@@ -18,6 +18,7 @@ secrets/
 *.sqlite
 *.sqlite3
 data/
+!OpenGothic/data/
 
 # OS
 .DS_Store
@@ -40,6 +41,9 @@ log.txt
 
 # Test bench output (scripts/bench.sh)
 /.bench/
+
+# Collected Ryzen test logs
+/.ryzen/
 
 # Shorts: takes and voiced lines (gothic-shorts)
 /.shorts/

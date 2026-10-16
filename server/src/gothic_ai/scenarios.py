@@ -15,7 +15,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
 
-from . import characters, programs
+from . import characters, programs, questbook, triggers
 from .amends import Amends
 from .authoring import PROPOSE as PROPOSE_QUEST
 from .authoring import Author
@@ -27,6 +27,8 @@ from .budget import Budget
 from .cast import TEMPLATES, Cast, Person, PersonTie
 from .casting import PROPOSE as PROPOSE_CHARACTER
 from .casting import Casting
+from .chains import PROPOSE as PROPOSE_CHAIN
+from .chains import ChainAuthor
 from .chests import BACK, CHEST, OWNED, ChestDesk
 from .chronicle import Fact
 from .concerns import Concerns
@@ -36,6 +38,7 @@ from .deals import GOLD, Deals
 from .dialogue import DialogueManager, SceneLine, line_duration
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
+from .gamedata.storygraph import Expr
 from .gossip import WORDS_CM, GossipDesk, Scene
 from .group import ANSWER_CUE, ROUND_GAP_S
 from .incidents import IncidentDesk
@@ -47,11 +50,12 @@ from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, Tool
 from .llm.fake import FakeBackend, FakeStep
 from .lore import Lore
 from .npc_tools import GESTURES as NPC_GESTURES
-from .perception import PerceptionDesk, Sight
+from .perception import BEASTS, PerceptionDesk, Sight, trace_name
 from .persona import PersonaProvider, habits_of
 from .places import SIDES, PlaceBook
 from .protocol import (
     ActionResult,
+    DebugCmd,
     Detached,
     DialogChosen,
     FollowEnded,
@@ -81,7 +85,7 @@ from .protocol import (
     ThreatControlCmd,
 )
 from .quests import RUMOR_CM, SEE_CM, QuestBoard
-from .sightings import Sightings
+from .sightings import Sighting, Sightings
 from .social import DAY, TICK_S, Rumor, Rumors
 from .story import StoryPatches
 from .storyguard import StoryGuard
@@ -974,10 +978,32 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         f"{'done' if queued else 'failed'} (line started after {time.monotonic() - t0:.1f} s)"
     )
 
+    # Fight on the same open, level ground used by the native physics benches.
+    # A tower save can leave the hero on a ledge with no standing room at its height.
+    arena = "NW_XARDAS_TOWER_VALLEY_091"
+    await link.debug("player_goto", waypoint=arena)
+    await link.debug("npc_goto", npc=npc, waypoint=arena, face="PLAYER")
+    # Native animals can otherwise start a different fight before the test wolf.
+    around = (await link.snapshot(npc, fresh=True)).nearby_npcs
+    for other in around:
+        if not other.dead and other.guild >= BEASTS:
+            await link.debug("kill", instance=other.id, near=npc)
+    await link.debug("teleport", near=npc, distance=300)
+
     # 1. the player draws a weapon next to the npc: the npc perceives it (it is free, scripts run)
     await attach_when_free(link, npc)
     await link.act(npc, "go_to_npc", npc="PLAYER", radius=300)
     await link.act(npc, "return_to_routine")
+    # Returning control starts the old tower routine. Hold an ordinary native idle
+    # here and wait for its initialization, including its normal enemy perceptions.
+    bodies = Bodies(link)
+    ready = await bodies.act(
+        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+        minutes=60, arrive=True, radius=100, timeout=15,
+    )
+    if ready.status != "arrived":
+        current = (await link.routine(npc)).current
+        raise GameError(f"m5b arena preparation: {ready.status} {ready.detail}; state={current}")
     events.clear()
     await link.debug("player_weapon", state="melee")
     e = await event({"weapon_drawn"}, 5)
@@ -3678,6 +3704,151 @@ class CastingScript:
         yield Done("", (call,))
 
 
+class ChainCharacterScript(CastingScript):
+    """The chain's named thief has a separate casting request, rather than an author's personality."""
+
+    name = "chain-character-script"
+
+    async def stream(self, **kwargs: Any) -> AsyncIterator[LLMEvent]:
+        async for event in super().stream(**kwargs):
+            if isinstance(event, ToolCall):
+                args = {
+                    **event.arguments,
+                    "name": "Рудек",
+                    "ru": "Ты — Рудек, мелкий вор. Добычу прячешь при себе и лишнего не болтаешь.",
+                    "en": "Rudek, a furtive petty thief carrying stolen merchandise.",
+                    "past": "Ты стащил товар у бродячего торговца и теперь пережидаешь на дороге.",
+                    "knows": ["Ты украл товар у торговца Гарета."],
+                    "ties": [],
+                    "reason": "вор с пропавшим товаром Гарета",
+                }
+                call = ToolCall(PROPOSE_CHARACTER, args, event.call_id)
+                yield call
+                yield Done("", (call,))
+
+
+class ChainScript:
+    """Garet's two quests; first offer the camp in the farmyard so the author's retry is exercised."""
+
+    name = "chain-script"
+
+    def __init__(self, *, thief: str, camp: str, item: str, gold: int, xp: int) -> None:
+        self.thief, self.camp, self.item = thief, camp, item
+        self.gold, self.xp = gold, xp
+        self.calls: list[str] = []
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        self.calls.append("\n".join(m.content for m in messages if isinstance(m, Message)))
+
+        def talk(description: str, reply: str, remember: str = "") -> dict[str, Any]:
+            return {
+                "description": description,
+                "lines": [{"speaker": "hero", "text": description}, {"speaker": "npc", "text": reply}],
+                "remember": remember,
+            }
+
+        stolen = {
+            "title": "Украденный товар",
+            "give": talk("У тебя что-то пропало?", "Вор унёс мой товар. Найди его и принеси обратно."),
+            "stages": [
+                {
+                    "journal": "Гарет просит найти вора на дороге.",
+                    "goals": [{"kind": "reach", "npc": "thief"}],
+                },
+                {
+                    "journal": "Я нашёл вора. Надо вернуть товар.",
+                    "goals": [{"kind": "have", "npc": "thief", "item": self.item}],
+                },
+                {
+                    "journal": "Товар у меня. Гарет ждёт его на ферме.",
+                    "goals": [
+                        {
+                            "kind": "bring",
+                            "npc": "giver",
+                            "item": self.item,
+                            "talk": talk(
+                                "Вот твой товар.",
+                                "Всё цело. Держи за труды.",
+                                "Герой вернул тебе украденный товар.",
+                            ),
+                        }
+                    ],
+                },
+            ],
+            "done_journal": "Я вернул Гарету украденный товар и получил награду.",
+            "knows": "У тебя украли товар. Вор скрывается неподалёку.",
+            "asked": "Найти вора и принести украденный товар.",
+            "gold": min(10, self.gold),
+            "xp": self.xp,
+        }
+        camp = {
+            "title": "Лагерь",
+            "give": talk("Куда вор нёс товар?", "У него подельники в лагере. Убей их, иначе опять налетят."),
+            "stages": [
+                {
+                    "journal": "Гарет просит покончить с бандитами лагеря.",
+                    "goals": [{"kind": "kill", "npcs": ["camp"]}],
+                },
+                {
+                    "journal": "Бандиты мертвы. Надо сказать Гарету.",
+                    "goals": [
+                        {
+                            "kind": "talk",
+                            "npc": "giver",
+                            "talk": talk(
+                                "Бандиты мертвы.",
+                                "Теперь можно торговать спокойно. Вот награда.",
+                                "Герой убил всех бандитов лагеря, ты заплатил ему.",
+                            ),
+                        }
+                    ],
+                },
+            ],
+            "done_journal": "Я уничтожил лагерь бандитов и рассказал Гарету. Он заплатил.",
+            "knows": "Вор связан с бандитами лагеря неподалёку.",
+            "asked": "Убить бандитов лагеря и сказать тебе.",
+            "gold": min(15, self.gold),
+            "xp": self.xp,
+        }
+        args = {
+            "cast": [
+                {
+                    "role": "thief",
+                    "kind": "townsman",
+                    "place": self.thief,
+                    "count": 1,
+                    "about": "Мелкий вор Рудек, стащивший товар Гарета.",
+                    "carries": [self.item],
+                },
+                {
+                    "role": "camp",
+                    "kind": "bandit",
+                    "place": "FARM1_OUT" if len(self.calls) == 1 else self.camp,
+                    "count": 3,
+                    "about": "Подельники вора, грабящие торговцев.",
+                    "carries": [],
+                },
+            ],
+            "quests": [stolen, camp],
+            "reason": "У вора украденный товар Гарета; след от него ведёт к лагерю его подельников.",
+        }
+        call = ToolCall(PROPOSE_CHAIN, args, f"chain{len(self.calls)}")
+        yield call
+        yield Done("", (call,))
+
+
 async def director_casts(
     link: GameLink, casting: Casting, author: Author, story: StoryPatches, places: PlaceBook
 ) -> dict[str, str]:
@@ -3770,29 +3941,32 @@ async def authored_quest(
     check("made", q is not None, q or rejected[-1:])
     if q is None:
         return _logged(results)
-    point = next(f["point"] for f in reversed(author.chronicle.facts("authored")) if f.get("id") == q.id)
+    book = author.book
+    thing = q.stages[0].goals[0]
+    give, done = questbook.give_node(q), questbook.done_node(q)
+    point, item = thing.point, thing.item
     check("var", await var(q.id) == 0, f"{q.id} = {await var(q.id)}")
     offered = await link.offered_dialogs(giver)
-    check("offered", q.give in offered and q.done not in offered, " ".join(offered))
+    check("offered", give in offered and done not in offered, " ".join(offered))
 
     # the hero asks her what is wrong
     await come_to_her()
-    await link.choose_dialog(giver, q.give)
+    await link.choose_dialog(giver, give)
     ok = await _until_async(lambda: var(q.id), lambda v: v == 1, 15)
-    await _until(lambda: author.quests[q.id].stage == "given", 5)
-    check("given", ok and author.quests[q.id].stage == "given", f"{q.id} = {await var(q.id)}")
+    await _until(lambda: book.progress(q.id).state == "given", 5)
+    check("given", ok and book.progress(q.id).state == "given", f"{q.id} = {await var(q.id)}")
 
     # the thing lies where she said
-    before = await has(q.item)
+    before = await has(item)
     await link.debug("player_goto", waypoint=point)
     await asyncio.sleep(1)
     error = ""
     try:
-        await link.debug("player_take", item=q.item, distance=800)
+        await link.debug("player_take", item=item, distance=800)
     except GameError as err:
         error = str(err)
-    ok = await _until_async(lambda: has(q.item), lambda n: n > before, 10)
-    check("found", ok, f"{q.item} at {point}" + (f": {error}" if error else ""))
+    ok = await _until_async(lambda: has(item), lambda n: n > before, 10)
+    check("found", ok, f"{item} at {point}" + (f": {error}" if error else ""))
 
     # a save and a load in between
     await asyncio.sleep(0.5)  # the game has the memory head of the quest
@@ -3806,24 +3980,650 @@ async def authored_quest(
     await asyncio.sleep(1)
     now = await link.offered_dialogs(giver)
     kept = await var(q.id)
-    check(
-        "after_load", kept == 1 and q.done in now and q.give not in now, f"{q.id} = {kept}; {' '.join(now)}"
-    )
+    check("after_load", kept == 1 and done in now and give not in now, f"{q.id} = {kept}; {' '.join(now)}")
 
     # he brings it
     gold, exp = await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"])
     await come_to_her()
-    await link.choose_dialog(giver, q.done)
+    await link.choose_dialog(giver, done)
     ok = await _until_async(lambda: var(q.id), lambda v: v == 2, 15)
-    after = (await has(q.item), await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]))
+    after = (await has(item), await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]))
     paid = after[0] == before and after[1] >= gold + q.gold and after[2] >= exp + q.xp
     check("done", ok and paid, f"thing, gold, exp {(before + 1, gold, exp)} -> {after}")
     await asyncio.sleep(1)
     left = await link.offered_dialogs(giver)
-    check("once", q.give not in left and q.done not in left, " ".join(left))
-    await _until(lambda: author.quests[q.id].stage == "done", 5)
-    check("knows", "ты заплатил" in (author.situation(giver) or ""), author.situation(giver) or "")
+    check("once", give not in left and done not in left, " ".join(left))
+    await _until(lambda: book.progress(q.id).state == "done", 5)
+    check("knows", "ты заплатил" in (book.situation(giver) or ""), book.situation(giver) or "")
     return _logged(results)
+
+
+class OwnRepairScript:
+    """Hilda's turn-in passes to Lobart: first the dead giver is refused, then he keeps the gold reward.
+    The experience is left out, so the description and the dialog must both keep the smaller reward."""
+
+    name = "own-repair-script"
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        brief = next(m.content for m in messages if isinstance(m, Message))
+        self.calls.append(brief)
+        ending = re.search(r"^1\. (\S+)", brief, re.M)
+        args = {
+            "kind": "handover",
+            "ending": ending.group(1) if ending else "",
+            "npc": HILDA if len(self.calls) == 1 else LOBART,
+            "description": "Вот что искала Хильда.",
+            "lines": [
+                {"speaker": "hero", "text": "Хильда просила вернуть это. Она мертва."},
+                {"speaker": "npc", "text": "Знаю. Неси сюда. За её поручение я заплачу."},
+            ],
+            "effects": ["E1"],
+            "answers": [],
+            "status": "obsolete",
+            "journal_now": "Хильда мертва. Её находку теперь примет Лобарт.",
+            "journal_done": "Я отдал находку Лобарту. Он заплатил за поручение Хильды.",
+            "reason": "Лобарт ведёт хозяйство вместе с женой и был рядом",
+        }
+        call = ToolCall(PROPOSE, args, f"o{len(self.calls)}")
+        yield call
+        yield Done("", (call,))
+
+
+async def own_repair(
+    link: GameLink,
+    book: questbook.QuestBook,
+    director: Director,
+    places: PlaceBook,
+    slot: int = 7,
+) -> dict[str, str]:
+    """Stage 3, layer 3: the three-stage quest of `stages`, with Hilda dead at stage 2 and Lobart taking
+    her turn-in over, a save and a load before the hero finds the broom and brings it to him."""
+    return await book_stages(link, book, places, slot, director=director)
+
+
+async def book_stages(
+    link: GameLink,
+    book: questbook.QuestBook,
+    places: PlaceBook,
+    slot: int = 7,
+    *,
+    director: Director | None = None,
+) -> dict[str, str]:
+    """Stage 3 of the director as author, layer 2 (docs/director.md): a quest as an object, of three stages.
+
+    The quest is written here, not by a model: Hilda asks the hero to look who walks about a place near the
+    farm (reach), then to get a thing that lies at another one (have, put there as the stage begins), then
+    to bring it to her (bring, the turn-in). The book checks it, builds it of the graph's primitives and
+    makes it.
+    Checks:
+    - made: the book takes it; its status is in the game, 0, and her menu offers the dialog that gives it;
+    - given: the hero asks her, the quest runs at stage 1;
+    - reach: he comes to the place, its trigger and the stage's fire: stage 2;
+    - after_load: a save and a load keep the stage, and the triggers are back with their counts;
+    - have: he picks the thing up where it was put: stage 3;
+    - done: he brings it, she takes it and pays; the quest is done, no dialog of it is offered any more;
+    - knows: her conversational model knows he did it and she paid."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    hero = ["inst", "HERO"]
+    successor = HILDA
+    if director is not None:
+        director.model.llm = OwnRepairScript()
+
+    async def vars(*names: str) -> dict[str, int]:
+        return dict((await link.story_state(vars=list(names))).get("vars", {}))
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    async def come_to_her() -> None:
+        await link.debug("player_goto", to=successor, distance=300)
+        for _ in range(40):  # her own greeting may start as he comes in
+            if not (await link.story_state()).get("dialog"):
+                break
+            await asyncio.sleep(0.5)
+
+    # two places near her own: one to come to, one where the thing lies
+    routine = await link.routine(HILDA)
+    home = places.of(*(e.waypoint for e in routine.entries))
+    if home is None or home.center is None:
+        return _logged({"made": "failed (no place of Hilda's in the book)"})
+    spots = [
+        (p, sorted(w for w in p.points if not w.startswith("FP_")))
+        for p, _ in places.near(home.center, 4000, 8)
+        if p.id != home.id
+    ]
+    spots = [(p, points) for p, points in spots if points]
+    if director is not None:
+        # This repair always starts in the farmyard and ends with the same broom, on the supplied save.
+        yard = places.get("FARM1_OUT")
+        yard_points = sorted(w for w in yard.points if not w.startswith("FP_")) if yard else []
+        if yard is None or not yard_points:
+            return _logged({"made": "failed (no farmyard in the book)"})
+        spots = [(yard, yard_points), *(s for s in spots if s[0].id != yard.id)]
+    if len(spots) < 2:
+        return _logged({"made": f"failed (places near {home.id}: {len(spots)})"})
+    (look, look_at), (lies, lies_at) = spots[0], spots[1]
+    to, at = look_at[len(look_at) // 2], lies_at[len(lies_at) // 2]
+    thing = None
+    things = (
+        ("ITMI_BROOM",)
+        if director is not None
+        else ("ITMI_BROOM", "ITMI_RAKE", "ITMI_SAW", "ITMI_SCOOP", "ITMI_BRUSH")
+    )
+    for candidate in things:
+        if await has(candidate) == 0:
+            thing = candidate
+            break
+    if thing is None:
+        return _logged({"made": "failed (the hero has every thing of the list)"})
+
+    def talk(said: str, answer: str, remember: str = "") -> questbook.Talk:
+        return questbook.Talk(said, [{"speaker": "self", "text": answer}], remember)
+
+    q = questbook.Quest(
+        id=book.next_id(),
+        giver=HILDA,
+        title="Чужак у фермы",
+        give=talk("Что-то случилось?", f"Кто-то бродит {look.where_ru}. Глянь, а? Заплачу."),
+        stages=[
+            questbook.Stage(
+                f"Хильда видела чужака {look.where_ru}. Надо посмотреть.", [questbook.Goal("reach", point=to)]
+            ),
+            questbook.Stage(
+                f"Чужака нет, но он что-то бросил {lies.where_ru}.",
+                [questbook.Goal("have", item=thing, point=at, journal="Я подобрал то, что он бросил.")],
+            ),
+            questbook.Stage(
+                "Надо отнести находку Хильде.",
+                [
+                    questbook.Goal(
+                        "bring",
+                        npc=HILDA,
+                        item=thing,
+                        talk=talk(
+                            "Вот что он бросил.",
+                            "Так это наша! Держи за труды.",
+                            "Герой принёс то, что бросил чужак.",
+                        ),
+                    )
+                ],
+            ),
+        ],
+        done_journal="Я отдал Хильде находку.",
+        asked=f"посмотреть, кто бродит {look.where_ru}.",
+        gold=10,
+        xp=20,
+        names={HILDA: "Хильда", LOBART: "Лобарт"} if director is not None else {HILDA: "Хильда"},
+        reason="e2e: три стадии",
+    )
+    errors = await book.make(q)
+    status, stage = q.id, questbook.stage_var(q)
+    offered = await link.offered_dialogs(HILDA) if not errors else []
+    give, done = questbook.give_node(q), questbook.done_node(q)
+    now = await vars(status, stage)
+    check(
+        "made",
+        not errors and now.get(status) == 0 and give in offered and done not in offered,
+        errors or f"{now}; {' '.join(offered)}",
+    )
+    if errors:
+        return _logged(results)
+    original_reward = q.gold, q.xp
+    original = next(
+        op["node"] for op in book.patches.ops() if op.get("op") == "add_node" and op["node"]["id"] == done
+    )
+
+    await come_to_her()
+    await link.choose_dialog(HILDA, give)
+    ok = await _until_async(lambda: vars(status, stage), lambda v: v == {status: 1, stage: 1}, 15)
+    check("given", ok and book.progress(q.id).state == "given", await vars(status, stage))
+
+    await link.debug("player_goto", waypoint=to)
+    ok = await _until_async(lambda: vars(stage), lambda v: v.get(stage) == 2, 10)
+    await _until(lambda: book.progress(q.id).stage == 2, 5)
+    check("reach", ok and book.progress(q.id).stage == 2, f"{to} ({look.id}): {await vars(stage)}")
+
+    if director is not None:
+        facts = director.chronicle.facts
+        await link.debug("npc_goto", npc=LOBART, to=HILDA, distance=300)
+        await link.debug("kill", npc=HILDA)
+        died = await _until(lambda: any(f.get("npc") == HILDA for f in facts("died")), 10)
+        check("died", died)
+        await _until(lambda: any(f.get("quest") == q.id for f in facts("repair") + facts("unrepaired")), 60)
+        dead_ends = [f for f in facts("dead_end") if f.get("quest") == q.id]
+        check("dead_end", bool(dead_ends), dead_ends[-1:])
+        rejected = [f for f in facts("repair_rejected") if f.get("quest") == q.id]
+        check("rejected", any("мёртв" in why for f in rejected for why in f["why"]), rejected[-1:])
+        repaired = next((f for f in facts("repair") if f.get("quest") == q.id), None)
+        accepted = (
+            repaired is not None and repaired.get("kind") == "handover" and repaired.get("npc") == LOBART
+        )
+        check("repaired", accepted, repaired or facts("unrepaired"))
+        if not accepted:
+            return _logged(results)
+        successor = LOBART
+        q = book.all()[q.id]
+        made = next(
+            op["node"]
+            for op in reversed(book.patches.ops())
+            if op.get("op") == "add_node" and op["node"]["id"] == done
+        )
+        mandatory = [
+            e
+            for e in original["effects"]
+            if e["do"] not in ("xp", "journal") and not (e["do"] == "give" and e.get("item") == "ITMI_GOLD")
+        ]
+        check(
+            "same_dialog",
+            made["id"] == original["id"] == done
+            and made["npc"] == successor
+            and made["condition"] == original["condition"]
+            and all(e in made["effects"] for e in mandatory)
+            and q.turn_in() is not None
+            and q.turn_in().npc == successor,
+            made,
+        )
+        gold = sum(e["count"] for e in made["effects"] if e["do"] == "give" and e.get("item") == "ITMI_GOLD")
+        xp = sum(e["amount"] for e in made["effects"] if e["do"] == "xp")
+        check(
+            "reward_cap",
+            (gold, xp) == (q.gold, q.xp) == (original_reward[0], 0)
+            and 0 <= gold <= original_reward[0]
+            and 0 <= xp <= original_reward[1],
+            f"{original_reward} -> {(gold, xp)}",
+        )
+        situation = book.situation(successor) or ""
+        check("successor_knows", "принял" in situation.lower() and "Хильд" in situation, situation)
+
+    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+    await link.debug("save", slot)
+    await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    await loaded
+    await link.wait_world()
+    await asyncio.sleep(2)
+    counts = {t["id"]: t["count"] for t in await link.triggers()}
+    mine = {k: v for k, v in counts.items() if k.startswith(f"{q.id}_")}
+    check(
+        "after_load",
+        await vars(status, stage) == {status: 1, stage: 2}
+        and mine == {f"{q.id}_S1G1": 1, f"{q.id}_S1": 1, f"{q.id}_S2G1": 0, f"{q.id}_S2": 0},
+        f"{await vars(status, stage)}; {mine}",
+    )
+    if director is not None:
+        q = book.all()[q.id]
+        nodes = [
+            op["node"] for op in book.patches.ops() if op.get("op") == "add_node" and op["node"]["id"] == done
+        ]
+        check(
+            "repair_after_load",
+            bool(nodes)
+            and nodes[-1]["npc"] == successor
+            and q.turn_in() is not None
+            and q.turn_in().npc == successor
+            and len([f for f in director.chronicle.facts("repair") if f.get("quest") == q.id]) == 1,
+            nodes[-1] if nodes else "no turn-in",
+        )
+
+    await link.debug("player_goto", waypoint=at)
+    await asyncio.sleep(1)
+    error = ""
+    try:
+        await link.debug("player_take", item=thing, distance=800)
+    except GameError as err:
+        error = str(err)
+    ok = await _until_async(lambda: vars(stage), lambda v: v.get(stage) == 3, 10)
+    check("have", ok, f"{thing} at {at} ({lies.id}): {await vars(stage)}" + (f"; {error}" if error else ""))
+
+    gold, exp = await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"])
+    await come_to_her()
+    offered = await link.offered_dialogs(successor)
+    if director is not None:
+        check("successor_offers", done in offered and done not in await link.offered_dialogs(HILDA), offered)
+    try:
+        await link.choose_dialog(successor, done)
+    except GameError as err:
+        check("done", False, f"{err}; {' '.join(offered)}")
+        return _logged(results)
+    ok = await _until_async(lambda: vars(status), lambda v: v.get(status) == 2, 15)
+    after = (await has(thing), await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]))
+    await asyncio.sleep(1)
+    left = await link.offered_dialogs(successor)
+    paid = after[0] == 0 and after[1] >= gold + q.gold and after[2] >= exp + q.xp
+    if director is not None:
+        paid = paid and after[1] - gold <= original_reward[0] and after[2] - exp <= original_reward[1]
+    check(
+        "done",
+        ok and paid and give not in left and done not in left,
+        f"thing, gold, exp {(1, gold, exp)} -> {after}; {await vars(status, stage)}",
+    )
+    await _until(lambda: book.progress(q.id).state == "done", 5)
+    situation = book.situation(successor) or ""
+    check("knows", "ты заплатил" in situation, situation)
+    if director is not None:
+        left = [*left, *await link.offered_dialogs(HILDA)]
+        check("once", not any(n.startswith(f"{q.id}_") for n in left), left)
+        check("book_done", book.progress(q.id).state == "done" and "герой выполнил" in situation, situation)
+    return _logged(results)
+
+
+async def author_chain(
+    link: GameLink, chains: ChainAuthor, places: PlaceBook, slot: int = 7
+) -> dict[str, str]:
+    """Stage 3, layer 4: Garet's chain, built by the author, then played from the book's descriptions.
+
+    With a scripted model the thief holds his stolen merchandise and three bandits wait at their camp.
+    The first proposal puts the bandits in a farmyard and must be refused before anybody is introduced.
+    With a live model the same player handles whatever valid two or three quests it invents.
+    """
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    # v37 has no god-mode command. A large health reserve protects the hero while reach goals can send
+    # him near a live hostile role; kill goals themselves work remotely, before he approaches the camp.
+    await link.debug("player_hp", hp=1_000_000)
+    found = await _peddler(link, chains.casting.cast)
+    if isinstance(found, str):
+        return _logged({"giver": f"failed ({found})"})
+    spec, _ = found
+    made, why = await chains.casting.cast.introduce(spec, GARET)
+    check("giver", made is not None, made or why)
+    if made is None:
+        return _logged(results)
+    giver = spec.npc
+    script: ChainScript | None = None
+    characters_script: ChainCharacterScript | None = None
+    if isinstance(chains.model.llm, FakeBackend):
+        brief = await chains.brief(giver)
+        if brief is None:
+            return _logged({**results, "made": "failed (no author's brief for Garet)"})
+        camps = [p for p in brief.places.values() if brief.bandit_ok(p.id) and len(p.points) >= 3]
+        if not camps:
+            return _logged({**results, "made": "failed (no unoccupied camp in the author's brief)"})
+        camp = camps[0]
+        thief = next((p for p in brief.places.values() if p.id != camp.id), camp)
+        item = next(iter(brief.base.items))
+        for candidate in brief.base.items:
+            if not await link.evaluate(["call", "NPC_HASITEMS", ["inst", "HERO"], ["sym", candidate]]):
+                item = candidate
+                break
+        chains.model.llm = script = ChainScript(
+            thief=thief.id, camp=camp.id, item=item, gold=brief.base.gold, xp=brief.base.xp
+        )
+        chains.casting.model.llm = characters_script = ChainCharacterScript()
+
+    quests = await chains.chain(giver, new_people=True)  # a chain of the director's own people
+    facts = chains.chronicle.facts
+    rejected = facts("chain_rejected")
+    if script is not None:
+        refusal = [str(why) for f in rejected for why in f.get("why", f.get("errors", []))]
+        check("rejected", len(script.calls) == 2 and bool(refusal), rejected)
+        check("retry_reasons", bool(refusal) and all(why in script.calls[-1] for why in refusal), refusal)
+    check(
+        "made",
+        quests is not None and 2 <= len(quests) <= 3 and all(q.id in chains.book.all() for q in quests),
+        [q.id for q in quests]
+        if quests
+        else {"rejected": rejected, "proposal": script.calls if script else "see chain model log"},
+    )
+    if not quests:
+        return _logged(results)
+    if script is not None:
+        check(
+            "garet_chain",
+            [q.title for q in quests] == ["Украденный товар", "Лагерь"],
+            [q.title for q in quests],
+        )
+        check(
+            "named_cast_only",
+            characters_script is not None and len(characters_script.calls) == 1,
+            len(characters_script.calls) if characters_script else 0,
+        )
+    chain_fact = next((f for f in reversed(facts("chain")) if f.get("quests") == [q.id for q in quests]), {})
+    roles = chain_fact.get("roles", {})
+    npcs = [npc for group in roles.values() for npc in group]
+    world = (await link.story_state(npcs=npcs)).get("npcs", {})
+    # asked for someone new: the cast is not empty, and all of it is in the world
+    check("roles", bool(npcs) and all(world.get(n, {}).get("state") == "alive" for n in npcs), roles)
+    held = []
+    for q in quests:
+        for stage in q.stages:
+            for goal in stage.goals:
+                if goal.kind == questbook.HAVE and goal.npc:
+                    count = await link.evaluate(
+                        ["call", "NPC_HASITEMS", ["inst", "SELF"], ["sym", goal.item]], npc=goal.npc
+                    )
+                    held.append((goal.npc, goal.item, count, goal.count))
+    check("carries", all(count >= needed for _, _, count, needed in held), held)
+    check(
+        "linear",
+        all(q.after == quests[k - 1].id for k, q in enumerate(quests) if k),
+        [q.after for q in quests],
+    )
+    locked = [questbook.give_node(q) not in await link.offered_dialogs(giver) for q in quests[1:]]
+    check("locked", all(locked), locked)
+
+    async def save_and_load(q: questbook.Quest, dead: str, rest: list[str]) -> None:
+        names = [v for quest in quests for v in (quest.id, questbook.stage_var(quest))]
+        before = (await link.story_state(vars=names)).get("vars", {})
+        before_counts = {
+            t["id"]: t["count"]
+            for t in await link.triggers()
+            if any(t["id"].startswith(f"{quest.id}_") for quest in quests)
+        }
+        saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+        await link.debug("save", slot)
+        await saving
+        loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+        await link.debug("load", slot)
+        await loaded
+        await link.wait_world()
+        await asyncio.sleep(2)
+        after = (await link.story_state(vars=names, npcs=[dead, *rest])).copy()
+        after_counts = {
+            t["id"]: t["count"]
+            for t in await link.triggers()
+            if any(t["id"].startswith(f"{quest.id}_") for quest in quests)
+        }
+        actors = after.get("npcs", {})
+        check(
+            "after_load",
+            before == after.get("vars", {})
+            and before_counts == after_counts
+            and actors.get(dead, {}).get("state") == "dead"
+            and all(actors.get(n, {}).get("state") == "alive" for n in rest)
+            and all(quest.id in chains.book.all() for quest in quests),
+            f"{q.id}: {before} -> {after.get('vars')}; counts {before_counts} -> {after_counts}; {actors}",
+        )
+
+    played = await play_book_chain(link, chains.book, quests, after_first_kill=save_and_load)
+    results.update(played)
+    if script is not None and "after_load" not in results:
+        check("after_load", False, "the scripted chain never reached its group kill checkpoint")
+    await chains.book.settle(giver)
+    situation = chains.book.situation(giver) or ""
+    check(
+        "knows",
+        all(q.title in situation and chains.book.progress(q.id).state == "done" for q in quests)
+        and situation.count("герой выполнил") == len(quests),
+        situation,
+    )
+    snap = await link.snapshot(giver, fresh=True)
+    check(
+        "hero_alive",
+        snap.player is not None and snap.player.hp > 0,
+        snap.player.hp if snap.player else "no player",
+    )
+    return _logged(results)
+
+
+async def play_book_chain(
+    link: GameLink,
+    book: questbook.QuestBook,
+    quests: list[questbook.Quest],
+    *,
+    after_first_kill: Callable[[questbook.Quest, str, list[str]], Any] | None = None,
+) -> dict[str, str]:
+    """A debug player for any book description: no Garet ids, items, stages or dialogs are hardcoded."""
+    results: dict[str, str] = {}
+    saved = False
+
+    async def vars(*names: str) -> dict[str, int]:
+        return dict((await link.story_state(vars=list(names))).get("vars", {}))
+
+    async def has(item: str, npc: str = "HERO") -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", ["inst", npc], ["sym", item]]) or 0)
+
+    async def pick(item: str) -> None:
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                await link.debug("player_take", item=item, distance=800)
+                return
+            except GameError as err:
+                if "the hero could not pick it up now" not in str(err) or time.monotonic() >= deadline:
+                    raise
+                await asyncio.sleep(0.25)
+
+    async def idle() -> None:
+        for _ in range(40):
+            if not (await link.story_state()).get("dialog"):
+                return
+            await asyncio.sleep(0.5)
+        raise RuntimeError("the previous dialog did not finish")
+
+    async def choose(npc: str, node: str) -> None:
+        await link.debug("player_goto", to=npc, distance=300)
+        await idle()
+        if node not in await link.offered_dialogs(npc):
+            raise RuntimeError(f"{npc} does not offer {node}: {await link.offered_dialogs(npc)}")
+        await link.choose_dialog(npc, node)
+
+    for qi, q in enumerate(quests):
+        status, stage_var = q.id, questbook.stage_var(q)
+        try:
+            if qi:
+                results[f"opened_{qi + 1}"] = (
+                    "done" if questbook.give_node(q) in await link.offered_dialogs(q.giver) else "failed"
+                )
+            await choose(q.giver, questbook.give_node(q))
+            if not await _until_async(
+                lambda status=status: vars(status), lambda v, status=status: v.get(status) == 1, 15
+            ):
+                raise RuntimeError(f"quest was not given: {await vars(status, stage_var)}")
+            for si, stage in enumerate(q.stages, 1):
+                last = si == len(q.stages)
+                # World goals first: the last dialog is the turn-in and must wait for all others.
+                ordered = sorted(enumerate(stage.goals, 1), key=lambda x: x[1].kind in questbook.TALKS)
+                for gi, goal in ordered:
+                    await idle()
+                    gid = questbook.goal_id(q, si, gi)
+
+                    async def counts(gid: str = gid) -> int:
+                        return next((t["count"] for t in await link.triggers() if t["id"] == gid), 0)
+
+                    if goal.kind not in questbook.TALKS and await counts() >= 1:
+                        continue
+                    if goal.kind == questbook.REACH:
+                        if goal.point:
+                            await link.debug("player_goto", waypoint=goal.point)
+                        else:
+                            await link.debug("teleport", near=goal.npc, distance=max(50, goal.radius // 2))
+                            await asyncio.sleep(0.5)
+                    elif goal.kind == questbook.HAVE:
+                        if goal.npc:
+                            await link.debug("kill", npc=goal.npc)
+                            await link.debug("teleport", near=goal.npc, distance=100)
+                            await asyncio.sleep(0.5)
+                            before = await has(goal.item, goal.npc)
+                            # v37 only picks things off the ground. Use the existing inventory transfer
+                            # for debug looting, then drop/pick the real transferred item through player_take.
+                            await link.story_effect(
+                                goal.npc, [{"do": "give", "item": goal.item, "count": goal.count}], check=True
+                            )
+                            after = await has(goal.item, goal.npc)
+                            if before - after != goal.count:
+                                raise RuntimeError(f"looting {goal.npc}: {goal.item} {before} -> {after}")
+                            for _ in range(goal.count):
+                                await link.debug("player_drop", item=goal.item)
+                                await asyncio.sleep(2)
+                        elif goal.point:
+                            await link.debug("player_goto", waypoint=goal.point)
+                        for _ in range(max(0, goal.count - await has(goal.item))):
+                            await pick(goal.item)
+                    elif goal.kind == questbook.KILL:
+                        states = (await link.story_state(npcs=goal.npcs)).get("npcs", {})
+                        alive = [n for n in goal.npcs if states.get(n, {}).get("state") == "alive"]
+                        for ni, npc in enumerate(alive):
+                            await link.debug("kill", npc=npc)
+                            if not saved and ni == 0 and len(alive) >= 2 and after_first_kill is not None:
+                                await asyncio.sleep(1)
+                                await after_first_kill(q, npc, alive[1:])
+                                saved = True
+                    elif goal.kind in questbook.TALKS:
+                        if goal.kind == questbook.BRING and goal.point and await has(goal.item) < goal.count:
+                            await link.debug("player_goto", waypoint=goal.point)
+                            for _ in range(goal.count - await has(goal.item)):
+                                await pick(goal.item)
+                        if qi + 1 < len(quests) and last:
+                            next_q = quests[qi + 1]
+                            results[f"locked_until_done_{qi + 2}"] = (
+                                "done"
+                                if questbook.give_node(next_q) not in await link.offered_dialogs(next_q.giver)
+                                else "failed"
+                            )
+                        node = questbook.done_node(q) if last else questbook.goal_node(gid)
+                        await choose(goal.npc, node)
+                    elif goal.kind == questbook.WAIT:
+                        for _ in range(goal.days):
+                            await link.debug("time", hour=23, minute=0)
+                            await link.debug("time", hour=0, minute=0)
+                    if goal.kind not in questbook.TALKS:
+                        if not await _until_async(counts, lambda value: value >= 1, 15):
+                            raise RuntimeError(f"goal {gid} did not fire: {await vars(status, stage_var)}")
+                target = len(q.stages) + 1 if last else si + 1
+                if not await _until_async(
+                    lambda stage_var=stage_var: vars(stage_var),
+                    lambda v, stage_var=stage_var, target=target: v.get(stage_var) == target,
+                    15,
+                ):
+                    raise RuntimeError(f"stage {si} did not end: {await vars(status, stage_var)}")
+            done = (await vars(status)).get(status) == 2
+            results[f"quest_{qi + 1}"] = f"{'done' if done else 'failed'} ({q.id} «{q.title}»)"
+        except (GameError, TimeoutError, RuntimeError) as err:
+            results[f"quest_{qi + 1}"] = f"failed ({q.id} «{q.title}»: {err})"
+            return results
+    return results
 
 
 async def _peddler(link: GameLink, actors: Cast) -> tuple[NpcSpec, str] | str:
@@ -4224,6 +5024,232 @@ async def own_symbols(link: GameLink, slot: int = 7) -> dict[str, str]:
         (shown(last, HILDA), shown(last, like)) == vanilla,
         f"{vanilla} -> {(shown(last, HILDA), shown(last, like))}",
     )
+    return _logged(results)
+
+
+async def story_triggers(link: GameLink, story: StoryPatches, slot: int = 7) -> dict[str, str]:
+    """Stage 3 of the director as author, layer 1 (docs/director.md): the triggers of the bridge.
+
+    A trigger for every event, put into the branch like the director's other changes, with a save and a load
+    in the middle. Checks:
+    - start: a trigger without a condition fires at once, once: it puts a thing at a point nearby;
+    - item: the hero picks it up, and a trigger on his having it fires, its self the hero;
+    - place: one that repeats fires on every coming into a place, not while he stays or is away;
+    - dialog: one on a dialog of the director's fires when it is chosen, its self the npc;
+    - after_load: after a save and a load every count is what it was, and none fired again: the first one
+      not, though its condition holds, the place's not, though the hero loaded inside it;
+    - place_again: coming into the place again after the load counts on;
+    - hour: one on the time of day fires when the clock gets there;
+    - death: one on the death of an npc of the director's fires when the hero kills it, its self the dead
+      and its other the killer."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    own = "DIR_NPC_T"
+    start, item_t, place_t, hour_t, death_t, dialog_t = (
+        "DIR_E2E_START",
+        "DIR_E2E_ITEM",
+        "DIR_E2E_PLACE",
+        "DIR_E2E_HOUR",
+        "DIR_E2E_DEATH",
+        "DIR_E2E_DIALOG",
+    )
+    counts = [start, item_t, place_t, hour_t, death_t, dialog_t]
+    marks = ["DIR_E2E_STARTS", "DIR_E2E_GOT", "DIR_E2E_TOLD", "DIR_E2E_DEAD", "DIR_E2E_KILLER"]
+
+    def own_id(of: str) -> Expr:
+        return ["call", "HLP_GETINSTANCEID", ["inst", of]]
+
+    def mark(var: str, value: Expr) -> dict[str, Any]:
+        return {"do": "set", "target": ["var", var], "value": value}
+
+    def plus(var: str) -> dict[str, Any]:
+        return mark(var, ["+", ["var", var], ["int", 1]])
+
+    # the points: a waypoint for the thing, another for the place, apart from each other and from the hero
+    snap = await link.snapshot(HILDA, fresh=True)
+    if snap.player is None:
+        return _logged({"start": "failed (no hero in the snapshot)"})
+    hero_at = snap.player.pos
+
+    def far(p: dict[str, Any], q: Sequence[float], cm: float) -> bool:
+        return math.dist((p["x"], p["z"]), (q[0], q[2])) >= cm
+
+    points = sorted(
+        (w for w in await link.waypoints() if not w.get("fp")),
+        key=lambda w: math.dist((w["x"], w["z"]), (hero_at[0], hero_at[2])),
+    )
+    thing_at = next((w for w in points if far(w, hero_at, 700)), None)
+    place_at = (
+        next(
+            (w for w in points if far(w, hero_at, 1500) and far(w, (thing_at["x"], 0, thing_at["z"]), 1500)),
+            None,
+        )
+        if thing_at
+        else None
+    )
+    if thing_at is None or place_at is None:
+        return _logged({"start": "failed (no waypoints around the hero)"})
+    a, b = thing_at["name"], place_at["name"]
+    # a thing the hero has none of
+    thing = None
+    for candidate in ("ITMI_SAW", "ITMI_BROOM", "ITMI_RAKE", "ITMI_SCOOP", "ITMI_BRUSH", "ITMI_PLIERS"):
+        if await link.evaluate(triggers.hero_has(candidate)) == 0:
+            thing = candidate
+            break
+    if thing is None:
+        return _logged({"start": "failed (the hero has every thing of the list)"})
+    hour = int((await link.story_state()).get("hour", 8))
+    at = ((hour + 6) % 24, (hour + 7) % 24)
+
+    try:
+        farmers = sorted(
+            p["npc"] for p in await link.story_people() if re.fullmatch(r"BAU_\d+_BAUER", p["npc"])
+        )
+        await link.own_npc(own, farmers[0], distance=400)
+    except (GameError, IndexError) as err:
+        return _logged({"start": f"failed (no npc of the director's: {err})"})
+
+    talk = "DIR_E2E_TALK"
+    ops: list[dict[str, Any]] = [
+        {"op": "vars", "vars": dict.fromkeys(marks, 0)},
+        {
+            "op": "add_node",
+            "node": {
+                "id": talk,
+                "npc": HILDA,
+                "description": "Как дела на ферме?",
+                "permanent": True,
+                "lines": [{"speaker": "self", "text": "Работы много, как всегда."}],
+            },
+        },
+        triggers.trigger(
+            start,
+            triggers.STATE,
+            [
+                {"do": "call", "call": ["call", "WLD_INSERTITEM", ["sym", thing], ["str", a]]},
+                plus("DIR_E2E_STARTS"),
+            ],
+        ),
+        triggers.trigger(
+            item_t, triggers.STATE, [mark("DIR_E2E_GOT", own_id("SELF"))], when=triggers.hero_has(thing)
+        ),
+        # the count is all these two do
+        triggers.trigger(place_t, triggers.STATE, [], when=triggers.hero_near_point(b, 400), repeat=True),
+        triggers.trigger(
+            dialog_t, triggers.DIALOG, [mark("DIR_E2E_TOLD", own_id("SELF"))], npc=HILDA, node=talk
+        ),
+        triggers.trigger(hour_t, triggers.STATE, [], when=triggers.time_between((at[0], 0), (at[1], 0))),
+        triggers.trigger(
+            death_t,
+            triggers.DEATH,
+            [mark("DIR_E2E_DEAD", own_id("SELF")), mark("DIR_E2E_KILLER", own_id("OTHER"))],
+            npc=own,
+        ),
+    ]
+    try:
+        for op in ops:
+            await story.apply(op)
+    except GameError as err:
+        return _logged({"start": f"failed ({err})"})
+
+    async def values() -> dict[str, int]:
+        state = await link.story_state(vars=[*counts, *marks])
+        return {k: int(v) for k, v in state.get("vars", {}).items()}
+
+    async def goto(point: str) -> None:
+        await link.debug("player_goto", waypoint=point)
+        await asyncio.sleep(1.0)  # four times a second
+
+    hero = await link.evaluate(own_id("HERO"))
+    hilda = await link.evaluate(own_id("SELF"), npc=HILDA)
+    mine = await link.evaluate(own_id("SELF"), npc=own)
+
+    await asyncio.sleep(1.0)
+    v = await values()
+    check("start", v.get(start) == 1 and v.get("DIR_E2E_STARTS") == 1, f"{v.get(start)}×, at {a}")
+
+    await goto(a)
+    try:
+        await link.debug("player_take", item=thing, distance=500)
+    except GameError as err:
+        check("item", False, f"no {thing} at {a}: {err}")
+    else:
+        await asyncio.sleep(1.0)
+        v = await values()
+        check(
+            "item",
+            v.get(item_t) == 1 and v.get("DIR_E2E_GOT") == hero,
+            f"{v.get(item_t)}×, self {v.get('DIR_E2E_GOT')}, hero {hero}",
+        )
+
+    seen = []
+    for point in (b, a, b):
+        await goto(point)
+        seen.append((await values()).get(place_t))
+    check("place", seen == [1, 1, 2], f"{b}: {seen}")
+
+    try:
+        await link.choose_dialog(HILDA, talk)
+        await asyncio.sleep(1.0)
+    except GameError as err:
+        check("dialog", False, err)
+    else:
+        v = await values()
+        check(
+            "dialog",
+            v.get(dialog_t) == 1 and v.get("DIR_E2E_TOLD") == hilda,
+            f"{v.get(dialog_t)}×, self {v.get('DIR_E2E_TOLD')}, Hilda {hilda}",
+        )
+
+    before = await values()
+    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+    await link.debug("save", slot)
+    await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    await loaded
+    await link.wait_world()
+    await asyncio.sleep(3.0)  # the branch's changes come back, the triggers count again
+    after = await values()
+    listed = {t["id"]: t for t in await link.triggers()}
+    broken = [t["id"] for t in listed.values() if t.get("broken")]
+    check(
+        "after_load",
+        after == before and set(counts) <= set(listed) and not broken,
+        f"{before} -> {after}; listed {sorted(listed)}, broken {broken}",
+    )
+
+    seen = []
+    for point in (a, b):
+        await goto(point)
+        seen.append((await values()).get(place_t))
+    check("place_again", seen == [2, 3], seen)
+
+    await link.debug("time", hour=at[0], minute=30)
+    await asyncio.sleep(1.0)
+    v = await values()
+    check("hour", v.get(hour_t) == 1, f"{v.get(hour_t)}× at {at[0]}:30")
+
+    try:
+        await link.debug("kill", instance=own)
+        await asyncio.sleep(1.5)  # deaths are looked for twice a second
+    except GameError as err:
+        check("death", False, err)
+    else:
+        v = await values()
+        check(
+            "death",
+            v.get(death_t) == 1 and v.get("DIR_E2E_DEAD") == mine and v.get("DIR_E2E_KILLER") == hero,
+            f"{v.get(death_t)}×, self {v.get('DIR_E2E_DEAD')} ({mine}), "
+            f"other {v.get('DIR_E2E_KILLER')} ({hero})",
+        )
     return _logged(results)
 
 
@@ -5473,6 +6499,410 @@ async def seen_memory(
         f"{session.branch} from {session.parent}@{session.parent_seq}: {len(trail)} sighting(s) of the hero",
     )
 
+    return _logged(results)
+
+
+def _trace_evidence_line(prompt: str, observation: Sighting) -> tuple[str, str]:
+    """Find this trace's actual evidence id, even when a new hero sighting has renumbered the В lines."""
+    if not observation.trace_kind or not observation.places:
+        return "", ""
+    stamp = f"{observation.start % 1440 // 60:02d}:{observation.start % 60:02d}"
+    for line in prompt.splitlines():
+        match = re.match(r"- (В\d+): ", line)
+        if (
+            match
+            and stamp in line
+            and trace_name(observation.trace_kind, observation.name) in line
+            and observation.places[0] in line
+        ):
+            return match[1], line
+    return "", ""
+
+
+async def trace_memory(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    sightings: Sightings,
+    log_dir: str,
+    farmer: str = LOBART,
+) -> dict[str, str]:
+    """Native arrows at Lobart's house: an unseen NPC's arrow proves no culprit; a new arrow after
+    Lobart saw the hero there contradicts his claim that it is a week old. The bench only shoots and
+    waits for the server; views, memory, requests, tools and consequences use the conversation path."""
+    results: dict[str, str] = {}
+    desk, chronicle = sightings.desk, sightings.chronicle
+    directory = Path(log_dir)
+    original = dialogue.llm
+    control_denial = "это не я стрелял в твою стену, я ничего не трогал, я только пришел"
+    age_lie = "стрела эта давно там торчит, с прошлой недели"
+    house = "NW_FARM1_INHOUSE_01"
+    parked = "NW_FARM1_PATH_CITY_16"
+    target = "BAU_951_HILDA"
+
+    def check(name: str, ok: bool, detail: object = "") -> bool:
+        results[name] = f"{'done' if ok else 'failed'} ({detail})"
+        log.info("trace %-20s %s", name, results[name])
+        return ok
+
+    async def mark(name: str) -> None:
+        path = directory / "events.jsonl"
+        if not await _until(
+            lambda: (
+                path.exists()
+                and any(r.get("kind") == "mark" and r.get("text") == name for r in read_trace(path))
+            ),
+            30,
+        ):
+            raise RuntimeError(f"trace bench did not reach {name}")
+
+    async def release(name: str) -> None:
+        # The controlled observer's overlay releases waitreply without a model turn or memory entry.
+        await link.send(SayCmd(npc=farmer, line=f"AIB_TRACE_{name}", text=".", overlay=True))
+
+    async def move(
+        who: str,
+        waypoint: str | None = None,
+        *,
+        near: str | None = None,
+        distance: int = 0,
+        pos: tuple[float, float, float] | None = None,
+        attach: bool = False,
+    ) -> None:
+        try:
+            await link.detach(who)
+        except GameError as err:
+            if "npc is not attached" not in str(err):
+                raise
+        if pos is not None:
+            hero = (await link.snapshot(who, fresh=True)).player
+            assert hero is not None
+            await link.debug("player_goto", pos=pos)
+            await asyncio.sleep(1)  # settle on walkable ground before copying the position to the frozen NPC
+            await link.debug("npc_goto", npc=who, to="PC_HERO", distance=0)
+            await link.debug("player_goto", pos=hero.pos)
+        else:
+            await link.debug(
+                "npc_goto",
+                npc=who,
+                waypoint=waypoint,
+                to="PC_HERO" if near == "PLAYER" else near,
+                distance=distance,
+                face="PC_HERO",
+            )
+        if attach:
+            await attach_when_free(link, who)
+
+    def turns() -> list[dict[str, Any]]:
+        return [
+            r
+            for p in sorted((directory / "traces").glob("*.jsonl"))
+            for r in read_trace(p)
+            if r.get("type") == "turn" and r.get("npc") == farmer
+        ]
+
+    async def deny(*, observation: Sighting | None = None) -> dict[str, Any]:
+        denial = f"Это не я. Да и {age_lie}" if observation is not None else control_denial
+        before = {r["id"] for r in turns()}
+        await link.debug("teleport", near=farmer, distance=250)
+        await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 10)
+        await desk.fresh(farmer)
+        if isinstance(original, FakeBackend):
+            step = FakeStep("Не видел, кто стрелял. Одной стрелы мало, чтобы обвинять тебя.")
+            if observation is not None:
+                sid, _ = _trace_evidence_line(sightings.situation(farmer) or "", observation)
+                step = FakeStep(
+                    "Не с прошлой недели! Стрела свежая, и я только что её увидел.",
+                    [ToolCall("catch_lie", {"said": age_lie, "seen": sid})],
+                )
+            dialogue.llm = ClaimScript([(denial, step)], [], "Я запомню.", only="Лобарт")
+        await link.debug("type", text=f"Лобарт, {denial}.")
+        completed = await _until(
+            lambda: any(
+                r["id"] not in before and denial in r.get("trigger", {}).get("text", "") for r in turns()
+            ),
+            90,
+        )
+        await _until(lambda: not dialogue.speaking(farmer), 30)
+        rows = [
+            r for r in turns() if r["id"] not in before and denial in r.get("trigger", {}).get("text", "")
+        ]
+        row = rows[-1] if rows else {}
+        log.info(
+            "trace %s reply: %s",
+            "positive" if observation is not None else "control",
+            [s.get("text") for s in row.get("steps", [])],
+        )
+        check(
+            "positive_turn" if observation is not None else "control_turn",
+            completed and row.get("status") == "completed",
+            row.get("status"),
+        )
+        return row
+
+    def calls(row: dict[str, Any]) -> list[dict[str, Any]]:
+        return [c for s in row.get("steps", []) for c in s.get("calls", []) if c.get("name") == "catch_lie"]
+
+    def request(row: dict[str, Any]) -> str:
+        return "\n".join(
+            str(i.get("content", ""))
+            for s in row.get("steps", [])
+            for i in s.get("added", [])
+            if i.get("role") == "developer"
+        )
+
+    def evidence(trace_id: str) -> tuple[str, str]:
+        situation = sightings.situation(farmer) or ""
+        sid = next(
+            (
+                sid
+                for sid, s in sightings._shown.get(farmer, {}).items()
+                if s.who == f"TRACE:{trace_id}:arrow"
+            ),
+            "",
+        )
+        line = next((line for line in situation.splitlines() if sid and line.startswith(f"- {sid}:")), "")
+        return sid, line
+
+    def shots(actor: str) -> list[str]:
+        return [
+            r.get("text", "")
+            for r in read_trace(directory / "events.jsonl")
+            if r.get("kind") == "note"
+            and r.get("text", "").startswith(("arrow shot:", "dice shot:"))
+            and f"by {actor}" in r["text"]
+        ]
+
+    await link.wait_world()
+    await mark("trace_ready")
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    for who in (farmer, VINO, target):
+        await link.debug("skip_important", near=who)
+    await link.debug("player_hp", hp=5000)
+    # Changing the clock relocates scripted routines, even for an attached body: set it before staging.
+    await link.debug("time", hour=8, minute=0)
+    # Lobart is away for both shots. The wall is only the arrow's target, not the observer's hiding place.
+    await move(farmer, parked, attach=True)
+    await link.debug("player_goto", waypoint=house)
+    inside = (await link.snapshot(target, fresh=True)).player
+    if inside is None:
+        return _logged({"house": "failed (no player position)"})
+    points = await link._request(DebugCmd(req=link._next_id("trace-"), cmd="waypoints"), 10)
+    waypoints = points.value
+    distant = sorted(
+        [
+            p
+            for p in waypoints
+            if p["name"].startswith("NW_FARM1_")
+            and not p["fp"]
+            and math.dist((p["x"], p["y"], p["z"]), inside.pos) > 6000
+        ],
+        key=lambda p: math.dist((p["x"], p["y"], p["z"]), inside.pos),
+    )
+    if not distant:
+        return _logged({"preparation": "failed (no farm waypoint beyond 60 m)"})
+    parked = distant[0]["name"]
+    await move(farmer, parked, attach=True)
+    # Native ray queries choose a wooden door/wall: stone reflects arrows rather than retaining them.
+    candidates = [
+        (
+            inside.pos[0] + 750 * math.cos(angle * math.pi / 72),
+            inside.pos[1],
+            inside.pos[2] + 750 * math.sin(angle * math.pi / 72),
+        )
+        for height in (140, 170)
+        for angle in range(144)
+    ]
+    rays = [
+        (*point[:1], point[1] + height, point[2], inside.pos[0], inside.pos[1] + 140, inside.pos[2], 1)
+        for height in (140, 170)
+        for point in candidates[:144]
+    ]
+    (directory / "trace-rays.tsv").write_text(
+        "".join(" ".join(str(value) for value in ray) + "\n" for ray in rays), encoding="utf-8"
+    )
+    await release("wall_query")
+    await mark("wall_sample")
+    surfaces = [
+        r
+        for r in read_trace(directory / "physics-results.jsonl")
+        if r.get("kind") == "ray"
+        and r.get("hit")
+        and abs(r["normal"][1]) < 0.7
+        and r.get("material") not in (1, 2, 255)
+    ]
+    surfaces.sort(key=lambda r: r["material"] != 3)
+    candidates = [
+        (r["point"][0] + r["normal"][0] * 150, inside.pos[1], r["point"][2] + r["normal"][2] * 150)
+        for r in surfaces
+    ]
+    outside = None
+    for point in candidates:
+        await move(VINO, pos=point, attach=True)
+        await link.act(VINO, "turn_to", npc="PLAYER")
+        view = await desk.fresh(VINO)
+        position = (await link.snapshot(VINO, fresh=True)).npc.pos
+        if (
+            view is not None
+            and view.hero is not None
+            and not view.hero.seen
+            and view.hero.distance < 1500
+            and abs(position[1] - inside.pos[1]) < 180
+        ):
+            outside = position
+            break
+    if not check(
+        "house_wall", bool(outside), f"inside {house}, outside {outside}; {len(candidates)} candidates"
+    ):
+        return _logged(results)
+    view = await desk.fresh(farmer)
+    if not check(
+        "control_unseen",
+        view is not None
+        and view.hero is not None
+        and not view.hero.seen
+        and view.hero.distance > 5000
+        and not sightings.hero_trail(farmer),
+        f"parked {parked}; {view.hero if view else 'no view'}",
+    ):
+        return _logged(results)
+    shooter_view = await desk.fresh(VINO)
+    baseline = {t.id for t in shooter_view.traces} if shooter_view else set()
+    heard = len(sightings.mind(farmer).heard)
+    await release("control_start")
+    await mark("control_shot")
+    check("npc_shot", bool(shots(VINO)) and not shots("PC_HERO"), shots(VINO))
+    check("control_not_heard", len(sightings.mind(farmer).heard) == heard, f"heard {heard}")
+    await move(farmer, near=VINO, attach=True)
+    await move(VINO, parked)
+    await link.act(farmer, "turn_to", npc="PLAYER")
+    view = await desk.fresh(farmer)
+    control = (
+        next((t for t in view.traces if t.kind == "arrow" and t.id not in baseline), None) if view else None
+    )
+    if not check(
+        "control_trace",
+        control is not None and not sightings.hero_trail(farmer),
+        view.model_dump() if view else "no view",
+    ):
+        return _logged(results)
+    sid, line = evidence(control.id)
+    control_observed = sightings.mind(farmer).traces[f"TRACE:{control.id}:arrow"]
+    await asyncio.sleep(5)  # the trace predates the hero's first visible arrival by at least a game minute
+    row = await deny()
+    control_sid, control_line = _trace_evidence_line(request(row), control_observed)
+    check(
+        "control_in_request",
+        bool(control_sid) and "Следы, которые ты видел" in request(row),
+        control_line,
+    )
+    check("control_no_catch", not calls(row) and not chronicle.facts("caught"), calls(row))
+    talk.end("gone")
+
+    # A new hour, a witnessed arrival, then Lobart is too far to see the actual shot.
+    await mark("positive_ready")
+    await link.debug("time", hour=9, minute=0)
+    await move(VINO, parked)
+    await link.debug("teleport", near=farmer, distance=300)
+    await desk.fresh(farmer)
+    trail = sightings.hero_trail(farmer)
+    hero_start = trail[0].start if trail else -1
+    if not check(
+        "hero_nearby",
+        bool(trail) and trail[0].end % 1440 >= 9 * 60,
+        sightings.words(trail[0]) if trail else "no sighting",
+    ):
+        return _logged(results)
+    await move(farmer, parked, attach=True)
+    await link.debug("player_goto", pos=outside)
+    view = await desk.fresh(farmer)
+    check(
+        "shot_unseen",
+        view is not None and view.hero is not None and not view.hero.seen and view.hero.distance > 2000,
+        view.hero if view else "no view",
+    )
+    baseline = set(sightings.mind(farmer).traces)
+    heard = len(sightings.mind(farmer).heard)
+    await release("hero_start")
+    await mark("hero_shot")
+    check("hero_shot", bool(shots("PC_HERO")), shots("PC_HERO"))
+    hidden = await desk.fresh(farmer)
+    check(
+        "act_not_seen",
+        hidden is not None
+        and hidden.hero is not None
+        and not hidden.hero.seen
+        and hidden.hero.distance > 2000
+        and set(sightings.mind(farmer).traces) == baseline,
+        hidden.hero if hidden else "no view",
+    )
+    check("shot_not_heard", len(sightings.mind(farmer).heard) == heard, f"heard {heard}")
+    await move(farmer, near="PLAYER", attach=True)
+    await link.debug("player_goto", waypoint=house)
+    await link.act(farmer, "turn_to", npc="PLAYER")
+    view = await desk.fresh(farmer)
+    arrow = (
+        next((t for t in view.traces if t.kind == "arrow" and f"TRACE:{t.id}:arrow" not in baseline), None)
+        if view
+        else None
+    )
+    if not check(
+        "new_trace", arrow is not None and arrow.age is not None, view.model_dump() if view else "no view"
+    ):
+        return _logged(results)
+    sid, line = evidence(arrow.id)
+    observed = sightings.mind(farmer).traces[f"TRACE:{arrow.id}:arrow"]
+    check(
+        "trace_memory",
+        bool(sid)
+        and bool(line)
+        and 0 <= arrow.age <= 5
+        and view.time - arrow.age <= observed.start <= view.time,
+        f"{line}; appearance {view.time - arrow.age}, age {arrow.age} min",
+    )
+    row = await deny(observation=observed)
+    prompt = request(row)
+    actual_sid, actual_line = _trace_evidence_line(prompt, observed)
+    fresh_trace = re.search(
+        rf"{re.escape(trace_name(observed.trace_kind, observed.name))} "
+        rf"\([^)]*{re.escape(observed.places[0])}[^)]*давность [0-5] мин\)",
+        prompt,
+    )
+    # Relative age may change during the turn; the stable time/name/place and the В id must survive.
+    check(
+        "trace_in_request",
+        bool(actual_sid) and "Следы, которые ты видел" in prompt and bool(fresh_trace),
+        f"{actual_line}; {fresh_trace.group() if fresh_trace else 'fresh trace absent'}",
+    )
+    hero_ids = [
+        sid
+        for sid, s in sightings._shown.get(farmer, {}).items()
+        if s.who == "PLAYER" and s.start == hero_start
+    ]
+    hero_lines = [
+        line for line in prompt.splitlines() if any(line.startswith(f"- {sid}:") for sid in hero_ids)
+    ]
+    check("hero_in_request", any("ферм" in line for line in hero_lines), hero_lines)
+    caught_calls = calls(row)
+    check(
+        "catch_uses_trace",
+        any(
+            c.get("arguments", {}).get("seen") == actual_sid and c.get("outcome") == "accepted"
+            for c in caught_calls
+        ),
+        caught_calls,
+    )
+    await _until(lambda: bool(chronicle.facts("caught")), 15)
+    caught = chronicle.facts("caught")
+    check(
+        "caught",
+        len(caught) == 1
+        and bool(_trace_evidence_line(f"- В1: {caught[0].get('how', '')}", observed)[0])
+        and "сам видел:" in caught[0].get("how", ""),
+        caught,
+    )
+    dialogue.llm = original
+    await release("done")
     return _logged(results)
 
 

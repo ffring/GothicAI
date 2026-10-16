@@ -5,6 +5,7 @@
 #include <Tempest/Matrix4x4>
 #include <string>
 #include <functional>
+#include <array>
 
 #include <zenkit/World.hh>
 
@@ -27,6 +28,7 @@ class ParticleFx;
 class Interactive;
 class VersionInfo;
 class GlobalFx;
+struct PhysicsNoise;
 
 class World final {
   public:
@@ -40,6 +42,7 @@ class World final {
     void                 setPlayer(Npc* npc);
     void                 postInit();
     std::string_view     name() const { return wname; }
+    double               loadMilliseconds() const { return worldLoadMs; }
 
     void                 load(Serialize& fin );
     void                 save(Serialize& fout);
@@ -48,9 +51,22 @@ class World final {
     Npc*                 npcById(uint32_t id);
     uint32_t             npcCount() const;
     Npc*                 npcForRagdoll(const Ragdoll* body);
-    bool                 stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix);
+    bool                 stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix,
+                                    std::string_view visual = {},
+                                    std::shared_ptr<const DynamicWorld::MovableVobPose> movable = {},
+                                    const Npc* culprit = nullptr, const Tempest::Vec3* sightPoint = nullptr,
+                                    std::string_view surface = "unknown");
     size_t               stuckArrowCount() const { return stuckArrows.size(); }
     bool                 stuckArrowTransform(size_t index, Tempest::Matrix4x4& out) const;
+    bool                 stuckArrowAttachment(size_t index, uint32_t& zenId, Tempest::Matrix4x4& local) const;
+    struct PhysicsTrace {
+      std::string id, kind, name;
+      Tempest::Vec3 position;
+      std::array<Tempest::Vec3,6> sightPoints;
+      int64_t appearedAt = -1; // game minutes; -1 for traces from legacy saves
+      std::string culprit; // engine truth: never serialize this field to the AI bridge
+      };
+    std::vector<PhysicsTrace> physicsTraces() const;
 
     uint32_t             mobsiId(const Interactive* ptr) const;
     Interactive*         mobsiById(uint32_t id);
@@ -196,6 +212,7 @@ class World final {
     Sound                addWeaponHitEffect(Npc&         src, const Bullet* srcArrow, Npc&  reciver);
     Sound                addWeaponBlkEffect(ItemMaterial src, ItemMaterial          reciver, const Tempest::Matrix4x4& pos);
     Sound                addLandHitEffect  (ItemMaterial src, zenkit::MaterialGroup reciver, const Tempest::Matrix4x4& pos);
+    void                 emitPhysicsNoise(const PhysicsNoise& noise);
 
     void                 addTrigger    (AbstractTrigger* trigger);
     void                 addInteractive(Interactive* inter);
@@ -206,6 +223,7 @@ class World final {
     void                 invalidateVobIndex();
 
   private:
+    double               worldLoadMs = 0;
     const zenkit::IFocus& searchPolicy(const Npc& pl, TargetCollect& collAlgo, TargetType& collType, WorldObjects::SearchFlg& opt) const;
     std::string                           wname;
     GameSession&                          game;
@@ -231,7 +249,22 @@ class World final {
     std::unique_ptr<GlobalEffects>        globFx;
     WorldSound                            wsound;
     WorldObjects                          wobj;
-    std::vector<MeshObjects::Mesh>        stuckArrows;
+    struct StuckArrow {
+      MeshObjects::Mesh mesh;
+      std::string visual;
+      Tempest::Matrix4x4 local;
+      std::weak_ptr<const DynamicWorld::MovableVobPose> movable;
+      bool attached = false;
+      uint64_t traceId = 0;
+      int64_t appearedAt = -1;
+      std::string culprit, surface = "unknown";
+      Tempest::Vec3 sightPoint;
+      };
+    std::vector<StuckArrow>               stuckArrows;
+    uint64_t                             nextArrowTraceId = 1;
+    void                                 saveStuckArrows(Serialize& fout) const;
+    void                                 loadStuckArrows(Serialize& fin);
+    void                                 updateStuckArrows();
     struct SpellField {
       Tempest::Vec3 center;
       Npc* caster = nullptr; // identities only; never dereferenced by a field

@@ -44,6 +44,7 @@ from .validator import (
 
 if TYPE_CHECKING:
     from .dialogue import DialogueManager
+    from .questbook import DeadEnd, Quest, QuestBook
 
 log = logging.getLogger(__name__)
 
@@ -180,6 +181,7 @@ class Brief:
     told: list[str]  # what the journal told the hero
     endings: list[Ending]
     successors: dict[str, str]  # npc -> "Name: why"
+    remaining: str = ""  # a quest of the book: its stage and the goals still ahead, in order
 
     def offers(self) -> dict[str, Offer]:
         return {o.id: o for e in self.endings for o in e.offers}
@@ -193,10 +195,12 @@ class Brief:
         if self.told:
             out.append("Что герой знает из журнала:")
             out += [f"- «{t}»" for t in self.told]
+        if self.remaining:
+            out.append(self.remaining)
         out.append("Концовки, которые теперь недоступны:")
         for i, e in enumerate(self.endings, 1):
             out.append(
-                f"{i}. {e.node} — диалог «{e.description}», ставит квесту {ENDINGS[e.value]}. "
+                f"{i}. {e.node} — диалог «{e.description}», ставит квесту {ENDINGS.get(e.value, 'running')}. "
                 f"Когда: {render(e.condition)}."
             )
             if e.lines:
@@ -324,6 +328,7 @@ class Director:
         journal: Journal | None = None,
         pacing: Pacing | None = None,
         settle_s: float = SETTLE_S,
+        book: QuestBook | None = None,
     ) -> None:
         self.link = link
         self.graph = graph
@@ -334,6 +339,7 @@ class Director:
         self.journal = journal or Journal()
         self.pacing = pacing or Pacing()
         self.settle_s = settle_s
+        self.book = book
         self.rules = Rules.of(graph)
         self.repairs: list[Repair] = []
         self.given_up: set[str] = set()  # quests no repair was found for, in this session
@@ -406,7 +412,33 @@ class Director:
             broken.append(q)
         for q in broken:
             await self.repair(q, story)
+        if self.book is not None:
+            broken.extend(await self._look_book(story, deaths))
         return broken
+
+    async def _look_book(self, story: Story, deaths: set[str] | None) -> list[str]:
+        """The book checks the order of its goals; a trigger writing a stage cannot mend a dead dialog."""
+        assert self.book is not None
+        await self.book.settle()
+        broken: list[str] = []
+        while True:
+            state = story.state.merge(await self.book.world())
+            story = Story(self.graph, state, Patches.of(self.patches.ops()))
+            blocked = next(
+                (
+                    b
+                    for b in self.book.dead_ends(state)
+                    if b.quest not in self.given_up and (deaths is None or b.npc in deaths)
+                ),
+                None,
+            )
+            if blocked is None:
+                return broken
+            if blocked.quest not in broken:
+                broken.append(blocked.quest)
+            # One dialog at a time: the same dead npc may own another later in this quest.
+            if await self.repair(blocked.quest, story) is None:
+                self.given_up.add(blocked.quest)
 
     # --- repairing ----------------------------------------------------------------------------
 
@@ -451,6 +483,9 @@ class Director:
             self.pacing.stepped()
 
     async def brief(self, quest: str, story: Story) -> Brief | None:
+        if self.book is not None and quest in self.book.all():
+            blocked = next((b for b in self.book.dead_ends(story.state) if b.quest == quest), None)
+            return await self._book_brief(blocked, story) if blocked is not None else None
         q = self.graph.quests.get(quest)
         if q is None:
             return None
@@ -484,6 +519,109 @@ class Director:
             endings=endings,
             successors=await self._successors(quest, dead, story),
         )
+
+    async def _book_brief(self, blocked: DeadEnd, story: Story) -> Brief | None:
+        assert self.book is not None
+        from .questbook import GOLD, TALKS, done_node, goal_id, goal_node
+
+        q = self.book.all()[blocked.quest]
+        node = story.patches.nodes.get(blocked.node)
+        if node is None:
+            return None
+        offers = []
+        for e in node.get("effects", []):
+            if e.get("do") == "give" and e.get("item") == GOLD and e.get("to") != "self":
+                offers.append(Offer("E1", copy.deepcopy(e), f"золото герою: {e['count']}"))
+            elif e.get("do") == "xp":
+                offers.append(Offer("E2", copy.deepcopy(e), f"опыт +{e['amount']}"))
+        value = next(
+            (e["value"] for e in node.get("effects", []) if e.get("do") == "set" and e.get("var") == q.id),
+            LOG_RUNNING,
+        )
+        told = []
+        current = story.state.vars.get(f"{q.id}_STAGE", self.book.progress(q.id).stage)
+        remaining = [f"Стадия {current} из {len(q.stages)}. Осталось сделать по порядку:"]
+        for k, stage in enumerate(q.stages, 1):
+            if k <= current and stage.journal:
+                told.append(stage.journal)
+            pending = []
+            for j, g in enumerate(stage.goals, 1):
+                gid = goal_id(q, k, j)
+                dialog = done_node(q) if k == len(q.stages) else goal_node(gid)
+                done = k < current or story.state.vars.get(gid, 0) > 0 or dialog in story.patches.told
+                if done:
+                    if g.journal:
+                        told.append(g.journal)
+                    continue
+                if g.kind in TALKS:
+                    text = f"поговорить с {q.name(g.npc)}: «{g.talk.description if g.talk else ''}»"
+                    if g.kind == "bring":
+                        text = f"принести {g.item} ×{g.count} к {q.name(g.npc)}; {text}"
+                elif g.kind == "kill":
+                    text = "убить: " + ", ".join(q.name(n) for n in g.npcs)
+                elif g.kind == "reach":
+                    text = f"дойти до {g.point or q.name(g.npc)}"
+                elif g.kind == "have":
+                    text = f"заполучить {g.item} ×{g.count}"
+                else:
+                    text = f"подождать {g.days} дн."
+                pending.append(text)
+            if pending:
+                remaining.append(f"- Стадия {k}: {stage.journal} " + "; ".join(pending) + ".")
+        killer = next(
+            (f.get("killer") for f in reversed(self.chronicle.facts("died")) if f.get("npc") == blocked.npc),
+            "",
+        )
+        return Brief(
+            quest=q.id,
+            title=q.title,
+            dead=blocked.npc,
+            dead_name=story.state.name(blocked.npc),
+            killer="герой"
+            if killer == "PLAYER"
+            else story.state.name(killer)
+            if killer
+            else "неизвестно кто",
+            told=list(dict.fromkeys(told)),
+            endings=[
+                Ending(
+                    blocked.node,
+                    blocked.npc,
+                    node["description"],
+                    value,
+                    copy.deepcopy(node.get("condition")),
+                    [x.get("text", "") for x in node.get("lines", [])],
+                    offers,
+                )
+            ],
+            successors=await self._book_successors(q, blocked.npc, story),
+            remaining="\n".join(remaining),
+        )
+
+    async def _book_successors(self, q: Quest, dead: str, story: Story) -> dict[str, str]:
+        why = {g.npc: "другая цель этого поручения" for s in q.stages for g in s.goals if g.npc}
+        for s in q.stages:
+            for g in s.goals:
+                for npc in g.npcs:
+                    why.setdefault(npc, "другая цель этого поручения")
+        try:
+            near = await self.link.story_nearby(dead, NEARBY_CM)
+        except (GameError, TimeoutError):
+            near = []
+        for p in sorted(near, key=lambda p: p.get("distance", 0)):
+            why.setdefault(p["npc"].upper(), f"был рядом ({round(p.get('distance', 0) / 100)} м)")
+        missing = [n for n in why if n not in story.state.npcs]
+        if missing:
+            more = await self.world(missing)
+            story.state.npcs.update(more.npcs)
+            story.state.names.update(more.names)
+        out = {}
+        for npc, reason in why.items():
+            if npc != dead and story.state.alive(npc) and not self.rules.plot_npc(npc):
+                out[npc] = f"{story.state.name(npc)}: {reason}"
+                if len(out) == MAX_SUCCESSORS:
+                    break
+        return out
 
     def _ending(self, node: Node, quest: str, story: Story, first: int) -> Ending | None:
         """The ending as a repair could replay it: when it is offered, what it needs, what it gives."""
@@ -603,6 +741,11 @@ class Director:
 
     async def _try(self, p: Proposal, brief: Brief, story: Story) -> tuple[Repair | None, list[str]]:
         """Build the change from the proposal, check it, make it."""
+        if self.book is not None and brief.quest in self.book.all():
+            done, errors = await self.book.repair(p, brief, story)
+            if done is not None:
+                self._done(done, brief, p)
+            return done, errors
         if p.kind == "close":
             return await self._close(p, brief, story)
         if p.kind != "handover":

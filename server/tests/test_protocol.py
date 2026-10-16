@@ -1,8 +1,11 @@
 import pytest
 from pydantic import ValidationError
 
+from gothic_ai import triggers
 from gothic_ai.protocol import (
+    NOISE_PROTOCOL,
     PROTOCOL_VERSION,
+    TRACE_PROTOCOL,
     ActionCmd,
     ActionResult,
     BeastCmd,
@@ -14,7 +17,9 @@ from gothic_ai.protocol import (
     HushCmd,
     LineVoice,
     NpcActCmd,
+    NpcActResult,
     NpcChestsCmd,
+    NpcEvent,
     NpcIdle,
     NpcLook,
     NpcRoster,
@@ -27,6 +32,7 @@ from gothic_ai.protocol import (
     StoryEffectCmd,
     StoryNpcCmd,
     StoryProgramCmd,
+    TriggerFired,
     parse_game_message,
 )
 from tests.fake_game import FakeGame
@@ -308,7 +314,7 @@ def test_v33_an_npc_of_the_directors():
 
 
 def test_v34_a_character_of_the_directors():
-    assert PROTOCOL_VERSION == 34
+    assert PROTOCOL_VERSION >= 34
     spec = NpcSpec(
         npc="DIR_NPC_1",
         like="VLK_4000_BUERGER",
@@ -325,3 +331,70 @@ def test_v34_a_character_of_the_directors():
     json = StoryNpcCmd(req="n1", **spec.model_dump()).to_json()
     assert '"type":"story_npc"' in json and '"name":"Гарет"' in json and '"armor"' not in json
     assert '"routine":[{"start":"06:00","end":"06:00","state":"ZS_STAND_ARMSCROSSED"' in json
+
+
+def test_v35_the_directors_triggers():
+    assert PROTOCOL_VERSION >= 35
+    op = triggers.trigger("DIR_Q1_T1", triggers.STATE, [], when=triggers.hero_has("ITMI_SAW"), repeat=True)
+    patch = GraphPatchCmd(ops=[op]).to_json()
+    assert '"op":"trigger"' in patch and '"on":"state"' in patch and '"repeat":true' in patch
+    fired = parse_game_message(
+        '{"type":"trigger_fired","id":"DIR_Q1_T1","count":2,"npc":"PC_HERO","other":"PC_HERO"}'
+    )
+    assert isinstance(fired, TriggerFired) and fired.count == 2 and fired.error is None
+    assert '"cmd":"triggers"' in DebugCmd(req="r1", cmd="triggers").to_json()
+
+
+def test_v36_physics_noise_and_investigation():
+    assert PROTOCOL_VERSION >= NOISE_PROTOCOL == 36
+    noise = parse_game_message(
+        '{"type":"npc_event","npc":"X","kind":"noise","at":[100,20,300],'
+        '"place":"NW_CITY_TAVERN_01","loudness":0.54,"source":"table","distance":502}'
+    )
+    assert isinstance(noise, NpcEvent)
+    assert noise.at == (100, 20, 300) and noise.place == "NW_CITY_TAVERN_01"
+    assert noise.loudness == 0.54 and noise.source == "table" and noise.distance == 502
+    assert noise.other == "" and noise.other_name is None
+    seen = parse_game_message(
+        '{"type":"npc_event","npc":"X","kind":"noise","other":"PLAYER","at":[1,2,3]}'
+    )
+    assert isinstance(seen, NpcEvent) and seen.other == "PLAYER"
+    legacy = parse_game_message('{"type":"npc_event","npc":"X","kind":"player_near"}')
+    assert isinstance(legacy, NpcEvent) and legacy.other == "PLAYER" and legacy.at is None
+    cmd = NpcActCmd(id="n1", npc="X", action="investigate", args={"at": [100, 20, 300], "ms": 5000})
+    assert '"action":"investigate"' in cmd.to_json() and '"at":[100,20,300]' in cmd.to_json()
+    assert '"cmd":"physics_noise"' in DebugCmd(req="r1", cmd="physics_noise", text="status").to_json()
+
+
+def test_v36_investigation_receipt_identifies_action_without_breaking_old_bridge():
+    receipt = parse_game_message(
+        '{"type":"npc_act_result","id":"n1","npc":"X","status":"queued","action":"investigate"}'
+    )
+    assert isinstance(receipt, NpcActResult) and receipt.action == "investigate" and receipt.id == "n1"
+    legacy = parse_game_message('{"type":"npc_act_result","id":"n2","npc":"X","status":"queued"}')
+    assert isinstance(legacy, NpcActResult) and legacy.action is None
+
+
+def test_v37_physical_traces_and_noise_clock():
+    assert PROTOCOL_VERSION == TRACE_PROTOCOL == 37
+    msg = parse_game_message(_json({
+        "type": "npc_views", "t": 1000, "views": [{
+            "npc": "X", "name": "Корагон", "time": 725,
+            "traces": [{"id": "NEWWORLD.ZEN:vob:42", "kind": "tilted", "name": "стол",
+                        "waypoint": "NW_CITY_TAVERN_01", "distance": 210, "hero_cm": 300,
+                        "from_hero": "left", "age": 5}],
+        }],
+    }))
+    assert isinstance(msg, NpcViews)
+    trace = msg.views[0].traces[0]
+    assert (trace.kind, trace.name, trace.waypoint, trace.age) == (
+        "tilted", "стол", "NW_CITY_TAVERN_01", 5,
+    )
+    assert trace.hero_cm == 300 and trace.from_hero == "left"
+    assert set(trace.model_dump()) == {
+        "id", "kind", "name", "waypoint", "distance", "hero_cm", "from_hero", "age",
+    }
+    legacy = parse_game_message('{"type":"npc_views","t":1,"views":[{"npc":"X","name":"x"}]}')
+    assert isinstance(legacy, NpcViews) and legacy.views[0].traces == []
+    noise = parse_game_message('{"type":"npc_event","npc":"X","kind":"noise","time":725}')
+    assert isinstance(noise, NpcEvent) and noise.time == 725 and noise.other == ""

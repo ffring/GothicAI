@@ -214,6 +214,7 @@ def render_situation(
         # a free npc nobody asked a snapshot of: what it sees is all there is
         seen = [sight.place, *([sight.hero] if sight.hero else []), sight.people]
         seen += [sight.ground] if sight.ground else []
+        seen += [sight.traces] if sight.traces else []
         intent_line = [f"Твоё намерение: {intent.describe()}."] if intent else []
         return "\n".join(["[Обстановка — видна только тебе, герою её не пересказывай]", *seen, *intent_line])
     w, npc, pl = snap.world, snap.npc, snap.player
@@ -241,6 +242,8 @@ def render_situation(
         lines.append(sight.people)
         if sight.ground:
             lines.append(sight.ground)
+        if sight.traces:
+            lines.append(sight.traces)
     else:
         near = [f"{o.name} ({_metres(o.distance)}{', мёртв' if o.dead else ''})" for o in snap.nearby_npcs]
         lines.append("Рядом: " + (", ".join(near) if near else "никого") + ".")

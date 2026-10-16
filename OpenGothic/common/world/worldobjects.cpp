@@ -1,6 +1,7 @@
 #include "worldobjects.h"
 
 #include "game/serialize.h"
+#include "physics/physicsnoise.h"
 #include "game/bodyobservations.h"
 #include "world/objects/itemtorchburning.h"
 #include "world/objects/item.h"
@@ -988,6 +989,22 @@ void WorldObjects::passivePerceptionProcess(PerceptionMsg& msg, Npc& npc, Npc& p
   if(msg.item!=size_t(-1) && msg.other!=nullptr)
     owner.script().setInstanceItem(*msg.other,msg.item);
   npc.perceptionProcess(*msg.other,msg.victim,distance,PercType(msg.what));
+  }
+
+void WorldObjects::emitPhysicsNoise(const PhysicsNoise& noise) {
+  // Only fully simulated NPCs can respond; the cheap radius/gate checks precede rays.
+  for(auto* npc:npcNear) {
+    if(npc==noise.culprit || !npc->canHearPhysicsNoise())
+      continue;
+    const float distance = npc->qDistTo(noise.position);
+    if(distance>noise.radius*noise.radius)
+      continue;
+    const float occlusion = owner.physic()->soundOclusion(npc->mapHeadBone(),noise.position);
+    const float audibleRadius = noise.radius*std::max(0.f,1.f-occlusion);
+    if(distance>audibleRadius*audibleRadius)
+      continue;
+    npc->hearPhysicsNoise(noise);
+    }
   }
 
 void WorldObjects::resetPositionToTA() {

@@ -24,6 +24,9 @@ knew him, else by the look of what he wears; with ids, so «вон тот мёр
 
 It sees things lying about too (protocol v22): «На земле: Запечатанное послание (ITWR_…; 1 м, у ног
 героя).». What the hero threw down for it, it can pick up (`take_item`, npc_tools.py).
+
+Physical traces (v37) are shown on a separate line: stuck arrows, displaced or tilted furniture, where
+they are and how old they look. A trace never tells it who caused it.
 """
 
 from __future__ import annotations
@@ -37,7 +40,18 @@ from typing import TYPE_CHECKING
 from .game import GameError, GameLink
 from .llm import Tool, ToolCall
 from .npc_tools import guild_name
-from .protocol import GameMessage, GroundItem, HeroLook, Loading, Look, NpcView, NpcViews, Session, Snapshot
+from .protocol import (
+    TRACE_PROTOCOL,
+    GameMessage,
+    GroundItem,
+    HeroLook,
+    Loading,
+    Look,
+    NpcView,
+    NpcViews,
+    Session,
+    Snapshot,
+)
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
@@ -208,6 +222,7 @@ class Sight:
     targets: dict[str, str] = field(default_factory=dict)
     ground: str | None = None  # «На земле: …», what it sees lying about
     things: dict[str, GroundItem] = field(default_factory=dict)  # what take_item may pick up, by item id
+    traces: str | None = None  # «Следы: …», visible physical evidence, never its culprit
 
 
 def armor_look(armor: str | None) -> tuple[str, str] | None:
@@ -271,6 +286,9 @@ class PerceptionDesk:
         return self.view(npc)
 
     def _store(self, view: NpcView) -> None:
+        hello = getattr(self.link, "hello", None)
+        if hello is not None and hello.protocol < TRACE_PROTOCOL and view.traces:
+            view = view.model_copy(update={"traces": []})
         now = self.clock()
         self._views[view.npc.upper()] = (now, view)
         recent = self._recent.setdefault(view.npc.upper(), {})
@@ -323,7 +341,27 @@ class PerceptionDesk:
             self.targets(view),
             ground=_ground(view.items),
             things={t.item.upper(): t for t in view.items},
+            traces=self._traces(view),
         )
+
+    def _traces(self, view: NpcView) -> str | None:
+        if not view.traces:
+            return None
+        told = []
+        for trace in view.traces:
+            where = [f"{_m(trace.distance)} м"]
+            place = self.places.of(trace.waypoint) if self.places is not None and trace.waypoint else None
+            if place is not None:
+                where.append(place.where_ru)
+            elif trace.waypoint:
+                where.append(f"у точки {trace.waypoint}")
+            if trace.hero_cm is not None and trace.hero_cm <= AT_FEET_CM:
+                where.append("у ног героя")
+            elif trace.from_hero in SIDES:
+                where.append(SIDES[trace.from_hero])
+            where.append(f"давность {trace.age} мин" if trace.age is not None else "давность неизвестна")
+            told.append(f"{trace_name(trace.kind, trace.name)} ({', '.join(where)})")
+        return "Следы: " + "; ".join(told) + "."
 
     def targets(self, view: NpcView) -> dict[str, str]:
         """Whom its intent may point to: the hero, whom it sees, saw a moment ago, whom the hero looks at
@@ -578,6 +616,13 @@ class PerceptionDesk:
             t = view.items[0]
             at = " at the hero's feet" if t.hero_cm is not None and t.hero_cm <= AT_FEET_CM else ""
             lines.append(f"On the ground: {t.name}, {_m(t.distance)} m away{at}.")
+        if view.traces:
+            kinds = {"arrow": "a stuck arrow", "moved": "a displaced object", "tilted": "a tilted object"}
+            for trace in view.traces:
+                lines.append(
+                    f"You see {kinds[trace.kind]}: {trace.name}, {_m(trace.distance)} m away "
+                    + (f"(age {trace.age} game minutes)." if trace.age is not None else "(age unknown).")
+                )
         return tuple(lines)
 
 
@@ -619,6 +664,13 @@ def _ground(items: list[GroundItem]) -> str | None:
         count = f" ×{t.count}" if t.count > 1 else ""
         told.append(f"{t.name}{count} ({t.item}; {', '.join(where)})")
     return "На земле: " + "; ".join(told) + "."
+
+
+def trace_name(kind: str, name: str) -> str:
+    if kind == "arrow" and "стрел" in name.lower():
+        return name
+    kinds = {"arrow": "застрявшая стрела", "moved": "сдвинутый предмет", "tilted": "наклонённый предмет"}
+    return f"{kinds.get(kind, 'след')}: {name}"
 
 
 def _salience(o: Look) -> int:

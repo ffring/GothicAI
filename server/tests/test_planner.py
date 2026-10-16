@@ -9,7 +9,14 @@ from gothic_ai.brain import DeciderClient, LogApplier, NpcPlanner, PlannerConfig
 from gothic_ai.brain.day import DayMenu, DayOption, own_options, plan_options
 from gothic_ai.brain.tiers import Placement, TierConfig, assign_tiers, raw_tier
 from gothic_ai.game import GameError
-from gothic_ai.protocol import RosterEntry, RoutineEntry, RoutineInfo, parse_game_message
+from gothic_ai.protocol import (
+    NpcActResult,
+    NpcIdle,
+    RosterEntry,
+    RoutineEntry,
+    RoutineInfo,
+    parse_game_message,
+)
 from tests.fakes import Clock, FakeDecider
 
 
@@ -199,6 +206,331 @@ async def test_events_debounce_into_one_request() -> None:
     assert call["lane"] == "background" and call["deadline_ms"] == 1000
     assert "came close to you (3 m away)" in call["state"] and "dropped an apple" in call["state"]
     assert "pick_up" not in call["questions"]["react"]["criteria"]  # the game never sends it: no option
+
+
+async def test_noise_reaches_decider_without_inventing_a_culprit_and_uses_its_location() -> None:
+    from gothic_ai.brain.apply import actions_for
+
+    planner, decider, applier, clock = make(FakeDecider("investigate"))
+    planner.on_roster([entry("PATRON", 5)], clock.t)
+    planner.on_message(
+        parse_game_message(
+            json.dumps(
+                {
+                    "type": "npc_event",
+                    "npc": "PATRON",
+                    "kind": "noise",
+                    "distance": 500,
+                    "at": [1200, 350, -600],
+                    "place": "in Koragon's tavern",
+                    "loudness": 0.7,
+                    "source": "barrel",
+                }
+            )
+        )
+    )
+    assert planner.npcs["PATRON"].stimuli[0].other == ""
+    assert planner.npcs["PATRON"].last_interaction is None
+    await step(planner, clock, 0.3)
+    (call,) = decider.calls
+    assert call["lane"] == "background"
+    assert "5 m away in Koragon's tavern" in call["state"]
+    assert "a barrel hit something (loudness 0.70)" in call["state"]
+    assert "You did not see who caused it." in call["state"]
+    assert "You saw the hero cause it" not in call["state"]
+    assert set(call["questions"]["react"]["criteria"]) == {
+        "continue",
+        "look_at",
+        "investigate",
+        "call_guards",
+        "comment",
+    }
+    (decision,) = applier.recent
+    assert decision.choice == "investigate" and decision.stimuli == ("noise",)
+    assert actions_for(decision) == [("investigate", {"at": [1200, 350, -600], "ms": 5000})]
+    await step(planner, clock, 9)
+    assert len(applier.recent) == 1  # the same noise does not send it on another trip
+
+
+@pytest.mark.parametrize(("confidence", "applied"), [(0.35, True), (0.29, False)])
+async def test_bounded_noise_investigation_needs_less_certainty_than_a_general_reaction(confidence, applied):
+    planner, _, applier, clock = make(FakeDecider("investigate", confidence=confidence))
+    planner.on_roster([entry("PATRON", 5)], clock.t)
+    planner.on_event("PATRON", "noise", clock.t, position=(100, 200, 300), source="barrel", loudness=0.7)
+    await step(planner, clock, 0.3)
+    assert bool(applier.recent) is applied
+    assert planner.stats.unsure == (0 if applied else 1)
+    if applied:
+        assert applier.recent[0].args == {"at": [100, 200, 300], "ms": 5000}
+
+
+async def investigating(*, queued: bool = True):
+    planner, decider, applier, clock = make(FakeDecider("investigate"))
+    planner.on_roster([entry("PATRON", 5)], clock.t)
+    planner.on_event("PATRON", "noise", clock.t, position=(100, 200, 300), source="barrel", loudness=0.7)
+    await step(planner, clock, 0.3)
+    if queued:
+        planner.on_message(
+            NpcActResult(
+                type="npc_act_result", id="noise1", npc="PATRON", action="investigate", status="queued"
+            )
+        )
+    decider.choice = "greet"
+    return planner, decider, applier, clock
+
+
+async def test_investigation_defers_hero_and_day_plan_then_redecides_current_presence() -> None:
+    planner, decider, applier, clock = await investigating()
+    planner.routine_of = routines = Routines()
+    planner.game_time = (14, 0)
+    planner.set_agenda("PATRON", "sell the hero some bread")
+    planner.npcs["PATRON"].last_plan = clock.t - 1000
+    planner.on_event("PATRON", "player_near", clock.t, distance_cm=300)
+    await step(planner, clock, 30)  # longer than player_near's 15 s TTL
+    assert len(decider.calls) == 1 and len(applier.recent) == 1 and routines.asked == []
+    assert "greet" not in planner.npcs["PATRON"].last_applied
+    planner.on_roster([entry("PATRON", 6.5)], clock.t)  # still within the bridge's 7 m leave border
+    planner.on_message(NpcIdle(type="npc_idle", npc="PATRON", act="noise1", reason="done"))
+    await step(planner, clock)
+    assert len(decider.calls) == 2 and applier.recent[-1].choice == "greet"
+    assert applier.recent[-1].stimuli == ("player_near",)
+    assert "came close to you (6 m away)" in decider.calls[-1]["state"]
+    assert planner.npcs["PATRON"].investigation is None
+
+
+async def test_deferred_hero_reaction_is_dropped_when_the_hero_has_left() -> None:
+    planner, decider, applier, clock = await investigating()
+    planner.on_event("PATRON", "player_near", clock.t, distance_cm=300)
+    await step(planner, clock, 20)
+    planner.on_roster([entry("PATRON", 9)], clock.t)  # NEAR tier still, but outside proximity hysteresis
+    planner.on_message(NpcIdle(type="npc_idle", npc="PATRON", act="noise1", reason="done"))
+    await step(planner, clock)
+    assert len(decider.calls) == 1 and len(applier.recent) == 1
+    assert planner.npcs["PATRON"].deferred == [] and planner.npcs["PATRON"].stimuli == []
+
+
+async def test_completed_investigation_waits_for_fresh_roster_before_a_deferred_reaction() -> None:
+    planner, decider, _, clock = await investigating()
+    planner.on_event("PATRON", "player_near", clock.t, distance_cm=300)
+    await step(planner, clock, 30)
+    planner.on_message(NpcIdle(type="npc_idle", npc="PATRON", act="noise1", reason="done"))
+    await step(planner, clock)
+    assert len(decider.calls) == 1 and planner.npcs["PATRON"].deferred
+    planner.on_roster([entry("PATRON", 5)], clock.t)
+    await step(planner, clock)
+    assert len(decider.calls) == 2
+
+
+@pytest.mark.parametrize("queued", [False, True])
+async def test_lost_investigation_receipt_or_idle_has_bounded_priority(queued) -> None:
+    planner, decider, _, clock = await investigating(queued=queued)
+    planner.on_event("PATRON", "player_near", clock.t, distance_cm=300)
+    await step(planner, clock, 59)
+    assert len(decider.calls) == 1 and planner.npcs["PATRON"].investigation is not None
+    planner.on_roster([entry("PATRON", 5)], clock.t)
+    await step(planner, clock, 1)
+    assert len(decider.calls) == 2 and planner.npcs["PATRON"].investigation is None
+
+
+async def test_only_the_investigation_receipt_and_matching_idle_end_its_priority() -> None:
+    planner, decider, _, clock = await investigating(queued=False)
+    planner.on_event("PATRON", "player_near", clock.t, distance_cm=300)
+    planner.on_message(
+        NpcActResult(type="npc_act_result", id="old", npc="PATRON", action="look_at", status="queued")
+    )
+    assert planner.npcs["PATRON"].investigation.act is None
+    planner.on_message(NpcIdle(type="npc_idle", npc="PATRON", act="old", reason="done"))
+    planner.on_message(NpcIdle(type="npc_idle", npc="PATRON", reason="done"))
+    planner.on_message(
+        NpcActResult(type="npc_act_result", id="noise1", npc="PATRON", action="investigate", status="queued")
+    )
+    planner.on_message(
+        NpcActResult(
+            type="npc_act_result",
+            id="noise2",
+            npc="PATRON",
+            action="investigate",
+            status="rejected",
+            detail="busy",
+        )
+    )
+    await step(planner, clock, 0.3)
+    assert len(decider.calls) == 1 and planner.npcs["PATRON"].investigation.act == "noise1"
+    planner.on_message(NpcIdle(type="npc_idle", npc="PATRON", act="noise1", reason="done"))
+    await step(planner, clock)
+    assert len(decider.calls) == 2
+
+
+async def test_rejected_investigation_releases_provisional_priority() -> None:
+    planner, decider, _, clock = await investigating(queued=False)
+    planner.on_event("PATRON", "player_near", clock.t, distance_cm=300)
+    planner.on_message(
+        NpcActResult(
+            type="npc_act_result",
+            id="noise1",
+            npc="PATRON",
+            action="investigate",
+            status="rejected",
+            detail="busy",
+        )
+    )
+    await step(planner, clock)
+    assert planner.npcs["PATRON"].investigation is None and len(decider.calls) == 2
+
+
+@pytest.mark.parametrize("kind", ["monster_near", "monster_attack", "attack", "threatened"])
+async def test_threats_interrupt_investigation_without_waiting_for_its_idle(kind) -> None:
+    planner, decider, applier, clock = await investigating()
+    planner.on_event("PATRON", "player_near", clock.t, distance_cm=300)
+    decider.choice = "flee"
+    other = "PLAYER" if kind in ("attack", "threatened") else "WOLF"
+    planner.on_event("PATRON", kind, clock.t, other=other, detail="you", distance_cm=200)
+    assert planner.npcs["PATRON"].investigation is None and planner.npcs["PATRON"].deferred == []
+    await step(planner, clock)
+    if kind in ("attack", "threatened"):
+        assert len(decider.calls) == 1  # the hero's crimes stay with the native scripts, immediately
+    else:
+        assert decider.calls[-1]["lane"] == "urgent" and applier.recent[-1].choice == "flee"
+
+
+@pytest.mark.parametrize("activity", ["talk", "dialog", "fight", "attached"])
+async def test_dialogue_combat_or_attachment_clear_investigation_and_deferred_greeting(activity) -> None:
+    planner, decider, _, clock = await investigating()
+    planner.on_event("PATRON", "player_near", clock.t, distance_cm=300)
+    if activity == "talk":
+        planner.talking("PATRON", True)
+    else:
+        planner.on_roster([entry("PATRON", 5, activity=activity)], clock.t)
+    planner.on_message(NpcIdle(type="npc_idle", npc="PATRON", act="noise1", reason="interrupted"))
+    await step(planner, clock, 1)
+    assert planner.npcs["PATRON"].investigation is None and planner.npcs["PATRON"].deferred == []
+    assert len(decider.calls) == 1
+
+
+async def test_an_ordinary_answer_already_in_flight_is_not_applied_during_investigation() -> None:
+    from gothic_ai.brain.planner import Investigation
+
+    planner, decider, applier, clock = make(FakeDecider("greet"))
+    decider.gate = asyncio.Event()
+    planner.on_roster([entry("PATRON", 5)], clock.t)
+    planner.on_event("PATRON", "player_near", clock.t)
+    await step(planner, clock, 0.3)
+    assert len(decider.calls) == 1
+    # The bridge can accept a bounded action while an ordinary request has already left the server.
+    # Keep its version unchanged to test the body-priority check independently of event invalidation.
+    planner.npcs["PATRON"].investigation = Investigation(clock.t, "noise1")
+    decider.gate.set()
+    await settle()
+    assert planner.stats.discarded == 1 and not applier.recent
+    assert "greet" not in planner.npcs["PATRON"].last_applied
+
+
+@pytest.mark.parametrize(
+    ("other", "other_name", "seen"), [("PLAYER", None, "the hero"), ("VLK_400", "Горожанин", "Горожанин")]
+)
+async def test_noise_identifies_only_the_witnessed_culprit(other, other_name, seen) -> None:
+    planner, decider, _, clock = make(FakeDecider("continue"))
+    planner.on_roster([entry("PATRON", 25)], clock.t)  # salient even for MID npc's
+    planner.on_event(
+        "PATRON",
+        "noise",
+        clock.t,
+        other=other,
+        other_name=other_name,
+        distance_cm=600,
+        position=(1, 2, 3),
+        source="table",
+        loudness=0.8,
+    )
+    await step(planner, clock, 0.3)
+    assert f"You saw {seen} cause it." in decider.calls[0]["state"]
+
+
+@pytest.mark.parametrize(
+    ("activity", "talking"), [("dialog", False), ("fight", False), ("attached", False), ("routine", True)]
+)
+async def test_busy_npc_does_not_retain_a_noise(activity, talking) -> None:
+    planner, decider, _, clock = make()
+    planner.on_roster([entry("PATRON", 5, activity=activity)], clock.t)
+    planner.talking("PATRON", talking)
+    planner.on_event("PATRON", "noise", clock.t, position=(1, 2, 3), source="body", loudness=0.9)
+    await step(planner, clock, 1)
+    assert decider.calls == [] and planner.npcs["PATRON"].stimuli == []
+
+
+def test_noise_menu_and_comment_keep_attention_on_the_sound() -> None:
+    from gothic_ai.brain.apply import Decision, actions_for
+    from gothic_ai.brain.situation import NpcContext, SituationBuilder
+    from gothic_ai.brain.stimuli import Stimulus
+
+    stimulus = Stimulus("noise", 10, position=(1, 2, 3), source="cup")
+    react = SituationBuilder().react(NpcContext("PATRON", "Patron"), [stimulus], 10, None)
+    assert "You did not see who caused it." in react.state
+
+    def decision(choice: str, **kwargs) -> Decision:
+        return Decision("PATRON", "react", choice, 0.9, {}, ("noise",), **kwargs)
+
+    assert actions_for(decision("look_at")) == []  # native noise reaction already did the turn
+    assert actions_for(decision("comment")) == [("say_svm", {"svm": "WHATWASTHAT", "overlay": True})]
+    assert actions_for(decision("call_guards")) == [("say_svm", {"svm": "GUARDS", "overlay": True})]
+    assert actions_for(decision("investigate")) == []  # never walk toward an invented destination
+    without_location = SituationBuilder().react(
+        NpcContext("PATRON", "Patron"), [Stimulus("noise", 10)], 10, None
+    )
+    assert "investigate" not in without_location.questions["react"]["criteria"]
+
+
+def test_noise_place_uses_existing_place_book() -> None:
+    from gothic_ai.brain.situation import NpcContext, SituationBuilder
+    from gothic_ai.brain.stimuli import Stimulus
+    from gothic_ai.places import PlaceBook
+
+    book = PlaceBook(
+        {
+            "points": {"TAVERN_01": 0},
+            "places": [
+                {
+                    "id": "TAVERN",
+                    "ru": "Таверна",
+                    "where_ru": "в таверне",
+                    "en": "Koragon's tavern",
+                    "where_en": "in Koragon's tavern",
+                }
+            ],
+        }
+    )
+    stimulus = Stimulus("noise", 10, place="TAVERN_01", source="barrel", distance_cm=500)
+    react = SituationBuilder(places=book).react(NpcContext("PATRON", "Patron"), [stimulus], 10, None)
+    assert "in Koragon's tavern" in react.state and "TAVERN_01" not in react.state
+    assert stimulus.place == "TAVERN_01"  # the input event is still the bridge's observation
+
+
+@pytest.mark.parametrize("protocol_offset", [None, -1, 0])
+async def test_investigation_is_only_sent_to_a_bridge_that_supports_it(protocol_offset) -> None:
+    from types import SimpleNamespace
+
+    from gothic_ai.brain import Decision, GameApplier
+    from gothic_ai.protocol import NOISE_PROTOCOL
+
+    class Link:
+        def __init__(self):
+            self.hello = (
+                None
+                if protocol_offset is None
+                else SimpleNamespace(protocol=NOISE_PROTOCOL + protocol_offset)
+            )
+            self.sent: list[tuple] = []
+
+        async def npc_act(self, npc, action, **args):
+            self.sent.append((npc, action, args))
+
+    link = Link()
+    GameApplier(link).apply(  # type: ignore[arg-type]
+        Decision("PATRON", "react", "investigate", 0.9, {}, ("noise",), args={"at": [1, 2, 3], "ms": 5000})
+    )
+    await settle()
+    expected = [("PATRON", "investigate", {"at": [1, 2, 3], "ms": 5000})] if protocol_offset == 0 else []
+    assert link.sent == expected
 
 
 async def test_scripted_events_are_context_only() -> None:

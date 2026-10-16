@@ -1,6 +1,15 @@
 #include "physics/collisionworld.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicvbo.h"
+#include "physics/ragdoll.h"
+#include "graphics/mesh/protomesh.h"
+#include "graphics/mesh/skeleton.h"
+#include "graphics/mesh/hitzones.h"
+#include "graphics/mesh/submesh/packedmesh.h"
+#include "game/serialize.h"
+
+#include <Tempest/MemReader>
+#include <Tempest/MemWriter>
 
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -11,15 +20,20 @@
 
 #include <Jolt/Physics/Collision/CastSphereVsTriangles.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -47,6 +61,611 @@ namespace {
     auto matrix = Tempest::Matrix4x4::mkIdentity();
     matrix.translate(x,y,z);
     return matrix;
+    }
+
+  void requireMatrix(const Tempest::Matrix4x4& actual, const Tempest::Matrix4x4& expected,
+                     const char* message) {
+    for(int c=0;c<4;++c)
+      for(int r=0;r<4;++r)
+        requireNear(actual.at(c,r),expected.at(c,r),c==3 ? .001f : .00001f,message);
+    }
+
+  zenkit::MultiResolutionMesh movableCube() {
+    zenkit::MultiResolutionMesh mesh;
+    mesh.positions = {{-10,-10,-10},{10,-10,-10},{10,10,-10},{-10,10,-10},
+                      {-10,-10,10},{10,-10,10},{10,10,10},{-10,10,10}};
+    mesh.bbox = {{-10,-10,-10},{10,10,10}};
+    mesh.sub_meshes.resize(1);
+    auto& part = mesh.sub_meshes[0];
+    part.mat.group = zenkit::MaterialGroup::WOOD;
+    for(size_t i=0;i<mesh.positions.size();++i)
+      part.wedges.push_back({{0,1,0},{0,0},uint16_t(i)});
+    part.triangles = {{{0,2,1}},{{0,3,2}},{{4,5,6}},{{4,6,7}},
+                      {{0,4,7}},{{0,7,3}},{{1,2,6}},{{1,6,5}},
+                      {{0,1,5}},{{0,5,4}},{{3,7,6}},{{3,6,2}}};
+    return mesh;
+    }
+
+  zenkit::MultiResolutionMesh movableBox(const Tempest::Vec3& dimensionsCm) {
+    auto mesh=movableCube();
+    for(auto& vertex:mesh.positions) {
+      vertex.x*=dimensionsCm.x/20.f;
+      vertex.y*=dimensionsCm.y/20.f;
+      vertex.z*=dimensionsCm.z/20.f;
+      }
+    mesh.bbox={{-.5f*dimensionsCm.x,-.5f*dimensionsCm.y,-.5f*dimensionsCm.z},
+               { .5f*dimensionsCm.x, .5f*dimensionsCm.y, .5f*dimensionsCm.z}};
+    return mesh;
+    }
+
+  zenkit::Mesh movableFloor() {
+    zenkit::Mesh mesh;
+    mesh.vertices={{-2000,0,-2000},{-2000,0,2000},{2000,0,2000},{2000,0,-2000}};
+    mesh.materials.resize(1);
+    mesh.materials[0].group=zenkit::MaterialGroup::STONE;
+    // Gothic source faces are reversed by PhysicVbo::addIndex.
+    mesh.polygons.vertex_indices={0,2,1,0,3,2};
+    mesh.polygons.material_indices={0,0};
+    return mesh;
+    }
+
+  void requireVectorRelative(const Tempest::Vec3& actual, const Tempest::Vec3& expected,
+                             const char* message) {
+    requireNear(actual.x,expected.x,std::max(std::abs(expected.x)*.02f,.0001f),message);
+    requireNear(actual.y,expected.y,std::max(std::abs(expected.y)*.02f,.0001f),message);
+    requireNear(actual.z,expected.z,std::max(std::abs(expected.z)*.02f,.0001f),message);
+    }
+
+  struct ImpulseResponse {
+    float mass;
+    Tempest::Vec3 impulse,linear,angular;
+    };
+
+  ImpulseResponse movableImpulseResponse(const ProtoMesh& proto, const Tempest::Vec3& dimensionsCm,
+                                         float massMultiplier, const Tempest::Vec3* sameImpulse=nullptr) {
+    DynamicWorld world(nullptr,zenkit::Mesh{});
+    const Tempest::Vec3 center(123,10000,-257);
+    const auto origin=at(center.x,center.y,center.z);
+    auto object=world.addMovableVob(proto,"CONTRACT_IMPULSE.MRM",origin,massMultiplier,true,"table",true,44);
+    require(!object.isEmpty() && object.mass()>0,"impulse fixture must use a native movable vob");
+    const float mass=object.mass();
+    const auto impulse=sameImpulse!=nullptr ? *sameImpulse : Tempest::Vec3(.2f,.4f,-.1f)*mass;
+    const Tempest::Vec3 r(dimensionsCm.x*.0035f,dimensionsCm.y*.003f,-dimensionsCm.z*.002f);
+    const auto point=center+r*100.f;
+    require(world.applyMovableVobImpulse(center,1.f,[&](const Tempest::Vec3&,float) { return impulse; },
+                                        nullptr,&point)==1,
+            "airborne movable vob must receive exactly one impulse at a world point");
+    world.tick(17);
+
+    const auto size=dimensionsCm*.01f;
+    const Tempest::Vec3 inertia(mass*(size.y*size.y+size.z*size.z)/12.f,
+                                mass*(size.x*size.x+size.z*size.z)/12.f,
+                                mass*(size.x*size.x+size.y*size.y)/12.f);
+    const Tempest::Vec3 momentum(r.y*impulse.z-r.z*impulse.y,
+                                 r.z*impulse.x-r.x*impulse.z,
+                                 r.x*impulse.y-r.y*impulse.x);
+    const Tempest::Vec3 expectedAngular(momentum.x/inertia.x,momentum.y/inertia.y,momentum.z/inertia.z);
+    auto expectedLinear=impulse*(100.f/mass);
+    expectedLinear.y-=DynamicWorld::gravityMS*100.f/60.f;
+    const auto actualAngular=object.angularVelocity(),actualLinear=object.velocity();
+    std::printf("Movable impulse %.0fx%.0fx%.0f cm, multiplier %.3f, mass %.6f kg: "
+                "omega expected (%.6f, %.6f, %.6f), actual (%.6f, %.6f, %.6f) rad/s; "
+                "v expected (%.6f, %.6f, %.6f), actual (%.6f, %.6f, %.6f) cm/s\n",
+                double(dimensionsCm.x),double(dimensionsCm.y),double(dimensionsCm.z),
+                double(massMultiplier),double(mass),
+                double(expectedAngular.x),double(expectedAngular.y),double(expectedAngular.z),
+                double(actualAngular.x),double(actualAngular.y),double(actualAngular.z),
+                double(expectedLinear.x),double(expectedLinear.y),double(expectedLinear.z),
+                double(actualLinear.x),double(actualLinear.y),double(actualLinear.z));
+    requireVectorRelative(actualAngular,expectedAngular,
+                          "movable angular velocity after one step must match I^-1(r cross J) within two percent");
+    requireVectorRelative(actualLinear,expectedLinear,
+                          "movable linear velocity after one step must match J/m plus gravity within two percent");
+    return {mass,impulse,actualLinear,actualAngular};
+    }
+
+  void testMovableVobImpulseInertia() {
+    Resources resources;
+    for(const auto dimensions:{Tempest::Vec3(20,20,20),Tempest::Vec3(40,60,80)}) {
+      ProtoMesh proto(PackedMesh(movableBox(dimensions),PackedMesh::PK_Visual),"CONTRACT_IMPULSE.MRM");
+      const auto normal=movableImpulseResponse(proto,dimensions,.25f);
+      const auto doubled=movableImpulseResponse(proto,dimensions,.5f,&normal.impulse);
+      requireNear(doubled.mass,normal.mass*2.f,normal.mass*.0001f,
+                  "doubling massMultiplier must double native movable mass");
+      requireVectorRelative(doubled.angular,normal.angular*.5f,
+                            "doubling massMultiplier must halve angular response to the same impulse");
+      requireNear(doubled.linear.x,normal.linear.x*.5f,.0001f,
+                  "doubling massMultiplier must halve X velocity from the same impulse");
+      requireNear(doubled.linear.z,normal.linear.z*.5f,.0001f,
+                  "doubling massMultiplier must halve Z velocity from the same impulse");
+      }
+    }
+
+  void testMovableTableImpulseCouple() {
+    Resources resources;
+    // NW_CITY_TABLE_PEASANT_01's source bounds are 200 x 90 x 120 cm.
+    const Tempest::Vec3 dimensions(200,90,120);
+    constexpr float tableMass=51.81584f;
+    const float multiplier=tableMass/(2.f*.9f*1.2f*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD));
+    ProtoMesh proto(PackedMesh(movableBox(dimensions),PackedMesh::PK_Visual),"CONTRACT_TABLE.MRM");
+    const auto origin=at(0,45,0);
+    DynamicWorld world(nullptr,movableFloor());
+    const auto floor=world.landRay({0,100,0},200.f);
+    require(floor.hasCol && floor.n.y>.99f,"table fixture must have an upward-facing static floor");
+    requireNear(floor.v.y,0.f,.001f,"table fixture's bottom face must start on the floor");
+    auto table=world.addMovableVob(proto,"CONTRACT_TABLE.MRM",origin,multiplier,true,"table",true,45);
+    require(!table.isEmpty(),"table couple fixture must use a native movable vob on a static floor");
+    requireNear(table.mass(),tableMass,.001f,"table fixture must retain the tavern table's mass");
+    const Tempest::Vec3 center(0,45,0),point(0,90,60);
+    const Tempest::Vec3 force(0,0,6.f*table.mass());
+    for(const auto& application:{std::pair(force,point),std::pair(force*-1.f,center)})
+      require(world.applyMovableVobImpulse(center,140.f,[&](const Tempest::Vec3&,float) { return application.first; },
+                                          nullptr,&application.second)==1,
+              "table fixture must receive both opposing bench impulses");
+    const auto afterPair=table.angularVelocity();
+    float maximumTilt=0;
+    for(int i=0;i<120;++i) {
+      world.tick(i%3==2 ? 16 : 17);
+      const auto matrix=world.movableVobSnapshot()[0].transform;
+      const Tempest::Vec3 up(matrix.at(1,0),matrix.at(1,1),matrix.at(1,2));
+      const float cosine=std::clamp(up.y/up.length(),-1.f,1.f);
+      maximumTilt=std::max(maximumTilt,std::acos(cosine)*(180.f/3.14159265358979323846f));
+      }
+    std::printf("Movable table couple %.6f Ns: omega after pair (%.6f, %.6f, %.6f) rad/s; maximum tilt %.6f deg\n",
+                double(force.z),double(afterPair.x),double(afterPair.y),double(afterPair.z),double(maximumTilt));
+    require(maximumTilt>45.f,"the bench impulse couple must tilt a free-standing table beyond forty-five degrees");
+
+    DynamicWorld untouched(nullptr,movableFloor());
+    auto resting=untouched.addMovableVob(proto,"CONTRACT_TABLE.MRM",origin,multiplier,true,"table",true,46);
+    for(int i=0;i<3600;++i)
+      untouched.tick(i%3==2 ? 16 : 17);
+    const auto settled=untouched.movableVobSnapshot()[0].transform;
+    const Tempest::Vec3 displacement(settled.at(3,0)-origin.at(3,0),settled.at(3,1)-origin.at(3,1),
+                                      settled.at(3,2)-origin.at(3,2));
+    std::printf("Movable table untouched for 60 s: drift %.9f cm\n",double(displacement.length()));
+    require(resting.isSleeping(),"an untouched table must remain asleep for sixty seconds");
+    requireNear(displacement.length(),0.f,.00001f,"an untouched table must have zero drift after sixty seconds");
+    requireMatrix(settled,origin,"an untouched table must retain its complete pose for sixty seconds");
+    }
+
+  std::vector<uint8_t> saveArchive(const std::function<void(Serialize&)>& write) {
+    std::vector<uint8_t> bytes;
+    Tempest::MemWriter writer(bytes);
+    {
+      Serialize output(writer);
+      write(output);
+    }
+    return bytes;
+    }
+
+  void loadMovables(DynamicWorld& world, const std::vector<uint8_t>& bytes) {
+    Tempest::MemReader reader(bytes);
+    Serialize input(reader);
+    world.loadMovableVobs(input);
+    }
+
+  void testMovableVobSave() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
+    constexpr uint32_t zenId=42;
+    auto origin=at(120,100,-200);
+    origin.rotateOY(17.f);
+    auto moved=at(170.125f,118.5f,-219.25f);
+    moved.rotateOX(13.f);
+    moved.rotateOY(39.f);
+    // The independent optional entry can describe a settled pose without having to
+    // wait for a game asset or a particular native solver trajectory in this fixture.
+    auto savedRecord=[&](std::string_view worldName, uint32_t id, std::string_view visual,
+                         const Tempest::Matrix4x4& birth) {
+      return saveArchive([&](Serialize& output) {
+        output.setEntry("worlds/_/movable-vobs");
+        output.write(uint32_t(0x31564f4d),uint16_t(1),worldName,uint32_t(1));
+        output.write(id,visual,birth,moved,true);
+        });
+      };
+    const auto saved=savedRecord("_",zenId,"CONTRACT_CUBE.MRM",origin);
+    DynamicWorld first(nullptr,zenkit::Mesh{});
+    auto firstObject=first.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    require(!firstObject.isEmpty(),"movable save fixture must have a physical body");
+    loadMovables(first,saved);
+    auto firstState=first.movableVobSnapshot();
+    require(firstState.size()==1 && firstState[0].zenId==zenId && firstState[0].sleeping,
+            "saved movable identity and sleep must restore in a fresh world");
+    requireMatrix(firstState[0].origin,origin,"restore must retain the original ZEN frame");
+    requireMatrix(firstState[0].transform,moved,"restore must retain moved translation and rotation");
+    const auto roundtrip=saveArchive([&](Serialize& output) { first.saveMovableVobs(output); });
+
+    DynamicWorld second(nullptr,zenkit::Mesh{});
+    auto secondObject=second.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    loadMovables(second,roundtrip);
+    require(secondObject.isSleeping(),"a sleeping saved vob must remain asleep after a save roundtrip");
+    auto pose=second.movableVobPose(zenId);
+    require(pose!=nullptr && pose->zenId==zenId && pose->visual=="CONTRACT_CUBE.MRM",
+            "attachments must find a loaded vob by its stable ZEN identity");
+    requireMatrix(pose->transform,moved,"attachment pose must synchronize during restore before any tick");
+    for(int i=0;i<1800;++i)
+      second.tick(17);
+    require(secondObject.isSleeping(),"restored furniture must remain asleep for thirty seconds");
+    requireMatrix(second.movableVobSnapshot()[0].transform,moved,"sleeping restored furniture must not drift");
+    const auto pinLocal=at(2,3,4);
+    const auto pinBefore=pose->transform*pinLocal;
+    require(secondObject.addImpulse({secondObject.mass(),0,0}),"restored furniture must still accept impulses");
+    second.tick(17);
+    const auto after=second.movableVobSnapshot()[0].transform;
+    requireMatrix(pose->transform,after,"attachment pose must follow later furniture motion");
+    require(std::abs((pose->transform*pinLocal).at(3,0)-pinBefore.at(3,0))>.01f,
+            "a local arrow attachment must travel with a restored vob after another push");
+
+    const std::vector<std::vector<uint8_t>> rejected = {
+      savedRecord("OTHERWORLD.ZEN",zenId,"CONTRACT_CUBE.MRM",origin),
+      savedRecord("_",zenId+1,"CONTRACT_CUBE.MRM",origin),
+      savedRecord("_",zenId,"OTHER_CUBE.MRM",origin),
+      savedRecord("_",zenId,"CONTRACT_CUBE.MRM",at(121,100,-200)),
+      saveArchive([](Serialize& output) { output.setEntry("old-save"); output.write(uint8_t(1)); })
+      };
+    for(const auto& bytes:rejected) {
+      DynamicWorld other(nullptr,zenkit::Mesh{});
+      auto object=other.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+      loadMovables(other,bytes);
+      requireMatrix(other.movableVobSnapshot()[0].transform,origin,
+                    "old saves and mismatched world, ZEN id, visual or origin must retain the ZEN pose");
+      require(object.isSleeping(),"ignoring an optional record must not wake furniture");
+      }
+    DynamicWorld disabled(nullptr,zenkit::Mesh{});
+    disabled.setMovableVobsEnabled(false);
+    auto disabledObject=disabled.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    loadMovables(disabled,saved);
+    requireMatrix(disabled.movableVobSnapshot()[0].transform,origin,
+                  "movable_vobs=0 must ignore saved motion and keep the ZEN frame");
+    }
+
+  void testMovableTraceThresholds() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
+    constexpr uint32_t zenId=43;
+    const auto origin=at(0,100,0);
+    DynamicWorld world(nullptr,zenkit::Mesh{});
+    auto object=world.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    require(!object.isEmpty(),"trace fixture must have a movable body");
+    world.setTraceTime(1500);
+    for(const float distance:{10.f,50.f}) {
+      require(world.setMovableVobTransform(zenId,at(distance,100,0)),"trace fixture must accept controlled translation");
+      const auto state=world.movableVobSnapshot()[0];
+      require(!state.trace && !state.tilted && state.traceTime==-1,
+              "ten or exactly fifty centimetres of displacement must not create a trace");
+      }
+    require(world.setMovableVobTransform(zenId,at(50.1f,100,0)),"trace fixture must accept above-threshold displacement");
+    auto state=world.movableVobSnapshot()[0];
+    require(state.trace && !state.tilted && state.traceTime==1500 && state.traceCulprit.empty(),
+            "displacement beyond fifty centimetres must create an unknown-culprit trace at game time");
+    world.setTraceTime(1530);
+    require(world.setMovableVobTransform(zenId,at(75,100,0)),"an existing trace must accept further movement");
+    require(world.movableVobSnapshot()[0].traceTime==1500,
+            "later furniture movement must retain the first trace appearance time");
+
+    const auto roundtrip=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
+    DynamicWorld restored(nullptr,zenkit::Mesh{});
+    auto restoredObject=restored.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    restored.setTraceTime(2000);
+    loadMovables(restored,roundtrip);
+    state=restored.movableVobSnapshot()[0];
+    require(state.trace && state.traceTime==1500 && state.traceCulprit.empty(),
+            "a v2 save roundtrip must retain trace appearance rather than load time");
+
+    for(const float degrees:{30.f,31.f}) {
+      auto rotated=origin;
+      rotated.rotateOX(degrees);
+      require(world.setMovableVobTransform(zenId,rotated),"trace fixture must accept a tilted pose");
+      state=world.movableVobSnapshot()[0];
+      require(state.trace==(degrees>30.f) && state.tilted==(degrees>30.f),
+              "exactly thirty degrees must not be a trace, but thirty-one degrees must be tilted");
+      }
+    auto yaw=origin;
+    yaw.rotateOY(140.f);
+    require(world.setMovableVobTransform(zenId,yaw),"trace fixture must accept an upright yaw rotation");
+    state=world.movableVobSnapshot()[0];
+    require(!state.trace && !state.tilted && state.traceTime==-1,
+            "yaw-only rotation must not create a fallen-furniture trace");
+
+    const auto moved=at(75,100,0);
+    for(const uint16_t schema:{uint16_t(1),uint16_t(2)}) {
+      const auto saved=saveArchive([&](Serialize& output) {
+        output.setEntry("worlds/_/movable-vobs");
+        output.write(uint32_t(0x31564f4d),schema,std::string_view("_"),uint32_t(1));
+        output.write(zenId,std::string_view("CONTRACT_CUBE.MRM"),origin,moved,true);
+        if(schema>=2)
+          output.write(true,uint64_t(1501),std::string_view("PLAYER"));
+        });
+      DynamicWorld loaded(nullptr,zenkit::Mesh{});
+      auto loadedObject=loaded.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+      loaded.setTraceTime(2200);
+      loadMovables(loaded,saved);
+      state=loaded.movableVobSnapshot()[0];
+      require(state.trace && !state.tilted && state.zenId==zenId,
+              "both optional save schemas must recover the same moved trace identity");
+      require(state.traceTime==(schema==1 ? -1 : 1500) && state.traceCulprit==(schema==1 ? "" : "PLAYER"),
+              "legacy trace time and culprit must remain unknown; v2 must retain engine truth");
+      require(loadedObject.addImpulse({loadedObject.mass(),0,0}),"a loaded trace must accept another impulse");
+      loaded.tick(17);
+      const auto afterImpulse=loaded.movableVobSnapshot()[0];
+      require(afterImpulse.trace && afterImpulse.traceTime==state.traceTime && afterImpulse.traceCulprit==state.traceCulprit,
+              "a later unattributed impulse must not rewrite an existing trace's first time or culprit");
+      const auto savedAgain=saveArchive([&](Serialize& output) { loaded.saveMovableVobs(output); });
+      DynamicWorld reloaded(nullptr,zenkit::Mesh{});
+      auto reloadedObject=reloaded.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+      reloaded.setTraceTime(2300);
+      loadMovables(reloaded,savedAgain);
+      const auto reloadedState=reloaded.movableVobSnapshot()[0];
+      require(reloadedState.trace && reloadedState.traceTime==state.traceTime && reloadedState.traceCulprit==state.traceCulprit,
+              "saving either legacy unknown metadata or v2 known metadata must preserve it in the next process");
+      }
+    }
+
+  void testPhysicsNoise() {
+    CollisionWorld world;
+    std::vector<PhysicsNoise> noises;
+    std::vector<uint64_t> steps;
+    world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) {
+      noises.push_back(noise);
+      steps.push_back(world.simulationStep());
+      });
+    require(world.physicsNoiseEnabled(),"physics noise must be enabled by default");
+    auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                      DynamicWorld::C_Landscape);
+    auto cup=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.05f)),at(0,100,0),.7f,.15f);
+    cup->setNoiseProfile(MAT_CLAY,zenkit::MaterialGroup::STONE,"cup");
+    auto table=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.35f)),at(300,100,0),.7f,50.f,
+                                    DynamicWorld::C_MovableVob);
+    table->setNoiseProfile(MAT_WOOD,zenkit::MaterialGroup::WOOD,"table");
+    auto soft=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.05f)),at(-300,5.1f,0),.7f,.15f);
+    soft->setNoiseProfile(MAT_CLAY,zenkit::MaterialGroup::STONE,"soft");
+    auto wood=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.3f,.1f,.3f)),at(600,40,0),.7f,DynamicWorld::C_Object);
+    wood->setNoiseProfile(MAT_WOOD,zenkit::MaterialGroup::WOOD,"wood");
+    auto metal=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.05f)),at(600,100,0),.7f,1.f);
+    metal->setNoiseProfile(MAT_METAL,zenkit::MaterialGroup::METAL,"metal");
+    for(int i=0;i<120;++i) world.tick(17);
+    const auto find=[&](std::string_view what) -> const PhysicsNoise* {
+      for(const auto& noise:noises) if(noise.what==what) return &noise;
+      return nullptr;
+      };
+    const auto* cupNoise=find("cup");
+    const auto* tableNoise=find("table");
+    const auto* metalNoise=find("metal");
+    require(cupNoise!=nullptr && tableNoise!=nullptr && metalNoise!=nullptr,
+            "items, movable furniture and contact with another object must emit noise");
+    require(find("soft")==nullptr,"resting/subthreshold contact must remain silent");
+    require(cupNoise->material==MAT_CLAY && cupNoise->radius<300.f && cupNoise->culprit==nullptr,
+            "a small fallen cup must retain clay material, local radius and unknown culprit");
+    require(tableNoise->material==MAT_WOOD && tableNoise->radius>=600.f && tableNoise->volume>cupNoise->volume,
+            "a heavy table must be louder and audible at six metres");
+    require(metalNoise->surface==zenkit::MaterialGroup::WOOD && metalNoise->material==MAT_METAL,
+            "noise must retain both source and struck surface materials");
+    requireNear(cupNoise->position.y,0.f,2.f,"noise position must be the contact in world centimetres");
+    for(size_t i=0;i<noises.size();++i)
+      for(size_t j=i+1;j<noises.size();++j)
+        if(noises[i].body==noises[j].body)
+          require(steps[j]>=steps[i]+29,"a logical body must not emit more often than every half second");
+    const auto before=noises.size();
+    world.setPhysicsNoiseEnabled(false);
+    cup->restoreTransform(at(0,100,0),false);
+    for(int i=0;i<60;++i) world.tick(17);
+    require(noises.size()==before && !world.physicsNoiseEnabled(),"disabled physics noise must not emit events");
+    world.setPhysicsNoiseEnabled(true);
+    cup->restoreTransform(at(0,100,0),false);
+    for(int i=0;i<60 && noises.size()==before;++i) world.tick(17);
+    require(noises.size()>before,"runtime re-enable must restore impact noise");
+    // Repeated hard contacts before the same half-second expires must share
+    // the body's cooldown, including multiple collision manifolds/substeps.
+    const auto firstCount=noises.size();
+    cup->restoreTransform(at(0,5,0),false);
+    require(cup->addImpulse({0,-2.f,0}),"cooldown fixture must accept a second hard impact");
+    world.tick(17);
+    require(noises.size()==firstCount,"a second immediate impact must be throttled per body");
+    }
+
+  void testRagdollNoise() {
+    zenkit::ModelHierarchy hierarchy;
+    const char* names[]={"BIP01","BIP01 PELVIS","BIP01 SPINE","BIP01 HEAD"};
+    const float offsets[]={0,95,40,40};
+    for(int i=0;i<4;++i) {
+      zenkit::ModelHierarchyNode node;
+      node.name=names[i];
+      node.parent_index=int16_t(i-1);
+      const auto matrix=at(0,offsets[i],0);
+      std::memcpy(&node.transform,&matrix,sizeof(matrix));
+      hierarchy.nodes.push_back(node);
+      }
+    Skeleton skeleton(hierarchy,nullptr,"NOISE_HUMAN.MDS");
+    HitZones zones;
+    zones.setSkeleton(&skeleton);
+    require(zones.isValid(),"noise ragdoll fixture must contain canonical capsules");
+    CollisionWorld world;
+    auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                      DynamicWorld::C_Landscape);
+    auto object=at(0,100,0);
+    object.rotateOZ(90.f);
+    std::vector<Tempest::Matrix4x4> pose;
+    for(const auto& bone:skeleton.tr) pose.push_back(object*bone);
+    auto body=world.createRagdoll(skeleton,zones,pose.data(),pose.size(),object,{0,-600,0});
+    require(body!=nullptr && body->partCount()>1,"noise fixture must create several physical limbs");
+    std::vector<uint64_t> steps;
+    uint64_t identity=0;
+    world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) {
+      require(noise.material==MAT_LEATHER && noise.what=="ragdoll","body noise must retain its material and source");
+      if(identity!=0) require(noise.body==identity,"limbs must share one logical noise identity");
+      identity=noise.body;
+      if(!steps.empty()) require(world.simulationStep()>=steps.back()+29,"ragdoll limbs must share a half-second cooldown");
+      steps.push_back(world.simulationStep());
+      });
+    for(int i=0;i<120;++i) world.tick(17);
+    require(!steps.empty(),"a fallen ragdoll must emit impact noise");
+    }
+
+  void testOffCenterImpulse() {
+    CollisionWorld world;
+    auto centered=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.5f)),at(0,1000,0),.7f,2.f);
+    auto tipped=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.5f)),at(300,1000,0),.7f,2.f);
+    require(centered->addImpulse({2,0,0}),"centre-of-mass fixture must accept an impulse");
+    require(tipped->addImpulseAtPoint({2,0,0},{300,1050,0}),"off-centre fixture must accept an impulse at a world point");
+    require(!tipped->addImpulseAtPoint({2,0,0},{0,std::numeric_limits<float>::infinity(),0}),
+            "a nonfinite application point must be rejected");
+    world.tick(17);
+    const auto straight=centered->matrix(),rotated=tipped->matrix();
+    requireNear(straight.at(0,1),0.f,.00001f,"centre impulse must preserve the cube's orientation");
+    require(std::abs(rotated.at(0,1))>.01f,"an impulse above the centre of mass must rotate the body");
+    requireNear(rotated.at(3,0)-straight.at(3,0),300.f,.001f,
+                "the application point changes angular response while preserving linear impulse");
+    }
+
+  void testMovableVobArrowIdentity() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
+    DynamicWorld world(nullptr,zenkit::Mesh{});
+    auto object=world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(0,100,0),.25f,true,"table",true,42);
+    struct ArrowContact final : DynamicWorld::BulletCallback {
+      bool stopsAtWorldHit() const override { return true; }
+      void onWorldHit(const DynamicWorld::BulletWorldHit& hit) override {
+        ++hits;
+        movable=hit.movable;
+        }
+      int hits=0;
+      std::weak_ptr<const DynamicWorld::MovableVobPose> movable;
+      } contact;
+    auto* arrow=world.bulletObj(&contact);
+    arrow->setPosition({-40,100,0});
+    arrow->setDirection({3,0,0});
+    world.tick(17);
+    require(contact.hits==1 && !contact.movable.expired(),
+            "a world arrow contact must identify the movable body it hit");
+    require(contact.movable.lock()==world.movableVobPose(42),
+            "arrow contact identity must share the live ZEN vob attachment pose");
+    world.deleteObj(arrow);
+    object=DynamicWorld::Item();
+    require(contact.movable.expired() && world.movableVobPose(42)==nullptr,
+            "removing a vob must expire weak arrow attachments without leaving a dangling body");
+    }
+
+  void testMovableVobLegacyCollision() {
+    // Exercise the real mesh cache and rebuild/toggle path, rather than constructing
+    // query proxies directly. No game assets or graphics device are required.
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
+    zenkit::ModelHierarchy hierarchy;
+    hierarchy.collision_bbox = {{-5,-10,-5},{5,10,5}};
+    Skeleton walkerShape(hierarchy,nullptr,"CONTRACT_WALKER");
+    for(const bool blocksWalking:{false,true}) {
+      for(const bool legacyCollision:{false,true}) {
+        DynamicWorld world(nullptr,zenkit::Mesh{});
+        world.setMovableVobsEnabled(false);
+        auto object = world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(0,100,0),.25f,
+                                          blocksWalking,blocksWalking ? "table" : "utensil",legacyCollision);
+        require(!object.isEmpty(),"disabled movable vobs must retain their handle for re-enabling");
+        for(const bool enabled:{false,true,false,true}) {
+          world.setMovableVobsEnabled(enabled);
+          const auto snapshot = world.movableVobSnapshot();
+          require(snapshot.size()==1 && snapshot[0].legacyCollision==legacyCollision,
+                  "movable snapshots must retain the original cd_dynamic flag across toggles");
+          require(snapshot[0].enabled==enabled && (object.mass()>0)==enabled,
+                  "cd_dynamic must not suppress an enabled movable simulation hull");
+          require(world.physicsStats().bodies==size_t(enabled)+size_t(legacyCollision),
+                  "only cd_dynamic vobs may create query bodies in either mode");
+          require(object.isSleeping(),"rebuilding a movable vob must start its simulation asleep");
+          const Tempest::Vec3 from{-30,100,0},to{30,100,0};
+          require(world.ray(from,to).hasCol==legacyCollision,
+                  "camera, foot IK and visibility rays must preserve original mesh collision eligibility");
+          require(world.rayArrow(from,to,[](Npc&,const Tempest::Vec3&,const Tempest::Vec3&,float&) { return false; }).hasCol==legacyCollision,
+                  "arrow rays must preserve original mesh collision eligibility");
+          const bool groundHit = legacyCollision && (!enabled || blocksWalking);
+          require(world.landRay({0,130,0},60).hasCol==groundHit,
+                  "landRay must ignore non-colliding vobs and enabled small utensils");
+          require(world.sweep({-30,100,0},{30,100,0},2).hasCol==groundHit,
+                  "movement sweeps must preserve original mesh collision eligibility");
+          auto walker = world.addGhostObj(&walkerShape);
+          walker.setPosition({12,70,0});
+          require(walker.hasCollision()==groundHit,
+                  "walking must ignore cd_dynamic=0 vobs for large furniture and utensils alike");
+          if(enabled) {
+            require(object.addImpulse({object.mass(),0,0}),
+                    "both colliding and non-colliding movable vobs must accept physical impulses");
+            require(!object.isSleeping() && object.velocity().x>0,
+                    "cd_dynamic=0 hulls must remain active simulation bodies after an impulse");
+            }
+          }
+        }
+
+      DynamicWorld world(nullptr,zenkit::Mesh{});
+      auto moving = world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(0,100,0),.25f,
+                                        blocksWalking,"impactor",false);
+      auto target = world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(30,100,0),.25f,
+                                        blocksWalking,"target",false);
+      require(!moving.isEmpty() && !target.isEmpty() && target.isSleeping(),
+              "physical contact fixture must start with two sleeping cd_dynamic=0 hulls");
+      require(moving.addImpulse({moving.mass()*2.f,0,0}),"contact fixture must wake the impactor");
+      for(int i=0;i<15;++i)
+        world.tick(17);
+      require(!target.isSleeping() && target.velocity().x>1.f,
+              "a cd_dynamic=0 movable hull must wake and push another hull through physical contact");
+      require(world.physicsStats().bodies==2,
+              "physical contact between cd_dynamic=0 hulls must not require query proxies");
+      }
+    }
+
+  void testMovableVobBodies() {
+    CollisionWorld world;
+    const JPH::Vec3 points[] = {
+      {-.1f,-.1f,-.1f},{-.1f,-.1f,.1f},{-.1f,.1f,-.1f},{-.1f,.1f,.1f},
+      {.1f,-.1f,-.1f},{.1f,-.1f,.1f},{.1f,.1f,-.1f},{.1f,.1f,.1f}
+      };
+    const auto hull = JPH::ConvexHullShapeSettings(points,8,0.f).Create();
+    require(!hull.HasError(),"movable vob convex hull must be constructible");
+    const float mass = hull.Get()->GetVolume()*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD)*.25f;
+    requireNear(mass,.008f*700.f*.25f,.00001f,"mass must use convex hull volume and class multiplier");
+    auto floor = world.addCollisionBody(new JPH::BoxShape({10,.1f,10}),at(0,-10,0),.65f,DynamicWorld::C_Landscape);
+    auto movable = world.addDynamicBody(hull.Get(),at(0,100,0),.5f,mass,DynamicWorld::C_MovableVob,true);
+    const auto initial = movable->position();
+    for(int i=0;i<3600;++i)
+      world.tick(17);
+    require(movable->isSleeping(),"fresh movable vobs must stay asleep for 60 seconds");
+    require((movable->position()-initial).length()<=.001f,"sleeping movable vobs must not drift under gravity");
+    require(world.bodyCount()==2,"sleeping movable vobs must remain registered bodies");
+    Tempest::Vec3 normal;
+    Interactive* vob = nullptr;
+    JPH::SphereShape walker(.05f);
+    require(!world.hasCollision(&walker,{0,100,0},normal,vob),"convex simulation hull must not replace legacy walking queries");
+
+    JPH::TriangleList triangles;
+    triangles.emplace_back(JPH::Float3(-.2f,0,-.2f),JPH::Float3(0,0,.2f),JPH::Float3(.2f,0,-.2f));
+    const auto queryMesh = JPH::MeshShapeSettings(triangles).Create();
+    require(!queryMesh.HasError(),"movable source query mesh must be constructible");
+    auto smallQuery = world.addCollisionBody(queryMesh.Get(),at(0,100,0),.5f,DynamicWorld::C_SmallVobQuery,true,true);
+    require(!world.hasCollision(&walker,{0,101,0},normal,vob),"small utensil mesh must not obstruct walking");
+    auto largeQuery = world.addCollisionBody(queryMesh.Get(),at(50,100,0),.5f,DynamicWorld::C_MovableQuery,true,true);
+    require(world.hasCollision(&walker,{50,101,0},normal,vob),"large furniture must obstruct walking through its source mesh");
+    const uint32_t queryMask = (1u<<DynamicWorld::C_MovableQuery)|(1u<<DynamicWorld::C_SmallVobQuery);
+    require(world.rayCast({0,130,0},{0,90,0},queryMask).hasHit,"small vob source mesh must remain aimable");
+    const std::vector<const CollisionWorld::CollisionBody*> excluded = {smallQuery.get()};
+    require(!world.rayCast({0,130,0},{0,90,0},queryMask,false,nullptr,&excluded).hasHit,
+            "spell visibility must exclude the target's own source mesh");
+    require(movable->addImpulse({mass*2.f,mass*.5f,0}),"spell impulse must wake a movable vob");
+    require(!movable->isSleeping(),"an impulse must activate a sleeping movable vob");
+    for(int i=0;i<900;++i)
+      world.tick(17);
+    require(std::abs(movable->position().x-initial.x)>20.f,"a movable vob impulse must produce physical displacement");
+    require(movable->isSleeping(),"movable vob must settle within 15 seconds after an impulse");
+    require(world.bodyCount()==4,"settled movable vob must retain its registered body");
+
+    // Source vertices keep attachment-local transforms before hull creation.
+    std::vector<JPH::Vec3> source = {{1,2,3},{2,2,3},{1,3,3}};
+    PhysicVbo sourceMesh(&source);
+    sourceMesh.addIndex({0,1,2},0,3,zenkit::MaterialGroup::WOOD);
+    auto local = at(100,200,300);
+    local.scale(2,3,4);
+    std::vector<JPH::Vec3> transformed;
+    sourceMesh.appendVertices(transformed,local);
+    require(transformed.size()==3,"hull input must retain every referenced source vertex");
+    requireNear(transformed[0].GetX(),3.f,.00001f,"hull source input must apply local attachment X transform");
+    requireNear(transformed[0].GetY(),8.f,.00001f,"hull source input must apply local attachment Y transform");
+    requireNear(transformed[0].GetZ(),15.f,.00001f,"hull source input must apply local attachment Z transform");
     }
 
   struct SpherePrecisionCollector final : JPH::CastShapeCollector {
@@ -733,6 +1352,8 @@ namespace {
 
 int main() {
   try {
+    testMovableVobImpulseInertia();
+    testMovableTableImpulseCouple();
     testMeshRayEdges();
     testCoincidentMaterials();
     testSharedRayEdge();
@@ -747,6 +1368,14 @@ int main() {
     testFixedStepCarry();
     testFixedStepCadence();
     testContracts();
+    testMovableVobBodies();
+    testMovableVobLegacyCollision();
+    testMovableVobSave();
+    testMovableTraceThresholds();
+    testMovableVobArrowIdentity();
+    testPhysicsNoise();
+    testRagdollNoise();
+    testOffCenterImpulse();
     std::puts("Physics contracts passed");
     return EXIT_SUCCESS;
     }

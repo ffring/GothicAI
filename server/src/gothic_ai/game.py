@@ -460,6 +460,12 @@ class GameLink:
         )
         return dict((await self._request(cmd, timeout)).value or {})
 
+    async def triggers(self, timeout: float = 5.0) -> list[dict[str, Any]]:
+        """The director's triggers in the game (game in -devmode, v35): [{id, on, npc, node, repeat, count,
+        holds}] — `holds`: a state trigger's condition now (None: not computed)."""
+        res = await self._request(DebugCmd(req=self._next_id("r"), cmd="triggers"), timeout)
+        return list(res.value or [])
+
     async def story_eval(self, npc: str, exprs: list[Any], timeout: float = 5.0) -> list[Any]:
         """Story graph expressions on the live VM, self = `npc` (see StoryEvalCmd)."""
         cmd = StoryEvalCmd(req=self._next_id("s"), npc=npc.upper(), exprs=exprs)

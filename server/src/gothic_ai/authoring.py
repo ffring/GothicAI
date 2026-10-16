@@ -2,21 +2,19 @@
 
 The model proposes; the code builds the change, the validator checks it, the game plays it, as with the
 repairs (director.py) and the amends (amends.py). The quest: someone has lost a thing and asks the hero to
-find it and bring it back. It is made of
-- its own story variable DIR_Q<n> (graph_patch `vars`, v29): 0 — not given, LOG_RUNNING, LOG_SUCCESS; the
-  game keeps it in its save like the scripts' quest variables;
-- its own journal topic;
-- the giver's dialog that gives it: the talk, the quest set running, the journal, and the thing put into the
+find it and bring it back. It is a quest of the book (questbook.py, stage 3) of one stage, whose one goal is
+to bring the thing to the giver:
+- the giver's dialog gives it: the talk, the quest set running, the journal, and the thing put into the
   world at a point of a place near the giver (Wld_InsertItem), so it can always be found;
 - the dialog that ends it, offered once the hero has the thing: the giver takes it and pays, the quest
   succeeds, the journal closes;
 - the reward within the chapter's measure: experience no more than the scripts' XP_AMBIENT (what the game
   gives for a small task in this chapter), as much gold.
 
-The things are ITEMS: ordinary ones anybody could lose, none that a quest of the scripts uses. The quest's
-state is in the game (its variable, the journal), and in the chronicle (`authored*` facts) for the giver's
-conversational model; the dialogs are in the patches of the save branch: a load brings back exactly where
-it was.
+The things are ITEMS: ordinary ones anybody could lose, none that a quest of the scripts uses. The book
+keeps the quest in the branch's log, the game its state (the variables, the journal). A quest made before
+the book (stage 1, facts `authored*` of the chronicle) keeps its dialogs in the log; its giver's knowledge of
+it is read from those facts (OldQuest).
 """
 
 from __future__ import annotations
@@ -27,6 +25,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from . import questbook
 from .characters import Card
 from .chronicle import Chronicle
 from .game import GameError, GameLink
@@ -35,9 +34,10 @@ from .journal import Journal
 from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
 from .places import PlaceBook
 from .protocol import DialogChosen, GameMessage, Session, Snapshot
+from .questbook import BRING, Goal, QuestBook, Stage, Talk
 from .story import StoryPatches
 from .turn import ToolOutcome
-from .validator import DIRECTOR_PREFIX, LOG_RUNNING, LOG_SUCCESS, Caps, Rules, names_in, validate
+from .validator import Rules
 
 if TYPE_CHECKING:
     from .dialogue import Conversation, DialogueManager
@@ -68,7 +68,6 @@ NEAR_CM = 4000  # places around the giver's own, where the thing may lie
 MAX_PLACES = 6
 XP_FALLBACK = 50  # when the game does not say XP_AMBIENT
 MAX_TITLE = 40
-GOLD = "ITMI_GOLD"
 
 INSTRUCTIONS = """\
 Ты — сценарист Gothic II. Придумай небольшое поручение, которое житель мира даёт герою: у него пропала вещь \
@@ -204,8 +203,8 @@ class Proposal:
 
 
 @dataclass
-class Quest:
-    """A quest the author made, and where it stands."""
+class OldQuest:
+    """A quest the author made before the book (stage 1, facts `authored*`), and where it stands."""
 
     id: str  # its story variable too
     npc: str
@@ -259,7 +258,8 @@ class AuthorModel:
 
 
 class Author:
-    """Quests of the director's own; also a TurnExtension: the giver knows what it asked of the hero."""
+    """Quests of the director's own, made up by the model and made by the book (questbook.py). Also a
+    TurnExtension for the quests made before the book: the giver knows what it asked of the hero."""
 
     def __init__(
         self,
@@ -274,6 +274,7 @@ class Author:
         cards: dict[str, Card] | None = None,
         dialogue: DialogueManager | None = None,
         journal: Journal | None = None,
+        book: QuestBook | None = None,
     ) -> None:
         self.link = link
         self.graph = graph
@@ -285,8 +286,11 @@ class Author:
         self.cards = cards or {}
         self.dialogue = dialogue
         self.journal = journal or Journal()
+        self.book = book or QuestBook(
+            link, graph, patches, chronicle, director, places=places, dialogue=dialogue, journal=self.journal
+        )
         self.rules = Rules.of(graph)
-        self.quests: dict[str, Quest] = {}  # by id
+        self.old: dict[str, OldQuest] = {}  # made before the book, by id
         link.listeners.append(self._on_message)
         if dialogue is not None:
             dialogue.extensions.append(self)
@@ -297,7 +301,7 @@ class Author:
             case Session():
                 self._load()
             case DialogChosen(made=True):
-                for q in self.quests.values():
+                for q in self.old.values():
                     if msg.node == q.give and q.stage == "open":
                         self._stage(q, "given")
                     elif msg.node == q.done and q.stage != "done":
@@ -305,7 +309,7 @@ class Author:
 
     # --- a quest ------------------------------------------------------------------------------
 
-    async def quest(self, npc: str) -> Quest | None:
+    async def quest(self, npc: str) -> questbook.Quest | None:
         """A quest of the author's that `npc` gives the hero; None if the model has none that passes."""
         npc = npc.upper()
         self.model.warm()
@@ -326,6 +330,12 @@ class Author:
             self.chronicle.record({"fact": "authored_rejected", "npc": npc, "why": errors})
         self.journal.add("authored_none", npc=npc, name=brief.name, why=errors)
         return None
+
+    def given(self, npc: str) -> list[str]:
+        """The titles of the quests the npc gave before, the old ones too."""
+        npc = npc.upper()
+        old = [q.title for q in self.old.values() if q.npc == npc]
+        return old + [q.title for q in self.book.all().values() if q.giver == npc]
 
     async def brief(self, npc: str) -> Brief | None:
         state = await self.link.story_state(
@@ -358,7 +368,7 @@ class Author:
             spots=spots,
             xp=xp,
             gold=xp,
-            given=[q.title for q in self.quests.values() if q.npc == npc],
+            given=self.given(npc),
         )
 
     async def _spots(self, npc: str) -> tuple[str, list[Spot]]:
@@ -385,8 +395,8 @@ class Author:
             spots.append(Spot(place.id, place.where_ru, round(d / 100), points[len(points) // 2]))
         return home.where_ru, spots[:MAX_PLACES]
 
-    async def _try(self, p: Proposal, brief: Brief) -> tuple[Quest | None, list[str]]:
-        """Build the quest from the proposal, check it, make it."""
+    async def _try(self, p: Proposal, brief: Brief) -> tuple[questbook.Quest | None, list[str]]:
+        """The quest of the proposal: checked against the brief, then made by the book."""
         errors = []
         item = p.item.strip().upper()
         spot = next((s for s in brief.spots if s.id == p.place.strip().upper()), None)
@@ -403,100 +413,47 @@ class Author:
             errors.append(f"золота {p.gold}, а можно от 0 до {brief.gold}")
         if not 0 <= p.xp <= brief.xp:
             errors.append(f"опыта {p.xp}, а можно от 0 до {brief.xp}")
-        if any(q.title == title for q in self.quests.values()):
+        if title in self.given(brief.npc):
             errors.append(f"поручение «{title}» уже было")
         if errors or spot is None:
             return None, errors
 
-        story = await self.director.story()
-        id = self._id(story.patches.vars)
-        give, done = f"{id}_GIVE", f"{id}_DONE"
-        var = ["var", id]
-        reward: list[dict[str, Any]] = [{"do": "give", "item": GOLD, "count": p.gold}] if p.gold else []
-        reward += [{"do": "xp", "amount": p.xp}] if p.xp else []
-        ops: list[dict[str, Any]] = [
-            {"op": "vars", "vars": {id: 0}},
-            {
-                "op": "add_node",
-                "node": {
-                    "id": give,
-                    "npc": brief.npc,
-                    "description": p.give_description,
-                    "condition": ["==", var, ["int", 0]],
-                    "lines": _lines(p.give_lines, p.give_description),
-                    "effects": [
-                        {"do": "set", "var": id, "value": LOG_RUNNING},
-                        {"do": "journal", "topic": title, "text": p.journal_given, "status": "LOG_RUNNING"},
-                    ],
-                    # the thing is in the world from the moment he is asked for it
-                    "program": [
-                        {"do": "call", "call": ["call", "WLD_INSERTITEM", ["sym", item], ["str", spot.point]]}
-                    ],
-                },
-            },
-            {
-                "op": "add_node",
-                "node": {
-                    "id": done,
-                    "npc": brief.npc,
-                    "description": p.done_description,
-                    "condition": [
-                        "&&",
-                        ["==", var, ["int", LOG_RUNNING, "LOG_RUNNING"]],
-                        [">=", ["call", "NPC_HASITEMS", ["inst", "OTHER"], ["sym", item]], ["int", 1]],
-                    ],
-                    "lines": _lines(p.done_lines, p.done_description),
-                    "effects": [
-                        {"do": "give", "item": item, "count": 1, "to": "self"},
-                        *reward,
-                        {"do": "set", "var": id, "value": LOG_SUCCESS},
-                        {"do": "journal", "topic": title, "text": p.journal_done, "status": "LOG_SUCCESS"},
-                    ],
-                },
-            },
-        ]
-        story = await self.director.with_symbols(story, names_in(ops))
-        caps = Caps(xp=brief.xp, items={GOLD: brief.gold})
-        errors = validate(ops, story, self.rules, caps=caps)
+        thing = brief.items[item]
+        bring = Goal(
+            BRING,
+            npc=brief.npc,
+            item=item,
+            point=spot.point,
+            talk=Talk(
+                p.done_description,
+                p.done_lines,
+                remember=f"Герой нашёл и принёс твою пропавшую вещь — {thing}.",
+            ),
+        )
+        q = questbook.Quest(
+            id=self.book.next_id({*self.old}),
+            giver=brief.npc,
+            title=title,
+            give=Talk(p.give_description, p.give_lines),
+            stages=[Stage(p.journal_given, [bring])],
+            done_journal=p.journal_done,
+            knows=f"У тебя пропала вещь: {thing}. Она лежит {spot.where}; ты знаешь это примерно.",
+            asked=f"найти твою пропавшую вещь — {thing}: она лежит {spot.where}.",
+            gold=p.gold,
+            xp=p.xp,
+            names={brief.npc: brief.name},
+            reason=p.reason,
+        )
+        errors = await self.book.make(q, gold=brief.gold, xp=brief.xp)
         if errors:
             return None, errors
-        for op in ops:
-            await self.patches.apply(op)
-        q = Quest(
-            id,
-            brief.npc,
-            brief.name,
-            title,
-            item,
-            brief.items[item],
-            spot.id,
-            spot.where,
-            p.gold,
-            p.xp,
-            give,
-            done,
-        )
-        self.quests[q.id] = q
-        self.chronicle.record({"fact": "authored", **asdict(q), "point": spot.point, "reason": p.reason})
         self.journal.add(
-            "authored", npc=q.npc, name=q.name, quest=q.id, title=title, item=item, place=spot.id
+            "authored", npc=q.giver, name=brief.name, quest=q.id, title=title, item=item, place=spot.id
         )
-        if self.dialogue is not None:
-            self.dialogue.remember(
-                q.npc,
-                q.name,
-                f"У тебя пропала вещь: {q.item_name}. Она лежит {q.where}; ты знаешь это примерно.",
-            )
-        log.info("author: %s gives %s «%s»: %s %s", q.npc, q.id, title, item, spot.point)
+        log.info("author: %s gives %s «%s»: %s %s", q.giver, q.id, title, item, spot.point)
         return q, []
 
-    def _id(self, made: dict[str, int]) -> str:
-        n = 1 + max(
-            [0, *(int(k[len(f"{DIRECTOR_PREFIX}Q") :]) for k in [*made, *self.quests] if _numbered(k))]
-        )
-        return f"{DIRECTOR_PREFIX}Q{n}"
-
-    def _stage(self, q: Quest, stage: str) -> None:
+    def _stage(self, q: OldQuest, stage: str) -> None:
         q.stage = stage
         self.chronicle.record({"fact": f"authored_{stage}", "id": q.id, "npc": q.npc})
         self.journal.add(f"authored_{stage}", npc=q.npc, name=q.name, quest=q.id, title=q.title)
@@ -508,15 +465,16 @@ class Author:
     # --- the save branch --------------------------------------------------------------------
 
     def _load(self) -> None:
-        self.quests.clear()
+        """The quests made before the book, as the branch's chronicle has them."""
+        self.old.clear()
         for f in self.chronicle.facts():
             match f.get("fact"):
                 case "authored":
-                    fields = {k: f[k] for k in Quest.__dataclass_fields__ if k in f}
-                    q = Quest(**fields)
-                    self.quests[q.id] = q
-                case "authored_given" | "authored_done" if f.get("id") in self.quests:
-                    self.quests[f["id"]].stage = f["fact"].removeprefix("authored_")
+                    fields = {k: f[k] for k in OldQuest.__dataclass_fields__ if k in f}
+                    q = OldQuest(**fields)
+                    self.old[q.id] = q
+                case "authored_given" | "authored_done" if f.get("id") in self.old:
+                    self.old[f["id"]].stage = f["fact"].removeprefix("authored_")
 
     # --- the conversation (TurnExtension) ------------------------------------------------------
 
@@ -526,7 +484,7 @@ class Author:
     def situation(self, npc: str) -> str | None:
         npc = npc.upper()
         lines = []
-        for q in self.quests.values():
+        for q in self.old.values():
             if q.npc != npc:
                 continue
             if q.stage == "given":
@@ -549,19 +507,3 @@ class Author:
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
     ) -> ToolOutcome | None:
         return None
-
-
-def _numbered(key: str) -> bool:
-    return key.startswith(f"{DIRECTOR_PREFIX}Q") and key[len(f"{DIRECTOR_PREFIX}Q") :].isdigit()
-
-
-def _lines(lines: list[dict[str, str]], description: str) -> list[dict[str, str]]:
-    """The talk as the bridge plays it; the hero opens it with what he picked in the menu, as in the scripts,
-    unless the model has him open it with words of his own."""
-    out = [
-        {"speaker": "other" if x.get("speaker") == "hero" else "self", "text": str(x.get("text", ""))}
-        for x in lines
-    ]
-    if not out or out[0]["speaker"] != "other":
-        out.insert(0, {"speaker": "other", "text": description})
-    return out

@@ -26,6 +26,7 @@ from .brain.situation import SituationBuilder
 from .budget import Budget
 from .cast import Cast
 from .casting import Casting
+from .chains import ChainAuthor
 from .characters import Cards, Traits
 from .chests import ChestDesk
 from .chronicle import Chronicle
@@ -79,6 +80,7 @@ from .protocol import (
     Session,
     ThreatControlCmd,
 )
+from .questbook import QuestBook
 from .quests import QuestBoard
 from .replay import replay as replay_turn
 from .sightings import Sightings
@@ -87,6 +89,7 @@ from .story import StoryPatches, freed
 from .storyguard import StoryGuard
 from .talk import TalkDesk, fights
 from .trace import TraceWriter, find_turn, latest
+from .triggers import Triggers
 from .trust import Trust
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
 from .vanilla import VanillaQuests
@@ -144,7 +147,9 @@ HELP = """commands (npc defaults to the last attached one):
   day [npc]         the npc's last menus of its next hour (the old plan, do) and the trip it is on
   amends            the director's storylets of amends for the hero's lies, and where they stand
   author [npc]      the director makes up a quest the npc gives the hero (docs/director.md); none: the quests
+  chain <npc> [new] the director makes a linear chain of quests and the characters it needs; new: someone new
   cast              the director's own characters on this branch (docs/director.md, stage 2)
+  triggers          the director's triggers in the game: counts and conditions (stage 3, -devmode)
   character <place> the director makes up a character for the place (places.py id), and a quest he gives
   deal              offers open to the hero, and what the game's deal window shows (needs -devmode)
   deal <npc gives> / <hero gives>   the npc offers a deal, e.g. deal ITPO_HEALTH_01:2 / ITMI_GOLD:30
@@ -187,8 +192,11 @@ class ServerState:
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
         self.author: Author | None = None
+        self.chains: ChainAuthor | None = None
         self.cast: Cast | None = None
         self.casting: Casting | None = None
+        self.triggers: Triggers | None = None
+        self.book: QuestBook | None = None
         self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
@@ -349,11 +357,29 @@ class Console:
             case "author" if self.state.author is not None:
                 if rest:
                     q = await self.state.author.quest(rest[0])
+                    print("(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.asked}")
+                for old in self.state.author.old.values():
+                    print(f"{old.id} {old.name}: «{old.title}» {old.stage}; {old.item_name} {old.where}")
+                book = self.state.author.book
+                for q in book.all().values():
+                    p = book.progress(q.id)
                     print(
-                        "(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.item} {q.where}"
+                        f"{q.id} {q.name(q.giver)}: «{q.title}» {p.state}, stage {p.stage}/{len(q.stages)}; "
+                        f"{q.reward()}"
                     )
-                for q in self.state.author.quests.values():
-                    print(f"{q.id} {q.name}: «{q.title}» {q.stage}; {q.item_name} {q.where}; {q.reward()}")
+            case "chain" if self.state.chains is not None and rest:
+                quests = await self.state.chains.chain(rest[0], new_people="new" in rest[1:])
+                if quests is None:
+                    print("(no chain: see the log)")
+                else:
+                    for q in quests:
+                        print(f"{q.id} «{q.title}»: {q.asked}; after {q.after or '-'}")
+            case "triggers":
+                for t in await link.triggers():
+                    holds = {True: "holds", False: "does not hold", None: "-"}[t.get("holds")]
+                    print(
+                        f"{t['id']} on {t['on']} {t['npc'] or ''} {t['node'] or ''}: {t['count']}×, {holds}"
+                    )
             case "cast" if self.state.cast is not None:
                 for c in self.state.cast.characters():
                     print(f"{c.npc} «{c.name}» like {c.like} at {c.at}")
@@ -367,9 +393,7 @@ class Console:
                 )
                 if spec is not None and self.state.author is not None:
                     q = await self.state.author.quest(spec.npc)
-                    print(
-                        "(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.item} {q.where}"
-                    )
+                    print("(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.asked}")
             case "deal" if self.state.deals is not None:
                 await self.deal(link, npc, rest)
             case "rumors" if self.state.rumors is not None:
@@ -667,6 +691,8 @@ async def serve(args: argparse.Namespace) -> int:
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
+        # the director's triggers fire in the game, with or without the server: the chronicle hears of them
+        state.triggers = Triggers(link, state.chronicle)
         talk = state.talk
         # what each npc saw itself: where and how it saw the hero and the people it knows (wave 1 step 6)
         state.sightings = Sightings(
@@ -751,7 +777,14 @@ async def serve(args: argparse.Namespace) -> int:
         if graph is not None and not args.no_director:
             # quests the hero can no longer finish get repaired (story graph, stage 5)
             state.director = Director(
-                link, graph, state.story, state.chronicle, llm, dialogue=state.dialogue, journal=journal
+                link,
+                graph,
+                state.story,
+                state.chronicle,
+                llm,
+                dialogue=state.dialogue,
+                journal=journal,
+                book=state.book,
             )
             # the scripts' quests in their givers' conversations, and the hero's lies about them
             state.vanilla = VanillaQuests(
@@ -782,7 +815,19 @@ async def serve(args: argparse.Namespace) -> int:
             # the director's model makes characters up for a place (layer 4): for now on the console's word
             if place_book is not None:
                 state.casting = Casting(link, state.cast, llm, place_book, state.chronicle, journal=journal)
-            # quests of the director's own (docs/director.md, stage 1): for now on the console's word
+            # quests of the director's own as objects (docs/director.md, stage 3): the book makes and follows
+            # them, the author makes them up (stage 1), for now on the console's word
+            state.book = QuestBook(
+                link,
+                graph,
+                state.story,
+                state.chronicle,
+                state.director,
+                places=place_book,
+                dialogue=state.dialogue,
+                journal=journal,
+            )
+            state.director.book = state.book
             state.author = Author(
                 link,
                 graph,
@@ -794,7 +839,10 @@ async def serve(args: argparse.Namespace) -> int:
                 cards=personas.cards,
                 dialogue=state.dialogue,
                 journal=journal,
+                book=state.book,
             )
+            if state.casting is not None:
+                state.chains = ChainAuthor(state.author, state.casting)
             # a lie found out changes the scripts' dialogs of the one lied to: the quest is not done there
             state.consequences = LieConsequences(
                 link,
@@ -864,7 +912,7 @@ async def serve(args: argparse.Namespace) -> int:
                 habits_of=habits_of,
                 view_of=perception.english,
                 # each npc's character, from its card (characters.py)
-                builder=SituationBuilder(traits=Traits(personas.cards)),
+                builder=SituationBuilder(traits=Traits(personas.cards), places=place_book),
                 # the new day menu applied, or still asked in shadow beside the old one
                 config=PlannerConfig(apply_day=args.apply_day),
                 trace=trace,  # its decisions: data for fine-tuning (M5d)
@@ -1090,6 +1138,16 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario seen: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "trace":
+                dialogue, talk, sightings = state.dialogue, state.talk, state.sightings
+                assert dialogue is not None and talk is not None and sightings is not None
+                assert args.trace_dir is not None
+                results = await scenarios.trace_memory(
+                    link, dialogue, talk, sightings, str(Path(args.trace_dir).parent)
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario trace: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "witness":
                 dialogue, talk, sightings = state.dialogue, state.talk, state.sightings
                 assert dialogue is not None and talk is not None and sightings is not None
@@ -1157,6 +1215,30 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.cast_character(link, state.cast)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario cast: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "chain":
+                assert state.chains is not None and place_book is not None
+                results = await scenarios.author_chain(link, state.chains, place_book)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario chain: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "stages":
+                assert state.book is not None and place_book is not None
+                results = await scenarios.book_stages(link, state.book, place_book)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario stages: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "own_repair":
+                assert state.book is not None and state.director is not None and place_book is not None
+                results = await scenarios.own_repair(link, state.book, state.director, place_book)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario own_repair: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "trigger":
+                assert state.story is not None
+                results = await scenarios.story_triggers(link, state.story)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario trigger: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "own":
                 results = await scenarios.own_symbols(link)
@@ -1814,6 +1896,7 @@ def main() -> None:
             "m6",
             "see",
             "seen",
+            "trace",
             "witness",
             "places",
             "graph",
@@ -1823,6 +1906,10 @@ def main() -> None:
             "repair",
             "authored",
             "own",
+            "trigger",
+            "stages",
+            "chain",
+            "own_repair",
             "cast",
             "person",
             "character",

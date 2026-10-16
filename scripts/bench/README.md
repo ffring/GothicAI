@@ -455,6 +455,43 @@ recovery. This controlled queue test preserves the main acceptance fixture.
 The current stage-2 result is in
 [`validation-notes.md`](../../reports/physics/2026-10-14-jolt-stage2/validation-notes.md).
 
+Stage 4 movable vobs use the real Coragon tavern in a Khorinis save. The fixture finds
+Coragon and the nearest original map table, adds six real beer-mug meshes on its tabletop,
+a floor mug on a supported walking lane, and a real barrel only if none is nearby. The
+original tavern population keeps its routines during the untouched 60 simulation seconds.
+The seven mugs are explicit test bodies created through `addMovableVob`; they are not
+authored map props and do not add unused item-visual rules to the stock-world allowlist.
+The setup records map/fixture counts separately, plus actual map `cd_dynamic=0` bodies by class.
+Native NPC contacts, including their propagation through other movable bodies, mark the
+items excluded from spontaneous drift. After that observation actors stop for a controlled
+walking test and an actual equipped instant fireball (`spellId=23`). No fixture command
+forces a dynamic body asleep. The 15-second fireball checkpoint requires all fixture vobs
+to be sleeping, at least five displaced over 20 cm, including a table or barrel.
+
+Configure the build with `-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`. Run one game at a time,
+checking `pgrep -fl Gothic2Notr` before each launch. A complete example (from the repository):
+
+```sh
+MOVABLE_VOBS=1 NO_BUILD=1 SAVE="$PWD/.bench/movable-input.sav" scripts/bench.sh movable-vobs .bench/movable-functional
+python3 scripts/movable_vobs_compare.py functional .bench/movable-functional --output .bench/movable-functional/result.json
+MOVABLE_VOBS=1 NO_BUILD=1 SAVE="$PWD/.bench/movable-functional/session-scattered.sav" scripts/bench.sh movable-vobs-reload .bench/movable-reload
+python3 scripts/movable_vobs_compare.py reload .bench/movable-reload --saved .bench/movable-functional --output .bench/movable-reload/result.json
+MOVABLE_VOBS=0 NO_BUILD=1 SAVE="$PWD/.bench/movable-input.sav" scripts/bench.sh movable-vobs-off .bench/movable-performance/off
+MOVABLE_VOBS=1 NO_BUILD=1 SAVE="$PWD/.bench/movable-input.sav" scripts/bench.sh movable-vobs-on .bench/movable-performance/on
+python3 scripts/movable_vobs_compare.py performance .bench/movable-performance --output .bench/movable-performance/result.json
+```
+
+`MOVABLE_VOBS` writes the initial `[GAME] movable_vobs` setting before constructing the world;
+toggling after load cannot measure disabled world-loading cost. Each performance run records
+30 seconds of ordinary app-frame completion cadence, with the real fireball at the start,
+plus buffered native physics-step timings. Per-frame vob snapshots and recording are disabled
+in the measured window. The reader requires p95 physics ≤2 ms and mean FPS loss ≤5%, and
+reports world-constructor duration beside both modes (GameSession deserialization is excluded).
+The functional run starts from the supplied old save, writes a complete `GameSession` archive
+with scattered original furniture, and the separate fresh process must load those exact bytes
+and continue for a second. Authored map vobs may return to their initial transforms; temporary
+fixture mugs are outside the map archive. Moved-vob persistence belongs to stage 4, point 2.
+
 Film mode (what `gothic-shorts film` sets): `OPENGOTHIC_BENCH_REALTIME=1` keeps the fixed steps to the wall
 clock and draws only the captured frame; `TEMPEST_AUDIO_LOOPBACK=48000` records the game's sound into
 `<segment>.wav` instead of playing it; `TEMPEST_WINDOW_SIZE=<w>x<h>` (points) sets the frame;

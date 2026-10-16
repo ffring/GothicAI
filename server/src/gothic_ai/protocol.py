@@ -18,7 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 34
+PROTOCOL_VERSION = 37
+NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
+TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 
 # --- game -> server -----------------------------------------------------------
 
@@ -267,6 +269,19 @@ class NpcDied(_GameMessage):
     killer: str = ""
 
 
+class TriggerFired(_GameMessage):
+    """A trigger of the director's fired (v35, graph_patch `trigger`): `count` — how many times so far, as its
+    variable has it; `npc` and `other` — self and other of its program (the npc of the event, the hero, the
+    killer; empty: none); `error` — why the program stopped half way."""
+
+    type: Literal["trigger_fired"]
+    id: str
+    count: int
+    npc: str = ""
+    other: str = ""
+    error: str | None = None
+
+
 class HeroKill(_GameMessage):
     """Whoever the hero killed, person or creature (v17): an npc's contract may count it. `guild` is the
     victim's guild as the scripts number it (GIL_*)."""
@@ -440,6 +455,19 @@ class GroundItem(_GameMessage):
     from_hero: Side | None = None
 
 
+class Trace(_GameMessage):
+    """A visible physical trace (v37). Its originator remains private to the engine and save."""
+
+    id: str  # stable across saves; identifies the trace, not its originator
+    kind: Literal["arrow", "moved", "tilted"]
+    name: str  # arrow, table, barrel, ...
+    waypoint: str | None = None  # nearest waypoint to the trace
+    distance: float = 0  # cm from the npc
+    hero_cm: float | None = None
+    from_hero: Side | None = None
+    age: int | None = Field(default=None, ge=0)  # game minutes since appearance; unknown in legacy saves
+
+
 class NpcView(_GameMessage):
     """What an npc perceives (v11): where it is, what it does, the hero, whom it sees (the nearest first).
     Sight is the engine's own (the head's field of view and a ray), within the npc's senses range."""
@@ -461,6 +489,7 @@ class NpcView(_GameMessage):
     hero: HeroLook | None = None
     sees: list[Look] = Field(default_factory=list)
     items: list[GroundItem] = Field(default_factory=list)  # v22: things lying about, the nearest first
+    traces: list[Trace] = Field(default_factory=list)  # v37: visible physical traces, up to six within 15 m
 
 
 class NpcViews(_GameMessage):
@@ -481,7 +510,10 @@ class NpcEvent(_GameMessage):
     or the victim), an npc attacking it (`npc_attack`), someone attacking the hero (`hero_attacked`).
     The end of it: a monster killed (`monster_killed`; `other` is the killer, the npc itself too, `victim`
     the monster's symbol, `detail` its name).
-    `distance` is from the npc to `other`. The engine's own perceptions still run; this is a copy."""
+    Noise (v36): `at` is the impact point in cm, `place` its nearest waypoint (named by the server's
+    place book), `loudness` the source volume 0..1, `source` what struck. `distance` is to the impact,
+    and `other`/`other_name` are supplied only when the npc saw the culprit before turning to the sound.
+    Other events measure `distance` to `other`. The engine's own perceptions still run."""
 
     type: Literal["npc_event"]
     npc: str
@@ -491,13 +523,26 @@ class NpcEvent(_GameMessage):
     distance: float | None = None
     detail: str | None = None
     victim: str | None = None  # monster_killed: the dead monster's symbol
+    at: tuple[float, float, float] | None = None  # noise: impact point, cm
+    place: str | None = None  # noise: nearest waypoint, resolved through PlaceBook
+    loudness: float | None = None  # noise: source volume, 0..1
+    source: str | None = None  # noise: table, barrel, cup, body, ...
+    time: int | None = None  # v37 noise: game minutes since the first day began
+
+    @model_validator(mode="before")
+    @classmethod
+    def unknown_noise_culprit(cls, value: Any) -> Any:
+        # Older events omit `other` to mean PLAYER. A sound never implies who made it.
+        if isinstance(value, dict) and value.get("kind") == "noise" and "other" not in value:
+            return {**value, "other": ""}
+        return value
 
 
 class NpcIdle(_GameMessage):
     """A soft action (`npc_act`) is over (v5): a good moment to decide what the npc does next.
     `reason`: done (its AI queue ran empty), gone (down, removed, taken over), timeout, arrived (v15: a
     `start_activity` with `arrive` got there) or failed (v15: a `give` that could not be done, `detail`
-    says why)."""
+    says why); interrupted (v36: investigation gave way to combat or dialogue)."""
 
     type: Literal["npc_idle"]
     npc: str
@@ -514,6 +559,7 @@ class NpcActResult(_GameMessage):
     npc: str
     status: Literal["queued", "rejected"]
     detail: str | None = None
+    action: str | None = None  # v36: identifies the command whose lifecycle this receipt starts
 
 
 class PerceptionHeld(_GameMessage):
@@ -844,6 +890,7 @@ GameMessage = Annotated[
     | RoutineInfo
     | PerceptionHeld
     | DialogChosen
+    | TriggerFired
     | NpcDied
     | HeroKill
     | StoryWorld
@@ -953,6 +1000,7 @@ NpcActType = Literal[
     "start_activity",
     "set_routine",  # v6: args.name, e.g. START (Rtn_START_<id>), effective at once
     "give",  # v15: args.npc, args.item, args.count: to another npc; npc_idle done or failed
+    "investigate",  # v36: args.at xyz cm, args.ms scanning time; then back to the routine
 ]
 
 
@@ -1155,6 +1203,9 @@ DebugCommand = Literal[
     "chest_take",
     "player_take",
     "own_npc",
+    "triggers",
+    "physics_noise",  # v36: native tavern fixture, devmode only
+    "physics_traces",  # v37: physical traces fixture, devmode only
 ]
 
 
@@ -1194,7 +1245,9 @@ class DebugCmd(_Command):
     of `npc` offers after its lines, as the dialog window asks (`value`: [{id, text}]); `choose` also takes
     one of them. The dialog window as the player has it: `talk` — the hero talks to `npc` as with the action
     key, `menu` — what the window offers now (`value`: the texts, none while a line plays), `menu_pick` —
-    picks the entry `text` as the player does with the keys."""
+    picks the entry `text` as the player does with the keys. v35: `triggers` — the director's triggers
+    (`value`: [{id, on, npc, node, repeat, count, holds: a state trigger's condition now, null if it is not
+    computed, broken?: why it can't run}])."""
 
     type: Literal["debug"] = "debug"
     req: str
@@ -1233,7 +1286,12 @@ class GraphPatchCmd(_Command):
     The director's own dialogs offer choices with `choice` steps (v24). `vars` (v29): the director's story
     variables (`vars` = {name: first value}, names DIR_...), integer globals like the scripts' own that the
     save keeps: made with that value if missing, kept as they are if a save brought them back; conditions,
-    programs, effects and story_state read and write them by name.
+    programs, effects and story_state read and write them by name. `trigger` (v35): {id, on, npc?, node?,
+    when?, steps, repeat?, world?} — `steps` run when the event `on` happens and `when` holds: `state` (the
+    condition, four times a second; self: `npc` or the hero, other: the hero), `death` (self: the dead, `npc`
+    if given; other: the killer), `dialog` (a dialog or choice `node` of `npc` ran; self: the npc, other: the
+    hero). Its count is a variable of the director's by its id (DIR_...): once (the default) it fires while
+    the count is 0, `repeat` fires whenever the condition comes true; `steps` null takes it away.
     With `req`, the game answers `result` (`error` lists rejected ops)."""
 
     type: Literal["graph_patch"] = "graph_patch"

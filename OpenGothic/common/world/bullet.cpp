@@ -1,10 +1,12 @@
 #include "bullet.h"
 
 #include <Tempest/Log>
+#include <cmath>
 
 #include "graphics/visualfx.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
+#include "world/objects/interactive.h"
 #include "world.h"
 #include "testbench.h"
 #include "gothic.h"
@@ -13,6 +15,7 @@ using namespace Tempest;
 
 Bullet::Bullet(World& owner, const Item& itm, const Vec3& pos)
   :wrld(&owner) {
+  visualName = itm.handle().visual;
   obj = wrld->physic()->bulletObj(this);
   if(itm.isSpellOrRune()) {
     obj->setSpellId(itm.spellId());
@@ -163,7 +166,7 @@ void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
   auto matrix = obj->matrix();
   if(auto* npc = wrld->npcForRagdoll(hit.ragdoll)) {
     npc->addCorpseArrowImpulse(*this);
-    if(npc->stickArrow(std::move(view),hit.bone,matrix)) {
+    if(npc->stickArrow(std::move(view),hit.bone,matrix,visualName)) {
       char buf[160];
       const auto who = TestBench::who(npc);
       std::snprintf(buf,sizeof(buf),"arrow stuck corpse %.*s bone %zu",int(who.size()),who.data(),hit.bone);
@@ -171,7 +174,13 @@ void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
       return;
       }
     }
-  if(wrld->stickArrow(std::move(view),matrix)) {
+  auto sightNormal = hit.normal;
+  if(Tempest::Vec3::dotProduct(sightNormal,hit.incoming)>0.f)
+    sightNormal = -sightNormal;
+  const auto sightPoint = hit.point+sightNormal*3.f;
+  const auto surface = hit.vob!=nullptr && hit.vob->isDoor() ? "door" :
+                       (std::abs(hit.normal.y)<.7f ? "wall" : "ground");
+  if(wrld->stickArrow(std::move(view),matrix,visualName,hit.movable,origin(),&sightPoint,surface)) {
     char buf[256];
     std::snprintf(buf,sizeof(buf),"arrow stuck world: at %.9g %.9g %.9g normal %.9g %.9g %.9g material %u",
                   double(hit.point.x),double(hit.point.y),double(hit.point.z),
@@ -278,7 +287,7 @@ bool Bullet::onCollide(Npc& npc) {
     matrix.set(3,0,point.x);
     matrix.set(3,1,point.y);
     matrix.set(3,2,point.z);
-    if(npc.stickArrow(std::move(view),impactOwner,matrix)) {
+    if(npc.stickArrow(std::move(view),impactOwner,matrix,visualName)) {
       Npc::ArrowPinProbe pin;
       npc.stuckArrowProbe(npc.stuckArrowCount()-1,pin);
       char buf[160];

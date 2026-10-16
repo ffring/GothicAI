@@ -10,6 +10,7 @@
 #include "game/damagecalculator.h"
 #include "game/bodyobservations.h"
 #include "game/serialize.h"
+#include "physics/physicsnoise.h"
 #include "game/ragdollsave.h"
 #include "game/gamescript.h"
 #include "utils/string_frm.h"
@@ -254,6 +255,8 @@ Npc::~Npc(){
   TestBench::bodyForget(this);
   if(currentInteract)
     currentInteract->detach(*this,true);
+  if(hnpc && hnpc->user_ptr==this)
+    hnpc->user_ptr=nullptr;
   }
 
 void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
@@ -311,6 +314,10 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
   visual.pose().saveRagdollRecovery(fout);
   fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-quest-return");
   RagdollSave::saveQuestReturn(fout,ragdollQuestReturn);
+  if(visual.stuckArrowCount()>0) {
+    fout.setEntry("worlds/",fout.worldName(),directory,id,"/stuck-arrows");
+    visual.saveStuckArrows(fout);
+    }
   }
 
 void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
@@ -433,6 +440,10 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
       !ragdollLegacyDown && !ragdollRecovering &&
       (movement==MoveAlgo::InAir || movement==MoveAlgo::Falling ||
        movement==MoveAlgo::Swim || movement==MoveAlgo::Dive);
+  if(Gothic::physicsFlags().arrowSticking &&
+     fin.setEntry("worlds/",fin.worldName(),directory,id,"/stuck-arrows") &&
+     !visual.loadStuckArrows(fin,owner))
+    Log::e("arrows: invalid saved NPC attachments, keeping the body without arrows");
   }
 
 void Npc::postValidate() {
@@ -818,22 +829,26 @@ float Npc::physicsMass() const {
   return std::max(0.01f,base*std::abs(sz[0]*sz[1]*sz[2]));
   }
 
-bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction) {
+bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction, Npc* culprit) {
   if(!Gothic::physicsFlags().spellPhysics || spellFrozen() ||
      !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
      impulseNs.quadLength()<=0.f)
     return false;
   if(ragdoll) {
-    ragdoll->addImpulse(impulseNs);
+    ragdoll->addImpulse(impulseNs,culprit);
     return true;
     }
   if(isDown()) {
     pendingSpellImpulse += impulseNs;
+    spellImpulseCulprit = culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
     return true;
     }
   updateRagdollQuestAnchor();
   if(!mvAlgo.addSpellImpulse(impulseNs,physicsMass(),reaction))
     return false;
+  spellImpulseCulprit = culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
+  if(living)
+    living->setNoiseCulprit(culprit);
   if(!isPlayer() && isHuman() && ragdollQuestReturn.hasAnchor &&
      Gothic::physicsFlags().questGuard) {
     if(!ragdollQuestReturn.armed)
@@ -846,7 +861,7 @@ bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction) {
 
 void Npc::suspendRagdoll() {
   pendingSpellImpulse = {};
-  visual.clearStuckArrows();
+  spellImpulseCulprit.reset();
   living.reset();
   arrowImpacts.clear();
   ragdollHasLastPosition = false;
@@ -888,10 +903,16 @@ bool Npc::createRagdoll() {
     }
   ragdollDormant.reset();
   ragdoll = std::move(body);
+  ragdoll->setNpc(this);
+  if(const auto culprit = spellImpulseCulprit.lock())
+    ragdoll->setNoiseCulprit(static_cast<Npc*>(culprit->user_ptr));
   dispatchArrowPhysics(*ragdoll);
-  if(Gothic::physicsFlags().spellPhysics && pendingSpellImpulse.quadLength()>0.f)
-    ragdoll->addImpulse(pendingSpellImpulse);
+  if(Gothic::physicsFlags().spellPhysics && pendingSpellImpulse.quadLength()>0.f) {
+    const auto culprit = spellImpulseCulprit.lock();
+    ragdoll->addImpulse(pendingSpellImpulse,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr);
+    }
   pendingSpellImpulse = {};
+  spellImpulseCulprit.reset();
   ragdollStartTick = owner.tickCount();
   physic.setEnable(false);
   mvAlgo.takeRagdollControl();
@@ -1046,6 +1067,8 @@ bool Npc::recoverSpellThrow() {
 void Npc::prepareRagdoll() {
   if(!isDown() || !Gothic::physicsFlags().spellPhysics)
     pendingSpellImpulse = {};
+  if(!Gothic::physicsFlags().spellPhysics || (!isDown() && !isInAir()))
+    spellImpulseCulprit.reset();
   if(!Gothic::physicsFlags().arrowSticking)
     visual.clearStuckArrows();
   if(!Gothic::physicsFlags().arrowPhysics)
@@ -1201,7 +1224,12 @@ void Npc::prepareLivingBody() {
   updateAnimation(0,true);
   living = owner.physic()->createKinematicBody(*skeleton,visual.hitZoneShape(),visual.pose().transform(),
                                              visual.pose().boneCount(),visual.transform());
-  if(!living)
+  if(living) {
+    living->setNpc(this);
+    if(const auto culprit = spellImpulseCulprit.lock())
+      living->setNoiseCulprit(static_cast<Npc*>(culprit->user_ptr));
+    }
+  else
     livingRetryTick = owner.tickCount()+1000;
   if(living && !frozen)
     dispatchArrowPhysics(*living);
@@ -1209,7 +1237,8 @@ void Npc::prepareLivingBody() {
     arrowImpacts.clear();
   }
 
-bool Npc::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix) {
+bool Npc::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix,
+                     std::string_view visualName) {
   // A corpse hit is selected after the native step, before the usual pose export.
   // Bind against that same current pose so the first sync cannot move the pin twice.
   if(ragdoll)
@@ -1220,7 +1249,7 @@ bool Npc::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& wo
     const Vec3 at(worldMatrix.at(3,0),worldMatrix.at(3,1),worldMatrix.at(3,2));
     bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,at);
     }
-  return visual.stickArrow(std::move(arrow),bone,worldMatrix);
+  return visual.stickArrow(std::move(arrow),bone,worldMatrix,visualName);
   }
 
 void Npc::addCorpseArrowImpulse(const Bullet& bullet) {
@@ -1250,7 +1279,8 @@ void Npc::queueArrowPhysics(const Bullet& bullet) {
   const float momentum = std::clamp(0.08f*speed*10.f,0.2f,12.f);
   const float strength = std::clamp(momentum/8.f,0.1f,1.f);
   const Vec3 impulse = direction*(momentum/speed);
-  arrowImpacts.push_back({bone,point,impulse,strength});
+  arrowImpacts.push_back({bone,point,impulse,strength,
+                           bullet.origin()!=nullptr ? bullet.origin()->handlePtr() : std::weak_ptr<zenkit::INpc>()});
   arrowPhysics.bone = bone;
   arrowPhysics.point = point;
   arrowPhysics.impulseNs = impulse;
@@ -1259,12 +1289,14 @@ void Npc::queueArrowPhysics(const Bullet& bullet) {
   }
 
 void Npc::dispatchArrowPhysics(Ragdoll& body) {
-  for(const auto& hit:arrowImpacts)
-    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength)) {
+  for(const auto& hit:arrowImpacts) {
+    const auto culprit = hit.culprit.lock();
+    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr)) {
       ++arrowPhysics.applied;
       if(&body==ragdoll.get())
         ++arrowPhysics.corpseImpulses;
       }
+    }
   arrowImpacts.clear();
   }
 
@@ -3004,6 +3036,8 @@ void Npc::takeDamage(Npc &other, const Bullet* b) {
   if(isDown())
     return;
 
+  stopPhysicsInvestigation(false);
+
   assert(b==nullptr || !b->isSpell());
   const auto& pose    = visual.pose();
   const bool  isJumpb = pose.isJumpBack(owner.tickCount()) && fghAlgo.isInJumpBackAngle(*this,other);
@@ -3070,6 +3104,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   if(!isSpell || splCat==SpellCategory::SPELL_BAD) {
+    stopPhysicsInvestigation(false);
     perceptionProcess(other,this,0,PERC_ASSESSDAMAGE);
     const auto tracePrimitiveBefore = fghAlgo.queuedAction();
     fghAlgo.onTakeHit();
@@ -3501,6 +3536,23 @@ void Npc::tick(uint64_t dt) {
 
   const bool physicalMovement = ragdoll ||
       (Gothic::physicsFlags().ragdoll && isDown() && !ragdollLegacyDown && !ragdollRecovering);
+
+  // A nearby impact briefly interrupts idle work, including an AI_Wait. Combat,
+  // conversation and sleep immediately regain control if they begin meanwhile.
+  if(physicsNoiseUntil>owner.tickCount()) {
+    if(Gothic::physicsFlags().physicsNoise && canHearPhysicsNoise()) {
+      if(prepareTurn()) {
+        const auto direction = physicsNoisePosition-position();
+        implTurnTo(direction.x,direction.z,AnimationSolver::TurnType::Std,dt);
+        }
+      mvAlgo.tick(dt,MoveAlgo::WaitMove);
+      return;
+      }
+    physicsNoiseUntil = 0;
+    }
+
+  if(tickPhysicsInvestigation(dt))
+    return;
 
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     traceCombatGate("tick_wait_or_animation_lock");
@@ -4231,6 +4283,8 @@ void Npc::tickRoutine() {
   }
 
 void Npc::setTarget(Npc *t) {
+  if(t!=nullptr)
+    stopPhysicsInvestigation(false);
   if(currentTarget==t)
     return;
 
@@ -4598,6 +4652,10 @@ void Npc::setToFistMode() {
   }
 
 void Npc::aiPush(AiQueue::AiAction&& a) {
+  // Vanilla quiet-sound scripts aim at OTHER. A physical sound is located at the
+  // collision, and OTHER may be null or a distant culprit, so native turning owns it.
+  if(physicsNoiseCallback && (a.act==AI_TurnToNpc || a.act==AI_LookAtNpc))
+    return;
   if(a.act==AI_OutputSvmOverlay)
     aiQueueOverlay.pushBack(std::move(a)); else
     aiQueue.pushBack(std::move(a));
@@ -5550,6 +5608,10 @@ Gaze::Source Npc::gazeTarget(Tempest::Vec3& at) const {
     at = other->mapHeadBone() + eyes;
     return Gaze::Source::Talk;
     }
+  if(physicsNoiseUntil>owner.tickCount() && Gothic::physicsFlags().physicsNoise && canHearPhysicsNoise()) {
+    at = physicsNoisePosition;
+    return Gaze::Source::Script;
+    }
   if(currentLookAtNpc!=nullptr && currentLookAtNpc!=this) {
     at = currentLookAtNpc->mapHeadBone() + eyes;
     return Gaze::Source::Script;
@@ -5616,6 +5678,7 @@ void Npc::setPerceptionDisable(PercType t) {
 void Npc::startDialog(Npc& pl) {
   if(pl.isDown() || pl.isInAir() || isPlayer())
     return;
+  stopPhysicsInvestigation(false);
   if(perceptionProcess(pl,nullptr,0,PERC_ASSESSTALK))
     setOther(&pl);
   }
@@ -5723,6 +5786,50 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
     }
   Gothic::inst().onObservedPerception(*this,pl,victim,perc);
 
+  if(isPhysicsInvestigating()) {
+    constexpr auto interrupts = [](PercType observed) {
+      switch(observed) {
+      case PERC_ASSESSENEMY:
+      case PERC_ASSESSFIGHTER:
+      case PERC_ASSESSDAMAGE:
+      case PERC_ASSESSOTHERSDAMAGE:
+      case PERC_ASSESSTHREAT:
+      case PERC_ASSESSFIGHTSOUND:
+      case PERC_ASSESSWARN:
+      case PERC_ASSESSCALL:
+      case PERC_ASSESSTALK:
+      case PERC_DRAWWEAPON:
+      case PERC_ASSESSMURDER:
+      case PERC_ASSESSMAGIC:
+      case PERC_ASSESSCASTER:
+      case PERC_CATCHTHIEF:
+      case PERC_ASSESSTHEFT:
+      case PERC_ASSESSUSEMOB:
+      case PERC_ASSESSENTERROOM:
+      case PERC_MOVEMOB:
+      case PERC_OBSERVEINTRUDER:
+      case PERC_OBSERVESUSPECT:
+      case PERC_ASSESSBODY:
+      case PERC_ASSESSDEFEAT:
+        return true;
+      default:
+        return false;
+        }
+      };
+    // Contract for this active-investigation gate: witnessed crimes reach the scripts,
+    // while ordinary proximity and quiet sounds keep the ongoing check intact.
+    static_assert(interrupts(PERC_CATCHTHIEF) && interrupts(PERC_ASSESSTHEFT));
+    static_assert(interrupts(PERC_ASSESSENTERROOM));
+    static_assert(!interrupts(PERC_ASSESSPLAYER) && !interrupts(PERC_ASSESSQUIETSOUND));
+    if(!interrupts(perc)) {
+      // The planner has observed it above. Routine chatter and ordinary hero
+      // activity must not replace the ongoing check through a script callback.
+      trace("investigating",false,false);
+      return false;
+      }
+    stopPhysicsInvestigation(false);
+    }
+
   if(hasPerc(perc)) {
     auto& intercept = Gothic::inst().interceptPerception;
     if(!percPassThrough && intercept && intercept(*this,pl,victim,perc)) {
@@ -5743,6 +5850,117 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
     }
   trace("no_callback",false,false);
   return false;
+  }
+
+bool Npc::canHearPhysicsNoise() const {
+  if(isPlayer() || processPolicy()!=NpcProcessPolicy::AiNormal || externalCtrl || isDown() ||
+     isLie() || isTalk() || isAttack() || currentTarget!=nullptr || talkPartner()!=nullptr ||
+     Gothic::inst().isNpcInDialog(*this))
+    return false;
+  const auto* state = owner.script().findSymbol(aiState.funcIni.ptr);
+  return state==nullptr || (state->name()!="ZS_SLEEP" && state->name()!="ZS_MAGICSLEEP" &&
+                            state->name()!="ZS_MM_RTN_SLEEP");
+  }
+
+bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
+  const uint64_t now = owner.tickCount();
+  if(noise.culprit==this || !canHearPhysicsNoise() || isPhysicsInvestigating() || now<physicsNoiseNextTime)
+    return false;
+  // The observer checks sight now, before either the native turn or a script callback.
+  Gothic::inst().onPhysicsNoiseHeard(*this,noise);
+  physicsNoiseNextTime = now+2001;
+  physicsNoisePosition = noise.position;
+  physicsNoiseUntil = now+2000;
+  // Vanilla B_AssessQuietSound dereferences OTHER. Unknown physical causes
+  // still turn the listener natively, without inventing a script actor.
+  const bool callbackDispatched = noise.culprit!=nullptr && hasPerc(PERC_ASSESSQUIETSOUND);
+  if(callbackDispatched) {
+    physicsNoiseCallback = true;
+    owner.script().invokeState(this,noise.culprit,nullptr,perception[PERC_ASSESSQUIETSOUND].func);
+    physicsNoiseCallback = false;
+    }
+  TestBench::physicsNoiseHeard(*this,noise,callbackDispatched);
+  return true;
+  }
+
+bool Npc::startPhysicsInvestigation(const Tempest::Vec3& at, uint64_t scanMs) {
+  if(!canHearPhysicsNoise() || !isHuman() || weaponState()!=WeaponState::NoWeapon)
+    return false;
+  clearAiQueue();
+  physicsInvestigationPosition = at;
+  physicsInvestigationUntil = owner.tickCount()+45000;
+  physicsInvestigationScanUntil = 0;
+  physicsInvestigationScanMs = std::clamp<uint64_t>(scanMs,2000,8000);
+  physicsInvestigationWalking = false;
+  physicsInvestigationReason = {};
+  return true;
+  }
+
+void Npc::stopPhysicsInvestigation(bool resume, std::string_view reason) {
+  if(physicsInvestigationUntil==0)
+    return;
+  physicsInvestigationUntil = 0;
+  physicsInvestigationScanUntil = 0;
+  physicsInvestigationReason = reason;
+  physicsNoiseUntil = 0;
+  // A new owner or native state may already have installed its own movement.
+  if(go2.flag==GT_Point && (go2.pos-physicsInvestigationPosition).quadLength()<1.f)
+    clearGoTo();
+  if(resume) {
+    clearAiQueue();
+    resumeAiRoutine();
+    }
+  }
+
+bool Npc::tickPhysicsInvestigation(uint64_t dt) {
+  if(physicsInvestigationUntil==0)
+    return false;
+  if(!canHearPhysicsNoise() || weaponState()!=WeaponState::NoWeapon) {
+    stopPhysicsInvestigation(false);
+    return false;
+    }
+  const uint64_t now = owner.tickCount();
+  if(now>=physicsInvestigationUntil) {
+    stopPhysicsInvestigation(true,"timeout");
+    return false;
+    }
+  if(physicsInvestigationScanUntil!=0) {
+    if(now>=physicsInvestigationScanUntil) {
+      stopPhysicsInvestigation(true,"done");
+      return false;
+      }
+    // Look to either side of the impact, then back, while standing at the spot.
+    const uint64_t elapsed = physicsInvestigationScanMs-(physicsInvestigationScanUntil-now);
+    const float offset = elapsed<physicsInvestigationScanMs/3 ? -.7f :
+                         elapsed<2*physicsInvestigationScanMs/3 ? .7f : 0.f;
+    const float facing = physicsInvestigationFacing+offset;
+    implTurnTo(std::cos(facing),std::sin(facing),AnimationSolver::TurnType::Std,dt);
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if(!setInteraction(nullptr)) {
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if((position()-physicsInvestigationPosition).quadLength()<140.f*140.f) {
+    clearGoTo();
+    stopWalking();
+    physicsInvestigationFacing = rotationRad();
+    physicsInvestigationScanUntil = now+physicsInvestigationScanMs;
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if(!physicsInvestigationWalking) {
+    wayPath.clear();
+    attachToPoint(nullptr);
+    go2.clear();
+    go2.set(physicsInvestigationPosition);
+    physicsInvestigationWalking = true;
+    }
+  // Position targets use the same native movement/collision checks as AI_UseMob.
+  // A blocked approach ends at the deadline; it never teleports the listener.
+  implGoTo(dt,60.f);
+  return true;
   }
 
 bool Npc::hasPerc(PercType perc) const {
@@ -6018,7 +6236,7 @@ std::vector<GameScript::DlgChoice> Npc::dialogChoices(Npc& player,const std::vec
   }
 
 bool Npc::isAiQueueEmpty() const {
-  return aiQueue.size()==0 &&
+  return !isPhysicsInvestigating() && aiQueue.size()==0 &&
          go2.empty() &&
          waitTime<owner.tickCount();
   }
@@ -6030,6 +6248,7 @@ bool Npc::isAiBusy() const {
   }
 
 void Npc::clearAiQueue() {
+  stopPhysicsInvestigation(false);
   currentLookAt    = nullptr;
   currentLookAtNpc = nullptr;
   visual.setHeadRotation(0,0);

@@ -3,6 +3,8 @@
 #include "dynamicworld.h"
 #include "ragdoll.h"
 #include "world/objects/item.h"
+#include "world/objects/npc.h"
+#include "world/world.h"
 
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
@@ -12,6 +14,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
@@ -45,9 +48,9 @@ namespace {
   struct LayerInterface final : JPH::BroadPhaseLayerInterface {
     JPH::uint GetNumBroadPhaseLayers() const override { return 3; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody)
+      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_MovableVob)
         return dynamicLayer;
-      if(layer==DynamicWorld::C_Water || layer==DynamicWorld::C_Ghost)
+      if(layer==DynamicWorld::C_Water || layer==DynamicWorld::C_Ghost || layer==DynamicWorld::C_MovableQuery || layer==DynamicWorld::C_SmallVobQuery)
         return sensorLayer;
       return staticLayer;
       }
@@ -60,16 +63,20 @@ namespace {
 
   struct LayerPairFilter final : JPH::ObjectLayerPairFilter {
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
+      if(a==DynamicWorld::C_MovableQuery || a==DynamicWorld::C_SmallVobQuery ||
+         b==DynamicWorld::C_MovableQuery || b==DynamicWorld::C_SmallVobQuery)
+        return false;
       if(a==DynamicWorld::C_ActiveBody)
-        return b==DynamicWorld::C_Landscape || b==DynamicWorld::C_Object || b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll;
+        return b==DynamicWorld::C_Landscape || b==DynamicWorld::C_Object || b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_MovableVob;
       if(b==DynamicWorld::C_ActiveBody)
-        return a==DynamicWorld::C_Landscape || a==DynamicWorld::C_Object || a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll;
+        return a==DynamicWorld::C_Landscape || a==DynamicWorld::C_Object || a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll || a==DynamicWorld::C_MovableVob;
       if(a==DynamicWorld::C_LivingBody)
-        return b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll;
+        return b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_MovableVob;
       if(b==DynamicWorld::C_LivingBody)
-        return a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll;
+        return a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll || a==DynamicWorld::C_MovableVob;
       return (a==DynamicWorld::C_Item || b==DynamicWorld::C_Item ||
-              a==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_Ragdoll) &&
+              a==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_Ragdoll ||
+              a==DynamicWorld::C_MovableVob || b==DynamicWorld::C_MovableVob) &&
              a!=DynamicWorld::C_Null && b!=DynamicWorld::C_Null;
       }
     };
@@ -78,7 +85,9 @@ namespace {
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad) const override {
       if(layer==DynamicWorld::C_LivingBody)
         return broad==dynamicLayer;
-      return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody ||
+      if(layer==DynamicWorld::C_MovableQuery || layer==DynamicWorld::C_SmallVobQuery)
+        return false;
+      return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_MovableVob ||
              (layer!=DynamicWorld::C_Null && broad==dynamicLayer);
       }
     };
@@ -95,8 +104,9 @@ namespace {
     explicit QueryBroadPhaseFilter(uint32_t mask):mask(mask) {}
     bool ShouldCollide(JPH::BroadPhaseLayer layer) const override {
       constexpr uint32_t itemMask = (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll)|
-                                    (1u<<DynamicWorld::C_LivingBody)|(1u<<DynamicWorld::C_ActiveBody);
-      constexpr uint32_t sensorMask = (1u<<DynamicWorld::C_Water)|(1u<<DynamicWorld::C_Ghost);
+                                    (1u<<DynamicWorld::C_LivingBody)|(1u<<DynamicWorld::C_ActiveBody)|(1u<<DynamicWorld::C_MovableVob);
+      constexpr uint32_t sensorMask = (1u<<DynamicWorld::C_Water)|(1u<<DynamicWorld::C_Ghost)|
+                                      (1u<<DynamicWorld::C_MovableQuery)|(1u<<DynamicWorld::C_SmallVobQuery);
       if(layer==dynamicLayer)
         return (mask & itemMask)!=0;
       if(layer==sensorLayer)
@@ -271,6 +281,15 @@ uint32_t Physics::triangleData(const JPH::Shape& shape, JPH::SubShapeID subShape
   }
 
 struct CollisionWorld::Impl final : JPH::ContactListener {
+  struct NoiseImpact {
+    JPH::BodyID body,other;
+    Tempest::Vec3 point;
+    zenkit::MaterialGroup surface;
+    float impulse;
+    uint64_t step;
+    uint64_t logicalBody;
+    bool otherPushing;
+    };
   struct Impact {
     JPH::BodyID item;
     zenkit::MaterialGroup material;
@@ -296,6 +315,80 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
 
   void onContact(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold,
                  const JPH::ContactSettings& settings) {
+    auto markNpcContact = [](const JPH::Body& movable, const JPH::Body& other) {
+      if(movable.GetObjectLayer()!=DynamicWorld::C_MovableVob ||
+         (other.GetObjectLayer()!=DynamicWorld::C_LivingBody && other.GetObjectLayer()!=DynamicWorld::C_ActiveBody))
+        return;
+      auto* body = reinterpret_cast<CollisionBody*>(movable.GetUserData());
+      if(body!=nullptr)
+        body->npcContact.store(true,std::memory_order_relaxed);
+      };
+    markNpcContact(a,b);
+    markNpcContact(b,a);
+    if(a.GetObjectLayer()==DynamicWorld::C_MovableVob && b.GetObjectLayer()==DynamicWorld::C_MovableVob) {
+      auto* first = reinterpret_cast<CollisionBody*>(a.GetUserData());
+      auto* second = reinterpret_cast<CollisionBody*>(b.GetUserData());
+      if(first!=nullptr && second!=nullptr && (first->touchedByNpc() || second->touchedByNpc())) {
+        first->npcContact.store(true,std::memory_order_relaxed);
+        second->npcContact.store(true,std::memory_order_relaxed);
+        }
+      }
+    // Movable traces need the same push attribution even when audible noise
+    // is disabled. Resolve identities after the native workers have finished.
+    if((emitNoise || a.GetObjectLayer()==DynamicWorld::C_MovableVob || b.GetObjectLayer()==DynamicWorld::C_MovableVob) &&
+       !manifold.mRelativeContactPointsOn1.empty() && !a.IsSensor() && !b.IsSensor()) {
+      auto source=[this](const JPH::Body& body) {
+        if(!emitNoise && body.GetObjectLayer()!=DynamicWorld::C_MovableVob) return false;
+        return body.IsDynamic() && (body.GetObjectLayer()==DynamicWorld::C_Item ||
+               body.GetObjectLayer()==DynamicWorld::C_MovableVob || body.GetObjectLayer()==DynamicWorld::C_Ragdoll ||
+               body.GetObjectLayer()==DynamicWorld::C_ActiveBody);
+        };
+      const bool first=source(a),second=source(b);
+      if(first || second) {
+        const auto point=manifold.GetWorldSpaceContactPointOn1(0);
+        const auto firstVelocity=a.GetPointVelocity(point),secondVelocity=b.GetPointVelocity(point);
+        const float speed=(firstVelocity-secondVelocity).Dot(manifold.mWorldSpaceNormal);
+        const bool firstNpc=b.GetObjectLayer()==DynamicWorld::C_LivingBody || b.GetObjectLayer()==DynamicWorld::C_ActiveBody ||
+                            b.GetObjectLayer()==DynamicWorld::C_Ragdoll;
+        const bool secondNpc=a.GetObjectLayer()==DynamicWorld::C_LivingBody || a.GetObjectLayer()==DynamicWorld::C_ActiveBody ||
+                             a.GetObjectLayer()==DynamicWorld::C_Ragdoll;
+        const bool firstPushed=first && firstNpc && secondVelocity.Dot(manifold.mWorldSpaceNormal)<-.05f;
+        const bool secondPushed=second && secondNpc && firstVelocity.Dot(manifold.mWorldSpaceNormal)>.05f;
+        // Resting contacts do not need the native impulse solver. Slow contact
+        // with an NPC rig still retains who pushed a body before its fall.
+        if(speed>=.9f || firstPushed || secondPushed) {
+          float impulse=0.f;
+          if(speed>=.9f) {
+            JPH::CollisionEstimationResult response;
+            JPH::EstimateCollisionResponse(a,b,manifold,response,settings.mCombinedFriction,settings.mCombinedRestitution);
+            for(float contact:response.mContactImpulse) impulse+=contact;
+            }
+          auto surface=[](const JPH::Body& body,JPH::SubShapeID subShape) {
+            const auto layer=body.GetObjectLayer();
+            if(layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody)
+              return zenkit::MaterialGroup::UNDEFINED;
+            auto* obj=reinterpret_cast<CollisionBody*>(body.GetUserData());
+            if(obj==nullptr) return zenkit::MaterialGroup::STONE;
+            if(obj->mesh!=nullptr)
+              return obj->mesh->materialId(Physics::triangleData(*body.GetShape(),subShape));
+            return obj->noiseSurface;
+            };
+          auto identity=[](const JPH::Body& body) -> uint64_t {
+            const auto layer=body.GetObjectLayer();
+            if(layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody)
+              return (uint64_t(1)<<63)|body.GetCollisionGroup().GetGroupID();
+            return body.GetID().GetIndexAndSequenceNumber();
+            };
+          std::lock_guard<std::mutex> guard(impactMutex);
+          if(first && (impulse>=.08f || firstPushed))
+            noises.push_back({a.GetID(),b.GetID(),toCentimeters(point),surface(b,manifold.mSubShapeID2),impulse,simulationStep,identity(a),
+                              firstPushed});
+          if(second && (impulse>=.08f || secondPushed))
+            noises.push_back({b.GetID(),a.GetID(),toCentimeters(point),surface(a,manifold.mSubShapeID1),impulse,simulationStep,identity(b),
+                              secondPushed});
+          }
+        }
+      }
     if(!emitImpacts)
       return;
     const JPH::Body* item = nullptr;
@@ -348,8 +441,10 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
   JPH::JobSystemThreadPool jobs;
   std::mutex impactMutex;
   std::vector<Impact> impacts;
+  std::vector<NoiseImpact> noises;
   uint64_t simulationStep = 0;
   bool emitImpacts = false;
+  bool noiseEnabled = true,emitNoise = false;
   std::atomic<uint64_t> rayCount {0};
   uint64_t lastRayCount = 0;
   float stepMilliseconds = 0;
@@ -391,8 +486,8 @@ CollisionWorld::CollisionBody::~CollisionBody() {
     owner->removeBody(*this);
   }
 
-CollisionWorld::DynamicBody::DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass)
-  :CollisionBody(owner,std::move(shape),DynamicWorld::C_Item), bodyMass(mass) {
+CollisionWorld::DynamicBody::DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass, int category)
+  :CollisionBody(owner,std::move(shape),category), bodyMass(mass) {
   }
 
 void CollisionWorld::CollisionBody::setObjMatrix(const Tempest::Matrix4x4& matrix) {
@@ -405,6 +500,16 @@ void CollisionWorld::CollisionBody::setObjMatrix(const Tempest::Matrix4x4& matri
     owner->impl->system.GetBodyInterface().SetShape(id,scaledShape.GetPtr(),false,JPH::EActivation::DontActivate);
     }
   owner->impl->system.GetBodyInterface().SetPositionAndRotationWhenChanged(id,transform.position,transform.rotation,JPH::EActivation::DontActivate);
+  }
+
+void CollisionWorld::CollisionBody::restoreTransform(const Tempest::Matrix4x4& matrix, bool sleeping) {
+  setObjMatrix(matrix);
+  auto& bodies = owner->impl->system.GetBodyInterface();
+  bodies.SetLinearAndAngularVelocity(id,JPH::Vec3::sZero(),JPH::Vec3::sZero());
+  if(sleeping)
+    bodies.DeactivateBody(id);
+  else
+    bodies.ActivateBody(id);
   }
 
 void CollisionWorld::CollisionBody::setPosition(const Tempest::Vec3& position) {
@@ -433,8 +538,18 @@ void CollisionWorld::CollisionBody::setPayload(void* payload, int type) {
   pointerType = type;
   }
 
+void CollisionWorld::CollisionBody::setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what) {
+  noiseMaterial=material;
+  noiseSurface=surface;
+  noiseWhat=what;
+  }
+
 Tempest::Vec3 CollisionWorld::CollisionBody::position() const {
   return toCentimeters(owner->impl->system.GetBodyInterface().GetPosition(id));
+  }
+
+Tempest::Vec3 CollisionWorld::CollisionBody::centerOfMass() const {
+  return toCentimeters(owner->impl->system.GetBodyInterface().GetCenterOfMassPosition(id));
   }
 
 Tempest::Matrix4x4 CollisionWorld::CollisionBody::matrix() const {
@@ -481,26 +596,59 @@ Tempest::Vec3 CollisionWorld::CollisionBody::velocity() const {
   return toCentimeters(lock.GetBody().GetLinearVelocity());
   }
 
+Tempest::Vec3 CollisionWorld::CollisionBody::angularVelocity() const {
+  if(owner==nullptr || id.IsInvalid()) return {};
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return {};
+  const auto velocity=lock.GetBody().GetAngularVelocity();
+  return {velocity.GetX(),velocity.GetY(),velocity.GetZ()};
+  }
+
 bool CollisionWorld::CollisionBody::isSleeping() const {
   if(owner==nullptr || id.IsInvalid()) return true;
   JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
   return !lock.Succeeded() || !lock.GetBody().IsDynamic() || !lock.GetBody().IsActive();
   }
 
-bool CollisionWorld::CollisionBody::addImpulse(const Tempest::Vec3& impulseNs) {
+void CollisionWorld::CollisionBody::setTraceCulprit(Npc* culprit) {
+  traceCause.clear();
+  if(culprit==nullptr)
+    return;
+  if(culprit->isPlayer())
+    traceCause = "PLAYER";
+  else if(auto symbol = culprit->world().script().findSymbol(size_t(culprit->instanceSymbol())))
+    traceCause = symbol->name();
+  }
+
+bool CollisionWorld::CollisionBody::addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit,
+                                               const Tempest::Vec3* pointCm) {
   if(owner==nullptr || id.IsInvalid() || !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) ||
      !std::isfinite(impulseNs.z) || (impulseNs.x==0.f && impulseNs.y==0.f && impulseNs.z==0.f)) return false;
+  if(pointCm!=nullptr && (!std::isfinite(pointCm->x) || !std::isfinite(pointCm->y) || !std::isfinite(pointCm->z)))
+    return false;
   {
     JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
     if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return false;
     }
   // BodyInterface adds the impulse in SI units and activates a sleeping body.
-  owner->impl->system.GetBodyInterface().AddImpulse(id,JPH::Vec3(impulseNs.x,impulseNs.y,impulseNs.z));
+  auto& interface=owner->impl->system.GetBodyInterface();
+  if(pointCm!=nullptr)
+    interface.AddImpulse(id,JPH::Vec3(impulseNs.x,impulseNs.y,impulseNs.z),JPH::RVec3(toMeters(*pointCm)));
+  else
+    interface.AddImpulse(id,JPH::Vec3(impulseNs.x,impulseNs.y,impulseNs.z));
+  noiseCulprit=culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
+  noiseCulpritUntilStep=owner->impl->simulationStep+300;
+  setTraceCulprit(culprit);
   return true;
   }
 
+bool CollisionWorld::CollisionBody::addImpulseAtPoint(const Tempest::Vec3& impulseNs,
+                                                      const Tempest::Vec3& pointCm, Npc* culprit) {
+  return addImpulse(impulseNs,culprit,&pointCm);
+  }
+
 void CollisionWorld::addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
-                             bool movable, bool sensor, float mass) {
+                             bool movable, bool sensor, float mass, bool startSleeping) {
   const auto transform = toTransform(matrix);
   body.scale = transform.scale;
   body.scaledShape = ::scaledShape(body.baseShape.GetPtr(),body.scale);
@@ -521,13 +669,17 @@ void CollisionWorld::addBody(CollisionBody& body, const Tempest::Matrix4x4& matr
     settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
     settings.mLinearDamping = 0.f;
     settings.mAngularDamping = 0.f;
+    if(body.categoryId==DynamicWorld::C_MovableVob) {
+      settings.mLinearDamping = 0.1f;
+      settings.mAngularDamping = 0.2f;
+      }
     }
   auto& interface = impl->system.GetBodyInterface();
   auto* native = interface.CreateBody(settings);
   if(native==nullptr)
     throw std::runtime_error("Jolt body capacity exhausted");
   body.id = native->GetID();
-  interface.AddBody(body.id,type==JPH::EMotionType::Dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+  interface.AddBody(body.id,type==JPH::EMotionType::Dynamic && !startSleeping ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
   bodies.push_back(&body);
   }
 
@@ -541,10 +693,10 @@ std::unique_ptr<CollisionWorld::CollisionBody> CollisionWorld::addCollisionBody(
   }
 
 std::unique_ptr<CollisionWorld::DynamicBody> CollisionWorld::addDynamicBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix,
-                                                                           float friction, float mass) {
+                                                                           float friction, float mass, int category, bool startSleeping) {
   mass = std::isfinite(mass) && mass>0.f ? mass : 1.f;
-  auto result = std::unique_ptr<DynamicBody>(new DynamicBody(*this,std::move(shape),mass));
-  addBody(*result,matrix,friction,false,false,mass);
+  auto result = std::unique_ptr<DynamicBody>(new DynamicBody(*this,std::move(shape),mass,category));
+  addBody(*result,matrix,friction,false,false,mass,startSleeping);
   rigid.push_back(result.get());
   return result;
   }
@@ -581,7 +733,8 @@ void CollisionWorld::fillRagdoll(QueryResult& result, JPH::BodyID native) const 
   }
 
 CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
-                                                    bool backfaces, std::vector<QueryResult>* all) const {
+                                                    bool backfaces, std::vector<QueryResult>* all,
+                                                    const std::vector<const CollisionBody*>* excluded) const {
   impl->rayCount.fetch_add(1,std::memory_order_relaxed);
   QueryResult result;
   if(all!=nullptr)
@@ -597,6 +750,11 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
   settings.SetBackFaceMode(backfaces ? JPH::EBackFaceMode::CollideWithBackFaces : JPH::EBackFaceMode::IgnoreBackFaces);
   QueryLayerFilter filter(mask);
   QueryBroadPhaseFilter broadFilter(mask);
+  JPH::IgnoreMultipleBodiesFilter bodyFilter;
+  if(excluded!=nullptr)
+    for(auto* body:*excluded)
+      if(body!=nullptr)
+        bodyFilter.IgnoreBody(body->id);
   struct RayEdge {
     const PhysicVbo* mesh = nullptr;
     JPH::TransformedShape shape;
@@ -665,7 +823,7 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
     };
   if(all!=nullptr) {
     JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
-    impl->system.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broadFilter,filter);
+    impl->system.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broadFilter,filter,bodyFilter);
     collector.Sort();
     for(const auto& hit:collector.mHits) {
       auto value = convert(hit);
@@ -677,7 +835,7 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
     }
   else {
     JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;
-    impl->system.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broadFilter,filter);
+    impl->system.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broadFilter,filter,bodyFilter);
     if(collector.HadHit()) {
       result = convert(collector.mHit,true);
       if(edge.mesh!=nullptr) {
@@ -792,7 +950,8 @@ bool CollisionWorld::hasCollision(const JPH::Shape* shape, const Tempest::Vec3& 
   // Keep that query tolerance without changing the physical capsule.
   settings.mMaxSeparationDistance = radius+disc*0.02f;
   JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
-  constexpr uint32_t mask = (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_Ragdoll);
+  constexpr uint32_t mask = (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_Ragdoll)|
+                            (1u<<DynamicWorld::C_MovableQuery);
   QueryLayerFilter filter(mask);
   QueryBroadPhaseFilter broadFilter(mask);
   const auto position = toMeters(center);
@@ -898,9 +1057,96 @@ void CollisionWorld::tick(uint64_t dt) {
     }
 
   std::vector<Impl::Impact> impacts;
+  std::vector<Impl::NoiseImpact> noises;
   {
     std::lock_guard<std::mutex> guard(impl->impactMutex);
     impacts.swap(impl->impacts);
+    noises.swap(impl->noises);
+    }
+  auto rigFor=[&](JPH::BodyID id) -> Ragdoll* {
+    QueryResult result;
+    fillRagdoll(result,id);
+    return result.ragdoll;
+    };
+  // Resolve identities only after all Jolt workers finish. The native sequence
+  // number rejects a removed/reused body; NPC handles are weak and user_ptr is
+  // cleared by NPC destruction even while the script retains the instance.
+  for(const auto& impact:noises) {
+    Npc* culprit=nullptr;
+    bool knownCulprit=false;
+    {
+      JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),impact.other);
+      if(lock.Succeeded()) {
+        const auto layer=lock.GetBody().GetObjectLayer();
+        if(layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_Ragdoll)
+          if(auto* other=rigFor(impact.other)) {
+            culprit=other->noiseCulprit();
+            knownCulprit=culprit!=nullptr;
+            // A stationary NPC struck by an unknown falling body is its
+            // victim. Attribute an owner only when that rig moves into it.
+            if(culprit==nullptr && impact.otherPushing) culprit=other->noiseNpc();
+            }
+        }
+      }
+    if(culprit==nullptr) continue;
+    JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),impact.body);
+    if(!lock.Succeeded()) continue;
+    const auto layer=lock.GetBody().GetObjectLayer();
+    // A body thrown by a known actor keeps that cause when it happens to
+    // strike a bystander. A counterpart's known cause can still propagate.
+    if(layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_LivingBody) {
+      if(auto* rig=rigFor(impact.body))
+        if(knownCulprit || rig->noiseCulprit()==nullptr) rig->setNoiseCulprit(culprit);
+      }
+    else if(auto* body=reinterpret_cast<CollisionBody*>(lock.GetBody().GetUserData())) {
+      const auto current=impact.step<=body->noiseCulpritUntilStep ? body->noiseCulprit.lock() : nullptr;
+      if(!knownCulprit && current!=nullptr && current->user_ptr!=nullptr) continue;
+      body->noiseCulprit=culprit->handlePtr();
+      body->noiseCulpritUntilStep=impact.step+300;
+      body->setTraceCulprit(culprit);
+      }
+    }
+  std::sort(noises.begin(),noises.end(),[](const auto& a,const auto& b) {
+    return std::make_tuple(a.step,a.logicalBody,-a.impulse,a.body.GetIndexAndSequenceNumber()) <
+           std::make_tuple(b.step,b.logicalBody,-b.impulse,b.body.GetIndexAndSequenceNumber());
+    });
+  if(impl->noiseEnabled && physicsNoise) {
+    for(const auto& impact:noises) {
+      if(impact.impulse<.08f) continue;
+      PhysicsNoise noise;
+      {
+        JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),impact.body);
+        if(!lock.Succeeded()) continue;
+        const auto layer=lock.GetBody().GetObjectLayer();
+        if(layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_LivingBody) {
+          auto* rig=rigFor(impact.body);
+          if(rig==nullptr || !rig->acceptNoise(impact.step)) continue;
+          noise.body=rig->noiseId();
+          noise.material=MAT_LEATHER;
+          noise.what="ragdoll";
+          noise.culprit=rig->noiseCulprit();
+          }
+        else {
+          auto* body=reinterpret_cast<CollisionBody*>(lock.GetBody().GetUserData());
+          if(body==nullptr || impact.step<body->nextNoiseStep) continue;
+          body->nextNoiseStep=impact.step+30;
+          noise.body=impact.body.GetIndexAndSequenceNumber();
+          noise.material=body->noiseMaterial;
+          noise.what=body->noiseWhat;
+          const auto culprit=impact.step<=body->noiseCulpritUntilStep ? body->noiseCulprit.lock() : nullptr;
+          noise.culprit=culprit!=nullptr ? static_cast<Npc*>(culprit->user_ptr) : nullptr;
+          }
+        }
+      noise.position=impact.point;
+      noise.surface=impact.surface;
+      noise.impulse=impact.impulse;
+      const float gain=noise.material==MAT_METAL ? 1.15f : noise.material==MAT_CLAY ? .9f :
+                       noise.material==MAT_LEATHER ? .55f : 1.f;
+      noise.volume=std::clamp(std::sqrt(noise.impulse)*gain/18.f,.04f,1.f);
+      noise.radius=100.f+1100.f*noise.volume;
+      // Game callbacks may remove bodies and must run without native locks.
+      physicsNoise(noise);
+      }
     }
   std::sort(impacts.begin(),impacts.end(),[](const auto& a, const auto& b) {
     return std::make_tuple(a.step,a.item.GetIndexAndSequenceNumber(),a.landscape,a.subShape,a.material,a.impulse,a.mass) <
@@ -1007,6 +1253,7 @@ void CollisionWorld::unregisterRagdoll(Ragdoll& body) {
 size_t CollisionWorld::bodyCount() const { return impl->system.GetNumBodies(); }
 float CollisionWorld::stepMilliseconds() const { return impl->stepMilliseconds; }
 uint64_t CollisionWorld::rayCount() const { return impl->lastRayCount; }
+uint64_t CollisionWorld::simulationStep() const { return impl->simulationStep; }
 
 void CollisionWorld::setBBox(JPH::Vec3Arg min, JPH::Vec3Arg) {
   bboxMin = min;
@@ -1014,5 +1261,20 @@ void CollisionWorld::setBBox(JPH::Vec3Arg min, JPH::Vec3Arg) {
 
 void CollisionWorld::setItemHitCallback(std::function<void(Item&, zenkit::MaterialGroup, float, float)> callback) {
   hitItem = std::move(callback);
-  impl->emitImpacts = bool(hitItem);
+  impl->emitImpacts = bool(hitItem) && !impl->noiseEnabled;
+  }
+
+void CollisionWorld::setPhysicsNoiseEnabled(bool enabled) {
+  impl->noiseEnabled=enabled;
+  impl->emitNoise=enabled && bool(physicsNoise);
+  impl->emitImpacts=!enabled && bool(hitItem);
+  }
+
+bool CollisionWorld::physicsNoiseEnabled() const {
+  return impl->noiseEnabled;
+  }
+
+void CollisionWorld::setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback) {
+  physicsNoise=std::move(callback);
+  impl->emitNoise=impl->noiseEnabled && bool(physicsNoise);
   }

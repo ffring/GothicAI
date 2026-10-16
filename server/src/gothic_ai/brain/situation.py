@@ -8,9 +8,13 @@ Npc-specific menus (trader, guard, smith) and voiced SVM lines are the next step
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from .stimuli import Stimulus
+
+if TYPE_CHECKING:
+    from ..places import PlaceBook
 
 GUILD_ROLES = {
     0: "a commoner without a guild",
@@ -41,6 +45,15 @@ REACT_OPTIONS = {
     "approach_talk": "go talk to the hero",
     "comment": "remark on what happened",
     "step_away": "step away from the hero",
+}
+NOISE_OPTIONS = {
+    "continue": "keep doing what you do",
+    "look_at": "stay where you are and look toward the sound",
+    "investigate": (
+        "walk to where the noise came from, look around for a few seconds, then resume your routine"
+    ),
+    "call_guards": "call the guards",
+    "comment": "say something about the noise",
 }
 # extra options that only make sense after a given event
 EVENT_OPTIONS = {
@@ -104,8 +117,16 @@ class Situation:
 
 
 class SituationBuilder:
-    def __init__(self, traits: Mapping[str, str] | None = None) -> None:
+    def __init__(self, traits: Mapping[str, str] | None = None, *, places: PlaceBook | None = None) -> None:
         self.traits = traits or {}
+        self.places = places
+
+    def _describe(self, stimulus: Stimulus, now: float) -> str:
+        if stimulus.kind == "noise" and self.places is not None:
+            place = self.places.of(stimulus.place)
+            if place is not None:
+                stimulus = replace(stimulus, place=place.where_en)
+        return stimulus.describe(now)
 
     def who(self, npc: NpcContext) -> str:
         role = GUILD_ROLES.get(npc.guild, "someone")
@@ -119,12 +140,15 @@ class SituationBuilder:
         seen = ", looking at you" if npc.in_view else ""
         parts.append(f"The hero is {npc.distance_cm / 100:.0f} m away{seen}.")
         parts += npc.view
-        parts += [s.describe(now) for s in stimuli]
+        parts += [self._describe(s, now) for s in stimuli]
         if npc.agenda:
             parts.append(f"What you want: {npc.agenda}")
         if npc.facts:
             parts.append("What you remember: " + " ".join(npc.facts))
-        options = dict(REACT_OPTIONS)
+        noise = max((s for s in stimuli if s.kind == "noise"), key=lambda s: s.at, default=None)
+        options = dict(NOISE_OPTIONS if noise is not None else REACT_OPTIONS)
+        if noise is not None and noise.position is None:
+            del options["investigate"]  # a bridge without a location cannot send the npc to it
         for s in stimuli:
             options.update(EVENT_OPTIONS.get(s.kind, {}))
             if s.other == "PLAYER":

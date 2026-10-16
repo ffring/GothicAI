@@ -30,6 +30,7 @@
 #include "camera.h"
 #include "commandline.h"
 #include "physics/dynamicworld.h"
+#include "physics/physicsnoise.h"
 #include "world/objects/interactive.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
@@ -42,6 +43,8 @@
 #include "chatoverlay.h"
 #include "dialoggraph.h"
 #include "storycast.h"
+#include "storyruntime.h"
+#include "storytriggers.h"
 #include "storyworld.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
@@ -60,7 +63,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 34;
+constexpr int         ProtocolVersion = 37;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -206,6 +209,7 @@ struct AiBridge::Impl final {
   void runWorldDebug(const rapidjson::Value& msg);
   void onPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   void onObservedPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
+  void onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise);
   // who drives the npc instead of its scripts: "attached" or nobody
   std::string_view npcOwner(std::string_view symbol) const;
   bool onConsoleCommand(std::string_view cmd, std::string& reply);
@@ -216,6 +220,10 @@ struct AiBridge::Impl final {
   void onSay(World& world, const rapidjson::Value& msg);
   // the director's lines (story graph) get the npc's voice from the server (v26)
   void askVoice(const std::string& line, const std::string& npc, const std::string& text);
+  // a line of the director's own (npc symbol, text in the game codepage): a runtime line, voiced; its id
+  std::string storyLine(const std::string& npc, const std::string& text);
+  // a graph_patch message: the operations in order, the triggers' to the triggers; the ones not applied
+  std::vector<std::string> applyPatch(const rapidjson::Value& msg);
   void voiceStoryLine(World& world, const rapidjson::Value& msg, const std::string& line);
   void onSayAudio(World& world, const rapidjson::Value& msg);
   // streamed voices: playback starts with the line, the line is shortened to the real length
@@ -303,13 +311,17 @@ struct AiBridge::Impl final {
   uint64_t                     thinkUntil  = 0;  // no answer by then: it stops thinking
   // dialogs of the story graph: the lines of the director's dialogs are runtime lines too
   uint64_t                     graphLines = 0;
+  // what the director's programs and conditions run on, in dialogs and triggers (docs/director.md, stage 3)
+  StoryRuntime                 runtime{[this](const std::string& npc, const std::string& text) {
+                                         return storyLine(npc,text);
+                                         }};
   DialogGraph                  graph{[this](std::string&& s){ send(std::move(s)); },
                                      [this](const std::string& npc, const std::string& text) {
-                                       auto id = "AIB_G" + std::to_string(++graphLines);
-                                       lines.add(id,npc,text);
-                                       askVoice(id,npc,text);
-                                       return id;
-                                       }};
+                                       return storyLine(npc,text);
+                                       },
+                                     runtime};
+  // the director's triggers: an event, a condition, a program (v35)
+  StoryTriggers                triggers{runtime,[this](std::string&& s){ send(std::move(s)); }};
   // the director's hands in the world: tagged creatures, deaths, effects on npc's (v8)
   StoryWorld                   story{[this](std::string&& s){ send(std::move(s)); },
                                      [this](World& w, Npc& npc) {
@@ -332,6 +344,7 @@ AiBridge::Impl::Impl() {
   gothic.onWorldLoaded       .bind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.bind(this,&Impl::onPerception);
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
+  gothic.onPhysicsNoiseHeard .bind(this,&Impl::onPhysicsNoiseHeard);
   gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
     World* world = Gothic::inst().world();
     // the wolves' own (they leave the hero be) without the server too: the console drives them on the bench
@@ -383,6 +396,10 @@ AiBridge::Impl::Impl() {
       return lines.pending();
       };
   lines.onStart   = [this](const LineLibrary::Line& l) { onLineStarted(l); };
+  graph.chosen    = [this](Npc& npc, const std::string& node) {
+    if(auto world = Gothic::inst().world())
+      triggers.onDialog(*world,npc,node);
+    };
   ctrl.onFollowEnded = [this](const std::string& npc, std::string_view) {
     // following on its own ended: back to its routine (the server takes it again if it wants)
     std::string err;
@@ -431,6 +448,7 @@ AiBridge::Impl::~Impl() {
   gothic.onWorldLoaded       .ubind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.ubind(this,&Impl::onPerception);
   gothic.onObservedPerception.ubind(this,&Impl::onObservedPerception);
+  gothic.onPhysicsNoiseHeard .ubind(this,&Impl::onPhysicsNoiseHeard);
   gothic.interceptPerception = nullptr;
   gothic.consoleCommandFn  = nullptr;
   gothic.externalMessageFn = nullptr;
@@ -503,6 +521,7 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
   if(world!=nullptr) {
     ctrl.tick(*world);
     beasts.tick(*world);  // its reports go nowhere without the server; the console drives it then
+    triggers.tick(*world);  // the director's story goes on without the server too
     if(connected) {
       observer.tick(*world);
       view.tick(*world);
@@ -544,8 +563,12 @@ void AiBridge::Impl::onStartLoading() {
   originalTo.clear();
   lines.clear();
   observer.clear();
-  Log::i("[story] ",graph.status());
-  graph.clear();  // the server sends the patches of the new branch
+  Log::i("[story] ",graph.status(),"; ",triggers.status());
+  // the server sends the patches of the new branch
+  graph.clear();
+  triggers.clear();
+  triggers.clearWorld();
+  runtime.clear();
   story.clear();
   necro.clear();
   if(auto world = Gothic::inst().world()) {
@@ -639,6 +662,13 @@ void AiBridge::Impl::onObservedPerception(Npc& self, Npc& other, Npc* victim, Pe
     observer.perception(*world,self,other,victim,perc);
   }
 
+void AiBridge::Impl::onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise) {
+  if(!connected)
+    return;
+  if(auto world = Gothic::inst().world())
+    observer.physicsNoise(*world,self,noise);
+  }
+
 std::string_view AiBridge::Impl::npcOwner(std::string_view symbol) const {
   if(ctrl.isAttached(symbol))
     return "attached";
@@ -670,14 +700,14 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   if(type=="debug") {
     const auto cmd = JsonRead::str(doc,"cmd");
     if(cmd=="dialogs" || cmd=="choices" || cmd=="choose" || cmd=="eval" || cmd=="check" || cmd=="talk" ||
-       cmd=="menu" || cmd=="menu_pick")
+       cmd=="menu" || cmd=="menu_pick" || cmd=="triggers")
       onDialogDebug(world,doc); else
       onDebug(doc);
     return;
     }
   if(type=="graph_patch") {
     // patches don't need a world: names are checked when there is one
-    auto errors = graph.apply(doc);
+    auto errors = applyPatch(doc);
     std::string all;
     for(auto& e : errors)
       all += (all.empty() ? "" : "; ") + e;
@@ -900,7 +930,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
      cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
-     cmd=="player_take" || cmd=="own_npc") {
+     cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise" || cmd=="physics_traces") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -953,6 +983,18 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     sendResult(req,false,"no world loaded");
     return;
     }
+  if(cmd=="physics_noise") {
+    std::string value, error;
+    const bool ok = TestBench::physicsNoiseDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
+    sendResult(req,ok,error,value);
+    return;
+    }
+  if(cmd=="physics_traces") {
+    std::string value, error;
+    const bool ok = TestBench::physicsTracesDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
+    sendResult(req,ok,error,value);
+    return;
+    }
   if(cmd=="spawn") {
     // a creature next to an npc (or the player): monsters for tests of threats
     std::string inst(JsonRead::str(msg,"instance"));
@@ -965,7 +1007,7 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       sendResult(req,false,id==size_t(-1) ? "unknown instance" : "unknown npc to spawn near");
       return;
       }
-    // towards the player (open ground both have walked), else where the npc faces
+    // Prefer the old direction towards the player, else where the npc faces.
     const float dist = float(JsonRead::integer(msg,"distance",600));
     auto        pos  = at->position();
     float       dx   = std::cos(at->rotationRad()), dz = std::sin(at->rotationRad());
@@ -979,7 +1021,68 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       }
     pos.x += dist*dx;
     pos.z += dist*dz;
-    sendResult(req,world->addNpc(id,pos)!=nullptr,"could not spawn");
+    Npc* spawned = nullptr;
+    if(at!=pl && dist>=0) {
+      const auto hero = pl->position();
+      const auto* physics = world->physic();
+      int level = 0, supported = 0;
+      const auto grounded = [&](Vec3& point) {
+        const float px = point.x-hero.x, pz = point.z-hero.z;
+        if(px*px+pz*pz<400.f*400.f)
+          return false;
+        const auto floor = physics->landRay({point.x,hero.y+100.f,point.z},200.f);
+        if(!floor.hasCol || std::abs(floor.v.y-hero.y)>100.f)
+          return false;
+        // landRay deliberately leaves object normals zero. The footprint below
+        // checks their support; a zero normal does not describe a steep slope.
+        if(floor.n!=Vec3() && floor.n.y<.8f)
+          return false;
+        ++level;
+        point = floor.v;
+        // Support the body, not just its centre on the edge of a floor.
+        const std::array<Vec3,4> footprint = {{{30,0,0},{-30,0,0},{0,0,30},{0,0,-30}}};
+        for(const auto& offset:footprint) {
+          const auto support = physics->landRay(point+offset+Vec3(0,50,0),100.f);
+          if(!support.hasCol || std::abs(support.v.y-point.y)>40.f)
+            return false;
+          }
+        if(physics->ray(point+Vec3(0,5,0),point+Vec3(0,100,0)).hasCol)
+          return false;
+        ++supported;
+        // Keep a single creature while testing its actual animated centre: that
+        // is the endpoint used by enemy perception, including for attached NPCs.
+        if(spawned==nullptr) {
+          spawned = world->addNpc(id,point);
+          } else {
+          spawned->setPosition(point);
+          spawned->updateTransform();
+          }
+        return spawned!=nullptr && at->canRayHitPoint(spawned->centerPosition(),true);
+        };
+      bool found = grounded(pos);
+      // A point on the NPC-to-hero ray can be beyond a wall or on another floor.
+      // Search bounded rings around the hero without relaxing the height/LOS gates.
+      for(int ring=0; ring<8 && !found; ++ring) {
+        const float radius = std::max(dist,401.f)+float(ring)*100.f;
+        for(int step=0; step<32 && !found; ++step) {
+          const float angle = float(step)*(2.f*float(M_PI)/32.f);
+          const float c = std::cos(angle), s = std::sin(angle);
+          auto candidate = hero+Vec3(radius*(dx*c-dz*s),0,radius*(dx*s+dz*c));
+          if(grounded(candidate)) {
+            pos = candidate;
+            found = true;
+            }
+          }
+        }
+      if(!found) {
+        if(spawned!=nullptr)
+          world->removeNpc(*spawned);
+        sendResult(req,false,"no visible supported ground within 1 m of the hero's height and at least 4 m away "
+                             "(level: "+std::to_string(level)+", supported: "+std::to_string(supported)+")");
+        return;
+        }
+      }
+    sendResult(req,spawned!=nullptr || world->addNpc(id,pos)!=nullptr,"could not spawn");
     return;
     }
   if(cmd=="own_npc") {
@@ -1353,6 +1456,38 @@ void AiBridge::Impl::send(std::string&& text) {
   ws.sendText(text);
   }
 
+std::string AiBridge::Impl::storyLine(const std::string& npc, const std::string& text) {
+  auto id = "AIB_G" + std::to_string(++graphLines);
+  lines.add(id,npc,text);
+  askVoice(id,npc,text);
+  return id;
+  }
+
+std::vector<std::string> AiBridge::Impl::applyPatch(const rapidjson::Value& msg) {
+  std::vector<std::string> errors;
+  if(JsonRead::boolean(msg,"replace",false)) {
+    graph.clear();
+    triggers.clear();
+    runtime.clear();
+    }
+  auto it = msg.FindMember("ops");
+  if(it==msg.MemberEnd() || !it->value.IsArray())
+    return errors;
+  size_t i = 0;
+  for(auto& op : it->value.GetArray()) {
+    std::string err = !op.IsObject()                         ? std::string("not an object")
+                    : JsonRead::str(op,"op")=="trigger" ? triggers.apply(op)
+                                                             : graph.applyOp(op);
+    if(!err.empty()) {
+      errors.push_back("op " + std::to_string(i) + ": " + err);
+      Log::e("[story] patch op ",i,": ",err);
+      }
+    ++i;
+    }
+  Log::i("[story] patch: ",i," operation(s), ",errors.size()," rejected; ",graph.summary(),"; ",triggers.status());
+  return errors;
+  }
+
 void AiBridge::Impl::sendResult(std::string_view req, bool ok, std::string_view err, std::string_view value) {
   JsonWriter j("result");
   j.str("req",req).boolean("ok",ok);
@@ -1376,6 +1511,10 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
     }
   if(cmd=="check") {
     sendResult(req,true,"",graph.checkWorld(*world));
+    return;
+    }
+  if(cmd=="triggers") {
+    sendResult(req,true,"",triggers.list(*world));
     return;
     }
   if(cmd=="menu") {
@@ -1508,6 +1647,7 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     reply  = std::string(connected ? "connected to " : "NOT connected to ") + url;
     reply += "; " + ctrl.status(world);
     reply += "; " + graph.status();
+    reply += "; " + triggers.status();
     reply += "; necro " + necro.status();
     reply += "; " + beasts.status();
     return true;

@@ -11,6 +11,9 @@
 #      KEEP=1        the game stays open after the scenario
 #      SOUND, MUSIC  volumes 0..1 (default 0); with TEMPEST_AUDIO_LOOPBACK=48000 the sound of a segment
 #                    goes into <segment>.wav instead of the speakers
+#      MOVABLE_VOBS  optional initial GAME movable_vobs setting (0 or 1), before world loading
+#      ARROW_STICKING optional initial GAME arrow_sticking setting (0 or 1), before world loading
+#      PHYSICS_NOISE optional initial GAME physics_noise setting (0 or 1), before world loading
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -49,6 +52,21 @@ vidResIndex=2
 soundVolume=${SOUND:-0}
 musicVolume=${MUSIC:-0}
 EOF
+if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}" ]]; then
+  printf '\n[GAME]\n' >>"$RUN/Gothic.ini"
+  if [[ -n "${MOVABLE_VOBS:-}" ]]; then
+    [[ "$MOVABLE_VOBS" == 0 || "$MOVABLE_VOBS" == 1 ]] || { echo "MOVABLE_VOBS must be 0 or 1" >&2; exit 2; }
+    printf 'movable_vobs=%s\n' "$MOVABLE_VOBS" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${ARROW_STICKING:-}" ]]; then
+    [[ "$ARROW_STICKING" == 0 || "$ARROW_STICKING" == 1 ]] || { echo "ARROW_STICKING must be 0 or 1" >&2; exit 2; }
+    printf 'arrow_sticking=%s\n' "$ARROW_STICKING" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${PHYSICS_NOISE:-}" ]]; then
+    [[ "$PHYSICS_NOISE" == 0 || "$PHYSICS_NOISE" == 1 ]] || { echo "PHYSICS_NOISE must be 0 or 1" >&2; exit 2; }
+    printf 'physics_noise=%s\n' "$PHYSICS_NOISE" >>"$RUN/Gothic.ini"
+  fi
+fi
 
 # the sharper textures the launcher gives the game too (scripts/hd-textures.sh)
 HD_TEXTURES="$HOME/.local/share/gothic-ai/hd-textures/textures"

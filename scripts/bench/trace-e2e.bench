@@ -1,0 +1,40 @@
+# The server places the actors at Lobart's wall and releases each waitreply barrier.
+# Both arrows use the game's normal shooting path; marks synchronize observations.
+seed 73013
+mark trace_ready
+waitreply 120000 100
+physics dump 1 73013 trace-rays.tsv
+mark wall_sample
+waitreply 120000 100
+
+npcequip BAU_952_VINO ItRw_Bow_L_01
+npcequip BAU_952_VINO ItRw_Arrow 20
+npcaim on arrow
+npcaim sigma 0
+stats npc BAU_952_VINO dex 150 bow 100
+archer BAU_952_VINO at player
+wait 6000
+archer off
+mark control_shot
+waitreply 120000 100
+waitquiet 1500 120000
+
+mark positive_ready
+waitreply 120000 100
+manual on
+release all
+cam follow 260 30 55
+cam look 105
+equip ItRw_Bow_L_01
+give ItRw_Arrow 10
+stats dex 150 bow 100
+tap bow
+wait 1500
+face wp NW_FARM1_INHOUSE_01
+aimat ahead 750 140
+volley 1 300
+tap bow
+wait 600
+mark hero_shot
+waitreply 120000 100
+quit

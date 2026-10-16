@@ -50,7 +50,7 @@ class Item : public Vob {
     float   physicsMass() const { return physic.mass(); }
     Tempest::Vec3 physicsVelocity() const { return physic.velocity(); } // cm/s
     bool    physicsSleeping() const { return physic.isSleeping(); }
-    bool    addSpellImpulse(const Tempest::Vec3& impulseNs);
+    bool    addSpellImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr);
 
     uint8_t slot() const       { return itSlot;  }
     void    setSlot(uint8_t s) { itSlot = s;     }
