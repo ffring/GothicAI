@@ -709,6 +709,13 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   if(moved.grounded || moved.steep)
     cache.n = moved.groundNormal;
 
+  if(collision.preFall) {
+    // The common controller retained the supported origin. Match the legacy
+    // fall rejection for both the hero and NPCs, including its AI notification.
+    onMoveFailed(displacement,collision,dt);
+    return false;
+    }
+
   if(std::isfinite(water) && ground<water) {
     if(pos.y+chest<=water+0.01f && npc.hasSwimAnimations()) {
       const bool splash = !moved.grounded || moved.velocity.y<-30.f;

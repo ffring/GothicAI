@@ -827,7 +827,18 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     auto velocity = toMeters(displacement)/seconds;
     if(character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround)
       velocity += groundVelocity;
-    velocity += JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
+    auto gravityStep = JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
+    if(displacement==Tempest::Vec3() && character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround) {
+      // A supported idle character has static friction. Feeding vertical
+      // gravity to Jolt's frictionless contact solver adds a downhill tangent
+      // every frame, even on a walkable slope. Keep only pressure into the
+      // support; moving platforms still carry us through groundVelocity and
+      // Update applies the character's weight independently. Steep slopes and
+      // requested walking/jumping retain their ordinary gravity response.
+      const auto normal = character.GetGroundNormal();
+      gravityStep = normal*gravityStep.Dot(normal);
+      }
+    velocity += gravityStep;
     character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     const float step = std::max(toMeters(stepHeight),0.f);

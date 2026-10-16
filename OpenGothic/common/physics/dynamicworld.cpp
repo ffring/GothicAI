@@ -1976,7 +1976,18 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
   // Jolt may have slid around a wall or stepped up: an interpolated point on
   // the chord to that endpoint is not necessarily clear of world geometry.
   // If that resolved motion hits an NPC, retain the known-safe starting feet.
-  const auto accepted = resolvedClipped ? initial : moved.position;
+  // A capsule can still touch the edge while its feet have already crossed
+  // beyond all world collision. Keep the legacy fall guard's vertical floor
+  // query: a lower landing is allowed, a bottomless step is not. Test the
+  // resolved endpoint too, since wall sliding can change the requested X/Z.
+  const auto candidate = resolvedClipped ? initial : moved.position;
+  const auto floor = owner->landRay({candidate.x,std::max(initial.y,candidate.y)+obj->groundOffset()+1.f,candidate.z});
+  const bool preFall = !floor.hasCol;
+  const auto accepted = preFall ? initial : candidate;
+  if(preFall) {
+    result.collision.preFall = true;
+    result.collision.normal = displacement;
+    }
   if(npcDiagnostic!=nullptr) {
     npcDiagnostic->clippedRequest = requested;
     npcDiagnostic->nativePosition = moved.position;
@@ -1984,7 +1995,7 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     npcDiagnostic->requestClipped = requestClipped;
     npcDiagnostic->resolvedClipped = resolvedClipped;
     }
-  if(resolvedClipped) {
+  if(resolvedClipped || preFall) {
     obj->virtualCharacter->setPosition(accepted);
     const auto support = obj->virtualCharacter->move({},0,stepHeight,maxSlope,mass,culprit);
     moved.groundNormal = support.groundNormal;
@@ -2008,12 +2019,13 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
   result.groundVelocity = moved.groundVelocity;
   result.grounded = moved.grounded;
   result.steep = moved.steep;
+  result.blocked = preFall;
   const Tempest::Vec3 horizontal(displacement.x,0,displacement.z);
   const float desiredLength = horizontal.length();
   if(!isNpcMoveSkipped(displacement) && desiredLength>0.1f) {
     const float advancement = Tempest::Vec3::dotProduct(accepted-initial,horizontal)/desiredLength;
-    result.blocked = advancement<=std::max(0.1f,desiredLength*0.1f);
-    if(result.blocked && !requestClipped && !resolvedClipped) {
+    result.blocked |= advancement<=std::max(0.1f,desiredLength*0.1f);
+    if(result.blocked && !requestClipped && !resolvedClipped && !preFall) {
       result.collision.landCol = true;
       result.collision.normal = Tempest::Vec3::normalize(accepted-initial-horizontal);
       }
