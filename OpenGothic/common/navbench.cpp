@@ -114,6 +114,7 @@ void fallback(World& w) {
 void finish(World& w) {
   if(trial.npc==nullptr) throw std::runtime_error("navmesh finish without trial");
   if(trial.active) {trial.elapsed=w.tickCount()-trial.began;trial.active=false;}
+  if(!trial.success && trial.failure.empty()) trial.failure="path_timeout";
   auto& n=*trial.npc;
   auto out=file(trial.output,"trial.json");
   out<<"{\"mode\":"<<std::quoted(trial.mode)<<",\"start\":"<<std::quoted(trial.start)
@@ -130,7 +131,16 @@ void finish(World& w) {
      <<",\"start_snap_m\":"<<trial.path.startSnapDistance<<",\"end_snap_m\":"<<trial.path.endSnapDistance
      <<",\"frames\":"<<trial.frames<<",\"cv_frames\":"<<trial.cvFrames<<",\"normal_ai_frames\":"<<trial.normalFrames;
   const auto hit=w.physic()->navigationRay(n.centerPosition(),destination()+Vec3(0,100,0),&n);
-  out<<",\"blocker_category\":"<<int(hit.kind)<<",\"blocker_position\":";vec(out,hit.point);out<<"}\n";
+  out<<",\"blocker_category\":"<<int(hit.kind)<<",\"blocker_position\":";vec(out,hit.point);
+  // Sweep a sphere along the standing capsule's axis at the requested goal,
+  // independently of the route from the actor. This is diagnostic only.
+  const auto capsule=n.navigationCapsule();
+  const auto center=trial.goal+Vec3(0,n.navigationClearance()-capsule.y*.5f,0);
+  const auto half=Vec3(0,std::max(0.f,capsule.y*.5f-capsule.x),0);
+  const auto volume=w.physic()->sweep(center+half,center-half,capsule.x);
+  out<<",\"goal_capsule_hit\":"<<volume.hasCol<<",\"goal_capsule_hit_position\":";
+  if(volume.hasCol) vec(out,volume.v); else out<<"null";
+  out<<"}\n";
   trial.trace.close();
   n.clearAiQueue();n.clearGoTo();n.stopWalking();
   trial.finished=true;
