@@ -89,8 +89,10 @@ PY
     else
       LOCK_WAIT="${RYZEN_LOCK_WAIT:-900}"
     fi
+    rm -f -- "$OUT/game.log" "$OUT/host.txt"
     RYZEN_RC=0
-    RYZEN_LOCK_WAIT="$LOCK_WAIT" "$ROOT/scripts/ryzen.sh" bench "$SCEN" "$OUT" >"$OUT/ryzen.log" 2>&1 || RYZEN_RC=$?
+    RYZEN_LOCK_WAIT="$LOCK_WAIT" "$ROOT/scripts/ryzen.sh" bench "$SCEN" "$OUT" 2>&1 | tee "$OUT/ryzen.log" \
+      || RYZEN_RC="${PIPESTATUS[0]}"
     if [[ -f "$OUT/game.log" ]]; then
       printf 'ryzen\n' >"$OUT/host.txt"
       echo "bench: ran on ryzen"
@@ -98,7 +100,6 @@ PY
       exit "$RYZEN_RC"
     fi
     if [[ "$BENCH_HOST" == ryzen ]]; then
-      cat "$OUT/ryzen.log" >&2
       # A successful transport without a game log is still a failed launch.
       [[ "$RYZEN_RC" != 0 ]] || RYZEN_RC=1
       exit "$RYZEN_RC"
