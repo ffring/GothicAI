@@ -643,7 +643,7 @@ for the single requested `SCENARIO=m5b` check, without changing the user's Gothi
 ### Nearby human NPC CharacterVirtual comparison
 
 `NPC_CHARACTER_VIRTUAL=0|1` sets the independent `[GAME] npc_character_virtual` before loading
-in both `bench.sh` and `e2e.sh`. The production default is **0**; the hero's setting is independent.
+in both `bench.sh` and `e2e.sh`. The production default is **1** since 2026-10-16; the hero's setting is independent.
 `OPENGOTHIC_BENCH_TAKE=off|on` selects the same NPC flag inside the comparison scripts.
 
 `npc-character-virtual` sends its own human NPC through the stock forest stairs, doorway and
