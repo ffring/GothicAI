@@ -9,6 +9,7 @@ on: character on
 view full
 cam auto 240 70
 overlay on
+npccharacter trace player
 
 release all
 character route stairs_up
@@ -104,3 +105,4 @@ hold forward 8000
 wait 8000
 character end
 stop
+npccharacter trace off

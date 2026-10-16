@@ -28,6 +28,8 @@ namespace TestBench {
   std::vector<Npc*> bodyObservationActors();
   // Fixed time step while a scenario runs: the video and the metrics do not depend on the frame rate
   uint64_t frameDt(uint64_t dt);
+  // Move synthetic support fixtures before both NPC and player world steps.
+  void     beforeWorldTick(uint64_t dt);
   // Runs the scenario after the world update; true if this frame has to be captured
   bool     tick(uint64_t dt, PlayerControl& player);
   // The captured frame: draws the overlay and writes it to the video; uiScale: the interface's (the

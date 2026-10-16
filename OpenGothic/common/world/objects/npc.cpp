@@ -583,6 +583,16 @@ void Npc::setViewPosition(const Tempest::Vec3& pos) {
   durtyTranform |= TR_Pos;
   }
 
+void Npc::syncCharacterVirtualSupport(const Tempest::Vec3& pos) {
+  // Animation already sampled these feet before the physics step. Transport
+  // that sample with the accepted support motion so a lift does not become a
+  // fictitious stair correction at the same timestamp.
+  if(characterVisualHasSample && characterVisualSampleTick==owner.tickCount())
+    characterVisualSamplePosition += pos-position();
+  setViewPosition(pos);
+  updateTransform();
+  }
+
 int Npc::aiOutputOrderId() const {
   return aiQueue.aiOutputOrderId();
   }
