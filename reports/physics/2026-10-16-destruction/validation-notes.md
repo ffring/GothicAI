@@ -275,9 +275,25 @@
 | `LLM=chatgpt`, два живых прогона | В **2/2** принят `catch_lie` со строкой обломков `В3` и записан `caught`; второй завершён **21/21**, контроль в обоих без обвинения |
 | Прежние `trace`, `seen`, `witness`, `LLM=fake` | **21/21**, **10/10**, **10/10** соответственно |
 | Полный `scripts/ryzen.sh pytest` | **1086 passed, 3 skipped**, **273,36 с**, один запуск |
-| `m5b`, один запуск | **FAIL**, **12 с**: `GameError: the player cannot switch weapons now` при `player_weapon state="none"` после проверки извлечённого оружия; остальные проверки не завершены |
+| `m5b`, исходный запуск | **FAIL**, **12 с**: `GameError: the player cannot switch weapons now` при `player_weapon state="none"` после проверки извлечённого оружия; остальные проверки не завершены. Контроль ветки и main приведён ниже |
 
-`m5b` не повторялся по условию задания. Его отказ остаётся открытым ограничением проверки; код `m5b`, переключения оружия, `check_claim` и `vanilla.py` не менялся.
+В исходной приёмке `m5b` запускался один раз. Затем по отдельному поручению пользователя перед слиянием выполнено сравнение ниже. Код `m5b`, переключения оружия, `check_claim` и `vanilla.py` не менялся.
+
+### Контроль m5b перед слиянием
+
+**Отказ воспроизводится на main и не является регрессией PR #143.** Дополнительно выполнены ровно **два запуска ветки** `codex/destruction-3` (`f0edc575`) и **один запуск текущего main** (`4fbdfc60`), все на **Ryzen / NVIDIA RTX 3080**, `LLM=fake`, под общим замком. Для main собрана отдельная копия из `git archive` в собственной папке задачи; другие git-worktree не менялись.
+
+Во всех трёх запусках использован тот же `m5b-input.sav` из исходного отказа: **10 281 899 байт**, SHA256 **`a0fd28fd8666bbd2739694c1e86b5f129da6a95af62fd7918b2783a7bedea8f9`**. Контрольные суммы входных копий совпали **3/3**. `m5b_bridge` и `Npc::closeWeapon` на ветке и main совпадают. Чтобы снять состояние именно в момент отказа, в обе тестовые копии добавлялась одинаковая временная строка лога в ветке `closeWeapon(false)`, вернувшей `false`; ожидания сценария и игровая логика не менялись. Временная диагностика в PR не включена, исходники обеих тестовых копий восстановлены.
+
+| Запуск | Результат и время e2e | MoveAlgo / InAir | Анимация в момент отказа | Оружие |
+|---|---|---|---|---|
+| Ветка, 1 | тот же отказ, exit **1**, **13 с** | `Run (0)` / `false` | `T_1H_2_1HRUN`, **203 мс** от начала | `W1H (2)` |
+| Ветка, 2 | тот же отказ, exit **1**, **12 с** | `Run (0)` / `false` | `T_1H_2_1HRUN`, **206 мс** от начала | `W1H (2)` |
+| Main, 1 | тот же отказ, exit **1**, **15 с** | `Run (0)` / `false` | `T_1H_2_1HRUN`, **204 мс** от начала | `W1H (2)` |
+
+Во всех случаях `body_state=98304` (`BS_STAND`), оружие уже в состоянии одноручного (`WeaponState::W1H`), но переход `T_1H_2_1HRUN` ещё исполняется. Герой **не в InAir**. Отказ происходит на той же команде `debug player_weapon state="none"` после `weapon_drawn`, до боевой части стенда. Сценарий и механику не исправляли по условию пользователя. Полная серия проверок m5b этим сравнением не засчитывается; установлено, что данный отказ уже присутствует на main.
+
+Логи всех трёх запусков: **`.bench/m5b-comparison/{branch-1,branch-2,main-1}/game.log`** и `server.log`; сборки и коды выхода — `branch-launcher.log` / `main-launcher.log` в том же каталоге. Дополнительные три входных SAV скопированы в **`~/.local/share/gothic-ai/saves/destruction/step3/m5b-comparison/`**, SHA256 совпал **3/3**.
 
 ### Лобарт и улика
 
@@ -293,7 +309,7 @@
 
 ### Артефакты
 
-Успешные журналы: `.bench/destruction-step3-stand/`, `destruction-step3-fake-2/`, `destruction-step3-live-2/`, `destruction-step3-regression-{trace-2,seen,witness}/`. `destruction-step3-live-1/` содержит первый живой `catch_lie` и `caught`, но не полное завершение сценария; `destruction-step3-m5b/` — единственный отказ m5b. `destruction-step3-native/check-physics.log` — нативные контракты.
+Успешные журналы: `.bench/destruction-step3-stand/`, `destruction-step3-fake-2/`, `destruction-step3-live-2/`, `destruction-step3-regression-{trace-2,seen,witness}/`. `destruction-step3-live-1/` содержит первый живой `catch_lie` и `caught`, но не полное завершение сценария; `destruction-step3-m5b/` — исходный отказ m5b до сравнения с main. `destruction-step3-native/check-physics.log` — нативные контракты.
 
 Все SAV/MP4/WAV из `.bench/destruction-step3-*` скопированы с той же структурой в **`~/.local/share/gothic-ai/saves/destruction/step3/`**: **26 файлов, 189,56 МиБ, SHA256 совпал у 26/26**. В том числе `destruction-step3-stand/create/run/save_slot_2.sav`, повторно загруженный `reload/run/save_slot_9.sav`, `m5b-input.sav`, два видео меча и `session-step3-broken.sav` каждого завершённого e2e. Двоичные файлы в git не добавлены.
 
