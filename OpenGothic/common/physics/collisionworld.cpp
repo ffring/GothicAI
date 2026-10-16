@@ -738,11 +738,13 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   void OnContactPersisted(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact,
                           JPH::CharacterContactSettings& settings) override { onContact(contact,settings); }
 
-  void OnAdjustBodyVelocity(const JPH::CharacterVirtual*, const JPH::Body&, JPH::Vec3& linear,
+  void OnAdjustBodyVelocity(const JPH::CharacterVirtual*, const JPH::Body& body, JPH::Vec3& linear,
                             JPH::Vec3& angular) override {
     // Carry sweeps through the already integrated world. Predicting the bodies
     // for another interval here would count their motion a second time.
-    if(carrying)
+    // An idle update also already accounts for its tracked support's observed
+    // motion; its endpoint velocity must not advance that support again.
+    if(carrying || (idleSupportMotionObserved && body.GetID()==ground))
       linear = angular = JPH::Vec3::sZero();
     }
 
@@ -756,6 +758,7 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   bool contactsDirty = true;
   bool needsInitialUpdate = true;
   bool carrying = false;
+  bool idleSupportMotionObserved = false;
   float radius = 0.f;
   float height = 0.f;
   JPH::BodyID ground;
@@ -932,8 +935,10 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     const auto desiredVelocity = character.GetLinearVelocity();
     if(diagnostic!=nullptr)
       diagnostic->stairDesiredVelocity = toCentimeters(desiredVelocity);
+    state.idleSupportMotionObserved = inferredGroundVelocity && onGround && displacement==Tempest::Vec3();
     character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
                              broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+    state.idleSupportMotionObserved = false;
     // RefreshContacts only classifies the initial overlap. Let the first
     // physical solve after creation/teleport recover penetration with native
     // gravity. Only a verified nonpenetrating static plane can start at rest;

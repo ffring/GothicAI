@@ -1792,6 +1792,41 @@ namespace {
       }
     {
       CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      auto platform=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(2,.1f,2)),at(0,90,0),.7f,122.f,
+                                          DynamicWorld::C_MovableVob);
+      auto rider=world.createVirtualCharacter(25,180,{0,100,0});
+      auto state=rider->move({},17,50,slope,80,nullptr);
+      require(state.grounded,"the reversing support fixture must acquire its dynamic deck");
+      const auto bodyStart=platform->position();
+      auto local=state.position;
+      auto inverse=platform->matrix();inverse.inverse();inverse.project(local);
+      require(platform->addImpulse({0,platform->mass()*(1.8f-platform->velocity().y*.01f),0}),
+              "the dynamic deck must accept an upward impulse before reversing under gravity");
+      float maximumDrift=0.f, maximumRise=0.f;
+      bool descended=false;
+      for(int frame=0;frame<180;++frame) {
+        const uint64_t dt=frame%3==2 ? 34 : 33;
+        state=rider->move({},dt,50,slope,80,nullptr);
+        const auto previous=platform->position();
+        world.tick(dt);
+        const auto carried=rider->carry(dt);
+        if(carried.supportMoved)
+          state=carried;
+        require(state.grounded,"an idle rider must retain support while its deck reverses vertical direction");
+        maximumRise=std::max(maximumRise,platform->position().y-bodyStart.y);
+        descended|=platform->position().y<previous.y-.01f;
+        maximumDrift=std::max(maximumDrift,(state.position-carriedPoint(platform->matrix(),local)).length());
+        }
+      std::printf("CharacterVirtual reversing dynamic deck: rise %.6f cm, descended %d, maximum carry error %.6f cm\n",
+                  double(maximumRise),descended,double(maximumDrift));
+      require(maximumRise>1.f && descended,"the dynamic carry fixture must actually rise and reverse");
+      require(maximumDrift<=.1f,
+              "an idle rider must not add predicted support motion before being carried by the observed transform");
+      }
+    {
+      CollisionWorld world;
       auto platform=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(4,.1f,2)),at(0,90,0),.7f,
                                            DynamicWorld::C_Object,true);
       auto wall=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.1f,2,2)),at(100,200,0),.7f,
