@@ -32,10 +32,14 @@ struct FractureMesh {
   };
 
 struct FractureRule {
+  enum class Melee { Fist, OneHand, TwoHand };
   std::string visualPattern, className;
   float health = 100;
   float threshold = 5; // newton seconds per kilogram (delta velocity, m/s)
   float impactDamage = 250; // health / (Ns/kg) above threshold
   float arrowDamage = 8.333334f; // health / Ns; 0.12 kg arrow at 30 m/s => 30 health
+  float meleeWeapon = .5f, meleeStrength = .5f;
+  float fist = .35f, oneHand = 1.f, twoHand = 1.3f;
+  float meleeDamage(Melee kind, float weaponDamage, float strength) const;
   static const FractureRule* classify(std::string_view visual);
   };

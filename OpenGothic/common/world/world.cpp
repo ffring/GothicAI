@@ -670,6 +670,8 @@ void World::tick(uint64_t dt) {
   tickSpellFields(dt);
   { FrameProfile::Scope timing(FrameProfile::Zone::WorldLogic); wobj.tick(dt,dt); }
   { FrameProfile::Scope timing(FrameProfile::Zone::Prepare); wobj.prepareRagdolls(); }
+  if(const auto* pl=player())
+    wdynamic->setFragmentObserver(pl->position());
   { FrameProfile::Scope timing(FrameProfile::Zone::Physics); wdynamic->tick(dt); }
   updateStuckArrows();
   { FrameProfile::Scope timing(FrameProfile::Zone::Sync); wobj.syncRagdolls(); }

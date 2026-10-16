@@ -51,8 +51,10 @@ const FractureRule* FractureRule::classify(std::string_view visual) {
       std::istringstream row(line);
       row.imbue(std::locale::classic());
       FractureRule rule;
-      if(row>>rule.visualPattern>>rule.className>>rule.health>>rule.threshold>>rule.impactDamage>>rule.arrowDamage)
-        if(rule.health>0 && rule.threshold>0 && rule.impactDamage>0 && rule.arrowDamage>0)
+      if(row>>rule.visualPattern>>rule.className>>rule.health>>rule.threshold>>rule.impactDamage>>rule.arrowDamage>>
+         rule.meleeWeapon>>rule.meleeStrength>>rule.fist>>rule.oneHand>>rule.twoHand)
+        if(rule.health>0 && rule.threshold>0 && rule.impactDamage>0 && rule.arrowDamage>0 &&
+           rule.meleeWeapon>0 && rule.meleeStrength>0 && rule.fist>0 && rule.oneHand>0 && rule.twoHand>0)
           value.push_back(std::move(rule));
       }
     return value;
@@ -61,6 +63,17 @@ const FractureRule* FractureRule::classify(std::string_view visual) {
   for(const auto& rule:rules)
     if(matches(rule.visualPattern,name)) return &rule;
   return nullptr;
+  }
+
+float FractureRule::meleeDamage(Melee kind,float weaponDamage,float strength) const {
+  if(!std::isfinite(weaponDamage) || !std::isfinite(strength)) return 0.f;
+  const float power=std::max(weaponDamage,0.f)*meleeWeapon+std::max(strength,0.f)*meleeStrength;
+  switch(kind) {
+    case Melee::Fist:    return power*fist;
+    case Melee::OneHand: return power*oneHand;
+    case Melee::TwoHand: return power*twoHand;
+    }
+  return 0.f;
   }
 
 std::shared_ptr<const FractureMesh> FractureMesh::load(std::string_view visual) {

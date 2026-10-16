@@ -1,0 +1,32 @@
+# Native map fence at Lobart farm, zenId 19355. Full GameSession save.
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+noise on
+destruction on
+overlay off
+view full
+destruction2 farm 19355
+wait 600
+destruction2 farm-npc-walk before
+wait 24000
+destruction2 farm-checkpoint before
+destruction2 farm-ready
+wait 600
+shot destruction2-farm-before
+rec destruction2-farm-sword
+destruction2 attack
+wait 1200
+destruction2 farm-walk
+release all
+wait 600
+shot destruction2-farm-breach
+destruction2 farm-npc-walk after
+wait 24000
+destruction2 farm-checkpoint after
+stop
+destruction2 snapshot scattered
+destruction2 save step2-scattered
+physics stats

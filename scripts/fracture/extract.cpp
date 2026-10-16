@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
       std::istringstream row(line);
       std::string glob,cls;
       std::getline(row,glob,','); std::getline(row,cls,',');
-      if(cls!="crate" && cls!="barrel" && cls!="pot") continue;
+      if(cls!="crate" && cls!="barrel" && cls!="pot" && cls!="fence") continue;
       std::string re="^";
       for(char c:glob) re += c=='*' ? ".*" : c=='?' ? "." : std::string(1,c);
       rules.emplace_back(std::regex(re+"$"),cls);

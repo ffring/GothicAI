@@ -1,0 +1,7 @@
+# Load session-step2-scattered.sav in a NEW process, then leave the sleeping pieces.
+destruction2 initial restored
+destruction2 far
+wait 1000
+destruction2 snapshot distant
+destruction2 save step2-distance-cleaned
+physics stats

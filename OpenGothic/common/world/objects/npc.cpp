@@ -3041,6 +3041,32 @@ bool Npc::setGoToLadder() {
   }
 
 void Npc::commitDamage() {
+  const auto mode=weaponState();
+  if(owner.physic()->destructionEnabled() &&
+     (mode==WeaponState::Fist || mode==WeaponState::W1H || mode==WeaponState::W2H)) {
+    const auto& guild=owner.script().guildVal();
+    const auto gl=this->guild();
+    auto kind=FractureRule::Melee::Fist;
+    float range=float(guild.fight_range_base[gl]+guild.fight_range_fist[gl]);
+    float weaponDamage=0.f;
+    if(mode!=WeaponState::Fist) {
+      const auto* weapon=invent.activeWeapon();
+      if(weapon!=nullptr) {
+        const bool twoHand=mode==WeaponState::W2H;
+        kind=twoHand ? FractureRule::Melee::TwoHand : FractureRule::Melee::OneHand;
+        range=float(guild.fight_range_base[gl]+(twoHand ? guild.fight_range_2ha[gl] : guild.fight_range_1ha[gl])+
+                    weapon->swordLength());
+        weaponDamage=float(weapon->handle().damage_total);
+        }
+      else range=0.f;
+      }
+    const float strength=float(attribute(ATR_STRENGTH));
+    const float angle=rotationRad();
+    const size_t affected=owner.physic()->meleeMovableVobs(collosionCenter(),{std::cos(angle),0,std::sin(angle)},
+                                                         range,weaponDamage,strength,kind,this);
+    if(TestBench::isActive())
+      TestBench::destructionMeleeHit(*this,affected,weaponDamage+strength);
+    }
   const auto hitTrace = [&](const char* result) {
     BodyObservations::noteEvent(*this,currentTarget,result,owner.tickCount());
     if(TestBench::bodyTracing())

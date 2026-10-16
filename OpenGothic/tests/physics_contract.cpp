@@ -773,6 +773,7 @@ namespace {
           }
         file.close();
         std::filesystem::copy_file(path/"NW_HARBOUR_CRATE_01.fracture",path/"NW_HARBOUR_BARREL_01.fracture");
+        std::filesystem::copy_file(path/"NW_HARBOUR_CRATE_01.fracture",path/"NW_NATURE_FENCE_01.fracture");
         setenv("OPENGOTHIC_FRACTURE",path.string().c_str(),1);
         }
       ~CacheFixture() {
@@ -790,6 +791,39 @@ namespace {
     require(FractureRule::classify("path/nw_harbour_crate_01.3ds")!=nullptr &&
             FractureRule::classify("NW_CITY_TABLE_01.MRM")==nullptr,
             "destruction must use the explicit visual data table");
+    {
+      const auto& rule=*FractureRule::classify("NW_HARBOUR_CRATE_01.MRM");
+      requireNear(rule.meleeDamage(FractureRule::Melee::Fist,0,100),17.5f,.001f,
+                  "fists must use strength and the CSV fist multiplier");
+      requireNear(rule.meleeDamage(FractureRule::Melee::OneHand,40,100),70.f,.001f,
+                  "one-handed damage must combine weapon damage and strength");
+      requireNear(rule.meleeDamage(FractureRule::Melee::TwoHand,40,100),91.f,.001f,
+                  "two-handed strikes must use their own CSV multiplier");
+      DynamicWorld world(nullptr,zenkit::Mesh{});
+      auto object=make(world,at(100,1000,0));
+      const auto swing=[&](const Tempest::Vec3& from,const Tempest::Vec3& facing,float range) {
+        return world.meleeMovableVobs(from,facing,range,40,100,FractureRule::Melee::OneHand);
+        };
+      require(swing({0,1000,0},{-1,0,0},150)==0 && swing({0,1000,0},{1,0,0},40)==0 &&
+              swing({0,1300,0},{1,0,0},150)==0,
+              "melee must reject a target behind, out of reach or outside the striking height");
+      requireNear(world.movableVobSnapshot()[0].health,100,.001f,"misses must leave structural health untouched");
+      ProtoMesh wallMesh(PackedMesh(movableCollisionBox({10,200,200}),PackedMesh::PK_Visual),"MELEE_WALL.MRM");
+      auto wall=world.addStaticObj(wallMesh.attach[0].shape.get(),at(25,1000,0),"MELEE_WALL.MRM");
+      require(swing({0,1000,0},{1,0,0},150)==0,
+              "a wall before a crate must stop all melee contact rays");
+      wall=DynamicWorld::Item{};
+      require(swing({0,1000,0},{1,0,0},150)==1,"a real first contact must reach the crate");
+      requireNear(world.movableVobSnapshot()[0].health,30,.001f,
+                  "one phase must damage a contacted body only once even when many rays hit it");
+      require(swing({0,1000,0},{1,0,0},150)==1,"the next phase must be a separate strike");
+      world.tick(17);
+      require(object.isBroken() && world.fragmentSnapshot().size()==8,
+              "two one-handed strikes must break and replace the crate");
+      world.setDestructionEnabled(false);
+      require(swing({0,1000,0},{1,0,0},150)==0 && !object.isBroken(),
+              "destruction=0 must ignore otherwise valid melee strikes");
+      }
     {
       DynamicWorld world(nullptr,zenkit::Mesh{});
       auto object=make(world,at(0,1000,0));
@@ -836,8 +870,51 @@ namespace {
       DynamicWorld restored(nullptr,zenkit::Mesh{});
       auto restoredObject=make(restored,at(0,1000,0));
       loadMovables(restored,saved);
-      require(!restoredObject.isBroken() && restored.fragmentSnapshot().empty(),
-              "saving destruction must keep the previous archive schema and restore an intact original");
+      const auto restoredPieces=restored.fragmentSnapshot();
+      require(restoredObject.isBroken() && restoredPieces.size()==pieces.size(),
+              "a fresh world must restore the broken original and every surviving fragment");
+      for(size_t i=0;i<pieces.size();++i) {
+        require(restoredPieces[i].piece==pieces[i].piece && restoredPieces[i].sleeping==pieces[i].sleeping,
+                "fragment cache index and sleep state must survive save/load");
+        requireMatrix(restoredPieces[i].transform,pieces[i].transform,"saved fragment pose must restore before any tick");
+        requireNear((restoredPieces[i].velocity-pieces[i].velocity).length(),0,.001f,
+                    "awake fragment linear velocity must survive save/load");
+        requireNear((restoredPieces[i].angularVelocity-pieces[i].angularVelocity).length(),0,.001f,
+                    "awake fragment angular velocity must survive save/load");
+        }
+      DynamicWorld movementOff(nullptr,zenkit::Mesh{});
+      movementOff.setMovableVobsEnabled(false);
+      auto offObject=make(movementOff,at(0,1000,0));
+      loadMovables(movementOff,saved);
+      const auto offPieces=movementOff.fragmentSnapshot();
+      require(offObject.isBroken() && offPieces.size()==pieces.size(),
+              "movable-vobs=0 must restore destruction independently of intact prop simulation");
+      for(size_t i=0;i<pieces.size();++i) {
+        const auto& restored=offPieces[i];
+        requireMatrix(restored.transform,pieces[i].transform,"movement OFF loads must preserve debris pose");
+        requireNear((restored.velocity-pieces[i].velocity).length(),0,.001f,
+                    "movement OFF loads must preserve awake debris velocity");
+        }
+      const auto offSave=saveArchive([&](Serialize& output) { movementOff.saveMovableVobs(output); });
+      DynamicWorld offReloaded(nullptr,zenkit::Mesh{});
+      auto offReloadedObject=make(offReloaded,at(0,1000,0));
+      loadMovables(offReloaded,offSave);
+      require(offReloadedObject.isBroken() && offReloaded.fragmentSnapshot().size()==pieces.size(),
+              "saving with movable-vobs=0 must retain the destruction archive entry");
+      restored.setMovableVobsEnabled(false);
+      require(restoredObject.isBroken() && restored.fragmentSnapshot().size()==pieces.size(),
+              "disabling movable-vobs must not resurrect an already broken prop");
+      restored.tick(17);
+      require(restored.fragmentSnapshot()[0].transform.at(3,0)!=restoredPieces[0].transform.at(3,0),
+              "awake debris must continue native integration with intact prop movement disabled");
+      restored.setMovableVobsEnabled(true);
+      require(restoredObject.isBroken(),"enabling movable-vobs must not resurrect broken props either");
+      DynamicWorld disabled(nullptr,zenkit::Mesh{});
+      disabled.setDestructionEnabled(false);
+      auto disabledObject=make(disabled,at(0,1000,0));
+      loadMovables(disabled,saved);
+      require(!disabledObject.isBroken() && disabled.fragmentSnapshot().empty(),
+              "destruction=0 must ignore destruction archive records and keep intact objects");
       world.setDestructionEnabled(false);
       require(!world.destructionEnabled() && !object.isBroken() && !brokenCallback && world.fragmentSnapshot().empty(),
               "disabling destruction must restore intact visuals and remove transient fragments");
@@ -875,6 +952,122 @@ namespace {
       require(state.broken==(height>100.f),"a one metre fall must survive and a five metre fall must break");
       for(const auto& piece:world.fragmentSnapshot())
         require(piece.sleeping,"fragments must settle and sleep after fifteen seconds");
+      }
+    {
+      DynamicWorld world(nullptr,movableFloor());
+      world.setTraceTime(1500);
+      world.setFragmentObserver({0,0,0});
+      auto object=make(world,at(0,550,0));
+      object.addImpulse({0,-.001f,0});
+      for(int i=0;i<900;++i) world.tick(17);
+      const auto settled=world.fragmentSnapshot();
+      require(object.isBroken() && settled.size()==8,"cleanup fixture must break and settle without retiring pieces early");
+      size_t permanentCount=0;
+      for(const auto& piece:settled) {
+        require(piece.sleeping && piece.asleepSince==1500,"a sleeping fragment must record its absolute game minute");
+        permanentCount+=piece.permanent;
+        }
+      require(permanentCount==3,"three largest cache pieces must be marked permanent");
+      world.setTraceTime(1529);
+      world.tick(17);
+      require(world.fragmentSnapshot().size()==8,"sleeping debris must remain during the first twenty-nine game minutes");
+      const auto saved=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
+      DynamicWorld restored(nullptr,movableFloor());
+      restored.setTraceTime(1529);
+      restored.setFragmentObserver({0,0,0});
+      auto restoredObject=make(restored,at(0,550,0));
+      loadMovables(restored,saved);
+      const auto loaded=restored.fragmentSnapshot();
+      require(restoredObject.isBroken() && loaded.size()==settled.size(),"sleeping fragments must restore in a fresh world");
+      for(size_t i=0;i<loaded.size();++i) {
+        requireMatrix(loaded[i].transform,settled[i].transform,"sleeping debris must retain its complete saved pose");
+        require(loaded[i].asleepSince==1500 && loaded[i].permanent==settled[i].permanent,
+                "loading must preserve cleanup age and permanent-piece selection");
+        }
+      restored.setTraceTime(1530);
+      restored.tick(17);
+      const auto retained=restored.fragmentSnapshot();
+      require(retained.size()==3,"thirty game minutes must remove only nonpermanent sleeping debris");
+      for(const auto& piece:retained) {
+        require(piece.permanent,"cleanup must retain the three permanent piece indices");
+        requireMatrix(piece.transform,settled[piece.piece].transform,"cleanup must not move the permanent pieces");
+        }
+      const auto cleanedSave=saveArchive([&](Serialize& output) { restored.saveMovableVobs(output); });
+      DynamicWorld cleaned(nullptr,movableFloor());
+      cleaned.setTraceTime(1530);
+      auto cleanedObject=make(cleaned,at(0,550,0));
+      std::vector<Tempest::Matrix4x4> rendered;
+      cleanedObject.setFractureCallback([&](bool broken,const std::vector<Tempest::Matrix4x4>& pieces) {
+        if(broken) rendered=pieces;
+        });
+      loadMovables(cleaned,cleanedSave);
+      require(cleanedObject.isBroken() && cleaned.fragmentSnapshot().size()==3 && rendered.size()==8,
+              "cleaned saves must not resurrect removed bodies or lose the render index mapping");
+      size_t hidden=0;
+      for(const auto& matrix:rendered) hidden+=matrix.at(3,1)<-1000000.f;
+      require(hidden==5,"loading cleaned debris must hide removed render batches immediately");
+      cleaned.setTraceTime(5000);
+      cleaned.setFragmentObserver({100000,0,0});
+      cleaned.tick(17);
+      require(cleaned.fragmentSnapshot().size()==3,"permanent pieces must survive later age and distance cleanup");
+
+      DynamicWorld distant(nullptr,movableFloor());
+      distant.setTraceTime(1529);
+      auto distantObject=make(distant,at(0,550,0));
+      loadMovables(distant,saved);
+      distant.setFragmentObserver({10000,0,0});
+      distant.tick(17);
+      require(distantObject.isBroken() && distant.fragmentSnapshot().size()==3,
+              "leaving farther than thirty metres must retire sleeping pieces before their age expires");
+      DynamicWorld offCleanup(nullptr,movableFloor());
+      offCleanup.setMovableVobsEnabled(false);
+      offCleanup.setTraceTime(1530);
+      auto offCleanupObject=make(offCleanup,at(0,550,0));
+      loadMovables(offCleanup,saved);
+      offCleanup.tick(17);
+      require(offCleanupObject.isBroken() && offCleanup.fragmentSnapshot().size()==3,
+              "sleeping debris cleanup must continue with intact prop movement disabled");
+
+      DynamicWorld backwards(nullptr,movableFloor());
+      backwards.setTraceTime(1000);
+      auto backwardsObject=make(backwards,at(0,550,0));
+      loadMovables(backwards,saved);
+      backwards.tick(17);
+      require(backwardsObject.isBroken() && backwards.fragmentSnapshot().size()==8 &&
+              backwards.fragmentSnapshot()[0].asleepSince==1000,
+              "a backwards game clock must restart cleanup age without removing fragments");
+      }
+    for(const bool movable:{false,true}) {
+      DynamicWorld world(nullptr,movableFloor());
+      world.setMovableVobsEnabled(movable);
+      const auto origin=at(100,50,0);
+      auto fence=world.addMovableVob(proto,"NW_NATURE_FENCE_01.MRM",origin,.04f,true,"fence",true,zenId);
+      require(!fence.isEmpty() && fence.mass()==0.f,"an intact fence must keep a static body with movable-vobs both off and on");
+      require(!fence.addImpulse({10000,0,0}),"an intact fence must never receive free-body impulses");
+      for(int i=0;i<120;++i) world.tick(17);
+      requireMatrix(world.movableVobSnapshot()[0].transform,origin,"an intact fence must remain exactly at its authored pose");
+      require(world.navigationRay({0,50,0},{200,50,0},nullptr).hasCol,"an intact fence must obstruct native navigation rays");
+      world.meleeMovableVobs({0,50,0},{1,0,0},150,40,100,FractureRule::Melee::OneHand);
+      const auto damaged=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
+      DynamicWorld damagedWorld(nullptr,movableFloor());
+      damagedWorld.setMovableVobsEnabled(movable);
+      auto damagedFence=damagedWorld.addMovableVob(proto,"NW_NATURE_FENCE_01.MRM",origin,.04f,true,"fence",true,zenId);
+      loadMovables(damagedWorld,damaged);
+      requireNear(damagedWorld.movableVobSnapshot()[0].health,30.f,.001f,"partially damaged static fences must retain health in saves");
+      damagedWorld.meleeMovableVobs({0,50,0},{1,0,0},150,40,100,FractureRule::Melee::OneHand);
+      damagedWorld.tick(17);
+      require(damagedFence.isBroken() && damagedWorld.fragmentSnapshot().size()==8 &&
+              !damagedWorld.navigationRay({0,50,0},{200,50,0},nullptr).hasCol,
+              "a broken static fence must remove both intact obstacles and open the passage");
+      const auto saved=saveArchive([&](Serialize& output) { damagedWorld.saveMovableVobs(output); });
+      DynamicWorld loaded(nullptr,movableFloor());
+      loaded.setMovableVobsEnabled(movable);
+      auto loadedFence=loaded.addMovableVob(proto,"NW_NATURE_FENCE_01.MRM",origin,.04f,true,"fence",true,zenId);
+      loadMovables(loaded,saved);
+      require(loadedFence.isBroken() && loaded.fragmentSnapshot().size()==8,
+              "broken fences must restore even when movable-vobs is disabled");
+      loaded.setMovableVobsEnabled(!movable);
+      require(loadedFence.isBroken(),"toggling movable-vobs must not resurrect a broken static fence");
       }
     {
       DynamicWorld world(nullptr,zenkit::Mesh{});

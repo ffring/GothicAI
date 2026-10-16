@@ -1,0 +1,5 @@
+# Load session-step2-scattered.sav in a NEW process. First snapshot is before the first physics step.
+destruction2 initial restored
+wait 1000
+destruction2 snapshot continued
+physics stats

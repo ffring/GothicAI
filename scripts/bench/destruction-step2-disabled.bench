@@ -1,0 +1,5 @@
+# Start with DESTRUCTION=0 before loading session-step2-scattered.sav.
+destruction2 initial disabled
+wait 1000
+destruction2 snapshot disabled-continued
+physics stats

@@ -44,6 +44,7 @@ namespace TestBench {
   void     physicsNoiseHeard(const Npc& npc, const PhysicsNoise& noise, bool callbackDispatched = false);
   // Native destruction telemetry: includes body creation and the render callback.
   void     destructionBreak(uintptr_t body, size_t pieces, float milliseconds);
+  void     destructionMeleeHit(const Npc& actor, size_t affected, float damage);
   // Devmode-only live bridge stand, reusing the actual Coragon tavern fixture.
   bool     isPhysicsNoiseDebug();
   void     physicsNoiseBridgeEvent(const Npc& listener, uint64_t tick);
