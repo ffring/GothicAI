@@ -869,27 +869,52 @@ class QuestBook:
     async def make(self, q: Quest, *, gold: int | None = None, xp: int | None = None) -> list[str]:
         """Check the quest, build it, make it: why not, in the words a model reads; empty: it is made.
         `gold`, `xp`: the most of the reward, the chapter's (XP_AMBIENT) if not given."""
+        _, errors = await self.make_chain([q], gold=gold, xp=xp)
+        return errors
+
+    async def make_chain(
+        self, quests: list[Quest], *, gold: int | None = None, xp: int | None = None
+    ) -> tuple[list[Quest] | None, list[str]]:
+        """Check every quest before the game sees any, then introduce their graph in one patch.
+
+        The descriptions may refer to earlier quests in this list through `after`. Reward limits apply to
+        each quest. A refusal leaves neither descriptions nor graph changes of the chain on the branch.
+        """
+        if not quests:
+            return None, ["в цепочке нет квестов"]
+        previous = dict(self.all())
+        ops: list[Op] = []
         try:
-            ground = await self.ground(q)
+            for q in quests:
+                if q.id in previous:
+                    return None, [f"квест {q.id} уже есть"]
+                ground = await self.ground(q)
+                ground.quests = dict(previous)
+                if gold is not None:
+                    ground.gold = gold
+                if xp is not None:
+                    ground.xp = xp
+                errors = problems(q, ground)
+                if errors:
+                    return None, errors
+                previous[q.id] = q
+                ops.extend(build(q))
+            story = await self.director.with_symbols(await self.director.story(), names_in(ops))
         except (GameError, TimeoutError) as err:
-            return [f"игра не ответила: {err}"]
-        if gold is not None:
-            ground.gold = gold
-        if xp is not None:
-            ground.xp = xp
-        errors = problems(q, ground)
-        if errors:
-            return errors
-        ops = build(q)
-        story = await self.director.with_symbols(await self.director.story(), names_in(ops))
+            return None, [f"игра не ответила: {err}"]
         errors = validate(ops, story, self.rules, caps=Caps(xp=ground.xp, items={GOLD: ground.gold}))
         if errors:
-            return errors
+            return None, errors
         try:
-            await self.patches.make({"op": QUEST, "quest": q.to_dict()}, ops)
+            await self.patches.make([{"op": QUEST, "quest": q.to_dict()} for q in quests], ops)
         except GameError as err:
-            return [f"игра не приняла правку: {err}"]
-        self.all()[q.id] = q
+            return None, [f"игра не приняла правку: {err}"]
+        for q in quests:
+            self._made(q)
+        return quests, []
+
+    def _made(self, q: Quest) -> None:
+        """The accepted description and what its giver knows, after the entire graph has been accepted."""
         if q.knows and self.dialogue is not None:
             self.dialogue.remember(q.giver, q.name(q.giver), q.knows)
         self.chronicle.record(
@@ -897,7 +922,6 @@ class QuestBook:
         )
         self.journal.add("story_quest", npc=q.giver, name=q.name(q.giver), quest=q.id, title=q.title)
         log.info("questbook: %s gives %s «%s», %d stage(s)", q.giver, q.id, q.title, len(q.stages))
-        return []
 
     # --- following -----------------------------------------------------------------------------
 

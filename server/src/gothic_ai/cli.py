@@ -26,6 +26,7 @@ from .brain.situation import SituationBuilder
 from .budget import Budget
 from .cast import Cast
 from .casting import Casting
+from .chains import ChainAuthor
 from .characters import Cards, Traits
 from .chests import ChestDesk
 from .chronicle import Chronicle
@@ -146,6 +147,7 @@ HELP = """commands (npc defaults to the last attached one):
   day [npc]         the npc's last menus of its next hour (the old plan, do) and the trip it is on
   amends            the director's storylets of amends for the hero's lies, and where they stand
   author [npc]      the director makes up a quest the npc gives the hero (docs/director.md); none: the quests
+  chain <npc>       the director makes a linear chain of quests and the characters it needs
   cast              the director's own characters on this branch (docs/director.md, stage 2)
   triggers          the director's triggers in the game: counts and conditions (stage 3, -devmode)
   character <place> the director makes up a character for the place (places.py id), and a quest he gives
@@ -190,6 +192,7 @@ class ServerState:
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
         self.author: Author | None = None
+        self.chains: ChainAuthor | None = None
         self.cast: Cast | None = None
         self.casting: Casting | None = None
         self.triggers: Triggers | None = None
@@ -364,6 +367,13 @@ class Console:
                         f"{q.id} {q.name(q.giver)}: «{q.title}» {p.state}, stage {p.stage}/{len(q.stages)}; "
                         f"{q.reward()}"
                     )
+            case "chain" if self.state.chains is not None and rest:
+                quests = await self.state.chains.chain(rest[0])
+                if quests is None:
+                    print("(no chain: see the log)")
+                else:
+                    for q in quests:
+                        print(f"{q.id} «{q.title}»: {q.asked}; after {q.after or '-'}")
             case "triggers":
                 for t in await link.triggers():
                     holds = {True: "holds", False: "does not hold", None: "-"}[t.get("holds")]
@@ -831,6 +841,8 @@ async def serve(args: argparse.Namespace) -> int:
                 journal=journal,
                 book=state.book,
             )
+            if state.casting is not None:
+                state.chains = ChainAuthor(state.author, state.casting)
             # a lie found out changes the scripts' dialogs of the one lied to: the quest is not done there
             state.consequences = LieConsequences(
                 link,
@@ -1203,6 +1215,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.cast_character(link, state.cast)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario cast: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "chain":
+                assert state.chains is not None and place_book is not None
+                results = await scenarios.author_chain(link, state.chains, place_book)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario chain: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "stages":
                 assert state.book is not None and place_book is not None
@@ -1890,6 +1908,7 @@ def main() -> None:
             "own",
             "trigger",
             "stages",
+            "chain",
             "own_repair",
             "cast",
             "person",
