@@ -15,7 +15,16 @@ from array import array
 from pathlib import Path
 from typing import Any
 
-from . import lore, npc_tools, places, programs, scenario_occasions, scenario_showrunner, scenarios
+from . import (
+    lore,
+    npc_tools,
+    places,
+    programs,
+    scenario_occasions,
+    scenario_questlog,
+    scenario_showrunner,
+    scenarios,
+)
 from .amends import Amends
 from .authoring import Author
 from .beasts import TONE_MAX_TOKENS, BeastDesk
@@ -85,6 +94,7 @@ from .protocol import (
     ThreatControlCmd,
 )
 from .questbook import QuestBook
+from .questlog import QuestLog
 from .quests import QuestBoard
 from .replay import replay as replay_turn
 from .showrunner import Showrunner
@@ -140,6 +150,7 @@ HELP = """commands (npc defaults to the last attached one):
   director          quests left without an ending and the director's repairs of them
   director look     look for such quests now and repair them
   occasions         the hero's place, queued and recent occasions for the director
+  questlog          the scripts' open quests and recent state changes
   lines             the director's plot lines, their state and remaining budget
   pitch             an occasion here and now, subject to the director's budget
   claims            quests of the scripts the hero said were done: believed, lies, found out
@@ -196,6 +207,7 @@ class ServerState:
         self.quests: QuestBoard | None = None
         self.director: Director | None = None
         self.occasions: Occasions | None = None
+        self.questlog: QuestLog | None = None
         self.showrunner: Showrunner | None = None
         self.vanilla: VanillaQuests | None = None
         self.trust: Trust | None = None
@@ -320,6 +332,16 @@ class Console:
                         print(f"{label}: {len(facts)}")
                         for fact in facts:
                             print("  " + json.dumps(fact, ensure_ascii=False))
+            case "questlog":
+                if (questlog := self.state.questlog) is None:
+                    print("questlog: off")
+                else:
+                    for var, status in questlog.states.items():
+                        if status == "running":
+                            print(f"{var}: {questlog.graph.quests[var].title}; {status}")
+                    print("recent:")
+                    for fact in questlog.recent:
+                        print("  " + json.dumps(fact, ensure_ascii=False))
             case "lines":
                 if (showrunner := self.state.showrunner) is None:
                     print("lines: off")
@@ -642,7 +664,9 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
     log.info("lines in a fight: %s", quick_at or "the conversational model")
     log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
-    graph = None if args.no_director and args.no_knowledge else _story_graph(args, game_dir)
+    graph = (
+        None if args.no_director and args.no_knowledge and args.no_questlog else _story_graph(args, game_dir)
+    )
     place_book = places.PlaceBook.load()
     log.info("places: %s", f"{len(place_book.places)} named" if place_book else "no book, waypoints only")
     log.info(
@@ -877,6 +901,9 @@ async def serve(args: argparse.Namespace) -> int:
         if place_book is not None and not args.no_occasions:
             state.occasions = Occasions(link, state.chronicle, place_book)
             directing.append(asyncio.create_task(state.occasions.run()))
+        if graph is not None and not args.no_questlog:
+            state.questlog = QuestLog(link, graph, state.chronicle)
+            directing.append(asyncio.create_task(state.questlog.run()))
         if graph is not None and not args.no_director:
             # quests the hero can no longer finish get repaired (story graph, stage 5)
             state.director = Director(
@@ -1073,6 +1100,8 @@ async def serve(args: argparse.Namespace) -> int:
                 errand_clock.cancel()
             for task in directing:
                 task.cancel()
+            if state.questlog is not None:
+                await state.questlog.close()
             if brain is not None:
                 brain.cancel()
 
@@ -1365,6 +1394,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenario_occasions.occasions(link, state.occasions)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario occasions: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "questlog":
+                assert state.questlog is not None and state.occasions is not None and state.story is not None
+                results = await scenario_questlog.questlog(link, state.story, state.questlog, state.occasions)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario questlog: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "showrunner":
                 assert state.showrunner is not None
@@ -2094,6 +2129,7 @@ def main() -> None:
             "repair",
             "authored",
             "occasions",
+            "questlog",
             "showrunner",
             "showrunner_live",
             "own",
@@ -2158,6 +2194,7 @@ def main() -> None:
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
+    p.add_argument("--no-questlog", action="store_true", help="do not track the scripts' quest states")
     p.add_argument(
         "--no-occasions", action="store_true", help="do not watch for the director's story occasions"
     )

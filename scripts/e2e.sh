@@ -94,6 +94,11 @@
 #       visited places, empty queue, no repeat); KAPITEL rises (chapter), the hero kills a living human
 #       bandit (deed), and the clock passes a full game day (quiet). Uses the real 5 s sampling and 10 s
 #       settling, normal story_eval for the nearest waypoint. On a save: SAVE=save_slot_1.sav; LLM=fake
+#   questlog: vanilla quest progress (docs/director.md, stage 5, layer 1), no model: Lobart's actual
+#       work offer and native answer start "Убрать поле репы" (open -> running, dialog node and npc,
+#       vanilla occasion); story_effect finishes it and the real 30 s poll records running -> success
+#       without a dialog node. A save and a load repeat no facts, including the next periodic sample.
+#       On a save: SAVE=save_slot_1.sav; LLM=fake; TIMEOUT=300
 #   showrunner: the director's decision (docs/director.md, stage 4, layer 2), LLM=fake only: a real
 #       arrived at a new inhabited place produces a quest from an eligible giver; a plot giver is refused
 #       first, the second proposal and the builder receive the premise. Another occasion that day is
