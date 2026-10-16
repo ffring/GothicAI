@@ -343,6 +343,7 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
     sym->set_instance(hnpc);
 
   fin.read(x,y,z,angle,sz);
+  resetCharacterVisualHeight();
   fin.read(wlkMode,trGuild,talentsSk,talentsVl,refuseTalkMilis);
   durtyTranform = TR_Pos|TR_Rot|TR_Scale;
   if(fin.version()<55)
@@ -541,6 +542,7 @@ bool Npc::setPosition(float ix, float iy, float iz) {
   x = ix;
   y = iy;
   z = iz;
+  resetCharacterVisualHeight();
   if(liveTeleport) {
     // Recreate at the destination instead of sweeping a kinematic body through
     // every item between a scripted teleport's endpoints.
@@ -1336,7 +1338,17 @@ Vec3 Npc::position() const {
   }
 
 Matrix4x4 Npc::transform() const {
-  return visual.transform();
+  auto matrix = visual.transform();
+  // Gameplay users of this matrix retain the exact origin. The presentation
+  // correction belongs to the model, its attachments and the foot IK frame only.
+  if(characterVisualYOffset!=0)
+    matrix.set(3,1,matrix.at(3,1)-characterVisualYOffset);
+  return matrix;
+  }
+
+Vec3 Npc::characterVisualPosition() const {
+  const auto& matrix = visual.transform();
+  return {matrix.at(3,0),matrix.at(3,1),matrix.at(3,2)};
   }
 
 Vec3 Npc::cameraBone(bool isFirstPerson) const {
@@ -6515,6 +6527,58 @@ void Npc::updateTransform() {
   updateAnimation(0, true);
   }
 
+void Npc::resetCharacterVisualHeight() {
+  if(characterVisualYOffset!=0)
+    durtyTranform |= TR_Pos;
+  characterVisualSteps.clear();
+  characterVisualYOffset = 0;
+  characterVisualHasSample = false;
+  characterVisualGroundSample = false;
+  }
+
+void Npc::updateCharacterVisualHeight() {
+  if(!isPlayer()) {
+    if(characterVisualHasSample)
+      resetCharacterVisualHeight();
+    return;
+    }
+  constexpr uint64_t blendMilliseconds = 100;
+  const auto now = owner.tickCount();
+  const bool groundState = !isDown() && !spellFrozen() && interactive()==nullptr &&
+                           (mvAlgo.state()==MoveAlgo::Run || mvAlgo.state()==MoveAlgo::Slide) &&
+                           !(bodyStateMasked()==BS_JUMP && isFlyAnim());
+  const bool enabled = Gothic::physicsFlags().characterVirtual &&
+                        mvAlgo.characterVirtualActive() && groundState;
+  const float previousOffset = characterVisualYOffset;
+
+  if(!enabled || (characterVisualHasSample && now<characterVisualSampleTick)) {
+    characterVisualSteps.clear();
+    characterVisualYOffset = 0;
+    }
+  else {
+    auto alive = std::find_if(characterVisualSteps.begin(),characterVisualSteps.end(),[now](const CharacterVisualStep& step) {
+      return now-step.tick<blendMilliseconds;
+      });
+    characterVisualSteps.erase(characterVisualSteps.begin(),alive);
+    // Applying the same finite filter to Run and Slide keeps the rendered height
+    // within the physical samples from the last 100 ms, including state changes.
+    if(characterVisualHasSample && characterVisualGroundSample && y!=characterVisualSampleY)
+      characterVisualSteps.push_back({now,characterVisualSampleY-y});
+    characterVisualYOffset = 0;
+    for(const auto& step:characterVisualSteps)
+      characterVisualYOffset += step.offset*(1.f-float(now-step.tick)/float(blendMilliseconds));
+    }
+
+  // Keep a baseline even while the freshly loaded controller is inactive. Its first
+  // floor correction can then blend from the saved height, while airborne handoffs snap.
+  characterVisualHasSample = true;
+  characterVisualGroundSample = groundState;
+  characterVisualSampleY = y;
+  characterVisualSampleTick = now;
+  if(characterVisualYOffset!=previousOffset)
+    durtyTranform |= TR_Pos;
+  }
+
 void Npc::updateAnimation(uint64_t dt, bool force) {
   FrameProfile::Scope timing(FrameProfile::Zone::ActorAnimationCpu,FrameProfile::watchedActor(this));
   const bool frozen = spellFrozen();
@@ -6522,6 +6586,8 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   const auto camera = Gothic::inst().camera();
   if(isPlayer() && camera!=nullptr && camera->isFree())
     dt = 0;
+
+  updateCharacterVisualHeight();
 
   if(durtyTranform) {
     const auto ground = groundNormal();
@@ -6535,10 +6601,11 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     if(durtyTranform==TR_Pos) {
       pos = visual.transform();
       pos.set(3,0,x);
-      pos.set(3,1,y);
+      pos.set(3,1,y+characterVisualYOffset);
       pos.set(3,2,z);
       } else {
       pos = mkPositionMatrix();
+      pos.set(3,1,pos.at(3,1)+characterVisualYOffset);
       }
 
     visual.setObjMatrix(pos,false);

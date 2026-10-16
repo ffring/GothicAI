@@ -534,14 +534,19 @@ exercise the legacy-path handoff.
 
 Held movement is released as soon as the destination is reached; the remainder of the video records the natural stop.
 Each route has its own MP4 and ordinary IK metrics; `foot-ik-stairs.png` is captured on the first
-stair route. `character-frames.csv` additionally records root position, held movement, falling,
+stair route. `character-frames.csv` additionally records the exact physical root and the actual
+model translation (`visual_x_cm`, `visual_y_cm`, `visual_z_cm`), held movement, falling,
 swimming, actual CV use, support velocity and native physics cost after each world tick. A route
 succeeds only after crossing its destination plane within the stated lateral/height tolerance;
 water entry additionally requires the real swimming state. Route-end `saw_slide` establishes whether the
 legacy slope take entered the actual slide state. The analyzer counts continuous held
 input with less than 5 cm of horizontal progress for more than one second, maximum absolute Y
 change per frame and native falls more than 100 cm below the last supported root (planned ledge
-jumps and swimming are excluded). Unmatched falls are compared within a 1 m spatial radius.
+jumps and swimming are excluded). Physical and visual maximum Y changes are reported separately;
+older CSVs without visual columns leave that measurement empty. Unmatched falls are compared
+within a 1 m spatial radius. `character-virtual-review` retakes stairs up/down, the tavern
+and the steep slope after support-filter or visual-height changes, using the same OFF/ON
+environment above. The slope checks the shared Run/Slide presentation blend.
 
 Run `character-virtual-props` with the same OFF/ON environment in separate output directories for
 four equal-duration native contacts: a real potion Item, a beer mug Item, a stock barrel mesh and

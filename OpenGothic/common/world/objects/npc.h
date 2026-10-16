@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <zenkit/addon/daedalus.hh>
 
@@ -502,6 +503,7 @@ class Npc final {
     float     physicsMass() const;
     bool      characterVirtualActive() const { return mvAlgo.characterVirtualActive(); }
     Tempest::Vec3 characterVirtualGroundVelocity() const { return mvAlgo.characterVirtualGroundVelocity(); }
+    Tempest::Vec3 characterVisualPosition() const;
     bool      addSpellImpulse(const Tempest::Vec3& impulseNs, bool reaction=true, Npc* culprit=nullptr);
     Tempest::Vec3 spellVelocity() const { return mvAlgo.spellVelocity(); }
     bool      spellWhirling() const;
@@ -732,6 +734,8 @@ class Npc final {
     bool               isAlignedToGround() const;
     Tempest::Vec3      groundNormal() const;
     Tempest::Matrix4x4 mkPositionMatrix() const;
+    void               resetCharacterVisualHeight();
+    void               updateCharacterVisualHeight();
     void               releaseRagdoll(bool blend);
     bool               recoverRagdoll();
     bool               createRagdoll();
@@ -766,6 +770,17 @@ class Npc final {
     // visual props (cache)
     uint8_t                        durtyTranform=0;
     Tempest::Vec3                  lastGroundNormal;
+    // Transient presentation only: each grounded controller correction fades in 100 ms.
+    struct CharacterVisualStep {
+      uint64_t tick = 0;
+      float    offset = 0;
+      };
+    std::vector<CharacterVisualStep> characterVisualSteps;
+    float                          characterVisualYOffset = 0;
+    float                          characterVisualSampleY = 0;
+    uint64_t                       characterVisualSampleTick = 0;
+    bool                           characterVisualHasSample = false;
+    bool                           characterVisualGroundSample = false;
 
     DynamicWorld::NpcItem          physic;
     std::unique_ptr<Ragdoll>       living;

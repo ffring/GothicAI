@@ -15,6 +15,7 @@ FRAME_FIELDS = {
     'ground_vx_cm_s', 'ground_vy_cm_s', 'ground_vz_cm_s', 'step_ms',
     'wall_ms', 'captured', 'normal_clock',
 }
+VISUAL_FIELDS = {'visual_x_cm', 'visual_y_cm', 'visual_z_cm'}
 
 WALKING_ROUTES = {'stairs_up', 'stairs_down', 'steep_slope', 'port_edge', 'doorway', 'tavern'}
 
@@ -87,7 +88,7 @@ def read_frames(frame_path, enabled, frames):
         booleans = {'move_held', 'in_air', 'falling', 'swimming', 'cv_enabled', 'cv_active', 'captured', 'normal_clock'}
         for index, raw in enumerate(reader, 2):
             row = {key: value if key == 'route' else flag(value) if key in booleans else number(value)
-                   for key, value in raw.items() if key in FRAME_FIELDS}
+                   for key, value in raw.items() if key in FRAME_FIELDS | VISUAL_FIELDS}
             require(row['route'] and row['dt_ms'] > 0 and row['step_ms'] >= 0 and row['wall_ms'] >= 0,
                     f'{frame_path}:{index}: invalid timing or route')
             require(row['cv_enabled'] is enabled, f'{frame_path}:{index}: configured mode differs from directory')
@@ -159,6 +160,12 @@ def route_result(run, name):
               # This is a comparison fixture: a recorded failure to reach the
               # goal (for example, sliding on an impassable slope) is evidence.
               'pass': True if starts and ends and frames and success is not None and elapsed is not None else None}
+    visual = frames and all(VISUAL_FIELDS <= row.keys() for row in frames)
+    visual_deltas = [abs(b['visual_y_cm'] - a['visual_y_cm']) for a, b in zip(frames, frames[1:])] if visual else []
+    if visual and starts and 'visual_start_cm' in starts[0]:
+        visual_deltas.append(abs(frames[0]['visual_y_cm'] - vector(starts[0]['visual_start_cm'])[1]))
+    result['maximum_visual_vertical_frame_delta_cm'] = max(visual_deltas, default=None)
+    result['maximum_visual_height_offset_cm'] = max((abs(row['visual_y_cm'] - row['y_cm']) for row in frames), default=None) if visual else None
     if 'saw_slide' in end:
         result['saw_slide'] = flag(end['saw_slide'])
     if starts:
@@ -442,13 +449,13 @@ def markdown(result):
     lines = [f'Проверки и полнота данных CharacterVirtual: **{state}**. Пропущенные данные обозначены «—». Исходы маршрутов и известные ограничения оцениваются отдельно.']
     if 'error' in result:
         return '\n'.join(lines + ['', result['error']]) + '\n'
-    lines += ['', '| Маршрут | Дошёл OFF / ON | Время, мс OFF / ON | Застревания >1с OFF / ON | Макс. ΔY, см OFF / ON | Новые падения ON | Кадры native CV ON |',
-              '|---|---|---:|---:|---:|---:|---:|']
+    lines += ['', '| Маршрут | Дошёл OFF / ON | Время, мс OFF / ON | Застревания >1с OFF / ON | Макс. ΔY физики, см OFF / ON | Макс. ΔY модели, см OFF / ON | Новые падения ON | Кадры native CV ON |',
+              '|---|---|---:|---:|---:|---:|---:|---:|']
     for row in result['routes']:
         before, after = row['off'], row['on']
         pair = lambda key: f'{display(before[key])} / {display(after[key])}'
         falls = row['falls']['on_only_positions_cm']
-        lines.append(f"| {display(row['route'])} | {pair('success')} | {pair('elapsed_ms')} | {pair('stalls_over_1s')} | {pair('maximum_vertical_frame_delta_cm')} | {display(len(falls) if falls is not None else None)} | {after['cv_active_frames']} |")
+        lines.append(f"| {display(row['route'])} | {pair('success')} | {pair('elapsed_ms')} | {pair('stalls_over_1s')} | {pair('maximum_vertical_frame_delta_cm')} | {pair('maximum_visual_vertical_frame_delta_cm')} | {display(len(falls) if falls is not None else None)} | {after['cv_active_frames']} |")
     perf = result['performance']
     lines += ['', f"Физика p95 OFF / ON: {display(perf['off'].get('physics_p95_ms'))} / {display(perf['on'].get('physics_p95_ms'))} мс; Δ {display(perf.get('physics_p95_delta_ms'))} мс (лимит +0,3). FPS OFF / ON: {display(perf['off'].get('mean_fps'))} / {display(perf['on'].get('mean_fps'))}; падение {display(perf.get('fps_drop_percent'))}% (лимит 5%). Учитываются только кадры без записи видео с обычными часами."]
     lines += ['', '| Предмет ON | Масса, кг | Гориз. смещение, см | Удержание хода, мс | Гориз. смещение / время хода, см/с | Контакт героя |', '|---|---:|---:|---:|---:|---|']

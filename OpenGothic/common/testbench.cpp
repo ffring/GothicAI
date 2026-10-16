@@ -628,7 +628,7 @@ struct Bench {
   struct CharacterFrame {
     std::string route;
     uint64_t frame=0,time=0,dt=0;
-    Vec3 root,groundVelocity;
+    Vec3 root,groundVelocity,visualRoot;
     bool moving=false,air=false,fall=false,swim=false,enabled=false,active=false,captured=false,normal=false;
     float physics=0,wall=0;
   };
@@ -1214,13 +1214,14 @@ void finish() {
   stopRecording();
   if(!bench.characterFrames.empty()) {
     if(auto* file=std::fopen((outDir+"/character-frames.csv").c_str(),"w")) {
-      std::fprintf(file,"route,frame,t_game_ms,dt_ms,x_cm,y_cm,z_cm,move_held,in_air,falling,swimming,cv_enabled,cv_active,ground_vx_cm_s,ground_vy_cm_s,ground_vz_cm_s,step_ms,wall_ms,captured,normal_clock\n");
+      std::fprintf(file,"route,frame,t_game_ms,dt_ms,x_cm,y_cm,z_cm,move_held,in_air,falling,swimming,cv_enabled,cv_active,ground_vx_cm_s,ground_vy_cm_s,ground_vz_cm_s,step_ms,wall_ms,captured,normal_clock,visual_x_cm,visual_y_cm,visual_z_cm\n");
       for(const auto& row:bench.characterFrames)
-        std::fprintf(file,"%s,%llu,%llu,%llu,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d\n",
+        std::fprintf(file,"%s,%llu,%llu,%llu,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%d,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%.9g,%.9g,%.9g\n",
           row.route.c_str(),(unsigned long long)row.frame,(unsigned long long)row.time,(unsigned long long)row.dt,
           double(row.root.x),double(row.root.y),double(row.root.z),int(row.moving),int(row.air),int(row.fall),int(row.swim),
           int(row.enabled),int(row.active),double(row.groundVelocity.x),double(row.groundVelocity.y),double(row.groundVelocity.z),
-          double(row.physics),double(row.wall),int(row.captured),int(row.normal));
+          double(row.physics),double(row.wall),int(row.captured),int(row.normal),
+          double(row.visualRoot.x),double(row.visualRoot.y),double(row.visualRoot.z));
       std::fclose(file);
       } else event("character_error","\"reason\":\"cannot write native character frames\"");
     }
@@ -4017,7 +4018,7 @@ bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool
 
 void characterSnapshot(World& world,Npc& player,std::string_view operation) {
   event("character_snapshot","\"operation\":"+jsonStr(operation)+",\"world\":"+jsonStr(world.name())+
-    ",\"root_cm\":"+ragdollVector(player.position())+",\"cv_enabled\":"+
+    ",\"root_cm\":"+ragdollVector(player.position())+",\"visual_root_cm\":"+ragdollVector(player.characterVisualPosition())+",\"cv_enabled\":"+
     (Gothic::physicsFlags().characterVirtual?"true":"false")+
     ",\"cv_active\":"+(player.characterVirtualActive()?"true":"false"));
   }
@@ -4050,7 +4051,7 @@ void characterFields(World& world,Npc& player,uint64_t dt,PlayerControl& ctrl) {
   const std::string rideLabel=bench.characterMover?"ride_mover":bench.characterPlatform?"ride_kinematic":"ride_dynamic";
   const std::string label=bench.characterMeasuring?"performance":route.active?route.name:bench.characterRiding?rideLabel:bench.characterPropRole;
   if(!normal || wall>0)bench.characterFrames.push_back({label,bench.characterFrame++,world.tickCount(),dt,position,
-    player.characterVirtualGroundVelocity(),move,player.isInAir(),player.isFalling(),player.isSwim(),
+    player.characterVirtualGroundVelocity(),player.characterVisualPosition(),move,player.isInAir(),player.isFalling(),player.isSwim(),
     Gothic::physicsFlags().characterVirtual,player.characterVirtualActive(),bench.rec && bench.recVideo,normal,
     world.physic()->physicsStats().stepMilliseconds,wall});
   if(bench.characterMeasuring) {
@@ -4216,6 +4217,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     route.began=w.tickCount();route.lastSupported=route.start;
     bench.characterHasWall=false;
     event("character_route_begin","\"route\":"+jsonStr(route.name)+",\"start_cm\":"+ragdollVector(route.start)+
+      ",\"visual_start_cm\":"+ragdollVector(pl.characterVisualPosition())+
       ",\"goal_cm\":"+ragdollVector(route.goal)+",\"tolerance_cm\":"+ragdollNumber(route.tolerance)+
       ",\"cv_enabled\":"+(Gothic::physicsFlags().characterVirtual?"true":"false"));
     }
