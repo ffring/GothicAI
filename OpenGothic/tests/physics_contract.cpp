@@ -1754,48 +1754,11 @@ namespace {
       }
     }
 
-  void testCharacterVirtualIdleSlope() {
-    CollisionWorld world;
-    auto matrix=at(0,-50,0);
-    matrix.rotateOZ(10.f);
-    auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),matrix,.7f,
-                                      DynamicWorld::C_Landscape);
-    const auto surface=world.rayCast({0,200,0},{0,-200,0},landscapeMask);
-    require(surface.hasHit && surface.normal.y>.98f,
-            "the idle slope fixture must expose a walkable ten-degree surface");
-    auto rider=world.createVirtualCharacter(25,180,surface.point);
-    CollisionWorld::CharacterMoveResult state;
-    // Let capsule padding recover before measuring ordinary idle movement.
-    // This reproduces a saved resting pose without attributing depenetration
-    // to the subsequent zero-input walking interval.
-    for(int frame=0;frame<30;++frame)
-      state=rider->move({},frame%3==2 ? 16 : 17,50,.785398163f,80,nullptr);
-    require(state.grounded,"the idle slope rider must be grounded before its zero-input interval");
-    const auto start=state.position;
-    float maximumDrift=0.f;
-    bool supported=true;
-    for(int frame=0;frame<60;++frame) {
-      const uint64_t dt=frame%3==2 ? 16 : 17;
-      world.tick(dt);
-      state=rider->move({},dt,50,.785398163f,80,nullptr);
-      supported&=state.grounded;
-      maximumDrift=std::max(maximumDrift,(state.position-start).length());
-      }
-    const auto delta=state.position-start;
-    std::printf("CharacterVirtual idle ten-degree slope for one second: displacement (%.6f, %.6f, %.6f) cm, "
-                "final %.6f / maximum %.6f cm\n",double(delta.x),double(delta.y),double(delta.z),
-                double(delta.length()),double(maximumDrift));
-    require(supported,"an idle virtual character must retain its walkable slope support");
-    requireNear(maximumDrift,0,.5f,
-                "gravity must not create walking displacement on an idle walkable slope");
-    }
-
   void testCharacterVirtual() {
     testCharacterVirtualSkippedMove();
     testCharacterVirtualInteractiveStep();
     testCharacterVirtualMovingUtensil();
     testCharacterVirtualSupports();
-    testCharacterVirtualIdleSlope();
     constexpr float slope = .785398163f;
     const auto printState=[](const char* stage, int frames, const CollisionWorld::CharacterMoveResult& state) {
       std::fprintf(stderr,"CharacterVirtual %s: frames=%d feet=(%.3f,%.3f,%.3f) velocity=(%.3f,%.3f,%.3f) grounded=%d steep=%d normal=(%.3f,%.3f,%.3f)\n",

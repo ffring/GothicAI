@@ -844,13 +844,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     auto velocity = toMeters(displacement)/seconds;
     if(onGround)
       velocity += groundVelocity;
-    // Static friction balances gravity along a walkable support. Keep its
-    // inward normal component for contact solving, but do not turn -g*dt into
-    // requested downhill motion at rest. Flat-ground pushing is unchanged.
-    // ExtendedUpdate still applies weight to the body. Steep / unsupported
-    // movement retains the full acceleration.
-    const auto normal = onGround ? character.GetGroundNormal() : JPH::Vec3::sAxisY();
-    velocity -= normal*(DynamicWorld::gravityMS*seconds*normal.GetY());
+    velocity += JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
     character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     const float step = std::max(toMeters(stepHeight),0.f);
