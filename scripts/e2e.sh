@@ -89,6 +89,11 @@
 #       player follows its goals, checks the next quest stays locked until turn-in, saves and loads after
 #       the first bandit's death, finishes both quests, and checks Garet knows. LLM=chatgpt uses the same
 #       player for the model's own chain. On a save: SAVE=save_slot_1.sav
+#   occasions: the director's occasions (docs/director.md, stage 4, layer 1), no model: the hero settles
+#       in a new inhabited place (one arrived), leaves and returns (none), saves and loads (the same
+#       visited places, empty queue, no repeat); KAPITEL rises (chapter), the hero kills a living human
+#       bandit (deed), and the clock passes a full game day (quiet). Uses the real 5 s sampling and 10 s
+#       settling, normal story_eval for the nearest waypoint. On a save: SAVE=save_slot_1.sav; LLM=fake
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)

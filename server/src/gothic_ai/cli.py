@@ -15,7 +15,7 @@ from array import array
 from pathlib import Path
 from typing import Any
 
-from . import lore, npc_tools, places, programs, scenarios
+from . import lore, npc_tools, places, programs, scenario_occasions, scenarios
 from .amends import Amends
 from .authoring import Author
 from .beasts import TONE_MAX_TOKENS, BeastDesk
@@ -68,6 +68,7 @@ from .llm.siwc import AuthError, TokenStore, login
 from .meetings import Meetings
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
+from .occasions import Occasions
 from .orders import Orders
 from .perception import PerceptionDesk
 from .persona import MOOD_DELIVERY, PersonaProvider, habits_of
@@ -136,6 +137,7 @@ HELP = """commands (npc defaults to the last attached one):
   quests            the director's quests: paid, lied about, found out
   director          quests left without an ending and the director's repairs of them
   director look     look for such quests now and repair them
+  occasions         the hero's place, queued and recent occasions for the director
   claims            quests of the scripts the hero said were done: believed, lies, found out
   know [npc] [query]  what the npc knows of the world now (M6), and what recall finds for the query
   see [npc]         what the npc perceives now: in Russian for its words, in English for its body
@@ -189,6 +191,7 @@ class ServerState:
         self.chronicle: Chronicle | None = None
         self.quests: QuestBoard | None = None
         self.director: Director | None = None
+        self.occasions: Occasions | None = None
         self.vanilla: VanillaQuests | None = None
         self.trust: Trust | None = None
         self.rumors: Rumors | None = None
@@ -299,6 +302,18 @@ class Console:
                 print(self.state.brain.snapshot())
                 for d in list(self.state.brain.applier.recent)[-10:]:
                     print(f"  {d.npc} {d.question}={d.choice} ({d.confidence:.2f}) {','.join(d.stimuli)}")
+            case "occasions":
+                if (occasions := self.state.occasions) is None:
+                    print("occasions: off")
+                else:
+                    place = occasions.current
+                    print(
+                        f"hero: {place.ru if place else 'settling / unknown'} ({occasions.waypoint or '-'})"
+                    )
+                    for label, facts in (("queue", occasions.pending), ("recent", occasions.recent)):
+                        print(f"{label}: {len(facts)}")
+                        for fact in facts:
+                            print("  " + json.dumps(fact, ensure_ascii=False))
             case "graph" if self.state.story is not None:
                 await self.graph(rest)
             case "quest" if len(rest) >= 5 and self.state.quests is not None:
@@ -810,6 +825,9 @@ async def serve(args: argparse.Namespace) -> int:
         )
         lies = asyncio.create_task(state.quests.run())
         directing: list[asyncio.Task[None]] = []
+        if place_book is not None and not args.no_occasions:
+            state.occasions = Occasions(link, state.chronicle, place_book)
+            directing.append(asyncio.create_task(state.occasions.run()))
         if graph is not None and not args.no_director:
             # quests the hero can no longer finish get repaired (story graph, stage 5)
             state.director = Director(
@@ -889,7 +907,7 @@ async def serve(args: argparse.Namespace) -> int:
                 dialogue=state.dialogue,
                 journal=journal,
             )
-            directing = [
+            directing += [
                 asyncio.create_task(state.director.run()),
                 asyncio.create_task(state.vanilla.run()),
                 asyncio.create_task(state.amends.run()),
@@ -1259,6 +1277,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.authored_quest(link, state.author, state.story)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario authored: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "occasions":
+                assert state.occasions is not None
+                results = await scenario_occasions.occasions(link, state.occasions)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario occasions: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "character":
                 casting, author, story = state.casting, state.author, state.story
@@ -1971,6 +1995,7 @@ def main() -> None:
             "wrath",
             "repair",
             "authored",
+            "occasions",
             "own",
             "trigger",
             "stages",
@@ -2033,6 +2058,9 @@ def main() -> None:
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
+    p.add_argument(
+        "--no-occasions", action="store_true", help="do not watch for the director's story occasions"
+    )
     p.add_argument(
         "--no-knowledge", action="store_true", help="npc's do not know the world from the scripts (M6)"
     )
