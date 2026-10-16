@@ -6543,9 +6543,13 @@ void Npc::updateCharacterVisualHeight() {
     return;
     }
   constexpr uint64_t blendMilliseconds = 100;
+  constexpr float heightNoise = 0.1f; // cm
+  constexpr float maxVisualLag = 10.f; // cm
   const auto now = owner.tickCount();
+  const auto at = position();
+  const auto normal = mvAlgo.groundNormal();
   const bool groundState = !isDown() && !spellFrozen() && interactive()==nullptr &&
-                           (mvAlgo.state()==MoveAlgo::Run || mvAlgo.state()==MoveAlgo::Slide) &&
+                           mvAlgo.state()==MoveAlgo::Run &&
                            !(bodyStateMasked()==BS_JUMP && isFlyAnim());
   const bool enabled = Gothic::physicsFlags().characterVirtual &&
                         mvAlgo.characterVirtualActive() && groundState;
@@ -6560,20 +6564,47 @@ void Npc::updateCharacterVisualHeight() {
       return now-step.tick<blendMilliseconds;
       });
     characterVisualSteps.erase(characterVisualSteps.begin(),alive);
-    // Applying the same finite filter to Run and Slide keeps the rendered height
-    // within the physical samples from the last 100 ms, including state changes.
-    if(characterVisualHasSample && characterVisualGroundSample && y!=characterVisualSampleY)
-      characterVisualSteps.push_back({now,characterVisualSampleY-y});
+    if(characterVisualHasSample && characterVisualGroundSample) {
+      const auto delta = at-characterVisualSamplePosition;
+      const auto support = mvAlgo.characterVirtualGroundVelocity()*(float(now-characterVisualSampleTick)*0.001f);
+      const auto relative = delta-support;
+      float predictedMin = 0, predictedMax = 0;
+      bool hasPrediction = false;
+      // Relative travel along the support plane explains an ordinary slope.
+      // Either endpoint normal may explain a transition between two surfaces.
+      for(const auto& n:{characterVisualSampleNormal,normal}) {
+        if(n.y<=1.e-3f)
+          continue;
+        const float predicted = support.y-(n.x*relative.x+n.z*relative.z)/n.y;
+        if(!std::isfinite(predicted))
+          continue;
+        if(!hasPrediction)
+          predictedMin = predictedMax = predicted;
+        predictedMin = std::min(predictedMin,predicted);
+        predictedMax = std::max(predictedMax,predicted);
+        hasPrediction = true;
+        }
+      const float explained = hasPrediction ? std::clamp(delta.y,predictedMin,predictedMax) : support.y;
+      const float residual = delta.y-explained;
+      const float correction = std::copysign(std::max(0.f,std::abs(residual)-heightNoise),residual);
+      if(correction!=0)
+        characterVisualSteps.push_back({now,-correction});
+      }
     characterVisualYOffset = 0;
     for(const auto& step:characterVisualSteps)
       characterVisualYOffset += step.offset*(1.f-float(now-step.tick)/float(blendMilliseconds));
+    if(std::abs(characterVisualYOffset)>maxVisualLag) {
+      characterVisualSteps.clear();
+      characterVisualYOffset = 0;
+      }
     }
 
   // Keep a baseline even while the freshly loaded controller is inactive. Its first
   // floor correction can then blend from the saved height, while airborne handoffs snap.
   characterVisualHasSample = true;
   characterVisualGroundSample = groundState;
-  characterVisualSampleY = y;
+  characterVisualSamplePosition = at;
+  characterVisualSampleNormal = normal;
   characterVisualSampleTick = now;
   if(characterVisualYOffset!=previousOffset)
     durtyTranform |= TR_Pos;

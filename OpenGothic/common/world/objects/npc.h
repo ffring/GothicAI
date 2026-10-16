@@ -770,14 +770,15 @@ class Npc final {
     // visual props (cache)
     uint8_t                        durtyTranform=0;
     Tempest::Vec3                  lastGroundNormal;
-    // Transient presentation only: each grounded controller correction fades in 100 ms.
+    // Transient presentation only: unexplained grounded height changes fade in 100 ms.
     struct CharacterVisualStep {
       uint64_t tick = 0;
       float    offset = 0;
       };
     std::vector<CharacterVisualStep> characterVisualSteps;
     float                          characterVisualYOffset = 0;
-    float                          characterVisualSampleY = 0;
+    Tempest::Vec3                  characterVisualSamplePosition;
+    Tempest::Vec3                  characterVisualSampleNormal;
     uint64_t                       characterVisualSampleTick = 0;
     bool                           characterVisualHasSample = false;
     bool                           characterVisualGroundSample = false;

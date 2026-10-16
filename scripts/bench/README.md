@@ -546,7 +546,9 @@ jumps and swimming are excluded). Physical and visual maximum Y changes are repo
 older CSVs without visual columns leave that measurement empty. Unmatched falls are compared
 within a 1 m spatial radius. `character-virtual-review` retakes stairs up/down, the tavern
 and the steep slope after support-filter or visual-height changes, using the same OFF/ON
-environment above. The slope checks the shared Run/Slide presentation blend.
+environment above. `character-virtual-step-blend` retakes only the steep slope and stairs
+down with ON. The 100 ms model-height blend applies only to Run height discontinuities
+beyond support-plane travel; Slide clears it, and offsets over 10 cm catch up immediately.
 
 Run `character-virtual-props` with the same OFF/ON environment in separate output directories for
 four equal-duration native contacts: a real potion Item, a beer mug Item, a stock barrel mesh and
