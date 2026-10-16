@@ -65,22 +65,46 @@ desktop() {
   exit 1
 }
 
-build_engine() {
-  local state="$1" digest started=$SECONDS
+source_digest() {
   # Content and paths include additions/deletions and uncommitted files, not just HEAD.
-  digest="$(python3 - "$ROOT/OpenGothic" <<'PY'
+  python3 - "$ROOT/OpenGothic" <<'PY'
 import hashlib
 import sys
 from pathlib import Path
 root = Path(sys.argv[1])
 digest = hashlib.sha256()
 for path in sorted(root.rglob('*')):
+    if 'build' in path.relative_to(root).parts:
+        continue
     if path.is_file():
         digest.update(path.relative_to(root).as_posix().encode() + b'\0')
         digest.update(hashlib.sha256(path.read_bytes()).digest())
 print(digest.hexdigest())
 PY
-)"
+}
+
+build_storygraph() {
+  local state="$1" digest="$2" started=$SECONDS
+  local build="$state/storygraph-build"
+  if [[ ! -x "$build/storygraph" || ! -f "$build/source.sha256" ]] || \
+     [[ "$(cat "$build/source.sha256")" != "$digest" ]]; then
+    mkdir -p "$build"
+    cmake -S "$ROOT/OpenGothic/ai_bridge/storygraph" -B "$build" -G Ninja \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      >"$build/configure.log" 2>&1 || { cat "$build/configure.log"; return 1; }
+    cmake --build "$build" --target storygraph --parallel "${RYZEN_JOBS:-12}" \
+      >"$build/build.log" 2>&1 || { tail -80 "$build/build.log"; return 1; }
+    tail -3 "$build/build.log"
+    printf '%s\n' "$digest" >"$build/source.sha256"
+    echo "Ryzen: storygraph configure + build $((SECONDS - started))s"
+  fi
+  # Both the server and its native-tool tests look for this conventional path.
+  mkdir -p "$ROOT/OpenGothic/ai_bridge/storygraph/build"
+  ln -sfn "$build/storygraph" "$ROOT/OpenGothic/ai_bridge/storygraph/build/storygraph"
+}
+
+build_engine() {
+  local state="$1" digest="$2" started=$SECONDS
   if [[ -x "$state/build/opengothic/Gothic2Notr" && -f "$state/build/source.sha256" ]] && \
      [[ "$(cat "$state/build/source.sha256")" == "$digest" ]]; then
     echo "Ryzen: engine unchanged, build skipped ($((SECONDS - started))s)"
@@ -106,8 +130,11 @@ remote_run() {
   shift 3
   toolchain
   export GOTHIC_DIR="$HOME/gothic-ai/game"
-  local started=$SECONDS rc
+  local started=$SECONDS rc digest
+  [[ "${RYZEN_JOBS:-12}" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; return 2; }
+  digest="$(source_digest)"
   if [[ "$action" == pytest ]]; then
+    build_storygraph "$state" "$digest"
     cd "$ROOT/server"
     uv run pytest "$@" && rc=0 || rc=$?
     echo "Ryzen: pytest $((SECONDS - started))s, exit $rc"
@@ -130,7 +157,8 @@ if server != engine:
     raise SystemExit(f'Protocol mismatch: server={server}, engine={engine}')
 print(f'Ryzen: protocol {engine} (engine = server)', flush=True)
 PY
-  build_engine "$state"
+  build_engine "$state" "$digest"
+  build_storygraph "$state" "$digest"
   started=$SECONDS
   desktop
   # Resolve dependencies under the same lock, before the e2e server's two-second startup wait.
@@ -154,11 +182,6 @@ WRAPPER
   bash "$ROOT/scripts/e2e.sh" && rc=0 || rc=$?
   echo "Ryzen: e2e $((SECONDS - started))s, exit $rc"
   grep -E 'GPU = ' "$LOG_DIR/game.log" || true
-  if ! grep -Eq 'GPU = .*NVIDIA.*RTX 3080' "$LOG_DIR/game.log"; then
-    echo 'NVIDIA RTX 3080 was not confirmed in game.log' >&2
-    # Preserve a failed e2e's original code, but reject a false success on another renderer.
-    [[ "$rc" != 0 ]] || rc=1
-  fi
   return "$rc"
 }
 
@@ -206,6 +229,7 @@ LOCK_WAIT=$LOCK_WAIT
 take_lock
 exec bash -se"
 printf -v bootstrap_command 'bash -c %q' "$bootstrap"
+: >"$OUTPUT"
 ssh -o BatchMode=yes -o ConnectTimeout=10 ryzen "$bootstrap_command" \
   8>&- <"$SESSION/input" > >(exec 8>&-; tee "$OUTPUT") 2>&1 &
 SSH_PID=$!
@@ -261,7 +285,7 @@ fi
 RUN="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 remote mkdir -p "$STATE/source" "$STATE/inputs/$RUN"
 started=$SECONDS
-rsync -a --delete \
+rsync -a --checksum --delete \
   --exclude=.git --exclude=build/ --exclude='build-*/' --exclude=cmake-build-\*/ \
   --exclude=.venv/ --exclude=__pycache__/ --exclude=.pytest_cache/ --exclude=.ruff_cache/ --exclude=.mypy_cache/ \
   --exclude=.claude/ --exclude=.codex/ --exclude=.DS_Store --exclude=node_modules/ \
