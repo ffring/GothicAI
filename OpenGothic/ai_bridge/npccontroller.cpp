@@ -586,15 +586,11 @@ bool NpcController::startScriptState(World& world, Controlled& c, Action& a, std
   a.target    = target->instanceSymbol();
   a.targetNpc = target;
   a.deadline = a.type=="fight" ? 60000 : 20000;
-  // Install the state before releasing perceptions. A queued start can sit behind
-  // regainControl's RemoveWeapon until a damage perception replaces it with ATTACK.
-  npc.clearAiQueue();
-  npc.startState(fn,"",gtime::endOfTime(),true);
-  npc.setOther(target);
-  npc.setVictim(nullptr);
+  // Keep perceptions external while queued speech and weapon removal finish.
+  // Release script control only once the queue has installed the requested state.
   npc.setTarget(target);
+  npc.aiPush(AiQueue::aiStartState(fn,0,target,nullptr,""));
   c.scripted = true;
-  npc.setExternalControl(false);
   return true;
   }
 
@@ -602,8 +598,10 @@ void NpcController::updateStateAction(World& world, Controlled& c, uint64_t now)
   auto& a  = *c.act;
   Npc&  npc = *c.npc;
   const bool in = npc.isInState(a.state);
+  if(in && npc.isExternalControl())
+    npc.setExternalControl(false);
   if(!a.entered) {
-    if(in) {
+    if(in && npc.isStateStarted()) {
       a.entered = true;
       } else {
       if(now>a.start+StateStartMs)
