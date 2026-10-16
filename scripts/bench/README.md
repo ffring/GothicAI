@@ -530,7 +530,7 @@ switches bone by bone),
 
 ### Stage 5, step 1: hero CharacterVirtual
 
-`character_virtual` stays off by default. The comparison uses two fresh processes and the same
+`character_virtual` is on by default since the manual trial (2026-10-16). The comparison uses two fresh processes and the same
 stock-world geometry, with `movable_vobs=1` in both. Check `pgrep -fl Gothic2Notr` before each
 run and wait for any other game's process to finish.
 

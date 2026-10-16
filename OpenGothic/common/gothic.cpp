@@ -100,7 +100,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "spell_physics",       1);
   defaults->set("GAME", "movable_vobs",        1);
   defaults->set("GAME", "physics_noise",       1);
-  defaults->set("GAME", "character_virtual",   0); // walking trial; enable after the manual comparison
+  defaults->set("GAME", "character_virtual",   1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
