@@ -1007,7 +1007,7 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       sendResult(req,false,id==size_t(-1) ? "unknown instance" : "unknown npc to spawn near");
       return;
       }
-    // towards the player (open ground both have walked), else where the npc faces
+    // Prefer the old direction towards the player, else where the npc faces.
     const float dist = float(JsonRead::integer(msg,"distance",600));
     auto        pos  = at->position();
     float       dx   = std::cos(at->rotationRad()), dz = std::sin(at->rotationRad());
@@ -1021,7 +1021,64 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       }
     pos.x += dist*dx;
     pos.z += dist*dz;
-    sendResult(req,world->addNpc(id,pos)!=nullptr,"could not spawn");
+    Npc* spawned = nullptr;
+    if(at!=pl && dist>=0) {
+      const auto hero = pl->position();
+      const auto* physics = world->physic();
+      int level = 0, supported = 0;
+      const auto grounded = [&](Vec3& point) {
+        const float px = point.x-hero.x, pz = point.z-hero.z;
+        if(px*px+pz*pz<400.f*400.f)
+          return false;
+        const auto floor = physics->landRay({point.x,hero.y+100.f,point.z},200.f);
+        if(!floor.hasCol || std::abs(floor.v.y-hero.y)>100.f || floor.n.y<.8f)
+          return false;
+        ++level;
+        point = floor.v;
+        // Support the body, not just its centre on the edge of a floor.
+        const std::array<Vec3,4> footprint = {{{30,0,0},{-30,0,0},{0,0,30},{0,0,-30}}};
+        for(const auto& offset:footprint) {
+          const auto support = physics->landRay(point+offset+Vec3(0,50,0),100.f);
+          if(!support.hasCol || std::abs(support.v.y-point.y)>40.f)
+            return false;
+          }
+        if(physics->ray(point+Vec3(0,5,0),point+Vec3(0,100,0)).hasCol)
+          return false;
+        ++supported;
+        // Keep a single creature while testing its actual animated centre: that
+        // is the endpoint used by enemy perception, including for attached NPCs.
+        if(spawned==nullptr) {
+          spawned = world->addNpc(id,point);
+          } else {
+          spawned->setPosition(point);
+          spawned->updateTransform();
+          }
+        return spawned!=nullptr && at->canRayHitPoint(spawned->centerPosition(),true);
+        };
+      bool found = grounded(pos);
+      // A point on the NPC-to-hero ray can be beyond a wall or on another floor.
+      // Search bounded rings around the hero without relaxing the height/LOS gates.
+      for(int ring=0; ring<8 && !found; ++ring) {
+        const float radius = std::max(dist,401.f)+float(ring)*100.f;
+        for(int step=0; step<32 && !found; ++step) {
+          const float angle = float(step)*(2.f*float(M_PI)/32.f);
+          const float c = std::cos(angle), s = std::sin(angle);
+          auto candidate = hero+Vec3(radius*(dx*c-dz*s),0,radius*(dx*s+dz*c));
+          if(grounded(candidate)) {
+            pos = candidate;
+            found = true;
+            }
+          }
+        }
+      if(!found) {
+        if(spawned!=nullptr)
+          world->removeNpc(*spawned);
+        sendResult(req,false,"no visible supported ground within 1 m of the hero's height and at least 4 m away "
+                             "(level: "+std::to_string(level)+", supported: "+std::to_string(supported)+")");
+        return;
+        }
+      }
+    sendResult(req,spawned!=nullptr || world->addNpc(id,pos)!=nullptr,"could not spawn");
     return;
     }
   if(cmd=="own_npc") {
