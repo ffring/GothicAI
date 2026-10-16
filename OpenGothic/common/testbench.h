@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -41,6 +42,8 @@ namespace TestBench {
   // Native impact/audio and accepted NPC hearing; inert outside the noise fixture.
   void     physicsNoise(const PhysicsNoise& noise, std::string_view sound, bool played);
   void     physicsNoiseHeard(const Npc& npc, const PhysicsNoise& noise, bool callbackDispatched = false);
+  // Native destruction telemetry: includes body creation and the render callback.
+  void     destructionBreak(uintptr_t body, size_t pieces, float milliseconds);
   // Devmode-only live bridge stand, reusing the actual Coragon tavern fixture.
   bool     isPhysicsNoiseDebug();
   void     physicsNoiseBridgeEvent(const Npc& listener, uint64_t tick);

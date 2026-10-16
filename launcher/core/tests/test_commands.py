@@ -1,5 +1,6 @@
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,20 @@ def test_the_game_gets_the_sharper_textures_when_they_are_made(config, tmp_path)
     assert "OPENGOTHIC_TEXTURES" not in game(config, LAYOUT, PORTS).env
     with_hd = Layout(LAYOUT.repo, LAYOUT.uv, LAYOUT.game_bin, LAYOUT.game_dir, LAYOUT.game_home, tmp_path)
     assert game(config, with_hd, PORTS).env["OPENGOTHIC_TEXTURES"] == str(tmp_path)
+
+
+def test_the_game_gets_the_fracture_cache_when_made(config, tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENGOTHIC_FRACTURE", raising=False)
+    assert "OPENGOTHIC_FRACTURE" not in game(config, LAYOUT, PORTS).env
+    layout = replace(LAYOUT, fracture_cache=tmp_path)
+    assert game(config, layout, PORTS).env["OPENGOTHIC_FRACTURE"] == str(tmp_path)
+
+
+@pytest.mark.parametrize("override", ["/another/fracture", ""])
+def test_the_game_preserves_an_explicit_fracture_override(config, tmp_path, monkeypatch, override):
+    monkeypatch.setenv("OPENGOTHIC_FRACTURE", override)
+    layout = replace(LAYOUT, fracture_cache=tmp_path)
+    assert game(config, layout, PORTS).env["OPENGOTHIC_FRACTURE"] == override
 
 
 def test_latest_save(tmp_path):

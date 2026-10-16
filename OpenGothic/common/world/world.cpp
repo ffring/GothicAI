@@ -151,6 +151,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
 
     wdynamic = wdynamicFut.get();
     wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
+    wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
     wdynamic->setPhysicsNoiseCallback([this](const PhysicsNoise& noise) { emitPhysicsNoise(noise); });
     world.world_mesh = zenkit::Mesh();
     loadProgress(70);
@@ -280,7 +281,7 @@ Npc* World::npcForRagdoll(const Ragdoll* body) {
 bool World::stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix,
                       std::string_view visual, std::shared_ptr<const DynamicWorld::MovableVobPose> movable,
                       const Npc* culprit, const Tempest::Vec3* sightPoint, std::string_view surface) {
-  if(arrow.isEmpty() || !Gothic::physicsFlags().arrowSticking)
+  if(arrow.isEmpty() || !Gothic::physicsFlags().arrowSticking || (movable!=nullptr && movable->broken))
     return false;
   if(stuckArrows.size()>=512)
     stuckArrows.erase(stuckArrows.begin());
@@ -325,7 +326,7 @@ bool World::stuckArrowAttachment(size_t index, uint32_t& zenId, Tempest::Matrix4
     return false;
   const auto& pin = stuckArrows[index];
   auto pose = pin.movable.lock();
-  if(!pin.attached || pose==nullptr)
+  if(!pin.attached || pose==nullptr || pose->broken)
     return false;
   zenId = pose->zenId;
   local = pin.local;
@@ -384,7 +385,7 @@ void World::updateStuckArrows() {
       continue;
       }
     auto pose = i->movable.lock();
-    if(pose==nullptr) {
+    if(pose==nullptr || pose->broken) {
       i = stuckArrows.erase(i);
       continue;
       }
@@ -401,7 +402,7 @@ void World::saveStuckArrows(Serialize& fout) const {
   std::vector<const StuckArrow*> pins;
   for(const auto& pin:stuckArrows) {
     auto pose = pin.movable.lock();
-    if(pin.visual.empty() || (pin.attached && (pose==nullptr || pose->zenId==uint32_t(-1))))
+    if(pin.visual.empty() || (pin.attached && (pose==nullptr || pose->broken || pose->zenId==uint32_t(-1))))
       continue;
     pins.push_back(&pin);
     }
@@ -660,6 +661,7 @@ void World::tick(uint64_t dt) {
   wdynamic->setTraceTime(traceTime(*this));
   wdynamic->setMovableVobsEnabled(Gothic::physicsFlags().movableVobs);
   wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
+  wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
   if(!Gothic::physicsFlags().arrowSticking)
     stuckArrows.clear();
   static bool doTicks=true;

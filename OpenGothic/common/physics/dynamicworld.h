@@ -4,6 +4,7 @@
 #include "physics/physicsnoise.h"
 #include "physics/charactervirtualdiagnostics.h"
 #include "physics/navmesh.h"
+#include "physics/fracture.h"
 
 #include <Tempest/Matrix4x4>
 #include <functional>
@@ -64,6 +65,7 @@ class DynamicWorld final {
       C_MovableVob = 10,
       C_MovableQuery = 11,
       C_SmallVobQuery = 12,
+      C_Fragment = 13,
       };
 
     enum PtrType {
@@ -189,6 +191,10 @@ class DynamicWorld final {
         // World-space newton seconds (kg * metres/second), with native wake.
         bool addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr);
         void setTransformCallback(std::function<void(const Tempest::Matrix4x4&)> callback);
+        std::shared_ptr<const FractureMesh> fractureMesh() const;
+        bool isBroken() const;
+        // Preload GPU geometry with fractureMesh() before installing this.
+        void setFractureCallback(std::function<void(bool,const std::vector<Tempest::Matrix4x4>&)> callback);
 
       private:
         DynamicWorld*       owner  = nullptr;
@@ -231,6 +237,7 @@ class DynamicWorld final {
       uint32_t zenId = uint32_t(-1);
       std::string visual;
       Tempest::Matrix4x4 origin, transform;
+      bool broken = false;
       };
 
     struct BulletWorldHit {
@@ -352,6 +359,8 @@ class DynamicWorld final {
                                  float massMultiplier, bool blocksWalking, std::string_view className = {},
                                  bool legacyCollision = true, uint32_t zenId = uint32_t(-1));
     void           setMovableVobsEnabled(bool enabled);
+    void           setDestructionEnabled(bool enabled);
+    bool           destructionEnabled() const;
     // Called after the complete authored vob tree has installed its collisions.
     void           finalizeMovableVobs();
     double         movableVobValidationMilliseconds() const;
@@ -373,6 +382,8 @@ class DynamicWorld final {
       std::string        visual, className;
       bool               blocksWalking = false, legacyCollision = true, enabled = false, sleeping = true, touchedByNpc = false;
       float              mass = 0;
+      bool               destructible = false, broken = false;
+      float              health = 0, maxHealth = 0, impactThreshold = 0;
       Tempest::Matrix4x4 transform, origin;
       Tempest::Vec3      velocity;
       Tempest::Vec3      localBounds[2];
@@ -382,6 +393,15 @@ class DynamicWorld final {
       std::string        traceCulprit;
       };
     std::vector<MovableVobSnapshot> movableVobSnapshot() const;
+    struct FragmentSnapshot {
+      uintptr_t parentId = 0;
+      uint32_t zenId = uint32_t(-1);
+      size_t piece = 0;
+      bool sleeping = true;
+      Tempest::Matrix4x4 transform;
+      Tempest::Vec3 velocity, angularVelocity;
+      };
+    std::vector<FragmentSnapshot> fragmentSnapshot() const;
     // Diagnostic: what each movable hull touches or penetrates at its origin pose.
     struct MovableVobContact {
       std::string   other;      // visual of the other body, "landscape" for the world mesh
@@ -461,6 +481,9 @@ class DynamicWorld final {
     void           rebuildMovableVob(BodyData& body);
     void           validateMovableVobs();
     void           syncMovableVob(BodyData& body);
+    void           damageMovableVob(BodyData& body, float impulse, const Tempest::Vec3& point, bool arrow = false);
+    void           breakMovableVob(BodyData& body);
+    void           syncFragments(BodyData& body);
 
     std::unique_ptr<CollisionWorld>    world;
 

@@ -1,0 +1,8 @@
+# Visual basename glob (case-insensitive, no extension),class,health,impact threshold Ns/kg,health per excess Ns/kg,arrow health per Ns
+# The threshold excludes walking and ordinary handling; a five metre fall or
+# a nearby blast exceeds it. Arrows deposit their own 0.12 kg momentum.
+NW_HARBOUR_BARREL_01,barrel,120,5,250,8.333334
+NW_CITY_WEAPON_BARREL_01,barrel,120,5,250,8.333334
+OC_BARREL_V?,barrel,120,5,250,8.333334
+NW_HARBOUR_CRATE_01,crate,100,5,250,8.333334
+AW_CRATE_01,crate,100,5,250,8.333334

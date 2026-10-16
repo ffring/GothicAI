@@ -180,6 +180,7 @@ Marvin::Marvin() {
     {"toggle spell_physics",      C_ToggleSpellPhysics},
     {"toggle movable_vobs",       C_ToggleMovableVobs},
     {"toggle physics_noise",      C_TogglePhysicsNoise},
+    {"toggle destruction",        C_ToggleDestruction},
     {"toggle character_virtual",  C_ToggleCharacterVirtual},
     {"toggle npc_character_virtual",C_ToggleNpcCharacterVirtual},
     };
@@ -573,6 +574,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_TogglePhysicsNoise:
       Gothic::settingsSetI("GAME","physics_noise",Gothic::settingsGetI("GAME","physics_noise")==0 ? 1 : 0);
+      return true;
+    case C_ToggleDestruction:
+      Gothic::settingsSetI("GAME","destruction",Gothic::settingsGetI("GAME","destruction")==0 ? 1 : 0);
       return true;
     case C_ToggleCharacterVirtual: {
       const bool enabled = !Gothic::physicsFlags().characterVirtual;

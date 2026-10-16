@@ -1,0 +1,3 @@
+#pragma once
+
+constexpr const char* destructibleVobsCsv = R"fracture(@DESTRUCTIBLE_VOBS_CSV@)fracture";

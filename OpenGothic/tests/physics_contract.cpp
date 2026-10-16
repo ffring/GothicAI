@@ -33,6 +33,9 @@
 #include <cstdlib>
 #include <exception>
 #include <functional>
+#include <filesystem>
+#include <fstream>
+#include <chrono>
 #include <string>
 #include <utility>
 #include <vector>
@@ -742,6 +745,238 @@ namespace {
     object=DynamicWorld::Item();
     require(contact.movable.expired() && world.movableVobPose(42)==nullptr,
             "removing a vob must expire weak arrow attachments without leaving a dangling body");
+    }
+
+  void testDestruction() {
+    struct CacheFixture {
+      std::filesystem::path path;
+      std::string old;
+      bool hadOld=false;
+      CacheFixture() {
+        if(const auto* value=std::getenv("OPENGOTHIC_FRACTURE")) { old=value; hadOld=true; }
+        path=std::filesystem::temp_directory_path()/
+             ("gothic-fracture-contract-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(path);
+        std::ofstream file(path/"NW_HARBOUR_CRATE_01.fracture");
+        file<<"GOTHIC_FRACTURE 1\npieces 8\n";
+        for(int x:{-1,1}) for(int y:{-1,1}) for(int z:{-1,1}) {
+          auto mesh=movableBox({50,50,50});
+          for(auto& p:mesh.positions) { p.x+=float(x)*25.f; p.y+=float(y)*25.f; p.z+=float(z)*25.f; }
+          file<<"piece 125000 "<<x*25<<' '<<y*25<<' '<<z*25<<" 12\n";
+          for(const auto& triangle:mesh.sub_meshes[0].triangles) {
+            file<<"tri WOOD.TGA\n";
+            for(const auto index:triangle.wedges) {
+              const auto& p=mesh.positions[index];
+              file<<p.x<<' '<<p.y<<' '<<p.z<<" 0 1 0 0 0\n";
+              }
+            }
+          }
+        file.close();
+        std::filesystem::copy_file(path/"NW_HARBOUR_CRATE_01.fracture",path/"NW_HARBOUR_BARREL_01.fracture");
+        setenv("OPENGOTHIC_FRACTURE",path.string().c_str(),1);
+        }
+      ~CacheFixture() {
+        if(hadOld) setenv("OPENGOTHIC_FRACTURE",old.c_str(),1);
+        else unsetenv("OPENGOTHIC_FRACTURE");
+        std::filesystem::remove_all(path);
+        }
+      } cache;
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCollisionBox({100,100,100}),PackedMesh::PK_Visual),"NW_HARBOUR_CRATE_01.MRM");
+    constexpr uint32_t zenId=4321;
+    const auto make=[&](DynamicWorld& world,const Tempest::Matrix4x4& matrix) {
+      return world.addMovableVob(proto,"NW_HARBOUR_CRATE_01.MRM",matrix,.04f,true,"crate",true,zenId);
+      };
+    require(FractureRule::classify("path/nw_harbour_crate_01.3ds")!=nullptr &&
+            FractureRule::classify("NW_CITY_TABLE_01.MRM")==nullptr,
+            "destruction must use the explicit visual data table");
+    {
+      DynamicWorld world(nullptr,zenkit::Mesh{});
+      auto object=make(world,at(0,1000,0));
+      require(world.destructionEnabled() && object.fractureMesh()!=nullptr && object.fractureMesh()->pieces.size()==8,
+              "destruction must preload all native piece hulls and be enabled by default");
+      bool brokenCallback=false;
+      object.setFractureCallback([&](bool broken,const std::vector<Tempest::Matrix4x4>& pieces) {
+        brokenCallback=broken;
+        require(pieces.size()==size_t(broken ? 8 : 0),"render callbacks must match the physical piece count");
+        });
+      std::vector<PhysicsNoise> noises;
+      world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { noises.push_back(noise); });
+      const auto parentPose=world.movableVobPose(zenId);
+      const float mass=object.mass();
+      const Tempest::Vec3 point(0,1050,0);
+      require(world.applyMovableVobImpulse({0,1000,0},1.f,[&](const Tempest::Vec3&,float) {
+        return Tempest::Vec3(mass*10.f,0,0);
+        },nullptr,&point)==1,"a strong blast must reach its target");
+      world.tick(17);
+      require(object.isBroken() && brokenCallback && parentPose->broken,
+              "breaking must hide the intact body and invalidate pinned-arrow parents together");
+      const auto state=world.movableVobSnapshot()[0];
+      require(state.broken && state.destructible && state.health==0 && !state.enabled,
+              "a broken original must retain diagnostic identity without an intact collision body");
+      const auto pieces=world.fragmentSnapshot();
+      require(pieces.size()==8 && world.physicsStats().bodies==8,
+              "replacement must remove both intact and query collisions and install only fragments");
+      Tempest::Vec3 average;
+      for(const auto& piece:pieces) {
+        require(piece.parentId==state.id && piece.zenId==zenId && !piece.sleeping,
+                "each dynamic fragment must retain its original parent identity");
+        requireNear((piece.angularVelocity-pieces[0].angularVelocity).length(),0,.001f,
+                    "all fragments must inherit the same parent angular velocity");
+        average+=piece.velocity/8.f;
+        }
+      requireNear(average.x,1000.f,5.f,"fragments must inherit parent linear momentum");
+      require(pieces[0].angularVelocity.length()>1.f,"fragments must inherit nonzero parent rotation");
+      require(!noises.empty() && noises.back().volume==1.f && noises.back().radius==1600.f &&
+              noises.back().material==MAT_WOOD && noises.back().what.find("break")!=std::string::npos,
+              "breaking must emit one loud material noise through the existing physics noise callback");
+      require(!world.landRay({0,1100,0},300).hasCol,
+              "fragments must never become walking or floor query obstacles");
+      const auto saved=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
+      DynamicWorld restored(nullptr,zenkit::Mesh{});
+      auto restoredObject=make(restored,at(0,1000,0));
+      loadMovables(restored,saved);
+      require(!restoredObject.isBroken() && restored.fragmentSnapshot().empty(),
+              "saving destruction must keep the previous archive schema and restore an intact original");
+      world.setDestructionEnabled(false);
+      require(!world.destructionEnabled() && !object.isBroken() && !brokenCallback && world.fragmentSnapshot().empty(),
+              "disabling destruction must restore intact visuals and remove transient fragments");
+      require(object.addImpulse({mass*20.f,0,0}),"disabled furniture must retain ordinary impulse physics");
+      world.tick(17);
+      require(!object.isBroken(),"destruction=0 must ignore otherwise destructive impulses");
+      }
+    {
+      auto source=movableCollisionBox({100,100,100});
+      source.sub_meshes[0].mat.group=zenkit::MaterialGroup::STONE;
+      ProtoMesh barrel(PackedMesh(source,PackedMesh::PK_Visual),"NW_HARBOUR_BARREL_01.MRM");
+      DynamicWorld world(nullptr,zenkit::Mesh{});
+      auto object=world.addMovableVob(barrel,"NW_HARBOUR_BARREL_01.MRM",at(0,1000,0),.03f,true,"barrel");
+      std::vector<PhysicsNoise> noises;
+      world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { noises.push_back(noise); });
+      requireNear(object.mass(),DynamicWorld::materialDensity(zenkit::MaterialGroup::STONE)*.03f,.01f,
+                  "destructible class must not change the authored mesh density");
+      object.addImpulse({object.mass()*10.f,0,0});
+      world.tick(17);
+      require(object.isBroken() && !noises.empty() && noises.back().material==MAT_WOOD &&
+              noises.back().surface==zenkit::MaterialGroup::WOOD,
+              "a wooden barrel mislabeled as stone must still emit a wooden break sound");
+      }
+    for(const bool tilted:{false,true}) for(const float height:{100.f,500.f}) {
+      auto floor=movableFloor();
+      if(tilted)
+        for(auto& vertex:floor.vertices) vertex.y=vertex.x*std::tan(.5f*3.141592654f/180.f);
+      DynamicWorld world(nullptr,floor);
+      auto object=make(world,at(0,height+50.f,0));
+      require(object.addImpulse({0,-.001f,0}),"drop fixture must wake without structural damage");
+      for(int i=0;i<900;++i) world.tick(17);
+      const auto state=world.movableVobSnapshot()[0];
+      std::printf("Destruction drop %.0f cm, floor tilt %.1f deg: broken %d, health %.3f, fragments %zu\n",
+                  double(height),tilted ? .5 : 0.,int(state.broken),double(state.health),world.fragmentSnapshot().size());
+      require(state.broken==(height>100.f),"a one metre fall must survive and a five metre fall must break");
+      for(const auto& piece:world.fragmentSnapshot())
+        require(piece.sleeping,"fragments must settle and sleep after fifteen seconds");
+      }
+    {
+      DynamicWorld world(nullptr,zenkit::Mesh{});
+      auto object=make(world,at(0,1000,0));
+      int arrows=0;
+      for(;arrows<8 && !object.isBroken();++arrows) {
+        const auto before=world.movableVobSnapshot()[0].transform;
+        const Tempest::Vec3 center(before.at(3,0),before.at(3,1),before.at(3,2));
+        DynamicWorld::BulletCallback contact;
+        auto* arrow=world.bulletObj(&contact);
+        arrow->setPosition(center+Tempest::Vec3(-80,0,0));
+        arrow->setDirection({3,0,0});
+        world.tick(17);
+        world.deleteObj(arrow);
+        }
+      std::printf("Destruction arrows: %d\n",arrows);
+      require(object.isBroken() && arrows==4,"four standard-speed arrows must break the crate through real flight contacts");
+      }
+    {
+      DynamicWorld world(nullptr,movableFloor());
+      auto object=make(world,at(100,50,0));
+      auto walker=world.movableVobSnapshot()[0];
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox={{-25,0,-25},{25,180,25}};
+      Skeleton shape(hierarchy,nullptr,"DESTRUCTION_WALKER");
+      auto hero=world.addGhostObj(&shape);
+      hero.setPosition({0,0,0});
+      for(int i=0;i<180;++i) {
+        hero.moveVirtual({5,0,0},17,50,.785398163f,80);
+        world.tick(17);
+        }
+      require(!object.isBroken() && world.movableVobSnapshot()[0].health==walker.health,
+              "walking into a crate must not consume structural health");
+      }
+    {
+      setenv("OPENGOTHIC_FRACTURE","",1);
+      DynamicWorld world(nullptr,zenkit::Mesh{});
+      auto object=make(world,at(0,1000,0));
+      require(object.fractureMesh()==nullptr,"an explicitly empty cache path must disable cache lookup");
+      object.addImpulse({object.mass()*20.f,0,0});
+      world.tick(17);
+      require(!object.isBroken() && world.fragmentSnapshot().empty(),
+              "uncached visuals must preserve intact legacy physics even after a large impulse");
+      }
+    }
+
+  void testRotatingFragments() {
+    CollisionWorld world;
+    // A single-sided terrain mesh, rather than a thick box that catches an
+    // already penetrating piece from below. The wedge has no asset dependency.
+    constexpr float slope=.00872686779f; // half a degree
+    JPH::TriangleList triangles;
+    // Triangle seams on mildly uneven ground reproduce rotational tunnelling;
+    // a single flat pair of triangles misses the failure even at the same spin.
+    const auto terrain=[](float x,float z) { return slope*x+.03f*std::sin(2.3f*x)*std::cos(1.7f*z); };
+    for(int x=-40;x<40;++x) for(int z=-40;z<40;++z) {
+      const auto point=[&](int dx,int dz) {
+        const float px=float(x+dx)*.5f,pz=float(z+dz)*.5f;
+        return JPH::Float3(px,terrain(px,pz),pz);
+        };
+      triangles.emplace_back(point(0,0),point(0,1),point(1,0));
+      triangles.emplace_back(point(1,0),point(0,1),point(1,1));
+      }
+    const auto floorShape=JPH::MeshShapeSettings(triangles).Create();
+    require(!floorShape.HasError(),"the fragment rotation fixture needs one-sided terrain");
+    auto floor=world.addCollisionBody(floorShape.Get(),at(0,0,0),.8f,DynamicWorld::C_Landscape);
+    const std::vector<JPH::Vec3> points={{-.15f,-.08f,-.16f},{.15f,-.08f,-.16f},
+                                       {-.15f,.40f,-.16f},{.15f,.40f,-.16f},
+                                       {-.15f,.40f,.16f},{.15f,.40f,.16f}};
+    const auto shape=JPH::ConvexHullShapeSettings(points.data(),int(points.size()),.001f).Create();
+    require(!shape.HasError(),"the fragment rotation wedge must have a native convex hull");
+    std::vector<std::unique_ptr<CollisionWorld::DynamicBody>> fragments;
+    for(int axis=0;axis<3;++axis) for(int orientation=0;orientation<8;++orientation) {
+      const float x=float(orientation-4)*250.f,z=float(axis-1)*250.f;
+      auto rotation=Tempest::Matrix4x4::mkIdentity();
+      rotation.rotateOX(float(orientation)*45.f);
+      rotation.rotateOZ(float(axis)*37.f);
+      float lowest=std::numeric_limits<float>::max();
+      for(const auto& point:points) {
+        Tempest::Vec3 rotated(point.GetX()*100.f,point.GetY()*100.f,point.GetZ()*100.f);
+        rotation.project(rotated);
+        lowest=std::min(lowest,rotated.y-slope*rotated.x);
+        }
+      auto matrix=at(x,slope*x-lowest+4.f,z);
+      matrix.mul(rotation);
+      auto body=world.addDynamicBody(shape.Get(),matrix,.8f,1.f,DynamicWorld::C_Fragment);
+      const Tempest::Vec3 omega=axis==0 ? Tempest::Vec3(47.f,0,0) :
+                                axis==1 ? Tempest::Vec3(0,0,47.f) : Tempest::Vec3(27.f,27.f,27.f);
+      body->setVelocity({0,-1000,0},omega);
+      fragments.push_back(std::move(body));
+      }
+    float lowestCenter=std::numeric_limits<float>::max();
+    for(int i=0;i<300;++i) {
+      world.tick(17);
+      for(const auto& body:fragments) {
+        const auto center=body->centerOfMass();
+        lowestCenter=std::min(lowestCenter,center.y-terrain(center.x*.01f,center.z*.01f)*100.f);
+        }
+      }
+    std::printf("Rotating fragments: %zu convex wedges, minimum centre over one-sided floor %.3f cm\n",
+                fragments.size(),double(lowestCenter));
+    require(lowestCenter>=0.f,"a rapidly rotating convex fragment must never fall through one-sided terrain");
     }
 
   void testMovableVobLegacyCollision() {
@@ -2540,6 +2775,8 @@ int main() {
     testMovableVobSave();
     testMovableTraceThresholds();
     testMovableVobArrowIdentity();
+    testDestruction();
+    testRotatingFragments();
     testPhysicsNoise();
     testRagdollNoise();
     testOffCenterImpulse();

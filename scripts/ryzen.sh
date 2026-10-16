@@ -120,8 +120,9 @@ build_storygraph() {
 
 build_engine() {
   local state="$1" digest="$2" started=$SECONDS
-  if [[ -x "$state/build/opengothic/Gothic2Notr" && -f "$state/build/source.sha256" ]] && \
-     [[ "$(cat "$state/build/source.sha256")" == "$digest" ]]; then
+  if [[ -x "$state/build/opengothic/Gothic2Notr" && -f "$state/build/source.sha256" && -f "$state/build/CMakeCache.txt" ]] && \
+     [[ "$(cat "$state/build/source.sha256")" == "$digest" ]] && \
+     grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$state/build/CMakeCache.txt"; then
     echo "Ryzen: engine unchanged, build skipped ($((SECONDS - started))s)"
     return
   fi
@@ -131,6 +132,7 @@ build_engine() {
   # Reconfigure on tree changes: OpenGothic's source globs need this for new .cpp files.
   cmake -S "$ROOT/OpenGothic" -B "$state/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DOPENGOTHIC_ENABLE_APP_CADENCE=ON \
     -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib" \
     >"$state/build/configure.log" 2>&1 || { cat "$state/build/configure.log"; return 1; }
   cmake --build "$state/build" --target Gothic2Notr --parallel "$jobs" \
@@ -485,8 +487,8 @@ PY
   # Preserve game options, translating paths into this run's output directory.
   while IFS= read -r name; do
     case "$name" in
-      GOTHIC_DIR|OPENGOTHIC_TEXTURES) continue ;;
-      OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL)
+      GOTHIC_DIR|OPENGOTHIC_TEXTURES|OPENGOTHIC_FRACTURE) continue ;;
+      OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|DESTRUCTION|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL)
         value="$(bench_path "${!name}")"
         ENV_ARGS+=("$name=$value") ;;
     esac
@@ -518,6 +520,24 @@ PY
   else
     # An explicit empty value disables HD textures, including on the remote host.
     ENV_ARGS+=("OPENGOTHIC_TEXTURES=$(bench_path "${OPENGOTHIC_TEXTURES}")")
+  fi
+  FRACTURE_CACHE="${OPENGOTHIC_FRACTURE-$HOME/.local/share/gothic-ai/fracture}"
+  if [[ -n "$FRACTURE_CACHE" ]]; then
+    FRACTURE_CACHE="$(python3 - "$FRACTURE_CACHE" <<'PY'
+import os
+import sys
+print(os.path.realpath(os.path.expanduser(sys.argv[1])))
+PY
+)"
+  fi
+  if [[ -n "$FRACTURE_CACHE" && -d "$FRACTURE_CACHE" ]]; then
+    # Keep this worktree's cache beside its source, away from other sessions.
+    remote mkdir -p "$STATE/fracture"
+    rsync -a --delete "$FRACTURE_CACHE/" "$RYZEN_HOST:$REMOTE/fracture/"
+    ENV_ARGS+=("OPENGOTHIC_FRACTURE=$STATE/fracture")
+  else
+    # Missing and explicitly disabled local caches must not select a remote default.
+    ENV_ARGS+=("OPENGOTHIC_FRACTURE=")
   fi
   rsync -a -- "$BENCH_SCENARIO" "$RYZEN_HOST:$REMOTE/inputs/$RUN/"
   if [[ -z "${WORLD:-}" ]]; then

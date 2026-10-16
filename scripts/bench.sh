@@ -20,9 +20,11 @@
 #      MOVABLE_VOBS  optional initial GAME movable_vobs setting (0 or 1), before world loading
 #      ARROW_STICKING optional initial GAME arrow_sticking setting (0 or 1), before world loading
 #      PHYSICS_NOISE optional initial GAME physics_noise setting (0 or 1), before world loading
+#      DESTRUCTION optional initial GAME destruction setting (0 or 1), before world loading
 #      CHARACTER_VIRTUAL optional initial GAME character_virtual setting (0 or 1), before world loading
 #      NPC_CHARACTER_VIRTUAL optional initial GAME npc_character_virtual setting (0 or 1)
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
+#      OPENGOTHIC_FRACTURE  pre-cut meshes (default: ~/.local/share/gothic-ai/fracture, when made; empty: none)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEFAULT_GOTHIC_DIR="/Volumes/DevSSD/Dev/games/Gothic II"
@@ -30,6 +32,7 @@ GOTHIC_DIR="${GOTHIC_DIR:-$DEFAULT_GOTHIC_DIR}"
 BIN="$ROOT/OpenGothic/build/opengothic/Gothic2Notr"
 GAME_BIN="${GAME_BIN:-$BIN}"
 HD_TEXTURES="$HOME/.local/share/gothic-ai/hd-textures/textures"
+FRACTURE_CACHE="$HOME/.local/share/gothic-ai/fracture"
 BENCH_HOST="${BENCH_HOST:-auto}"
 case "$BENCH_HOST" in
   auto|ryzen|local) ;;
@@ -65,7 +68,7 @@ out, textures = map(path, sys.argv[1:])
 for name, value in sorted(os.environ.items()):
     if not name.startswith(("OPENGOTHIC_", "GOTHIC_", "TEMPEST_")):
         continue
-    if name in ("GOTHIC_DIR", "GOTHIC_AI_URL"):
+    if name in ("GOTHIC_DIR", "GOTHIC_AI_URL", "OPENGOTHIC_FRACTURE"):
         continue
     if not value.startswith(("/", "~/")):
         continue
@@ -142,7 +145,7 @@ vidResIndex=$VID_RES_INDEX
 soundVolume=${SOUND:-0}
 musicVolume=${MUSIC:-0}
 EOF
-if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
+if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
   printf '\n[GAME]\n' >>"$RUN/Gothic.ini"
   if [[ -n "${MOVABLE_VOBS:-}" ]]; then
     [[ "$MOVABLE_VOBS" == 0 || "$MOVABLE_VOBS" == 1 ]] || { echo "MOVABLE_VOBS must be 0 or 1" >&2; exit 2; }
@@ -164,11 +167,18 @@ if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${CHARACTER_VIRT
     [[ "$PHYSICS_NOISE" == 0 || "$PHYSICS_NOISE" == 1 ]] || { echo "PHYSICS_NOISE must be 0 or 1" >&2; exit 2; }
     printf 'physics_noise=%s\n' "$PHYSICS_NOISE" >>"$RUN/Gothic.ini"
   fi
+  if [[ -n "${DESTRUCTION:-}" ]]; then
+    [[ "$DESTRUCTION" == 0 || "$DESTRUCTION" == 1 ]] || { echo "DESTRUCTION must be 0 or 1" >&2; exit 2; }
+    printf 'destruction=%s\n' "$DESTRUCTION" >>"$RUN/Gothic.ini"
+  fi
 fi
 
 # the sharper textures the launcher gives the game too (scripts/hd-textures.sh)
 if [[ -z "${OPENGOTHIC_TEXTURES+set}" && -d "$HD_TEXTURES" ]]; then
   export OPENGOTHIC_TEXTURES="$HD_TEXTURES"
+fi
+if [[ -z "${OPENGOTHIC_FRACTURE+set}" && -d "$FRACTURE_CACHE" ]]; then
+  export OPENGOTHIC_FRACTURE="$FRACTURE_CACHE"
 fi
 
 START=$(date +%s)

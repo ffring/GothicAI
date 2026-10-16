@@ -1,0 +1,21 @@
+# Matched original-body baseline. Configure DESTRUCTION=0 before world load.
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+noise on
+destruction off
+overlay off
+view full
+destruction setup five
+spell equip 23
+wait 1200
+cadence normal
+wait 34
+movable measure off
+destruction begin
+spell cast 600
+cadence wait
+destruction checkpoint
+movable report
