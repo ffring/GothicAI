@@ -107,6 +107,7 @@ void BodyArena::configure(const Config& config, uint64_t generation) {
                                 *config.wallClearanceCm<60.f || *config.wallClearanceCm>180.f)) ||
      !BodyArenaGeometry::validTangentSelection(config.wallTangentSign,config.geometry=="near_wall",bool(config.wallClearanceCm)) ||
      (config.reactionHold && (!acceptsReactionScenario(config.scenario) || config.loadFixture)) ||
+     (config.opponentOwned && (config.scenario!="native_duel" || config.loadFixture || config.reactionHold)) ||
      (config.loadFixture && (config.scenario!="native_duel" || config.geometry!="open" ||
                             config.distanceCm>400 || config.yawOffsetDeg!=0 || config.opponentYawOffsetDeg!=0 ||
                             config.separationYawDeg!=0 || config.centerOffsetCm[0]!=0 || config.centerOffsetCm[1]!=0)))
@@ -495,6 +496,7 @@ void BodyArena::sealInitialState() {
       << ",\"runner_generation\":" << state().generation
       << ",\"session_epoch\":" << BodyObservations::sessionEpoch() << ",\"world_epoch\":" << BodyObservations::worldEpoch();
   if(customSetup()) out << ",\"setup\":" << setupJson();
+  if(s.config.opponentOwned) out << ",\"opponent_owned\":true";
   if(s.config.reactionHold) out << ",\"reaction\":" << reactionJson();
   if(s.config.loadFixture) {
     out << ",\"load_fixture\":true,\"quality_credit\":false,\"real_actor_count\":4,\"actor_pairs\":[";
@@ -530,6 +532,7 @@ std::string BodyArena::statusJson() {
       << ",\"elapsed_game_ms\":" << elapsed << ",\"start_game_ms\":" << s.startTime << ",\"game_ms\":" << now
       << ",\"actors\":" << (s.finished ? s.finalActors : actorsJson()) << ",\"initial_state\":" << (s.initial.empty() ? "null" : s.initial);
   if(customSetup()) out << ",\"setup\":" << setupJson();
+  if(s.config.opponentOwned) out << ",\"opponent_owned\":true";
   if(s.config.reactionHold) out << ",\"reaction\":" << reactionJson();
   if(s.config.loadFixture) {
     out << ",\"load_fixture\":true,\"quality_credit\":false,\"real_actor_count\":4,\"actor_pairs\":[";
@@ -563,10 +566,12 @@ void BodyArena::start(std::string_view provider) {
         throw std::runtime_error("four-actor load ownership must match provider for every actual actor");
     }
   if(provider=="native" && (first || second)) throw std::runtime_error("native arena requires native ownership");
+  if(s.config.opponentOwned && (provider!="scripted" || !first || !second))
+    throw std::runtime_error("owned-opponent duel requires both scripted leases");
   if(provider=="native_with_scripted_opponent" && (first || !second || s.config.scenario=="native_duel"))
     throw std::runtime_error("native micro baseline requires native primary and scripted opponent");
   if(!s.config.loadFixture && provider=="scripted" && (!first || (s.config.scenario!="native_duel" && !second) ||
-                               (s.config.scenario=="native_duel" && second)))
+                               (s.config.scenario=="native_duel" && second!=s.config.opponentOwned)))
     throw std::runtime_error("scripted arena ownership does not match scenario");
   s.provider=provider; s.started=true; s.startTime=gameTime();
   auto& script=Gothic::inst().world()->script(); const auto attack=script.findSymbolIndex("ZS_ATTACK");
@@ -728,6 +733,7 @@ void BodyArena::noteControl(std::string_view encoded) {
   if(s.provider!="scripted" || s.config.scenario!="native_duel" || text("phase")!="ownership" ||
      (text("reason")!="release_pending" && text("reason")!="native_restored")) return;
   bool actorMatches=matches("entity_id",BodyObservations::entityId(*s.actors[0]));
+  if(s.config.opponentOwned) actorMatches=actorMatches || matches("entity_id",BodyObservations::entityId(*s.actors[1]));
   if(s.config.loadFixture) for(unsigned i=1;i<s.actorCount;++i)
     actorMatches=actorMatches || matches("entity_id",BodyObservations::entityId(*s.actors[i]));
   if(!actorMatches || !matches("session_epoch",BodyObservations::sessionEpoch()) || !matches("world_epoch",BodyObservations::worldEpoch())) return;

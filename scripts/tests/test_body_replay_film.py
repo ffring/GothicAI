@@ -9,13 +9,15 @@ import sys
 SCRIPT = Path(__file__).resolve().parents[1]/"body_replay_film.py"
 
 
-def write(folder, setup=None):
+def write(folder, setup=None, owned=False):
     folder.mkdir(parents=True)
     lines = lambda rows: "".join(json.dumps(row)+"\n" for row in rows)
     initial = {"scenario": "native_duel", "seed": 90014, "side": 0, "distance_cm": 400, "timeout_ms": 60000,
-               "primary_entity_id": 1}
+               "primary_entity_id": 1, "opponent_entity_id": 2}
     if setup:
         initial["setup"] = setup
+    if owned:
+        initial["opponent_owned"] = True
     final = {**initial, "outcome": "death_or_down", "reason": "opponent_down", "elapsed_game_ms": 16133}
     (folder/"arena-events.jsonl").write_text(lines([{"kind": "reset_ready", "arena": initial}, {"kind": "terminal", "arena": final}]))
     command = {"provider": "stage9-rl", "goal_version": 1, "target_entity_id": 2, "ttl_ms": 100}
@@ -59,3 +61,13 @@ def test_a_wall_arena_keeps_its_reset_fields_but_not_the_placement_proof(tmp_pat
     arena = json.loads((tmp_path/"film/wall/replay.json").read_text())["arena"]
     assert arena["geometry"] == "near_wall" and arena["center_offset_cm"] == [0, 0]
     assert "geometry_proof" not in arena and "schema_version" not in arena
+
+
+def test_a_self_play_duel_replays_both_actors_in_accepted_order(tmp_path):
+    write(tmp_path/"ep", owned=True)
+    subprocess.run([sys.executable, str(SCRIPT), "prepare", f"sp={tmp_path/'ep'}", "--output", str(tmp_path/"film")],
+                   check=True, capture_output=True)
+    replay = json.loads((tmp_path/"film/sp/replay.json").read_text())
+    assert replay["arena"]["opponent_owned"] is True
+    assert [(c["step"], c["action_id"], c.get("actor", "primary")) for c in replay["commands"]] == [
+        (1, 1, "primary"), (2, 6, "opponent"), (28, 6, "primary")]

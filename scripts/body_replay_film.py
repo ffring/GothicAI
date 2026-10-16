@@ -14,7 +14,8 @@ recording before anyone looks at it.
 
 Replay file: {"arena": {scenario, seed, side, distance_cm, timeout_ms[, geometry, ...]}, "provider",
 "commands": [{step, command_id, action_id, goal_version, target_entity_id, observation_seq,
-ttl_ms}]}, where step counts the native steps after the reset sample (arena_start is step 0).
+ttl_ms[, actor: "opponent"]}]}, where step counts the native steps after the reset sample (arena_start
+is step 0). A self-play duel (arena opponent_owned) also replays the opponent's commands.
 """
 from __future__ import annotations
 
@@ -44,18 +45,22 @@ def replay_file(episode: Path) -> dict:
     arena = rows(episode/"arena-events.jsonl")
     initial = next(row["arena"] for row in arena if row.get("kind") == "reset_ready")
     terminal = next((row["arena"] for row in arena if row.get("kind") == "terminal"), None)
-    primary = initial["primary_entity_id"]
+    primary, opponent = initial["primary_entity_id"], initial.get("opponent_entity_id")
+    owned = initial.get("opponent_owned") is True
     # The reset sample is the first observation row: its step is the arena's step zero.
     start = rows(episode/"observations.jsonl")[0]["sim_step"]
+    # In a self-play duel the opponent's commands too, in the order the runner accepted them.
+    actors = {primary: "primary", **({opponent: "opponent"} if owned else {})}
     accepted = [row for row in rows(episode/"body-control-events.jsonl")
-                if row.get("entity_id") == primary and row.get("phase") == "accepted"]
+                if row.get("entity_id") in actors and row.get("phase") == "accepted"]
     if initial["scenario"] != "native_duel" or not accepted:
         raise SystemExit(f"{episode}: not a policy-driven native duel")
     return {"schema_version": 1, "source": str(episode), "provider": accepted[0]["provider"],
             "arena": {**{key: initial[key] for key in ARENA_KEYS}, **{key: value for key, value in (initial.get("setup") or {}).items()
-                                                                  if key in SETUP_KEYS}},
+                                                                  if key in SETUP_KEYS}, **({"opponent_owned": True} if owned else {})},
             "outcome": {key: terminal.get(key) for key in ("outcome", "reason", "elapsed_game_ms")} if terminal else None,
-            "commands": [{"step": row["sim_step"]-start, **{key: row[key] for key in COMMAND_KEYS}} for row in accepted]}
+            "commands": [{"step": row["sim_step"]-start, **{key: row[key] for key in COMMAND_KEYS},
+                          **({"actor": "opponent"} if actors[row["entity_id"]] == "opponent" else {})} for row in accepted]}
 
 
 def scene(scenario: Path, replay: Path, *, camera: str, tail_ms: int) -> str:

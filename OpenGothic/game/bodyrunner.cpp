@@ -186,6 +186,10 @@ public:
         if(!arena["load_fixture"].IsBool()) throw std::runtime_error("arena load_fixture must be boolean");
         arenaConfig->loadFixture=arena["load_fixture"].GetBool();
         }
+      if(arena.HasMember("opponent_owned")) {
+        if(!arena["opponent_owned"].IsBool()) throw std::runtime_error("arena opponent_owned must be boolean");
+        arenaConfig->opponentOwned=arena["opponent_owned"].GetBool();
+        }
       if(arena.HasMember("reaction_hold")) {
         if(!arena["reaction_hold"].IsBool()) throw std::runtime_error("arena reaction_hold must be boolean");
         arenaConfig->reactionHold=arena["reaction_hold"].GetBool();

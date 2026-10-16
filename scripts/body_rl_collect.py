@@ -16,6 +16,17 @@ episode forks right before `bodyarena`. Between decisions the runner advances on
 the tick where the per-tick loop would decide next; --per-tick keeps one round trip per tick.
 The world outside the arena is frozen and the actors draw their own script randomness: such a
 rollout equals the realtime driver in the live world with OPENGOTHIC_BODY_SCRIPT_RNG=isolated.
+
+Stage 9.3 additions. --opponent gives frozen checkpoints of a self-play pool: a duel against one of
+them owns both actors (arena opponent_owned), the opponent's rows go to its own runtime and it
+samples at --opponent-temperature; --native-share of the duels keep the native opponent. The engine
+starts each owned command in its actor's own tick and the opponent ticks first, so on a shared
+decision tick its command can start and close the primary's mask (mask_changed_before_start): the
+seat matters. --learner-seat random puts the learner in either one; its summary (reason, health,
+score) is then from the learner's side, with the arena's own reason kept as arena_reason.
+--wall-share mixes near_wall arenas into one collection. Each learner row also keeps its game time,
+both health fractions and, at a decision, the log-probability of the sampled action under the
+sampling distribution (PPO's behaviour policy).
 """
 from __future__ import annotations
 
@@ -68,13 +79,34 @@ def score(summary: dict, timeout_ms: int) -> float:
     return outcome+0.5*margin+speed
 
 
-def sample_action(scores: list[float], mask: list[bool], temperature: float, rng: random.Random) -> int:
+def sample_action(scores: list[float], mask: list[bool], temperature: float, rng: random.Random) -> tuple[int, float]:
+    """The action and its log-probability under the sampling distribution (0 for the greedy argmax)."""
     allowed = [index for index in range(1, 12) if mask[index]]
     if temperature <= 0:
-        return max(allowed, key=lambda index: scores[index])
+        return max(allowed, key=lambda index: scores[index]), 0.0
     top = max(scores[index] for index in allowed)
     weights = [math.exp((scores[index]-top)/temperature) for index in allowed]
-    return rng.choices(allowed, weights=weights)[0]
+    action = rng.choices(allowed, weights=weights)[0]
+    return action, math.log(weights[allowed.index(action)]/sum(weights))
+
+
+def assign(tasks: list[list], *, seed: int, wall_share: float, opponents: list[str], native_share: float,
+           learner_seat: str) -> None:
+    """Append geometry, opponent and learner seat to each [task, seed, side, distance] from their own
+    seeded draws, so the task list itself is the same with or without them. Only duels meet the pool;
+    against the native opponent the learner is always the primary."""
+    schedule = random.Random(seed)
+    for entry in tasks:
+        wall, draw, pick, coin = schedule.random(), schedule.random(), schedule.randrange(max(1, len(opponents))), schedule.random()
+        entry.append("near_wall" if wall < wall_share else "open")
+        entry.append(opponents[pick] if opponents and entry[0] == "native_duel" and draw >= native_share else "native")
+        seat = learner_seat if learner_seat != "random" else ("primary" if coin < 0.5 else "opponent")
+        entry.append(seat if entry[-1] != "native" else "primary")
+
+
+def health(section) -> float:
+    value = section.get("hp_fraction") if isinstance(section, dict) else None
+    return float(value) if type(value) in (int, float) else -1.0
 
 
 class SharedBackend:
@@ -191,6 +223,15 @@ def run_worker(process: int, options: dict, env_shards: list[tuple[int, list[lis
     base = TorchBackend(options["checkpoint"], device="cpu", inference_cpu_threads=1)
     backend = SharedBackend(base, batched=options.get("inference", "exact") == "batched")
     checkpoint_sha256 = hashlib.sha256(Path(options["checkpoint"]).read_bytes()).hexdigest()
+    # The self-play pool: one frozen model per checkpoint, each row stepped alone.
+    pool = {path: (SharedBackend(TorchBackend(path, device="cpu", inference_cpu_threads=1), batched=False),
+                   hashlib.sha256(Path(path).read_bytes()).hexdigest()) for path in options.get("opponent") or []}
+
+    class Seat:
+        """One owned actor of an episode: its runtime, stream counter and sampling."""
+        def __init__(self, entity, runtime, temperature, rng, learner):
+            self.entity, self.runtime, self.temperature, self.rng, self.learner = entity, runtime, temperature, rng, learner
+            self.stream = 0
 
     def run_env(worker: int, tasks: list[list]) -> dict:
         base.torch.set_num_threads(1)  # per thread: keep the one-thread kernels of the realtime runtime
@@ -202,18 +243,24 @@ def run_worker(process: int, options: dict, env_shards: list[tuple[int, list[lis
                                          native_serial_workers=True,
                                          runner_extra_args=["--fork-reset"]+(["--fork-prefix"] if options.get("fork_prefix") else []))
         runner = LeanRunner(runner_args)
-        if options.get("geometry", "open") != "open":
-            runner.arena_options = {"geometry": options["geometry"]}  # merged into every arena reset
         # Training runtime: the fast packer (float-for-float equal to the gate's) and no provenance digests.
         lean = options.get("lean_runtime", True)
         policy = PolicyRuntime(backend=backend, checkpoint_sha256=checkpoint_sha256, max_actors=4, inference_cpu_threads=1,
                                lean=lean, feature_packer=fast_pack_features if lean else None)
         rng = random.Random(options["sampling_seed"]*1000+worker)
+        # The opponent's own stream of samples: the learner's stays as without a pool.
+        opponent_rng = random.Random(options["sampling_seed"]*1000+worker+500)
+        rivals = {path: PolicyRuntime(backend=model, checkpoint_sha256=digest, max_actors=4, inference_cpu_threads=1,
+                                      lean=lean, feature_packer=fast_pack_features if lean else None)
+                  for path, (model, digest) in pool.items()}
         summaries = []
         try:
-            for task, seed, side, distance in tasks:
+            for task, seed, side, distance, geometry, against, seat_role in tasks:
                 name = f"ep-{task}-{seed}-{side}-{distance}"
                 episode_dir = output/name
+                owned = against != "native"
+                runner.arena_options = {**({"geometry": geometry} if geometry != "open" else {}),
+                                        **({"opponent_owned": True} if owned else {})}  # merged into the reset
                 env = LeanEnv(runner, Path(options["scenario"]), owner_provider="stage9-rl")
                 env.command_ttl_ms = options.get("command_ttl_ms", 1000)
                 started = time.monotonic()
@@ -221,40 +268,50 @@ def run_worker(process: int, options: dict, env_shards: list[tuple[int, list[lis
                 initial = env.reset(output=episode_dir, task=task, seed=seed, side=side, distance_cm=distance,
                                     timeout_ms=timeout_ms, provider="scripted")
                 adversary_sent = task != "block"
-                reset_s = time.monotonic()-started
                 primary, opponent = initial["primary_entity_id"], initial["opponent_entity_id"]
-                policy.begin_episode(initial["session_epoch"], initial["world_epoch"], initial_game_ms=initial["game_ms"])
-                stream, rows, stats = 0, [], Counter()
+                me, rival = (primary, opponent) if seat_role == "primary" else (opponent, primary)
+                seats = [Seat(me, policy, options["temperature"], rng, True)]
+                if owned:
+                    env.acquire(opponent)
+                    seats.append(Seat(rival, rivals[against], options["opponent_temperature"], opponent_rng, False))
+                reset_s = time.monotonic()-started
+                for seat in seats:
+                    seat.runtime.begin_episode(initial["session_epoch"], initial["world_epoch"], initial_game_ms=initial["game_ms"])
+                by_entity = {seat.entity: seat for seat in seats}
+                rows, stats = [], Counter()
 
                 def feed(command_enabled):
-                    nonlocal stream
                     pulled, env.pulled = env.pulled, []
                     for row in pulled:
-                        if row.get("entity_id") != primary or row.get("periodic") is not True:
+                        seat = by_entity.get(row.get("entity_id"))
+                        if seat is None or row.get("periodic") is not True:
                             continue
-                        lease = env.leases.get(primary)
+                        lease = env.leases.get(seat.entity)
                         if lease is None or any(row.get(key) != lease[key] for key in LEASE_KEYS):
                             continue
-                        stream += 1
+                        seat.stream += 1
                         # A per-tick client processes each periodic row on its own tick: now == row time.
-                        response = policy.process({"stream_seq": stream, "observation": row, "source": "periodic_observer",
-                                                   "now_game_ms": row["t_game_ms"], "checkpoint_sha256": policy.checkpoint_sha256,
-                                                   "command_enabled": command_enabled,
-                                                   "memory_only": not command_enabled or row.get("can_decide") is not True})
+                        response = seat.runtime.process({"stream_seq": seat.stream, "observation": row, "source": "periodic_observer",
+                                                         "now_game_ms": row["t_game_ms"], "checkpoint_sha256": seat.runtime.checkpoint_sha256,
+                                                         "command_enabled": command_enabled,
+                                                         "memory_only": not command_enabled or row.get("can_decide") is not True})
                         if response.get("model_processed"):
-                            features = policy.last_features
-                            rows.append({"features": features, "mask": response["effective_action_mask"],
-                                         "reset": bool(response.get("hidden_reset")), "label": -1, "seq": row["observation_seq"]})
+                            if seat.learner:
+                                rows.append({"features": seat.runtime.last_features, "mask": response["effective_action_mask"],
+                                             "reset": bool(response.get("hidden_reset")), "label": -1, "seq": row["observation_seq"],
+                                             "logp": 0.0, "t": row["t_game_ms"], "hp": health(row.get("self")),
+                                             "target_hp": health(row.get("target"))})
                         elif response.get("status") == "fallback" and command_enabled:
-                            stats["fallbacks"] += 1
-                            env.release_to_native(primary, response.get("reason"))
+                            stats["fallbacks" if seat.learner else "opponent_fallbacks"] += 1
+                            env.release_to_native(seat.entity, response.get("reason"))
 
                 def watches():
-                    # Exactly the per-tick checks below: the primary on a periodic row, and the
+                    # Exactly the per-tick checks below: an owned actor on a periodic row, and the
                     # block task's held opponent while its single attack is still unsent.
                     out = []
-                    if primary in env.leases:
-                        out.append({**{key: env.leases[primary][key] for key in LEASE_KEYS}, "periodic": True})
+                    for seat in seats:
+                        if seat.entity in env.leases:
+                            out.append({**{key: env.leases[seat.entity][key] for key in LEASE_KEYS}, "periodic": True})
                     if not adversary_sent and opponent in env.leases:
                         out.append({**{key: env.leases[opponent][key] for key in LEASE_KEYS}, "periodic": False, "actions": [6, 2]})
                     return out
@@ -275,22 +332,29 @@ def run_worker(process: int, options: dict, env_shards: list[tuple[int, list[lis
                             adversary_sent = True
                         elif env.eligible(opponent, 2):
                             env.act(opponent, 2)
-                    row = env.latest.get(primary)
                     undecided = False
-                    if row is not None and row.get("periodic") is True and env.eligible(primary):
-                        response = policy.arbitrate(row, stream_seq=stream)
+                    for seat in (reversed(seats) if options.get("opponent_first") else seats):
+                        row = env.latest.get(seat.entity)
+                        if row is None or row.get("periodic") is not True or not env.eligible(seat.entity):
+                            continue
+                        response = seat.runtime.arbitrate(row, stream_seq=seat.stream)
                         if response.get("status") == "decision" and response.get("action_id") is not None:
-                            scores = policy.states[actor_identity(row)].scores
+                            scores = seat.runtime.states[actor_identity(row)].scores
                             allowed = [bool(a and b) for a, b in zip(response["effective_action_mask"], row["action_mask"])]
-                            action = sample_action(scores, allowed, options["temperature"], rng)
-                            env.act(primary, action)
+                            action, logp = sample_action(scores, allowed, seat.temperature, seat.rng)
+                            env.act(seat.entity, action)
+                            if not seat.learner:
+                                stats["opponent_decisions"] += 1
+                                continue
                             stats["decisions"] += 1
                             stats[f"action_{action}"] += 1
                             if rows and rows[-1]["seq"] == row["observation_seq"]:
-                                rows[-1]["label"] = action
+                                rows[-1]["label"], rows[-1]["logp"] = action, logp
+                                if allowed != rows[-1]["mask"]:
+                                    stats["sampling_mask_differs"] += 1
                         elif response.get("status") == "fallback":
-                            stats["fallbacks"] += 1
-                            env.release_to_native(primary, response.get("reason"))
+                            stats["fallbacks" if seat.learner else "opponent_fallbacks"] += 1
+                            env.release_to_native(seat.entity, response.get("reason"))
                         else:
                             # The runtime declined an eligible row: re-check it tick by tick, as before.
                             undecided = True
@@ -303,14 +367,19 @@ def run_worker(process: int, options: dict, env_shards: list[tuple[int, list[lis
                     if advanced == 0 and not (env.arena.get("terminated") or env.arena.get("truncated")):
                         raise ArenaInfrastructureError("rollout made no simulation progress")
                 final = env.status()
-                policy.end_episode(initial["session_epoch"], initial["world_epoch"])
+                for seat in seats:
+                    seat.runtime.end_episode(initial["session_epoch"], initial["world_epoch"])
                 actors = {actor["entity_id"]: actor for actor in final["actors"]}
                 start = {actor["entity_id"]: actor for actor in initial["actors"]}
                 summary = {"worker": worker, "name": name, "task": task, "seed": seed, "side": side, "distance_cm": distance,
-                           "reason": final.get("reason"), "outcome": final.get("outcome"),
-                           "elapsed_game_ms": final.get("elapsed_game_ms", 0),
-                           "primary_hp": actors[primary]["hp"], "primary_hp_max": start[primary].get("hp_max", start[primary]["hp"]),
-                           "opponent_hp": actors[opponent]["hp"], "opponent_hp_max": start[opponent].get("hp_max", start[opponent]["hp"]),
+                           "geometry": geometry, "opponent": against if not owned else (Path(against).stem if Path(against).stem != "best" else Path(against).parent.name),
+                           "opponent_sha256": pool[against][1] if owned else None,
+                           "learner_seat": seat_role, "arena_reason": final.get("reason"),
+                           "reason": final.get("reason") if seat_role == "primary" else
+                           {"primary_down": "opponent_down", "opponent_down": "primary_down"}.get(final.get("reason"), final.get("reason")),
+                           "outcome": final.get("outcome"), "elapsed_game_ms": final.get("elapsed_game_ms", 0),
+                           "primary_hp": actors[me]["hp"], "primary_hp_max": start[me].get("hp_max", start[me]["hp"]),
+                           "opponent_hp": actors[rival]["hp"], "opponent_hp_max": start[rival].get("hp_max", start[rival]["hp"]),
                            "rows": len(rows), "ticks": ticks, "reset_s": reset_s, "rollout_s": time.monotonic()-rollout_started,
                            "temperature": options["temperature"], "checkpoint_sha256": policy.checkpoint_sha256, **stats}
                 summary["success"] = success(summary)
@@ -320,7 +389,11 @@ def run_worker(process: int, options: dict, env_shards: list[tuple[int, list[lis
                                            features=numpy.asarray([row["features"] for row in rows], dtype=numpy.float32),
                                            masks=numpy.asarray([row["mask"] for row in rows], dtype=bool),
                                            resets=numpy.asarray([row["reset"] for row in rows], dtype=bool),
-                                           labels=numpy.asarray([row["label"] for row in rows], dtype=numpy.int16))
+                                           labels=numpy.asarray([row["label"] for row in rows], dtype=numpy.int16),
+                                           logp=numpy.asarray([row["logp"] for row in rows], dtype=numpy.float64),
+                                           t_ms=numpy.asarray([row["t"] for row in rows], dtype=numpy.int64),
+                                           hp=numpy.asarray([row["hp"] for row in rows], dtype=numpy.float32),
+                                           target_hp=numpy.asarray([row["target_hp"] for row in rows], dtype=numpy.float32))
                 summaries.append(summary)
                 with (output/"episodes.jsonl").open("a") as stream_file:
                     stream_file.write(json.dumps(summary)+"\n")
@@ -354,6 +427,17 @@ def main() -> int:
     parser.add_argument("--tasks", default="native_duel")
     parser.add_argument("--geometry", choices=("open", "near_wall"), default="open",
                         help="near_wall: the arena against a static wall, as the gate's screening")
+    parser.add_argument("--wall-share", type=float, default=None,
+                        help="share of near_wall arenas drawn per episode (default: all or none by --geometry)")
+    parser.add_argument("--opponent", type=Path, action="append", default=[],
+                        help="a frozen checkpoint of the self-play pool; duels against it own both actors")
+    parser.add_argument("--native-share", type=float, default=0.5,
+                        help="with --opponent: share of duels that keep the native opponent")
+    parser.add_argument("--opponent-temperature", type=float, default=1.0)
+    parser.add_argument("--learner-seat", choices=("random", "primary", "opponent"), default="random",
+                        help="the learner's actor in a duel against the pool (native duels: always primary)")
+    parser.add_argument("--opponent-first", action="store_true",
+                        help="when both owned actors decide on one tick, the opponent's command goes first")
     parser.add_argument("--start-substeps", type=int, default=1,
                         help="ticks before the first decision; 1 matches the realtime driver (9.2 rounds used 2)")
     parser.add_argument("--envs-per-worker", type=int, default=1,
@@ -380,6 +464,10 @@ def main() -> int:
         task = kinds[index % len(kinds)]
         distance = TASK_SETUP[task][0] if task in TASK_SETUP else distances[(index//2) % len(distances)]
         tasks.append([task, args.seed_start+index, (index//len(kinds)) % 2, distance])
+    wall_share = args.wall_share if args.wall_share is not None else float(args.geometry == "near_wall")
+    args.opponent = [str(path.resolve()) for path in args.opponent]
+    assign(tasks, seed=args.seed_start, wall_share=wall_share, opponents=args.opponent,
+           native_share=args.native_share, learner_seat=args.learner_seat)
     options = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
     (args.output/"collect.json").write_text(json.dumps({"schema_version": 1, "kind": "body_rl_collect",
                                                         "quality_credit": False, "options": options,
@@ -403,7 +491,12 @@ def main() -> int:
         entry = by_task.setdefault(row.get("task", "native_duel"), [0, 0])
         entry[0] += int(row.get("success", row["reason"] == "opponent_down"))
         entry[1] += 1
-    report = {"episodes": len(summaries), "wall_s": wall, "wins": wins,
+    against = Counter(row.get("opponent", "native") for row in summaries)
+    report = {"episodes": len(summaries), "wall_s": wall, "wins": wins, "opponents": dict(sorted(against.items())),
+              "wins_by_opponent": {name: sum(row["reason"] == "opponent_down" for row in summaries if row.get("opponent", "native") == name)
+                                   for name in sorted(against)},
+              "sampling_mask_differs": sum(row.get("sampling_mask_differs", 0) for row in summaries),
+              "opponent_fallbacks": sum(row.get("opponent_fallbacks", 0) for row in summaries),
               "success_by_task": {task: f"{done}/{total}" for task, (done, total) in sorted(by_task.items())}, "losses": sum(row["reason"] == "primary_down" for row in summaries),
               "timeouts": sum(row["reason"] not in ("opponent_down", "primary_down") for row in summaries),
               "mean_score": sum(row["score"] for row in summaries)/max(1, len(summaries)),

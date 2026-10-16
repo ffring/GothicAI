@@ -27,6 +27,7 @@
 namespace {
 struct Command final {
   uint64_t step=0, commandId=0, actionId=0, goal=0, target=0, observation=0, ttl=0;
+  unsigned actor=0; // 0 primary, 1 opponent (an owned-opponent duel)
   };
 
 struct Replay final {
@@ -35,7 +36,8 @@ struct Replay final {
   size_t next=0;
   std::string provider;
   uint64_t tailMs=0, startStep=0, endAt=0;
-  uint64_t entity=0, generation=0;
+  bool opponentOwned=false;
+  uint64_t entity[2]={0,0}, generation[2]={0,0};
   unsigned accepted=0, rejected=0, observationMismatches=0;
   std::ofstream observations, control, arena, log;
   };
@@ -65,12 +67,12 @@ void writeRow(std::ofstream& file, std::string_view row) {
   }
 
 // One body-control request, as the runner's IPC passes it to the common authority.
-rapidjson::Document request(std::string_view type, uint64_t generation) {
+rapidjson::Document request(std::string_view type, uint64_t entity, uint64_t generation) {
   auto& r=replay();
   rapidjson::Document d(rapidjson::kObjectType);
   auto& a=d.GetAllocator();
   d.AddMember("type",rapidjson::Value(type.data(),rapidjson::SizeType(type.size()),a),a);
-  d.AddMember("entity_id",r.entity,a);
+  d.AddMember("entity_id",entity,a);
   d.AddMember("session_epoch",BodyObservations::sessionEpoch(),a);
   d.AddMember("world_epoch",BodyObservations::worldEpoch(),a);
   d.AddMember("control_generation",generation,a);
@@ -95,7 +97,8 @@ std::string reason(const rapidjson::Document& reply) {
   }
 
 // The runner's reset tail and the driver's first calls: subscription, the sealed initial state,
-// the lease on the primary and the arena start, all between the setup step and the next one.
+// the lease on the primary (then the opponent's, in a self-play duel) and the arena start, all
+// between the setup step and the next one.
 void begin() {
   auto& r=replay();
   const auto actors=BodyArena::actors();
@@ -115,17 +118,19 @@ void begin() {
   BodyObservations::sampleAll();
   BodyArena::sealInitialState();
 
-  r.entity=BodyObservations::entityId(*actors[0]);
-  auto acquire=request("body_acquire",0);
-  auto& a=acquire.GetAllocator();
-  acquire.AddMember("target_entity_id",BodyObservations::entityId(*actors[1]),a);
-  acquire.AddMember("body_control",true,a);
-  acquire.AddMember("mode","lockstep",a);
-  acquire.AddMember("timeout_ms",uint64_t(5000),a);
-  const auto lease=call(acquire);
-  if(!accepted(lease))
-    throw std::runtime_error("bodyreplay: acquire rejected: "+reason(lease));
-  r.generation=lease["control_generation"].GetUint64();
+  for(unsigned i=0;i<(r.opponentOwned ? 2u : 1u);++i) {
+    r.entity[i]=BodyObservations::entityId(*actors[i]);
+    auto acquire=request("body_acquire",r.entity[i],0);
+    auto& a=acquire.GetAllocator();
+    acquire.AddMember("target_entity_id",BodyObservations::entityId(*actors[i^1]),a);
+    acquire.AddMember("body_control",true,a);
+    acquire.AddMember("mode","lockstep",a);
+    acquire.AddMember("timeout_ms",uint64_t(5000),a);
+    const auto lease=call(acquire);
+    if(!accepted(lease))
+      throw std::runtime_error("bodyreplay: acquire rejected: "+reason(lease));
+    r.generation[i]=lease["control_generation"].GetUint64();
+    }
   BodyArena::start("scripted");
   r.startStep=step;
   r.started=true;
@@ -133,12 +138,12 @@ void begin() {
 
 void issue(const Command& c) {
   auto& r=replay();
-  auto* actor=BodyObservations::findEntity(r.entity);
+  auto* actor=BodyObservations::findEntity(r.entity[c.actor]);
   const uint64_t seq=actor!=nullptr ? BodyObservations::latestSequence(*actor) : 0;
   const uint64_t observed=actor!=nullptr ? BodyObservations::latestGameMs(*actor) : 0;
   if(seq!=c.observation)
     ++r.observationMismatches;
-  auto action=request("body_action",r.generation);
+  auto action=request("body_action",r.entity[c.actor],r.generation[c.actor]);
   auto& a=action.GetAllocator();
   action.AddMember("goal_version",c.goal,a);
   action.AddMember("target_entity_id",c.target,a);
@@ -150,7 +155,7 @@ void issue(const Command& c) {
   const auto reply=call(action);
   if(accepted(reply)) ++r.accepted; else ++r.rejected;
   std::ostringstream row;
-  row << "{\"kind\":\"replay_command\",\"step\":" << c.step << ",\"command_id\":" << c.commandId
+  row << "{\"kind\":\"replay_command\",\"actor\":" << c.actor << ",\"step\":" << c.step << ",\"command_id\":" << c.commandId
       << ",\"action_id\":" << c.actionId << ",\"recorded_observation_seq\":" << c.observation
       << ",\"observation_seq\":" << seq << ",\"t_game_ms\":" << gameTime()
       << ",\"accepted\":" << (accepted(reply) ? "true" : "false") << ",\"reason\":\"" << reason(reply) << "\"}";
@@ -186,6 +191,7 @@ void BodyReplay::load(const std::string& path, const std::string& outDir, uint64
   config.scenario=arena.HasMember("scenario") && arena["scenario"].IsString() ? arena["scenario"].GetString() : "";
   if(config.scenario!="native_duel")
     throw std::runtime_error("bodyreplay: only native_duel episodes are replayed");
+  config.opponentOwned=arena.HasMember("opponent_owned") && arena["opponent_owned"].IsBool() && arena["opponent_owned"].GetBool();
   config.seed=uint32_t(field(arena,"seed"));
   config.side=unsigned(field(arena,"side"));
   config.distanceCm=float(field(arena,"distance_cm"));
@@ -212,6 +218,11 @@ void BodyReplay::load(const std::string& path, const std::string& outDir, uint64
     c.step=field(item,"step"); c.commandId=field(item,"command_id"); c.actionId=field(item,"action_id");
     c.goal=field(item,"goal_version"); c.target=field(item,"target_entity_id");
     c.observation=field(item,"observation_seq"); c.ttl=field(item,"ttl_ms");
+    if(item.HasMember("actor") && item["actor"].IsString() && std::string_view(item["actor"].GetString())=="opponent") {
+      if(!config.opponentOwned)
+        throw std::runtime_error("bodyreplay: an opponent command needs arena opponent_owned");
+      c.actor=1;
+      }
     if(!r.commands.empty() && c.step<r.commands.back().step)
       throw std::runtime_error("bodyreplay: commands must be ordered by step");
     r.commands.push_back(c);
@@ -240,7 +251,8 @@ void BodyReplay::load(const std::string& path, const std::string& outDir, uint64
   BodyObservations::beginStep(step);
   BodyArena::configure(config,1);
   r.next=0; r.accepted=r.rejected=r.observationMismatches=0;
-  r.tailMs=tailMs; r.endAt=0; r.started=false; r.generation=0;
+  r.tailMs=tailMs; r.endAt=0; r.started=false; r.opponentOwned=config.opponentOwned;
+  r.entity[0]=r.entity[1]=r.generation[0]=r.generation[1]=0;
   r.active=true;
   }
 
@@ -263,9 +275,11 @@ void BodyReplay::postStep() {
     BodyObservations::drainJson();
     BodyController::drainJson();
     if(!BodyArena::complete()) {
-      const auto heartbeat=call(request("body_heartbeat",r.generation));
-      if(!accepted(heartbeat) && reason(heartbeat)!="release_pending")
-        throw std::runtime_error("bodyreplay: heartbeat rejected: "+reason(heartbeat));
+      for(unsigned i=0;i<(r.opponentOwned ? 2u : 1u);++i) {
+        const auto heartbeat=call(request("body_heartbeat",r.entity[i],r.generation[i]));
+        if(!accepted(heartbeat) && reason(heartbeat)!="release_pending")
+          throw std::runtime_error("bodyreplay: heartbeat rejected: "+reason(heartbeat));
+        }
       const auto step=BodyObservations::currentStep()-r.startStep;
       while(r.next<r.commands.size() && r.commands[r.next].step<=step)
         issue(r.commands[r.next++]);

@@ -5,9 +5,10 @@
 #include <string_view>
 
 // Bench-only: a recorded lockstep arena episode replayed in the rendered game, to film a policy's
-// duel. The headless runner records the primary's accepted commands (body-control-events.jsonl).
-// The replay configures the arena from the same reset, lets the bench set it up at the same line,
-// acquires the primary as the lockstep driver did and issues each command after the same number of
+// duel. The headless runner records the primary's accepted commands (body-control-events.jsonl),
+// in a self-play duel (arena opponent_owned) the opponent's too. The replay configures the arena
+// from the same reset, lets the bench set it up at the same line, acquires the primary (and the
+// owned opponent) as the lockstep driver did and issues each command after the same number of
 // steps, through the ordinary body authority. It writes the runner's journals next to the bench
 // output, so the replay is checked against the recording (scripts/body_schedule_equivalence.py)
 // rather than trusted. File format: scripts/body_replay_film.py.

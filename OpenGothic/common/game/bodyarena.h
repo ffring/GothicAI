@@ -28,6 +28,7 @@ class BodyArena final {
       std::optional<int> wallTangentSign; // near-wall + explicit clearance only; absent retains candidate order
       bool loadFixture = false; // four real actors, raised HP, no combat-quality credit
       bool reactionHold = false; // block/reset_stress common preparation, before any defender decision
+      bool opponentOwned = false; // native_duel: the opponent is owned too (self-play), no native ZS_ATTACK
       };
     struct ReactionRequest final {
       uint64_t session=0,world=0,primary=0,opponent=0,primaryGeneration=0,opponentGeneration=0,observation=0,game=0;
