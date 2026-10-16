@@ -11,7 +11,7 @@ OUT=/absolute/results CACHE=/absolute/cache [CV=0|1] [LINKS=/absolute/accepted-l
   ./run.sh coverage
 
 START is zero-based in the original 204 pairs or 34 missing edges. Defaults:
-teacher START=0 COUNT=34; probe START=0 COUNT=6. Already completed samples are
+teacher START=0 COUNT=17; probe START=0 COUNT=2. Already completed samples are
 skipped automatically (--resume is also accepted). Use separate OUT directories
 for CV=0 and CV=1, and for each teacher implementation or set of LINKS.
 
@@ -165,7 +165,7 @@ try:
         pairs = list(rows(pairs_path))
         if len(pairs) != 204:
             raise RuntimeError(f'Expected the exact original 204 pairs, got {len(pairs)}')
-        count = options.count if options.count is not None else 34
+        count = options.count if options.count is not None else 17
         completed = {row['pair'] for row in previous_trials}
         for index in range(options.start, min(options.start + count, len(pairs))):
             if index in completed:
@@ -193,7 +193,7 @@ try:
         gaps = [(index, row) for index, row in enumerate(rows(coverage_path)) if not edge_fields(row)[2]]
         if len(gaps) != 34:
             raise RuntimeError(f'Expected the original 34 missing edges, got {len(gaps)}')
-        count = options.count if options.count is not None else 6
+        count = options.count if options.count is not None else 2
         completed = {row['edge'] for row in previous_probes}
         for gap in range(options.start, min(options.start + count, len(gaps))):
             edge, source = gaps[gap]

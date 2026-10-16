@@ -103,7 +103,7 @@ void finishSession(const std::string& reason) {
 uint32_t linkId(const Attempt& a) {
   // Stable across separate per-edge runner processes; no implementation-defined hash.
   uint32_t value=2166136261u;
-  for(unsigned char ch:session.from+"/"+session.to) {value^=ch;value*=16777619u;}
+  for(char ch:session.from+"/"+session.to) {value^=static_cast<unsigned char>(ch);value*=16777619u;}
   value^=uint32_t(a.candidate*8+size_t(a.reverse)*4+size_t(a.type));
   value*=16777619u;
   return value==0?1:value;
@@ -220,7 +220,9 @@ bool NavTransitions::command(const std::vector<std::string>& args,World& world,N
       // A drop is meaningful only downwards; jump and native climb are independent attempts.
       if(end[1]<start[1]-.2f) session.attempts.push_back({start,end,NavMesh::LinkType::Drop,i,reverse});
       session.attempts.push_back({start,end,NavMesh::LinkType::Jump,i,reverse});
-      if(end[1]>start[1]+.15f) session.attempts.push_back({start,end,NavMesh::LinkType::Climb,i,reverse});
+      // A level or lower landing may still require climbing over an intervening wall.
+      // Let tryJump/startClimb decide, independently of endpoint height.
+      session.attempts.push_back({start,end,NavMesh::LinkType::Climb,i,reverse});
       }
     }
   session.active=true;
