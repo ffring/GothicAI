@@ -43,6 +43,7 @@
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
+#include "game/navigationeyebench.h"
 #include "game/serialize.h"
 #include "game/ragdollsave.h"
 #include "game/definitions/sounddefinitions.h"
@@ -4902,6 +4903,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     return;
   const std::string& c = a[0];
 
+  // Navigation-eye commands are independent of navigation mesh and body rays.
+  if(c=="eye") {
+    try {
+      event("eye_command","\"sample\":"+NavigationEyeBench::command(a,w,pl,outDir));
+    } catch(const std::exception& error) {
+      event("eye_error","\"reason\":"+jsonStr(error.what()));
+      arenaAbort(error.what());
+    }
+    return;
+  }
   if(c=="navmesh") {
     bench.navigationOnly = true;
     if(a.size()!=2 || a[1]!="wait") NavBench::command(a,w,pl,outDir);
@@ -9907,6 +9918,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
   npcCharacterStopMotionTrace(Gothic::inst().world());
+  NavigationEyeBench::reset();
   NavBench::reset();
   stopRecording();
   if(bench.csv!=nullptr)
@@ -9924,7 +9936,8 @@ void TestBench::configure(std::string scenario, std::string output, int64_t seed
   configuredScenario = std::move(scenario);
   scenarioPath = configuredScenario.c_str();
   outDir = std::move(output);
-  bodyTrace = bodyTrace || Resources::isHeadless();
+  const auto traceSetting = envStr("OPENGOTHIC_BODY_TRACE");
+  bodyTrace = traceSetting!=nullptr ? std::string_view(traceSetting)=="1" : bodyTrace || Resources::isHeadless();
   Pose::probeNpc = nullptr;
   loadScenario();
   if(seedOverride>=0) {
@@ -10251,6 +10264,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   if(dt==0)
     return false;
   NavBench::tick(*world);
+  NavigationEyeBench::tick(world->tickCount());
   arrowFields(*world);
   stickingFields(*world);
   spellFields(*world);

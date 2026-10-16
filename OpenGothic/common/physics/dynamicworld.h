@@ -215,6 +215,13 @@ class DynamicWorld final {
       Npc* npcHit = nullptr;
       };
 
+    enum class NavigationHit : uint8_t { None, World, StaticVob, MovableVob, Npc, Water };
+    struct NavigationRayResult {
+      bool hasCol = false;
+      Tempest::Vec3 point = {}, normal = {};
+      NavigationHit kind = NavigationHit::None;
+      };
+
     struct MovableVobPose {
       uint32_t zenId = uint32_t(-1);
       std::string visual;
@@ -324,6 +331,8 @@ class DynamicWorld final {
     RayLandResult  ray          (const Tempest::Vec3& from, const Tempest::Vec3& to) const;
     RayLandResult  sweep        (const Tempest::Vec3& from, const Tempest::Vec3& to, float R) const;
     RayQueryResult rayNpc       (const Tempest::Vec3& from, const Tempest::Vec3& to, const Npc* except) const;
+    // Physical Jolt hulls used by bodies, plus water and NPC rigs; no duplicate visual meshes.
+    NavigationRayResult navigationRay(const Tempest::Vec3& from, const Tempest::Vec3& to, const Npc* except) const;
     // where an arrow aimed by hand would stop flying straight from-to: the first npc 'hit' takes (it says
     // how far along, t), else the ground; v: the point
     RayQueryResult rayArrow     (const Tempest::Vec3& from, const Tempest::Vec3& to,

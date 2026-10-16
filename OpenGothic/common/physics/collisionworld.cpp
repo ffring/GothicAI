@@ -1069,6 +1069,12 @@ float CollisionWorld::CollisionBody::mass() const {
   return 1.f/lock.GetBody().GetMotionProperties()->GetInverseMass();
   }
 
+bool CollisionWorld::CollisionBody::isMovable() const {
+  if(owner==nullptr || id.IsInvalid()) return false;
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  return lock.Succeeded() && !lock.GetBody().IsStatic();
+  }
+
 Tempest::Vec3 CollisionWorld::CollisionBody::velocity() const {
   if(owner==nullptr || id.IsInvalid()) return {};
   JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
@@ -1263,9 +1269,17 @@ void CollisionWorld::fillRagdoll(QueryResult& result, JPH::BodyID native) const 
     }
   }
 
+int CollisionWorld::navigationBodyCategory(JPH::BodyID native) const {
+  if(native.IsInvalid())
+    return 0;
+  JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),native);
+  return lock.Succeeded() ? int(lock.GetBody().GetObjectLayer()) : 0;
+  }
+
 CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
                                                     bool backfaces, std::vector<QueryResult>* all,
-                                                    const std::vector<const CollisionBody*>* excluded) const {
+                                                    const std::vector<const CollisionBody*>* excluded,
+                                                    const Ragdoll* excludedRig) const {
   impl->rayCount.fetch_add(1,std::memory_order_relaxed);
   QueryResult result;
   if(all!=nullptr)
@@ -1281,7 +1295,14 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
   settings.SetBackFaceMode(backfaces ? JPH::EBackFaceMode::CollideWithBackFaces : JPH::EBackFaceMode::IgnoreBackFaces);
   QueryLayerFilter filter(mask);
   QueryBroadPhaseFilter broadFilter(mask);
-  JPH::IgnoreMultipleBodiesFilter bodyFilter;
+  struct RayBodyFilter final : JPH::IgnoreMultipleBodiesFilter {
+    const Ragdoll* rig = nullptr;
+    bool ShouldCollide(const JPH::BodyID& id) const override {
+      return JPH::IgnoreMultipleBodiesFilter::ShouldCollide(id) &&
+             (rig==nullptr || rig->boneForBodyId(id.GetIndexAndSequenceNumber())==size_t(-1));
+      }
+    } bodyFilter;
+  bodyFilter.rig = excludedRig;
   if(excluded!=nullptr)
     for(auto* body:*excluded)
       if(body!=nullptr)
@@ -1301,6 +1322,7 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
     const auto& body = lock.GetBody();
     value.hasHit = true;
     value.fraction = hit.mFraction;
+    value.nativeBodyId = hit.mBodyID;
     value.body = reinterpret_cast<CollisionBody*>(body.GetUserData());
     value.point = toCentimeters(origin*(1.f-hit.mFraction)+end*hit.mFraction);
     const auto normal = body.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2,ray.GetPointOnRay(hit.mFraction));
