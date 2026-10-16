@@ -200,6 +200,7 @@ class DynamicWorld final {
     struct BulletWorldHit {
       Tempest::Vec3          point = {}; // world centimetres
       Tempest::Vec3          normal = {}; // unit world normal, unchanged winding
+      Tempest::Vec3          incoming = {}; // original flight segment, before any reflection
       zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
       // Borrowed only for onWorldHit; game code owns the attachment lifetime.
       Ragdoll*              ragdoll = nullptr;
@@ -319,6 +320,10 @@ class DynamicWorld final {
     void           setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback);
     void           saveMovableVobs(Serialize& fout) const;
     void           loadMovableVobs(Serialize& fin);
+    // Absolute game minutes. Trace creation is recorded at the physics tick,
+    // independently of which NPC happens to inspect the body.
+    void           setTraceTime(int64_t minutes);
+    bool           setMovableVobTransform(uint32_t zenId, const Tempest::Matrix4x4& matrix, Npc* culprit = nullptr);
     std::shared_ptr<const MovableVobPose> movableVobPose(uint32_t zenId) const;
     std::shared_ptr<const MovableVobPose> rayMovableVob(const Tempest::Vec3& from, const Tempest::Vec3& to) const;
     struct MovableVobSnapshot {
@@ -329,6 +334,11 @@ class DynamicWorld final {
       float              mass = 0;
       Tempest::Matrix4x4 transform, origin;
       Tempest::Vec3      velocity;
+      Tempest::Vec3      localBounds[2];
+      bool               trace = false, tilted = false;
+      int64_t            traceTime = -1;
+      // Engine/save truth only; never serialize this field into npc_view.
+      std::string        traceCulprit;
       };
     std::vector<MovableVobSnapshot> movableVobSnapshot() const;
     // callback returns a world-space impulse in newton seconds; target is the
@@ -391,6 +401,7 @@ class DynamicWorld final {
     std::unique_ptr<BulletsList>       bulletList;
     std::unique_ptr<BBoxList>          bboxList;
     std::unique_ptr<MovableVobs>       movableVobs;
+    int64_t                           traceTime = -1;
 
     static const float                 worldHeight;
   };

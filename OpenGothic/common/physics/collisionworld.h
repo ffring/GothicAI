@@ -57,6 +57,10 @@ class CollisionWorld final {
         bool                addImpulseAtPoint(const Tempest::Vec3& impulseNs, const Tempest::Vec3& pointCm,
                                               Npc* culprit = nullptr);
         void                setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what);
+        // The latest engine-known cause survives the short noise attribution
+        // window and NPC destruction, until a new impulse replaces it.
+        void                setTraceCulprit(Npc* culprit);
+        const std::string&  traceCulprit() const { return traceCause; }
         Tempest::Vec3       centerOfMass() const;
         bool                touchedByNpc() const { return npcContact.load(std::memory_order_relaxed); }
 
@@ -83,6 +87,7 @@ class CollisionWorld final {
         std::weak_ptr<zenkit::INpc> noiseCulprit;
         uint64_t            noiseCulpritUntilStep = 0;
         uint64_t            nextNoiseStep = 0;
+        std::string         traceCause;
 
       friend class CollisionWorld;
       friend class DynamicBody;

@@ -32,6 +32,8 @@ constexpr float    NoticeRange  = 1500;  // cm: this close it notices someone ou
 constexpr size_t   ItemLimit    = 6;     // things lying about in one view (v22)
 constexpr float    ItemRange    = 1500;  // cm: things lying further off are not told of
 constexpr float    UnderFoot    = 300;   // cm: this close it notices a thing out of its field of view too
+constexpr size_t   TraceLimit   = 6;
+constexpr float    TraceRange   = 1500;  // cm: visible physical evidence
 
 using Writer = rapidjson::Writer<rapidjson::StringBuffer>;
 
@@ -221,6 +223,53 @@ void writeItems(Writer& w, World& world, Npc& npc, float range) {
   w.EndArray();
   }
 
+void writeTraces(Writer& w, World& world, Npc& npc, float range) {
+  struct SeenTrace { const World::PhysicsTrace* trace; float dist; };
+  const auto traces = world.physicsTraces();
+  std::vector<SeenTrace> seen;
+  const auto maxRange = std::min(range,TraceRange);
+  for(const auto& trace:traces) {
+    const auto dist = (trace.position-npc.position()).length();
+    if(dist>maxRange)
+      continue;
+    const bool visible = std::any_of(trace.sightPoints.begin(),trace.sightPoints.end(),[&](const Tempest::Vec3& p) {
+      return npc.canRayHitPoint(p,false);
+      });
+    if(visible)
+      seen.push_back({&trace,dist});
+    }
+  std::sort(seen.begin(),seen.end(),[](const SeenTrace& a,const SeenTrace& b) { return a.dist<b.dist; });
+  if(seen.size()>TraceLimit)
+    seen.resize(TraceLimit);
+  const auto now = world.time();
+  const int64_t minute = now.day()*24*60+now.hour()*60+now.minute();
+  const auto* pl = world.player();
+  key(w,"traces");
+  w.StartArray();
+  for(const auto& seenTrace:seen) {
+    const auto& trace = *seenTrace.trace;
+    w.StartObject();
+    // Deliberate field list: the engine's culprit is never part of perception.
+    str(w,"id",trace.id);
+    str(w,"kind",trace.kind);
+    str(w,"name",trace.name); // engine trace labels are UTF-8
+    if(const auto* waypoint = world.findWayPoint(trace.position))
+      str(w,"waypoint",waypoint->name);
+    w.Key("distance"); w.Double(std::round(double(seenTrace.dist)));
+    w.Key("age");
+    if(trace.appearedAt<0)
+      w.Null(); // records written before trace metadata do not reveal their age
+    else
+      w.Int64(std::max(int64_t(0),minute-trace.appearedAt));
+    if(pl!=nullptr) {
+      w.Key("hero_cm"); w.Double(std::round(double((trace.position-pl->position()).length())));
+      str(w,"from_hero",fromHero(*pl,trace.position));
+      }
+    w.EndObject();
+    }
+  w.EndArray();
+  }
+
 void writeView(Writer& w, World& world, Npc& npc) {
   Npc* pl = world.player();
   w.StartObject();
@@ -287,6 +336,7 @@ void writeView(Writer& w, World& world, Npc& npc) {
     }
   w.EndArray();
   writeItems(w,world,npc,range);
+  writeTraces(w,world,npc,range);
   w.EndObject();
   }
 

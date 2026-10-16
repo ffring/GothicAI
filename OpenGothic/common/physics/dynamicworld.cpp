@@ -58,6 +58,27 @@ double volumeScale(const Tempest::Matrix4x4& matrix) {
                   double(m[8])*(double(m[1])*m[6]-double(m[5])*m[2]));
   }
 
+bool noticeableMovableTrace(const Tempest::Matrix4x4& origin, const Tempest::Matrix4x4& current, bool& tilted) {
+  double originLength=0.,currentLength=0.,dot=0.;
+  for(int component=0;component<3;++component) {
+    const double a=origin.at(1,component),b=current.at(1,component);
+    originLength+=a*a;
+    currentLength+=b*b;
+    dot+=a*b;
+    }
+  // Compare the original and current local up axes, so rotating around the
+  // upright axis cannot turn a table in place into a fallen-table trace.
+  // Float matrices and the native quaternion roundtrip can put exactly 30
+  // degrees a few ulps over the boundary.
+  tilted = originLength>0. && currentLength>0. && dot/std::sqrt(originLength*currentLength)<0.8660254037844386-1.e-6;
+  double displacement=0.;
+  for(int component=0;component<3;++component) {
+    const double delta=double(current.at(3,component))-origin.at(3,component);
+    displacement+=delta*delta;
+    }
+  return displacement>50.*50. || tilted;
+  }
+
 DynamicWorld::RayLandResult toResult(const CollisionWorld::QueryResult& hit, const Tempest::Vec3& to) {
   DynamicWorld::RayLandResult ret = {};
   ret.hasCol      = hit.hasHit;
@@ -120,6 +141,10 @@ struct DynamicWorld::BodyData {
   float movableMass = 0.f, massMultiplier = 1.f;
   bool blocksWalking = false, legacyCollision = true;
   bool wasSleeping = true;
+  Tempest::Vec3 localBounds[2];
+  bool trace = false, tilted = false;
+  int64_t traceTime = -1;
+  std::string traceCulprit;
   std::function<void(const Tempest::Matrix4x4&)> transformCallback;
   };
 
@@ -931,6 +956,8 @@ DynamicWorld::Item DynamicWorld::addMovableVob(const ProtoMesh& proto, std::stri
   obj->blocksWalking = blocksWalking;
   obj->legacyCollision = legacyCollision;
   obj->massMultiplier = massMultiplier;
+  obj->localBounds[0] = proto.bbox()[0];
+  obj->localBounds[1] = proto.bbox()[1];
   rebuildMovableVob(*obj);
   if(movableVobs->enabled && obj->body==nullptr)
     return {};
@@ -944,6 +971,9 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
   obj.query.clear();
   obj.current = obj.origin;
   obj.wasSleeping = true;
+  obj.trace = obj.tilted = false;
+  obj.traceTime = -1;
+  obj.traceCulprit.clear();
   auto& shape = *obj.movableShape;
   if(movableVobs->enabled && !shape.hullAttempted) {
     shape.hullAttempted = true;
@@ -997,6 +1027,16 @@ void DynamicWorld::syncMovableVob(BodyData& obj) {
   obj.wasSleeping = sleeping;
   obj.current = obj.body->matrix();
   obj.pose->transform = obj.current;
+  const bool trace = noticeableMovableTrace(obj.origin,obj.current,obj.tilted);
+  if(trace && !obj.trace) {
+    obj.traceTime = traceTime;
+    obj.traceCulprit = obj.body->traceCulprit();
+    }
+  else if(!trace) {
+    obj.traceTime = -1;
+    obj.traceCulprit.clear();
+    }
+  obj.trace = trace;
   for(size_t i=0;i<obj.query.size();++i) {
     auto matrix = obj.current;
     matrix.mul(obj.movableShape->parts[i].local);
@@ -1058,9 +1098,10 @@ void DynamicWorld::saveMovableVobs(Serialize& fout) const {
   if(moved.empty())
     return;
   fout.setEntry("worlds/",fout.worldName(),"/movable-vobs");
-  fout.write(uint32_t(0x31564f4d),uint16_t(1),fout.worldName(),uint32_t(moved.size()));
+  fout.write(uint32_t(0x31564f4d),uint16_t(2),fout.worldName(),uint32_t(moved.size()));
   for(const auto* obj:moved)
-    fout.write(obj->pose->zenId,obj->visual,obj->origin,obj->body->matrix(),obj->body->isSleeping());
+    fout.write(obj->pose->zenId,obj->visual,obj->origin,obj->body->matrix(),obj->body->isSleeping(),
+               obj->trace,uint64_t(obj->traceTime)+1,obj->traceCulprit);
   }
 
 void DynamicWorld::loadMovableVobs(Serialize& fin) {
@@ -1071,7 +1112,7 @@ void DynamicWorld::loadMovableVobs(Serialize& fin) {
     uint16_t schema=0;
     std::string worldName;
     fin.read(magic,schema,worldName,count);
-    if(magic!=0x31564f4d || schema!=1 || worldName!=fin.worldName() || count>100000)
+    if(magic!=0x31564f4d || (schema!=1 && schema!=2) || worldName!=fin.worldName() || count>100000)
       return;
     for(uint32_t i=0;i<count;++i) {
       uint32_t id=uint32_t(-1);
@@ -1079,6 +1120,11 @@ void DynamicWorld::loadMovableVobs(Serialize& fin) {
       Tempest::Matrix4x4 origin,matrix;
       bool sleeping=true;
       fin.read(id,visual,origin,matrix,sleeping);
+      bool trace=false;
+      uint64_t traceTimeEncoded=0;
+      std::string traceCulprit;
+      if(schema>=2)
+        fin.read(trace,traceTimeEncoded,traceCulprit);
       if(!PhysicsSave::validTransform(matrix) || !PhysicsSave::sameScale(matrix,origin))
         continue;
       for(auto* obj:movableVobs->bodies) {
@@ -1086,6 +1132,12 @@ void DynamicWorld::loadMovableVobs(Serialize& fin) {
            !PhysicsSave::sameTransform(obj->origin,origin) || obj->body==nullptr)
           continue;
         obj->body->restoreTransform(matrix,sleeping);
+        // Legacy poses have no recorded appearance time. Mark an existing
+        // trace before synchronizing so loading cannot invent a new timestamp.
+        obj->trace = schema==1 ? noticeableMovableTrace(origin,matrix,obj->tilted) : trace;
+        obj->traceTime = traceTimeEncoded>0 && traceTimeEncoded-1<=uint64_t(std::numeric_limits<int64_t>::max())
+                           ? int64_t(traceTimeEncoded-1) : -1;
+        obj->traceCulprit = std::move(traceCulprit);
         // Force query meshes, render callback and attachment pose to synchronize
         // even when the restored body is asleep and will never take a step.
         obj->wasSleeping = false;
@@ -1097,6 +1149,25 @@ void DynamicWorld::loadMovableVobs(Serialize& fin) {
   catch(const std::exception& e) {
     Tempest::Log::e("movable vob load: ",e.what());
     }
+  }
+
+void DynamicWorld::setTraceTime(int64_t minutes) {
+  traceTime = std::max(int64_t(-1),minutes);
+  }
+
+bool DynamicWorld::setMovableVobTransform(uint32_t zenId, const Tempest::Matrix4x4& matrix, Npc* culprit) {
+  if(!movableVobs->enabled || zenId==uint32_t(-1) || !PhysicsSave::validTransform(matrix))
+    return false;
+  for(auto* obj:movableVobs->bodies) {
+    if(obj->pose->zenId!=zenId || obj->body==nullptr || !PhysicsSave::sameScale(matrix,obj->origin))
+      continue;
+    obj->body->setTraceCulprit(culprit);
+    obj->body->restoreTransform(matrix,true);
+    obj->wasSleeping = false;
+    syncMovableVob(*obj);
+    return true;
+    }
+  return false;
   }
 
 std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot() const {
@@ -1114,6 +1185,12 @@ std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot()
     entry.enabled = obj->body!=nullptr;
     entry.mass = obj->movableMass;
     entry.transform = obj->body!=nullptr ? obj->body->matrix() : obj->current;
+    entry.localBounds[0] = obj->localBounds[0];
+    entry.localBounds[1] = obj->localBounds[1];
+    entry.trace = obj->trace;
+    entry.tilted = obj->tilted;
+    entry.traceTime = obj->traceTime;
+    entry.traceCulprit = obj->traceCulprit;
     if(obj->body!=nullptr) {
       entry.velocity = obj->body->velocity();
       entry.sleeping = obj->body->isSleeping();
@@ -1201,6 +1278,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         BulletWorldHit result;
         result.point=hit.point;
         result.normal=hit.normal;
+        result.incoming=to-pos;
         result.material=matId;
         result.ragdoll=hit.ragdoll;
         result.bone=hit.bone;
@@ -1269,6 +1347,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         BulletWorldHit result;
         result.point=b.position();
         result.normal=hit.normal;
+        result.incoming=to-pos;
         result.material=matId;
         result.ragdoll=hit.ragdoll;
         result.bone=hit.bone;

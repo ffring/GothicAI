@@ -11,6 +11,10 @@ Sightings are the npc's own events in the memory log of the save branch (memory.
 brings back exactly what it had seen before that save. One is written when it starts, every SAVE_MIN game
 minutes while it goes on and when it ends; the latest record of it wins.
 
+Visible physical traces (v37) keep their first observation's time and place, with stable ids across a
+load. They are its own evidence (В lines), without a culprit. Impacts heard (v36) are remembered alongside
+them but told separately as sounds, without visual evidence ids or an inferred cause.
+
 For the conversational model (a TurnExtension):
 - the situation, «Что ты видел сам»: the hero's last sightings, each with an id (В1, В2…), and the last
   sighting of each one it knows that it does not see now;
@@ -41,8 +45,21 @@ from .journal import Journal
 from .knowledge import roots
 from .llm import Tool, ToolCall
 from .memory import MemoryStore
-from .perception import WEAPON, _doing, armor_look
-from .protocol import GameMessage, Loading, Look, MemoryCmd, NpcView, NpcViews, Session, Snapshot
+from .perception import WEAPON, _doing, armor_look, trace_name
+from .protocol import (
+    NOISE_PROTOCOL,
+    TRACE_PROTOCOL,
+    GameMessage,
+    Loading,
+    Look,
+    MemoryCmd,
+    NpcEvent,
+    NpcView,
+    NpcViews,
+    Session,
+    Snapshot,
+    Trace,
+)
 from .quests import Lie, caught
 from .turn import ToolOutcome
 
@@ -65,6 +82,8 @@ HEARD = 8  # the hero's latest lines a lie must be in
 RECALLED = 8
 NOTED = 6  # strangers and creatures worth remembering, kept from one view (the nearest)
 NOTED_SHOWN = 5  # ...in the situation
+TRACES_SHOWN = 6
+HEARD_SHOWN = 4
 FADE_MIN = 180  # ...not longer ago than this (game minutes, about 12 minutes of real time)
 HOSTILE = ("hostile", "angry")
 
@@ -117,6 +136,7 @@ class Sighting:
     known: bool = True  # the hero or one it knows by name; False: a stranger or a creature, by its look
     doing: str = ""  # what it was doing when last seen: «сидит у костра»
     saved: int = -1  # the end last written down; -1: never
+    trace_kind: str = ""  # physical evidence, first seen at start; not a person or proof of a culprit
 
     @property
     def key(self) -> str:
@@ -135,6 +155,7 @@ class Sighting:
             "notable": self.notable,
             **({} if self.known else {"known": False}),
             **({"doing": self.doing} if self.doing else {}),
+            **({"trace_kind": self.trace_kind} if self.trace_kind else {}),
         }
 
     @classmethod
@@ -151,9 +172,26 @@ class Sighting:
             place_ids=[str(p) for p in record.get("place_ids", [])],
             known=bool(record.get("known", True)),
             doing=str(record.get("doing", "")),
+            trace_kind=str(record.get("trace_kind", "")),
         )
         s.saved = s.end
         return s
+
+
+@dataclass(frozen=True)
+class Heard:
+    """An impact the npc heard itself; this says nothing about who made it."""
+
+    time: int
+    place: str
+    place_id: str = ""
+
+    def record(self) -> dict[str, Any]:
+        return {"observation": "heard", "time": self.time, "place": self.place, "place_id": self.place_id}
+
+    @classmethod
+    def of(cls, record: dict[str, Any]) -> Heard:
+        return cls(int(record["time"]), str(record["place"]), str(record.get("place_id", "")))
 
 
 @dataclass
@@ -162,6 +200,8 @@ class Mind:
 
     sightings: list[Sighting] = field(default_factory=list)
     going: dict[str, Sighting] = field(default_factory=dict)  # who -> the sighting going on
+    traces: dict[str, Sighting] = field(default_factory=dict)  # (trace id, visible kind) -> first observation
+    heard: list[Heard] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -209,6 +249,7 @@ class Sightings:
         self.journal = journal or Journal()
         self.branch: str | None = link.session.branch if link.session is not None else None
         self.now = 0  # the game's clock as the latest view had it (minutes)
+        self._clock_known = False
         self._minds: dict[str, Mind] = {}
         self._shown: dict[str, dict[str, Sighting]] = {}  # npc -> the hero's sightings by id, last turn
         self._caught: set[tuple[str, str]] = set()  # (npc, his words) caught already
@@ -228,12 +269,15 @@ class Sightings:
                 times = [v.time for v in msg.views if v.time is not None]
                 if times:
                     self._sweep(max(times))
+            case NpcEvent(kind="noise"):
+                self.heard(msg)
 
     def _forget(self) -> None:
         self._minds.clear()
         self._shown.clear()
         self._caught.clear()
         self.now = 0
+        self._clock_known = False
 
     # --- seeing ---------------------------------------------------------------------------------
 
@@ -243,6 +287,7 @@ class Sightings:
             return
         now = view.time
         self.now = max(self.now, now)
+        self._clock_known = True
         viewer = view.npc.upper()
         mind = self.mind(viewer)
         for who, look, known in self._subjects(view):
@@ -271,6 +316,41 @@ class Sightings:
                 s.doing = doing
             if s.saved < 0 or s.end - s.saved >= SAVE_MIN:
                 self._write(viewer, s)
+        hello = getattr(self.link, "hello", None)
+        if hello is None or hello.protocol >= TRACE_PROTOCOL:
+            for trace in view.traces:
+                who = f"TRACE:{trace.id}:{trace.kind}"
+                s = mind.traces.get(who)
+                if s is None:
+                    where, place = self._where(view, trace)
+                    s = Sighting(
+                        who, trace.name, now, now, [where], place_ids=[place] if place else [],
+                        trace_kind=trace.kind,
+                    )
+                    mind.traces[who] = s
+                    self._write(viewer, s)
+
+    def heard(self, event: NpcEvent) -> None:
+        """An actual noise event, kept separately from things seen and never usable as a В line."""
+        hello = getattr(self.link, "hello", None)
+        if self.branch is None or (hello is not None and hello.protocol < NOISE_PROTOCOL):
+            return
+        now = event.time if event.time is not None else self.now if self._clock_known else None
+        if now is None:
+            return
+        self.now = max(self.now, now)
+        self._clock_known = True
+        book = self.desk.places
+        place = book.of(event.place) if book is not None and event.place else None
+        where = place.where_ru if place is not None else f"у точки {event.place}" if event.place else "рядом"
+        sound = Heard(now, where, place.id if place is not None else "")
+        viewer = event.npc.upper()
+        mind = self.mind(viewer)
+        if sound in mind.heard:
+            return
+        mind.heard.append(sound)
+        del mind.heard[:-KEEP]
+        self._remember(viewer, sound.record())
 
     def _subjects(self, view: NpcView) -> list[tuple[str, Look, bool]]:
         """Whom of those it sees it keeps: the hero, the people it knows (the nearest), and the strangers and
@@ -284,7 +364,7 @@ class Sightings:
         out += [(o.id.upper(), o, False) for o in others[:NOTED]]
         return out
 
-    def _where(self, view: NpcView, look: Look) -> tuple[str, str]:
+    def _where(self, view: NpcView, look: Look | Trace) -> tuple[str, str]:
         """Where someone was seen, in words and by the book's id (''): his place by the book, else where the
         npc is."""
         book = self.desk.places
@@ -299,6 +379,7 @@ class Sightings:
     def _sweep(self, now: int) -> None:
         """Sightings unseen for long enough are over: their end is written down."""
         self.now = max(self.now, now)
+        self._clock_known = True
         for viewer, mind in self._minds.items():
             for s in list(mind.going.values()):
                 if self.now - s.end > GAP_MIN:
@@ -310,10 +391,13 @@ class Sightings:
         mind.going.pop(s.who, None)
 
     def _write(self, viewer: str, s: Sighting) -> None:
+        self._remember(viewer, s.record())
+        s.saved = s.end
+
+    def _remember(self, viewer: str, record: dict[str, Any]) -> None:
         if self.branch is None:
             return
-        seq = self.memory.add_seen(self.branch, viewer, json.dumps(s.record(), ensure_ascii=False))
-        s.saved = s.end
+        seq = self.memory.add_seen(self.branch, viewer, json.dumps(record, ensure_ascii=False))
         # the head goes into the next save, so a load brings this back
         self._spawn(self.link.send(MemoryCmd(branch=self.branch, seq=seq)))
 
@@ -323,14 +407,25 @@ class Sightings:
         mind = self._minds.get(npc)
         if mind is None:
             latest: dict[str, Sighting] = {}
+            sounds: list[Heard] = []
             for raw in self.memory.seen(self.branch, npc) if self.branch is not None else []:
                 try:
-                    s = Sighting.of(json.loads(raw))
+                    record = json.loads(raw)
+                    if not isinstance(record, dict):
+                        raise ValueError("observation is not an object")
+                    if record.get("observation") == "heard":
+                        sounds.append(Heard.of(record))
+                        continue
+                    s = Sighting.of(record)
                 except (ValueError, TypeError, KeyError) as err:
                     log.warning("sightings of %s: a broken record: %s", npc, err)
                     continue
                 latest[s.key] = s
-            mind = self._minds[npc] = Mind(sorted(latest.values(), key=lambda s: s.start)[-KEEP:])
+            people = [s for s in latest.values() if not s.trace_kind]
+            traces = {s.who: s for s in latest.values() if s.trace_kind}
+            mind = self._minds[npc] = Mind(
+                sorted(people, key=lambda s: s.start)[-KEEP:], traces=traces, heard=sounds[-KEEP:]
+            )
         return mind
 
     # --- in words ---------------------------------------------------------------------------------
@@ -347,6 +442,8 @@ class Sightings:
         """A sighting in words: «сегодня 08:10–08:14, около часа назад — на пастбище у…; без доспеха»."""
         now = max(self.now if now is None else now, s.end)
         parts = [", потом ".join(s.places) or "где-то"]
+        if s.trace_kind:
+            return f"{_observed_when(s.start, now)} — {trace_name(s.trace_kind, s.name)}; {parts[0]}"
         if s.who == HERO:
             parts.append(_wore(s))
         parts += [NOTABLE[n] for n in s.notable if n in NOTABLE]
@@ -375,6 +472,13 @@ class Sightings:
             for i, s in enumerate(trail, 1):
                 shown[f"В{i}"] = s
                 lines.append(f"- В{i}: {self.words(s)}.")
+        traces = sorted(self.mind(npc).traces.values(), key=lambda s: s.start, reverse=True)[:TRACES_SHOWN]
+        if traces:
+            lines.append("Следы, которые ты видел:")
+            for s in traces:
+                sid = f"В{len(shown) + 1}"
+                shown[sid] = s
+                lines.append(f"- {sid}: {self.words(s)}.")
         view = self.desk.view(npc)
         in_sight = {o.id.upper() for o in view.sees} if view is not None else set()
         others: list[Sighting] = []
@@ -397,9 +501,15 @@ class Sightings:
                 for s in noted
             ]
         self._shown[npc] = shown
-        if not lines:
-            return None
-        return "Что ты видел сам, своими глазами (не с чужих слов):\n" + "\n".join(lines)
+        seen = "Что ты видел сам, своими глазами (не с чужих слов):\n" + "\n".join(lines) if lines else ""
+        sounds = self.mind(npc).heard[-HEARD_SHOWN:]
+        if sounds:
+            heard = "Что ты слышал сам (звук не говорит, кто его вызвал):\n" + "\n".join(
+                f"- {_observed_when(sound.time, max(self.now, sound.time))} — слышал грохот {sound.place}."
+                for sound in reversed(sounds)
+            )
+            return "\n".join(part for part in (seen, heard) if part)
+        return seen or None
 
     def noted(self, npc: str, in_sight: set[str] | None = None) -> list[Sighting]:
         """The strangers and creatures it saw lately and does not see now, the latest first: the latest
@@ -441,7 +551,7 @@ class Sightings:
 
     def tools(self, npc: str) -> list[Tool]:
         told = self.hearsay is not None and self.hearsay.any(npc)
-        return [CATCH_TOOL] if self.hero_trail(npc) or told else []
+        return [CATCH_TOOL] if self.hero_trail(npc) or self.mind(npc).traces or told else []
 
     async def handle(
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
@@ -473,7 +583,7 @@ class Sightings:
                     "Отклонено: такого ты сам не видел — укажи строку из «Что ты видел сам» (В1, В2…).",
                     "rejected",
                 )
-            how = f"сам видел его {self.words(s)}"
+            how = f"сам видел: {self.words(s)}" if s.trace_kind else f"сам видел его {self.words(s)}"
         if not said:
             return ToolOutcome("Отклонено: скажи, в каких его словах ложь.", "rejected")
         # his words: in his latest lines, or those a witness was asked about (checked when it was asked)
@@ -508,7 +618,9 @@ class Sightings:
         q = query.lower()
         words = roots(query)
         hits = []
-        for s in reversed(self.mind(npc).sightings):
+        mind = self.mind(npc)
+        observations = sorted([*mind.sightings, *mind.traces.values()], key=lambda s: s.start, reverse=True)
+        for s in observations:
             if s.who == HERO:
                 hit = "геро" in q
             elif s.known:
@@ -558,6 +670,12 @@ def when(start: int, end: int, now: int) -> str:
         else f"{days} {_plural(days, 'день', 'дня', 'дней')} назад"
     )
     return f"{label} {span}, {_part_of_day(start % 1440)}"
+
+
+def _observed_when(time: int, now: int) -> str:
+    """A single observation keeps its clock time even while it is still fresh."""
+    words = when(time, time, now)
+    return f"сегодня {_hhmm(time)}, только что" if words == "сейчас" else words
 
 
 def ago(minutes: int) -> str:

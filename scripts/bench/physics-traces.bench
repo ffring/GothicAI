@@ -1,0 +1,20 @@
+# Native Coragon fixture inspection; full wire/save/new-process acceptance uses
+# scripts/physics_traces_bridge.py (no models).
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+traces setup
+traces small
+traces sample
+traces moved
+traces arrow
+wait 600
+traces visible
+traces blocked
+traces visible
+traces tilted
+traces sample
+traces moved
+movable save traces

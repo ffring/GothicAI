@@ -28,6 +28,38 @@
 #include "frameprofile.h"
 #include "testbench.h"
 #include "physics/physicsnoise.h"
+#include "world/movablevobs.h"
+
+namespace {
+
+std::string_view traceObjectName(std::string_view what, bool arrow = false) {
+  if(arrow) {
+    if(what=="door")     return "стрела в двери";
+    if(what=="table")    return "стрела в столе";
+    if(what=="barrel")   return "стрела в бочке";
+    if(what=="crate")    return "стрела в ящике";
+    if(what=="cupboard") return "стрела в шкафу";
+    if(what=="wall")     return "стрела в стене";
+    return "стрела";
+    }
+  if(what=="table")    return "стол";
+  if(what=="barrel")   return "бочка";
+  if(what=="crate")    return "ящик";
+  if(what=="cupboard") return "шкаф";
+  return "предмет";
+  }
+
+int64_t traceTime(const World& world) {
+  const auto now = world.time();
+  return now.day()*24*60+now.hour()*60+now.minute();
+  }
+
+Tempest::Vec3 tracePoint(const Tempest::Matrix4x4& matrix, Tempest::Vec3 point) {
+  matrix.project(point);
+  return point;
+  }
+
+}
 
 const char* materialTag(ItemMaterial src) {
   switch(src) {
@@ -186,6 +218,7 @@ void World::postInit() {
 void World::load(Serialize &fin) {
   spellFields.clear();
   stuckArrows.clear();
+  nextArrowTraceId = 1;
   fin.setContext(this);
   fin.setEntry("worlds/",wname,"/world");
 
@@ -201,6 +234,7 @@ void World::load(Serialize &fin) {
 
   wobj.load(fin);
   npcPlayer = wobj.findHero();
+  wdynamic->setTraceTime(traceTime(*this));
   wdynamic->loadMovableVobs(fin);
   loadStuckArrows(fin);
   }
@@ -243,7 +277,8 @@ Npc* World::npcForRagdoll(const Ragdoll* body) {
   }
 
 bool World::stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix,
-                      std::string_view visual, std::shared_ptr<const DynamicWorld::MovableVobPose> movable) {
+                      std::string_view visual, std::shared_ptr<const DynamicWorld::MovableVobPose> movable,
+                      const Npc* culprit, const Tempest::Vec3* sightPoint, std::string_view surface) {
   if(arrow.isEmpty() || !Gothic::physicsFlags().arrowSticking)
     return false;
   if(stuckArrows.size()>=512)
@@ -253,12 +288,25 @@ bool World::stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worl
   pin.mesh = std::move(arrow);
   pin.visual = std::string(visual);
   pin.local = worldMatrix;
+  pin.traceId = nextArrowTraceId++;
+  pin.appearedAt = traceTime(*this);
+  pin.surface = std::string(surface);
+  pin.sightPoint = sightPoint!=nullptr ? *sightPoint : Tempest::Vec3(worldMatrix.at(3,0),worldMatrix.at(3,1),worldMatrix.at(3,2));
+  if(culprit!=nullptr) {
+    if(culprit->isPlayer())
+      pin.culprit = "PLAYER";
+    else if(auto* symbol = script().findSymbol(culprit->instanceSymbol()))
+      pin.culprit = symbol->name();
+    }
   if(movable!=nullptr) {
     pin.local = movable->transform;
     pin.local.inverse();
+    pin.local.project(pin.sightPoint);
     pin.local.mul(worldMatrix);
     pin.movable = movable;
     pin.attached = true;
+    if(const auto* rule = MovableVobs::classifyVisual(movable->visual))
+      pin.surface = rule->className;
     }
   stuckArrows.push_back(std::move(pin));
   return true;
@@ -283,6 +331,51 @@ bool World::stuckArrowAttachment(size_t index, uint32_t& zenId, Tempest::Matrix4
   return true;
   }
 
+std::vector<World::PhysicsTrace> World::physicsTraces() const {
+  std::vector<PhysicsTrace> result;
+  if(Gothic::physicsFlags().arrowSticking) {
+    for(const auto& pin:stuckArrows) {
+      auto pose = pin.movable.lock();
+      if(pin.mesh.isEmpty() || (pin.attached && pose==nullptr) ||
+         (!pin.attached && (pin.surface=="ground" || pin.surface=="unknown")))
+        continue;
+      PhysicsTrace trace;
+      trace.id = wname+":arrow:"+std::to_string(pin.traceId);
+      trace.kind = "arrow";
+      trace.name = traceObjectName(pin.surface,true);
+      trace.position = pin.attached ? tracePoint(pose->transform,pin.sightPoint) : pin.sightPoint;
+      trace.sightPoints.fill(trace.position);
+      trace.appearedAt = pin.appearedAt;
+      trace.culprit = pin.culprit;
+      result.push_back(std::move(trace));
+      }
+    }
+  for(const auto& item:wdynamic->movableVobSnapshot()) {
+    if(!item.enabled || !item.trace || item.zenId==uint32_t(-1))
+      continue;
+    PhysicsTrace trace;
+    trace.id = wname+":vob:"+std::to_string(item.zenId);
+    trace.kind = item.tilted ? "tilted" : "moved";
+    trace.name = traceObjectName(item.className);
+    const auto center = (item.localBounds[0]+item.localBounds[1])*.5f;
+    trace.position = tracePoint(item.transform,center);
+    // Surface samples stay just outside the mesh: a ray to the object's origin
+    // would often end inside its own collider and hide a perfectly visible table.
+    for(size_t axis=0;axis<3;++axis) {
+      auto low = center, high = center;
+      if(axis==0) { low.x = item.localBounds[0].x-2.f; high.x = item.localBounds[1].x+2.f; }
+      if(axis==1) { low.y = item.localBounds[0].y-2.f; high.y = item.localBounds[1].y+2.f; }
+      if(axis==2) { low.z = item.localBounds[0].z-2.f; high.z = item.localBounds[1].z+2.f; }
+      trace.sightPoints[axis*2] = tracePoint(item.transform,low);
+      trace.sightPoints[axis*2+1] = tracePoint(item.transform,high);
+      }
+    trace.appearedAt = item.traceTime;
+    trace.culprit = item.traceCulprit;
+    result.push_back(std::move(trace));
+    }
+  return result;
+  }
+
 void World::updateStuckArrows() {
   for(auto i=stuckArrows.begin();i!=stuckArrows.end();) {
     if(!i->attached) {
@@ -302,7 +395,7 @@ void World::updateStuckArrows() {
   }
 
 void World::saveStuckArrows(Serialize& fout) const {
-  if(!Gothic::physicsFlags().arrowSticking || stuckArrows.empty())
+  if(!Gothic::physicsFlags().arrowSticking || (stuckArrows.empty() && nextArrowTraceId==1))
     return;
   std::vector<const StuckArrow*> pins;
   for(const auto& pin:stuckArrows) {
@@ -312,11 +405,12 @@ void World::saveStuckArrows(Serialize& fout) const {
     pins.push_back(&pin);
     }
   fout.setEntry("worlds/",wname,"/stuck-arrows");
-  fout.write(uint32_t(0x31524157),uint16_t(1),wname,uint32_t(pins.size()));
+  fout.write(uint32_t(0x31524157),uint16_t(2),wname,uint32_t(pins.size()),nextArrowTraceId);
   for(const auto* pin:pins) {
     fout.write(pin->visual,pin->local,pin->attached);
     if(auto pose = pin->movable.lock(); pin->attached && pose!=nullptr)
       fout.write(pose->zenId,pose->visual,pose->origin);
+    fout.write(pin->traceId,uint64_t(pin->appearedAt+1),pin->culprit,pin->surface,pin->sightPoint);
     }
   }
 
@@ -328,12 +422,21 @@ void World::loadStuckArrows(Serialize& fin) {
     uint16_t schema=0;
     std::string worldName;
     fin.read(magic,schema,worldName,count);
-    if(magic!=0x31524157 || schema!=1 || worldName!=wname || count>512)
+    if(magic!=0x31524157 || (schema!=1 && schema!=2) || worldName!=wname || count>512)
       return;
+    if(schema>=2) {
+      uint64_t nextId=1;
+      fin.read(nextId);
+      if(nextId==0 || nextId==UINT64_MAX)
+        return;
+      nextArrowTraceId = nextId;
+      }
     std::vector<StuckArrow> pins;
     for(uint32_t i=0;i<count;++i) {
       StuckArrow pin;
       fin.read(pin.visual,pin.local,pin.attached);
+      pin.traceId = uint64_t(i)+1;
+      pin.sightPoint = Tempest::Vec3(pin.local.at(3,0),pin.local.at(3,1),pin.local.at(3,2));
       bool matches=true;
       if(pin.attached) {
         uint32_t id=uint32_t(-1);
@@ -343,13 +446,23 @@ void World::loadStuckArrows(Serialize& fin) {
         auto pose = wdynamic->movableVobPose(id);
         matches = pose!=nullptr && pose->visual==visual && PhysicsSave::sameTransform(pose->origin,origin);
         pin.movable = pose;
+        if(const auto* rule = MovableVobs::classifyVisual(visual))
+          pin.surface = rule->className;
         }
-      if(!matches || pin.visual.empty() || pin.visual.size()>512 || !PhysicsSave::validTransform(pin.local))
+      if(schema>=2) {
+        uint64_t appeared=0;
+        fin.read(pin.traceId,appeared,pin.culprit,pin.surface,pin.sightPoint);
+        pin.appearedAt = appeared>0 && appeared<=uint64_t(INT64_MAX) ? int64_t(appeared-1) : -1;
+        }
+      if(!matches || pin.visual.empty() || pin.visual.size()>512 || !PhysicsSave::validTransform(pin.local) ||
+         pin.traceId==0 || pin.traceId==UINT64_MAX || pin.culprit.size()>512 || pin.surface.size()>64 ||
+         !std::isfinite(pin.sightPoint.x) || !std::isfinite(pin.sightPoint.y) || !std::isfinite(pin.sightPoint.z))
         continue;
       pin.mesh = addView(pin.visual);
       if(pin.mesh.isEmpty())
         continue;
       pin.mesh.setObjMatrix(pin.local);
+      nextArrowTraceId = std::max(nextArrowTraceId,pin.traceId+1);
       pins.push_back(std::move(pin));
       }
     stuckArrows = std::move(pins);
@@ -543,6 +656,7 @@ void World::scaleTime(uint64_t& dt) {
   }
 
 void World::tick(uint64_t dt) {
+  wdynamic->setTraceTime(traceTime(*this));
   wdynamic->setMovableVobsEnabled(Gothic::physicsFlags().movableVobs);
   wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
   if(!Gothic::physicsFlags().arrowSticking)

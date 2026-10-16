@@ -63,7 +63,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 36;
+constexpr int         ProtocolVersion = 37;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -930,7 +930,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
      cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
-     cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise") {
+     cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise" || cmd=="physics_traces") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -986,6 +986,12 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
   if(cmd=="physics_noise") {
     std::string value, error;
     const bool ok = TestBench::physicsNoiseDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
+    sendResult(req,ok,error,value);
+    return;
+    }
+  if(cmd=="physics_traces") {
+    std::string value, error;
+    const bool ok = TestBench::physicsTracesDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
     sendResult(req,ok,error,value);
     return;
     }

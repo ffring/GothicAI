@@ -1,4 +1,7 @@
 from dataclasses import dataclass, field
+from types import SimpleNamespace
+
+import pytest
 
 from gothic_ai.brain.situation import NpcContext, SituationBuilder
 from gothic_ai.dialogue import DialogueManager
@@ -8,7 +11,7 @@ from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.npc_tools import render_situation
 from gothic_ai.perception import RECENT_S, PerceptionDesk
 from gothic_ai.persona import PersonaProvider
-from gothic_ai.protocol import NpcView
+from gothic_ai.protocol import TRACE_PROTOCOL, NpcView
 from gothic_ai.protocol import Snapshot as NpcSnapshot
 from tests.fake_game import FakeGame, connected
 from tests.fakes import Clock
@@ -302,6 +305,54 @@ def test_things_lying_about():
         and nothing.ground is None
         and "На земле" not in render_situation(None, None, nothing)
     )
+
+
+def physical_trace(id: str = "vob:12", kind: str = "moved", name: str = "Стол", **extra) -> dict:
+    return {
+        "id": id,
+        "kind": kind,
+        "name": name,
+        "distance": 500,
+        "waypoint": "NW_FARM1_OUT_02",
+        "hero_cm": 600,
+        "from_hero": "left",
+        "age": 17,
+        **extra,
+    }
+
+
+def test_visible_physical_traces_in_both_world_picture_paths():
+    view = {
+        **lobarts_view(),
+        "traces": [
+            physical_trace(),
+            physical_trace("arrow:7", "arrow", "Стена", age=2, distance=300, from_hero="ahead"),
+        ],
+    }
+    perception = desk([view])
+    sight = perception.sight(LOBART)
+    assert sight is not None and sight.traces == (
+        "Следы: сдвинутый предмет: Стол (5 м, у точки NW_FARM1_OUT_02, слева от героя, давность 17 мин); "
+        "застрявшая стрела: Стена (3 м, у точки NW_FARM1_OUT_02, перед героем, давность 2 мин)."
+    )
+    snap = NpcSnapshot.model_validate(FakeGame().snapshot(LOBART))
+    for snapshot in (None, snap):
+        assert sight.traces in render_situation(snapshot, None, sight)
+    assert "You see a displaced object: Стол, 5 m away (age 17 game minutes)." in perception.english(LOBART)
+    assert "PLAYER" not in sight.traces
+    assert sight.things == {}  # a trace cannot be picked up as a ground item
+
+
+@pytest.mark.parametrize("protocol", [TRACE_PROTOCOL - 1, TRACE_PROTOCOL])
+def test_trace_perception_requires_the_bridge_protocol(protocol):
+    perception = desk([])
+    perception.link.hello = SimpleNamespace(protocol=protocol)
+    perception._store(NpcView.model_validate({**lobarts_view(), "traces": [physical_trace()]}))
+    sight = perception.sight(LOBART)
+    assert sight is not None
+    assert bool(sight.traces) == (protocol >= TRACE_PROTOCOL)
+    perception._store(NpcView.model_validate(lobarts_view()))
+    assert perception.sight(LOBART).traces is None
 
 
 async def test_it_picks_up_what_the_hero_threw_down_and_follows_him_again():
