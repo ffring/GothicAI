@@ -197,7 +197,8 @@
 #       «ты кому-нибудь расскажешь?», sets out to tell Andre tomorrow at 7:00; the night goes by (a leap), the
 #       hero waits where Andre will be; Lobart walks there from the farm, finds Andre and tells him in front of
 #       the hero: a rumor with `how: told`, `goal_done`, a scene of two voices. Starts the TTS service
-#       (TTS=fake); model scripted with LLM=fake; TIMEOUT=1500 (the walk is ~8 min of real time)
+#       (TTS=fake); model scripted with LLM=fake (LLM=chatgpt: Lobart decides himself whom he tells and
+#       when, or not to); TIMEOUT=1500 (the walk is ~8 min of real time)
 #   errand_fork: the same, but Andre is taken away before Lobart comes: another of the militia there hears it
 #   errand_far: the same, the hero at the tower: nothing walks, the rumor comes as a fact when Lobart would be
 #       there, his body stays at his routine, no model call

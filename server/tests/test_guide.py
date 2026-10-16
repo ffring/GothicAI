@@ -135,6 +135,10 @@ class _Dialogue:
         self.notes: list[str] = []
         self.conv = SimpleNamespace(actions=set(), voice=None, reply=None)
         self.conversations = {MALETH: self.conv}
+        self.heard = False  # its line is being heard
+
+    def audible(self, npc: str) -> bool:
+        return self.heard
 
     def open(self, npc: str, name: str) -> Any:
         return self.conv
@@ -244,6 +248,19 @@ async def test_stuck_on_its_way_it_gets_back_onto_the_waynet_and_at_last_gives_u
     assert len(hops) == 3 and hops[0] == {"waypoint": "", "pos": [1000, 0, 0], "radius": 200}
     assert [f["how"] for f in facts] == ["failed"]
     assert dialogue.cues[-1] == "[Ты не смог довести героя: дорогу туда не пройти. Скажи ему.]"
+
+
+async def test_standing_while_it_says_its_line_is_not_stuck(monkeypatch):
+    monkeypatch.setattr(gothic_ai.guide, "STUCK_S", 0.1)
+    guide, link, _, dialogue, _ = _guide()
+    dialogue.heard = True  # a live «за мной» takes seconds, and the game starts the walk after it
+    link.snapshots[MALETH] = _snap((1000, 0, 0), (800, 0, 0))
+    guide.start(MALETH, "Малет", Way(BOOK.places[1], ("NW_FARM1_MILL_01",), (6000.0, 0.0, 0.0)), "D1")
+    await _until(lambda: link.walk is not None)
+    await asyncio.sleep(0.3)
+    assert not [args for action, args in link.acts if action == "go_to_waypoint" and "points" not in args]
+    dialogue.heard = False  # said: now standing is stuck
+    await _until(lambda: any(a == "go_to_waypoint" and "points" not in args for a, args in link.acts))
 
 
 async def test_something_else_takes_its_body_the_way_is_over():
