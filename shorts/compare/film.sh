@@ -9,6 +9,7 @@ OUT="$ROOT/.shorts/compare/$NAME"
 mkdir -p "$OUT"
 export TEMPEST_WINDOW_SIZE="${SIZE:-1080x960}" TEMPEST_AUDIO_LOOPBACK=48000 SOUND="${SOUND:-1}" MUSIC="${MUSIC:-0.3}"
 export OPENGOTHIC_BENCH_ENCODER="-c:v h264_videotoolbox -b:v 24M" GOTHIC_AI=0 NO_BUILD="${NO_BUILD:-1}"
+export BENCH_HOST=local
 # what the "off" take switches off: "off_env" of compare/<name>.json, else the animation work
 OFF_ENV="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("off_env",""))' \
            "$ROOT/shorts/compare/$NAME.json" 2>/dev/null || true)"

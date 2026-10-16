@@ -1367,6 +1367,10 @@ def report(out):
     segs = load(out)
     os.makedirs(os.path.join(out, "sheets"), exist_ok=True)
     lines = [f"# Bench report: {os.path.basename(out)}", ""]
+    host_path = os.path.join(out, "host.txt")
+    if os.path.exists(host_path):
+        with open(host_path) as f:
+            lines += [f"Host: {f.read().strip()}", ""]
     summary = {"segments": {}, "events": []}
     all_events = []
     table = []
