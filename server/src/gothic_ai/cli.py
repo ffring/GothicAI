@@ -177,6 +177,10 @@ HELP = """commands (npc defaults to the last attached one):
   dialogs           what the npc offers in the dialog menu now (game needs -devmode)
   choose <node>     play a dialog of the npc as if chosen in the menu (game needs -devmode)
   eval <json>       compute a story graph expression in the game, self = the npc (game needs -devmode)
+  open [npc] | menu | pick <text>   talk to the npc as with the action key; what the dialog window offers
+                    now; pick its entry as the player does (game needs -devmode)
+  debug <cmd> [k=v ...]  a test helper of the game, as the scenarios use it (-devmode): player_goto
+                    waypoint=..., teleport near=... distance=..., kill instance=... near=..., time ...
   quit"""
 
 
@@ -270,6 +274,9 @@ class Console:
                 await self.execute(link, args)
             except (GameError, TimeoutError, KeyError) as err:
                 print(f"error: {err}", flush=True)
+            except Exception as err:  # a typo in a command must not end the server
+                log.exception("console: %s", line.strip())
+                print(f"error: {type(err).__name__}: {err}", flush=True)
 
     async def execute(self, link: GameLink, args: list[str]) -> None:
         cmd, rest = args[0], args[1:]
@@ -289,6 +296,23 @@ class Console:
                     print(f"  {e.start}-{e.end} {e.state} at {e.waypoint}")
             case "ping":
                 print(f"pong in {await link.ping() * 1000:.1f} ms")
+            case "open":
+                await link.start_talk(rest[0] if rest else npc)
+                print("ok", flush=True)
+            case "menu":
+                for entry in await link.dialog_menu():
+                    print(f"  {entry}", flush=True)
+                print("(menu end)", flush=True)
+            case "pick" if rest:
+                await link.pick_in_menu(" ".join(rest))
+                print("ok", flush=True)
+            case "debug" if rest:
+                params: dict[str, Any] = {}
+                for arg in rest[1:]:
+                    key, _, value = arg.partition("=")
+                    params[key] = int(value) if value.lstrip("-").isdigit() else value
+                await link.debug(rest[0], **params)  # type: ignore[arg-type]
+                print("ok", flush=True)
             case "goto" if rest:
                 print(await link.act(npc, "go_to_waypoint", waypoint=rest[0]))
             case "come":
