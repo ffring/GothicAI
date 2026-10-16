@@ -1,8 +1,7 @@
 # Load the unchanged NPC standing stair save with NPC_CHARACTER_VIRTUAL=1.
 # This snapshot also enables native tracing before the first world tick.
 npccharacter initial
-# Freeze only the known wolf outside the archived fixture's 22m freeze radius.
-freeze id:984
+# Initial guards use position, independent of the archive's creature indices.
 rec npc_idle_10s
 # Ordinary commands first run at 33ms; the remaining 967ms ends at exactly 1s.
 wait 967

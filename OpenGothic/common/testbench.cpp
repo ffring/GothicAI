@@ -4144,6 +4144,19 @@ void characterFreezeNear(World& world,Npc& player,const Vec3& start,const Vec3& 
   event("character_fixture_freeze","\"npcs\":"+std::to_string(count)+",\"radius_cm\":2200");
   }
 
+void characterIdleGuards(World& world,const Npc& player) {
+  size_t count=0;
+  // A loaded archive does not retain external control. Guard the full ten
+  // second idle window against nearby creatures, without relying on one
+  // archive's NPC indices or changing the measured human's state or pose.
+  for(uint32_t id=0;id<world.npcCount();++id)
+    if(auto* npc=world.npcById(id);npc && npc!=&player && !npc->isHuman() &&
+       (npc->position()-player.position()).length()<10000.f) {
+      npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);++count;
+      }
+  event("character_idle_guards","\"creatures\":"+std::to_string(count)+",\"radius_cm\":10000");
+  }
+
 bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool abortMissing=true,std::string_view onlyWaypoint={}) {
   Bench::CharacterRoute route;route.name=name;
   std::vector<const WayPoint*> points;
@@ -10569,6 +10582,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         }
       else if(args.size()==2 && args[0]=="npccharacter" && args[1]=="initial") {
         ++bench.pc;npcCharacterSnapshot(*world,*player,"initial");
+        characterIdleGuards(*world,*player);
         // The first native step recreates the transient controller. Observe it
         // before normal command dispatch can advance past that initial contact.
         std::string trace="npccharacter trace";
@@ -10582,6 +10596,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         }
       else if(args.size()==2 && args[0]=="character" && args[1]=="initial") {
         ++bench.pc;characterSnapshot(*world,*player,"initial");
+        characterIdleGuards(*world,*player);
         exec("npccharacter trace player",*world,*player,ctrl);
         }
       else if(args.size()==3 && args[0]=="movable" && args[1]=="initial") {
