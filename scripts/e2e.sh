@@ -34,6 +34,7 @@
 #       the city (Harad sees him), an hour passes, he comes back and says he was in the city all morning:
 #       Lobart catches the lie by what he saw (model scripted with LLM=fake); the memory follows the save;
 #       story_state's `seen` (check_claim) is the engine's sight
+#   trace: Lobart catches a lie about an arrow's age by its fresh trace; a stranger's arrow and denied authorship are the control
 #   witness: asking a witness (wave 2 step 3): at 8:00 someone Lobart knows sees the hero in the open, Lobart
 #       does not; later the hero comes up to Lobart with an alibi («это не я топтал твою репу — я всё утро был
 #       в городе»), Lobart calls that one over, it comes and tells what it saw, Lobart catches the lie «со слов»
@@ -235,7 +236,12 @@ if [ -n "${SAVE:-}" ]; then
 fi
 # Recheck after server startup: another session may have taken the game while it was starting.
 until ! pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
-(cd "$LOG_DIR" && GOTHIC_AI_URL="ws://127.0.0.1:$PORT" exec "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
+GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT")
+if [ "$SCENARIO" = "trace" ]; then
+  GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/trace-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
+    "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1")
+fi
+(cd "$LOG_DIR" && exec env "${GAME_ENV[@]}" "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
 
 for _ in $(seq 1 "$TIMEOUT"); do

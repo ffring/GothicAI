@@ -329,7 +329,8 @@ async def test_a_seen_trace_is_a_catch_lie_evidence_line_in_the_model_prompt():
     assert "Что ты видел сам, своими глазами" in prompt
     assert "В1: сегодня 08:10, 20 минут назад — сдвинутый предмет: Стол; во дворе фермы Лобарта" in prompt
     assert "Следы: сдвинутый предмет: Стол" in prompt
-    assert "catch_lie" in [tool.name for tool in llm.calls[0][2]]
+    catch = next(tool for tool in llm.calls[0][2] if tool.name == "catch_lie")
+    assert "Следы, которые ты видел" in catch.description
     caught = chronicle.facts("caught")
     assert len(caught) == 1
     assert caught[0]["title"] == "я не трогал стол"

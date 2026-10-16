@@ -48,11 +48,12 @@ from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, Tool
 from .llm.fake import FakeBackend, FakeStep
 from .lore import Lore
 from .npc_tools import GESTURES as NPC_GESTURES
-from .perception import BEASTS, PerceptionDesk, Sight
+from .perception import BEASTS, PerceptionDesk, Sight, trace_name
 from .persona import PersonaProvider, habits_of
 from .places import SIDES, PlaceBook
 from .protocol import (
     ActionResult,
+    DebugCmd,
     Detached,
     DialogChosen,
     FollowEnded,
@@ -82,7 +83,7 @@ from .protocol import (
     ThreatControlCmd,
 )
 from .quests import RUMOR_CM, SEE_CM, QuestBoard
-from .sightings import Sightings
+from .sightings import Sighting, Sightings
 from .social import DAY, TICK_S, Rumor, Rumors
 from .story import StoryPatches
 from .storyguard import StoryGuard
@@ -6056,6 +6057,410 @@ async def seen_memory(
         f"{session.branch} from {session.parent}@{session.parent_seq}: {len(trail)} sighting(s) of the hero",
     )
 
+    return _logged(results)
+
+
+def _trace_evidence_line(prompt: str, observation: Sighting) -> tuple[str, str]:
+    """Find this trace's actual evidence id, even when a new hero sighting has renumbered the В lines."""
+    if not observation.trace_kind or not observation.places:
+        return "", ""
+    stamp = f"{observation.start % 1440 // 60:02d}:{observation.start % 60:02d}"
+    for line in prompt.splitlines():
+        match = re.match(r"- (В\d+): ", line)
+        if (
+            match
+            and stamp in line
+            and trace_name(observation.trace_kind, observation.name) in line
+            and observation.places[0] in line
+        ):
+            return match[1], line
+    return "", ""
+
+
+async def trace_memory(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    sightings: Sightings,
+    log_dir: str,
+    farmer: str = LOBART,
+) -> dict[str, str]:
+    """Native arrows at Lobart's house: an unseen NPC's arrow proves no culprit; a new arrow after
+    Lobart saw the hero there contradicts his claim that it is a week old. The bench only shoots and
+    waits for the server; views, memory, requests, tools and consequences use the conversation path."""
+    results: dict[str, str] = {}
+    desk, chronicle = sightings.desk, sightings.chronicle
+    directory = Path(log_dir)
+    original = dialogue.llm
+    control_denial = "это не я стрелял в твою стену, я ничего не трогал, я только пришел"
+    age_lie = "стрела эта давно там торчит, с прошлой недели"
+    house = "NW_FARM1_INHOUSE_01"
+    parked = "NW_FARM1_PATH_CITY_16"
+    target = "BAU_951_HILDA"
+
+    def check(name: str, ok: bool, detail: object = "") -> bool:
+        results[name] = f"{'done' if ok else 'failed'} ({detail})"
+        log.info("trace %-20s %s", name, results[name])
+        return ok
+
+    async def mark(name: str) -> None:
+        path = directory / "events.jsonl"
+        if not await _until(
+            lambda: (
+                path.exists()
+                and any(r.get("kind") == "mark" and r.get("text") == name for r in read_trace(path))
+            ),
+            30,
+        ):
+            raise RuntimeError(f"trace bench did not reach {name}")
+
+    async def release(name: str) -> None:
+        # The controlled observer's overlay releases waitreply without a model turn or memory entry.
+        await link.send(SayCmd(npc=farmer, line=f"AIB_TRACE_{name}", text=".", overlay=True))
+
+    async def move(
+        who: str,
+        waypoint: str | None = None,
+        *,
+        near: str | None = None,
+        distance: int = 0,
+        pos: tuple[float, float, float] | None = None,
+        attach: bool = False,
+    ) -> None:
+        try:
+            await link.detach(who)
+        except GameError as err:
+            if "npc is not attached" not in str(err):
+                raise
+        if pos is not None:
+            hero = (await link.snapshot(who, fresh=True)).player
+            assert hero is not None
+            await link.debug("player_goto", pos=pos)
+            await asyncio.sleep(1)  # settle on walkable ground before copying the position to the frozen NPC
+            await link.debug("npc_goto", npc=who, to="PC_HERO", distance=0)
+            await link.debug("player_goto", pos=hero.pos)
+        else:
+            await link.debug(
+                "npc_goto",
+                npc=who,
+                waypoint=waypoint,
+                to="PC_HERO" if near == "PLAYER" else near,
+                distance=distance,
+                face="PC_HERO",
+            )
+        if attach:
+            await attach_when_free(link, who)
+
+    def turns() -> list[dict[str, Any]]:
+        return [
+            r
+            for p in sorted((directory / "traces").glob("*.jsonl"))
+            for r in read_trace(p)
+            if r.get("type") == "turn" and r.get("npc") == farmer
+        ]
+
+    async def deny(*, observation: Sighting | None = None) -> dict[str, Any]:
+        denial = f"Это не я. Да и {age_lie}" if observation is not None else control_denial
+        before = {r["id"] for r in turns()}
+        await link.debug("teleport", near=farmer, distance=250)
+        await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 10)
+        await desk.fresh(farmer)
+        if isinstance(original, FakeBackend):
+            step = FakeStep("Не видел, кто стрелял. Одной стрелы мало, чтобы обвинять тебя.")
+            if observation is not None:
+                sid, _ = _trace_evidence_line(sightings.situation(farmer) or "", observation)
+                step = FakeStep(
+                    "Не с прошлой недели! Стрела свежая, и я только что её увидел.",
+                    [ToolCall("catch_lie", {"said": age_lie, "seen": sid})],
+                )
+            dialogue.llm = ClaimScript([(denial, step)], [], "Я запомню.", only="Лобарт")
+        await link.debug("type", text=f"Лобарт, {denial}.")
+        completed = await _until(
+            lambda: any(
+                r["id"] not in before and denial in r.get("trigger", {}).get("text", "") for r in turns()
+            ),
+            90,
+        )
+        await _until(lambda: not dialogue.speaking(farmer), 30)
+        rows = [
+            r for r in turns() if r["id"] not in before and denial in r.get("trigger", {}).get("text", "")
+        ]
+        row = rows[-1] if rows else {}
+        log.info(
+            "trace %s reply: %s",
+            "positive" if observation is not None else "control",
+            [s.get("text") for s in row.get("steps", [])],
+        )
+        check(
+            "positive_turn" if observation is not None else "control_turn",
+            completed and row.get("status") == "completed",
+            row.get("status"),
+        )
+        return row
+
+    def calls(row: dict[str, Any]) -> list[dict[str, Any]]:
+        return [c for s in row.get("steps", []) for c in s.get("calls", []) if c.get("name") == "catch_lie"]
+
+    def request(row: dict[str, Any]) -> str:
+        return "\n".join(
+            str(i.get("content", ""))
+            for s in row.get("steps", [])
+            for i in s.get("added", [])
+            if i.get("role") == "developer"
+        )
+
+    def evidence(trace_id: str) -> tuple[str, str]:
+        situation = sightings.situation(farmer) or ""
+        sid = next(
+            (
+                sid
+                for sid, s in sightings._shown.get(farmer, {}).items()
+                if s.who == f"TRACE:{trace_id}:arrow"
+            ),
+            "",
+        )
+        line = next((line for line in situation.splitlines() if sid and line.startswith(f"- {sid}:")), "")
+        return sid, line
+
+    def shots(actor: str) -> list[str]:
+        return [
+            r.get("text", "")
+            for r in read_trace(directory / "events.jsonl")
+            if r.get("kind") == "note"
+            and r.get("text", "").startswith(("arrow shot:", "dice shot:"))
+            and f"by {actor}" in r["text"]
+        ]
+
+    await link.wait_world()
+    await mark("trace_ready")
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    for who in (farmer, VINO, target):
+        await link.debug("skip_important", near=who)
+    await link.debug("player_hp", hp=5000)
+    # Changing the clock relocates scripted routines, even for an attached body: set it before staging.
+    await link.debug("time", hour=8, minute=0)
+    # Lobart is away for both shots. The wall is only the arrow's target, not the observer's hiding place.
+    await move(farmer, parked, attach=True)
+    await link.debug("player_goto", waypoint=house)
+    inside = (await link.snapshot(target, fresh=True)).player
+    if inside is None:
+        return _logged({"house": "failed (no player position)"})
+    points = await link._request(DebugCmd(req=link._next_id("trace-"), cmd="waypoints"), 10)
+    waypoints = points.value
+    distant = sorted(
+        [
+            p
+            for p in waypoints
+            if p["name"].startswith("NW_FARM1_")
+            and not p["fp"]
+            and math.dist((p["x"], p["y"], p["z"]), inside.pos) > 6000
+        ],
+        key=lambda p: math.dist((p["x"], p["y"], p["z"]), inside.pos),
+    )
+    if not distant:
+        return _logged({"preparation": "failed (no farm waypoint beyond 60 m)"})
+    parked = distant[0]["name"]
+    await move(farmer, parked, attach=True)
+    # Native ray queries choose a wooden door/wall: stone reflects arrows rather than retaining them.
+    candidates = [
+        (
+            inside.pos[0] + 750 * math.cos(angle * math.pi / 72),
+            inside.pos[1],
+            inside.pos[2] + 750 * math.sin(angle * math.pi / 72),
+        )
+        for height in (140, 170)
+        for angle in range(144)
+    ]
+    rays = [
+        (*point[:1], point[1] + height, point[2], inside.pos[0], inside.pos[1] + 140, inside.pos[2], 1)
+        for height in (140, 170)
+        for point in candidates[:144]
+    ]
+    (directory / "trace-rays.tsv").write_text(
+        "".join(" ".join(str(value) for value in ray) + "\n" for ray in rays), encoding="utf-8"
+    )
+    await release("wall_query")
+    await mark("wall_sample")
+    surfaces = [
+        r
+        for r in read_trace(directory / "physics-results.jsonl")
+        if r.get("kind") == "ray"
+        and r.get("hit")
+        and abs(r["normal"][1]) < 0.7
+        and r.get("material") not in (1, 2, 255)
+    ]
+    surfaces.sort(key=lambda r: r["material"] != 3)
+    candidates = [
+        (r["point"][0] + r["normal"][0] * 150, inside.pos[1], r["point"][2] + r["normal"][2] * 150)
+        for r in surfaces
+    ]
+    outside = None
+    for point in candidates:
+        await move(VINO, pos=point, attach=True)
+        await link.act(VINO, "turn_to", npc="PLAYER")
+        view = await desk.fresh(VINO)
+        position = (await link.snapshot(VINO, fresh=True)).npc.pos
+        if (
+            view is not None
+            and view.hero is not None
+            and not view.hero.seen
+            and view.hero.distance < 1500
+            and abs(position[1] - inside.pos[1]) < 180
+        ):
+            outside = position
+            break
+    if not check(
+        "house_wall", bool(outside), f"inside {house}, outside {outside}; {len(candidates)} candidates"
+    ):
+        return _logged(results)
+    view = await desk.fresh(farmer)
+    if not check(
+        "control_unseen",
+        view is not None
+        and view.hero is not None
+        and not view.hero.seen
+        and view.hero.distance > 5000
+        and not sightings.hero_trail(farmer),
+        f"parked {parked}; {view.hero if view else 'no view'}",
+    ):
+        return _logged(results)
+    shooter_view = await desk.fresh(VINO)
+    baseline = {t.id for t in shooter_view.traces} if shooter_view else set()
+    heard = len(sightings.mind(farmer).heard)
+    await release("control_start")
+    await mark("control_shot")
+    check("npc_shot", bool(shots(VINO)) and not shots("PC_HERO"), shots(VINO))
+    check("control_not_heard", len(sightings.mind(farmer).heard) == heard, f"heard {heard}")
+    await move(farmer, near=VINO, attach=True)
+    await move(VINO, parked)
+    await link.act(farmer, "turn_to", npc="PLAYER")
+    view = await desk.fresh(farmer)
+    control = (
+        next((t for t in view.traces if t.kind == "arrow" and t.id not in baseline), None) if view else None
+    )
+    if not check(
+        "control_trace",
+        control is not None and not sightings.hero_trail(farmer),
+        view.model_dump() if view else "no view",
+    ):
+        return _logged(results)
+    sid, line = evidence(control.id)
+    control_observed = sightings.mind(farmer).traces[f"TRACE:{control.id}:arrow"]
+    await asyncio.sleep(5)  # the trace predates the hero's first visible arrival by at least a game minute
+    row = await deny()
+    control_sid, control_line = _trace_evidence_line(request(row), control_observed)
+    check(
+        "control_in_request",
+        bool(control_sid) and "Следы, которые ты видел" in request(row),
+        control_line,
+    )
+    check("control_no_catch", not calls(row) and not chronicle.facts("caught"), calls(row))
+    talk.end("gone")
+
+    # A new hour, a witnessed arrival, then Lobart is too far to see the actual shot.
+    await mark("positive_ready")
+    await link.debug("time", hour=9, minute=0)
+    await move(VINO, parked)
+    await link.debug("teleport", near=farmer, distance=300)
+    await desk.fresh(farmer)
+    trail = sightings.hero_trail(farmer)
+    hero_start = trail[0].start if trail else -1
+    if not check(
+        "hero_nearby",
+        bool(trail) and trail[0].end % 1440 >= 9 * 60,
+        sightings.words(trail[0]) if trail else "no sighting",
+    ):
+        return _logged(results)
+    await move(farmer, parked, attach=True)
+    await link.debug("player_goto", pos=outside)
+    view = await desk.fresh(farmer)
+    check(
+        "shot_unseen",
+        view is not None and view.hero is not None and not view.hero.seen and view.hero.distance > 2000,
+        view.hero if view else "no view",
+    )
+    baseline = set(sightings.mind(farmer).traces)
+    heard = len(sightings.mind(farmer).heard)
+    await release("hero_start")
+    await mark("hero_shot")
+    check("hero_shot", bool(shots("PC_HERO")), shots("PC_HERO"))
+    hidden = await desk.fresh(farmer)
+    check(
+        "act_not_seen",
+        hidden is not None
+        and hidden.hero is not None
+        and not hidden.hero.seen
+        and hidden.hero.distance > 2000
+        and set(sightings.mind(farmer).traces) == baseline,
+        hidden.hero if hidden else "no view",
+    )
+    check("shot_not_heard", len(sightings.mind(farmer).heard) == heard, f"heard {heard}")
+    await move(farmer, near="PLAYER", attach=True)
+    await link.debug("player_goto", waypoint=house)
+    await link.act(farmer, "turn_to", npc="PLAYER")
+    view = await desk.fresh(farmer)
+    arrow = (
+        next((t for t in view.traces if t.kind == "arrow" and f"TRACE:{t.id}:arrow" not in baseline), None)
+        if view
+        else None
+    )
+    if not check(
+        "new_trace", arrow is not None and arrow.age is not None, view.model_dump() if view else "no view"
+    ):
+        return _logged(results)
+    sid, line = evidence(arrow.id)
+    observed = sightings.mind(farmer).traces[f"TRACE:{arrow.id}:arrow"]
+    check(
+        "trace_memory",
+        bool(sid)
+        and bool(line)
+        and 0 <= arrow.age <= 5
+        and view.time - arrow.age <= observed.start <= view.time,
+        f"{line}; appearance {view.time - arrow.age}, age {arrow.age} min",
+    )
+    row = await deny(observation=observed)
+    prompt = request(row)
+    actual_sid, actual_line = _trace_evidence_line(prompt, observed)
+    fresh_trace = re.search(
+        rf"{re.escape(trace_name(observed.trace_kind, observed.name))} "
+        rf"\([^)]*{re.escape(observed.places[0])}[^)]*давность [0-5] мин\)",
+        prompt,
+    )
+    # Relative age may change during the turn; the stable time/name/place and the В id must survive.
+    check(
+        "trace_in_request",
+        bool(actual_sid) and "Следы, которые ты видел" in prompt and bool(fresh_trace),
+        f"{actual_line}; {fresh_trace.group() if fresh_trace else 'fresh trace absent'}",
+    )
+    hero_ids = [
+        sid
+        for sid, s in sightings._shown.get(farmer, {}).items()
+        if s.who == "PLAYER" and s.start == hero_start
+    ]
+    hero_lines = [
+        line for line in prompt.splitlines() if any(line.startswith(f"- {sid}:") for sid in hero_ids)
+    ]
+    check("hero_in_request", any("ферм" in line for line in hero_lines), hero_lines)
+    caught_calls = calls(row)
+    check(
+        "catch_uses_trace",
+        any(
+            c.get("arguments", {}).get("seen") == actual_sid and c.get("outcome") == "accepted"
+            for c in caught_calls
+        ),
+        caught_calls,
+    )
+    await _until(lambda: bool(chronicle.facts("caught")), 15)
+    caught = chronicle.facts("caught")
+    check(
+        "caught",
+        len(caught) == 1
+        and bool(_trace_evidence_line(f"- В1: {caught[0].get('how', '')}", observed)[0])
+        and "сам видел:" in caught[0].get("how", ""),
+        caught,
+    )
+    dialogue.llm = original
+    await release("done")
     return _logged(results)
 
 
