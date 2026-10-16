@@ -1,0 +1,44 @@
+# Calibrated stock Lobart pasture fence. Memory remains passive throughout.
+seed 7
+cheat god
+set time 12 0
+eye setup lobart-fence 1
+wait 2000
+memory on 0
+memory keys 0 on
+wait 1000
+memory snapshot front 0
+# The existing NpcKeys executor rotates an unarmed actor at 90 deg/s.
+memory keys 0 0 0 1 walk 0 0 0 0 2100
+wait 2000
+memory keys 0 0 0 0 walk 0 0 0 0 100
+wait 300
+memory snapshot turned 0
+# This is scenario setup, never an input to the memory. The new NPC is behind
+# the observer, offset sideways so it does not block the backing actor.
+memory spawn-behind 0 150 175
+wait 300
+memory snapshot unseen 0
+memory keys 0 -1 0 0 walk 0 0 0 0 250
+wait 250
+memory snapshot back-1 0
+memory keys 0 -1 0 0 walk 0 0 0 0 250
+wait 250
+memory snapshot back-2 0
+# Stop before reaching the fence: contact can bring a post into the peripheral
+# eye sector and refresh it, which would no longer test unseen aging.
+memory keys 0 0 0 0 walk 0 0 0 0 100
+wait 500
+memory snapshot stopped 0
+# Return along the same keys path before the standing measurement. The stock
+# slope slowly moves an idle actor toward the fence; leave room for that drift
+# so no post enters the 200-degree eye during the next minute.
+memory keys 0 1 0 0 walk 0 0 0 0 2100
+wait 2000
+memory keys 0 0 0 0 walk 0 0 0 0 100
+wait 500
+memory snapshot stand-start 0
+wait 60000
+memory snapshot aged 0
+memory off 0
+label done

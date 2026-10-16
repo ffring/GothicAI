@@ -1,0 +1,7 @@
+turn: stone behind -512.5 cm, confidence 0.967216; unseen=0, ray cells free
+decay: static 1.000000 -> 0.846482, movable 1.000000 -> 0.367879; after 30 m 0.311403 at 2100.0 cm
+cache: timestamp/pose retained, stale cache after new hit skipped; partial near segment retained
+ground: ledge/free/drop follow current feet; low empty air proves drop; high air preserves lower surfaces
+windows: world positions survive movement; eviction permanent; per-tick path and late cached observation correct
+far clearing: parallel ray 150 cm away retains hit; ray through actual 3D hit clears it
+navigation memory contracts passed
