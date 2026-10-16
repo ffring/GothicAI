@@ -553,11 +553,23 @@ fi
 # Carry e2e options, including scenario-specific GOTHIC_* settings; paths are remapped below.
 while IFS= read -r name; do
   case "$name" in
-    GOTHIC_DIR|GOTHIC_AI_URL) ;;
+    GOTHIC_DIR|GOTHIC_AI_URL|OPENGOTHIC_FRACTURE) ;;
     SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|CHATGPT_*|OPENAI_*)
       ENV_ARGS+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)
+if [[ "$ACTION" == e2e && "${SCENARIO:-m0}" == broken ]]; then
+  FRACTURE_CACHE="${OPENGOTHIC_FRACTURE-$HOME/.local/share/gothic-ai/fracture}"
+  if [[ -n "$FRACTURE_CACHE" && -d "$FRACTURE_CACHE" ]]; then
+    remote mkdir -p "$STATE/fracture"
+    rsync -a --delete "$FRACTURE_CACHE/" "$RYZEN_HOST:$REMOTE/fracture/"
+    ENV_ARGS+=("OPENGOTHIC_FRACTURE=$STATE/fracture")
+  else
+    ENV_ARGS+=("OPENGOTHIC_FRACTURE=")
+  fi
+elif [[ -n "${OPENGOTHIC_FRACTURE+set}" ]]; then
+  ENV_ARGS+=("OPENGOTHIC_FRACTURE=$OPENGOTHIC_FRACTURE")
+fi
 for name in SAVE VOICE_FILE; do
   if [[ -n "${!name:-}" ]]; then
     [[ -f "${!name}" ]] || { echo "Missing $name: ${!name}" >&2; exit 2; }

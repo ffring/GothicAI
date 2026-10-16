@@ -41,7 +41,7 @@ class Bullet final : public DynamicWorld::BulletCallback {
     int32_t  spellId() const;
 
     void     setOrigin(Npc* n);
-    Npc*     origin() const;
+    Npc*     origin() const override;
 
     void     setTarget(const Npc* n);
 

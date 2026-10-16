@@ -56,6 +56,8 @@ namespace TestBench {
   // Devmode-only native trace fixture; truth is returned only by an explicit debug request.
   bool     physicsTracesDebug(World& world, Npc& player, std::string_view command,
                               std::string& value, std::string& error);
+  bool     destructionTracesDebug(World& world, Npc& player, std::string_view command,
+                                  std::string& value, std::string& error);
   // An arrow (a bolt) has moved to (x, y, z), cm: the overlay draws the way it flew (`overlay trail`)
   void     arrowAt(const void* arrow, float x, float y, float z);
   // Native melee baseline telemetry. Opt in with OPENGOTHIC_BODY_TRACE=1; no events outside an active bench.

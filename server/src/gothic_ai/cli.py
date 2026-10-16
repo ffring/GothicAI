@@ -1355,15 +1355,18 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario seen: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
-            elif args.scenario == "trace":
+            elif args.scenario in ("trace", "broken"):
                 dialogue, talk, sightings = state.dialogue, state.talk, state.sightings
                 assert dialogue is not None and talk is not None and sightings is not None
                 assert args.trace_dir is not None
-                results = await scenarios.trace_memory(
+                from .scenario_broken import broken_memory
+
+                runner = broken_memory if args.scenario == "broken" else scenarios.trace_memory
+                results = await runner(
                     link, dialogue, talk, sightings, str(Path(args.trace_dir).parent)
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
-                log.info("scenario trace: %d checks, %d failed", len(results), len(bad))
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "witness":
                 dialogue, talk, sightings = state.dialogue, state.talk, state.sightings
@@ -2158,6 +2161,7 @@ def main() -> None:
             "see",
             "seen",
             "trace",
+            "broken",
             "witness",
             "places",
             "graph",

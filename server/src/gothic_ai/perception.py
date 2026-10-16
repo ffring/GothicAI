@@ -41,6 +41,7 @@ from .game import GameError, GameLink
 from .llm import Tool, ToolCall
 from .npc_tools import guild_name
 from .protocol import (
+    BROKEN_TRACE_PROTOCOL,
     TRACE_PROTOCOL,
     GameMessage,
     GroundItem,
@@ -289,6 +290,8 @@ class PerceptionDesk:
         hello = getattr(self.link, "hello", None)
         if hello is not None and hello.protocol < TRACE_PROTOCOL and view.traces:
             view = view.model_copy(update={"traces": []})
+        elif hello is not None and hello.protocol < BROKEN_TRACE_PROTOCOL and view.traces:
+            view = view.model_copy(update={"traces": [t for t in view.traces if t.kind != "broken"]})
         now = self.clock()
         self._views[view.npc.upper()] = (now, view)
         recent = self._recent.setdefault(view.npc.upper(), {})
@@ -617,7 +620,10 @@ class PerceptionDesk:
             at = " at the hero's feet" if t.hero_cm is not None and t.hero_cm <= AT_FEET_CM else ""
             lines.append(f"On the ground: {t.name}, {_m(t.distance)} m away{at}.")
         if view.traces:
-            kinds = {"arrow": "a stuck arrow", "moved": "a displaced object", "tilted": "a tilted object"}
+            kinds = {
+                "arrow": "a stuck arrow", "moved": "a displaced object", "tilted": "a tilted object",
+                "broken": "debris",
+            }
             for trace in view.traces:
                 lines.append(
                     f"You see {kinds[trace.kind]}: {trace.name}, {_m(trace.distance)} m away "
@@ -667,6 +673,8 @@ def _ground(items: list[GroundItem]) -> str | None:
 
 
 def trace_name(kind: str, name: str) -> str:
+    if kind == "broken":
+        return name
     if kind == "arrow" and "стрел" in name.lower():
         return name
     kinds = {"arrow": "застрявшая стрела", "moved": "сдвинутый предмет", "tilted": "наклонённый предмет"}

@@ -1,0 +1,25 @@
+# Lobart's authored farm fence; real sword animation and native sight samples.
+# Full wire, save/new-process, and optional step-2 archive acceptance:
+# scripts/destruction_traces_bridge.py (no model calls).
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+noise on
+destruction on
+overlay off
+view full
+destruction_traces setup
+shot destruction-traces-before
+rec destruction-traces-sword
+destruction_traces break
+wait 18000
+stop
+destruction_traces visible
+shot destruction-traces-visible
+destruction_traces blocked
+shot destruction-traces-behind-wall
+destruction_traces visible
+destruction_traces sample
+physics stats

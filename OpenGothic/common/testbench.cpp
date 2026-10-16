@@ -835,6 +835,11 @@ struct Bench {
   Matrix4x4 traceOrigin;
   Vec3 traceCenter,traceVisible,traceBlocked,traceFar,traceWall,traceShotDirection;
   bool traceReady=false;
+  Npc* destructionTraceHost=nullptr;
+  World* destructionTraceWorld=nullptr;
+  uint32_t destructionTraceZen=uint32_t(-1);
+  Vec3 destructionTraceSource;
+  bool destructionTraceDebug=false;
   Npc* arrowNpc=nullptr;
   std::string arrowCase,arrowAim;
   float arrowDraw=1.f;
@@ -977,6 +982,7 @@ struct Bench {
   uint64_t    busyAt    = 0;      // an npc of the AI spoke (or had a line waiting)
   bool        waitReply = false;
   std::string waitAiKey, waitAiStage;  // waitai: until the bridge says it got that far
+  std::unordered_set<std::string> brokenSignals; // explicit server barriers, independent of NPC lines
   uint64_t    waitAiEnd = 0;
   bool        replyNeed = false;  // a line has to start after replyFrom first
   uint64_t    replyFrom = 0;
@@ -4284,9 +4290,12 @@ std::string destructionRoutineRows(const Npc& npc) {
   return result+"]";
   }
 
-void destructionFarmSetup(World& world,Npc& player,uint32_t zenId) {
+void destructionFarmSetup(World& world,Npc& player,uint32_t zenId,bool npc=false) {
   bench.destructionMeleeRunning=false;bench.destructionTrace=false;
   bench.destructionFixtures.clear();bench.destructionIds.clear();
+  if(bench.destructionMeleeNpc) {
+    world.removeNpc(*bench.destructionMeleeNpc);bench.destructionMeleeNpc=nullptr;
+    }
   const auto bodies=world.physic()->movableVobSnapshot();
   const auto found=std::find_if(bodies.begin(),bodies.end(),[&](const auto& body){return body.zenId==zenId;});
   if(found==bodies.end() || found->className!="fence" || !found->destructible || found->broken) {
@@ -4306,14 +4315,21 @@ void destructionFarmSetup(World& world,Npc& player,uint32_t zenId) {
     start.y=first.v.y;end.y=last.v.y;normal*=sign;supported=true;break;
     }
   if(!supported) {arenaAbort("destruction farm fence lacks native walkable ground on both sides");return;}
-  if(!destructionMeleeEquip(world,player,"1h"))return;
-  player.setPosition(start);player.setDirection(normal);player.updateTransform();
-  bench.destructionIds.push_back(found->id);bench.destructionMeleeActor=&player;
+  auto* actor=&player;
+  if(npc) {
+    actor=world.findNpcByInstance(world.script().findSymbolIndex("BAU_952_VINO"));
+    if(!actor) {arenaAbort("destruction farm NPC actor Vino is absent");return;}
+    }
+  if(!destructionMeleeEquip(world,*actor,"1h"))return;
+  actor->setPosition(start);actor->setDirection(normal);actor->updateTransform();
+  if(npc) {player.closeWeapon(true);player.setPosition(start-normal*800.f);player.updateTransform();}
+  bench.destructionIds.push_back(found->id);bench.destructionMeleeActor=actor;
   bench.destructionMeleeRestance=false;
   bench.destructionMeleeFacing=normal;
   bench.destructionMeleeAttempts=bench.destructionMeleeHits=0;
   bench.destructionFarmZen=zenId;bench.destructionFarmStart=start;bench.destructionFarmEnd=end;
-  bench.destructionCase="farm-fence-1h";bench.destructionTrace=true;bench.destructionStart=world.tickCount();
+  bench.destructionCase=npc?"farm-fence-1h-npc":"farm-fence-1h";
+  bench.destructionTrace=true;bench.destructionStart=world.tickCount();
   auto* maleth=world.findNpcByInstance(world.script().findSymbolIndex("BAU_954_MALETH"));
   if(!maleth) {arenaAbort("destruction farm routine NPC Maleth is absent");return;}
   bench.destructionFarmNpc=maleth;bench.destructionFarmNpcStart=maleth->position();bench.destructionFarmNpcTravel=0;
@@ -4321,9 +4337,23 @@ void destructionFarmSetup(World& world,Npc& player,uint32_t zenId) {
   bench.cam=C_Hold;lookFrom(center-normal*310.f+side*290.f+Vec3(0,170,0),center+Vec3(0,-10,0));
   event("destruction2_farm_setup","\"zen_id\":"+std::to_string(zenId)+",\"visual\":"+jsonStr(found->visual)+
     ",\"from_map\":true,\"start_cm\":"+ragdollVector(start)+",\"goal_cm\":"+ragdollVector(end)+
+    ",\"actor\":"+jsonStr(symName(world,actor))+
     ",\"intact_passable\":"+(player.testMove(end)?"true":"false")+",\"npc\":"+jsonStr(symName(world,maleth))+
     ",\"npc_cm\":"+ragdollVector(maleth->position())+",\"npc_routines\":"+destructionRoutineRows(*maleth)+
     ",\"bodies\":"+destructionRows(world));
+  }
+
+void destructionFarmSetupNext(World& world,Npc& player) {
+  const auto bodies=world.physic()->movableVobSnapshot();
+  const DynamicWorld::MovableVobSnapshot* nearest=nullptr;
+  float distance=1800.f;
+  for(const auto& body:bodies) {
+    if(body.zenId==uint32_t(-1) || body.className!="fence" || !body.destructible || body.broken)continue;
+    const float cm=(movablePosition(body.transform)-bench.destructionFarmStart).length();
+    if(cm<distance || (nearest && cm==distance && body.zenId<nearest->zenId)) {nearest=&body;distance=cm;}
+    }
+  if(!nearest) {arenaAbort("destruction farm needs another intact native fence within 18 m");return;}
+  destructionFarmSetup(world,player,nearest->zenId);
   }
 
 void destructionFarmNpcWalk(World& world,std::string_view phase) {
@@ -6880,6 +6910,12 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(!TestBench::physicsTracesDebug(w,pl,command,value,error)) {arenaAbort(error);return;}
     event("physics_traces_debug","\"command\":"+jsonStr(command)+",\"sample\":"+value);
     }
+  else if(c=="destruction_traces" && a.size()>=2) {
+    std::string command=a[1],value,error;
+    for(size_t i=2;i<a.size();++i)command+=' '+a[i];
+    if(!TestBench::destructionTracesDebug(w,pl,command,value,error)) {arenaAbort(error);return;}
+    event("destruction_traces_debug","\"command\":"+jsonStr(command)+",\"sample\":"+value);
+    }
   else if(c=="destruction" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","destruction",a[1]=="on");
     w.physic()->setDestructionEnabled(a[1]=="on");
@@ -6900,8 +6936,9 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.destructionMeleeDeadline=w.tickCount()+90000;bench.waitUntil=bench.time+90034;
     }
   else if(c=="destruction2" && a.size()==2 && a[1]=="checkpoint") destructionCheckpoint(w);
-  else if(c=="destruction2" && (a.size()==2 || a.size()==3) && a[1]=="farm")
-    destructionFarmSetup(w,pl,uint32_t(num(a,2,19355)));
+  else if(c=="destruction2" && (a.size()==2 || a.size()==3 || (a.size()==4 && a[3]=="npc")) && a[1]=="farm")
+    destructionFarmSetup(w,pl,uint32_t(num(a,2,19355)),a.size()==4);
+  else if(c=="destruction2" && a.size()==2 && a[1]=="farm-nearby") destructionFarmSetupNext(w,pl);
   else if(c=="destruction2" && a.size()==2 && a[1]=="farm-walk") {
     pl.closeWeapon(true);pl.stopWalking();pl.clearAiQueue();pl.setDirection(bench.destructionMeleeFacing);pl.updateTransform();
     exec("hold forward 2800",w,pl,ctrl);bench.waitUntil=bench.time+2834;
@@ -10549,7 +10586,8 @@ bool waitingForReply() {
 bool waitingForAi() {
   if(bench.waitAiKey.empty())
     return false;
-  if(TestBench::aiReached && TestBench::aiReached(bench.waitAiKey,bench.waitAiStage)) {
+  const bool signalled=bench.waitAiKey=="broken" && bench.brokenSignals.count(bench.waitAiStage)>0;
+  if(signalled || (TestBench::aiReached && TestBench::aiReached(bench.waitAiKey,bench.waitAiStage))) {
     say("waitai " + bench.waitAiKey + " " + bench.waitAiStage);
     bench.waitAiKey.clear();
     return false;
@@ -11419,6 +11457,132 @@ bool TestBench::physicsTracesDebug(World& world,Npc& player,std::string_view com
   return true;
   }
 
+bool TestBench::destructionTracesDebug(World& world,Npc& player,std::string_view command,
+                                      std::string& value,std::string& error) {
+  if(command.starts_with("signal ")) {
+    bench.brokenSignals.insert(std::string(command.substr(7)));
+    value="{}";
+    return true;
+    }
+  const auto fail=[&](std::string_view message) {error=message;return false;};
+  const auto park=[&](Npc& npc,const Vec3& point) {
+    npc.clearAiQueue();npc.clearState(false);npc.clearGoTo();npc.stopWalking();npc.setInteraction(nullptr,true);
+    npc.closeWeapon(true);npc.setPosition(point);npc.setExternalControl(false);
+    npc.setDirection(bench.destructionTraceSource-point);npc.updateTransform();
+    npc.aiPush(AiQueue::aiWait(120000));
+    };
+  const auto floorAt=[&](Vec3& point) {
+    const auto floor=world.physic()->landRay(point+Vec3(0,220,0),600);
+    if(!floor.hasCol || floor.n.y<.8f || std::abs(floor.v.y-bench.destructionTraceSource.y)>350)return false;
+    point.y=floor.v.y;
+    for(const auto offset:{Vec3(40,0,0),Vec3(-40,0,0),Vec3(0,0,40),Vec3(0,0,-40)})
+      if(world.physic()->ray(point+Vec3(0,85,0),point+offset+Vec3(0,85,0)).hasCol)return false;
+    return true;
+    };
+  if(command=="setup" || command.starts_with("reload ")) {
+    bench.destructionTraceDebug=false;bench.destructionMeleeRunning=false;
+    bench.destructionTraceHost=nullptr;bench.destructionTraceWorld=nullptr;
+    uint32_t zenId=19355;
+    if(command.starts_with("reload ")) {
+      try {zenId=uint32_t(std::stoul(std::string(command.substr(7))));}
+      catch(const std::exception&) {return fail("destruction trace reload requires a map-vob zen id");}
+      }
+    Gothic::settingsSetI("GAME","destruction",1);
+    world.physic()->setDestructionEnabled(true);
+    const auto bodies=world.physic()->movableVobSnapshot();
+    const auto found=std::find_if(bodies.begin(),bodies.end(),[&](const auto& body){return body.zenId==zenId;});
+    if(found==bodies.end() || found->className!="fence" || !found->destructible)
+      return fail("destruction trace fixture requires the authored Lobart farm fence");
+    if(command=="setup" && found->broken)return fail("destruction trace setup requires an intact farm fence");
+    for(uint32_t i=0;i<world.npcCount();++i) {
+      auto* npc=world.npcById(i);if(!npc)continue;
+      auto name=symName(world,npc);
+      for(auto& c:name)c=char(std::toupper(static_cast<unsigned char>(c)));
+      if(name.find("LOBART")!=std::string::npos) {bench.destructionTraceHost=npc;break;}
+      }
+    if(!bench.destructionTraceHost)return fail("destruction trace fixture requires Lobart");
+    bench.destructionTraceZen=zenId;
+    bench.destructionTraceSource=(found->localBounds[0]+found->localBounds[1])*.5f;
+    found->transform.project(bench.destructionTraceSource);
+    if(command=="setup") {
+      destructionFarmSetup(world,player,zenId);
+      if(bench.destructionFarmZen!=zenId || bench.destructionMeleeActor!=&player)
+        return fail("destruction trace native sword stance preparation failed");
+      }
+    world.script().skipImportantInfos(*bench.destructionTraceHost,player);
+    player.handle().attribute[ATR_HITPOINTS]=100000;player.handle().attribute[ATR_HITPOINTSMAX]=100000;
+    bool supported=false;
+    for(unsigned i=0;i<96;++i) {
+      const float angle=float(i)*float(M_PI)/48.f;
+      auto point=bench.destructionTraceSource+Vec3(std::cos(angle)*500,0,std::sin(angle)*500);
+      if(!floorAt(point))continue;
+      park(*bench.destructionTraceHost,point);supported=true;break;
+      }
+    if(!supported)return fail("destruction trace fixture lacks supported observer floor");
+    bench.destructionTraceWorld=&world;bench.destructionTraceDebug=true;
+    }
+  if(!bench.destructionTraceDebug || bench.destructionTraceWorld!=&world || !bench.destructionTraceHost)
+    return fail("destruction_traces setup or reload required");
+  auto& npc=*bench.destructionTraceHost;
+  const auto traceId=std::string(world.name())+":vob:"+std::to_string(bench.destructionTraceZen);
+  if(command=="break") {
+    if(bench.destructionFarmZen!=bench.destructionTraceZen || bench.destructionMeleeActor!=&player)
+      return fail("destruction trace break requires the original intact setup");
+    if(bench.destructionMeleeRunning)return fail("destruction trace native sword attack is already running");
+    const auto bodies=world.physic()->movableVobSnapshot();
+    const auto found=std::find_if(bodies.begin(),bodies.end(),[&](const auto& body){return body.zenId==bench.destructionTraceZen;});
+    if(found==bodies.end() || found->broken)return fail("destruction trace break requires its intact farm fence");
+    bench.destructionMeleeRunning=true;bench.destructionMeleeNext=world.tickCount();
+    bench.destructionMeleeDeadline=world.tickCount()+90000;
+    if(scenarioPath!=nullptr)bench.waitUntil=bench.time+90034;
+    }
+  else if(command=="visible" || command=="blocked") {
+    const auto traces=world.physicsTraces();
+    const auto source=std::find_if(traces.begin(),traces.end(),[&](const auto& trace){return trace.id==traceId && trace.kind=="broken";});
+    if(source==traces.end())return fail("destruction trace observer placement requires broken native debris");
+    bool found=false;
+    for(float distance:{300.f,450.f,600.f,800.f,1000.f,1250.f,1400.f}) {
+      for(unsigned i=0;i<192;++i) {
+        const float angle=float(i)*float(M_PI)/96.f;
+        auto point=bench.destructionTraceSource+Vec3(std::cos(angle)*distance,0,std::sin(angle)*distance);
+        if(!floorAt(point))continue;
+        park(npc,point);
+        if((source->position-point).length()>1500.f)continue;
+        bool visible=false;
+        for(const auto& sight:source->sightPoints)
+          visible|=npc.canRayHitPoint(sight,command=="blocked",2000.f);
+        if((command=="visible" && visible) || (command=="blocked" && !visible)) {found=true;break;}
+        }
+      if(found)break;
+      }
+    if(!found)return fail(command=="blocked"?"no supported Lobart position behind a real farm wall":
+                                             "no supported Lobart position seeing the native debris");
+    }
+  else if(command!="setup" && !command.starts_with("reload ") && command!="sample")
+    return fail("unknown destruction_traces command");
+  std::string rows="[";
+  for(const auto& trace:world.physicsTraces()) {
+    if(trace.id!=traceId || trace.kind!="broken")continue;
+    bool visible=false;
+    for(const auto& point:trace.sightPoints)visible|=npc.canRayHitPoint(point,true,2000.f);
+    const auto* wp=world.findWayPoint(trace.position);
+    if(rows.size()>1)rows+=',';
+    rows+="{\"id\":"+jsonStr(trace.id)+",\"kind\":"+jsonStr(trace.kind)+",\"name\":"+jsonStr(trace.name)+
+      ",\"waypoint\":"+jsonStr(wp?wp->name:"")+",\"position_cm\":"+ragdollVector(trace.position)+
+      ",\"distance_cm\":"+ragdollNumber((trace.position-npc.position()).length())+
+      ",\"appeared_at\":"+std::to_string(trace.appearedAt)+",\"actor_truth\":"+jsonStr(trace.culprit)+
+      ",\"can_ray_hit_point\":"+(visible?"true":"false")+"}";
+    }
+  value="{\"npc\":"+jsonStr(symName(world,&npc))+",\"hero\":"+jsonStr(symName(world,&player))+
+    ",\"zen_id\":"+std::to_string(bench.destructionTraceZen)+",\"trace_id\":"+jsonStr(traceId)+
+    ",\"source_position_cm\":"+ragdollVector(bench.destructionTraceSource)+
+    ",\"npc_position_cm\":"+ragdollVector(npc.position())+
+    ",\"game_minutes\":"+std::to_string(world.time().toInt()/60000)+
+    ",\"melee_running\":"+(bench.destructionMeleeRunning?"true":"false")+
+    ",\"melee_attempts\":"+std::to_string(bench.destructionMeleeAttempts)+",\"truth\":"+rows+"]}";
+  return true;
+  }
+
 void TestBench::destructionBreak(uintptr_t body,size_t pieces,float milliseconds) {
   if(scenarioPath==nullptr || !bench.destructionTrace || !destructionOwns(body))return;
   auto* world=Gothic::inst().world();
@@ -11742,6 +11906,13 @@ uint64_t TestBench::frameDt(uint64_t dt) {
   }
 
 void TestBench::beforeWorldTick(uint64_t dt) {
+  // The live bridge stand has no bench program, but uses the same real sword
+  // animation and its normal hit frame as the scripted destruction fixture.
+  if(scenarioPath==nullptr && bench.destructionTraceDebug && bench.destructionMeleeRunning && dt!=0) {
+    auto* world=Gothic::inst().world();
+    if(world && world==bench.destructionTraceWorld)destructionMeleeTick(*world);
+    else {bench.destructionTraceDebug=false;bench.destructionMeleeRunning=false;}
+    }
   const bool destructionCast=bench.destructionTrace &&
                              (bench.destructionCase=="fireball" || bench.destructionCase=="five");
   const bool movableCast=bench.movableTrace && bench.movablePhase=="blast";

@@ -701,9 +701,10 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   world.reset(new CollisionWorld());
   bodies.reset(new WorldBodies());
   movableVobs.reset(new MovableVobs());
-  world->setBodyImpactCallback([this](CollisionWorld::CollisionBody& body,float impulse,const Tempest::Vec3& point) {
+  world->setBodyImpactCallback([this](CollisionWorld::CollisionBody& body,float impulse,const Tempest::Vec3& point,
+                                     std::string_view culprit) {
     if(body.ptrType()==P_MovableVob && body.payload()!=nullptr)
-      damageMovableVob(*static_cast<BodyData*>(body.payload()),impulse,point);
+      damageMovableVob(*static_cast<BodyData*>(body.payload()),impulse,point,false,culprit);
     });
 
   {
@@ -1285,10 +1286,15 @@ size_t DynamicWorld::meleeMovableVobs(const Tempest::Vec3& origin,const Tempest:
     touched.insert(&obj);
     ++count;
     const float impulse=damage*.02f;
+    // Fences keep a static sensor hull, so their rejected physical impulse
+    // must still record the actor of the real weapon contact.
+    obj.body->setTraceCulprit(attacker);
     obj.body->addImpulseAtPoint(direction*impulse,hit.point,attacker);
     obj.health=std::max(0.f,obj.health-damage);
     if(obj.health>.001f) continue;
     obj.pendingBreak=true;
+    obj.traceTime=traceTime;
+    obj.traceCulprit=obj.body->traceCulprit();
     obj.breakImpulse=impulse;
     obj.breakPoint=hit.point;
     }
@@ -1379,10 +1385,10 @@ void DynamicWorld::saveDestructionVobs(Serialize& fout) const {
   // Separate optional archive entry: older saves have no destruction state,
   // and movable-vobs readers keep their existing schema and meaning.
   fout.setEntry("worlds/",fout.worldName(),"/destruction-vobs");
-  fout.write(uint32_t(0x31534544),uint16_t(1),fout.worldName(),uint32_t(changed.size()));
+  fout.write(uint32_t(0x31534544),uint16_t(2),fout.worldName(),uint32_t(changed.size()));
   for(const auto* obj:changed) {
     fout.write(obj->pose->zenId,obj->visual,obj->origin,obj->current,obj->health,obj->pose->broken,
-               uint32_t(obj->fragments.size()));
+               uint32_t(obj->fragments.size()),uint64_t(obj->traceTime)+1,obj->traceCulprit);
     for(size_t i=0;i<obj->fragments.size();++i) {
       const auto& piece=obj->fragments[i];
       fout.write(piece!=nullptr,obj->fragmentPermanent[i],uint64_t(obj->fragmentSleepTime[i])+1);
@@ -1400,7 +1406,7 @@ void DynamicWorld::loadDestructionVobs(Serialize& fin) {
     uint16_t schema=0;
     std::string worldName;
     fin.read(magic,schema,worldName,count);
-    if(magic!=0x31534544 || schema!=1 || worldName!=fin.worldName() || count>100000)
+    if(magic!=0x31534544 || (schema!=1 && schema!=2) || worldName!=fin.worldName() || count>100000)
       return;
     struct Piece {
       bool present=false,permanent=false,sleeping=true;
@@ -1418,6 +1424,10 @@ void DynamicWorld::loadDestructionVobs(Serialize& fin) {
       float health=0;
       bool broken=false;
       fin.read(id,visual,origin,matrix,health,broken,pieceCount);
+      uint64_t traceTimeEncoded=0;
+      std::string traceCulprit;
+      if(schema>=2)
+        fin.read(traceTimeEncoded,traceCulprit);
       if(pieceCount>20)
         return;
       std::vector<Piece> pieces(pieceCount);
@@ -1475,8 +1485,10 @@ void DynamicWorld::loadDestructionVobs(Serialize& fin) {
         obj->health=0.f;
         obj->pendingBreak=false;
         obj->trace=obj->tilted=false;
-        obj->traceTime=-1;
-        obj->traceCulprit.clear();
+        // Step-2 saves have debris but no recorded break time or actor.
+        obj->traceTime=traceTimeEncoded>0 && traceTimeEncoded-1<=uint64_t(std::numeric_limits<int64_t>::max())
+                         ? int64_t(traceTimeEncoded-1) : -1;
+        obj->traceCulprit=std::move(traceCulprit);
         obj->fragments=std::move(fragments);
         obj->fragmentSleepTime.resize(pieces.size());
         obj->fragmentPermanent.resize(pieces.size());
@@ -1748,7 +1760,8 @@ std::vector<DynamicWorld::RagdollSupport> DynamicWorld::ragdollSupports(const Ra
   return result;
   }
 
-void DynamicWorld::damageMovableVob(BodyData& obj,float impulse,const Tempest::Vec3& point,bool arrow) {
+void DynamicWorld::damageMovableVob(BodyData& obj,float impulse,const Tempest::Vec3& point,bool arrow,
+                                  std::string_view impactCulprit) {
   if(!movableVobs->destructionEnabled || obj.fractureRule==nullptr || obj.movableShape->fracture==nullptr ||
      obj.body==nullptr || obj.pose->broken || obj.pendingBreak || !std::isfinite(impulse) || impulse<=0.f)
     return;
@@ -1759,6 +1772,8 @@ void DynamicWorld::damageMovableVob(BodyData& obj,float impulse,const Tempest::V
   obj.health=std::max(0.f,obj.health-damage);
   if(obj.health>.001f) return;
   obj.pendingBreak=true;
+  obj.traceTime=traceTime;
+  obj.traceCulprit=impactCulprit.empty() ? obj.body->traceCulprit() : impactCulprit;
   obj.breakImpulse=impulse;
   obj.breakPoint=point;
   }
@@ -1805,8 +1820,6 @@ void DynamicWorld::breakMovableVob(BodyData& obj) {
     obj.fragmentPermanent[largest[i]]=true;
   obj.pendingBreak=false;
   obj.trace=obj.tilted=false;
-  obj.traceTime=-1;
-  obj.traceCulprit.clear();
   obj.fragmentsWereSleeping=false;
   syncFragments(obj);
   PhysicsNoise noise;
@@ -1898,6 +1911,8 @@ size_t DynamicWorld::applyMovableVobImpulse(const Tempest::Vec3& center, float r
       excluded.push_back(part.get());
     if(world->rayCast(center,target,visualMask,false,nullptr,&excluded).hasHit)
       continue;
+    if(obj->className=="fence")
+      obj->body->setTraceCulprit(culprit);
     if(obj->className=="fence" || obj->body->addImpulse(force,culprit,pointCm)) {
       ++count;
       damageMovableVob(*obj,force.length(),pointCm!=nullptr ? *pointCm : target);
@@ -1957,7 +1972,11 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
       // actual flight speed, independently of optional arrow attachments.
       if(movableVobs->destructionEnabled && target.movableShape->fracture!=nullptr) {
         const auto impulse=b.direction()*1.2f;
-        if(target.body!=nullptr) target.body->addImpulseAtPoint(impulse,hit.point);
+        if(target.body!=nullptr) {
+          auto* culprit=b.cb!=nullptr ? b.cb->origin() : nullptr;
+          target.body->setTraceCulprit(culprit);
+          target.body->addImpulseAtPoint(impulse,hit.point,culprit);
+          }
         damageMovableVob(target,impulse.length(),hit.point,true);
         }
       }

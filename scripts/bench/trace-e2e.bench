@@ -6,6 +6,9 @@ waitreply 120000 100
 physics dump 1 73013 trace-rays.tsv
 mark wall_sample
 waitreply 120000 100
+physics dump 1 73013 trace-shot-rays.tsv
+mark shot_sample
+waitreply 120000 100
 
 npcequip BAU_952_VINO ItRw_Bow_L_01
 npcequip BAU_952_VINO ItRw_Arrow 20

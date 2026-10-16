@@ -49,6 +49,13 @@ std::string_view traceObjectName(std::string_view what, bool arrow = false) {
   return "предмет";
   }
 
+std::string_view brokenObjectName(std::string_view what) {
+  if(what=="crate")  return "обломки ящика";
+  if(what=="barrel") return "обломки бочки";
+  if(what=="fence")  return "сломанный забор";
+  return "обломки предмета";
+  }
+
 int64_t traceTime(const World& world) {
   const auto now = world.time();
   return now.day()*24*60+now.hour()*60+now.minute();
@@ -353,14 +360,16 @@ std::vector<World::PhysicsTrace> World::physicsTraces() const {
       }
     }
   for(const auto& item:wdynamic->movableVobSnapshot()) {
-    if(!item.enabled || !item.trace || item.zenId==uint32_t(-1))
+    if((!item.broken && (!item.enabled || !item.trace)) || item.zenId==uint32_t(-1))
       continue;
     PhysicsTrace trace;
     trace.id = wname+":vob:"+std::to_string(item.zenId);
-    trace.kind = item.tilted ? "tilted" : "moved";
-    trace.name = traceObjectName(item.className);
+    trace.kind = item.broken ? "broken" : item.tilted ? "tilted" : "moved";
+    trace.name = item.broken ? brokenObjectName(item.className) : traceObjectName(item.className);
     const auto center = (item.localBounds[0]+item.localBounds[1])*.5f;
     trace.position = tracePoint(item.transform,center);
+    // Broken parents retain their last intact pose: the trace describes where
+    // the prop stood, independently of where its surviving pieces roll.
     // Surface samples stay just outside the mesh: a ray to the object's origin
     // would often end inside its own collider and hide a perfectly visible table.
     for(size_t axis=0;axis<3;++axis) {

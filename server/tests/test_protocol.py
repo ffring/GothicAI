@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from gothic_ai import triggers
 from gothic_ai.protocol import (
+    BROKEN_TRACE_PROTOCOL,
     ERRAND_PROTOCOL,
     NOISE_PROTOCOL,
     PACE_PROTOCOL,
@@ -436,7 +437,7 @@ def test_v38_a_guide_keeps_the_heros_pace():
 
 
 def test_v39_errands_mission_items_and_a_give_to_an_npc():
-    assert PROTOCOL_VERSION == ERRAND_PROTOCOL == 39
+    assert PROTOCOL_VERSION >= ERRAND_PROTOCOL == 39
     snap = parse_game_message(_json({
         "type": "snapshot", "req": "r1", "t": 1,
         "npc": {"id": "X", "name": "Хильда", "pos": [0, 0, 0], "rot": 0, "hp": 1, "hp_max": 1, "busy": False,
@@ -449,3 +450,24 @@ def test_v39_errands_mission_items_and_a_give_to_an_npc():
     effect = {"do": "give", "item": "ITMI_GOLD", "count": 25, "to": "npc", "npc": "BAU_950_LOBART"}
     give = StoryEffectCmd(req="e1", npc="BAU_951_HILDA", effects=[effect])
     assert '"to":"npc","npc":"BAU_950_LOBART"' in give.to_json()
+
+
+@pytest.mark.parametrize("age", [0, 9, None])
+def test_v40_broken_trace_has_age_and_no_culprit(age):
+    assert PROTOCOL_VERSION == BROKEN_TRACE_PROTOCOL == 40
+    command = DebugCmd(req="stand", cmd="destruction_traces", text="sample")
+    assert '"cmd":"destruction_traces"' in command.to_json()
+    msg = parse_game_message(_json({
+        "type": "npc_views", "t": 10,
+        "views": [{"npc": "BAU_950_LOBART", "name": "Лобарт", "time": 725, "traces": [{
+            "id": "NEWWORLD.ZEN:vob:42", "kind": "broken", "name": "сломанный забор",
+            "waypoint": "NW_FARM1_OUT_02", "distance": 210, "age": age,
+        }]}],
+    }))
+    assert isinstance(msg, NpcViews)
+    trace = msg.views[0].traces[0]
+    assert (trace.kind, trace.name, trace.age) == ("broken", "сломанный забор", age)
+    assert trace.waypoint == "NW_FARM1_OUT_02" and trace.distance == 210
+    assert set(trace.model_dump()) == {
+        "id", "kind", "name", "waypoint", "distance", "hero_cm", "from_hero", "age",
+    }

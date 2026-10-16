@@ -57,3 +57,27 @@ def test_a_hero_sighting_at_the_same_time_and_place_is_not_trace_evidence():
     prompt = f"Героя:\n- В1: сегодня 09:07, только что — {FARM}; с оружием наголо."
 
     assert _trace_evidence_line(prompt, arrow_observation()) == ("", "")
+
+
+def test_broken_evidence_uses_its_own_line_after_hero_and_older_debris():
+    observed = Sighting(
+        "TRACE:NEWWORLD:vob:19355:broken",
+        "сломанный забор",
+        AT_9_07,
+        AT_9_07,
+        [FARM],
+        trace_kind="broken",
+    )
+    expected = f"- В3: сегодня 09:07, только что — сломанный забор; {FARM}; давность при наблюдении 1 мин."
+    prompt = "\n".join(
+        [
+            "Героя:",
+            f"- В1: сегодня 09:07, только что — {FARM}; с оружием наголо.",
+            "Следы, которые ты видел:",
+            f"- В2: сегодня 08:03, около часа назад — сломанный забор; {FARM}; "
+            "давность при наблюдении 2 мин.",
+            expected,
+        ]
+    )
+
+    assert _trace_evidence_line(prompt, observed) == ("В3", expected)

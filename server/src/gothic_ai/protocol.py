@@ -18,11 +18,12 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 39
+PROTOCOL_VERSION = 40
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
 ERRAND_PROTOCOL = 39  # inventory items' `mission`; story_effect give to another npc (errands.py)
+BROKEN_TRACE_PROTOCOL = 40  # visible debris, with the time of breakage kept in the engine and save
 
 # --- game -> server -----------------------------------------------------------
 
@@ -462,8 +463,8 @@ class Trace(_GameMessage):
     """A visible physical trace (v37). Its originator remains private to the engine and save."""
 
     id: str  # stable across saves; identifies the trace, not its originator
-    kind: Literal["arrow", "moved", "tilted"]
-    name: str  # arrow, table, barrel, ...
+    kind: Literal["arrow", "moved", "tilted", "broken"]
+    name: str  # arrow, table, barrel, ...; broken: a full description, e.g. «обломки ящика»
     waypoint: str | None = None  # nearest waypoint to the trace
     distance: float = 0  # cm from the npc
     hero_cm: float | None = None
@@ -1210,6 +1211,7 @@ DebugCommand = Literal[
     "triggers",
     "physics_noise",  # v36: native tavern fixture, devmode only
     "physics_traces",  # v37: physical traces fixture, devmode only
+    "destruction_traces",  # v40: broken debris fixture, devmode only
 ]
 
 

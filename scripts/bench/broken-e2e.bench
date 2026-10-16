@@ -1,0 +1,38 @@
+# Server stages Lobart around two native map fences. Damage uses normal sword animation events.
+seed 73013
+cheat god
+movable on
+living on
+noise on
+destruction on
+overlay off
+view full
+mark broken_ready
+waitai broken control_setup 120000
+
+destruction2 farm 19355 npc
+wait 600
+mark control_ready
+waitai broken control_attack 120000
+rec broken-control-sword
+destruction2 attack
+wait 1200
+stop
+mark control_broken
+waitai broken positive_setup 180000
+waitquiet 1500 120000
+
+destruction2 farm-nearby
+wait 600
+mark positive_ready
+waitai broken hero_attack 120000
+rec broken-hero-sword
+destruction2 attack
+wait 1200
+stop
+mark hero_broken
+waitai broken save 180000
+destruction2 save step3-broken
+mark broken_saved
+waitai broken done 30000
+quit
