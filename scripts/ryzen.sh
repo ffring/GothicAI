@@ -277,6 +277,40 @@ finish_run() {
     case "$found" in
       0)
         if rsync -a "$RYZEN_HOST:$REMOTE/runs/$RUN/" "$LOG_DIR/"; then
+          if [[ "$ACTION" == bench ]]; then
+            # Reports are built on Ryzen; collected links must point at the local output.
+            if ! python3 - "$STATE/runs/$RUN" "$LOG_DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+remote_out, local_out = sys.argv[1:]
+out = Path(local_out)
+report = out / 'report.md'
+if report.is_file():
+    text = report.read_text().replace(remote_out, local_out)
+    text = text.replace(f'# Bench report: {Path(remote_out).name}\n',
+                        f'# Bench report: {out.name}\n', 1)
+    report.write_text(text)
+
+def localize(value):
+    if isinstance(value, str):
+        return value.replace(remote_out, local_out)
+    if isinstance(value, list):
+        return [localize(item) for item in value]
+    if isinstance(value, dict):
+        return {key: localize(item) for key, item in value.items()}
+    return value
+
+report = out / 'report.json'
+if report.is_file():
+    report.write_text(json.dumps(localize(json.loads(report.read_text())), indent=2) + '\n')
+PY
+            then
+              echo "Ryzen: could not localize reports; keeping remote artifacts for $RUN" >&2
+              return 1
+            fi
+          fi
           if remote rm -rf -- "$STATE/runs/$RUN" "$STATE/inputs/$RUN"; then
             echo "Ryzen: removed runs/$RUN and inputs/$RUN"
           else
