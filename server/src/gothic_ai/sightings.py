@@ -583,7 +583,7 @@ class Sightings:
                     "Отклонено: такого ты сам не видел — укажи строку из «Что ты видел сам» (В1, В2…).",
                     "rejected",
                 )
-            how = f"сам видел его {self.words(s)}"
+            how = f"сам видел: {self.words(s)}" if s.trace_kind else f"сам видел его {self.words(s)}"
         if not said:
             return ToolOutcome("Отклонено: скажи, в каких его словах ложь.", "rejected")
         # his words: in his latest lines, or those a witness was asked about (checked when it was asked)

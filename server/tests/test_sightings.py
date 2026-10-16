@@ -334,6 +334,7 @@ async def test_a_seen_trace_is_a_catch_lie_evidence_line_in_the_model_prompt():
     assert len(caught) == 1
     assert caught[0]["title"] == "я не трогал стол"
     assert "сдвинутый предмет: Стол; во дворе фермы Лобарта" in caught[0]["how"]
+    assert caught[0]["how"].startswith("сам видел: ")  # the trace, without claiming to have seen its maker
 
 
 async def test_a_lie_about_where_he_was_is_caught_by_what_it_saw():
