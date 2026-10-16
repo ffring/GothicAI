@@ -5,6 +5,7 @@
 #include "world/objects/npc.h"
 #include "world/objects/interactive.h"
 #include "world/world.h"
+#include "gothic.h"
 #include "serialize.h"
 #include "testbench.h"
 
@@ -85,6 +86,10 @@ MoveAlgo::MoveAlgo(Npc& unit)
   }
 
 void MoveAlgo::load(Serialize &fin) {
+  npc.physic.resetVirtual();
+  virtualMovementActive = false;
+  virtualGroundVelocity = {};
+  virtualJumpVelocity = {};
   fin.read(reinterpret_cast<uint32_t&>(flags));
   fin.read(mulSpeed,fallSpeed,fallCount,climbStart,climbPos0,climbHeight);
   fin.read(reinterpret_cast<uint8_t&>(jmp));
@@ -223,6 +228,10 @@ void MoveAlgo::tick(uint64_t dt, MvFlags moveFlg) {
     }
 
   if(npc.interactive()!=nullptr) {
+    npc.physic.resetVirtual();
+    virtualMovementActive = false;
+    virtualGroundVelocity = {};
+    virtualJumpVelocity = {};
     tickMobsi(dt);
     return;
     }
@@ -241,6 +250,19 @@ void MoveAlgo::tick(uint64_t dt, MvFlags moveFlg) {
   }
 
 bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
+  const auto bs = npc.bodyStateMasked();
+  const bool liftOff = bs==BS_JUMP && npc.isFlyAnim();
+  const bool virtualWalking = npc.isPlayer() && Gothic::physicsFlags().characterVirtual &&
+                              !npc.isDown() && npc.hasCollision() && !canFlyOverWater() &&
+                              (flags==Run || flags==Slide || flags==InWater) && !liftOff;
+  if(!virtualWalking) {
+    if(virtualMovementActive && flags==Run && liftOff)
+      virtualJumpVelocity = virtualGroundVelocity*0.001f;
+    npc.physic.resetVirtual();
+    virtualMovementActive = false;
+    virtualGroundVelocity = {};
+    }
+
   if(flags==ClimbUp) {
     tickClimb(dt);
     return true;
@@ -255,10 +277,20 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
   const bool swim  = (state==Swim);
   const bool dive  = (state==Dive);
   const bool grav  = (state==InAir || state==Falling || state==JumpUp);
-  const auto bs    = npc.bodyStateMasked();
   const auto pos0  = npc.position();
-  const auto dp    = (!grav && state!=Slide) ? npcMoveSpeed(dt,moveFlg) : npcFallSpeed(dt);
+  auto       dp    = (!grav && state!=Slide) ? npcMoveSpeed(dt,moveFlg) : npcFallSpeed(dt);
   const bool walk  = bool(npc.wlkMode & WalkBit::WM_Walk) && (state==Run);
+
+  if(virtualWalking) {
+    if(state!=Slide)
+      dp.y = 0.f; // walking root bob cannot detach the controller from its support
+    return tickCharacterVirtual(dt,dp);
+    }
+
+  // Jump animation still owns its launch. Carry the support's velocity through its root motion,
+  // then let the existing airborne integrator inherit the accumulated displacement.
+  if(state==Jump || (state==Run && liftOff))
+    dp += virtualJumpVelocity*float(dt);
 
   DynamicWorld::CollisionTest info;
   if(!tryMove(dp,info)) {
@@ -573,17 +605,91 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
   return true;
   }
 
+bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displacement) {
+  const auto origin = npc.position();
+  const float maxSlope = std::acos(std::clamp(slideAngle(),0.f,1.f));
+  const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc);
+  npc.setViewPosition(moved.position);
+  virtualMovementActive = true;
+  virtualGroundVelocity = moved.groundVelocity;
+
+  if(movementTrace!=nullptr) {
+    DynamicWorld::CollisionTest contact;
+    contact.normal = moved.groundNormal;
+    contact.landCol = moved.grounded || moved.steep;
+    movementTrace->collision(displacement,true,contact);
+    }
+
+  // Keep the native material/room cache and water state machine. Controller support is
+  // authoritative for the feet: a moving body can be well above the landscape ray.
+  bool validGround = false;
+  const auto pos = npc.position();
+  const auto ground = dropRay(pos,validGround);
+  const auto water = waterRay(pos);
+  const auto chest = waterDepthChest();
+  const auto knee = waterDepthKnee();
+  if(moved.grounded || moved.steep)
+    cache.n = moved.groundNormal;
+
+  if(std::isfinite(water) && ground<water) {
+    if(pos.y+chest<=water+0.01f && npc.hasSwimAnimations()) {
+      const bool splash = !moved.grounded || moved.velocity.y<-30.f;
+      setState(Swim);
+      if(splash)
+        emitWaterSplash(water);
+      return true;
+      }
+    if(ground+chest<water && !npc.hasSwimAnimations()) {
+      npc.setPosition(origin);
+      virtualMovementActive = false;
+      virtualGroundVelocity = {};
+      return false;
+      }
+    }
+
+  if(moved.steep) {
+    // The controller resolves steep contacts and gravity; MoveAlgo chooses the same slide
+    // state and animation, without applying a second collision or floor correction.
+    fallSpeed = moved.velocity*0.001f;
+    fallCount = 0;
+    setState(Slide);
+    npc.setAnimRotate(0);
+    npc.setAnim(slideDir() ? AnimationSolver::SlideA : AnimationSolver::SlideB);
+    return true;
+    }
+
+  if(moved.grounded) {
+    setState(pos.y+knee<=water && ground<water ? InWater : Run);
+    clearSpeed();
+    return true;
+    }
+
+  // Falling and landing remain on the old path. Hand over the actual world velocity,
+  // including a departing support, at the exact current origin.
+  fallSpeed = moved.velocity*0.001f;
+  fallCount = 0;
+  setState(InAir);
+  npc.setAnimRotate(0);
+  if(fallSpeed.y<-0.3f && npc.bodyStateMasked()!=BS_FALL)
+    npc.setAnim(AnimationSolver::Fall);
+  return true;
+  }
+
 void MoveAlgo::clearSpeed() {
   fallSpeed.x = 0;
   fallSpeed.y = 0;
   fallSpeed.z = 0;
   fallCount   = 0;
+  virtualJumpVelocity = {};
   }
 
 void MoveAlgo::takeRagdollControl() {
   // Native bodies replace this movement state machine, including airborne/climbing state.
   // Its stale InAir gate must not block queued script actions after the body settles.
   clearSpeed();
+  npc.physic.resetVirtual();
+  virtualMovementActive = false;
+  virtualGroundVelocity = {};
   flags = Run;
   }
 
@@ -686,7 +792,10 @@ Tempest::Vec3 MoveAlgo::npcFallSpeed(uint64_t dt) {
   if(0.f<fallCount) {
     fallSpeed/=fallCount;
     fallCount = 0.f;
+    } else {
+    fallSpeed += virtualJumpVelocity;
     }
+  virtualJumpVelocity = {};
   return fallSpeed*float(dt);
   }
 
@@ -847,6 +956,7 @@ bool MoveAlgo::startClimb(JumpStatus jump) {
   fallSpeed.y = dHeight/sq->totalTime();
   fallSpeed.z = 0.f;
   fallCount   = 0.f;
+  virtualJumpVelocity = {};
 
   if(jump.anim==Npc::Anim::JumpUp && dHeight>0.f){
     setState(JumpUp);
@@ -974,7 +1084,7 @@ void MoveAlgo::assertStateChange(State f) {
       assert(f==Run);
       break;
     case InWater:
-      assert(f==Run || f==Slide || f==Jump || f==JumpUp || f==Swim || f==Dive);
+      assert(f==Run || f==InAir || f==Slide || f==Jump || f==JumpUp || f==Swim || f==Dive);
       break;
     case Swim:
       assert(f==Run || f==InAir || f==InWater || f==Dive);

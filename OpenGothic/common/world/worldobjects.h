@@ -20,6 +20,7 @@ class World;
 class Serialize;
 class TriggerEvent;
 class AbstractTrigger;
+class MoveTrigger;
 class CsCamera;
 class CollisionZone;
 struct PhysicsNoise;
@@ -88,6 +89,7 @@ class WorldObjects final {
     CsCamera*      currentCs() const;
 
     void           addTrigger(AbstractTrigger* trigger);
+    void           detectMover(const std::function<void(MoveTrigger&)>& f);
     void           enableDefTrigger(AbstractTrigger& trigger);
     void           triggerEvent(const TriggerEvent& e);
     bool           triggerOnStart(bool firstTime);

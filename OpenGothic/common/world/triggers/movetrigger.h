@@ -19,6 +19,13 @@ class MoveTrigger : public AbstractTrigger {
 
     void tick(uint64_t dt) override;
 
+    std::string_view visualNameView() const { return visualName; }
+    size_t keyFrameCount() const { return moverKeyFrames.size(); }
+    Tempest::Vec3 keyFramePosition(size_t index) const {
+      const auto& p = moverKeyFrames.at(index).position;
+      return {p.x,p.y,p.z};
+      }
+
   private:
     enum State : int32_t {
       Idle         = 0,

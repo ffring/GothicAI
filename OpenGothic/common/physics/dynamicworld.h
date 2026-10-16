@@ -124,6 +124,16 @@ class DynamicWorld final {
         bool  testMove(const Tempest::Vec3& to, const Tempest::Vec3& from, CollisionTest& out);
         auto  tryMove (const Tempest::Vec3& to, CollisionTest& out) -> DynamicWorld::MoveCode;
 
+        struct VirtualMoveResult {
+          Tempest::Vec3 position = {}, velocity = {}, groundNormal = {}, groundVelocity = {};
+          bool grounded = false;
+          bool steep = false;
+          };
+        // Walking only: displacement in cm, dt in ms, slope in radians, mass in kg.
+        VirtualMoveResult moveVirtual(const Tempest::Vec3& displacement, uint64_t dt,
+                                      float stepHeight, float maxSlope, float mass, Npc* culprit = nullptr);
+        void resetVirtual();
+
         bool  hasCollision() const;
 
       private:
@@ -157,6 +167,7 @@ class DynamicWorld final {
         float mass() const; // kilograms; zero for empty/static/kinematic handles
         Tempest::Vec3 velocity() const; // centimetres/second; zero without dynamics
         bool isSleeping() const;
+        bool touchedByNpc() const;
         // World-space newton seconds (kg * metres/second), with native wake.
         bool addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr);
         void setTransformCallback(std::function<void(const Tempest::Matrix4x4&)> callback);

@@ -229,6 +229,11 @@ if ! kill -0 "$SRV" 2>/dev/null; then
   exit 1
 fi
 
+# An isolated initial setting also exercises first-load character synchronization.
+if [[ -n "${CHARACTER_VIRTUAL:-}" ]]; then
+  [[ "$CHARACTER_VIRTUAL" == 0 || "$CHARACTER_VIRTUAL" == 1 ]] || { echo "CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
+  printf '[GAME]\ncharacter_virtual=%s\n' "$CHARACTER_VIRTUAL" >"$LOG_DIR/Gothic.ini"
+fi
 START_ARGS=(-nomenu)
 if [ -n "${SAVE:-}" ]; then
   cp "$SAVE" "$LOG_DIR/save_slot_1.sav"

@@ -1,0 +1,10 @@
+# Save the identical stock stair point immediately after a second teleport.
+seed 73013
+cheat god
+set time 12 0
+off: character off
+on: character on
+character route stairs_up
+wait 700
+character route stairs_up
+character save standing

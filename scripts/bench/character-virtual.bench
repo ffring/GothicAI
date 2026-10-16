@@ -1,0 +1,102 @@
+# Same real geometry and held keys in independent OFF / ON processes.
+# CHARACTER_VIRTUAL controls the initial flag; OPENGOTHIC_BENCH_TAKE selects it here too.
+seed 73013
+cheat god
+set time 12 0
+movable on
+off: character off
+on: character on
+view full
+cam auto 240 70
+overlay on
+
+release all
+character route stairs_up
+walkmode walk
+wait 500
+rec stairs_up
+character begin
+hold forward 2500
+wait 900
+shot foot-ik-stairs
+wait 1600
+character end
+stop
+
+release all
+character route stairs_down
+walkmode walk
+wait 500
+rec stairs_down
+character begin
+hold forward 2500
+wait 2500
+character end
+stop
+
+release all
+character route steep_slope
+walkmode run
+wait 500
+rec steep_slope
+character begin
+hold forward 3000
+wait 3000
+character end
+stop
+
+release all
+character route port_edge
+walkmode walk
+wait 500
+rec port_edge
+character begin
+hold forward 3000
+wait 3000
+character end
+stop
+
+release all
+character route doorway
+walkmode run
+wait 500
+rec doorway
+character begin
+hold forward 2500
+wait 2500
+character end
+stop
+
+release all
+character route tavern
+walkmode walk
+wait 500
+rec tavern
+character begin
+hold forward 3500
+wait 3500
+character end
+stop
+
+release all
+character route jump_ledge
+walkmode run
+wait 500
+rec jump_ledge
+character begin
+hold forward 3000
+hold jump 650
+wait 3000
+character end
+stop
+
+release all
+character route water_entry
+walkmode run
+wait 500
+rec water_entry
+character begin
+hold forward 4000
+wait 4000
+character end
+stop

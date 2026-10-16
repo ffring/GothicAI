@@ -169,6 +169,7 @@ struct DynamicWorld::NpcBody {
     }
 
   JPH::ShapeRefC shape;
+  std::unique_ptr<CollisionWorld::VirtualCharacter> virtualCharacter;
   void*         userPointer = nullptr;
   float         radius      = 0.f;
   float         cylinderHeight = 0.f;
@@ -1511,6 +1512,7 @@ DynamicWorld::NpcItem::~NpcItem() {
 
 void DynamicWorld::NpcItem::setPosition(const Tempest::Vec3& pos) {
   if(obj) {
+    resetVirtual();
     implSetPosition(pos);
     owner->npcList->onMove(*obj);
     //NOTE: not very usefull, but can create non-trivial cases, for spells
@@ -1526,6 +1528,7 @@ void DynamicWorld::NpcItem::setEnable(bool e) {
   if(obj==nullptr || obj->enable==e)
     return;
   obj->enable = e;
+  resetVirtual();
   owner->world->touchAabbs();
   }
 
@@ -1608,6 +1611,8 @@ DynamicWorld::MoveCode DynamicWorld::NpcItem::tryMove(const Tempest::Vec3& to, C
   if(!obj)
     return MoveCode::MC_Fail;
 
+  resetVirtual();
+
   auto dp = to - obj->pos;
   if(std::abs(dp.x)<eps && std::abs(dp.y)<eps && std::abs(dp.z)<eps) {
     // skip-move
@@ -1628,6 +1633,75 @@ DynamicWorld::MoveCode DynamicWorld::NpcItem::tryMove(const Tempest::Vec3& to, C
       return MoveCode::MC_OK;
     }
   return code;
+  }
+
+void DynamicWorld::NpcItem::resetVirtual() {
+  if(obj!=nullptr)
+    obj->virtualCharacter.reset();
+  }
+
+DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
+  VirtualMoveResult result;
+  if(obj==nullptr)
+    return result;
+  result.position = obj->pos;
+  if(!obj->enable)
+    return result;
+  if(obj->virtualCharacter==nullptr)
+    obj->virtualCharacter = owner->world->createVirtualCharacter(obj->radius,obj->h,obj->pos);
+
+  const auto initial = obj->pos;
+  auto npcDepth = [&]() {
+    float depth = 0;
+    Tempest::Vec3 normal;
+    for(const auto* records:{&owner->npcList->body,&owner->npcList->frozen}) {
+      for(const auto& record:*records) {
+        if(record.body==nullptr || !record.body->enable)
+          continue;
+        owner->npcList->hasCollision(*obj,*record.body,normal,depth);
+        }
+      }
+    return depth;
+    };
+  const float initialDepth = npcDepth();
+  // NPCs retain their old ellipsoids and are never handed to Jolt's impulse
+  // solver. Sweep this hero only against those existing stationary obstacles.
+  auto clipNpc = [&](const Tempest::Vec3& target) {
+    const auto delta = target-initial;
+    const int count = std::max(1,int(std::ceil(delta.length()/std::max(obj->stepSz*0.5f,1.f))));
+    auto accepted = initial;
+    for(int i=1;i<=count;++i) {
+      obj->setPosition(initial+delta*(float(i)/float(count)));
+      if(npcDepth()>initialDepth+0.01f)
+        break;
+      accepted = obj->pos;
+      }
+    obj->setPosition(initial);
+    return accepted;
+    };
+  const auto requested = clipNpc(initial+displacement)-initial;
+  const auto moved = obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit);
+  const auto accepted = clipNpc(moved.position);
+  if((accepted-moved.position).quadLength()>0.0001f)
+    obj->virtualCharacter->setPosition(accepted);
+  obj->setPosition(accepted);
+  owner->npcList->onMove(*obj);
+  owner->bulletList->onMoveNpc(*obj,*owner->npcList);
+  result.position = accepted;
+  result.velocity = moved.velocity;
+  const auto blocked = moved.position-accepted;
+  if(blocked.quadLength()>0.0001f) {
+    const auto normal = Tempest::Vec3::normalize(blocked);
+    const float into = Tempest::Vec3::dotProduct(result.velocity,normal);
+    if(into>0.f)
+      result.velocity -= normal*into;
+    }
+  result.groundNormal = moved.groundNormal;
+  result.groundVelocity = moved.groundVelocity;
+  result.grounded = moved.grounded;
+  result.steep = moved.steep;
+  return result;
   }
 
 DynamicWorld::MoveCode DynamicWorld::NpcItem::implTryMove(const Tempest::Vec3& to, const Tempest::Vec3& pos0, CollisionTest& out) {
@@ -1739,6 +1813,10 @@ Tempest::Vec3 DynamicWorld::Item::velocity() const {
 
 bool DynamicWorld::Item::isSleeping() const {
   return obj==nullptr || obj->body==nullptr || obj->body->isSleeping();
+  }
+
+bool DynamicWorld::Item::touchedByNpc() const {
+  return obj!=nullptr && obj->body!=nullptr && obj->body->touchedByNpc();
   }
 
 bool DynamicWorld::Item::addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit) {

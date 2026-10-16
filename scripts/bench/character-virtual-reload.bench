@@ -1,0 +1,4 @@
+# This first command runs before the first native world tick after load.
+character initial
+wait 500
+character snapshot settled

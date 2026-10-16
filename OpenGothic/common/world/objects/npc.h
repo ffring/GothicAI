@@ -500,6 +500,8 @@ class Npc final {
     bool      setRagdollDown(bool death);
     void      addRagdollImpulse(const Tempest::Vec3& impulse);
     float     physicsMass() const;
+    bool      characterVirtualActive() const { return mvAlgo.characterVirtualActive(); }
+    Tempest::Vec3 characterVirtualGroundVelocity() const { return mvAlgo.characterVirtualGroundVelocity(); }
     bool      addSpellImpulse(const Tempest::Vec3& impulseNs, bool reaction=true, Npc* culprit=nullptr);
     Tempest::Vec3 spellVelocity() const { return mvAlgo.spellVelocity(); }
     bool      spellWhirling() const;

@@ -1,0 +1,81 @@
+# Isolated equal-duration contacts, followed by three support-body cases.
+seed 73013
+cheat god
+set time 12 0
+movable on
+off: character off
+on: character on
+view full
+overlay on
+cam auto 250 80
+walkmode walk
+
+release all
+character prop item
+wait 700
+rec push_item
+hold forward 3000
+wait 3000
+character prop-checkpoint
+stop
+character cleanup
+
+release all
+character prop mug
+wait 700
+rec push_mug
+hold forward 3000
+wait 3000
+character prop-checkpoint
+stop
+character cleanup
+
+release all
+character prop barrel
+wait 700
+rec push_barrel
+hold forward 3000
+wait 3000
+character prop-checkpoint
+stop
+character cleanup
+
+release all
+character prop table
+wait 700
+rec push_table
+hold forward 3000
+wait 3000
+character prop-checkpoint
+stop
+character cleanup
+
+release all
+character ride dynamic
+wait 700
+rec ride_dynamic
+character ride-start
+wait 4000
+character ride-checkpoint
+stop
+character cleanup
+
+release all
+character ride kinematic
+wait 700
+rec ride_kinematic
+character ride-start
+wait 4000
+character ride-checkpoint
+stop
+character cleanup
+
+release all
+character ride mover
+wait 700
+rec ride_mover
+character ride-start
+wait 4000
+character ride-checkpoint
+stop
+character cleanup

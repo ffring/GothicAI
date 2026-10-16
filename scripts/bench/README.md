@@ -506,3 +506,60 @@ switches bone by bone),
 `LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `TalkGestures::subjectProbe` (the hands), `EyeBlink::subjectProbe` (blinks), `Camera::setNearClip`
 (`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
 `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).
+
+### Stage 5, step 1: hero CharacterVirtual
+
+`character_virtual` stays off by default. The comparison uses two fresh processes and the same
+stock-world geometry, with `movable_vobs=1` in both. Check `pgrep -fl Gothic2Notr` before each
+run and wait for any other game's process to finish.
+
+```sh
+NO_BUILD=1 MOVABLE_VOBS=1 CHARACTER_VIRTUAL=0 scripts/bench.sh character-virtual-probe .bench/character-probe
+NO_BUILD=1 MOVABLE_VOBS=1 CHARACTER_VIRTUAL=0 OPENGOTHIC_BENCH_TAKE=off scripts/bench.sh character-virtual .bench/character-off
+NO_BUILD=1 MOVABLE_VOBS=1 CHARACTER_VIRTUAL=1 OPENGOTHIC_BENCH_TAKE=on scripts/bench.sh character-virtual .bench/character-on
+```
+
+Preparation searches actual supported geometry deterministically, in waypoint-name order. It
+prints every selected waypoint, start XYZ, goal XYZ and yaw as `character_route_setup` in
+`events.jsonl`. Missing geometry produces `character_error`; the probe visits all eight
+preparations before ending, while the actual scenario stops on a missing fixture. Routes are
+Khorinis stairs up/down, a smooth 44–65° slope, a harbour lane within 95 cm of a drop, a narrow
+opening, Coragon's furnished tavern, a 55–110 cm ledge and a waterfront with a swimming destination (the quay may enter via falling).
+These coordinates are also the teleport points for a manual trial. Only the initial placement
+teleports the hero; route movement uses the real player's held keys. The jump and water routes
+exercise the legacy-path handoff.
+
+Each route has its own MP4 and ordinary IK metrics; `foot-ik-stairs.png` is captured on the first
+stair route. `character-frames.csv` additionally records root position, held movement, falling,
+swimming, actual CV use, support velocity and native physics cost after each world tick. A route
+succeeds only after crossing its destination plane within the stated lateral/height tolerance;
+water entry additionally requires the real swimming state. The analyzer counts continuous held
+input with less than 5 cm of horizontal progress for more than one second, maximum absolute Y
+change per frame and native falls more than 100 cm below the last supported root (planned ledge
+jumps and swimming are excluded). Unmatched falls are compared within a 1 m spatial radius.
+
+Run `character-virtual-props` with the same OFF/ON environment in separate output directories for
+four equal-duration native contacts: a real potion Item, a beer mug Item, a stock barrel mesh and
+a stock table mesh. Only the current test prop occupies the lane; temporary props from the general
+tavern fixture are removed. Checkpoints include native contact attribution, mass, horizontal
+position, velocity and displacement. Table passage is checked against the current transformed
+far face after straight forward input. The same scenario records dynamic table, kinematic mesh
+and any exposed standable world mover. A missing standable mover is explicitly reported;
+insufficient support motion or falling needs review of its video.
+
+`character-virtual-save` writes `session-standing.sav` at an identical freshly placed stair point.
+Load each result through `SAVE=<path>/session-standing.sav` and `character-virtual-reload`, with
+that mode's initial `CHARACTER_VIRTUAL`. Its first command snapshots the loaded root before the
+first world tick. The comparator checks saved-versus-loaded and OFF-versus-ON positions to 1 cm.
+
+Performance uses `character-virtual-performance` in two more fresh processes, with a build
+configured with `-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`. It records an uncaptured 30-second normal app-clock
+window of walking to and fro; `appcadence.csv` supplies complete app-frame intervals and
+`character-frames.csv` supplies native physics-step cost. Video capture runs at a fixed 30 Hz and
+must never be presented as game FPS. Limits are +0.3 ms native physics p95 and 5% mean FPS loss.
+
+`character on|off`, `character route <name>`, `character begin|end`, `character prop <item|mug|barrel|table>`,
+`character prop-checkpoint`, `character ride <dynamic|kinematic|mover>`, `character ride-start`,
+`character ride-checkpoint`, `character cleanup`, `character save <label>` and the first-command
+`character initial` are test-only commands. `CHARACTER_VIRTUAL=1` also works with `scripts/e2e.sh`
+for the single requested `SCENARIO=m5b` check, without changing the user's Gothic.ini.

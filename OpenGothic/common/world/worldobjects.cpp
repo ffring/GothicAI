@@ -13,6 +13,7 @@
 #include "world/triggers/pfxcontroller.h"
 #include "world/triggers/triggerworldstart.h"
 #include "world/triggers/abstracttrigger.h"
+#include "world/triggers/movetrigger.h"
 #include "world.h"
 #include "utils/workers.h"
 #include "utils/dbgpainter.h"
@@ -531,6 +532,12 @@ void WorldObjects::detectItem(const float x, const float y, const float z,
     if(qDist<maxDist)
       f(*i);
     }
+  }
+
+void WorldObjects::detectMover(const std::function<void(MoveTrigger&)>& f) {
+  for(auto* trigger:triggers)
+    if(auto* mover = dynamic_cast<MoveTrigger*>(trigger))
+      f(*mover);
   }
 
 void WorldObjects::addTrigger(AbstractTrigger* tg) {

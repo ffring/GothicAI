@@ -15,12 +15,14 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyFilter.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/ShapeFilter.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -115,6 +117,12 @@ namespace {
       }
     const uint32_t mask;
     };
+
+  // Use simulated hulls, including small props. The movable query meshes are
+  // duplicate sensor geometry used by the legacy controller and aiming only.
+  constexpr uint32_t characterMask = (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|
+                                     (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_MovableVob)|
+                                     (1u<<DynamicWorld::C_Ragdoll);
 
   float angularMotionDisc(const JPH::Shape& shape) {
     const auto bounds = shape.GetLocalBounds();
@@ -448,7 +456,168 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
   std::atomic<uint64_t> rayCount {0};
   uint64_t lastRayCount = 0;
   float stepMilliseconds = 0;
+  float characterMilliseconds = 0;
   };
+
+struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListener {
+  explicit Impl(CollisionWorld& world):world(world) {}
+
+  void onContact(const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings) {
+    JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),contact.mBodyB);
+    if(!lock.Succeeded()) {
+      settings.mCanReceiveImpulses = false;
+      return;
+      }
+    const auto layer = lock.GetBody().GetObjectLayer();
+    settings.mCanReceiveImpulses = layer==DynamicWorld::C_Item || layer==DynamicWorld::C_MovableVob;
+    if(!settings.mCanReceiveImpulses || contact.mMotionTypeB!=JPH::EMotionType::Dynamic)
+      return;
+    auto* body = reinterpret_cast<CollisionBody*>(contact.mUserData);
+    if(body==nullptr)
+      return;
+    // Attribute an approaching contact, including the character's weight on a
+    // simulated support, rather than a separating or predictive-only contact.
+    const auto relative = character->GetLinearVelocity()-contact.mLinearVelocity;
+    if(relative.Dot(contact.mContactNormal)>=-0.01f)
+      return;
+    body->npcContact.store(true,std::memory_order_relaxed);
+    body->setTraceCulprit(culprit);
+    }
+
+  void OnContactAdded(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact,
+                      JPH::CharacterContactSettings& settings) override { onContact(contact,settings); }
+  void OnContactPersisted(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact,
+                          JPH::CharacterContactSettings& settings) override { onContact(contact,settings); }
+
+  CollisionWorld& world;
+  std::unique_ptr<JPH::CharacterVirtual> character;
+  Npc* culprit = nullptr;
+  bool contactsDirty = true;
+  JPH::BodyID ground;
+  JPH::RMat44 groundTransform = JPH::RMat44::sIdentity();
+  };
+
+CollisionWorld::VirtualCharacter::VirtualCharacter(CollisionWorld& owner, float radius, float height,
+                                                  const Tempest::Vec3& feet)
+  :impl(std::make_unique<Impl>(owner)) {
+  const float r = std::max(toMeters(radius),0.01f);
+  const float h = std::max(toMeters(height),2.f*r);
+  JPH::CharacterVirtualSettings settings;
+  settings.mShape = new JPH::CapsuleShape(std::max(h*0.5f-r,0.001f),r);
+  settings.mShapeOffset = JPH::Vec3(0,h*0.5f,0);
+  settings.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(),-r);
+  settings.mCharacterPadding = 0.01f;
+  settings.mPredictiveContactDistance = 0.05f;
+  settings.mCollisionTolerance = 0.001f;
+  settings.mEnhancedInternalEdgeRemoval = true;
+  impl->character = std::make_unique<JPH::CharacterVirtual>(&settings,JPH::RVec3(toMeters(feet)),
+                                                          JPH::Quat::sIdentity(),&owner.impl->system);
+  impl->character->SetListener(impl.get());
+  }
+
+CollisionWorld::VirtualCharacter::~VirtualCharacter() = default;
+
+std::unique_ptr<CollisionWorld::VirtualCharacter> CollisionWorld::createVirtualCharacter(
+    float radius, float height, const Tempest::Vec3& feet) {
+  return std::unique_ptr<VirtualCharacter>(new VirtualCharacter(*this,radius,height,feet));
+  }
+
+void CollisionWorld::VirtualCharacter::setPosition(const Tempest::Vec3& feet) {
+  impl->character->SetPosition(JPH::RVec3(toMeters(feet)));
+  impl->contactsDirty = true;
+  impl->ground = JPH::BodyID();
+  }
+
+CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
+  const auto started = std::chrono::steady_clock::now();
+  auto& state = *impl;
+  auto& character = *state.character;
+  auto& world = *state.world.impl;
+  const QueryBroadPhaseFilter broadFilter(characterMask);
+  const QueryLayerFilter layerFilter(characterMask);
+  const JPH::BodyFilter bodyFilter;
+  const JPH::ShapeFilter shapeFilter;
+  state.culprit = culprit;
+  character.SetMass(std::max(mass,1.f));
+  character.SetMaxStrength(character.GetMass()*DynamicWorld::gravityMS);
+  character.SetMaxSlopeAngle(maxSlope);
+  if(state.contactsDirty) {
+    character.RefreshContacts(broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+    state.contactsDirty = false;
+    }
+  auto inheritedGroundVelocity = character.GetGroundVelocity();
+  bool inferredKinematicVelocity = false;
+  const float seconds = float(dt)*0.001f;
+  if(seconds>0.f) {
+    auto kinematicVelocity = JPH::Vec3::sZero();
+    if(character.IsSupported() && state.ground==character.GetGroundBodyID() && !state.ground.IsInvalid()) {
+      JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),state.ground);
+      if(lock.Succeeded() && lock.GetBody().IsKinematic()) {
+        // Movers update their transform directly. Infer their motion at the
+        // support point, including rotation, without changing legacy physics.
+        const auto transform = lock.GetBody().GetWorldTransform();
+        const auto position = character.GetPosition();
+        kinematicVelocity = JPH::Vec3(transform*(state.groundTransform.InversedRotationTranslation()*position)-position)/seconds;
+        inheritedGroundVelocity = kinematicVelocity;
+        inferredKinematicVelocity = true;
+        }
+      }
+    character.UpdateGroundVelocity();
+    auto groundVelocity = character.GetGroundVelocity();
+    if(inferredKinematicVelocity) {
+      groundVelocity = kinematicVelocity;
+      // A direct-matrix lift has already advanced vertically. Resolve that new
+      // floor through penetration recovery / floor sticking; adding its upward
+      // speed again would detach the feet from a contact with zero native speed.
+      groundVelocity.SetY(0.f);
+      }
+    auto velocity = toMeters(displacement)/seconds;
+    if(character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround)
+      velocity += groundVelocity;
+    velocity += JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
+    character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
+    JPH::CharacterVirtual::ExtendedUpdateSettings settings;
+    const float step = std::max(toMeters(stepHeight),0.f);
+    settings.mWalkStairsStepUp = JPH::Vec3(0,step,0);
+    settings.mStickToFloorStepDown = JPH::Vec3(0,-step,0);
+    character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
+                             broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+    }
+  const auto previousGround = state.ground;
+  state.ground = character.GetGroundBodyID();
+  if(!state.ground.IsInvalid()) {
+    JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),state.ground);
+    if(lock.Succeeded())
+      state.groundTransform = lock.GetBody().GetWorldTransform();
+    else
+      state.ground = JPH::BodyID();
+    }
+  CharacterMoveResult result;
+  result.position = toCentimeters(JPH::Vec3(character.GetPosition()));
+  // Jolt keeps its requested velocity after moving. Resolve the carried
+  // velocity against actual contacts so downhill acceleration survives, while
+  // stair snaps and penetration recovery never turn into airborne momentum.
+  auto solvedVelocity = character.GetLinearVelocity();
+  for(int iteration=0;iteration<2;++iteration) {
+    for(const auto& contact:character.GetActiveContacts()) {
+      if(!contact.mHadCollision || contact.mWasDiscarded || contact.mIsSensorB)
+        continue;
+      const float into = (solvedVelocity-contact.mLinearVelocity).Dot(contact.mContactNormal);
+      if(into<0.f)
+        solvedVelocity -= contact.mContactNormal*into;
+      }
+    }
+  result.velocity = toCentimeters(solvedVelocity);
+  result.groundVelocity = toCentimeters(inferredKinematicVelocity && previousGround==state.ground ?
+                                        inheritedGroundVelocity : character.GetGroundVelocity());
+  const auto normal = character.GetGroundNormal();
+  result.groundNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
+  result.grounded = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;
+  result.steep = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnSteepGround;
+  world.characterMilliseconds += std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  return result;
+  }
 
 CollisionWorld::CollisionWorld() {
   Physics::initialize();
@@ -1198,7 +1367,8 @@ void CollisionWorld::tick(uint64_t dt) {
     if(disable)
       item->setPhysicsDisable();
     }
-  impl->stepMilliseconds=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  impl->stepMilliseconds=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count()+impl->characterMilliseconds;
+  impl->characterMilliseconds = 0;
   impl->lastRayCount=impl->rayCount.exchange(0,std::memory_order_relaxed);
   }
 

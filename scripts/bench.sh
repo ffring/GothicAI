@@ -14,6 +14,7 @@
 #      MOVABLE_VOBS  optional initial GAME movable_vobs setting (0 or 1), before world loading
 #      ARROW_STICKING optional initial GAME arrow_sticking setting (0 or 1), before world loading
 #      PHYSICS_NOISE optional initial GAME physics_noise setting (0 or 1), before world loading
+#      CHARACTER_VIRTUAL optional initial GAME character_virtual setting (0 or 1), before world loading
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -52,7 +53,7 @@ vidResIndex=2
 soundVolume=${SOUND:-0}
 musicVolume=${MUSIC:-0}
 EOF
-if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}" ]]; then
+if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${CHARACTER_VIRTUAL:-}" ]]; then
   printf '\n[GAME]\n' >>"$RUN/Gothic.ini"
   if [[ -n "${MOVABLE_VOBS:-}" ]]; then
     [[ "$MOVABLE_VOBS" == 0 || "$MOVABLE_VOBS" == 1 ]] || { echo "MOVABLE_VOBS must be 0 or 1" >&2; exit 2; }
@@ -61,6 +62,10 @@ if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}" ]]; then
   if [[ -n "${ARROW_STICKING:-}" ]]; then
     [[ "$ARROW_STICKING" == 0 || "$ARROW_STICKING" == 1 ]] || { echo "ARROW_STICKING must be 0 or 1" >&2; exit 2; }
     printf 'arrow_sticking=%s\n' "$ARROW_STICKING" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${CHARACTER_VIRTUAL:-}" ]]; then
+    [[ "$CHARACTER_VIRTUAL" == 0 || "$CHARACTER_VIRTUAL" == 1 ]] || { echo "CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
+    printf 'character_virtual=%s\n' "$CHARACTER_VIRTUAL" >>"$RUN/Gothic.ini"
   fi
   if [[ -n "${PHYSICS_NOISE:-}" ]]; then
     [[ "$PHYSICS_NOISE" == 0 || "$PHYSICS_NOISE" == 1 ]] || { echo "PHYSICS_NOISE must be 0 or 1" >&2; exit 2; }
