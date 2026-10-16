@@ -552,6 +552,12 @@ class Npc final {
     Item*     currentShield();
     auto      mapWeaponBone() const -> Tempest::Vec3;
     auto      mapHeadBone() const -> Tempest::Vec3;
+    struct EyePose {
+      Tempest::Vec3 origin = {}, forward = {1,0,0}, right = {0,0,1}, up = {0,1,0};
+      bool animatedHead = false;
+      };
+    // Reads the applied head bone, including animation, gaze and physical pose corrections.
+    EyePose   navigationEyePose() const;
     auto      aimDirection(const Tempest::Vec3& target) const -> Tempest::Vec3;
     auto      aimLeanDirection(const Tempest::Vec3& target) const -> Tempest::Vec3;
     auto      aimHead(const Tempest::Vec3& target, float angle) const -> Tempest::Vec3;

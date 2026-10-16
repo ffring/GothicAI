@@ -50,6 +50,7 @@ class CollisionWorld final {
         Tempest::Matrix4x4  matrix() const;
         void                getAabb(JPH::Vec3& min, JPH::Vec3& max) const;
         float               mass() const; // kilograms; zero for non-dynamic bodies
+        bool                isMovable() const; // native dynamic or kinematic, including doors/lifts
         Tempest::Vec3        velocity() const; // centimetres/second
         Tempest::Vec3        angularVelocity() const; // world radians/second
         bool                isSleeping() const;
@@ -185,7 +186,8 @@ class CollisionWorld final {
     // Masks use 1u << DynamicWorld::Category. Normals keep the mesh's winding.
     QueryResult rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
                         bool backfaces = false, std::vector<QueryResult>* all = nullptr,
-                        const std::vector<const CollisionBody*>* excluded = nullptr) const;
+                        const std::vector<const CollisionBody*>* excluded = nullptr,
+                        const Ragdoll* excludedRig = nullptr) const;
     QueryResult raySweep(const Tempest::Vec3& from, const Tempest::Vec3& to, float radius, uint32_t mask,
                          bool backfaces = false) const;
 

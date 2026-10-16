@@ -929,6 +929,12 @@ float CollisionWorld::CollisionBody::mass() const {
   return 1.f/lock.GetBody().GetMotionProperties()->GetInverseMass();
   }
 
+bool CollisionWorld::CollisionBody::isMovable() const {
+  if(owner==nullptr || id.IsInvalid()) return false;
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  return lock.Succeeded() && !lock.GetBody().IsStatic();
+  }
+
 Tempest::Vec3 CollisionWorld::CollisionBody::velocity() const {
   if(owner==nullptr || id.IsInvalid()) return {};
   JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
@@ -1074,7 +1080,8 @@ void CollisionWorld::fillRagdoll(QueryResult& result, JPH::BodyID native) const 
 
 CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
                                                     bool backfaces, std::vector<QueryResult>* all,
-                                                    const std::vector<const CollisionBody*>* excluded) const {
+                                                    const std::vector<const CollisionBody*>* excluded,
+                                                    const Ragdoll* excludedRig) const {
   impl->rayCount.fetch_add(1,std::memory_order_relaxed);
   QueryResult result;
   if(all!=nullptr)
@@ -1090,7 +1097,14 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
   settings.SetBackFaceMode(backfaces ? JPH::EBackFaceMode::CollideWithBackFaces : JPH::EBackFaceMode::IgnoreBackFaces);
   QueryLayerFilter filter(mask);
   QueryBroadPhaseFilter broadFilter(mask);
-  JPH::IgnoreMultipleBodiesFilter bodyFilter;
+  struct RayBodyFilter final : JPH::IgnoreMultipleBodiesFilter {
+    const Ragdoll* rig = nullptr;
+    bool ShouldCollide(const JPH::BodyID& id) const override {
+      return JPH::IgnoreMultipleBodiesFilter::ShouldCollide(id) &&
+             (rig==nullptr || rig->boneForBodyId(id.GetIndexAndSequenceNumber())==size_t(-1));
+      }
+    } bodyFilter;
+  bodyFilter.rig = excludedRig;
   if(excluded!=nullptr)
     for(auto* body:*excluded)
       if(body!=nullptr)
@@ -1157,7 +1171,8 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
       value.material = mesh->materialId(triangle);
       value.sector = mesh->sectorName(triangle);
       }
-    if(body.GetObjectLayer()==DynamicWorld::C_Ragdoll)
+    if(body.GetObjectLayer()==DynamicWorld::C_Ragdoll || body.GetObjectLayer()==DynamicWorld::C_LivingBody ||
+       body.GetObjectLayer()==DynamicWorld::C_ActiveBody)
       fillRagdoll(value,hit.mBodyID);
     return value;
     };

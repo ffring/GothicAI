@@ -243,7 +243,7 @@ add_subdirectory(ai_bridge)
 target_link_libraries(Gothic2Notr PRIVATE AiBridge)
 
 # Uses the shared engine/CPU simulation without constructing a window or graphics/audio device.
-if(UNIX AND NOT APPLE AND NOT ANDROID)
+if(UNIX AND NOT IOS AND NOT ANDROID)
   add_executable(gothic-body-runner game/bodyrunner.cpp)
   target_link_libraries(gothic-body-runner PRIVATE OpenGothic AiBridge)
 endif()
@@ -285,6 +285,16 @@ if(NOT ANDROID AND NOT IOS)
 endif()
 
 # editor
+
+# Navigation eye has an independent contract block to keep parallel navigation work isolated.
+if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-navigation-eye-contract EXCLUDE_FROM_ALL tests/navigation_eye_contract.cpp)
+  target_link_libraries(gothic-navigation-eye-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-navigation-eye
+    COMMAND $<TARGET_FILE:gothic-navigation-eye-contract>
+    DEPENDS gothic-navigation-eye-contract USES_TERMINAL)
+endif()
+
 target_sources(Spacer PRIVATE ${SPACER_SOURCES} spacer/main.cpp)
 target_include_directories(Spacer PRIVATE "spacer")
 target_link_libraries(Spacer PRIVATE OpenGothic SpacerAssets)

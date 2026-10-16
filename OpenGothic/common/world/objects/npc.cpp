@@ -4829,6 +4829,61 @@ Vec3 Npc::mapHeadBone() const {
   return visual.mapHeadBone();
   }
 
+Npc::EyePose Npc::navigationEyePose() const {
+  EyePose result;
+  const auto& model = visual.transform();
+  result.origin = Vec3(model.at(3,0),model.at(3,1)+180.f,model.at(3,2));
+  result.forward = Vec3::normalize(Vec3(model.at(2,0),model.at(2,1),model.at(2,2)));
+  if(result.forward.length()<0.5f)
+    result.forward = Vec3(std::cos(rotationRad()),0,std::sin(rotationRad()));
+  const auto* skeleton = visual.visualSkeleton();
+  const auto axis = [](const Tempest::Matrix4x4& m, size_t k) {
+    const int column = int(k);
+    return Vec3::normalize(Vec3(m.at(column,0),m.at(column,1),m.at(column,2)));
+    };
+  if(skeleton!=nullptr && skeleton->BIP01_HEAD<visual.pose().boneCount() &&
+     skeleton->BIP01_HEAD<skeleton->tr.size()) {
+    const size_t head = skeleton->BIP01_HEAD;
+    const auto& bind = skeleton->tr[head];
+    Vec3 bindForward(0,0,1);
+    const size_t left = skeleton->findNode("BIP01 L THIGH");
+    const size_t right = skeleton->findNode("BIP01 R THIGH");
+    if(left<skeleton->tr.size() && right<skeleton->tr.size()) {
+      const auto& l = skeleton->tr[left];
+      const auto& r = skeleton->tr[right];
+      const Vec3 hips = Vec3::crossProduct(Vec3(0,1,0),Vec3(l.at(3,0)-r.at(3,0),0,l.at(3,2)-r.at(3,2)));
+      if(hips.length()>1.e-3f)
+        bindForward = Vec3::normalize(hips);
+      }
+    // The same bind-pose face-axis choice used by Gaze; apply it to the finished head.
+    size_t forwardAxis = 0, upAxis = 0;
+    float forwardDot = 0, upDot = 0;
+    for(size_t k=0; k<3; ++k) {
+      const auto a = axis(bind,k);
+      const float f = Vec3::dotProduct(a,bindForward);
+      if(std::abs(f)>std::abs(forwardDot)) {
+        forwardAxis = k;
+        forwardDot = f;
+        }
+      if(std::abs(a.y)>std::abs(upDot)) {
+        upAxis = k;
+        upDot = a.y;
+        }
+      }
+    const auto& shown = visual.renderedBone(head);
+    result.origin = Vec3(shown.at(3,0),shown.at(3,1),shown.at(3,2));
+    result.forward = axis(shown,forwardAxis)*(forwardDot<0.f ? -1.f : 1.f);
+    result.up = axis(shown,upAxis)*(upDot<0.f ? -1.f : 1.f);
+    result.animatedHead = true;
+    }
+  result.right = Vec3::crossProduct(result.forward,result.up);
+  if(result.right.length()<1.e-3f)
+    result.right = Vec3::crossProduct(result.forward,Vec3(0,0,1));
+  result.right = Vec3::normalize(result.right);
+  result.up = Vec3::normalize(Vec3::crossProduct(result.right,result.forward));
+  return result;
+  }
+
 Vec3 Npc::mapBone(std::string_view bone) const {
   if(auto sk = visual.visualSkeleton()) {
     size_t id = sk->findNode(bone);

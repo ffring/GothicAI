@@ -599,3 +599,34 @@ must never be presented as game FPS. Limits are +0.3 ms native physics p95 and 5
 `character ride-checkpoint`, `character cleanup`, `character save <label>` and the first-command
 `character initial` are test-only commands. `CHARACTER_VIRTUAL=1` also works with `scripts/e2e.sh`
 for the single requested `SCENARIO=m5b` check, without changing the user's Gothic.ini.
+
+## Navigation eye (CPU runner)
+
+The `eye` commands are an independent navigation sensor fixture. They leave combat's 16 body rays
+and bridge observations unchanged. Run with `gothic-body-runner --mode lockstep`; all output paths
+must be absolute. The runner also builds on macOS (POSIX target).
+
+```text
+eye setup market 20                 # market|lobart; 1, 10, 20 or 50 distinct frozen human NPCs
+wait 2000
+eye begin 500 100 off baseline       # layout 250|500|1000, center range 20|50|100 m, on|off, tag
+wait 12000                          # first 2000 ms excluded; remaining ~10 s measured
+eye end
+eye begin 500 100 on eye-500-100
+wait 12000
+eye end
+eye snapshot market-20 0             # fresh full eye of actor 0, outside measurement
+eye wall                            # bounded real finite-wall fixture: back 0 hits, front >0
+```
+
+`setup` uses supported roots near the market or Lobart's pasture fence, freezes nearby residents,
+and enables the existing native living rigs. `begin` rejects overlapping spans. Only `tick` samples
+the eye, after world movement and animation. Near segments (up to 10 m) update at 10 Hz; unobstructed
+continuations at 2 Hz. Cached continuations retain their original head pose and timestamp.
+
+Output: `eye-spans.jsonl` (all/near/full cost aggregates, wall and process CPU time, actual Hz and rig
+count), `eye-timing.jsonl` (each measured NPC update), `eye-snapshots.jsonl` (ray geometry, distance,
+hit kind, signed normal Y and timestamps), `eye-events.jsonl` (fixture geometry and wall checks).
+Timing rows are buffered and written after the measured span; snapshots are explicit. No eye data
+enters the AI bridge. Repeat the full matrix with
+[`reports/navigation/2026-10-16-eye/run.sh`](../../reports/navigation/2026-10-16-eye/run.sh).

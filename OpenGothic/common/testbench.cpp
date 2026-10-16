@@ -42,6 +42,7 @@
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
+#include "game/navigationeyebench.h"
 #include "game/serialize.h"
 #include "game/ragdollsave.h"
 #include "game/definitions/sounddefinitions.h"
@@ -4431,6 +4432,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     return;
   const std::string& c = a[0];
 
+  // Navigation-eye commands are independent of navigation mesh and body rays.
+  if(c=="eye") {
+    try {
+      event("eye_command","\"sample\":"+NavigationEyeBench::command(a,w,pl,outDir));
+    } catch(const std::exception& error) {
+      event("eye_error","\"reason\":"+jsonStr(error.what()));
+      arenaAbort(error.what());
+    }
+    return;
+  }
   if(c=="character" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","character_virtual",a[1]=="on");
     event("character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
@@ -9160,6 +9171,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
   }
 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
+  NavigationEyeBench::reset();
   stopRecording();
   if(bench.csv!=nullptr)
     std::fclose(bench.csv);
@@ -9495,6 +9507,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     }
   if(dt==0)
     return false;
+  NavigationEyeBench::tick(world->tickCount());
   arrowFields(*world);
   stickingFields(*world);
   spellFields(*world);
