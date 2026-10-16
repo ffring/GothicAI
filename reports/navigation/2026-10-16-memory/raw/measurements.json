@@ -1,0 +1,1082 @@
+{
+  "fence": [
+    {
+      "tag": "front",
+      "game_ms": 18794,
+      "root_cm": [
+        14369.4707,
+        1726.440186,
+        -15955.8916
+      ],
+      "body_yaw_deg": 176.263138,
+      "traveled_cm": 6.42196888,
+      "fence_reference_points": 6,
+      "fence_matched_within_25cm": 6,
+      "fence_max_axis_error_cm": 16.18362999999954,
+      "fence_max_normal_error_cm": 9.89834610943847,
+      "fence_distance_along_body_cm": 178.55399383900982,
+      "fence_wall_confidence_mean": 0.997631848,
+      "current_eye_fence_hits": 6,
+      "fence_matches": [
+        {
+          "point_cm": [
+            14225.68359,
+            1714.869141,
+            -15815.96484
+          ],
+          "cell_world_cm": [
+            14216.2783,
+            -15808.0928
+          ],
+          "axis_error_cm": 9.405290000000605,
+          "distance_error_cm": 12.264929422777552,
+          "confidence": 0.997631848,
+          "x": 26,
+          "z": 38
+        },
+        {
+          "point_cm": [
+            14221.49512,
+            1809.191528,
+            -15811.9541
+          ],
+          "cell_world_cm": [
+            14216.2783,
+            -15808.0928
+          ],
+          "axis_error_cm": 5.216819999999643,
+          "distance_error_cm": 6.490365829627788,
+          "confidence": 0.997631848,
+          "x": 26,
+          "z": 38
+        },
+        {
+          "point_cm": [
+            14212.03027,
+            1773.887207,
+            -15849.22363
+          ],
+          "cell_world_cm": [
+            14214.6484,
+            -15833.04
+          ],
+          "axis_error_cm": 16.18362999999954,
+          "distance_error_cm": 16.3940380832115,
+          "confidence": 0.997631848,
+          "x": 27,
+          "z": 38
+        },
+        {
+          "point_cm": [
+            14179.06934,
+            1718.241699,
+            -15909.03613
+          ],
+          "cell_world_cm": [
+            14184.8135,
+            -15906.252
+          ],
+          "axis_error_cm": 5.744160000000193,
+          "distance_error_cm": 6.383318413059326,
+          "confidence": 0.997631848,
+          "x": 30,
+          "z": 39
+        },
+        {
+          "point_cm": [
+            14165.01465,
+            1710.855347,
+            -15942.74023
+          ],
+          "cell_world_cm": [
+            14158.2373,
+            -15929.5684
+          ],
+          "axis_error_cm": 13.171829999999318,
+          "distance_error_cm": 14.813155591276336,
+          "confidence": 0.997631848,
+          "x": 31,
+          "z": 40
+        },
+        {
+          "point_cm": [
+            14133.79492,
+            1797.843994,
+            -15982.45215
+          ],
+          "cell_world_cm": [
+            14130.0312,
+            -15977.833
+          ],
+          "axis_error_cm": 4.619149999998626,
+          "distance_error_cm": 5.958366803151142,
+          "confidence": 0.997631848,
+          "x": 33,
+          "z": 41
+        }
+      ]
+    },
+    {
+      "tag": "turned",
+      "game_ms": 21094,
+      "root_cm": [
+        14357.95898,
+        1723.784424,
+        -15948.1709
+      ],
+      "body_yaw_deg": -3.73687577,
+      "traveled_cm": 20.5351983,
+      "fence_reference_points": 6,
+      "fence_matched_within_25cm": 6,
+      "fence_max_axis_error_cm": 22.54689000000144,
+      "fence_max_normal_error_cm": 21.88928512906479,
+      "fence_distance_along_body_cm": -166.56359513854252,
+      "fence_wall_confidence_mean": 0.9629939995,
+      "current_eye_fence_hits": 0,
+      "fence_matches": [
+        {
+          "point_cm": [
+            14225.68359,
+            1714.869141,
+            -15815.96484
+          ],
+          "cell_world_cm": [
+            14203.1367,
+            -15825.3193
+          ],
+          "axis_error_cm": 22.54689000000144,
+          "distance_error_cm": 24.410411110092753,
+          "confidence": 0.962954044,
+          "x": 36,
+          "z": 25
+        },
+        {
+          "point_cm": [
+            14221.49512,
+            1809.191528,
+            -15811.9541
+          ],
+          "cell_world_cm": [
+            14204.7666,
+            -15800.3721
+          ],
+          "axis_error_cm": 16.728519999998753,
+          "distance_error_cm": 20.34664850510683,
+          "confidence": 0.973228753,
+          "x": 37,
+          "z": 25
+        },
+        {
+          "point_cm": [
+            14212.03027,
+            1773.887207,
+            -15849.22363
+          ],
+          "cell_world_cm": [
+            14201.5078,
+            -15850.2666
+          ],
+          "axis_error_cm": 10.522469999999885,
+          "distance_error_cm": 10.574032405936652,
+          "confidence": 0.96979177,
+          "x": 35,
+          "z": 25
+        },
+        {
+          "point_cm": [
+            14179.06934,
+            1718.241699,
+            -15909.03613
+          ],
+          "cell_world_cm": [
+            14198.249,
+            -15900.1602
+          ],
+          "axis_error_cm": 19.179659999999785,
+          "distance_error_cm": 21.133894366171475,
+          "confidence": 0.966366649,
+          "x": 33,
+          "z": 25
+        },
+        {
+          "point_cm": [
+            14165.01465,
+            1710.855347,
+            -15942.74023
+          ],
+          "cell_world_cm": [
+            14170.043,
+            -15948.4238
+          ],
+          "axis_error_cm": 5.683570000001055,
+          "distance_error_cm": 7.588627785536528,
+          "confidence": 0.959553123,
+          "x": 31,
+          "z": 24
+        },
+        {
+          "point_cm": [
+            14133.79492,
+            1797.843994,
+            -15982.45215
+          ],
+          "cell_world_cm": [
+            14141.8379,
+            -15996.6885
+          ],
+          "axis_error_cm": 14.236350000001039,
+          "distance_error_cm": 16.351244252439393,
+          "confidence": 0.946069658,
+          "x": 29,
+          "z": 23
+        }
+      ]
+    },
+    {
+      "tag": "unseen",
+      "game_ms": 21394,
+      "root_cm": [
+        14356.45703,
+        1723.43811,
+        -15947.16309
+      ],
+      "body_yaw_deg": -3.73687577,
+      "traveled_cm": 22.3768037,
+      "fence_reference_points": 6,
+      "fence_matched_within_25cm": 6,
+      "fence_max_axis_error_cm": 24.048790000000736,
+      "fence_max_normal_error_cm": 23.45367434364522,
+      "fence_distance_along_body_cm": -164.99915486042093,
+      "fence_wall_confidence_mean": 0.9545213381666665,
+      "current_eye_fence_hits": 0,
+      "fence_matches": [
+        {
+          "point_cm": [
+            14225.68359,
+            1714.869141,
+            -15815.96484
+          ],
+          "cell_world_cm": [
+            14201.6348,
+            -15824.3115
+          ],
+          "axis_error_cm": 24.048790000000736,
+          "distance_error_cm": 25.456060842552265,
+          "confidence": 0.962953687,
+          "x": 36,
+          "z": 25
+        },
+        {
+          "point_cm": [
+            14221.49512,
+            1809.191528,
+            -15811.9541
+          ],
+          "cell_world_cm": [
+            14201.6348,
+            -15824.3115
+          ],
+          "axis_error_cm": 19.860319999999774,
+          "distance_error_cm": 23.39097358517523,
+          "confidence": 0.962953687,
+          "x": 36,
+          "z": 25
+        },
+        {
+          "point_cm": [
+            14212.03027,
+            1773.887207,
+            -15849.22363
+          ],
+          "cell_world_cm": [
+            14224.9521,
+            -15850.8877
+          ],
+          "axis_error_cm": 12.921830000001137,
+          "distance_error_cm": 13.028538656112808,
+          "confidence": 0.959552944,
+          "x": 35,
+          "z": 26
+        },
+        {
+          "point_cm": [
+            14179.06934,
+            1718.241699,
+            -15909.03613
+          ],
+          "cell_world_cm": [
+            14196.7471,
+            -15899.1523
+          ],
+          "axis_error_cm": 17.67776000000049,
+          "distance_error_cm": 20.25322922613899,
+          "confidence": 0.956164002,
+          "x": 33,
+          "z": 25
+        },
+        {
+          "point_cm": [
+            14165.01465,
+            1710.855347,
+            -15942.74023
+          ],
+          "cell_world_cm": [
+            14168.541,
+            -15947.416
+          ],
+          "axis_error_cm": 4.6757699999998295,
+          "distance_error_cm": 5.856446825114957,
+          "confidence": 0.949422419,
+          "x": 31,
+          "z": 24
+        },
+        {
+          "point_cm": [
+            14133.79492,
+            1797.843994,
+            -15982.45215
+          ],
+          "cell_world_cm": [
+            14140.3359,
+            -15995.6807
+          ],
+          "axis_error_cm": 13.228550000001633,
+          "distance_error_cm": 14.757335615311462,
+          "confidence": 0.93608129,
+          "x": 29,
+          "z": 23
+        }
+      ]
+    },
+    {
+      "tag": "back-1",
+      "game_ms": 21661,
+      "root_cm": [
+        14311.56445,
+        1715.561646,
+        -15940.35156
+      ],
+      "body_yaw_deg": -3.73687577,
+      "traveled_cm": 68.8558283,
+      "fence_reference_points": 6,
+      "fence_matched_within_25cm": 6,
+      "fence_max_axis_error_cm": 19.047889999999825,
+      "fence_max_normal_error_cm": 18.69495056883784,
+      "fence_distance_along_body_cm": -119.75808241942491,
+      "fence_wall_confidence_mean": 0.9304189583333334,
+      "current_eye_fence_hits": 0,
+      "fence_matches": [
+        {
+          "point_cm": [
+            14225.68359,
+            1714.869141,
+            -15815.96484
+          ],
+          "cell_world_cm": [
+            14206.6357,
+            -15820.7588
+          ],
+          "axis_error_cm": 19.047889999999825,
+          "distance_error_cm": 19.64189822633455,
+          "confidence": 0.939748526,
+          "x": 36,
+          "z": 27
+        },
+        {
+          "point_cm": [
+            14221.49512,
+            1809.191528,
+            -15811.9541
+          ],
+          "cell_world_cm": [
+            14206.6357,
+            -15820.7588
+          ],
+          "axis_error_cm": 14.859419999998863,
+          "distance_error_cm": 17.27209034327764,
+          "confidence": 0.939748526,
+          "x": 36,
+          "z": 27
+        },
+        {
+          "point_cm": [
+            14212.03027,
+            1773.887207,
+            -15849.22363
+          ],
+          "cell_world_cm": [
+            14205.0068,
+            -15845.7051
+          ],
+          "axis_error_cm": 7.0234700000000885,
+          "distance_error_cm": 7.855519346409226,
+          "confidence": 0.929827273,
+          "x": 35,
+          "z": 27
+        },
+        {
+          "point_cm": [
+            14179.06934,
+            1718.241699,
+            -15909.03613
+          ],
+          "cell_world_cm": [
+            14176.8008,
+            -15893.9697
+          ],
+          "axis_error_cm": 15.066430000000764,
+          "distance_error_cm": 15.236258946228206,
+          "confidence": 0.933122456,
+          "x": 33,
+          "z": 26
+        },
+        {
+          "point_cm": [
+            14165.01465,
+            1710.855347,
+            -15942.74023
+          ],
+          "cell_world_cm": [
+            14173.542,
+            -15943.8633
+          ],
+          "axis_error_cm": 8.527350000000297,
+          "distance_error_cm": 8.600987399561072,
+          "confidence": 0.926543295,
+          "x": 31,
+          "z": 26
+        },
+        {
+          "point_cm": [
+            14133.79492,
+            1797.843994,
+            -15982.45215
+          ],
+          "cell_world_cm": [
+            14145.3369,
+            -15992.1279
+          ],
+          "axis_error_cm": 11.541979999999967,
+          "distance_error_cm": 15.061123476783056,
+          "confidence": 0.913523674,
+          "x": 29,
+          "z": 25
+        }
+      ]
+    },
+    {
+      "tag": "back-2",
+      "game_ms": 21927,
+      "root_cm": [
+        14266.66113,
+        1707.686279,
+        -15933.56641
+      ],
+      "body_yaw_deg": -3.73687577,
+      "traveled_cm": 115.34574,
+      "fence_reference_points": 6,
+      "fence_matched_within_25cm": 6,
+      "fence_max_axis_error_cm": 18.5927300000003,
+      "fence_max_normal_error_cm": 13.945090180060546,
+      "fence_distance_along_body_cm": -74.50801211753932,
+      "fence_wall_confidence_mean": 0.9080247878333334,
+      "current_eye_fence_hits": 0,
+      "fence_matches": [
+        {
+          "point_cm": [
+            14225.68359,
+            1714.869141,
+            -15815.96484
+          ],
+          "cell_world_cm": [
+            14211.626,
+            -15817.2324
+          ],
+          "axis_error_cm": 14.057590000000346,
+          "distance_error_cm": 14.114621672638282,
+          "confidence": 0.917129755,
+          "x": 36,
+          "z": 29
+        },
+        {
+          "point_cm": [
+            14221.49512,
+            1809.191528,
+            -15811.9541
+          ],
+          "cell_world_cm": [
+            14211.626,
+            -15817.2324
+          ],
+          "axis_error_cm": 9.869119999999384,
+          "distance_error_cm": 11.19196052818215,
+          "confidence": 0.917129755,
+          "x": 36,
+          "z": 29
+        },
+        {
+          "point_cm": [
+            14212.03027,
+            1773.887207,
+            -15849.22363
+          ],
+          "cell_world_cm": [
+            14209.9971,
+            -15842.1787
+          ],
+          "axis_error_cm": 7.044930000000022,
+          "distance_error_cm": 7.332449723918698,
+          "confidence": 0.907447338,
+          "x": 35,
+          "z": 29
+        },
+        {
+          "point_cm": [
+            14179.06934,
+            1718.241699,
+            -15909.03613
+          ],
+          "cell_world_cm": [
+            14181.791,
+            -15890.4434
+          ],
+          "axis_error_cm": 18.5927300000003,
+          "distance_error_cm": 18.7908765630693,
+          "confidence": 0.910663247,
+          "x": 33,
+          "z": 28
+        },
+        {
+          "point_cm": [
+            14165.01465,
+            1710.855347,
+            -15942.74023
+          ],
+          "cell_world_cm": [
+            14153.5859,
+            -15938.708
+          ],
+          "axis_error_cm": 11.428749999999127,
+          "distance_error_cm": 12.119208115028435,
+          "confidence": 0.904242456,
+          "x": 31,
+          "z": 27
+        },
+        {
+          "point_cm": [
+            14133.79492,
+            1797.843994,
+            -15982.45215
+          ],
+          "cell_world_cm": [
+            14125.3799,
+            -15986.9717
+          ],
+          "axis_error_cm": 8.415020000000368,
+          "distance_error_cm": 9.551905244657437,
+          "confidence": 0.891536176,
+          "x": 29,
+          "z": 26
+        }
+      ]
+    },
+    {
+      "tag": "stopped",
+      "game_ms": 22427,
+      "root_cm": [
+        14264.1582,
+        1707.108887,
+        -15931.8877
+      ],
+      "body_yaw_deg": -3.73687577,
+      "traveled_cm": 118.414318,
+      "fence_reference_points": 6,
+      "fence_matched_within_25cm": 6,
+      "fence_max_axis_error_cm": 20.271529999999984,
+      "fence_max_normal_error_cm": 16.552176223804345,
+      "fence_distance_along_body_cm": -71.90099441022028,
+      "fence_wall_confidence_mean": 0.8921034833333333,
+      "current_eye_fence_hits": 0,
+      "fence_matches": [
+        {
+          "point_cm": [
+            14225.68359,
+            1714.869141,
+            -15815.96484
+          ],
+          "cell_world_cm": [
+            14209.123,
+            -15815.5537
+          ],
+          "axis_error_cm": 16.560590000000957,
+          "distance_error_cm": 16.565692778985486,
+          "confidence": 0.901048839,
+          "x": 36,
+          "z": 29
+        },
+        {
+          "point_cm": [
+            14221.49512,
+            1809.191528,
+            -15811.9541
+          ],
+          "cell_world_cm": [
+            14209.123,
+            -15815.5537
+          ],
+          "axis_error_cm": 12.372119999999995,
+          "distance_error_cm": 12.88512605504489,
+          "confidence": 0.901048839,
+          "x": 36,
+          "z": 29
+        },
+        {
+          "point_cm": [
+            14212.03027,
+            1773.887207,
+            -15849.22363
+          ],
+          "cell_world_cm": [
+            14207.4941,
+            -15840.501
+          ],
+          "axis_error_cm": 8.722630000000208,
+          "distance_error_cm": 9.831638336808275,
+          "confidence": 0.891536176,
+          "x": 35,
+          "z": 29
+        },
+        {
+          "point_cm": [
+            14179.06934,
+            1718.241699,
+            -15909.03613
+          ],
+          "cell_world_cm": [
+            14179.2891,
+            -15888.7646
+          ],
+          "axis_error_cm": 20.271529999999984,
+          "distance_error_cm": 20.27272115426292,
+          "confidence": 0.89469564,
+          "x": 33,
+          "z": 28
+        },
+        {
+          "point_cm": [
+            14165.01465,
+            1710.855347,
+            -15942.74023
+          ],
+          "cell_world_cm": [
+            14151.083,
+            -15937.0293
+          ],
+          "axis_error_cm": 13.931649999998626,
+          "distance_error_cm": 15.056745770164067,
+          "confidence": 0.888387442,
+          "x": 31,
+          "z": 27
+        },
+        {
+          "point_cm": [
+            14133.79492,
+            1797.843994,
+            -15982.45215
+          ],
+          "cell_world_cm": [
+            14147.8242,
+            -15986.9229
+          ],
+          "axis_error_cm": 14.029279999998835,
+          "distance_error_cm": 14.724411800845253,
+          "confidence": 0.875903964,
+          "x": 29,
+          "z": 27
+        }
+      ]
+    },
+    {
+      "tag": "stand-start",
+      "game_ms": 24927,
+      "root_cm": [
+        14438.56836,
+        1734.466919,
+        -15927.90332
+      ],
+      "body_yaw_deg": -3.73687577,
+      "traveled_cm": 296.835154,
+      "fence_reference_points": 6,
+      "fence_matched_within_25cm": 6,
+      "fence_max_axis_error_cm": 18.4071899999999,
+      "fence_max_normal_error_cm": 17.771942736693298,
+      "fence_distance_along_body_cm": -245.68066116769165,
+      "fence_wall_confidence_mean": 0.772923857,
+      "current_eye_fence_hits": 0,
+      "fence_matches": [
+        {
+          "point_cm": [
+            14225.68359,
+            1714.869141,
+            -15815.96484
+          ],
+          "cell_world_cm": [
+            14207.2764,
+            -15825.1113
+          ],
+          "axis_error_cm": 18.4071899999999,
+          "distance_error_cm": 20.554376035961177,
+          "confidence": 0.772891819,
+          "x": 35,
+          "z": 22
+        },
+        {
+          "point_cm": [
+            14221.49512,
+            1809.191528,
+            -15811.9541
+          ],
+          "cell_world_cm": [
+            14208.9053,
+            -15800.1641
+          ],
+          "axis_error_cm": 12.589819999999236,
+          "distance_error_cm": 17.24841058278708,
+          "confidence": 0.781138539,
+          "x": 36,
+          "z": 22
+        },
+        {
+          "point_cm": [
+            14212.03027,
+            1773.887207,
+            -15849.22363
+          ],
+          "cell_world_cm": [
+            14205.6465,
+            -15850.0576
+          ],
+          "axis_error_cm": 6.383769999998549,
+          "distance_error_cm": 6.438014086174474,
+          "confidence": 0.778379917,
+          "x": 34,
+          "z": 22
+        },
+        {
+          "point_cm": [
+            14179.06934,
+            1718.241699,
+            -15909.03613
+          ],
+          "cell_world_cm": [
+            14177.4414,
+            -15898.3213
+          ],
+          "axis_error_cm": 10.714830000000802,
+          "distance_error_cm": 10.837793621052128,
+          "confidence": 0.775630832,
+          "x": 32,
+          "z": 21
+        },
+        {
+          "point_cm": [
+            14165.01465,
+            1710.855347,
+            -15942.74023
+          ],
+          "cell_world_cm": [
+            14174.1816,
+            -15948.2148
+          ],
+          "axis_error_cm": 9.166950000000725,
+          "distance_error_cm": 10.677260368999939,
+          "confidence": 0.770162106,
+          "x": 30,
+          "z": 21
+        },
+        {
+          "point_cm": [
+            14133.79492,
+            1797.843994,
+            -15982.45215
+          ],
+          "cell_world_cm": [
+            14145.9766,
+            -15996.4795
+          ],
+          "axis_error_cm": 14.027350000000297,
+          "distance_error_cm": 18.57847883021914,
+          "confidence": 0.759339929,
+          "x": 28,
+          "z": 20
+        }
+      ]
+    },
+    {
+      "tag": "aged",
+      "game_ms": 84927,
+      "root_cm": [
+        14252.90039,
+        1691.931519,
+        -15802.28613
+      ],
+      "body_yaw_deg": -3.73687577,
+      "traveled_cm": 530.737124,
+      "fence_reference_points": 6,
+      "fence_matched_within_25cm": 6,
+      "fence_max_axis_error_cm": 23.509729999999763,
+      "fence_max_normal_error_cm": 11.232014287385633,
+      "fence_distance_along_body_cm": -52.22039466792232,
+      "fence_wall_confidence_mean": 0.09681557488333332,
+      "current_eye_fence_hits": 0,
+      "fence_matches": [
+        {
+          "point_cm": [
+            14225.68359,
+            1714.869141,
+            -15815.96484
+          ],
+          "cell_world_cm": [
+            14214.666,
+            -15812.3154
+          ],
+          "axis_error_cm": 11.017590000001292,
+          "distance_error_cm": 11.606278547481795,
+          "confidence": 0.0977863669,
+          "x": 31,
+          "z": 30
+        },
+        {
+          "point_cm": [
+            14221.49512,
+            1809.191528,
+            -15811.9541
+          ],
+          "cell_world_cm": [
+            14214.666,
+            -15812.3154
+          ],
+          "axis_error_cm": 6.82912000000033,
+          "distance_error_cm": 6.8386707527416135,
+          "confidence": 0.0977863669,
+          "x": 31,
+          "z": 30
+        },
+        {
+          "point_cm": [
+            14212.03027,
+            1773.887207,
+            -15849.22363
+          ],
+          "cell_world_cm": [
+            14213.0361,
+            -15837.2617
+          ],
+          "axis_error_cm": 11.961930000001303,
+          "distance_error_cm": 12.004143589354106,
+          "confidence": 0.096754007,
+          "x": 30,
+          "z": 30
+        },
+        {
+          "point_cm": [
+            14179.06934,
+            1718.241699,
+            -15909.03613
+          ],
+          "cell_world_cm": [
+            14184.8301,
+            -15885.5264
+          ],
+          "axis_error_cm": 23.509729999999763,
+          "distance_error_cm": 24.205242416684857,
+          "confidence": 0.0970968902,
+          "x": 28,
+          "z": 29
+        },
+        {
+          "point_cm": [
+            14165.01465,
+            1710.855347,
+            -15942.74023
+          ],
+          "cell_world_cm": [
+            14156.625,
+            -15933.791
+          ],
+          "axis_error_cm": 8.94923000000017,
+          "distance_error_cm": 12.266822926715337,
+          "confidence": 0.0964122936,
+          "x": 26,
+          "z": 28
+        },
+        {
+          "point_cm": [
+            14133.79492,
+            1797.843994,
+            -15982.45215
+          ],
+          "cell_world_cm": [
+            14128.4189,
+            -15982.0557
+          ],
+          "axis_error_cm": 5.3760199999996985,
+          "distance_error_cm": 5.390618113249673,
+          "confidence": 0.0950575247,
+          "x": 24,
+          "z": 27
+        }
+      ]
+    }
+  ],
+  "hidden": {
+    "kind": "memory_hidden_npc",
+    "actor": "0",
+    "npc_id": 1054,
+    "root_cm": [
+      14219.68359,
+      1682.886841,
+      -15763.7666
+    ],
+    "observer_root_cm": [
+      14357.95898,
+      1723.784424,
+      -15948.1709
+    ],
+    "observer_forward": [
+      0.9978739023,
+      0,
+      -0.06517455727
+    ],
+    "game_ms": 21094,
+    "memory_movable_max": 0,
+    "current_eye_npc_hits_at_spawn": 0
+  },
+  "far_reference_points": 2,
+  "far_after_turn": [
+    {
+      "point_cm": [
+        8795.619141,
+        1885.605957,
+        -15593.47949
+      ],
+      "cell_world_cm": [
+        8676.5957,
+        -15476.8887
+      ],
+      "axis_error_cm": 119.02344099999937,
+      "distance_error_cm": 166.6133002503236,
+      "confidence": 0.906686306,
+      "x": 50,
+      "z": 21
+    },
+    {
+      "point_cm": [
+        9020.101562,
+        1886.238647,
+        -23974.39648
+      ],
+      "cell_world_cm": [
+        9127.00195,
+        -23924.2031
+      ],
+      "axis_error_cm": 106.90038800000002,
+      "distance_error_cm": 118.09770679558096,
+      "confidence": 0.906686306,
+      "x": 8,
+      "z": 26
+    }
+  ],
+  "costs": [
+    {
+      "kind": "memory_span",
+      "tag": "perf20",
+      "actors": 20,
+      "ray_count": 238,
+      "decision_period_ms": 100,
+      "warmup_ms": 2000,
+      "start_game_ms": 21794,
+      "end_game_ms": 29794,
+      "eye_cost_included": false,
+      "pose_updates_amortized": true,
+      "update": {
+        "samples": 1600,
+        "median_us": 64.572,
+        "p95_us": 238.278,
+        "mean_us": 94.871895
+      },
+      "view": {
+        "samples": 1600,
+        "median_us": 242.346,
+        "p95_us": 368.875,
+        "mean_us": 262.5940175
+      },
+      "update_and_view": {
+        "samples": 1600,
+        "median_us": 313.431,
+        "p95_us": 481.928,
+        "mean_us": 357.4659125
+      }
+    },
+    {
+      "kind": "memory_span",
+      "tag": "perf50",
+      "actors": 50,
+      "ray_count": 238,
+      "decision_period_ms": 100,
+      "warmup_ms": 2000,
+      "start_game_ms": 21794,
+      "end_game_ms": 29794,
+      "eye_cost_included": false,
+      "pose_updates_amortized": true,
+      "update": {
+        "samples": 4000,
+        "median_us": 64.541,
+        "p95_us": 228.149,
+        "mean_us": 88.683765
+      },
+      "view": {
+        "samples": 4000,
+        "median_us": 232.898,
+        "p95_us": 354.608,
+        "mean_us": 240.6090798
+      },
+      "update_and_view": {
+        "samples": 4000,
+        "median_us": 306.426,
+        "p95_us": 458.233,
+        "mean_us": 329.2928447
+      }
+    },
+    {
+      "kind": "memory_span",
+      "tag": "mac",
+      "actors": 20,
+      "ray_count": 238,
+      "decision_period_ms": 100,
+      "warmup_ms": 2000,
+      "start_game_ms": 21794,
+      "end_game_ms": 29794,
+      "eye_cost_included": false,
+      "pose_updates_amortized": true,
+      "update": {
+        "samples": 1600,
+        "median_us": 46.291,
+        "p95_us": 162.333,
+        "mean_us": 68.3959875
+      },
+      "view": {
+        "samples": 1600,
+        "median_us": 96.375,
+        "p95_us": 142.625,
+        "mean_us": 107.1608631
+      },
+      "update_and_view": {
+        "samples": 1600,
+        "median_us": 148.416,
+        "p95_us": 282.167,
+        "mean_us": 175.5568506
+      }
+    }
+  ]
+}

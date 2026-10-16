@@ -401,6 +401,10 @@ std::string wall(World& world) {
 
 void NavigationEyeBench::reset() { state=State{}; }
 
+Npc* NavigationEyeBench::actor(size_t index) {
+  return index<state.actors.size() ? state.actors[index] : nullptr;
+}
+
 std::string NavigationEyeBench::command(const std::vector<std::string>& args,World& world,Npc& player,
                                        const std::string& outputDirectory) {
   if(state.directory.empty()) {
