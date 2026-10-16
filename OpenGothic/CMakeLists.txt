@@ -163,6 +163,10 @@ add_definitions(-DMINIZ_NO_STDIO)
 add_library(miniz STATIC EXCLUDE_FROM_ALL "lib/miniz/miniz.h" "lib/miniz/miniz.c")
 target_link_libraries(${PROJECT_NAME} miniz)
 
+# Recast/Detour are used only by the opt-in body-runner navmesh commands.
+add_subdirectory(lib/recastnavigation)
+target_link_libraries(${PROJECT_NAME} Recast Detour)
+
 # Jolt Physics: single precision, static library, portable instruction sets.
 set(JPH_BUILD_SHARED_LIBS                OFF CACHE INTERNAL "")
 set(DOUBLE_PRECISION                     OFF CACHE INTERNAL "")
@@ -250,6 +254,15 @@ endif()
 
 # Asset-free contracts; run explicitly with their check-* targets.
 if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-navmesh-contract EXCLUDE_FROM_ALL
+    tests/navmesh_contract.cpp common/physics/navmesh.cpp)
+  target_link_libraries(gothic-navmesh-contract PRIVATE Recast Detour)
+  if(NOT MSVC)
+    target_compile_options(gothic-navmesh-contract PRIVATE -Wall -Wconversion -Werror)
+  endif()
+  add_custom_target(check-navmesh
+    COMMAND $<TARGET_FILE:gothic-navmesh-contract>
+    DEPENDS gothic-navmesh-contract USES_TERMINAL)
   add_executable(gothic-aim-contract EXCLUDE_FROM_ALL tests/aim_contract.cpp)
   target_link_libraries(gothic-aim-contract PRIVATE OpenGothic AiBridge)
   add_custom_target(check-aim

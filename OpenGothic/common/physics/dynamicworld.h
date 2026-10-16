@@ -2,6 +2,7 @@
 
 #include <zenkit/Mesh.hh>
 #include "physics/physicsnoise.h"
+#include "physics/navmesh.h"
 
 #include <Tempest/Matrix4x4>
 #include <functional>
@@ -121,6 +122,9 @@ class DynamicWorld final {
         auto  centerAsym()  const -> Tempest::Vec3;
         float groundOffset() const;
         float radiusXZ() const;
+        // Read-only dimensions of the landscape-query capsule, centimetres.
+        float capsuleRadius() const;
+        float capsuleHeight() const;
 
         bool  testMove(const Tempest::Vec3& to, CollisionTest& out);
         bool  testMove(const Tempest::Vec3& to, const Tempest::Vec3& from, CollisionTest& out);
@@ -413,6 +417,9 @@ class DynamicWorld final {
       uint64_t rays = 0;
       };
     PhysicsStats physicsStats() const;
+
+    // Called explicitly by the runner; ordinary worlds never build a navmesh.
+    NavMesh::Geometry navigationGeometry() const;
 
     void           deleteObj(BulletBody* obj);
 
