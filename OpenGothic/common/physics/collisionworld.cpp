@@ -1192,6 +1192,57 @@ void CollisionWorld::removeBody(CollisionBody& body) {
   rigid.erase(std::remove(rigid.begin(),rigid.end(),&body),rigid.end());
   }
 
+void CollisionWorld::staticTriangles(const std::function<void(const StaticTriangle&)>& output) const {
+  struct TriangleCollector final : JPH::TransformedShapeCollector {
+    TriangleCollector(const std::function<void(const StaticTriangle&)>& output, bool water)
+      :output(output),water(water) {
+      }
+
+    void AddHit(const JPH::TransformedShape& leaf) override {
+      // CollectTransformedShapes resolves compounds and every scale/transform
+      // wrapper before GetTrianglesStart, which only accepts leaf shapes.
+      JPH::Shape::GetTrianglesContext context;
+      const auto bounds = leaf.GetWorldSpaceBounds();
+      leaf.GetTrianglesStart(context,bounds,JPH::RVec3::sZero());
+      constexpr int batchSize = 128;
+      JPH::Float3 vertices[batchSize*3];
+      for(;;) {
+        const int count = leaf.GetTrianglesNext(context,batchSize,vertices);
+        if(count==0)
+          break;
+        for(int triangle=0;triangle<count;++triangle) {
+          StaticTriangle result;
+          result.water = water;
+          for(int i=0;i<3;++i) {
+            const auto& v = vertices[triangle*3+i];
+            result.vertices[i] = Tempest::Vec3(v.x,v.y,v.z);
+            }
+          output(result);
+          }
+        }
+      }
+
+    const std::function<void(const StaticTriangle&)>& output;
+    bool water;
+    };
+
+  for(const auto* object:bodies) {
+    if(object->categoryId!=DynamicWorld::C_Landscape &&
+       object->categoryId!=DynamicWorld::C_Object &&
+       object->categoryId!=DynamicWorld::C_Water)
+      continue;
+    JPH::TransformedShape shape;
+    {
+      JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),object->id);
+      if(!lock.Succeeded() || !lock.GetBody().IsStatic())
+        continue; // no living bodies, dynamic props or animated/kinematic vobs
+      shape = lock.GetBody().GetTransformedShape();
+    }
+    TriangleCollector collector(output,object->categoryId==DynamicWorld::C_Water);
+    shape.CollectTransformedShapes(shape.GetWorldSpaceBounds(),collector);
+    }
+  }
+
 void CollisionWorld::fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const {
   if(result.body==nullptr || result.body->mesh==nullptr)
     return;

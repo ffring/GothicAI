@@ -27,6 +27,7 @@
 #include <cctype>
 #include <chrono>
 #include <unordered_set>
+#include <stdexcept>
 
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "world/objects/item.h"
@@ -1584,6 +1585,26 @@ DynamicWorld::PhysicsStats DynamicWorld::physicsStats() const {
   return {world->stepMilliseconds(),world->bodyCount(),world->rayCount()};
   }
 
+NavMesh::Geometry DynamicWorld::navigationGeometry() const {
+  NavMesh::Geometry result;
+  world->staticTriangles([&](const CollisionWorld::StaticTriangle& triangle) {
+    auto& vertices = triangle.water ? result.waterVertices : result.vertices;
+    auto& indices  = triangle.water ? result.waterTriangles : result.triangles;
+    if(vertices.size()/3>size_t(std::numeric_limits<int>::max())-3)
+      throw std::runtime_error("Static navigation geometry exceeds the index limit");
+    const int first = int(vertices.size()/3);
+    for(const auto& vertex:triangle.vertices) {
+      vertices.push_back(vertex.x);
+      vertices.push_back(vertex.y);
+      vertices.push_back(vertex.z);
+      }
+    indices.push_back(first);
+    indices.push_back(first+1);
+    indices.push_back(first+2);
+    });
+  return result;
+  }
+
 void DynamicWorld::deleteObj(BulletBody* obj) {
   bulletList->del(obj);
   }
@@ -1752,6 +1773,14 @@ float DynamicWorld::NpcItem::groundOffset() const {
 
 float DynamicWorld::NpcItem::radiusXZ() const {
   return obj->maxRXZ;
+  }
+
+float DynamicWorld::NpcItem::capsuleRadius() const {
+  return obj!=nullptr ? obj->radius : 0.f;
+  }
+
+float DynamicWorld::NpcItem::capsuleHeight() const {
+  return obj!=nullptr ? obj->cylinderHeight+2.f*obj->radius : 0.f;
   }
 
 const Tempest::Vec3& DynamicWorld::NpcItem::position() const {

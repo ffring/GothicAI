@@ -185,6 +185,14 @@ class CollisionWorld final {
     uint64_t rayCount() const;
     uint64_t simulationStep() const;
 
+    struct StaticTriangle {
+      Tempest::Vec3 vertices[3]; // world metres, including the native shape's scale
+      bool water = false;
+      };
+    // Bench-only snapshot of static collision geometry, never render meshes.
+    // Water is exported separately from solid surfaces for depth filtering.
+    void staticTriangles(const std::function<void(const StaticTriangle&)>& output) const;
+
     // Masks use 1u << DynamicWorld::Category. Normals keep the mesh's winding.
     QueryResult rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
                         bool backfaces = false, std::vector<QueryResult>* all = nullptr,

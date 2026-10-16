@@ -81,6 +81,7 @@ void Npc::GoTo::save(Serialize& fout) const {
   }
 
 void Npc::GoTo::load(Serialize& fin) {
+  pointDistance = 0.f;
   fin.read(npc, reinterpret_cast<uint8_t&>(flag), wp, pos);
   //NOTE: no real need to version check
   //if(fin.version()<53) {
@@ -115,6 +116,7 @@ void Npc::GoTo::clear() {
   npc  = nullptr;
   wp   = nullptr;
   flag = Npc::GT_No;
+  pointDistance = 0.f;
   }
 
 void Npc::GoTo::set(Npc* to, Npc::GoToHint hnt) {
@@ -137,6 +139,7 @@ void Npc::GoTo::set(const Item* to) {
 void Npc::GoTo::set(const Vec3& to) {
   pos  = to;
   flag = GT_Point;
+  pointDistance = 0.f;
   }
 
 void Npc::GoTo::setFlee() {
@@ -2294,6 +2297,8 @@ bool Npc::implGoTo(uint64_t dt) {
     if(go2.wp!=nullptr && go2.wp->useCounter()>1)
       dist = float(MAX_AI_USE_DISTANCE);
     }
+  if(go2.flag==GT_Point && go2.pointDistance>0.f)
+    dist = go2.pointDistance;
   return implGoTo(dt,dist);
   }
 
@@ -6340,6 +6345,19 @@ void Npc::clearAiQueue() {
 void Npc::attachToPoint(const WayPoint *p) {
   currentFp     = p;
   currentFpLock = FpLock(currentFp);
+  }
+
+bool Npc::goToPosition(const Vec3& position) {
+  if(isInAir() || !setInteraction(nullptr))
+    return false;
+  attachToPoint(nullptr);
+  wayPath.clear();
+  go2.clear();
+  // GoTo::isClose(Vec3) measures from the actor's center, whereas navmesh points
+  // (like WayPoint::groundPos) lie on the walkable surface.
+  go2.set(position+(centerPosition()-this->position()));
+  go2.pointDistance = 20.f;
+  return true;
   }
 
 void Npc::clearGoTo() {

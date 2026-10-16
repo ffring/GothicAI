@@ -98,7 +98,11 @@
 #       arrived at a new inhabited place produces a quest from an eligible giver; a plot giver is refused
 #       first, the second proposal and the builder receive the premise. Another occasion that day is
 #       skipped before the model; after a game day and a simulated 15 min, none is recorded. Save/load
-#       keeps the lines and budget. On a save: SAVE=save_slot_1.sav; no --showrunner background loop
+#       keeps the lines and budget. On a save: SAVE=save_slot_1.sav; no ordinary background loop
+#   showrunner_live: LLM=chatgpt only, stage 4 layer 3: one saved game, real arrived, human-kill deed and
+#       chapter occasions consumed by Showrunner.run; every line is finished by play_book_chain before
+#       the next occasion, with a game day and an injected 15 min between them. All three must have a
+#       line/none outcome, at least two lines, all quests completed. SAVE=save_slot_1.sav; TIMEOUT=1200
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)
@@ -193,7 +197,8 @@
 #       «ты кому-нибудь расскажешь?», sets out to tell Andre tomorrow at 7:00; the night goes by (a leap), the
 #       hero waits where Andre will be; Lobart walks there from the farm, finds Andre and tells him in front of
 #       the hero: a rumor with `how: told`, `goal_done`, a scene of two voices. Starts the TTS service
-#       (TTS=fake); model scripted with LLM=fake; TIMEOUT=1500 (the walk is ~8 min of real time)
+#       (TTS=fake); model scripted with LLM=fake (LLM=chatgpt: Lobart decides himself whom he tells and
+#       when, or not to); TIMEOUT=1500 (the walk is ~8 min of real time)
 #   errand_fork: the same, but Andre is taken away before Lobart comes: another of the militia there hears it
 #   errand_far: the same, the hero at the tower: nothing walks, the rumor comes as a fact when Lobart would be
 #       there, his body stays at his routine, no model call
