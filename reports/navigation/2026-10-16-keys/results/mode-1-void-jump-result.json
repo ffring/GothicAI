@@ -1,0 +1,2807 @@
+{
+  "status": "observed",
+  "fixture": {
+    "kind": "keys_setup",
+    "scene": "void",
+    "anchor": "stock_void_north_6754_262_-6115",
+    "root_cm": [
+      6725.211914,
+      270.1354065,
+      -5957.473145
+    ],
+    "goal_cm": [
+      6782.763672,
+      262,
+      -6272.393066
+    ],
+    "forward": [
+      0.179773137,
+      0,
+      -0.9837080836
+    ],
+    "actors": 1,
+    "frozen_residents": 12,
+    "cv_diagnostics_enabled": true,
+    "hero_parking_cm": [
+      6938.779297,
+      270.1050415,
+      -5735.462402
+    ],
+    "void_reference_cm": [
+      6754,
+      262,
+      -6115
+    ],
+    "void_approach_side": "north",
+    "void_observed_start_cm": [
+      6738.694824,
+      270.1410828,
+      -6031.250977
+    ],
+    "void_approach_cm": [
+      6738.694824,
+      270.1412659,
+      -6031.250977
+    ],
+    "void_start_back_cm": 75,
+    "void_edge_back_cm": 0,
+    "void_start_from_original_back_cm": 75,
+    "void_goal_beyond_cm": 160,
+    "void_support_grid": {
+      "center_cm": [
+        6754,
+        262,
+        -6115
+      ],
+      "step_cm": 50,
+      "radius_cm": 200,
+      "probe_above_cm": 180,
+      "probe_below_cm": 500,
+      "samples": [
+        {
+          "offset_x_cm": -200,
+          "offset_z_cm": -200,
+          "support": {
+            "point_cm": [
+              6554,
+              244.637207,
+              -6314.999512
+            ],
+            "normal": [
+              -0.651953876,
+              0.586350739,
+              -0.4807795584
+            ],
+            "drop_cm": 17.36279297
+          }
+        },
+        {
+          "offset_x_cm": -200,
+          "offset_z_cm": -150,
+          "support": {
+            "point_cm": [
+              6554.000977,
+              264.8970642,
+              -6265
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -2.897064209
+          }
+        },
+        {
+          "offset_x_cm": -200,
+          "offset_z_cm": -100,
+          "support": {
+            "point_cm": [
+              6554,
+              270.1663513,
+              -6214.999512
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -8.166351318
+          }
+        },
+        {
+          "offset_x_cm": -200,
+          "offset_z_cm": -50,
+          "support": null
+        },
+        {
+          "offset_x_cm": -200,
+          "offset_z_cm": 0,
+          "support": null
+        },
+        {
+          "offset_x_cm": -200,
+          "offset_z_cm": 50,
+          "support": null
+        },
+        {
+          "offset_x_cm": -200,
+          "offset_z_cm": 100,
+          "support": {
+            "point_cm": [
+              6554,
+              270.1795044,
+              -6015
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.179504395
+          }
+        },
+        {
+          "offset_x_cm": -200,
+          "offset_z_cm": 150,
+          "support": {
+            "point_cm": [
+              6554,
+              417.5250549,
+              -5965
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "drop_cm": -155.5250549
+          }
+        },
+        {
+          "offset_x_cm": -200,
+          "offset_z_cm": 200,
+          "support": {
+            "point_cm": [
+              6554,
+              270.1409302,
+              -5915
+            ],
+            "normal": [
+              -3.852469308e-05,
+              0.9999998808,
+              0.0004997103242
+            ],
+            "drop_cm": -8.140930176
+          }
+        },
+        {
+          "offset_x_cm": -150,
+          "offset_z_cm": -200,
+          "support": {
+            "point_cm": [
+              6604,
+              261.0449219,
+              -6315
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": 0.955078125
+          }
+        },
+        {
+          "offset_x_cm": -150,
+          "offset_z_cm": -150,
+          "support": {
+            "point_cm": [
+              6604,
+              266.3142395,
+              -6265
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -4.314239502
+          }
+        },
+        {
+          "offset_x_cm": -150,
+          "offset_z_cm": -100,
+          "support": null
+        },
+        {
+          "offset_x_cm": -150,
+          "offset_z_cm": -50,
+          "support": null
+        },
+        {
+          "offset_x_cm": -150,
+          "offset_z_cm": 0,
+          "support": null
+        },
+        {
+          "offset_x_cm": -150,
+          "offset_z_cm": 50,
+          "support": null
+        },
+        {
+          "offset_x_cm": -150,
+          "offset_z_cm": 100,
+          "support": {
+            "point_cm": [
+              6604,
+              313.4446716,
+              -6015
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "drop_cm": -51.44467163
+          }
+        },
+        {
+          "offset_x_cm": -150,
+          "offset_z_cm": 150,
+          "support": {
+            "point_cm": [
+              6604,
+              389.558136,
+              -5965
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "drop_cm": -127.558136
+          }
+        },
+        {
+          "offset_x_cm": -150,
+          "offset_z_cm": 200,
+          "support": {
+            "point_cm": [
+              6604,
+              270.1428528,
+              -5915
+            ],
+            "normal": [
+              -3.852469308e-05,
+              0.9999998808,
+              0.0004997103242
+            ],
+            "drop_cm": -8.142852783
+          }
+        },
+        {
+          "offset_x_cm": -100,
+          "offset_z_cm": -200,
+          "support": {
+            "point_cm": [
+              6654,
+              262.4621277,
+              -6315
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -0.4621276855
+          }
+        },
+        {
+          "offset_x_cm": -100,
+          "offset_z_cm": -150,
+          "support": {
+            "point_cm": [
+              6654,
+              267.7314758,
+              -6265
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -5.73147583
+          }
+        },
+        {
+          "offset_x_cm": -100,
+          "offset_z_cm": -100,
+          "support": null
+        },
+        {
+          "offset_x_cm": -100,
+          "offset_z_cm": -50,
+          "support": null
+        },
+        {
+          "offset_x_cm": -100,
+          "offset_z_cm": 0,
+          "support": null
+        },
+        {
+          "offset_x_cm": -100,
+          "offset_z_cm": 50,
+          "support": null
+        },
+        {
+          "offset_x_cm": -100,
+          "offset_z_cm": 100,
+          "support": {
+            "point_cm": [
+              6654,
+              334.3008118,
+              -6015
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "drop_cm": -72.30081177
+          }
+        },
+        {
+          "offset_x_cm": -100,
+          "offset_z_cm": 150,
+          "support": {
+            "point_cm": [
+              6654,
+              332.2894592,
+              -5964.999512
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "drop_cm": -70.28945923
+          }
+        },
+        {
+          "offset_x_cm": -100,
+          "offset_z_cm": 200,
+          "support": {
+            "point_cm": [
+              6654,
+              270.1448059,
+              -5915
+            ],
+            "normal": [
+              -3.852469308e-05,
+              0.9999998808,
+              0.0004997103242
+            ],
+            "drop_cm": -8.144805908
+          }
+        },
+        {
+          "offset_x_cm": -50,
+          "offset_z_cm": -200,
+          "support": {
+            "point_cm": [
+              6704.000977,
+              263.8793335,
+              -6315
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -1.879333496
+          }
+        },
+        {
+          "offset_x_cm": -50,
+          "offset_z_cm": -150,
+          "support": {
+            "point_cm": [
+              6704,
+              269.1486206,
+              -6265
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -7.148620605
+          }
+        },
+        {
+          "offset_x_cm": -50,
+          "offset_z_cm": -100,
+          "support": null
+        },
+        {
+          "offset_x_cm": -50,
+          "offset_z_cm": -50,
+          "support": null
+        },
+        {
+          "offset_x_cm": -50,
+          "offset_z_cm": 0,
+          "support": null
+        },
+        {
+          "offset_x_cm": -50,
+          "offset_z_cm": 50,
+          "support": null
+        },
+        {
+          "offset_x_cm": -50,
+          "offset_z_cm": 100,
+          "support": {
+            "point_cm": [
+              6704,
+              289.3439636,
+              -6015
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "drop_cm": -27.34396362
+          }
+        },
+        {
+          "offset_x_cm": -50,
+          "offset_z_cm": 150,
+          "support": {
+            "point_cm": [
+              6704,
+              292.5550842,
+              -5964.999512
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "drop_cm": -30.55508423
+          }
+        },
+        {
+          "offset_x_cm": -50,
+          "offset_z_cm": 200,
+          "support": {
+            "point_cm": [
+              6704,
+              270.1349182,
+              -5915
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.134918213
+          }
+        },
+        {
+          "offset_x_cm": 0,
+          "offset_z_cm": -200,
+          "support": {
+            "point_cm": [
+              6754,
+              265.2965088,
+              -6314.999512
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -3.296508789
+          }
+        },
+        {
+          "offset_x_cm": 0,
+          "offset_z_cm": -150,
+          "support": null
+        },
+        {
+          "offset_x_cm": 0,
+          "offset_z_cm": -100,
+          "support": null
+        },
+        {
+          "offset_x_cm": 0,
+          "offset_z_cm": -50,
+          "support": null
+        },
+        {
+          "offset_x_cm": 0,
+          "offset_z_cm": 0,
+          "support": null
+        },
+        {
+          "offset_x_cm": 0,
+          "offset_z_cm": 50,
+          "support": {
+            "point_cm": [
+              6754,
+              270.1419678,
+              -6065
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.141967773
+          }
+        },
+        {
+          "offset_x_cm": 0,
+          "offset_z_cm": 100,
+          "support": {
+            "point_cm": [
+              6754.000977,
+              270.1359863,
+              -6015
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.135986328
+          }
+        },
+        {
+          "offset_x_cm": 0,
+          "offset_z_cm": 150,
+          "support": {
+            "point_cm": [
+              6753.999512,
+              270.1300049,
+              -5965
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.130004883
+          }
+        },
+        {
+          "offset_x_cm": 0,
+          "offset_z_cm": 200,
+          "support": {
+            "point_cm": [
+              6754,
+              270.1240234,
+              -5915
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.124023438
+          }
+        },
+        {
+          "offset_x_cm": 50,
+          "offset_z_cm": -200,
+          "support": {
+            "point_cm": [
+              6804,
+              266.7137146,
+              -6315
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -4.7137146
+          }
+        },
+        {
+          "offset_x_cm": 50,
+          "offset_z_cm": -150,
+          "support": null
+        },
+        {
+          "offset_x_cm": 50,
+          "offset_z_cm": -100,
+          "support": null
+        },
+        {
+          "offset_x_cm": 50,
+          "offset_z_cm": -50,
+          "support": null
+        },
+        {
+          "offset_x_cm": 50,
+          "offset_z_cm": 0,
+          "support": null
+        },
+        {
+          "offset_x_cm": 50,
+          "offset_z_cm": 50,
+          "support": {
+            "point_cm": [
+              6804,
+              270.1310425,
+              -6064.999512
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.13104248
+          }
+        },
+        {
+          "offset_x_cm": 50,
+          "offset_z_cm": 100,
+          "support": {
+            "point_cm": [
+              6804,
+              270.1250916,
+              -6015
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.125091553
+          }
+        },
+        {
+          "offset_x_cm": 50,
+          "offset_z_cm": 150,
+          "support": {
+            "point_cm": [
+              6804,
+              270.1191101,
+              -5964.999512
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.119110107
+          }
+        },
+        {
+          "offset_x_cm": 50,
+          "offset_z_cm": 200,
+          "support": {
+            "point_cm": [
+              6804,
+              270.1131287,
+              -5915
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.113128662
+          }
+        },
+        {
+          "offset_x_cm": 100,
+          "offset_z_cm": -200,
+          "support": {
+            "point_cm": [
+              6854,
+              268.1309814,
+              -6315
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -6.130981445
+          }
+        },
+        {
+          "offset_x_cm": 100,
+          "offset_z_cm": -150,
+          "support": null
+        },
+        {
+          "offset_x_cm": 100,
+          "offset_z_cm": -100,
+          "support": null
+        },
+        {
+          "offset_x_cm": 100,
+          "offset_z_cm": -50,
+          "support": null
+        },
+        {
+          "offset_x_cm": 100,
+          "offset_z_cm": 0,
+          "support": null
+        },
+        {
+          "offset_x_cm": 100,
+          "offset_z_cm": 50,
+          "support": {
+            "point_cm": [
+              6853.999512,
+              270.1201782,
+              -6064.999512
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.120178223
+          }
+        },
+        {
+          "offset_x_cm": 100,
+          "offset_z_cm": 100,
+          "support": {
+            "point_cm": [
+              6854,
+              270.1141968,
+              -6015
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.114196777
+          }
+        },
+        {
+          "offset_x_cm": 100,
+          "offset_z_cm": 150,
+          "support": {
+            "point_cm": [
+              6854.000977,
+              270.1082458,
+              -5965
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.10824585
+          }
+        },
+        {
+          "offset_x_cm": 100,
+          "offset_z_cm": 200,
+          "support": {
+            "point_cm": [
+              6854,
+              270.1035461,
+              -5915
+            ],
+            "normal": [
+              -1.563537444e-05,
+              1,
+              -2.726267485e-05
+            ],
+            "drop_cm": -8.103546143
+          }
+        },
+        {
+          "offset_x_cm": 150,
+          "offset_z_cm": -200,
+          "support": {
+            "point_cm": [
+              6904.000977,
+              269.5481873,
+              -6315
+            ],
+            "normal": [
+              -0.02817685716,
+              0.9940978885,
+              -0.1047638208
+            ],
+            "drop_cm": -7.548187256
+          }
+        },
+        {
+          "offset_x_cm": 150,
+          "offset_z_cm": -150,
+          "support": null
+        },
+        {
+          "offset_x_cm": 150,
+          "offset_z_cm": -100,
+          "support": null
+        },
+        {
+          "offset_x_cm": 150,
+          "offset_z_cm": -50,
+          "support": null
+        },
+        {
+          "offset_x_cm": 150,
+          "offset_z_cm": 0,
+          "support": {
+            "point_cm": [
+              6903.999512,
+              270.1152344,
+              -6115
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.115234375
+          }
+        },
+        {
+          "offset_x_cm": 150,
+          "offset_z_cm": 50,
+          "support": {
+            "point_cm": [
+              6904,
+              270.1092834,
+              -6065
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.109283447
+          }
+        },
+        {
+          "offset_x_cm": 150,
+          "offset_z_cm": 100,
+          "support": {
+            "point_cm": [
+              6904,
+              270.103302,
+              -6015
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.103302002
+          }
+        },
+        {
+          "offset_x_cm": 150,
+          "offset_z_cm": 150,
+          "support": {
+            "point_cm": [
+              6904.000977,
+              270.1029663,
+              -5965
+            ],
+            "normal": [
+              -1.563537444e-05,
+              1,
+              -2.726267485e-05
+            ],
+            "drop_cm": -8.102966309
+          }
+        },
+        {
+          "offset_x_cm": 150,
+          "offset_z_cm": 200,
+          "support": {
+            "point_cm": [
+              6904,
+              270.1043091,
+              -5915
+            ],
+            "normal": [
+              -1.563537444e-05,
+              1,
+              -2.726267485e-05
+            ],
+            "drop_cm": -8.104309082
+          }
+        },
+        {
+          "offset_x_cm": 200,
+          "offset_z_cm": -200,
+          "support": null
+        },
+        {
+          "offset_x_cm": 200,
+          "offset_z_cm": -150,
+          "support": null
+        },
+        {
+          "offset_x_cm": 200,
+          "offset_z_cm": -100,
+          "support": null
+        },
+        {
+          "offset_x_cm": 200,
+          "offset_z_cm": -50,
+          "support": null
+        },
+        {
+          "offset_x_cm": 200,
+          "offset_z_cm": 0,
+          "support": {
+            "point_cm": [
+              6954,
+              270.1043701,
+              -6114.999512
+            ],
+            "normal": [
+              0.0002178201248,
+              0.9999999404,
+              0.000119413824
+            ],
+            "drop_cm": -8.104370117
+          }
+        },
+        {
+          "offset_x_cm": 200,
+          "offset_z_cm": 50,
+          "support": {
+            "point_cm": [
+              6954,
+              270.1010132,
+              -6065
+            ],
+            "normal": [
+              -1.563537444e-05,
+              1,
+              -2.726267485e-05
+            ],
+            "drop_cm": -8.101013184
+          }
+        },
+        {
+          "offset_x_cm": 200,
+          "offset_z_cm": 100,
+          "support": {
+            "point_cm": [
+              6954,
+              270.102356,
+              -6014.999512
+            ],
+            "normal": [
+              -1.563537444e-05,
+              1,
+              -2.726267485e-05
+            ],
+            "drop_cm": -8.102355957
+          }
+        },
+        {
+          "offset_x_cm": 200,
+          "offset_z_cm": 150,
+          "support": {
+            "point_cm": [
+              6954,
+              270.1037292,
+              -5965
+            ],
+            "normal": [
+              -1.563537444e-05,
+              1,
+              -2.726267485e-05
+            ],
+            "drop_cm": -8.103729248
+          }
+        },
+        {
+          "offset_x_cm": 200,
+          "offset_z_cm": 200,
+          "support": {
+            "point_cm": [
+              6953.999512,
+              270.1050415,
+              -5915
+            ],
+            "normal": [
+              0,
+              1,
+              0
+            ],
+            "drop_cm": -8.105041504
+          }
+        }
+      ]
+    },
+    "removed_relaxed_overlay": true,
+    "flat_probe_count": 0,
+    "flat_minimum_y_cm": 0.0,
+    "flat_maximum_y_cm": 0.0,
+    "climb_probe_animation": "",
+    "climb_probe_height_cm": 0.0,
+    "climb_probe_no_climb": false,
+    "climb_face_cm": [
+      0,
+      0,
+      0
+    ],
+    "hero_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "npc_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "hero_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "npc_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "hero_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97",
+    "npc_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97"
+  },
+  "mode": 1,
+  "npc_cv_active_samples": 310,
+  "npc_walking_samples": 23,
+  "npc_walking_cv_active_samples": 22,
+  "measurement_only": true,
+  "actors": {
+    "hero": {
+      "start": {
+        "physical_root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "npc_root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "visual_root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "physical_root_source": "npc_physics",
+        "physical_root_valid": true,
+        "cv_root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_position_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_native_position_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_accepted_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_diagnostics_valid": true,
+        "cv_ground_state": 0,
+        "cv_ground_normal": [
+          -3.870324508e-05,
+          0.9999999404,
+          0.0005020181998
+        ],
+        "cv_velocity_cm_s": [
+          0,
+          -32.34000015,
+          0
+        ],
+        "cv_active": true,
+        "support_physical": {
+          "point_cm": [
+            6737.280273,
+            270.1161499,
+            -5851.256348
+          ],
+          "normal": [
+            -3.852469308e-05,
+            0.9999998808,
+            0.0004997103242
+          ],
+          "drop_cm": 0
+        },
+        "support_npc": {
+          "point_cm": [
+            6737.280273,
+            270.1161499,
+            -5851.256348
+          ],
+          "normal": [
+            -3.852469308e-05,
+            0.9999998808,
+            0.0004997103242
+          ],
+          "drop_cm": 0
+        },
+        "air": false,
+        "falling": false,
+        "jumping": false,
+        "keys_enabled": false,
+        "has_command": false,
+        "remaining_ms": 0,
+        "animations": "S_RUN",
+        "game_ms": 16894,
+        "frame_dt_ms": 33,
+        "anim_root_local_cm": [
+          0,
+          0,
+          0
+        ],
+        "support_probe_above_cm": 50,
+        "support_probe_below_cm": 500,
+        "cv_ground_position_cm": [
+          6737.280273,
+          270.1161804,
+          -5851.261719
+        ],
+        "cv_ground_velocity_cm_s": [
+          0,
+          0,
+          0
+        ],
+        "cv_ground_body": {
+          "id": 8388608,
+          "layer": 2,
+          "pointer_type": 0,
+          "motion_type": 0,
+          "label": "landscape",
+          "mass_kg": 0,
+          "position_cm": [
+            0,
+            0,
+            0
+          ],
+          "point_velocity_cm_s": [
+            0,
+            0,
+            0
+          ]
+        },
+        "cv_contacts": [
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4045268099,
+            "point_cm": [
+              6737.280273,
+              270.1161804,
+              -5851.261719
+            ],
+            "normal": [
+              -3.870324508e-05,
+              0.9999999404,
+              0.0005020181998
+            ],
+            "surface_normal": [
+              -3.870324508e-05,
+              0.9999999404,
+              0.0005020181998
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": -3.147870302e-05,
+            "supporting_volume_distance_cm": -8.171906471,
+            "had_collision": true,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": true,
+            "walkable_slope": true,
+            "support_allowed_by_policy": true,
+            "support_eligible": true
+          }
+        ],
+        "cv_before_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_before_ground_state": 0,
+        "cv_before_ground_normal": [
+          -3.870324508e-05,
+          0.9999999404,
+          0.0005020181998
+        ],
+        "cv_after_extended_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_dt_ms": 33,
+        "cv_initial_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_requested_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_native_requested_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_clipped_request_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_request_clipped": false,
+        "cv_resolved_clipped": false,
+        "cv_blocked": false
+      },
+      "end": {
+        "physical_root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "npc_root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "visual_root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "physical_root_source": "npc_physics",
+        "physical_root_valid": true,
+        "cv_root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_position_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_native_position_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_accepted_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_diagnostics_valid": true,
+        "cv_ground_state": 0,
+        "cv_ground_normal": [
+          0.0002197233407,
+          1,
+          0.0001186359877
+        ],
+        "cv_velocity_cm_s": [
+          0,
+          -32.34000015,
+          0
+        ],
+        "cv_active": true,
+        "support_physical": {
+          "point_cm": [
+            6742.748047,
+            270.1437378,
+            -6059.28418
+          ],
+          "normal": [
+            0.0002178201248,
+            0.9999999404,
+            0.000119413824
+          ],
+          "drop_cm": -0.0002136230469
+        },
+        "support_npc": {
+          "point_cm": [
+            6742.748047,
+            270.1437378,
+            -6059.28418
+          ],
+          "normal": [
+            0.0002178201248,
+            0.9999999404,
+            0.000119413824
+          ],
+          "drop_cm": -0.0002136230469
+        },
+        "air": false,
+        "falling": false,
+        "jumping": false,
+        "keys_enabled": false,
+        "has_command": false,
+        "remaining_ms": 0,
+        "animations": "S_RUN",
+        "game_ms": 21894,
+        "frame_dt_ms": 33,
+        "anim_root_local_cm": [
+          0,
+          0,
+          0
+        ],
+        "support_probe_above_cm": 50,
+        "support_probe_below_cm": 500,
+        "cv_ground_position_cm": [
+          6742.746094,
+          270.1435852,
+          -6059.285156
+        ],
+        "cv_ground_velocity_cm_s": [
+          0,
+          0,
+          0
+        ],
+        "cv_ground_body": {
+          "id": 8388608,
+          "layer": 2,
+          "pointer_type": 0,
+          "motion_type": 0,
+          "label": "landscape",
+          "mass_kg": 0,
+          "position_cm": [
+            0,
+            0,
+            0
+          ],
+          "point_velocity_cm_s": [
+            0,
+            0,
+            0
+          ]
+        },
+        "cv_contacts": [
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4078822531,
+            "point_cm": [
+              6742.746094,
+              270.1435852,
+              -6059.285156
+            ],
+            "normal": [
+              0.0002197233553,
+              1,
+              0.0001186359877
+            ],
+            "surface_normal": [
+              0.0002197233407,
+              1,
+              0.0001186359877
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": -3.706663847e-05,
+            "supporting_volume_distance_cm": -8.171882629,
+            "had_collision": true,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": true,
+            "walkable_slope": true,
+            "support_allowed_by_policy": true,
+            "support_eligible": true
+          },
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4213197443,
+            "point_cm": [
+              6739.42334,
+              388.1550903,
+              -6071.567383
+            ],
+            "normal": [
+              0.2613121569,
+              -0.0001534387702,
+              0.9652543664
+            ],
+            "surface_normal": [
+              0.2613121271,
+              -0.0001534387702,
+              0.9652543664
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": 3.553270578,
+            "supporting_volume_distance_cm": 109.8396149,
+            "had_collision": false,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": false,
+            "walkable_slope": false,
+            "support_allowed_by_policy": true,
+            "support_eligible": false
+          }
+        ],
+        "cv_before_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_before_ground_state": 0,
+        "cv_before_ground_normal": [
+          0.0002197233407,
+          1,
+          0.0001186359877
+        ],
+        "cv_after_extended_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_dt_ms": 33,
+        "cv_initial_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_requested_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_native_requested_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_clipped_request_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_request_clipped": false,
+        "cv_resolved_clipped": false,
+        "cv_blocked": false
+      },
+      "diagnostics": {
+        "positions": {
+          "physical_root_cm": {
+            "first_cm": [
+              6737.280273,
+              270.1161499,
+              -5851.256836
+            ],
+            "last_cm": [
+              6742.748047,
+              270.1435242,
+              -6059.28418
+            ],
+            "minimum_cm": [
+              6734.77002,
+              270.1161499,
+              -6063.507812
+            ],
+            "maximum_cm": [
+              6744.751953,
+              272.052948,
+              -5851.256836
+            ],
+            "max_horizontal_from_first_cm": 212.3824446958248,
+            "max_3d_from_first_cm": 212.38244647574243,
+            "net_horizontal_cm": 208.09918886004684,
+            "horizontal_path_cm": 243.82085466609112,
+            "max_derived_horizontal_speed_cm_s": 357.4938321865893
+          },
+          "npc_root_cm": {
+            "first_cm": [
+              6737.280273,
+              270.1161499,
+              -5851.256836
+            ],
+            "last_cm": [
+              6742.748047,
+              270.1435242,
+              -6059.28418
+            ],
+            "minimum_cm": [
+              6734.77002,
+              270.1161499,
+              -6063.507812
+            ],
+            "maximum_cm": [
+              6744.751953,
+              272.052948,
+              -5851.256836
+            ],
+            "max_horizontal_from_first_cm": 212.3824446958248,
+            "max_3d_from_first_cm": 212.38244647574243,
+            "net_horizontal_cm": 208.09918886004684,
+            "horizontal_path_cm": 243.82085466609112,
+            "max_derived_horizontal_speed_cm_s": 357.4938321865893
+          },
+          "visual_root_cm": {
+            "first_cm": [
+              6737.280273,
+              270.1161499,
+              -5851.256836
+            ],
+            "last_cm": [
+              6742.748047,
+              270.1435242,
+              -6059.28418
+            ],
+            "minimum_cm": [
+              6734.77002,
+              270.1161499,
+              -6063.507812
+            ],
+            "maximum_cm": [
+              6744.751953,
+              272.052948,
+              -5851.256836
+            ],
+            "max_horizontal_from_first_cm": 212.3824446958248,
+            "max_3d_from_first_cm": 212.38244647574243,
+            "net_horizontal_cm": 208.09918886004684,
+            "horizontal_path_cm": 243.82085466609112,
+            "max_derived_horizontal_speed_cm_s": 357.4938321865893
+          },
+          "samples": 150,
+          "start_game_ms": 16927,
+          "end_game_ms": 21894,
+          "maximum_visual_to_physical_cm": 0.0,
+          "maximum_npc_to_physical_cm": 0.0
+        },
+        "missing_physical_support_frames": 0,
+        "missing_npc_support_frames": 0,
+        "below_last_support_frames": 0,
+        "maximum_below_last_support_cm": 0,
+        "support_loss_episodes": [],
+        "root_below_probe_surface_frames": 0,
+        "maximum_root_below_probe_surface_cm": 0,
+        "first_support_issue": null,
+        "physical_support_drop_range_cm": [
+          -0.0002136230469,
+          1.910095215
+        ],
+        "persistent_support_loss_episodes": 0,
+        "physical_fall_episodes": 0,
+        "support_issue_detected": false
+      },
+      "minimum_distance_to_probe_cm": 52.31607590733054,
+      "closest_to_probe": {
+        "physical_root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "npc_root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "visual_root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "physical_root_source": "npc_physics",
+        "physical_root_valid": true,
+        "cv_root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_position_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_native_position_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_accepted_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_diagnostics_valid": true,
+        "cv_ground_state": 0,
+        "cv_ground_normal": [
+          0.0002197233407,
+          1,
+          0.0001186359877
+        ],
+        "cv_velocity_cm_s": [
+          4.572087765,
+          -32.34000015,
+          -99.38742828
+        ],
+        "cv_active": true,
+        "support_physical": {
+          "point_cm": [
+            6744.751953,
+            270.1437988,
+            -6063.507812
+          ],
+          "normal": [
+            0.0002178201248,
+            0.9999999404,
+            0.000119413824
+          ],
+          "drop_cm": -0.0001525878906
+        },
+        "support_npc": {
+          "point_cm": [
+            6744.751953,
+            270.1437988,
+            -6063.507812
+          ],
+          "normal": [
+            0.0002178201248,
+            0.9999999404,
+            0.000119413824
+          ],
+          "drop_cm": -0.0001525878906
+        },
+        "air": false,
+        "falling": false,
+        "jumping": false,
+        "keys_enabled": false,
+        "has_command": false,
+        "remaining_ms": 0,
+        "animations": "T_JUMP_2_STAND",
+        "game_ms": 18627,
+        "frame_dt_ms": 33,
+        "anim_root_local_cm": [
+          -0.07305282354,
+          3.878286362,
+          3.282562256
+        ],
+        "support_probe_above_cm": 50,
+        "support_probe_below_cm": 500,
+        "cv_ground_position_cm": [
+          6743.78125,
+          270.1438293,
+          -6063.24707
+        ],
+        "cv_ground_velocity_cm_s": [
+          0,
+          0,
+          0
+        ],
+        "cv_ground_body": {
+          "id": 8388608,
+          "layer": 2,
+          "pointer_type": 0,
+          "motion_type": 0,
+          "label": "landscape",
+          "mass_kg": 0,
+          "position_cm": [
+            0,
+            0,
+            0
+          ],
+          "point_velocity_cm_s": [
+            0,
+            0,
+            0
+          ]
+        },
+        "cv_contacts": [
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4078822531,
+            "point_cm": [
+              6743.78125,
+              270.1438293,
+              -6063.24707
+            ],
+            "normal": [
+              0.0002197233407,
+              1,
+              0.0001186359805
+            ],
+            "surface_normal": [
+              0.0002197233407,
+              1,
+              0.0001186359877
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": 8.847564459e-05,
+            "supporting_volume_distance_cm": -8.17176342,
+            "had_collision": true,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": true,
+            "walkable_slope": true,
+            "support_allowed_by_policy": true,
+            "support_eligible": true
+          },
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4213197443,
+            "point_cm": [
+              6741.387207,
+              388.1549072,
+              -6072.099121
+            ],
+            "normal": [
+              0.2613121271,
+              -0.0001534387557,
+              0.9652543068
+            ],
+            "surface_normal": [
+              0.2613121271,
+              -0.0001534387557,
+              0.9652543068
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": -0.0001052394509,
+            "supporting_volume_distance_cm": 109.8393326,
+            "had_collision": true,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": false,
+            "walkable_slope": false,
+            "support_allowed_by_policy": true,
+            "support_eligible": false
+          }
+        ],
+        "cv_before_cm": [
+          6743.783691,
+          270.1439209,
+          -6063.245605
+        ],
+        "cv_before_ground_state": 0,
+        "cv_before_ground_normal": [
+          0.0002197233407,
+          1,
+          0.0001186359877
+        ],
+        "cv_after_extended_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_dt_ms": 33,
+        "cv_initial_cm": [
+          6743.783691,
+          270.1439209,
+          -6063.245605
+        ],
+        "cv_requested_cm": [
+          0.1507435441,
+          0,
+          -3.27991271
+        ],
+        "cv_native_requested_cm": [
+          0.1508789062,
+          0,
+          -3.279785156
+        ],
+        "cv_clipped_request_cm": [
+          0.1508789062,
+          0,
+          -3.279785156
+        ],
+        "cv_request_clipped": false,
+        "cv_resolved_clipped": false,
+        "cv_blocked": true
+      },
+      "reached_recorded_gap_within_40cm": false
+    },
+    "0": {
+      "start": {
+        "physical_root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "npc_root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "visual_root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "physical_root_source": "npc_physics",
+        "physical_root_valid": true,
+        "cv_root_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_position_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_native_position_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_accepted_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_diagnostics_valid": true,
+        "cv_ground_state": 0,
+        "cv_ground_normal": [
+          -3.870324508e-05,
+          0.9999999404,
+          0.0005020181998
+        ],
+        "cv_velocity_cm_s": [
+          0,
+          -32.34000015,
+          0
+        ],
+        "cv_active": true,
+        "support_physical": {
+          "point_cm": [
+            6737.280273,
+            270.1161499,
+            -5851.256348
+          ],
+          "normal": [
+            -3.852469308e-05,
+            0.9999998808,
+            0.0004997103242
+          ],
+          "drop_cm": 0
+        },
+        "support_npc": {
+          "point_cm": [
+            6737.280273,
+            270.1161499,
+            -5851.256348
+          ],
+          "normal": [
+            -3.852469308e-05,
+            0.9999998808,
+            0.0004997103242
+          ],
+          "drop_cm": 0
+        },
+        "air": false,
+        "falling": false,
+        "jumping": false,
+        "keys_enabled": true,
+        "has_command": false,
+        "remaining_ms": 0,
+        "animations": "S_RUN",
+        "game_ms": 22994,
+        "frame_dt_ms": 33,
+        "anim_root_local_cm": [
+          0,
+          0,
+          0
+        ],
+        "support_probe_above_cm": 50,
+        "support_probe_below_cm": 500,
+        "cv_ground_position_cm": [
+          6737.280273,
+          270.1161804,
+          -5851.261719
+        ],
+        "cv_ground_velocity_cm_s": [
+          0,
+          0,
+          0
+        ],
+        "cv_ground_body": {
+          "id": 8388608,
+          "layer": 2,
+          "pointer_type": 0,
+          "motion_type": 0,
+          "label": "landscape",
+          "mass_kg": 0,
+          "position_cm": [
+            0,
+            0,
+            0
+          ],
+          "point_velocity_cm_s": [
+            0,
+            0,
+            0
+          ]
+        },
+        "cv_contacts": [
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4045268099,
+            "point_cm": [
+              6737.280273,
+              270.1161804,
+              -5851.261719
+            ],
+            "normal": [
+              -3.870324508e-05,
+              0.9999999404,
+              0.0005020181998
+            ],
+            "surface_normal": [
+              -3.870324508e-05,
+              0.9999999404,
+              0.0005020181998
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": -3.147870302e-05,
+            "supporting_volume_distance_cm": -8.171906471,
+            "had_collision": true,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": true,
+            "walkable_slope": true,
+            "support_allowed_by_policy": true,
+            "support_eligible": true
+          }
+        ],
+        "cv_before_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_before_ground_state": 0,
+        "cv_before_ground_normal": [
+          -3.870324508e-05,
+          0.9999999404,
+          0.0005020181998
+        ],
+        "cv_after_extended_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_dt_ms": 33,
+        "cv_initial_cm": [
+          6737.280273,
+          270.1161499,
+          -5851.256836
+        ],
+        "cv_requested_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_native_requested_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_clipped_request_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_request_clipped": false,
+        "cv_resolved_clipped": false,
+        "cv_blocked": false
+      },
+      "end": {
+        "physical_root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "npc_root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "visual_root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "physical_root_source": "npc_physics",
+        "physical_root_valid": true,
+        "cv_root_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_position_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_native_position_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_accepted_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_diagnostics_valid": true,
+        "cv_ground_state": 0,
+        "cv_ground_normal": [
+          0.0002197233407,
+          1,
+          0.0001186359877
+        ],
+        "cv_velocity_cm_s": [
+          0,
+          -32.34000015,
+          0
+        ],
+        "cv_active": true,
+        "support_physical": {
+          "point_cm": [
+            6742.748047,
+            270.1437378,
+            -6059.28418
+          ],
+          "normal": [
+            0.0002178201248,
+            0.9999999404,
+            0.000119413824
+          ],
+          "drop_cm": -0.0002136230469
+        },
+        "support_npc": {
+          "point_cm": [
+            6742.748047,
+            270.1437378,
+            -6059.28418
+          ],
+          "normal": [
+            0.0002178201248,
+            0.9999999404,
+            0.000119413824
+          ],
+          "drop_cm": -0.0002136230469
+        },
+        "air": false,
+        "falling": false,
+        "jumping": false,
+        "keys_enabled": true,
+        "has_command": false,
+        "remaining_ms": 0,
+        "animations": "S_RUN",
+        "game_ms": 27994,
+        "frame_dt_ms": 33,
+        "anim_root_local_cm": [
+          0,
+          0,
+          0
+        ],
+        "support_probe_above_cm": 50,
+        "support_probe_below_cm": 500,
+        "cv_ground_position_cm": [
+          6742.746094,
+          270.1435852,
+          -6059.285156
+        ],
+        "cv_ground_velocity_cm_s": [
+          0,
+          0,
+          0
+        ],
+        "cv_ground_body": {
+          "id": 8388608,
+          "layer": 2,
+          "pointer_type": 0,
+          "motion_type": 0,
+          "label": "landscape",
+          "mass_kg": 0,
+          "position_cm": [
+            0,
+            0,
+            0
+          ],
+          "point_velocity_cm_s": [
+            0,
+            0,
+            0
+          ]
+        },
+        "cv_contacts": [
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4078822531,
+            "point_cm": [
+              6742.746094,
+              270.1435852,
+              -6059.285156
+            ],
+            "normal": [
+              0.0002197233553,
+              1,
+              0.0001186359877
+            ],
+            "surface_normal": [
+              0.0002197233407,
+              1,
+              0.0001186359877
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": -3.706663847e-05,
+            "supporting_volume_distance_cm": -8.171882629,
+            "had_collision": true,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": true,
+            "walkable_slope": true,
+            "support_allowed_by_policy": true,
+            "support_eligible": true
+          },
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4213197443,
+            "point_cm": [
+              6739.42334,
+              388.1550903,
+              -6071.567383
+            ],
+            "normal": [
+              0.2613121569,
+              -0.0001534387702,
+              0.9652543664
+            ],
+            "surface_normal": [
+              0.2613121271,
+              -0.0001534387702,
+              0.9652543664
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": 3.553270578,
+            "supporting_volume_distance_cm": 109.8396149,
+            "had_collision": false,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": false,
+            "walkable_slope": false,
+            "support_allowed_by_policy": true,
+            "support_eligible": false
+          }
+        ],
+        "cv_before_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_before_ground_state": 0,
+        "cv_before_ground_normal": [
+          0.0002197233407,
+          1,
+          0.0001186359877
+        ],
+        "cv_after_extended_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_dt_ms": 33,
+        "cv_initial_cm": [
+          6742.748047,
+          270.1435242,
+          -6059.28418
+        ],
+        "cv_requested_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_native_requested_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_clipped_request_cm": [
+          0,
+          0,
+          0
+        ],
+        "cv_request_clipped": false,
+        "cv_resolved_clipped": false,
+        "cv_blocked": false
+      },
+      "diagnostics": {
+        "positions": {
+          "physical_root_cm": {
+            "first_cm": [
+              6737.280273,
+              270.1161499,
+              -5851.256836
+            ],
+            "last_cm": [
+              6742.748047,
+              270.1435242,
+              -6059.28418
+            ],
+            "minimum_cm": [
+              6734.77002,
+              270.1161499,
+              -6063.507812
+            ],
+            "maximum_cm": [
+              6744.751953,
+              272.052948,
+              -5851.256836
+            ],
+            "max_horizontal_from_first_cm": 212.3824446958248,
+            "max_3d_from_first_cm": 212.38244647574243,
+            "net_horizontal_cm": 208.09918886004684,
+            "horizontal_path_cm": 243.82085466609112,
+            "max_derived_horizontal_speed_cm_s": 357.4938321865893
+          },
+          "npc_root_cm": {
+            "first_cm": [
+              6737.280273,
+              270.1161499,
+              -5851.256836
+            ],
+            "last_cm": [
+              6742.748047,
+              270.1435242,
+              -6059.28418
+            ],
+            "minimum_cm": [
+              6734.77002,
+              270.1161499,
+              -6063.507812
+            ],
+            "maximum_cm": [
+              6744.751953,
+              272.052948,
+              -5851.256836
+            ],
+            "max_horizontal_from_first_cm": 212.3824446958248,
+            "max_3d_from_first_cm": 212.38244647574243,
+            "net_horizontal_cm": 208.09918886004684,
+            "horizontal_path_cm": 243.82085466609112,
+            "max_derived_horizontal_speed_cm_s": 357.4938321865893
+          },
+          "visual_root_cm": {
+            "first_cm": [
+              6737.280273,
+              270.1161499,
+              -5851.256836
+            ],
+            "last_cm": [
+              6742.748047,
+              270.1435242,
+              -6059.28418
+            ],
+            "minimum_cm": [
+              6734.77002,
+              270.1161499,
+              -6063.507812
+            ],
+            "maximum_cm": [
+              6744.751953,
+              272.052948,
+              -5851.256836
+            ],
+            "max_horizontal_from_first_cm": 212.3824446958248,
+            "max_3d_from_first_cm": 212.38244647574243,
+            "net_horizontal_cm": 208.09918886004684,
+            "horizontal_path_cm": 243.82085466609112,
+            "max_derived_horizontal_speed_cm_s": 357.4938321865893
+          },
+          "samples": 150,
+          "start_game_ms": 23027,
+          "end_game_ms": 27994,
+          "maximum_visual_to_physical_cm": 0.0,
+          "maximum_npc_to_physical_cm": 0.0
+        },
+        "missing_physical_support_frames": 0,
+        "missing_npc_support_frames": 0,
+        "below_last_support_frames": 0,
+        "maximum_below_last_support_cm": 0,
+        "support_loss_episodes": [],
+        "root_below_probe_surface_frames": 0,
+        "maximum_root_below_probe_surface_cm": 0,
+        "first_support_issue": null,
+        "physical_support_drop_range_cm": [
+          -0.0002136230469,
+          1.910095215
+        ],
+        "persistent_support_loss_episodes": 0,
+        "physical_fall_episodes": 0,
+        "support_issue_detected": false
+      },
+      "minimum_distance_to_probe_cm": 52.31607590733054,
+      "closest_to_probe": {
+        "physical_root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "npc_root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "visual_root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "physical_root_source": "npc_physics",
+        "physical_root_valid": true,
+        "cv_root_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_position_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_native_position_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_accepted_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_diagnostics_valid": true,
+        "cv_ground_state": 0,
+        "cv_ground_normal": [
+          0.0002197233407,
+          1,
+          0.0001186359877
+        ],
+        "cv_velocity_cm_s": [
+          4.572087765,
+          -32.34000015,
+          -99.38742828
+        ],
+        "cv_active": true,
+        "support_physical": {
+          "point_cm": [
+            6744.751953,
+            270.1437988,
+            -6063.507812
+          ],
+          "normal": [
+            0.0002178201248,
+            0.9999999404,
+            0.000119413824
+          ],
+          "drop_cm": -0.0001525878906
+        },
+        "support_npc": {
+          "point_cm": [
+            6744.751953,
+            270.1437988,
+            -6063.507812
+          ],
+          "normal": [
+            0.0002178201248,
+            0.9999999404,
+            0.000119413824
+          ],
+          "drop_cm": -0.0001525878906
+        },
+        "air": false,
+        "falling": false,
+        "jumping": false,
+        "keys_enabled": true,
+        "has_command": false,
+        "remaining_ms": 0,
+        "animations": "T_JUMP_2_STAND",
+        "game_ms": 24727,
+        "frame_dt_ms": 33,
+        "anim_root_local_cm": [
+          -0.07305282354,
+          3.878286362,
+          3.282562256
+        ],
+        "support_probe_above_cm": 50,
+        "support_probe_below_cm": 500,
+        "cv_ground_position_cm": [
+          6743.78125,
+          270.1438293,
+          -6063.24707
+        ],
+        "cv_ground_velocity_cm_s": [
+          0,
+          0,
+          0
+        ],
+        "cv_ground_body": {
+          "id": 8388608,
+          "layer": 2,
+          "pointer_type": 0,
+          "motion_type": 0,
+          "label": "landscape",
+          "mass_kg": 0,
+          "position_cm": [
+            0,
+            0,
+            0
+          ],
+          "point_velocity_cm_s": [
+            0,
+            0,
+            0
+          ]
+        },
+        "cv_contacts": [
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4078822531,
+            "point_cm": [
+              6743.78125,
+              270.1438293,
+              -6063.24707
+            ],
+            "normal": [
+              0.0002197233407,
+              1,
+              0.0001186359805
+            ],
+            "surface_normal": [
+              0.0002197233407,
+              1,
+              0.0001186359877
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": 8.847564459e-05,
+            "supporting_volume_distance_cm": -8.17176342,
+            "had_collision": true,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": true,
+            "walkable_slope": true,
+            "support_allowed_by_policy": true,
+            "support_eligible": true
+          },
+          {
+            "body": {
+              "id": 8388608,
+              "layer": 2,
+              "pointer_type": 0,
+              "motion_type": 0,
+              "label": "landscape",
+              "mass_kg": 0,
+              "position_cm": [
+                0,
+                0,
+                0
+              ],
+              "point_velocity_cm_s": [
+                0,
+                0,
+                0
+              ]
+            },
+            "subshape": 4213197443,
+            "point_cm": [
+              6741.387207,
+              388.1549072,
+              -6072.099121
+            ],
+            "normal": [
+              0.2613121271,
+              -0.0001534387557,
+              0.9652543068
+            ],
+            "surface_normal": [
+              0.2613121271,
+              -0.0001534387557,
+              0.9652543068
+            ],
+            "point_velocity_cm_s": [
+              0,
+              0,
+              0
+            ],
+            "distance_cm": -0.0001052394509,
+            "supporting_volume_distance_cm": 109.8393326,
+            "had_collision": true,
+            "discarded": false,
+            "sensor": false,
+            "can_push_character": true,
+            "within_supporting_volume": false,
+            "walkable_slope": false,
+            "support_allowed_by_policy": true,
+            "support_eligible": false
+          }
+        ],
+        "cv_before_cm": [
+          6743.783691,
+          270.1439209,
+          -6063.245605
+        ],
+        "cv_before_ground_state": 0,
+        "cv_before_ground_normal": [
+          0.0002197233407,
+          1,
+          0.0001186359877
+        ],
+        "cv_after_extended_cm": [
+          6744.751953,
+          270.1436462,
+          -6063.507812
+        ],
+        "cv_dt_ms": 33,
+        "cv_initial_cm": [
+          6743.783691,
+          270.1439209,
+          -6063.245605
+        ],
+        "cv_requested_cm": [
+          0.1507435441,
+          0,
+          -3.27991271
+        ],
+        "cv_native_requested_cm": [
+          0.1508789062,
+          0,
+          -3.279785156
+        ],
+        "cv_clipped_request_cm": [
+          0.1508789062,
+          0,
+          -3.279785156
+        ],
+        "cv_request_clipped": false,
+        "cv_resolved_clipped": false,
+        "cv_blocked": true
+      },
+      "reached_recorded_gap_within_40cm": false
+    }
+  },
+  "approach_gait": "run+jump",
+  "intended_probe_cm": [
+    6754,
+    262,
+    -6115
+  ],
+  "actors_with_support_issues": []
+}

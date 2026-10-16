@@ -20,6 +20,7 @@ class Gaze final {
       Script,    // AI_LookAtNpc, AI_LookAt
       Focus,     // the hero: the npc in focus
       Attention, // an npc: the hero coming close, a weapon drawn, a fight (world/objects/attention)
+      Input,     // explicit head input relative to the body, for this actor tick
       };
 
     struct Input final {

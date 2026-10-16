@@ -44,6 +44,7 @@
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
 #include "game/navigationeyebench.h"
+#include "game/npckeysbench.h"
 #include "game/serialize.h"
 #include "game/ragdollsave.h"
 #include "game/definitions/sounddefinitions.h"
@@ -1510,6 +1511,7 @@ const char* gazeSource(Gaze::Source s) {
     case Gaze::Source::Script:    return "script";
     case Gaze::Source::Focus:     return "focus";
     case Gaze::Source::Attention: return "attention";
+    case Gaze::Source::Input:     return "input";
     }
   return "?";
   }
@@ -4903,6 +4905,15 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     return;
   const std::string& c = a[0];
 
+  if(c=="keys") {
+    try {
+      event("keys_command","\"sample\":"+NpcKeysBench::command(a,w,pl,ctrl,outDir));
+    } catch(const std::exception& error) {
+      event("keys_error","\"reason\":"+jsonStr(error.what()));
+      arenaAbort(error.what());
+    }
+    return;
+  }
   // Navigation-eye commands are independent of navigation mesh and body rays.
   if(c=="eye") {
     try {
@@ -9919,6 +9930,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
   npcCharacterStopMotionTrace(Gothic::inst().world());
   NavigationEyeBench::reset();
+  NpcKeysBench::reset();
   NavBench::reset();
   stopRecording();
   if(bench.csv!=nullptr)
@@ -10265,6 +10277,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     return false;
   NavBench::tick(*world);
   NavigationEyeBench::tick(world->tickCount());
+  NpcKeysBench::tick(*world,*player,ctrl,dt);
   arrowFields(*world);
   stickingFields(*world);
   spellFields(*world);

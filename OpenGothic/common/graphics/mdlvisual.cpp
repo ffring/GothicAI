@@ -879,7 +879,7 @@ bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
     // a four-legged spine does not turn like a man's
     const auto bs = npc.bodyStateMasked() & BS_MAX;
     // aiming by hand the trunk is the aim's: a turn of it would throw the arrow off
-    in.headOnly = npc.isPlayer() || npc.hasManualAim() || npc.interactive()!=nullptr || pose.footIk().isQuadruped() ||
+    in.headOnly = in.source==Gaze::Source::Input || npc.isPlayer() || npc.hasManualAim() || npc.interactive()!=nullptr || pose.footIk().isQuadruped() ||
                   bs==(BS_WALK & BS_MAX) || bs==BS_RUN || bs==BS_SPRINT || bs==(BS_SNEAK & BS_MAX);
     }
   const bool changed = pose.updateGaze(in);
