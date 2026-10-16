@@ -85,6 +85,8 @@ def episode_paths(path: str | Path) -> list[Path]:
         return [path]
     if (path / "samples.bin.gz").is_file():
         return [path / "samples.bin.gz"]
+    if (path / "episodes").is_dir():
+        path = path / "episodes"
     return sorted(path.rglob("samples.bin.gz"))
 
 
@@ -120,6 +122,16 @@ def learner_input(records: np.ndarray) -> dict[str, np.ndarray]:
     """Model inputs only; actions, world pose and privileged teacher hints stay separate."""
     return {name: records[name] for name in
             ("body", "roads", "previous_keys", "eye", "memory_near", "memory_far")}
+
+
+def ray_layout(path: str | Path) -> np.ndarray:
+    """Static [238,3] yaw degrees, pitch degrees, max range cm, relative to head."""
+    source = _samples_path(path).parent / "episode.json"
+    metadata = json.loads(source.read_text(encoding="utf-8"))
+    layout = np.asarray(metadata["eye_layout"], dtype=np.float32)
+    if layout.shape != (238, 3) or not np.isfinite(layout).all() or not (layout[:, 2] > 0).all():
+        raise ValueError(f"invalid eye layout in {source}")
+    return layout
 
 
 def _finite(value: np.ndarray, prefix: str = "record") -> None:
@@ -193,6 +205,8 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
     total_records = 0
     episodes = []
     for file in files:
+        if validate:
+            ray_layout(file)
         record_count = 0
         first_ms = last_ms = None
         last_keys = None
@@ -226,6 +240,8 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
         total_records += record_count
     compressed_bytes = sum(episode["compressed_bytes"] for episode in episodes)
     root = Path(path)
+    if (root / "episodes").is_dir():
+        root = root / "episodes"
     dataset_bytes = sum(file.stat().st_size for file in root.rglob("*") if file.is_file()) if root.is_dir() else compressed_bytes
     return {
         "format_version": VERSION, "episodes": len(files), "decisions": total_records,

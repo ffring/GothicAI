@@ -223,7 +223,7 @@ def run_episode(args, runner, pairs, states, index):
     else:
         count = decision_count(directory) if (directory / "actions.txt").is_file() else 0
     episode.update(pair=pair_index, region=pair["region"], start=pair["start"], goal=pair["goal"],
-                   seed=args.seed, npc=args.npc, limit_ms=limit_ms, collector_wall_s=elapsed,
+                   seed=args.seed, npc=args.npc, limit_ms=episode.get("limit_ms", limit_ms), collector_wall_s=elapsed,
                    collector_decisions=count, collector_decisions_per_second=count / elapsed)
     if state:
         episode.update(dagger=index, dagger_lateral_cm=state["lateral_cm"],

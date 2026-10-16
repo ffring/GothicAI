@@ -5440,6 +5440,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   }
   if(c=="navdemos") {
     if(!Resources::isHeadless()) throw std::runtime_error("navdemos is runner-only");
+    bench.navigationOnly = true;
     NavDemos::command(a,w,pl,outDir);
     return;
   }

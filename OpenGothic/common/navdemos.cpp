@@ -86,6 +86,12 @@ void finish(World& world) {
      <<",\"final_position\":";vector(out,NpcKeys::physicalPosition(*ep.npc));
   out<<",\"target_position\":";vector(out,ep.goal);
   out<<",\"next_corner\":";vector(out,ep.path.corners.empty()?ep.goal:cm(ep.path.corners.back()));
+  out<<",\"eye_layout\":[";
+  for(size_t i=0;i<ep.eye.samples().size();++i) {
+    if(i)out<<',';
+    const auto& ray=ep.eye.samples()[i];out<<'['<<ray.yawDeg<<','<<ray.pitchDeg<<','<<ray.maxRangeCm<<']';
+  }
+  out<<']';
   out<<"}\n";
   NpcKeys::enable(*ep.npc,false);ep.npc->stopWalking();ep.active=false;
 }
@@ -149,7 +155,9 @@ void decide(World& w) {
   body.climbing=n.navigationClimbing();body.swimming=n.isSwim();body.jumping=n.isJump()||n.isJumpUp();
   body.supported=NavTransitions::supported(w,n);
   body.turnSpeedDegrees=n.weaponState()==WeaponState::NoWeapon?90.f:180.f;
-  if(body.supported || ep.path.corners.empty()) {
+  const auto present=NavKeyTeacher::decide(body,ep.path,meters(ep.goal));
+  const bool followingRoad=ep.path.reason=="waynet_fallback" && present.pathValid && !present.replan;
+  if((body.supported && !followingRoad) || ep.path.corners.empty()) {
     // A commanded step with no body velocity chooses a road alternative directly from
     // the present state. Recovery has no timeout or hidden action phase to reconstruct.
     const bool blocked=ep.previous.forward>0 && ep.previous.turn==0 &&
@@ -204,6 +212,8 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
   ep.limit=replay?0:std::stoull(a[5]);
   npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->clearSpeed();
   npc->setExternalControl(true);npc->clearGoTo();npc->setPosition(from->groundPos);npc->updateTransform();
+  // Keyboard episodes must not inherit a native route's waypoint from the save.
+  npc->attachToPoint(nullptr);
   npc->setDirection(ep.goal-npc->position());npc->setWalkMode(WalkBit::WM_Walk);
   if(!replay && a.size()>6) {
     const auto path=NavBench::navigationMesh(w).findPath(meters(from->groundPos),meters(ep.goal));
