@@ -131,9 +131,12 @@ fi
 RUN="$OUT/run"
 mkdir -p "$RUN"
 [[ -n "${WORLD:-}" ]] || cp "$SAVE" "$RUN/save_slot_1.sav"
+# macOS captures half of its Retina backing size; X11 client sizes are already pixels.
+VID_RES_INDEX=2
+if [[ "$(uname -s)" == Linux ]]; then VID_RES_INDEX=0; fi
 cat >"$RUN/Gothic.ini" <<EOF
 [INTERNAL]
-vidResIndex=2
+vidResIndex=$VID_RES_INDEX
 [SOUND]
 soundVolume=${SOUND:-0}
 musicVolume=${MUSIC:-0}
