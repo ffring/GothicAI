@@ -5766,7 +5766,8 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
   Gothic::inst().onObservedPerception(*this,pl,victim,perc);
 
   if(isPhysicsInvestigating()) {
-    switch(perc) {
+    constexpr auto interrupts = [](PercType observed) {
+      switch(observed) {
       case PERC_ASSESSENEMY:
       case PERC_ASSESSFIGHTER:
       case PERC_ASSESSDAMAGE:
@@ -5780,14 +5781,32 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
       case PERC_ASSESSMURDER:
       case PERC_ASSESSMAGIC:
       case PERC_ASSESSCASTER:
-        stopPhysicsInvestigation(false);
-        break;
+      case PERC_CATCHTHIEF:
+      case PERC_ASSESSTHEFT:
+      case PERC_ASSESSUSEMOB:
+      case PERC_ASSESSENTERROOM:
+      case PERC_MOVEMOB:
+      case PERC_OBSERVEINTRUDER:
+      case PERC_OBSERVESUSPECT:
+      case PERC_ASSESSBODY:
+      case PERC_ASSESSDEFEAT:
+        return true;
       default:
-        // The planner has observed it above. Routine chatter and ordinary hero
-        // activity must not replace the ongoing check through a script callback.
-        trace("investigating",false,false);
         return false;
+        }
+      };
+    // Contract for this active-investigation gate: witnessed crimes reach the scripts,
+    // while ordinary proximity and quiet sounds keep the ongoing check intact.
+    static_assert(interrupts(PERC_CATCHTHIEF) && interrupts(PERC_ASSESSTHEFT));
+    static_assert(interrupts(PERC_ASSESSENTERROOM));
+    static_assert(!interrupts(PERC_ASSESSPLAYER) && !interrupts(PERC_ASSESSQUIETSOUND));
+    if(!interrupts(perc)) {
+      // The planner has observed it above. Routine chatter and ordinary hero
+      // activity must not replace the ongoing check through a script callback.
+      trace("investigating",false,false);
+      return false;
       }
+    stopPhysicsInvestigation(false);
     }
 
   if(hasPerc(perc)) {
