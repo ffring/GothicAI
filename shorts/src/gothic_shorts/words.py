@@ -5,8 +5,8 @@ out one after another on the short's timeline.
     script.<lang>.said.txt        what was really said, a line per row, when it differs from the script (the
                                   captions follow the voice word for word); else script.<lang>.txt
     voice/gaps.json               optional: {"4": 0.7} seconds of silence after line 4 (default GAP)
- -> voice/clean/03.wav            the take cleaned: low cut, de-esser, gentle compression, the silence at both
-                                  ends trimmed to a breath
+ -> voice/clean/03.wav            the take cleaned: clicks out, low cut, de-esser, gentle compression, the
+                                  silence at both ends trimmed to a breath
     voice/clean/03.words.json     its words (gothic-shorts align, on the GPU server)
     words.<lang>.json             {"lines": [{"n", "file", "start", "words": [{"text", "start", "end"}]}]},
                                   seconds of the short
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -27,14 +28,19 @@ from .studio import StudioError, script_lines
 
 GAP = 0.35  # seconds between two lines unless voice/gaps.json says otherwise
 
-# speech: no rumble, softer s, a little compression, peaks kept under -1.5 dBFS; the silence at both ends
-# trimmed to a breath (80 ms before, 120 ms after). Loudness is set on the final mix, not here.
+# speech: no rumble, softer s, a little compression, peaks kept under -1.5 dBFS, a short fade at both ends.
+# Loudness is set on the final mix, not here.
 CLEAN = (
     "highpass=f=80,deesser=i=0.3,"
     "acompressor=threshold=0.1:ratio=3:attack=10:release=150:makeup=2,alimiter=limit=0.84,"
-    "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.08,areverse,"
-    "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.12,areverse"
+    "afade=t=in:d=0.01,areverse,afade=t=in:d=0.02,areverse"
 )
+# a recorded take's clicks out first (mouth clicks, samples the browser dropped; the default leaves some, and
+# this is slow: ~40 s a line). Speech from TTS has none.
+DECLICK = "adeclick=t=1:b=3,"
+# the silence at both ends trimmed to a breath: 80 ms before the first sound over -50 dB, 120 ms after the last.
+# Cut with atrim: silenceremove left a step in the waveform where it cut (a click 80 ms into most lines).
+QUIET, LEAD, TAIL, MIN_SOUND = "-50dB", 0.08, 0.12, 0.08
 
 
 def _duration(wav: Path) -> float:
@@ -43,6 +49,30 @@ def _duration(wav: Path) -> float:
         capture_output=True, text=True,
     )  # fmt: skip
     return float(out.stdout.strip())
+
+
+def _trim(raw: Path) -> str:
+    """the atrim keeping the take's speech: from LEAD before its first sound over QUIET to TAIL after its last"""
+    out = subprocess.run(
+        ["ffmpeg", "-v", "info", "-i", str(raw), "-af", f"silencedetect=n={QUIET}:d=0.05", "-f", "null", "-"],
+        capture_output=True, text=True,
+    ).stderr  # fmt: skip
+    dur = _duration(raw)
+    starts = [float(v) for v in re.findall(r"silence_start: (-?[\d.]+)", out)]
+    ends = [float(v) for v in re.findall(r"silence_end: ([\d.]+)", out)]
+    quiet = [(s, ends[i] if i < len(ends) else dur) for i, s in enumerate(starts)]
+    # the sounds between the quiet spans; a few ms over QUIET (a click as the recording starts) is not speech
+    edges = [0.0] + [t for span in quiet for t in span] + [dur]
+    sounds = [(a, b) for a, b in zip(edges[::2], edges[1::2]) if b - a >= MIN_SOUND]
+    if not sounds:  # all of it under QUIET: keep it whole
+        sounds = [(0.0, dur)]
+    begin, finish = sounds[0][0], sounds[-1][1]
+    return f"atrim=start={max(0.0, begin - LEAD):.3f}:end={min(dur, finish + TAIL):.3f},asetpts=PTS-STARTPTS,"
+
+
+def clean_chain(wav: Path, declick: bool = True) -> str:
+    """the cleaning of a line: its speech cut out (LEAD before it), the clicks out (a recorded take), CLEAN"""
+    return _trim(wav) + (DECLICK if declick else "") + CLEAN
 
 
 def said_lines(ws: Path, lang: str) -> list[str]:
@@ -72,10 +102,11 @@ def prepare(ws: Path, lang: str = "ru", language: str = "Russian", log=print) ->
         n = f"{i:02d}"
         raw = ws / f"voice/raw/{n}-{chosen[n]}.wav"
         clean, words = clean_dir / f"{n}.wav", clean_dir / f"{n}.words.json"
-        key = hashlib.sha1(f"{raw.name}|{raw.stat().st_mtime_ns}|{text}|{CLEAN}".encode()).hexdigest()
+        chain = clean_chain(raw)
+        key = hashlib.sha1(f"{raw.name}|{raw.stat().st_mtime_ns}|{text}|{chain}".encode()).hexdigest()
         stamp = clean_dir / f"{n}.key"
         if not (stamp.is_file() and stamp.read_text() == key and words.is_file() and clean.is_file()):
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(raw), "-af", CLEAN, "-ar", "48000",
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(raw), "-af", chain, "-ar", "48000",
                             "-c:a", "pcm_s24le", str(clean)], check=True)  # fmt: skip
             done = align(clean, text, words, language)
             stamp.write_text(key)
