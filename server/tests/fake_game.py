@@ -63,6 +63,9 @@ class FakeGame:
         self.known: set[str] = set()
         self.symbols: dict[str, str] = {}
         self.in_dialog = False
+        self.in_cutscene = False
+        self.nearest_waypoint: str | None = "NW_XARDAS_TOWER_IN1_31"
+        self.waypoint_distances: dict[str, float] = {}  # story_eval: hero's distance to a waypoint, cm
         self.day = 1
         self.hour, self.minute = 8, 0
         self.people: list[dict[str, Any]] = []  # what story_people answers: the world's people and their days
@@ -313,7 +316,7 @@ class FakeGame:
                     "knows": {k: k in self.known for k in msg.get("knows", [])},
                     "symbols": {n: self.symbols[n] for n in msg.get("symbols", []) if n in self.symbols},
                     "dialog": self.in_dialog,
-                    "cutscene": False,
+                    "cutscene": self.in_cutscene,
                     "items": {i: self.item_names[i] for i in msg.get("items", []) if i in self.item_names},
                     "day": self.day,
                     "hour": self.hour,
@@ -470,6 +473,8 @@ class FakeGame:
             ">=": lambda a, b: a >= b,
         }
         match e:
+            case ["inst", "HERO"]:
+                return "PC_HERO"
             case ["int", v, *_]:
                 return v
             case ["var", name]:
@@ -492,6 +497,12 @@ class FakeGame:
                 return None if x is None or y is None else int(ops[op](x, y))
             case ["call", "NPC_HASITEMS", ["inst", "OTHER" | "HERO"], ["sym", item]]:
                 return self.hero_items.get(item, 0)
+            case ["call", "NPC_GETNEARESTWP", ["inst", "HERO"]]:
+                return self.nearest_waypoint
+            case ["call", "NPC_GETDISTTOWP", ["inst", "HERO"], ["str", waypoint]]:
+                return self.waypoint_distances.get(waypoint, 0)
+            case ["call", "WLD_GETDAY"]:
+                return self.day
             case ["call", "NPC_ISDEAD", ["inst", name]]:
                 dead = self.instances.get(name, name)
                 return int(self.npc_states.get(dead, {}).get("state") == "dead")
