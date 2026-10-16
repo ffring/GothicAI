@@ -118,7 +118,9 @@ uv run --project shorts python shorts/compare/cut.py bodies ru  # -> .shorts/com
 `bodies`: the animation work off and on. `archery`: the bow as Gothic II has it (the auto aim and the dice,
 `OPENGOTHIC_MANUALAIM=0 OPENGOTHIC_NPCAIM=0`) and aimed by hand: the draw, a head shot from the game's
 camera (`ui on`: the crosshair), the cant, steps with the bow drawn, leaning out round a corner, paladins
-at a runner. A line break in the hook makes it two lines.
+at a runner. `hits`: the body physics off (`off:` ragdoll, living bodies, arrow reactions, stuck arrows; our
+flinch too) and on: three arrows stay in a bandit, one killed on the run, a bandit and a wolf killed on a slope
+over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break in the hook makes it two lines.
 
 - `compare/<name>.bench`: the scenario; every `rec` is a beat. Both takes run the same steps on the fixed
   time step, so the halves stay in sync; the "off" take sets `OPENGOTHIC_FOOTIK=0`, `_GAZE`, `_LEAN`, `_AIM`,
@@ -127,11 +129,20 @@ at a runner. A line break in the hook makes it two lines.
   auto aim shoots on action + forward, the hand lets go of the action key). Frames 1080x960 (`TEMPEST_WINDOW_SIZE`), the game's sound into
   `<segment>.wav` (`TEMPEST_AUDIO_LOOPBACK`, `SOUND`/`MUSIC` of `scripts/bench.sh`).
 - `compare/<name>.json`: the hook, the two labels, the beats in order with their trims and titles, per language.
+  Optional: a beat's `"slow": {"from", "to", "ru", "en"}` (seconds of the segment; a `slowmo` stretch of the
+  scenario, silent in the takes) puts its mark in the corner of both halves; `"music": {"file", "volume"}` lays
+  a bed under the whole short, the file under `.shorts/compare/<name>/` (cut from a theme of the game by the
+  explainer's `bed.sh`, never in git).
 - `cut.py` stacks each beat, grades both halves the same (a little brighter), takes the sound of the "on"
-  take, normalizes to -14 LUFS.
+  take (with the bed under it), limits the peaks and brings it to -14 LUFS by one gain (loudnorm in two passes,
+  linear: one pass lifts the quiet stretches).
 
 Pick spots in daylight and open ground (`clear` sends rats and wolves away), and look at both takes before
 cutting: a difference that does not read at phone size (a flinch on top of the game's stumble) stays out.
+Scout on Ryzen (`OPENGOTHIC_BENCH_TAKE=off|on BENCH_HOST=ryzen scripts/bench.sh compare/<name>.bench <dir>`,
+silent) and film on the Mac. A camera put by hand near a target on a slope or stairs often lands in ferns:
+`foreach slope|stairs <n>` with `views watched 1 1000 shoot <prefix>` gives a still of each spot from a camera
+that sees both; `view clean` clips the ground in front of the camera too (white wedges).
 
 ## Word timings of a known text
 
