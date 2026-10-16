@@ -1749,6 +1749,80 @@ std::vector<CollisionWorld::Overlap> CollisionWorld::overlaps(const CollisionBod
   return ret;
   }
 
+std::vector<CollisionWorld::RagdollContact> CollisionWorld::ragdollContacts(const Ragdoll& rig, float marginCm) const {
+  std::vector<RagdollContact> result;
+  if(!std::isfinite(marginCm) || marginCm<0.f)
+    return result;
+  const auto partIds=rig.diagnosticBodyIds();
+  struct OtherBodyFilter final : JPH::BodyFilter {
+    explicit OtherBodyFilter(const std::vector<uint32_t>& ids):ids(ids) {}
+    bool ShouldCollide(const JPH::BodyID& id) const override {
+      return std::find(ids.begin(),ids.end(),id.GetIndexAndSequenceNumber())==ids.end();
+      }
+    const std::vector<uint32_t>& ids;
+    } bodyFilter(partIds);
+  constexpr uint32_t mask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|
+                          (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll)|
+                          (1u<<DynamicWorld::C_LivingBody)|(1u<<DynamicWorld::C_ActiveBody)|
+                          (1u<<DynamicWorld::C_MovableVob)|(1u<<DynamicWorld::C_Fragment);
+  QueryLayerFilter layerFilter(mask);
+  QueryBroadPhaseFilter broadFilter(mask);
+  JPH::CollideShapeSettings settings;
+  settings.mActiveEdgeMode=JPH::EActiveEdgeMode::CollideOnlyWithActive;
+  settings.mMaxSeparationDistance=toMeters(marginCm);
+  for(const auto partId:partIds) {
+    JPH::RMat44 com;
+    JPH::ShapeRefC shape;
+    bool sleeping=false;
+    {
+      JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),JPH::BodyID(partId));
+      if(!lock.Succeeded()) continue;
+      com=lock.GetBody().GetCenterOfMassTransform();
+      shape=lock.GetBody().GetShape();
+      sleeping=!lock.GetBody().IsActive();
+      }
+    const auto base=com.GetTranslation();
+    JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+    impl->system.GetNarrowPhaseQuery().CollideShape(shape,JPH::Vec3::sOne(),com,settings,base,collector,
+                                                 broadFilter,layerFilter,bodyFilter);
+    for(const auto& hit:collector.mHits) {
+      JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),hit.mBodyID2);
+      if(!lock.Succeeded()) continue;
+      RagdollContact contact;
+      contact.bone=rig.boneForBodyId(partId);
+      contact.partBodyId=partId;
+      contact.supportBodyId=hit.mBodyID2.GetIndexAndSequenceNumber();
+      contact.category=int(lock.GetBody().GetObjectLayer());
+      contact.sleeping=sleeping;
+      contact.depth=hit.mPenetrationDepth*100.f;
+      contact.axis=toCentimeters(hit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero())*.01f);
+      contact.point1=toCentimeters(base+hit.mContactPointOn1);
+      contact.point2=toCentimeters(base+hit.mContactPointOn2);
+      // Native rigs deliberately have no CollisionBody payload. Resolve only
+      // owned wrappers, rather than interpreting arbitrary body user data.
+      for(auto* body:bodies)
+        if(body->id==hit.mBodyID2) {contact.body=body;break;}
+      if(contact.body!=nullptr && contact.body->mesh!=nullptr) {
+        const auto triangle=Physics::triangleData(*lock.GetBody().GetShape(),hit.mSubShapeID2);
+        JPH::Vec3 vertices[3];
+        if(contact.body->mesh->triangleVertices(triangle,vertices)) {
+          const auto transform=lock.GetBody().GetWorldTransform();
+          const auto point=toMeters(contact.point1);
+          for(auto& vertex:vertices)
+            vertex=JPH::Vec3(transform*(vertex*contact.body->scale))-point;
+          JPH::uint32 feature=0;
+          const auto nearest=JPH::ClosestPoint::GetClosestPointOnTriangle(vertices[0],vertices[1],vertices[2],feature);
+          contact.sourceDistance=nearest.Length()*100.f;
+          contact.sourcePoint=toCentimeters(nearest+point);
+          contact.sourceTriangle=triangle;
+          }
+        }
+      result.push_back(contact);
+      }
+    }
+  return result;
+  }
+
 bool CollisionWorld::hasCollision(const JPH::Shape* shape, const Tempest::Vec3& center,
                                   Tempest::Vec3& normal, Interactive*& vob) const {
   if(shape==nullptr)

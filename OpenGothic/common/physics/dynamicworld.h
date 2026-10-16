@@ -410,6 +410,25 @@ class DynamicWorld final {
       int64_t asleepSince = -1;
       };
     std::vector<FragmentSnapshot> fragmentSnapshot() const;
+    struct RagdollSupport {
+      size_t        bone = 0;
+      uint32_t      partBodyId = uint32_t(-1), supportBodyId = uint32_t(-1);
+      int           category = 0;
+      bool          sleeping = false;
+      float         depth = 0;
+      Tempest::Vec3 axis, point1, point2;
+      uintptr_t     parentId = 0;
+      uint32_t      zenId = uint32_t(-1);
+      size_t        piece = size_t(-1);
+      std::string   visual, kind;
+      bool          broken = false, visible = true;
+      float         visibleDistance = -1;
+      Tempest::Vec3 visiblePoint;
+      uint32_t      sourceTriangle = uint32_t(-1);
+      };
+    // Native contacts, including sleeping parts, annotated with exact source
+    // faces to distinguish real visible support from a convex hull's cavity.
+    std::vector<RagdollSupport> ragdollSupports(const Ragdoll& ragdoll, float marginCm) const;
     // Diagnostic: what each movable hull touches or penetrates at its origin pose.
     struct MovableVobContact {
       std::string   other;      // visual of the other body, "landscape" for the world mesh

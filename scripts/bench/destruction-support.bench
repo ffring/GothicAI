@@ -1,0 +1,31 @@
+# Native support audit of the unchanged #138 Coragon fireball scene.
+# One-second shape contacts include sleeping Jolt rigs. Frames at 6 and 19 s.
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+noise on
+destruction on
+overlay off
+view full
+destruction setup fireball
+destruction support on
+spell equip 23
+wait 1200
+shot destruction-before
+rec destruction-support
+destruction begin
+spell cast 600
+wait 6000
+destruction support sample
+shot destruction-support-6s
+wait 13000
+destruction support sample
+shot destruction-support-19s
+wait 100
+destruction checkpoint
+noise checkpoint
+movable save destruction-support-scattered
+stop
+physics stats

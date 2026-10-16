@@ -75,6 +75,7 @@ class CollisionWorld final {
         const JPH::Shape*    shape() const { return scaledShape.GetPtr(); }
         void                setLabel(std::string_view value) { debugLabel = value; }
         const std::string&  label() const { return debugLabel; }
+        uint32_t            nativeId() const { return id.GetIndexAndSequenceNumber(); }
 
       private:
         CollisionBody(CollisionWorld& owner, JPH::ShapeRefC shape, int category);
@@ -178,6 +179,22 @@ class CollisionWorld final {
       const char*           sector = nullptr;
       };
     std::vector<Overlap> overlaps(const CollisionBody& body, float marginCm, uint32_t mask) const;
+
+    // Bench-only narrow-phase snapshot at the native parts' current poses.
+    // Unlike contact callbacks, this also includes sleeping rigs and supports.
+    struct RagdollContact {
+      size_t               bone = size_t(-1);
+      uint32_t             partBodyId = uint32_t(-1), supportBodyId = uint32_t(-1);
+      CollisionBody*       body = nullptr;
+      int                  category = 0;
+      bool                 sleeping = false;
+      float                depth = 0; // centimetres; negative means separation
+      Tempest::Vec3        axis, point1, point2; // axis moves support out of part
+      float                sourceDistance = -1; // actual source triangle, centimetres
+      Tempest::Vec3        sourcePoint;
+      uint32_t             sourceTriangle = uint32_t(-1);
+      };
+    std::vector<RagdollContact> ragdollContacts(const Ragdoll& rig, float marginCm) const;
 
     std::unique_ptr<CollisionBody> addCollisionBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix, float friction,
                                                    int category, bool movable = false, bool sensor = false, const PhysicVbo* mesh = nullptr);

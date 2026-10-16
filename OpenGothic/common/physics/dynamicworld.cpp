@@ -16,6 +16,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Geometry/ClosestPoint.h>
 
 #include <algorithm>
 #include <cmath>
@@ -1653,6 +1654,97 @@ std::vector<DynamicWorld::FragmentSnapshot> DynamicWorld::fragmentSnapshot() con
                         body.matrix(),body.velocity(),body.angularVelocity(),obj->fragmentPermanent[i],
                         obj->fragmentSleepTime[i]});
       }
+  return result;
+  }
+
+std::vector<DynamicWorld::RagdollSupport> DynamicWorld::ragdollSupports(const Ragdoll& ragdoll,float marginCm) const {
+  std::vector<RagdollSupport> result;
+  for(const auto& contact:world->ragdollContacts(ragdoll,marginCm)) {
+    RagdollSupport entry;
+    entry.bone=contact.bone;
+    entry.partBodyId=contact.partBodyId;
+    entry.supportBodyId=contact.supportBodyId;
+    entry.category=contact.category;
+    entry.sleeping=contact.sleeping;
+    entry.depth=contact.depth;
+    entry.axis=contact.axis;
+    entry.point1=contact.point1;
+    entry.point2=contact.point2;
+    entry.visibleDistance=contact.sourceDistance;
+    entry.visiblePoint=contact.sourcePoint;
+    entry.sourceTriangle=contact.sourceTriangle;
+    entry.kind=contact.category==C_Landscape ? "landscape" : "body";
+    if(contact.body!=nullptr)
+      entry.visual=contact.body->label();
+    const auto queryPoint=CollisionWorld::toMeters(contact.point1);
+    float closestSquared=std::numeric_limits<float>::infinity();
+    const auto triangle=[&](const Tempest::Vec3 (&vertices)[3],const Tempest::Matrix4x4& matrix) {
+      JPH::Vec3 points[3];
+      for(size_t i=0;i<3;++i) {
+        auto point=vertices[i];
+        matrix.project(point);
+        points[i]=CollisionWorld::toMeters(point)-queryPoint;
+        }
+      JPH::uint32 feature=0;
+      const auto nearest=JPH::ClosestPoint::GetClosestPointOnTriangle(points[0],points[1],points[2],feature);
+      const float distance=nearest.LengthSq();
+      if(distance<closestSquared) {
+        closestSquared=distance;
+        entry.visiblePoint=CollisionWorld::toCentimeters(nearest+queryPoint);
+        }
+      };
+    for(const auto* obj:movableVobs->bodies) {
+      size_t piece=size_t(-1);
+      bool matches=obj->body.get()==contact.body;
+      std::string kind=matches ? "hull" : "query";
+      if(!matches)
+        for(const auto& query:obj->query)
+          matches|=query.get()==contact.body;
+      if(!matches)
+        for(size_t i=0;i<obj->fragments.size();++i)
+          if(obj->fragments[i].get()==contact.body && contact.body!=nullptr) {
+            matches=true;
+            piece=i;
+            kind="fragment";
+            break;
+            }
+      if(!matches || contact.body==nullptr)
+        continue;
+      entry.parentId=reinterpret_cast<uintptr_t>(obj);
+      entry.zenId=obj->pose->zenId;
+      entry.visual=obj->visual;
+      entry.kind=std::move(kind);
+      entry.piece=piece;
+      entry.broken=obj->pose->broken;
+      entry.visible=piece!=size_t(-1) || !entry.broken;
+      if(piece!=size_t(-1)) {
+        const auto matrix=obj->fragments[piece]->matrix();
+        for(const auto& face:obj->movableShape->fracture->pieces[piece].triangles) {
+          const Tempest::Vec3 vertices[]={face.vertices[0].position,face.vertices[1].position,face.vertices[2].position};
+          triangle(vertices,matrix);
+          }
+        }
+      else if(entry.visible) {
+        for(const auto& part:obj->movableShape->parts) {
+          auto matrix=obj->current;
+          matrix.mul(part.local);
+          for(size_t t=0;t<part.source->mesh.triangleCount();++t) {
+            JPH::Vec3 points[3];
+            if(!part.source->mesh.triangleVertices(uint32_t(t),points))
+              continue;
+            const Tempest::Vec3 vertices[]={CollisionWorld::toCentimeters(points[0]),
+                                           CollisionWorld::toCentimeters(points[1]),
+                                           CollisionWorld::toCentimeters(points[2])};
+            triangle(vertices,matrix);
+            }
+          }
+        }
+      break;
+      }
+    if(std::isfinite(closestSquared))
+      entry.visibleDistance=std::sqrt(closestSquared)*100.f;
+    result.push_back(std::move(entry));
+    }
   return result;
   }
 

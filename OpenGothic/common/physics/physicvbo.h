@@ -39,6 +39,7 @@ class PhysicVbo final {
     // Exact source geometry, before Jolt's triangle BVH quantization.
     void                    appendVertices(std::vector<JPH::Vec3>& points, const Tempest::Matrix4x4& transform) const;
     size_t                  vertexCount() const { return vert.size(); }
+    size_t                  triangleCount() const { return id.size()/3; }
 
     std::string_view        validateSectorName(std::string_view name) const;
 

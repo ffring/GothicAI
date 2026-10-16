@@ -1069,6 +1069,89 @@ namespace {
       loaded.setMovableVobsEnabled(!movable);
       require(loadedFence.isBroken(),"toggling movable-vobs must not resurrect a broken static fence");
       }
+    for(const bool fence:{false,true}) {
+      const auto origin=at(100,50,0);
+      const auto add=[&](DynamicWorld& world) {
+        return world.addMovableVob(proto,fence ? "NW_NATURE_FENCE_01.MRM" : "NW_HARBOUR_CRATE_01.MRM",
+                                   origin,.04f,true,fence ? "fence" : "crate",true,zenId);
+        };
+      const auto passage=[&](DynamicWorld& world,bool blocked) {
+        const Tempest::Vec3 from(0,50,0),to(200,50,0);
+        require(world.ray(from,to).hasCol==blocked,
+                "only an intact source mesh may obstruct a visual ray through the original volume");
+        require(world.navigationRay(from,to,nullptr).hasCol==blocked,
+                "only an intact native hull may obstruct a navigation ray through the original volume");
+        require(world.rayArrow(from,to,[](Npc&,const auto&,const auto&,float&) { return false; }).hasCol==blocked,
+                "arrow aiming must agree with the surviving source collision after destruction or load");
+        struct ArrowContact final : DynamicWorld::BulletCallback {
+          bool stopsAtWorldHit() const override { return true; }
+          void onWorldHit(const DynamicWorld::BulletWorldHit&) override { ++hits; }
+          int hits=0;
+          } contact;
+        auto* arrow=world.bulletObj(&contact);
+        arrow->setPosition(from);
+        arrow->setDirection({3,0,0});
+        for(int i=0;i<5;++i) world.tick(17);
+        require(contact.hits==(blocked ? 1 : 0),
+                "live arrows must stop on intact source collision and pass through a broken original");
+        if(!blocked)
+          require(arrow->position().x>to.x,"a live arrow must cross the entire former obstacle without stopping");
+        world.deleteObj(arrow);
+
+        zenkit::ModelHierarchy hierarchy;
+        // Legacy walking tests the upper capsule, with its feet above the
+        // logical root. Keep that capsule overlapping the 100 cm fixture.
+        hierarchy.collision_bbox={{-25,0,-25},{25,140,25}};
+        Skeleton shape(hierarchy,nullptr,"DESTRUCTION_PASSAGE_WALKER");
+        auto walker=world.addGhostObj(&shape);
+        walker.setPosition({0,0,0});
+        DynamicWorld::CollisionTest collision;
+        require(walker.testMove({60,0,0},collision)!=blocked,
+                "legacy walking must retain intact collision and cross the former obstacle after destruction or load");
+        if(!blocked) {
+          for(float x=20;x<=200;x+=20)
+            require(walker.tryMove({x,0,0},collision)==DynamicWorld::MC_OK,
+                    "legacy walking must complete each step through a destroyed obstacle");
+          requireNear(walker.position().x,200,.001f,"legacy walking must reach the far side of the opened passage");
+          walker.setPosition({0,0,0});
+          for(int i=0;i<50;++i) walker.moveVirtual({5,0,0},17,50,.785398163f,80);
+          require(walker.position().x>200,
+                  "native walking must cross the original hull after destruction, cleanup and fresh load");
+          }
+        };
+      DynamicWorld world(nullptr,movableFloor());
+      world.setTraceTime(1500);
+      world.setFragmentObserver({0,0,0});
+      auto object=add(world);
+      passage(world,true);
+      require(world.meleeMovableVobs({0,50,0},{1,0,0},150,40,1000,FractureRule::Melee::OneHand)==1,
+              "the passage fixture must strike its intact obstacle");
+      world.tick(17);
+      require(object.isBroken() && world.fragmentSnapshot().size()==8,
+              "the passage fixture must install fragments before checking collision consumers");
+      passage(world,false);
+      const auto saved=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
+      DynamicWorld restored(nullptr,movableFloor());
+      restored.setTraceTime(1500);
+      restored.setFragmentObserver({0,0,0});
+      auto restoredObject=add(restored);
+      loadMovables(restored,saved);
+      require(restoredObject.isBroken(),"the passage fixture must restore destruction in a fresh world");
+      passage(restored,false);
+      for(int i=0;i<900;++i) restored.tick(17);
+      restored.setTraceTime(1530);
+      restored.tick(17);
+      require(restored.fragmentSnapshot().size()==3,
+              "the passage fixture must retire sleeping debris before saving the cleaned state");
+      passage(restored,false);
+      const auto cleanedSave=saveArchive([&](Serialize& output) { restored.saveMovableVobs(output); });
+      DynamicWorld cleaned(nullptr,movableFloor());
+      auto cleanedObject=add(cleaned);
+      loadMovables(cleaned,cleanedSave);
+      require(cleanedObject.isBroken() && cleaned.fragmentSnapshot().size()==3,
+              "loading cleaned debris must retain the opened passage and only its three remaining pieces");
+      passage(cleaned,false);
+      }
     {
       DynamicWorld world(nullptr,zenkit::Mesh{});
       auto object=make(world,at(0,1000,0));

@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <Tempest/Vec>
 
 namespace Tempest {
 class Pixmap;
@@ -45,6 +46,8 @@ namespace TestBench {
   // Native destruction telemetry: includes body creation and the render callback.
   void     destructionBreak(uintptr_t body, size_t pieces, float milliseconds);
   void     destructionMeleeHit(const Npc& actor, size_t affected, float damage);
+  void     movementImpulseHandoff(const Npc& actor, std::string_view backend, uint32_t fromState,
+                                  uint32_t toState, const Tempest::Vec3& velocity);
   // Devmode-only live bridge stand, reusing the actual Coragon tavern fixture.
   bool     isPhysicsNoiseDebug();
   void     physicsNoiseBridgeEvent(const Npc& listener, uint64_t tick);

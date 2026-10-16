@@ -684,6 +684,11 @@ struct Bench {
   unsigned destructionArrows=0;
   bool destructionReady=false,destructionTrace=false,destructionShooting=false;
   bool destructionSleepSampled=false;
+  bool destructionSupportTrace=false;
+  uint64_t destructionSupportNext=0;
+  const Npc* destructionSkinRequest=nullptr;
+  std::unordered_map<const ProtoMesh*,std::vector<Resources::VertexA>> destructionSkinGeometry;
+  std::string destructionSkinSample="null";
   Npc* destructionMeleeActor=nullptr;
   Npc* destructionMeleeNpc=nullptr;
   Vec3 destructionMeleeFacing,destructionMeleeStand;
@@ -3802,6 +3807,7 @@ void destructionSetup(World& world,Npc& player,std::string_view name) {
 
 void destructionBegin(World& world) {
   bench.destructionTrace=true;bench.destructionStart=world.tickCount();
+  bench.destructionSupportNext=1000;
   bench.destructionLastBreak=0;bench.destructionSleepSampled=false;
   bench.destructionFallSample=0;
   bench.destructionFragmentOrigins.clear();bench.destructionFragmentTravel.clear();
@@ -3857,6 +3863,190 @@ void destructionCheckpoint(World& world) {
     ",\"actor_start_cm\":"+ragdollVector(bench.destructionActorStart)+",\"actor_cm\":"+
     (bench.destructionActor?ragdollVector(bench.destructionActor->position()):"null"));
   bench.destructionShooting=false;
+  }
+
+void destructionSkinSample(const Npc& npc,const ProtoMesh& proto,const Matrix4x4& object) {
+  auto [cache,inserted]=bench.destructionSkinGeometry.try_emplace(&proto);
+  if(inserted)
+    for(const auto& mesh:proto.skined) {
+      std::vector<Resources::VertexA> vertices(mesh.vbo.size());
+      std::vector<uint32_t> indices(mesh.ibo.size());
+      if(vertices.empty() || indices.empty())continue;
+      Resources::device().readBytes(mesh.vbo,vertices.data(),vertices.size()*sizeof(vertices[0]));
+      Resources::device().readBytes(mesh.ibo,indices.data(),indices.size()*sizeof(indices[0]));
+      std::vector<bool> used(vertices.size(),false);
+      for(const auto index:indices)
+        if(index<vertices.size() && !used[index]) {
+          used[index]=true;
+          cache->second.push_back(vertices[index]);
+          }
+      }
+  const auto* skeleton=npc.visualSkeleton();
+  if(cache->second.empty() || !skeleton)return;
+  Vec3 lowest;
+  lowest.y=std::numeric_limits<float>::infinity();
+  size_t count=0;
+  for(const auto& vertex:cache->second) {
+    Vec3 point;
+    float weight=0;
+    for(size_t r=0;r<4;++r) {
+      if(vertex.weights[r]<=0.f || vertex.boneId[r]>=skeleton->nodes.size())continue;
+      Vec3 p(vertex.pos[r][0],vertex.pos[r][1],vertex.pos[r][2]);
+      npc.renderedBone(vertex.boneId[r]).project(p);
+      point+=p*vertex.weights[r];
+      weight+=vertex.weights[r];
+      }
+    if(weight<=0.f)continue;
+    // This is the shader's full weighted skinning, including the instance's
+    // normal displacement. Dominant-bone clouds and capsule radii are unused.
+    Vec3 normal;
+    normal.x=object.at(0,0)*vertex.norm[0]+object.at(1,0)*vertex.norm[1]+object.at(2,0)*vertex.norm[2];
+    normal.y=object.at(0,1)*vertex.norm[0]+object.at(1,1)*vertex.norm[1]+object.at(2,1)*vertex.norm[2];
+    normal.z=object.at(0,2)*vertex.norm[0]+object.at(1,2)*vertex.norm[1]+object.at(2,2)*vertex.norm[2];
+    point+=normal*(npc.fatness()*.5f);
+    if(!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))continue;
+    ++count;
+    if(point.y<lowest.y)lowest=point;
+    }
+  if(!count)return;
+  auto& physics=*npc.world().physic();
+  // The ordinary ray uses exact authored query triangles, excluding the NPC's
+  // own body. A short allowance also measures signed floor penetration.
+  const auto floor=physics.landRay(lowest+Vec3(0,20,0),620.f);
+  bool found=floor.hasCol;
+  Vec3 support=floor.v;
+  std::string kind="source_mesh",visual;
+  uintptr_t parent=0;
+  size_t piece=size_t(-1);
+  std::unordered_map<uintptr_t,std::string> visuals;
+  for(const auto& body:physics.movableVobSnapshot())visuals[body.id]=body.visual;
+  // Fragments have no intact query mesh. Intersect the visible cut triangles
+  // themselves, so a visible piece above the floor can be the real support.
+  for(const auto& fragment:physics.fragmentSnapshot()) {
+    const auto entry=visuals.find(fragment.parentId);
+    if(entry==visuals.end())continue;
+    const auto fracture=FractureMesh::load(entry->second);
+    if(!fracture || fragment.piece>=fracture->pieces.size())continue;
+    for(const auto& face:fracture->pieces[fragment.piece].triangles) {
+      Vec3 vertices[3];
+      for(size_t i=0;i<3;++i) {
+        vertices[i]=face.vertices[i].position;
+        fragment.transform.project(vertices[i]);
+        }
+      const auto a=vertices[1]-vertices[0],b=vertices[2]-vertices[0],p=lowest-vertices[0];
+      const float determinant=a.x*b.z-a.z*b.x;
+      if(std::abs(determinant)<1.e-5f)continue;
+      const float u=(p.x*b.z-p.z*b.x)/determinant,v=(a.x*p.z-a.z*p.x)/determinant;
+      if(u<0.f || v<0.f || u+v>1.f)continue;
+      const float y=vertices[0].y+u*a.y+v*b.y;
+      if(y>lowest.y+20.f || y<lowest.y-600.f || (found && y<=support.y))continue;
+      found=true;support=Vec3(lowest.x,y,lowest.z);
+      kind="fragment";visual=entry->second;parent=fragment.parentId;piece=fragment.piece;
+      }
+    }
+  bench.destructionSkinSample="{\"mesh\":"+jsonStr(proto.fname)+",\"indexed_vertices\":"+std::to_string(count)+
+    ",\"lowest_world_cm\":"+ragdollVector(lowest)+",\"support_found\":"+(found?"true":"false")+
+    ",\"support_kind\":"+jsonStr(kind)+",\"support_visual\":"+jsonStr(visual)+
+    ",\"support_parent_id\":"+std::to_string(parent)+",\"support_piece\":"+
+    (piece==size_t(-1)?"null":std::to_string(piece))+
+    ",\"support_world_cm\":"+(found?ragdollVector(support):"null")+
+    ",\"gap_cm\":"+(found?ragdollNumber(lowest.y-support.y):"null")+"}";
+  }
+
+void destructionSupportSample(World& world) {
+  if(bench.spellActors.empty() || bench.spellActors[0].npc==nullptr) {
+    event("destruction_error","\"reason\":\"support probe has no native fireball target\"");
+    return;
+    }
+  const auto& npc=*bench.spellActors[0].npc;
+  bench.destructionSkinSample="null";
+  bench.destructionSkinRequest=&npc;
+  const bool drawable=TestBench::ragdollBodyDrawable(npc);
+  bench.destructionSkinRequest=nullptr;
+  const auto* rig=npc.ragdollBody()!=nullptr ? npc.ragdollBody() : npc.livingBody();
+  std::vector<Matrix4x4> native;
+  const bool nativePose=rig && rig->getPose(native);
+  std::string bones="[";
+  if(const auto* skeleton=npc.visualSkeleton())
+    for(std::string_view name:{"BIP01 PELVIS","BIP01 SPINE2","BIP01 L THIGH","BIP01 L CALF","BIP01 L FOOT"}) {
+      const auto bone=arrowBone(*skeleton,name);
+      if(bone==size_t(-1))continue;
+      if(bones.size()>1)bones+=',';
+      bones+="{\"name\":"+jsonStr(name)+",\"bone\":"+std::to_string(bone)+
+        ",\"render\":"+ragdollMatrix(npc.renderedBone(bone))+
+        ",\"animation\":"+ragdollMatrix(npc.animationBone(bone));
+      if(nativePose && bone<native.size())bones+=",\"native\":"+ragdollMatrix(native[bone]);
+      bones+='}';
+      }
+  bones+=']';
+  std::string contacts="[";
+  size_t supports=0,invisible=0,unknown=0;
+  float maximumGap=0;
+  if(rig!=nullptr)
+    for(const auto& contact:world.physic()->ragdollSupports(*rig,2.f)) {
+      const bool support=contact.axis.y<-.25f;
+      // Source-triangle contacts may penetrate the floor. Report their signed
+      // separation, while hulls retain a distance that exposes empty cavities.
+      const float visibleGap=contact.sourceTriangle!=uint32_t(-1) ?
+          Vec3::dotProduct(contact.point1-contact.visiblePoint,contact.axis*-1.f) : contact.visibleDistance;
+      if(support) {
+        ++supports;
+        if(!contact.visible)++invisible;
+        if(contact.visibleDistance<0.f)++unknown;
+        else maximumGap=std::max(maximumGap,visibleGap);
+        }
+      if(contacts.size()>1)contacts+=',';
+      contacts+="{\"bone\":"+std::to_string(contact.bone)+
+        ",\"part_body_id\":"+std::to_string(contact.partBodyId)+
+        ",\"support_body_id\":"+std::to_string(contact.supportBodyId)+
+        ",\"layer\":"+std::to_string(contact.category)+",\"kind\":"+jsonStr(contact.kind)+
+        ",\"visual\":"+jsonStr(contact.visual)+",\"parent_id\":"+std::to_string(contact.parentId)+
+        ",\"zen_id\":"+std::to_string(contact.zenId)+",\"piece\":"+
+        (contact.piece==size_t(-1)?"null":std::to_string(contact.piece))+
+        ",\"source_triangle\":"+(contact.sourceTriangle==uint32_t(-1)?"null":std::to_string(contact.sourceTriangle))+
+        ",\"sleeping\":"+(contact.sleeping?"true":"false")+
+        ",\"broken\":"+(contact.broken?"true":"false")+
+        ",\"visible\":"+(contact.visible?"true":"false")+
+        ",\"supports_weight\":"+(support?"true":"false")+
+        ",\"depth_cm\":"+ragdollNumber(contact.depth)+
+        ",\"normal\":"+ragdollVector(contact.axis*-1.f)+
+        ",\"part_contact_cm\":"+ragdollVector(contact.point1)+
+        ",\"support_contact_cm\":"+ragdollVector(contact.point2)+
+        ",\"visible_distance_cm\":"+(contact.visibleDistance<0.f?"null":ragdollNumber(contact.visibleDistance))+
+        ",\"visible_gap_cm\":"+(contact.visibleDistance<0.f?"null":ragdollNumber(visibleGap))+
+        ",\"visible_penetration_cm\":"+(contact.visibleDistance<0.f?"null":ragdollNumber(std::max(0.f,-visibleGap)))+
+        ",\"visible_point_cm\":"+(contact.visibleDistance<0.f?"null":ragdollVector(contact.visiblePoint))+"}";
+      }
+  contacts+=']';
+  event("destruction_support_sample","\"elapsed_ms\":"+std::to_string(world.tickCount()-bench.destructionStart)+
+    ",\"actor\":"+jsonStr(symName(world,&npc))+",\"actor_id\":"+std::to_string(world.npcId(&npc))+
+    ",\"body_drawable\":"+(drawable?"true":"false")+
+    ",\"ragdoll\":"+(npc.ragdollBody()?"true":"false")+
+    ",\"rig_kind\":"+jsonStr(npc.ragdollBody()?"ragdoll":npc.livingBody()?"living":"none")+
+    ",\"kinematic\":"+(rig && rig->isKinematic()?"true":"false")+
+    ",\"sleeping\":"+(rig && rig->isSleeping()?"true":"false")+
+    ",\"reaction_weight\":"+ragdollNumber(rig?rig->reactionWeight():0.f)+
+    ",\"ragdoll_enabled\":"+(Gothic::physicsFlags().ragdoll?"true":"false")+
+    ",\"spell_physics_enabled\":"+(Gothic::physicsFlags().spellPhysics?"true":"false")+
+    ",\"external_control\":"+(npc.isExternalControl()?"true":"false")+
+    ",\"process_policy\":"+std::to_string(int(npc.processPolicy()))+
+    ",\"body_state\":"+std::to_string(int(npc.bodyState()))+
+    ",\"state\":"+jsonStr(stateName(world,npc))+",\"state_time\":"+std::to_string(npc.stateTime())+
+    ",\"quest_return_count\":"+std::to_string(npc.ragdollQuestReturnCount())+
+    ",\"quest_return_armed\":"+(npc.ragdollQuestReturnState().armed?"true":"false")+
+    ",\"quest_return_hazards\":"+std::to_string(npc.ragdollQuestReturnState().hazards)+
+    ",\"animations\":"+jsonStr(npc.animNames())+
+    ",\"hp\":"+std::to_string(npc.attribute(ATR_HITPOINTS))+
+    ",\"dead\":"+(npc.isDead()?"true":"false")+
+    ",\"down\":"+(npc.isDown()?"true":"false")+
+    ",\"in_air\":"+(npc.isInAir()?"true":"false")+
+    ",\"falling\":"+(npc.isFalling()?"true":"false")+
+    ",\"standing\":"+(npc.isStanding()?"true":"false")+
+    ",\"spell_velocity_cm_s\":"+ragdollVector(npc.spellVelocity())+
+    ",\"bones\":"+bones+",\"rendered_skin\":"+bench.destructionSkinSample+
+    ",\"position_cm\":"+ragdollVector(npc.position())+",\"supports\":"+std::to_string(supports)+
+    ",\"invisible_supports\":"+std::to_string(invisible)+",\"unknown_supports\":"+std::to_string(unknown)+
+    ",\"maximum_visible_gap_cm\":"+ragdollNumber(maximumGap)+",\"contacts\":"+contacts);
   }
 
 bool destructionMeleeEquip(World& world,Npc& actor,std::string_view weapon) {
@@ -6624,6 +6814,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="destruction" && a.size()==3 && a[1]=="setup") destructionSetup(w,pl,a[2]);
   else if(c=="destruction" && a.size()==2 && a[1]=="begin") destructionBegin(w);
   else if(c=="destruction" && a.size()==2 && a[1]=="checkpoint") destructionCheckpoint(w);
+  else if(c=="destruction" && a.size()==3 && a[1]=="support" && (a[2]=="on" || a[2]=="off")) {
+    bench.destructionSupportTrace=a[2]=="on";
+    bench.destructionSupportNext=0;
+    }
+  else if(c=="destruction" && a.size()==3 && a[1]=="support" && a[2]=="sample") destructionSupportSample(w);
   else if(c=="destruction2" && (a.size()==4 || a.size()==5) && a[1]=="setup")
     destructionMeleeSetup(w,pl,a[2],a[3],a.size()==5 && a[4]=="npc");
   else if(c=="destruction2" && a.size()==2 && a[1]=="attack") {
@@ -11172,6 +11367,17 @@ void TestBench::destructionMeleeHit(const Npc& actor,size_t affected,float damag
     ",\"raw_hit_power\":"+ragdollNumber(damage)+",\"bodies\":"+(world?destructionRows(*world):"[]"));
   }
 
+void TestBench::movementImpulseHandoff(const Npc& actor,std::string_view backend,uint32_t fromState,
+                                      uint32_t toState,const Vec3& velocity) {
+  if(scenarioPath==nullptr || !bench.started || bench.done)return;
+  auto* world=Gothic::inst().world();
+  if(!world)return;
+  event("movement_impulse_handoff","\"actor\":"+jsonStr(symName(*world,&actor))+
+    ",\"actor_id\":"+std::to_string(world->npcId(&actor))+",\"backend\":"+jsonStr(backend)+
+    ",\"from_state\":"+std::to_string(fromState)+",\"to_state\":"+std::to_string(toState)+
+    ",\"impulse_velocity_cm_s\":"+ragdollVector(velocity));
+  }
+
 void TestBench::physicsNoise(const PhysicsNoise& noise,std::string_view sound,bool played) {
   if(bench.noiseBridgeDebug && (noise.position-bench.noiseSource).quadLength()<250.f*250.f) {
     ++bench.noiseBridgeImpacts;
@@ -11524,6 +11730,8 @@ std::function<bool(World&)> TestBench::stuckEnd;
 bool TestBench::ragdollBodyDrawable(const Npc& npc) {
   const auto& mesh=npc.visual.view;
   if(mesh.cpuOnly) return false;
+  if(bench.destructionSkinRequest==&npc && mesh.protoMesh()!=nullptr)
+    destructionSkinSample(npc,*mesh.protoMesh(),npc.visual.transform());
   for(size_t i=0;i<mesh.subCount;++i) {
     const auto& item=mesh.sub[i];
     if(item.isEmpty()) continue;
@@ -11650,6 +11858,11 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   stickingFields(*world);
   spellFields(*world);
   destructionFields(*world);
+  if(bench.destructionSupportTrace && bench.destructionTrace &&
+     world->tickCount()-bench.destructionStart>=bench.destructionSupportNext) {
+    bench.destructionSupportNext=world->tickCount()-bench.destructionStart+1000;
+    destructionSupportSample(*world);
+    }
   destructionShoot(*world,*player);
   destructionMeleeTick(*world);
   if(bench.destructionFarmNpc) {
