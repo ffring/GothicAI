@@ -574,6 +574,16 @@ class Npc final {
     auto      currentTaPoint() const -> const WayPoint*;
     void      attachToPoint(const WayPoint* p);
     GoToHint  moveHint() const { return go2.flag; }
+    // Passive navigation telemetry: reads the active destination or a ready go-to queue head.
+    struct NavigationGoal final {
+      bool active = false;
+      const WayPoint* point = nullptr;
+      const Npc* npc = nullptr;
+      Tempest::Vec3 position;
+      std::string_view kind;
+      std::string_view name;
+      };
+    auto      navigationGoal() const -> NavigationGoal;
     void      clearGoTo();
     void      stopWalking();
 

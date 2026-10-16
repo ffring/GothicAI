@@ -1,0 +1,18 @@
+seed 7
+cheat god
+set time 10 0
+goto NW_FARM1_ENTRANCE_03
+put BAU_954_MALETH 0 0 -1400
+goto NW_FARM1_ENTRANCE_01
+wait 1000
+where BAU_954_MALETH FP_ROAM_FARM1_SHEEP_09
+stuck begin intentional 3000
+npcgo BAU_954_MALETH FP_ROAM_FARM1_SHEEP_09 walk
+wait 20000
+where BAU_954_MALETH FP_ROAM_FARM1_SHEEP_09
+wait 20000
+where BAU_954_MALETH FP_ROAM_FARM1_SHEEP_09
+freeze BAU_954_MALETH
+wait 100
+stuck end
+label done

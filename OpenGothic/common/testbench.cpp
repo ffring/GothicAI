@@ -6336,6 +6336,27 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("wander stats: " + std::to_string(bench.wanderers.size()) + " npcs, " + std::to_string(walking) +
         " walking, " + std::to_string(bench.wanderLegs) + " legs");
     }
+  else if(c=="stuck") {
+    // stuck begin <label> [radius cm 3000] | stuck end: observe native routine movement without
+    // taking control of any NPC. The logger is absent unless OPENGOTHIC_STUCK_LOG is set.
+    if(a.size()>=3 && a.size()<=4 && a[1]=="begin") {
+      const float radius = num(a,3,3000);
+      if(!std::isfinite(radius) || radius<=0 || (a.size()==4 && !isNumber(a[3]))) {
+        say("stuck begin failed: radius must be positive and finite");
+        return;
+        }
+      const bool ok = TestBench::stuckBegin && TestBench::stuckBegin(w,a[2],radius);
+      say(std::string(ok ? "stuck begin " : "stuck begin failed: ") + a[2] +
+          " radius_cm=" + std::to_string(radius));
+      }
+    else if(a.size()==2 && a[1]=="end") {
+      const bool ok = TestBench::stuckEnd && TestBench::stuckEnd(w);
+      say(ok ? "stuck end" : "stuck end failed: logger unavailable or no observation");
+      }
+    else {
+      say("stuck: expected begin <label> [radius cm 3000] or end");
+      }
+    }
   else if(c=="wander") {
     // wander [radius cm 3000] [walk|run]: each npc set out by `arc` is held as the AI server holds a body and
     // walks by the waynet to a waypoint within the radius of the hero, then to another: a crowd for the speed
@@ -8778,6 +8799,8 @@ void renderSound(uint64_t dt) {
 
 std::function<bool()> TestBench::aiBusy;
 std::function<bool(std::string_view,std::string_view)> TestBench::aiReached;
+std::function<bool(World&,std::string_view,float)> TestBench::stuckBegin;
+std::function<bool(World&)> TestBench::stuckEnd;
 
 bool TestBench::ragdollBodyDrawable(const Npc& npc) {
   const auto& mesh=npc.visual.view;

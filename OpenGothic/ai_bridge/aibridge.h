@@ -2,6 +2,8 @@
 
 #include <memory>
 
+class StuckLogger;
+
 // Connects the game to the external AI server (WebSocket + JSON, see docs/protocol.md in gothic-ai).
 // Server address: env GOTHIC_AI_URL (default ws://127.0.0.1:47817); GOTHIC_AI=0 disables the bridge.
 class AiBridge final {
@@ -14,5 +16,6 @@ class AiBridge final {
 
   private:
     struct Impl;
+    std::unique_ptr<StuckLogger> stuck;
     std::unique_ptr<Impl> impl;
   };
