@@ -139,9 +139,28 @@ over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break 
   Such a plan (its script, the voice files) stays outside the repository, in the explainer's workspace: give its
   path as the third argument, the short goes into that folder's `render/`:
   `uv run --project shorts python shorts/compare/cut.py hits ru ~/.local/share/gothic-ai/explain/hits/plan.json`.
+- The channel's brand, on by default: its wax seal with the raven in the top right corner all through, and its
+  end sting after the last beat (below); every text of the cut — labels, titles, captions, the hook — in PT Serif
+  Bold (ParaType, OFL, ships with macOS: Cyrillic, bookish like the channel's letters) on warm dark bands. The
+  shorts published before it (`bodies`, `archery`, `hits`) say `"brand": false` and cut as they went out: Arial
+  and Georgia on black bands, no seal, no sting. They are not re-uploaded.
 - `cut.py` stacks each beat, grades both halves the same (a little brighter), takes the sound of the "on"
   take (with the bed under it), limits the peaks and brings it to -14 LUFS by one gain (loudnorm in two passes,
   linear: one pass lifts the quiet stretches), fading out over the last 80 ms.
+
+### The brand: the seal and the end sting
+
+`shorts/brand/sting.py` renders the end sting, 2.2 s of 1080×1920: a letter on the desk at night, GOTHIC AI written
+in ink from left to right, the red wax seal with the raven pressed on (the frame jolts) to the game's diary-entry
+sound, the candle flickering; and `seal-corner.png`, the seal for the corner. Its pictures and sound are not in
+the repository (generated art, a sound of the game): `~/.local/share/gothic-ai/brand/sting/` holds `bg.png` (the
+blank letter, top-down), `seal-green.png` (the seal on chroma green, keyed out), `seal.png` (the seal on parchment),
+`lettering.png` (the name, traced once from a generated pen master, so it never changes) and `LOGENTRY.WAV`
+(from the game's `Sounds.vdf`).
+
+```bash
+uv run --project shorts python shorts/brand/sting.py    # -> ~/.local/share/gothic-ai/brand/sting/sting.mp4, seal-corner.png
+```
 
 Pick spots in daylight and open ground (`clear` sends rats and wolves away), and look at both takes before
 cutting: a difference that does not read at phone size (a flinch on top of the game's stumble) stays out.

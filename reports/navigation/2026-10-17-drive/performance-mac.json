@@ -1,0 +1,25 @@
+{
+  "timing_scope": "same_input_independent_gru_states_one_thread",
+  "weights": "/Users/kaifat/.codex/worktrees/claude-nav-drive/gothic/.ryzen/nav-drive/mac-speed/policy.navbc",
+  "pair_index": 57,
+  "start": "NW_CITY_UPTOWN_HUT_04_02",
+  "goal": "FP_STAND_CITYKNEIPE_OUT",
+  "teacher_elapsed_ms": 235467,
+  "measurements": [
+    {
+      "policy_population": 20,
+      "policy_warmup_decisions": 30,
+      "policy_measured_calls": 2000,
+      "population_measured_ticks": 100,
+      "policy_us_median": 263.333,
+      "policy_us_p95": 296.5923,
+      "encode_us_median": 138.9795,
+      "encode_us_p95": 152.42435,
+      "population_us_median": 5479.479,
+      "population_us_p95": 5775.8146,
+      "elapsed_ms": 13000,
+      "decisions": 130,
+      "collector_wall_s": 8.96816404099809
+    }
+  ]
+}

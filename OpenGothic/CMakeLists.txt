@@ -263,6 +263,24 @@ endif()
 
 # Asset-free contracts; run explicitly with their check-* targets.
 if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-navpolicy-contract EXCLUDE_FROM_ALL
+    tests/navpolicy_contract.cpp common/navpolicy.cpp)
+  target_include_directories(gothic-navpolicy-contract PRIVATE
+    common lib/Tempest/Engine/include lib/Tempest/Engine
+    lib/Tempest/Engine/thirdparty/zlib ${CMAKE_BINARY_DIR}/lib/Tempest/thirdparty/zlib)
+  target_link_libraries(gothic-navpolicy-contract PRIVATE zlibstatic)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_custom_target(check-navpolicy
+      COMMAND ${CMAKE_COMMAND} -E env
+        OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
+        ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/check_nav_policy.py
+        --output ${CMAKE_CURRENT_BINARY_DIR}/navpolicy-fixture --steps 1000
+      COMMAND $<TARGET_FILE:gothic-navpolicy-contract>
+        ${CMAKE_CURRENT_BINARY_DIR}/navpolicy-fixture/fixture.navbc
+        ${CMAKE_CURRENT_BINARY_DIR}/navpolicy-fixture/parity.bin.gz
+      DEPENDS gothic-navpolicy-contract USES_TERMINAL)
+  endif()
   add_executable(gothic-navkeyteacher-contract EXCLUDE_FROM_ALL
     tests/navkeyteacher_contract.cpp common/navkeyteacher.cpp)
   target_include_directories(gothic-navkeyteacher-contract PRIVATE

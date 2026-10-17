@@ -2,6 +2,7 @@
 #include "navbench.h"
 #include "navkeyteacher.h"
 #include "navdemowriter.h"
+#include "navpolicy.h"
 #include "navtransitions.h"
 #include "game/knownroadsbench.h"
 #include "world/world.h"
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -20,18 +22,27 @@
 namespace {
 using Tempest::Vec3;
 constexpr float Pi=3.14159265358979323846f;
+constexpr uint64_t PolicyWarmupDecisions=30;
 struct RecordedKeys { uint64_t time=0; NpcKeys::KeyState keys; };
+struct MotionSample { uint64_t time=0; Vec3 position; bool commanded=false; };
 struct Episode {
   Npc* npc=nullptr;
   Vec3 goal,previousPosition,velocity;
   std::string output,from,to,failure;
-  bool active=false,replay=false,success=false;
+  bool active=false,replay=false,drive=false,success=false;
   uint64_t began=0,limit=240000,next=0,decisions=0,frames=0,cvFrames=0;
   uint64_t progressAt=0;
   float best=std::numeric_limits<float>::max();
   size_t replayIndex=0;
   uint64_t replans=0,fallbacks=0;
   double writeUs=0,maxWriteUs=0;
+  std::unique_ptr<NavPolicy> policy;
+  std::vector<NavPolicy::State> policyStates;
+  std::vector<double> policyUs,encodeUs,populationUs;
+  std::array<uint64_t,6> disagreements={};
+  std::deque<MotionSample> motion;
+  uint64_t blockedSpans=0,blockedMs=0,maxBlockedMs=0,blockedSince=0,blockedUntil=0;
+  bool blocked=false;
   std::chrono::steady_clock::time_point wallStart;
   NpcKeys::KeyState previous;
   NavMesh::Path path;
@@ -69,14 +80,45 @@ void action(uint64_t elapsed,const NpcKeys::KeyState& k) {
             <<int(k.walk)<<' '<<int(k.jump)<<' '<<int(k.climb)<<' '<<k.headYaw<<' '<<k.headPitch<<'\n';
   if(!ep.actions)throw std::runtime_error("navdemos action write failed");
 }
+double percentile(std::vector<double> values,double quantile) {
+  if(values.empty())return 0;
+  std::sort(values.begin(),values.end());
+  const double index=quantile*double(values.size()-1);
+  const auto lower=size_t(index),upper=std::min(lower+1,values.size()-1);
+  return values[lower]+(values[upper]-values[lower])*(index-double(lower));
+}
+void closeBlocked(uint64_t elapsed) {
+  if(!ep.blocked)return;
+  const auto duration=elapsed-ep.blockedSince;
+  ep.blockedMs+=duration;ep.maxBlockedMs=std::max(ep.maxBlockedMs,duration);
+  ep.blockedUntil=elapsed;ep.blocked=false;
+}
+void measureBlocked(uint64_t elapsed) {
+  const auto& k=ep.previous;
+  ep.motion.push_back({elapsed,NpcKeys::physicalPosition(*ep.npc),
+                       k.forward!=0 || k.strafe!=0 || k.jump || k.climb});
+  const auto cutoff=elapsed>3000?elapsed-3000:0;
+  while(ep.motion.size()>1 && ep.motion[1].time<=cutoff)ep.motion.pop_front();
+  uint64_t commanded=0;
+  for(size_t i=1;i<ep.motion.size();++i)
+    if(ep.motion[i].commanded)commanded+=ep.motion[i].time-ep.motion[i-1].time;
+  const auto displacement=ep.motion.back().position-ep.motion.front().position;
+  const bool stalled=elapsed-ep.motion.front().time>=3000 && commanded>=1500 &&
+                     std::hypot(displacement.x,displacement.z)<50.f;
+  if(stalled && !ep.blocked) {
+    ep.blocked=true;ep.blockedSince=std::max(ep.motion.front().time,ep.blockedUntil);++ep.blockedSpans;
+  }
+  else if(!stalled)closeBlocked(elapsed);
+}
 void finish(World& world) {
   const auto elapsed=world.tickCount()-ep.began;
+  closeBlocked(elapsed);
   trajectory(elapsed);
   if(!ep.replay) {NpcKeys::KeyState end;end.walk=true;action(elapsed,end);ep.writer->finish();}
   ep.trajectory.close();ep.actions.close();
   auto out=file("episode.json");
   const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-ep.wallStart).count();
-  out<<"{\"success\":"<<ep.success<<",\"replay\":"<<ep.replay<<",\"start\":"<<std::quoted(ep.from)
+  out<<"{\"success\":"<<ep.success<<",\"replay\":"<<ep.replay<<",\"drive\":"<<ep.drive<<",\"start\":"<<std::quoted(ep.from)
      <<",\"goal\":"<<std::quoted(ep.to)<<",\"elapsed_ms\":"<<elapsed<<",\"limit_ms\":"<<ep.limit
      <<",\"distance_cm\":"<<(ep.npc->position()-ep.goal).length()<<",\"failure\":"<<std::quoted(ep.failure)
      <<",\"decisions\":"<<ep.decisions<<",\"record_us_mean\":"<<(ep.decisions?ep.writeUs/double(ep.decisions):0)
@@ -86,6 +128,31 @@ void finish(World& world) {
      <<",\"final_position\":";vector(out,NpcKeys::physicalPosition(*ep.npc));
   out<<",\"target_position\":";vector(out,ep.goal);
   out<<",\"next_corner\":";vector(out,ep.path.corners.empty()?ep.goal:cm(ep.path.corners.back()));
+  if(ep.drive) {
+    out<<",\"policy_population\":"<<ep.policyStates.size()
+       <<",\"policy_warmup_decisions\":"<<std::min(ep.decisions,PolicyWarmupDecisions)
+       <<",\"policy_measured_calls\":"<<ep.policyUs.size()
+       <<",\"population_measured_ticks\":"<<ep.populationUs.size()
+       <<",\"policy_us_median\":"<<percentile(ep.policyUs,.5)
+       <<",\"policy_us_p95\":"<<percentile(ep.policyUs,.95)
+       <<",\"encode_us_median\":"<<percentile(ep.encodeUs,.5)
+       <<",\"encode_us_p95\":"<<percentile(ep.encodeUs,.95)
+       <<",\"population_us_median\":"<<percentile(ep.populationUs,.5)
+       <<",\"population_us_p95\":"<<percentile(ep.populationUs,.95)
+       <<",\"blocked_spans\":"<<ep.blockedSpans<<",\"blocked_ms\":"<<ep.blockedMs
+       <<",\"max_blocked_ms\":"<<ep.maxBlockedMs<<",\"disagreement_counts\":{";
+    constexpr const char* heads[]={"forward","strafe","turn","walk","jump","climb"};
+    for(size_t i=0;i<ep.disagreements.size();++i) {
+      if(i)out<<',';
+      out<<std::quoted(heads[i])<<':'<<ep.disagreements[i];
+    }
+    out<<"},\"disagreement_rates\":{";
+    for(size_t i=0;i<ep.disagreements.size();++i) {
+      if(i)out<<',';
+      out<<std::quoted(heads[i])<<':'<<(ep.decisions?double(ep.disagreements[i])/double(ep.decisions):0);
+    }
+    out<<'}';
+  }
   out<<",\"eye_layout\":[";
   for(size_t i=0;i<ep.eye.samples().size();++i) {
     if(i)out<<',';
@@ -149,6 +216,7 @@ void decide(World& w) {
     if(a.time!=elapsed)throw std::runtime_error("navdemos replay clock mismatch");
     NpcKeys::set(n,a.keys,1000);ep.previous=a.keys;++ep.decisions;return;
   }
+  if(ep.drive)measureBlocked(elapsed);
   NavKeyTeacher::State body;
   body.position=meters(n.position());body.velocity=meters(ep.velocity);body.yawDegrees=n.rotation();
   body.inAir=n.isInAir();body.falling=n.isFalling();body.sliding=n.isSlide();
@@ -188,11 +256,31 @@ void decide(World& w) {
     hint=NavKeyTeacher::decide(body,meshPath,meters(ep.goal)).hint;
   }
   sample.teacherCorner=array(cm(hint.nextCorner));sample.teacherPathCm=hint.remainingLength*100;
+  auto executed=d.keys;
+  if(ep.drive) {
+    // Encoding reads only learner fields. The very same snapshot is written below with
+    // the teacher's label, while previous keeps the action that the student actually held.
+    const bool measure=ep.decisions>=PolicyWarmupDecisions;
+    const auto populationStart=std::chrono::steady_clock::now();
+    const auto features=NavPolicy::encode(sample);
+    if(measure)ep.encodeUs.push_back(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-populationStart).count());
+    for(size_t i=0;i<ep.policyStates.size();++i) {
+      const auto began=std::chrono::steady_clock::now();
+      const auto result=ep.policy->step(features,ep.policyStates[i]);
+      if(measure)ep.policyUs.push_back(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-began).count());
+      if(i==0)executed=result.keys;
+    }
+    if(measure)ep.populationUs.push_back(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-populationStart).count());
+    executed.headYaw=0;executed.headPitch=0;
+    const std::array<bool,6> disagree={executed.forward!=d.keys.forward,executed.strafe!=d.keys.strafe,
+      executed.turn!=d.keys.turn,executed.walk!=d.keys.walk,executed.jump!=d.keys.jump,executed.climb!=d.keys.climb};
+    for(size_t i=0;i<disagree.size();++i)ep.disagreements[i]+=disagree[i];
+  }
   const double cost=ep.writer->append(sample);ep.writeUs+=cost;ep.maxWriteUs=std::max(ep.maxWriteUs,cost);
-  action(elapsed,d.keys);NpcKeys::set(n,d.keys,1000);ep.previous=d.keys;++ep.decisions;
+  action(elapsed,executed);NpcKeys::set(n,executed,1000);ep.previous=executed;++ep.decisions;
   if(d.hint.remainingLength*100+20<ep.best) {ep.best=d.hint.remainingLength*100;ep.progressAt=w.tickCount();}
   if(!d.pathValid)ep.failure="no_path:"+ep.path.reason;
-  else if(w.tickCount()-ep.progressAt>=3000)ep.failure="body_blocked";
+  else if(ep.drive?ep.blocked:w.tickCount()-ep.progressAt>=3000)ep.failure="body_blocked";
   else ep.failure.clear();
 }
 }
@@ -202,21 +290,37 @@ void NavDemos::reset() {ep=Episode{};}
 void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,const std::string& output) {
   if(a.size()==2 && a[1]=="wait")return;
   const bool replay=a.size()==6 && a[1]=="replay";
-  if(!replay && !((a.size()==6 || a.size()==8 || a.size()==9) && a[1]=="start"))
-    throw std::runtime_error("navdemos start NPC FROM TO LIMIT [lateral_cm yaw_deg fraction] | replay NPC FROM TO ACTIONS");
+  const bool drive=a.size()==7 && a[1]=="drive";
+  const bool current=a.size()==6 && a[1]=="drive-current";
+  const bool speed=a.size()==8 && a[1]=="speed";
+  const bool learner=drive || current || speed;
+  if(!replay && !learner && !((a.size()==6 || a.size()==8 || a.size()==9) && a[1]=="start"))
+    throw std::runtime_error("navdemos start NPC FROM TO LIMIT [lateral_cm yaw_deg fraction] | replay NPC FROM TO ACTIONS | drive NPC FROM TO LIMIT WEIGHTS | drive-current NPC GOAL LIMIT WEIGHTS | speed NPC FROM TO LIMIT WEIGHTS POPULATION");
   if(ep.active)throw std::runtime_error("navdemos already active");
-  const auto* from=w.findPoint(a[3],false);const auto* to=w.findPoint(a[4],false);
+  const auto* from=current?nullptr:w.findPoint(a[3],false);const auto* to=w.findPoint(a[current?3:4],false);
   auto* npc=w.findNpcByInstance(w.script().findSymbolIndex(a[2]));
-  if(!from || !to || !npc)throw std::runtime_error("navdemos missing NPC/waypoint");
-  ep=Episode{};ep.npc=npc;ep.from=a[3];ep.to=a[4];ep.output=output;ep.goal=to->groundPos;ep.replay=replay;
+  if((!from && !current) || !to || !npc)throw std::runtime_error("navdemos missing NPC/waypoint");
+  ep=Episode{};ep.npc=npc;ep.from=current?"intentional":a[3];ep.to=a[current?3:4];ep.output=output;
+  ep.goal=to->groundPos;ep.replay=replay;ep.drive=learner;
   // Optional start arguments begin at 6.
-  ep.limit=replay?0:std::stoull(a[5]);
+  ep.limit=replay?0:std::stoull(a[current?4:5]);
+  if(learner) {
+    const auto population=speed?std::stoul(a[7]):1;
+    if(population==0 || population>1000)throw std::runtime_error("navdemos invalid policy population");
+    ep.policy=std::make_unique<NavPolicy>(a[current?5:6]);
+    ep.policyStates.resize(population);
+    ep.policyUs.reserve(size_t((ep.limit+99)/100)*population);
+    ep.encodeUs.reserve(size_t((ep.limit+99)/100));
+    ep.populationUs.reserve(size_t((ep.limit+99)/100));
+  }
   npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->clearSpeed();
-  npc->setExternalControl(true);npc->clearGoTo();npc->setPosition(from->groundPos);npc->updateTransform();
+  npc->setExternalControl(true);npc->clearGoTo();
+  if(!current) {npc->setPosition(from->groundPos);npc->updateTransform();}
   // Keyboard episodes must not inherit a native route's waypoint from the save.
   npc->attachToPoint(nullptr);
-  npc->setDirection(ep.goal-npc->position());npc->setWalkMode(WalkBit::WM_Walk);
-  if(!replay && a.size()>6) {
+  if(!current)npc->setDirection(ep.goal-npc->position());
+  npc->setWalkMode(WalkBit::WM_Walk);
+  if(!replay && !learner && a.size()>6) {
     const auto path=NavBench::navigationMesh(w).findPath(meters(from->groundPos),meters(ep.goal));
     if(!path.complete || path.corners.size()<2) {
       auto out=file("episode.json");
@@ -241,7 +345,7 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     point=floor.v;
     npc->setPosition(point);npc->updateTransform();npc->setDirection(std::stof(a[7]));
   }
-  player.setPosition(npc->position()+Vec3(0,0,500));player.updateTransform();
+  if(!current) {player.setPosition(npc->position()+Vec3(0,0,500));player.updateTransform();}
   NpcKeys::enable(*npc,true);ep.previousPosition=NpcKeys::physicalPosition(*npc);
   ep.began=ep.next=ep.progressAt=w.tickCount();ep.active=true;ep.wallStart=std::chrono::steady_clock::now();
   ep.trajectory=file("trajectory.txt");
