@@ -94,7 +94,7 @@ update() {
     tail -1 "$log" | cut -c1-500
     return "$result"
   else
-    "${cmd[@]}" 2>&1 | tail -1 | cut -c1-500
+    locked "${cmd[@]}" 2>&1 | tail -1 | cut -c1-500
   fi
 }
 evaluate() {  # policy, iteration directory
