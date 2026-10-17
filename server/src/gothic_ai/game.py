@@ -291,6 +291,8 @@ class GameLink:
             lease = self.body_leases.get(row.entity_id)
             if lease is not None and (
                 row.observation_seq > lease.acquired_observation_seq and
+                # Buffered pre-acquire snapshots can arrive after the receipt.
+                row.control_generation != 0 and
                 lease.control_generation != row.control_generation
             ):
                 self.body_leases.pop(row.entity_id, None)

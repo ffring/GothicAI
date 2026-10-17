@@ -381,6 +381,32 @@ async def test_acquire_then_reset_on_first_owned_periodic_row_and_exact_wire_act
         }
 
 
+async def test_pre_acquire_snapshot_delivered_after_acquire_keeps_lease_and_waits_for_owned_row():
+    async with running() as rig:
+        await rig.acquire()
+        lease = rig.link.body_leases[1]
+        # The bridge replies to acquire before flushing observations from the previous tick.
+        passive = fighter(3)
+        assert passive["control_generation"] == 0
+        assert passive["observation_seq"] > lease.acquired_observation_seq
+        rig.bridge.emit(passive)
+        await eventually(lambda: not rig.pilot._rows)
+        assert rig.link.body_leases == {1: lease}
+        assert rig.pilot.lease == lease
+        assert not rig.policy.requests
+        assert not rig.bridge.commands("body_release")
+
+        own = fighter(4, owned=True)
+        rig.bridge.emit(own)
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert [request["cmd"] for request in rig.policy.requests] == ["reset", "step"]
+        assert rig.policy.commands("reset")[0]["initial_game_ms"] == own["t_game_ms"]
+        assert rig.policy.commands("step")[0]["observation"] == own
+        assert rig.bridge.commands("body_action")[0]["observation_seq"] == 4
+        assert rig.link.body_leases == {1: lease}
+        assert not rig.bridge.commands("body_release")
+
+
 @pytest.mark.parametrize("player_near", [False, True])
 async def test_native_attack_roster_starts_episode_without_hero_combat_events(player_near):
     async with running() as rig:
@@ -700,7 +726,7 @@ async def test_native_ownership_or_dialogue_takeover_ends_episode(takeover):
         if takeover == "native_restored":
             rig.link._dispatch(events(event(1, reason="native_restored", owner="native")))
         elif takeover == "lease_lost":
-            rig.bridge.emit(fighter(4))
+            rig.bridge.emit(fighter(4, owned=True, control_generation=8))
         elif takeover == "attached":
             rig.link._dispatch(Attached(type="attached", npc="NPC", name="Fighter"))
         elif takeover == "dialog":

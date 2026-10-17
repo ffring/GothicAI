@@ -180,6 +180,8 @@ async def test_authority_is_not_cleared_by_pending_release_or_old_passive_snapsh
     link._dispatch(message(packet(controlled(control_allowed=False, can_decide=False))))
     assert link.body_leases[1] == lease
     link._dispatch(message(packet(observation(3))))
+    assert link.body_leases[1] == lease
+    link._dispatch(message(packet(controlled(4, control_generation=8))))
     assert not link.body_leases
 
 
