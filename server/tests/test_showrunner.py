@@ -1126,10 +1126,13 @@ async def test_run_logs_unexpected_failure_records_the_occasion_and_continues(
         [failed] = w.chronicle.facts("line_failed")
         assert failed["occasion"] == first and "RuntimeError: broken" in failed["why"][0]
         assert any(record.exc_info and "showrunner" in record.message for record in caplog.records)
-        assert any(f.get("occasion") == second for f in w.chronicle.facts())
         if stage == "builder":
             assert failed["characters"] == [OWN] and failed["quests"] == ["DIR_Q1"]
             assert w.showrunner.budget(1, occasion()).people_left == MAX_PEOPLE_PER_CHAPTER - 1
+            assert w.showrunner.occasions.pending == [second]
+            assert w.chronicle.facts("line_skipped") == []
+        else:
+            assert any(f.get("occasion") == second for f in w.chronicle.facts())
 
 
 async def test_run_marks_an_unexpected_handoff_failure_and_takes_the_next_occasion(
