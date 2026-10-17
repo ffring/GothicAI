@@ -216,6 +216,7 @@ def test_measurement_reports_silence_short_audio_and_empty_windows_as_unavailabl
     silent = ["-f", "lavfi", "-i", "anullsrc=sample_rate=48000:channel_layout=mono:duration=1"]
     short = ["-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:duration=0.1"]
     assert levels.measure(silent, "[0:a]anull[track]", "track") == -math.inf
+    assert levels.measure(silent, "[0:a]anull[track]", "track", meter_gain_db=20) == -math.inf
     assert levels.measure(short, "[0:a]anull[track]", "track") == -math.inf
     assert _tone_level(tone_inputs, windows=[]) == -math.inf
 
@@ -290,9 +291,10 @@ def test_calibration_keeps_game_pauses_that_are_quiet_enough(tmp_path, tone_inpu
     assert calibrated.measure("game", pauses) == pytest.approx(original.measure("game", pauses), abs=0.5)
 
 
-def test_calibration_lowers_music_below_quiet_effects(tmp_path, tone_inputs):
+@pytest.mark.parametrize("game_gain", [-32, -45])
+def test_calibration_lowers_music_below_quiet_effects(tmp_path, tone_inputs, game_gain):
     paths = {}
-    for track, gain, duration in [("game", -32, 12), ("music", 0, 12), ("voice", -12, 4)]:
+    for track, gain, duration in [("game", game_gain, 12), ("music", 0, 12), ("voice", -12, 4)]:
         paths[track] = tmp_path / f"{track}.wav"
         subprocess.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", *tone_inputs, "-t", str(duration),
@@ -305,13 +307,21 @@ def test_calibration_lowers_music_below_quiet_effects(tmp_path, tone_inputs):
     )
     assert report["ok"] is True
     assert report["game_gain_db"] == 0
+    meter_gain = report["master_gain_db"]
     voice = calibrated.measure("voice")
-    game = calibrated.measure("game", pauses)
-    music = calibrated.measure("music", pauses)
+    game = calibrated.measure("game", pauses, meter_gain_db=meter_gain)
+    music = calibrated.measure("music", pauses, meter_gain_db=meter_gain)
+    music_speech = calibrated.measure("music", speech, meter_gain_db=meter_gain)
     assert game - 3 < voice - 14
     assert music == pytest.approx(min(voice - 14, game - 3), abs=0.5)
-    assert calibrated.measure("music", speech) == pytest.approx(music - 6, abs=levels.LEVEL_TOLERANCE_LU)
+    assert music_speech == pytest.approx(music - 6, abs=levels.LEVEL_TOLERANCE_LU)
     assert _rows(report)["music_below_game"]["ok"] is True
+    if game_gain == -45:
+        # This stem crosses R128's absolute gate only after the shared mastering gain.
+        assert calibrated.measure("music", speech) == -math.inf
+        assert music_speech < -70 < music_speech + meter_gain
+        assert _rows(report)["music_speech"]["measured_lufs"] == music_speech
+        assert _rows(report)["music_speech"]["ok"] is True
 
 
 def test_calibration_brings_a_loud_ending_to_voice_minus_three(tmp_path, tone_inputs):

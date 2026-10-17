@@ -107,12 +107,14 @@ def body_gain_filter(gain_db: float, total: float, ending_gain_db: float = 0.0) 
 
 
 def measure(inputs: list[str], graph: str, output: str,
-            windows: list[Window] | None = None) -> float:
+            windows: list[Window] | None = None, *, meter_gain_db: float = 0.0) -> float:
     """EBU R128 integrated LUFS after exact sample trims, before any mastering.
 
     Other outputs of graph must already be consumed. Disjoint windows are joined
     without artificial silence. Empty/silent selections return -inf; selections
     shorter than an R128 block are rejected rather than silently passing a check.
+    Metering after the common mastering gain keeps audible quiet stems above the
+    absolute R128 gate; subtract that gain to report their pre-master levels.
     """
     if windows is not None:
         if not windows:
@@ -127,7 +129,8 @@ def measure(inputs: list[str], graph: str, output: str,
         graph += ";" + "".join(f"[level_piece{i}]" for i in range(len(windows)))
         graph += f"concat=n={len(windows)}:v=0:a=1[level_selection]"
         output = "level_selection"
-    graph += f";[{output}]ebur128=peak=true[level_meter]"
+    meter_gain = f"volume={meter_gain_db:.9f}dB," if meter_gain_db else ""
+    graph += f";[{output}]{meter_gain}ebur128=peak=true[level_meter]"
     result = subprocess.run(
         ["ffmpeg", "-hide_banner", "-nostats", *inputs, "-filter_complex", graph,
          "-map", "[level_meter]", "-vn", "-f", "null", "-"],
@@ -137,7 +140,7 @@ def measure(inputs: list[str], graph: str, output: str,
     if not readings:
         raise ValueError("ffmpeg did not return an EBU R128 integrated loudness")
     value = float(readings[-1])
-    return value if value > -70 and math.isfinite(value) else -math.inf
+    return value - meter_gain_db if value > -70 and math.isfinite(value) else -math.inf
 
 
 def music_target(speech_lufs: float, game_pause_lufs: float | None = None) -> float:
@@ -256,9 +259,11 @@ class AudioGraph:
     filters: list[str]
     tracks: dict[str, str]
 
-    def measure(self, track: str, windows: list[Window] | None = None) -> float:
+    def measure(self, track: str, windows: list[Window] | None = None, *,
+                meter_gain_db: float = 0.0) -> float:
         graph = self.filters + [f"[{label}]anullsink" for key, label in self.tracks.items() if key != track]
-        return measure(self.inputs, ";".join(graph), self.tracks[track], windows)
+        return measure(self.inputs, ";".join(graph), self.tracks[track], windows,
+                       meter_gain_db=meter_gain_db)
 
     def stem(self, track: str) -> str:
         return ";".join(self.filters + [f"[{label}]anullsink" for key, label in self.tracks.items()
@@ -323,10 +328,12 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
     s = raw.measure("voice")
     if not math.isfinite(s):
         raise ValueError("The voice track has no measurable EBU R128 loudness")
+    meter_gain = master_gain(s)
     ending_windows = [(total, length)] if length > total else []
-    ending = raw.measure("game", ending_windows) if ending_windows else -math.inf
+    ending = (raw.measure("game", ending_windows, meter_gain_db=meter_gain)
+              if ending_windows else -math.inf)
     ending_gain = s - ENDING_BELOW_VOICE_LU - ending if math.isfinite(ending) else 0.0
-    game_pause = raw.measure("game", pauses) if pauses else -math.inf
+    game_pause = raw.measure("game", pauses, meter_gain_db=meter_gain) if pauses else -math.inf
     game_gain = min(0.0, s - GAME_PAUSE_BELOW_VOICE_LU - game_pause) if math.isfinite(game_pause) else 0.0
     if game_gain < 0:
         game_gain -= METER_RESOLUTION_LU
@@ -334,25 +341,27 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
         ending_gain = game_gain
     game = audio_graph(joined, None, voice, speech, total, length,
                        game_gain_db=game_gain, ending_gain_db=ending_gain)
-    game_speech = game.measure("game", speech)
+    game_speech = game.measure("game", speech, meter_gain_db=meter_gain)
     game_db = max(0.0, game_speech - (s - GAME_BELOW_VOICE_LU))
     if game_db > 0:
         game_db += METER_RESOLUTION_LU
     game = audio_graph(joined, None, voice, speech, total, length,
                        game_gain_db=game_gain, game_duck_db=game_db, ending_gain_db=ending_gain)
-    game_pause = game.measure("game", pauses) if pauses else None
-    music_pause = raw.measure("music", pauses if pauses else None) if music is not None else None
+    game_pause = game.measure("game", pauses, meter_gain_db=meter_gain) if pauses else None
+    music_pause = (raw.measure("music", pauses if pauses else None, meter_gain_db=meter_gain)
+                   if music is not None else None)
     music_db = music_gain(s, music_pause, game_pause) if music_pause is not None else 0.0
     final = audio_graph(joined, music, voice, speech, total, length,
                         music_gain_db=music_db, game_gain_db=game_gain, game_duck_db=game_db,
                         ending_gain_db=ending_gain)
     report = check_balance(
-        s, final.measure("music", pauses) if music is not None and pauses else None,
-        final.measure("music", speech) if music is not None else None,
-        final.measure("game", speech), game_pause,
-        final.measure("game", ending_windows) if ending_windows else None,
+        s, final.measure("music", pauses, meter_gain_db=meter_gain)
+        if music is not None and pauses else None,
+        final.measure("music", speech, meter_gain_db=meter_gain) if music is not None else None,
+        final.measure("game", speech, meter_gain_db=meter_gain), game_pause,
+        final.measure("game", ending_windows, meter_gain_db=meter_gain) if ending_windows else None,
     )
-    report.update({"speech_lufs": s, "master_gain_db": master_gain(s),
+    report.update({"speech_lufs": s, "master_gain_db": meter_gain,
                    "music_gain_db": _finite(music_db), "game_gain_db": game_gain, "game_duck_db": game_db,
                    "ending_gain_db": ending_gain, "speech_windows": speech, "pause_windows": pauses})
     return final, report
