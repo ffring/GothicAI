@@ -130,17 +130,20 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
             raise ValueError("Voiced mastering needs the calibrated stems and balance report")
         with tempfile.TemporaryDirectory(dir=out.parent) as pending:
             candidate = Path(pending) / out.name
-            voice = Path(pending) / "voice.m4a"
+            stems = {track: Path(pending) / f"{track}.m4a" for track in audio.tracks}
             gain_correction = 0.0
             report["master_corrections_db"] = []
             for attempt in range(levels.MAX_MASTER_CORRECTIONS + 1):
-                # Both outputs share the actual mix limiter's gain and final fade.
+                # Every stem shares the actual mix limiter's gain and final fade.
                 graph = audio.master_graph(report["speech_lufs"], length, gain_correction_db=gain_correction)
-                run(["ffmpeg", "-y", *inputs, "-filter_complex", graph,
-                     "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
-                     "-b:a", "192k", "-ar", "48000", str(candidate),
-                     "-map", "[voice_mastered]", "-vn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(voice)])
-                voice_lufs, _ = levels.meter_file(voice)
+                command = ["ffmpeg", "-y", *inputs, "-filter_complex", graph,
+                           "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
+                           "-b:a", "192k", "-ar", "48000", str(candidate)]
+                for track, path in stems.items():
+                    command += ["-map", f"[{track}_mastered]", "-vn", "-c:a", "aac",
+                                "-b:a", "192k", "-ar", "48000", str(path)]
+                run(command)
+                voice_lufs, _ = levels.meter_file(stems["voice"])
                 report["master_passes"] = attempt + 1
                 report["master_gain_db"] = levels.master_gain(report["speech_lufs"]) + gain_correction
                 correction = levels.master_correction(voice_lufs)
@@ -149,6 +152,11 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
                 gain_correction += correction
                 report["master_corrections_db"].append(correction)
             _, peak = levels.meter_file(candidate)
+            balance = levels.check_mastered_balance(stems, voice_lufs, report["speech_windows"],
+                                                    report["pause_windows"], report["ending_windows"])
+            report["pre_master_rows"] = report["rows"]
+            report.update(balance)
+            report["balance_stage"] = "mastered_aac"
             levels.check_mastering(report, voice_lufs, peak, clicks.detect(candidate))
             if not report["ok"]:
                 raise ValueError("Audio mastering check failed; the short was not published")

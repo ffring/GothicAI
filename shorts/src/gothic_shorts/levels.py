@@ -242,6 +242,18 @@ def check_mastering(report: dict, voice_lufs: float, true_peak_dbtp: float,
     report["ok"] = all(row["ok"] is not False for row in report["rows"])
 
 
+def check_mastered_balance(stems: dict[str, Path], speech_lufs: float,
+                           speech: list[Window], pauses: list[Window], ending: list[Window]) -> dict:
+    """Validate decoded AAC stems under the actual mix limiter, using the final voice as S."""
+    def reading(track: str, windows: list[Window]) -> float | None:
+        if track not in stems or not windows:
+            return None
+        return measure(["-i", str(stems[track])], "[0:a]anull[stem]", "stem", windows)
+
+    return check_balance(speech_lufs, reading("music", pauses), reading("music", speech),
+                         reading("game", speech), reading("game", pauses), reading("game", ending))
+
+
 def print_balance(report: dict) -> None:
     print(f"{'Track / window':<20} {'Measured':>10} {'Target':>12}  Rule / result")
     for row in report["rows"]:
@@ -302,32 +314,37 @@ class AudioGraph:
         return measure(self.inputs, ";".join(graph), self.tracks[track], windows,
                        meter_gain_db=meter_gain_db)
 
-    def mix(self, *, voice_probe: bool = False) -> str:
+    def mix(self, *, stem_probes: bool = False) -> str:
         filters, tracks = list(self.filters), dict(self.tracks)
-        if voice_probe:
-            filters.append(f"[{tracks['voice']}]asplit=2[master_voice_mix][master_voice_probe]")
-            tracks["voice"] = "master_voice_mix"
+        if stem_probes:
+            for track, label in tracks.items():
+                filters.append(f"[{label}]asplit=2[master_{track}_mix][master_{track}_probe]")
+                tracks[track] = f"master_{track}_mix"
         return ";".join(filters + ["".join(f"[{label}]" for label in tracks.values()) +
                                   f"amix=inputs={len(tracks)}:duration=first:normalize=0"])
 
     def master_graph(self, speech_lufs: float, length: float, *, gain_correction_db: float = 0.0) -> str:
-        """Output stereo [a] and a voice probe under the mix's exact limiting gain.
+        """Output stereo [a] and every stem under the mix's exact limiting gain.
 
         The limiter applies one gain to every channel. Its quiet constant third
         channel reveals that gain, including the final fade, even on silent or
         cancelling samples. Discard the pilot from the published stereo. Delay
-        compensation in master_filter keeps the voice and envelope aligned.
+        compensation in master_filter keeps the stems and envelope aligned.
         """
         processing = master_filter(speech_lufs, length, voice_probe=True,
                                    gain_correction_db=gain_correction_db)
-        return (f"{self.mix(voice_probe=True)},"
-                f"{processing},"
-                "asplit=2[master_mix][master_pilot];"
-                "[master_mix]pan=stereo|c0=c0|c1=c1[a];"
-                f"[master_pilot]pan=stereo|c0=c2|c1=c2,volume={1 / LIMITER_PILOT:g}[master_envelope];"
-                f"[master_voice_probe]volume={master_gain(speech_lufs) + gain_correction_db:.9f}dB"
-                "[master_voice_boosted];"
-                "[master_voice_boosted][master_envelope]amultiply[voice_mastered]")
+        envelopes = "".join(f"[master_{track}_envelope]" for track in self.tracks)
+        graph = [f"{self.mix(stem_probes=True)},{processing},asplit=2[master_mix][master_pilot]",
+                 "[master_mix]pan=stereo|c0=c0|c1=c1[a]",
+                 f"[master_pilot]pan=stereo|c0=c2|c1=c2,volume={1 / LIMITER_PILOT:g},"
+                 f"asplit={len(self.tracks)}{envelopes}"]
+        for track in self.tracks:
+            graph.extend([
+                f"[master_{track}_probe]volume={master_gain(speech_lufs) + gain_correction_db:.9f}dB"
+                f"[master_{track}_boosted]",
+                f"[master_{track}_boosted][master_{track}_envelope]amultiply[{track}_mastered]",
+            ])
+        return ";".join(graph)
 
 
 def audio_graph(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
@@ -419,5 +436,6 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
     )
     report.update({"speech_lufs": s, "master_gain_db": meter_gain,
                    "music_gain_db": _finite(music_db), "game_gain_db": game_gain, "game_duck_db": game_db,
-                   "ending_gain_db": ending_gain, "speech_windows": speech, "pause_windows": pauses})
+                   "ending_gain_db": ending_gain, "speech_windows": speech, "pause_windows": pauses,
+                   "ending_windows": ending_windows})
     return final, report
