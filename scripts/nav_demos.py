@@ -231,6 +231,24 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
             _require(action_times[-1] == elapsed_ms, "terminal action time differs from episode elapsed_ms")
             _require((actions[-1, 1:] == [0, 0, 0, 1, 0, 0, 0, 0]).all(),
                      "terminal action must release movement, jump, climb and head input")
+            # In policy drives NAVDEMO keys remain the teacher's labels, while
+            # actions.txt records what the learner actually applied. The format
+            # and learner_input are unchanged; only action provenance differs.
+            drive = metadata.get("drive", False)
+            applied_keys = np.zeros(len(actions), dtype=KEY_DTYPE)
+            action_fields = ("forward", "strafe", "turn", "walk", "jump", "climb",
+                             "head_yaw_deg", "head_pitch_deg")
+            for column, name in enumerate(action_fields, start=1):
+                if name in ("forward", "strafe", "turn"):
+                    _require(np.isin(actions[:, column], [-1, 0, 1]).all(), f"actions.{name} is not a digital axis")
+                elif name in ("walk", "jump", "climb"):
+                    _require(np.isin(actions[:, column], [0, 1]).all(), f"actions.{name} is not a bit")
+                else:
+                    bound = 180 if name == "head_yaw_deg" else 90
+                    _require((np.abs(actions[:, column]) <= bound).all(), f"actions.{name} outside head limits")
+                    if drive:
+                        _require((actions[:, column] == 0).all(), f"policy actions.{name} must look straight")
+                applied_keys[name] = actions[:, column]
         record_count = 0
         first_ms = last_ms = None
         last_keys = None
@@ -247,11 +265,10 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
                 relative_times = data["time_ms"] - first_ms
                 _require((relative_times == chunk_actions[:, 0]).all(),
                          "record times differ from relative action times")
-                action_fields = ("forward", "strafe", "turn", "walk", "jump", "climb",
-                                 "head_yaw_deg", "head_pitch_deg")
-                for column, name in enumerate(action_fields, start=1):
-                    _require((chunk_actions[:, column].astype(np.float32) == data["keys"][name]).all(),
-                             f"actions.{name} differs from recorded keys")
+                if not drive:
+                    for column, name in enumerate(action_fields, start=1):
+                        _require((chunk_actions[:, column].astype(np.float32) == data["keys"][name]).all(),
+                                 f"actions.{name} differs from recorded keys")
                 if last_ms is not None:
                     _require(int(data["time_ms"][0]) - last_ms == PERIOD_MS, "time gap between chunks")
                     _require(bool(data["previous_keys"][0] == last_keys), "previous keys mismatch between chunks")
@@ -259,9 +276,10 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
                     times = data["time_ms"]
                     _require((times[1:] > times[:-1]).all(), "time is not strictly increasing")
                     _require((np.diff(times) == PERIOD_MS).all(), "decision interval is not 100 ms")
-                    _require((data["previous_keys"][1:] == data["keys"][:-1]).all(), "previous keys mismatch")
+                    prior = applied_keys[record_count:end_record - 1] if drive else data["keys"][:-1]
+                    _require((data["previous_keys"][1:] == prior).all(), "previous keys mismatch")
             last_ms = int(data["time_ms"][-1])
-            last_keys = data["keys"][-1].copy()
+            last_keys = (applied_keys[record_count + len(data) - 1] if validate and drive else data["keys"][-1]).copy()
             last = data[-1]
             last_debug = {
                 "last_teacher_hint": {
