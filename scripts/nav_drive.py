@@ -415,15 +415,18 @@ def plot(args):
                 selected.append(ep)
     if not selected:
         raise ValueError("No teacher/learner trajectory comparisons available")
-    fig, axes = plt.subplots(len(selected), 2, figsize=(12, 3.4 * len(selected)), squeeze=False)
+    fig, axes = plt.subplots(len(selected), 2, figsize=(9, 3.8 * len(selected)), squeeze=False)
     for row, ep in enumerate(selected):
         teacher = trajectory(Path(ep["teacher_episode"]))[:, [1, 3]] / 100
         learner = trajectory(Path(ep["episode"]))[:, [1, 3]] / 100
-        combined = np.concatenate([teacher, learner])
+        target = ep.get("target_position")
+        bounds = [teacher, learner]
+        if target is not None:
+            bounds.append(np.array([[target[0], target[2]]]) / 100)
+        combined = np.concatenate(bounds)
         lo, hi = combined.min(axis=0), combined.max(axis=0)
         center = (lo + hi) / 2
         span = max(float(np.max(hi - lo)), 5) * 1.12
-        target = ep.get("target_position")
         for column, (path, title, color) in enumerate(((teacher, "Teacher", "#278246"), (learner, "Learner", "#bc4a32"))):
             ax = axes[row, column]
             ax.plot(path[:, 0], path[:, 1], color=color, lw=1.6)
