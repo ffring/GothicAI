@@ -142,6 +142,8 @@ class BodyPilot:
         self.people: dict[str, RosterEntry] = {}
         # Repeated attack perceptions belong to the same combat, even after fallback.
         self._claimed_fights: set[str] = set()
+        # Periodic roster updates cannot restart an exhausted acquisition window.
+        self._roster_attempted: set[str] = set()
         self.npc: str | None = None
         self.lease: BodyLease | None = None
         self.client: PolicyClient | None = None
@@ -188,18 +190,30 @@ class BodyPilot:
     def on_message(self, message: GameMessage) -> None:
         if isinstance(message, NpcRoster):
             entries = {entry.id.upper(): entry for entry in message.npcs}
-            self._claimed_fights.difference_update(
+            ended = {
                 npc
                 for npc, entry in entries.items()
                 if entry.activity == "down"
                 or (entry.activity == "routine" and entry.state.upper() not in {"ZS_ATTACK", "ZS_MM_ATTACK"})
-            )
+            }
+            self._claimed_fights.difference_update(ended)
+            self._roster_attempted.difference_update(ended)
             self.people = entries if message.full else {**self.people, **entries}
             if self.npc is not None and not self._allowed(self.npc):
                 self._reason = "npc_unavailable"
+            # A lone hostile NPC can attack a passive hero without any combat
+            # perception reaching the server. A drawn weapon alone is not a fight.
+            for npc, entry in sorted(entries.items(), key=lambda item: item[1].distance):
+                if entry.activity != "fight" or entry.state.upper() != "ZS_ATTACK":
+                    continue
+                if npc == self.npc:
+                    self._roster_attempted.add(npc)
+                elif npc not in self._roster_attempted and self._start(npc):
+                    break
         elif isinstance(message, (Loading, Hello)):
             self.people.clear()
             self._claimed_fights.clear()
+            self._roster_attempted.clear()
             self._reason = "loading" if isinstance(message, Loading) else "session_changed"
         elif isinstance(message, Attached) and message.npc.upper() == self.npc:
             self._reason = "attached"
@@ -223,16 +237,26 @@ class BodyPilot:
                 npc = message.npc.upper()
             elif message.kind == "hero_attacked":
                 npc = message.other.upper()
-            if (
-                npc is not None
-                and npc not in self._claimed_fights
-                and self._allowed(npc)
-                and not self.link.body_leases
-            ):
-                self.npc = npc
-                self._reason = None
-                self._attempt_at = self.clock()
+            if npc is not None:
+                self._start(npc)
         self._wake.set()
+
+    def _start(self, npc: str) -> bool:
+        if (
+            self.npc is not None
+            or self._closing
+            or npc in self._claimed_fights
+            or not self._allowed(npc)
+            or self.link.body_leases
+        ):
+            return False
+        self.npc = npc
+        self._reason = None
+        self._attempt_at = self.clock()
+        entry = self.people[npc]
+        if entry.activity == "fight" and entry.state.upper() == "ZS_ATTACK":
+            self._roster_attempted.add(npc)
+        return True
 
     @staticmethod
     def _identity(lease: BodyLease) -> tuple[int, int, int, int]:

@@ -381,6 +381,51 @@ async def test_acquire_then_reset_on_first_owned_periodic_row_and_exact_wire_act
         }
 
 
+@pytest.mark.parametrize("player_near", [False, True])
+async def test_native_attack_roster_starts_episode_without_hero_combat_events(player_near):
+    async with running() as rig:
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        if player_near:
+            rig.combat(kind="player_near")
+        await eventually(lambda: rig.bridge.commands("body_watch"))
+        assert rig.bridge.commands("body_watch")[0]["npcs"] == ["NPC"]
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.link.body_leases)
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert not rig.policy.requests
+        own = fighter(3, owned=True)
+        rig.bridge.emit(own)
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert [request["cmd"] for request in rig.policy.requests[:2]] == ["reset", "step"]
+        assert rig.policy.commands("step")[0]["observation"] == own
+
+
+async def test_fight_activity_without_native_attack_state_does_not_start_watch():
+    async with running() as rig:
+        rig.roster(activity="fight", state="ZS_WAIT")
+        rig.combat(kind="player_near")
+        rig.bridge.emit(player_row(), fighter())
+        await asyncio.sleep(0.04)
+        assert not rig.bridge.commands("body_watch")
+        assert not rig.bridge.commands("body_acquire")
+        assert not rig.policy.requests
+
+
+async def test_native_attack_roster_needs_the_actual_target_to_be_the_hero():
+    async with running() as rig:
+        rig.bridge.target_is_hero = False
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: rig.bridge.commands("body_watch"))
+        own = fighter()
+        own["target"]["entity_id"] = 8
+        own["goal"]["target_id"] = 8
+        rig.bridge.emit(player_row(), own)
+        await eventually(lambda: len(rig.bridge.commands("story_eval")) == 2)
+        await asyncio.sleep(0.01)
+        assert not rig.bridge.commands("body_acquire")
+        assert not rig.policy.requests
+
+
 async def test_runtime_entity_id_is_bound_from_the_watched_npc_symbol():
     async with running() as rig:
         await rig.active(entity=9)
@@ -555,6 +600,63 @@ async def test_acquire_window_expires_after_five_seconds_and_waits_for_new_comba
         assert "unsafe_boundary" in caplog.text
         rig.combat()
         await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
+
+
+async def test_repeated_native_attack_roster_does_not_restart_exhausted_acquisition():
+    async with running() as rig:
+        rig.bridge.acquire_rejections.append("unsafe_boundary")
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: rig.bridge.commands("body_watch"))
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.commands("body_acquire"))
+        rig.clock.advance(5.01)
+        rig.roster()
+        await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
+        await eventually(lambda: rig.pilot.npc is None)
+        for seq in range(3, 6):
+            rig.roster()
+            rig.bridge.emit(fighter(seq))
+            await asyncio.sleep(0.01)
+        assert len(rig.bridge.commands("body_watch")) == 2
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert not rig.policy.requests
+
+
+async def test_native_attack_roster_starts_after_a_precombat_watch_expires():
+    async with running() as rig:
+        rig.roster(activity="fight", state="ZS_WAIT")
+        rig.combat(kind="weapon_drawn")
+        await eventually(lambda: rig.bridge.commands("body_watch"))
+        rig.clock.advance(5.01)
+        rig.roster(activity="fight", state="ZS_WAIT")
+        await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
+        await eventually(lambda: rig.pilot.npc is None)
+        assert not rig.bridge.commands("body_acquire")
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.link.body_leases)
+        assert len(rig.bridge.commands("body_acquire")) == 1
+
+
+async def test_native_attack_during_a_precombat_watch_is_not_retried_after_exhaustion():
+    async with running() as rig:
+        rig.roster(activity="fight", state="ZS_WAIT")
+        rig.combat(kind="weapon_drawn")
+        await eventually(lambda: rig.bridge.commands("body_watch"))
+        rig.clock.advance(2.0)
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        rig.clock.advance(3.01)
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
+        await eventually(lambda: rig.pilot.npc is None)
+        for seq in range(2, 5):
+            rig.roster(activity="fight", state="ZS_ATTACK")
+            rig.bridge.emit(fighter(seq))
+            await asyncio.sleep(0.01)
+        assert len(rig.bridge.commands("body_watch")) == 2
+        assert not rig.bridge.commands("body_acquire")
+        assert not rig.policy.requests
 
 
 @pytest.mark.parametrize("change", [
@@ -756,6 +858,37 @@ async def test_native_remainder_of_same_combat_is_not_reacquired(end):
         assert len(rig.bridge.commands("body_acquire")) == 1
         assert len(rig.bridge.commands("body_watch")) == 2
         assert not rig.link.body_leases
+
+
+async def test_repeated_native_attack_roster_does_not_reacquire_after_fallback():
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_mode = "fallback"
+        rig.bridge.emit(fighter(4, owned=True))
+        await rig.ended()
+        await eventually(lambda: rig.pilot.npc is None)
+        for seq in range(5, 8):
+            rig.roster()
+            rig.bridge.emit(fighter(seq))
+            await asyncio.sleep(0.01)
+        assert len(rig.bridge.commands("body_watch")) == 2
+        assert len(rig.bridge.commands("body_acquire")) == 1
+
+
+@pytest.mark.parametrize("activity,state", [("routine", "ZS_SIT_BENCH"), ("down", "ZS_UNCONSCIOUS")])
+async def test_new_native_attack_roster_rearms_after_the_previous_fight_ends(activity, state):
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_mode = "fallback"
+        rig.bridge.emit(fighter(4, owned=True))
+        await rig.ended()
+        await eventually(lambda: rig.pilot.npc is None)
+        rig.roster(activity=activity, state=state)
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
+        rig.bridge.emit(fighter(5))
+        await eventually(lambda: len(rig.bridge.commands("body_acquire")) == 2)
+        assert rig.link.body_leases
 
 
 async def test_fallback_npc_can_be_acquired_in_a_new_combat_after_returning_to_routine():
