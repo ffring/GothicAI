@@ -1,6 +1,6 @@
 """The end sting of a short: a letter on the desk, the name GOTHIC AI written in ink from left to right, the red
-wax seal with the raven pressed onto it — the frame jolts at the press, the game's diary-entry sound starts there —
-and the candle flickers to the end. 1080×1920, 30 fps, 2.2 s, -14 LUFS of its own sound.
+wax seal with the G of that lettering pressed onto it — the frame jolts at the press, the game's diary-entry sound
+starts there — and the candle flickers to the end. 1080×1920, 30 fps, 2.2 s, -14 LUFS of its own sound.
 
 The pictures and the sound are not in the repository (generated art and a sound of the game): they live in
 ~/.local/share/gothic-ai/brand/sting/ — bg.png (the blank letter, top-down), seal-green.png (the seal on chroma

@@ -139,7 +139,7 @@ over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break 
   Such a plan (its script, the voice files) stays outside the repository, in the explainer's workspace: give its
   path as the third argument, the short goes into that folder's `render/`:
   `uv run --project shorts python shorts/compare/cut.py hits ru ~/.local/share/gothic-ai/explain/hits/plan.json`.
-- The channel's brand, on by default: its wax seal with the raven in the top right corner all through, and its
+- The channel's brand, on by default: its wax seal with the G in the top right corner all through, and its
   end sting after the last beat (below); every text of the cut — labels, titles, captions, the hook — in PT Serif
   Bold (ParaType, OFL, ships with macOS: Cyrillic, bookish like the channel's letters) on warm dark bands. The
   shorts published before it (`bodies`, `archery`, `hits`) say `"brand": false` and cut as they went out: Arial
@@ -151,7 +151,7 @@ over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break 
 ### The brand: the seal and the end sting
 
 `shorts/brand/sting.py` renders the end sting, 2.2 s of 1080×1920: a letter on the desk at night, GOTHIC AI written
-in ink from left to right, the red wax seal with the raven pressed on (the frame jolts) to the game's diary-entry
+in ink from left to right, the red wax seal with the G of that lettering pressed on (the frame jolts) to the game's diary-entry
 sound, the candle flickering; and `seal-corner.png`, the seal for the corner. Its pictures and sound are not in
 the repository (generated art, a sound of the game): `~/.local/share/gothic-ai/brand/sting/` holds `bg.png` (the
 blank letter, top-down), `seal-green.png` (the seal on chroma green, keyed out), `seal.png` (the seal on parchment),
