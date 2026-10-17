@@ -11,6 +11,7 @@ import math
 import time
 from collections import Counter, deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -125,6 +126,23 @@ def _percentile(values: list[float], fraction: float) -> float | None:
     return sorted(values)[math.ceil(len(values) * fraction) - 1] if values else None
 
 
+@dataclass(frozen=True)
+class FightSummary:
+    """Completed fight and acknowledged cleanup, independent of mutable pilot state."""
+
+    npc: str | None
+    lease: BodyLease | None
+    reason: str
+    decisions: int
+    fallbacks: int
+    service_p50_ms: float | None
+    service_p95_ms: float | None
+    fight_seconds: float | None
+    release_confirmed: bool
+    release_seconds: float | None
+    watch_removed: bool
+
+
 class BodyPilot:
     """Single-owner state machine with a separate wall-clock lease keepalive."""
 
@@ -173,8 +191,14 @@ class BodyPilot:
         self._latencies: list[float] = []
         self._decisions = 0
         self._fallbacks = 0
+        self._last_summary: FightSummary | None = None
         link.listeners.append(self.on_message)
         link.raw_body_listeners.append(self.on_body_packet)
+
+    @property
+    def last_summary(self) -> FightSummary | None:
+        """The last completed cleanup; an active fight never mutates this snapshot."""
+        return self._last_summary
 
     def _allowed(self, npc: str) -> bool:
         entry = self.people.get(npc)
@@ -631,6 +655,10 @@ class BodyPilot:
         npc, client = self.npc, self.client
         if npc is None and self.lease is None and client is None:
             return
+        finish_at = time.monotonic()
+        fight_seconds = self.clock() - self._fight_at if self.lease is not None else None
+        release_confirmed = watch_removed = False
+        release_seconds = None
         self._watch_ready = False
         unconfirmed = "acquire_status" if self._pending_acquire is not None else "body_release"
         lease = self.lease
@@ -674,6 +702,14 @@ class BodyPilot:
                     async with asyncio.timeout(BRIDGE_TIMEOUT):
                         await self._finish_status(lease)
         finally:
+            release_confirmed = bool(
+                lease is not None
+                and reason not in {"finish_deadline", "disconnected"}
+                and not self.link.closed.is_set()
+                and self.link.body_leases.get(lease.entity_id) != lease
+            )
+            if release_confirmed:
+                release_seconds = time.monotonic() - finish_at
             if reason == "finish_deadline" and lease is not None:
                 if self.link.body_leases.get(lease.entity_id) == lease:
                     self.link.body_leases.pop(lease.entity_id)
@@ -697,6 +733,20 @@ class BodyPilot:
                 with contextlib.suppress(*BRIDGE_ERRORS):
                     async with asyncio.timeout(BRIDGE_TIMEOUT):
                         await self.link.body_watch([], timeout=BRIDGE_TIMEOUT)
+                        watch_removed = True
+        summary = FightSummary(
+            npc=npc,
+            lease=lease,
+            reason=reason,
+            decisions=self._decisions,
+            fallbacks=self._fallbacks,
+            service_p50_ms=_percentile(self._latencies, 0.50),
+            service_p95_ms=_percentile(self._latencies, 0.95),
+            fight_seconds=fight_seconds,
+            release_confirmed=release_confirmed,
+            release_seconds=release_seconds,
+            watch_removed=watch_removed,
+        )
         log.info(
             "neural-body end npc=%s reason=%s decisions=%d fallback=%d service_p50_ms=%s "
             "service_p95_ms=%s acquire_refusals=%s unconfirmed=%s",
@@ -720,3 +770,4 @@ class BodyPilot:
         self._refusals.clear()
         self._latencies.clear()
         self._decisions = self._fallbacks = 0
+        self._last_summary = summary

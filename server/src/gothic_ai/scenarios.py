@@ -21,6 +21,7 @@ from .authoring import PROPOSE as PROPOSE_QUEST
 from .authoring import Author
 from .beasts import BeastDesk
 from .bodies import Bodies
+from .bodypilot import BodyPilot
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
@@ -972,6 +973,114 @@ async def _m5b_player_weapon(link: GameLink, state: Literal["none", "melee"], *,
         raise GameError(f"m5b player_weapon {state}: not ready within {timeout:g} s") from err
     finally:
         await link.body_watch([], timeout=1)
+
+
+async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, str]:
+    """A real one-handed bandit/hero fight, from native acquisition through confirmed release."""
+    if pilot is None:
+        raise GameError("scenario neural requires GOTHIC_BODY_URL and --neural-body")
+    await link.wait_world()
+    npc = "BDT_1014_BANDIT_L"
+    arena = "NW_XARDAS_TOWER_VALLEY_09"
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object) -> None:
+        results[name] = f"{'done' if ok else 'failed'} ({detail})"
+
+    # Prepare while separated: no scripted opening conversation, wildlife or allies in the duel.
+    await link.debug("skip_important", near=npc)
+    await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+    await link.debug("npc_goto", npc=npc, waypoint=arena)
+    for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
+        if not other.dead and other.guild >= BEASTS:
+            await link.debug("kill", instance=other.id, near=npc)
+    for view in await link.npc_view([npc]):
+        for seen in view.sees:
+            if seen.guild >= BEASTS and seen.body != "dead":
+                await link.debug("kill", instance=seen.id, near=npc)
+    # The passive hero survives enough decisions, then falls to actual melee damage.
+    await link.debug("player_hp", hp=300)
+    await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
+    await _m5b_player_weapon(link, "melee")
+    symbol = (await link.story_eval(npc, [["sym", npc]]))[0]
+    previous = pilot.last_summary
+    leased_entity: int | None = None
+    one_handed = False
+    down_at: float | None = None
+    down_reason: str | None = None
+
+    def observe(packet: dict[str, Any]) -> None:
+        nonlocal leased_entity, one_handed, down_at, down_reason
+        lease = pilot.lease
+        if lease is None or lease.npc != npc:
+            return
+        for row in packet["observations"]:
+            if (
+                row["script_symbol"] != symbol
+                or (row["entity_id"], row["session_epoch"], row["world_epoch"], row["control_generation"])
+                != (lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation)
+                or not row["periodic"]
+            ):
+                continue
+            leased_entity = row["entity_id"]
+            one_handed |= row["self"]["weapon_state"] == 2
+            own, target = row["self"], row["target"]
+            if down_at is None:
+                if own["dead"] or own["unconscious"] or own["down"] or own["hp"] <= 0:
+                    down_reason = "npc_down"
+                elif target["entity_id"] == lease.target_entity_id and (
+                    target["down"] or (target["hp"] is not None and target["hp"] <= 0)
+                ):
+                    down_reason = "hero_down"
+                if down_reason is not None:
+                    down_at = time.monotonic()
+
+    link.raw_body_listeners.append(observe)
+    started = time.monotonic()
+    try:
+        await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
+        await link.debug("teleport", near=npc, distance=250)
+        await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
+        finished = await _until(lambda: pilot.last_summary is not previous, 92)
+        completed_at = time.monotonic()
+    finally:
+        link.raw_body_listeners.remove(observe)
+    summary = pilot.last_summary if finished else None
+    lease = summary.lease if summary else None
+    check(
+        "neural_lease",
+        bool(lease and summary.npc == npc and lease.npc == npc and lease.entity_id == leased_entity
+             and lease.provider == "neural-body" and lease.mode == "realtime" and one_handed),
+        f"npc={npc}, entity={leased_entity}, one_handed={one_handed}, lease={lease}",
+    )
+    check("neural_decisions", summary is not None and summary.decisions >= 10,
+          f"decisions={summary.decisions if summary else None}, minimum=10")
+    check("neural_fallback", summary is not None and summary.fallbacks == 0,
+          f"fallback={summary.fallbacks if summary else None}")
+    duration = down_at - started if down_at is not None else None
+    check(
+        "neural_outcome",
+        bool(summary and summary.reason in {"npc_down", "hero_down"} and summary.reason == down_reason
+             and duration is not None and duration <= 90),
+        f"reason={summary.reason if summary else None}, observed={down_reason}, duration_s={duration}",
+    )
+    # Completion includes policy close and unwatch, so this also bounds the earlier native release.
+    released_in = completed_at - down_at if down_at is not None else None
+    check(
+        "neural_release",
+        bool(summary and summary.release_confirmed and released_in is not None and released_in <= 2),
+        f"confirmed={summary.release_confirmed if summary else False}, after_down_s={released_in}",
+    )
+    p95 = summary.service_p95_ms if summary else None
+    check("neural_service_p95", p95 is not None and p95 <= 20, f"p95_ms={p95}, maximum_ms=20")
+    await asyncio.sleep(0.3)
+    check(
+        "neural_idle",
+        bool(summary and summary.watch_removed and pilot.npc is None and pilot.lease is None
+             and pilot.client is None and not link.body_leases),
+        f"npc={pilot.npc}, lease={pilot.lease}, watch_removed={summary.watch_removed if summary else False}",
+    )
+    return _logged(results)
 
 
 async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, str]:

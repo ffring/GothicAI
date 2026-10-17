@@ -5,6 +5,7 @@ import json
 import socket
 from collections import deque
 from contextlib import asynccontextmanager
+from dataclasses import FrozenInstanceError
 from itertools import pairwise
 
 import pytest
@@ -820,6 +821,45 @@ async def test_npc_down_or_dead_releases_body_and_ends_episode(change):
         await rig.ended()
 
 
+async def test_completed_fight_summary_survives_counter_reset_and_the_next_fight():
+    async with running() as rig:
+        assert rig.pilot.last_summary is None
+        await rig.active()
+        lease = rig.pilot.lease
+        for seq in (4, 5):
+            rig.bridge.emit(fighter(seq, owned=True))
+            await eventually(lambda seq=seq: len(rig.bridge.commands("body_action")) == seq - 2)
+        rig.bridge.emit(fighter(6, owned=True, can_decide=False))
+        await eventually(lambda: len(rig.pilot._latencies) == 4)
+        latencies = sorted(rig.pilot._latencies)
+        rig.clock.advance(0.75)
+        row = fighter(7, owned=True)
+        row["self"]["down"] = True
+        rig.bridge.emit(row)
+        await eventually(lambda: rig.pilot.last_summary is not None)
+
+        summary = rig.pilot.last_summary
+        assert summary.npc == "NPC" and summary.lease == lease
+        assert summary.reason == "npc_down"
+        assert summary.decisions == 3 and summary.fallbacks == 0
+        assert summary.service_p50_ms == latencies[1]
+        assert summary.service_p95_ms == latencies[-1]
+        assert summary.fight_seconds == pytest.approx(0.75)
+        assert summary.release_confirmed
+        assert 0 <= summary.release_seconds < bodypilot.FINISH_TIMEOUT
+        assert summary.watch_removed
+        assert rig.pilot.npc is rig.pilot.lease is rig.pilot.client is None
+        assert not rig.link.body_leases and rig.bridge._watched_npc is None
+        assert not rig.pilot._latencies and rig.pilot._decisions == rig.pilot._fallbacks == 0
+        with pytest.raises(FrozenInstanceError):
+            summary.decisions = 100
+
+        rig.roster(activity="routine", state="ZS_SIT_BENCH")
+        await rig.watch()
+        assert rig.pilot.last_summary is summary
+        assert summary.decisions == 3
+
+
 @pytest.mark.parametrize("change", [
     {"down": True}, {"hp": 0}, {"entity_id": 8},
     {"present": False, "visible": False, "current_valid": False},
@@ -979,6 +1019,10 @@ async def test_unconfirmed_release_hits_finish_deadline_and_closes_episode(monke
         assert not rig.pilot._done.is_set()
         assert "reason=finish_deadline" in caplog.text
         assert "unconfirmed=" in caplog.text
+        summary = rig.pilot.last_summary
+        assert summary.lease == lease and summary.reason == "finish_deadline"
+        assert not summary.release_confirmed and summary.release_seconds is None
+        assert summary.watch_removed
 
 
 async def test_uncertain_acquire_recovery_is_bounded_by_finish_deadline(monkeypatch, caplog):
@@ -1094,6 +1138,11 @@ async def test_watch_timeout_clears_applied_subscription_and_ignores_late_replie
         assert not rig.bridge.commands("body_acquire")
         assert not rig.bridge.commands("body_action")
         assert not rig.policy.requests
+        summary = rig.pilot.last_summary
+        assert summary.reason == "watch_failed" and summary.lease is None
+        assert summary.fight_seconds is None
+        assert not summary.release_confirmed and summary.release_seconds is None
+        assert not summary.watch_removed
 
 
 @pytest.mark.parametrize("mode", ["fallback", "error", "disconnect", "timeout"])

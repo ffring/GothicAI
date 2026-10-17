@@ -676,6 +676,9 @@ def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -
 
 
 async def serve(args: argparse.Namespace) -> int:
+    if args.scenario == "neural" and (not args.body_url or not args.neural_body):
+        log.error("scenario neural requires GOTHIC_BODY_URL (or --body-url) and --neural-body")
+        return 2
     done = asyncio.Event()
     exit_code = 0
     state = ServerState()
@@ -1130,7 +1133,7 @@ async def serve(args: argparse.Namespace) -> int:
         bodypilot = _start_bodypilot(args, link, state.talk)
         body_task = asyncio.create_task(bodypilot.run()) if bodypilot is not None else None
         try:
-            await _run_scenario(link)
+            await _run_scenario(link, bodypilot)
             await link.closed.wait()  # the session lives while the game is connected
         finally:
             if bodypilot is not None:
@@ -1151,12 +1154,17 @@ async def serve(args: argparse.Namespace) -> int:
             if brain is not None:
                 brain.cancel()
 
-    async def _run_scenario(link: GameLink) -> None:
+    async def _run_scenario(link: GameLink, bodypilot: BodyPilot | None) -> None:
         nonlocal exit_code
         if args.scenario is None:
             return
         try:
-            if args.scenario == "m0":
+            if args.scenario == "neural":
+                results = await scenarios.neural_scenario(link, bodypilot)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario neural: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "m0":
                 steps = await scenarios.m0_smoke(link, args.npc)
                 failed = [s for s in steps if s.result.status in ("failed", "timeout")]
                 log.info("scenario m0: %d steps, %d failed", len(steps), len(failed))
@@ -2156,6 +2164,7 @@ def main() -> None:
             "m4",
             "m5",
             "m5b",
+            "neural",
             "m5c",
             "m5e",
             "orders",
