@@ -151,8 +151,8 @@ over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break 
 ### The brand: the seal and the end sting
 
 `shorts/brand/sting.py` renders the end sting, 2.2 s of 1080×1920: a letter on the desk at night, GOTHIC AI written
-in ink from left to right, the red wax seal with the G of that lettering pressed on (the frame jolts) to the game's diary-entry
-sound, the candle flickering; and `seal-corner.png`, the seal for the corner. Its pictures and sound are not in
+in ink from left to right, the red wax seal with the G of that lettering pressed on (the frame jolts) to the game's
+diary-entry sound, the candle flickering; and `seal-corner.png`, the seal for the corner. Its pictures and sound are not in
 the repository (generated art, a sound of the game): `~/.local/share/gothic-ai/brand/sting/` holds `bg.png` (the
 blank letter, top-down), `seal-green.png` (the seal on chroma green, keyed out), `seal.png` (the seal on parchment),
 `lettering.png` (the name, traced once from a generated pen master, so it never changes) and `LOGENTRY.WAV`
