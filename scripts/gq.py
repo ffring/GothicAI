@@ -41,6 +41,9 @@ TERMINAL = {"done", "cancelled", "timeout", "failed"}
 ACTIVE = {"starting", "running"}
 SCRIPT = str(Path(__file__).resolve())
 POLL = 0.25
+QUEUED_POLL = 1
+RECONCILE_INTERVAL = 5
+RETENTION = 24 * 3600
 
 
 class QueueError(Exception):
@@ -169,7 +172,34 @@ class Queue:
         for job in self.jobs():
             if job["id"] == job_id:
                 return job
+        archived = None
+        for record in self.history():
+            if record.get("event") == "finished" and record.get("id") == job_id:
+                archived = dict(record, status=record["reason"], end=record["time"])
+        if archived is not None:
+            return archived
         raise QueueError(f"нет заявки {job_id}")
+
+    def history(self):
+        path = self.home / "journal.jsonl"
+        if path.exists():
+            with path.open(encoding="utf-8") as source:
+                for line in source:
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+    def claim_reconcile(self):
+        with self.transaction() as state:
+            now = self.now()
+            previous = state.get("last_reconcile")
+            if previous is not None and 0 <= now - previous < RECONCILE_INTERVAL:
+                return False
+            state["last_reconcile"] = now
+            state["jobs"] = [job for job in state["jobs"] if not (
+                job["status"] in TERMINAL and job.get("end", now) < now - RETENTION)]
+        return True
 
     def validate(self, spec):
         p = self.profile
@@ -211,9 +241,10 @@ class Queue:
                    wait=(job["start"] or end) - job["submitted"],
                    duration=end - job["start"] if job["start"] else 0)
 
-    def cancel(self, job_id, owner, force=False, reason="cancelled", *, expected=None):
+    def cancel(self, job_id, owner, force=False, reason="cancelled", *, expected=None, queued_only=False):
         stop = False
         found = False
+        cancelled = False
         with self.transaction() as state:
             for job in state["jobs"]:
                 if job["id"] != job_id:
@@ -223,15 +254,33 @@ class Queue:
                     raise QueueError("чужая заявка: нужен --force")
                 if expected is not None and not same_attempt(job, expected):
                     continue
+                if queued_only and job["status"] != "queued":
+                    continue
                 if job["status"] in ACTIVE:
                     job["cancel_reason"] = reason
                     stop = True
+                    cancelled = True
                 elif job["status"] == "queued":
                     self.terminal(job, reason, 143)
+                    cancelled = True
         if not found:
+            if queued_only:
+                return False
             raise QueueError(f"нет заявки {job_id}")
         if stop:
-            systemctl("stop", "--no-block", f"gq-{job_id}.service")
+            result = systemctl("stop", "--no-block", f"gq-{job_id}.service")
+            if result.returncode:
+                detail = result.stderr.strip() or result.stdout.strip()
+                raise QueueError(f"systemctl stop gq-{job_id}: код {result.returncode}: {detail}")
+        return cancelled
+
+    def retry_cancel(self, job_id, owner, *, expected=None):
+        try:
+            return self.cancel(job_id, owner, expected=expected)
+        except QueueError as error:
+            # The cancellation flag is durable; another reconcile retries the stop.
+            print(f"gq: {error}", file=sys.stderr)
+            return False
 
     def finish(self, job_id, result, exit_code="exited", exit_status="0", *, expected=None):
         with self.transaction() as state:
@@ -269,6 +318,8 @@ class Queue:
         return False
 
     def reconcile(self):
+        if not self.claim_reconcile():
+            return
         snapshot = self.jobs()
         for job in snapshot:
             if job.get("retry_pending") and job["status"] == "queued":
@@ -279,8 +330,9 @@ class Queue:
                             if (current["id"] == job["id"] and current["status"] == "queued"
                                     and same_attempt(current, job)):
                                 current.pop("retry_pending", None)
-            if job["status"] not in TERMINAL and not alive(job.get("waiter")):
-                self.cancel(job["id"], job["owner"])
+            if (job["status"] not in TERMINAL and not job.get("cancel_reason")
+                    and not alive(job.get("waiter"))):
+                self.retry_cancel(job["id"], job["owner"], expected=job)
             if job["status"] not in ACTIVE:
                 continue
             # ExecStopPost normally finalizes. Recover after reboot or failed/missing callback.
@@ -297,6 +349,8 @@ class Queue:
                 self.finish(job["id"], "failed", "exited", "1", expected=job)
                 continue
             active = props.get("ActiveState", "")
+            if job.get("cancel_reason") and active in {"active", "activating", "deactivating", "reloading"}:
+                self.retry_cancel(job["id"], job["owner"], expected=job)
             if active in {"inactive", "failed"} and self.now() - job.get("reserved", self.now()) > 5:
                 self.finish(job["id"], props.get("Result", "failed"),
                             "exited" if props.get("ExecMainCode") == "1" else "killed",
@@ -347,6 +401,7 @@ class Queue:
             if free < self.profile["min_disk"] or any(j["class"] == "quiet" for j in active):
                 return
             batch_blocked = False
+            skipped_owners = set()
             for job in queued:
                 if job.get("retry_pending"):
                     if job["class"] == "batch":
@@ -354,13 +409,17 @@ class Queue:
                     continue
                 kind = job["class"]
                 if kind == "batch":
+                    if job["owner"] in skipped_owners:
+                        continue
                     other_waits = any(j["status"] == "queued" and j["class"] == "batch"
                                       and j["owner"] != job["owner"] for j in queued)
                     same_active = any(j["class"] == "batch" and j["owner"] == job["owner"] for j in active)
-                    if quiet_waiting or batch_blocked or (other_waits and same_active):
-                        # Fairness skips this owner's second job so the waiting owner can run.
-                        if not (other_waits and same_active):
-                            batch_blocked = True
+                    if quiet_waiting or batch_blocked:
+                        batch_blocked = True
+                        continue
+                    if other_waits and same_active:
+                        # Preserve this owner's FIFO after yielding to another session.
+                        skipped_owners.add(job["owner"])
                         continue
                     if sum(j["threads"] for j in active if j["class"] == "batch") + job["threads"] > self.profile["threads"]:
                         batch_blocked = True
@@ -408,6 +467,7 @@ class Queue:
             "Nice": 19 if job["class"] == "batch" else 0,
             "MemoryMax": job["mem"], "RuntimeMaxSec": f"{job['max'] * 1.25:g}s",
             "TimeoutStopSec": 60, "KillMode": "control-group", "ExecStopPost": post,
+            "CollectMode": "inactive-or-failed",
             "WorkingDirectory": job["cwd"],
             "StandardOutput": "append:" + str(self.home / "logs" / f"{job['id']}.log"),
             "StandardError": "inherit",
@@ -423,14 +483,14 @@ class Queue:
                 self.append_log(job["id"], result.stderr)
                 self.finish(job["id"], "failed", "exited", str(result.returncode), expected=job)
             elif self.get(job["id"]).get("cancel_reason"):
-                systemctl("stop", "--no-block", "gq-" + job["id"] + ".service")
+                self.retry_cancel(job["id"], job["owner"], expected=job)
         except OSError as error:
             self.append_log(job["id"], str(error) + "\n")
             self.finish(job["id"], "failed", "exited", "127", expected=job)
         except subprocess.TimeoutExpired as error:
             # A timed-out D-Bus request may have started the unit. Stop before releasing resources.
             self.append_log(job["id"], str(error) + "\n")
-            self.cancel(job["id"], job["owner"], expected=job)
+            self.retry_cancel(job["id"], job["owner"], expected=job)
         finally:
             # Only reservations still waiting for their launch call need a live launcher.
             # Once the call returns (including timeout), reconcile can recover a missing
@@ -456,16 +516,10 @@ class Queue:
             elif job["status"] == "queued":
                 ahead += job["max"]
         history = []
-        path = self.home / "journal.jsonl"
-        if path.exists():
-            for line in path.read_text().splitlines():
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if (record.get("event") == "finished" and record.get("reason") == "done"
-                        and record.get("name") == target["name"]):
-                    history.append(record["duration"])
+        for record in self.history():
+            if (record.get("event") == "finished" and record.get("reason") == "done"
+                    and record.get("name") == target["name"]):
+                history.append(record["duration"])
         typical = statistics.median(history) if history else None
         return {"upper": ahead + (typical or 0), "typical": typical}
 
@@ -515,20 +569,21 @@ def execute(queue, job_id):
             return 127
         while child.poll() is None:
             if not alive(job.get("waiter")):
-                queue.cancel(job_id, job["owner"])
+                queue.retry_cancel(job_id, job["owner"])
             time.sleep(POLL)
         while unit_has_children(job_id):
             if not alive(job.get("waiter")):
-                queue.cancel(job_id, job["owner"])
+                queue.retry_cancel(job_id, job["owner"])
             time.sleep(POLL)
         return child.returncode if child.returncode >= 0 else 128 - child.returncode
 
 
 def pump(queue, job_id):
     # One finite waiter per submit, detached from SSH. It exits as soon as its job ends.
+    os.nice(19)
     while queue.get(job_id)["status"] not in TERMINAL:
         queue.tick()
-        time.sleep(POLL)
+        time.sleep(QUEUED_POLL if queue.get(job_id)["status"] == "queued" else POLL)
     return 0
 
 
@@ -553,6 +608,7 @@ def stream_log(queue, job_id, offset):
 
 
 def wait_job(queue, job_id, run=False, wait_max=None, follow=True):
+    os.nice(19)
     started = queue.now()
     next_report = 0
     offset = 0
@@ -575,20 +631,21 @@ def wait_job(queue, job_id, run=False, wait_max=None, follow=True):
                 except (OSError, ValueError):
                     disconnected = True
             if disconnected:
-                queue.cancel(job_id, queue.get(job_id)["owner"])
+                queue.retry_cancel(job_id, queue.get(job_id)["owner"])
             queue.tick()
             jobs = queue.jobs()
             job = next((j for j in jobs if j["id"] == job_id), None)
             if job is None:
-                raise QueueError(f"нет заявки {job_id}")
+                job = queue.get(job_id)  # Completed requests may already be archived.
             if follow:
                 offset = stream_log(queue, job_id, offset)
             if job["status"] in TERMINAL:
                 return job["code"]
             if wait_max is not None and job["status"] == "queued" and queue.now() - started >= wait_max:
-                queue.cancel(job_id, job["owner"])
-                print("Ryzen занят", file=sys.stderr)
-                return 75
+                if queue.cancel(job_id, job["owner"], queued_only=True):
+                    print("Ryzen занят", file=sys.stderr)
+                    return 75
+                continue  # Admission/completion won the race: return its actual result.
             if job["status"] == "queued" and queue.now() >= next_report:
                 waiting = [j["id"] for j in jobs if j["status"] == "queued"]
                 estimate = queue.estimate(job_id)
@@ -596,7 +653,7 @@ def wait_job(queue, job_id, run=False, wait_max=None, follow=True):
                 print(f"gq {job_id}: место {waiting.index(job_id) + 1}, старт ≤ {estimate['upper']:.0f}s{typical}",
                       file=sys.stderr, flush=True)
                 next_report = queue.now() + 60
-            time.sleep(POLL)
+            time.sleep(QUEUED_POLL if job["status"] == "queued" else POLL)
     finally:
         for signum, handler in old.items():
             signal.signal(signum, handler)
@@ -689,19 +746,28 @@ def main(argv=None):
             queue.get(args.id)
             return wait_job(queue, args.id)
         elif args.action == "logs":
-            queue.get(args.id)
+            if Path(args.id).name != args.id:
+                raise QueueError("неверный id заявки")
+            if not (queue.home / "logs" / f"{args.id}.log").exists():
+                queue.get(args.id)
+            if args.follow:
+                os.nice(19)
             offset = 0
             while True:
                 offset = stream_log(queue, args.id, offset)
                 if not args.follow:
                     break
-                if queue.get(args.id)["status"] in TERMINAL:
+                try:
+                    job = queue.get(args.id)
+                except QueueError:
+                    break  # A standalone archived log has no running producer.
+                if job["status"] in TERMINAL:
                     # Completion may have happened after the read above. Once terminal,
                     # the command's output is final, so drain the remaining bytes.
                     stream_log(queue, args.id, offset)
                     break
                 queue.tick()
-                time.sleep(POLL)
+                time.sleep(QUEUED_POLL if job["status"] == "queued" else POLL)
         return 0
     except (QueueError, OSError, ValueError) as error:
         print(f"gq: {error}", file=sys.stderr)

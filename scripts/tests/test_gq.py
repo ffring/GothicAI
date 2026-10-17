@@ -27,6 +27,12 @@ def gq():
     return module
 
 
+@pytest.fixture(autouse=True)
+def preserve_test_process_priority(gq, monkeypatch):
+    # Renicing the imported module would otherwise change pytest's own process.
+    monkeypatch.setattr(gq.os, "nice", lambda _increment: 19)
+
+
 FAKE_SYSTEMD = r'''#!/usr/bin/env python3
 import json
 import os
@@ -190,6 +196,16 @@ def test_a_session_does_not_start_second_batch_while_another_session_waits(queue
     queue.tick()
     assert queue.get(same_session)["status"] == "queued"
     assert queue.get(other_session)["status"] == "running"
+
+
+def test_fairness_skip_preserves_fifo_for_all_later_batches_of_that_owner(queue):
+    first = start(queue, "batch", owner="session-a", threads=8)
+    second = enqueue(queue, "batch", owner="session-a", threads=8)
+    other = enqueue(queue, "batch", owner="session-b", threads=8)
+    third = enqueue(queue, "batch", owner="session-a", threads=8)
+    queue.tick()
+    assert queue.get(first)["status"] == queue.get(other)["status"] == "running"
+    assert queue.get(second)["status"] == queue.get(third)["status"] == "queued"
 
 
 def test_same_session_can_share_budget_when_no_other_session_is_waiting(queue):
@@ -380,6 +396,39 @@ def test_run_wait_max_returns_75_and_cancels_request(queue, gq, monkeypatch, cap
     assert records(queue)[-1]["reason"] == "cancelled"
 
 
+@pytest.mark.parametrize("transition", ["running", "finished"])
+def test_wait_max_does_not_cancel_a_job_admitted_after_its_snapshot(
+        queue, gq, monkeypatch, capsys, transition):
+    ident = enqueue(queue)
+    original_jobs = queue.jobs
+    raced = False
+
+    def jobs_then_admit():
+        nonlocal raced
+        snapshot = original_jobs()
+        if not raced:
+            raced = True
+            with queue.transaction() as state:
+                state["jobs"][0].update(status="starting", reserved=queue.now())
+            assert queue.started(ident)
+            if transition == "finished":
+                queue.finish(ident, "exit-code", "exited", "7")
+        return snapshot
+
+    def finish_running_job(_seconds):
+        queue.finish(ident, "exit-code", "exited", "7")
+
+    monkeypatch.setattr(queue, "tick", lambda: None)
+    monkeypatch.setattr(queue, "jobs", jobs_then_admit)
+    monkeypatch.setattr(gq.select, "select", lambda *args: ([], [], []))
+    monkeypatch.setattr(gq.time, "sleep", finish_running_job)
+    assert gq.wait_job(queue, ident, run=True, wait_max=0) == 7
+    assert raced and queue.get(ident)["status"] == "failed"
+    assert "Ryzen занят" not in capsys.readouterr().err
+    assert records(queue)[-1]["code"] == 7
+    assert not any(record.get("reason") == "cancelled" for record in records(queue))
+
+
 def test_eof_from_disconnected_ssh_cancels_waiting_run(queue, gq, monkeypatch):
     ident = enqueue(queue)
     monkeypatch.setattr(queue, "disk_free", lambda: 0)
@@ -442,6 +491,9 @@ def test_wait_progress_survives_a_concurrent_admission_or_cancellation(
 def make_queue(gq, host, monkeypatch):
     q = gq.Queue(home=host["home"], legacy_lock=host["legacy"], proc_locks=host["locks"])
     monkeypatch.setattr(q, "disk_free", lambda: 100 * GIB)
+    # Lifecycle race tests deliberately reconcile immediately after each mutation.
+    # The shared five-second cadence has its own test using unmodified Queue instances.
+    monkeypatch.setattr(q, "claim_reconcile", lambda: True)
     return q
 
 
@@ -488,6 +540,7 @@ def test_systemd_launch_sets_affinity_limits_runtime_and_stop_callback(gq, host,
     assert properties["MemoryMax"] == str(3 * GIB)
     assert properties["RuntimeMaxSec"] == "50s"
     assert properties["TimeoutStopSec"] == "60"
+    assert properties["CollectMode"] == "inactive-or-failed"
     assert "_finish" in properties["ExecStopPost"] and ident in properties["ExecStopPost"]
     assert properties["StandardOutput"] == f"append:{q.home}/logs/{ident}.log"
     assert "_execute" in arguments and arguments[-1] == ident
@@ -518,6 +571,43 @@ def test_cancel_running_unit_requests_stop_and_callback_records_cancelled(gq, ho
     stop = calls(host, "systemctl")[-1]
     assert "stop" in stop and f"gq-{ident}.service" in stop
     q.finish(ident, "signal", "killed", "15")
+    assert q.get(ident)["status"] == "cancelled"
+    assert records(q)[-1]["reason"] == "cancelled"
+
+
+def test_cli_reports_a_failed_stop_and_reconcile_retries_until_it_stops(
+        gq, host, monkeypatch, capsys):
+    q = make_queue(gq, host, monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(q, "now", lambda: clock[0])
+    ident = q.submit(spec(owner="test-worktree"))
+    q.tick()
+    assert q.started(ident)
+    original_systemctl = gq.systemctl
+    stop_calls = []
+
+    def fail_first_stop(*args):
+        if "stop" in args:
+            stop_calls.append(args)
+            if len(stop_calls) == 1:
+                return subprocess.CompletedProcess(args, 1, "", "fake stop refused")
+        return original_systemctl(*args)
+
+    monkeypatch.setattr(gq, "systemctl", fail_first_stop)
+    monkeypatch.setattr(gq, "Queue", lambda: q)
+    assert gq.main(["cancel", ident]) != 0
+    error = capsys.readouterr().err
+    assert "fake stop refused" in error and "stop" in error
+    assert q.get(ident)["status"] == "running"
+    assert q.get(ident)["cancel_reason"] == "cancelled"
+    assert len(stop_calls) == 1
+
+    clock[0] += 6
+    q.reconcile()
+    assert len(stop_calls) == 2
+    state = json.loads((host["systemd"] / f"gq-{ident}.json").read_text())
+    assert state["ActiveState"] == "inactive"
+    q.reconcile()
     assert q.get(ident)["status"] == "cancelled"
     assert records(q)[-1]["reason"] == "cancelled"
 
@@ -938,6 +1028,98 @@ def test_unit_lock_holder_detects_orphaned_children_in_its_own_cgroup(gq, tmp_pa
     assert not gq.unit_has_children("abc", membership, tmp_path)
     (group / "cgroup.procs").unlink()
     assert gq.unit_has_children("abc", membership, tmp_path), "unreadable unit fails closed"
+
+
+def test_reconcile_prunes_a_thousand_old_jobs_but_wait_and_logs_use_the_archive(
+        gq, host, monkeypatch, capsys):
+    q = gq.Queue(home=host["home"], legacy_lock=host["legacy"], proc_locks=host["locks"])
+    now = 200000.0
+    monkeypatch.setattr(q, "now", lambda: now)
+    monkeypatch.setattr(q, "disk_free", lambda: 100 * GIB)
+    seed = q.submit(spec())
+    template = q.get(seed)
+    old_end = now - 24 * 3600 - 1
+    old_jobs = [dict(template, id=f"old-{index:04d}", status="failed", reason="failed",
+                     code=7, submitted=old_end - 10, start=old_end - 5, end=old_end,
+                     env={"ONLY_OLD_JOB_ENV": "x" * 1000}) for index in range(1000)]
+    recent = dict(template, id="recent", status="done", reason="done", code=0, end=now - 60)
+    with q.transaction() as state:
+        state["jobs"] = [*old_jobs, recent]
+    archived = old_jobs[0]
+    journal = dict(archived, event="finished", time=old_end)
+    journal.pop("env")
+    journal_path = q.home / "journal.jsonl"
+    journal_path.write_text(json.dumps(journal) + "\n")
+    log_path = q.home / "logs" / f"{archived['id']}.log"
+    log_path.write_text("archived output\n")
+
+    q.reconcile()
+    assert [job["id"] for job in q.jobs()] == ["recent"]
+    assert "ONLY_OLD_JOB_ENV" not in (q.home / "state.json").read_text()
+    assert q.get(archived["id"])["code"] == 7
+    assert journal_path.read_text() == json.dumps(journal) + "\n"
+    assert log_path.read_text() == "archived output\n"
+
+    monkeypatch.setattr(gq, "Queue", lambda: q)
+    assert gq.main(["wait", archived["id"]]) == 7
+    assert capsys.readouterr().out == "archived output\n"
+    assert gq.main(["logs", archived["id"]]) == 0
+    assert capsys.readouterr().out == "archived output\n"
+
+
+def test_logs_can_read_a_preserved_file_without_a_state_or_journal_entry(queue, gq, monkeypatch, capsys):
+    ident = "logs-only"
+    (queue.home / "logs" / f"{ident}.log").write_text("preserved log\n")
+    monkeypatch.setattr(gq, "Queue", lambda: queue)
+    assert gq.main(["logs", ident]) == 0
+    assert capsys.readouterr().out == "preserved log\n"
+
+
+def test_ten_ticks_in_five_seconds_reconcile_each_active_job_once_across_processes(
+        gq, host, monkeypatch):
+    queues = [gq.Queue(home=host["home"], legacy_lock=host["legacy"], proc_locks=host["locks"])
+              for _ in range(2)]
+    clock = [1000.0]
+    for q in queues:
+        monkeypatch.setattr(q, "now", lambda: clock[0])
+        monkeypatch.setattr(q, "disk_free", lambda: 100 * GIB)
+    first = queues[0].submit(spec())
+    second = queues[0].submit(spec())
+    queues[0].tick()
+    assert queues[0].started(first) and queues[0].started(second)
+
+    for index in range(10):
+        clock[0] = 1005.0 + index / 2
+        queues[index % 2].tick()
+    shows = [args for args in calls(host, "systemctl") if "show" in args]
+    assert len(shows) == 2
+    for ident in (first, second):
+        assert sum(f"gq-{ident}.service" in args for args in shows) == 1
+
+    clock[0] = 1010.0
+    queues[1].tick()
+    assert len([args for args in calls(host, "systemctl") if "show" in args]) == 4
+
+
+@pytest.mark.parametrize("action", ["wait", "_pump", "logs"])
+def test_waiters_lower_priority_once_and_poll_queued_jobs_once_per_second(
+        queue, gq, monkeypatch, action):
+    ident = enqueue(queue)
+    priorities = []
+    sleeps = []
+
+    def cancel_after_sleep(seconds):
+        sleeps.append(seconds)
+        queue.cancel(ident, "session-a")
+
+    monkeypatch.setattr(queue, "tick", lambda: None)
+    monkeypatch.setattr(gq, "Queue", lambda: queue)
+    monkeypatch.setattr(gq.os, "nice", lambda increment: priorities.append(increment))
+    monkeypatch.setattr(gq.time, "sleep", cancel_after_sleep)
+    args = [action, ident] + (["-f"] if action == "logs" else [])
+    assert gq.main(args) == (143 if action == "wait" else 0)
+    assert sleeps == [1]
+    assert priorities == [19]
 
 
 @pytest.mark.parametrize("source", ["environment", "file", "missing"])
