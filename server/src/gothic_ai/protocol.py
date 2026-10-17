@@ -789,6 +789,8 @@ class BodyObservation(_BodyModel):
     phase: Literal["post_simulation_post_animation"]
     entity_id: Annotated[int, Field(strict=True, gt=0)]
     script_symbol: BodyUInt
+    snapshot_wall_monotonic_ns: BodyUInt | None = None
+    clock_domain: Literal["linux-clock-monotonic", "cxx-steady-clock"] | None = None
     t_game_ms: BodyUInt
     dt_game_ms: BodyUInt
     sim_step: BodyUInt

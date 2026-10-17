@@ -116,6 +116,7 @@ _Request = (
 )
 
 Listener = Callable[[GameMessage], None]
+RawBodyListener = Callable[[dict[str, Any]], None]
 
 
 class GameError(RuntimeError):
@@ -161,6 +162,9 @@ class GameLink:
         self._body_control_last_event = 0
         self.body_control_dropped_events = 0
         self.listeners: list[Listener] = []
+        # Policy consumers need the exact JSON values from the numeric channel (including
+        # optional encoder metadata and list types), after the ordinary schema/staleness checks.
+        self.raw_body_listeners: list[RawBodyListener] = []
         self.closed = asyncio.Event()
 
     # --- receiving --------------------------------------------------------------
@@ -173,7 +177,10 @@ class GameLink:
                 except ValidationError as err:
                     log.warning("unparsed message from game: %s (%s)", raw, err.errors()[0]["msg"])
                     continue
-                self._dispatch(msg)
+                raw_body_packet = None
+                if isinstance(msg, BodyObservations) and self.raw_body_listeners:
+                    raw_body_packet = json.loads(raw)["packet"]
+                self._dispatch(msg, raw_body_packet=raw_body_packet)
         except ConnectionClosed:
             pass
         finally:
@@ -181,7 +188,7 @@ class GameLink:
             self.closed.set()
             self._fail_pending(GameDisconnected("game disconnected"))
 
-    def _dispatch(self, msg: GameMessage) -> None:
+    def _dispatch(self, msg: GameMessage, *, raw_body_packet: dict[str, Any] | None = None) -> None:
         match msg:
             case Hello():
                 self._clear_body_observations()
@@ -217,6 +224,9 @@ class GameLink:
             case BodyObservations():
                 if not self._receive_body_observations(msg.packet):
                     return
+                if raw_body_packet is not None:
+                    for listener in self.raw_body_listeners:
+                        listener(raw_body_packet)
             case BodyControlEvents():
                 if not self._receive_body_control_events(msg):
                     return
