@@ -1,0 +1,40 @@
+{
+  "timing_scope": "same_input_independent_gru_states_one_thread",
+  "weights": "/home/kaifaty/gothic-ai/nav-drive/policy.navbc",
+  "pair_index": 57,
+  "start": "NW_CITY_UPTOWN_HUT_04_02",
+  "goal": "FP_STAND_CITYKNEIPE_OUT",
+  "teacher_elapsed_ms": 235467,
+  "measurements": [
+    {
+      "policy_population": 20,
+      "policy_warmup_decisions": 30,
+      "policy_measured_calls": 2000,
+      "population_measured_ticks": 100,
+      "policy_us_median": 237.197,
+      "policy_us_p95": 288.115,
+      "encode_us_median": 355.985,
+      "encode_us_p95": 373.19455,
+      "population_us_median": 5184.7015,
+      "population_us_p95": 5373.7834,
+      "elapsed_ms": 13000,
+      "decisions": 130,
+      "collector_wall_s": 7.209327974007465
+    },
+    {
+      "policy_population": 50,
+      "policy_warmup_decisions": 30,
+      "policy_measured_calls": 5000,
+      "population_measured_ticks": 100,
+      "policy_us_median": 232.939,
+      "policy_us_p95": 259.07455,
+      "encode_us_median": 352.98,
+      "encode_us_p95": 369.6446,
+      "population_us_median": 12114.836,
+      "population_us_p95": 12525.2449,
+      "elapsed_ms": 13000,
+      "decisions": 130,
+      "collector_wall_s": 7.940767595995567
+    }
+  ]
+}
