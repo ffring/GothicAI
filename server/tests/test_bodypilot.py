@@ -60,6 +60,9 @@ class Bridge:
         self._lease_timeout = 0.0
         self._lease_watchdog = None
         self.lease_expirations = 0
+        self.provider_owned = False
+        self._control_scope = None
+        self.control_events = deque()
 
     def commands(self, kind):
         return [command for command in self.sent if command["type"] == kind]
@@ -101,10 +104,22 @@ class Bridge:
         self.lease_expirations += 1
         if self.link.body_leases:
             lease = next(iter(self.link.body_leases.values()))
+            self.provider_owned = False
             self.link._dispatch(events(event(
                 1, entity_id=lease.entity_id, reason="native_restored", owner="native",
             )))
             self._activity(lease.npc, "fight")
+
+    def restore_native(self):
+        """Restore the native actor, leaving ownership events for the next destructive poll."""
+        lease = next(iter(self.link.body_leases.values()))
+        self.provider_owned = False
+        if self._lease_watchdog is not None:
+            self._lease_watchdog.cancel()
+        self.control_events.append(event(
+            1, entity_id=lease.entity_id, reason="native_restored", owner="native",
+        ))
+        self._activity(lease.npc, "fight")
 
     async def close(self):
         if self._lease_watchdog is not None:
@@ -126,17 +141,43 @@ class Bridge:
             expressions = command["exprs"]
             value = [50 if expr[0] == "sym" else int(self.target_is_hero) for expr in expressions]
         elif kind == "body_events":
-            if self._released_pending and self.release_pending_polls <= 0:
+            if self.control_events:
+                value = events(*self.control_events).model_dump(mode="json")
+                self.control_events.clear()
+            elif self._released_pending and self.release_pending_polls <= 0:
                 lease = next(iter(self.link.body_leases.values()))
                 value = events(event(
                     1, entity_id=lease.entity_id, reason="native_restored", owner="native",
                 )).model_dump(mode="json")
                 self._released_pending = False
+                self.provider_owned = False
                 self._activity(lease.npc, "fight")
             else:
                 value = events().model_dump(mode="json")
                 if self._released_pending:
                     self.release_pending_polls -= 1
+        elif kind == "body_control_status":
+            actors = []
+            if self._control_scope is not None:
+                row = {
+                    **self._control_scope,
+                    "control_generation": 7 if self.provider_owned else 0,
+                    "goal_version": 1 if self.provider_owned else 0,
+                    "target_entity_id": 2, "command_id": 0, "execution_id": 0,
+                    "owner": "scripted" if self.provider_owned else "native",
+                    "release_pending": self._released_pending,
+                    "provider": "neural-body" if self.provider_owned else "",
+                    "mode": "realtime" if self.provider_owned else "native",
+                    "t_game_ms": 200, "observation_seq": 4, "observed_game_ms": 200,
+                    "watchdog_timeout_ms": int(self._lease_timeout * 1000) if self.provider_owned else 0,
+                    "control_allowed": False, "can_decide": False, "action_mask": [False] * 12,
+                }
+                actors.append(row)
+            value = {
+                "type": "body_control_status", "session_epoch": 1, "world_epoch": 1,
+                "paused": False, "infrastructure_failure": False, "infrastructure_reason": "",
+                "actors": actors,
+            }
         else:
             value = receipt(
                 entity_id=command.get("entity_id", 1),
@@ -150,18 +191,28 @@ class Bridge:
             if kind == "body_acquire" and self.acquire_rejections:
                 value.update(accepted=False, reason=self.acquire_rejections.popleft())
             if kind == "body_acquire" and value["accepted"]:
+                self.provider_owned = True
+                self._control_scope = {name: command[name] for name in (
+                    "entity_id", "session_epoch", "world_epoch",
+                )}
                 self._lease_timeout = command["timeout_ms"] / 1000
                 self._renew_lease()
                 self._background(self._acquired_roster(self._watched_npc))
             elif kind == "body_heartbeat":
-                self._renew_lease()
+                if self.provider_owned:
+                    self._renew_lease()
+                else:
+                    value.update(accepted=False, reason="not_owned", owner="native", control_generation=0)
             if kind == "body_release":
                 if self._lease_watchdog is not None:
                     self._lease_watchdog.cancel()
-                if self.release_pending_polls:
+                if not self.provider_owned:
+                    value.update(accepted=False, reason="not_owned", owner="native", control_generation=0)
+                elif self.release_pending_polls:
                     self._released_pending = True
                     value.update(owner="scripted", reason="release_pending", release_pending=True)
                 else:
+                    self.provider_owned = False
                     value.update(owner="native", reason="native_restored")
                     lease = self.link.body_leases.get(command["entity_id"])
                     if lease is not None:
@@ -750,13 +801,53 @@ async def test_pending_release_keeps_watch_until_native_restoration():
         assert sum(command["type"] == "body_events" for command in commands[released_at:unwatched_at]) == 3
 
 
-@pytest.mark.parametrize("failed_command", ["body_release", "body_events", "body_watch"])
+@pytest.mark.parametrize("lost_during_release", [False, True])
+async def test_lost_native_restoration_event_reconciles_lease_and_allows_the_next_fight(lost_during_release):
+    async with running() as rig:
+        await rig.active()
+        lease = rig.link.body_leases[1]
+        rig.bridge.response_delays["body_events"] = 0.350
+        if lost_during_release:
+            rig.bridge.release_pending_polls = 1
+            rig.link._dispatch(Attached(type="attached", npc="NPC", name="Fighter"))
+            await eventually(lambda: not rig.bridge.provider_owned)
+        else:
+            rig.bridge.restore_native()
+            # Polling destructively drains the event before its reply times out.
+            await eventually(lambda: not rig.bridge.control_events)
+        rig.bridge.emit(fighter(4))
+        assert rig.link.body_leases == {1: lease}
+
+        await rig.ended()
+        await eventually(lambda: rig.pilot.npc is None)
+        assert rig.bridge.commands("body_control_status")
+        assert rig.bridge._watched_npc is None
+        assert len(rig.policy.commands("end_episode")) == 1
+        assert len(rig.policy.commands("close")) == 1
+        assert len(rig.policy.commands("step")) == 1
+
+        # A later combat can still acquire and run policy decisions.
+        rig.bridge.response_delays.clear()
+        rig.roster(activity="routine", state="ZS_SIT_BENCH")
+        await rig.watch()
+        await eventually(lambda: rig.pilot._watch_ready)
+        rig.bridge.emit(player_row(5), fighter(6))
+        await eventually(lambda: len(rig.bridge.commands("body_acquire")) == 2)
+        await eventually(lambda: rig.link.body_leases)
+        rig.bridge.emit(fighter(7, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        assert len(rig.policy.commands("reset")) == 2
+
+
+@pytest.mark.parametrize("failed_command", [
+    "body_release", "body_events", "body_control_status", "body_watch",
+])
 async def test_websocket_closing_during_cleanup_still_closes_policy_and_pilot(failed_command, monkeypatch):
     async with running() as rig:
         await rig.active()
         client = rig.pilot.client
         assert client is not None
-        if failed_command == "body_events":
+        if failed_command in {"body_events", "body_control_status"}:
             rig.bridge.release_pending_polls = 2
         original_send = rig.bridge.send
         failed_sends = []

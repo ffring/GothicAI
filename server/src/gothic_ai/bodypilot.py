@@ -592,7 +592,15 @@ class BodyPilot:
             try:
                 await self.link.body_events(timeout=BRIDGE_TIMEOUT)
             except BRIDGE_ERRORS:
+                pass
+            if self.link.body_leases.get(lease.entity_id) != lease:
                 break
+            # Event polling drains the native queue even if its reply is lost.
+            # Reconcile the cache with a non-destructive ownership snapshot.
+            try:
+                await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
+            except BRIDGE_ERRORS:
+                pass
             if self.link.body_leases.get(lease.entity_id) == lease:
                 await asyncio.sleep(0.025)
         if self._watched and not self.link.body_leases:
