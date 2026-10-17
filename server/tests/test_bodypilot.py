@@ -1465,6 +1465,51 @@ async def test_uncertain_acquire_recovery_is_bounded_by_finish_deadline(monkeypa
         assert "unconfirmed=" in caplog.text
 
 
+@pytest.mark.parametrize("confirmation", ["event", "status"])
+async def test_orphaned_boundary_request_unsubscribes_and_allows_the_next_fight(monkeypatch, confirmation):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.050)
+    monkeypatch.setattr(bodypilot, "FINISH_TIMEOUT", 0.150)
+    async with running() as rig:
+        # The native request expires, but its ACK and cancellation evidence are
+        # unavailable until after the pilot's bounded cleanup has finished.
+        rig.bridge.acquire_pending_results.append("expired")
+        rig.bridge.acquire_pending_delay = 0
+        rig.bridge.response_delays["body_acquire"] = 2.0
+        rig.bridge.release_rejections.extend(["cancel_busy"] * 100)
+        rig.bridge.status_error = "status_busy"
+        await rig.watch()
+        await eventually(lambda: rig.pilot._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        assert rig.pilot.last_summary.reason == "finish_deadline"
+        assert rig.pilot.last_summary.watch_removed
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
+        assert rig.bridge._watched_npc is None
+        assert rig.link.body_acquire_pending(1)
+        assert not rig.bridge.pending_acquire and not rig.bridge.provider_owned
+        assert not rig.policy.requests
+
+        rig.bridge.status_error = None
+        rig.bridge.response_delays.clear()
+        rig.bridge.release_rejections.clear()
+        if confirmation == "event":
+            await rig.link.body_events()
+        else:
+            status = await rig.link.body_control_status()
+            assert status.actors[0].owner == "native" and status.actors[0].acquire_request_id == 0
+        assert not rig.link.body_acquire_pending(1)
+
+        rig.roster(activity="routine", state="ZS_SIT_BENCH")
+        await rig.watch()
+        await eventually(lambda: rig.pilot._watch_ready)
+        rig.bridge.emit(player_row(5), fighter(6))
+        await eventually(lambda: rig.link.body_leases)
+        rig.bridge.emit(fighter(7, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert len(rig.bridge.commands("body_acquire")) == 2
+        assert len(rig.policy.commands("reset")) == 1
+
+
 @pytest.mark.parametrize("failed_command", [
     "body_release", "body_events", "body_control_status", "body_watch",
 ])
