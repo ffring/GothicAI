@@ -69,7 +69,9 @@ elif args[0] == "wait":
     if os.environ.get("FAKE_WAIT_SKIP_COMMAND"):
         sys.exit(0)
     saved = json.loads((root / "command.json").read_text())
-    sys.exit(subprocess.run(saved["command"], cwd=saved["cwd"]).returncode)
+    # This marker belongs only to the admitted command, never the launcher.
+    env = {**os.environ, "FAKE_GQ_JOB": "1"}
+    sys.exit(subprocess.run(saved["command"], cwd=saved["cwd"], env=env).returncode)
 elif args[0] == "cancel":
     (root / "cancelling").write_text(args[1])
     while os.environ.get("FAKE_CANCEL_BLOCK") and not (root / "release-cancel").exists():
@@ -289,6 +291,60 @@ def test_body_snapshot_refuses_concurrent_workspace_build(remote):
     assert not (task / "runs/blocked-build").exists()
 
 
+@pytest.mark.parametrize("queued,action,collector_code,reporter_code,expected,stages", [
+    (True, "run", 0, 0, 0, ["collector", "reporter"]),
+    (True, "run", 31, 0, 31, ["collector"]),
+    (True, "run", 0, 32, 32, ["collector", "reporter"]),
+    (True, "smoke", 0, 32, 0, ["collector"]),
+    (False, "run", 0, 0, 0, ["collector", "reporter"]),
+    (False, "run", 31, 0, 31, ["collector"]),
+    (False, "run", 0, 32, 2, ["collector", "reporter"]),
+])
+def test_trajectory_collection_and_report_share_queue_job(
+        remote, queued, action, collector_code, reporter_code, expected, stages):
+    task = prepare(remote, "body", "body_trajectory_suite.py")
+    scripts = task / "source/scripts"
+    (scripts / "body_trajectory_suite.py").write_text('''import argparse
+import json
+import os
+from pathlib import Path
+import sys
+parser = argparse.ArgumentParser()
+parser.add_argument("--output", type=Path)
+args, rest = parser.parse_known_args()
+with (args.output / "stages.jsonl").open("a") as log:
+    log.write(json.dumps({"stage": "collector", "in_job": os.environ.get("FAKE_GQ_JOB") == "1"}) + "\\n")
+sys.exit(int(os.environ["COLLECTOR_CODE"]))
+''')
+    (scripts / "body_trajectory_report.py").write_text('''import json
+import os
+from pathlib import Path
+import sys
+out = Path(sys.argv[1])
+with (out / "stages.jsonl").open("a") as log:
+    log.write(json.dumps({"stage": "reporter", "in_job": os.environ.get("FAKE_GQ_JOB") == "1"}) + "\\n")
+sys.exit(int(os.environ["REPORTER_CODE"]))
+''')
+    env = {**remote["env"], "COLLECTOR_CODE": str(collector_code),
+           "REPORTER_CODE": str(reporter_code)}
+    if not queued:
+        env.update(GQ_BIN=str(remote["root"] / "absent-gq"), FAKE_PGREP_EXIT="1")
+    (remote["root"] / "release").touch()
+    result = subprocess.run(["bash", str(SCRIPTS / "body-trajectories-remote.sh"), action, "stages-test"],
+                            env=env, stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, timeout=5)
+    out = task / "data/stages-test"
+    assert result.returncode == expected, result.stdout + result.stderr + (out / "launcher.log").read_text()
+    recorded = [json.loads(line) for line in (out / "stages.jsonl").read_text().splitlines()]
+    assert recorded == [{"stage": stage, "in_job": queued} for stage in stages]
+    if queued:
+        calls = [json.loads(line) for line in (remote["root"] / "calls.jsonl").read_text().splitlines()]
+        assert [call[0] for call in calls] == ["submit", "wait"]
+        assert calls[0][calls[0].index("--class") + 1] == "batch"
+    else:
+        assert not (remote["root"] / "calls.jsonl").exists()
+
+
 def test_queued_baseline_keeps_archived_scenario_binary_and_report(remote):
     import hashlib
 
@@ -504,6 +560,64 @@ def test_queued_bc_phase_existing_id_preserves_evidence_before_submit(remote):
     assert (out / "gq-tests.id").read_text() == "previous-job\n"
     for name, original in evidence.items():
         assert (out / name).read_bytes() == original, name
+
+
+@pytest.mark.parametrize("first,second", [
+    ("train-cuda", "defence-train-cuda"),
+    ("defence-train-cuda", "train-cuda"),
+])
+def test_queued_bc_phase_aliases_share_reservation_and_id(remote, first, second):
+    task, out = prepare_bc_run(remote)
+    # The real GPU monitor is unrelated to reserving a phase. Keep its lifetime
+    # tied to job-done without starting CUDA or querying a real GPU.
+    (task / "source/scripts/body_training_gpu_watch.py").write_text('''import argparse
+from pathlib import Path
+import time
+parser = argparse.ArgumentParser()
+parser.add_argument("--job-done", type=Path)
+args, rest = parser.parse_known_args()
+deadline = time.monotonic() + 10
+while not args.job_done.exists():
+    assert time.monotonic() < deadline, "launcher did not finish its job"
+    time.sleep(0.01)
+''')
+    env = {**remote["env"], "FAKE_SUBMIT_BLOCK": "1", "FAKE_WAIT_SKIP_COMMAND": "1"}
+    launcher = ["bash", str(SCRIPTS / "body-bc-remote.sh")]
+    process = subprocess.Popen([*launcher, first, out.name], env=env, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        deadline = time.monotonic() + 5
+        while not (remote["root"] / "submitting").exists():
+            assert process.poll() is None, process.communicate(timeout=1)
+            assert time.monotonic() < deadline, "submit did not reach the ID barrier"
+            time.sleep(0.01)
+        assert (out / "gq-defence-train-cuda.lock").exists()
+        assert not (out / "gq-train-cuda.lock").exists()
+        assert not (out / "gq-defence-train-cuda.id").exists()
+        saved = json.loads((remote["root"] / "command.json").read_text())["command"]
+        assert saved[-4:] == [str(out / "code/scripts/body_defence_suite.py"),
+                              "train-cuda", "--run", str(out)]
+        duplicate = subprocess.run([*launcher, second, out.name], env=env,
+                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        assert duplicate.returncode == 1, duplicate.stdout + duplicate.stderr
+        assert "Another launcher owns this run/phase" in duplicate.stderr
+        (remote["root"] / "release-submit").touch()
+        (remote["root"] / "release").touch()
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 0, stdout + stderr + (out / f"launcher-{first}.log").read_text()
+        assert (out / "gq-defence-train-cuda.id").read_text() == "snapshot123\n"
+        assert not (out / "gq-train-cuda.id").exists()
+        completed = subprocess.run([*launcher, second, out.name], env=env,
+                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        assert completed.returncode == 1, completed.stdout + completed.stderr
+        assert "Queue id evidence exists" in completed.stderr
+        calls = [json.loads(line)[0] for line in (remote["root"] / "calls.jsonl").read_text().splitlines()]
+        assert calls == ["submit", "wait"]
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
 
 
 def test_bc_phase_repeated_interrupt_during_cancel_cancels_job(remote):

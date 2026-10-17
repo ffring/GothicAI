@@ -338,9 +338,14 @@ if gq_available; then
   # Reserve this run/phase before touching its evidence or submitting a job.
   # The ID does not exist while submit is in flight. Keep this local lock
   # through wait and cleanup; other runs/phases still use the queue normally.
-  gq_job_id_file="$out/gq-$phase.id"
-  exec 7>"$out/gq-$phase.lock"
-  flock -n 7 || { echo "Another launcher owns this run/phase: $phase" >&2; exit 1; }
+  # Aliases of the same suite command share both reservation and saved ID.
+  queue_phase="$phase"
+  case "$queue_phase" in
+    train-cuda) queue_phase=defence-train-cuda ;;
+  esac
+  gq_job_id_file="$out/gq-$queue_phase.id"
+  exec 7>"$out/gq-$queue_phase.lock"
+  flock -n 7 || { echo "Another launcher owns this run/phase: $queue_phase" >&2; exit 1; }
   [[ ! -e "$gq_job_id_file" ]] || { echo 'Queue id evidence exists; preserve it and use a fresh run' >&2; exit 1; }
   echo 'gq: lock-wait is accepted for compatibility; batch queue waiting has no timeout.'
 else

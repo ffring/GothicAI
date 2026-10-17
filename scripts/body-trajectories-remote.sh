@@ -142,9 +142,7 @@ else
   --setenv="OPENGOTHIC_TEXTURES=" --setenv="OPENGOTHIC_BODY_TRACE=1" \
   --setenv="OPENGOTHIC_BODY_ANIMATION_RNG=isolated")
 fi
-set +e
-"${launch[@]}" \
-  /usr/bin/time -v -o "$out/resources.txt" \
+collector=(/usr/bin/time -v -o "$out/resources.txt" \
   python3 "$suite_source/scripts/body_trajectory_suite.py" \
     --runner "$out/reference/gothic-body-runner" \
     --assets "$HOME/gothic-ai/body-baseline/assets" --save "$reference/run/save_slot_1.sav" \
@@ -153,7 +151,29 @@ set +e
     --config "$suite_source/evals/npc-body/body-trajectories-v1.json" \
     --scenario "$suite_source/scripts/bench/body-arena.bench" \
     --melee-scenario "$suite_source/scripts/bench/body-melee.bench" \
-    --output "$out" ${suite_args[@]+"${suite_args[@]}"} > "$out/launcher.log" 2>&1
+    --output "$out" ${suite_args[@]+"${suite_args[@]}"})
+set +e
+if gq_available; then
+  # Both CPU-heavy stages belong to one admitted batch job. Stop at the
+  # first failure, preserving the collector or reporter's actual exit code.
+  "${launch[@]}" bash -c '
+    out=$1; suite_source=$2; native_reference=$3; suite_mode=$4
+    shift 4
+    "$@" || exit "$?"
+    if [[ "$suite_mode" != smoke ]]; then
+      python3 "$suite_source/scripts/body_trajectory_report.py" "$out" \
+        --config "$suite_source/evals/npc-body/body-trajectories-v1.json" \
+        --native-reference "$native_reference" --output-dir "$out/validated" \
+        > "$out/report-launcher.log" 2>&1 || {
+          result=$?; tail -60 "$out/report-launcher.log" >&2; exit "$result"
+        }
+    fi
+  ' gq-body-trajectories "$out" "$suite_source" \
+    "$HOME/gothic-ai/body-headless/runs/stage3-v1/native-off" "$suite_mode" \
+    "${collector[@]}" > "$out/launcher.log" 2>&1
+else
+  "${launch[@]}" "${collector[@]}" > "$out/launcher.log" 2>&1
+fi
 result=$?
 set -e
 trap - INT TERM
@@ -162,7 +182,7 @@ if [[ "$result" -ne 0 ]]; then
   echo "Trajectory suite failed ($result); evidence remains in $out" >&2
   exit "$result"
 fi
-if [[ "$suite_mode" != smoke ]]; then
+if ! gq_available && [[ "$suite_mode" != smoke ]]; then
   python3 "$suite_source/scripts/body_trajectory_report.py" "$out" \
     --config "$suite_source/evals/npc-body/body-trajectories-v1.json" \
     --native-reference "$HOME/gothic-ai/body-headless/runs/stage3-v1/native-off" \
