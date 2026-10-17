@@ -1012,20 +1012,30 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     # Clear both neighbourhoods: a relocation can retain the stock encounter's
     # enemy, and animals by the new spot must not join either test fight.
     # debug kill drops victims by the hero; leave that food away from the wolves.
-    await link.debug("player_goto", pos=[23472, 1032, -10816])
-    await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
-    await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
-    for clearing in ("NW_XARDAS_TOWER_VALLEY_091", arena):
-        await link.debug("npc_goto", npc=npc, waypoint=clearing)
+    async def clear_animals() -> None:
         around = (await link.snapshot(npc, fresh=True)).nearby_npcs
         for other in around:
             if not other.dead and other.guild >= BEASTS:
                 await link.debug("kill", instance=other.id, near=npc)
-        # Perception reaches beyond snapshot's 15 m: clear the visible corridor too.
+        # Perception reaches beyond snapshot's 15 m, but only within its field of view.
         for view in await link.npc_view([npc]):
             for seen in view.sees:
                 if seen.guild >= BEASTS and seen.body != "dead":
                     await link.debug("kill", instance=seen.id, near=npc)
+
+    await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+    await link.debug("npc_goto", npc=npc, waypoint="NW_XARDAS_TOWER_VALLEY_091")
+    await clear_animals()
+    # A bloodfly 17 m off can enter ZS_ATTACK after the NPC turns to the hero.
+    # Inspect all four directions before the fights, with corpses kept off the arena.
+    for facing in (
+        [23560, 1032, -10604], [23260, 1032, -10304],
+        [22960, 1032, -10604], [23260, 1032, -10904],
+    ):
+        await link.debug("player_goto", pos=facing)
+        await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
+        await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+        await clear_animals()
     # npc_goto resolves script instances, so face needs PC_HERO, not the PLAYER alias.
     # This position fixes the direction for both wolf spawns, away from the rocks.
     await link.debug("player_goto", pos=[23472, 1032, -10816])
