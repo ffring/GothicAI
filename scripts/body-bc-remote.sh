@@ -15,9 +15,15 @@ LOCK_WAIT_SECONDS="${GOTHIC_BODY_LOCK_WAIT_SECONDS:-0}"
 [[ "$LOCK_WAIT_SECONDS" =~ ^[0-9]{1,5}$ ]] && ((LOCK_WAIT_SECONDS <= 36000)) || { echo 'Lock wait must be an integer from 0 to 36000 seconds' >&2; exit 2; }
 
 remote_script() {
-  local remote_args="" arg
+  local remote_args="" arg variable
   for arg in "$@"; do printf -v remote_args '%s %q' "$remote_args" "$arg"; done
-  ssh -o BatchMode=yes "$HOST" "bash -s --$remote_args"
+  {
+    for variable in GQ_BIN GQ_OWNER GQ_HOME GQ_LEGACY_LOCK GQ_PROFILE; do
+      if [[ -n "${!variable+x}" ]]; then printf 'export %s=%q\n' "$variable" "${!variable}"; fi
+    done
+    cat "$ROOT/scripts/gq-job.sh"
+    cat
+  } | ssh -o BatchMode=yes "$HOST" "bash -s --$remote_args"
 }
 
 preflight() {
@@ -42,7 +48,7 @@ mkdir -p "$HOME/$1/source/body-service" "$HOME/$1/source/scripts/tests" "$HOME/$
 REMOTE_SCRIPT
   rsync -a --delete --exclude=.venv/ --exclude=__pycache__/ --exclude=.pytest_cache/ \
     "$ROOT/body-service/" "$HOST:$REMOTE/source/body-service/"
-  rsync -a "$ROOT/scripts/body-bc-remote.sh" "$ROOT/scripts/body_demonstration_suite.py" \
+  rsync -a "$ROOT/scripts/body-bc-remote.sh" "$ROOT/scripts/gq-job.sh" "$ROOT/scripts/body_demonstration_suite.py" \
     "$ROOT/scripts/body_demonstration_teacher.py" "$ROOT/scripts/body_demonstration_recover.py" \
     "$ROOT/scripts/body_bc_suite.py" "$ROOT/scripts/body_setup_probe.py" \
     "$ROOT/scripts/body_policy_suite.py" "$ROOT/scripts/body_bc_report.py" \
@@ -121,7 +127,7 @@ audit="$HOME/$1/data/$2/validation/audit-code"
 mkdir -p "$audit/scripts/tests"
 REMOTE_SCRIPT
   rsync -a "$ROOT/scripts/body_bc_report.py" "$HOST:$REMOTE/data/$RUN_NAME/validation/audit-code/scripts/"
-  rsync -a "$ROOT/scripts/body-bc-remote.sh" "$HOST:$REMOTE/data/$RUN_NAME/validation/audit-code/scripts/"
+  rsync -a "$ROOT/scripts/body-bc-remote.sh" "$ROOT/scripts/gq-job.sh" "$HOST:$REMOTE/data/$RUN_NAME/validation/audit-code/scripts/"
   rsync -a "$ROOT/scripts/tests/test_body_bc_report.py" "$HOST:$REMOTE/data/$RUN_NAME/validation/audit-code/scripts/tests/"
   remote_script "$REMOTE" "$RUN_NAME" <<'REMOTE_SCRIPT'
 set -euo pipefail
@@ -153,7 +159,7 @@ retry="$out/faults-retry-v1"
 mkdir -p "$retry/code/scripts/bench"
 REMOTE_SCRIPT
   rsync -a "$ROOT/scripts/bench/body-api.bench" "$HOST:$REMOTE/data/$RUN_NAME/faults-retry-v1/code/scripts/bench/"
-  rsync -a "$ROOT/scripts/body-bc-remote.sh" "$HOST:$REMOTE/data/$RUN_NAME/faults-retry-v1/code/scripts/"
+  rsync -a "$ROOT/scripts/body-bc-remote.sh" "$ROOT/scripts/gq-job.sh" "$HOST:$REMOTE/data/$RUN_NAME/faults-retry-v1/code/scripts/"
   remote_script "$REMOTE" "$ENGINE" "$RUN_NAME" <<'REMOTE_SCRIPT'
 set -euo pipefail
 task_root="$HOME/$1"
@@ -278,16 +284,22 @@ simulation_phase=false
 case "$phase" in
   setup|tests|audit-tests|combat-tests|stage8-tests|stage8-faults|stage8-faults-retry|runtime-cpu-profile-tests|runtime-delivery-tests|load-delivery-tests|service-cadence-tests|visibility-boundary-tests|visibility-boundary-probe|compact-reply-tests|compact-reply-probe|pending-input-tests|pending-input-probe|block-reaction-tests|block-reaction|realtime-reference|realtime-reaction|screening-reaction|final-evaluation-tests|safe-peer-teacher-tests|safe-peer-tests|safe-peer-calibration|safe-peer-smoke|safe-peer-demos|defence-tests|defence-smoke|defence-demos|realtime-probe|probe-tests|probe|shadow|realtime|screening|load|load-reference|combat-geometry-preflight|combat-calibration|combat-smoke|combat-demos|smoke|demos|arena|arena-smoke) simulation_phase=true ;;
 esac
-lock_path="$HOME/gothic-ai/body-training.lock"
-[[ "$simulation_phase" != true ]] || lock_path="$HOME/gothic-ai/body-simulation.lock"
-exec 9>"$lock_path"
-flock -w "$lock_wait_seconds" 9 || { echo 'Another phase owns the required body lock' >&2; exit 1; }
-if [[ "$phase" == defence-train-cuda || "$phase" == safe-peer-train-cuda || "$phase" == train-cuda ]]; then
-  exec 8>"$HOME/gothic-ai/body-simulation.lock"
-  flock -w "$lock_wait_seconds" 8 || { echo 'CUDA training waits for the simulation owner' >&2; exit 1; }
+use_gq=false
+if gq_available; then
+  use_gq=true
+  echo 'gq: lock-wait is accepted for compatibility; batch queue waiting has no timeout.'
+else
+  lock_path="$HOME/gothic-ai/body-training.lock"
+  [[ "$simulation_phase" != true ]] || lock_path="$HOME/gothic-ai/body-simulation.lock"
+  exec 9>"$lock_path"
+  flock -w "$lock_wait_seconds" 9 || { echo 'Another phase owns the required body lock' >&2; exit 1; }
+  if [[ "$phase" == defence-train-cuda || "$phase" == safe-peer-train-cuda || "$phase" == train-cuda ]]; then
+    exec 8>"$HOME/gothic-ai/body-simulation.lock"
+    flock -w "$lock_wait_seconds" 8 || { echo 'CUDA training waits for the simulation owner' >&2; exit 1; }
+  fi
 fi
 [[ ! -e "$engine_root/build-active" ]] || { echo 'Wait for the private build' >&2; exit 1; }
-if [[ "$simulation_phase" == true ]] && pgrep -x 'gothic-body-run' >/dev/null; then
+if [[ "$use_gq" != true && "$simulation_phase" == true ]] && pgrep -x 'gothic-body-run' >/dev/null; then
   echo 'Another runner is active; wait for its owner' >&2; exit 1
 fi
 python="$task_root/.venv/bin/python"
@@ -632,6 +644,26 @@ snapshot={'recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoform
 PY
 gpu_watch_pid=''
 gpu_watch_done="$out/gpu-watch-$phase.done"
+gq_job_id_file="$out/gq-$phase.id"
+if [[ "$use_gq" == true ]]; then
+  queue_class=batch
+  case "$phase" in
+    tests|*-tests) queue_class=quick ;;
+    realtime|realtime-reference|realtime-reaction|realtime-probe|load|load-reference|screening-reaction|shadow|probe|screening|block-reaction|pending-input-probe|stage8-faults|stage8-faults-retry|verify|stage8-verify|defence-verify|safe-peer-verify)
+      queue_class=quiet ;;
+  esac
+  queue_budget="$budget"
+  if ((queue_budget > 7200)); then
+    # These suites skip completed seeds but cannot resume a partial seed from
+    # its checkpoint. Do not restart a partially written frozen experiment.
+    queue_budget=7200
+    echo "gq: warning: $phase cannot resume a partial checkpoint; --max is capped at 2h (legacy budget ${budget}s)."
+  fi
+  queue_args=(--class "$queue_class" --threads 2 --mem 6G --max "${queue_budget}s" --name "body-bc $3 $phase")
+  [[ "$queue_class" != quiet ]] || queue_args+=(--cpu-quota 200%)
+  [[ "$cuda_visible_devices" != 0 ]] || queue_args+=(--gpu-mem 1536M)
+  [[ ! -e "$gq_job_id_file" ]] || { echo 'Queue id evidence exists; preserve it and use a fresh run' >&2; exit 1; }
+fi
 if [[ "$cuda_visible_devices" == 0 ]]; then
   [[ ! -e "$out/gpu-watch-$phase.jsonl" && ! -e "$out/gpu-watch-$phase.json" && ! -e "$gpu_watch_done" ]] || {
     echo 'CUDA monitor evidence exists; preserve it and use a fresh run' >&2; exit 1;
@@ -640,14 +672,69 @@ if [[ "$cuda_visible_devices" == 0 ]]; then
     # The monitor lives outside the training unit and must not keep either
     # coordination lock alive after the launcher finishes.
     exec 8>&- 9>&-
-    exec "$python" "$code/scripts/body_training_gpu_watch.py" --unit "$unit.service" \
+    watcher_script="$code/scripts/body_training_gpu_watch.py"
+    if [[ "$use_gq" == true ]]; then
+      # Queue admission may take hours. Start the monitor's bounded startup
+      # clock only after this job's own unit becomes active.
+      while [[ ! -s "$gq_job_id_file" ]]; do
+        [[ ! -e "$gpu_watch_done" ]] || exit 0
+        sleep 0.2
+      done
+      unit="gq-$(cat "$gq_job_id_file")"
+      while ! systemctl --user is-active --quiet "$unit.service"; do
+        [[ ! -e "$gpu_watch_done" ]] || exit 0
+        sleep 0.2
+      done
+      # The current monitor understands gq units, including for a previously
+      # frozen training run whose original code remains immutable.
+      watcher_script="$task_root/source/scripts/body_training_gpu_watch.py"
+    fi
+    exec "$python" "$watcher_script" --unit "$unit.service" \
       --output "$out/gpu-watch-$phase.jsonl" --summary "$out/gpu-watch-$phase.json" --job-done "$gpu_watch_done"
   ) > "$out/gpu-watch-$phase.log" 2>&1 &
   gpu_watch_pid=$!
 fi
-trap 'systemctl --user stop "$unit.service" >/dev/null 2>&1 || true; if [[ -n "$gpu_watch_pid" ]]; then touch "$gpu_watch_done"; wait "$gpu_watch_pid" || true; fi' INT TERM
+if [[ "$use_gq" != true ]]; then
+  trap 'systemctl --user stop "$unit.service" >/dev/null 2>&1 || true; if [[ -n "$gpu_watch_pid" ]]; then touch "$gpu_watch_done"; wait "$gpu_watch_pid" || true; fi' INT TERM
+fi
 set +e
-systemd-run --user --wait --pipe --collect --unit="$unit" \
+if [[ "$use_gq" == true ]]; then
+  cd "$out"
+  GQ_JOB_ID_FILE="$gq_job_id_file" gq_job "${queue_args[@]}" -- \
+    env "PYTHONPATH=$code/body-service/src:$code/scripts" \
+    "CUDA_VISIBLE_DEVICES=$cuda_visible_devices" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 \
+    DISPLAY= WAYLAND_DISPLAY= GOTHIC_AI=0 \
+    VK_DRIVER_FILES=/nonexistent/body-bc-no-vulkan.json VK_ICD_FILENAMES=/nonexistent/body-bc-no-vulkan.json \
+    OPENGOTHIC_TEXTURES= OPENGOTHIC_BODY_TRACE=1 OPENGOTHIC_BODY_ANIMATION_RNG=isolated \
+    /usr/bin/time -v -o "$out/resources-$phase.txt" "${argv[@]}" > "$out/launcher-$phase.log" 2>&1 &
+  queue_launcher_pid=$!
+  queue_interrupted=0
+  queue_cancelled=0
+  cancel_queue_job() {
+    queue_interrupted=1
+    [[ "$queue_cancelled" == 0 ]] || return 0
+    # A signal can arrive while submit has not returned its ID yet. The
+    # background function has an extra Bash child, so signalling $! alone
+    # would leave that child and its queued request alive.
+    while [[ ! -s "$gq_job_id_file" ]] && kill -0 "$queue_launcher_pid" 2>/dev/null; do
+      sleep 0.1
+    done
+    if [[ -s "$gq_job_id_file" ]]; then
+      queue_cancelled=1
+      GQ_OWNER="${GQ_OWNER:-${task_root##*/}}" "${GQ_BIN:-$HOME/gothic-ai/bin/gq}" \
+        cancel "$(cat "$gq_job_id_file")" >&2 || true
+    fi
+  }
+  trap 'cancel_queue_job' INT TERM HUP
+  while :; do
+    queue_interrupted=0
+    wait "$queue_launcher_pid"
+    result=$?
+    [[ "$queue_interrupted" != 1 ]] || continue
+    break
+  done
+else
+  systemd-run --user --wait --pipe --collect --unit="$unit" \
   --property=Nice=10 --property=CPUQuota=200% --property=MemoryMax=6G \
   --property=TasksMax=128 --property="RuntimeMaxSec=$budget" --working-directory="$out" \
   --setenv="PYTHONPATH=$code/body-service/src:$code/scripts" \
@@ -656,7 +743,8 @@ systemd-run --user --wait --pipe --collect --unit="$unit" \
   --setenv="VK_DRIVER_FILES=/nonexistent/body-bc-no-vulkan.json" --setenv="VK_ICD_FILENAMES=/nonexistent/body-bc-no-vulkan.json" \
   --setenv="OPENGOTHIC_TEXTURES=" --setenv="OPENGOTHIC_BODY_TRACE=1" --setenv="OPENGOTHIC_BODY_ANIMATION_RNG=isolated" \
   /usr/bin/time -v -o "$out/resources-$phase.txt" "${argv[@]}" > "$out/launcher-$phase.log" 2>&1
-result=$?
+  result=$?
+fi
 if [[ -n "$gpu_watch_pid" ]]; then
   touch "$gpu_watch_done"
   wait "$gpu_watch_pid"
@@ -664,7 +752,7 @@ if [[ -n "$gpu_watch_pid" ]]; then
   [[ "$gpu_watch_result" -eq 0 ]] || result="$gpu_watch_result"
 fi
 set -e
-trap - INT TERM
+trap - INT TERM HUP
 "$python" - "$out" "$phase" after <<'PY'
 import datetime,json,subprocess,sys
 from pathlib import Path
@@ -706,8 +794,8 @@ case "$ACTION" in
   stage8-faults-retry) run_faults_retry ;;
   _faults-retry-local)
     # Only the frozen server copy enters this branch; run_phase's same heredoc
-    # executes locally, retaining its locks, resource bounds and snapshots.
-    remote_script() { bash -s -- "$@"; }
+    # executes locally, retaining its resource bounds and snapshots.
+    remote_script() { { cat "$ROOT/scripts/gq-job.sh"; cat; } | bash -s -- "$@"; }
     run_phase stage8-faults-retry ;;
   setup|tests|audit-tests|audit-report|combat-tests|probe-tests|stage8-tests|stage8-faults|runtime-cpu-profile-tests|runtime-delivery-tests|load-delivery-tests|service-cadence-tests|visibility-boundary-tests|visibility-boundary-probe|compact-reply-tests|compact-reply-probe|pending-input-tests|pending-input-probe|block-reaction-tests|block-reaction|realtime-reference|realtime-reaction|screening-reaction|final-evaluation-tests|safe-peer-teacher-tests|safe-peer-tests|safe-peer-calibration|safe-peer-smoke|safe-peer-demos|safe-peer-dataset|safe-peer-verify|safe-peer-overfit|safe-peer-train|safe-peer-train-cuda|safe-peer-evaluate|defence-tests|defence-smoke|defence-demos|defence-dataset|defence-verify|defence-overfit|defence-train|defence-train-cuda|defence-evaluate|train-cuda|realtime-probe|probe|shadow|realtime|screening|load|load-reference|combat-geometry-preflight|combat-calibration|combat-smoke|combat-demos|stage8-dataset|stage8-verify|stage8-overfit|stage8-train|stage8-evaluate|stage8-report|probe-report|smoke|demos|recover|dataset|verify|overfit|train|evaluate|arena|arena-smoke|report) run_phase "$ACTION" ;;
   collect) collect_run ;;

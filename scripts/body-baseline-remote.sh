@@ -14,12 +14,15 @@ BUILD_DIR="${BASELINE_BUILD:-build}"
 [[ "$RUN_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { echo 'Invalid run name' >&2; exit 2; }
 
 remote_script() {
-  local remote_args=""
-  local arg
-  for arg in "$@"; do
-    printf -v remote_args '%s %q' "$remote_args" "$arg"
+  local remote_args="" remote_env="" arg key
+  for arg in "$@"; do printf -v remote_args '%s %q' "$remote_args" "$arg"; done
+  for key in GQ_BIN GQ_OWNER GQ_HOME GQ_LEGACY_LOCK GQ_PROFILE; do
+    if [[ -n "${!key:-}" ]]; then
+      printf -v remote_env '%s %q' "$remote_env" "$key=${!key}"
+    fi
   done
-  ssh -o BatchMode=yes "$HOST" "bash -s --$remote_args"
+  { cat "$ROOT/scripts/gq-job.sh"; cat; } |
+    ssh -o BatchMode=yes "$HOST" "env$remote_env bash -s --$remote_args"
 }
 
 sync_sources() {
@@ -64,7 +67,13 @@ prepare_toolchain() {
   remote_script "$REMOTE" <<'REMOTE_SCRIPT'
 set -euo pipefail
 task_root="$HOME/$1"
-bash "$task_root/source/scripts/body-baseline-toolchain.sh"
+if gq_available; then
+  cd "$task_root"
+  gq_job --class quick --threads 3 --mem 6G --max 1h --name body-baseline-toolchain -- \
+    bash "$task_root/source/scripts/body-baseline-toolchain.sh"
+else
+  bash "$task_root/source/scripts/body-baseline-toolchain.sh"
+fi
 REMOTE_SCRIPT
 }
 
@@ -72,6 +81,11 @@ build_reference() {
   remote_script "$REMOTE" <<'REMOTE_SCRIPT'
 set -euo pipefail
 task_root="$HOME/$1"
+if gq_available; then
+  cd "$task_root"
+  build_command="$(cat <<'GQ_BUILD'
+set -euo pipefail
+task_root="$1"
 export VULKAN_SDK="$task_root/toolchain/vulkan-1.4.341.0"
 export PATH="$VULKAN_SDK/bin:$PATH"
 [[ -x "$VULKAN_SDK/bin/glslangValidator" && -f "$VULKAN_SDK/include/vulkan/vulkan.h" ]] || {
@@ -86,6 +100,26 @@ nice -n 10 cmake --build "$task_root/build" --target Gothic2Notr --parallel 2 \
   tail -60 "$task_root/reference/build.log" >&2; exit 1;
 }
 tail -5 "$task_root/reference/build.log"
+GQ_BUILD
+)"
+  gq_job --class quick --threads 3 --mem 6G --max 30m --name "body-baseline-build" -- \
+    bash -c "$build_command" bash "$task_root"
+else
+  export VULKAN_SDK="$task_root/toolchain/vulkan-1.4.341.0"
+  export PATH="$VULKAN_SDK/bin:$PATH"
+  [[ -x "$VULKAN_SDK/bin/glslangValidator" && -f "$VULKAN_SDK/include/vulkan/vulkan.h" ]] || {
+    echo 'Prepare the user-local toolchain first' >&2; exit 1;
+  }
+  nice -n 10 cmake -S "$task_root/source/OpenGothic" -B "$task_root/build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib" \
+    > "$task_root/reference/configure.log" 2>&1
+  nice -n 10 cmake --build "$task_root/build" --target Gothic2Notr --parallel 2 \
+    > "$task_root/reference/build.log" 2>&1 || {
+    tail -60 "$task_root/reference/build.log" >&2; exit 1;
+  }
+  tail -5 "$task_root/reference/build.log"
+fi
 REMOTE_SCRIPT
 }
 
@@ -99,7 +133,7 @@ out="$task_root/runs/$run_name"
 [[ -x "$binary" ]] || { echo 'Build reference engine first' >&2; exit 1; }
 exec 9>"$task_root/reference-run.lock"
 flock -n 9 || { echo 'Another baseline launcher owns the runner lock' >&2; exit 1; }
-if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
+if ! gq_available && pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
 [[ ! -e "$out" ]] || { echo 'Run directory already exists; choose a new run-name' >&2; exit 1; }
@@ -170,9 +204,40 @@ data = {
 (out / 'manifest.json').write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
 PY
 unit="gothic-body-baseline-$run_name"
-# Only this launcher's own transient unit can be stopped by the watchdog.
-trap 'systemctl --user stop "$unit.service" >/dev/null 2>&1 || true' INT TERM
-systemd-run --user --wait --pipe --collect --unit="$unit" \
+baseline_interrupted=0
+stop_baseline() {
+  if gq_available; then
+    baseline_interrupted=1
+    # The async function's $! can name a wrapper rather than the helper. Wait
+    # for submit to publish its ID, then cancel the owned request directly.
+    while [[ ! -s "$out/gq-job-id" && -n "${launch_pid:-}" ]] &&
+          kill -0 "$launch_pid" 2>/dev/null; do
+      sleep 0.1 || true
+    done
+    if [[ -s "$out/gq-job-id" ]]; then
+      GQ_OWNER="${GQ_OWNER:-$(basename "$task_root")}" \
+        "${GQ_BIN:-$HOME/gothic-ai/bin/gq}" cancel "$(cat "$out/gq-job-id")" || true
+    fi
+  else
+    systemctl --user stop "$unit.service" >/dev/null 2>&1 || true
+  fi
+}
+if gq_available; then
+  cd "$out/run"
+  trap 'stop_baseline' INT TERM HUP
+  launch=(gq_job --class quiet --threads 3 --mem 12G --display --cpu-quota 200% \
+    --max 15m --name "body-baseline-$run_name" -- env \
+    "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json" "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" \
+    "LP_NUM_THREADS=2" "ALSOFT_DRIVERS=null" \
+    "GOTHIC_AI=0" "TEMPEST_BACKGROUND=1" \
+    "TEMPEST_WINDOW_SIZE=640x480" "OPENGOTHIC_TEXTURES=" \
+    "OPENGOTHIC_BODY_TRACE=1" "OPENGOTHIC_BENCH_REALTIME=1" \
+    "OPENGOTHIC_BENCH=$task_root/source/scripts/bench/body-melee.bench" "OPENGOTHIC_BENCH_OUT=$out" \
+    "ASAN_OPTIONS=abort_on_error=0:halt_on_error=1:detect_leaks=0:exitcode=86:allow_addr2line=1:log_path=$out/asan")
+else
+  # Only this launcher's own transient unit can be stopped by the watchdog.
+  trap 'systemctl --user stop "$unit.service" >/dev/null 2>&1 || true' INT TERM
+  launch=(systemd-run --user --wait --pipe --collect --unit="$unit" \
   --property=Nice=10 --property=CPUQuota=200% --property=MemoryMax=12G \
   --property=TasksMax=128 --property=RuntimeMaxSec=900 \
   --working-directory="$out/run" \
@@ -184,28 +249,43 @@ systemd-run --user --wait --pipe --collect --unit="$unit" \
   --setenv="OPENGOTHIC_BENCH_REALTIME=1" \
   --setenv="OPENGOTHIC_BENCH=$task_root/source/scripts/bench/body-melee.bench" \
   --setenv="OPENGOTHIC_BENCH_OUT=$out" \
-  --setenv="ASAN_OPTIONS=abort_on_error=0:halt_on_error=1:detect_leaks=0:exitcode=86:allow_addr2line=1:log_path=$out/asan" \
+  --setenv="ASAN_OPTIONS=abort_on_error=0:halt_on_error=1:detect_leaks=0:exitcode=86:allow_addr2line=1:log_path=$out/asan")
+fi
+GQ_JOB_ID_FILE="$out/gq-job-id" "${launch[@]}" \
   /usr/bin/time -v -o "$out/resources.txt" \
   /usr/bin/xvfb-run -a -s '-screen 0 640x480x24' "$out/reference/Gothic2Notr" \
   -g "$task_root/assets" -g2 -window -devmode -save 1 > "$out/launcher.log" 2>&1 &
 launch_pid=$!
+if gq_available && [[ "$baseline_interrupted" == 1 ]]; then stop_baseline; fi
 failed=0
 while kill -0 "$launch_pid" 2>/dev/null; do
   if grep -Eq 'loading error:|unable to load landscape mesh|Fatal glibc|---crashlog\(|ERROR: AddressSanitizer|bodyduel: setup_failed' "$out/launcher.log" || \
      { [[ -f "$out/run/log.txt" ]] && grep -Eq '^loading error:|^bodyduel: setup_failed' "$out/run/log.txt"; } || \
      { [[ -f "$out/bench.log" ]] && grep -q 'bodyduel: setup_failed' "$out/bench.log"; }; then
     echo 'Reference loading/setup failed; stopping owned baseline unit' >&2
-    systemctl --user stop "$unit.service"
+    stop_baseline
     failed=1
     break
   fi
-  sleep 2
+  if gq_available; then sleep 2 || true; else sleep 2; fi
 done
-wait "$launch_pid" || failed=1
-trap - INT TERM
+launch_result=0
+if gq_available; then
+  while :; do
+    baseline_interrupted=0
+    wait "$launch_pid" && launch_result=0 || launch_result=$?
+    # A trapped signal interrupts wait before gq wait has returned its code.
+    [[ "$baseline_interrupted" == 1 ]] || break
+  done
+  [[ "$launch_result" == 0 ]] || failed=1
+else
+  wait "$launch_pid" || { launch_result=$?; failed=1; }
+fi
+trap - INT TERM HUP
 if [[ "$failed" -ne 0 ]]; then
   tail -40 "$out/launcher.log" >&2
   [[ ! -f "$out/run/log.txt" ]] || tail -40 "$out/run/log.txt" >&2
+  if gq_available && [[ "$launch_result" -ne 0 ]]; then exit "$launch_result"; fi
   exit 1
 fi
 cp "$out/run/log.txt" "$out/game.log"

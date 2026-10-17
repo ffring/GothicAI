@@ -25,12 +25,12 @@ from typing import Callable
 INTERVAL_SECONDS = 2
 MAX_OWN_GPU_MIB = 1536
 MIN_GPU_FREE_MIB = 2048
-UNIT_RE = re.compile(r"gothic-body-bc-[A-Za-z0-9][A-Za-z0-9_-]*-train-cuda\.service\Z")
+UNIT_RE = re.compile(r"(?:gothic-body-bc-[A-Za-z0-9][A-Za-z0-9_-]*-train-cuda|gq-[0-9a-f]{12})\.service\Z")
 
 
 def exact_unit(value: str) -> str:
     if not UNIT_RE.fullmatch(value):
-        raise ValueError("Expected exact gothic-body-bc-<run>-train-cuda.service user unit")
+        raise ValueError("Expected exact gothic-body-bc-<run>-train-cuda.service or gq-<id>.service user unit")
     return value
 
 
@@ -247,10 +247,10 @@ def watch(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--unit", required=True, help="Exact own gothic-body-bc-...-train-cuda.service name")
+    parser.add_argument("--unit", required=True, help="Exact own gothic-body-bc-...-train-cuda.service or gq-<id>.service name")
     parser.add_argument("--output", required=True, help="New JSONL output file; never overwritten")
     parser.add_argument("--summary", required=True, help="Compact final JSON artifact")
-    parser.add_argument("--job-done", required=True, help="Launcher creates this marker after systemd-run returns")
+    parser.add_argument("--job-done", required=True, help="Launcher creates this marker after the job returns")
     parser.add_argument("--startup-timeout-seconds", type=int, default=60)
     args = parser.parse_args()
     if sys.platform != "linux":

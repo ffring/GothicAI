@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${GOTHIC_BODY_SSH:-dev-ubuntu}"
 # An isolated stage 4 source/build cache keeps other worktrees and archived
-# stage 2/3 evidence intact. All stages share a single simulation lock.
+# stage 2/3 evidence intact. gq schedules work; older hosts keep the shared lock.
 REMOTE="gothic-ai/body-api"
 REFERENCE="gothic-ai/body-baseline/runs/melee-reference-stage1-v4"
 ACTION="${1:-preflight}"
@@ -13,9 +13,15 @@ RUN_NAME="${2:-stage4-api-$(date -u +%Y%m%dT%H%M%SZ)}"
 [[ "$RUN_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { echo 'Invalid run name' >&2; exit 2; }
 
 remote_script() {
-  local remote_args="" arg
+  local remote_args="" remote_env="" arg key
   for arg in "$@"; do printf -v remote_args '%s %q' "$remote_args" "$arg"; done
-  ssh -o BatchMode=yes "$HOST" "bash -s --$remote_args"
+  for key in GQ_BIN GQ_OWNER GQ_HOME GQ_LEGACY_LOCK GQ_PROFILE; do
+    if [[ -n "${!key:-}" ]]; then
+      printf -v remote_env '%s %q' "$remote_env" "$key=${!key}"
+    fi
+  done
+  { cat "$ROOT/scripts/gq-job.sh"; cat; } |
+    ssh -o BatchMode=yes "$HOST" "env$remote_env bash -s --$remote_args"
 }
 
 preflight() {
@@ -30,8 +36,12 @@ set -euo pipefail
 df -h "$HOME/gothic-ai"
 free -h
 nvidia-smi --query-gpu=memory.used,memory.free,utilization.gpu --format=csv,noheader
-systemctl --user is-active gothic-voxtral gothic-voxcpm
-if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
+if gq_available; then
+  systemctl --user show gothic-voxtral gothic-voxcpm --property=Id,ActiveState,SubState,MainPID
+else
+  systemctl --user is-active gothic-voxtral gothic-voxcpm
+fi
+if ! gq_available && pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
 echo "Stage 4 workspace: $HOME/$1"
@@ -44,7 +54,7 @@ set -euo pipefail
 task_root="$HOME/$1"
 mkdir -p "$task_root/source/scripts/bench" "$task_root/source/evals/npc-body" "$task_root/provenance" "$task_root/runs"
 [[ ! -e "$task_root/build-active" ]] || { echo 'Build owns source tree' >&2; exit 1; }
-if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
+if ! gq_available && pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Active simulation owns source/provenance; do not sync' >&2; exit 1
 fi
 free_kib=$(df -Pk "$task_root" | awk 'NR==2 {print $4}')
@@ -80,6 +90,11 @@ flock -n 9 || { echo 'Another build owns workspace' >&2; exit 1; }
 [[ ! -e "$task_root/build-active" ]] || { echo 'Inspect build marker first' >&2; exit 1; }
 touch "$task_root/build-active"
 trap 'rm -f "$task_root/build-active"' EXIT
+if gq_available; then
+  cd "$task_root"
+  build_command="$(cat <<'GQ_BUILD'
+set -euo pipefail
+task_root="$1"
 export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
 export PATH="$VULKAN_SDK/bin:$PATH"
 nice -n 10 cmake -S "$task_root/source/OpenGothic" -B "$task_root/build" -G Ninja \
@@ -90,6 +105,22 @@ nice -n 10 cmake --build "$task_root/build" --target gothic-body-runner Gothic2N
   > "$task_root/provenance/build.log" 2>&1 || { tail -80 "$task_root/provenance/build.log" >&2; exit 1; }
 "$task_root/build/opengothic/gothic-body-resolver-test" > "$task_root/provenance/resolver-tests.json"
 tail -8 "$task_root/provenance/build.log"
+GQ_BUILD
+)"
+  gq_job --class quick --threads 3 --mem 6G --max 30m --name "body-api-build" -- \
+    bash -c "$build_command" bash "$task_root"
+else
+  export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
+  export PATH="$VULKAN_SDK/bin:$PATH"
+  nice -n 10 cmake -S "$task_root/source/OpenGothic" -B "$task_root/build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib" \
+    > "$task_root/provenance/configure.log" 2>&1
+  nice -n 10 cmake --build "$task_root/build" --target gothic-body-runner Gothic2Notr gothic-body-resolver-test --parallel 2 \
+    > "$task_root/provenance/build.log" 2>&1 || { tail -80 "$task_root/provenance/build.log" >&2; exit 1; }
+  "$task_root/build/opengothic/gothic-body-resolver-test" > "$task_root/provenance/resolver-tests.json"
+  tail -8 "$task_root/provenance/build.log"
+fi
 REMOTE_SCRIPT
 }
 
@@ -106,9 +137,11 @@ binary="$task_root/build/opengothic/gothic-body-runner"
 out="$task_root/runs/$run_name"
 [[ -x "$binary" && -f "$task_root/build/libOpenGothic.a" ]] || { echo 'Build runner first' >&2; exit 1; }
 [[ ! -e "$task_root/build-active" ]] || { echo 'Wait for build' >&2; exit 1; }
-exec 9>"$HOME/gothic-ai/body-simulation.lock"
-flock -n 9 || { echo 'Another simulation owns shared lock' >&2; exit 1; }
-if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
+if ! gq_available; then
+  exec 9>"$HOME/gothic-ai/body-simulation.lock"
+  flock -n 9 || { echo 'Another simulation owns shared lock' >&2; exit 1; }
+fi
+if ! gq_available && pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
 [[ ! -e "$out" ]] || { echo 'Run exists; choose fresh name' >&2; exit 1; }
@@ -120,9 +153,17 @@ cp "$task_root/provenance/source-head.txt" "$task_root/provenance/source.patch" 
 cp "$task_root/build/opengothic/gothic-body-resolver-test" "$out/reference/"
 nice -n 10 tar -czf "$out/source.tar.gz" -C "$task_root/source" OpenGothic scripts evals
 unit="gothic-body-api-$run_name"
-trap 'systemctl --user stop "$unit.service" >/dev/null 2>&1 || true' INT TERM
-set +e
-systemd-run --user --wait --pipe --collect --unit="$unit" \
+if gq_available; then
+  cd "$out/run"
+  launch=(gq_job --class quiet --threads 2 --mem 12G --cpu-quota 200% \
+    --max 40m --name "body-api-$run_name" -- env \
+    "DISPLAY=" "WAYLAND_DISPLAY=" \
+    "GOTHIC_AI=0" "VK_DRIVER_FILES=/nonexistent/body-api-no-vulkan.json" \
+    "VK_ICD_FILENAMES=/nonexistent/body-api-no-vulkan.json" "OPENGOTHIC_TEXTURES=" \
+    "OPENGOTHIC_BODY_TRACE=1" "OPENGOTHIC_BODY_ANIMATION_RNG=isolated")
+else
+  trap 'systemctl --user stop "$unit.service" >/dev/null 2>&1 || true' INT TERM
+  launch=(systemd-run --user --wait --pipe --collect --unit="$unit" \
   --property=Nice=10 --property=CPUQuota=200% --property=MemoryMax=12G \
   --property=TasksMax=128 --property=RuntimeMaxSec=2400 \
   --working-directory="$out/run" \
@@ -130,7 +171,10 @@ systemd-run --user --wait --pipe --collect --unit="$unit" \
   --setenv="VK_DRIVER_FILES=/nonexistent/body-api-no-vulkan.json" \
   --setenv="VK_ICD_FILENAMES=/nonexistent/body-api-no-vulkan.json" \
   --setenv="OPENGOTHIC_TEXTURES=" --setenv="OPENGOTHIC_BODY_TRACE=1" \
-  --setenv="OPENGOTHIC_BODY_ANIMATION_RNG=isolated" \
+  --setenv="OPENGOTHIC_BODY_ANIMATION_RNG=isolated")
+fi
+set +e
+"${launch[@]}" \
   /usr/bin/time -v -o "$out/resources.txt" \
   python3 "$task_root/source/scripts/body_api_suite.py" \
     --runner "$out/reference/gothic-body-runner" \

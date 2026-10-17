@@ -16,10 +16,16 @@ STATE = module.UnitState("active", CGROUP, "a"*32)
 
 
 @pytest.mark.parametrize("unit", ["gothic-decider.service", "device-assistant.service", "gothic-body-bc-x-train.service",
-                                  UNIT+";gothic-decider.service", "*.service"])
+                                  UNIT+";gothic-decider.service", "*.service", "gq-*.service", "gq-123.service",
+                                  "gq-0123456789ag.service", "gq-0123456789ab.service;gothic-decider.service"])
 def test_unit_guard_cannot_target_services_or_patterns(unit):
     with pytest.raises(ValueError, match="exact"):
         module.exact_unit(unit)
+
+
+@pytest.mark.parametrize("unit", [UNIT, "gq-0123456789ab.service"])
+def test_exact_legacy_or_queue_unit_is_accepted(unit):
+    assert module.exact_unit(unit) == unit
 
 
 def test_cgroup_cannot_include_another_users_or_manager_processes(tmp_path):
