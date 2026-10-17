@@ -11,6 +11,6 @@ export const BrandSeal: React.FC = () => (
   />
 );
 
-export const BrandSting: React.FC = () => (
-  <OffthreadVideo src={staticFile('brand/sting.mp4')} volume={1} style={{width: W, height: H}} />
+export const BrandSting: React.FC<{volume: number}> = ({volume}) => (
+  <OffthreadVideo src={staticFile('brand/sting.mp4')} volume={volume} style={{width: W, height: H}} />
 );

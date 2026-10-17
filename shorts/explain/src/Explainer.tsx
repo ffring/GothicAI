@@ -184,7 +184,7 @@ export const Explainer: React.FC<Plan> = (plan) => {
       </Sequence>
       {plan.brand && (
         <Sequence from={contentFrames} durationInFrames={STING_FRAMES} name="brand sting">
-          <BrandSting />
+          <BrandSting volume={plan.brandVolume} />
         </Sequence>
       )}
     </AbsoluteFill>

@@ -151,6 +151,7 @@ const Word = z.object({text: z.string(), start: z.number(), end: z.number()});
 
 export const Plan = z.object({
   brand: z.boolean().default(true),
+  brandVolume: z.number().nonnegative().default(0.355),
   lang: z.enum(['ru', 'en']),
   hook: z.object({text: z.string(), until: z.number()}),
   beats: z.array(Beat).min(1),

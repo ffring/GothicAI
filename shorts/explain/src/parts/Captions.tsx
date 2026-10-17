@@ -77,13 +77,7 @@ export const Captions: React.FC<{lines: Word[][]; brand: boolean}> = ({lines, br
         }}
       >
         {all[i].map((w, k) => (
-          <span
-            key={k}
-            style={{
-              color: t >= w.start && t < w.end + 0.05 ? COLOR.now : COLOR.text,
-              ...(brand && /\d/.test(w.text) ? {fontFamily: FONT.body, fontWeight: 900} : {}),
-            }}
-          >
+          <span key={k} style={{color: t >= w.start && t < w.end + 0.05 ? COLOR.now : COLOR.text}}>
             {(k > 0 ? ' ' : '') + w.text}
           </span>
         ))}
