@@ -14,7 +14,7 @@ import threading
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from gothic_body.runtime import MAX_REQUEST_BYTES, PolicyRuntime
+from gothic_body.runtime import MAX_REQUEST_BYTES, PolicyRuntime, shared_feature_packer
 from gothic_body.serving_net import PolicyTCPServer
 
 
@@ -238,6 +238,41 @@ def test_invalid_request_is_bounded_fallback_and_connection_recovers(raw, reques
         assert malformed.exchange(step(observation(), "recovered"))["status"] == "decision"
         assert other.exchange(reset())["ok"]
         assert other.exchange(step(observation(), "other-client"))["status"] == "decision"
+
+
+def test_real_feature_packer_error_keeps_request_id_and_queued_replies():
+    packer = shared_feature_packer()
+    from body_trajectory_dataset import PERIODIC_FEATURE_VERSION, canonical_feature_names
+
+    names = canonical_feature_names()
+    normalizer = {"feature_version": PERIODIC_FEATURE_VERSION, "feature_names": names,
+                  "mean": dict.fromkeys(names, 0.0), "std": dict.fromkeys(names, 1.0)}
+
+    def real_packer_runtime():
+        return PolicyRuntime(backend=CounterBackend(), checkpoint_sha256="frozen",
+                             normalizer=normalizer, feature_packer=packer)
+
+    valid = {**observation(), "schema_version": 1, "sim_step": 1, "dt_game_ms": 50,
+             "mask_kind": "shared_melee_resolver", "self": {}, "target": {}}
+    invalid = {**valid, "target": None}
+    # Reproduce the actual helper exception without substituting a failing stub.
+    with pytest.raises(AttributeError):
+        packer(invalid, normalizer, sequence_dt_game_ms=50)
+    requests = [reset(), step(invalid, "null-target"), {"cmd": "status", "id": "queued-status"},
+                reset("recovery-reset"), step(valid, "valid-row"), {"cmd": "close", "id": "close"}]
+    with running_server(real_packer_runtime) as port, Client(port) as client:
+        client.socket.sendall(b"".join(json.dumps(request).encode() + b"\n" for request in requests))
+        responses = [client.receive() for _ in requests]
+        assert client.reader.readline() == b""
+    assert [response["id"] for response in responses] == [request["id"] for request in requests]
+    rejected = responses[1]
+    assert rejected["ok"] is False and rejected["status"] == "fallback"
+    assert rejected["reason"] == "invalid_request" and rejected["action_id"] is None
+    assert rejected["model_processed"] is False and "NoneType" in rejected["error"]
+    assert responses[2]["ok"] and responses[2]["counters"].get("processed", 0) == 0
+    assert responses[3]["reason"] == "episode_reset"
+    assert responses[4]["status"] == "decision" and responses[4]["process"]["model_processed"]
+    assert responses[5]["reason"] == "closed"
 
 
 def test_reader_limits_raw_bytes_drains_oversized_line_and_accepts_exact_limit():

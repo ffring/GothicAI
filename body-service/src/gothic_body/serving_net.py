@@ -70,7 +70,9 @@ class PolicySession:
             else:
                 raise ValueError("unknown service command")
             return {"ok": True, **response, "id": request_id, "schema_version": 1}
-        except (ValueError, KeyError, TypeError, RuntimeError, OverflowError, RecursionError) as error:
+        except Exception as error:
+            # Nested JSON fields can also fail inside policy helpers. Contain
+            # every request failure here so its ID and queued replies survive.
             return invalid_request(error, request_id)
 
     def step(self, request: dict) -> dict:
