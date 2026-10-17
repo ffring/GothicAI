@@ -23,7 +23,7 @@ export const COLOR = {
 
 export const FONT = {
   title: 'PT Serif', // hooks and titles
-  body: 'Montserrat', // captions, labels, numbers (tabular figures)
+  body: 'Montserrat', // labels, numbers (tabular figures), unbranded captions
 };
 
 export const OUTLINE = '0 0 6px rgba(0,0,0,0.9), 0 0 2px #000, 0 0 2px #000, 0 0 2px #000';

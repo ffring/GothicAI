@@ -1,10 +1,11 @@
 import React from 'react';
 import {Composition, type CalculateMetadataFunction} from 'remotion';
+import {STING_FRAMES} from './Brand';
 import {Explainer} from './Explainer';
 import {Plan} from './schema';
 import {FPS, H, W} from './theme';
 
-// a plan that needs no files: the dice chart alone (the real plans come with --props <workspace>/plan.json)
+// the dice chart demo (use --props '{"brand":false}' without assets; real plans come from the workspace)
 const demo: Plan = Plan.parse({
   lang: 'ru',
   hook: {text: 'Шаг за 15 м — минус треть шанса', until: 2},
@@ -32,7 +33,7 @@ const demo: Plan = Plan.parse({
 const metadata: CalculateMetadataFunction<Plan> = ({props}) => {
   const plan = Plan.parse(props);
   const dur = plan.beats.reduce((s, b) => s + b.dur, 0);
-  return {props: plan, durationInFrames: Math.round(dur * FPS)};
+  return {props: plan, durationInFrames: Math.round(dur * FPS) + (plan.brand ? STING_FRAMES : 0)};
 };
 
 export const Root: React.FC = () => (
