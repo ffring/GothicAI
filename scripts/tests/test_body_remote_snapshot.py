@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -52,12 +53,17 @@ elif args[0] == "wait":
     (root / "waiting").write_text("1")
     deadline = time.monotonic() + 10
     while not (root / "release").exists():
+        if (root / "cancelled").exists():
+            sys.exit(73)
         if time.monotonic() > deadline:
             sys.exit(98)
         time.sleep(0.01)
     saved = json.loads((root / "command.json").read_text())
     sys.exit(subprocess.run(saved["command"], cwd=saved["cwd"]).returncode)
 elif args[0] == "cancel":
+    (root / "cancelling").write_text(args[1])
+    while os.environ.get("FAKE_CANCEL_BLOCK") and not (root / "release-cancel").exists():
+        time.sleep(0.01)
     (root / "cancelled").write_text(args[1])
 else:
     sys.exit(99)
@@ -80,6 +86,7 @@ for name in ("engine_library", "config", "scenario", "melee_scenario", "senses_s
 if args.scenario is None:
     result["scenario"] = (args.source.parent / "scripts/bench/body-melee.bench").read_text()
 result["source"] = (args.source / "native.cpp").read_text()
+args.output.mkdir(parents=True, exist_ok=True)
 (args.output / "snapshot-result.json").write_text(json.dumps(result))
 '''
 REPORT = '''import argparse
@@ -343,6 +350,120 @@ Path("log.txt").write_text("test runner\\n")
             for member in archive.getmembers():
                 if member.isfile():
                     assert archive.extractfile(member).read() == (out / "reference/source" / member.name).read_bytes()
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+
+def prepare_bc_run(remote):
+    task = prepare(remote, "body", "body_setup_probe.py")
+    source = task / "source"
+    (source / "body-service/src").mkdir(parents=True)
+    (source / "evals/npc-body/body-bc-v1.json").write_text(json.dumps({
+        "resources": {"required_services": []}}))
+    (source / "evals/npc-body/body-stage8-v1.json").write_text(json.dumps({"runtime": {}}))
+    out = task / "data/bc-snapshot-test"
+    shutil.copytree(source, out / "code")
+    (out / "reference").mkdir()
+    runner = out / "reference/gothic-body-runner"
+    runner.write_text("v1")
+    runner.chmod(0o755)
+    (out / "environment.json").write_text("{}")
+    with tarfile.open(out / "source.tar.gz", "w:gz") as archive:
+        archive.add(engine_task(task) / "source/OpenGothic", arcname="OpenGothic")
+    (task / ".venv/bin").mkdir(parents=True)
+    (task / ".venv/bin/python").symlink_to(sys.executable)
+    binary_dir = Path(remote["env"]["GQ_BIN"]).parent
+    executable(binary_dir / "nvidia-smi", 'print("fake GPU")\n')
+    return task, out
+
+
+@pytest.mark.parametrize("existing_snapshot", [False, True])
+def test_queued_bc_phase_keeps_frozen_native_inputs(remote, existing_snapshot):
+    task, out = prepare_bc_run(remote)
+    engine = engine_task(task)
+    if existing_snapshot:
+        shutil.copytree(engine / "source/OpenGothic", out / "reference/source/OpenGothic")
+        shutil.copyfile(engine / "build/libOpenGothic.a", out / "reference/libOpenGothic.a")
+    # Native source belongs to the prepared archive, including older runs that
+    # do not yet have an extracted reference. Existing snapshots stay intact.
+    (engine / "source/OpenGothic/native.cpp").write_text("v2")
+    if existing_snapshot:
+        (engine / "build/libOpenGothic.a").write_text("v2")
+    process = subprocess.Popen(["bash", str(SCRIPTS / "body-bc-remote.sh"), "setup", out.name],
+                               env=remote["env"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        wait_for_queue(process, remote)
+        with (engine / "build.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        command = json.loads((remote["root"] / "command.json").read_text())["command"]
+        assert command[command.index("--source") + 1] == str(out / "reference/source/OpenGothic")
+        assert command[command.index("--engine-library") + 1] == str(out / "reference/libOpenGothic.a")
+        (engine / "source/OpenGothic/native.cpp").write_text("v3")
+        (engine / "build/libOpenGothic.a").write_text("v3")
+        (remote["root"] / "release").touch()
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 0, stdout + stderr + (out / "launcher-setup.log").read_text()
+        result = json.loads((out / "setup-probe/snapshot-result.json").read_text())
+        assert {key: result[key] for key in ("suite", "dependency", "source", "engine_library", "runner")} == {
+            key: "v1" for key in ("suite", "dependency", "source", "engine_library", "runner")}
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+
+def test_legacy_bc_phase_keeps_shared_native_paths(remote):
+    task, out = prepare_bc_run(remote)
+    env = {**remote["env"], "GQ_BIN": str(remote["root"] / "absent-gq"), "FAKE_PGREP_EXIT": "1"}
+    result = subprocess.run(["bash", str(SCRIPTS / "body-bc-remote.sh"), "setup", out.name],
+                            env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = json.loads((remote["root"] / "legacy-command.json").read_text())
+    assert args[args.index("--source") + 1] == str(engine_task(task) / "source/OpenGothic")
+    assert args[args.index("--engine-library") + 1] == str(engine_task(task) / "build/libOpenGothic.a")
+    assert not (out / "reference/source").exists()
+    assert not (out / "reference/libOpenGothic.a").exists()
+
+
+def test_bc_phase_repeated_interrupt_during_cancel_cancels_job(remote):
+    task, out = prepare_bc_run(remote)
+    env = {**remote["env"], "FAKE_CANCEL_BLOCK": "1"}
+    launcher = (SCRIPTS / "body-bc-remote.sh").read_text()
+    # Execute exactly the remote run_phase body. An SSH client otherwise adds
+    # a second process group whose own terminal handling is outside this test.
+    freezer = launcher.split("freeze_engine_reference() {", 1)[1].split("\nremote_script() {", 1)[0]
+    body = launcher.split("run_phase() {", 1)[1].split("<<'REMOTE_SCRIPT'\n", 1)[1].split("\nREMOTE_SCRIPT", 1)[0]
+    payload = (SCRIPTS / "gq-job.sh").read_text() + "\nfreeze_engine_reference() {" + freezer + "\n" + body
+    process = subprocess.Popen(["bash", "-s", "--", "gothic-ai/body", "gothic-ai/body-api",
+                                out.name, "setup", "", "0"], env=env,
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    process.stdin.write(payload)
+    process.stdin.close()
+    process.stdin = None
+    try:
+        wait_for_queue(process, remote)
+        os.killpg(process.pid, signal.SIGINT)
+        deadline = time.monotonic() + 5
+        while not (remote["root"] / "cancelling").exists():
+            assert process.poll() is None, process.communicate(timeout=1)
+            assert time.monotonic() < deadline, "cancel did not start"
+            time.sleep(0.01)
+        os.killpg(process.pid, signal.SIGINT)
+        time.sleep(0.05)
+        assert process.poll() is None
+        assert not (remote["root"] / "cancelled").exists()
+        (remote["root"] / "release-cancel").touch()
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 73, stdout + stderr + (out / "launcher-setup.log").read_text()
+        assert (remote["root"] / "cancelled").read_text() == "snapshot123"
+        calls = [json.loads(line)[0] for line in (remote["root"] / "calls.jsonl").read_text().splitlines()]
+        assert calls == ["submit", "wait", "cancel"]
+        assert "could not cancel" not in (out / "launcher-setup.log").read_text()
     finally:
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)

@@ -14,6 +14,41 @@ LOCK_WAIT_SECONDS="${GOTHIC_BODY_LOCK_WAIT_SECONDS:-0}"
 # Other sessions queue on the same Ryzen lock with long blocking waits; a phase may wait up to 10 h.
 [[ "$LOCK_WAIT_SECONDS" =~ ^[0-9]{1,5}$ ]] && ((LOCK_WAIT_SECONDS <= 36000)) || { echo 'Lock wait must be an integer from 0 to 36000 seconds' >&2; exit 2; }
 
+freeze_engine_reference() {
+  local out="$1" engine_root="$2" lock_held="${3:-false}" snapshot_tmp
+  if [[ "$lock_held" != true ]]; then
+    exec 8>"$engine_root/build.lock"
+    flock -n 8 || { echo 'Build owns the engine snapshot; wait for its owner' >&2; exit 1; }
+  fi
+  [[ ! -e "$engine_root/build-active" ]] || { echo 'Wait for the private build' >&2; exit 1; }
+  # Reuse this run's prepared source and retain the first library snapshot.
+  # A later sync/build must not change the inputs while a phase is queued.
+  engine_source="$out/reference/source/OpenGothic"
+  engine_library="$out/reference/libOpenGothic.a"
+  if [[ ! -d "$engine_source" ]]; then
+    snapshot_tmp=$(mktemp -d "$out/reference/.source.XXXXXX")
+    if ! tar -xzf "$out/source.tar.gz" -C "$snapshot_tmp" OpenGothic; then
+      rm -rf "$snapshot_tmp"
+      return 1
+    fi
+    mkdir -p "$out/reference/source"
+    mv "$snapshot_tmp/OpenGothic" "$engine_source"
+    rmdir "$snapshot_tmp"
+  fi
+  if [[ ! -f "$engine_library" ]]; then
+    snapshot_tmp=$(mktemp "$out/reference/.library.XXXXXX")
+    if ! cp "$engine_root/build/libOpenGothic.a" "$snapshot_tmp"; then
+      rm -f "$snapshot_tmp"
+      return 1
+    fi
+    mv "$snapshot_tmp" "$engine_library"
+  fi
+  if [[ "$lock_held" != true ]]; then
+    flock -u 8
+    exec 8>&-
+  fi
+}
+
 remote_script() {
   local remote_args="" arg variable
   for arg in "$@"; do printf -v remote_args '%s %q' "$remote_args" "$arg"; done
@@ -22,6 +57,7 @@ remote_script() {
       if [[ -n "${!variable+x}" ]]; then printf 'export %s=%q\n' "$variable" "${!variable}"; fi
     done
     cat "$ROOT/scripts/gq-job.sh"
+    declare -f freeze_engine_reference
     cat
   } | ssh -o BatchMode=yes "$HOST" "bash -s --$remote_args"
 }
@@ -89,6 +125,10 @@ engine_root="$HOME/$2"
 out="$task_root/data/$3"
 [[ ! -e "$out" ]] || { echo 'Run exists; choose a fresh name' >&2; exit 1; }
 [[ -x "$engine_root/build/opengothic/gothic-body-runner" ]] || { echo 'Build runner first' >&2; exit 1; }
+if gq_available; then
+  exec 8>"$engine_root/build.lock"
+  flock -n 8 || { echo 'Build owns the engine snapshot; wait for its owner' >&2; exit 1; }
+fi
 [[ ! -e "$engine_root/build-active" ]] || { echo 'Wait for the private build' >&2; exit 1; }
 mkdir -p "$out/code" "$out/reference" "$out/models" "$out/validation"
 rsync -a --exclude=__pycache__/ --exclude=.pytest_cache/ \
@@ -98,6 +138,11 @@ cp "$engine_root/build/opengothic/gothic-body-runner" \
 cp "$task_root/provenance/"{source-head.txt,source.patch,configure.log,build.log,resolver-tests.json,body-environment.txt} "$out/"
 nice -n 10 tar --exclude=__pycache__ --exclude=.pytest_cache -czf "$out/source.tar.gz" \
   -C "$engine_root/source" OpenGothic -C "$out/code" scripts evals body-service
+if gq_available; then
+  freeze_engine_reference "$out" "$engine_root" true
+  flock -u 8
+  exec 8>&-
+fi
 CUDA_VISIBLE_DEVICES='' "$task_root/.venv/bin/python" - "$out" <<'PY'
 import datetime,hashlib,json,os,subprocess,sys
 from importlib.metadata import version
@@ -165,10 +210,13 @@ set -euo pipefail
 task_root="$HOME/$1"
 engine_root="$HOME/$2"
 out="$task_root/data/$3"
-CUDA_VISIBLE_DEVICES='' "$task_root/.venv/bin/python" - "$out" "$engine_root" "$task_root/.venv/bin/python" <<'PY'
+engine_source="$engine_root/source/OpenGothic"
+engine_library="$engine_root/build/libOpenGothic.a"
+if gq_available; then freeze_engine_reference "$out" "$engine_root"; fi
+CUDA_VISIBLE_DEVICES='' "$task_root/.venv/bin/python" - "$out" "$engine_source" "$engine_library" "$task_root/.venv/bin/python" <<'PY'
 import datetime,hashlib,json,sys
 from pathlib import Path
-out,engine,python=Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3]
+out,engine_source,engine_library,python=Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),sys.argv[4]
 retry=out/'faults-retry-v1';code=out/'code';home=Path.home()
 def sha(path):
     digest=hashlib.sha256()
@@ -188,15 +236,15 @@ originals += [name for name in ['resources-stage8-faults.txt','services-stage8-f
 originals += [str(path.relative_to(out)) for path in sorted((out/'faults').rglob('*')) if path.is_file()]
 argv=[python,str(code/'scripts/body_api_suite.py'),'--runner',str(out/'reference/gothic-body-runner'),
       '--assets',str(home/'gothic-ai/body-baseline/assets'),'--save',str(home/'gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav'),
-      '--reference',str(home/'gothic-ai/body-baseline/runs/melee-reference-stage1-v4'),'--source',str(engine/'source/OpenGothic'),
-      '--engine-library',str(engine/'build/libOpenGothic.a'),'--scenario',str(code/'scripts/bench/body-arena.bench'),
+      '--reference',str(home/'gothic-ai/body-baseline/runs/melee-reference-stage1-v4'),'--source',str(engine_source),
+      '--engine-library',str(engine_library),'--scenario',str(code/'scripts/bench/body-arena.bench'),
       '--melee-scenario',str(code/'scripts/bench/body-melee.bench'),'--native-reference',str(home/'gothic-ai/body-headless/runs/stage3-v1/native-off'),
       '--config',str(code/'evals/npc-body/body-api-v1.json'),'--scenario',str(fixture),'--output',str(retry/'run')]
 declaration={'schema_version':1,'kind':'body_stage8_missing_bench_retry','recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),
     'original_run':str(out),'phase':'stage8-faults-retry','allowed_changes':['scenario_fixture_path','output_path'],
     'original_files':{name:sha(out/name) for name in originals},
     'retry_files':{str(path.relative_to(retry)):sha(path) for path in sorted((retry/'code').rglob('*')) if path.is_file()},
-    'engine_library':{'path':str(engine/'build/libOpenGothic.a'),'sha256':sha(engine/'build/libOpenGothic.a')},
+    'engine_library':{'path':str(engine_library),'sha256':sha(engine_library)},
     'argv':argv,'resources':{'cpu_quota_percent':200,'memory_max':'6G','runtime_max_seconds':2400,'nice':10,'tasks_max':128,
         'working_directory':str(out),'simulation_lock':str(home/'gothic-ai/body-simulation.lock')},
     'execution_environment':{'PYTHONPATH':str(code/'body-service/src')+':'+str(code/'scripts'),
@@ -303,10 +351,13 @@ if [[ "$use_gq" != true && "$simulation_phase" == true ]] && pgrep -x 'gothic-bo
   echo 'Another runner is active; wait for its owner' >&2; exit 1
 fi
 python="$task_root/.venv/bin/python"
+engine_source="$engine_root/source/OpenGothic"
+engine_library="$engine_root/build/libOpenGothic.a"
+if [[ "$use_gq" == true ]]; then freeze_engine_reference "$out" "$engine_root"; fi
 common=(--runner "$out/reference/gothic-body-runner" --assets "$HOME/gothic-ai/body-baseline/assets"
  --save "$HOME/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav"
  --reference "$HOME/gothic-ai/body-baseline/runs/melee-reference-stage1-v4"
- --source "$engine_root/source/OpenGothic" --engine-library "$engine_root/build/libOpenGothic.a"
+ --source "$engine_source" --engine-library "$engine_library"
  --scenario "$code/scripts/bench/body-arena.bench" --melee-scenario "$code/scripts/bench/body-melee.bench"
  --native-reference "$HOME/gothic-ai/body-headless/runs/stage3-v1/native-off")
 budget=2400
@@ -698,38 +749,16 @@ fi
 set +e
 if [[ "$use_gq" == true ]]; then
   cd "$out"
+  # Keep the helper in this shell so its protected, retryable cancellation
+  # handles launcher signals; the GPU watcher already runs in the background.
   GQ_JOB_ID_FILE="$gq_job_id_file" gq_job "${queue_args[@]}" -- \
     env "PYTHONPATH=$code/body-service/src:$code/scripts" \
     "CUDA_VISIBLE_DEVICES=$cuda_visible_devices" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 \
     DISPLAY= WAYLAND_DISPLAY= GOTHIC_AI=0 \
     VK_DRIVER_FILES=/nonexistent/body-bc-no-vulkan.json VK_ICD_FILENAMES=/nonexistent/body-bc-no-vulkan.json \
     OPENGOTHIC_TEXTURES= OPENGOTHIC_BODY_TRACE=1 OPENGOTHIC_BODY_ANIMATION_RNG=isolated \
-    /usr/bin/time -v -o "$out/resources-$phase.txt" "${argv[@]}" > "$out/launcher-$phase.log" 2>&1 &
-  queue_launcher_pid=$!
-  queue_interrupted=0
-  queue_cancelled=0
-  cancel_queue_job() {
-    queue_interrupted=1
-    [[ "$queue_cancelled" == 0 ]] || return 0
-    # A signal can arrive before submit returns its ID. The parent owns GPU
-    # monitor cleanup, so cancel the exact request and reap the helper below.
-    while [[ ! -s "$gq_job_id_file" ]] && kill -0 "$queue_launcher_pid" 2>/dev/null; do
-      sleep 0.1
-    done
-    if [[ -s "$gq_job_id_file" ]]; then
-      queue_cancelled=1
-      GQ_OWNER="${GQ_OWNER:-${task_root##*/}}" "${GQ_BIN:-$HOME/gothic-ai/bin/gq}" \
-        cancel "$(cat "$gq_job_id_file")" >&2 || true
-    fi
-  }
-  trap 'cancel_queue_job' INT TERM HUP
-  while :; do
-    queue_interrupted=0
-    wait "$queue_launcher_pid"
-    result=$?
-    [[ "$queue_interrupted" != 1 ]] || continue
-    break
-  done
+    /usr/bin/time -v -o "$out/resources-$phase.txt" "${argv[@]}" > "$out/launcher-$phase.log" 2>&1
+  result=$?
 else
   systemd-run --user --wait --pipe --collect --unit="$unit" \
   --property=Nice=10 --property=CPUQuota=200% --property=MemoryMax=6G \
@@ -792,7 +821,7 @@ case "$ACTION" in
   _faults-retry-local)
     # Only the frozen server copy enters this branch; run_phase's same heredoc
     # executes locally, retaining its resource bounds and snapshots.
-    remote_script() { { cat "$ROOT/scripts/gq-job.sh"; cat; } | bash -s -- "$@"; }
+    remote_script() { { cat "$ROOT/scripts/gq-job.sh"; declare -f freeze_engine_reference; cat; } | bash -s -- "$@"; }
     run_phase stage8-faults-retry ;;
   setup|tests|audit-tests|audit-report|combat-tests|probe-tests|stage8-tests|stage8-faults|runtime-cpu-profile-tests|runtime-delivery-tests|load-delivery-tests|service-cadence-tests|visibility-boundary-tests|visibility-boundary-probe|compact-reply-tests|compact-reply-probe|pending-input-tests|pending-input-probe|block-reaction-tests|block-reaction|realtime-reference|realtime-reaction|screening-reaction|final-evaluation-tests|safe-peer-teacher-tests|safe-peer-tests|safe-peer-calibration|safe-peer-smoke|safe-peer-demos|safe-peer-dataset|safe-peer-verify|safe-peer-overfit|safe-peer-train|safe-peer-train-cuda|safe-peer-evaluate|defence-tests|defence-smoke|defence-demos|defence-dataset|defence-verify|defence-overfit|defence-train|defence-train-cuda|defence-evaluate|train-cuda|realtime-probe|probe|shadow|realtime|screening|load|load-reference|combat-geometry-preflight|combat-calibration|combat-smoke|combat-demos|stage8-dataset|stage8-verify|stage8-overfit|stage8-train|stage8-evaluate|stage8-report|probe-report|smoke|demos|recover|dataset|verify|overfit|train|evaluate|arena|arena-smoke|report) run_phase "$ACTION" ;;
   collect) collect_run ;;
