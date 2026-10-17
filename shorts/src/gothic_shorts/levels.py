@@ -21,7 +21,7 @@ TRUE_PEAK_METADATA_HALF_STEP = 0.0005
 VOICE_TOLERANCE_LU = 0.5
 MASTER_CORRECTION_TOLERANCE_LU = 0.1
 MAX_MASTER_CORRECTIONS = 2
-MAX_ENDING_CORRECTIONS = 2
+MAX_BALANCE_CORRECTIONS = 2
 CEILING_HEADROOM_LU = 0.5
 PEAK_LIMIT = 0.79  # Leave AAC/intersample headroom below the final true-peak ceiling.
 # A sub-threshold pilot follows the limiter's shared gain without influencing it.
@@ -296,6 +296,32 @@ def ending_correction(voice_lufs: float, ending_lufs: float | None) -> float:
     return correction if abs(correction) > MASTER_CORRECTION_TOLERANCE_LU + 1e-6 else 0.0
 
 
+def balance_correction(balance: dict) -> dict[str, float]:
+    """Lower decoded effects and retarget music at the fixed common mastering gain."""
+    readings = {row["id"]: row["measured_lufs"] for row in balance["rows"]}
+    correction = {"game_gain_db": 0.0, "game_duck_db": 0.0, "music_gain_db": 0.0}
+    s = readings["voice"]
+    if s is None or not math.isfinite(s):
+        return correction
+    pause, speech = readings["game_pause"], readings["game_speech"]
+    if pause is not None and math.isfinite(pause):
+        correction["game_gain_db"] = min(0.0, s - GAME_PAUSE_BELOW_VOICE_LU - CEILING_HEADROOM_LU - pause)
+        pause += correction["game_gain_db"]
+    if speech is not None and math.isfinite(speech):
+        # Body attenuation already lowers speech; duck only its remaining excess.
+        speech += correction["game_gain_db"]
+        correction["game_duck_db"] = max(0.0, speech - (s - GAME_BELOW_VOICE_LU - CEILING_HEADROOM_LU))
+    target = music_target(s, pause)
+    for key, duck in (("music_pause", 0.0), ("music_speech", MUSIC_DUCK_DB)):
+        measured = readings[key]
+        if measured is not None and math.isfinite(measured):
+            difference = target - duck - measured
+            if abs(difference) > LEVEL_TOLERANCE_LU + 1e-6:
+                correction["music_gain_db"] = difference
+                break
+    return {key: value if abs(value) > 1e-6 else 0.0 for key, value in correction.items()}
+
+
 def master_filter(speech_lufs: float, length: float, *, voice_probe: bool = False,
                   gain_correction_db: float = 0.0) -> str:
     pilot = f"aeval='val(0)|val(1)|{LIMITER_PILOT}':c=2.1," if voice_probe else ""
@@ -341,14 +367,24 @@ class AudioGraph:
                        meter_gain_db=meter_gain_db)
 
     def mix(self, *, stem_probes: bool = False, ending_gain_correction_db: float = 0.0,
-            ending_start: float | None = None) -> str:
+            ending_start: float | None = None, balance_corrections: dict[str, float] | None = None,
+            speech: list[Window] | None = None) -> str:
         filters, tracks = list(self.filters), dict(self.tracks)
-        if ending_gain_correction_db:
+        corrections = balance_corrections or {}
+        game_gain = corrections.get("game_gain_db", 0.0)
+        game_duck = corrections.get("game_duck_db", 0.0)
+        if ending_gain_correction_db or game_gain or game_duck:
             if ending_start is None:
-                raise ValueError("An ending correction needs the body's duration")
-            ending_filter = body_gain_filter(0.0, ending_start, ending_gain_correction_db)
-            filters.append(f"[{tracks['game']}]{ending_filter}[ending_adjusted]")
-            tracks["game"] = "ending_adjusted"
+                raise ValueError("A game correction needs the body's duration")
+            if game_duck and not speech:
+                raise ValueError("A ducking correction needs speech windows")
+            game_filter = body_gain_filter(game_gain, ending_start, ending_gain_correction_db)
+            filters.append(f"[{tracks['game']}]{game_filter},"
+                           f"{duck_filter(speech or [], game_duck)}[game_adjusted]")
+            tracks["game"] = "game_adjusted"
+        if corrections.get("music_gain_db"):
+            filters.append(f"[{tracks['music']}]volume={corrections['music_gain_db']:.9f}dB[music_adjusted]")
+            tracks["music"] = "music_adjusted"
         if stem_probes:
             for track, label in tracks.items():
                 filters.append(f"[{label}]asplit=2[master_{track}_mix][master_{track}_probe]")
@@ -357,7 +393,9 @@ class AudioGraph:
                                   f"amix=inputs={len(tracks)}:duration=first:normalize=0"])
 
     def master_graph(self, speech_lufs: float, length: float, *, gain_correction_db: float = 0.0,
-                     ending_gain_correction_db: float = 0.0, ending_start: float | None = None) -> str:
+                     ending_gain_correction_db: float = 0.0, ending_start: float | None = None,
+                     balance_corrections: dict[str, float] | None = None,
+                     speech: list[Window] | None = None) -> str:
         """Output stereo [a] and every stem under the mix's exact limiting gain.
 
         The limiter applies one gain to every channel. Its quiet constant third
@@ -368,7 +406,7 @@ class AudioGraph:
         processing = master_filter(speech_lufs, length, voice_probe=True,
                                    gain_correction_db=gain_correction_db)
         mix = self.mix(stem_probes=True, ending_gain_correction_db=ending_gain_correction_db,
-                       ending_start=ending_start)
+                       ending_start=ending_start, balance_corrections=balance_corrections, speech=speech)
         envelopes = "".join(f"[master_{track}_envelope]" for track in self.tracks)
         graph = [f"{mix},{processing},asplit=2[master_mix][master_pilot]",
                  "[master_mix]pan=stereo|c0=c0|c1=c1[a]",

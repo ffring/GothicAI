@@ -121,7 +121,8 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
     """Lift voiced mixes by the voice's gain, limit peaks, then validate decoded AAC.
 
     Correct the common gain from the decoded voice, with at most two adjustments.
-    Then recalibrate the ending against that voice with the common gain fixed.
+    Then recalibrate effects, music and ending with at most two adjustments,
+    keeping the common gain fixed.
     Unvoiced mixes retain the original limiter and two-pass loudnorm.
     mix is the filter graph ending where mastering goes on.
     """
@@ -134,15 +135,19 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
             stems = {track: Path(pending) / f"{track}.m4a" for track in audio.tracks}
             gain_correction = 0.0
             ending_gain_correction = 0.0
+            balance_corrections = {"game_gain_db": 0.0, "game_duck_db": 0.0, "music_gain_db": 0.0}
             ending_start = report["ending_windows"][0][0] if report["ending_windows"] else None
+            body_end = ending_start if ending_start is not None else length
             report["master_passes"] = 0
             report["master_corrections_db"] = []
             report["ending_corrections_db"] = []
+            report["balance_corrections_db"] = []
 
             def render() -> float:
                 # Every stem shares the actual mix limiter's gain and final fade.
                 graph = audio.master_graph(report["speech_lufs"], length, gain_correction_db=gain_correction,
-                                           ending_gain_correction_db=ending_gain_correction, ending_start=ending_start)
+                                           ending_gain_correction_db=ending_gain_correction, ending_start=body_end,
+                                           balance_corrections=dict(balance_corrections), speech=report["speech_windows"])
                 command = ["ffmpeg", "-y", *inputs, "-filter_complex", graph,
                            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
                            "-b:a", "192k", "-ar", "48000", str(candidate)]
@@ -167,15 +172,24 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
                 gain_correction += correction
                 report["master_corrections_db"].append(correction)
             balance = measure_balance(voice_lufs)
-            for _ in range(levels.MAX_ENDING_CORRECTIONS):
+            for _ in range(levels.MAX_BALANCE_CORRECTIONS):
                 ending = next(row["measured_lufs"] for row in balance["rows"] if row["id"] == "ending")
                 correction = levels.ending_correction(voice_lufs, ending)
-                if not correction:
+                adjustments = levels.balance_correction(balance)
+                if not correction and not any(adjustments.values()):
                     break
                 ending_gain_correction += correction
-                report["ending_corrections_db"].append(correction)
+                if correction:
+                    report["ending_corrections_db"].append(correction)
+                if any(adjustments.values()):
+                    report["balance_corrections_db"].append(adjustments)
+                    for key, value in adjustments.items():
+                        balance_corrections[key] += value
                 voice_lufs = render()
                 balance = measure_balance(voice_lufs)
+            for key, value in balance_corrections.items():
+                if value:
+                    report[key] = report.get(key, 0.0) + value
             if ending_start is not None:
                 report["ending_gain_db"] += ending_gain_correction
                 report["ending_gain_correction_db"] = ending_gain_correction

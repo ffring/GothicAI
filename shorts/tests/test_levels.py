@@ -465,7 +465,44 @@ def _mock_mastered_balance(monkeypatch, report):
     """Keep loop/peak/click unit tests independent of synthetic stem decoding."""
     report.update(speech_windows=[(4, 8)], pause_windows=[(0, 4), (8, 12)], ending_windows=[])
     monkeypatch.setattr(levels, "check_mastered_balance", lambda _stems, voice, *_windows:
-                        levels.check_balance(voice, None, None, voice - 6, voice - 3))
+                        levels.check_balance(voice, None, None, voice - 6.5, voice - 3.5))
+
+
+@pytest.mark.parametrize("game_speech,game_pause,body_change,extra_duck", [
+    (-20, -16, -1.5, 0),  # Lowering the whole body also resolves the speech excess.
+    (-19, -18, 0, 1.5),  # Quiet pauses need no attenuation; duck only the speech.
+    (-18, -16, -1.5, 1),
+    (-21, -18, 0, 0),  # Already quiet effects are never raised toward the ceiling.
+])
+def test_balance_correction_attenuates_effects_without_double_ducking(
+    game_speech, game_pause, body_change, extra_duck,
+):
+    report = levels.check_balance(-14, None, None, game_speech, game_pause)
+    correction = levels.balance_correction(report)
+    assert correction.get("game_gain_db", 0) == pytest.approx(body_change)
+    assert correction.get("game_duck_db", 0) == pytest.approx(extra_duck)
+    assert correction.get("music_gain_db", 0) == 0
+    corrected = levels.check_balance(
+        -14, None, None, game_speech + body_change - extra_duck, game_pause + body_change,
+    )
+    assert corrected["ok"] is True
+
+
+@pytest.mark.parametrize("music_pause,music_speech,expected", [
+    (-34, -40, -4),
+    (-42, -48, 4),
+    (-37, -43, 0),  # The existing music tolerance does not trigger another render.
+])
+def test_balance_correction_retargets_music_below_quiet_decoded_effects(
+    music_pause, music_speech, expected,
+):
+    report = levels.check_balance(-14, music_pause, music_speech, -38, -35)
+    correction = levels.balance_correction(report)
+    assert correction.get("game_gain_db", 0) == 0
+    assert correction.get("game_duck_db", 0) == 0
+    assert correction.get("music_gain_db", 0) == pytest.approx(expected)
+    corrected = levels.check_balance(-14, music_pause + expected, music_speech + expected, -38, -35)
+    assert corrected["ok"] is True
 
 
 @pytest.mark.parametrize("linear_peak,accepted", [(0.892, False), (0.891, True)])
@@ -670,6 +707,42 @@ def test_master_corrections_change_only_common_gain_and_stop_after_two(
     assert audio.mix() == mix
 
 
+def test_mastering_rejects_effects_still_above_the_caps_after_two_corrections(
+    tmp_path, monkeypatch, comparison_cut,
+):
+    report = levels.check_balance(-28, None, None, -34.5, -31.5)
+    report["speech_lufs"] = -28
+    _mock_mastered_balance(monkeypatch, report)
+    # Simulate an unresponsive source/render: attenuation fails to change the
+    # decoded levels. The bound must preserve the normal publication failure.
+    balance = Mock(side_effect=lambda _stems, voice, *_windows:
+                   levels.check_balance(voice, None, None, voice - 4, voice - 2))
+    monkeypatch.setattr(levels, "check_mastered_balance", balance)
+    audio = levels.AudioGraph(["-i", "joined.mp4"], ["[0:a]asplit=2[g][vo]"],
+                              {"game": "g", "voice": "vo"})
+
+    def render(command):
+        for argument in command:
+            if argument.endswith(("short-ru.mp4", "voice.m4a")):
+                Path(argument).touch()
+
+    monkeypatch.setattr(comparison_cut, "run", render)
+    monkeypatch.setattr(levels, "meter_file", Mock(return_value=(-14, -1.9)))
+    monkeypatch.setattr(comparison_cut.clicks, "detect", Mock(return_value=[]))
+    out = tmp_path / "short-ru.mp4"
+    out.write_bytes(b"stale")
+    with pytest.raises(ValueError, match="mastering check failed"):
+        comparison_cut.master(audio.inputs, audio.mix(), out, 12,
+                              voiced=True, audio=audio, report=report)
+    assert report["master_common_passes"] == 1
+    assert report["master_passes"] == balance.call_count == levels.MAX_BALANCE_CORRECTIONS + 1
+    assert len(report["balance_corrections_db"]) == levels.MAX_BALANCE_CORRECTIONS == 2
+    assert _rows(report)["game_pause"]["ok"] is False
+    assert _rows(report)["game_speech"]["ok"] is False
+    assert report["ok"] is False
+    assert not out.exists()
+
+
 @pytest.mark.parametrize("failed_row", ["true_peak", "clicks", "voice_mastered"])
 def test_mastering_failure_writes_report_and_click_times(
     tmp_path, monkeypatch, comparison_cut, capsys, failed_row,
@@ -865,8 +938,9 @@ def test_peaky_voice_reaches_base_with_bounded_common_gain_corrections(
     assert out.stat().st_size > 0
 
 
-def test_mastering_rejects_loud_effects_after_recalibrating_the_ending(
-    tmp_path, comparison_cut, monkeypatch,
+@pytest.mark.parametrize("with_music", [False, True])
+def test_mastering_recalibrates_decoded_effects_after_peaky_voice_corrections(
+    tmp_path, comparison_cut, monkeypatch, with_music,
 ):
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg is required for synthetic mastering")
@@ -885,17 +959,34 @@ def test_mastering_rejects_loud_effects_after_recalibrating_the_ending(
          "sine=frequency=440:sample_rate=48000:duration=14",
          "-c:v", "mpeg4", "-c:a", "pcm_f32le", str(joined)], check=True, capture_output=True,
     )
-    audio, report = levels.calibrate(joined, None, [(voice, 4)], [(4, 8)], 12, 14)
+    music = tmp_path / "music.wav" if with_music else None
+    if music is not None:
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+             "sine=frequency=220:sample_rate=48000:duration=12",
+             "-c:a", "pcm_f32le", str(music)], check=True, capture_output=True,
+        )
+    audio, report = levels.calibrate(joined, music, [(voice, 4)], [(4, 8)], 12, 14)
     assert report["ok"] is True
     pre_master_rows = [row.copy() for row in report["rows"]]
-    measured_voice, candidate_levels = [], {}
+    measured_voice, candidate_levels, balances, common_gains = [], {}, [], []
     real_meter = levels.meter_file
+    real_balance, real_graph = levels.check_mastered_balance, audio.master_graph
+
+    def balance(*args):
+        result = real_balance(*args)
+        balances.append(_rows(result))
+        return result
+
+    def graph(*args, **kwargs):
+        common_gains.append(kwargs["gain_correction_db"])
+        return real_graph(*args, **kwargs)
 
     def meter(path):
         result = real_meter(path)
         if path.name == "voice.m4a":
             measured_voice.append(result[0])
-        elif path.name == out.name:
+        elif path.name == out.name and not with_music:
             # These windows contain only effects in the actual mixed AAC.
             candidate_levels["game_pause"] = levels.measure(
                 ["-i", str(path)], "[0:a]anull[mixed]", "mixed", [(0, 3.8), (8.2, 11.8)],
@@ -906,26 +997,49 @@ def test_mastering_rejects_loud_effects_after_recalibrating_the_ending(
         return result
 
     monkeypatch.setattr(levels, "meter_file", meter)
-    with pytest.raises(ValueError, match="mastering check failed"):
-        comparison_cut.master(audio.inputs, audio.mix(), out, 14,
-                              voiced=True, audio=audio, report=report)
+    monkeypatch.setattr(levels, "check_mastered_balance", balance)
+    monkeypatch.setattr(audio, "master_graph", graph)
+    original_mix = audio.mix()
+    comparison_cut.master(audio.inputs, original_mix, out, 14,
+                          voiced=True, audio=audio, report=report)
     rows = _rows(report)
-    assert measured_voice[-1] == pytest.approx(-14.4, abs=0.2)
+    # Before refining the decoded effects, the limiter has taken at least 0.5 LU
+    # from the voice; compensating the voice lifts the effects above both caps.
+    assert measured_voice[0] <= levels.BASE_LUFS - 0.5
+    assert balances[0]["game_pause"]["ok"] is False
+    assert balances[0]["game_speech"]["ok"] is False
+    assert 1 <= len(report["balance_corrections_db"]) <= 2
+    assert 1 < len(balances) <= levels.MAX_BALANCE_CORRECTIONS + 1
+    assert common_gains[report["master_common_passes"] - 1:] == pytest.approx(
+        [sum(report["master_corrections_db"])] * len(balances),
+    )
+    assert measured_voice[-1] == pytest.approx(-14, abs=levels.VOICE_TOLERANCE_LU)
     assert rows["voice_mastered"]["measured_lufs"] == measured_voice[-1]
     assert rows["voice_mastered"]["ok"] is True
-    for key, below in (("game_pause", 3), ("ending", 2)):
+    for key, below in (("game_pause", 3), ("game_speech", 6), ("ending", 2)):
         assert rows[key]["target_lufs"] == pytest.approx(measured_voice[-1] - below)
-        assert rows[key]["measured_lufs"] == pytest.approx(candidate_levels[key], abs=0.2)
-    assert rows["game_pause"]["ok"] is False
-    assert rows["ending"]["ok"] is True
-    assert candidate_levels["game_pause"] == pytest.approx(-13.0, abs=0.3)
-    assert candidate_levels["ending"] == pytest.approx(measured_voice[-1] - 3.5, abs=0.5)
+        assert rows[key]["ok"] is True
+    assert rows["game_pause"]["measured_lufs"] == pytest.approx(measured_voice[-1] - 3.5, abs=0.2)
+    assert rows["game_speech"]["measured_lufs"] <= measured_voice[-1] - 6.5 + 0.2
+    assert rows["ending"]["measured_lufs"] == pytest.approx(measured_voice[-1] - 3.5, abs=0.5)
+    if with_music:
+        assert any(step["music_gain_db"] for step in report["balance_corrections_db"])
+        assert balances[0]["music_pause"]["ok"] is False
+        assert rows["music_pause"]["ok"] is True
+        assert rows["music_speech"]["ok"] is True
+        assert rows["music_below_game"]["ok"] is True
+    else:
+        for key in ("game_pause", "ending"):
+            assert rows[key]["measured_lufs"] == pytest.approx(candidate_levels[key], abs=0.2)
     assert report["ending_corrections_db"]
     assert report["pre_master_rows"] == pre_master_rows
     assert all(row["ok"] is not False for row in report["pre_master_rows"])
     assert report["balance_stage"] == "mastered_aac"
-    assert report["ok"] is False
-    assert not out.exists()
+    assert rows["true_peak"]["ok"] is True
+    assert rows["clicks"]["count"] == 0
+    assert audio.mix() == original_mix
+    assert report["ok"] is True
+    assert out.stat().st_size > 0
 
 
 def test_mastering_checks_all_decoded_stems_of_a_balanced_music_mix(tmp_path, comparison_cut):
