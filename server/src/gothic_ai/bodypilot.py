@@ -40,6 +40,7 @@ HEARTBEAT_INTERVAL = 0.250
 HEARTBEAT_TIMEOUT = 0.500
 LEASE_TIMEOUT_MS = 2000
 EVENTS_INTERVAL = 0.150
+FINISH_TIMEOUT = 2.0
 MAX_JSON_BYTES = 256 * 1024
 BRIDGE_ERRORS = (GameError, ConnectionClosed, OSError, TimeoutError)
 TARGET_IS_HERO = [
@@ -579,9 +580,10 @@ class BodyPilot:
                 return True
             try:
                 status = await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
-            except BRIDGE_ERRORS:
-                if self._closing:
-                    return False
+            except BRIDGE_ERRORS as error:
+                if "unknown_entity" in str(error):
+                    self._pending_acquire = None
+                    return True
             else:
                 if self.link.closed.is_set() or (
                     self.link.body_session_epoch, self.link.body_generation
@@ -605,28 +607,77 @@ class BodyPilot:
                         self._claimed_fights.add(self.npc)
                         self._pending_acquire = None
                         return True
-                if self._closing:
-                    return False
             await asyncio.sleep(0.025)
         self._pending_acquire = None
         return True
 
-    async def _finish(self, reason: str) -> None:
-        self._watch_ready = False
-        if self._pending_acquire is not None and not await self._recover_acquire():
-            return
-        npc, lease, client = self.npc, self.lease, self.client
-        if npc is None and lease is None and client is None:
-            return
-        heartbeat, self._heartbeat_task = self._heartbeat_task, None
-        if heartbeat is not None:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
+    async def _finish_status(self, lease: BodyLease) -> bool:
         try:
+            status = await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
+        except GameError as error:
+            if "unknown_entity" not in str(error):
+                raise
+        else:
+            if (status.session_epoch, status.world_epoch) != (lease.session_epoch, lease.world_epoch):
+                return False
+            if any(actor.entity_id == lease.entity_id for actor in status.actors):
+                return self.link.body_leases.get(lease.entity_id) != lease
+        # Removed actors cannot send native_restored or appear in a status row.
+        if self.link.body_leases.get(lease.entity_id) == lease:
+            self.link.body_leases.pop(lease.entity_id)
+        return True
+
+    async def _finish(self, reason: str) -> None:
+        npc, client = self.npc, self.client
+        if npc is None and self.lease is None and client is None:
+            return
+        self._watch_ready = False
+        unconfirmed = "acquire_status" if self._pending_acquire is not None else "body_release"
+        lease = self.lease
+        heartbeat, self._heartbeat_task = self._heartbeat_task, None
+        try:
+            # One wall-clock budget covers every route into ownership cleanup.
+            async with asyncio.timeout(FINISH_TIMEOUT):
+                if heartbeat is not None:
+                    heartbeat.cancel()
+                    await asyncio.gather(heartbeat, return_exceptions=True)
+                if self._pending_acquire is not None:
+                    await self._recover_acquire()
+                lease = self.lease
+                if lease is not None:
+                    try:
+                        await self.link.body_release(lease, timeout=BRIDGE_TIMEOUT)
+                    except BRIDGE_ERRORS as error:
+                        unconfirmed = f"body_release:{error}"
+                while lease is not None and self.link.body_leases.get(lease.entity_id) == lease:
+                    if self.link.closed.is_set():
+                        break
+                    try:
+                        await self.link.body_events(timeout=BRIDGE_TIMEOUT)
+                    except BRIDGE_ERRORS:
+                        pass
+                    if self.link.body_leases.get(lease.entity_id) != lease:
+                        break
+                    try:
+                        if await self._finish_status(lease):
+                            break
+                        unconfirmed = "native_restored"
+                    except BRIDGE_ERRORS as error:
+                        unconfirmed = f"body_control_status:{error}"
+                    await asyncio.sleep(0.025)
+        except TimeoutError:
+            reason = "finish_deadline"
+            # Make a final authoritative check before discarding local ownership.
+            lease = self.lease
             if lease is not None:
                 with contextlib.suppress(*BRIDGE_ERRORS):
-                    await self.link.body_release(lease, timeout=BRIDGE_TIMEOUT)
+                    async with asyncio.timeout(BRIDGE_TIMEOUT):
+                        await self._finish_status(lease)
         finally:
+            if reason == "finish_deadline" and lease is not None:
+                if self.link.body_leases.get(lease.entity_id) == lease:
+                    self.link.body_leases.pop(lease.entity_id)
+            self._pending_acquire = None
             if client is not None:
                 try:
                     if lease is not None:
@@ -639,32 +690,16 @@ class BodyPilot:
                     with contextlib.suppress(OSError, ValueError, PolicyError, TimeoutError):
                         await client.call("close")
                 finally:
-                    await client.close()
-        # A release receipt can still mean a protected segment is finishing. Do not
-        # reconfigure the watch until the bridge confirms actual native ownership.
-        while lease is not None and self.link.body_leases.get(lease.entity_id) == lease:
-            if self.link.closed.is_set() or self._closing:
-                break
-            try:
-                await self.link.body_events(timeout=BRIDGE_TIMEOUT)
-            except BRIDGE_ERRORS:
-                pass
-            if self.link.body_leases.get(lease.entity_id) != lease:
-                break
-            # Event polling drains the native queue even if its reply is lost.
-            # Reconcile the cache with a non-destructive ownership snapshot.
-            try:
-                await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
-            except BRIDGE_ERRORS:
-                pass
-            if self.link.body_leases.get(lease.entity_id) == lease:
-                await asyncio.sleep(0.025)
-        if self._watched and not self.link.body_leases:
-            with contextlib.suppress(*BRIDGE_ERRORS):
-                await self.link.body_watch([], timeout=BRIDGE_TIMEOUT)
+                    with contextlib.suppress(OSError, TimeoutError):
+                        async with asyncio.timeout(SERVICE_TIMEOUT):
+                            await client.close()
+            if self._watched and not self.link.body_leases:
+                with contextlib.suppress(*BRIDGE_ERRORS):
+                    async with asyncio.timeout(BRIDGE_TIMEOUT):
+                        await self.link.body_watch([], timeout=BRIDGE_TIMEOUT)
         log.info(
             "neural-body end npc=%s reason=%s decisions=%d fallback=%d service_p50_ms=%s "
-            "service_p95_ms=%s acquire_refusals=%s",
+            "service_p95_ms=%s acquire_refusals=%s unconfirmed=%s",
             npc,
             reason,
             self._decisions,
@@ -672,6 +707,7 @@ class BodyPilot:
             _percentile(self._latencies, 0.50),
             _percentile(self._latencies, 0.95),
             dict(self._refusals),
+            unconfirmed if reason == "finish_deadline" else None,
         )
         self.npc = self.lease = self.client = None
         self._watched = self._watch_ready = False

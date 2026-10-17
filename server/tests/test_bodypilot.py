@@ -10,6 +10,7 @@ from itertools import pairwise
 import pytest
 from websockets.exceptions import ConnectionClosedError
 
+from gothic_ai import bodypilot
 from gothic_ai.bodypilot import BodyPilot
 from gothic_ai.game import GameLink
 from gothic_ai.protocol import (
@@ -50,6 +51,8 @@ class Bridge:
         self.sent_times = []
         self.link = GameLink(self)
         self.acquire_rejections = deque()
+        self.release_rejections = deque()
+        self.status_error = None
         self.acquire_roster_delay = 0
         self.target_is_hero = True
         self.release_pending_polls = 0
@@ -165,6 +168,11 @@ class Bridge:
                 if self._released_pending:
                     self.release_pending_polls -= 1
         elif kind == "body_control_status":
+            if self.status_error is not None:
+                self.link._dispatch(Result(
+                    type="result", req=command["req"], ok=False, error=self.status_error,
+                ))
+                return
             actors = []
             if self._control_scope is not None:
                 row = {
@@ -216,7 +224,9 @@ class Bridge:
             if kind == "body_release":
                 if self._lease_watchdog is not None:
                     self._lease_watchdog.cancel()
-                if not self.provider_owned:
+                if self.release_rejections:
+                    value.update(accepted=False, reason=self.release_rejections.popleft())
+                elif not self.provider_owned:
                     value.update(accepted=False, reason="not_owned", owner="native", control_generation=0)
                 elif self.release_pending_polls:
                     self._released_pending = True
@@ -899,6 +909,100 @@ async def test_lost_native_restoration_event_reconciles_lease_and_allows_the_nex
         rig.bridge.emit(fighter(7, owned=True))
         await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
         assert len(rig.policy.commands("reset")) == 2
+
+
+@pytest.mark.parametrize("status_response", ["missing_actor", "unknown_entity"])
+async def test_removed_actor_during_release_clears_watch_and_allows_a_different_fight(
+    status_response, monkeypatch,
+):
+    monkeypatch.setattr(bodypilot, "FINISH_TIMEOUT", 0.8)
+    async with running() as rig:
+        await rig.active()
+        lease = rig.link.body_leases[1]
+        # Removal destroys the native actor without a restoration event. The
+        # adapter still has the lease, while neither release nor status can find it.
+        rig.bridge.provider_owned = False
+        rig.bridge._control_scope = None
+        rig.bridge._lease_watchdog.cancel()
+        rig.bridge.release_rejections.append("unknown_entity")
+        if status_response == "unknown_entity":
+            rig.bridge.status_error = "unknown_entity"
+        assert rig.link.body_leases == {1: lease}
+        rig.link._dispatch(Attached(type="attached", npc="NPC", name="Fighter"))
+        await eventually(lambda: rig.pilot.npc is None, timeout=1.2)
+        assert rig.bridge.commands("body_release")
+        assert rig.bridge.commands("body_control_status")
+        assert not rig.link.body_leases
+        assert rig.bridge._watched_npc is None
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
+        assert len(rig.policy.commands("end_episode")) == 1
+        assert len(rig.policy.commands("close")) == 1
+        assert not rig.pilot._done.is_set()
+
+        rig.bridge.status_error = None
+        rig.bridge.roster(RosterEntry(
+            id="OTHER", name="Other Fighter", guild=1, distance=250.0,
+            in_view=True, activity="fight", state="ZS_ATTACK",
+        ))
+        rig.combat("OTHER")
+        await eventually(lambda: rig.pilot._watch_ready)
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == ["OTHER"]
+        rig.bridge.emit(player_row(5), fighter(6, entity=4))
+        await eventually(lambda: len(rig.bridge.commands("body_acquire")) == 2)
+        await eventually(lambda: rig.link.body_leases)
+        rig.bridge.emit(fighter(7, owned=True, entity=4))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        assert rig.link.body_leases[4].npc == "OTHER"
+        assert len(rig.policy.commands("reset")) == 2
+
+
+async def test_unconfirmed_release_hits_finish_deadline_and_closes_episode(monkeypatch, caplog):
+    monkeypatch.setattr(bodypilot, "FINISH_TIMEOUT", 0.8)
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        await rig.active()
+        lease = rig.link.body_leases[1]
+        # Ownership has returned to native, but all evidence is unavailable:
+        # release says not_owned, the event queue is empty, and status never replies.
+        rig.bridge.provider_owned = False
+        rig.bridge._lease_watchdog.cancel()
+        rig.bridge.response_delays["body_control_status"] = 2.0
+        rig.link._dispatch(Attached(type="attached", npc="NPC", name="Fighter"))
+        await eventually(lambda: rig.bridge.commands("body_control_status"))
+        assert rig.link.body_leases == {1: lease}
+        await eventually(lambda: rig.pilot.npc is None, timeout=1.2)
+        assert not rig.link.body_leases
+        assert rig.bridge._watched_npc is None
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
+        assert len(rig.policy.commands("end_episode")) == 1
+        assert len(rig.policy.commands("close")) == 1
+        assert not rig.pilot._done.is_set()
+        assert "reason=finish_deadline" in caplog.text
+        assert "unconfirmed=" in caplog.text
+
+
+async def test_uncertain_acquire_recovery_is_bounded_by_finish_deadline(monkeypatch, caplog):
+    monkeypatch.setattr(bodypilot, "FINISH_TIMEOUT", 0.8)
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        rig.bridge.response_delays.update(body_acquire=2.0, body_control_status=2.0)
+        await rig.watch()
+        await eventually(lambda: rig.pilot._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.commands("body_control_status"))
+        # The native watchdog has restored the actor, but the adapter never
+        # received its acquire receipt or an ownership snapshot.
+        rig.bridge.provider_owned = False
+        rig.bridge._lease_watchdog.cancel()
+        await eventually(lambda: rig.pilot.npc is None, timeout=1.2)
+        assert rig.pilot._pending_acquire is None
+        assert not rig.link.body_leases
+        assert rig.bridge._watched_npc is None
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
+        assert not rig.policy.requests
+        assert not rig.pilot._done.is_set()
+        assert "reason=finish_deadline" in caplog.text
+        assert "unconfirmed=" in caplog.text
 
 
 @pytest.mark.parametrize("failed_command", [
