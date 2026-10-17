@@ -29,7 +29,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from gothic_shorts import levels
+from gothic_shorts import clicks, levels
 
 ROOT = Path(__file__).resolve().parents[2]
 W, H, HALF = 1080, 1920, 960
@@ -46,7 +46,6 @@ SEAL = (110, W - 140, 110)  # the corner seal: size, x, y (under the slow-motion
 GRADE = "eq=gamma=1.18:saturation=1.08"  # the game's noon is dark on a phone; the same for both takes
 WHITE, ACCENT = (255, 255, 255, 255), (255, 214, 120, 255)  # a caption's words, the one being said
 PAGE_WORDS = 3  # a caption page: at most this many words, a new one after a comma or a full stop
-PEAK_LIMIT = 0.79  # a voiced master's peaks over -2 dBFS limited after its gain to -14 LUFS
 
 
 def font(spec: tuple[str, int], size: int) -> ImageFont.FreeTypeFont:
@@ -117,42 +116,33 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
-def loudnorm_result(stderr: str) -> dict:
-    key = stderr.rindex('"input_i"')
-    return json.loads(stderr[stderr.rindex("{", 0, key):stderr.index("}", key) + 1])
+def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: bool = False,
+           audio: levels.AudioGraph | None = None, report: dict | None = None) -> None:
+    """Lift voiced mixes by the voice's gain, limit peaks, then validate decoded AAC.
 
-
-def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: bool = False) -> None:
-    """Master the mix and fade its last 80 ms. Voiced mixes: one gain to about -14 LUFS, the peaks over
-    -2 dBFS limited, then a linear loudnorm verified linear (the target lowered only if the true-peak
-    ceiling still requires it). Unvoiced mixes retain the original limiter and two-pass loudnorm.
+    Unvoiced mixes retain the original limiter and two-pass loudnorm.
     mix is the filter graph ending where mastering goes on.
     """
     if voiced:
-        # A voice's peaks stand ~17 dB over its loudness (and the blasts' over theirs): a linear master alone
-        # can not lift such a mix to -14 LUFS under -1.5 dBTP (2026-10-17: -20 LUFS). The limiter after the
-        # common gain only touches those peaks; the stems' integrated balance stays as checked.
-        def probe(graph: str) -> dict:
-            return loudnorm_result(subprocess.run(
-                ["ffmpeg", "-hide_banner", *inputs, "-filter_complex",
-                 f"{graph},loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json", "-vn", "-f", "null", "-"],
-                check=True, capture_output=True, text=True,
-            ).stderr)
-        gain = -14.0 - float(probe(mix)["input_i"])
-        pre = f"{mix},volume={gain:.3f}dB,alimiter=limit={PEAK_LIMIT}:level=false"
-        loud = levels.linear_master_filter(probe(pre))
-        fade = f"afade=t=out:st={length - 0.08:.3f}:d=0.08"
-        # Only publish after FFmpeg confirms it did not fall back to dynamic mode.
+        out.unlink(missing_ok=True)
+        if audio is None or report is None:
+            raise ValueError("Voiced mastering needs the calibrated stems and balance report")
+        processing = levels.master_filter(report["speech_lufs"], length)
         with tempfile.TemporaryDirectory(dir=out.parent) as pending:
             candidate = Path(pending) / out.name
-            rendered = subprocess.run(
-                ["ffmpeg", "-y", *inputs, "-filter_complex", f"{pre},{loud},{fade}[a]",
+            run(["ffmpeg", "-y", *inputs, "-filter_complex", f"{mix},{processing}[a]",
                  "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
-                 "-b:a", "192k", "-ar", "48000", str(candidate)],
-                check=True, capture_output=True, text=True,
-            )
-            if loudnorm_result(rendered.stderr)["normalization_type"] != "linear":
-                raise ValueError("loudnorm fell back to dynamic mode; the short was not published")
+                 "-b:a", "192k", "-ar", "48000", str(candidate)])
+            # The isolated voice uses the same gain, limiter, fade and AAC encoder as the mix.
+            # Its decoded measurement catches a limiter that would pull the reference off the base.
+            voice = Path(pending) / "voice.m4a"
+            run(["ffmpeg", "-y", *inputs, "-filter_complex", f"{audio.stem('voice')},{processing}[a]",
+                 "-map", "[a]", "-vn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(voice)])
+            voice_lufs, _ = levels.meter_file(voice)
+            _, peak = levels.meter_file(candidate)
+            levels.check_mastering(report, voice_lufs, peak, clicks.detect(candidate))
+            if not report["ok"]:
+                raise ValueError("Audio mastering check failed; the short was not published")
             candidate.replace(out)
         return
     loud = "loudnorm=I=-14:TP=-1.5:LRA=11"
@@ -263,7 +253,7 @@ def main() -> None:
                 joined, takes / music["file"] if music else None, voice, speech, total, length,
                 music_volume=music["volume"] if music and not voiced else 1.0,
             )
-        except ValueError as error:
+        except (ValueError, subprocess.CalledProcessError) as error:
             if not voiced:
                 raise
             report = levels.check_balance(float("-inf"), None, None, None, None)
@@ -271,12 +261,20 @@ def main() -> None:
             levels.print_balance(report)
             out.with_suffix(".levels.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
             raise SystemExit(str(error)) from error
-        levels.print_balance(report)
         if voiced:
+            if report["ok"]:
+                try:
+                    master(audio.inputs, audio.mix(), out, length, voiced=True, audio=audio, report=report)
+                except (ValueError, subprocess.CalledProcessError) as error:
+                    report["error"] = str(error)
+                    report["ok"] = False
+            levels.print_balance(report)
             out.with_suffix(".levels.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
             if not report["ok"]:
-                raise SystemExit("Audio balance check failed; the short was not published")
-        master(audio.inputs, audio.mix(), out, length, voiced=voiced)
+                raise SystemExit(report.get("error", "Audio balance check failed; the short was not published"))
+        else:
+            levels.print_balance(report)
+            master(audio.inputs, audio.mix(), out, length, voiced=False)
     # frames over the whole short, for a look
     run(["ffmpeg", "-y", "-i", str(out), "-vf", "fps=1,scale=270:-2,tile=6x3", "-frames:v", "1",
          str(out.with_suffix(".png"))])
