@@ -110,6 +110,7 @@ class Policy:
         self.step_mode = "normal"
         self.reset_mode = "normal"
         self.step_waiter = None
+        self.on_step = None
 
     def commands(self, kind):
         return [request for request in self.requests if request["cmd"] == kind]
@@ -131,6 +132,8 @@ class Policy:
                     else:
                         result.update(reason="episode_reset", hidden_reset=True)
                 elif command == "step":
+                    if self.on_step is not None:
+                        self.on_step(request)
                     if self.step_waiter is not None:
                         await self.step_waiter.wait()
                     if self.step_mode == "disconnect":
@@ -348,6 +351,26 @@ async def test_every_owned_periodic_row_in_a_packet_reaches_policy_as_received()
         assert [step["observation"] for step in steps] == [first, second]
         assert all(step["now_game_ms"] == second["t_game_ms"] for step in steps)
         assert len(rig.bridge.commands("body_action")) == 1
+
+
+async def test_policy_backlog_does_not_starve_lease_heartbeats():
+    async with running() as rig:
+        await rig.active()
+        processed = []
+
+        def step_received(request):
+            processed.append((
+                request["observation"]["observation_seq"],
+                len(rig.bridge.commands("body_heartbeat")),
+            ))
+            rig.clock.advance(0.16)
+
+        rig.policy.on_step = step_received
+        rig.bridge.emit(*(fighter(seq, owned=True, can_decide=False) for seq in (4, 5, 6)))
+        await eventually(lambda: len(processed) == 3)
+        assert [seq for seq, _ in processed] == [4, 5, 6]
+        assert processed[1][1] > processed[0][1]
+        assert processed[2][1] > processed[1][1]
 
 
 async def test_old_world_packets_are_excluded_without_rewinding_active_lease():

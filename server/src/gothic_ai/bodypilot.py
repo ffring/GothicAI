@@ -320,6 +320,11 @@ class BodyPilot:
             if self._reason:
                 await self._finish(self._reason)
                 break
+            if self.lease is not None and self.clock() - self._last_heartbeat >= HEARTBEAT_INTERVAL:
+                # A continuous observation stream must not keep this drain loop
+                # busy past the watchdog deadline, even with valid slow replies.
+                self._wake.set()
+                break
 
     def _watch_npcs(self) -> list[str]:
         assert self.npc is not None
