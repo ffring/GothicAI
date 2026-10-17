@@ -2,6 +2,7 @@
 
 #include <Tempest/Log>
 #include <cmath>
+#include <cstdlib>
 
 #include "graphics/visualfx.h"
 #include "world/objects/item.h"
@@ -85,6 +86,11 @@ int32_t Bullet::spellId() const {
 
 void Bullet::setOrigin(Npc *n) {
   ow = n;
+  if(std::getenv("OPENGOTHIC_FIGHT_TRACE") && isSpell() && n!=nullptr) {
+    const auto p=position();
+    Log::i("[fight-trace] shot t=",wrld->tickCount()," origin=",reinterpret_cast<uintptr_t>(n),
+           " target=",reinterpret_cast<uintptr_t>(n->target())," spell=",spellId()," pos=",p.x,",",p.y,",",p.z);
+    }
   vfx.setOrigin(n);
   }
 
@@ -153,6 +159,10 @@ bool Bullet::stopsAtWorldHit() const {
   }
 
 void Bullet::onSpellWorldHit(const DynamicWorld::BulletWorldHit& hit) {
+  if(std::getenv("OPENGOTHIC_FIGHT_TRACE"))
+    Log::i("[fight-trace] hit-world t=",wrld->tickCount()," origin=",reinterpret_cast<uintptr_t>(ow),
+           " spell=",spellId()," pos=",hit.point.x,",",hit.point.y,",",hit.point.z,
+           " ragdoll=",reinterpret_cast<uintptr_t>(hit.ragdoll)," movable=",bool(hit.movable));
   impactAt = hit.point;
   impactOwner = hit.bone;
   impactKnown = true;
@@ -247,6 +257,10 @@ bool Bullet::onCollidePrecise(Npc& npc, const Vec3& from, const Vec3& to) {
 bool Bullet::onCollide(Npc& npc) {
   if(&npc==origin() || isFinished())
     return false;
+  if(std::getenv("OPENGOTHIC_FIGHT_TRACE") && isSpell())
+    Log::i("[fight-trace] hit-npc t=",wrld->tickCount()," origin=",reinterpret_cast<uintptr_t>(ow),
+           " target=",reinterpret_cast<uintptr_t>(&npc)," instance=",npc.instanceSymbol(),
+           " hp=",npc.attribute(ATR_HITPOINTS)," spell=",spellId());
 
   if(ow!=nullptr) {
     // no damage between ally npc's, only emit pfx effect
