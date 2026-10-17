@@ -1066,6 +1066,11 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
     summary = pilot.last_summary if finished else None
     if summary is not None:
         log.info(
+            "neural acquire: requests=%d completed=%d request_to_lease_ms p50=%s max=%s",
+            summary.acquire_requests, summary.acquire_completed,
+            summary.acquire_wait_p50_ms, summary.acquire_wait_max_ms,
+        )
+        log.info(
             "neural pipeline ms p50/p95: packet_to_request=%s/%s packet_to_response=%s/%s "
             "response_to_action=%s/%s packet_to_action=%s/%s; acquire_refusals=%s action_rejections=%s "
             "stale_consecutive=%d",

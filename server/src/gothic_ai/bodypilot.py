@@ -36,6 +36,7 @@ SERVICE_TIMEOUT = 0.100
 BRIDGE_TIMEOUT = 0.250
 ACQUIRE_INTERVAL = 0.150
 ACQUIRE_WINDOW = 5.0
+AWAIT_BOUNDARY_MS = 1500
 MAX_FIGHT_SECONDS = 300.0
 HEARTBEAT_INTERVAL = 0.250
 HEARTBEAT_TIMEOUT = 0.500
@@ -147,6 +148,10 @@ class FightSummary:
     packet_to_action_p50_ms: float | None
     packet_to_action_p95_ms: float | None
     acquire_refusals: tuple[tuple[str, int], ...]
+    acquire_requests: int
+    acquire_completed: int
+    acquire_wait_p50_ms: float | None
+    acquire_wait_max_ms: float | None
     action_rejections: tuple[tuple[str, int], ...]
     stale_observation_consecutive: int
     fight_seconds: float | None
@@ -195,11 +200,15 @@ class BodyPilot:
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._last_events_poll = 0.0
         self._acquiring = False
+        self._acquire_cancel = asyncio.Event()
         self._pending_acquire: BodyObservation | None = None
         self._symbol: int | None = None
         self._entity: int | None = None
         self._hero: int | None = None
         self._refusals: Counter[str] = Counter()
+        self._acquire_requests = 0
+        self._acquire_completed = 0
+        self._acquire_waits: list[float] = []
         self._action_rejections: Counter[str] = Counter()
         self._stale_observation_consecutive = 0
         self._latencies: list[float] = []
@@ -283,6 +292,8 @@ class BodyPilot:
                 npc = message.other.upper()
             if npc is not None:
                 self._start(npc)
+        if self._reason is not None:
+            self._acquire_cancel.set()
         self._wake.set()
 
     def _start(self, npc: str) -> bool:
@@ -296,6 +307,7 @@ class BodyPilot:
             return False
         self.npc = npc
         self._reason = None
+        self._acquire_cancel.clear()
         self._attempt_at = self.clock()
         entry = self.people[npc]
         if entry.activity == "fight" and entry.state.upper() == "ZS_ATTACK":
@@ -354,6 +366,7 @@ class BodyPilot:
 
     async def aclose(self) -> None:
         self._closing = True
+        self._acquire_cancel.set()
         self._wake.set()
         if self._running:
             await self._done.wait()
@@ -528,6 +541,8 @@ class BodyPilot:
                     return
                 self._acquiring = True
                 self._pending_acquire = observation
+                requested_at = self.clock()
+                self._acquire_requests += 1
                 try:
                     self.lease = await self.link.body_acquire(
                         self.npc,
@@ -535,14 +550,26 @@ class BodyPilot:
                         "neural-body",
                         mode="realtime",
                         timeout_ms=LEASE_TIMEOUT_MS,
+                        await_boundary_ms=min(
+                            AWAIT_BOUNDARY_MS,
+                            max(0, int((ACQUIRE_WINDOW - (requested_at - self._attempt_at)) * 1000)),
+                        ),
                         timeout=BRIDGE_TIMEOUT,
+                        cancel_event=self._acquire_cancel,
                     )
                 except (TimeoutError, OSError, ConnectionClosed):
                     # The bridge may own the body even though no receipt arrived.
                     self._reason = self._reason or "acquire_uncertain"
                     raise
                 except GameError:
-                    self._pending_acquire = None
+                    recovered = self.link.body_leases.get(observation.entity_id)
+                    if recovered is not None and recovered.provider == "neural-body":
+                        self.lease = recovered
+                        self._claimed_fights.add(self.npc)
+                    if self.link.body_acquire_pending(observation.entity_id):
+                        self._reason = self._reason or "acquire_uncertain"
+                    else:
+                        self._pending_acquire = None
                     raise
                 else:
                     self._pending_acquire = None
@@ -553,6 +580,8 @@ class BodyPilot:
             except BRIDGE_ERRORS as error:
                 self._refusals[str(error).removeprefix("body command rejected: ")] += 1
             else:
+                self._acquire_completed += 1
+                self._acquire_waits.append((self.clock() - requested_at) * 1000)
                 self._claimed_fights.add(self.npc)
                 self._entity = self.lease.entity_id
                 self._hero = self.lease.target_entity_id
@@ -569,6 +598,8 @@ class BodyPilot:
                 # The independent heartbeat already protects the lease during TCP
                 # connection and reset, so neither delays that row's first step.
                 self._initial_game_ms = observation.t_game_ms
+                if self._closing or self._reason:
+                    return
                 try:
                     self.client = PolicyClient(self.url)
                     await self.client.connect()
@@ -649,6 +680,9 @@ class BodyPilot:
                 self._pending_acquire = None
                 return True
             try:
+                # Native status alone cannot prove a queued request was cancelled.
+                # Resolve its request identity before changing the observation watch.
+                await self.link.body_cancel_acquire(pending.entity_id, timeout=BRIDGE_TIMEOUT)
                 status = await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
             except BRIDGE_ERRORS as error:
                 if "unknown_entity" in str(error):
@@ -797,6 +831,10 @@ class BodyPilot:
             packet_to_action_p50_ms=_percentile(self._packet_to_action, 0.50),
             packet_to_action_p95_ms=_percentile(self._packet_to_action, 0.95),
             acquire_refusals=tuple(sorted(self._refusals.items())),
+            acquire_requests=self._acquire_requests,
+            acquire_completed=self._acquire_completed,
+            acquire_wait_p50_ms=_percentile(self._acquire_waits, 0.50),
+            acquire_wait_max_ms=max(self._acquire_waits, default=None),
             action_rejections=tuple(sorted(self._action_rejections.items())),
             stale_observation_consecutive=self._stale_observation_consecutive,
             fight_seconds=fight_seconds,
@@ -810,7 +848,9 @@ class BodyPilot:
             "packet_to_response_p50_ms=%s packet_to_response_p95_ms=%s "
             "response_to_action_p50_ms=%s response_to_action_p95_ms=%s "
             "packet_to_action_p50_ms=%s packet_to_action_p95_ms=%s "
-            "acquire_refusals=%s action_rejections=%s stale_observation_consecutive=%d unconfirmed=%s",
+            "acquire_refusals=%s acquire_requests=%d acquire_completed=%d "
+            "acquire_wait_p50_ms=%s acquire_wait_max_ms=%s "
+            "action_rejections=%s stale_observation_consecutive=%d unconfirmed=%s",
             npc,
             reason,
             self._decisions,
@@ -826,6 +866,10 @@ class BodyPilot:
             summary.packet_to_action_p50_ms,
             summary.packet_to_action_p95_ms,
             dict(summary.acquire_refusals),
+            summary.acquire_requests,
+            summary.acquire_completed,
+            summary.acquire_wait_p50_ms,
+            summary.acquire_wait_max_ms,
             dict(summary.action_rejections),
             summary.stale_observation_consecutive,
             unconfirmed if reason == "finish_deadline" else None,
@@ -839,6 +883,8 @@ class BodyPilot:
         self._initial_game_ms = None
         self._symbol = self._entity = self._hero = None
         self._refusals.clear()
+        self._acquire_requests = self._acquire_completed = 0
+        self._acquire_waits.clear()
         self._action_rejections.clear()
         self._stale_observation_consecutive = 0
         self._latencies.clear()

@@ -52,6 +52,11 @@ class Bridge:
         self.sent_times = []
         self.link = GameLink(self)
         self.acquire_rejections = deque()
+        self.acquire_pending_results = deque()
+        self.acquire_pending_delay = 0.020
+        self.pending_acquire = None
+        self._acquire_request_id = 0
+        self._pending_event_seq = 0
         self.action_rejections = deque()
         self.release_rejections = deque()
         self.status_error = None
@@ -107,6 +112,36 @@ class Bridge:
         self._lease_watchdog = asyncio.get_running_loop().call_later(
             self._lease_timeout, self._expire_lease,
         )
+
+    def _grant(self, command):
+        self.provider_owned = True
+        self._control_scope = {name: command[name] for name in (
+            "entity_id", "session_epoch", "world_epoch",
+        )}
+        self._control_npc = self._watched_npc
+        self._acquire_request_id = command.get("acquire_request_id", 0)
+        self._lease_timeout = command["timeout_ms"] / 1000
+        self._renew_lease()
+        self._background(self._acquired_roster(self._watched_npc))
+
+    async def _resolve_pending(self, command, outcome):
+        await asyncio.sleep(self.acquire_pending_delay)
+        if self.pending_acquire is not command:
+            return
+        self.pending_acquire = None
+        self._pending_event_seq += 1
+        if outcome == "acquired":
+            self._grant(command)
+            self.control_events.append(event(
+                self._pending_event_seq, **self._control_scope, provider=command["provider"],
+                acquire_request_id=command["acquire_request_id"], observation_seq=3,
+            ))
+        else:
+            self.control_events.append(event(
+                self._pending_event_seq, entity_id=command["entity_id"], provider=command["provider"],
+                acquire_request_id=command["acquire_request_id"], reason="acquire_cancelled",
+                acquire_cancel_reason=outcome, owner="native", control_generation=0, goal_version=0,
+            ))
 
     def _expire_lease(self):
         self.lease_expirations += 1
@@ -180,6 +215,11 @@ class Bridge:
                 row = {
                     **self._control_scope,
                     "control_generation": 7 if self.provider_owned else 0,
+                    "acquire_request_id": (
+                        self.pending_acquire["acquire_request_id"] if self.pending_acquire
+                        else self._acquire_request_id if self.provider_owned else 0
+                    ),
+                    "acquire_pending": self.pending_acquire is not None,
                     "goal_version": 1 if self.provider_owned else 0,
                     "target_entity_id": 2, "command_id": 0, "execution_id": 0,
                     "owner": "scripted" if self.provider_owned else "native",
@@ -206,20 +246,25 @@ class Bridge:
                 goal_version=command.get("goal_version", 1),
                 target_entity_id=command.get("target_entity_id", 2),
                 command_id=command.get("command_id", 0),
+                acquire_request_id=command.get("acquire_request_id", 0),
+                observation_seq=self.link.body_latest[command.get("entity_id", 1)].observation_seq
+                if command.get("entity_id", 1) in self.link.body_latest else 1,
             )
             if kind == "body_acquire" and self.acquire_rejections:
                 value.update(accepted=False, reason=self.acquire_rejections.popleft())
             if kind == "body_action" and self.action_rejections:
                 value.update(accepted=False, reason=self.action_rejections.popleft())
             if kind == "body_acquire" and value["accepted"]:
-                self.provider_owned = True
-                self._control_scope = {name: command[name] for name in (
-                    "entity_id", "session_epoch", "world_epoch",
-                )}
-                self._control_npc = self._watched_npc
-                self._lease_timeout = command["timeout_ms"] / 1000
-                self._renew_lease()
-                self._background(self._acquired_roster(self._watched_npc))
+                if self.acquire_pending_results:
+                    assert command["await_boundary_ms"] > 0
+                    self.pending_acquire = command
+                    self._control_scope = {name: command[name] for name in (
+                        "entity_id", "session_epoch", "world_epoch",
+                    )}
+                    value.update(reason="acquire_pending", owner="native", control_generation=0)
+                    self._background(self._resolve_pending(command, self.acquire_pending_results.popleft()))
+                else:
+                    self._grant(command)
             elif kind == "body_heartbeat":
                 if self.provider_owned:
                     self._renew_lease()
@@ -228,7 +273,11 @@ class Bridge:
             if kind == "body_release":
                 if self._lease_watchdog is not None:
                     self._lease_watchdog.cancel()
-                if self.release_rejections:
+                if command.get("acquire_request_id") and self.pending_acquire is not None:
+                    self.pending_acquire = None
+                    value.update(owner="native", control_generation=0, reason="acquire_cancelled",
+                                 acquire_cancel_reason="released")
+                elif self.release_rejections:
                     value.update(accepted=False, reason=self.release_rejections.popleft())
                 elif not self.provider_owned:
                     value.update(accepted=False, reason="not_owned", owner="native", control_generation=0)
@@ -516,8 +565,9 @@ async def test_lost_acquire_reply_reconciles_native_lease_before_clearing_watch(
         assert {key: release[key] for key in (
             "session_epoch", "world_epoch", "entity_id", "control_generation",
         )} == {
-            "session_epoch": 1, "world_epoch": 1, "entity_id": 1, "control_generation": 7,
+            "session_epoch": 1, "world_epoch": 1, "entity_id": 1, "control_generation": 0,
         }
+        assert release["acquire_request_id"] == rig.bridge.commands("body_acquire")[0]["acquire_request_id"]
         release_index = rig.bridge.sent.index(release)
         unwatch_index = next(i for i, cmd in enumerate(rig.bridge.sent)
                              if cmd["type"] == "body_watch" and not cmd["npcs"])
@@ -758,6 +808,82 @@ async def test_acquire_rejection_retries_at_150_ms_and_then_starts_an_episode(ca
             "unsafe_boundary": 1,
             "ai_queue_not_empty": 1,
         }
+
+
+async def test_pending_boundary_wait_sends_no_policy_or_actions_until_actual_grant():
+    async with running() as rig:
+        rig.bridge.acquire_pending_results.append("acquired")
+        rig.bridge.acquire_pending_delay = 0.075
+        await rig.watch()
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.pending_acquire is not None)
+        command = rig.bridge.commands("body_acquire")[0]
+        assert command["await_boundary_ms"] == 1500 and command["acquire_request_id"] > 0
+        assert not rig.link.body_leases and not rig.policy.requests
+        assert not rig.bridge.commands("body_action")
+        rig.clock.advance(0.075)
+        await eventually(lambda: rig.policy.commands("reset"))
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert rig.pilot.lease.acquired_observation_seq == 3
+        assert not rig.policy.commands("step")
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.acquire_requests == summary.acquire_completed == 1
+        assert summary.acquire_wait_p50_ms == pytest.approx(75)
+        assert summary.acquire_wait_max_ms == pytest.approx(75)
+        assert summary.release_confirmed and summary.watch_removed
+
+
+async def test_expired_boundary_request_retries_without_ending_or_resetting_episode():
+    async with running() as rig:
+        rig.bridge.acquire_pending_results.extend(["expired", "acquired"])
+        await rig.watch()
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.pilot._refusals)
+        assert dict(rig.pilot._refusals) == {"body acquire cancelled: expired": 1}
+        assert not rig.policy.requests and rig.pilot.npc == "NPC"
+        rig.clock.advance(0.151)
+        rig.bridge.emit(fighter(4))
+        await eventually(lambda: rig.policy.commands("reset"))
+        assert len(rig.bridge.commands("body_acquire")) == 2
+        assert len(rig.policy.commands("reset")) == 1
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.acquire_requests == 2 and summary.acquire_completed == 1
+
+
+async def test_boundary_wait_is_clipped_to_remaining_five_second_acquire_window():
+    async with running() as rig:
+        rig.bridge.acquire_pending_results.append("expired")
+        await rig.watch()
+        rig.clock.advance(4.5)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.pilot._refusals)
+        assert rig.bridge.commands("body_acquire")[0]["await_boundary_ms"] == 500
+        rig.clock.advance(0.501)
+        rig.bridge.emit(fighter(4))
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        assert rig.pilot.last_summary.reason == "acquire_exhausted"
+        assert rig.pilot.last_summary.acquire_completed == 0
+        assert not rig.policy.requests
+
+
+async def test_shutdown_cancels_boundary_request_before_removing_watch():
+    async with running() as rig:
+        rig.bridge.acquire_pending_results.append("acquired")
+        rig.bridge.acquire_pending_delay = 1.5
+        await rig.watch()
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.pending_acquire is not None)
+        await rig.pilot.aclose()
+        assert rig.bridge.pending_acquire is None and not rig.bridge.provider_owned
+        cancel = rig.bridge.commands("body_release")[0]
+        assert cancel["control_generation"] == 0
+        assert cancel["acquire_request_id"] == rig.bridge.commands("body_acquire")[0]["acquire_request_id"]
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
+        assert not rig.policy.requests and not rig.link.body_leases
 
 
 async def test_acquire_window_expires_after_five_seconds_and_waits_for_new_combat_event(caplog):

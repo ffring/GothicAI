@@ -905,6 +905,9 @@ class BodyControlResult(_BodyModel):
     execution_id: BodyUInt
     owner: Literal["native", "scripted"]
     release_pending: BodyBool
+    acquire_request_id: BodyUInt = 0
+    observation_seq: BodyUInt = 0
+    acquire_cancel_reason: str = ""
 
 
 class BodyLease(_BodyModel):
@@ -954,6 +957,8 @@ class BodyControlActor(_BodyModel):
     can_decide: BodyBool
     action_mask: BodyMask
     purity_state: BodyControlPurityState | None = None
+    acquire_request_id: BodyUInt = 0
+    acquire_pending: BodyBool = False
 
 
 class BodyVisibilityDiagnostics(_BodyModel):
@@ -1030,6 +1035,8 @@ class BodyControlEvent(_BodyModel):
     ttl_ms: BodyUInt
     watchdog_timeout_ms: BodyUInt
     infrastructure_failure: BodyBool
+    acquire_request_id: BodyUInt = 0
+    acquire_cancel_reason: str = ""
 
 
 class BodyControlEvents(_BodyModel):
@@ -1179,6 +1186,8 @@ class BodyAcquireCmd(_BodyCommand):
     mode: BodyMode = "realtime"
     timeout_ms: Annotated[int, Field(strict=True, ge=100, le=5000)] = 500
     target_entity_id: BodyPositive | None = None
+    await_boundary_ms: Annotated[int, Field(strict=True, ge=0, le=2000)] = 0
+    acquire_request_id: BodyUInt = 0
 
     @model_validator(mode="before")
     @classmethod
@@ -1223,6 +1232,18 @@ class BodyReleaseCmd(_BodyLeaseCmd):
 
 class BodyDisconnectCmd(_BodyLeaseCmd):
     type: Literal["body_disconnect"] = "body_disconnect"
+
+
+class BodyCancelAcquireCmd(_BodyCommand):
+    """Cancel a specific pending request, including a concurrent grant of that request."""
+
+    type: Literal["body_release", "body_disconnect"] = "body_release"
+    entity_id: BodyPositive
+    session_epoch: BodyPositive
+    world_epoch: BodyUInt
+    provider: BodyProvider
+    control_generation: Literal[0] = 0
+    acquire_request_id: BodyPositive
 
 
 class BodyControlStatusCmd(_BodyCommand):
