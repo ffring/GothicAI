@@ -609,6 +609,7 @@ void NpcController::updateStateAction(World& world, Controlled& c, uint64_t now)
     a.nextFightTrace = now+1000;
     const auto identity = [&](Npc* n) {
       if(n==nullptr) return std::string("none");
+      if(world.npcId(n)==uint32_t(-1)) return std::string("gone");
       std::ostringstream s;
       s << npcId(world,*n) << '#' << reinterpret_cast<uintptr_t>(n) << ":hp=" << n->attribute(ATR_HITPOINTS);
       return s.str();
