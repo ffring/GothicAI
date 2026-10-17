@@ -119,8 +119,8 @@ def balanced_tracks(tone_inputs):
         "music_pause_lufs": _tone_level(tone_inputs, -14),
         "music_speech_lufs": _tone_level(tone_inputs, -20),
         "game_speech_lufs": _tone_level(tone_inputs, -6),
-        # Loud game audio in pauses is allowed; only speech windows impose a ceiling.
-        "game_pause_lufs": _tone_level(tone_inputs, 3),
+        # The game may punch above the voice in its pauses, by up to 2 LU.
+        "game_pause_lufs": _tone_level(tone_inputs, 1),
     }
 
 
@@ -132,7 +132,7 @@ def test_balance_accepts_calibrated_synthetic_tracks(balanced_tracks):
     assert rows["music_pause"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 14)
     assert rows["music_speech"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 20)
     assert rows["game_speech"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 6)
-    assert rows["game_pause"]["target_lufs"] is None
+    assert rows["game_pause"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] + 2)
     assert all({"id", "measured_lufs", "target_lufs", "ok", "target"} <= row.keys()
                for row in report["rows"])
 
@@ -161,6 +161,14 @@ def test_balance_rejects_game_audio_that_is_too_loud_during_speech(tone_inputs, 
     })
     assert report["ok"] is False
     assert _rows(report)["game_speech"]["ok"] is False
+
+
+def test_balance_rejects_game_audio_that_is_too_loud_in_pauses(tone_inputs, balanced_tracks):
+    report = levels.check_balance(**{
+        **balanced_tracks, "game_pause_lufs": _tone_level(tone_inputs, 4),
+    })
+    assert report["ok"] is False
+    assert _rows(report)["game_pause"]["ok"] is False
 
 
 def test_unvoiced_balance_only_reports_levels(balanced_tracks):
@@ -192,7 +200,7 @@ def test_silent_voice_and_unmeasurable_music_cannot_be_calibrated():
     assert _rows(report)["voice"]["ok"] is False
 
 
-def test_calibration_uses_the_render_stems_and_preserves_game_pauses(tmp_path, tone_inputs):
+def test_calibration_uses_the_render_stems_and_caps_loud_game_pauses(tmp_path, tone_inputs):
     paths = {}
     for track, gain, duration in [("game", 0, 12), ("music", -6, 12), ("voice", -12, 4)]:
         paths[track] = tmp_path / f"{track}.wav"
@@ -212,16 +220,36 @@ def test_calibration_uses_the_render_stems_and_preserves_game_pauses(tmp_path, t
     assert calibrated.measure("music", pauses) == pytest.approx(
         calibrated.measure("voice") - 14, abs=0.5,
     )
-    original = levels.audio_graph(paths["game"], paths["music"], voice, speech, 12, 12)
-    assert calibrated.measure("game", pauses) == pytest.approx(original.measure("game", pauses), abs=0.5)
+    # the game tone is ~12 LU over the voice: its pauses come down to S + 2, its speech to S - 6
+    assert report["game_gain_db"] < 0
+    assert calibrated.measure("game", pauses) == pytest.approx(calibrated.measure("voice") + 2, abs=0.5)
     assert calibrated.measure("game", speech) <= calibrated.measure("voice") - 6
 
     # The plan's music volume has no effect on a voiced graph; only calibrated dB do.
     other_volume = levels.audio_graph(
         paths["game"], paths["music"], voice, speech, 12, 12, music_volume=0.9,
-        music_gain_db=report["music_gain_db"], game_duck_db=report["game_duck_db"],
+        music_gain_db=report["music_gain_db"], game_gain_db=report["game_gain_db"],
+        game_duck_db=report["game_duck_db"],
     )
     assert other_volume.mix() == calibrated.mix()
+
+
+def test_calibration_keeps_game_pauses_that_are_quiet_enough(tmp_path, tone_inputs):
+    paths = {}
+    for track, gain, duration in [("game", -16, 12), ("voice", -12, 4)]:
+        paths[track] = tmp_path / f"{track}.wav"
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", *tone_inputs, "-t", str(duration),
+             "-af", f"volume={gain}dB", "-c:a", "pcm_s16le", str(paths[track])],
+            check=True, capture_output=True,
+        )
+    speech, pauses = [(4, 8)], [(0, 4), (8, 12)]
+    voice = [(paths["voice"], 4)]
+    calibrated, report = levels.calibrate(paths["game"], None, voice, speech, 12, 12)
+    assert report["ok"] is True
+    assert report["game_gain_db"] == 0
+    original = levels.audio_graph(paths["game"], None, voice, speech, 12, 12)
+    assert calibrated.measure("game", pauses) == pytest.approx(original.measure("game", pauses), abs=0.5)
 
 
 def test_unvoiced_graph_keeps_plan_volume_and_does_not_duck(tmp_path):
@@ -263,7 +291,7 @@ def test_comparison_checks_and_writes_levels_before_publication(
     out = tmp_path / "render" / "short-ru.mp4"
     out.parent.mkdir()
     out.write_bytes(b"stale short must not survive a failed balance check")
-    report = levels.check_balance(-22, -36, -42, -28 if balanced else -20, -10)
+    report = levels.check_balance(-22, -36, -42, -28 if balanced else -20, -21)
     audio = SimpleNamespace(inputs=["-i", "game.mp4"], mix=lambda: "[0:a]anull")
     calibrate = Mock(return_value=(audio, report))
     master = Mock(side_effect=lambda _inputs, _mix, path, _length, **_kwargs: path.touch())
@@ -303,7 +331,7 @@ def test_voiced_master_only_publishes_confirmed_linear_audio(
 
     def ffmpeg(command, **kwargs):
         commands.append(command)
-        if len(commands) == 1:
+        if len(commands) <= 2:  # the mix, then the mix after the gain and the peak limiter
             return SimpleNamespace(stderr=json.dumps(measured))
         Path(command[-1]).touch()
         return SimpleNamespace(stderr=json.dumps({**measured, "normalization_type": mode}))
@@ -319,7 +347,8 @@ def test_voiced_master_only_publishes_confirmed_linear_audio(
         assert not out.exists()
         assert not list(tmp_path.rglob("*.mp4"))
     graph = commands[-1][commands[-1].index("-filter_complex") + 1]
-    assert "alimiter" not in graph
+    # one gain to -14 LUFS from the mix's -28, then only the peaks over -2 dBFS limited
+    assert "volume=14.000dB,alimiter=limit=0.79:level=false" in graph
     assert "linear=true" in graph
     # A high peak and LRA require a lower common gain and a wider linear LRA target.
     assert "loudnorm=I=-26.600:TP=-1.5:LRA=18.100" in graph
@@ -368,7 +397,7 @@ def test_balanced_constant_tones_publish_with_confirmed_linear_mastering(
     monkeypatch.setattr(comparison_cut.subprocess, "run", record_master_pass)
     comparison_cut.master(audio.inputs, audio.mix(), out, 12, voiced=True)
 
-    assert len(measured_passes) == 2
+    assert len(measured_passes) == 3
     assert float(measured_passes[0]["input_lra"]) == 0
-    assert measured_passes[1]["normalization_type"] == "linear"
+    assert measured_passes[2]["normalization_type"] == "linear"
     assert out.stat().st_size > 0

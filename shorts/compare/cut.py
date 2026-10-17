@@ -46,6 +46,7 @@ SEAL = (110, W - 140, 110)  # the corner seal: size, x, y (under the slow-motion
 GRADE = "eq=gamma=1.18:saturation=1.08"  # the game's noon is dark on a phone; the same for both takes
 WHITE, ACCENT = (255, 255, 255, 255), (255, 214, 120, 255)  # a caption's words, the one being said
 PAGE_WORDS = 3  # a caption page: at most this many words, a new one after a comma or a full stop
+PEAK_LIMIT = 0.79  # a voiced master's peaks over -2 dBFS limited after its gain to -14 LUFS
 
 
 def font(spec: tuple[str, int], size: int) -> ImageFont.FreeTypeFont:
@@ -122,25 +123,30 @@ def loudnorm_result(stderr: str) -> dict:
 
 
 def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: bool = False) -> None:
-    """Master the mix and fade its last 80 ms. Voiced mixes use one common gain,
-    verified linear, at -14 LUFS or lower if required by the true-peak ceiling.
-    Unvoiced mixes retain the original limiter and two-pass loudnorm.
+    """Master the mix and fade its last 80 ms. Voiced mixes: one gain to about -14 LUFS, the peaks over
+    -2 dBFS limited, then a linear loudnorm verified linear (the target lowered only if the true-peak
+    ceiling still requires it). Unvoiced mixes retain the original limiter and two-pass loudnorm.
     mix is the filter graph ending where mastering goes on.
     """
     if voiced:
-        # No shared limiter: it would change the balance verified on the stems.
-        probe = subprocess.run(
-            ["ffmpeg", "-hide_banner", *inputs, "-filter_complex",
-             f"{mix},loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json", "-vn", "-f", "null", "-"],
-            check=True, capture_output=True, text=True,
-        )
-        loud = levels.linear_master_filter(loudnorm_result(probe.stderr))
+        # A voice's peaks stand ~17 dB over its loudness (and the blasts' over theirs): a linear master alone
+        # can not lift such a mix to -14 LUFS under -1.5 dBTP (2026-10-17: -20 LUFS). The limiter after the
+        # common gain only touches those peaks; the stems' integrated balance stays as checked.
+        def probe(graph: str) -> dict:
+            return loudnorm_result(subprocess.run(
+                ["ffmpeg", "-hide_banner", *inputs, "-filter_complex",
+                 f"{graph},loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json", "-vn", "-f", "null", "-"],
+                check=True, capture_output=True, text=True,
+            ).stderr)
+        gain = -14.0 - float(probe(mix)["input_i"])
+        pre = f"{mix},volume={gain:.3f}dB,alimiter=limit={PEAK_LIMIT}:level=false"
+        loud = levels.linear_master_filter(probe(pre))
         fade = f"afade=t=out:st={length - 0.08:.3f}:d=0.08"
         # Only publish after FFmpeg confirms it did not fall back to dynamic mode.
         with tempfile.TemporaryDirectory(dir=out.parent) as pending:
             candidate = Path(pending) / out.name
             rendered = subprocess.run(
-                ["ffmpeg", "-y", *inputs, "-filter_complex", f"{mix},{loud},{fade}[a]",
+                ["ffmpeg", "-y", *inputs, "-filter_complex", f"{pre},{loud},{fade}[a]",
                  "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
                  "-b:a", "192k", "-ar", "48000", str(candidate)],
                 check=True, capture_output=True, text=True,
