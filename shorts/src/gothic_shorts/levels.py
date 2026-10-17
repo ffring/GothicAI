@@ -127,8 +127,9 @@ def measure(inputs: list[str], graph: str, output: str,
     """EBU R128 integrated LUFS after exact sample trims, before any mastering.
 
     Other outputs of graph must already be consumed. Disjoint windows are joined
-    without artificial silence. Empty/silent selections return -inf; selections
-    shorter than an R128 block are rejected rather than silently passing a check.
+    directly, then 100 ms of meter-only silence flushes the final R128 block.
+    Empty/silent selections return -inf; explicit selections shorter than an
+    R128 block are rejected rather than silently passing a check.
     The common mastering gain usually clears R128's absolute gate. If it does
     not, normalize the selected signal's measured peak for one metering retry.
     Subtract every measurement-only gain to preserve the stem's actual level.
@@ -149,7 +150,7 @@ def measure(inputs: list[str], graph: str, output: str,
 
     def meter(gain_db: float) -> tuple[float, str]:
         gain = f"volume={gain_db:.9f}dB:precision=double," if gain_db else ""
-        metering_graph = f"{graph};[{output}]{gain}ebur128=peak=true[level_meter]"
+        metering_graph = f"{graph};[{output}]{gain}apad=pad_dur=0.1,ebur128=peak=true[level_meter]"
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-nostats", *inputs, "-filter_complex", metering_graph,
              "-map", "[level_meter]", "-vn", "-f", "null", "-"],

@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import math
+import re
 import shutil
 import subprocess
 from array import array
@@ -28,6 +29,14 @@ def _tone_level(inputs, gain_db=0, *, windows=None, extra="anull"):
 
 def _rows(report):
     return {row["id"]: row for row in report["rows"]}
+
+
+def _reference_lufs(inputs, filters):
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", *inputs, "-af", f"{filters},ebur128=peak=true",
+         "-vn", "-f", "null", "-"], check=True, capture_output=True, text=True,
+    )
+    return float(re.findall(r"\bI:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+LUFS", result.stderr)[-1])
 
 
 def test_speech_windows_use_words_beat_starts_and_joined_timeline():
@@ -231,6 +240,30 @@ def test_measurement_recovers_quiet_float_audio_below_the_absolute_gate(tone_inp
             tone_inputs, graph, "track", windows, meter_gain_db=meter_gain,
         )
         assert measured == pytest.approx(original + gain_db, abs=0.2)
+
+
+@pytest.mark.parametrize("gain_db,earlier_amplitude", [(0, 0), (-90, 0), (0, 0.01)])
+def test_measurement_includes_energy_in_the_last_partial_r128_block(gain_db, earlier_amplitude):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for synthetic loudness measurements")
+    inputs = ["-f", "lavfi", "-i",
+              f"aevalsrc='if(lt(t,8.2),{earlier_amplitude},0.79*min((t-8.2)/0.005,1))"
+              "*sin(2*PI*4000*t)':s=48000:d=8.29"]
+    selection = f"atrim=6:8.29,asetpts=PTS-STARTPTS,volume={gain_db}dB:precision=double"
+    unflushed = _reference_lufs(inputs, selection)
+    # An independent reference flushes the partial block. Amplify only its
+    # measurement in the quiet case, then undo that gain in the expected LUFS.
+    reference_gain = -gain_db
+    expected = _reference_lufs(
+        inputs, f"{selection},volume={reference_gain}dB:precision=double,apad=pad_dur=0.1",
+    ) - reference_gain
+    assert math.isfinite(expected)
+    if earlier_amplitude:
+        assert -70 < unflushed < expected - 10  # A finite earlier reading also misses the loud tail.
+    else:
+        assert unflushed <= -70
+    measured = levels.measure(inputs, f"[0:a]volume={gain_db}dB[track]", "track", [(6, 8.29)])
+    assert measured == pytest.approx(expected, abs=0.2)
 
 
 def test_short_explicit_selection_cannot_pass_the_balance_check_as_silence(tone_inputs):
@@ -1178,7 +1211,8 @@ def test_decoded_peak_resolves_small_exceedances_in_full_and_partial_blocks(
     assert peak == pytest.approx(sample_peak, abs=0.000001)
     # R128 integrated loudness needs a 400 ms block; the 80 ms case tests only peaks.
     if duration >= 0.4:
-        assert loudness == _tone_level(["-i", str(path)])
+        # File-meter loudness uses the original audio, without measure()'s block flush.
+        assert loudness == _reference_lufs(["-i", str(path)], "anull")
     report = levels.check_balance(-14, None, None, None, None)
     levels.check_mastering(report, -14, peak, [])
     assert _rows(report)["true_peak"]["ok"] is accepted
@@ -1285,5 +1319,51 @@ def test_four_aac_beats_keep_the_ending_on_target_after_voice_corrections(
     )
     assert published_ending == pytest.approx(report["ending_target_lufs"], abs=0.5)
     assert final["ending"]["measured_lufs"] == pytest.approx(published_ending, abs=0.1)
+    assert report["ok"] is True
+    assert out.stat().st_size > 0
+
+
+def test_mastering_calibrates_an_ending_audible_only_in_the_last_90_ms(tmp_path, comparison_cut):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for synthetic mastering")
+    joined, voice, out = (tmp_path / name for name in ("joined.mkv", "voice.wav", "short-ru.mp4"))
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "color=c=black:s=16x16:r=100:d=8.29", "-f", "lavfi", "-i",
+         "aevalsrc='if(lt(t,8.2),0,0.79*min((t-8.2)/0.005,1)*sin(2*PI*4000*t))':s=48000:d=8.29",
+         "-c:v", "mpeg4", "-c:a", "pcm_f32le", str(joined)], check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "sine=frequency=1000:sample_rate=48000:duration=4", "-c:a", "pcm_f32le", str(voice)],
+        check=True, capture_output=True,
+    )
+    inputs = ["-i", str(joined)]
+    selection = "atrim=6:8.29,asetpts=PTS-STARTPTS"
+    assert _reference_lufs(inputs, selection) <= -70
+    raw_ending = _reference_lufs(inputs, f"{selection},apad=pad_dur=0.1")
+    assert raw_ending > -70
+
+    audio, report = levels.calibrate(joined, None, [(voice, 0)], [(0, 4)], 6, 8.29)
+    assert report["ok"] is True
+    assert math.isfinite(report["ending_gain_db"])
+    assert report["ending_gain_db"] == pytest.approx(
+        report["speech_lufs"] - levels.ENDING_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU - raw_ending,
+        abs=0.2,
+    )
+    assert _rows(report)["ending"]["measured_lufs"] == pytest.approx(
+        report["speech_lufs"] - 3.5, abs=0.2,
+    )
+    comparison_cut.master(audio.inputs, audio.mix(), out, 8.29,
+                          voiced=True, audio=audio, report=report)
+    rows = _rows(report)
+    published_ending = _reference_lufs(["-i", str(out)], f"{selection},apad=pad_dur=0.1")
+    assert math.isfinite(rows["ending"]["measured_lufs"])
+    assert rows["ending"]["measured_lufs"] == pytest.approx(published_ending, abs=0.1)
+    assert published_ending == pytest.approx(report["ending_target_lufs"], abs=0.5)
+    assert published_ending <= rows["voice_mastered"]["measured_lufs"] - 2
+    assert rows["ending"]["ok"] is True
+    assert rows["true_peak"]["ok"] is True
+    assert rows["clicks"]["count"] == 0
     assert report["ok"] is True
     assert out.stat().st_size > 0
