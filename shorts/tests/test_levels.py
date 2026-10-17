@@ -347,10 +347,48 @@ def test_calibration_brings_a_loud_ending_to_voice_minus_three(tmp_path, tone_in
     assert _rows(report)["ending"]["ok"] is True
 
 
-def test_body_gain_ramps_to_the_ending_gain_over_the_last_fade(tone_inputs):
+def test_calibration_boosts_a_quiet_ending_without_a_body_surge(tmp_path):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for synthetic loudness measurements")
+    game, voice = tmp_path / "game.wav", tmp_path / "voice.wav"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "sine=frequency=1000:sample_rate=48000:duration=12", "-f", "lavfi", "-i",
+         "sine=frequency=1000:sample_rate=48000:duration=2", "-filter_complex",
+         "[0:a]afade=t=out:st=11.94:d=0.06[body];[1:a]volume=0.01[ending];"
+         "[body][ending]concat=n=2:v=0:a=1[a]", "-map", "[a]", "-c:a", "pcm_s24le", str(game)],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "sine=frequency=1000:sample_rate=48000:duration=4", "-af", "volume=-12dB",
+         "-c:a", "pcm_s24le", str(voice)], check=True, capture_output=True,
+    )
+    calibrated, report = levels.calibrate(game, None, [(voice, 4)], [(4, 8)], 12, 14)
+    rows = _rows(report)
+    s = report["speech_lufs"]
+    assert report["ending_gain_db"] > 24
+    assert report["ok"] is True
+    assert rows["game_pause"]["measured_lufs"] <= s - 3
+    assert rows["ending"]["measured_lufs"] == pytest.approx(s - 3, abs=0.5)
+    # No sample in the body's fade may exceed the same body with a constant gain.
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", *calibrated.inputs,
+         "-filter_complex", ";".join(calibrated.filters + ["[vo]anullsink"]), "-map", "[g]",
+         "-f", "f32le", "-ac", "1", "-ar", "48000", "-"], check=True, capture_output=True,
+    )
+    samples = array("f")
+    samples.frombytes(result.stdout)
+    body_peak = max(abs(value) for value in samples[round(11.94 * 48000):12 * 48000])
+    assert body_peak <= 0.125 * 10 ** (report["game_gain_db"] / 20)
+
+
+@pytest.mark.parametrize("ending_gain_db", [-18, -3, 18])
+def test_body_gain_ramps_on_the_side_that_preserves_the_body_fade(tone_inputs, ending_gain_db):
     result = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", *tone_inputs,
-         "-af", levels.body_gain_filter(-6, 6, -18), "-f", "f32le", "-ac", "1", "-ar", "48000", "-"],
+         "-af", levels.body_gain_filter(-6, 6, ending_gain_db),
+         "-f", "f32le", "-ac", "1", "-ar", "48000", "-"],
         check=True, capture_output=True,
     )
     samples = array("f")
@@ -362,8 +400,12 @@ def test_body_gain_ramps_to_the_ending_gain_over_the_last_fade(tone_inputs):
 
     body = rms(5.9)
     ending = rms(6.1)
-    assert ending == pytest.approx(body * 10 ** (-12 / 20), rel=0.01)
-    assert body > rms(5.95) > rms(5.97) > rms(5.99) > ending
+    assert ending == pytest.approx(body * 10 ** ((ending_gain_db + 6) / 20), rel=0.01)
+    if ending_gain_db > -6:
+        assert rms(5.99) == pytest.approx(body, rel=0.01)
+        assert body < rms(6.01) < rms(6.03) < rms(6.05) < ending
+    else:
+        assert body > rms(5.95) > rms(5.97) > rms(5.99) > ending
 
 
 def test_unvoiced_graph_keeps_plan_volume_and_does_not_duck(tmp_path):

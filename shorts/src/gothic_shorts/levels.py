@@ -97,14 +97,20 @@ def duck_filter(windows: list[Window], attenuation_db: float) -> str:
 
 
 def body_gain_filter(gain_db: float, total: float, ending_gain_db: float = 0.0) -> str:
-    """Change body gain to the ending's gain over the last beat's 60 ms fade."""
+    """Lower gain in the body's fade; raise it only once the ending has begun.
+
+    Raising gain during the body's 60 ms fade can overpower that fade and make
+    the last effects louder than their calibrated level. Keep that body gain
+    until the boundary, then ramp up over the ending's first 60 ms instead.
+    """
     if gain_db == ending_gain_db:
         return "anull" if gain_db == 0 else f"volume={gain_db:.9f}dB"
     gain, ending = 10 ** (gain_db / 20), 10 ** (ending_gain_db / 20)
-    start = max(0.0, total - 0.06)
+    start, end = ((total, total + 0.06) if ending_gain_db > gain_db
+                  else (max(0.0, total - 0.06), total))
     return (f"aresample=48000,asetnsamples=n=48:p=0,"
-            f"volume='if(lt(t,{start:.9f}),{gain:.12f},if(lt(t,{total:.9f}),"
-            f"{gain:.12f}+({ending - gain:.12f})*(t-{start:.9f})/{total - start:.9f},"
+            f"volume='if(lt(t,{start:.9f}),{gain:.12f},if(lt(t,{end:.9f}),"
+            f"{gain:.12f}+({ending - gain:.12f})*(t-{start:.9f})/{end - start:.9f},"
             f"{ending:.12f}))':eval=frame")
 
 
