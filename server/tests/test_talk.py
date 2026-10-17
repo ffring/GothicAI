@@ -104,6 +104,7 @@ def test_the_codes_posture_when_the_behavioral_model_is_unsure():
     assert default_posture(stand) == "listen"
     assert default_posture(stand.model_copy(update={"state": "ZS_SMITH_ANVIL"})) == "keep_working"
     assert default_posture(stand.model_copy(update={"moving": True})) == "keep_working"
+    assert default_posture(stand.model_copy(update={"activity": "body"})) == "keep_working"
 
 
 async def _desk(fake: FakeGame, llm, decider: FakeDecider | None = None, journal: Journal | None = None):
@@ -432,3 +433,23 @@ async def test_one_in_a_fight_answers_on_and_fights_on():
 
     assert talk.last[0].why == "attacker"
     assert BANDIT not in fake.attached  # not held to listen: its scripts fight on while it answers
+
+
+async def test_a_body_provider_keeps_its_body_while_talking():
+    fake = FakeGame()
+    llm = FakeBackend("Чего тебе?", delay=0)
+    decider = FakeDecider("listen", 0.99)
+    cm, link, dialogue, talk = await _desk(fake, llm, decider)
+    try:
+        # The provider may have replaced the native attack state; activity alone must protect it.
+        await fake.roster(person(BANDIT, "Бандит", 3, True, activity="body"))
+        await _until(lambda: BANDIT in talk.people)
+        assert not link.body_leases and dialogue.body_busy(BANDIT)
+        assert not await talk.hold(BANDIT, "listen")
+        await fake.send(type="player_text", text="Ты чего, спокуха!", focus=BANDIT)
+        await _until(lambda: fake.said == ["Чего тебе?"])
+        assert not decider.calls
+        assert BANDIT not in fake.attached and BANDIT not in talk.held
+        assert not any(m["type"] in {"attach", "action", "npc_act"} for m in fake.received)
+    finally:
+        await cm.__aexit__(None, None, None)

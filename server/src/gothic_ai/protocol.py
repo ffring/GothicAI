@@ -372,7 +372,7 @@ class DealDecline(_GameMessage):
     version: int
 
 
-NpcActivity = Literal["routine", "attached", "dialog", "fight", "down"]
+NpcActivity = Literal["routine", "attached", "dialog", "fight", "body", "down"]
 
 
 class RosterEntry(_GameMessage):
@@ -789,6 +789,8 @@ class BodyObservation(_BodyModel):
     phase: Literal["post_simulation_post_animation"]
     entity_id: Annotated[int, Field(strict=True, gt=0)]
     script_symbol: BodyUInt
+    snapshot_wall_monotonic_ns: BodyUInt | None = None
+    clock_domain: Literal["linux-clock-monotonic", "cxx-steady-clock"] | None = None
     t_game_ms: BodyUInt
     dt_game_ms: BodyUInt
     sim_step: BodyUInt
@@ -954,6 +956,20 @@ class BodyControlActor(_BodyModel):
     purity_state: BodyControlPurityState | None = None
 
 
+class BodyVisibilityDiagnostics(_BodyModel):
+    type: Literal["body_visibility_diagnostics"]
+    enabled: BodyBool
+    capture_failed: BodyBool
+    diagnostic_generation: BodyUInt
+    records_total: BodyUInt
+    dropped_total: BodyUInt
+    max_records_per_actor: BodyPositive
+    sample_period_ms: Literal[50]
+    clock_domain: Literal["linux-clock-monotonic", "cxx-steady-clock"]
+    journal: Literal["events.jsonl"]
+    phase: Literal["visibility_diagnostic"]
+
+
 class BodyControlStatus(_BodyModel):
     type: Literal["body_control_status"]
     session_epoch: BodyPositive
@@ -962,6 +978,7 @@ class BodyControlStatus(_BodyModel):
     infrastructure_failure: BodyBool
     infrastructure_reason: str
     actors: Annotated[tuple[BodyControlActor, ...], Field(max_length=4)]
+    visibility_diagnostics: BodyVisibilityDiagnostics | None = None
 
     @model_validator(mode="after")
     def consistent_actors(self) -> BodyControlStatus:

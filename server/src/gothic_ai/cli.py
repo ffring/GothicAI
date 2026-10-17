@@ -30,6 +30,7 @@ from .amends import Amends
 from .authoring import Author
 from .beasts import TONE_MAX_TOKENS, BeastDesk
 from .bodies import Bodies
+from .bodypilot import BodyPilot
 from .brain import DeciderClient, GameApplier, NpcPlanner, PlannerConfig
 from .brain.reflex import Reflexes
 from .brain.situation import SituationBuilder
@@ -661,6 +662,19 @@ def _start_showrunner(args: argparse.Namespace, showrunner: Showrunner) -> async
     return asyncio.create_task(showrunner.run())
 
 
+def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -> BodyPilot | None:
+    if not args.neural_body or not args.body_url:
+        return None
+    return BodyPilot(
+        link,
+        args.body_url,
+        companion=talk.orders.companion,
+        unavailable=lambda npc: (
+            npc.upper() in talk.attached or (talk.partner is not None and talk.partner.npc == npc.upper())
+        ),
+    )
+
+
 async def serve(args: argparse.Namespace) -> int:
     done = asyncio.Event()
     exit_code = 0
@@ -687,6 +701,7 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
+    log.info("neural body: %s", args.body_url if args.neural_body and args.body_url else "off")
     log.info("lines in a fight: %s", quick_at or "the conversational model")
     log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
     graph = (
@@ -1112,10 +1127,16 @@ async def serve(args: argparse.Namespace) -> int:
             if state.errands is not None:  # an npc on an errand
                 state.errands.attach_planner(planner)
             brain = asyncio.create_task(planner.run())
+        bodypilot = _start_bodypilot(args, link, state.talk)
+        body_task = asyncio.create_task(bodypilot.run()) if bodypilot is not None else None
         try:
             await _run_scenario(link)
             await link.closed.wait()  # the session lives while the game is connected
         finally:
+            if bodypilot is not None:
+                await bodypilot.aclose()
+            if body_task is not None:
+                await asyncio.gather(body_task, return_exceptions=True)
             lies.cancel()
             debts.cancel()
             asks.cancel()
@@ -2227,6 +2248,17 @@ def main() -> None:
         "--decider-url",
         default=os.environ.get("GOTHIC_DECIDER_URL"),
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
+    )
+    p.add_argument(
+        "--body-url",
+        default=os.environ.get("GOTHIC_BODY_URL"),
+        help="body policy service at tcp://host:47835 (GOTHIC_BODY_URL; without it the pilot is off)",
+    )
+    p.add_argument(
+        "--neural-body",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="let the body policy fight the hero with one eligible npc at a time (requires --body-url)",
     )
     p.add_argument(
         "--quick-url",

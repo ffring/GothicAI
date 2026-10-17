@@ -193,6 +193,46 @@ def test_actual_native_encoder_packet_reaches_ordinary_bridge_cache():
     assert link.body_session_epoch == native["session_epoch"]
 
 
+def test_raw_body_listener_keeps_original_json_values_after_cache_acceptance():
+    row = observation()
+    row.update(snapshot_wall_monotonic_ns=123456, clock_domain="linux-clock-monotonic")
+    original = packet(row)
+    link = GameLink(Connection())
+    received = []
+    link.raw_body_listeners.append(received.append)
+    link._dispatch(message(original), raw_body_packet=original)
+    assert received == [original] and received[0] is original
+    assert received[0]["observations"][0] is row
+    assert isinstance(received[0]["observations"][0]["self"]["position_world_cm"], list)
+    assert link.body_latest[1].snapshot_wall_monotonic_ns == 123456
+    assert link.body_latest[1].clock_domain == "linux-clock-monotonic"
+
+    link._dispatch(message(original), raw_body_packet=original)
+    stale = packet(observation(2, generation=0), generation=0)
+    link._dispatch(message(stale), raw_body_packet=stale)
+    foreign = packet(observation(2), session_epoch=2)
+    foreign["observations"][0]["session_epoch"] = 2
+    link._dispatch(message(foreign), raw_body_packet=foreign)
+    assert len(received) == 1
+    assert link.body_stale_packets == 3
+
+
+async def test_receive_loop_exposes_original_body_packet_without_model_repacking():
+    original = packet()
+
+    class StreamingConnection(Connection):
+        async def _empty(self):
+            yield json.dumps({"type": "body_observations", "packet": original})
+
+    link = GameLink(StreamingConnection())
+    received = []
+    link.raw_body_listeners.append(received.append)
+    await link.run()
+    assert received == [original]
+    assert isinstance(received[0]["observations"], list)
+    assert isinstance(received[0]["observations"][0]["self"]["position_world_cm"], list)
+
+
 @pytest.mark.parametrize("epoch", [0, -1, True, "1791905681806544012", 1.0])
 def test_body_process_epoch_requires_a_positive_integer(epoch):
     row = observation()

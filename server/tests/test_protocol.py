@@ -292,6 +292,15 @@ def test_v30_how_far_the_players_voice_goes():
     assert old.heard is None and old.earshot == 900  # a bridge before v30: as the crow flies
 
 
+def test_roster_accepts_a_body_control_provider():
+    roster = parse_game_message(
+        '{"type":"npc_roster","t":1,"npcs":['
+        '{"id":"FIGHTER","name":"Боец","distance":300,"activity":"body"}]}'
+    )
+    assert isinstance(roster, NpcRoster)
+    assert roster.npcs[0].activity == "body"
+
+
 def test_v31_a_dialog_heard_in_a_conversation():
     assert PROTOCOL_VERSION >= 31
     cmd = StoryEffectCmd(req="e1", npc="BAU_4300_ADDON_CAVALORN", effects=[{"do": "knows", "info": "DIA_X"}])

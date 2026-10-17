@@ -447,7 +447,7 @@ class GossipDesk:
         hold, a fight, a walk; None if they are free."""
         if any(e.activity == "dialog" for e in self.talk.people.values()):
             return "a dialog"
-        if {ea.activity, eb.activity} & {"attached", "fight"} or {a, b} & set(self.talk.held):
+        if {ea.activity, eb.activity} & {"attached", "fight", "body"} or {a, b} & set(self.talk.held):
             return "held or fighting"
         if self.initiative is not None and self.initiative.active in (a, b):
             return "walks up to the hero"
@@ -921,6 +921,8 @@ class GossipDesk:
                     self.cut("gone")
                 elif any(e.activity == "dialog" for e in people.values()):
                     self.cut("dialog")
+                elif "body" in (ea.activity, eb.activity):
+                    self.cut("body")
                 elif min(ea.distance, eb.distance) > LEAVE_CM:
                     self.cut("hero_left")
 
