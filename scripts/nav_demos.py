@@ -240,7 +240,8 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
                              "head_yaw_deg", "head_pitch_deg")
             for column, name in enumerate(action_fields, start=1):
                 if name in ("forward", "strafe", "turn"):
-                    _require(np.isin(actions[:, column], [-1, 0, 1]).all(), f"actions.{name} is not a digital axis")
+                    if drive:
+                        _require(np.isin(actions[:, column], [-1, 0, 1]).all(), f"actions.{name} is not a digital axis")
                 elif name in ("walk", "jump", "climb"):
                     _require(np.isin(actions[:, column], [0, 1]).all(), f"actions.{name} is not a bit")
                 else:

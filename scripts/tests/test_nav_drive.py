@@ -13,14 +13,14 @@ demos = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(demos)
 
 
-def write_episode(path, drive=True, corrupt_previous=None):
+def write_episode(path, drive=True, corrupt_previous=None, teacher_turn=-1):
     # Cross the reader's 64-record chunk boundary as well as ordinary adjacent rows.
     count = 65
     path.mkdir()
     records = np.zeros(count, dtype=demos.RECORD_DTYPE)
     records["time_ms"] = 1000 + np.arange(count) * 100
     records["eye"]["distance_cm"] = 1000
-    records["keys"]["turn"] = -1
+    records["keys"]["turn"] = teacher_turn
     records["keys"]["walk"] = 1
     actual = records["keys"].copy()
     if drive:
@@ -72,4 +72,22 @@ def test_teacher_actions_are_still_checked_against_teacher_keys(tmp_path):
     actions[1, 3] = 1
     np.savetxt(episode / "actions.txt", actions)
     with pytest.raises(ValueError, match=r"actions.turn differs from recorded keys"):
+        demos.summarize(episode, validate=True)
+
+
+def test_teacher_fractional_axis_preserves_existing_navdemo_contract(tmp_path):
+    episode = tmp_path / "teacher"
+    write_episode(episode, drive=False, teacher_turn=.5)
+    result = demos.summarize(episode, validate=True)
+    assert result["validated"]
+    assert result["decisions"] == 65
+    assert result["key_counts"]["turn_right"] == 65
+
+
+def test_drive_still_rejects_fractional_applied_axis(tmp_path):
+    episode = tmp_path / "drive"
+    actions = write_episode(episode)
+    actions[1, 3] = .5
+    np.savetxt(episode / "actions.txt", actions)
+    with pytest.raises(ValueError, match=r"actions.turn is not a digital axis"):
         demos.summarize(episode, validate=True)
