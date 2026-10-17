@@ -40,6 +40,7 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     config.set("llm.model", "gpt-6.1-sol")
     config.set("llm.decider_url", "ws://gpu:47832")
     config.set("llm.quick_url", "http://gpu:47834/v1")
+    config.set("llm.body_url", "tcp://gpu:47835")
     config.set("secrets.inworld_api_key", "iw-secret")
     config.set("secrets.openai_api_key", "sk-secret")
 
@@ -68,6 +69,7 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     assert args[args.index("--model") + 1] == "gpt-6.1-sol" and "--no-console" in args
     assert args[args.index("--decider-url") + 1] == "ws://gpu:47832"
     assert args[args.index("--quick-url") + 1] == "http://gpu:47834/v1" and "--no-quick" not in args
+    assert args[args.index("--body-url") + 1] == "tcp://gpu:47835"
     assert args[args.index("--game-dir") + 1] == "/games/G2"
     for p in procs:  # keys never in argv: they would end up in logs and `ps`
         assert not any("secret" in a for a in p.argv)
