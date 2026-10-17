@@ -366,11 +366,15 @@ class BodyPilot:
                 if len(symbol) != 1 or type(symbol[0]) is not int or symbol[0] < 0:
                     raise GameError("NPC script symbol unavailable")
                 self._symbol = symbol[0]
+                # A timed-out request may already have enabled observations on
+                # the bridge. Track it before awaiting the reply so cleanup
+                # also unsubscribes when that acknowledgement never arrives.
+                self._watched = True
                 await self.link.body_watch(self._watch_npcs(), timeout=BRIDGE_TIMEOUT)
             except BRIDGE_ERRORS:
                 await self._finish("watch_failed")
                 return
-            self._watched = self._watch_ready = True
+            self._watch_ready = True
         if self.lease is not None:
             if self.link.body_leases.get(self.lease.entity_id) != self.lease:
                 await self._finish("lease_lost")

@@ -792,6 +792,27 @@ async def test_world_or_connection_reset_releases_and_closes_episode(transition,
         await rig.ended()
 
 
+async def test_watch_timeout_clears_applied_subscription_and_ignores_late_replies():
+    async with running() as rig:
+        rig.bridge.response_delays["body_watch"] = 0.300
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: rig.bridge._watched_npc == "NPC")
+        # The bridge applies the watch immediately, before its delayed acknowledgement.
+        rig.bridge.emit(fighter())
+        await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
+        await asyncio.wait_for(rig.pilot.aclose(), 1.0)
+        # Both acknowledgements arrive after their request deadlines. Neither
+        # may revive a watch or allow the queued observation to acquire a body.
+        await eventually(lambda: not rig.bridge._response_tasks)
+        assert [cmd["npcs"] for cmd in rig.bridge.commands("body_watch")] == [["NPC"], []]
+        assert rig.bridge._watched_npc is None
+        assert rig.pilot.npc is None
+        assert not rig.pilot._watched and not rig.pilot._watch_ready
+        assert not rig.bridge.commands("body_acquire")
+        assert not rig.bridge.commands("body_action")
+        assert not rig.policy.requests
+
+
 @pytest.mark.parametrize("mode", ["fallback", "error", "disconnect", "timeout"])
 async def test_service_failure_releases_to_native_and_does_not_block_loop(mode):
     async with running() as rig:
