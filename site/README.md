@@ -34,6 +34,10 @@ frame and 1200 px for wide ones (under ~250 KB); a muted loop under 3 MB (`clip`
 to YouTube: set `youtube` in the post, or `[hero] youtube` for the home page, and the page shows a still
 that loads the video from youtube-nocookie.com only when it is clicked.
 
+`static/brand/` is the channel's mark: the wax seal with the G as favicon (`.ico`, `.svg`), app icons and the
+manifest, and `lockup.svg` (the seal and the lettering) in the bar. They are exported from the brand kit
+outside the repository (`~/.local/share/gothic-ai/brand/logo/letter/kit/`): change them there and copy.
+
 ## Publishing
 
 Once: Settings → Pages → Source: GitHub Actions. Then a push to `main` that touches `site/` publishes it.
