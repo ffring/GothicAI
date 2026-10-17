@@ -50,7 +50,7 @@ CACHE_KEY = (
     "author"  # its requests' own connection (openai_responses.py): the prompt cache of its instructions
 )
 ATTEMPTS = 2
-# ordinary things anybody could lose; no dialog of the scripts asks for any of them
+# Ordinary supplies and small valuables; the brief also excludes anything named by a script dialog.
 ITEMS = (
     "ITMI_SAW",
     "ITMI_HAMMER",
@@ -63,6 +63,32 @@ ITEMS = (
     "ITMI_LUTE",
     "ITMI_SILVERRING",
     "ITMI_GOLDRING",
+    "ITFO_ADDON_SHELLFLESH",
+    "ITFO_SMELLYFISH",
+    "ITFO_CORAGONSBEER",
+    "ITPL_BLUEPLANT",
+    "ITPL_FORESTBERRY",
+    "ITPL_PLANEBERRY",
+    "ITPL_WEED",
+    "ITAT_MEATBUGFLESH",
+    "ITAT_BUGMANDIBLES",
+    "ITAT_CRAWLERMANDIBLES",
+    "ITAT_TEETH",
+    "ITAT_CLAW",
+    "ITAT_LURKERCLAW",
+    "ITAT_LURKERSKIN",
+    "ITAT_SHARKSKIN",
+    "ITMI_ADDON_SHELL_01",
+    "ITMI_ADDON_SHELL_02",
+    "ITMI_ADDON_WHITEPEARL",
+    "ITMI_GOLDCANDLEHOLDER",
+    "ITMI_GOLDCHALICE",
+    "ITMI_GOLDPLATE",
+    "ITMI_GOLDNECKLACE",
+    "ITMI_SILVERCANDLEHOLDER",
+    "ITMI_SILVERNECKLACE",
+    "ITMI_SKULL",
+    "ITMI_POCKET",
 )
 NEAR_CM = 4000  # places around the giver's own, where the thing may lie
 MAX_PLACES = 6
@@ -165,7 +191,7 @@ class Brief:
     requires: list[dict[str, Any]] = field(default_factory=list)
     follows: str = ""  # the vanilla quest's title, in words rather than its script variable
 
-    def text(self) -> str:
+    def text(self, *, errand: bool = True) -> str:
         out = [f"Кто просит: {self.name} ({self.npc})."]
         if self.card:
             out.append(f"Его характер (написан ему самому): {self.card}")
@@ -176,9 +202,17 @@ class Brief:
             out.append(f"Поручение отвечает на дело «{self.follows}».")
         if self.premise:
             out.append(f"Замысел режиссёра: {self.premise}")
-        out.append("Вещи, одна из которых у него пропала (id — название):")
+        out.append(
+            "Вещи, одна из которых у него пропала (id — название):"
+            if errand
+            else "Вещи для поручения (id — название):"
+        )
         out += [f"- {i} — {n}" for i, n in self.items.items()]
-        out.append("Места рядом, где она может лежать (id — где, как далеко от его места):")
+        out.append(
+            "Места рядом, где она может лежать (id — где, как далеко от его места):"
+            if errand
+            else "Места рядом (id — где, как далеко от его места):"
+        )
         out += [f"- {s.id} — {s.where}, {s.distance_m} м" for s in self.spots]
         out.append(f"Награда: опыт до {self.xp}, золото до {self.gold}.")
         if self.given:
@@ -294,6 +328,8 @@ class Author:
     ) -> None:
         self.link = link
         self.graph = graph
+        script_things = graph.things()
+        self._items = tuple(i for i in ITEMS if i not in script_things)
         self.patches = patches
         self.chronicle = chronicle
         self.director = director
@@ -369,7 +405,7 @@ class Author:
         follows: str = "",
     ) -> Brief | None:
         state = await self.link.story_state(
-            vars=["KAPITEL", "XP_AMBIENT"], npcs=[npc], symbols=[npc, *ITEMS], items=list(ITEMS)
+            vars=["KAPITEL", "XP_AMBIENT"], npcs=[npc], symbols=[npc, *self._items], items=list(self._items)
         )
         person = (state.get("npcs") or {}).get(npc) or {}
         if person.get("state") != "alive":
@@ -380,7 +416,7 @@ class Author:
             return None
         symbols = state.get("symbols") or {}
         names = state.get("items") or {}
-        items = {i: str(names.get(i) or i) for i in ITEMS if symbols.get(i) == "item"}
+        items = {i: str(names.get(i) or i) for i in self._items if symbols.get(i) == "item"}
         home, spots = await self._spots(npc)
         if not items or not spots:
             log.info("author: %s: no things (%d) or places (%d)", npc, len(items), len(spots))

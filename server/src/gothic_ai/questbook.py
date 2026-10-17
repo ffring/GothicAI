@@ -470,6 +470,7 @@ class Ground:
     xp: int
     quests: dict[str, Quest] = field(default_factory=dict)  # the branch's others
     story: Story | None = None  # vanilla graph, its current state and the branch's changes
+    waypoint: Callable[[str], bool] | None = None  # if known: reach needs a waypoint, not a freepoint
 
 
 def problems(q: Quest, ground: Ground) -> list[str]:
@@ -621,6 +622,8 @@ def _goal(g: Goal, ground: Ground, killed: set[str], held: set[str]) -> list[str
             errors.append("дойти: или до точки, или до NPC")
         elif g.point and not ground.point(g.point):
             errors.append(f"точки {g.point} нет в книге мест")
+        elif g.point and ground.waypoint is not None and not ground.waypoint(g.point):
+            errors.append(f"точка {g.point} — не вейпоинт: цель «дойти» не работает с фрипоинтами")
         elif g.npc and ground.symbols.get(g.npc.upper()) != "npc":
             errors.append(f"нет такого NPC {g.npc}")
         if not MIN_REACH_CM <= g.radius <= MAX_REACH_CM:
@@ -936,6 +939,7 @@ class QuestBook:
             xp=xp,
             quests=self.all(),
             story=await self.director.story() if vanilla else None,
+            waypoint=lambda p: places is not None and places.is_waypoint(p),
         )
 
     async def make(self, q: Quest, *, gold: int | None = None, xp: int | None = None) -> list[str]:

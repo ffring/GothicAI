@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from gothic_ai.authoring import ITEMS
 from gothic_ai.gamedata.storygraph import is_known, load, render, variables
 
 REPO = Path(__file__).resolve().parents[2]
@@ -163,6 +164,21 @@ def test_the_things_of_an_npcs_story(graph):
     assert graph.things_of("NONE_100_XARDAS") == set()
 
 
+def test_all_script_things_include_nested_conditions_effects_and_choices(graph):
+    graph.node("DIA_LOBART_WORKNOW").condition = [
+        "&&",
+        KNOWS_KLEIDUNG,
+        ["call", "NPC_HASITEMS", ["inst", "OTHER"], ["sym", "ITMI_SAW"]],
+    ]
+    graph.node("DIA_LOBART_WORKNOW_OK").condition_effects = [
+        {"do": "call", "call": ["fn", "CHECK_ITEM", ["sym", "ITMI_RAKE"]]}
+    ]
+    graph.node("DIA_HILDA_RUEBEN").effects.append(
+        {"do": "xp", "amount": ["int", 5], "when": ["!=", ["sym", "ITMI_HAMMER"], ["int", 0]]}
+    )
+    assert graph.things() == {"ITPL_BEET", "ITFO_STEW", "ITMI_SAW", "ITMI_RAKE", "ITMI_HAMMER"}
+
+
 def test_expressions(graph):
     done = graph.node("DIA_LOBART_RUEBENRUNNING")
     assert render(done.condition) == (
@@ -192,6 +208,9 @@ def test_the_real_game(tmp_path):
     dialogs = [n for n in graph.nodes.values() if not n.is_choice]
     assert len(dialogs) > 4000
     assert sum(n.lifted for n in dialogs) / len(dialogs) >= 0.95
+    # The broad authored supply list must remain outside every script dialog and choice.
+    assert 30 <= len(ITEMS) == len(set(ITEMS)) <= 40
+    assert set(ITEMS).isdisjoint(graph.things()), sorted(set(ITEMS) & graph.things())
 
     quest = graph.quest("MIS_LOBART_RUEBEN")
     assert quest.topics == {"TOPIC_RUEBEN": "Убрать поле репы"}

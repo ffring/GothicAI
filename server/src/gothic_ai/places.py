@@ -565,13 +565,17 @@ class Place:
         return KINDS.get(self.kind, KINDS["other"])[1]
 
     @property
+    def waypoints(self) -> tuple[str, ...]:
+        """Only this place's waypoints: freepoints cannot be targets of NPC_GETDISTTOWP."""
+        return tuple(p for p in self.points if not p.upper().startswith("FP_"))
+
+    @property
     def waynet(self) -> tuple[str, ...]:
         """Its points on the waynet, for a walk there: a freepoint (FP_…) is no waypoint, so the game walks to
         it in a straight line, into whatever stands between (Malet into the pasture's fence on his way to the
         mill, 2026-10-15). With none of its own, its anchor: a waypoint by it (74 places have freepoints
         only)."""
-        own = tuple(p for p in self.points if not p.upper().startswith("FP_"))
-        return own or ((self.anchor,) if self.anchor else ())
+        return self.waypoints or ((self.anchor,) if self.anchor else ())
 
 
 # where a spot is from the hero as he faces (the bridge's v18 words for people, perception.py)
@@ -642,6 +646,10 @@ class PlaceBook:
             if wp and (i := self.points.get(wp.upper())) is not None:
                 return self.places[i]
         return None
+
+    def is_waypoint(self, name: str) -> bool:
+        """A known point usable by NPC_GETDISTTOWP; freepoints are only item/routine positions."""
+        return not name.upper().startswith("FP_") and self.of(name) is not None
 
     def get(self, place_id: str) -> Place | None:
         return self._by_id.get(place_id.strip().upper())

@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .chronicle import Chronicle, Fact
@@ -60,15 +60,19 @@ class Occasions:
         settle_s: float = 10.0,
         chapter_s: float = 30.0,
         busy_poll_s: float = 1.0,
+        gather_s: float = 10.0,
+        max_gather_s: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.link, self.chronicle, self.places = link, chronicle, places
         self.poll_s, self.settle_s, self.chapter_s = poll_s, settle_s, chapter_s
         self.busy_poll_s, self.clock = busy_poll_s, clock
+        self.gather_s, self.max_gather_s = gather_s, max_gather_s
         self.current: Place | None = None
         self.waypoint: str | None = None
         self.visited: set[str] = set()
         self.pending: list[Fact] = []
+        self._queued_at: dict[int, float] = {}
         self._generation = 0
         self._lock = asyncio.Lock()
         self._changed = asyncio.Event()
@@ -99,6 +103,7 @@ class Occasions:
         self.current = self.waypoint = None
         self.visited.clear()
         self.pending.clear()
+        self._queued_at.clear()
         self._events.clear()
         self._people = None
         self._context = "PC_HERO"
@@ -132,6 +137,7 @@ class Occasions:
             self._generation += 1
             self.current = self.waypoint = None
             self.pending.clear()
+            self._queued_at.clear()
             self._events.clear()
             self._changed.set()
         elif isinstance(message, WorldLoaded):
@@ -285,6 +291,7 @@ class Occasions:
         self.chronicle.record(fact)
         self._activity = _minutes(fact)
         self.pending.append(fact)
+        self._queued_at[id(fact)] = self.clock()
         self.pending.sort(key=lambda f: PRIORITY[f["kind"]])
 
     def _expire(self) -> None:
@@ -301,11 +308,44 @@ class Occasions:
                 and self._distances.get(f["place"], 0) > AWAY_CM
             )
         ]
+        self._sync_queued_at()
 
-    async def next(self) -> Fact:
-        """Wait for and take the best fresh occasion while no dialog or cutscene is playing.
+    def _sync_queued_at(self) -> None:
+        now = self.clock()
+        self._queued_at = {id(f): self._queued_at.get(id(f), now) for f in self.pending}
 
-        A single call for layer 2: taking removes the occasion; cancellation leaves it in the queue.
+    def _gathering(self) -> bool:
+        self._sync_queued_at()
+        if not self._queued_at:
+            return False
+        times = self._queued_at.values()
+        return self.clock() < min(min(times) + self.max_gather_s, max(times) + self.gather_s)
+
+    def _bundle(self) -> Fact:
+        first, *others = self.pending
+        return {**first, **({"also": [dict(f) for f in others]} if others else {})}
+
+    def _consume(self) -> Fact:
+        occasion = self._bundle()
+        self.pending.clear()
+        self._queued_at.clear()
+        return occasion
+
+    def put_back(self, occasion: Fact) -> None:
+        """Restore a gathered group if another decision closed its budget during handoff."""
+        first = {k: v for k, v in occasion.items() if k != "also"}
+        for fact in [first, *occasion.get("also", [])]:
+            self.pending.append(fact)
+            self._queued_at[id(fact)] = self.clock() - self.max_gather_s
+        self.pending.sort(key=lambda f: PRIORITY[f["kind"]])
+        self._expire()
+        self._changed.set()
+
+    async def next(self, *, ready: Callable[[], Awaitable[bool]] | None = None) -> Fact:
+        """Gather and take fresh occasions while the budget and the game allow a decision.
+
+        The best leads; the rest accompany it in `also`. A closed budget or cancellation leaves
+        the queue intact. The optional budget check runs before any handoff requests to the bridge.
         Run the watcher alongside the consumer. Every await is guarded against a load of another branch.
         """
         while True:
@@ -313,16 +353,23 @@ class Occasions:
             try:
                 async with self._lock:
                     generation = self._generation
-                    pending = self.pending[0] if self.pending else None
                     try:
-                        if (fact := await self._take()) is not None:
+                        can_take = (
+                            bool(self.pending) and self.link.world is not None and not self._gathering()
+                        )
+                        if can_take and ready is not None:
+                            can_take = await ready()
+                        if (
+                            can_take
+                            and generation == self._generation
+                            and (fact := await self._take()) is not None
+                        ):
                             return fact
                     except (GameError, TimeoutError):
                         raise
                     except Exception as error:
-                        if generation == self._generation and pending is not None:
-                            self.pending.remove(pending)
-                            raise OccasionFailed(pending, error) from error
+                        if generation == self._generation and self.pending:
+                            raise OccasionFailed(self._consume(), error) from error
                         raise
             except (GameError, TimeoutError) as error:
                 log.warning("occasions waiting: %s", error)
@@ -352,4 +399,4 @@ class Occasions:
         self._raw_place = place.id if place else None
         self._set_distances(owners, values[1:])
         self._expire()
-        return self.pending.pop(0) if self.pending else None
+        return self._consume() if self.pending else None

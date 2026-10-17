@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -134,12 +134,11 @@ class StoryGraph:
         quests = {v for n in own for v in n.writes | n.reads if v in self.quests}
         ids = {m for v in quests if (var := self.vars.get(v)) for m in var.readers | var.writers}
         nodes = own + [self.nodes[i] for i in ids if i in self.nodes and self.nodes[i].npc != npc]
-        out: set[str] = set()
-        for n in nodes:
-            for e in _exprs([n.condition, n.condition_effects, n.effects]):
-                if e[0] == "sym" and len(e) > 1 and str(e[1]).startswith("IT"):
-                    out.add(str(e[1]))
-        return out
+        return _things(nodes)
+
+    def things(self) -> set[str]:
+        """Item-like symbols (IT…) named by any script dialog or choice, including its conditions."""
+        return _things(self.nodes.values())
 
     def npc(self, instance: str) -> str:
         """Npc instance behind a global instance variable (HILDA -> BAU_951_HILDA); other names unchanged."""
@@ -238,6 +237,15 @@ def walk(expr: Expr | None) -> Iterator[Expr]:
     elif tag not in ("int", "str", "var", "inst", "sym", "param", "unknown"):
         for a in expr[1:]:
             yield from walk(a)
+
+
+def _things(nodes: Iterable[Node]) -> set[str]:
+    return {
+        str(e[1])
+        for n in nodes
+        for e in _exprs([n.condition, n.condition_effects, n.effects])
+        if e[0] == "sym" and len(e) > 1 and str(e[1]).startswith("IT")
+    }
 
 
 def _exprs(data: object) -> Iterator[Expr]:

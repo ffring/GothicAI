@@ -17,10 +17,10 @@ from .llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
 from .llm.fake import FakeBackend
 from .protocol import Session
 from .scenario_questlog import ACCEPT, TAKE, TITLE
+from .scenario_showrunner import ErrandScript
 from .scenarios import (
     LOBART,
     RUEBEN,
-    AuthoredScript,
     _logged,
     _save,
     _until,
@@ -28,7 +28,7 @@ from .scenarios import (
     play_book_chain,
     wait_message,
 )
-from .showrunner import MIN_REAL_SECONDS, OUTCOMES
+from .showrunner import MIN_REAL_SECONDS, OUTCOMES, occasion_members
 
 if TYPE_CHECKING:
     from .questlog import QuestLog
@@ -40,7 +40,8 @@ FINISH = "DIA_LOBART_RUEBENRUNNING"
 REQUIRES = [{"kind": "quest", "quest": RUEBEN, "state": "success"}]
 PREMISE = (
     "Герой убрал для Лобарта поле репы. Сосед увидел, что работник расторопный, "
-    "и просит найти потерянную по хозяйству вещь. Урожай уже принят Лобартом; это отдельная просьба."
+    "и просит осмотреть дорогу, где бросили грязные остатки припасов, и принести образец. "
+    "Урожай уже принят Лобартом; это отдельная просьба."
 )
 
 
@@ -234,8 +235,10 @@ async def vanilla_line(
     check("neighbor", giver is not None and giver != LOBART, giver)
     if giver is None:
         return _logged(results)
-    script, builder = VanillaLineScript(giver), AuthoredScript()
-    director.model.llm, director.author.model.llm = script, builder
+    script, builder = VanillaLineScript(giver), await ErrandScript.for_giver(director, giver)
+    if builder is None:
+        return _logged({**results, "builder": "failed (no book quest brief)"})
+    director.model.llm, director.chains.model.llm = script, builder
     line = await director.decide(occasion)
     check("line", line is not None and line.get("fact") == "line", line)
     if line is None or line.get("fact") != "line":
@@ -305,12 +308,11 @@ async def vanilla_line_live(link: GameLink, director: Showrunner, quests: QuestL
         loop = asyncio.create_task(director.run())
 
         def stop_on_outcome(fact: dict[str, Any]) -> None:
-            event = fact.get("occasion", {})
-            if (
-                fact.get("fact") in OUTCOMES - {"line_rejected"}
-                and event.get("kind") == "vanilla"
+            if fact.get("fact") in OUTCOMES - {"line_rejected"} and any(
+                event.get("kind") == "vanilla"
                 and event.get("vanilla", {}).get("quest") == RUEBEN
                 and event["vanilla"].get("to") == state
+                for event in occasion_members(fact.get("occasion", {}))
             ):
                 loop.cancel()
 
@@ -330,7 +332,7 @@ async def vanilla_line_live(link: GameLink, director: Showrunner, quests: QuestL
                         fact
                         for fact in reversed(director.chronicle.facts())
                         if fact.get("fact") in OUTCOMES
-                        and fact.get("occasion") == event
+                        and event in occasion_members(fact.get("occasion", {}))
                         and (fact["fact"] != "line_rejected" or director._work is None)
                     ),
                     None,

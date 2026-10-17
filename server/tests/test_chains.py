@@ -161,6 +161,7 @@ async def _setup(
     script: list[dict[str, Any]] | None = None,
     *,
     partial_group: bool = False,
+    extra_points: dict[str, int] | None = None,
 ) -> AsyncIterator[tuple[FakeGame, ChainAuthor, StubCasting, FakeBackend]]:
     fake = FakeGame(branch="A")
     steps = [FakeStep("", [ToolCall(PROPOSE, raw, f"chain{i}")]) for i, raw in enumerate(script or [])]
@@ -168,6 +169,7 @@ async def _setup(
     link_cm, author, _ = await _author(fake, llm, story_graph, MemoryStore(":memory:"))
     try:
         data = deepcopy(BOOK)
+        data["points"].update(extra_points or {})
         for place, kind in zip(data["places"], ["house", "yard", "field", "street"], strict=True):
             place["kind"] = kind
         author.places = PlaceBook(data)
@@ -460,6 +462,108 @@ async def test_reach_and_have_places_are_converted_to_points_by_the_code(graph):
         have = made[0].stages[1].goals[0]
         assert reach.point in brief.places[FIELD].points and reach.npc == ""
         assert have.point in brief.places[YARD].points and have.npc == ""
+
+
+def _single_proposal() -> dict[str, Any]:
+    raw = _proposal()
+    raw["cast"] = []
+    raw["quests"] = raw["quests"][:1]
+    quest = raw["quests"][0]
+    quest.update(
+        title="Починить изгородь",
+        knows="Изгородь у поля разошлась, прежде чем пилить доски, надо осмотреть её.",
+        asked="обсудить ремонт, осмотреть изгородь и принести пилу с места работы",
+        done_journal="Я осмотрел изгородь и принёс пилу для ремонта.",
+        stages=[
+            {
+                "journal": "Надо обсудить ремонт.",
+                "goals": [{"kind": "talk", "npc": "giver", "talk": _talk("Как чинить изгородь?")}],
+            },
+            {"journal": "Надо осмотреть изгородь.", "goals": [{"kind": "reach", "place": FIELD}]},
+            {
+                "journal": "Надо взять пилу у поля.",
+                "goals": [{"kind": "have", "item": GOODS, "place": FIELD}],
+            },
+            {
+                "journal": "Надо передать пилу для ремонта.",
+                "goals": [{"kind": "bring", "npc": "giver", "item": GOODS, "talk": _talk("Вот пила.")}],
+            },
+        ],
+    )
+    return raw
+
+
+async def test_a_single_errand_uses_book_goals_and_one_atomic_patch(graph):  # noqa: F811
+    premise = "Изгородь у поля разошлась: осмотри её и помоги с ремонтом."
+    async with _setup(graph, [_single_proposal()]) as (fake, chains, casting, llm):
+        made = await chains.chain(HILDA, quest_count=1, max_people=0, premise=premise)
+        assert made is not None and len(made) == 1
+        [quest] = made
+        assert quest.after == "" and quest.giver == HILDA
+        assert [g.kind for s in quest.stages for g in s.goals] == ["talk", "reach", "have", "bring"]
+        reach, have = quest.stages[1].goals[0], quest.stages[2].goals[0]
+        assert reach.point == have.point and have.point and have.npc == ""
+        assert not questbook.problems(quest, await chains.book.ground(quest))
+        assert not casting.calls and not fake.cast
+        assert len(fake.graph) == 2  # initial session replacement plus the whole quest
+        assert fake.graph[-1]["ops"] == questbook.build(quest)
+        assert list(chains.book.all()) == [quest.id]
+        [fact] = chains.chronicle.facts("chain")
+        assert fact["quests"] == [quest.id] and fact["roles"] == {}
+        instructions, messages, _ = llm.calls[0]
+        assert "одно поручение" in instructions and "2–3" not in instructions
+        assert "разыгрывать сам замысел" in instructions
+        assert premise in messages[0].content and "Число квестов: ровно 1" in messages[0].content
+        assert "у него пропала" not in messages[0].content
+
+
+async def test_place_reach_uses_a_waypoint_but_have_can_still_use_a_freepoint(graph):  # noqa: F811
+    freepoints = {f"FP_ROAM_FARM1_FIELD_{i}": 2 for i in range(5)}
+    async with _setup(graph, [_single_proposal()], extra_points=freepoints) as (fake, chains, casting, _):
+        made = await chains.chain(HILDA, quest_count=1, max_people=0)
+        assert made is not None and len(made) == 1
+        reach, have = made[0].stages[1].goals[0], made[0].stages[2].goals[0]
+        assert reach.point == "NW_FARM1_FIELD_02"
+        assert have.point in freepoints
+        assert len(fake.graph) == 2 and not casting.calls
+
+
+async def test_place_with_only_freepoints_cannot_be_a_reach_target_even_with_an_anchor(graph):  # noqa: F811
+    freepoints = {f"FP_ROAM_FARM1_FIELD_{i}": 2 for i in range(5)}
+    async with _setup(graph, extra_points=freepoints) as (fake, chains, casting, _):
+        brief = await chains.brief(HILDA)
+        assert brief is not None
+        brief.quest_count = 1
+        brief.places[FIELD] = replace(brief.places[FIELD], points=tuple(freepoints), anchor="NW_FARM1_OUT_01")
+        made, errors = await chains._try(_single_proposal(), brief)
+        assert made is None and f"дойти до места {FIELD} нельзя: в нём нет вейпоинтов" in errors
+        assert any(
+            line.startswith(f"- {FIELD} —") and "дойти: нет" in line for line in brief.text().splitlines()
+        )
+        assert not casting.calls and not chains.book.all() and len(fake.graph) == 1
+
+
+async def test_two_quests_requested_as_one_are_rejected_and_explained_to_the_model(graph):  # noqa: F811
+    async with _setup(graph, [_proposal(), _single_proposal()]) as (fake, chains, casting, llm):
+        made = await chains.chain(HILDA, quest_count=1, max_people=0)
+        assert made is not None and len(made) == 1 and len(llm.calls) == 2
+        [rejected] = chains.chronicle.facts("chain_rejected")
+        assert any("ровно 1" in why and "предложено 2" in why for why in rejected["why"])
+        assert all(why in llm.calls[1][1][-1].content for why in rejected["why"])
+        assert not casting.calls and len(fake.graph) == 2
+
+
+async def test_a_single_errand_cannot_add_roles_when_the_stranger_has_used_the_budget(graph):  # noqa: F811
+    raw = _single_proposal()
+    raw["cast"] = _proposal()["cast"][:1]
+    async with _setup(graph, [raw]) as (fake, chains, casting, _):
+        assert await chains.chain(HILDA, quest_count=1, max_people=0) is None
+        assert not casting.calls and not fake.cast and not chains.book.all()
+        assert len(fake.graph) == 1
+        assert all(
+            any("новых персонажей 1" in why and "не больше 0" in why for why in fact["why"])
+            for fact in chains.chronicle.facts("chain_rejected")
+        )
 
 
 async def test_a_dead_role_cannot_be_used_for_a_later_quest_dialog(graph):  # noqa: F811

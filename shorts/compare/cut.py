@@ -6,7 +6,8 @@ seconds, a title per beat, the game's sound of the "on" take, -14 LUFS. Optional
 "lines" [{"at", "file", "words": [[word, from, to], ...]}] are voiced lines laid at that second of its segment,
 captioned word by word in place of the beat's title, the music and the game's sound ducked under them. A plan
 with a voice lives outside the repository (the explainer's workspace): give its path, the short goes into its
-render/ folder.
+render/ folder. "brand": true puts the channel's seal in the corner and its end sting after the last beat
+(shorts/brand/sting.py makes both, in ~/.local/share/gothic-ai/brand/sting/).
 
     uv run --project shorts python shorts/compare/cut.py bodies ru
     uv run --project shorts python shorts/compare/cut.py bodies en
@@ -26,28 +27,36 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[2]
 W, H, HALF = 1080, 1920, 960
 FPS = 30
-LABEL_FONT = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
-HOOK_FONT = "/System/Library/Fonts/Supplemental/Georgia Bold.ttf"
+# PT Serif Bold (ParaType, OFL, ships with macOS): Cyrillic, bookish like the channel's letters
+LABEL_FONT = HOOK_FONT = ("/System/Library/Fonts/Supplemental/PTSerif.ttc", 3)
+BAND, OUTLINE = (23, 17, 13, 165), (20, 12, 8, 255)  # under and round the words: the night of the brand
+# the brand's seal and its end sting (shorts/brand/sting.py): generated art and a sound of the game, not in git
+BRAND = Path.home() / ".local/share/gothic-ai/brand/sting"
+SEAL = (110, W - 140, 110)  # the corner seal: size, x, y (under the slow-motion mark of the top half)
 GRADE = "eq=gamma=1.18:saturation=1.08"  # the game's noon is dark on a phone; the same for both takes
 WHITE, ACCENT = (255, 255, 255, 255), (255, 214, 120, 255)  # a caption's words, the one being said
 PAGE_WORDS = 3  # a caption page: at most this many words, a new one after a comma or a full stop
 DUCK = "threshold=0.02:ratio={}:attack=20:release=350"  # sidechaincompress under the voice
 
 
-def text_image(path: Path, items: list[tuple[str, str, int, int, tuple, str]]) -> None:
+def font(spec: tuple[str, int], size: int) -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(spec[0], size, index=spec[1])
+
+
+def text_image(path: Path, items: list[tuple[str, tuple[str, int], int, int, tuple, str]]) -> None:
     """items: (text, font, size, y, color, anchor x: 'l' at 40 px, 'r' at W - 40 or 'c' centered); a dark band under
     each"""
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     for text, font_file, size, y, color, ax in items:
-        font = ImageFont.truetype(font_file, size)
+        face = font(font_file, size)
         x = {"l": 40, "r": W - 40}.get(ax, W // 2)
         anchor = {"l": "la", "r": "ra"}.get(ax, "ma")
-        box = draw.textbbox((x, y), text, font=font, anchor=anchor, stroke_width=0)
+        box = draw.textbbox((x, y), text, font=face, anchor=anchor, stroke_width=0)
         pad = size // 4
         draw.rounded_rectangle((box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad), radius=pad,
-                               fill=(0, 0, 0, 150))
-        draw.text((x, y), text, font=font, fill=color, anchor=anchor, stroke_width=2, stroke_fill=(0, 0, 0, 255))
+                               fill=BAND)
+        draw.text((x, y), text, font=face, fill=color, anchor=anchor, stroke_width=2, stroke_fill=OUTLINE)
     img.save(path)
 
 
@@ -57,19 +66,18 @@ def caption_image(path: Path, words: list[str], current: int) -> None:
     draw = ImageDraw.Draw(img)
     size = 76
     while True:
-        font = ImageFont.truetype(LABEL_FONT, size)
-        space, widths = draw.textlength(" ", font=font), [draw.textlength(w, font=font) for w in words]
+        face = font(LABEL_FONT, size)
+        space, widths = draw.textlength(" ", font=face), [draw.textlength(w, font=face) for w in words]
         total = sum(widths) + space * (len(words) - 1)
         if total <= W - 140 or size <= 48:
             break
         size -= 4
     x, y, pad = (W - total) / 2, HALF - 160, size // 4
-    ascent, descent = font.getmetrics()
-    draw.rounded_rectangle((x - pad, y - pad, x + total + pad, y + ascent + descent + pad), radius=pad,
-                           fill=(0, 0, 0, 150))
+    ascent, descent = face.getmetrics()
+    draw.rounded_rectangle((x - pad, y - pad, x + total + pad, y + ascent + descent + pad), radius=pad, fill=BAND)
     for k, (word, width) in enumerate(zip(words, widths)):
-        draw.text((x, y), word, font=font, fill=ACCENT if k == current else WHITE, stroke_width=6,
-                  stroke_fill=(0, 0, 0, 255))
+        draw.text((x, y), word, font=face, fill=ACCENT if k == current else WHITE, stroke_width=6,
+                  stroke_fill=OUTLINE)
         x += width + space
     img.save(path)
 
@@ -166,6 +174,10 @@ def main() -> None:
                     layers.append(f"[{len(inputs) // 2 - 1}]loop=-1:1,trim=0:{end - start}[c{j}_{k}]")
                     overlay += (f"[q{j}_{k}];[q{j}_{k}][c{j}_{k}]overlay=0:0:shortest=1:"
                                 f"enable='between(t,{a:.3f},{b:.3f})'")
+            if plan.get("brand"):  # the seal in the corner, all through
+                inputs += ["-i", str(BRAND / "seal-corner.png")]
+                layers.append(f"[{len(inputs) // 2 - 1}]loop=-1:1,trim=0:{end - start}[k]")
+                overlay += f"[r];[r][k]overlay={SEAL[1]}:{SEAL[2]}:shortest=1"
             offset += end - start
             graph = ";".join([
                 f"[0]trim={start}:{end},setpts=PTS-STARTPTS,scale={W}:{HALF},{GRADE}[a]",
@@ -182,6 +194,14 @@ def main() -> None:
                  "-r", str(FPS), "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-c:a", "aac", "-b:a", "192k",
                  "-ar", "48000", "-ac", "2", str(part)])
             parts.append(part)
+        length = offset
+        if plan.get("brand"):  # the end sting after the last beat, encoded like the beats so they join as they are
+            sting = tmp / "sting.mp4"
+            run(["ffmpeg", "-y", "-i", str(BRAND / "sting.mp4"), "-r", str(FPS), "-c:v", "libx264", "-preset", "slow",
+                 "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", str(sting)])
+            parts.append(sting)
+            length += float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
+                                            "csv=p=0", str(sting)], check=True, capture_output=True, text=True).stdout)
         (tmp / "list.txt").write_text("".join(f"file '{p}'\n" for p in parts))
         joined = tmp / "joined.mp4"
         run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(tmp / "list.txt"), "-c", "copy", str(joined)])
@@ -194,7 +214,7 @@ def main() -> None:
                 graph.append(f"[{first + k}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
                              f"adelay={ms}|{ms}[v{k}]")
             graph.append("".join(f"[v{k}]" for k in range(len(voice))) +
-                         f"amix=inputs={len(voice)}:duration=longest:normalize=0,apad=whole_dur={total},"
+                         f"amix=inputs={len(voice)}:duration=longest:normalize=0,apad=whole_dur={length},"
                          + ("asplit=3[vo][vg][vm]" if "music" in plan else "asplit=2[vo][vg]"))
             graph.append(f"[0:a][vg]sidechaincompress={DUCK.format(3)}[g]")
             mix.append("[vo]")
@@ -210,7 +230,7 @@ def main() -> None:
         for wav, _ in voice:
             inputs += ["-i", str(wav)]
         graph.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0")
-        master(inputs, ";".join(graph), out, total)
+        master(inputs, ";".join(graph), out, length)
     # frames over the whole short, for a look
     run(["ffmpeg", "-y", "-i", str(out), "-vf", "fps=1,scale=270:-2,tile=6x3", "-frames:v", "1",
          str(out.with_suffix(".png"))])
