@@ -32,6 +32,7 @@ with (root / "calls.jsonl").open("a") as output:
     output.write(json.dumps({"args": args, "cwd": os.getcwd(),
                              "owner": os.environ.get("GQ_OWNER"),
                              "env": os.environ.get("TEST_ENV"),
+                             "pid": os.getpid(),
                              "parent": os.getppid()}) + "\n")
 if args[0] == "submit":
     if os.environ.get("FAKE_SUBMIT_CODE"):
@@ -54,6 +55,18 @@ elif args[0] == "wait":
     print("job stderr", file=sys.stderr, flush=True)
     sys.exit(int(os.environ.get("FAKE_WAIT_CODE", "0")))
 elif args[0] == "cancel":
+    attempts = sum(json.loads(line)["args"][0] == "cancel"
+                   for line in (root / "calls.jsonl").read_text().splitlines())
+    (root / f"cancelling-{attempts}").write_text(str(os.getpid()))
+    if os.environ.get("FAKE_CANCEL_BLOCK") and attempts == 1:
+        deadline = time.monotonic() + 10
+        while not (root / "release-cancel").exists():
+            if time.monotonic() > deadline:
+                sys.exit(97)
+            time.sleep(0.01)
+    if os.environ.get("FAKE_CANCEL_FAIL_ONCE") and attempts == 1:
+        (root / "cancel-failed").write_text("1")
+        sys.exit(42)
     (root / "cancelled").write_text(args[1])
 else:
     sys.exit(98)
@@ -198,6 +211,70 @@ def test_signals_cancel_own_job_and_return_wait_status(host, signum, signal_grou
         assert [record["args"] for record in calls(host)] == [
             ["submit", *ARGS], ["wait", JOB_ID], ["cancel", JOB_ID]]
         assert (host["root"] / "cancelled").read_text() == JOB_ID
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
+def test_repeated_group_signals_allow_in_flight_cancel_to_finish(host, signum):
+    host["env"].update(FAKE_WAIT_BLOCK="1", FAKE_WAIT_CODE="73", FAKE_CANCEL_BLOCK="1")
+    process = subprocess.Popen(command(), cwd=host["work"], env=host["env"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        wait_for_file(process, host["root"] / "waiting")
+        os.killpg(process.pid, signum)
+        cancelling = host["root"] / "cancelling-1"
+        wait_for_file(process, cancelling)
+        # Both later signals arrive before the fake persists its cancellation.
+        os.killpg(process.pid, signum)
+        time.sleep(0.03)
+        os.killpg(process.pid, signum)
+        assert process.poll() is None
+        assert not (host["root"] / "cancelled").exists()
+        (host["root"] / "release-cancel").write_text("1")
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 73, stderr
+        assert stdout == "job stdout\n"
+        assert [record["args"] for record in calls(host)] == [
+            ["submit", *ARGS], ["wait", JOB_ID], ["cancel", JOB_ID]]
+        assert (host["root"] / "cancelled").read_text() == JOB_ID
+        assert "could not cancel" not in stderr
+        for record in calls(host):
+            with pytest.raises(ProcessLookupError):
+                os.kill(record["pid"], 0)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("signal_during_cancel", [False, True], ids=["after-failure", "in-flight"])
+def test_failed_cancel_can_be_retried_by_another_signal(host, signal_during_cancel):
+    host["env"].update(FAKE_WAIT_BLOCK="1", FAKE_WAIT_CODE="73", FAKE_CANCEL_FAIL_ONCE="1")
+    if signal_during_cancel:
+        host["env"]["FAKE_CANCEL_BLOCK"] = "1"
+    process = subprocess.Popen(command(), cwd=host["work"], env=host["env"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        wait_for_file(process, host["root"] / "waiting")
+        os.killpg(process.pid, signal.SIGINT)
+        marker = "cancelling-1" if signal_during_cancel else "cancel-failed"
+        wait_for_file(process, host["root"] / marker)
+        assert not (host["root"] / "cancelled").exists()
+        os.killpg(process.pid, signal.SIGINT)
+        if signal_during_cancel:
+            (host["root"] / "release-cancel").write_text("1")
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 73, stderr
+        assert stdout == "job stdout\n"
+        assert [record["args"] for record in calls(host)] == [
+            ["submit", *ARGS], ["wait", JOB_ID], ["cancel", JOB_ID], ["cancel", JOB_ID]]
+        assert (host["root"] / "cancelled").read_text() == JOB_ID
+        assert stderr.count("could not cancel") == 1
     finally:
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)

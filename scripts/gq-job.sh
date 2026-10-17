@@ -9,19 +9,29 @@ gq_available() {
 # Bash dynamically scopes these locals from gq_job. Keep the cancellation in
 # the launcher's shell: a signal directed only at its PID must reach this trap.
 _gq_job_cancel() {
-  if [[ -n "$_gq_id" && "$_gq_cancelled" == 0 ]]; then
-    _gq_cancelled=1
-    if ! GQ_OWNER="$_gq_owner" "$_gq_bin" cancel "$_gq_id" >&2; then
+  [[ -n "$_gq_id" && "$_gq_cancelled" == 0 ]] || return 0
+  _gq_cancel_pending=1
+  [[ "$_gq_cancelling" == 0 ]] || return 0
+  _gq_cancelling=1
+  while [[ "$_gq_cancel_pending" == 1 && "$_gq_cancelled" == 0 ]]; do
+    _gq_cancel_pending=0
+    # Terminal/group signals belong to the launcher. Let an in-flight cancel
+    # save its result, and serialize any further requests from nested traps.
+    if GQ_OWNER="$_gq_owner" bash -c 'trap "" INT TERM HUP; exec "$@"' \
+        gq-cancel "$_gq_bin" cancel "$_gq_id" >&2; then
+      _gq_cancelled=1
+    else
       printf 'gq: could not cancel %s\n' "$_gq_id" >&2
     fi
-  fi
+  done
+  _gq_cancelling=0
 }
 
 gq_job() {
   local _gq_bin="${GQ_BIN:-$HOME/gothic-ai/bin/gq}"
   local _gq_root="${HOME%/}/gothic-ai" _gq_cwd _gq_owner
   local _gq_id='' _gq_wait_pid _gq_result _gq_saved_traps
-  local _gq_interrupted=0 _gq_cancelled=0
+  local _gq_interrupted=0 _gq_cancelled=0 _gq_cancelling=0 _gq_cancel_pending=0
 
   if ! gq_available; then
     printf 'gq: executable not found: %s\n' "$_gq_bin" >&2
