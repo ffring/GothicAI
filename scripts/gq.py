@@ -439,7 +439,7 @@ class Queue:
                     continue
                 with self.legacy_probe(kind == "quiet") as available:
                     if not available:
-                        continue
+                        break
                 job.update(status="starting", reserved=self.now(), attempt=uuid.uuid4().hex,
                            launcher={"pid": os.getpid(), "start": process_token(os.getpid())})
                 active.append(job)
@@ -805,7 +805,8 @@ def main(argv=None):
             return 0
         if args.action == "_pump":
             return pump(queue, args.id)
-        queue.tick()
+        if args.action != "cancel":
+            queue.tick()
         if args.action in {"submit", "run"}:
             if args.action == "run" and args.wait_max is not None and (not math.isfinite(args.wait_max) or args.wait_max < 0):
                 raise QueueError("--wait-max должен быть неотрицательным")

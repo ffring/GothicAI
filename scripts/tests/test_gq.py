@@ -1,6 +1,7 @@
 """Admission and lifecycle checks; never touch the machine's real queue or units."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import fcntl
 from importlib.machinery import SourceFileLoader
 import importlib.util
@@ -311,6 +312,31 @@ def test_old_exclusive_lock_prevents_all_new_admissions(queue, host, kind):
     assert queue.get(ident)["status"] == "running"
 
 
+def test_failed_legacy_probe_stops_admission_even_if_old_client_releases_lock(
+        queue, host, monkeypatch):
+    first = enqueue(queue, "batch", owner="first", threads=28)
+    second = enqueue(queue, "batch", owner="second", threads=28)
+    original_probe = queue.legacy_probe
+    probes = []
+
+    with host["legacy"].open("a+") as old_client:
+        fcntl.flock(old_client, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        @contextmanager
+        def probe_then_release(quiet=False):
+            with original_probe(quiet) as available:
+                probes.append(available)
+                if not available:
+                    fcntl.flock(old_client, fcntl.LOCK_UN)
+                yield available
+
+        monkeypatch.setattr(queue, "legacy_probe", probe_then_release)
+        queue.tick()
+
+    assert probes == [False]
+    assert queue.get(first)["status"] == queue.get(second)["status"] == "queued"
+
+
 def test_blocked_old_exclusive_waiter_drains_batches_like_quiet(queue, host):
     running = start(queue, "batch", maximum=120)
     write_legacy_waiter(host)
@@ -381,6 +407,29 @@ def test_cancellation_checks_owner_and_records_queued_request(queue, gq):
     assert queue.get(ident)["status"] == "cancelled"
     finished = records(queue)[-1]
     assert finished["reason"] == "cancelled" and finished["code"] == 143
+
+
+def test_cli_cancel_does_not_admit_its_queued_job_before_cancelling(
+        queue, gq, host, monkeypatch):
+    marker = host["home"].parent / "cancelled-command-ran"
+    ident = enqueue(queue, owner="test-worktree", command=[
+        sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"])
+    following = enqueue(queue, owner="other-worktree")
+    launched = []
+
+    def launch_command(job):
+        launched.append(job["id"])
+        assert queue.started(job["id"])
+        subprocess.run(job["command"], cwd=job["cwd"], env=job["env"], check=True)
+        queue.finish(job["id"], "success")
+
+    monkeypatch.setattr(queue, "launch", launch_command)
+    monkeypatch.setattr(gq, "Queue", lambda: queue)
+    assert gq.main(["cancel", ident]) == 0
+    assert not marker.exists()
+    assert queue.get(ident)["status"] == "cancelled"
+    assert launched == [following], "cancel must still tick after removing its queued job"
+    assert queue.get(following)["status"] == "done"
 
 
 def test_run_wait_max_returns_75_and_cancels_request(queue, gq, monkeypatch, capsys):
