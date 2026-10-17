@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -746,6 +747,97 @@ def test_unit_process_holds_legacy_lock_until_command_finishes(gq, host, monkeyp
     assert process.returncode == 0, stderr
     with host["legacy"].open("a+") as old_client:
         fcntl.flock(old_client, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+@pytest.mark.parametrize("when", ["before-popen", "after-popen"])
+@pytest.mark.parametrize("cancel_request", [False, True])
+def test_stop_during_spawn_prevents_the_user_command_from_running(
+        gq, host, monkeypatch, when, cancel_request):
+    q = make_queue(gq, host, monkeypatch)
+    marker = host["home"].parent / "ran-after-stop"
+    command = [sys.executable, "-c", (
+        "from pathlib import Path; import sys,time; "
+        "time.sleep(.3); Path(sys.argv[1]).write_text('ran')"
+    ), str(marker)]
+    ident = q.submit(spec(command=command))
+    q.tick()
+    original_popen = subprocess.Popen
+    children = []
+    stopped = False
+
+    def request_stop():
+        nonlocal stopped
+        stopped = True
+        if cancel_request:
+            assert q.cancel(ident, "session-a")
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler), "the unit helper must handle TERM while it owns the lock"
+        handler(signal.SIGTERM, None)
+
+    def spawning_with_stop(*args, **kwargs):
+        # Deliver TERM after handler installation, immediately around the actual
+        # spawn. The child does not exist yet or is not assigned in execute yet.
+        if when == "before-popen":
+            request_stop()
+        child = original_popen(*args, **kwargs)
+        children.append(child)
+        if when == "after-popen":
+            request_stop()
+        return child
+
+    monkeypatch.setattr(gq, "systemctl", lambda *args: subprocess.CompletedProcess(args, 0, "", ""))
+    monkeypatch.setattr(gq.subprocess, "Popen", spawning_with_stop)
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        assert gq.execute(q, ident) == 143
+        assert stopped
+        assert not marker.exists(), "a user command ran after cancellation/TERM during spawn"
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def test_execute_keeps_the_user_commands_nonzero_exit_code(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    ident = q.submit(spec(command=[sys.executable, "-c", "raise SystemExit(7)"]))
+    q.tick()
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        assert gq.execute(q, ident) == 7
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def test_execute_forwards_term_to_a_command_that_has_already_started(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    ready = host["home"].parent / "command-ready"
+    marker = host["home"].parent / "command-survived-term"
+    command = [sys.executable, "-c", (
+        "from pathlib import Path; import sys,time; "
+        "Path(sys.argv[1]).touch(); time.sleep(.6); Path(sys.argv[2]).touch()"
+    ), str(ready), str(marker)]
+    ident = q.submit(spec(command=command))
+    q.tick()
+    helper = subprocess.Popen([sys.executable, str(SCRIPT), "_execute", ident],
+                              env=host["env"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and helper.poll() is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert ready.exists(), "the command did not start"
+        helper.terminate()
+        _stdout, stderr = helper.communicate(timeout=5)
+        assert helper.returncode == 143, stderr
+        assert not marker.exists(), "TERM reached the helper but not its command"
+    finally:
+        if helper.poll() is None:
+            helper.kill()
+        helper.communicate(timeout=5)
 
 
 def test_owner_and_default_submission_are_stable_from_worktree_subdirectories(

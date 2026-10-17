@@ -546,6 +546,21 @@ def unit_has_children(job_id, membership_path=None, cgroup_root=None):
     return False
 
 
+def command_gate(fd, command):
+    """Stay inside the unit without executing user code until admission is committed."""
+    try:
+        token = os.read(fd, 1)
+    finally:
+        os.close(fd)
+    if token != b"1":
+        return 143
+    try:
+        os.execvpe(command[0], command, os.environ)
+    except OSError as error:
+        print(error, file=sys.stderr, flush=True)
+        return 127
+
+
 def execute(queue, job_id):
     job = queue.get(job_id)
     # A legacy EX can win the race between reservation and unit start. Never wait here:
@@ -559,24 +574,61 @@ def execute(queue, job_id):
             return 0
         if not queue.started(job_id):
             return 143
-        # systemd sends TERM to the whole cgroup. Keep this lock holder alive while
-        # the command shuts down; SIGKILL after TimeoutStopSec ends the whole cgroup.
-        signal.signal(signal.SIGTERM, lambda *_: None)
-        signal.signal(signal.SIGINT, lambda *_: None)
+        # Keep the lock holder alive during shutdown. Latch a stop before the child
+        # exists and forward later stops, including the gap inside Popen itself.
+        child = None
+        interrupted = 0
+        read_fd = write_fd = None
+
+        def stop(signum, _frame):
+            nonlocal interrupted
+            interrupted = signum
+            if child is not None and child.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(child.pid, signum)
+
+        previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
         try:
-            child = subprocess.Popen(job["command"], stdin=subprocess.DEVNULL)
-        except OSError as error:
-            print(error, file=sys.stderr, flush=True)
-            return 127
-        while child.poll() is None:
-            if not alive(job.get("waiter")):
-                queue.retry_cancel(job_id, job["owner"])
-            time.sleep(POLL)
-        while unit_has_children(job_id):
-            if not alive(job.get("waiter")):
-                queue.retry_cancel(job_id, job["owner"])
-            time.sleep(POLL)
-        return child.returncode if child.returncode >= 0 else 128 - child.returncode
+            read_fd, write_fd = os.pipe()
+            try:
+                child = subprocess.Popen(
+                    [sys.executable, SCRIPT, "_command", str(read_fd), "--", *job["command"]],
+                    stdin=subprocess.DEVNULL, pass_fds=(read_fd,))
+            except OSError as error:
+                print(error, file=sys.stderr, flush=True)
+                return 128 + interrupted if interrupted else 127
+            os.close(read_fd)
+            read_fd = None
+            # cancel() uses this same lock. If cancellation won, the child sees EOF
+            # instead of permission to exec. If admission won, a child already exists
+            # to receive systemd's cgroup signal or the helper's forwarded signal.
+            with queue.transaction() as state:
+                for current in state["jobs"]:
+                    if (current["id"] == job_id and current["status"] == "running"
+                            and same_attempt(current, job) and not current.get("cancel_reason")
+                            and not interrupted and alive(current.get("waiter"))):
+                        with contextlib.suppress(BrokenPipeError):
+                            os.write(write_fd, b"1")
+                        break
+            os.close(write_fd)
+            write_fd = None
+            while child.poll() is None:
+                if not alive(job.get("waiter")):
+                    queue.retry_cancel(job_id, job["owner"])
+                time.sleep(POLL)
+            while unit_has_children(job_id):
+                if not alive(job.get("waiter")):
+                    queue.retry_cancel(job_id, job["owner"])
+                time.sleep(POLL)
+            if interrupted:
+                return 128 + interrupted
+            return child.returncode if child.returncode >= 0 else 128 - child.returncode
+        finally:
+            for fd in (read_fd, write_fd):
+                if fd is not None:
+                    os.close(fd)
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 def pump(queue, job_id):
@@ -720,6 +772,9 @@ def parser():
             r.add_argument("--wait-max", type=float)
         r.add_argument("command", nargs=argparse.REMAINDER)
     sub.add_parser("status")
+    r = sub.add_parser("_command")
+    r.add_argument("fd", type=int)
+    r.add_argument("command", nargs=argparse.REMAINDER)
     for name in ("wait", "logs", "cancel", "_execute", "_finish", "_pump"):
         r = sub.add_parser(name)
         r.add_argument("id")
@@ -733,6 +788,9 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
+        if args.action == "_command":
+            command = args.command[1:] if args.command[:1] == ["--"] else args.command
+            return command_gate(args.fd, command)
         queue = Queue()
         if args.action == "_execute":
             return execute(queue, args.id)
