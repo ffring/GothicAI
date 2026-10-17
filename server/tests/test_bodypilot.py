@@ -21,7 +21,7 @@ from gothic_ai.protocol import (
     Result,
     RosterEntry,
 )
-from tests.test_body_control import controlled, event, events, receipt
+from tests.test_body_control import controlled, event, events, receipt, visibility_diagnostics
 from tests.test_body_observations import message, observation, packet
 
 
@@ -50,6 +50,7 @@ class Bridge:
         self.sent_times = []
         self.link = GameLink(self)
         self.acquire_rejections = deque()
+        self.acquire_roster_delay = 0
         self.target_is_hero = True
         self.release_pending_polls = 0
         self._released_pending = False
@@ -62,6 +63,7 @@ class Bridge:
         self.lease_expirations = 0
         self.provider_owned = False
         self._control_scope = None
+        self._control_npc = None
         self.control_events = deque()
 
     def commands(self, kind):
@@ -89,9 +91,10 @@ class Bridge:
         task.add_done_callback(self._response_tasks.discard)
 
     async def _acquired_roster(self, npc):
-        # A result is resolved before GameLink has installed its lease cache.
-        await eventually(lambda: self.link.body_owned(npc))
-        self._activity(npc, "body")
+        # Native ownership is independent of whether the acquire reply arrives.
+        await asyncio.sleep(self.acquire_roster_delay)
+        if self.provider_owned:
+            self._activity(npc, "body")
 
     def _renew_lease(self):
         if self._lease_watchdog is not None:
@@ -102,13 +105,12 @@ class Bridge:
 
     def _expire_lease(self):
         self.lease_expirations += 1
-        if self.link.body_leases:
-            lease = next(iter(self.link.body_leases.values()))
+        if self.provider_owned:
             self.provider_owned = False
             self.link._dispatch(events(event(
-                1, entity_id=lease.entity_id, reason="native_restored", owner="native",
+                1, **self._control_scope, reason="native_restored", owner="native",
             )))
-            self._activity(lease.npc, "fight")
+            self._activity(self._control_npc, "fight")
 
     def restore_native(self):
         """Restore the native actor, leaving ownership events for the next destructive poll."""
@@ -135,6 +137,12 @@ class Bridge:
         kind = command["type"]
         if kind == "body_watch":
             assert not self.link.body_leases, "watch must never change with an active lease"
+            if self.provider_owned:
+                self.link._dispatch(Result(
+                    type="result", req=command["req"], ok=False,
+                    error="cannot change watch while a lease is active",
+                ))
+                return
             self._watched_npc = command["npcs"][0] if command["npcs"] else None
             value = {"generation": 1, "session_epoch": 1, "world_epoch": 1}
         elif kind == "story_eval":
@@ -176,6 +184,7 @@ class Bridge:
             value = {
                 "type": "body_control_status", "session_epoch": 1, "world_epoch": 1,
                 "paused": False, "infrastructure_failure": False, "infrastructure_reason": "",
+                "visibility_diagnostics": visibility_diagnostics(),
                 "actors": actors,
             }
         else:
@@ -195,6 +204,7 @@ class Bridge:
                 self._control_scope = {name: command[name] for name in (
                     "entity_id", "session_epoch", "world_epoch",
                 )}
+                self._control_npc = self._watched_npc
                 self._lease_timeout = command["timeout_ms"] / 1000
                 self._renew_lease()
                 self._background(self._acquired_roster(self._watched_npc))
@@ -214,9 +224,7 @@ class Bridge:
                 else:
                     self.provider_owned = False
                     value.update(owner="native", reason="native_restored")
-                    lease = self.link.body_leases.get(command["entity_id"])
-                    if lease is not None:
-                        self._activity(lease.npc, "fight")
+                    self._activity(self._control_npc, "fight")
         result = Result(type="result", req=command["req"], ok=True, value=value)
         delay = self.response_delays.get(kind, 0)
         if delay:
@@ -456,6 +464,60 @@ async def test_pre_acquire_snapshot_delivered_after_acquire_keeps_lease_and_wait
         assert rig.bridge.commands("body_action")[0]["observation_seq"] == 4
         assert rig.link.body_leases == {1: lease}
         assert not rig.bridge.commands("body_release")
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+async def test_lost_acquire_reply_reconciles_native_lease_before_clearing_watch(shutdown):
+    async with running() as rig:
+        rig.bridge.response_delays["body_acquire"] = 0.350
+        rig.bridge.acquire_roster_delay = 0.500
+        await rig.watch()
+        await eventually(lambda: rig.pilot._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.provider_owned)
+        # The native actor has a lease before its result or body roster arrives.
+        await asyncio.sleep(0.050)
+        rig.bridge.emit(fighter(3, owned=True))
+        assert not rig.link.body_leases
+        if shutdown:
+            await asyncio.wait_for(rig.pilot.aclose(), 1.0)
+        await eventually(lambda: rig.bridge.commands("body_release"))
+        await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
+        await eventually(lambda: rig.pilot.npc is None)
+        # Drain the delayed reply and roster; neither may revive the discarded lease.
+        await eventually(lambda: not rig.bridge._response_tasks)
+        assert not rig.bridge.provider_owned
+        assert not rig.link.body_leases
+        assert rig.bridge._watched_npc is None
+        assert rig.bridge.lease_expirations == 0
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert not rig.bridge.commands("body_heartbeat")
+        assert not rig.policy.requests
+        release = rig.bridge.commands("body_release")[0]
+        assert {key: release[key] for key in (
+            "session_epoch", "world_epoch", "entity_id", "control_generation",
+        )} == {
+            "session_epoch": 1, "world_epoch": 1, "entity_id": 1, "control_generation": 7,
+        }
+        release_index = rig.bridge.sent.index(release)
+        unwatch_index = next(i for i, cmd in enumerate(rig.bridge.sent)
+                             if cmd["type"] == "body_watch" and not cmd["npcs"])
+        assert release_index < unwatch_index
+        assert rig.bridge.commands("body_control_status")
+
+        if not shutdown:
+            # Cleanup leaves the same pilot available for a later fight.
+            rig.bridge.response_delays.clear()
+            rig.bridge.acquire_roster_delay = 0
+            rig.roster(activity="routine", state="ZS_SIT_BENCH")
+            await rig.watch()
+            await eventually(lambda: rig.pilot._watch_ready)
+            rig.bridge.emit(player_row(4), fighter(5))
+            await eventually(lambda: rig.link.body_leases)
+            rig.bridge.emit(fighter(6, owned=True))
+            await eventually(lambda: rig.bridge.commands("body_action"))
+            assert len(rig.bridge.commands("body_acquire")) == 2
+            assert len(rig.policy.commands("reset")) == 1
 
 
 @pytest.mark.parametrize("player_near", [False, True])

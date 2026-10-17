@@ -164,6 +164,7 @@ class BodyPilot:
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._last_events_poll = 0.0
         self._acquiring = False
+        self._pending_acquire: BodyObservation | None = None
         self._symbol: int | None = None
         self._entity: int | None = None
         self._hero: int | None = None
@@ -482,6 +483,7 @@ class BodyPilot:
                 if self.clock() - received_at > 0.100 or self.clock() - self._attempt_at >= ACQUIRE_WINDOW:
                     return
                 self._acquiring = True
+                self._pending_acquire = observation
                 try:
                     self.lease = await self.link.body_acquire(
                         self.npc,
@@ -491,6 +493,15 @@ class BodyPilot:
                         timeout_ms=LEASE_TIMEOUT_MS,
                         timeout=BRIDGE_TIMEOUT,
                     )
+                except (TimeoutError, OSError, ConnectionClosed):
+                    # The bridge may own the body even though no receipt arrived.
+                    self._reason = self._reason or "acquire_uncertain"
+                    raise
+                except GameError:
+                    self._pending_acquire = None
+                    raise
+                else:
+                    self._pending_acquire = None
                 finally:
                     self._acquiring = False
             except (GameDisconnected, ConnectionClosed):
@@ -557,11 +568,56 @@ class BodyPilot:
         except BRIDGE_ERRORS:
             self._reason = "body_action_rejected"
 
+    async def _recover_acquire(self) -> bool:
+        """Resolve an uncertain acquire before releasing or changing the watch."""
+        pending = self._pending_acquire
+        assert pending is not None and self.npc is not None
+        scope = pending.session_epoch, pending.world_epoch
+        while not self.link.closed.is_set():
+            if (self.link.body_session_epoch, self.link.body_generation) != scope:
+                self._pending_acquire = None
+                return True
+            try:
+                status = await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
+            except BRIDGE_ERRORS:
+                if self._closing:
+                    return False
+            else:
+                if self.link.closed.is_set() or (
+                    self.link.body_session_epoch, self.link.body_generation
+                ) != scope:
+                    self._pending_acquire = None
+                    return True
+                if (status.session_epoch, status.world_epoch) == scope:
+                    actor = next((row for row in status.actors if row.entity_id == pending.entity_id), None)
+                    if actor is None or actor.owner == "native":
+                        self._pending_acquire = None
+                        return True
+                    if actor.provider == "neural-body" and actor.mode == "realtime":
+                        self.lease = BodyLease(
+                            npc=self.npc, provider=actor.provider, mode=actor.mode,
+                            session_epoch=actor.session_epoch, world_epoch=actor.world_epoch,
+                            entity_id=actor.entity_id, control_generation=actor.control_generation,
+                            goal_version=actor.goal_version, target_entity_id=actor.target_entity_id,
+                            acquired_observation_seq=pending.observation_seq,
+                        )
+                        self.link.body_leases[self.lease.entity_id] = self.lease
+                        self._claimed_fights.add(self.npc)
+                        self._pending_acquire = None
+                        return True
+                if self._closing:
+                    return False
+            await asyncio.sleep(0.025)
+        self._pending_acquire = None
+        return True
+
     async def _finish(self, reason: str) -> None:
+        self._watch_ready = False
+        if self._pending_acquire is not None and not await self._recover_acquire():
+            return
         npc, lease, client = self.npc, self.lease, self.client
         if npc is None and lease is None and client is None:
             return
-        self._watch_ready = False
         heartbeat, self._heartbeat_task = self._heartbeat_task, None
         if heartbeat is not None:
             heartbeat.cancel()
