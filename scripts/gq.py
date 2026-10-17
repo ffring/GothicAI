@@ -67,6 +67,15 @@ def memory(value):
     return int(float(match[1]) * 1024 ** (" KMGT".index(match[2]) if match[2] else 0))
 
 
+def cpu_quota(value):
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(?:%)?", str(value))
+    if match:
+        number = float(match[1])
+        if math.isfinite(number) and number > 0:
+            return f"{match[1]}%"
+    raise argparse.ArgumentTypeError("квота CPU должна быть положительным числом: 200% или 200")
+
+
 def process_token(pid):
     try:
         # comm may contain spaces and parentheses; fields after the final ')' are stable.
@@ -156,7 +165,7 @@ class Queue:
     def event(self, job, event, **extra):
         # Called only within a transaction: journal lines from different processes never interleave.
         record = {k: job.get(k) for k in ("id", "owner", "class", "name", "threads", "mem",
-                                        "gpu_mem", "display", "max", "submitted", "start")}
+                                        "gpu_mem", "display", "cpu_quota", "max", "submitted", "start")}
         record.update(event=event, time=self.now(), **extra)
         with (self.home / "journal.jsonl").open("a", encoding="utf-8") as output:
             os.chmod(output.name, 0o600)
@@ -223,6 +232,11 @@ class Queue:
         spec = dict(spec)
         spec.setdefault("gpu_mem", 0)
         spec.setdefault("display", False)
+        if spec.get("cpu_quota") is not None:
+            try:
+                spec["cpu_quota"] = cpu_quota(spec["cpu_quota"])
+            except argparse.ArgumentTypeError as error:
+                raise QueueError(str(error)) from None
         if "owner" not in spec:
             spec["owner"] = owner()
         self.validate(spec)
@@ -473,6 +487,8 @@ class Queue:
             "StandardOutput": "append:" + str(self.home / "logs" / f"{job['id']}.log"),
             "StandardError": "inherit",
         }
+        if job.get("cpu_quota") is not None:
+            props["CPUQuota"] = job["cpu_quota"]
         args = ["systemd-run", "--user", "--quiet", "--unit", "gq-" + job["id"]]
         args += [f"--property={k}={v}" for k, v in props.items()]
         args += [f"--setenv={k}={v}" for k, v in env.items() if k not in {
@@ -771,6 +787,7 @@ def parser():
         r.add_argument("--mem", type=memory, required=True)
         r.add_argument("--gpu-mem", type=memory, default=0)
         r.add_argument("--display", action="store_true")
+        r.add_argument("--cpu-quota", type=cpu_quota)
         r.add_argument("--max", type=duration, required=True)
         r.add_argument("--name", required=True)
         if name == "run":
@@ -814,7 +831,8 @@ def main(argv=None):
             waiter = {"pid": os.getpid(), "start": process_token(os.getpid())} if args.action == "run" else None
             job_id = queue.submit({
                 "class": args.class_, "threads": args.threads, "mem": args.mem, "gpu_mem": args.gpu_mem,
-                "display": args.display, "max": args.max, "name": args.name, "owner": owner(), "command": command}, waiter)
+                "display": args.display, "cpu_quota": args.cpu_quota, "max": args.max,
+                "name": args.name, "owner": owner(), "command": command}, waiter)
             if args.action == "submit":
                 spawn_pump(queue, job_id)
                 print(job_id, flush=True)

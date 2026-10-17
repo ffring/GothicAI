@@ -596,6 +596,49 @@ def test_systemd_launch_sets_affinity_limits_runtime_and_stop_callback(gq, host,
     assert "_execute" in arguments and arguments[-1] == ident
 
 
+@pytest.mark.parametrize("action", ["run", "submit"])
+@pytest.mark.parametrize("quota,expected", [("200%", "200%"), ("200", "200%"),
+                                          ("12.5%", "12.5%"), ("12.5", "12.5%")])
+def test_cli_cpu_quota_is_saved_and_applied_to_unit(
+        gq, host, monkeypatch, action, quota, expected):
+    q = make_queue(gq, host, monkeypatch)
+    monkeypatch.setattr(gq, "Queue", lambda: q)
+    monkeypatch.setattr(gq, "spawn_pump", lambda *_: None)
+    monkeypatch.setattr(gq, "wait_job", lambda *_args, **_kwargs: 0)
+    assert gq.main([action, "--class", "quiet", "--threads", "2", "--mem", "1G",
+                    "--cpu-quota", quota, "--max", "1m", "--name", "quota test",
+                    "--", "true"]) == 0
+    job = q.jobs()[0]
+    assert job["cpu_quota"] == expected
+    assert json.loads((q.home / "state.json").read_text())["jobs"][0]["cpu_quota"] == expected
+    q.tick()
+    arguments = calls(host, "systemd-run")[0]
+    assert f"--property=CPUQuota={expected}" in arguments
+    assert records(q)[0]["cpu_quota"] == expected
+
+
+@pytest.mark.parametrize("action", ["run", "submit"])
+@pytest.mark.parametrize("quota", ["0", "0%", "-1", "nan", "inf", "200%%", "", "9" * 400])
+def test_cli_rejects_invalid_cpu_quota(gq, action, quota):
+    with pytest.raises(SystemExit) as failure:
+        gq.parser().parse_args([action, "--class", "quick", "--threads", "2", "--mem", "1G",
+                                "--cpu-quota", quota, "--max", "1m", "--name", "bad quota",
+                                "--", "true"])
+    assert failure.value.code == 2
+
+
+def test_old_state_without_cpu_quota_launches_without_quota_property(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    ident = q.submit(spec())
+    assert "cpu_quota" not in q.get(ident)
+    # Reload an existing state written before this optional field was introduced.
+    reloaded = make_queue(gq, host, monkeypatch)
+    reloaded.tick()
+    assert reloaded.get(ident)["status"] == "starting"
+    assert not any(value.startswith("--property=CPUQuota=")
+                   for value in calls(host, "systemd-run")[0])
+
+
 def test_reconcile_recovers_systemd_timeout_without_waiter_or_callback(gq, host, monkeypatch):
     q = make_queue(gq, host, monkeypatch)
     clock = [1000.0]
