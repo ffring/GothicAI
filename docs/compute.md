@@ -1,6 +1,6 @@
 # Вычислительные ресурсы: карта машин и очередь
 
-Статус: **принято 17 октября 2026 года**. Пользователь выбрал очередь `gq` (вариант B) и сервис политики P30 на Ryzen: резервные ядра 0–1, откат на native, прогон под нагрузкой перед приёмкой этапа 10. Шаг 1 реализует `gq` на Ryzen; существующие скрипты пока используют общий замок из `AGENTS.md`, совместимый с очередью.
+Статус: **принято 17 октября 2026 года**. Пользователь выбрал очередь `gq` (вариант B) и сервис политики P30 на Ryzen: резервные ядра 0–1, откат на native, прогон под нагрузкой перед приёмкой этапа 10. Очередь установлена на Ryzen; `ryzen.sh` и `bench.sh` переведены на `quick`. Перевод `body-*`, `nav-*` и PPO идёт отдельным PR, до этого они используют совместимый с очередью общий замок.
 
 ## Коротко
 
@@ -125,7 +125,7 @@ TCP-запрос 200 байт и ответ эхо-сервера (`TCP_NODELAY`
 
 ```sh
 scripts/gq install ryzen
-scripts/gq run --class quick --threads 4 --mem 6G --display --max 15m --name "e2e stages" -- /absolute/path/to/command
+scripts/gq run --class quick --threads 12 --mem 8G --gpu-mem 2G --display --max 30m --name "e2e stages" -- /absolute/path/to/command
 scripts/gq submit --class batch --threads 24 --mem 18G --max 2h --name "nav-dagger r2" -- /absolute/path/to/command
 scripts/gq run --class quiet --threads 28 --mem 8G --max 40m --name "realtime gate" -- /absolute/path/to/command
 scripts/gq status
@@ -143,7 +143,7 @@ scripts/gq cancel <id>
 - Состояние и журнал по умолчанию в `~/gothic-ai/queue/`. Обёртка передаёт `GQ_HOME`, `GQ_LEGACY_LOCK` и `GQ_PROFILE`, если они заданы. Для изолированной проверки: `GQ_HOME='~/gothic-ai/gq-dev' GQ_LEGACY_LOCK='~/gothic-ai/gq-dev/legacy.lock' scripts/gq status`. Сохраняй эти переменные одинаковыми для всех команд проверки.
 - Завершённые заявки старше 24 ч удаляются из состояния. Журнал и логи остаются: `wait <id>` возвращает прежний код из журнала, `logs <id>` читает сохранённый лог.
 
-Скрипты `ryzen.sh`, `bench.sh`, `body-*` и `nav-*` ещё не переведены на `gq`: это шаг 2. Старый `flock -x` и новая очередь взаимно ждут друг друга через общий замок.
+`ryzen.sh` и `bench.sh` переведены на `gq`: e2e, pytest и bench подают по одной `quick`-заявке, включая сборки и подготовку окружения. Параметры и ожидание описаны в [`docs/ryzen.md`](ryzen.md). Скрипты `body-*`, `nav-*` и цикл PPO переводятся отдельным PR. Старый `flock -x` и новая очередь взаимно ждут друг друга через общий замок.
 
 ### Устройство
 

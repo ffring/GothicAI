@@ -7,7 +7,8 @@
 # env: GOTHIC_DIR    game data (default: /Volumes/DevSSD/Dev/games/Gothic II)
 #      BENCH_HOST    auto (default): Ryzen first, ryzen: require Ryzen, local: this machine
 #      RYZEN_HOST    SSH host for Ryzen (default: ryzen)
-#      RYZEN_LOCK_WAIT seconds to wait for Ryzen (default: auto 120, ryzen 900)
+#      RYZEN_LOCK_WAIT seconds to wait for the worktree lock and gq (default: auto 120, ryzen 900)
+#      RYZEN_MAX     gq job time limit, including the build (default: 30m)
 #      GAME_BIN      game executable (default: OpenGothic/build/opengothic/Gothic2Notr)
 #      TEMPEST_WINDOW_SIZE client frame size (default: 800x600)
 #      SAVE          save to start from (default: save_slot_1.sav in the main checkout)

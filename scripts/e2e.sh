@@ -312,8 +312,11 @@ fi
 if [ "${GOTHIC_INTRO:-0}" != "1" ]; then
   START_ARGS+=(-nointro)
 fi
-# Recheck after server startup: another session may have taken the game while it was starting.
-until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
+# Recheck Mac contention after server startup. On Ryzen, gq owns the display and
+# permits server pytest alongside the game (older runners hold the machine lock).
+if [ "$(uname -s)" = Darwin ]; then
+  until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
+fi
 GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT")
 if [ "$SCENARIO" = "trace" ] || [ "$SCENARIO" = "broken" ]; then
   GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/$SCENARIO-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
