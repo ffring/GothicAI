@@ -1012,6 +1012,8 @@ class BodyControlEvent(_BodyModel):
     mode: BodyMode
     t_game_ms: BodyUInt
     t_wall_ms: BodyUInt
+    wall_monotonic_ns: BodyUInt | None = None
+    clock_domain: Literal["linux-clock-monotonic", "cxx-steady-clock"] | None = None
     last_heartbeat_wall_ms: BodyUInt
     pose_identity: str
     pose_before: str

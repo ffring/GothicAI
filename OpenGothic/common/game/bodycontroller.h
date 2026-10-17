@@ -24,6 +24,12 @@ class BodyController final {
       FightAlgo::PolicyAction action=FightAlgo::PolicyAction::Continue;
       };
     static const char* validate(const GateState& state,const GateCommand& command);
+    struct AcquireState final {
+      bool targetValid=false,externalControl=false,player=false,talking=false,terminal=false,safeBoundary=false;
+      bool nativeCombat=false,queueEmpty=true,queueCombatOnly=false,overlayEmpty=true,gotoEmpty=true,gotoToTarget=false;
+      };
+    static const char* validateAcquire(const AcquireState& state);
+    static bool nativeCombatGoto(uint8_t hint,const Npc* target,const Npc* provenance,const Npc* gotoNpc,bool gotoWaypoint);
     struct Snapshot final {
       bool owned=false, releasePending=false, controlAllowed=false, canDecide=false;
       uint64_t controlGeneration=0, goalVersion=0, commandId=0, executionId=0;

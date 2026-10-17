@@ -232,6 +232,13 @@ async def test_live_status_with_visibility_diagnostics_clears_restored_native_le
 
 
 @pytest.mark.parametrize("clock_domain", ["linux-clock-monotonic", "cxx-steady-clock"])
+def test_control_events_parse_live_engine_timestamps(clock_domain):
+    stream = events(event(1, wall_monotonic_ns=123_000_000, clock_domain=clock_domain))
+    assert stream.events[0].wall_monotonic_ns == 123_000_000
+    assert stream.events[0].clock_domain == clock_domain
+
+
+@pytest.mark.parametrize("clock_domain", ["linux-clock-monotonic", "cxx-steady-clock"])
 def test_status_parses_live_visibility_diagnostics(clock_domain):
     diagnostics = visibility_diagnostics(clock_domain=clock_domain, enabled=True, records_total=3)
     status = BodyControlStatus.model_validate(control_status(visibility_diagnostics=diagnostics))

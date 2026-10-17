@@ -22,6 +22,7 @@ void AiQueue::load(Serialize& fin) {
   fin.read(size);
   aiActions.resize(size);
   for(auto& i:aiActions){
+    i.nativeCombatTarget = nullptr;
     fin.read(reinterpret_cast<uint32_t&>(i.act));
     fin.read(i.target,i.victim);
     fin.read(i.point,i.func,i.i0,i.i1,i.s0);
@@ -64,6 +65,28 @@ int AiQueue::aiOutputOrderId() const {
     if(i.i0<v && (i.act==AI_Output || i.act==AI_OutputSvm || i.act==AI_OutputSvmOverlay || i.act==AI_StopProcessInfo))
       v = i.i0;
   return v;
+  }
+
+bool AiQueue::nativeCombatOnly(const Npc* target) const {
+  if(target==nullptr)
+    return false;
+  for(const auto& action:aiActions) {
+    if(action.nativeCombatTarget!=target)
+      return false;
+    switch(action.act) {
+      case AI_Attack:
+      case AI_Wait:
+        break;
+      case AI_GoToNpc:
+      case AI_TurnToNpc:
+        if(action.target==target)
+          break;
+        [[fallthrough]];
+      default:
+        return false;
+      }
+    }
+  return true;
   }
 
 void AiQueue::onWldItemRemoved(const Item& itm) {

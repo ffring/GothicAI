@@ -433,13 +433,28 @@ std::string BodyController::handleJson(const rapidjson::Value& req) {
       return result(nullptr,actor,false,"invalid_acquire");
     const auto mode=textField(req,"mode");
     if(mode!="realtime" && mode!="lockstep") return result(nullptr,actor,false,"invalid_mode");
-    if(!targetValid(*actor,target) || actor->externalCtrl || actor->isPlayer() || actor->isTalk() || terminal(*actor) ||
-       actor->aiQueue.size()>0 || !actor->go2.empty() || !safeBoundary(*actor)) return result(nullptr,actor,false,"actor_unavailable");
+    AcquireState acquire;
+    acquire.targetValid=targetValid(*actor,target); acquire.externalControl=actor->externalCtrl;
+    acquire.player=actor->isPlayer(); acquire.talking=actor->isTalk(); acquire.terminal=terminal(*actor);
+    acquire.safeBoundary=safeBoundary(*actor);
+    acquire.nativeCombat=actor->aiState.started && std::string_view(actor->aiState.hint)=="ZS_ATTACK";
+    acquire.queueEmpty=actor->aiQueue.size()==0; acquire.overlayEmpty=actor->aiQueueOverlay.size()==0;
+    acquire.queueCombatOnly=actor->aiQueue.nativeCombatOnly(actor->target());
+    acquire.gotoEmpty=actor->go2.empty();
+    acquire.gotoToTarget=nativeCombatGoto(actor->go2.flag,actor->target(),actor->go2.nativeCombatTarget,
+                                         actor->go2.npc,actor->go2.wp!=nullptr);
+    const auto refusal=validateAcquire(acquire);
+    if(std::string_view(refusal)!="allowed") return result(nullptr,actor,false,refusal);
     Lease newLease; newLease.npc=actor; newLease.entity=entity; newLease.generation=++state().nextGeneration;
     newLease.minimumSequence=BodyObservations::latestSequence(*actor);
     newLease.provider=provider; newLease.mode=mode; newLease.target=target; newLease.timeout=timeout; newLease.heartbeat=Clock::now();
+    // The accepted queue contains only this target's replaceable native combat work.
+    // Leave waits, state callbacks, dialogue and every locked pose untouched.
+    if(!acquire.queueEmpty) actor->aiQueue.clear();
+    if(!acquire.gotoEmpty) { actor->go2.clear(); actor->wayPath.clear(); newLease.movementStopPending=true; }
     actor->fghAlgo.onClearTarget();
     l=&state().leases.emplace(actor,std::move(newLease)).first->second;
+    if(l->movementStopPending && stopOwnedMovement(*actor)) l->movementStopPending=false;
     event(*l,"ownership","acquired"); return result(l,actor,true,"acquired");
     }
   uint64_t generation=0;
@@ -741,6 +756,29 @@ void BodyController::fixtureLock(Npc& actor,uint64_t durationMs) {
   if(durationMs==0 || durationMs>5000) throw std::invalid_argument("body fixture lock outside [1,5000]");
   // This is the same real game-time lock used by native combat waits, never a lifecycle event.
   actor.implFaiWait(durationMs);
+  }
+
+bool BodyController::nativeCombatGoto(uint8_t hint,const Npc* target,const Npc* provenance,const Npc* gotoNpc,bool gotoWaypoint) {
+  if(target==nullptr || provenance!=target)
+    return false;
+  if(hint==Npc::GT_Enemy)
+    return gotoNpc==target && !gotoWaypoint;
+  if(hint==Npc::GT_Way)
+    return (gotoNpc==target && !gotoWaypoint) || (gotoNpc==nullptr && gotoWaypoint);
+  return false;
+  }
+
+const char* BodyController::validateAcquire(const AcquireState& s) {
+  if(!s.targetValid) return "target_invalid";
+  if(s.externalControl) return "external_control";
+  if(s.player) return "player_actor";
+  if(s.talking) return "talking";
+  if(s.terminal) return "actor_down";
+  if(!s.safeBoundary) return "not_safe_boundary";
+  if(!s.overlayEmpty) return "native_overlay_busy";
+  if(!s.queueEmpty && (!s.nativeCombat || !s.queueCombatOnly)) return "native_queue_busy";
+  if(!s.gotoEmpty && (!s.nativeCombat || !s.gotoToTarget)) return "goto_busy";
+  return "allowed";
   }
 
 std::string BodyController::selfTestJson() {

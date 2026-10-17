@@ -43,6 +43,7 @@ LEASE_TIMEOUT_MS = 2000
 EVENTS_INTERVAL = 0.150
 FINISH_TIMEOUT = 2.0
 MAX_JSON_BYTES = 256 * 1024
+STALE_OBSERVATION_LIMIT = 10
 BRIDGE_ERRORS = (GameError, ConnectionClosed, OSError, TimeoutError)
 TARGET_IS_HERO = [
     "&&",
@@ -137,6 +138,17 @@ class FightSummary:
     fallbacks: int
     service_p50_ms: float | None
     service_p95_ms: float | None
+    packet_to_request_p50_ms: float | None
+    packet_to_request_p95_ms: float | None
+    packet_to_response_p50_ms: float | None
+    packet_to_response_p95_ms: float | None
+    response_to_action_p50_ms: float | None
+    response_to_action_p95_ms: float | None
+    packet_to_action_p50_ms: float | None
+    packet_to_action_p95_ms: float | None
+    acquire_refusals: tuple[tuple[str, int], ...]
+    action_rejections: tuple[tuple[str, int], ...]
+    stale_observation_consecutive: int
     fight_seconds: float | None
     release_confirmed: bool
     release_seconds: float | None
@@ -188,7 +200,13 @@ class BodyPilot:
         self._entity: int | None = None
         self._hero: int | None = None
         self._refusals: Counter[str] = Counter()
+        self._action_rejections: Counter[str] = Counter()
+        self._stale_observation_consecutive = 0
         self._latencies: list[float] = []
+        self._packet_to_request: list[float] = []
+        self._packet_to_response: list[float] = []
+        self._response_to_action: list[float] = []
+        self._packet_to_action: list[float] = []
         self._decisions = 0
         self._fallbacks = 0
         self._last_summary: FightSummary | None = None
@@ -289,6 +307,7 @@ class BodyPilot:
         return lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation
 
     def on_body_packet(self, packet: dict[str, Any]) -> None:
+        received_at = self.clock()
         rows = packet["observations"]
         if rows:
             self._now_game_ms = max(row["t_game_ms"] for row in rows)
@@ -303,7 +322,7 @@ class BodyPilot:
             if len(self._rows) >= 128:
                 self._reason = "observation_overflow"
                 break
-            self._rows.append((row, self.clock()))
+            self._rows.append((row, received_at))
         self._wake.set()
 
     async def run(self) -> None:
@@ -532,7 +551,7 @@ class BodyPilot:
             except (GameDisconnected, ConnectionClosed):
                 self._reason = "disconnected"
             except BRIDGE_ERRORS as error:
-                self._refusals[str(error)] += 1
+                self._refusals[str(error).removeprefix("body command rejected: ")] += 1
             else:
                 self._claimed_fights.add(self.npc)
                 self._entity = self.lease.entity_id
@@ -546,25 +565,36 @@ class BodyPilot:
                     self._identity(self.lease),
                     dict(self._refusals),
                 )
+                # Establish the episode while waiting for the first leased row.
+                # The independent heartbeat already protects the lease during TCP
+                # connection and reset, so neither delays that row's first step.
+                self._initial_game_ms = observation.t_game_ms
+                try:
+                    self.client = PolicyClient(self.url)
+                    await self.client.connect()
+                    await self.client.call(
+                        "reset",
+                        session_epoch=self.lease.session_epoch,
+                        world_epoch=self.lease.world_epoch,
+                        initial_game_ms=self._initial_game_ms,
+                    )
+                except TimeoutError:
+                    self._reason = "policy_timeout"
+                except (OSError, ValueError, PolicyError):
+                    self._reason = "policy_error"
             return
         if raw["observation_seq"] <= self.lease.acquired_observation_seq:
             return
         try:
-            if self.client is None:
-                self.client = PolicyClient(self.url)
-                await self.client.connect()
-                self._initial_game_ms = raw["t_game_ms"]
-                await self.client.call(
-                    "reset",
-                    session_epoch=self.lease.session_epoch,
-                    world_epoch=self.lease.world_epoch,
-                    initial_game_ms=self._initial_game_ms,
-                )
-            started = time.monotonic()
+            assert self.client is not None
+            started = self.clock()
+            self._packet_to_request.append((started - received_at) * 1000)
             try:
                 result = await self.client.call("step", observation=raw, now_game_ms=self._now_game_ms)
             finally:
-                self._latencies.append((time.monotonic() - started) * 1000)
+                responded_at = self.clock()
+                self._latencies.append((responded_at - started) * 1000)
+            self._packet_to_response.append((responded_at - received_at) * 1000)
             if result.get("status") == "fallback":
                 self._fallbacks += 1
                 self._reason = f"policy_fallback:{result.get('reason')}"
@@ -582,9 +612,25 @@ class BodyPilot:
                 latest = self.link.body_latest.get(self.lease.entity_id)
                 if latest is None or latest.observation_seq != observation.observation_seq:
                     return
-                await self.link.body_action(
-                    self.lease, observation, action, ttl_ms=100, timeout=BRIDGE_TIMEOUT
-                )
+                # Record the send boundary before awaiting its acknowledgement;
+                # bridge reply latency is not server decision-processing time.
+                sent_at = self.clock()
+                self._response_to_action.append((sent_at - responded_at) * 1000)
+                self._packet_to_action.append((sent_at - received_at) * 1000)
+                try:
+                    await self.link.body_action(
+                        self.lease, observation, action, ttl_ms=100, timeout=BRIDGE_TIMEOUT
+                    )
+                except BRIDGE_ERRORS as error:
+                    reason = str(error).removeprefix("body command rejected: ") or type(error).__name__
+                    self._action_rejections[reason] += 1
+                    if isinstance(error, GameError) and reason == "stale_observation":
+                        self._stale_observation_consecutive += 1
+                        if self._stale_observation_consecutive >= STALE_OBSERVATION_LIMIT:
+                            self._reason = "body_action_rejected"
+                        return
+                    raise
+                self._stale_observation_consecutive = 0
                 self._decisions += 1
         except TimeoutError:
             self._reason = "policy_timeout"
@@ -742,6 +788,17 @@ class BodyPilot:
             fallbacks=self._fallbacks,
             service_p50_ms=_percentile(self._latencies, 0.50),
             service_p95_ms=_percentile(self._latencies, 0.95),
+            packet_to_request_p50_ms=_percentile(self._packet_to_request, 0.50),
+            packet_to_request_p95_ms=_percentile(self._packet_to_request, 0.95),
+            packet_to_response_p50_ms=_percentile(self._packet_to_response, 0.50),
+            packet_to_response_p95_ms=_percentile(self._packet_to_response, 0.95),
+            response_to_action_p50_ms=_percentile(self._response_to_action, 0.50),
+            response_to_action_p95_ms=_percentile(self._response_to_action, 0.95),
+            packet_to_action_p50_ms=_percentile(self._packet_to_action, 0.50),
+            packet_to_action_p95_ms=_percentile(self._packet_to_action, 0.95),
+            acquire_refusals=tuple(sorted(self._refusals.items())),
+            action_rejections=tuple(sorted(self._action_rejections.items())),
+            stale_observation_consecutive=self._stale_observation_consecutive,
             fight_seconds=fight_seconds,
             release_confirmed=release_confirmed,
             release_seconds=release_seconds,
@@ -749,14 +806,28 @@ class BodyPilot:
         )
         log.info(
             "neural-body end npc=%s reason=%s decisions=%d fallback=%d service_p50_ms=%s "
-            "service_p95_ms=%s acquire_refusals=%s unconfirmed=%s",
+            "service_p95_ms=%s packet_to_request_p50_ms=%s packet_to_request_p95_ms=%s "
+            "packet_to_response_p50_ms=%s packet_to_response_p95_ms=%s "
+            "response_to_action_p50_ms=%s response_to_action_p95_ms=%s "
+            "packet_to_action_p50_ms=%s packet_to_action_p95_ms=%s "
+            "acquire_refusals=%s action_rejections=%s stale_observation_consecutive=%d unconfirmed=%s",
             npc,
             reason,
             self._decisions,
             self._fallbacks,
-            _percentile(self._latencies, 0.50),
-            _percentile(self._latencies, 0.95),
-            dict(self._refusals),
+            summary.service_p50_ms,
+            summary.service_p95_ms,
+            summary.packet_to_request_p50_ms,
+            summary.packet_to_request_p95_ms,
+            summary.packet_to_response_p50_ms,
+            summary.packet_to_response_p95_ms,
+            summary.response_to_action_p50_ms,
+            summary.response_to_action_p95_ms,
+            summary.packet_to_action_p50_ms,
+            summary.packet_to_action_p95_ms,
+            dict(summary.acquire_refusals),
+            dict(summary.action_rejections),
+            summary.stale_observation_consecutive,
             unconfirmed if reason == "finish_deadline" else None,
         )
         self.npc = self.lease = self.client = None
@@ -768,6 +839,12 @@ class BodyPilot:
         self._initial_game_ms = None
         self._symbol = self._entity = self._hero = None
         self._refusals.clear()
+        self._action_rejections.clear()
+        self._stale_observation_consecutive = 0
         self._latencies.clear()
+        self._packet_to_request.clear()
+        self._packet_to_response.clear()
+        self._response_to_action.clear()
+        self._packet_to_action.clear()
         self._decisions = self._fallbacks = 0
         self._last_summary = summary

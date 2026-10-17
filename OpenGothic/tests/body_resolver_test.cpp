@@ -2,6 +2,8 @@
 #include "game/bodycontroller.h"
 #include "game/bodyarenageometry.h"
 #include "game/bodyarena.h"
+#include "world/aiqueue.h"
+#include "world/objects/npc.h"
 
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
@@ -276,6 +278,103 @@ void actualArbiterFakeStateChecks() {
     }
   }
 
+void nativeCombatAcquisitionGates() {
+  ++cases;
+  using Acquire = BodyController::AcquireState;
+  Acquire state;
+  state.targetValid=state.safeBoundary=true;
+  const auto reason=[](const Acquire& actual) {
+    return std::string_view(BodyController::validateAcquire(actual));
+    };
+  expect(reason(state)=="allowed","empty arena queue and goto need no native state");
+  for(auto field:{&Acquire::nativeCombat,&Acquire::queueCombatOnly,&Acquire::gotoToTarget}) {
+    auto diagnostic=state; diagnostic.*field=true;
+    expect(reason(diagnostic)=="allowed","unused native provenance cannot alter empty arena acquisition");
+    }
+  state.nativeCombat=state.queueCombatOnly=state.gotoToTarget=true;
+  state.queueEmpty=state.gotoEmpty=false;
+  expect(reason(state)=="allowed","safe same-target native combat queue and goto can be replaced");
+  auto changed=state; changed.nativeCombat=false;
+  expect(reason(changed)=="native_queue_busy","other native states retain their queued actions");
+  changed.queueEmpty=true;
+  expect(reason(changed)=="goto_busy","other native states retain their goto");
+  changed=state; changed.queueCombatOnly=false;
+  expect(reason(changed)=="native_queue_busy","mixed or unproven native queue blocks acquisition");
+  changed=state; changed.gotoToTarget=false;
+  expect(reason(changed)=="goto_busy","goto to a different goal blocks acquisition");
+  changed=state; changed.safeBoundary=false;
+  expect(reason(changed)=="not_safe_boundary","combat provenance cannot bypass a live wait or segment lock");
+  changed=state; changed.overlayEmpty=false;
+  expect(reason(changed)=="native_overlay_busy","overlay output remains native work");
+  changed=state; changed.targetValid=false;
+  expect(reason(changed)=="target_invalid","lease target must remain the actor's live visible target");
+  for(auto pair:{std::pair{&Acquire::externalControl,"external_control"},
+                 std::pair{&Acquire::player,"player_actor"},std::pair{&Acquire::talking,"talking"},
+                 std::pair{&Acquire::terminal,"actor_down"}}) {
+    changed=state; changed.*pair.first=true;
+    expect(reason(changed)==pair.second,"actor-specific refusal retains its cause");
+    }
+  const auto target=reinterpret_cast<Npc*>(uintptr_t(1));
+  const auto other=reinterpret_cast<Npc*>(uintptr_t(2));
+  for(unsigned hint=Npc::GT_No;hint<=Npc::GT_Flee;++hint) {
+    expect(BodyController::nativeCombatGoto(uint8_t(hint),target,target,target,false)==
+           (hint==Npc::GT_Way || hint==Npc::GT_Enemy),"only real native waypoint/NPC and enemy goto hints can be replaced");
+    expect(!BodyController::nativeCombatGoto(uint8_t(hint),target,nullptr,target,false),
+           "matching enemy destination without native provenance cannot be replaced");
+    expect(!BodyController::nativeCombatGoto(uint8_t(hint),target,target,other,false),
+           "every native goto hint remains bound to the requested target");
+    }
+  expect(BodyController::nativeCombatGoto(Npc::GT_Way,target,target,nullptr,true),
+         "proven native path waypoint toward the enemy can be replaced");
+  expect(!BodyController::nativeCombatGoto(Npc::GT_Enemy,target,target,nullptr,true),
+         "native enemy approach must point to the exact enemy NPC, not a waypoint");
+  expect(!BodyController::nativeCombatGoto(Npc::GT_Enemy,target,target,target,true),
+         "inconsistent enemy approach cannot smuggle a waypoint goal");
+  expect(!BodyController::nativeCombatGoto(Npc::GT_Way,target,other,nullptr,true),
+         "native waypoint path toward another enemy is preserved");
+  expect(!BodyController::nativeCombatGoto(Npc::GT_Enemy,nullptr,nullptr,nullptr,false),
+         "null enemy cannot become a valid goto target");
+  }
+
+void nativeCombatQueueProvenance() {
+  ++cases;
+  // Identity-only sentinel pointers: queue validation never dereferences an NPC.
+  const auto target=reinterpret_cast<Npc*>(uintptr_t(1));
+  const auto other=reinterpret_cast<Npc*>(uintptr_t(2));
+  AiQueue queue;
+  expect(queue.nativeCombatOnly(target),"empty native combat queue has no conflicting work");
+  expect(!queue.nativeCombatOnly(nullptr),"missing native combat target fails closed");
+  for(unsigned ordinal=AI_None;ordinal<=AI_TurnAway;++ordinal) {
+    auto action=AiQueue::aiAttack(); action.act=Action(ordinal); action.target=target;
+    const bool replaceable=action.act==AI_Attack || action.act==AI_Wait ||
+                           action.act==AI_GoToNpc || action.act==AI_TurnToNpc;
+    queue.pushBack(std::move(action));
+    expect(!queue.nativeCombatOnly(target),"untagged script work cannot become native combat merely by action type");
+    queue.clear();
+    action=AiQueue::aiAttack(); action.act=Action(ordinal); action.target=target; action.nativeCombatTarget=target;
+    queue.pushBack(std::move(action));
+    expect(queue.nativeCombatOnly(target)==replaceable,"native queue whitelist excludes output, animation, state and story work");
+    expect(!queue.nativeCombatOnly(other),"native combat provenance is bound to the same target");
+    queue.clear();
+    }
+  for(auto action:{AiQueue::aiAttack(),AiQueue::aiWait(200),AiQueue::aiGoToNpc(target),AiQueue::aiTurnToNpc(target)}) {
+    action.nativeCombatTarget=target; queue.pushBack(std::move(action));
+    }
+  const auto first=queue.front();
+  for(unsigned repeat=0;repeat<32;++repeat)
+    expect(queue.nativeCombatOnly(target) && queue.size()==4 && queue.front()==first,
+           "native queue classification preserves every action and order");
+  AiQueue::AiAction story; story.act=AI_Output; story.target=target; story.s0="story";
+  queue.pushBack(std::move(story));
+  expect(!queue.nativeCombatOnly(target) && queue.size()==5,"one story action blocks the whole queue without clearing it");
+  queue.clear();
+  for(auto action:{AiQueue::aiGoToNpc(other),AiQueue::aiTurnToNpc(other)}) {
+    action.nativeCombatTarget=target; queue.pushBack(std::move(action));
+    expect(!queue.nativeCombatOnly(target),"tagged navigation must still explicitly address the lease target");
+    queue.clear();
+    }
+  }
+
 void optionalWallNormalPlacement() {
   ++cases;
   using Tempest::Vec3;
@@ -414,6 +513,8 @@ int main() {
     run("native_normalization_preserves_ordinals",nativeNormalizationPreservesOrdinals);
     run("repeat_value_and_queue_purity",repeatPurity);
     run("actual_arbiter_fake_state_checks",actualArbiterFakeStateChecks);
+    run("native_combat_acquisition_gates",nativeCombatAcquisitionGates);
+    run("native_combat_queue_provenance",nativeCombatQueueProvenance);
     run("optional_wall_normal_placement",optionalWallNormalPlacement);
     run("optional_wall_tangent_selection",optionalWallTangentSelection);
     run("reaction_activation_gates",reactionActivationGates);
