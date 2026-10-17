@@ -81,7 +81,9 @@ class ErrandScript:
         brief = await director.chains.brief(giver)
         if brief is None or not brief.places or not brief.base.items:
             return None
-        place = next(iter(brief.places.values()))
+        place = next((p for p in brief.places.values() if p.waypoints), None)
+        if place is None:
+            return None
         samples = {"ITFO_SMELLYFISH": 0, "ITAT_MEATBUGFLESH": 1, "ITFO_ADDON_SHELLFLESH": 2}
         items = sorted(brief.base.items, key=lambda item: (samples.get(item, 3), item))
         item = items[0]

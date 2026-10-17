@@ -127,7 +127,20 @@ def test_the_book_knows_the_bandits_cave_is_a_cave_entered_from_the_steps():
     # a place of freepoints only is walked to, and waited at, by its anchor: a waypoint by it
     field = book.get("FARM1_WOLF")
     assert field is not None and all(p.startswith("FP_") for p in field.points)
+    assert field.waypoints == ()  # a reach goal cannot use an anchor outside its requested place
     assert field.waynet == ("NW_FARM1_PATH_CITY_05_B",)
+    assert book.is_waypoint("nw_farm1_path_city_05_b")
+    assert not book.is_waypoint(field.points[0]) and not book.is_waypoint("NW_MISSING")
+
+
+def test_the_tower_place_that_blocked_reach_has_only_freepoints():
+    book = PlaceBook.load()
+    assert book is not None
+    steps = book.get("XARDAS_TOWER#2")
+    assert steps is not None and "FP_ROAM_XARDAS_TOWER_3_03" in steps.points
+    assert steps.waypoints == ()
+    assert not book.is_waypoint("FP_ROAM_XARDAS_TOWER_3_03")
+    assert steps.anchor is not None and book.is_waypoint(steps.anchor)
 
 
 def test_the_waynet_and_rooms_tell_a_caves_way_in_and_neighbours():

@@ -161,6 +161,7 @@ async def _setup(
     script: list[dict[str, Any]] | None = None,
     *,
     partial_group: bool = False,
+    extra_points: dict[str, int] | None = None,
 ) -> AsyncIterator[tuple[FakeGame, ChainAuthor, StubCasting, FakeBackend]]:
     fake = FakeGame(branch="A")
     steps = [FakeStep("", [ToolCall(PROPOSE, raw, f"chain{i}")]) for i, raw in enumerate(script or [])]
@@ -168,6 +169,7 @@ async def _setup(
     link_cm, author, _ = await _author(fake, llm, story_graph, MemoryStore(":memory:"))
     try:
         data = deepcopy(BOOK)
+        data["points"].update(extra_points or {})
         for place, kind in zip(data["places"], ["house", "yard", "field", "street"], strict=True):
             place["kind"] = kind
         author.places = PlaceBook(data)
@@ -513,6 +515,32 @@ async def test_a_single_errand_uses_book_goals_and_one_atomic_patch(graph):  # n
         assert "разыгрывать сам замысел" in instructions
         assert premise in messages[0].content and "Число квестов: ровно 1" in messages[0].content
         assert "у него пропала" not in messages[0].content
+
+
+async def test_place_reach_uses_a_waypoint_but_have_can_still_use_a_freepoint(graph):  # noqa: F811
+    freepoints = {f"FP_ROAM_FARM1_FIELD_{i}": 2 for i in range(5)}
+    async with _setup(graph, [_single_proposal()], extra_points=freepoints) as (fake, chains, casting, _):
+        made = await chains.chain(HILDA, quest_count=1, max_people=0)
+        assert made is not None and len(made) == 1
+        reach, have = made[0].stages[1].goals[0], made[0].stages[2].goals[0]
+        assert reach.point == "NW_FARM1_FIELD_02"
+        assert have.point in freepoints
+        assert len(fake.graph) == 2 and not casting.calls
+
+
+async def test_place_with_only_freepoints_cannot_be_a_reach_target_even_with_an_anchor(graph):  # noqa: F811
+    freepoints = {f"FP_ROAM_FARM1_FIELD_{i}": 2 for i in range(5)}
+    async with _setup(graph, extra_points=freepoints) as (fake, chains, casting, _):
+        brief = await chains.brief(HILDA)
+        assert brief is not None
+        brief.quest_count = 1
+        brief.places[FIELD] = replace(brief.places[FIELD], points=tuple(freepoints), anchor="NW_FARM1_OUT_01")
+        made, errors = await chains._try(_single_proposal(), brief)
+        assert made is None and f"дойти до места {FIELD} нельзя: в нём нет вейпоинтов" in errors
+        assert any(
+            line.startswith(f"- {FIELD} —") and "дойти: нет" in line for line in brief.text().splitlines()
+        )
+        assert not casting.calls and not chains.book.all() and len(fake.graph) == 1
 
 
 async def test_two_quests_requested_as_one_are_rejected_and_explained_to_the_model(graph):  # noqa: F811

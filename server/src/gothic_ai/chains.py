@@ -53,7 +53,8 @@ give.description и talk.description — строка героя в меню, д
 Реплика lines: speaker hero или npc, text. Записи журнала — от первого лица героя.
 В каждой стадии 1–4 цели, всего 1–5 стадий. Последняя стадия заканчивается ровно одним bring или talk.
 Цели: kind, npc, item, count, place, radius, npcs, days, talk, journal.
-- reach: place из сводки (точку выберет код) ИЛИ npc роли/заказчика/жителя сводки;
+- reach: place из сводки с разрешением «дойти: да» (вейпоинт выберет код)
+  ИЛИ npc роли/заказчика/жителя сводки;
   radius от 200 до 3000 см, обычно 500;
 - have: вещь item, count; npc — её держатель (у новой роли она обязана быть в carries),
   или place — код положит вещь там при начале стадии;
@@ -179,7 +180,8 @@ class Brief:
             out.append(f"Число квестов: ровно {self.quest_count}.")
         out += [
             f"- {p.id} — {p.where_ru}; вид {p.kind}; "
-            f"бандиты: {'да' if self.bandit_ok(p.id) else 'нет'}; точек {len(p.points)}"
+            f"бандиты: {'да' if self.bandit_ok(p.id) else 'нет'}; "
+            f"дойти: {'да' if p.waypoints else 'нет'}; точек {len(p.points)}"
             for p in self.places.values()
         ]
         out.append("Люди для разговора и передачи вещей (npc — имя; заказчик также giver):")
@@ -464,8 +466,12 @@ class ChainAuthor:
                         elif goal["kind"] not in (questbook.REACH, questbook.HAVE, questbook.BRING):
                             errors.append(f"цель {goal['kind']}: место не используется")
                         else:
-                            points = brief.places[place].points
-                            goal["point"] = points[len(points) // 2]
+                            site = brief.places[place]
+                            points = site.waypoints if goal["kind"] == questbook.REACH else site.points
+                            if not points:
+                                errors.append(f"дойти до места {place} нельзя: в нём нет вейпоинтов")
+                            else:
+                                goal["point"] = points[len(points) // 2]
                     ref = goal["npc"]
                     if ref:
                         if ref in roles:
