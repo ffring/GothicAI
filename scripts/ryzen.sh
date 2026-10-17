@@ -144,6 +144,25 @@ build_engine() {
 
 remote_bench() {
   local state="$1" run="$2" scenario="$3" digest rc started=$SECONDS
+  if [[ "${RYZEN_AI_TUNNEL:-0}" == 1 ]]; then
+    # This command runs only after gq grants the window. The Mac opens the
+    # reverse forwarding on its lock-holding SSH connection, then acknowledges.
+    echo 'Ryzen: waiting for AI tunnel'
+    until [[ -f "$state/inputs/$run/tunnel-ready" ]]; do sleep 0.2; done
+    GOTHIC_AI_URL="$(python3 - "$GOTHIC_AI_URL" "$state/inputs/$run/tunnel-ready" <<'PY'
+from pathlib import Path
+import sys
+from urllib.parse import urlsplit, urlunsplit
+url = urlsplit(sys.argv[1])
+port = int(Path(sys.argv[2]).read_text())
+assert 1 <= port <= 65535
+credentials, separator, _ = url.netloc.rpartition('@')
+netloc = (credentials + separator) if separator else ''
+print(urlunsplit(url._replace(netloc=netloc + f'{url.hostname}:{port}')))
+PY
+)"
+    export GOTHIC_AI_URL
+  fi
   toolchain
   export GOTHIC_DIR="$HOME/gothic-ai/game"
   [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
@@ -267,6 +286,14 @@ remote() {
   ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" "$command"
 }
 
+sync_hd_textures() {
+  # Upload only into this worktree: another admitted bench may still be reading
+  # its own texture files while we prepare a queued job.
+  remote mkdir -p "$STATE/hd-textures/textures"
+  rsync -a --delete "$HD_TEXTURES/" "$RYZEN_HOST:$REMOTE/hd-textures/textures/"
+  ENV_ARGS+=("OPENGOTHIC_TEXTURES=$STATE/hd-textures/textures")
+}
+
 if [[ "$ACTION" == setup ]]; then
   remote bash -s <<'REMOTE'
 set -euo pipefail
@@ -375,9 +402,6 @@ cleanup() {
   if [[ "$RUN_CREATED" == 1 ]]; then finish_run || true; fi
   exec 8>&- || true
   if [[ -n "$SSH_PID" ]]; then kill "$SSH_PID" 2>/dev/null || true; wait "$SSH_PID" 2>/dev/null || true; fi
-  if [[ "$TUNNEL_OPEN" == 1 ]]; then
-    ssh -S "$SESSION/tunnel" -O exit "$RYZEN_HOST" >/dev/null 2>&1 || true
-  fi
   rm -rf -- "$SESSION" || true
   return "$status"
 }
@@ -402,7 +426,8 @@ disk_usage
 exec bash -se"
 printf -v bootstrap_command 'bash -c %q' "$bootstrap"
 : >"$OUTPUT"
-ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" "$bootstrap_command" \
+ssh -o BatchMode=yes -o ConnectTimeout=10 \
+  -o ControlMaster=yes -o ControlPath="$SESSION/control" "$RYZEN_HOST" "$bootstrap_command" \
   8>&- <"$SESSION/input" > >(exec 8>&-; tee -a "$OUTPUT") 2>&1 &
 SSH_PID=$!
 until [[ -f "$OUTPUT" ]] && grep -q '^Ryzen: lock acquired ' "$OUTPUT"; do
@@ -414,6 +439,7 @@ until [[ -f "$OUTPUT" ]] && grep -q '^Ryzen: lock acquired ' "$OUTPUT"; do
   sleep 0.1
 done
 
+AI_PORT=''
 if [[ "$ACTION" == bench && -n "${GOTHIC_AI_URL:-}" ]]; then
   # Only loopback endpoints need forwarding. Bind remotely to loopback as well.
   AI_PORT="$(python3 - "$GOTHIC_AI_URL" <<'PY'
@@ -424,28 +450,51 @@ if url.hostname in ('127.0.0.1', 'localhost'):
     print(url.port or (443 if url.scheme == 'wss' else 80))
 PY
 )"
-  if [[ -n "$AI_PORT" ]]; then
-    if ssh -f -N -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=yes \
-      -o ControlMaster=yes -o ControlPath="$SESSION/tunnel" \
-      -R "127.0.0.1:$AI_PORT:127.0.0.1:$AI_PORT" "$RYZEN_HOST" 8>&- >"$SESSION/tunnel.log" 2>&1; then
-      TUNNEL_OPEN=1
-      echo "Ryzen: AI tunnel ready on port $AI_PORT"
-    else
-      cat "$SESSION/tunnel.log" >&2
-      echo "Ryzen: could not open AI tunnel on port $AI_PORT" >&2
-      exit 1
-    fi
-  fi
 fi
 
+start_tunnel() {
+  # Forward only after the admitted job asks for it. Reuse the control SSH so
+  # forwarding also ends when the worktree-lock connection closes. A private
+  # port avoids conflicts even while collecting logs after gq releases display.
+  local port attempt
+  for attempt in {1..10}; do
+    if ! ssh -S "$SESSION/control" -O forward -o ExitOnForwardFailure=yes \
+      -R "127.0.0.1:0:127.0.0.1:$AI_PORT" "$RYZEN_HOST" \
+      8>&- >"$SESSION/tunnel.port" 2>"$SESSION/tunnel.log"; then
+      cat "$SESSION/tunnel.log" >&2
+      echo "Ryzen: could not open AI tunnel to port $AI_PORT" >&2
+      return 1
+    fi
+    port="$(cat "$SESSION/tunnel.port")"
+    [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || {
+      echo 'Ryzen: invalid allocated tunnel port' >&2; return 1;
+    }
+    case "$port" in
+      47827|47829|47840)
+        ssh -S "$SESSION/control" -O cancel \
+          -R "127.0.0.1:0:127.0.0.1:$AI_PORT" "$RYZEN_HOST" 8>&- || return 1
+        continue ;;
+    esac
+    remote bash -c 'printf "%s\n" "$1" > "$2.tmp" && mv -- "$2.tmp" "$2"' -- \
+      "$port" "$STATE/inputs/$RUN/tunnel-ready" || return 1
+    TUNNEL_OPEN=1
+    echo "Ryzen: AI tunnel ready on private port $port"
+    return 0
+  done
+  echo 'Ryzen: could not allocate a tunnel outside e2e ports' >&2
+  return 1
+}
+
 run_quick() {
-  local rc control_lost=0
+  local rc control_lost=0 tunnel_failed=0
   kill -0 "$SSH_PID" 2>/dev/null || { echo 'Ryzen: worktree lock connection lost' >&2; return 255; }
   RUN_STARTED=1
   # The Mac wrapper owns gq's stdin pipe; running gq inside the control SSH
   # would close that pipe on command completion and cancel the job at once.
+  # Keep fd 8 in the wrapper: even SIGKILL of this shell must not release the
+  # worktree lock while its gq job is still alive. tee must not retain that fd.
   "$ROOT/scripts/gq" --host "$RYZEN_HOST" run "${GQ_ARGS[@]}" -- "$@" \
-    8>&- > >(exec 8>&-; tee -a "$OUTPUT") 2>&1 &
+    > >(exec 8>&-; tee -a "$OUTPUT") 2>&1 &
   GQ_PID=$!
   # A dropped control connection releases the snapshot lock. Stop our job too,
   # before another invocation can upload over its source/build directories.
@@ -456,11 +505,19 @@ run_quick() {
       kill -TERM "$GQ_PID" 2>/dev/null || true
       break
     fi
+    if [[ -n "$AI_PORT" && "$TUNNEL_OPEN" == 0 ]] && grep -qx 'Ryzen: waiting for AI tunnel' "$OUTPUT"; then
+      if ! start_tunnel; then
+        tunnel_failed=1
+        kill -TERM "$GQ_PID" 2>/dev/null || true
+        break
+      fi
+    fi
     sleep 1
   done
   wait "$GQ_PID" && rc=0 || rc=$?
   GQ_PID=''
   [[ "$control_lost" == 0 ]] || rc=255
+  [[ "$tunnel_failed" == 0 ]] || rc=1
   RUN_FINISHED=1
   RUN_RC="$rc"
   return "$rc"
@@ -501,6 +558,7 @@ fi
 GQ_ARGS+=(--wait-max "$LOCK_WAIT")
 ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS")
 if [[ "$ACTION" == bench ]]; then
+  [[ -z "$AI_PORT" ]] || ENV_ARGS+=("RYZEN_AI_TUNNEL=1")
   REMOTE_OUT="$STATE/runs/$RUN"
   bench_path() {
     python3 - "$1" "$LOG_DIR" "$REMOTE_OUT" <<'PY'
@@ -542,9 +600,7 @@ PY
   fi
   if [[ "$TEXTURES" == "$HD_TEXTURES" ]]; then
     if [[ -d "$HD_TEXTURES" ]]; then
-      remote mkdir -p "$REMOTE_HOME/gothic-ai/hd-textures/textures"
-      rsync -a --delete "$HD_TEXTURES/" "$RYZEN_HOST:gothic-ai/hd-textures/textures/"
-      ENV_ARGS+=("OPENGOTHIC_TEXTURES=$REMOTE_HOME/gothic-ai/hd-textures/textures")
+      sync_hd_textures
     else
       ENV_ARGS+=("OPENGOTHIC_TEXTURES=")
     fi
