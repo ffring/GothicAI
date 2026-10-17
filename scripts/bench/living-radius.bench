@@ -1,0 +1,9 @@
+seed 73013
+cheat god
+goto NW_XARDAS_TOWER_VALLEY_091
+wait 500
+living off
+living setup
+living on
+wait 100
+living radius-check

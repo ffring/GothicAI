@@ -1,8 +1,11 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 
 project(OpenGothic LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(BUILD_SHARED_LIBS OFF)
+
+option(OPENGOTHIC_ENABLE_FRAME_PROFILE "Compile opt-in frame profiling diagnostics" OFF)
+option(OPENGOTHIC_ENABLE_APP_CADENCE "Compile the normal-game death cadence benchmark" OFF)
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/opengothic)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/opengothic)
@@ -12,6 +15,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_SKIP_RPATH ON)
 
 add_library(${PROJECT_NAME} STATIC)
+if(OPENGOTHIC_ENABLE_FRAME_PROFILE)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC OPENGOTHIC_ENABLE_FRAME_PROFILE=1)
+endif()
+if(OPENGOTHIC_ENABLE_APP_CADENCE)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC OPENGOTHIC_ENABLE_APP_CADENCE=1)
+endif()
 if(ANDROID)
   add_library(Gothic2Notr SHARED)
   add_library(Spacer SHARED)
@@ -73,9 +82,25 @@ endif()
 
 # sources
 file(GLOB_RECURSE OPENGOTHIC_SOURCES "common/*.h" "common/*.cpp")
+if(NOT OPENGOTHIC_ENABLE_FRAME_PROFILE)
+  list(REMOVE_ITEM OPENGOTHIC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/common/frameprofile.cpp")
+endif()
+if(NOT OPENGOTHIC_ENABLE_APP_CADENCE)
+  list(REMOVE_ITEM OPENGOTHIC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/common/appcadence.cpp")
+endif()
 file(GLOB_RECURSE SPACER_SOURCES "spacer/*.h" "spacer/*.cpp")
 
 target_sources(${PROJECT_NAME} PRIVATE ${OPENGOTHIC_SOURCES} ${ObjCSOURCES})
+
+# The movable-vob allowlist is data, embedded so installed builds do not depend
+# on their working directory. Editing the CSV also triggers reconfiguration.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/movable-vobs.csv")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/movable-vobs.csv" MOVABLE_VOBS_CSV)
+configure_file(common/world/movablevobsdata.h.in generated/movablevobsdata.h @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/destructible-vobs.csv")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/destructible-vobs.csv" DESTRUCTIBLE_VOBS_CSV)
+configure_file(common/physics/fracturedata.h.in generated/fracturedata.h @ONLY)
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 # shaders
 add_subdirectory(shader)
@@ -140,40 +165,53 @@ include_directories(lib/miniz)
 add_definitions(-DMINIZ_NO_STDIO)
 add_library(miniz STATIC EXCLUDE_FROM_ALL "lib/miniz/miniz.h" "lib/miniz/miniz.c")
 target_link_libraries(${PROJECT_NAME} miniz)
+target_link_libraries(${PROJECT_NAME} zlibstatic)
+target_include_directories(${PROJECT_NAME} PRIVATE
+  lib/Tempest/Engine/thirdparty/zlib ${CMAKE_BINARY_DIR}/lib/Tempest/thirdparty/zlib)
 
-# bullet physics
-set(BULLET2_MULTITHREADING       ON  CACHE INTERNAL "")
-set(USE_MSVC_RUNTIME_LIBRARY_DLL ON  CACHE INTERNAL "")
-set(USE_GRAPHICAL_BENCHMARK      OFF CACHE INTERNAL "")
-set(BUILD_BULLET2_DEMOS          OFF CACHE INTERNAL "") # No samples
-set(BUILD_OPENGL3_DEMOS          OFF CACHE INTERNAL "") # No samples
-set(BUILD_UNIT_TESTS             OFF CACHE INTERNAL "") # No tests
-set(BUILD_CPU_DEMOS              OFF CACHE INTERNAL "") # No samples
-set(BUILD_EXTRAS                 OFF CACHE INTERNAL "") # No bugs
-set(GLFW_BUILD_EXAMPLES          OFF CACHE INTERNAL "")
-set(GLFW_BUILD_TESTS             OFF CACHE INTERNAL "")
-set(GLFW_BUILD_DOCS              OFF CACHE INTERNAL "")
-set(BUILD_BULLET3                OFF CACHE INTERNAL "") # Can use bullet2, bullet3 wants to build examples...
-add_subdirectory(lib/bullet3)
-if(NOT MSVC)
-  target_compile_options(BulletDynamics         PRIVATE -Wno-argument-outside-range)
-  target_compile_options(BulletInverseDynamics  PRIVATE -Wno-argument-outside-range)
-  target_compile_options(BulletSoftBody         PRIVATE -Wno-argument-outside-range)
-  target_compile_options(Bullet3Common          PRIVATE -Wno-argument-outside-range)
-  target_compile_options(BulletCollision        PRIVATE -Wno-argument-outside-range)
-  target_compile_options(LinearMath             PRIVATE -Wno-argument-outside-range)
-endif()
-if(NOT MSVC AND NOT APPLE AND NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
-  target_compile_options(BulletDynamics         PRIVATE -Wno-stringop-overflow)
-  target_compile_options(BulletInverseDynamics  PRIVATE -Wno-stringop-overflow)
-  target_compile_options(BulletSoftBody         PRIVATE -Wno-stringop-overflow)
-  target_compile_options(Bullet3Common          PRIVATE -Wno-stringop-overflow)
-  target_compile_options(BulletCollision        PRIVATE -Wno-stringop-overflow)
-  target_compile_options(LinearMath             PRIVATE -Wno-stringop-overflow)
-endif()
+# Recast/Detour are used only by the opt-in body-runner navmesh commands.
+add_subdirectory(lib/recastnavigation)
+target_link_libraries(${PROJECT_NAME} Recast Detour)
 
-include_directories(lib/bullet3/src)
-target_link_libraries(${PROJECT_NAME} BulletDynamics BulletCollision LinearMath)
+# Jolt Physics: single precision, static library, portable instruction sets.
+set(JPH_BUILD_SHARED_LIBS                OFF CACHE INTERNAL "")
+set(DOUBLE_PRECISION                     OFF CACHE INTERNAL "")
+set(CROSS_PLATFORM_DETERMINISTIC          ON CACHE INTERNAL "")
+set(OVERRIDE_CXX_FLAGS                    OFF CACHE INTERNAL "")
+set(INTERPROCEDURAL_OPTIMIZATION          OFF CACHE INTERNAL "")
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY       OFF CACHE INTERNAL "")
+set(ENABLE_ALL_WARNINGS                   OFF CACHE INTERNAL "")
+set(ENABLE_INSTALL                       OFF CACHE INTERNAL "")
+set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE   OFF CACHE INTERNAL "")
+set(DEBUG_RENDERER_IN_DISTRIBUTION        OFF CACHE INTERNAL "")
+set(PROFILER_IN_DEBUG_AND_RELEASE         OFF CACHE INTERNAL "")
+set(PROFILER_IN_DISTRIBUTION              OFF CACHE INTERNAL "")
+set(ENABLE_OBJECT_STREAM                 OFF CACHE INTERNAL "")
+set(JPH_USE_DX12                         OFF CACHE INTERNAL "")
+set(JPH_USE_VK                           OFF CACHE INTERNAL "")
+set(JPH_USE_MTL                          OFF CACHE INTERNAL "")
+set(JPH_USE_CPU_COMPUTE                  OFF CACHE INTERNAL "")
+foreach(JOLT_X86_FEATURE SSE4_1 SSE4_2 AVX AVX2 AVX512 LZCNT TZCNT F16C FMADD)
+  set(USE_${JOLT_X86_FEATURE} OFF CACHE INTERNAL "")
+endforeach()
+add_subdirectory(lib/JoltPhysics/Build)
+
+# Jolt's inline headers inherit the same floating point behavior as its library.
+# Treat the upstream headers as system headers under the engine's -Werror policy.
+get_target_property(JOLT_INCLUDE_DIRECTORIES Jolt INTERFACE_INCLUDE_DIRECTORIES)
+set_property(TARGET Jolt PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+  "${JOLT_INCLUDE_DIRECTORIES}")
+if(XCODE)
+  # Upstream adds SSE4.2 for Xcode unconditionally; retain the portable x86 baseline.
+  set_property(TARGET Jolt PROPERTY XCODE_ATTRIBUTE_OTHER_CPLUSPLUSFLAGS[arch=x86_64]
+    "$(inherited) -msse2")
+endif()
+if(MSVC)
+  target_compile_options(Jolt PUBLIC /fp:precise)
+else()
+  target_compile_options(Jolt PUBLIC -ffp-contract=off)
+endif()
+target_link_libraries(${PROJECT_NAME} Jolt)
 
 # script for launching in binary directory
 if(WIN32)
@@ -215,7 +253,7 @@ add_subdirectory(ai_bridge)
 target_link_libraries(Gothic2Notr PRIVATE AiBridge)
 
 # Uses the shared engine/CPU simulation without constructing a window or graphics/audio device.
-if(UNIX AND NOT APPLE AND NOT ANDROID)
+if(UNIX AND NOT IOS AND NOT ANDROID)
   add_executable(gothic-body-runner game/bodyrunner.cpp)
   target_link_libraries(gothic-body-runner PRIVATE OpenGothic AiBridge)
   # Pure production resolver/command gates: no assets, simulation or rendering device.
@@ -223,7 +261,81 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
   target_link_libraries(gothic-body-resolver-test PRIVATE OpenGothic AiBridge)
 endif()
 
+# Asset-free contracts; run explicitly with their check-* targets.
+if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-navkeyteacher-contract EXCLUDE_FROM_ALL
+    tests/navkeyteacher_contract.cpp common/navkeyteacher.cpp)
+  target_include_directories(gothic-navkeyteacher-contract PRIVATE
+    common lib/Tempest/Engine/include lib/Tempest/Engine)
+  add_custom_target(check-navkeyteacher
+    COMMAND $<TARGET_FILE:gothic-navkeyteacher-contract>
+    DEPENDS gothic-navkeyteacher-contract USES_TERMINAL)
+  add_executable(gothic-navmesh-contract EXCLUDE_FROM_ALL
+    tests/navmesh_contract.cpp common/physics/navmesh.cpp)
+  target_link_libraries(gothic-navmesh-contract PRIVATE Recast Detour)
+  if(NOT MSVC)
+    target_compile_options(gothic-navmesh-contract PRIVATE -Wall -Wconversion -Werror)
+  endif()
+  add_custom_target(check-navmesh
+    COMMAND $<TARGET_FILE:gothic-navmesh-contract>
+    DEPENDS gothic-navmesh-contract USES_TERMINAL)
+  add_executable(gothic-aim-contract EXCLUDE_FROM_ALL tests/aim_contract.cpp)
+  target_link_libraries(gothic-aim-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-aim
+    COMMAND $<TARGET_FILE:gothic-aim-contract>
+    DEPENDS gothic-aim-contract USES_TERMINAL)
+  add_executable(gothic-aimwalk-contract EXCLUDE_FROM_ALL tests/aimwalk_contract.cpp)
+  target_link_libraries(gothic-aimwalk-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-aimwalk
+    COMMAND $<TARGET_FILE:gothic-aimwalk-contract>
+    DEPENDS gothic-aimwalk-contract USES_TERMINAL)
+  add_executable(gothic-physics-contract EXCLUDE_FROM_ALL tests/physics_contract.cpp)
+  target_link_libraries(gothic-physics-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-physics
+    COMMAND $<TARGET_FILE:gothic-physics-contract>
+    DEPENDS gothic-physics-contract
+    USES_TERMINAL)
+  add_executable(gothic-ragdoll-contract EXCLUDE_FROM_ALL tests/physics_ragdoll_contract.cpp)
+  target_link_libraries(gothic-ragdoll-contract PRIVATE OpenGothic AiBridge)
+  add_executable(gothic-ragdoll-save-contract EXCLUDE_FROM_ALL tests/ragdoll_save_contract.cpp)
+  target_link_libraries(gothic-ragdoll-save-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-ragdoll-save
+    COMMAND $<TARGET_FILE:gothic-ragdoll-save-contract>
+    DEPENDS gothic-ragdoll-save-contract USES_TERMINAL)
+  add_custom_target(check-ragdoll
+    COMMAND $<TARGET_FILE:gothic-ragdoll-contract>
+    COMMAND $<TARGET_FILE:gothic-ragdoll-save-contract>
+    DEPENDS gothic-ragdoll-contract gothic-ragdoll-save-contract USES_TERMINAL)
+  add_executable(gothic-instance-storage-contract EXCLUDE_FROM_ALL tests/instance_storage_contract.cpp)
+  target_link_libraries(gothic-instance-storage-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-instance-storage
+    COMMAND $<TARGET_FILE:gothic-instance-storage-contract>
+    DEPENDS gothic-instance-storage-contract USES_TERMINAL)
+endif()
+
 # editor
+
+# Navigation eye has an independent contract block to keep parallel navigation work isolated.
+if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-navigation-eye-contract EXCLUDE_FROM_ALL tests/navigation_eye_contract.cpp)
+  target_link_libraries(gothic-navigation-eye-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-navigation-eye
+    COMMAND $<TARGET_FILE:gothic-navigation-eye-contract>
+    DEPENDS gothic-navigation-eye-contract USES_TERMINAL)
+  add_executable(gothic-navigation-memory-contract EXCLUDE_FROM_ALL tests/navigation_memory_contract.cpp)
+  target_link_libraries(gothic-navigation-memory-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-navigation-memory
+    COMMAND $<TARGET_FILE:gothic-navigation-memory-contract>
+    DEPENDS gothic-navigation-memory-contract USES_TERMINAL)
+  add_executable(gothic-navigation-roads-contract EXCLUDE_FROM_ALL
+    tests/navigation_roads_contract.cpp common/game/knownroads.cpp)
+  target_include_directories(gothic-navigation-roads-contract PRIVATE
+    common lib/Tempest/Engine/include lib/Tempest/Engine)
+  add_custom_target(check-navigation-roads
+    COMMAND $<TARGET_FILE:gothic-navigation-roads-contract>
+    DEPENDS gothic-navigation-roads-contract USES_TERMINAL)
+endif()
+
 target_sources(Spacer PRIVATE ${SPACER_SOURCES} spacer/main.cpp)
 target_include_directories(Spacer PRIVATE "spacer")
 target_link_libraries(Spacer PRIVATE OpenGothic SpacerAssets)

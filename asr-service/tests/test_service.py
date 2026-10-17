@@ -253,5 +253,5 @@ async def test_voxtral_speaks_audiocpp_live() -> None:
     target, headers = requests[1]
     path, _, query = target.partition("?")
     assert path == "POST /v1/audio/transcriptions/live"
-    assert query == "model=voxtral-test&sample_rate=16000&channels=1&sample_format=s16le"
+    assert query == "model=voxtral-test&sample_rate=16000&channels=1&sample_format=s16le&language=ru"
     assert headers["transfer-encoding"] == "chunked"

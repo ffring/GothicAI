@@ -1,0 +1,24 @@
+# Uncaptured normal app cadence: 30 seconds of walking to and fro in the tavern lane.
+# Requires OPENGOTHIC_ENABLE_APP_CADENCE=ON in CMake. Do not use video FPS as game FPS.
+seed 73013
+cheat god
+set time 12 0
+movable on
+off: character off
+on: character on
+character route tavern
+walkmode walk
+view nopfx
+overlay off
+# Set one world-facing shot, then freeze it before measurement.
+cam world 350 180 0
+wait 1500
+cam hold
+cadence normal
+wait 34
+off: character measure off
+on: character measure on
+hold forward 40000
+cadence wait
+release all
+character report

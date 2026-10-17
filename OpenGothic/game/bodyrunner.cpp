@@ -18,6 +18,7 @@
 #include "game/bodyarenageometry.h"
 #include "game/bodytrajectory.h"
 #include "testbench.h"
+#include "stucklogger.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "world/waypoint.h"
@@ -1401,6 +1402,7 @@ int main(int argc, const char** argv) {
     CommandLine commandLine(argc,argv);
     Resources resources;
     Gothic gothic;
+    auto stuckLogger = StuckLogger::fromEnvironment();
     gothic.isNpcInDialogFn = [](const Npc*) { return false; };
     gothic.setupGlobalScripts();
     GameMusic music;

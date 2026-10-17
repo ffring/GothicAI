@@ -1,0 +1,180 @@
+# Stage 2 integration: final world bones and native snapshots need OPENGOTHIC_RAGDOLL_TRACE=1.
+# Fresh save/seed per declared run; dead bodies are intentionally retained between segments.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+view nopfx
+goto NW_XARDAS_TOWER_VALLEY_091
+clear 2500
+face -106
+wait 500
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+put BDT_1013_BANDIT_L 300 0
+watch BDT_1013_BANDIT_L
+npcequip watched ItMi_Gold 7
+cam follow 300 100 75
+cam look 80
+wait 600
+down watched dead
+rec dead_flat
+waitragdoll watched sleep 30000
+ragdoll save watched sleeping
+ragdoll restore watched sleeping
+wait 1000
+stop
+physics stats
+rec dead_wake
+push watched 1 1 0 250
+wait 100
+ragdoll save watched awake
+push watched 1 0 0 75
+ragdoll restore watched awake
+wait 5000
+stop
+waitragdoll watched sleep 30000
+release all
+place 100 0
+wait 100
+ragdoll loot watched
+
+# Ordinary animation transitions on the identical human skeleton provide an independent
+# world-bone motion control for the KO handoff. No physical overlay participates here.
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+put BDT_1013_BANDIT_L 300 0
+watch BDT_1013_BANDIT_L
+wait 800
+rec blend_control
+ani BDT_1013_BANDIT_L S_WOUNDEDB
+wait 800
+ani BDT_1013_BANDIT_L T_WOUNDEDB_2_STAND
+wait 2000
+stop
+ani BDT_1013_BANDIT_L S_RUN
+wait 800
+# Hold native AI until the sleeping-body barrier; standup releases it and runs the
+# real unconscious End hook plus AI_StandUp. This is a controlled recovery fixture.
+down watched ko
+rec knockout
+waitragdoll watched sleep 30000
+standup watched
+waitragdoll watched recovery 5000
+ragdoll save watched pending_return
+ragdoll restore watched pending_return
+wait 66
+ragdoll save watched mid_return
+ragdoll restore watched mid_return
+waitragdoll watched getup 10000
+wait 1000
+stop
+physics stats
+
+foreach slope 25 40 1
+  face downhill
+  insert BDT_1013_BANDIT_L
+  freeze BDT_1013_BANDIT_L
+  put BDT_1013_BANDIT_L 120 90
+  watch BDT_1013_BANDIT_L
+  wait 600
+  down watched dead
+  rec dead_slope$I
+  wait 20000
+  stop
+end
+
+foreach stairs 1
+  face downhill
+  insert BDT_1013_BANDIT_L
+  freeze BDT_1013_BANDIT_L
+  put BDT_1013_BANDIT_L 120 0
+  watch BDT_1013_BANDIT_L
+  wait 600
+  down watched dead
+  rec dead_stairs$I
+  wait 16000
+  stop
+end
+
+# The tower ledge is already used by the aim fixture. Pin only sets the release point;
+# pin off precedes death, so the fixture does not hold a simulated corpse in the air.
+goto NW_XARDAS_TOWER_VALLEY_02
+face 135
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+pin BDT_1013_BANDIT_L 1400 0 0
+watch BDT_1013_BANDIT_L
+wait 600
+pin off
+down watched dead
+rec dead_cliff
+wait 10000
+stop
+
+goto NW_XARDAS_TOWER_VALLEY_091
+face -106
+insert Wolf
+freeze Wolf
+put Wolf 300 0
+watch Wolf
+wait 600
+down watched dead
+rec wolf
+wait 12000
+stop
+insert Scavenger
+freeze Scavenger
+put Scavenger 300 40
+watch Scavenger
+wait 600
+down watched dead
+rec scavenger
+wait 12000
+stop
+insert Molerat
+freeze Molerat
+put Molerat 300 -40
+watch Molerat
+wait 600
+down watched dead
+rec molerat
+wait 12000
+stop
+insert OrcWarrior_Roam
+freeze OrcWarrior_Roam
+put OrcWarrior_Roam 450 0
+watch OrcWarrior_Roam
+wait 600
+down watched dead
+rec orc
+wait 12000
+stop
+physics stats
+ragdoll remove watched
+
+# A sleeping human saved while feature-off retains its dormant native state. Loading with
+# feature-on must prefer that state; removing the optional entries then tests old-save fallback.
+goto NW_XARDAS_TOWER_VALLEY_091
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+put BDT_1013_BANDIT_L 450 90
+watch BDT_1013_BANDIT_L
+wait 600
+down watched dead
+rec toggle_save
+waitragdoll watched sleep 30000
+ragdoll session-snapshot watched toggle_before_off
+ragdoll off
+wait 600
+ragdoll save watched disabled_corpse
+ragdoll on
+wait 34
+ragdoll session-snapshot watched toggle_after_on
+ragdoll restore watched disabled_corpse
+wait 1000
+stop
+rec old_save
+ragdoll restore watched disabled_corpse old
+wait 1000
+stop

@@ -137,6 +137,12 @@ void Workers::threadFunc(size_t id) {
   setThreadName(tname.c_str());
   }
 
+  auto complete = [this] {
+    std::lock_guard<std::mutex> lck(sync);
+    if(taskDone.fetch_add(1)+1==int(taskCount))
+      workDone.notify_one();
+    };
+
   while(true) {
     {
     std::unique_lock<std::mutex> lck(sync);
@@ -145,7 +151,7 @@ void Workers::threadFunc(size_t id) {
     }
 
     if(!running) {
-      taskDone.fetch_add(1);
+      complete();
       return;
       }
 
@@ -156,9 +162,7 @@ void Workers::threadFunc(size_t id) {
       taskLoop();
       }
 
-    taskDone.fetch_add(1);
-    // if(size_t(taskDone.fetch_add(1)+1)==taskCount)
-    //   std::this_thread::yield();
+    complete();
     }
   }
 
@@ -223,12 +227,9 @@ void Workers::execWork(uint32_t& minElts) {
     cnt = taskLoop(); (void)cnt;
     }
 
-  while(true) {
-    int expect = int(taskCount);
-    if(taskDone.load()==expect) {
-      taskDone.store(0);
-      break;
-      }
-    std::this_thread::yield();
-    }
+  // Sleep until all dispatched callbacks finish instead of competing with them
+  // in a yield loop. The completion predicate and notification share sync.
+  std::unique_lock<std::mutex> lck(sync);
+  workDone.wait(lck,[this] { return taskDone.load()==int(taskCount); });
+  taskDone.store(0);
   }

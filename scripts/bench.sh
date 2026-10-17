@@ -4,18 +4,40 @@
 #
 #   scripts/bench.sh <scenario file | name from scripts/bench/> [out dir]
 #
-# env: GOTHIC_DIR    game data (default: /Volumes/shared/projects/Gothic II)
+# env: GOTHIC_DIR    game data (default: /Volumes/DevSSD/Dev/games/Gothic II)
+#      BENCH_HOST    auto (default): Ryzen first, ryzen: require Ryzen, local: this machine
+#      RYZEN_HOST    SSH host for Ryzen (default: ryzen)
+#      RYZEN_LOCK_WAIT seconds to wait for Ryzen (default: auto 120, ryzen 900)
+#      GAME_BIN      game executable (default: OpenGothic/build/opengothic/Gothic2Notr)
+#      TEMPEST_WINDOW_SIZE client frame size (default: 800x600)
 #      SAVE          save to start from (default: save_slot_1.sav in the main checkout)
+#      WORLD         start a fresh game in this world instead (NEWWORLD.ZEN, OLDWORLD.ZEN, ADDONWORLD.ZEN, DRAGONISLAND.ZEN)
 #      NO_BUILD=1    do not rebuild the engine first
 #      TIMEOUT=300   seconds before the game is killed
 #      KEEP=1        the game stays open after the scenario
 #      SOUND, MUSIC  volumes 0..1 (default 0); with TEMPEST_AUDIO_LOOPBACK=48000 the sound of a segment
 #                    goes into <segment>.wav instead of the speakers
+#      MOVABLE_VOBS  optional initial GAME movable_vobs setting (0 or 1), before world loading
+#      ARROW_STICKING optional initial GAME arrow_sticking setting (0 or 1), before world loading
+#      PHYSICS_NOISE optional initial GAME physics_noise setting (0 or 1), before world loading
+#      DESTRUCTION optional initial GAME destruction setting (0 or 1), before world loading
+#      CHARACTER_VIRTUAL optional initial GAME character_virtual setting (0 or 1), before world loading
+#      NPC_CHARACTER_VIRTUAL optional initial GAME npc_character_virtual setting (0 or 1)
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
+#      OPENGOTHIC_FRACTURE  pre-cut meshes (default: ~/.local/share/gothic-ai/fracture, when made; empty: none)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/shared/projects/Gothic II}"
+DEFAULT_GOTHIC_DIR="/Volumes/DevSSD/Dev/games/Gothic II"
+GOTHIC_DIR="${GOTHIC_DIR:-$DEFAULT_GOTHIC_DIR}"
 BIN="$ROOT/OpenGothic/build/opengothic/Gothic2Notr"
+GAME_BIN="${GAME_BIN:-$BIN}"
+HD_TEXTURES="$HOME/.local/share/gothic-ai/hd-textures/textures"
+FRACTURE_CACHE="$HOME/.local/share/gothic-ai/fracture"
+BENCH_HOST="${BENCH_HOST:-auto}"
+case "$BENCH_HOST" in
+  auto|ryzen|local) ;;
+  *) echo "bench: BENCH_HOST must be auto, ryzen or local" >&2; exit 2 ;;
+esac
 
 SCEN="${1:?usage: scripts/bench.sh <scenario> [out dir]}"
 [[ -f "$SCEN" ]] || SCEN="$ROOT/scripts/bench/$SCEN.bench"
@@ -26,12 +48,83 @@ OUT="${2:-$ROOT/.bench/$NAME-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 
-if [[ -z "${SAVE:-}" ]]; then
-  # worktrees share the save of the main checkout
-  COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
-  SAVE="$(dirname "$COMMON")/save_slot_1.sav"
+if [[ "$BENCH_HOST" != local ]]; then
+  LOCAL_REASON=""
+  if [[ "${KEEP:-}" == 1 ]]; then
+    LOCAL_REASON="KEEP=1 needs the local game"
+  elif [[ "${OPENGOTHIC_BENCH_ENCODER:-}" == *videotoolbox* ]]; then
+    LOCAL_REASON="the videotoolbox encoder needs macOS"
+  elif [[ "$GOTHIC_DIR" != "$DEFAULT_GOTHIC_DIR" ]]; then
+    LOCAL_REASON="GOTHIC_DIR uses local game data"
+  else
+    LOCAL_REASON="$(python3 - "$OUT" "$HD_TEXTURES" <<'PY'
+import os
+import sys
+
+def path(value):
+    return os.path.realpath(os.path.expanduser(value))
+
+out, textures = map(path, sys.argv[1:])
+for name, value in sorted(os.environ.items()):
+    if not name.startswith(("OPENGOTHIC_", "GOTHIC_", "TEMPEST_")):
+        continue
+    if name in ("GOTHIC_DIR", "GOTHIC_AI_URL", "OPENGOTHIC_FRACTURE"):
+        continue
+    if not value.startswith(("/", "~/")):
+        continue
+    value = path(value)
+    if name == "OPENGOTHIC_TEXTURES" and value == textures:
+        continue
+    if os.path.commonpath((out, value)) == out:
+        continue
+    print(f"{name} points to a local path outside OUT")
+    break
+PY
+)"
+  fi
+  if [[ -n "$LOCAL_REASON" ]]; then
+    if [[ "$BENCH_HOST" == ryzen ]]; then
+      echo "bench: cannot run on Ryzen: $LOCAL_REASON" >&2
+      exit 2
+    fi
+    echo "bench: falling back to Mac: $LOCAL_REASON" >&2
+  else
+    if [[ "$BENCH_HOST" == auto ]]; then
+      LOCK_WAIT="${RYZEN_LOCK_WAIT:-120}"
+    else
+      LOCK_WAIT="${RYZEN_LOCK_WAIT:-900}"
+    fi
+    rm -f -- "$OUT/game.log" "$OUT/host.txt"
+    RYZEN_RC=0
+    RYZEN_LOCK_WAIT="$LOCK_WAIT" "$ROOT/scripts/ryzen.sh" bench "$SCEN" "$OUT" 2>&1 | tee "$OUT/ryzen.log" \
+      || RYZEN_RC="${PIPESTATUS[0]}"
+    if [[ -f "$OUT/game.log" ]]; then
+      printf 'ryzen\n' >"$OUT/host.txt"
+      echo "bench: ran on ryzen"
+      echo "$OUT"
+      exit "$RYZEN_RC"
+    fi
+    if [[ "$BENCH_HOST" == ryzen ]]; then
+      # A successful transport without a game log is still a failed launch.
+      [[ "$RYZEN_RC" != 0 ]] || RYZEN_RC=1
+      exit "$RYZEN_RC"
+    fi
+    LOCAL_REASON="$(awk 'NF && !/^Ryzen: removed / && !/^bench: output in / { line=$0 } END { print line }' "$OUT/ryzen.log")"
+    echo "bench: falling back to Mac: ${LOCAL_REASON:-Ryzen did not start the game (exit $RYZEN_RC)}" >&2
+  fi
 fi
-[[ -f "$SAVE" ]] || { echo "no save: $SAVE (set SAVE=...)" >&2; exit 2; }
+
+if [[ -n "${WORLD:-}" ]]; then
+  START_ARGS=(-nomenu -w "$WORLD")
+else
+  if [[ -z "${SAVE:-}" ]]; then
+    # worktrees share the save of the main checkout
+    COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
+    SAVE="$(dirname "$COMMON")/save_slot_1.sav"
+  fi
+  [[ -f "$SAVE" ]] || { echo "no save: $SAVE (set SAVE=...)" >&2; exit 2; }
+  START_ARGS=(-save 1)
+fi
 
 if [[ "${NO_BUILD:-}" != 1 ]]; then
   cmake --build "$ROOT/OpenGothic/build" --target Gothic2Notr >"$OUT/build.log" 2>&1 \
@@ -41,24 +134,57 @@ fi
 # the game reads Gothic.ini and saves from its working directory
 RUN="$OUT/run"
 mkdir -p "$RUN"
-cp "$SAVE" "$RUN/save_slot_1.sav"
+[[ -n "${WORLD:-}" ]] || cp "$SAVE" "$RUN/save_slot_1.sav"
+# macOS captures half of its Retina backing size; X11 client sizes are already pixels.
+VID_RES_INDEX=2
+if [[ "$(uname -s)" == Linux ]]; then VID_RES_INDEX=0; fi
 cat >"$RUN/Gothic.ini" <<EOF
 [INTERNAL]
-vidResIndex=2
+vidResIndex=$VID_RES_INDEX
 [SOUND]
 soundVolume=${SOUND:-0}
 musicVolume=${MUSIC:-0}
 EOF
+if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
+  printf '\n[GAME]\n' >>"$RUN/Gothic.ini"
+  if [[ -n "${MOVABLE_VOBS:-}" ]]; then
+    [[ "$MOVABLE_VOBS" == 0 || "$MOVABLE_VOBS" == 1 ]] || { echo "MOVABLE_VOBS must be 0 or 1" >&2; exit 2; }
+    printf 'movable_vobs=%s\n' "$MOVABLE_VOBS" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${ARROW_STICKING:-}" ]]; then
+    [[ "$ARROW_STICKING" == 0 || "$ARROW_STICKING" == 1 ]] || { echo "ARROW_STICKING must be 0 or 1" >&2; exit 2; }
+    printf 'arrow_sticking=%s\n' "$ARROW_STICKING" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${CHARACTER_VIRTUAL:-}" ]]; then
+    [[ "$CHARACTER_VIRTUAL" == 0 || "$CHARACTER_VIRTUAL" == 1 ]] || { echo "CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
+    printf 'character_virtual=%s\n' "$CHARACTER_VIRTUAL" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${NPC_CHARACTER_VIRTUAL:-}" ]]; then
+    [[ "$NPC_CHARACTER_VIRTUAL" == 0 || "$NPC_CHARACTER_VIRTUAL" == 1 ]] || { echo "NPC_CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
+    printf 'npc_character_virtual=%s\n' "$NPC_CHARACTER_VIRTUAL" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${PHYSICS_NOISE:-}" ]]; then
+    [[ "$PHYSICS_NOISE" == 0 || "$PHYSICS_NOISE" == 1 ]] || { echo "PHYSICS_NOISE must be 0 or 1" >&2; exit 2; }
+    printf 'physics_noise=%s\n' "$PHYSICS_NOISE" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${DESTRUCTION:-}" ]]; then
+    [[ "$DESTRUCTION" == 0 || "$DESTRUCTION" == 1 ]] || { echo "DESTRUCTION must be 0 or 1" >&2; exit 2; }
+    printf 'destruction=%s\n' "$DESTRUCTION" >>"$RUN/Gothic.ini"
+  fi
+fi
 
 # the sharper textures the launcher gives the game too (scripts/hd-textures.sh)
-HD_TEXTURES="$HOME/.local/share/gothic-ai/hd-textures/textures"
 if [[ -z "${OPENGOTHIC_TEXTURES+set}" && -d "$HD_TEXTURES" ]]; then
   export OPENGOTHIC_TEXTURES="$HD_TEXTURES"
 fi
+if [[ -z "${OPENGOTHIC_FRACTURE+set}" && -d "$FRACTURE_CACHE" ]]; then
+  export OPENGOTHIC_FRACTURE="$FRACTURE_CACHE"
+fi
 
 START=$(date +%s)
-(cd "$RUN" && exec env TEMPEST_BACKGROUND=1 OPENGOTHIC_BENCH="$SCEN" OPENGOTHIC_BENCH_OUT="$OUT" ${KEEP:+OPENGOTHIC_BENCH_KEEP=1} \
-  "$BIN" -g "$GOTHIC_DIR" -window -devmode -save 1) >"$OUT/game.log" 2>&1 &
+(cd "$RUN" && exec env TEMPEST_BACKGROUND=1 TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE:-800x600}" \
+  OPENGOTHIC_BENCH="$SCEN" OPENGOTHIC_BENCH_OUT="$OUT" ${KEEP:+OPENGOTHIC_BENCH_KEEP=1} \
+  "$GAME_BIN" -g "$GOTHIC_DIR" -window -devmode "${START_ARGS[@]}") >"$OUT/game.log" 2>&1 &
 PID=$!
 for ((i = 0; i < ${TIMEOUT:-300} * 4; i++)); do
   kill -0 "$PID" 2>/dev/null || break
@@ -72,4 +198,11 @@ wait "$PID" || true
 echo "bench: game ran $(( $(date +%s) - START )) s, output in $OUT"
 grep -E "^\[bench\] (scenario|can not|unknown|marvin failed|goto failed|walkto: no|foreach|waitarrive)" "$OUT/game.log" || true
 
-python3 "$ROOT/scripts/bench_report.py" "$OUT"
+HOST=mac
+[[ "${RYZEN_BENCH:-}" != 1 ]] || HOST=ryzen
+printf '%s\n' "$HOST" >"$OUT/host.txt"
+REPORT_RC=0
+python3 "$ROOT/scripts/bench_report.py" "$OUT" || REPORT_RC=$?
+echo "bench: ran on $HOST"
+echo "$OUT"
+exit "$REPORT_RC"

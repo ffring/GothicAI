@@ -98,8 +98,14 @@ class ProtoMesh {
     size_t                         skinedNodesCount() const;
     size_t                         findNode(std::string_view name,size_t def=size_t(-1)) const;
     const Tempest::Vec3*           bbox() const;
+    // Lowest point of the exact indexed body skin, using the renderer's four
+    // bone weights and fatness displacement. No GPU access or pose changes.
+    bool                           minSkinnedVertex(const Tempest::Matrix4x4* worldBones, size_t count,
+                                                     const Tempest::Matrix4x4& object, float fatness,
+                                                     Tempest::Vec3& point) const;
 
   private:
+    std::vector<Vertex>            skinVertices;
     void                           setupScheme(std::string_view s);
     void                           shapeOfAttach(const std::vector<std::vector<Tempest::Vec3>>& attachPoints);
     void                           shapeOfSkin(const PackedMesh& pkg);

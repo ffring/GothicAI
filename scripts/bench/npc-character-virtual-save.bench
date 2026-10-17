@@ -1,0 +1,16 @@
+# Real full-session archive after native AI teleport and direct setPosition.
+seed 73013
+cheat god
+set time 12 0
+off: npccharacter off
+on: npccharacter on
+npccharacter route stairs
+wait 700
+npccharacter snapshot prepared
+npccharacter teleport
+wait 300
+npccharacter snapshot teleported
+npccharacter setposition
+wait 700
+npccharacter snapshot positioned
+npccharacter save standing

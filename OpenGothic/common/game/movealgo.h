@@ -59,7 +59,12 @@ class MoveAlgo final {
 
     void    multSpeed(float s){ mulSpeed=s; }
     void    clearSpeed();
+    void    resetCharacterVirtual(bool mobTransition=false);
+    void    carryCharacterVirtual(uint64_t dt);
+    void    takeRagdollControl();
     bool    accessDamFly(float dx, float dz, char hitType);
+    bool    addSpellImpulse(const Tempest::Vec3& impulseNs, float massKg, bool reaction);
+    Tempest::Vec3 spellVelocity() const { return fallSpeed*1000.f; } // cm/s
 
     bool    testSlide(const Tempest::Vec3& p, DynamicWorld::CollisionTest& out) const;
     bool    testSlide(const Tempest::Vec3& pos, const Tempest::Vec3& norm, DynamicWorld::CollisionTest& out) const;
@@ -79,6 +84,8 @@ class MoveAlgo final {
     auto    state() const { return flags; }
     // Telemetry counter only: records real MoveAlgo invocations, never advances simulation.
     uint64_t traceTickSerial() const { return movementTraceSerial; }
+    bool    characterVirtualActive() const { return virtualMovementActive; }
+    auto    characterVirtualGroundVelocity() const -> Tempest::Vec3 { return virtualGroundVelocity; }
 
     zenkit::MaterialGroup groundMaterial() const;
     auto    groundNormal() const -> Tempest::Vec3;
@@ -94,6 +101,16 @@ class MoveAlgo final {
     bool    canFallByGravity() const;
 
     bool    checkLastBounce() const;
+    // A short virtual step keeps an edge stop active even when the legs no longer produce root motion.
+    bool    isEdgeMoveBlocked(const Tempest::Vec3& modelDirection) const;
+    struct EdgeProbe final {
+      bool  found = false;
+      float distance = 0;
+      float drop = 0;
+      float supportY = 0;
+      };
+    // Read-only support query along a world-space direction, without the movement guard's margin.
+    EdgeProbe edgeAhead(const Tempest::Vec3& direction, float range) const;
 
   private:
     // Opt-in native movement observation, scoped to one tick; absent outside a body trace.
@@ -103,6 +120,9 @@ class MoveAlgo final {
     void    tickClimb (uint64_t dt);
     void    tickJumpup(uint64_t dt);
     bool    implTick  (uint64_t dt, MvFlags fai);
+    bool    tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displacement);
+    bool    useCharacterVirtual();
+    bool    preserveMovementImpulse(uint64_t generation, State previousState, std::string_view backend);
 
     bool    tryMove   (float x, float y, float z);
     bool    tryMove   (float x, float y, float z, DynamicWorld::CollisionTest& out);
@@ -129,6 +149,7 @@ class MoveAlgo final {
     float   stepHeight()  const;
     float   slideAngle()  const;
     float   slideAngle2() const;
+    float   edgeMoveFraction(const Tempest::Vec3& from, const Tempest::Vec3& to) const;
 
     void    emitWaterSplash(float y);
 
@@ -147,6 +168,8 @@ class MoveAlgo final {
     Npc&                npc;
     MovementTrace*      movementTrace = nullptr;
     uint64_t            movementTraceSerial = 0;
+    // Transient: projectile callbacks may accept a new impulse during a move.
+    uint64_t            movementImpulseGeneration = 0;
     mutable CacheLand   cache;
     mutable CacheWater  cacheW;
 
@@ -157,6 +180,13 @@ class MoveAlgo final {
     float               mulSpeed  =1.f;
     Tempest::Vec3       fallSpeed ={};
     float               fallCount=0.f;
+
+    // Controller contacts are transient: the saved origin and movement state stay unchanged.
+    bool                virtualMovementActive = false;
+    bool                npcVirtualInRange = false;
+    bool                npcVirtualMobTransition = false;
+    Tempest::Vec3       virtualGroundVelocity = {}; // cm/s
+    Tempest::Vec3       virtualJumpVelocity = {};   // cm/ms, inherited during jump root motion
 
     uint64_t            climbStart=0;
     Tempest::Vec3       climbPos0={};

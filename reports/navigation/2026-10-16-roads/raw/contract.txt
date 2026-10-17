@@ -1,0 +1,5 @@
+local/stranger: 210+0 m alley versus 200+30 m main street; 40/300 m network boundaries
+frontier/add: unknown remainder 5 m; added home 230+0 m; distant major connector 400 m; islands stay unreachable
+daily cycle/determinism: 16 rebuilds identical; unknown topology/coordinates do not influence query; empty graph handled
+road classification: nearby major fragments known; unknown minor seam remains uncrossable
+navigation roads contracts passed

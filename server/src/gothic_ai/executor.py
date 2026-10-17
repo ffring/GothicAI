@@ -42,7 +42,10 @@ ATTITUDES = {
 }
 # goals that only make sense while something is going on: dropped by code when the incident is over
 INCIDENT_GOALS = frozenset({"flee", "seek_help", "fight", "guard_hero"})
+# goals of an npc that goes with the hero: it follows him (and stands up for him, orders.py)
+COMPANION_GOALS = frozenset({"follow_hero", "guard_hero"})
 AGENDA_MAX = 120
+BODY_TARGETS = frozenset({"fight"})  # goals whose target is someone, never a place
 
 
 @dataclass(frozen=True)
@@ -113,8 +116,11 @@ def parse_intent(args: dict[str, Any], current: Intent | None = None) -> Intent:
     )
 
 
-def check_intent(intent: Intent, snap: Snapshot | None) -> tuple[Intent | None, str | None]:
-    """The intent as it will be carried out, or why not."""
+def check_intent(
+    intent: Intent, snap: Snapshot | None, seen: dict[str, str] | None = None
+) -> tuple[Intent | None, str | None]:
+    """The intent as it will be carried out, or why not. `seen`: whom it may point to, as the npc perceives
+    them (perception.py); else the snapshot's people and points around."""
     if intent.goal not in GOALS:
         return None, f"Нет такой цели: {intent.goal}. Можно: {', '.join(GOALS)}."
     if intent.attitude not in ATTITUDES:
@@ -122,13 +128,19 @@ def check_intent(intent: Intent, snap: Snapshot | None) -> tuple[Intent | None, 
     if intent.goal == "seek_help" and intent.target is None:
         intent = replace(intent, target="PLAYER")
     if intent.target is not None:
-        allowed = targets(snap)
+        allowed = dict(seen) if seen else targets(snap)
+        if intent.goal in BODY_TARGETS and not seen:  # someone to fight, not a place
+            allowed = {k: v for k, v in allowed.items() if k == "PLAYER" or k in npc_ids(snap)}
         match = next((t for t in allowed if t.upper() == intent.target.upper()), None)
         if match is None:
             listed = ", ".join(f"{k} ({v})" for k, v in allowed.items())
             return None, f"Цели {intent.target} рядом нет. Можно указать: {listed}."
         intent = replace(intent, target=match)
     return intent, None
+
+
+def npc_ids(snap: Snapshot | None) -> set[str]:
+    return {o.id for o in snap.nearby_npcs if not o.dead} if snap is not None else set()
 
 
 def check_give(args: dict[str, Any], snap: Snapshot | None) -> tuple[dict[str, Any] | None, str | None]:
@@ -151,21 +163,23 @@ Action = tuple[str, dict[str, Any]]  # a game action (`action` message) and its 
 
 
 def intent_actions(old: Intent, new: Intent, following: bool) -> list[Action]:
-    """What the body does at once when the intent changes. Goals of incidents (flee, fight...) are carried
-    out by the behavioral model's reactions, not here."""
+    """What the body does at once when the intent changes. Fleeing is the behavioral model's reaction; a
+    fight with someone named starts here (a companion's, orders.py)."""
     acts: list[Action] = []
-    if new.goal == "follow_hero":
+    if new.goal in COMPANION_GOALS:
         if not following:
             acts.append(("follow", {"npc": "PLAYER"}))
-    elif following and new.goal != "guard_hero":
+    elif following:
         acts.append(("stop", {}))
     if new.goal == "seek_help" and new.target and new.target != old.target:
         acts.append(("go_to_npc", {"npc": new.target}))
+    if new.goal == "fight" and new.target and (old.goal, old.target) != (new.goal, new.target):
+        acts.append(("fight", {"npc": new.target}))
     return acts
 
 
-def describe_targets(snap: Snapshot | None) -> str:
-    return ", ".join(f"{k} ({v})" for k, v in targets(snap).items())
+def describe_targets(snap: Snapshot | None, seen: dict[str, str] | None = None) -> str:
+    return ", ".join(f"{k} ({v})" for k, v in (seen or targets(snap)).items())
 
 
 def same(a: Intent, b: Intent) -> bool:

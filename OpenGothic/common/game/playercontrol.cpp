@@ -12,6 +12,7 @@
 #include "physics/dynamicworld.h"
 #include "camera.h"
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/aimwalk.h"
 #include "graphics/mesh/footik.h"
 #include "gothic.h"
 
@@ -106,7 +107,7 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
 
   handleMovementAction(KeyCodec::ActionMapping{a,mapping}, true);
 
-  if(pl!=nullptr && pl->interactive()!=nullptr && c!=nullptr && !c->isFree()) {
+  if(pl!=nullptr && !pl->spellFrozen() && pl->interactive()!=nullptr && c!=nullptr && !c->isFree()) {
     auto inter = pl->interactive();
     if(inter->needToLockpick(*pl)) {
       processPickLock(*pl,*inter,a);
@@ -520,7 +521,7 @@ bool PlayerControl::canInteract() const {
   if(w==nullptr || w->player()==nullptr)
     return false;
   auto pl = w->player();
-  if(pl->weaponState()!=WeaponState::NoWeapon || pl->isAiBusy())
+  if(pl->spellFrozen() || pl->weaponState()!=WeaponState::NoWeapon || pl->isAiBusy())
     return false;
   return true;
   }
@@ -664,6 +665,15 @@ bool PlayerControl::tickMove(uint64_t dt) {
 
   if(pl==nullptr)
     return true;
+
+  if(pl->spellFrozen()) {
+    // Input must not move an attached actor or change root lean outside Npc::tick.
+    // Explicit Marvin teleports above already leave the scripted state first.
+    clearInput();
+    rotMouse = rotMouseY = 0;
+    runAngleDest = 0;
+    return true;
+    }
 
   // implMove says if the bow is raised by hand
   const bool wasAiming = manualAiming;
@@ -1139,7 +1149,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   const float dtS  = float(dt)/1000.f;
   const float peek = (wantsToStrafeRight() ? 1.f : 0.f) - (wantsToStrafeLeft() ? 1.f : 0.f);
   const float cant = aimCant && ws==WeaponState::Bow ? 1.f : 0.f;
-  const float step = (wantsToMoveForward() ? 1.f : 0.f) - (wantsToMoveBackward() ? 1.f : 0.f);
+  float       step = (wantsToMoveForward() ? 1.f : 0.f) - (wantsToMoveBackward() ? 1.f : 0.f);
   const float ease = 1.f - std::exp(-StanceRate*dtS);
   crouchK += ((aimCrouch ? 1.f : 0.f) - crouchK)*ease;
   peekK   += (peek - peekK)*ease;
@@ -1150,10 +1160,6 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     peekK = peek;
   if(std::abs(cantK-cant)<1e-3f)
     cantK = cant;
-  // the steps ease in and out by themselves (AimWalk); the aim shakes as they do
-  walkK += (std::abs(step) - walkK)*ease;
-  if(std::abs(walkK-std::abs(step))<1e-3f)
-    walkK = std::abs(step);
   pl.setAimStance(crouchK,peekK,cantK,step);
   manualAiming = true;
 
@@ -1177,6 +1183,42 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
 
   Tempest::Vec3 at;
   aimRayHit(pl,at);
+  // Lean and approach toward the crosshair from the hero, not parallel to the camera:
+  // its forward offset must not make the stance aim more steeply at the same target.
+  const auto look = pl.aimLookAt(at);
+  pl.setAimLook(look);
+
+  AimStep::Input approach;
+  approach.drawn = lmb && ar.stage()==Archer::Held && Aim::isEnabled() && AimWalk::isEnabled() &&
+                   Aim::playerLeanOverride<0.f;
+  approach.moving = movement.forwardBackward.any() || movement.strafeRightLeft.any();
+  approach.down = -std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z))*180.f/float(M_PI);
+  approach.yaw = rot;
+  if(approach.drawn && approach.down>40.f) {
+    const float a = pl.rotationRad();
+    const auto edge = pl.aimEdge({std::cos(a),0,std::sin(a)},AimStep::SearchRange);
+    approach.edge = edge.found;
+    approach.distance = edge.distance;
+    approach.blocked = pl.isEdgeMoveBlocked({0,0,1});
+    const auto clearance = pl.aimLean(at,true);
+    approach.shotClear = clearance.edge && clearance.shotClear;
+    }
+  const bool wasStepping = aimStep.isActive();
+  if(aimStep.update(approach)) {
+    step = 1.f;
+    aimStepStopped = false;
+    }
+  else if(wasStepping) {
+    // Cancel the automatic root motion immediately; the planted pose still fades into the stance.
+    aimStepStopped = true;
+    }
+  if(step!=0.f && !aimStep.isActive())
+    aimStepStopped = false;
+  // The same gait and speed as forward input; its disturbance also shakes the drawn aim.
+  walkK += (std::abs(step) - walkK)*ease;
+  if(std::abs(walkK-std::abs(step))<1e-3f)
+    walkK = std::abs(step);
+  pl.setAimStance(crouchK,peekK,cantK,step,aimStepStopped);
 
   // canted: a quick shot (drawn fast, settles fast, looser)
   const auto    st = Archery::canted(Archery::stats(pl,pl.currentRangedWeapon()),cantK);
@@ -1206,17 +1248,26 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     // the left one leaning out to the left
     const float side = std::sin(Aim::playerProbe.side*float(M_PI)/180.f)*HeadOverHips;
     camera->setAimStance(crouchK*FootIk::aimCrouchDepth(),side,1.f-2.f*std::max(0.f,-peekK));
+    // over an edge ahead and down as the head goes (as far as the trunk bends: eased, no room no lean)
+    const auto shift = pl.aimLeanShift();
+    const float facing = pl.rotationRad();
+    camera->setAimLean(shift.x*std::cos(facing)+shift.z*std::sin(facing),-shift.y);
     }
   return true;
   }
 
 void PlayerControl::endManualAim(Npc& pl) {
+  const bool stopStep = aimStep.isActive() || aimStepStopped;
   pl.endManualAim(true);
+  if(stopStep)
+    pl.setAimStance(0,0,0,0,true);
   aimCrouch = false;
   crouchK   = 0;
   peekK     = 0;
   cantK     = 0;
   walkK     = 0;
+  aimStep   = AimStep();
+  aimStepStopped = false;
   Archer::playerProbe = Archer::Probe();
   ctrl[Action::Walk] = false;
   if(auto camera = Gothic::inst().camera()) {

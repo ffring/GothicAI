@@ -31,7 +31,7 @@ from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
 from .gamedata.storygraph import Node, StoryGraph
 from .journal import Journal
-from .llm import LLMBackend, LLMError, Message, Tool, ToolCall
+from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
 from .protocol import DialogChosen, GameMessage, Session, Snapshot
 from .story import StoryPatches
 from .turn import ToolOutcome
@@ -49,6 +49,9 @@ LOOKS_PER_LIE = 4  # people the model is asked about, for one lie
 MAX_GOLD = 100  # the most a fine may be
 MAX_CLOSE = 4
 ATTEMPTS = 2
+CACHE_KEY = (
+    "amends"  # its requests' own connection (openai_responses.py): the prompt cache of its instructions
+)
 # what the hero comes to an npc for: what it may close until he makes amends
 STAKES = {"join": "принимает в гильдию", "work": "даёт работу", "teach": "учит", "trade": "торгует"}
 SKIP = ("PICKPOCKET", "EXIT", "PETZ", "PMSCHULDEN")  # the scripts' own crime and pickpocket dialogs
@@ -235,6 +238,10 @@ class AmendsModel:
     def __init__(self, llm: LLMBackend) -> None:
         self.llm = llm
 
+    def warm(self) -> None:
+        """Its connection opened at once: the request after the pacing does not wait for it."""
+        open_ahead(self.llm, CACHE_KEY, keep=True)
+
     async def propose(
         self, brief: Brief, previous: Proposal | None = None, errors: list[str] | None = None
     ) -> Proposal | None:
@@ -246,7 +253,7 @@ class AmendsModel:
         calls: list[ToolCall] = []
         try:
             async for ev in self.llm.stream(
-                instructions=INSTRUCTIONS, messages=messages, tools=[PROPOSE_TOOL]
+                instructions=INSTRUCTIONS, messages=messages, tools=[PROPOSE_TOOL], cache_key=CACHE_KEY
             ):
                 if isinstance(ev, ToolCall) and ev.name == PROPOSE:
                     calls.append(ev)
@@ -356,6 +363,7 @@ class Amends:
         stakes = self.stakes(npc)
         if not stakes:
             return None  # nothing he comes to it for: no reason to write a storylet
+        self.model.warm()
         await self.director.pacing.wait(self.director.busy)
         try:
             story = await self.director.story()
@@ -629,6 +637,8 @@ class Amends:
                     f"Повинится — простишь ему эту ложь ({s.lie}) в сделке (forgive)."
                 )
         return "\n".join(lines) or None
+
+    all_tools: tuple[Tool, ...] = ()
 
     def tools(self, npc: str) -> list[Tool]:
         return []

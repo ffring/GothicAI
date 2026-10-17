@@ -18,6 +18,7 @@
 #include "game/constants.h"
 #include "game/aistate.h"
 #include "game/questlog.h"
+#include "game/ownsymbols.h"
 
 class GameSession;
 class World;
@@ -78,6 +79,8 @@ class GameScript final {
     void         loadPerc(Serialize& fin);
 
     inline auto& getVm() { return vm; }
+    // symbols of ours: the AI director's story variables and npc's
+    inline auto& ownSymbols() { return own; }
     auto         questLog() const -> const QuestLog&;
 
     const World& world() const;
@@ -124,12 +127,16 @@ class GameScript final {
 
     zenkit::DaedalusSymbol*     findSymbol(std::string_view s);
     zenkit::DaedalusSymbol*     findSymbol(const size_t s);
+    // the hero has heard this dialog of the npc's, as when it is played (Npc_KnowsInfo)
+    void                        setNpcInfoKnown(const zenkit::INpc& npc, const zenkit::IInfo& info);
     size_t                      findSymbolIndex(std::string_view s);
     size_t                      symbolsCount() const;
 
     const AiState&              aiState  (ScriptFn id);
     const zenkit::ISpell&       spellDesc(int32_t splId);
     const VisualFx*             spellVfx (int32_t splId);
+    enum class PhysicalSpell : uint8_t { None, WindFist, Whirlwind, Fireball, IceCube };
+    PhysicalSpell              physicalSpell(int32_t splId) const;
 
     auto dialogChoices(std::shared_ptr<zenkit::INpc> self, std::shared_ptr<zenkit::INpc> npc, const std::vector<uint32_t> &except, bool includeImp) -> std::vector<DlgChoice>;
     auto updateDialog (const GameScript::DlgChoice &dlg, Npc &player, Npc &npc) -> std::vector<GameScript::DlgChoice>;
@@ -461,7 +468,8 @@ class GameScript final {
     void exitsession         ();
 
     void sort(std::vector<DlgChoice>& dlg);
-    void setNpcInfoKnown(const zenkit::INpc& npc, const zenkit::IInfo& info);
+    // a dialog's condition, information or choice: the story graph runs it if it takes it, else the VM
+    int32_t dialogFunction(zenkit::DaedalusSymbol* fn, bool returns);
     bool doesNpcKnowInfo(const zenkit::INpc& npc, size_t infoInstance) const;
 
     void saveSym(Serialize& fout, zenkit::DaedalusSymbol& s);
@@ -471,6 +479,7 @@ class GameScript final {
 
     GameSession&                                                owner;
     zenkit::DaedalusVm                                          vm;
+    OwnSymbols                                                  own{vm};
     int32_t                                                     vmLang = -1;
     std::mt19937                                                randGen;
     std::unordered_map<const Npc*,std::mt19937>                 isolatedRandom;

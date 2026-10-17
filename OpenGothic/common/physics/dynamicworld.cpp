@@ -3,79 +3,203 @@
 #include "collisionworld.h"
 #include "physicmeshshape.h"
 #include "physicvbo.h"
+#include "ragdoll.h"
+#include "arrowtrace.h"
+#include <Tempest/Log>
 #include "graphics/mesh/skeleton.h"
+#include "graphics/mesh/protomesh.h"
+
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Geometry/ClosestPoint.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cassert>
 #include <cstddef>
+#include <list>
+#include <map>
+#include <unordered_map>
+#include <cctype>
+#include <chrono>
+#include <unordered_set>
+#include <stdexcept>
 
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "world/objects/item.h"
+#include "world/objects/npc.h"
 #include "world/bullet.h"
 #include "world/world.h"
+#include "game/serialize.h"
+#include "game/physicssave.h"
 
 #include "utils/dbgpainter.h"
 
 const float DynamicWorld::worldHeight = 20000; //TODO: remove
 
-static DynamicWorld::RayLandResult toResult(btCollisionWorld::ClosestRayResultCallback& cb, const Tempest::Vec3& to, zenkit::MaterialGroup matId, const char* sector) {
-  DynamicWorld::RayLandResult ret = {};
-  ret.hasCol      = cb.hasHit();
-  ret.v           = to;
-  ret.hitFraction = cb.m_closestHitFraction;
+namespace {
+constexpr uint32_t landscapeMask = (1u << DynamicWorld::C_Landscape) | (1u << DynamicWorld::C_Object) |
+                                    (1u << DynamicWorld::C_MovableQuery);
+constexpr uint32_t visualMask    = landscapeMask | (1u << DynamicWorld::C_SmallVobQuery);
+constexpr uint32_t waterMask     = 1u << DynamicWorld::C_Water;
 
-  if(!cb.hasHit()) {
+bool isNpcMoveSkipped(const Tempest::Vec3& displacement) {
+  constexpr float eps = 2.f; // Legacy component-wise two centimetre skip.
+  return std::abs(displacement.x)<eps && std::abs(displacement.y)<eps && std::abs(displacement.z)<eps;
+  }
+
+ItemMaterial impactMaterial(zenkit::MaterialGroup material) {
+  switch(material) {
+    case zenkit::MaterialGroup::METAL: return MAT_METAL;
+    case zenkit::MaterialGroup::STONE: return MAT_STONE;
+    case zenkit::MaterialGroup::WOOD:  return MAT_WOOD;
+    default:                          return MAT_CLAY;
+    }
+  }
+
+double volumeScale(const Tempest::Matrix4x4& matrix) {
+  const auto* m = matrix.data();
+  return std::abs(double(m[0])*(double(m[5])*m[10]-double(m[9])*m[6])-
+                  double(m[4])*(double(m[1])*m[10]-double(m[9])*m[2])+
+                  double(m[8])*(double(m[1])*m[6]-double(m[5])*m[2]));
+  }
+
+bool noticeableMovableTrace(const Tempest::Matrix4x4& origin, const Tempest::Matrix4x4& current, bool& tilted) {
+  double originLength=0.,currentLength=0.,dot=0.;
+  for(int component=0;component<3;++component) {
+    const double a=origin.at(1,component),b=current.at(1,component);
+    originLength+=a*a;
+    currentLength+=b*b;
+    dot+=a*b;
+    }
+  // Compare the original and current local up axes, so rotating around the
+  // upright axis cannot turn a table in place into a fallen-table trace.
+  // Float matrices and the native quaternion roundtrip can put exactly 30
+  // degrees a few ulps over the boundary.
+  tilted = originLength>0. && currentLength>0. && dot/std::sqrt(originLength*currentLength)<0.8660254037844386-1.e-6;
+  double displacement=0.;
+  for(int component=0;component<3;++component) {
+    const double delta=double(current.at(3,component))-origin.at(3,component);
+    displacement+=delta*delta;
+    }
+  return displacement>50.*50. || tilted;
+  }
+
+DynamicWorld::RayLandResult toResult(const CollisionWorld::QueryResult& hit, const Tempest::Vec3& to) {
+  DynamicWorld::RayLandResult ret = {};
+  ret.hasCol      = hit.hasHit;
+  ret.v           = to;
+  ret.hitFraction = hit.fraction;
+
+  if(!hit.hasHit) {
     ret.v.y = -std::numeric_limits<float>::infinity();
     return ret;
     }
-  if(cb.m_collisionObject==nullptr) {
-    ret.v = CollisionWorld::toCentimeters(cb.m_hitPointWorld);
-    return ret;
-    }
 
-  const auto colCat = DynamicWorld::Category(cb.m_collisionObject->getUserIndex());
-  if(colCat==DynamicWorld::C_Landscape) {
-    ret.n.x = cb.m_hitNormalWorld.x();
-    ret.n.y = cb.m_hitNormalWorld.y();
-    ret.n.z = cb.m_hitNormalWorld.z();
-    }
-  else if(colCat==DynamicWorld::C_Object) {
-    // ignore normal, for sake of sliding
-    }
-  ret.v      = CollisionWorld::toCentimeters(cb.m_hitPointWorld);
-  ret.mat    = matId;
-  ret.sector = sector;
-  if(cb.m_collisionObject->getUserIndex2()==DynamicWorld::P_Editor) {
-    ret.uptr = cb.m_collisionObject->getUserPointer();
-    }
-  else if(colCat==DynamicWorld::C_Object) {
-    ret.vob = reinterpret_cast<Interactive*>(cb.m_collisionObject->getUserPointer());
-    }
+  ret.v      = hit.point;
+  ret.mat    = hit.material;
+  ret.sector = hit.sector;
+  if(hit.body==nullptr)
+    return ret;
+
+  if(hit.body->category()==DynamicWorld::C_Landscape)
+    ret.n = hit.normal;
+  // Object normals stay zero: the movement code relies on this for sliding.
+  if(hit.body->ptrType()==DynamicWorld::P_Editor)
+    ret.uptr = hit.body->payload();
+  else if(hit.body->category()==DynamicWorld::C_Object && hit.body->ptrType()==DynamicWorld::P_Interactive)
+    ret.vob = reinterpret_cast<Interactive*>(hit.body->payload());
   return ret;
   }
+}
 
-struct DynamicWorld::HumShape:btCapsuleShape {
-  //NOTE: total height is height+2*radius
-  HumShape(btScalar radius, btScalar height):btCapsuleShape(CollisionWorld::toMeters(radius),
-                                                            CollisionWorld::toMeters(height)) {}
-
-  // "human" object mush have identyty scale/rotation matrix. Only translation allowed.
-  void getAabb(const btTransform& t, btVector3& aabbMin, btVector3& aabbMax) const override {
-    const btScalar rad = getRadius();
-    btVector3      extent(rad,rad,rad);
-    extent[m_upAxis]  = getHalfHeight() + rad;
-    btVector3  center = t.getOrigin();
-
-    aabbMin = center - extent;
-    aabbMax = center + extent;
-    }
+struct DynamicWorld::MovableVobs {
+  struct Part {
+    const PhysicMeshShape* source = nullptr;
+    Tempest::Matrix4x4    local;
+    };
+  struct Shape {
+    JPH::ShapeRefC              hull;
+    std::vector<Part>           parts;
+    zenkit::MaterialGroup      material = zenkit::MaterialGroup::UNDEFINED;
+    float                      friction = 0.f;
+    bool                       hullAttempted = false;
+    std::shared_ptr<const FractureMesh> fracture;
+    };
+  std::unordered_map<std::string,std::shared_ptr<Shape>> shapes;
+  std::vector<BodyData*> bodies;
+  std::vector<MovableVobContacts> census;
+  double validationMs = 0;
+  bool finalized = false;
+  bool enabled = true;
+  bool destructionEnabled = true;
   };
 
-struct DynamicWorld::NpcBody : btRigidBody {
-  NpcBody(btCollisionShape* shape):btRigidBody(0,nullptr,shape){}
-  ~NpcBody() { delete m_collisionShape; }
+struct DynamicWorld::BodyData {
+  ~BodyData() {
+    if(movableOwner!=nullptr) {
+      auto& bodies = movableOwner->bodies;
+      bodies.erase(std::remove(bodies.begin(),bodies.end(),this),bodies.end());
+      }
+    }
+  std::unique_ptr<CollisionWorld::CollisionBody> body;
+  MovableVobs* movableOwner = nullptr;
+  std::shared_ptr<MovableVobs::Shape> movableShape;
+  std::vector<std::unique_ptr<CollisionWorld::CollisionBody>> query;
+  Tempest::Matrix4x4 origin, current;
+  std::shared_ptr<MovableVobPose> pose = std::make_shared<MovableVobPose>();
+  std::string visual, className;
+  std::string disposition;
+  float movableMass = 0.f, massMultiplier = 1.f;
+  bool blocksWalking = false, legacyCollision = true;
+  bool wasSleeping = true;
+  Tempest::Vec3 localBounds[2];
+  bool trace = false, tilted = false;
+  int64_t traceTime = -1;
+  std::string traceCulprit;
+  std::function<void(const Tempest::Matrix4x4&)> transformCallback;
+  const FractureRule* fractureRule = nullptr;
+  float health = 0, breakImpulse = 0;
+  Tempest::Vec3 breakPoint;
+  bool pendingBreak = false, fragmentsWereSleeping = true;
+  std::vector<std::unique_ptr<CollisionWorld::DynamicBody>> fragments;
+  std::vector<int64_t> fragmentSleepTime;
+  std::vector<bool> fragmentPermanent;
+  std::function<void(bool,const std::vector<Tempest::Matrix4x4>&)> fractureCallback;
+  };
 
+struct DynamicWorld::WorldBodies {
+  std::vector<JPH::Vec3>                        vertices;
+  std::unique_ptr<CollisionWorld::CollisionBody> landscape;
+  std::unique_ptr<CollisionWorld::CollisionBody> water;
+  };
+
+struct DynamicWorld::BBoxShape {
+  std::unique_ptr<CollisionWorld::CollisionBody> body;
+  };
+
+struct DynamicWorld::NpcBody {
+  NpcBody(float radius, float height):radius(radius),cylinderHeight(height) {
+    if(radius>0.f) {
+      if(height>0.f)
+        shape = new JPH::CapsuleShape(CollisionWorld::toMeters(height*0.5f), CollisionWorld::toMeters(radius));
+      else
+        shape = new JPH::SphereShape(CollisionWorld::toMeters(radius));
+      }
+    }
+
+  JPH::ShapeRefC shape;
+  std::unique_ptr<CollisionWorld::VirtualCharacter> virtualCharacter;
+  bool virtualDiagnosticsEnabled = false;
+  std::unique_ptr<CharacterVirtualDiagnostics::NpcMove> virtualDiagnosticMove;
+  void*         userPointer = nullptr;
+  float         radius      = 0.f;
+  float         cylinderHeight = 0.f;
   Tempest::Vec3 pos      = {};
   float         h        = 0;
   float         gPadd    = 0.f;
@@ -84,7 +208,7 @@ struct DynamicWorld::NpcBody : btRigidBody {
   size_t        frozen   = size_t(-1);
   uint64_t      lastMove = 0;
 
-  // relevant for npc-to-npc collison
+  // Relevant for npc-to-npc collision; Jolt does not move these ellipsoids.
   float         angle    = 0;
   Tempest::Vec3 bboxCen  = {};
   Tempest::Vec3 bboxSize = {};
@@ -111,7 +235,7 @@ struct DynamicWorld::NpcBody : btRigidBody {
     }
 
   Npc* toNpc() {
-    return reinterpret_cast<Npc*>(getUserPointer());
+    return reinterpret_cast<Npc*>(userPointer);
     }
 
   auto groundOffset() const {
@@ -126,12 +250,6 @@ struct DynamicWorld::NpcBody : btRigidBody {
 
   void setPosition(const Tempest::Vec3& p) {
     pos = p;
-
-    auto m = p + Tempest::Vec3(0,groundOffset(),0);
-    btTransform trans;
-    trans.setIdentity();
-    trans.setOrigin(CollisionWorld::toMeters(m));
-    setWorldTransform(trans);
     }
   };
 
@@ -155,17 +273,8 @@ struct DynamicWorld::NpcBodyList final {
     float ghostPadding = height*0.5f;
     float cHeight      = std::max(height-2.f*radius-ghostPadding, 0.f);
 
-    //NOTE: it seem vanilla uses elipsoids at some point, at least for npc-2-npc collisions
-    btCollisionShape* shape = new HumShape(radius, cHeight);
-    //btCollisionShape* shape = new btCylinderShape(CollisionWorld::toMeters(Tempest::Vec3(radius, height*0.5f, radius)));
-    //btCollisionShape* shape = new btCapsuleShape(CollisionWorld::toMeters(radius), CollisionWorld::toMeters(height));
-    NpcBody*          obj   = new NpcBody(shape);
-
-    btTransform trans;
-    trans.setIdentity();
-    obj->setWorldTransform(trans);
-    obj->setUserIndex(C_Ghost);
-    obj->setCollisionFlags(btCollisionObject::CF_NO_CONTACT_RESPONSE);
+    // The custom movement controller queries this capsule without registering a simulated body.
+    NpcBody* obj = new NpcBody(radius, cHeight);
 
     obj->h      = height;
     obj->gPadd  = ghostPadding;
@@ -515,6 +624,7 @@ struct DynamicWorld::BulletsList final {
   void del(BulletBody* b) {
     for(auto i=body.begin(), e=body.end();i!=e;++i){
       if(&(*i)==b) {
+        ArrowTrace::forget(*i);
         body.erase(i);
         return;
         }
@@ -523,6 +633,7 @@ struct DynamicWorld::BulletsList final {
 
   void tick(uint64_t dt) {
     for(auto& i:body) {
+      if(i.worldStopped) continue;
       wrld.moveBullet(i,i.dir,dt);
       if(i.cb!=nullptr)
         i.cb->onMove();
@@ -533,12 +644,14 @@ struct DynamicWorld::BulletsList final {
     for(auto& i:body) {
       float proj = 0;
       auto  dp = i.pos - i.lastPos; // move is symetrical: move of npc and move of projectile is the same
-      if(i.cb==nullptr)
+      if(i.cb==nullptr || i.worldStopped)
         continue;
       const bool precise = i.cb->isPrecise();
       if(precise ? list.nearTest(npc, i.pos, Tempest::Vec3::normalize(dp), dp.length(), i.tgRange, proj)
                  : list.rayTest (npc, i.pos, Tempest::Vec3::normalize(dp), dp.length(), i.tgRange, proj)) {
+        ArrowTrace::write(i,i.cb,"moving_npc",0,npc.toNpc());
         const bool hit = precise ? i.cb->onCollidePrecise(*npc.toNpc(),i.lastPos,i.pos) : i.cb->onCollide(*npc.toNpc());
+        ArrowTrace::write(i,i.cb,hit ? "moving_npc_hit" : "moving_npc_pass",0,npc.toNpc());
         if(hit)
           i.cb->onStop();
         }
@@ -566,31 +679,18 @@ struct DynamicWorld::BBoxList final {
       }
     }
 
-  BBoxBody* rayTest(const btVector3& s, const btVector3& e) {
-    struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-      using ClosestRayResultCallback::ClosestRayResultCallback;
-      };
-    CallBack callback{s,e};
-
-    btTransform rayFromTrans,rayToTrans;
-    rayFromTrans.setIdentity();
-    rayFromTrans.setOrigin(s);
-    rayToTrans.setIdentity();
-    rayToTrans.setOrigin(e);
-    for(auto& i:body)
-      if(rayTestSingle(rayFromTrans, rayToTrans, *i, callback))
+  BBoxBody* rayTest(const Tempest::Vec3& from, const Tempest::Vec3& to) {
+    for(auto* i:body) {
+      const auto& obj = *i->shape->body;
+      const JPH::RayCast ray(CollisionWorld::toMeters(from-obj.position()), CollisionWorld::toMeters(to-from));
+      JPH::RayCastSettings settings;
+      settings.mTreatConvexAsSolid = false;
+      JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> hits;
+      obj.shape()->CastRay(ray,settings,JPH::SubShapeIDCreator(),hits);
+      if(hits.HadHit())
         return i;
+      }
     return nullptr;
-    }
-
-  bool rayTestSingle(const btTransform& s,
-                     const btTransform& e, BBoxBody& npc,
-                     btCollisionWorld::RayResultCallback& callback){
-    wrld.world->rayTestSingle(s, e, npc.obj,
-                              npc.shape,
-                              npc.obj->getWorldTransform(),
-                              callback);
-    return callback.hasHit();
     }
 
   std::vector<BBoxBody*> body;
@@ -599,6 +699,13 @@ struct DynamicWorld::BBoxList final {
 
 DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   world.reset(new CollisionWorld());
+  bodies.reset(new WorldBodies());
+  movableVobs.reset(new MovableVobs());
+  world->setBodyImpactCallback([this](CollisionWorld::CollisionBody& body,float impulse,const Tempest::Vec3& point,
+                                     std::string_view culprit) {
+    if(body.ptrType()==P_MovableVob && body.payload()!=nullptr)
+      damageMovableVob(*static_cast<BodyData*>(body.payload()),impulse,point,false,culprit);
+    });
 
   {
   PackedMesh pkg(worldMesh,PackedMesh::PK_Physic);
@@ -606,14 +713,14 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   for(size_t i=0;i<sectors.size();++i)
     sectors[i] = pkg.subMeshes[i].material.name;
 
-  landVbo.resize(pkg.vertices.size());
+  bodies->vertices.resize(pkg.vertices.size());
   for(size_t i=0;i<pkg.vertices.size();++i) {
     auto v = pkg.vertices[i];
-    landVbo[i] = CollisionWorld::toMeters(Tempest::Vec3(v.pos[0],v.pos[1],v.pos[2]));
+    bodies->vertices[i] = CollisionWorld::toMeters(Tempest::Vec3(v.pos[0],v.pos[1],v.pos[2]));
     }
 
-  landMesh .reset(new PhysicVbo(&landVbo));
-  waterMesh.reset(new PhysicVbo(&landVbo));
+  landMesh .reset(new PhysicVbo(&bodies->vertices));
+  waterMesh.reset(new PhysicVbo(&bodies->vertices));
 
   for(size_t i=0;i<pkg.subMeshes.size();++i) {
     auto& sm = pkg.subMeshes[i];
@@ -627,33 +734,25 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
     }
   }
 
-  btVector3 bbox[2] = {btVector3(0,0,0), btVector3(0,0,0)};
-  if(!landMesh->isEmpty()) {
-    Tempest::Matrix4x4 mt;
-    mt.identity();
-    landShape.reset(new btMultimaterialTriangleMeshShape(landMesh.get(),landMesh->useQuantization(),true));
-    landBody = world->addCollisionBody(*landShape,mt,DynamicWorld::materialFriction(zenkit::MaterialGroup::NONE));
-    landBody->setUserIndex(C_Landscape);
-
-    btVector3 b[2] = {btVector3(0,0,0), btVector3(0,0,0)};
-    landBody->getAabb(b[0],b[1]);
-    bbox[0].setMin(b[0]);
-    bbox[1].setMax(b[1]);
+  JPH::Vec3 bbox[2] = {JPH::Vec3::sZero(), JPH::Vec3::sZero()};
+  Tempest::Matrix4x4 mt;
+  mt.identity();
+  if(!landMesh->isEmpty() && landMesh->shape()!=nullptr) {
+    bodies->landscape = world->addCollisionBody(landMesh->shape(),mt,materialFriction(zenkit::MaterialGroup::NONE),
+                                               C_Landscape,false,false,landMesh.get());
+    bodies->landscape->setLabel("landscape");
+    JPH::Vec3 min, max;
+    bodies->landscape->getAabb(min,max);
+    bbox[0] = JPH::Vec3::sMin(bbox[0],min);
+    bbox[1] = JPH::Vec3::sMax(bbox[1],max);
     }
 
-  if(!waterMesh->isEmpty()) {
-    Tempest::Matrix4x4 mt;
-    mt.identity();
-    waterShape.reset(new btMultimaterialTriangleMeshShape(waterMesh.get(),waterMesh->useQuantization(),true));
-    waterBody = world->addCollisionBody(*waterShape,mt,0);
-    waterBody->setUserIndex(C_Water);
-    waterBody->setCollisionFlags(btCollisionObject::CF_STATIC_OBJECT | btCollisionObject::CF_NO_CONTACT_RESPONSE);
-    // waterBody->setCollisionFlags(btCollisionObject::CO_HF_FLUID);
-
-    btVector3 b[2] = {btVector3(0,0,0), btVector3(0,0,0)};
-    landBody->getAabb(b[0],b[1]);
-    bbox[0].setMin(b[0]);
-    bbox[1].setMax(b[1]);
+  if(!waterMesh->isEmpty() && waterMesh->shape()!=nullptr) {
+    bodies->water = world->addCollisionBody(waterMesh->shape(),mt,0,C_Water,false,true,waterMesh.get());
+    JPH::Vec3 min, max;
+    bodies->water->getAabb(min,max);
+    bbox[0] = JPH::Vec3::sMin(bbox[0],min);
+    bbox[1] = JPH::Vec3::sMax(bbox[1],max);
     }
 
   world->setBBox(bbox[0],bbox[1]);
@@ -673,13 +772,16 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   }
 
 DynamicWorld::~DynamicWorld(){
+  for(auto* body:movableVobs->bodies)
+    body->movableOwner = nullptr;
   }
 
 DynamicWorld::RayLandResult DynamicWorld::landRay(const Tempest::Vec3& from, float maxDy) const {
   world->updateAabbs();
   if(maxDy==0)
     maxDy = worldHeight;
-  return ray(from, Tempest::Vec3(from.x,from.y-maxDy,from.z));
+  const auto to = Tempest::Vec3(from.x,from.y-maxDy,from.z);
+  return toResult(world->rayCast(from,to,landscapeMask,false),to);
   }
 
 DynamicWorld::RayLandResult DynamicWorld::landSweep(const Tempest::Vec3& from, float R, float maxDy) const {
@@ -690,37 +792,7 @@ DynamicWorld::RayLandResult DynamicWorld::landSweep(const Tempest::Vec3& from, f
   }
 
 DynamicWorld::RayLandResult DynamicWorld::sweep(const Tempest::Vec3& from, const Tempest::Vec3& to, float R) const {
-  struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-    using ClosestRayResultCallback::ClosestRayResultCallback;
-    zenkit::MaterialGroup matId  = zenkit::MaterialGroup::UNDEFINED;
-    const char*           sector = nullptr;
-
-    bool needsCollision(btBroadphaseProxy* proxy0) const override {
-      auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
-      if(obj->getUserIndex()==C_Landscape || obj->getUserIndex()==C_Object)
-        return ClosestRayResultCallback::needsCollision(proxy0);
-      return false;
-      }
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      auto shape = rayResult.m_collisionObject->getCollisionShape();
-      if(shape!=nullptr) {
-        auto s  = reinterpret_cast<const btMultimaterialTriangleMeshShape*>(shape);
-        auto mt = reinterpret_cast<const PhysicVbo*>(s->getMeshInterface());
-
-        size_t id = size_t(rayResult.m_localShapeInfo->m_shapePart);
-        matId  = mt->materialId(id);
-        sector = mt->sectorName(id);
-        }
-      return ClosestRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
-  CallBack callback{CollisionWorld::toMeters(from), CollisionWorld::toMeters(to)};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  world->raySweep(from,to,R,callback);
-  return toResult(callback, to, callback.matId, callback.sector);
+  return toResult(world->raySweep(from,to,R,landscapeMask,false), to);
   }
 
 DynamicWorld::RayWaterResult DynamicWorld::waterRay(const Tempest::Vec3& from, float stepHeight) const {
@@ -729,34 +801,12 @@ DynamicWorld::RayWaterResult DynamicWorld::waterRay(const Tempest::Vec3& from, f
   }
 
 DynamicWorld::RayWaterResult DynamicWorld::implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight) const {
-  struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-    using ClosestRayResultCallback::ClosestRayResultCallback;
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      return ClosestRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
   const auto sFrom = from-Tempest::Vec3(0,stepHeight,0);
-  CallBack callback{CollisionWorld::toMeters(sFrom), CollisionWorld::toMeters(to)};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  if(waterBody!=nullptr) {
-    btTransform rayFromTrans,rayToTrans;
-    rayFromTrans.setIdentity();
-    rayFromTrans.setOrigin(callback.m_rayFromWorld);
-    rayToTrans.setIdentity();
-    rayToTrans.setOrigin(callback.m_rayToWorld);
-    world->rayTestSingle(rayFromTrans, rayToTrans,
-                         waterBody.get(),
-                         waterBody->getCollisionShape(),
-                         waterBody->getWorldTransform(),
-                         callback);
-    }
+  const auto hit = world->rayCast(sFrom,to,waterMask,false);
 
   RayWaterResult ret;
-  if(callback.hasHit()) {
-    const float waterY = callback.m_hitPointWorld.y()*100.f;
+  if(hit.hasHit) {
+    const float waterY = hit.point.y;
     const auto  cave   = ray(from,Tempest::Vec3(to.x,std::max(waterY,from.y),to.z));
     if(cave.hasCol && cave.v.y<waterY) {
       ret.wdepth = -std::numeric_limits<float>::infinity();
@@ -774,70 +824,15 @@ DynamicWorld::RayWaterResult DynamicWorld::implWaterRay(const Tempest::Vec3& fro
   }
 
 DynamicWorld::RayCamResult DynamicWorld::cameraRay(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
-  struct CallBack:btCollisionWorld::AllHitsRayResultCallback {
-    using AllHitsRayResultCallback::AllHitsRayResultCallback;
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      hits++;
-      return AllHitsRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-
-    uint32_t hits = 0;
-    };
-
-  CallBack callback{CollisionWorld::toMeters(from), CollisionWorld::toMeters(to)};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  if(waterBody!=nullptr) {
-    btTransform rayFromTrans,rayToTrans;
-    rayFromTrans.setIdentity();
-    rayFromTrans.setOrigin(callback.m_rayFromWorld);
-    rayToTrans.setIdentity();
-    rayToTrans.setOrigin(callback.m_rayToWorld);
-    world->rayTestSingle(rayFromTrans, rayToTrans,
-                         waterBody.get(),
-                         waterBody->getCollisionShape(),
-                         waterBody->getWorldTransform(),
-                         callback);
-    }
-
+  std::vector<CollisionWorld::QueryResult> hits;
+  world->rayCast(from,to,waterMask,false,&hits);
   RayCamResult ret;
-  ret.waterCol = int(callback.m_collisionObjects.size());
+  ret.waterCol = int(hits.size());
   return ret;
   }
 
 DynamicWorld::RayLandResult DynamicWorld::ray(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
-  struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-    using ClosestRayResultCallback::ClosestRayResultCallback;
-    zenkit::MaterialGroup matId  = zenkit::MaterialGroup::UNDEFINED;
-    const char*           sector = nullptr;
-
-    bool needsCollision(btBroadphaseProxy* proxy0) const override {
-      auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
-      if(obj->getUserIndex()==C_Landscape || obj->getUserIndex()==C_Object)
-        return ClosestRayResultCallback::needsCollision(proxy0);
-      return false;
-      }
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      auto shape = rayResult.m_collisionObject->getCollisionShape();
-      if(shape!=nullptr) {
-        auto s  = reinterpret_cast<const btMultimaterialTriangleMeshShape*>(shape);
-        auto mt = reinterpret_cast<const PhysicVbo*>(s->getMeshInterface());
-
-        size_t id = size_t(rayResult.m_localShapeInfo->m_shapePart);
-        matId  = mt->materialId(id);
-        sector = mt->sectorName(id);
-        }
-      return ClosestRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
-  CallBack callback{CollisionWorld::toMeters(from), CollisionWorld::toMeters(to)};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  world->rayCast(from,to,callback);
-  return toResult(callback, to, callback.matId, callback.sector);
+  return toResult(world->rayCast(from,to,visualMask,false), to);
   }
 
 DynamicWorld::RayQueryResult DynamicWorld::rayNpc(const Tempest::Vec3& from, const Tempest::Vec3& to, const Npc* except) const {
@@ -868,47 +863,19 @@ DynamicWorld::RayQueryResult DynamicWorld::rayArrow(const Tempest::Vec3& from, c
   }
 
 float DynamicWorld::soundOclusion(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
-  struct CallBack:btCollisionWorld::AllHitsRayResultCallback {
-    using AllHitsRayResultCallback::AllHitsRayResultCallback;
-
-    enum { FRAC_MAX=16 };
-    uint32_t           cnt            = 0;
-    float              frac[FRAC_MAX] = {};
-
-    bool needsCollision(btBroadphaseProxy* proxy0) const override {
-      auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
-      int id = obj->getUserIndex();
-      if(id==C_Landscape || id==C_Water || id==C_Object)
-        return AllHitsRayResultCallback::needsCollision(proxy0);
-      return false;
-      }
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      if(cnt<FRAC_MAX)
-        frac[cnt] = rayResult.m_hitFraction;
-      cnt++;
-      return AllHitsRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
-  CallBack callback(CollisionWorld::toMeters(from), CollisionWorld::toMeters(to));
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal;
-
-  world->rayCast(from,to,callback);
-  const uint32_t count = callback.cnt;
+  std::vector<CollisionWorld::QueryResult> hits;
+  world->rayCast(from,to,visualMask | waterMask,true,&hits);
+  const size_t count = hits.size();
   if(count<2)
     return 0;
-
-  if(count>=CallBack::FRAC_MAX)
+  if(count>=16)
     return 1;
 
-  float tlen = (callback.m_rayFromWorld-callback.m_rayToWorld).length();
-  float tr   = 1.f;
-  std::sort(callback.frac, callback.frac+count);
-  for(size_t i=1; i<count; i+=2) {
-    auto t = std::exp(-(callback.frac[i]-callback.frac[i-1])*tlen/3.5f);
-    tr *= t;
-    }
+  std::sort(hits.begin(),hits.end(),[](const auto& a, const auto& b) { return a.fraction<b.fraction; });
+  const float tlen = CollisionWorld::toMeters((from-to).length());
+  float tr = 1.f;
+  for(size_t i=1; i<count; i+=2)
+    tr *= std::exp(-(hits[i].fraction-hits[i-1].fraction)*tlen/3.5f);
   return std::clamp(1.f-tr, 0.f, 1.f);
   }
 
@@ -925,46 +892,1033 @@ DynamicWorld::NpcItem DynamicWorld::addGhostObj(const Skeleton* src) {
   return NpcItem(this,obj);
   }
 
-DynamicWorld::Item DynamicWorld::addStaticObj(const PhysicMeshShape *shape, const Tempest::Matrix4x4 &m) {
-  if(shape==nullptr)
+DynamicWorld::Item DynamicWorld::addStaticObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m, std::string_view label) {
+  if(shape==nullptr || shape->shape==nullptr)
     return Item();
-  return createObj(&shape->shape,false,m,0,shape->friction(),IT_Static);
+  auto obj = std::make_unique<BodyData>();
+  obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,false,false,&shape->mesh);
+  obj->body->setLabel(label);
+  obj->body->setNoiseProfile(impactMaterial(shape->material),shape->material,"vob");
+  return Item(this,obj.release());
   }
 
-DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m) {
-  if(shape==nullptr)
+DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m, std::string_view label) {
+  if(shape==nullptr || shape->shape==nullptr)
     return Item();
-  return createObj(&shape->shape,false,m,0,shape->friction(),IT_Movable);
+  auto obj = std::make_unique<BodyData>();
+  obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,true,false,&shape->mesh);
+  obj->body->setLabel(label);
+  obj->body->setNoiseProfile(impactMaterial(shape->material),shape->material,"vob");
+  return Item(this,obj.release());
   }
 
 DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& b, zenkit::MaterialGroup mat) {
-  btVector3 hExt = {b.bbox[1].x-b.bbox[0].x, b.bbox[1].y-b.bbox[0].y, b.bbox[1].z-b.bbox[0].z};
-  hExt *= 0.01f;
-
-  float density = DynamicWorld::materialDensity(mat);
-  float mass    = density*(hExt[0])*(hExt[1])*(hExt[2]);
-  //mass = 0.1f;
-  for(int i=0;i<3;++i)
-    hExt[i] = std::max(hExt[i]*0.5f,0.15f);
-
-  std::unique_ptr<btCollisionShape> shape { new btBoxShape(hExt) };
-  return createObj(shape.release(),true,pos,mass,materialFriction(mat),IT_Dynamic);
+  auto extent = CollisionWorld::toMeters(b.bbox[1]-b.bbox[0]);
+  const auto* m=pos.data();
+  const double volumeScale=std::abs(double(m[0])*(double(m[5])*m[10]-double(m[9])*m[6])-
+                                    double(m[4])*(double(m[1])*m[10]-double(m[9])*m[2])+
+                                    double(m[8])*(double(m[1])*m[6]-double(m[5])*m[2]));
+  // Use the visual bounds' volume, before the minimum collision proxy padding.
+  const float mass = float(materialDensity(mat)*double(extent.GetX())*extent.GetY()*extent.GetZ()*volumeScale);
+  const auto halfExtent = JPH::Vec3::sMax(extent*0.5f,JPH::Vec3::sReplicate(0.15f));
+  JPH::ShapeRefC shape = new JPH::BoxShape(halfExtent);
+  auto obj = std::make_unique<BodyData>();
+  obj->body = world->addDynamicBody(shape,pos,materialFriction(mat),mass);
+  obj->body->setNoiseProfile(impactMaterial(mat),mat,"item");
+  return Item(this,obj.release());
   }
 
-DynamicWorld::Item DynamicWorld::createObj(btCollisionShape* shape, bool ownShape, const Tempest::Matrix4x4& m, float mass, float friction, ItemType type) {
-  std::unique_ptr<CollisionWorld::CollisionBody> obj;
-  switch(type) {
-    case IT_Movable:
-    case IT_Static:
-      obj = world->addCollisionBody(*shape,m,friction);
-      obj->setUserIndex(C_Object);
-      break;
-    case IT_Dynamic:
-      obj = world->addDynamicBody(*shape,m,friction,mass);
-      obj->setUserIndex(C_Item);
-      break;
+DynamicWorld::Item DynamicWorld::addMovableVob(const ProtoMesh& proto, std::string_view visual,
+                                              const Tempest::Matrix4x4& matrix, float massMultiplier,
+                                              bool blocksWalking, std::string_view className,
+                                              bool legacyCollision, uint32_t zenId) {
+  if(!std::isfinite(massMultiplier) || massMultiplier<=0.f)
+    return {};
+  std::string key(visual);
+  std::transform(key.begin(),key.end(),key.begin(),[](unsigned char c) { return char(std::toupper(c)); });
+  auto [cached,inserted] = movableVobs->shapes.try_emplace(key);
+  if(inserted) {
+    auto shape = std::make_shared<MovableVobs::Shape>();
+    size_t largestAttach = 0;
+    for(size_t i=0;i<proto.attach.size();++i) {
+      const auto* source = proto.attach[i].shape.get();
+      if(source==nullptr || source->shape==nullptr)
+        continue;
+      auto local = Tempest::Matrix4x4::mkIdentity();
+      for(size_t node=0;node<proto.nodes.size();++node) {
+        if(proto.nodes[node].attachId!=i)
+          continue;
+        if(proto.skeleton!=nullptr && node<proto.skeleton->tr.size()) {
+          local = proto.skeleton->tr[node];
+          }
+        else {
+          local = proto.nodes[node].transform;
+          size_t parent = proto.nodes[node].parentId;
+          // Nodes normally come from a Skeleton. Bound the fallback traversal
+          // so malformed model hierarchy data cannot loop while loading a world.
+          for(size_t depth=0;parent<proto.nodes.size() && depth<proto.nodes.size();++depth) {
+            auto parentMatrix = proto.nodes[parent].transform;
+            parentMatrix.mul(local);
+            local = parentMatrix;
+            parent = proto.nodes[parent].parentId;
+            }
+          }
+        break;
+        }
+      const auto size = source->mesh.vertexCount();
+      if(size>largestAttach) {
+        largestAttach = size;
+        shape->material = source->material;
+        }
+      shape->friction += source->friction();
+      shape->parts.push_back({source,local});
+      }
+    if(!shape->parts.empty()) {
+      shape->friction /= float(shape->parts.size());
+      if(FractureRule::classify(visual)!=nullptr) {
+        shape->fracture=FractureMesh::load(visual);
+        if(shape->fracture==nullptr) {
+          static bool warned=false;
+          if(!warned) {
+            warned=true;
+            Tempest::Log::i("Destruction cache unavailable; uncached visuals keep their original physics (OPENGOTHIC_FRACTURE)");
+            }
+          }
+        }
+      cached->second = std::move(shape);
+      }
     }
-  return Item(this,obj.release(),ownShape ? shape : nullptr);
+  if(cached->second==nullptr)
+    return {};
+  auto obj = std::make_unique<BodyData>();
+  obj->movableShape = cached->second;
+  obj->origin = obj->current = matrix;
+  obj->visual = std::string(visual);
+  obj->pose->zenId = zenId;
+  obj->pose->visual = obj->visual;
+  obj->pose->origin = matrix;
+  obj->pose->transform = matrix;
+  obj->className = std::string(className);
+  obj->blocksWalking = blocksWalking;
+  obj->legacyCollision = legacyCollision;
+  obj->massMultiplier = massMultiplier;
+  obj->fractureRule=FractureRule::classify(visual);
+  obj->localBounds[0] = proto.bbox()[0];
+  obj->localBounds[1] = proto.bbox()[1];
+  rebuildMovableVob(*obj);
+  if((movableVobs->enabled || className=="fence") && obj->body==nullptr)
+    return {};
+  obj->movableOwner = movableVobs.get();
+  movableVobs->bodies.push_back(obj.get());
+  return Item(this,obj.release());
+  }
+
+void DynamicWorld::prepareMovableVobShape(BodyData& obj) {
+  auto& shape = *obj.movableShape;
+  if(!shape.hullAttempted) {
+    shape.hullAttempted = true;
+    std::vector<JPH::Vec3> points;
+    for(const auto& part:shape.parts)
+      part.source->mesh.appendVertices(points,part.local);
+    if(points.size()>=4) {
+      Physics::initialize();
+      // A single native hull closes cavities such as cup mouths and the space
+      // below a table. Walking and aiming still use the original source faces.
+      JPH::ConvexHullShapeSettings settings(points.data(),int(points.size()),0.001f);
+      const auto result = settings.Create();
+      if(!result.HasError() && result.Get()->GetVolume()>0.f)
+        shape.hull = result.Get();
+      }
+    if(shape.hull==nullptr)
+      Tempest::Log::e("Cannot build movable vob hull: ",obj.visual);
+    }
+  if(shape.hull!=nullptr)
+    obj.movableMass = float(shape.hull->GetVolume()*volumeScale(obj.origin)*materialDensity(shape.material)*obj.massMultiplier);
+  }
+
+void DynamicWorld::rebuildMovableVob(BodyData& obj) {
+  obj.body.reset();
+  obj.query.clear();
+  obj.fragments.clear();
+  obj.fragmentSleepTime.clear();
+  obj.fragmentPermanent.clear();
+  obj.pendingBreak=false;
+  obj.pose->broken=false;
+  obj.health=obj.fractureRule!=nullptr ? obj.fractureRule->health : 0.f;
+  obj.current = obj.origin;
+  obj.wasSleeping = true;
+  obj.trace = obj.tilted = false;
+  obj.traceTime = -1;
+  obj.traceCulprit.clear();
+  auto& shape = *obj.movableShape;
+  const bool fence=obj.className=="fence";
+  if(movableVobs->enabled || fence)
+    prepareMovableVobShape(obj);
+  const bool allowed = obj.disposition.empty() || obj.disposition=="ok" || obj.disposition=="item";
+  const bool enabled = (movableVobs->enabled || fence) && (allowed || fence) && shape.hull!=nullptr &&
+                       std::isfinite(obj.movableMass) && obj.movableMass>0.f;
+  if(enabled) {
+    if(fence)
+      // The authored mesh remains the exact static obstacle. This sensor hull
+      // only owns destruction identity and the mass used by its future pieces.
+      obj.body=world->addCollisionBody(shape.hull,obj.origin,shape.friction,C_MovableVob,false,true);
+    else
+      obj.body = world->addDynamicBody(shape.hull,obj.origin,shape.friction,obj.movableMass,C_MovableVob,true);
+    }
+  if(obj.body!=nullptr) {
+    obj.body->setPayload(&obj,P_MovableVob);
+    obj.body->setLabel(obj.visual);
+    obj.body->setNoiseProfile(impactMaterial(shape.material),shape.material,obj.visual);
+    }
+  // cd_dynamic controls the original mesh queries independently of simulation.
+  // The hull can move and receive impacts without becoming a new walking/ray obstacle.
+  if(obj.legacyCollision) {
+    const int category = !enabled || fence ? C_Object : obj.blocksWalking ? C_MovableQuery : C_SmallVobQuery;
+    for(const auto& part:shape.parts) {
+      auto matrix = obj.origin;
+      matrix.mul(part.local);
+      obj.query.push_back(world->addCollisionBody(part.source->shape,matrix,part.source->friction(),category,
+                                                 enabled && !fence,enabled && !fence,&part.source->mesh));
+      obj.query.back()->setPayload(&obj,P_MovableVob);
+      obj.query.back()->setLabel(obj.visual);
+      }
+    }
+  obj.pose->transform = obj.current;
+  if(obj.transformCallback)
+    obj.transformCallback(obj.current);
+  if(obj.fractureCallback) obj.fractureCallback(false,{});
+  }
+
+void DynamicWorld::syncMovableVob(BodyData& obj) {
+  if(obj.body==nullptr)
+    return;
+  const bool sleeping = obj.body->isSleeping();
+  if(sleeping && obj.wasSleeping)
+    return;
+  obj.wasSleeping = sleeping;
+  obj.current = obj.body->matrix();
+  obj.pose->transform = obj.current;
+  const bool trace = noticeableMovableTrace(obj.origin,obj.current,obj.tilted);
+  if(trace && !obj.trace) {
+    obj.traceTime = traceTime;
+    obj.traceCulprit = obj.body->traceCulprit();
+    }
+  else if(!trace) {
+    obj.traceTime = -1;
+    obj.traceCulprit.clear();
+    }
+  obj.trace = trace;
+  for(size_t i=0;i<obj.query.size();++i) {
+    auto matrix = obj.current;
+    matrix.mul(obj.movableShape->parts[i].local);
+    obj.query[i]->setObjMatrix(matrix);
+    }
+  if(obj.transformCallback)
+    obj.transformCallback(obj.current);
+  }
+
+void DynamicWorld::setMovableVobsEnabled(bool enabled) {
+  if(movableVobs->enabled==enabled)
+    return;
+  movableVobs->enabled = enabled;
+  for(auto* obj:movableVobs->bodies)
+    if(obj->className!="fence" && !obj->pose->broken)
+      rebuildMovableVob(*obj);
+  if(enabled && movableVobs->finalized && movableVobs->census.empty())
+    validateMovableVobs();
+  }
+
+void DynamicWorld::setDestructionEnabled(bool enabled) {
+  if(movableVobs->destructionEnabled==enabled) return;
+  movableVobs->destructionEnabled=enabled;
+  for(auto* obj:movableVobs->bodies) {
+    obj->pendingBreak=false;
+    obj->health=obj->fractureRule!=nullptr ? obj->fractureRule->health : 0.f;
+    if(!enabled && obj->pose->broken) rebuildMovableVob(*obj);
+    }
+  }
+
+bool DynamicWorld::destructionEnabled() const {
+  return movableVobs->destructionEnabled;
+  }
+
+void DynamicWorld::finalizeMovableVobs() {
+  movableVobs->finalized = true;
+  // Capture the authored geometry even when starting with physics disabled:
+  // a later enable must not classify against a moved door or a loaded save.
+  const bool enabled = movableVobs->enabled;
+  if(!enabled) {
+    movableVobs->enabled = true;
+    for(auto* obj:movableVobs->bodies)
+      if(obj->className!="fence" && !obj->pose->broken)
+        rebuildMovableVob(*obj);
+    }
+  validateMovableVobs();
+  if(!enabled) {
+    movableVobs->enabled = false;
+    for(auto* obj:movableVobs->bodies)
+      if(obj->className!="fence" && !obj->pose->broken)
+        rebuildMovableVob(*obj);
+    }
+  }
+
+double DynamicWorld::movableVobValidationMilliseconds() const {
+  return movableVobs->validationMs;
+  }
+
+void DynamicWorld::validateMovableVobs() {
+  const auto start = std::chrono::steady_clock::now();
+  // All candidates still have their hulls at ZEN poses here. Decide the entire
+  // set before replacing any hull with its original mesh: order cannot affect it.
+  auto census = movableVobContacts(1.f);
+  std::unordered_set<uint32_t> deepPairs;
+  for(const auto& entry:census)
+    for(const auto& c:entry.contacts)
+      if(c.category==C_MovableVob && c.depth>4.f) {
+        deepPairs.insert(entry.zenId);
+        if(c.otherZenId!=uint32_t(-1))
+          deepPairs.insert(c.otherZenId);
+        }
+  size_t rejected = 0;
+  for(auto& entry:census) {
+    const auto onTop = [&](const MovableVobContact& c) {
+      return c.category==C_Object && c.side!=0 &&
+             (c.otherMin.y-entry.hullMin.y)/std::max(entry.hullMax.y-entry.hullMin.y,1e-3f)>=.9f;
+      };
+    const auto size = [](const MovableVobContact& c) {
+      const auto s = c.otherMax-c.otherMin;
+      return std::max({s.x,s.y,s.z});
+      };
+    const MovableVobContact* deepest = nullptr;
+    bool supported = false, carries = false, item = false;
+    for(const auto& c:entry.contacts) {
+      supported |= c.side==0;
+      const bool top = onTop(c);
+      const bool small = size(c)<=80.f;
+      if(c.depth>4.f && !(top && small) && (deepest==nullptr || c.depth>deepest->depth))
+        deepest = &c;
+      carries |= top && !small;
+      item |= top;
+      }
+    entry.disposition = !supported ? "hangs" : deepest!=nullptr ?
+        (deepest->category==C_MovableVob ? "neighbour" : deepest->side==0 ? "floor" :
+         deepest->category==C_Landscape ? "wall" : "structure") :
+        carries ? "carries" : deepPairs.count(entry.zenId)!=0 ? "neighbour" : item ? "item" : "ok";
+    entry.enabled = entry.disposition=="ok" || entry.disposition=="item";
+    rejected += !entry.enabled;
+    }
+  // Preserve the exact origin geometry for the census, including rejected hulls.
+  movableVobs->census = std::move(census);
+  for(auto* obj:movableVobs->bodies)
+    for(const auto& entry:movableVobs->census)
+      if(obj->pose->zenId==entry.zenId) {
+        obj->disposition = entry.disposition;
+        if(!entry.enabled)
+          rebuildMovableVob(*obj);
+        break;
+        }
+  movableVobs->validationMs = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+  Tempest::Log::i("movable vob geometry: ",movableVobs->census.size()," candidates, ",rejected,
+                 " static, ",movableVobs->validationMs," ms");
+  }
+
+bool DynamicWorld::movableVobsEnabled() const {
+  return movableVobs->enabled;
+  }
+
+void DynamicWorld::setPhysicsNoiseEnabled(bool enabled) {
+  world->setPhysicsNoiseEnabled(enabled);
+  }
+
+bool DynamicWorld::physicsNoiseEnabled() const {
+  return world->physicsNoiseEnabled();
+  }
+
+void DynamicWorld::setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback) {
+  world->setPhysicsNoiseCallback(std::move(callback));
+  }
+
+std::shared_ptr<const DynamicWorld::MovableVobPose> DynamicWorld::movableVobPose(uint32_t zenId) const {
+  if(zenId==uint32_t(-1))
+    return {};
+  for(const auto* obj:movableVobs->bodies)
+    if(obj->pose->zenId==zenId)
+      return obj->pose;
+  return {};
+  }
+
+std::shared_ptr<const DynamicWorld::MovableVobPose> DynamicWorld::rayMovableVob(const Tempest::Vec3& from,
+                                                                           const Tempest::Vec3& to) const {
+  const auto hit = world->rayCast(from,to,visualMask,false);
+  if(!hit.hasHit || hit.body==nullptr || hit.body->ptrType()!=P_MovableVob)
+    return {};
+  return static_cast<BodyData*>(hit.body->payload())->pose;
+  }
+
+size_t DynamicWorld::meleeMovableVobs(const Tempest::Vec3& origin,const Tempest::Vec3& forward,
+                                     float rangeCm,float weaponDamage,float strength,FractureRule::Melee kind,
+                                     Npc* attacker) {
+  if(!movableVobs->destructionEnabled || !std::isfinite(rangeCm) || rangeCm<=0.f ||
+     !std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z) ||
+     !std::isfinite(forward.x) || !std::isfinite(forward.z)) return 0;
+  const auto facing=Tempest::Vec3(forward.x,0,forward.z);
+  if(facing.quadLength()<1.e-6f) return 0;
+  const float heading=std::atan2(facing.z,facing.x);
+  const int arc=kind==FractureRule::Melee::Fist ? 20 : 60;
+  std::unordered_set<BodyData*> touched;
+  size_t count=0;
+  // Test the swept striking arc against the source collision meshes, including
+  // downstrokes at low crates. Every ray stops at its first wall or object;
+  // range and facing alone never count as a contact. NPC damage keeps its own
+  // existing target/defence calculation and consumes exactly the same RNG.
+  for(int yaw=-arc;yaw<=arc;yaw+=10) for(int pitch=-40;pitch<=20;pitch+=20) {
+    const float a=heading+float(yaw)*(float(M_PI)/180.f);
+    const float p=float(pitch)*(float(M_PI)/180.f);
+    const Tempest::Vec3 direction(std::cos(a)*std::cos(p),std::sin(p),std::sin(a)*std::cos(p));
+    const auto hit=world->rayCast(origin,origin+direction*rangeCm,visualMask,false);
+    if(!hit.hasHit || hit.body==nullptr || hit.body->ptrType()!=P_MovableVob) continue;
+    auto& obj=*static_cast<BodyData*>(hit.body->payload());
+    if(obj.body==nullptr || obj.pose->broken || obj.pendingBreak || obj.fractureRule==nullptr ||
+       obj.movableShape->fracture==nullptr || (!movableVobs->enabled && obj.className!="fence") ||
+       touched.find(&obj)!=touched.end()) continue;
+    const float damage=obj.fractureRule->meleeDamage(kind,weaponDamage,strength);
+    if(!std::isfinite(damage) || damage<=0.f) continue;
+    touched.insert(&obj);
+    ++count;
+    const float impulse=damage*.02f;
+    // Fences keep a static sensor hull, so their rejected physical impulse
+    // must still record the actor of the real weapon contact.
+    obj.body->setTraceCulprit(attacker);
+    obj.body->addImpulseAtPoint(direction*impulse,hit.point,attacker);
+    obj.health=std::max(0.f,obj.health-damage);
+    if(obj.health>.001f) continue;
+    obj.pendingBreak=true;
+    obj.traceTime=traceTime;
+    obj.traceCulprit=obj.body->traceCulprit();
+    obj.breakImpulse=impulse;
+    obj.breakPoint=hit.point;
+    }
+  return count;
+  }
+
+void DynamicWorld::saveMovableVobs(Serialize& fout) const {
+  saveDestructionVobs(fout);
+  if(!movableVobs->enabled)
+    return;
+  std::vector<const BodyData*> moved;
+  for(const auto* obj:movableVobs->bodies)
+    if(obj->pose->zenId!=uint32_t(-1) && obj->body!=nullptr &&
+       !PhysicsSave::sameTransform(obj->origin,obj->body->matrix()))
+      moved.push_back(obj);
+  if(moved.empty())
+    return;
+  fout.setEntry("worlds/",fout.worldName(),"/movable-vobs");
+  fout.write(uint32_t(0x31564f4d),uint16_t(2),fout.worldName(),uint32_t(moved.size()));
+  for(const auto* obj:moved)
+    fout.write(obj->pose->zenId,obj->visual,obj->origin,obj->body->matrix(),obj->body->isSleeping(),
+               obj->trace,uint64_t(obj->traceTime)+1,obj->traceCulprit);
+  }
+
+void DynamicWorld::loadMovableVobs(Serialize& fin) {
+  loadDestructionVobs(fin);
+  if(!movableVobs->enabled || !fin.setEntry("worlds/",fin.worldName(),"/movable-vobs"))
+    return;
+  try {
+    uint32_t magic=0,count=0;
+    uint16_t schema=0;
+    std::string worldName;
+    fin.read(magic,schema,worldName,count);
+    if(magic!=0x31564f4d || (schema!=1 && schema!=2) || worldName!=fin.worldName() || count>100000)
+      return;
+    for(uint32_t i=0;i<count;++i) {
+      uint32_t id=uint32_t(-1);
+      std::string visual;
+      Tempest::Matrix4x4 origin,matrix;
+      bool sleeping=true;
+      fin.read(id,visual,origin,matrix,sleeping);
+      bool trace=false;
+      uint64_t traceTimeEncoded=0;
+      std::string traceCulprit;
+      if(schema>=2)
+        fin.read(trace,traceTimeEncoded,traceCulprit);
+      if(!PhysicsSave::validTransform(matrix) || !PhysicsSave::sameScale(matrix,origin))
+        continue;
+      for(auto* obj:movableVobs->bodies) {
+        if(obj->pose->zenId!=id || id==uint32_t(-1) || obj->visual!=visual ||
+           !PhysicsSave::sameTransform(obj->origin,origin))
+          continue;
+        if(obj->body==nullptr) {
+          if(!PhysicsSave::sameTransform(origin,matrix))
+            Tempest::Log::i("movable vob save pose ignored: ",id," ",visual," static (",obj->disposition,")");
+          break;
+          }
+        obj->body->restoreTransform(matrix,sleeping);
+        // Legacy poses have no recorded appearance time. Mark an existing
+        // trace before synchronizing so loading cannot invent a new timestamp.
+        obj->trace = schema==1 ? noticeableMovableTrace(origin,matrix,obj->tilted) : trace;
+        obj->traceTime = traceTimeEncoded>0 && traceTimeEncoded-1<=uint64_t(std::numeric_limits<int64_t>::max())
+                           ? int64_t(traceTimeEncoded-1) : -1;
+        obj->traceCulprit = std::move(traceCulprit);
+        // Force query meshes, render callback and attachment pose to synchronize
+        // even when the restored body is asleep and will never take a step.
+        obj->wasSleeping = false;
+        syncMovableVob(*obj);
+        break;
+        }
+      }
+    }
+  catch(const std::exception& e) {
+    Tempest::Log::e("movable vob load: ",e.what());
+    }
+  }
+
+void DynamicWorld::saveDestructionVobs(Serialize& fout) const {
+  if(!movableVobs->destructionEnabled)
+    return;
+  std::vector<const BodyData*> changed;
+  for(const auto* obj:movableVobs->bodies)
+    if(obj->pose->zenId!=uint32_t(-1) && obj->fractureRule!=nullptr && obj->movableShape->fracture!=nullptr &&
+       (obj->pose->broken || obj->health<obj->fractureRule->health))
+      changed.push_back(obj);
+  if(changed.empty())
+    return;
+  // Separate optional archive entry: older saves have no destruction state,
+  // and movable-vobs readers keep their existing schema and meaning.
+  fout.setEntry("worlds/",fout.worldName(),"/destruction-vobs");
+  fout.write(uint32_t(0x31534544),uint16_t(2),fout.worldName(),uint32_t(changed.size()));
+  for(const auto* obj:changed) {
+    fout.write(obj->pose->zenId,obj->visual,obj->origin,obj->current,obj->health,obj->pose->broken,
+               uint32_t(obj->fragments.size()),uint64_t(obj->traceTime)+1,obj->traceCulprit);
+    for(size_t i=0;i<obj->fragments.size();++i) {
+      const auto& piece=obj->fragments[i];
+      fout.write(piece!=nullptr,obj->fragmentPermanent[i],uint64_t(obj->fragmentSleepTime[i])+1);
+      if(piece!=nullptr)
+        fout.write(piece->matrix(),piece->velocity(),piece->angularVelocity(),piece->isSleeping());
+      }
+    }
+  }
+
+void DynamicWorld::loadDestructionVobs(Serialize& fin) {
+  if(!movableVobs->destructionEnabled || !fin.setEntry("worlds/",fin.worldName(),"/destruction-vobs"))
+    return;
+  try {
+    uint32_t magic=0,count=0;
+    uint16_t schema=0;
+    std::string worldName;
+    fin.read(magic,schema,worldName,count);
+    if(magic!=0x31534544 || (schema!=1 && schema!=2) || worldName!=fin.worldName() || count>100000)
+      return;
+    struct Piece {
+      bool present=false,permanent=false,sleeping=true;
+      uint64_t sleepTime=0;
+      Tempest::Matrix4x4 matrix;
+      Tempest::Vec3 velocity,omega;
+      };
+    const auto finiteVelocity=[](const Tempest::Vec3& v) {
+      return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) && v.quadLength()<1.e14f;
+      };
+    for(uint32_t record=0;record<count;++record) {
+      uint32_t id=uint32_t(-1),pieceCount=0;
+      std::string visual;
+      Tempest::Matrix4x4 origin,matrix;
+      float health=0;
+      bool broken=false;
+      fin.read(id,visual,origin,matrix,health,broken,pieceCount);
+      uint64_t traceTimeEncoded=0;
+      std::string traceCulprit;
+      if(schema>=2)
+        fin.read(traceTimeEncoded,traceCulprit);
+      if(pieceCount>20)
+        return;
+      std::vector<Piece> pieces(pieceCount);
+      bool valid=std::isfinite(health) && health>=0.f && PhysicsSave::validTransform(matrix) &&
+                 PhysicsSave::sameScale(matrix,origin) && (broken || pieceCount==0);
+      size_t permanentCount=0;
+      for(auto& piece:pieces) {
+        fin.read(piece.present,piece.permanent,piece.sleepTime);
+        permanentCount+=piece.permanent;
+        valid &= piece.sleepTime<=uint64_t(std::numeric_limits<int64_t>::max())+1;
+        valid &= !piece.permanent || piece.present;
+        if(piece.present) {
+          fin.read(piece.matrix,piece.velocity,piece.omega,piece.sleeping);
+          valid &= PhysicsSave::validTransform(piece.matrix) && PhysicsSave::sameScale(piece.matrix,origin) &&
+                   finiteVelocity(piece.velocity) && finiteVelocity(piece.omega);
+          }
+        }
+      if(!valid || (broken && permanentCount!=std::min(size_t(3),pieces.size())))
+        continue;
+      for(auto* obj:movableVobs->bodies) {
+        if(id==uint32_t(-1) || obj->pose->zenId!=id || obj->visual!=visual ||
+           !PhysicsSave::sameTransform(obj->origin,origin) || obj->fractureRule==nullptr ||
+           obj->movableShape->fracture==nullptr || health>obj->fractureRule->health)
+          continue;
+        if(!broken) {
+          obj->health=health;
+          break;
+          }
+        const auto& mesh=*obj->movableShape->fracture;
+        if(pieces.size()!=mesh.pieces.size())
+          break;
+        // Loading debris does not enable movement of any intact prop. Its
+        // authored hull is needed only to recover the original fragment mass.
+        prepareMovableVobShape(*obj);
+        if(!std::isfinite(obj->movableMass) || obj->movableMass<=0.f)
+          break;
+        std::vector<std::unique_ptr<CollisionWorld::DynamicBody>> fragments(pieces.size());
+        for(size_t i=0;i<pieces.size();++i) {
+          const auto& piece=pieces[i];
+          if(!piece.present)
+            continue;
+          const float mass=float(obj->movableMass*mesh.pieces[i].volume/mesh.volume);
+          auto body=world->addDynamicBody(mesh.pieces[i].hull,piece.matrix,obj->movableShape->friction,mass,C_Fragment);
+          body->setLabel(obj->visual+" fragment");
+          body->restoreTransform(piece.matrix,piece.sleeping);
+          if(!piece.sleeping)
+            body->setVelocity(piece.velocity,piece.omega);
+          fragments[i]=std::move(body);
+          }
+        obj->body.reset();
+        obj->query.clear();
+        obj->current=matrix;
+        obj->pose->transform=matrix;
+        obj->pose->broken=true;
+        obj->health=0.f;
+        obj->pendingBreak=false;
+        obj->trace=obj->tilted=false;
+        // Step-2 saves have debris but no recorded break time or actor.
+        obj->traceTime=traceTimeEncoded>0 && traceTimeEncoded-1<=uint64_t(std::numeric_limits<int64_t>::max())
+                         ? int64_t(traceTimeEncoded-1) : -1;
+        obj->traceCulprit=std::move(traceCulprit);
+        obj->fragments=std::move(fragments);
+        obj->fragmentSleepTime.resize(pieces.size());
+        obj->fragmentPermanent.resize(pieces.size());
+        for(size_t i=0;i<pieces.size();++i) {
+          obj->fragmentSleepTime[i]=pieces[i].sleepTime==0 ? -1 : int64_t(pieces[i].sleepTime-1);
+          obj->fragmentPermanent[i]=pieces[i].permanent;
+          }
+        obj->fragmentsWereSleeping=false;
+        syncFragments(*obj);
+        break;
+        }
+      }
+    }
+  catch(const std::exception& e) {
+    Tempest::Log::e("destruction vob load: ",e.what());
+    }
+  }
+
+void DynamicWorld::setTraceTime(int64_t minutes) {
+  traceTime = std::max(int64_t(-1),minutes);
+  }
+
+void DynamicWorld::setFragmentObserver(const Tempest::Vec3& position) {
+  fragmentObserver=position;
+  hasFragmentObserver=true;
+  }
+
+bool DynamicWorld::setMovableVobTransform(uint32_t zenId, const Tempest::Matrix4x4& matrix, Npc* culprit) {
+  if(!movableVobs->enabled || zenId==uint32_t(-1) || !PhysicsSave::validTransform(matrix))
+    return false;
+  for(auto* obj:movableVobs->bodies) {
+    if(obj->pose->zenId!=zenId || obj->body==nullptr || !PhysicsSave::sameScale(matrix,obj->origin))
+      continue;
+    obj->body->setTraceCulprit(culprit);
+    obj->body->restoreTransform(matrix,true);
+    obj->wasSleeping = false;
+    syncMovableVob(*obj);
+    return true;
+    }
+  return false;
+  }
+
+std::vector<DynamicWorld::MovableVobContacts> DynamicWorld::movableVobContacts(float marginCm) const {
+  if(marginCm==1.f && !movableVobs->census.empty()) {
+    auto result = movableVobs->census;
+    for(auto& entry:result)
+      for(const auto* obj:movableVobs->bodies)
+        if(obj->pose->zenId==entry.zenId) {
+          entry.enabled = obj->body!=nullptr;
+          break;
+          }
+    return result;
+    }
+  static const char* materials[] = {"undef","metal","stone","wood","earth","water","snow","none"};
+  constexpr uint32_t mask = (1u<<C_Landscape)|(1u<<C_Object)|(1u<<C_MovableVob);
+  std::vector<MovableVobContacts> result;
+  for(const auto* obj:movableVobs->bodies) {
+    if(obj->body==nullptr || obj->className=="fence")
+      continue;
+    MovableVobContacts entry;
+    entry.zenId = obj->pose->zenId;
+    entry.visual = obj->visual;
+    entry.className = obj->className;
+    entry.enabled = true;
+    entry.mass = obj->movableMass;
+    entry.position = obj->body->position();
+    JPH::Vec3 min, max;
+    obj->body->getAabb(min,max);
+    entry.hullMin = CollisionWorld::toCentimeters(min);
+    entry.hullMax = CollisionWorld::toCentimeters(max);
+    // One entry per body and side: the world mesh is a single body holding both floor and walls.
+    using Key = std::pair<const CollisionWorld::CollisionBody*,int>;
+    std::vector<Key> order;
+    std::map<Key,MovableVobContact> byBody;
+    const float height = std::max(entry.hullMax.y-entry.hullMin.y,1.f);
+    for(const auto& hit:world->overlaps(*obj->body,marginCm,mask)) {
+      const bool below = hit.axis.y<=-0.6f && hit.point1.y<=entry.hullMin.y+0.3f*height;
+      // side: 0 below, 1 above, 2..5 = +x,-x,+z,-z by the dominant horizontal component
+      int side = below ? 0 : hit.axis.y>=0.6f ? 1 :
+                 std::abs(hit.axis.x)>=std::abs(hit.axis.z) ? (hit.axis.x>=0 ? 2 : 3) : (hit.axis.z>=0 ? 4 : 5);
+      const Key key{hit.body,side};
+      auto [it,inserted] = byBody.try_emplace(key);
+      auto& c = it->second;
+      if(inserted) {
+        order.push_back(key);
+        c.below = below;
+        c.side = side;
+        c.category = hit.category;
+        c.depth = hit.depth;
+        c.pointYMin = c.pointYMax = hit.point1.y;
+        if(hit.body!=nullptr) {
+          c.interactive = hit.body->ptrType()==P_Interactive;
+          c.other = hit.body->label();
+          if(hit.body->ptrType()==P_MovableVob) {
+            c.other = static_cast<const BodyData*>(hit.body->payload())->visual;
+            c.otherZenId = static_cast<const BodyData*>(hit.body->payload())->pose->zenId;
+            }
+          hit.body->getAabb(min,max);
+          c.otherMin = CollisionWorld::toCentimeters(min);
+          c.otherMax = CollisionWorld::toCentimeters(max);
+          }
+        }
+      c.count++;
+      c.pointYMin = std::min(c.pointYMin,hit.point1.y);
+      c.pointYMax = std::max(c.pointYMax,hit.point1.y);
+      if(inserted || hit.depth>c.depth) {
+        c.depth = hit.depth;
+        c.axis = hit.axis;
+        c.point = hit.point1;
+        c.material = materials[std::min<size_t>(size_t(hit.material),7)];
+        c.sector = hit.sector==nullptr ? "" : hit.sector;
+        }
+      }
+    for(const auto& key:order)
+      entry.contacts.push_back(byBody[key]);
+    result.push_back(std::move(entry));
+    }
+  return result;
+  }
+
+size_t DynamicWorld::wakeMovableVobs() {
+  size_t count = 0;
+  for(auto* obj:movableVobs->bodies)
+    if(obj->body!=nullptr) {
+      obj->body->restoreTransform(obj->body->matrix(),false);
+      ++count;
+      }
+  return count;
+  }
+
+std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot() const {
+  std::vector<MovableVobSnapshot> result;
+  result.reserve(movableVobs->bodies.size());
+  for(auto* obj:movableVobs->bodies) {
+    MovableVobSnapshot entry;
+    entry.id = reinterpret_cast<uintptr_t>(obj);
+    entry.zenId = obj->pose->zenId;
+    entry.origin = obj->origin;
+    entry.visual = obj->visual;
+    entry.className = obj->className;
+    entry.blocksWalking = obj->blocksWalking;
+    entry.legacyCollision = obj->legacyCollision;
+    entry.enabled = obj->body!=nullptr;
+    entry.mass = obj->movableMass;
+    entry.destructible=obj->fractureRule!=nullptr && obj->movableShape->fracture!=nullptr;
+    entry.broken=obj->pose->broken;
+    entry.health=obj->health;
+    entry.maxHealth=obj->fractureRule!=nullptr ? obj->fractureRule->health : 0.f;
+    entry.impactThreshold=obj->fractureRule!=nullptr ? obj->fractureRule->threshold*obj->movableMass : 0.f;
+    entry.transform = obj->body!=nullptr ? obj->body->matrix() : obj->current;
+    entry.localBounds[0] = obj->localBounds[0];
+    entry.localBounds[1] = obj->localBounds[1];
+    entry.trace = obj->trace;
+    entry.tilted = obj->tilted;
+    entry.traceTime = obj->traceTime;
+    entry.traceCulprit = obj->traceCulprit;
+    if(obj->body!=nullptr) {
+      entry.velocity = obj->body->velocity();
+      entry.sleeping = obj->body->isSleeping();
+      entry.touchedByNpc = obj->body->touchedByNpc();
+      }
+    result.push_back(std::move(entry));
+    }
+  return result;
+  }
+
+std::vector<DynamicWorld::FragmentSnapshot> DynamicWorld::fragmentSnapshot() const {
+  std::vector<FragmentSnapshot> result;
+  for(const auto* obj:movableVobs->bodies)
+    for(size_t i=0;i<obj->fragments.size();++i) {
+      if(obj->fragments[i]==nullptr)
+        continue;
+      const auto& body=*obj->fragments[i];
+      result.push_back({reinterpret_cast<uintptr_t>(obj),obj->pose->zenId,i,body.isSleeping(),
+                        body.matrix(),body.velocity(),body.angularVelocity(),obj->fragmentPermanent[i],
+                        obj->fragmentSleepTime[i]});
+      }
+  return result;
+  }
+
+std::vector<DynamicWorld::RagdollSupport> DynamicWorld::ragdollSupports(const Ragdoll& ragdoll,float marginCm) const {
+  std::vector<RagdollSupport> result;
+  for(const auto& contact:world->ragdollContacts(ragdoll,marginCm)) {
+    RagdollSupport entry;
+    entry.bone=contact.bone;
+    entry.partBodyId=contact.partBodyId;
+    entry.supportBodyId=contact.supportBodyId;
+    entry.category=contact.category;
+    entry.sleeping=contact.sleeping;
+    entry.depth=contact.depth;
+    entry.axis=contact.axis;
+    entry.point1=contact.point1;
+    entry.point2=contact.point2;
+    entry.visibleDistance=contact.sourceDistance;
+    entry.visiblePoint=contact.sourcePoint;
+    entry.sourceTriangle=contact.sourceTriangle;
+    entry.kind=contact.category==C_Landscape ? "landscape" : "body";
+    if(contact.body!=nullptr)
+      entry.visual=contact.body->label();
+    const auto queryPoint=CollisionWorld::toMeters(contact.point1);
+    float closestSquared=std::numeric_limits<float>::infinity();
+    const auto triangle=[&](const Tempest::Vec3 (&vertices)[3],const Tempest::Matrix4x4& matrix) {
+      JPH::Vec3 points[3];
+      for(size_t i=0;i<3;++i) {
+        auto point=vertices[i];
+        matrix.project(point);
+        points[i]=CollisionWorld::toMeters(point)-queryPoint;
+        }
+      JPH::uint32 feature=0;
+      const auto nearest=JPH::ClosestPoint::GetClosestPointOnTriangle(points[0],points[1],points[2],feature);
+      const float distance=nearest.LengthSq();
+      if(distance<closestSquared) {
+        closestSquared=distance;
+        entry.visiblePoint=CollisionWorld::toCentimeters(nearest+queryPoint);
+        }
+      };
+    for(const auto* obj:movableVobs->bodies) {
+      size_t piece=size_t(-1);
+      bool matches=obj->body.get()==contact.body;
+      std::string kind=matches ? "hull" : "query";
+      if(!matches)
+        for(const auto& query:obj->query)
+          matches|=query.get()==contact.body;
+      if(!matches)
+        for(size_t i=0;i<obj->fragments.size();++i)
+          if(obj->fragments[i].get()==contact.body && contact.body!=nullptr) {
+            matches=true;
+            piece=i;
+            kind="fragment";
+            break;
+            }
+      if(!matches || contact.body==nullptr)
+        continue;
+      entry.parentId=reinterpret_cast<uintptr_t>(obj);
+      entry.zenId=obj->pose->zenId;
+      entry.visual=obj->visual;
+      entry.kind=std::move(kind);
+      entry.piece=piece;
+      entry.broken=obj->pose->broken;
+      entry.visible=piece!=size_t(-1) || !entry.broken;
+      if(piece!=size_t(-1)) {
+        const auto matrix=obj->fragments[piece]->matrix();
+        for(const auto& face:obj->movableShape->fracture->pieces[piece].triangles) {
+          const Tempest::Vec3 vertices[]={face.vertices[0].position,face.vertices[1].position,face.vertices[2].position};
+          triangle(vertices,matrix);
+          }
+        }
+      else if(entry.visible) {
+        for(const auto& part:obj->movableShape->parts) {
+          auto matrix=obj->current;
+          matrix.mul(part.local);
+          for(size_t t=0;t<part.source->mesh.triangleCount();++t) {
+            JPH::Vec3 points[3];
+            if(!part.source->mesh.triangleVertices(uint32_t(t),points))
+              continue;
+            const Tempest::Vec3 vertices[]={CollisionWorld::toCentimeters(points[0]),
+                                           CollisionWorld::toCentimeters(points[1]),
+                                           CollisionWorld::toCentimeters(points[2])};
+            triangle(vertices,matrix);
+            }
+          }
+        }
+      break;
+      }
+    if(std::isfinite(closestSquared))
+      entry.visibleDistance=std::sqrt(closestSquared)*100.f;
+    result.push_back(std::move(entry));
+    }
+  return result;
+  }
+
+void DynamicWorld::damageMovableVob(BodyData& obj,float impulse,const Tempest::Vec3& point,bool arrow,
+                                  std::string_view impactCulprit) {
+  if(!movableVobs->destructionEnabled || obj.fractureRule==nullptr || obj.movableShape->fracture==nullptr ||
+     obj.body==nullptr || obj.pose->broken || obj.pendingBreak || !std::isfinite(impulse) || impulse<=0.f)
+    return;
+  const auto& rule=*obj.fractureRule;
+  const float damage=arrow ? (impulse>=.5f ? impulse*rule.arrowDamage : 0.f) :
+                            std::max(impulse/obj.movableMass-rule.threshold,0.f)*rule.impactDamage;
+  if(damage<=0.f) return;
+  obj.health=std::max(0.f,obj.health-damage);
+  if(obj.health>.001f) return;
+  obj.pendingBreak=true;
+  obj.traceTime=traceTime;
+  obj.traceCulprit=impactCulprit.empty() ? obj.body->traceCulprit() : impactCulprit;
+  obj.breakImpulse=impulse;
+  obj.breakPoint=point;
+  }
+
+void DynamicWorld::breakMovableVob(BodyData& obj) {
+  if(!obj.pendingBreak || obj.body==nullptr) return;
+  const auto started=std::chrono::steady_clock::now();
+  const auto matrix=obj.body->matrix();
+  const auto velocity=obj.body->velocity(),omega=obj.body->angularVelocity();
+  const auto center=obj.body->centerOfMass();
+  const auto& mesh=*obj.movableShape->fracture;
+  std::vector<std::unique_ptr<CollisionWorld::DynamicBody>> fragments;
+  fragments.reserve(mesh.pieces.size());
+  // All hulls, triangle data and GPU meshes are prepared while loading the
+  // visual. The replacement only installs native bodies and transfers motion.
+  for(const auto& piece:mesh.pieces) {
+    const float mass=float(obj.movableMass*piece.volume/mesh.volume);
+    auto body=world->addDynamicBody(piece.hull,matrix,obj.movableShape->friction,mass,C_Fragment);
+    body->setLabel(obj.visual+" fragment");
+    const auto r=(body->centerOfMass()-center)*.01f;
+    const Tempest::Vec3 tangential(omega.y*r.z-omega.z*r.y,omega.z*r.x-omega.x*r.z,omega.x*r.y-omega.y*r.x);
+    // A small separation velocity releases touching cut faces. Linear and
+    // angular momentum inherited from the intact body remain the base motion.
+    const auto outward=r.quadLength()>1.e-6f ? Tempest::Vec3::normalize(r)*40.f : Tempest::Vec3();
+    body->setVelocity(velocity+tangential*100.f+outward,omega);
+    fragments.push_back(std::move(body));
+    }
+  obj.current=matrix;
+  obj.pose->transform=matrix;
+  obj.pose->broken=true; // Existing pinned arrows invalidate this parent.
+  obj.body.reset();
+  obj.query.clear();
+  obj.fragments=std::move(fragments);
+  obj.fragmentSleepTime.assign(obj.fragments.size(),-1);
+  obj.fragmentPermanent.assign(obj.fragments.size(),false);
+  // Keep stable piece indices throughout cleanup and save/load. Equal-volume
+  // pieces are ordered by their authored cache index, making the choice fixed.
+  std::vector<size_t> largest(obj.fragments.size());
+  for(size_t i=0;i<largest.size();++i) largest[i]=i;
+  std::stable_sort(largest.begin(),largest.end(),[&](size_t a,size_t b) {
+    return mesh.pieces[a].volume>mesh.pieces[b].volume;
+    });
+  for(size_t i=0;i<std::min(size_t(3),largest.size());++i)
+    obj.fragmentPermanent[largest[i]]=true;
+  obj.pendingBreak=false;
+  obj.trace=obj.tilted=false;
+  obj.fragmentsWereSleeping=false;
+  syncFragments(obj);
+  PhysicsNoise noise;
+  noise.position=center;
+  // Some wooden Gothic barrels label their source mesh as stone. Keep that
+  // authored density/friction for physics, but use the destructible class for
+  // the sound of the newly exposed material.
+  const bool wooden=obj.fractureRule->className=="crate" || obj.fractureRule->className=="barrel" ||
+                    obj.fractureRule->className=="fence";
+  noise.material=wooden ? MAT_WOOD : MAT_CLAY;
+  noise.surface=wooden ? zenkit::MaterialGroup::WOOD : zenkit::MaterialGroup::STONE;
+  noise.what=obj.visual+" break";
+  noise.impulse=obj.breakImpulse;
+  noise.volume=1.f;
+  noise.radius=1600.f;
+  noise.body=reinterpret_cast<uintptr_t>(&obj);
+  world->emitPhysicsNoise(noise);
+  if(TestBench::isActive())
+    TestBench::destructionBreak(reinterpret_cast<uintptr_t>(&obj),obj.fragments.size(),
+                               float(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count()));
+  }
+
+void DynamicWorld::syncFragments(BodyData& obj) {
+  if(obj.fragments.empty()) return;
+  const bool sleeping=std::all_of(obj.fragments.begin(),obj.fragments.end(),[](const auto& body) {
+    return body==nullptr || body->isSleeping();
+    });
+  if(sleeping && obj.fragmentsWereSleeping) return;
+  obj.fragmentsWereSleeping=sleeping;
+  if(!obj.fractureCallback) return;
+  std::vector<Tempest::Matrix4x4> matrices;
+  matrices.reserve(obj.fragments.size());
+  for(const auto& body:obj.fragments) {
+    if(body!=nullptr) {
+      matrices.push_back(body->matrix());
+      }
+    else {
+      // Preserve the mesh batch-to-piece mapping while hiding retired pieces.
+      auto hidden=Tempest::Matrix4x4::mkIdentity();
+      hidden.translate(0,-10000000.f,0);
+      matrices.push_back(hidden);
+      }
+    }
+  obj.fractureCallback(true,matrices);
+  }
+
+void DynamicWorld::cleanupFragments(BodyData& obj) {
+  bool changed=false;
+  for(size_t i=0;i<obj.fragments.size();++i) {
+    auto& body=obj.fragments[i];
+    if(body==nullptr)
+      continue;
+    auto& since=obj.fragmentSleepTime[i];
+    if(!body->isSleeping()) {
+      since=-1;
+      continue;
+      }
+    if(traceTime>=0 && (since<0 || traceTime<since))
+      since=traceTime;
+    const bool expired=since>=0 && traceTime>=since && traceTime-since>=30;
+    const bool distant=hasFragmentObserver && (body->centerOfMass()-fragmentObserver).quadLength()>3000.f*3000.f;
+    if(!obj.fragmentPermanent[i] && (expired || distant)) {
+      body.reset();
+      changed=true;
+      }
+    }
+  if(changed)
+    obj.fragmentsWereSleeping=false;
+  }
+
+size_t DynamicWorld::applyMovableVobImpulse(const Tempest::Vec3& center, float radius,
+                                           const std::function<Tempest::Vec3(const Tempest::Vec3&,float)>& impulse,
+                                           Npc* culprit, const Tempest::Vec3* pointCm) {
+  if(!std::isfinite(radius) || radius<=0.f || !impulse)
+    return 0;
+  size_t count = 0;
+  for(auto* obj:movableVobs->bodies) {
+    if(obj->body==nullptr || (!movableVobs->enabled && obj->className!="fence"))
+      continue;
+    const auto target = obj->body->centerOfMass();
+    if((target-center).quadLength()>radius*radius)
+      continue;
+    const auto force = impulse(target,obj->movableMass);
+    if(force.quadLength()==0.f)
+      continue;
+    std::vector<const CollisionWorld::CollisionBody*> excluded;
+    excluded.reserve(obj->query.size());
+    for(const auto& part:obj->query)
+      excluded.push_back(part.get());
+    if(world->rayCast(center,target,visualMask,false,nullptr,&excluded).hasHit)
+      continue;
+    if(obj->className=="fence")
+      obj->body->setTraceCulprit(culprit);
+    if(obj->className=="fence" || obj->body->addImpulse(force,culprit,pointCm)) {
+      ++count;
+      damageMovableVob(*obj,force.length(),pointCm!=nullptr ? *pointCm : target);
+      }
+    }
+  return count;
   }
 
 DynamicWorld::BulletBody* DynamicWorld::bulletObj(BulletCallback* cb) {
@@ -980,97 +1934,95 @@ DynamicWorld::BBoxBody DynamicWorld::bboxObj(BBoxCallback* cb, const Tempest::Ve
   }
 
 void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t dt) {
+  ArrowTrace::write(b,b.cb,"begin",dt);
   const float dtF     = float(dt);
   const bool  isSpell = b.isSpell();
 
   auto  pos = b.pos;
   auto  to  = pos + dir*dtF - Tempest::Vec3(0,(isSpell ? 0 : 0.5f*gravity*dtF*dtF),0);
 
-  struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-    using ClosestRayResultCallback::ClosestRayResultCallback;
-    zenkit::MaterialGroup matId = zenkit::MaterialGroup::NONE;
-
-    bool needsCollision(btBroadphaseProxy* proxy0) const override {
-      auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
-      if(obj->getUserIndex()==C_Landscape || obj->getUserIndex()==C_Object)
-        return ClosestRayResultCallback::needsCollision(proxy0);
-      return false;
-      }
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      auto shape = rayResult.m_collisionObject->getCollisionShape();
-      if(shape) {
-        auto s  = reinterpret_cast<const btMultimaterialTriangleMeshShape*>(shape);
-        auto mt = reinterpret_cast<const PhysicVbo*>(s->getMeshInterface());
-
-        size_t id = size_t(rayResult.m_localShapeInfo->m_shapePart);
-        matId  = mt->materialId(id);
-        }
-      return ClosestRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
-  btVector3 s=CollisionWorld::toMeters(pos), e=CollisionWorld::toMeters(to);
-
-  CallBack callback{s,e};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  if(auto ptr = bboxList->rayTest(s,e)) {
-    if(ptr->cb!=nullptr) {
+  if(auto ptr = bboxList->rayTest(pos,to)) {
+    if(ptr->cb!=nullptr)
       ptr->cb->onCollide(b);
-      }
     }
-
-  world->rayCast(pos, to, callback);
+  const bool attachAtWorldStop=!isSpell && b.cb!=nullptr && b.cb->stopsAtWorldHit();
+  const auto hit = world->rayCast(pos,to,visualMask,false);
+  const auto matId = hit.hasHit ? hit.material : zenkit::MaterialGroup::NONE;
+  ArrowTrace::write(b,b.cb,"world_query",dt,nullptr,hit.hasHit,hit.fraction,hit.point,hit.normal,
+                    unsigned(matId),hit.body!=nullptr ? unsigned(hit.body->category()) : 0);
 
   // an arrow aimed by hand: the npcs on the way to the wall first (one stands right before it), hit
   // where their bones are
   const bool precise = !isSpell && b.cb!=nullptr && b.cb->isPrecise();
   if(precise) {
-    const float a   = callback.matId!=zenkit::MaterialGroup::NONE ? callback.m_closestHitFraction : 1.f;
+    const float a   = matId!=zenkit::MaterialGroup::NONE ? hit.fraction : 1.f;
     const auto  end = pos + (to-pos)*a;
     if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) { return b.cb->onCollidePrecise(npc,pos,end); })) {
       b.cb->onStop();
+      ArrowTrace::write(b,b.cb,"end",dt);
       return;
       }
     }
 
   bool stopBullet = false;
-  if(callback.matId != zenkit::MaterialGroup::NONE) {
+  if(matId != zenkit::MaterialGroup::NONE) {
+    if(!isSpell && hit.body!=nullptr && hit.body->ptrType()==P_MovableVob) {
+      auto& target=*static_cast<BodyData*>(hit.body->payload());
+      // Direction is cm/ms; a 120 gram arrow transfers SI momentum at its
+      // actual flight speed, independently of optional arrow attachments.
+      if(movableVobs->destructionEnabled && target.movableShape->fracture!=nullptr) {
+        const auto impulse=b.direction()*1.2f;
+        if(target.body!=nullptr) {
+          auto* culprit=b.cb!=nullptr ? b.cb->origin() : nullptr;
+          target.body->setTraceCulprit(culprit);
+          target.body->addImpulseAtPoint(impulse,hit.point,culprit);
+          }
+        damageMovableVob(target,impulse.length(),hit.point,true);
+        }
+      }
     if(isSpell){
-      if(b.cb!=nullptr)
-        b.cb->onCollide(callback.matId);
+      if(b.cb!=nullptr) {
+        BulletWorldHit result;
+        result.point=hit.point;
+        result.normal=hit.normal;
+        result.incoming=to-pos;
+        result.material=matId;
+        result.ragdoll=hit.ragdoll;
+        result.bone=hit.bone;
+        if(hit.body!=nullptr && hit.body->ptrType()==P_MovableVob)
+          result.movable=static_cast<BodyData*>(hit.body->payload())->pose;
+        if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
+          result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
+        b.cb->onSpellWorldHit(result);
+        }
       stopBullet = true;
       } else {
-      if(callback.matId==zenkit::MaterialGroup::METAL ||
-         callback.matId==zenkit::MaterialGroup::STONE) {
-        auto d = b.dir;
-        btVector3 m = {d.x,d.y,d.z};
-        btVector3 n = callback.m_hitNormalWorld;
-
-        n.normalize();
+      if(matId==zenkit::MaterialGroup::METAL ||
+         matId==zenkit::MaterialGroup::STONE) {
+        auto m = b.dir;
+        auto n = Tempest::Vec3::normalize(hit.normal);
         const float l = b.speed();
         m/=l;
 
-        btVector3 dir = m - 2*m.dot(n)*n;
-        dir*=(l*0.5f); //slow-down
+        auto reflected = m - n*(2.f*Tempest::Vec3::dotProduct(m,n));
+        reflected*=(l*0.5f); // slow-down
 
-        float a = callback.m_closestHitFraction;
+        float a = hit.fraction;
         b.move(pos + (to-pos)*a);
         if(l*a>0.1f) {
-          b.setDirection({dir.x(),dir.y(),dir.z()});
+          b.setDirection(reflected);
           b.addPathLen((to-pos).length()*a);
           b.addHit();
           if(b.cb!=nullptr)
-            b.cb->onCollide(callback.matId);
+            b.cb->onCollide(matId);
           }
         } else {
-        float a = callback.m_closestHitFraction;
+        float a = hit.fraction;
         b.move(pos + (to-pos)*a);
         b.addPathLen((to-pos).length()*a);
         b.addHit();
         if(b.cb!=nullptr)
-          b.cb->onCollide(callback.matId);
+          b.cb->onCollide(matId);
         stopBullet = true;
         }
       }
@@ -1078,6 +2030,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     if(precise)
       ; // tested above
     else if(auto ptr = npcList->rayTest(pos,to,b.targetRange(),nullptr)) {
+      ArrowTrace::write(b,b.cb,"npc_collision",dt,ptr->toNpc());
       if(b.cb!=nullptr)
         stopBullet |= b.cb->onCollide(*ptr->toNpc()); else
         stopBullet  = true;
@@ -1092,15 +2045,91 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     }
 
   if(stopBullet || b.hitCount()>3 || b.pathLength()>10000) {
-    if(b.cb!=nullptr)
+    ArrowTrace::write(b,b.cb,"stop",dt,nullptr,hit.hasHit,hit.fraction,hit.point,hit.normal,
+                      unsigned(matId),hit.body!=nullptr ? unsigned(hit.body->category()) : 0);
+    if(b.cb!=nullptr) {
+      // Pin only after the unchanged flight code has decided to stop at a solid
+      // world contact. In particular, stone/metal still reflect before this test.
+      if(attachAtWorldStop && matId!=zenkit::MaterialGroup::NONE) {
+        BulletWorldHit result;
+        result.point=b.position();
+        result.normal=hit.normal;
+        result.incoming=to-pos;
+        result.material=matId;
+        result.ragdoll=hit.ragdoll;
+        result.bone=hit.bone;
+        if(hit.body!=nullptr && hit.body->ptrType()==P_MovableVob)
+          result.movable=static_cast<BodyData*>(hit.body->payload())->pose;
+        if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
+          result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
+        b.worldStopped=true;
+        b.cb->onWorldHit(result);
+        }
       b.cb->onStop();
+      }
     }
+  ArrowTrace::write(b,b.cb,"end",dt);
   }
 
 void DynamicWorld::tick(uint64_t dt) {
   npcList   ->tickAabbs();
   bulletList->tick(dt);
   world     ->tick(dt);
+  for(auto* obj:movableVobs->bodies)
+    if(movableVobs->enabled || obj->className=="fence" || obj->pose->broken) {
+      if(obj->pendingBreak) breakMovableVob(*obj);
+      syncMovableVob(*obj);
+      cleanupFragments(*obj);
+      syncFragments(*obj);
+      }
+  // NPC walking runs before native body integration. Finish only the motion
+  // of an already accepted moving support against the integrated world.
+  // onMove may thaw a frozen entry, so collect pointers before updating them.
+  std::vector<Npc*> riders;
+  for(const auto* records:{&npcList->body,&npcList->frozen})
+    for(const auto& record:*records)
+      if(record.body!=nullptr && record.body->virtualCharacter!=nullptr)
+        if(auto* npc=record.body->toNpc())
+          riders.push_back(npc);
+  for(auto* npc:riders)
+    npc->finishCharacterVirtualSupport(dt);
+  }
+
+std::unique_ptr<Ragdoll> DynamicWorld::createRagdoll(const Skeleton& skeleton, const HitZones& zones,
+                                                   const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                                   const Tempest::Matrix4x4& objectMatrix,
+                                                   const Tempest::Vec3& initialVelocity) {
+  return world->createRagdoll(skeleton,zones,worldPose,numBones,objectMatrix,initialVelocity);
+  }
+
+std::unique_ptr<Ragdoll> DynamicWorld::createKinematicBody(const Skeleton& skeleton, const HitZones& zones,
+                                                        const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                                        const Tempest::Matrix4x4& objectMatrix) {
+  return world->createKinematicBody(skeleton,zones,worldPose,numBones,objectMatrix);
+  }
+
+DynamicWorld::PhysicsStats DynamicWorld::physicsStats() const {
+  return {world->stepMilliseconds(),world->bodyCount(),world->rayCount()};
+  }
+
+NavMesh::Geometry DynamicWorld::navigationGeometry() const {
+  NavMesh::Geometry result;
+  world->staticTriangles([&](const CollisionWorld::StaticTriangle& triangle) {
+    auto& vertices = triangle.water ? result.waterVertices : result.vertices;
+    auto& indices  = triangle.water ? result.waterTriangles : result.triangles;
+    if(vertices.size()/3>size_t(std::numeric_limits<int>::max())-3)
+      throw std::runtime_error("Static navigation geometry exceeds the index limit");
+    const int first = int(vertices.size()/3);
+    for(const auto& vertex:triangle.vertices) {
+      vertices.push_back(vertex.x);
+      vertices.push_back(vertex.y);
+      vertices.push_back(vertex.z);
+      }
+    indices.push_back(first);
+    indices.push_back(first+1);
+    indices.push_back(first+2);
+    });
+  return result;
   }
 
 void DynamicWorld::deleteObj(BulletBody* obj) {
@@ -1204,7 +2233,7 @@ bool DynamicWorld::hasCollision(const NpcItem& it, CollisionTest& out) {
   if(npcList->hasCollision(it,out.normal,out.npc,out.npcCol)){
     ret = true;
     }
-  if(world->hasCollision(*it.obj,out.normal,out.vob)) {
+  if(it.obj->shape!=nullptr && world->hasCollision(it.obj->shape.GetPtr(),it.obj->centerPosition(),out.normal,out.vob)) {
     out.landCol = true;
     ret = true;
     }
@@ -1218,14 +2247,13 @@ bool DynamicWorld::hasCollision(const NpcItem& it, CollisionTest& out) {
 DynamicWorld::NpcItem::~NpcItem() {
   if(owner==nullptr || obj==nullptr)
     return;
-  owner->world->touchAabbs();
-  if(!owner->npcList->del(obj))
-    owner->world->removeCollisionObject(obj);
-  delete obj; // The handle owns both the body and its capsule; unregistering alone leaked them.
+  owner->npcList->del(obj);
+  delete obj;
   }
 
 void DynamicWorld::NpcItem::setPosition(const Tempest::Vec3& pos) {
   if(obj) {
+    resetVirtual();
     implSetPosition(pos);
     owner->npcList->onMove(*obj);
     //NOTE: not very usefull, but can create non-trivial cases, for spells
@@ -1241,29 +2269,24 @@ void DynamicWorld::NpcItem::setEnable(bool e) {
   if(obj==nullptr || obj->enable==e)
     return;
   obj->enable = e;
+  resetVirtual();
   owner->world->touchAabbs();
   }
 
+bool DynamicWorld::NpcItem::isEnabled() const {
+  return obj!=nullptr && obj->enable;
+  }
+
 void DynamicWorld::NpcItem::setUserPointer(void *p) {
-  obj->setUserPointer(p);
+  obj->userPointer = p;
   }
 
 auto DynamicWorld::NpcItem::center() const -> Tempest::Vec3 {
-  if(obj) {
-    const btTransform&  tr  = obj->getWorldTransform();
-    const Tempest::Vec3 ret = {tr.getOrigin().x(), tr.getOrigin().y(), tr.getOrigin().z()};
-    return ret*100.f;
-    }
-  return {};
+  return obj!=nullptr ? obj->centerPosition() : Tempest::Vec3();
   }
 
 float DynamicWorld::NpcItem::centerY() const {
-  if(obj) {
-    const btTransform& tr = obj->getWorldTransform();
-    return tr.getOrigin().y()*100.f;
-    //return obj->h*0.5f;
-    }
-  return 0;
+  return center().y;
   }
 
 auto DynamicWorld::NpcItem::centerAsym() const -> Tempest::Vec3 {
@@ -1279,6 +2302,14 @@ float DynamicWorld::NpcItem::radiusXZ() const {
   return obj->maxRXZ;
   }
 
+float DynamicWorld::NpcItem::capsuleRadius() const {
+  return obj!=nullptr ? obj->radius : 0.f;
+  }
+
+float DynamicWorld::NpcItem::capsuleHeight() const {
+  return obj!=nullptr ? obj->cylinderHeight+2.f*obj->radius : 0.f;
+  }
+
 const Tempest::Vec3& DynamicWorld::NpcItem::position() const {
   return obj->pos;
   }
@@ -1292,13 +2323,10 @@ void DynamicWorld::NpcItem::setScale(const Tempest::Vec3&) {
   }
 
 void DynamicWorld::NpcItem::debugDraw(DbgPainter& p) const {
-  btVector3 aabb0, aabb1;
-  obj->getAabb(aabb0, aabb1);
-
-  const auto min = Tempest::Vec3(aabb0.x()*100.f, aabb0.y()*100.f, aabb0.z()*100.f);
-  const auto max = Tempest::Vec3(aabb1.x()*100.f, aabb1.y()*100.f, aabb1.z()*100.f);
+  const auto extent = Tempest::Vec3(obj->radius, obj->cylinderHeight*0.5f+obj->radius, obj->radius);
+  const auto center = obj->centerPosition();
   p.setPen(Tempest::Color(1,0.5f,0));
-  p.drawAabb(min, max);
+  p.drawAabb(center-extent,center+extent);
   /*
   auto tr = Tempest::Matrix4x4::mkIdentity();
   tr.translate(obj->pos);
@@ -1330,14 +2358,13 @@ bool DynamicWorld::NpcItem::testMove(const Tempest::Vec3& to, const Tempest::Vec
   }
 
 DynamicWorld::MoveCode DynamicWorld::NpcItem::tryMove(const Tempest::Vec3& to, CollisionTest& out) {
-  // 2-santimeters
-  static const float eps = 2;
-
   if(!obj)
     return MoveCode::MC_Fail;
 
+  resetVirtual();
+
   auto dp = to - obj->pos;
-  if(std::abs(dp.x)<eps && std::abs(dp.y)<eps && std::abs(dp.z)<eps) {
+  if(isNpcMoveSkipped(dp)) {
     // skip-move
     return MoveCode::MC_Skip;
     }
@@ -1356,6 +2383,201 @@ DynamicWorld::MoveCode DynamicWorld::NpcItem::tryMove(const Tempest::Vec3& to, C
       return MoveCode::MC_OK;
     }
   return code;
+  }
+
+void DynamicWorld::NpcItem::resetVirtual() {
+  if(obj!=nullptr)
+    obj->virtualCharacter.reset();
+  }
+
+bool DynamicWorld::NpcItem::hasFloorBelow(const Tempest::Vec3& feet) const {
+  return obj!=nullptr && owner->landRay(feet+Tempest::Vec3(0,obj->groundOffset()+1.f,0)).hasCol;
+  }
+
+void DynamicWorld::NpcItem::setVirtualDiagnosticsEnabled(bool enabled) {
+  if(obj==nullptr)
+    return;
+  obj->virtualDiagnosticsEnabled = enabled;
+  if(enabled && obj->virtualDiagnosticMove==nullptr)
+    obj->virtualDiagnosticMove = std::make_unique<CharacterVirtualDiagnostics::NpcMove>();
+  if(!enabled)
+    obj->virtualDiagnosticMove.reset();
+  if(obj->virtualCharacter!=nullptr)
+    obj->virtualCharacter->setDiagnosticsEnabled(enabled);
+  }
+
+bool DynamicWorld::NpcItem::virtualDiagnostics(CharacterVirtualDiagnostics& out) const {
+  if(obj==nullptr || obj->virtualCharacter==nullptr || !obj->virtualCharacter->diagnostics(out))
+    return false;
+  if(obj->virtualDiagnosticMove!=nullptr)
+    out.npcMove = *obj->virtualDiagnosticMove;
+  return true;
+  }
+
+DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
+  return implMoveVirtual(displacement,dt,stepHeight,maxSlope,mass,culprit,false);
+  }
+
+DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::carryVirtual(uint64_t dt, Npc* culprit) {
+  return implMoveVirtual({},dt,0,0,0,culprit,true);
+  }
+
+DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry) {
+  VirtualMoveResult result;
+  if(obj==nullptr)
+    return result;
+  result.position = obj->pos;
+  if(!obj->enable || (carry && obj->virtualCharacter==nullptr))
+    return result;
+  if(obj->virtualCharacter==nullptr) {
+    obj->virtualCharacter = owner->world->createVirtualCharacter(obj->radius,obj->h,obj->pos);
+    obj->virtualCharacter->setDiagnosticsEnabled(obj->virtualDiagnosticsEnabled);
+    }
+
+  const auto initial = obj->pos;
+  auto* npcDiagnostic = carry ? nullptr : obj->virtualDiagnosticMove.get();
+  if(npcDiagnostic!=nullptr) {
+    *npcDiagnostic = {};
+    npcDiagnostic->initial = initial;
+    npcDiagnostic->requested = displacement;
+    }
+  // Every character retains its legacy ellipsoid. Movement is sequential, so
+  // each sweep sees the latest position of the other characters, including the
+  // hero, without applying impulses or moving a neighbour through world walls.
+  auto clipNpc = [&](const Tempest::Vec3& target, bool& clipped,
+                     CharacterVirtualDiagnostics::NpcCollision* diagnosticCollision) {
+    struct Obstacle {
+      NpcBody* body = nullptr;
+      float depth = 0;
+      };
+    std::vector<Obstacle> obstacles;
+    for(const auto* records:{&owner->npcList->body,&owner->npcList->frozen}) {
+      // A script teleport can change a frozen body's X before the next physics
+      // tick re-sorts that list, so use current poses for this broad phase.
+      for(const auto& record:*records) {
+        auto* other = record.body;
+        if(other==nullptr || other==obj || !other->enable)
+          continue;
+        const float reachXZ = obj->maxRXZ+other->maxRXZ;
+        const float reachY = obj->maxRY+other->maxRY;
+        if(other->pos.x<std::min(initial.x,target.x)-reachXZ || other->pos.x>std::max(initial.x,target.x)+reachXZ ||
+           other->pos.z<std::min(initial.z,target.z)-reachXZ || other->pos.z>std::max(initial.z,target.z)+reachXZ ||
+           other->pos.y<std::min(initial.y,target.y)-reachY || other->pos.y>std::max(initial.y,target.y)+reachY)
+          continue;
+        Tempest::Vec3 normal;
+        float depth = 0;
+        owner->npcList->hasCollision(*obj,*other,normal,depth);
+        obstacles.push_back({other,depth});
+        }
+      }
+    const auto delta = target-initial;
+    const int count = std::max(1,int(std::ceil(delta.length()/std::max(obj->stepSz*0.5f,1.f))));
+    auto accepted = initial;
+    for(int i=1;i<=count;++i) {
+      obj->setPosition(initial+delta*(float(i)/float(count)));
+      for(auto& obstacle:obstacles) {
+        Tempest::Vec3 normal;
+        float depth = 0;
+        owner->npcList->hasCollision(*obj,*obstacle.body,normal,depth);
+        if(depth>obstacle.depth+0.01f) {
+          result.collision.npc = obstacle.body->toNpc();
+          result.collision.npcCol = depth;
+          result.collision.normal = Tempest::Vec3::normalize(normal);
+          if(diagnosticCollision!=nullptr) {
+            diagnosticCollision->npc = obstacle.body->toNpc();
+            diagnosticCollision->position = obstacle.body->pos;
+            diagnosticCollision->normal = result.collision.normal;
+            diagnosticCollision->testedPosition = obj->pos;
+            diagnosticCollision->allowedDepth = obstacle.depth;
+            diagnosticCollision->rejectedDepth = depth;
+            }
+          clipped = true;
+          break;
+          }
+        // An overlap after a teleport may separate, but it cannot transfer to
+        // another neighbour or grow again after the characters have separated.
+        obstacle.depth = std::min(obstacle.depth,depth);
+        }
+      if(clipped)
+        break;
+      accepted = obj->pos;
+      }
+    obj->setPosition(initial);
+    return accepted;
+    };
+  bool requestClipped = false;
+  const auto requested = clipNpc(initial+displacement,requestClipped,
+                                 npcDiagnostic!=nullptr ? &npcDiagnostic->requestCollision : nullptr)-initial;
+  auto moved = carry ? obj->virtualCharacter->carry(dt) :
+                       obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit);
+  if(carry && !moved.supportMoved)
+    return result;
+  bool resolvedClipped = false;
+  clipNpc(moved.position,resolvedClipped,npcDiagnostic!=nullptr ? &npcDiagnostic->resolvedCollision : nullptr);
+  // Jolt may have slid around a wall or stepped up: an interpolated point on
+  // the chord to that endpoint is not necessarily clear of world geometry.
+  // If that resolved motion hits an NPC, retain the known-safe starting feet.
+  // A capsule can still touch the edge while its feet have already crossed
+  // beyond all world collision. Keep the legacy fall guard's vertical floor
+  // query: a lower landing is allowed, a bottomless step is not. Test the
+  // resolved endpoint too, since wall sliding can change the requested X/Z.
+  const auto candidate = resolvedClipped ? initial : moved.position;
+  const bool preFall = !hasFloorBelow({candidate.x,std::max(initial.y,candidate.y),candidate.z});
+  const auto accepted = preFall ? initial : candidate;
+  if(preFall) {
+    result.collision.preFall = true;
+    result.collision.normal = displacement;
+    }
+  if(npcDiagnostic!=nullptr) {
+    npcDiagnostic->clippedRequest = requested;
+    npcDiagnostic->nativePosition = moved.position;
+    npcDiagnostic->accepted = accepted;
+    npcDiagnostic->requestClipped = requestClipped;
+    npcDiagnostic->resolvedClipped = resolvedClipped;
+    }
+  if(resolvedClipped || preFall) {
+    obj->virtualCharacter->setPosition(accepted);
+    if(!carry) {
+      const auto support = obj->virtualCharacter->move({},0,stepHeight,maxSlope,mass,culprit);
+      moved.groundNormal = support.groundNormal;
+      moved.groundVelocity = support.groundVelocity;
+      moved.grounded = support.grounded;
+      moved.steep = support.steep;
+      }
+    }
+  obj->setPosition(accepted);
+  owner->npcList->onMove(*obj);
+  owner->bulletList->onMoveNpc(*obj,*owner->npcList);
+  result.position = accepted;
+  result.velocity = moved.velocity;
+  const auto blocked = moved.position-accepted;
+  if(blocked.quadLength()>0.0001f) {
+    const auto normal = Tempest::Vec3::normalize(blocked);
+    const float into = Tempest::Vec3::dotProduct(result.velocity,normal);
+    if(into>0.f)
+      result.velocity -= normal*into;
+    }
+  result.groundNormal = moved.groundNormal;
+  result.groundVelocity = moved.groundVelocity;
+  result.grounded = moved.grounded;
+  result.steep = moved.steep;
+  result.blocked = preFall;
+  result.supportMoved = moved.supportMoved;
+  const Tempest::Vec3 horizontal(displacement.x,0,displacement.z);
+  const float desiredLength = horizontal.length();
+  if(!isNpcMoveSkipped(displacement) && desiredLength>0.1f) {
+    const float advancement = Tempest::Vec3::dotProduct(accepted-initial,horizontal)/desiredLength;
+    result.blocked |= advancement<=std::max(0.1f,desiredLength*0.1f);
+    if(result.blocked && !requestClipped && !resolvedClipped && !preFall) {
+      result.collision.landCol = true;
+      result.collision.normal = Tempest::Vec3::normalize(accepted-initial-horizontal);
+      }
+    }
+  if(npcDiagnostic!=nullptr)
+    npcDiagnostic->blocked = result.blocked;
+  return result;
   }
 
 DynamicWorld::MoveCode DynamicWorld::NpcItem::implTryMove(const Tempest::Vec3& to, const Tempest::Vec3& pos0, CollisionTest& out) {
@@ -1420,39 +2642,108 @@ bool DynamicWorld::NpcItem::hasCollision() const {
 
 DynamicWorld::Item::~Item() {
   delete obj;
-  delete shp;
   }
 
-void DynamicWorld::Item::setObjMatrix(const Tempest::Matrix4x4 &m) {
-  if(obj!=nullptr) {
-    btTransform trans;
-    trans.setFromOpenGLMatrix(reinterpret_cast<const btScalar*>(&m));
-    trans.getOrigin()*=0.01f;
-    if(obj->getWorldTransform()==trans)
-      return;
-    obj->setWorldTransform(trans);
-    //owner->world->touchAabbs(); // TOO SLOW!
-    owner->world->updateSingleAabb(obj);
+void DynamicWorld::Item::setObjMatrix(const Tempest::Matrix4x4& m) {
+  if(obj==nullptr)
+    return;
+  if(obj->movableShape!=nullptr) {
+    obj->origin = m;
+    owner->rebuildMovableVob(*obj);
+    }
+  else if(obj->body!=nullptr)
+    obj->body->setObjMatrix(m);
+  }
+
+void DynamicWorld::Item::setAttachmentMatrix(const Tempest::Matrix4x4& m) {
+  if(obj==nullptr || obj->movableShape==nullptr || (obj->body!=nullptr && obj->body->mass()>0.f) || obj->pose->broken)
+    return;
+  obj->current = m;
+  obj->pose->transform = m;
+  if(obj->body!=nullptr)
+    obj->body->setObjMatrix(m);
+  for(size_t i=0;i<obj->query.size();++i) {
+    auto matrix = m;
+    matrix.mul(obj->movableShape->parts[i].local);
+    obj->query[i]->setObjMatrix(matrix);
     }
   }
 
 void DynamicWorld::Item::setItem(::Item* it) {
-  assert(obj->getUserIndex()==DynamicWorld::C_Item);
-  obj->setUserPointer(it);
-  obj->setUserIndex2(P_Item);
+  assert(obj->body->category()==DynamicWorld::C_Item);
+  obj->body->setPayload(it,P_Item);
+  if(it!=nullptr) {
+    const auto material=ItemMaterial(it->handle().material);
+    const auto surface=material==MAT_WOOD ? zenkit::MaterialGroup::WOOD :
+                       material==MAT_METAL ? zenkit::MaterialGroup::METAL : zenkit::MaterialGroup::STONE;
+    obj->body->setNoiseProfile(material,surface,it->handle().visual);
+    obj->body->setLabel(it->handle().visual);
+    }
   }
 
 void DynamicWorld::Item::setInteractive(Interactive* it) {
-  assert(obj->getUserIndex()==DynamicWorld::C_Object);
-  obj->setUserPointer(it);
-  obj->setUserIndex2(P_Interactive);
+  assert(obj->body->category()==DynamicWorld::C_Object);
+  obj->body->setPayload(it,P_Interactive);
   }
 
 void DynamicWorld::Item::setPayloadPtr(void* ptr) {
+  if(obj!=nullptr && obj->body!=nullptr)
+    obj->body->setPayload(ptr,P_Editor);
+  if(obj!=nullptr)
+    for(auto& query:obj->query)
+      query->setPayload(ptr,P_Editor);
+  }
+
+float DynamicWorld::Item::mass() const {
+  return obj!=nullptr && obj->body!=nullptr ? obj->body->mass() : 0.f;
+  }
+
+Tempest::Vec3 DynamicWorld::Item::velocity() const {
+  return obj!=nullptr && obj->body!=nullptr ? obj->body->velocity() : Tempest::Vec3{};
+  }
+
+Tempest::Vec3 DynamicWorld::Item::angularVelocity() const {
+  return obj!=nullptr && obj->body!=nullptr ? obj->body->angularVelocity() : Tempest::Vec3{};
+  }
+
+bool DynamicWorld::Item::isSleeping() const {
+  return obj==nullptr || obj->body==nullptr || obj->body->isSleeping();
+  }
+
+bool DynamicWorld::Item::touchedByNpc() const {
+  return obj!=nullptr && obj->body!=nullptr && obj->body->touchedByNpc();
+  }
+
+bool DynamicWorld::Item::addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit) {
+  if(obj==nullptr || obj->body==nullptr || !obj->body->addImpulse(impulseNs,culprit)) return false;
+  if(obj->movableShape!=nullptr) owner->damageMovableVob(*obj,impulseNs.length(),obj->body->centerOfMass());
+  return true;
+  }
+
+std::shared_ptr<const FractureMesh> DynamicWorld::Item::fractureMesh() const {
+  return obj!=nullptr && obj->movableShape!=nullptr ? obj->movableShape->fracture : nullptr;
+  }
+
+bool DynamicWorld::Item::isBroken() const {
+  return obj!=nullptr && obj->pose->broken;
+  }
+
+void DynamicWorld::Item::setFractureCallback(std::function<void(bool,const std::vector<Tempest::Matrix4x4>&)> callback) {
+  if(obj==nullptr) return;
+  obj->fractureCallback=std::move(callback);
+  if(obj->pose->broken) {
+    obj->fragmentsWereSleeping=false;
+    owner->syncFragments(*obj);
+    }
+  else if(obj->fractureCallback) obj->fractureCallback(false,{});
+  }
+
+void DynamicWorld::Item::setTransformCallback(std::function<void(const Tempest::Matrix4x4&)> callback) {
   if(obj==nullptr)
     return;
-  obj->setUserPointer(ptr);
-  obj->setUserIndex2(P_Editor);
+  obj->transformCallback = std::move(callback);
+  if(obj->transformCallback && obj->movableShape!=nullptr)
+    obj->transformCallback(obj->current);
   }
 
 DynamicWorld::BulletBody::BulletBody(DynamicWorld* wrld, DynamicWorld::BulletCallback* cb)
@@ -1461,7 +2752,7 @@ DynamicWorld::BulletBody::BulletBody(DynamicWorld* wrld, DynamicWorld::BulletCal
 
 DynamicWorld::BulletBody::BulletBody(DynamicWorld::BulletBody&& other)
   : pos(other.pos), lastPos(other.lastPos),
-    dir(other.dir), dirL(other.dirL), totalL(other.totalL), spl(other.spl){
+    dir(other.dir), dirL(other.dirL), totalL(other.totalL), spl(other.spl), worldStopped(other.worldStopped){
   std::swap(owner,other.owner);
   std::swap(cb,other.cb);
   }
@@ -1514,48 +2805,38 @@ Tempest::Matrix4x4 DynamicWorld::BulletBody::matrix() const {
   }
 
 DynamicWorld::BBoxBody::BBoxBody(DynamicWorld* ow, BBoxCallback* cb, const zenkit::AxisAlignedBoundingBox& bbox)
-  : owner(ow), cb(cb) {
-  btVector3 hExt = CollisionWorld::toMeters(Tempest::Vec3{bbox.max.x-bbox.min.x, bbox.max.y-bbox.min.y, bbox.max.z-bbox.min.z})*0.5f;
-  btVector3 pos  = CollisionWorld::toMeters(Tempest::Vec3{bbox.max.x+bbox.min.x, bbox.max.y+bbox.min.y, bbox.max.z+bbox.min.z})*0.5f;
-
-  shape = new btBoxShape(hExt);
-  obj   = new btRigidBody(btRigidBody::btRigidBodyConstructionInfo(0,nullptr,shape));
-
-  btTransform trans;
-  trans.setIdentity();
-  trans.setOrigin(pos);
-
-  obj->setWorldTransform(trans);
-  obj->setUserIndex(C_Ghost);
-  obj->setCollisionFlags(btCollisionObject::CF_NO_CONTACT_RESPONSE);
-
+  :owner(ow),cb(cb) {
+  const auto extent = Tempest::Vec3(bbox.max.x-bbox.min.x,bbox.max.y-bbox.min.y,bbox.max.z-bbox.min.z)*0.5f;
+  const auto center = Tempest::Vec3(bbox.max.x+bbox.min.x,bbox.max.y+bbox.min.y,bbox.max.z+bbox.min.z)*0.5f;
+  const auto halfExtent = JPH::Vec3::sMax(CollisionWorld::toMeters(extent),JPH::Vec3::sReplicate(0.0001f));
+  JPH::ShapeRefC box = new JPH::BoxShape(halfExtent,0.f);
+  Tempest::Matrix4x4 m;
+  m.identity();
+  m.translate(center);
+  auto data = std::make_unique<BBoxShape>();
+  data->body = owner->world->addCollisionBody(box,m,0,C_Ghost,false,true);
+  shape = data.release();
   owner->bboxList->add(this);
-}
+  }
 
-DynamicWorld::BBoxBody::BBoxBody(DynamicWorld* ow, BBoxCallback* cb, const Tempest::Vec3& p, float R)
-  : owner(ow), cb(cb) {
-  btVector3 pos = CollisionWorld::toMeters(p);
-
-  shape = new btCapsuleShape(R,4.f);
-  obj   = new btRigidBody(btRigidBody::btRigidBodyConstructionInfo(0,nullptr,shape));
-
-  btTransform trans;
-  trans.setIdentity();
-  trans.setOrigin(pos);
-
-  obj->setWorldTransform(trans);
-  obj->setUserIndex(C_Ghost);
-  obj->setCollisionFlags(btCollisionObject::CF_NO_CONTACT_RESPONSE);
-
+DynamicWorld::BBoxBody::BBoxBody(DynamicWorld* ow, BBoxCallback* cb, const Tempest::Vec3& pos, float R)
+  :owner(ow),cb(cb) {
+  // This overload historically takes its radius in meters and its cylinder height is four meters.
+  JPH::ShapeRefC capsule = new JPH::CapsuleShape(2.f,std::max(R,0.0001f));
+  Tempest::Matrix4x4 m;
+  m.identity();
+  m.translate(pos);
+  auto data = std::make_unique<BBoxShape>();
+  data->body = owner->world->addCollisionBody(capsule,m,0,C_Ghost,false,true);
+  shape = data.release();
   owner->bboxList->add(this);
   }
 
 DynamicWorld::BBoxBody::BBoxBody(BBoxBody&& other)
-  :owner(other.owner),cb(other.cb),shape(other.shape),obj(other.obj) {
+  :owner(other.owner),cb(other.cb),shape(other.shape) {
   other.owner = nullptr;
   other.cb    = nullptr;
   other.shape = nullptr;
-  other.obj   = nullptr;
 
   if(owner!=nullptr) {
     owner->bboxList->del(&other);
@@ -1572,7 +2853,6 @@ DynamicWorld::BBoxBody& DynamicWorld::BBoxBody::operator=(BBoxBody&& other) {
   std::swap(owner,other.owner);
   std::swap(cb,   other.cb);
   std::swap(shape,other.shape);
-  std::swap(obj,  other.obj);
 
   if(other.owner!=nullptr)
     other.owner->bboxList->add(&other);
@@ -1586,6 +2866,5 @@ DynamicWorld::BBoxBody::~BBoxBody() {
   if(owner==nullptr)
     return;
   owner->bboxList->del(this);
-  delete obj;
   delete shape;
   }

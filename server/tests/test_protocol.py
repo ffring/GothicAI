@@ -1,16 +1,41 @@
 import pytest
 from pydantic import ValidationError
 
+from gothic_ai import triggers
 from gothic_ai.protocol import (
+    BROKEN_TRACE_PROTOCOL,
+    ERRAND_PROTOCOL,
+    NOISE_PROTOCOL,
+    PACE_PROTOCOL,
     PROTOCOL_VERSION,
+    TRACE_PROTOCOL,
     ActionCmd,
     ActionResult,
+    BeastCmd,
+    BeastEvent,
+    Beasts,
+    Chest,
     DebugCmd,
+    GraphPatchCmd,
     HushCmd,
+    LineVoice,
     NpcActCmd,
+    NpcActResult,
+    NpcChestsCmd,
+    NpcEvent,
     NpcIdle,
+    NpcLook,
+    NpcRoster,
+    NpcSpec,
+    NpcThing,
+    NpcViews,
+    RoutineEntry,
     SayCmd,
     Snapshot,
+    StoryEffectCmd,
+    StoryNpcCmd,
+    StoryProgramCmd,
+    TriggerFired,
     parse_game_message,
 )
 from tests.fake_game import FakeGame
@@ -49,7 +74,6 @@ def test_action_command_omits_empty_fields():
 
 
 def test_v15_npc_to_npc():
-    assert PROTOCOL_VERSION == 17
     say = SayCmd(
         npc="BAU_950_LOBART", line="AIB_1", text="Слыхала?", stream=True, rate=24000, to="BAU_951_HILDA"
     )
@@ -82,3 +106,368 @@ def _json(obj) -> str:
     import json
 
     return json.dumps(obj)
+
+
+def test_v22_things_lying_about():
+    assert PROTOCOL_VERSION >= 22
+    seen = parse_game_message(
+        _json(
+            {
+                "type": "npc_views",
+                "t": 1000,
+                "views": [
+                    {
+                        "npc": "BAU_4300_ADDON_CAVALORN",
+                        "name": "Кавалорн",
+                        "items": [
+                            {
+                                "item": "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED",
+                                "name": "Запечатанное послание",
+                                "count": 1,
+                                "distance": 120,
+                                "hero_cm": 80,
+                                "from_hero": "ahead",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    assert isinstance(seen, NpcViews)
+    thing = seen.views[0].items[0]
+    assert (thing.item, thing.hero_cm, thing.from_hero) == (
+        "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED",
+        80,
+        "ahead",
+    )
+    assert (
+        NpcViews.model_validate({"type": "npc_views", "t": 1, "views": [{"npc": "X", "name": "x"}]})
+        .views[0]
+        .items
+        == []
+    )
+    assert ActionCmd(id="a1", npc="X", action="take_item", args={"item": "ITPL_BEET"}).action == "take_item"
+
+
+def test_v21_wolves_hear_the_hero():
+    seen = parse_game_message(
+        _json(
+            {
+                "type": "beasts",
+                "t": 1000,
+                "hero_weapon": "melee",
+                "wolves": [
+                    {
+                        "id": "WOLF#3",
+                        "name": "Волк",
+                        "distance": 950,
+                        "state": "threaten",
+                        "hp": 60,
+                        "hp_max": 60,
+                    },
+                    {
+                        "id": "YWOLF#4",
+                        "name": "Молодой волк",
+                        "distance": 400,
+                        "state": "calm",
+                        "sitting": True,
+                        "focus": True,
+                        "hit_ms": 120000,
+                        "tolerant": True,
+                    },
+                ],
+            }
+        )
+    )
+    assert isinstance(seen, Beasts) and seen.hero_weapon == "melee"
+    assert [(w.id, w.state, w.sitting) for w in seen.wolves] == [
+        ("WOLF#3", "threaten", False),
+        ("YWOLF#4", "calm", True),
+    ]
+    ended = parse_game_message('{"type":"beast_event","npc":"WOLF#3","kind":"calm_broken","detail":"close"}')
+    assert isinstance(ended, BeastEvent) and (ended.kind, ended.detail) == ("calm_broken", "close")
+    calm = BeastCmd(req="b1", npc="WOLF#3", do="calm", ms=120000, sit=True)
+    assert calm.to_json() == '{"type":"beast","req":"b1","npc":"WOLF#3","do":"calm","ms":120000,"sit":true}'
+    assert BeastCmd(req="b2", npc="WOLF#3", do="attack").to_json() == (
+        '{"type":"beast","req":"b2","npc":"WOLF#3","do":"attack"}'
+    )
+    hp = DebugCmd(req="r1", cmd="player_hp", hp=5000)
+    assert hp.to_json() == '{"type":"debug","req":"r1","cmd":"player_hp","slot":0,"hp":5000}'
+
+
+def test_v23_programs_in_the_story_graph():
+    assert PROTOCOL_VERSION >= 23
+    ask = StoryProgramCmd(req="s1", node="DIA_LOBART_RUEBENRUNNING")
+    assert ask.to_json() == (
+        '{"type":"story_program","req":"s1","node":"DIA_LOBART_RUEBENRUNNING","part":"information","own":false}'
+    )
+    with pytest.raises(ValidationError):
+        StoryProgramCmd(req="s2", node="X", part="choice")
+    steps = [{"do": "say", "speaker": "self", "text": "Спасибо."}, {"do": "return"}]
+    patch = GraphPatchCmd(ops=[{"op": "program", "node": "DIA_X", "part": "condition", "steps": steps}])
+    assert '"steps":[{"do":"say","speaker":"self","text":"Спасибо."},{"do":"return"}]' in patch.to_json()
+
+
+def test_v24_choices_in_the_directors_dialogs():
+    assert PROTOCOL_VERSION >= 24
+    pick = DebugCmd(req="r1", cmd="menu_pick", text="Золото")
+    assert pick.to_json() == '{"type":"debug","req":"r1","cmd":"menu_pick","slot":0,"text":"Золото"}'
+    assert DebugCmd(req="r2", cmd="choices", npc="X", node="DIR_X").to_json() == (
+        '{"type":"debug","req":"r2","cmd":"choices","slot":0,"npc":"X","node":"DIR_X"}'
+    )
+    for cmd in ("talk", "menu"):
+        assert DebugCmd(req="r3", cmd=cmd).cmd == cmd
+
+
+def test_v25_the_scripts_own_program():
+    assert PROTOCOL_VERSION >= 25
+    ask = StoryProgramCmd(req="s1", node="DIA_LOBART_BUYCLOTHES", own=True)
+    assert ask.to_json() == (
+        '{"type":"story_program","req":"s1","node":"DIA_LOBART_BUYCLOTHES","part":"information","own":true}'
+    )
+
+
+def test_v26_the_directors_lines_in_the_npcs_voice():
+    assert PROTOCOL_VERSION >= 26
+    msg = parse_game_message(
+        '{"type":"line_voice","npc":"NONE_100_XARDAS","name":"Ксардас","line":"AIB_G1","text":"Выбирай."}'
+    )
+    assert isinstance(msg, LineVoice) and (msg.line, msg.text, msg.name) == ("AIB_G1", "Выбирай.", "Ксардас")
+
+
+def test_v27_whom_the_npc_looks_at():
+    assert PROTOCOL_VERSION >= 27
+    snap = '{"type":"snapshot","t":5,"world":{"name":"NEWWORLD.ZEN","day":0,"hour":8,"minute":30},'
+    npc = '"npc":{"id":"BDT_1014_BANDIT_L","name":"Браго","pos":[1,2,3],"rot":0,"hp":10,"hp_max":10,'
+    npc += '"busy":false'
+    looks = parse_game_message(f'{snap}{npc},"gaze":"BAU_4300_ADDON_CAVALORN"}}}}')
+    nobody = parse_game_message(f'{snap}{npc},"gaze":null}}}}')
+    assert isinstance(looks, Snapshot) and looks.npc.gaze == "BAU_4300_ADDON_CAVALORN"
+    assert isinstance(nobody, Snapshot) and nobody.npc.gaze is None
+
+
+def test_v28_npc_chests():
+    assert PROTOCOL_VERSION >= 28
+    ask = NpcChestsCmd(req="c1", npc="BDT_1014_BANDIT_L")
+    assert ask.to_json() == '{"type":"npc_chests","req":"c1","npc":"BDT_1014_BANDIT_L"}'
+    chest = Chest.model_validate(
+        {
+            "id": "MOB_17897_3163_-20770",
+            "why": "key",
+            "pos": [17897, 3163, -20770],
+            "distance": 400,
+            "waypoint": "NW_XARDAS_BANDITS_RIGHT",
+            "locked": True,
+            "key": "ITKE_BANDIT",
+            "has_key": True,
+            "items": [{"item": "ITRW_BOW_L_01", "name": "Короткий лук", "count": 1}],
+            "start": [{"item": "ITMI_GOLD", "name": "Золото", "count": 29}],
+        }
+    )
+    assert chest.why == "key" and chest.items[0].item == "ITRW_BOW_L_01" and chest.start[0].count == 29
+    take = DebugCmd(req="r1", cmd="chest_take", chest=chest.id, item="ITMI_GOLD", count=29)
+    assert '"cmd":"chest_take"' in take.to_json() and '"count":29' in take.to_json()
+
+
+def test_v29_the_directors_story_variables():
+    assert PROTOCOL_VERSION >= 29
+    patch = GraphPatchCmd(ops=[{"op": "vars", "vars": {"DIR_Q1": 0}}])
+    assert '"ops":[{"op":"vars","vars":{"DIR_Q1":0}}]' in patch.to_json()
+    take = DebugCmd(req="r1", cmd="player_take", item="ITMI_PAN", distance=300)
+    assert '"cmd":"player_take"' in take.to_json() and '"distance":300' in take.to_json()
+
+
+def test_v30_how_far_the_players_voice_goes():
+    assert PROTOCOL_VERSION >= 30
+    roster = parse_game_message(
+        '{"type":"npc_roster","t":1,"npcs":['
+        '{"id":"BAU_4300_ADDON_CAVALORN","name":"Кавалорн","distance":140,"heard":140},'
+        '{"id":"BDT_1013_BANDIT_L","name":"Бандит","distance":3500,"heard":20000},'
+        '{"id":"VLK_LOBART","name":"Лобарт","distance":900}]}'
+    )
+    assert isinstance(roster, NpcRoster)
+    cavalorn, bandit, old = roster.npcs
+    assert cavalorn.earshot == 140 and bandit.earshot == 20000  # the rock between: his voice does not reach
+    assert old.heard is None and old.earshot == 900  # a bridge before v30: as the crow flies
+
+
+def test_v31_a_dialog_heard_in_a_conversation():
+    assert PROTOCOL_VERSION >= 31
+    cmd = StoryEffectCmd(req="e1", npc="BAU_4300_ADDON_CAVALORN", effects=[{"do": "knows", "info": "DIA_X"}])
+    assert '"effects":[{"do":"knows","info":"DIA_X"}]' in cmd.to_json()
+
+
+def test_v32_where_the_hero_faces():
+    assert PROTOCOL_VERSION >= 32
+    snap = '{"type":"snapshot","t":5,"world":{"name":"NEWWORLD.ZEN","day":0,"hour":8,"minute":30},'
+    snap += '"npc":{"id":"BAU_4300_ADDON_CAVALORN","name":"Кавалорн","pos":[1,2,3],"rot":0,"hp":10,'
+    snap += '"hp_max":10,"busy":false},"player":{"name":"Я","pos":[0,0,0],"distance":300'
+    new = parse_game_message(f'{snap},"ahead":[0,1],"right":[-1,0]}}}}')
+    old = parse_game_message(f"{snap}}}}}")
+    assert isinstance(new, Snapshot) and new.player is not None
+    assert new.player.ahead == (0, 1) and new.player.right == (-1, 0)
+    assert isinstance(old, Snapshot) and old.player is not None and old.player.ahead is None
+
+
+def test_v33_an_npc_of_the_directors():
+    assert PROTOCOL_VERSION >= 33
+    own = DebugCmd(req="r1", cmd="own_npc", npc="DIR_NPC_1", like="BAU_955_BAUER", waypoint="NW_FARM1_OUT_01")
+    assert '"cmd":"own_npc"' in own.to_json() and '"like":"BAU_955_BAUER"' in own.to_json()
+
+
+def test_v34_a_character_of_the_directors():
+    assert PROTOCOL_VERSION >= 34
+    spec = NpcSpec(
+        npc="DIR_NPC_1",
+        like="VLK_4000_BUERGER",
+        at="NW_FARM1_PATH_01",
+        name="Гарет",
+        look=NpcLook(gender="MALE", head="Hum_Head_Pony", face="FACE_N_NORMAL05", skin="BODYTEX_N"),
+        items=[NpcThing(item="ITMI_GOLD", count=40)],
+        routine=[
+            RoutineEntry(
+                start="06:00", end="06:00", state="ZS_STAND_ARMSCROSSED", waypoint="NW_FARM1_PATH_01"
+            )
+        ],
+    )
+    json = StoryNpcCmd(req="n1", **spec.model_dump()).to_json()
+    assert '"type":"story_npc"' in json and '"name":"Гарет"' in json and '"armor"' not in json
+    assert '"routine":[{"start":"06:00","end":"06:00","state":"ZS_STAND_ARMSCROSSED"' in json
+
+
+def test_v35_the_directors_triggers():
+    assert PROTOCOL_VERSION >= 35
+    op = triggers.trigger("DIR_Q1_T1", triggers.STATE, [], when=triggers.hero_has("ITMI_SAW"), repeat=True)
+    patch = GraphPatchCmd(ops=[op]).to_json()
+    assert '"op":"trigger"' in patch and '"on":"state"' in patch and '"repeat":true' in patch
+    fired = parse_game_message(
+        '{"type":"trigger_fired","id":"DIR_Q1_T1","count":2,"npc":"PC_HERO","other":"PC_HERO"}'
+    )
+    assert isinstance(fired, TriggerFired) and fired.count == 2 and fired.error is None
+    assert '"cmd":"triggers"' in DebugCmd(req="r1", cmd="triggers").to_json()
+
+
+def test_v36_physics_noise_and_investigation():
+    assert PROTOCOL_VERSION >= NOISE_PROTOCOL == 36
+    noise = parse_game_message(
+        '{"type":"npc_event","npc":"X","kind":"noise","at":[100,20,300],'
+        '"place":"NW_CITY_TAVERN_01","loudness":0.54,"source":"table","distance":502}'
+    )
+    assert isinstance(noise, NpcEvent)
+    assert noise.at == (100, 20, 300) and noise.place == "NW_CITY_TAVERN_01"
+    assert noise.loudness == 0.54 and noise.source == "table" and noise.distance == 502
+    assert noise.other == "" and noise.other_name is None
+    seen = parse_game_message('{"type":"npc_event","npc":"X","kind":"noise","other":"PLAYER","at":[1,2,3]}')
+    assert isinstance(seen, NpcEvent) and seen.other == "PLAYER"
+    legacy = parse_game_message('{"type":"npc_event","npc":"X","kind":"player_near"}')
+    assert isinstance(legacy, NpcEvent) and legacy.other == "PLAYER" and legacy.at is None
+    cmd = NpcActCmd(id="n1", npc="X", action="investigate", args={"at": [100, 20, 300], "ms": 5000})
+    assert '"action":"investigate"' in cmd.to_json() and '"at":[100,20,300]' in cmd.to_json()
+    assert '"cmd":"physics_noise"' in DebugCmd(req="r1", cmd="physics_noise", text="status").to_json()
+
+
+def test_v36_investigation_receipt_identifies_action_without_breaking_old_bridge():
+    receipt = parse_game_message(
+        '{"type":"npc_act_result","id":"n1","npc":"X","status":"queued","action":"investigate"}'
+    )
+    assert isinstance(receipt, NpcActResult) and receipt.action == "investigate" and receipt.id == "n1"
+    legacy = parse_game_message('{"type":"npc_act_result","id":"n2","npc":"X","status":"queued"}')
+    assert isinstance(legacy, NpcActResult) and legacy.action is None
+
+
+def test_v37_physical_traces_and_noise_clock():
+    assert PROTOCOL_VERSION >= TRACE_PROTOCOL == 37
+    msg = parse_game_message(
+        _json(
+            {
+                "type": "npc_views",
+                "t": 1000,
+                "views": [
+                    {
+                        "npc": "X",
+                        "name": "Корагон",
+                        "time": 725,
+                        "traces": [
+                            {
+                                "id": "NEWWORLD.ZEN:vob:42",
+                                "kind": "tilted",
+                                "name": "стол",
+                                "waypoint": "NW_CITY_TAVERN_01",
+                                "distance": 210,
+                                "hero_cm": 300,
+                                "from_hero": "left",
+                                "age": 5,
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    assert isinstance(msg, NpcViews)
+    trace = msg.views[0].traces[0]
+    assert (trace.kind, trace.name, trace.waypoint, trace.age) == (
+        "tilted",
+        "стол",
+        "NW_CITY_TAVERN_01",
+        5,
+    )
+    assert trace.hero_cm == 300 and trace.from_hero == "left"
+    assert set(trace.model_dump()) == {
+        "id",
+        "kind",
+        "name",
+        "waypoint",
+        "distance",
+        "hero_cm",
+        "from_hero",
+        "age",
+    }
+    legacy = parse_game_message('{"type":"npc_views","t":1,"views":[{"npc":"X","name":"x"}]}')
+    assert isinstance(legacy, NpcViews) and legacy.views[0].traces == []
+    noise = parse_game_message('{"type":"npc_event","npc":"X","kind":"noise","time":725}')
+    assert isinstance(noise, NpcEvent) and noise.time == 725 and noise.other == ""
+
+
+def test_v38_a_guide_keeps_the_heros_pace():
+    assert PROTOCOL_VERSION >= PACE_PROTOCOL == 38  # v36, v37 are the physics session's
+    go = ActionCmd(id="a1", npc="BAU_954_MALETH", action="go_to_waypoint", args={"pace": "hero"})
+    assert '"pace":"hero"' in go.to_json()
+
+
+def test_v39_errands_mission_items_and_a_give_to_an_npc():
+    assert PROTOCOL_VERSION >= ERRAND_PROTOCOL == 39
+    snap = parse_game_message(_json({
+        "type": "snapshot", "req": "r1", "t": 1,
+        "npc": {"id": "X", "name": "Хильда", "pos": [0, 0, 0], "rot": 0, "hp": 1, "hp_max": 1, "busy": False,
+                "inventory": [{"item": "ITWR_CANTHARS_KOMPROBRIEF_MIS", "name": "Письмо", "count": 1,
+                               "mission": True}, {"item": "ITMI_GOLD", "name": "Золото", "count": 25}]},
+        "world": {"name": "NEWWORLD.ZEN", "day": 1, "hour": 7, "minute": 0},
+    }))  # fmt: skip
+    assert isinstance(snap, Snapshot)
+    assert [i.mission for i in snap.npc.inventory] == [True, False]
+    effect = {"do": "give", "item": "ITMI_GOLD", "count": 25, "to": "npc", "npc": "BAU_950_LOBART"}
+    give = StoryEffectCmd(req="e1", npc="BAU_951_HILDA", effects=[effect])
+    assert '"to":"npc","npc":"BAU_950_LOBART"' in give.to_json()
+
+
+@pytest.mark.parametrize("age", [0, 9, None])
+def test_v40_broken_trace_has_age_and_no_culprit(age):
+    assert PROTOCOL_VERSION >= BROKEN_TRACE_PROTOCOL == 40
+    command = DebugCmd(req="stand", cmd="destruction_traces", text="sample")
+    assert '"cmd":"destruction_traces"' in command.to_json()
+    msg = parse_game_message(_json({
+        "type": "npc_views", "t": 10,
+        "views": [{"npc": "BAU_950_LOBART", "name": "Лобарт", "time": 725, "traces": [{
+            "id": "NEWWORLD.ZEN:vob:42", "kind": "broken", "name": "сломанный забор",
+            "waypoint": "NW_FARM1_OUT_02", "distance": 210, "age": age,
+        }]}],
+    }))
+    assert isinstance(msg, NpcViews)
+    trace = msg.views[0].traces[0]
+    assert (trace.kind, trace.name, trace.age) == ("broken", "сломанный забор", age)
+    assert trace.waypoint == "NW_FARM1_OUT_02" and trace.distance == 210
+    assert set(trace.model_dump()) == {
+        "id", "kind", "name", "waypoint", "distance", "hero_cm", "from_hero", "age",
+    }

@@ -1,0 +1,10 @@
+# Load session-step2-scattered.sav in a NEW process; keep hero close to debris.
+destruction2 initial restored
+destruction2 age 29 oldest
+wait 66
+destruction2 snapshot age29
+destruction2 age 30 youngest
+wait 66
+destruction2 snapshot age30
+destruction2 save step2-time-cleaned
+physics stats

@@ -40,7 +40,11 @@ class HitZones final {
     // The first zone the segment from-to enters; t: how far from 'from'. tr: the world-space bones,
     // scale: of the npc (the radii grow with it)
     Zone             rayTest(const Tempest::Matrix4x4* tr, size_t numBones, float scale,
-                             const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const;
+                             const Tempest::Vec3& from, const Tempest::Vec3& to, float& t,
+                             size_t* bone = nullptr) const;
+    // Secondary owner lookup for vanilla dice hits, which do not select a zone.
+    size_t           closestBone(const Tempest::Matrix4x4* tr, size_t numBones, float scale,
+                                 const Tempest::Vec3& at) const;
     // The middle of a zone: the test bench aims there
     bool             center(const Tempest::Matrix4x4* tr, size_t numBones, Zone z, Tempest::Vec3& at) const;
 
@@ -82,4 +86,5 @@ class HitZones final {
     float                size     = 0; // cm: the creature from end to end (the bind pose)
 
     static Tempest::Vec3 point(const Tempest::Matrix4x4* tr, const End& e);
+    friend class Ragdoll;
   };

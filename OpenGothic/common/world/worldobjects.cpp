@@ -2,6 +2,7 @@
 
 #include "game/serialize.h"
 #include "game/bodyarena.h"
+#include "physics/physicsnoise.h"
 #include "game/bodyobservations.h"
 #include "world/objects/itemtorchburning.h"
 #include "world/objects/item.h"
@@ -13,10 +14,12 @@
 #include "world/triggers/pfxcontroller.h"
 #include "world/triggers/triggerworldstart.h"
 #include "world/triggers/abstracttrigger.h"
+#include "world/triggers/movetrigger.h"
 #include "world.h"
 #include "utils/workers.h"
 #include "utils/dbgpainter.h"
 #include "gothic.h"
+#include "frameprofile.h"
 
 #include <Tempest/Painter>
 #include <Tempest/Application>
@@ -89,8 +92,10 @@ void WorldObjects::load(Serialize &fin) {
     npcInvalid.resize(sz);
     for(size_t i=0; i<npcInvalid.size(); ++i)
       npcInvalid[i] = std::make_unique<Npc>(owner,size_t(-1),"");
-    for(size_t i=0; i<npcInvalid.size(); ++i)
+    for(size_t i=0; i<npcInvalid.size(); ++i) {
       npcInvalid[i]->load(fin,i,"/npc_invalid/");
+      npcInvalid[i]->suspendRagdoll();
+      }
     }
 
   fin.setEntry("worlds/",fin.worldName(),"/items");
@@ -364,6 +369,7 @@ std::unique_ptr<Npc> WorldObjects::takeNpc(const Npc* ptr) {
   for(size_t i=0; i<npcArr.size(); ++i){
     auto& npc=*npcArr[i];
     if(&npc==ptr){
+      npc.suspendRagdoll();
       auto ret=std::move(npcArr[i]);
       npcArr.erase(npcArr.begin() + int32_t(i));
       return ret;
@@ -433,7 +439,20 @@ bool WorldObjects::execTriggerEvent(const TriggerEvent& e) {
   return emitted;
   }
 
+void WorldObjects::prepareRagdolls() {
+  for(auto& npc:npcArr) {
+    npc->prepareRagdoll();
+    npc->prepareLivingBody();
+    }
+  }
+
+void WorldObjects::syncRagdolls() {
+  for(auto& npc:npcArr)
+    npc->syncRagdoll();
+  }
+
 void WorldObjects::updateAnimation(uint64_t dt) {
+  FrameProfile::Scope timing(FrameProfile::Zone::ParallelAnimation);
   static bool doAnim=true;
   if(!doAnim)
     return;
@@ -532,6 +551,12 @@ void WorldObjects::detectItem(const float x, const float y, const float z,
     if(qDist<maxDist)
       f(*i);
     }
+  }
+
+void WorldObjects::detectMover(const std::function<void(MoveTrigger&)>& f) {
+  for(auto* trigger:triggers)
+    if(auto* mover = dynamic_cast<MoveTrigger*>(trigger))
+      f(*mover);
   }
 
 void WorldObjects::addTrigger(AbstractTrigger* tg) {
@@ -734,6 +759,13 @@ void WorldObjects::addRoot(const std::shared_ptr<zenkit::VirtualObject>& vob, bo
   if(p==nullptr)
     return;
   rootVobs.emplace_back(std::move(p));
+  }
+
+std::vector<Vob::AttachmentSnapshot> WorldObjects::vobAttachmentSnapshot(uint32_t zenId) const {
+  std::vector<Vob::AttachmentSnapshot> result;
+  for(const auto& root:rootVobs)
+    if(root->attachmentSnapshot(zenId,result))break;
+  return result;
   }
 
 void WorldObjects::invalidateVobIndex() {
@@ -992,6 +1024,22 @@ void WorldObjects::passivePerceptionProcess(PerceptionMsg& msg, Npc& npc, Npc& p
   npc.perceptionProcess(*msg.other,msg.victim,distance,PercType(msg.what));
   }
 
+void WorldObjects::emitPhysicsNoise(const PhysicsNoise& noise) {
+  // Only fully simulated NPCs can respond; the cheap radius/gate checks precede rays.
+  for(auto* npc:npcNear) {
+    if(npc==noise.culprit || !npc->canHearPhysicsNoise())
+      continue;
+    const float distance = npc->qDistTo(noise.position);
+    if(distance>noise.radius*noise.radius)
+      continue;
+    const float occlusion = owner.physic()->soundOclusion(npc->mapHeadBone(),noise.position);
+    const float audibleRadius = noise.radius*std::max(0.f,1.f-occlusion);
+    if(distance>audibleRadius*audibleRadius)
+      continue;
+    npc->hearPhysicsNoise(noise);
+    }
+  }
+
 void WorldObjects::resetPositionToTA() {
   for(auto& r:routines)
     r.curState = 0;
@@ -1016,6 +1064,7 @@ void WorldObjects::resetPositionToTA() {
 
       auto& point = owner.deadPoint();
       auto& npc   = *npcInvalid.back();
+      npc.suspendRagdoll();
       npc.attachToPoint(nullptr);
       npc.setPosition(point.position());
       npc.updateTransform();

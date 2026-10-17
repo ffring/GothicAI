@@ -4,6 +4,7 @@
 #include <Tempest/SoundEffect>
 
 #include <cctype>
+#include <optional>
 #include <sstream>
 
 #include "game/compatibility/directmemory.h"
@@ -515,6 +516,13 @@ void GameScript::initializeInstanceNpc(const std::shared_ptr<zenkit::INpc>& npc,
     return;
     }
 
+  // an npc of ours runs the code of the script's npc it is made like, and that code names its own instance
+  // (self in an instance's body is the instance's symbol): while it runs that instance is ours, as a script's
+  // instance is its own while its code runs. Else the body, clothes and things would go to the script's npc
+  std::optional<ScopeVar<zenkit::INpc>> mine;
+  if(auto* like = own.likeOf(sym->index()))
+    mine.emplace(*like,npc);
+
   vm.init_instance(npc, sym);
 
   if(npc->daily_routine!=0) {
@@ -580,6 +588,11 @@ void GameScript::loadVar(Serialize &fin) {
       case zenkit::DaedalusDataType::INT:{
         fin.read(name);
         auto* s = findSymbol(name);
+        if(s==nullptr && name.rfind(OwnSymbols::Prefix,0)==0) {
+          // a save made before its symbols had an entry of their own: the director's story variable is ours now
+          std::string why;
+          s = own.addInt(name,why);
+          }
 
         uint32_t size;
         fin.read(size);
@@ -873,6 +886,23 @@ const VisualFx* GameScript::spellVfx(int32_t splId) {
   return Gothic::inst().loadVisualFx(name);
   }
 
+GameScript::PhysicalSpell GameScript::physicalSpell(int32_t splId) const {
+  if(spellFxInstanceNames==nullptr || splId<0 || size_t(splId)>=spellFxInstanceNames->count())
+    return PhysicalSpell::None;
+  auto tag = spellFxInstanceNames->get_string(uint16_t(splId));
+  for(auto& c:tag)
+    c = char(std::toupper(static_cast<unsigned char>(c)));
+  if(tag=="WINDFIST" || tag=="STORMFIST")
+    return PhysicalSpell::WindFist;
+  if(tag=="WHIRLWIND")
+    return PhysicalSpell::Whirlwind;
+  if(tag=="INSTANTFIREBALL" || tag=="CHARGEFIREBALL" || tag=="FIREBALL")
+    return PhysicalSpell::Fireball;
+  if(tag=="ICECUBE" || tag=="ICEBLOCK")
+    return PhysicalSpell::IceCube;
+  return PhysicalSpell::None;
+  }
+
 std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zenkit::INpc> player,
                                                              std::shared_ptr<zenkit::INpc> hnpc,
                                                              const std::vector<uint32_t>& except,
@@ -911,7 +941,7 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
       if(info.condition) {
         auto* conditionSymbol = vm.find_symbol_by_index(uint32_t(info.condition));
         if (conditionSymbol != nullptr) {
-          valid = vm.call_function<int>(conditionSymbol) != 0;
+          valid = dialogFunction(conditionSymbol,true) != 0;
           }
         }
       if(Gothic::inst().dialogFilterFn)
@@ -939,12 +969,15 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
   }
 
 std::vector<GameScript::DlgChoice> GameScript::updateDialog(const GameScript::DlgChoice &dlg, Npc& player,Npc& npc) {
-  if(dlg.handle==nullptr)
-    return {};
-  if(dlg.handle==nullptr)
-    return {};  // made at runtime, without choices
-  const zenkit::IInfo&               info = *dlg.handle;
   std::vector<GameScript::DlgChoice> ret;
+  if(dlg.handle==nullptr) {
+    // made at runtime (ai_bridge): its choices, if it has any
+    if(!dlg.external.empty() && Gothic::inst().dialogExtraChoicesFn)
+      Gothic::inst().dialogExtraChoicesFn(dlg,ret);
+    sort(ret);
+    return ret;
+    }
+  const zenkit::IInfo&               info = *dlg.handle;
 
   ScopeVar self (*vm.global_self(), npc.handlePtr());
   ScopeVar other(*vm.global_other(), player.handlePtr());
@@ -993,8 +1026,18 @@ void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
         ++i;
       }
     }
-  vm.call_function(vm.find_symbol_by_index(dlg.scriptFn));
+  dialogFunction(vm.find_symbol_by_index(dlg.scriptFn),false);
   Gothic::inst().onDialogChosen(dlg,player,npc);
+  }
+
+int32_t GameScript::dialogFunction(zenkit::DaedalusSymbol* fn, bool returns) {
+  int32_t r = 0;
+  if(fn!=nullptr && Gothic::inst().dialogScriptFn && Gothic::inst().dialogScriptFn(*fn,r))
+    return r;
+  if(returns)
+    return vm.call_function<int>(fn);
+  vm.call_function(fn);
+  return 0;
   }
 
 void GameScript::printCannotUseError(Npc& npc, int32_t atr, int32_t nValue) {
@@ -2601,7 +2644,7 @@ bool GameScript::npc_checkinfo(std::shared_ptr<zenkit::INpc> npcRef, int imp) {
     if(info->condition) {
       auto* conditionSymbol = vm.find_symbol_by_index(uint32_t(info->condition));
       if (conditionSymbol != nullptr)
-        valid = vm.call_function<int>(conditionSymbol)!=0;
+        valid = dialogFunction(conditionSymbol,true)!=0;
       }
     if(Gothic::inst().dialogFilterFn)
       Gothic::inst().dialogFilterFn(*info,valid);

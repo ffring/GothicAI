@@ -11,13 +11,20 @@
 //                                  with --node, both computations of that dialog are traced
 //   storygraph <GOTHIC.DAT> --fuzz N [--node ID] [--verbose]
 //                                  the same in N random states per dialog
+//   ... --check/--fuzz with --effects: what dialogs and choices do; with --exec: their programs run by the
+//                                  Interpreter against the VM (docs/story-graph.md, «Исполнение без VM»); with
+//                                  --via-json too, each program written as JSON and read back first
+//   storygraph <GOTHIC.DAT> --program DIA_LOBART_WORKNOW   the programs of a dialog (condition, information)
+//                                  or of a script function
 //
 // Subtitles come from OU.BIN next to the scripts (_work/Data/Scripts/Content/Cutscene/OU.BIN), or --ou <path>.
 
 #include "bytecode.h"
 #include "check.h"
+#include "execcheck.h"
 #include "lifter.h"
 #include "model.h"
+#include "program.h"
 #include "vocab.h"
 
 #include <zenkit/Archive.hh>
@@ -141,10 +148,12 @@ int main(int argc, char** argv) {
   const char* quest   = nullptr;
   const char* tsvPath = nullptr;
   const char* disasm  = nullptr;
+  const char* program = nullptr;
   bool        pretty  = false;
   bool        scan    = false;
   bool        verbose = false;
   bool        effects = false;
+  bool        exec    = false;
   size_t      top     = 0;
   uint32_t    fuzz    = 0;
   std::vector<std::string> saves;
@@ -162,6 +171,8 @@ int main(int argc, char** argv) {
       tsvPath = argv[++i];
     else if(opt("--disasm"))
       disasm = argv[++i];
+    else if(opt("--program"))
+      program = argv[++i];
     else if(opt("--top"))
       top = size_t(std::strtoul(argv[++i],nullptr,10));
     else if(std::strcmp(argv[i],"--pretty")==0)
@@ -176,13 +187,17 @@ int main(int argc, char** argv) {
       verbose = true;
     else if(std::strcmp(argv[i],"--effects")==0)
       effects = true;
+    else if(std::strcmp(argv[i],"--exec")==0)
+      exec = true;
+    else if(std::strcmp(argv[i],"--via-json")==0)
+      storygraph::ExecCheck::viaJson = true;
     else
       datPath = argv[i];
     }
   if(datPath==nullptr) {
     std::fprintf(stderr, "usage: storygraph <GOTHIC.DAT> [--ou OU.BIN] [--json out.json [--pretty]] [--node ID] "
                          "[--quest MIS_*] [--scan [--tsv out.tsv] [--top N]] [--disasm FN] "
-                         "[--check <save dir>... [--verbose]] [--fuzz N] [--effects]\n");
+                         "[--check <save dir>... [--verbose]] [--fuzz N] [--effects|--exec [--via-json]] [--program FN]\n");
     return 2;
     }
 
@@ -203,6 +218,27 @@ int main(int argc, char** argv) {
 
   if(disasm!=nullptr)
     return code.print(upper(disasm)) ? 0 : 1;
+  if(program!=nullptr) {
+    // a dialog: its condition and information; otherwise the function itself
+    auto* sym = vm.find_symbol_by_name(upper(program));
+    if(sym==nullptr) {
+      std::fprintf(stderr, "no symbol %s\n", program);
+      return 1;
+      }
+    std::vector<uint32_t> fns = {sym->index()};
+    if(code.isInfo(*sym)) {
+      auto info = vm.init_instance<zenkit::IInfo>(sym);
+      fns.clear();
+      for(auto f : {info->condition, info->information})
+        if(f!=0)
+          fns.push_back(uint32_t(f));
+      }
+    for(auto f : fns) {
+      auto* s = dat.find_symbol_by_index(f);
+      std::printf("%s:\n%s\n", s ? ident(s->name()).c_str() : "?", describe(liftProgram(dat, code, f)).c_str());
+      }
+    return 0;
+    }
   if(scan)
     return scanDialogs(vm, code, tsvPath, top);
 
@@ -220,8 +256,10 @@ int main(int argc, char** argv) {
     auto id = node ? upper(node) : std::string();
     int  r  = 0;
     if(!saves.empty())
-      r |= checkSaves(datPath, m, saves, node ? id.c_str() : nullptr, verbose, effects);
-    if(fuzz>0 && effects)
+      r |= checkSaves(datPath, m, saves, node ? id.c_str() : nullptr, verbose, effects, exec);
+    if(fuzz>0 && exec)
+      r |= fuzzExec(datPath, m, fuzz, node ? id.c_str() : nullptr, verbose);
+    else if(fuzz>0 && effects)
       r |= fuzzEffects(datPath, m, fuzz, node ? id.c_str() : nullptr, verbose);
     else if(fuzz>0)
       r |= fuzzConditions(datPath, m, fuzz, node ? id.c_str() : nullptr, verbose);

@@ -172,6 +172,17 @@ Marvin::Marvin() {
     {"toggle manualaim",           C_ToggleManualAim},
     {"toggle npcmanualaim",        C_ToggleNpcManualAim},
     {"toggle flinch",              C_ToggleFlinch},
+    {"toggle ragdoll",             C_ToggleRagdoll},
+    {"toggle ragdoll_quest_guard", C_ToggleRagdollQuestGuard},
+    {"toggle living_bodies",      C_ToggleLivingBodies},
+    {"toggle arrow_physics",      C_ToggleArrowPhysics},
+    {"toggle arrow_sticking",     C_ToggleArrowSticking},
+    {"toggle spell_physics",      C_ToggleSpellPhysics},
+    {"toggle movable_vobs",       C_ToggleMovableVobs},
+    {"toggle physics_noise",      C_TogglePhysicsNoise},
+    {"toggle destruction",        C_ToggleDestruction},
+    {"toggle character_virtual",  C_ToggleCharacterVirtual},
+    {"toggle npc_character_virtual",C_ToggleNpcCharacterVirtual},
     };
   }
 
@@ -540,6 +551,45 @@ bool Marvin::exec(std::string_view v) {
     case C_ToggleFlinch:
       Flinch::setEnabled(!Flinch::isEnabled());
       return true;
+    case C_ToggleRagdoll:
+      Gothic::settingsSetI("GAME","ragdoll",Gothic::settingsGetI("GAME","ragdoll")==0 ? 1 : 0);
+      return true;
+    case C_ToggleRagdollQuestGuard:
+      Gothic::settingsSetI("GAME","ragdoll_quest_guard",Gothic::settingsGetI("GAME","ragdoll_quest_guard")==0 ? 1 : 0);
+      return true;
+    case C_ToggleLivingBodies:
+      Gothic::settingsSetI("GAME","living_bodies",Gothic::settingsGetI("GAME","living_bodies")==0 ? 1 : 0);
+      return true;
+    case C_ToggleArrowPhysics:
+      Gothic::settingsSetI("GAME","arrow_physics",Gothic::settingsGetI("GAME","arrow_physics")==0 ? 1 : 0);
+      return true;
+    case C_ToggleArrowSticking:
+      Gothic::settingsSetI("GAME","arrow_sticking",Gothic::settingsGetI("GAME","arrow_sticking")==0 ? 1 : 0);
+      return true;
+    case C_ToggleSpellPhysics:
+      Gothic::settingsSetI("GAME","spell_physics",Gothic::settingsGetI("GAME","spell_physics")==0 ? 1 : 0);
+      return true;
+    case C_ToggleMovableVobs:
+      Gothic::settingsSetI("GAME","movable_vobs",Gothic::settingsGetI("GAME","movable_vobs")==0 ? 1 : 0);
+      return true;
+    case C_TogglePhysicsNoise:
+      Gothic::settingsSetI("GAME","physics_noise",Gothic::settingsGetI("GAME","physics_noise")==0 ? 1 : 0);
+      return true;
+    case C_ToggleDestruction:
+      Gothic::settingsSetI("GAME","destruction",Gothic::settingsGetI("GAME","destruction")==0 ? 1 : 0);
+      return true;
+    case C_ToggleCharacterVirtual: {
+      const bool enabled = !Gothic::physicsFlags().characterVirtual;
+      Gothic::settingsSetI("GAME","character_virtual",enabled ? 1 : 0);
+      print(enabled ? "CharacterVirtual: ON (hero)" : "CharacterVirtual: OFF");
+      return true;
+      }
+    case C_ToggleNpcCharacterVirtual: {
+      const bool enabled = !Gothic::physicsFlags().npcCharacterVirtual;
+      Gothic::settingsSetI("GAME","npc_character_virtual",enabled ? 1 : 0);
+      print(enabled ? "CharacterVirtual: ON (nearby human NPCs)" : "CharacterVirtual: OFF (NPCs)");
+      return true;
+      }
     }
 
   return true;

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Collection, Sequence
 from dataclasses import dataclass, field
 
 from .base import Done, Item, LLMEvent, Message, TextDelta, Tool, ToolCall, ToolChoice
@@ -43,8 +43,11 @@ class FakeBackend:
         self.chunk = chunk
         self.delay = delay
         self.first = first
-        self.calls: list[tuple[str, list[Item], list[Tool]]] = []
+        self.calls: list[tuple[str, list[Item], list[Tool]]] = []  # the tools: those it may call
         self.tool_choices: list[ToolChoice | None] = []
+        self.sent_tools: list[list[Tool]] = []  # all the tools of each request
+        self.cache_keys: list[str | None] = []
+        self.prewarms: list[tuple[str, list[Item]]] = []  # what was sent to fill the prompt cache
 
     @property
     def reply(self) -> str:
@@ -53,6 +56,9 @@ class FakeBackend:
     async def aclose(self) -> None:
         pass
 
+    async def prewarm(self, *, instructions: str, messages: Sequence[Item]) -> None:
+        self.prewarms.append((instructions, list(messages)))
+
     async def stream(
         self,
         *,
@@ -60,9 +66,14 @@ class FakeBackend:
         messages: Sequence[Item],
         tools: list[Tool] | None = None,
         tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         step = self.script[min(len(self.calls), len(self.script) - 1)]
-        self.calls.append((instructions, list(messages), list(tools or [])))
+        self.sent_tools.append(list(tools or []))
+        self.cache_keys.append(cache_key)
+        tools = [t for t in tools or [] if allowed is None or t.name in allowed]
+        self.calls.append((instructions, list(messages), tools))
         self.tool_choices.append(tool_choice)
         if self.first > 0:
             await asyncio.sleep(self.first)
@@ -71,7 +82,7 @@ class FakeBackend:
             yield TextDelta(step.text[i : i + self.chunk])
         items: list[Item] = [Message("assistant", step.text)] if step.text else []
         if tool_choice != "none":
-            offered = {t.name for t in tools or []}
+            offered = {t.name for t in tools}
             for n, call in enumerate(c for c in step.tool_calls if c.name in offered):
                 call = ToolCall(
                     call.name,

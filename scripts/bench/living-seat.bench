@@ -1,0 +1,19 @@
+# A real world bench interaction, with nearby dropped items and a free corpse.
+seed 73013
+cheat god
+set time 12 0
+goto NW_FARM1_INHOUSE_01
+wait 500
+view clean
+overlay off
+living-seat setup
+wait 4000
+cam follow 300 35 70
+rec living_seat novideo
+living-seat sit
+wait 3500
+living-seat stand
+wait 2500
+living-seat shift
+wait 1500
+stop

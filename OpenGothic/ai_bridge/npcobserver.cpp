@@ -5,9 +5,19 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <queue>
+#include <unordered_map>
+#include <utility>
 
 #include "game/gamescript.h"
+#include "game/inventory.h"
+#include "physics/dynamicworld.h"
+#include "physics/physicsnoise.h"
+#include "testbench.h"
 #include "world/aiqueue.h"
+#include "world/movablevobs.h"
+#include "world/waypoint.h"
+#include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 
@@ -23,11 +33,19 @@ constexpr float    RosterRadius   = 6000;  // cm: the engine simplifies AI beyon
 constexpr float    EventRadius    = 3000;  // cm: the engine perceives within this
 constexpr float    ViewRadius     = 3000;
 constexpr float    ViewHalfAngle  = 60;    // degrees around where the player faces
+constexpr float    HeardRadius    = 6000;  // cm: the player's voice is followed round rock and walls to those this near
+constexpr float    AroundMax      = 10000; // cm: and this far round, at most
+constexpr float    NotHeard       = 2*AroundMax; // "heard" of one his voice does not reach
+constexpr float    WalledSide     = 40;    // cm: the lines either side of the one between the heads
+constexpr float    WaySight       = 2000;  // cm: a voice goes round by the waynet in sight this near
+constexpr float    WayEye         = 100;   // cm: above a point of the waynet, where it is looked at
 constexpr float    NearEnter      = 500;   // cm: "player_near" when the player comes this close
 constexpr float    NearLeave      = 700;   // and forgets it once they are this far again
 constexpr uint64_t EventPeriodMs  = 1000;  // per npc, kind and who did it
 constexpr uint64_t MonsterNearPeriodMs = 10000;
 constexpr uint64_t NearPeriodMs   = 30000;
+constexpr uint64_t NoisePeriodMs  = 10000; // per listener, regardless of body or culprit
+constexpr float    NoiseMinVolume = .35f; // source gain, 0..1, after the engine's hearing gate
 constexpr uint64_t ActMaxMs       = 30000; // npc_idle at the latest after this
 constexpr uint64_t ActGraceMs     = 200;   // let the npc take the action from its queue
 constexpr uint64_t StateMaxMs     = 120000; // fight/flee: npc_idle at the latest after this
@@ -68,6 +86,60 @@ bool inView(Npc& player, Npc& npc, float dist) {
   const float rot = player.rotationRad();
   const float cos = (d.x*std::cos(rot)+d.z*std::sin(rot))/len;
   return cos>=std::cos(ViewHalfAngle*float(M_PI)/180.f);
+  }
+
+// rock or a wall between two heads: no straight line from one to the other, nor a hand's breadth to either
+// side of it (a post or a tree trunk in between is no wall)
+bool walled(const DynamicWorld& physic, const Tempest::Vec3& a, const Tempest::Vec3& b) {
+  const float dx = b.x-a.x, dz = b.z-a.z;
+  const float len = std::sqrt(dx*dx+dz*dz);
+  if(len<1)
+    return false;
+  const Tempest::Vec3 side = Tempest::Vec3(-dz/len,0,dx/len)*WalledSide;
+  return physic.ray(a,b).hasCol && physic.ray(a+side,b+side).hasCol && physic.ray(a-side,b-side).hasCol;
+  }
+
+// the nearest point of the waynet in sight of `eye`, not farther than WaySight
+const WayPoint* wayInSight(World& world, const Tempest::Vec3& eye) {
+  const DynamicWorld& physic = *world.physic();
+  return world.findWayPoint(eye,[&](const WayPoint& w) {
+    if(!w.isConnected() || (w.position()-eye).quadLength()>WaySight*WaySight)
+      return false;
+    return !physic.ray(eye,w.position()+Tempest::Vec3(0,WayEye,0)).hasCol;
+    });
+  }
+
+// how far a voice goes from `a` to `b` round rock or a wall between them: to the waynet in sight, along it,
+// and from it (it goes nowhere through the rock); farther than `limit`: NotHeard
+float around(World& world, const WayPoint* from, const Tempest::Vec3& a, const Tempest::Vec3& b, float limit) {
+  const WayPoint* to = wayInSight(world,b);
+  if(from==nullptr || to==nullptr)
+    return NotHeard;
+  const float start = (from->position()-a).length(), end = (to->position()-b).length();
+  using Step = std::pair<float,const WayPoint*>;
+  std::priority_queue<Step,std::vector<Step>,std::greater<Step>> open;
+  std::unordered_map<const WayPoint*,float> best;
+  open.push({start,from});
+  best[from] = start;
+  while(!open.empty()) {
+    auto [len,w] = open.top();
+    open.pop();
+    if(len>best[w])
+      continue;
+    if(len+end>limit)
+      break;
+    if(w==to)
+      return len+end;
+    for(auto& c:w->connections()) {
+      const float next = len+float(c.len);
+      auto it = best.find(c.point);
+      if(it!=best.end() && it->second<=next)
+        continue;
+      best[c.point] = next;
+      open.push({next,c.point});
+      }
+    }
+  return NotHeard;
   }
 
 std::string_view activity(Npc& npc, std::string_view owner) {
@@ -135,6 +207,18 @@ Seen classify(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
     }
   }
 
+std::string noiseSource(const PhysicsNoise& noise) {
+  const auto what = upper(noise.what);
+  auto has = [&](std::string_view token) { return what.find(token)!=std::string::npos; };
+  if(has("RAGDOLL"))
+    return "body";
+  if(const auto* rule = MovableVobs::classifyVisual(noise.what))
+    return rule->className;
+  if(has("CUP") || has("MUG") || has("BECHER") || has("BEER") || noise.material==MAT_CLAY)
+    return "cup";
+  return noise.what.empty() ? "object" : noise.what;
+  }
+
 }
 
 NpcObserver::NpcObserver(Emit emit, Owner owner):emit(std::move(emit)), owner(std::move(owner)) {
@@ -184,6 +268,22 @@ void NpcObserver::emitRoster(World& world) {
    .array("npcs");
   struct Near { std::string symbol; float dist; };
   std::vector<Near> cameClose;  // reported after the roster, so the server already knows these npc's
+  const Tempest::Vec3 head = pl->mapHeadBone();
+  const WayPoint*     way  = nullptr;  // the player's, once someone is behind a wall
+  bool                wayFound = false;
+  // how far the player's voice goes to the npc (v30): straight on, or round what is between them
+  auto heard = [&](Npc& npc, float dist) {
+    if(dist>HeardRadius)
+      return NotHeard;
+    const Tempest::Vec3 at = npc.mapHeadBone();
+    if(!walled(*world.physic(),head,at))
+      return dist;
+    if(!wayFound) {
+      way      = wayInSight(world,head);
+      wayFound = true;
+      }
+    return around(world,way,head,at,AroundMax);
+    };
   world.detectNpc(pl->position(),RosterRadius,[&](Npc& npc) {
     if(npc.isPlayer() || npc.guild()>=GIL_SEPERATOR_HUM)
       return;  // people only: monsters keep their own AI
@@ -199,6 +299,7 @@ void NpcObserver::emitRoster(World& world) {
        .integer("guild",int64_t(npc.guild()))
        .num("distance",double(dist))
        .boolean("in_view",inView(*pl,npc,dist))
+       .num("heard",double(heard(npc,dist)))
        .str("activity",activity(npc,owner(symbol)))
        .str("state",AiNpc::stateName(world,npc.currentState()))
        .boolean("moving",AiNpc::isMoving(npc))
@@ -249,6 +350,38 @@ void NpcObserver::perception(World& world, Npc& self, Npc& other, Npc* victim, P
   const auto victimId = seen.kind=="monster_killed" ? npcId(world,*seen.about) : std::string();
   emitEvent(symbol,seen.kind,otherId,dist,detail,other.isPlayer() ? "" : TextCodec::toUtf8(other.displayName()),
             victimId);
+  }
+
+void NpcObserver::physicsNoise(World& world, Npc& self, const PhysicsNoise& noise) {
+  if(noise.volume<NoiseMinVolume || self.isPlayer() || self.isDead() || self.isDown() ||
+     self.guild()>=GIL_SEPERATOR_HUM || self.weaponState()!=WeaponState::NoWeapon ||
+     !self.canHearPhysicsNoise() || self.isPhysicsInvestigating())
+    return;
+  Npc* pl = world.player();
+  if(pl==nullptr || self.qDistTo(*pl)>EventRadius*EventRadius)
+    return;
+  const auto symbol = npcId(world,self);
+  if(symbol.empty() || !owner(symbol).empty() || throttled(symbol,"noise",world.tickCount(),NoisePeriodMs))
+    return;
+  JsonWriter j("npc_event");
+  const auto now = world.time();
+  j.str("npc",symbol).str("kind","noise")
+   .integer("time",now.day()*24*60+now.hour()*60+now.minute())
+   .array("at").item(double(noise.position.x)).item(double(noise.position.y)).item(double(noise.position.z)).endArray()
+   .num("distance",double((self.position()-noise.position).length()))
+   .num("loudness",double(noise.volume)).str("source",noiseSource(noise));
+  if(const auto* point = world.findWayPoint(noise.position))
+    j.str("place",point->name); // the server's PlaceBook supplies words for this point
+  if(noise.culprit!=nullptr && self.canSeeNpc(*noise.culprit,false)) {
+    const auto other = npcId(world,*noise.culprit);
+    if(!other.empty()) {
+      j.str("other",other);
+      if(!noise.culprit->isPlayer())
+        j.str("other_name",TextCodec::toUtf8(noise.culprit->displayName()));
+      }
+    }
+  TestBench::physicsNoiseBridgeEvent(self,world.tickCount());
+  emit(j.finish());
   }
 
 bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
@@ -314,6 +447,11 @@ void NpcObserver::releaseAll(World& world) {
     releaseHeld(world,h);
   held.clear();
   verdicts.clear();
+  for(auto& r:running)
+    if(r.investigate)
+      if(auto* npc = world.findNpcByInstance(r.instance))
+        npc->stopPhysicsInvestigation(owner(r.symbol).empty() && npc->canHearPhysicsNoise());
+  running.erase(std::remove_if(running.begin(),running.end(),[](const Running& r){ return r.investigate; }),running.end());
   }
 
 void NpcObserver::releaseHeld(World& world, Held& h) {
@@ -336,10 +474,11 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   const auto id     = JsonRead::str(msg,"id");
   const auto symbol = upper(JsonRead::str(msg,"npc"));
   const auto action = JsonRead::str(msg,"action");
+  auto result = [&](std::string_view status, std::string_view detail) { reply(id,symbol,status,detail,action); };
   Npc*       npc    = npcBySymbol(world,symbol);
   Npc*       pl     = world.player();
   if(npc==nullptr || npc->isPlayer() || pl==nullptr) {
-    reply(id,symbol,"rejected","npc not found");
+    result("rejected","npc not found");
     return;
     }
   if(BodyController::owns(*npc)) {
@@ -348,11 +487,11 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     return;
     }
   if(!owner(symbol).empty() || npc->isTalk()) {
-    reply(id,symbol,"rejected","npc is busy (attached or in a dialog)");
+    result("rejected","npc is busy (attached or in a dialog)");
     return;
     }
   if(npc->isDead() || npc->isDown()) {
-    reply(id,symbol,"rejected","npc is down");
+    result("rejected","npc is down");
     return;
     }
 
@@ -363,17 +502,22 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   if(auto t = JsonRead::str(args,"npc"); !t.empty()) {
     target = AiNpc::findNpc(world,t,npc);
     if(target==nullptr || target==npc) {
-      reply(id,symbol,"rejected","target not found");
+      result("rejected","target not found");
       return;
       }
     }
   ScriptFn state;
   Running  run;  // what is tracked until npc_idle
 
+  if(npc->isPhysicsInvestigating() && action!="fight" && action!="flee" && action!="draw_weapon") {
+    result("rejected","npc is investigating a noise");
+    return;
+    }
+
   if(action=="say_svm") {
     std::string svm = upper(JsonRead::str(args,"svm"));
     if(svm.empty()) {
-      reply(id,symbol,"rejected","say_svm needs svm");
+      result("rejected","say_svm needs svm");
       return;
       }
     if(svm[0]!='$')
@@ -398,7 +542,7 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   else if(action=="play_ani") {
     const auto name = JsonRead::str(args,"name");
     if(name.empty()) {
-      reply(id,symbol,"rejected","play_ani needs name");
+      result("rejected","play_ani needs name");
       return;
       }
     npc->aiPush(AiQueue::aiTurnToNpc(target));
@@ -408,6 +552,25 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     npc->aiPush(AiQueue::aiGoToNpc(target));
     npc->aiPush(AiQueue::aiTurnToNpc(target));
     }
+  else if(action=="investigate") {
+    const auto at = args.FindMember("at");
+    if(at==args.MemberEnd() || !at->value.IsArray() || at->value.Size()!=3) {
+      result("rejected","investigate needs at: [x,y,z]");
+      return;
+      }
+    for(auto& value:at->value.GetArray())
+      if(!value.IsNumber() || !std::isfinite(value.GetDouble())) {
+        result("rejected","invalid investigation position");
+        return;
+        }
+    const Tempest::Vec3 point(float(at->value[0].GetDouble()),float(at->value[1].GetDouble()),float(at->value[2].GetDouble()));
+    if((point-npc->position()).quadLength()>EventRadius*EventRadius ||
+       !npc->startPhysicsInvestigation(point,uint64_t(std::clamp<int64_t>(JsonRead::integer(args,"ms",5000),2000,8000)))) {
+      result("rejected","npc cannot investigate this position now");
+      return;
+      }
+    run.investigate = true;
+    }
   else if(action=="turn_away") {
     npc->aiPush(AiQueue::aiTurnAway(target));
     }
@@ -415,7 +578,7 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     // the game's own behaviour, the way B_Attack / B_Flee start it; the routine resumes afterwards
     state = AiNpc::scriptState(world,action=="fight" ? "ZS_ATTACK" : "ZS_FLEE");
     if(!state.isValid() || target->isDead()) {
-      reply(id,symbol,"rejected",state.isValid() ? "target is dead" : "the scripts have no such state");
+      result("rejected",state.isValid() ? "target is dead" : "the scripts have no such state");
       return;
       }
     npc->setTarget(target);
@@ -436,15 +599,24 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     const auto wp   = world.findPoint(JsonRead::str(args,"waypoint"),false);
     state = name.starts_with("ZS_") ? AiNpc::scriptState(world,name) : ScriptFn();
     if(!state.isValid() || wp==nullptr) {
-      reply(id,symbol,"rejected",!state.isValid() ? "unknown state: " + name : "unknown waypoint");
+      result("rejected",!state.isValid() ? "unknown state: " + name : "unknown waypoint");
       return;
       }
     auto until = world.time();
     until.addMilis(uint64_t(std::clamp<int64_t>(JsonRead::integer(args,"minutes",60),1,24*60))*60*1000);
+    // `place` (v38): it is there at once, the way the engine puts everyone at their routine's spot when the
+    // clock leaps (World::setDayTime: the hero slept), as Npc::resetPositionToTA does: the walk went by meanwhile
+    if(JsonRead::boolean(args,"place",false)) {
+      npc->clearAiQueue();
+      npc->setPosition (wp->position());
+      npc->setDirection(wp->direction());
+      world.script().fixNpcPosition(*npc,0,100);
+      }
     npc->startState(state,wp->name,until,false);
     // `arrive` (v15): npc_idle "arrived" once it is there doing it, not only when it leaves it
     run.arrival = JsonRead::boolean(args,"arrive",false);
-    run.at      = wp->position();
+    // Native waypoint walks end at groundPos; authored points can float above the floor.
+    run.at      = wp->groundPos;
     run.radius  = float(std::clamp<int64_t>(JsonRead::integer(args,"radius",500),50,5000));
     }
   else if(action=="set_routine") {
@@ -452,7 +624,7 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     const auto   name = upper(JsonRead::str(args,"name"));
     const size_t fn   = world.script().findSymbolIndex("RTN_" + name + "_" + std::to_string(npc->handle().id));
     if(name.empty() || fn==size_t(-1)) {
-      reply(id,symbol,"rejected","unknown routine: " + name);
+      result("rejected","unknown routine: " + name);
       return;
       }
     npc->excRoutine(fn);
@@ -462,14 +634,18 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     // to another npc (v15), as give_item does for an attached one: walks up if needed, turns, the item
     // changes hands once its queue is done (checkRunning). The hero gets things only through deals
     if(target==pl) {
-      reply(id,symbol,"rejected","give: to an npc only");
+      result("rejected","give: to an npc only");
       return;
       }
     const auto   name = upper(JsonRead::str(args,"item"));
     const size_t cls  = world.script().findSymbolIndex(name);
     const size_t have = cls==size_t(-1) ? 0 : npc->inventory().itemCount(cls);
     if(have==0) {
-      reply(id,symbol,"rejected","npc has no item " + name);
+      result("rejected","npc has no item " + name);
+      return;
+      }
+    if(auto* it = const_cast<Inventory&>(npc->inventory()).getItem(cls); it!=nullptr && it->isMission()) {
+      result("rejected","a mission item: " + name);  // v39: never between npc's
       return;
       }
     run.item   = cls;
@@ -480,8 +656,16 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     npc->aiPush(AiQueue::aiTurnToNpc(target));
     }
   else {
-    reply(id,symbol,"rejected","unknown action: " + std::string(action));
+    result("rejected","unknown action: " + std::string(action));
     return;
+    }
+
+  // Only combat actions pass the busy guard. Preserve their newly queued work.
+  if(!run.investigate) {
+    npc->stopPhysicsInvestigation(false);
+    for(const auto& previous:running)
+      if(previous.symbol==symbol && previous.investigate)
+        emit(JsonWriter("npc_idle").str("npc",symbol).str("act",previous.id).str("reason","interrupted").finish());
     }
 
   // a newer action for the same npc replaces the tracking of the older one
@@ -492,9 +676,9 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   run.instance = world.script().findSymbolIndex(symbol);
   run.start    = world.tickCount();
   run.state    = state;
-  run.maxMs    = action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs);
+  run.maxMs    = run.investigate ? 46000 : (action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs));
   running.push_back(std::move(run));
-  reply(id,symbol,"queued","");
+  result("queued","");
   }
 
 void NpcObserver::routine(World& world, const rapidjson::Value& msg) {
@@ -543,14 +727,19 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
     bool        done   = false;
     std::string reason = "done";
     std::string detail;
-    if(!gone && r.state.isValid()) {
+    if(!gone && r.investigate) {
+      done = !npc->isPhysicsInvestigating();
+      if(done && !npc->physicsInvestigationResult().empty())
+        reason = npc->physicsInvestigationResult();
+      }
+    else if(!gone && r.state.isValid()) {
       // a script state: done once the npc has entered it and left it again
       const bool in = npc->isInState(r.state);
       r.entered = r.entered || in;
       done      = (r.entered && !in) || (!r.entered && now>r.start+StateStartMs);
       // there and doing it (v15): the state has begun (its start pushes the walk to the spot) and the walk
-      // is over (queue, go-to and waits empty). From the feet: the waypoint is on the ground, and qDistTo's
-      // center is about a metre above it, so a small radius could never be met
+      // is over (queue, go-to and waits empty). Measure from the feet to the grounded waypoint,
+      // just as MoveAlgo does; qDistTo measures from the body's centre instead.
       if(r.arrival && in && now>r.start+ActGraceMs && npc->isAiQueueEmpty() &&
          (npc->position()-r.at).quadLength()<=r.radius*r.radius) {
         done   = true;
@@ -612,9 +801,12 @@ bool NpcObserver::throttled(std::string_view npc, std::string_view kind, uint64_
   return false;
   }
 
-void NpcObserver::reply(std::string_view id, std::string_view npc, std::string_view status, std::string_view detail) {
+void NpcObserver::reply(std::string_view id, std::string_view npc, std::string_view status, std::string_view detail,
+                        std::string_view action) {
   JsonWriter j("npc_act_result");
   j.str("id",id).str("npc",npc).str("status",status);
+  if(!action.empty())
+    j.str("action",action);
   if(!detail.empty())
     j.str("detail",detail);
   emit(j.finish());

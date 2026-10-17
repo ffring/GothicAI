@@ -67,6 +67,11 @@ class Interactive : public Vob {
     void                setAsCracked(bool c) { isLockCracked = c; }
     bool                isCracked() const { return isLockCracked; }
     bool                needToLockpick(const Npc& pl) const;
+    // ai_bridge (npc chests): the name in the world, whether it is locked now, and the key's instance
+    std::string_view    vobNameStr() const { return vobName; }
+    bool                isLocked() const { return locked && !isLockCracked; }
+    std::string_view    keyName() const { return keyInstance; }
+    std::string_view    startItems() const { return startContents; }  // "ItMi_Gold:29,ItRw_Arrow:15"
 
     Inventory&          inventory();
     void                setSlotItem(MeshObjects::Mesh&& itm, std::string_view slot);
@@ -162,6 +167,7 @@ class Interactive : public Vob {
     std::string         keyInstance;
     std::string         pickLockStr;
     Inventory           invent;
+    std::string         startContents;  // what the world's data put in it at the start (not saved: from the ZEN)
     // oCMobLadder
     int                 stepsCount = 0;
 

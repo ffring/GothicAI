@@ -1,5 +1,6 @@
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     config.set("tts.loudness", "-16")
     config.set("llm.model", "gpt-6.1-sol")
     config.set("llm.decider_url", "ws://gpu:47832")
+    config.set("llm.quick_url", "http://gpu:47834/v1")
     config.set("secrets.inworld_api_key", "iw-secret")
     config.set("secrets.openai_api_key", "sk-secret")
 
@@ -65,6 +67,7 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     assert args[args.index("--tts-url") + 1] == "ws://127.0.0.1:50003"
     assert args[args.index("--model") + 1] == "gpt-6.1-sol" and "--no-console" in args
     assert args[args.index("--decider-url") + 1] == "ws://gpu:47832"
+    assert args[args.index("--quick-url") + 1] == "http://gpu:47834/v1" and "--no-quick" not in args
     assert args[args.index("--game-dir") + 1] == "/games/G2"
     for p in procs:  # keys never in argv: they would end up in logs and `ps`
         assert not any("secret" in a for a in p.argv)
@@ -76,6 +79,12 @@ def test_voice_and_npc_voices_can_be_off(config, tmp_path):
     procs = services(config, LAYOUT, PORTS, tmp_path)
     assert [p.name for p in procs] == ["server"]
     assert "--no-voice" in procs[0].argv and "--no-tts" in procs[0].argv
+
+
+def test_the_quick_model_is_on_unless_turned_off(config, tmp_path):
+    assert "--no-quick" not in by_name(services(config, LAYOUT, PORTS, tmp_path))["server"].argv
+    config.set("llm.quick", "false")
+    assert "--no-quick" in by_name(services(config, LAYOUT, PORTS, tmp_path))["server"].argv
 
 
 def test_the_game_runs_in_its_home_and_finds_the_server(config):
@@ -94,6 +103,20 @@ def test_the_game_gets_the_sharper_textures_when_they_are_made(config, tmp_path)
     assert "OPENGOTHIC_TEXTURES" not in game(config, LAYOUT, PORTS).env
     with_hd = Layout(LAYOUT.repo, LAYOUT.uv, LAYOUT.game_bin, LAYOUT.game_dir, LAYOUT.game_home, tmp_path)
     assert game(config, with_hd, PORTS).env["OPENGOTHIC_TEXTURES"] == str(tmp_path)
+
+
+def test_the_game_gets_the_fracture_cache_when_made(config, tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENGOTHIC_FRACTURE", raising=False)
+    assert "OPENGOTHIC_FRACTURE" not in game(config, LAYOUT, PORTS).env
+    layout = replace(LAYOUT, fracture_cache=tmp_path)
+    assert game(config, layout, PORTS).env["OPENGOTHIC_FRACTURE"] == str(tmp_path)
+
+
+@pytest.mark.parametrize("override", ["/another/fracture", ""])
+def test_the_game_preserves_an_explicit_fracture_override(config, tmp_path, monkeypatch, override):
+    monkeypatch.setenv("OPENGOTHIC_FRACTURE", override)
+    layout = replace(LAYOUT, fracture_cache=tmp_path)
+    assert game(config, layout, PORTS).env["OPENGOTHIC_FRACTURE"] == override
 
 
 def test_latest_save(tmp_path):

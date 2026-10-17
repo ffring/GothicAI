@@ -55,10 +55,12 @@ Vob::~Vob() {
   }
 
 Vec3 Vob::position() const {
-  return Vec3(pos.at(3,0),pos.at(3,1),pos.at(3,2));
+  const auto& p = transform();
+  return Vec3(p.at(3,0),p.at(3,1),p.at(3,2));
   }
 
 void Vob::setGlobalTransform(const Matrix4x4& p) {
+  hasPhysicsPos = false;
   pos   = p;
   local = pos;
 
@@ -85,6 +87,53 @@ bool Vob::setMobState(std::string_view scheme, int32_t st) {
 void Vob::moveEvent() {
   }
 
+void Vob::physicsMoveEvent() {
+  moveEvent();
+  }
+
+bool Vob::hasDynamicBody() const {
+  return false;
+  }
+
+void Vob::setPhysicsTransform(const Matrix4x4& p) {
+  // Simulation never rewrites the authored/save pose or relative placement.
+  physicsPos = p;
+  hasPhysicsPos = true;
+  physicsMoveEvent();
+  for(auto& i:child) {
+    if(i->hasDynamicBody())
+      continue;
+    auto m = p;
+    m.mul(i->local);
+    i->setPhysicsTransform(m);
+    }
+  }
+
+void Vob::fillAttachmentSnapshot(AttachmentSnapshot& out) const {
+  out.zenId = vobObjectID;
+  out.parentZenId = parent!=nullptr ? parent->vobObjectID : uint32_t(-1);
+  out.transform = transform();
+  }
+
+void Vob::collectAttachmentSnapshots(std::vector<AttachmentSnapshot>& out) const {
+  AttachmentSnapshot snapshot;
+  fillAttachmentSnapshot(snapshot);
+  out.emplace_back(std::move(snapshot));
+  for(auto& i:child)
+    i->collectAttachmentSnapshots(out);
+  }
+
+bool Vob::attachmentSnapshot(uint32_t zenId, std::vector<AttachmentSnapshot>& out) const {
+  if(vobObjectID==zenId) {
+    collectAttachmentSnapshots(out);
+    return true;
+    }
+  for(auto& i:child)
+    if(i->attachmentSnapshot(zenId,out))
+      return true;
+  return false;
+  }
+
 bool Vob::isDynamic() const {
   return false;
   }
@@ -95,6 +144,7 @@ float Vob::extendedSearchRadius() const {
 
 void Vob::recalculateTransform() {
   auto old = position();
+  hasPhysicsPos = false;
   if(parent!=nullptr) {
     pos = parent->transform();
     pos.mul(local);
@@ -266,6 +316,7 @@ void Vob::load(Serialize& fin) {
   auto type = uint8_t(vobType);
   uint8_t savValue;
   fin.read(savValue,pos,local);
+  hasPhysicsPos = false;
 
   if(fin.version() > 41) {
     if(savValue!=type)

@@ -7,6 +7,11 @@ The director proposes, the code decides. A change (graph_patch operations) is ac
 - a dialog it adds can be offered from the current state: its npc lives, its condition can become true;
 - every quest in progress keeps an ending the hero can reach, and the quest it repairs gets one.
 
+A program in place of a dialog's own (graph_patch `program`, programs.py) is judged by what it does: the
+quest it ends, the variables it writes, the condition it has when it is one of the scripts' shapes (any
+other condition may come true). A trigger's program (graph_patch `trigger`, docs/director.md, stage 3) too:
+it writes variables like a dialog's, only no npc of its own dies with it.
+
 "Can become true" is computed over the lifted conditions with what may still change left open: a
 variable a dialog of a living npc writes, the items the hero may get, the dialogs he may yet hear. The dead
 stay dead, chapters only go forward. It over-approximates: a condition it calls impossible is impossible,
@@ -18,10 +23,12 @@ from __future__ import annotations
 import copy
 import itertools
 import operator
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import programs
 from .gamedata.storygraph import Expr, StoryGraph, render, walk
 
 LOG_RUNNING, LOG_SUCCESS, LOG_FAILED, LOG_OBSOLETE = 1, 2, 3, 4
@@ -34,6 +41,7 @@ JOURNAL_STATUS = {"LOG_RUNNING", "LOG_SUCCESS", "LOG_FAILED", "LOG_OBSOLETE"}
 MAX_LINES = 10
 MAX_TEXT = 300
 MAX_DESCRIPTION = 80
+TRIGGER_EVENTS = ("state", "death", "dialog")
 
 # The plot's npc's (instance prefixes): the director does not touch their dialogs. With the owners of the
 # dialogs that change the chapter, from the graph.
@@ -114,6 +122,10 @@ class Patches:
     conditions: dict[str, list[Expr]] = field(default_factory=dict)
     nodes: dict[str, dict[str, Any]] = field(default_factory=dict)  # the director's dialogs (add_node)
     told: set[str] = field(default_factory=set)
+    # the director's programs in place of the scripts': by dialog or choice, NODE:CONDITION for a condition
+    programs: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    vars: dict[str, int] = field(default_factory=dict)  # the director's story variables (vars): first values
+    triggers: dict[str, dict[str, Any]] = field(default_factory=dict)  # by id, which is its count's variable
 
     @classmethod
     def of(cls, ops: Iterable[dict[str, Any]]) -> Patches:
@@ -142,6 +154,21 @@ class Patches:
                     out.conditions.setdefault(node, []).append(op["expr"])
                 case "told":
                     out.told.add(node)
+                case "program":
+                    key = node + (":CONDITION" if op.get("part") == "condition" else "")
+                    if op.get("steps") is None:
+                        out.programs.pop(key, None)
+                    else:
+                        out.programs[key] = op["steps"]
+                case "vars":
+                    for name, value in (op.get("vars") or {}).items():
+                        out.vars.setdefault(str(name).upper(), value)
+                case "trigger":
+                    id = str(op.get("id", "")).upper()
+                    if op.get("steps") is None:
+                        out.triggers.pop(id, None)
+                    else:
+                        out.triggers[id] = dict(op, id=id)
         return out
 
 
@@ -161,21 +188,39 @@ class Story:
         """The story with these changes made."""
         return Story(self.graph, self.state, self.patches.then(ops))
 
+    @property
+    def symbols(self) -> dict[str, str]:
+        """The names the game knows (state.symbols), with the director's story variables and its triggers'
+        counts."""
+        return {**{v: "var" for v in [*self.patches.vars, *self.patches.triggers]}, **self.state.symbols}
+
     # --- quests -------------------------------------------------------------------------------
 
     def running(self) -> list[str]:
         return sorted(q for q in self.graph.quests if self.state.vars.get(q) == LOG_RUNNING)
 
     def endings(self, quest: str) -> list[str]:
-        """Dialogs that may end the quest: the scripts' own and the director's."""
+        """Dialogs that may end the quest: the scripts' own and the director's; a dialog with the director's
+        program ends it if the program does."""
         quest = quest.upper()
         out = set()
         if (q := self.graph.quests.get(quest)) is not None:
-            out = q.success | q.failed | q.obsolete
-        for id, made in self.patches.nodes.items():
-            if any(_sets(e, quest) in ENDINGS for e in made.get("effects", [])):
+            out = (q.success | q.failed | q.obsolete) - set(self.patches.programs)
+        for id in [*self.patches.nodes, *(k for k in self.patches.programs if ":" not in k)]:
+            if any(_sets(e, quest) in ENDINGS for e in self.effects_of(id)):
                 out.add(id)
         return sorted(out)
+
+    def effects_of(self, id: str) -> list[dict[str, Any]]:
+        """What the dialog (or choice) does when it runs: its lifted effects, or what the director's program
+        in its place does; for a dialog of the director, its effects and its program's."""
+        id = id.upper()
+        if (made := self.patches.nodes.get(id)) is not None:
+            return [*made.get("effects", []), *programs.effects(made.get("program"))]
+        if id in self.patches.programs:
+            return programs.effects(self.patches.programs[id])
+        node = self.graph.nodes.get(id)
+        return node.effects if node else []
 
     def dead_ends(self) -> list[str]:
         """Quests in progress that no dialog can end any more."""
@@ -215,7 +260,10 @@ class Story:
                 return not self.state.dead(npc) and any(self.can_offer(p) for p in node.parents)
             if not node.permanent and self.state.knows.get(id):
                 return False
-            conditions = [node.condition if node.lifted else None, *self.patches.conditions.get(id, [])]
+            condition = node.condition if node.lifted else None
+            if (own := self.patches.programs.get(id + ":CONDITION")) is not None:
+                condition = programs.condition(own)  # the director's; None: may come true
+            conditions = [condition, *self.patches.conditions.get(id, [])]
         else:
             return False
         if self.state.dead(npc):
@@ -246,7 +294,13 @@ class Story:
             return self._values[var]
         now = self.state.vars.get(var)
         if now is None:
-            vals: Vals = None
+            now = self.patches.vars.get(var)  # the director's, not reported by the game: as it was made
+        if (trigger := self.patches.triggers.get(var)) is not None:
+            # a trigger's count: the bridge counts it up when it fires; once, it fires once
+            now = now or 0
+            vals = None if trigger.get("repeat") else frozenset({now, 1} if now <= 1 else {now})
+        elif now is None:
+            vals = None
         elif var == "KAPITEL":
             vals = frozenset(range(now, max(now, LAST_CHAPTER) + 1))
         else:
@@ -263,11 +317,15 @@ class Story:
                 return None  # scripts outside dialogs write it: anything
             for w in info.writers:
                 node = self.graph.nodes.get(w)
-                if node is not None:
+                if node is not None and w not in self.patches.programs:
                     writers.append((node.npc, node.effects))
-        writers += [(m["npc"], m.get("effects", [])) for m in self.patches.nodes.values()]
+        for id in [*self.patches.nodes, *(k for k in self.patches.programs if ":" not in k)]:
+            if (npc := self.owner(id)) is not None:
+                writers.append((npc, self.effects_of(id)))
+        for t in self.patches.triggers.values():
+            writers.append((None, programs.effects(t.get("steps"))))  # nobody's: it does not die
         for npc, effects in writers:
-            if self.state.dead(npc):
+            if npc is not None and self.state.dead(npc):
                 continue
             for e in effects:
                 if e.get("do") != "set" or str(e.get("var", "")).upper() != var:
@@ -409,7 +467,14 @@ def names_in(ops: Iterable[dict[str, Any]]) -> set[str]:
                 for k in ("item", "var", "status"):
                     if e.get(k):
                         out.add(str(e[k]).upper())
+            out |= programs.names(made.get("program"))
+        out |= {str(v).upper() for v in op.get("vars") or {}}
+        if op.get("op") == "trigger":
+            out |= {str(op.get(k) or "").upper() for k in ("id", "npc", "node")}
+            out |= _expr_names(op.get("when"))
         out |= _expr_names(op.get("expr"))
+        if isinstance(op.get("steps"), list):
+            out |= programs.names(op["steps"])
     out.discard("")
     return out
 
@@ -421,6 +486,7 @@ def validate(
     *,
     repairs: str | None = None,
     caps: Caps | None = None,
+    book: bool = False,
 ) -> list[str]:
     """Why the change can't be made (in the words the director's model reads); empty: it can."""
     errors: list[str] = []
@@ -428,11 +494,19 @@ def validate(
     for op in ops:
         kind = op.get("op")
         if kind == "add_node":
-            errors += _check_node(op.get("node") or {}, story, after, rules, caps)
+            errors += _check_node(op.get("node") or {}, story, after, rules, caps, repairs)
         elif kind in ("disable", "enable", "condition", "remove_node"):
-            errors += _check_change(op, story, rules)
+            errors += _check_change(op, story, after.symbols, rules)
+        elif kind == "program":
+            errors += _check_program(op, story, after.symbols, rules)
+        elif kind == "vars":
+            errors += _check_vars(op, story)
+        elif kind == "trigger":
+            errors += _check_trigger(op, story, after.symbols, rules, caps)
         else:
             errors.append(f"операция {kind!r} режиссёру недоступна")
+        if book:
+            errors += _check_book_writes(op)
     if errors:
         return errors
     before = set(story.dead_ends())
@@ -444,16 +518,52 @@ def validate(
     return errors
 
 
+def _check_book_writes(op: dict[str, Any]) -> list[str]:
+    """Book quests only observe the scripts; repairs retain their right to change them."""
+    effects = []
+    steps = None
+    if op.get("op") == "add_node":
+        made = op.get("node") or {}
+        effects = made.get("effects") or []
+        steps = made.get("program")
+    elif op.get("op") in ("program", "trigger"):
+        steps = op.get("steps")
+    if isinstance(steps, list):
+        effects = [*effects, *programs.effects(steps)]
+    forbidden = sorted(
+        {
+            str(e.get("var", "")).upper()
+            for e in effects
+            if e.get("do") == "set" and not str(e.get("var", "")).upper().startswith(DIRECTOR_PREFIX)
+        }
+    )
+    return [
+        f"квест книги не меняет переменную скриптов {var}: разрешены только свои DIR_…" for var in forbidden
+    ]
+
+
 def _check_node(
-    made: dict[str, Any], story: Story, after: Story, rules: Rules, caps: Caps | None
+    made: dict[str, Any],
+    story: Story,
+    after: Story,
+    rules: Rules,
+    caps: Caps | None,
+    repairs: str | None = None,
 ) -> list[str]:
     errors = []
     id = str(made.get("id", "")).upper()
     npc = str(made.get("npc", "")).upper()
-    symbols = story.state.symbols
+    symbols = after.symbols
     if not id.startswith(DIRECTOR_PREFIX):
         errors.append(f"id диалога режиссёра начинается с {DIRECTOR_PREFIX}: {id}")
-    if id in story.graph.nodes or id in symbols or id in story.patches.nodes:
+    own_repair = (
+        repairs is not None
+        and re.fullmatch(r"DIR_Q[0-9]+", repairs) is not None
+        and repairs in story.patches.vars
+        and id in story.patches.nodes
+        and re.fullmatch(re.escape(repairs) + r"_(DONE|S[1-9][0-9]*G[1-9][0-9]*_D)", id) is not None
+    )
+    if id in story.graph.nodes or (not own_repair and (id in symbols or id in story.patches.nodes)):
         errors.append(f"диалог {id} уже есть")
     if symbols.get(npc) != "npc":
         errors.append(f"нет такого NPC: {npc}")
@@ -467,7 +577,11 @@ def _check_node(
     if len(description) > MAX_DESCRIPTION:
         errors.append(f"строка меню длиннее {MAX_DESCRIPTION} знаков")
     lines = made.get("lines") or []
-    if not 1 <= len(lines) <= MAX_LINES:
+    program = made.get("program")
+    if program is not None and not isinstance(program, list):
+        errors.append("программа диалога — список шагов")
+        program = None
+    if not 1 <= len(lines) + len(programs.lines(program)) <= MAX_LINES:
         errors.append(f"реплик должно быть от 1 до {MAX_LINES}")
     for line in lines:
         text = str(line.get("text", ""))
@@ -475,7 +589,12 @@ def _check_node(
             errors.append(f"кто говорит: self или other, а не {line.get('speaker')!r}")
         if (not line.get("line") and not text.strip()) or len(text) > MAX_TEXT:
             errors.append(f"реплика пустая или длиннее {MAX_TEXT} знаков")
-    errors += check_effects(made.get("effects") or [], symbols, rules, caps)
+    errors += check_effects(made.get("effects") or [], symbols, rules, None)
+    if program:
+        errors += _check_steps(program, symbols, rules)
+    if caps is not None:
+        # a repair gives no more than the ending it replaces: its effects and what its program gives
+        errors += _over_caps([*(made.get("effects") or []), *programs.effects(program)], caps)
     errors += _check_names(made.get("condition"), symbols)
     if not errors and not after.can_offer(id):
         errors.append(
@@ -521,15 +640,86 @@ def check_effects(
             if str(e.get("status") or "LOG_RUNNING").upper() not in JOURNAL_STATUS:
                 errors.append(f"статус темы журнала: {e.get('status')}")
     if caps is not None:
-        if xp > caps.xp:
-            errors.append(f"опыта {xp}, а исходная концовка давала {caps.xp}")
-        for item, n in given.items():
-            if n > caps.items.get(item, 0):
-                errors.append(f"{item} ×{n}, а исходная концовка давала ×{caps.items.get(item, 0)}")
+        errors += _over_caps(effects, caps)
     return errors
 
 
-def _check_change(op: dict[str, Any], story: Story, rules: Rules) -> list[str]:
+def _over_caps(effects: list[dict[str, Any]], caps: Caps) -> list[str]:
+    """What gives more than `caps`: experience and things for the hero, from the bridge's effects and from a
+    program's (programs.effects; a count that is not a number gives more than any cap)."""
+    xp = 0
+    given: dict[str, int] = {}
+    for e in effects:
+        kind = e.get("do")
+        if kind == "xp":
+            amount = _constant(e.get("amount"))
+            xp += amount if amount is not None else caps.xp + 1
+        elif kind == "give" and e.get("to") != "self":
+            item = str(e.get("item", "")).upper()
+            count = _constant(e.get("count")) if "count" in e else _count(e)
+            given[item] = given.get(item, 0) + (count if count is not None else caps.items.get(item, 0) + 1)
+    errors = []
+    if xp > caps.xp:
+        errors.append(f"опыта {xp}, а исходная концовка давала {caps.xp}")
+    for item, n in given.items():
+        if n > caps.items.get(item, 0):
+            errors.append(f"{item} ×{n}, а исходная концовка давала ×{caps.items.get(item, 0)}")
+    return errors
+
+
+def _check_vars(op: dict[str, Any], story: Story) -> list[str]:
+    vars = op.get("vars")
+    if not isinstance(vars, dict) or not vars:
+        return ["переменные режиссёра — словарь имя: начальное значение"]
+    errors = []
+    for name, value in vars.items():
+        name = str(name).upper()
+        if not name.startswith(DIRECTOR_PREFIX):
+            errors.append(f"переменная режиссёра называется {DIRECTOR_PREFIX}…: {name}")
+        elif story.state.symbols.get(name, "var") != "var" or name in story.graph.nodes:
+            errors.append(f"имя {name} уже занято")
+        if not isinstance(value, int) or isinstance(value, bool):
+            errors.append(f"{name}: начальное значение — целое число")
+    return errors
+
+
+def _check_trigger(
+    op: dict[str, Any], story: Story, symbols: dict[str, str], rules: Rules, caps: Caps | None
+) -> list[str]:
+    id = str(op.get("id", "")).upper()
+    if not id.startswith(DIRECTOR_PREFIX):
+        return [f"id триггера начинается с {DIRECTOR_PREFIX}: {id}"]
+    if story.state.symbols.get(id, "var") != "var" or id in story.graph.nodes or id in story.patches.nodes:
+        return [f"имя {id} уже занято"]
+    steps = op.get("steps")
+    if steps is None:
+        return []  # the trigger is taken away
+    errors = []
+    on = op.get("on")
+    if on not in TRIGGER_EVENTS:
+        errors.append(f"событие триггера — {', '.join(TRIGGER_EVENTS)}, а не {on!r}")
+    npc = str(op.get("npc") or "").upper()
+    if npc and symbols.get(npc) != "npc":
+        errors.append(f"нет такого NPC: {npc}")
+    node = str(op.get("node") or "").upper()
+    if node and on != "dialog":
+        errors.append("диалог (node) — только у триггера на диалог")
+    elif node and story.owner(node) is None:
+        errors.append(f"нет такого диалога: {node}")
+    if not isinstance(op.get("repeat", False), bool):
+        errors.append("repeat — да или нет")
+    errors += _check_names(op.get("when"), symbols)
+    if not isinstance(steps, list):
+        return [*errors, "программа триггера — список шагов (пустой: триггер только считает)"]
+    errors += _check_steps(steps, symbols, rules)
+    if programs.choices(steps) or any(s.get("do") == "clear_choices" for s in programs.steps_of(steps)):
+        errors.append("вне диалога вариантов ответа нет: они — в диалогах режиссёра")
+    if caps is not None:
+        errors += _over_caps(programs.effects(steps), caps)
+    return errors
+
+
+def _check_change(op: dict[str, Any], story: Story, symbols: dict[str, str], rules: Rules) -> list[str]:
     node = str(op.get("node", "")).upper()
     owner = story.owner(node)
     if owner is None:
@@ -538,7 +728,57 @@ def _check_change(op: dict[str, Any], story: Story, rules: Rules) -> list[str]:
         return [f"{node} меняет главу, его не трогаем"]
     if rules.plot_npc(owner):
         return [f"{node} — диалог сюжетного NPC {owner}, его не трогаем"]
-    return _check_names(op.get("expr"), story.state.symbols)
+    return _check_names(op.get("expr"), symbols)
+
+
+def _check_program(op: dict[str, Any], story: Story, symbols: dict[str, str], rules: Rules) -> list[str]:
+    node = str(op.get("node", "")).upper()
+    part = op.get("part", "information")
+    if part not in ("information", "condition"):
+        return [f"часть диалога: information или condition, а не {part!r}"]
+    graph_node = story.graph.nodes.get(node)
+    if graph_node is None:
+        return [f"нет такого диалога или варианта ответа в скриптах: {node}"]
+    if node in rules.plot_nodes:
+        return [f"{node} меняет главу, его не трогаем"]
+    if rules.plot_npc(graph_node.npc):
+        return [f"{node} — диалог сюжетного NPC {graph_node.npc}, его не трогаем"]
+    if part == "condition" and graph_node.is_choice:
+        return [f"{node} — вариант ответа, у него нет условия"]
+    steps = op.get("steps")
+    if steps is None:
+        return []  # the scripts' own program again
+    if not isinstance(steps, list):
+        return ["программа — список шагов"]
+    errors = _check_steps(steps, symbols, rules)
+    if programs.choices(steps) or any(s.get("do") == "clear_choices" for s in programs.steps_of(steps)):
+        errors.append("у диалога скриптов варианты ответа — через INFO_ADDCHOICE с функцией варианта")
+    return errors
+
+
+def _check_steps(steps: list[dict[str, Any]], symbols: dict[str, str], rules: Rules) -> list[str]:
+    errors = []
+    missing = sorted(n for n in programs.names(steps) if n not in symbols)
+    if missing:
+        errors.append(f"в программе неизвестные имена: {', '.join(missing)}")
+    for e in programs.effects(steps):
+        if e["do"] == "set" and e["var"] in rules.plot_vars:
+            errors.append(f"{e['var']} ведёт главы сюжета, её не трогаем")
+        elif e["do"] == "chapter":
+            errors.append("программа меняет главу: это сюжет, его не трогаем")
+    for choice in programs.choices(steps):
+        text = str(choice.get("text", ""))
+        if not text.strip() or len(text) > MAX_DESCRIPTION:
+            errors.append(f"строка варианта ответа пустая или длиннее {MAX_DESCRIPTION} знаков")
+        if not isinstance(choice.get("steps"), list):
+            errors.append(f"у варианта «{text}» нет шагов")
+    for line in programs.lines(steps):
+        text = str(line.get("text", ""))
+        if line.get("speaker") not in ("self", "other"):
+            errors.append(f"кто говорит: self или other, а не {line.get('speaker')!r}")
+        if (not line.get("line") and not text.strip()) or len(text) > MAX_TEXT:
+            errors.append(f"реплика пустая или длиннее {MAX_TEXT} знаков")
+    return errors
 
 
 def _check_names(expr: Expr | None, symbols: dict[str, str]) -> list[str]:

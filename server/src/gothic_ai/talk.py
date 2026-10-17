@@ -20,7 +20,9 @@ event of the world:
 - what the hero **does** meanwhile (draws a weapon, strikes, walks off mid-reply) goes into the partner's
   memory, and so into its next turn;
 - an **order** to his companions ("Стой!", "За мной!") is no conversation: they obey at once, without
-  the conversational model (orders.py).
+  the conversational model (orders.py);
+- words to a **wolf** at him (he looks at it, or it growls at him and he names nobody) are no conversation
+  either: it hears their tone and lets him pass, runs or bites (beasts.py).
 """
 
 from __future__ import annotations
@@ -59,16 +61,23 @@ from .protocol import (
 from .trace import TraceWriter
 
 if TYPE_CHECKING:
+    from .beasts import BeastDesk
     from .orders import Orders
 
 log = logging.getLogger(__name__)
 
-NAME_CM = 2000.0  # a name is heard this far
-FOCUS_CM = 1500.0  # the npc the hero looks at, if not farther than this
-PARTNER_CM = 800.0  # the current partner stays the addressee this close
-FRONT_CM = 800.0  # the nearest npc in front of the hero
+# how far the hero is heard (user, 2026-10-13: 20 m for a name and 8 m for the partner lost words said on
+# the run, to a companion a few steps behind or to one he called from afar). Along the way his voice goes
+# (RosterEntry.earshot, v30): round rock and walls, never through them
+NAME_CM = 4000.0  # a name is heard this far: it is called out
+FOCUS_CM = 2500.0  # the npc the hero looks at, if not farther than this
+PARTNER_CM = 1500.0  # the current partner stays the addressee this close
+FRONT_CM = 1200.0  # the nearest npc in front of the hero
+SCENE_CM = 2000.0  # two npc's talking near him (gossip.py), if not farther than this
+ATTACKER_CM = 1000.0  # one fighting this close to the hero is the one he speaks to in the fight
+ATTACK_STATE = "ZS_ATTACK"
 OVERHEAR_CM = 1000.0  # witnesses
-END_CM = 1000.0  # farther than this and silent for END_SILENCE_S: the conversation is over
+END_CM = 1500.0  # farther than this and silent for END_SILENCE_S: the conversation is over
 END_SILENCE_S = 20.0
 SNAPSHOT_WAIT_S = 1.0
 LOOK_MS = 4000
@@ -77,8 +86,8 @@ NOTE_EVERY_S = 15.0  # one note per kind of the hero's doings this often
 # states an npc is not busy in: when the behavioral model is unsure, such an npc stops and listens
 IDLE_STATES = ("ZS_STAND", "ZS_SIT", "ZS_SMALLTALK", "ZS_GUARD")
 # body jobs that take the partner away from the hero for the conversation and bring it back (check_claim,
-# ask_witness): it has not walked away
-ERRANDS = frozenset({"check", "witness"})
+# ask_witness, a walk to its chest), or lead him somewhere (guide.py): it has not walked away
+ERRANDS = frozenset({"check", "witness", "chest", "lead"})
 
 # what the hero does mid-conversation, for the partner's memory (npc_event kinds; perceptions of an
 # attached npc map to them below)
@@ -133,10 +142,16 @@ def edits(a: str, b: str, limit: float) -> float:
     return min(prev[-1], limit + 1)
 
 
-def _forms(word: str) -> list[tuple[str, bool]]:
-    """The word, and the word without a case ending (True)."""
-    return [(word, False)] + [
-        (word[: -len(e)], True) for e in _ENDINGS if word.endswith(e) and len(word) - len(e) >= 3
+# plural case endings of a name that ends in a consonant: such a word is those like it, never the one npc
+# (2026-10-14 «помогу тебе с бандитами», said to Cavalorn, went to a bandit called «Бандит»)
+_PLURAL = frozenset(("ами", "ам", "ах", "ы", "и"))
+_SOFT = frozenset("аеиоуыэюяйь")
+
+
+def _forms(word: str) -> list[tuple[str, str]]:
+    """The word, and the word without a case ending (with the ending)."""
+    return [(word, "")] + [
+        (word[: -len(e)], e) for e in _ENDINGS if word.endswith(e) and len(word) - len(e) >= 3
     ]
 
 
@@ -152,8 +167,14 @@ def name_edits(word: str, part: str, misheard: bool = False) -> float | None:
         slack = 0.0 if n <= 3 else 0.5 if n == 4 else 1.0 if n <= 7 else 2.0
     else:
         slack = 0.5 if n >= 5 else 0.0
+    plural = part[-1] not in _SOFT  # «Бандит»: «бандиты», «с бандитами» are not it
     best = min(
-        (edits(w, p, slack) for w, w_cut in _forms(word) for p, p_cut in _forms(part) if w_cut or not p_cut),
+        (
+            edits(w, p, slack)
+            for w, w_cut in _forms(word)
+            for p, p_cut in _forms(part)
+            if (w_cut or not p_cut) and not (plural and not p_cut and w_cut in _PLURAL)
+        ),
         default=slack + 1,
     )
     return best if best <= slack else None
@@ -165,6 +186,22 @@ _ADDRESS = frozenset(
     "мастер господин госпожа брат сестра сэр лорд друг дружище приятель старик старина парень командир "
     "капитан генерал отец сынок учитель хозяин торговец кузнец страж стражник маг".split()
 )
+
+
+# a phrase to several of those around («Пацаны, здорово», «Всем привет», «Эй, вы двое»): to the conversation.
+# A bare «вы» is the polite one to one person as often: only with a count of them («вы все», «вы двое»)
+_SEVERAL = frozenset(
+    "пацаны пацанва ребята ребят ребятки мужики парни братва народ господа друзья братцы все всем".split()
+)
+_COUNTS = frozenset("все двое трое оба обе".split())
+_YOU = frozenset("вы вас вам".split())
+
+
+def to_several(phrase: list[str]) -> bool:
+    """The hero speaks to several at once."""
+    return any(w in _SEVERAL for w in phrase) or (
+        any(w in _YOU for w in phrase) and any(w in _COUNTS for w in phrase)
+    )
 
 
 def calls(text: str) -> list[str]:
@@ -193,7 +230,9 @@ def named(phrase: list[str], name: str, called: list[str] | None = None) -> floa
 class Addressee:
     id: str
     name: str
-    why: str  # name | focus | partner | scene | front | order (companions who obey it)
+    # name | focus | partner | scene | front | group (to several: it answers first) | order (companions who
+    # obey it) | beast (a wolf)
+    why: str
 
 
 def addressee(
@@ -202,33 +241,67 @@ def addressee(
     people: dict[str, RosterEntry],
     partner: str | None,
     scene: Sequence[str] = (),
+    ours: Callable[[str], bool] = lambda npc: False,
+    lead: Callable[[str], int] = lambda npc: 0,
 ) -> Addressee | None:
-    """Whom the hero speaks to: a name in the phrase, his focus, the current partner, one of the npc's of
-    a `scene` (two who were just talking near him, the one who spoke last first), the nearest in front."""
+    """Whom the hero speaks to: a name in the phrase; to several of those around («пацаны»), outside a
+    fight, the one he looks at, else the one who leads (`lead`, by its character card), else the nearest,
+    his companions (`ours`) only when there is nobody else; his focus, the one fighting him close by («Воу,
+    ты чего?» — whoever is not ours), the current partner, one of the npc's of a `scene` (two who were just
+    talking near him, the one who spoke last first), the nearest in front."""
     alive = {k: e for k, e in people.items() if e.activity != "down"}
     phrase, by = words(text), calls(text)
-    near = [
-        (d, e)
-        for e in alive.values()
-        if e.distance <= NAME_CM and (d := named(phrase, e.name, by)) is not None
+    fighting = [
+        e for e in alive.values() if fights(e) and e.earshot <= ATTACKER_CM and not ours(e.id.upper())
     ]
-    if near:
+    group = [e for e in alive.values() if e.earshot <= PARTNER_CM]
+    # in a fight «Стой, пацаны!» is to whoever is at him, as before: words to him, not an order to his own
+    several = len(group) >= 2 and not fighting
+
+    def to_group() -> Addressee:
+        if focus and (e := alive.get(focus.upper())) is not None and e in group:
+            return Addressee(e.id.upper(), e.name, "group")
+        others = [e for e in group if not ours(e.id.upper())] or group
+        e = min(others, key=lambda e: (-lead(e.id.upper()), e.earshot))
+        return Addressee(e.id.upper(), e.name, "group")
+
+    near = [
+        (d, e, named(by, e.name, by) is not None)
+        for e in alive.values()
+        if e.earshot <= NAME_CM and (d := named(phrase, e.name, by)) is not None
+    ]
+    # a name called out («Браго, …») before one only spoken of («…кто ограбил Кавалорна»): 2026-10-14 the
+    # nearer Cavalorn took words meant for Brago
+    called = [(d, e) for d, e, out in near if out]
+    if called:
         # the name heard best ("Лестер!" with Фестер near too), then the nearer one
-        _, e = min(near, key=lambda de: (de[0], de[1].distance))
+        _, e = min(called, key=lambda de: (de[0], de[1].earshot))
         return Addressee(e.id.upper(), e.name, "name")
-    if focus and (e := alive.get(focus.upper())) is not None and e.distance <= FOCUS_CM:
+    if by and any(e.earshot > NAME_CM and named(by, e.name) is not None for e in alive.values()):
+        return None  # called out to one who does not hear it: nobody near takes the words meant for it
+    if several and to_several(by):  # «Пацаны, …»: they are called out, whoever is spoken of
+        return to_group()
+    if near:
+        _, e, _ = min(near, key=lambda de: (de[0], de[1].earshot))
+        return Addressee(e.id.upper(), e.name, "name")
+    if several and to_several(phrase):
+        return to_group()
+    if focus and (e := alive.get(focus.upper())) is not None and e.earshot <= FOCUS_CM:
         return Addressee(e.id.upper(), e.name, "focus")
-    if partner and (e := alive.get(partner)) is not None and e.distance <= PARTNER_CM:
+    if fighting:  # in a fight he speaks to whoever is at him, where he looks or not
+        e = min(fighting, key=lambda e: e.earshot)
+        return Addressee(e.id.upper(), e.name, "attacker")
+    if partner and (e := alive.get(partner)) is not None and e.earshot <= PARTNER_CM:
         return Addressee(e.id.upper(), e.name, "partner")
     # a scene starts only while he has no partner, so this never takes words meant for one
-    near = [e for n in scene if (e := alive.get(n.upper())) is not None and e.distance <= NAME_CM]
+    near = [e for n in scene if (e := alive.get(n.upper())) is not None and e.earshot <= SCENE_CM]
     if near:
         seen = [e for e in near if e.in_view]
-        e = min(seen, key=lambda e: e.distance) if seen else near[0]
+        e = min(seen, key=lambda e: e.earshot) if seen else near[0]
         return Addressee(e.id.upper(), e.name, "scene")
-    front = [e for e in alive.values() if e.in_view and e.distance <= FRONT_CM]
+    front = [e for e in alive.values() if e.in_view and e.earshot <= FRONT_CM]
     if front:
-        e = min(front, key=lambda e: e.distance)
+        e = min(front, key=lambda e: e.earshot)
         return Addressee(e.id.upper(), e.name, "front")
     return None
 
@@ -280,8 +353,14 @@ class TalkDesk:
         self.on_hero_voice: list[Callable[[], bool]] = []
         # npc's of a scene near the hero his next words may go to, the one who spoke last first (gossip.py)
         self.scene_hint: Callable[[], list[str]] = lambda: []
+        # how much an npc leads others (its character card, cli.py): the first to answer a phrase to several
+        self.lead: Callable[[str], int] = lambda npc: 0
+        # the hero said something, to whom (None: into the air): the conversation around him (group.py)
+        self.on_phrase: list[Callable[[Addressee | None, str], None]] = []
         # orders to the hero's companions ("Стой!"), carried out at once, without an answer (orders.py)
         self.orders: Orders | None = None
+        # wolves at the hero hear his words (beasts.py)
+        self.beasts: BeastDesk | None = None
         link.listeners.append(self.on_message)
         dialogue.take_body = self.hold
         dialogue.free_body = self.free
@@ -330,10 +409,20 @@ class TalkDesk:
             return
         now = self.clock()
         to = addressee(
-            text, focus, self.people, self.partner.npc if self.partner else None, self.scene_hint()
+            text,
+            focus,
+            self.people,
+            self.partner.npc if self.partner else None,
+            self.scene_hint(),
+            ours=self.orders.companion if self.orders is not None else lambda npc: False,
+            lead=self.lead,
         )
-        squad = self._order(text, focus, to)
-        if squad:  # said to the companions who obey it
+        order = commands.parse(text, self._is_name)
+        squad: list[tuple[str, str]] = []
+        beast = self.beasts.hears(text, focus, to, order) if self.beasts is not None else None
+        if beast is not None:  # said to a wolf: it is judging its tone already
+            to = beast
+        elif squad := self._order(order, focus, to):  # said to the companions who obey it
             to = Addressee(squad[0][0], squad[0][1], "order")
         self.last = (to, text)
         echo = TranscriptCmd(text=text, to=to.id if to else None, to_name=to.name if to else None)
@@ -347,11 +436,13 @@ class TalkDesk:
             **(details or {}),
         )
         log.info("hero -> %s (%s): %s", to.id if to else "nobody", to.why if to else "-", text)
+        for listener in self.on_phrase:
+            listener(None if beast is not None else to, text)  # a wolf joins no conversation
         self._witnesses(text, to, {npc for npc, _ in squad})
-        if self.planner is not None:
+        if self.planner is not None and beast is None:
             self.planner.on_player_text(to.id if to else "", text, now)
-        if squad:
-            return  # carried out already; the order is in their memories, no answer is asked
+        if squad or beast is not None:
+            return  # carried out already (an order is in their memories), no answer is asked
         if to is None:
             self._spawn(self.link.send(ChatStatusCmd(status="notice", detail="Рядом некому ответить")))
             return
@@ -363,12 +454,13 @@ class TalkDesk:
         talk.last_at = now
         self._spawn(self._answer(talk, text))
 
-    def _order(self, text: str, focus: str | None, to: Addressee | None) -> list[tuple[str, str]]:
+    def _order(
+        self, order: commands.Order | None, focus: str | None, to: Addressee | None
+    ) -> list[tuple[str, str]]:
         """If the phrase is an order and companions obey it, carry it out now; who obeys."""
-        if self.orders is None:
+        if self.orders is None or order is None:
             return []
-        order = commands.parse(text, self._is_name)
-        return self.orders.take(order, focus, to) if order is not None else []
+        return self.orders.take(order, focus, to)
 
     def _is_name(self, word: str) -> bool:
         """The word is the name of someone around ("Горн, стой!")."""
@@ -447,8 +539,8 @@ class TalkDesk:
     async def _posture(self, talk: Talk, text: str) -> str:
         entry = self.people.get(talk.npc)
         default = default_posture(entry)
-        if self.reflexes is None:
-            return default
+        if self.reflexes is None or fights(entry):
+            return default  # one in a fight fights on while it answers: whether to stop is its words' call
         conv = self.dialogue.conversations.get(talk.npc)
         ctx = NpcContext(
             talk.npc,
@@ -530,6 +622,12 @@ class TalkDesk:
         log.info("%s held for %s", npc, why)
         return True
 
+    def stop_listening(self, npc: str) -> None:
+        """It no longer stands listening, held for other things still (it leads the hero, guide.py): what it
+        answers him is said on the move."""
+        if (reasons := self.held.get(npc.upper())) is not None and reasons - {"listen", "walk"}:
+            reasons -= {"listen", "walk"}
+
     def free(self, npc: str, why: str) -> None:
         """`why` is done; with nothing else to do the npc goes back to its routine."""
         npc = npc.upper()
@@ -592,8 +690,11 @@ class TalkDesk:
             npc = e.id.upper()
             if npc in obeying:
                 continue  # an order: it remembers that it was given one (orders.py)
-            if (to is None or npc != to.id) and e.distance <= OVERHEAR_CM and e.activity != "down":
-                self.dialogue.overheard(npc, e.name, text, to.name if to else None)
+            if (to is None or npc != to.id) and e.earshot <= OVERHEAR_CM and e.activity != "down":
+                if to is not None and to.why == "group" and e.earshot <= PARTNER_CM:
+                    self.dialogue.told_all(npc, e.name, text, to.name)  # to it too
+                else:
+                    self.dialogue.overheard(npc, e.name, text, to.name if to else None)
 
     def _hero_act(self, npc: str, kind: str, detail: str | None) -> None:
         talk = self.partner
@@ -616,6 +717,11 @@ class TalkDesk:
         task = asyncio.get_running_loop().create_task(run())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+
+def fights(entry: RosterEntry | None) -> bool:
+    """The npc is in a fight (the scripts' attack state)."""
+    return entry is not None and entry.state.upper() == ATTACK_STATE
 
 
 def default_posture(entry: RosterEntry | None) -> str:

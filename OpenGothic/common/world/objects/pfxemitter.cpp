@@ -113,6 +113,16 @@ void PfxEmitter::setPosition(const Vec3& pos) {
     return; // no backup memory
   auto& p = bucket->getBlock(*this);
   p.pos = pos;
+  bucket->invalidateDecal();
+  }
+
+bool PfxEmitter::renderPosition(Vec3& out) const {
+  if(bucket==nullptr)
+    return false;
+  std::lock_guard<std::recursive_mutex> guard(bucket->parent.sync);
+  auto& v = bucket->get(id);
+  out = v.block==size_t(-1) ? v.pos : bucket->getBlock(v).pos;
+  return true;
   }
 
 void PfxEmitter::setTarget(const Npc* tg) {

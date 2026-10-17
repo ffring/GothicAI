@@ -53,7 +53,7 @@ async def serve(args: argparse.Namespace) -> int:
 async def say(args: argparse.Namespace) -> int:
     """Speak lines and report latency; --out keeps the audio."""
     synth = _synthesizer(args)
-    voice = Voice(args.voice_id, args.voice or "", args.preset, args.style or "")
+    voice = Voice(args.voice_id, args.voice or "", args.preset, args.style or "", args.clone or "")
     try:
         await synth.warmup()
         for text in args.text:
@@ -133,6 +133,7 @@ def main() -> None:
     p.add_argument("--voice", help="voice description (VoxCPM voice design)")
     p.add_argument("--preset", help="preset voice name for preset-voice APIs")
     p.add_argument("--style", help='how to say the lines, in English: "say angrily with force"')
+    p.add_argument("--clone", help="a recording to clone the voice from (Inworld), in any language")
     p.add_argument("--out", help="write the audio to this wav file (name_N.wav for several lines)")
     _add_provider_args(p)
 

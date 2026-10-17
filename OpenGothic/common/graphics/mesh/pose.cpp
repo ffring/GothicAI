@@ -8,13 +8,155 @@
 #include "game/serialize.h"
 #include "skeleton.h"
 #include "animmath.h"
+#include "ikmath.h"
 
 #include <cmath>
+#include <stdexcept>
 
 using namespace Tempest;
 
+namespace {
+
+IkMath::Mat3 polarRotation(const Matrix4x4& matrix) {
+  // The full local frame can contain shear even when every native body is rigid: differently
+  // rotated parts retain the NPC's anisotropic visual scale. Scaled Newton polar iteration
+  // yields a proper rotation without replacing that stretch by normalized matrix columns.
+  double x[3][3];
+  for(int r=0;r<3;++r)
+    for(int c=0;c<3;++c)
+      x[r][c]=matrix.at(c,r);
+  for(int step=0;step<24;++step) {
+    const double det=x[0][0]*(x[1][1]*x[2][2]-x[1][2]*x[2][1])-
+                     x[0][1]*(x[1][0]*x[2][2]-x[1][2]*x[2][0])+
+                     x[0][2]*(x[1][0]*x[2][1]-x[1][1]*x[2][0]);
+    if(!std::isfinite(det) || det<=0)
+      throw std::runtime_error("Invalid affine ragdoll bone");
+    const double inverseTranspose[3][3]={
+      {(x[1][1]*x[2][2]-x[1][2]*x[2][1])/det,(x[1][2]*x[2][0]-x[1][0]*x[2][2])/det,(x[1][0]*x[2][1]-x[1][1]*x[2][0])/det},
+      {(x[0][2]*x[2][1]-x[0][1]*x[2][2])/det,(x[0][0]*x[2][2]-x[0][2]*x[2][0])/det,(x[0][1]*x[2][0]-x[0][0]*x[2][1])/det},
+      {(x[0][1]*x[1][2]-x[0][2]*x[1][1])/det,(x[0][2]*x[1][0]-x[0][0]*x[1][2])/det,(x[0][0]*x[1][1]-x[0][1]*x[1][0])/det}
+      };
+    double norm=0,inverseNorm=0;
+    for(int r=0;r<3;++r)
+      for(int c=0;c<3;++c) {
+        norm+=x[r][c]*x[r][c]; inverseNorm+=inverseTranspose[r][c]*inverseTranspose[r][c];
+        }
+    const double scale=std::sqrt(std::sqrt(inverseNorm/norm));
+    double change=0;
+    for(int r=0;r<3;++r)
+      for(int c=0;c<3;++c) {
+        const double next=.5*(scale*x[r][c]+inverseTranspose[r][c]/scale);
+        change=std::max(change,std::abs(next-x[r][c])); x[r][c]=next;
+        }
+    if(change<1e-12)
+      break;
+    }
+  IkMath::Mat3 result;
+  for(int r=0;r<3;++r)
+    for(int c=0;c<3;++c)
+      result.m[r][c]=float(x[r][c]);
+  return result;
+  }
+
+zenkit::AnimationSample physicalSample(const Matrix4x4& local) {
+  zenkit::AnimationSample out;
+  const auto p = IkMath::position(local);
+  // MAN samples use the conjugate of the conventional column-vector rotation: mkMatrix writes
+  // their rotation transposed. Use the existing post-pass conversion, then undo that convention.
+  const auto q = IkMath::toQuat(IkMath::transpose(polarRotation(local)));
+  const float length=std::sqrt(q.w*q.w+q.x*q.x+q.y*q.y+q.z*q.z);
+  out.position = zenkit::Vec3(p.x,p.y,p.z);
+  out.rotation = zenkit::Quat(q.w/length,q.x/length,q.y/length,q.z/length);
+  return out;
+  }
+
+Matrix4x4 physicalStretch(const Matrix4x4& local, const zenkit::AnimationSample& sample) {
+  const auto rigid=mkMatrix(sample);
+  double h[3][3] = {};
+  for(int c=0;c<3;++c)
+    for(int r=0;r<3;++r)
+      for(int k=0;k<3;++k)
+        h[r][c]+=double(rigid.at(r,k))*double(local.at(c,k));
+  auto stretch=Matrix4x4::mkIdentity();
+  for(int c=0;c<3;++c)
+    for(int r=0;r<3;++r)
+      stretch.set(c,r,float(.5*(h[r][c]+h[c][r])));
+  return stretch;
+  }
+
+bool validStretch(const Matrix4x4& m) {
+  for(int c=0;c<4;++c)
+    for(int r=0;r<4;++r)
+      if(!std::isfinite(m.at(c,r)) || std::abs(m.at(c,r))>1e6f ||
+         ((c==3 || r==3) && m.at(c,r)!=(c==3 && r==3 ? 1.f : 0.f)))
+        return false;
+  for(int c=0;c<3;++c)
+    for(int r=0;r<3;++r)
+      if(m.at(c,r)!=m.at(r,c))
+        return false;
+  const double a=m.at(0,0),b=m.at(1,0),c=m.at(2,0),d=m.at(1,1),e=m.at(2,1),f=m.at(2,2);
+  return a>0 && a*d-b*b>0 && a*(d*f-e*e)-b*(b*f-c*e)+c*(b*e-c*d)>0;
+  }
+
+bool validPhysicalFrame(const Matrix4x4& m) {
+  for(int c=0; c<4; ++c)
+    for(int r=0; r<4; ++r)
+      if(!std::isfinite(m.at(c,r)))
+        return false;
+  const Vec3 x(m.at(0,0),m.at(0,1),m.at(0,2));
+  const Vec3 y(m.at(1,0),m.at(1,1),m.at(1,2));
+  const Vec3 z(m.at(2,0),m.at(2,1),m.at(2,2));
+  return IkMath::dot(x,IkMath::cross(y,z))>0.f &&
+         x.length()<=100.001f && y.length()<=100.001f && z.length()<=100.001f &&
+         std::abs(m.at(0,3))<=1e-5f && std::abs(m.at(1,3))<=1e-5f &&
+         std::abs(m.at(2,3))<=1e-5f && std::abs(m.at(3,3)-1.f)<=1e-5f;
+  }
+
+Matrix4x4 relativeAffine(const Matrix4x4& parent, const Matrix4x4& child) {
+  const double a=parent.at(0,0), b=parent.at(1,0), c=parent.at(2,0);
+  const double d=parent.at(0,1), e=parent.at(1,1), f=parent.at(2,1);
+  const double g=parent.at(0,2), h=parent.at(1,2), i=parent.at(2,2);
+  const double det=a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g);
+  const double inverse[3][3]={
+    {(e*i-f*h)/det,(c*h-b*i)/det,(b*f-c*e)/det},
+    {(f*g-d*i)/det,(a*i-c*g)/det,(c*d-a*f)/det},
+    {(d*h-e*g)/det,(b*g-a*h)/det,(a*e-b*d)/det}
+    };
+  auto result=Matrix4x4::mkIdentity();
+  for(int col=0;col<4;++col)
+    for(int row=0;row<3;++row) {
+      double value=0;
+      for(int k=0;k<3;++k) {
+        const double v=col<3 ? double(child.at(col,k)) : double(child.at(3,k))-parent.at(3,k);
+        value+=inverse[row][k]*v;
+        }
+      result.set(col,row,float(value));
+      }
+  // Both inputs are affine. A general 4x4 inverse rounds its homogeneous element away from one,
+  // which would then multiply the physical parent's large world translation on recomposition.
+  return result;
+  }
+
+}
+
 Pose::Pose() {
   lay.reserve(4);
+  }
+
+// Origin replay starts from the already sampled, blended pose. It needs the
+// retained procedural state, but never reads animation layers, blend drivers,
+// or the physical/recovery histories that a complete Pose copy would allocate.
+Pose::Pose(const Pose& source, OriginReplayTag)
+  :skeleton(source.skeleton), trY(source.trY), flag(source.flag), lastUpdate(source.lastUpdate),
+   headRotX(source.headRotX), headRotY(source.headRotY),
+   ik(source.ik), gaze(source.gaze), lean(source.lean), aim(source.aim),
+   walk(source.walk), bowDraw(source.bowDraw), flinch(source.flinch),
+   numBones(source.numBones), pos(source.pos) {
+  // Preserve the full bank: ordered hierarchy construction may read a parent
+  // below MAX_NUM_SKELETAL_NODES even when it is outside the current bone count.
+  std::copy_n(source.hasSamples,Resources::MAX_NUM_SKELETAL_NODES,hasSamples);
+  std::copy_n(source.base,Resources::MAX_NUM_SKELETAL_NODES,base);
+  std::copy_n(source.tr,Resources::MAX_NUM_SKELETAL_NODES,tr);
   }
 
 uint8_t Pose::calcAniComb(const Vec3& dpos, float rotation) {
@@ -68,6 +210,7 @@ void Pose::save(Serialize &fout) {
   }
 
 void Pose::load(Serialize &fin, const AnimationSolver& solver) {
+  clearRagdollPose();
   std::string name;
   uint8_t     sz = uint8_t(lay.size());
 
@@ -141,6 +284,7 @@ bool Pose::hasStateFlag(BodyState f) const {
 void Pose::setSkeleton(const Skeleton* sk) {
   if(skeleton==sk)
     return;
+  clearRagdollPose();
   skeleton = sk;
   for(auto& i:tr)
     i.identity();
@@ -159,7 +303,7 @@ void Pose::setSkeleton(const Skeleton* sk) {
   walk.setSkeleton(skeleton);
   bowDraw.setSkeleton(skeleton);
   flinch.setSkeleton(skeleton);
-  trY          = skeleton->rootTr.y;
+  trY          = skeleton==nullptr ? 0.f : skeleton->rootTr.y;
   needToUpdate = true;
   if(lay.size()>0) //TODO
     Log::d("WARNING: ",__func__," animation adjustment is not implemented");
@@ -326,8 +470,11 @@ void Pose::processLayers(AnimationSolver& solver, uint64_t tickCount) {
 
 bool Pose::update(uint64_t tickCount, bool force) {
   if(lay.size()==0) {
-    const bool ret = needToUpdate;
-    if(needToUpdate || lastUpdate==0)
+    const bool ret = needToUpdate || !physical.empty() || physicalReturning;
+    const bool make = ret || lastUpdate==0;
+    if(physicalReturning)
+      lastUpdate = tickCount;
+    if(make)
       mkSkeleton(pos);
     needToUpdate = false;
     lastUpdate   = tickCount;
@@ -350,13 +497,17 @@ bool Pose::update(uint64_t tickCount, bool force) {
 
       needMkSkeleton |= updateFrame(*seq,i.bs,i.sAnim,layerTime(i,tickCount));
       }
-    // switches of animations: smoothly from the pose shown
-    needMkSkeleton |= blend.apply(raw,base,numBones,tickCount);
+    // The physical return already owns the transition from the shown pose. A second ordinary
+    // offset underneath it would change its target, and is not part of the legacy pose save.
+    if(physicalReturning)
+      std::copy_n(raw,numBones,base);
+    else
+      needMkSkeleton |= blend.apply(raw,base,numBones,tickCount);
     lastUpdate   = tickCount;
     needToUpdate = needMkSkeleton;
     }
 
-  if(needMkSkeleton || force) {
+  if(needMkSkeleton || force || !physical.empty() || physicalReturning) {
     mkSkeleton(pos);
     return true;
     }
@@ -417,6 +568,10 @@ bool Pose::updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t sTim
   }
 
 void Pose::mkSkeleton(const Tempest::Matrix4x4& mt) {
+  mkSkeleton(mt,mt.at(3,1));
+  }
+
+void Pose::mkSkeleton(const Tempest::Matrix4x4& mt, float ikFloorY) {
   if(skeleton==nullptr)
     return;
   Matrix4x4 m = mt;
@@ -426,12 +581,259 @@ void Pose::mkSkeleton(const Tempest::Matrix4x4& mt) {
     implMkSkeleton(m,size_t(-1));
   walk.apply(tr,numBones,base,m);
   lean.apply(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)));
-  ik.apply(tr,numBones,mt.at(3,1));
+  ik.apply(tr,numBones,ikFloorY,aim.pelvisOffset(),&walk);
+  walk.captureFeet(tr,numBones);
   bowDraw.hold(tr,numBones,mt);
-  aim.apply(tr,numBones);
+  aim.apply(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)),
+            Vec3(mt.at(2,0),0,mt.at(2,2)));
   bowDraw.apply(tr,numBones);
   gaze.apply(tr,numBones);
   flinch.apply(tr,numBones);
+  if(!physical.empty())
+    applyRagdollPose();
+  else if(physicalReturning)
+    applyRagdollReturn();
+  aim.finish(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)),
+             Vec3(mt.at(2,0),0,mt.at(2,2)));
+  }
+
+bool Pose::setRagdollPose(const Skeleton* expected, const std::vector<Matrix4x4>& worldBones,
+                        const std::vector<size_t>& physicalBones, float weight) {
+  if(expected==nullptr || expected!=skeleton || worldBones.size()!=numBones || physicalBones.empty() ||
+     !std::isfinite(weight)) {
+    clearRagdollPose();
+    return false;
+    }
+  for(const auto i:physicalBones)
+    if(i>=numBones || !validPhysicalFrame(worldBones[i])) {
+      clearRagdollPose();
+      return false;
+      }
+  if(weight<=0.f) {
+    clearRagdollPose();
+    return true;
+    }
+  physical = worldBones;
+  physicalMask.assign(numBones,0);
+  for(const auto i:physicalBones)
+    physicalMask[i] = 1;
+  physicalWeight = std::min(weight,1.f);
+  physicalReturning = false;
+  physicalRaw.clear();
+  physicalShown.clear();
+  physicalTargetNext.clear();
+  physicalStretchFrom.clear();
+  physicalStretchTarget.clear();
+  needToUpdate = true;
+  return true;
+  }
+
+void Pose::clearRagdollPose(bool blendFromPhysical, uint64_t tickCount) {
+  if(blendFromPhysical && !physical.empty() && skeleton!=nullptr && numBones>0) {
+    physicalShown.resize(numBones);
+    physicalRaw.resize(numBones);
+    physicalStretchFrom.resize(numBones);
+    physicalStretchTarget.resize(numBones);
+    for(size_t i=0; i<numBones; ++i) {
+      const auto parent = skeleton->nodes[i].parent;
+      Matrix4x4 inv = parent<numBones ? tr[parent] : pos;
+      inv.inverse();
+      const auto local=inv*tr[i];
+      physicalShown[i] = physicalSample(local);
+      physicalStretchFrom[i] = physicalStretch(local,physicalShown[i]);
+      }
+    physicalBlend.reset(numBones);
+    std::vector<zenkit::AnimationSample> previous;
+    uint64_t previousTime=0;
+    if(physicalPreviousWorld.size()==numBones && physicalCurrentTime>physicalPreviousTime &&
+       physicalCurrentTime-physicalPreviousTime<=250 && tickCount>=physicalCurrentTime-physicalPreviousTime) {
+      previous.resize(numBones);
+      for(size_t i=0;i<numBones;++i) {
+        const auto parent=skeleton->nodes[i].parent;
+        // Both root samples use the new object frame: rebasing the NPC must not inject velocity.
+        Matrix4x4 inv=parent<numBones ? physicalPreviousWorld[parent] : pos;
+        inv.inverse();
+        previous[i]=physicalSample(inv*physicalPreviousWorld[i]);
+        }
+      previousTime=tickCount-(physicalCurrentTime-physicalPreviousTime);
+      }
+    physicalBlend.transitionFrom(physicalShown.data(),numBones,tickCount,
+                                 previous.empty() ? nullptr : previous.data(),previousTime);
+    blend.reset(numBones);
+    physicalReturning = true;
+    } else {
+    physicalBlend.reset(0);
+    physicalReturning = false;
+    physicalRaw.clear();
+    physicalShown.clear();
+    physicalTargetNext.clear();
+    physicalStretchFrom.clear();
+    physicalStretchTarget.clear();
+    }
+  physical.clear();
+  physicalMask.clear();
+  physicalPreviousWorld.clear();
+  physicalCurrentWorld.clear();
+  physicalPreviousTime=0;
+  physicalCurrentTime=0;
+  needToUpdate = true;
+  }
+
+void Pose::saveRagdollRecovery(Serialize& fout) const {
+  fout.write(physicalReturning);
+  if(!physicalReturning)
+    return;
+  fout.write(uint16_t(3),skeleton->name(),uint32_t(numBones));
+  for(const auto& i:physicalShown)
+    fout.write(i);
+  for(const auto& i:physicalStretchFrom)
+    fout.write(i);
+  physicalBlend.saveExternal(fout);
+  }
+
+void Pose::loadRagdollRecovery(Serialize& fin) {
+  clearRagdollPose();
+  bool returning = false;
+  fin.read(returning);
+  if(!returning)
+    return;
+  std::string name;
+  uint32_t count = 0;
+  uint16_t version=0;
+  uint32_t nameSize=0;
+  fin.read(version,nameSize);
+  if((version!=2 && version!=3) || nameSize==0 || nameSize>512)
+    throw std::runtime_error("Unsupported ragdoll return entry");
+  name.resize(nameSize);
+  fin.readBytes(name.data(),name.size());
+  fin.read(count);
+  if(skeleton==nullptr || name!=skeleton->name() || count!=numBones || count==0)
+    throw std::runtime_error("Ragdoll return skeleton mismatch");
+  physicalShown.resize(count);
+  physicalRaw.resize(count);
+  physicalStretchFrom.resize(count);
+  physicalStretchTarget.resize(count);
+  for(auto& i:physicalShown) {
+    fin.read(i);
+    if(!validPhysicalFrame(mkMatrix(i)))
+      throw std::runtime_error("Invalid ragdoll return pose");
+    }
+  for(auto& m:physicalStretchFrom) {
+    fin.read(m);
+    if(!validStretch(m))
+      throw std::runtime_error("Invalid ragdoll return stretch");
+    }
+  physicalBlend.loadExternal(fin,numBones,version>=3);
+  blend.reset(numBones);
+  physicalReturning = true;
+  needToUpdate = true;
+  }
+
+void Pose::applyRagdollPose() {
+  // Recover finished local relations before adding the large world translation. World-space
+  // parent/child matrices have already rounded their attachment positions by that point: even a
+  // double inverse cannot recover them. Replay the same procedural state on a private pose at the
+  // origin, retaining the object's complete basis and the IK's original absolute ground offset.
+  Pose local(*this,OriginReplayTag{});
+  auto object=pos;
+  object.set(3,0,0.f);
+  object.set(3,1,0.f);
+  object.set(3,2,0.f);
+  local.mkSkeleton(object,pos.at(3,1));
+  bool done[Resources::MAX_NUM_SKELETAL_NODES] = {};
+  for(size_t i=0; i<numBones; ++i)
+    applyRagdollPose(i,local.tr,done);
+  if(physicalCurrentWorld.size()==numBones && lastUpdate>physicalCurrentTime) {
+    physicalPreviousWorld=physicalCurrentWorld;
+    physicalPreviousTime=physicalCurrentTime;
+    }
+  physicalCurrentWorld.assign(tr,tr+numBones);
+  physicalCurrentTime=lastUpdate;
+  }
+
+void Pose::applyRagdollPose(size_t i, const Matrix4x4* animated, bool* done) {
+  if(done[i])
+    return;
+  const size_t parent = skeleton->nodes[i].parent;
+  if(parent<numBones)
+    applyRagdollPose(parent,animated,done);
+  if(physicalMask[i]) {
+    tr[i] = physicalWeight>=1.f ? physical[i] : IkMath::blend(tr[i],physical[i],physicalWeight);
+    } else if(parent<numBones) {
+    tr[i] = tr[parent]*relativeAffine(animated[parent],animated[i]);
+    }
+  done[i] = true;
+  }
+
+void Pose::applyRagdollReturn() {
+  Matrix4x4 animated[Resources::MAX_NUM_SKELETAL_NODES];
+  std::copy_n(tr,numBones,animated);
+  for(size_t i=0; i<numBones; ++i) {
+    const auto parent = skeleton->nodes[i].parent;
+    Matrix4x4 inv = parent<numBones ? tr[parent] : pos;
+    inv.inverse();
+    const auto local=inv*tr[i];
+    physicalRaw[i] = physicalSample(local);
+    physicalStretchTarget[i] = physicalStretch(local,physicalRaw[i]);
+    }
+  if(physicalBlend.hasExternalSeed()) {
+    // Sample the same finished animation slightly ahead on a private value copy. This includes
+    // root-motion cancellation and post-passes without advancing game state or firing events.
+    Pose future=*this;
+    future.clearRagdollPose();
+    future.blend.reset(numBones);
+    future.update(lastUpdate+1,true);
+    physicalTargetNext.resize(numBones);
+    for(size_t i=0;i<numBones;++i) {
+      const auto parent=skeleton->nodes[i].parent;
+      Matrix4x4 inv=parent<numBones ? future.tr[parent] : future.pos;
+      inv.inverse();
+      physicalTargetNext[i]=physicalSample(inv*future.tr[i]);
+      }
+    physicalBlend.setExternalTarget(physicalRaw.data(),physicalTargetNext.data(),numBones,1000.f);
+    }
+  physicalReturning = physicalBlend.apply(physicalRaw.data(),physicalShown.data(),numBones,lastUpdate);
+  const float affineWeight=physicalBlend.externalWeight(lastUpdate);
+  bool done[Resources::MAX_NUM_SKELETAL_NODES] = {};
+  auto bone = [&](auto&& self, size_t i) -> void {
+    if(done[i])
+      return;
+    const auto parent = skeleton->nodes[i].parent;
+    if(parent<numBones)
+      self(self,parent);
+    auto stretch=Matrix4x4::mkIdentity();
+    for(int c=0;c<3;++c)
+      for(int r=0;r<3;++r)
+        stretch.set(c,r,physicalStretchTarget[i].at(c,r)*(1.f-affineWeight)+physicalStretchFrom[i].at(c,r)*affineWeight);
+    tr[i] = (parent<numBones ? tr[parent] : pos)*(mkMatrix(physicalShown[i])*stretch);
+    done[i] = true;
+    };
+  if(physicalReturning)
+    for(size_t i=0; i<numBones; ++i)
+      bone(bone,i);
+  if(physicalReturning) {
+    bool finite=true;
+    for(size_t b=0;b<numBones;++b)
+      for(size_t i=0;i<16;++i)
+        finite &= std::isfinite(tr[b].data()[i]);
+    if(!finite) {
+      // Individually finite affine locals in a damaged archive can still overflow their hierarchy.
+      // Restore the whole finished animation transactionally before any bone reaches rendering.
+      std::copy_n(animated,numBones,tr);
+      physicalReturning=false;
+      }
+    }
+  if(!physicalReturning) {
+    // Record the current animation as the ordinary driver's starting point, so a later switch
+    // gets its usual transition without resurrecting an offset from before the body fell.
+    blend.apply(raw,base,numBones,lastUpdate);
+    physicalBlend.reset(0);
+    physicalRaw.clear();
+    physicalShown.clear();
+    physicalTargetNext.clear();
+    physicalStretchFrom.clear();
+    physicalStretchTarget.clear();
+    }
   }
 
 void Pose::implMkSkeleton(const Matrix4x4 &mt) {

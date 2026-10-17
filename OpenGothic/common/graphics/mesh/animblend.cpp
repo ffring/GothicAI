@@ -1,6 +1,7 @@
 #include "animblend.h"
 
 #include "animmath.h"
+#include "game/serialize.h"
 
 #include <Tempest/Log>
 
@@ -8,6 +9,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
+#include <stdexcept>
 
 using namespace Tempest;
 
@@ -155,6 +158,168 @@ void AnimBlend::reset(size_t numBones) {
   last.assign(numBones,Sample());
   outTime  = 0;
   lastTime = 0;
+  external.clear();
+  externalPrevious.clear();
+  externalPreviousTime = 0;
+  externalDriven = false;
+  externalFade = Curve();
+  externalStart = 0;
+  externalClockPending = false;
+  }
+
+void AnimBlend::transitionFrom(const Sample* shown, size_t numBones, uint64_t now,
+                              const Sample* previous, uint64_t previousTime) {
+  numBones = std::min(numBones,cur.size());
+  external.assign(shown,shown+numBones);
+  externalPrevious.clear();
+  externalPreviousTime = 0;
+  if(previous!=nullptr && previousTime<now && now-previousTime<=MaxGap) {
+    externalPrevious.assign(previous,previous+numBones);
+    externalPreviousTime = previousTime;
+    }
+  for(auto& o:off)
+    o = Offset();
+  pend.clear();
+  outTime = now;
+  lastTime = 0;
+  externalDriven = true;
+  externalFade = Curve();
+  externalStart = now;
+  externalClockPending = true;
+  }
+
+void AnimBlend::setExternalTarget(const Sample* current, const Sample* next, size_t numBones, float rate) {
+  if(current==nullptr || next==nullptr || !std::isfinite(rate) || rate<=0)
+    return;
+  for(size_t i=0;i<std::min(numBones,cur.size());++i) {
+    cur[i].a=current+i;
+    cur[i].b=next+i;
+    cur[i].rate=rate;
+    }
+  }
+
+float AnimBlend::externalWeight(uint64_t now) const {
+  if(!externalDriven)
+    return 0.f;
+  if(externalClockPending || now<=externalStart)
+    return 1.f;
+  return std::clamp(externalFade.at(float(now-externalStart)*.001f),0.f,1.f);
+  }
+
+void AnimBlend::saveExternal(Serialize& fout) const {
+  fout.write(uint32_t(off.size()),outTime,lastTime,externalStart,externalClockPending);
+  auto curve = [&](const Curve& c) {
+    fout.write(c.t1,c.x0,c.v0,c.a0,c.A,c.B,c.C);
+    };
+  curve(externalFade);
+  for(size_t i=0; i<off.size(); ++i) {
+    const auto& o = off[i];
+    fout.write(o.active,o.start,o.end,o.fade,o.from,o.fadeTime);
+    curve(o.rot); curve(o.rotSide); curve(o.pos); curve(o.posSide);
+    fout.write(o.axis,o.axisSide,o.dir,o.dirSide,last[i]);
+    }
+  fout.write(uint32_t(external.size()));
+  for(const auto& i:external)
+    fout.write(i);
+  fout.write(externalPreviousTime,uint32_t(externalPrevious.size()));
+  for(const auto& i:externalPrevious)
+    fout.write(i);
+  }
+
+void AnimBlend::loadExternal(Serialize& fin, size_t expectedBones, bool hasVelocityState) {
+  uint32_t count = 0;
+  fin.read(count);
+  if(count!=expectedBones || count==0)
+    throw std::runtime_error("Ragdoll blend skeleton mismatch");
+  reset(count);
+  fin.read(outTime,lastTime,externalStart,externalClockPending);
+  auto finite = [](const auto& v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+    };
+  auto sample = [&](const Sample& s, bool unused=false) {
+    const double q=double(s.rotation.w)*s.rotation.w+double(s.rotation.x)*s.rotation.x+
+                   double(s.rotation.y)*s.rotation.y+double(s.rotation.z)*s.rotation.z;
+    return finite(s.position) && std::abs(s.position.x)<=1.e8f && std::abs(s.position.y)<=1.e8f &&
+           std::abs(s.position.z)<=1.e8f && std::isfinite(s.rotation.w) && finite(s.rotation) &&
+           (std::abs(q-1.)<=.001 || (unused && q==0.));
+    };
+  auto curve = [&](Curve& c, float maxOffset, float maxVelocity, double intervalBound) {
+    fin.read(c.t1,c.x0,c.v0,c.a0,c.A,c.B,c.C);
+    if(!std::isfinite(c.t1) || c.t1<0 || c.t1>600 || !std::isfinite(c.x0) ||
+       !std::isfinite(c.v0) || !std::isfinite(c.a0) || !std::isfinite(c.A) ||
+       !std::isfinite(c.B) || !std::isfinite(c.C) || c.x0<0 || c.x0>maxOffset ||
+       std::abs(c.v0)>maxVelocity || (c.t1>0 && c.t1<=1.e-4f))
+      throw std::runtime_error("Invalid ragdoll blend curve");
+    // Serialized coefficients must describe a curve produced by the actual initializer. Checking
+    // only its endpoints misses finite polynomials which overflow in the middle of the transition.
+    Curve expected;
+    expected.init(c.x0,c.v0,c.t1,std::max(c.v0,0.f));
+    auto equal=[](float a, float b) {
+      return std::abs(double(a)-b)<=32.*std::numeric_limits<float>::epsilon()*
+             std::max({1.e-12,std::abs(double(a)),std::abs(double(b))});
+      };
+    if(!equal(c.t1,expected.t1) || !equal(c.a0,expected.a0) || !equal(c.A,expected.A) ||
+       !equal(c.B,expected.B) || !equal(c.C,expected.C))
+      throw std::runtime_error("Noncanonical ragdoll blend curve");
+    const double t=c.t1, t2=t*t, t3=t2*t, t4=t3*t, t5=t4*t;
+    const double bound=std::abs(double(c.x0))+std::abs(double(c.v0))*t+
+                       .5*std::abs(double(c.a0))*t2+std::abs(double(c.C))*t3+
+                       std::abs(double(c.B))*t4+std::abs(double(c.A))*t5;
+    if(!std::isfinite(bound) || bound>intervalBound)
+      throw std::runtime_error("Unbounded ragdoll blend curve");
+    };
+  curve(externalFade,1.f,0.f,100.);
+  if(lastTime>outTime || (!externalClockPending && externalStart>outTime) ||
+     (externalClockPending && (externalFade.t1!=0 || externalFade.x0!=0)) ||
+     (!externalClockPending && externalFade.t1>0 && externalFade.x0!=1.f))
+    throw std::runtime_error("Invalid ragdoll blend clock");
+  auto direction=[&](const Vec3& v, const Curve& c) {
+    const double n=double(v.x)*v.x+double(v.y)*v.y+double(v.z)*v.z;
+    return finite(v) && (std::abs(n-1.)<=.001 || (c.t1==0 && n==0.));
+    };
+  for(size_t i=0; i<count; ++i) {
+    auto& o = off[i];
+    fin.read(o.active,o.start,o.end,o.fade,o.from,o.fadeTime);
+    curve(o.rot,float(M_PI)+.001f,2.f*MaxTurn+.01f,1024.);
+    curve(o.rotSide,0.f,2.f*MaxTurn+.01f,1024.);
+    curve(o.pos,2.e8f,2.f*MaxSpeed+1.f,1.e12);
+    curve(o.posSide,0.f,2.f*MaxSpeed+1.f,1.e12);
+    fin.read(o.axis,o.axisSide,o.dir,o.dirSide,last[i]);
+    if(!std::isfinite(o.end) || o.end<0 || o.end>600 || !std::isfinite(o.fadeTime) ||
+       o.fadeTime!=0 || o.fade || !sample(o.from,true) || !sample(last[i],externalClockPending) ||
+       !direction(o.axis,o.rot) || !direction(o.axisSide,o.rotSide) ||
+       !direction(o.dir,o.pos) || !direction(o.dirSide,o.posSide) || o.start>outTime ||
+       o.end!=std::max({o.rot.t1,o.rotSide.t1,o.pos.t1,o.posSide.t1}) || (o.active && o.end==0))
+      throw std::runtime_error("Invalid ragdoll blend offset");
+    }
+  uint32_t pending = 0;
+  fin.read(pending);
+  if(pending!=0 && pending!=count)
+    throw std::runtime_error("Invalid pending ragdoll blend pose");
+  if(externalClockPending!=(pending!=0))
+    throw std::runtime_error("Inconsistent pending ragdoll blend clock");
+  external.resize(pending);
+  for(auto& i:external) {
+    fin.read(i);
+    if(!sample(i))
+      throw std::runtime_error("Invalid ragdoll blend sample");
+    }
+  if(hasVelocityState) {
+    uint32_t previousCount=0;
+    fin.read(externalPreviousTime,previousCount);
+    if(previousCount!=0 && (previousCount!=count || pending!=count || externalPreviousTime>=outTime ||
+                           outTime-externalPreviousTime>MaxGap))
+      throw std::runtime_error("Invalid previous ragdoll blend pose");
+    if(previousCount==0 && externalPreviousTime!=0)
+      throw std::runtime_error("Invalid previous ragdoll blend time");
+    externalPrevious.resize(previousCount);
+    for(auto& i:externalPrevious) {
+      fin.read(i);
+      if(!sample(i))
+        throw std::runtime_error("Invalid previous ragdoll blend sample");
+      }
+    }
+  externalDriven = true;
   }
 
 // What the bone switched from: the shown pose and how it moved, carried on to now, against the new
@@ -175,6 +340,10 @@ void AnimBlend::prepare(size_t i, const Sample& target, const Sample& shown, flo
   if(c.a!=nullptr && c.b!=nullptr && c.rate>0) {
     tvel  = (vec(c.b->position) - vec(c.a->position))*c.rate;
     tturn = rotVec(mul(c.b->rotation,conj(c.a->rotation)))*c.rate;
+    if(externalDriven) {
+      tvel=clampLength(tvel,MaxSpeed);
+      tturn=clampLength(tturn,MaxTurn);
+      }
     }
 
   Quat q = normalize(mul(rot,conj(target.rotation)));
@@ -208,6 +377,11 @@ void AnimBlend::begin(uint64_t now) {
     }
   time      = std::min(time,std::max(prm.maxTime,prm.minTime));
   lastBlend = std::max(lastBlend,time);
+  if(externalDriven && externalClockPending) {
+    externalFade.init(1.f,0.f,time,0.f);
+    externalStart = now;
+    externalClockPending = false;
+    }
 
   // an offset and its velocity: a curve along it from its size, one across it from zero; a rotation
   // does not go out past MaxTurnOffset (limit), aside or along
@@ -245,7 +419,8 @@ void AnimBlend::begin(uint64_t now) {
     if(log && o.active) {
       char buf[256];
       std::snprintf(buf,sizeof(buf),"aniblend: %llu bone %zu %s -> %s: turn %.1f deg v %.1f/%.1f side %.1f, move %.1f cm v %.0f, t %.3f",
-                    (unsigned long long)now,sw.bone,drv[sw.bone].seq->name.c_str(),cur[sw.bone].seq->name.c_str(),
+                    (unsigned long long)now,sw.bone,drv[sw.bone].seq ? drv[sw.bone].seq->name.c_str() : "physical",
+                    cur[sw.bone].seq ? cur[sw.bone].seq->name.c_str() : "pose",
                     double(sw.angle*180.f/float(M_PI)),double(dot(o.axis,sw.dturn)),double(o.rot.v0),double(o.rotSide.v0),
                     double(sw.len),double(dot(o.dir,sw.dmove)),double(time));
       Log::d(buf);
@@ -267,6 +442,23 @@ bool AnimBlend::apply(const Sample* raw, Sample* out, size_t numBones, uint64_t 
   const bool  next    = (now!=outTime);
   const float dtShown = (lastTime>0 && outTime>lastTime && outTime-lastTime<=MaxGap) ? float(outTime-lastTime)*0.001f : 0.f;
   const float dtNow   = (outTime>0 && next) ? float(std::min(now-outTime,MaxGap))*0.001f : 0.f;
+
+  // Start from the physical pose without advancing its position, preserving its measured velocity
+  // and subtracting the finished target's velocity just like an ordinary animation switch.
+  if(!external.empty()) {
+    for(size_t i=0; i<std::min(numBones,external.size()); ++i) {
+      out[i] = external[i];
+      const bool known=externalPrevious.size()==external.size() && externalPreviousTime<outTime &&
+                       outTime-externalPreviousTime<=MaxGap;
+      last[i] = known ? externalPrevious[i] : external[i];
+      const float dt=known ? float(outTime-externalPreviousTime)*.001f : 0.f;
+      prepare(i,raw[i],external[i],dt,0.f);
+      started++;
+      }
+    external.clear();
+    externalPrevious.clear();
+    externalPreviousTime=0;
+    }
 
   // the switches first: they start from the pose shown, before it changes
   for(size_t i=0; i<numBones; ++i) {
@@ -291,10 +483,10 @@ bool AnimBlend::apply(const Sample* raw, Sample* out, size_t numBones, uint64_t 
   if(!pend.empty())
     begin(now);
 
-  bool blending = false;
+  bool blending = externalDriven && externalWeight(now)>0.f;
   for(size_t i=0; i<numBones; ++i) {
     const Driver& c = cur[i];
-    if(c.seq==nullptr)
+    if(c.seq==nullptr && !externalDriven)
       continue;
     Driver&    d     = drv[i];
     const bool fresh = (d.seq==nullptr);

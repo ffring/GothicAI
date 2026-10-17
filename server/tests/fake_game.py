@@ -48,7 +48,11 @@ class FakeGame:
         self.transcripts: list[str] = []  # final ones
         self.partials: list[str] = []
         self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
+        # what story_program answers (v23): the scripts' programs of (node, part); missing ones are errors
+        self.programs: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self.story: list[dict[str, Any]] = []  # story_spawn / story_watch / story_effect / raise_dead
+        self.cast: dict[str, dict[str, Any]] = {}  # story_npc (v34): the director's npc's made, by id
+        self.cast_asked: list[str] = []  # story_npc, every one asked, in order
         self.people_near: list[dict[str, Any]] = []  # what story_nearby answers
         self.nearby_of: dict[str, list[dict[str, Any]]] = {}  # ...around this npc (else people_near)
         self.nearby_error: set[str] = set()  # npc's story_nearby does not know (ok=false: not in the world)
@@ -59,14 +63,26 @@ class FakeGame:
         self.known: set[str] = set()
         self.symbols: dict[str, str] = {}
         self.in_dialog = False
+        self.in_cutscene = False
+        self.nearest_waypoint: str | None = "NW_XARDAS_TOWER_IN1_31"
+        self.waypoint_distances: dict[str, float] = {}  # story_eval: hero's distance to a waypoint, cm
         self.day = 1
         self.hour, self.minute = 8, 0
         self.people: list[dict[str, Any]] = []  # what story_people answers: the world's people and their days
         self.item_names: dict[str, str] = {}
+        self.fns: dict[str, int] = {}  # story_eval: what helper predicates of the scripts come to (C_X())
+        self.attitudes: dict[str, int] = {}  # NPC_GETATTITUDE towards HERO; default ATT_NEUTRAL
+        self.guild_attitudes: dict[tuple[int, int], int] = {}  # WLD_GETGUILDATTITUDE, npc -> hero guild
         # story_eval: expressions over vars, npc_states, the hero's items (instances: global -> npc symbol)
         self.hero_items: dict[str, int] = {}
         # story_effect with `check`: the npc's things (the hero's are hero_items), moved by the gives
         self.npc_items: dict[str, dict[str, int]] = {}
+        # v17: the hero's learning points and experience; what teaching costs (per point for attribute and
+        # fight, else for the lesson), default 1; what was taught
+        self.hero_lp = 0
+        self.hero_xp = 0
+        self.learn_cost: dict[tuple[str, str], int] = {}
+        self.taught: list[tuple[str, str, int]] = []
         self.deals: list[dict[str, Any]] = []  # deal_show / deal_hide messages
         self.views: dict[str, dict[str, Any]] = {}  # what npc_view answers: npc -> its view (NpcView)
         self.fields: dict[tuple[str, str], int] = {}  # ("SELF" | "OTHER", "GUILD") -> value; others read 0
@@ -93,7 +109,12 @@ class FakeGame:
         self.routine_errors: dict[str, str] = {}  # npc -> the error its routine is answered with
         self.routine_hang: set[str] = set()  # npc's whose routine is never answered (the server times out)
         self.routine_calls: list[str] = []  # every npc asked for, in order
+        self.beast_cmds: list[dict[str, Any]] = []  # the server's words on wolves (v21)
         self._later: set[asyncio.Task[None]] = set()
+        self.slow_actions: set[str] = set()  # actions that go on until the npc's next action cancels them
+        # v28: what npc_chests answers, npc -> its chests (protocol.Chest as JSON); use_chest moves items
+        self.chests: dict[str, list[dict[str, Any]]] = {}
+        self.long_running: dict[str, str] = {}  # npc -> the id of its action going on
 
     async def perception(
         self, npc: str, perc: str, other: str, distance: float = 300.0, victim: str | None = None
@@ -105,6 +126,10 @@ class FakeGame:
     async def push_views(self, *views: dict[str, Any]) -> None:
         """What the npc's nearest to the player perceive, as the game pushes it once a second (v11)."""
         await self.send(type="npc_views", t=1000, views=list(views))
+
+    async def beasts(self, *wolves: dict[str, Any], hero_weapon: str = "none") -> None:
+        """The wolves near the hero (v21): id, name, distance, state, hp, hp_max, focus..."""
+        await self.send(type="beasts", t=1000, hero_weapon=hero_weapon, wolves=list(wolves))
 
     async def roster(self, *people: dict[str, Any]) -> None:
         """The people around the player (npc_roster): id, name, distance, in_view, state, moving..."""
@@ -140,6 +165,8 @@ class FakeGame:
             "player": {
                 "name": "Я",
                 "pos": [100.0, 2.0, 3.0],
+                "ahead": [1.0, 0.0],  # he faces +x, his right is -z (v32)
+                "right": [0.0, -1.0],
                 "distance": 99.0,
                 "guild": 0,
                 "hp": 40,
@@ -237,17 +264,38 @@ class FakeGame:
                 await self.send(type="result", req=msg["req"], ok=True, value=msg.get("count", 1))
             case "story_watch":
                 self.story.append(msg)
+            case "story_npc":
+                # the director's npc (v34): made once, then left as the save has it
+                self.cast_asked.append(msg["npc"])
+                npc = msg["npc"]
+                if npc in self.cast:
+                    state = "dead" if self.npc_states.get(npc, {}).get("state") == "dead" else "there"
+                else:
+                    self.cast[npc] = msg
+                    self.npc_states[npc] = {"state": "alive", "name": msg["name"]}
+                    self.symbols[npc] = "npc"
+                    if msg.get("routine"):
+                        self.routines[npc] = {"entries": msg["routine"]}
+                    state = "made"
+                index = 74650 + list(self.cast).index(npc)
+                await self.send(
+                    type="result", req=msg["req"], ok=True, value={"npc": npc, "state": state, "index": index}
+                )
             case "raise_dead":
                 self.story.append(msg)
                 await self.send(type="result", req=msg["req"], ok=True)
             case "story_effect":
                 self.story.append(msg)
+                # a dialog counts as heard (v31)
+                self.known |= {e["info"] for e in msg["effects"] if e.get("do") == "knows"}
                 error = self.give(msg) if msg.get("check") else None
                 await self.send(
                     type="result", req=msg["req"], ok=error is None, **({"error": error} if error else {})
                 )
             case "deal_show" | "deal_hide":
                 self.deals.append(msg)
+            case "npc_chests":
+                await self.send(type="result", req=msg["req"], ok=True, value=self.chests.get(msg["npc"], []))
             case "story_nearby":
                 if msg["npc"] in self.nearby_error:
                     await self.send(type="result", req=msg["req"], ok=False, error=f"no npc {msg['npc']}")
@@ -270,7 +318,7 @@ class FakeGame:
                     "knows": {k: k in self.known for k in msg.get("knows", [])},
                     "symbols": {n: self.symbols[n] for n in msg.get("symbols", []) if n in self.symbols},
                     "dialog": self.in_dialog,
-                    "cutscene": False,
+                    "cutscene": self.in_cutscene,
                     "items": {i: self.item_names[i] for i in msg.get("items", []) if i in self.item_names},
                     "day": self.day,
                     "hour": self.hour,
@@ -289,8 +337,29 @@ class FakeGame:
             case "story_tag":
                 self.story.append(msg)
                 await self.send(type="result", req=msg["req"], ok=True, value=len(msg["npcs"]))
+            case "beast":
+                self.beast_cmds.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True)
+            case "story_program":
+                key = (msg["node"], msg.get("part", "information"))
+                if key not in self.programs:
+                    await self.send(type="result", req=msg["req"], ok=False, error=f"no dialog {key[0]}")
+                else:
+                    value = {"node": key[0], "fn": key[0], "returns": key[1] == "condition", "patched": False}
+                    await self.send(
+                        type="result", req=msg["req"], ok=True, value={**value, "steps": self.programs[key]}
+                    )
             case "graph_patch":
                 self.graph.append(msg)
+                for op in msg["ops"]:
+                    for name, value in (op.get("vars") or {}).items() if op.get("op") == "vars" else []:
+                        # the director's story variables (v29): kept if the save has them
+                        self.vars.setdefault(name, value)
+                        self.symbols.setdefault(name, "var")
+                    if op.get("op") == "trigger" and op.get("steps") is not None:
+                        # a trigger's count (v35): a variable of the director's by its id
+                        self.vars.setdefault(op["id"], 0)
+                        self.symbols.setdefault(op["id"], "var")
                 if msg.get("req"):
                     bad = [i for i, op in enumerate(msg["ops"]) if op.get("node") == "BAD"]
                     errors = {"error": "; ".join(f"op {i}: no dialog BAD" for i in bad)} if bad else {}
@@ -353,22 +422,45 @@ class FakeGame:
         return None
 
     def give(self, msg: dict[str, Any]) -> str | None:
-        """story_effect with `check`: all the gives or none, as the bridge does; what is missing, or None."""
+        """story_effect with `check`: all the gives or none, as the bridge does; what is missing, or None.
+        What the npc creates (v17) is its own to give; teaching takes the hero's learning points."""
         npc = self.npc_items.setdefault(msg["npc"], {})
         need: dict[tuple[str, str], int] = {}
+        made: dict[str, int] = {}
+        lp = 0
         for e in msg["effects"]:
             if e.get("do") == "give":
                 who = "npc" if e.get("to") != "self" else "hero"
                 need[(who, e["item"])] = need.get((who, e["item"]), 0) + int(e.get("count", 1))
+            elif e.get("do") == "create":
+                made[e["item"]] = made.get(e["item"], 0) + int(e.get("count", 1))
+            elif e.get("do") == "teach":
+                lp += self.cost(e)
         for (who, item), count in need.items():
-            has = (self.hero_items if who == "hero" else npc).get(item, 0)
+            has = (self.hero_items if who == "hero" else npc).get(item, 0) + (
+                made.get(item, 0) if who == "npc" else 0
+            )
             if has < count:
                 return f"missing: {who} {item} {count} (has {has})"
+        if lp > self.hero_lp:
+            return f"missing: hero LP {lp} (has {self.hero_lp})"
+        for item, count in made.items():
+            npc[item] = npc.get(item, 0) + count
         for (who, item), count in need.items():
             giver, taker = (self.hero_items, npc) if who == "hero" else (npc, self.hero_items)
             giver[item] -= count
             taker[item] = taker.get(item, 0) + count
+        for e in msg["effects"]:
+            if e.get("do") == "teach":
+                self.hero_lp -= self.cost(e)
+                self.taught.append((e["teach"], e.get("arg", ""), int(e.get("count", 1))))
+            elif e.get("do") == "xp":
+                self.hero_xp += int(e.get("amount", e.get("count", 0)))
         return None
+
+    def cost(self, e: dict[str, Any]) -> int:
+        each = self.learn_cost.get((e["teach"], e.get("arg", "")), 1)
+        return each * int(e.get("count", 1)) if e["teach"] in ("attribute", "fight") else each
 
     def evaluate(self, e: Any, npc: str | None = None) -> Any:
         """A story graph expression, as far as the fake world knows: ints, vars, comparisons, logic, the
@@ -383,10 +475,12 @@ class FakeGame:
             ">=": lambda a, b: a >= b,
         }
         match e:
+            case ["inst", "HERO"]:
+                return "PC_HERO"
             case ["int", v, *_]:
                 return v
             case ["var", name]:
-                return self.vars.get(name, 0)
+                return self.vars.get(name, {"ATT_HOSTILE": 0, "GIL_BDT": 9}.get(name, 0))
             case ["field", ["inst", who], name]:
                 return self.fields.get((who, name), 0)
             case ["field", *_]:
@@ -405,15 +499,35 @@ class FakeGame:
                 return None if x is None or y is None else int(ops[op](x, y))
             case ["call", "NPC_HASITEMS", ["inst", "OTHER" | "HERO"], ["sym", item]]:
                 return self.hero_items.get(item, 0)
+            case ["call", "NPC_GETNEARESTWP", ["inst", "HERO"]]:
+                return self.nearest_waypoint
+            case ["call", "NPC_GETDISTTOWP", ["inst", "HERO"], ["str", waypoint]]:
+                return self.waypoint_distances.get(waypoint, 0)
+            case ["call", "NPC_GETATTITUDE", ["inst", who], ["inst", "HERO"]]:
+                return self.attitudes.get(who, 2)
+            case ["call", "WLD_GETGUILDATTITUDE", first, second]:
+                guilds = (self.evaluate(first, npc), self.evaluate(second, npc))
+                return self.guild_attitudes.get(guilds, 2)
+            case ["call", "WLD_GETDAY"]:
+                return self.day
             case ["call", "NPC_ISDEAD", ["inst", name]]:
                 dead = self.instances.get(name, name)
                 return int(self.npc_states.get(dead, {}).get("state") == "dead")
             case ["call", "NPC_CHECKINFO", ["inst", "SELF"], ["int", 1, *_]]:
                 return int(npc in self.important)
+            case ["call", "NPC_KNOWSINFO", ["inst", "OTHER" | "HERO"], ["sym", info]]:
+                return int(info in self.known)
+            case ["fn", name] if name in self.fns:
+                return self.fns[name]
         return None
 
     async def handle_action(self, msg: dict[str, Any]) -> None:
         npc, action, args = msg["npc"], msg["action"], msg.get("args", {})
+        if (running := self.long_running.pop(npc, None)) is not None:  # preempted, as the bridge does
+            await self.send(type="action_result", id=running, npc=npc, status="cancelled", detail="preempted")
+        if action in self.slow_actions and npc in self.attached:
+            self.long_running[npc] = msg["id"]  # goes on until the next action of this npc
+            return
         status, detail = "done", None
         if npc not in self.attached:
             status, detail = "rejected", "npc is not attached"
@@ -421,6 +535,8 @@ class FakeGame:
             status, detail = "rejected", "unknown animation"
         elif action == "go_to_waypoint" and args.get("waypoint") not in WAYPOINTS:
             status, detail = "rejected", "unknown waypoint"
+        elif action == "use_chest":
+            status, detail = self.use_chest(npc, args)
         elif action == "go_to_npc" and args.get("npc") in self.npc_states:
             # it gets there: the target is as far from it as it was to stop, and in sight
             self.npc_states[args["npc"]]["distance"] = args.get("radius", 400)
@@ -436,6 +552,30 @@ class FakeGame:
         if action == "return_to_routine" and status == "done":
             self.attached.discard(npc)
             await self.send(type="detached", npc=npc, reason="routine")
+
+    def use_chest(self, npc: str, args: dict[str, Any]) -> tuple[str, str | None]:
+        """As the bridge does: what is there moves, as much as there is; `detail` says what moved."""
+        chest = next((c for c in self.chests.get(npc, []) if c["id"] == args.get("chest")), None)
+        if chest is None:
+            return "rejected", "not its chest"
+        mine = self.npc_items.setdefault(npc, {})
+        moved: dict[str, list[str]] = {"took": [], "put": []}
+        for m in args.get("take", []):
+            it = next((i for i in chest["items"] if i["item"] == m["item"]), None)
+            n = min(m["count"], it["count"]) if it else 0
+            if it is not None and n > 0:
+                it["count"] -= n
+                mine[m["item"]] = mine.get(m["item"], 0) + n
+                moved["took"].append(f"{m['item']}:{n}")
+        for m in args.get("put", []):
+            n = min(m["count"], mine.get(m["item"], 0)) or m["count"]
+            it = next((i for i in chest["items"] if i["item"] == m["item"]), None)
+            if it is None:
+                chest["items"].append(it := {"item": m["item"], "name": m["item"], "count": 0})
+            it["count"] += n
+            moved["put"].append(f"{m['item']}:{n}")
+        chest["items"] = [i for i in chest["items"] if i["count"] > 0]
+        return "done", f"took={','.join(moved['took'])};put={','.join(moved['put'])}"
 
 
 @asynccontextmanager

@@ -8,6 +8,8 @@ from pydantic import ValidationError
 from gothic_ai.bodies import Bodies
 from gothic_ai.game import GameError, GameLink
 from gothic_ai.protocol import (
+    BODY_CONTROL_PROTOCOL,
+    PROTOCOL_VERSION,
     BodyAcquireCmd,
     BodyActionCmd,
     BodyControlEvents,
@@ -19,6 +21,10 @@ from gothic_ai.protocol import (
     parse_game_message,
 )
 from tests.test_body_observations import message, observation, packet
+
+
+def test_body_control_protocol_is_v41():
+    assert PROTOCOL_VERSION >= BODY_CONTROL_PROTOCOL == 41
 
 
 def receipt(**updates):

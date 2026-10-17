@@ -218,6 +218,9 @@ bool DialogMenu::aiOutput(Npc &npc, std::string_view msg) {
 
   if(current.time>0)
     return false;
+  // the other one may still be saying its line: a voice that streams in (ai_bridge) learns its length late
+  if(Npc* said = &npc==pl ? other : pl; said!=nullptr && said->speechLeft()>0)
+    return false;
 
   if(pl==&npc) {
     if(other!=nullptr)
@@ -532,6 +535,23 @@ void DialogMenu::paintChoice(PaintEvent &e) {
     fnt.drawText(p,x+padd,y+padd+textHeightOffset,dw-padd,0,choice[i].title,AlignLeft);
     textHeightOffset += choiceTextSize.h;
     }
+  }
+
+std::vector<std::string> DialogMenu::entries() const {
+  std::vector<std::string> ret;
+  if(state==State::Idle || !isChoiceMenuActive())
+    return ret;
+  for(auto& c : choice)
+    ret.push_back(c.title);
+  return ret;
+  }
+
+bool DialogMenu::pick(size_t i) {
+  if(state==State::Idle || !isChoiceMenuActive() || i>=choice.size())
+    return false;
+  dlgSel = i;
+  onSelect();
+  return true;
   }
 
 bool DialogMenu::isChoiceMenuActive() const {

@@ -3,10 +3,15 @@
 #include <Tempest/Log>
 
 #include <cctype>
+#include <optional>
 
 #include <zenkit/DaedalusVm.hh>
 
+#include "game/gamescript.h"
 #include "world/objects/npc.h"
+#include "world/world.h"
+#include "gothic.h"
+#include "world/aiqueue.h"
 
 #include "eval.h"
 #include "jsonread.h"
@@ -23,11 +28,54 @@ static std::string upper(std::string_view s) {
   return r;
   }
 
+namespace {
+
+// What an npc teaches (v17): the scripts' own teacher function, and for those that teach one thing of a
+// talent (a rune, a potion...), the talent their learn cost is asked for (B_GetLearnCostTalent).
+struct Teaching {
+  std::string_view kind;
+  const char*      fn;
+  const char*      talent;
+  };
+
+constexpr Teaching Teachings[] = {
+  {"attribute", "B_TEACHATTRIBUTEPOINTS",              nullptr},
+  {"fight",     "B_TEACHFIGHTTALENTPERCENT",           nullptr},
+  {"thief",     "B_TEACHTHIEFTALENT",                  nullptr},
+  {"circle",    "B_TEACHMAGICCIRCLE",                  "NPC_TALENT_MAGE"},
+  {"rune",      "B_TEACHPLAYERTALENTRUNES",            "NPC_TALENT_RUNES"},
+  {"alchemy",   "B_TEACHPLAYERTALENTALCHEMY",          "NPC_TALENT_ALCHEMY"},
+  {"smith",     "B_TEACHPLAYERTALENTSMITH",            "NPC_TALENT_SMITH"},
+  {"trophy",    "B_TEACHPLAYERTALENTTAKEANIMALTROPHY", "NPC_TALENT_TAKEANIMALTROPHY"},
+  };
+
+// no teacher's own limit: how far the npc goes is the npc's to say (the server's deal)
+constexpr int32_t AttributeMax = 1000;
+constexpr int32_t FightMax     = 100;
+
+const Teaching* teaching(std::string_view kind) {
+  for(auto& t:Teachings)
+    if(t.kind==kind)
+      return &t;
+  return nullptr;
+  }
+
+int32_t intConst(zenkit::DaedalusVm& vm, std::string_view name) {
+  auto* s = vm.find_symbol_by_name(name);
+  return s!=nullptr && s->type()==DaedalusDataType::INT ? s->get_int(0) : 0;
+  }
+
+}
+
 std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm, StoryEffect& e) {
   e.kind   = std::string(JsonRead::str(x,"do"));
   e.item   = upper(JsonRead::str(x,"item"));
+  e.teach  = std::string(JsonRead::str(x,"teach"));
+  e.arg    = upper(JsonRead::str(x,"arg"));
   e.var    = upper(JsonRead::str(x,"var"));
   e.reason = upper(JsonRead::str(x,"reason"));
+  e.attitude = upper(JsonRead::str(x,"attitude"));
+  e.info   = upper(JsonRead::str(x,"info"));
   e.topic  = TextCodec::fromUtf8(JsonRead::str(x,"topic"));
   e.text   = TextCodec::fromUtf8(JsonRead::str(x,"text"));
   e.status = upper(JsonRead::str(x,"status"));
@@ -35,14 +83,35 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   e.routine = upper(JsonRead::str(x,"routine"));
   e.count  = int32_t(JsonRead::integer(x,"count",JsonRead::integer(x,"amount",
                      JsonRead::integer(x,"value",JsonRead::integer(x,"seconds",1)))));
-  e.toHero = JsonRead::str(x,"to")!="self";
+  e.toNpc  = JsonRead::str(x,"to")=="npc";
+  e.toHero = JsonRead::str(x,"to")!="self" && !e.toNpc;
   auto* item = vm ? vm->find_symbol_by_name(e.item) : nullptr;
   auto* var  = vm ? vm->find_symbol_by_name(e.var) : nullptr;
-  if(e.kind=="give") {
+  if(e.kind=="give" || e.kind=="create") {
     if(vm && (item==nullptr || item->type()!=DaedalusDataType::INSTANCE))
-      return "give: no item " + e.item;
+      return e.kind + ": no item " + e.item;
     if(e.count<=0)
-      return "give: count must be positive";
+      return e.kind + ": count must be positive";
+    if(e.kind=="give" && e.toNpc) {
+      auto* t = vm && !e.target.empty() ? vm->find_symbol_by_name(e.target) : nullptr;
+      if(e.target.empty() || (vm && (t==nullptr || t->type()!=DaedalusDataType::INSTANCE)))
+        return "give: no npc " + e.target;
+      }
+    return {};
+    }
+  if(e.kind=="teach") {
+    auto* t = teaching(e.teach);
+    if(t==nullptr)
+      return "teach: unknown teaching " + e.teach;
+    if(vm && vm->find_symbol_by_name(t->fn)==nullptr)
+      return std::string("teach: the scripts have no ") + t->fn;
+    if(e.teach=="circle")
+      return e.count<1 || e.count>6 ? "teach: circle must be 1..6" : "";
+    auto* a = vm && !e.arg.empty() ? vm->find_symbol_by_name(e.arg) : nullptr;
+    if(e.arg.empty() || (vm && (a==nullptr || !a->is_const() || a->type()!=DaedalusDataType::INT)))
+      return "teach: no constant " + e.arg;
+    if((e.teach=="attribute" || e.teach=="fight") && e.count<=0)
+      return "teach: count must be positive";
     return {};
     }
   if(e.kind=="set") {
@@ -66,6 +135,14 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
       return "attack: no reason " + e.reason;
     return {};
     }
+  if(e.kind=="calm") {
+    if(e.attitude.empty())
+      e.attitude = "ATT_NEUTRAL";
+    auto* a = vm ? vm->find_symbol_by_name(e.attitude) : nullptr;
+    if(vm && (a==nullptr || !a->is_const() || a->type()!=DaedalusDataType::INT))
+      return "calm: no attitude " + e.attitude;
+    return {};
+    }
   if(e.kind=="refuse_talk")
     return e.count<=0 ? "refuse_talk: seconds must be positive" : "";
   if(e.kind=="routine") {
@@ -73,6 +150,17 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
     if(vm && !e.target.empty() && (t==nullptr || t->type()!=DaedalusDataType::INSTANCE))
       return "routine: no npc " + e.target;
     return e.routine.empty() ? "routine: needs a routine" : "";
+    }
+  if(e.kind=="knows") {
+    auto* i = vm ? vm->find_symbol_by_name(e.info) : nullptr;
+    if(vm && (i==nullptr || i->type()!=DaedalusDataType::INSTANCE || !i->is_instance_of<zenkit::IInfo>()))
+      return "knows: no dialog " + e.info;
+    return e.info.empty() ? "knows: needs a dialog" : "";
+    }
+  if(e.kind=="party") {
+    if(vm && vm->find_symbol_by_name("AIV_PARTYMEMBER")==nullptr)
+      return "party: the scripts have no AIV_PARTYMEMBER";
+    return {};
     }
   if(e.kind=="xp" || e.kind=="end")
     return {};
@@ -83,8 +171,10 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
   auto call = [&](const char* fn, std::vector<Value> args) {
     std::string err;
     auto* s = vm.find_symbol_by_name(fn);
-    if(s==nullptr || !storygraph::callFunction(vm,*s,args,err))
+    auto  r = s ? storygraph::callFunction(vm,*s,args,err) : std::nullopt;
+    if(!r)
       Log::e("[story] ",who,": ",fn," failed: ",s ? err : "no such function");
+    return r;
     };
   auto constant = [&](std::string_view name, int32_t def) {
     auto* s = vm.find_symbol_by_name(name);
@@ -98,12 +188,44 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
   self->set_instance(npc.handlePtr());
   other->set_instance(player.handlePtr());
 
-  if(kind=="give") {
+  if(kind=="give" && toNpc) {
+    // to another npc (v39): an errand far from the hero, the walk taken as done (errands.py)
+    auto* s = vm.find_symbol_by_name(item);
+    auto* t = vm.find_symbol_by_name(target);
+    auto  inst = t!=nullptr ? t->get_instance() : nullptr;
+    if(s!=nullptr && inst!=nullptr)
+      call("B_GIVEINVITEMS",{Value::instance(npc.handlePtr()),Value::instance(inst),
+                             Value::integer(int32_t(s->index())),Value::integer(count)}); else
+      Log::e("[story] ",who,": give to ",target,": no such npc in the world");
+    }
+  else if(kind=="give") {
     if(auto* s = vm.find_symbol_by_name(item)) {
       auto& from = toHero ? npc : player;
       auto& to   = toHero ? player : npc;
       call("B_GIVEINVITEMS",{Value::instance(from.handlePtr()),Value::instance(to.handlePtr()),
                              Value::integer(int32_t(s->index())),Value::integer(count)});
+      }
+    }
+  else if(kind=="create") {
+    // into the npc's own hands first: a thing it keeps elsewhere (the server's stash), given after this
+    if(auto* s = vm.find_symbol_by_name(item))
+      call("CREATEINVITEMS",{Value::instance(npc.handlePtr()),Value::integer(int32_t(s->index())),
+                             Value::integer(count)});
+    }
+  else if(kind=="teach") {
+    // the scripts' teacher function, as a teacher's dialog calls it: it takes the learning points itself
+    if(auto* t = teaching(teach)) {
+      std::vector<Value> args = {Value::instance(npc.handlePtr()),Value::instance(player.handlePtr())};
+      if(teach=="circle")
+        args.push_back(Value::integer(count)); else
+        args.push_back(Value::integer(intConst(vm,arg)));
+      if(teach=="attribute" || teach=="fight") {
+        args.push_back(Value::integer(count));
+        args.push_back(Value::integer(teach=="attribute" ? AttributeMax : FightMax));
+        }
+      auto r = call(t->fn,std::move(args));
+      if(r && r->i==0)
+        Log::e("[story] ",who,": ",t->fn," ",arg," ",count,": the scripts refused");
       }
     }
   else if(kind=="xp") {
@@ -127,6 +249,35 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
     call("B_ATTACK",{Value::instance(npc.handlePtr()),Value::instance(player.handlePtr()),
                      Value::integer(constant(reason,0)),Value::integer(0)});
     }
+  else if(kind=="calm") {
+    // the npc calls off its fight with the hero (v20, talked down: "Воу, ты чего, спокуха") and keeps to it:
+    // its attitude to him as the scripts set it (B_SetAttitude), so their B_AssessEnemy sees no enemy in
+    // him any more; and a fight with him ends now, the npc back to its routine
+    call("B_SETATTITUDE",{Value::instance(npc.handlePtr()),Value::integer(constant(attitude,2))});
+    if(npc.target()==&player && !npc.isDown()) {
+      npc.clearAiQueue();
+      npc.clearState(true);
+      npc.setTarget(nullptr);
+      npc.aiPush(AiQueue::aiRemoveWeapon());
+      npc.resumeAiRoutine();
+      }
+    }
+  else if(kind=="knows") {
+    // the dialog counts as heard, as when it is played: the menu no longer offers it, conditions see it
+    auto* s    = vm.find_symbol_by_name(info);
+    auto  dlg  = s!=nullptr ? std::dynamic_pointer_cast<zenkit::IInfo>(s->get_instance()) : nullptr;
+    auto* w    = Gothic::inst().world();
+    if(dlg!=nullptr && w!=nullptr)
+      w->script().setNpcInfoKnown(player.handle(),*dlg); else
+      Log::e("[story] ",who,": knows ",info,": no such dialog in the world");
+    }
+  else if(kind=="party") {
+    // the npc goes with the hero (v30), as a companion's dialog marks it: whom it kills gives him the
+    // experience (ZS_Dead), its blows at him are friendly fire
+    const int32_t aiv = intConst(vm,"AIV_PARTYMEMBER");
+    if(aiv>=0 && uint32_t(aiv)<zenkit::INpc::aivar_count)
+      npc.handlePtr()->aivar[size_t(aiv)] = count!=0 ? 1 : 0;
+    }
   else if(kind=="refuse_talk") {
     call("NPC_SETREFUSETALK",{Value::instance(npc.handlePtr()),Value::integer(count)});
     }
@@ -141,4 +292,34 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
 
   self->set_instance(prevSelf);
   other->set_instance(prevOther);
+  }
+
+int32_t StoryEffect::learnCost(zenkit::DaedalusVm& vm, Npc& player, std::string& error) const {
+  auto* t = teaching(teach);
+  if(t==nullptr) {
+    error = "teach: unknown teaching " + teach;
+    return -1;
+    }
+  // as the teacher function itself asks it (B_Teach*: disassembled from GOTHIC.DAT)
+  const char*        fn   = teach=="attribute" ? "B_GETLEARNCOSTATTRIBUTE" : "B_GETLEARNCOSTTALENT";
+  std::vector<Value> args = {Value::instance(player.handlePtr())};
+  if(teach=="attribute") {
+    args.push_back(Value::integer(intConst(vm,arg)));
+    }
+  else if(t->talent==nullptr) {  // fight, thief: the talent itself, skill 1
+    args.push_back(Value::integer(intConst(vm,arg)));
+    args.push_back(Value::integer(1));
+    }
+  else {  // circle: the circle; a rune, a potion...: what is taught
+    args.push_back(Value::integer(intConst(vm,t->talent)));
+    args.push_back(Value::integer(teach=="circle" ? count : intConst(vm,arg)));
+    }
+  auto* s = vm.find_symbol_by_name(fn);
+  auto  r = s ? storygraph::callFunction(vm,*s,args,error) : std::nullopt;
+  if(!r) {
+    if(s==nullptr)
+      error = std::string("the scripts have no ") + fn;
+    return -1;
+    }
+  return teach=="attribute" || teach=="fight" ? r->i*count : r->i;
   }

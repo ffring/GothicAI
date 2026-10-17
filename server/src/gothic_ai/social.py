@@ -33,7 +33,7 @@ import heapq
 import logging
 import math
 from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -76,6 +76,8 @@ class Tie:
     deals: list[str] = field(default_factory=list)  # quests they share
     # daily, when both stand in ZS_SMALLTALK, and the first one's waypoint (in story_people's order)
     talks: list[tuple[int, int, str]] = field(default_factory=list)
+    # how they know each other, in words: a character of the director's knows them (cast.Person.ties)
+    bonds: list[str] = field(default_factory=list)
 
     def occasions(self, a: str, b: str, after: int, until: int) -> Iterator[int]:
         """The game minutes in [after, until] they talk: their meetings (from when one already goes on),
@@ -85,7 +87,7 @@ class Tie:
             for s, e in self.meets:
                 if base + e > after and base + s <= until:
                     yield max(base + s, after)
-            if self.deals:
+            if self.deals or self.bonds:
                 at = (
                     base + DEAL_FROM + int(_chance("deal", *sorted((a, b)), str(day)) * (DEAL_TO - DEAL_FROM))
                 )
@@ -108,7 +110,12 @@ class Social:
     """The acquaintances of the world's people: whom each meets, and when; whom each has dealings with.
     And each one's day by its routine: where it is at a minute, how many a place holds (daylife.py)."""
 
-    def __init__(self, people: list[dict[str, Any]], graph: StoryGraph | None = None) -> None:
+    def __init__(
+        self,
+        people: list[dict[str, Any]],
+        graph: StoryGraph | None = None,
+        bonds: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> None:
         self.names = {p["npc"]: p.get("name") or p["npc"] for p in people}
         self.guilds = {p["npc"]: int(p.get("guild", 0)) for p in people}
         self.ties: dict[str, dict[str, Tie]] = defaultdict(dict)
@@ -136,6 +143,11 @@ class Social:
         self._meetings()
         if graph is not None:
             self._dealings(graph)
+        # whom the director's characters know, by their description: news goes between them once a day
+        for a, known in (bonds or {}).items():
+            for b, how in known.items():
+                if a in self.names and b in self.names and (tie := self.tie(a, b)) is not None:
+                    tie.bonds.append(how)
 
     def tie(self, a: str, b: str) -> Tie | None:
         """Their tie, made if there is none yet; None if they can't be acquainted (an outlaw and the rest)."""
@@ -202,6 +214,7 @@ class Social:
             how = [f"{_hm(s)}–{_hm(e)}" for s, e in sorted(t.meets)]
             how += [f"дела: {q}" for q in t.deals]
             how += [f"болтают {_hm(s)}–{_hm(e)} у {wp}" for s, e, wp in t.talks]
+            how += [f"знакомы: {b}" for b in t.bonds]
             out.append(f"{self.names.get(other, other)} ({other}): {', '.join(how)}")
         return out
 
@@ -270,6 +283,11 @@ class Rumor:
 
     def told(self, teller: str) -> str:
         """The remark for the one it is told to (names stay as they are: nothing to decline)."""
+        if self.kind == "broken" and self.quest.startswith("meet-"):  # meetings.py
+            return (
+                f"Слух (со слов: {teller}): герой обещал человеку по имени {self.about_name} прийти на "
+                f"встречу и не пришёл — {self.title}"
+            )
         if self.kind == "broken":
             return (
                 f"Слух (со слов: {teller}): герой задолжал человеку по имени {self.about_name} и не вернул "
@@ -301,11 +319,13 @@ class Rumors:
         dialogue: DialogueManager,
         chronicle: Chronicle,
         graph: StoryGraph | None = None,
+        bonds: Callable[[], Mapping[str, Mapping[str, str]]] = dict,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
         self.chronicle = chronicle
         self.graph = graph
+        self.bonds = bonds  # whom the director's characters know (cast.py)
         self.social: Social | None = None
         self.rumors: dict[str, Rumor] = {}
         self.dead: set[str] = set()
@@ -327,7 +347,7 @@ class Rumors:
     async def tick(self) -> None:
         """Who met whom since the last tick, and what they told each other."""
         if self.social is None:
-            self.social = Social(await self.link.story_people(), self.graph)
+            self.social = Social(await self.link.story_people(), self.graph, self.bonds())
             log.info("rumors: %d people, %d ties", len(self.social.names), _count(self.social))
         state = await self.link.story_state()
         now = int(state.get("day", 0)) * DAY + int(state.get("hour", 0)) * 60 + int(state.get("minute", 0))
@@ -393,6 +413,21 @@ class Rumors:
         self._pass(r, a, b, clock, how, staging)
         return "told"
 
+    def tell(self, r: Rumor, a: str, b: str) -> Literal["told", "wait", "no"]:
+        """a has set out to tell b (an errand, errands.py): no lot and no day's count, it means to; only the
+        living, what each knows and a's word to keep silent (deals.py). how: told, also when near the hero
+        it is a scene of two voices (gossip.py)."""
+        clock = self.clock
+        if clock is None or self.social is None or a in self.dead or b in self.dead:
+            return "no"
+        if a not in r.known or b in r.known or a in r.silent:
+            return "no"
+        staging = self._staging(r, a, b)
+        if staging is not None and staging.tier == "wait":
+            return "wait"
+        self._pass(r, a, b, clock, "told", staging)
+        return "told"
+
     def offer(self, r: Rumor, a: str, b: str) -> bool:
         """offer_status of a meeting: True if it passed (busy now: the view trigger asks again later)."""
         return self.offer_status(r, a, b) == "told"
@@ -437,8 +472,8 @@ class Rumors:
     def _pass(self, r: Rumor, a: str, b: str, t: int, how: str, staging: Staging | None) -> None:
         """b hears it from a: the fact first; then, said or seen, how it looks (gossip.py)."""
         shown = staging if staging is not None and staging.tier in ("words", "sight") else None
-        if shown is not None and shown.tier == "words":
-            how = "talked"
+        if shown is not None and shown.tier == "words" and how != "told":
+            how = "talked"  # an errand's stays told: it went to tell it
         fact = self._learn(r, b, a, t, how, shown.keys() if shown is not None else None)
         if self.waiting:
             self.waiting.pop((r.key, a, b), None)
@@ -514,9 +549,8 @@ class Rumors:
                         if not r.about_name or r.about_name == about:
                             r.about_name = f.get("about_name") or f.get("name") or about
             case "broken":
-                r = Rumor(
-                    f.get("debt", ""), "broken", f.get("npc", ""), f.get("name") or "", f.get("what", "")
-                )
+                key = f.get("debt") or f.get("meet") or ""  # a debt, or a meeting he did not come to
+                r = Rumor(key, "broken", f.get("npc", ""), f.get("name") or "", f.get("what", ""))
                 r.known[r.about] = 0
                 if "day" in f:
                     r.since[r.about] = int(f["day"])
@@ -533,6 +567,11 @@ class Rumors:
             self._load()
             self.social = None  # the people of the new world
             self.clock = None
+
+    def people_changed(self) -> None:
+        """Someone came into the world (a character of the director's): the next tick takes the people again,
+        its day and ties with them."""
+        self.social = None
 
     def describe(self) -> list[str]:
         """The rumors and who knows them (for the console)."""

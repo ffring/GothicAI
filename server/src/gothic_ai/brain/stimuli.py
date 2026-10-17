@@ -28,6 +28,12 @@ POLICIES: dict[str, EventPolicy] = {
     "enter_room": EventPolicy("The hero walked into your house.", 30, urgent=True, salient=True),
     "item_given": EventPolicy("The hero gave you {detail}.", 60, urgent=True, salient=True),
     "item_dropped": EventPolicy("The hero dropped {detail} on the ground near you.", 30, salient=True),
+    "noise": EventPolicy(
+        "You heard an impact {dist} away {place}: {source} hit something (loudness {loudness}). "
+        "You have already turned toward the sound. {witness}",
+        15,
+        salient=True,
+    ),
     "player_sleeps": EventPolicy("The hero lay down to sleep nearby.", 60),
     "player_sits": EventPolicy("The hero sat down nearby.", 30),
     "weapon_drawn": EventPolicy("The hero drew a weapon near you.", 20, scripted=True),
@@ -80,11 +86,15 @@ def normalize(kind: str, other: str, other_name: str | None, detail: str | None)
 class Stimulus:
     kind: str
     at: float  # monotonic time it arrived
-    other: str = "PLAYER"
+    other: str = ""  # never infer the cause of a sound; legacy event defaults are set by the planner
     distance_cm: float | None = None
     detail: str | None = None
     other_name: str | None = None  # shown name of `other` (not the player)
     context: str = ""  # what it was about, e.g. the threat a killed monster was to the npc
+    position: tuple[float, float, float] | None = None  # noise: where the sound came from, cm
+    place: str | None = None
+    loudness: float | None = None
+    source: str | None = None
 
     @property
     def policy(self) -> EventPolicy:
@@ -98,7 +108,17 @@ class Stimulus:
         dist = f"{self.distance_cm / 100:.0f} m" if self.distance_cm is not None else "a few metres"
         detail = {"you": "you", "PLAYER": "the hero"}.get(self.detail or "", self.detail or "something")
         text = self.policy.text.format(
-            other=other, detail=detail, dist=dist, kind=self.kind, context=self.context
+            other=other,
+            detail=detail,
+            dist=dist,
+            kind=self.kind,
+            context=self.context,
+            place=self.place or "nearby",
+            source={"table": "a table", "barrel": "a barrel", "cup": "a cup", "body": "a body"}.get(
+                self.source or "", "an object"
+            ),
+            loudness=f"{self.loudness:.2f}" if self.loudness is not None else "unknown",
+            witness=f"You saw {other} cause it." if self.other else "You did not see who caused it.",
         )
         text = text[:1].upper() + text[1:]  # "{other} ..." may start with "the hero"
         ago = now - self.at

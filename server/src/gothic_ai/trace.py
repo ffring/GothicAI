@@ -9,7 +9,8 @@ A file per day under `<data dir>/traces/`. Records:
 
 The first step's input is the whole request; later steps only list what was added to it (the previous
 response and the tool results). Reasoning is not kept, only marked: it is opaque and only valid for the
-original request.
+original request. A line in a fight (dialogue.py) starts with the quick model's step (`llm`); the turn's
+model then acts on a request of its own, whole again, with its text unsaid (`silent`).
 """
 
 from __future__ import annotations
@@ -85,6 +86,8 @@ class StepTrace:
     first_token_s: float | None = None
     total_s: float = 0.0
     usage: dict[str, int] | None = None
+    llm: str | None = None  # another model than the turn's (the quick model of a fight, dialogue.py)
+    silent: bool = False  # its text was not said: the quick model spoke, this step only acts
 
 
 class TurnTrace:
@@ -124,8 +127,10 @@ class TurnTrace:
         self.steps: list[StepTrace] = []
         self.closed = False
 
-    def step(self, added: Sequence[Item], tool_choice: str | None) -> StepTrace:
-        st = StepTrace([item_json(i) for i in added], tool_choice=tool_choice)
+    def step(
+        self, added: Sequence[Item], tool_choice: str | None, *, llm: str | None = None, silent: bool = False
+    ) -> StepTrace:
+        st = StepTrace([item_json(i) for i in added], tool_choice=tool_choice, llm=llm, silent=silent)
         self.steps.append(st)
         return st
 

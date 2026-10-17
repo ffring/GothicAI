@@ -25,7 +25,7 @@ the baseline game and all subsequent simulations/training run on the server.
 Full setup/run/collection from the Mac (only SSH/rsync and lightweight tooling run locally):
 
 ```sh
-GOTHIC_DIR='/Volumes/shared/projects/Gothic II' \
+GOTHIC_DIR='/Volumes/DevSSD/Dev/games/Gothic II' \
 BASELINE_SAVE="$PWD/save_slot_1.sav" \
   scripts/body-baseline-remote.sh all melee-reference
 ```

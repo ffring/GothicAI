@@ -25,6 +25,7 @@ class MusicDefinitions;
 class FightAi;
 class IniFile;
 class Serialize;
+struct PhysicsNoise;
 
 class Gothic final {
   public:
@@ -40,6 +41,20 @@ class Gothic final {
       Finalize   = 3,
       FailedLoad = 4,
       FailedSave = 5
+      };
+
+    struct PhysicsFlags {
+      bool ragdoll       = false;
+      bool questGuard    = false;
+      bool livingBodies  = false;
+      bool arrowPhysics  = false;
+      bool arrowSticking = false;
+      bool spellPhysics  = false;
+      bool movableVobs   = false;
+      bool physicsNoise  = false;
+      bool destruction   = false;
+      bool characterVirtual = false;
+      bool npcCharacterVirtual = false;
       };
 
     struct Options {
@@ -171,6 +186,9 @@ class Gothic final {
 
     Tempest::Signal<void(Npc&,Npc&,AiOuputPipe*&)>                      onDialogPipe;
     std::function<bool(const Npc*)>                                     isNpcInDialogFn;
+    // the dialog window: what it offers now and picking the i-th as the player does (debug and test tools)
+    std::function<std::vector<std::string>()>                           dialogEntriesFn;
+    std::function<bool(size_t)>                                         dialogPickFn;
 
     Tempest::Signal<void(std::string_view,int,int,int,const GthFont&)>  onPrintScreen;
     Tempest::Signal<void(std::string_view)>                             onPrint;
@@ -191,6 +209,8 @@ class Gothic final {
     Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onExternalPerception;
     // perceptions of npc's that follow their scripts (seen, not consumed): ai_bridge watches them
     Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onObservedPerception;
+    // A physical impact actually heard, before the listener turns towards it.
+    Tempest::Signal<void(Npc&,const PhysicsNoise&)>                     onPhysicsNoiseHeard;
     // a perception the scripts would handle may be taken over (true: the scripts do not get it now);
     // the taker decides and hands it back with Npc::passPerception if it does not act on it
     std::function<bool(Npc&,Npc&,Npc*,PercType)>                         interceptPerception;
@@ -213,8 +233,13 @@ class Gothic final {
     std::function<void(const zenkit::INpc&,bool,std::vector<GameScript::DlgChoice>&)> dialogExtraFn;
     // one of those was chosen: play it
     std::function<void(const GameScript::DlgChoice&,Npc&,Npc&)>         dialogExtraExecFn;
+    // the choices one of those offers now, after its lines (as Info_AddChoice's after a script dialog)
+    std::function<void(const GameScript::DlgChoice&,std::vector<GameScript::DlgChoice>&)> dialogExtraChoicesFn;
     // a dialog or a choice was chosen and has run
     Tempest::Signal<void(const GameScript::DlgChoice&,Npc&,Npc&)>       onDialogChosen;
+    // a dialog's script function (its condition, its information or a choice) is about to run, self and other
+    // set: true if the story graph ran it in place of the VM, a condition's answer in `result`
+    std::function<bool(zenkit::DaedalusSymbol&,int32_t&)>               dialogScriptFn;
 
     std::string_view                      messageFromSvm(std::string_view id, int voice) const;
     std::string_view                      messageByName (std::string_view id) const;
@@ -231,6 +256,9 @@ class Gothic final {
     static const MusicDefinitions&        musicDef();
     static const CameraDefinitions&       cameraDef();
 
+    // Shared read-only snapshot for actor/physics hot paths, refreshed on settings changes
+    // and once before each world tick. It is also ready before loading the first actor.
+    static const PhysicsFlags&            physicsFlags() { return instance->physicsFlagsCache; }
     static bool                           settingsHasSection(std::string_view sec);
     static int                            settingsGetI(std::string_view sec, std::string_view name);
     static void                           settingsSetI(std::string_view sec, std::string_view name, int val);
@@ -244,6 +272,7 @@ class Gothic final {
   private:
     VersionInfo                             vinfo;
     Options                                 opts;
+    PhysicsFlags                            physicsFlagsCache;
     std::mt19937                            randGen;
     uint16_t                                pauseSum=0;
     bool                                    isMarvin       = false;
@@ -298,6 +327,7 @@ class Gothic final {
 
     void                                    detectGothicVersion();
     void                                    setupSettings();
+    void                                    refreshPhysicsFlags();
 
     auto                                    getDocument(int id) -> std::unique_ptr<DocumentMenu::Show>&;
 

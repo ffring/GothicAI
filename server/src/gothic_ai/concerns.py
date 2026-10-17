@@ -7,7 +7,8 @@ what really happened between them:
 - lied: it found a lie of his out or caught him lying (quests.py), and did not forgive it in a deal or take
   amends for it;
 - debt_due: today is the last day of his debt to it;
-- witness: someone it asked far away (witnesses.py) saw the hero, and it has not spoken to him of it yet.
+- witness: someone it asked far away (witnesses.py) saw the hero, and it has not spoken to him of it yet;
+- meet_missed: he did not come to a meeting he promised it (meetings.py), and it has not told him so yet.
 
 The most pressing one is the npc's agenda for the behavioral model (English, in the planner's wording) and
 the occasion it may come up to the hero with (Russian, for the conversational model). Rumors of his lies to
@@ -24,10 +25,21 @@ from .deals import GOLD, Deals, Debt
 from .game import GameLink
 from .protocol import GameMessage, Loading, Session
 
-RANK = {"debt_broken": 0, "lied": 1, "witness": 1, "debt_due": 2}
+RANK = {"debt_broken": 0, "lied": 1, "witness": 1, "debt_due": 2, "errand": 2}
 # the facts that change what an npc has on its mind; deals.py updates its debts before it records them
 FACTS = frozenset(
-    {"debt", "debt_paid", "broken", "deal", "found_out", "caught", "amends", "testimony", "initiative"}
+    {
+        "debt",
+        "debt_paid",
+        "broken",
+        "deal",
+        "found_out",
+        "caught",
+        "amends",
+        "testimony",
+        "initiative",
+        "meet_raised",
+    }
 )
 # the agendas quests.py sets when the lie comes out
 LIED_EN = {

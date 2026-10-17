@@ -9,6 +9,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
+from ..protocol import NOISE_PROTOCOL
+
 if TYPE_CHECKING:
     from ..game import GameLink
 
@@ -26,7 +28,7 @@ class Decision:
     attitude: float | None = None  # expected level 0..4 when it was asked
     latency_ms: float = 0.0  # from the request leaving the planner to the answer
     target: str | None = None  # whom a fight or flight is about (the newest threat's `other`)
-    args: dict[str, Any] | None = None  # a plan: the activity it chose (start_activity args)
+    args: dict[str, Any] | None = None  # a plan's activity, or a reaction's destination (noise)
     own: bool = False  # the newest event is the npc's own doing (it killed the monster itself)
 
 
@@ -86,6 +88,7 @@ COMMENT_SVM = {
     "npc_attack": "HELP",
     "fight_nearby": "OHMYGODITSAFIGHT",
     "monster_killed": "GOODMONSTERKILL",
+    "noise": "WHATWASTHAT",
 }
 
 
@@ -94,10 +97,18 @@ def actions_for(decision: Decision) -> list[tuple[str, dict[str, Any]]]:
         return [("start_activity", dict(decision.args))] if decision.args else []
     if decision.question != "react":
         return []  # attitudes and escalations have no game action
+    if decision.choice == "investigate":
+        return [("investigate", dict(decision.args))] if decision.args and "at" in decision.args else []
+    if decision.choice == "look_at" and "noise" in decision.stimuli:
+        return []  # the bridge has already turned it toward the sound, not toward the hero
+    if decision.choice == "call_guards" and "noise" in decision.stimuli:
+        return [("say_svm", {"svm": "GUARDS", "overlay": True})]
     if decision.choice == "comment":
         if decision.own:
             return []  # its own kill: the scripts end a fight with a line of their own (B_Say_AttackEnd)
         svm = next((COMMENT_SVM[k] for k in decision.stimuli if k in COMMENT_SVM), None)
+        if svm == "WHATWASTHAT":
+            return [("say_svm", {"svm": svm, "overlay": True})]
         return [("say_svm", {"svm": svm})] if svm else ACTIONS["look_at"]
     if decision.choice == "call_help":
         return call_help(decision)
@@ -154,6 +165,10 @@ class GameApplier(LogApplier):
     async def _send(self, npc: str, acts: list[tuple[str, dict[str, Any]]]) -> None:
         try:
             for action, args in acts:
+                if action == "investigate":
+                    hello = self.link.hello
+                    if hello is None or hello.protocol < NOISE_PROTOCOL:
+                        continue  # older bridges keep their routine; no unknown command on the wire
                 await self.link.npc_act(npc, action, **args)  # type: ignore[arg-type]
         except Exception as err:  # the game went away: nothing to do
             log.debug("npc_act for %s failed: %s", npc, err)

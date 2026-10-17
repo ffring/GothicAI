@@ -1,3 +1,4 @@
+#include "appcadence.h"
 #include "mainwindow.h"
 
 #include <Tempest/Except>
@@ -28,6 +29,7 @@
 #include "commandline.h"
 #include "gothic.h"
 #include "testbench.h"
+#include "frameprofile.h"
 
 using namespace Tempest;
 
@@ -132,6 +134,10 @@ MainWindow::~MainWindow() {
   removeAllWidgets();
   // unload
   Gothic::inst().setGame(std::unique_ptr<GameSession>());
+  FrameProfile::flush();
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  AppCadence::flush();
+#endif
   }
 
 float MainWindow::uiScale() const {
@@ -154,6 +160,8 @@ void MainWindow::setupUi() {
 
   Gothic::inst().onDialogPipe  .bind(&dialogs,&DialogMenu::openPipe);
   Gothic::inst().isNpcInDialogFn = std::bind(&DialogMenu::isNpcInDialog, &dialogs, std::placeholders::_1);
+  Gothic::inst().dialogEntriesFn = [this]() { return dialogs.entries(); };
+  Gothic::inst().dialogPickFn    = [this](size_t i) { return dialogs.pick(i); };
 
   Gothic::inst().onPrintScreen .bind(&dialogs,&DialogMenu::printScreen);
   Gothic::inst().onPrint       .bind(&dialogs,&DialogMenu::print);
@@ -1184,7 +1192,8 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   }
 
 void MainWindow::onVideo(std::string_view fname) {
-  if(Gothic::inst().isBenchmarkMode())
+  // -nointro (autotests): no videos, Xardas's first dialog plays the addon's intro for over a minute
+  if(Gothic::inst().isBenchmarkMode() || !CommandLine::inst().doIntro())
     return;
   video.pushVideo(fname);
   }
@@ -1281,6 +1290,10 @@ void MainWindow::setFullscreen(bool fs) {
   }
 
 void MainWindow::render(){
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  AppCadence::beginAttempt();
+#endif
+  FrameProfile::Attempt profile(cmdId);
   try {
     static uint64_t time=Application::tickCount();
 
@@ -1303,29 +1316,43 @@ void MainWindow::render(){
       once player position is updated, animation bones(cameraBone in particular) can be updated
       lastly - camera position
       */
-    const uint64_t dt = tick();
-    if(SimulationStep::finishStep(dt,player,[&] { tickCamera(dt); })) {
+    const uint64_t dt = [&] { FrameProfile::Scope timing(FrameProfile::Zone::Tick); return tick(); }();
+    profile.simulation(dt);
+    const bool capture=[&] {
+      FrameProfile::Scope timing(FrameProfile::Zone::FinishStep);
+      return SimulationStep::finishStep(dt,player,[&] { FrameProfile::Scope cameraTiming(FrameProfile::Zone::Camera); tickCamera(dt); });
+      }();
+    if(capture) {
+      profile.flag(FrameProfile::Flag::CaptureRequested);
       auto   tex = TestBench::withUi() ? screenshotWithUi() : renderer.screenshoot(cmdId);
       Pixmap pm;
-      if(!tex.isEmpty())
+      if(!tex.isEmpty()) {
         pm = device.readPixels(textureCast<const Texture2d&>(tex));
+        profile.flag(FrameProfile::Flag::CaptureReadCompleted);
+        }
       TestBench::capture(pm,Gothic::interfaceScale(this));
       if(TestBench::filming() && !tex.isEmpty()) {
         // nobody watches the window: the captured frame is the frame (the GPU is idle after the capture)
         Resources::resetRecycled(cmdId);
         cmdId = (cmdId+1u)%Resources::MaxFramesInFlight;
+        profile.outcome(FrameProfile::Outcome::Capture);
         return;
         }
       }
 
     auto& sync = fence[cmdId];
-    if(!sync.wait(0)) {
+    const bool ready=[&] { FrameProfile::Scope timing(FrameProfile::Zone::FencePoll); return sync.wait(0); }();
+    if(!ready) {
       // GPU rendering is not done, pass to next frame
       std::this_thread::yield();
+      profile.flag(FrameProfile::Flag::FenceBusy);
+      profile.outcome(FrameProfile::Outcome::FenceBusy);
       return;
       }
-    Resources::resetRecycled(cmdId);
+    { FrameProfile::Scope timing(FrameProfile::Zone::Recycle); Resources::resetRecycled(cmdId); }
 
+    {
+    FrameProfile::Scope timing(FrameProfile::Zone::Ui);
     if(video.isActive()) {
       video.paint(device,cmdId);
       uiLayer.clear();
@@ -1341,14 +1368,19 @@ void MainWindow::render(){
       }
     uiMesh [cmdId].update(device,uiLayer);
     numMesh[cmdId].update(device,numOverlay);
+    }
 
     CommandBuffer& cmd = commands[cmdId];
     {
+    FrameProfile::Scope timing(FrameProfile::Zone::Encode);
     auto enc = cmd.startEncoding(device);
     renderer.draw(swapchain[swapchain.currentImage()],enc,cmdId,uiMesh[cmdId],numMesh[cmdId],inventory,video);
     }
-    sync = device.submit(cmd);
-    device.present(swapchain);
+    { FrameProfile::Scope timing(FrameProfile::Zone::Submit); sync = device.submit(cmd); }
+    profile.flag(FrameProfile::Flag::SubmitCompleted);
+    { FrameProfile::Scope timing(FrameProfile::Zone::Present); device.present(swapchain); }
+    profile.flag(FrameProfile::Flag::PresentCompleted);
+    profile.outcome(FrameProfile::Outcome::Submitted);
     cmdId = (cmdId+1u)%Resources::MaxFramesInFlight;
 
     auto t = Application::tickCount();
@@ -1357,15 +1389,20 @@ void MainWindow::render(){
       frameTime = std::max<uint64_t>(frameTime,16);
     if(t-time<frameTime) {
       uint32_t delay = uint32_t(frameTime-(t-time));
-      Application::sleep(delay);
+      { FrameProfile::Scope timing(FrameProfile::Zone::Limiter); Application::sleep(delay); }
       t += delay;
       }
     fps.push(t-time);
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+    AppCadence::appFrame();
+#endif
     if(Gothic::inst().isBenchmarkMode() && Gothic::inst().world()!=nullptr && Gothic::inst().world()->currentCs()!=nullptr)
       benchmark.push(t-time);
     time = t;
     }
   catch(const Tempest::SwapchainSuboptimal&) {
+    profile.flag(FrameProfile::Flag::Error);
+    profile.outcome(FrameProfile::Outcome::Error);
     Log::e("swapchain is outdated - reset renderer");
     device.waitIdle();
     swapchain.reset();

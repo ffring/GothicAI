@@ -1,17 +1,21 @@
 #include "bullet.h"
 
 #include <Tempest/Log>
+#include <cmath>
 
 #include "graphics/visualfx.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
+#include "world/objects/interactive.h"
 #include "world.h"
 #include "testbench.h"
+#include "gothic.h"
 
 using namespace Tempest;
 
 Bullet::Bullet(World& owner, const Item& itm, const Vec3& pos)
   :wrld(&owner) {
+  visualName = itm.handle().visual;
   obj = wrld->physic()->bulletObj(this);
   if(itm.isSpellOrRune()) {
     obj->setSpellId(itm.spellId());
@@ -138,11 +142,57 @@ Tempest::Vec3 Bullet::direction() const {
 
 void Bullet::onMove() {
   updateMatrix();
+  if(!isSpell() && TestBench::isActive()) {
+    const auto p = position();
+    TestBench::arrowAt(this,p.x,p.y,p.z);
+    }
+  }
+
+bool Bullet::stopsAtWorldHit() const {
+  return !isSpell() && Gothic::physicsFlags().arrowSticking;
+  }
+
+void Bullet::onSpellWorldHit(const DynamicWorld::BulletWorldHit& hit) {
+  impactAt = hit.point;
+  impactOwner = hit.bone;
+  impactKnown = true;
+  onCollide(hit.material);
+  }
+
+void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
+  impactAt = hit.point;
+  impactOwner = hit.bone;
+  impactKnown = true;
+  auto matrix = obj->matrix();
+  if(auto* npc = wrld->npcForRagdoll(hit.ragdoll)) {
+    npc->addCorpseArrowImpulse(*this);
+    if(npc->stickArrow(std::move(view),hit.bone,matrix,visualName)) {
+      char buf[160];
+      const auto who = TestBench::who(npc);
+      std::snprintf(buf,sizeof(buf),"arrow stuck corpse %.*s bone %zu",int(who.size()),who.data(),hit.bone);
+      TestBench::note(buf);
+      return;
+      }
+    }
+  auto sightNormal = hit.normal;
+  if(Tempest::Vec3::dotProduct(sightNormal,hit.incoming)>0.f)
+    sightNormal = -sightNormal;
+  const auto sightPoint = hit.point+sightNormal*3.f;
+  const auto surface = hit.vob!=nullptr && hit.vob->isDoor() ? "door" :
+                       (std::abs(hit.normal.y)<.7f ? "wall" : "ground");
+  if(wrld->stickArrow(std::move(view),matrix,visualName,hit.movable,origin(),&sightPoint,surface)) {
+    char buf[256];
+    std::snprintf(buf,sizeof(buf),"arrow stuck world: at %.9g %.9g %.9g normal %.9g %.9g %.9g material %u",
+                  double(hit.point.x),double(hit.point.y),double(hit.point.z),
+                  double(hit.normal.x),double(hit.normal.y),double(hit.normal.z),unsigned(hit.material));
+    TestBench::note(buf);
+    }
   }
 
 void Bullet::onCollide(zenkit::MaterialGroup matId) {
   if(isFinished())
     return;
+  applySpellPhysics(nullptr);
   if(precise && zone==HitZones::None && !landed) {
     // where it came down first: it may glance off stone and fly on
     landed = true;
@@ -170,10 +220,14 @@ bool Bullet::onCollidePrecise(Npc& npc, const Vec3& from, const Vec3& to) {
     return false;
   // between the arm and the trunk, over the head: past it
   float t = 0;
-  const auto z = npc.rayHitZone(from,to,t);
+  size_t bone = size_t(-1);
+  const auto z = npc.rayHitZone(from,to,t,&bone);
   if(z==HitZones::None)
     return false;
   zone = z;
+  impactOwner = bone;
+  impactAt = from+Vec3::normalize(to-from)*t;
+  impactKnown = true;
   const int32_t hp = npc.attribute(ATR_HITPOINTS);
   const bool    ret = onCollide(npc);
   if(TestBench::isActive()) {
@@ -203,11 +257,45 @@ bool Bullet::onCollide(Npc& npc) {
         npc.takeDamage(*ow,this);
       }
     }
+  applySpellPhysics(&npc);
   vfx.setKey(*wrld,SpellFxKey::Collide);
   vfx.setLooped(false);
   vfx.setPhysicsDisable();
   wrld->runEffect(std::move(vfx));
 
+  if(stopsAtWorldHit() && !impactKnown) {
+    // Damage and the existing physical reaction consumed the legacy impact
+    // metadata above. Resolve this additional frame only for the visual pin.
+    const auto from = position();
+    const auto dir = direction();
+    float distance = 0;
+    size_t bone = size_t(-1);
+    if(dir.length()>1.e-3f &&
+       npc.rayHitZone(from,from+Vec3::normalize(dir)*500.f,distance,&bone)!=HitZones::None) {
+      impactOwner = bone;
+      impactAt = from+Vec3::normalize(dir)*distance;
+      }
+    else {
+      impactAt = npc.collosionCenter();
+      }
+    impactKnown = true;
+    }
+
+  if(stopsAtWorldHit()) {
+    auto matrix = obj->matrix();
+    const auto point = impactPoint();
+    matrix.set(3,0,point.x);
+    matrix.set(3,1,point.y);
+    matrix.set(3,2,point.z);
+    if(npc.stickArrow(std::move(view),impactOwner,matrix,visualName)) {
+      Npc::ArrowPinProbe pin;
+      npc.stuckArrowProbe(npc.stuckArrowCount()-1,pin);
+      char buf[160];
+      const auto who = TestBench::who(&npc);
+      std::snprintf(buf,sizeof(buf),"arrow stuck npc %.*s bone %zu",int(who.size()),who.data(),pin.bone);
+      TestBench::note(buf);
+      }
+    }
   return true;
   }
 
@@ -220,4 +308,15 @@ void Bullet::updateMatrix() {
   mat.rotateOY(90);
   vfx.setObjMatrix(mat);
   // vfx .setTarget(obj->position()+obj->direction());
+  }
+
+void Bullet::applySpellPhysics(Npc* target) {
+  if(!isSpell() || spellPhysicsApplied || !Gothic::physicsFlags().spellPhysics)
+    return;
+  const auto kind = wrld->script().physicalSpell(spellId());
+  if(kind!=GameScript::PhysicalSpell::WindFist && kind!=GameScript::PhysicalSpell::Fireball)
+    return;
+  spellPhysicsApplied = true;
+  const auto point = target!=nullptr ? target->collosionCenter() : impactPoint();
+  wrld->applySpellImpact(spellId(),point,origin(),target);
   }

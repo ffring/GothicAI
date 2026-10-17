@@ -9,6 +9,8 @@
 
 #include "game/constants.h"
 #include "game/gamescript.h"
+#include "camera.h"
+#include "gothic.h"
 #include "world/objects/interactive.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
@@ -26,6 +28,12 @@ constexpr size_t   PushLimit    = 12;
 constexpr size_t   SeenLimit    = 12;    // people and creatures in one view
 constexpr float    SightMax     = 3000;  // cm: never further, whatever the senses range says
 constexpr float    FacingCos    = 0.7f;  // within ~45 degrees: it faces you
+constexpr float    NoticeRange  = 1500;  // cm: this close it notices someone out of its field of view too
+constexpr size_t   ItemLimit    = 6;     // things lying about in one view (v22)
+constexpr float    ItemRange    = 1500;  // cm: things lying further off are not told of
+constexpr float    UnderFoot    = 300;   // cm: this close it notices a thing out of its field of view too
+constexpr size_t   TraceLimit   = 6;
+constexpr float    TraceRange   = 1500;  // cm: visible physical evidence
 
 using Writer = rapidjson::Writer<rapidjson::StringBuffer>;
 
@@ -105,6 +113,38 @@ bool faces(const Npc& other, const Npc& self) {
   return (d.x*std::cos(rot)+d.z*std::sin(rot))/len>=FacingCos;
   }
 
+std::string_view attitude(Attitude a) {
+  switch(a) {
+    case ATT_HOSTILE:  return "hostile";
+    case ATT_ANGRY:    return "angry";
+    case ATT_FRIENDLY: return "friendly";
+    case ATT_NEUTRAL:
+    case ATT_NULL:     break;
+    }
+  return "neutral";
+  }
+
+// where `other` is from the player, as he faces (v18): ahead, left, right or behind him. Left and right
+// are as the player sees them on the screen: the side is checked against the camera when there is one
+std::string_view fromHero(const Npc& pl, const Tempest::Vec3& at) {
+  const auto  d   = at-pl.position();
+  const float len = std::sqrt(d.x*d.x+d.z*d.z);
+  if(len<1)
+    return "ahead";
+  const auto  ax    = heroAxes(pl);
+  const float ahead = (d.x*ax.aheadX+d.z*ax.aheadZ)/len;
+  const float right = (d.x*ax.rightX+d.z*ax.rightZ)/len;
+  if(ahead>=0.7f)
+    return "ahead";
+  if(ahead<=-0.7f)
+    return "behind";
+  return right>0 ? "right" : "left";
+  }
+
+std::string_view fromHero(const Npc& pl, const Npc& other) {
+  return fromHero(pl,other.position());
+  }
+
 void writeItem(Writer& w, World& world, std::string_view k, const Item* it) {
   if(it==nullptr)
     return;
@@ -141,6 +181,93 @@ void writeLook(Writer& w, World& world, Npc& self, Npc& other, float dist) {
     if(auto wp = world.findWayPoint(other.position()))
       str(w,"waypoint",wp->name);
     }
+  if(other.isPlayer())
+    return;
+  // v18: how it treats the viewer and the hero, and where it is from the hero
+  auto& vm = world.script();
+  str(w,"att",attitude(vm.personAttitude(other,self)));
+  if(Npc* pl = world.player()) {
+    str(w,"att_hero",attitude(vm.personAttitude(other,*pl)));
+    w.Key("hero_cm"); w.Double(std::round(double(std::sqrt(other.qDistTo(*pl)))));
+    str(w,"from_hero",fromHero(*pl,other));
+    }
+  }
+
+// things lying about that it sees, the nearest first (v22): what the hero threw down, a body's loot, herbs
+void writeItems(Writer& w, World& world, Npc& npc, float range) {
+  struct Thing { Item* it; float dist; };
+  std::vector<Thing> things;
+  world.detectItem(npc.position(),std::min(range,ItemRange),[&](Item& it) {
+    const float dist = std::sqrt((it.position()-npc.position()).quadLength());
+    if(npc.canSeeItem(it,false) || (dist<=UnderFoot && npc.canSeeItem(it,true)))
+      things.push_back({&it,dist});
+    });
+  std::sort(things.begin(),things.end(),[](const Thing& a, const Thing& b){ return a.dist<b.dist; });
+  if(things.size()>ItemLimit)
+    things.resize(ItemLimit);
+  Npc* pl = world.player();
+  key(w,"items");
+  w.StartArray();
+  for(auto& t:things) {
+    w.StartObject();
+    str(w,"item",symbolOf(world,t.it->clsId()));
+    utf8(w,"name",t.it->displayName());
+    w.Key("count");    w.Uint64(uint64_t(t.it->count()));
+    w.Key("distance"); w.Double(std::round(double(t.dist)));
+    if(pl!=nullptr) {
+      w.Key("hero_cm"); w.Double(std::round(double(std::sqrt((t.it->position()-pl->position()).quadLength()))));
+      str(w,"from_hero",fromHero(*pl,t.it->position()));
+      }
+    w.EndObject();
+    }
+  w.EndArray();
+  }
+
+void writeTraces(Writer& w, World& world, Npc& npc, float range) {
+  struct SeenTrace { const World::PhysicsTrace* trace; float dist; };
+  const auto traces = world.physicsTraces();
+  std::vector<SeenTrace> seen;
+  const auto maxRange = std::min(range,TraceRange);
+  for(const auto& trace:traces) {
+    const auto dist = (trace.position-npc.position()).length();
+    if(dist>maxRange)
+      continue;
+    const bool visible = std::any_of(trace.sightPoints.begin(),trace.sightPoints.end(),[&](const Tempest::Vec3& p) {
+      return npc.canRayHitPoint(p,false);
+      });
+    if(visible)
+      seen.push_back({&trace,dist});
+    }
+  std::sort(seen.begin(),seen.end(),[](const SeenTrace& a,const SeenTrace& b) { return a.dist<b.dist; });
+  if(seen.size()>TraceLimit)
+    seen.resize(TraceLimit);
+  const auto now = world.time();
+  const int64_t minute = now.day()*24*60+now.hour()*60+now.minute();
+  const auto* pl = world.player();
+  key(w,"traces");
+  w.StartArray();
+  for(const auto& seenTrace:seen) {
+    const auto& trace = *seenTrace.trace;
+    w.StartObject();
+    // Deliberate field list: the engine's culprit is never part of perception.
+    str(w,"id",trace.id);
+    str(w,"kind",trace.kind);
+    str(w,"name",trace.name); // engine trace labels are UTF-8
+    if(const auto* waypoint = world.findWayPoint(trace.position))
+      str(w,"waypoint",waypoint->name);
+    w.Key("distance"); w.Double(std::round(double(seenTrace.dist)));
+    w.Key("age");
+    if(trace.appearedAt<0)
+      w.Null(); // records written before trace metadata do not reveal their age
+    else
+      w.Int64(std::max(int64_t(0),minute-trace.appearedAt));
+    if(pl!=nullptr) {
+      w.Key("hero_cm"); w.Double(std::round(double((trace.position-pl->position()).length())));
+      str(w,"from_hero",fromHero(*pl,trace.position));
+      }
+    w.EndObject();
+    }
+  w.EndArray();
   }
 
 void writeView(Writer& w, World& world, Npc& npc) {
@@ -175,18 +302,24 @@ void writeView(Writer& w, World& world, Npc& npc) {
     w.StartObject();
     writeLook(w,world,npc,*pl,dist);
     w.Key("seen"); w.Bool(npcSees(npc,*pl));
+    if(Npc* focus = pl->target(); focus!=nullptr && focus!=pl)
+      str(w,"focus",npcId(world,*focus));  // whom the hero looks at (v18)
     w.EndObject();
     }
 
   // whom it sees: the nearest first
-  struct Seen { Npc* npc; float dist; };
+  // and close by, out of its field of view: it notices them all the same, if nothing is in between (v18)
+  struct Seen { Npc* npc; float dist; bool noticed; };
   std::vector<Seen> seen;
   const float range = std::min(float(npc.handle().senses_range),SightMax);
   world.detectNpc(npc.position(),range,[&](Npc& other) {
     if(&other==&npc || other.isPlayer())
       return;
+    const float dist = std::sqrt(npc.qDistTo(other));
     if(npc.canSeeNpc(other,false))
-      seen.push_back({&other,std::sqrt(npc.qDistTo(other))});
+      seen.push_back({&other,dist,false});
+    else if(dist<=NoticeRange && npc.canSeeNpc(other,true))
+      seen.push_back({&other,dist,true});
     });
   std::sort(seen.begin(),seen.end(),[](const Seen& a, const Seen& b){ return a.dist<b.dist; });
   if(seen.size()>SeenLimit)
@@ -196,9 +329,14 @@ void writeView(Writer& w, World& world, Npc& npc) {
   for(auto& s:seen) {
     w.StartObject();
     writeLook(w,world,npc,*s.npc,s.dist);
+    if(s.noticed) {
+      w.Key("noticed"); w.Bool(true);  // out of its field of view: behind it or to the side
+      }
     w.EndObject();
     }
   w.EndArray();
+  writeItems(w,world,npc,range);
+  writeTraces(w,world,npc,range);
   w.EndObject();
   }
 
@@ -258,4 +396,23 @@ std::string NpcView::views(World& world, const rapidjson::Value& npcs) {
     }
   w.EndArray();
   return std::string(buf.GetString(),buf.GetSize());
+  }
+
+HeroAxes heroAxes(const Npc& pl) {
+  const float a  = pl.rotationRad();
+  HeroAxes    ax = {std::cos(a),std::sin(a),std::sin(a),-std::cos(a)};  // left-handed, y up: the world's own
+  if(auto cam = Gothic::inst().camera()) {
+    // a point to that side of the player must come out to the right of him on the screen
+    auto  vp   = cam->viewProj();
+    auto  at   = pl.position()+Tempest::Vec3(0,100,0);
+    auto  side = at+Tempest::Vec3(ax.rightX,0,ax.rightZ)*100.f;
+    float w0 = 1, w1 = 1;
+    vp.project(at.x,at.y,at.z,w0);
+    vp.project(side.x,side.y,side.z,w1);
+    if(w0>0 && w1>0 && side.x/w1<at.x/w0) {
+      ax.rightX = -ax.rightX;
+      ax.rightZ = -ax.rightZ;
+      }
+    }
+  return ax;
   }

@@ -54,6 +54,7 @@ class PfxBucket {
     PfxObjects&                 parent;
 
     bool                        isEmpty() const;
+    void                        invalidateDecal();
 
     void                        preFrameUpdate(const SceneGlobals& scene, uint8_t fId);
     void                        drawGBuffer    (Tempest::Encoder<Tempest::CommandBuffer>& cmd, const SceneGlobals &scene, uint8_t fId);

@@ -12,7 +12,7 @@
 #   finish   x4 -> at most MAX a side, the colors of the originals, DXT with mipmaps -> $HD_DIR/textures
 #            (DDS files), what the game loads
 #
-# env: GOTHIC_DIR   game data (default: /Volumes/shared/projects/Gothic II)
+# env: GOTHIC_DIR   game data (default: /Volumes/DevSSD/Dev/games/Gothic II)
 #      HD_DIR       work and output folder (default: ~/.local/share/gothic-ai/hd-textures)
 #      GOTHIC_GPU_SSH  ssh destination of the GPU server (default: from .env, as scripts/deploy-gpu.sh)
 #      CREATURES=1  the textures of the creatures too
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/shared/projects/Gothic II}"
+GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 HD_DIR="${HD_DIR:-$HOME/.local/share/gothic-ai/hd-textures}"
 MODEL="${MODEL:-realesrgan-x4plus}"
 MAX="${MAX:-1024}"

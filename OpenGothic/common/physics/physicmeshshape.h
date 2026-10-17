@@ -15,8 +15,9 @@ class PhysicMeshShape final {
     PhysicMeshShape(PackedMesh&& packed);
 
     PhysicVbo                      mesh;
-    mutable btBvhTriangleMeshShape shape;
+    JPH::ShapeRefC                  shape;
     float                          frict = 0;
+    zenkit::MaterialGroup           material = zenkit::MaterialGroup::UNDEFINED;
 
   friend class DynamicWorld;
   };

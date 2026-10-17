@@ -1,0 +1,61 @@
+# Static stock-landscape footprints, analytic padded-capsule tangent starts.
+# Every initial sample is taken immediately, before the first native tick.
+# Angle matching is +/-2 degrees (+/-.75 near 49); setup reports geometry.
+seed 73013
+cheat god
+set time 12 0
+character on
+npccharacter on
+view full
+release all
+
+character idle-slope 14 hero
+character save slope-hero
+wait 1000
+character idle-slope-sample first_1s
+wait 9000
+character idle-slope-sample idle_10s
+
+character idle-slope 25 hero
+wait 1000
+character idle-slope-sample first_1s
+wait 9000
+character idle-slope-sample idle_10s
+
+character idle-slope 49 hero
+wait 1000
+character idle-slope-sample first_1s
+wait 9000
+character idle-slope-sample idle_10s
+
+character idle-slope 55 hero
+wait 1000
+character idle-slope-sample first_1s
+wait 9000
+character idle-slope-sample idle_10s
+
+character idle-slope 14 npc
+npccharacter save slope-npc
+wait 1000
+character idle-slope-sample first_1s
+wait 9000
+character idle-slope-sample idle_10s
+
+character idle-slope 25 npc
+wait 1000
+character idle-slope-sample first_1s
+wait 9000
+character idle-slope-sample idle_10s
+
+character idle-slope 49 npc
+wait 1000
+character idle-slope-sample first_1s
+wait 9000
+character idle-slope-sample idle_10s
+
+character idle-slope 55 npc
+wait 1000
+character idle-slope-sample first_1s
+wait 9000
+character idle-slope-sample idle_10s
+npccharacter trace off

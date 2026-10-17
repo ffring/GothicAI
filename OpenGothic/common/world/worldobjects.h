@@ -10,6 +10,7 @@
 #include "game/gametime.h"
 #include "game/perceptionmsg.h"
 #include "game/constants.h"
+#include "objects/vob.h"
 
 class Npc;
 class Item;
@@ -20,8 +21,10 @@ class World;
 class Serialize;
 class TriggerEvent;
 class AbstractTrigger;
+class MoveTrigger;
 class CsCamera;
 class CollisionZone;
+struct PhysicsNoise;
 
 class WorldObjects final {
   public:
@@ -51,6 +54,8 @@ class WorldObjects final {
     void           load(Serialize& fout);
     void           save(Serialize& fout);
     void           tick(uint64_t dt, uint64_t dtPlayer);
+    void           prepareRagdolls();
+    void           syncRagdolls();
 
     Npc*           addNpc(size_t itemInstance, std::string_view     at);
     Npc*           addNpc(size_t itemInstance, const Tempest::Vec3& at);
@@ -85,6 +90,7 @@ class WorldObjects final {
     CsCamera*      currentCs() const;
 
     void           addTrigger(AbstractTrigger* trigger);
+    void           detectMover(const std::function<void(MoveTrigger&)>& f);
     void           enableDefTrigger(AbstractTrigger& trigger);
     void           triggerEvent(const TriggerEvent& e);
     bool           triggerOnStart(bool firstTime);
@@ -114,6 +120,7 @@ class WorldObjects final {
     void           addStatic     (StaticObj*           obj);
     void           addRoot       (const std::shared_ptr<zenkit::VirtualObject>& vob, bool startup);
     void           invalidateVobIndex();
+    std::vector<Vob::AttachmentSnapshot> vobAttachmentSnapshot(uint32_t zenId) const;
 
     Interactive*   validateInteractive(Interactive *def);
     Npc*           validateNpc        (Npc         *def);
@@ -134,6 +141,8 @@ class WorldObjects final {
 
     void           sendPassivePerc  (Npc& self, Npc& other, Npc* victim, Item* itm, int32_t perc);
     void           sendImmediatePerc(Npc& self, Npc& other, Npc& victim, Item* itm, int32_t perc);
+
+    void           emitPhysicsNoise(const PhysicsNoise& noise);
 
     void           resetPositionToTA();
 

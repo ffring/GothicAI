@@ -1,0 +1,12 @@
+# Load the unchanged NPC standing stair save with NPC_CHARACTER_VIRTUAL=1.
+# This snapshot also enables native tracing before the first world tick.
+npccharacter initial
+# Initial guards use position, independent of the archive's creature indices.
+rec npc_idle_10s
+# Ordinary commands first run at 33ms; the remaining 967ms ends at exactly 1s.
+wait 967
+npccharacter snapshot first_1s
+wait 9000
+npccharacter snapshot idle_10s
+stop
+npccharacter trace off

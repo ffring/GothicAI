@@ -8,7 +8,7 @@ This page design to help you contribute to this project.
   - shader - glsl shaders
   - lib
     - MoltenTempest - graphics engine
-    - bullet3 - physic engine
+    - JoltPhysics - physics engine
     - ZenLib - gothic-asset loading library
     - TinySoundFont - midi sound support library
     - edd-dbg - crashlog library

@@ -18,6 +18,7 @@ secrets/
 *.sqlite
 *.sqlite3
 data/
+!OpenGothic/data/
 
 # OS
 .DS_Store
@@ -26,6 +27,7 @@ data/
 /game/
 *.vdf
 *.VDF
+*.fracture
 
 # Claude Code: per-session worktrees and personal settings
 .claude/worktrees/
@@ -36,12 +38,13 @@ Gothic.ini
 log.txt
 *.sav
 
-# Local agent rules (not shared)
-/AGENTS.md
 /tts-samples/
 
 # Test bench output (scripts/bench.sh)
 /.bench/
+
+# Collected Ryzen test logs
+/.ryzen/
 
 # Shorts: takes and voiced lines (gothic-shorts)
 /.shorts/

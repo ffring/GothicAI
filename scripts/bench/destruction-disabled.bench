@@ -1,0 +1,17 @@
+# Run once with DESTRUCTION=0 and once with an absent OPENGOTHIC_FRACTURE cache.
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+noise on
+overlay off
+view full
+destruction setup fireball
+spell equip 23
+wait 1200
+destruction begin
+spell cast 600
+wait 15000
+destruction checkpoint
+physics stats

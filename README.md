@@ -11,7 +11,7 @@
 | `docs/MVP.md` | Спецификация MVP «один живой NPC»: решения, объём работ, вехи |
 | `server/` | ИИ-сервер (Python): соединение с игрой, диалоги, персоны, память, голосовой ввод, адаптер LLM, сценарии |
 | `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере (audio.cpp), подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на GPU-сервере |
-| `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере, Inworld TTS-2 и OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на GPU-сервере |
+| `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере (audio.cpp), Inworld TTS-2 и OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на GPU-сервере |
 | `libs/chatgpt-auth/` | Вход через ChatGPT (OAuth PKCE) и общее хранилище токенов для сервера и ASR-сервиса |
 | `launcher/core/` | Ядро лаунчера `gothic-launcher`: поднимает сервисы и игру одной командой, хранит настройки и ключи |
 | `launcher/app/` | Окно лаунчера (Tauri, Svelte): мастер, запуск, журнал, настройки, значок в строке меню |
@@ -84,7 +84,7 @@ uv tool install --editable launcher/core
 Один раз указать папку игры:
 
 ```bash
-gothic-launcher config set game.dir "/Volumes/shared/projects/Gothic II"
+gothic-launcher config set game.dir "/Volumes/DevSSD/Dev/games/Gothic II"
 ```
 
 Играть, продолжив последнее сохранение (`--new` — сразу новая игра, `-v` — вывод всех процессов в терминал):
@@ -127,7 +127,7 @@ scripts/build-launcher.sh
 
 Экраны можно править в обычном браузере, без Tauri: `bun run dev` в `launcher/app` и http://localhost:47850. Вместо ядра там отвечает заглушка (`src/lib/mock.ts`), `?scenario=fresh` открывает мастер, `?scenario=failed` — ошибку запуска.
 
-ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на GPU-сервере (адрес в `GOTHIC_VOXTRAL_URL`), а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Voxtral работает на GPU-сервере под audio.cpp (Q4_K, ~3,5 ГБ видеопамяти); развёртывание описано в `asr-service/deploy/voxtral/install.sh`.
+ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на GPU-сервере (адрес в `GOTHIC_VOXTRAL_URL`), а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Voxtral работает на GPU-сервере под audio.cpp (Q4_K, ~3,5 ГБ видеопамяти); развёртывание описано в `asr-service/deploy/voxtral/install.sh`. Своего параметра языка у модели нет, поэтому наш патч к audio.cpp (`audiocpp-language.patch`) запрещает для `ru` все токены с нерусскими буквами.
 
 ```bash
 cd asr-service && uv run gothic-asr serve
@@ -191,7 +191,7 @@ cd server && uv run gothic-ai voice-test
 Игра в режиме разработчика. Окна чата нет: **удерживайте T где угодно, чтобы сказать фразу голосом**, а короткое нажатие T открывает строку ввода (Enter отправляет, Esc закрывает). Кому сказано, решает сервер: имя во фразе, NPC, на которого смотрит герой, текущий собеседник или ближайший NPC перед героем. Консоль Marvin открывается по F2, там доступны `ai status` и `ai attach <npc>`:
 
 ```bash
-OpenGothic/build/opengothic/Gothic2Notr -g "/Volumes/shared/projects/Gothic II" -devmode
+OpenGothic/build/opengothic/Gothic2Notr -g "/Volumes/DevSSD/Dev/games/Gothic II" -devmode
 ```
 
 Тесты (в каждом проекте свои):

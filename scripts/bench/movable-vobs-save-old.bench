@@ -1,0 +1,4 @@
+# An archive from before moved-vob/stuck-arrow persistence.
+movable initial old
+wait 1000
+movable snapshot continued_old

@@ -1,5 +1,9 @@
+import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.dialogue import DialogueManager
@@ -9,13 +13,21 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.perception import PerceptionDesk
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.places import PlaceBook
-from gothic_ai.protocol import NpcView, NpcViews
+from gothic_ai.protocol import (
+    BROKEN_TRACE_PROTOCOL,
+    NOISE_PROTOCOL,
+    TRACE_PROTOCOL,
+    Loading,
+    NpcEvent,
+    NpcView,
+    NpcViews,
+)
 from gothic_ai.sightings import Sightings, when
 from gothic_ai.trust import Trust
 from tests.fake_game import FakeGame, connected
 from tests.fakes import Clock
 from tests.test_dialogue import _until
-from tests.test_perception import HILDA, LOBART, Social, armor, look
+from tests.test_perception import HILDA, LOBART, Social, armor, look, physical_trace
 
 DAY = 1440
 AT_8 = DAY + 8 * 60 + 10  # the second day, 08:10
@@ -134,6 +146,53 @@ async def test_the_people_it_knows_last_seen_and_a_body():
     assert seen.tools(LOBART) == []  # never saw the hero: nothing to catch him with
 
 
+async def test_strangers_and_beasts_worth_remembering():
+    # step M2: Cavalorn saw the bandits in their cave, came out, and «там бандиты, разберись»
+    store = MemoryStore(":memory:")
+    store.ensure_branch("A")
+    clock = Clock()
+    seen = sightings(store, clock=clock)
+    bdt = armor("ITAR_BDT_M", "Доспех бандита")
+    hero = look("PLAYER", "Я", 9, seen=False)
+    brago = look(
+        "BDT_1014_BANDIT_L",
+        "Браго",
+        10,
+        guild=9,
+        att="hostile",
+        armor=bdt,
+        state="ZS_SIT_CAMPFIRE",
+        waypoint="NW_FARM1_PATH_01",
+    )
+    sheep = look("SHEEP", "Овца", 7, kind="monster", guild=40, state="ZS_MM_ALLSCHEDULER")
+    passer = look("VLK_400_X", "Горожанин", 8, guild=3)  # nobody to remember
+    push(seen, view(AT_8, hero, brago, sheep, passer))
+    push(seen, view(AT_8 + 2, hero, brago, sheep, passer))
+    push(seen, view(AT_8 + 20, hero, look(HILDA, "Хильда", 6, waypoint="NW_FARM1_OUT_02")))
+    clock.t += 1
+
+    assert seen.situation(LOBART) == (
+        "Что ты видел сам, своими глазами (не с чужих слов):\n"
+        "Недавно видел, сейчас не видишь:\n"
+        "- незнакомец, по виду бандит (id BDT_1014_BANDIT_L) — сегодня 08:10–08:12, 20 минут назад — на "
+        "пастбище у входа на ферму Лобарта; враг тебе; сидит у костра."
+    )  # fmt: skip
+    # its intent may point to him; a companion set on him goes there first (orders.py)
+    assert seen.targets(LOBART) == {
+        "BDT_1014_BANDIT_L": "незнакомец, по виду бандит, видел 20 минут назад — "
+        "на пастбище у входа на ферму Лобарта"
+    }
+    assert seen.where_seen(LOBART, "bdt_1014_bandit_l") == "FARM1_PASTURE"
+    assert "незнакомец, по виду бандит" in (seen.recall(LOBART, "где бандиты?") or "")
+    # it is kept across a load, and fades
+    again = sightings(store)
+    again._sweep(AT_8 + 20)
+    assert again.where_seen(LOBART, "BDT_1014_BANDIT_L") == "FARM1_PASTURE"
+    seen._sweep(AT_8 + 4 * 60)
+    assert seen.targets(LOBART) == {} and seen.where_seen(LOBART, "BDT_1014_BANDIT_L") is None
+    assert "Недавно видел" not in (seen.situation(LOBART) or "")
+
+
 def test_time_in_words():
     assert when(AT_8, AT_8 + 4, AT_8 + 6) == "сегодня 08:10–08:14, только что"
     assert when(AT_8, AT_8, AT_8 + 25) == "сегодня 08:10, 25 минут назад"
@@ -141,6 +200,206 @@ def test_time_in_words():
     assert when(AT_8, AT_8 + 3, AT_8 + 3) == "сейчас, с 08:10"
     assert when(AT_8 + 11 * 60, AT_8 + 11 * 60, AT_8 + DAY) == "вчера 19:10, вечером"
     assert when(AT_8, AT_8, AT_8 + 5 * DAY) == "5 дней назад 08:10, утром"
+
+
+def trace_view(time: int, kind: str = "moved", **extra) -> NpcView:
+    return NpcView.model_validate({
+        "npc": LOBART, "name": "Лобарт", "time": time, "waypoint": "NW_FARM1_OUT_01",
+        "traces": [physical_trace(kind=kind)], **extra,
+    })
+
+
+async def test_trace_memory_keeps_first_seen_time_place_and_save_branch(tmp_path):
+    path = str(tmp_path / "memory.sqlite3")
+    store = MemoryStore(path)
+    store.ensure_branch("A")
+    seen = sightings(store)
+    push(seen, trace_view(AT_8))
+    push(seen, trace_view(AT_8 + 30))
+    assert len(store.seen("A", LOBART)) == 1
+    assert seen.situation(LOBART) == (
+        "Что ты видел сам, своими глазами (не с чужих слов):\n"
+        "Следы, которые ты видел:\n"
+        "- В1: сегодня 08:10, 30 минут назад — сдвинутый предмет: Стол; во дворе фермы Лобарта."
+    )
+    assert seen.situation(HILDA) is None  # no view: nobody told Hilda what Lobart saw
+    push(seen, trace_view(
+        AT_8 + 31, "tilted",
+        traces=[physical_trace(kind="tilted", waypoint="NW_FARM1_PATH_01")],
+    ))
+    await asyncio.gather(*seen._background)
+    head = store.head("A")
+    assert head == 2  # a different visible state has its own first observation
+    store.close()
+
+    # A new store and observer process read only what the saved memory head contains.
+    store = MemoryStore(path)
+    store.ensure_branch("loaded", "A", head)
+    link = Link()
+    link.session.branch = "loaded"
+    again = sightings(store, link)
+    again._sweep(AT_8 + 60)
+    situation = again.situation(LOBART) or ""
+    assert (
+        "В1: сегодня 08:41, 30 минут назад — наклонённый предмет: Стол; "
+        "на пастбище у входа на ферму Лобарта"
+    ) in situation
+    assert (
+        "В2: сегодня 08:10, около часа назад — сдвинутый предмет: Стол; во дворе фермы Лобарта"
+    ) in situation
+    assert "08:10, около часа назад — наклонённый предмет" not in situation
+    push(again, trace_view(AT_8 + 61, "tilted"))
+    assert store.head("loaded") == head
+    assert "Стол" in (again.recall(LOBART, "где стол?") or "")
+    assert set(again.targets(LOBART)) == set()  # no trace becomes a companion or combat target
+    store.ensure_branch("before", "A", 0)
+    before = Link()
+    before.session.branch = "before"
+    assert sightings(store, before).situation(LOBART) is None
+    records = [json.loads(raw) for raw in store.seen("loaded", LOBART)]
+    assert all("other" not in record and "culprit" not in record for record in records)
+    assert {(record["trace_kind"], record["start"], tuple(record["place_ids"])) for record in records} == {
+        ("moved", AT_8, ("FARM1_OUT",)), ("tilted", AT_8 + 31, ("FARM1_PASTURE",)),
+    }
+    store.close()
+
+
+@pytest.mark.parametrize("protocol", [TRACE_PROTOCOL - 1, TRACE_PROTOCOL])
+async def test_trace_memory_obeys_hello_even_when_given_a_view_directly(protocol):
+    store = MemoryStore(":memory:")
+    store.ensure_branch("A")
+    link = Link()
+    link.hello = SimpleNamespace(protocol=protocol)
+    seen = sightings(store, link)
+    seen.saw(trace_view(AT_8))
+    assert bool(seen.situation(LOBART)) == (protocol >= TRACE_PROTOCOL)
+    assert bool(seen.tools(LOBART)) == (protocol >= TRACE_PROTOCOL)
+
+
+@pytest.mark.parametrize("protocol", [TRACE_PROTOCOL - 1, TRACE_PROTOCOL, BROKEN_TRACE_PROTOCOL])
+async def test_broken_memory_obeys_hello_without_disabling_old_traces(protocol):
+    store = MemoryStore(":memory:")
+    store.ensure_branch("A")
+    link = Link()
+    link.hello = SimpleNamespace(protocol=protocol)
+    seen = sightings(store, link)
+    seen.saw(trace_view(AT_8, traces=[
+        physical_trace(), physical_trace("broken:7", "broken", "сломанный забор"),
+    ]))
+    situation = seen.situation(LOBART) or ""
+    assert ("Стол" in situation) == (protocol >= TRACE_PROTOCOL)
+    assert ("сломанный забор" in situation) == (protocol >= BROKEN_TRACE_PROTOCOL)
+    await asyncio.gather(*seen._background)
+
+
+@pytest.mark.parametrize("age", [2, None])
+async def test_broken_memory_keeps_observed_age_after_a_load(tmp_path, age):
+    path = str(tmp_path / "memory.sqlite3")
+    store = MemoryStore(path)
+    store.ensure_branch("A")
+    seen = sightings(store)
+    first = trace_view(AT_8, traces=[physical_trace("broken:7", "broken", "обломки ящика", age=age)])
+    seen.saw(first)
+    seen.saw(first.model_copy(update={"time": AT_8 + 20}))
+    await asyncio.gather(*seen._background)
+    head = store.head("A")
+    assert head == 1
+    record = json.loads(store.seen("A", LOBART)[0])
+    assert record["trace_age"] == age
+    assert record["trace_kind"] == "broken"
+    assert "culprit" not in record and "other" not in record
+    store.close()
+
+    store = MemoryStore(path)
+    store.ensure_branch("loaded", "A", head)
+    link = Link()
+    link.session.branch = "loaded"
+    again = sightings(store, link)
+    again._sweep(AT_8 + 60)
+    age_words = f"{age} мин" if age is not None else "неизвестна"
+    assert (
+        "В1: сегодня 08:10, около часа назад — обломки ящика; во дворе фермы Лобарта; "
+        f"давность при наблюдении {age_words}."
+    ) in (again.situation(LOBART) or "")
+    assert again.targets(LOBART) == {}
+    store.close()
+
+
+@pytest.mark.parametrize("protocol", [NOISE_PROTOCOL - 1, NOISE_PROTOCOL, TRACE_PROTOCOL])
+async def test_noise_is_heard_memory_with_time_and_place_never_visual_evidence(protocol):
+    store = MemoryStore(":memory:")
+    store.ensure_branch("A")
+    link = Link()
+    link.hello = SimpleNamespace(protocol=protocol)
+    seen = sightings(store, link)
+    # v36 has no event time: use the last game's clock. v37 can arrive before any npc_view.
+    if protocol < TRACE_PROTOCOL:
+        push(seen, NpcView(npc=LOBART, name="Лобарт", time=AT_8))
+    noise = NpcEvent(
+        type="npc_event", npc=LOBART, kind="noise", place="NW_FARM1_OUT_02",
+        time=AT_8 if protocol >= TRACE_PROTOCOL else None,
+    )
+    for listener in link.listeners:
+        listener(noise)
+    if protocol < NOISE_PROTOCOL:
+        assert seen.situation(LOBART) is None and store.seen("A", LOBART) == []
+        return
+    assert seen.situation(LOBART) == (
+        "Что ты слышал сам (звук не говорит, кто его вызвал):\n"
+        "- сегодня 08:10, только что — слышал грохот во дворе фермы Лобарта."
+    )
+    assert seen.tools(LOBART) == [] and seen._shown[LOBART] == {}
+    assert "PLAYER" not in store.seen("A", LOBART)[0]
+    assert seen.situation(HILDA) is None
+    again = sightings(store)
+    again._sweep(AT_8 + 20)
+    assert "сегодня 08:10, 20 минут назад — слышал грохот во дворе фермы Лобарта" in (
+        again.situation(LOBART) or ""
+    )
+    # Loading clears in-process observation state; the active branch restores the saved record.
+    again._on_message(Loading(type="loading"))
+    assert len(again.mind(LOBART).heard) == 1
+
+
+@pytest.mark.parametrize("kind,name,lie,description", [
+    ("moved", "Стол", "я не трогал стол", "сдвинутый предмет: Стол"),
+    ("broken", "сломанный забор", "этот забор давно сломан, ещё с весны", "сломанный забор"),
+])
+async def test_a_seen_trace_is_a_catch_lie_evidence_line_in_the_model_prompt(kind, name, lie, description):
+    observed = trace_view(AT_8, traces=[physical_trace(kind=kind, name=name, age=2)])
+    fake = FakeGame(branch="A")
+    fake.views = {LOBART: observed.model_copy(update={"time": AT_8 + 20}).model_dump()}
+    llm = FakeBackend(script=[
+        FakeStep(
+            "Я видел свежий след.", [ToolCall("catch_lie", {"said": lie, "seen": "В1"}, "c1")]
+        ),
+        FakeStep("Я запомню твои слова."),
+    ], delay=0)
+    store = MemoryStore(":memory:")
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), memory=store)
+        chronicle = Chronicle(link, store)
+        desk = PerceptionDesk(link, social=Social, places=BOOK)
+        seen = Sightings(link, store, desk, chronicle)
+        dialogue.extensions += [desk, seen]
+        dialogue.sight = desk.sight
+        seen.saw(observed)
+        dialogue.open(LOBART, "Лобарт")
+        await dialogue.say_as_player(LOBART, lie)
+        await _until(lambda: chronicle.facts("caught") != [], 5)
+    prompt = str(llm.calls[0][1][-2].content)
+    assert "Что ты видел сам, своими глазами" in prompt
+    assert f"В1: сегодня 08:10, 20 минут назад — {description}; во дворе фермы Лобарта" in prompt
+    assert f"Следы: {description}" in prompt
+    if kind == "broken":
+        assert "давность при наблюдении 2 мин" in prompt
+    catch = next(tool for tool in llm.calls[0][2] if tool.name == "catch_lie")
+    assert "Следы, которые ты видел" in catch.description
+    caught = chronicle.facts("caught")
+    assert len(caught) == 1
+    assert caught[0]["title"] == lie
+    assert f"{description}; во дворе фермы Лобарта" in caught[0]["how"]
+    assert caught[0]["how"].startswith("сам видел: ")  # the trace, without claiming to have seen its maker
 
 
 async def test_a_lie_about_where_he_was_is_caught_by_what_it_saw():

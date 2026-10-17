@@ -11,6 +11,8 @@
 #include <zenkit/DaedalusVm.hh>
 #include <zenkit/addon/daedalus.hh>
 
+#include "game/inventory.h"
+#include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 
@@ -25,6 +27,15 @@
 using namespace Tempest;
 
 namespace {
+
+// the npc goes with the hero: a companion's dialog, or the server's `party` effect (v30), marked it
+bool partyMember(World& world, const Npc& npc) {
+  auto* s = world.script().getVm().find_symbol_by_name("AIV_PARTYMEMBER");
+  if(s==nullptr || s->type()!=zenkit::DaedalusDataType::INT)
+    return false;
+  const int32_t aiv = s->get_int(0);
+  return aiv>=0 && uint32_t(aiv)<zenkit::INpc::aivar_count && npc.handlePtr()->aivar[size_t(aiv)]!=0;
+  }
 
 constexpr uint64_t ScanMs   = 500;   // how often deaths are looked for
 constexpr uint64_t ReportMs = 1000;  // how often tags are reported
@@ -96,8 +107,7 @@ StoryWorld::StoryWorld(std::function<void(std::string&&)> send, std::function<vo
 
 void StoryWorld::clear() {
   tags.clear();
-  dead.clear();
-  primed = false;
+  deaths.clear();
   }
 
 int StoryWorld::spawn(World& world, const rapidjson::Value& msg, std::string& error) {
@@ -199,26 +209,51 @@ bool StoryWorld::effects(World& world, const rapidjson::Value& msg, std::string&
       list.push_back(std::move(e));
       }
     }
+  for(auto& e : list) {
+    // v39: a mission item (ITEM_MISSION) never goes from one npc to another
+    const size_t id = e.kind=="give" && e.toNpc ? world.script().findSymbolIndex(e.item) : size_t(-1);
+    if(auto* it = id==size_t(-1) ? nullptr : const_cast<Inventory&>(npc->inventory()).getItem(id); it!=nullptr && it->isMission()) {
+      error = "a mission item: " + e.item;
+      return false;
+      }
+    }
   if(JsonRead::boolean(msg,"check",false)) {
-    // all or nothing (v10, a deal): each giver must have all it gives, or nothing happens
+    // all or nothing (v10, a deal): each giver must have all it gives, or nothing happens; what the npc
+    // creates (v17, its stash) is its own to give, and the hero must have the learning points of all
+    // that is taught
     std::map<std::pair<bool,std::string>,int64_t> need;  // (the hero gives, item) -> count
-    for(auto& e : list)
+    std::map<std::string,int64_t>                 made;  // item -> created for the npc
+    int64_t                                       lp = 0;
+    for(auto& e : list) {
       if(e.kind=="give")
         need[{!e.toHero,e.item}] += e.count;
+      else if(e.kind=="create")
+        made[e.item] += e.count;
+      else if(e.kind=="teach") {
+        const int32_t cost = e.learnCost(vm,*pl,error);
+        if(cost<0)
+          return false;
+        lp += cost;
+        }
+      }
     for(auto& [k,count] : need) {
       Npc&         giver = k.first ? *pl : *npc;
       const size_t id    = world.script().findSymbolIndex(k.second);
-      const size_t has   = id==size_t(-1) ? 0 : giver.itemCount(id);
-      if(int64_t(has)<count) {
+      const auto   has   = int64_t(id==size_t(-1) ? 0 : giver.itemCount(id)) + (k.first ? 0 : made[k.second]);
+      if(has<count) {
         error = "missing: " + std::string(k.first ? "hero " : "npc ") + k.second + " " + std::to_string(count) +
                 " (has " + std::to_string(has) + ")";
         return false;
         }
       }
+    if(lp>pl->learningPoints()) {
+      error = "missing: hero LP " + std::to_string(lp) + " (has " + std::to_string(pl->learningPoints()) + ")";
+      return false;
+      }
     }
   const auto who = symbolOf(world,*npc);
   for(auto& e : list) {
-    if(e.kind=="attack" || e.kind=="refuse_talk")
+    if(e.kind=="attack" || e.kind=="refuse_talk" || e.kind=="calm")
       release(world,*npc);  // the scripts carry these out: an npc the server holds is let go first
     e.run(vm,*npc,*pl,who);
     }
@@ -402,17 +437,23 @@ void StoryWorld::tick(World& world) {
     for(auto& [tag,list] : tags)
       for(auto* n : list)
         tagged.insert(n);
-    for(uint32_t i=0; i<world.npcCount(); ++i) {
-      Npc* n = world.npcById(i);
-      if(n==nullptr || !n->isDead() || n->isPlayer() || !dead.insert(n).second)
-        continue;
-      if(!primed || (n->isMonster() && !tagged.count(n)))
+    for(auto& death : deaths.look(world)) {
+      Npc* n  = death.npc;
+      Npc* by = death.killer;
+      if(by!=nullptr && (by->isPlayer() || partyMember(world,*by))) {
+        // whoever the hero killed, person or creature (v17): an npc's contract may count it. One of his
+        // companions killed counts too (v30), as the scripts give him the experience for it (ZS_Dead)
+        JsonWriter k("hero_kill");
+        k.str("npc",symbolOf(world,*n)).str("name",TextCodec::toUtf8(n->displayName()))
+         .integer("guild",int64_t(n->guild())).boolean("monster",n->isMonster());
+        send(k.finish());
+        }
+      if(n->isMonster() && !tagged.count(n))
         continue;
       std::string tag;
       for(auto& [t,list] : tags)
         if(std::find(list.begin(),list.end(),n)!=list.end())
           tag = t;
-      Npc* by = n->lastHitBy();
       JsonWriter j("npc_died");
       j.str("npc",symbolOf(world,*n)).str("name",TextCodec::toUtf8(n->displayName()));
       if(!tag.empty())
@@ -420,7 +461,6 @@ void StoryWorld::tick(World& world) {
       j.str("killer",by==nullptr ? std::string() : by->isPlayer() ? std::string("PLAYER") : symbolOf(world,*by));
       send(j.finish());
       }
-    primed = true;
     }
   if(!tags.empty() && now>=nextReport) {
     nextReport = now+ReportMs;

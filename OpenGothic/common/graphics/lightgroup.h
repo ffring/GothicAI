@@ -24,6 +24,7 @@ class LightGroup final {
 
         void     setPosition(float x, float y, float z);
         void     setPosition(const Tempest::Vec3& p);
+        bool     renderPosition(Tempest::Vec3& out) const;
 
         void     setEnabled(bool e);
 

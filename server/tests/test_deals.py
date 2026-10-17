@@ -2,7 +2,8 @@ import asyncio
 
 import gothic_ai.deals
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.deals import Deals, LieRef, gold_text
+from gothic_ai.contracts import gold_text
+from gothic_ai.deals import Deals, LieRef
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
@@ -128,6 +129,11 @@ async def test_declined_the_npc_offers_otherwise():
         await _until(lambda: len(llm.calls) == 2)
         assert "Герой отказался от сделки" in llm.calls[1][1][-1].content
         assert [t.name for t in llm.calls[1][2]] == ["propose_deal"]
+        # offered less, the request's tools are the same: the start of the npc's requests does not change
+        every = [t.name for t in llm.sent_tools[0]]
+        assert "propose_deal" in every and "withdraw_deal" in every and "set_intent" in every
+        assert [[t.name for t in tools] for tools in llm.sent_tools] == [every, every]
+        assert llm.cache_keys == [XARDAS, XARDAS]
         await _until(lambda: len(_shown(fake)) == 2)
         again = _shown(fake)[1]
         assert (again["deal"], again["version"], again["hero_gives"][0]["count"]) == ("D2", 1, 40)
@@ -185,6 +191,63 @@ async def test_what_cannot_be_offered():
         await _until(lambda: fake.deals[-1] == {"type": "deal_hide", "deal": "D1"})
         o = await deals.handle(dialogue, conv, call, snap)
         assert o is not None and o.status == "rejected"
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_thing_of_its_story_by_a_guessed_id():
+    # 2026-10-14: Cavalorn asked for his letter as ITWR_CAVALORNLETTER twice, and no window came
+    sealed, opened, map_ = (
+        "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED",
+        "ITWR_SATURASFIRSTMESSAGE_ADDON",
+        "ITWR_MAP_NEWWORLD_ORNAMENTS_ADDON",
+    )
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    fake.symbols.update({sealed: "item", opened: "item", map_: "item", "DIA_X": "dialog"})
+    fake.item_names.update({sealed: "Запечатанное послание", opened: "Вскрытое послание", map_: "Карта"})
+    deals.things = lambda npc: {sealed, opened, map_, GOLD, "ITMI_NOT_IN_THE_GAME", "DIA_X"}
+    try:
+        snap = dialogue.link.snapshots[XARDAS]
+
+        async def offer(hero_gives, bring=()):
+            args = {
+                "npc_gives": [{"item": POTION, "count": 1}],
+                "hero_gives": hero_gives,
+                "task": {"kill": [], "bring": list(bring), "days": 0},
+            }
+            return await deals.propose(XARDAS, "Ксардас", args, snap)
+
+        letter = {"item": "ITWR_CAVALORNLETTER", "count": 1}
+        fake.hero_items = {map_: 1, sealed: 1, GOLD: 30}  # the map is a letter too, but not his: one of his
+        deals.things = lambda npc: {sealed, opened, GOLD}
+        o = await offer([letter, {"item": GOLD, "count": 5}])
+        assert o.status == "accepted"
+        assert "Предмета ITWR_CAVALORNLETTER нет" in o.output
+        assert f"Запечатанное послание ({sealed})" in o.output
+        await _until(lambda: _shown(fake) != [])
+        assert [t["item"] for t in _shown(fake)[-1]["hero_gives"]] == [sealed, GOLD]
+
+        # he has none of its letters, or two: it is told the things of its story, of the kind it asked first
+        deals.things = lambda npc: {sealed, opened, map_, GOLD, "ITMI_NOT_IN_THE_GAME", "DIA_X"}
+        for items in ({GOLD: 30}, {sealed: 1, map_: 1}):
+            fake.hero_items = items
+            o = await offer([letter])
+            assert o.status == "rejected" and o.output == (
+                "Отклонено: нет таких предметов: ITWR_CAVALORNLETTER. Вещи из твоих дел: "
+                f"Карта ({map_}); Вскрытое послание ({opened}); Запечатанное послание ({sealed}); "
+                f"Золото ({GOLD})."
+            )
+        # what it wants brought some day is not looked for on him
+        fake.hero_items = {sealed: 1}
+        o = await offer([], bring=[letter])
+        assert o.status == "rejected" and "нет таких предметов: ITWR_CAVALORNLETTER." in o.output
+        # with no story graph it is just told there is no such thing
+        deals.things = None
+        o = await offer([letter])
+        assert o.output == "Отклонено: нет таких предметов: ITWR_CAVALORNLETTER."
+        assert len(_shown(fake)) == 1
     finally:
         await link_cm.__aexit__(None, None, None)
 
@@ -463,4 +526,33 @@ async def test_day_is_told_when_it_changes(monkeypatch):
     finally:
         if watch is not None:
             watch.cancel()
+        await link_cm.__aexit__(None, None, None)
+
+
+class _IgnoresAllowed(FakeBackend):
+    """A model that calls what it sees in the request, whether it is offered or not."""
+
+    async def stream(
+        self, *, instructions, messages, tools=None, tool_choice=None, allowed=None, cache_key=None
+    ):
+        async for event in super().stream(
+            instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+        ):
+            yield event
+
+
+async def test_a_tool_not_offered_in_the_turn_is_rejected():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    llm = _IgnoresAllowed(
+        script=[FakeStep("Эликсир — за пятьдесят.", [_offer(1, 50)]), FakeStep("Ладно.")], delay=0
+    )
+    link_cm, dialogue, _, deals = await _setup(fake, llm, store)
+    try:
+        dialogue.event_turn(XARDAS, "[Герой кивнул.]", tools=("set_intent",))
+        await _until(lambda: len(llm.calls) == 2)
+        assert "propose_deal" in [t.name for t in llm.calls[0][2]]  # in the request
+        assert "сейчас propose_deal тебе недоступен" in llm.calls[1][1][-1].output
+        assert XARDAS not in deals.open and _shown(fake) == []
+    finally:
         await link_cm.__aexit__(None, None, None)

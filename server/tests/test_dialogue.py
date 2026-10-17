@@ -9,11 +9,10 @@ from websockets.asyncio.server import serve
 
 from gothic_ai import dialogue as dialogue_module
 from gothic_ai import scenarios
-from gothic_ai.dialogue import QUIET_STYLE, SCENE_GAP_S, TTS_PAUSE, DialogueManager
-from gothic_ai.fillers import Fillers
+from gothic_ai.dialogue import QUIET_STYLE, SCENE_GAP_S, TTS_PAUSE, DialogueManager, FirstReaction
 from gothic_ai.journal import Journal
 from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, ToolCall
-from gothic_ai.llm.fake import FakeBackend
+from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
 from gothic_ai.tts import TtsClient
 from tests.fake_game import FakeGame, connected
@@ -77,7 +76,7 @@ class FailingBackend:
     name = "failing"
 
     async def stream(
-        self, *, instructions: str, messages: list[Message], tools=None, tool_choice=None
+        self, *, instructions: str, messages: list[Message], tools=None, tool_choice=None, **_
     ) -> AsyncIterator[LLMEvent]:
         raise LLMError("plan limit reached")
         yield  # pragma: no cover
@@ -106,7 +105,7 @@ class StallingBackend:
         self.calls = self.closed = 0
 
     async def stream(
-        self, *, instructions: str, messages: list[Message], tools=None, tool_choice=None
+        self, *, instructions: str, messages: list[Message], tools=None, tool_choice=None, **_
     ) -> AsyncIterator[LLMEvent]:
         self.calls += 1
         try:
@@ -434,29 +433,21 @@ async def test_a_voice_that_fails_leaves_the_scene_in_subtitles():
     assert [e["kind"] for e in journal] == ["tts_off"]
 
 
-class _Warming(Fillers):
-    def __init__(self) -> None:
-        super().__init__("ws://unused")
-        self.warmed: list[str] = []
-
-    def warm(self, npc: str, voice: str) -> None:
-        self.warmed.append(npc)
-
-
-async def test_notes_do_not_voice_an_npcs_sounds_but_talking_to_it_does():
+async def test_notes_do_not_warm_the_quick_model_but_talking_to_the_npc_does(monkeypatch):
+    monkeypatch.setattr(dialogue_module, "PREWARM_DELAY_S", 0)
     fake = FakeGame()
-    fillers = _Warming()
+    quick = FakeBackend("Хм...", delay=0)
     async with connected(fake) as link:
-        dialogue = DialogueManager(
-            link, FakeBackend(), PersonaProvider(None), tts=TtsClient("ws://unused"), fillers=fillers
-        )
+        dialogue = DialogueManager(link, FakeBackend(), PersonaProvider(None), quick=quick)
         dialogue.remember(HILDA, "Хильда", "Лобарт рассказал тебе о герое")  # a rumor
         dialogue.overheard(HILDA, "Хильда", "Привет", None)
         said = [("Лобарт", "Слыхала?"), ("Хильда", "Да ну?")]
         dialogue.overheard_talk(XARDAS, "Ксардас", ("Лобарт", "Хильда"), said)
-        assert fillers.warmed == []
-        dialogue.open(HILDA, "Хильда")  # the hero talks to her: made by a note before, warmed now
-        assert fillers.warmed == [HILDA]
+        await asyncio.sleep(0.05)
+        assert quick.prewarms == []
+        dialogue.open(HILDA, "Хильда")  # the hero talks to her: her history, notes and all, is read now
+        await _until(lambda: len(quick.prewarms) == 1)
+        assert quick.prewarms[0][1] == dialogue.conversations[HILDA].history
 
     (heard,) = [m.content for m in dialogue.conversations[XARDAS].history]
     assert heard == "[Ты слышал, как Лобарт и Хильда говорили о герое: Лобарт: «Слыхала?» — Хильда: «Да ну?»]"
@@ -476,3 +467,290 @@ async def test_a_line_that_never_starts_is_not_spoken_forever(monkeypatch):
         assert dialogue.speaking(XARDAS)  # its line may still come
         await asyncio.sleep(0.4)
         assert not dialogue.speaking(XARDAS)
+
+
+async def test_an_npc_that_means_to_fight_the_hero_attacks_him_through_the_scripts():
+    fake = FakeGame()
+    fight = {"goal": "fight", "target": "PLAYER", "attitude": "hostile", "agenda": None}
+    llm = FakeBackend("Кошелёк или жизнь!", delay=0, tool_calls=[ToolCall("set_intent", fight)])
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.guild_of = lambda npc: 9  # a bandit
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Бандит")
+        await dialogue.say_as_player(XARDAS, "Отойди с дороги")
+        await _until(lambda: any(m.get("type") == "story_effect" for m in fake.story))
+        await _until(lambda: dialogue.conversations[XARDAS].history[-1].content == "[Ты напал на героя.]")
+
+    (attack,) = [m for m in fake.story if m["type"] == "story_effect"]
+    assert attack["npc"] == XARDAS and attack["effects"] == [
+        {"do": "attack", "reason": "AR_SUDDENENEMYINFERNO"}
+    ]
+    assert not any(
+        m["type"] == "action" and m["action"] == "fight" for m in fake.received
+    )  # the scripts fight
+
+
+# --- the quick model of a fight ----------------------------------------------------------------------
+
+
+def _situation_of(messages) -> str:
+    return next(m.content for m in reversed(messages) if m.role == "developer" and "Обстановка" in m.content)
+
+
+async def test_a_line_in_a_fight_is_the_quick_models_and_the_turns_model_only_acts():
+    """The bandit's "Держи его!" comes from the quick model at once; the conversational model, told what was
+    said, decides the attack, and its own words are not said."""
+    fake = FakeGame()
+    fight = {"goal": "fight", "target": "PLAYER", "attitude": "hostile", "agenda": None}
+    quick = FakeBackend("[hostile] Это он! Держи его!", delay=0)
+    llm = FakeBackend("Слова, которых никто не услышит.", delay=0, tool_calls=[ToolCall("set_intent", fight)])
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        dialogue.in_fight = lambda npc: True
+        dialogue.guild_of = lambda npc: 9  # a bandit
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Бандит")
+        await dialogue.event_turn(XARDAS, "[Событие: герой сказал рядом: «Давай поговорим»]")
+        await _until(lambda: any(m.get("type") == "story_effect" for m in fake.story))
+
+    assert " ".join(fake.said) == "Это он! Держи его!"
+    (_, quick_messages, quick_tools), (_, messages, tools) = quick.calls[0], llm.calls[0]
+    assert quick_tools == [] and "set_intent" in {t.name for t in tools}
+    brief, full = _situation_of(quick_messages), _situation_of(messages)
+    assert dialogue_module.QUICK_HINT in brief and "Цели для намерения" not in brief
+    assert "Цели для намерения" in full and "Ты уже сказал вслух: «Это он! Держи его!»" in full
+    history = dialogue.conversations[XARDAS].history
+    assert history[-1].content.startswith("[Ты напал") or history[-2].content == "Это он! Держи его!"
+    assert any(m.role == "assistant" and m.content == "Это он! Держи его!" for m in history)
+    assert dialogue.conversations[XARDAS].intent.goal == "fight"
+
+
+async def test_the_turns_model_speaks_when_the_quick_model_fails():
+    fake = FakeGame()
+    llm = FakeBackend("Сам справлюсь!", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=FailingBackend())
+        dialogue.in_fight = lambda npc: True
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.event_turn(XARDAS, "[Событие: Волк нападает на тебя]")
+        await _until(lambda: fake.said == ["Сам справлюсь!"])
+
+    _, messages, _ = llm.calls[0]
+    assert dialogue_module.QUICK_HINT not in _situation_of(messages)  # the whole situation, as usual
+
+
+async def test_out_of_a_fight_the_quick_model_only_says_the_first_words():
+    """The hero's phrase: the quick model's first words, then the conversational model's answer. An event
+    outside a fight is the conversational model's alone."""
+    fake = FakeGame()
+    quick = FakeBackend("[angry] Тьфу! И это всё?", delay=0)
+    llm = FakeBackend("Не спеши.", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Ты старый дурак")
+        await dialogue.event_turn(XARDAS, "[Событие: герой подошёл к тебе]")
+        await _until(lambda: fake.said == ["Тьфу!", "Не спеши.", "Не спеши."])
+
+    assert len(quick.calls) == 1  # the phrase's first words; the event: no
+    _, words_request, words_tools = quick.calls[0]
+    assert words_tools == [] and dialogue_module.REACT_HINT in _situation_of(words_request)
+    said = [m for m, _ in fake.says if m["text"] == "Тьфу!"]
+    assert said[0]["filler"] is True and said[0]["mood"] == "angry" and said[0].get("reply") is None
+    _, messages, _ = llm.calls[0]
+    situation = _situation_of(messages)
+    assert "Ты уже сказал вслух: «Тьфу!»" in situation and dialogue_module.REACT_HINT not in situation
+    assert [m.content for m in dialogue.conversations[XARDAS].history][:2] == ["Ты старый дурак", "Не спеши."]
+
+
+async def test_no_first_words_to_a_greeting_or_without_the_quick_model_in_time(monkeypatch):
+    monkeypatch.setattr(dialogue_module, "REACTION_S", 0.2)
+    fake = FakeGame()
+    nothing = FakeBackend("[friendly] —", delay=0)
+    late = FakeBackend("Хм...", delay=0, first=1.0)
+    async with connected(fake) as link:
+        greeted = DialogueManager(
+            link, FakeBackend("Здравствуй.", delay=0), PersonaProvider(None), quick=nothing
+        )
+        greeted.open(XARDAS, "Ксардас")
+        await greeted.say_as_player(XARDAS, "Привет")
+        slow = DialogueManager(link, FakeBackend("Слушаю.", delay=0), PersonaProvider(None), quick=late)
+        slow.open(LOBART, "Лобарт")
+        await slow.say_as_player(LOBART, "Где мне найти работу?")
+        await _until(lambda: fake.said == ["Здравствуй.", "Слушаю."])
+
+    for dialogue in (greeted, slow):
+        _, messages, _ = dialogue.llm.calls[0]
+        assert "Ты уже сказал вслух" not in _situation_of(messages)
+
+
+async def test_the_quick_model_is_kept_warm_with_the_history_of_an_npc_in_a_fight(monkeypatch):
+    """Whenever the history of an npc in a fight grows, and when the hero starts to speak, the quick model
+    reads the npc's instructions and history: its next line only reads the situation and the trigger."""
+    monkeypatch.setattr(dialogue_module, "PREWARM_DELAY_S", 0)
+    fake = FakeGame()
+    quick = FakeBackend("Держись!", delay=0)
+    fighting = {LOBART}
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend("", delay=0), PersonaProvider(None), quick=quick)
+        dialogue.in_fight = lambda npc: npc in fighting
+        dialogue.open(XARDAS, "Ксардас", warm=False)  # nobody talks to them yet
+        dialogue.open(LOBART, "Лобарт", warm=False)
+        dialogue.note(XARDAS, "Ты видел волка")  # not in a fight: nothing to warm
+        dialogue.note(LOBART, "Волк нападает на тебя")
+        await _until(lambda: len(quick.prewarms) == 1)
+        instructions, history = quick.prewarms[0]
+        assert "Лобарт" in instructions and history == dialogue.conversations[LOBART].history
+
+        await dialogue.event_turn(LOBART, "[Событие: Волк нападает на тебя]")
+        # not during the turn (its line would wait for the server's one slot), once after it
+        await _until(lambda: len(quick.prewarms) == 2)
+        assert quick.prewarms[-1][1] == dialogue.conversations[LOBART].history
+        assert quick.prewarms[-1][1][-1] == Message("assistant", "Держись!")
+
+        await fake.send(type="ptt_start", focus=LOBART)  # the hero speaks: warmed again (the server's slot)
+        await _until(lambda: len(quick.prewarms) == 3)
+
+
+async def test_an_npc_acting_on_its_quick_line_is_done_speaking():
+    """While the conversational model decides what to do about the line, the npc is not speaking: the hero's
+    next phrase is a new turn, not an interruption, and the line said is remembered as it was."""
+    fake = FakeGame()
+    quick = FakeBackend("Держись!", delay=0)
+    llm = FakeBackend("Неслышные слова.", delay=0, first=5.0)  # still deciding when the hero speaks again
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        dialogue.in_fight = lambda npc: True
+        dialogue.open(XARDAS, "Ксардас")
+        first = dialogue.event_turn(XARDAS, "[Событие: Волк нападает на тебя]")
+        conv = dialogue.conversations[XARDAS]
+        await _until(lambda: conv.acting and fake.statuses[-1:] == ["idle"])
+        _, sounding, unsaid = dialogue._said(conv)
+        assert dialogue.speaking(XARDAS) == (sounding or unsaid)  # the running turn does not count
+        dialogue.say_as_player(XARDAS, "Бей его!")
+        await _until(lambda: first.done())
+
+    assert first.cancelled()
+    history = [m.content for m in dialogue.conversations[XARDAS].history]
+    assert history[:2] == ["[Событие: Волк нападает на тебя]", "Держись!"]
+    assert not any("перебил" in h for h in history)
+
+
+async def test_a_quick_line_ends_at_its_first_blank_line():
+    """Gemma, seeing tool calls in the history, may write one out after its line: it is never said."""
+    fake = FakeGame()
+    quick = FakeBackend("[hostile] Это он! Держи его!\n\nset_intent(goal=fight, target=PLAYER)", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend("", delay=0), PersonaProvider(None), quick=quick)
+        dialogue.in_fight = lambda npc: True
+        dialogue.open(XARDAS, "Бандит")
+        await dialogue.event_turn(XARDAS, "[Событие: герой сказал рядом: «Давай поговорим»]")
+        await _until(lambda: fake.statuses[-1:] == ["idle"] and fake.said)
+
+    assert " ".join(fake.said) == "Это он! Держи его!"
+    assert dialogue.conversations[XARDAS].history[-1] == Message("assistant", "Это он! Держи его!")
+
+
+async def test_the_first_words_go_out_before_the_gesture():
+    """The game's queue holds a line until the gesture before it is over: the words go first."""
+    fake = FakeGame()
+    seen: list[bool] = []
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link, FakeBackend("Слушаю.", delay=0), PersonaProvider(None), quick=FakeBackend("Хм...", delay=0)
+        )
+
+        async def first_reaction(npc: str, text: str) -> FirstReaction:
+            return FirstReaction(lambda: seen.append(any(t == "Хм..." for t, _ in dialogue._lines.values())))
+
+        dialogue.first_reaction = first_reaction
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Что ты знаешь о драконах?")
+        await _until(lambda: fake.said == ["Хм...", "Слушаю."])
+
+    assert seen == [True]
+
+
+async def test_a_companion_answers_an_order_through_the_quick_model():
+    fake = FakeGame()
+    quick = FakeBackend("[neutral] Стою.", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend(), PersonaProvider(None), quick=quick)
+        dialogue.remember(LOBART, "Лобарт", "Герой приказал тебе: «Стой!» — остановиться. Ты подчинился.")
+        await dialogue.acknowledge(LOBART, "Лобарт")
+        silent = DialogueManager(link, FakeBackend(), PersonaProvider(None))
+        await silent.acknowledge(LOBART, "Лобарт")  # no quick model: no answer
+        await _until(lambda: fake.said == ["Стою."])
+
+    (_, messages, tools) = quick.calls[0]
+    assert tools == [] and "Герой приказал тебе: «Стой!»" in messages[-2].content
+    assert messages[-1].role == "developer" and dialogue_module.ACK_HINT in messages[-1].content
+    (said,) = [m for m, _ in fake.says if m["text"] == "Стою."]
+    assert said["overlay"] is True and not said.get("filler")  # on the move: the order is carried out
+
+
+async def test_first_words_are_short_and_not_the_same_twice_in_a_row():
+    """Gemma now and then answers at once in a whole sentence, or says "Хм..." to everything: such first
+    words are not said (the answer would follow a second one; the same sound grows tiresome)."""
+    fake = FakeGame()
+    quick = FakeBackend(
+        script=[
+            FakeStep("Хм..."),
+            FakeStep("Хм..."),
+            FakeStep("Ты ещё слишком слаб, чтобы полагаться на чужую силу."),
+            FakeStep("[angry] Ишь ты!"),
+        ],
+        delay=0,
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend("Слушаю.", delay=0), PersonaProvider(None), quick=quick)
+        dialogue.open(XARDAS, "Ксардас")
+        for phrase in (
+            "Что это за башня?",
+            "А кто тут живёт?",
+            "Помоги мне.",
+            "Я убью дракона голыми руками!",
+        ):
+            await dialogue.say_as_player(XARDAS, phrase)
+        await _until(lambda: fake.said.count("Слушаю.") == 4)
+
+    assert [m["text"] for m, _ in fake.says if m.get("filler")] == ["Хм...", "Ишь ты!"]
+
+
+async def test_one_fighting_the_hero_may_call_it_off_and_keeps_to_it():
+    fake = FakeGame()
+    calm = {"goal": "none", "target": None, "attitude": "wary", "agenda": None}
+    llm = FakeBackend("Ладно, ладно. Живи пока.", delay=0, tool_calls=[ToolCall("set_intent", calm)])
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.fights_hero = lambda npc: True  # the scripts' attack on the hero
+        calmed: list[str] = []
+        dialogue.on_calm.append(calmed.append)
+        dialogue.open(XARDAS, "Бандит")
+        await dialogue.say_as_player(XARDAS, "Воу, воу, ты чего? Спокуха!")
+        await _until(
+            lambda: dialogue.conversations[XARDAS].history[-1].content == "[Ты прекратил драку с героем.]"
+        )
+
+    (effect,) = [m for m in fake.story if m["type"] == "story_effect"]
+    assert effect["npc"] == XARDAS and effect["effects"] == [{"do": "calm", "attitude": "ATT_NEUTRAL"}]
+    assert calmed == [XARDAS]
+    situation = next(m.content for m in llm.calls[0][1] if m.role == "developer")
+    assert "Ты дерёшься с героем. Прекратить драку" in situation
+
+
+async def test_words_with_a_hostile_heart_do_not_end_the_fight():
+    fake = FakeGame()
+    still = {"goal": "none", "target": None, "attitude": "hostile", "agenda": None}
+    llm = FakeBackend(
+        "Спокуха? Сейчас я тебе покажу спокуху!", delay=0, tool_calls=[ToolCall("set_intent", still)]
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.fights_hero = lambda npc: True
+        dialogue.open(XARDAS, "Бандит")
+        await dialogue.say_as_player(XARDAS, "Спокуха!")
+        await _until(lambda: dialogue.conversations[XARDAS].intent.attitude == "hostile")
+        await asyncio.sleep(0.1)
+    assert not [m for m in fake.story if m["type"] == "story_effect"]

@@ -1,0 +1,143 @@
+seed 73013
+cheat god
+set time 12 0
+movable on
+character on
+npccharacter on
+view full
+cam auto 240 70
+overlay on
+npccharacter trace player
+release all
+character route stairs_up
+character approach base 0 0 0
+walkmode walk
+wait 500
+rec stairs_up_base
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_up
+character approach left -10 0 0
+walkmode walk
+wait 500
+rec stairs_up_left
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_up
+character approach right 10 0 0
+walkmode walk
+wait 500
+rec stairs_up_right
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_up
+character approach yaw_minus 0 0 -15
+walkmode walk
+wait 500
+rec stairs_up_yaw_minus
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_up
+character approach yaw_plus 0 0 15
+walkmode walk
+wait 500
+rec stairs_up_yaw_plus
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_up
+character approach slipped 5.16 -5.75 0
+walkmode walk
+wait 500
+rec stairs_up_slipped
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_down
+character approach base 0 0 0
+walkmode walk
+wait 500
+rec stairs_down_base
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_down
+character approach left -10 0 0
+walkmode walk
+wait 500
+rec stairs_down_left
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_down
+character approach right 10 0 0
+walkmode walk
+wait 500
+rec stairs_down_right
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_down
+character approach yaw_minus 0 0 -15
+walkmode walk
+wait 500
+rec stairs_down_yaw_minus
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_down
+character approach yaw_plus 0 0 15
+walkmode walk
+wait 500
+rec stairs_down_yaw_plus
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+release all
+character route stairs_down
+character approach slipped 5.16 -5.75 0
+walkmode walk
+wait 500
+rec stairs_down_slipped
+character begin
+hold forward 4500
+wait 4500
+character end
+stop
+npccharacter trace off

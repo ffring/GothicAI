@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS events (
     branch    TEXT NOT NULL,
     seq       INTEGER NOT NULL,
     npc       TEXT NOT NULL,
-    kind      TEXT NOT NULL,          -- message | summary | intent | seen | patch, fact (npc '*': JSON)
+    kind      TEXT NOT NULL,          -- message|summary|intent|seen|chest; patch, fact (npc '*': JSON)
     role      TEXT,                   -- message: user | assistant | developer
     content   TEXT NOT NULL,
     covers    INTEGER,                -- summary: messages up to this seq are folded in
@@ -200,6 +200,17 @@ class MemoryStore:
         """What the npc saw, oldest first (inherited records included)."""
         rows = self._db.execute(
             "SELECT content FROM events WHERE branch=? AND npc=? AND kind='seen' ORDER BY seq", (branch, npc)
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    def add_chest(self, branch: str, npc: str, record: str) -> int:
+        """What the npc knows lies in its chest (JSON, chests.py): a later record of the same chest wins."""
+        return self._insert(branch, npc, "chest", None, record, None, None)
+
+    def chests(self, branch: str, npc: str) -> list[str]:
+        """What the npc knows of its chests, oldest first."""
+        rows = self._db.execute(
+            "SELECT content FROM events WHERE branch=? AND npc=? AND kind='chest' ORDER BY seq", (branch, npc)
         ).fetchall()
         return [row[0] for row in rows]
 

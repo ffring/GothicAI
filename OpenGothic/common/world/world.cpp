@@ -3,6 +3,9 @@
 #include <functional>
 #include <future>
 #include <cctype>
+#include <algorithm>
+#include <cmath>
+#include <chrono>
 
 #include <Tempest/Log>
 #include <Tempest/Painter>
@@ -18,10 +21,53 @@
 #include "game/bodyarena.h"
 #include "game/globaleffects.h"
 #include "game/serialize.h"
+#include "game/physicssave.h"
 #include "utils/string_frm.h"
 #include "gothic.h"
 #include "focus.h"
 #include "resources.h"
+#include "frameprofile.h"
+#include "testbench.h"
+#include "physics/physicsnoise.h"
+#include "world/movablevobs.h"
+
+namespace {
+
+std::string_view traceObjectName(std::string_view what, bool arrow = false) {
+  if(arrow) {
+    if(what=="door")     return "стрела в двери";
+    if(what=="table")    return "стрела в столе";
+    if(what=="barrel")   return "стрела в бочке";
+    if(what=="crate")    return "стрела в ящике";
+    if(what=="cupboard") return "стрела в шкафу";
+    if(what=="wall")     return "стрела в стене";
+    return "стрела";
+    }
+  if(what=="table")    return "стол";
+  if(what=="barrel")   return "бочка";
+  if(what=="crate")    return "ящик";
+  if(what=="cupboard") return "шкаф";
+  return "предмет";
+  }
+
+std::string_view brokenObjectName(std::string_view what) {
+  if(what=="crate")  return "обломки ящика";
+  if(what=="barrel") return "обломки бочки";
+  if(what=="fence")  return "сломанный забор";
+  return "обломки предмета";
+  }
+
+int64_t traceTime(const World& world) {
+  const auto now = world.time();
+  return now.day()*24*60+now.hour()*60+now.minute();
+  }
+
+Tempest::Vec3 tracePoint(const Tempest::Matrix4x4& matrix, Tempest::Vec3 point) {
+  matrix.project(point);
+  return point;
+  }
+
+}
 
 const char* materialTag(ItemMaterial src) {
   switch(src) {
@@ -66,6 +112,7 @@ const char* materialTag(zenkit::MaterialGroup src) {
 
 World::World(GameSession& game, std::string_view file, bool startup, std::function<void(int)> loadProgress)
   :wname(std::move(file)), game(game), wsound(game,*this), wobj(*this) {
+  const auto loadStarted = std::chrono::steady_clock::now();
   const auto* entry = Resources::vdfsIndex().find(wname);
 
   if(entry == nullptr) {
@@ -111,6 +158,9 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     loadProgress(60);
 
     wdynamic = wdynamicFut.get();
+    wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
+    wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
+    wdynamic->setPhysicsNoiseCallback([this](const PhysicsNoise& noise) { emitPhysicsNoise(noise); });
     world.world_mesh = zenkit::Mesh();
     loadProgress(70);
 
@@ -118,6 +168,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     wmatrix.reset(new WayMatrix(*this, *world.way_net));
     for(auto& vob:world.world_vobs)
       wobj.addRoot(vob,startup);
+    wdynamic->finalizeMovableVobs();
 
     wmatrix->buildIndex();
     loadProgress(100);
@@ -126,6 +177,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     Tempest::Log::e("unable to load landscape mesh");
     throw;
     }
+  worldLoadMs = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-loadStarted).count();
   }
 
 World::~World() {
@@ -174,6 +226,9 @@ void World::postInit() {
   }
 
 void World::load(Serialize &fin) {
+  spellFields.clear();
+  stuckArrows.clear();
+  nextArrowTraceId = 1;
   fin.setContext(this);
   fin.setEntry("worlds/",wname,"/world");
 
@@ -189,6 +244,9 @@ void World::load(Serialize &fin) {
 
   wobj.load(fin);
   npcPlayer = wobj.findHero();
+  wdynamic->setTraceTime(traceTime(*this));
+  wdynamic->loadMovableVobs(fin);
+  loadStuckArrows(fin);
   }
 
 void World::save(Serialize &fout) {
@@ -201,6 +259,8 @@ void World::save(Serialize &fout) {
     }
 
   wobj.save(fout);
+  wdynamic->saveMovableVobs(fout);
+  saveStuckArrows(fout);
   }
 
 uint32_t World::npcId(const Npc *ptr) const {
@@ -215,6 +275,214 @@ Npc *World::npcById(uint32_t id) {
 
 uint32_t World::npcCount() const {
   return uint32_t(wobj.npcCount());
+  }
+
+Npc* World::npcForRagdoll(const Ragdoll* body) {
+  if(body==nullptr)
+    return nullptr;
+  for(size_t i=0;i<wobj.npcCount();++i)
+    if(wobj.npc(i).ragdollBody()==body)
+      return &wobj.npc(i);
+  return nullptr;
+  }
+
+bool World::stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix,
+                      std::string_view visual, std::shared_ptr<const DynamicWorld::MovableVobPose> movable,
+                      const Npc* culprit, const Tempest::Vec3* sightPoint, std::string_view surface) {
+  if(arrow.isEmpty() || !Gothic::physicsFlags().arrowSticking || (movable!=nullptr && movable->broken))
+    return false;
+  if(stuckArrows.size()>=512)
+    stuckArrows.erase(stuckArrows.begin());
+  arrow.setObjMatrix(worldMatrix);
+  StuckArrow pin;
+  pin.mesh = std::move(arrow);
+  pin.visual = std::string(visual);
+  pin.local = worldMatrix;
+  pin.traceId = nextArrowTraceId++;
+  pin.appearedAt = traceTime(*this);
+  pin.surface = std::string(surface);
+  pin.sightPoint = sightPoint!=nullptr ? *sightPoint : Tempest::Vec3(worldMatrix.at(3,0),worldMatrix.at(3,1),worldMatrix.at(3,2));
+  if(culprit!=nullptr) {
+    if(culprit->isPlayer())
+      pin.culprit = "PLAYER";
+    else if(auto* symbol = script().findSymbol(culprit->instanceSymbol()))
+      pin.culprit = symbol->name();
+    }
+  if(movable!=nullptr) {
+    pin.local = movable->transform;
+    pin.local.inverse();
+    pin.local.project(pin.sightPoint);
+    pin.local.mul(worldMatrix);
+    pin.movable = movable;
+    pin.attached = true;
+    if(const auto* rule = MovableVobs::classifyVisual(movable->visual))
+      pin.surface = rule->className;
+    }
+  stuckArrows.push_back(std::move(pin));
+  return true;
+  }
+
+bool World::stuckArrowTransform(size_t index, Tempest::Matrix4x4& out) const {
+  if(index>=stuckArrows.size() || stuckArrows[index].mesh.isEmpty())
+    return false;
+  out = stuckArrows[index].mesh.node(0).position();
+  return true;
+  }
+
+bool World::stuckArrowAttachment(size_t index, uint32_t& zenId, Tempest::Matrix4x4& local) const {
+  if(index>=stuckArrows.size())
+    return false;
+  const auto& pin = stuckArrows[index];
+  auto pose = pin.movable.lock();
+  if(!pin.attached || pose==nullptr || pose->broken)
+    return false;
+  zenId = pose->zenId;
+  local = pin.local;
+  return true;
+  }
+
+std::vector<World::PhysicsTrace> World::physicsTraces() const {
+  std::vector<PhysicsTrace> result;
+  if(Gothic::physicsFlags().arrowSticking) {
+    for(const auto& pin:stuckArrows) {
+      auto pose = pin.movable.lock();
+      if(pin.mesh.isEmpty() || (pin.attached && pose==nullptr) ||
+         (!pin.attached && (pin.surface=="ground" || pin.surface=="unknown")))
+        continue;
+      PhysicsTrace trace;
+      trace.id = wname+":arrow:"+std::to_string(pin.traceId);
+      trace.kind = "arrow";
+      trace.name = traceObjectName(pin.surface,true);
+      trace.position = pin.attached ? tracePoint(pose->transform,pin.sightPoint) : pin.sightPoint;
+      trace.sightPoints.fill(trace.position);
+      trace.appearedAt = pin.appearedAt;
+      trace.culprit = pin.culprit;
+      result.push_back(std::move(trace));
+      }
+    }
+  for(const auto& item:wdynamic->movableVobSnapshot()) {
+    if((!item.broken && (!item.enabled || !item.trace)) || item.zenId==uint32_t(-1))
+      continue;
+    PhysicsTrace trace;
+    trace.id = wname+":vob:"+std::to_string(item.zenId);
+    trace.kind = item.broken ? "broken" : item.tilted ? "tilted" : "moved";
+    trace.name = item.broken ? brokenObjectName(item.className) : traceObjectName(item.className);
+    const auto center = (item.localBounds[0]+item.localBounds[1])*.5f;
+    trace.position = tracePoint(item.transform,center);
+    // Broken parents retain their last intact pose: the trace describes where
+    // the prop stood, independently of where its surviving pieces roll.
+    // Surface samples stay just outside the mesh: a ray to the object's origin
+    // would often end inside its own collider and hide a perfectly visible table.
+    for(size_t axis=0;axis<3;++axis) {
+      auto low = center, high = center;
+      if(axis==0) { low.x = item.localBounds[0].x-2.f; high.x = item.localBounds[1].x+2.f; }
+      if(axis==1) { low.y = item.localBounds[0].y-2.f; high.y = item.localBounds[1].y+2.f; }
+      if(axis==2) { low.z = item.localBounds[0].z-2.f; high.z = item.localBounds[1].z+2.f; }
+      trace.sightPoints[axis*2] = tracePoint(item.transform,low);
+      trace.sightPoints[axis*2+1] = tracePoint(item.transform,high);
+      }
+    trace.appearedAt = item.traceTime;
+    trace.culprit = item.traceCulprit;
+    result.push_back(std::move(trace));
+    }
+  return result;
+  }
+
+void World::updateStuckArrows() {
+  for(auto i=stuckArrows.begin();i!=stuckArrows.end();) {
+    if(!i->attached) {
+      ++i;
+      continue;
+      }
+    auto pose = i->movable.lock();
+    if(pose==nullptr || pose->broken) {
+      i = stuckArrows.erase(i);
+      continue;
+      }
+    auto matrix = pose->transform;
+    matrix.mul(i->local);
+    i->mesh.setObjMatrix(matrix);
+    ++i;
+    }
+  }
+
+void World::saveStuckArrows(Serialize& fout) const {
+  if(!Gothic::physicsFlags().arrowSticking || (stuckArrows.empty() && nextArrowTraceId==1))
+    return;
+  std::vector<const StuckArrow*> pins;
+  for(const auto& pin:stuckArrows) {
+    auto pose = pin.movable.lock();
+    if(pin.visual.empty() || (pin.attached && (pose==nullptr || pose->broken || pose->zenId==uint32_t(-1))))
+      continue;
+    pins.push_back(&pin);
+    }
+  fout.setEntry("worlds/",wname,"/stuck-arrows");
+  fout.write(uint32_t(0x31524157),uint16_t(2),wname,uint32_t(pins.size()),nextArrowTraceId);
+  for(const auto* pin:pins) {
+    fout.write(pin->visual,pin->local,pin->attached);
+    if(auto pose = pin->movable.lock(); pin->attached && pose!=nullptr)
+      fout.write(pose->zenId,pose->visual,pose->origin);
+    fout.write(pin->traceId,uint64_t(pin->appearedAt+1),pin->culprit,pin->surface,pin->sightPoint);
+    }
+  }
+
+void World::loadStuckArrows(Serialize& fin) {
+  if(!Gothic::physicsFlags().arrowSticking || !fin.setEntry("worlds/",wname,"/stuck-arrows"))
+    return;
+  try {
+    uint32_t magic=0,count=0;
+    uint16_t schema=0;
+    std::string worldName;
+    fin.read(magic,schema,worldName,count);
+    if(magic!=0x31524157 || (schema!=1 && schema!=2) || worldName!=wname || count>512)
+      return;
+    if(schema>=2) {
+      uint64_t nextId=1;
+      fin.read(nextId);
+      if(nextId==0 || nextId==UINT64_MAX)
+        return;
+      nextArrowTraceId = nextId;
+      }
+    std::vector<StuckArrow> pins;
+    for(uint32_t i=0;i<count;++i) {
+      StuckArrow pin;
+      fin.read(pin.visual,pin.local,pin.attached);
+      pin.traceId = uint64_t(i)+1;
+      pin.sightPoint = Tempest::Vec3(pin.local.at(3,0),pin.local.at(3,1),pin.local.at(3,2));
+      bool matches=true;
+      if(pin.attached) {
+        uint32_t id=uint32_t(-1);
+        std::string visual;
+        Tempest::Matrix4x4 origin;
+        fin.read(id,visual,origin);
+        auto pose = wdynamic->movableVobPose(id);
+        matches = pose!=nullptr && pose->visual==visual && PhysicsSave::sameTransform(pose->origin,origin);
+        pin.movable = pose;
+        if(const auto* rule = MovableVobs::classifyVisual(visual))
+          pin.surface = rule->className;
+        }
+      if(schema>=2) {
+        uint64_t appeared=0;
+        fin.read(pin.traceId,appeared,pin.culprit,pin.surface,pin.sightPoint);
+        pin.appearedAt = appeared>0 && appeared<=uint64_t(INT64_MAX) ? int64_t(appeared-1) : -1;
+        }
+      if(!matches || pin.visual.empty() || pin.visual.size()>512 || !PhysicsSave::validTransform(pin.local) ||
+         pin.traceId==0 || pin.traceId==UINT64_MAX || pin.culprit.size()>512 || pin.surface.size()>64 ||
+         !std::isfinite(pin.sightPoint.x) || !std::isfinite(pin.sightPoint.y) || !std::isfinite(pin.sightPoint.z))
+        continue;
+      pin.mesh = addView(pin.visual);
+      if(pin.mesh.isEmpty())
+        continue;
+      pin.mesh.setObjMatrix(pin.local);
+      nextArrowTraceId = std::max(nextArrowTraceId,pin.traceId+1);
+      pins.push_back(std::move(pin));
+      }
+    stuckArrows = std::move(pins);
+    updateStuckArrows();
+    }
+  catch(const std::exception& e) {
+    Tempest::Log::e("world arrows load: ",e.what());
+    }
   }
 
 uint32_t World::mobsiId(const Interactive* ptr) const {
@@ -400,11 +668,24 @@ void World::scaleTime(uint64_t& dt) {
   }
 
 void World::tick(uint64_t dt) {
+  wdynamic->setTraceTime(traceTime(*this));
+  wdynamic->setMovableVobsEnabled(Gothic::physicsFlags().movableVobs);
+  wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
+  wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
+  if(!Gothic::physicsFlags().arrowSticking)
+    stuckArrows.clear();
   static bool doTicks=true;
   if(!doTicks)
     return;
-  wobj.tick(dt,dt);
-  wdynamic->tick(dt);
+  tickSpellFields(dt);
+  { FrameProfile::Scope timing(FrameProfile::Zone::WorldLogic); wobj.tick(dt,dt); }
+  { FrameProfile::Scope timing(FrameProfile::Zone::Prepare); wobj.prepareRagdolls(); }
+  if(const auto* pl=player())
+    wdynamic->setFragmentObserver(pl->position());
+  { FrameProfile::Scope timing(FrameProfile::Zone::Physics); wdynamic->tick(dt); }
+  updateStuckArrows();
+  { FrameProfile::Scope timing(FrameProfile::Zone::Sync); wobj.syncRagdolls(); }
+  FrameProfile::Scope timing(FrameProfile::Zone::WorldMisc);
   if(auto pl = player(); pl!=nullptr && !BodyArena::frozenWorld())
     wsound.tick(*pl);
   globFx->tick(dt);
@@ -669,6 +950,156 @@ size_t World::hasItems(std::string_view tag, size_t itemCls) {
   return wobj.hasItems(tag,itemCls);
   }
 
+void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target) {
+  using namespace Tempest;
+  if(!Gothic::physicsFlags().spellPhysics)
+    return;
+  const auto kind = script().physicalSpell(spellId);
+  const bool wind = kind==GameScript::PhysicalSpell::WindFist;
+  if(!wind && kind!=GameScript::PhysicalSpell::Fireball)
+    return;
+  if(wind && caster==nullptr)
+    return;
+  const Vec3 center = wind ? caster->collosionCenter() : point;
+  const float radius = wind ? 1000.f : 400.f;
+  auto forward = point-center;
+  if(forward.length()<1.e-3f && caster!=nullptr)
+    forward = Vec3(std::cos(caster->rotationRad()),0,std::sin(caster->rotationRad()));
+  if(forward.length()>1.e-3f)
+    forward = Vec3::normalize(forward);
+  auto clearPath = [&](const Vec3& to) {
+    const auto delta = to-center;
+    if(delta.length()<4.f)
+      return true;
+    const auto hit = physic()->ray(center+Vec3::normalize(delta)*2.f,to);
+    return !hit.hasCol || (hit.v-to).length()<8.f;
+    };
+  auto impulseAt = [&](const Vec3& to, bool testOcclusion=true) {
+    const auto delta = to-center;
+    const float distance = delta.length();
+    if(distance>=radius || (testOcclusion && !clearPath(to)))
+      return Vec3();
+    const auto radial = distance>1.e-3f ? delta/distance : Vec3(0,1,0);
+    if(wind && Vec3::dotProduct(radial,forward)<0.819152f) // 35 degree cone
+      return Vec3();
+    const float falloff = 1.f-distance/radius;
+    auto direction = wind ? forward+Vec3(0,0.35f,0) : radial+Vec3(0,0.35f,0);
+    return Vec3::normalize(direction)*((wind ? 450.f : 300.f)*falloff);
+    };
+  size_t npcHits = 0, itemHits = 0;
+  detectNpc(center,radius,[&](Npc& npc) {
+    if(&npc==caster || (wind && &npc!=target))
+      return;
+    const auto impulse = impulseAt(npc.collosionCenter());
+    // A heavy creature resists this finite wind impulse. The threshold is a
+    // delta velocity, so object scale and species mass use the same rule.
+    if(impulse.quadLength()<=0.f || (wind && impulse.length()/npc.physicsMass()<1.f))
+      return;
+    if(!npc.addSpellImpulse(impulse,true,caster))
+      return;
+    ++npcHits;
+    if(TestBench::isActive()) {
+      const auto who = TestBench::who(&npc);
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"spell physics %s %.*s mass %.9g impulse %.9g %.9g %.9g",
+                    wind ? "wind" : "fireball",int(who.size()),who.data(),double(npc.physicsMass()),
+                    double(impulse.x),double(impulse.y),double(impulse.z));
+      TestBench::note(buf);
+      }
+    });
+  detectItem(center,radius,[&](Item& item) {
+    const auto impulse = impulseAt(item.midPosition());
+    if(impulse.quadLength()>0.f && item.addSpellImpulse(impulse,caster))
+      ++itemHits;
+    });
+  const auto vobHits = physic()->applyMovableVobImpulse(center,radius,[&](const Vec3& to, float mass) {
+    auto impulse = impulseAt(to,false);
+    // Small vessels should scatter through the room. The same finite blast
+    // impulse as furniture would launch a light cup at kilometres per second.
+    const float limit = mass*10.f; // at most 10 m/s of added velocity
+    const float length = impulse.length();
+    if(length>limit)
+      impulse *= limit/length;
+    return impulse;
+    },caster);
+  if(TestBench::isActive()) {
+    char buf[256];
+    std::snprintf(buf,sizeof(buf),"spell physics impact id %d at %.9g %.9g %.9g npc %zu items %zu vobs %zu",
+                  spellId,double(point.x),double(point.y),double(point.z),npcHits,itemHits,vobHits);
+    TestBench::note(buf);
+    }
+  }
+
+void World::startSpellField(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target) {
+  if(!Gothic::physicsFlags().spellPhysics ||
+     script().physicalSpell(spellId)!=GameScript::PhysicalSpell::Whirlwind)
+    return;
+  int seconds = 10;
+  if(auto* duration = script().findSymbol("SPL_TIME_WHIRLWIND"))
+    seconds = std::clamp(duration->get_int(),1,60);
+  if(spellFields.size()>=16)
+    spellFields.erase(spellFields.begin());
+  spellFields.push_back({point,caster,target,tickCount()+uint64_t(seconds)*1000,spellId});
+  if(TestBench::isActive()) {
+    char buf[192];
+    std::snprintf(buf,sizeof(buf),"spell physics field start id %d at %.9g %.9g %.9g duration %d",
+                  spellId,double(point.x),double(point.y),double(point.z),seconds);
+    TestBench::note(buf);
+    }
+  }
+
+void World::tickSpellFields(uint64_t dt) {
+  using namespace Tempest;
+  if(!Gothic::physicsFlags().spellPhysics) {
+    spellFields.clear();
+    return;
+    }
+  for(auto i=spellFields.begin();i!=spellFields.end();) {
+    if(tickCount()<i->until) {
+      ++i;
+      continue;
+      }
+    if(TestBench::isActive()) {
+      char buf[192];
+      std::snprintf(buf,sizeof(buf),"spell physics field end id %d at %.9g %.9g %.9g",i->spellId,
+                    double(i->center.x),double(i->center.y),double(i->center.z));
+      TestBench::note(buf);
+      }
+    i = spellFields.erase(i);
+    }
+  const float seconds = float(std::min<uint64_t>(dt,50))*0.001f;
+  if(seconds<=0.f)
+    return;
+  for(const auto& field:spellFields) {
+    auto* caster = wobj.validateNpc(field.caster);
+    auto impulseAt = [&](const Vec3& position) {
+      const auto r = position-field.center;
+      const float distance = Vec3(r.x,0,r.z).length();
+      if(distance>=350.f || r.y>400.f || r.y< -100.f)
+        return Vec3();
+      const auto from = field.center+Vec3(0,75,0);
+      if(physic()->ray(from,position+Vec3(0,30,0)).hasCol)
+        return Vec3();
+      const float falloff = 1.f-distance/350.f;
+      // World-space force in newtons: lift loses strength above the vortex,
+      // while the horizontal component turns inward and around its centre.
+      const Vec3 force(-r.z*4.f-r.x*2.f+80.f,
+                       std::clamp(1800.f-r.y*6.f,-750.f,1800.f),
+                       r.x*4.f-r.z*2.f);
+      return force*(seconds*falloff);
+      };
+    detectNpc(field.center,550.f,[&](Npc& npc) {
+      if(&npc==field.target && &npc!=field.caster)
+        npc.addSpellImpulse(impulseAt(npc.position()),false,caster);
+      });
+    detectItem(field.center,550.f,[&](Item& item) {
+      const auto impulse = impulseAt(item.position());
+      if(impulse.quadLength()>0.f)
+        item.addSpellImpulse(impulse,caster);
+      });
+    }
+  }
+
 Bullet& World::shootSpell(const Item &itm, const Npc &npc, const Npc *target) {
   Tempest::Vec3   dir     = {1.f,0.f,0.f};
   auto            pos     = npc.collosionCenter();
@@ -795,6 +1226,29 @@ Sound World::addLandHitEffect(ItemMaterial src, zenkit::MaterialGroup reciver, c
   return addHitEffect(materialTag(src),materialTag(reciver),"IHL",pos);
   }
 
+void World::emitPhysicsNoise(const PhysicsNoise& noise) {
+  // Gothic has no CS_IHL_CL_* instances. Its existing clay contact samples are
+  // named for the reverse pair (wood/metal/stone hitting clay).
+  const auto surface = noise.surface==zenkit::MaterialGroup::UNDEFINED || noise.surface==zenkit::MaterialGroup::NONE ?
+                       "ST" : materialTag(noise.surface);
+  const auto claySurface = noise.surface==zenkit::MaterialGroup::WOOD ? "WO" :
+                           noise.surface==zenkit::MaterialGroup::METAL ? "ME" : "ST";
+  std::string name = noise.material==MAT_CLAY ? std::string("CS_IHL_")+claySurface+"_CL.wav" :
+                                              std::string("CS_IHL_")+materialTag(noise.material)+'_'+surface;
+  auto sound = Sound(*this,Sound::T_Regular,name,noise.position,noise.radius,false);
+  // Some Gothic installations reference clay samples without shipping them.
+  // Reuse the existing vessel impact in that case, keeping the event's material.
+  if(sound.isEmpty() && noise.material==MAT_CLAY) {
+    name = std::string("CS_IHL_GL_")+surface;
+    sound = Sound(*this,Sound::T_Regular,name,noise.position,noise.radius,false);
+    }
+  sound.setVolume(sound.volume()*noise.volume);
+  sound.play();
+  if(TestBench::isActive() || TestBench::isPhysicsNoiseDebug())
+    TestBench::physicsNoise(noise,name,!sound.isEmpty());
+  wobj.emitPhysicsNoise(noise);
+  }
+
 Sound World::addWeaponBlkEffect(ItemMaterial src, ItemMaterial reciver, const Tempest::Matrix4x4& pos) {
   // IAI - item attacks item
   return addHitEffect(materialTag(src),materialTag(reciver),"IAI",pos);
@@ -842,6 +1296,10 @@ void World::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float rang
                         std::shared_ptr<LipSync::Track>* voice) {
   auto sfx = wsound.addDlgSound(s,pos,range,timeLen,voice);
   sfx.play();
+  }
+
+void World::detectMover(const std::function<void(MoveTrigger&)>& f) {
+  wobj.detectMover(f);
   }
 
 void World::addTrigger(AbstractTrigger* trigger) {

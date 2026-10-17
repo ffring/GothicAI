@@ -1,0 +1,19 @@
+# MOVABLE_VOBS=0 must be configured before world construction.
+seed 73013
+cheat god
+set time 12 0
+movable off
+living on
+movable setup
+movable cast-ready
+spell equip 23
+wait 1200
+overlay off
+view full
+cadence normal
+wait 34
+movable measure off
+movable blast
+cadence wait
+movable checkpoint
+movable report

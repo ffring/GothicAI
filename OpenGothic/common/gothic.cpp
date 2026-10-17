@@ -92,6 +92,17 @@ Gothic::Gothic() {
   defaults->set("GAME", "useQuickSaveKeys",    1);
   defaults->set("GAME", "manualAim",           1); // the bow aimed by hand (game/archery)
   defaults->set("GAME", "npcManualAim",        1); // npc archers aim by hand too (game/archerai)
+  defaults->set("GAME", "ragdoll",             1); // physical death/KO bodies; GAME/ragdoll=0 keeps animation-only behavior
+  defaults->set("GAME", "ragdoll_quest_guard", 1);
+  defaults->set("GAME", "living_bodies",       1);
+  defaults->set("GAME", "arrow_physics",       1);
+  defaults->set("GAME", "arrow_sticking",      1);
+  defaults->set("GAME", "spell_physics",       1);
+  defaults->set("GAME", "movable_vobs",        1);
+  defaults->set("GAME", "physics_noise",       1);
+  defaults->set("GAME", "destruction",         1);
+  defaults->set("GAME", "character_virtual",   1);
+  defaults->set("GAME", "npc_character_virtual",1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -589,6 +600,7 @@ void Gothic::tick(uint64_t dt) {
 
   // before world tick: queued external AI commands apply in the same frame
   onTick(dt);
+  refreshPhysicsFlags();
   if(game)
     game->tick(dt);
   }
@@ -891,9 +903,33 @@ void Gothic::detectGothicVersion() {
     }
   }
 
+void Gothic::refreshPhysicsFlags() {
+  physicsFlagsCache = {
+    settingsGetI("GAME","ragdoll")!=0,
+    settingsGetI("GAME","ragdoll_quest_guard")!=0,
+    settingsGetI("GAME","living_bodies")!=0,
+    settingsGetI("GAME","arrow_physics")!=0,
+    settingsGetI("GAME","arrow_sticking")!=0,
+    settingsGetI("GAME","spell_physics")!=0,
+    settingsGetI("GAME","movable_vobs")!=0,
+    settingsGetI("GAME","physics_noise")!=0,
+    settingsGetI("GAME","destruction")!=0,
+    settingsGetI("GAME","character_virtual")!=0,
+    settingsGetI("GAME","npc_character_virtual")!=0
+    };
+  }
+
 void Gothic::setupSettings() {
+  // settingsSetI/S/F emit onSettingsChanged synchronously. Publish before any
+  // same-dispatch actor creation, prepare or input query can consume the change.
+  refreshPhysicsFlags();
   if(game!=nullptr)
     game->setupSettings();
+  if(auto* activeWorld = world()) {
+    activeWorld->physic()->setMovableVobsEnabled(physicsFlagsCache.movableVobs);
+    activeWorld->physic()->setPhysicsNoiseEnabled(physicsFlagsCache.physicsNoise);
+    activeWorld->physic()->setDestructionEnabled(physicsFlagsCache.destruction);
+    }
 
   const float soundVolume = settingsSoundVolume();
   if(sndDev)
@@ -1047,6 +1083,9 @@ bool Gothic::playvideoex(std::string_view name, bool, bool) {
   }
 
 bool Gothic::printscreen(std::string_view msg, int posx, int posy, std::string_view font, int timesec) {
+  // Script notifications still return normally in the CPU runner, which has no fonts or UI.
+  if(Resources::isHeadless())
+    return false;
   onPrintScreen(msg,posx,posy,timesec,Resources::font(font, Resources::FontType::Normal, 1));
   return false;
   }

@@ -8,6 +8,10 @@ connection answers with SSE as the model transcribes with a fixed delay (480 ms)
 `transcript.text.delta{delta}`, after the terminating chunk one `transcript.text.done{text}`, then
 `[DONE]`; failures come as `error{error{message}}`. audio.cpp does not pad the end of a stream, so
 `finish` sends `tail` seconds of silence first, or the last word stays inside the model's delay.
+
+The model takes no language and at times writes Russian speech as Polish or Portuguese. `language=`
+is our patch to audio.cpp (deploy/voxtral/audiocpp-language.patch): the decoder never picks a token
+with letters outside that language. An unpatched server ignores it.
 """
 
 from __future__ import annotations
@@ -75,8 +79,10 @@ class VoxtralRealtime:
         await self._lock.acquire()
         try:
             reader, writer = await self._connect()
-            # no language: audio.cpp's voxtral_realtime knows only "Auto", the model detects it itself
-            query = f"model={quote(self.model)}&sample_rate={RATE}&channels=1&sample_format=s16le"
+            query = (
+                f"model={quote(self.model)}&sample_rate={RATE}&channels=1&sample_format=s16le"
+                f"&language={quote(lang)}"
+            )
             writer.write(
                 self._head(
                     "POST",

@@ -16,6 +16,7 @@ class Serialize;
 class ObjVisual;
 class Npc;
 class Item;
+namespace TestBench { bool ragdollBodyDrawable(const Npc& npc); }
 
 class MdlVisual final {
   public:
@@ -33,6 +34,7 @@ class MdlVisual final {
     void                           setVisual(const Skeleton *visual);
 
     void                           setObjMatrix(const Tempest::Matrix4x4 &m, bool syncAttach = false);
+    bool                           minSkinnedVertex(float fatness, Tempest::Vec3& point) const;
 
     void                           setHeadRotation(float dx, float dz);
     Tempest::Vec2                  headRotation() const;
@@ -82,10 +84,30 @@ class MdlVisual final {
     void                           setTorch(bool t, World& owner);
     bool                           isUsingTorch() const;
 
+    Pose&                          pose() { return *skInst; }
     const Pose&                    pose() const { return *skInst; }
+    // A render-only physical layer: gameplay and aiming continue to read the ordinary Pose.
+    // Both setters return whether attached visuals need synchronization.
+    bool                           setPhysicalPose(const std::vector<Tempest::Matrix4x4>& physical,
+                                                   const std::vector<size_t>& bones, float weight);
+    bool                           clearPhysicalPose();
+    const Tempest::Matrix4x4&       renderedBone(size_t bone) const;
+    struct ArrowPinProbe {
+      size_t             bone=size_t(-1);
+      Tempest::Matrix4x4 local, world;
+      };
+    bool                           stickArrow(MeshObjects::Mesh&& arrow, size_t bone,
+                                              const Tempest::Matrix4x4& worldMatrix, std::string_view visualName={});
+    void                           saveStuckArrows(Serialize& fout) const;
+    bool                           loadStuckArrows(Serialize& fin, World& world);
+    void                           clearStuckArrows();
+    size_t                         stuckArrowCount() const { return stuckArrows.size(); }
+    bool                           stuckArrowProbe(size_t index, ArrowPinProbe& out) const;
+    const HitZones&                hitZoneShape() const { return hitZones; }
     // the animation of that name plays k times as fast from its next start (1: as it is)
     void                           setAnimSpeed(std::string_view name, float k);
-    bool                           updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force);
+    bool                           updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force,
+                                                    bool pausePose=false);
     bool                           updateFootIk(Npc& npc, World& world, uint64_t dt, bool alignedToGround);
     bool                           hasQuadrupedIk() const;
     bool                           hasGaze() const;
@@ -101,8 +123,11 @@ class MdlVisual final {
     auto                           mapHeadBone() const -> Tempest::Vec3;
     // the arrow on the string as posed: its nock, where it points
     bool                           arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    // Rendered bow/arrow attachment bounds for the camera's test-bench visibility diagnostic.
+    bool                           aimAttachmentBounds(bool ammo, Tempest::Matrix4x4& matrix, Tempest::Vec3 (&bounds)[2]) const;
     // where an arrow passing from-to hits the body (its bones), t: how far from 'from'
-    auto                           rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
+    auto                           rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t,
+                                              size_t* bone=nullptr) const -> HitZones::Zone;
     bool                           hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string                    hitZonesDump() const;
     void                           hitZonesPosed(std::vector<HitZones::Posed>& out) const;
@@ -201,6 +226,15 @@ class MdlVisual final {
       size_t                     boneId=size_t(-1);
       };
 
+    struct ArrowPin {
+      MeshObjects::Mesh  view;
+      std::string        visual;
+      size_t             bone=size_t(-1);
+      Tempest::Matrix4x4 local;
+      };
+
+    static constexpr size_t MaxStuckArrows=64;
+
     void implSetBody(Npc* npc, World& world, MeshObjects::Mesh&& body, const int32_t version);
     void setSlotAttachment(MeshObjects::Mesh&& itm, std::string_view bone);
 
@@ -230,6 +264,7 @@ class MdlVisual final {
     MeshAttach                     ammunition, stateItm;
     std::vector<MeshAttach>        item;
     std::vector<MeshAttach>        attach;
+    std::vector<ArrowPin>          stuckArrows;
 
     std::vector<PfxSlot>           effects;
     PfxSlot                        pfx;
@@ -248,5 +283,8 @@ class MdlVisual final {
     WeaponState                    fgtMode=WeaponState::NoWeapon;
     AnimationSolver                solver;
     std::unique_ptr<Pose>          skInst;
+    std::vector<Tempest::Matrix4x4> renderedPose;
+    std::vector<uint8_t>           renderedMask;
+    friend bool TestBench::ragdollBodyDrawable(const Npc& npc);
   };
 

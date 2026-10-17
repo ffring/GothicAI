@@ -1,0 +1,123 @@
+# Isolated equal-duration contacts, followed by three support-body cases.
+seed 73013
+cheat god
+set time 12 0
+movable on
+off: character off
+off: npccharacter off
+on: character on
+on: npccharacter on
+view full
+overlay on
+cam auto 250 80
+walkmode walk
+
+release all
+character prop item
+cam auto 250 80
+wait 700
+rec push_item
+hold forward 3000
+wait 3000
+character prop-checkpoint
+stop
+character cleanup
+
+release all
+character prop mug
+cam auto 250 80
+wait 700
+rec push_mug
+hold forward 3000
+wait 3000
+character prop-checkpoint
+stop
+character cleanup
+
+release all
+character prop barrel
+cam auto 250 80
+wait 700
+rec push_barrel
+hold forward 3000
+wait 3000
+character prop-checkpoint
+stop
+character cleanup
+
+release all
+character prop table
+cam auto 250 80
+wait 700
+rec push_table
+hold forward 3000
+wait 3000
+character prop-checkpoint
+stop
+character cleanup
+
+release all
+character ride dynamic
+cam auto 250 80
+wait 700
+rec ride_dynamic
+character ride-start
+wait 4000
+character ride-checkpoint
+stop
+character cleanup
+
+release all
+character ride kinematic
+cam auto 250 80
+wait 700
+rec ride_kinematic
+character ride-start
+wait 4000
+character ride-checkpoint
+stop
+character cleanup
+
+release all
+character ride rotation
+cam auto 250 80
+wait 700
+rec ride_rotation
+character ride-start
+wait 4000
+character ride-checkpoint
+stop
+character cleanup
+
+release all
+character ride kinematic npc
+cam auto 250 80
+wait 700
+rec ride_kinematic_npc
+character ride-start
+wait 4000
+character ride-checkpoint
+stop
+character cleanup
+
+release all
+character ride rotation npc
+cam auto 250 80
+wait 700
+rec ride_rotation_npc
+character ride-start
+wait 4000
+character ride-checkpoint
+stop
+character cleanup
+
+release all
+character ride mover
+cam auto 250 80
+wait 700
+rec ride_mover
+character ride-start
+wait 4000
+character ride-checkpoint
+stop
+character cleanup

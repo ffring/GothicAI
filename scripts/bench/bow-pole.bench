@@ -1,0 +1,75 @@
+# Near-vertical manual shots (~85 degrees down), 30 cm from Lobart's roof edge.
+# Regression for bow roll and torso yaw during the reload; adapted from recoil2.bench.
+# The aim goes straight at the wolf (aimat without mouse), so the side camera does not move the aim.
+# A: the bow side, two shots with the reload between; B: the drawing hand's side; C: the same 4x slower.
+cheat god
+set time 12 0
+overlay off
+overlay bright off
+view full
+stats bow 100 talent 0
+equip ItRw_Bow_L_01
+give ItRw_Arrow 50
+goto pos 14591 2349 -14597
+wait 600
+face 247.5
+edge 247.5 2000 60 exact
+wait 300
+clear 2500
+insert Wolf
+wait 300
+put WOLF 160 0
+wait 300
+pin WOLF 160 0 -733
+wait 300
+cam lift off
+manual on
+draw bow
+wait 1500
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 30 exact
+wait 300
+edgedist 247.5
+aimat WOLF body
+cam follow 260 60 80
+cam look 110
+# A: the bow side
+press action
+wait 2000
+rec down_left
+wait 400
+release action
+wait 2200
+press action
+wait 2000
+release action
+wait 1800
+stop
+# B: the drawing hand's side
+cam follow 260 60 -80
+cam look 110
+wait 300
+press action
+wait 2000
+rec down_right
+wait 400
+release action
+wait 2500
+stop
+# C: slowed down, the bow side
+cam follow 260 60 80
+cam look 110
+wait 300
+press action
+wait 2000
+slowmo 4
+rec down_slow
+wait 300
+release action
+wait 2000
+stop
+slowmo 1
+hp WOLF
+aimat off

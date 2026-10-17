@@ -363,6 +363,14 @@ void ProtoMesh::shapeOfAttach(const std::vector<std::vector<Tempest::Vec3>>& pt)
   }
 
 void ProtoMesh::shapeOfSkin(const PackedMesh& pkg) {
+  // Meshlet buffers contain padding. Retain only vertices referenced by the
+  // actual index buffer, including seam normals used by the fatness shader.
+  std::vector<bool> used(pkg.verticesA.size(),false);
+  for(const auto index:pkg.indices)
+    if(index<pkg.verticesA.size() && !used[index]) {
+      used[index]=true;
+      skinVertices.push_back(pkg.verticesA[index]);
+      }
   // ...a skinned vertex at the bone it follows the most, in that bone's frame
   for(auto& v:pkg.verticesA) {
     int best = -1;
@@ -376,6 +384,46 @@ void ProtoMesh::shapeOfSkin(const PackedMesh& pkg) {
       nodePoints.resize(v.boneId[best]+1u);
     nodePoints[v.boneId[best]].emplace_back(v.pos[best][0],v.pos[best][1],v.pos[best][2]);
     }
+  }
+
+bool ProtoMesh::minSkinnedVertex(const Matrix4x4* worldBones,size_t count,const Matrix4x4& object,
+                                float fatness,Vec3& point) const {
+  if(worldBones==nullptr || count==0 || skinVertices.empty() || !std::isfinite(fatness))
+    return false;
+  Vec3 minimum;
+  bool found=false;
+  for(const auto& vertex:skinVertices) {
+    Vec3 posed;
+    float weight=0.f;
+    for(size_t r=0;r<4;++r) {
+      if(!std::isfinite(vertex.weights[r]) || vertex.weights[r]<0.f)
+        return false;
+      if(vertex.weights[r]==0.f)
+        continue;
+      if(vertex.boneId[r]>=count)
+        return false;
+      Vec3 part(vertex.pos[r][0],vertex.pos[r][1],vertex.pos[r][2]);
+      worldBones[vertex.boneId[r]].project(part);
+      posed+=part*vertex.weights[r];
+      weight+=vertex.weights[r];
+      }
+    if(weight<=0.f)
+      continue;
+    Vec3 normal;
+    normal.x=object.at(0,0)*vertex.norm[0]+object.at(1,0)*vertex.norm[1]+object.at(2,0)*vertex.norm[2];
+    normal.y=object.at(0,1)*vertex.norm[0]+object.at(1,1)*vertex.norm[1]+object.at(2,1)*vertex.norm[2];
+    normal.z=object.at(0,2)*vertex.norm[0]+object.at(1,2)*vertex.norm[1]+object.at(2,2)*vertex.norm[2];
+    posed+=normal*(fatness*.5f);
+    if(!std::isfinite(posed.x) || !std::isfinite(posed.y) || !std::isfinite(posed.z))
+      return false;
+    if(!found || posed.y<minimum.y) {
+      minimum=posed;
+      found=true;
+      }
+    }
+  if(found)
+    point=minimum;
+  return found;
   }
 
 size_t ProtoMesh::skinedNodesCount() const {
@@ -463,6 +511,12 @@ ProtoMesh::Morph ProtoMesh::mkAnimation(const zenkit::MorphAnimation& a) {
       const float d = std::sqrt(s.x*s.x + s.y*s.y + s.z*s.z);
       sum     += d;
       ret.peak = std::max(ret.peak,d);
+      ret.moveMin.x = std::min(ret.moveMin.x,s.x);
+      ret.moveMin.y = std::min(ret.moveMin.y,s.y);
+      ret.moveMin.z = std::min(ret.moveMin.z,s.z);
+      ret.moveMax.x = std::max(ret.moveMax.x,s.x);
+      ret.moveMax.y = std::max(ret.moveMax.y,s.y);
+      ret.moveMax.z = std::max(ret.moveMax.z,s.z);
       }
     ret.strength[f] = sum/float(ret.samplesPerFrame);
     maxStrength     = std::max(maxStrength, ret.strength[f]);

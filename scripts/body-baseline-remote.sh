@@ -23,7 +23,7 @@ remote_script() {
 }
 
 sync_sources() {
-  local assets="${GOTHIC_DIR:-/Volumes/shared/projects/Gothic II}"
+  local assets="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
   local save="${BASELINE_SAVE:-$ROOT/save_slot_1.sav}"
   [[ -d "$assets/Data" && -d "$assets/_work" && -f "$save" ]] || {
     echo 'Set GOTHIC_DIR and BASELINE_SAVE to your own Gothic II data and reference save' >&2

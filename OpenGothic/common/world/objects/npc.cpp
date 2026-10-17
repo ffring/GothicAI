@@ -2,6 +2,8 @@
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Log>
+#include <cctype>
+#include <cstdlib>
 
 #include "graphics/mesh/skeleton.h"
 #include "graphics/visualfx.h"
@@ -9,7 +11,10 @@
 #include "game/bodyobservations.h"
 #include "game/bodycontroller.h"
 #include "game/bodytrajectory.h"
+#include "game/npckeys.h"
 #include "game/serialize.h"
+#include "physics/physicsnoise.h"
+#include "game/ragdollsave.h"
 #include "game/gamescript.h"
 #include "utils/string_frm.h"
 #include "world/objects/interactive.h"
@@ -22,6 +27,7 @@
 #include "testbench.h"
 #include "gothic.h"
 #include "resources.h"
+#include "frameprofile.h"
 
 #include <chrono>
 #include <iomanip>
@@ -83,6 +89,7 @@ void Npc::GoTo::save(Serialize& fout) const {
   }
 
 void Npc::GoTo::load(Serialize& fin) {
+  pointDistance = 0.f;
   fin.read(npc, reinterpret_cast<uint8_t&>(flag), wp, pos);
   //NOTE: no real need to version check
   //if(fin.version()<53) {
@@ -117,6 +124,7 @@ void Npc::GoTo::clear() {
   npc  = nullptr;
   wp   = nullptr;
   flag = Npc::GT_No;
+  pointDistance = 0.f;
   }
 
 void Npc::GoTo::set(Npc* to, Npc::GoToHint hnt) {
@@ -139,6 +147,7 @@ void Npc::GoTo::set(const Item* to) {
 void Npc::GoTo::set(const Vec3& to) {
   pos  = to;
   flag = GT_Point;
+  pointDistance = 0.f;
   }
 
 void Npc::GoTo::setFlee() {
@@ -253,10 +262,13 @@ Npc::Npc(World &owner, size_t instance, std::string_view waypoint, NpcProcessPol
   }
 
 Npc::~Npc(){
+  NpcKeys::forget(this);
   BodyObservations::forget(this);
   TestBench::bodyForget(this);
   if(currentInteract)
     currentInteract->detach(*this,true);
+  if(hnpc && hnpc->user_ptr==this)
+    hnpc->user_ptr=nullptr;
   }
 
 void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
@@ -303,9 +315,34 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
   fout.setEntry("worlds/",fout.worldName(),directory,id,"/inventory");
   if(!invent.isEmpty() || id==size_t(-1))
     invent.save(fout);
+
+  // Optional independent entry: the old NPC/visual byte layouts remain readable.
+  fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll");
+  RagdollSave::Snapshot state;
+  state.legacyDown = ragdollLegacyDown || ragdollRecovering;
+  state.body = ragdoll ? std::optional<Ragdoll::State>(ragdoll->state()) : ragdollDormant;
+  RagdollSave::save(fout,state);
+  fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-recovery");
+  visual.pose().saveRagdollRecovery(fout);
+  fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-quest-return");
+  RagdollSave::saveQuestReturn(fout,ragdollQuestReturn);
+  if(visual.stuckArrowCount()>0) {
+    fout.setEntry("worlds/",fout.worldName(),directory,id,"/stuck-arrows");
+    visual.saveStuckArrows(fout);
+    }
   }
 
 void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
+  releaseRagdoll(false);
+  ragdollDormant.reset();
+  ragdollRecovering = false;
+  ragdollHasLastPosition = false;
+  ragdollLastVelocity = {};
+  ragdollQuestReturn = {};
+  ragdollQuestSpellThrow = false;
+  ragdollQuestSampleTick = 0;
+  ragdollQuestReturns = 0;
+  ragdollQuestFrom = {};
   fin.setEntry("worlds/",fin.worldName(),directory,id,"/data");
 
   hnpc = std::make_shared<zenkit::INpc>();
@@ -318,6 +355,8 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
     sym->set_instance(hnpc);
 
   fin.read(x,y,z,angle,sz);
+  resetCharacterVisualHeight();
+  lieVisualYOffset=0;
   fin.read(wlkMode,trGuild,talentsSk,talentsVl,refuseTalkMilis);
   durtyTranform = TR_Pos|TR_Rot|TR_Scale;
   if(fin.version()<55)
@@ -379,6 +418,46 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
     visual.setTorch(true,owner);
   if(isDead())
     physic.setEnable(false);
+
+  if(fin.setEntry("worlds/",fin.worldName(),directory,id,"/ragdoll-quest-return") &&
+     !RagdollSave::loadQuestReturn(fin,ragdollQuestReturn))
+    Log::e("ragdoll: invalid quest NPC return point");
+
+  // Absence denotes an old save: existing dead/KO poses stay animated until a new down event.
+  ragdollLegacyDown = isDown();
+  if(fin.setEntry("worlds/",fin.worldName(),directory,id,"/ragdoll")) {
+    RagdollSave::Snapshot state;
+    if(RagdollSave::load(fin,state)) {
+      ragdollLegacyDown = state.legacyDown;
+      if(state.body && isDown())
+        ragdollDormant = std::move(state.body);
+      if(fin.setEntry("worlds/",fin.worldName(),directory,id,"/ragdoll-recovery")) {
+        try {
+          visual.pose().loadRagdollRecovery(fin);
+          ragdollRecovering = !ragdollDormant && visual.pose().isRagdollBlending();
+          } catch(const std::exception& e) {
+          visual.pose().clearRagdollPose();
+          Log::e("ragdoll recovery load: ",e.what());
+          }
+        }
+      if(ragdollDormant && Gothic::physicsFlags().ragdoll)
+        prepareRagdoll();
+      else if(visual.pose().isRagdollBlending())
+        updateAnimation(0,true); // Optional recovery must be visible before the first loaded frame.
+      } else {
+      Log::e("ragdoll: invalid saved body, keeping the animated pose");
+      }
+    }
+  // Existing save entries distinguish a live airborne throw from KO recovery.
+  const auto movement = mvAlgo.state();
+  ragdollQuestSpellThrow = ragdollQuestReturn.armed && !isDown() &&
+      !ragdollLegacyDown && !ragdollRecovering &&
+      (movement==MoveAlgo::InAir || movement==MoveAlgo::Falling ||
+       movement==MoveAlgo::Swim || movement==MoveAlgo::Dive);
+  if(Gothic::physicsFlags().arrowSticking &&
+     fin.setEntry("worlds/",fin.worldName(),directory,id,"/stuck-arrows") &&
+     !visual.loadStuckArrows(fin,owner))
+    Log::e("arrows: invalid saved NPC attachments, keeping the body without arrows");
   }
 
 void Npc::postValidate() {
@@ -409,11 +488,10 @@ void Npc::loadAiState(Serialize& fin) {
   fin.read(aiState.funcIni,aiState.funcLoop,aiState.funcEnd,aiState.sTime,aiState.eTime,aiState.started,aiState.loopNextTime);
   fin.read(aiPrevState);
 
-#ifndef NDEBUG
+  aiState.hint = "";
   if(auto s = owner.script().findSymbol(aiState.funcIni.ptr)) {
     aiState.hint = s->name().c_str();
     }
-#endif
 
   aiQueue.load(fin);
   aiQueueOverlay.load(fin);
@@ -447,11 +525,56 @@ void Npc::loadTrState(Serialize& fin) {
 bool Npc::setPosition(float ix, float iy, float iz) {
   if(x==ix && y==iy && z==iz)
     return false;
+  const bool liveTeleport = !isDown() && !ragdoll && (position()-Vec3(ix,iy,iz)).length()>300.f;
+  const auto* skeleton = visual.visualSkeleton();
+  std::optional<Ragdoll::State> movedBody, movedDormant;
+  auto relocate = [&](Ragdoll::State& state) {
+    // A disabled body's origin can differ from the legacy animated origin.
+    const Vec3 at(float(double(ix)+(double(state.rootTransform.at(3,0))-double(x))),
+                  float(double(iy)+(double(state.rootTransform.at(3,1))-double(y))),
+                  float(double(iz)+(double(state.rootTransform.at(3,2))-double(z))));
+    return skeleton!=nullptr && Ragdoll::relocateState(*skeleton,state,at);
+    };
+  if(ragdoll) {
+    movedBody = ragdoll->state();
+    if(!relocate(*movedBody))
+      return false;
+    }
+  if(ragdollDormant) {
+    movedDormant = *ragdollDormant;
+    if(!relocate(*movedDormant))
+      return false;
+    }
+  if(movedBody) {
+    if(!ragdoll->restore(*movedBody))
+      return false;
+    ragdollObjectMatrix = ragdoll->rootTransform();
+    }
+  if(movedDormant)
+    ragdollDormant = std::move(movedDormant);
   x = ix;
   y = iy;
   z = iz;
+  resetCharacterVisualHeight();
+  if(!isPlayer() && isHuman())
+    mvAlgo.resetCharacterVirtual();
+  if(liveTeleport) {
+    // Recreate at the destination instead of sweeping a kinematic body through
+    // every item between a scripted teleport's endpoints.
+    living.reset();
+    arrowImpacts.clear();
+    // Large scripted relocations start a new history; normal movement samples
+    // must retain the last supported position when the NPC steps off an edge.
+    ragdollQuestReturn = {};
+    ragdollQuestSpellThrow = false;
+    ragdollQuestSampleTick = 0;
+    }
+  ragdollHasLastPosition = false;
+  ragdollLastVelocity = {};
   durtyTranform |= TR_Pos;
   physic.setPosition(Vec3{x,y,z});
+  if(movedBody)
+    syncRagdoll();
   return true;
   }
 
@@ -460,10 +583,22 @@ bool Npc::setPosition(const Tempest::Vec3& pos) {
   }
 
 void Npc::setViewPosition(const Tempest::Vec3& pos) {
+  // Routine legacy alignment must not move the frozen physical pose. Explicit
+  // teleports use setPosition and translate the dormant state there.
   x = pos.x;
   y = pos.y;
   z = pos.z;
   durtyTranform |= TR_Pos;
+  }
+
+void Npc::syncCharacterVirtualSupport(const Tempest::Vec3& pos) {
+  // Animation already sampled these feet before the physics step. Transport
+  // that sample with the accepted support motion so a lift does not become a
+  // fictitious stair correction at the same timestamp.
+  if(characterVisualHasSample && characterVisualSampleTick==owner.tickCount())
+    characterVisualSamplePosition += pos-position();
+  setViewPosition(pos);
+  updateTransform();
   }
 
 int Npc::aiOutputOrderId() const {
@@ -640,11 +775,23 @@ bool Npc::checkHealth(bool onChange, bool allowUnconscious) {
       return false;
       }
     }
-  physic.setEnable(true);
+  physic.setEnable(ragdoll==nullptr);
   return true;
   }
 
 void Npc::onNoHealth(bool death, HitSound sndMask) {
+  living.reset();
+  ragdollQuestSpellThrow = false;
+  if(!isDown()) {
+    updateRagdollQuestAnchor();
+    const auto hazards = ragdollQuestReturn.armed ? ragdollQuestReturn.hazards : uint8_t(0);
+    ragdollQuestReturn.armed = !death && !isPlayer() && isHuman() &&
+        Gothic::physicsFlags().questGuard && ragdollQuestReturn.hasAnchor;
+    ragdollQuestReturn.hazards = ragdollQuestReturn.armed ? hazards : 0;
+    ragdollDormant.reset();
+    }
+  ragdollLegacyDown = false;
+  ragdollRecovering = false;
   invent.switchActiveWeapon(*this,Item::NSLOT);
   visual.dropWeapon(*this);
   visual.dropShield(*this);
@@ -688,6 +835,514 @@ void Npc::onNoHealth(bool death, HitSound sndMask) {
                         ",\"down\":" + (isDown() ? "true" : "false") + ",\"dead\":" + (isDead() ? "true" : "false"));
   }
 
+bool Npc::setRagdollDown(bool death) {
+  hnpc->attribute[ATR_HITPOINTS] = death ? 0 : 1;
+  onNoHealth(death,HS_NoSound);
+  return isDown();
+  }
+
+void Npc::addRagdollImpulse(const Vec3& impulse) {
+  if(ragdoll)
+    ragdoll->addImpulse(impulse);
+  }
+
+float Npc::physicsMass() const {
+  if(ragdoll)
+    return ragdoll->mass();
+  if(living)
+    return living->mass();
+  const auto* skeleton = visual.visualSkeleton();
+  const float base = skeleton!=nullptr ? Ragdoll::speciesMass(skeleton->name()) : 75.f;
+  return std::max(0.01f,base*std::abs(sz[0]*sz[1]*sz[2]));
+  }
+
+bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction, Npc* culprit) {
+  if(!Gothic::physicsFlags().spellPhysics || spellFrozen() ||
+     !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
+     impulseNs.quadLength()<=0.f)
+    return false;
+  if(ragdoll) {
+    ragdoll->addImpulse(impulseNs,culprit);
+    return true;
+    }
+  if(isDown()) {
+    pendingSpellImpulse += impulseNs;
+    spellImpulseCulprit = culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
+    return true;
+    }
+  updateRagdollQuestAnchor();
+  if(!mvAlgo.addSpellImpulse(impulseNs,physicsMass(),reaction))
+    return false;
+  spellImpulseCulprit = culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
+  if(living)
+    living->setNoiseCulprit(culprit);
+  if(!isPlayer() && isHuman() && ragdollQuestReturn.hasAnchor &&
+     Gothic::physicsFlags().questGuard) {
+    if(!ragdollQuestReturn.armed)
+      ragdollQuestReturn.hazards = 0;
+    ragdollQuestReturn.armed = true;
+    ragdollQuestSpellThrow = true;
+    }
+  return true;
+  }
+
+void Npc::suspendRagdoll() {
+  pendingSpellImpulse = {};
+  spellImpulseCulprit.reset();
+  living.reset();
+  arrowImpacts.clear();
+  ragdollHasLastPosition = false;
+  ragdollLastVelocity = {};
+  const bool hadBody = ragdoll!=nullptr;
+  if(hadBody)
+    ragdollDormant = ragdoll->state();
+  releaseRagdoll(false);
+  if(hadBody)
+    physic.setEnable(false);
+  }
+
+bool Npc::createRagdoll() {
+  const auto* skeleton = visual.visualSkeleton();
+  if(skeleton==nullptr || !visual.hitZoneShape().isValid())
+    return false;
+  updateAnimation(0,true);
+  Vec3 velocity;
+  const auto now = owner.tickCount();
+  if(ragdollHasLastPosition && now>=ragdollLastTick && now-ragdollLastTick<=250) {
+    // A hit before this NPC's tick, or immediately after the world tick, leaves its root at
+    // the last live sample. Carry that sample's velocity instead of treating it as a stop.
+    velocity = ragdollLastVelocity;
+    const auto delta = position()-ragdollLastPosition;
+    if(now>ragdollLastTick && delta.length()>0.f)
+      velocity = delta*(1000.f/float(now-ragdollLastTick));
+    const float speed = velocity.length();
+    if(!std::isfinite(speed))
+      velocity = {}; else if(speed>3000.f)
+      velocity *= 3000.f/speed;
+    }
+  auto body = owner.physic()->createRagdoll(*skeleton,visual.hitZoneShape(),visual.pose().transform(),
+                                          visual.pose().boneCount(),visual.transform(),velocity);
+  if(!body || !body->valid())
+    return false;
+  if(ragdollDormant && !body->restore(*ragdollDormant)) {
+    ragdollDormant.reset();
+    return false;
+    }
+  ragdollDormant.reset();
+  ragdoll = std::move(body);
+  ragdoll->setNpc(this);
+  if(const auto culprit = spellImpulseCulprit.lock())
+    ragdoll->setNoiseCulprit(static_cast<Npc*>(culprit->user_ptr));
+  dispatchArrowPhysics(*ragdoll);
+  if(Gothic::physicsFlags().spellPhysics && pendingSpellImpulse.quadLength()>0.f) {
+    const auto culprit = spellImpulseCulprit.lock();
+    ragdoll->addImpulse(pendingSpellImpulse,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr);
+    }
+  pendingSpellImpulse = {};
+  spellImpulseCulprit.reset();
+  ragdollStartTick = owner.tickCount();
+  physic.setEnable(false);
+  mvAlgo.takeRagdollControl();
+  syncRagdoll();
+  if(const auto* trace=std::getenv("OPENGOTHIC_RAGDOLL_TRACE");trace!=nullptr && trace[0]=='1')
+    Log::i("[ragdoll] created actor=",displayName()," hero=",isPlayer()," parts=",ragdoll->partCount()," dead=",isDead());
+  return true;
+  }
+
+void Npc::releaseRagdoll(bool blend) {
+  const bool hadBody = ragdoll!=nullptr;
+  if(hadBody)
+    if(const auto* trace=std::getenv("OPENGOTHIC_RAGDOLL_TRACE");trace!=nullptr && trace[0]=='1')
+      Log::i("[ragdoll] released actor=",displayName()," hero=",isPlayer()," parts=",ragdoll->partCount()," dead=",isDead());
+  visual.pose().clearRagdollPose(blend,owner.tickCount());
+  ragdoll.reset();
+  ragdollPose.clear();
+  if(hadBody && hnpc)
+    physic.setEnable(!isDead());
+  }
+
+bool Npc::recoverRagdoll() {
+  if(!ragdoll)
+    return true;
+  if(isDead())
+    return false;
+  checkRagdollQuestHazard();
+  const bool returnToAnchor = needsRagdollQuestReturn();
+  if(!returnToAnchor && !ragdoll->isSleeping() && (owner.tickCount()-ragdollStartTick<500 || !ragdoll->settled()))
+    return false;
+
+  const bool onBack = ragdoll->onBack();
+  const auto pelvis = ragdoll->pelvisTransform();
+  Vec3 at(pelvis.at(3,0),pelvis.at(3,1),pelvis.at(3,2));
+  const auto floor = owner.physic()->landRay(at+Vec3(0,80,0),380.f);
+  if(floor.hasCol && floor.n.y>0.25f)
+    at.y = floor.v.y;
+
+  if(returnToAnchor) {
+    ragdollQuestFrom = position();
+    at = ragdollQuestReturn.anchor;
+    ++ragdollQuestReturns;
+    }
+
+  // Rebase the animated frame while the physical overlay still holds the shown pose.
+  const auto physicalRoot = ragdoll->rootTransform();
+  const float fx = physicalRoot.at(2,0), fz = physicalRoot.at(2,2);
+  if(returnToAnchor)
+    angle = ragdollQuestReturn.angle;
+  else if(fx*fx+fz*fz>1e-6f)
+    angle = 90.f-std::atan2(fx,fz)*180.f/float(M_PI);
+  x = at.x; y = at.y; z = at.z;
+  physic.setPosition(at);
+  ragdollObjectMatrix.identity();
+  ragdollObjectMatrix.translate(x,y,z);
+  ragdollObjectMatrix.rotateOY(90-angle);
+  ragdollObjectMatrix.scale(sz[0],sz[1],sz[2]);
+  visual.setObjMatrix(ragdollObjectMatrix,false);
+  visual.pose().stopAllAnim();
+  const char* wounded = onBack ? "S_WOUNDEDB" : "S_WOUNDED";
+  if(visual.startAnimAndGet(*this,wounded,calcAniComb(),BS_UNCONSCIOUS)==nullptr) {
+    // Creatures without wounded poses retain the standard idle fallback.
+    visual.startAnimAndGet("S_RUN",owner.tickCount(),true);
+    }
+  // Do not interpolate a world-space corpse pose across the whole ravine.
+  releaseRagdoll(!returnToAnchor);
+  ragdollDormant.reset();
+  if(!returnToAnchor)
+    ragdollQuestReturn.armed = false;
+  ragdollRecovering = true;
+  ragdollHasLastPosition = false;
+  ragdollLastVelocity = {};
+  mvAlgo.clearSpeed();
+  durtyTranform = TR_Pos|TR_Rot|TR_Scale;
+  return true;
+  }
+
+void Npc::updateRagdollQuestAnchor() {
+  if(isPlayer() || !isHuman() || isDown() || ragdoll || interactive()!=nullptr ||
+     ragdollQuestReturn.armed ||
+     !Gothic::physicsFlags().questGuard ||
+     !Gothic::physicsFlags().ragdoll || mvAlgo.state()!=MoveAlgo::Run)
+    return;
+  const auto now = owner.tickCount();
+  if(ragdollQuestReturn.hasAnchor && now>=ragdollQuestSampleTick && now-ragdollQuestSampleTick<250)
+    return;
+  ragdollQuestSampleTick = now;
+  const auto at = position();
+  const auto floor = owner.physic()->landRay(at+Vec3(0,15,0),45.f);
+  if(!floor.hasCol || floor.n.y<0.7f || std::abs(floor.v.y-at.y)>30.f)
+    return;
+  const auto water = owner.physic()->waterRay(at,15.f);
+  if(water.hasCol)
+    return;
+  ragdollQuestReturn.anchor = {at.x,floor.v.y,at.z};
+  ragdollQuestReturn.angle = angle;
+  ragdollQuestReturn.hasAnchor = true;
+  }
+
+bool Npc::needsRagdollQuestReturn() const {
+  return ragdollQuestReturn.armed && ragdollQuestReturn.hasAnchor && ragdollQuestReturn.hazards!=0 &&
+         !isPlayer() && isHuman() && !isDead() && Gothic::physicsFlags().questGuard;
+  }
+
+void Npc::checkRagdollQuestHazard() {
+  if(!ragdollQuestReturn.armed || !Gothic::physicsFlags().questGuard)
+    return;
+  auto at = position();
+  if(ragdoll) {
+    const auto pelvis = ragdoll->pelvisTransform();
+    at = Vec3(pelvis.at(3,0),pelvis.at(3,1),pelvis.at(3,2));
+    }
+  if(at.y<ragdollQuestReturn.anchor.y-RagdollSave::QuestReturn::maxFall)
+    ragdollQuestReturn.hazards |= RagdollSave::QuestReturn::fell;
+  if((ragdollQuestReturn.hazards & RagdollSave::QuestReturn::water)==0) {
+    const auto water = owner.physic()->waterRay(at,60.f);
+    if(water.hasCol) {
+      // The padded water ray can start below a dry bank or bridge. A solid
+      // support between the pelvis and that lower surface keeps the body dry.
+      const auto support = water.wdepth<at.y ? owner.physic()->landRay(at,at.y-water.wdepth) : DynamicWorld::RayLandResult();
+      if(!support.hasCol || support.v.y<=water.wdepth)
+        ragdollQuestReturn.hazards |= RagdollSave::QuestReturn::water;
+      }
+    }
+  }
+
+bool Npc::recoverSpellThrow() {
+  if(!ragdollQuestSpellThrow || ragdoll || isDown() || !ragdollQuestReturn.armed)
+    return false;
+  checkRagdollQuestHazard();
+  const bool returnToAnchor = needsRagdollQuestReturn();
+  ragdollQuestReturn.armed = false;
+  ragdollQuestSpellThrow = false;
+  if(!returnToAnchor)
+    return false;
+  ragdollQuestFrom = position();
+  ++ragdollQuestReturns;
+  angle = ragdollQuestReturn.angle;
+  const auto at = ragdollQuestReturn.anchor;
+  x = at.x; y = at.y; z = at.z;
+  physic.setPosition(at);
+  living.reset();
+  arrowImpacts.clear();
+  mvAlgo.takeRagdollControl();
+  ragdollHasLastPosition = false;
+  ragdollLastVelocity = {};
+  setAnim(Anim::Idle);
+  durtyTranform = TR_Pos|TR_Rot|TR_Scale;
+  return true;
+  }
+
+void Npc::prepareRagdoll() {
+  if(!isDown() || !Gothic::physicsFlags().spellPhysics)
+    pendingSpellImpulse = {};
+  if(!Gothic::physicsFlags().spellPhysics || (!isDown() && !isInAir()))
+    spellImpulseCulprit.reset();
+  if(!Gothic::physicsFlags().arrowSticking)
+    visual.clearStuckArrows();
+  if(!Gothic::physicsFlags().arrowPhysics)
+    arrowImpacts.clear();
+  if(!ragdollQuestSpellThrow && !ragdoll && !isDown() &&
+     ragdollQuestReturn.armed && ragdollQuestReturn.hazards!=0) {
+    if(!needsRagdollQuestReturn()) {
+      ragdollQuestReturn.armed = false;
+      }
+    else if(visual.pose().isStanding()) {
+      // Finish at the dry point too: get-up root motion must not carry a quest
+      // NPC straight over the same edge again. 'armed' also survives a mid-rise save.
+      const auto at = ragdollQuestReturn.anchor;
+      x = at.x; y = at.y; z = at.z;
+      physic.setPosition(at);
+      mvAlgo.clearSpeed();
+      durtyTranform |= TR_Pos;
+      ragdollQuestReturn.armed = false;
+      }
+    }
+  updateRagdollQuestAnchor();
+  const bool enabled = Gothic::physicsFlags().ragdoll;
+  if(!enabled) {
+    if(isDown())
+      arrowImpacts.clear();
+    if(ragdollHasLastPosition) {
+      ragdollHasLastPosition = false;
+      ragdollLastVelocity = {};
+      }
+    if(ragdoll) {
+      ragdollDormant = ragdoll->state();
+      // Legacy fall alignment expects the actor origin at the floor. Rebase while
+      // the overlay still holds the shown world pose, keeping the dormant body fixed.
+      const auto pelvis = ragdoll->pelvisTransform();
+      const Vec3 at(x,pelvis.at(3,1),z);
+      const auto floor = owner.physic()->landRay(at+Vec3(0,80,0),380.f);
+      if(floor.hasCol && floor.n.y>0.25f)
+        y = floor.v.y;
+      ragdoll.reset();
+      physic.setPosition(position());
+      visual.setObjMatrix(mkPositionMatrix(),false);
+      releaseRagdoll(true);
+      physic.setEnable(!isDead());
+      mvAlgo.clearSpeed();
+      durtyTranform = TR_Pos|TR_Rot|TR_Scale;
+      }
+    if(!isDown()) {
+      if(ragdollDormant)
+        physic.setEnable(true);
+      ragdollDormant.reset();
+      ragdollLegacyDown = false;
+      ragdollRecovering = false;
+      }
+    return;
+    }
+  if(!isDown()) {
+    ragdollLegacyDown = false;
+    ragdollDormant.reset();
+    if(ragdoll)
+      recoverRagdoll();
+    else {
+      ragdollRecovering = false;
+      physic.setEnable(true);
+      }
+    const auto now = owner.tickCount();
+    if(ragdollHasLastPosition && now>ragdollLastTick && now-ragdollLastTick<=250) {
+      ragdollLastVelocity = (position()-ragdollLastPosition)*(1000.f/float(now-ragdollLastTick));
+      const float speed = ragdollLastVelocity.length();
+      if(!std::isfinite(speed))
+        ragdollLastVelocity = {}; else if(speed>3000.f)
+        ragdollLastVelocity *= 3000.f/speed;
+      } else if(!ragdollHasLastPosition || now!=ragdollLastTick) {
+      ragdollLastVelocity = {};
+      }
+    ragdollLastPosition = position();
+    ragdollLastTick = now;
+    ragdollHasLastPosition = true;
+    return;
+    }
+  if(ragdoll || ragdollLegacyDown || (ragdollRecovering && !ragdollDormant)) {
+    if(ragdoll)
+      dispatchArrowPhysics(*ragdoll);
+    else
+      arrowImpacts.clear();
+    return;
+    }
+  if(!createRagdoll()) {
+    ragdollLegacyDown = true;
+    arrowImpacts.clear();
+    Log::e("ragdoll: unsupported skeleton or body state for ",displayName());
+    }
+  }
+
+void Npc::prepareLivingBody() {
+  constexpr float enterRadius = 2000.f, leaveRadius = 2200.f;
+  if(currentInteract!=nullptr)
+    livingWasInteracting = true;
+  else if(visual.pose().isStanding())
+    livingWasInteracting = false;
+  else if(visual.pose().hasState(BS_MOBINTERACT))
+    livingWasInteracting = true;
+  else if(!visual.pose().hasState(BS_CLIMB))
+    livingWasInteracting = false;
+  // Mob clips align their bones independently of the walking root. Their short
+  // pose changes are real animation, but are not contact velocities. Detach can
+  // clear currentInteract before ToStand finishes; retain the suspension until
+  // that clip ends or ordinary movement interrupts it. Idle successors can keep
+  // the interaction body-state tag, so recognize their standing pose explicitly.
+  const bool interacting = currentInteract!=nullptr || livingWasInteracting;
+  const bool frozen = spellFrozen();
+  if(frozen!=livingWasFrozen) {
+    // Enter with a completely kinematic rig, discarding any active hit reaction.
+    // On thaw the ordinary living-body policy decides whether this rig is still needed.
+    living.reset();
+    livingRetryTick = 0;
+    livingNeedsRebuild = false;
+    livingWasFrozen = frozen;
+    arrowImpacts.clear();
+    }
+  const auto* hero = owner.player();
+  const bool outside = hero!=nullptr && (living ? qDistTo(*hero)>leaveRadius*leaveRadius
+                                               : qDistTo(*hero)>=enterRadius*enterRadius);
+  if(isDown() || ragdoll || interacting || (!frozen && (isPlayer() || hero==nullptr ||
+     !Gothic::physicsFlags().livingBodies || outside))) {
+    living.reset();
+    livingRetryTick = 0;
+    livingNeedsRebuild = false;
+    arrowImpacts.clear();
+    return;
+    }
+  if(frozen)
+    arrowImpacts.clear();
+  if(livingNeedsRebuild || (living && !living->isKinematic() && !Gothic::physicsFlags().arrowPhysics)) {
+    living.reset();
+    livingNeedsRebuild = false;
+    }
+  if(living) {
+    if(!frozen)
+      dispatchArrowPhysics(*living);
+    return;
+    }
+  if(owner.tickCount()<livingRetryTick) {
+    arrowImpacts.clear();
+    return;
+    }
+  const auto* skeleton = visual.visualSkeleton();
+  if(skeleton==nullptr || !visual.hitZoneShape().isValid()) {
+    arrowImpacts.clear();
+    return;
+    }
+  // Only birth needs a forced solve. Subsequent targets come from the normal
+  // animation update, including IK/aim/flinch, without solving the pose twice.
+  updateAnimation(0,true);
+  living = owner.physic()->createKinematicBody(*skeleton,visual.hitZoneShape(),visual.pose().transform(),
+                                             visual.pose().boneCount(),visual.transform());
+  if(living) {
+    living->setNpc(this);
+    if(const auto culprit = spellImpulseCulprit.lock())
+      living->setNoiseCulprit(static_cast<Npc*>(culprit->user_ptr));
+    }
+  else
+    livingRetryTick = owner.tickCount()+1000;
+  if(living && !frozen)
+    dispatchArrowPhysics(*living);
+  else
+    arrowImpacts.clear();
+  }
+
+bool Npc::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix,
+                     std::string_view visualName) {
+  // A corpse hit is selected after the native step, before the usual pose export.
+  // Bind against that same current pose so the first sync cannot move the pin twice.
+  if(ragdoll)
+    syncRagdoll();
+  if(bone>=visual.pose().boneCount()) {
+    const auto& transform = visual.transform();
+    const float scale = Vec3(transform.at(0,0),transform.at(0,1),transform.at(0,2)).length();
+    const Vec3 at(worldMatrix.at(3,0),worldMatrix.at(3,1),worldMatrix.at(3,2));
+    bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,at);
+    }
+  return visual.stickArrow(std::move(arrow),bone,worldMatrix,visualName);
+  }
+
+void Npc::addCorpseArrowImpulse(const Bullet& bullet) {
+  if(ragdoll && isDown())
+    queueArrowPhysics(bullet);
+  }
+
+void Npc::queueArrowPhysics(const Bullet& bullet) {
+  if(bullet.isSpell() || !Gothic::physicsFlags().arrowPhysics)
+    return;
+  const auto direction = bullet.direction(); // cm/ms, as used by the projectile integrator
+  const float speed = direction.length();
+  const auto point = bullet.impactPoint();
+  if(!std::isfinite(speed) || speed<1.e-3f ||
+     !std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+    return;
+  size_t bone = bullet.impactBone();
+  if(bone>=visual.pose().boneCount()) {
+    const auto& transform = visual.transform();
+    const float scale = Vec3(transform.at(0,0),transform.at(0,1),transform.at(0,2)).length();
+    bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,point);
+    }
+  if(bone>=visual.pose().boneCount())
+    return;
+  // An 80 g projectile: cm/ms -> m/s gives momentum in N*s. Draw and weapon
+  // strength already determine the actual projectile speed; damage dice do not.
+  const float momentum = std::clamp(0.08f*speed*10.f,0.2f,12.f);
+  const float strength = std::clamp(momentum/8.f,0.1f,1.f);
+  const Vec3 impulse = direction*(momentum/speed);
+  arrowImpacts.push_back({bone,point,impulse,strength,
+                           bullet.origin()!=nullptr ? bullet.origin()->handlePtr() : std::weak_ptr<zenkit::INpc>()});
+  arrowPhysics.bone = bone;
+  arrowPhysics.point = point;
+  arrowPhysics.impulseNs = impulse;
+  arrowPhysics.strength = strength;
+  ++arrowPhysics.hits;
+  }
+
+void Npc::dispatchArrowPhysics(Ragdoll& body) {
+  for(const auto& hit:arrowImpacts) {
+    const auto culprit = hit.culprit.lock();
+    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr)) {
+      ++arrowPhysics.applied;
+      if(&body==ragdoll.get())
+        ++arrowPhysics.corpseImpulses;
+      }
+    }
+  arrowImpacts.clear();
+  }
+
+void Npc::syncRagdoll() {
+  const bool hasPose=[&] { FrameProfile::Scope timing(FrameProfile::Zone::NativeExport,FrameProfile::watchedActor(this));
+    return ragdoll && ragdoll->getPose(ragdollPose); }();
+  if(!hasPose)
+    return;
+  ragdollObjectMatrix = ragdoll->rootTransform();
+  x = ragdollObjectMatrix.at(3,0);
+  y = ragdollObjectMatrix.at(3,1);
+  z = ragdollObjectMatrix.at(3,2);
+  checkRagdollQuestHazard();
+  physic.setPosition(position());
+  visual.pose().setRagdollPose(visual.visualSkeleton(),ragdollPose,ragdoll->poseIndices());
+  durtyTranform = TR_Pos|TR_Rot|TR_Scale;
+  { FrameProfile::Scope timing(FrameProfile::Zone::ForcedSyncAnimation,FrameProfile::watchedActor(this)); updateAnimation(0,true); }
+  }
+
 bool Npc::hasAutoroll() const {
   auto gl = std::min<uint32_t>(guild(),GIL_MAX);
   return owner.script().guildVal().disable_autoroll[gl]==0;
@@ -703,12 +1358,27 @@ World& Npc::world() {
   return owner;
   }
 
+const World& Npc::world() const {
+  return owner;
+  }
+
 Vec3 Npc::position() const {
   return {x,y,z};
   }
 
 Matrix4x4 Npc::transform() const {
-  return visual.transform();
+  auto matrix = visual.transform();
+  // Gameplay users of this matrix retain the exact origin. The presentation
+  // correction belongs to the model, its attachments and the foot IK frame only.
+  const float visualOffset=characterVisualYOffset+lieVisualYOffset;
+  if(visualOffset!=0)
+    matrix.set(3,1,matrix.at(3,1)-visualOffset);
+  return matrix;
+  }
+
+Vec3 Npc::characterVisualPosition() const {
+  const auto& matrix = visual.transform();
+  return {matrix.at(3,0),matrix.at(3,1),matrix.at(3,2)};
   }
 
 Vec3 Npc::cameraBone(bool isFirstPerson) const {
@@ -943,10 +1613,22 @@ void Npc::dropTorch(bool burnout) {
   }
 
 Tempest::Vec3 Npc::animMoveSpeed(uint64_t dt) const {
+  if(!ragdoll && needsRagdollQuestReturn() && !visual.pose().isStanding())
+    return {};
   return visual.pose().animMoveSpeed(owner.tickCount(),dt);
   }
 
 void Npc::setVisual(const Skeleton* v) {
+  if(visual.visualSkeleton()!=v) {
+    living.reset();
+    arrowImpacts.clear();
+    releaseRagdoll(false);
+    ragdollDormant.reset();
+    ragdollRecovering = false;
+    ragdollLegacyDown = false;
+    ragdollHasLastPosition = false;
+    ragdollLastVelocity = {};
+    }
   visual.setVisual(v);
   invalidateTalentOverlays();
   }
@@ -969,6 +1651,7 @@ void Npc::setVisualBody(int32_t headTexNr, int32_t teethTexNr, int32_t bodyTexNr
   }
 
 void Npc::updateArmor() {
+  living.reset();
   auto  ar = invent.currentArmor();
   auto& w  = owner;
 
@@ -1032,6 +1715,8 @@ void Npc::setPhysic(DynamicWorld::NpcItem &&item) {
   physic.setUserPointer(this);
   physic.setPosition(Vec3{x,y,z});
   physic.setRotation(angle);
+  if(ragdoll)
+    physic.setEnable(false);
   }
 
 void Npc::setFatness(float f) {
@@ -1040,6 +1725,15 @@ void Npc::setFatness(float f) {
   }
 
 void Npc::setScale(float x, float y, float z) {
+  if(sz[0]!=x || sz[1]!=y || sz[2]!=z) {
+    living.reset();
+    arrowImpacts.clear();
+    releaseRagdoll(false);
+    ragdollDormant.reset();
+    ragdollLegacyDown = false;
+    ragdollHasLastPosition = false;
+    ragdollLastVelocity = {};
+    }
   sz[0]=x;
   sz[1]=y;
   sz[2]=z;
@@ -1064,6 +1758,23 @@ const Animation::Sequence* Npc::setAnimAngGet(Anim a, uint8_t comb) {
   const auto before = trace ? combatPoseIdentity() : std::string();
   auto st  = weaponState();
   auto wlk = walkMode();
+  if(isPlayer() && (st==WeaponState::Bow || st==WeaponState::CBow) && !hasManualAim()) {
+    const auto bs = bodyStateMasked() & BS_MAX;
+    if(bs!=BS_AIMNEAR && bs!=BS_AIMFAR) {
+      Tempest::Vec3 dir = {};
+      switch(a) {
+        case Anim::Move:     dir = { 0,0, 1}; break;
+        case Anim::MoveBack: dir = { 0,0,-1}; break;
+        case Anim::MoveL:    dir = {-1,0, 0}; break;
+        case Anim::MoveR:    dir = { 1,0, 0}; break;
+        default: break;
+        }
+      // Input is processed after movement: prevent it from restarting the carried-weapon walk
+      // at the edge every frame. A drawn aim keeps its own animation.
+      if(isEdgeMoveBlocked(dir))
+        a = Anim::Idle;
+      }
+    }
   const auto result = visual.startAnimAndGet(*this,a,comb,st,wlk);
   if(trace)
     traceCombatAttempt(a,result!=nullptr,before,"set_anim");
@@ -1607,6 +2318,8 @@ bool Npc::implGoTo(uint64_t dt) {
     if(go2.wp!=nullptr && go2.wp->useCounter()>1)
       dist = float(MAX_AI_USE_DISTANCE);
     }
+  if(go2.flag==GT_Point && go2.pointDistance>0.f)
+    dist = go2.pointDistance;
   return implGoTo(dt,dist);
   }
 
@@ -2498,6 +3211,32 @@ bool Npc::setGoToLadder() {
   }
 
 void Npc::commitDamage() {
+  const auto mode=weaponState();
+  if(owner.physic()->destructionEnabled() &&
+     (mode==WeaponState::Fist || mode==WeaponState::W1H || mode==WeaponState::W2H)) {
+    const auto& guild=owner.script().guildVal();
+    const auto gl=this->guild();
+    auto kind=FractureRule::Melee::Fist;
+    float range=float(guild.fight_range_base[gl]+guild.fight_range_fist[gl]);
+    float weaponDamage=0.f;
+    if(mode!=WeaponState::Fist) {
+      const auto* weapon=invent.activeWeapon();
+      if(weapon!=nullptr) {
+        const bool twoHand=mode==WeaponState::W2H;
+        kind=twoHand ? FractureRule::Melee::TwoHand : FractureRule::Melee::OneHand;
+        range=float(guild.fight_range_base[gl]+(twoHand ? guild.fight_range_2ha[gl] : guild.fight_range_1ha[gl])+
+                    weapon->swordLength());
+        weaponDamage=float(weapon->handle().damage_total);
+        }
+      else range=0.f;
+      }
+    const float strength=float(attribute(ATR_STRENGTH));
+    const float angle=rotationRad();
+    const size_t affected=owner.physic()->meleeMovableVobs(collosionCenter(),{std::cos(angle),0,std::sin(angle)},
+                                                         range,weaponDamage,strength,kind,this);
+    if(TestBench::isActive())
+      TestBench::destructionMeleeHit(*this,affected,weaponDamage+strength);
+    }
   const auto hitTrace = [&](const char* result) {
     BodyObservations::noteEvent(*this,currentTarget,result,owner.tickCount());
     if(TestBench::bodyTracing())
@@ -2523,6 +3262,8 @@ void Npc::commitDamage() {
 void Npc::takeDamage(Npc &other, const Bullet* b) {
   if(isDown())
     return;
+
+  stopPhysicsInvestigation(false);
 
   assert(b==nullptr || !b->isSpell());
   const auto& pose    = visual.pose();
@@ -2590,6 +3331,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   if(!isSpell || splCat==SpellCategory::SPELL_BAD) {
+    stopPhysicsInvestigation(false);
     perceptionProcess(other,this,0,PERC_ASSESSDAMAGE);
     const auto tracePrimitiveBefore = fghAlgo.queuedAction();
     fghAlgo.onTakeHit();
@@ -2601,6 +3343,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   hitResult = DamageCalculator::damageValue(other,*this,b,isSpell,dmg,bMask);
+  if(hitResult.hasHit && !isSpell && b!=nullptr)
+    queueArrowPhysics(*b);
   const auto traceDamage = [&] {
     BodyObservations::noteEvent(*this,&other,hitResult.value>0 ? "damage_received" : "damage_no_loss",owner.tickCount());
     if(TestBench::bodyTracing())
@@ -2658,7 +3402,9 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   // throw enemy
-  if(hitResult.hasHit && (damageType & (1<<zenkit::DamageType::FLY))) {
+  const bool physicalWind = isSpell && Gothic::physicsFlags().spellPhysics &&
+                            owner.script().physicalSpell(splId)==GameScript::PhysicalSpell::WindFist;
+  if(hitResult.hasHit && (damageType & (1<<zenkit::DamageType::FLY)) && !physicalWind) {
     mvAlgo.accessDamFly(x-other.x, z-other.z, lastHitType);
     }
 
@@ -2735,7 +3481,9 @@ void Npc::takeFallDamage(const Vec3& fallSpeed) {
       if(std::cos(da*M_PI/180.0)<0 || Vec2(fallSpeed.x,fallSpeed.z).length()<0.1f)
         lastHitType='A'; else
         lastHitType='B';
-      setAnim(lastHitType=='A' ? Anim::FallenA : Anim::FallenB);
+      // Match the incoming fall so its authored transition refreshes every
+      // bone before the sparse lying loop inherits the pose.
+      setAnim(Anim::Fallen);
       }
     }
   auto dmg = DamageCalculator::damageFall(*this,fallSpeed.length());
@@ -2942,6 +3690,7 @@ void Npc::tickAnimationTags() {
   }
 
 void Npc::tick(uint64_t dt) {
+  headInput.reset();
   static bool dbg = false;
   static int  kId = 432;
   if(dbg && !isPlayer() && hnpc->id!=kId)
@@ -2952,6 +3701,27 @@ void Npc::tick(uint64_t dt) {
   BodyMovementTrace movementTrace(*this,dt);
   traceCombatSnapshot();
   traceVisibilityDiagnostic("npc_pre_tick");
+  // A field can lift an actor before its turn in the NPC list. Admit the queued
+  // magical state before ordinary airborne/animation waits, independent of tick order.
+  if(isInAir() && hasQueuedPhysicalSpellState(aiQueue))
+    nextAiAction(aiQueue,dt);
+  if(spellFrozen()) {
+    // Script time and the real state callbacks keep running even if the queued freeze
+    // animation is waiting in mid-air. B_StopMagicFreeze owns queue cleanup and StandUp.
+    lastEventTime = owner.tickCount();
+    visual.setNpcEffect(owner,*this,hnpc->effect,hnpc->flags);
+    mvAlgo.clearSpeed();
+    tickRoutine();
+    return;
+    }
+  if(spellWhirling()) {
+    // The vortex may keep the actor airborne for the entire state. Its script
+    // loop must still reach B_StopWhirlwind while queued animations wait to land.
+    lastEventTime = owner.tickCount();
+    tickRoutine();
+    mvAlgo.tick(dt);
+    return;
+    }
   tickAnimationTags();
   visual.updateMouth(*this,dt);
   visual.updateGestures(*this,dt);
@@ -2998,13 +3768,43 @@ void Npc::tick(uint64_t dt) {
 
   if(BodyController::tick(*this,dt))
     return;
+  if(NpcKeys::tick(*this,dt))
+    return;
+
+  const bool physicalMovement = ragdoll ||
+      (Gothic::physicsFlags().ragdoll && isDown() && !ragdollLegacyDown && !ragdollRecovering);
+
+  // A nearby impact briefly interrupts idle work, including an AI_Wait. Combat,
+  // conversation and sleep immediately regain control if they begin meanwhile.
+  if(physicsNoiseUntil>owner.tickCount()) {
+    if(Gothic::physicsFlags().physicsNoise && canHearPhysicsNoise()) {
+      if(prepareTurn()) {
+        const auto direction = physicsNoisePosition-position();
+        implTurnTo(direction.x,direction.z,AnimationSolver::TurnType::Std,dt);
+        }
+      mvAlgo.tick(dt,MoveAlgo::WaitMove);
+      return;
+      }
+    physicsNoiseUntil = 0;
+    }
+
+  if(tickPhysicsInvestigation(dt))
+    return;
 
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     traceCombatGate("tick_wait_or_animation_lock");
+    if(physicalMovement)
+      return;
     if(!isPlayer() && go2.flag!=GT_Flee && faiWaitTime<owner.tickCount() && currentTarget!=nullptr) {
       implTurnToFai(*currentTarget,dt);
       }
     mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return;
+    }
+
+  if(physicalMovement) {
+    // Keep the ordinary AI barriers above; native bodies alone own gravity/root movement.
+    implAiTick(dt);
     return;
     }
 
@@ -3045,8 +3845,18 @@ bool Npc::prepareTurn() {
   return true;
   }
 
+bool Npc::hasQueuedPhysicalSpellState(const AiQueue& queue) const {
+  if(!Gothic::physicsFlags().spellPhysics)
+    return false;
+  const auto* action = queue.front();
+  if(action==nullptr || action->act!=AI_StartState)
+    return false;
+  const auto* symbol = owner.script().findSymbol(action->func.ptr);
+  return symbol!=nullptr && (symbol->name()=="ZS_MAGICFREEZE" || symbol->name()=="ZS_WHIRLWIND");
+  }
+
 void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
-  if(isInAir())
+  if(isInAir() && !hasQueuedPhysicalSpellState(queue))
     return;
   if(queue.size()==0)
     return;
@@ -3199,6 +4009,14 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
       break;
     case AI_StandUp:
     case AI_StandUpQuick: {
+      if(ragdoll) {
+        if(isDead())
+          break;
+        if(!recoverRagdoll()) {
+          queue.pushFront(std::move(act));
+          break;
+          }
+        }
       const auto bs = bodyStateMasked();
       // NOTE: B_ASSESSTALK calls AI_StandUp, to make npc stand, if it's not on a chair or something
       if(interactive()!=nullptr) {
@@ -3715,6 +4533,8 @@ void Npc::setTarget(Npc *t) {
     BodyController::deferNative(*this,[this,bodyTargetId] { setTarget(BodyObservations::findEntity(bodyTargetId)); });
     return;
     }
+  if(t!=nullptr)
+    stopPhysicsInvestigation(false);
   if(currentTarget==t)
     return;
 
@@ -3875,6 +4695,8 @@ void Npc::commitSpell() {
       currentTarget->lastHitSpell = splId;
       currentTarget->perceptionProcess(*this,nullptr,0,PERC_ASSESSMAGIC);
       }
+    if(owner.script().physicalSpell(splId)==GameScript::PhysicalSpell::Whirlwind)
+      owner.startSpellField(splId,currentTarget!=nullptr ? currentTarget->position() : position(),this,currentTarget);
     }
 
   if(active->isSpell()) {
@@ -4017,6 +4839,32 @@ bool Npc::hasStateFlag(BodyState flg) const {
   return false;
   }
 
+bool Npc::spellWhirling() const {
+  if(!Gothic::physicsFlags().spellPhysics || !aiState.funcIni.isValid() || isDown())
+    return false;
+  constexpr std::string_view whirlwind="ZS_WHIRLWIND";
+  const std::string_view state=aiState.hint;
+  if(state.size()!=whirlwind.size())
+    return false;
+  for(size_t i=0;i<whirlwind.size();++i)
+    if(std::toupper(static_cast<unsigned char>(state[i]))!=whirlwind[i])
+      return false;
+  return true;
+  }
+
+bool Npc::spellFrozen() const {
+  if(!Gothic::physicsFlags().spellPhysics || !aiState.funcIni.isValid() || isDown())
+    return false;
+  constexpr std::string_view frozen="ZS_MAGICFREEZE";
+  const std::string_view state=aiState.hint;
+  if(state.size()!=frozen.size())
+    return false;
+  for(size_t i=0; i<frozen.size(); ++i)
+    if(std::toupper(static_cast<unsigned char>(state[i]))!=frozen[i])
+      return false;
+  return true;
+  }
+
 void Npc::setToFightMode(const size_t item) {
   if(invent.itemCount(item)==0)
     addItem(item,1);
@@ -4054,6 +4902,10 @@ void Npc::setToFistMode() {
   }
 
 void Npc::aiPush(AiQueue::AiAction&& a) {
+  // Vanilla quiet-sound scripts aim at OTHER. A physical sound is located at the
+  // collision, and OTHER may be null or a distant culprit, so native turning owns it.
+  if(physicsNoiseCallback && (a.act==AI_TurnToNpc || a.act==AI_LookAtNpc))
+    return;
   if(BodyController::owns(*this) && a.act!=AI_OutputSvmOverlay)
     BodyController::takeover(*this,"native_script_queue");
   if(a.act==AI_OutputSvmOverlay)
@@ -4215,6 +5067,61 @@ Vec3 Npc::mapWeaponBone() const {
 
 Vec3 Npc::mapHeadBone() const {
   return visual.mapHeadBone();
+  }
+
+Npc::EyePose Npc::navigationEyePose() const {
+  EyePose result;
+  const auto& model = visual.transform();
+  result.origin = Vec3(model.at(3,0),model.at(3,1)+180.f,model.at(3,2));
+  result.forward = Vec3::normalize(Vec3(model.at(2,0),model.at(2,1),model.at(2,2)));
+  if(result.forward.length()<0.5f)
+    result.forward = Vec3(std::cos(rotationRad()),0,std::sin(rotationRad()));
+  const auto* skeleton = visual.visualSkeleton();
+  const auto axis = [](const Tempest::Matrix4x4& m, size_t k) {
+    const int column = int(k);
+    return Vec3::normalize(Vec3(m.at(column,0),m.at(column,1),m.at(column,2)));
+    };
+  if(skeleton!=nullptr && skeleton->BIP01_HEAD<visual.pose().boneCount() &&
+     skeleton->BIP01_HEAD<skeleton->tr.size()) {
+    const size_t head = skeleton->BIP01_HEAD;
+    const auto& bind = skeleton->tr[head];
+    Vec3 bindForward(0,0,1);
+    const size_t left = skeleton->findNode("BIP01 L THIGH");
+    const size_t right = skeleton->findNode("BIP01 R THIGH");
+    if(left<skeleton->tr.size() && right<skeleton->tr.size()) {
+      const auto& l = skeleton->tr[left];
+      const auto& r = skeleton->tr[right];
+      const Vec3 hips = Vec3::crossProduct(Vec3(0,1,0),Vec3(l.at(3,0)-r.at(3,0),0,l.at(3,2)-r.at(3,2)));
+      if(hips.length()>1.e-3f)
+        bindForward = Vec3::normalize(hips);
+      }
+    // The same bind-pose face-axis choice used by Gaze; apply it to the finished head.
+    size_t forwardAxis = 0, upAxis = 0;
+    float forwardDot = 0, upDot = 0;
+    for(size_t k=0; k<3; ++k) {
+      const auto a = axis(bind,k);
+      const float f = Vec3::dotProduct(a,bindForward);
+      if(std::abs(f)>std::abs(forwardDot)) {
+        forwardAxis = k;
+        forwardDot = f;
+        }
+      if(std::abs(a.y)>std::abs(upDot)) {
+        upAxis = k;
+        upDot = a.y;
+        }
+      }
+    const auto& shown = visual.renderedBone(head);
+    result.origin = Vec3(shown.at(3,0),shown.at(3,1),shown.at(3,2));
+    result.forward = axis(shown,forwardAxis)*(forwardDot<0.f ? -1.f : 1.f);
+    result.up = axis(shown,upAxis)*(upDot<0.f ? -1.f : 1.f);
+    result.animatedHead = true;
+    }
+  result.right = Vec3::crossProduct(result.forward,result.up);
+  if(result.right.length()<1.e-3f)
+    result.right = Vec3::crossProduct(result.forward,Vec3(0,0,1));
+  result.right = Vec3::normalize(result.right);
+  result.up = Vec3::normalize(Vec3::crossProduct(result.right,result.forward));
+  return result;
   }
 
 Vec3 Npc::mapBone(std::string_view bone) const {
@@ -4889,6 +5796,7 @@ void Npc::endManualAim(bool idle) {
     }
   setManualAim(false);
   setAimStance(0,0,0,0);
+  setAimLook({});
   }
 
 bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
@@ -4938,8 +5846,8 @@ bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
   return true;
   }
 
-HitZones::Zone Npc::rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const {
-  return visual.rayHitZone(from,to,t);
+HitZones::Zone Npc::rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t, size_t* bone) const {
+  return visual.rayHitZone(from,to,t,bone);
   }
 
 bool Npc::hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const {
@@ -5001,11 +5909,21 @@ Npc* Npc::talkPartner() const {
   }
 
 Gaze::Source Npc::gazeTarget(Tempest::Vec3& at) const {
+  if(headInput) {
+    const float yaw = rotationRad()+headInput->x*float(M_PI)/180.f;
+    const float pitch = headInput->y*float(M_PI)/180.f;
+    at = mapHeadBone() + Vec3(std::cos(yaw)*std::cos(pitch),std::sin(pitch),std::sin(yaw)*std::cos(pitch))*1000.f;
+    return Gaze::Source::Input;
+    }
   static const float focusDist = 800;
   const Vec3 eyes = {0,6,0}; // the eyes are a bit above the head bone
   if(auto other = talkPartner()) {
     at = other->mapHeadBone() + eyes;
     return Gaze::Source::Talk;
+    }
+  if(physicsNoiseUntil>owner.tickCount() && Gothic::physicsFlags().physicsNoise && canHearPhysicsNoise()) {
+    at = physicsNoisePosition;
+    return Gaze::Source::Script;
     }
   if(currentLookAtNpc!=nullptr && currentLookAtNpc!=this) {
     at = currentLookAtNpc->mapHeadBone() + eyes;
@@ -5077,6 +5995,7 @@ void Npc::startDialog(Npc& pl) {
     }
   if(pl.isDown() || pl.isInAir() || isPlayer())
     return;
+  stopPhysicsInvestigation(false);
   if(perceptionProcess(pl,nullptr,0,PERC_ASSESSTALK))
     setOther(&pl);
   }
@@ -5189,6 +6108,50 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
     }
   Gothic::inst().onObservedPerception(*this,pl,victim,perc);
 
+  if(isPhysicsInvestigating()) {
+    constexpr auto interrupts = [](PercType observed) {
+      switch(observed) {
+      case PERC_ASSESSENEMY:
+      case PERC_ASSESSFIGHTER:
+      case PERC_ASSESSDAMAGE:
+      case PERC_ASSESSOTHERSDAMAGE:
+      case PERC_ASSESSTHREAT:
+      case PERC_ASSESSFIGHTSOUND:
+      case PERC_ASSESSWARN:
+      case PERC_ASSESSCALL:
+      case PERC_ASSESSTALK:
+      case PERC_DRAWWEAPON:
+      case PERC_ASSESSMURDER:
+      case PERC_ASSESSMAGIC:
+      case PERC_ASSESSCASTER:
+      case PERC_CATCHTHIEF:
+      case PERC_ASSESSTHEFT:
+      case PERC_ASSESSUSEMOB:
+      case PERC_ASSESSENTERROOM:
+      case PERC_MOVEMOB:
+      case PERC_OBSERVEINTRUDER:
+      case PERC_OBSERVESUSPECT:
+      case PERC_ASSESSBODY:
+      case PERC_ASSESSDEFEAT:
+        return true;
+      default:
+        return false;
+        }
+      };
+    // Contract for this active-investigation gate: witnessed crimes reach the scripts,
+    // while ordinary proximity and quiet sounds keep the ongoing check intact.
+    static_assert(interrupts(PERC_CATCHTHIEF) && interrupts(PERC_ASSESSTHEFT));
+    static_assert(interrupts(PERC_ASSESSENTERROOM));
+    static_assert(!interrupts(PERC_ASSESSPLAYER) && !interrupts(PERC_ASSESSQUIETSOUND));
+    if(!interrupts(perc)) {
+      // The planner has observed it above. Routine chatter and ordinary hero
+      // activity must not replace the ongoing check through a script callback.
+      trace("investigating",false,false);
+      return false;
+      }
+    stopPhysicsInvestigation(false);
+    }
+
   if(hasPerc(perc)) {
     auto& intercept = Gothic::inst().interceptPerception;
     if(!percPassThrough && intercept && intercept(*this,pl,victim,perc)) {
@@ -5209,6 +6172,117 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
     }
   trace("no_callback",false,false);
   return false;
+  }
+
+bool Npc::canHearPhysicsNoise() const {
+  if(isPlayer() || processPolicy()!=NpcProcessPolicy::AiNormal || externalCtrl || isDown() ||
+     isLie() || isTalk() || isAttack() || currentTarget!=nullptr || talkPartner()!=nullptr ||
+     Gothic::inst().isNpcInDialog(*this))
+    return false;
+  const auto* state = owner.script().findSymbol(aiState.funcIni.ptr);
+  return state==nullptr || (state->name()!="ZS_SLEEP" && state->name()!="ZS_MAGICSLEEP" &&
+                            state->name()!="ZS_MM_RTN_SLEEP");
+  }
+
+bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
+  const uint64_t now = owner.tickCount();
+  if(noise.culprit==this || !canHearPhysicsNoise() || isPhysicsInvestigating() || now<physicsNoiseNextTime)
+    return false;
+  // The observer checks sight now, before either the native turn or a script callback.
+  Gothic::inst().onPhysicsNoiseHeard(*this,noise);
+  physicsNoiseNextTime = now+2001;
+  physicsNoisePosition = noise.position;
+  physicsNoiseUntil = now+2000;
+  // Vanilla B_AssessQuietSound dereferences OTHER. Unknown physical causes
+  // still turn the listener natively, without inventing a script actor.
+  const bool callbackDispatched = noise.culprit!=nullptr && hasPerc(PERC_ASSESSQUIETSOUND);
+  if(callbackDispatched) {
+    physicsNoiseCallback = true;
+    owner.script().invokeState(this,noise.culprit,nullptr,perception[PERC_ASSESSQUIETSOUND].func);
+    physicsNoiseCallback = false;
+    }
+  TestBench::physicsNoiseHeard(*this,noise,callbackDispatched);
+  return true;
+  }
+
+bool Npc::startPhysicsInvestigation(const Tempest::Vec3& at, uint64_t scanMs) {
+  if(!canHearPhysicsNoise() || !isHuman() || weaponState()!=WeaponState::NoWeapon)
+    return false;
+  clearAiQueue();
+  physicsInvestigationPosition = at;
+  physicsInvestigationUntil = owner.tickCount()+45000;
+  physicsInvestigationScanUntil = 0;
+  physicsInvestigationScanMs = std::clamp<uint64_t>(scanMs,2000,8000);
+  physicsInvestigationWalking = false;
+  physicsInvestigationReason = {};
+  return true;
+  }
+
+void Npc::stopPhysicsInvestigation(bool resume, std::string_view reason) {
+  if(physicsInvestigationUntil==0)
+    return;
+  physicsInvestigationUntil = 0;
+  physicsInvestigationScanUntil = 0;
+  physicsInvestigationReason = reason;
+  physicsNoiseUntil = 0;
+  // A new owner or native state may already have installed its own movement.
+  if(go2.flag==GT_Point && (go2.pos-physicsInvestigationPosition).quadLength()<1.f)
+    clearGoTo();
+  if(resume) {
+    clearAiQueue();
+    resumeAiRoutine();
+    }
+  }
+
+bool Npc::tickPhysicsInvestigation(uint64_t dt) {
+  if(physicsInvestigationUntil==0)
+    return false;
+  if(!canHearPhysicsNoise() || weaponState()!=WeaponState::NoWeapon) {
+    stopPhysicsInvestigation(false);
+    return false;
+    }
+  const uint64_t now = owner.tickCount();
+  if(now>=physicsInvestigationUntil) {
+    stopPhysicsInvestigation(true,"timeout");
+    return false;
+    }
+  if(physicsInvestigationScanUntil!=0) {
+    if(now>=physicsInvestigationScanUntil) {
+      stopPhysicsInvestigation(true,"done");
+      return false;
+      }
+    // Look to either side of the impact, then back, while standing at the spot.
+    const uint64_t elapsed = physicsInvestigationScanMs-(physicsInvestigationScanUntil-now);
+    const float offset = elapsed<physicsInvestigationScanMs/3 ? -.7f :
+                         elapsed<2*physicsInvestigationScanMs/3 ? .7f : 0.f;
+    const float facing = physicsInvestigationFacing+offset;
+    implTurnTo(std::cos(facing),std::sin(facing),AnimationSolver::TurnType::Std,dt);
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if(!setInteraction(nullptr)) {
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if((position()-physicsInvestigationPosition).quadLength()<140.f*140.f) {
+    clearGoTo();
+    stopWalking();
+    physicsInvestigationFacing = rotationRad();
+    physicsInvestigationScanUntil = now+physicsInvestigationScanMs;
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if(!physicsInvestigationWalking) {
+    wayPath.clear();
+    attachToPoint(nullptr);
+    go2.clear();
+    go2.set(physicsInvestigationPosition);
+    physicsInvestigationWalking = true;
+    }
+  // Position targets use the same native movement/collision checks as AI_UseMob.
+  // A blocked approach ends at the deadline; it never teleports the listener.
+  implGoTo(dt,60.f);
+  return true;
   }
 
 bool Npc::hasPerc(PercType perc) const {
@@ -5232,6 +6306,13 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 
   if(id->attach(*this)) {
     currentInteract = id;
+    if(!isPlayer() && isHuman()) {
+      mvAlgo.resetCharacterVirtual(true);
+      resetCharacterVisualHeight();
+      }
+    // Remove the contact rig in the sequential physics handoff, including
+    // when an immediate detach leaves only its transition animation behind.
+    livingWasInteracting = true;
     attachToPoint(nullptr); //NOTE: Fajeth campfire
     if(!quick) {
       visual.stopAnim(*this,"");
@@ -5246,6 +6327,10 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 void Npc::quitInteraction() {
   if(currentInteract==nullptr)
     return;
+  if(!isPlayer() && isHuman()) {
+    mvAlgo.resetCharacterVirtual(true);
+    resetCharacterVisualHeight();
+    }
   if(invTorch)
     processDefInvTorch();
   setDirectionY(0);
@@ -5308,6 +6393,10 @@ void Npc::addRoutine(gtime s, gtime e, uint32_t callback, std::string_view point
   std::stable_sort(routines.begin(), routines.end(), [](const Routine& l, const Npc::Routine& r) {
     return l.start < r.start;
     });
+  }
+
+void Npc::clearRoutine() {
+  routines.clear();
   }
 
 void Npc::excRoutine(size_t callback) {
@@ -5477,9 +6566,61 @@ std::vector<GameScript::DlgChoice> Npc::dialogChoices(Npc& player,const std::vec
   }
 
 bool Npc::isAiQueueEmpty() const {
-  return aiQueue.size()==0 &&
+  return !isPhysicsInvestigating() && aiQueue.size()==0 &&
          go2.empty() &&
          waitTime<owner.tickCount();
+  }
+
+auto Npc::navigationGoal() const -> NavigationGoal {
+  NavigationGoal ret;
+  if(!go2.empty()) {
+    ret.active = true;
+    ret.npc = go2.npc;
+    ret.point = go2.wp;
+    // Preserve the final goal as intermediate waypoints change along the same walk.
+    if(go2.flag==GT_Way && go2.npc==nullptr && wayPath.last()!=nullptr)
+      ret.point = wayPath.last();
+    ret.position = ret.point!=nullptr ? ret.point->position() : go2.target();
+    ret.kind = ret.npc!=nullptr ? "npc" : (ret.point!=nullptr ? (ret.point->isFreePoint() ? "freepoint" : "waypoint") : "point");
+    if(ret.point!=nullptr)
+      ret.name = ret.point->name;
+    else if(go2.flag==GT_Item)
+      ret.kind = "item";
+    return ret;
+    }
+
+  // A future walk behind AI_Wait/occupation is not a moving NPC. Only the ready head counts.
+  const auto now = owner.tickCount();
+  if(waitTime>=now || aniWaitTime>=now || outWaitTime>now)
+    return ret;
+  const auto* action = aiQueue.front();
+  if(action==nullptr)
+    return ret;
+  if(action->act==AI_GoToPoint && action->point!=nullptr) {
+    ret.active = true;
+    ret.point = action->point;
+    ret.position = action->point->position();
+    ret.kind = ret.point->isFreePoint() ? "freepoint" : "waypoint";
+    ret.name = ret.point->name;
+    }
+  else if(action->act==AI_GoToNpc && action->target!=nullptr) {
+    ret.active = true;
+    ret.npc = action->target;
+    ret.position = action->target->position();
+    ret.kind = "npc";
+    }
+  else if(action->act==AI_GoToNextFp) {
+    // Resolving the freepoint would acquire runtime state. Keep the queued name until scripts do it.
+    ret.active = true;
+    ret.kind = "freepoint_query";
+    ret.name = action->s0;
+    }
+  else if(action->act==AI_GotoItem && action->item!=nullptr) {
+    ret.active = true;
+    ret.kind = "item";
+    ret.position = action->item->position();
+    }
+  return ret;
   }
 
 bool Npc::isAiBusy() const {
@@ -5490,6 +6631,7 @@ bool Npc::isAiBusy() const {
 
 void Npc::clearAiQueue() {
   if(BodyController::deferNative(*this,[this] { clearAiQueue(); })) return;
+  stopPhysicsInvestigation(false);
   currentLookAt    = nullptr;
   currentLookAtNpc = nullptr;
   visual.setHeadRotation(0,0);
@@ -5507,6 +6649,19 @@ void Npc::clearAiQueue() {
 void Npc::attachToPoint(const WayPoint *p) {
   currentFp     = p;
   currentFpLock = FpLock(currentFp);
+  }
+
+bool Npc::goToPosition(const Vec3& position) {
+  if(isInAir() || !setInteraction(nullptr))
+    return false;
+  attachToPoint(nullptr);
+  wayPath.clear();
+  go2.clear();
+  // GoTo::isClose(Vec3) measures from the actor's center, whereas navmesh points
+  // (like WayPoint::groundPos) lie on the walkable surface.
+  go2.set(position+(centerPosition()-this->position()));
+  go2.pointDistance = 20.f;
+  return true;
   }
 
 void Npc::clearGoTo() {
@@ -5590,6 +6745,91 @@ bool Npc::canSeeNpc(const Npc &oth, bool freeLos) const {
   return false;
   }
 
+Vec3 Npc::aimDirection(const Vec3& target) const {
+  const float a = rotationRad();
+  const Vec3 f(std::cos(a),0,std::sin(a));
+  float shoulder = 145.f;
+  if(const auto sk = visual.visualSkeleton()) {
+    const size_t sh = sk->findNode("BIP01 R UPPERARM");
+    if(sh<sk->tr.size())
+      shoulder = sk->tr[sh].at(3,1);
+    }
+  Vec3 from = position()+Vec3(0,shoulder,0)+f*35.f;
+  if(hasManualAim()) {
+    Vec3 point,dir;
+    if(arrowRay(point,dir) && (target-point).length()>150.f)
+      from = point;
+    return target-from;
+    }
+  if(weaponState()==WeaponState::Bow || weaponState()==WeaponState::CBow)
+    return World::bulletVelocity(from,target);
+  return target-from;
+  }
+
+Vec3 Npc::aimLookAt(const Vec3& target) const {
+  const float a = rotationRad();
+  const Vec3 facing(std::cos(a),0,std::sin(a));
+  // Follow the hero's physical shoulder as the original aim camera did, without the
+  // camera's extra forward displacement. Read the last applied pose, not the hand.
+  const Vec3 shift = aimLeanShift();
+  const Vec3 offset = facing*std::max(Vec3::dotProduct(shift,facing),0.f) + Vec3(0,std::min(shift.y,0.f),0);
+  // A crosshair on the nearby roof edge still looks down from this elevated origin;
+  // the directional clearance rays continue past the hit to find a pose over the edge.
+  const Vec3 direction = target-(Camera::aimShoulder(position(),facing)+offset);
+  return direction.length()>1e-3f ? Vec3::normalize(direction) : facing;
+  }
+
+Vec3 Npc::aimLeanDirection(const Vec3& target) const {
+  if(hasManualAim())
+    return aimLookAt(target);
+  return target-position();
+  }
+
+Vec3 Npc::aimHead(const Vec3& target, float angle) const {
+  const float a = rotationRad();
+  const Vec3 f = {std::cos(a),0,std::sin(a)};
+  return visual.pose().aimIk().headAt(position(),f,aimLeanDirection(target),angle);
+  }
+
+Vec3 Npc::aimCurrentHead() const {
+  const auto& mt = visual.transform();
+  const auto& aim = visual.pose().aimIk();
+  return aim.headAt(Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)),
+                    Vec3(mt.at(2,0),0,mt.at(2,2)),aim.appliedDirection(),aim.appliedLean());
+  }
+
+Vec3 Npc::aimLeanShift() const {
+  const auto& mt = visual.transform();
+  const auto& aim = visual.pose().aimIk();
+  const Vec3 origin(mt.at(3,0),mt.at(3,1),mt.at(3,2));
+  const Vec3 facing(mt.at(2,0),0,mt.at(2,2));
+  return aim.headAt(origin,facing,aim.appliedDirection(),aim.appliedLean())-
+         aim.headAt(origin,facing,aim.appliedDirection(),0.f);
+  }
+
+Vec3 Npc::aimArrow(const Vec3& target, float angle) const {
+  const float a = rotationRad();
+  const Vec3 f(std::cos(a),0,std::sin(a));
+  return visual.pose().aimIk().arrowAt(position(),f,aimLeanDirection(target),angle);
+  }
+
+Aim::LeanEdge Npc::aimEdge(const Vec3& direction, float range) const {
+  const auto edge = mvAlgo.edgeAhead(direction,range);
+  return {edge.found,edge.distance,edge.drop,edge.supportY};
+  }
+
+Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual) const {
+  if(!manual) {
+    const auto d = aimDirection(target);
+    Aim::LeanResult result;
+    result.angle = Aim::leanForNpc(-std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z)));
+    return result;
+    }
+  const auto look = aimLookAt(target);
+  const float down = -std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z));
+  return visual.pose().aimIk().leanNeeded(*this,look,look,down,aimEdge(look));
+  }
+
 bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
   const auto ws = weaponState();
   if(!Aim::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow && ws!=WeaponState::Mage))
@@ -5598,14 +6838,15 @@ bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
   const Vec3  tg   = oth.physic.center();
   const Vec3  d    = tg - head;
   const float h    = std::sqrt(d.x*d.x+d.z*d.z);
-  const float lean = Aim::leanFor(-std::atan2(d.y,h));
+  const float lean = Aim::leanForNpc(-std::atan2(d.y,h));
   if(lean<=0.f)
     return false;
-  // toward it, straight down where the body faces (as the aim leans)
+  // Classic focus keeps its original angular rule and head estimate.
+  static constexpr float reach = 58.f, drop = 28.f;
   const float a   = rotationRad();
   const Vec3  dir = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(a),0,std::sin(a))*0.25f);
-  const float k   = lean/(Aim::LeanMax*float(M_PI)/180.f);
-  const Vec3  eye = head + dir*(Aim::LeanReach*k) - Vec3(0,Aim::LeanDrop*k,0);
+  const float k   = lean/(Aim::NpcLeanMax*float(M_PI)/180.f);
+  const Vec3  eye = head + dir*(reach*k) - Vec3(0,drop*k,0);
   if(owner.physic()->ray(head,eye).hasCol)
     return false; // no room to lean
   return canRayHitPoint(eye,tg,180.f) || canRayHitPoint(eye,oth.visual.mapHeadBone(),180.f);
@@ -5724,6 +6965,8 @@ bool Npc::canSeeItem(const Item& it, bool freeLos) const {
   }
 
 bool Npc::isAlignedToGround() const {
+  if(ragdoll)
+    return false;
   auto gl = guild();
   // four-legged creatures stand on the ground with foot IK instead of tilting as a whole
   const bool align = owner.script().guildVal().surface_align[gl]!=0 && !visual.hasQuadrupedIk();
@@ -5742,6 +6985,8 @@ Vec3 Npc::groundNormal() const {
   }
 
 Matrix4x4 Npc::mkPositionMatrix() const {
+  if(ragdoll)
+    return ragdollObjectMatrix;
   const auto ground = groundNormal();
   const bool align  = isAlignedToGround();
 
@@ -5773,10 +7018,113 @@ void Npc::updateTransform() {
   updateAnimation(0, true);
   }
 
+void Npc::resetCharacterVisualHeight() {
+  if(characterVisualYOffset!=0)
+    durtyTranform |= TR_Pos;
+  characterVisualSteps.clear();
+  characterVisualYOffset = 0;
+  characterVisualHasSample = false;
+  characterVisualGroundSample = false;
+  }
+
+void Npc::updateCharacterVisualHeight() {
+  if(!isPlayer() && (!isHuman() || (!Gothic::physicsFlags().npcCharacterVirtual && characterVisualSteps.empty()))) {
+    if(characterVisualHasSample)
+      resetCharacterVisualHeight();
+    return;
+    }
+  constexpr uint64_t blendMilliseconds = 100;
+  constexpr float heightNoise = 0.1f; // cm
+  constexpr float maxVisualLag = 10.f; // cm
+  const auto now = owner.tickCount();
+  const auto at = position();
+  const auto normal = mvAlgo.groundNormal();
+  const bool groundState = !isDown() && !spellFrozen() && interactive()==nullptr &&
+                           mvAlgo.state()==MoveAlgo::Run &&
+                           !(bodyStateMasked()==BS_JUMP && isFlyAnim());
+  const bool enabled = (isPlayer() ? Gothic::physicsFlags().characterVirtual :
+                                    Gothic::physicsFlags().npcCharacterVirtual) &&
+                        mvAlgo.characterVirtualActive() && groundState;
+  // A radius/flag handoff keeps the remaining 100 ms of a stair blend. Removing
+  // that visual offset immediately would pop the model even though its feet agree.
+  const bool finishNpcBlend = !isPlayer() && groundState && !characterVisualSteps.empty();
+  const float previousOffset = characterVisualYOffset;
+
+  if((!enabled && !finishNpcBlend) || (characterVisualHasSample && now<characterVisualSampleTick)) {
+    characterVisualSteps.clear();
+    characterVisualYOffset = 0;
+    }
+  else {
+    auto alive = std::find_if(characterVisualSteps.begin(),characterVisualSteps.end(),[now](const CharacterVisualStep& step) {
+      return now-step.tick<blendMilliseconds;
+      });
+    characterVisualSteps.erase(characterVisualSteps.begin(),alive);
+    if(enabled && characterVisualHasSample && characterVisualGroundSample) {
+      const auto delta = at-characterVisualSamplePosition;
+      const auto support = mvAlgo.characterVirtualGroundVelocity()*(float(now-characterVisualSampleTick)*0.001f);
+      const auto relative = delta-support;
+      float predictedMin = support.y, predictedMax = support.y;
+      // Relative travel along the support plane explains an ordinary slope.
+      // Either endpoint normal may explain a transition between two surfaces.
+      // Include support-only travel: a blended normal must not turn continued
+      // ascent relative to that support into a fictitious downward step.
+      for(const auto& n:{characterVisualSampleNormal,normal}) {
+        if(n.y<=1.e-3f)
+          continue;
+        const float predicted = support.y-(n.x*relative.x+n.z*relative.z)/n.y;
+        if(!std::isfinite(predicted))
+          continue;
+        predictedMin = std::min(predictedMin,predicted);
+        predictedMax = std::max(predictedMax,predicted);
+        }
+      const float explained = std::clamp(delta.y,predictedMin,predictedMax);
+      const float residual = delta.y-explained;
+      const float correction = std::copysign(std::max(0.f,std::abs(residual)-heightNoise),residual);
+      if(correction!=0)
+        characterVisualSteps.push_back({now,-correction});
+      }
+    characterVisualYOffset = 0;
+    for(const auto& step:characterVisualSteps)
+      characterVisualYOffset += step.offset*(1.f-float(now-step.tick)/float(blendMilliseconds));
+    if(std::abs(characterVisualYOffset)>maxVisualLag) {
+      const float limited = std::clamp(characterVisualYOffset,-maxVisualLag,maxVisualLag);
+      const float scale = limited/characterVisualYOffset;
+      // Keep each correction's remaining lifetime while discarding excess lag.
+      // Clamping only the shown offset would retain a hidden backlog; clearing
+      // the history would instead snap the model to its physical feet.
+      for(auto& step:characterVisualSteps)
+        step.offset *= scale;
+      characterVisualYOffset = limited;
+      }
+    }
+
+  // Keep a baseline even while the freshly loaded controller is inactive. Its first
+  // floor correction can then blend from the saved height, while airborne handoffs snap.
+  characterVisualHasSample = true;
+  characterVisualGroundSample = groundState;
+  characterVisualSamplePosition = at;
+  characterVisualSampleNormal = normal;
+  characterVisualSampleTick = now;
+  if(characterVisualYOffset!=previousOffset)
+    durtyTranform |= TR_Pos;
+  }
+
 void Npc::updateAnimation(uint64_t dt, bool force) {
+  FrameProfile::Scope timing(FrameProfile::Zone::ActorAnimationCpu,FrameProfile::watchedActor(this));
+  if(lieVisualYOffset!=0) {
+    auto matrix=visual.transform();
+    matrix.set(3,1,matrix.at(3,1)-lieVisualYOffset);
+    lieVisualYOffset=0;
+    // Rebuild even when another animation update happens at the same timestamp.
+    visual.setObjMatrix(matrix,true);
+    }
+  const bool frozen = spellFrozen();
+  const bool clearedPhysicalPose = visual.clearPhysicalPose();
   const auto camera = Gothic::inst().camera();
   if(isPlayer() && camera!=nullptr && camera->isFree())
     dt = 0;
+
+  updateCharacterVisualHeight();
 
   if(durtyTranform) {
     const auto ground = groundNormal();
@@ -5790,17 +7138,31 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     if(durtyTranform==TR_Pos) {
       pos = visual.transform();
       pos.set(3,0,x);
-      pos.set(3,1,y);
+      pos.set(3,1,y+characterVisualYOffset);
       pos.set(3,2,z);
       } else {
       pos = mkPositionMatrix();
+      pos.set(3,1,pos.at(3,1)+characterVisualYOffset);
       }
 
     visual.setObjMatrix(pos,false);
     durtyTranform = 0;
     }
 
-  bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force);
+  bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force,frozen) || clearedPhysicalPose;
+  if(frozen) {
+    if(living)
+      livingNeedsRebuild = !living->moveKinematic(visual.pose().transform(),visual.pose().boneCount(),visual.transform(),
+                                                float(std::max<uint64_t>(dt,1))*0.001f);
+    if(syncAtt || force)
+      visual.syncAttaches();
+    return;
+    }
+  if(ragdoll) {
+    if(syncAtt || force)
+      visual.syncAttaches();
+    return;
+    }
   syncAtt |= visual.updateLean(*this,dt);
   // Headless body training can keep foot IK on the watched arena actors only: nobody
   // looks at the rest of the world there, and their foot IK is ~30% of a serial tick.
@@ -5813,6 +7175,36 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   syncAtt |= visual.updateAim(*this,dt);
   syncAtt |= visual.updateGaze(*this,dt);
   syncAtt |= visual.updateFlinch(*this,dt);
+  syncAtt |= updateLyingVisualHeight();
+  if(living)
+    livingNeedsRebuild = !living->moveKinematic(visual.pose().transform(),visual.pose().boneCount(),visual.transform(),
+                                              float(std::max<uint64_t>(dt,1))*0.001f);
+  if(living && living->reactionWeight()>0.f && living->getPose(arrowPhysicalPose))
+    syncAtt |= visual.setPhysicalPose(arrowPhysicalPose,living->reactionBones(),living->reactionWeight());
   if(syncAtt)
     visual.syncAttaches();
+  }
+
+bool Npc::updateLyingVisualHeight() {
+  if(!isHuman() || ragdoll || spellFrozen() || !isLie() || mvAlgo.state()!=MoveAlgo::Run || interactive()!=nullptr)
+    return false;
+  Vec3 lowest;
+  if(!visual.minSkinnedVertex(fatness(),lowest))
+    return false;
+  // Look only around the current root and posed surface. A hand over a ledge
+  // must not pull the whole animation down toward a distant lower floor.
+  constexpr float rayMargin=20.f;
+  const Vec3 from(lowest.x,std::max(y,lowest.y)+rayMargin,lowest.z);
+  const float distance=from.y-(std::min(y,lowest.y)-rayMargin);
+  const auto floor=owner.physic()->landRay(from,distance);
+  if(!floor.hasCol || floor.n.y<=.5f)
+    return false;
+  const float offset=floor.v.y-lowest.y;
+  if(!std::isfinite(offset) || offset==0)
+    return false;
+  auto matrix=visual.transform();
+  matrix.set(3,1,matrix.at(3,1)+offset);
+  lieVisualYOffset=offset;
+  visual.setObjMatrix(matrix,true);
+  return true;
   }

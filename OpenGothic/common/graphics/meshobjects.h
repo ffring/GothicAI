@@ -11,6 +11,8 @@
 class Pose;
 class ProtoMesh;
 class LightSource;
+class Npc;
+namespace TestBench { bool ragdollBodyDrawable(const Npc& npc); }
 
 class MeshObjects final {
   private:
@@ -65,13 +67,14 @@ class MeshObjects final {
         void   setObjMatrix(const Tempest::Matrix4x4& mt);
         void   setSkeleton (const Skeleton* sk);
         void   setPose     (const Tempest::Matrix4x4& obj, const Pose& p);
+        void   setPose     (const Tempest::Matrix4x4& obj, const Tempest::Matrix4x4* bones);
         void   setAsGhost  (bool g);
         void   setFatness  (float f);
         void   setWind     (zenkit::AnimationType m, float intensity);
         // freeOnly: not in place of another anim of the head (a blink gives way to the faces)
         void   startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly = false);
         void   setMMShape  (std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
-        float  morphWeight (std::string_view anim);
+        float  morphWeight (std::string_view anim) const;
 
         bool   isEmpty()    const { return nodesCount()==0; }
         size_t nodesCount() const { return subCount+cpuSub.size(); }
@@ -96,6 +99,7 @@ class MeshObjects final {
 
         bool                    cpuOnly = false;
         std::vector<CpuNode>     cpuSub;
+        friend bool TestBench::ragdollBodyDrawable(const Npc& npc);
       };
 
   private:

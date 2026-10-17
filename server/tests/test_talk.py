@@ -38,9 +38,9 @@ def test_whom_the_hero_speaks_to():
     hit = addressee("Эй!", None, people, None)
     assert (hit.id, hit.why) == (XARDAS, "front")
     # nobody close in front of him: said into the air
-    far = roster(person(LOBART, "Лобарт", 12, True))
+    far = roster(person(LOBART, "Лобарт", 20, True))
     assert addressee("Эй!", None, far, None) is None
-    assert addressee("Эй!", LOBART, far, None).why == "focus"  # 12 m: still the one he looks at
+    assert addressee("Эй!", LOBART, far, None).why == "focus"  # 20 m: still the one he looks at
 
 
 def test_a_name_as_speech_recognition_heard_it():
@@ -67,6 +67,36 @@ def test_a_name_as_speech_recognition_heard_it():
     assert addressee("Я хочу вступить в ополчение", None, guards, None) is None
     assert addressee("Купи мне торт", None, guards, None) is None
     assert addressee("Скажи Торусу, что я пришёл", None, guards, None).id == "VLK_TORUS"
+
+
+def test_words_about_bandits_are_not_to_a_bandit():
+    # 2026-10-14 at Cavalorn's fire: «…помогу тебе с бандитами» went to a bandit called «Бандит»
+    people = roster(
+        person("BAU_4300_ADDON_CAVALORN", "Кавалорн", 1.4, True),
+        person("BDT_1013_BANDIT_L", "Бандит", 9),
+    )
+    hit = addressee("Лучше за обещание помочь тебе с бандитами.", "BAU_4300_ADDON_CAVALORN", people, None)
+    assert hit.id == "BAU_4300_ADDON_CAVALORN" and hit.why == "focus"
+    assert addressee("Бандиты там остались?", None, people, "BAU_4300_ADDON_CAVALORN").why == "partner"
+    # one of them, by any case of the name, is still him
+    assert addressee("Скажи бандиту, чтобы ушёл", None, people, None).id == "BDT_1013_BANDIT_L"
+    assert addressee("Эй, бандит, стой!", None, people, None).id == "BDT_1013_BANDIT_L"
+
+
+def test_the_heros_voice_does_not_go_through_rock():
+    # the bandit 35 m off in the cave behind the rock: the voice goes round it, too far for him to hear
+    people = roster(
+        person("BAU_4300_ADDON_CAVALORN", "Кавалорн", 1.4, True, heard=140),
+        person("BDT_1014_BANDIT_L", "Браго", 35, heard=20000),
+        person("BDT_1015_BANDIT_L", "Бандит", 6, heard=20000),
+    )
+    assert addressee("Браго, выходи!", None, people, None) is None  # Cavalorn does not take words for Brago
+    assert addressee("Бандит, ты меня слышишь?", None, people, None) is None
+    assert addressee("Ты меня слышишь?", None, people, None).id == "BAU_4300_ADDON_CAVALORN"  # the one near
+    # round the corner of a passage his voice carries on: a call is heard, words to whoever is near are not
+    corner = roster(person("BAU_4300_ADDON_CAVALORN", "Кавалорн", 8, heard=3000))
+    assert addressee("Кавалорн, сюда!", None, corner, None).id == "BAU_4300_ADDON_CAVALORN"
+    assert addressee("Ну что, идём?", None, corner, "BAU_4300_ADDON_CAVALORN") is None
 
 
 def test_the_codes_posture_when_the_behavioral_model_is_unsure():
@@ -196,7 +226,7 @@ async def test_the_conversation_ends_when_the_hero_walks_away():
         await fake.send(type="player_text", text="Пока", focus=XARDAS)
         await _until(lambda: fake.said == ["Иди."] and XARDAS in fake.attached)
         await asyncio.sleep(1.6)  # the line is said
-        await fake.roster({**XARDAS_NEAR, "distance": 1500.0})
+        await fake.roster({**XARDAS_NEAR, "distance": 2000.0})
         await _until(lambda: talk.partner is None and XARDAS not in fake.attached)
     finally:
         await cm.__aexit__(None, None, None)
@@ -331,3 +361,74 @@ async def test_an_npc_held_for_a_scene_listens_to_the_hero():
     assert "Твоё тело сейчас: ты остановился, повернулся к герою и слушаешь" in situation
     assert ended == [(HILDA, "walked_away")]
     assert dialogue.conversations[HILDA].history[-1].content == "[Герой ушёл, разговор закончился]"
+
+
+BANDIT = "BDT_1013_BANDIT_L"
+
+
+def test_a_phrase_to_several():
+    # 2026-10-13: «Здарова, пацаны» to two bandits went to Cavalorn, who follows the hero, the nearest
+    brago, bandit, cavalorn = "BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L", "BAU_4300_ADDON_CAVALORN"
+    people = roster(
+        person(cavalorn, "Кавалорн", 2, True),
+        person(bandit, "Бандит", 4, True),
+        person(brago, "Браго", 6, True),
+    )
+    lead = {brago: 8, bandit: 6, cavalorn: 8}.get
+
+    def to(text: str, focus: str | None = None, ours=lambda npc: npc == cavalorn):
+        a = addressee(text, focus, people, None, ours=ours, lead=lambda npc: lead(npc, 0))
+        return (a.id, a.why) if a else None
+
+    assert to("Здарова, пацаны.") == (brago, "group")  # the leader, not the companion, not the nearest
+    assert to("Ребята, вы откуда?", focus=bandit) == (bandit, "group")  # the one he looks at
+    assert to("Эй, вы двое, стоять!") == (brago, "group")
+    assert to("Всем привет") == (brago, "group")
+    # called out first, then spoken of (the live run of 2026-10-14: words to Brago went to Cavalorn, nearer)
+    assert to("Пацаны, Браго тут главный?", focus=bandit) == (bandit, "group")  # «Пацаны,» calls them all
+    assert to("Браго, я ищу того, кто ограбил Кавалорна.") == (brago, "name")
+    assert to("Пацаны, верните Кавалорну его вещи.") == (brago, "group")
+    assert to("Где Кавалорн?") == (cavalorn, "name")  # only spoken of, but nobody is called: as before
+    # a bare «вы» is the polite one to one person
+    assert to("Вы не подскажете дорогу?", focus=bandit) == (bandit, "focus")
+    # nobody but companions: one of them; nobody but one: not a phrase to several
+    assert to("Ребята, привет", ours=lambda npc: True) == (cavalorn, "group")
+    # in a fight it is to whoever is at him: words to him, not an order to the companions
+    fight = roster(
+        person(cavalorn, "Кавалорн", 2, True, state="ZS_ATTACK"),
+        person(bandit, "Бандит", 4, True, state="ZS_ATTACK"),
+        person(brago, "Браго", 6, True),
+    )
+    stop = addressee("Стой, пацаны, стой!", None, fight, None, ours=lambda npc: npc == cavalorn)
+    assert stop is not None and (stop.id, stop.why) == (bandit, "attacker")
+    alone = roster(person(bandit, "Бандит", 4, True))
+    assert addressee("Пацаны, здорово", None, alone, None) == addressee("Здорово", None, alone, None)
+
+
+def test_in_a_fight_he_speaks_to_whoever_is_at_him():
+    at_him = person(BANDIT, "Бандит", 4, state="ZS_ATTACK", activity="fight")
+    people = roster(
+        at_him, person(XARDAS, "Ксардас", 3, True), person("PC_FIGHTER", "Горн", 2, state="ZS_ATTACK")
+    )
+    gorn_is_ours = lambda npc: npc == "PC_FIGHTER"  # noqa: E731
+    hit = addressee("Воу, воу, ты чего?", None, people, XARDAS, ours=gorn_is_ours)
+    assert (hit.id, hit.why) == (BANDIT, "attacker")  # not his partner, not his own companion
+    assert addressee("Ксардас, помоги!", None, people, None, ours=gorn_is_ours).why == "name"
+    assert addressee("Ты кто?", XARDAS, people, None, ours=gorn_is_ours).why == "focus"
+    far = roster(person(BANDIT, "Бандит", 14, state="ZS_ATTACK"))
+    assert addressee("Эй!", None, far, None) is None  # a fight farther off is not with him
+
+
+async def test_one_in_a_fight_answers_on_and_fights_on():
+    fake = FakeGame()
+    llm = FakeBackend("Чего тебе?", delay=0)
+    cm, link, dialogue, talk = await _desk(fake, llm, FakeDecider("listen", 0.99))
+    try:
+        await fake.roster(person(BANDIT, "Бандит", 3, True, state="ZS_ATTACK", activity="fight"))
+        await fake.send(type="player_text", text="Ты чего, спокуха!")
+        await _until(lambda: fake.said == ["Чего тебе?"])
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    assert talk.last[0].why == "attacker"
+    assert BANDIT not in fake.attached  # not held to listen: its scripts fight on while it answers

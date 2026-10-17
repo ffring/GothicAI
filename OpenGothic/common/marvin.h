@@ -78,6 +78,17 @@ class Marvin {
       C_ToggleManualAim,
       C_ToggleNpcManualAim,
       C_ToggleFlinch,
+      C_ToggleRagdoll,
+      C_ToggleRagdollQuestGuard,
+      C_ToggleLivingBodies,
+      C_ToggleArrowPhysics,
+      C_ToggleArrowSticking,
+      C_ToggleSpellPhysics,
+      C_ToggleMovableVobs,
+      C_TogglePhysicsNoise,
+      C_ToggleDestruction,
+      C_ToggleCharacterVirtual,
+      C_ToggleNpcCharacterVirtual,
       };
 
     struct Cmd {

@@ -13,6 +13,7 @@ The pace: one step at a time, a pause between steps, none while a dialog or a cu
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -24,7 +25,7 @@ from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
 from .gamedata.storygraph import Expr, Node, StoryGraph, render, walk
 from .journal import Journal
-from .llm import LLMBackend, LLMError, Message, Tool, ToolCall
+from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
 from .protocol import GameMessage, Session
 from .story import StoryPatches
 from .validator import (
@@ -43,11 +44,15 @@ from .validator import (
 
 if TYPE_CHECKING:
     from .dialogue import DialogueManager
+    from .questbook import DeadEnd, Quest, QuestBook
 
 log = logging.getLogger(__name__)
 
 PROPOSE = "propose_repair"
 SETTLE_S = 2.0  # after a death: the scripts' own reaction (ZS_Dead) comes first
+CACHE_KEY = (
+    "director"  # its requests' own connection (openai_responses.py): the prompt cache of its instructions
+)
 NEARBY_CM = 3000  # who stood near the dead: candidates to take its ending over
 MAX_SUCCESSORS = 8
 ATTEMPTS = 2
@@ -63,7 +68,11 @@ INSTRUCTIONS = """\
 (description), короткий разговор (lines: 2–5 реплик; hero — герой, npc — преемник, он говорит своим голосом \
 и знает о смерти), выбираешь эффекты концовки по id из сводки (награда не больше исходной, можно меньше, \
 если так честнее) и две записи в журнал героя от первого лица: journal_now — что он узнаёт сразу (о смерти и \
-к кому теперь идти), journal_done — после сдачи.
+к кому теперь идти), journal_done — после сдачи. Эффект-«вариант ответа» — это выбор героя в меню после \
+разговора, как в оригинале (например, золото или скидка): выбери те варианты, что преемнику естественно \
+предложить, и, если нужно, напиши его ответ на каждый (answers: id варианта и одна реплика). Вариант, \
+который обещает то, что мог дать только умерший, не бери. То, что даёт вариант, преемник отдаёт в ответе \
+на него, а не раньше, в разговоре.
 - close: если передать концовку некому или это нелепо, квест закрывается (status: obsolete — потерял смысл, \
 failed — провален), с записью journal_now.
 
@@ -101,6 +110,16 @@ PROPOSE_TOOL = Tool(
                 },
             },
             "effects": {"type": "array", "items": {"type": "string"}, "description": "id эффектов: E1, E2…"},
+            "answers": {
+                "type": "array",
+                "description": "ответ преемника на вариант ответа героя; можно пусто",
+                "items": {
+                    "type": "object",
+                    "properties": {"effect": {"type": "string"}, "text": {"type": "string"}},
+                    "required": ["effect", "text"],
+                    "additionalProperties": False,
+                },
+            },
             "status": {"type": "string", "enum": ["obsolete", "failed"], "description": "для close"},
             "journal_now": {"type": "string"},
             "journal_done": {"type": "string", "description": "для handover"},
@@ -113,6 +132,7 @@ PROPOSE_TOOL = Tool(
             "description",
             "lines",
             "effects",
+            "answers",
             "status",
             "journal_now",
             "journal_done",
@@ -125,11 +145,15 @@ PROPOSE_TOOL = Tool(
 
 @dataclass
 class Offer:
-    """An effect of the lifted ending the repair may keep (the bridge's vocabulary)."""
+    """An effect of the lifted ending the repair may keep (the bridge's vocabulary), or a choice of it the
+    hero picks in the menu after the talk, as in the scripts (`choice`: its node; `inside`: what it gives)."""
 
     id: str
     effect: dict[str, Any]
     text: str
+    choice: str = ""
+    inside: list[dict[str, Any]] = field(default_factory=list)
+    when: Expr | None = None  # a choice: when the scripts offer it
 
 
 @dataclass
@@ -157,6 +181,7 @@ class Brief:
     told: list[str]  # what the journal told the hero
     endings: list[Ending]
     successors: dict[str, str]  # npc -> "Name: why"
+    remaining: str = ""  # a quest of the book: its stage and the goals still ahead, in order
 
     def offers(self) -> dict[str, Offer]:
         return {o.id: o for e in self.endings for o in e.offers}
@@ -170,10 +195,12 @@ class Brief:
         if self.told:
             out.append("Что герой знает из журнала:")
             out += [f"- «{t}»" for t in self.told]
+        if self.remaining:
+            out.append(self.remaining)
         out.append("Концовки, которые теперь недоступны:")
         for i, e in enumerate(self.endings, 1):
             out.append(
-                f"{i}. {e.node} — диалог «{e.description}», ставит квесту {ENDINGS[e.value]}. "
+                f"{i}. {e.node} — диалог «{e.description}», ставит квесту {ENDINGS.get(e.value, 'running')}. "
                 f"Когда: {render(e.condition)}."
             )
             if e.lines:
@@ -195,6 +222,7 @@ class Proposal:
     description: str = ""
     lines: list[dict[str, str]] = field(default_factory=list)
     effects: list[str] = field(default_factory=list)
+    answers: dict[str, str] = field(default_factory=dict)  # choice offer -> the successor's answer
     status: str = "obsolete"
     journal_now: str = ""
     journal_done: str = ""
@@ -209,6 +237,11 @@ class Proposal:
             description=str(args.get("description", "")),
             lines=[dict(x) for x in args.get("lines") or [] if isinstance(x, dict)],
             effects=[str(x).upper() for x in args.get("effects") or []],
+            answers={
+                str(a.get("effect", "")).upper(): str(a.get("text", ""))
+                for a in args.get("answers") or []
+                if isinstance(a, dict) and str(a.get("text", "")).strip()
+            },
             status=str(args.get("status") or "obsolete"),
             journal_now=str(args.get("journal_now", "")),
             journal_done=str(args.get("journal_done", "")),
@@ -233,6 +266,10 @@ class RepairModel:
     def __init__(self, llm: LLMBackend) -> None:
         self.llm = llm
 
+    def warm(self) -> None:
+        """Its connection opened at once (a death): the request after the pacing does not wait for it."""
+        open_ahead(self.llm, CACHE_KEY, keep=True)
+
     async def propose(
         self, brief: Brief, previous: Proposal | None = None, errors: list[str] | None = None
     ) -> Proposal | None:
@@ -244,7 +281,7 @@ class RepairModel:
         calls: list[ToolCall] = []
         try:
             async for ev in self.llm.stream(
-                instructions=INSTRUCTIONS, messages=messages, tools=[PROPOSE_TOOL]
+                instructions=INSTRUCTIONS, messages=messages, tools=[PROPOSE_TOOL], cache_key=CACHE_KEY
             ):
                 if isinstance(ev, ToolCall) and ev.name == PROPOSE:
                     calls.append(ev)
@@ -291,6 +328,7 @@ class Director:
         journal: Journal | None = None,
         pacing: Pacing | None = None,
         settle_s: float = SETTLE_S,
+        book: QuestBook | None = None,
     ) -> None:
         self.link = link
         self.graph = graph
@@ -301,6 +339,7 @@ class Director:
         self.journal = journal or Journal()
         self.pacing = pacing or Pacing()
         self.settle_s = settle_s
+        self.book = book
         self.rules = Rules.of(graph)
         self.repairs: list[Repair] = []
         self.given_up: set[str] = set()  # quests no repair was found for, in this session
@@ -373,11 +412,38 @@ class Director:
             broken.append(q)
         for q in broken:
             await self.repair(q, story)
+        if self.book is not None:
+            broken.extend(await self._look_book(story, deaths))
         return broken
+
+    async def _look_book(self, story: Story, deaths: set[str] | None) -> list[str]:
+        """The book checks the order of its goals; a trigger writing a stage cannot mend a dead dialog."""
+        assert self.book is not None
+        await self.book.settle()
+        broken: list[str] = []
+        while True:
+            state = story.state.merge(await self.book.world())
+            story = Story(self.graph, state, Patches.of(self.patches.ops()))
+            blocked = next(
+                (
+                    b
+                    for b in self.book.dead_ends(state)
+                    if b.quest not in self.given_up and (deaths is None or b.npc in deaths)
+                ),
+                None,
+            )
+            if blocked is None:
+                return broken
+            if blocked.quest not in broken:
+                broken.append(blocked.quest)
+            # One dialog at a time: the same dead npc may own another later in this quest.
+            if await self.repair(blocked.quest, story) is None:
+                self.given_up.add(blocked.quest)
 
     # --- repairing ----------------------------------------------------------------------------
 
     async def repair(self, quest: str, story: Story) -> Repair | None:
+        self.model.warm()
         await self.pacing.wait(self.busy)
         try:
             brief = await self.brief(quest, story)
@@ -417,6 +483,9 @@ class Director:
             self.pacing.stepped()
 
     async def brief(self, quest: str, story: Story) -> Brief | None:
+        if self.book is not None and quest in self.book.all():
+            blocked = next((b for b in self.book.dead_ends(story.state) if b.quest == quest), None)
+            return await self._book_brief(blocked, story) if blocked is not None else None
         q = self.graph.quests.get(quest)
         if q is None:
             return None
@@ -450,6 +519,109 @@ class Director:
             endings=endings,
             successors=await self._successors(quest, dead, story),
         )
+
+    async def _book_brief(self, blocked: DeadEnd, story: Story) -> Brief | None:
+        assert self.book is not None
+        from .questbook import GOLD, TALKS, done_node, goal_id, goal_node
+
+        q = self.book.all()[blocked.quest]
+        node = story.patches.nodes.get(blocked.node)
+        if node is None:
+            return None
+        offers = []
+        for e in node.get("effects", []):
+            if e.get("do") == "give" and e.get("item") == GOLD and e.get("to") != "self":
+                offers.append(Offer("E1", copy.deepcopy(e), f"золото герою: {e['count']}"))
+            elif e.get("do") == "xp":
+                offers.append(Offer("E2", copy.deepcopy(e), f"опыт +{e['amount']}"))
+        value = next(
+            (e["value"] for e in node.get("effects", []) if e.get("do") == "set" and e.get("var") == q.id),
+            LOG_RUNNING,
+        )
+        told = []
+        current = story.state.vars.get(f"{q.id}_STAGE", self.book.progress(q.id).stage)
+        remaining = [f"Стадия {current} из {len(q.stages)}. Осталось сделать по порядку:"]
+        for k, stage in enumerate(q.stages, 1):
+            if k <= current and stage.journal:
+                told.append(stage.journal)
+            pending = []
+            for j, g in enumerate(stage.goals, 1):
+                gid = goal_id(q, k, j)
+                dialog = done_node(q) if k == len(q.stages) else goal_node(gid)
+                done = k < current or story.state.vars.get(gid, 0) > 0 or dialog in story.patches.told
+                if done:
+                    if g.journal:
+                        told.append(g.journal)
+                    continue
+                if g.kind in TALKS:
+                    text = f"поговорить с {q.name(g.npc)}: «{g.talk.description if g.talk else ''}»"
+                    if g.kind == "bring":
+                        text = f"принести {g.item} ×{g.count} к {q.name(g.npc)}; {text}"
+                elif g.kind == "kill":
+                    text = "убить: " + ", ".join(q.name(n) for n in g.npcs)
+                elif g.kind == "reach":
+                    text = f"дойти до {g.point or q.name(g.npc)}"
+                elif g.kind == "have":
+                    text = f"заполучить {g.item} ×{g.count}"
+                else:
+                    text = f"подождать {g.days} дн."
+                pending.append(text)
+            if pending:
+                remaining.append(f"- Стадия {k}: {stage.journal} " + "; ".join(pending) + ".")
+        killer = next(
+            (f.get("killer") for f in reversed(self.chronicle.facts("died")) if f.get("npc") == blocked.npc),
+            "",
+        )
+        return Brief(
+            quest=q.id,
+            title=q.title,
+            dead=blocked.npc,
+            dead_name=story.state.name(blocked.npc),
+            killer="герой"
+            if killer == "PLAYER"
+            else story.state.name(killer)
+            if killer
+            else "неизвестно кто",
+            told=list(dict.fromkeys(told)),
+            endings=[
+                Ending(
+                    blocked.node,
+                    blocked.npc,
+                    node["description"],
+                    value,
+                    copy.deepcopy(node.get("condition")),
+                    [x.get("text", "") for x in node.get("lines", [])],
+                    offers,
+                )
+            ],
+            successors=await self._book_successors(q, blocked.npc, story),
+            remaining="\n".join(remaining),
+        )
+
+    async def _book_successors(self, q: Quest, dead: str, story: Story) -> dict[str, str]:
+        why = {g.npc: "другая цель этого поручения" for s in q.stages for g in s.goals if g.npc}
+        for s in q.stages:
+            for g in s.goals:
+                for npc in g.npcs:
+                    why.setdefault(npc, "другая цель этого поручения")
+        try:
+            near = await self.link.story_nearby(dead, NEARBY_CM)
+        except (GameError, TimeoutError):
+            near = []
+        for p in sorted(near, key=lambda p: p.get("distance", 0)):
+            why.setdefault(p["npc"].upper(), f"был рядом ({round(p.get('distance', 0) / 100)} м)")
+        missing = [n for n in why if n not in story.state.npcs]
+        if missing:
+            more = await self.world(missing)
+            story.state.npcs.update(more.npcs)
+            story.state.names.update(more.names)
+        out = {}
+        for npc, reason in why.items():
+            if npc != dead and story.state.alive(npc) and not self.rules.plot_npc(npc):
+                out[npc] = f"{story.state.name(npc)}: {reason}"
+                if len(out) == MAX_SUCCESSORS:
+                    break
+        return out
 
     def _ending(self, node: Node, quest: str, story: Story, first: int) -> Ending | None:
         """The ending as a repair could replay it: when it is offered, what it needs, what it gives."""
@@ -508,8 +680,22 @@ class Director:
                 effect, text = made
                 out.append(Offer(f"E{first + len(out)}", effect, text + label))
             elif e["do"] == "choice" and depth == 0 and e.get("node") in self.graph.nodes:
+                # the hero's choice in the menu, as the scripts offer it: kept whole, its program played
                 choice = self.graph.nodes[e["node"]]
-                self._offers(choice, quest, story, needs, out, first, f" (вариант «{choice.description}»)", 1)
+                inside: list[Offer] = []
+                self._offers(choice, quest, story, needs, inside, 0, "", 1)
+                gives = ", ".join(o.text for o in inside) or "сам ничего не даёт"
+                said = " ".join(
+                    f"«{x.get('text', '')}»"
+                    for x in choice.effects
+                    if x["do"] == "line"
+                    and x.get("speaker") == ["inst", "SELF"]
+                    and story.possible(x.get("when"), self_npc=node.npc, hero_items=needs)
+                )
+                text = f"вариант ответа «{choice.description}»" + (f", в ответ: {said}" if said else "")
+                text += f" — {gives}"
+                effects = [o.effect for o in inside]
+                out.append(Offer(f"E{first + len(out)}", {}, text, choice.id, effects, e.get("when")))
 
     def _told(self, quest: str) -> list[str]:
         q = self.graph.quests[quest]
@@ -555,6 +741,11 @@ class Director:
 
     async def _try(self, p: Proposal, brief: Brief, story: Story) -> tuple[Repair | None, list[str]]:
         """Build the change from the proposal, check it, make it."""
+        if self.book is not None and brief.quest in self.book.all():
+            done, errors = await self.book.repair(p, brief, story)
+            if done is not None:
+                self._done(done, brief, p)
+            return done, errors
         if p.kind == "close":
             return await self._close(p, brief, story)
         if p.kind != "handover":
@@ -569,8 +760,23 @@ class Director:
         if not p.journal_now.strip() or not p.journal_done.strip():
             return None, ["нужны обе записи журнала: journal_now и journal_done"]
         id = self._node_id(brief.quest, story)
-        effects: list[dict[str, Any]] = [offers[x].effect for x in p.effects]
+        picked = [offers[x] for x in p.effects]
+        effects: list[dict[str, Any]] = [o.effect for o in picked if not o.choice]
         effects.append({"do": "set", "var": brief.quest, "value": ending.value})
+        program: list[dict[str, Any]] = []
+        for o in picked:
+            if o.choice:
+                try:
+                    own = await self.link.story_program(o.choice, own=True)
+                except (GameError, TimeoutError) as err:
+                    return None, [f"вариант ответа {o.id} не прочитать в игре: {err}"]
+                steps = borrowed(own.get("steps") or [], p.answers.get(o.id, ""))
+                text = self.graph.nodes[o.choice].description
+                choice: dict[str, Any] = {"do": "choice", "text": text, "steps": steps}
+                # offered when the scripts offer it, but for what the dialog already asked (it may have taken
+                # the things since: the turnips handed over)
+                when = _rest(o.when, ending.condition)
+                program.append({"do": "if", "cond": when, "then": [choice]} if when is not None else choice)
         if brief.title:
             status = {2: "LOG_SUCCESS", 3: "LOG_FAILED", 4: "LOG_OBSOLETE"}[ending.value]
             effects.append({"do": "journal", "topic": brief.title, "text": p.journal_done, "status": status})
@@ -586,9 +792,11 @@ class Director:
             ],
             "effects": effects,
         }
+        if program:
+            node["program"] = program
         ops = [{"op": "add_node", "node": node}]
         story = await self.with_symbols(story, names_in(ops))
-        caps = _caps([o.effect for o in ending.offers])
+        caps = _caps([x for o in ending.offers for x in ([o.effect] if not o.choice else o.inside)])
         errors = validate(ops, story, self.rules, repairs=brief.quest, caps=caps)
         if errors:
             return None, errors
@@ -645,8 +853,9 @@ class Director:
             log.warning("director: effects on %s: %s", npc, err)
 
     async def with_symbols(self, story: Story, names: set[str]) -> Story:
-        """The story with what the game says of the names a change uses."""
-        known = await self.world(symbols=names)
+        """The story with what the game says of the names a change uses, and how the npc's among them are:
+        a character of the director's own is in no dialog of the graph (cast.py)."""
+        known = await self.world(npcs=names, symbols=names)
         state = story.state.merge(known)
         state.symbols = known.symbols
         return Story(self.graph, state, story.patches)
@@ -705,6 +914,40 @@ def _effect(e: dict[str, Any], quest: str, titles: dict[str, str]) -> tuple[dict
     return None
 
 
+def borrowed(steps: list[dict[str, Any]], answer: str = "") -> list[dict[str, Any]]:
+    """A choice of the dead npc's dialog as its successor plays it: the hero says his own lines, the dead
+    one's are gone (the successor's `answer` comes after the hero's first line), the choices it would offer
+    next are not (a handover's menu has one level), and Info_ClearChoices clears the successor's."""
+
+    def block(ss: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
+        for st in ss:
+            call = st.get("call") if st.get("do") == "call" else None
+            name = str(call[1]).upper() if isinstance(call, list) and len(call) > 1 else ""
+            if name == "AI_OUTPUT" and call[2] != ["inst", "OTHER"]:
+                continue  # the dead one's line
+            if name == "INFO_ADDCHOICE":
+                continue
+            if name == "INFO_CLEARCHOICES":
+                out.append({"do": "clear_choices"})
+                continue
+            st = dict(st)
+            for k in ("then", "else"):
+                if isinstance(st.get(k), list):
+                    st[k] = block(st[k])
+            pure = not any(x[0] in ("call", "fn") for x in walk(st.get("cond")))
+            if st.get("do") == "if" and not st.get("then") and not st.get("else") and pure:
+                continue  # it held only the dead one's lines
+            out.append(st)
+        return out
+
+    out = block(copy.deepcopy(steps))
+    if answer.strip():
+        said = next((i + 1 for i, st in enumerate(out) if st.get("do") == "call"), 0)
+        out.insert(said, {"do": "say", "speaker": "self", "text": answer.strip()})
+    return out
+
+
 def topic_titles(graph: StoryGraph) -> dict[str, str]:
     titles: dict[str, str] = {}
     for q in graph.quests.values():
@@ -738,6 +981,19 @@ def _caps(effects: list[dict[str, Any]]) -> Caps:
         elif e["do"] == "give" and e.get("to") != "self":
             caps.items[e["item"]] = caps.items.get(e["item"], 0) + int(e["count"])
     return caps
+
+
+def _rest(guard: Expr | None, condition: Expr | None) -> Expr | None:
+    """The terms of `guard` the condition does not have, as a program computes them; None if there are none
+    or they are not plain (cases, unknown parts: a program does not take them)."""
+    have = condition[1:] if condition is not None and condition[:1] == ["&&"] else [condition]
+    terms = [
+        t for t in (guard[1:] if guard is not None and guard[:1] == ["&&"] else [guard]) if t is not None
+    ]
+    rest = [t for t in terms if t not in have]
+    if not rest or any(x[0] in ("cases", "unknown", "param", "local") for t in rest for x in walk(t)):
+        return None
+    return rest[0] if len(rest) == 1 else ["&&", *rest]
 
 
 def _all(*parts: Expr | None) -> Expr | None:

@@ -1,0 +1,135 @@
+{
+  "status": "passed",
+  "fixture": {
+    "kind": "keys_setup",
+    "scene": "flat",
+    "anchor": "NW_FARM1_PATH_01",
+    "root_cm": [
+      13881.52344,
+      1672.283325,
+      -15549.84277
+    ],
+    "goal_cm": [
+      13881.52344,
+      1672.283325,
+      -15049.84277
+    ],
+    "forward": [
+      -4.371138829e-08,
+      0,
+      1
+    ],
+    "actors": 1,
+    "frozen_residents": 11,
+    "cv_diagnostics_enabled": true,
+    "hero_parking_cm": [
+      13631.52344,
+      1710.258911,
+      -15729.84277
+    ],
+    "void_reference_cm": null,
+    "void_approach_cm": null,
+    "void_start_back_cm": null,
+    "void_edge_back_cm": null,
+    "void_start_from_original_back_cm": null,
+    "void_goal_beyond_cm": null,
+    "void_support_grid": null,
+    "removed_relaxed_overlay": true,
+    "flat_probe_count": 92,
+    "flat_minimum_y_cm": 1626.334595,
+    "flat_maximum_y_cm": 1702.518311,
+    "climb_probe_animation": "",
+    "climb_probe_height_cm": 0.0,
+    "climb_probe_no_climb": false,
+    "climb_face_cm": [
+      0,
+      0,
+      0
+    ],
+    "hero_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "npc_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "hero_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "npc_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "hero_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97",
+    "npc_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97"
+  },
+  "mode": 0,
+  "npc_cv_active_samples": 0,
+  "npc_walking_samples": 304,
+  "npc_walking_cv_active_samples": 0,
+  "segments": [
+    {
+      "segment": "forward",
+      "requested_ms": 3000,
+      "hero_cm": 428.43361743368064,
+      "npc_cm": 428.43361743368064,
+      "vector_error_cm": 0.0,
+      "hero_yaw_deg": 0,
+      "npc_yaw_deg": 0,
+      "animations": {
+        "hero": "S_WALKL",
+        "0": "S_WALKL"
+      },
+      "relative_error": 0.0
+    },
+    {
+      "segment": "side",
+      "requested_ms": 2000,
+      "hero_cm": 128.0894862243129,
+      "npc_cm": 128.0894862243129,
+      "vector_error_cm": 0.0,
+      "hero_yaw_deg": 0,
+      "npc_yaw_deg": 0,
+      "animations": {
+        "hero": "T_WALKWSTRAFER",
+        "0": "T_WALKWSTRAFER"
+      },
+      "relative_error": 0.0
+    },
+    {
+      "segment": "turn",
+      "requested_ms": 1000,
+      "hero_cm": 2.9516587087604886,
+      "npc_cm": 2.9516587087604886,
+      "vector_error_cm": 0.0,
+      "hero_yaw_deg": -90.00001096725464,
+      "npc_yaw_deg": -90.00001096725464,
+      "animations": {
+        "hero": "S_WALK",
+        "0": "S_WALK"
+      }
+    },
+    {
+      "segment": "back",
+      "requested_ms": 2000,
+      "hero_cm": 334.3748048992957,
+      "npc_cm": 334.3748048992957,
+      "vector_error_cm": 0.0,
+      "hero_yaw_deg": 0.0,
+      "npc_yaw_deg": 0.0,
+      "animations": {
+        "hero": "T_JUMPB",
+        "0": "T_JUMPB"
+      },
+      "relative_error": 0.0
+    },
+    {
+      "segment": "run",
+      "requested_ms": 3000,
+      "hero_cm": 853.2112941169405,
+      "npc_cm": 853.2112941169405,
+      "vector_error_cm": 0.0,
+      "hero_yaw_deg": 0.0,
+      "npc_yaw_deg": 0.0,
+      "animations": {
+        "hero": "S_RUNL",
+        "0": "S_RUNL"
+      },
+      "relative_error": 0.0
+    }
+  ],
+  "held_sequence_vector_error_cm": 0.0,
+  "total_vector_error_cm": 0.0,
+  "total_relative_error": 0.0,
+  "final_yaw_error_deg": 0.0
+}

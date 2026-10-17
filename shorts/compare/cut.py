@@ -1,9 +1,16 @@
 """Cuts a before/after short from the two takes of shorts/compare/film.sh: each beat (a recorded segment)
 the take with the animation work off on top, the one with it on below, 1080x1920; a hook over the first
-seconds, a title per beat, the game's sound of the "on" take, -14 LUFS.
+seconds, a title per beat, the game's sound of the "on" take, -14 LUFS. Optional in the plan: a beat's
+"slow" {"from", "to", "<lang>"} (seconds of its segment) marks a slowed stretch in the corner; "music"
+{"file", "volume"} (the file under the takes' folder, a theme of the game) lies under the whole short; a beat's
+"lines" [{"at", "file", "words": [[word, from, to], ...]}] are voiced lines laid at that second of its segment,
+captioned word by word in place of the beat's title, the music and the game's sound ducked under them. A plan
+with a voice lives outside the repository (the explainer's workspace): give its path, the short goes into its
+render/ folder.
 
     uv run --project shorts python shorts/compare/cut.py bodies ru
     uv run --project shorts python shorts/compare/cut.py bodies en
+    uv run --project shorts python shorts/compare/cut.py hits ru ~/.local/share/gothic-ai/explain/hits/plan.json
 """
 
 from __future__ import annotations
@@ -22,16 +29,20 @@ FPS = 30
 LABEL_FONT = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
 HOOK_FONT = "/System/Library/Fonts/Supplemental/Georgia Bold.ttf"
 GRADE = "eq=gamma=1.18:saturation=1.08"  # the game's noon is dark on a phone; the same for both takes
+WHITE, ACCENT = (255, 255, 255, 255), (255, 214, 120, 255)  # a caption's words, the one being said
+PAGE_WORDS = 3  # a caption page: at most this many words, a new one after a comma or a full stop
+DUCK = "threshold=0.02:ratio={}:attack=20:release=350"  # sidechaincompress under the voice
 
 
 def text_image(path: Path, items: list[tuple[str, str, int, int, tuple, str]]) -> None:
-    """items: (text, font, size, y, color, anchor x: 'l' at 40 px or 'c' centered); a dark band under each"""
+    """items: (text, font, size, y, color, anchor x: 'l' at 40 px, 'r' at W - 40 or 'c' centered); a dark band under
+    each"""
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     for text, font_file, size, y, color, ax in items:
         font = ImageFont.truetype(font_file, size)
-        x = 40 if ax == "l" else W // 2
-        anchor = "la" if ax == "l" else "ma"
+        x = {"l": 40, "r": W - 40}.get(ax, W // 2)
+        anchor = {"l": "la", "r": "ra"}.get(ax, "ma")
         box = draw.textbbox((x, y), text, font=font, anchor=anchor, stroke_width=0)
         pad = size // 4
         draw.rounded_rectangle((box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad), radius=pad,
@@ -40,25 +51,92 @@ def text_image(path: Path, items: list[tuple[str, str, int, int, tuple, str]]) -
     img.save(path)
 
 
+def caption_image(path: Path, words: list[str], current: int) -> None:
+    """A caption page in the title's place, the word being said in the accent colour, smaller when it is wide."""
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    size = 76
+    while True:
+        font = ImageFont.truetype(LABEL_FONT, size)
+        space, widths = draw.textlength(" ", font=font), [draw.textlength(w, font=font) for w in words]
+        total = sum(widths) + space * (len(words) - 1)
+        if total <= W - 140 or size <= 48:
+            break
+        size -= 4
+    x, y, pad = (W - total) / 2, HALF - 160, size // 4
+    ascent, descent = font.getmetrics()
+    draw.rounded_rectangle((x - pad, y - pad, x + total + pad, y + ascent + descent + pad), radius=pad,
+                           fill=(0, 0, 0, 150))
+    for k, (word, width) in enumerate(zip(words, widths)):
+        draw.text((x, y), word, font=font, fill=ACCENT if k == current else WHITE, stroke_width=6,
+                  stroke_fill=(0, 0, 0, 255))
+        x += width + space
+    img.save(path)
+
+
+def caption_states(line: dict, start: float, end: float) -> list[tuple[list[str], int, float, float]]:
+    """(page words, the current one, from, to) in seconds of the beat, for a voiced line at line["at"] of the
+    segment: pages of PAGE_WORDS, each word lit from its start to the next one's, the last held a little."""
+    words = [(w, line["at"] + a - start, line["at"] + b - start) for w, a, b in line["words"]]
+    pages: list[list[tuple[str, float, float]]] = [[]]
+    for word in words:
+        if len(pages[-1]) == PAGE_WORDS:
+            pages.append([])
+        pages[-1].append(word)
+        if word[0][-1] in ",.!?:;":
+            pages.append([])
+    pages = [page for page in pages if page]
+    states = []
+    for n, page in enumerate(pages):
+        page_end = pages[n + 1][0][1] if n + 1 < len(pages) else min(page[-1][2] + 0.4, end - start)
+        for k, (_, a, _b) in enumerate(page):
+            to = page[k + 1][1] if k + 1 < len(page) else page_end
+            states.append(([w for w, _, _ in page], k, a, to))
+    return states
+
+
 def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
+def master(inputs: list[str], mix: str, out: Path, length: float) -> None:
+    """The sound of the joined video brought to -14 LUFS by one gain: the peaks limited, then loudnorm in two passes,
+    linear (one pass is dynamic: it lifts the quiet stretches, a slowed silence under the music), faded out over
+    the last 80 ms (no step at the end). mix: a filter graph from the inputs to the sound, ending where the
+    mastering goes on"""
+    loud = "loudnorm=I=-14:TP=-1.5:LRA=11"
+    pre = f"{mix},alimiter=limit=0.75:level=false"
+    probe = subprocess.run(["ffmpeg", "-hide_banner", *inputs, "-filter_complex", f"{pre},{loud}:print_format=json",
+                            "-f", "null", "-"], check=True, capture_output=True, text=True).stderr
+    key = probe.rindex('"input_i"')  # the json loudnorm prints, among ffmpeg's other lines
+    m = json.loads(probe[probe.rindex("{", 0, key):probe.index("}", key) + 1])
+    loud += (f":measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}"
+             f":measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
+    fade = f"afade=t=out:st={length - 0.08:.3f}:d=0.08"
+    run(["ffmpeg", "-y", *inputs, "-filter_complex", f"{pre},{loud},{fade}[a]", "-map", "0:v", "-map", "[a]",
+         "-c:v", "copy",
+         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(out)])
+
+
 def main() -> None:
     name, lang = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "ru"
-    plan = json.loads((ROOT / "shorts/compare" / f"{name}.json").read_text())
+    plan_file = Path(sys.argv[3]).expanduser() if len(sys.argv) > 3 else ROOT / "shorts/compare" / f"{name}.json"
+    plan = json.loads(plan_file.read_text())
     takes = ROOT / ".shorts/compare" / name
-    out = takes / f"short-{lang}.mp4"
+    out = plan_file.parent / "render" / f"short-{lang}.mp4" if len(sys.argv) > 3 else takes / f"short-{lang}.mp4"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    voice = []  # (the line's file, its second in the short)
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
-        parts = []
+        parts, offset = [], 0.0
         for i, beat in enumerate(plan["beats"]):
             seg, start, end = beat["segment"], beat["start"], beat["end"]
             items = [
                 (plan["labels"][lang][0], LABEL_FONT, 40, 40, (230, 230, 230, 255), "l"),
                 (plan["labels"][lang][1], LABEL_FONT, 40, HALF + 40, (255, 214, 120, 255), "l"),
-                (beat["title"][lang], LABEL_FONT, 64, HALF - 150, (255, 255, 255, 255), "c"),
             ]
+            if not beat.get("lines"):  # a voiced beat has its captions there instead
+                items.append((beat["title"][lang], LABEL_FONT, 64, HALF - 150, (255, 255, 255, 255), "c"))
             text_image(tmp / f"t{i}.png", items)
             layers = [f"[2]loop=-1:1,trim=0:{end - start}[t]"]
             overlay = "[s][t]overlay=0:0:shortest=1"
@@ -71,6 +149,24 @@ def main() -> None:
                 inputs += ["-i", str(tmp / "hook.png")]
                 layers.append(f"[3]loop=-1:1,trim=0:{plan['hook_s']}[h]")
                 overlay += "[o];[o][h]overlay=0:0:eof_action=pass"
+            if "slow" in beat:  # both takes are slowed: the mark in the corner of each half
+                slow = beat["slow"]
+                mark = (slow[lang], LABEL_FONT, 40, 40, (255, 255, 255, 255), "r")
+                text_image(tmp / f"s{i}.png", [mark, (*mark[:3], HALF + 40, *mark[4:])])
+                inputs += ["-i", str(tmp / f"s{i}.png")]
+                n = len(inputs) // 2 - 1
+                layers.append(f"[{n}]loop=-1:1,trim=0:{end - start}[m]")
+                overlay += (f"[q];[q][m]overlay=0:0:shortest=1:"
+                            f"enable='between(t,{max(slow['from'] - start, 0)},{slow['to'] - start})'")
+            for j, line in enumerate(beat.get("lines", [])):
+                voice.append((takes / line["file"], offset + line["at"] - start))
+                for k, (words, current, a, b) in enumerate(caption_states(line, start, end)):
+                    caption_image(tmp / f"c{i}_{j}_{k}.png", words, current)
+                    inputs += ["-i", str(tmp / f"c{i}_{j}_{k}.png")]
+                    layers.append(f"[{len(inputs) // 2 - 1}]loop=-1:1,trim=0:{end - start}[c{j}_{k}]")
+                    overlay += (f"[q{j}_{k}];[q{j}_{k}][c{j}_{k}]overlay=0:0:shortest=1:"
+                                f"enable='between(t,{a:.3f},{b:.3f})'")
+            offset += end - start
             graph = ";".join([
                 f"[0]trim={start}:{end},setpts=PTS-STARTPTS,scale={W}:{HALF},{GRADE}[a]",
                 f"[1]trim={start}:{end},setpts=PTS-STARTPTS,scale={W}:{HALF},{GRADE}[b]",
@@ -89,8 +185,32 @@ def main() -> None:
         (tmp / "list.txt").write_text("".join(f"file '{p}'\n" for p in parts))
         joined = tmp / "joined.mp4"
         run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(tmp / "list.txt"), "-c", "copy", str(joined)])
-        run(["ffmpeg", "-y", "-i", str(joined), "-c:v", "copy", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
-             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(out)])
+        total = offset
+        inputs, graph, mix = ["-i", str(joined)], [], ["[g]"]
+        if voice:  # the lines at their seconds; the game's sound (and the music below) ducked under them
+            first = len(inputs) // 2 + (1 if "music" in plan else 0)
+            for k, (wav, at) in enumerate(voice):
+                ms = round(at * 1000)
+                graph.append(f"[{first + k}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+                             f"adelay={ms}|{ms}[v{k}]")
+            graph.append("".join(f"[v{k}]" for k in range(len(voice))) +
+                         f"amix=inputs={len(voice)}:duration=longest:normalize=0,apad=whole_dur={total},"
+                         + ("asplit=3[vo][vg][vm]" if "music" in plan else "asplit=2[vo][vg]"))
+            graph.append(f"[0:a][vg]sidechaincompress={DUCK.format(3)}[g]")
+            mix.append("[vo]")
+        else:
+            graph.append("[0:a]anull[g]")
+        if "music" in plan:  # the theme under the game's sound, faded in and out over the whole short
+            music = plan["music"]
+            inputs += ["-i", str(takes / music["file"])]
+            graph.append(f"[1:a]atrim=0:{total},asetpts=PTS-STARTPTS,volume={music['volume']},afade=t=in:d=1,"
+                         f"afade=t=out:st={total - 1.5}:d=1.5" + ("[m0];[m0][vm]sidechaincompress=" +
+                                                                 DUCK.format(8) if voice else "") + "[m]")
+            mix.append("[m]")
+        for wav, _ in voice:
+            inputs += ["-i", str(wav)]
+        graph.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0")
+        master(inputs, ";".join(graph), out, total)
     # frames over the whole short, for a look
     run(["ffmpeg", "-y", "-i", str(out), "-vf", "fps=1,scale=270:-2,tile=6x3", "-frames:v", "1",
          str(out.with_suffix(".png"))])

@@ -56,9 +56,13 @@ void MeshObjects::Mesh::setSkeleton(const Skeleton *sk) {
   }
 
 void MeshObjects::Mesh::setPose(const Tempest::Matrix4x4& obj, const Pose &p) {
+  setPose(obj,p.transform());
+  }
+
+void MeshObjects::Mesh::setPose(const Tempest::Matrix4x4& obj, const Tempest::Matrix4x4* bones) {
   if(anim!=nullptr)
-    anim->set(p.transform());
-  implSetObjMatrix(obj,p.transform());
+    anim->set(bones);
+  implSetObjMatrix(obj,bones);
   }
 
 void MeshObjects::Mesh::setAsGhost(bool g) {
@@ -86,7 +90,7 @@ void MeshObjects::Mesh::setMMShape(std::string_view anim, uint32_t frame0, uint3
     sub[i].setMMShape(anim,frame0,frame1,alpha,intensity);
   }
 
-float MeshObjects::Mesh::morphWeight(std::string_view anim) {
+float MeshObjects::Mesh::morphWeight(std::string_view anim) const {
   float w = 0;
   for(size_t i=0;i<subCount;++i)
     w = std::max(w, sub[i].morphWeight(anim));

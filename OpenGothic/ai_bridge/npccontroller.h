@@ -16,6 +16,7 @@
 class Npc;
 class World;
 class WayPoint;
+class Interactive;
 
 // NPCs taken off script control (routines, perceptions) and driven by the external AI server.
 // One action in flight per NPC; a new action preempts the current one.
@@ -58,11 +59,19 @@ class NpcController final {
       size_t          target   = 0;     // instance of target npc
       bool            toPlayer = false;
       float           radius   = 0;     // success radius for movement, cm
-      size_t          item     = 0;     // give_item: item instance and count
+      size_t          item     = 0;     // give_item, take_item: item instance and count (take: what it had)
       size_t          count    = 0;
       ScriptFn        state;            // fight/flee: the script state that runs it
+      uint64_t        stateStart = 0;   // fight/flee: startup clock after queued speech
       const Npc*      targetNpc = nullptr; // fight/flee: exactly whom (symbols of monsters are shared)
       bool            entered  = false; // the npc is in that state already
+      // use_chest (v28): the chest, what to take out and put in (item, count), how far it got
+      Interactive*    chest    = nullptr;
+      std::vector<std::pair<size_t,size_t>> take, put;
+      bool            opened   = false; // the items have moved, it closes the chest now
+      bool            relock   = false; // its lock was opened for its owner: locked again after
+      std::string     moved;            // what moved: "took=ITEM:N,…;put=ITEM:N,…"
+      std::string     pace;             // go_to_waypoint (v38): run, walk, or hero (his, as a guide ahead)
       };
 
     struct Follow final {
@@ -70,6 +79,9 @@ class NpcController final {
       bool            toPlayer = false;
       uint64_t        until    = 0;
       uint64_t        nextStep = 0;
+      Tempest::Vec3   movedFrom;          // where it last was a step away from: stuck if it stays there
+      uint64_t        movedAt  = 0;
+      bool            byWay    = false;   // going round by the waynet, a straight walk having got stuck
       };
 
     struct Controlled final {
@@ -91,10 +103,12 @@ class NpcController final {
     bool startScriptState(World& world, Controlled& c, Action& a, std::string_view state, const rapidjson::Value& args,
                           std::string& err);
     void regainControl(Controlled& c);
+    void keepHeroPace(World& world, Npc& npc);
     void updateFollow(World& world, Controlled& c, uint64_t now);
     void stopFollow(Controlled& c, std::string_view reason);
     bool giveItem(World& world, Controlled& c, const Action& a, std::string& err);
     void finishAction(Controlled& c, std::string_view status, std::string_view detail, double distance = -1);
+    void useChest(World& world, Controlled& c, Action& a);
     void release(Controlled& c, bool resumeRoutine);
 
     void emitDetached(std::string_view symbol, std::string_view reason);

@@ -23,10 +23,24 @@ live there and are served as the public dir.
 - `hook`: the big text over the first seconds;
 - `beats`: in order, each `footage` (an mp4, `freeze` and `zoom` optional), `still` (a png), `split` (two takes,
   top and bottom, with labels) or `card` (a chart); `texts` on top of a beat, `tags` (a label pinned to a point
-  of the picture, lines appearing one by one, a roll counter that stops on the real number);
-- `lines`: the voice's words with their times, a sentence per line (from `gothic-shorts align`); the captions
-  are pages of 2-4 words of them, the word being said in gold;
-- `voice`: the recorded lines and where they start; the game's sound ducks under them.
+  of the picture, to its left or right with `side`, lines appearing one by one, a roll counter that stops on the
+  real number), `strokes` (a line drawing itself between two points of the picture; with `cut` it stops at a wall:
+  solid up to it, dashed past it, a cross on it) and `fans` (a sector opening from a point): lines of sight and the
+  bow's focus from the bench's `sight` export;
+- the cards (`chart.type`): `dice` (the chance by distance, curves drawn as they are named), `formula` (the
+  terms a line each as they are said, then a worked example computed the way `damagecalculator.cpp` does it:
+  rounded at each step, protection not below 0, at least 5), `bars` (groups growing one by one), `dots` (marks
+  filling up to a count), `stats` (the character's numbers greying out under a question); each but `stats`
+  names its `source`;
+- `lines`: the voice's words with their times, a sentence per line (`gothic-shorts words`); the captions are
+  pages of 2-4 words of them, the word being said in gold. A page never ends on a preposition or a conjunction
+  (`в`, `как`, `of the`, `than`): it goes to the next one. For captions in another language than the voice, the
+  plan's maker spreads the translated words over the spoken ones (a part per pause);
+- `voice`: the recorded lines and where they start; the game's sound ducks under them (`duck`), `gameVolume`
+  sets it as a whole (0: the footage is silent);
+- `music`: one bed under the whole short (`file`, `volume` in the voice's pauses, `duck` times that while it
+  speaks, fades at both ends), looped. Footage of different moments carries different parts of the game's
+  soundtrack: one bed and `gameVolume: 0` keep it from jumping at every cut.
 
 `{chance:exe:40:16}` in a tag is the chance by that rule (`exe`: Gothic2.exe's dice, `opengothic`: OpenGothic's
 before it) for that talent and distance, computed by `src/dice.ts` from the same formulas as

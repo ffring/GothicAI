@@ -1,0 +1,12 @@
+# Load the hero's standing stair save with CHARACTER_VIRTUAL=1. No actor input.
+# `initial` snapshots and guards nearby creatures before the first native tick.
+character initial
+npccharacter trace player
+rec idle_10s
+# Ordinary commands first run at 33ms; the remaining 967ms ends at exactly 1s.
+wait 967
+character snapshot first_1s
+wait 9000
+character snapshot idle_10s
+stop
+npccharacter trace off

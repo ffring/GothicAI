@@ -20,23 +20,34 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "game/gamescript.h"
 #include "game/bodyobservations.h"
 #include "game/bodycontroller.h"
+#include "game/inventory.h"
 #include "game/serialize.h"
 #include "camera.h"
 #include "commandline.h"
 #include "physics/dynamicworld.h"
+#include "physics/physicsnoise.h"
+#include "world/objects/interactive.h"
+#include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "world/worldsound.h"
+#include "npcchests.h"
 #include "gothic.h"
 
+#include "beasts.h"
 #include "chatoverlay.h"
 #include "dialoggraph.h"
+#include "storycast.h"
+#include "storyruntime.h"
+#include "storytriggers.h"
 #include "storyworld.h"
+#include "stucklogger.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
 #include "world/waypoint.h"
@@ -54,9 +65,10 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 17;
+constexpr int         ProtocolVersion = 41;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
+constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
 
 constexpr uint32_t    MoodHoldMs      = 2000;  // the face of a line stays this long after it, then fades (a second)
 
@@ -132,7 +144,7 @@ std::vector<uint8_t> fromBase64(std::string_view in) {
   }
 
 // listening to the hero's voice, thinking of an answer (tickListener)
-constexpr float    ListenRange  = 800;    // cm: who listens to the hero's voice is this near
+constexpr float    ListenRange  = 1500;   // cm: who listens to the hero's voice is this near (talk.py PARTNER_CM)
 constexpr float    ListenFront  = 0.34f;  // ...and in front of him (cos of 70 degrees), unless he looks at it
 constexpr uint64_t ListenAfter  = 4000;   // ms after the key: it listens on until the final transcript, at most
 constexpr uint64_t ThinkMax     = 12000;  // ms: no answer by then, it stops thinking
@@ -192,7 +204,8 @@ struct AiBridge::Impl final {
   void onStartLoading();
   void onSessionUnload() { voices.clear(); resetBodyObservations(); }
   void onWorldLoaded();
-  void takePendingSession();
+  bool takePendingSession();
+  void skipIntro(World& world);
   void startBranch(std::string parent, int64_t parentSeq, std::string_view reason);
   void sendSession();
   void updateSaveRecord();
@@ -201,6 +214,7 @@ struct AiBridge::Impl final {
   void runWorldDebug(const rapidjson::Value& msg);
   void onPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   void onObservedPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
+  void onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise);
   // who drives the npc instead of its scripts: "attached" or nobody
   std::string_view npcOwner(std::string_view symbol) const;
   bool onConsoleCommand(std::string_view cmd, std::string& reply);
@@ -212,6 +226,13 @@ struct AiBridge::Impl final {
   void finishBodyReset(World* world);
   void resetBodyObservations();
   void onSay(World& world, const rapidjson::Value& msg);
+  // the director's lines (story graph) get the npc's voice from the server (v26)
+  void askVoice(const std::string& line, const std::string& npc, const std::string& text);
+  // a line of the director's own (npc symbol, text in the game codepage): a runtime line, voiced; its id
+  std::string storyLine(const std::string& npc, const std::string& text);
+  // a graph_patch message: the operations in order, the triggers' to the triggers; the ones not applied
+  std::vector<std::string> applyPatch(const rapidjson::Value& msg);
+  void voiceStoryLine(World& world, const rapidjson::Value& msg, const std::string& line);
   void onSayAudio(World& world, const rapidjson::Value& msg);
   // streamed voices: playback starts with the line, the line is shortened to the real length
   void startVoice(const LineLibrary::Line& line);
@@ -266,6 +287,8 @@ struct AiBridge::Impl final {
   NpcObserver          observer{[this](std::string&& s){ send(std::move(s)); },
                                 [this](std::string_view symbol){ return npcOwner(symbol); }};
   NpcView              view{[this](std::string&& s){ send(std::move(s)); }};
+  // wolves hear the hero's voice (v21, docs/beasts.md)
+  BeastWatch           beasts{[this](std::string&& s){ send(std::move(s)); }};
 
   Session              session;
   bool                 saving = false;  // a save is in progress: the same world comes back
@@ -285,6 +308,7 @@ struct AiBridge::Impl final {
   LineLibrary                  lines;
   std::vector<struct Voice>    voices;
   std::unordered_map<std::string,std::string> lastLine;  // npc -> line it speaks (or spoke) last
+  std::unordered_set<std::string>             voicing;   // the director's lines the server is asked to voice
   std::unordered_map<std::string,std::string> originalLines;  // original line sent with `say` -> npc, until it starts
   std::unordered_map<std::string,std::string> originalTo;     // ...-> the npc it is said to (v15), if not the hero
   std::unique_ptr<ChatOverlay> chat;
@@ -297,12 +321,17 @@ struct AiBridge::Impl final {
   uint64_t                     thinkUntil  = 0;  // no answer by then: it stops thinking
   // dialogs of the story graph: the lines of the director's dialogs are runtime lines too
   uint64_t                     graphLines = 0;
+  // what the director's programs and conditions run on, in dialogs and triggers (docs/director.md, stage 3)
+  StoryRuntime                 runtime{[this](const std::string& npc, const std::string& text) {
+                                         return storyLine(npc,text);
+                                         }};
   DialogGraph                  graph{[this](std::string&& s){ send(std::move(s)); },
                                      [this](const std::string& npc, const std::string& text) {
-                                       auto id = "AIB_G" + std::to_string(++graphLines);
-                                       lines.add(id,npc,text);
-                                       return id;
-                                       }};
+                                       return storyLine(npc,text);
+                                       },
+                                     runtime};
+  // the director's triggers: an event, a condition, a program (v35)
+  StoryTriggers                triggers{runtime,[this](std::string&& s){ send(std::move(s)); }};
   // the director's hands in the world: tagged creatures, deaths, effects on npc's (v8)
   StoryWorld                   story{[this](std::string&& s){ send(std::move(s)); },
                                      [this](World& w, Npc& npc) {
@@ -326,9 +355,13 @@ AiBridge::Impl::Impl() {
   gothic.onWorldLoaded       .bind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.bind(this,&Impl::onPerception);
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
+  gothic.onPhysicsNoiseHeard .bind(this,&Impl::onPhysicsNoiseHeard);
   gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
     World* world = Gothic::inst().world();
-    return connected && world!=nullptr && observer.intercept(*world,self,other,victim,perc);
+    // the wolves' own (they leave the hero be) without the server too: the console drives them on the bench
+    return world!=nullptr &&
+           (beasts.intercept(*world,self,other,victim,perc) ||
+            (connected && observer.intercept(*world,self,other,victim,perc)));
     };
   gothic.consoleCommandFn = [this](std::string_view cmd, std::string& reply) {
     return onConsoleCommand(cmd,reply);
@@ -376,6 +409,10 @@ AiBridge::Impl::Impl() {
       return lines.pending();
       };
   lines.onStart   = [this](const LineLibrary::Line& l) { onLineStarted(l); };
+  graph.chosen    = [this](Npc& npc, const std::string& node) {
+    if(auto world = Gothic::inst().world())
+      triggers.onDialog(*world,npc,node);
+    };
   ctrl.onFollowEnded = [this](const std::string& npc, std::string_view) {
     // following on its own ended: back to its routine (the server takes it again if it wants)
     std::string err;
@@ -425,6 +462,7 @@ AiBridge::Impl::~Impl() {
   gothic.onWorldLoaded       .ubind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.ubind(this,&Impl::onPerception);
   gothic.onObservedPerception.ubind(this,&Impl::onObservedPerception);
+  gothic.onPhysicsNoiseHeard .ubind(this,&Impl::onPhysicsNoiseHeard);
   gothic.interceptPerception = nullptr;
   gothic.consoleCommandFn  = nullptr;
   gothic.externalMessageFn = nullptr;
@@ -456,6 +494,8 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
 
   if(world!=nullptr) {
     ctrl.tick(*world);
+    beasts.tick(*world);  // its reports go nowhere without the server; the console drives it then
+    triggers.tick(*world);  // the director's story goes on without the server too
     if(connected) {
       observer.tick(*world);
       view.tick(*world);
@@ -519,6 +559,7 @@ void AiBridge::Impl::processInbound(World* world, Inbound& in) {
         if(world!=nullptr) {
           ctrl.detachAll(*world,"server_disconnected");
           observer.releaseAll(*world);
+          beasts.releaseAll(*world);
           }
         observer.setHoldThreats(false);
         if(chat!=nullptr)
@@ -555,13 +596,21 @@ void AiBridge::Impl::onStartLoading() {
   originalTo.clear();
   lines.clear();
   observer.clear();
-  Log::i("[story] ",graph.status());
-  graph.clear();  // the server sends the patches of the new branch
+  Log::i("[story] ",graph.status(),"; ",triggers.status());
+  // the server sends the patches of the new branch
+  graph.clear();
+  triggers.clear();
+  triggers.clearWorld();
+  runtime.clear();
   story.clear();
   necro.clear();
-  if(auto world = Gothic::inst().world())
-    ctrl.detachAll(*world,"loading"); else
+  if(auto world = Gothic::inst().world()) {
+    ctrl.detachAll(*world,"loading");
+    beasts.releaseAll(*world);
+    } else {
     ctrl.dropAll("loading");
+    }
+  beasts.clear();
   send(JsonWriter("loading").finish());
   }
 
@@ -571,11 +620,30 @@ void AiBridge::Impl::onWorldLoaded() {
     send(JsonWriter("saved").str("branch",session.branch).integer("seq",session.seq).finish());
     return;
     }
-  takePendingSession();
+  const bool newGame = takePendingSession();
+  if(newGame && !CommandLine::inst().doIntro() && Gothic::inst().world()!=nullptr)
+    skipIntro(*Gothic::inst().world());
   sendWorld("world_loaded",Gothic::inst().world());
   }
 
-void AiBridge::Impl::takePendingSession() {
+void AiBridge::Impl::skipIntro(World& world) {
+  // -nointro (autotests): the important dialogs of those around the hero at the start count as told, as
+  // `debug skip_important` does: Xardas does not stop him for his first talk (and the addon's intro video)
+  Npc* pl = world.player();
+  if(pl==nullptr)
+    return;
+  uint32_t near = 0;
+  for(uint32_t i=0; i<world.npcCount(); ++i) {
+    Npc* npc = world.npcById(i);
+    if(npc==nullptr || npc==pl || npc->qDistTo(*pl)>IntroCm*IntroCm)
+      continue;
+    world.script().skipImportantInfos(*npc,*pl);
+    near++;
+    }
+  Log::i("[ai] no intro: the important dialogs of ",near," npc's around the hero count as told");
+  }
+
+bool AiBridge::Impl::takePendingSession() {
   bool        pending  = false;
   bool        fromSave = false;
   std::string rec;
@@ -587,9 +655,10 @@ void AiBridge::Impl::takePendingSession() {
   }
   if(!pending) {
     // a world change: same line of play
-    if(session.branch.empty())
-      startBranch("",0,"new_game");
-    return;
+    if(!session.branch.empty())
+      return false;
+    startBranch("",0,"new_game");
+    return true;
     }
   std::string parent;
   int64_t     parentSeq = 0;
@@ -602,6 +671,7 @@ void AiBridge::Impl::takePendingSession() {
       }
     }
   startBranch(std::move(parent),parentSeq,fromSave ? "load" : "new_game");
+  return !fromSave;
   }
 
 void AiBridge::Impl::startBranch(std::string parent, int64_t parentSeq, std::string_view reason) {
@@ -646,6 +716,13 @@ void AiBridge::Impl::onObservedPerception(Npc& self, Npc& other, Npc* victim, Pe
     observer.perception(*world,self,other,victim,perc);
   }
 
+void AiBridge::Impl::onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise) {
+  if(!connected)
+    return;
+  if(auto world = Gothic::inst().world())
+    observer.physicsNoise(*world,self,noise);
+  }
+
 std::string_view AiBridge::Impl::npcOwner(std::string_view symbol) const {
   if(ctrl.isAttached(symbol))
     return "attached";
@@ -680,14 +757,15 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   if(type=="debug") {
     const auto cmd = JsonRead::str(doc,"cmd");
-    if(cmd=="dialogs" || cmd=="choose" || cmd=="eval" || cmd=="check")
+    if(cmd=="dialogs" || cmd=="choices" || cmd=="choose" || cmd=="eval" || cmd=="check" || cmd=="talk" ||
+       cmd=="menu" || cmd=="menu_pick" || cmd=="triggers")
       onDialogDebug(world,doc); else
       onDebug(doc);
     return;
     }
   if(type=="graph_patch") {
     // patches don't need a world: names are checked when there is one
-    auto errors = graph.apply(doc);
+    auto errors = applyPatch(doc);
     std::string all;
     for(auto& e : errors)
       all += (all.empty() ? "" : "; ") + e;
@@ -754,6 +832,12 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="story_state") {
     sendResult(req,true,"",story.state(*world,doc));
     }
+  else if(type=="npc_chests") {
+    // v28: the npc's chests and what lies in them
+    if(Npc* npc = npcBySymbol(*world,JsonRead::str(doc,"npc")))
+      sendResult(req,true,"",NpcChests::of(*world,*npc)); else
+      sendResult(req,false,"no npc " + std::string(JsonRead::str(doc,"npc")));
+    }
   else if(type=="story_people") {
     sendResult(req,true,"",story.people(*world));
     }
@@ -763,6 +847,18 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   else if(type=="story_eval") {
     onStoryEval(*world,doc);
+    }
+  else if(type=="story_program") {
+    // the program a dialog's function runs now (v23), or the scripts' own (`own`, v25), for the director to edit
+    std::string err;
+    auto json = graph.program(JsonRead::str(doc,"node"),JsonRead::str(doc,"part"),JsonRead::boolean(doc,"own",false),err);
+    sendResult(req,!json.empty(),err,json);
+    }
+  else if(type=="story_npc") {
+    // v34: a character of the director's, made once (docs/director.md, stage 2, layer 2)
+    std::string err;
+    auto        value = StoryCast::npc(*world,doc,err);
+    sendResult(req,!value.empty(),err,value);
     }
   else if(type=="story_effect") {
     if(auto npc = npcBySymbol(*world,JsonRead::str(doc,"npc"));
@@ -796,6 +892,11 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   else if(type=="hold_verdict") {
     observer.verdict(*world,doc);
+    }
+  else if(type=="beast") {
+    std::string err;
+    const bool  ok = beasts.command(*world,doc,err);
+    sendResult(req,ok,err);
     }
   else if(type=="say") {
     onSay(*world,doc);
@@ -986,7 +1087,8 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto") {
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
+     cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise" || cmd=="physics_traces" || cmd=="destruction_traces") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -1039,6 +1141,24 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     sendResult(req,false,"no world loaded");
     return;
     }
+  if(cmd=="physics_noise") {
+    std::string value, error;
+    const bool ok = TestBench::physicsNoiseDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
+    sendResult(req,ok,error,value);
+    return;
+    }
+  if(cmd=="physics_traces") {
+    std::string value, error;
+    const bool ok = TestBench::physicsTracesDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
+    sendResult(req,ok,error,value);
+    return;
+    }
+  if(cmd=="destruction_traces") {
+    std::string value, error;
+    const bool ok = TestBench::destructionTracesDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
+    sendResult(req,ok,error,value);
+    return;
+    }
   if(cmd=="spawn") {
     // a creature next to an npc (or the player): monsters for tests of threats
     std::string inst(JsonRead::str(msg,"instance"));
@@ -1051,7 +1171,7 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       sendResult(req,false,id==size_t(-1) ? "unknown instance" : "unknown npc to spawn near");
       return;
       }
-    // towards the player (open ground both have walked), else where the npc faces
+    // Prefer the old direction towards the player, else where the npc faces.
     const float dist = float(JsonRead::integer(msg,"distance",600));
     auto        pos  = at->position();
     float       dx   = std::cos(at->rotationRad()), dz = std::sin(at->rotationRad());
@@ -1065,7 +1185,110 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       }
     pos.x += dist*dx;
     pos.z += dist*dz;
-    sendResult(req,world->addNpc(id,pos)!=nullptr,"could not spawn");
+    Npc* spawned = nullptr;
+    if(at!=pl && dist>=0) {
+      const auto hero = pl->position();
+      const auto* physics = world->physic();
+      int level = 0, supported = 0;
+      const auto grounded = [&](Vec3& point) {
+        const float px = point.x-hero.x, pz = point.z-hero.z;
+        if(px*px+pz*pz<400.f*400.f)
+          return false;
+        const auto floor = physics->landRay({point.x,hero.y+100.f,point.z},200.f);
+        if(!floor.hasCol || std::abs(floor.v.y-hero.y)>100.f)
+          return false;
+        // landRay deliberately leaves object normals zero. The footprint below
+        // checks their support; a zero normal does not describe a steep slope.
+        if(floor.n!=Vec3() && floor.n.y<.8f)
+          return false;
+        ++level;
+        point = floor.v;
+        // Support the body, not just its centre on the edge of a floor.
+        const std::array<Vec3,4> footprint = {{{30,0,0},{-30,0,0},{0,0,30},{0,0,-30}}};
+        for(const auto& offset:footprint) {
+          const auto support = physics->landRay(point+offset+Vec3(0,50,0),100.f);
+          if(!support.hasCol || std::abs(support.v.y-point.y)>40.f)
+            return false;
+          }
+        if(physics->ray(point+Vec3(0,5,0),point+Vec3(0,100,0)).hasCol)
+          return false;
+        ++supported;
+        // Keep a single creature while testing its actual animated centre: that
+        // is the endpoint used by enemy perception, including for attached NPCs.
+        if(spawned==nullptr) {
+          spawned = world->addNpc(id,point);
+          } else {
+          spawned->setPosition(point);
+          spawned->updateTransform();
+          }
+        return spawned!=nullptr && at->canRayHitPoint(spawned->centerPosition(),true);
+        };
+      bool found = grounded(pos);
+      // A point on the NPC-to-hero ray can be beyond a wall or on another floor.
+      // Search bounded rings around the hero without relaxing the height/LOS gates.
+      for(int ring=0; ring<8 && !found; ++ring) {
+        const float radius = std::max(dist,401.f)+float(ring)*100.f;
+        for(int step=0; step<32 && !found; ++step) {
+          const float angle = float(step)*(2.f*float(M_PI)/32.f);
+          const float c = std::cos(angle), s = std::sin(angle);
+          auto candidate = hero+Vec3(radius*(dx*c-dz*s),0,radius*(dx*s+dz*c));
+          if(grounded(candidate)) {
+            pos = candidate;
+            found = true;
+            }
+          }
+        }
+      if(!found) {
+        if(spawned!=nullptr)
+          world->removeNpc(*spawned);
+        sendResult(req,false,"no visible supported ground within 1 m of the hero's height and at least 4 m away "
+                             "(level: "+std::to_string(level)+", supported: "+std::to_string(supported)+")");
+        return;
+        }
+      }
+    sendResult(req,spawned!=nullptr || world->addNpc(id,pos)!=nullptr,"could not spawn");
+    return;
+    }
+  if(cmd=="own_npc") {
+    // an npc of the director's (v33): a symbol of ours made like the script's npc `like`, put at a waypoint
+    // or `distance` cm in front of the player. The save keeps both
+    std::string why;
+    auto*       sym = world->script().ownSymbols().addNpc(JsonRead::str(msg,"npc"),JsonRead::str(msg,"like"),why);
+    if(sym==nullptr) {
+      sendResult(req,false,why);
+      return;
+      }
+    const auto wp  = JsonRead::str(msg,"waypoint");
+    Npc*       npc = nullptr;
+    if(!wp.empty()) {
+      npc = world->addNpc(sym->index(),wp);
+      } else {
+      const float dist = float(JsonRead::integer(msg,"distance",300));
+      auto        pos  = pl->position();
+      pos.x += dist*std::cos(pl->rotationRad());
+      pos.z += dist*std::sin(pl->rotationRad());
+      npc = world->addNpc(sym->index(),pos);
+      }
+    if(npc==nullptr) {
+      sendResult(req,false,"could not put " + sym->name() + " in the world");
+      return;
+      }
+    if(npc->visualSkeleton()==nullptr) {
+      // the code it is made like gave it no body: the world cannot have it (perception needs a head)
+      world->removeNpc(*npc);
+      sendResult(req,false,"the code of " + std::string(JsonRead::str(msg,"like")) + " gives " + sym->name() + " no body");
+      return;
+      }
+    // {npc, index: its symbol, name: as the game shows it}
+    rapidjson::StringBuffer                    buf;
+    rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+    const auto                                 shown = TextCodec::toUtf8(npc->displayName());
+    w.StartObject();
+    w.Key("npc");   w.String(sym->name().data(),rapidjson::SizeType(sym->name().size()));
+    w.Key("index"); w.Uint(sym->index());
+    w.Key("name");  w.String(shown.data(),rapidjson::SizeType(shown.size()));
+    w.EndObject();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
     return;
     }
   if(cmd=="teleport") {
@@ -1079,8 +1302,8 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     auto        pos  = at->position();
     pos.x += dist*std::cos(at->rotationRad());
     pos.z += dist*std::sin(at->rotationRad());
-    // on the ground there: on a slope the npc's own height would bury the player or drop him
-    const auto land = world->physic()->landRay(pos+Tempest::Vec3(0,500,0),1500);
+    // Search from the NPC's body height, not above an overhead floor or rock shelf.
+    const auto land = world->physic()->landRay({pos.x,at->centerPosition().y,pos.z},1500);
     if(land.hasCol)
       pos.y = land.v.y;
     pl->setPosition(pos);
@@ -1109,21 +1332,21 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
         sendResult(req,false,"unknown waypoint");
         return;
         }
-      pos = wp->position();
+      pos = wp->groundPos;
       }
     else if(Npc* to = npcBySymbol(*world,JsonRead::str(msg,"to"))) {
       const float d = float(JsonRead::integer(msg,"distance",300));
       pos = to->position();
       pos.x += d*std::cos(to->rotationRad());
       pos.z += d*std::sin(to->rotationRad());
+      const auto land = world->physic()->landRay({pos.x,to->centerPosition().y,pos.z},1500);
+      if(land.hasCol)
+        pos.y = land.v.y;
       }
     else {
       sendResult(req,false,"npc_goto needs waypoint or to");
       return;
       }
-    const auto land = world->physic()->landRay(pos+Tempest::Vec3(0,500,0),1500);
-    if(land.hasCol)
-      pos.y = land.v.y;
     npc->setInteraction(nullptr,true);  // off a bench or a stove first
     npc->clearAiQueue();                // a walk under way would take it back at once
     npc->setPosition(pos);
@@ -1198,6 +1421,7 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     at1.x += 150*std::cos(by->rotationRad());
     at1.z += 150*std::sin(by->rotationRad());
     victim->setPosition(at1);
+    victim->setLastHitBy(by);  // as a deadly hit leaves it: whose kill it is (hero_kill, v17)
     victim->changeAttribute(ATR_HITPOINTS,-victim->attribute(ATR_HITPOINTS),false);
     world->sendPassivePerc(*victim,*by,*victim,PERC_ASSESSMURDER);
     sendResult(req,victim->isDead(),"it did not die");
@@ -1207,6 +1431,18 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     // the hero steps to a waypoint (walking away from a conversation): a named one, the nearest one at
     // least `distance` cm away from an npc (`near`), or one next to an npc (`to`, `distance` cm off)
     const WayPoint* wp = nullptr;
+    if(auto pos = msg.FindMember("pos"); pos!=msg.MemberEnd() && pos->value.IsArray() && pos->value.Size()==3) {
+      // a point of the world (v21), on the ground there
+      Tempest::Vec3 at(float(pos->value[0].GetDouble()),float(pos->value[1].GetDouble()),
+                       float(pos->value[2].GetDouble()));
+      const auto land = world->physic()->landRay(at+Tempest::Vec3(0,100,0),1500);
+      if(land.hasCol)
+        at.y = land.v.y;
+      pl->setPosition(at);
+      pl->updateTransform();
+      sendResult(req,true,"");
+      return;
+      }
     if(auto name = JsonRead::str(msg,"waypoint"); !name.empty()) {
       wp = world->findPoint(name,false);
       }
@@ -1228,7 +1464,8 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       sendResult(req,false,"unknown waypoint");
       return;
       }
-    pl->setPosition(wp->position());
+    pl->setPosition(wp->groundPos);
+    pl->updateTransform();
     sendResult(req,true,"");
     return;
     }
@@ -1251,14 +1488,36 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     return;
     }
   if(cmd=="waypoints") {
-    // every waypoint and freepoint of the world: for the server's book of place names
-    std::string out = "[";
-    char        num[96];
+    // every waypoint and freepoint of the world: for the server's book of places (places.py). v32: the
+    // waynet's links of each, how much of the sky above it is covered (`roof`: of five rays up, straight
+    // and tilted, how many hit rock or a roof within RoofCm) and the room it is in (`room`, indoors)
+    constexpr float RoofCm   = 2000;
+    constexpr float RoofTilt = 0.57f;  // sin of 35°
+    const auto*     phys     = world->physic();
+    std::string     out      = "[";
+    char            num[128];
     world->forEachWayPoint([&](const WayPoint& w) {
       const auto pos = w.position();
-      std::snprintf(num,sizeof(num),"\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"fp\":%s}",
-                    double(pos.x),double(pos.y),double(pos.z),w.isFreePoint() ? "true" : "false");
+      int        roof = 0;
+      const auto eye  = pos+Tempest::Vec3(0,50,0);
+      const Tempest::Vec3 dirs[] = {{0,1,0},
+                                    {RoofTilt,0.82f,0},{-RoofTilt,0.82f,0},{0,0.82f,RoofTilt},{0,0.82f,-RoofTilt}};
+      for(auto& d:dirs)
+        if(phys->ray(eye,eye+d*RoofCm).hasCol)
+          ++roof;
+      std::snprintf(num,sizeof(num),"\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"fp\":%s,\"roof\":%d",
+                    double(pos.x),double(pos.y),double(pos.z),w.isFreePoint() ? "true" : "false",roof);
       out += (out.size()>1 ? ",{\"name\":\"" : "{\"name\":\"") + w.name + num;
+      const auto land = phys->landRay(eye,500);
+      if(land.hasCol && land.sector!=nullptr && land.sector[0]!='\0')
+        out += std::string(",\"room\":\"") + land.sector + "\"";
+      if(!w.connections().empty()) {
+        out += ",\"conn\":[";
+        for(size_t i=0; i<w.connections().size(); ++i)
+          out += (i ? ",\"" : "\"") + w.connections()[i].point->name + "\"";
+        out += "]";
+        }
+      out += "}";
       });
     sendResult(req,true,"",out + "]");
     return;
@@ -1279,6 +1538,77 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     sendResult(req,true,"");
     return;
     }
+  if(cmd=="player_drop") {
+    // the player throws a thing down, as with the game's own key (v22): he is given it first if he has none
+    std::string inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(id==size_t(-1)) {
+      sendResult(req,false,"unknown item " + inst);
+      return;
+      }
+    if(!pl->inventory().itemCount(id))
+      pl->addItem(id,1);
+    const size_t before = pl->inventory().itemCount(id);
+    pl->dropItem(id,1);
+    const bool dropped = pl->inventory().itemCount(id)<before;
+    sendResult(req,dropped,dropped ? "" : "the hero could not drop it now");
+    return;
+    }
+  if(cmd=="player_take") {
+    // the hero picks up the nearest such thing lying within `distance` cm (v29), as with the game's own key
+    std::string inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(id==size_t(-1)) {
+      sendResult(req,false,"unknown item " + inst);
+      return;
+      }
+    const float range = float(JsonRead::integer(msg,"distance",500));
+    Item*       it    = nullptr;
+    float       best  = range*range;
+    world->detectItem(pl->position(),range,[&](Item& i) {
+      const float d = (i.position()-pl->position()).quadLength();
+      if(i.clsId()==id && d<best) {
+        it   = &i;
+        best = d;
+        }
+      });
+    if(it==nullptr) {
+      sendResult(req,false,"no " + inst + " lying nearby");
+      return;
+      }
+    const bool taken = pl->takeItem(*it)!=nullptr;
+    sendResult(req,taken,taken ? "" : "the hero could not pick it up now");
+    return;
+    }
+  if(cmd=="chest_take") {
+    // the hero takes things out of a chest unseen (v28): what its owner remembers is no longer there
+    Interactive* chest = NpcChests::find(*world,JsonRead::str(msg,"chest"));
+    std::string  inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(chest==nullptr || id==size_t(-1)) {
+      sendResult(req,false,chest==nullptr ? "no such chest" : "unknown item " + inst);
+      return;
+      }
+    const size_t n = std::min(chest->inventory().itemCount(id),size_t(std::max<int64_t>(1,JsonRead::integer(msg,"count",1))));
+    if(n>0)
+      Inventory::transfer(const_cast<Inventory&>(pl->inventory()),chest->inventory(),nullptr,id,n,*world);
+    sendResult(req,n>0,"it is not in the chest",std::to_string(n));
+    return;
+    }
+  if(cmd=="player_hp") {
+    // the player's health and its maximum (v21): a test of creatures that bite lets him live through it
+    const auto hp = int32_t(std::clamp<int64_t>(JsonRead::integer(msg,"hp",1000),1,100000));
+    pl->changeAttribute(ATR_HITPOINTSMAX,hp-pl->attribute(ATR_HITPOINTSMAX),false);
+    pl->changeAttribute(ATR_HITPOINTS,hp-pl->attribute(ATR_HITPOINTS),false);
+    sendResult(req,true,"");
+    return;
+    }
   // player_weapon: the player draws ("melee") or puts away ("none") a weapon
   const auto state = JsonRead::str(msg,"state");
   const bool ok    = state=="none" ? pl->closeWeapon(false) : pl->drawWeaponMelee();
@@ -1289,6 +1619,38 @@ void AiBridge::Impl::send(std::string&& text) {
   if(!connected)
     return;
   ws.sendText(text);
+  }
+
+std::string AiBridge::Impl::storyLine(const std::string& npc, const std::string& text) {
+  auto id = "AIB_G" + std::to_string(++graphLines);
+  lines.add(id,npc,text);
+  askVoice(id,npc,text);
+  return id;
+  }
+
+std::vector<std::string> AiBridge::Impl::applyPatch(const rapidjson::Value& msg) {
+  std::vector<std::string> errors;
+  if(JsonRead::boolean(msg,"replace",false)) {
+    graph.clear();
+    triggers.clear();
+    runtime.clear();
+    }
+  auto it = msg.FindMember("ops");
+  if(it==msg.MemberEnd() || !it->value.IsArray())
+    return errors;
+  size_t i = 0;
+  for(auto& op : it->value.GetArray()) {
+    std::string err = !op.IsObject()                         ? std::string("not an object")
+                    : JsonRead::str(op,"op")=="trigger" ? triggers.apply(op)
+                                                             : graph.applyOp(op);
+    if(!err.empty()) {
+      errors.push_back("op " + std::to_string(i) + ": " + err);
+      Log::e("[story] patch op ",i,": ",err);
+      }
+    ++i;
+    }
+  Log::i("[story] patch: ",i," operation(s), ",errors.size()," rejected; ",graph.summary(),"; ",triggers.status());
+  return errors;
   }
 
 void AiBridge::Impl::sendResult(std::string_view req, bool ok, std::string_view err, std::string_view value) {
@@ -1316,6 +1678,34 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
     sendResult(req,true,"",graph.checkWorld(*world));
     return;
     }
+  if(cmd=="triggers") {
+    sendResult(req,true,"",triggers.list(*world));
+    return;
+    }
+  if(cmd=="menu") {
+    // the dialog window as the player sees it: what it offers now, none while a line plays
+    rapidjson::StringBuffer                    buf;
+    rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+    w.StartArray();
+    if(Gothic::inst().dialogEntriesFn)
+      for(auto& e : Gothic::inst().dialogEntriesFn()) {
+        auto text = TextCodec::toUtf8(e);
+        w.String(text.data(),rapidjson::SizeType(text.size()));
+        }
+    w.EndArray();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
+    return;
+    }
+  if(cmd=="menu_pick") {
+    // picks the entry with this text, as the player does with the keys
+    const auto text    = TextCodec::fromUtf8(JsonRead::str(msg,"text"));
+    auto       entries = Gothic::inst().dialogEntriesFn ? Gothic::inst().dialogEntriesFn() : std::vector<std::string>();
+    auto       at      = std::find(entries.begin(),entries.end(),text);
+    const bool ok      = at!=entries.end() && Gothic::inst().dialogPickFn &&
+                         Gothic::inst().dialogPickFn(size_t(at-entries.begin()));
+    sendResult(req,ok,"the window does not offer it now");
+    return;
+    }
   const auto symbol = JsonRead::str(msg,"npc");
   Npc*       npc    = symbol.empty() ? nullptr : npcBySymbol(*world,symbol);
   if(npc==nullptr && (cmd!="eval" || !symbol.empty())) {
@@ -1329,6 +1719,27 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
     w.StartArray();
     for(auto& id : graph.offered(*world,*npc))
       w.String(id.data(),rapidjson::SizeType(id.size()));
+    w.EndArray();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
+    }
+  else if(cmd=="talk") {
+    // the hero talks to it, as with the action key: the dialog window opens
+    Npc* player = world->player();
+    if(player!=nullptr)
+      npc->startDialog(*player);
+    sendResult(req,player!=nullptr,"no player");
+    }
+  else if(cmd=="choices") {
+    // what the dialog menu offers after this dialog's lines: [{id, text}]
+    rapidjson::StringBuffer                    buf;
+    rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+    w.StartArray();
+    for(auto& [id,text] : graph.choices(*world,*npc,JsonRead::str(msg,"node"))) {
+      w.StartObject();
+      w.Key("id");   w.String(id.data(),rapidjson::SizeType(id.size()));
+      w.Key("text"); w.String(text.data(),rapidjson::SizeType(text.size()));
+      w.EndObject();
+      }
     w.EndArray();
     sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
     }
@@ -1401,7 +1812,9 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     reply  = std::string(connected ? "connected to " : "NOT connected to ") + url;
     reply += "; " + ctrl.status(world);
     reply += "; " + graph.status();
+    reply += "; " + triggers.status();
     reply += "; necro " + necro.status();
+    reply += "; " + beasts.status();
     return true;
     }
 
@@ -1439,6 +1852,14 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     card.title = TextCodec::fromUtf8("Конец");
     const auto spell = args.size()>3 ? upperSymbol(args[3]) : std::string("SPL_SKULL");
     reply = necro.start(*world,*npc,std::move(card),spell,err) ? "necro " + spell : err;
+    return true;
+    }
+  if(sub=="beast" && args.size()>2) {
+    // ai beast listen|calm|sit|flee|attack|resume [ms]: the word on the wolf nearest the hero (docs/beasts.md),
+    // without the server; sit is calm sitting down
+    const auto what = lower(args[2]);
+    const auto ms   = args.size()>3 ? int64_t(std::atoll(args[3].c_str())) : int64_t(0);
+    reply = beasts.console(*world,what=="sit" ? "calm" : what,ms,what=="sit");
     return true;
     }
   if(sub=="ptt" && args.size()>2) {
@@ -1479,6 +1900,7 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
   }
 
 AiBridge::AiBridge() {
+  stuck = StuckLogger::fromEnvironment();
   const char* env = std::getenv("GOTHIC_AI");
   if(env!=nullptr && std::string_view(env)=="0") {
     Log::i("[ai] bridge disabled (GOTHIC_AI=0)");
@@ -1489,9 +1911,45 @@ AiBridge::AiBridge() {
 
 AiBridge::~AiBridge() = default;
 
+void AiBridge::Impl::askVoice(const std::string& line, const std::string& npc, const std::string& text) {
+  World* world = Gothic::inst().world();
+  Npc*   who   = world!=nullptr ? npcBySymbol(*world,npc) : nullptr;
+  if(who==nullptr || who->isPlayer())
+    return;  // the hero's lines of the director's stay subtitles: his voice is the game's own
+  if(voicing.size()>256)
+    voicing.clear();  // asked long ago and never answered: no voice service
+  voicing.insert(line);
+  send(JsonWriter("line_voice")
+         .str("npc",npc)
+         .str("name",TextCodec::toUtf8(who->displayName()))
+         .str("line",line)
+         .str("text",TextCodec::toUtf8(text))
+         .finish());
+  }
+
+void AiBridge::Impl::voiceStoryLine(World& world, const rapidjson::Value& msg, const std::string& id) {
+  // the voice comes to the line that is there: queued, or already started without one
+  auto* l = lines.find(id);
+  if(l==nullptr || l->voice!=nullptr || !JsonRead::boolean(msg,"stream",false))
+    return;
+  if(l->started && lastLine[l->npc]!=id)
+    return;  // too late: the npc has moved on to its next line
+  l->voice = std::make_shared<VoiceBuffer>(uint32_t(JsonRead::integer(msg,"rate",24000)));
+  if(!l->started)
+    return;  // it starts with its voice
+  // it started as a subtitle: the voice starts now, and the npc waits for it (shortened once it is all in)
+  startVoice(*l);
+  if(Npc* npc = npcBySymbol(world,l->npc))
+    npc->setAiOutputBarrier(LineLibrary::streamedTime(*l),false);
+  }
+
 void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
   const auto symbol = std::string(JsonRead::str(msg,"npc"));
   const auto line   = std::string(JsonRead::str(msg,"line"));
+  if(voicing.erase(line)>0) {
+    voiceStoryLine(world,msg,line);
+    return;
+    }
   Npc*       pl     = world.player();
   Npc*       npc    = ctrl.find(world,symbol);
   if(npc==nullptr) {

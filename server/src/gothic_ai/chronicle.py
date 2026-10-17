@@ -23,7 +23,7 @@ from typing import Any
 
 from .game import GameError, GameLink
 from .memory import MemoryStore
-from .protocol import GameMessage, MemoryCmd, NpcDied, Session, StoryWorld
+from .protocol import GameMessage, HeroKill, MemoryCmd, NpcDied, Session, StoryWorld
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ class Chronicle:
         self.branch: str | None = None
         self.tags: dict[str, Tag] = {}
         self.on_fact: list[Callable[[Fact], None]] = []  # every new fact, after it is written
+        self._hero_kills: dict[str, bool] = {}  # hero_kill precedes npc_died; its explicit monster flag
         self._background: set[asyncio.Task[Any]] = set()
         # the branch's facts as read so far: each read takes only the newer rows (by seq), since trust,
         # deals and the rumors read them on every turn
@@ -105,9 +106,21 @@ class Chronicle:
         match msg:
             case Session():
                 self._on_session(msg)
+            case HeroKill():
+                # Only humans and tagged monsters also produce npc_died. Do not retain every wild kill.
+                self._hero_kills.clear()
+                self._hero_kills[msg.npc] = msg.monster
             case NpcDied():
+                monster = self._hero_kills.pop(msg.npc, None)
                 self.record(
-                    {"fact": "died", "npc": msg.npc, "name": msg.name, "tag": msg.tag, "killer": msg.killer}
+                    {
+                        "fact": "died",
+                        "npc": msg.npc,
+                        "name": msg.name,
+                        "tag": msg.tag,
+                        "killer": msg.killer,
+                        **({"monster": monster} if monster is not None else {}),
+                    }
                 )
             case StoryWorld():
                 self.tags = {
@@ -124,6 +137,7 @@ class Chronicle:
         self.branch = session.branch
         self.memory.ensure_branch(session.branch, session.parent, session.parent_seq)
         self.tags.clear()  # the game reports them again for this world
+        self._hero_kills.clear()
 
     def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         async def run() -> None:

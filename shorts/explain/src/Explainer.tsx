@@ -13,7 +13,9 @@ import {
 } from 'remotion';
 import './fonts';
 import {Captions} from './parts/Captions';
+import {BarsView, DotsView, FormulaView, StatsView} from './parts/Cards';
 import {DiceChart} from './parts/DiceChart';
+import {Sight} from './parts/Sight';
 import {Tags} from './parts/Tags';
 import {Hook, Texts} from './parts/Texts';
 import type {Beat, Plan} from './schema';
@@ -22,11 +24,11 @@ import {COLOR, FONT, H, OUTLINE, W} from './theme';
 // the voice speaks in these spans (seconds of the short): the game ducks under them
 type Spans = [number, number][];
 
-const ducked = (t: number, spans: Spans, duck: number) => {
+const ducked = (t: number, spans: Spans, duck: number, ramp = 0.15) => {
   let k = 1;
   for (const [a, b] of spans) {
-    // ~150 ms ramps either side of a line
-    const v = interpolate(t, [a - 0.15, a, b, b + 0.15], [1, duck, duck, 1], {
+    // ramps either side of a line
+    const v = interpolate(t, [a - ramp, a, b, b + ramp], [1, duck, duck, 1], {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
     });
@@ -87,12 +89,23 @@ const HalfLabel: React.FC<{text: string; top: number; color: string}> = ({text, 
   </div>
 );
 
-const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number}> = ({beat, start, spans, duck}) => {
+const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number; game: number}> = ({
+  beat,
+  start,
+  spans,
+  duck,
+  game,
+}) => {
   const {fps} = useVideoConfig();
-  const volume = (f: number) => beat.game * ducked(start + f / fps, spans, duck);
+  const volume = (f: number) => game * beat.game * ducked(start + f / fps, spans, duck);
   let body: React.ReactNode = null;
-  if (beat.kind === 'card' && beat.chart) {
-    body = <DiceChart spec={beat.chart} />;
+  const card = beat.chart;
+  if (beat.kind === 'card' && card) {
+    if (card.type === 'dice') body = <DiceChart spec={card} />;
+    else if (card.type === 'formula') body = <FormulaView spec={card} />;
+    else if (card.type === 'bars') body = <BarsView spec={card} />;
+    else if (card.type === 'dots') body = <DotsView spec={card} />;
+    else body = <StatsView spec={card} />;
   } else if (beat.kind === 'split' && beat.src && beat.srcBottom) {
     const half = H / 2;
     body = (
@@ -118,10 +131,26 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number}
   return (
     <AbsoluteFill style={{background: '#000', overflow: 'hidden'}}>
       {body}
+      <Sight strokes={beat.strokes} fans={beat.fans} />
       <Tags tags={beat.tags} />
       <Texts texts={beat.texts} />
     </AbsoluteFill>
   );
+};
+
+// the music bed: under the whole short, fading in and out, lower while the voice speaks (slow ramps)
+const Music: React.FC<{music: NonNullable<Plan['music']>; spans: Spans}> = ({music, spans}) => {
+  const {fps, durationInFrames} = useVideoConfig();
+  const end = durationInFrames / fps;
+  const volume = (f: number) => {
+    const t = f / fps;
+    const fade = Math.min(
+      interpolate(t, [0, music.fadeIn], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}),
+      interpolate(t, [end - music.fadeOut, end], [1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}),
+    );
+    return music.volume * fade * ducked(t, spans, music.duck, 0.35);
+  };
+  return <Audio src={staticFile(music.file)} volume={volume} loop />;
 };
 
 export const Explainer: React.FC<Plan> = (plan) => {
@@ -136,10 +165,11 @@ export const Explainer: React.FC<Plan> = (plan) => {
         t += beat.dur;
         return (
           <Sequence key={beat.id} from={from} durationInFrames={Math.round(t * fps) - from} name={beat.id}>
-            <BeatView beat={beat} start={start} spans={spans} duck={plan.duck} />
+            <BeatView beat={beat} start={start} spans={spans} duck={plan.duck} game={plan.gameVolume} />
           </Sequence>
         );
       })}
+      {plan.music && <Music music={plan.music} spans={spans} />}
       {plan.voice.map((v) => (
         <Sequence key={v.file} from={Math.round(v.start * fps)} name={v.file}>
           <Audio src={staticFile(v.file)} />

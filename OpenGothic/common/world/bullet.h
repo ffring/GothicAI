@@ -41,7 +41,7 @@ class Bullet final : public DynamicWorld::BulletCallback {
     int32_t  spellId() const;
 
     void     setOrigin(Npc* n);
-    Npc*     origin() const;
+    Npc*     origin() const override;
 
     void     setTarget(const Npc* n);
 
@@ -62,6 +62,8 @@ class Bullet final : public DynamicWorld::BulletCallback {
     bool     isPrecise() const override { return precise; }
     float    draw() const { return drawK; }
     auto     hitZone() const -> HitZones::Zone { return zone; }
+    size_t   impactBone() const { return impactOwner; }
+    auto     impactPoint() const -> Tempest::Vec3 { return impactKnown ? impactAt : position(); }
 
     bool     isFinished() const;
     float    pathLength() const;
@@ -69,6 +71,9 @@ class Bullet final : public DynamicWorld::BulletCallback {
     bool     onEffectCollide(Npc& other);
 
   protected:
+    bool     stopsAtWorldHit() const override;
+    void     onWorldHit(const DynamicWorld::BulletWorldHit& hit) override;
+    void     onSpellWorldHit(const DynamicWorld::BulletWorldHit& hit) override;
     void     onStop() override;
     void     onMove() override;
     void     onCollide(zenkit::MaterialGroup matId) override;
@@ -87,13 +92,19 @@ class Bullet final : public DynamicWorld::BulletCallback {
     float                     drawK      = 1.f;
     HitZones::Zone            zone       = HitZones::None;
     bool                      landed     = false; // came down to the ground (a miss)
+    size_t                    impactOwner = size_t(-1);
+    Tempest::Vec3             impactAt;
+    bool                      impactKnown = false;
+    bool                      spellPhysicsApplied = false;
 
     MeshObjects::Mesh         view;
+    std::string               visualName;
     Effect                    vfx;
 
     uint8_t                   material=0;
     Flg                       flg=NoFlags;
 
     void updateMatrix();
+    void applySpellPhysics(Npc* target);
   };
 

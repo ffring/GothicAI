@@ -1,0 +1,11 @@
+# Movable vobs against the level: run on a fresh world, e.g.
+#   WORLD=NEWWORLD.ZEN MOVABLE_VOBS=1 scripts/bench.sh movable-census
+# movable-clamps.jsonl: what each movable hull touches or penetrates at its ZEN pose (1 cm margin);
+# movable-drift.jsonl: how far each one moved after waking without any impulse (3 s, then 15 s).
+movable on
+movable clamps 1
+movable wake
+wait 3000
+movable drift
+wait 12000
+movable drift

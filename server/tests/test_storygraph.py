@@ -5,11 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from gothic_ai.authoring import ITEMS
 from gothic_ai.gamedata.storygraph import is_known, load, render, variables
 
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / "OpenGothic" / "ai_bridge" / "storygraph" / "build" / "storygraph"
-GAME_DIR = Path(os.environ.get("GOTHIC_DIR", "/Volumes/shared/projects/Gothic II"))
+GAME_DIR = Path(os.environ.get("GOTHIC_DIR", "/Volumes/DevSSD/Dev/games/Gothic II"))
 DAT = GAME_DIR / "_work" / "Data" / "Scripts" / "_compiled" / "GOTHIC.DAT"
 # original-format saves (ZenGin), one folder each; see docs/story-graph.md, stage 2
 SAVES = Path(os.environ.get("GOTHIC_SAVES", Path.home() / ".local/share/gothic-ai/saves/original"))
@@ -85,12 +86,36 @@ GRAPH = {
                 {"do": "xp", "amount": ["int", 50, "XP_LOBARTHOLRUEBEN"], "when": HAS_20},
             ],
         },
+        {
+            "id": "DIA_HILDA_RUEBEN",
+            "kind": "dialog",
+            "npc": "BAU_951_HILDA",
+            "description": "Лобарт прислал меня за супом.",
+            "nr": 1,
+            "important": False,
+            "permanent": False,
+            "trade": False,
+            "condition": RUEBEN_RUNNING,
+            "lifted": True,
+            "reads": ["MIS_LOBART_RUEBEN"],
+            "knows": [],
+            "writes": [],
+            "effects": [
+                {
+                    "do": "give",
+                    "from": ["inst", "SELF"],
+                    "to": ["inst", "OTHER"],
+                    "item": ["sym", "ITFO_STEW"],
+                    "amount": ["int", 1],
+                },
+            ],
+        },
     ],
     "functions": {},
     "instances": {"HILDA": "BAU_951_HILDA"},
     "vars": {
         "MIS_LOBART_RUEBEN": {
-            "readers": ["DIA_LOBART_RUEBENRUNNING"],
+            "readers": ["DIA_LOBART_RUEBENRUNNING", "DIA_HILDA_RUEBEN"],
             "writers": ["DIA_LOBART_RUEBENRUNNING", "DIA_LOBART_WORKNOW_OK"],
             "others": [],
         },
@@ -132,6 +157,28 @@ def test_quest_and_its_nodes(graph):
     assert graph.npc("Hilda") == "BAU_951_HILDA" and graph.npc("BAU_950_LOBART") == "BAU_950_LOBART"
 
 
+def test_the_things_of_an_npcs_story(graph):
+    # his own dialogs, and the dialogs of others in his quest: the stew is named only in Hilda's
+    assert graph.things_of("bau_950_lobart") == {"ITPL_BEET", "ITFO_STEW"}
+    assert graph.things_of("BAU_951_HILDA") == {"ITFO_STEW", "ITPL_BEET"}  # she reads his quest
+    assert graph.things_of("NONE_100_XARDAS") == set()
+
+
+def test_all_script_things_include_nested_conditions_effects_and_choices(graph):
+    graph.node("DIA_LOBART_WORKNOW").condition = [
+        "&&",
+        KNOWS_KLEIDUNG,
+        ["call", "NPC_HASITEMS", ["inst", "OTHER"], ["sym", "ITMI_SAW"]],
+    ]
+    graph.node("DIA_LOBART_WORKNOW_OK").condition_effects = [
+        {"do": "call", "call": ["fn", "CHECK_ITEM", ["sym", "ITMI_RAKE"]]}
+    ]
+    graph.node("DIA_HILDA_RUEBEN").effects.append(
+        {"do": "xp", "amount": ["int", 5], "when": ["!=", ["sym", "ITMI_HAMMER"], ["int", 0]]}
+    )
+    assert graph.things() == {"ITPL_BEET", "ITFO_STEW", "ITMI_SAW", "ITMI_RAKE", "ITMI_HAMMER"}
+
+
 def test_expressions(graph):
     done = graph.node("DIA_LOBART_RUEBENRUNNING")
     assert render(done.condition) == (
@@ -161,6 +208,9 @@ def test_the_real_game(tmp_path):
     dialogs = [n for n in graph.nodes.values() if not n.is_choice]
     assert len(dialogs) > 4000
     assert sum(n.lifted for n in dialogs) / len(dialogs) >= 0.95
+    # The broad authored supply list must remain outside every script dialog and choice.
+    assert 30 <= len(ITEMS) == len(set(ITEMS)) <= 40
+    assert set(ITEMS).isdisjoint(graph.things()), sorted(set(ITEMS) & graph.things())
 
     quest = graph.quest("MIS_LOBART_RUEBEN")
     assert quest.topics == {"TOPIC_RUEBEN": "Убрать поле репы"}
@@ -175,6 +225,8 @@ def test_the_real_game(tmp_path):
     hilda = next(e for e in done.effects if e["do"] == "set" and e["var"] == "MIS_LOBART_RUEBENTOHILDA")
     assert render(hilda["when"]) == "!NPC_ISDEAD(HILDA) && (NPC_HASITEMS(other, ITPL_BEET) >= 20)"
     assert graph.npc("HILDA") == "BAU_951_HILDA"
+    # Cavalorn's stolen letter is named only in Vatras's dialog, of the quest Cavalorn's move
+    assert "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED" in graph.things_of("BAU_4300_ADDON_CAVALORN")
     # Franco's death makes two quests obsolete in ZS_Dead, outside any dialog
     assert "ZS_DEAD" in graph.vars["MIS_HLPLOGAN"].others
     # the gate guard stores AIV_PASSGATE and then checks it: the check sees the store (found by the VM check)
@@ -225,3 +277,54 @@ def test_a_read_after_a_call_that_writes_it_is_not_known():
     # effects check; the value after the call is not the one before it
     r = _run("--node", "DIA_ADDON_VATRAS_FREE")
     assert "set other.ATTRIBUTE[ATR_MANA] = ?other.attribute[ATR_MANA_MAX] after B_RAISEATTRIBUTE" in r.stdout
+
+
+# programs: the graph runs a function itself (docs/story-graph.md, «Исполнение без VM»)
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_programs_match_the_vm_in_random_states():
+    # every condition, dialog and choice run by the Interpreter against the VM, 5 states each; the engine
+    # remembers items given and taken, so reading the inventory after changing it is checked too
+    r = _run("--fuzz", "5", "--exec")
+    assert r.returncode == 0, r.stdout[-3000:]
+    assert "DIFFER 0;" in r.stdout and "VM failed 0" in r.stdout and "not a program 0 " in r.stdout
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_a_program_read_back_from_json_runs_as_the_vm():
+    # programs reach the game as JSON (story_program, graph_patch "program"): each one written and read back,
+    # then run against the VM; one that reads back otherwise would not be a program
+    r = _run("--fuzz", "2", "--exec", "--via-json")
+    assert r.returncode == 0, r.stdout[-3000:]
+    assert "DIFFER 0;" in r.stdout and "VM failed 0" in r.stdout and "not a program 0 " in r.stdout
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists() and _saves()), reason="needs the tool, game, saves")
+def test_programs_match_the_vm_on_original_saves():
+    r = _run(*[a for s in _saves() for a in ("--check", str(s))], "--exec")
+    assert r.returncode == 0, r.stdout[-3000:]
+    total = next(line for line in r.stdout.splitlines() if "programs (all saves)" in line)
+    assert "DIFFER 0;" in total and "not a program 0 " in total
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_a_program_keeps_the_order_of_the_script():
+    # Alrik takes 50 gold, then removes all his gold: the count comes after the gift, where the VM makes it
+    r = _run("--program", "DIA_ALRIK_WANNAFIGHT_GOLD")
+    lines = r.stdout.splitlines()
+    give = lines.index("B_GIVEINVITEMS(other, self, ITMI_GOLD, 50)")
+    assert lines[give + 3] == "NPC_REMOVEINVITEMS(self, ITMI_GOLD, NPC_HASITEMS(self, ITMI_GOLD))"
+    # `Bullco_Leave_Day == B_GetDayPlus();`, a typo for `=` in the original: nobody takes the comparison,
+    # but the call in it still runs
+    r = _run("--program", "DIA_BULLCO_DAILYCHECK")
+    assert "BULLCO_LEAVE_DAY == B_GETDAYPLUS()" in r.stdout
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_a_returned_local_is_read_when_it_is_taken():
+    # B_GetLearnCostTalent returns its static local: the VM reads it after all three calls, so the original
+    # prices "all thief talents" at three times the last one; the program does the same
+    r = _run("--fuzz", "20", "--exec", "--node", "DIA_CH_DIEB_ALLE")
+    assert r.returncode == 0, r.stdout[-3000:]
+    assert "DIFFER 0;" in r.stdout

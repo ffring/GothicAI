@@ -4,11 +4,17 @@
 
 #include "world/objects/npc.h"
 #include "world/objects/interactive.h"
+#include "world/objects/item.h"
 #include "world/world.h"
+#include "gothic.h"
 #include "serialize.h"
 #include "testbench.h"
 
 #include <cstdio>
+#include <algorithm>
+#include <cmath>
+#include <vector>
+#include <limits>
 
 // Read-only measurement around the existing movement step. Collision fields describe only calls
 // through MoveAlgo::tryMove: Npc::tryMove exposes success, not DynamicWorld's internal MoveCode.
@@ -83,6 +89,9 @@ MoveAlgo::MoveAlgo(Npc& unit)
   }
 
 void MoveAlgo::load(Serialize &fin) {
+  resetCharacterVirtual();
+  npcVirtualInRange = false;
+  npcVirtualMobTransition = false;
   fin.read(reinterpret_cast<uint32_t&>(flags));
   fin.read(mulSpeed,fallSpeed,fallCount,climbStart,climbPos0,climbHeight);
   fin.read(reinterpret_cast<uint8_t&>(jmp));
@@ -221,8 +230,17 @@ void MoveAlgo::tick(uint64_t dt, MvFlags moveFlg) {
     }
 
   if(npc.interactive()!=nullptr) {
+    resetCharacterVirtual(true);
     tickMobsi(dt);
     return;
+    }
+
+  if(npcVirtualMobTransition) {
+    const auto& pose = npc.visual.pose();
+    // Detach can precede ToStand's last frame. Its root remains animation-owned,
+    // just like the seated/bed/kettle clip, until normal standing or movement resumes.
+    if(pose.isStanding() || (!pose.hasState(BS_MOBINTERACT) && !pose.hasState(BS_CLIMB)))
+      npcVirtualMobTransition = false;
     }
 
   if(!implTick(dt,moveFlg))
@@ -239,6 +257,20 @@ void MoveAlgo::tick(uint64_t dt, MvFlags moveFlg) {
   }
 
 bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
+  const auto bs = npc.bodyStateMasked();
+  const bool liftOff = bs==BS_JUMP && npc.isFlyAnim();
+  const bool virtualEnabled = useCharacterVirtual();
+  const bool virtualWalking = virtualEnabled && !npcVirtualMobTransition &&
+                              !npc.isDown() && npc.physic.isEnabled() && !canFlyOverWater() &&
+                              (flags==Run || flags==Slide || flags==InWater) && !liftOff;
+  if(!virtualWalking) {
+    if(virtualMovementActive && flags==Run && liftOff)
+      virtualJumpVelocity = virtualGroundVelocity*0.001f;
+    npc.physic.resetVirtual();
+    virtualMovementActive = false;
+    virtualGroundVelocity = {};
+    }
+
   if(flags==ClimbUp) {
     tickClimb(dt);
     return true;
@@ -249,17 +281,52 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     }
 
   const auto state = flags;
+  const auto impulseGeneration=movementImpulseGeneration;
   const bool dead  = npc.isDead();
   const bool swim  = (state==Swim);
   const bool dive  = (state==Dive);
   const bool grav  = (state==InAir || state==Falling || state==JumpUp);
-  const auto bs    = npc.bodyStateMasked();
   const auto pos0  = npc.position();
-  const auto dp    = (!grav && state!=Slide) ? npcMoveSpeed(dt,moveFlg) : npcFallSpeed(dt);
+  auto       dp    = (!grav && state!=Slide) ? npcMoveSpeed(dt,moveFlg) : npcFallSpeed(dt);
   const bool walk  = bool(npc.wlkMode & WalkBit::WM_Walk) && (state==Run);
 
+  const auto guardEdgeMove = [&] {
+    const auto weapon = npc.weaponState();
+    if(!npc.isPlayer() || npc.isDown() || (state!=Run && state!=Slide) || bs==BS_JUMP ||
+       (weapon!=WeaponState::Bow && weapon!=WeaponState::CBow))
+      return;
+    // Apply the main branch's bow edge guard to the displacement accepted by
+    // either controller, including a partial move and a sliding step.
+    const auto  pos = npc.position();
+    const float k   = edgeMoveFraction(pos0,pos);
+    if(k<1.f) {
+      npc.setPosition(pos0+(pos-pos0)*k);
+      if(state==Slide)
+        clearSpeed();
+      // Keep the aim animation: onMoveFailed would switch it to Idle.
+      }
+    };
+
+  if(virtualWalking) {
+    if(state!=Slide)
+      dp.y = 0.f; // walking root bob cannot detach the controller from its support
+    const bool moved = tickCharacterVirtual(dt,dp);
+    if(impulseGeneration!=movementImpulseGeneration)
+      return moved;
+    guardEdgeMove();
+    return moved;
+    }
+
+  // Jump animation still owns its launch. Carry the support's velocity through its root motion,
+  // then let the existing airborne integrator inherit the accumulated displacement.
+  if(state==Jump || (state==Run && liftOff))
+    dp += virtualJumpVelocity*float(dt);
+
   DynamicWorld::CollisionTest info;
-  if(!tryMove(dp,info)) {
+  const bool moved=tryMove(dp,info);
+  if(preserveMovementImpulse(impulseGeneration,state,"legacy"))
+    return true;
+  if(!moved) {
     info.preFall = false;
     if(state==Slide) {
       onGravityFailed(info,dt);
@@ -286,6 +353,31 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     else {
       onMoveFailed(dp,info,dt);
       return false;
+      }
+    }
+
+  guardEdgeMove();
+
+  // CV walking can reach a different takeoff pose beside world geometry.
+  // Keep its floor guard through the legacy jump/fall handoff as well: reject
+  // lateral travel into a bottomless region, while lower landing floors and
+  // ordinary vertical flight retain the existing integrator.
+  if(virtualEnabled && !npcVirtualMobTransition && !npc.isDown() && npc.physic.isEnabled() &&
+     !swim && !dive && !canFlyOverWater()) {
+    const auto pos = npc.position();
+    if((pos.x!=pos0.x || pos.z!=pos0.z) &&
+       !npc.physic.hasFloorBelow({pos.x,std::max(pos.y,pos0.y),pos.z})) {
+      npc.setPosition(pos0);
+      DynamicWorld::CollisionTest vertical;
+      const bool movedVertical=tryMove({0,pos.y-pos0.y,0},vertical);
+      if(preserveMovementImpulse(impulseGeneration,state,"legacy"))
+        return true;
+      if(!movedVertical && grav)
+        onGravityFailed(vertical,dt);
+      fallSpeed.x = fallSpeed.z = 0.f;
+      virtualJumpVelocity.x = virtualJumpVelocity.z = 0.f;
+      // Do not return before vertical gravity/landing below: an inertial jump
+      // must descend at the supported X/Z instead of freezing at the boundary.
       }
     }
 
@@ -356,6 +448,8 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     return true;
     }
 
+  npc.checkRagdollQuestHazard();
+
   // water interaction
   if(!canFlyOverWater() && !dead && ground<water) {
     if(swim) {
@@ -370,6 +464,8 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
       // setState(Dive);
       }
     else if(gpos + chest <= water+0.01f && npc.hasSwimAnimations()) {
+      if(npc.recoverSpellThrow())
+        return true;
       if(state!=Swim && state!=Dive) {
         const bool splash = grav || fallSpeed.quadLength() >= 1.f;
         setState(Swim);
@@ -412,6 +508,10 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
       }
     return true;
     }
+
+  // A bottomless fall cannot reach the normal landing callback.
+  if(!gValid && npc.needsRagdollQuestReturn() && npc.recoverSpellThrow())
+    return true;
 
   // above ground/void
   if(!gValid || (pos.y>ground && dY >= stickThreshold && state!=InWater)) {
@@ -482,6 +582,17 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
 
   // no longer in air - ground code
   if(state==InAir || state==Falling) {
+    // A protected return records the landing source before leaving this tick.
+    // Attach its root to the detected floor first, as the normal path does below;
+    // the fall step can otherwise leave that source below ground for one tick.
+    if(npc.needsRagdollQuestReturn()) {
+      npc.tryMove(Tempest::Vec3(0,-dY,0));
+      if(preserveMovementImpulse(impulseGeneration,state,"legacy"))
+        return true;
+      }
+    // Resolve the protected throw before landing damage can lose the NPC.
+    if(npc.recoverSpellThrow())
+      return true;
     // attach to ground
     npc.takeFallDamage(fallSpeed);
     setState(Run);
@@ -512,6 +623,8 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     if(state==InAir && ground>=pos.y) {
       // rough landing
       npc.tryMove(Tempest::Vec3(0,-dY,0));
+      if(preserveMovementImpulse(impulseGeneration,state,"legacy"))
+        return true;
       //npc.setAnim(AnimationSolver::Idle);
       npc.setAnim(AnimationSolver::SlideA);
       }
@@ -555,11 +668,214 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
   return true;
   }
 
+bool MoveAlgo::useCharacterVirtual() {
+  if(npc.isPlayer())
+    return Gothic::physicsFlags().characterVirtual;
+  const auto* hero = npc.world().player();
+  if(!Gothic::physicsFlags().npcCharacterVirtual || !npc.isHuman() || npc.isDown() || hero==nullptr) {
+    npcVirtualInRange = false;
+    return false;
+    }
+  constexpr float enterRadius = 2000.f, leaveRadius = 2200.f;
+  const float distance = npc.qDistTo(*hero);
+  npcVirtualInRange = npcVirtualInRange ? distance<=leaveRadius*leaveRadius
+                                       : distance<enterRadius*enterRadius;
+  return npcVirtualInRange;
+  }
+
+bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displacement) {
+  const auto origin = npc.position();
+  auto& world = npc.world();
+  std::vector<Item*> nearbyItems;
+  world.detectItem(origin,DynamicWorld::characterItemRange,[&](Item& item) {
+    if(!item.isDynamic())
+      nearbyItems.push_back(&item);
+    });
+  // Creating a native body invalidates the item query index. Finish detection first,
+  // and preserve existing bodies with their current mass, sleep state and velocity.
+  for(auto* item:nearbyItems)
+    item->setPhysicsEnable(world);
+  const float maxSlope = std::acos(std::clamp(slideAngle(),0.f,1.f));
+  const auto impulseGeneration=movementImpulseGeneration;
+  const auto previousState=flags;
+  const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc);
+  if(preserveMovementImpulse(impulseGeneration,previousState,"virtual"))
+    return true;
+  npc.setViewPosition(moved.position);
+  virtualMovementActive = true;
+  virtualGroundVelocity = moved.groundVelocity;
+
+  auto collision = moved.collision;
+  if(!npc.isPlayer() && moved.blocked) {
+    DynamicWorld::CollisionTest legacy;
+    // Enrich only the AI notification, after Jolt has accepted the final origin.
+    // In particular, doors need their Interactive pointer for PERC_MOVEMOB.
+    // testMove restores the ellipsoid and leaves the native controller untouched.
+    npc.physic.testMove(origin+displacement,origin,legacy);
+    if(legacy.vob!=nullptr || legacy.npc!=nullptr || legacy.landCol) {
+      if(legacy.normal!=Tempest::Vec3())
+        collision.normal = legacy.normal;
+      collision.vob = legacy.vob;
+      if(collision.npc==nullptr) {
+        collision.npc = legacy.npc;
+        collision.npcCol = legacy.npcCol;
+        }
+      collision.landCol |= legacy.landCol;
+      collision.preFall |= legacy.preFall;
+      }
+    }
+
+  if(movementTrace!=nullptr) {
+    const bool failed = !npc.isPlayer() && moved.blocked;
+    DynamicWorld::CollisionTest contact;
+    if(failed) {
+      contact = collision;
+      } else {
+      contact.normal = moved.groundNormal;
+      contact.landCol = moved.grounded || moved.steep;
+      }
+    movementTrace->collision(displacement,!failed,contact);
+    }
+
+  // Keep the native material/room cache and water state machine. Controller support is
+  // authoritative for the feet: a moving body can be well above the landscape ray.
+  bool validGround = false;
+  const auto pos = npc.position();
+  const auto ground = dropRay(pos,validGround);
+  const auto water = waterRay(pos);
+  const auto chest = waterDepthChest();
+  const auto knee = waterDepthKnee();
+  if(moved.grounded || moved.steep)
+    cache.n = moved.groundNormal;
+
+  if(collision.preFall) {
+    // The common controller retained the supported origin. Match the legacy
+    // fall rejection for both the hero and NPCs, including its AI notification.
+    onMoveFailed(displacement,collision,dt);
+    return false;
+    }
+
+  if(std::isfinite(water) && ground<water) {
+    if(pos.y+chest<=water+0.01f && npc.hasSwimAnimations()) {
+      const bool splash = !moved.grounded || moved.velocity.y<-30.f;
+      setState(Swim);
+      if(splash)
+        emitWaterSplash(water);
+      return true;
+      }
+    if(ground+chest<water && !npc.hasSwimAnimations()) {
+      npc.setPosition(origin);
+      virtualMovementActive = false;
+      virtualGroundVelocity = {};
+      return false;
+      }
+    }
+
+  if(moved.steep) {
+    // The controller resolves steep contacts and gravity; MoveAlgo chooses the same slide
+    // state and animation, without applying a second collision or floor correction.
+    fallSpeed = moved.velocity*0.001f;
+    fallCount = 0;
+    setState(Slide);
+    npc.setAnimRotate(0);
+    npc.setAnim(slideDir() ? AnimationSolver::SlideA : AnimationSolver::SlideB);
+    return true;
+    }
+
+  if(moved.grounded) {
+    setState(pos.y+knee<=water && ground<water ? InWater : Run);
+    clearSpeed();
+    if(!npc.isPlayer() && moved.blocked) {
+      // Jolt owns collision resolution; retain the existing AI response when a
+      // wall or another actor prevents progress (bounce, climb, or mob perception).
+      onMoveFailed(displacement,collision,dt);
+      return false;
+      }
+    return true;
+    }
+
+  // Falling and landing remain on the old path. Hand over the actual world velocity,
+  // including a departing support, at the exact current origin.
+  fallSpeed = moved.velocity*0.001f;
+  fallCount = 0;
+  setState(InAir);
+  npc.setAnimRotate(0);
+  if(fallSpeed.y<-0.3f && npc.bodyStateMasked()!=BS_FALL)
+    npc.setAnim(AnimationSolver::Fall);
+  return true;
+  }
+
+bool MoveAlgo::preserveMovementImpulse(uint64_t generation,State previousState,std::string_view backend) {
+  if(generation==movementImpulseGeneration)
+    return false;
+  // Moving the controller also tests live projectiles. Their callbacks can
+  // launch this NPC before the move returns; its earlier ground result must
+  // not clear that new velocity or replace the airborne state with Run.
+  npc.setViewPosition(npc.physic.position());
+  resetCharacterVirtual();
+  if(TestBench::isActive())
+    TestBench::movementImpulseHandoff(npc,backend,uint32_t(previousState),uint32_t(flags),spellVelocity());
+  return true;
+  }
+
 void MoveAlgo::clearSpeed() {
   fallSpeed.x = 0;
   fallSpeed.y = 0;
   fallSpeed.z = 0;
   fallCount   = 0;
+  virtualJumpVelocity = {};
+  }
+
+void MoveAlgo::resetCharacterVirtual(bool mobTransition) {
+  npc.physic.resetVirtual();
+  virtualMovementActive = false;
+  virtualGroundVelocity = {};
+  virtualJumpVelocity = {};
+  npcVirtualMobTransition |= mobTransition && !npc.isPlayer() && npc.isHuman();
+  }
+
+void MoveAlgo::carryCharacterVirtual(uint64_t dt) {
+  if(!virtualMovementActive || (flags!=Run && flags!=InWater))
+    return;
+  const auto moved = npc.physic.carryVirtual(dt,&npc);
+  if(!moved.supportMoved)
+    return;
+  virtualGroundVelocity = moved.groundVelocity;
+  npc.syncCharacterVirtualSupport(moved.position);
+  }
+
+void MoveAlgo::takeRagdollControl() {
+  // Native bodies replace this movement state machine, including airborne/climbing state.
+  // Its stale InAir gate must not block queued script actions after the body settles.
+  clearSpeed();
+  npc.physic.resetVirtual();
+  virtualMovementActive = false;
+  virtualGroundVelocity = {};
+  flags = Run;
+  }
+
+bool MoveAlgo::addSpellImpulse(const Tempest::Vec3& impulseNs, float massKg, bool reaction) {
+  if(npc.isDown() || npc.spellFrozen() || !std::isfinite(massKg) || massKg<=0.f ||
+     !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
+     (flags!=Run && flags!=Falling && flags!=InAir))
+    return false;
+  if(!npc.setInteraction(nullptr,true))
+    return false;
+  if(reaction) {
+    npc.setAnimAngGet(Npc::Anim::FallDeepB);
+    npc.setAnimRotate(0);
+    }
+  if(fallCount>0.f)
+    fallSpeed /= fallCount;
+  // N*s / kg gives m/s; the existing movement integrator uses cm/ms.
+  fallSpeed += impulseNs*(0.1f/massKg);
+  const float speed = fallSpeed.length();
+  if(speed>2.f)
+    fallSpeed *= 2.f/speed;
+  fallCount = 0;
+  setState(InAir);
+  ++movementImpulseGeneration;
+  return true;
   }
 
 bool MoveAlgo::accessDamFly(float dx, float dz, char hitType) {
@@ -585,6 +901,7 @@ bool MoveAlgo::accessDamFly(float dx, float dz, char hitType) {
   fallSpeed = vec*0.75f;
   fallCount = 0;
   setState(InAir);
+  ++movementImpulseGeneration;
   return true;
   }
 
@@ -638,7 +955,10 @@ Tempest::Vec3 MoveAlgo::npcFallSpeed(uint64_t dt) {
   if(0.f<fallCount) {
     fallSpeed/=fallCount;
     fallCount = 0.f;
+    } else {
+    fallSpeed += virtualJumpVelocity;
     }
+  virtualJumpVelocity = {};
   return fallSpeed*float(dt);
   }
 
@@ -689,6 +1009,109 @@ float MoveAlgo::stepHeight() const {
   if(v>0.f)
     return v;
   return 50;
+  }
+
+bool MoveAlgo::isEdgeMoveBlocked(const Tempest::Vec3& modelDirection) const {
+  if(!npc.isPlayer() || npc.isDown() || (flags!=Run && flags!=Slide) || npc.bodyStateMasked()==BS_JUMP)
+    return false;
+  const auto weapon = npc.weaponState();
+  if(weapon!=WeaponState::Bow && weapon!=WeaponState::CBow)
+    return false;
+
+  Tempest::Vec3 dir;
+  applyRotation(dir,modelDirection);
+  dir.y = 0;
+  const float len = dir.length();
+  if(len==0.f)
+    return false;
+
+  const auto pos = npc.position();
+  // Less than 2 mm of an independent 2 cm probe can pass: the guard is holding this direction.
+  // Rechecking geometry lets retreating, strafing or turning away resume without a stale blocked flag.
+  return edgeMoveFraction(pos,pos+dir*(2.f/len))<0.1f;
+  }
+
+MoveAlgo::EdgeProbe MoveAlgo::edgeAhead(const Tempest::Vec3& direction, float range) const {
+  static constexpr float maxDrop = 100.f;
+  static constexpr float step = 10.f;
+  const float len = std::sqrt(direction.x*direction.x+direction.z*direction.z);
+  if(len==0.f || range<=0.f)
+    return {};
+  const Tempest::Vec3 dir(direction.x/len,0,direction.z/len);
+  const auto from = npc.position();
+  const float up = stepHeight()+eps;
+  auto floor = [&](float distance, float height) {
+    const auto point = from+dir*distance;
+    return npc.world().physic()->landRay({point.x,height+up,point.z});
+    };
+  auto r = floor(0,from.y);
+  if(!r.hasCol)
+    return {};
+
+  // Match edgeMoveFraction: follow each supported surface, so a continuous hill is not an edge.
+  float lo = 0, height = r.v.y;
+  for(float distance=std::min(step,range);; distance=std::min(distance+step,range)) {
+    r = floor(distance,height);
+    if(!r.hasCol || height-r.v.y>maxDrop) {
+      const float drop = r.hasCol ? height-r.v.y : std::numeric_limits<float>::infinity();
+      float hi = distance;
+      for(int i=0;i<8;++i) {
+        const float mid = (lo+hi)*0.5f;
+        const auto q = floor(mid,height);
+        if(q.hasCol && height-q.v.y<=maxDrop)
+          lo = mid; else
+          hi = mid;
+        }
+      return {true,lo,drop,height};
+      }
+    if(distance>=range)
+      return {};
+    lo = distance;
+    height = r.v.y;
+    }
+  }
+
+float MoveAlgo::edgeMoveFraction(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
+  static constexpr float margin  = 30.f;
+  static constexpr float maxDrop = 100.f;
+  static constexpr float step    = 10.f;
+
+  const auto  dp   = to-from;
+  const float dist = std::sqrt(dp.x*dp.x+dp.z*dp.z);
+  if(dist==0.f)
+    return 1.f;
+
+  const float up = stepHeight()+eps;
+  auto floor = [&](float d, float height) {
+    const auto p = from+dp*(d/dist);
+    return npc.world().physic()->landRay({p.x,height+up,p.z});
+    };
+  auto r = floor(0,from.y);
+  if(!r.hasCol)
+    return 1.f;
+
+  // Follow the surface rather than comparing its height with the hero: small steps and continuous
+  // slopes stay traversable. Probe beyond the actual move to leave room before a dangerous drop.
+  float lo = 0, height = r.v.y;
+  const float end = dist+margin;
+  for(float d=std::min(step,end);; d=std::min(d+step,end)) {
+    r = floor(d,height);
+    if(!r.hasCol || height-r.v.y>maxDrop) {
+      float hi = d;
+      for(int i=0; i<8; ++i) {
+        const float mid = (lo+hi)*0.5f;
+        const auto  q   = floor(mid,height);
+        if(q.hasCol && height-q.v.y<=maxDrop)
+          lo = mid; else
+          hi = mid;
+        }
+      return std::clamp((lo-margin)/dist,0.f,1.f);
+      }
+    if(d>=end)
+      return 1.f;
+    lo     = d;
+    height = r.v.y;
+    }
   }
 
 float MoveAlgo::slideAngle() const {
@@ -799,6 +1222,7 @@ bool MoveAlgo::startClimb(JumpStatus jump) {
   fallSpeed.y = dHeight/sq->totalTime();
   fallSpeed.z = 0.f;
   fallCount   = 0.f;
+  virtualJumpVelocity = {};
 
   if(jump.anim==Npc::Anim::JumpUp && dHeight>0.f){
     setState(JumpUp);
@@ -926,7 +1350,7 @@ void MoveAlgo::assertStateChange(State f) {
       assert(f==Run);
       break;
     case InWater:
-      assert(f==Run || f==Slide || f==Jump || f==JumpUp || f==Swim || f==Dive);
+      assert(f==Run || f==InAir || f==Slide || f==Jump || f==JumpUp || f==Swim || f==Dive);
       break;
     case Swim:
       assert(f==Run || f==InAir || f==InWater || f==Dive);

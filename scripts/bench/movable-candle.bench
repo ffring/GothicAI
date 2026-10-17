@@ -1,0 +1,16 @@
+# The real candle and its authored fire/light descendants, on tavern table 21133/21134.
+#   WORLD=NEWWORLD.ZEN MOVABLE_VOBS=1 scripts/bench.sh movable-candle
+seed 73013
+cheat god
+set time 12 0
+movable on
+noise on
+overlay off
+view full
+movable candle-setup
+wait 100
+shot movable-candle-before
+movable candle-push
+wait 4000
+movable candle-checkpoint
+physics stats

@@ -1,0 +1,9 @@
+# docs/navigation.md stage 0: 0 npc's walk the waynet round Khorinis's market for 60 s of game time
+seed 7
+cheat god
+set time 12 0
+goto NW_CITY_MERCHANT_PATH_01
+wait 500
+immortal player on
+wait 60000
+label done

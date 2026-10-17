@@ -8,6 +8,11 @@ Entries (`t` is the unix time, `npc` the npc's symbol, `name` its display name):
     {"kind": "player", "npc", "name", "text", "via": "text"|"voice", "asr"?, "latency_s"?}
     {"kind": "npc", "npc", "name", "text", "llm", "first_token_s", "total_s"}
     {"kind": "action", "npc", "name", "action", "arguments"}
+    {"kind": "defend", "npc", "name", "target"}   a companion fights for the hero without an order (orders.py)
+    {"kind": "attack", "npc", "name", "target", "reason"}   an npc turns on the hero (dialogue.py)
+    {"kind": "beast", "npc", "name", "text", "tone", "via", "chance", "roll", "outcome"}   a wolf heard the
+        hero (beasts.py): outcome calm, flee, attack or keep
+    {"kind": "beast_event", "npc", "name", "event", "detail"}   a wolf's calm is over or broken (beasts.py)
     {"kind": "tts_off", "npc", "name", "seconds", "detail"}   lines go out silent for a while
     {"kind": "llm_error", "npc", "name", "detail"}
     {"kind": "voice_error", "npc", "detail"}
