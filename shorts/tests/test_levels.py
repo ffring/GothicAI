@@ -472,17 +472,27 @@ def _mock_mastered_balance(monkeypatch, report):
 def test_decoded_peak_metadata_decides_the_gate_when_the_summary_rounds_to_minus_one(
     monkeypatch, capsys, linear_peak, accepted,
 ):
+    scaled_peak = round(linear_peak * levels.TRUE_PEAK_METER_GAIN, 3)
     stderr = (
-        f"lavfi.r128.true_peak={linear_peak}\n"
-        "lavfi.r128.true_peak=0.5\n"
-        "  I: -14.0 LUFS\n  True peak:\n    Peak: -1.0 dBFS\n"
+        f"lavfi.r128.true_peak={scaled_peak}\n"
+        "lavfi.r128.true_peak=0.0\n"
+        "[ebur128@loudness @ 0x1] Summary:\n\n  Integrated loudness:\n"
+        "  I: -14.0 LUFS\n"
+        "[ebur128@peaks @ 0x2] Summary:\n\n  Integrated loudness:\n"
+        "  I: 10.0 LUFS\n  True peak:\n    Peak: 95.3 dBFS\n"
     )
     run = Mock(return_value=SimpleNamespace(stderr=stderr))
     monkeypatch.setattr(levels.subprocess, "run", run)
     voice, peak = levels.meter_file(Path("short.mp4"))
-    assert peak == pytest.approx(max(20 * math.log10(linear_peak), -1), abs=1e-12)
+    expected = 20 * math.log10(
+        (scaled_peak + levels.TRUE_PEAK_METADATA_HALF_STEP) / levels.TRUE_PEAK_METER_GAIN,
+    )
+    assert voice == -14  # Ignore the amplified/padded peak meter's loudness summary.
+    assert peak == pytest.approx(expected, abs=1e-12)
     graph = run.call_args.args[0][run.call_args.args[0].index("-af") + 1]
-    assert graph == "ebur128=peak=true:metadata=1,ametadata=print:key=lavfi.r128.true_peak"
+    assert graph.index("ebur128@loudness") < graph.index("volume=") < graph.index("apad=")
+    assert f"volume={levels.TRUE_PEAK_METER_GAIN}:precision=double" in graph
+    assert "apad=pad_dur=0.1,ebur128@peaks=peak=true:metadata=1" in graph
     report = levels.check_balance(voice, None, None, None, None)
     levels.check_mastering(report, voice, peak, [])
     assert _rows(report)["true_peak"]["ok"] is accepted
@@ -491,16 +501,14 @@ def test_decoded_peak_metadata_decides_the_gate_when_the_summary_rounds_to_minus
     assert f"{peak:.6f}" in capsys.readouterr().out
 
 
-def test_decoded_peak_uses_summary_when_a_short_file_has_no_full_metadata_block(monkeypatch):
-    run = Mock(return_value=SimpleNamespace(stderr="I: -14.0 LUFS\nPeak: -1.0 dBFS\n"))
+@pytest.mark.parametrize("metadata", [None, "nan", "inf", "-0.1"])
+def test_decoded_peak_requires_valid_metadata_instead_of_a_rounded_fallback(monkeypatch, metadata):
+    stderr = "[ebur128@loudness @ 0x1] Summary:\n\nIntegrated loudness:\nI: -14.0 LUFS\nPeak: -1.0 dBFS\n"
+    if metadata is not None:
+        stderr += f"lavfi.r128.true_peak={metadata}\n"
+    run = Mock(return_value=SimpleNamespace(stderr=stderr))
     monkeypatch.setattr(levels.subprocess, "run", run)
-    assert levels.meter_file(Path("short.mp4")) == (-14, -1)
-
-
-def test_decoded_peak_requires_a_summary_covering_the_final_partial_block(monkeypatch):
-    run = Mock(return_value=SimpleNamespace(stderr="I: -14.0 LUFS\nlavfi.r128.true_peak=0.5\n"))
-    monkeypatch.setattr(levels.subprocess, "run", run)
-    with pytest.raises(ValueError, match="true peak"):
+    with pytest.raises(ValueError, match="true[- ]peak"):
         levels.meter_file(Path("short.mp4"))
 
 
@@ -1004,7 +1012,8 @@ def test_mastering_rejects_a_true_peak_hidden_by_the_rounded_summary(
     rows = _rows(report)
     assert candidate_peak["rounded"] == levels.TRUE_PEAK_DBTP
     assert candidate_peak["detailed"] > levels.TRUE_PEAK_DBTP
-    assert rows["true_peak"]["measured_dbtp"] == pytest.approx(candidate_peak["detailed"], abs=1e-6)
+    # The old linear metadata itself rounds to 0.001, about 0.005 dB here.
+    assert rows["true_peak"]["measured_dbtp"] == pytest.approx(candidate_peak["detailed"], abs=0.005)
     assert rows["true_peak"]["ok"] is False
     assert rows["voice_mastered"]["ok"] is True
     assert rows["clicks"]["count"] == 0
@@ -1022,9 +1031,67 @@ def test_decoded_peak_catches_a_peak_in_the_last_eighty_milliseconds(tmp_path):
          "-c:a", "pcm_f32le", str(path)], check=True, capture_output=True,
     )
     _, peak = levels.meter_file(path)
-    # Full 100 ms metadata blocks see only the quiet first second (-20 dBTP).
-    # The summary also sees the final 80 ms at 0.97 amplitude (-0.3 dBTP).
-    assert peak == pytest.approx(20 * math.log10(0.97), abs=0.05)
+    # Meter-only padding makes the final 80 ms available in precise metadata.
+    assert peak == pytest.approx(20 * math.log10(0.97), abs=0.000001)
+    report = levels.check_balance(-14, None, None, None, None)
+    levels.check_mastering(report, -14, peak, [])
+    assert _rows(report)["true_peak"]["ok"] is False
+    assert report["ok"] is False
+
+
+@pytest.mark.parametrize("amplitude,accepted", [(0.8914, False), (0.8912, True)])
+@pytest.mark.parametrize("duration,tail_start", [(1.0, 0.0), (1.08, 1.0), (0.08, 0.0)])
+def test_decoded_peak_resolves_small_exceedances_in_full_and_partial_blocks(
+    tmp_path, amplitude, accepted, duration, tail_start,
+):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for synthetic true-peak measurements")
+    path = tmp_path / "rounded-peak.wav"
+    signal = f"aevalsrc='if(lt(t,{tail_start}),0.1,{amplitude})*sin(2*PI*1000*t)':s=48000:d={duration}"
+    fade = ("afade=t=in:d=0.1,afade=t=out:st=0.9:d=0.1" if duration == 1 else
+            f"afade=t=in:d=0.01,afade=t=out:st={duration - 0.01}:d=0.01")
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", signal,
+         "-af", fade, "-c:a", "pcm_f32le", str(path)], check=True, capture_output=True,
+    )
+    raw = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path), "-f", "f32le", "-"],
+        check=True, capture_output=True,
+    ).stdout
+    sample_peak = 20 * math.log10(max(map(abs, array("f", raw))))
+    loudness, peak = levels.meter_file(path)
+    assert peak >= sample_peak
+    assert peak == pytest.approx(sample_peak, abs=0.000001)
+    # R128 integrated loudness needs a 400 ms block; the 80 ms case tests only peaks.
+    if duration >= 0.4:
+        assert loudness == _tone_level(["-i", str(path)])
+    report = levels.check_balance(-14, None, None, None, None)
+    levels.check_mastering(report, -14, peak, [])
+    assert _rows(report)["true_peak"]["ok"] is accepted
+    assert report["ok"] is accepted
+
+
+def test_decoded_aac_tail_peak_is_not_hidden_by_summary_rounding(tmp_path):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for synthetic true-peak measurements")
+    path = tmp_path / "faded-tail.m4a"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "aevalsrc='if(gte(t,1),0.895,0.01)*sin(2*PI*1000*t)':s=48000:d=1.08",
+         "-af", "afade=t=out:st=1:d=0.08", "-c:a", "aac", "-b:a", "192k", str(path)],
+        check=True, capture_output=True,
+    )
+    diagnostic = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af",
+         "ebur128=peak=true:metadata=1,ametadata=print:key=lavfi.r128.true_peak", "-f", "null", "-"],
+        check=True, capture_output=True, text=True,
+    ).stderr
+    rounded_peak = float(diagnostic.rsplit("Peak:", 1)[1].split()[0])
+    block_peaks = [float(line.split("lavfi.r128.true_peak=", 1)[1])
+                   for line in diagnostic.splitlines() if "lavfi.r128.true_peak=" in line]
+    assert max(rounded_peak, 20 * math.log10(max(block_peaks))) == levels.TRUE_PEAK_DBTP
+    _, peak = levels.meter_file(path)
+    assert peak == pytest.approx(-0.978572, abs=0.002)
     report = levels.check_balance(-14, None, None, None, None)
     levels.check_mastering(report, -14, peak, [])
     assert _rows(report)["true_peak"]["ok"] is False

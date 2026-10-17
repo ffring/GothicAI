@@ -14,6 +14,10 @@ from pathlib import Path
 
 BASE_LUFS = -14.0
 TRUE_PEAK_DBTP = -1.0
+# R128 prints linear peaks to 0.001. Scale by a power of two before metering,
+# then undo it and include the rounding bound (under 0.0000001 dB at the ceiling).
+TRUE_PEAK_METER_GAIN = 65536
+TRUE_PEAK_METADATA_HALF_STEP = 0.0005
 VOICE_TOLERANCE_LU = 0.5
 MASTER_CORRECTION_TOLERANCE_LU = 0.1
 MAX_MASTER_CORRECTIONS = 2
@@ -301,25 +305,27 @@ def master_filter(speech_lufs: float, length: float, *, voice_probe: bool = Fals
 
 
 def meter_file(path: Path) -> tuple[float, float]:
-    """Combine precise block peaks with the summary covering the final partial block."""
+    """Meter original loudness and a conservative, precise peak including the tail."""
+    graph = ("ebur128@loudness=framelog=quiet,"
+             f"volume={TRUE_PEAK_METER_GAIN}:precision=double,apad=pad_dur=0.1,"
+             "ebur128@peaks=peak=true:metadata=1:framelog=quiet,"
+             "ametadata=print:key=lavfi.r128.true_peak")
     result = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af",
-         "ebur128=peak=true:metadata=1,ametadata=print:key=lavfi.r128.true_peak",
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af", graph,
          "-f", "null", "-"], check=True, capture_output=True, text=True,
     )
-    loudness = re.findall(r"\bI:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+LUFS", result.stderr)
+    # Padding and gain belong only to the peak meter, after the loudness meter.
+    loudness = re.search(r"\[ebur128@loudness [^\n]*\] Summary:\s*Integrated loudness:\s*"
+                         r"I:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+LUFS", result.stderr)
     peaks = [float(value) for value in re.findall(r"\blavfi\.r128\.true_peak=([^\s]+)", result.stderr)]
-    summaries = re.findall(r"\bPeak:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+dBFS", result.stderr)
-    if not loudness or not summaries:
+    if not loudness or not peaks:
         raise ValueError("ffmpeg did not return decoded loudness and true peak")
     if any(not math.isfinite(peak) or peak < 0 for peak in peaks):
         raise ValueError("ffmpeg returned invalid true-peak metadata")
-    summary_peak = float(summaries[-1])
-    if summary_peak == math.inf:
-        raise ValueError("ffmpeg returned invalid true-peak summary")
-    peak = max(peaks, default=0)
-    metadata_peak = 20 * math.log10(peak) if peak > 0 else -math.inf
-    return float(loudness[-1]), max(metadata_peak, summary_peak)
+    # 100 ms of silence flushes the last partial block and resampler tail.
+    peak = max(peaks)
+    peak = (peak + TRUE_PEAK_METADATA_HALF_STEP) / TRUE_PEAK_METER_GAIN if peak > 0 else 0.0
+    return float(loudness[1]), 20 * math.log10(peak) if peak > 0 else -math.inf
 
 
 @dataclass
