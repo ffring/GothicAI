@@ -5,12 +5,15 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import runpy
 import select
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -126,6 +129,48 @@ class RyzenLockTests(unittest.TestCase):
         guardian = Guardian(directory)
         self.addCleanup(guardian.close)
         return guardian
+
+    def test_registration_grace_period_is_60_seconds(self):
+        guardian = self.guardian()
+        namespace = runpy.run_path(str(ROOT / 'scripts/ryzen-lock.py'))
+        wait = namespace['wait_terminal']
+        elapsed = 0
+
+        def sleep(seconds):
+            nonlocal elapsed
+            elapsed += seconds
+
+        clock = SimpleNamespace(monotonic=lambda: elapsed, sleep=sleep)
+        with patch.dict(wait.__globals__, time=clock), patch.dict(wait.__globals__, report=lambda message: messages.append(message)):
+            messages = []
+            wait(guardian.state, RUN, False, guardian.queue_home, 1, {'done'})
+        self.assertGreaterEqual(elapsed, 60)
+        self.assertLess(elapsed, 60.3)
+        releasing = [message for message in messages if 'releasing' in message]
+        self.assertEqual(releasing, [f'Ryzen: no gq request registered for {RUN} in 60s; releasing'])
+
+    def test_observed_request_waits_past_registration_deadline(self):
+        guardian = self.guardian()
+        guardian.snapshot('running')
+        namespace = runpy.run_path(str(ROOT / 'scripts/ryzen-lock.py'))
+        wait = namespace['wait_terminal']
+        elapsed = 0
+
+        def sleep(_seconds):
+            nonlocal elapsed
+            elapsed += 61
+            # Even a temporarily missing observed record cannot release it.
+            if elapsed == 61:
+                guardian.write_state({'version': 1, 'jobs': []})
+            else:
+                guardian.snapshot('done')
+
+        clock = SimpleNamespace(monotonic=lambda: elapsed, sleep=sleep)
+        messages = []
+        with patch.dict(wait.__globals__, time=clock, report=messages.append):
+            wait(guardian.state, RUN, False, guardian.queue_home, 1, {'done'})
+        self.assertEqual(elapsed, 122)
+        self.assertFalse(any('releasing' in message for message in messages))
 
     def test_eof_keeps_active_job_locked_until_terminal(self):
         guardian = self.guardian()

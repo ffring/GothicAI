@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep inherited worktree-lock fd 9 until the exact gq request is terminal."""
+"""Hold fd 9 until gq is terminal, or a request stays unregistered for 60s."""
 import json
 import os
 from pathlib import Path
@@ -20,6 +20,7 @@ def wait_terminal(state, run, complete, queue_home, version, terminal):
     marker = f"RYZEN_RUN_ID={run}"
     script = str(state / "source/scripts/ryzen.sh")
     observed = set()
+    registration_deadline = time.monotonic() + 60
     next_report = 0
     while True:
         try:
@@ -33,12 +34,16 @@ def wait_terminal(state, run, complete, queue_home, version, terminal):
             if observed and all(job_id in jobs and jobs[job_id]["status"] in terminal for job_id in observed):
                 return
             # A normal gq return may be a validation error before submission.
-            # After interruption, absence is unknown: registration can be late.
+            # Interrupted submission gets a registration grace period; any
+            # observed request must reach terminal state regardless of age.
             if not observed and complete:
                 return
             detail = "waiting for gq registration" if not observed else "waiting for terminal gq state"
         except (OSError, ValueError, KeyError, TypeError) as error:
             detail = str(error)
+        if not observed and not complete and time.monotonic() >= registration_deadline:
+            report(f"Ryzen: no gq request registered for {run} in 60s; releasing")
+            return
         if time.monotonic() >= next_report:
             report(f"Ryzen: keeping worktree lock for {run}: {detail}")
             next_report = time.monotonic() + 60

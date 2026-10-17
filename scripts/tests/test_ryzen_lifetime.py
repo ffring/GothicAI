@@ -41,7 +41,7 @@ def function(name):
 
 
 class RyzenLifetimeTests(unittest.TestCase):
-    def start_launcher(self, directory):
+    def start_launcher(self, directory, fail_before_registration=False):
         root = Path(directory)
         binaries = root / 'bin'
         binaries.mkdir()
@@ -82,6 +82,9 @@ import subprocess
 import sys
 import time
 root = Path(os.environ['RYZEN_TEST_HOME'])
+if os.environ['RYZEN_TEST_SSH_FAIL'] == '1':
+    (root / 'ssh-failed').touch()
+    raise SystemExit(255)
 job = subprocess.Popen([sys.executable, str(root / 'worker.py')],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, start_new_session=True)
@@ -132,14 +135,18 @@ os.execv(sys.executable, [sys.executable, '-u', sys.argv[1],
             'run_quick env "RYZEN_RUN_ID=$RUN" bash "$STATE/source/scripts/ryzen.sh" __remote pytest "$STATE" "$RUN"',
         ])
         environment = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ['PATH'],
-                           RYZEN_TEST_HOME=str(root), GQ_HOME=str(root / 'queue'))
+                           RYZEN_TEST_HOME=str(root), GQ_HOME=str(root / 'queue'),
+                           RYZEN_TEST_SSH_FAIL=str(int(fail_before_registration)))
         output = (root / 'launcher.log').open('wb')
         self.addCleanup(output.close)
         launcher = subprocess.Popen(['bash', '-c', harness], env=environment,
                                     stdout=output, stderr=output, start_new_session=True)
         self.addCleanup(self.stop_children, launcher, root)
-        eventually(lambda: (root / 'started').exists())
-        eventually(lambda: (root / 'job.json').exists())
+        if fail_before_registration:
+            eventually(lambda: (root / 'ssh-failed').exists())
+        else:
+            eventually(lambda: (root / 'started').exists())
+            eventually(lambda: (root / 'job.json').exists())
         self.assertFalse(lock_available(root / 'worktree.lock'))
         return root, launcher
 
@@ -190,6 +197,20 @@ os.execv(sys.executable, [sys.executable, '-u', sys.argv[1],
         self.assertGreaterEqual(time.monotonic() - stopped_at, 2.8)
         self.assertTrue((root / 'collected').exists())
         self.assertTrue(lock_available(root / 'worktree.lock'))
+
+    def test_ssh_255_before_registration_releases_lock_within_65_seconds(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-no-job-test-'))
+        started = time.monotonic()
+        root, launcher = self.start_launcher(directory, fail_before_registration=True)
+        self.assertEqual(launcher.wait(timeout=65 - (time.monotonic() - started)), 255)
+        elapsed = time.monotonic() - started
+        self.assertGreaterEqual(elapsed, 60)
+        self.assertLessEqual(elapsed, 65)
+        self.assertTrue(lock_available(root / 'worktree.lock'))
+        message = 'no gq request registered for test in 60s; releasing'
+        self.assertEqual((root / 'launcher.log').read_text().count(message), 1)
+        self.assertFalse((root / 'queue/state.json').exists())
+        print(f'\nSSH 255 before registration: exit=255, elapsed={elapsed:.2f}s, lock released', flush=True)
 
 
 if __name__ == '__main__':
