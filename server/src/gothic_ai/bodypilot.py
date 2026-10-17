@@ -14,6 +14,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
+from websockets.exceptions import ConnectionClosed
+
 from .game import GameDisconnected, GameError, GameLink
 from .protocol import (
     Attached,
@@ -36,6 +38,7 @@ ACQUIRE_WINDOW = 5.0
 MAX_FIGHT_SECONDS = 300.0
 HEARTBEAT_INTERVAL = 0.150
 MAX_JSON_BYTES = 256 * 1024
+BRIDGE_ERRORS = (GameError, ConnectionClosed, OSError, TimeoutError)
 TARGET_IS_HERO = [
     "&&",
     ["call", "NPC_GETTARGET", ["inst", "SELF"]],
@@ -103,13 +106,15 @@ class PolicyClient:
             self.pending.pop(request["id"], None)
 
     async def close(self) -> None:
-        if self.writer is not None:
-            self.writer.close()
-            with contextlib.suppress(OSError):
-                await self.writer.wait_closed()
-        if self.reader_task is not None:
-            self.reader_task.cancel()
-            await asyncio.gather(self.reader_task, return_exceptions=True)
+        try:
+            if self.writer is not None:
+                self.writer.close()
+                with contextlib.suppress(OSError):
+                    await self.writer.wait_closed()
+        finally:
+            if self.reader_task is not None:
+                self.reader_task.cancel()
+                await asyncio.gather(self.reader_task, return_exceptions=True)
 
 
 def _percentile(values: list[float], fraction: float) -> float | None:
@@ -132,6 +137,8 @@ class BodyPilot:
         self.url = url
         self.companion, self.unavailable, self.clock = companion, unavailable, clock
         self.people: dict[str, RosterEntry] = {}
+        # Repeated attack perceptions belong to the same combat, even after fallback.
+        self._claimed_fights: set[str] = set()
         self.npc: str | None = None
         self.lease: BodyLease | None = None
         self.client: PolicyClient | None = None
@@ -175,11 +182,18 @@ class BodyPilot:
     def on_message(self, message: GameMessage) -> None:
         if isinstance(message, NpcRoster):
             entries = {entry.id.upper(): entry for entry in message.npcs}
+            self._claimed_fights.difference_update(
+                npc
+                for npc, entry in entries.items()
+                if entry.activity == "down"
+                or (entry.activity == "routine" and entry.state.upper() not in {"ZS_ATTACK", "ZS_MM_ATTACK"})
+            )
             self.people = entries if message.full else {**self.people, **entries}
             if self.npc is not None and not self._allowed(self.npc):
                 self._reason = "npc_unavailable"
         elif isinstance(message, (Loading, Hello)):
             self.people.clear()
+            self._claimed_fights.clear()
             self._reason = "loading" if isinstance(message, Loading) else "session_changed"
         elif isinstance(message, Attached) and message.npc.upper() == self.npc:
             self._reason = "attached"
@@ -203,7 +217,12 @@ class BodyPilot:
                 npc = message.npc.upper()
             elif message.kind == "hero_attacked":
                 npc = message.other.upper()
-            if npc is not None and self._allowed(npc) and not self.link.body_leases:
+            if (
+                npc is not None
+                and npc not in self._claimed_fights
+                and self._allowed(npc)
+                and not self.link.body_leases
+            ):
                 self.npc = npc
                 self._reason = None
                 self._attempt_at = self.clock()
@@ -252,9 +271,11 @@ class BodyPilot:
             self._reason = "pilot_error"
             log.exception("neural-body pilot failed")
         finally:
-            await self._finish(self._reason or "shutdown")
-            self._unregister()
-            self._done.set()
+            try:
+                await self._finish(self._reason or "shutdown")
+            finally:
+                self._unregister()
+                self._done.set()
 
     async def aclose(self) -> None:
         self._closing = True
@@ -262,8 +283,11 @@ class BodyPilot:
         if self._running:
             await self._done.wait()
         else:
-            await self._finish("shutdown")
-            self._unregister()
+            try:
+                await self._finish("shutdown")
+            finally:
+                self._unregister()
+                self._done.set()
 
     def _unregister(self) -> None:
         if self.on_message in self.link.listeners:
@@ -290,7 +314,7 @@ class BodyPilot:
                     raise GameError("NPC script symbol unavailable")
                 self._symbol = symbol[0]
                 await self.link.body_watch(self._watch_npcs(), timeout=BRIDGE_TIMEOUT)
-            except (GameError, TimeoutError):
+            except BRIDGE_ERRORS:
                 await self._finish("watch_failed")
                 return
             self._watched = self._watch_ready = True
@@ -308,7 +332,7 @@ class BodyPilot:
                     await self.link.body_heartbeat(self.lease, timeout=BRIDGE_TIMEOUT)
                     await self.link.body_events(timeout=BRIDGE_TIMEOUT)
                     self._last_heartbeat = self.clock()
-                except (GameError, TimeoutError):
+                except BRIDGE_ERRORS:
                     await self._finish("lease_lost")
                     return
                 if self._reason or self.link.body_leases.get(self.lease.entity_id) != self.lease:
@@ -405,11 +429,12 @@ class BodyPilot:
                     mode="realtime",
                     timeout=BRIDGE_TIMEOUT,
                 )
-            except GameDisconnected:
+            except (GameDisconnected, ConnectionClosed):
                 self._reason = "disconnected"
-            except (GameError, TimeoutError) as error:
+            except BRIDGE_ERRORS as error:
                 self._refusals[str(error)] += 1
             else:
+                self._claimed_fights.add(self.npc)
                 self._entity = self.lease.entity_id
                 self._hero = self.lease.target_entity_id
                 self._fight_at = self.clock()
@@ -464,7 +489,7 @@ class BodyPilot:
             self._reason = "policy_timeout"
         except (OSError, ValueError, PolicyError):
             self._reason = "policy_error"
-        except GameError:
+        except BRIDGE_ERRORS:
             self._reason = "body_action_rejected"
 
     async def _finish(self, reason: str) -> None:
@@ -472,18 +497,24 @@ class BodyPilot:
         if npc is None and lease is None and client is None:
             return
         self._watch_ready = False
-        if lease is not None:
-            with contextlib.suppress(GameError, TimeoutError):
-                await self.link.body_release(lease, timeout=BRIDGE_TIMEOUT)
-        if client is not None:
+        try:
             if lease is not None:
-                with contextlib.suppress(OSError, ValueError, PolicyError, TimeoutError):
-                    await client.call(
-                        "end_episode", session_epoch=lease.session_epoch, world_epoch=lease.world_epoch
-                    )
-            with contextlib.suppress(OSError, ValueError, PolicyError, TimeoutError):
-                await client.call("close")
-            await client.close()
+                with contextlib.suppress(*BRIDGE_ERRORS):
+                    await self.link.body_release(lease, timeout=BRIDGE_TIMEOUT)
+        finally:
+            if client is not None:
+                try:
+                    if lease is not None:
+                        with contextlib.suppress(OSError, ValueError, PolicyError, TimeoutError):
+                            await client.call(
+                                "end_episode",
+                                session_epoch=lease.session_epoch,
+                                world_epoch=lease.world_epoch,
+                            )
+                    with contextlib.suppress(OSError, ValueError, PolicyError, TimeoutError):
+                        await client.call("close")
+                finally:
+                    await client.close()
         # A release receipt can still mean a protected segment is finishing. Do not
         # reconfigure the watch until the bridge confirms actual native ownership.
         while lease is not None and self.link.body_leases.get(lease.entity_id) == lease:
@@ -491,12 +522,12 @@ class BodyPilot:
                 break
             try:
                 await self.link.body_events(timeout=BRIDGE_TIMEOUT)
-            except (GameError, TimeoutError):
+            except BRIDGE_ERRORS:
                 break
             if self.link.body_leases.get(lease.entity_id) == lease:
                 await asyncio.sleep(0.025)
         if self._watched and not self.link.body_leases:
-            with contextlib.suppress(GameError, TimeoutError):
+            with contextlib.suppress(*BRIDGE_ERRORS):
                 await self.link.body_watch([], timeout=BRIDGE_TIMEOUT)
         log.info(
             "neural-body end npc=%s reason=%s decisions=%d fallback=%d service_p50_ms=%s "

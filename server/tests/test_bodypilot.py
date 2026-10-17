@@ -7,6 +7,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 
 import pytest
+from websockets.exceptions import ConnectionClosedError
 
 from gothic_ai.bodypilot import BodyPilot
 from gothic_ai.game import GameLink
@@ -207,10 +208,11 @@ class Rig:
         self.bridge, self.policy, self.pilot, self.clock = bridge, policy, pilot, clock
         self.link = bridge.link
 
-    def roster(self, *, activity="fight", guild=1, include=True, extra=()):
+    def roster(self, *, activity="fight", state=None, guild=1, include=True, extra=()):
         npcs = [RosterEntry(
             id="NPC", name="Fighter", guild=guild, distance=200.0,
-            in_view=True, activity=activity, state="ZS_ATTACK",
+            in_view=True, activity=activity,
+            state=state if state is not None else "ZS_ATTACK" if activity == "fight" else "ZS_SIT_BENCH",
         )] if include else []
         self.link._dispatch(NpcRoster(type="npc_roster", t=1, npcs=[*npcs, *extra]))
 
@@ -496,6 +498,40 @@ async def test_pending_release_keeps_watch_until_native_restoration():
         assert sum(command["type"] == "body_events" for command in commands[released_at:unwatched_at]) == 3
 
 
+@pytest.mark.parametrize("failed_command", ["body_release", "body_events", "body_watch"])
+async def test_websocket_closing_during_cleanup_still_closes_policy_and_pilot(failed_command, monkeypatch):
+    async with running() as rig:
+        await rig.active()
+        client = rig.pilot.client
+        assert client is not None
+        if failed_command == "body_events":
+            rig.bridge.release_pending_polls = 2
+        original_send = rig.bridge.send
+        failed_sends = []
+
+        async def disconnect_during_send(raw):
+            command = json.loads(raw)
+            if command["type"] == failed_command:
+                failed_sends.append(command)
+                # WebSocket send can fail before GameLink.run observes the close.
+                asyncio.get_running_loop().call_soon(rig.link.closed.set)
+                raise ConnectionClosedError(None, None)
+            await original_send(raw)
+
+        monkeypatch.setattr(rig.bridge, "send", disconnect_during_send)
+        rig.link._dispatch(Attached(type="attached", npc="NPC", name="Fighter"))
+        await eventually(lambda: failed_sends)
+        await eventually(lambda: rig.pilot._done.is_set())
+        await asyncio.wait_for(rig.pilot.aclose(), 0.1)
+        assert rig.link.closed.is_set()
+        assert len(rig.policy.commands("end_episode")) == 1
+        assert len(rig.policy.commands("close")) == 1
+        assert client.writer is not None and client.writer.is_closing()
+        assert client.reader_task is not None and client.reader_task.done()
+        assert rig.pilot.on_message not in rig.link.listeners
+        assert rig.pilot.on_body_packet not in rig.link.raw_body_listeners
+
+
 @pytest.mark.parametrize("transition", ["loading", "hello", "disconnect"])
 async def test_world_or_connection_reset_releases_and_closes_episode(transition, monkeypatch):
     async with running() as rig:
@@ -575,6 +611,79 @@ async def test_five_minute_combat_limit_ends_episode():
         rig.clock.advance(300.01)
         rig.bridge.emit(fighter(4, owned=True, t_game_ms=300_151))
         await rig.ended()
+
+
+@pytest.mark.parametrize("end", ["fallback", "error", "fight_timeout"])
+async def test_native_remainder_of_same_combat_is_not_reacquired(end):
+    async with running() as rig:
+        await rig.active()
+        if end == "fight_timeout":
+            rig.clock.advance(300.01)
+        else:
+            rig.policy.step_mode = end
+        rig.bridge.emit(fighter(4, owned=True))
+        await rig.ended()
+        await eventually(lambda: rig.pilot.npc is None)
+        # The native bridge emits another attack for every subsequent hero blow.
+        for kind in ("attack", "threatened", "weapon_drawn", "npc_attack"):
+            rig.combat(kind=kind)
+        rig.bridge.emit(fighter(5))
+        await asyncio.sleep(0.04)
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert len(rig.bridge.commands("body_watch")) == 2
+        assert not rig.link.body_leases
+
+
+async def test_fallback_npc_can_be_acquired_in_a_new_combat_after_returning_to_routine():
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_mode = "fallback"
+        rig.bridge.emit(fighter(4, owned=True))
+        await rig.ended()
+        await eventually(lambda: rig.pilot.npc is None)
+        seq = 4
+        for temporary_roster in (
+            {"include": False},
+            {"activity": "dialog"},
+            {"activity": "attached"},
+            {"activity": "routine", "state": "ZS_ATTACK"},
+        ):
+            # Absence, a takeover, and a transient activity label do not prove
+            # that the native fight ended, even if another attack follows.
+            rig.roster(**temporary_roster)
+            rig.roster()
+            rig.combat()
+            seq += 1
+            rig.bridge.emit(fighter(seq))
+            await asyncio.sleep(0.01)
+            assert len(rig.bridge.commands("body_acquire")) == 1
+            assert len(rig.bridge.commands("body_watch")) == 2
+        rig.roster(activity="routine", state="ZS_SIT_BENCH")
+        rig.roster()
+        rig.combat()
+        await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
+        rig.bridge.emit(fighter(seq + 1))
+        await eventually(lambda: len(rig.bridge.commands("body_acquire")) == 2)
+        assert rig.link.body_leases
+
+
+async def test_fallback_for_one_npc_does_not_block_a_different_npc():
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_mode = "fallback"
+        rig.bridge.emit(fighter(4, owned=True))
+        await rig.ended()
+        await eventually(lambda: rig.pilot.npc is None)
+        rig.roster(extra=[RosterEntry(
+            id="OTHER", name="Other Fighter", guild=1, distance=250.0,
+            in_view=True, activity="fight", state="ZS_ATTACK",
+        )])
+        rig.combat("OTHER")
+        await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
+        rig.bridge.emit(fighter(5, entity=4))
+        await eventually(lambda: len(rig.bridge.commands("body_acquire")) == 2)
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == ["OTHER"]
+        assert rig.bridge.commands("body_acquire")[-1]["entity_id"] == 4
 
 
 @pytest.mark.parametrize("denied", ["monster", "unknown", "companion", "twohand", "dialog", "attached"])
