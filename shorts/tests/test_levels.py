@@ -505,7 +505,8 @@ def test_voiced_master_checks_decoded_audio_before_publication(
                 Path(argument).touch()
 
     monkeypatch.setattr(comparison_cut, "run", render)
-    meter = Mock(side_effect=[(voice_lufs, -4), (-13, peak)])
+    passes = 3 if failed_row == "voice_mastered" else 1
+    meter = Mock(side_effect=[(voice_lufs, -4)] * passes + [(-13, peak)])
     detector = Mock(return_value=click_times)
     monkeypatch.setattr(levels, "meter_file", meter)
     monkeypatch.setattr(comparison_cut.clicks, "detect", detector)
@@ -524,8 +525,9 @@ def test_voiced_master_checks_decoded_audio_before_publication(
         assert _rows(report)[failed_row]["ok"] is False
     assert _rows(report)["clicks"]["times_seconds"] == click_times
     assert detector.call_args.args[0].name == out.name
-    assert meter.call_args_list[1].args[0] == detector.call_args.args[0]
-    assert len(commands) == 1
+    assert meter.call_args_list[-1].args[0] == detector.call_args.args[0]
+    assert len(commands) == report["master_passes"] == passes
+    assert len(report["master_corrections_db"]) == passes - 1
     graph = commands[0][commands[0].index("-filter_complex") + 1]
     assert "volume=14.000000000dB" in graph
     assert graph.count("alimiter=") == 1
@@ -534,6 +536,59 @@ def test_voiced_master_checks_decoded_audio_before_publication(
     assert "amultiply[voice_mastered]" in graph
     assert "loudnorm" not in graph
     json.dumps(report, allow_nan=False)
+
+
+@pytest.mark.parametrize("readings,corrections,passes_ok", [
+    ([-14.1], [], True),
+    ([-13.9], [], True),
+    ([-14.8, -14.1], [0.8], True),
+    ([-14.8, -14.3, -14.0], [0.8, 0.3], True),
+    ([-13.7, -14.0], [-0.3], True),
+    ([-15.0, -14.8, -14.7], [1.0, 0.8], False),
+])
+def test_master_corrections_change_only_common_gain_and_stop_after_two(
+    tmp_path, monkeypatch, comparison_cut, readings, corrections, passes_ok,
+):
+    report = levels.check_balance(-28, None, None, -34, -31)
+    report["speech_lufs"] = -28
+    audio = levels.AudioGraph(["-i", "joined.mp4"], ["[0:a]asplit=2[g][vo]"],
+                              {"game": "g", "voice": "vo"})
+    mix = audio.mix()
+    rendered_graphs = []
+
+    def render(command):
+        rendered_graphs.append(command[command.index("-filter_complex") + 1])
+        for argument in command:
+            if argument.endswith(("short-ru.mp4", "voice.m4a")):
+                Path(argument).touch()
+
+    monkeypatch.setattr(comparison_cut, "run", render)
+    meter = Mock(side_effect=[(value, -4) for value in readings] + [(-13, -1.9)])
+    detector = Mock(return_value=[])
+    monkeypatch.setattr(levels, "meter_file", meter)
+    monkeypatch.setattr(comparison_cut.clicks, "detect", detector)
+    out = tmp_path / "short-ru.mp4"
+    if passes_ok:
+        comparison_cut.master(audio.inputs, mix, out, 12, voiced=True, audio=audio, report=report)
+    else:
+        with pytest.raises(ValueError, match="mastering check failed"):
+            comparison_cut.master(audio.inputs, mix, out, 12, voiced=True, audio=audio, report=report)
+    assert out.exists() is passes_ok
+    assert report["ok"] is passes_ok
+    assert report["master_passes"] == len(rendered_graphs) == len(readings) <= 3
+    assert report["master_corrections_db"] == pytest.approx(corrections)
+    assert report["master_gain_db"] == pytest.approx(14 + sum(corrections))
+    assert detector.call_count == 1
+    # Across renders only the two taps of the same common gain may change.
+    gain = 14.0
+    for index, graph in enumerate(rendered_graphs):
+        assert graph.count(f"volume={gain:.9f}dB") == 2
+        assert graph.replace(f"volume={gain:.9f}dB", "COMMON_GAIN") == rendered_graphs[0].replace(
+            "volume=14.000000000dB", "COMMON_GAIN",
+        )
+        if index < len(corrections):
+            gain += corrections[index]
+    assert audio.mix() == mix
 
 
 @pytest.mark.parametrize("failed_row", ["true_peak", "clicks", "voice_mastered"])
@@ -567,8 +622,8 @@ def test_mastering_failure_writes_report_and_click_times(
     monkeypatch.setattr(comparison_cut, "caption_image", Mock())
     monkeypatch.setattr(comparison_cut, "run", render)
     monkeypatch.setattr(levels, "calibrate", Mock(return_value=(audio, report)))
-    monkeypatch.setattr(levels, "meter_file", Mock(side_effect=[
-        (-15 if failed_row == "voice_mastered" else -14, -4),
+    voice_readings = [(-15, -4)] * 3 if failed_row == "voice_mastered" else [(-14, -4)]
+    monkeypatch.setattr(levels, "meter_file", Mock(side_effect=voice_readings + [
         (-13, -0.9 if failed_row == "true_peak" else -1.1),
     ]))
     times = [2.25] if failed_row == "clicks" else []
@@ -595,7 +650,7 @@ def test_voice_based_master_gain_reaches_base(tone_inputs, speech):
 
 
 def test_synthetic_voiced_mix_publishes_voice_at_base_after_aac(
-    tmp_path, tone_inputs, comparison_cut,
+    tmp_path, tone_inputs, comparison_cut, monkeypatch,
 ):
     joined, voice, out = (tmp_path / name for name in ("joined.mp4", "voice.wav", "short-ru.mp4"))
     subprocess.run(
@@ -611,6 +666,8 @@ def test_synthetic_voiced_mix_publishes_voice_at_base_after_aac(
     )
     audio, report = levels.calibrate(joined, None, [(voice, 0)], [(0, 12)], 12, 12)
     assert report["ok"] is True
+    render = Mock(wraps=comparison_cut.run)
+    monkeypatch.setattr(comparison_cut, "run", render)
     comparison_cut.master(audio.inputs, audio.mix(), out, 12, voiced=True, audio=audio, report=report)
     rows = _rows(report)
     assert rows["voice_mastered"]["measured_lufs"] == pytest.approx(-14, abs=0.5)
@@ -618,9 +675,11 @@ def test_synthetic_voiced_mix_publishes_voice_at_base_after_aac(
     assert rows["clicks"]["count"] == 0
     assert report["ok"] is True
     assert out.stat().st_size > 0
+    assert render.call_count == report["master_passes"] == 1
+    assert report["master_corrections_db"] == []
 
 
-def test_game_peaks_that_suppress_the_voice_block_publication(
+def test_voice_correction_uses_the_mix_limiter_and_matches_the_published_channel(
     tmp_path, comparison_cut, monkeypatch,
 ):
     if shutil.which("ffmpeg") is None:
@@ -650,16 +709,16 @@ def test_game_peaks_that_suppress_the_voice_block_publication(
         return real_meter(path)
 
     monkeypatch.setattr(levels, "meter_file", meter)
-    with pytest.raises(ValueError, match="mastering check failed"):
-        comparison_cut.master(audio.inputs, audio.mix(), out, 6, voiced=True, audio=audio, report=report)
+    comparison_cut.master(audio.inputs, audio.mix(), out, 6, voiced=True, audio=audio, report=report)
     rows = _rows(report)
-    assert measured_mix_voice[0] == pytest.approx(-15.0, abs=0.2)
+    assert measured_mix_voice[0] == pytest.approx(-14.0, abs=0.2)
     assert rows["voice_mastered"]["measured_lufs"] == pytest.approx(measured_mix_voice[0], abs=0.1)
-    assert rows["voice_mastered"]["ok"] is False
+    assert rows["voice_mastered"]["ok"] is True
     assert rows["true_peak"]["ok"] is True
     assert rows["clicks"]["count"] == 0
-    assert report["ok"] is False
-    assert not out.exists()
+    assert report["ok"] is True
+    assert report["master_passes"] == 2
+    assert out.exists()
 
 
 def test_unvoiced_master_keeps_original_two_pass_filters(tmp_path, monkeypatch, comparison_cut):
@@ -676,3 +735,51 @@ def test_unvoiced_master_keeps_original_two_pass_filters(tmp_path, monkeypatch, 
         "measured_I=-19.1:measured_TP=-3.2:measured_LRA=2.0:measured_thresh=-29.1:"
         "offset=0.1:linear=true,afade=t=out:st=11.920:d=0.08[a]"
     )
+
+
+def test_peaky_voice_reaches_base_with_bounded_common_gain_corrections(
+    tmp_path, comparison_cut, monkeypatch,
+):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for synthetic mastering")
+    voice, joined, out = (tmp_path / name for name in ("voice.wav", "joined.mkv", "short-ru.mp4"))
+    # Smooth 2-ms peaks have a high crest factor without introducing clicks.
+    peaky_voice = (
+        "aevalsrc='(0.03+if(lt(mod(t,0.1),0.002),"
+        "0.15*pow(sin(PI*mod(t,0.1)/0.002),2),0))*sin(2*PI*1000*t)':s=48000:d=6"
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", peaky_voice,
+         "-c:a", "pcm_s24le", str(voice)], check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "color=c=black:s=16x16:r=1:d=6", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo:d=6",
+         "-c:v", "mpeg4", "-c:a", "pcm_s24le", str(joined)], check=True, capture_output=True,
+    )
+    audio, report = levels.calibrate(joined, None, [(voice, 0)], [(0, 6)], 6, 6)
+    calibrated_mix = audio.mix()
+    assert report["ok"] is True
+    measured_voice = []
+    real_meter = levels.meter_file
+
+    def meter(path):
+        result = real_meter(path)
+        if path.name == "voice.m4a":
+            measured_voice.append(result[0])
+        return result
+
+    monkeypatch.setattr(levels, "meter_file", meter)
+    comparison_cut.master(audio.inputs, calibrated_mix, out, 6, voiced=True, audio=audio, report=report)
+    rows = _rows(report)
+    assert measured_voice[0] <= levels.BASE_LUFS - 0.5
+    assert measured_voice[-1] == pytest.approx(levels.BASE_LUFS, abs=0.2)
+    assert rows["voice_mastered"]["measured_lufs"] == measured_voice[-1]
+    assert 1 < len(measured_voice) == report["master_passes"] <= 3
+    assert len(report["master_corrections_db"]) == len(measured_voice) - 1 <= 2
+    assert audio.mix() == calibrated_mix
+    assert rows["voice_mastered"]["ok"] is True
+    assert rows["true_peak"]["ok"] is True
+    assert rows["clicks"]["count"] == 0
+    assert report["ok"] is True
+    assert out.stat().st_size > 0

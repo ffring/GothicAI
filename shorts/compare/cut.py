@@ -120,6 +120,7 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
            audio: levels.AudioGraph | None = None, report: dict | None = None) -> None:
     """Lift voiced mixes by the voice's gain, limit peaks, then validate decoded AAC.
 
+    Correct the common gain from the decoded voice, with at most two adjustments.
     Unvoiced mixes retain the original limiter and two-pass loudnorm.
     mix is the filter graph ending where mastering goes on.
     """
@@ -130,12 +131,23 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
         with tempfile.TemporaryDirectory(dir=out.parent) as pending:
             candidate = Path(pending) / out.name
             voice = Path(pending) / "voice.m4a"
-            # Both outputs share the actual mix limiter's gain and final fade.
-            run(["ffmpeg", "-y", *inputs, "-filter_complex", audio.master_graph(report["speech_lufs"], length),
-                 "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
-                 "-b:a", "192k", "-ar", "48000", str(candidate),
-                 "-map", "[voice_mastered]", "-vn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(voice)])
-            voice_lufs, _ = levels.meter_file(voice)
+            gain_correction = 0.0
+            report["master_corrections_db"] = []
+            for attempt in range(levels.MAX_MASTER_CORRECTIONS + 1):
+                # Both outputs share the actual mix limiter's gain and final fade.
+                graph = audio.master_graph(report["speech_lufs"], length, gain_correction_db=gain_correction)
+                run(["ffmpeg", "-y", *inputs, "-filter_complex", graph,
+                     "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
+                     "-b:a", "192k", "-ar", "48000", str(candidate),
+                     "-map", "[voice_mastered]", "-vn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(voice)])
+                voice_lufs, _ = levels.meter_file(voice)
+                report["master_passes"] = attempt + 1
+                report["master_gain_db"] = levels.master_gain(report["speech_lufs"]) + gain_correction
+                correction = levels.master_correction(voice_lufs)
+                if not correction or attempt == levels.MAX_MASTER_CORRECTIONS:
+                    break
+                gain_correction += correction
+                report["master_corrections_db"].append(correction)
             _, peak = levels.meter_file(candidate)
             levels.check_mastering(report, voice_lufs, peak, clicks.detect(candidate))
             if not report["ok"]:

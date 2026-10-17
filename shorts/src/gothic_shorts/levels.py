@@ -15,6 +15,8 @@ from pathlib import Path
 BASE_LUFS = -14.0
 TRUE_PEAK_DBTP = -1.0
 VOICE_TOLERANCE_LU = 0.5
+MASTER_CORRECTION_TOLERANCE_LU = 0.1
+MAX_MASTER_CORRECTIONS = 2
 PEAK_LIMIT = 0.79  # Leave AAC/intersample headroom below the final true-peak ceiling.
 # A sub-threshold pilot follows the limiter's shared gain without influencing it.
 LIMITER_PILOT = 0.01
@@ -243,9 +245,18 @@ def master_gain(speech_lufs: float) -> float:
     return BASE_LUFS - speech_lufs
 
 
-def master_filter(speech_lufs: float, length: float, *, voice_probe: bool = False) -> str:
+def master_correction(voice_lufs: float) -> float:
+    """Correct decoded voice loudness; leave an unavailable reading to the final gate."""
+    if not math.isfinite(voice_lufs):
+        return 0.0
+    correction = BASE_LUFS - voice_lufs
+    return correction if abs(correction) > MASTER_CORRECTION_TOLERANCE_LU + 1e-6 else 0.0
+
+
+def master_filter(speech_lufs: float, length: float, *, voice_probe: bool = False,
+                  gain_correction_db: float = 0.0) -> str:
     pilot = f"aeval='val(0)|val(1)|{LIMITER_PILOT}':c=2.1," if voice_probe else ""
-    return (f"volume={master_gain(speech_lufs):.9f}dB,{pilot}"
+    return (f"volume={master_gain(speech_lufs) + gain_correction_db:.9f}dB,{pilot}"
             f"alimiter=limit={PEAK_LIMIT}:level=false:latency=true,"
             f"afade=t=out:st={length - 0.08:.3f}:d=0.08")
 
@@ -283,7 +294,7 @@ class AudioGraph:
         return ";".join(filters + ["".join(f"[{label}]" for label in tracks.values()) +
                                   f"amix=inputs={len(tracks)}:duration=first:normalize=0"])
 
-    def master_graph(self, speech_lufs: float, length: float) -> str:
+    def master_graph(self, speech_lufs: float, length: float, *, gain_correction_db: float = 0.0) -> str:
         """Output stereo [a] and a voice probe under the mix's exact limiting gain.
 
         The limiter applies one gain to every channel. Its quiet constant third
@@ -291,12 +302,15 @@ class AudioGraph:
         cancelling samples. Discard the pilot from the published stereo. Delay
         compensation in master_filter keeps the voice and envelope aligned.
         """
+        processing = master_filter(speech_lufs, length, voice_probe=True,
+                                   gain_correction_db=gain_correction_db)
         return (f"{self.mix(voice_probe=True)},"
-                f"{master_filter(speech_lufs, length, voice_probe=True)},"
+                f"{processing},"
                 "asplit=2[master_mix][master_pilot];"
                 "[master_mix]pan=stereo|c0=c0|c1=c1[a];"
                 f"[master_pilot]pan=stereo|c0=c2|c1=c2,volume={1 / LIMITER_PILOT:g}[master_envelope];"
-                f"[master_voice_probe]volume={master_gain(speech_lufs):.9f}dB[master_voice_boosted];"
+                f"[master_voice_probe]volume={master_gain(speech_lufs) + gain_correction_db:.9f}dB"
+                "[master_voice_boosted];"
                 "[master_voice_boosted][master_envelope]amultiply[voice_mastered]")
 
 
