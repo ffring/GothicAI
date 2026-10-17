@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Small recurrent walking policy and its portable, single-file weight export.
+
+Torch is required by this training module only. Runtime inference lives in
+``nav_bc_numpy.py`` and does not import this module or torch.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import torch
+from torch import Tensor, nn
+
+
+HEAD_SIZES = {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "jump": 2, "climb": 2}
+FORMAT_NAME = "gothic-nav-bc"
+FORMAT_VERSION = 1
+
+
+class NavPolicy(nn.Module):
+    """Encode the two local maps and sensors, then retain state with one GRU.
+
+    Map inputs have shape ``(batch, time, 9, height, width)``; the vector has
+    shape ``(batch, time, vector_size)``. Hidden state follows torch's GRU
+    convention: ``(1, batch, hidden_size)``. Every output logit tensor has
+    shape ``(batch, time, classes)``.
+    """
+
+    def __init__(self, vector_size: int, hidden_size: int = 256) -> None:
+        super().__init__()
+        if vector_size <= 0 or hidden_size <= 0:
+            raise ValueError("vector_size and hidden_size must be positive")
+        self.vector_size = int(vector_size)
+        self.hidden_size = int(hidden_size)
+        self.near_encoder = self._map_encoder()
+        self.far_encoder = self._map_encoder()
+        self.vector_encoder = nn.Sequential(nn.Linear(vector_size, 128), nn.ReLU())
+        self.fusion = nn.Sequential(nn.Linear(256, 128), nn.ReLU())
+        self.gru = nn.GRU(128, hidden_size, num_layers=1, batch_first=True)
+        # "forward" itself cannot be a ModuleDict key: nn.Module owns that name.
+        for name, classes in HEAD_SIZES.items():
+            setattr(self, f"head_{name}", nn.Linear(hidden_size, classes))
+        if self.mac_count()["total"] > 2_000_000:
+            raise ValueError("policy exceeds the 2,000,000 MAC decision budget")
+
+    @staticmethod
+    def _map_encoder() -> nn.Sequential:
+        return nn.Sequential(
+            nn.Conv2d(9, 8, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((2, 2)),
+            nn.Flatten(),
+        )
+
+    def forward(
+        self, near: Tensor, far: Tensor, vector: Tensor, hidden: Tensor | None = None
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        batch, time = vector.shape[:2]
+        near_features = self.near_encoder(near.reshape(batch * time, 9, 32, 32))
+        far_features = self.far_encoder(far.reshape(batch * time, 9, 25, 25))
+        vector_features = self.vector_encoder(vector.reshape(batch * time, self.vector_size))
+        features = self.fusion(torch.cat((near_features, far_features, vector_features), dim=-1))
+        recurrent, hidden = self.gru(features.reshape(batch, time, 128), hidden)
+        return {
+            name: getattr(self, f"head_{name}")(recurrent) for name in HEAD_SIZES
+        }, hidden
+
+    def mac_count(self) -> dict[str, Any]:
+        """Matrix-product MACs per decision, including zero-padded conv taps.
+
+        Bias addition, activation, pooling, and scalar GRU gates are listed as
+        non-MAC operations rather than silently counted as dense matrix work.
+        """
+        components = {
+            "near_conv1": 16 * 16 * 8 * 9 * 3 * 3,
+            "near_conv2": 8 * 8 * 16 * 8 * 3 * 3,
+            "far_conv1": 13 * 13 * 8 * 9 * 3 * 3,
+            "far_conv2": 7 * 7 * 16 * 8 * 3 * 3,
+            "vector_linear": self.vector_size * 128,
+            "fusion_linear": 256 * 128,
+            "gru_input": 3 * self.hidden_size * 128,
+            "gru_hidden": 3 * self.hidden_size * self.hidden_size,
+            "heads": self.hidden_size * sum(HEAD_SIZES.values()),
+        }
+        return {
+            "total": sum(components.values()),
+            "components": components,
+            "convention": "One multiply plus accumulate per convolution/linear/GRU matrix weight; includes padded zero taps.",
+            "other_operations": {
+                "gru_elementwise_multiplies": 3 * self.hidden_size,
+                "pool_output_means": 2 * 16 * 2 * 2,
+                "pool_input_values_summed": 16 * 64 + 16 * 64,
+                "excluded": "bias additions, ReLU, sigmoid, tanh, pooling reductions, scalar gate additions",
+            },
+        }
+
+    def architecture(self) -> dict[str, Any]:
+        """A runtime-independent description sufficient to reproduce inference."""
+        return {
+            "name": "map-cnn-vector-gru",
+            "version": 1,
+            "inputs": {
+                "near": [9, 32, 32],
+                "far": [9, 25, 25],
+                "vector": [self.vector_size],
+                "dtype": "float32",
+                "map_layout": "CHW",
+            },
+            "map_encoders": {
+                "separate_weights": True,
+                "layers": [
+                    {"type": "conv2d", "in_channels": 9, "out_channels": 8, "kernel": 3, "stride": 2, "padding": 1, "activation": "relu"},
+                    {"type": "conv2d", "in_channels": 8, "out_channels": 16, "kernel": 3, "stride": 2, "padding": 1, "activation": "relu"},
+                    {"type": "adaptive_avg_pool2d", "output": [2, 2], "bins": "start=floor(i*input/output); end=ceil((i+1)*input/output)"},
+                    {"type": "flatten", "order": "CHW", "output": 64},
+                ],
+            },
+            "vector_encoder": {"in": self.vector_size, "out": 128, "activation": "relu"},
+            "fusion": {"concat": ["near", "far", "vector"], "in": 256, "out": 128, "activation": "relu"},
+            "gru": {
+                "input_size": 128,
+                "hidden_size": self.hidden_size,
+                "layers": 1,
+                "gate_order": ["reset", "update", "new"],
+                "equations": [
+                    "r = sigmoid(W_ir*x + b_ir + W_hr*h + b_hr)",
+                    "z = sigmoid(W_iz*x + b_iz + W_hz*h + b_hz)",
+                    "n = tanh(W_in*x + b_in + r*(W_hn*h + b_hn))",
+                    "h_new = (1-z)*n + z*h",
+                ],
+                "initial_hidden": "zeros",
+            },
+            "heads": {
+                name: {"classes": classes, "values": [-1, 0, 1] if classes == 3 else [0, 1]}
+                for name, classes in HEAD_SIZES.items()
+            },
+            "macs": self.mac_count(),
+        }
+
+
+def export_weights(
+    model: NavPolicy, path: str | Path, preprocessing: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Write one UTF-8 JSON line followed immediately by float32 tensor data.
+
+    Tensor byte offsets are relative to the first byte following the header's
+    terminating newline. Tensors use little-endian float32 in C order, with
+    torch's native weight layout (linear OI, convolution OIHW).
+    """
+    tensors = []
+    payload = []
+    offset = 0
+    for name, tensor in model.state_dict().items():
+        array = tensor.detach().cpu().numpy().astype("<f4", copy=False)
+        data = array.tobytes(order="C")
+        tensors.append({"name": name, "shape": list(array.shape), "dtype": "float32", "offset": offset, "nbytes": len(data)})
+        payload.append(data)
+        offset += len(data)
+    header = {
+        "format": FORMAT_NAME,
+        "version": FORMAT_VERSION,
+        "byte_order": "little",
+        "offset_origin": "first byte after JSON header newline",
+        "data_nbytes": offset,
+        "architecture": model.architecture(),
+        "preprocessing": preprocessing or {},
+        "tensors": tensors,
+    }
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as stream:
+        stream.write(json.dumps(header, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n")
+        for data in payload:
+            stream.write(data)
+    return header
