@@ -375,6 +375,61 @@ void nativeCombatQueueProvenance() {
     }
   }
 
+void boundaryRequestLifecycle() {
+  ++cases;
+  using Request=BodyController::BoundaryRequest;
+  BodyController::AcquireState state;
+  state.targetValid=state.nativeCombat=state.queueCombatOnly=state.gotoToTarget=true;
+  state.queueEmpty=state.gotoEmpty=false;
+  Request request;
+  expect(!request.begin(0,42,100,1500) && !request.pending,"zero request identity is rejected");
+  expect(!request.begin(7,0,100,1500) && !request.pending,"zero target identity is rejected");
+  expect(!request.begin(7,42,100,0) && !request.begin(7,42,100,2001),"only a bounded positive wait may be pending");
+  expect(request.begin(7,42,100,1500) && request.pending,"a request reserves its identity and wall deadline");
+  expect(request.id==7 && request.target==42 && request.deadlineMs==1600,"stored request identity is exact");
+  expect(!request.begin(8,43,200,1500),"a second request cannot replace the existing actor slot");
+  expect(request.id==7 && request.target==42 && request.deadlineMs==1600,"duplicate submission never extends the window");
+  for(uint64_t wall:{101,200,1000,1599})
+    expect(std::string_view(request.advance(state,42,wall))=="waiting" && request.pending,
+           "locked native combat keeps executing without acquiring before its safe boundary");
+  state.safeBoundary=true;
+  expect(std::string_view(request.advance(state,42,1599))=="acquired" && !request.pending,
+         "the first safe simulation boundary consumes exactly one pending request");
+  expect(request.id==7 && request.target==42,"grant preserves identity for the ownership event and cancellation race");
+  expect(std::string_view(request.advance(state,42,1599))=="not_pending","one request cannot grant a second lease");
+  expect(request.begin(8,42,2000,500),"completed request slot may be reused");
+  expect(std::string_view(request.advance(state,42,2500))=="expired" && !request.pending,
+         "deadline is wall time and wins over a simultaneous safe boundary");
+  expect(!request.cancel(),"expired request cannot be cancelled twice");
+  for(const auto reason:{"released","disconnect","loading","destroyed","story_takeover"}) {
+    expect(request.begin(9,42,3000,1500),reason);
+    expect(request.cancel() && !request.pending,"explicit cancellation consumes the actual pending lifecycle");
+    expect(std::string_view(request.advance(state,42,3001))=="not_pending",
+           "release, disconnect and world teardown cannot later grant an old request");
+    }
+  for(const auto reason:{"target_changed","actor_down","talking","native_combat_ended","target_invalid",
+                         "external_control","native_overlay_busy","native_queue_busy","goto_busy"}) {
+    auto changed=state;
+    uint64_t target=42;
+    if(std::string_view(reason)=="target_changed") target=43;
+    if(std::string_view(reason)=="actor_down") changed.terminal=true;
+    if(std::string_view(reason)=="talking") changed.talking=true;
+    if(std::string_view(reason)=="native_combat_ended") changed.nativeCombat=false;
+    if(std::string_view(reason)=="target_invalid") changed.targetValid=false;
+    if(std::string_view(reason)=="external_control") changed.externalControl=true;
+    if(std::string_view(reason)=="native_overlay_busy") changed.overlayEmpty=false;
+    if(std::string_view(reason)=="native_queue_busy") changed.queueCombatOnly=false;
+    if(std::string_view(reason)=="goto_busy") changed.gotoToTarget=false;
+    // Cancellation is checked while a physical segment is still locked as well.
+    changed.safeBoundary=false;
+    expect(request.begin(10,42,4000,1500),"new cancellation case starts in the same actual lifecycle");
+    expect(std::string_view(request.advance(changed,target,4001))==reason && !request.pending,
+           std::string("pending request cancels promptly on ")+reason);
+    expect(std::string_view(request.advance(state,42,4002))=="not_pending",
+           "restoring the target/state after cancellation does not resurrect the lease");
+    }
+  }
+
 void optionalWallNormalPlacement() {
   ++cases;
   using Tempest::Vec3;
@@ -515,6 +570,7 @@ int main() {
     run("actual_arbiter_fake_state_checks",actualArbiterFakeStateChecks);
     run("native_combat_acquisition_gates",nativeCombatAcquisitionGates);
     run("native_combat_queue_provenance",nativeCombatQueueProvenance);
+    run("boundary_request_lifecycle",boundaryRequestLifecycle);
     run("optional_wall_normal_placement",optionalWallNormalPlacement);
     run("optional_wall_tangent_selection",optionalWallTangentSelection);
     run("reaction_activation_gates",reactionActivationGates);

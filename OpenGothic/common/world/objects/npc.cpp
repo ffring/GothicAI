@@ -4550,6 +4550,8 @@ void Npc::tickRoutine() {
   }
 
 void Npc::setTarget(Npc *t) {
+  if(!BodyController::owns(*this) && currentTarget!=t)
+    BodyController::takeover(*this,"target_changed");
   if(BodyController::owns(*this) && currentTarget!=t) {
     const auto bodyTargetId=t ? BodyObservations::entityId(*t) : 0;
     BodyController::deferNative(*this,[this,bodyTargetId] { setTarget(BodyObservations::findEntity(bodyTargetId)); });
