@@ -1006,21 +1006,41 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         f"{'done' if queued else 'failed'} (line started after {time.monotonic() - t0:.1f} s)"
     )
 
-    # Fight on the same open, level ground used by the native physics benches.
-    # A tower save can leave the hero on a ledge with no standing room at its height.
-    arena = "NW_XARDAS_TOWER_VALLEY_091"
-    await link.debug("player_goto", waypoint=arena)
-    await link.debug("npc_goto", npc=npc, waypoint=arena, face="PLAYER")
-    # Native animals can otherwise start a different fight before the test wolf.
-    around = (await link.snapshot(npc, fresh=True)).nearby_npcs
-    for other in around:
-        if not other.dead and other.guild >= BEASTS:
-            await link.debug("kill", instance=other.id, near=npc)
+    # _091 puts Xardas beside a rock that blocks spells from his hand even when
+    # the wolf is visible. Use _09's flat ground and its open southeast corridor.
+    arena = "NW_XARDAS_TOWER_VALLEY_09"
+    # Clear both neighbourhoods: a relocation can retain the stock encounter's
+    # enemy, and animals by the new spot must not join either test fight.
+    # debug kill drops victims by the hero; leave that food away from the wolves.
+    async def clear_animals() -> None:
+        around = (await link.snapshot(npc, fresh=True)).nearby_npcs
+        for other in around:
+            if not other.dead and other.guild >= BEASTS:
+                await link.debug("kill", instance=other.id, near=npc)
+        # Perception reaches beyond snapshot's 15 m, but only within its field of view.
+        for view in await link.npc_view([npc]):
+            for seen in view.sees:
+                if seen.guild >= BEASTS and seen.body != "dead":
+                    await link.debug("kill", instance=seen.id, near=npc)
+
+    await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+    for clearing in ("NW_XARDAS_TOWER_VALLEY_091", arena):
+        await link.debug("npc_goto", npc=npc, waypoint=clearing)
+        await clear_animals()
+    # npc_goto resolves script instances, so face needs PC_HERO, not the PLAYER alias.
+    # This position fixes the direction for both wolf spawns, away from the rocks.
+    await link.debug("player_goto", pos=[23472, 1032, -10816])
+    await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
     await link.debug("teleport", near=npc, distance=300)
 
     # 1. the player draws a weapon next to the npc: the npc perceives it (it is free, scripts run)
     await attach_when_free(link, npc)
     await link.act(npc, "go_to_npc", npc="PLAYER", radius=300)
+    # The approach changes the standing pose and can expose animals hidden from
+    # the relocated book-reading pose. Clear that view before native perceptions resume.
+    await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+    await clear_animals()
+    await link.debug("teleport", near=npc, distance=300)
     await link.act(npc, "return_to_routine")
     # Returning control starts the old tower routine. Hold an ordinary native idle
     # here and wait for its initialization, including its normal enemy perceptions.
@@ -1031,12 +1051,20 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     )
     if ready.status != "arrived":
         current = (await link.routine(npc)).current
-        raise GameError(f"m5b arena preparation: {ready.status} {ready.detail}; state={current}")
+        snap = await link.snapshot(npc, fresh=True)
+        views = await link.npc_view([npc])
+        raise GameError(
+            f"m5b arena preparation: {ready.status} {ready.detail}; state={current}; "
+            f"pos={snap.npc.pos}; rot={snap.npc.rot}; nearby={snap.nearby_npcs}; sees={[v.sees for v in views]}"
+        )
     events.clear()
     await _m5b_player_weapon(link, "melee")
     e = await event({"weapon_drawn"}, 5)
     results["weapon_drawn"] = f"done ({e.npc}, {e.distance:.0f} cm)" if e else "failed (no weapon_drawn)"
     await _m5b_player_weapon(link, "none")
+    # Keep the hero beyond the 400/500 cm wolf spawns so he cannot intercept
+    # Xardas's projectiles. The weapon perception above still runs at 300 cm.
+    await link.debug("player_goto", pos=[23967, 1032, -11311])
 
     # 2. a wolf next to the npc: the npc senses it or sees it attack
     events.clear()
@@ -1098,7 +1126,13 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         f"{'done' if res.status in ('done', 'timeout') and not detached else 'failed'} "
         f"({res.status} {res.detail or ''}, still attached: {not detached})"
     )
-    # The flee wolf can still be alive: finish this encounter before restoring the routine.
+    # The flee wolf may stay with the hero outside the fleeing NPC's snapshot.
+    # Remove that encounter before restoring the routine, even if it is out of view.
+    try:
+        await link.debug("kill", instance="WOLF", near="PC_HERO")
+    except GameError as err:
+        if str(err) != "no such creature alive":
+            raise
     around = (await link.snapshot(npc, fresh=True)).nearby_npcs
     for other in around:
         if not other.dead and other.guild >= BEASTS:
