@@ -6,8 +6,9 @@ seconds, a title per beat, the game's sound of the "on" take, -14 LUFS. Optional
 "lines" [{"at", "file", "words": [[word, from, to], ...]}] are voiced lines laid at that second of its segment,
 captioned word by word in place of the beat's title, the music and the game's sound ducked under them. A plan
 with a voice lives outside the repository (the explainer's workspace): give its path, the short goes into its
-render/ folder. "brand": true puts the channel's seal in the corner and its end sting after the last beat
-(shorts/brand/sting.py makes both, in ~/.local/share/gothic-ai/brand/sting/).
+render/ folder. The channel's brand is on unless the plan says "brand": false (the shorts published before it,
+kept as they went out): the seal in the corner, the end sting after the last beat (shorts/brand/sting.py makes
+both, in ~/.local/share/gothic-ai/brand/sting/), PT Serif on warm bands instead of Arial and Georgia on black.
 
     uv run --project shorts python shorts/compare/cut.py bodies ru
     uv run --project shorts python shorts/compare/cut.py bodies en
@@ -27,9 +28,12 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[2]
 W, H, HALF = 1080, 1920, 960
 FPS = 30
-# PT Serif Bold (ParaType, OFL, ships with macOS): Cyrillic, bookish like the channel's letters
-LABEL_FONT = HOOK_FONT = ("/System/Library/Fonts/Supplemental/PTSerif.ttc", 3)
-BAND, OUTLINE = (23, 17, 13, 165), (20, 12, 8, 255)  # under and round the words: the night of the brand
+SUP = "/System/Library/Fonts/Supplemental/"
+# the texts' faces, the band under them and their outline: the brand's (PT Serif Bold — ParaType, OFL, ships with
+# macOS: Cyrillic, bookish like the channel's letters — on the night of the brand), or the look before it
+STYLES = {True: ((SUP + "PTSerif.ttc", 3), (SUP + "PTSerif.ttc", 3), (23, 17, 13, 165), (20, 12, 8, 255)),
+          False: ((SUP + "Arial Bold.ttf", 0), (SUP + "Georgia Bold.ttf", 0), (0, 0, 0, 150), (0, 0, 0, 255))}
+LABEL_FONT, HOOK_FONT, BAND, OUTLINE = STYLES[True]
 # the brand's seal and its end sting (shorts/brand/sting.py): generated art and a sound of the game, not in git
 BRAND = Path.home() / ".local/share/gothic-ai/brand/sting"
 SEAL = (110, W - 140, 110)  # the corner seal: size, x, y (under the slow-motion mark of the top half)
@@ -130,6 +134,9 @@ def main() -> None:
     name, lang = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "ru"
     plan_file = Path(sys.argv[3]).expanduser() if len(sys.argv) > 3 else ROOT / "shorts/compare" / f"{name}.json"
     plan = json.loads(plan_file.read_text())
+    brand = plan.get("brand", True)
+    global LABEL_FONT, HOOK_FONT, BAND, OUTLINE
+    LABEL_FONT, HOOK_FONT, BAND, OUTLINE = STYLES[brand]
     takes = ROOT / ".shorts/compare" / name
     out = plan_file.parent / "render" / f"short-{lang}.mp4" if len(sys.argv) > 3 else takes / f"short-{lang}.mp4"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -174,7 +181,7 @@ def main() -> None:
                     layers.append(f"[{len(inputs) // 2 - 1}]loop=-1:1,trim=0:{end - start}[c{j}_{k}]")
                     overlay += (f"[q{j}_{k}];[q{j}_{k}][c{j}_{k}]overlay=0:0:shortest=1:"
                                 f"enable='between(t,{a:.3f},{b:.3f})'")
-            if plan.get("brand"):  # the seal in the corner, all through
+            if brand:  # the seal in the corner, all through
                 inputs += ["-i", str(BRAND / "seal-corner.png")]
                 layers.append(f"[{len(inputs) // 2 - 1}]loop=-1:1,trim=0:{end - start}[k]")
                 overlay += f"[r];[r][k]overlay={SEAL[1]}:{SEAL[2]}:shortest=1"
@@ -195,7 +202,7 @@ def main() -> None:
                  "-ar", "48000", "-ac", "2", str(part)])
             parts.append(part)
         length = offset
-        if plan.get("brand"):  # the end sting after the last beat, encoded like the beats so they join as they are
+        if brand:  # the end sting after the last beat, encoded like the beats so they join as they are
             sting = tmp / "sting.mp4"
             run(["ffmpeg", "-y", "-i", str(BRAND / "sting.mp4"), "-r", str(FPS), "-c:v", "libx264", "-preset", "slow",
                  "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", str(sting)])
