@@ -5,6 +5,9 @@ scene with the hero's lines, the hero says them with a TTS voice through the tal
 through speech recognition and answer with the language model, the test bench films it with the game's
 sound, and the cut makes a 1080x1920 short with subtitles.
 
+Channel branding is on by default: PT Serif Bold text, the corner seal and the end sting (see below).
+Set `brand = false` in the shot TOML to turn it off.
+
 ```bash
 cd shorts
 uv run gothic-shorts film xardas-lie            # a take: .shorts/xardas-lie/take-NN/

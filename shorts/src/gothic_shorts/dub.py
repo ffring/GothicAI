@@ -54,6 +54,7 @@ LOCALES = {"en": "en-US"}  # a dub's language -> the TTS's
 MAX_TEMPO = 1.15  # a line may be sped up this much to fit its slot
 GAP_S = 0.15  # an English line ends this long before the next one starts
 TAIL_S = 0.3  # and the last one this long before the short ends
+STING_S = 2.2  # the channel's end sting; its mastered sound is kept from the rendered Russian short
 LEAD_S = 0.05  # silence kept before a line's first sound (the line is placed this much early)
 MARGIN_S = 0.3  # the voices are taken out from this long before an npc's line to this long after it
 RAMP_S = 0.1  # fades between the recording's sound and the separated one
@@ -401,10 +402,31 @@ def dub_take(config: Config, shot: Shot, take: Path, lang: str = "en", provider:
     dub.duration = dub.ru_duration or tl.cut_duration
     mix = work / "mix.wav"
     _mix_take(tl, take / "main.wav", rest, placed, mix)
-    dub.lufs = finish(mix, dub.wav, dub.duration)
+    # The rendered short is authoritative: the shot's brand flag may have changed since it was cut.
+    has_sting = dub.ru_duration is not None and dub.ru_duration - tl.cut_duration >= STING_S - 1 / 30
+    if has_sting:
+        body_duration = dub.duration - STING_S
+        body = work / "body.wav"
+        finish(mix, body, body_duration)
+        _take_sting(body, ru, dub.wav, body_duration, dub.duration)
+        dub.lufs = loudness(dub.wav)
+    else:
+        dub.lufs = finish(mix, dub.wav, dub.duration)
     if ru.is_file():
         dub.preview = preview(ru, dub.wav, take / f"dub.{lang}.mp4")
     return dub
+
+
+def _take_sting(body: Path, ru: Path, out: Path, start: float, duration: float) -> None:
+    """Join the mastered English body to the Russian sting, preserving its gain and existing fades."""
+    first, last = round(start * 48000), round(duration * 48000)
+    graph = (
+        f"[0:a]afade=t=out:st={max(0, start - 0.02):.6f}:d=0.02[body];"
+        f"[1:a]aresample=48000,atrim=start_sample={first}:end_sample={last},"
+        "asetpts=PTS-STARTPTS[sting];[body][sting]concat=n=2:v=0:a=1[track]"
+    )
+    _ffmpeg(["-i", str(body), "-i", str(ru), "-filter_complex", graph, "-map", "[track]",
+             "-ac", "2", "-ar", "48000", "-c:a", "pcm_s24le", str(out)], "the dub's end sting")  # fmt: skip
 
 
 def english_voices(

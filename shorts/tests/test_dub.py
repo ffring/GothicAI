@@ -213,6 +213,79 @@ def test_a_take_dub_is_as_long_as_the_cut_and_as_loud(tmp_path, monkeypatch):
 
 
 @needs_ffmpeg
+@pytest.mark.parametrize("brand, rendered_sting", [(False, True), (True, True), (True, False)])
+def test_a_take_dub_copies_only_an_existing_russian_sting(tmp_path, monkeypatch, brand, rendered_sting):
+    take = tmp_path / "take"
+    take.mkdir()
+    (take / "events.jsonl").write_text("\n".join(json.dumps(e) for e in EVENTS))
+    (take / "subs.en.json").write_text(json.dumps(SUBS))
+    _sound(take / "main.wav", 11.0, "0.05*sin(2*PI*110*t)")
+    # A rendered body's padding is real: the nominal timeline is 8.45 s, this body is 8.5 s.
+    # The sting is a distinct sound with the same short fades that the Russian cut gives it.
+    body, tail = 8.5, 2.2
+    total = body + (tail if rendered_sting else 0.0)
+    ru_audio = _sound(
+        take / "ru.wav", total,
+        f"if(lt(t,{body}),0.03*sin(2*PI*110*t),"
+        f"0.2*sin(2*PI*880*t)*clip((t-{body})/0.02,0,1)*clip(({total}-t)/0.02,0,1))",
+    )
+    ru = take / "short-ru.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+         f"color=c=black:s=32x64:r=30:d={total}", "-i", str(ru_audio),
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-b:a", "192k", str(ru)],
+        check=True,
+    )  # fmt: skip
+
+    monkeypatch.setattr(dub, "separate", lambda take, work: (take / "main.wav", take / "main.wav"))
+
+    def english_voices(config, voices, lines, cache, lang, tts=None):
+        return {(who, t): _sound(cache / f"{abs(hash(t))}.wav", 1.0)
+                for who, texts in lines.items() for t in texts}  # fmt: skip
+
+    monkeypatch.setattr(dub, "english_voices", english_voices)
+    monkeypatch.setattr(dub, "npc_voices", lambda config, npcs: {
+        "XARDAS": {"voice_id": "XARDAS", "voice": "An old man"},
+    })
+    monkeypatch.setattr(dub, "tools", lambda config: (tmp_path, Path("uv")))
+    if not rendered_sting:
+        def unexpected_sting(*args):
+            raise AssertionError("a legacy Russian cut has no sting to copy")
+
+        monkeypatch.setattr(dub, "_take_sting", unexpected_sting)
+    # The shot's flag may change after rendering: the actual Russian short determines its tail.
+    shot = Shot(name="t", title="T", script="", hook="Я соврал", brand=brand)
+    done = dub.dub_take(CONFIG, shot, take)
+
+    assert done.ru_duration == pytest.approx(total, abs=1 / 48000)
+    assert _samples(done.wav) == round(done.ru_duration * 48000)
+    assert done.preview == take / "dub.en.mp4"
+    assert dub._probe(done.preview) == pytest.approx(done.ru_duration, abs=1 / 30)
+    # Decode the first/default English stream explicitly, rather than accidentally checking RU.
+    first_audio = take / "preview-en.wav"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-i", str(done.preview), "-map", "0:a:0",
+         "-c:a", "pcm_s24le", str(first_audio)],
+        check=True,
+    )  # fmt: skip
+    metadata = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+         "stream_disposition=default:stream_tags=language", "-of", "json", str(done.preview)],
+        check=True, capture_output=True, text=True,
+    )  # fmt: skip
+    stream = json.loads(metadata.stdout)["streams"][0]
+    assert stream["disposition"]["default"] == 1 and stream["tags"]["language"] == "eng"
+    if rendered_sting:
+        ru_level = dub.loudness(ru, body, tail)
+        assert ru_level is not None
+        for track in (done.wav, first_audio):
+            en_level = dub.loudness(track, body, tail)
+            assert en_level is not None  # the old path padded the entire sting with silence
+            assert en_level == pytest.approx(ru_level, abs=1.0)
+
+
+@needs_ffmpeg
 def test_an_explainer_dub_over_its_music_bed(tmp_path, monkeypatch, voices):
     ws = tmp_path
     for n in ("01", "02"):
