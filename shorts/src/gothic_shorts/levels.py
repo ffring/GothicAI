@@ -17,6 +17,8 @@ TRUE_PEAK_DBTP = -1.0
 VOICE_TOLERANCE_LU = 0.5
 MASTER_CORRECTION_TOLERANCE_LU = 0.1
 MAX_MASTER_CORRECTIONS = 2
+MAX_ENDING_CORRECTIONS = 2
+CEILING_HEADROOM_LU = 0.5
 PEAK_LIMIT = 0.79  # Leave AAC/intersample headroom below the final true-peak ceiling.
 # A sub-threshold pilot follows the limiter's shared gain without influencing it.
 LIMITER_PILOT = 0.01
@@ -282,6 +284,14 @@ def master_correction(voice_lufs: float) -> float:
     return correction if abs(correction) > MASTER_CORRECTION_TOLERANCE_LU + 1e-6 else 0.0
 
 
+def ending_correction(voice_lufs: float, ending_lufs: float | None) -> float:
+    """Recalibrate the ending after common gain corrections and actual voice limiting."""
+    if ending_lufs is None or not all(math.isfinite(value) for value in (voice_lufs, ending_lufs)):
+        return 0.0
+    correction = voice_lufs - ENDING_BELOW_VOICE_LU - CEILING_HEADROOM_LU - ending_lufs
+    return correction if abs(correction) > MASTER_CORRECTION_TOLERANCE_LU + 1e-6 else 0.0
+
+
 def master_filter(speech_lufs: float, length: float, *, voice_probe: bool = False,
                   gain_correction_db: float = 0.0) -> str:
     pilot = f"aeval='val(0)|val(1)|{LIMITER_PILOT}':c=2.1," if voice_probe else ""
@@ -291,7 +301,7 @@ def master_filter(speech_lufs: float, length: float, *, voice_probe: bool = Fals
 
 
 def meter_file(path: Path) -> tuple[float, float]:
-    """Measure AAC true peak from linear metadata, avoiding the rounded dB summary."""
+    """Combine precise block peaks with the summary covering the final partial block."""
     result = subprocess.run(
         ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af",
          "ebur128=peak=true:metadata=1,ametadata=print:key=lavfi.r128.true_peak",
@@ -299,12 +309,17 @@ def meter_file(path: Path) -> tuple[float, float]:
     )
     loudness = re.findall(r"\bI:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+LUFS", result.stderr)
     peaks = [float(value) for value in re.findall(r"\blavfi\.r128\.true_peak=([^\s]+)", result.stderr)]
-    if not loudness or not peaks:
+    summaries = re.findall(r"\bPeak:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+dBFS", result.stderr)
+    if not loudness or not summaries:
         raise ValueError("ffmpeg did not return decoded loudness and true peak")
     if any(not math.isfinite(peak) or peak < 0 for peak in peaks):
         raise ValueError("ffmpeg returned invalid true-peak metadata")
-    peak = max(peaks)
-    return float(loudness[-1]), 20 * math.log10(peak) if peak > 0 else -math.inf
+    summary_peak = float(summaries[-1])
+    if summary_peak == math.inf:
+        raise ValueError("ffmpeg returned invalid true-peak summary")
+    peak = max(peaks, default=0)
+    metadata_peak = 20 * math.log10(peak) if peak > 0 else -math.inf
+    return float(loudness[-1]), max(metadata_peak, summary_peak)
 
 
 @dataclass
@@ -319,8 +334,15 @@ class AudioGraph:
         return measure(self.inputs, ";".join(graph), self.tracks[track], windows,
                        meter_gain_db=meter_gain_db)
 
-    def mix(self, *, stem_probes: bool = False) -> str:
+    def mix(self, *, stem_probes: bool = False, ending_gain_correction_db: float = 0.0,
+            ending_start: float | None = None) -> str:
         filters, tracks = list(self.filters), dict(self.tracks)
+        if ending_gain_correction_db:
+            if ending_start is None:
+                raise ValueError("An ending correction needs the body's duration")
+            ending_filter = body_gain_filter(0.0, ending_start, ending_gain_correction_db)
+            filters.append(f"[{tracks['game']}]{ending_filter}[ending_adjusted]")
+            tracks["game"] = "ending_adjusted"
         if stem_probes:
             for track, label in tracks.items():
                 filters.append(f"[{label}]asplit=2[master_{track}_mix][master_{track}_probe]")
@@ -328,7 +350,8 @@ class AudioGraph:
         return ";".join(filters + ["".join(f"[{label}]" for label in tracks.values()) +
                                   f"amix=inputs={len(tracks)}:duration=first:normalize=0"])
 
-    def master_graph(self, speech_lufs: float, length: float, *, gain_correction_db: float = 0.0) -> str:
+    def master_graph(self, speech_lufs: float, length: float, *, gain_correction_db: float = 0.0,
+                     ending_gain_correction_db: float = 0.0, ending_start: float | None = None) -> str:
         """Output stereo [a] and every stem under the mix's exact limiting gain.
 
         The limiter applies one gain to every channel. Its quiet constant third
@@ -338,8 +361,10 @@ class AudioGraph:
         """
         processing = master_filter(speech_lufs, length, voice_probe=True,
                                    gain_correction_db=gain_correction_db)
+        mix = self.mix(stem_probes=True, ending_gain_correction_db=ending_gain_correction_db,
+                       ending_start=ending_start)
         envelopes = "".join(f"[master_{track}_envelope]" for track in self.tracks)
-        graph = [f"{self.mix(stem_probes=True)},{processing},asplit=2[master_mix][master_pilot]",
+        graph = [f"{mix},{processing},asplit=2[master_mix][master_pilot]",
                  "[master_mix]pan=stereo|c0=c0|c1=c1[a]",
                  f"[master_pilot]pan=stereo|c0=c2|c1=c2,volume={1 / LIMITER_PILOT:g},"
                  f"asplit={len(self.tracks)}{envelopes}"]
@@ -410,9 +435,10 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
     ending_windows = [(total, length)] if length > total else []
     ending = (raw.measure("game", ending_windows, meter_gain_db=meter_gain)
               if ending_windows else -math.inf)
-    ending_gain = s - ENDING_BELOW_VOICE_LU - ending if math.isfinite(ending) else 0.0
+    ending_gain = s - ENDING_BELOW_VOICE_LU - CEILING_HEADROOM_LU - ending if math.isfinite(ending) else 0.0
     game_pause = raw.measure("game", pauses, meter_gain_db=meter_gain) if pauses else -math.inf
-    game_gain = min(0.0, s - GAME_PAUSE_BELOW_VOICE_LU - game_pause) if math.isfinite(game_pause) else 0.0
+    game_gain = (min(0.0, s - GAME_PAUSE_BELOW_VOICE_LU - CEILING_HEADROOM_LU - game_pause)
+                 if math.isfinite(game_pause) else 0.0)
     if game_gain < 0:
         game_gain -= METER_RESOLUTION_LU
     if not ending_windows:
@@ -420,7 +446,7 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
     game = audio_graph(joined, None, voice, speech, total, length,
                        game_gain_db=game_gain, ending_gain_db=ending_gain)
     game_speech = game.measure("game", speech, meter_gain_db=meter_gain)
-    game_db = max(0.0, game_speech - (s - GAME_BELOW_VOICE_LU))
+    game_db = max(0.0, game_speech - (s - GAME_BELOW_VOICE_LU - CEILING_HEADROOM_LU))
     if game_db > 0:
         game_db += METER_RESOLUTION_LU
     game = audio_graph(joined, None, voice, speech, total, length,

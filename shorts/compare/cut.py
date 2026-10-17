@@ -121,6 +121,7 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
     """Lift voiced mixes by the voice's gain, limit peaks, then validate decoded AAC.
 
     Correct the common gain from the decoded voice, with at most two adjustments.
+    Then recalibrate the ending against that voice with the common gain fixed.
     Unvoiced mixes retain the original limiter and two-pass loudnorm.
     mix is the filter graph ending where mastering goes on.
     """
@@ -132,10 +133,16 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
             candidate = Path(pending) / out.name
             stems = {track: Path(pending) / f"{track}.m4a" for track in audio.tracks}
             gain_correction = 0.0
+            ending_gain_correction = 0.0
+            ending_start = report["ending_windows"][0][0] if report["ending_windows"] else None
+            report["master_passes"] = 0
             report["master_corrections_db"] = []
-            for attempt in range(levels.MAX_MASTER_CORRECTIONS + 1):
+            report["ending_corrections_db"] = []
+
+            def render() -> float:
                 # Every stem shares the actual mix limiter's gain and final fade.
-                graph = audio.master_graph(report["speech_lufs"], length, gain_correction_db=gain_correction)
+                graph = audio.master_graph(report["speech_lufs"], length, gain_correction_db=gain_correction,
+                                           ending_gain_correction_db=ending_gain_correction, ending_start=ending_start)
                 command = ["ffmpeg", "-y", *inputs, "-filter_complex", graph,
                            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
                            "-b:a", "192k", "-ar", "48000", str(candidate)]
@@ -143,17 +150,37 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
                     command += ["-map", f"[{track}_mastered]", "-vn", "-c:a", "aac",
                                 "-b:a", "192k", "-ar", "48000", str(path)]
                 run(command)
-                voice_lufs, _ = levels.meter_file(stems["voice"])
-                report["master_passes"] = attempt + 1
+                report["master_passes"] += 1
+                return levels.meter_file(stems["voice"])[0]
+
+            def measure_balance(voice_lufs: float) -> dict:
+                return levels.check_mastered_balance(stems, voice_lufs, report["speech_windows"],
+                                                      report["pause_windows"], report["ending_windows"])
+
+            for attempt in range(levels.MAX_MASTER_CORRECTIONS + 1):
+                voice_lufs = render()
+                report["master_common_passes"] = attempt + 1
                 report["master_gain_db"] = levels.master_gain(report["speech_lufs"]) + gain_correction
                 correction = levels.master_correction(voice_lufs)
                 if not correction or attempt == levels.MAX_MASTER_CORRECTIONS:
                     break
                 gain_correction += correction
                 report["master_corrections_db"].append(correction)
+            balance = measure_balance(voice_lufs)
+            for _ in range(levels.MAX_ENDING_CORRECTIONS):
+                ending = next(row["measured_lufs"] for row in balance["rows"] if row["id"] == "ending")
+                correction = levels.ending_correction(voice_lufs, ending)
+                if not correction:
+                    break
+                ending_gain_correction += correction
+                report["ending_corrections_db"].append(correction)
+                voice_lufs = render()
+                balance = measure_balance(voice_lufs)
+            if ending_start is not None:
+                report["ending_gain_db"] += ending_gain_correction
+                report["ending_gain_correction_db"] = ending_gain_correction
+                report["ending_target_lufs"] = voice_lufs - levels.ENDING_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU
             _, peak = levels.meter_file(candidate)
-            balance = levels.check_mastered_balance(stems, voice_lufs, report["speech_windows"],
-                                                    report["pause_windows"], report["ending_windows"])
             report["pre_master_rows"] = report["rows"]
             report.update(balance)
             report["balance_stage"] = "mastered_aac"
