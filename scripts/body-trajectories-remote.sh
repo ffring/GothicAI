@@ -87,6 +87,10 @@ suite_args=()
 out="$task_root/data/$run_name"
 binary="$engine_root/build/opengothic/gothic-body-runner"
 [[ -x "$binary" && -f "$engine_root/build/libOpenGothic.a" ]] || { echo 'Build runner first' >&2; exit 1; }
+if gq_available; then
+  exec 8>"$engine_root/build.lock"
+  flock -n 8 || { echo 'Build owns the engine snapshot; wait for its owner' >&2; exit 1; }
+fi
 [[ ! -e "$engine_root/build-active" ]] || { echo 'Wait for build' >&2; exit 1; }
 if ! gq_available; then
   exec 9>"$HOME/gothic-ai/body-simulation.lock"
@@ -103,6 +107,19 @@ cp "$task_root/provenance/source-head.txt" "$task_root/provenance/source.patch" 
    "$task_root/provenance/resolver-tests.json" "$out/"
 cp "$engine_root/build/opengothic/gothic-body-resolver-test" "$out/reference/"
 nice -n 10 tar -czf "$out/source.tar.gz" -C "$engine_root/source" OpenGothic -C "$task_root/source" scripts evals
+suite_source="$task_root/source"
+engine_source="$engine_root/source/OpenGothic"
+engine_library="$engine_root/build/libOpenGothic.a"
+if gq_available; then
+  suite_source="$out/reference/source"
+  mkdir -p "$suite_source"
+  tar -xzf "$out/source.tar.gz" -C "$suite_source"
+  engine_source="$suite_source/OpenGothic"
+  cp "$engine_library" "$out/reference/libOpenGothic.a"
+  engine_library="$out/reference/libOpenGothic.a"
+  flock -u 8
+  exec 8>&-
+fi
 unit="gothic-body-trajectories-$run_name"
 if gq_available; then
   echo 'gq: batch queue wait has no timeout (FIFO with fairness between sessions)' >&2
@@ -128,15 +145,15 @@ fi
 set +e
 "${launch[@]}" \
   /usr/bin/time -v -o "$out/resources.txt" \
-  python3 "$task_root/source/scripts/body_trajectory_suite.py" \
+  python3 "$suite_source/scripts/body_trajectory_suite.py" \
     --runner "$out/reference/gothic-body-runner" \
     --assets "$HOME/gothic-ai/body-baseline/assets" --save "$reference/run/save_slot_1.sav" \
     --reference "$reference" --native-reference "$HOME/gothic-ai/body-headless/runs/stage3-v1/native-off" \
-    --source "$engine_root/source/OpenGothic" --engine-library "$engine_root/build/libOpenGothic.a" \
-    --config "$task_root/source/evals/npc-body/body-trajectories-v1.json" \
-    --scenario "$task_root/source/scripts/bench/body-arena.bench" \
-    --melee-scenario "$task_root/source/scripts/bench/body-melee.bench" \
-    --output "$out" "${suite_args[@]}" > "$out/launcher.log" 2>&1
+    --source "$engine_source" --engine-library "$engine_library" \
+    --config "$suite_source/evals/npc-body/body-trajectories-v1.json" \
+    --scenario "$suite_source/scripts/bench/body-arena.bench" \
+    --melee-scenario "$suite_source/scripts/bench/body-melee.bench" \
+    --output "$out" ${suite_args[@]+"${suite_args[@]}"} > "$out/launcher.log" 2>&1
 result=$?
 set -e
 trap - INT TERM
@@ -146,8 +163,8 @@ if [[ "$result" -ne 0 ]]; then
   exit "$result"
 fi
 if [[ "$suite_mode" != smoke ]]; then
-  python3 "$task_root/source/scripts/body_trajectory_report.py" "$out" \
-    --config "$task_root/source/evals/npc-body/body-trajectories-v1.json" \
+  python3 "$suite_source/scripts/body_trajectory_report.py" "$out" \
+    --config "$suite_source/evals/npc-body/body-trajectories-v1.json" \
     --native-reference "$HOME/gothic-ai/body-headless/runs/stage3-v1/native-off" \
     --output-dir "$out/validated" > "$out/report-launcher.log" 2>&1 || {
       tail -60 "$out/report-launcher.log" >&2; exit 2;

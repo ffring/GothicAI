@@ -82,6 +82,8 @@ build_reference() {
 set -euo pipefail
 task_root="$HOME/$1"
 if gq_available; then
+  exec 8>"$task_root/build.lock"
+  flock -n 8 || { echo 'Another build or snapshot owns this workspace' >&2; exit 1; }
   cd "$task_root"
   build_command="$(cat <<'GQ_BUILD'
 set -euo pipefail
@@ -133,6 +135,10 @@ out="$task_root/runs/$run_name"
 [[ -x "$binary" ]] || { echo 'Build reference engine first' >&2; exit 1; }
 exec 9>"$task_root/reference-run.lock"
 flock -n 9 || { echo 'Another baseline launcher owns the runner lock' >&2; exit 1; }
+if gq_available; then
+  exec 8>"$task_root/build.lock"
+  flock -n 8 || { echo 'Build owns the reference snapshot; wait for its owner' >&2; exit 1; }
+fi
 if ! gq_available && pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
@@ -143,7 +149,18 @@ cp "$task_root/reference/save_slot_1.sav" "$out/run/save_slot_1.sav"
 mkdir -p "$out/reference"
 cp "$binary" "$out/reference/Gothic2Notr"
 [[ ! -f "$task_root/reference/source.patch" ]] || cp "$task_root/reference/source.patch" "$out/source.patch"
-nice -n 10 tar -czf "$out/source.tar.gz" -C "$task_root/source" OpenGothic
+suite_source="$task_root/source"
+source_provenance="$task_root/reference"
+if gq_available; then
+  nice -n 10 tar -czf "$out/source.tar.gz" -C "$task_root/source" OpenGothic scripts evals
+  suite_source="$out/reference/source"
+  mkdir -p "$suite_source"
+  tar -xzf "$out/source.tar.gz" -C "$suite_source"
+  [[ ! -f "$task_root/reference/source-head.txt" ]] || cp "$task_root/reference/source-head.txt" "$out/source-head.txt"
+  source_provenance="$out"
+else
+  nice -n 10 tar -czf "$out/source.tar.gz" -C "$task_root/source" OpenGothic
+fi
 cat > "$out/run/Gothic.ini" <<'INI'
 [INTERNAL]
 vidResIndex=2
@@ -151,10 +168,10 @@ vidResIndex=2
 soundVolume=0
 musicVolume=0
 INI
-python3 - "$task_root" "$out" "$binary" <<'PY'
+python3 - "$task_root" "$out" "$binary" "$suite_source" "$source_provenance" <<'PY'
 import datetime, hashlib, json, platform, subprocess, sys
 from pathlib import Path
-root, out, binary = map(Path, sys.argv[1:])
+root, out, binary, suite_source, source_provenance = map(Path, sys.argv[1:])
 def sha(path):
     h = hashlib.sha256()
     with path.open('rb') as f:
@@ -163,9 +180,9 @@ def sha(path):
     return h.hexdigest()
 source = hashlib.sha256()
 count = 0
-for path in sorted((root / 'source/OpenGothic').rglob('*')):
+for path in sorted((suite_source / 'OpenGothic').rglob('*')):
     if path.is_file():
-        source.update(str(path.relative_to(root / 'source')).encode())
+        source.update(str(path.relative_to(suite_source)).encode())
         source.update(bytes.fromhex(sha(path)))
         count += 1
 assets = []
@@ -181,14 +198,14 @@ data = {
     'schema_version': 1, 'kind': 'rendered_reference_before_headless',
     'recorded_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
     'host': platform.node(), 'platform': platform.platform(),
-    'source_head': (root / 'reference/source-head.txt').read_text().strip() if (root / 'reference/source-head.txt').exists() else None,
-    'source_patch_sha256': sha(root / 'reference/source.patch') if (root / 'reference/source.patch').exists() else None,
+    'source_head': (source_provenance / 'source-head.txt').read_text().strip() if (source_provenance / 'source-head.txt').exists() else None,
+    'source_patch_sha256': sha(source_provenance / 'source.patch') if (source_provenance / 'source.patch').exists() else None,
     'source_sha256': source.hexdigest(), 'source_files_hashed': count,
     'binary_sha256': sha(binary), 'build_dir': str(binary.parent.parent), 'build_cache': build_cache,
     'archived_binary': str(out / 'reference/Gothic2Notr'),
     'source_archive': {'path': str(out / 'source.tar.gz'), 'sha256': sha(out / 'source.tar.gz')},
-    'scenario_sha256': sha(root / 'source/scripts/bench/body-melee.bench'),
-    'config_sha256': sha(root / 'source/evals/npc-body/melee-v1.json'),
+    'scenario_sha256': sha(suite_source / 'scripts/bench/body-melee.bench'),
+    'config_sha256': sha(suite_source / 'evals/npc-body/melee-v1.json'),
     'save_sha256': sha(root / 'reference/save_slot_1.sav'), 'assets': assets,
     'renderer': 'lavapipe', 'display': 'Xvfb', 'headless': False,
     'sim_fps': 30, 'realtime': True, 'model': None,
@@ -203,6 +220,10 @@ data = {
 }
 (out / 'manifest.json').write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
 PY
+if gq_available; then
+  flock -u 8
+  exec 8>&-
+fi
 unit="gothic-body-baseline-$run_name"
 baseline_interrupted=0
 stop_baseline() {
@@ -232,7 +253,7 @@ if gq_available; then
     "GOTHIC_AI=0" "TEMPEST_BACKGROUND=1" \
     "TEMPEST_WINDOW_SIZE=640x480" "OPENGOTHIC_TEXTURES=" \
     "OPENGOTHIC_BODY_TRACE=1" "OPENGOTHIC_BENCH_REALTIME=1" \
-    "OPENGOTHIC_BENCH=$task_root/source/scripts/bench/body-melee.bench" "OPENGOTHIC_BENCH_OUT=$out" \
+    "OPENGOTHIC_BENCH=$suite_source/scripts/bench/body-melee.bench" "OPENGOTHIC_BENCH_OUT=$out" \
     "ASAN_OPTIONS=abort_on_error=0:halt_on_error=1:detect_leaks=0:exitcode=86:allow_addr2line=1:log_path=$out/asan")
 else
   # Only this launcher's own transient unit can be stopped by the watchdog.
@@ -304,7 +325,7 @@ data['services_after'] = {unit: subprocess.run(['systemctl', '--user', 'show', u
 data['service_latency_measurement'] = None  # no live ASR/TTS requests in the native reference
 path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
 PY
-python3 "$task_root/source/scripts/body_baseline_report.py" "$out" \
+python3 "$suite_source/scripts/body_baseline_report.py" "$out" \
   --manifest "$out/manifest.json" --output-dir "$out/report"
 echo "Reference run saved: $out"
 REMOTE_SCRIPT

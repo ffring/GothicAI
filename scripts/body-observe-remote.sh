@@ -132,6 +132,13 @@ suite_args=()
 [[ "$suite_mode" != smoke ]] || suite_args+=(--smoke)
 binary="$task_root/build/opengothic/gothic-body-runner"
 out="$task_root/runs/$run_name"
+source_root="$task_root/source"
+engine_library="$task_root/build/libOpenGothic.a"
+if gq_available; then
+  # Freeze binaries and their library together, outside any concurrent build.
+  exec 8>"$task_root/build.lock"
+  flock -n 8 || { echo 'Another build owns workspace' >&2; exit 1; }
+fi
 [[ -x "$binary" && -f "$task_root/build/libOpenGothic.a" ]] || { echo 'Build runner first' >&2; exit 1; }
 [[ ! -e "$task_root/build-active" ]] || { echo 'Wait for build' >&2; exit 1; }
 if ! gq_available; then
@@ -146,7 +153,19 @@ mkdir -p "$out/run" "$out/reference"
 cp "$binary" "$out/reference/gothic-body-runner"
 cp "$task_root/provenance/source-head.txt" "$task_root/provenance/source.patch" \
    "$task_root/provenance/configure.log" "$task_root/provenance/build.log" "$out/"
-nice -n 10 tar -czf "$out/source.tar.gz" -C "$task_root/source" OpenGothic
+if gq_available; then
+  # Import dependencies, config and scenarios must match the archived source,
+  # even when sync replaces the development tree while this run is queued.
+  nice -n 10 tar -czf "$out/source.tar.gz" -C "$source_root" OpenGothic scripts evals
+  source_root="$out/reference/source"
+  mkdir -p "$source_root"
+  tar -xzf "$out/source.tar.gz" -C "$source_root"
+  cp "$engine_library" "$out/reference/libOpenGothic.a"
+  engine_library="$out/reference/libOpenGothic.a"
+  exec 8>&-
+else
+  nice -n 10 tar -czf "$out/source.tar.gz" -C "$task_root/source" OpenGothic
+fi
 unit="gothic-body-observe-$run_name"
 if gq_available; then
   cd "$out/run"
@@ -171,15 +190,15 @@ fi
 set +e
 "${launch[@]}" \
   /usr/bin/time -v -o "$out/resources.txt" \
-  python3 "$task_root/source/scripts/body_observe_suite.py" \
+  python3 "$source_root/scripts/body_observe_suite.py" \
     --runner "$out/reference/gothic-body-runner" \
     --assets "$HOME/gothic-ai/body-baseline/assets" --save "$reference/run/save_slot_1.sav" \
-    --reference "$reference" --source "$task_root/source/OpenGothic" \
-    --engine-library "$task_root/build/libOpenGothic.a" \
-    --config "$task_root/source/evals/npc-body/body-observe-v1.json" \
-    --scenario "$task_root/source/scripts/bench/body-observe.bench" \
-    --melee-scenario "$task_root/source/scripts/bench/body-melee.bench" \
-    --output "$out" "${suite_args[@]}" > "$out/launcher.log" 2>&1
+    --reference "$reference" --source "$source_root/OpenGothic" \
+    --engine-library "$engine_library" \
+    --config "$source_root/evals/npc-body/body-observe-v1.json" \
+    --scenario "$source_root/scripts/bench/body-observe.bench" \
+    --melee-scenario "$source_root/scripts/bench/body-melee.bench" \
+    --output "$out" ${suite_args[@]+"${suite_args[@]}"} > "$out/launcher.log" 2>&1
 result=$?
 set -e
 trap - INT TERM

@@ -1,0 +1,349 @@
+"""Queued remote body runs execute their archive even after another sync/build."""
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import tarfile
+import time
+
+import pytest
+
+
+SCRIPTS = Path(__file__).resolve().parents[1]
+CASES = [
+    ("body-api-remote.sh", "run", "body-api", "body_api_suite.py", "body-api-v1.json"),
+    ("body-observe-remote.sh", "run", "body-headless", "body_observe_suite.py", "body-observe-v1.json"),
+    ("body-headless-remote.sh", "run", "body-headless", "body_headless_suite.py", "melee-v1.json"),
+    ("body-headless-remote.sh", "replay", "body-headless", "body_headless_suite.py", "melee-v1.json"),
+    ("body-arena-remote.sh", "run", "body-arena", "body_arena_suite.py", "body-arena-v1.json"),
+    ("body-trajectories-remote.sh", "run", "body", "body_trajectory_suite.py", "body-trajectories-v1.json"),
+]
+FAKE_GQ = r'''
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+root = Path(os.environ["FAKE_REMOTE"])
+args = sys.argv[1:]
+with (root / "calls.jsonl").open("a") as output:
+    output.write(json.dumps(args) + "\n")
+if args[0] == "submit":
+    command = args[args.index("--") + 1:]
+    # macOS's /usr/bin/time has no GNU -v; this test exercises the real suite
+    # launch path without measuring a stub's resources.
+    index = command.index("/usr/bin/time")
+    assert command[index + 1:index + 3] == ["-v", "-o"]
+    del command[index:index + 4]
+    if "/usr/bin/xvfb-run" in command:
+        index = command.index("/usr/bin/xvfb-run")
+        assert command[index + 1:index + 3] == ["-a", "-s"]
+        del command[index:index + 4]
+    (root / "command.json").write_text(json.dumps({"command": command, "cwd": os.getcwd()}))
+    print("snapshot123")
+elif args[0] == "wait":
+    (root / "waiting").write_text("1")
+    deadline = time.monotonic() + 10
+    while not (root / "release").exists():
+        if time.monotonic() > deadline:
+            sys.exit(98)
+        time.sleep(0.01)
+    saved = json.loads((root / "command.json").read_text())
+    sys.exit(subprocess.run(saved["command"], cwd=saved["cwd"]).returncode)
+elif args[0] == "cancel":
+    (root / "cancelled").write_text(args[1])
+else:
+    sys.exit(99)
+'''
+SUITE = '''import argparse
+import json
+from pathlib import Path
+import snapshot_dependency
+
+parser = argparse.ArgumentParser()
+for name in ("output", "source", "engine-library", "config", "scenario",
+             "melee-scenario", "senses-scenario", "runner", "rendered"):
+    parser.add_argument("--" + name, type=Path)
+args, rest = parser.parse_known_args()
+result = {"suite": "v1", "dependency": snapshot_dependency.VERSION}
+for name in ("engine_library", "config", "scenario", "melee_scenario", "senses_scenario", "runner", "rendered"):
+    path = getattr(args, name)
+    if path is not None:
+        result[name] = path.read_text()
+if args.scenario is None:
+    result["scenario"] = (args.source.parent / "scripts/bench/body-melee.bench").read_text()
+result["source"] = (args.source / "native.cpp").read_text()
+(args.output / "snapshot-result.json").write_text(json.dumps(result))
+'''
+REPORT = '''import argparse
+import json
+from pathlib import Path
+import snapshot_dependency
+parser = argparse.ArgumentParser()
+parser.add_argument("output", type=Path)
+parser.add_argument("--config", type=Path)
+args, rest = parser.parse_known_args()
+(args.output / "snapshot-report.json").write_text(json.dumps({"report": "v1", "dependency": snapshot_dependency.VERSION, "config": args.config.read_text()}))
+'''
+
+
+def executable(path: Path, body: str) -> None:
+    path.write_text(f"#!{sys.executable}\n" + body)
+    path.chmod(0o755)
+
+
+@pytest.fixture
+def remote(tmp_path):
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    executable(binary_dir / "ssh", 'import os, sys\nos.execlp("bash", "bash", "-c", sys.argv[-1])\n')
+    executable(binary_dir / "rsync", "pass\n")
+    executable(binary_dir / "df", 'print("Filesystem 1024-blocks Used Available Capacity Mounted")\nprint("fake 20000000 0 20000000 0% /")\n')
+    executable(binary_dir / "pgrep", 'import os, pathlib, sys\n(pathlib.Path(os.environ["FAKE_REMOTE"]) / "pgrep-called").touch()\nsys.exit(int(os.environ.get("FAKE_PGREP_EXIT", "0")))\n')
+    # Exercise the workspace lock on macOS too, where util-linux flock is absent.
+    executable(binary_dir / "flock", 'import fcntl, sys\ntry:\n fcntl.flock(int(sys.argv[-1]), fcntl.LOCK_UN if "-u" in sys.argv else fcntl.LOCK_EX | fcntl.LOCK_NB)\nexcept BlockingIOError:\n sys.exit(1)\n')
+    executable(binary_dir / "gq", FAKE_GQ)
+    executable(binary_dir / "systemd-run", '''import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+args = sys.argv[1:]
+root = Path(os.environ["FAKE_REMOTE"])
+(root / "legacy-command.json").write_text(json.dumps(args))
+cwd = next(value.split("=", 1)[1] for value in args if value.startswith("--working-directory="))
+env = dict(os.environ)
+for value in args:
+    if value.startswith("--setenv="):
+        key, setting = value[len("--setenv="):].split("=", 1)
+        env[key] = setting
+index = args.index("/usr/bin/time")
+assert args[index + 1:index + 3] == ["-v", "-o"]
+sys.exit(subprocess.run(args[index + 4:], cwd=cwd, env=env).returncode)
+''')
+    env = {**os.environ, "HOME": str(home), "GQ_BIN": str(binary_dir / "gq"),
+           "GQ_OWNER": "snapshot-test", "FAKE_REMOTE": str(tmp_path),
+           # Match Linux tar: macOS otherwise inserts AppleDouble metadata
+           # pseudo-files that its own extractor restores as extended attrs.
+           "COPYFILE_DISABLE": "1",
+           "PATH": str(binary_dir) + os.pathsep + os.environ["PATH"]}
+    env.pop("GQ_JOB_ID_FILE", None)
+    return {"root": tmp_path, "home": home, "env": env}
+
+
+def prepare(remote, task_name, suite):
+    if task_name in ("body-arena", "body"):
+        prepare(remote, "body-api", "body_api_suite.py")
+    task = remote["home"] / "gothic-ai" / task_name
+    source = task / "source"
+    for directory in ("OpenGothic", "scripts/bench", "evals/npc-body"):
+        (source / directory).mkdir(parents=True)
+    (source / "scripts" / suite).write_text(SUITE)
+    (source / "scripts/snapshot_dependency.py").write_text('VERSION = "v1"\n')
+    (source / "scripts/body_trajectory_report.py").write_text(REPORT)
+    (source / "OpenGothic/native.cpp").write_text("v1")
+    for name in ("body-api.bench", "body-observe.bench", "body-melee.bench", "body-headless-senses.bench", "body-arena.bench"):
+        (source / "scripts/bench" / name).write_text("v1")
+    for name in ("body-api-v1.json", "body-observe-v1.json", "melee-v1.json", "body-arena-v1.json", "body-trajectories-v1.json"):
+        (source / "evals/npc-body" / name).write_text("v1")
+    provenance = task / "provenance"
+    provenance.mkdir()
+    for name in ("source-head.txt", "source.patch", "configure.log", "build.log", "resolver-tests.json"):
+        (provenance / name).write_text("v1")
+    build = task / "build"
+    (build / "opengothic").mkdir(parents=True)
+    for name in ("gothic-body-runner", "Gothic2Notr", "gothic-body-resolver-test"):
+        path = build / "opengothic" / name
+        path.write_text("v1")
+        path.chmod(0o755)
+    (build / "libOpenGothic.a").write_text("v1")
+    return task
+
+
+def engine_task(task):
+    return task.parent / "body-api" if task.name in ("body-arena", "body") else task
+
+
+def run_output(task, name):
+    return task / ("data" if task.name == "body" else "runs") / name
+
+
+def wait_for_queue(process, remote):
+    deadline = time.monotonic() + 5
+    while not (remote["root"] / "waiting").exists():
+        assert process.poll() is None, process.communicate(timeout=1)
+        assert time.monotonic() < deadline, "launcher did not reach fake queue"
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize("script,action,task_name,suite,config", CASES)
+def test_queued_body_suite_runs_archived_snapshot_after_sync(remote, script, action, task_name, suite, config):
+    task = prepare(remote, task_name, suite)
+    process = subprocess.Popen(["bash", str(SCRIPTS / script), action, "snapshot-test"],
+                               env=remote["env"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        wait_for_queue(process, remote)
+        out = run_output(task, "snapshot-test")
+        with tarfile.open(out / "source.tar.gz") as archive:
+            assert archive.extractfile("scripts/" + suite).read().decode() == SUITE
+            assert archive.extractfile("evals/npc-body/" + config).read() == b"v1"
+        # The real sync heredoc must permit another run in this workspace;
+        # executing this queued run is safe because its inputs are frozen.
+        sync = subprocess.run(["bash", str(SCRIPTS / script), "sync"], env=remote["env"],
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        assert sync.returncode == 0, sync.stderr
+        assert not (remote["root"] / "pgrep-called").exists()
+        # Snapshotting must release the workspace lock before entering wait.
+        with (engine_task(task) / "build.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for workspace in {task, engine_task(task)}:
+            for path in (workspace / "source").rglob("*"):
+                if path.is_file():
+                    if path.name == suite:
+                        path.write_text(SUITE.replace('"suite": "v1"', '"suite": "v2"'))
+                    elif path.name == "snapshot_dependency.py":
+                        path.write_text('VERSION = "v2"\n')
+                    elif path.name == "body_trajectory_report.py":
+                        path.write_text(REPORT.replace('"report": "v1"', '"report": "v2"'))
+                    else:
+                        path.write_text("v2")
+        # A subsequent build must not change the queued run's native inputs.
+        for path in (engine_task(task) / "build").rglob("*"):
+            if path.is_file():
+                path.write_text("v2")
+        (remote["root"] / "release").write_text("1")
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 0, stdout + stderr + (out / "launcher.log").read_text()
+        result = json.loads((out / "snapshot-result.json").read_text())
+        assert result and set(result.values()) == {"v1"}
+        if task_name == "body":
+            assert set(json.loads((out / "snapshot-report.json").read_text()).values()) == {"v1"}
+        with tarfile.open(out / "source.tar.gz") as archive:
+            for member in archive.getmembers():
+                if member.isfile():
+                    assert archive.extractfile(member).read() == (out / "reference/source" / member.name).read_bytes()
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("script,action,task_name,suite,config", CASES)
+def test_legacy_body_launch_keeps_shared_paths_and_unit_properties(remote, script, action, task_name, suite, config):
+    task = prepare(remote, task_name, suite)
+    env = {**remote["env"], "GQ_BIN": str(remote["root"] / "absent-gq"), "FAKE_PGREP_EXIT": "1"}
+    result = subprocess.run(["bash", str(SCRIPTS / script), action, "legacy-test"],
+                            env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = json.loads((remote["root"] / "legacy-command.json").read_text())
+    assert str(task / "source/scripts" / suite) in args
+    assert args[args.index("--source") + 1] == str(engine_task(task) / "source/OpenGothic")
+    assert args[args.index("--config") + 1] == str(task / "source/evals/npc-body" / config)
+    assert args[args.index("--engine-library") + 1] == str(engine_task(task) / "build/libOpenGothic.a")
+    assert "--property=CPUQuota=200%" in args
+    assert "--property=MemoryMax=12G" in args
+    assert (remote["root"] / "pgrep-called").exists()
+    assert not (engine_task(task) / "build.lock").exists()
+    assert (remote["home"] / "gothic-ai/body-simulation.lock").exists()
+    assert not (run_output(task, "legacy-test") / "reference/source").exists()
+
+
+def test_body_snapshot_refuses_concurrent_workspace_build(remote):
+    task = prepare(remote, "body-api", "body_api_suite.py")
+    with (task / "build.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(["bash", str(SCRIPTS / "body-api-remote.sh"), "run", "blocked-build"],
+                                env=remote["env"], stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, timeout=5)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Another build owns workspace" in result.stderr
+    assert not (remote["root"] / "calls.jsonl").exists()
+    assert not (task / "runs/blocked-build").exists()
+
+
+def test_queued_baseline_keeps_archived_scenario_binary_and_report(remote):
+    import hashlib
+
+    task = prepare(remote, "body-baseline", "body_baseline_report.py")
+    source = task / "source"
+    reporter = '''import json
+from pathlib import Path
+import sys
+import snapshot_dependency
+out = Path(sys.argv[1])
+root = Path(__file__).resolve().parents[1]
+(out / "report-result.json").write_text(json.dumps({
+    "report": "v1", "dependency": snapshot_dependency.VERSION,
+    "config": (root / "evals/npc-body/melee-v1.json").read_text()}))
+'''
+    (source / "scripts/body_baseline_report.py").write_text(reporter)
+    binary = task / "build/opengothic/Gothic2Notr"
+    executable(binary, '''import json
+import os
+from pathlib import Path
+out = Path(os.environ["OPENGOTHIC_BENCH_OUT"])
+(out / "baseline-result.json").write_text(json.dumps({
+    "binary": "v1", "scenario": Path(os.environ["OPENGOTHIC_BENCH"]).read_text()}))
+(out / "bench.log").write_text("done\\n")
+Path("log.txt").write_text("test runner\\n")
+''')
+    (task / "build/CMakeCache.txt").write_text("CMAKE_BUILD_TYPE:STRING=RelWithDebInfo\n")
+    (task / "assets").mkdir()
+    (task / "assets/Data").mkdir()
+    (task / "assets/_work").mkdir()
+    (task / "reference").mkdir()
+    for name in ("save_slot_1.sav", "source-head.txt", "source.patch"):
+        (task / "reference" / name).write_text("v1")
+    remote["env"].update(GOTHIC_DIR=str(task / "assets"),
+                         BASELINE_SAVE=str(task / "reference/save_slot_1.sav"))
+    toolchain = task / "toolchain/vulkan-1.4.341.0"
+    toolchain.mkdir(parents=True)
+    (toolchain / "manifest.json").write_text("{}")
+    binary_dir = Path(remote["env"]["GQ_BIN"]).parent
+    executable(binary_dir / "nvidia-smi", 'print("fake GPU")\n')
+    executable(binary_dir / "systemctl", 'print("ActiveState=inactive")\n')
+    process = subprocess.Popen(["bash", str(SCRIPTS / "body-baseline-remote.sh"), "run", "snapshot-test"],
+                               env=remote["env"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        wait_for_queue(process, remote)
+        out = task / "runs/snapshot-test"
+        sync = subprocess.run(["bash", str(SCRIPTS / "body-baseline-remote.sh"), "sync"],
+                              env=remote["env"], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=5)
+        assert sync.returncode == 0, sync.stderr
+        with (task / "build.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for path in source.rglob("*"):
+            if path.is_file():
+                path.write_text("v2")
+        binary.write_text("v2")
+        (remote["root"] / "release").write_text("1")
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 0, stdout + stderr + (out / "launcher.log").read_text()
+        assert set(json.loads((out / "baseline-result.json").read_text()).values()) == {"v1"}
+        assert set(json.loads((out / "report-result.json").read_text()).values()) == {"v1"}
+        manifest = json.loads((out / "manifest.json").read_text())
+        assert manifest["scenario_sha256"] == manifest["config_sha256"] == hashlib.sha256(b"v1").hexdigest()
+        assert manifest["binary_sha256"] == hashlib.sha256((out / "reference/Gothic2Notr").read_bytes()).hexdigest()
+        with tarfile.open(out / "source.tar.gz") as archive:
+            assert archive.extractfile("scripts/body_baseline_report.py").read().decode() == reporter
+            for member in archive.getmembers():
+                if member.isfile():
+                    assert archive.extractfile(member).read() == (out / "reference/source" / member.name).read_bytes()
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)

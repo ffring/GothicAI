@@ -147,6 +147,13 @@ fi
 binary="$task_root/build/opengothic/gothic-body-runner"
 rendered="$task_root/build/opengothic/Gothic2Notr"
 out="$task_root/runs/$run_name"
+source_root="$task_root/source"
+engine_library="$task_root/build/libOpenGothic.a"
+if gq_available; then
+  # Keep the runner, rendered engine and IPC probe library from one build.
+  exec 8>"$task_root/build.lock"
+  flock -n 8 || { echo 'Another build owns this workspace' >&2; exit 1; }
+fi
 [[ -x "$binary" && -x "$rendered" ]] || { echo 'Build both runner and rendered engine first' >&2; exit 1; }
 [[ ! -e "$task_root/build-active" ]] || { echo 'Wait for the build to finish' >&2; exit 1; }
 # Older hosts retain the shared lock and process checks. gq owns admission
@@ -168,13 +175,25 @@ cp "$binary" "$out/reference/gothic-body-runner"
 cp "$rendered" "$out/reference/Gothic2Notr"
 cp "$task_root/provenance/source-head.txt" "$task_root/provenance/source.patch" \
    "$task_root/provenance/configure.log" "$task_root/provenance/build.log" "$out/"
-nice -n 10 tar -czf "$out/source.tar.gz" -C "$task_root/source" OpenGothic
+if gq_available; then
+  # Derive every executed source/config/scenario path from this exact archive.
+  # Later syncs and builds may proceed while the immutable run is queued.
+  nice -n 10 tar -czf "$out/source.tar.gz" -C "$source_root" OpenGothic scripts evals
+  source_root="$out/reference/source"
+  mkdir -p "$source_root"
+  tar -xzf "$out/source.tar.gz" -C "$source_root"
+  cp "$engine_library" "$out/reference/libOpenGothic.a"
+  engine_library="$out/reference/libOpenGothic.a"
+  exec 8>&-
+else
+  nice -n 10 tar -czf "$out/source.tar.gz" -C "$task_root/source" OpenGothic
+fi
 unit="gothic-body-headless-$run_name"
 if gq_available; then
   cd "$out/run"
   gq_display=()
   [[ "$suite_mode" == replay ]] || gq_display+=(--display)
-  launch=(gq_job --class quiet --threads 3 --mem 12G "${gq_display[@]}" --cpu-quota 200% \
+  launch=(gq_job --class quiet --threads 3 --mem 12G ${gq_display[@]+"${gq_display[@]}"} --cpu-quota 200% \
     --max 30m --name "body-headless-$run_name" -- env \
     "DISPLAY=" "WAYLAND_DISPLAY=" \
     "GOTHIC_AI=0" "VK_DRIVER_FILES=/nonexistent/body-headless-no-vulkan.json" \
@@ -195,14 +214,14 @@ fi
 set +e
 "${launch[@]}" \
   /usr/bin/time -v -o "$out/resources.txt" \
-  python3 "$task_root/source/scripts/body_headless_suite.py" \
+  python3 "$source_root/scripts/body_headless_suite.py" \
     --runner "$out/reference/gothic-body-runner" --rendered "$out/reference/Gothic2Notr" \
     --assets "$assets" --save "$save" \
-    --reference "$reference" --source "$task_root/source/OpenGothic" \
-    --engine-library "$task_root/build/libOpenGothic.a" \
-    --config "$task_root/source/evals/npc-body/melee-v1.json" \
-    --senses-scenario "$task_root/source/scripts/bench/body-headless-senses.bench" --output "$out" \
-    "${suite_args[@]}" \
+    --reference "$reference" --source "$source_root/OpenGothic" \
+    --engine-library "$engine_library" \
+    --config "$source_root/evals/npc-body/melee-v1.json" \
+    --senses-scenario "$source_root/scripts/bench/body-headless-senses.bench" --output "$out" \
+    ${suite_args[@]+"${suite_args[@]}"} \
     > "$out/launcher.log" 2>&1
 result=$?
 set -e

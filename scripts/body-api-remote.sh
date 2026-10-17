@@ -135,6 +135,14 @@ suite_args=()
 [[ "$suite_mode" != smoke ]] || suite_args+=(--smoke)
 binary="$task_root/build/opengothic/gothic-body-runner"
 out="$task_root/runs/$run_name"
+source_root="$task_root/source"
+engine_library="$task_root/build/libOpenGothic.a"
+if gq_available; then
+  # Freeze binaries and their library together; release this workspace lock
+  # before waiting in the queue so later builds can prepare their own runs.
+  exec 8>"$task_root/build.lock"
+  flock -n 8 || { echo 'Another build owns workspace' >&2; exit 1; }
+fi
 [[ -x "$binary" && -f "$task_root/build/libOpenGothic.a" ]] || { echo 'Build runner first' >&2; exit 1; }
 [[ ! -e "$task_root/build-active" ]] || { echo 'Wait for build' >&2; exit 1; }
 if ! gq_available; then
@@ -152,6 +160,16 @@ cp "$task_root/provenance/source-head.txt" "$task_root/provenance/source.patch" 
    "$task_root/provenance/resolver-tests.json" "$out/"
 cp "$task_root/build/opengothic/gothic-body-resolver-test" "$out/reference/"
 nice -n 10 tar -czf "$out/source.tar.gz" -C "$task_root/source" OpenGothic scripts evals
+if gq_available; then
+  # Execute the exact archived bytes, including Python imports and scenarios.
+  # Sync may replace the development tree while this run waits for admission.
+  source_root="$out/reference/source"
+  mkdir -p "$source_root"
+  tar -xzf "$out/source.tar.gz" -C "$source_root"
+  cp "$engine_library" "$out/reference/libOpenGothic.a"
+  engine_library="$out/reference/libOpenGothic.a"
+  exec 8>&-
+fi
 unit="gothic-body-api-$run_name"
 if gq_available; then
   cd "$out/run"
@@ -176,16 +194,16 @@ fi
 set +e
 "${launch[@]}" \
   /usr/bin/time -v -o "$out/resources.txt" \
-  python3 "$task_root/source/scripts/body_api_suite.py" \
+  python3 "$source_root/scripts/body_api_suite.py" \
     --runner "$out/reference/gothic-body-runner" \
     --assets "$HOME/gothic-ai/body-baseline/assets" --save "$reference/run/save_slot_1.sav" \
     --reference "$reference" \
-    --native-reference "$HOME/gothic-ai/body-headless/runs/stage3-v1/native-off" --source "$task_root/source/OpenGothic" \
-    --engine-library "$task_root/build/libOpenGothic.a" \
-    --config "$task_root/source/evals/npc-body/body-api-v1.json" \
-    --scenario "$task_root/source/scripts/bench/body-api.bench" \
-    --melee-scenario "$task_root/source/scripts/bench/body-melee.bench" \
-    --output "$out" "${suite_args[@]}" > "$out/launcher.log" 2>&1
+    --native-reference "$HOME/gothic-ai/body-headless/runs/stage3-v1/native-off" --source "$source_root/OpenGothic" \
+    --engine-library "$engine_library" \
+    --config "$source_root/evals/npc-body/body-api-v1.json" \
+    --scenario "$source_root/scripts/bench/body-api.bench" \
+    --melee-scenario "$source_root/scripts/bench/body-melee.bench" \
+    --output "$out" ${suite_args[@]+"${suite_args[@]}"} > "$out/launcher.log" 2>&1
 result=$?
 set -e
 trap - INT TERM
