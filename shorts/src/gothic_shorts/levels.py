@@ -15,6 +15,9 @@ from pathlib import Path
 MUSIC_BELOW_VOICE_LU = 14.0
 MUSIC_DUCK_DB = 6.0
 GAME_BELOW_VOICE_LU = 6.0
+# The game's sound in the voice's pauses: the action may punch above the voice, a little. Louder, and the
+# explosions' peaks pull the whole linear master far under -14 LUFS, the voice with it (2026-10-17: -18 LUFS).
+GAME_PAUSE_ABOVE_VOICE_LU = 2.0
 LEVEL_TOLERANCE_LU = 1.5
 RAMP_SECONDS = 0.150
 # ebur128's summary is rounded to tenths; keep game gain on the safe side.
@@ -86,6 +89,17 @@ def duck_filter(windows: list[Window], attenuation_db: float) -> str:
             f"volume='1-({1 - gain:.12f})*({envelope})':eval=frame")
 
 
+def body_gain_filter(gain_db: float, total: float) -> str:
+    """A gain over the short's body, back to 1 for the end sting after it. The way back runs over the last
+    beat's own 60 ms fade-out: a step at the sting's first sample would click."""
+    if gain_db >= 0:
+        return "anull"
+    gain, start = 10 ** (gain_db / 20), max(0.0, total - 0.06)
+    return (f"aresample=48000,asetnsamples=n=48:p=0,"
+            f"volume='if(lt(t,{start:.9f}),{gain:.12f},if(lt(t,{total:.9f}),"
+            f"{gain:.12f}+({1 - gain:.12f})*(t-{start:.9f})/{total - start:.9f},1))':eval=frame")
+
+
 def measure(inputs: list[str], graph: str, output: str,
             windows: list[Window] | None = None) -> float:
     """EBU R128 integrated LUFS after exact sample trims, before any mastering.
@@ -151,9 +165,10 @@ def check_balance(speech_lufs: float | None, music_pause_lufs: float | None,
     row("game_speech", game_speech_lufs, target,
         f"≤ S - {GAME_BELOW_VOICE_LU:g} LU" if voiced else "measured",
         game_speech_lufs <= target + 1e-6 if game_speech_lufs is not None and target is not None else None)
-    row("game_pause", game_pause_lufs, None,
-        f"original (except {RAMP_SECONDS * 1000:g} ms ramps)" if voiced else "measured",
-        True if voiced and game_pause_lufs is not None else None)
+    target = speech_lufs + GAME_PAUSE_ABOVE_VOICE_LU if voiced and math.isfinite(speech_lufs) else None
+    row("game_pause", game_pause_lufs, target,
+        f"≤ S + {GAME_PAUSE_ABOVE_VOICE_LU:g} LU" if voiced else "measured",
+        game_pause_lufs <= target + 1e-6 if game_pause_lufs is not None and target is not None else None)
     return {"voiced": voiced, "ok": all(r["ok"] is not False for r in rows), "rows": rows}
 
 
@@ -207,14 +222,16 @@ class AudioGraph:
 def audio_graph(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
                 speech: list[Window], total: float, length: float, *,
                 music_volume: float = 1.0, music_gain_db: float = 0.0,
-                game_duck_db: float = 0.0) -> AudioGraph:
+                game_gain_db: float = 0.0, game_duck_db: float = 0.0) -> AudioGraph:
     """One source of truth for the mix and all calibration/validation taps."""
     inputs, filters, tracks = ["-i", str(joined)], [], {"game": "g"}
     if music is not None:
         inputs += ["-i", str(music)]
     if voice:
         filters.append(f"[0:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-                       f"atrim=duration={length},{duck_filter(speech, game_duck_db)}[g]")
+                       f"atrim=duration={length},"
+                       f"{body_gain_filter(game_gain_db, total)},"
+                       f"{duck_filter(speech, game_duck_db)}[g]")
         first = len(inputs) // 2
         for k, (wav, at) in enumerate(voice):
             inputs += ["-i", str(wav)]
@@ -256,17 +273,21 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
         raise ValueError("The voice track has no measurable EBU R128 loudness")
     music_pause = raw.measure("music", pauses) if music is not None else None
     music_db = music_gain(s, music_pause) if music_pause is not None and math.isfinite(music_pause) else 0.0
-    game_speech = raw.measure("game", speech)
+    game_pause = raw.measure("game", pauses) if pauses else -math.inf
+    game_gain = min(0.0, s + GAME_PAUSE_ABOVE_VOICE_LU - game_pause) if math.isfinite(game_pause) else 0.0
+    if game_gain < 0:
+        game_gain -= METER_RESOLUTION_LU
+    game_speech = raw.measure("game", speech) + game_gain
     game_db = max(0.0, game_speech - (s - GAME_BELOW_VOICE_LU))
     if game_db > 0:
         game_db += METER_RESOLUTION_LU
     final = audio_graph(joined, music, voice, speech, total, length,
-                        music_gain_db=music_db, game_duck_db=game_db)
+                        music_gain_db=music_db, game_gain_db=game_gain, game_duck_db=game_db)
     report = check_balance(
         s, final.measure("music", pauses) if music is not None else None,
         final.measure("music", speech) if music is not None else None,
         final.measure("game", speech), final.measure("game", pauses) if pauses else None,
     )
-    report.update({"music_gain_db": music_db, "game_duck_db": game_db,
+    report.update({"music_gain_db": music_db, "game_gain_db": game_gain, "game_duck_db": game_db,
                    "speech_windows": speech, "pause_windows": pauses})
     return final, report
