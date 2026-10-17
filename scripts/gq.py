@@ -223,7 +223,8 @@ class Queue:
         spec = dict(spec)
         spec.setdefault("gpu_mem", 0)
         spec.setdefault("display", False)
-        spec.setdefault("owner", os.environ.get("GQ_OWNER", Path.cwd().name))
+        if "owner" not in spec:
+            spec["owner"] = owner()
         self.validate(spec)
         job = dict(spec, id=uuid.uuid4().hex[:12], status="queued", submitted=self.now(),
                    start=None, waiter=waiter, cwd=str(Path.cwd()), env=dict(os.environ))
@@ -660,7 +661,25 @@ def wait_job(queue, job_id, run=False, wait_max=None, follow=True):
 
 
 def owner():
-    return os.environ.get("GQ_OWNER", Path.cwd().name)
+    if "GQ_OWNER" in os.environ:
+        return os.environ["GQ_OWNER"]
+    for path in (Path.cwd(), Path(SCRIPT).parent):
+        ancestors = (path.resolve(), *path.resolve().parents)
+        # Codex worktrees use .../worktrees/<session>/<repo>, even in copied trees
+        # without Git metadata. Subdirectories retain the session's identity.
+        for root in ancestors:
+            if root.parent.parent.name == "worktrees":
+                return root.parent.name
+        for root in ancestors:
+            marker = root / ".git"
+            if marker.exists():
+                if marker.is_file():
+                    gitdir = marker.read_text().strip().removeprefix("gitdir: ")
+                    metadata = (root / gitdir).resolve()
+                    if metadata.parent.name == "worktrees":
+                        return metadata.name
+                return root.name
+    raise QueueError("не удалось определить worktree; задайте GQ_OWNER")
 
 
 def status(queue):

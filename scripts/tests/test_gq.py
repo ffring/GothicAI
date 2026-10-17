@@ -748,6 +748,79 @@ def test_unit_process_holds_legacy_lock_until_command_finishes(gq, host, monkeyp
         fcntl.flock(old_client, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+def test_owner_and_default_submission_are_stable_from_worktree_subdirectories(
+        queue, gq, monkeypatch, tmp_path):
+    worktree = tmp_path / "worktrees" / "session-a" / "gothic"
+    subdirectory = worktree / "server"
+    subdirectory.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: /unused/worktrees/session-a\n")
+    monkeypatch.delenv("GQ_OWNER", raising=False)
+    monkeypatch.chdir(worktree)
+    request = spec()
+    request.pop("owner")
+    ident = queue.submit(request)
+    assert queue.get(ident)["owner"] == gq.owner() == "session-a"
+    monkeypatch.chdir(subdirectory)
+    assert gq.owner() == "session-a"
+    assert queue.cancel(ident, gq.owner())
+    assert queue.get(ident)["status"] == "cancelled"
+
+
+def test_worktrees_with_the_same_repository_basename_have_distinct_owners(gq, monkeypatch, tmp_path):
+    monkeypatch.delenv("GQ_OWNER", raising=False)
+    owners = []
+    for session in ("session-a", "session-b"):
+        root = tmp_path / "worktrees" / session / "gothic"
+        (root / "server").mkdir(parents=True)
+        (root / ".git").write_text(f"gitdir: /unused/worktrees/{session}\n")
+        monkeypatch.chdir(root / "server")
+        owners.append(gq.owner())
+    assert owners == ["session-a", "session-b"]
+
+
+def test_owner_uses_repository_root_for_a_regular_checkout(gq, monkeypatch, tmp_path):
+    root = tmp_path / "my-repository"
+    (root / ".git").mkdir(parents=True)
+    (root / "server" / "nested").mkdir(parents=True)
+    monkeypatch.delenv("GQ_OWNER", raising=False)
+    monkeypatch.chdir(root / "server" / "nested")
+    assert gq.owner() == "my-repository"
+
+
+def test_explicit_owner_overrides_worktree_identity_for_submission(queue, gq, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GQ_OWNER", "explicit-session")
+    request = spec()
+    request.pop("owner")
+    ident = queue.submit(request)
+    assert gq.owner() == queue.get(ident)["owner"] == "explicit-session"
+
+
+def test_owner_uses_source_worktree_when_called_from_outside_a_repository(gq, monkeypatch, tmp_path):
+    root = tmp_path / "worktrees" / "source-session" / "gothic"
+    (root / "scripts").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.delenv("GQ_OWNER", raising=False)
+    monkeypatch.setattr(gq, "SCRIPT", str(root / "scripts" / "gq.py"))
+    monkeypatch.chdir(elsewhere)
+    assert gq.owner() == "source-session"
+
+
+def test_installed_queue_requires_owner_when_no_worktree_can_be_identified(
+        queue, gq, monkeypatch, tmp_path):
+    installed = tmp_path / "gothic-ai" / "bin"
+    installed.mkdir(parents=True)
+    monkeypatch.delenv("GQ_OWNER", raising=False)
+    monkeypatch.setattr(gq, "SCRIPT", str(installed / "gq"))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(gq.QueueError, match="GQ_OWNER"):
+        gq.owner()
+    # Explicit callers already supplied ownership; do not evaluate the fallback.
+    ident = queue.submit(spec(owner="explicit-session"))
+    assert queue.get(ident)["owner"] == "explicit-session"
+
+
 def test_format_version_mismatch_refuses_to_modify_state(gq, host):
     host["home"].mkdir()
     original = json.dumps({"version": gq.FORMAT_VERSION + 1, "jobs": []})
@@ -1175,3 +1248,16 @@ def test_install_copies_executable_and_private_profile_to_remote_home(gq, monkey
     assert os.access(installed / "gq", os.X_OK)
     assert (installed / "gq.profile").read_text() == "ryzen\n"
     assert sorted(path.name for path in installed.iterdir()) == ["gq", "gq.profile"]
+
+
+def test_linked_worktrees_with_matching_directory_names_use_their_git_identity(gq, monkeypatch, tmp_path):
+    monkeypatch.delenv('GQ_OWNER', raising=False)
+    owners = []
+    for session in ('linked-a', 'linked-b'):
+        root = tmp_path / 'checkouts' / session / 'gothic'
+        (root / 'server').mkdir(parents=True)
+        gitdir = tmp_path / 'common.git' / 'worktrees' / session
+        (root / '.git').write_text(f'gitdir: {gitdir}\n')
+        monkeypatch.chdir(root / 'server')
+        owners.append(gq.owner())
+    assert owners == ['linked-a', 'linked-b']
