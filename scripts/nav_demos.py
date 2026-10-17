@@ -234,6 +234,8 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
         record_count = 0
         first_ms = last_ms = None
         last_keys = None
+        last_debug = {name: None for name in
+                      ("last_teacher_hint", "last_body_flags", "last_keys", "last_position_cm", "body_yaw_deg")}
         for data in iter_chunks(file):
             if first_ms is None:
                 first_ms = int(data["time_ms"][0])
@@ -260,6 +262,17 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
                     _require((data["previous_keys"][1:] == data["keys"][:-1]).all(), "previous keys mismatch")
             last_ms = int(data["time_ms"][-1])
             last_keys = data["keys"][-1].copy()
+            last = data[-1]
+            last_debug = {
+                "last_teacher_hint": {
+                    "next_corner_cm": last["teacher_hint"]["next_corner_cm"].tolist(),
+                    "path_cm": float(last["teacher_hint"]["path_cm"]),
+                },
+                "last_body_flags": last["body"]["flags"].tolist(),
+                "last_keys": {name: last_keys[name].item() for name in KEY_DTYPE.names},
+                "last_position_cm": last["position_cm"].tolist(),
+                "body_yaw_deg": float(last["body_yaw_deg"]),
+            }
             record_count += len(data)
             for key, mask in key_masks(data["keys"]).items():
                 counts[key] = counts.get(key, 0) + int(np.count_nonzero(mask))
@@ -272,7 +285,7 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
         compressed_bytes = file.stat().st_size
         episodes.append({"episode": str(file.parent), "decisions": record_count,
                          "first_ms": first_ms, "last_ms": last_ms,
-                         "compressed_bytes": compressed_bytes})
+                         "compressed_bytes": compressed_bytes, **last_debug})
         total_records += record_count
     compressed_bytes = sum(episode["compressed_bytes"] for episode in episodes)
     root = Path(path)
