@@ -137,7 +137,7 @@ class World:
 
 
 @asynccontextmanager
-async def world(story_graph, *proposals):
+async def world(story_graph, *proposals, gather_s=0):
     fake, clock = FakeGame(branch="A"), Clock()
     clock.t = 100_000.0
     llm = FakeBackend(
@@ -186,7 +186,14 @@ async def world(story_graph, *proposals):
         cast = Cast(author.link, author.patches, chronicle)
         casting = SimpleNamespace(cast=cast, character=AsyncMock())
         chains = SimpleNamespace(chain=AsyncMock())
-        occasions = Occasions(author.link, chronicle, author.places, clock=clock, busy_poll_s=0.01)
+        occasions = Occasions(
+            author.link,
+            chronicle,
+            author.places,
+            clock=clock,
+            busy_poll_s=0.01,
+            gather_s=gather_s,
+        )
         runner = Showrunner(occasions, author, chains, casting, llm, clock=clock)
         state = World(fake, clock, runner, author, chains, casting, llm)
 
@@ -254,7 +261,224 @@ async def test_giver_and_people_budget_can_skip_when_no_builder_kind_fits(graph)
         assert budget.people_left == 0 and budget.busy_givers == {HILDA}
         result = await w.showrunner.decide(occasion())
         assert result["fact"] == "line_skipped" and result["why"]
+        assert "нет свободных живых заказчиков" in str(result["why"])
+        assert w.chronicle.facts("line_skipped") == [result]
         assert w.llm.calls == []
+
+
+async def arrive(w):
+    occasions = w.showrunner.occasions
+    await occasions.poll()
+    w.clock.t += occasions.settle_s
+    await occasions.poll()
+    [arrival] = occasions.pending
+    return arrival
+
+
+def close_budget(w, rule):
+    if rule == "open":
+        for i in range(MAX_OPEN_LINES):
+            w.chronicle.record(line(giver=f"GIVER_{i}", quests=[f"DIR_Q{i + 1}"]))
+    elif rule == "chapter":
+        for i in range(MAX_LINES_PER_CHAPTER):
+            w.chronicle.record(line(quests=[f"DIR_Q{i + 1}"]))
+            w.finish(f"DIR_Q{i + 1}")
+    else:
+        w.chronicle.record(
+            line(
+                day=9 if rule == "game_time" else 8,
+                minute=1 if rule == "game_time" else 0,
+                wall_time=w.clock.t - MIN_REAL_SECONDS + (1 if rule == "wall_time" else 0),
+            )
+        )
+        w.finish("DIR_Q1")
+    # Completing old test quests is setup, not another new occasion for the hero.
+    w.showrunner.occasions._events.clear()
+
+
+@pytest.mark.parametrize("rule", ["open", "chapter", "game_time", "wall_time"])
+async def test_run_keeps_an_arrival_until_its_budget_opens(graph, monkeypatch, rule):
+    async with world(graph, proposal(kind="none")) as w:
+        arrival = await arrive(w)
+        close_budget(w, rule)
+        checked, finished = asyncio.Event(), asyncio.Event()
+        original_ready = w.showrunner._ready
+
+        async def ready():
+            result = await original_ready()
+            checked.set()
+            return result
+
+        monkeypatch.setattr(w.showrunner, "_ready", ready)
+        w.chronicle.on_fact.append(lambda f: finished.set() if f.get("fact") == "line_none" else None)
+        running = asyncio.create_task(w.showrunner.run())
+        try:
+            await asyncio.wait_for(checked.wait(), 1)
+            assert w.showrunner.occasions.pending == [arrival]
+            assert w.chronicle.facts("line_skipped") == [] and w.llm.calls == []
+            if rule == "open":
+                w.finish(*(f"DIR_Q{i + 1}" for i in range(MAX_OPEN_LINES)))
+            elif rule == "chapter":
+                w.fake.vars["KAPITEL"] = 2
+            elif rule == "game_time":
+                w.fake.minute = 1
+            w.clock.t += 1 if rule == "wall_time" else w.showrunner.occasions.poll_s
+            w.showrunner.occasions._changed.set()
+            await asyncio.wait_for(finished.wait(), 1)
+            [result] = w.chronicle.facts("line_none")
+            assert result["occasion"] == arrival
+            assert w.showrunner.occasions.pending == []
+            assert len(w.llm.calls) == 1 and w.chronicle.facts("line_skipped") == []
+        finally:
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+
+
+@pytest.mark.parametrize("expired_by", ["moving", "game_day"])
+async def test_an_arrival_expires_while_the_run_waits_for_budget(graph, monkeypatch, expired_by):
+    async with world(graph, proposal(kind="none")) as w:
+        arrival = await arrive(w)
+        close_budget(w, "open")
+        checked = asyncio.Event()
+        original_ready = w.showrunner._ready
+
+        async def ready():
+            result = await original_ready()
+            checked.set()
+            return result
+
+        monkeypatch.setattr(w.showrunner, "_ready", ready)
+        running = asyncio.create_task(w.showrunner.run())
+        try:
+            await asyncio.wait_for(checked.wait(), 1)
+            assert arrival in w.showrunner.occasions.pending
+            if expired_by == "moving":
+                w.fake.nearest_waypoint = "NW_CITY_01"
+                w.fake.waypoint_distances["NW_FARM1_INHOUSE_01"] = 90000
+            else:
+                w.fake.day += 1
+            w.clock.t += w.showrunner.occasions.poll_s
+            await w.showrunner.occasions.poll()
+            assert arrival not in w.showrunner.occasions.pending
+            assert w.chronicle.facts("line_skipped") == [] and w.llm.calls == []
+        finally:
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+
+
+async def test_budget_readiness_uses_one_state_per_poll_and_counts_real_wait_locally(graph, monkeypatch):
+    async with world(graph) as w:
+        close_budget(w, "wall_time")
+        state = AsyncMock(wraps=w.showrunner._state)
+        monkeypatch.setattr(w.showrunner, "_state", state)
+        assert not await w.showrunner._ready()
+        for _ in range(25):
+            w.clock.t += 0.02
+            assert not await w.showrunner._ready()
+        assert state.await_count == 1
+        w.clock.t += 0.5
+        assert await w.showrunner._ready()
+        assert state.await_count == 1
+        w.clock.t += w.showrunner.occasions.poll_s
+        assert await w.showrunner._ready()
+        assert state.await_count == 2
+
+
+@pytest.mark.parametrize("loading", [False, True])
+async def test_budget_state_cache_is_reset_by_a_session_or_loading(graph, monkeypatch, loading):
+    async with world(graph) as w:
+        state = AsyncMock(wraps=w.showrunner._state)
+        monkeypatch.setattr(w.showrunner, "_state", state)
+        assert await w.showrunner._ready()
+        assert state.await_count == 1
+        if loading:
+            w.showrunner.link._dispatch(Loading(type="loading"))
+        else:
+            branch = w.chronicle.branch
+            w.showrunner.link._dispatch(
+                Session(
+                    type="session",
+                    branch="loaded",
+                    parent=branch,
+                    parent_seq=w.chronicle.memory.head(branch),
+                    reason="load",
+                )
+            )
+        await w.showrunner._ready()
+        assert state.await_count == 2
+
+
+async def test_budget_readiness_waits_for_another_decision_without_reading_the_bridge(graph, monkeypatch):
+    async with world(graph) as w:
+        state = AsyncMock(wraps=w.showrunner._state)
+        monkeypatch.setattr(w.showrunner, "_state", state)
+        async with w.showrunner._lock:
+            assert not await w.showrunner._ready()
+            state.assert_not_awaited()
+        assert await w.showrunner._ready()
+        state.assert_awaited_once()
+
+
+async def test_run_returns_its_bundle_when_another_writer_spends_budget_after_handoff(graph, monkeypatch):
+    async with world(graph, proposal(kind="none"), gather_s=10) as w:
+        occasions = w.showrunner.occasions
+        arrival = await arrive(w)
+        deed = {"fact": "found_out", "reason": "Герой раскрыл обман с пилой."}
+        w.clock.t += 5
+        w.chronicle.record(deed)
+        await occasions.poll()
+        w.clock.t += occasions.gather_s
+        originals = list(occasions.pending)
+        assert originals[0]["kind"] == "deed" and originals[1] == arrival
+        recorded = w.chronicle.facts("occasion")
+        handed_off, resume, returned, finished = (asyncio.Event() for _ in range(4))
+        original_next, original_put_back = occasions.next, occasions.put_back
+        first = True
+
+        async def next_occasion(**kwargs):
+            nonlocal first
+            bundle = await original_next(**kwargs)
+            if first:
+                first = False
+                handed_off.set()
+                await resume.wait()
+            return bundle
+
+        def put_back(bundle):
+            original_put_back(bundle)
+            returned.set()
+
+        monkeypatch.setattr(occasions, "next", next_occasion)
+        monkeypatch.setattr(occasions, "put_back", put_back)
+        w.chronicle.on_fact.append(lambda f: finished.set() if f.get("fact") == "line_none" else None)
+        running = asyncio.create_task(w.showrunner.run())
+        try:
+            await asyncio.wait_for(handed_off.wait(), 1)
+            assert occasions.pending == []
+            # Another writer commits its receipts after handoff's readiness check. Both cooldowns
+            # are near their boundary, so reopening them will leave the arrival fresh.
+            async with w.showrunner._lock:
+                w.chronicle.record(line(day=9, minute=1, wall_time=w.clock.t - MIN_REAL_SECONDS + 1))
+                w.finish("DIR_Q1")
+                resume.set()
+            await asyncio.wait_for(returned.wait(), 1)
+            assert occasions.pending == originals
+            assert w.chronicle.facts("occasion") == recorded
+            assert w.chronicle.facts("line_skipped") == [] and w.llm.calls == []
+            w.fake.minute = 1
+            # Refresh the game minute before a new gather interval could have elapsed.
+            w.clock.t += occasions.poll_s
+            occasions._changed.set()
+            await asyncio.wait_for(finished.wait(), 1)
+            [result] = w.chronicle.facts("line_none")
+            assert result["occasion"] == {**originals[0], "also": [arrival]}
+            assert occasions.pending == [] and len(w.llm.calls) == 1
+            assert w.chronicle.facts("line_skipped") == []
+            assert w.chronicle.facts("occasion") == recorded
+        finally:
+            resume.set()
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
 
 
 async def test_both_cooldown_boundaries_allow_a_model_call(graph):
@@ -347,6 +571,98 @@ async def test_brief_has_local_cards_time_quests_deeds_history_and_only_free_liv
         assert any(OWN in item or "Рутгер" in item for item in brief.history)
         assert brief.budget.open_left == 1 and brief.budget.lines_left == 3
         assert brief.budget.people_left == 7
+
+
+async def test_brief_lists_each_other_occasion_with_details_and_game_age(graph):
+    async with world(graph) as w:
+        w.fake.minute = 7
+        others = [
+            occasion(),
+            occasion(
+                kind="deed",
+                place=YARD,
+                minute=2,
+                deed={"fact": "found_out", "reason": "Герой раскрыл обман с пилой."},
+            ),
+            occasion(
+                kind="vanilla",
+                place=FIELD,
+                minute=3,
+                vanilla={"fact": "vanilla_quest", "title": "Пропала репа", "to": "success"},
+            ),
+        ]
+        brief = await w.showrunner.brief(occasion(kind="chapter", minute=7, also=others))
+        [also] = [line for line in brief.text().splitlines() if line.lower().startswith("заодно:")]
+        for expected in (
+            "arrived",
+            "deed",
+            "vanilla",
+            HOME,
+            YARD,
+            FIELD,
+            "Герой раскрыл обман с пилой.",
+            "Пропала репа",
+            "success",
+            "7",
+            "5",
+            "4",
+        ):
+            assert expected in also
+
+
+async def test_an_arrival_and_a_deed_five_seconds_later_make_one_decision(graph):
+    async with world(graph, proposal(kind="none"), gather_s=10) as w:
+        arrival = await arrive(w)
+        finished = asyncio.Event()
+        w.chronicle.on_fact.append(lambda f: finished.set() if f.get("fact") == "line_none" else None)
+        running = asyncio.create_task(w.showrunner.run())
+        try:
+            await asyncio.sleep(0.02)
+            assert w.llm.calls == [] and w.showrunner.occasions.pending == [arrival]
+            w.clock.t += 5
+            deed = {"fact": "died", "npc": "BANDIT", "killer": "PLAYER", "monster": False}
+            w.chronicle.record(deed)
+            await w.showrunner.occasions.poll()
+            assert len(w.showrunner.occasions.pending) == 2 and w.llm.calls == []
+            w.clock.t += 5
+            w.showrunner.occasions._changed.set()
+            await asyncio.sleep(0.02)
+            assert w.llm.calls == []
+            w.clock.t += 5
+            w.showrunner.occasions._changed.set()
+            await asyncio.wait_for(finished.wait(), 1)
+            [result] = w.chronicle.facts("line_none")
+            assert result["occasion"]["kind"] == "deed"
+            assert result["occasion"]["deed"] == deed
+            assert result["occasion"]["also"] == [arrival]
+            assert w.showrunner.occasions.pending == [] and len(w.llm.calls) == 1
+            text = "\n".join(getattr(item, "content", "") for item in w.llm.calls[0][1])
+            [also] = [line for line in text.splitlines() if line.lower().startswith("заодно:")]
+            assert "arrived" in also and HOME in also
+        finally:
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+
+
+@pytest.mark.parametrize("outcome", ["line", "line_none", "line_rejected", "line_failed"])
+async def test_every_outcome_keeps_and_consumes_the_whole_occasion_bundle(graph, outcome):
+    choice = proposal(kind="none") if outcome == "line_none" else proposal()
+    if outcome == "line_rejected":
+        choice = proposal(giver=XARDAS)
+    async with world(graph, choice) as w:
+        if outcome == "line_failed":
+            w.chains.chain.side_effect = None
+            w.chains.chain.return_value = None
+        arrival = occasion()
+        vanilla = occasion(kind="vanilla", vanilla={"quest": SCRIPT_QUEST, "to": "success"})
+        deed = occasion(kind="deed", deed={"fact": "died", "npc": "BANDIT", "killer": "PLAYER"})
+        bundle = {**deed, "also": [arrival, vanilla]}
+        result = await w.showrunner.decide(bundle)
+        assert result["fact"] == outcome and result["occasion"] == bundle
+        calls = len(w.llm.calls)
+        for source in (deed, arrival, vanilla, {**arrival, "also": [vanilla, deed]}):
+            assert await w.showrunner.decide(source) == result
+        assert len(w.llm.calls) == calls
 
 
 @pytest.mark.parametrize("value", [1, 2])
@@ -810,18 +1126,22 @@ async def test_run_logs_unexpected_failure_records_the_occasion_and_continues(
         [failed] = w.chronicle.facts("line_failed")
         assert failed["occasion"] == first and "RuntimeError: broken" in failed["why"][0]
         assert any(record.exc_info and "showrunner" in record.message for record in caplog.records)
-        assert any(f.get("occasion") == second for f in w.chronicle.facts())
         if stage == "builder":
             assert failed["characters"] == [OWN] and failed["quests"] == ["DIR_Q1"]
             assert w.showrunner.budget(1, occasion()).people_left == MAX_PEOPLE_PER_CHAPTER - 1
+            assert w.showrunner.occasions.pending == [second]
+            assert w.chronicle.facts("line_skipped") == []
+        else:
+            assert any(f.get("occasion") == second for f in w.chronicle.facts())
 
 
 async def test_run_marks_an_unexpected_handoff_failure_and_takes_the_next_occasion(
     graph, monkeypatch, caplog
 ):
     async with world(graph, proposal(kind="none")) as w:
-        first, second = occasion(), occasion(kind="chapter", chapter=2)
-        w.showrunner.occasions.pending[:] = [first, second]
+        first = occasion(kind="deed", deed={"fact": "found_out", "reason": "Герой раскрыл обман."})
+        companion, second = occasion(), occasion(kind="chapter", chapter=2)
+        w.showrunner.occasions.pending[:] = [first, companion]
         original = w.showrunner.link.story_state
 
         async def broken_once(**kwargs):
@@ -829,13 +1149,26 @@ async def test_run_marks_an_unexpected_handoff_failure_and_takes_the_next_occasi
             raise RuntimeError("handoff broken")
 
         monkeypatch.setattr(w.showrunner.link, "story_state", broken_once)
-        finished = asyncio.Event()
-        w.chronicle.on_fact.append(lambda fact: finished.set() if fact.get("fact") == "line_none" else None)
+        failed_once, finished = asyncio.Event(), asyncio.Event()
+
+        def outcome(fact):
+            if fact.get("fact") == "line_failed":
+                failed_once.set()
+            elif fact.get("fact") == "line_none":
+                finished.set()
+
+        w.chronicle.on_fact.append(outcome)
         running = asyncio.create_task(w.showrunner.run())
         try:
-            await asyncio.wait_for(finished.wait(), 1)
+            await asyncio.wait_for(failed_once.wait(), 1)
             [failed] = w.chronicle.facts("line_failed")
-            assert failed["occasion"] == first and "RuntimeError: handoff broken" in failed["why"][0]
+            assert failed["occasion"] == {**first, "also": [companion]}
+            assert "RuntimeError: handoff broken" in failed["why"][0]
+            assert w.showrunner.occasions.pending == []
+            w.clock.t += w.showrunner.occasions.poll_s
+            w.showrunner.occasions.pending.append(second)
+            w.showrunner.occasions._changed.set()
+            await asyncio.wait_for(finished.wait(), 1)
             assert w.chronicle.facts("line_none")[0]["occasion"] == second
             assert w.showrunner.occasions.pending == []
             assert any(record.exc_info for record in caplog.records)
@@ -879,12 +1212,12 @@ async def test_run_does_not_write_a_late_old_builder_failure_into_the_loaded_bra
         original_next = w.showrunner.occasions.next
         first = True
 
-        async def next_occasion():
+        async def next_occasion(**kwargs):
             nonlocal first
             if first:
                 first = False
                 return occasion()
-            return await original_next()
+            return await original_next(**kwargs)
 
         async def late_failure(*args, **kwargs):
             await w.keep(quest())
@@ -934,4 +1267,6 @@ async def test_pitch_uses_the_heros_place_and_budget_without_consuming_the_queue
         w.clock.t += 1
         result = await w.showrunner.pitch()
         assert result["fact"] == "line_skipped"
+        assert result["why"] and w.chronicle.facts("line_skipped") == [result]
+        assert w.showrunner.occasions.pending == [queued]
         assert len(w.llm.calls) == 1

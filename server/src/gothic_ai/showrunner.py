@@ -1,4 +1,4 @@
-"""The director's decision: occasion -> budget -> proposal -> canon -> builders -> chronicle.
+"""The director's decision: budget -> occasions -> proposal -> canon -> builders -> chronicle.
 
 Only the queue and an in-flight decision live in memory. Lines, partial casting and both clocks belong
 to the save branch, so loading restores the same budget without replaying a builder.
@@ -148,6 +148,11 @@ def minutes(at: Fact) -> int:
     return int(at["day"]) * 1440 + int(at["hour"]) * 60 + int(at["minute"])
 
 
+def occasion_members(occasion: Fact) -> list[Fact]:
+    """The original facts, independent of which one led the decision."""
+    return [{k: v for k, v in occasion.items() if k != "also"}, *occasion.get("also", [])]
+
+
 @dataclass
 class Budget:
     open_left: int
@@ -184,10 +189,20 @@ class Brief:
     budget: Budget
 
     def text(self) -> str:
+        leading, *others = occasion_members(self.occasion)
+        at = minutes({"day": self.day, "hour": self.hour, "minute": self.minute})
+        also = [
+            {
+                **f,
+                "давность в игровых минутах": max(0, at - minutes(f)),
+            }
+            for f in others
+        ]
         return "\n".join(
             [
                 "Повод (вид, место, время; deed — поступок героя; vanilla — событие квеста скриптов): "
-                + json.dumps(self.occasion, ensure_ascii=False),
+                + json.dumps(leading, ensure_ascii=False),
+                *(["Заодно: " + json.dumps(also, ensure_ascii=False)] if also else []),
                 f"Глава {self.chapter}, день {self.day}, {self.hour:02}:{self.minute:02}.",
                 "Место повода и места рядом (id — название и вид):",
                 *[f"- {p} — {s}" for p, s in self.places.items()],
@@ -269,6 +284,9 @@ class Showrunner:
         self._generation = 0
         self._work: asyncio.Task[Fact | None] | None = None
         self._building: _Build | None = None
+        self._budget_state: Fact | None = None
+        self._budget_checked = float("-inf")
+        self._budget_reason: str | None = None
         self.link.listeners.append(self._on_message)
 
     def _on_message(self, message: GameMessage) -> None:
@@ -278,6 +296,9 @@ class Showrunner:
                 # only be delivered after Session has switched the chronicle and the builders.
                 self._finish_build(self._building, ["постройка отменена загрузкой"])
             self._generation += 1
+            self._budget_state = None
+            self._budget_checked = float("-inf")
+            self._budget_reason = None
             if self._work is not None:
                 self._work.cancel()
 
@@ -319,6 +340,30 @@ class Showrunner:
 
     async def _state(self) -> Fact:
         return await self.link.story_state(vars=["KAPITEL", *self.author.graph.quests])
+
+    async def _ready(self) -> bool:
+        """Keep queued occasions until the budget opens, sampling game time once per poll."""
+        if self._lock.locked():
+            return False
+        now = self.occasions.clock()
+        if now - self._budget_checked >= self.occasions.poll_s:
+            generation = self._generation
+            self._budget_checked = now
+            self._budget_state = None
+            state = await self._state()
+            if generation != self._generation:
+                return False
+            self._budget_state = state
+        if self._budget_state is None:
+            return False
+        state = self._budget_state
+        budget = self.budget(int(state.get("vars", {}).get("KAPITEL") or 1), state)
+        # Real time and open quest progress can change without another bridge request.
+        reason = "; ".join(budget.reasons)
+        if reason and not self._budget_reason:
+            log.info("showrunner waiting for budget: %s", reason)
+        self._budget_reason = reason
+        return not budget.reasons
 
     async def brief(self, occasion: Fact, budget: Budget | None = None) -> Brief:
         state = await self._state()
@@ -378,7 +423,9 @@ class Showrunner:
                 quests.append(f"{q.id}: «{q.title}», {progress.state}, стадия {progress.stage}")
         facts = self.chronicle.facts()
         vanilla = [f for f in facts if f.get("fact") == "vanilla_quest"][-RECENT_DEEDS:]
-        event_quests = {f.get("quest") for f in [*vanilla, occasion.get("vanilla", {})]}
+        event_quests = {
+            f.get("quest") for f in [*vanilla, *(o.get("vanilla", {}) for o in occasion_members(occasion))]
+        }
         scripted = []
         for var, q in self.author.graph.quests.items():
             value = state.get("vars", {}).get(var)
@@ -502,9 +549,9 @@ class Showrunner:
             occasion = None
             generation = self._generation
             try:
-                occasion = await self.occasions.next()
+                occasion = await self.occasions.next(ready=self._ready)
                 generation = self._generation
-                await self.decide(occasion)
+                await self.decide(occasion, wait_budget=True)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -552,12 +599,12 @@ class Showrunner:
         self.chronicle.record(occasion)
         return await self.decide(occasion)
 
-    async def decide(self, occasion: Fact) -> Fact | None:
+    async def decide(self, occasion: Fact, *, wait_budget: bool = False) -> Fact | None:
         generation = self._generation
         async with self._lock:
             if generation != self._generation:
                 return None
-            self._work = asyncio.create_task(self._decide(occasion))
+            self._work = asyncio.create_task(self._decide(occasion, wait_budget=wait_budget))
             try:
                 result = await self._work
                 return result if generation == self._generation else None
@@ -574,13 +621,16 @@ class Showrunner:
         self.chronicle.record(fact)
         return fact
 
-    async def _decide(self, occasion: Fact) -> Fact | None:
+    async def _decide(self, occasion: Fact, *, wait_budget: bool = False) -> Fact | None:
         # A failed or refused occasion is used, too. Explicitly re-submitting it never replays a write.
+        members = occasion_members(occasion)
         used = next(
             (
                 f
                 for f in reversed(self.chronicle.facts())
-                if f.get("fact") in OUTCOMES and f.get("occasion") == occasion
+                if f.get("fact") in OUTCOMES
+                and f.get("occasion") is not None
+                and any(o in members for o in occasion_members(f["occasion"]))
             ),
             None,
         )
@@ -590,6 +640,11 @@ class Showrunner:
             state = await self._state()
             budget = self.budget(int(state.get("vars", {}).get("KAPITEL") or 1), state)
             if budget.reasons:
+                if wait_budget:
+                    # A console pitch can spend the budget after next() checked readiness but before
+                    # this decision acquired the lock. Keep the whole group for the next opening.
+                    self.occasions.put_back(occasion)
+                    return None
                 return self._record("line_skipped", occasion, why=budget.reasons)
             brief = await self._brief(occasion, budget, state)
             if not brief.candidates and not budget.people_left:

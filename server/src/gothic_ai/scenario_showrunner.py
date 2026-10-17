@@ -16,7 +16,7 @@ from .llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
 from .llm.fake import FakeBackend
 from .protocol import Saved, Session
 from .scenarios import _logged, _until, play_book_chain, wait_message
-from .showrunner import MIN_REAL_SECONDS, OUTCOMES
+from .showrunner import MIN_REAL_SECONDS, OUTCOMES, occasion_members
 
 if TYPE_CHECKING:
     from .showrunner import Showrunner
@@ -186,7 +186,7 @@ class ErrandScript:
 
 
 async def showrunner(link: GameLink, director: Showrunner, slot: int = 7) -> dict[str, str]:
-    """Arrived → canon retry → quest, early skip, tomorrow's none, then save/load of the budget.
+    """Arrived → canon retry → quest, queued arrival during the pause, then save/load of the budget.
 
     The running occasion watcher samples the real game. Only the director's wall clock is advanced in
     the scenario, so checking its fifteen-minute pause never requires a real fifteen-minute wait.
@@ -245,9 +245,13 @@ async def showrunner(link: GameLink, director: Showrunner, slot: int = 7) -> dic
     if not settled:
         return _logged({"arrived": f"failed (hero did not settle at {target.id}, {waypoint})"})
 
-    occasion = await asyncio.wait_for(service.next(), timeout=20)
-    while occasion.get("kind") != "arrived" or occasion.get("place") != target.id:
-        occasion = await asyncio.wait_for(service.next(), timeout=20)
+    handoff_timeout = service.max_gather_s + service.poll_s * 3
+    occasion = await asyncio.wait_for(service.next(), timeout=handoff_timeout)
+    while not any(
+        event.get("kind") == "arrived" and event.get("place") == target.id
+        for event in occasion_members(occasion)
+    ):
+        occasion = await asyncio.wait_for(service.next(), timeout=handoff_timeout)
     check("arrived", target.id in service.visited, f"{target.id}, {waypoint}")
     brief = await director.brief(occasion)
     giver = None
@@ -297,7 +301,7 @@ async def showrunner(link: GameLink, director: Showrunner, slot: int = 7) -> dic
         calls = len(script.calls)
         skipped = await director.pitch()
         check(
-            "early",
+            "pitch_paused",
             skipped is not None
             and skipped.get("fact") == "line_skipped"
             and len(script.calls) == calls
@@ -318,16 +322,88 @@ async def showrunner(link: GameLink, director: Showrunner, slot: int = 7) -> dic
             - hour * 60
             - minute
         )
-        wall[0] += 15 * 60 + 1
-        none = await director.pitch()
-        check(
-            "none",
-            elapsed >= 24 * 60
-            and len(script.calls) == calls + 1
-            and none is not None
-            and none.get("fact") == "line_none",
-            f"{elapsed} game minutes; {none}",
-        )
+        # Create the arrival after advancing the game day: an earlier arrival would correctly expire.
+        # The real-clock pause still holds, so the production consumer must leave this one queued.
+        waiting_targets = [p for p in targets if p.id not in service.visited]
+        if not waiting_targets:
+            return _logged({**results, "waiting_target": "failed (no second unvisited inhabited place)"})
+        waiting_target = min(waiting_targets, key=lambda p: math.dist(target.center or (0, 0, 0), p.center))
+        waiting_waypoint, waiting_residents = homes[waiting_target.id]
+        for npc in dict.fromkeys(waiting_residents):
+            await link.debug("skip_important", near=npc)
+        await service.poll()
+        async with service._lock:
+            service.pending.clear()
+            service._events.clear()
+        before_occasions = len(director.chronicle.facts("occasion"))
+        loop = asyncio.create_task(director.run())
+        waiting: dict[str, Any] | None = None
+
+        def uses_waiting(fact: dict[str, Any]) -> bool:
+            return waiting is not None and waiting in occasion_members(fact.get("occasion", {}))
+
+        def stop_on_outcome(fact: dict[str, Any]) -> None:
+            if fact.get("fact") in OUTCOMES - {"line_rejected"} and uses_waiting(fact):
+                loop.cancel()
+
+        director.chronicle.on_fact.append(stop_on_outcome)
+        try:
+            await link.debug("player_goto", waypoint=waiting_waypoint)
+
+            def arrival() -> dict[str, Any] | None:
+                return next(
+                    (
+                        fact
+                        for fact in director.chronicle.facts("occasion")[before_occasions:]
+                        if fact.get("kind") == "arrived" and fact.get("place") == waiting_target.id
+                    ),
+                    None,
+                )
+
+            if not await _until(arrival, 30):
+                check("queued_arrival", False, f"no arrival at {waiting_target.id}")
+                return _logged(results)
+            waiting = arrival()
+            await asyncio.sleep(service.gather_s + service.poll_s * 2)
+            used = [
+                fact
+                for fact in director.chronicle.facts()
+                if fact.get("fact") in OUTCOMES and uses_waiting(fact)
+            ]
+            check(
+                "queued_arrival",
+                waiting in service.pending and not used and len(script.calls) == calls,
+                f"{waiting_target.id}; queued={waiting in service.pending}; outcomes={len(used)}",
+            )
+            wall[0] += MIN_REAL_SECONDS + 1
+
+            def outcome() -> dict[str, Any] | None:
+                return next(
+                    (
+                        fact
+                        for fact in reversed(director.chronicle.facts())
+                        if fact.get("fact") in {"line", "line_none", "line_failed", "line_skipped"}
+                        and uses_waiting(fact)
+                    ),
+                    None,
+                )
+
+            await _until(outcome, 60)
+            none = outcome()
+            check(
+                "none",
+                elapsed >= 24 * 60
+                and len(script.calls) == calls + 1
+                and none is not None
+                and none.get("fact") == "line_none"
+                and waiting not in service.pending,
+                f"{elapsed} game minutes; {none}",
+            )
+        finally:
+            director.chronicle.on_fact.remove(stop_on_outcome)
+            loop.cancel()
+            with suppress(asyncio.CancelledError):
+                await loop
 
         at = await link.story_state(vars=["KAPITEL"])
         chapter = int(at.get("vars", {}).get("KAPITEL") or 1)
@@ -435,9 +511,8 @@ async def showrunner_live(link: GameLink, director: Showrunner) -> dict[str, str
         loop = asyncio.create_task(director.run())
 
         def stop_on_outcome(fact: dict[str, Any]) -> None:
-            if (
-                fact.get("fact") in OUTCOMES - {"line_rejected"}
-                and fact.get("occasion", {}).get("kind") == kind
+            if fact.get("fact") in OUTCOMES - {"line_rejected"} and any(
+                event.get("kind") == kind for event in occasion_members(fact.get("occasion", {}))
             ):
                 # Stop at the receipt, before run() can take a second incidental occasion.
                 loop.cancel()
@@ -464,7 +539,7 @@ async def showrunner_live(link: GameLink, director: Showrunner) -> dict[str, str
                         f
                         for f in reversed(director.chronicle.facts())
                         if f.get("fact") in OUTCOMES
-                        and f.get("occasion") == event
+                        and event in occasion_members(f.get("occasion", {}))
                         and (f["fact"] != "line_rejected" or director._work is None)
                     ),
                     None,

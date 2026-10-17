@@ -28,7 +28,7 @@ from .scenarios import (
     play_book_chain,
     wait_message,
 )
-from .showrunner import MIN_REAL_SECONDS, OUTCOMES
+from .showrunner import MIN_REAL_SECONDS, OUTCOMES, occasion_members
 
 if TYPE_CHECKING:
     from .questlog import QuestLog
@@ -308,12 +308,11 @@ async def vanilla_line_live(link: GameLink, director: Showrunner, quests: QuestL
         loop = asyncio.create_task(director.run())
 
         def stop_on_outcome(fact: dict[str, Any]) -> None:
-            event = fact.get("occasion", {})
-            if (
-                fact.get("fact") in OUTCOMES - {"line_rejected"}
-                and event.get("kind") == "vanilla"
+            if fact.get("fact") in OUTCOMES - {"line_rejected"} and any(
+                event.get("kind") == "vanilla"
                 and event.get("vanilla", {}).get("quest") == RUEBEN
                 and event["vanilla"].get("to") == state
+                for event in occasion_members(fact.get("occasion", {}))
             ):
                 loop.cancel()
 
@@ -333,7 +332,7 @@ async def vanilla_line_live(link: GameLink, director: Showrunner, quests: QuestL
                         fact
                         for fact in reversed(director.chronicle.facts())
                         if fact.get("fact") in OUTCOMES
-                        and fact.get("occasion") == event
+                        and event in occasion_members(fact.get("occasion", {}))
                         and (fact["fact"] != "line_rejected" or director._work is None)
                     ),
                     None,

@@ -41,7 +41,7 @@ def places():
 
 
 @asynccontextmanager
-async def world(places):
+async def world(places, *, gather=False):
     fake, clock, store = FakeGame(), Clock(), MemoryStore(":memory:")
     fake.nearest_waypoint = "ROAD_1"
     fake.vars["KAPITEL"] = 1
@@ -61,7 +61,8 @@ async def world(places):
     }
     async with connected(fake) as link:
         chronicle = Chronicle(link, store)
-        occasions = Occasions(link, chronicle, places, clock=clock, busy_poll_s=0.01)
+        options = {} if gather else {"gather_s": 0}
+        occasions = Occasions(link, chronicle, places, clock=clock, busy_poll_s=0.01, **options)
         yield fake, clock, chronicle, occasions
 
 
@@ -298,7 +299,8 @@ async def test_every_vanilla_quest_change_is_an_occasion_with_the_heros_current_
         await occasions.poll()
         assert occasions.current is None  # the event uses the live location, even before settling
         assert kinds(occasions) == ["vanilla", "vanilla"]
-        changes = [await occasions.next(), await occasions.next()]
+        result = await occasions.next()
+        changes = [{k: v for k, v in result.items() if k != "also"}, *result["also"]]
         assert [f["vanilla"] for f in changes] == [started, completed]
         assert all(f["place"] == "HOME" and f["people"] == [LOBART] for f in changes)
         assert all(f["waypoint"] == "HOME_1" for f in changes)
@@ -400,7 +402,7 @@ async def test_quiet_clock_survives_a_load_and_any_occasion_restarts_it(places):
         assert [f["kind"] for f in chronicle.facts("occasion")] == ["quiet", "deed", "quiet"]
 
 
-async def test_the_single_take_call_returns_priority_order_and_consumes_once(places):
+async def test_the_single_take_call_bundles_priority_order_and_consumes_once(places):
     async with world(places) as (fake, clock, chronicle, occasions):
         await settle(fake, clock, occasions, "ROAD")
         fake.day += 1
@@ -414,7 +416,8 @@ async def test_the_single_take_call_returns_priority_order_and_consumes_once(pla
         await occasions.poll()
         expected = ["deed", "vanilla", "chapter", "arrived", "quiet"]
         assert kinds(occasions) == expected
-        assert [(await occasions.next())["kind"] for _ in expected] == expected
+        result = await occasions.next()
+        assert [result["kind"], *(f["kind"] for f in result["also"])] == expected
         assert occasions.pending == []
         assert len(chronicle.facts("occasion")) == 5
 
@@ -496,8 +499,10 @@ async def test_next_waits_while_the_director_is_busy_then_takes_the_fresh_best(p
             chronicle.record({"fact": "found_out", "quest": "LIE"})
             await occasions.poll()
             setattr(fake, busy, False)
-            assert (await asyncio.wait_for(taking, 1))["kind"] == "deed"
-            assert kinds(occasions) == ["arrived"]
+            result = await asyncio.wait_for(taking, 1)
+            assert result["kind"] == "deed"
+            assert [f["kind"] for f in result["also"]] == ["arrived"]
+            assert occasions.pending == []
         finally:
             taking.cancel()
             await asyncio.gather(taking, return_exceptions=True)
@@ -579,3 +584,165 @@ async def test_next_passes_an_unexpected_handoff_failure_with_the_consumed_occas
         assert caught.value.occasion == pending
         assert isinstance(caught.value.error, RuntimeError)
         assert occasions.pending == []
+
+
+async def test_next_gathers_for_ten_seconds_after_the_latest_occasion_by_default(places):
+    async with world(places, gather=True) as (fake, clock, chronicle, occasions):
+        assert occasions.gather_s == 10 and occasions.max_gather_s == 30
+        await settle(fake, clock, occasions, "HOME")
+        arrival = dict(occasions.pending[0])
+        calls = sum(m["type"] in {"story_state", "story_eval"} for m in fake.received)
+        taking = asyncio.create_task(occasions.next())
+        try:
+            await asyncio.sleep(0.03)
+            assert not taking.done()
+            assert sum(m["type"] in {"story_state", "story_eval"} for m in fake.received) == calls
+            clock.t += 5
+            chronicle.record({"fact": "found_out", "quest": "LIE"})
+            await occasions.poll()
+            clock.t += 9.99
+            await occasions.poll()
+            await asyncio.sleep(0.03)
+            assert not taking.done()
+            clock.t += 0.01
+            await occasions.poll()
+            result = await asyncio.wait_for(taking, 1)
+            assert result["kind"] == "deed"
+            assert result["also"] == [arrival]
+            assert occasions.pending == []
+            assert all("also" not in f for f in chronicle.facts("occasion"))
+        finally:
+            taking.cancel()
+            await asyncio.gather(taking, return_exceptions=True)
+
+
+async def test_continuous_occasions_are_handed_off_at_the_thirty_second_limit(places):
+    async with world(places, gather=True) as (fake, clock, chronicle, occasions):
+        await settle(fake, clock, occasions, "HOME")
+        started = clock.t
+        taking = asyncio.create_task(occasions.next())
+        try:
+            for number in range(1, 7):
+                clock.t += 5
+                chronicle.record({"fact": "found_out", "quest": str(number)})
+                await occasions.poll()
+                if number < 6:
+                    await asyncio.sleep(0.03)
+                    assert not taking.done()
+            result = await asyncio.wait_for(taking, 1)
+            assert clock.t - started == occasions.max_gather_s
+            assert result["deed"]["quest"] == "1"
+            assert len(result["also"]) == 6
+            assert result["also"][-1]["kind"] == "arrived"
+            assert occasions.pending == []
+        finally:
+            taking.cancel()
+            await asyncio.gather(taking, return_exceptions=True)
+
+
+async def test_a_closed_budget_keeps_the_arrival_without_handoff_requests(places):
+    async with world(places) as (fake, clock, chronicle, occasions):
+        await settle(fake, clock, occasions, "HOME")
+        [arrival] = occasions.pending
+        budget_open = False
+        checked = asyncio.Event()
+
+        async def ready():
+            checked.set()
+            return budget_open
+
+        calls = sum(m["type"] in {"story_state", "story_eval"} for m in fake.received)
+        taking = asyncio.create_task(occasions.next(ready=ready))
+        try:
+            await asyncio.wait_for(checked.wait(), 1)
+            await asyncio.sleep(0.03)
+            assert not taking.done()
+            assert occasions.pending == [arrival]
+            assert sum(m["type"] in {"story_state", "story_eval"} for m in fake.received) == calls
+            clock.t += 300
+            budget_open = True
+            assert await asyncio.wait_for(taking, 1) == arrival
+            assert occasions.pending == []
+        finally:
+            taking.cancel()
+            await asyncio.gather(taking, return_exceptions=True)
+
+
+@pytest.mark.parametrize("expired_by", ["distance", "time"])
+async def test_the_watcher_expires_an_arrival_while_the_budget_is_closed(places, expired_by):
+    async with world(places) as (fake, clock, chronicle, occasions):
+        await settle(fake, clock, occasions, "HOME")
+        budget_open = False
+        checked = asyncio.Event()
+
+        async def ready():
+            checked.set()
+            return budget_open
+
+        taking = asyncio.create_task(occasions.next(ready=ready))
+        try:
+            await asyncio.wait_for(checked.wait(), 1)
+            if expired_by == "distance":
+                fake.nearest_waypoint = "ROAD_1"
+                fake.waypoint_distances.update(HOME_1=5001, HOME_2=5001)
+            else:
+                fake.day += 1
+            await occasions.poll()
+            assert "arrived" not in kinds(occasions)
+            assert not taking.done()
+            chronicle.record({"fact": "found_out", "quest": "FRESH"})
+            await occasions.poll()
+            budget_open = True
+            result = await asyncio.wait_for(taking, 1)
+            assert result["deed"]["quest"] == "FRESH"
+            assert all(f["kind"] != "arrived" for f in result.get("also", []))
+        finally:
+            taking.cancel()
+            await asyncio.gather(taking, return_exceptions=True)
+
+
+async def test_load_while_the_budget_check_waits_cannot_take_the_old_branch(places):
+    async with world(places) as (fake, clock, chronicle, occasions):
+        await settle(fake, clock, occasions, "HOME")
+        checking, resume = asyncio.Event(), asyncio.Event()
+
+        async def ready():
+            checking.set()
+            await resume.wait()
+            return True
+
+        taking = asyncio.create_task(occasions.next(ready=ready))
+        try:
+            await asyncio.wait_for(checking.wait(), 1)
+            await load(fake, chronicle)
+            resume.set()
+            await asyncio.sleep(0.03)
+            assert not taking.done()
+            assert occasions.pending == []
+            chronicle.record({"fact": "found_out", "quest": "NEW_BRANCH"})
+            await occasions.poll()
+            result = await asyncio.wait_for(taking, 1)
+            assert result["deed"]["quest"] == "NEW_BRANCH"
+            assert "also" not in result
+        finally:
+            resume.set()
+            taking.cancel()
+            await asyncio.gather(taking, return_exceptions=True)
+
+
+async def test_an_unexpected_handoff_failure_consumes_the_whole_bundle(places, monkeypatch):
+    async with world(places) as (fake, clock, chronicle, occasions):
+        await settle(fake, clock, occasions, "HOME")
+        chronicle.record({"fact": "found_out", "quest": "LIE"})
+        await occasions.poll()
+        deed, arrival = occasions.pending
+
+        async def broken(**kwargs):
+            raise RuntimeError("handoff broken")
+
+        monkeypatch.setattr(chronicle.link, "story_state", broken)
+        with pytest.raises(OccasionFailed) as caught:
+            await occasions.next()
+        assert caught.value.occasion == {**deed, "also": [arrival]}
+        assert occasions.pending == []
+        assert "also" not in deed and "also" not in arrival
