@@ -368,7 +368,7 @@ async def test_quest_changes_become_vanilla_occasions_between_deeds_and_chapters
         clock = Clock()
         people(w.fake)
         w.fake.nearest_waypoint = "ROAD_1"
-        occasions = Occasions(w.link, w.chronicle, places(), clock=clock, settle_s=0)
+        occasions = Occasions(w.link, w.chronicle, places(), clock=clock, settle_s=0, gather_s=0)
         await occasions.poll()
         w.fake.day += 1
         await occasions.poll()  # quiet
@@ -385,14 +385,16 @@ async def test_quest_changes_become_vanilla_occasions_between_deeds_and_chapters
         vanilla = occasions.pending[1]
         assert vanilla["vanilla"] == w.facts[0]
         assert (vanilla["place"], vanilla["waypoint"], vanilla["people"]) == ("HOME", "HOME_1", [LOBART])
-        assert [(await occasions.next())["kind"] for _ in expected] == expected
+        current = await occasions.next()
+        assert [current["kind"], *(f["kind"] for f in current["also"])] == expected
+        assert occasions.pending == []
 
 
 async def test_showrunner_decide_accepts_a_real_vanilla_occasion_without_special_logic(graph):
     async with world(graph) as w:
         people(w.fake)
         w.fake.nearest_waypoint = "HOME_1"
-        occasions = Occasions(w.link, w.chronicle, places(), settle_s=0)
+        occasions = Occasions(w.link, w.chronicle, places(), settle_s=0, gather_s=0)
         await occasions.poll()
         await occasions.next()  # first arrival
         w.fake.vars[QUEST] = 1
