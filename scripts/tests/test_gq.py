@@ -618,3 +618,17 @@ def test_legacy_retry_waits_for_prior_exec_stop_post_to_unload(gq, host, monkeyp
     q.tick()
     assert q.get(ident)["status"] == "starting"
     assert len(calls(host, "systemd-run")) == 2
+
+
+def test_unit_lock_holder_detects_orphaned_children_in_its_own_cgroup(gq, tmp_path):
+    membership = tmp_path / "membership"
+    group = tmp_path / "user.slice" / "gq-abc.service"
+    group.mkdir(parents=True)
+    membership.write_text("0::/user.slice/gq-abc.service\n")
+    (group / "cgroup.procs").write_text(f"{os.getpid()}\n999999\n")
+    assert gq.unit_has_children("abc", membership, tmp_path)
+    assert not gq.unit_has_children("another-unit", membership, tmp_path)
+    (group / "cgroup.procs").write_text(f"{os.getpid()}\n")
+    assert not gq.unit_has_children("abc", membership, tmp_path)
+    (group / "cgroup.procs").unlink()
+    assert gq.unit_has_children("abc", membership, tmp_path), "unreadable unit fails closed"

@@ -443,6 +443,27 @@ class Queue:
         return {"upper": ahead + (typical or 0), "typical": typical}
 
 
+
+def unit_has_children(job_id, membership_path=None, cgroup_root=None):
+    """Keep the in-unit lock holder alive until orphaned command children exit too."""
+    membership_path = Path(membership_path or "/proc/self/cgroup")
+    cgroup_root = Path(cgroup_root or "/sys/fs/cgroup")
+    try:
+        memberships = membership_path.read_text().splitlines()
+    except OSError:
+        return False  # Direct helper execution in the portable fake-systemd tests.
+    for membership in memberships:
+        fields = membership.split(":", 2)
+        if len(fields) != 3 or not fields[2].endswith(f"/gq-{job_id}.service"):
+            continue
+        try:
+            pids = (cgroup_root / fields[2].lstrip("/") / "cgroup.procs").read_text().split()
+        except OSError:
+            return True  # Fail closed: RuntimeMaxSec will still stop the unit.
+        return any(int(pid) != os.getpid() for pid in pids)
+    return False
+
+
 def execute(queue, job_id):
     job = queue.get(job_id)
     # A legacy EX can win the race between reservation and unit start. Never wait here:
@@ -466,6 +487,10 @@ def execute(queue, job_id):
             print(error, file=sys.stderr, flush=True)
             return 127
         while child.poll() is None:
+            if not alive(job.get("waiter")):
+                queue.cancel(job_id, job["owner"])
+            time.sleep(POLL)
+        while unit_has_children(job_id):
             if not alive(job.get("waiter")):
                 queue.cancel(job_id, job["owner"])
             time.sleep(POLL)
