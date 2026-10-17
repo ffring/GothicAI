@@ -1,0 +1,652 @@
+#!/usr/bin/env python3.14
+"""File-backed resource queue. Each submitted request has a finite waiter, no daemon.
+
+The only long-lived processes are pending submit waiters and running systemd units.
+All systemd calls happen outside queue.lock; starting reserves resources atomically.
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import json
+import math
+import os
+from pathlib import Path
+import re
+import select
+import shutil
+import signal
+import socket
+import statistics
+import subprocess
+import sys
+import time
+import uuid
+
+FORMAT_VERSION = 1
+GIB = 1024**3
+PROFILES = {
+    "ryzen": {
+        "live_cpus": "0,1,16,17",
+        "cpus": "2-15,18-31",
+        "threads": 28,
+        "mem": 20 * GIB,
+        "display": 1,
+        "gpu_mem": 10 * GIB,
+        "quiet": True,
+        "min_disk": 20 * GIB,
+    },
+}
+# The SSH alias and the machine hostname select the same host configuration.
+PROFILES["kaifaty-B550I-AORUS-PRO-AX"] = PROFILES["ryzen"]
+TERMINAL = {"done", "cancelled", "timeout", "failed"}
+ACTIVE = {"starting", "running"}
+SCRIPT = str(Path(__file__).resolve())
+POLL = 0.25
+
+
+class QueueError(Exception):
+    pass
+
+
+def duration(value):
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([smh]?)", value)
+    if not match:
+        raise argparse.ArgumentTypeError("время: секунды либо 30s, 15m, 2h")
+    number = float(match[1]) * {"": 1, "s": 1, "m": 60, "h": 3600}[match[2]]
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("время должно быть положительным")
+    return number
+
+
+def memory(value):
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGT]?)(?:I?B)?", value.upper())
+    if not match:
+        raise argparse.ArgumentTypeError("память: число байт либо 512M, 8G")
+    return int(float(match[1]) * 1024 ** (" KMGT".index(match[2]) if match[2] else 0))
+
+
+def process_token(pid):
+    try:
+        # comm may contain spaces and parentheses; fields after the final ')' are stable.
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        if fields[0] == "Z":
+            return None
+        return fields[19]
+    except (OSError, IndexError):
+        return None
+
+
+def alive(waiter):
+    return waiter is None or process_token(waiter["pid"]) == waiter["start"]
+
+
+def systemctl(*args):
+    return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+
+
+def exec_property(args):
+    # systemd's Exec* syntax, not shell syntax. Disable specifier/environment expansion.
+    return " ".join('"' + str(s).replace("\\", "\\\\").replace('"', '\\"')
+                    .replace("%", "%%").replace("$", "$$") + '"' for s in args)
+
+
+class Queue:
+    def __init__(self, home=None, profile=None, legacy_lock=None, proc_locks=None):
+        self.home = Path(home or os.environ.get("GQ_HOME", "~/gothic-ai/queue")).expanduser().resolve()
+        self.legacy_lock = Path(legacy_lock or os.environ.get(
+            "GQ_LEGACY_LOCK", "~/gothic-ai/body-simulation.lock")).expanduser().resolve()
+        self.proc_locks = Path(proc_locks or "/proc/locks")
+        key = profile or os.environ.get("GQ_PROFILE") or socket.gethostname()
+        if isinstance(key, dict):
+            self.profile = key
+            self.profile_name = "ryzen"
+        else:
+            if key not in PROFILES:
+                raise QueueError(f"неизвестный профиль {key!r}; задайте GQ_PROFILE=ryzen")
+            self.profile = PROFILES[key]
+            self.profile_name = key
+        self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        (self.home / "logs").mkdir(exist_ok=True, mode=0o700)
+        self.legacy_lock.parent.mkdir(parents=True, exist_ok=True)
+        self.legacy_lock.touch(exist_ok=True)
+        with self.transaction():
+            pass
+
+    def now(self):
+        return time.time()
+
+    def disk_free(self):
+        return shutil.disk_usage(self.home).free
+
+    @contextlib.contextmanager
+    def transaction(self):
+        with (self.home / "queue.lock").open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            path = self.home / "state.json"
+            state = json.loads(path.read_text()) if path.exists() else {"version": FORMAT_VERSION, "jobs": []}
+            if state.get("version") != FORMAT_VERSION:
+                raise QueueError(f"несовместимая версия формата {state.get('version')}; "
+                                 f"этот gq поддерживает {FORMAT_VERSION}. Установите совместимый gq; "
+                                 "не удаляйте состояние работающей очереди")
+            original = json.dumps(state, ensure_ascii=False)
+            yield state
+            data = json.dumps(state, ensure_ascii=False)
+            if data != original or not path.exists():
+                tmp = self.home / "state.json.tmp"
+                with tmp.open("w", encoding="utf-8") as output:
+                    os.chmod(tmp, 0o600)
+                    output.write(data + "\n")
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(tmp, path)
+
+    def event(self, job, event, **extra):
+        # Called only within a transaction: journal lines from different processes never interleave.
+        record = {k: job.get(k) for k in ("id", "owner", "class", "name", "threads", "mem",
+                                        "gpu_mem", "display", "max", "submitted", "start")}
+        record.update(event=event, time=self.now(), **extra)
+        with (self.home / "journal.jsonl").open("a", encoding="utf-8") as output:
+            os.chmod(output.name, 0o600)
+            output.write(json.dumps(record, ensure_ascii=False) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+
+    def jobs(self):
+        with self.transaction() as state:
+            return [dict(j) for j in state["jobs"]]
+
+    def get(self, job_id):
+        for job in self.jobs():
+            if job["id"] == job_id:
+                return job
+        raise QueueError(f"нет заявки {job_id}")
+
+    def validate(self, spec):
+        p = self.profile
+        if spec["class"] not in {"quick", "batch", "quiet"}:
+            raise QueueError("неизвестный класс")
+        if spec["class"] == "quiet" and not p["quiet"]:
+            raise QueueError("quiet недоступен: иди на Ryzen")
+        for key in ("threads", "mem", "max"):
+            if not math.isfinite(spec[key]) or spec[key] <= 0:
+                raise QueueError(f"{key} должен быть положительным")
+        if spec["threads"] > p["threads"] or spec["mem"] > p["mem"]:
+            raise QueueError("ресурсы заявки превышают ёмкость хоста")
+        if not 0 <= spec["gpu_mem"] <= p["gpu_mem"]:
+            raise QueueError("видеопамять заявки превышает ёмкость хоста")
+        if spec["class"] == "batch" and spec["max"] > 7200:
+            raise QueueError("--max для batch не больше 2h")
+        if not spec["command"]:
+            raise QueueError("после -- нужна команда")
+
+    def submit(self, spec, waiter=None):
+        spec = dict(spec)
+        spec.setdefault("gpu_mem", 0)
+        spec.setdefault("display", False)
+        spec.setdefault("owner", os.environ.get("GQ_OWNER", Path.cwd().name))
+        self.validate(spec)
+        job = dict(spec, id=uuid.uuid4().hex[:12], status="queued", submitted=self.now(),
+                   start=None, waiter=waiter, cwd=str(Path.cwd()), env=dict(os.environ))
+        with self.transaction() as state:
+            state["jobs"].append(job)
+            self.event(job, "submitted")
+        return job["id"]
+
+    def terminal(self, job, reason, code):
+        if job["status"] in TERMINAL:
+            return
+        end = self.now()
+        job.update(status=reason, reason=reason, code=code, end=end)
+        self.event(job, "finished", reason=reason, code=code,
+                   wait=(job["start"] or end) - job["submitted"],
+                   duration=end - job["start"] if job["start"] else 0)
+
+    def cancel(self, job_id, owner, force=False, reason="cancelled"):
+        stop = False
+        found = False
+        with self.transaction() as state:
+            for job in state["jobs"]:
+                if job["id"] != job_id:
+                    continue
+                found = True
+                if job["owner"] != owner and not force:
+                    raise QueueError("чужая заявка: нужен --force")
+                if job["status"] in ACTIVE:
+                    job["cancel_reason"] = reason
+                    stop = True
+                elif job["status"] == "queued":
+                    self.terminal(job, reason, 143)
+        if not found:
+            raise QueueError(f"нет заявки {job_id}")
+        if stop:
+            systemctl("stop", "--no-block", f"gq-{job_id}.service")
+
+    def finish(self, job_id, result, exit_code="exited", exit_status="0"):
+        with self.transaction() as state:
+            for job in state["jobs"]:
+                if job["id"] != job_id or job["status"] in TERMINAL:
+                    continue
+                if job.get("retry") and not job.get("cancel_reason"):
+                    job.update(status="queued", start=None, retry_pending=True)
+                    job.pop("retry", None)
+                    self.event(job, "deferred", reason="legacy lock")
+                    continue
+                try:
+                    code = int(exit_status)
+                except ValueError:
+                    code = 128 + getattr(signal, "SIG" + exit_status, 1)
+                if exit_code != "exited" and code < 128:
+                    code += 128
+                reason = job.get("cancel_reason") or ("timeout" if result == "timeout" else
+                         "done" if result == "success" and code == 0 else "failed")
+                if reason == "timeout":
+                    code = 124
+                elif reason == "cancelled":
+                    code = 143
+                self.terminal(job, reason, code)
+
+    def started(self, job_id):
+        with self.transaction() as state:
+            for job in state["jobs"]:
+                if job["id"] == job_id and job["status"] == "starting" and not job.get("cancel_reason"):
+                    job.update(status="running", start=self.now())
+                    self.event(job, "started")
+                    return True
+        return False
+
+    def reconcile(self):
+        snapshot = self.jobs()
+        for job in snapshot:
+            if job.get("retry_pending") and job["status"] == "queued":
+                previous = systemctl("show", f"gq-{job['id']}.service", "--property=LoadState")
+                if "LoadState=not-found" in previous.stdout.splitlines():
+                    with self.transaction() as state:
+                        for current in state["jobs"]:
+                            if current["id"] == job["id"]:
+                                current.pop("retry_pending", None)
+            if job["status"] not in TERMINAL and not alive(job.get("waiter")):
+                self.cancel(job["id"], job["owner"])
+            if job["status"] not in ACTIVE:
+                continue
+            # ExecStopPost normally finalizes. Recover after reboot or failed/missing callback.
+            result = systemctl("show", f"gq-{job['id']}.service", "--property=LoadState,ActiveState,Result,ExecMainCode,ExecMainStatus")
+            props = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+            missing = props.get("LoadState") == "not-found"
+            if result.returncode and not missing:
+                continue  # A transient bus error must not free a live job's resources.
+            if missing and job.get("launcher") and alive(job["launcher"]) and self.now() - job["reserved"] < 30:
+                continue
+            if missing and self.now() - job.get("reserved", self.now()) > 5:
+                self.finish(job["id"], "failed", "exited", "1")
+                continue
+            active = props.get("ActiveState", "")
+            if active in {"inactive", "failed"} and self.now() - job.get("reserved", self.now()) > 5:
+                self.finish(job["id"], props.get("Result", "failed"),
+                            "exited" if props.get("ExecMainCode") == "1" else "killed",
+                            props.get("ExecMainStatus", "1"))
+
+    def legacy_waiting(self):
+        stat = self.legacy_lock.stat()
+        try:
+            lines = self.proc_locks.read_text().splitlines()
+        except OSError as error:
+            raise QueueError(f"нельзя прочитать {self.proc_locks}: {error}") from error
+        for line in lines:
+            parts = line.split()
+            if "->" not in parts or "FLOCK" not in parts or "WRITE" not in parts:
+                continue
+            for part in parts:
+                if part.count(":") != 2:
+                    continue
+                try:
+                    major, minor, inode = part.split(":")
+                    if (int(major, 16), int(minor, 16), int(inode)) == (
+                            os.major(stat.st_dev), os.minor(stat.st_dev), stat.st_ino):
+                        return True
+                except ValueError:
+                    continue
+        return False
+
+    @contextlib.contextmanager
+    def legacy_probe(self, quiet=False):
+        with self.legacy_lock.open("a+") as lock:
+            try:
+                fcntl.flock(lock, (fcntl.LOCK_EX if quiet else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+            else:
+                yield True
+
+    def tick(self):
+        self.reconcile()
+        free = self.disk_free()
+        legacy_waiting = self.legacy_waiting()
+        launch = []
+        with self.transaction() as state:
+            jobs = state["jobs"]
+            active = [j for j in jobs if j["status"] in ACTIVE]
+            queued = [j for j in jobs if j["status"] == "queued"]
+            quiet_waiting = legacy_waiting or any(j["class"] == "quiet" for j in queued)
+            if free < self.profile["min_disk"] or any(j["class"] == "quiet" for j in active):
+                return
+            batch_blocked = False
+            for job in queued:
+                if job.get("retry_pending"):
+                    continue
+                kind = job["class"]
+                if kind == "batch":
+                    other_waits = any(j["status"] == "queued" and j["class"] == "batch"
+                                      and j["owner"] != job["owner"] for j in queued)
+                    same_active = any(j["class"] == "batch" and j["owner"] == job["owner"] for j in active)
+                    if quiet_waiting or batch_blocked or (other_waits and same_active):
+                        # Fairness skips this owner's second job so the waiting owner can run.
+                        if not (other_waits and same_active):
+                            batch_blocked = True
+                        continue
+                    if sum(j["threads"] for j in active if j["class"] == "batch") + job["threads"] > self.profile["threads"]:
+                        batch_blocked = True
+                        continue
+                if kind == "quiet" and (active or legacy_waiting):
+                    continue
+                if kind == "quick" and quiet_waiting:
+                    last_batch = max(((j["start"] or j.get("reserved", self.now())) + j["max"]
+                                      for j in active if j["class"] == "batch"), default=0)
+                    if self.now() + job["max"] >= last_batch:
+                        continue
+                if any(sum(j[resource] for j in active) + job[resource] > self.profile[resource]
+                       for resource in ("mem", "gpu_mem", "display")):
+                    if kind == "batch":
+                        batch_blocked = True
+                    continue
+                with self.legacy_probe(kind == "quiet") as available:
+                    if not available:
+                        continue
+                job.update(status="starting", reserved=self.now(),
+                           launcher={"pid": os.getpid(), "start": process_token(os.getpid())})
+                active.append(job)
+                launch.append(dict(job))
+                if kind == "quiet":
+                    break
+        for job in launch:
+            self.launch(job)
+
+    def launch(self, job):
+        # Recheck cancellation after releasing the reservation transaction.
+        current = self.get(job["id"])
+        if current.get("cancel_reason"):
+            self.finish(job["id"], "cancelled", "exited", "143")
+            return
+        env = {**job["env"], "GQ_HOME": str(self.home), "GQ_LEGACY_LOCK": str(self.legacy_lock),
+               "GQ_PROFILE": self.profile_name}
+        internal = [sys.executable, SCRIPT]
+        post = exec_property(["/usr/bin/env", *(f"{k}={env[k]}" for k in (
+            "GQ_HOME", "GQ_LEGACY_LOCK", "GQ_PROFILE")), *internal, "_finish", job["id"]])
+        props = {
+            "CPUAffinity": self.profile["cpus"].replace(",", " "),
+            "CPUWeight": 10 if job["class"] == "batch" else 100,
+            "Nice": 19 if job["class"] == "batch" else 0,
+            "MemoryMax": job["mem"], "RuntimeMaxSec": f"{job['max'] * 1.25:g}s",
+            "TimeoutStopSec": 60, "KillMode": "control-group", "ExecStopPost": post,
+            "WorkingDirectory": job["cwd"],
+            "StandardOutput": "append:" + str(self.home / "logs" / f"{job['id']}.log"),
+            "StandardError": "inherit",
+        }
+        args = ["systemd-run", "--user", "--quiet", "--unit", "gq-" + job["id"]]
+        args += [f"--property={k}={v}" for k, v in props.items()]
+        args += [f"--setenv={k}={v}" for k, v in env.items() if k not in {
+            "SERVICE_RESULT", "EXIT_CODE", "EXIT_STATUS", "INVOCATION_ID", "NOTIFY_SOCKET"}]
+        args += ["--", *internal, "_execute", job["id"]]
+        try:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=15)
+            if result.returncode:
+                self.append_log(job["id"], result.stderr)
+                self.finish(job["id"], "failed", "exited", str(result.returncode))
+            elif self.get(job["id"]).get("cancel_reason"):
+                systemctl("stop", "--no-block", "gq-" + job["id"] + ".service")
+        except OSError as error:
+            self.append_log(job["id"], str(error) + "\n")
+            self.finish(job["id"], "failed", "exited", "127")
+        except subprocess.TimeoutExpired as error:
+            # A timed-out D-Bus request may have started the unit. Stop before releasing resources.
+            self.append_log(job["id"], str(error) + "\n")
+            self.cancel(job["id"], job["owner"])
+
+    def append_log(self, job_id, text):
+        with (self.home / "logs" / f"{job_id}.log").open("a") as output:
+            output.write(text)
+
+    def estimate(self, job_id):
+        jobs = self.jobs()
+        target = self.get(job_id)
+        ahead = 0
+        for job in jobs:
+            if job["id"] == job_id:
+                break
+            if job["status"] in ACTIVE:
+                ahead += job["max"]
+            elif job["status"] == "queued":
+                ahead += job["max"]
+        history = []
+        path = self.home / "journal.jsonl"
+        if path.exists():
+            for line in path.read_text().splitlines():
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (record.get("event") == "finished" and record.get("reason") == "done"
+                        and record.get("name") == target["name"]):
+                    history.append(record["duration"])
+        typical = statistics.median(history) if history else None
+        return {"upper": ahead + (typical or 0), "typical": typical}
+
+
+def execute(queue, job_id):
+    job = queue.get(job_id)
+    # A legacy EX can win the race between reservation and unit start. Never wait here:
+    # retry admission instead, so RuntimeMaxSec measures work, not lock waiting.
+    with queue.legacy_probe(job["class"] == "quiet") as acquired:
+        if not acquired:
+            with queue.transaction() as state:
+                for current in state["jobs"]:
+                    if current["id"] == job_id:
+                        current["retry"] = True
+            return 0
+        if not queue.started(job_id):
+            return 143
+        # systemd sends TERM to the whole cgroup. Keep this lock holder alive while
+        # the command shuts down; SIGKILL after TimeoutStopSec ends the whole cgroup.
+        signal.signal(signal.SIGTERM, lambda *_: None)
+        signal.signal(signal.SIGINT, lambda *_: None)
+        try:
+            child = subprocess.Popen(job["command"], stdin=subprocess.DEVNULL)
+        except OSError as error:
+            print(error, file=sys.stderr, flush=True)
+            return 127
+        while child.poll() is None:
+            if not alive(job.get("waiter")):
+                queue.cancel(job_id, job["owner"])
+            time.sleep(POLL)
+        return child.returncode if child.returncode >= 0 else 128 - child.returncode
+
+
+def pump(queue, job_id):
+    # One finite waiter per submit, detached from SSH. It exits as soon as its job ends.
+    while queue.get(job_id)["status"] not in TERMINAL:
+        queue.tick()
+        time.sleep(POLL)
+    return 0
+
+
+def spawn_pump(queue, job_id):
+    env = {**os.environ, "GQ_HOME": str(queue.home), "GQ_PROFILE": queue.profile_name,
+           "GQ_LEGACY_LOCK": str(queue.legacy_lock)}
+    subprocess.Popen([sys.executable, SCRIPT, "_pump", job_id], env=env, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def stream_log(queue, job_id, offset):
+    path = queue.home / "logs" / f"{job_id}.log"
+    if path.exists():
+        with path.open("rb") as log:
+            log.seek(offset)
+            chunk = log.read()
+            if chunk:
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+            return log.tell()
+    return offset
+
+
+def wait_job(queue, job_id, run=False, wait_max=None, follow=True):
+    started = queue.now()
+    next_report = 0
+    offset = 0
+    disconnected = False
+
+    def interrupted(signum, frame):
+        nonlocal disconnected
+        disconnected = True
+
+    old = {}
+    if run:
+        for signum in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+            old[signum] = signal.signal(signum, interrupted)
+    try:
+        while True:
+            if run and not disconnected:
+                try:
+                    if select.select([sys.stdin], [], [], 0)[0]:
+                        disconnected = not bool(os.read(sys.stdin.fileno(), 4096))
+                except (OSError, ValueError):
+                    disconnected = True
+            if disconnected:
+                queue.cancel(job_id, queue.get(job_id)["owner"])
+            queue.tick()
+            job = queue.get(job_id)
+            if follow:
+                offset = stream_log(queue, job_id, offset)
+            if job["status"] in TERMINAL:
+                return job["code"]
+            if wait_max is not None and job["status"] == "queued" and queue.now() - started >= wait_max:
+                queue.cancel(job_id, job["owner"])
+                print("Ryzen занят", file=sys.stderr)
+                return 75
+            if job["status"] == "queued" and queue.now() >= next_report:
+                waiting = [j["id"] for j in queue.jobs() if j["status"] == "queued"]
+                estimate = queue.estimate(job_id)
+                typical = f", медиана имени {estimate['typical']:.0f}s" if estimate["typical"] is not None else ""
+                print(f"gq {job_id}: место {waiting.index(job_id) + 1}, старт ≤ {estimate['upper']:.0f}s{typical}",
+                      file=sys.stderr, flush=True)
+                next_report = queue.now() + 60
+            time.sleep(POLL)
+    finally:
+        for signum, handler in old.items():
+            signal.signal(signum, handler)
+
+
+def owner():
+    return os.environ.get("GQ_OWNER", Path.cwd().name)
+
+
+def status(queue):
+    print("ID           ВЛАДЕЛЕЦ         КЛАСС  СОСТОЯНИЕ  РЕСУРСЫ                         СТАРТ    ПОТОЛОК ОЦЕНКА")
+    for job in queue.jobs():
+        if job["status"] in TERMINAL:
+            continue
+        resources = f"{job['threads']}t {job['mem']/GIB:g}G gpu={job['gpu_mem']/GIB:g}G окно={int(job['display'])}"
+        start = time.strftime("%H:%M:%S", time.localtime(job["start"])) if job["start"] else "—"
+        estimate = queue.estimate(job["id"])
+        typical = f" median={estimate['typical']:.0f}s" if estimate["typical"] is not None else ""
+        print(f"{job['id']} {job['owner'][:16]:16} {job['class']:6} {job['status']:10} "
+              f"{resources:31} {start:8} {job['max']:g}s ≤{estimate['upper']:.0f}s{typical}")
+    free = queue.disk_free()
+    print(f"Диск: свободно {free/GIB:.1f}G; минимум {queue.profile['min_disk']/GIB:g}G")
+    if queue.legacy_waiting():
+        print("Старый LOCK_EX ждёт: допуск batch остановлен, машина осушается")
+    if free < queue.profile["min_disk"]:
+        print("Мало места: новые заявки остановлены. Крупные папки:")
+        result = subprocess.run(["du", "-h", "--max-depth=1", str(Path.home() / "gothic-ai")],
+                                capture_output=True, text=True)
+        print(result.stdout, end="")
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__)
+    sub = p.add_subparsers(dest="action", required=True)
+    for name in ("run", "submit"):
+        r = sub.add_parser(name)
+        r.add_argument("--class", dest="class_", choices=["quick", "batch", "quiet"], required=True)
+        r.add_argument("--threads", type=int, required=True)
+        r.add_argument("--mem", type=memory, required=True)
+        r.add_argument("--gpu-mem", type=memory, default=0)
+        r.add_argument("--display", action="store_true")
+        r.add_argument("--max", type=duration, required=True)
+        r.add_argument("--name", required=True)
+        if name == "run":
+            r.add_argument("--wait-max", type=float)
+        r.add_argument("command", nargs=argparse.REMAINDER)
+    sub.add_parser("status")
+    for name in ("wait", "logs", "cancel", "_execute", "_finish", "_pump"):
+        r = sub.add_parser(name)
+        r.add_argument("id")
+        if name == "logs":
+            r.add_argument("-f", "--follow", action="store_true")
+        if name == "cancel":
+            r.add_argument("--force", action="store_true")
+    return p
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    try:
+        queue = Queue()
+        if args.action == "_execute":
+            return execute(queue, args.id)
+        if args.action == "_finish":
+            queue.finish(args.id, os.environ.get("SERVICE_RESULT", "failed"),
+                         os.environ.get("EXIT_CODE", "exited"), os.environ.get("EXIT_STATUS", "1"))
+            return 0
+        if args.action == "_pump":
+            return pump(queue, args.id)
+        queue.tick()
+        if args.action in {"submit", "run"}:
+            if args.action == "run" and args.wait_max is not None and (not math.isfinite(args.wait_max) or args.wait_max < 0):
+                raise QueueError("--wait-max должен быть неотрицательным")
+            command = args.command[1:] if args.command[:1] == ["--"] else args.command
+            waiter = {"pid": os.getpid(), "start": process_token(os.getpid())} if args.action == "run" else None
+            job_id = queue.submit({
+                "class": args.class_, "threads": args.threads, "mem": args.mem, "gpu_mem": args.gpu_mem,
+                "display": args.display, "max": args.max, "name": args.name, "owner": owner(), "command": command}, waiter)
+            if args.action == "submit":
+                spawn_pump(queue, job_id)
+                print(job_id, flush=True)
+                return 0
+            return wait_job(queue, job_id, run=True, wait_max=args.wait_max)
+        if args.action == "status":
+            status(queue)
+        elif args.action == "cancel":
+            queue.cancel(args.id, owner(), force=args.force)
+            queue.tick()
+        elif args.action == "wait":
+            queue.get(args.id)
+            return wait_job(queue, args.id)
+        elif args.action == "logs":
+            queue.get(args.id)
+            offset = 0
+            while True:
+                offset = stream_log(queue, args.id, offset)
+                if not args.follow or queue.get(args.id)["status"] in TERMINAL:
+                    break
+                queue.tick()
+                time.sleep(POLL)
+        return 0
+    except (QueueError, OSError, ValueError) as error:
+        print(f"gq: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

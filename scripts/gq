@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Forward queue commands to a host; all scheduling lives in gq.py there."""
+
+import os
+from pathlib import Path
+import shlex
+import signal
+import subprocess
+import sys
+
+
+USAGE = """Usage: scripts/gq [--host HOST] COMMAND [ARGS...]
+       scripts/gq install [HOST]
+
+HOST defaults to ryzen. --host is accepted before the command's -- separator.
+Commands: run, submit, status, wait, logs, cancel.
+Run scripts/gq run --help for job options.
+"""
+
+
+def parse_host(argv):
+    host = "ryzen"
+    selected = False
+    forwarded = []
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--":
+            forwarded.extend(argv[index:])
+            break
+        if arg == "--host":
+            index += 1
+            if index == len(argv):
+                raise ValueError("--host needs a host name")
+            host, selected = argv[index], True
+        elif arg.startswith("--host="):
+            host, selected = arg.split("=", 1)[1], True
+        else:
+            forwarded.append(arg)
+        index += 1
+    if forwarded and forwarded[0] == "install":
+        if len(forwarded) > 2:
+            raise ValueError("install accepts one host name")
+        if len(forwarded) == 2:
+            if selected and host != forwarded[1]:
+                raise ValueError("install host differs from --host")
+            host = forwarded[1]
+    if not host or host.startswith("-") or any(c.isspace() for c in host):
+        raise ValueError("invalid SSH host name")
+    return host, forwarded
+
+
+def owner():
+    if "GQ_OWNER" in os.environ:
+        return os.environ["GQ_OWNER"]
+    root = Path(__file__).resolve().parent.parent
+    if "worktrees" in root.parts[:-2]:
+        return root.parent.name
+    return root.name
+
+
+def ssh_command(host, command):
+    return ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+            "--", host, command]
+
+
+def install(host):
+    # Upload into the destination filesystem and rename only after a full copy.
+    command = """set -eu
+umask 022
+mkdir -p "$HOME/gothic-ai/bin"
+gq_upload=$(mktemp "$HOME/gothic-ai/bin/.gq.XXXXXX")
+trap 'rm -f -- "$gq_upload"' EXIT HUP INT TERM
+cat > "$gq_upload"
+chmod 755 "$gq_upload"
+mv -f -- "$gq_upload" "$HOME/gothic-ai/bin/gq"
+"""
+    with Path(__file__).with_name("gq.py").open("rb") as source:
+        return subprocess.call(ssh_command(host, command), stdin=source)
+
+
+def forward(host, argv):
+    assignments = ["GQ_OWNER=" + owner()]
+    for name in ("GQ_HOME", "GQ_LEGACY_LOCK", "GQ_PROFILE"):
+        if name in os.environ:
+            assignments.append(name + "=" + os.environ[name])
+    command = ("exec env " + shlex.join(assignments)
+               + ' "$HOME/gothic-ai/bin/gq" ' + shlex.join(argv))
+    # A private pipe stays open even when a caller supplies /dev/null. The
+    # remote run watches its EOF, which then means this wrapper/SSH has died.
+    child = subprocess.Popen(ssh_command(host, command),
+                             stdin=subprocess.PIPE if argv[0] == "run" else subprocess.DEVNULL)
+
+    def stop(signum, _frame):
+        if child.poll() is None:
+            child.send_signal(signum)
+
+    previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        result = child.wait()
+    finally:
+        if child.stdin is not None:
+            child.stdin.close()
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    return result if result >= 0 else 128 - result
+
+
+def main():
+    try:
+        host, argv = parse_host(sys.argv[1:])
+        if not argv or argv[0] in ("-h", "--help"):
+            print(USAGE, end="", file=sys.stdout if argv else sys.stderr)
+            return 0 if argv else 2
+        return install(host) if argv[0] == "install" else forward(host, argv)
+    except (OSError, ValueError) as exc:
+        print(f"gq: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
