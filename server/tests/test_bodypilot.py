@@ -317,6 +317,8 @@ class Policy:
         self.reset_waiter = None
         self.step_waiter = None
         self.step_delay = 0
+        self.step_delays = deque()
+        self.step_response_actions = deque()
         self.on_step = None
 
     def commands(self, kind):
@@ -343,8 +345,9 @@ class Policy:
                 elif command == "step":
                     if self.on_step is not None:
                         self.on_step(request)
-                    if self.step_delay:
-                        await asyncio.sleep(self.step_delay)
+                    delay = self.step_delays.popleft() if self.step_delays else self.step_delay
+                    if delay:
+                        await asyncio.sleep(delay)
                     if self.step_waiter is not None:
                         await self.step_waiter.wait()
                     if self.step_mode == "disconnect":
@@ -358,9 +361,10 @@ class Policy:
                     else:
                         row = request["observation"]
                         eligible = row["can_decide"] and row["action_mask_valid"]
+                        action = self.step_response_actions.popleft() if self.step_response_actions else 1
                         result.update(
                             status="decision" if eligible else "locked",
-                            action_id=1 if eligible else None,
+                            action_id=action if eligible else None,
                             reason="accepted" if eligible else "memory_only",
                         )
                 elif command == "end_episode":
@@ -1426,7 +1430,95 @@ async def test_watch_timeout_clears_applied_subscription_and_ignores_late_replie
         assert not summary.watch_removed
 
 
-@pytest.mark.parametrize("mode", ["fallback", "error", "disconnect", "timeout"])
+@pytest.mark.parametrize("late_count", [1, 3])
+async def test_late_step_replies_do_not_act_or_steal_the_next_request_and_timely_reply_resets(late_count):
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_delays.extend([0.120] * late_count)
+        # If an old reply were matched to a new row, this invalid action would
+        # terminate the pilot. Only the timely reply authorizes the legal action.
+        rig.policy.step_response_actions.extend([11] * late_count + [1])
+        for count, seq in enumerate(range(4, 4 + late_count), 1):
+            rig.bridge.emit(fighter(seq, owned=True))
+            await eventually(lambda count=count: rig.pilot._policy_timeouts == count)
+            assert rig.pilot._policy_timeouts_consecutive == count
+            assert rig.link.body_owned("NPC")
+            assert len(rig.bridge.commands("body_action")) == 1
+            assert not rig.bridge.commands("body_release")
+        fresh_seq = 4 + late_count
+        rig.bridge.emit(fighter(fresh_seq, owned=True))
+        await eventually(lambda: rig.pilot._decisions == 2)
+        assert rig.pilot._policy_timeouts_consecutive == 0
+        assert rig.pilot._policy_watchdog_task is None
+        assert not rig.pilot.client.pending
+        assert [cmd["observation_seq"] for cmd in rig.bridge.commands("body_action")] == [3, fresh_seq]
+
+        # A later isolated timeout starts a new streak rather than exhausting the
+        # earlier one. A memory-only timely reply also resets that streak.
+        rig.policy.step_delays.append(0.120)
+        rig.policy.step_response_actions.extend([11, 1])
+        rig.bridge.emit(fighter(fresh_seq + 1, owned=True))
+        await eventually(lambda: rig.pilot._policy_timeouts == late_count + 1)
+        assert rig.pilot._policy_timeouts_consecutive == 1
+        rig.bridge.emit(fighter(fresh_seq + 2, owned=True, can_decide=False))
+        await eventually(lambda: rig.pilot._policy_timeouts_consecutive == 0)
+        assert len(rig.bridge.commands("body_action")) == 2
+        row = fighter(fresh_seq + 3, owned=True)
+        row["self"]["down"] = True
+        rig.bridge.emit(row)
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "npc_down" and summary.decisions == 2
+        assert summary.policy_timeouts == late_count + 1 and summary.policy_timeouts_consecutive == 0
+        assert summary.policy_timeout_wait_p95_ms is not None
+        assert summary.policy_response_silence_ms is None
+        assert summary.release_confirmed and summary.watch_removed
+        assert rig.pilot._policy_timeouts == rig.pilot._policy_timeouts_consecutive == 0
+
+
+async def test_five_consecutive_late_steps_end_and_restore_native_before_any_late_action(caplog):
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_delays.extend([0.120] * 5)
+        rig.policy.step_response_actions.extend([11] * 5)
+        for count, seq in enumerate(range(4, 8), 1):
+            rig.bridge.emit(fighter(seq, owned=True))
+            await eventually(lambda count=count: rig.pilot._policy_timeouts_consecutive == count)
+            assert not rig.bridge.commands("body_release")
+        rig.bridge.emit(fighter(8, owned=True))
+        await rig.ended()
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "policy_timeout" and summary.decisions == 1
+        assert summary.policy_timeouts == summary.policy_timeouts_consecutive == 5
+        assert summary.policy_timeout_wait_p95_ms is not None
+        assert summary.release_confirmed and summary.watch_removed
+        assert len(rig.bridge.commands("body_action")) == 1
+        assert "policy_timeouts=5 policy_timeouts_consecutive=5" in caplog.text
+
+
+async def test_one_second_without_policy_response_ends_even_without_more_observations():
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_mode = "timeout"
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: rig.pilot._policy_timeouts == 1)
+        assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
+        # The fake game sends no more rows, and its injected game clock never
+        # advances. The service-silence guard must still use wall time.
+        await rig.ended()
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "policy_timeout"
+        assert summary.policy_timeouts == summary.policy_timeouts_consecutive == 1
+        assert summary.policy_response_silence_ms >= 1000
+        assert len(rig.policy.commands("step")) == 2
+        assert len(rig.bridge.commands("body_action")) == 1
+        assert summary.release_confirmed and summary.watch_removed
+
+
+@pytest.mark.parametrize("mode", ["fallback", "error", "disconnect"])
 async def test_service_failure_releases_to_native_and_does_not_block_loop(mode):
     async with running() as rig:
         await rig.active()

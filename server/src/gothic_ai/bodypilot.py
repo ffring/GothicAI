@@ -33,6 +33,8 @@ from .protocol import (
 
 log = logging.getLogger(__name__)
 SERVICE_TIMEOUT = 0.100
+POLICY_TIMEOUT_LIMIT = 5
+POLICY_RESPONSE_TIMEOUT = 1.0
 BRIDGE_TIMEOUT = 0.250
 ACQUIRE_INTERVAL = 0.150
 ACQUIRE_WINDOW = 5.0
@@ -76,6 +78,8 @@ class PolicyClient:
         self.reader_task: asyncio.Task[None] | None = None
         self.pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self.ids = itertools.count(1)
+        self.last_response_at: float | None = None
+        self.response_received = asyncio.Event()
 
     async def connect(self) -> None:
         async with asyncio.timeout(SERVICE_TIMEOUT):
@@ -90,6 +94,8 @@ class PolicyClient:
                 response = json.loads(line)
                 if not isinstance(response, dict) or type(response.get("id")) is not int:
                     raise PolicyError("invalid policy response identity")
+                self.last_response_at = asyncio.get_running_loop().time()
+                self.response_received.set()
                 future = self.pending.get(response["id"])
                 if future is not None and not future.done():
                     future.set_result(response)
@@ -161,6 +167,10 @@ class FightSummary:
     acquire_wait_max_ms: float | None
     action_rejections: tuple[tuple[str, int], ...]
     transient_rejections_consecutive: int
+    policy_timeouts: int
+    policy_timeouts_consecutive: int
+    policy_timeout_wait_p95_ms: float | None
+    policy_response_silence_ms: float | None
     fight_seconds: float | None
     release_confirmed: bool
     release_seconds: float | None
@@ -205,6 +215,8 @@ class BodyPilot:
         self._now_game_ms = 0
         self._last_seq = 0
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._policy_watchdog_task: asyncio.Task[None] | None = None
+        self._policy_watchdog_at: float | None = None
         self._last_events_poll = 0.0
         self._acquiring = False
         self._acquire_cancel = asyncio.Event()
@@ -218,6 +230,9 @@ class BodyPilot:
         self._acquire_waits: list[float] = []
         self._action_rejections: Counter[str] = Counter()
         self._transient_rejections_consecutive = 0
+        self._policy_timeouts = 0
+        self._policy_timeouts_consecutive = 0
+        self._policy_timeout_waits: list[float] = []
         self._latencies: list[float] = []
         self._packet_to_request: list[float] = []
         self._packet_to_response: list[float] = []
@@ -412,6 +427,34 @@ class BodyPilot:
                 self._wake.set()
                 return
             deadline = sent_at + HEARTBEAT_INTERVAL
+
+    def _policy_response_age(self) -> float | None:
+        if self._policy_watchdog_at is None or self.client is None:
+            return None
+        last_response = self.client.last_response_at
+        since = max(self._policy_watchdog_at, last_response or self._policy_watchdog_at)
+        return asyncio.get_running_loop().time() - since
+
+    async def _policy_watchdog(self) -> None:
+        """A missing observation cannot hide an unresponsive policy connection."""
+        assert self.client is not None
+        client = self.client
+        while (
+            self.client is client and self._policy_watchdog_at is not None
+            and not self._closing and self._reason is None
+        ):
+            client.response_received.clear()
+            age = self._policy_response_age()
+            assert age is not None
+            remaining = POLICY_RESPONSE_TIMEOUT - age
+            if remaining <= 0:
+                self._reason = "policy_timeout"
+                self._wake.set()
+                return
+            try:
+                await asyncio.wait_for(client.response_received.wait(), timeout=remaining)
+            except TimeoutError:
+                pass
 
     async def _tick(self) -> None:
         if self._reason:
@@ -626,12 +669,27 @@ class BodyPilot:
         try:
             assert self.client is not None
             started = self.clock()
+            if self._policy_watchdog_at is None:
+                self._policy_watchdog_at = asyncio.get_running_loop().time()
+                self._policy_watchdog_task = asyncio.create_task(self._policy_watchdog())
             self._packet_to_request.append((started - received_at) * 1000)
             try:
                 result = await self.client.call("step", observation=raw, now_game_ms=self._now_game_ms)
+            except TimeoutError:
+                self._policy_timeouts += 1
+                self._policy_timeouts_consecutive += 1
+                self._policy_timeout_waits.append((self.clock() - started) * 1000)
+                if self._policy_timeouts_consecutive >= POLICY_TIMEOUT_LIMIT:
+                    self._reason = "policy_timeout"
+                return
             finally:
                 responded_at = self.clock()
                 self._latencies.append((responded_at - started) * 1000)
+            self._policy_timeouts_consecutive = 0
+            self._policy_watchdog_at = None
+            assert self._policy_watchdog_task is not None
+            self._policy_watchdog_task.cancel()
+            self._policy_watchdog_task = None
             self._packet_to_response.append((responded_at - received_at) * 1000)
             if result.get("status") == "fallback":
                 self._fallbacks += 1
@@ -670,8 +728,6 @@ class BodyPilot:
                     raise
                 self._transient_rejections_consecutive = 0
                 self._decisions += 1
-        except TimeoutError:
-            self._reason = "policy_timeout"
         except (OSError, ValueError, PolicyError):
             self._reason = "policy_error"
         except BRIDGE_ERRORS:
@@ -744,18 +800,23 @@ class BodyPilot:
             return
         finish_at = time.monotonic()
         fight_seconds = self.clock() - self._fight_at if self.lease is not None else None
+        policy_response_age = self._policy_response_age()
         release_confirmed = watch_removed = False
         release_seconds = None
         self._watch_ready = False
         unconfirmed = "acquire_status" if self._pending_acquire is not None else "body_release"
         lease = self.lease
         heartbeat, self._heartbeat_task = self._heartbeat_task, None
+        policy_watchdog, self._policy_watchdog_task = self._policy_watchdog_task, None
         try:
             # One wall-clock budget covers every route into ownership cleanup.
             async with asyncio.timeout(FINISH_TIMEOUT):
                 if heartbeat is not None:
                     heartbeat.cancel()
                     await asyncio.gather(heartbeat, return_exceptions=True)
+                if policy_watchdog is not None:
+                    policy_watchdog.cancel()
+                    await asyncio.gather(policy_watchdog, return_exceptions=True)
                 if self._pending_acquire is not None:
                     await self._recover_acquire()
                 lease = self.lease
@@ -844,6 +905,12 @@ class BodyPilot:
             acquire_wait_max_ms=max(self._acquire_waits, default=None),
             action_rejections=tuple(sorted(self._action_rejections.items())),
             transient_rejections_consecutive=self._transient_rejections_consecutive,
+            policy_timeouts=self._policy_timeouts,
+            policy_timeouts_consecutive=self._policy_timeouts_consecutive,
+            policy_timeout_wait_p95_ms=_percentile(self._policy_timeout_waits, 0.95),
+            policy_response_silence_ms=(
+                policy_response_age * 1000 if policy_response_age is not None else None
+            ),
             fight_seconds=fight_seconds,
             release_confirmed=release_confirmed,
             release_seconds=release_seconds,
@@ -857,7 +924,9 @@ class BodyPilot:
             "packet_to_action_p50_ms=%s packet_to_action_p95_ms=%s "
             "acquire_refusals=%s acquire_requests=%d acquire_completed=%d "
             "acquire_wait_p50_ms=%s acquire_wait_max_ms=%s "
-            "action_rejections=%s transient_rejections_consecutive=%d unconfirmed=%s",
+            "action_rejections=%s transient_rejections_consecutive=%d "
+            "policy_timeouts=%d policy_timeouts_consecutive=%d policy_timeout_wait_p95_ms=%s "
+            "policy_response_silence_ms=%s unconfirmed=%s",
             npc,
             reason,
             self._decisions,
@@ -879,6 +948,10 @@ class BodyPilot:
             summary.acquire_wait_max_ms,
             dict(summary.action_rejections),
             summary.transient_rejections_consecutive,
+            summary.policy_timeouts,
+            summary.policy_timeouts_consecutive,
+            summary.policy_timeout_wait_p95_ms,
+            summary.policy_response_silence_ms,
             unconfirmed if reason == "finish_deadline" else None,
         )
         self.npc = self.lease = self.client = None
@@ -894,6 +967,9 @@ class BodyPilot:
         self._acquire_waits.clear()
         self._action_rejections.clear()
         self._transient_rejections_consecutive = 0
+        self._policy_timeouts = self._policy_timeouts_consecutive = 0
+        self._policy_timeout_waits.clear()
+        self._policy_watchdog_at = None
         self._latencies.clear()
         self._packet_to_request.clear()
         self._packet_to_response.clear()
