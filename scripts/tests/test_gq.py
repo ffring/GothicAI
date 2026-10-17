@@ -596,6 +596,174 @@ def test_systemd_launch_sets_affinity_limits_runtime_and_stop_callback(gq, host,
     assert "_execute" in arguments and arguments[-1] == ident
 
 
+@pytest.mark.parametrize("action", ["run", "submit"])
+@pytest.mark.parametrize("quota,expected", [("200%", "200%"), ("200", "200%"),
+                                          ("12.5%", "12.5%"), ("12.5", "12.5%")])
+def test_cli_cpu_quota_is_saved_and_applied_to_unit(
+        gq, host, monkeypatch, action, quota, expected):
+    q = make_queue(gq, host, monkeypatch)
+    monkeypatch.setattr(gq, "Queue", lambda: q)
+    monkeypatch.setattr(gq, "spawn_pump", lambda *_: None)
+    monkeypatch.setattr(gq, "wait_job", lambda *_args, **_kwargs: 0)
+    assert gq.main([action, "--class", "quiet", "--threads", "2", "--mem", "1G",
+                    "--cpu-quota", quota, "--max", "1m", "--name", "quota test",
+                    "--", "true"]) == 0
+    job = q.jobs()[0]
+    assert job["cpu_quota"] == expected
+    assert json.loads((q.home / "state.json").read_text())["jobs"][0]["cpu_quota"] == expected
+    q.tick()
+    arguments = calls(host, "systemd-run")[0]
+    assert f"--property=CPUQuota={expected}" in arguments
+    assert records(q)[0]["cpu_quota"] == expected
+
+
+def test_submit_hands_off_printed_id_without_cancelling_request(queue, gq, monkeypatch, capsys):
+    pumped = []
+    previous = {sig: signal.getsignal(sig)
+                for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)}
+    monkeypatch.setattr(queue, "tick", lambda: None)
+    monkeypatch.setattr(gq, "Queue", lambda: queue)
+    monkeypatch.setattr(gq, "spawn_pump", lambda _queue, ident: pumped.append(ident))
+    assert gq.main(["submit", "--class", "quick", "--threads", "1", "--mem", "1G",
+                    "--max", "1m", "--name", "normal submit", "--", "true"]) == 0
+    job = queue.jobs()[0]
+    assert job["status"] == "queued" and job["waiter"] is None
+    assert pumped == [job["id"]]
+    assert capsys.readouterr().out == job["id"] + "\n"
+    assert [entry["event"] for entry in records(queue)] == ["submitted"]
+    assert all(signal.getsignal(sig) == handler for sig, handler in previous.items())
+
+
+@pytest.mark.parametrize("signum", [signal.SIGHUP, signal.SIGTERM, signal.SIGINT])
+@pytest.mark.parametrize("stage", ["transaction", "after-persistence"])
+def test_interrupted_submit_cancels_before_id_returns(
+        queue, gq, monkeypatch, capsys, signum, stage):
+    foreign = enqueue(queue, owner="another-session")
+    previous = {sig: signal.getsignal(sig)
+                for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)}
+    original_event = queue.event
+    original_submit = queue.submit
+    pumped = []
+
+    def interrupt_in_transaction(job, event, **extra):
+        original_event(job, event, **extra)
+        if event == "submitted":
+            # The handler must let this transaction persist, retaining a way to
+            # identify and cancel the request once submit() returns.
+            os.kill(os.getpid(), signum)
+
+    def interrupt_after_persistence(*args, **kwargs):
+        ident = original_submit(*args, **kwargs)
+        assert queue.get(ident)["status"] == "queued"
+        os.kill(os.getpid(), signum)
+        return ident
+
+    if stage == "transaction":
+        monkeypatch.setattr(queue, "event", interrupt_in_transaction)
+    else:
+        monkeypatch.setattr(queue, "submit", interrupt_after_persistence)
+    monkeypatch.setattr(queue, "tick", lambda: None)
+    monkeypatch.setattr(gq, "Queue", lambda: queue)
+    monkeypatch.setattr(gq, "spawn_pump", lambda *_: pumped.append(True))
+    assert gq.main(["submit", "--class", "quick", "--threads", "1", "--mem", "1G",
+                    "--max", "1m", "--name", "interrupted submit", "--", "true"]) == 128 + signum
+    jobs = queue.jobs()
+    assert len(jobs) == 2
+    assert queue.get(foreign)["status"] == "queued"
+    job = next(job for job in jobs if job["id"] != foreign)
+    assert job["status"] == "cancelled" and job["code"] == 143
+    assert job["waiter"] is None
+    assert [entry["event"] for entry in records(queue) if entry["id"] == job["id"]] == [
+        "submitted", "finished"]
+    assert not pumped and capsys.readouterr().out == ""
+    assert all(signal.getsignal(sig) == handler for sig, handler in previous.items())
+
+
+@pytest.mark.parametrize("signum", [signal.SIGHUP, signal.SIGTERM, signal.SIGINT])
+def test_submit_signal_to_process_group_cancels_persisted_job_before_id_output(
+        gq, host, tmp_path, signum):
+    ready = tmp_path / "submit-saved"
+    harness = r'''
+import importlib.util
+from pathlib import Path
+import sys
+import time
+
+module_spec = importlib.util.spec_from_file_location("signal_submit_gq", sys.argv[1])
+gq = importlib.util.module_from_spec(module_spec)
+module_spec.loader.exec_module(gq)
+gq.Queue.tick = lambda self: None
+
+def pause_after_persistence(queue, ident):
+    Path(sys.argv[2]).write_text(ident)
+    while True:
+        time.sleep(10)
+
+gq.spawn_pump = pause_after_persistence
+sys.exit(gq.main(["submit", "--class", "quick", "--threads", "1", "--mem", "1G",
+                  "--max", "1m", "--name", "signal before output", "--", "true"]))
+'''
+    child = subprocess.Popen([sys.executable, "-c", harness, str(SCRIPT), str(ready)],
+                             env=host["env"], start_new_session=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists(), "submit did not persist its request"
+        os.killpg(child.pid, signum)
+        output, errors = child.communicate(timeout=5)
+        assert child.returncode == 128 + signum, errors
+        assert output == ""
+        queue = gq.Queue(home=host["home"], legacy_lock=host["legacy"], proc_locks=host["locks"])
+        jobs = queue.jobs()
+        assert len(jobs) == 1 and jobs[0]["id"] == ready.read_text()
+        assert jobs[0]["status"] == "cancelled" and jobs[0]["waiter"] is None
+        assert [entry["event"] for entry in records(queue)] == ["submitted", "finished"]
+        assert not (host["systemd"] / "calls.jsonl").exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=5)
+
+
+def test_failed_submit_pump_start_cancels_request_without_printing_id(
+        queue, gq, monkeypatch, capsys):
+    def fail_pump(*_args):
+        raise OSError("cannot spawn pump")
+
+    monkeypatch.setattr(queue, "tick", lambda: None)
+    monkeypatch.setattr(gq, "Queue", lambda: queue)
+    monkeypatch.setattr(gq, "spawn_pump", fail_pump)
+    assert gq.main(["submit", "--class", "quick", "--threads", "1", "--mem", "1G",
+                    "--max", "1m", "--name", "failed pump", "--", "true"]) == 2
+    assert len(queue.jobs()) == 1 and queue.jobs()[0]["status"] == "cancelled"
+    output = capsys.readouterr()
+    assert output.out == "" and "cannot spawn pump" in output.err
+
+
+@pytest.mark.parametrize("action", ["run", "submit"])
+@pytest.mark.parametrize("quota", ["0", "0%", "-1", "nan", "inf", "200%%", "", "9" * 400])
+def test_cli_rejects_invalid_cpu_quota(gq, action, quota):
+    with pytest.raises(SystemExit) as failure:
+        gq.parser().parse_args([action, "--class", "quick", "--threads", "2", "--mem", "1G",
+                                "--cpu-quota", quota, "--max", "1m", "--name", "bad quota",
+                                "--", "true"])
+    assert failure.value.code == 2
+
+
+def test_old_state_without_cpu_quota_launches_without_quota_property(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    ident = q.submit(spec())
+    assert "cpu_quota" not in q.get(ident)
+    # Reload an existing state written before this optional field was introduced.
+    reloaded = make_queue(gq, host, monkeypatch)
+    reloaded.tick()
+    assert reloaded.get(ident)["status"] == "starting"
+    assert not any(value.startswith("--property=CPUQuota=")
+                   for value in calls(host, "systemd-run")[0])
+
+
 def test_reconcile_recovers_systemd_timeout_without_waiter_or_callback(gq, host, monkeypatch):
     q = make_queue(gq, host, monkeypatch)
     clock = [1000.0]
@@ -1456,3 +1624,13 @@ def test_linked_worktrees_with_matching_directory_names_use_their_git_identity(g
         monkeypatch.chdir(root / 'server')
         owners.append(gq.owner())
     assert owners == ['linked-a', 'linked-b']
+
+
+def test_started_records_systemd_invocation_for_gpu_monitor(queue, monkeypatch):
+    q = queue
+    job_id = q.submit(spec())
+    with q.transaction() as state:
+        state["jobs"][0].update(status="starting", attempt="1"*32)
+    monkeypatch.setenv("INVOCATION_ID", "a"*32)
+    assert q.started(job_id)
+    assert q.get(job_id)["invocation_id"] == "a"*32
