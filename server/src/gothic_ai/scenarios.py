@@ -1109,12 +1109,16 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         f"({res.status} {res.detail or ''}, still attached: {not detached})"
     )
     # The flee wolf may stay with the hero outside the fleeing NPC's snapshot.
-    # Finish the encounter at both ends before restoring the routine.
-    for near in (npc, "PC_HERO"):
-        around = (await link.snapshot(near, fresh=True)).nearby_npcs
-        for other in around:
-            if not other.dead and other.guild >= BEASTS:
-                await link.debug("kill", instance=other.id, near=near)
+    # Remove that encounter before restoring the routine, even if it is out of view.
+    try:
+        await link.debug("kill", instance="WOLF", near="PC_HERO")
+    except GameError as err:
+        if str(err) != "no such creature alive":
+            raise
+    around = (await link.snapshot(npc, fresh=True)).nearby_npcs
+    for other in around:
+        if not other.dead and other.guild >= BEASTS:
+            await link.debug("kill", instance=other.id, near=npc)
     await link.act(npc, "return_to_routine")
 
     # 5. a free npc speaks: queued like its own lines, or on the move (overlay) without stopping
