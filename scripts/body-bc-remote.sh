@@ -673,23 +673,21 @@ if [[ "$cuda_visible_devices" == 0 ]]; then
     # coordination lock alive after the launcher finishes.
     exec 8>&- 9>&-
     watcher_script="$code/scripts/body_training_gpu_watch.py"
+    watcher_queue_args=()
     if [[ "$use_gq" == true ]]; then
-      # Queue admission may take hours. Start the monitor's bounded startup
-      # clock only after this job's own unit becomes active.
+      # Queue admission may take hours. The monitor follows this exact job's
+      # state and starts sampling only after the command has been admitted.
       while [[ ! -s "$gq_job_id_file" ]]; do
         [[ ! -e "$gpu_watch_done" ]] || exit 0
         sleep 0.2
       done
       unit="gq-$(cat "$gq_job_id_file")"
-      while ! systemctl --user is-active --quiet "$unit.service"; do
-        [[ ! -e "$gpu_watch_done" ]] || exit 0
-        sleep 0.2
-      done
+      watcher_queue_args=(--gq-home "${GQ_HOME:-$HOME/gothic-ai/queue}")
       # The current monitor understands gq units, including for a previously
       # frozen training run whose original code remains immutable.
       watcher_script="$task_root/source/scripts/body_training_gpu_watch.py"
     fi
-    exec "$python" "$watcher_script" --unit "$unit.service" \
+    exec "$python" "$watcher_script" --unit "$unit.service" "${watcher_queue_args[@]}" \
       --output "$out/gpu-watch-$phase.jsonl" --summary "$out/gpu-watch-$phase.json" --job-done "$gpu_watch_done"
   ) > "$out/gpu-watch-$phase.log" 2>&1 &
   gpu_watch_pid=$!
@@ -713,9 +711,8 @@ if [[ "$use_gq" == true ]]; then
   cancel_queue_job() {
     queue_interrupted=1
     [[ "$queue_cancelled" == 0 ]] || return 0
-    # A signal can arrive while submit has not returned its ID yet. The
-    # background function has an extra Bash child, so signalling $! alone
-    # would leave that child and its queued request alive.
+    # A signal can arrive before submit returns its ID. The parent owns GPU
+    # monitor cleanup, so cancel the exact request and reap the helper below.
     while [[ ! -s "$gq_job_id_file" ]] && kill -0 "$queue_launcher_pid" 2>/dev/null; do
       sleep 0.1
     done

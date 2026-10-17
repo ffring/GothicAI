@@ -64,8 +64,16 @@ for name in ${DUELS_MODELS:-bc round2}; do
   )
   launch() {
     if gq_available; then
-      (cd "$work" && gq_job --class quiet --threads 3 --mem 6G --max 80m \
-        --cpu-quota 200% --name "body duels $phase $name$suffix" -- env "${unit_env[@]}" "${cmd[@]}")
+      local previous_dir="$PWD" result
+      cd "$work"
+      if gq_job --class quiet --threads 3 --mem 6G --max 80m \
+        --cpu-quota 200% --name "body duels $phase $name$suffix" -- env "${unit_env[@]}" "${cmd[@]}"; then
+        result=0
+      else
+        result=$?
+      fi
+      cd "$previous_dir"
+      return "$result"
     else
       local legacy_env=() pair
       for pair in "${unit_env[@]}"; do legacy_env+=(--setenv="$pair"); done

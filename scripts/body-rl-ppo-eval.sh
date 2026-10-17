@@ -51,11 +51,18 @@ collect() {
     --scenario "$PPO_CODE/scripts/bench/body-arena.bench" --workers "$workers" --checkpoint "$checkpoint" --output "$dir" \
     --temperature 0 "$@")
   if gq_available; then
-    gq_job --class batch --threads "$collect_threads" --mem "$collect_mem" --max 30m \
-      --name "body PPO eval $(basename "$dir")" -- "${cmd[@]}"
+    local log="$dir.launcher.log" result
+    if gq_job --class batch --threads "$collect_threads" --mem "$collect_mem" --max 30m \
+      --name "body PPO eval $(basename "$dir")" -- "${cmd[@]}" > "$log" 2>&1; then
+      result=0
+    else
+      result=$?
+    fi
+    tail -1 "$log" | cut -c1-300
+    return "$result"
   else
-    locked "${cmd[@]}"
-  fi 2>&1 | tail -1 | cut -c1-300
+    locked "${cmd[@]}" 2>&1 | tail -1 | cut -c1-300
+  fi
 }
 collect "$out/$name-open" --episodes 2048 --seed-start 100000
 collect "$out/$name-wall" --episodes 2048 --seed-start 100000 --geometry near_wall

@@ -208,8 +208,8 @@ baseline_interrupted=0
 stop_baseline() {
   if gq_available; then
     baseline_interrupted=1
-    # The async function's $! can name a wrapper rather than the helper. Wait
-    # for submit to publish its ID, then cancel the owned request directly.
+    # The parent also owns the watchdog. Wait for submit to publish its ID,
+    # then cancel the owned request and collect the helper's final status.
     while [[ ! -s "$out/gq-job-id" && -n "${launch_pid:-}" ]] &&
           kill -0 "$launch_pid" 2>/dev/null; do
       sleep 0.1 || true

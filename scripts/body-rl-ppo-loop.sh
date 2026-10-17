@@ -56,11 +56,19 @@ collect() {
     --reference "$baseline/runs/melee-reference-stage1-v4" --scenario "$PPO_CODE/scripts/bench/body-arena.bench" \
     --workers "$workers" "$@")
   if gq_available; then
-    gq_job --class batch --threads "$collect_threads" --mem "$collect_mem" --max 30m \
-      --name "body PPO ${it:-initial} collect $output" -- "${cmd[@]}"
+    # Keep the helper in the launcher shell so PID-only signals reach its traps.
+    local log="$PWD/$it/launcher-collect-$output.log" result
+    if gq_job --class batch --threads "$collect_threads" --mem "$collect_mem" --max 30m \
+      --name "body PPO ${it:-initial} collect $output" -- "${cmd[@]}" > "$log" 2>&1; then
+      result=0
+    else
+      result=$?
+    fi
+    tail -1 "$log" | cut -c1-400
+    return "$result"
   else
-    locked "${cmd[@]}"
-  fi 2>&1 | tail -1 | cut -c1-400
+    locked "${cmd[@]}" 2>&1 | tail -1 | cut -c1-400
+  fi
 }
 update() {
   local update_args=(${PPO_UPDATE_ARGS:-}) update_threads=$threads device=cpu previous='' arg
@@ -76,11 +84,18 @@ update() {
   if gq_available; then
     local gpu=()
     [[ "$device" != cuda* ]] || gpu=(--gpu-mem "${PPO_GPU_MEM:-4G}")
-    gq_job --class batch --threads "$update_threads" --mem 6G "${gpu[@]}" --max 2h \
-      --name "body PPO $it update" -- "${cmd[@]}"
+    local log="$PWD/$it/launcher-update.log" result
+    if gq_job --class batch --threads "$update_threads" --mem 6G "${gpu[@]}" --max 2h \
+      --name "body PPO $it update" -- "${cmd[@]}" > "$log" 2>&1; then
+      result=0
+    else
+      result=$?
+    fi
+    tail -1 "$log" | cut -c1-500
+    return "$result"
   else
-    "${cmd[@]}"
-  fi 2>&1 | tail -1 | cut -c1-500
+    "${cmd[@]}" 2>&1 | tail -1 | cut -c1-500
+  fi
 }
 evaluate() {  # policy, iteration directory
   local policy=$1 out=$2/eval first

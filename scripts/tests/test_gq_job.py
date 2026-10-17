@@ -36,12 +36,13 @@ with (root / "calls.jsonl").open("a") as output:
 if args[0] == "submit":
     if os.environ.get("FAKE_SUBMIT_CODE"):
         sys.exit(int(os.environ["FAKE_SUBMIT_CODE"]))
-    print("012345abcdef")
+    if os.environ.get("FAKE_SUBMIT_PAUSE"):
+        (root / "submitting").write_text("1")
+        time.sleep(float(os.environ["FAKE_SUBMIT_PAUSE"]))
+    print(os.environ.get("FAKE_SUBMIT_ID", "012345abcdef"))
 elif args[0] == "wait":
-    # A real wait observes cancellation from queue state. Ignore group signals
-    # here too, so tests prove the helper cancelled and reaped the final status.
-    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        signal.signal(signum, signal.SIG_IGN)
+    # The helper must protect wait from group signals while it cancels the job.
+    # Like real gq wait, this fake installs no signal handlers of its own.
     (root / "waiting").write_text(str(os.getppid()))
     if os.environ.get("FAKE_WAIT_BLOCK"):
         deadline = time.monotonic() + 10
@@ -140,6 +141,14 @@ def test_submit_failure_does_not_wait_or_cancel(host):
     assert [record["args"][0] for record in calls(host)] == ["submit"]
 
 
+def test_invalid_submit_id_does_not_wait_or_cancel(host):
+    host["env"]["FAKE_SUBMIT_ID"] = "invalid id"
+    result = run(host)
+    assert result.returncode == 1
+    assert "invalid job id" in result.stderr
+    assert [record["args"][0] for record in calls(host)] == ["submit"]
+
+
 def test_default_binary_path_and_gq_available(host):
     binary = host["home"] / "gothic-ai" / "bin" / "gq"
     binary.parent.mkdir()
@@ -158,26 +167,31 @@ def test_unavailable_override_fails_without_submitting(host):
     assert calls(host) == []
 
 
+def wait_for_file(process, path):
+    deadline = time.monotonic() + 5
+    while not path.exists() or not path.read_text():
+        assert process.poll() is None
+        assert time.monotonic() < deadline, f"fake gq did not create {path.name}"
+        time.sleep(0.01)
+
+
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
-def test_signals_cancel_own_job_and_return_wait_status(host, signum):
+@pytest.mark.parametrize("signal_group", [False, True], ids=["launcher-pid", "process-group"])
+def test_signals_cancel_own_job_and_return_wait_status(host, signum, signal_group):
     host["env"].update(FAKE_WAIT_BLOCK="1", FAKE_WAIT_CODE="73")
-    # Signal an isolated foreground process group, as terminal Ctrl-C does. The
-    # wrapper stays alive to collect the helper's status. Running gq_job in the
-    # foreground avoids Bash's ignored SIGINT for background function calls.
-    process = subprocess.Popen(command('trap ":" INT TERM HUP; gq_job "$@"'),
+    process = subprocess.Popen(command(),
                                cwd=host["work"], env=host["env"],
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
         waiting = host["root"] / "waiting"
-        deadline = time.monotonic() + 5
-        while not waiting.exists() or not waiting.read_text():
-            assert process.poll() is None
-            assert time.monotonic() < deadline, "fake gq wait did not start"
-            time.sleep(0.01)
+        wait_for_file(process, waiting)
         helper_pid = int(waiting.read_text())
-        assert helper_pid != process.pid  # gq_job isolates its traps in a subshell.
-        os.killpg(process.pid, signum)
+        assert helper_pid == process.pid  # The helper traps in the launcher shell.
+        if signal_group:
+            os.killpg(process.pid, signum)
+        else:
+            process.send_signal(signum)
         stdout, stderr = process.communicate(timeout=5)
         assert process.returncode == 73, stderr
         assert stdout == "job stdout\n"
@@ -194,3 +208,97 @@ def test_function_does_not_replace_caller_traps(host):
     result = run(host, body='trap "printf caller-trap\\\\n" TERM; before=$(trap -p TERM); '
                            'gq_job "$@"; [[ "$(trap -p TERM)" == "$before" ]]')
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("submit_code", ["0", "42"])
+def test_function_restores_all_caller_traps_and_owner(host, submit_code):
+    if submit_code != "0":
+        host["env"]["FAKE_SUBMIT_CODE"] = submit_code
+    result = run(host, body='trap ": caller-int" INT; trap ": caller-term" TERM; '
+                           'trap ": caller-hup" HUP; before=$(trap -p INT TERM HUP); '
+                           'gq_job "$@"; result=$?; '
+                           '[[ "$result" == "' + submit_code + '" && '
+                           '"$(trap -p INT TERM HUP)" == "$before" && ! ${GQ_OWNER+x} ]]')
+    assert result.returncode == 0, result.stderr
+
+
+def test_pid_only_signal_during_submit_cancels_after_id_arrives(host):
+    host["env"].update(FAKE_SUBMIT_PAUSE="0.3", FAKE_WAIT_BLOCK="1", FAKE_WAIT_CODE="73")
+    process = subprocess.Popen(command(), cwd=host["work"], env=host["env"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        wait_for_file(process, host["root"] / "submitting")
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 73, stderr
+        assert stdout == "job stdout\n"
+        assert [record["args"] for record in calls(host)] == [
+            ["submit", *ARGS], ["cancel", JOB_ID], ["wait", JOB_ID]]
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("launcher", ["nav-drive-batch.sh", "nav-demos-batch.sh",
+    "body-rl-ppo-loop.sh", "body-rl-ppo-loop.sh:update", "body-rl-ppo-eval.sh",
+    "body-stage9-duels.sh"])
+def test_pid_only_sigterm_cancels_job_from_real_launcher(host, launcher):
+    host["env"].update(FAKE_WAIT_BLOCK="1", FAKE_WAIT_CODE="73")
+    scripts = HELPER.parent
+    script, _, phase = launcher.partition(":")
+    arguments = []
+    if script.startswith("nav-"):
+        binary_dir = host["root"] / "bin"
+        binary_dir.mkdir()
+        uname = binary_dir / "uname"
+        uname.write_text("#!/bin/sh\necho Linux\n")
+        uname.chmod(0o755)
+        python = binary_dir / "python3"
+        python.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                          'if "--list-indices" in sys.argv: print("0 1")\n'
+                          'else: os.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n')
+        python.chmod(0o755)
+        host["env"]["PATH"] = str(binary_dir) + os.pathsep + host["env"]["PATH"]
+        arguments = ["--runner", "fake-runner"]
+        if script == "nav-demos-batch.sh":
+            arguments.insert(0, "collect")
+    elif script.startswith("body-rl-ppo"):
+        host["env"].update(PPO_CODE=str(scripts.parent), PPO_RUNNER="fake-runner",
+                           PPO_WORK=str(host["work"]), PPO_START="fake.pt",
+                           PPO_REFERENCE="reference.pt", PPO_POOL="peer.pt", PPO_ITERATIONS="1")
+        if phase == "update":
+            # Resume with a critic checkpoint, as the server's update phase
+            # does; keep arrays populated under macOS's Bash 3 with set -u.
+            host["env"].update(PPO_UPDATE_ARGS="--device cuda --policy-epochs 0", PPO_ITERATIONS="2")
+            update = host["work"] / "iter-001" / "update"
+            update.mkdir(parents=True)
+            (update / "best.pt").write_text("checkpoint")
+            collect = host["work"] / "iter-002" / "collect"
+            collect.mkdir(parents=True)
+            (collect / "summary.json").write_text("{}")
+        if script == "body-rl-ppo-eval.sh":
+            arguments = ["policy", "fake.pt", str(host["work"] / "eval")]
+    else:
+        config = host["work"] / "duels.json"
+        config.write_text("{}")
+        host["env"].update(DUELS_CODE=str(scripts.parent), DUELS_WORK=str(host["work"]),
+                           DUELS_CONFIG=str(config), DUELS_MODELS="bc")
+    process = subprocess.Popen(["bash", str(scripts / script), *arguments],
+                               cwd=host["work"], env=host["env"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        wait_for_file(process, host["root"] / "waiting")
+        assert int((host["root"] / "waiting").read_text()) == process.pid
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 73, stderr + stdout
+        records = calls(host)
+        assert [record["args"][0] for record in records] == ["submit", "wait", "cancel"]
+        assert records[-1]["args"] == ["cancel", JOB_ID]
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)

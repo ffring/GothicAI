@@ -328,6 +328,9 @@ class Queue:
             for job in state["jobs"]:
                 if job["id"] == job_id and job["status"] == "starting" and not job.get("cancel_reason"):
                     job.update(status="running", start=self.now())
+                    invocation = os.environ.get("INVOCATION_ID", "")
+                    if re.fullmatch(r"[0-9a-f]{32}", invocation):
+                        job["invocation_id"] = invocation
                     self.event(job, "started")
                     return True
         return False
@@ -668,6 +671,50 @@ def spawn_pump(queue, job_id):
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def submit_job(queue, spec):
+    """Own a detached request until its ID has reached the caller.
+
+    A signal may arrive after submit() persists the job but before it returns its
+    ID. Record that signal without unwinding the transaction; once submit()
+    returns we can cancel the exact request. Later signals can interrupt pump
+    startup or stdout immediately because the ID is already known.
+    """
+    class Interrupted(Exception):
+        pass
+
+    job_id = None
+    interrupted = 0
+    delivered = False
+    closing = False
+
+    def stop(signum, _frame):
+        nonlocal interrupted
+        interrupted = interrupted or signum
+        if job_id is not None and not closing:
+            raise Interrupted
+
+    previous = {sig: signal.signal(sig, stop)
+                for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)}
+    try:
+        job_id = queue.submit(spec)
+        if interrupted:
+            raise Interrupted
+        spawn_pump(queue, job_id)
+        print(job_id, flush=True)
+        delivered = True
+        return 0
+    except Interrupted:
+        return 128 + interrupted
+    finally:
+        closing = True
+        try:
+            if job_id is not None and (not delivered or interrupted):
+                queue.retry_cancel(job_id, spec["owner"])
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+
+
 def stream_log(queue, job_id, offset):
     path = queue.home / "logs" / f"{job_id}.log"
     if path.exists():
@@ -829,14 +876,13 @@ def main(argv=None):
                 raise QueueError("--wait-max должен быть неотрицательным")
             command = args.command[1:] if args.command[:1] == ["--"] else args.command
             waiter = {"pid": os.getpid(), "start": process_token(os.getpid())} if args.action == "run" else None
-            job_id = queue.submit({
+            request = {
                 "class": args.class_, "threads": args.threads, "mem": args.mem, "gpu_mem": args.gpu_mem,
                 "display": args.display, "cpu_quota": args.cpu_quota, "max": args.max,
-                "name": args.name, "owner": owner(), "command": command}, waiter)
+                "name": args.name, "owner": owner(), "command": command}
             if args.action == "submit":
-                spawn_pump(queue, job_id)
-                print(job_id, flush=True)
-                return 0
+                return submit_job(queue, request)
+            job_id = queue.submit(request, waiter)
             return wait_job(queue, job_id, run=True, wait_max=args.wait_max)
         if args.action == "status":
             status(queue)
