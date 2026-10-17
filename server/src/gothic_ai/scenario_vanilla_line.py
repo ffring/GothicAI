@@ -17,10 +17,10 @@ from .llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
 from .llm.fake import FakeBackend
 from .protocol import Session
 from .scenario_questlog import ACCEPT, TAKE, TITLE
+from .scenario_showrunner import ErrandScript
 from .scenarios import (
     LOBART,
     RUEBEN,
-    AuthoredScript,
     _logged,
     _save,
     _until,
@@ -40,7 +40,8 @@ FINISH = "DIA_LOBART_RUEBENRUNNING"
 REQUIRES = [{"kind": "quest", "quest": RUEBEN, "state": "success"}]
 PREMISE = (
     "Герой убрал для Лобарта поле репы. Сосед увидел, что работник расторопный, "
-    "и просит найти потерянную по хозяйству вещь. Урожай уже принят Лобартом; это отдельная просьба."
+    "и просит осмотреть дорогу, где бросили грязные остатки припасов, и принести образец. "
+    "Урожай уже принят Лобартом; это отдельная просьба."
 )
 
 
@@ -234,8 +235,10 @@ async def vanilla_line(
     check("neighbor", giver is not None and giver != LOBART, giver)
     if giver is None:
         return _logged(results)
-    script, builder = VanillaLineScript(giver), AuthoredScript()
-    director.model.llm, director.author.model.llm = script, builder
+    script, builder = VanillaLineScript(giver), await ErrandScript.for_giver(director, giver)
+    if builder is None:
+        return _logged({**results, "builder": "failed (no book quest brief)"})
+    director.model.llm, director.chains.model.llm = script, builder
     line = await director.decide(occasion)
     check("line", line is not None and line.get("fact") == "line", line)
     if line is None or line.get("fact") != "line":

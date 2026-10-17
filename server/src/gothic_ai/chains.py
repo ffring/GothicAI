@@ -32,9 +32,11 @@ NEW_PEOPLE = (
 )
 
 INSTRUCTIONS = """\
-Ты — сценарист Gothic II. Придумай для заказчика из сводки одну связанную цепочку из 2–3 квестов.
+Ты — сценарист Gothic II. Придумай для заказчика из сводки {assignment}.
 Заказчик один. Квесты открываются по порядку после сдачи предыдущего; after и id ставит код.
 Пиши просто, грубовато, в характере заказчика. Не повторяй его прежние поручения.
+Цели квестов должны разыгрывать сам замысел (premise), а не подменять его пропажей вещи.
+«Пропало — найди» подходит только тогда, когда замысел и есть пропажа.
 
 Ответ — один вызов propose_chain, три части: cast, quests, reason.
 cast — новые люди, нужные истории: role (короткий id латиницей), kind из списка, place из сводки,
@@ -148,7 +150,9 @@ def _schema() -> dict[str, Any]:
     return schema
 
 
-PROPOSE_TOOL = Tool(PROPOSE, "Предложить связанную цепочку и нужных ей новых персонажей.", _schema())
+PROPOSE_TOOL = Tool(
+    PROPOSE, "Предложить поручение или связанную цепочку и нужных ей новых персонажей.", _schema()
+)
 
 
 @dataclass
@@ -161,13 +165,16 @@ class Brief:
     fixed: dict[str, Role] = field(default_factory=dict)
     new_people: bool = False  # the chain must bring in someone new: a person or a camp
     max_people: int | None = None  # the whole chain, including already introduced roles on a retry
+    quest_count: int | None = None  # None keeps the usual 2–3 quests; otherwise an exact count
 
     def bandit_ok(self, place: str) -> bool:
         p = self.places.get(place)
         return p is not None and p.kind not in ("house", "yard", "street") and place not in self.occupied
 
     def text(self) -> str:
-        out = [self.base.text(), "Места для цепочки (точки выбирает код):"]
+        out = [self.base.text(errand=False), "Места для поручения (точки выбирает код):"]
+        if self.quest_count is not None:
+            out.append(f"Число квестов: ровно {self.quest_count}.")
         out += [
             f"- {p.id} — {p.where_ru}; вид {p.kind}; "
             f"бандиты: {'да' if self.bandit_ok(p.id) else 'нет'}; точек {len(p.points)}"
@@ -211,9 +218,17 @@ class ChainModel:
                 )
             )
         calls = []
+        assignment = (
+            "одно поручение, ровно один квест"
+            if brief.quest_count == 1
+            else f"одну связанную цепочку из {brief.quest_count or '2–3'} квестов"
+        )
         try:
             async for event in self.llm.stream(
-                instructions=INSTRUCTIONS, messages=messages, tools=[PROPOSE_TOOL], cache_key=CACHE_KEY
+                instructions=INSTRUCTIONS.format(assignment=assignment),
+                messages=messages,
+                tools=[PROPOSE_TOOL],
+                cache_key=CACHE_KEY,
             ):
                 if isinstance(event, ToolCall) and event.name == PROPOSE:
                     calls.append(event)
@@ -290,14 +305,18 @@ class ChainAuthor:
         max_people: int | None = None,
         requires: list[dict[str, Any]] | None = None,
         follows: str = "",
+        quest_count: int | None = None,
     ) -> list[questbook.Quest] | None:
-        """`new_people`: the chain must bring in someone new (cast not empty), not only the people around."""
+        """Build 2–3 quests by default, or exactly `quest_count`; `new_people` requires a nonempty cast."""
+        if quest_count is not None and quest_count not in (1, 2, 3):
+            raise ValueError("quest_count must be 1, 2, 3 or None")
         open_ahead(self.model.llm, CACHE_KEY, keep=True)
         brief = await self.brief(npc, premise=premise, requires=requires, follows=follows)
         if brief is None:
             return None
         brief.new_people = new_people
         brief.max_people = max_people
+        brief.quest_count = quest_count
         previous = None
         errors: list[str] = []
         for attempt in range(1, ATTEMPTS + 1):
@@ -384,7 +403,9 @@ class ChainAuthor:
 
     def _roles(self, p: Proposal, brief: Brief) -> list[str]:
         errors = []
-        if not 2 <= len(p.quests) <= 3:
+        if brief.quest_count is not None and len(p.quests) != brief.quest_count:
+            errors.append(f"нужно ровно {brief.quest_count} квест, предложено {len(p.quests)}")
+        elif brief.quest_count is None and not 2 <= len(p.quests) <= 3:
             errors.append("в цепочке должно быть 2–3 квеста")
         if brief.new_people and not p.cast:
             errors.append("cast пуст, а цепочке нужен новый человек или лагерь бандитов")

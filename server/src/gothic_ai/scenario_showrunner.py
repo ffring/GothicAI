@@ -15,7 +15,7 @@ from .game import GameLink
 from .llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
 from .llm.fake import FakeBackend
 from .protocol import Saved, Session
-from .scenarios import AuthoredScript, _logged, _until, play_book_chain, wait_message
+from .scenarios import _logged, _until, play_book_chain, wait_message
 from .showrunner import MIN_REAL_SECONDS, OUTCOMES
 
 if TYPE_CHECKING:
@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 PREMISE = (
-    "После недавней суеты в хозяйстве обнаружилась пропажа небольшой вещи. "
-    "Хозяин просит помочь сейчас, пока следы ещё свежи и работа не встала."
+    "На дороге рядом с жильём бросили грязные остатки припасов. "
+    "Хозяин просит расспросить его, осмотреть обочину и принести образец, пока его не растащили звери."
 )
 
 
@@ -59,9 +59,126 @@ class ShowrunnerScript:
             "place": "",
             "new_people": False,
             "premise": PREMISE if n <= 2 else "",
-            "reason": "свежая местная пропажа" if n <= 2 else "герою пока хватает поручений",
+            "reason": "надо убрать дрянь с дороги" if n <= 2 else "герою пока хватает поручений",
         }
         call = ToolCall("propose_line", args, f"showrunner{n}")
+        yield call
+        yield Done("", (call,))
+
+
+class ErrandScript:
+    """One book quest: ask for directions, inspect a place, collect a sample, then bring it back."""
+
+    name = "errand-script"
+
+    def __init__(self, *, place: str, where: str, item: str, name: str, gold: int, xp: int) -> None:
+        self.place, self.where, self.item, self.item_name = place, where, item, name
+        self.gold, self.xp = gold, xp
+        self.calls: list[str] = []
+
+    @classmethod
+    async def for_giver(cls, director: Showrunner, giver: str) -> ErrandScript | None:
+        brief = await director.chains.brief(giver)
+        if brief is None or not brief.places or not brief.base.items:
+            return None
+        place = next(iter(brief.places.values()))
+        samples = {"ITFO_SMELLYFISH": 0, "ITAT_MEATBUGFLESH": 1, "ITFO_ADDON_SHELLFLESH": 2}
+        items = sorted(brief.base.items, key=lambda item: (samples.get(item, 3), item))
+        item = items[0]
+        for candidate in items:
+            count = await director.link.evaluate(
+                ["call", "NPC_HASITEMS", ["inst", "HERO"], ["sym", candidate]]
+            )
+            if not count:
+                item = candidate
+                break
+        return cls(
+            place=place.id,
+            where=place.where_ru,
+            item=item,
+            name=brief.base.items[item],
+            gold=brief.base.gold,
+            xp=brief.base.xp,
+        )
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        self.calls.append("\n".join(m.content for m in messages if isinstance(m, Message)))
+
+        def talk(description: str, reply: str) -> dict[str, Any]:
+            return {
+                "description": description,
+                "lines": [{"speaker": "hero", "text": description}, {"speaker": "npc", "text": reply}],
+                "remember": reply,
+            }
+
+        call = ToolCall(
+            "propose_chain",
+            {
+                "cast": [],
+                "quests": [
+                    {
+                        "title": "Дрянь на дороге",
+                        "give": talk("Что стряслось на дороге?", "Кто-то выбросил там припасы. Надо убрать."),
+                        "stages": [
+                            {
+                                "journal": "Надо расспросить хозяина, где осмотреть дорогу.",
+                                "goals": [
+                                    {
+                                        "kind": "talk",
+                                        "npc": "giver",
+                                        "talk": talk(
+                                            "Где искать эту дрянь?",
+                                            f"Посмотри {self.where}. Там валяется {self.item_name}. "
+                                            "Принеси образец, я сам с ним разберусь.",
+                                        ),
+                                    }
+                                ],
+                            },
+                            {
+                                "journal": f"Надо осмотреть дорогу: {self.where}.",
+                                "goals": [{"kind": "reach", "place": self.place}],
+                            },
+                            {
+                                "journal": f"Я осмотрел дорогу. Надо забрать образец: {self.item_name}.",
+                                "goals": [{"kind": "have", "item": self.item, "place": self.place}],
+                            },
+                            {
+                                "journal": "Образец у меня. Хозяин просил принести его.",
+                                "goals": [
+                                    {
+                                        "kind": "bring",
+                                        "npc": "giver",
+                                        "item": self.item,
+                                        "talk": talk(
+                                            "Вот что я убрал с дороги.", "Давай сюда. Вот за труды."
+                                        ),
+                                    }
+                                ],
+                            },
+                        ],
+                        "done_journal": "Я осмотрел дорогу и принёс образец выброшенных припасов хозяину.",
+                        "knows": "На дороге бросили грязные остатки припасов. Надо осмотреть и убрать их.",
+                        "asked": "Расспросить тебя, осмотреть дорогу и принести образец.",
+                        "gold": min(10, self.gold),
+                        "xp": self.xp,
+                    }
+                ],
+                "reason": "Осмотреть и очистить дорогу, а не искать чужую пропажу.",
+            },
+            f"errand{len(self.calls)}",
+        )
         yield call
         yield Done("", (call,))
 
@@ -141,8 +258,10 @@ async def showrunner(link: GameLink, director: Showrunner, slot: int = 7) -> dic
         return _logged(results)
 
     script = ShowrunnerScript(giver, plot)
-    builder = AuthoredScript()
-    director.model.llm, author.model.llm = script, builder
+    builder = await ErrandScript.for_giver(director, giver)
+    if builder is None:
+        return _logged({**results, "builder": "failed (no book quest brief)"})
+    director.model.llm, director.chains.model.llm = script, builder
     real_clock = director.clock
     wall = [real_clock()]
     director.clock = lambda: wall[0]
@@ -162,7 +281,14 @@ async def showrunner(link: GameLink, director: Showrunner, slot: int = 7) -> dic
             giver,
         )
         quests = line.get("quests", [])
-        check("book", bool(quests) and all(q in director.book.all() for q in quests), quests)
+        made = [director.book.all()[q] for q in quests if q in director.book.all()]
+        check(
+            "book",
+            len(made) == len(quests) == 1
+            and [g.kind for stage in made[0].stages for g in stage.goals]
+            == ["talk", "reach", "have", "bring"],
+            quests,
+        )
         check("premise", bool(builder.calls) and f"Замысел режиссёра: {PREMISE}" in builder.calls[0])
         check("open", director.is_open(line))
 
@@ -224,6 +350,10 @@ async def showrunner(link: GameLink, director: Showrunner, slot: int = 7) -> dic
             f"{len(lines)} lines; {budget}",
         )
         check("book_after_load", all(q in director.book.all() for q in quests), quests)
+        played = await play_book_chain(link, director.book, made)
+        results.update({f"passage_{key}": value for key, value in played.items()})
+        await director.book.settle(giver)
+        check("completed", bool(made) and all(director.book.progress(q.id).state == "done" for q in made))
     finally:
         director.clock = real_clock
     return _logged(results)
