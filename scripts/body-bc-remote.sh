@@ -335,6 +335,13 @@ esac
 use_gq=false
 if gq_available; then
   use_gq=true
+  # Reserve this run/phase before touching its evidence or submitting a job.
+  # The ID does not exist while submit is in flight. Keep this local lock
+  # through wait and cleanup; other runs/phases still use the queue normally.
+  gq_job_id_file="$out/gq-$phase.id"
+  exec 7>"$out/gq-$phase.lock"
+  flock -n 7 || { echo "Another launcher owns this run/phase: $phase" >&2; exit 1; }
+  [[ ! -e "$gq_job_id_file" ]] || { echo 'Queue id evidence exists; preserve it and use a fresh run' >&2; exit 1; }
   echo 'gq: lock-wait is accepted for compatibility; batch queue waiting has no timeout.'
 else
   lock_path="$HOME/gothic-ai/body-training.lock"
@@ -695,7 +702,6 @@ snapshot={'recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoform
 PY
 gpu_watch_pid=''
 gpu_watch_done="$out/gpu-watch-$phase.done"
-gq_job_id_file="$out/gq-$phase.id"
 if [[ "$use_gq" == true ]]; then
   queue_class=batch
   case "$phase" in
@@ -713,16 +719,15 @@ if [[ "$use_gq" == true ]]; then
   queue_args=(--class "$queue_class" --threads 2 --mem 6G --max "${queue_budget}s" --name "body-bc $3 $phase")
   [[ "$queue_class" != quiet ]] || queue_args+=(--cpu-quota 200%)
   [[ "$cuda_visible_devices" != 0 ]] || queue_args+=(--gpu-mem 1536M)
-  [[ ! -e "$gq_job_id_file" ]] || { echo 'Queue id evidence exists; preserve it and use a fresh run' >&2; exit 1; }
 fi
 if [[ "$cuda_visible_devices" == 0 ]]; then
   [[ ! -e "$out/gpu-watch-$phase.jsonl" && ! -e "$out/gpu-watch-$phase.json" && ! -e "$gpu_watch_done" ]] || {
     echo 'CUDA monitor evidence exists; preserve it and use a fresh run' >&2; exit 1;
   }
   (
-    # The monitor lives outside the training unit and must not keep either
-    # coordination lock alive after the launcher finishes.
-    exec 8>&- 9>&-
+    # The monitor lives outside the training unit and must not keep the
+    # phase or legacy coordination locks alive after the launcher finishes.
+    exec 7>&- 8>&- 9>&-
     watcher_script="$code/scripts/body_training_gpu_watch.py"
     watcher_queue_args=()
     if [[ "$use_gq" == true ]]; then

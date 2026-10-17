@@ -48,6 +48,14 @@ if args[0] == "submit":
         assert command[index + 1:index + 3] == ["-a", "-s"]
         del command[index:index + 4]
     (root / "command.json").write_text(json.dumps({"command": command, "cwd": os.getcwd()}))
+    if os.environ.get("FAKE_SUBMIT_BLOCK") and not (root / "submitting").exists():
+        print("fake submit is waiting to publish its ID", file=sys.stderr, flush=True)
+        (root / "submitting").touch()
+        deadline = time.monotonic() + 10
+        while not (root / "release-submit").exists():
+            if time.monotonic() > deadline:
+                sys.exit(97)
+            time.sleep(0.01)
     print("snapshot123")
 elif args[0] == "wait":
     (root / "waiting").write_text("1")
@@ -58,6 +66,8 @@ elif args[0] == "wait":
         if time.monotonic() > deadline:
             sys.exit(98)
         time.sleep(0.01)
+    if os.environ.get("FAKE_WAIT_SKIP_COMMAND"):
+        sys.exit(0)
     saved = json.loads((root / "command.json").read_text())
     sys.exit(subprocess.run(saved["command"], cwd=saved["cwd"]).returncode)
 elif args[0] == "cancel":
@@ -427,6 +437,73 @@ def test_legacy_bc_phase_keeps_shared_native_paths(remote):
     assert args[args.index("--engine-library") + 1] == str(engine_task(task) / "build/libOpenGothic.a")
     assert not (out / "reference/source").exists()
     assert not (out / "reference/libOpenGothic.a").exists()
+
+
+@pytest.mark.parametrize("id_published", [False, True], ids=["submit-pending", "wait-pending"])
+def test_queued_bc_phase_rejects_duplicate_without_changing_evidence(remote, id_published):
+    task, out = prepare_bc_run(remote)
+    env = {**remote["env"], "FAKE_WAIT_SKIP_COMMAND": "1"}
+    if not id_published:
+        env["FAKE_SUBMIT_BLOCK"] = "1"
+    command = ["bash", str(SCRIPTS / "body-bc-remote.sh"), "tests", out.name]
+    process = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        if id_published:
+            wait_for_queue(process, remote)
+            assert (out / "gq-tests.id").read_text().strip() == "snapshot123"
+        else:
+            deadline = time.monotonic() + 5
+            while not (remote["root"] / "submitting").exists():
+                assert process.poll() is None, process.communicate(timeout=1)
+                assert time.monotonic() < deadline, "submit did not reach the ID barrier"
+                time.sleep(0.01)
+            assert not (out / "gq-tests.id").exists()
+            # A broken second launcher can finish without executing pytest;
+            # the first submit remains paused until its own barrier opens.
+            (remote["root"] / "release").touch()
+        evidence = {name: (out / name).read_bytes() for name in (
+            "launcher-tests.log", "services-tests-before.json")}
+        duplicate = subprocess.run(command, env=env, stdin=subprocess.DEVNULL,
+                                   capture_output=True, text=True, timeout=5)
+        assert duplicate.returncode == 1, duplicate.stdout + duplicate.stderr
+        assert "Another launcher owns this run/phase" in duplicate.stderr
+        calls = [json.loads(line)[0] for line in (remote["root"] / "calls.jsonl").read_text().splitlines()]
+        assert calls.count("submit") == 1
+        for name, original in evidence.items():
+            assert (out / name).read_bytes() == original, name
+        (remote["root"] / "release-submit").touch()
+        (remote["root"] / "release").touch()
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 0, stdout + stderr + (out / "launcher-tests.log").read_text()
+        calls = [json.loads(line)[0] for line in (remote["root"] / "calls.jsonl").read_text().splitlines()]
+        assert calls == ["submit", "wait"]
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+
+def test_queued_bc_phase_existing_id_preserves_evidence_before_submit(remote):
+    task, out = prepare_bc_run(remote)
+    (out / "gq-tests.id").write_text("previous-job\n")
+    evidence = {"launcher-tests.log": b"previous launcher output\n",
+                "services-tests-before.json": b'{"previous": true}\n',
+                "services-tests-after.json": b'{"previous": true}\n',
+                "resources-tests.txt": b"previous resources\n",
+                "tests.xml": b"<previous-tests/>\n"}
+    for name, content in evidence.items():
+        (out / name).write_bytes(content)
+    result = subprocess.run(["bash", str(SCRIPTS / "body-bc-remote.sh"), "tests", out.name],
+                            env=remote["env"], stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Queue id evidence exists" in result.stderr
+    assert not (remote["root"] / "calls.jsonl").exists()
+    assert (out / "gq-tests.id").read_text() == "previous-job\n"
+    for name, original in evidence.items():
+        assert (out / name).read_bytes() == original, name
 
 
 def test_bc_phase_repeated_interrupt_during_cancel_cancels_job(remote):
