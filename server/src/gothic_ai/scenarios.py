@@ -980,7 +980,7 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
     if pilot is None:
         raise GameError("scenario neural requires GOTHIC_BODY_URL and --neural-body")
     await link.wait_world()
-    npc = "BDT_1014_BANDIT_L"
+    npc = "DIR_NPC_NEURAL_BANDIT"
     arena = "NW_XARDAS_TOWER_VALLEY_09"
     results: dict[str, str] = {}
 
@@ -988,9 +988,11 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
         results[name] = f"{'done' if ok else 'failed'} ({detail})"
 
     # Prepare while separated: no scripted opening conversation, wildlife or allies in the duel.
-    await link.debug("skip_important", near=npc)
     await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
-    await link.debug("npc_goto", npc=npc, waypoint=arena)
+    # Stock BDT_1002 carries a sword but has several instances in the world. Give this
+    # new bandit its own symbol so body_watch and the lease identify exactly one actor.
+    await link.own_npc(npc, like="BDT_1002_BANDIT_L", waypoint=arena)
+    await link.debug("skip_important", near=npc)
     for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
         if not other.dead and other.guild >= BEASTS:
             await link.debug("kill", instance=other.id, near=npc)
@@ -998,11 +1000,27 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
         for seen in view.sees:
             if seen.guild >= BEASTS and seen.body != "dead":
                 await link.debug("kill", instance=seen.id, near=npc)
+    ready = await Bodies(link).act(
+        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+        minutes=60, arrive=True, radius=100, timeout=15,
+    )
+    if ready.status != "arrived":
+        raise GameError(f"neural arena preparation: {ready.status} {ready.detail}")
+    weapon = ["call", "NPC_GETEQUIPPEDMELEEWEAPON", ["inst", "SELF"]]
+    symbol, sword, weapon_name = await link.story_eval(npc, [
+        ["sym", npc], ["&", ["field", weapon, "FLAGS"], ["var", "ITEM_SWD"]],
+        ["field", weapon, "NAME"],
+    ])
+    if not sword:
+        raise GameError(f"neural arena preparation: {npc} has no one-handed sword ({weapon_name})")
+    log.info("neural arena: npc=%s weapon=%s", npc, weapon_name)
     # The passive hero survives enough decisions, then falls to actual melee damage.
     await link.debug("player_hp", hp=300)
     await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
     await _m5b_player_weapon(link, "melee")
-    symbol = (await link.story_eval(npc, [["sym", npc]]))[0]
+    drawn = await Bodies(link).act(npc, "draw_weapon", kind="melee")
+    if drawn.status != "done":
+        raise GameError(f"neural arena preparation: sword draw {drawn.status} {drawn.detail}")
     previous = pilot.last_summary
     leased_entity: int | None = None
     one_handed = False
@@ -1051,7 +1069,7 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
         "neural_lease",
         bool(lease and summary.npc == npc and lease.npc == npc and lease.entity_id == leased_entity
              and lease.provider == "neural-body" and lease.mode == "realtime" and one_handed),
-        f"npc={npc}, entity={leased_entity}, one_handed={one_handed}, lease={lease}",
+        f"npc={npc}, entity={leased_entity}, sword={bool(sword)}, one_handed={one_handed}, lease={lease}",
     )
     check("neural_decisions", summary is not None and summary.decisions >= 10,
           f"decisions={summary.decisions if summary else None}, minimum=10")
