@@ -31,7 +31,7 @@ df -h "$HOME/gothic-ai"
 free -h
 nvidia-smi --query-gpu=memory.used,memory.free,utilization.gpu --format=csv,noheader
 systemctl --user is-active gothic-voxtral gothic-voxcpm
-if pgrep -f '[/]Gothic2Notr([[:space:]]|$)' >/dev/null || pgrep -f '[/]gothic-body-runner([[:space:]]|$)' >/dev/null; then
+if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
 echo "Stage 3 workspace: $HOME/$1"
@@ -44,7 +44,7 @@ set -euo pipefail
 task_root="$HOME/$1"
 mkdir -p "$task_root/source/scripts/bench" "$task_root/source/evals/npc-body" "$task_root/provenance" "$task_root/runs"
 [[ ! -e "$task_root/build-active" ]] || { echo 'Build owns source tree' >&2; exit 1; }
-if pgrep -f '[/]Gothic2Notr([[:space:]]|$)' >/dev/null || pgrep -f '[/]gothic-body-runner([[:space:]]|$)' >/dev/null; then
+if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Active simulation owns source/provenance; do not sync' >&2; exit 1
 fi
 free_kib=$(df -Pk "$task_root" | awk 'NR==2 {print $4}')
@@ -106,7 +106,7 @@ out="$task_root/runs/$run_name"
 [[ ! -e "$task_root/build-active" ]] || { echo 'Wait for build' >&2; exit 1; }
 exec 9>"$HOME/gothic-ai/body-simulation.lock"
 flock -n 9 || { echo 'Another simulation owns shared lock' >&2; exit 1; }
-if pgrep -f '[/]Gothic2Notr([[:space:]]|$)' >/dev/null || pgrep -f '[/]gothic-body-runner([[:space:]]|$)' >/dev/null; then
+if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
 [[ ! -e "$out" ]] || { echo 'Run exists; choose fresh name' >&2; exit 1; }

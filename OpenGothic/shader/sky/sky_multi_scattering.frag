@@ -106,5 +106,5 @@ void main() {
   // Equation 10 from the paper.
   vec3 psi = lum  / (1.0 - f_ms);
   //vec3 psi = vec3(0);
-  outColor = vec4(psi, 1.0);
+  outColor = finiteOrZero(vec4(psi, 1.0));
   }

@@ -58,13 +58,15 @@ class Bodies:
     def busy(self, npc: str) -> bool:
         """An act of ours on the npc is under way: another one now would drop its tracking (a walk's
         npc_idle never comes)."""
-        return self._acting[npc.upper()] > 0
+        return self._acting[npc.upper()] > 0 or self.link.body_owned(npc)
 
     async def act(
         self, npc: str, action: NpcActType, /, *, timeout: float = ACT_TIMEOUT_S, **args: Any
     ) -> BodyOutcome:
         """Queue a soft act for a free npc and wait for its end. `args` go to the game as-is."""
         key = npc.upper()
+        if self.link.body_owned(npc):
+            return BodyOutcome("", npc, "rejected", "NPC body is owned by the combat provider")
         self._acting[key] += 1
         try:
             return await self._act(npc, action, timeout, args)

@@ -44,6 +44,8 @@
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
+#include "game/bodyarena.h"
+#include "game/bodyreplay.h"
 #include "game/navigationeyebench.h"
 #include "game/navigationmemorybench.h"
 #include "game/knownroadsbench.h"
@@ -560,7 +562,8 @@ struct BodyAnimationControl {
   bool totalsWritten = false;
   uint32_t seed = 0;
   uint64_t errors = 0, errorsAtStart = 0;
-  BodyAnimationActor actors[2];
+  BodyAnimationActor actors[4];
+  unsigned actorCount = 2;
   std::vector<BodyAnimationEntry> fixture;
   std::string sourceEventsHash;
   };
@@ -573,6 +576,8 @@ struct Bench {
   bool        loaded    = false;
   bool        started   = false;
   bool        done      = false;
+  std::string holdCommand;      // --fork-prefix: stop before this command
+  bool        heldNow   = false;
   uint64_t    time      = 0;    // game time since the start, ms
   uint64_t    step      = 0;    // fixed steps made
 
@@ -1149,28 +1154,51 @@ bool initializeAnimationControl() {
   return true;
   }
 
-bool beginAnimationControl(uint32_t seed, Npc& first, Npc& second) {
+bool beginAnimationControl(uint32_t seed, const std::vector<Npc*>& actors) {
   auto& control = bench.bodyAnimation;
   control.seed = seed;
+  if((actors.size()!=2 && actors.size()!=4) || std::any_of(actors.begin(),actors.end(),[](Npc* npc) { return npc==nullptr; }))
+    return false;
   if(!initializeAnimationControl())
     return false;
   if(control.mode==BodyAnimationControl::Default)
     return true;
+  if(actors.size()==4 && control.mode==BodyAnimationControl::Replay) {
+    animationControlError("four-actor animation replay requires a separate fixture contract");
+    return false;
+    }
   control.active = true;
   control.errorsAtStart = control.errors;
-  control.actors[0] = {};
-  control.actors[1] = {};
-  control.actors[0].npc = &first;
-  control.actors[1].npc = &second;
-  for(unsigned side=0; side<2; ++side) {
-    // Defined uint32 overflow; two independent streams, refreshed for every bodyduel/reset.
+  control.actorCount = unsigned(actors.size());
+  for(auto& actor:control.actors) actor = {};
+  for(unsigned side=0; side<control.actorCount; ++side) {
+    control.actors[side].npc = actors[side];
+    // Defined uint32 overflow; slots 0/1 preserve the archived two-actor streams.
+    // The four-actor load fixture gets two further independent streams, never std-RNG fallback.
     control.actors[side].rng = seed ^ (0x9e3779b9u*(side+1u));
     if(control.actors[side].rng==0)
       control.actors[side].rng = 0x6d2b79f5u;
     }
   event("body_animation_control_start","\"schema_version\":1,\"mode\":"+jsonStr(animationModeName())+
-        ",\"seed\":"+std::to_string(seed)+",\"source_events_sha256\":"+jsonStr(control.sourceEventsHash));
+        ",\"seed\":"+std::to_string(seed)+",\"source_events_sha256\":"+jsonStr(control.sourceEventsHash)+
+        (control.actorCount==4 ? ",\"actor_count\":4" : ""));
   return true;
+  }
+
+bool beginAnimationControl(uint32_t seed, Npc& first, Npc& second) {
+  return beginAnimationControl(seed,std::vector<Npc*>{&first,&second});
+  }
+
+unsigned animationActorIndex(const Npc& npc) {
+  const auto& control=bench.bodyAnimation;
+  for(unsigned index=0;index<control.actorCount;++index)
+    if(control.actors[index].npc==&npc) return index;
+  return control.actorCount;
+  }
+
+std::string animationActorFields(unsigned index) {
+  return bench.bodyAnimation.actorCount==4 ? ",\"pair_index\":"+std::to_string(index/2)+
+         ",\"animation_actor_index\":"+std::to_string(index) : "";
   }
 
 BodyAnimationEntry* animationFixtureEntry(unsigned side, uint64_t time) {
@@ -1186,8 +1214,8 @@ void observeAnimationAttempt(const Npc& npc, const std::string& fields, uint64_t
     return;
   if((npc.weaponState()!=WeaponState::W1H && npc.weaponState()!=WeaponState::W2H) || Gothic::inst().version().game!=2)
     return;
-  unsigned side = &npc==control.actors[0].npc ? 0 : 1;
-  if(&npc!=control.actors[side].npc)
+  const unsigned side = animationActorIndex(npc);
+  if(side>=control.actorCount)
     return;
   rapidjson::Document row;
   const auto json = "{"+fields+"}";
@@ -1227,9 +1255,9 @@ void observeAnimationAttempt(const Npc& npc, const std::string& fields, uint64_t
     }
   TestBench::bodyEvent(npc,npc.target(),"animation_branch_accept",gameTime,
                       "\"mode\":"+jsonStr(animationModeName())+",\"seed\":"+std::to_string(control.seed)+
-                      ",\"role\":"+jsonStr(side==0 ? "actor" : "target")+",\"relative_time_ms\":"+std::to_string(time)+
+                      ",\"role\":"+jsonStr(side%2==0 ? "actor" : "target")+",\"relative_time_ms\":"+std::to_string(time)+
                       ",\"selected_variant\":"+std::to_string(variant)+",\"animation_name\":"+jsonStr(animation)+
-                      ",\"source_seq\":"+std::to_string(entry==nullptr ? 0 : entry->sourceSeq));
+                      ",\"source_seq\":"+std::to_string(entry==nullptr ? 0 : entry->sourceSeq)+animationActorFields(side));
   }
 
 void endAnimationControl() {
@@ -1281,6 +1309,23 @@ void animationControlTotals() {
 Npc* npcBySymbol(World& w, std::string_view symbol) {
   const size_t id = w.script().findSymbolIndex(symbol);
   return id==size_t(-1) ? nullptr : w.findNpcByInstance(id);
+  }
+
+// `bodyarena`, `bodyreplay`: the configured arena's participants, with isolated animation RNG
+void setupArena(World& w, Npc& pl) {
+  try {
+    BodyArena::setup(w,pl);
+    const auto actors=BodyArena::actors();
+    bench.duelFrom=w.tickCount();
+    if(!beginAnimationControl(BodyArena::seed(),actors))
+      throw std::runtime_error("arena animation RNG setup failed");
+    event("body_arena_setup","\"arena\":"+BodyArena::statusJson());
+    }
+  catch(const std::exception& error) {
+    event("body_arena_error","\"reason\":"+jsonStr(error.what()));
+    bench.pc=bench.prog.size();
+    throw;
+    }
   }
 
 bool aiCommand(const std::string& cmd, std::string& reply) {
@@ -1673,13 +1718,25 @@ Vec3 rotY(const Vec3& v, float deg) {
   return {v.x*c - v.z*s, v.y, v.x*s + v.z*c};
   }
 
-// a shot of the hero and camNpc; false if the npc is not there
-bool npcShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
-  Npc* npc = findNpc(w,pl,bench.camNpc);  // of several (wolves) the nearest living one
-  if(npc==&pl)
-    return false;
+// a shot of the hero and camNpc; false if the npc is not there. camNpc `arena`: the arena's primary
+// in place of the hero and its opponent
+bool npcShot(World& w, Npc& player, Vec3& org, Vec3& tgt) {
+  Npc* npc = nullptr;
+  Npc* own = &player;
+  if(bench.camNpc=="arena") {
+    const auto actors = BodyArena::actors();
+    if(actors.size()<2)
+      return false;
+    own = actors[0];
+    npc = actors[1];
+    } else {
+    npc = findNpc(w,player,bench.camNpc);  // of several (wolves) the nearest living one
+    if(npc==&player)
+      return false;
+    }
   if(npc==nullptr)
     return false;
+  Npc& pl = *own;
   const Vec3 hero  = pl.mapHeadBone();
   const Vec3 other = npc->mapHeadBone();
   Vec3 d = other-hero;
@@ -8168,7 +8225,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.camDist   = num(a,3,m=="shoulder" ? 120 : (m=="face" ? 140 : 250));
       bench.camHeight = num(a,4,m=="shoulder" ? 15 : (m=="face" ? 0 : 10));
       bench.camAngle  = num(a,5,m=="face" ? 30 : 1);
-      if(npcBySymbol(w,bench.camNpc)==nullptr)
+      if(bench.camNpc!="arena" && npcBySymbol(w,bench.camNpc)==nullptr)
         say("cam " + m + ": no npc " + bench.camNpc);
       }
     else if(m=="arrow") {
@@ -8742,12 +8799,31 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     pl.archer().reseed(s);
     say("seed " + std::to_string(s));
     }
-  else if(c=="bodyobserve") {
+  else if(c=="bodyarena") {
+    setupArena(w,pl);
+    }
+  else if(c=="bodyreplay") {
+    // bodyreplay <file> [tail ms 3000]: a recorded lockstep arena episode, replayed for the camera
+    // (game/bodyreplay.h); put it in place of `bodyarena`, the following `wait` ends with the replay
+    try {
+      BodyReplay::load(a.size()>1 ? a[1] : "",outDir,uint64_t(num(a,2,3000)));
+      setupArena(w,pl);
+      }
+    catch(const std::exception& error) {
+      event("body_replay_error","\"reason\":"+jsonStr(error.what()));
+      say("bodyreplay: "+std::string(error.what()));
+      BodyReplay::stop("error");
+      bench.pc=bench.prog.size();
+      }
+    }
+  else if(c=="bodyobserve" || c=="bodyapi") {
+    const bool bodyApi = c=="bodyapi";
+    const size_t actorCount = bodyApi ? 2 : 4;
     // Four mortal native fighters. High HP keeps real damage/defence alive for the ten-minute
     // observation test; no healing, invulnerability, held input or policy owns their bodies.
     const auto fail = [&](const std::string& reason) {
-      event("body_observe_error","\"reason\":"+jsonStr(reason));
-      say("bodyobserve: "+reason);
+      event(bodyApi ? "body_api_error" : "body_observe_error","\"reason\":"+jsonStr(reason));
+      say(c+": "+reason);
       bench.pc = bench.prog.size();
       };
     const char* names[] = {"BDT_1003_BANDIT_M","PAL_255_RITTER","ItMw_1h_Common_01","ItAr_Leather_L",
@@ -8768,14 +8844,14 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const float an = pl.rotation()*float(M_PI)/180.f;
     const Vec3 forward(std::cos(an),0,std::sin(an)), side(-forward.z,0,forward.x);
     Vec3 positions[4];
-    for(size_t i=0;i<4;++i) {
+    for(size_t i=0;i<actorCount;++i) {
       auto p = pl.position()+forward*1200.f+side*((i<2 ? -550.f : 550.f)+(i%2==0 ? -150.f : 150.f));
       const float y = groundY(w,p.x,p.z,p.y);
       if(!std::isfinite(y)) { fail("arena ground not found"); return; }
       p.y = y;
       positions[i] = p;
       }
-    for(size_t i=0;i<4;++i) {
+    for(size_t i=0;i<actorCount;++i) {
       Npc* actor = w.addNpc(ids[i%2],positions[i]);
       if(actor==nullptr) { fail("NPC creation failed"); return; }
       bench.observeActors.push_back(actor);
@@ -8806,7 +8882,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     w.script().setSeed(seed);
     std::string actors = "[";
-    for(size_t i=0;i<4;++i) {
+    for(size_t i=0;i<actorCount;++i) {
       auto* actor = bench.observeActors[i];
       auto* target = bench.observeActors[i^1];
       actor->setExternalControl(false); actor->setTarget(target);
@@ -8818,8 +8894,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                 ",\"symbol\":"+jsonStr(names[i%2])+",\"hp\":1000000,\"hp_max\":1000000,\"immortal\":false}";
       }
     bench.observeFrom = w.tickCount(); bench.observeEnd = bench.observeFrom+duration;
-    bench.observeActive = true; bench.observeVisibleSaved = false;
-    event("body_observe_setup","\"seed\":"+std::to_string(seed)+",\"t_game_ms\":"+
+    // Stage 3 explicitly forbids external/frozen actors. Stage 4 intentionally tests those
+    // transitions and owns its assertions in the API suite, while retaining the same real setup.
+    bench.observeActive = !bodyApi; bench.observeVisibleSaved = false;
+    event(bodyApi ? "body_api_setup" : "body_observe_setup","\"seed\":"+std::to_string(seed)+",\"t_game_ms\":"+
           std::to_string(bench.observeFrom)+",\"duration_ms\":"+std::to_string(duration)+
           ",\"ownership\":\"native\",\"actors\":"+actors+"]");
     }
@@ -10776,6 +10854,10 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
         say("waitarrive: timeout");
       bench.waitArrive = false;
       }
+    if(!bench.holdCommand.empty() && bench.prog[bench.pc].rfind(bench.holdCommand,0)==0) {
+      bench.heldNow = true;
+      return;
+      }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
     if(NavBench::running() || NavDemos::running()) return;
@@ -10903,6 +10985,24 @@ void drawZones(Canvas& cv, Camera* cam) {
         }
       }
     }
+  }
+
+// `cam two arena`: a mark over the arena's primary, the body under test (the opponent is native)
+void drawArenaMark(Pixmap& pm) {
+  const auto actors = BodyArena::actors();
+  auto       cam    = Gothic::inst().camera();
+  if(actors.size()<2 || cam==nullptr)
+    return;
+  Canvas cv;
+  cv.px = reinterpret_cast<uint8_t*>(pm.data());
+  cv.w  = int(pm.w());
+  cv.h  = int(pm.h());
+  const Vec3 at = actors[0]->mapHeadBone() + Vec3(0,40,0);
+  float x = at.x, y = at.y, z = at.z, ww = 1;
+  cam->viewProj().project(x,y,z,ww);
+  if(ww<=1e-3f)
+    return;
+  cv.dot((0.5f*x/ww+0.5f)*float(cv.w),(0.5f*y/ww+0.5f)*float(cv.h),6,{255,200,30,255});
   }
 
 // the arrows' ways (overlay trail): gold lines from the bow to where each flew, fading out after it stopped
@@ -11737,11 +11837,54 @@ void TestBench::configure(std::string scenario, std::string output, int64_t seed
     }
   }
 
+void TestBench::holdBefore(std::string command) {
+  bench.holdCommand = std::move(command);
+  bench.heldNow = false;
+  }
+
+bool TestBench::held() { return bench.heldNow; }
+
+void TestBench::flushOutput() {
+  for(std::FILE* file:{bench.events,bench.csv,logFile})
+    if(file!=nullptr)
+      std::fflush(file);
+  }
+
+void TestBench::retarget(std::string output) {
+  // The template flushed these before forking: closing the fork's copies writes nothing twice.
+  for(std::FILE** file:{&bench.events,&bench.csv,&logFile})
+    if(*file!=nullptr) {
+      std::fclose(*file);
+      *file = nullptr;
+      }
+  outDir = std::move(output);
+  }
+
+void TestBench::resumeHeld() {
+  auto world  = Gothic::inst().world();
+  auto player = Gothic::inst().player();
+  if(!bench.heldNow || world==nullptr || player==nullptr || bench.ctrl==nullptr)
+    throw std::runtime_error("no held scenario step to resume");
+  bench.holdCommand.clear();
+  bench.heldNow = false;
+  run(*world,*player,*bench.ctrl);
+  }
+
 bool TestBench::done() { return bench.done; }
+
+void TestBench::endWait(std::string_view reason) {
+  if(scenarioPath==nullptr || bench.done)
+    return;
+  bench.waitUntil = bench.time;
+  say("wait ended: " + std::string(reason));
+  }
+
 uint64_t TestBench::stepCount() { return bench.step; }
 uint64_t TestBench::nativeChoices() { return bench.nativeChoices; }
 
 std::vector<Npc*> TestBench::bodyObservationActors() {
+  if(BodyArena::enabled())
+    return BodyArena::actors();
   if(!bench.observeActors.empty())
     return bench.observeActors;
   if(bench.duelA!=nullptr && bench.duelB!=nullptr)
@@ -11777,6 +11920,7 @@ void TestBench::bodyEvent(const Npc& actor, const Npc* target, std::string_view 
                      (fields.empty() ? "" : ",") + fields);
   if(phase=="native_attempt")
     observeAnimationAttempt(actor,fields,gameTime);
+  BodyArena::noteCombat(actor,target,phase,fields);
   }
 
 void TestBench::bodyForget(const Npc* npc) {
@@ -11806,8 +11950,8 @@ int TestBench::bodyBlockVariant(const Npc& npc, int fallback) {
   auto& control = bench.bodyAnimation;
   if(!bodyTracing() || !control.active || control.mode==BodyAnimationControl::Default)
     return fallback;
-  const unsigned side = &npc==control.actors[0].npc ? 0 : 1;
-  if(&npc!=control.actors[side].npc)
+  const unsigned side = animationActorIndex(npc);
+  if(side>=control.actorCount)
     return fallback;
   auto& actor = control.actors[side];
   ++actor.solverCalls;
@@ -11835,10 +11979,10 @@ int TestBench::bodyBlockVariant(const Npc& npc, int fallback) {
   actor.lastVariant = variant;
   bodyEvent(npc,npc.target(),"animation_branch_draw",now,
             "\"mode\":"+jsonStr(animationModeName())+",\"seed\":"+std::to_string(control.seed)+
-            ",\"role\":"+jsonStr(side==0 ? "actor" : "target")+",\"relative_time_ms\":"+std::to_string(time)+
+            ",\"role\":"+jsonStr(side%2==0 ? "actor" : "target")+",\"relative_time_ms\":"+std::to_string(time)+
             ",\"fallback_variant\":"+std::to_string(fallback)+",\"selected_variant\":"+std::to_string(variant)+
             ",\"fixture_matched\":"+(entry==nullptr ? "false" : "true")+
-            ",\"source_seq\":"+std::to_string(entry==nullptr ? 0 : entry->sourceSeq));
+            ",\"source_seq\":"+std::to_string(entry==nullptr ? 0 : entry->sourceSeq)+animationActorFields(side));
   return variant;
   }
 
@@ -12738,6 +12882,8 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
 
   if(pm.w()>0 && bench.overlay)
     drawOverlay(pm);
+  if(pm.w()>0 && bench.cam==C_Two && bench.camNpc=="arena")
+    drawArenaMark(pm);
   if(pm.w()>0 && bench.livingDebug) {
     Canvas cv;cv.px=reinterpret_cast<uint8_t*>(pm.data());cv.w=int(pm.w());cv.h=int(pm.h());
     if(!bench.overlay) drawZones(cv,Gothic::inst().camera());

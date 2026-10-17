@@ -5,6 +5,7 @@
 
 #include <cctype>
 #include <optional>
+#include <sstream>
 
 #include "game/compatibility/directmemory.h"
 #include "game/definitions/spelldefinitions.h"
@@ -1556,8 +1557,27 @@ void GameScript::tick(uint64_t dt) {
     dma->tick(dt);
   }
 
-uint32_t GameScript::rand(uint32_t max) {
+uint32_t GameScript::rand(uint32_t max, const Npc* actor) {
+  if(actor!=nullptr && !isolatedRandom.empty()) {
+    auto it = isolatedRandom.find(actor);
+    if(it!=isolatedRandom.end())
+      return uint32_t(it->second())%max;
+    }
   return uint32_t(randGen())%max;
+  }
+
+void GameScript::isolateRandom(const Npc& actor, uint32_t seed, uint32_t stream) {
+  std::seed_seq sequence{seed, stream, 0x5C21D7u};
+  isolatedRandom[&actor].seed(sequence);
+  }
+
+std::string GameScript::randomState(const Npc* actor) const {
+  std::ostringstream out;
+  auto it = actor==nullptr ? isolatedRandom.end() : isolatedRandom.find(actor);
+  if(it!=isolatedRandom.end())
+    out << it->second; else
+    out << randGen;
+  return out.str();
   }
 
 Npc* GameScript::findNpc(zenkit::DaedalusSymbol* s) {
@@ -3414,8 +3434,11 @@ int GameScript::hlp_getinstanceid(std::shared_ptr<zenkit::DaedalusInstance> inst
   }
 
 int GameScript::hlp_random(int bound) {
-  uint32_t mod = uint32_t(std::max(1,bound));
-  return int32_t(randGen() % mod);
+  uint32_t   mod  = uint32_t(std::max(1,bound));
+  const Npc* self = nullptr;
+  if(!isolatedRandom.empty() && vm.global_self()!=nullptr)
+    self = findNpc(vm.global_self());
+  return int32_t(rand(mod,self));
   }
 
 bool GameScript::hlp_isvalidnpc(std::shared_ptr<zenkit::INpc> npcRef) {

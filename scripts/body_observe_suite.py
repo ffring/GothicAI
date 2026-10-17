@@ -25,6 +25,13 @@ from body_headless_suite import (process_sample, rng_environment,
                                  service_snapshot, sha256, write_json)
 
 
+def native_worker_arguments(args):
+    value=getattr(args,"native_serial_workers",False)
+    if type(value) is not bool:
+        raise ValueError("native_serial_workers must be an explicit boolean")
+    return ["--serial-workers"] if value else []
+
+
 class ObserverRunner:
     """Bounded JSONL protocol reader; large rows live in the engine journal."""
     def __init__(self, args: argparse.Namespace):
@@ -40,7 +47,9 @@ class ObserverRunner:
         self.process = subprocess.Popen(
             [str(args.runner), "-g", str(args.assets), "-g2", "-devmode", "--save", str(args.save),
              "--scenario", str(args.scenario), "--output", str(args.output / "initial"),
-             "--mode", "lockstep", "--stdio"], cwd=workdir,
+             "--mode", "lockstep", "--stdio"] +
+            (["--compact-replies"] if getattr(args, "compact_replies", False) else [])+native_worker_arguments(args)+
+            list(getattr(args, "runner_extra_args", [])), cwd=workdir,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
             env=rng_environment("isolated"))
 
@@ -143,6 +152,7 @@ def provenance(args: argparse.Namespace) -> dict[str, Any]:
             "headless": True, "renderer": "none", "display": None, "audio_playback": False,
             "graphics_device_created": False, "window_created": False, "audio_device_created": False,
             "model": None, "sim_fps": 30, "time_multiplier": 1,
+            "native_serial_workers":bool(native_worker_arguments(args)),
             "animation_rng_mode": "isolated", "observer_ownership": "passive",
             "environment": {key: os.environ.get(key) for key in
                             ("DISPLAY", "WAYLAND_DISPLAY", "VK_DRIVER_FILES", "VK_ICD_FILENAMES", "GOTHIC_AI")},

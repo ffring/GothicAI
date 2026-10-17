@@ -1,0 +1,1128 @@
+{
+  "schema_version": 1,
+  "name": "body-stage8-v1",
+  "declared_before_measurement": "2026-10-14",
+  "candidate_policy": "gru",
+  "reference": {
+    "run": "stage7-bc-v9",
+    "immutable": true,
+    "gru_checkpoint_sha256": "7d48c8ddb9383c72aeea14e66b582702a40c70f7a15269efc828dfda58a52801",
+    "mlp_checkpoint_sha256": "c377207c7e97fdc6258af6d3028ed444e38f0fbd2a017a75533e59735e2b5f4e",
+    "old_arena_role": "development_regression",
+    "policy_code_run_name": "stage9-rt-eval-v3"
+  },
+  "groups": {
+    "[\"arena-native-melee-v1\",17]": "train",
+    "[\"arena-native-melee-v1\",61]": "train",
+    "[\"arena-native-melee-v1\",73]": "train",
+    "[\"arena-native-melee-v1\",89]": "train",
+    "[\"arena-native-melee-v1\",101]": "train",
+    "[\"arena-native-melee-v1\",127]": "train",
+    "[\"arena-native-melee-v1\",29]": "eval",
+    "[\"arena-native-melee-v1\",113]": "eval",
+    "[\"arena-native-melee-v1\",43]": "test",
+    "[\"arena-native-melee-v1\",151]": "ood",
+    "[\"arena-native-melee-v1\",163]": "ood",
+    "[\"arena-native-melee-v1\",181]": "train",
+    "[\"arena-native-melee-v1\",191]": "train",
+    "[\"arena-native-melee-v1\",193]": "train",
+    "[\"arena-native-melee-v1\",197]": "train",
+    "[\"arena-native-melee-v1\",199]": "train",
+    "[\"arena-native-melee-v1\",211]": "train",
+    "[\"arena-native-melee-v1\",223]": "eval",
+    "[\"arena-native-melee-v1\",227]": "eval",
+    "[\"arena-native-melee-v1\",229]": "test",
+    "[\"arena-native-melee-v1\",233]": "test",
+    "[\"arena-native-melee-v1\",239]": "ood",
+    "[\"arena-native-melee-v1\",241]": "ood"
+  },
+  "new_data": {
+    "train_seeds": [
+      181,
+      191,
+      193,
+      197,
+      199,
+      211
+    ],
+    "eval_seeds": [
+      223,
+      227
+    ],
+    "test_seeds": [
+      229,
+      233
+    ],
+    "ood_seeds": [
+      239,
+      241
+    ],
+    "teacher_id": "observed-melee-combat-v1",
+    "native_opponent": true,
+    "original_data_immutable": true,
+    "native_opponent_scope": "full_combat_bouts; train-only maneuver microcases use explicitly held scripted opponents",
+    "micro_wall_clearances_cm": [
+      120,
+      130,
+      140,
+      150,
+      160,
+      170
+    ]
+  },
+  "dataset": {
+    "sampling_view": "periodic-v1",
+    "feature_version": "body-periodic-numeric-v1",
+    "action_version": 1,
+    "minimum_train_labels_per_action": 20,
+    "included_actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "normalization_source": "train_only",
+    "max_label_age_game_ms": 67,
+    "maximum_collection_seed_overlap_with_screen": 0,
+    "minimum_new_teacher_train_labels_per_action": {
+      "3": 20,
+      "4": 20,
+      "10": 20,
+      "11": 20
+    }
+  },
+  "training": {
+    "architecture": "gru",
+    "comparison_architecture": "mlp",
+    "seeds": [
+      17,
+      29,
+      43
+    ],
+    "epochs": 120,
+    "patience": 25,
+    "batch_size": 8,
+    "chunk_length": 64,
+    "burn_in": 32,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "device": "cpu",
+    "threads": 2,
+    "max_wall_seconds": 1800,
+    "selection_split": "eval",
+    "selection_view": "full_episode",
+    "selection_criterion": "macro_f1_then_unweighted_nll",
+    "selection_actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "test_and_ood_selection": false,
+    "selection_seed_groups": [
+      223,
+      227
+    ],
+    "legacy_eval_role": "development_regression_only"
+  },
+  "runtime": {
+    "max_actors": 4,
+    "max_age_game_ms": 100,
+    "max_dt_game_ms": 100,
+    "poll_ms": 5,
+    "command_ttl_ms": 100,
+    "compact_replies": true,
+    "heartbeat_interval_ms": 250,
+    "max_stale_refresh_attempts": 2,
+    "startup_warmup_steps": 2,
+    "clock_domain": "linux-clock-monotonic",
+    "periodic_sample_ms": 50,
+    "continue_token_is_memory_only": true,
+    "inference_cpu_threads": 1,
+    "collector_static_gc_freeze": true,
+    "collector_bootstrap_gc_reset": true,
+    "native_deadline_polling": true,
+    "native_serial_workers": true
+  },
+  "probe": {
+    "cases": [
+      {
+        "name": "strafe-221-0",
+        "task": "reset_stress",
+        "seed": 29,
+        "side": 0,
+        "distance_cm": 221,
+        "timeout_ms": 3000,
+        "policies": [
+          "native",
+          "scripted_strafe"
+        ]
+      },
+      {
+        "name": "old-duel-29-0",
+        "task": "native_duel",
+        "seed": 29,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000,
+        "policies": [
+          "native",
+          "gru",
+          "mlp"
+        ]
+      },
+      {
+        "name": "strafe-221-1",
+        "task": "reset_stress",
+        "seed": 29,
+        "side": 1,
+        "distance_cm": 221,
+        "timeout_ms": 3000,
+        "policies": [
+          "native",
+          "scripted_strafe"
+        ]
+      },
+      {
+        "name": "old-duel-29-1",
+        "task": "native_duel",
+        "seed": 29,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000,
+        "policies": [
+          "native",
+          "gru",
+          "mlp"
+        ]
+      }
+    ],
+    "max_episode_substeps": 2200,
+    "model_weights": "reference_fixed",
+    "diagnostics_enabled": true,
+    "policy_credit": false
+  },
+  "shadow": {
+    "cases": [
+      {
+        "name": "shadow-223-0",
+        "task": "native_duel",
+        "seed": 223,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 20000,
+        "policies": [
+          "native",
+          "gru",
+          "mlp"
+        ]
+      }
+    ],
+    "max_episode_substeps": 2200,
+    "wall_overhead_s": 30,
+    "model_weights": "reference_or_selected_fixed",
+    "diagnostics_enabled": true,
+    "owner": "native",
+    "policy_credit": false
+  },
+  "realtime": {
+    "cases": [
+      {
+        "name": "realtime-distance-223-0",
+        "task": "distance",
+        "seed": 223,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "realtime-attack-223-0",
+        "task": "attack",
+        "seed": 223,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "realtime-block-223-0",
+        "task": "block",
+        "seed": 223,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "realtime-native_duel-223-0",
+        "task": "native_duel",
+        "seed": 223,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "realtime-distance-223-1",
+        "task": "distance",
+        "seed": 223,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "realtime-attack-223-1",
+        "task": "attack",
+        "seed": 223,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "realtime-block-223-1",
+        "task": "block",
+        "seed": 223,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "realtime-native_duel-223-1",
+        "task": "native_duel",
+        "seed": 223,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      }
+    ],
+    "policies": [
+      "native",
+      "gru",
+      "mlp"
+    ],
+    "max_episode_substeps": 2200,
+    "wall_overhead_s": 30,
+    "model_weights": "selected_fixed",
+    "diagnostics_enabled": true,
+    "service_probes": true
+  },
+  "load": {
+    "actors": [
+      1,
+      4
+    ],
+    "same_engine_world": true,
+    "four_actor_setup": "two_independent_duel_pairs_all_four_actors_neural_owned",
+    "sampling_ms": 50,
+    "duplicate_virtual_actors_allowed": false,
+    "duration_ms": 20000,
+    "actor_hp": 3000,
+    "quality_credit": false,
+    "minimum_distinct_neural_owners": 4,
+    "seed": 223,
+    "side": 0,
+    "distance_cm": 300,
+    "policies": [
+      "native",
+      "gru",
+      "mlp"
+    ],
+    "cohorts_per_provider": 4
+  },
+  "screening": {
+    "cases": [
+      {
+        "name": "screen-distance-251-0",
+        "task": "distance",
+        "seed": 251,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-251-0",
+        "task": "attack",
+        "seed": 251,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-251-0",
+        "task": "block",
+        "seed": 251,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-251-0",
+        "task": "native_duel",
+        "seed": 251,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000,
+        "arena": {
+          "geometry": "near_wall"
+        }
+      },
+      {
+        "name": "screen-distance-257-1",
+        "task": "distance",
+        "seed": 257,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-257-1",
+        "task": "attack",
+        "seed": 257,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-257-1",
+        "task": "block",
+        "seed": 257,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-257-1",
+        "task": "native_duel",
+        "seed": 257,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-263-0",
+        "task": "distance",
+        "seed": 263,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-263-0",
+        "task": "attack",
+        "seed": 263,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-263-0",
+        "task": "block",
+        "seed": 263,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-263-0",
+        "task": "native_duel",
+        "seed": 263,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-269-1",
+        "task": "distance",
+        "seed": 269,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-269-1",
+        "task": "attack",
+        "seed": 269,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-269-1",
+        "task": "block",
+        "seed": 269,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-269-1",
+        "task": "native_duel",
+        "seed": 269,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-271-0",
+        "task": "distance",
+        "seed": 271,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-271-0",
+        "task": "attack",
+        "seed": 271,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-271-0",
+        "task": "block",
+        "seed": 271,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-271-0",
+        "task": "native_duel",
+        "seed": 271,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-277-1",
+        "task": "distance",
+        "seed": 277,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-277-1",
+        "task": "attack",
+        "seed": 277,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-277-1",
+        "task": "block",
+        "seed": 277,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-277-1",
+        "task": "native_duel",
+        "seed": 277,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000,
+        "arena": {
+          "geometry": "near_wall"
+        }
+      },
+      {
+        "name": "screen-distance-281-0",
+        "task": "distance",
+        "seed": 281,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-281-0",
+        "task": "attack",
+        "seed": 281,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-281-0",
+        "task": "block",
+        "seed": 281,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-281-0",
+        "task": "native_duel",
+        "seed": 281,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-283-1",
+        "task": "distance",
+        "seed": 283,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-283-1",
+        "task": "attack",
+        "seed": 283,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-283-1",
+        "task": "block",
+        "seed": 283,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-283-1",
+        "task": "native_duel",
+        "seed": 283,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-293-0",
+        "task": "distance",
+        "seed": 293,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-293-0",
+        "task": "attack",
+        "seed": 293,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-293-0",
+        "task": "block",
+        "seed": 293,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-293-0",
+        "task": "native_duel",
+        "seed": 293,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-307-1",
+        "task": "distance",
+        "seed": 307,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-307-1",
+        "task": "attack",
+        "seed": 307,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-307-1",
+        "task": "block",
+        "seed": 307,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-307-1",
+        "task": "native_duel",
+        "seed": 307,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-311-0",
+        "task": "distance",
+        "seed": 311,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-311-0",
+        "task": "attack",
+        "seed": 311,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-311-0",
+        "task": "block",
+        "seed": 311,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-311-0",
+        "task": "native_duel",
+        "seed": 311,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000,
+        "arena": {
+          "geometry": "near_wall"
+        }
+      },
+      {
+        "name": "screen-distance-313-1",
+        "task": "distance",
+        "seed": 313,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-313-1",
+        "task": "attack",
+        "seed": 313,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-313-1",
+        "task": "block",
+        "seed": 313,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-313-1",
+        "task": "native_duel",
+        "seed": 313,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-317-0",
+        "task": "distance",
+        "seed": 317,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-317-0",
+        "task": "attack",
+        "seed": 317,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-317-0",
+        "task": "block",
+        "seed": 317,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-317-0",
+        "task": "native_duel",
+        "seed": 317,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-331-1",
+        "task": "distance",
+        "seed": 331,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-331-1",
+        "task": "attack",
+        "seed": 331,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-331-1",
+        "task": "block",
+        "seed": 331,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-331-1",
+        "task": "native_duel",
+        "seed": 331,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-337-0",
+        "task": "distance",
+        "seed": 337,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-337-0",
+        "task": "attack",
+        "seed": 337,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-337-0",
+        "task": "block",
+        "seed": 337,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-337-0",
+        "task": "native_duel",
+        "seed": 337,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-347-1",
+        "task": "distance",
+        "seed": 347,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-347-1",
+        "task": "attack",
+        "seed": 347,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-347-1",
+        "task": "block",
+        "seed": 347,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-347-1",
+        "task": "native_duel",
+        "seed": 347,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000,
+        "arena": {
+          "geometry": "near_wall"
+        }
+      },
+      {
+        "name": "screen-distance-349-0",
+        "task": "distance",
+        "seed": 349,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-349-0",
+        "task": "attack",
+        "seed": 349,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-349-0",
+        "task": "block",
+        "seed": 349,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-349-0",
+        "task": "native_duel",
+        "seed": 349,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-353-1",
+        "task": "distance",
+        "seed": 353,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-353-1",
+        "task": "attack",
+        "seed": 353,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-353-1",
+        "task": "block",
+        "seed": 353,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-353-1",
+        "task": "native_duel",
+        "seed": 353,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-359-0",
+        "task": "distance",
+        "seed": 359,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-359-0",
+        "task": "attack",
+        "seed": 359,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-359-0",
+        "task": "block",
+        "seed": 359,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-359-0",
+        "task": "native_duel",
+        "seed": 359,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "screen-distance-367-1",
+        "task": "distance",
+        "seed": 367,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "screen-attack-367-1",
+        "task": "attack",
+        "seed": 367,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-block-367-1",
+        "task": "block",
+        "seed": 367,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "screen-native_duel-367-1",
+        "task": "native_duel",
+        "seed": 367,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      }
+    ],
+    "seeds": [
+      251,
+      257,
+      263,
+      269,
+      271,
+      277,
+      281,
+      283,
+      293,
+      307,
+      311,
+      313,
+      317,
+      331,
+      337,
+      347,
+      349,
+      353,
+      359,
+      367
+    ],
+    "policies": [
+      "native",
+      "gru",
+      "mlp"
+    ],
+    "mode": "lockstep",
+    "held_out": true,
+    "minimum_success_delta_to_native": -0.15,
+    "selection_allowed": false,
+    "checkpoint_fixed_before_first_case": true,
+    "max_episode_substeps": 2200
+  },
+  "quality": {
+    "minimum_success_delta_to_native": -0.15,
+    "minimum_healthy_neural_control_fraction": 0.95,
+    "maximum_invariant_violations": 0,
+    "maximum_softlocks": 0,
+    "model_step_p95_ms": 5,
+    "collector_to_command_send_p95_ms": 20,
+    "observation_to_arbitration_p95_ms": 100,
+    "maximum_service_p95_degradation_fraction": 0.1,
+    "defense_reaction": "observed_windup_to_real_defense_start_within_actual_native_window",
+    "no_native_fallback_success_credit": true
+  },
+  "resources": {
+    "host": "dev-ubuntu",
+    "device": "cpu",
+    "cuda_visible_devices": "",
+    "threads": 2,
+    "cpu_quota_percent": 200,
+    "memory_max_gib": 6,
+    "required_services": [
+      "gothic-voxtral",
+      "gothic-voxcpm",
+      "gothic-decider",
+      "gothic-gemma"
+    ],
+    "production_identity_unchanged": true,
+    "docker_changes_allowed": false
+  },
+  "services": {
+    "workload": "fixed_fixture_same_run_before_and_during_healthy_four_actor_load",
+    "request_cadence": {
+      "schema_version": 1,
+      "kind": "four_bursts_monotonic_v1",
+      "bursts": 4,
+      "measured_per_burst": 5,
+      "warmup_first_burst": 2,
+      "nominal_start_interval_ms": 20000,
+      "minimum_actual_start_interval_ms": 20000,
+      "maximum_actual_start_interval_ms": 25000,
+      "baseline_offsets_ms": [
+        0,
+        20000,
+        40000,
+        60000
+      ],
+      "during_timing": "actual_arena_start_plus_reset_floor_before_reset"
+    },
+    "warmup_requests": 2,
+    "measured_requests": 20,
+    "concurrency_per_service": 1,
+    "model_requests_bounded": true,
+    "metrics": [
+      "asr_completion_ms",
+      "tts_first_pcm_ms",
+      "decider_first_decision_ms",
+      "gemma_first_token_ms"
+    ],
+    "exact_fixture_binding_required": true,
+    "during_cohorts": 4,
+    "measured_requests_per_cohort": 5,
+    "warmup_cohort": 0,
+    "parallel_across_services": true,
+    "request_overlap_rule": "full request interval inside started, healthy four-owner arena window; no after-terminal credit"
+  },
+  "limitations": [
+    "Stage8 screening is diagnostic admission, not the 100-seed release gate.",
+    "Old test/OOD already inspected are not used to choose or tune new weights.",
+    "Any further training after fresh screening failure requires a newly declared held-out screen; failed artifacts remain immutable."
+  ],
+  "verification": {
+    "seed": 17,
+    "tolerance": 1e-05,
+    "warmup": 100,
+    "iterations": 500,
+    "model_step_p95_budget_ms": 5,
+    "all_model_tests_host": "dev-ubuntu"
+  },
+  "overfit": {
+    "source_split": "train",
+    "seed": 17,
+    "steps": 500,
+    "max_chunks": 11,
+    "learning_rate": 0.003,
+    "weight_decay": 0,
+    "target_accuracy": 0.98,
+    "max_wall_seconds": 600,
+    "deployment_candidate": false
+  },
+  "engine_compatibility": {
+    "proof_run": "stage8-motor-v7",
+    "historical_owned_trajectory_equivalence": false,
+    "new_teacher_capture_requires_current_binary": true
+  },
+  "service_gate_role": "remote_host_not_measured",
+  "service_gate_protocol_version": 2
+}

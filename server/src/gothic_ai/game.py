@@ -24,9 +24,23 @@ from .protocol import (
     AttachCmd,
     BeastCmd,
     BeastDo,
+    BodyAcquireCmd,
+    BodyActionCmd,
+    BodyControlEvent,
+    BodyControlEvents,
+    BodyControlEventsCmd,
+    BodyControlResult,
+    BodyControlStatus,
+    BodyControlStatusCmd,
+    BodyDisconnectCmd,
+    BodyGoalCmd,
+    BodyHeartbeatCmd,
+    BodyLease,
+    BodyMode,
     BodyObservation,
     BodyObservationPacket,
     BodyObservations,
+    BodyReleaseCmd,
     BodyWatchCmd,
     Chest,
     DebugCmd,
@@ -76,6 +90,14 @@ log = logging.getLogger(__name__)
 _Request = (
     AttachCmd
     | BeastCmd
+    | BodyAcquireCmd
+    | BodyActionCmd
+    | BodyGoalCmd
+    | BodyHeartbeatCmd
+    | BodyReleaseCmd
+    | BodyControlEventsCmd
+    | BodyControlStatusCmd
+    | BodyDisconnectCmd
     | BodyWatchCmd
     | DetachCmd
     | DebugCmd
@@ -133,6 +155,11 @@ class GameLink:
         self.body_sequence_gaps = 0
         self.body_stale_packets = 0
         self._body_last_seq = 0
+        self.body_leases: dict[int, BodyLease] = {}
+        self._body_command_ids = itertools.count(1)
+        self._body_control_events: deque[BodyControlEvent] = deque(maxlen=512)
+        self._body_control_last_event = 0
+        self.body_control_dropped_events = 0
         self.listeners: list[Listener] = []
         self.closed = asyncio.Event()
 
@@ -190,6 +217,9 @@ class GameLink:
             case BodyObservations():
                 if not self._receive_body_observations(msg.packet):
                     return
+            case BodyControlEvents():
+                if not self._receive_body_control_events(msg):
+                    return
             case Detached():
                 self.snapshots.pop(msg.npc, None)
             case NpcActResult(status="rejected"):
@@ -199,6 +229,10 @@ class GameLink:
 
     def _clear_body_observations(self) -> None:
         self.body_latest.clear()
+        self.body_leases.clear()
+        self._body_control_events.clear()
+        self._body_control_last_event = 0
+        self.body_control_dropped_events = 0
         self._body_packets.clear()
         self.body_generation = None
         self.body_session_epoch = None
@@ -233,10 +267,36 @@ class GameLink:
             self.body_sequence_gaps += max(0, row.observation_seq - self._body_last_seq - 1)
             self._body_last_seq = row.observation_seq
             self.body_latest[row.entity_id] = row
+            lease = self.body_leases.get(row.entity_id)
+            if lease is not None and (
+                row.observation_seq > lease.acquired_observation_seq and
+                lease.control_generation != row.control_generation
+            ):
+                self.body_leases.pop(row.entity_id, None)
         if len(self._body_packets) == self._body_packets.maxlen:
             self.body_buffer_dropped_packets += 1
         self._body_packets.append(packet)
         return True
+
+    def _receive_body_control_events(self, packet: BodyControlEvents) -> bool:
+        if packet.session_epoch != self.body_session_epoch or packet.world_epoch != self.body_generation:
+            return False
+        if packet.events and packet.events[0].event_seq <= self._body_control_last_event:
+            return False
+        for event in packet.events:
+            self._body_control_last_event = event.event_seq
+            lease = self.body_leases.get(event.entity_id)
+            if lease is not None and event.control_generation == lease.control_generation and (
+                event.phase == "ownership" and event.reason == "native_restored"
+            ):
+                self.body_leases.pop(event.entity_id, None)
+            if len(self._body_control_events) == self._body_control_events.maxlen:
+                self.body_control_dropped_events += 1
+            self._body_control_events.append(event)
+        return True
+
+    def pop_body_control_event(self) -> BodyControlEvent | None:
+        return self._body_control_events.popleft() if self._body_control_events else None
 
     def pop_body_observations(self) -> BodyObservationPacket | None:
         """Consume one queued packet; the latest state remains available in body_latest.
@@ -309,6 +369,135 @@ class GameLink:
             self._clear_body_observations()
             self.body_generation = generation
         return stats
+
+    def body_owned(self, npc: str) -> bool:
+        """Client cache hint; the bridge checks the actual owner before any legacy mutation."""
+        return any(lease.npc == npc.upper() for lease in self.body_leases.values())
+
+    async def _body_request(self, cmd: _Request, timeout: float) -> BodyControlResult:
+        result = BodyControlResult.model_validate((await self._request(cmd, timeout)).value)
+        if not result.accepted:
+            raise GameError(f"body command rejected: {result.reason}")
+        if isinstance(cmd, (
+            BodyAcquireCmd, BodyActionCmd, BodyGoalCmd, BodyHeartbeatCmd, BodyReleaseCmd, BodyDisconnectCmd,
+        )):
+            if (result.entity_id, result.session_epoch, result.world_epoch) != (
+                cmd.entity_id, cmd.session_epoch, cmd.world_epoch,
+            ):
+                raise GameError("body response belongs to a different actor or world")
+            if self.body_session_epoch != result.session_epoch or self.body_generation != result.world_epoch:
+                raise GameError("body response belongs to an invalidated world")
+            if not isinstance(cmd, BodyAcquireCmd) and result.control_generation != cmd.control_generation:
+                raise GameError("body response belongs to a different control generation")
+        return result
+
+    async def body_acquire(
+        self, npc: str, observation: BodyObservation, provider: str, *,
+        mode: BodyMode = "realtime", timeout_ms: int = 500, timeout: float = 5.0,
+    ) -> BodyLease:
+        """Claim a watched actor using its real process/world/target IDs, without changing native state."""
+        if mode != "realtime":
+            raise GameError("ordinary game body control requires realtime mode")
+        cmd = BodyAcquireCmd(
+            req=self._next_id("bc"), entity_id=observation.entity_id,
+            session_epoch=observation.session_epoch, world_epoch=observation.world_epoch,
+            provider=provider, mode=mode, timeout_ms=timeout_ms,
+            target_entity_id=observation.target.entity_id,
+        )
+        result = await self._body_request(cmd, timeout)
+        lease = BodyLease(
+            npc=npc.upper(), provider=provider, mode=mode, session_epoch=result.session_epoch,
+            world_epoch=result.world_epoch, entity_id=result.entity_id,
+            control_generation=result.control_generation, goal_version=result.goal_version,
+            target_entity_id=observation.target.entity_id,
+            acquired_observation_seq=observation.observation_seq,
+        )
+        # A loading/disconnect notification may already have invalidated this response's world.
+        if self.body_session_epoch != lease.session_epoch or self.body_generation != lease.world_epoch:
+            raise GameError("body acquisition belongs to an invalidated world")
+        if len(self.body_leases) >= 4 and lease.entity_id not in self.body_leases:
+            raise GameError("body lease cache is full")
+        self.body_leases[lease.entity_id] = lease
+        return lease
+
+    async def body_goal(
+        self, lease: BodyLease, goal_version: int, target_entity_id: int, *, timeout: float = 5.0,
+    ) -> BodyLease:
+        cmd = BodyGoalCmd(
+            req=self._next_id("bg"), **self._body_scope(lease), goal_version=goal_version,
+            target_entity_id=target_entity_id,
+        )
+        result = await self._body_request(cmd, timeout)
+        updated = lease.model_copy(
+            update={"goal_version": result.goal_version, "target_entity_id": target_entity_id}
+        )
+        if self.body_leases.get(lease.entity_id) == lease:
+            self.body_leases[lease.entity_id] = updated
+        return updated
+
+    @staticmethod
+    def _body_scope(lease: BodyLease) -> dict[str, Any]:
+        return lease.model_dump(
+            include={"entity_id", "session_epoch", "world_epoch", "provider", "control_generation"}
+        )
+
+    async def body_action(
+        self, lease: BodyLease, observation: BodyObservation, action_id: int, *,
+        command_id: int | None = None, ttl_ms: int = 200, timeout: float = 5.0,
+    ) -> BodyControlResult:
+        if (observation.entity_id, observation.session_epoch, observation.world_epoch) != (
+            lease.entity_id, lease.session_epoch, lease.world_epoch,
+        ):
+            raise GameError("body observation belongs to a different actor or world")
+        if observation.control_generation != lease.control_generation or not observation.action_mask_valid:
+            raise GameError("body observation does not grant this control generation")
+        if (
+            observation.goal.version != lease.goal_version or
+            observation.goal.target_id != lease.target_entity_id
+        ):
+            raise GameError("body observation belongs to an older goal or target")
+        cmd = BodyActionCmd(
+            req=self._next_id("ba"), **self._body_scope(lease),
+            command_id=next(self._body_command_ids) if command_id is None else command_id,
+            goal_version=lease.goal_version, target_entity_id=lease.target_entity_id,
+            observation_seq=observation.observation_seq, issued_game_ms=observation.t_game_ms,
+            action_id=action_id, ttl_ms=ttl_ms,
+        )
+        return await self._body_request(cmd, timeout)
+
+    async def body_heartbeat(self, lease: BodyLease, *, timeout: float = 5.0) -> BodyControlResult:
+        return await self._body_request(
+            BodyHeartbeatCmd(req=self._next_id("bh"), **self._body_scope(lease)), timeout,
+        )
+
+    async def body_release(self, lease: BodyLease, *, timeout: float = 5.0) -> BodyControlResult:
+        result = await self._body_request(
+            BodyReleaseCmd(req=self._next_id("br"), **self._body_scope(lease)), timeout,
+        )
+        if result.owner == "native" and not result.release_pending:
+            self.body_leases.pop(lease.entity_id, None)
+        return result
+
+    async def body_control_status(self, *, timeout: float = 5.0) -> BodyControlStatus:
+        result = await self._request(BodyControlStatusCmd(req=self._next_id("bs")), timeout)
+        status = BodyControlStatus.model_validate(result.value)
+        if status.session_epoch == self.body_session_epoch and status.world_epoch == self.body_generation:
+            for actor in status.actors:
+                lease = self.body_leases.get(actor.entity_id)
+                if lease is not None and actor.control_generation != lease.control_generation:
+                    self.body_leases.pop(actor.entity_id, None)
+        return status
+
+    async def body_events(self, *, timeout: float = 5.0) -> BodyControlEvents:
+        result = await self._request(BodyControlEventsCmd(req=self._next_id("be")), timeout)
+        events = BodyControlEvents.model_validate(result.value)
+        self._receive_body_control_events(events)
+        return events
+
+    async def body_disconnect(self, lease: BodyLease, *, timeout: float = 5.0) -> BodyControlResult:
+        return await self._body_request(
+            BodyDisconnectCmd(req=self._next_id("bd"), **self._body_scope(lease)), timeout,
+        )
 
     async def routine(self, npc: str, timeout: float = 5.0) -> RoutineInfo:
         """The npc's daily routine, its routine variants and current script state (v6)."""

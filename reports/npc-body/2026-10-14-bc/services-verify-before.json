@@ -1,0 +1,10 @@
+{
+  "recorded_at_utc": "2026-10-13T23:34:12.653035+00:00",
+  "services": {
+    "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=3366349",
+    "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+    "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+    "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+  },
+  "gpu": "19001 MiB, 5124 MiB, 0 %"
+}

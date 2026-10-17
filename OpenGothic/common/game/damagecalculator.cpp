@@ -94,7 +94,7 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
     const float   d      = (nother.position()-nsrc.position()).length();
     const int32_t talent = int32_t(std::lround(b.hitChance()*100.f));
     const int32_t chance = vanillaChance(script,talent,d);
-    const int32_t roll   = int32_t(script.rand(100));
+    const int32_t roll   = int32_t(script.rand(100,&nsrc));
     noHit = roll>=chance;
     if(TestBench::isActive()) {
       const auto who = TestBench::who(&nother);
@@ -108,7 +108,7 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
     }
   else if(!b.isSpell()) {
     auto& script    = nsrc.world().script();
-    float hitChance = float(script.rand(100))/100.f;
+    float hitChance = float(script.rand(100,&nsrc))/100.f;
     float hitCh     = 0;
     bool  g2        = Gothic::inst().version().game==2;
     float refRange  = g2 ? ReferenceBowRangeG2 : ReferenceBowRangeG1;
@@ -136,7 +136,7 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
 
     if(!g2 && !noHit && !invincible) {
       const int32_t mul        = script.criticalDamageMultiplyer();
-      const int     critChance = int(script.rand(100));
+      const int     critChance = int(script.rand(100,&nsrc));
       if(std::lround(100.f * b.critChance())>critChance)
         dmg *= mul;
       }
@@ -192,7 +192,7 @@ DamageCalculator::Val DamageCalculator::swordDamage(Npc& nsrc, Npc& nother) {
   const int dtype      = damageTypeMask(nsrc);
   Talent    tal        = TALENT_UNKNOWN;
   int       str        = nsrc.attribute(Attribute::ATR_STRENGTH);
-  int       critChance = int(script.rand(100));
+  int       critChance = int(script.rand(100,&nsrc));
 
   int value = 0;
 

@@ -1,6 +1,8 @@
 # План реализации GRU слоя управления телом NPC
 
-Статус: **этапы 1–3 готовы**, 13 октября 2026 года. Контракт, native trace, melee сценарий, baseline, настоящий headless runner и частые числовые наблюдения проверены на `dev-ubuntu`. Результаты — [baseline](../reports/npc-body/2026-10-13-melee-reference/body-baseline.md), [его границы](../reports/npc-body/2026-10-13-melee-reference/run-notes.md), [отчёт headless](../reports/npc-body/2026-10-13-headless/headless-report.md) и [наблюдения](../reports/npc-body/2026-10-13-observations/body-observe.md). Следующий этап — боевой API и арбитр тела. Основание — [исследование архитектур](../research_notes/npc_body_control_architectures.md), [текущие контуры NPC](npc-agent.md) и [протокол игры](protocol.md).
+Статус: **этапы 1–7 готовы; этап 8 — боевой gate пройден (gate v16, 15 октября 2026 года, Ryzen 9 3950X)**: известные сценарии, нагрузка из 4 NPC и свежий screening на 20 seed прошли все боевые пороги; сервисный бюджет на этом хосте не измерялся и остаётся отдельным отчётом. [Итог gate v16](../reports/npc-body/2026-10-15-gate-v16/README.md), [продолжение после остановки](../reports/npc-body/2026-10-15-stage8-resume/README.md), [прежняя остановка](npc-body-stage8-stop-report.md). Релизный gate на 100 seed не начат.
+
+Добраны 37 физических демонстраций, включая поворот, отскок, wait300 и стену; GRU/MLP обучены на общем periodic dataset с 11 классами. Первый checkpoint прошёл 12/12 микро-задач, но 0/6 дуэлей из-за native perception loss и возврата к native AI. Последующее обучение на корпусе207 и known-проверки описаны ниже; итоговый допуск также не пройден. Новые запуски не назначены.
 
 **Первый результат — один NPC с оружием ближнего боя, который выбирает следующий боевой примитив через GRU и сражается в воспроизводимой headless арене на `dev-ubuntu`.** Движок сохраняет движение, столкновения, урон, анимации и ограничения прерывания. Большая LLM и Strands задают намерение и режим; GRU получает числовую задачу и состояние боя.
 
@@ -19,21 +21,21 @@
 
 ## Этапы и зависимости
 
-Этапы 1–3 выполнены; остальные запланированы. Каждый заканчивается коротким отчётом с конфигурацией, результатами и выводом о прохождении критериев.
+Этапы 1–7 выполнены, боевой gate этапа 8 пройден (gate v16). Следующий — этап 9 по решению пользователя от 15 октября 2026 года: сначала скорость симуляции (9.1), затем отбор лучших прогонов и PPO. Этапы 10–11 описаны, но не назначены.
 
 | Этап | Результат | Зависимость |
 |---|---|---|
 | 1, готов | Контракт действия, baseline и бюджет задержки | Начало |
 | 2, готов | Headless runner настоящего движка на dev-ubuntu | 1 |
 | 3, готов | Частые числовые наблюдения в общей симуляции | 1–2 |
-| 4 | Боевой API и один владелец тела | 2–3 |
-| 5 | Headless арена, reset и измерение скорости среды | 2–4 |
-| 6 | Проверенный recorder и датасет на сервере | 4–5 |
-| 7 | GRU service и обучение BC, рядом MLP baseline | 6 и ресурсный бюджет |
-| 8 | Исполнение GRU в headless арене и исправление ошибок | 7 |
-| 9 | Recurrent PPO на сервере и проверка улучшения | 5 и 8; DAgger необязателен |
-| 10 | Интеграция с намерениями и ограниченное включение в мире | 8 и общий release gate; 9 для PPO checkpoint |
-| 11 | Локальная навигация, препятствия и несколько целей | После готовности первой версии |
+| 4, готов | Боевой API и один владелец тела | 2–3 |
+| 5, готов | Headless арена, reset и измерение скорости среды | 2–4 |
+| 6, готов | Проверенный recorder и датасет на сервере | 4–5 |
+| 7, реализация готова | GRU service, MLP baseline и BC; checkpoint quality gate не пройден | 6 и ресурсный бюджет |
+| 8, боевой gate пройден | Gate v16: known, нагрузка 4 NPC и свежий screening; сервисы — отдельный отчёт | 7 |
+| 9, в работе | Сильнее учителя: скорость симуляции, отбор лучших прогонов, PPO, новые действия и ситуации, сравнение MLP/GRU/Mamba. 9.1–9.2 готовы, первый прогон 9.3 дал рабочую модель P30 | 8; начинается с 9.1 |
+| 10, не начат | Интеграция с намерениями и ограниченное включение в мире | 8 и общий release gate; только после возобновления |
+| 11, не начат | Локальная навигация, препятствия и несколько целей | После готовности первой версии и возобновления |
 
 Численные бюджеты ниже — **начальные критерии проекта**, а не обещанные результаты. На этапе 1 проверяем их реалистичность и фиксируем до обучения. Если бюджет меняется, отчёт объясняет причину; критерии не подгоняются под выбранный checkpoint.
 
@@ -165,6 +167,8 @@ Runner использует общую симуляцию настоящего �
 
 ## Этап 4 Боевой API и арбитр тела
 
+**Выполнен 13 октября 2026 года.** [API и runtime](npc-body-api.md), [отчёт](../reports/npc-body/2026-10-13-body-api/validation-notes.md), [37 независимых проверок](../reports/npc-body/2026-10-13-body-api/body-api.md). Общий арбитр расположен в `OpenGothic/common/game/bodycontroller`, headless и bridge используют один parser/resolver/executor. Native-off совпал с архивом этапа 3 на seeds 17/29/43. Первая версия управляет melee относительно текущей native цели; стратегические goals и выбор другой цели ещё запланированы.
+
 **Сделать:** общий resolver/mask и source selector рядом с `FightAlgo`/`Npc::implAttack`; отдельный body controller в bridge. Сначала команды задаёт scripted provider.
 
 Арбитр допускает одного владельца. Native AI, soft `npc_act`, управление в разговоре и новая policy не должны одновременно выбирать движение или чистить очереди друг друга. Владение разрешается по `body_control`, ограничениям сценария и цели. Сюжетный/native takeover завершает neural generation.
@@ -183,11 +187,13 @@ Mask описывает реально допустимые примитивы. 
 
 ## Этап 5 Headless арена и runner эпизодов
 
+**Выполнен 13 октября 2026 года.** [Арена и API эпизода](npc-body-arena.md), [результаты и ограничения](../reports/npc-body/2026-10-13-arena/validation-notes.md), [независимый отчёт](../reports/npc-body/2026-10-13-arena/body-arena.md). Полная серия `stage5-v2`: 100 восстановлений после настоящего урона/движения/active wait, 130 arena snapshots/эпизодов, микроэпизоды, 12 paired и 12 throughput эпизодов. Измерено 2,471 реальных policy transitions/s с reset и local provider; p95 reset 1,168 с. Бюджет сбора 32768 таких решений за 6 часов пройден по simulator-only прогнозу; model inference и optimizer ещё не измерены. `control_lost` завершает неуспешный candidate эпизод, исключается из actor updates и не засчитывается как победа.
+
 **Сделать:** episode orchestration поверх headless runner на `dev-ubuntu`, reset из контрольного save/setup с повторной установкой участников, характеристик, позиции, цели и seed. Добавить серии коротких задач: дистанция, блок scripted атаки, собственный удар и native дуэль. На Mac эпизоды не собираются.
 
 Существующий стенд с fixed шагом 30 fps и `seed` служит источником сценариев и reference, но сам по себе остаётся графической игрой. Использовать совместимые команды/общие сценарные данные и новый headless API; проверить фактический throughput вместе с local provider и без видео. [TestBench](../OpenGothic/common/testbench.cpp), [bench tools](../scripts/bench/README.md).
 
-`terminated` означает смерть/выведение из строя или достигнутую terminal цель; `truncated` — лимит времени. Load, crash, disconnect и неудачный setup имеют отдельный infrastructure status. Timeout дуэли не маркируется победой.
+`terminated` означает смерть/выведение из строя или достигнутую terminal цель; `truncated` — лимит времени либо `control_lost` при потере цели scripted участником. Load, crash, disconnect и неудачный setup имеют отдельный infrastructure status. Timeout и потеря управления не маркируются победой.
 
 **Готовность:**
 
@@ -201,6 +207,8 @@ Mask описывает реально допустимые примитивы. 
 **Код:** общий melee scenario/setup, headless episode runner и адаптер reference для [testbench.cpp](../OpenGothic/common/testbench.cpp); переиспользовать [scenarios.py](../server/src/gothic_ai/scenarios.py) и [bench_report.py](../scripts/bench_report.py), где они подходят без GUI. Проверка — одна серверная серия `body_arena`, pytest и симуляция последовательно.
 
 ## Этап 6 Траектории и датасет
+
+**Выполнен 14 октября 2026 года.** [Контракт recorder и loader](npc-body-trajectories.md), [результаты и ограничения](../reports/npc-body/2026-10-14-trajectories/validation-notes.md), [независимый отчёт](../reports/npc-body/2026-10-14-trajectories/body-trajectories.md). Полная серия `stage6-v1`: 23 эпизода, 16 421 наблюдение, 1 236 решений/переходов и 681 пригодная BC label. Сырые causal joins, masks, lifecycle, групповые train/eval/test/OOD splits, train normalization и ordered loader с reset/burn-in проверены; OFF/ON и исторический native baseline совпали. Train содержит 455 labels. Coverage gate первого BC **ещё не пройден**: `turn_to_target` 14/20, `jump_back` 0/20, `wait_300` 0/20; отсутствует сценарий стены. Модели и optimizer на этом этапе не запускались.
 
 **Сделать:** отдельный body recorder на `dev-ubuntu`, подписанный на headless observations/decision/execution events. Семантический trace разговоров не использовать как основной частый журнал. Писать компактные файлы с последующей упаковкой для обучения; JSONL подходит для первых диагностических эпизодов.
 
@@ -226,6 +234,8 @@ Replay здесь проверяет журнал и связи, а не обе�
 
 ## Этап 7 Сервис и behavioral cloning
 
+Реализация: [workflow](npc-body-bc.md), [body-service](../body-service/README.md), [remote launcher](../scripts/body-bc-remote.sh). Результаты: [validation notes](../reports/npc-body/2026-10-14-bc/validation-notes.md), [независимый audit](../reports/npc-body/2026-10-14-bc/body-bc.json). `implementation_ready=true`, `checkpoint_ready=false`: численные и runtime инварианты пройдены; дуэли требуют разбора. Сохранены шесть training runs и eval-selected веса GRU/MLP на сервере.
+
 **Сделать:** отдельный пакет `body-service/` с `serve`, сборкой dataset, BC training и evaluation; отдельный `uv` environment в `~/gothic-ai/body/`. Сервис не загружает языковую модель.
 
 Actor: self/goal/geometry features → MLP → GRU-256 → masked categorical primitive head. Для первой дуэли target фиксирован. При нескольких целях сохранять per-entity embeddings и использовать scorer по каждой сущности; одного pooling для выбора ID недостаточно. Critic понадобится на этапе PPO.
@@ -244,6 +254,40 @@ Recorder дополнительно отмечает, какие наблюде�
 
 ## Этап 8 Управление в headless арене и разбор ошибок
 
+**Итог (15 октября 2026 года): gate v16 — PASS** на Ryzen 9 3950X; свежий screening GRU 20/20 во всех четырёх задачах (native: блок 0/20, дуэль 9/20); нагрузка 4 NPC — neural control ≥ 0,989; p95 модели ≤ 1,3 мс. [Отчёт](../reports/npc-body/2026-10-15-gate-v16/README.md). Ниже — история до этого допуска.
+
+**Статус: STOPPED_AT_PREFLIGHT.** Единственная дополнительная SafePeer калибровка закрыта: шесть эпизодов с сохранением HP и без infrastructure failure; approved action2/5/11 =0/2/0 при требовании2/2/2. Поэтому сбор72, child279, новое обучение и новый боевой gate не запускались. Fresh screening не запускался. [Итог остановки](npc-body-stage8-stop-report.md). В сохранённом child `stage8-defence-bc-v2` подтверждены 72/72 настоящих завершённых блока (9): 36 train и по 12 eval/test/OOD. Объединённый датасет — 207 эпизодов (148 train, 20 eval, 19 test, 20 OOD); train содержит 1104 метки, включая 36 новых блоков, eval — 169 меток и пять классов из 11. CPU verification и tiny overfit GRU/MLP прошли; overfit accuracy — 1,0.
+
+Все шесть CUDA jobs завершены по фиксированному профилю 120 эпох / patience25; GPU unit — 23 мин 7,662 с. Monitor сохранил 681 sample: peak наших процессов 472 MiB, минимум свободной VRAM 4646 MiB; четыре сервиса сохранили active/running и PID. Выбраны GRU seed 11 / epoch 25 и MLP seed 11 / epoch 14, веса зафиксированы 2026-10-14 11:15:23.540769 UTC. Точность GRU на сохранённых метках: eval 164/169, test 74/92, OOD 117/156; block recall 12/12, 17/18, 15/18 без false positives. Warm CPU p95 — GRU 0,132028 мс, MLP 0,117020 мс. Независимый [числовой аудит](../reports/npc-body/2026-10-14-combat/defence-v2/README.md) прошёл 3867 файловых привязок.
+
+Gate-v1 не пройден; gate-v2 остановился на infrastructure `rng_state`. Gate-v3 собрал зарегистрированную known matrix: 3 shadow, 24 ordinary, 6 reaction. [Known audit R2](../reports/npc-body/2026-10-14-combat/gate-v3/README.md) — PASS: оба настоящих блока GRU сохранили HP300, neural control 1 и fallback 0; физический старт 66 игровых мс при окне 166 мс. Первый reader failure сохранён; external correction меняет только predicate `shadow` для native comparator с пустыми controls. Числовой аудит, выбранные веса и normalizer прежние; общего боевого PASS нет.
+
+Compact/startup/dispatch hooks подключены, восемь CPU runtimes прогреваются до reset. Последующий [gate-v4](../reports/npc-body/2026-10-14-combat/gate-v4/README.md) завершил known 3/24/6, но не прошёл порог управления в одном distance случае: физический успех, 2/3 принятых решений, strict stale rejection и один fresh retry, без fallback. В старом запуске нет tick BEGIN/native READ, поэтому будущий observation EMIT не устанавливает начало тика. Отказ API не получает исключения или зачёта.
+
+[Motor-v14](../reports/npc-body/2026-10-14-combat/motor-v14/README.md) (`ac2dfe…5263`) прошёл full native parity 17/29/43, API37, realtime4, visibility8 и compact10. Его queue probe с нулём реальных priority admissions сохранён как FAIL. [Queue15](../reports/npc-body/2026-10-14-combat/motor-v15-queue/README.md) на том же бинарнике подтвердила 13 heartbeat admissions, один post-tick запрос чтения и два accepted/started wait11 без отказов; шесть tests прошли. Это не 13 приоритетных боевых действий. Доставка использует paced heartbeat, bounded fresh retries и явный compact transport с `discard_hidden`; rejected commands не получают зачёт.
+
+Gate-v5 declaration прошла за 17,487 с с привязками Motor14/queue15, failed gate-v1/v2/v4 и known-v3. Исходные focused tests — 58 PASS и два fixture failure; внешняя правка только fixtures прошла 2/2 при неизменном producer. Known 3/24/6 завершена, но [аудит gate-v5](../reports/npc-body/2026-10-14-combat/gate-v5/README.md) не прошёл latency: второй memory-only GRU шаг 18,962995 мс при пороге 5 мс. Первый управляющий шаг 1,243341 мс; оба блока настоящие, HP300, control 1 и fallback 0. CPU/thread samples по шагам нет, причина всплеска не доказана.
+
+[Gate-v6 known audit](../reports/npc-body/2026-10-14-combat/gate-v6/README.md) — PASS за 42,099 с: 3/24/6 закрыты, issues пусты. Frozen CPU profile tests48 и final evaluation tests63 прошли. Private PyTorch intra-op1 подтверждён для всех 2205 real forwards (802/1387/16); interop12, веса, normalizer и quality thresholds прежние. GRU максимальный case model p95 — 1,440461 мс, observation→arbitration9,690933 мс, collector→send5,542793 мс; healthy neural control минимум1. Оба настоящих reaction блока: start66 игровых мс при окне166, HP300, damage0, fallback0.
+
+Последующий [load gate-v6](../reports/npc-body/2026-10-14-combat/gate-v6/load-failure.md) — FAIL: 10/12 cohorts (native4/GRU4/MLP2). После receive→process gap169,008339 мс у первого актёра и максимума171,622080 мс следующий stream MLP дал observation_too_old всем4; body_release завершил арену на367 мс с unexpected_control_loss:released. HP всех четырёх3000, damage0, visibility сохранена. Gemma защищённый p95 вырос с108,032685 до147,864559/149,453219 мс при native/GRU (+36,87%/+38,34%), выше бюджета10%. GRU control0,99515/1/1/0,98710 без fallback не отменяет эти отказы. Отдельные [GC профили](../reports/npc-body/2026-10-14-combat/collector-gc/README.md) измерили реальные паузы, но причина старых169 мс не доказана.
+
+[Gate-v7](../reports/npc-body/2026-10-14-combat/gate-v7/README.md) дал startup infrastructure failure: shadow0, preexisting frozen ownership375 private UV Python3.12.13. Оно существует до imports и после8warm, mutator calls нет. Exact version/path/executable SHA bootstrap opt-in прошёл actual375→0/freeze8891/close0 и pure tests28, сохранив GC enabled/thresholds700/10/10; неизвестное nonzero ownership не снимается. Gate-v8 заморожен: preregistration PASS50,177 с, targeted runtime76/final70 PASS.
+
+[Known audit gate-v8](../reports/npc-body/2026-10-14-combat/gate-v8/README.md) — PASS за 62,755 с: 3/24/6 закрыты, issues пусты, оба GRU reaction блока HP300/damage0/block1/fallback0. Максимальный case model p95 GRU2,209114 мс; repaired population control минимум1. Neutral block diagnostic8/9 сохранён отдельно. Все2518 forward CPU intra-op1; dynamic GC enabled, bootstrap375→0/static freeze183578/183641/close0 проверены.
+
+[Load gate-v8](../reports/npc-body/2026-10-14-combat/gate-v8/load-failure.md) — FAIL: завершены5/12 cohorts (native0–3 и GRU0), partial GRU1 остановлен после current masked отказа action8 при движущейся цели. Source mask была true, текущая физическая false; удар не принят/не начат, owner сохранён. Native20/20 protected p95: ASR −0,97253% PASS, TTS +10,02641%, decider +24,24811%, Gemma +51,08487% FAIL при бюджете10%. GRU5/20 не оценивается.
+
+[Motor16](../reports/npc-body/2026-10-14-combat/motor-v16/README.md) на бинарнике a1695d…bc0c2 прошёл full native parity 17/29/43 с нулём различий, realtime4, visibility8, compact10 и API37; full-stage4 issues пусты. [Queue17](../reports/npc-body/2026-10-14-combat/motor-v17-queue/README.md) завершилась FAIL: `body_control_status` запросы8/81/153 получили ответы до уже просроченного следующего тика при запущенном и не приостановленном realtime. Для запроса8 reply остался на step17/game16327, а Tick18 со step18/game16361 начался только после него; точные native timestamps сохранены в отчёте. Gate9 targeted runtime101/final78/combat-reader82 tests прошли, quality cases/model forwards — 0. [Motor18](../reports/npc-body/2026-10-14-combat/motor-v18/README.md) и [Queue19](../reports/npc-body/2026-10-14-combat/motor-v19-queue/README.md) на runner `681a1704364e07836f839c3e4382b16ae43b28ae3bf75fb46f7884e2b10a1359` прошли: full native parity 17/29/43 без различий, API37/realtime4/visibility8/compact10 и четыре неизменённые строгие проверки очереди. Queue19 сохранила 18 WRITE admissions (все heartbeat), 10 fresh query chains и три wait11 accepted/actual started без отказов; шесть reader tests прошли. Это не 18 боевых команд; failed Queue17 неизменна. Gate10 known collection завершилась FAIL до load/reaction/fresh. Guarded masked refresh и opt-in actual native-deadline polling сохраняют physical masks и freshness. Веса/normalizer и thresholds прежние, fresh screening не запускался, этап8 не завершён.
+
+[Gate10](../reports/npc-body/2026-10-14-combat/gate-v10/README.md) завершил shadow3 и ordinary22; partial `realtime-native_duel-223-1-gru` сохранил 145 actual forwards и один age fallback из 146 model inputs. Control — 12/13 = 0,9230769: один stale отказ, затем oldest observation337/game23561 с age166 вызвал hidden reset/release6046, `native_restored` на game23761 и `unexpected_control_loss:released`. Process wall p95/max — 2,591128/9,772362 мс. RPC observations187,74668 мс/action78,658525 мс/events81,912808 мс совпали с native steps70–103 мс при обычных9–10; packet p95/max0,420/1,96 мс и соседний GC0,349 мс не объясняют задержки. Masked budget не исчерпан, причина не доказана. Отдельная native CPUv2 диагностика сохранила 606 response attestations: CPU −23,31%, но тики медленнее; этот diagnostic run не доказывает причину Gate10 FAIL. Веса, normalizer, masks и quality thresholds прежние. Ни load, ни reaction, ни fresh в Gate10 не начались; на тот момент этап8 был IN_PROGRESS.
+
+[Motor20](../reports/npc-body/2026-10-14-combat/motor-v20/README.md) и [Queue21](../reports/npc-body/2026-10-14-combat/motor-v21-queue/README.md) на serial-native runner `a83efa28236ff9917b7e7d60a4a508de6feedd31d8d9ff4bc69adeb20ab777b7` завершены: full native parity 17/29/43 без различий, API37/realtime4/visibility8/compact10 и четыре строгие проверки очереди PASS. Queue21 ready admissions — 20, все `body_heartbeat`; fresh query chains — 7, четыре wait11 accepted и actual started, rejected — 0; шесть reader tests прошли. Counts Queue19 не переносятся. Header `worker_execution`: `serial=true`, `mode=caller_serial`, `worker_pool_created=false`, `native_task_parallelism_cap=1`; manifest `native_serial_workers=true`. Во всех 2107 реальных response packets Queue21 профиль совпал; это attestations, а не число proof cases. Это native worker pool, а не весь процесс с одним thread. Gate11 заморожен: preregistration PASS за 26,768 с, targeted runtime101/final94 PASS. Независимый known audit закрыл 3/24/6: PASS за 39,393 с, issues пусты, reader508cf… проверил actual serial worker profile. Load фактически начался в 17:47 UTC после завершения чужого physics-disabled regression linux-v8 и освобождения lock, unit `gothic-body-bc-stage8-final-gate-v11-load`. Baseline записывается до любого engine lease/tick: 80 с baseline, затем 12 cohorts (native4/GRU4/MLP4), одинаковые protected20 before/during, бюджет10% неизменён. [Закрытый load Gate11](../reports/npc-body/2026-10-14-combat/gate-v11/README.md) — FAIL, exit2: unit wall3:52,841/CPU1:38,928/memory5,6G. Native0–3 завершились с `time_limit`; GRU0/2/3 — `control_lost`, GRU1 — `time_limit`; partial MLP0 после explicit release завершился infrastructure `unexpected_control_loss:released`. [Causal report](../reports/npc-body/2026-10-14-combat/gate-v11/load-failure.md) связал GRU0/2/3 target_visibility_lost с completed RightStrafe4/Idle/no lock; control19/24,32/35,75/78, healthy GRU1 —153/158. Fallback0 не даёт handoff credit. Partial MLP target_invalid/all masks false при той же lease, receive→send4,848299 мс, snapshot→send6,709377 мс/RTT19,703637; explicit release завершил infrastructure. Native20/20 ASR/TTS −1,24908%/+8,36735% PASS, Decider/Gemma +10,59663%/+31,21631% FAIL; все GRU16/15/20/20 populations invalid. Actual4PID before/after совпали, реальный restart не заявляется; частичный прогон не получает gate credit. Прежняя попытка дала только lock refusal без launcher-load/service baseline/output/requests; это историческое ожидание, а не quality failure. Fresh не запускался. Боевого допуска нет; текущий статус этапа8 — STOPPED_AT_PREFLIGHT, все прежние отказы сохранены.
+
+Опциональный realtime transport header `next_tick_wall_monotonic_ns` хранит фактический Linux CLOCK_MONOTONIC deadline, будущий либо уже прошедший, только в active/unpaused realtime. `native_deadline_polling` запрашивает slices≤5 мс, сохраняет actual overshoot и полный periodic/event stream с latency counts. Схема184 признаков модели прежняя.
+
+Для сервисов baseline/load cadence приведена к одинаковым 4×5 measured запросам +2 warmup, nominal 20 с / actual 20–25 с; count 20 и бюджет 10% сохранены. Модели и симуляции выполняются только на dev-ubuntu.
+
 **Сделать:** сначала shadow inference при native исполнении на серверном runner — проверка схемы, времени и памяти. Затем включить GRU как владельца в headless арене, сохраняя fault injection и native fallback. Проверки скорости реакции выполняются в realtime режиме, серии поведения — также в lockstep с явным simulated delay. Shadow не показывает качество поведения после собственных ошибок learner.
 
 Начальная нагрузка — один NPC; после прохождения — четыре активных. Считать `neural_control_fraction` только среди decision opportunities. Успех, достигнутый в основном native fallback, не приписывается GRU.
@@ -260,9 +304,92 @@ Recorder дополнительно отмечает, какие наблюде�
 
 **Исправление поведения:** добавить targeted demonstrations на посещённых learner состояниях. DAgger использовать только при наличии teacher oracle без побочных эффектов. `FightAlgo` stateful и использует RNG: простой второй вызов teacher может изменить настоящий бой. Нужен clone состояния/RNG или независимый наблюдающий scripted oracle. Gate oracle — запрос разметки не изменяет game trace. Если его нет, DAgger откладывается, PPO остаётся следующим возможным этапом.
 
-## Этап 9 Recurrent PPO на dev-ubuntu
+## Этап 9 Сильнее учителя: обучение с подкреплением
 
-**Сделать:** actor/critic, masked distribution, synchronous rollout collector и recurrent updater; всё на `dev-ubuntu` с headless env API. Один frozen checkpoint собирает batch в lockstep, обновление происходит после сбора; новые веса включаются между эпизодами. Перед новым on-policy batch завершить текущие эпизоды старой версии и сбросить управление/hidden state; лишние эпизоды входят в прежний batch. Не смешивать незавершённый rollout старых весов с новым behavior policy. Начать с коротких задач дистанции и защиты, затем native дуэли. Увеличивать rollout/сложность после стабильного малого эксперимента, без автоматического запуска нескольких игр.
+Подражание поднимает сеть максимум до уровня родного ИИ вместе с его ошибками: например, он достаёт оружие, когда его уже бьют. Чтобы NPC стал умнее, сеть дообучается на награде в той же headless арене настоящего движка. Что выучено в арене, работает в игре без переноса между симулятором и движком. Отправная точка — BC-веса этапа 8 (gate v16).
+
+**Рабочая модель этапа 9 — P30** (`edcb77c3…`, первый прогон PPO с self-play) вместо BC gate v16, по решению пользователя 17 октября 2026 года после процедуры gate и realtime-дуэлей. От неё считаются следующие сравнения и прогоны. Веса с критиком и записью происхождения лежат в `~/gothic-ai/body/models/p30` на Ryzen и dev-ubuntu, ссылка `~/gothic-ai/body/models/working` указывает на рабочую модель. Симуляции идут на Ryzen 9 3950X (16 ядер, без соседей; dev-ubuntu делит CPU с CI и сервисами). Обновление весов маленькой сети — на CPU Ryzen или на 3090 dev-ubuntu, по замеру. Каждый подэтап заканчивается отчётом и решением пользователя о следующем.
+
+### 9.1 Скорость симуляции
+
+**Выполнено 15 октября 2026 года:** около 90 решений/с при 16 параллельных runner на Ryzen; тик одного runner 2,0 мс вместо 21 с флагами режима обучения `OPENGOTHIC_FOOTIK_WATCHED_ONLY` и `OPENGOTHIC_ANIM_SKIP_FAR`, native parity арены полная. Затем `--fork-reset`: эпизод идёт в fork загруженного мира, reset 0,27 с вместо 1,23, начальное состояние и вся родная траектория тик в тик совпадают с полной перезагрузкой; 16 runner — около 150 решений/с. Узкое место теперь — коллектор. [Отчёт](../reports/npc-body/2026-10-15-sim-throughput/README.md).
+
+**Шаг до решения (15 октября):** runner сам идёт до тика, где NPC может решать (`arena_advance`), коллектор делает один обмен на решение. Эпизоды те же (64/64 против realtime, 96/96 на коротких задачах). С моделью: 116 решений/с на 16 воркерах (было 92), потолок около 120 на 24; дальше ограничивает тик мира при параллельной нагрузке и память (0,7 ГБ на воркер). Следующие шаги — несколько дуэлей в одном мире и урезанный мир. [Отчёт](../reports/npc-body/2026-10-15-advance-to-decision/README.md).
+
+**Замороженный мир (15 октября):** на остальной Хоринис уходило около 85% тика. Простая заморозка меняла бои: боевой ИИ, броски урона и `Hlp_Random` всех NPC берут числа из одного генератора. Теперь у участников арены свой поток (`OPENGOTHIC_BODY_SCRIPT_RNG=isolated`), а остальной мир стоит (`OPENGOTHIC_FREEZE_WORLD=1`, с подготовки арены). Эпизоды совпадают с realtime живого мира с тем же генератором (64/64, короткие задачи 96/96). С моделью: 309 решений/с на 16 воркерах (было 116), около 340 на 24. Теперь ограничивает Python: двойная упаковка признаков, хэши провенанса и копии torch. Это следующий шаг, а не несколько арен в одном мире. Оценка, которую сравнивают с обучением, идёт с тем же генератором. [Отчёт](../reports/npc-body/2026-10-15-frozen-world/README.md).
+
+**Лёгкий Python (15 октября):** признаки строки упаковываются один раз, быстрым упаковщиком (`scripts/body_fast_features.py`, побитово равен упаковщику gate: 168 706 строк без расхождений), runtime в режиме `lean` не считает хэши. Эпизоды (64/64 против realtime) и обучающие данные (64/64 файлов) те же. 420 решений/с на 16 воркерах (было 309), 431 на 24. Теперь половину времени эпизода занимает сброс: 132 мс из ~135 уходят на начало сценария стенда (`set time` пересчитывает распорядок всего мира). Его стоит один раз выполнить в шаблоне. [Отчёт](../reports/npc-body/2026-10-15-lean-python/README.md).
+
+**Начало сценария в шаблоне (15 октября):** `--fork-prefix` проигрывает начало сценария один раз, эпизоды делают fork перед `bodyarena` с теми же счётчиками шагов. Эпизоды тик в тик те же (64/64 против realtime, 96/96). Сброс в runner — 2–3 мс вместо 136. В установившемся режиме 688 решений/с на 16 воркерах (577 без этого) и 786 на 24: миллион решений примерно за 21 минуту. Дальше — Python: один драйвер на несколько runner с пакетным инференсом. [Отчёт](../reports/npc-body/2026-10-15-fork-prefix/README.md).
+
+**Несколько сред на процесс (15 октября):** `--envs-per-worker` и `--inference exact|batched`. Эпизоды (64/64 против realtime) и обучающие данные (192/192 файлов) те же. Пакетный шаг GRU не побитовый (до 7,6·10⁻⁶ в логитах), но ни одного изменённого действия. На этом хосте медленнее одной среды на процесс (742 против 788 решений/с на 24 средах): GIL сводит Python сред процесса в один поток, пакеты маленькие, а хост упирается в CPU, не в память. По умолчанию одна среда на процесс. Потолок ~790 решений/с; дальше — меньше работы на решение (только нужные строки, компактный формат). [Отчёт](../reports/npc-body/2026-10-15-multi-env-driver/README.md).
+
+RL нужны сотни тысяч или миллионы решений. На этапе 5 арена давала около 2,5 решения/с вместе с reset, тик runner стоит около 20 мс: почти всё время уходит на остальной мир Хориниса. Без ускорения эксперимент на один навык занимает недели.
+
+**Сделать:** замерить на Ryzen lockstep-throughput одного runner (решения/с, эпизоды/ч, reset, память) и разложить тик: мир, боевые NPC, наблюдения, диагностика, IPC. Затем по очереди и с замером после каждого шага:
+
+- N параллельных lockstep runner по числу ядер и памяти, каждый со своим миром и seed;
+- отключаемая в режиме обучения тяжёлая диагностика (visibility trace, body trace, журналы IPC); в evaluation она остаётся;
+- более дешёвый мир арены (заморозка или удаление дальних NPC и объектов, меньшая зона) только при неизменной native parity арены;
+- быстрый reset без полной перезагрузки save, если он воспроизводит то же начальное состояние.
+
+**Готовность:** суммарно не меньше 50 решений/с на Ryzen при сохранённой native parity и прежних результатах проверок этапов 4–5 на ускоренном runner; отчёт с прогнозом времени для 1 и 10 млн решений. Если цель недостижима, отчёт называет, что ограничивает (CPU тика, память на runner, reset), и решение принимает пользователь.
+
+### 9.2 Награда и отбор лучших прогонов
+
+**Выполнено 15 октября 2026 года (два раунда):** на 448 отложенных дуэлях раунд 2 против BC — поражений 6 вместо 17 (McNemar p=0,035), +12 HP, бой на 2,3 с короче; дистанция и атака без изменений, эксплойтов не найдено. Всё в lockstep. [Отчёт](../reports/npc-body/2026-10-15-self-imitation/README.md).
+
+**Повтор на исправленном стенде (15 октября):** протокол как есть хуже BC (раунд 1: 424 победы против 439, p=0,008). Причина — веса классов BC в функции потерь на собственных сэмплах политики тянули её к редким действиям. С `--self-weighting none` два раунда сильнее BC на 448 дуэлях: 445 побед против 439, HP +40 ± 8, счёт +0,105 ± 0,039, бой 12,0 с против 14,8. В realtime 64/64 побед (BC 63), тик в тик с lockstep. По победам пока незначимо; стиль сузился — нужно видео. [Отчёт](../reports/npc-body/2026-10-15-self-imitation-v2/README.md).
+
+**Realtime-проверка 15 октября — выигрыш не подтвердился.** По процедуре gate v16 раунд 2 проходит все пороги, но сильнее BC не стал. На 64 отложенных дуэлях в realtime у него 59 побед против 64 у BC, на 28 HP меньше, бой на 2 с дольше; в screening одна дуэль у стены оборвалась по видимости. Задержка тут ни при чём: в realtime и lockstep различается расписание решений, и эпизоды расходятся с первой команды. RL-коллектор воспроизводит lockstep драйвера gate шаг в шаг, так что раунды учились в lockstep-расписании. Веса не продвигаются, рабочая модель — BC gate v16. [Отчёт](../reports/npc-body/2026-10-15-stage9-realtime/README.md).
+
+**Расписание исправлено 15 октября.** Причины две: lockstep начинал с 2 тиков вместо 1 и слал TTL команды 1000 вместо 100 мс. С `--start-substeps 1` и `--command-ttl-ms 100` коллектор повторяет realtime-драйвер gate команда в команду (64/64 дуэли BC, 63/64 у раунда 2, расхождение — опоздавшая команда realtime). Переоценка на 448 дуэлях с этим расписанием: BC 444 победы, раунд 1 — 442, раунд 2 — 426 (хуже BC, p=0,0005). [Отчёт](../reports/npc-body/2026-10-15-schedule-equivalence/README.md).
+
+**Третий раунд и видео (15 октября).** На 2048 свежих дуэлях (seed 100000+) поражений у BC 40, у R2u 11, у R3u 3; оба раунда значимо сильнее BC (McNemar p < 0,0001), R3u сильнее R2u (10 против 2, p = 0,039), HP 218 → 258 → 271. В realtime R3u 64/64, HP 275, тик в тик с lockstep. С каждым раундом меньше стрейфов, блоков и отскоков. Бои сняты в игре с рендером повтором записи (`bodyreplay`, `scripts/body_replay_film.py`), повтор совпадает с записью тик в тик. Для lavapipe понадобилась защита небесных LUT от NaN. Веса не продвигаются до полной процедуры gate. [Отчёт](../reports/npc-body/2026-10-15-round3-film/README.md).
+
+**R3u по процедуре gate (16 октября).** Все пороги gate v16 пройдены, ни одна фаза не хуже BC: задержки p95 до 1,3 / 1,7 / 3,0 мс, neural control 1,0 (0,993 под нагрузкой 4 NPC), блок через 66 мс в окне 166, screening-дуэли 20/20 с HP 251 против 232, четыре дуэли у стены 4/4. В 64 дуэлях у стены в realtime 63 победы против 61 у BC, HP 272 против 261. Одна дуэль у стены оборвалась после того, как R3u потерял 210 HP. По порогам gate его можно продвигать, но пользователь отложил продвижение до разбора дуэлей у стены. [Отчёт](../reports/npc-body/2026-10-16-r3u-gate/README.md).
+
+**Разбор дуэли у стены (16 октября).** R3u разучился уходить вбок после пропущенного удара: у стены стрейф в 2% случаев (42% на открытой арене, у BC у стены 29%). Вместо этого он отскакивает назад, в препятствие, и снова атакует из того же места. Раунды self-imitation играли только на открытой арене, а в демонстрациях BC стены были. Следующий раунд — на смеси геометрий (`--geometry near_wall` у коллектора), с оценкой на обеих. [Отчёт](../reports/npc-body/2026-10-16-wall-duel/README.md).
+
+**Раунд на смеси геометрий (16 октября).** R3m — от R2u, половина дуэлей у стены, отбор лучших в каждой половине. Уход вбок после удара у стены вернулся (21% против 2% у R3u), повторные прерывания реже (15% против 24%). На 2048 дуэлях у стены R3m чуть сильнее R3u (+2,7 HP, 3 не победы против 5), на открытой арене чуть слабее (−5,5 HP, 6 против 3); по победам разница незначима, обе модели намного сильнее BC. В realtime 128 из 128 (R3u 127, BC 124), тик в тик с lockstep. По полной процедуре gate R3m проходит все пороги, screening-дуэли 20/20 с HP 254. Для одного числа в нагрузке пришлось расширить допуск сериализации до 3 ULP. [Отчёт](../reports/npc-body/2026-10-16-mixed-geometry/README.md), [gate](../reports/npc-body/2026-10-16-gate-r3m-p30/README.md).
+
+**Сделать:** счёт эпизода: исход задачи, урон нанесённый и полученный, время; штрафы за застревание и выход за границу. Собрать K эпизодов текущей политики с контролируемым разбросом действий (температура), оставить лучшие по счёту, добавить к BC-датасету и дообучить (self-imitation, filtered BC). Повторить несколько раундов.
+
+**Готовность:** улучшение счёта относительно BC на свежих seed без потери успеха задач; проверки эксплойтов (бесконечный отход, спам блока, удар через стену, выход за арену) пройдены; бои просмотрены на видео стенда. Этот шаг проверяет награду и конвейер до более капризного PPO.
+
+### 9.3 Recurrent PPO
+
+**Первый прогон (16 октября 2026 года), dev-ubuntu.** PPO от R3m: критик-MLP по признакам и
+состоянию GRU, награда раскладывает счёт 9.2 по решениям, KL-штраф 0,02 к BC. Противники — родной
+ИИ и пул собственных версий: арена получила `opponent_owned`, где оба бойца под управлением сети.
+Роль в дуэли двух сетей неравноправна: противник тикает раньше, и на общем тике его команда
+отменяет команду primary. Поэтому роль обучаемой сети выбирается случайно. Перед каждым
+обновлением пересчитанные log-вероятности совпадают с записанными (≤ 9·10⁻⁶). 40 итераций по 1024
+дуэли — 73 минуты. Лучшая на отборочных seed итерация 30 (P30, `edcb77c3…`) на 2048 свежих
+дуэлях: 2048/2048 и HP 294,5 на открытой арене, 2048/2048 и HP 281,4 у стены (R3m: 2042 / 265,4,
+2045 / 270,5). Против R3m и R3u — 2047 из 2048 в обеих ролях. После 30-й итерации игра у стены
+ухудшалась, KL к BC рос до 0,8. Уход вбок после удара у P30 исчез: удары реже прерываются, после
+удара он сразу снова сближается. По полной процедуре gate P30 проходит все пороги без
+отклонений: screening-дуэли 20/20 с HP 280 (BC — 232). В realtime 128 из 128, HP 294 на открытой
+арене и 282 у стены, тик в тик с lockstep в 127 дуэлях. 17 октября пользователь сделал P30
+рабочей моделью этапа 9. [Отчёт](../reports/npc-body/2026-10-16-ppo/README.md),
+[gate](../reports/npc-body/2026-10-16-gate-r3m-p30/README.md).
+
+**Слияние с main (17 октября 2026 года).** В main пришёл Jolt: NPC рядом с героем ходят физическим
+персонажем (`npc_character_virtual`, включён по умолчанию, как в игре). Арена повторяет эту физику,
+поэтому прежние записи дуэлей больше не воспроизводятся: тик в тик совпали 13 из 64 открытых и
+8 из 64 у стены. Сила моделей не изменилась: на 2048 дуэлях P30 — 2048/2048 и HP 294,7 на открытой
+арене, 2048/2048 и HP 284,1 у стены; R3m — 2035 и 2044; P30 против R3m — 2046 из 2048. Runner
+считает физику Jolt в своём потоке (`OPENGOTHIC_PHYSICS_THREADS=0` по умолчанию), иначе fork-reset
+невозможен. Новый runner детерминирован: прогоны совпадают между собой, fork совпадает с полной
+перезагрузкой. Равенство lockstep и realtime на новом движке ещё не перепроверено, а native-эпизоды
+gate v16 к нему не привязаны: следующей процедуре gate нужна новая native-база.
+
+**Сделать:** actor/critic, masked distribution, synchronous rollout collector и recurrent updater поверх параллельных runner из 9.1. Старт с весов 9.2 или BC; KL-штраф к BC-политике удерживает поведение «готическим». Противники: сначала родной ИИ, затем пул собственных прошлых версий (self-play) и смешанные противники, чтобы сеть не училась только на слабостях родного ИИ. Оценка всегда против отложенных противников и на свежих seed.
+
+**Расписание решений.** Lockstep-сбор принимает решения в те же моменты, что realtime: это проверено (`scripts/body_schedule_equivalence.py`, см. 9.2). Проверку повторять при любом изменении коллектора, runtime или runner. Редкие сбои realtime (команда, опоздавшая на тик, — 1 на 3,5 тыс. решений) можно добавлять при сборе. Финальный отбор весов — realtime-оценкой драйвером gate; в оценку входят дуэли у стены (`near_wall`).
+
+**Правила сбора** (из исходного плана): один frozen checkpoint собирает batch в lockstep, обновление происходит после сбора; новые веса включаются между эпизодами. Перед новым on-policy batch завершить текущие эпизоды старой версии и сбросить управление/hidden state; лишние эпизоды входят в прежний batch. Не смешивать незавершённый rollout старых весов с новым behavior policy. Начать с коротких задач дистанции и защиты, затем native дуэли. Увеличивать rollout/сложность после стабильного малого эксперимента, без автоматического запуска нескольких игр.
 
 В rollout сохранять sampled action, его log-probability, value, mask, behavior-policy version, начальный hidden state фрагмента, rewards и terminal semantics. **Фактическое native fallback действие не подставляется вместо sampled action в PPO ratio.** Rejection/delay либо моделируется как часть среды с исходным action, либо affected fragment исключается из actor update по явно заданному правилу.
 
@@ -279,6 +406,27 @@ GAE не пересекает resets. Смерть/terminal success не bootstr
 **Дополнительный gate продвижения PPO checkpoint:** хотя бы одна заранее выбранная основная метрика улучшена относительно BC без ухудшения остальных сверх бюджета; эффект и интервалы показаны в отчёте. Если PPO не улучшает BC, сохраняем лучший BC и разбираем среду/награды — завершение PPO job не доказывает готовность PPO policy.
 
 Для содержательного архитектурного/алгоритмического сравнения — три training seeds при доступном бюджете. Каждая on-policy модель собирает собственные rollouts; фиксируются сценарии и interaction budget, а не общий PPO dataset. Стиль и читаемость поведения оцениваются отдельно от win rate.
+
+### 9.4 Новые действия и ситуации
+
+Сейчас сеть включается, когда меч уже в руке и бой идёт. Тактика «достать оружие заранее» недоступна, пока нет таких действий и эпизодов, начинающихся до боя.
+
+**Сделать по очереди, каждый пункт с тестами и gate как на этапе 8:**
+
+1. Достать, убрать и сменить оружие; эпизод начинается с подхода противника.
+2. Лук и арбалет: выстрел и смена на ближнее оружие при сближении. Учитель есть: родной ИИ лучников и ArcherAi проекта.
+3. Задачи на память в ближнем бою: цель ушла из поля зрения и вернулась, два противника, бой у стены или обрыва, волк с другим ритмом атак.
+4. Зелья и предметы в бою. Если родной ИИ так не делает, учителя нет: только награда (9.2–9.3). Отдельно решить баланс: кто пьёт, сколько зелий, ограничения характера.
+
+Препятствия и лазанье остаются на этапе 11.
+
+### 9.5 Сравнение архитектур
+
+MLP, GRU и Mamba (state-space) с одинаковым бюджетом параметров и тремя training seed на задачах 9.4, где нужна память. На задачах этапа 8 все три дают 20/20, поэтому сравнение там ничего не различает. Победитель определяется по качеству, задержке шага и стабильности обучения.
+
+### Сила и характер
+
+Слишком сильный NPC не всегда хорош для игры. Сила политики регулируется: температура, KL к BC, черты характера (трус, берсерк) как часть задачи, уровни сложности. Стиль и читаемость поведения оцениваются отдельно от процента побед, по видео.
 
 ## Этап 10 Интеграция в мир
 
@@ -332,6 +480,6 @@ Checkpoint bundle включает веса, feature/action schema, train normal
 
 Перед runner/training/inference сверить CPU/RAM/threads/disk и GPU бюджеты. Исторический снимок с примерно 2 GiB свободной VRAM не гарантирует доступность сейчас. Headless освобождает renderer VRAM, но всё равно конкурирует за CPU/RAM; выставить измеренные лимиты и не занимать все ядра сервера. ASR/TTS/Strands и продовые контейнеры не останавливать ради прохождения gate; GPU training не запускается фоном без известного бюджета. Для модели используются отдельные venv и user units; конфигурацию Docker и системные пакеты не менять.
 
-## Ближайшая работа
+## Остановка работы
 
-Следующий шаг — **этап 4: боевой API и единый арбитр управления телом** поверх готового headless runner и числовых наблюдений этапов 2–3. Общий resolver проверяет команды и маски доступности; scripted provider, fault injection и возврат к native AI проверяют исполнение и безопасную передачу управления. Сбор обучающих траекторий начинается после готовности этапов 4–5.
+Работа остановлена по ограничению пользователя после одного SafePeer preflight FAIL. Повторной попытки, private CPU/placement diagnostic, сбора72, child279, нового обучения, боевого gate и fresh screening не назначено. Pipeline279 не реализован и не выполнялся. WIP `f17e5d625fea643ed463b9f2aab10b3498c2b4f6` сохраняет этапы4–8; итоговая документация входит в последующий WIP. Выбранные веса207, normalizer, strict masks/freshness/visibility100 и боевые thresholds неизменны. Motor20/Queue21 и known3/24/6 PASS остаются доказательствами своего scope; Gate11 visibility/handoff FAIL и прежние отказы сохранены. Protected service FAIL рассматривается отдельно с прежним бюджетом10% и не подменяет оценку боя. [Итоговый отчёт](npc-body-stage8-stop-report.md). Возобновление возможно только по новому указанию пользователя.

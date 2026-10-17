@@ -99,7 +99,7 @@ out="$task_root/runs/$run_name"
 [[ -x "$binary" ]] || { echo 'Build reference engine first' >&2; exit 1; }
 exec 9>"$task_root/reference-run.lock"
 flock -n 9 || { echo 'Another baseline launcher owns the runner lock' >&2; exit 1; }
-if pgrep -f '[/]Gothic2Notr([[:space:]]|$)' >/dev/null || pgrep -f '[/]gothic-body-runner' >/dev/null; then
+if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
 [[ ! -e "$out" ]] || { echo 'Run directory already exists; choose a new run-name' >&2; exit 1; }

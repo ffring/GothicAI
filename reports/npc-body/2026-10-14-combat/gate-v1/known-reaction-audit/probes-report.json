@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "kind": "body_stage8_known_reaction_saved_fault_probes",
+  "passed": true,
+  "checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "helper_sha256": "34f0cb5489b181dd124421757671aa6559b556e024caf484b1d7ce7428545f84",
+  "proofs": {
+    "gru": {
+      "real_process_exit": 0,
+      "requests": 14,
+      "duplicate_gap_epoch_checkpoint_terminal_checked": true,
+      "journal_sha256": "6b51e4ee143570857c5c0888d78701d9c86abbd5e231e4aa0caa149889c15a49"
+    },
+    "mlp": {
+      "real_process_exit": 0,
+      "requests": 14,
+      "duplicate_gap_epoch_checkpoint_terminal_checked": true,
+      "journal_sha256": "9be3f35684fc71aaf0aa10bfe1de37bafc9a15f589c560568604829fbfc1c739"
+    }
+  },
+  "raw_sha256": {
+    "realtime-reaction/serve-probe-gru/probe.json": "b7221af4f3f4da0f20d85b0881ce63f0bb04d8a82685a80eb0ceeefe65e6bb09",
+    "realtime-reaction/serve-probe-gru/request.jsonl": "47cd6e958d99a3af45c3b7d1192b735b4a289b3b504be5b3c4342330bc9fc6df",
+    "realtime-reaction/serve-probe-gru/service-journal.jsonl": "6b51e4ee143570857c5c0888d78701d9c86abbd5e231e4aa0caa149889c15a49",
+    "realtime-reaction/serve-probe-gru/response.jsonl": "c6f95c7e6a8bb298d7ba15aabcb74bc9556038cc027d04aefc47e7c88f69dfc6",
+    "realtime-reaction/serve-probe-gru/stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "realtime-reaction/serve-probe-mlp/probe.json": "cfbe2490c89bd43cded088f19846b425fd1cb78218f47c0d87d595ca8e40a5ba",
+    "realtime-reaction/serve-probe-mlp/request.jsonl": "2702bb2e8638f8c7b3bd4902b7dd9ceb6a1970cf8874dc15215cfcbaf58ec3aa",
+    "realtime-reaction/serve-probe-mlp/service-journal.jsonl": "9be3f35684fc71aaf0aa10bfe1de37bafc9a15f589c560568604829fbfc1c739",
+    "realtime-reaction/serve-probe-mlp/response.jsonl": "f5a9e193217fd08b50bcab6d05ba6aeef07c9415fab9a899a4cfe3e5be2b6bdc",
+    "realtime-reaction/serve-probe-mlp/stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

@@ -1,0 +1,24 @@
+Command exited with non-zero status 2
+	Command being timed: "/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-visibility-attempt-v1/code/scripts/body_safe_peer_demonstrations.py --runner /home/kaifat/gothic-ai/body/data/stage8-visibility-attempt-v1/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-visibility-attempt-v1/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-visibility-attempt-v1/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-visibility-attempt-v1/code/evals/npc-body/body-safe-peer-demonstrations-v1.json --existing-dataset /home/kaifat/gothic-ai/body/data/stage8-defence-bc-v2/dataset/dataset.json --output /home/kaifat/gothic-ai/body/data/stage8-visibility-attempt-v1/safe-peer-calibration --calibration --serial-workers"
+	User time (seconds): 29.13
+	System time (seconds): 1.21
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:30.55
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 703144
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 441524
+	Voluntary context switches: 10959
+	Involuntary context switches: 321
+	Swaps: 0
+	File system inputs: 3103096
+	File system outputs: 238840
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 2

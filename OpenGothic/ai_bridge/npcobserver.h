@@ -48,6 +48,8 @@ class NpcObserver final {
     // `routine`: an npc's daily routine, its routine variants and current state (v6)
     void routine(World& world, const rapidjson::Value& msg);
     void clear();
+    // A running soft act already owns movement/queues; a body lease must not overlap it.
+    bool isActing(std::string_view symbol) const;
 
   private:
     struct Running final {

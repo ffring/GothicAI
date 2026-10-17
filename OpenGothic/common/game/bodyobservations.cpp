@@ -1,4 +1,6 @@
 #include "bodyobservations.h"
+#include "bodycontroller.h"
+#include "bodytrajectory.h"
 
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -21,6 +23,7 @@ constexpr size_t MaxEvents = 32;
 constexpr size_t MaxEntityIds = 4096;
 constexpr double Pi = 3.14159265358979323846;
 constexpr const char* Phase = "post_simulation_post_animation";
+constexpr const char* CapturePhase = "pre_native_primitive";
 
 uint64_t processEpoch() {
   // Identity only: never used for velocity, TTL or comparisons with a remote host's clock.
@@ -77,9 +80,10 @@ struct Actor final {
   Npc* npc = nullptr;
   bool sampled = false, seen = false, seenVelocity = false, lastSampleVisible = false;
   bool motionDiscontinuity = false;
-  uint64_t lastTime = 0, lastBucket = 0, lastSeen = 0, targetId = 0, goalVersion = 0;
+  bool lastPeriodic = false;
+  uint64_t lastWallMs = 0, lastSequence = 0, lastTime = 0, lastBucket = 0, lastSeen = 0, targetId = 0, goalVersion = 0;
   Vec3 lastPosition = {}, lastSeenPosition = {}, lastSeenVelocity = {};
-  std::array<uint64_t,15> fingerprint = {};
+  std::array<uint64_t,18> fingerprint = {};
   std::deque<Event> events;
   Event lastResult;
   };
@@ -91,11 +95,16 @@ struct State final {
   std::vector<Actor> actors;
   std::unordered_map<const Npc*,uint64_t> ids;
   std::deque<std::string> queue;
+  std::deque<BodyObservations::QueuedRow> queuedRows; // parallel to queue
+  uint64_t queuedTotal = 0;
   std::function<void(std::string_view)> sink;
   uint64_t emitted = 0, dropped = 0, lastDrainDropped = 0, eventDropped = 0;
   uint64_t invalid = 0, missedPeriods = 0, calls = 0, totalCost = 0, stepCost = 0;
   uint64_t drainCost = 0, maxCost = 0;
   size_t stepActors = 0, maxQueue = 0;
+  Actor* captureActor = nullptr;
+  std::string* captureOutput = nullptr;
+  uint64_t captureSequence = 0;
   };
 
 // NPC destructors may run after other engine globals during shutdown. The process-lifetime
@@ -158,13 +167,13 @@ void appendEvent(Actor& actor, const Event& event) {
     actor.lastResult = event;
   }
 
-void common(Json& j, const State& s) {
+void common(Json& j, const State& s, const char* phase = Phase) {
   j.u("schema_version",1);
   j.u("generation",s.generation);
   j.u("session_epoch",processEpoch());
   j.u("world_epoch",s.generation);
   j.u("control_generation",0);
-  j.key("phase"); j.s += '"'; j.s += Phase; j.s += "\",";
+  j.key("phase"); j.s += '"'; j.s += phase; j.s += "\",";
   j.u("sample_period_ms",s.config.periodMs);
   }
 
@@ -187,6 +196,8 @@ void accountCost(uint64_t cost) {
 }
 
 void BodyObservations::reset(uint64_t generation) {
+  BodyTrajectory::reset("observation_reset");
+  BodyController::reset("observation_reset");
   auto sink = std::move(state().sink);
   auto config = state().config;
   state() = State{};
@@ -206,6 +217,7 @@ void BodyObservations::configure(const Config& config) {
   s.config = config;
   while(s.queue.size()>config.queueCapacity) {
     s.queue.pop_front();
+    s.queuedRows.pop_front();
     ++s.dropped;
     }
   }
@@ -233,13 +245,43 @@ void BodyObservations::disable() { state().enabled = false; clearActors(); }
 bool BodyObservations::enabled() { return state().enabled; }
 size_t BodyObservations::watchedCount() { return state().actors.size(); }
 size_t BodyObservations::queuedCount() { return state().queue.size(); }
+size_t BodyObservations::queueCapacity() { return state().config.queueCapacity; }
 void BodyObservations::setSink(std::function<void(std::string_view)> sink) { state().sink = std::move(sink); }
 uint64_t BodyObservations::lastStepCostUs() { return state().stepCost; }
 size_t BodyObservations::lastStepActorCount() { return state().stepActors; }
 uint64_t BodyObservations::currentStep() { return state().step; }
 uint64_t BodyObservations::entityId(const Npc& npc) { return idFor(npc); }
+uint64_t BodyObservations::sessionEpoch() { return processEpoch(); }
+uint64_t BodyObservations::worldEpoch() { return state().generation; }
+Npc* BodyObservations::findEntity(uint64_t id) {
+  for(const auto& pair:state().ids)
+    if(pair.second==id)
+      return const_cast<Npc*>(pair.first);
+  return nullptr;
+  }
+bool BodyObservations::watched(const Npc& actor) { return tracked(&actor)!=nullptr; }
+std::string BodyObservations::captureDecision(Npc& npc) {
+  auto& s=state();
+  const auto actor=tracked(&npc);
+  if(!s.enabled || actor==nullptr) return {};
+  if(s.captureActor!=nullptr) throw std::logic_error("recursive native body capture");
+  Actor isolated=*actor;
+  std::string result;
+  s.captureActor=&isolated; s.captureOutput=&result;
+  try { sample(npc,npc.world().tickCount(),true); }
+  catch(...) { s.captureActor=nullptr; s.captureOutput=nullptr; throw; }
+  s.captureActor=nullptr; s.captureOutput=nullptr;
+  return result;
+  }
+
+uint64_t BodyObservations::latestSequence(const Npc& npc) { const auto a=tracked(&npc); return a ? a->lastSequence : 0; }
+uint64_t BodyObservations::latestGameMs(const Npc& npc) { const auto a=tracked(&npc); return a ? a->lastTime : 0; }
+bool BodyObservations::latestPeriodic(const Npc& npc) { const auto a=tracked(&npc); return a && a->lastPeriodic; }
+uint64_t BodyObservations::latestWallMs(const Npc& npc) { const auto a=tracked(&npc); return a ? a->lastWallMs : 0; }
 
 void BodyObservations::forget(const Npc* npc) {
+  BodyTrajectory::forget(npc);
+  BodyController::forget(npc);
   auto& s = state();
   s.ids.erase(npc);
   for(const auto& actor:s.actors)
@@ -286,23 +328,26 @@ void BodyObservations::noteEvent(const Npc& npc, const Npc* other, std::string_v
   accountCost(micros(start));
   }
 
-void BodyObservations::sampleAll() {
+void BodyObservations::sampleAll(bool force) {
   auto& s = state();
   if(!s.enabled)
     return;
   const auto start = Clock::now();
   ++s.calls;
   for(auto& actor:s.actors)
-    sample(*actor.npc,actor.npc->world().tickCount());
+    sample(*actor.npc,actor.npc->world().tickCount(),force);
   accountCost(micros(start));
   }
 
-void BodyObservations::sample(Npc& npc, uint64_t now) {
+void BodyObservations::sample(Npc& npc, uint64_t now, bool force) {
   auto& s = state();
   if(!s.enabled)
     return;
-  auto actor = tracked(&npc);
+  const bool capture=s.captureActor!=nullptr;
+  auto actor = capture ? s.captureActor : tracked(&npc);
   if(actor==nullptr)
+    return;
+  if(!capture && force && actor->sampled && actor->lastTime==now)
     return;
   const auto start = Clock::now();
   const auto own = npc.bodyObservationState();
@@ -318,7 +363,8 @@ void BodyObservations::sample(Npc& npc, uint64_t now) {
   Npc::BodyObservationState targetState;
   if(seen)
     targetState = target->bodyObservationState();
-  const std::array<uint64_t,15> fingerprint = {
+  auto control=BodyController::snapshot(npc);
+  const std::array<uint64_t,18> fingerprint = {
     own.bodyState,uint64_t(npc.attribute(ATR_HITPOINTS)),own.weaponState,uint64_t(own.primitive),targetId,
     uint64_t(own.attackAnim),uint64_t(own.prehit),uint64_t(own.defence),uint64_t(own.jumpBack),
     uint64_t(own.faiGate)|(uint64_t(own.aniGate)<<1)|(uint64_t(own.aiGate)<<2)|(uint64_t(own.outputGate)<<3),
@@ -326,16 +372,17 @@ void BodyObservations::sample(Npc& npc, uint64_t now) {
     uint64_t(seen),seen ? targetState.bodyState : 0,
     uint64_t(seen && targetState.prehit),uint64_t(seen && targetState.attackAnim)|
     (uint64_t(seen && targetState.defence)<<1)|(uint64_t(seen && targetState.jumpBack)<<2)|
-    (uint64_t(seen && targetState.defWindow)<<3)|(uint64_t(seen && targetState.parWindow)<<4)
+    (uint64_t(seen && targetState.defWindow)<<3)|(uint64_t(seen && targetState.parWindow)<<4),
+    control.controlGeneration,control.commandId,control.goalVersion
     };
   const uint64_t bucket = now/s.config.periodMs;
   const bool periodic = !actor->sampled || bucket!=actor->lastBucket;
   const bool changed = !actor->sampled || actor->motionDiscontinuity || fingerprint!=actor->fingerprint;
-  if(!periodic && !changed && actor->events.empty())
+  if(!force && !periodic && !changed && actor->events.empty())
     return;
   if(actor->sampled && now<actor->lastTime)
     throw std::logic_error("body observations require reset on game clock reversal");
-  if(actor->sampled && bucket>actor->lastBucket+1)
+  if(!capture && actor->sampled && bucket>actor->lastBucket+1)
     s.missedPeriods += bucket-actor->lastBucket-1;
   const uint64_t dt = actor->sampled ? now-actor->lastTime : 0;
   const Vec3 position = npc.position();
@@ -358,6 +405,9 @@ void BodyObservations::sample(Npc& npc, uint64_t now) {
     actor->seen = true;
     }
   const bool nativeEligible = own.nativeEligible && seen && !target->isDown();
+  const auto captureResolver=capture ? BodyController::resolverState(npc) : FightAlgo::ResolverState{};
+  const auto sharedMask=capture ? FightAlgo::actionMask(captureResolver) : std::array<bool,12>{};
+  const bool captureEligible=captureResolver.eligible && captureResolver.targetValid;
   Npc::BodyObservationTarget targetProbe;
   if(seen)
     targetProbe = npc.bodyObservationTarget(*target);
@@ -378,17 +428,37 @@ void BodyObservations::sample(Npc& npc, uint64_t now) {
   try {
     Json j;
     j.s = "{\"kind\":\"body_observation\",";
-    common(j,s);
-    j.u("observation_seq",++s.sequence);
+    common(j,s,capture ? CapturePhase : Phase);
+    actor->lastWallMs = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
+    actor->lastSequence = capture ? ++s.captureSequence : ++s.sequence;
+    control=BodyController::snapshot(npc);
+    j.u("observation_seq",actor->lastSequence);
     j.u("entity_id",idFor(npc));
+    if(control.owned) {
+      const auto at=j.s.find("\"control_generation\":0,");
+      if(at!=std::string::npos) j.s.replace(at,std::string_view("\"control_generation\":0,").size(),"\"control_generation\":"+std::to_string(control.controlGeneration)+",");
+      }
     j.u("script_symbol",npc.instanceSymbol());
     j.u("t_game_ms",now); j.u("dt_game_ms",dt); j.u("sim_step",s.step);
+    j.u("snapshot_wall_monotonic_ns",uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count()));
+#ifdef __linux__
+    j.s += "\"clock_domain\":\"linux-clock-monotonic\",";
+#else
+    j.s += "\"clock_domain\":\"cxx-steady-clock\",";
+#endif
     j.b("periodic",periodic); j.b("event_only",!periodic); j.b("state_changed",changed);
     j.b("motion_discontinuity",actor->motionDiscontinuity);
-    j.b("can_decide",false); j.b("control_allowed",false);
-    j.b("native_decision_eligible",nativeEligible); j.b("action_mask_valid",false);
-    j.s += "\"mask_kind\":\"conservative_native_availability\",\"availability_mask\":[";
-    for(size_t i=0;i<mask.size();++i) { if(i>0) j.s += ','; j.boolean(mask[i]); }
+    j.b("can_decide",capture ? captureEligible : control.canDecide); j.b("control_allowed",capture ? captureEligible : control.controlAllowed);
+    j.b("native_decision_eligible",capture ? captureEligible : nativeEligible); j.b("action_mask_valid",capture || control.owned);
+    j.s += (capture || control.owned) ? "\"mask_kind\":\"shared_melee_resolver\",\"availability_mask\":[" :
+                           "\"mask_kind\":\"conservative_native_availability\",\"availability_mask\":[";
+    const auto& publishedMask=capture ? sharedMask : control.owned ? control.mask : mask;
+    for(size_t i=0;i<publishedMask.size();++i) { if(i>0) j.s += ','; j.boolean(publishedMask[i]); }
+    if(capture || control.owned) {
+      j.s += "],\"action_mask\":[";
+      for(size_t i=0;i<publishedMask.size();++i) { if(i>0) j.s += ','; j.boolean(publishedMask[i]); }
+      }
+
     j.s += "],\"self\":{";
     j.v("position_world_cm",position); j.nullableVector("linear_velocity_cm_s",velocityValid,velocity);
     j.b("velocity_valid",velocityValid); j.f("yaw_rad",npc.rotationRad());
@@ -442,7 +512,7 @@ void BodyObservations::sample(Npc& npc, uint64_t now) {
     j.finishObject();
     j.s += ",\"goal\":{\"kind\":";
     j.s += target!=nullptr ? "\"native_combat\"," : "\"native_idle\",";
-    j.u("version",actor->goalVersion); j.u("target_id",targetId); j.u("move_hint",uint8_t(npc.moveHint()));
+    j.u("version",control.owned ? control.goalVersion : actor->goalVersion); j.u("target_id",targetId); j.u("move_hint",uint8_t(npc.moveHint()));
     j.finishObject();
     j.s += ",\"last_result\":{";
     j.b("valid",actor->lastResult.code!=0); j.i("code",actor->lastResult.code);
@@ -471,21 +541,31 @@ void BodyObservations::sample(Npc& npc, uint64_t now) {
       }
     j.s += "],";
     j.u("builder_wall_us",micros(start)); j.finishObject();
+    if(capture) { *s.captureOutput=std::move(j.s); return; }
     // Journal receives exactly the same serialized row as the bounded IPC queue. Sink work is
     // included in sampleAll's simulation-thread cost, but IPC packet encoding is measured separately.
     if(s.sink)
       s.sink(j.s);
+    BodyTrajectory::observe(j.s);
     if(s.queue.size()==s.config.queueCapacity) {
       s.queue.pop_front();
+      s.queuedRows.pop_front();
       ++s.dropped;
       }
     s.queue.push_back(std::move(j.s));
+    BodyObservations::QueuedRow queued;
+    queued.entityId=idFor(npc); queued.sessionEpoch=processEpoch(); queued.worldEpoch=s.generation;
+    queued.controlGeneration=control.owned ? control.controlGeneration : 0;
+    queued.periodic=periodic; queued.canDecide=control.canDecide; queued.actionMaskValid=control.owned;
+    if(control.owned) queued.actionMask=control.mask;
+    s.queuedRows.push_back(queued);
+    ++s.queuedTotal;
     s.maxQueue = std::max(s.maxQueue,s.queue.size());
     ++s.emitted; ++s.stepActors;
+    npc.traceVisibilityDiagnostic("post_observation");
     }
   catch(const std::runtime_error&) {
-    ++s.invalid;
-    ++s.dropped;
+    if(!capture) { ++s.invalid; ++s.dropped; }
     throw;
     }
   actor->lastPosition = position;
@@ -494,6 +574,7 @@ void BodyObservations::sample(Npc& npc, uint64_t now) {
   actor->fingerprint = fingerprint;
   actor->sampled = true;
   actor->lastSampleVisible = seen;
+  actor->lastPeriodic = periodic;
   actor->motionDiscontinuity = false;
   actor->events.clear();
   }
@@ -516,9 +597,18 @@ std::string BodyObservations::drainJson() {
     }
   j.s += "]}";
   s.queue.clear();
+  s.queuedRows.clear();
   s.lastDrainDropped = s.dropped;
   s.drainCost += micros(start);
   return std::move(j.s);
+  }
+
+uint64_t BodyObservations::queuedTotal() { return state().queuedTotal; }
+
+std::vector<BodyObservations::QueuedRow> BodyObservations::queuedSince(uint64_t total) {
+  const auto& s = state();
+  const auto fresh = size_t(std::min<uint64_t>(s.queuedTotal-std::min(total,s.queuedTotal),s.queuedRows.size()));
+  return std::vector<QueuedRow>(s.queuedRows.end()-std::ptrdiff_t(fresh),s.queuedRows.end());
   }
 
 std::string BodyObservations::statsJson() {

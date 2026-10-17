@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "kind": "body_block_reaction_diagnostic",
+  "scope": "known_seed_diagnostic_only",
+  "original_v6_credit": false,
+  "reference": {
+    "run_name": "stage8-combat-v6",
+    "gru_checkpoint_sha256": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+    "mlp_checkpoint_sha256": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf",
+    "normalizer_sha256": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6"
+  },
+  "policies": ["native", "gru", "mlp"],
+  "cases": [
+    {"name": "block-reaction-223-0", "task": "block", "seed": 223, "side": 0, "distance_cm": 150, "timeout_ms": 5000},
+    {"name": "block-reaction-223-1", "task": "block", "seed": 223, "side": 1, "distance_cm": 150, "timeout_ms": 5000}
+  ],
+  "preparation": {
+    "mode": "lockstep",
+    "reset_reaction_hold": true,
+    "both_actors_leased": true,
+    "attacker_action_id": 6,
+    "max_substeps": 8,
+    "max_game_ms": 200,
+    "source": "first actual current periodic post-animation visible in-range attacker windup",
+    "primary_commands": 0,
+    "primary_native_choices": 0,
+    "primary_rng_draws": 0,
+    "hp_per_actor": 300,
+    "hits_before_activation": 0,
+    "quality_credit": false
+  },
+  "runtime": {
+    "device": "cpu",
+    "cpu_threads": 2,
+    "max_actors_per_runtime": 1,
+    "command_ttl_ms": 100,
+    "first_model_input": "actual prepared periodic anchor",
+    "first_sequence_dt_game_ms": 0,
+    "preparation_hidden_updates": 0,
+    "masks": "unchanged frozen shared policy_action_mask"
+  },
+  "rollout": {"mode": "lockstep", "max_substeps": 180, "wall_timeout_s": 30},
+  "mechanical_success": {"native_outcome": "task_success", "reason": "melee_hit_blocked", "primary_hp": 300, "blocked_hits_min": 1, "received_damage": 0},
+  "selection": {"retraining": false, "weight_selection": false, "known_cases_are_screening": false, "legacy_result_replacement": false}
+}

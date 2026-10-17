@@ -1,0 +1,83 @@
+{
+  "source_directory": "/home/kaifat/gothic-ai/body/data/stage8-collector-gc-profile-v1",
+  "binding": {
+    "kind": "immutable_collector_diagnostic_binding",
+    "quality_credit": false,
+    "checkpoint_selection_allowed": false,
+    "fresh_screening_credit": false,
+    "source_run": "stage8-final-gate-v6",
+    "files": {
+      "profile.py": "62c256079409cc4d96b080ae651dd381667f89c600abcc32b4bad706b917a5d2",
+      "resources.txt": "d94bb6b874cb6b2c2820c9c34caa8836a9365860c4599342b91673e066b3695b",
+      "report.json": "7402736993dbdb35a3f4ea80455bb29763813155c3c8e6a30b8bb79adb437c52",
+      "launcher.log": "450b154c2b0cbfcf65d11b53464e1e57089297ef06cc5c8d8cc846d04edc1c9f"
+    }
+  },
+  "binding_file": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-collector-gc-profile-v1/diagnostic-binding.json",
+    "size_bytes": 565,
+    "sha256": "bee708ba3c623eb603179041ad3e66a85403f89fd0bb9dbbe5bf062462b34b6f"
+  },
+  "report": {
+    "kind": "collector_static_gc_cpu_diagnostic",
+    "quality_credit": false,
+    "model_selection": false,
+    "training": false,
+    "engine_started": false,
+    "checkpoint_sha256": {
+      "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+      "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+    },
+    "startup_runtime_count": {
+      "gru": 4,
+      "mlp": 4
+    },
+    "torch_profiles": {
+      "gru": {
+        "inference_cpu_threads": 1,
+        "torch_intraop_threads": 1,
+        "torch_interop_threads": 12
+      },
+      "mlp": {
+        "inference_cpu_threads": 1,
+        "torch_intraop_threads": 1,
+        "torch_interop_threads": 12
+      }
+    },
+    "gc_threshold": [
+      700,
+      10,
+      10
+    ],
+    "baseline": [
+      {
+        "elapsed_ms": 42.733592,
+        "collected": 26
+      },
+      {
+        "elapsed_ms": 32.217121,
+        "collected": 0
+      },
+      {
+        "elapsed_ms": 29.94575,
+        "collected": 0
+      }
+    ],
+    "frozen": [
+      {
+        "elapsed_ms": 0.003376,
+        "collected": 0
+      },
+      {
+        "elapsed_ms": 0.001903,
+        "collected": 0
+      },
+      {
+        "elapsed_ms": 0.000241,
+        "collected": 0
+      }
+    ],
+    "static_frozen_object_count": 184812,
+    "gc_enabled_after": true
+  }
+}

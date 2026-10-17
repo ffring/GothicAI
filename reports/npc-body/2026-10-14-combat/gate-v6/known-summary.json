@@ -1,0 +1,1247 @@
+{
+  "schema_version": 1,
+  "kind": "compact_closed_known_pass_excerpt",
+  "created_at_utc": "2026-10-14T14:51:50.471406+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6",
+  "source_report": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/validation/known-audit-v1/report.json",
+    "size_bytes": 1333071,
+    "sha256": "7b76bbfe1ab517874db59696dcdd00e2619e03a00f3d82764b8ddb1617a742ed"
+  },
+  "passed": true,
+  "issues": [],
+  "closed_known_stages_only": true,
+  "stage8_quality_credit": false,
+  "load_read": false,
+  "fresh_screening_read": false,
+  "audit_wall_s": 42.019438229035586,
+  "audit_process_wall_s_parent_reported": 42.099,
+  "candidate_checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "normalization_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "audit_binding": {
+    "environment_sha256": "dcac6eb0ed3db24f539215a89b5ced892ea6683b4023996fbc10fd92f79287ef",
+    "declaration_sha256": "3a0e1898b1196d9dedca87c1d54c0cfb88b4506e839b69725d27520c8907616b",
+    "known_reader_sha256": "747845004224b1cfafa9aa47dab19f1b68aa65bf5e47b4433b7b2b8dfdcf14fc",
+    "known_audit_manifest_sha256": null
+  },
+  "external_reader_binding": {
+    "audit_snapshot_sha256": "3d9f5591acce159a1681589aaf00549c4e255a04957169cb0aa66c2513212a9a",
+    "reporter_sha256": "2c64358264d85fe322d829eab57d010eaa4b18e3cfcc4abb81c70a9304793387"
+  },
+  "closed_phases": {
+    "shadow": {
+      "status": "collected",
+      "error": null,
+      "episodes": 3,
+      "suite_path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/shadow/suite.json",
+      "suite_sha256": "8d01de02d6f59ee0c8ddbf1bf00d2e55101e60cecbceb90c3872d5a774345c12",
+      "suite_binding_origin": "Original closed audit raw_sha256; no new full-suite hash scan during load"
+    },
+    "realtime": {
+      "status": "collected",
+      "error": null,
+      "episodes": 24,
+      "suite_path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/realtime/suite.json",
+      "suite_sha256": "5869d5e7c21ed6a32ffb2f02c9adebb36b81429d4217887959d4eed2ac7b7fc7",
+      "suite_binding_origin": "Original closed audit raw_sha256; no new full-suite hash scan during load"
+    },
+    "realtime-reaction": {
+      "status": "collected",
+      "error": null,
+      "episodes": 6,
+      "suite_path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/realtime-reaction/suite.json",
+      "suite_sha256": "2f0b4ecf9b692eae9a342d339f79b894a35ec3ae35aeef26bdf52c4310fc36f3",
+      "suite_binding_origin": "Original closed audit raw_sha256; no new full-suite hash scan during load"
+    }
+  },
+  "episode_summaries": [
+    {
+      "name": "shadow-223-0-native",
+      "policy": "native",
+      "task": "native_duel",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": false,
+      "latency": null,
+      "phase": "shadow",
+      "runtime": null
+    },
+    {
+      "name": "shadow-223-0-gru",
+      "policy": "gru",
+      "task": "native_duel",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": false,
+      "latency": null,
+      "phase": "shadow",
+      "runtime": {
+        "processed_periodic_inputs": 401,
+        "accepted_commands": 0,
+        "rejected_commands": 0,
+        "eligible_opportunities": 0,
+        "neural_control_fraction": null,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "shadow-223-0-mlp",
+      "policy": "mlp",
+      "task": "native_duel",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": false,
+      "latency": null,
+      "phase": "shadow",
+      "runtime": {
+        "processed_periodic_inputs": 401,
+        "accepted_commands": 0,
+        "rejected_commands": 0,
+        "eligible_opportunities": 0,
+        "neural_control_fraction": null,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-distance-223-0-native",
+      "policy": "native",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-distance-223-0-gru",
+      "policy": "gru",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 29,
+          "p95": 1.440461
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 3.453928
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 1.655645
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 29,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-distance-223-0-mlp",
+      "policy": "mlp",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 29,
+          "p95": 1.219426
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 3.649524
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 1.514329
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 29,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-attack-223-0-native",
+      "policy": "native",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-attack-223-0-gru",
+      "policy": "gru",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 3,
+          "p95": 1.15758
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 3.234786
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 1.444918
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 3,
+        "accepted_commands": 1,
+        "rejected_commands": 0,
+        "eligible_opportunities": 1,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-attack-223-0-mlp",
+      "policy": "mlp",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 19,
+          "p95": 1.293013
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 3.166979
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 1.444658
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 19,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-block-223-0-native",
+      "policy": "native",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-block-223-0-gru",
+      "policy": "gru",
+      "task": "block",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 100,
+          "p95": 1.319255
+        },
+        "observation_to_arbitration_ms": {
+          "count": 10,
+          "p95": 3.681132
+        },
+        "collector_to_command_send_ms": {
+          "count": 10,
+          "p95": 1.917696
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 100,
+        "accepted_commands": 10,
+        "rejected_commands": 0,
+        "eligible_opportunities": 10,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-block-223-0-mlp",
+      "policy": "mlp",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 5,
+          "p95": 1.188238
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 3.912787
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 1.908299
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 5,
+        "accepted_commands": 1,
+        "rejected_commands": 0,
+        "eligible_opportunities": 1,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-native_duel-223-0-native",
+      "policy": "native",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-native_duel-223-0-gru",
+      "policy": "gru",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 241,
+          "p95": 1.263649
+        },
+        "observation_to_arbitration_ms": {
+          "count": 22,
+          "p95": 2.871614
+        },
+        "collector_to_command_send_ms": {
+          "count": 22,
+          "p95": 1.668519
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 241,
+        "accepted_commands": 22,
+        "rejected_commands": 0,
+        "eligible_opportunities": 22,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-native_duel-223-0-mlp",
+      "policy": "mlp",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 456,
+          "p95": 1.292794
+        },
+        "observation_to_arbitration_ms": {
+          "count": 48,
+          "p95": 3.099521
+        },
+        "collector_to_command_send_ms": {
+          "count": 48,
+          "p95": 1.643602
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 456,
+        "accepted_commands": 48,
+        "rejected_commands": 0,
+        "eligible_opportunities": 48,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-distance-223-1-native",
+      "policy": "native",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-distance-223-1-gru",
+      "policy": "gru",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 29,
+          "p95": 1.308635
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 3.391109
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 1.518277
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 29,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-distance-223-1-mlp",
+      "policy": "mlp",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 30,
+          "p95": 1.16788
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 3.955207
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 2.210495
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 30,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-attack-223-1-native",
+      "policy": "native",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-attack-223-1-gru",
+      "policy": "gru",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 6,
+          "p95": 1.200672
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 9.690933
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 2.230103
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 6,
+        "accepted_commands": 1,
+        "rejected_commands": 0,
+        "eligible_opportunities": 1,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-attack-223-1-mlp",
+      "policy": "mlp",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 6,
+          "p95": 1.161779
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 9.381393
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 2.308089
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 6,
+        "accepted_commands": 1,
+        "rejected_commands": 0,
+        "eligible_opportunities": 1,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-block-223-1-native",
+      "policy": "native",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-block-223-1-gru",
+      "policy": "gru",
+      "task": "block",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 100,
+          "p95": 1.319705
+        },
+        "observation_to_arbitration_ms": {
+          "count": 10,
+          "p95": 3.78627
+        },
+        "collector_to_command_send_ms": {
+          "count": 10,
+          "p95": 1.984862
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 100,
+        "accepted_commands": 10,
+        "rejected_commands": 0,
+        "eligible_opportunities": 10,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-block-223-1-mlp",
+      "policy": "mlp",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 5,
+          "p95": 1.238882
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 3.641989
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 1.961668
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 5,
+        "accepted_commands": 1,
+        "rejected_commands": 0,
+        "eligible_opportunities": 1,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-native_duel-223-1-native",
+      "policy": "native",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-native_duel-223-1-gru",
+      "policy": "gru",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 179,
+          "p95": 1.26411
+        },
+        "observation_to_arbitration_ms": {
+          "count": 16,
+          "p95": 9.109161
+        },
+        "collector_to_command_send_ms": {
+          "count": 16,
+          "p95": 2.22341
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 179,
+        "accepted_commands": 16,
+        "rejected_commands": 0,
+        "eligible_opportunities": 16,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-native_duel-223-1-mlp",
+      "policy": "mlp",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 150,
+          "p95": 1.201844
+        },
+        "observation_to_arbitration_ms": {
+          "count": 12,
+          "p95": 2.876405
+        },
+        "collector_to_command_send_ms": {
+          "count": 12,
+          "p95": 1.757325
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 150,
+        "accepted_commands": 12,
+        "rejected_commands": 0,
+        "eligible_opportunities": 12,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "block-reaction-223-0-native",
+      "policy": "native",
+      "task": "block",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 0,
+        "eligible_opportunities": 0,
+        "accepted_model_commands": 0,
+        "healthy_fraction": null,
+        "runtime_fallbacks": 0
+      }
+    },
+    {
+      "name": "block-reaction-223-0-gru",
+      "policy": "gru",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 1.202355
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 7.016145
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 5.542793
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 4,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "neural_control_fraction": 1.0,
+        "runtime_fallbacks": 0,
+        "declared_runtime_fallbacks": 0,
+        "terminal_memory_reset": true
+      },
+      "defense_reactions": {
+        "linked_reactions": [
+          {
+            "observation_seq": 5,
+            "command_id": 1,
+            "execution_id": 3,
+            "action_id": 9,
+            "observed_windup_game_ms": 16361,
+            "actual_started_game_ms": 16427,
+            "incoming_attempt_game_ms": 16527,
+            "pose_change_seq": 40,
+            "hit_attempt_seq": 59,
+            "defence_result_seq": 60,
+            "reaction_game_ms": 66,
+            "actual_window_game_ms": 166,
+            "hp_preserved": true
+          }
+        ],
+        "censored": {},
+        "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+      },
+      "actual_physics": {
+        "linked_attack_hits": 0,
+        "linked_opponent_hp_loss": 0,
+        "linked_blocked_hits": 1,
+        "primary_mapping": [
+          3
+        ],
+        "opponent_mapping": [
+          4
+        ],
+        "raw_counters": {
+          "primary": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 1
+          },
+          "opponent": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 0
+          }
+        },
+        "issues": []
+      },
+      "capture_integrity": {
+        "final_integrity_sha256": "e87d7681649b55ccbe5c25676bd2237c9eb68c5d55ffb2ce27c5b546eb22c72b",
+        "visibility_records": 25,
+        "dropped": 0,
+        "capture_failed": false
+      },
+      "final_primary": {
+        "hp": 300,
+        "blocked_hits": 1,
+        "received_damage": 0
+      },
+      "source_episode": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/realtime-reaction/block-reaction-223-0-gru/episode.json",
+        "size_bytes": 231357,
+        "sha256": "a43a62e0bb0089ad940118fc19273b05aec91d85e7c6230f295188db10f51044"
+      }
+    },
+    {
+      "name": "block-reaction-223-0-mlp",
+      "policy": "mlp",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 1.364769
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 6.813115
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 5.273069
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 4,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "neural_control_fraction": 1.0,
+        "runtime_fallbacks": 0,
+        "declared_runtime_fallbacks": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "block-reaction-223-1-native",
+      "policy": "native",
+      "task": "block",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 0,
+        "eligible_opportunities": 0,
+        "accepted_model_commands": 0,
+        "healthy_fraction": null,
+        "runtime_fallbacks": 0
+      }
+    },
+    {
+      "name": "block-reaction-223-1-gru",
+      "policy": "gru",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 1.320276
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 6.942008
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 5.542474
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 4,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "neural_control_fraction": 1.0,
+        "runtime_fallbacks": 0,
+        "declared_runtime_fallbacks": 0,
+        "terminal_memory_reset": true
+      },
+      "defense_reactions": {
+        "linked_reactions": [
+          {
+            "observation_seq": 5,
+            "command_id": 1,
+            "execution_id": 8,
+            "action_id": 9,
+            "observed_windup_game_ms": 16361,
+            "actual_started_game_ms": 16427,
+            "incoming_attempt_game_ms": 16527,
+            "pose_change_seq": 40,
+            "hit_attempt_seq": 59,
+            "defence_result_seq": 60,
+            "reaction_game_ms": 66,
+            "actual_window_game_ms": 166,
+            "hp_preserved": true
+          }
+        ],
+        "censored": {},
+        "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+      },
+      "actual_physics": {
+        "linked_attack_hits": 0,
+        "linked_opponent_hp_loss": 0,
+        "linked_blocked_hits": 1,
+        "primary_mapping": [
+          3
+        ],
+        "opponent_mapping": [
+          4
+        ],
+        "raw_counters": {
+          "primary": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 1
+          },
+          "opponent": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 0
+          }
+        },
+        "issues": []
+      },
+      "capture_integrity": {
+        "final_integrity_sha256": "bbd7ec34c0f65371fec3dd3bb2fbafb68f5fd94f1ed7b25f6e7715e2b448203a",
+        "visibility_records": 25,
+        "dropped": 0,
+        "capture_failed": false
+      },
+      "final_primary": {
+        "hp": 300,
+        "blocked_hits": 1,
+        "received_damage": 0
+      },
+      "source_episode": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/realtime-reaction/block-reaction-223-1-gru/episode.json",
+        "size_bytes": 231531,
+        "sha256": "11a6f58d8c80f201a2048041c16690e911663c33358994f748096ace18bfbfbf"
+      }
+    },
+    {
+      "name": "block-reaction-223-1-mlp",
+      "policy": "mlp",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 1.212073
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 6.954722
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 5.833228
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 4,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "neural_control_fraction": 1.0,
+        "runtime_fallbacks": 0,
+        "declared_runtime_fallbacks": 0,
+        "terminal_memory_reset": true
+      }
+    }
+  ],
+  "maximum_per_case_p95_and_control": {
+    "gru": {
+      "model_step_ms": {
+        "episode": "realtime-distance-223-0-gru",
+        "count": 29,
+        "p95": 1.440461
+      },
+      "observation_to_arbitration_ms": {
+        "episode": "realtime-attack-223-1-gru",
+        "count": 1,
+        "p95": 9.690933
+      },
+      "collector_to_command_send_ms": {
+        "episode": "block-reaction-223-0-gru",
+        "count": 1,
+        "p95": 5.542793
+      },
+      "minimum_neural_control": {
+        "episode": "realtime-distance-223-0-gru",
+        "fraction": 1.0
+      }
+    },
+    "mlp": {
+      "model_step_ms": {
+        "episode": "block-reaction-223-0-mlp",
+        "count": 4,
+        "p95": 1.364769
+      },
+      "observation_to_arbitration_ms": {
+        "episode": "realtime-attack-223-1-mlp",
+        "count": 1,
+        "p95": 9.381393
+      },
+      "collector_to_command_send_ms": {
+        "episode": "block-reaction-223-1-mlp",
+        "count": 1,
+        "p95": 5.833228
+      },
+      "minimum_neural_control": {
+        "episode": "realtime-distance-223-0-mlp",
+        "fraction": 1.0
+      }
+    },
+    "all_neural": {
+      "model_step_ms": {
+        "episode": "realtime-distance-223-0-gru",
+        "count": 29,
+        "p95": 1.440461
+      },
+      "observation_to_arbitration_ms": {
+        "episode": "realtime-attack-223-1-gru",
+        "count": 1,
+        "p95": 9.690933
+      },
+      "collector_to_command_send_ms": {
+        "episode": "block-reaction-223-1-mlp",
+        "count": 1,
+        "p95": 5.833228
+      },
+      "minimum_neural_control": {
+        "episode": "realtime-distance-223-0-gru",
+        "fraction": 1.0
+      }
+    }
+  },
+  "percentile_scope": "Maximum of per-case p95; not a pooled percentile. Each entry retains its own sample count.",
+  "real_backend_execution_profiles": {
+    "shadow": {
+      "actual_forward_count": 802,
+      "profiles": [
+        {
+          "inference_cpu_threads": 1,
+          "torch_intraop_threads": 1,
+          "torch_interop_threads": 12,
+          "count": 802
+        }
+      ],
+      "max_process_wall_ms": 2.137547,
+      "max_backend_wall_ms": 1.505663,
+      "wall_latency_population_unchanged": true,
+      "cpu_stall_cause_claim": false
+    },
+    "realtime": {
+      "actual_forward_count": 1387,
+      "profiles": [
+        {
+          "inference_cpu_threads": 1,
+          "torch_intraop_threads": 1,
+          "torch_interop_threads": 12,
+          "count": 1387
+        }
+      ],
+      "max_process_wall_ms": 2.046318,
+      "max_backend_wall_ms": 1.342477,
+      "wall_latency_population_unchanged": true,
+      "cpu_stall_cause_claim": false
+    },
+    "realtime_reaction": {
+      "actual_forward_count": 16,
+      "profiles": [
+        {
+          "inference_cpu_threads": 1,
+          "torch_intraop_threads": 1,
+          "torch_interop_threads": 12,
+          "count": 16
+        }
+      ],
+      "max_process_wall_ms": 1.364769,
+      "max_backend_wall_ms": 0.844894,
+      "wall_latency_population_unchanged": true,
+      "cpu_stall_cause_claim": false
+    }
+  },
+  "actual_real_forward_count": 2205,
+  "neutral_block_results_not_replaced": [
+    {
+      "name": "realtime-block-223-0-native",
+      "policy": "native",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-0-gru",
+      "policy": "gru",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-0-mlp",
+      "policy": "mlp",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-1-native",
+      "policy": "native",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-1-gru",
+      "policy": "gru",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-1-mlp",
+      "policy": "mlp",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true
+    }
+  ],
+  "original_raw_sha256_count": 295,
+  "selected_raw_sha256": {
+    "shadow/suite.json": "8d01de02d6f59ee0c8ddbf1bf00d2e55101e60cecbceb90c3872d5a774345c12",
+    "realtime/suite.json": "5869d5e7c21ed6a32ffb2f02c9adebb36b81429d4217887959d4eed2ac7b7fc7",
+    "realtime-reaction/block-reaction-223-0-gru/arena-events.jsonl": "35eb08b700c6da93b5335f44a07a95f85d0e91b0fd8979247e67ff572cb7b1d6",
+    "realtime-reaction/block-reaction-223-0-gru/policy-final-before-clear.json": "f5a1c83a09f38c38f7568a14cdc343e1bfea77dfc15ec75fd5bdc187d48e010b",
+    "realtime-reaction/block-reaction-223-0-gru/observations.jsonl": "0b86e2f068c718bfff509fe208a4509a269fa245c955e3d503b1d7b2e5142f66",
+    "realtime-reaction/block-reaction-223-0-gru/observer-timing.jsonl": "f33621519549e52625e69e180d37ca96227b1ddcf4e965aac1ee3672c28c873f",
+    "realtime-reaction/block-reaction-223-0-gru/ipc.jsonl": "8d507da93b9963d367441d0101d54986948487b23f54c32dd9d9776e4f611111",
+    "realtime-reaction/block-reaction-223-0-gru/bench.log": "02835af25a9544fa8b1deafb5cc350d9c7742daef3ab5f066440422ecdb8e3c7",
+    "realtime-reaction/block-reaction-223-0-gru/collector-transport.jsonl": "0b8d11aa90528e6af40a790caacb4a01452a81fc006c63d3c15cf893e0b8baeb",
+    "realtime-reaction/block-reaction-223-0-gru/activation.json": "d6defb5f7e0995a56efbf8959caab7e0fce685dad0777065405aabcfdfa6e797",
+    "realtime-reaction/block-reaction-223-0-gru/preparation.json": "739ac4abc4849c37280a92092f2b7ba693ffd35d99b8be5eb3b7fef8c84f3dfe",
+    "realtime-reaction/block-reaction-223-0-gru/policy-inputs.jsonl": "d57d3d01e92bd18174d2a5e44c069b717fc235d063d23bb425670e82e56231eb",
+    "realtime-reaction/block-reaction-223-0-gru/events.jsonl": "30b91633d3f0060e2e2d3df25024e9ac9ad1e2adc7d306462f5b3d26e5065740",
+    "realtime-reaction/block-reaction-223-0-gru/latency.jsonl": "dc7033a60ff3383a1181d04549e43ab3c04e30f2139c9a4d8707c4274df3044f",
+    "realtime-reaction/block-reaction-223-0-gru/body-control-events.jsonl": "82e634f186ce7adb343d6a310cbbf47fd930fa20b9dc6023c8a2a51833087774",
+    "realtime-reaction/block-reaction-223-0-gru/episode.json": "a43a62e0bb0089ad940118fc19273b05aec91d85e7c6230f295188db10f51044",
+    "realtime-reaction/block-reaction-223-0-gru/runner-summary.json": "1c2d27d7e698b7e5d05956c525918425659c8638ae5a59db257124ad36e4d056",
+    "realtime-reaction/block-reaction-223-1-gru/arena-events.jsonl": "3e8b4c77bf76b2b210c1aa55390e29b4bac8570897fa49340d3b2b47c083b1d9",
+    "realtime-reaction/block-reaction-223-1-gru/policy-final-before-clear.json": "cfe9037c1783b8e3c0484483d1cb9b65a0b3cdab200a164f9c64cdcb8245c7ba",
+    "realtime-reaction/block-reaction-223-1-gru/observations.jsonl": "d7d0e9f6887d6b9952f96d853f20e9e1f455d3605d2fde4e955ab7c278c44234",
+    "realtime-reaction/block-reaction-223-1-gru/observer-timing.jsonl": "b15ee12a79af13cdc109e6c758e88c933855111f6512958b5d75d112355f86f7",
+    "realtime-reaction/block-reaction-223-1-gru/ipc.jsonl": "317634b8523fdf0de8cb694772821baa1047416135d6b2956c7105ac3e935dad",
+    "realtime-reaction/block-reaction-223-1-gru/bench.log": "02835af25a9544fa8b1deafb5cc350d9c7742daef3ab5f066440422ecdb8e3c7",
+    "realtime-reaction/block-reaction-223-1-gru/collector-transport.jsonl": "15b1ac853e61ff141c15e0cf1be9c8da6a9ae413a7acd570e7158dabd3b638d6",
+    "realtime-reaction/block-reaction-223-1-gru/activation.json": "60e62ea43b62c534660572388607275a0647b6c7889af0c19e75991707b75ab1",
+    "realtime-reaction/block-reaction-223-1-gru/preparation.json": "ce9a8fb2e429d9a8cc739679c4dafb7867c8d1e487587d5891af49182245f3af",
+    "realtime-reaction/block-reaction-223-1-gru/policy-inputs.jsonl": "243cbfd1ab475f278d6640b824a66f68e1412739a9cd33739fb53714ecab02e3",
+    "realtime-reaction/block-reaction-223-1-gru/events.jsonl": "d05bcd60b5d351257a2cdbc3951c7db96099775b4edf735b51b95cfdfa1e0356",
+    "realtime-reaction/block-reaction-223-1-gru/latency.jsonl": "d9d35b5e0eb9154ec236988b076edae8af2986bb44e106829d40aeef8b825712",
+    "realtime-reaction/block-reaction-223-1-gru/body-control-events.jsonl": "59a21a5b06183f07ad1fb91cf269e83cffda53035f6ce80b64074e98b2475816",
+    "realtime-reaction/block-reaction-223-1-gru/episode.json": "11a6f58d8c80f201a2048041c16690e911663c33358994f748096ace18bfbfbf",
+    "realtime-reaction/block-reaction-223-1-gru/runner-summary.json": "2caf9512c7e53d78c971d8d574b29f9d44a3cc97f9be2cf370786d4a418a184f",
+    "realtime-reaction/suite.json": "2f0b4ecf9b692eae9a342d339f79b894a35ec3ae35aeef26bdf52c4310fc36f3"
+  },
+  "full_raw_bindings_retained_in_source_report": true,
+  "current_parent_status": {
+    "load": "running",
+    "fresh_screening": "not_started",
+    "overall_combat_gate": "IN_PROGRESS"
+  },
+  "extraction": {
+    "source_hashes_inherited_from_closed_audit": true,
+    "large_raw_journals_rehashed": false,
+    "new_hashes_only_known_report_and_two_small_episode_metadata": true,
+    "models_or_engine_started": false,
+    "tests_run": false,
+    "source_or_remote_raw_changed": false
+  }
+}

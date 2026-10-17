@@ -18,6 +18,7 @@
 #include "world/objects/interactive.h"
 #include "world/triggers/abstracttrigger.h"
 #include "world/triggers/cscamera.h"
+#include "game/bodyarena.h"
 #include "game/globaleffects.h"
 #include "game/serialize.h"
 #include "game/physicssave.h"
@@ -685,7 +686,7 @@ void World::tick(uint64_t dt) {
   updateStuckArrows();
   { FrameProfile::Scope timing(FrameProfile::Zone::Sync); wobj.syncRagdolls(); }
   FrameProfile::Scope timing(FrameProfile::Zone::WorldMisc);
-  if(auto pl = player())
+  if(auto pl = player(); pl!=nullptr && !BodyArena::frozenWorld())
     wsound.tick(*pl);
   globFx->tick(dt);
   }

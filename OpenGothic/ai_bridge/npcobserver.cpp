@@ -1,4 +1,5 @@
 #include "npcobserver.h"
+#include "game/bodycontroller.h"
 
 #include <algorithm>
 #include <cctype>
@@ -230,6 +231,11 @@ void NpcObserver::clear() {
   held.clear();
   verdicts.clear();
   nextRoster = 0;
+  }
+
+bool NpcObserver::isActing(std::string_view symbol) const {
+  const auto key = upper(symbol);
+  return std::any_of(running.begin(),running.end(),[&](const Running& r){ return r.symbol==key; });
   }
 
 void NpcObserver::tick(World& world) {
@@ -473,6 +479,11 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   Npc*       pl     = world.player();
   if(npc==nullptr || npc->isPlayer() || pl==nullptr) {
     result("rejected","npc not found");
+    return;
+    }
+  if(BodyController::owns(*npc)) {
+    BodyController::legacyRejected(*npc,"legacy_npc_act_rejected");
+    reply(id,symbol,"rejected","npc body is owned by a combat provider");
     return;
     }
   if(!owner(symbol).empty() || npc->isTalk()) {

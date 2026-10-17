@@ -25,6 +25,7 @@
 
 #include "game/gamescript.h"
 #include "game/bodyobservations.h"
+#include "game/bodycontroller.h"
 #include "game/inventory.h"
 #include "game/serialize.h"
 #include "camera.h"
@@ -64,7 +65,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 40;
+constexpr int         ProtocolVersion = 41;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -199,6 +200,7 @@ struct AiBridge::Impl final {
     };
 
   void onTick(uint64_t dt);
+  void processInbound(World* world, Inbound& in);
   void onStartLoading();
   void onSessionUnload() { voices.clear(); resetBodyObservations(); }
   void onWorldLoaded();
@@ -219,6 +221,9 @@ struct AiBridge::Impl final {
 
   void handle(World* world, const std::string& text);
   void onBodyWatch(World& world, const rapidjson::Value& msg);
+  void onBodyControl(World& world, const rapidjson::Value& msg);
+  void pumpBodyControl();
+  void finishBodyReset(World* world);
   void resetBodyObservations();
   void onSay(World& world, const rapidjson::Value& msg);
   // the director's lines (story graph) get the npc's voice from the server (v26)
@@ -276,6 +281,7 @@ struct AiBridge::Impl final {
 
   bool                 connected = false;
   uint64_t             bodyGeneration = 0;
+  bool                 bodyResetPending = false;
   std::string          lastError;
   NpcController        ctrl{[this](std::string&& s){ send(std::move(s)); }};
   NpcObserver          observer{[this](std::string&& s){ send(std::move(s)); },
@@ -296,6 +302,7 @@ struct AiBridge::Impl final {
   // debug save/load must not run inside the game tick (it clears the world mid-frame):
   // it waits for the application's event loop
   Tempest::Timer       debugTimer;
+  Tempest::Timer       bodyTimer;
   std::string          debugReq, debugCmd, debugSlot;
 
   LineLibrary                  lines;
@@ -328,6 +335,7 @@ struct AiBridge::Impl final {
   // the director's hands in the world: tagged creatures, deaths, effects on npc's (v8)
   StoryWorld                   story{[this](std::string&& s){ send(std::move(s)); },
                                      [this](World& w, Npc& npc) {
+                                       BodyController::takeover(npc,"story_takeover");
                                        std::string err;
                                        const auto  symbol = npcSymbol(w,npc);
                                        if(ctrl.isAttached(symbol))
@@ -384,6 +392,8 @@ AiBridge::Impl::Impl() {
     pendingRecord   = std::move(rec);
     };
   debugTimer.timeout.bind(this,&Impl::runDebug);
+  bodyTimer.timeout.bind(this,&Impl::pumpBodyControl);
+  bodyTimer.start(50);
   if(TestBench::isActive())
     TestBench::aiReached = [this](std::string_view key, std::string_view stage) {
       return key=="necro" && necro.reached(stage);
@@ -444,6 +454,7 @@ AiBridge::Impl::Impl() {
   }
 
 AiBridge::Impl::~Impl() {
+  bodyTimer.stop();
   auto& gothic = Gothic::inst();
   gothic.onTick              .ubind(this,&Impl::onTick);
   gothic.onStartLoading      .ubind(this,&Impl::onStartLoading);
@@ -468,6 +479,9 @@ AiBridge::Impl::~Impl() {
   }
 
 void AiBridge::Impl::onTick(uint64_t /*dt*/) {
+  BodyController::pause(Gothic::inst().isPause());
+  BodyController::pumpWatchdogs();
+  finishBodyReset(Gothic::inst().world());
   std::vector<Inbound> queue;
   {
     std::lock_guard<std::mutex> guard(sync);
@@ -475,51 +489,8 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
   }
 
   World* world = Gothic::inst().world();
-  for(auto& in:queue) {
-    switch(in.kind) {
-      case Inbound::Open:
-        resetBodyObservations();
-        connected = true;
-        lastError.clear();
-        Log::i("[ai] connected to ",url);
-        send(JsonWriter("hello")
-               .integer("protocol",ProtocolVersion)
-               .str("client","opengothic-ai-bridge")
-               .str("codepage","cp1251")
-               .finish());
-        session.reason = "connect";
-        sendSession();
-        if(world!=nullptr)
-          sendWorld("world_loaded",world);
-        break;
-      case Inbound::Close:
-      case Inbound::Error:
-        resetBodyObservations();
-        if(connected) {
-          Log::i("[ai] disconnected: ",in.text);
-          Gothic::inst().onPrint(TextCodec::fromUtf8("Связь с ИИ-сервером потеряна"));
-          // nobody drives the npc's anymore: hand them back to their routines, threats to their scripts
-          if(world!=nullptr) {
-            ctrl.detachAll(*world,"server_disconnected");
-            observer.releaseAll(*world);
-            beasts.releaseAll(*world);
-            }
-          observer.setHoldThreats(false);
-          if(chat!=nullptr)
-            chat->hideDeal("");  // nobody is there to carry it out
-          }
-        else if(in.kind==Inbound::Error && in.text!=lastError) {
-          Log::i("[ai] connection failed: ",in.text);
-          }
-        connected = false;
-        if(in.kind==Inbound::Error)
-          lastError = in.text;
-        break;
-      case Inbound::Message:
-        handle(world,in.text);
-        break;
-      }
-    }
+  for(auto& in:queue)
+    processInbound(world,in);
 
   if(world!=nullptr) {
     ctrl.tick(*world);
@@ -537,6 +508,14 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
         auto packet = BodyObservations::drainJson();
         send(JsonWriter("body_observations").raw("packet",packet).finish());
         }
+      if(BodyObservations::enabled() && ws.bufferedAmount()<65536) {
+        auto events = BodyController::drainJson();
+        // The controller event queue is bounded and shared with the runner encoder.
+        rapidjson::Document envelope;
+        envelope.Parse(events.c_str(),events.size());
+        if(envelope.HasMember("events") && !envelope["events"].Empty())
+          send(std::move(events));
+        }
       }
     tickVoices(*world);
     tickDeal(*world);
@@ -546,6 +525,57 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
   ensureChat();
   chat->setHidden(necro.hidesChat());
   chat->tick();
+  }
+
+void AiBridge::Impl::processInbound(World* world, Inbound& in) {
+  switch(in.kind) {
+    case Inbound::Open:
+      // Reconnection invalidates old requests immediately, while an old owner's current locked
+      // animation reaches its safe boundary before observation IDs are reset.
+      BodyController::disconnect("");
+      bodyResetPending = true;
+      finishBodyReset(world);
+      BodyController::pause(Gothic::inst().isPause());
+      connected = true;
+      lastError.clear();
+      Log::i("[ai] connected to ",url);
+      send(JsonWriter("hello")
+             .integer("protocol",ProtocolVersion)
+             .str("client","opengothic-ai-bridge")
+             .str("codepage","cp1251")
+             .finish());
+      session.reason = "connect";
+      sendSession();
+      if(world!=nullptr)
+        sendWorld("world_loaded",world);
+      break;
+    case Inbound::Close:
+    case Inbound::Error:
+      BodyController::disconnect("");
+      if(connected) {
+        Log::i("[ai] disconnected: ",in.text);
+        Gothic::inst().onPrint(TextCodec::fromUtf8("Связь с ИИ-сервером потеряна"));
+        // nobody drives the npc's anymore: hand them back to their routines, threats to their scripts
+        if(world!=nullptr) {
+          ctrl.detachAll(*world,"server_disconnected");
+          observer.releaseAll(*world);
+          beasts.releaseAll(*world);
+          }
+        observer.setHoldThreats(false);
+        if(chat!=nullptr)
+          chat->hideDeal("");  // nobody is there to carry it out
+        }
+      else if(in.kind==Inbound::Error && in.text!=lastError) {
+        Log::i("[ai] connection failed: ",in.text);
+        }
+      connected = false;
+      if(in.kind==Inbound::Error)
+        lastError = in.text;
+      break;
+    case Inbound::Message:
+      handle(world,in.text);
+      break;
+    }
   }
 
 void AiBridge::Impl::onStartLoading() {
@@ -696,6 +726,10 @@ void AiBridge::Impl::onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise) {
 std::string_view AiBridge::Impl::npcOwner(std::string_view symbol) const {
   if(ctrl.isAttached(symbol))
     return "attached";
+  if(auto world = Gothic::inst().world()) {
+    if(auto npc = npcBySymbol(*world,symbol); npc!=nullptr && BodyController::owns(*npc))
+      return "body";
+    }
   return {};
   }
 
@@ -765,6 +799,11 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="body_watch") {
     onBodyWatch(*world,doc);
     }
+  else if(type=="body_acquire" || type=="body_goal" || type=="body_action" ||
+          type=="body_heartbeat" || type=="body_release" || type=="body_disconnect" ||
+          type=="body_control_status" || type=="body_events") {
+    onBodyControl(*world,doc);
+    }
   else if(type=="detach") {
     std::string err;
     const bool  ok = ctrl.detach(*world,JsonRead::str(doc,"npc"),"server",err);
@@ -822,6 +861,14 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     sendResult(req,!value.empty(),err,value);
     }
   else if(type=="story_effect") {
+    if(auto npc = npcBySymbol(*world,JsonRead::str(doc,"npc"));
+       npc!=nullptr && BodyController::owns(*npc)) {
+      BodyController::takeover(*npc,"story_takeover");
+      if(BodyController::owns(*npc)) {
+        sendResult(req,false,"body control is releasing at a safe boundary; retry story effect");
+        return;
+        }
+      }
     std::string err;
     const bool  ok = story.effects(*world,doc,err);
     sendResult(req,ok,err);
@@ -889,11 +936,96 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   }
 
 void AiBridge::Impl::resetBodyObservations() {
+  bodyResetPending = false;
   BodyObservations::reset(++bodyGeneration);
+  }
+
+void AiBridge::Impl::finishBodyReset(World* world) {
+  if(!bodyResetPending)
+    return;
+  if(world!=nullptr) {
+    for(uint32_t i=0;i<world->npcCount();++i) {
+      auto npc = world->npcById(i);
+      if(npc!=nullptr && BodyController::owns(*npc))
+        return;
+      }
+    }
+  resetBodyObservations();
+  }
+
+void AiBridge::Impl::pumpBodyControl() {
+  // MainWindow does not tick the world while paused. The application timer still runs on the
+  // same main thread, so pause and wall timeout invalidate pending commands without simulation.
+  if(Gothic::inst().checkLoading()!=Gothic::LoadState::Idle)
+    return;
+  BodyController::pause(Gothic::inst().isPause());
+  BodyController::pumpWatchdogs();
+  finishBodyReset(Gothic::inst().world());
+  if(!Gothic::inst().isPause())
+    return;
+  std::vector<Inbound> queue;
+  {
+    std::lock_guard<std::mutex> guard(sync);
+    for(auto it=inbound.begin();it!=inbound.end();) {
+      bool body = false;
+      if(it->kind==Inbound::Message) {
+        rapidjson::Document msg;
+        msg.Parse(it->text.c_str(),it->text.size());
+        body = !msg.HasParseError() && msg.IsObject() && JsonRead::str(msg,"type").starts_with("body_");
+        }
+      if(it->kind!=Inbound::Message || body) {
+        queue.push_back(std::move(*it));
+        it = inbound.erase(it);
+        } else {
+        ++it;
+        }
+      }
+  }
+  // Reply to body requests and close the transport during pause; legacy gameplay commands keep
+  // their existing behavior of waiting for the next world tick.
+  auto world = Gothic::inst().world();
+  for(auto& in:queue)
+    processInbound(world,in);
+  }
+
+void AiBridge::Impl::onBodyControl(World& world, const rapidjson::Value& msg) {
+  BodyController::pause(Gothic::inst().isPause());
+  const auto req = JsonRead::str(msg,"req");
+  if(req.empty())
+    return;
+  if(JsonRead::str(msg,"type")=="body_acquire") {
+    if(JsonRead::str(msg,"mode")!="realtime") {
+      sendResult(req,false,"ordinary game body control requires realtime mode");
+      return;
+      }
+    auto id = msg.FindMember("entity_id");
+    auto npc = id!=msg.MemberEnd() && id->value.IsUint64()
+               ? BodyObservations::findEntity(id->value.GetUint64()) : nullptr;
+    if(npc!=nullptr) {
+      const auto symbol = npcSymbol(world,*npc);
+      if(ctrl.isAttached(symbol) || observer.isActing(symbol) || npc->isTalk() ||
+         Gothic::inst().isNpcInDialog(*npc)) {
+        sendResult(req,false,"NPC already has conversation or soft-action body ownership");
+        return;
+        }
+      }
+    }
+  // Exactly the same parser, scope checks, lease and resolver as the headless IPC adapter.
+  send(JsonWriter("result").str("req",req).boolean("ok",true)
+       .raw("value",BodyController::handleJson(msg)).finish());
   }
 
 void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
   const auto req = JsonRead::str(msg,"req");
+  // Changing subscription changes world IDs. Release through the common arbiter first so a
+  // subscription edit cannot bypass a current non-interruptible segment's safe handoff.
+  for(uint32_t i=0;i<world.npcCount();++i) {
+    auto npc = world.npcById(i);
+    if(npc!=nullptr && BodyController::owns(*npc)) {
+      sendResult(req,false,"release active body owners before changing body_watch");
+      return;
+      }
+    }
   auto npcs = msg.FindMember("npcs");
   auto rate = msg.FindMember("rate_hz");
   if(req.empty() || npcs==msg.MemberEnd() || !npcs->value.IsArray() || npcs->value.Size()>4 ||
@@ -932,6 +1064,7 @@ void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
     watched.push_back(npc);
     }
   resetBodyObservations();
+  BodyController::pause(Gothic::inst().isPause());
   if(!watched.empty()) {
     BodyObservations::Config config;
     config.periodMs = (rate==msg.MemberEnd() || rate->value.GetInt()==20) ? 50 : 100;
@@ -940,6 +1073,7 @@ void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
     BodyObservations::configure(config);
     BodyObservations::watch(watched);
     }
+  BodyController::setActors(watched);
   // Observation alone does not attach a controller, clear AI queues or claim body ownership.
   sendResult(req,true,"",BodyObservations::statsJson());
   }
@@ -1840,6 +1974,12 @@ void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
       }
     }
   const std::string toId = to!=pl ? npcSymbol(world,*to) : std::string();
+  if(BodyController::owns(*npc) &&
+     (!LineLibrary::isExternal(line) || !JsonRead::boolean(msg,"overlay",false))) {
+    BodyController::legacyRejected(*npc,"legacy_queued_speech_rejected");
+    Log::i("[ai] say: body provider owns queued speech/turns: ",symbol," ",line);
+    return;
+    }
   if(!LineLibrary::isExternal(line)) {
     // an original line of the game (v8): subtitle and voice come from the game's own files
     if(Gothic::inst().messageByName(line).empty()) {

@@ -1,0 +1,12 @@
+{
+  "kind": "independent_reporter_repair_snapshot",
+  "frozen_run_environment_sha256": "710db46405838d1d20c160e8bf6824b8dd82884eb652326a7a82be92a755c201",
+  "original_report_sha256": "b95206253cdaac0d77c8c5943d98cc3ebd33173aa712c11938d2428a2dea9c83",
+  "config_sha256": "6c33be0e110409ba4c532990543a4bbb821f3c1fe82960974750b2f5461c542f",
+  "dataset_helper_sha256": "2ad88bfeb6260a3bf41a60eccdf674d4f54259f5bf2d1d0537c8a5b3ce8ca488",
+  "files": {
+    "scripts/body-bc-remote.sh": "869e2e39f18371ceb4caaa6a425c99459c2c7fc379e9fe7480ce27e1f88a0a5d",
+    "scripts/body_bc_report.py": "fde91ba8129a40b5229b79e4dcd2f9f6470d454208673a31d297c6b82bf03991",
+    "scripts/tests/test_body_bc_report.py": "a25f8ce09ce8303cfbf4dc99ff54532061b895a2520ee2ae8bc3c19147c90ff2"
+  }
+}

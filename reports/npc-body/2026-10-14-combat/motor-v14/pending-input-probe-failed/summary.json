@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "kind": "body_pending_input_probe_failed_coverage_summary",
+  "status": "failed",
+  "source_collection_status": "collected",
+  "error": "no real ready admission or more than one command admitted per due tick",
+  "model": null,
+  "quality_credit": false,
+  "source_report": {
+    "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/pending-input-probe/probe.json",
+    "sha256": "3dbcfefe159e6ef8264f9e530f610255d9202c15cef04f6181422c1a83dea993",
+    "bytes": 78183
+  },
+  "scheduling_journal": {
+    "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/pending-input-probe/episode/observer-timing.jsonl",
+    "sha256": "b951061aae2f0744aa4713702f953151f6db8fc8494896d676d06adc8c649538",
+    "bytes": 620298
+  },
+  "raw_markers": 1508,
+  "phase_counts": {
+    "tick_begin": 61,
+    "tick_end": 61,
+    "input_read": 1386
+  },
+  "priority_write_admissions": 0,
+  "interpretation": "The actual fixture did not exercise priority write admission; no native ordering failure or cap violation was established. This failed prerequisite remains failed."
+}

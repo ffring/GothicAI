@@ -1,0 +1,1684 @@
+{
+  "schema_version": 1,
+  "kind": "compact_load_failure_with_separate_gc_diagnostics",
+  "created_at_utc": "2026-10-14T15:09:05.446781+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6",
+  "known_audit": "PASS_closed_3_24_6",
+  "load_status": "infrastructure_failure",
+  "load_error": "native arena infrastructure failure: unexpected_control_loss:released",
+  "load_gate": "FAIL",
+  "fresh_screening_started": false,
+  "stage8_quality_credit": false,
+  "requested_cohorts": 12,
+  "completed_cohorts": 10,
+  "completed_by_provider": {
+    "native": 4,
+    "gru": 4,
+    "mlp": 2
+  },
+  "partial_cohort": "four-actor-mlp-2",
+  "unstarted_cohort": "four-actor-mlp-3",
+  "completed_cases": [
+    {
+      "name": "four-actor-native-0",
+      "cohort": 0,
+      "policy": "native",
+      "neural_control_fraction": null,
+      "model_stats": {},
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [],
+      "independent_runtime_count": 0,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    },
+    {
+      "name": "four-actor-native-1",
+      "cohort": 1,
+      "policy": "native",
+      "neural_control_fraction": null,
+      "model_stats": {},
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [],
+      "independent_runtime_count": 0,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    },
+    {
+      "name": "four-actor-native-2",
+      "cohort": 2,
+      "policy": "native",
+      "neural_control_fraction": null,
+      "model_stats": {},
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [],
+      "independent_runtime_count": 0,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    },
+    {
+      "name": "four-actor-native-3",
+      "cohort": 3,
+      "policy": "native",
+      "neural_control_fraction": null,
+      "model_stats": {},
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [],
+      "independent_runtime_count": 0,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    },
+    {
+      "name": "four-actor-gru-0",
+      "cohort": 0,
+      "policy": "gru",
+      "neural_control_fraction": 0.9951456310679612,
+      "model_stats": {
+        "periodic_observations": 1604,
+        "unowned_periodic_observations": 4,
+        "model_processed": 1600,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 206,
+        "accepted_model_commands": 205,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 1,
+        "actor_1_accepted_commands": 64,
+        "stale_refresh_requests": 1,
+        "actor_2_accepted_commands": 56,
+        "actor_3_accepted_commands": 48,
+        "actor_4_accepted_commands": 37,
+        "event_only_observations": 234
+      },
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "independent_runtime_count": 4,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    },
+    {
+      "name": "four-actor-gru-1",
+      "cohort": 1,
+      "policy": "gru",
+      "neural_control_fraction": 1.0,
+      "model_stats": {
+        "periodic_observations": 1604,
+        "unowned_periodic_observations": 4,
+        "model_processed": 1600,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 167,
+        "accepted_model_commands": 167,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 0,
+        "actor_1_accepted_commands": 32,
+        "actor_2_accepted_commands": 38,
+        "actor_3_accepted_commands": 34,
+        "actor_4_accepted_commands": 63,
+        "event_only_observations": 246
+      },
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "independent_runtime_count": 4,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    },
+    {
+      "name": "four-actor-gru-2",
+      "cohort": 2,
+      "policy": "gru",
+      "neural_control_fraction": 1.0,
+      "model_stats": {
+        "periodic_observations": 1604,
+        "unowned_periodic_observations": 4,
+        "model_processed": 1600,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 167,
+        "accepted_model_commands": 167,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 0,
+        "actor_1_accepted_commands": 32,
+        "actor_2_accepted_commands": 38,
+        "actor_3_accepted_commands": 34,
+        "actor_4_accepted_commands": 63,
+        "event_only_observations": 246
+      },
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "independent_runtime_count": 4,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    },
+    {
+      "name": "four-actor-gru-3",
+      "cohort": 3,
+      "policy": "gru",
+      "neural_control_fraction": 0.9870967741935484,
+      "model_stats": {
+        "periodic_observations": 1604,
+        "unowned_periodic_observations": 4,
+        "model_processed": 1600,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 155,
+        "accepted_model_commands": 153,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 2,
+        "actor_1_accepted_commands": 32,
+        "actor_2_accepted_commands": 38,
+        "actor_3_accepted_commands": 40,
+        "actor_4_accepted_commands": 43,
+        "event_only_observations": 234,
+        "stale_refresh_requests": 2
+      },
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "independent_runtime_count": 4,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    },
+    {
+      "name": "four-actor-mlp-0",
+      "cohort": 0,
+      "policy": "mlp",
+      "neural_control_fraction": 1.0,
+      "model_stats": {
+        "periodic_observations": 1604,
+        "unowned_periodic_observations": 4,
+        "model_processed": 1600,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 179,
+        "accepted_model_commands": 179,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 0,
+        "actor_1_accepted_commands": 39,
+        "actor_2_accepted_commands": 40,
+        "actor_3_accepted_commands": 50,
+        "actor_4_accepted_commands": 50,
+        "event_only_observations": 240
+      },
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "independent_runtime_count": 4,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    },
+    {
+      "name": "four-actor-mlp-1",
+      "cohort": 1,
+      "policy": "mlp",
+      "neural_control_fraction": 1.0,
+      "model_stats": {
+        "periodic_observations": 1604,
+        "unowned_periodic_observations": 4,
+        "model_processed": 1600,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 179,
+        "accepted_model_commands": 179,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 0,
+        "actor_1_accepted_commands": 39,
+        "actor_2_accepted_commands": 40,
+        "actor_3_accepted_commands": 50,
+        "actor_4_accepted_commands": 50,
+        "event_only_observations": 240
+      },
+      "physical_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "policy_actor_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "independent_runtime_count": 4,
+      "no_fallback_credit": false,
+      "behavioral_quality_evaluated": false,
+      "fallback_event_count": 0,
+      "final": {
+        "outcome": "time_limit",
+        "reason": "time_limit",
+        "elapsed_game_ms": 20000,
+        "game_ms": 36294,
+        "infrastructure": false
+      }
+    }
+  ],
+  "native_binding": {
+    "binary_sha256": "ac2dfe85bc7dd255f08e3eff5502594f854241ee04985f698569f527d2652263",
+    "source_sha256": "9239b2912b05d092a827ae5871ffc621d2657b0f881ba22c6c127e49b10b260b",
+    "engine_library_sha256": "9be068cd18b461fa213bf7c625e9e2c7e6fd1e3c2466ca95e79eb271d9e0202a",
+    "driver_sha256": "ff8b3682fbb2bce2c7f6ed639d8210f2860b8b745f25b279720370aa88eef4f8",
+    "common_driver_sha256": "156295ae76c48e9475222a6077b7050e2c14b924ae33e51fcdd44550315c8f30",
+    "feature_packer_sha256": "185966eed12f07350a230bba027a76c3133968acc6431de422dc7f7b11f6084a",
+    "policy_code_sha256": {
+      "gothic_body/__init__.py": "c2247350dc860fc36ddbf6dd0b3baed9bcc9184a348d5dc92190c98f14a74e2e",
+      "gothic_body/__main__.py": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
+      "gothic_body/checkpoint.py": "955feda62eda42cf199db7d2b65e163f993b149723bbfc0acd9804422cb07c81",
+      "gothic_body/cli.py": "e0a70e5278b8d1254712a304da1f52c14ea9327d16a546029fd6ffd238d14b7d",
+      "gothic_body/data.py": "db482eddb06929a567b1373e706f6e9684a274814efd82fdc6be4029bf405694",
+      "gothic_body/evaluation.py": "47c8f3de03d53974517ae511ba3976c59974c0edb7c73a1c18b0d55fb3117149",
+      "gothic_body/models.py": "c5622960d9b9d2637d00a13bfdac9d72e88489e4dac1e4628e4e4249137c608f",
+      "gothic_body/runtime.py": "700f0876736425f520179269dc837e46612c339a9493588803a1eb9dc91bcce1",
+      "gothic_body/schema.py": "12cbea4c45cd1a2d05a794b9e4df955186aefa6b63bd158039f4a28c3dbe3b10",
+      "gothic_body/serving.py": "1adb0b55b4273cc83d47a72d72123b51cc7a64e6a245853f8461dc3d26fd80cf",
+      "gothic_body/training.py": "16bec9e51463708d5bd6c70813d4426e005141bce3ac69b452ae16df72e2535b",
+      "gothic_body/verification.py": "1e2184081769817fa141c36d24f97e0772a92b4b1aebe75a75ab5087259115e6"
+    },
+    "device": "cpu",
+    "compact_replies": true,
+    "startup_runtime_counts": {
+      "gru": 4,
+      "mlp": 4
+    }
+  },
+  "checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "normalization_sha256": {},
+  "profile": {
+    "sampling_version": "periodic-v1",
+    "decision_anchor": "latest_periodic_exact",
+    "feature_version": "body-periodic-numeric-v1",
+    "periodic_rate_hz": 20,
+    "event_only_model_updates": false,
+    "event_only_commands": false
+  },
+  "timing_profile": {
+    "clock": "Linux CLOCK_MONOTONIC, nanoseconds",
+    "collector_clock": "time.monotonic_ns",
+    "native_clock": "std::chrono::steady_clock; independently checked against IPC bounds",
+    "network": "same-host JSONL pipes; no Mac gateway",
+    "animation_latency": "native accepted/started/completed events, separately from inference",
+    "oracle_visibility_enters_features": false
+  },
+  "partial": {
+    "stream4_received_to_process": [
+      {
+        "stream_seq": 4,
+        "entity_id": 1,
+        "observation_seq": 17,
+        "source_game_ms": 16461,
+        "request_now_game_ms": 16461,
+        "snapshot_wall_monotonic_ns": 1106403756642549,
+        "memory_only": true,
+        "response": {
+          "status": "processed",
+          "reason": "locked",
+          "model_processed": true,
+          "inference_ms": 0.514174,
+          "identity": {
+            "session_epoch": 1791989187415310783,
+            "world_epoch": 22,
+            "entity_id": 1,
+            "control_generation": 25
+          }
+        },
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1106403758479263,
+          "process_begin_wall_monotonic_ns": 1106403927487602,
+          "process_end_wall_monotonic_ns": 1106403928497787
+        },
+        "receive_to_process_begin_ms": 169.008339
+      },
+      {
+        "stream_seq": 4,
+        "entity_id": 2,
+        "observation_seq": 18,
+        "source_game_ms": 16461,
+        "request_now_game_ms": 16461,
+        "snapshot_wall_monotonic_ns": 1106403756801517,
+        "memory_only": true,
+        "response": {
+          "status": "processed",
+          "reason": "locked",
+          "model_processed": true,
+          "inference_ms": 0.307325,
+          "identity": {
+            "session_epoch": 1791989187415310783,
+            "world_epoch": 22,
+            "entity_id": 2,
+            "control_generation": 26
+          }
+        },
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1106403758479263,
+          "process_begin_wall_monotonic_ns": 1106403928574090,
+          "process_end_wall_monotonic_ns": 1106403929322483
+        },
+        "receive_to_process_begin_ms": 170.094827
+      },
+      {
+        "stream_seq": 4,
+        "entity_id": 3,
+        "observation_seq": 19,
+        "source_game_ms": 16461,
+        "request_now_game_ms": 16461,
+        "snapshot_wall_monotonic_ns": 1106403756889984,
+        "memory_only": true,
+        "response": {
+          "status": "processed",
+          "reason": "locked",
+          "model_processed": true,
+          "inference_ms": 0.225442,
+          "identity": {
+            "session_epoch": 1791989187415310783,
+            "world_epoch": 22,
+            "entity_id": 3,
+            "control_generation": 27
+          }
+        },
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1106403758479263,
+          "process_begin_wall_monotonic_ns": 1106403929388697,
+          "process_end_wall_monotonic_ns": 1106403930030060
+        },
+        "receive_to_process_begin_ms": 170.909434
+      },
+      {
+        "stream_seq": 4,
+        "entity_id": 4,
+        "observation_seq": 20,
+        "source_game_ms": 16461,
+        "request_now_game_ms": 16461,
+        "snapshot_wall_monotonic_ns": 1106403757017653,
+        "memory_only": true,
+        "response": {
+          "status": "processed",
+          "reason": "locked",
+          "model_processed": true,
+          "inference_ms": 0.241361,
+          "identity": {
+            "session_epoch": 1791989187415310783,
+            "world_epoch": 22,
+            "entity_id": 4,
+            "control_generation": 28
+          }
+        },
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1106403758479263,
+          "process_begin_wall_monotonic_ns": 1106403930101343,
+          "process_end_wall_monotonic_ns": 1106403930728800
+        },
+        "receive_to_process_begin_ms": 171.62208
+      }
+    ],
+    "maximum_receive_to_process_ms": 171.62208,
+    "subsequent_observation_too_old": [
+      {
+        "stream_seq": 5,
+        "entity_id": 1,
+        "observation_seq": 21,
+        "source_game_ms": 16527,
+        "request_now_game_ms": 16661,
+        "snapshot_wall_monotonic_ns": 1106403811681540,
+        "memory_only": true,
+        "response": {
+          "status": "fallback",
+          "reason": "observation_too_old",
+          "model_processed": false,
+          "inference_ms": null,
+          "identity": {
+            "session_epoch": 1791989187415310783,
+            "world_epoch": 22,
+            "entity_id": 1,
+            "control_generation": 25
+          }
+        },
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1106403961802911,
+          "process_begin_wall_monotonic_ns": 1106403962471725,
+          "process_end_wall_monotonic_ns": 1106403962627738
+        },
+        "receive_to_process_begin_ms": 0.668814
+      },
+      {
+        "stream_seq": 5,
+        "entity_id": 2,
+        "observation_seq": 22,
+        "source_game_ms": 16527,
+        "request_now_game_ms": 16661,
+        "snapshot_wall_monotonic_ns": 1106403811854394,
+        "memory_only": true,
+        "response": {
+          "status": "fallback",
+          "reason": "observation_too_old",
+          "model_processed": false,
+          "inference_ms": null,
+          "identity": {
+            "session_epoch": 1791989187415310783,
+            "world_epoch": 22,
+            "entity_id": 2,
+            "control_generation": 26
+          }
+        },
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1106403961802911,
+          "process_begin_wall_monotonic_ns": 1106403966589397,
+          "process_end_wall_monotonic_ns": 1106403966719201
+        },
+        "receive_to_process_begin_ms": 4.786486
+      },
+      {
+        "stream_seq": 5,
+        "entity_id": 3,
+        "observation_seq": 23,
+        "source_game_ms": 16527,
+        "request_now_game_ms": 16661,
+        "snapshot_wall_monotonic_ns": 1106403811988756,
+        "memory_only": true,
+        "response": {
+          "status": "fallback",
+          "reason": "observation_too_old",
+          "model_processed": false,
+          "inference_ms": null,
+          "identity": {
+            "session_epoch": 1791989187415310783,
+            "world_epoch": 22,
+            "entity_id": 3,
+            "control_generation": 27
+          }
+        },
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1106403961802911,
+          "process_begin_wall_monotonic_ns": 1106403967946031,
+          "process_end_wall_monotonic_ns": 1106403968225786
+        },
+        "receive_to_process_begin_ms": 6.14312
+      },
+      {
+        "stream_seq": 5,
+        "entity_id": 4,
+        "observation_seq": 24,
+        "source_game_ms": 16527,
+        "request_now_game_ms": 16661,
+        "snapshot_wall_monotonic_ns": 1106403812090597,
+        "memory_only": true,
+        "response": {
+          "status": "fallback",
+          "reason": "observation_too_old",
+          "model_processed": false,
+          "inference_ms": null,
+          "identity": {
+            "session_epoch": 1791989187415310783,
+            "world_epoch": 22,
+            "entity_id": 4,
+            "control_generation": 28
+          }
+        },
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1106403961802911,
+          "process_begin_wall_monotonic_ns": 1106403969828752,
+          "process_end_wall_monotonic_ns": 1106403970045398
+        },
+        "receive_to_process_begin_ms": 8.025841
+      }
+    ],
+    "body_release_requests": [
+      {
+        "direction": "request",
+        "wall_monotonic": 1106403.962694834,
+        "value": {
+          "id": 74455,
+          "cmd": "body_release",
+          "entity_id": 1,
+          "session_epoch": 1791989187415310783,
+          "world_epoch": 22,
+          "control_generation": 25,
+          "provider": "stage8-load-mlp"
+        }
+      },
+      {
+        "direction": "request",
+        "wall_monotonic": 1106403.966770717,
+        "value": {
+          "id": 74456,
+          "cmd": "body_release",
+          "entity_id": 2,
+          "session_epoch": 1791989187415310783,
+          "world_epoch": 22,
+          "control_generation": 26,
+          "provider": "stage8-load-mlp"
+        }
+      },
+      {
+        "direction": "request",
+        "wall_monotonic": 1106403.968320243,
+        "value": {
+          "id": 74457,
+          "cmd": "body_release",
+          "entity_id": 3,
+          "session_epoch": 1791989187415310783,
+          "world_epoch": 22,
+          "control_generation": 27,
+          "provider": "stage8-load-mlp"
+        }
+      },
+      {
+        "direction": "request",
+        "wall_monotonic": 1106403.970121641,
+        "value": {
+          "id": 74458,
+          "cmd": "body_release",
+          "entity_id": 4,
+          "session_epoch": 1791989187415310783,
+          "world_epoch": 22,
+          "control_generation": 28,
+          "provider": "stage8-load-mlp"
+        }
+      }
+    ],
+    "terminal": {
+      "ipc_response_id": 74459,
+      "collector_wall_monotonic": 1106403.972400123,
+      "arena": {
+        "outcome": "infrastructure",
+        "reason": "unexpected_control_loss:released",
+        "elapsed_game_ms": 367,
+        "game_ms": 16661,
+        "infrastructure": true
+      },
+      "actors": [
+        {
+          "entity_id": 1,
+          "hp": 3000,
+          "received_damage": 0,
+          "owner": "scripted",
+          "release_pending": true,
+          "pose": "T_1HRUNSTRAFEL"
+        },
+        {
+          "entity_id": 2,
+          "hp": 3000,
+          "received_damage": 0,
+          "owner": "scripted",
+          "release_pending": false,
+          "pose": "T_1HRUNSTRAFEL"
+        },
+        {
+          "entity_id": 3,
+          "hp": 3000,
+          "received_damage": 0,
+          "owner": "scripted",
+          "release_pending": false,
+          "pose": "S_1HRUN"
+        },
+        {
+          "entity_id": 4,
+          "hp": 3000,
+          "received_damage": 0,
+          "owner": "scripted",
+          "release_pending": false,
+          "pose": "S_1HRUN"
+        }
+      ]
+    },
+    "visibility_diagnostic_count": 70,
+    "visibility_diagnostics": {
+      "count": 70,
+      "reason_counts": {
+        "visible": 70
+      },
+      "actual_can_see_false_count": 0,
+      "controller_visible_false_count": 0,
+      "query_mismatch_count": 0
+    }
+  },
+  "service_fixture_binding_sha256": "bcc7290b9394f7f9e7c51d7feb3a4eaacd13c8ac81af5903e109ff6b21250928",
+  "service_final_quality_gate_evaluated": false,
+  "service_comparisons": {
+    "native": {
+      "measurement_issues": [],
+      "metrics": {
+        "asr_completion_ms": {
+          "before_n": 20,
+          "during_n": 20,
+          "before_p95_ms": 799.891156,
+          "during_p95_ms": 814.591603,
+          "degradation_fraction": 0.01837805917684121
+        },
+        "tts_first_pcm_ms": {
+          "before_n": 20,
+          "during_n": 20,
+          "before_p95_ms": 444.334127,
+          "during_p95_ms": 476.733903,
+          "degradation_fraction": 0.07291759518620089
+        },
+        "decider_first_decision_ms": {
+          "before_n": 20,
+          "during_n": 20,
+          "before_p95_ms": 65.28267,
+          "during_p95_ms": 71.094097,
+          "degradation_fraction": 0.08901944421084518
+        },
+        "gemma_first_token_ms": {
+          "before_n": 20,
+          "during_n": 20,
+          "before_p95_ms": 108.032685,
+          "during_p95_ms": 147.864559,
+          "degradation_fraction": 0.3687020645649972
+        }
+      },
+      "cadence": {
+        "before": {
+          "valid": true,
+          "configuration": {
+            "schema_version": 1,
+            "kind": "four_bursts_monotonic_v1",
+            "bursts": 4,
+            "measured_per_burst": 5,
+            "warmup_first_burst": 2,
+            "nominal_start_interval_ms": 20000,
+            "minimum_actual_start_interval_ms": 20000,
+            "maximum_actual_start_interval_ms": 25000,
+            "baseline_offsets_ms": [
+              0,
+              20000,
+              40000,
+              60000
+            ],
+            "during_timing": "actual_arena_start_plus_reset_floor_before_reset"
+          },
+          "services": {
+            "asr": {
+              "intervals_ms": [
+                20015.145096,
+                20018.14979,
+                20016.95066
+              ],
+              "issues": []
+            },
+            "tts": {
+              "intervals_ms": [
+                20015.331145,
+                20018.211084,
+                20016.880119
+              ],
+              "issues": []
+            },
+            "decider": {
+              "intervals_ms": [
+                20015.346353,
+                20018.258964,
+                20016.867616
+              ],
+              "issues": []
+            },
+            "gemma": {
+              "intervals_ms": [
+                20015.353386,
+                20018.255459,
+                20016.890368
+              ],
+              "issues": []
+            }
+          }
+        },
+        "during": {
+          "valid": true,
+          "configuration": {
+            "schema_version": 1,
+            "kind": "four_bursts_monotonic_v1",
+            "bursts": 4,
+            "measured_per_burst": 5,
+            "warmup_first_burst": 2,
+            "nominal_start_interval_ms": 20000,
+            "minimum_actual_start_interval_ms": 20000,
+            "maximum_actual_start_interval_ms": 25000,
+            "baseline_offsets_ms": [
+              0,
+              20000,
+              40000,
+              60000
+            ],
+            "during_timing": "actual_arena_start_plus_reset_floor_before_reset"
+          },
+          "services": {
+            "asr": {
+              "intervals_ms": [
+                21207.948847,
+                21206.477196,
+                21294.872567
+              ],
+              "issues": []
+            },
+            "tts": {
+              "intervals_ms": [
+                21207.931535,
+                21206.437651,
+                21294.869983
+              ],
+              "issues": []
+            },
+            "decider": {
+              "intervals_ms": [
+                21207.932828,
+                21206.429367,
+                21294.883556
+              ],
+              "issues": []
+            },
+            "gemma": {
+              "intervals_ms": [
+                21207.927889,
+                21206.442872,
+                21294.869921
+              ],
+              "issues": []
+            }
+          }
+        }
+      }
+    },
+    "gru": {
+      "measurement_issues": [],
+      "metrics": {
+        "asr_completion_ms": {
+          "before_n": 20,
+          "during_n": 20,
+          "before_p95_ms": 799.891156,
+          "during_p95_ms": 843.707681,
+          "degradation_fraction": 0.05477810908563163
+        },
+        "tts_first_pcm_ms": {
+          "before_n": 20,
+          "during_n": 20,
+          "before_p95_ms": 444.334127,
+          "during_p95_ms": 463.200825,
+          "degradation_fraction": 0.042460609828423035
+        },
+        "decider_first_decision_ms": {
+          "before_n": 20,
+          "during_n": 20,
+          "before_p95_ms": 65.28267,
+          "during_p95_ms": 69.142177,
+          "degradation_fraction": 0.059119931828768735
+        },
+        "gemma_first_token_ms": {
+          "before_n": 20,
+          "during_n": 20,
+          "before_p95_ms": 108.032685,
+          "during_p95_ms": 149.453219,
+          "degradation_fraction": 0.3834074289646692
+        }
+      },
+      "cadence": {
+        "before": {
+          "valid": true,
+          "configuration": {
+            "schema_version": 1,
+            "kind": "four_bursts_monotonic_v1",
+            "bursts": 4,
+            "measured_per_burst": 5,
+            "warmup_first_burst": 2,
+            "nominal_start_interval_ms": 20000,
+            "minimum_actual_start_interval_ms": 20000,
+            "maximum_actual_start_interval_ms": 25000,
+            "baseline_offsets_ms": [
+              0,
+              20000,
+              40000,
+              60000
+            ],
+            "during_timing": "actual_arena_start_plus_reset_floor_before_reset"
+          },
+          "services": {
+            "asr": {
+              "intervals_ms": [
+                20015.145096,
+                20018.14979,
+                20016.95066
+              ],
+              "issues": []
+            },
+            "tts": {
+              "intervals_ms": [
+                20015.331145,
+                20018.211084,
+                20016.880119
+              ],
+              "issues": []
+            },
+            "decider": {
+              "intervals_ms": [
+                20015.346353,
+                20018.258964,
+                20016.867616
+              ],
+              "issues": []
+            },
+            "gemma": {
+              "intervals_ms": [
+                20015.353386,
+                20018.255459,
+                20016.890368
+              ],
+              "issues": []
+            }
+          }
+        },
+        "during": {
+          "valid": true,
+          "configuration": {
+            "schema_version": 1,
+            "kind": "four_bursts_monotonic_v1",
+            "bursts": 4,
+            "measured_per_burst": 5,
+            "warmup_first_burst": 2,
+            "nominal_start_interval_ms": 20000,
+            "minimum_actual_start_interval_ms": 20000,
+            "maximum_actual_start_interval_ms": 25000,
+            "baseline_offsets_ms": [
+              0,
+              20000,
+              40000,
+              60000
+            ],
+            "during_timing": "actual_arena_start_plus_reset_floor_before_reset"
+          },
+          "services": {
+            "asr": {
+              "intervals_ms": [
+                21340.826581,
+                21550.898241,
+                21535.243661
+              ],
+              "issues": []
+            },
+            "tts": {
+              "intervals_ms": [
+                21340.811452,
+                21550.908942,
+                21535.246626
+              ],
+              "issues": []
+            },
+            "decider": {
+              "intervals_ms": [
+                21340.802285,
+                21550.913862,
+                21535.284656
+              ],
+              "issues": []
+            },
+            "gemma": {
+              "intervals_ms": [
+                21340.769543,
+                21550.917408,
+                21535.313752
+              ],
+              "issues": []
+            }
+          }
+        }
+      }
+    },
+    "mlp": {
+      "measurement_issues": [
+        "asr: fixed request count/binding differs",
+        "baseline/during actual four-burst cadence differs",
+        "decider: fixed request count/binding differs",
+        "gemma: fixed request count/binding differs",
+        "requires four declared cohorts",
+        "tts: fixed request count/binding differs"
+      ],
+      "metrics": {
+        "asr_completion_ms": {
+          "before_n": 20,
+          "during_n": 10,
+          "before_p95_ms": null,
+          "during_p95_ms": null,
+          "degradation_fraction": null
+        },
+        "tts_first_pcm_ms": {
+          "before_n": 20,
+          "during_n": 10,
+          "before_p95_ms": null,
+          "during_p95_ms": null,
+          "degradation_fraction": null
+        },
+        "decider_first_decision_ms": {
+          "before_n": 20,
+          "during_n": 10,
+          "before_p95_ms": null,
+          "during_p95_ms": null,
+          "degradation_fraction": null
+        },
+        "gemma_first_token_ms": {
+          "before_n": 20,
+          "during_n": 10,
+          "before_p95_ms": null,
+          "during_p95_ms": null,
+          "degradation_fraction": null
+        }
+      },
+      "cadence": {
+        "before": {
+          "valid": true,
+          "configuration": {
+            "schema_version": 1,
+            "kind": "four_bursts_monotonic_v1",
+            "bursts": 4,
+            "measured_per_burst": 5,
+            "warmup_first_burst": 2,
+            "nominal_start_interval_ms": 20000,
+            "minimum_actual_start_interval_ms": 20000,
+            "maximum_actual_start_interval_ms": 25000,
+            "baseline_offsets_ms": [
+              0,
+              20000,
+              40000,
+              60000
+            ],
+            "during_timing": "actual_arena_start_plus_reset_floor_before_reset"
+          },
+          "services": {
+            "asr": {
+              "intervals_ms": [
+                20015.145096,
+                20018.14979,
+                20016.95066
+              ],
+              "issues": []
+            },
+            "tts": {
+              "intervals_ms": [
+                20015.331145,
+                20018.211084,
+                20016.880119
+              ],
+              "issues": []
+            },
+            "decider": {
+              "intervals_ms": [
+                20015.346353,
+                20018.258964,
+                20016.867616
+              ],
+              "issues": []
+            },
+            "gemma": {
+              "intervals_ms": [
+                20015.353386,
+                20018.255459,
+                20016.890368
+              ],
+              "issues": []
+            }
+          }
+        },
+        "during": {
+          "valid": false,
+          "configuration": {
+            "schema_version": 1,
+            "kind": "four_bursts_monotonic_v1",
+            "bursts": 4,
+            "measured_per_burst": 5,
+            "warmup_first_burst": 2,
+            "nominal_start_interval_ms": 20000,
+            "minimum_actual_start_interval_ms": 20000,
+            "maximum_actual_start_interval_ms": 25000,
+            "baseline_offsets_ms": [
+              0,
+              20000,
+              40000,
+              60000
+            ],
+            "during_timing": "actual_arena_start_plus_reset_floor_before_reset"
+          },
+          "services": {
+            "asr": {
+              "intervals_ms": [
+                21798.508723
+              ],
+              "issues": [
+                "requires four actual bursts"
+              ]
+            },
+            "tts": {
+              "intervals_ms": [
+                21798.487824
+              ],
+              "issues": [
+                "requires four actual bursts"
+              ]
+            },
+            "decider": {
+              "intervals_ms": [
+                21798.467615
+              ],
+              "issues": [
+                "requires four actual bursts"
+              ]
+            },
+            "gemma": {
+              "intervals_ms": [
+                21798.464259
+              ],
+              "issues": [
+                "requires four actual bursts"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "measured_protected_budget_failures": [
+    {
+      "provider": "native",
+      "metric": "gemma_first_token_ms",
+      "before_n": 20,
+      "during_n": 20,
+      "before_p95_ms": 108.032685,
+      "during_p95_ms": 147.864559,
+      "degradation_fraction": 0.3687020645649972,
+      "budget_fraction": 0.1
+    },
+    {
+      "provider": "gru",
+      "metric": "gemma_first_token_ms",
+      "before_n": 20,
+      "during_n": 20,
+      "before_p95_ms": 108.032685,
+      "during_p95_ms": 149.453219,
+      "degradation_fraction": 0.3834074289646692,
+      "budget_fraction": 0.1
+    }
+  ],
+  "source_files": [
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/suite.json",
+      "size_bytes": 33324271,
+      "sha256": "bfdd866e42c1a96b8e97197d2bbb61f7de1112503128b9dbc57c8d9ae9d44830"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/manifest.json",
+      "size_bytes": 79746,
+      "sha256": "72ceaebc4522caf2ccab14090a75a8cabf784af44da473b8d82d8472c48488db"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-native-0/episode.json",
+      "size_bytes": 472262,
+      "sha256": "c4669cea6c83fdb1fa3f9d8fb65a117f9b46181afef52e3092454c87321b3081"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-native-1/episode.json",
+      "size_bytes": 449283,
+      "sha256": "bb1c2002c39968e9f96c7e23d36591725f350ac99f6fea2fae67e7f7daab5131"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-native-2/episode.json",
+      "size_bytes": 449516,
+      "sha256": "aaead162a61be3cffa3dd91dc48630b52e803c1c69168dadace8276ea1da5ac1"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-native-3/episode.json",
+      "size_bytes": 449732,
+      "sha256": "a1a13d7cb51e8fc1c7b3e99607bd6a98e4e8d7a6ad02dd4a2c3fb5a2360197ef"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-gru-0/episode.json",
+      "size_bytes": 5315257,
+      "sha256": "cdb334ae5d42cc95aed3b8c5b5263b747522f5c11b20b54cfaea71938778b342"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-gru-1/episode.json",
+      "size_bytes": 4381820,
+      "sha256": "b9e642f54bfd05bf4766d4266f72ca2940a83acb74a24eeec88080df0a8b901b"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-gru-2/episode.json",
+      "size_bytes": 4383428,
+      "sha256": "783960f545e1ba3aed3909ebeb29d11ab08420182f3d43396df9039d77642529"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-gru-3/episode.json",
+      "size_bytes": 4101838,
+      "sha256": "a6851d825b7dda070e42bf93886ca3e6193395bfd7ff2adb4ce396d029742736"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-0/episode.json",
+      "size_bytes": 4687272,
+      "sha256": "c7396130e0a3eb8728dee5397a4d8ad3d4a5cf668b7494ffc0bff9de302ccb66"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-1/episode.json",
+      "size_bytes": 4665765,
+      "sha256": "cfe59646359bda832906a4448ae1516d5f44d29b10cd56729900543fab3de133"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/arena-events.jsonl",
+      "size_bytes": 35644,
+      "sha256": "bc064989fcf7e43414d35bf8859730a35056bb95d35d59cb99e2176bfd02b651"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/bench.log",
+      "size_bytes": 281,
+      "sha256": "02835af25a9544fa8b1deafb5cc350d9c7742daef3ab5f066440422ecdb8e3c7"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/body-control-events.jsonl",
+      "size_bytes": 20489,
+      "sha256": "8c03e4eecf4488976499d336bbf10cafc2a1bb36928cca6660955c18087fcb9c"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/collector-transport.jsonl",
+      "size_bytes": 15223,
+      "sha256": "930306f4fe131ccb57051a050260703c30a5b807e514a528a8039144eef738e9"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/events.jsonl",
+      "size_bytes": 235136,
+      "sha256": "2d88479af5daf62f2eb7ac2ef89fe767dcc2acd09d48b0739a7b0f4ffd2c7f90"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/ipc.jsonl",
+      "size_bytes": 1476175,
+      "sha256": "88bedfdff0e41cc191b4f746f3b0eeea5a1ea9368ea7c3d1ad30b9d0043b263a"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/latency.jsonl",
+      "size_bytes": 7229,
+      "sha256": "39fa8aae7825a67e762e844a09c8c27a4ea490cd190af067e608aff8fa8434fa"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/observations.jsonl",
+      "size_bytes": 142623,
+      "sha256": "785eced589ddcb7c4a47e82f31eebe47a7b63052c67678c472c07f6dd10132f2"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/observer-timing.jsonl",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/four-actor-mlp-2/policy-inputs.jsonl",
+      "size_bytes": 250115,
+      "sha256": "4465fada144fea755ba053c6734626e0a7c1982af5be03191788a30ba29ed1d5"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/resources-load.txt",
+      "size_bytes": 2017,
+      "sha256": "6818a18ca91e1eb4859c5ca9d3579d5322b7c8b6468b2bf79cc07bc2d8c9ddcb"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/launcher-load.log",
+      "size_bytes": 1247,
+      "sha256": "8f9f0b9a2bf634608d5a8f2c23c70820dd3fa1afaaede21b7a59f0844065d6c3"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/services-load-before.json",
+      "size_bytes": 429,
+      "sha256": "b5031cd2ee5602ab70a3d53488c795b1f1bf864e0a66869488636872ce7ed5f6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/services-load-after.json",
+      "size_bytes": 429,
+      "sha256": "bd4cb1aba0eaac5ff960f984f5a5d8adc6bcb7dd0efc776bc4be1aa5946a8f94"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/environment.json",
+      "size_bytes": 14231,
+      "sha256": "dcac6eb0ed3db24f539215a89b5ced892ea6683b4023996fbc10fd92f79287ef"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/final-evaluation.json",
+      "size_bytes": 1228542,
+      "sha256": "3a0e1898b1196d9dedca87c1d54c0cfb88b4506e839b69725d27520c8907616b"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/startup-warmup.json",
+      "size_bytes": 20271,
+      "sha256": "432bb62975dbac10185ea5b61694a4123ff94e1b6b3784c33dab40eb6a0c7b95"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/services/services.json",
+      "size_bytes": 3438708,
+      "sha256": "059cda484aeb122ac38890b6cb96db7a6ec0dab8385ca6059e93e2edd8ec9d91"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load/services/fixtures.json",
+      "size_bytes": 7149,
+      "sha256": "2e78c2989578305b08b7123bbc647804384182262b8a11729f9c8a30505104eb"
+    }
+  ],
+  "resource_and_log_fragments": {
+    "resources-load.txt": "Command exited with non-zero status 2\n\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/code/scripts/body_policy_load.py --runner /home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/code/evals/npc-body/body-stage8-v1.json --gru-checkpoint /home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/models/gru/best.pt --mlp-checkpoint /home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/models/mlp/best.pt --device cpu --output /home/kaifat/gothic-ai/body/data/stage8-final-gate-v6/load\"\n\tUser time (seconds): 260.28\n\tSystem time (seconds): 10.31\n\tPercent of CPU this job got: 94%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 4:46.39\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 794740\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 97\n\tMinor (reclaiming a frame) page faults: 1246256\n\tVoluntary context switches: 386353\n\tInvoluntary context switches: 17424\n\tSwaps: 0\n\tFile system inputs: 9655280\n\tFile system outputs: 2783264\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 2\n",
+    "launcher-load.log": "Running as unit: gothic-body-bc-stage8-final-gate-v6-load.service; invocation ID: d5188de1c7e3495b8b820211a02db530\nstage8 protected-service baseline starts before any engine lease or game tick\nstage8 [four-actor-native-0] real actors=4 runtimes=0 outcome=time_limit\nstage8 [four-actor-native-1] real actors=4 runtimes=0 outcome=time_limit\nstage8 [four-actor-native-2] real actors=4 runtimes=0 outcome=time_limit\nstage8 [four-actor-native-3] real actors=4 runtimes=0 outcome=time_limit\nstage8 [four-actor-gru-0] real actors=4 runtimes=4 outcome=time_limit\nstage8 [four-actor-gru-1] real actors=4 runtimes=4 outcome=time_limit\nstage8 [four-actor-gru-2] real actors=4 runtimes=4 outcome=time_limit\nstage8 [four-actor-gru-3] real actors=4 runtimes=4 outcome=time_limit\nstage8 [four-actor-mlp-0] real actors=4 runtimes=4 outcome=time_limit\nstage8 [four-actor-mlp-1] real actors=4 runtimes=4 outcome=time_limit\nfour actor load failed: native arena infrastructure failure: unexpected_control_loss:released\n          Finished with result: exit-code\nMain processes terminated with: code=exited, status=2/INVALIDARGUMENT\n               Service runtime: 4min 46.408s\n             CPU time consumed: 4min 30.609s\n                   Memory peak: 6G (swap: 0B)\n"
+  },
+  "gc_diagnostics": {
+    "profile_v1": {
+      "source_directory": "/home/kaifat/gothic-ai/body/data/stage8-collector-gc-profile-v1",
+      "binding": {
+        "kind": "immutable_collector_diagnostic_binding",
+        "quality_credit": false,
+        "checkpoint_selection_allowed": false,
+        "fresh_screening_credit": false,
+        "source_run": "stage8-final-gate-v6",
+        "files": {
+          "profile.py": "62c256079409cc4d96b080ae651dd381667f89c600abcc32b4bad706b917a5d2",
+          "resources.txt": "d94bb6b874cb6b2c2820c9c34caa8836a9365860c4599342b91673e066b3695b",
+          "report.json": "7402736993dbdb35a3f4ea80455bb29763813155c3c8e6a30b8bb79adb437c52",
+          "launcher.log": "450b154c2b0cbfcf65d11b53464e1e57089297ef06cc5c8d8cc846d04edc1c9f"
+        }
+      },
+      "binding_file": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-collector-gc-profile-v1/diagnostic-binding.json",
+        "size_bytes": 565,
+        "sha256": "bee708ba3c623eb603179041ad3e66a85403f89fd0bb9dbbe5bf062462b34b6f"
+      },
+      "report": {
+        "kind": "collector_static_gc_cpu_diagnostic",
+        "quality_credit": false,
+        "model_selection": false,
+        "training": false,
+        "engine_started": false,
+        "checkpoint_sha256": {
+          "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+          "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+        },
+        "startup_runtime_count": {
+          "gru": 4,
+          "mlp": 4
+        },
+        "torch_profiles": {
+          "gru": {
+            "inference_cpu_threads": 1,
+            "torch_intraop_threads": 1,
+            "torch_interop_threads": 12
+          },
+          "mlp": {
+            "inference_cpu_threads": 1,
+            "torch_intraop_threads": 1,
+            "torch_interop_threads": 12
+          }
+        },
+        "gc_threshold": [
+          700,
+          10,
+          10
+        ],
+        "baseline": [
+          {
+            "elapsed_ms": 42.733592,
+            "collected": 26
+          },
+          {
+            "elapsed_ms": 32.217121,
+            "collected": 0
+          },
+          {
+            "elapsed_ms": 29.94575,
+            "collected": 0
+          }
+        ],
+        "frozen": [
+          {
+            "elapsed_ms": 0.003376,
+            "collected": 0
+          },
+          {
+            "elapsed_ms": 0.001903,
+            "collected": 0
+          },
+          {
+            "elapsed_ms": 0.000241,
+            "collected": 0
+          }
+        ],
+        "static_frozen_object_count": 184812,
+        "gc_enabled_after": true
+      }
+    },
+    "profile_v2": {
+      "source_directory": "/home/kaifat/gothic-ai/body/data/stage8-collector-gc-profile-v2",
+      "binding": {
+        "kind": "immutable_collector_diagnostic_binding",
+        "quality_credit": false,
+        "checkpoint_selection_allowed": false,
+        "fresh_screening_credit": false,
+        "source_run": "stage8-final-gate-v6",
+        "files": {
+          "profile.py": "3eb767091e98ebd6154421bb5f5758abd1790f6e89dab8441fb1dcaade42397d",
+          "profile.json": "a500e9c5b0a2a23810547629ba041a98753d932ed53e2591185cd22cde5af9ce",
+          "resources.txt": "f6dc869b0a177fd4aa7a8f4bcb91eafdf76b3562050f11d056d6fb29ff16474a",
+          "launcher.log": "8f5afde7463b076f7c959b867f24508e6af9b852e5cb707785b8c92395aa3ae3"
+        }
+      },
+      "binding_file": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-collector-gc-profile-v2/diagnostic-binding.json",
+        "size_bytes": 566,
+        "sha256": "d40ffa1fd7d7235cb741e8bfaf6c1b5c6ee733bc8f6302e63f5d54b50e676239"
+      },
+      "original_profile_bytes": 7972520,
+      "profile_sha256_inherited": "a500e9c5b0a2a23810547629ba041a98753d932ed53e2591185cd22cde5af9ce",
+      "metadata": {
+        "kind": "collector_actual_stage_gc_trace",
+        "quality_credit": false,
+        "source_run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6",
+        "no_service_requests": true,
+        "fresh_seeds_exposed": false,
+        "gc_enabled": true,
+        "gc_threshold": [
+          700,
+          10,
+          10
+        ]
+      },
+      "gc_span_count": 686,
+      "generation2_count": 5,
+      "collector_span_count": 68381,
+      "top_generation2_spans": [
+        {
+          "generation": 2,
+          "begin_ns": 1107092380830678,
+          "end_ns": 1107092454169427,
+          "elapsed_ms": 73.338749,
+          "collected": 0,
+          "uncollectable": 0,
+          "containing_pull_spans": []
+        },
+        {
+          "generation": 2,
+          "begin_ns": 1107071054077839,
+          "end_ns": 1107071111675077,
+          "elapsed_ms": 57.597238,
+          "collected": 0,
+          "uncollectable": 0,
+          "containing_pull_spans": []
+        },
+        {
+          "generation": 2,
+          "begin_ns": 1107039754655713,
+          "end_ns": 1107039803674292,
+          "elapsed_ms": 49.018579,
+          "collected": 20,
+          "uncollectable": 0,
+          "containing_pull_spans": [
+            {
+              "method": "DiagnosticEpisodeEnv.pull",
+              "begin_ns": 1107039749848117,
+              "end_ns": 1107039803976690,
+              "elapsed_ms": 54.128573
+            }
+          ]
+        },
+        {
+          "generation": 2,
+          "begin_ns": 1107027521421639,
+          "end_ns": 1107027551138481,
+          "elapsed_ms": 29.716842,
+          "collected": 0,
+          "uncollectable": 0,
+          "containing_pull_spans": []
+        },
+        {
+          "generation": 2,
+          "begin_ns": 1107027315525629,
+          "end_ns": 1107027324281099,
+          "elapsed_ms": 8.75547,
+          "collected": 0,
+          "uncollectable": 0,
+          "containing_pull_spans": []
+        }
+      ],
+      "top_collector_spans": [
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107039749848117,
+          "end_ns": 1107039803976690,
+          "elapsed_ms": 54.128573
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107029916527725,
+          "end_ns": 1107029928860905,
+          "elapsed_ms": 12.33318
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107030516727278,
+          "end_ns": 1107030526588151,
+          "elapsed_ms": 9.860873
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107053083457800,
+          "end_ns": 1107053093190142,
+          "elapsed_ms": 9.732342
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107052418148459,
+          "end_ns": 1107052427498325,
+          "elapsed_ms": 9.349866
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107051783535768,
+          "end_ns": 1107051792147828,
+          "elapsed_ms": 8.61206
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107052583549555,
+          "end_ns": 1107052592110781,
+          "elapsed_ms": 8.561226
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107052117666572,
+          "end_ns": 1107052125913247,
+          "elapsed_ms": 8.246675
+        }
+      ],
+      "top_pull_spans": [
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107039749848117,
+          "end_ns": 1107039803976690,
+          "elapsed_ms": 54.128573
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107029916527725,
+          "end_ns": 1107029928860905,
+          "elapsed_ms": 12.33318
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107030516727278,
+          "end_ns": 1107030526588151,
+          "elapsed_ms": 9.860873
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107053083457800,
+          "end_ns": 1107053093190142,
+          "elapsed_ms": 9.732342
+        },
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107052418148459,
+          "end_ns": 1107052427498325,
+          "elapsed_ms": 9.349866
+        }
+      ],
+      "full_profile_downloaded": false,
+      "old_load169_cause_proven": false
+    }
+  },
+  "causal_limits": {
+    "old_load_gap_has_no_gc_callbacks": true,
+    "old_gap_gc_cause_proven": false,
+    "separate_diagnostics_do_not_reclassify_old_failure": true,
+    "freshness_or_protected_service_budget_changed": false
+  },
+  "next_state": "Gate-v7 GC profile/frozen retry pending; no model quality credit",
+  "collection_method": {
+    "remote_reads_only": true,
+    "models_tests_runner_services_started_by_extractor": false,
+    "remote_sources_or_raw_rewritten": false,
+    "weights_binaries_or_large_raw_downloaded": false
+  },
+  "service_identity": {
+    "before": {
+      "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+      "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+      "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+      "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+    },
+    "after": {
+      "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+      "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+      "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+      "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+    },
+    "same_in_load_phase": true,
+    "scope": "Recorded load before/after only; not whole-turn PID continuity"
+  }
+}

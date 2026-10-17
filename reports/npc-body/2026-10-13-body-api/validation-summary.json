@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "run": "stage4-v5",
+  "host": "dev-ubuntu",
+  "status": "complete",
+  "cases": 37,
+  "raw_hashes_checked": 113,
+  "native_comparison_kind": "archived_pre_refactor_headless_parity",
+  "ordered_mechanics": 1077,
+  "physics_steps": 3198,
+  "resource_samples": 397,
+  "runner_pid": 3159194,
+  "proc_sampled_max_rss_kib": 648340,
+  "proc_peak_rss_kib": 753764,
+  "max_threads": 17,
+  "max_file_descriptors": 10,
+  "forbidden_device_descriptors": [],
+  "display_socket_descriptors": [],
+  "whole_suite_wall_s": 95.85,
+  "whole_suite_cpu_user_s": 137.74,
+  "whole_suite_cpu_system_s": 6.11,
+  "time_max_rss_kib": 753764,
+  "systemd_peak_memory_display": "647M",
+  "source_base_git_head": "979d343354ea7bf711a53fce1331c83b31080a27",
+  "source_archive_sha256": "beea806afa913716259c3650a0de77cd0054028ca6f17fbf899425cefdfed05f",
+  "resolver_binary_sha256": "d3a8dbc7d26862b01522cffbc5383a5e7c40a80252aa0ba6967842919dd67b6f",
+  "reporter_sha256": "6740ee839f6f554df8f7f7aebf9bef34a9115d5e220c49840ac010bfe74e1f99",
+  "tests": {
+    "native_resolver_assertions": 2419,
+    "body_control_python": 26,
+    "report_parser_python": 26
+  },
+  "scope": "One controlled melee NPC and one native target; no neural inference or training.",
+  "services_before": {
+    "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=3366349\nMemoryCurrent=2453733376\nCPUUsageNSec=12781605245000",
+    "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=630559\nMemoryCurrent=4200669184\nCPUUsageNSec=3839661444000"
+  },
+  "services_after": {
+    "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=3366349\nMemoryCurrent=2430664704\nCPUUsageNSec=12781704928000",
+    "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=630559\nMemoryCurrent=4200669184\nCPUUsageNSec=3839759086000"
+  }
+}

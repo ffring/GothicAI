@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "kind": "body_guard_reader_validation_receipts",
+  "tests": {
+    "passed": 164,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "wall_s": 0.4,
+    "cpu_user_s": 0.37,
+    "cpu_system_s": 0.02,
+    "maximum_rss_kib": 44480
+  },
+  "protected_services_unchanged": true,
+  "snapshot_manifest_sha256": "8293e1c543ff5569d1441c0630bfc5059cc4d72ffe2a5581343acc2245e8ce75",
+  "actual_prior_gate11_preservation_passed": true,
+  "prior_snapshot_kind": "known_pass_eight_cohort_visibility_load_failure",
+  "no_model_forward": true,
+  "no_game_started": true,
+  "quality_credit": false,
+  "source_receipts": {
+    "audit-prior.py": "1de528ac35c674e77726a2fbedfcaa0096e800cd64666fc27b3e868d8eea7191",
+    "code/scripts/body_combat_report.py": "0a090cf1302608842ccce9dfb3d552b3836ae45df7e1f5d5599f9ec9a11f5ef0",
+    "code/scripts/body_final_evaluation.py": "9f826f7a323e38a5127a515a9751ec5cc5e341da4ad5e1c11e8f416a0682c16b",
+    "code/scripts/body_stage8_final_report.py": "aecb6b1f23088254820c740c53dd31c50f193a729bb5b4ffe58cd77c7aeccc8c",
+    "code/scripts/tests/test_body_combat_report.py": "40fd437cc5ba0afb067efabef131a71536cfd00b0295dc824e92b5e4c4bddc6b",
+    "code/scripts/tests/test_body_final_evaluation.py": "62de4151be6a804d43ef244da28b8e84f8a912401ee81b1dc7c259a77f33cec5",
+    "code/scripts/tests/test_body_stage8_final_report.py": "792af5ad60ded1ba73b214ebb46529f5811c2c412c771d7363a5a03cfa636a28",
+    "junit.xml": "61aedbc102232ae015b69edf4110aaf2f99c2264989284da55d72f5589bcc6fb",
+    "launcher.log": "fb2e87fbd64077f5f34b8c8d94ad18b376ce22a05d638a033d735a66143d35d2",
+    "manifest.json": "8293e1c543ff5569d1441c0630bfc5059cc4d72ffe2a5581343acc2245e8ce75",
+    "prior-gate11-invocation.json": "0f01ac77df68ea9112e8e2476fc4b652fd1b0c8bcb299e2f9f48f0fcd41286eb",
+    "prior-gate11-launcher.log": "faddc938ef0e94b952214a715fee8505b2b90febd868415033b2770e0a8193a5",
+    "prior-gate11-resources.txt": "e8c080ac998bbb18560868e1c7014bf32f6c3b44576de1f209ac0bda90e15e87",
+    "prior-gate11.json": "5ab24207b87c8cb0524103f6c40ffa9d20d1a0651eae6eb5a46b9742cf80585b",
+    "resources.txt": "1ee3dc3544f9366ab3072cd4a93abbf0331e63b5c8498d3f0c0dc17f04562c18",
+    "run-tests.sh": "ca32d098faa9a9c7c36cfa3b5fb89c8f46891a6422ae7d73b4e59e64f1830f8a",
+    "services-after.json": "6688d4a3886a2693539c647bdaf44707c08ac4a4cb3ea49003eea576f5d310bd",
+    "services-before.json": "8802e2770ab6bb8154faf76df2c86d3e14fa3ed23e41d32ace30d4af962fb0b0"
+  }
+}

@@ -1,0 +1,177 @@
+{
+  "source_directory": "/home/kaifat/gothic-ai/body/data/stage8-collector-gc-profile-v2",
+  "binding": {
+    "kind": "immutable_collector_diagnostic_binding",
+    "quality_credit": false,
+    "checkpoint_selection_allowed": false,
+    "fresh_screening_credit": false,
+    "source_run": "stage8-final-gate-v6",
+    "files": {
+      "profile.py": "3eb767091e98ebd6154421bb5f5758abd1790f6e89dab8441fb1dcaade42397d",
+      "profile.json": "a500e9c5b0a2a23810547629ba041a98753d932ed53e2591185cd22cde5af9ce",
+      "resources.txt": "f6dc869b0a177fd4aa7a8f4bcb91eafdf76b3562050f11d056d6fb29ff16474a",
+      "launcher.log": "8f5afde7463b076f7c959b867f24508e6af9b852e5cb707785b8c92395aa3ae3"
+    }
+  },
+  "binding_file": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-collector-gc-profile-v2/diagnostic-binding.json",
+    "size_bytes": 566,
+    "sha256": "d40ffa1fd7d7235cb741e8bfaf6c1b5c6ee733bc8f6302e63f5d54b50e676239"
+  },
+  "original_profile_bytes": 7972520,
+  "profile_sha256_inherited": "a500e9c5b0a2a23810547629ba041a98753d932ed53e2591185cd22cde5af9ce",
+  "metadata": {
+    "kind": "collector_actual_stage_gc_trace",
+    "quality_credit": false,
+    "source_run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v6",
+    "no_service_requests": true,
+    "fresh_seeds_exposed": false,
+    "gc_enabled": true,
+    "gc_threshold": [
+      700,
+      10,
+      10
+    ]
+  },
+  "gc_span_count": 686,
+  "generation2_count": 5,
+  "collector_span_count": 68381,
+  "top_generation2_spans": [
+    {
+      "generation": 2,
+      "begin_ns": 1107092380830678,
+      "end_ns": 1107092454169427,
+      "elapsed_ms": 73.338749,
+      "collected": 0,
+      "uncollectable": 0,
+      "containing_pull_spans": []
+    },
+    {
+      "generation": 2,
+      "begin_ns": 1107071054077839,
+      "end_ns": 1107071111675077,
+      "elapsed_ms": 57.597238,
+      "collected": 0,
+      "uncollectable": 0,
+      "containing_pull_spans": []
+    },
+    {
+      "generation": 2,
+      "begin_ns": 1107039754655713,
+      "end_ns": 1107039803674292,
+      "elapsed_ms": 49.018579,
+      "collected": 20,
+      "uncollectable": 0,
+      "containing_pull_spans": [
+        {
+          "method": "DiagnosticEpisodeEnv.pull",
+          "begin_ns": 1107039749848117,
+          "end_ns": 1107039803976690,
+          "elapsed_ms": 54.128573
+        }
+      ]
+    },
+    {
+      "generation": 2,
+      "begin_ns": 1107027521421639,
+      "end_ns": 1107027551138481,
+      "elapsed_ms": 29.716842,
+      "collected": 0,
+      "uncollectable": 0,
+      "containing_pull_spans": []
+    },
+    {
+      "generation": 2,
+      "begin_ns": 1107027315525629,
+      "end_ns": 1107027324281099,
+      "elapsed_ms": 8.75547,
+      "collected": 0,
+      "uncollectable": 0,
+      "containing_pull_spans": []
+    }
+  ],
+  "top_collector_spans": [
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107039749848117,
+      "end_ns": 1107039803976690,
+      "elapsed_ms": 54.128573
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107029916527725,
+      "end_ns": 1107029928860905,
+      "elapsed_ms": 12.33318
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107030516727278,
+      "end_ns": 1107030526588151,
+      "elapsed_ms": 9.860873
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107053083457800,
+      "end_ns": 1107053093190142,
+      "elapsed_ms": 9.732342
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107052418148459,
+      "end_ns": 1107052427498325,
+      "elapsed_ms": 9.349866
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107051783535768,
+      "end_ns": 1107051792147828,
+      "elapsed_ms": 8.61206
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107052583549555,
+      "end_ns": 1107052592110781,
+      "elapsed_ms": 8.561226
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107052117666572,
+      "end_ns": 1107052125913247,
+      "elapsed_ms": 8.246675
+    }
+  ],
+  "top_pull_spans": [
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107039749848117,
+      "end_ns": 1107039803976690,
+      "elapsed_ms": 54.128573
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107029916527725,
+      "end_ns": 1107029928860905,
+      "elapsed_ms": 12.33318
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107030516727278,
+      "end_ns": 1107030526588151,
+      "elapsed_ms": 9.860873
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107053083457800,
+      "end_ns": 1107053093190142,
+      "elapsed_ms": 9.732342
+    },
+    {
+      "method": "DiagnosticEpisodeEnv.pull",
+      "begin_ns": 1107052418148459,
+      "end_ns": 1107052427498325,
+      "elapsed_ms": 9.349866
+    }
+  ],
+  "full_profile_downloaded": false,
+  "old_load169_cause_proven": false
+}

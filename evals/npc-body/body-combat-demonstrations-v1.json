@@ -1,0 +1,459 @@
+{
+  "schema_version": 1,
+  "scenario": "body-combat-demonstrations-v1",
+  "declared_before_collection": "2026-10-14",
+  "teacher_id": "observed-melee-combat-v1",
+  "provider": "stage8-scripted-combat-teacher",
+  "teacher_module": "body_combat_teacher",
+  "setup_family": "arena-native-melee-v1",
+  "train_seeds": [
+    181,
+    191,
+    193,
+    197,
+    199,
+    211
+  ],
+  "eval_seeds": [
+    223,
+    227
+  ],
+  "reserved_test_seeds": [
+    229,
+    233
+  ],
+  "ood_seeds": [
+    239,
+    241
+  ],
+  "ood_geometry": "near_wall",
+  "ood_distances_cm": [
+    450,
+    450
+  ],
+  "ood_yaw_offsets_deg": [
+    35,
+    -35
+  ],
+  "distances_cm": [
+    200,
+    350,
+    450
+  ],
+  "geometries": [
+    "open",
+    "near_wall"
+  ],
+  "sides": [
+    0,
+    1
+  ],
+  "timeout_game_ms": 60000,
+  "yaw_offsets_deg": [
+    20,
+    -20
+  ],
+  "allowed_actions": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
+  "maneuver_rule_status": "enabled_after_paired_motor_probe",
+  "maneuver_rule": "ordinary_native_arc-v1",
+  "microcurriculum": {
+    "enabled": true,
+    "scenario": "reset_stress",
+    "geometry": "near_wall",
+    "timeout_game_ms": 4000,
+    "opponent": "scripted_hold_nonexpert",
+    "max_primary_commands": 2,
+    "direction": "Current rays1..7 versus9..15 clearance differs by at least20cm; take the clearer side only if its full tangent-to-forward static ray fan is clear. Equal inputs do not receive opposite labels.",
+    "settling_wait": "After an actual completed arc and no threat, wait200 if observed safe fight distance is below425cm, wait300 if at least425cm. No unsafe or absent physical opportunity is forced.",
+    "safe_endpoint_focus_degrees": 30,
+    "variants": [
+      {
+        "id": "left-yaw20-distance350",
+        "side": 0,
+        "yaw_offset_deg": 20,
+        "distance_cm": 350,
+        "expected_action_id": 3,
+        "wall_tangent_sign": 1,
+        "calibration_case": "calibration-joint-left-181-side0-yaw20-distance350-clearance150-sign1"
+      },
+      {
+        "id": "left-yaw20-distance450",
+        "side": 0,
+        "yaw_offset_deg": 20,
+        "distance_cm": 450,
+        "expected_action_id": 3,
+        "wall_tangent_sign": 1,
+        "calibration_case": "calibration-joint-left-181-side0-yaw20-distance450-clearance150-sign1"
+      },
+      {
+        "id": "left-yaw35-distance350",
+        "side": 0,
+        "yaw_offset_deg": 35,
+        "distance_cm": 350,
+        "expected_action_id": 3,
+        "wall_tangent_sign": 1,
+        "calibration_case": "calibration-joint-left-181-side0-yaw35-distance350-clearance150-sign1"
+      },
+      {
+        "id": "left-yaw35-distance450",
+        "side": 0,
+        "yaw_offset_deg": 35,
+        "distance_cm": 450,
+        "expected_action_id": 3,
+        "wall_tangent_sign": 1,
+        "calibration_case": "calibration-joint-left-181-side0-yaw35-distance450-clearance150-sign1"
+      },
+      {
+        "id": "right-yaw-35-distance350",
+        "side": 0,
+        "yaw_offset_deg": -35,
+        "distance_cm": 350,
+        "expected_action_id": 4,
+        "wall_tangent_sign": -1,
+        "calibration_case": "calibration-joint-right-181-side0-yaw-35-distance350-clearance150-sign-1"
+      },
+      {
+        "id": "right-yaw-35-distance450",
+        "side": 0,
+        "yaw_offset_deg": -35,
+        "distance_cm": 450,
+        "expected_action_id": 4,
+        "wall_tangent_sign": -1,
+        "calibration_case": "calibration-joint-right-181-side0-yaw-35-distance450-clearance150-sign-1"
+      },
+      {
+        "id": "right-yaw-38-distance350",
+        "side": 0,
+        "yaw_offset_deg": -38,
+        "distance_cm": 350,
+        "expected_action_id": 4,
+        "wall_tangent_sign": -1,
+        "calibration_case": "calibration-joint-right-181-side0-yaw-38-distance350-clearance150-sign-1"
+      },
+      {
+        "id": "right-yaw-38-distance450",
+        "side": 0,
+        "yaw_offset_deg": -38,
+        "distance_cm": 450,
+        "expected_action_id": 4,
+        "wall_tangent_sign": -1,
+        "calibration_case": "calibration-joint-right-181-side0-yaw-38-distance450-clearance150-sign-1"
+      }
+    ],
+    "expected_action_is_diagnostic_only": true,
+    "wall_clearance_by_seed_cm": {
+      "181": 120,
+      "191": 130,
+      "193": 140,
+      "197": 150,
+      "199": 160,
+      "211": 170
+    },
+    "geometry_diversity": "Only train micros request distinct real wall clearances, verified by native ray/capsule/ground proof. All36 full bouts retain legacy default120cm. Repeated seed names alone do not count as new physical states.",
+    "selection_evidence": {
+      "run": "stage8-calibration-v5",
+      "directory": "combat-calibration",
+      "scope": "calibration",
+      "automatic_training_admission": false,
+      "files": {
+        "suite.json": "3920751a8de68266f31d82a5f497e494ed46c65d621d7675bea26339ad90df61",
+        "manifest.json": "e1e17ab2092a253b92cb5dda307fff6a011eb231e39ac60e4725f04f9ab5c1d7",
+        "teacher-registry.json": "4c4d57222e929c8f02c9f0fc397db6b0dde3c7b9c87dc2ac9a855218c07290d5"
+      },
+      "selected_cases": [
+        "calibration-joint-left-181-side0-yaw20-distance350-clearance150-sign1",
+        "calibration-joint-left-181-side0-yaw20-distance450-clearance150-sign1",
+        "calibration-joint-left-181-side0-yaw35-distance350-clearance150-sign1",
+        "calibration-joint-left-181-side0-yaw35-distance450-clearance150-sign1",
+        "calibration-joint-right-181-side0-yaw-35-distance350-clearance150-sign-1",
+        "calibration-joint-right-181-side0-yaw-35-distance450-clearance150-sign-1",
+        "calibration-joint-right-181-side0-yaw-38-distance350-clearance150-sign-1",
+        "calibration-joint-right-181-side0-yaw-38-distance450-clearance150-sign-1"
+      ],
+      "limitation": "All8 selected tuples have actual approved arcs and paired waits in one closed joint calibration at150cm. All6 production clearances120..170 still require48 actual preflight proofs before corpus84. Calibration episodes are never automatically merged."
+    },
+    "apply_clearance_to_full_bouts": false
+  },
+  "native_duel_regression_eval_seeds": [
+    29,
+    113
+  ],
+  "policy": "Full native_duel bouts: only the primary has scripted control; the opponent uses actual native AI. Fresh exact periodic observations choose range/facing corrections, attacks and threat defenses independently, without a fixed action cycle, native FightAlgo calls or RNG reads. Cancellations and unproved effects remain nonexpert diagnostics.",
+  "new_group_assignments": {
+    "[\"arena-native-melee-v1\",181]": "train",
+    "[\"arena-native-melee-v1\",191]": "train",
+    "[\"arena-native-melee-v1\",193]": "train",
+    "[\"arena-native-melee-v1\",197]": "train",
+    "[\"arena-native-melee-v1\",199]": "train",
+    "[\"arena-native-melee-v1\",211]": "train",
+    "[\"arena-native-melee-v1\",223]": "eval",
+    "[\"arena-native-melee-v1\",227]": "eval",
+    "[\"arena-native-melee-v1\",229]": "test",
+    "[\"arena-native-melee-v1\",233]": "test",
+    "[\"arena-native-melee-v1\",239]": "ood",
+    "[\"arena-native-melee-v1\",241]": "ood"
+  },
+  "sampling": {
+    "version": "periodic-v1",
+    "rate_hz": 20,
+    "max_label_age_game_ms": 67,
+    "event_only_commands": false
+  },
+  "coverage": {
+    "combined_minimum_train_usable_per_action": 20,
+    "combined_actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "new_maneuver_coverage_claimed": false,
+    "minimum_new_train_usable_actions": {
+      "3": 20,
+      "4": 20,
+      "10": 20,
+      "11": 20
+    },
+    "safe_maneuver_gate": "Requires actual completed native arc, displacement50..350cm, grounded movement with zero collision failures/prefall and no HP damage or fallback. Every diagnostic has a same ray in range and unoccluded; transient pose-only invalidity is at most100ms inside protected execution without new commands. Actual completion and first settled eligible decision are visible with finalfocus30."
+  },
+  "budgets": {
+    "collection_wall_timeout_s": 2400,
+    "max_episode_substeps": 2000,
+    "native_queue_capacity": 4096,
+    "drain_max": 256,
+    "writer_queue_capacity": 256,
+    "provider_watchdog_wall_ms": 5000,
+    "max_dropped_records": 0
+  },
+  "smoke": {
+    "train_seed": 181,
+    "include_both_sides_and_geometries": true
+  },
+  "simulation": {
+    "mode": "lockstep",
+    "fps": 30,
+    "time_multiplier": 1,
+    "delay_substeps": 0,
+    "model": null
+  },
+  "limitations": [
+    "The native BIP/LOS diagnostic is evaluation evidence, not an input oracle for action selection.",
+    "The initial teacher cannot label a safe full strafe until an evidence-based observational rule is declared and physically checked.",
+    "New test groups are reserved and are not collected, trained on or inspected for checkpoint selection.",
+    "Source trajectories and approvals from earlier stages remain immutable."
+  ],
+  "maneuver_enable_evidence": {
+    "run": "stage8-motor-v7",
+    "binary_sha256": "44eff82c4980fe1e54e1b69f5ed2ecc4d6d94c726bc94f23d45fde868620f84c",
+    "files": {
+      "reference/gothic-body-runner": "44eff82c4980fe1e54e1b69f5ed2ecc4d6d94c726bc94f23d45fde868620f84c",
+      "validation/visibility-comparison.json": "09a08dc34fca8a0388fc12ef640da16444d6752be2bbd8706a521d7706024450",
+      "setup-probe/parity/headless-parity.json": "341bea9911d32cfca8c3cbccfdd652836cdfe9f5d6e87c67552886d7b416f4fe",
+      "validation/probe/body-combat.json": "d1b223d8fc568737dc68fe0ecd67c70e5cdbe19422b5f014afddf333e98f678a"
+    }
+  },
+  "calibration": {
+    "scope": "calibration",
+    "seed": 181,
+    "train_only": true,
+    "automatic_training_admission": false,
+    "purpose": "Joint complete capture of4 Left opportunities with positive20/35deg yaw/tangent+1 and4 measured safe Right opportunities with negative35/38deg yaw/tangent\u22121, allside0 at150cm normal clearance. Bind one closed raw source for all8 variants before new production; every existing proof threshold stays unchanged.",
+    "cases": [
+      {
+        "name": "calibration-joint-left-181-side0-yaw20-distance350-clearance150-sign1",
+        "seed": 181,
+        "split": "train",
+        "side": 0,
+        "geometry": "near_wall",
+        "distance_cm": 350,
+        "yaw_offset_deg": 20,
+        "center_offset_cm": [
+          0,
+          0
+        ],
+        "separation_yaw_deg": 0,
+        "task": "reset_stress",
+        "timeout_ms": 4000,
+        "curriculum": "safe_native_arc_then_settle",
+        "opponent": "scripted_hold_nonexpert",
+        "calibration_expected_direction": 3,
+        "wall_clearance_cm": 150,
+        "wall_tangent_sign": 1
+      },
+      {
+        "name": "calibration-joint-left-181-side0-yaw20-distance450-clearance150-sign1",
+        "seed": 181,
+        "split": "train",
+        "side": 0,
+        "geometry": "near_wall",
+        "distance_cm": 450,
+        "yaw_offset_deg": 20,
+        "center_offset_cm": [
+          0,
+          0
+        ],
+        "separation_yaw_deg": 0,
+        "task": "reset_stress",
+        "timeout_ms": 4000,
+        "curriculum": "safe_native_arc_then_settle",
+        "opponent": "scripted_hold_nonexpert",
+        "calibration_expected_direction": 3,
+        "wall_clearance_cm": 150,
+        "wall_tangent_sign": 1
+      },
+      {
+        "name": "calibration-joint-left-181-side0-yaw35-distance350-clearance150-sign1",
+        "seed": 181,
+        "split": "train",
+        "side": 0,
+        "geometry": "near_wall",
+        "distance_cm": 350,
+        "yaw_offset_deg": 35,
+        "center_offset_cm": [
+          0,
+          0
+        ],
+        "separation_yaw_deg": 0,
+        "task": "reset_stress",
+        "timeout_ms": 4000,
+        "curriculum": "safe_native_arc_then_settle",
+        "opponent": "scripted_hold_nonexpert",
+        "calibration_expected_direction": 3,
+        "wall_clearance_cm": 150,
+        "wall_tangent_sign": 1
+      },
+      {
+        "name": "calibration-joint-left-181-side0-yaw35-distance450-clearance150-sign1",
+        "seed": 181,
+        "split": "train",
+        "side": 0,
+        "geometry": "near_wall",
+        "distance_cm": 450,
+        "yaw_offset_deg": 35,
+        "center_offset_cm": [
+          0,
+          0
+        ],
+        "separation_yaw_deg": 0,
+        "task": "reset_stress",
+        "timeout_ms": 4000,
+        "curriculum": "safe_native_arc_then_settle",
+        "opponent": "scripted_hold_nonexpert",
+        "calibration_expected_direction": 3,
+        "wall_clearance_cm": 150,
+        "wall_tangent_sign": 1
+      },
+      {
+        "name": "calibration-joint-right-181-side0-yaw-35-distance350-clearance150-sign-1",
+        "seed": 181,
+        "split": "train",
+        "side": 0,
+        "geometry": "near_wall",
+        "distance_cm": 350,
+        "yaw_offset_deg": -35,
+        "center_offset_cm": [
+          0,
+          0
+        ],
+        "separation_yaw_deg": 0,
+        "task": "reset_stress",
+        "timeout_ms": 4000,
+        "curriculum": "safe_native_arc_then_settle",
+        "opponent": "scripted_hold_nonexpert",
+        "calibration_expected_direction": 4,
+        "wall_clearance_cm": 150,
+        "wall_tangent_sign": -1
+      },
+      {
+        "name": "calibration-joint-right-181-side0-yaw-35-distance450-clearance150-sign-1",
+        "seed": 181,
+        "split": "train",
+        "side": 0,
+        "geometry": "near_wall",
+        "distance_cm": 450,
+        "yaw_offset_deg": -35,
+        "center_offset_cm": [
+          0,
+          0
+        ],
+        "separation_yaw_deg": 0,
+        "task": "reset_stress",
+        "timeout_ms": 4000,
+        "curriculum": "safe_native_arc_then_settle",
+        "opponent": "scripted_hold_nonexpert",
+        "calibration_expected_direction": 4,
+        "wall_clearance_cm": 150,
+        "wall_tangent_sign": -1
+      },
+      {
+        "name": "calibration-joint-right-181-side0-yaw-38-distance350-clearance150-sign-1",
+        "seed": 181,
+        "split": "train",
+        "side": 0,
+        "geometry": "near_wall",
+        "distance_cm": 350,
+        "yaw_offset_deg": -38,
+        "center_offset_cm": [
+          0,
+          0
+        ],
+        "separation_yaw_deg": 0,
+        "task": "reset_stress",
+        "timeout_ms": 4000,
+        "curriculum": "safe_native_arc_then_settle",
+        "opponent": "scripted_hold_nonexpert",
+        "calibration_expected_direction": 4,
+        "wall_clearance_cm": 150,
+        "wall_tangent_sign": -1
+      },
+      {
+        "name": "calibration-joint-right-181-side0-yaw-38-distance450-clearance150-sign-1",
+        "seed": 181,
+        "split": "train",
+        "side": 0,
+        "geometry": "near_wall",
+        "distance_cm": 450,
+        "yaw_offset_deg": -38,
+        "center_offset_cm": [
+          0,
+          0
+        ],
+        "separation_yaw_deg": 0,
+        "task": "reset_stress",
+        "timeout_ms": 4000,
+        "curriculum": "safe_native_arc_then_settle",
+        "opponent": "scripted_hold_nonexpert",
+        "calibration_expected_direction": 4,
+        "wall_clearance_cm": 150,
+        "wall_tangent_sign": -1
+      }
+    ],
+    "kind": "joint_verified_wall_arcs_v1"
+  },
+  "geometry_preflight": {
+    "scope": "preflight",
+    "train_only": true,
+    "automatic_training_admission": false,
+    "cases": "all48 declared train micros",
+    "purpose": "Check every new wall clearance/yaw/distance tuple physically before production84. Placement failure remains infrastructure evidence; unproved commands stay nonexpert. No quota gate, dataset build or automatic merge."
+  }
+}

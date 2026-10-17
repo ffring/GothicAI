@@ -1,0 +1,623 @@
+{
+  "schema_version": 1,
+  "kind": "independent_stage8_preflight_v6_evidence",
+  "generated_at_utc": "2026-10-14T08:32:21.958354+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6",
+  "source_directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight",
+  "source_status": "collected",
+  "scope": "preflight_geometry_and_demonstration_eligibility",
+  "analysis": {
+    "method": "frozen validate_episode with teacher registry followed by periodic_model_view; one episode retained at a time",
+    "sampling_view": "periodic-v1",
+    "max_label_age_game_ms": 67,
+    "actor": "primary",
+    "source": "scripted",
+    "models_or_simulations_run": false,
+    "source_mutations": false
+  },
+  "source_bindings": {
+    "files": {
+      "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/suite.json": "88071cf4223477697ebddba420b5bb5771e183d58db62305768e00b80c544fb9",
+      "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/manifest.json": "0b4cc45d0a17d1690e10c2c48e5c2f6d63ad1b80a9458139c06323684bce9837",
+      "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/teacher-registry.json": "ddd9d45a229964c2c2d664d0e17a1033eba0e47aa3968cdc9d32af831a660f93"
+    },
+    "frozen_analysis_code": {
+      "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/scripts/body_trajectory_dataset.py": "e1d3289c2f2532865a15b4e69c10ca1cd1c542ffb8a5c001ac086ed708a84efe",
+      "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/scripts/body_combat_teacher.py": "ece5cb704aff2bcccd9b785a52c0a8b76d9dce417ed9399fb2297e2df7c81f9b",
+      "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/scripts/body_combat_demonstrations.py": "ae7ca3c254e27dc6e2ff71884970f6587f782677f36969c97cea3fb662569a9f"
+    },
+    "episodes": [
+      {
+        "episode_id": "maneuver-train-181-left-yaw20-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-181-left-yaw20-distance350",
+        "files": {
+          "trajectory-manifest.json": "1f1c52f91b060dfc1c3ecb7947d38309c206c753b492b7a8f25158a8b01805d4",
+          "records-approved.jsonl": "f74205ea8dbf87da0b1feb1d1e47977e72793d89ec57c4adaaa97bccd7104453",
+          "raw-trajectory.jsonl": "7f5f4801904d4bf7388e80ed7b5da1d3b17387efa242bc7439fa416400f44617"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-181-left-yaw20-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-181-left-yaw20-distance450",
+        "files": {
+          "trajectory-manifest.json": "3f385127a395cf5378fe1779d98e5e2eb430b74c4df3fb707858c1dcb8870642",
+          "records-approved.jsonl": "7bee602bd6fc850aa022d84d639796c41f85c764e6b83a9c9d324d2f655ac31d",
+          "raw-trajectory.jsonl": "f0eead840bf7f9f080f89f40220a44dd8aee7335b07c5aac1bc8578f6c590527"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-181-left-yaw35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-181-left-yaw35-distance350",
+        "files": {
+          "trajectory-manifest.json": "57b191c18143cff574b53dc622952863dde2f367b6469b0227e1716ebcb8a836",
+          "records-approved.jsonl": "9629918b7e70e0c9c57bfcf8229a9c88ac30aca279efe4e98c60367dbcbbe3a3",
+          "raw-trajectory.jsonl": "fb644c0649515f82c0424617fe633b44ffd7d6dae4f23843d7a89515c28934cb"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-181-left-yaw35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-181-left-yaw35-distance450",
+        "files": {
+          "trajectory-manifest.json": "cca5e18e36d6bcc24ef7e48d8ab3725be10505be8c44f72b717dd7222c366f1f",
+          "records-approved.jsonl": "4ab71c44efbb0235ea282ede33fefaa4f21c6a43119029dc57b475e73e4c52ce",
+          "raw-trajectory.jsonl": "62d744832a2ec031c4a656f5062af3dae0fe85916aece457b5e5573d9a331286"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-181-right-yaw-35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-181-right-yaw-35-distance350",
+        "files": {
+          "trajectory-manifest.json": "d6a95ee43366e5ddf308180ffac3e26ca18b111907c8763781ac00165dea1450",
+          "records-approved.jsonl": "95ef3b9243a7d920e10aa274dad233efe618b22e97b579985634bc31d744dcc0",
+          "raw-trajectory.jsonl": "6cce430d10bdc69a1e6b54ff410a19023fcebdc9e95bbe4751f9d575ff3e69a4"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-181-right-yaw-35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-181-right-yaw-35-distance450",
+        "files": {
+          "trajectory-manifest.json": "d4eb8b978b66b50df5973b046468ac4afeaaf9e7f30018cb79842b3bc445880d",
+          "records-approved.jsonl": "592eed404004b23c92051af4882f849c21928674456c5fd3718ad9ce46878b22",
+          "raw-trajectory.jsonl": "8f09faab7fcd220e415a5f4a063c553329bd82f4a638763da27adb915ee5ceaf"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-181-right-yaw-38-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-181-right-yaw-38-distance350",
+        "files": {
+          "trajectory-manifest.json": "85b4f8b124621f42915179db4d56a71d63eb14cf58c86695b63928266d0eb5b8",
+          "records-approved.jsonl": "cf6941d40ced6635d147e244564006ef060b0c95265146453f10ae3f6bb3d7bc",
+          "raw-trajectory.jsonl": "4417331890aa320f8a4899592ec2fadaa6375c8e079d0f786c2a959956baaedb"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-181-right-yaw-38-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-181-right-yaw-38-distance450",
+        "files": {
+          "trajectory-manifest.json": "3fa5ada1483f998749a2c07608e72754dc641e3d9f4dc7a7dcfe03c80e78e8fa",
+          "records-approved.jsonl": "f5029c800760d976c1853ab643f8a9f57d6f8b18dc22fd396363cce98bf24a30",
+          "raw-trajectory.jsonl": "99285c8af9fa496808d78d626fc0bf1f8acbc09ffda317524fb8e2dc1064e2f8"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-191-left-yaw20-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-191-left-yaw20-distance350",
+        "files": {
+          "trajectory-manifest.json": "5749e8f118de7389ac828a6a4c40230d42273e322b738ed1aa4ce4aa09cb24f0",
+          "records-approved.jsonl": "3b107ebef30d63ce2ea63ae2b2c537b2a32590e2e95e2a1480ecdb21d1119a3d",
+          "raw-trajectory.jsonl": "ee75c6ad463ece5ae04e5610619b7a9619e4cab37472080b587a6595bd08396d"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-191-left-yaw20-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-191-left-yaw20-distance450",
+        "files": {
+          "trajectory-manifest.json": "dc536a7b7a979f9e8e3564c799caeac8e385986ee1b02f2f21951ed6f5ef01cc",
+          "records-approved.jsonl": "def13bb2f931fbb8107f5701c85eb10a0e98c9cb1a9820e4e508e918693168fd",
+          "raw-trajectory.jsonl": "737bc7cdc053b50b1c3da694b2a841a2d2dc49d567d07fd0b9643eeeb102cbab"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-191-left-yaw35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-191-left-yaw35-distance350",
+        "files": {
+          "trajectory-manifest.json": "46fef0bbd67380df827c2469b7758a48c33cb8dcd64065987fc7d1406a7fbfdf",
+          "records-approved.jsonl": "1e00a3c11ab04cc69fd5cfc2b951bc881654be998b96f0375c1d6a58771e4b00",
+          "raw-trajectory.jsonl": "0dd5df5a91a7f1b3a61b386bf68718575d92ce9fadd797e2a33e51d7f1f2034a"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-191-left-yaw35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-191-left-yaw35-distance450",
+        "files": {
+          "trajectory-manifest.json": "651731b791ccc05ed04ff865fafcaf697b86b75e243d8560bb58175f56283368",
+          "records-approved.jsonl": "05c9f3238f4771ac6f473cb8c2fdae36396954a58374486fd9dcd7f565311ccd",
+          "raw-trajectory.jsonl": "d89b9f02d046262212e2e69ba31c5fae34ad35b573b3779d448d131cfa159eda"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-191-right-yaw-35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-191-right-yaw-35-distance350",
+        "files": {
+          "trajectory-manifest.json": "c0ac589a8113b4f64732d2eb78746a5369b388bd09175c17ff36ea6ff695a1b8",
+          "records-approved.jsonl": "fa73e9bcfe6e027d2a8abba2e169c400b3ce60ae271e46a75090d432f0ca5b56",
+          "raw-trajectory.jsonl": "a99e2af08d6b6cba6fb7de3c139dbc33b8efc9f71a39c6c0d95c3b9c8e8a026a"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-191-right-yaw-35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-191-right-yaw-35-distance450",
+        "files": {
+          "trajectory-manifest.json": "8de3fc423fbc8d4a93904494f0bf9fd4140c56f5548abb1be6f8b374bce8f0f7",
+          "records-approved.jsonl": "9b32a942d057682d9e41f1d53d66613cf9d9cc18817412b906f8a487106badc7",
+          "raw-trajectory.jsonl": "65c4fde51552b6e395db6bf3a8d4109c607251611d21c70413c991045d25aa6c"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-191-right-yaw-38-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-191-right-yaw-38-distance350",
+        "files": {
+          "trajectory-manifest.json": "b643c44f296cf54f308467d183e11d1fbfdc992d12e9064a5c4e42928920cded",
+          "records-approved.jsonl": "d8ab0302658ef531bd4ba585188fb3fae54cc07f8cafa10aba2774e863b2d202",
+          "raw-trajectory.jsonl": "e20b473df0af3f40b1bc61c43492069239d0a6be00a1c321b1a09f53a3c88c2a"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-191-right-yaw-38-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-191-right-yaw-38-distance450",
+        "files": {
+          "trajectory-manifest.json": "fe26a3811cf97dea32baff8f2215ac31219dc369ef6807abda6a18ff49cc0b88",
+          "records-approved.jsonl": "0fe877e2156f7674130bf0e029bda3eaaaa01742b52255671860f867892c3bb7",
+          "raw-trajectory.jsonl": "1f71b3dcc6a4c9ae3af3521af14abdbb720e15f79dd639245f877e34fc22f47f"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-193-left-yaw20-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-193-left-yaw20-distance350",
+        "files": {
+          "trajectory-manifest.json": "3b277bc1f3cfde3ad72d246825b2e0e0786c5a7dc5036cb6e0946f92e3e7d13c",
+          "records-approved.jsonl": "92aff43e8e10c4b4c79d2acffa89fe1aaea4739a882184809532ab838ebf6ce9",
+          "raw-trajectory.jsonl": "57d2ae8443699a03d75c3be135b9003b0ecf78252f8f49c45ac009fc427c69e3"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-193-left-yaw20-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-193-left-yaw20-distance450",
+        "files": {
+          "trajectory-manifest.json": "458a2750852d294a62551851bd8e88af43292a0c5b90e56222017db44234fc74",
+          "records-approved.jsonl": "fdc083aff3e571d64098a096b93e62ef80d5331a61d90ee9d533363a8946a154",
+          "raw-trajectory.jsonl": "f139eb9553b37f7353846efcb85b2c0369386808cf124da6c3f760e8405881b6"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-193-left-yaw35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-193-left-yaw35-distance350",
+        "files": {
+          "trajectory-manifest.json": "3c9090b411223fdbf04c8a8676bb1882a191d2c6799219937e8baba8e548d929",
+          "records-approved.jsonl": "be0f0e1e5d5bf282844cdcb553a5dd6238d33b69faf91895e784a070416054bc",
+          "raw-trajectory.jsonl": "c198f254845a5d37810fb80f7b60490864ea0a1d5c1e00b0e118a0137492dc1c"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-193-left-yaw35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-193-left-yaw35-distance450",
+        "files": {
+          "trajectory-manifest.json": "49ff6464b0b9b2b5f2f1fab373ecf64fe50337dc7728cdb75efc2e7b1d616a9e",
+          "records-approved.jsonl": "5f830c5c37ced36acdeb2eb70c45d4d6d81f2195031e43223b2de614476e546c",
+          "raw-trajectory.jsonl": "92356579695e7b599de0a1a5a94684956d9d145e123e9ff3274090ca8f7baf55"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-193-right-yaw-35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-193-right-yaw-35-distance350",
+        "files": {
+          "trajectory-manifest.json": "00e78d670c5e406b39281378872a94e9ace9c74ceee125b1c5e6725b6d6166e7",
+          "records-approved.jsonl": "0ce87c6931a0e5389cb46fa969f55a599bc87a3faadb7e797867ea53a85eb2c3",
+          "raw-trajectory.jsonl": "46f8323d71cac577bc53b7d2b7b1d7d9cfc71c116e76b5bf9452bd55e0d4b1c2"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-193-right-yaw-35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-193-right-yaw-35-distance450",
+        "files": {
+          "trajectory-manifest.json": "ab0ea335096e2713f0430b58fcdd391e302b0d7b1b432d7c458d9e82d764e687",
+          "records-approved.jsonl": "c2cf462ef281e100f62e00b602ae2921c7940e3e00ce406c1473d0ffd9c11ebb",
+          "raw-trajectory.jsonl": "069305f8ef1b8752141ac21d02023445dade7da054526d3f00ee7f63c9545991"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-193-right-yaw-38-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-193-right-yaw-38-distance350",
+        "files": {
+          "trajectory-manifest.json": "8239e1ae297ee7c137b100fc2e4ba59d3f90d540bd794914c02b4f917549c231",
+          "records-approved.jsonl": "80e7f7841136ec9c27fb53e5c00823d52ddf442565f3a00eefc8950337d1d142",
+          "raw-trajectory.jsonl": "94fd5aa4d870b91506bf5cbc371452fa22cc6e2ef2da338a82c38f95f5d9e266"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-193-right-yaw-38-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-193-right-yaw-38-distance450",
+        "files": {
+          "trajectory-manifest.json": "baff276ab7a9f67e4ab895c1dcbf43d9308389fd7962de1ca35bc2405e1f6a52",
+          "records-approved.jsonl": "6cd18c63ab5bea9bc5a5f3bac63d6cfc33dac27b3b96c7c1caab4cba7420ecd1",
+          "raw-trajectory.jsonl": "6f0095adb1947122d9cea087ce5e82b54a8d3677514c158ea024adae7562b5ee"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-197-left-yaw20-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-197-left-yaw20-distance350",
+        "files": {
+          "trajectory-manifest.json": "0c809219a7b395e56ea1866dab2eb2de00ad7de9afe3d23e43b42d6455ae0d5b",
+          "records-approved.jsonl": "eb2650f26ffedad1e9a0b81149f516d088b3dd2b1522e892c4fd31ec121e7227",
+          "raw-trajectory.jsonl": "ced71e3124ba0c4544dceb076901d3c136e3778f92264c8cf5d0114be692e1da"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-197-left-yaw20-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-197-left-yaw20-distance450",
+        "files": {
+          "trajectory-manifest.json": "c271a3f512be4fa0adfdfafbc29bca65ebafd74e014481ce1fefa69dfb94759c",
+          "records-approved.jsonl": "b3307ef5db1036e628c2334825455db0fa326212552e835e0b69e172bc9bee87",
+          "raw-trajectory.jsonl": "6563c6345475e37f222b24fa84a1c30189e9be81763d436010c1ec20e9ea3f38"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-197-left-yaw35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-197-left-yaw35-distance350",
+        "files": {
+          "trajectory-manifest.json": "f430d1405bd59f681871ac22a9c77b5ce11c8baafb5b6f1b5fce1fd865f9200f",
+          "records-approved.jsonl": "a7f93b5bc7499a67eb2fecf86cb49747e7c22b07ff72a0071c8ecd97b2e3d347",
+          "raw-trajectory.jsonl": "d417334f6f7bbed238c305a8125f2cdde2c02c0784ca56d64b09d44d269c9533"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-197-left-yaw35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-197-left-yaw35-distance450",
+        "files": {
+          "trajectory-manifest.json": "08bae414ec580055745c9bbce32b4be3804ea0f8794bb6c981b740f181ea6bb7",
+          "records-approved.jsonl": "6176a5812a5d97bcca68d7efa78bac1ee996936923da92edb09e55b92984bd0a",
+          "raw-trajectory.jsonl": "fcf44129541f63e7a2292b63f15f5bb235de5102d91a1bf12113c959c52e8ab9"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-197-right-yaw-35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-197-right-yaw-35-distance350",
+        "files": {
+          "trajectory-manifest.json": "cad0646fa93ed0a6ed8a0816c2737849cf554c3243510b22e8b65a0492fe0b67",
+          "records-approved.jsonl": "bac7e0f416ef32478a678def77c2b71ede136631a39b30a42f1768fb4d083564",
+          "raw-trajectory.jsonl": "b71ff0ed0f132e6b765e31c03b02d834bb3d30cee39783706b7f4a6e599c9711"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-197-right-yaw-35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-197-right-yaw-35-distance450",
+        "files": {
+          "trajectory-manifest.json": "def8837eea714855e2757ef9beb9dff471a87da574839f7dcfe81d49f6892998",
+          "records-approved.jsonl": "0245998f62531205b7c0b0a213e87e5c7ef21aca1b6b2ac369bb812ff9a644b6",
+          "raw-trajectory.jsonl": "f793fa725b8ccd6bcfc66a344b7f4943f696ce2a28f73b1c82814c5aa8c5406c"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-197-right-yaw-38-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-197-right-yaw-38-distance350",
+        "files": {
+          "trajectory-manifest.json": "e2da84463aeb9f1516348094690f469a6e4c39a2a34574e8cdaa3d35a5889d9b",
+          "records-approved.jsonl": "949422c1a8064350f03d140dee041d8432241ba7d60691a4e79bd09c95560787",
+          "raw-trajectory.jsonl": "330d0e93d4d027aac77fd26bd035ce49afd94868b25bddd8744229bcc92be3e4"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-197-right-yaw-38-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-197-right-yaw-38-distance450",
+        "files": {
+          "trajectory-manifest.json": "9ca793c56e586d07edfd363d5b4162d61697e09c9b4820894a6516b79a025d29",
+          "records-approved.jsonl": "336b30525173a16aae852bd33ef40a18a6d0a210c608f1cea4c899a0435f3a2b",
+          "raw-trajectory.jsonl": "dfed5973b88efb6e52910e400de71e5354afce0d73daa71ea541ffa850343c22"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-199-left-yaw20-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-199-left-yaw20-distance350",
+        "files": {
+          "trajectory-manifest.json": "e43125858b98895a3e68d662d5a5c99d7c70279f1e23b43ee8c22d2f5e61d422",
+          "records-approved.jsonl": "6d8be599ede37539f16474f711f666eccf0ab2b45ddc1dafface5acb9f69cf0b",
+          "raw-trajectory.jsonl": "94f3e2211747d3888e81ea9b32d963c9531fa41492cf922d6fc66cc401c6754a"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-199-left-yaw20-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-199-left-yaw20-distance450",
+        "files": {
+          "trajectory-manifest.json": "2245cdb2c76250d9402dfa449f70b92431dd194b35bd37c76251cbe56c287b72",
+          "records-approved.jsonl": "ece8eb53c8a8258087fef21d9f2ee9ca89597170c176d25ff72bae132beed694",
+          "raw-trajectory.jsonl": "1117ec045218a6d77e24a3504f225a95f60ba4711a01406f437d00e3b49fcd41"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-199-left-yaw35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-199-left-yaw35-distance350",
+        "files": {
+          "trajectory-manifest.json": "7250e7c60bfa6002ff8d4403b26fb3b1ca42d3b18da98b5ef69a854e8eebc51e",
+          "records-approved.jsonl": "bf200a0e3f05513edb47dfeccd81b6b17640db6b63fdd407facad2b9657116a8",
+          "raw-trajectory.jsonl": "157a956388f43c1925aec9d9754954687f576a64583a3b2e0347e390cb5a5b63"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-199-left-yaw35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-199-left-yaw35-distance450",
+        "files": {
+          "trajectory-manifest.json": "8df14b357bf0488f1e1ca0dc357667362d2f7e53ba030fe41c5ca4bd967828bd",
+          "records-approved.jsonl": "5bbcafa04bde237e928f654718055a06dd21dde4bfa88fb8c3018861b85eeb77",
+          "raw-trajectory.jsonl": "e8351cc35adabdbd0e9fec19b72b2e876e870d7fc6fddc51cb84e3f3701a1134"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-199-right-yaw-35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-199-right-yaw-35-distance350",
+        "files": {
+          "trajectory-manifest.json": "8eac9baa989f9245587f4a9adcfdda91e6354e47e2c0c9639d7353080fbf8dfa",
+          "records-approved.jsonl": "5687169ae2b409779373f2c8fc4d48cfacd905233a0d6f235ab924df5481b3aa",
+          "raw-trajectory.jsonl": "4b53553ec1553a635ea72c4196592df8558b48c67b5bc67b3787e51b477403b4"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-199-right-yaw-35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-199-right-yaw-35-distance450",
+        "files": {
+          "trajectory-manifest.json": "76b404af7b361a4589d68d96de7653db32baf726c00f2642e6fbed5337273a3c",
+          "records-approved.jsonl": "70410340ac88a86791106d41148762fcaae0896c1f1568b8e353caa42f06f6a2",
+          "raw-trajectory.jsonl": "256d8702dff550156b737f97fb6ad6107b318c30d21a1eb5185b2320b64b9a1d"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-199-right-yaw-38-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-199-right-yaw-38-distance350",
+        "files": {
+          "trajectory-manifest.json": "23446a43f8710e08d522d49ffb78bb664c67caffd3fd56375d1dbb24d444b01c",
+          "records-approved.jsonl": "f072e5b442e98ec57158c1797dd1fd65f0f04e2a022b0cf3300dc50ae1794c3e",
+          "raw-trajectory.jsonl": "d9814df77a7e714185a21e68027a31c00de52d5195326554dfaf31cf8be29315"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-199-right-yaw-38-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-199-right-yaw-38-distance450",
+        "files": {
+          "trajectory-manifest.json": "f782e1b03b977f5659bec691444b0f0da8626a05b9565781118864334a9a1b32",
+          "records-approved.jsonl": "5ecfe744327f64712fb133c4a0382c7354c5a29f1ae51c7e9c7a36fac372aff3",
+          "raw-trajectory.jsonl": "517ed1f3de2539014a33e061f9055bc0d2b93b55448148b57051c5e191b083ef"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-211-left-yaw20-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-211-left-yaw20-distance350",
+        "files": {
+          "trajectory-manifest.json": "461e8fad4ef795bfea3ffd72c8bc0fda6ca1b69ac1a10f1ba38a47e91fd268d0",
+          "records-approved.jsonl": "eb0642067957b42c579d935ddbd523153a5fb7cf996c6625cf2d0f6e16eb72b8",
+          "raw-trajectory.jsonl": "91c1b9d21d222a2ac3658a7fde67f7d2abcfd1b5c72b58fb3ffc02a550459ac7"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-211-left-yaw20-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-211-left-yaw20-distance450",
+        "files": {
+          "trajectory-manifest.json": "181a185b736ac9fb17a0f8869c5bf432a94042876beab9c0321614c5eaade3a1",
+          "records-approved.jsonl": "0380eedab4568d9c1ecef922c26733fb9b671165520fa2ca4e1a878734bf7e5d",
+          "raw-trajectory.jsonl": "faa5741f917b6eb03bb78f50004e420194cc3cbfd0f27ed7f5700f0b7d247e8d"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-211-left-yaw35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-211-left-yaw35-distance350",
+        "files": {
+          "trajectory-manifest.json": "dd694c9d729ce8a0f0ba8fd15dafcc330c72dc5a82a9dbcc8a502b7acecf5480",
+          "records-approved.jsonl": "14383c266f32fde01207d7c6add1863fc9fa58069f0095511c72205668a806bd",
+          "raw-trajectory.jsonl": "3883d19a0c36e4749735e09fa49a77a965ad27804ac0236e97ee491e3e82ea94"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-211-left-yaw35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-211-left-yaw35-distance450",
+        "files": {
+          "trajectory-manifest.json": "a0461d731a28febb0efbc2ebbe4901818a2dfd131745cd41fb442871c0ba3448",
+          "records-approved.jsonl": "1c6ec286d81c2b446402534928c1e7a8d7a4da2ef03baf3fea4819ba6f1d5814",
+          "raw-trajectory.jsonl": "5716d599067f2b91c5dfaf7af8f86be3d2e95f5ccb2fbb0bb56e71a45ab6ec71"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-211-right-yaw-35-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-211-right-yaw-35-distance350",
+        "files": {
+          "trajectory-manifest.json": "e012470d551a2073c21f3aa2c06d895889fa1c337c0d6710b86ea2842bb0d5bf",
+          "records-approved.jsonl": "9502101b229d63b436ec6e614b07b9121284ac634c498e1ce9a7bd598d246418",
+          "raw-trajectory.jsonl": "de38316fd910050cf98feebece66d9f376a6203a454ed1b60d71ec0c3bfe9276"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-211-right-yaw-35-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-211-right-yaw-35-distance450",
+        "files": {
+          "trajectory-manifest.json": "ff27a81f3ab6161ac795882250349f5124c6a4c6dee3aa342776599cc91a6d99",
+          "records-approved.jsonl": "abe542549e7aa9b957c440b48ba3fdcfdd5a21516e4ff11aaa918c15369566c0",
+          "raw-trajectory.jsonl": "9aba538bb45205af7a7f2fd087691109f6e73b138ee60a03db5c592fed9d62d6"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-211-right-yaw-38-distance350",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-211-right-yaw-38-distance350",
+        "files": {
+          "trajectory-manifest.json": "51ac6551ccb88730b8a06d6734eb0808919ef6b3f2b1c851277da504cbf23515",
+          "records-approved.jsonl": "c0a4258ea1e460f2d4e56ecfd89c1154eea97b072b355c28435c1da3987fa769",
+          "raw-trajectory.jsonl": "77a32e72bc0a716acb053558c6383120a80619a04cc656c8593506b6b697031f"
+        }
+      },
+      {
+        "episode_id": "maneuver-train-211-right-yaw-38-distance450",
+        "directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-geometry-preflight/episodes/maneuver-train-211-right-yaw-38-distance450",
+        "files": {
+          "trajectory-manifest.json": "42b362f34f35752e0c7380403cf7b2a1662ee497e1a8efb8c8e58b7945f1b5c8",
+          "records-approved.jsonl": "d2348c9c380b09a0c1f880516d7b12bf8fbfab90ac924dcd0fd66f7b31eb5811",
+          "raw-trajectory.jsonl": "76c17d65921afe1cb419fa5d9b2f95a263c54927fc6f52ff835d5dcce578538f"
+        }
+      }
+    ]
+  },
+  "episodes": 48,
+  "projected_primary_scripted_usable": {
+    "3": 24,
+    "4": 24,
+    "10": 24,
+    "11": 24
+  },
+  "minimum_new_train_usable_per_action": 20,
+  "coverage_ready": true,
+  "projection_drops": {},
+  "approval_diagnostics": [],
+  "arc_evidence": {
+    "approved_arcs": 48,
+    "maximum_pose_gap_ms": 66,
+    "pose_gap_distribution_ms": {
+      "0": 42,
+      "66": 6
+    },
+    "displacement_cm": [
+      272.82110914211967,
+      277.9485207035386
+    ],
+    "physics_step_count_distribution": {
+      "23": 48
+    }
+  },
+  "physical_diversity": {
+    "distinct_yaw_distance_sign_variants": 8,
+    "variant_counts": [
+      {
+        "yaw_offset_deg": 20,
+        "distance_cm": 350,
+        "wall_tangent_sign": 1,
+        "cases": 6
+      },
+      {
+        "yaw_offset_deg": 20,
+        "distance_cm": 450,
+        "wall_tangent_sign": 1,
+        "cases": 6
+      },
+      {
+        "yaw_offset_deg": 35,
+        "distance_cm": 350,
+        "wall_tangent_sign": 1,
+        "cases": 6
+      },
+      {
+        "yaw_offset_deg": 35,
+        "distance_cm": 450,
+        "wall_tangent_sign": 1,
+        "cases": 6
+      },
+      {
+        "yaw_offset_deg": -35,
+        "distance_cm": 350,
+        "wall_tangent_sign": -1,
+        "cases": 6
+      },
+      {
+        "yaw_offset_deg": -35,
+        "distance_cm": 450,
+        "wall_tangent_sign": -1,
+        "cases": 6
+      },
+      {
+        "yaw_offset_deg": -38,
+        "distance_cm": 350,
+        "wall_tangent_sign": -1,
+        "cases": 6
+      },
+      {
+        "yaw_offset_deg": -38,
+        "distance_cm": 450,
+        "wall_tangent_sign": -1,
+        "cases": 6
+      }
+    ],
+    "measured_wall_clearance_groups": [
+      {
+        "requested_cm": 120,
+        "cases": 8,
+        "actual_normal_cm": [
+          121.439774,
+          121.538651
+        ],
+        "actual_ray_cm": [
+          121.50222,
+          121.601013
+        ],
+        "maximum_abs_normal_request_error_cm": 1.53865051
+      },
+      {
+        "requested_cm": 130,
+        "cases": 8,
+        "actual_normal_cm": [
+          131.190384,
+          131.289276
+        ],
+        "actual_ray_cm": [
+          131.25,
+          131.350388
+        ],
+        "maximum_abs_normal_request_error_cm": 1.28927612
+      },
+      {
+        "requested_cm": 140,
+        "cases": 8,
+        "actual_normal_cm": [
+          140.921616,
+          141.020493
+        ],
+        "actual_ray_cm": [
+          140.991531,
+          141.093765
+        ],
+        "maximum_abs_normal_request_error_cm": 1.02049255
+      },
+      {
+        "requested_cm": 150,
+        "cases": 8,
+        "actual_normal_cm": [
+          150.664734,
+          150.767273
+        ],
+        "actual_ray_cm": [
+          150.73703,
+          150.837128
+        ],
+        "maximum_abs_normal_request_error_cm": 0.767272949
+      },
+      {
+        "requested_cm": 160,
+        "cases": 8,
+        "actual_normal_cm": [
+          160.407837,
+          160.506363
+        ],
+        "actual_ray_cm": [
+          160.486816,
+          160.587097
+        ],
+        "maximum_abs_normal_request_error_cm": 0.506362915
+      },
+      {
+        "requested_cm": 170,
+        "cases": 8,
+        "actual_normal_cm": [
+          170.142731,
+          170.249115
+        ],
+        "actual_ray_cm": [
+          170.22963,
+          170.331879
+        ],
+        "maximum_abs_normal_request_error_cm": 0.24911499
+      }
+    ]
+  }
+}

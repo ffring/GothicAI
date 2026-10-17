@@ -1,0 +1,1181 @@
+{
+  "schema_version": 1,
+  "kind": "stage8_v6_saved_prediction_read_only_audit",
+  "created_at_utc": "2026-10-14T09:13:44.070757+00:00",
+  "run": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6",
+  "weights_fixed_at_utc": "2026-10-14T09:02:35.266523+00:00",
+  "bindings_sha256": {
+    "selection.json": "b8ae94660743319462ce6e24216f83e64fbe104e15885e08a1f8b0605b9022c0",
+    "dataset/dataset.json": "f75fdcb02ec9389bab77fac1ef2da661d5f48f61add36727a1a57c6ed3fbcfe6",
+    "dataset/normalization.json": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6",
+    "dataset/selection-profile.json": "e9c5ca6db72f21e81fd874826edb7714fa88be17c9efcaf0635425c56b7dc6d4",
+    "code/scripts/body_trajectory_dataset.py": "e1d3289c2f2532865a15b4e69c10ca1cd1c542ffb8a5c001ac086ed708a84efe"
+  },
+  "scope": "Saved eval/test/OOD predictions after fixed weights; hash-bound canonical records projected with frozen periodic_model_view; no forwards or gameplay. Complete engine/teacher raw-proof revalidation remains the independent reporter gate.",
+  "fresh_eval_ids_exact": true,
+  "source_episode_bindings": {
+    "native-43-0": {
+      "split": "test",
+      "manifest_sha256": "0ff49a8e165d49140d5d257367f2dcb3158be8de6e3856e5dbec61ba47a38235",
+      "records_sha256": "af8a588cbfae78e325c9010c15fa9cace50412e4b087c3a8643e0ea1abf383d3"
+    },
+    "native-43-1": {
+      "split": "test",
+      "manifest_sha256": "d37c72f7f28461bca715a7874667ca4dc427cb9a43e5fd22a9e90067960cba86",
+      "records_sha256": "95c17f638f06371a59e77a124efc437b0513136bf7db8468e1213b846564a3f0"
+    },
+    "ood-distance-800": {
+      "split": "ood",
+      "manifest_sha256": "fd0605c4c07b2501477d692c148b261f31214da7ffc035e39b23f061f47cbd20",
+      "records_sha256": "008643e733f8b4da1090facea3ecb4e92ff00d8eb41e3ac8db45ed46b670edf9"
+    },
+    "ood-distance-1000": {
+      "split": "ood",
+      "manifest_sha256": "33d6cc43b1669886ae63b69df5503e6e6b55a0741515188ae05601508c315eed",
+      "records_sha256": "e51ccd991118ee08cc86ddb9d8647a08304e12c5ba8d7afc05587432b9ad856e"
+    },
+    "demo-test-43-0": {
+      "split": "test",
+      "manifest_sha256": "0c7517bd346354eacce3b2f752d156a830deb3edb8fcc0265e33e66f2385eded",
+      "records_sha256": "5b49128dd2f9d995131662213ca0a43a75dbf180e2ef10ab236ddf1540f467e0"
+    },
+    "demo-test-43-1": {
+      "split": "test",
+      "manifest_sha256": "2fec96898ff2ee179b8e28281f0c49c4308e7d6d3cf0897c9dc4e4df9ec1e7b3",
+      "records_sha256": "8b391982e981b4bd367e018fe9c8bf603bfb7d75579fe56c0d25862b29c3f81f"
+    },
+    "demo-test-43-2": {
+      "split": "test",
+      "manifest_sha256": "cf5dbc4960cbb28da36a05c48da1cf1f36aa091ff5945cae84fcd5b233b4886a",
+      "records_sha256": "bba41d918b8b1c5404b2e60c43d623d562ff343928181a8c2fabba1a19931613"
+    },
+    "demo-test-43-3": {
+      "split": "test",
+      "manifest_sha256": "36ed5465ad82b2111560d905c9b85f0b68451d9a7d113cc143af826a04dae400",
+      "records_sha256": "8ab78536ce9bfc83f505a52fb2ce026766348d05fbcb222b817e399384d8875c"
+    },
+    "ood-151": {
+      "split": "ood",
+      "manifest_sha256": "3391137c03d25fb34c73e52a6f3f2916ca12c1be3b7a9a29662bfe6aa9328041",
+      "records_sha256": "019cee6b90f6c2270e49b854687e477929e5c1945bdc9234ca1e1976d558bff7"
+    },
+    "ood-163": {
+      "split": "ood",
+      "manifest_sha256": "2a0379863fa2f698f831ce8203bd157ed7f64338774e53d55f88afd0ff661128",
+      "records_sha256": "f8a3faeb6a3e57719e3b26277f6693916838658835616d1e1e31910b80e7c85d"
+    },
+    "wall-test": {
+      "split": "test",
+      "manifest_sha256": "985122af0b8afad8ac0a2edd70b05edcfb05a32d92214f219167e75073dcc2c5",
+      "records_sha256": "2e576201ff693c37c8c8eb2f384845974e50e6dd13207967f3f9b33410765782"
+    },
+    "combat-eval-223-near_wall-0": {
+      "split": "eval",
+      "manifest_sha256": "c44d807f0e9a7ed3c363790f34d507e0c881125b4b13c355559e0f1f7f152940",
+      "records_sha256": "0c644c0501a4708fccfa5e3e8f3a4919b38260a283657afc74ee6fdad85eac05"
+    },
+    "combat-eval-223-near_wall-1": {
+      "split": "eval",
+      "manifest_sha256": "ec90a41e002b659052956e80097e842242429d55e909d395439aeadf5d650790",
+      "records_sha256": "0ee97b62abc1d194e08839820f2f82309b59359d76a929274422848e2d2654f5"
+    },
+    "combat-eval-223-open-0": {
+      "split": "eval",
+      "manifest_sha256": "77b356f4b770a299de6b44b274df00f927cfce3037fc323e7709d687451d1de8",
+      "records_sha256": "cd0721c6d9ab6818199a421a1152f7dcdd5244f05dd17487dedeed6a102ccf8f"
+    },
+    "combat-eval-223-open-1": {
+      "split": "eval",
+      "manifest_sha256": "f1738ce20e4594bcce6f3bc1ae254c67ed9012c3f77dd96b97a117936c30a526",
+      "records_sha256": "d547ab53c301c8c83524c637902fff362aa8c4a5277de2b82a45fe57d844535c"
+    },
+    "combat-eval-227-near_wall-0": {
+      "split": "eval",
+      "manifest_sha256": "c4e40a57e5aaaa8690f638dda62b57f21afc02f8e8533f6167d4b56bdcc91ae8",
+      "records_sha256": "36fcb17eeefe8538417fc1166fbb4c35e103a4deae858305d296a8e625e21734"
+    },
+    "combat-eval-227-near_wall-1": {
+      "split": "eval",
+      "manifest_sha256": "f2bf1ed39ce4d86159d1531214b1cfdbe38986b896077a1af1a9f25c55104b7f",
+      "records_sha256": "bb015163893fcfaab807bf2413da66d25f7970d766a78439dc0dfd6e5113bc97"
+    },
+    "combat-eval-227-open-0": {
+      "split": "eval",
+      "manifest_sha256": "f7cdc352efa31085f57785ebcb3daac0e571af7f121b52f79664efeb5fb67fa6",
+      "records_sha256": "80c275ca55eb96120d18143e0344aed92e5f0abe528d81216275c2c31fd41cbe"
+    },
+    "combat-eval-227-open-1": {
+      "split": "eval",
+      "manifest_sha256": "10be80a511b8bcc9fd4885b87fddd5c408d7562cae8399d68de980fdbd43b163",
+      "records_sha256": "9c3baac60ddc45fc3ec250e51d1cebd1ad75b296d09a7627876bdd5369c7f7b3"
+    },
+    "combat-ood-239-near_wall-0": {
+      "split": "ood",
+      "manifest_sha256": "e7e7874676bfc7c6a7f7cf911e73c450edf752cc1295bb0ec4ec49befc76a5c8",
+      "records_sha256": "3e9f15d4086b1333e8b42b4f9b9b68e563e3c3231429e8454f09cae360500024"
+    },
+    "combat-ood-239-near_wall-1": {
+      "split": "ood",
+      "manifest_sha256": "d0ab60eb26d994bf1581e2c459166730d91966766741c7b02f1f6ae415b2ecc0",
+      "records_sha256": "197f6486f50bb4eb00e8bf26effc04c7a78da5b630ff11342f6ecfd68fe6c7b7"
+    },
+    "combat-ood-241-near_wall-0": {
+      "split": "ood",
+      "manifest_sha256": "51ba17708e5c446c00c89d4d7ef1c4ac5031dfb7a3f433706da43d225d56363f",
+      "records_sha256": "18f4b3f9c046b9a145f4c34c21736946f2123d7e6ced9dd85bd44119afe9a11d"
+    },
+    "combat-ood-241-near_wall-1": {
+      "split": "ood",
+      "manifest_sha256": "620406a3828695b2c94e6691a0dbec2abee2e831a1063c9aea31fe40144f2ab6",
+      "records_sha256": "4979ee40a9d373a32f122cf580624dcf7b49a0583dfb377536d43d458f8c3506"
+    }
+  },
+  "evaluations": [
+    {
+      "architecture": "gru",
+      "split": "eval",
+      "passed": true,
+      "checkpoint_sha256": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+      "metrics_sha256": "5bf67a3a0a6df1963d9efef1dc2d0f70ff5f2fa251880fcd9bbefa4a37a7e830",
+      "predictions_sha256": "c622992540efd63d372822dbf3f6004413d7f6ae933837dc8fce993ca39359e2",
+      "label_count": 157,
+      "accuracy": 0.9681528662420382,
+      "macro_f1": 0.3543859649122807,
+      "nll_recomputed": 0.18261274265969557,
+      "nll_recorded": 0.18261275473673633,
+      "weighted_nll_recomputed": 0.1977291407721148,
+      "weighted_nll_recorded": 0.19772911062210516,
+      "per_action": [
+        {
+          "action_id": 0,
+          "action": "continue",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 1,
+          "action": "approach",
+          "support": 67,
+          "tp": 67,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "support": 23,
+          "tp": 23,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 3,
+          "action": "strafe_left",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 4,
+          "action": "strafe_right",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 6,
+          "action": "attack_front",
+          "support": 59,
+          "tp": 55,
+          "fp": 0,
+          "fn": 4,
+          "precision": 1,
+          "recall": 0.9322033898305084,
+          "f1": 0.9649122807017544
+        },
+        {
+          "action_id": 7,
+          "action": "attack_left",
+          "support": 0,
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 8,
+          "action": "attack_right",
+          "support": 0,
+          "tp": 0,
+          "fp": 4,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 9,
+          "action": "block",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 10,
+          "action": "wait_200",
+          "support": 8,
+          "tp": 7,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1,
+          "recall": 0.875,
+          "f1": 0.9333333333333333
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        }
+      ],
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "strafe_right": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_200": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_300": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        }
+      }
+    },
+    {
+      "architecture": "gru",
+      "split": "test",
+      "passed": true,
+      "checkpoint_sha256": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+      "metrics_sha256": "c81503a5962e78a49a88d3244b203e1587f616db9e6c8a60f74a6a0042c87f2d",
+      "predictions_sha256": "f08bdc82225e7431cbb737f22ccf70047cfc8633b1016686432f2287e346f2fd",
+      "label_count": 80,
+      "accuracy": 0.7375,
+      "macro_f1": 0.718259434168525,
+      "nll_recomputed": 1.4665527754891872,
+      "nll_recorded": 1.4665527820587159,
+      "weighted_nll_recomputed": 1.8344637676513187,
+      "weighted_nll_recorded": 1.834463960531423,
+      "per_action": [
+        {
+          "action_id": 0,
+          "action": "continue",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 1,
+          "action": "approach",
+          "support": 29,
+          "tp": 22,
+          "fp": 3,
+          "fn": 7,
+          "precision": 0.88,
+          "recall": 0.7586206896551724,
+          "f1": 0.8148148148148148
+        },
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "support": 5,
+          "tp": 5,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 3,
+          "action": "strafe_left",
+          "support": 4,
+          "tp": 1,
+          "fp": 9,
+          "fn": 3,
+          "precision": 0.1,
+          "recall": 0.25,
+          "f1": 0.14285714285714288
+        },
+        {
+          "action_id": 4,
+          "action": "strafe_right",
+          "support": 6,
+          "tp": 3,
+          "fp": 1,
+          "fn": 3,
+          "precision": 0.75,
+          "recall": 0.5,
+          "f1": 0.6
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "support": 5,
+          "tp": 5,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 6,
+          "action": "attack_front",
+          "support": 5,
+          "tp": 5,
+          "fp": 1,
+          "fn": 0,
+          "precision": 0.8333333333333334,
+          "recall": 1,
+          "f1": 0.9090909090909091
+        },
+        {
+          "action_id": 7,
+          "action": "attack_left",
+          "support": 6,
+          "tp": 5,
+          "fp": 5,
+          "fn": 1,
+          "precision": 0.5,
+          "recall": 0.8333333333333334,
+          "f1": 0.625
+        },
+        {
+          "action_id": 8,
+          "action": "attack_right",
+          "support": 8,
+          "tp": 2,
+          "fp": 0,
+          "fn": 6,
+          "precision": 1,
+          "recall": 0.25,
+          "f1": 0.4
+        },
+        {
+          "action_id": 9,
+          "action": "block",
+          "support": 6,
+          "tp": 5,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1,
+          "recall": 0.8333333333333334,
+          "f1": 0.9090909090909091
+        },
+        {
+          "action_id": 10,
+          "action": "wait_200",
+          "support": 1,
+          "tp": 1,
+          "fp": 2,
+          "fn": 0,
+          "precision": 0.3333333333333333,
+          "recall": 1,
+          "f1": 0.5
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "support": 5,
+          "tp": 5,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        }
+      ],
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 9,
+          "source_true_actions": {
+            "approach": 7,
+            "strafe_right": 2
+          }
+        },
+        "strafe_right": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "strafe_left": 1
+          }
+        },
+        "wait_200": {
+          "false_positives": 2,
+          "source_true_actions": {
+            "attack_left": 1,
+            "block": 1
+          }
+        },
+        "wait_300": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        }
+      }
+    },
+    {
+      "architecture": "gru",
+      "split": "ood",
+      "passed": true,
+      "checkpoint_sha256": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+      "metrics_sha256": "5751fb3ec2409a1eb9257e9e5bef20d1a5aaa9cda7995b991cecaf1bb7a1a5e0",
+      "predictions_sha256": "e72a59ea40cfcc6fcc1bea601c260b24ee37026ea9d67bf8fa1b0940aa8d7e36",
+      "label_count": 144,
+      "accuracy": 0.75,
+      "macro_f1": 0.5883588815556029,
+      "nll_recomputed": 1.2932589565833896,
+      "nll_recorded": 1.293258958392673,
+      "weighted_nll_recomputed": 2.4441569938759877,
+      "weighted_nll_recorded": 2.444157186776124,
+      "per_action": [
+        {
+          "action_id": 0,
+          "action": "continue",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 1,
+          "action": "approach",
+          "support": 64,
+          "tp": 53,
+          "fp": 5,
+          "fn": 11,
+          "precision": 0.9137931034482759,
+          "recall": 0.828125,
+          "f1": 0.8688524590163935
+        },
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "support": 6,
+          "tp": 6,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 3,
+          "action": "strafe_left",
+          "support": 6,
+          "tp": 1,
+          "fp": 9,
+          "fn": 5,
+          "precision": 0.1,
+          "recall": 0.16666666666666666,
+          "f1": 0.125
+        },
+        {
+          "action_id": 4,
+          "action": "strafe_right",
+          "support": 4,
+          "tp": 0,
+          "fp": 6,
+          "fn": 4,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "support": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 6,
+          "action": "attack_front",
+          "support": 39,
+          "tp": 34,
+          "fp": 2,
+          "fn": 5,
+          "precision": 0.9444444444444444,
+          "recall": 0.8717948717948718,
+          "f1": 0.9066666666666667
+        },
+        {
+          "action_id": 7,
+          "action": "attack_left",
+          "support": 2,
+          "tp": 2,
+          "fp": 2,
+          "fn": 0,
+          "precision": 0.5,
+          "recall": 1,
+          "f1": 0.6666666666666666
+        },
+        {
+          "action_id": 8,
+          "action": "attack_right",
+          "support": 7,
+          "tp": 1,
+          "fp": 1,
+          "fn": 6,
+          "precision": 0.5,
+          "recall": 0.14285714285714285,
+          "f1": 0.22222222222222224
+        },
+        {
+          "action_id": 9,
+          "action": "block",
+          "support": 6,
+          "tp": 3,
+          "fp": 0,
+          "fn": 3,
+          "precision": 1,
+          "recall": 0.5,
+          "f1": 0.6666666666666666
+        },
+        {
+          "action_id": 10,
+          "action": "wait_200",
+          "support": 6,
+          "tp": 4,
+          "fp": 8,
+          "fn": 2,
+          "precision": 0.3333333333333333,
+          "recall": 0.6666666666666666,
+          "f1": 0.4444444444444444
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "support": 2,
+          "tp": 2,
+          "fp": 3,
+          "fn": 0,
+          "precision": 0.4,
+          "recall": 1,
+          "f1": 0.5714285714285715
+        }
+      ],
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 9,
+          "source_true_actions": {
+            "approach": 7,
+            "strafe_right": 1,
+            "block": 1
+          }
+        },
+        "strafe_right": {
+          "false_positives": 6,
+          "source_true_actions": {
+            "approach": 2,
+            "strafe_left": 4
+          }
+        },
+        "wait_200": {
+          "false_positives": 8,
+          "source_true_actions": {
+            "attack_front": 5,
+            "attack_right": 3
+          }
+        },
+        "wait_300": {
+          "false_positives": 3,
+          "source_true_actions": {
+            "approach": 2,
+            "wait_200": 1
+          }
+        }
+      }
+    },
+    {
+      "architecture": "mlp",
+      "split": "eval",
+      "passed": true,
+      "checkpoint_sha256": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf",
+      "metrics_sha256": "a996489607e5e2ccecea012b1647fd466b7a61b0328d9e5c55e6874cccb543d5",
+      "predictions_sha256": "9bb3be94926f472267170afe23120197d6984b3f339fcfcbd8b79db074cfe763",
+      "label_count": 157,
+      "accuracy": 0.9490445859872612,
+      "macro_f1": 0.3323999233090142,
+      "nll_recomputed": 0.2752384615608503,
+      "nll_recorded": 0.2752384501657668,
+      "weighted_nll_recomputed": 0.3637823746932083,
+      "weighted_nll_recorded": 0.3637823651360136,
+      "per_action": [
+        {
+          "action_id": 0,
+          "action": "continue",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 1,
+          "action": "approach",
+          "support": 67,
+          "tp": 65,
+          "fp": 0,
+          "fn": 2,
+          "precision": 1,
+          "recall": 0.9701492537313433,
+          "f1": 0.9848484848484849
+        },
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "support": 23,
+          "tp": 23,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 3,
+          "action": "strafe_left",
+          "support": 0,
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 4,
+          "action": "strafe_right",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "support": 0,
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 6,
+          "action": "attack_front",
+          "support": 59,
+          "tp": 56,
+          "fp": 2,
+          "fn": 3,
+          "precision": 0.9655172413793104,
+          "recall": 0.9491525423728814,
+          "f1": 0.9572649572649573
+        },
+        {
+          "action_id": 7,
+          "action": "attack_left",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 8,
+          "action": "attack_right",
+          "support": 0,
+          "tp": 0,
+          "fp": 3,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 9,
+          "action": "block",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 10,
+          "action": "wait_200",
+          "support": 8,
+          "tp": 5,
+          "fp": 1,
+          "fn": 3,
+          "precision": 0.8333333333333334,
+          "recall": 0.625,
+          "f1": 0.7142857142857143
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        }
+      ],
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "approach": 1
+          }
+        },
+        "strafe_right": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_200": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "attack_front": 1
+          }
+        },
+        "wait_300": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        }
+      }
+    },
+    {
+      "architecture": "mlp",
+      "split": "test",
+      "passed": true,
+      "checkpoint_sha256": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf",
+      "metrics_sha256": "deeb7cbff440e5c7edd3e3414bbcb16dc8d427247a15d472b60bb7d7c05252b3",
+      "predictions_sha256": "3789d49314edc658934269fb3809f1b62275052d8a742150984a246ec0cf360f",
+      "label_count": 80,
+      "accuracy": 0.725,
+      "macro_f1": 0.6927743497211765,
+      "nll_recomputed": 0.7437623955730487,
+      "nll_recorded": 0.743762430921197,
+      "weighted_nll_recomputed": 0.7278820339584241,
+      "weighted_nll_recorded": 0.727882111690392,
+      "per_action": [
+        {
+          "action_id": 0,
+          "action": "continue",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 1,
+          "action": "approach",
+          "support": 29,
+          "tp": 20,
+          "fp": 4,
+          "fn": 9,
+          "precision": 0.8333333333333334,
+          "recall": 0.6896551724137931,
+          "f1": 0.7547169811320755
+        },
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "support": 5,
+          "tp": 5,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 3,
+          "action": "strafe_left",
+          "support": 4,
+          "tp": 2,
+          "fp": 15,
+          "fn": 2,
+          "precision": 0.11764705882352941,
+          "recall": 0.5,
+          "f1": 0.19047619047619047
+        },
+        {
+          "action_id": 4,
+          "action": "strafe_right",
+          "support": 6,
+          "tp": 0,
+          "fp": 0,
+          "fn": 6,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "support": 5,
+          "tp": 5,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 6,
+          "action": "attack_front",
+          "support": 5,
+          "tp": 5,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 7,
+          "action": "attack_left",
+          "support": 6,
+          "tp": 5,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1,
+          "recall": 0.8333333333333334,
+          "f1": 0.9090909090909091
+        },
+        {
+          "action_id": 8,
+          "action": "attack_right",
+          "support": 8,
+          "tp": 6,
+          "fp": 0,
+          "fn": 2,
+          "precision": 1,
+          "recall": 0.75,
+          "f1": 0.8571428571428571
+        },
+        {
+          "action_id": 9,
+          "action": "block",
+          "support": 6,
+          "tp": 5,
+          "fp": 0,
+          "fn": 1,
+          "precision": 1,
+          "recall": 0.8333333333333334,
+          "f1": 0.9090909090909091
+        },
+        {
+          "action_id": 10,
+          "action": "wait_200",
+          "support": 1,
+          "tp": 0,
+          "fp": 3,
+          "fn": 1,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "support": 5,
+          "tp": 5,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        }
+      ],
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 15,
+          "source_true_actions": {
+            "approach": 9,
+            "strafe_right": 5,
+            "wait_200": 1
+          }
+        },
+        "strafe_right": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_200": {
+          "false_positives": 3,
+          "source_true_actions": {
+            "attack_left": 1,
+            "attack_right": 1,
+            "block": 1
+          }
+        },
+        "wait_300": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        }
+      }
+    },
+    {
+      "architecture": "mlp",
+      "split": "ood",
+      "passed": true,
+      "checkpoint_sha256": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf",
+      "metrics_sha256": "fcc268fe7c585ce4dedaa6de9818a744dd026de5bf06d6661ba7c04724e4cb7a",
+      "predictions_sha256": "be7e364024cee644bf9d1044c9c2cba52653a15e19e994e3fe85b88fcdc03cb4",
+      "label_count": 144,
+      "accuracy": 0.7569444444444444,
+      "macro_f1": 0.64281357720331,
+      "nll_recomputed": 1.1317995027060401,
+      "nll_recorded": 1.1317995124393039,
+      "weighted_nll_recomputed": 2.0867058569132575,
+      "weighted_nll_recorded": 2.0867059028264827,
+      "per_action": [
+        {
+          "action_id": 0,
+          "action": "continue",
+          "support": 0,
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 1,
+          "action": "approach",
+          "support": 64,
+          "tp": 53,
+          "fp": 3,
+          "fn": 11,
+          "precision": 0.9464285714285714,
+          "recall": 0.828125,
+          "f1": 0.8833333333333333
+        },
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "support": 6,
+          "tp": 6,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 3,
+          "action": "strafe_left",
+          "support": 6,
+          "tp": 4,
+          "fp": 13,
+          "fn": 2,
+          "precision": 0.23529411764705882,
+          "recall": 0.6666666666666666,
+          "f1": 0.3478260869565218
+        },
+        {
+          "action_id": 4,
+          "action": "strafe_right",
+          "support": 4,
+          "tp": 0,
+          "fp": 1,
+          "fn": 4,
+          "precision": 0,
+          "recall": 0,
+          "f1": 0
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "support": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 6,
+          "action": "attack_front",
+          "support": 39,
+          "tp": 34,
+          "fp": 10,
+          "fn": 5,
+          "precision": 0.7727272727272727,
+          "recall": 0.8717948717948718,
+          "f1": 0.8192771084337349
+        },
+        {
+          "action_id": 7,
+          "action": "attack_left",
+          "support": 2,
+          "tp": 2,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        {
+          "action_id": 8,
+          "action": "attack_right",
+          "support": 7,
+          "tp": 2,
+          "fp": 1,
+          "fn": 5,
+          "precision": 0.6666666666666666,
+          "recall": 0.2857142857142857,
+          "f1": 0.4
+        },
+        {
+          "action_id": 9,
+          "action": "block",
+          "support": 6,
+          "tp": 3,
+          "fp": 0,
+          "fn": 3,
+          "precision": 1,
+          "recall": 0.5,
+          "f1": 0.6666666666666666
+        },
+        {
+          "action_id": 10,
+          "action": "wait_200",
+          "support": 6,
+          "tp": 1,
+          "fp": 6,
+          "fn": 5,
+          "precision": 0.14285714285714285,
+          "recall": 0.16666666666666666,
+          "f1": 0.15384615384615383
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "support": 2,
+          "tp": 2,
+          "fp": 1,
+          "fn": 0,
+          "precision": 0.6666666666666666,
+          "recall": 1,
+          "f1": 0.8
+        }
+      ],
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 13,
+          "source_true_actions": {
+            "approach": 8,
+            "strafe_right": 3,
+            "attack_right": 2
+          }
+        },
+        "strafe_right": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "strafe_left": 1
+          }
+        },
+        "wait_200": {
+          "false_positives": 6,
+          "source_true_actions": {
+            "attack_front": 5,
+            "block": 1
+          }
+        },
+        "wait_300": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "approach": 1
+          }
+        }
+      }
+    }
+  ]
+}

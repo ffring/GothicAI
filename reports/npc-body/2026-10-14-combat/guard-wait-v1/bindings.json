@@ -1,0 +1,343 @@
+{
+  "schema_version": 1,
+  "kind": "npc_body_guard_wait_targeted_test_bindings",
+  "run_name": "stage8-guard-wait-v1",
+  "remote_run": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1",
+  "status": "passed",
+  "scope": "protocol receipt tests; no simulations or real model forwards",
+  "quality_credit": false,
+  "selection_credit": false,
+  "test_counts": {
+    "tests": 74,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "tests": [
+    "scripts/tests/test_body_runtime_delivery.py",
+    "scripts/tests/test_body_policy_diagnostics.py",
+    "scripts/tests/test_body_policy_load.py"
+  ],
+  "snapshot": {
+    "schema_version": 1,
+    "kind": "body_guard_wait_targeted_test_snapshot",
+    "run_name": "stage8-guard-wait-v1",
+    "source_root": "/Users/kaifat/.codex/worktrees/npc-body-api/gothic",
+    "tests": [
+      "scripts/tests/test_body_runtime_delivery.py",
+      "scripts/tests/test_body_policy_diagnostics.py",
+      "scripts/tests/test_body_policy_load.py"
+    ],
+    "files": {
+      "body-service/pyproject.toml": {
+        "sha256": "8797b9aaab5230b7cf59fbe3dba6ea55ee7bd63da6b24e22b4578a45e5cb6108",
+        "bytes": 494
+      },
+      "body-service/src/gothic_body/__init__.py": {
+        "sha256": "c2247350dc860fc36ddbf6dd0b3baed9bcc9184a348d5dc92190c98f14a74e2e",
+        "bytes": 100
+      },
+      "body-service/src/gothic_body/__main__.py": {
+        "sha256": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
+        "bytes": 48
+      },
+      "body-service/src/gothic_body/checkpoint.py": {
+        "sha256": "955feda62eda42cf199db7d2b65e163f993b149723bbfc0acd9804422cb07c81",
+        "bytes": 4440
+      },
+      "body-service/src/gothic_body/cli.py": {
+        "sha256": "e0a70e5278b8d1254712a304da1f52c14ea9327d16a546029fd6ffd238d14b7d",
+        "bytes": 7585
+      },
+      "body-service/src/gothic_body/data.py": {
+        "sha256": "db482eddb06929a567b1373e706f6e9684a274814efd82fdc6be4029bf405694",
+        "bytes": 5902
+      },
+      "body-service/src/gothic_body/evaluation.py": {
+        "sha256": "47c8f3de03d53974517ae511ba3976c59974c0edb7c73a1c18b0d55fb3117149",
+        "bytes": 10467
+      },
+      "body-service/src/gothic_body/models.py": {
+        "sha256": "c5622960d9b9d2637d00a13bfdac9d72e88489e4dac1e4628e4e4249137c608f",
+        "bytes": 6386
+      },
+      "body-service/src/gothic_body/runtime.py": {
+        "sha256": "700f0876736425f520179269dc837e46612c339a9493588803a1eb9dc91bcce1",
+        "bytes": 26235
+      },
+      "body-service/src/gothic_body/schema.py": {
+        "sha256": "12cbea4c45cd1a2d05a794b9e4df955186aefa6b63bd158039f4a28c3dbe3b10",
+        "bytes": 2397
+      },
+      "body-service/src/gothic_body/serving.py": {
+        "sha256": "1adb0b55b4273cc83d47a72d72123b51cc7a64e6a245853f8461dc3d26fd80cf",
+        "bytes": 5249
+      },
+      "body-service/src/gothic_body/training.py": {
+        "sha256": "16bec9e51463708d5bd6c70813d4426e005141bce3ac69b452ae16df72e2535b",
+        "bytes": 19124
+      },
+      "body-service/src/gothic_body/verification.py": {
+        "sha256": "1e2184081769817fa141c36d24f97e0772a92b4b1aebe75a75ab5087259115e6",
+        "bytes": 5522
+      },
+      "scripts/body_api_report.py": {
+        "sha256": "6740ee839f6f554df8f7f7aebf9bef34a9115d5e220c49840ac010bfe74e1f99",
+        "bytes": 36176
+      },
+      "scripts/body_arena_env.py": {
+        "sha256": "1f2a72c4a280e961167f646cc8fcc7df1e7c383dbda7484fcc5a6b19a4671f3e",
+        "bytes": 16474
+      },
+      "scripts/body_arena_report.py": {
+        "sha256": "3bf81cad01d42b29611a52f665b9f8ef1c91296c4e52891804d0cfebac0504a7",
+        "bytes": 49704
+      },
+      "scripts/body_baseline_report.py": {
+        "sha256": "5ffa500af2d79fe44650901bec4af3b412e3d9c2d261d0f2b2a490bbe600fb66",
+        "bytes": 22342
+      },
+      "scripts/body_bc_report.py": {
+        "sha256": "34f0cb5489b181dd124421757671aa6559b556e024caf484b1d7ce7428545f84",
+        "bytes": 90383
+      },
+      "scripts/body_collector_gc.py": {
+        "sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a",
+        "bytes": 10474
+      },
+      "scripts/body_combat_evaluation.py": {
+        "sha256": "d4d76c61cbc3cd9e488b56d044986890e5f18cc20c0652de1c6337e18ff5c0ac",
+        "bytes": 22055
+      },
+      "scripts/body_headless_parity.py": {
+        "sha256": "9d0094d77a0ce89719887c574ab4c1a9eb9f2fabc463e2179f6153ab5114d742",
+        "bytes": 27915
+      },
+      "scripts/body_headless_suite.py": {
+        "sha256": "efd2e4a886baa12183b79fe9fd2ad8302a2a68cf1b3d20b21d441e767e961556",
+        "bytes": 54979
+      },
+      "scripts/body_observe_suite.py": {
+        "sha256": "f7c35f54876c9deb4baa0619edd40623c568c0d36ee9fbdd41150fa946707056",
+        "bytes": 22106
+      },
+      "scripts/body_policy_diagnostics.py": {
+        "sha256": "72d423eefb30543e2c96876178dc3fab439209c3b39d7a479f6cd9e1db2f00c0",
+        "bytes": 58961
+      },
+      "scripts/body_policy_load.py": {
+        "sha256": "4b76a321e631cb0b7a34b27c48da39b72495cec20fa6637221a2ab006afc4639",
+        "bytes": 29360
+      },
+      "scripts/body_policy_suite.py": {
+        "sha256": "c3012314ca4f1f5c5e7b182ea167fa47cbcaae93a856258ad4f3f70cd37018f0",
+        "bytes": 30003
+      },
+      "scripts/body_service_load.py": {
+        "sha256": "3d1e4adf6fa715f8bc8473277a2fbb257f3d6eafec93b4f43871b6b5aac552b8",
+        "bytes": 46833
+      },
+      "scripts/body_trajectory_dataset.py": {
+        "sha256": "185966eed12f07350a230bba027a76c3133968acc6431de422dc7f7b11f6084a",
+        "bytes": 110728
+      },
+      "scripts/body_trajectory_report.py": {
+        "sha256": "dcde0f738f1ba89b8571824f92ec923b335514aee56d5cf0311f33d943d64bc8",
+        "bytes": 37268
+      },
+      "scripts/tests/test_body_policy_diagnostics.py": {
+        "sha256": "95e7f234e3ff6b4ebceaf7260ea3956d7167ba3228ce143117654848e990e498",
+        "bytes": 8072
+      },
+      "scripts/tests/test_body_policy_load.py": {
+        "sha256": "63671e4ff63e0fde7de069f062fad20268f17927bc3113cd1c0eab0cc5cec330",
+        "bytes": 6394
+      },
+      "scripts/tests/test_body_runtime_delivery.py": {
+        "sha256": "c9f6d06e260cb0877c557f91aed025af29f195390836a80d7f6992913177522e",
+        "bytes": 24252
+      }
+    },
+    "support_files": {
+      "test-runner.py": {
+        "sha256": "bc3874e8ed527134f07cebc5a32a205452000c04289186d315ea714acc49b9a1",
+        "bytes": 2168
+      },
+      "run-tests.sh": {
+        "sha256": "ced3a5bc628b0235594dfc2cef031a50347d25a851d9f52926696e426760f7a7",
+        "bytes": 2369
+      }
+    }
+  },
+  "execution": {
+    "pid": 1042647,
+    "python": "/home/kaifat/gothic-ai/body/.venv/bin/python",
+    "python_version": "3.12.13 (main, Aug  7 2026, 02:25:39) [Clang 22.1.3 ]",
+    "cuda_visible_devices": "",
+    "cgroup": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/body-guard-wait-v1.service",
+    "nice": 10,
+    "cgroup_limits": {
+      "cpu.max": "200000 100000",
+      "memory.max": "6442450944",
+      "pids.max": "128"
+    },
+    "begin_wall_monotonic_ns": 1118884857707652,
+    "snapshot_manifest_sha256": "cd19e5a89b2feda186163ca62d722b1b064cef61b959ecc6652a7283e080f1f5",
+    "end_wall_monotonic_ns": 1118885162453175,
+    "pytest_returncode": 0,
+    "pytest_argv": [
+      "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/tests/test_body_runtime_delivery.py",
+      "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/tests/test_body_policy_diagnostics.py",
+      "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/tests/test_body_policy_load.py",
+      "-q",
+      "--junitxml=/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/junit.xml"
+    ],
+    "actual_imported_modules": {
+      "body_arena_env": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_arena_env.py",
+        "sha256": "1f2a72c4a280e961167f646cc8fcc7df1e7c383dbda7484fcc5a6b19a4671f3e"
+      },
+      "body_collector_gc": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_collector_gc.py",
+        "sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a"
+      },
+      "body_combat_evaluation": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_combat_evaluation.py",
+        "sha256": "d4d76c61cbc3cd9e488b56d044986890e5f18cc20c0652de1c6337e18ff5c0ac"
+      },
+      "body_headless_suite": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_headless_suite.py",
+        "sha256": "efd2e4a886baa12183b79fe9fd2ad8302a2a68cf1b3d20b21d441e767e961556"
+      },
+      "body_observe_suite": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_observe_suite.py",
+        "sha256": "f7c35f54876c9deb4baa0619edd40623c568c0d36ee9fbdd41150fa946707056"
+      },
+      "body_policy_diagnostics": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_policy_diagnostics.py",
+        "sha256": "72d423eefb30543e2c96876178dc3fab439209c3b39d7a479f6cd9e1db2f00c0"
+      },
+      "body_policy_load": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_policy_load.py",
+        "sha256": "4b76a321e631cb0b7a34b27c48da39b72495cec20fa6637221a2ab006afc4639"
+      },
+      "body_policy_suite": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_policy_suite.py",
+        "sha256": "c3012314ca4f1f5c5e7b182ea167fa47cbcaae93a856258ad4f3f70cd37018f0"
+      },
+      "body_service_load": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_service_load.py",
+        "sha256": "3d1e4adf6fa715f8bc8473277a2fbb257f3d6eafec93b4f43871b6b5aac552b8"
+      },
+      "body_trajectory_dataset": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/body_trajectory_dataset.py",
+        "sha256": "185966eed12f07350a230bba027a76c3133968acc6431de422dc7f7b11f6084a"
+      },
+      "gothic_body": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/body-service/src/gothic_body/__init__.py",
+        "sha256": "c2247350dc860fc36ddbf6dd0b3baed9bcc9184a348d5dc92190c98f14a74e2e"
+      },
+      "gothic_body.runtime": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/body-service/src/gothic_body/runtime.py",
+        "sha256": "700f0876736425f520179269dc837e46612c339a9493588803a1eb9dc91bcce1"
+      },
+      "test_body_policy_diagnostics": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/tests/test_body_policy_diagnostics.py",
+        "sha256": "95e7f234e3ff6b4ebceaf7260ea3956d7167ba3228ce143117654848e990e498"
+      },
+      "test_body_policy_load": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/tests/test_body_policy_load.py",
+        "sha256": "63671e4ff63e0fde7de069f062fad20268f17927bc3113cd1c0eab0cc5cec330"
+      },
+      "test_body_runtime_delivery": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/code/scripts/tests/test_body_runtime_delivery.py",
+        "sha256": "c9f6d06e260cb0877c557f91aed025af29f195390836a80d7f6992913177522e"
+      }
+    },
+    "source_binding_errors": []
+  },
+  "resources_receipt": "\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/test-runner.py\"\n\tUser time (seconds): 0.29\n\tSystem time (seconds): 0.02\n\tPercent of CPU this job got: 95%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.33\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 55920\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 14327\n\tVoluntary context switches: 149\n\tInvoluntary context switches: 3\n\tSwaps: 0\n\tFile system inputs: 5656\n\tFile system outputs: 104\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+  "services_before": {
+    "recorded_at_utc": "2026-10-14T18:18:03.205052+00:00",
+    "services": {
+      "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+      "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+      "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+      "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+    },
+    "gpu": "19011 MiB, 5114 MiB, 0 %"
+  },
+  "services_after": {
+    "recorded_at_utc": "2026-10-14T18:18:03.623809+00:00",
+    "services": {
+      "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+      "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+      "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+      "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+    },
+    "gpu": "19011 MiB, 5114 MiB, 0 %"
+  },
+  "protected_service_states_and_pids_unchanged": true,
+  "raw_receipt_bindings": {
+    "snapshot-manifest.json": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/snapshot-manifest.json",
+      "sha256": "cd19e5a89b2feda186163ca62d722b1b064cef61b959ecc6652a7283e080f1f5",
+      "bytes": 5649
+    },
+    "snapshot-verified-before.json": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/snapshot-verified-before.json",
+      "sha256": "20fbcc7fa98b58e6dea954ec74b2a2b4e8dfbb034c28ebafe2de5a24ea37108c",
+      "bytes": 188
+    },
+    "execution-before.json": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/execution-before.json",
+      "sha256": "92f64406ce6d7a54d8d31ba0912b38086b0039f3b85092d41f4211797737db9c",
+      "bytes": 571
+    },
+    "execution-after.json": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/execution-after.json",
+      "sha256": "13e9ecd6125eba0ca440562c3066cdf4dfad3487c08d7c9e925ff6ccaf01bd35",
+      "bytes": 4597
+    },
+    "services-before.json": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/services-before.json",
+      "sha256": "0f719a9ec2ddaf9bae6c51c6e0787496dd9cc65261fb00f5f714a0cefab60c81",
+      "bytes": 429
+    },
+    "services-after.json": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/services-after.json",
+      "sha256": "c6a773d18b76eb9eb64833dbc8ea6b933d9454f9fae190e55ee15f40f46701e9",
+      "bytes": 429
+    },
+    "junit.xml": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/junit.xml",
+      "sha256": "2fdaf2dc1dee1f7eae90d1ade1d4ace1d1613b0bdd548b754fce2d1e06defdfe",
+      "bytes": 12723
+    },
+    "resources.txt": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/resources.txt",
+      "sha256": "2c1d525533af5d4098bfe66a3f620f35191813cbc37f1840ea817b56c0e3f67c",
+      "bytes": 836
+    },
+    "launcher.log": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/launcher.log",
+      "sha256": "fb0eb572f5503dea1aee94f4b06a35e2d3efaa7ce013ebfb6cd8bb1b72a68ab0",
+      "bytes": 499
+    },
+    "exit-code.txt": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    "test-runner.py": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/test-runner.py",
+      "sha256": "bc3874e8ed527134f07cebc5a32a205452000c04289186d315ea714acc49b9a1",
+      "bytes": 2168
+    },
+    "run-tests.sh": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-guard-wait-v1/run-tests.sh",
+      "sha256": "ced3a5bc628b0235594dfc2cef031a50347d25a851d9f52926696e426760f7a7",
+      "bytes": 2369
+    }
+  }
+}

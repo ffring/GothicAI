@@ -1,0 +1,23 @@
+	Command being timed: "/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage7-bc-v9/code/scripts/body_bc_suite.py evaluate --run /home/kaifat/gothic-ai/body/data/stage7-bc-v9"
+	User time (seconds): 50.50
+	System time (seconds): 2.08
+	Percent of CPU this job got: 101%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:51.98
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 835816
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 3
+	Minor (reclaiming a frame) page faults: 819045
+	Voluntary context switches: 2849
+	Involuntary context switches: 562
+	Swaps: 0
+	File system inputs: 1984632
+	File system outputs: 984
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

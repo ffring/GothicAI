@@ -7,6 +7,7 @@
 #include <memory>
 #include <set>
 #include <random>
+#include <unordered_map>
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Painter>
@@ -87,9 +88,16 @@ class GameScript final {
     uint64_t     tickCount() const;
     void         tick(uint64_t dt);
 
-    uint32_t     rand(uint32_t max);
+    // Draws for `actor` come from its own stream when the test bench isolated it; everything
+    // else (and every NPC by default) shares randGen in tick order.
+    uint32_t     rand(uint32_t max, const Npc* actor = nullptr);
     // the random numbers start over (the test bench)
     void         setSeed(uint32_t s) { randGen.seed(s); }
+    // Body arena opt-in: the actor's native choices, damage rolls and own scripts no longer
+    // depend on how many draws the rest of the world made before it.
+    void         isolateRandom(const Npc& actor, uint32_t seed, uint32_t stream);
+    void         clearIsolatedRandom() { isolatedRandom.clear(); }
+    std::string  randomState(const Npc* actor) const;
     void         removeItem(Item& it);
 
     void         setInstanceNPC (std::string_view name, Npc& npc);
@@ -474,6 +482,7 @@ class GameScript final {
     OwnSymbols                                                  own{vm};
     int32_t                                                     vmLang = -1;
     std::mt19937                                                randGen;
+    std::unordered_map<const Npc*,std::mt19937>                 isolatedRandom;
     NpcProcessPolicy                                            aiProcessPolicy = NpcProcessPolicy::AiNormal;
 
     std::unique_ptr<DirectMemory>                               dma;
@@ -518,4 +527,5 @@ class GameScript final {
     std::shared_ptr<zenkit::IGuildValues>                       cGuildVal;
 
   friend struct ScopeCtx;
+  friend class BodyController;
   };

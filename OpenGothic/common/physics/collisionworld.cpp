@@ -6,6 +6,8 @@
 #include "world/objects/npc.h"
 #include "world/world.h"
 
+#include <cstdlib>
+
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
@@ -255,6 +257,10 @@ namespace {
     }
 
   int workerCount() {
+    // OPENGOTHIC_PHYSICS_THREADS: Jolt's worker threads; 0 runs every physics job on the stepping
+    // thread. The headless body runner forks its loaded world and needs a single-threaded process.
+    if(const char* env = std::getenv("OPENGOTHIC_PHYSICS_THREADS"); env!=nullptr && *env!='\0')
+      return std::max(0,std::atoi(env));
     unsigned int cores = std::max(1u,std::thread::hardware_concurrency());
 #ifdef __APPLE__
     unsigned int performanceCores = 0;

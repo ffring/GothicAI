@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v3",
+  "closed_known_stages_only": true,
+  "full_audit": {
+    "source": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v3/validation/final-audit-code-v2/audit.json",
+      "size_bytes": 1007,
+      "sha256": "2a2c374d34a0533266b94c4bf17343398714cf0418847aaca1992c10eb0960d7"
+    },
+    "binding": {
+      "schema_version": 1,
+      "kind": "body_stage8_final_runtime_audit_snapshot",
+      "environment_sha256": "baffb2ac5bad61bd4cd2ba33a65725ab1377ac7a6bca7ebaaa3d39f1cf199ebe",
+      "declaration_sha256": "053b09e108a141a03acd25f841b157a67b855cc0263764e64cad250da8292ab6",
+      "files": {
+        "body_block_reaction_report.py": "9a1908f5a2966b8c28ae7a985bc91c874648234ef34a87ede2e2e1bfd11bb3db",
+        "body_combat_report.py": "644aeb54ff420c33833ddc093e76d00eb5ec8657a1e239d141cffc947efa36c4",
+        "body_stage8_final_report.py": "f00934d41add564d09d97f3f36e4a14c25d8ec1f948453c9deec3155d79820c7"
+      },
+      "combat_helper_correction": {
+        "kind": "shadow_native_comparator_flag_only",
+        "original_helper_sha256": "7183079af6391a7dd30d985e8673c90a5945e0f6e371fb48ea24d0eb9bf0651d",
+        "original_failed_known_report": {
+          "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v3/validation/known-audit-v1/report.json",
+          "sha256": "c799ba53952377d3595f1885088e6a3f6dd05bd0f75f8ce9806f1c073f3b1588"
+        }
+      }
+    }
+  },
+  "known_audit": {
+    "source": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v3/validation/known-audit-code-v2/known-audit.json",
+      "size_bytes": 485,
+      "sha256": "cc03b88e549c35e932508f38d8fa8423d51288914c791bfb838a37d073538f54"
+    },
+    "binding": {
+      "schema_version": 1,
+      "kind": "body_stage8_known_runtime_audit_snapshot",
+      "environment_sha256": "baffb2ac5bad61bd4cd2ba33a65725ab1377ac7a6bca7ebaaa3d39f1cf199ebe",
+      "declaration_sha256": "053b09e108a141a03acd25f841b157a67b855cc0263764e64cad250da8292ab6",
+      "final_audit_manifest_sha256": "2a2c374d34a0533266b94c4bf17343398714cf0418847aaca1992c10eb0960d7",
+      "files": {
+        "body_stage8_known_report.py": "747845004224b1cfafa9aa47dab19f1b68aa65bf5e47b4433b7b2b8dfdcf14fc"
+      }
+    }
+  }
+}

@@ -256,6 +256,9 @@ target_link_libraries(Gothic2Notr PRIVATE AiBridge)
 if(UNIX AND NOT IOS AND NOT ANDROID)
   add_executable(gothic-body-runner game/bodyrunner.cpp)
   target_link_libraries(gothic-body-runner PRIVATE OpenGothic AiBridge)
+  # Pure production resolver/command gates: no assets, simulation or rendering device.
+  add_executable(gothic-body-resolver-test tests/body_resolver_test.cpp)
+  target_link_libraries(gothic-body-resolver-test PRIVATE OpenGothic AiBridge)
 endif()
 
 # Asset-free contracts; run explicitly with their check-* targets.

@@ -3,6 +3,13 @@
 
 #include <Tempest/Platform>
 #include <Tempest/Log>
+#include <stdexcept>
+
+namespace {
+std::atomic_bool serialRequested{false};
+std::atomic_bool executionStarted{false};
+std::atomic_bool poolCreated{false};
+}
 
 #if defined(__WINDOWS__)
 #include <windows.h>
@@ -79,6 +86,7 @@ Workers::Workers() {
       });
     ++id;
     }
+  poolCreated.store(true,std::memory_order_relaxed);
   }
 
 Workers::~Workers() {
@@ -93,6 +101,25 @@ Workers::~Workers() {
 Workers &Workers::inst() {
   static Workers w;
   return w;
+  }
+
+void Workers::setSerialExecution(bool enabled) {
+  if(executionStarted.load(std::memory_order_relaxed))
+    throw std::logic_error("worker execution must be configured before the first dispatch");
+  serialRequested.store(enabled,std::memory_order_relaxed);
+  }
+
+bool Workers::serialExecution() {
+  return serialRequested.load(std::memory_order_relaxed);
+  }
+
+bool Workers::workerPoolCreated() {
+  return poolCreated.load(std::memory_order_relaxed);
+  }
+
+bool Workers::useSerialExecution() {
+  executionStarted.store(true,std::memory_order_relaxed);
+  return serialExecution();
   }
 
 uint8_t Workers::maxThreads() {

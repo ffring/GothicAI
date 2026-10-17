@@ -1,0 +1,856 @@
+{
+  "kind": "body-bc-overfit",
+  "schema_version": 1,
+  "passed": true,
+  "target_accuracy": 0.98,
+  "architecture": "mlp",
+  "seed": 17,
+  "source_split": "train",
+  "selected_sequences": [
+    {
+      "episode_id": "native-17-0",
+      "identity": [
+        1791924734860861984,
+        7,
+        0,
+        1
+      ],
+      "first_observation_seq": 403,
+      "last_observation_seq": 452
+    },
+    {
+      "episode_id": "native-17-0",
+      "identity": [
+        1791924734860861984,
+        7,
+        0,
+        2
+      ],
+      "first_observation_seq": 147,
+      "last_observation_seq": 199
+    },
+    {
+      "episode_id": "demo-train-101-0",
+      "identity": [
+        1791931676723213619,
+        34,
+        33,
+        1
+      ],
+      "first_observation_seq": 62,
+      "last_observation_seq": 107
+    },
+    {
+      "episode_id": "native-17-0",
+      "identity": [
+        1791924734860861984,
+        7,
+        0,
+        1
+      ],
+      "first_observation_seq": 441,
+      "last_observation_seq": 488
+    },
+    {
+      "episode_id": "native-89-0",
+      "identity": [
+        1791924734860861984,
+        27,
+        0,
+        1
+      ],
+      "first_observation_seq": 256,
+      "last_observation_seq": 304
+    },
+    {
+      "episode_id": "demo-train-101-0",
+      "identity": [
+        1791931676723213619,
+        34,
+        33,
+        1
+      ],
+      "first_observation_seq": 99,
+      "last_observation_seq": 142
+    },
+    {
+      "episode_id": "demo-train-101-0",
+      "identity": [
+        1791931676723213619,
+        34,
+        33,
+        1
+      ],
+      "first_observation_seq": 135,
+      "last_observation_seq": 176
+    },
+    {
+      "episode_id": "native-17-0",
+      "identity": [
+        1791924734860861984,
+        7,
+        0,
+        1
+      ],
+      "first_observation_seq": 1,
+      "last_observation_seq": 43
+    },
+    {
+      "episode_id": "native-17-0",
+      "identity": [
+        1791924734860861984,
+        7,
+        0,
+        1
+      ],
+      "first_observation_seq": 104,
+      "last_observation_seq": 150
+    },
+    {
+      "episode_id": "native-17-0",
+      "identity": [
+        1791924734860861984,
+        7,
+        0,
+        1
+      ],
+      "first_observation_seq": 246,
+      "last_observation_seq": 293
+    },
+    {
+      "episode_id": "native-17-0",
+      "identity": [
+        1791924734860861984,
+        7,
+        0,
+        1
+      ],
+      "first_observation_seq": 284,
+      "last_observation_seq": 332
+    }
+  ],
+  "steps": 20,
+  "before": {
+    "label_count": 18,
+    "accuracy": 0.05555555555555555,
+    "macro_f1": 0.009569377990430622,
+    "macro_f1_classes": [
+      "approach",
+      "turn_to_target",
+      "strafe_left",
+      "strafe_right",
+      "jump_back",
+      "attack_front",
+      "attack_left",
+      "attack_right",
+      "block",
+      "wait_200",
+      "wait_300"
+    ],
+    "macro_f1_rule": "All included actions 1..11; absent support and zero division contribute zero.",
+    "macro_f1_supported": 0.009569377990430622,
+    "per_action": [
+      {
+        "action_id": 0,
+        "action": "continue",
+        "support": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 1,
+        "action": "approach",
+        "support": 4,
+        "tp": 0,
+        "fp": 0,
+        "fn": 4,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 2,
+        "action": "turn_to_target",
+        "support": 1,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 3,
+        "action": "strafe_left",
+        "support": 2,
+        "tp": 0,
+        "fp": 0,
+        "fn": 2,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 4,
+        "action": "strafe_right",
+        "support": 3,
+        "tp": 0,
+        "fp": 0,
+        "fn": 3,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 5,
+        "action": "jump_back",
+        "support": 1,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 6,
+        "action": "attack_front",
+        "support": 1,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 7,
+        "action": "attack_left",
+        "support": 1,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 8,
+        "action": "attack_right",
+        "support": 1,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 9,
+        "action": "block",
+        "support": 2,
+        "tp": 0,
+        "fp": 0,
+        "fn": 2,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 10,
+        "action": "wait_200",
+        "support": 1,
+        "tp": 1,
+        "fp": 17,
+        "fn": 0,
+        "precision": 0.05555555555555555,
+        "recall": 1.0,
+        "f1": 0.10526315789473684
+      },
+      {
+        "action_id": 11,
+        "action": "wait_300",
+        "support": 1,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      }
+    ],
+    "confusion": [
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ]
+    ],
+    "missing_heldout_actions": [],
+    "nll": 2.210144148932563,
+    "weighted_nll": 2.2094163785022918,
+    "wall_seconds": 0.018482630141079426,
+    "sequence_count": 11,
+    "forwarded_sequence_count": 11,
+    "empty_sequences_skipped": 0,
+    "burn_in_labels_excluded": true
+  },
+  "after": {
+    "label_count": 18,
+    "accuracy": 1.0,
+    "macro_f1": 1.0,
+    "macro_f1_classes": [
+      "approach",
+      "turn_to_target",
+      "strafe_left",
+      "strafe_right",
+      "jump_back",
+      "attack_front",
+      "attack_left",
+      "attack_right",
+      "block",
+      "wait_200",
+      "wait_300"
+    ],
+    "macro_f1_rule": "All included actions 1..11; absent support and zero division contribute zero.",
+    "macro_f1_supported": 1.0,
+    "per_action": [
+      {
+        "action_id": 0,
+        "action": "continue",
+        "support": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      {
+        "action_id": 1,
+        "action": "approach",
+        "support": 4,
+        "tp": 4,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 2,
+        "action": "turn_to_target",
+        "support": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 3,
+        "action": "strafe_left",
+        "support": 2,
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 4,
+        "action": "strafe_right",
+        "support": 3,
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 5,
+        "action": "jump_back",
+        "support": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 6,
+        "action": "attack_front",
+        "support": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 7,
+        "action": "attack_left",
+        "support": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 8,
+        "action": "attack_right",
+        "support": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 9,
+        "action": "block",
+        "support": 2,
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 10,
+        "action": "wait_200",
+        "support": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      {
+        "action_id": 11,
+        "action": "wait_300",
+        "support": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    ],
+    "confusion": [
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ]
+    ],
+    "missing_heldout_actions": [],
+    "nll": 0.00029975206901629764,
+    "weighted_nll": 0.00013590379922928368,
+    "wall_seconds": 0.015933968126773834,
+    "sequence_count": 11,
+    "forwarded_sequence_count": 11,
+    "empty_sequences_skipped": 0,
+    "burn_in_labels_excluded": true
+  },
+  "history": [
+    {
+      "step": 10,
+      "accuracy": 0.9444444444444444,
+      "nll": 0.13847538955613142
+    },
+    {
+      "step": 20,
+      "accuracy": 1.0,
+      "nll": 0.00029975206901629764
+    }
+  ],
+  "included_actions": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
+  "selected_support_by_action": {
+    "approach": 4,
+    "turn_to_target": 1,
+    "strafe_left": 2,
+    "strafe_right": 3,
+    "jump_back": 1,
+    "attack_front": 1,
+    "attack_left": 1,
+    "attack_right": 1,
+    "block": 2,
+    "wait_200": 1,
+    "wait_300": 1
+  },
+  "selected_support_ready": true,
+  "wall_seconds": 0.7759567049797624,
+  "config": {
+    "architecture": "mlp",
+    "seed": 17,
+    "epochs": 120,
+    "batch_size": 8,
+    "chunk_length": 32,
+    "burn_in": 8,
+    "learning_rate": 0.003,
+    "weight_decay": 0.0,
+    "gradient_clip": 1.0,
+    "patience": 25,
+    "threads": 2,
+    "device": "cpu",
+    "stack_size": 8,
+    "max_wall_seconds": 600.0,
+    "minimum_cuda_free_mib": 1536
+  },
+  "checkpoint_sha256": "7ae478626086cb3f4af51695eaae987141c3b9dc5f9b759306ec5c2f1b32aafc",
+  "deployment_candidate": false
+}

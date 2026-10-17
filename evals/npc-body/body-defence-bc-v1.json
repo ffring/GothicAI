@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "kind": "body_defence_child_bc",
+  "declared_before_measurement": true,
+  "reference": {
+    "run": "stage8-combat-v6",
+    "dataset_sha256": "f75fdcb02ec9389bab77fac1ef2da661d5f48f61add36727a1a57c6ed3fbcfe6",
+    "normalizer_sha256": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6"
+  },
+  "engine_proof_run_name": "stage8-motor-v10",
+  "engine_proof_binding": "Root must fill the actual same-child-binary motor run before freezing; setup-probe full native17/29/43 parity is required. The v3 preparation helper is not the child binary proof.",
+  "new_data": {
+    "collection_dir": "defence-demonstrations",
+    "episode_count": 72,
+    "teacher_id": "observed-reactive-defence-v1",
+    "train_seeds": [181, 191, 193, 197, 199, 211],
+    "eval_seeds": [223, 227],
+    "required_usable_block_labels": {"train": 36, "eval": 12, "test": 12, "ood": 12},
+    "model_sequence": "actual prepared primary periodic source; cold hidden state and dt0; all preparation raw retained",
+    "normalization": "recompute using all combined train streams only"
+  },
+  "dataset": {
+    "sampling_view": "periodic-v1",
+    "feature_version": "body-periodic-numeric-v1",
+    "action_version": 1,
+    "included_actions": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    "minimum_train_labels_per_action": 20,
+    "max_label_age_game_ms": 67,
+    "expected_episodes": 207,
+    "inherited_assignment_changes": 0,
+    "legacy_excluded_eval_reopened": false
+  },
+  "training": {
+    "seeds": [11, 29, 43],
+    "epochs": 120,
+    "patience": 25,
+    "batch_size": 8,
+    "chunk_length": 64,
+    "burn_in": 32,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "max_wall_seconds": 1800,
+    "device": "cpu",
+    "threads": 2,
+    "selection_split": "eval",
+    "selection_view": "full_episode",
+    "evaluation_mode": "continuous",
+    "selection_criterion": "macro_f1_then_unweighted_nll",
+    "test_and_ood_selection": false,
+    "architectures": ["gru", "mlp"],
+    "stack_size": 8
+  },
+  "train_cuda": {
+    "explicit_phase_only": true,
+    "device": "cuda",
+    "minimum_cuda_free_mib": 3072,
+    "cuda_memory_fraction": 0.04,
+    "cuda_memory_limit_mib": 1024,
+    "same_selection_algorithm": true,
+    "allocation_cap_excludes_context_and_non_allocator_memory": true,
+    "verify_overfit_evaluate_device": "cpu",
+    "restart_or_service_changes": false
+  },
+  "verification": {"seed": 17, "warmup": 100, "iterations": 500, "model_step_p95_budget_ms": 5},
+  "overfit": {"source_split": "train", "seed": 17, "steps": 500, "max_chunks": 11, "learning_rate": 0.003, "weight_decay": 0, "target_accuracy": 0.98, "max_wall_seconds": 600, "deployment_candidate": false},
+  "resources": {"host": "dev-ubuntu", "threads": 2, "cpu_quota_percent": 200, "memory_max_gib": 6, "protected_services_unchanged": true, "docker_changes_allowed": false},
+  "acceptance": {"selection_never_reads_fresh_screen": true, "no_test_or_ood_for_selection": true, "strict_block_requires_action9_and_real_blocked_hit": true, "jump_or_kill_is_block_success": false}
+}

@@ -1,0 +1,44 @@
+{
+  "pid": 969033,
+  "clock_domain": "linux-clock-monotonic",
+  "clock_ticks_per_second": 100,
+  "page_size_bytes": 4096,
+  "cgroup": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/gothic-body-native-cpu-probe-v2.service",
+  "hierarchy_limits": [
+    {
+      "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/gothic-body-native-cpu-probe-v2.service",
+      "cpu.max": "200000 100000",
+      "memory.max": "6442450944"
+    },
+    {
+      "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice",
+      "cpu.max": "max 100000",
+      "memory.max": "max"
+    },
+    {
+      "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service",
+      "cpu.max": "max 100000",
+      "memory.max": "max"
+    },
+    {
+      "path": "/sys/fs/cgroup/user.slice/user-1000.slice",
+      "cpu.max": "max 100000",
+      "memory.max": "max"
+    },
+    {
+      "path": "/sys/fs/cgroup/user.slice",
+      "cpu.max": "max 100000",
+      "memory.max": "max",
+      "cpuset.cpus.effective": "0-11"
+    },
+    {
+      "path": "/sys/fs/cgroup",
+      "cpuset.cpus.effective": "0-11"
+    }
+  ],
+  "cgroup_scope": "native runner plus collector/sampler and any children",
+  "process_scope": "native runner including its worker threads",
+  "samples": 601,
+  "bytes": 751083,
+  "error": null
+}

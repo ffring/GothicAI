@@ -1,0 +1,2446 @@
+{
+  "schema_version": 1,
+  "kind": "body_stage8_known_saved_runtime_report",
+  "passed": true,
+  "issues": [],
+  "closed_known_stages_only": true,
+  "load_read": false,
+  "fresh_screening_read": false,
+  "stage8_quality_credit": false,
+  "model_forward_executed": false,
+  "engine_started": false,
+  "created_at_utc": "2026-10-14T17:35:02.322848+00:00",
+  "audit_wall_s": 39.31428438005969,
+  "candidate_checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "normalization_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "environment_sha256": "3c077c4624b4987e1b5279a39f568057c4a2e48f8dfc94013432a4261102806e",
+  "declaration_sha256": "ef7844ecbca3038a22d4e191fe4ae4a79a74546b63963a450f0ab84cf575a5fc",
+  "known_reader_sha256": "747845004224b1cfafa9aa47dab19f1b68aa65bf5e47b4433b7b2b8dfdcf14fc",
+  "external_reader_binding": {
+    "audit_snapshot_sha256": "508cf0b10f8a4cf4b7d70054ca408e020528b92e17dede52e1195610d0fe08aa",
+    "reporter_sha256": "aecb6b1f23088254820c740c53dd31c50f193a729bb5b4ffe58cd77c7aeccc8c",
+    "combat_helper_correction": null
+  },
+  "summary_kind": "minimal_closed_known11_extraction_during_load_lock_wait",
+  "source_report": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v11/validation/known-audit-v1/report.json",
+    "size_bytes": 1368003,
+    "sha256": "8db1117197e669210090cb6f150182990b4a64474d7d78113fd2d45c4c9f1a6f"
+  },
+  "audit_process_wall_s_parent_reported": 39.393,
+  "episode_counts": {
+    "shadow": 3,
+    "ordinary_realtime": 24,
+    "realtime_reaction": 6
+  },
+  "episodes": {
+    "shadow": [
+      {
+        "name": "shadow-223-0-native",
+        "policy": "native",
+        "task": "native_duel",
+        "outcome": "time_limit",
+        "quality_credit": false,
+        "credited_success": false,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "e0e3644e90639921d18b773af665c319d1e52eda6756400601d32097ba07d7b6",
+          "visibility_records": 1671,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {},
+        "visibility": {
+          "rows": 1671,
+          "actors": 2,
+          "causes": {
+            "visible": 1408,
+            "outside_pose_cone": 263
+          },
+          "native_query_matches": true,
+          "paired_rows": 1671,
+          "paired_causes": {
+            "visible": 1408,
+            "outside_pose_cone": 263
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "shadow-223-0-gru",
+        "policy": "gru",
+        "task": "native_duel",
+        "outcome": "time_limit",
+        "quality_credit": false,
+        "credited_success": false,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "d06697325218657be4ba19e7c6720cfad8d578cb0cfe0b8119c7338c06460d25",
+          "visibility_records": 1671,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 401,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 0,
+          "rejected_commands": 0,
+          "eligible_opportunities": 0,
+          "neural_control_fraction": null,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 1671,
+          "actors": 2,
+          "causes": {
+            "visible": 1408,
+            "outside_pose_cone": 263
+          },
+          "native_query_matches": true,
+          "paired_rows": 1671,
+          "paired_causes": {
+            "visible": 1408,
+            "outside_pose_cone": 263
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "shadow-223-0-mlp",
+        "policy": "mlp",
+        "task": "native_duel",
+        "outcome": "time_limit",
+        "quality_credit": false,
+        "credited_success": false,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "3eec8627d39b4d0dc3f1052088b87a96767870890eb770d0575a80a2b58f817a",
+          "visibility_records": 1671,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 401,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 0,
+          "rejected_commands": 0,
+          "eligible_opportunities": 0,
+          "neural_control_fraction": null,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 1671,
+          "actors": 2,
+          "causes": {
+            "visible": 1408,
+            "outside_pose_cone": 263
+          },
+          "native_query_matches": true,
+          "paired_rows": 1671,
+          "paired_causes": {
+            "visible": 1408,
+            "outside_pose_cone": 263
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      }
+    ],
+    "ordinary_realtime": [
+      {
+        "name": "realtime-distance-223-0-native",
+        "policy": "native",
+        "task": "distance",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "874a603a82ec2aed57273eeef5cd3312796f3e78fa3d2ae5aee8ce20e523f897",
+          "visibility_records": 127,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {},
+        "visibility": {
+          "rows": 127,
+          "actors": 2,
+          "causes": {
+            "visible": 127
+          },
+          "native_query_matches": true,
+          "paired_rows": 127,
+          "paired_causes": {
+            "visible": 127
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-distance-223-0-gru",
+        "policy": "gru",
+        "task": "distance",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 29,
+            "p95": 1.174632
+          },
+          "observation_to_arbitration_ms": {
+            "count": 2,
+            "p95": 3.239391
+          },
+          "collector_to_command_send_ms": {
+            "count": 2,
+            "p95": 1.432975
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "f1e33261a187c9657d7a3841480cb46e9aadcc01db1038111f91e5e1035686fe",
+          "visibility_records": 120,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 29,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 2,
+          "rejected_commands": 0,
+          "eligible_opportunities": 2,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 120,
+          "actors": 2,
+          "causes": {
+            "visible": 120
+          },
+          "native_query_matches": true,
+          "paired_rows": 120,
+          "paired_causes": {
+            "visible": 120
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-distance-223-0-mlp",
+        "policy": "mlp",
+        "task": "distance",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 29,
+            "p95": 1.40857
+          },
+          "observation_to_arbitration_ms": {
+            "count": 2,
+            "p95": 3.610267
+          },
+          "collector_to_command_send_ms": {
+            "count": 2,
+            "p95": 1.427435
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "fd199323cf1308f467c4ee8bddcbbc7dd440cded86b422d7facf5b7bc975953d",
+          "visibility_records": 120,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 29,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 2,
+          "rejected_commands": 0,
+          "eligible_opportunities": 2,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 120,
+          "actors": 2,
+          "causes": {
+            "visible": 120
+          },
+          "native_query_matches": true,
+          "paired_rows": 120,
+          "paired_causes": {
+            "visible": 120
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-attack-223-0-native",
+        "policy": "native",
+        "task": "attack",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "6ca8ac6f8fe8d1014b6ffb7a8a6d27ae7bec9e986ba3faf6d3c1984e2971acbb",
+          "visibility_records": 41,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {},
+        "visibility": {
+          "rows": 41,
+          "actors": 2,
+          "causes": {
+            "visible": 41
+          },
+          "native_query_matches": true,
+          "paired_rows": 41,
+          "paired_causes": {
+            "visible": 41
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-attack-223-0-gru",
+        "policy": "gru",
+        "task": "attack",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 3,
+            "p95": 1.405434
+          },
+          "observation_to_arbitration_ms": {
+            "count": 1,
+            "p95": 3.800553
+          },
+          "collector_to_command_send_ms": {
+            "count": 1,
+            "p95": 1.818398
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "307b1d4a6dd3cba969e404f3216bc05f93ee9abfbc3d435cf9904c9e93da1e7c",
+          "visibility_records": 15,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 3,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 1,
+          "rejected_commands": 0,
+          "eligible_opportunities": 1,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 15,
+          "actors": 2,
+          "causes": {
+            "visible": 15
+          },
+          "native_query_matches": true,
+          "paired_rows": 15,
+          "paired_causes": {
+            "visible": 15
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-attack-223-0-mlp",
+        "policy": "mlp",
+        "task": "attack",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 19,
+            "p95": 1.396968
+          },
+          "observation_to_arbitration_ms": {
+            "count": 2,
+            "p95": 3.549391
+          },
+          "collector_to_command_send_ms": {
+            "count": 2,
+            "p95": 1.443806
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "ad597047bb3a385a33abc4e4fed60c681a5f85c66aea12d74e227b431e085bcf",
+          "visibility_records": 84,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 19,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 2,
+          "rejected_commands": 0,
+          "eligible_opportunities": 2,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 84,
+          "actors": 2,
+          "causes": {
+            "visible": 84
+          },
+          "native_query_matches": true,
+          "paired_rows": 84,
+          "paired_causes": {
+            "visible": 84
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-block-223-0-native",
+        "policy": "native",
+        "task": "block",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "686cd1bed8b7962976ead094dea43c1ac562684d932127c8e7f10556851598ee",
+          "visibility_records": 24,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {},
+        "visibility": {
+          "rows": 24,
+          "actors": 2,
+          "causes": {
+            "visible": 24
+          },
+          "native_query_matches": true,
+          "paired_rows": 24,
+          "paired_causes": {
+            "visible": 24
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-block-223-0-gru",
+        "policy": "gru",
+        "task": "block",
+        "outcome": "time_limit",
+        "quality_credit": true,
+        "credited_success": false,
+        "latency": {
+          "model_step_ms": {
+            "count": 100,
+            "p95": 1.435901
+          },
+          "observation_to_arbitration_ms": {
+            "count": 10,
+            "p95": 4.073213
+          },
+          "collector_to_command_send_ms": {
+            "count": 10,
+            "p95": 1.905179
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "ccb068f2bbc05bef693f590fcb7a9f531e17ee313bf008eb8e314933dda130aa",
+          "visibility_records": 449,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 100,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 10,
+          "rejected_commands": 0,
+          "eligible_opportunities": 10,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 449,
+          "actors": 2,
+          "causes": {
+            "visible": 449
+          },
+          "native_query_matches": true,
+          "paired_rows": 449,
+          "paired_causes": {
+            "visible": 449
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-block-223-0-mlp",
+        "policy": "mlp",
+        "task": "block",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 5,
+            "p95": 1.378514
+          },
+          "observation_to_arbitration_ms": {
+            "count": 1,
+            "p95": 3.987012
+          },
+          "collector_to_command_send_ms": {
+            "count": 1,
+            "p95": 2.140721
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "a5fbc58c7ff0124b0e84b4fc99cf7b9afca683a6d6c1bc0c1c720c14fe3deb87",
+          "visibility_records": 26,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 5,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 1,
+          "rejected_commands": 0,
+          "eligible_opportunities": 1,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 26,
+          "actors": 2,
+          "causes": {
+            "visible": 26
+          },
+          "native_query_matches": true,
+          "paired_rows": 26,
+          "paired_causes": {
+            "visible": 26
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-native_duel-223-0-native",
+        "policy": "native",
+        "task": "native_duel",
+        "outcome": "death_or_down",
+        "quality_credit": true,
+        "credited_success": false,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "53437d40e6a7dfdc297ae915aaea7bd4306f411f80a826d9e521b7c4625377c1",
+          "visibility_records": 2348,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {},
+        "visibility": {
+          "rows": 2348,
+          "actors": 2,
+          "causes": {
+            "visible": 2027,
+            "outside_pose_cone": 321
+          },
+          "native_query_matches": true,
+          "paired_rows": 2348,
+          "paired_causes": {
+            "visible": 2027,
+            "outside_pose_cone": 321
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-native_duel-223-0-gru",
+        "policy": "gru",
+        "task": "native_duel",
+        "outcome": "death_or_down",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 241,
+            "p95": 1.341324
+          },
+          "observation_to_arbitration_ms": {
+            "count": 22,
+            "p95": 3.307048
+          },
+          "collector_to_command_send_ms": {
+            "count": 22,
+            "p95": 1.976785
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "880acf7944335a1acb4cbd2ca0cea5e0c261a15a1982677393a48a8bda766a0c",
+          "visibility_records": 1071,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 241,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 22,
+          "rejected_commands": 0,
+          "eligible_opportunities": 22,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 1071,
+          "actors": 2,
+          "causes": {
+            "visible": 951,
+            "outside_pose_cone": 120
+          },
+          "native_query_matches": true,
+          "paired_rows": 1071,
+          "paired_causes": {
+            "visible": 951,
+            "outside_pose_cone": 120
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-native_duel-223-0-mlp",
+        "policy": "mlp",
+        "task": "native_duel",
+        "outcome": "death_or_down",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 150,
+            "p95": 1.349579
+          },
+          "observation_to_arbitration_ms": {
+            "count": 12,
+            "p95": 3.422434
+          },
+          "collector_to_command_send_ms": {
+            "count": 12,
+            "p95": 1.925869
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "bc159bfd575c9dd6ce599ca2f0255c7ea787e67402e66e2785ddd890a57acd7a",
+          "visibility_records": 655,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 150,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 12,
+          "rejected_commands": 0,
+          "eligible_opportunities": 12,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 655,
+          "actors": 2,
+          "causes": {
+            "visible": 655
+          },
+          "native_query_matches": true,
+          "paired_rows": 655,
+          "paired_causes": {
+            "visible": 655
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-distance-223-1-native",
+        "policy": "native",
+        "task": "distance",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "e80249e7355238f3376ab4bb6d42d548a39041d38edb0011626aee825880f33b",
+          "visibility_records": 127,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {},
+        "visibility": {
+          "rows": 127,
+          "actors": 2,
+          "causes": {
+            "visible": 127
+          },
+          "native_query_matches": true,
+          "paired_rows": 127,
+          "paired_causes": {
+            "visible": 127
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-distance-223-1-gru",
+        "policy": "gru",
+        "task": "distance",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 29,
+            "p95": 1.372453
+          },
+          "observation_to_arbitration_ms": {
+            "count": 2,
+            "p95": 3.487796
+          },
+          "collector_to_command_send_ms": {
+            "count": 2,
+            "p95": 1.754397
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "f35922be6a20f796569d1997c8b8a6da267db9b46d537a0270c0d3aff6eb6bed",
+          "visibility_records": 120,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 29,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 2,
+          "rejected_commands": 0,
+          "eligible_opportunities": 2,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 120,
+          "actors": 2,
+          "causes": {
+            "visible": 120
+          },
+          "native_query_matches": true,
+          "paired_rows": 120,
+          "paired_causes": {
+            "visible": 120
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-distance-223-1-mlp",
+        "policy": "mlp",
+        "task": "distance",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 29,
+            "p95": 1.261274
+          },
+          "observation_to_arbitration_ms": {
+            "count": 2,
+            "p95": 3.069281
+          },
+          "collector_to_command_send_ms": {
+            "count": 2,
+            "p95": 1.475425
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "78388f030675127b61fc865267ef699853f89a672dc0fa724b55929811a07b5f",
+          "visibility_records": 120,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 29,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 2,
+          "rejected_commands": 0,
+          "eligible_opportunities": 2,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 120,
+          "actors": 2,
+          "causes": {
+            "visible": 120
+          },
+          "native_query_matches": true,
+          "paired_rows": 120,
+          "paired_causes": {
+            "visible": 120
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-attack-223-1-native",
+        "policy": "native",
+        "task": "attack",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "d11259f5bfcfb45d8f7657164cfd60b5b5b3e3ed641abd2c381294bce25df1d9",
+          "visibility_records": 41,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {},
+        "visibility": {
+          "rows": 41,
+          "actors": 2,
+          "causes": {
+            "visible": 41
+          },
+          "native_query_matches": true,
+          "paired_rows": 41,
+          "paired_causes": {
+            "visible": 41
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-attack-223-1-gru",
+        "policy": "gru",
+        "task": "attack",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 3,
+            "p95": 1.242117
+          },
+          "observation_to_arbitration_ms": {
+            "count": 1,
+            "p95": 3.145845
+          },
+          "collector_to_command_send_ms": {
+            "count": 1,
+            "p95": 1.423728
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "650e2059e6280768a0a3a06231ea304bd6d154ad2b4bf78c0eecfd0fe354444f",
+          "visibility_records": 15,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 3,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 1,
+          "rejected_commands": 0,
+          "eligible_opportunities": 1,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 15,
+          "actors": 2,
+          "causes": {
+            "visible": 15
+          },
+          "native_query_matches": true,
+          "paired_rows": 15,
+          "paired_causes": {
+            "visible": 15
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-attack-223-1-mlp",
+        "policy": "mlp",
+        "task": "attack",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 19,
+            "p95": 1.405715
+          },
+          "observation_to_arbitration_ms": {
+            "count": 2,
+            "p95": 3.272243
+          },
+          "collector_to_command_send_ms": {
+            "count": 2,
+            "p95": 1.366731
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "42312e132609dd5a047798d3ac36399e643e8f1f21d8b742b15b2d960d95e683",
+          "visibility_records": 84,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 19,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 2,
+          "rejected_commands": 0,
+          "eligible_opportunities": 2,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 84,
+          "actors": 2,
+          "causes": {
+            "visible": 84
+          },
+          "native_query_matches": true,
+          "paired_rows": 84,
+          "paired_causes": {
+            "visible": 84
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-block-223-1-native",
+        "policy": "native",
+        "task": "block",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "69802c914cca08cf90eb43080c4d9832f9c8cc76751ad311c807e11df50ffeee",
+          "visibility_records": 24,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {},
+        "visibility": {
+          "rows": 24,
+          "actors": 2,
+          "causes": {
+            "visible": 24
+          },
+          "native_query_matches": true,
+          "paired_rows": 24,
+          "paired_causes": {
+            "visible": 24
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-block-223-1-gru",
+        "policy": "gru",
+        "task": "block",
+        "outcome": "time_limit",
+        "quality_credit": true,
+        "credited_success": false,
+        "latency": {
+          "model_step_ms": {
+            "count": 100,
+            "p95": 1.363746
+          },
+          "observation_to_arbitration_ms": {
+            "count": 10,
+            "p95": 3.761138
+          },
+          "collector_to_command_send_ms": {
+            "count": 10,
+            "p95": 1.884852
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "a524c32ce0b126a814f26b9d2a22c09d1a6b87b91c6c4b234eccb3b6057cfe26",
+          "visibility_records": 449,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 100,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 10,
+          "rejected_commands": 0,
+          "eligible_opportunities": 10,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 449,
+          "actors": 2,
+          "causes": {
+            "visible": 449
+          },
+          "native_query_matches": true,
+          "paired_rows": 449,
+          "paired_causes": {
+            "visible": 449
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-block-223-1-mlp",
+        "policy": "mlp",
+        "task": "block",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 5,
+            "p95": 1.139616
+          },
+          "observation_to_arbitration_ms": {
+            "count": 1,
+            "p95": 3.681069
+          },
+          "collector_to_command_send_ms": {
+            "count": 1,
+            "p95": 1.812687
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "d8adebabf372b1afbc1bbbfd69097add169515ff75464bbb32e8fe77d2a81aa7",
+          "visibility_records": 26,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 5,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 1,
+          "rejected_commands": 0,
+          "eligible_opportunities": 1,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 26,
+          "actors": 2,
+          "causes": {
+            "visible": 26
+          },
+          "native_query_matches": true,
+          "paired_rows": 26,
+          "paired_causes": {
+            "visible": 26
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-native_duel-223-1-native",
+        "policy": "native",
+        "task": "native_duel",
+        "outcome": "death_or_down",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "92e85b100f70e5355b4b02aea2f81a42c19a5a0e260e0568e0922f60839e7abb",
+          "visibility_records": 1204,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {},
+        "visibility": {
+          "rows": 1204,
+          "actors": 2,
+          "causes": {
+            "visible": 1073,
+            "outside_pose_cone": 131
+          },
+          "native_query_matches": true,
+          "paired_rows": 1204,
+          "paired_causes": {
+            "visible": 1073,
+            "outside_pose_cone": 131
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-native_duel-223-1-gru",
+        "policy": "gru",
+        "task": "native_duel",
+        "outcome": "death_or_down",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 263,
+            "p95": 1.421234
+          },
+          "observation_to_arbitration_ms": {
+            "count": 25,
+            "p95": 3.165472
+          },
+          "collector_to_command_send_ms": {
+            "count": 25,
+            "p95": 1.681561
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "f97ced76969f9b6d24b74186b35aff20610a061bf67c602e2cb1ded639a90150",
+          "visibility_records": 1166,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 263,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 25,
+          "rejected_commands": 0,
+          "eligible_opportunities": 25,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 1166,
+          "actors": 2,
+          "causes": {
+            "visible": 1054,
+            "outside_pose_cone": 112
+          },
+          "native_query_matches": true,
+          "paired_rows": 1166,
+          "paired_causes": {
+            "visible": 1054,
+            "outside_pose_cone": 112
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      },
+      {
+        "name": "realtime-native_duel-223-1-mlp",
+        "policy": "mlp",
+        "task": "native_duel",
+        "outcome": "death_or_down",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 150,
+            "p95": 1.278505
+          },
+          "observation_to_arbitration_ms": {
+            "count": 12,
+            "p95": 3.803097
+          },
+          "collector_to_command_send_ms": {
+            "count": 12,
+            "p95": 1.66494
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "ecb7001a30a19b0ae2e628bf2a20ab2d5d62500eb5e781d9edddc2747257582b",
+          "visibility_records": 655,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "runtime": {
+          "processed_periodic_inputs": 150,
+          "model_actor_ids": [
+            1
+          ],
+          "accepted_commands": 12,
+          "rejected_commands": 0,
+          "eligible_opportunities": 12,
+          "neural_control_fraction": 1.0,
+          "terminal_censored_commands": 0,
+          "terminal_memory_reset": true,
+          "masked_refreshes": []
+        },
+        "visibility": {
+          "rows": 655,
+          "actors": 2,
+          "causes": {
+            "visible": 655
+          },
+          "native_query_matches": true,
+          "paired_rows": 655,
+          "paired_causes": {
+            "visible": 655
+          },
+          "post_handoff_retarget_rows": 0
+        }
+      }
+    ],
+    "realtime_reaction": [
+      {
+        "name": "block-reaction-223-0-native",
+        "policy": "native",
+        "task": "block",
+        "outcome": "time_limit",
+        "quality_credit": true,
+        "credited_success": false,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "93d18435f982fe5521158a321adcce2c78ac6cb181f7d85954db6718dac2a484",
+          "visibility_records": 408,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "actual_physics": {
+          "linked_attack_hits": 0,
+          "linked_opponent_hp_loss": 0,
+          "linked_blocked_hits": 0,
+          "primary_mapping": [
+            3
+          ],
+          "opponent_mapping": [
+            4
+          ],
+          "raw_counters": {
+            "primary": {
+              "received_damage": 70,
+              "outgoing_damage": 0,
+              "blocked_hits": 0
+            },
+            "opponent": {
+              "received_damage": 0,
+              "outgoing_damage": 70,
+              "blocked_hits": 0
+            }
+          },
+          "issues": []
+        },
+        "defense_reactions": null,
+        "runtime": {
+          "processed_inputs": 0,
+          "runtime_fallbacks": 0,
+          "eligible_opportunities": 0,
+          "accepted_model_commands": 0,
+          "healthy_fraction": null
+        },
+        "visibility": {
+          "rows": 408,
+          "actors": 2,
+          "causes": {
+            "visible": 408
+          },
+          "native_query_matches": true,
+          "paired_rows": 408,
+          "paired_causes": {
+            "visible": 408
+          },
+          "post_handoff_retarget_rows": 0
+        },
+        "preparation": {
+          "prepared_game_ms": 16361,
+          "anchor_observation_seq": 5,
+          "feature_sha256": "0f57ff21aaad6558015d740e6be2cfe725ff65e7139ece2a721dcef5e1afb9b7",
+          "attacker_started_game_ms": 16361,
+          "first_dt_ms": 0,
+          "prep_model_updates": 0,
+          "prep_primary_actions": 0,
+          "prep_rng_unchanged": true
+        }
+      },
+      {
+        "name": "block-reaction-223-0-gru",
+        "policy": "gru",
+        "task": "block",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 4,
+            "p95": 1.168049
+          },
+          "observation_to_arbitration_ms": {
+            "count": 1,
+            "p95": 6.862872
+          },
+          "collector_to_command_send_ms": {
+            "count": 1,
+            "p95": 5.434115
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "98fbb485151eac7829e6c5c3af542fbd461e37e5967bca056589612cc4a6de16",
+          "visibility_records": 25,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "actual_physics": {
+          "linked_attack_hits": 0,
+          "linked_opponent_hp_loss": 0,
+          "linked_blocked_hits": 1,
+          "primary_mapping": [
+            3
+          ],
+          "opponent_mapping": [
+            4
+          ],
+          "raw_counters": {
+            "primary": {
+              "received_damage": 0,
+              "outgoing_damage": 0,
+              "blocked_hits": 1
+            },
+            "opponent": {
+              "received_damage": 0,
+              "outgoing_damage": 0,
+              "blocked_hits": 0
+            }
+          },
+          "issues": []
+        },
+        "defense_reactions": {
+          "linked_reactions": [
+            {
+              "observation_seq": 5,
+              "command_id": 1,
+              "execution_id": 3,
+              "action_id": 9,
+              "observed_windup_game_ms": 16361,
+              "actual_started_game_ms": 16427,
+              "incoming_attempt_game_ms": 16527,
+              "pose_change_seq": 40,
+              "hit_attempt_seq": 59,
+              "defence_result_seq": 60,
+              "reaction_game_ms": 66,
+              "actual_window_game_ms": 166,
+              "hp_preserved": true
+            }
+          ],
+          "censored": {},
+          "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+        },
+        "runtime": {
+          "processed_inputs": 4,
+          "runtime_fallbacks": 0,
+          "fallbacks": [],
+          "declared_runtime_fallbacks": 0,
+          "eligible_opportunities": 1,
+          "accepted_model_commands": 1,
+          "healthy_fraction": 1.0,
+          "terminal_memory_reset": true,
+          "command_fallback_cuts": [],
+          "neural_control_fraction": 1.0
+        },
+        "visibility": {
+          "rows": 25,
+          "actors": 2,
+          "causes": {
+            "visible": 25
+          },
+          "native_query_matches": true,
+          "paired_rows": 25,
+          "paired_causes": {
+            "visible": 25
+          },
+          "post_handoff_retarget_rows": 0
+        },
+        "preparation": {
+          "prepared_game_ms": 16361,
+          "anchor_observation_seq": 5,
+          "feature_sha256": "0f57ff21aaad6558015d740e6be2cfe725ff65e7139ece2a721dcef5e1afb9b7",
+          "attacker_started_game_ms": 16361,
+          "first_dt_ms": 0,
+          "prep_model_updates": 0,
+          "prep_primary_actions": 0,
+          "prep_rng_unchanged": true
+        }
+      },
+      {
+        "name": "block-reaction-223-0-mlp",
+        "policy": "mlp",
+        "task": "block",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 4,
+            "p95": 1.216269
+          },
+          "observation_to_arbitration_ms": {
+            "count": 1,
+            "p95": 7.498032
+          },
+          "collector_to_command_send_ms": {
+            "count": 1,
+            "p95": 5.713087
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "f7cebc42fc3ad7ac2ff7e82b572c3c41c0fe574c5565124590cc7de38c7b9bab",
+          "visibility_records": 25,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "actual_physics": {
+          "linked_attack_hits": 0,
+          "linked_opponent_hp_loss": 0,
+          "linked_blocked_hits": 1,
+          "primary_mapping": [
+            3
+          ],
+          "opponent_mapping": [
+            4
+          ],
+          "raw_counters": {
+            "primary": {
+              "received_damage": 0,
+              "outgoing_damage": 0,
+              "blocked_hits": 1
+            },
+            "opponent": {
+              "received_damage": 0,
+              "outgoing_damage": 0,
+              "blocked_hits": 0
+            }
+          },
+          "issues": []
+        },
+        "defense_reactions": {
+          "linked_reactions": [
+            {
+              "observation_seq": 5,
+              "command_id": 1,
+              "execution_id": 5,
+              "action_id": 9,
+              "observed_windup_game_ms": 16361,
+              "actual_started_game_ms": 16427,
+              "incoming_attempt_game_ms": 16527,
+              "pose_change_seq": 40,
+              "hit_attempt_seq": 59,
+              "defence_result_seq": 60,
+              "reaction_game_ms": 66,
+              "actual_window_game_ms": 166,
+              "hp_preserved": true
+            }
+          ],
+          "censored": {},
+          "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+        },
+        "runtime": {
+          "processed_inputs": 4,
+          "runtime_fallbacks": 0,
+          "fallbacks": [],
+          "declared_runtime_fallbacks": 0,
+          "eligible_opportunities": 1,
+          "accepted_model_commands": 1,
+          "healthy_fraction": 1.0,
+          "terminal_memory_reset": true,
+          "command_fallback_cuts": [],
+          "neural_control_fraction": 1.0
+        },
+        "visibility": {
+          "rows": 25,
+          "actors": 2,
+          "causes": {
+            "visible": 25
+          },
+          "native_query_matches": true,
+          "paired_rows": 25,
+          "paired_causes": {
+            "visible": 25
+          },
+          "post_handoff_retarget_rows": 0
+        },
+        "preparation": {
+          "prepared_game_ms": 16361,
+          "anchor_observation_seq": 5,
+          "feature_sha256": "0f57ff21aaad6558015d740e6be2cfe725ff65e7139ece2a721dcef5e1afb9b7",
+          "attacker_started_game_ms": 16361,
+          "first_dt_ms": 0,
+          "prep_model_updates": 0,
+          "prep_primary_actions": 0,
+          "prep_rng_unchanged": true
+        }
+      },
+      {
+        "name": "block-reaction-223-1-native",
+        "policy": "native",
+        "task": "block",
+        "outcome": "time_limit",
+        "quality_credit": true,
+        "credited_success": false,
+        "latency": null,
+        "native_fallback_boundary": null,
+        "capture_integrity": {
+          "final_integrity_sha256": "0390f244d61c8f187f1c04b2c9bba4ee318612b205e5eeb79a1884f47449211d",
+          "visibility_records": 408,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "actual_physics": {
+          "linked_attack_hits": 0,
+          "linked_opponent_hp_loss": 0,
+          "linked_blocked_hits": 0,
+          "primary_mapping": [
+            3
+          ],
+          "opponent_mapping": [
+            4
+          ],
+          "raw_counters": {
+            "primary": {
+              "received_damage": 70,
+              "outgoing_damage": 0,
+              "blocked_hits": 0
+            },
+            "opponent": {
+              "received_damage": 0,
+              "outgoing_damage": 70,
+              "blocked_hits": 0
+            }
+          },
+          "issues": []
+        },
+        "defense_reactions": null,
+        "runtime": {
+          "processed_inputs": 0,
+          "runtime_fallbacks": 0,
+          "eligible_opportunities": 0,
+          "accepted_model_commands": 0,
+          "healthy_fraction": null
+        },
+        "visibility": {
+          "rows": 408,
+          "actors": 2,
+          "causes": {
+            "visible": 408
+          },
+          "native_query_matches": true,
+          "paired_rows": 408,
+          "paired_causes": {
+            "visible": 408
+          },
+          "post_handoff_retarget_rows": 0
+        },
+        "preparation": {
+          "prepared_game_ms": 16361,
+          "anchor_observation_seq": 5,
+          "feature_sha256": "03194b86606c4af39a4f29f253960210364810a5cc6a9612b249771b84c39dc7",
+          "attacker_started_game_ms": 16361,
+          "first_dt_ms": 0,
+          "prep_model_updates": 0,
+          "prep_primary_actions": 0,
+          "prep_rng_unchanged": true
+        }
+      },
+      {
+        "name": "block-reaction-223-1-gru",
+        "policy": "gru",
+        "task": "block",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 4,
+            "p95": 1.11543
+          },
+          "observation_to_arbitration_ms": {
+            "count": 1,
+            "p95": 7.266407
+          },
+          "collector_to_command_send_ms": {
+            "count": 1,
+            "p95": 5.925685
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "00cade69054bd4349f2d6155b0627711beb4fc86695e0fc04d3fae06585a42d8",
+          "visibility_records": 25,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "actual_physics": {
+          "linked_attack_hits": 0,
+          "linked_opponent_hp_loss": 0,
+          "linked_blocked_hits": 1,
+          "primary_mapping": [
+            3
+          ],
+          "opponent_mapping": [
+            4
+          ],
+          "raw_counters": {
+            "primary": {
+              "received_damage": 0,
+              "outgoing_damage": 0,
+              "blocked_hits": 1
+            },
+            "opponent": {
+              "received_damage": 0,
+              "outgoing_damage": 0,
+              "blocked_hits": 0
+            }
+          },
+          "issues": []
+        },
+        "defense_reactions": {
+          "linked_reactions": [
+            {
+              "observation_seq": 5,
+              "command_id": 1,
+              "execution_id": 8,
+              "action_id": 9,
+              "observed_windup_game_ms": 16361,
+              "actual_started_game_ms": 16427,
+              "incoming_attempt_game_ms": 16527,
+              "pose_change_seq": 40,
+              "hit_attempt_seq": 59,
+              "defence_result_seq": 60,
+              "reaction_game_ms": 66,
+              "actual_window_game_ms": 166,
+              "hp_preserved": true
+            }
+          ],
+          "censored": {},
+          "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+        },
+        "runtime": {
+          "processed_inputs": 4,
+          "runtime_fallbacks": 0,
+          "fallbacks": [],
+          "declared_runtime_fallbacks": 0,
+          "eligible_opportunities": 1,
+          "accepted_model_commands": 1,
+          "healthy_fraction": 1.0,
+          "terminal_memory_reset": true,
+          "command_fallback_cuts": [],
+          "neural_control_fraction": 1.0
+        },
+        "visibility": {
+          "rows": 25,
+          "actors": 2,
+          "causes": {
+            "visible": 25
+          },
+          "native_query_matches": true,
+          "paired_rows": 25,
+          "paired_causes": {
+            "visible": 25
+          },
+          "post_handoff_retarget_rows": 0
+        },
+        "preparation": {
+          "prepared_game_ms": 16361,
+          "anchor_observation_seq": 5,
+          "feature_sha256": "03194b86606c4af39a4f29f253960210364810a5cc6a9612b249771b84c39dc7",
+          "attacker_started_game_ms": 16361,
+          "first_dt_ms": 0,
+          "prep_model_updates": 0,
+          "prep_primary_actions": 0,
+          "prep_rng_unchanged": true
+        }
+      },
+      {
+        "name": "block-reaction-223-1-mlp",
+        "policy": "mlp",
+        "task": "block",
+        "outcome": "task_success",
+        "quality_credit": true,
+        "credited_success": true,
+        "latency": {
+          "model_step_ms": {
+            "count": 4,
+            "p95": 1.090753
+          },
+          "observation_to_arbitration_ms": {
+            "count": 1,
+            "p95": 6.410834
+          },
+          "collector_to_command_send_ms": {
+            "count": 1,
+            "p95": 5.327614
+          },
+          "clock_domain": "linux-clock-monotonic",
+          "native_reply_bracketed": true
+        },
+        "native_fallback_boundary": {
+          "restorations_before_final": [],
+          "same_final_native_continuations": []
+        },
+        "capture_integrity": {
+          "final_integrity_sha256": "ca2c595eda7c26b15aa161ec4609b80c6fde2caae20f889c00b6479c76007ff7",
+          "visibility_records": 25,
+          "dropped": 0,
+          "capture_failed": false
+        },
+        "actual_physics": {
+          "linked_attack_hits": 0,
+          "linked_opponent_hp_loss": 0,
+          "linked_blocked_hits": 1,
+          "primary_mapping": [
+            3
+          ],
+          "opponent_mapping": [
+            4
+          ],
+          "raw_counters": {
+            "primary": {
+              "received_damage": 0,
+              "outgoing_damage": 0,
+              "blocked_hits": 1
+            },
+            "opponent": {
+              "received_damage": 0,
+              "outgoing_damage": 0,
+              "blocked_hits": 0
+            }
+          },
+          "issues": []
+        },
+        "defense_reactions": {
+          "linked_reactions": [
+            {
+              "observation_seq": 5,
+              "command_id": 1,
+              "execution_id": 10,
+              "action_id": 9,
+              "observed_windup_game_ms": 16361,
+              "actual_started_game_ms": 16427,
+              "incoming_attempt_game_ms": 16527,
+              "pose_change_seq": 40,
+              "hit_attempt_seq": 59,
+              "defence_result_seq": 60,
+              "reaction_game_ms": 66,
+              "actual_window_game_ms": 166,
+              "hp_preserved": true
+            }
+          ],
+          "censored": {},
+          "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+        },
+        "runtime": {
+          "processed_inputs": 4,
+          "runtime_fallbacks": 0,
+          "fallbacks": [],
+          "declared_runtime_fallbacks": 0,
+          "eligible_opportunities": 1,
+          "accepted_model_commands": 1,
+          "healthy_fraction": 1.0,
+          "terminal_memory_reset": true,
+          "command_fallback_cuts": [],
+          "neural_control_fraction": 1.0
+        },
+        "visibility": {
+          "rows": 25,
+          "actors": 2,
+          "causes": {
+            "visible": 25
+          },
+          "native_query_matches": true,
+          "paired_rows": 25,
+          "paired_causes": {
+            "visible": 25
+          },
+          "post_handoff_retarget_rows": 0
+        },
+        "preparation": {
+          "prepared_game_ms": 16361,
+          "anchor_observation_seq": 5,
+          "feature_sha256": "03194b86606c4af39a4f29f253960210364810a5cc6a9612b249771b84c39dc7",
+          "attacker_started_game_ms": 16361,
+          "first_dt_ms": 0,
+          "prep_model_updates": 0,
+          "prep_primary_actions": 0,
+          "prep_rng_unchanged": true
+        }
+      }
+    ]
+  },
+  "known_task_comparisons": {
+    "comparisons": {
+      "gru": {
+        "distance": {
+          "episodes": 2,
+          "native_successes": 2,
+          "candidate_successes": 2,
+          "native_success_rate": 1.0,
+          "candidate_success_rate": 1.0,
+          "delta": 0.0,
+          "passed": true
+        },
+        "attack": {
+          "episodes": 2,
+          "native_successes": 2,
+          "candidate_successes": 2,
+          "native_success_rate": 1.0,
+          "candidate_success_rate": 1.0,
+          "delta": 0.0,
+          "passed": true
+        },
+        "block": {
+          "episodes": 2,
+          "native_successes": 0,
+          "candidate_successes": 2,
+          "native_success_rate": 0.0,
+          "candidate_success_rate": 1.0,
+          "delta": 1.0,
+          "passed": true
+        },
+        "native_duel": {
+          "episodes": 2,
+          "native_successes": 1,
+          "candidate_successes": 2,
+          "native_success_rate": 0.5,
+          "candidate_success_rate": 1.0,
+          "delta": 0.5,
+          "passed": true
+        }
+      },
+      "mlp": {
+        "distance": {
+          "episodes": 2,
+          "native_successes": 2,
+          "candidate_successes": 2,
+          "native_success_rate": 1.0,
+          "candidate_success_rate": 1.0,
+          "delta": 0.0,
+          "passed": true
+        },
+        "attack": {
+          "episodes": 2,
+          "native_successes": 2,
+          "candidate_successes": 2,
+          "native_success_rate": 1.0,
+          "candidate_success_rate": 1.0,
+          "delta": 0.0,
+          "passed": true
+        },
+        "block": {
+          "episodes": 2,
+          "native_successes": 0,
+          "candidate_successes": 2,
+          "native_success_rate": 0.0,
+          "candidate_success_rate": 1.0,
+          "delta": 1.0,
+          "passed": true
+        },
+        "native_duel": {
+          "episodes": 2,
+          "native_successes": 1,
+          "candidate_successes": 2,
+          "native_success_rate": 0.5,
+          "candidate_success_rate": 1.0,
+          "delta": 0.5,
+          "passed": true
+        }
+      }
+    },
+    "primary_candidate": "gru",
+    "mlp_comparison_only": true
+  },
+  "services": {
+    "shadow": {
+      "unchanged": true,
+      "identity": {
+        "gothic-voxtral": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "556920"
+        },
+        "gothic-voxcpm": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "3359086"
+        },
+        "gothic-decider": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "2712185"
+        },
+        "gothic-gemma": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "3333298"
+        }
+      },
+      "services_all_active": true
+    },
+    "realtime": {
+      "unchanged": true,
+      "identity": {
+        "gothic-voxtral": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "556920"
+        },
+        "gothic-voxcpm": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "3359086"
+        },
+        "gothic-decider": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "2712185"
+        },
+        "gothic-gemma": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "3333298"
+        }
+      },
+      "services_all_active": true
+    },
+    "realtime-reaction": {
+      "unchanged": true,
+      "identity": {
+        "gothic-voxtral": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "556920"
+        },
+        "gothic-voxcpm": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "3359086"
+        },
+        "gothic-decider": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "2712185"
+        },
+        "gothic-gemma": {
+          "ActiveState": "active",
+          "SubState": "running",
+          "MainPID": "3333298"
+        }
+      },
+      "services_all_active": true
+    }
+  },
+  "original_raw_binding_count": 295,
+  "raw_bindings_copied_from_closed_report": {
+    "shadow/suite.json": "b85726d5ca97e175f67dadd5f3f3b27d04768d40a42f43ad10ba5b2e6a77c48e",
+    "shadow/manifest.json": "1fc9b885bc11979e8c531a4d38f603e9d4e4a83bdf7ba31bfc2966a873547c3d",
+    "realtime/suite.json": "94e6bdfa3099c66523c08082b64808e4d8cbbad0ac37a311dc0f77704d20119f",
+    "realtime/manifest.json": "2978789b6f4fc32527454730e20be8c1663b6d662d2e4e095ae01e8e88211094",
+    "realtime-reaction/block-reaction-223-0-native/arena-events.jsonl": "80ff306b754eb5c7b8a731337de76280d927f04d80d2c6919cf520d6ed5ba441",
+    "realtime-reaction/block-reaction-223-0-native/observations.jsonl": "27538fa3006a0a5f1cf14b3885a8767fa76656a8041d2a47a1510c551391389e",
+    "realtime-reaction/block-reaction-223-0-native/observer-timing.jsonl": "ada4923ac8f2b626299ae6b18b818a04a68ba348578d1949ca4b0bb1f644b120",
+    "realtime-reaction/block-reaction-223-0-native/ipc.jsonl": "4a0ac81976b680335687759c91c0a9c8e5f0657af69dd0dd1e39f6662e1ec92b",
+    "realtime-reaction/block-reaction-223-0-native/bench.log": "f731d9e0fb9126ba23e4b3ba1dc0ee2b34420d0cfecbcf38dd4c1c6953d13438",
+    "realtime-reaction/block-reaction-223-0-native/collector-transport.jsonl": "c5e2ee5eb58c1e1cf8ae04dbe00d12d2570be3f2ec2bc6c1384bc2c20c8a748f",
+    "realtime-reaction/block-reaction-223-0-native/activation.json": "5018f87c64be889de9b4c6bef440c2f3ca04f6c6c76648add9d3b4bd425b0c68",
+    "realtime-reaction/block-reaction-223-0-native/preparation.json": "42fd78d69bac37215a39801125c45ed4c20961d3e21c59499f160a4c665d85a7",
+    "realtime-reaction/block-reaction-223-0-native/policy-inputs.jsonl": "4a0444766e1d93d7fd468bfc5c721faa396a5edede9caacd21370222ddaa90cf",
+    "realtime-reaction/block-reaction-223-0-native/events.jsonl": "c0a87ee6347520f20c0886ec1981077d6eac4e5359c709756eae05aa19e22d3c",
+    "realtime-reaction/block-reaction-223-0-native/latency.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "realtime-reaction/block-reaction-223-0-native/body-control-events.jsonl": "d3a51e549510f94fa6b831a1a88436bd153a89736c6679df4d8ff9bea2346655",
+    "realtime-reaction/block-reaction-223-0-native/episode.json": "8d8138c41deb0f031c8c8c8852c54365d7511bc6ea4572236240b8fed1ae39bc",
+    "realtime-reaction/block-reaction-223-0-native/runner-summary.json": "9cfa990364644db92f9dfa9593bce4899c54909abc9668713a231ab23bbf6a56",
+    "realtime-reaction/block-reaction-223-0-gru/arena-events.jsonl": "1b1ca5d847add3a4e66d3f119d3612c196629f3b0764fbee06ae0022ff79c534",
+    "realtime-reaction/block-reaction-223-0-gru/policy-final-before-clear.json": "5a9b9599921d845b1c15455fe7dd074858ac34892557f19b78ab4679a0405580",
+    "realtime-reaction/block-reaction-223-0-gru/observations.jsonl": "fae0c7e567edd0f447ce13edd2f82127aa7f229910d2f5a2db5507953162b848",
+    "realtime-reaction/block-reaction-223-0-gru/observer-timing.jsonl": "b2bc0cc1f62a3f6cb6e9b831c227e5b1edd6ab9be31521ea3d7de185af0ce868",
+    "realtime-reaction/block-reaction-223-0-gru/ipc.jsonl": "01b81fa28de51d3cd551374f99ffc0677564cdee25c7148c2326834f25ee2f56",
+    "realtime-reaction/block-reaction-223-0-gru/bench.log": "2446d6cb6f541dc867f0bac3f11914af63c446e3097d4125112bf53040ccaddb",
+    "realtime-reaction/block-reaction-223-0-gru/collector-transport.jsonl": "7bc53ebae62bb8acb76143cd613dd623160b6fca76a0c98118e572a61359cfb1",
+    "realtime-reaction/block-reaction-223-0-gru/activation.json": "38fffd32d12ec8206c4764867d48b8603e537e2e3ee01e4882f099c9877bbca5",
+    "realtime-reaction/block-reaction-223-0-gru/preparation.json": "800e5addec200b2f0520198ab673cfbd9897fb680ac5045593ae60bad8795466",
+    "realtime-reaction/block-reaction-223-0-gru/policy-inputs.jsonl": "27f605767d86de68af9518b7cc11e7d48244f50329932f54418bd8193684b903",
+    "realtime-reaction/block-reaction-223-0-gru/events.jsonl": "c53beefd6472a9ac6da219f843efc0b7d9eda4cf7c7f403f7ae85c8cf51eb80f",
+    "realtime-reaction/block-reaction-223-0-gru/latency.jsonl": "907851d3f5b5d4c87424953cf658767cc18793b3b09bb9b05eebd580a9597cbe",
+    "realtime-reaction/block-reaction-223-0-gru/body-control-events.jsonl": "5cac13da5eaa9e70914b1fa56dddde7f5995d46ed5d678d9ba9514ee75a3fe98",
+    "realtime-reaction/block-reaction-223-0-gru/episode.json": "439eab1fa0a15628b44cfc36d10100b75685b2ed9b47c7b1cc132bb75e9163e9",
+    "realtime-reaction/block-reaction-223-0-gru/runner-summary.json": "0003230edb1df80fc4f135068ad2a8a7d9afbbae94e58b4787e9beddb567c906",
+    "realtime-reaction/block-reaction-223-0-mlp/arena-events.jsonl": "405c7ebe4abee895867c80ecb492aee4b5ff514e2aced2987b38813ca307dd13",
+    "realtime-reaction/block-reaction-223-0-mlp/policy-final-before-clear.json": "a92904122304d5345f26fdd776229c952baf6495c5974dfcad92a6bf4ef445a8",
+    "realtime-reaction/block-reaction-223-0-mlp/observations.jsonl": "477003d29a55c7dc89c312026c6fbb200edced237d34680e723f8c5c5174c716",
+    "realtime-reaction/block-reaction-223-0-mlp/observer-timing.jsonl": "164689a3b333c5b46b92a2c71223bf40bc372f7a6643b615cac9475b25b03483",
+    "realtime-reaction/block-reaction-223-0-mlp/ipc.jsonl": "3ac9df145d7ea6109a1e2f2a034b42a37249aa647aa580b7daac7c926479fa25",
+    "realtime-reaction/block-reaction-223-0-mlp/bench.log": "2446d6cb6f541dc867f0bac3f11914af63c446e3097d4125112bf53040ccaddb",
+    "realtime-reaction/block-reaction-223-0-mlp/collector-transport.jsonl": "08ab24747e44150de5801e9c0a88ff00e156622be86626a14a35c7138681162c",
+    "realtime-reaction/block-reaction-223-0-mlp/activation.json": "ef204e52846a638a084c6415c9dc2acd6cdc310394ee4f929d43157ee7ecab68",
+    "realtime-reaction/block-reaction-223-0-mlp/preparation.json": "e5ebc2e61d51c33c9e4114ab066972668b4613a2ce7ff23092cc31fe89a31c73",
+    "realtime-reaction/block-reaction-223-0-mlp/policy-inputs.jsonl": "87a8e256f9f632cb329be5025f6f37ba719f47eeac344de9de52cfbe38e114dd",
+    "realtime-reaction/block-reaction-223-0-mlp/events.jsonl": "bfd94821e77054c9421f385f2e42b61a67a171577a1a2b47f1fc2f669c02cfe5",
+    "realtime-reaction/block-reaction-223-0-mlp/latency.jsonl": "652524ca30fbbb49f6edf6afa8f61854dbdbec572c8eaec971055bd76572e44c",
+    "realtime-reaction/block-reaction-223-0-mlp/body-control-events.jsonl": "baee937e16121ba43a5331503df507cb78ec9a7a693eedf0880c9ea6a87c3dfb",
+    "realtime-reaction/block-reaction-223-0-mlp/episode.json": "3d640a70ad81e39f50e0306a02e52ade66c450a8ee76ce11aae2484a52ab6284",
+    "realtime-reaction/block-reaction-223-0-mlp/runner-summary.json": "5779829fc8397ed12a13e7a9add9df4d64687fdff1950c2c14bf417e64a80f31",
+    "realtime-reaction/block-reaction-223-1-native/arena-events.jsonl": "6fdeea21e8a1ec75f182bb9a94cb9ce783c732f1529031996441880b667c5b37",
+    "realtime-reaction/block-reaction-223-1-native/observations.jsonl": "64335e8b01ef6bdadc4e05e1366012973651275cd4a8791a626630470572bb18",
+    "realtime-reaction/block-reaction-223-1-native/observer-timing.jsonl": "92d02d7dd197bbae194784374e8fc22fb93e48df7ca1b6ea0d87c9782b0d0a43",
+    "realtime-reaction/block-reaction-223-1-native/ipc.jsonl": "947a4c6c08c2160c7f6dbe1e5686465bb4f467a000198f8b29e7ea820d3a98cb",
+    "realtime-reaction/block-reaction-223-1-native/bench.log": "f731d9e0fb9126ba23e4b3ba1dc0ee2b34420d0cfecbcf38dd4c1c6953d13438",
+    "realtime-reaction/block-reaction-223-1-native/collector-transport.jsonl": "31e877d6745ab86323b5741a50cad140a3f9987eaf9b7672c139e48cb0e44937",
+    "realtime-reaction/block-reaction-223-1-native/activation.json": "c2e884a4ab3d8a830fa1487de0e2abfd46b9bfd54a7943837e1d474c83201dd3",
+    "realtime-reaction/block-reaction-223-1-native/preparation.json": "8a9db5f742e8781064266a0686e535ea37280f09cb8c3075f376d5ade2e6f332",
+    "realtime-reaction/block-reaction-223-1-native/policy-inputs.jsonl": "05ee76fcd957ad483b24798d4fe82cdfabe9ab7bef65fdbf8daed1b4b2e4a897",
+    "realtime-reaction/block-reaction-223-1-native/events.jsonl": "a8e23f455b32eecb213e98e504bc24204e2e46637f0654a6d0e3441baf800a29",
+    "realtime-reaction/block-reaction-223-1-native/latency.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "realtime-reaction/block-reaction-223-1-native/body-control-events.jsonl": "a788ac167892129196d564f06448764b83017e4ba2a88ff6fd386d58bf3c75e6",
+    "realtime-reaction/block-reaction-223-1-native/episode.json": "8ab318edc750ee9ab12d5935008dd541b2ba706c66ab5969e8778d63861c8f4a",
+    "realtime-reaction/block-reaction-223-1-native/runner-summary.json": "7950501a36b7ce4903323a444ce3c556d4b3c392c40c660c45614de937817838",
+    "realtime-reaction/block-reaction-223-1-gru/arena-events.jsonl": "4b69998055e2f9afc1723d0ea97770e24952a503ce959d63fe3bb99f592b92cc",
+    "realtime-reaction/block-reaction-223-1-gru/policy-final-before-clear.json": "c48f391adda216f2f5b2eea2c8601ab3570ddcbd354fa4899b841b7d903f0547",
+    "realtime-reaction/block-reaction-223-1-gru/observations.jsonl": "9220c6049722b8c19388bd60c8d8e272cdd1a1d5db6d07611d027e43fafe639b",
+    "realtime-reaction/block-reaction-223-1-gru/observer-timing.jsonl": "011e09fefb90f000d1d71110adae280f697bc8fafb1e50ad5d2ea46feed8d968",
+    "realtime-reaction/block-reaction-223-1-gru/ipc.jsonl": "3a33890566cd0199a23a2a8f183e446a39417bc0d8310143d899d4de665765c1",
+    "realtime-reaction/block-reaction-223-1-gru/bench.log": "2446d6cb6f541dc867f0bac3f11914af63c446e3097d4125112bf53040ccaddb",
+    "realtime-reaction/block-reaction-223-1-gru/collector-transport.jsonl": "2273c6fb83be1628856a6adeecd3cd830fe49fcab9cbf5f428c0303aa7425f01",
+    "realtime-reaction/block-reaction-223-1-gru/activation.json": "3c02a093da9b8ebbe1ecc0c1e73c55de0cb04c26e61d87acaa9e7c861d063dfd",
+    "realtime-reaction/block-reaction-223-1-gru/preparation.json": "f499f17925adb51c0083964976075b33484febde9abff0a040022de4e18dca57",
+    "realtime-reaction/block-reaction-223-1-gru/policy-inputs.jsonl": "b85e44381026cc31c47fea87acd7a77493d8a0665c3457280e62fba94661cc12",
+    "realtime-reaction/block-reaction-223-1-gru/events.jsonl": "cbc54f6a3648adb3c706590bb56fb20787895075f26dc13b566a6b1a7a6485cb",
+    "realtime-reaction/block-reaction-223-1-gru/latency.jsonl": "4671acb37554d6e64b730e807646704173727ae0809de8d0123aa175e1cea913",
+    "realtime-reaction/block-reaction-223-1-gru/body-control-events.jsonl": "eadbba29563cf9214722530d98d12c0a9e09b09a37f6b973e9277bf82c4c4aaf",
+    "realtime-reaction/block-reaction-223-1-gru/episode.json": "528d1cb8393420dcdd2c108aa32b56d45a2d39c0535b75b4cd584fdaf1080b49",
+    "realtime-reaction/block-reaction-223-1-gru/runner-summary.json": "701d74985e2be3899cca3262faa9e716e1f88b0f796415ac5dc1921adce9d1b0",
+    "realtime-reaction/block-reaction-223-1-mlp/arena-events.jsonl": "c588eebbfa9ec50b9b211f9de18b09341c837602aaa46bcdab4b199ff4d68395",
+    "realtime-reaction/block-reaction-223-1-mlp/policy-final-before-clear.json": "b791ce9d319a53bb157a4a8a47678ee2eb67dc943ff7936f22ac55fc3f2144ae",
+    "realtime-reaction/block-reaction-223-1-mlp/observations.jsonl": "1478667dece11d6875647a0afb6eb4020c0514bab5347b72d6588428920ef359",
+    "realtime-reaction/block-reaction-223-1-mlp/observer-timing.jsonl": "5e8ae9c680032901963ff59475562585c243fbc80c1b6ba02cc3587f3d08d82e",
+    "realtime-reaction/block-reaction-223-1-mlp/ipc.jsonl": "ad4f531c855968518b3cb15d1e475ec498fa324dee30fa1839c8afc9896e1490",
+    "realtime-reaction/block-reaction-223-1-mlp/bench.log": "2446d6cb6f541dc867f0bac3f11914af63c446e3097d4125112bf53040ccaddb",
+    "realtime-reaction/block-reaction-223-1-mlp/collector-transport.jsonl": "ba805ec9d02f6bf4d25f8baf99d47d29437e1569bd6d0c15f207de2f207f1e27",
+    "realtime-reaction/block-reaction-223-1-mlp/activation.json": "296c1afddbd52f4039c6871acd1c35939e6c04ccf1a701e1179e3e7be9b50629",
+    "realtime-reaction/block-reaction-223-1-mlp/preparation.json": "140b59ac510df945708004923ed4344e302d87c71d17fe63d7690d884e4623c8",
+    "realtime-reaction/block-reaction-223-1-mlp/policy-inputs.jsonl": "8184c30defaa80fd7a0de9003deae7426885f04b49b1f7f8e7bc0dc0442e4460",
+    "realtime-reaction/block-reaction-223-1-mlp/events.jsonl": "e0f7be9db44d7ab23e600f7a265e155af53af94471cd14519b86c5dad7af522f",
+    "realtime-reaction/block-reaction-223-1-mlp/latency.jsonl": "5e4754a07f3233a3624f25028b47afad2c3f010a8918ccf0a664e122af4d7ef6",
+    "realtime-reaction/block-reaction-223-1-mlp/body-control-events.jsonl": "eff22e6f94a417aee4d3aa3878735e896b24b9723a36945842e2809f0cf09af5",
+    "realtime-reaction/block-reaction-223-1-mlp/episode.json": "2a2ed46f54b52ec2c79ff0e0ed56c941339a7a31c73a28fb4760cd3d1495d2b0",
+    "realtime-reaction/block-reaction-223-1-mlp/runner-summary.json": "3340a046c651d9062d9bf2ac65848b02be290ad3fdaaa0c83c42b970afb9593d",
+    "realtime-reaction/suite.json": "4ddf10273a6aa2bc330f5ef75623c6210a35957a5910984e02dad797357e8179",
+    "realtime-reaction/manifest.json": "6db05e0a32a63792edad00a559ac1e92f24d62fa2f907a518f495c71d973ff2c"
+  },
+  "extraction_scope": {
+    "source_raw_weights_proofs_scanned": false,
+    "only_closed_report_read": true,
+    "no_model_test_engine_service_jobs": true,
+    "load_not_started_parent_correction": true,
+    "lock_only_refusal": "foreign linux-v8 shared simulation lock; bounded retry60s only exact lock refusals",
+    "fresh_never_started": true,
+    "phase_status_source": "root explicit correction, no active-load state read",
+    "large_sequences_omitted_but_original_hash_bound": true,
+    "created_at_utc": "2026-10-14T17:41:18.336372+00:00"
+  },
+  "maximum_per_case_p95": {
+    "gru": {
+      "model_step_ms": {
+        "case": "realtime-block-223-0-gru",
+        "count": 100,
+        "p95": 1.435901
+      },
+      "observation_to_arbitration_ms": {
+        "case": "block-reaction-223-1-gru",
+        "count": 1,
+        "p95": 7.266407
+      },
+      "collector_to_command_send_ms": {
+        "case": "block-reaction-223-1-gru",
+        "count": 1,
+        "p95": 5.925685
+      }
+    },
+    "mlp": {
+      "model_step_ms": {
+        "case": "realtime-distance-223-0-mlp",
+        "count": 29,
+        "p95": 1.40857
+      },
+      "observation_to_arbitration_ms": {
+        "case": "block-reaction-223-0-mlp",
+        "count": 1,
+        "p95": 7.498032
+      },
+      "collector_to_command_send_ms": {
+        "case": "block-reaction-223-0-mlp",
+        "count": 1,
+        "p95": 5.713087
+      }
+    }
+  },
+  "registered_repaired_population_control": {
+    "gru": {
+      "case": "realtime-distance-223-0-gru",
+      "fraction": 1.0,
+      "cases": 8
+    },
+    "mlp": {
+      "case": "realtime-distance-223-0-mlp",
+      "fraction": 1.0,
+      "cases": 8
+    }
+  },
+  "execution_profiles": {
+    "shadow": {
+      "backend_execution": {
+        "inference_cpu_threads": 1,
+        "actual_forward_count": 802,
+        "samples": {
+          "records": 802,
+          "original_report_bound": true,
+          "first_item_keys": [
+            "episode",
+            "observation_seq",
+            "process_wall_ms",
+            "backend_execution_profile",
+            "wall_ms",
+            "main_thread_cpu_ms",
+            "process_cpu_ms"
+          ]
+        },
+        "wall_latency_population_unchanged": true,
+        "cpu_stall_cause_claim": false
+      },
+      "native_workers": {
+        "native_serial_workers": true,
+        "actual_response_count": 3625,
+        "total_process_thread_cap_claim": false,
+        "rpc_delay_cause_claim": false,
+        "latency_samples_excluded": 0
+      },
+      "collector_gc": {
+        "file_sha256": "3b0d27251692ed78c4a4d6b579d19c0dba081c3aec5c8b1e59afeba435a67a45",
+        "real_latency_samples_excluded": 0
+      },
+      "deadline_polling": {
+        "episode_count": 3,
+        "counters": {
+          "numeric_queries": 1806,
+          "valid_hints": 3597,
+          "legacy_poll_batches": 3,
+          "event_queries": 1800,
+          "deadline_wait_batches": 1797,
+          "sleep_calls": 5368
+        },
+        "wait_records": 1797,
+        "requested_sleep_ns": 23448418119,
+        "actual_sleep_ns": 23917536563,
+        "actual_wakeup_within_5ms_claim": false,
+        "real_latency_samples_removed": 0,
+        "periodic_inputs_excluded": 0
+      }
+    },
+    "realtime": {
+      "backend_execution": {
+        "inference_cpu_threads": 1,
+        "actual_forward_count": 1174,
+        "samples": {
+          "records": 1174,
+          "original_report_bound": true,
+          "first_item_keys": [
+            "episode",
+            "observation_seq",
+            "process_wall_ms",
+            "backend_execution_profile",
+            "wall_ms",
+            "main_thread_cpu_ms",
+            "process_cpu_ms"
+          ]
+        },
+        "wall_latency_population_unchanged": true,
+        "cpu_stall_cause_claim": false
+      },
+      "native_workers": {
+        "native_serial_workers": true,
+        "actual_response_count": 7020,
+        "total_process_thread_cap_claim": false,
+        "rpc_delay_cause_claim": false,
+        "latency_samples_excluded": 0
+      },
+      "collector_gc": {
+        "file_sha256": "902b08e10611e92cb5fe79681bce4396fdf6245fe70a65039728938d39fb6b95",
+        "real_latency_samples_excluded": 0
+      },
+      "deadline_polling": {
+        "episode_count": 24,
+        "counters": {
+          "numeric_queries": 3212,
+          "valid_hints": 6735,
+          "heartbeat_requests": 318,
+          "already_advanced_batches": 22,
+          "event_queries": 3164,
+          "deadline_wait_batches": 3140,
+          "sleep_calls": 9364,
+          "legacy_poll_batches": 2
+        },
+        "wait_records": 3140,
+        "requested_sleep_ns": 40089128395,
+        "actual_sleep_ns": 40929247812,
+        "actual_wakeup_within_5ms_claim": false,
+        "real_latency_samples_removed": 0,
+        "periodic_inputs_excluded": 0
+      }
+    },
+    "reaction": {
+      "backend_execution": {
+        "inference_cpu_threads": 1,
+        "actual_forward_count": 16,
+        "samples": {
+          "records": 16,
+          "original_report_bound": true,
+          "first_item_keys": [
+            "episode",
+            "observation_seq",
+            "process_wall_ms",
+            "backend_execution_profile",
+            "wall_ms",
+            "main_thread_cpu_ms",
+            "process_cpu_ms"
+          ]
+        },
+        "wall_latency_population_unchanged": true,
+        "cpu_stall_cause_claim": false
+      },
+      "native_workers": {
+        "native_serial_workers": true,
+        "actual_response_count": 839,
+        "total_process_thread_cap_claim": false,
+        "rpc_delay_cause_claim": false,
+        "latency_samples_excluded": 0
+      },
+      "collector_gc": {
+        "file_sha256": "2735ed5ecfdd9dd94d27eefc1dd1c1442a8fab375baabb873020915bb0cc7cc2",
+        "real_latency_samples_excluded": 0
+      },
+      "deadline_polling": {
+        "episode_count": 6,
+        "counters": {
+          "numeric_queries": 340,
+          "valid_hints": 676,
+          "heartbeat_requests": 46,
+          "already_advanced_batches": 6,
+          "event_queries": 316,
+          "deadline_wait_batches": 310,
+          "sleep_calls": 936
+        },
+        "wait_records": 310,
+        "requested_sleep_ns": 3928063046,
+        "actual_sleep_ns": 4009712997,
+        "actual_wakeup_within_5ms_claim": false,
+        "real_latency_samples_removed": 0,
+        "periodic_inputs_excluded": 0
+      }
+    }
+  },
+  "actual_forward_count": 1992,
+  "known_native_response_attestations": 11484,
+  "count_scope": "1992 actual observation forwards and11484 response attestations are known11 collection populations; reader itself performed no forwards/engine work; CPUdiagnostic606 is separate."
+}

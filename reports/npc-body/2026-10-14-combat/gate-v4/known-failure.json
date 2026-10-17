@@ -1,0 +1,423 @@
+{
+  "schema_version": 1,
+  "kind": "compact_known_failure_excerpt",
+  "created_at_utc": "2026-10-14T14:17:52.877912+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4",
+  "passed": false,
+  "issues": [
+    "realtime-distance-223-1-gru: healthy control below .95",
+    "realtime-distance-223-1-gru: healthy neural control below95percent"
+  ],
+  "failed_case_count": 1,
+  "closed_known_phases": {
+    "shadow": {
+      "status": "collected",
+      "error": null,
+      "episodes": 3,
+      "suite": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/shadow/suite.json",
+        "size_bytes": 377341,
+        "sha256": "f67312e3201fcffc64cb41aa4042d6b56fcefbeb32107b8cfcfdf96ff6a2aa83"
+      }
+    },
+    "realtime": {
+      "status": "collected",
+      "error": null,
+      "episodes": 24,
+      "suite": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/suite.json",
+        "size_bytes": 5531807,
+        "sha256": "8d6c3e797fd7d50532e8ec7ca053364bc8b38218382f7c92e4b206c882f71005"
+      }
+    },
+    "realtime-reaction": {
+      "status": "collected",
+      "error": null,
+      "episodes": 6,
+      "suite": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime-reaction/suite.json",
+        "size_bytes": 1489638,
+        "sha256": "29e86b2e909bc89641171566bcc2976f682b29b18451c523c033fa0b19edc25f"
+      }
+    }
+  },
+  "stage8_quality_credit": false,
+  "load_read": false,
+  "fresh_screening_read": false,
+  "load_directory_exists": false,
+  "screening_directory_exists": false,
+  "candidate_checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "normalization_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "audit_binding": {
+    "audit_wall_s": 39.219731708057225,
+    "environment_sha256": "17a544ca3891707ef0740b629c862929b58f996e9b9e51943478953a4a399b52",
+    "declaration_sha256": "dcd80b4e75c0fa992c1516ef3bd55ebddb24b0d328f2c07adec7cba0bf5dc912",
+    "known_reader_sha256": "747845004224b1cfafa9aa47dab19f1b68aa65bf5e47b4433b7b2b8dfdcf14fc",
+    "external_reader_binding": {
+      "audit_snapshot_sha256": "80f8dc5bddb236b57d692905e5a58ba88a74655fdc8e73eeea4a1d72f1246fe3",
+      "reporter_sha256": "92cff877b5ed5999096b9e8fd732a7e64e38f6f91e49789156697ac413614f16",
+      "combat_helper_correction": null
+    },
+    "known_audit_manifest_sha256": null
+  },
+  "failed_case": {
+    "name": "realtime-distance-223-1-gru",
+    "case": {
+      "name": "realtime-distance-223-1",
+      "task": "distance",
+      "seed": 223,
+      "side": 1,
+      "distance_cm": 600,
+      "timeout_ms": 10000
+    },
+    "audit_evidence": {
+      "name": "realtime-distance-223-1-gru",
+      "policy": "gru",
+      "task": "distance",
+      "outcome": "task_success",
+      "visibility": {
+        "rows": 132,
+        "actors": 2,
+        "causes": {
+          "visible": 132
+        },
+        "native_query_matches": true,
+        "paired_rows": 132,
+        "paired_causes": {
+          "visible": 132
+        },
+        "post_handoff_retarget_rows": 0,
+        "post_handoff_retarget_causes": {},
+        "post_handoff_targets": [],
+        "owned_housekeeping": {
+          "pairs": [
+            {
+              "entity_id": 1,
+              "command_id": 3,
+              "execution_id": 98,
+              "game_ms": 17861,
+              "branch": "hit_lock",
+              "before_seq": 333,
+              "after_seq": 336,
+              "body_yaw_delta_deg": -0.055399899999997615,
+              "native_choice_or_new_command": false
+            }
+          ],
+          "branch_counts": {
+            "hit_lock": 1
+          },
+          "native_choice_or_new_command": false
+        }
+      },
+      "runtime": {
+        "processed_periodic_inputs": 32,
+        "model_actor_ids": [
+          1
+        ],
+        "accepted_commands": 2,
+        "rejected_commands": 1,
+        "eligible_opportunities": 3,
+        "neural_control_fraction": 0.6666666666666666,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true,
+        "native_to_received_wire": {
+          "wire_rows": 71,
+          "float_differences": 163,
+          "observed_max_ulps": 1,
+          "allowed_max_ulps": 2
+        }
+      },
+      "latency": {
+        "model_step_ms": {
+          "count": 32,
+          "p95": 2.523421
+        },
+        "observation_to_arbitration_ms": {
+          "count": 3,
+          "p95": 20.359761
+        },
+        "collector_to_command_send_ms": {
+          "count": 3,
+          "p95": 5.319024
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "native_fallback_boundary": {
+        "restorations_before_final": [],
+        "same_final_native_continuations": []
+      },
+      "quality_credit": true,
+      "credited_success": true,
+      "capture_integrity": {
+        "final_integrity_sha256": "2709950541a3d81d962049caedb0f03e9d5c8ea8844c6405d620f1133679ee44",
+        "visibility_records": 132,
+        "dropped": 0,
+        "capture_failed": false
+      },
+      "softlocks": {
+        "inspected_finite_segments": 0,
+        "unbounded_movement_segments_excluded": 1,
+        "violations": [],
+        "allowance_game_ms": 67,
+        "terminal_or_fresh_hit_not_counted": true
+      }
+    },
+    "model_stats": {
+      "periodic_observations": 33,
+      "unowned_periodic_observations": 1,
+      "model_processed": 32,
+      "runtime_fallbacks": 0,
+      "latest_eligible_periodic_opportunities": 3,
+      "stale_refresh_requests": 1,
+      "accepted_model_commands": 2,
+      "terminal_censored_commands": 0,
+      "rejected_model_commands": 1,
+      "action_1": 1,
+      "event_only_observations": 3,
+      "event_only_latest_eligible_skips": 2,
+      "action_6": 1
+    },
+    "runtime_fallbacks": 0,
+    "neural_control_fraction": 0.6666666666666666,
+    "final": {
+      "game_ms": 17894,
+      "outcome": "task_success",
+      "reason": "distance_reached",
+      "terminated": true,
+      "truncated": false,
+      "infrastructure": false
+    },
+    "primary_final_hp": 300
+  },
+  "stale_request": {
+    "request": {
+      "id": 27927,
+      "cmd": "body_action",
+      "entity_id": 1,
+      "session_epoch": 1791983470083499856,
+      "world_epoch": 28,
+      "control_generation": 19,
+      "provider": "stage8-gru",
+      "goal_version": 1,
+      "target_entity_id": 2,
+      "command_id": 1,
+      "action_id": 1,
+      "observation_seq": 5,
+      "issued_game_ms": 16361,
+      "ttl_ms": 100
+    },
+    "response_excerpt": {
+      "id": 27927,
+      "type": "body_control_result",
+      "ok": true,
+      "accepted": false,
+      "reason": "stale_observation",
+      "game_ms": 16427,
+      "sim_step": 20,
+      "wall_monotonic_ns": 1100569647628006
+    },
+    "native_rejection": {
+      "schema_version": 1,
+      "event": "body_control_event",
+      "phase": "rejected",
+      "reason": "stale_observation",
+      "session_epoch": 1791983470083499856,
+      "world_epoch": 28,
+      "entity_id": 1,
+      "control_generation": 19,
+      "goal_version": 1,
+      "target_entity_id": 2,
+      "command_id": 1,
+      "execution_id": 0,
+      "owner": "scripted",
+      "release_pending": false,
+      "provider": "stage8-gru",
+      "mode": "realtime",
+      "event_seq": 331,
+      "t_wall_ms": 1100569647,
+      "t_game_ms": 16427,
+      "wall_monotonic_ns": 1100569647371015,
+      "clock_domain": "linux-clock-monotonic",
+      "last_heartbeat_wall_ms": 1100569547,
+      "pose_identity": "S_1HRUN",
+      "sim_step": 20,
+      "observation_seq": 5,
+      "action_id": 1,
+      "effective_primitive": 0,
+      "segment_identity": "",
+      "pose_before": "",
+      "pose_after": "",
+      "release_reason": "",
+      "remaining_lock_game_ms": 0,
+      "segment_started": false,
+      "primitive_consumed": false,
+      "issued_game_ms": 16361,
+      "ttl_ms": 100,
+      "watchdog_timeout_ms": 5000,
+      "infrastructure_failure": false
+    },
+    "stale_refresh_pending": true,
+    "recovery_attempt": 1,
+    "model_processed": false,
+    "source_observation": {
+      "entity_id": 1,
+      "observation_seq": 5,
+      "game_ms": 16361,
+      "sim_step": 18
+    },
+    "current_observation": {
+      "entity_id": 1,
+      "observation_seq": 7,
+      "game_ms": 16427,
+      "sim_step": 20
+    }
+  },
+  "clock_domain": "linux-clock-monotonic",
+  "clock_ns": {
+    "source_observation_created": 1100569563474578,
+    "collector_received_observation": 1100569578534812,
+    "arbitration_begin": 1100569583578018,
+    "arbitration_end": 1100569583834339,
+    "command_sent": 1100569583853836,
+    "current_observation_created": 1100569646966606,
+    "native_response_stamped": 1100569647628006,
+    "collector_received_response": 1100569647954658
+  },
+  "derived_timing_ms": {
+    "source_age_at_send_ms": 20.379258,
+    "collector_receive_to_send_ms": 5.319024,
+    "source_to_collector_receive_ms": 15.060234,
+    "send_to_native_response_ms": 63.77417,
+    "collector_round_trip_ms": 64.100822,
+    "send_to_current_observation_created_ms": 63.11277
+  },
+  "causal_limit": {
+    "old_native_read_diagnostic_available": false,
+    "old_tick_begin_diagnostic_available": false,
+    "send_before_future_observation_does_not_prove_send_or_arrival_before_tick_begin": true,
+    "exact_freshness_validation_retained": true
+  },
+  "source_files": [
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/environment.json",
+      "size_bytes": 13861,
+      "sha256": "17a544ca3891707ef0740b629c862929b58f996e9b9e51943478953a4a399b52"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/final-evaluation.json",
+      "size_bytes": 1074544,
+      "sha256": "dcd80b4e75c0fa992c1516ef3bd55ebddb24b0d328f2c07adec7cba0bf5dc912"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/validation/known-audit-v1/report.json",
+      "size_bytes": 287689,
+      "sha256": "7df5a279dd355bc3e768ed932a711cdc34304b34e40dd8f8358af6bd5428e8cc"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/resources-known-audit.txt",
+      "size_bytes": 1175,
+      "sha256": "9f33ea967e73b6c50cd03afdae51ff139698cfa8e0832b7b184ba4a312e5c8d8"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/launcher-known-audit.log",
+      "size_bytes": 502,
+      "sha256": "af021095afe626882a6ab0f87134d5814f400e45867e238a3c1ec3637a4f1f01"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/resources-shadow.txt",
+      "size_bytes": 2080,
+      "sha256": "cadf8e2d0fbee473a6bdbd0c30945c27576581fcd2a3e5f89ec43746db76a307"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/resources-realtime.txt",
+      "size_bytes": 2083,
+      "sha256": "47542fc26c19216e3bbe9a5b8850c6bc46ded23c587211d8c5fadfbcae43c1b3"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/resources-realtime-reaction.txt",
+      "size_bytes": 2161,
+      "sha256": "8fe16a06ba53fc71cd713f97695444a9706f21efcadb2603c8f51e60e1de7ac6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/arena-events.jsonl",
+      "size_bytes": 27555,
+      "sha256": "cafa93179efaff8ae6ac193e0c3a8fce3cddb91d64f24aa9927d1b724ab750ba"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/bench.log",
+      "size_bytes": 281,
+      "sha256": "199daff193e5c1af49f64c09740ef7e759e4e564d97e7e4f1b833c4adfaae801"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/body-control-events.jsonl",
+      "size_bytes": 9893,
+      "sha256": "630af60ea77eb946bfc41adc7f19352358de5cfb6ea6dc3a1dcdef1a8e460955"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/collector-transport.jsonl",
+      "size_bytes": 30778,
+      "sha256": "f8e1bbf6690bcd21a6c839c05e845809b40e52faf213a3f99a8fbe6a6a8771b6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/episode.json",
+      "size_bytes": 158040,
+      "sha256": "7607d1e1754a3951e6712b9cb967609281609a4393821c0d36f4fa3f5905c5f2"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/events.jsonl",
+      "size_bytes": 444224,
+      "sha256": "1a5b9dbc52b2c64847ef95c4eb5f3af52df0b3d2ac53483c7a32e80096bd9212"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/ipc.jsonl",
+      "size_bytes": 1242240,
+      "sha256": "d74642cbec8bb5ea13dde1da5ebaf72f51f265107b5cfea609d7e894b08285a6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/latency.jsonl",
+      "size_bytes": 10386,
+      "sha256": "46483266dfdc9c29f530b1c7841bec87e77c394941aff092c8846babe2709875"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/observations.jsonl",
+      "size_bytes": 269682,
+      "sha256": "d694d0b5c49aa6bc0bb4090bdddd4f751e894549910e9ee7a575b8a5b594b53f"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/observer-timing.jsonl",
+      "size_bytes": 12994,
+      "sha256": "dcc40ac5dcad78f42f7d7b2daf108130845a05d50c5c40adfbd64a8dc8c37066"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/policy-final-before-clear.json",
+      "size_bytes": 10718,
+      "sha256": "0e2e7f80d8b2442317036f48edd2d50fb6cd67e6850f1fdd14159a184a31d1c4"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/policy-inputs.jsonl",
+      "size_bytes": 227593,
+      "sha256": "9f1c707a15527367c5dcfbdc5bae58e70f39dcbbc84bafd85f45e08bcaec8021"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/realtime/realtime-distance-223-1-gru/runner-summary.json",
+      "size_bytes": 22038,
+      "sha256": "ce6529897e85591c08a4007fcbf66bf3401cf4e83866984077dcd31a46eb19f5"
+    }
+  ],
+  "resource_and_log_fragments": {
+    "resources-known-audit.txt": "Command exited with non-zero status 2\n\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/code/scripts/body_stage8_known_report.py --run /home/kaifat/gothic-ai/body/data/stage8-final-gate-v4 --audit-manifest /home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/validation/final-audit-code/audit.json --output-dir /home/kaifat/gothic-ai/body/data/stage8-final-gate-v4/validation/known-audit-v1\"\n\tUser time (seconds): 34.04\n\tSystem time (seconds): 3.00\n\tPercent of CPU this job got: 94%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:39.26\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 469276\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 275324\n\tVoluntary context switches: 7512\n\tInvoluntary context switches: 2166\n\tSwaps: 0\n\tFile system inputs: 30095504\n\tFile system outputs: 1928\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 2\n",
+    "launcher-known-audit.log": "Running as unit: gothic-body-gate-v4-known-audit.service; invocation ID: b774dcbc1ae44785a4cfcdd0bb0efe8c\n{\"passed\": false, \"issues\": [\"realtime-distance-223-1-gru: healthy control below .95\", \"realtime-distance-223-1-gru: healthy neural control below95percent\"]}\n          Finished with result: exit-code\nMain processes terminated with: code=exited, status=2/INVALIDARGUMENT\n               Service runtime: 39.279s\n             CPU time consumed: 37.056s\n                   Memory peak: 6G (swap: 0B)\n"
+  },
+  "collection_method": {
+    "remote_reads_only": true,
+    "model_forward_executed": false,
+    "engine_started": false,
+    "tests_executed": false,
+    "raw_journals_modified": false,
+    "large_raw_downloads": false
+  }
+}

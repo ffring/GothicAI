@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "kind": "body_stage8_missing_bench_retry",
+  "recorded_at_utc": "2026-10-14T09:38:41.535396+00:00",
+  "original_run": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6",
+  "phase": "stage8-faults-retry",
+  "allowed_changes": [
+    "scenario_fixture_path",
+    "output_path"
+  ],
+  "original_files": {
+    "environment.json": "01ab5d176a995a50c68e81ed721e49b8a0bbc0bbf440f5b40185b0d12e3f38cd",
+    "source.tar.gz": "1a4267bfe4bd14459e57852db13f2d4269249b190d622df05822e7c23ec1a5dc",
+    "reference/gothic-body-runner": "44eff82c4980fe1e54e1b69f5ed2ecc4d6d94c726bc94f23d45fde868620f84c",
+    "code/scripts/body_api_suite.py": "5032530009c8f17aff4d13c6b13c8cb47d8c11f5ebcdb61ad762422b7ca25dee",
+    "code/evals/npc-body/body-api-v1.json": "f7addbde456365a81e5a6650e846ceb0e470887b18b617b3c564c9801dd6b76b",
+    "code/evals/npc-body/body-bc-v1.json": "6c33be0e110409ba4c532990543a4bbb821f3c1fe82960974750b2f5461c542f",
+    "launcher-stage8-faults.log": "b9399f6b5e1e0869addf1f49da876150f7b0cdf1d2d9f0597032edf4a939d148",
+    "resources-stage8-faults.txt": "148e7c801d4b26799107daf1aa212e7adc444ecff0abedf2bcbc9cc54ce121a8",
+    "services-stage8-faults-before.json": "3312463712011c01667b8258feb534556fb04aa66e1b9b3be99bbcb3ec9e51cb",
+    "services-stage8-faults-after.json": "59f4a54ffc79afb21e3c2fd8c93a3d2f29054480f65b64fd63dddd0d3fec1c63",
+    "faults/suite.json": "85aa20f32631a533d0786030b2a0006ce02589c8cc9a846a17d5ac01a78b3cc0"
+  },
+  "retry_files": {
+    "code/scripts/bench/body-api.bench": "9ed2f6bba58f474a7d7ab1daab8e72fcc48bf11a64f27c1ff15ad46e0f3f6456",
+    "code/scripts/body-bc-remote.sh": "ccd829b7ed8ad88b49ead399857c4b9b97095b9f525ba3e9689d126f92ac5f6a"
+  },
+  "engine_library": {
+    "path": "/home/kaifat/gothic-ai/body-api/build/libOpenGothic.a",
+    "sha256": "dc5ce3d6c88028b0bbd3a662257643d2ce202d5e92dbaa00d846066030bae87e"
+  },
+  "argv": [
+    "/home/kaifat/gothic-ai/body/.venv/bin/python",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/scripts/body_api_suite.py",
+    "--runner",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/reference/gothic-body-runner",
+    "--assets",
+    "/home/kaifat/gothic-ai/body-baseline/assets",
+    "--save",
+    "/home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav",
+    "--reference",
+    "/home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4",
+    "--source",
+    "/home/kaifat/gothic-ai/body-api/source/OpenGothic",
+    "--engine-library",
+    "/home/kaifat/gothic-ai/body-api/build/libOpenGothic.a",
+    "--scenario",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/scripts/bench/body-arena.bench",
+    "--melee-scenario",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/scripts/bench/body-melee.bench",
+    "--native-reference",
+    "/home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off",
+    "--config",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/evals/npc-body/body-api-v1.json",
+    "--scenario",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/faults-retry-v1/code/scripts/bench/body-api.bench",
+    "--output",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/faults-retry-v1/run"
+  ],
+  "resources": {
+    "cpu_quota_percent": 200,
+    "memory_max": "6G",
+    "runtime_max_seconds": 2400,
+    "nice": 10,
+    "tasks_max": 128,
+    "working_directory": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6",
+    "simulation_lock": "/home/kaifat/gothic-ai/body-simulation.lock"
+  },
+  "execution_environment": {
+    "PYTHONPATH": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/body-service/src:/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/scripts",
+    "CUDA_VISIBLE_DEVICES": "",
+    "OMP_NUM_THREADS": "2",
+    "MKL_NUM_THREADS": "2",
+    "OPENBLAS_NUM_THREADS": "2",
+    "DISPLAY": "",
+    "WAYLAND_DISPLAY": "",
+    "GOTHIC_AI": "0",
+    "VK_DRIVER_FILES": "/nonexistent/body-bc-no-vulkan.json",
+    "VK_ICD_FILENAMES": "/nonexistent/body-bc-no-vulkan.json",
+    "OPENGOTHIC_TEXTURES": "",
+    "OPENGOTHIC_BODY_TRACE": "1",
+    "OPENGOTHIC_BODY_ANIMATION_RNG": "isolated"
+  },
+  "original_frozen_files_changed": false,
+  "execution_started": false
+}

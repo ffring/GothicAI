@@ -41,5 +41,5 @@ void main() {
   float night = gl_GlobalInvocationID.x==0 ? 0.0 : 1.0;
 
   vec4  ret   = clouds(vec3(0,1,0), night, textureDayL1,textureDayL0, textureNightL1,textureNightL0);
-  imageStore(result, dstUV, ret);
+  imageStore(result, dstUV, finiteOrZero(ret));
   }

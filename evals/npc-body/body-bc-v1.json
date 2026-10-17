@@ -1,0 +1,328 @@
+{
+  "schema_version": 1,
+  "name": "body-bc-v1",
+  "declared_before_measurement": "2026-10-14",
+  "dataset": {
+    "feature_version": "body-periodic-numeric-v1",
+    "action_version": 1,
+    "sampling_view": "periodic-v1",
+    "max_label_age_game_ms": 67,
+    "ambiguous_labels": "drop_all",
+    "minimum_true_expert_labels_per_included_class": 20,
+    "included_actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "required_conditions": [
+      "wall",
+      "target_visibility_lost",
+      "bad_distance"
+    ],
+    "split_seed": 20261013,
+    "preserve_stage6_assignments": true,
+    "normalization_source": "train_only"
+  },
+  "models": {
+    "gru": {
+      "hidden_size": 256,
+      "encoder_size": 256,
+      "head_size": 128,
+      "recurrent_layers": 1
+    },
+    "mlp": {
+      "stack_size": 8,
+      "hidden_size": 256,
+      "head_size": 128
+    },
+    "shared": {
+      "features": "same periodic physical whitelist",
+      "actions": 12,
+      "dtype": "float32",
+      "dropout": 0,
+      "decision_mask_rule": "Shared policy_action_mask on every periodic row: preserve raw availability separately; an empty raw mask becomes continue-only for memory, with no expert loss or command. Otherwise exclude continue(0) iff physical native_decision_eligible and any noncontinue primitive is available; retain continue on locked rows."
+    }
+  },
+  "training": {
+    "seeds": [
+      17,
+      29,
+      43
+    ],
+    "epochs": 120,
+    "batch_size": 8,
+    "chunk_length": 32,
+    "burn_in": 8,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "patience": 25,
+    "threads": 2,
+    "device": "cpu",
+    "max_wall_seconds": 1800,
+    "loss": "train-only class-weighted categorical cross entropy at usable expert decisions",
+    "selection_split": "eval",
+    "selection_criterion": "macro_f1_then_unweighted_nll",
+    "selection_macro_f1_actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "test_and_ood_selection": false
+  },
+  "overfit": {
+    "source_split": "train",
+    "seed": 17,
+    "steps": 500,
+    "max_chunks": 11,
+    "learning_rate": 0.003,
+    "weight_decay": 0,
+    "target_accuracy": 0.98,
+    "max_wall_seconds": 600,
+    "deployment_candidate": false
+  },
+  "verification": {
+    "seed": 17,
+    "tolerance": 1e-05,
+    "warmup": 100,
+    "iterations": 500,
+    "model_step_p95_budget_ms": 5,
+    "all_model_tests_host": "dev-ubuntu"
+  },
+  "runtime": {
+    "max_age_game_ms": 100,
+    "max_dt_game_ms": 100,
+    "max_actors": 4,
+    "threads": 2,
+    "unexpected_gap": "reset_and_native_fallback",
+    "sampling": "periodic-v1",
+    "decision_anchor": "latest_periodic_exact",
+    "checkpoint_fixed_per_episode": true,
+    "latest_observation_mailbox_capacity": 1,
+    "max_inflight_per_actor": 1
+  },
+  "arena": {
+    "policies": [
+      "native",
+      "gru",
+      "mlp"
+    ],
+    "cases": [
+      {
+        "name": "distance-29-0",
+        "task": "distance",
+        "seed": 29,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "attack-29-0",
+        "task": "attack",
+        "seed": 29,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "block-29-0",
+        "task": "block",
+        "seed": 29,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "native_duel-29-0",
+        "task": "native_duel",
+        "seed": 29,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "distance-29-1",
+        "task": "distance",
+        "seed": 29,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "attack-29-1",
+        "task": "attack",
+        "seed": 29,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "block-29-1",
+        "task": "block",
+        "seed": 29,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "native_duel-29-1",
+        "task": "native_duel",
+        "seed": 29,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "distance-113-0",
+        "task": "distance",
+        "seed": 113,
+        "side": 0,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "attack-113-0",
+        "task": "attack",
+        "seed": 113,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "block-113-0",
+        "task": "block",
+        "seed": 113,
+        "side": 0,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "native_duel-113-0",
+        "task": "native_duel",
+        "seed": 113,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "distance-113-1",
+        "task": "distance",
+        "seed": 113,
+        "side": 1,
+        "distance_cm": 600,
+        "timeout_ms": 10000
+      },
+      {
+        "name": "attack-113-1",
+        "task": "attack",
+        "seed": 113,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "block-113-1",
+        "task": "block",
+        "seed": 113,
+        "side": 1,
+        "distance_cm": 150,
+        "timeout_ms": 5000
+      },
+      {
+        "name": "native_duel-113-1",
+        "task": "native_duel",
+        "seed": 113,
+        "side": 1,
+        "distance_cm": 400,
+        "timeout_ms": 60000
+      },
+      {
+        "name": "near-wall-29-0",
+        "task": "native_duel",
+        "seed": 29,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000,
+        "arena": {
+          "geometry": "near_wall"
+        }
+      },
+      {
+        "name": "near-wall-113-0",
+        "task": "native_duel",
+        "seed": 113,
+        "side": 0,
+        "distance_cm": 400,
+        "timeout_ms": 60000,
+        "arena": {
+          "geometry": "near_wall"
+        }
+      }
+    ],
+    "max_episode_substeps": 2000,
+    "model_device": "cpu",
+    "sampling_view": "periodic-v1",
+    "seeds_are_eval_only": [
+      29,
+      113
+    ],
+    "metric_native_duel": "primary_win",
+    "metric_other_tasks": "task_success",
+    "minimum_success_delta_to_native": -0.15,
+    "required_softlocks": 0,
+    "required_invariant_violations": 0,
+    "comparison_gate": "GRU per task against paired native, delta >= -0.15. MLP is reported as comparison only; diagnostic is not statistical noninferiority.",
+    "candidate_policy": "gru",
+    "mlp_gate": "comparison_only",
+    "native_micro_ownership": "native_with_scripted_opponent",
+    "opponents_by_task": {
+      "distance": "hold_position",
+      "attack": "hold_position",
+      "block": "attack_front_when_available",
+      "native_duel": "native"
+    }
+  },
+  "resources": {
+    "host": "dev-ubuntu",
+    "threads": 2,
+    "cpu_quota_percent": 200,
+    "memory_max_gib": 6,
+    "training_minimum_cuda_free_mib": 1536,
+    "initial_device": "cpu",
+    "model_process_cuda_visible_devices": "",
+    "production_services_must_keep_identity": true,
+    "docker_changes_allowed": false,
+    "required_services": [
+      "gothic-voxtral",
+      "gothic-voxcpm",
+      "gothic-decider",
+      "gothic-gemma"
+    ]
+  },
+  "artifacts": {
+    "raw_data": "server_only",
+    "checkpoints": "server_only",
+    "repo": "configs, manifests, compact metrics and notes"
+  },
+  "limitations": [
+    "Initial diagnostic BC is not release readiness.",
+    "Test/OOD are reported only after eval checkpoint selection.",
+    "CPU resource measurement includes runtime and RSS; no GPU performance claim for CPU run."
+  ]
+}

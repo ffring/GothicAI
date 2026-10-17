@@ -1,0 +1,296 @@
+{
+ "schema_version": 1,
+ "kind": "body_schedule_equivalence_summary",
+ "host": "Ryzen 9 3950X, bare metal, Ubuntu 26.04",
+ "quality_credit": false,
+ "fix": {
+  "lockstep_start_substeps": 1,
+  "command_ttl_ms": 100,
+  "previous": {
+   "lockstep_start_substeps": 2,
+   "collector_command_ttl_ms": 1000
+  },
+  "defaults_unchanged": "EpisodeEnv.start() keeps 2; gate config keeps its key absent; the RL collector defaults to 1 and 100"
+ },
+ "realtime_reference": "body/rl/rt-duels-v1/{bc,round2}: 64 held-out duels, seeds 90000-90063, gate driver in realtime",
+ "equivalence": {
+  "collector-bc": {
+   "lockstep": "eq-collect-bc2",
+   "realtime": "rt-duels-v1/bc",
+   "totals": {
+    "pairs": 64,
+    "identical": 64,
+    "identical_commands": 64,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 0,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 2,
+    "realtime_late_commands": 0,
+    "realtime_accepted_commands": 1649
+   },
+   "command_events": 4866,
+   "observation_rows": 41002,
+   "diverged": [],
+   "file_sha256": "ef26c81134bdcc7cd61094c3dbdc873cb6921aee1602b11d8408455babba525a"
+  },
+  "collector-r2": {
+   "lockstep": "eq-collect-r2",
+   "realtime": "rt-duels-v1/round2",
+   "totals": {
+    "pairs": 64,
+    "identical": 63,
+    "identical_commands": 63,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 1,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 1,
+    "realtime_late_commands": 1,
+    "realtime_accepted_commands": 1884
+   },
+   "command_events": 5588,
+   "observation_rows": 47318,
+   "diverged": [
+    {
+     "key": [
+      "native_duel",
+      90061,
+      1,
+      350
+     ],
+     "first_command_difference": {
+      "index": 3,
+      "keys": [
+       "sim_step",
+       "t_game_ms"
+      ],
+      "game_ms": 17494
+     },
+     "first_observation_difference": {
+      "index": 57,
+      "keys": [
+       "dt_game_ms",
+       "event_only",
+       "periodic",
+       "sim_step",
+       "t_game_ms",
+       "target"
+      ],
+      "game_ms": 17527
+     },
+     "realtime_late_commands": [
+      {
+       "game_ms": 17494,
+       "observation_game_ms": 17461,
+       "action_id": 4
+      }
+     ],
+     "realtime_skipped_ticks": []
+    }
+   ],
+   "file_sha256": "d6673c2593658b518f7c99d786b24d8c0ef518622261ebca138ffda32b95e8d4"
+  },
+  "gate-bc": {
+   "lockstep": "bc-lockstep1",
+   "realtime": "bc",
+   "totals": {
+    "pairs": 64,
+    "identical": 64,
+    "identical_commands": 64,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 0,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 2,
+    "realtime_late_commands": 0,
+    "realtime_accepted_commands": 1649
+   },
+   "command_events": 4866,
+   "observation_rows": 41002,
+   "diverged": [],
+   "file_sha256": "93c534846e95f29cbe763d630b268b4cdf87af2d7d94255fd6802a291455726b"
+  },
+  "gate-r2": {
+   "lockstep": "round2-lockstep1",
+   "realtime": "round2",
+   "totals": {
+    "pairs": 64,
+    "identical": 63,
+    "identical_commands": 63,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 1,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 1,
+    "realtime_late_commands": 1,
+    "realtime_accepted_commands": 1884
+   },
+   "command_events": 5588,
+   "observation_rows": 47318,
+   "diverged": [
+    {
+     "key": [
+      "native_duel",
+      90061,
+      1,
+      350
+     ],
+     "first_command_difference": {
+      "index": 3,
+      "keys": [
+       "sim_step",
+       "t_game_ms"
+      ],
+      "game_ms": 17494
+     },
+     "first_observation_difference": {
+      "index": 57,
+      "keys": [
+       "dt_game_ms",
+       "event_only",
+       "periodic",
+       "sim_step",
+       "t_game_ms",
+       "target"
+      ],
+      "game_ms": 17527
+     },
+     "realtime_late_commands": [
+      {
+       "game_ms": 17494,
+       "observation_game_ms": 17461,
+       "action_id": 4
+      }
+     ],
+     "realtime_skipped_ticks": []
+    }
+   ],
+   "file_sha256": "5c67773007bb55181c699c468269e4984cc313d26ecbd229d681c0f556509281"
+  }
+ },
+ "held_out_448_realtime_schedule": {
+  "models": {
+   "bc": {
+    "run": "eval-rt-bc",
+    "episodes": 448,
+    "wins": 444,
+    "losses": 4,
+    "hp_mean": 219.07,
+    "win_s_mean": 15.04,
+    "decisions_per_duel": 27.43,
+    "attack_front_share": 0.2907,
+    "wait_200_share": 0.1077,
+    "score_mean": 1.2937,
+    "checkpoint_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb"
+   },
+   "round1": {
+    "run": "eval-rt-si1",
+    "episodes": 448,
+    "wins": 442,
+    "losses": 6,
+    "hp_mean": 215.93,
+    "win_s_mean": 15.49,
+    "decisions_per_duel": 28.03,
+    "attack_front_share": 0.2939,
+    "wait_200_share": 0.0974,
+    "score_mean": 1.2784,
+    "checkpoint_sha256": "c3dafa006f0f0f64c4de180e793cd65a65967b79406ae09a4ca9e65a56f29b8a"
+   },
+   "round2": {
+    "run": "eval-rt-si2",
+    "episodes": 448,
+    "wins": 426,
+    "losses": 22,
+    "hp_mean": 199.23,
+    "win_s_mean": 16.52,
+    "decisions_per_duel": 30.44,
+    "attack_front_share": 0.275,
+    "wait_200_share": 0.1581,
+    "score_mean": 1.1704,
+    "checkpoint_sha256": "fc6de05e696de167e111e352e7633b4dfb66e3c468d4a310d4357137aa576e0c"
+   },
+   "bc_old_schedule": {
+    "run": "eval-bc",
+    "episodes": 448,
+    "wins": 431,
+    "losses": 17,
+    "hp_mean": 216.32,
+    "win_s_mean": 16.68,
+    "decisions_per_duel": 31.81,
+    "attack_front_share": 0.2299,
+    "wait_200_share": 0.1319,
+    "score_mean": 1.2249,
+    "checkpoint_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb"
+   },
+   "round2_old_schedule": {
+    "run": "eval-si2",
+    "episodes": 448,
+    "wins": 442,
+    "losses": 6,
+    "hp_mean": 228.17,
+    "win_s_mean": 14.6,
+    "decisions_per_duel": 26.34,
+    "attack_front_share": 0.3122,
+    "wait_200_share": 0.089,
+    "score_mean": 1.3012,
+    "checkpoint_sha256": "fc6de05e696de167e111e352e7633b4dfb66e3c468d4a310d4357137aa576e0c"
+   }
+  },
+  "paired": {
+   "bc->round1": {
+    "cases": 448,
+    "only_a": 5,
+    "only_b": 3,
+    "mcnemar_p": 0.72656,
+    "hp_delta": -3.14,
+    "hp_ci95": 6.9,
+    "score_delta": -0.0152,
+    "score_ci95": 0.0331
+   },
+   "bc->round2": {
+    "cases": 448,
+    "only_a": 22,
+    "only_b": 4,
+    "mcnemar_p": 0.00053,
+    "hp_delta": -19.84,
+    "hp_ci95": 9.6,
+    "score_delta": -0.1233,
+    "score_ci95": 0.0578
+   },
+   "round1->round2": {
+    "cases": 448,
+    "only_a": 22,
+    "only_b": 6,
+    "mcnemar_p": 0.00372,
+    "hp_delta": -16.7,
+    "hp_ci95": 9.12,
+    "score_delta": -0.1081,
+    "score_ci95": 0.0594
+   },
+   "bc_old_schedule->bc": {
+    "cases": 448,
+    "only_a": 4,
+    "only_b": 17,
+    "mcnemar_p": 0.0072,
+    "hp_delta": 2.75,
+    "hp_ci95": 10.09,
+    "score_delta": 0.0688,
+    "score_ci95": 0.0532
+   },
+   "round2_old_schedule->round2": {
+    "cases": 448,
+    "only_a": 22,
+    "only_b": 6,
+    "mcnemar_p": 0.00372,
+    "hp_delta": -28.95,
+    "hp_ci95": 9.75,
+    "score_delta": -0.1308,
+    "score_ci95": 0.0599
+   }
+  }
+ },
+ "sha256": {
+  "bc_gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+  "round1_gru": "c3dafa006f0f0f64c4de180e793cd65a65967b79406ae09a4ca9e65a56f29b8a",
+  "round2_gru": "fc6de05e696de167e111e352e7633b4dfb66e3c468d4a310d4357137aa576e0c",
+  "runner": "fc0a3d0d6122601f569a4816ef80f593da60c72b4aa2ee4b858f7d93ba556a10",
+  "gate_lockstep_config": "7334fdd80552b424866a40359a5913c33376be13ede13c897e5980b5d819bea7"
+ }
+}

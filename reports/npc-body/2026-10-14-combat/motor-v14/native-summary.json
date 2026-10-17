@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "kind": "body_motor_v14_native_summary",
+  "status": "native_guard_proofs_passed_queue_coverage_incomplete",
+  "binary_sha256": "ac2dfe85bc7dd255f08e3eff5502594f854241ee04985f698569f527d2652263",
+  "model": null,
+  "quality_credit": false,
+  "independent_audit": {
+    "api37_exact_json_rederivation": true,
+    "visibility8_exact_rederivation": true,
+    "compact10_exact_rederivation": true
+  },
+  "visibility": {
+    "physical_prefix": {
+      "status": "matched",
+      "ordered_rows": 1801,
+      "through_offset_ms": 7567,
+      "position_tolerance_cm": 1,
+      "clock_pose_damage_mask_tolerance": "exact except float roundoff <=0.0001"
+    },
+    "boundary": {
+      "target_entity_id": 3,
+      "hit_offset_ms": 7567,
+      "damage_hp": 70,
+      "stumble_duration_ms": 360,
+      "damage_event_seq": 3309,
+      "stumble_event_seq": 3308,
+      "cancel_event_seq": 192,
+      "invisible_locked_observation_sequences": [
+        698,
+        700
+      ],
+      "recovered_offset_ms": 7633,
+      "release_during_forced_lock": false,
+      "policy_decisions_disabled_during_loss": true
+    },
+    "four_actors_retained": true,
+    "replayed_accepted_commands": 64,
+    "checks": {
+      "accepted_schedule_replayed": true,
+      "physical_prefix_matched": true,
+      "actual_hit_70_preserved": true,
+      "forced_stumble_360_preserved": true,
+      "no_unsafe_visibility_release": true,
+      "policy_decisions_disabled_during_loss": true,
+      "actual_visibility_recovered": true,
+      "four_owners_retained": true
+    },
+    "schema_version": 1,
+    "kind": "body_visibility_boundary_probe_compact_summary",
+    "status": "passed",
+    "model": null,
+    "quality_credit": false,
+    "source_report": {
+      "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/visibility-boundary-probe/probe.json",
+      "sha256": "7c00d82304775753708e424c9d70e2fa9c8acb375b293dfe3c4a7608ec1b5094",
+      "bytes": 4224145
+    },
+    "source_accepted_commands": 64,
+    "declared_cutoff_ms": 7567,
+    "summary_scope": "Saved-data extraction; full report/raw journals retained on dev-ubuntu."
+  },
+  "realtime": {
+    "schema_version": 1,
+    "kind": "body_realtime_arena_probe_compact_summary",
+    "status": "passed",
+    "model": null,
+    "quality_credit": false,
+    "source_report": {
+      "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/realtime-probe/probe.json",
+      "sha256": "9e80b07f61021a4437995b7fea127f0ce54e0ad42983336706a323d100247d97",
+      "bytes": 3465248
+    },
+    "summary_scope": "Saved-data extraction; full report/raw journals retained on dev-ubuntu.",
+    "clock_brackets": 815,
+    "watchdog_ms": 5000,
+    "arena_status": "passed",
+    "generic_status": "passed",
+    "no_pre_start_catchup": true,
+    "free_tick_rate": {
+      "wall_s": 1.001117708,
+      "substeps": 30,
+      "simulated_ms": 1000,
+      "substeps_per_wall_s": 29.966506196292354,
+      "declared_fps_bounds": [
+        27.0,
+        33.0
+      ]
+    },
+    "actual_actor_count": 4,
+    "actual_animation_stream_count": 4,
+    "four_actor_terminal": {
+      "game_ms": 17794,
+      "sim_step": 61,
+      "done": true,
+      "native_choices": 0,
+      "graphics_device_created": false,
+      "window_created": false,
+      "audio_device_created": false
+    },
+    "generic_terminal": {
+      "game_ms": 21394,
+      "sim_step": 169,
+      "done": true,
+      "native_choices": 10,
+      "graphics_device_created": false,
+      "window_created": false,
+      "audio_device_created": false
+    },
+    "wall_clearance_case_count": 12,
+    "requested_wall_clearances_cm": [
+      120,
+      130,
+      140,
+      150,
+      160,
+      170
+    ],
+    "wall_clearances": [
+      {
+        "side": 0,
+        "requested_cm": 120,
+        "actual_cm": 121.700729,
+        "normal_actual_cm": 121.641197,
+        "normal_projection_cm": 121.64121545130781,
+        "numeric_ray_normal_projection_cm": 121.64115454797799
+      },
+      {
+        "side": 0,
+        "requested_cm": 130,
+        "actual_cm": 131.45076,
+        "normal_actual_cm": 131.384476,
+        "normal_projection_cm": 131.3844552521785,
+        "numeric_ray_normal_projection_cm": 131.38438298261562
+      },
+      {
+        "side": 0,
+        "requested_cm": 140,
+        "actual_cm": 141.191757,
+        "normal_actual_cm": 141.119186,
+        "normal_projection_cm": 141.11918156538374,
+        "numeric_ray_normal_projection_cm": 141.11916975311553
+      },
+      {
+        "side": 0,
+        "requested_cm": 150,
+        "actual_cm": 150.93515,
+        "normal_actual_cm": 150.861954,
+        "normal_projection_cm": 150.86200228231783,
+        "numeric_ray_normal_projection_cm": 150.8619482706943
+      },
+      {
+        "side": 0,
+        "requested_cm": 160,
+        "actual_cm": 160.684784,
+        "normal_actual_cm": 160.604889,
+        "normal_projection_cm": 160.60490304521875,
+        "numeric_ray_normal_projection_cm": 160.60489455395606
+      },
+      {
+        "side": 0,
+        "requested_cm": 170,
+        "actual_cm": 170.430435,
+        "normal_actual_cm": 170.347809,
+        "normal_projection_cm": 170.34782165222322,
+        "numeric_ray_normal_projection_cm": 170.3478255857921
+      },
+      {
+        "side": 1,
+        "requested_cm": 120,
+        "actual_cm": 136.778168,
+        "normal_actual_cm": 134.110367,
+        "normal_projection_cm": 134.110435077014,
+        "numeric_ray_normal_projection_cm": 134.11033751900445
+      },
+      {
+        "side": 1,
+        "requested_cm": 130,
+        "actual_cm": 146.417938,
+        "normal_actual_cm": 143.563583,
+        "normal_projection_cm": 143.56356663051088,
+        "numeric_ray_normal_projection_cm": 143.56336337439183
+      },
+      {
+        "side": 1,
+        "requested_cm": 140,
+        "actual_cm": 156.048935,
+        "normal_actual_cm": 153.000763,
+        "normal_projection_cm": 153.00073432654403,
+        "numeric_ray_normal_projection_cm": 153.00068014200244
+      },
+      {
+        "side": 1,
+        "requested_cm": 150,
+        "actual_cm": 165.688766,
+        "normal_actual_cm": 162.457321,
+        "normal_projection_cm": 162.45732314207342,
+        "numeric_ray_normal_projection_cm": 162.45735649016842
+      },
+      {
+        "side": 1,
+        "requested_cm": 160,
+        "actual_cm": 175.31987,
+        "normal_actual_cm": 171.891159,
+        "normal_projection_cm": 171.8912556426807,
+        "numeric_ray_normal_projection_cm": 171.8910227650004
+      },
+      {
+        "side": 1,
+        "requested_cm": 170,
+        "actual_cm": 173.2621,
+        "normal_actual_cm": 173.241425,
+        "normal_projection_cm": 173.24145999294822,
+        "numeric_ray_normal_projection_cm": 173.24147458829276
+      }
+    ],
+    "imported_model_modules": []
+  },
+  "pending_input_failed": {
+    "schema_version": 1,
+    "kind": "body_pending_input_probe_failed_coverage_summary",
+    "status": "failed",
+    "source_collection_status": "collected",
+    "error": "no real ready admission or more than one command admitted per due tick",
+    "model": null,
+    "quality_credit": false,
+    "source_report": {
+      "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/pending-input-probe/probe.json",
+      "sha256": "3dbcfefe159e6ef8264f9e530f610255d9202c15cef04f6181422c1a83dea993",
+      "bytes": 78183
+    },
+    "scheduling_journal": {
+      "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/pending-input-probe/episode/observer-timing.jsonl",
+      "sha256": "b951061aae2f0744aa4713702f953151f6db8fc8494896d676d06adc8c649538",
+      "bytes": 620298
+    },
+    "raw_markers": 1508,
+    "phase_counts": {
+      "tick_begin": 61,
+      "tick_end": 61,
+      "input_read": 1386
+    },
+    "priority_write_admissions": 0,
+    "interpretation": "The actual fixture did not exercise priority write admission; no native ordering failure or cap violation was established. This failed prerequisite remains failed."
+  },
+  "api": {
+    "status": "complete",
+    "full_stage4_evidence": true,
+    "cases": 37,
+    "issues": [],
+    "native_parity": "matched",
+    "source_report": {
+      "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/faults/validated/body-api.json",
+      "sha256": "5fc44b4e08e8c6ca0e960e54fdde2f26c68b26ca68ac2a604911fe418dd582b9",
+      "bytes": 173988
+    }
+  },
+  "compact": {
+    "status": "passed",
+    "checks": {
+      "actual_compact_flag": true,
+      "held_and_armed_full_evidence": true,
+      "held_primary_rng_unchanged": true,
+      "no_primary_preparation_choices_or_commands": true,
+      "real_incoming_attack_anchor": true,
+      "activation_full_and_same_game_clock": true,
+      "active_reply_only_allowed_pruning": true,
+      "numeric_masks_pose_hp_clocks_preserved": true,
+      "terminal_full_evidence": true,
+      "no_rendering_devices": true
+    },
+    "source_report": {
+      "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/compact-reply-probe/probe.json",
+      "sha256": "73d927b26dc1f25ed2fd07965460d7c6a373a516ebbe6b609d0dbfe81c30efbb",
+      "bytes": 26268
+    }
+  }
+}

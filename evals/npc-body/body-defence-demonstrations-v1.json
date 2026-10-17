@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "kind": "body-reactive-defence-demonstrations-v1",
+  "declared_before_collection": "2026-10-14",
+  "teacher_id": "observed-reactive-defence-v1",
+  "provider": "stage8-scripted-defence-teacher",
+  "teacher_module": "body_defence_teacher",
+  "setup_family": "arena-native-melee-v1",
+  "train_seeds": [181, 191, 193, 197, 199, 211],
+  "eval_seeds": [223, 227],
+  "reserved_test_seeds": [229, 233],
+  "ood_seeds": [239, 241],
+  "sides": [0, 1],
+  "distances_cm": [140, 150, 180],
+  "timeout_game_ms": 2000,
+  "allowed_actions": [9],
+  "case_count": 72,
+  "smoke_case_count": 6,
+  "group_assignments": {
+    "[\"arena-native-melee-v1\",181]": "train",
+    "[\"arena-native-melee-v1\",191]": "train",
+    "[\"arena-native-melee-v1\",193]": "train",
+    "[\"arena-native-melee-v1\",197]": "train",
+    "[\"arena-native-melee-v1\",199]": "train",
+    "[\"arena-native-melee-v1\",211]": "train",
+    "[\"arena-native-melee-v1\",223]": "eval",
+    "[\"arena-native-melee-v1\",227]": "eval",
+    "[\"arena-native-melee-v1\",229]": "test",
+    "[\"arena-native-melee-v1\",233]": "test",
+    "[\"arena-native-melee-v1\",239]": "ood",
+    "[\"arena-native-melee-v1\",241]": "ood"
+  },
+  "preparation_source": {
+    "run": "stage8-reaction-v3",
+    "helper_file": "code/scripts/body_block_reaction.py",
+    "config_file": "code/evals/npc-body/body-block-reaction-v1.json",
+    "helper_sha256": "8a7e9cbe213e83cd75bf43c7e812a326363000eb30c5dfa8a9f1407b787d2f81",
+    "config_sha256": "5008de06ff1efe1aba1fa2f91683a6f32394e9cf9318e13c8015c9c7f4ed62e3",
+    "status": "exact_frozen_hashes_required_before_collection"
+  },
+  "reference": {
+    "normalizer_sha256": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6"
+  },
+  "preparation": {
+    "mode": "lockstep",
+    "reset_reaction_hold": true,
+    "both_actors_leased": true,
+    "attacker_action_id": 6,
+    "max_substeps": 8,
+    "max_game_ms": 200,
+    "source": "first actual current periodic post-animation visible in-range attacker windup",
+    "primary_commands": 0,
+    "primary_native_choices": 0,
+    "primary_rng_draws": 0,
+    "hp_per_actor": 300,
+    "hits_before_activation": 0,
+    "quality_credit": false
+  },
+  "model_sequence": {
+    "start": "source-bound actual prepared primary periodic capture record",
+    "first_sequence_dt_game_ms": 0,
+    "preparation_hidden_updates": 0,
+    "preparation_raw_records_retained": true,
+    "model_actors": ["primary"],
+    "episode_initial": "original native reset; no fabricated clock or observations"
+  },
+  "mechanical_approval": {
+    "primary_action_id": 9,
+    "primary_commands": 1,
+    "accepted_started_completed": true,
+    "incoming_hit": "actual mapped opponent applied hit_attempt followed by one-to-one same-time reverse-role melee defence_result with blocked=true and higher native event sequence",
+    "primary_hp": 300,
+    "opponent_hp": 300,
+    "primary_damage": 0,
+    "cancelled_or_censored_is_expert": false,
+    "arena_task": "reset_stress permits the real block to finish after the hit; original block benchmark unchanged"
+  },
+  "coverage": {
+    "new_train_block_labels": 36,
+    "new_eval_block_labels": 12,
+    "new_test_block_labels": 12,
+    "new_ood_block_labels": 12,
+    "count_only": "primary usable approved exact periodic labels after prepared-scene projection"
+  },
+  "budgets": {
+    "collection_wall_timeout_s": 900,
+    "max_episode_substeps": 90,
+    "native_queue_capacity": 4096,
+    "drain_max": 256,
+    "writer_queue_capacity": 256,
+    "provider_watchdog_wall_ms": 5000,
+    "max_dropped_records": 0
+  },
+  "sampling": {
+    "version": "periodic-v1",
+    "rate_hz": 20,
+    "max_label_age_game_ms": 67,
+    "event_only_commands": false
+  },
+  "simulation": {
+    "mode": "lockstep",
+    "fps": 30,
+    "time_multiplier": 1,
+    "model": null
+  },
+  "limitations": [
+    "Only reactive block is labelled here. Existing genuine jump-back labels retain their original provenance.",
+    "Known eval/test/OOD assignments are inherited. The fresh twenty-seed screening is never opened by this collector.",
+    "Preparation and opponent commands are retained as raw nonexpert evidence; they do not update learner memory.",
+    "A completed block without a real prevented hit, or a stopped/cancelled block, receives no expert credit.",
+    "This collection changes neither masks nor native physics nor the original neutral block gate."
+  ]
+}

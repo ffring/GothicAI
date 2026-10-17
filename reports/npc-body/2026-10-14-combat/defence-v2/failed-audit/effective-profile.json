@@ -1,0 +1,342 @@
+{
+  "arena": {
+    "candidate_policy": "gru",
+    "cases": [
+      {
+        "distance_cm": 600,
+        "name": "distance-29-0",
+        "seed": 29,
+        "side": 0,
+        "task": "distance",
+        "timeout_ms": 10000
+      },
+      {
+        "distance_cm": 150,
+        "name": "attack-29-0",
+        "seed": 29,
+        "side": 0,
+        "task": "attack",
+        "timeout_ms": 5000
+      },
+      {
+        "distance_cm": 150,
+        "name": "block-29-0",
+        "seed": 29,
+        "side": 0,
+        "task": "block",
+        "timeout_ms": 5000
+      },
+      {
+        "distance_cm": 400,
+        "name": "native_duel-29-0",
+        "seed": 29,
+        "side": 0,
+        "task": "native_duel",
+        "timeout_ms": 60000
+      },
+      {
+        "distance_cm": 600,
+        "name": "distance-29-1",
+        "seed": 29,
+        "side": 1,
+        "task": "distance",
+        "timeout_ms": 10000
+      },
+      {
+        "distance_cm": 150,
+        "name": "attack-29-1",
+        "seed": 29,
+        "side": 1,
+        "task": "attack",
+        "timeout_ms": 5000
+      },
+      {
+        "distance_cm": 150,
+        "name": "block-29-1",
+        "seed": 29,
+        "side": 1,
+        "task": "block",
+        "timeout_ms": 5000
+      },
+      {
+        "distance_cm": 400,
+        "name": "native_duel-29-1",
+        "seed": 29,
+        "side": 1,
+        "task": "native_duel",
+        "timeout_ms": 60000
+      },
+      {
+        "distance_cm": 600,
+        "name": "distance-113-0",
+        "seed": 113,
+        "side": 0,
+        "task": "distance",
+        "timeout_ms": 10000
+      },
+      {
+        "distance_cm": 150,
+        "name": "attack-113-0",
+        "seed": 113,
+        "side": 0,
+        "task": "attack",
+        "timeout_ms": 5000
+      },
+      {
+        "distance_cm": 150,
+        "name": "block-113-0",
+        "seed": 113,
+        "side": 0,
+        "task": "block",
+        "timeout_ms": 5000
+      },
+      {
+        "distance_cm": 400,
+        "name": "native_duel-113-0",
+        "seed": 113,
+        "side": 0,
+        "task": "native_duel",
+        "timeout_ms": 60000
+      },
+      {
+        "distance_cm": 600,
+        "name": "distance-113-1",
+        "seed": 113,
+        "side": 1,
+        "task": "distance",
+        "timeout_ms": 10000
+      },
+      {
+        "distance_cm": 150,
+        "name": "attack-113-1",
+        "seed": 113,
+        "side": 1,
+        "task": "attack",
+        "timeout_ms": 5000
+      },
+      {
+        "distance_cm": 150,
+        "name": "block-113-1",
+        "seed": 113,
+        "side": 1,
+        "task": "block",
+        "timeout_ms": 5000
+      },
+      {
+        "distance_cm": 400,
+        "name": "native_duel-113-1",
+        "seed": 113,
+        "side": 1,
+        "task": "native_duel",
+        "timeout_ms": 60000
+      },
+      {
+        "arena": {
+          "geometry": "near_wall"
+        },
+        "distance_cm": 400,
+        "name": "near-wall-29-0",
+        "seed": 29,
+        "side": 0,
+        "task": "native_duel",
+        "timeout_ms": 60000
+      },
+      {
+        "arena": {
+          "geometry": "near_wall"
+        },
+        "distance_cm": 400,
+        "name": "near-wall-113-0",
+        "seed": 113,
+        "side": 0,
+        "task": "native_duel",
+        "timeout_ms": 60000
+      }
+    ],
+    "comparison_gate": "GRU per task against paired native, delta >= -0.15. MLP is reported as comparison only; diagnostic is not statistical noninferiority.",
+    "max_episode_substeps": 2000,
+    "metric_native_duel": "primary_win",
+    "metric_other_tasks": "task_success",
+    "minimum_success_delta_to_native": -0.15,
+    "mlp_gate": "comparison_only",
+    "model_device": "cpu",
+    "native_micro_ownership": "native_with_scripted_opponent",
+    "opponents_by_task": {
+      "attack": "hold_position",
+      "block": "attack_front_when_available",
+      "distance": "hold_position",
+      "native_duel": "native"
+    },
+    "policies": [
+      "native",
+      "gru",
+      "mlp"
+    ],
+    "required_invariant_violations": 0,
+    "required_softlocks": 0,
+    "sampling_view": "periodic-v1",
+    "seeds_are_eval_only": [
+      29,
+      113
+    ]
+  },
+  "artifacts": {
+    "checkpoints": "server_only",
+    "raw_data": "server_only",
+    "repo": "configs, manifests, compact metrics and notes"
+  },
+  "dataset": {
+    "action_version": 1,
+    "ambiguous_labels": "drop_all",
+    "expected_episodes": 207,
+    "feature_version": "body-periodic-numeric-v1",
+    "included_actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "inherited_assignment_changes": 0,
+    "legacy_excluded_eval_reopened": false,
+    "max_label_age_game_ms": 67,
+    "minimum_train_labels_per_action": 20,
+    "minimum_true_expert_labels_per_included_class": 20,
+    "normalization_source": "train_only",
+    "preserve_stage6_assignments": true,
+    "required_conditions": [
+      "wall",
+      "target_visibility_lost",
+      "bad_distance"
+    ],
+    "sampling_view": "periodic-v1",
+    "split_seed": 20261013
+  },
+  "declared_before_measurement": "2026-10-14",
+  "limitations": [
+    "Initial diagnostic BC is not release readiness.",
+    "Test/OOD are reported only after eval checkpoint selection.",
+    "CPU resource measurement includes runtime and RSS; no GPU performance claim for CPU run."
+  ],
+  "models": {
+    "gru": {
+      "encoder_size": 256,
+      "head_size": 128,
+      "hidden_size": 256,
+      "recurrent_layers": 1
+    },
+    "mlp": {
+      "head_size": 128,
+      "hidden_size": 256,
+      "stack_size": 8
+    },
+    "shared": {
+      "actions": 12,
+      "decision_mask_rule": "Shared policy_action_mask on every periodic row: preserve raw availability separately; an empty raw mask becomes continue-only for memory, with no expert loss or command. Otherwise exclude continue(0) iff physical native_decision_eligible and any noncontinue primitive is available; retain continue on locked rows.",
+      "dropout": 0,
+      "dtype": "float32",
+      "features": "same periodic physical whitelist"
+    }
+  },
+  "name": "body-bc-v1",
+  "overfit": {
+    "deployment_candidate": false,
+    "learning_rate": 0.003,
+    "max_chunks": 11,
+    "max_wall_seconds": 600,
+    "seed": 17,
+    "source_split": "train",
+    "steps": 500,
+    "target_accuracy": 0.98,
+    "weight_decay": 0
+  },
+  "resources": {
+    "cpu_quota_percent": 200,
+    "docker_changes_allowed": false,
+    "host": "dev-ubuntu",
+    "initial_device": "cpu",
+    "memory_max_gib": 6,
+    "model_process_cuda_visible_devices": "",
+    "production_services_must_keep_identity": true,
+    "required_services": [
+      "gothic-voxtral",
+      "gothic-voxcpm",
+      "gothic-decider",
+      "gothic-gemma"
+    ],
+    "threads": 2,
+    "training_minimum_cuda_free_mib": 1536
+  },
+  "runtime": {
+    "checkpoint_fixed_per_episode": true,
+    "decision_anchor": "latest_periodic_exact",
+    "latest_observation_mailbox_capacity": 1,
+    "max_actors": 4,
+    "max_age_game_ms": 100,
+    "max_dt_game_ms": 100,
+    "max_inflight_per_actor": 1,
+    "sampling": "periodic-v1",
+    "threads": 2,
+    "unexpected_gap": "reset_and_native_fallback"
+  },
+  "schema_version": 1,
+  "training": {
+    "architectures": [
+      "gru",
+      "mlp"
+    ],
+    "batch_size": 8,
+    "burn_in": 32,
+    "chunk_length": 64,
+    "cuda_memory_fraction": 0.04,
+    "cuda_memory_limit_mib": 1024,
+    "device": "cuda",
+    "epochs": 120,
+    "evaluation_mode": "continuous",
+    "gradient_clip": 1.0,
+    "learning_rate": 0.001,
+    "loss": "train-only class-weighted categorical cross entropy at usable expert decisions",
+    "max_wall_seconds": 1800,
+    "minimum_cuda_free_mib": 3072,
+    "patience": 25,
+    "seeds": [
+      11,
+      29,
+      43
+    ],
+    "selection_criterion": "macro_f1_then_unweighted_nll",
+    "selection_macro_f1_actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "selection_split": "eval",
+    "selection_view": "full_episode",
+    "stack_size": 8,
+    "test_and_ood_selection": false,
+    "threads": 2,
+    "weight_decay": 0.0001
+  },
+  "verification": {
+    "all_model_tests_host": "dev-ubuntu",
+    "iterations": 500,
+    "model_step_p95_budget_ms": 5,
+    "seed": 17,
+    "tolerance": 1e-05,
+    "warmup": 100
+  }
+}

@@ -1,0 +1,2523 @@
+{
+  "schema_version": 1,
+  "kind": "stage8_v6_completed_candidate_read_only_audit",
+  "created_at_utc": "2026-10-14T09:03:43.612227+00:00",
+  "run": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6",
+  "bindings_sha256": {
+    "environment.json": "01ab5d176a995a50c68e81ed721e49b8a0bbc0bbf440f5b40185b0d12e3f38cd",
+    "code/evals/npc-body/body-stage8-v1.json": "506cae01813644e53acaf5d9124f887d4ebdab5e198a89e8ce07840b6778b9ac",
+    "dataset/dataset.json": "f75fdcb02ec9389bab77fac1ef2da661d5f48f61add36727a1a57c6ed3fbcfe6",
+    "dataset/normalization.json": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6",
+    "dataset/selection-profile.json": "e9c5ca6db72f21e81fd874826edb7714fa88be17c9efcaf0635425c56b7dc6d4"
+  },
+  "scope": "All six completed candidate and fixed global-selection metadata; continuous fresh-eval confusion. No forwards or gameplay. Independently joined saved predictions are recorded in predictions.json.",
+  "global_selection_exists": true,
+  "global_selection": {
+    "schema_version": 1,
+    "selection_split": "eval",
+    "selection_view": "full_episode",
+    "evaluation_mode": "continuous",
+    "criterion": "macro_f1_then_unweighted_nll",
+    "config_sha256": "506cae01813644e53acaf5d9124f887d4ebdab5e198a89e8ce07840b6778b9ac",
+    "selection_profile_sha256": "e9c5ca6db72f21e81fd874826edb7714fa88be17c9efcaf0635425c56b7dc6d4",
+    "selection_evaluation_episode_ids": [
+      "combat-eval-223-near_wall-0",
+      "combat-eval-223-near_wall-1",
+      "combat-eval-223-open-0",
+      "combat-eval-223-open-1",
+      "combat-eval-227-near_wall-0",
+      "combat-eval-227-near_wall-1",
+      "combat-eval-227-open-0",
+      "combat-eval-227-open-1"
+    ],
+    "selection_evaluation_groups": {
+      "[\"arena-native-melee-v1\",223]": "eval",
+      "[\"arena-native-melee-v1\",227]": "eval"
+    },
+    "dataset_sha256": "f75fdcb02ec9389bab77fac1ef2da661d5f48f61add36727a1a57c6ed3fbcfe6",
+    "normalization_sha256": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6",
+    "test_and_ood_used_for_selection": false,
+    "models": {
+      "gru": {
+        "candidates": [
+          {
+            "seed": 17,
+            "path": "models/gru/seed-17",
+            "epoch": 32,
+            "eval_macro_f1": 0.3543859649122807,
+            "eval_nll": 0.23720821985013926,
+            "checkpoint_sha256": "43de06723c9ddd3f1ef1c16012d2eb60e3912dcb8250976ac8c5ad719a34accd",
+            "training_sha256": "993294dba52b1306c0a7586a617843effa012d5c7430111bc90a1a65ab7060b9",
+            "history_sha256": "d81d196d7cc1338b0e47a2e22442616016774513a1e7759ff52ea821e13126ce"
+          },
+          {
+            "seed": 29,
+            "path": "models/gru/seed-29",
+            "epoch": 26,
+            "eval_macro_f1": 0.3543859649122807,
+            "eval_nll": 0.18261275473673633,
+            "checkpoint_sha256": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+            "training_sha256": "5f13783987151a117733ed071337c9a813e586b88bef442410bc9b866841f9fd",
+            "history_sha256": "33219c16ab960318924a90d2f888342a82f04f440d267af98d9114695828ca22"
+          },
+          {
+            "seed": 43,
+            "path": "models/gru/seed-43",
+            "epoch": 6,
+            "eval_macro_f1": 0.34553334468042185,
+            "eval_nll": 0.19911096050481128,
+            "checkpoint_sha256": "7f33d22ea84fb168b4166e9b8b65bf250d3db421db8422cb465a1d91e5a7a512",
+            "training_sha256": "94aeb4381b84912bc9b3d81b2a3d4b845fdbc30e455f5663af6cd95386abe13b",
+            "history_sha256": "51c89dbe07bb4686a1ad4bb424b6ce8d9283f71869963fe806203f0327d4ce92"
+          }
+        ],
+        "selected": {
+          "seed": 29,
+          "path": "models/gru/seed-29",
+          "epoch": 26,
+          "eval_macro_f1": 0.3543859649122807,
+          "eval_nll": 0.18261275473673633,
+          "checkpoint_sha256": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+          "training_sha256": "5f13783987151a117733ed071337c9a813e586b88bef442410bc9b866841f9fd",
+          "history_sha256": "33219c16ab960318924a90d2f888342a82f04f440d267af98d9114695828ca22"
+        },
+        "checkpoint": "models/gru/best.pt",
+        "selection_split": "eval",
+        "selection_view": "full_episode",
+        "evaluation_mode": "continuous",
+        "selection_evaluation_episode_ids": [
+          "combat-eval-223-near_wall-0",
+          "combat-eval-223-near_wall-1",
+          "combat-eval-223-open-0",
+          "combat-eval-223-open-1",
+          "combat-eval-227-near_wall-0",
+          "combat-eval-227-near_wall-1",
+          "combat-eval-227-open-0",
+          "combat-eval-227-open-1"
+        ],
+        "selection_evaluation_groups": {
+          "[\"arena-native-melee-v1\",223]": "eval",
+          "[\"arena-native-melee-v1\",227]": "eval"
+        }
+      },
+      "mlp": {
+        "candidates": [
+          {
+            "seed": 17,
+            "path": "models/mlp/seed-17",
+            "epoch": 11,
+            "eval_macro_f1": 0.32733018316542345,
+            "eval_nll": 0.42477333166037395,
+            "checkpoint_sha256": "24473a026a4486cc81032d7b7414a90200e89fd22d15890243a1a7b3223b8acc",
+            "training_sha256": "72803e0d519647e9660a503243dc944927e5ae44817e03d841f52a802e32f05b",
+            "history_sha256": "34d0a7ec7b97068f49180e24773b09360460b261a70990f039b14cc4f8895f28"
+          },
+          {
+            "seed": 29,
+            "path": "models/mlp/seed-29",
+            "epoch": 8,
+            "eval_macro_f1": 0.32196393856472905,
+            "eval_nll": 0.28787693096573946,
+            "checkpoint_sha256": "f56dae18dd19b94012aa76bad014b4d684a2e7516dd855ec1a63dc0e4d95fbaa",
+            "training_sha256": "594bcfb1878d208af34c49e89ed34395dc1520c0c9c7884d51edf7426ba73f5b",
+            "history_sha256": "b0abe4a74623e9402603e0779d09470f6c4b0be9f5ab501db88e2b8ea77f72bf"
+          },
+          {
+            "seed": 43,
+            "path": "models/mlp/seed-43",
+            "epoch": 7,
+            "eval_macro_f1": 0.3323999233090142,
+            "eval_nll": 0.2752384501657668,
+            "checkpoint_sha256": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf",
+            "training_sha256": "ddf4a4512ef6a1c0c2d01a8a0e4e63cbccd5a913327219adec43b77b47ce7533",
+            "history_sha256": "358efbb6a127c89c94eb52b2d040eff8e420cb3ba25c0dd91b82530fb1e7ff29"
+          }
+        ],
+        "selected": {
+          "seed": 43,
+          "path": "models/mlp/seed-43",
+          "epoch": 7,
+          "eval_macro_f1": 0.3323999233090142,
+          "eval_nll": 0.2752384501657668,
+          "checkpoint_sha256": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf",
+          "training_sha256": "ddf4a4512ef6a1c0c2d01a8a0e4e63cbccd5a913327219adec43b77b47ce7533",
+          "history_sha256": "358efbb6a127c89c94eb52b2d040eff8e420cb3ba25c0dd91b82530fb1e7ff29"
+        },
+        "checkpoint": "models/mlp/best.pt",
+        "selection_split": "eval",
+        "selection_view": "full_episode",
+        "evaluation_mode": "continuous",
+        "selection_evaluation_episode_ids": [
+          "combat-eval-223-near_wall-0",
+          "combat-eval-223-near_wall-1",
+          "combat-eval-223-open-0",
+          "combat-eval-223-open-1",
+          "combat-eval-227-near_wall-0",
+          "combat-eval-227-near_wall-1",
+          "combat-eval-227-open-0",
+          "combat-eval-227-open-1"
+        ],
+        "selection_evaluation_groups": {
+          "[\"arena-native-melee-v1\",223]": "eval",
+          "[\"arena-native-melee-v1\",227]": "eval"
+        }
+      }
+    },
+    "weights_fixed_at_utc": "2026-10-14T09:02:35.266523+00:00"
+  },
+  "frozen_model_code_sha256": {
+    "code/body-service/src/gothic_body/__init__.py": "c2247350dc860fc36ddbf6dd0b3baed9bcc9184a348d5dc92190c98f14a74e2e",
+    "code/body-service/src/gothic_body/__main__.py": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
+    "code/body-service/src/gothic_body/checkpoint.py": "955feda62eda42cf199db7d2b65e163f993b149723bbfc0acd9804422cb07c81",
+    "code/body-service/src/gothic_body/cli.py": "f46488e55c6004ad9ad343e16886e004347b53d99e9a7144d4782f0041d32207",
+    "code/body-service/src/gothic_body/data.py": "db482eddb06929a567b1373e706f6e9684a274814efd82fdc6be4029bf405694",
+    "code/body-service/src/gothic_body/evaluation.py": "47c8f3de03d53974517ae511ba3976c59974c0edb7c73a1c18b0d55fb3117149",
+    "code/body-service/src/gothic_body/models.py": "c5622960d9b9d2637d00a13bfdac9d72e88489e4dac1e4628e4e4249137c608f",
+    "code/body-service/src/gothic_body/runtime.py": "e0ec4f2741fe72fabfe5f51b21183588e0b6c33c9fac35ac29189c6a1395de40",
+    "code/body-service/src/gothic_body/schema.py": "12cbea4c45cd1a2d05a794b9e4df955186aefa6b63bd158039f4a28c3dbe3b10",
+    "code/body-service/src/gothic_body/serving.py": "95ad2ae403a32a8114f37d0533de38a82887e9107592597c0994c47d25315f9f",
+    "code/body-service/src/gothic_body/training.py": "672aca4c51928e13f7d1eb958a14da350267e6fdfbcbb466758995086904683f",
+    "code/body-service/src/gothic_body/verification.py": "1e2184081769817fa141c36d24f97e0772a92b4b1aebe75a75ab5087259115e6"
+  },
+  "candidates": [
+    {
+      "architecture": "gru",
+      "seed": 17,
+      "selected_epoch": 32,
+      "completed_epochs": 57,
+      "stop_reason": "eval_patience",
+      "train_label_count": 1068,
+      "training_wall_seconds": 238.08466576086357,
+      "artifacts_sha256": {
+        "training.json": "993294dba52b1306c0a7586a617843effa012d5c7430111bc90a1a65ab7060b9",
+        "history.json": "d81d196d7cc1338b0e47a2e22442616016774513a1e7759ff52ea821e13126ce",
+        "best.pt": "43de06723c9ddd3f1ef1c16012d2eb60e3912dcb8250976ac8c5ad719a34accd",
+        "best.pt.json": "e2a08c2bf5b5f3a626ca1065dc2da9023fa3b6457d58ba197e8ee9d9711cf874"
+      },
+      "binding_checks": {
+        "checkpoint_sha_matches": true,
+        "dataset_sha_matches": true,
+        "normalization_sha_matches": true,
+        "embedded_normalizer_sha_matches": true,
+        "feature_order_matches": true,
+        "action_order_matches": true,
+        "dataset_helper_sha_matches": true,
+        "sidecar_dataset_exact": true,
+        "train_config_exact": true,
+        "sidecar_training_config_exact": true,
+        "selected_epoch_exact": true,
+        "selected_eval_exact": true,
+        "all_history_continuous": true,
+        "heldout_not_selected": true,
+        "eval_profile_exact": true,
+        "frozen_model_code_matches": true,
+        "train_ids_match": true,
+        "confusion_support_matches_dataset": true,
+        "confusion_metrics_recompute": true
+      },
+      "model_configuration": {
+        "architecture": "gru",
+        "feature_count": 184,
+        "action_count": 12,
+        "hidden_size": 256,
+        "encoder_size": 256,
+        "head_size": 128,
+        "stack_size": 8
+      },
+      "fresh_eval": {
+        "label_count": 157,
+        "accuracy": 0.9681528662420382,
+        "macro_f1": 0.3543859649122807,
+        "macro_f1_supported": 0.974561403508772,
+        "nll": 0.23720821985013926,
+        "weighted_nll": 0.271432085238657,
+        "per_action": [
+          {
+            "action_id": 0,
+            "action": "continue",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 1,
+            "action": "approach",
+            "support": 67,
+            "tp": 67,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1,
+            "recall": 1,
+            "f1": 1
+          },
+          {
+            "action_id": 2,
+            "action": "turn_to_target",
+            "support": 23,
+            "tp": 23,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1,
+            "recall": 1,
+            "f1": 1
+          },
+          {
+            "action_id": 3,
+            "action": "strafe_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 4,
+            "action": "strafe_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 5,
+            "action": "jump_back",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 6,
+            "action": "attack_front",
+            "support": 59,
+            "tp": 55,
+            "fp": 0,
+            "fn": 4,
+            "precision": 1,
+            "recall": 0.9322033898305084,
+            "f1": 0.9649122807017544
+          },
+          {
+            "action_id": 7,
+            "action": "attack_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 1,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 8,
+            "action": "attack_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 4,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 9,
+            "action": "block",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 10,
+            "action": "wait_200",
+            "support": 8,
+            "tp": 7,
+            "fp": 0,
+            "fn": 1,
+            "precision": 1,
+            "recall": 0.875,
+            "f1": 0.9333333333333333
+          },
+          {
+            "action_id": 11,
+            "action": "wait_300",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          }
+        ],
+        "confusion": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            67,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            23,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            55,
+            1,
+            3,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            7,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "stream_count": 16,
+        "observation_count": 3454,
+        "actual_stream_reset_count": 16,
+        "artificial_chunk_resets": 0,
+        "duplicate_burnin_labels": 0,
+        "evaluation_mode": "continuous"
+      },
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "strafe_right": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_200": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_300": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        }
+      }
+    },
+    {
+      "architecture": "gru",
+      "seed": 29,
+      "selected_epoch": 26,
+      "completed_epochs": 51,
+      "stop_reason": "eval_patience",
+      "train_label_count": 1068,
+      "training_wall_seconds": 219.65806665783748,
+      "artifacts_sha256": {
+        "training.json": "5f13783987151a117733ed071337c9a813e586b88bef442410bc9b866841f9fd",
+        "history.json": "33219c16ab960318924a90d2f888342a82f04f440d267af98d9114695828ca22",
+        "best.pt": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+        "best.pt.json": "70b5b345755fa257dee8168d80caff8c5458c6d4586c5ae01ecce4522117dac6"
+      },
+      "binding_checks": {
+        "checkpoint_sha_matches": true,
+        "dataset_sha_matches": true,
+        "normalization_sha_matches": true,
+        "embedded_normalizer_sha_matches": true,
+        "feature_order_matches": true,
+        "action_order_matches": true,
+        "dataset_helper_sha_matches": true,
+        "sidecar_dataset_exact": true,
+        "train_config_exact": true,
+        "sidecar_training_config_exact": true,
+        "selected_epoch_exact": true,
+        "selected_eval_exact": true,
+        "all_history_continuous": true,
+        "heldout_not_selected": true,
+        "eval_profile_exact": true,
+        "frozen_model_code_matches": true,
+        "train_ids_match": true,
+        "confusion_support_matches_dataset": true,
+        "confusion_metrics_recompute": true
+      },
+      "model_configuration": {
+        "architecture": "gru",
+        "feature_count": 184,
+        "action_count": 12,
+        "hidden_size": 256,
+        "encoder_size": 256,
+        "head_size": 128,
+        "stack_size": 8
+      },
+      "fresh_eval": {
+        "label_count": 157,
+        "accuracy": 0.9681528662420382,
+        "macro_f1": 0.3543859649122807,
+        "macro_f1_supported": 0.974561403508772,
+        "nll": 0.18261275473673633,
+        "weighted_nll": 0.19772911062210516,
+        "per_action": [
+          {
+            "action_id": 0,
+            "action": "continue",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 1,
+            "action": "approach",
+            "support": 67,
+            "tp": 67,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1,
+            "recall": 1,
+            "f1": 1
+          },
+          {
+            "action_id": 2,
+            "action": "turn_to_target",
+            "support": 23,
+            "tp": 23,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1,
+            "recall": 1,
+            "f1": 1
+          },
+          {
+            "action_id": 3,
+            "action": "strafe_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 4,
+            "action": "strafe_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 5,
+            "action": "jump_back",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 6,
+            "action": "attack_front",
+            "support": 59,
+            "tp": 55,
+            "fp": 0,
+            "fn": 4,
+            "precision": 1,
+            "recall": 0.9322033898305084,
+            "f1": 0.9649122807017544
+          },
+          {
+            "action_id": 7,
+            "action": "attack_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 1,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 8,
+            "action": "attack_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 4,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 9,
+            "action": "block",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 10,
+            "action": "wait_200",
+            "support": 8,
+            "tp": 7,
+            "fp": 0,
+            "fn": 1,
+            "precision": 1,
+            "recall": 0.875,
+            "f1": 0.9333333333333333
+          },
+          {
+            "action_id": 11,
+            "action": "wait_300",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          }
+        ],
+        "confusion": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            67,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            23,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            55,
+            1,
+            3,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            7,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "stream_count": 16,
+        "observation_count": 3454,
+        "actual_stream_reset_count": 16,
+        "artificial_chunk_resets": 0,
+        "duplicate_burnin_labels": 0,
+        "evaluation_mode": "continuous"
+      },
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "strafe_right": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_200": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_300": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        }
+      }
+    },
+    {
+      "architecture": "gru",
+      "seed": 43,
+      "selected_epoch": 6,
+      "completed_epochs": 31,
+      "stop_reason": "eval_patience",
+      "train_label_count": 1068,
+      "training_wall_seconds": 167.59729374200106,
+      "artifacts_sha256": {
+        "training.json": "94aeb4381b84912bc9b3d81b2a3d4b845fdbc30e455f5663af6cd95386abe13b",
+        "history.json": "51c89dbe07bb4686a1ad4bb424b6ce8d9283f71869963fe806203f0327d4ce92",
+        "best.pt": "7f33d22ea84fb168b4166e9b8b65bf250d3db421db8422cb465a1d91e5a7a512",
+        "best.pt.json": "a4324f20ac0d9a3877563ca6acf0a8bdecf64b7d7ec4aa2eb53b0a4ed18e54f7"
+      },
+      "binding_checks": {
+        "checkpoint_sha_matches": true,
+        "dataset_sha_matches": true,
+        "normalization_sha_matches": true,
+        "embedded_normalizer_sha_matches": true,
+        "feature_order_matches": true,
+        "action_order_matches": true,
+        "dataset_helper_sha_matches": true,
+        "sidecar_dataset_exact": true,
+        "train_config_exact": true,
+        "sidecar_training_config_exact": true,
+        "selected_epoch_exact": true,
+        "selected_eval_exact": true,
+        "all_history_continuous": true,
+        "heldout_not_selected": true,
+        "eval_profile_exact": true,
+        "frozen_model_code_matches": true,
+        "train_ids_match": true,
+        "confusion_support_matches_dataset": true,
+        "confusion_metrics_recompute": true
+      },
+      "model_configuration": {
+        "architecture": "gru",
+        "feature_count": 184,
+        "action_count": 12,
+        "hidden_size": 256,
+        "encoder_size": 256,
+        "head_size": 128,
+        "stack_size": 8
+      },
+      "fresh_eval": {
+        "label_count": 157,
+        "accuracy": 0.9681528662420382,
+        "macro_f1": 0.34553334468042185,
+        "macro_f1_supported": 0.9502166978711601,
+        "nll": 0.19911096050481128,
+        "weighted_nll": 0.19466666838964208,
+        "per_action": [
+          {
+            "action_id": 0,
+            "action": "continue",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 1,
+            "action": "approach",
+            "support": 67,
+            "tp": 65,
+            "fp": 0,
+            "fn": 2,
+            "precision": 1,
+            "recall": 0.9701492537313433,
+            "f1": 0.9848484848484849
+          },
+          {
+            "action_id": 2,
+            "action": "turn_to_target",
+            "support": 23,
+            "tp": 23,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1,
+            "recall": 1,
+            "f1": 1
+          },
+          {
+            "action_id": 3,
+            "action": "strafe_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 4,
+            "action": "strafe_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 5,
+            "action": "jump_back",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 6,
+            "action": "attack_front",
+            "support": 59,
+            "tp": 56,
+            "fp": 0,
+            "fn": 3,
+            "precision": 1,
+            "recall": 0.9491525423728814,
+            "f1": 0.9739130434782608
+          },
+          {
+            "action_id": 7,
+            "action": "attack_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 8,
+            "action": "attack_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 9,
+            "action": "block",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 10,
+            "action": "wait_200",
+            "support": 8,
+            "tp": 8,
+            "fp": 3,
+            "fn": 0,
+            "precision": 0.7272727272727273,
+            "recall": 1,
+            "f1": 0.8421052631578948
+          },
+          {
+            "action_id": 11,
+            "action": "wait_300",
+            "support": 0,
+            "tp": 0,
+            "fp": 2,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          }
+        ],
+        "confusion": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            65,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2
+          ],
+          [
+            0,
+            0,
+            23,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            56,
+            0,
+            0,
+            0,
+            3,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            8,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "stream_count": 16,
+        "observation_count": 3454,
+        "actual_stream_reset_count": 16,
+        "artificial_chunk_resets": 0,
+        "duplicate_burnin_labels": 0,
+        "evaluation_mode": "continuous"
+      },
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "strafe_right": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_200": {
+          "false_positives": 3,
+          "source_true_actions": {
+            "attack_front": 3
+          }
+        },
+        "wait_300": {
+          "false_positives": 2,
+          "source_true_actions": {
+            "approach": 2
+          }
+        }
+      }
+    },
+    {
+      "architecture": "mlp",
+      "seed": 17,
+      "selected_epoch": 11,
+      "completed_epochs": 36,
+      "stop_reason": "eval_patience",
+      "train_label_count": 1068,
+      "training_wall_seconds": 157.28990813391283,
+      "artifacts_sha256": {
+        "training.json": "72803e0d519647e9660a503243dc944927e5ae44817e03d841f52a802e32f05b",
+        "history.json": "34d0a7ec7b97068f49180e24773b09360460b261a70990f039b14cc4f8895f28",
+        "best.pt": "24473a026a4486cc81032d7b7414a90200e89fd22d15890243a1a7b3223b8acc",
+        "best.pt.json": "4db7f306ebc049314a8f38c907953124a73e07945e2b8bc9e9980dd8c26ddbfa"
+      },
+      "binding_checks": {
+        "checkpoint_sha_matches": true,
+        "dataset_sha_matches": true,
+        "normalization_sha_matches": true,
+        "embedded_normalizer_sha_matches": true,
+        "feature_order_matches": true,
+        "action_order_matches": true,
+        "dataset_helper_sha_matches": true,
+        "sidecar_dataset_exact": true,
+        "train_config_exact": true,
+        "sidecar_training_config_exact": true,
+        "selected_epoch_exact": true,
+        "selected_eval_exact": true,
+        "all_history_continuous": true,
+        "heldout_not_selected": true,
+        "eval_profile_exact": true,
+        "frozen_model_code_matches": true,
+        "train_ids_match": true,
+        "confusion_support_matches_dataset": true,
+        "confusion_metrics_recompute": true
+      },
+      "model_configuration": {
+        "architecture": "mlp",
+        "feature_count": 184,
+        "action_count": 12,
+        "hidden_size": 256,
+        "encoder_size": 256,
+        "head_size": 128,
+        "stack_size": 8
+      },
+      "fresh_eval": {
+        "label_count": 157,
+        "accuracy": 0.9363057324840764,
+        "macro_f1": 0.32733018316542345,
+        "macro_f1_supported": 0.9001580037049145,
+        "nll": 0.42477333166037395,
+        "weighted_nll": 0.7009394954209056,
+        "per_action": [
+          {
+            "action_id": 0,
+            "action": "continue",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 1,
+            "action": "approach",
+            "support": 67,
+            "tp": 65,
+            "fp": 1,
+            "fn": 2,
+            "precision": 0.9848484848484849,
+            "recall": 0.9701492537313433,
+            "f1": 0.9774436090225564
+          },
+          {
+            "action_id": 2,
+            "action": "turn_to_target",
+            "support": 23,
+            "tp": 23,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1,
+            "recall": 1,
+            "f1": 1
+          },
+          {
+            "action_id": 3,
+            "action": "strafe_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 2,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 4,
+            "action": "strafe_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 5,
+            "action": "jump_back",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 6,
+            "action": "attack_front",
+            "support": 59,
+            "tp": 55,
+            "fp": 1,
+            "fn": 4,
+            "precision": 0.9821428571428571,
+            "recall": 0.9322033898305084,
+            "f1": 0.9565217391304348
+          },
+          {
+            "action_id": 7,
+            "action": "attack_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 8,
+            "action": "attack_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 5,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 9,
+            "action": "block",
+            "support": 0,
+            "tp": 0,
+            "fp": 1,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 10,
+            "action": "wait_200",
+            "support": 8,
+            "tp": 4,
+            "fp": 0,
+            "fn": 4,
+            "precision": 1,
+            "recall": 0.5,
+            "f1": 0.6666666666666666
+          },
+          {
+            "action_id": 11,
+            "action": "wait_300",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          }
+        ],
+        "confusion": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            65,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            23,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            55,
+            0,
+            4,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            4,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "stream_count": 16,
+        "observation_count": 3454,
+        "actual_stream_reset_count": 16,
+        "artificial_chunk_resets": 0,
+        "duplicate_burnin_labels": 0,
+        "evaluation_mode": "continuous"
+      },
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 2,
+          "source_true_actions": {
+            "approach": 1,
+            "wait_200": 1
+          }
+        },
+        "strafe_right": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_200": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_300": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        }
+      }
+    },
+    {
+      "architecture": "mlp",
+      "seed": 29,
+      "selected_epoch": 8,
+      "completed_epochs": 33,
+      "stop_reason": "eval_patience",
+      "train_label_count": 1068,
+      "training_wall_seconds": 167.28971072100103,
+      "artifacts_sha256": {
+        "training.json": "594bcfb1878d208af34c49e89ed34395dc1520c0c9c7884d51edf7426ba73f5b",
+        "history.json": "b0abe4a74623e9402603e0779d09470f6c4b0be9f5ab501db88e2b8ea77f72bf",
+        "best.pt": "f56dae18dd19b94012aa76bad014b4d684a2e7516dd855ec1a63dc0e4d95fbaa",
+        "best.pt.json": "2b192b25c168401691159685d4b422440547ddade8d666aabacbcb593370a11b"
+      },
+      "binding_checks": {
+        "checkpoint_sha_matches": true,
+        "dataset_sha_matches": true,
+        "normalization_sha_matches": true,
+        "embedded_normalizer_sha_matches": true,
+        "feature_order_matches": true,
+        "action_order_matches": true,
+        "dataset_helper_sha_matches": true,
+        "sidecar_dataset_exact": true,
+        "train_config_exact": true,
+        "sidecar_training_config_exact": true,
+        "selected_epoch_exact": true,
+        "selected_eval_exact": true,
+        "all_history_continuous": true,
+        "heldout_not_selected": true,
+        "eval_profile_exact": true,
+        "frozen_model_code_matches": true,
+        "train_ids_match": true,
+        "confusion_support_matches_dataset": true,
+        "confusion_metrics_recompute": true
+      },
+      "model_configuration": {
+        "architecture": "mlp",
+        "feature_count": 184,
+        "action_count": 12,
+        "hidden_size": 256,
+        "encoder_size": 256,
+        "head_size": 128,
+        "stack_size": 8
+      },
+      "fresh_eval": {
+        "label_count": 157,
+        "accuracy": 0.9299363057324841,
+        "macro_f1": 0.32196393856472905,
+        "macro_f1_supported": 0.8854008310530049,
+        "nll": 0.28787693096573946,
+        "weighted_nll": 0.4029655048236611,
+        "per_action": [
+          {
+            "action_id": 0,
+            "action": "continue",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 1,
+            "action": "approach",
+            "support": 67,
+            "tp": 64,
+            "fp": 1,
+            "fn": 3,
+            "precision": 0.9846153846153847,
+            "recall": 0.9552238805970149,
+            "f1": 0.9696969696969696
+          },
+          {
+            "action_id": 2,
+            "action": "turn_to_target",
+            "support": 23,
+            "tp": 23,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1,
+            "recall": 1,
+            "f1": 1
+          },
+          {
+            "action_id": 3,
+            "action": "strafe_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 1,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 4,
+            "action": "strafe_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 1,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 5,
+            "action": "jump_back",
+            "support": 0,
+            "tp": 0,
+            "fp": 2,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 6,
+            "action": "attack_front",
+            "support": 59,
+            "tp": 55,
+            "fp": 1,
+            "fn": 4,
+            "precision": 0.9821428571428571,
+            "recall": 0.9322033898305084,
+            "f1": 0.9565217391304348
+          },
+          {
+            "action_id": 7,
+            "action": "attack_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 8,
+            "action": "attack_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 4,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 9,
+            "action": "block",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 10,
+            "action": "wait_200",
+            "support": 8,
+            "tp": 4,
+            "fp": 1,
+            "fn": 4,
+            "precision": 0.8,
+            "recall": 0.5,
+            "f1": 0.6153846153846154
+          },
+          {
+            "action_id": 11,
+            "action": "wait_300",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          }
+        ],
+        "confusion": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            64,
+            0,
+            1,
+            0,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            23,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            55,
+            0,
+            3,
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            4,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "stream_count": 16,
+        "observation_count": 3454,
+        "actual_stream_reset_count": 16,
+        "artificial_chunk_resets": 0,
+        "duplicate_burnin_labels": 0,
+        "evaluation_mode": "continuous"
+      },
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "approach": 1
+          }
+        },
+        "strafe_right": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "wait_200": 1
+          }
+        },
+        "wait_200": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "attack_front": 1
+          }
+        },
+        "wait_300": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        }
+      }
+    },
+    {
+      "architecture": "mlp",
+      "seed": 43,
+      "selected_epoch": 7,
+      "completed_epochs": 32,
+      "stop_reason": "eval_patience",
+      "train_label_count": 1068,
+      "training_wall_seconds": 160.90342204808258,
+      "artifacts_sha256": {
+        "training.json": "ddf4a4512ef6a1c0c2d01a8a0e4e63cbccd5a913327219adec43b77b47ce7533",
+        "history.json": "358efbb6a127c89c94eb52b2d040eff8e420cb3ba25c0dd91b82530fb1e7ff29",
+        "best.pt": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf",
+        "best.pt.json": "dd657b8505bc4eae06a85e508446b44b8a94b3f21937b5ea4c66daef19fdc8de"
+      },
+      "binding_checks": {
+        "checkpoint_sha_matches": true,
+        "dataset_sha_matches": true,
+        "normalization_sha_matches": true,
+        "embedded_normalizer_sha_matches": true,
+        "feature_order_matches": true,
+        "action_order_matches": true,
+        "dataset_helper_sha_matches": true,
+        "sidecar_dataset_exact": true,
+        "train_config_exact": true,
+        "sidecar_training_config_exact": true,
+        "selected_epoch_exact": true,
+        "selected_eval_exact": true,
+        "all_history_continuous": true,
+        "heldout_not_selected": true,
+        "eval_profile_exact": true,
+        "frozen_model_code_matches": true,
+        "train_ids_match": true,
+        "confusion_support_matches_dataset": true,
+        "confusion_metrics_recompute": true
+      },
+      "model_configuration": {
+        "architecture": "mlp",
+        "feature_count": 184,
+        "action_count": 12,
+        "hidden_size": 256,
+        "encoder_size": 256,
+        "head_size": 128,
+        "stack_size": 8
+      },
+      "fresh_eval": {
+        "label_count": 157,
+        "accuracy": 0.9490445859872612,
+        "macro_f1": 0.3323999233090142,
+        "macro_f1_supported": 0.9140997890997891,
+        "nll": 0.2752384501657668,
+        "weighted_nll": 0.3637823651360136,
+        "per_action": [
+          {
+            "action_id": 0,
+            "action": "continue",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 1,
+            "action": "approach",
+            "support": 67,
+            "tp": 65,
+            "fp": 0,
+            "fn": 2,
+            "precision": 1,
+            "recall": 0.9701492537313433,
+            "f1": 0.9848484848484849
+          },
+          {
+            "action_id": 2,
+            "action": "turn_to_target",
+            "support": 23,
+            "tp": 23,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1,
+            "recall": 1,
+            "f1": 1
+          },
+          {
+            "action_id": 3,
+            "action": "strafe_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 1,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 4,
+            "action": "strafe_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 5,
+            "action": "jump_back",
+            "support": 0,
+            "tp": 0,
+            "fp": 1,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 6,
+            "action": "attack_front",
+            "support": 59,
+            "tp": 56,
+            "fp": 2,
+            "fn": 3,
+            "precision": 0.9655172413793104,
+            "recall": 0.9491525423728814,
+            "f1": 0.9572649572649573
+          },
+          {
+            "action_id": 7,
+            "action": "attack_left",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 8,
+            "action": "attack_right",
+            "support": 0,
+            "tp": 0,
+            "fp": 3,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 9,
+            "action": "block",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          },
+          {
+            "action_id": 10,
+            "action": "wait_200",
+            "support": 8,
+            "tp": 5,
+            "fp": 1,
+            "fn": 3,
+            "precision": 0.8333333333333334,
+            "recall": 0.625,
+            "f1": 0.7142857142857143
+          },
+          {
+            "action_id": 11,
+            "action": "wait_300",
+            "support": 0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": 0,
+            "recall": 0,
+            "f1": 0
+          }
+        ],
+        "confusion": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            65,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            23,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            56,
+            0,
+            2,
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+            1,
+            0,
+            5,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "stream_count": 16,
+        "observation_count": 3454,
+        "actual_stream_reset_count": 16,
+        "artificial_chunk_resets": 0,
+        "duplicate_burnin_labels": 0,
+        "evaluation_mode": "continuous"
+      },
+      "false_wait_strafe": {
+        "strafe_left": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "approach": 1
+          }
+        },
+        "strafe_right": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        },
+        "wait_200": {
+          "false_positives": 1,
+          "source_true_actions": {
+            "attack_front": 1
+          }
+        },
+        "wait_300": {
+          "false_positives": 0,
+          "source_true_actions": {}
+        }
+      }
+    }
+  ],
+  "global_selection_audit": {
+    "selection_sha256": "b8ae94660743319462ce6e24216f83e64fbe104e15885e08a1f8b0605b9022c0",
+    "weights_fixed_at_utc": "2026-10-14T09:02:35.266523+00:00",
+    "binding_checks": {
+      "config_sha_matches": true,
+      "profile_sha_matches": true,
+      "dataset_sha_matches": true,
+      "normalizer_sha_matches": true,
+      "actual_fresh_ids_match": true,
+      "actual_fresh_groups_match": true,
+      "continuous_eval_only": true
+    },
+    "models": {
+      "gru": {
+        "selected_seed": 29,
+        "selected_epoch": 26,
+        "checkpoint_sha256": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+        "candidate_seeds_exact": true,
+        "selected_candidate_exact": true,
+        "published_bytes_exact": true,
+        "per_arch_selection_exact": true,
+        "eval_predictions_exist": true
+      },
+      "mlp": {
+        "selected_seed": 43,
+        "selected_epoch": 7,
+        "checkpoint_sha256": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf",
+        "candidate_seeds_exact": true,
+        "selected_candidate_exact": true,
+        "published_bytes_exact": true,
+        "per_arch_selection_exact": true,
+        "eval_predictions_exist": true
+      }
+    }
+  },
+  "saved_prediction_audit": "predictions.json"
+}

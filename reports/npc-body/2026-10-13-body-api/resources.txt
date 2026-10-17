@@ -1,0 +1,23 @@
+	Command being timed: "python3 /home/kaifat/gothic-ai/body-api/source/scripts/body_api_suite.py --runner /home/kaifat/gothic-ai/body-api/runs/stage4-v5/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --config /home/kaifat/gothic-ai/body-api/source/evals/npc-body/body-api-v1.json --scenario /home/kaifat/gothic-ai/body-api/source/scripts/bench/body-api.bench --melee-scenario /home/kaifat/gothic-ai/body-api/source/scripts/bench/body-melee.bench --output /home/kaifat/gothic-ai/body-api/runs/stage4-v5"
+	User time (seconds): 137.74
+	System time (seconds): 6.11
+	Percent of CPU this job got: 150%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:35.85
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 753764
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 2089055
+	Voluntary context switches: 112581
+	Involuntary context switches: 9690
+	Swaps: 0
+	File system inputs: 72
+	File system outputs: 149704
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

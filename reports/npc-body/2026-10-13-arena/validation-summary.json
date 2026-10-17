@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "run": "stage5-v2",
+  "host": "dev-ubuntu",
+  "status": "complete",
+  "episodes": 130,
+  "dirty_restorations": 100,
+  "throughput": {
+    "measured_episodes": 12,
+    "policy_transitions": 176,
+    "total_wall_s": 71.22822699509561,
+    "actor_update_transitions": 176,
+    "discarded_transitions": 0,
+    "actor_update_episodes": 12,
+    "discarded_episodes": 0,
+    "rollout_wall_s": 57.92977796308696,
+    "episodes_s": 0.16847253548549307,
+    "policy_transitions_s": 2.4709305204538983,
+    "rollout_policy_transitions_s": 3.0381611355760376,
+    "actor_update_transitions_s": 2.4709305204538983,
+    "advanced_substeps": 3600,
+    "substeps_s": 50.54176064564792,
+    "decision_counts": {
+      "accepted_decisions": 178,
+      "started_decisions": 176,
+      "completed_decisions": 138,
+      "cancelled_decisions": 38,
+      "terminal_decisions": 0,
+      "truncated_decisions": 0,
+      "control_lost_decisions": 0,
+      "pending_decisions": 0,
+      "not_started_decisions": 2,
+      "continue_commands": 0
+    },
+    "reset_p50_s": 1.094289822911378,
+    "reset_p95_s": 1.1628014743153472,
+    "collection_projection_s": {
+      "32768": 13261.400807814165,
+      "100000": 40470.58351994069,
+      "1000000": 404705.8351994069
+    },
+    "diagnostic_collection_projection_s": {
+      "32768": 13261.400807814165,
+      "100000": 40470.58351994069,
+      "1000000": 404705.8351994069
+    },
+    "small_ppo_collection_gate": true,
+    "small_ppo_collection_feasible": true,
+    "gate": {
+      "small_ppo_decisions": 32768,
+      "max_collection_wall_s": 21600
+    },
+    "scope": "One CPU runner, scripted provider, actual native execution transitions; reset and IPC included. Collection feasibility uses only actor-update-usable episodes and includes the wall time spent on discarded control_lost fragments. Optimizer/model cost excluded."
+  },
+  "reset_latency": {
+    "samples": 100,
+    "p50_s": 1.1068089599721134,
+    "p95_s": 1.1679938194341957
+  },
+  "resources": {
+    "peak_rss_mib": 736.1953125,
+    "threads": {
+      "minimum": 17,
+      "maximum": 17,
+      "span": 0
+    },
+    "file_descriptors": {
+      "minimum": 8,
+      "maximum": 10,
+      "span": 2
+    },
+    "cpu_user_s": 696.29,
+    "cpu_system_s": 30.7
+  },
+  "runner_pid": 3236185,
+  "resource_samples": 266,
+  "whole_suite_wall_s": 449.68,
+  "whole_suite_cpu_user_s": 737.07,
+  "whole_suite_cpu_system_s": 34.17,
+  "time_max_rss_kib": 753864,
+  "systemd_cgroup_peak_memory_display": "2.9G",
+  "native_parity": {
+    "status": "matched",
+    "seeds": [
+      17,
+      29,
+      43
+    ],
+    "ordered_mechanics": 1077,
+    "physics_steps": 3198,
+    "difference_count": 0
+  },
+  "source_base_git_head": "979d343354ea7bf711a53fce1331c83b31080a27",
+  "source_archive_sha256": "d605a42f13ce4d6e5661ce319ee187c8726720d30d571ac3f62f00ca575219ba",
+  "resolver_binary_sha256": "b99d8d08994559e234ce36af5a4b80e71d3c86b956b0663795f35cabc523d7a5",
+  "binary_sha256": "d2895c9bbb3b994b2c21b27b24af8a0e620c5b3b56fb60f317fffa79c8b18ce1",
+  "source_sha256": "9d75c6d4658ffe5d71d57c87750ae9106ea388816baab656f7f465de6468fc64",
+  "driver_sha256": "5c009d018598afc10252a88676fe6d23650242c2d6dba500a0d25e49f6f9048c",
+  "environment_adapter_sha256": "1f2a72c4a280e961167f646cc8fcc7df1e7c383dbda7484fcc5a6b19a4671f3e",
+  "archived_reporter_sha256": "957254e2c206b2433ab1e640f22347bfe0558de4e37ddc34ed41662ca7198a05",
+  "final_reporter_sha256": "3bf81cad01d42b29611a52f665b9f8ef1c91296c4e52891804d0cfebac0504a7",
+  "tests": {
+    "native_resolver_assertions": 2419,
+    "episode_adapter_python": 11,
+    "arena_report_python": 53
+  },
+  "services_before": {
+    "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=3366349\nMemoryCurrent=1085091840\nCPUUsageNSec=12785251579000",
+    "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=630559\nMemoryCurrent=4200669184\nCPUUsageNSec=3843112795000"
+  },
+  "services_after": {
+    "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=3366349\nMemoryCurrent=1085091840\nCPUUsageNSec=12785729470000",
+    "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=630559\nMemoryCurrent=4200669184\nCPUUsageNSec=3843567080000"
+  },
+  "scope": "One CPU runner with scripted provider; no model, learner update or dataset training was run."
+}

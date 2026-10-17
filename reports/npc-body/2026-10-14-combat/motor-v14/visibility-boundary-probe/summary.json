@@ -1,0 +1,50 @@
+{
+  "physical_prefix": {
+    "status": "matched",
+    "ordered_rows": 1801,
+    "through_offset_ms": 7567,
+    "position_tolerance_cm": 1,
+    "clock_pose_damage_mask_tolerance": "exact except float roundoff <=0.0001"
+  },
+  "boundary": {
+    "target_entity_id": 3,
+    "hit_offset_ms": 7567,
+    "damage_hp": 70,
+    "stumble_duration_ms": 360,
+    "damage_event_seq": 3309,
+    "stumble_event_seq": 3308,
+    "cancel_event_seq": 192,
+    "invisible_locked_observation_sequences": [
+      698,
+      700
+    ],
+    "recovered_offset_ms": 7633,
+    "release_during_forced_lock": false,
+    "policy_decisions_disabled_during_loss": true
+  },
+  "four_actors_retained": true,
+  "replayed_accepted_commands": 64,
+  "checks": {
+    "accepted_schedule_replayed": true,
+    "physical_prefix_matched": true,
+    "actual_hit_70_preserved": true,
+    "forced_stumble_360_preserved": true,
+    "no_unsafe_visibility_release": true,
+    "policy_decisions_disabled_during_loss": true,
+    "actual_visibility_recovered": true,
+    "four_owners_retained": true
+  },
+  "schema_version": 1,
+  "kind": "body_visibility_boundary_probe_compact_summary",
+  "status": "passed",
+  "model": null,
+  "quality_credit": false,
+  "source_report": {
+    "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/visibility-boundary-probe/probe.json",
+    "sha256": "7c00d82304775753708e424c9d70e2fa9c8acb375b293dfe3c4a7608ec1b5094",
+    "bytes": 4224145
+  },
+  "source_accepted_commands": 64,
+  "declared_cutoff_ms": 7567,
+  "summary_scope": "Saved-data extraction; full report/raw journals retained on dev-ubuntu."
+}

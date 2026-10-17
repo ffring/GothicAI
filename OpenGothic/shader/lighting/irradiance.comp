@@ -76,8 +76,8 @@ void main() {
     float cA = 2.0/max(a.w, 1.0);
     float cB = 2.0/max(b.w, 1.0);
 
-    imageStore(result, ivec2(laneId,0), vec4(a.rgb*cA, 1.0));
-    imageStore(result, ivec2(laneId,1), vec4(b.rgb*cB, 1.0));
+    imageStore(result, ivec2(laneId,0), finiteOrZero(vec4(a.rgb*cA, 1.0)));
+    imageStore(result, ivec2(laneId,1), finiteOrZero(vec4(b.rgb*cB, 1.0)));
     }
   }
 
@@ -118,5 +118,5 @@ void main2() {
   irradiance = M_PI * irradiance * (1.0 / float(nrSamples));
   irradiance *= scene.GSunIntensity;
 
-  imageStore(result, ivec2(laneId/2,laneId%2), vec4(irradiance.rgb,1.0));
+  imageStore(result, ivec2(laneId/2,laneId%2), finiteOrZero(vec4(irradiance.rgb,1.0)));
   }

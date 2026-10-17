@@ -1,6 +1,7 @@
 #include "fightalgo.h"
 
 #include <Tempest/Log>
+#include <algorithm>
 
 #include "game/definitions/fightaidefinitions.h"
 #include "world/objects/npc.h"
@@ -38,7 +39,7 @@ void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
 
   if(hitFlg) {
     hitFlg = false;
-    if(fillQueue(owner,ai.my_w_strafe))
+    if(fillQueue(npc,owner,ai.my_w_strafe))
       return;
     }
 
@@ -46,52 +47,52 @@ void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
 
   if(tg.isPrehit() && isInWRange(tg,npc,owner) && isInFocusAngle(tg,npc) && focus){
     if(tg.bodyStateMasked()==BS_RUN)
-      if(fillQueue(owner,ai.enemy_stormprehit))
+      if(fillQueue(npc,owner,ai.enemy_stormprehit))
         return;
-    if(fillQueue(owner,ai.enemy_prehit))
+    if(fillQueue(npc,owner,ai.enemy_prehit))
       return;
     }
 
   if(ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H) {
     if(isInWRange(npc,tg,owner)) {
       if(focus && npc.bodyStateMasked()==BS_RUN)
-        if(fillQueue(owner,ai.my_w_runto))
+        if(fillQueue(npc,owner,ai.my_w_runto))
           return;
       if(focus && npc.bodyStateMasked()!=BS_RUN)
-        if(fillQueue(owner,ai.my_w_focus))
+        if(fillQueue(npc,owner,ai.my_w_focus))
           return;
-      if(fillQueue(owner,ai.my_w_nofocus))
+      if(fillQueue(npc,owner,ai.my_w_nofocus))
         return;
       }
 
     if(isInGRange(npc,tg,owner)) {
       if(focus && npc.bodyStateMasked()==BS_RUN)
-        if(fillQueue(owner,ai.my_g_runto))
+        if(fillQueue(npc,owner,ai.my_g_runto))
           return;
       if(focus && npc.bodyStateMasked()!=BS_RUN)
-        if(fillQueue(owner,ai.my_g_focus))
+        if(fillQueue(npc,owner,ai.my_g_focus))
           return;
       }
     }
 
   if(ws==WeaponState::Mage) {
     if(isInWRange(npc,tg,owner))
-      if(fillQueue(owner,ai.my_fk_focus_mag))
+      if(fillQueue(npc,owner,ai.my_fk_focus_mag))
         return;
-    if(fillQueue(owner,ai.my_fk_nofocus_mag))
+    if(fillQueue(npc,owner,ai.my_fk_nofocus_mag))
       return;
     }
 
   if(isInWRange(npc,tg,owner) && focus)
-    if(fillQueue(owner,ai.my_fk_focus_far))
+    if(fillQueue(npc,owner,ai.my_fk_focus_far))
       return;
-  if(fillQueue(owner,ai.my_fk_nofocus_far))
+  if(fillQueue(npc,owner,ai.my_fk_nofocus_far))
     return;
 
-  fillQueue(owner,ai.my_w_nofocus);
+  fillQueue(npc,owner,ai.my_w_nofocus);
   }
 
-bool FightAlgo::fillQueue(GameScript& owner, const zenkit::IFightAi& src) {
+bool FightAlgo::fillQueue(const Npc& npc, GameScript& owner, const zenkit::IFightAi& src) {
   uint32_t sz=0;
   for(size_t i=0; i<zenkit::IFightAi::move_count; ++i){
     if(src.move[i]==zenkit::FightAiMove::NOP)
@@ -100,7 +101,7 @@ bool FightAlgo::fillQueue(GameScript& owner, const zenkit::IFightAi& src) {
     }
   if(sz==0)
     return false;
-  queueId = zenkit::FightAiMove(src.move[owner.rand(sz)]);
+  queueId = zenkit::FightAiMove(src.move[owner.rand(sz,&npc)]);
   return queueId!=zenkit::FightAiMove::NOP;
   }
 
@@ -126,7 +127,7 @@ FightAlgo::Action FightAlgo::nextFromQueue(Npc& npc, Npc& tg, GameScript& owner)
         break;
         }
       case FightAiMove::STRAFE:{
-        tr[0] = owner.rand(2) ? MV_STRAFEL : MV_STRAFER;
+        tr[0] = owner.rand(2,&npc) ? MV_STRAFEL : MV_STRAFER;
         tr[1] = FightAlgo::MV_STRAFE_E;
         break;
         }
@@ -140,12 +141,12 @@ FightAlgo::Action FightAlgo::nextFromQueue(Npc& npc, Npc& tg, GameScript& owner)
         break;
         }
       case FightAiMove::ATTACK_FRONT:{
-        tr[0] = owner.rand(2) ? MV_ATTACKL : MV_ATTACKR;
+        tr[0] = owner.rand(2,&npc) ? MV_ATTACKL : MV_ATTACKR;
         tr[1] = MV_ATTACK;
         break;
         }
       case FightAiMove::ATTACK_TRIPLE:{
-        if(owner.rand(2)){
+        if(owner.rand(2,&npc)){
           tr[0] = MV_ATTACK;
           tr[1] = MV_ATTACKR;
           tr[2] = MV_ATTACKL;
@@ -200,6 +201,7 @@ FightAlgo::Action FightAlgo::nextFromQueue(Npc& npc, Npc& tg, GameScript& owner)
           }
         }
       }
+    traceInstruction=int(selected); ++traceEntry;
     queueId = FightAiMove::NOP;
     if(TestBench::bodyTracing()) {
       std::string moves = "[";
@@ -231,12 +233,14 @@ bool FightAlgo::fetchInstructions(Npc &npc, Npc &tg, GameScript& owner) {
   }
 
 void FightAlgo::consumeAction() {
+  ++traceEntry;
   for(size_t i=1;i<MV_MAX;++i)
     tr[i-1]=tr[i];
   tr[MV_MAX-1]=MV_NULL;
   }
 
 void FightAlgo::onClearTarget() {
+  ++traceEntry;
   queueId = zenkit::FightAiMove::NOP;
   tr[0]   = MV_NULL;
   }
@@ -378,3 +382,53 @@ float FightAlgo::weaponRange(GameScript &owner, const Npc &npc) {
   return 0;
   }
 
+
+FightAlgo::Resolution FightAlgo::resolve(PolicyAction action, const ResolverState& s) {
+  if(action==PolicyAction::Continue)
+    return {MV_NULL,true,"continue"};
+  if(!s.targetValid) return {MV_NULL,false,"target_invalid"};
+  if(!s.sword) return {MV_NULL,false,"weapon_mode"};
+  if(!s.eligible) return {MV_NULL,false,"locked"};
+  Action primitive=MV_NULL;
+  bool allowed=false;
+  switch(action) {
+    case PolicyAction::Approach: primitive=MV_MOVE; allowed=s.hasMove && !s.inWRange; break;
+    case PolicyAction::TurnToTarget: primitive=MV_TURN2HIT; allowed=s.canRotate && !s.focus5; break;
+    case PolicyAction::StrafeLeft: primitive=MV_STRAFEL; allowed=s.hasLeft; break;
+    case PolicyAction::StrafeRight: primitive=MV_STRAFER; allowed=s.hasRight; break;
+    case PolicyAction::JumpBack: primitive=MV_JUMPBACK; allowed=s.hasBack && s.focus30 && !s.parade; break;
+    case PolicyAction::AttackFront: primitive=MV_ATTACK; allowed=s.hasAttack && s.focus5 && s.inWRange && s.lineClear; break;
+    case PolicyAction::AttackLeft: primitive=MV_ATTACKL; allowed=s.hasAttackLeft && s.focus5 && s.inWRange && s.lineClear; break;
+    case PolicyAction::AttackRight: primitive=MV_ATTACKR; allowed=s.hasAttackRight && s.focus5 && s.inWRange && s.lineClear; break;
+    case PolicyAction::Block: primitive=MV_BLOCK; allowed=s.hasBlock && s.focus30 && !s.parade; break;
+    // Normalize the native wait promotion rather than claiming a plain wait at close range.
+    case PolicyAction::Wait200:
+      primitive=resolveNative(MV_WAIT,s);
+      allowed=primitive==MV_JUMPBACK ? s.hasBack && !s.parade : true;
+      break;
+    case PolicyAction::Wait300: primitive=MV_WAITLONG; allowed=true; break;
+    default: break;
+    }
+  return {primitive,allowed,allowed ? "allowed" : "masked"};
+  }
+
+FightAlgo::Action FightAlgo::resolveNative(Action action, const ResolverState& s) {
+  if((action==MV_WAIT || action==MV_TURN) && s.inCloseup && s.focus30)
+    return MV_JUMPBACK;
+  if((action==MV_ATTACK || action==MV_ATTACKL || action==MV_ATTACKR) && !s.focus5)
+    return MV_TURN2HIT;
+  return action;
+  }
+
+std::array<bool,12> FightAlgo::actionMask(const ResolverState& state) {
+  std::array<bool,12> result{};
+  for(size_t i=0;i<result.size();++i)
+    result[i]=resolve(PolicyAction(i),state).allowed;
+  return result;
+  }
+
+std::array<FightAlgo::Action,FightAlgo::MV_MAX> FightAlgo::queueSnapshot() const {
+  std::array<Action,MV_MAX> result{};
+  std::copy(std::begin(tr),std::end(tr),result.begin());
+  return result;
+  }

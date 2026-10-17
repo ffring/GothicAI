@@ -1,0 +1,45 @@
+{
+  "candidates": [
+    {
+      "seed": 17,
+      "path": "models/gru/seed-17",
+      "epoch": 24,
+      "eval_macro_f1": 0.7135520288271712,
+      "eval_nll": 1.2229240887421877,
+      "checkpoint_sha256": "b72375053283fab3467e928d753dfaaf9b9a438b07c010ceb5951583101d424b",
+      "training_sha256": "b387ec9869f067d7fb80dac663231cee05245dc5004eda9316be1c2cf4542220",
+      "history_sha256": "01098b3b845cf17693ba50f398c53a05a4b396d3dcd9b27c0eb8b310a341ab6e"
+    },
+    {
+      "seed": 29,
+      "path": "models/gru/seed-29",
+      "epoch": 11,
+      "eval_macro_f1": 0.7653078996475223,
+      "eval_nll": 0.8916933146562982,
+      "checkpoint_sha256": "7d48c8ddb9383c72aeea14e66b582702a40c70f7a15269efc828dfda58a52801",
+      "training_sha256": "7b828c2f8a31735b1ac3b719576ffb832b4783a0c0c19881f96912152044da86",
+      "history_sha256": "373178eeb01085d3badcf07e0a33b754151c027c38116c62b8eae3127ff21c32"
+    },
+    {
+      "seed": 43,
+      "path": "models/gru/seed-43",
+      "epoch": 10,
+      "eval_macro_f1": 0.6988053328229281,
+      "eval_nll": 1.0096513501348647,
+      "checkpoint_sha256": "ae5c471891f0b46455f31b166cf6e7510d26ae9abde5aef12f7ae204fac263cd",
+      "training_sha256": "173e9f62a1e65ef7bf51ee5995921dfda46853ff3db56d9baa91cac1097b867c",
+      "history_sha256": "512aee4cdf2c3942647bc9e6c519bb428f3dec6e094bfcc18b1b6ab9adb374dc"
+    }
+  ],
+  "selected": {
+    "seed": 29,
+    "path": "models/gru/seed-29",
+    "epoch": 11,
+    "eval_macro_f1": 0.7653078996475223,
+    "eval_nll": 0.8916933146562982,
+    "checkpoint_sha256": "7d48c8ddb9383c72aeea14e66b582702a40c70f7a15269efc828dfda58a52801",
+    "training_sha256": "7b828c2f8a31735b1ac3b719576ffb832b4783a0c0c19881f96912152044da86",
+    "history_sha256": "373178eeb01085d3badcf07e0a33b754151c027c38116c62b8eae3127ff21c32"
+  },
+  "checkpoint": "models/gru/best.pt"
+}

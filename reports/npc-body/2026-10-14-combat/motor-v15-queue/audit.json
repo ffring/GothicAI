@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "kind": "body_pending_input_saved_audit",
+  "passed": true,
+  "model": null,
+  "checks": [
+    {
+      "name": "native_binary_source_helper_binding",
+      "passed": true
+    },
+    {
+      "name": "strict_native_clock_and_ready_admission_cap_one",
+      "passed": true,
+      "ready_chains": 13,
+      "fresh_query_chains": 1
+    },
+    {
+      "name": "actual_periodic_action_mask_and_execution",
+      "passed": true,
+      "accepted": 2,
+      "rejected": 0
+    },
+    {
+      "name": "healthy_real_time_actors_without_model_or_clock_pause",
+      "passed": true
+    }
+  ],
+  "chains": [
+    {
+      "request_id": 113,
+      "command": "body_heartbeat",
+      "input_read_seq": 146,
+      "tick_id": 18,
+      "input_read_ns": 1103683516807768,
+      "tick_begin_ns": 1103683516963610,
+      "tick_end_ns": 1103683559371956,
+      "deadline_ns": 1103683516715430
+    },
+    {
+      "request_id": 115,
+      "command": "body_heartbeat",
+      "input_read_seq": 150,
+      "tick_id": 19,
+      "input_read_ns": 1103683559587089,
+      "tick_begin_ns": 1103683559786614,
+      "tick_end_ns": 1103683566280039,
+      "deadline_ns": 1103683550715430
+    },
+    {
+      "request_id": 179,
+      "command": "body_heartbeat",
+      "input_read_seq": 216,
+      "tick_id": 20,
+      "input_read_ns": 1103683583854151,
+      "tick_begin_ns": 1103683584023488,
+      "tick_end_ns": 1103683590834840,
+      "deadline_ns": 1103683583715430
+    },
+    {
+      "request_id": 290,
+      "command": "body_heartbeat",
+      "input_read_seq": 329,
+      "tick_id": 21,
+      "input_read_ns": 1103683616899471,
+      "tick_begin_ns": 1103683617158055,
+      "tick_end_ns": 1103683624515190,
+      "deadline_ns": 1103683616715430
+    },
+    {
+      "request_id": 459,
+      "command": "body_heartbeat",
+      "input_read_seq": 502,
+      "tick_id": 23,
+      "input_read_ns": 1103683683722043,
+      "tick_begin_ns": 1103683683878045,
+      "tick_end_ns": 1103683690859506,
+      "deadline_ns": 1103683683715430
+    },
+    {
+      "request_id": 576,
+      "command": "body_heartbeat",
+      "input_read_seq": 621,
+      "tick_id": 24,
+      "input_read_ns": 1103683716764017,
+      "tick_begin_ns": 1103683716915761,
+      "tick_end_ns": 1103683723355245,
+      "deadline_ns": 1103683716715430
+    },
+    {
+      "request_id": 759,
+      "command": "body_heartbeat",
+      "input_read_seq": 808,
+      "tick_id": 26,
+      "input_read_ns": 1103683783757941,
+      "tick_begin_ns": 1103683783912611,
+      "tick_end_ns": 1103683790512885,
+      "deadline_ns": 1103683783715430
+    },
+    {
+      "request_id": 992,
+      "command": "body_heartbeat",
+      "input_read_seq": 1045,
+      "tick_id": 28,
+      "input_read_ns": 1103683850848906,
+      "tick_begin_ns": 1103683851017362,
+      "tick_end_ns": 1103683859469320,
+      "deadline_ns": 1103683850715430
+    },
+    {
+      "request_id": 1194,
+      "command": "body_heartbeat",
+      "input_read_seq": 1251,
+      "tick_id": 30,
+      "input_read_ns": 1103683916790707,
+      "tick_begin_ns": 1103683916942601,
+      "tick_end_ns": 1103683923609542,
+      "deadline_ns": 1103683916715430
+    },
+    {
+      "request_id": 1405,
+      "command": "body_heartbeat",
+      "input_read_seq": 1466,
+      "tick_id": 32,
+      "input_read_ns": 1103683983767509,
+      "tick_begin_ns": 1103683983928099,
+      "tick_end_ns": 1103683991034104,
+      "deadline_ns": 1103683983715430
+    },
+    {
+      "request_id": 1639,
+      "command": "body_heartbeat",
+      "input_read_seq": 1704,
+      "tick_id": 34,
+      "input_read_ns": 1103684050786420,
+      "tick_begin_ns": 1103684050935289,
+      "tick_end_ns": 1103684058843106,
+      "deadline_ns": 1103684050715430
+    },
+    {
+      "request_id": 1847,
+      "command": "body_heartbeat",
+      "input_read_seq": 1916,
+      "tick_id": 36,
+      "input_read_ns": 1103684116717791,
+      "tick_begin_ns": 1103684116870527,
+      "tick_end_ns": 1103684123772368,
+      "deadline_ns": 1103684116715430
+    },
+    {
+      "request_id": 2046,
+      "command": "body_heartbeat",
+      "input_read_seq": 2119,
+      "tick_id": 38,
+      "input_read_ns": 1103684183771477,
+      "tick_begin_ns": 1103684183925806,
+      "tick_end_ns": 1103684191066134,
+      "deadline_ns": 1103684183715430
+    }
+  ],
+  "query_chains": [
+    {
+      "request_id": 660,
+      "command": "body_control_status",
+      "input_read_ns": 1103683750791829,
+      "tick_begin_ns": 1103683750797871,
+      "tick_end_ns": 1103683759404768,
+      "response_ns": 1103683759627666,
+      "response_game_ms": 16594,
+      "response_sim_step": 25
+    }
+  ],
+  "raw_sha256": {
+    "manifest.json": "f2f9359c00ea096a0935c7d83aed9ca8824de45bc1b9c78c85a77a7d2ad83b61",
+    "probe.json": "66f4c9197c2c740d7bff53b4289eafd7fbcd70103381b3a32cd754bbf69e3cb1",
+    "episode/ipc.jsonl": "bd9d1c0069033e59bd8b8057cb76e97a3dac8d77957d78a3b17b42e42eb4d424",
+    "collector-transport.jsonl": "64423c7be671ea4febeb559fb8f9ad19314a19b23dc7f301eb99fa4e20f94fca",
+    "episode/observer-timing.jsonl": "5397fbf4625e14c2b3b99b042a52749aff9aaaccf61ae6924d1b02d4984ea380",
+    "episode/observations.jsonl": "0ba959cc3bd2636b51c106a1aca28217635cd6ba2dde48e27dc15b25be575106",
+    "episode/body-control-events.jsonl": "10da761dc70d516a0b141f5db65ec123f6ec0f91c34a01e1b7d592b41f197fe7"
+  }
+}

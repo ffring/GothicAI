@@ -1,0 +1,24 @@
+Command exited with non-zero status 1
+	Command being timed: "/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-defence-bc-v2/validation/defence-audit-code-v2/body_defence_report.py /home/kaifat/gothic-ai/body/data/stage8-defence-bc-v2 --output-dir /home/kaifat/gothic-ai/body/data/stage8-defence-bc-v2/validation/defence-audit-v2"
+	User time (seconds): 218.50
+	System time (seconds): 6.05
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:44.60
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 145004
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 45897
+	Voluntary context switches: 34
+	Involuntary context switches: 2463
+	Swaps: 0
+	File system inputs: 596192
+	File system outputs: 1496
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

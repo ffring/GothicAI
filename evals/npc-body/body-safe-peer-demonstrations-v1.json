@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "scenario": "body-safe-peer-demonstrations-v1",
+  "declared_before_collection": "2026-10-14",
+  "teacher_id": "observed-safe-peer-v1",
+  "provider": "stage8-scripted-safe-peer-teacher",
+  "teacher_module": "body_safe_peer_teacher",
+  "setup_family": "arena-native-melee-v1",
+  "train_seeds": [
+    181,
+    191,
+    193,
+    197,
+    199,
+    211
+  ],
+  "eval_seeds": [],
+  "test_seeds": [],
+  "ood_seeds": [],
+  "sides": [
+    0,
+    1
+  ],
+  "allowed_actions": [
+    2,
+    5,
+    11
+  ],
+  "parent": {
+    "run_name": "stage8-defence-bc-v2",
+    "episode_count": 207,
+    "dataset_sha256": "e61890483f66166e9717d700602c9469a30e6f3bd2531462f94fef6dd17542a8"
+  },
+  "runtime": {
+    "native_serial_workers": true
+  },
+  "timeout_game_ms": 4000,
+  "variants": [
+    {
+      "id": "turn-left",
+      "expected_action_id": 2,
+      "distance_cm": 350,
+      "yaw_offset_deg": 20,
+      "peer_motion_action": 3,
+      "peer_attack_after_motion": false
+    },
+    {
+      "id": "turn-right",
+      "expected_action_id": 2,
+      "distance_cm": 450,
+      "yaw_offset_deg": -35,
+      "peer_motion_action": 4,
+      "peer_attack_after_motion": false
+    },
+    {
+      "id": "jump-near",
+      "expected_action_id": 5,
+      "distance_cm": 260,
+      "yaw_offset_deg": 0,
+      "peer_motion_action": 1,
+      "peer_attack_after_motion": true
+    },
+    {
+      "id": "jump-far",
+      "expected_action_id": 5,
+      "distance_cm": 300,
+      "yaw_offset_deg": 0,
+      "peer_motion_action": 1,
+      "peer_attack_after_motion": true
+    },
+    {
+      "id": "wait-near",
+      "expected_action_id": 11,
+      "distance_cm": 450,
+      "yaw_offset_deg": 0,
+      "peer_motion_action": 3,
+      "peer_attack_after_motion": false
+    },
+    {
+      "id": "wait-far",
+      "expected_action_id": 11,
+      "distance_cm": 500,
+      "yaw_offset_deg": 0,
+      "peer_motion_action": 4,
+      "peer_attack_after_motion": false
+    }
+  ],
+  "expected_action_is_diagnostic_only": true,
+  "selection": {
+    "feature_version": "body-periodic-numeric-v1",
+    "feature_count": 184,
+    "model": null,
+    "shared_engine_masks_unchanged": true,
+    "task_or_peer_schedule_input": false,
+    "world_motion": "relative_velocity + self_velocity; bearing derivative from world relative_position and relative_velocity",
+    "turn": "current unfocused yaw5..40 degrees, no observed incoming strike, legal turn mask",
+    "jump": "actual observed attack/prehit, current focus30 and fight distance<=current native g_range (outWR permitted), clear rear ray150cm, legal jump mask",
+    "wait": "no current threat, legal wait300, observed peer speed>=20cm/s, conservative334ms yaw bound<=20deg and projected fight distance>=max350cm,g_range+50cm",
+    "future_velocity_is_assumed_safe": false
+  },
+  "mechanical_approval": {
+    "exact_periodic_precommand_certificate": true,
+    "accepted_started_completed": true,
+    "first_settled_row_before_next_command": true,
+    "all_numeric_rows_visible_current_valid": true,
+    "maximum_periodic_gap_ms": 67,
+    "same_identity_and_lease": true,
+    "own_hp_loss": 0,
+    "collision_failures": 0,
+    "grounded": true,
+    "mapped_peer_actual_motion_precedes_anchor": true,
+    "recent_peer_motion_window_ms": 2000,
+    "posthoc_unsafe_strafe_labels": false,
+    "cancelled_or_censored_is_expert": false,
+    "oracle_visibility_input_to_selector": false,
+    "native_actual_visibility_posthoc_proof_only": true,
+    "maximum_native_visibility_gap_ms": 67,
+    "allowed_native_visibility_failures": 0
+  },
+  "coverage": {
+    "full_episodes": 72,
+    "smoke_episodes": 6,
+    "minimum_new_train_usable_actions": {
+      "2": 24,
+      "5": 24,
+      "11": 24
+    },
+    "minimum_expected_action_per_scene": 1,
+    "count_only": "approved primary completed decisions retained by actual periodic model view"
+  },
+  "budgets": {
+    "collection_wall_timeout_s": 900,
+    "max_episode_substeps": 150,
+    "max_primary_commands": 12,
+    "native_queue_capacity": 4096,
+    "drain_max": 256,
+    "writer_queue_capacity": 256,
+    "provider_watchdog_wall_ms": 5000,
+    "max_dropped_records": 0
+  },
+  "sampling": {
+    "version": "periodic-v1",
+    "rate_hz": 20,
+    "max_label_age_game_ms": 67,
+    "event_only_commands": false
+  },
+  "simulation": {
+    "mode": "lockstep",
+    "fps": 30,
+    "time_multiplier": 1,
+    "model": null
+  },
+  "limitations": [
+    "Planned curriculum; no simulation or approved data exists until the frozen dev-ubuntu run finishes.",
+    "Calibration and smoke cannot automatically enter the new training corpus.",
+    "All six seeds inherit the immutable parent's train groups; eval223/227, old test/OOD and fresh screening are excluded.",
+    "Failed physical effects remain raw diagnostics; no duplicated, cancelled, invisible or intended-only label satisfies coverage.",
+    "Old207 episodes, old checkpoints, masks, timing and visibility thresholds remain immutable.",
+    "The first six calibration scenes use real Approach then legal AttackFront. An outWR incoming jump is legal under the guard but is not claimed covered until a causal native scene actually demonstrates it; failed scenes are never silently rerun or relabeled."
+  ]
+}
