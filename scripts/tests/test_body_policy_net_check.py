@@ -125,5 +125,112 @@ class ReplayCheckTests(unittest.TestCase):
             list(check.replay_requests(self.observations))
 
 
+class FakeRuntime:
+    """Record direct runtime calls without importing model or transport code."""
+    checkpoint_sha256 = "frozen"
+
+    def __init__(self):
+        self.processed = []
+        self.arbitrated = []
+        self.epochs = None
+        self.active = {}
+
+    def begin_episode(self, session_epoch, world_epoch, *, initial_game_ms):
+        self.epochs = (session_epoch, world_epoch)
+        self.initial_game_ms = initial_game_ms
+        self.active.clear()
+
+    def process(self, request):
+        self.processed.append(request)
+        row = request["observation"]
+        identity = tuple(row[key] for key in ("session_epoch", "world_epoch", "entity_id", "control_generation"))
+        previous = self.active.get(row["entity_id"])
+        fallback_reason = None
+        if identity[:2] != self.epochs:
+            fallback_reason = "stale_epoch"
+        elif previous is not None and identity[3] < previous[3]:
+            fallback_reason = "stale_generation"
+        else:
+            self.active[row["entity_id"]] = identity
+            if row.get("force_fallback") is True:
+                fallback_reason = "observation_too_old"
+        fallback = fallback_reason is not None
+        return {"status": "fallback" if fallback else "processed",
+                "reason": fallback_reason if fallback else "locked" if request["memory_only"] else "decision",
+                "action_id": None, "model_processed": not fallback, "stream_seq": request["stream_seq"],
+                "logits": [0.123, 0.456], "inference_ms": 0.25, "backend_timing": {"wall_ms": 0.2}}
+
+    def arbitrate(self, row, *, stream_seq):
+        self.arbitrated.append((row, stream_seq))
+        return {"status": "decision", "reason": "decision", "action_id": 6, "stream_seq": stream_seq}
+
+    def status(self):
+        return {"reason": "status", "expected_epochs": list(self.epochs), "initial_game_ms": self.initial_game_ms}
+
+    def end_episode(self, session_epoch, world_epoch):
+        accepted = self.epochs == (session_epoch, world_epoch)
+        if accepted:
+            self.active.clear()
+        return {"accepted": accepted, "reason": "episode_ended" if accepted else "stale_episode_end"}
+
+
+class ReferenceDriverTests(unittest.TestCase):
+    def setUp(self):
+        self.runtime = FakeRuntime()
+        self.reference = check.RuntimeReference(self.runtime)
+        self.reset = {"cmd": "reset", "id": "reset", "session_epoch": 2, "world_epoch": 3, "initial_game_ms": 100}
+        self.reference.handle(self.reset)
+
+    def step(self, generation=1, **overrides):
+        row = {"session_epoch": 2, "world_epoch": 3, "entity_id": 7, "control_generation": generation,
+               "can_decide": True, "action_mask_valid": True, "t_game_ms": 150, **overrides}
+        return self.reference.handle({"cmd": "step", "id": "step", "observation": row, "now_game_ms": 150})
+
+    def test_sequences_belong_to_full_actor_identity_and_stale_generations_do_not_reset_newer_stream(self):
+        responses = [self.step(), self.step(2), self.step(1), self.step(2),
+                     self.step(2, world_epoch=2), self.step(2), self.step(2, entity_id=8)]
+        self.assertEqual([response["process"]["stream_seq"] for response in responses], [1, 1, 1, 2, 1, 3, 1])
+        self.assertEqual([request["stream_seq"] for request in self.runtime.processed], [1, 1, 1, 2, 1, 3, 1])
+        self.assertEqual(responses[2]["reason"], "stale_generation")
+        self.assertEqual(responses[4]["reason"], "stale_epoch")
+
+    def test_direct_reference_preserves_fields_and_only_arbitrates_eligible_success(self):
+        decision = self.step()
+        locked = self.step(action_mask_valid=False)
+        fallback = self.step(force_fallback=True)
+        self.assertEqual(decision, {"ok": True, "id": "step", "schema_version": 1,
+            "process": {"status": "processed", "reason": "decision", "action_id": None,
+                        "model_processed": True, "stream_seq": 1, "logits": [0.123, 0.456]},
+            "arbitration": {"status": "decision", "reason": "decision", "action_id": 6, "stream_seq": 1},
+            "status": "decision", "action_id": 6, "reason": "decision"})
+        self.assertEqual([request["memory_only"] for request in self.runtime.processed], [False, True, False])
+        self.assertEqual([request["command_enabled"] for request in self.runtime.processed], [True, False, True])
+        self.assertEqual(len(self.runtime.arbitrated), 1)
+        self.assertEqual((locked["status"], locked["action_id"], locked["arbitration"]), ("locked", None, None))
+        self.assertEqual((fallback["status"], fallback["reason"], fallback["arbitration"]),
+                         ("fallback", "observation_too_old", None))
+        self.assertEqual(self.runtime.processed[0]["source"], "periodic_observer")
+        self.assertEqual(self.runtime.processed[0]["checkpoint_sha256"], "frozen")
+        self.assertEqual(self.runtime.processed[0]["now_game_ms"], 150)
+
+    def test_reset_and_accepted_end_clear_reference_sequences(self):
+        self.step()
+        stale_end = self.reference.handle({"cmd": "end_episode", "id": "stale", "session_epoch": 2, "world_epoch": 4})
+        self.assertFalse(stale_end["accepted"])
+        self.assertEqual(self.step()["process"]["stream_seq"], 2)
+        accepted_end = self.reference.handle({"cmd": "end_episode", "id": "end", "session_epoch": 2, "world_epoch": 3})
+        self.assertTrue(accepted_end["accepted"])
+        self.assertEqual(self.reference.streams, {})
+        self.reference.handle(self.reset)
+        self.assertEqual(self.step()["process"]["stream_seq"], 1)
+        self.reference.handle(self.reset)
+        self.assertEqual(self.step()["process"]["stream_seq"], 1)
+        status = self.reference.handle({"cmd": "status", "id": "status"})
+        self.assertEqual(status, {"ok": True, "id": "status", "schema_version": 1, "reason": "status",
+                                  "expected_epochs": [2, 3], "initial_game_ms": 100})
+        self.assertEqual(self.reference.handle({"cmd": "close", "id": "close"}),
+                         {"ok": True, "id": "close", "schema_version": 1, "reason": "closed"})
+
+
 if __name__ == "__main__":
     unittest.main()

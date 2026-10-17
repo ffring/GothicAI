@@ -32,7 +32,8 @@ independent runtime episode. Requests carry `id` and `cmd`: `reset` requires
 `session_epoch`, `world_epoch`, and `initial_game_ms`; `step` accepts `observation` (one
 periodic bridge row) and `now_game_ms`. Other commands are `status`, `end_episode`, and
 `close`. The service assigns actor-local stream sequences, updates memory on every row,
-and arbitrates eligible decisions. Responses preserve request order and IDs and include
+and arbitrates eligible decisions. Each control generation starts its stream at 1;
+stale generations cannot reset the current stream. Responses preserve request order and IDs and include
 the process result, `action_id` (or `null`), and an explicit fallback reason when needed.
 The `process` receipt omits only local `inference_ms` and `backend_timing` diagnostics
 so network and in-process replay responses can be compared exactly.

@@ -76,8 +76,9 @@ class DirectRuntime:
             result = {"reason": "episode_reset", "hidden_reset": True}
         elif command == "step":
             row = request["observation"]
-            self.streams[row["entity_id"]] += 1
-            sequence = self.streams[row["entity_id"]]
+            identity = tuple(row[key] for key in ("session_epoch", "world_epoch", "entity_id", "control_generation"))
+            self.streams[identity] += 1
+            sequence = self.streams[identity]
             eligible = row.get("can_decide") is True and row.get("action_mask_valid") is True
             processed = self.policy.process({
                 "stream_seq": sequence, "observation": deepcopy(row),
@@ -192,6 +193,43 @@ def test_network_replays_runtime_field_for_field_and_preserves_pipeline_order():
     assert responses[10]["reason"] == "episode_ended" and responses[10]["action_id"] is None
     assert responses[12]["process"]["stream_seq"] == 1
     assert responses[12]["process"]["sequence_dt_game_ms"] == 33
+
+
+def test_generation_change_starts_new_sequence_without_stale_rows_resetting_it():
+    rows = [observation(index, game_ms=game_ms) for index, game_ms in
+            enumerate((150, 200, 200, 250, 250, 300), 1)]
+    for row, generation in zip(rows, (1, 2, 1, 2, 2, 2)):
+        row["control_generation"] = generation
+    rows[4]["world_epoch"] = 6
+    # Explicit runtime inputs are independent of either adapter's counters.
+    sequences = (1, 1, 1, 2, 1, 3)
+    direct = make_runtime()
+    direct.begin_episode(4, 7, initial_game_ms=100)
+    expected = []
+    for row, sequence in zip(rows, sequences):
+        eligible = row["can_decide"] and row["action_mask_valid"]
+        processed = direct.process({"stream_seq": sequence, "observation": row,
+                                   "now_game_ms": row["t_game_ms"], "source": "periodic_observer",
+                                   "checkpoint_sha256": direct.checkpoint_sha256,
+                                   "command_enabled": eligible, "memory_only": not eligible})
+        processed.pop("inference_ms", None)
+        processed.pop("backend_timing", None)
+        arbitration = direct.arbitrate(row, stream_seq=sequence) if processed["status"] != "fallback" else None
+        expected.append((processed, arbitration))
+    requests = [reset()] + [step(row, index) for index, row in enumerate(rows, 1)]
+    with running_server() as port, Client(port) as client:
+        for request in requests:
+            client.send(request)
+        assert client.receive()["reason"] == "episode_reset"
+        responses = [client.receive() for _ in rows]
+    assert [(response["process"], response["arbitration"]) for response in responses] == expected
+    assert [response["id"] for response in responses] == list(range(1, 7))
+    for index in (0, 1, 3, 5):
+        assert responses[index]["status"] == "decision" and responses[index]["process"]["model_processed"]
+    assert responses[1]["process"]["hidden_reset"] and responses[1]["process"]["sequence_dt_game_ms"] == 50
+    assert responses[2]["reason"] == "stale_generation" and responses[4]["reason"] == "stale_epoch"
+    assert [responses[index]["process"]["stream_seq"] for index in (0, 1, 3, 5)] == [1, 1, 2, 3]
+    assert [call[2] for call in direct.backend.calls] == [None, None, 1, 2]
 
 
 def test_clients_have_independent_runtime_episodes_with_simultaneous_requests():

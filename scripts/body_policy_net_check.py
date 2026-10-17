@@ -105,16 +105,72 @@ class NetworkClient:
             self.socket.close()
 
 
+class RuntimeReference:
+    """Independent in-process driver for valid replay requests.
+
+    Keep this separate from the TCP adapter: comparing a service against its
+    own adapter would hide mistakes in stream bookkeeping or arbitration.
+    """
+    def __init__(self, runtime):
+        self.runtime = runtime
+        self.streams = {}
+
+    def handle(self, request: dict) -> dict:
+        command = request["cmd"]
+        if command == "reset":
+            self.runtime.begin_episode(request["session_epoch"], request["world_epoch"],
+                                       initial_game_ms=request["initial_game_ms"])
+            self.streams.clear()
+            result = {"reason": "episode_reset", "hidden_reset": True}
+        elif command == "step":
+            row = request["observation"]
+            identity = tuple(row[key] for key in ("session_epoch", "world_epoch", "entity_id", "control_generation"))
+            entity = row["entity_id"]
+            previous = self.streams.get(entity)
+            sequence = previous[1] + 1 if previous is not None and previous[0] == identity else 1
+            eligible = row.get("can_decide") is True and row.get("action_mask_valid") is True
+            processed = self.runtime.process({
+                "stream_seq": sequence, "observation": row, "source": "periodic_observer",
+                "now_game_ms": request["now_game_ms"], "checkpoint_sha256": self.runtime.checkpoint_sha256,
+                "command_enabled": eligible, "memory_only": not eligible,
+            })
+            # A stale generation or epoch must not rewind the active actor's
+            # sequence. Only the identity accepted by the runtime owns it.
+            if self.runtime.active.get(entity) == identity:
+                self.streams[entity] = (identity, sequence)
+            arbitration = None
+            if processed["status"] == "fallback":
+                status, action, reason = "fallback", None, processed["reason"]
+            elif eligible:
+                arbitration = self.runtime.arbitrate(row, stream_seq=sequence)
+                status, action, reason = (arbitration[key] for key in ("status", "action_id", "reason"))
+            else:
+                status, action, reason = "locked", None, processed["reason"]
+            result = {"process": {key: value for key, value in processed.items()
+                                   if key not in ("inference_ms", "backend_timing")},
+                      "arbitration": arbitration, "status": status, "action_id": action, "reason": reason}
+        elif command == "status":
+            result = self.runtime.status()
+        elif command == "end_episode":
+            result = self.runtime.end_episode(request["session_epoch"], request["world_epoch"])
+            if result["accepted"]:
+                self.streams.clear()
+        elif command == "close":
+            result = {"reason": "closed"}
+        else:
+            raise ValueError("unknown reference command")
+        return {"ok": True, **result, "id": request["id"], "schema_version": 1}
+
+
 def runtime_session(args):
     if sys.platform != "linux":
         raise RuntimeError("runtime mode runs only on dev-ubuntu; use net on the Mac")
     package = Path(__file__).resolve().parents[1] / "body-service" / "src"
     sys.path.insert(0, str(package))
     from gothic_body.runtime import PolicyRuntime
-    from gothic_body.serving_net import PolicySession
 
     runtime = PolicyRuntime(args.checkpoint, device="cpu", inference_cpu_threads=args.inference_cpu_threads)
-    return PolicySession(runtime)
+    return RuntimeReference(runtime)
 
 
 def percentile(values: list[float], fraction: float) -> float | None:

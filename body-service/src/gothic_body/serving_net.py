@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import hashlib
 import json
 import math
@@ -41,7 +40,9 @@ class PolicySession:
     """
     def __init__(self, runtime: PolicyRuntime):
         self.runtime = runtime
-        self.stream: Counter[int] = Counter()
+        # Retain only the current identity/sequence per actor, bounding memory
+        # across arbitrarily many control generations.
+        self.stream: dict[int, tuple[tuple[int, ...], int]] = {}
 
     def handle(self, request) -> dict:
         request_id = request.get("id") if isinstance(request, dict) else None
@@ -79,19 +80,24 @@ class PolicySession:
         row = request.get("observation")
         if not isinstance(row, dict):
             raise ValueError("observation object required")
-        entity = actor_identity(row)[2]
+        identity = actor_identity(row)
+        entity = identity[2]
         now = request.get("now_game_ms")
         if type(now) is not int or now < 0:
             raise ValueError("now_game_ms must come from the engine clock")
         if entity not in self.stream and len(self.stream) >= self.runtime.max_actors:
             raise ValueError("actor stream capacity exceeded")
-        self.stream[entity] += 1
-        sequence = self.stream[entity]
+        previous = self.stream.get(entity)
+        sequence = previous[1] + 1 if previous is not None and previous[0] == identity else 1
         eligible = row.get("can_decide") is True and row.get("action_mask_valid") is True
         processed = self.runtime.process({"stream_seq": sequence, "observation": row,
             "source": "periodic_observer", "now_game_ms": now,
             "checkpoint_sha256": self.runtime.checkpoint_sha256,
             "command_enabled": eligible, "memory_only": not eligible})
+        # A new generation owns a fresh recurrent sequence. Rejected old
+        # generations/epochs must not displace the current actor's counter.
+        if self.runtime.active.get(entity) == identity:
+            self.stream[entity] = (identity, sequence)
         arbitration = None
         # A process fallback must keep its original cause, and cannot use old scores.
         if processed["status"] != "fallback" and eligible:
