@@ -12,6 +12,7 @@ import {
   useVideoConfig,
 } from 'remotion';
 import './fonts';
+import {BrandSeal, BrandSting, STING_FRAMES} from './Brand';
 import {Captions} from './parts/Captions';
 import {BarsView, DotsView, FormulaView, StatsView} from './parts/Cards';
 import {DiceChart} from './parts/DiceChart';
@@ -138,10 +139,10 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
   );
 };
 
-// the music bed: under the whole short, fading in and out, lower while the voice speaks (slow ramps)
-const Music: React.FC<{music: NonNullable<Plan['music']>; spans: Spans}> = ({music, spans}) => {
-  const {fps, durationInFrames} = useVideoConfig();
-  const end = durationInFrames / fps;
+// the music bed: under the beats, fading in and out, lower while the voice speaks (slow ramps)
+const Music: React.FC<{music: NonNullable<Plan['music']>; spans: Spans; frames: number}> = ({music, spans, frames}) => {
+  const {fps} = useVideoConfig();
+  const end = frames / fps;
   const volume = (f: number) => {
     const t = f / fps;
     const fade = Math.min(
@@ -155,28 +156,37 @@ const Music: React.FC<{music: NonNullable<Plan['music']>; spans: Spans}> = ({mus
 
 export const Explainer: React.FC<Plan> = (plan) => {
   const {fps} = useVideoConfig();
+  const contentFrames = Math.round(plan.beats.reduce((s, b) => s + b.dur, 0) * fps);
   const spans: Spans = plan.lines.filter((l) => l.length > 0).map((l) => [l[0].start, l[l.length - 1].end]);
   let t = 0;
   return (
     <AbsoluteFill style={{background: '#000'}}>
-      {plan.beats.map((beat) => {
-        const from = Math.round(t * fps);
-        const start = t;
-        t += beat.dur;
-        return (
-          <Sequence key={beat.id} from={from} durationInFrames={Math.round(t * fps) - from} name={beat.id}>
-            <BeatView beat={beat} start={start} spans={spans} duck={plan.duck} game={plan.gameVolume} />
+      <Sequence durationInFrames={contentFrames} layout="none" name="beats">
+        {plan.beats.map((beat) => {
+          const from = Math.round(t * fps);
+          const start = t;
+          t += beat.dur;
+          return (
+            <Sequence key={beat.id} from={from} durationInFrames={Math.round(t * fps) - from} name={beat.id}>
+              <BeatView beat={beat} start={start} spans={spans} duck={plan.duck} game={plan.gameVolume} />
+            </Sequence>
+          );
+        })}
+        {plan.music && <Music music={plan.music} spans={spans} frames={contentFrames} />}
+        {plan.voice.map((v) => (
+          <Sequence key={v.file} from={Math.round(v.start * fps)} name={v.file}>
+            <Audio src={staticFile(v.file)} />
           </Sequence>
-        );
-      })}
-      {plan.music && <Music music={plan.music} spans={spans} />}
-      {plan.voice.map((v) => (
-        <Sequence key={v.file} from={Math.round(v.start * fps)} name={v.file}>
-          <Audio src={staticFile(v.file)} />
+        ))}
+        <Captions lines={plan.lines} brand={plan.brand} />
+        <Hook text={plan.hook.text} until={plan.hook.until} />
+        {plan.brand && <BrandSeal />}
+      </Sequence>
+      {plan.brand && (
+        <Sequence from={contentFrames} durationInFrames={STING_FRAMES} name="brand sting">
+          <BrandSting volume={plan.brandVolume} />
         </Sequence>
-      ))}
-      <Captions lines={plan.lines} />
-      <Hook text={plan.hook.text} until={plan.hook.until} />
+      )}
     </AbsoluteFill>
   );
 };

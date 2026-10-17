@@ -8,7 +8,7 @@ from the engine's formula or taken from the bench's log, never typed into a pict
 ```bash
 cd shorts/explain
 npm ci
-npx remotion studio                                                    # the demo plan: the dice chart
+npx remotion studio --props '{"brand":false}'                           # the demo plan: the dice chart, no assets
 npx remotion still Explainer --public-dir "$W" --props "$W/plan.json" --frame 120 "$W/render/f120.png"
 npx remotion render Explainer --public-dir "$W" --props "$W/plan.json" --codec h264 --crf 18 "$W/render/short-ru.mp4"
 ```
@@ -16,11 +16,27 @@ npx remotion render Explainer --public-dir "$W" --props "$W/plan.json" --codec h
 `$W` is the short's own folder (outside the repository): footage, stills and voice lines referenced by the plan
 live there and are served as the public dir.
 
+Connect the channel assets to that folder once, before rendering with branding enabled:
+
+```bash
+ln -s "$HOME/.local/share/gothic-ai/brand/sting" "$W/brand"
+```
+
+Remotion serves files through this directory symlink with `--public-dir "$W"`; no copying is needed.
+The renderer uses `brand/seal-corner.png` and `brand/sting.mp4` from it.
+
 ## The plan
 
 `src/schema.ts` is the format; a missing or misspelt field stops the render with its path. In short:
 
 - `hook`: the big text over the first seconds;
+- `brand`: boolean, defaults to `true`. A 110 × 110 G seal stays at (940, 110) over every beat, then the
+  2.2-second letter sting plays after the last beat (1080 × 1920, 30 fps, its own −14 LUFS source audio).
+  Mastering raises the sting together with the whole short, so the renderer attenuates it to voice level before
+  mastering. The voice and game sound stop before it; the music fades out by its start. The render's duration
+  includes these extra 66 frames. `false` needs no brand assets and preserves the original frames, captions
+  and duration;
+- `brandVolume`: nonnegative linear gain for the sting's audio, defaults to `0.355` (about −9 dB);
 - `beats`: in order, each `footage` (an mp4, `freeze` and `zoom` optional), `still` (a png), `split` (two takes,
   top and bottom, with labels) or `card` (a chart); `texts` on top of a beat, `tags` (a label pinned to a point
   of the picture, to its left or right with `side`, lines appearing one by one, a roll counter that stops on the
@@ -50,7 +66,9 @@ before it) for that talent and distance, computed by `src/dice.ts` from the same
 
 `src/theme.ts`: the palette (the old rule grey, the new one gold, skill blue, strength red, dexterity green), the
 safe area of the Shorts interface (no text in the top 150, bottom 380, right 150 px). Fonts: PT Serif Bold and
-Montserrat, with full Cyrillic, shipped in `src/fonts/` under the SIL Open Font License.
+Montserrat, with full Cyrillic, shipped in `src/fonts/` under the SIL Open Font License. With `brand: true`,
+all voice captions use PT Serif Bold, including words with digits. Chart labels, tags and counters keep
+Montserrat; all colours stay the same. With `brand: false`, captions retain their original Montserrat.
 
 Remotion is under the [Remotion License](https://www.remotion.pro/license): free for individuals and companies of
 up to three people. The versions are pinned in `package.json`.

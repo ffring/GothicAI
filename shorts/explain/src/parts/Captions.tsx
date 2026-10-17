@@ -46,7 +46,7 @@ export const pages = (lines: Word[][]) => {
 };
 
 // the voice's words at the lower middle, the word being said in the accent colour
-export const Captions: React.FC<{lines: Word[][]}> = ({lines}) => {
+export const Captions: React.FC<{lines: Word[][]; brand: boolean}> = ({lines, brand}) => {
   const t = useCurrentFrame() / useVideoConfig().fps;
   const all = pages(lines);
   const i = all.findIndex((p, k) => {
@@ -66,8 +66,8 @@ export const Captions: React.FC<{lines: Word[][]}> = ({lines}) => {
           left: SAFE.left,
           width: W - SAFE.left - SAFE.right,
           textAlign: 'center',
-          fontFamily: FONT.body,
-          fontWeight: 900,
+          fontFamily: brand ? FONT.title : FONT.body,
+          fontWeight: brand ? 700 : 900,
           fontSize: 76,
           lineHeight: 1.12,
           textTransform: 'uppercase',
