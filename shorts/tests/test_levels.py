@@ -452,12 +452,15 @@ def test_voiced_master_checks_decoded_audio_before_publication(
 ):
     report = levels.check_balance(-28, None, None, -34, -31)
     report["speech_lufs"] = -28
-    audio = SimpleNamespace(stem=lambda _track: "[0:a]anull")
+    audio = levels.AudioGraph(["-i", "joined.mp4"], ["[0:a]asplit=2[g][vo]"],
+                              {"game": "g", "voice": "vo"})
     commands = []
 
     def render(command):
         commands.append(command)
-        Path(command[-1]).touch()
+        for argument in command:
+            if argument.endswith(("short-ru.mp4", "voice.m4a")):
+                Path(argument).touch()
 
     monkeypatch.setattr(comparison_cut, "run", render)
     meter = Mock(side_effect=[(voice_lufs, -4), (-13, peak)])
@@ -480,11 +483,14 @@ def test_voiced_master_checks_decoded_audio_before_publication(
     assert _rows(report)["clicks"]["times_seconds"] == click_times
     assert detector.call_args.args[0].name == out.name
     assert meter.call_args_list[1].args[0] == detector.call_args.args[0]
-    assert len(commands) == 2
-    for command in commands:
-        graph = command[command.index("-filter_complex") + 1]
-        assert "volume=14.000000000dB,alimiter=limit=0.79:level=false" in graph
-        assert "loudnorm" not in graph
+    assert len(commands) == 1
+    graph = commands[0][commands[0].index("-filter_complex") + 1]
+    assert "volume=14.000000000dB" in graph
+    assert graph.count("alimiter=") == 1
+    assert "alimiter=limit=0.79:level=false:latency=true" in graph
+    assert "aeval='val(0)|val(1)|0.01':c=2.1" in graph
+    assert "amultiply[voice_mastered]" in graph
+    assert "loudnorm" not in graph
     json.dumps(report, allow_nan=False)
 
 
@@ -506,12 +512,13 @@ def test_mastering_failure_writes_report_and_click_times(
     out.touch()
     report = levels.check_balance(-22, None, None, -28, -25)
     report["speech_lufs"] = -22
-    audio = SimpleNamespace(inputs=["-i", "game.mp4"], mix=lambda: "[0:a]anull",
-                            stem=lambda _track: "[0:a]anull")
+    audio = levels.AudioGraph(["-i", "game.mp4"], ["[0:a]asplit=2[g][vo]"],
+                              {"game": "g", "voice": "vo"})
 
     def render(command):
-        if command[-1].endswith(("short-ru.mp4", "voice.m4a")):
-            Path(command[-1]).touch()
+        for argument in command:
+            if argument.endswith(("short-ru.mp4", "voice.m4a")):
+                Path(argument).touch()
 
     monkeypatch.setattr(comparison_cut.sys, "argv", ["cut.py", "probe", "ru", str(plan_file)])
     monkeypatch.setattr(comparison_cut, "text_image", Mock())
@@ -569,6 +576,48 @@ def test_synthetic_voiced_mix_publishes_voice_at_base_after_aac(
     assert rows["clicks"]["count"] == 0
     assert report["ok"] is True
     assert out.stat().st_size > 0
+
+
+def test_game_peaks_that_suppress_the_voice_block_publication(
+    tmp_path, comparison_cut, monkeypatch,
+):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for synthetic mastering")
+    voice, joined, out = (tmp_path / name for name in ("voice.wav", "joined.mkv", "short-ru.mp4"))
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "aevalsrc='0.03*sin(2*PI*1000*t)|0':s=48000:d=6:c=stereo",
+         "-c:a", "pcm_s24le", str(voice)], check=True, capture_output=True,
+    )
+    impulses = ("aevalsrc='0|if(lt(mod(t,0.1),0.002),"
+                "0.2*sin(PI*mod(t,0.1)/0.002)^2*sin(2*PI*1000*mod(t,0.1)),0)':s=48000:d=6:c=stereo")
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "color=c=black:s=16x16:r=1:d=6", "-f", "lavfi", "-i", impulses,
+         "-c:v", "mpeg4", "-c:a", "pcm_s24le", str(joined)], check=True, capture_output=True,
+    )
+    audio, report = levels.calibrate(joined, None, [(voice, 0)], [(0, 6)], 6, 6)
+    assert report["ok"] is True  # Effects are quiet enough in LUFS, despite their high peaks.
+    measured_mix_voice = []
+    real_meter = levels.meter_file
+
+    def meter(path):
+        if path.name == out.name:
+            # The mix's left channel contains only the voice, so this is an independent check.
+            measured_mix_voice.append(levels.measure(["-i", str(path)], "[0:a]pan=mono|c0=c0[v]", "v"))
+        return real_meter(path)
+
+    monkeypatch.setattr(levels, "meter_file", meter)
+    with pytest.raises(ValueError, match="mastering check failed"):
+        comparison_cut.master(audio.inputs, audio.mix(), out, 6, voiced=True, audio=audio, report=report)
+    rows = _rows(report)
+    assert measured_mix_voice[0] == pytest.approx(-15.0, abs=0.2)
+    assert rows["voice_mastered"]["measured_lufs"] == pytest.approx(measured_mix_voice[0], abs=0.1)
+    assert rows["voice_mastered"]["ok"] is False
+    assert rows["true_peak"]["ok"] is True
+    assert rows["clicks"]["count"] == 0
+    assert report["ok"] is False
+    assert not out.exists()
 
 
 def test_unvoiced_master_keeps_original_two_pass_filters(tmp_path, monkeypatch, comparison_cut):

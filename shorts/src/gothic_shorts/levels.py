@@ -16,6 +16,8 @@ BASE_LUFS = -14.0
 TRUE_PEAK_DBTP = -1.0
 VOICE_TOLERANCE_LU = 0.5
 PEAK_LIMIT = 0.79  # Leave AAC/intersample headroom below the final true-peak ceiling.
+# A sub-threshold pilot follows the limiter's shared gain without influencing it.
+LIMITER_PILOT = 0.01
 MUSIC_BELOW_VOICE_LU = 14.0
 MUSIC_BELOW_GAME_LU = 3.0
 MUSIC_DUCK_DB = 6.0
@@ -235,8 +237,10 @@ def master_gain(speech_lufs: float) -> float:
     return BASE_LUFS - speech_lufs
 
 
-def master_filter(speech_lufs: float, length: float) -> str:
-    return (f"volume={master_gain(speech_lufs):.9f}dB,alimiter=limit={PEAK_LIMIT}:level=false,"
+def master_filter(speech_lufs: float, length: float, *, voice_probe: bool = False) -> str:
+    pilot = f"aeval='val(0)|val(1)|{LIMITER_PILOT}':c=2.1," if voice_probe else ""
+    return (f"volume={master_gain(speech_lufs):.9f}dB,{pilot}"
+            f"alimiter=limit={PEAK_LIMIT}:level=false:latency=true,"
             f"afade=t=out:st={length - 0.08:.3f}:d=0.08")
 
 
@@ -265,13 +269,29 @@ class AudioGraph:
         return measure(self.inputs, ";".join(graph), self.tracks[track], windows,
                        meter_gain_db=meter_gain_db)
 
-    def stem(self, track: str) -> str:
-        return ";".join(self.filters + [f"[{label}]anullsink" for key, label in self.tracks.items()
-                                        if key != track] + [f"[{self.tracks[track]}]anull"])
+    def mix(self, *, voice_probe: bool = False) -> str:
+        filters, tracks = list(self.filters), dict(self.tracks)
+        if voice_probe:
+            filters.append(f"[{tracks['voice']}]asplit=2[master_voice_mix][master_voice_probe]")
+            tracks["voice"] = "master_voice_mix"
+        return ";".join(filters + ["".join(f"[{label}]" for label in tracks.values()) +
+                                  f"amix=inputs={len(tracks)}:duration=first:normalize=0"])
 
-    def mix(self) -> str:
-        return ";".join(self.filters + ["".join(f"[{label}]" for label in self.tracks.values()) +
-                                       f"amix=inputs={len(self.tracks)}:duration=first:normalize=0"])
+    def master_graph(self, speech_lufs: float, length: float) -> str:
+        """Output stereo [a] and a voice probe under the mix's exact limiting gain.
+
+        The limiter applies one gain to every channel. Its quiet constant third
+        channel reveals that gain, including the final fade, even on silent or
+        cancelling samples. Discard the pilot from the published stereo. Delay
+        compensation in master_filter keeps the voice and envelope aligned.
+        """
+        return (f"{self.mix(voice_probe=True)},"
+                f"{master_filter(speech_lufs, length, voice_probe=True)},"
+                "asplit=2[master_mix][master_pilot];"
+                "[master_mix]pan=stereo|c0=c0|c1=c1[a];"
+                f"[master_pilot]pan=stereo|c0=c2|c1=c2,volume={1 / LIMITER_PILOT:g}[master_envelope];"
+                f"[master_voice_probe]volume={master_gain(speech_lufs):.9f}dB[master_voice_boosted];"
+                "[master_voice_boosted][master_envelope]amultiply[voice_mastered]")
 
 
 def audio_graph(joined: Path, music: Path | None, voice: list[tuple[Path, float]],

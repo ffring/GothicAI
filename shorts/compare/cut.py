@@ -127,17 +127,14 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
         out.unlink(missing_ok=True)
         if audio is None or report is None:
             raise ValueError("Voiced mastering needs the calibrated stems and balance report")
-        processing = levels.master_filter(report["speech_lufs"], length)
         with tempfile.TemporaryDirectory(dir=out.parent) as pending:
             candidate = Path(pending) / out.name
-            run(["ffmpeg", "-y", *inputs, "-filter_complex", f"{mix},{processing}[a]",
-                 "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
-                 "-b:a", "192k", "-ar", "48000", str(candidate)])
-            # The isolated voice uses the same gain, limiter, fade and AAC encoder as the mix.
-            # Its decoded measurement catches a limiter that would pull the reference off the base.
             voice = Path(pending) / "voice.m4a"
-            run(["ffmpeg", "-y", *inputs, "-filter_complex", f"{audio.stem('voice')},{processing}[a]",
-                 "-map", "[a]", "-vn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(voice)])
+            # Both outputs share the actual mix limiter's gain and final fade.
+            run(["ffmpeg", "-y", *inputs, "-filter_complex", audio.master_graph(report["speech_lufs"], length),
+                 "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
+                 "-b:a", "192k", "-ar", "48000", str(candidate),
+                 "-map", "[voice_mastered]", "-vn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(voice)])
             voice_lufs, _ = levels.meter_file(voice)
             _, peak = levels.meter_file(candidate)
             levels.check_mastering(report, voice_lufs, peak, clicks.detect(candidate))
