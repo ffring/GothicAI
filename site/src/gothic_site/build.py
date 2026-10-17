@@ -152,12 +152,16 @@ class Builder:
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="{FONTS}">
 <link rel="stylesheet" href="{self.base}static/style.css">
-<link rel="icon" href="{self.base}static/icon.svg" type="image/svg+xml">
+<link rel="icon" href="{self.base}static/brand/favicon.ico" sizes="48x48">
+<link rel="icon" href="{self.base}static/brand/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="{self.base}static/brand/apple-touch-icon.png">
+<link rel="manifest" href="{self.base}static/brand/site.webmanifest">
+<meta name="theme-color" content="#17110D">
 </head>
 <body class="{cls}">
 <a class="skip" href="#main">{"Skip to content" if lang == "en" else "К содержанию"}</a>
 <header class="bar">
-  <a class="mark" href="{self.url(lang)}">{escape(s.get("title", "Gothic AI"))}</a>
+  <a class="mark" href="{self.url(lang)}"><img src="{self.base}static/brand/lockup.svg" width="174" height="44" alt="{escape(s.get("title", "Gothic AI"))}"></a>
   <nav>{"".join(links)}</nav>
 </header>
 <main id="main">

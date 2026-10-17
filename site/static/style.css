@@ -57,10 +57,11 @@ p { margin: 0 0 1em; }
 
 /* --- the bar ---------------------------------------------------------------------------------- */
 .bar {
-  display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: baseline; justify-content: space-between;
+  display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: center; justify-content: space-between;
   max-width: var(--wide); margin: 0 auto; padding: 1.25rem var(--gutter);
 }
-.mark { font-family: var(--serif); font-weight: 700; font-size: var(--s1); text-decoration: none; }
+.mark { display: block; line-height: 0; }
+.mark img { display: block; height: 2.75rem; width: auto; }  /* the channel's seal and lettering */
 .bar nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; }
 .bar nav a { text-decoration: none; color: var(--ash); }
 .bar nav a:hover { color: var(--torch); }
