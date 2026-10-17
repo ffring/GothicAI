@@ -2,7 +2,7 @@
 
 **Готов, 13 октября 2026 года.** Полная серия `stage5-v2` выполнена на `dev-ubuntu` в одном CPU runner. В текущем worktree реализованы reset из контрольного save, запуск и продвижение эпизода в lockstep, scripted provider, боевые микроэпизоды, парное сравнение с native AI и измерение скорости. [План](../../../docs/npc-body-control-plan.md) обновлён; [интерфейс и запуск](../../../docs/npc-body-arena.md) описаны отдельно.
 
-Проверка основана на фактических IPC, arena/control/mechanics journals и числовых наблюдениях. Независимый аудит подтвердил SHA-256 всех 650 исходных журналов, 3113 файлов движка в архиве и связь отчёта с исполняемым бинарником. [Машинный отчёт](body-arena.json), [краткие метрики](validation-summary.json), [manifest](manifest.json) и [автоматический отчёт](body-arena.md) сохранены рядом.
+Проверка основана на фактических IPC, arena/control/mechanics journals и числовых наблюдениях. Независимый аудит подтвердил SHA-256 всех 650 исходных журналов, 3113 файлов движка в архиве и связь отчёта с исполняемым бинарником. Машинный отчёт (3,9 МБ, в репозитории не хранится: dev-ubuntu `~/gothic-ai/body-arena/reports/stage5-v2-final/body-arena.json`), [краткие метрики](validation-summary.json), [manifest](manifest.json) и [автоматический отчёт](body-arena.md) сохранены рядом.
 
 ## Reset и сценарии
 

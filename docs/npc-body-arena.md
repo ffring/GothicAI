@@ -2,7 +2,7 @@
 
 Этап 5 [плана GRU](npc-body-control-plan.md). Арена использует настоящий CPU движок и [боевой API этапа 4](npc-body-api.md). Симуляции выполняются на dev-ubuntu; Mac запускает SSH orchestration и лёгкие тесты parser/adapter.
 
-**Готов, 13 октября 2026 года:** полная серия `stage5-v2` проверила 100 dirty restorations, микроэпизоды и mirrored native/scripted сравнения. [Результаты, throughput и границы](../reports/npc-body/2026-10-13-arena/validation-notes.md), [машинный отчёт](../reports/npc-body/2026-10-13-arena/body-arena.json).
+**Готов, 13 октября 2026 года:** полная серия `stage5-v2` проверила 100 dirty restorations, микроэпизоды и mirrored native/scripted сравнения. [Результаты, throughput и границы](../reports/npc-body/2026-10-13-arena/validation-notes.md), машинный отчёт (3,9 МБ, в репозитории не хранится: dev-ubuntu `~/gothic-ai/body-arena/reports/stage5-v2-final/body-arena.json`).
 
 ## Reset и начало эпизода
 

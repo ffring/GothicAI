@@ -40,7 +40,7 @@ GRU eval macro F1 по фиксированным 11 классам — 0,445295
 остались active/running с прежними PID. Модели на Mac не запускались.
 
 [Selection](selection.json), [аудит](audit/report.md) и
-[полный evidence JSON](audit/report.json) содержат точные bindings.
+полный evidence JSON (1,7 МБ, в репозитории не хранится: dev-ubuntu `~/gothic-ai/body/data/stage8-defence-bc-v2/validation/defence-audit-v3/report.json`) содержат точные bindings.
 Датасет SHA: `e61890483f66166e9717d700602c9469a30e6f3bd2531462f94fef6dd17542a8`;
 normalizer SHA: `c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe`.
 Проверенный reporter v3 SHA:

@@ -78,7 +78,7 @@ Backend `stage8-motor-v10`,
 
 Motor-v12 (`d44ef8a769c49226ea4ee08a024b43dd64bcddaa942183edfb9343eb03b3caaa`)
 прошёл 129 Python checks, полную native parity на 17/29/43, realtime с
-четырьмя NPC и все 37 Body API сценариев. [Физический replay](../reports/npc-body/2026-10-14-combat/motor-v12/probe.json)
+четырьмя NPC и все 37 Body API сценариев. Физический replay (4,2 МБ, в репозитории не хранится: dev-ubuntu `~/gothic-ai/body/data/stage8-motor-v12/visibility-boundary-probe/probe.json`)
 сохранил точный prefix из 64 scripted команд до 7567 мс, настоящий урон 70,
 `T_STUMBLEB` 360 мс и четырёх владельцев без преждевременного release.
 Последующий Motor-v13 завершён на бинарнике
