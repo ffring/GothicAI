@@ -1012,6 +1012,8 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     # Clear both neighbourhoods: a relocation can retain the stock encounter's
     # enemy, and animals by the new spot must not join either test fight.
     # debug kill drops victims by the hero; leave that food away from the wolves.
+    await link.debug("player_goto", pos=[23472, 1032, -10816])
+    await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
     await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
     for clearing in ("NW_XARDAS_TOWER_VALLEY_091", arena):
         await link.debug("npc_goto", npc=npc, waypoint=clearing)
@@ -1019,6 +1021,11 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         for other in around:
             if not other.dead and other.guild >= BEASTS:
                 await link.debug("kill", instance=other.id, near=npc)
+        # Perception reaches beyond snapshot's 15 m: clear the visible corridor too.
+        for view in await link.npc_view([npc]):
+            for seen in view.sees:
+                if seen.guild >= BEASTS and seen.body != "dead":
+                    await link.debug("kill", instance=seen.id, near=npc)
     # npc_goto resolves script instances, so face needs PC_HERO, not the PLAYER alias.
     # This position fixes the direction for both wolf spawns, away from the rocks.
     await link.debug("player_goto", pos=[23472, 1032, -10816])
@@ -1038,7 +1045,12 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     )
     if ready.status != "arrived":
         current = (await link.routine(npc)).current
-        raise GameError(f"m5b arena preparation: {ready.status} {ready.detail}; state={current}")
+        snap = await link.snapshot(npc, fresh=True)
+        views = await link.npc_view([npc])
+        raise GameError(
+            f"m5b arena preparation: {ready.status} {ready.detail}; state={current}; "
+            f"nearby={snap.nearby_npcs}; sees={[v.sees for v in views]}"
+        )
     events.clear()
     await _m5b_player_weapon(link, "melee")
     e = await event({"weapon_drawn"}, 5)
