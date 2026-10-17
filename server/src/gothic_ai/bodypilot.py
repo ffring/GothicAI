@@ -36,7 +36,10 @@ BRIDGE_TIMEOUT = 0.250
 ACQUIRE_INTERVAL = 0.150
 ACQUIRE_WINDOW = 5.0
 MAX_FIGHT_SECONDS = 300.0
-HEARTBEAT_INTERVAL = 0.150
+HEARTBEAT_INTERVAL = 0.250
+HEARTBEAT_TIMEOUT = 0.500
+LEASE_TIMEOUT_MS = 2000
+EVENTS_INTERVAL = 0.150
 MAX_JSON_BYTES = 256 * 1024
 BRIDGE_ERRORS = (GameError, ConnectionClosed, OSError, TimeoutError)
 TARGET_IS_HERO = [
@@ -122,7 +125,7 @@ def _percentile(values: list[float], fraction: float) -> float | None:
 
 
 class BodyPilot:
-    """Single-owner state machine; all bridge mutations run in one coroutine."""
+    """Single-owner state machine with a separate wall-clock lease keepalive."""
 
     def __init__(
         self,
@@ -156,7 +159,9 @@ class BodyPilot:
         self._initial_game_ms: int | None = None
         self._now_game_ms = 0
         self._last_seq = 0
-        self._last_heartbeat = 0.0
+        self._heartbeat_task: asyncio.Task[None] | None = None
+        self._last_events_poll = 0.0
+        self._acquiring = False
         self._symbol: int | None = None
         self._entity: int | None = None
         self._hero: int | None = None
@@ -174,6 +179,7 @@ class BodyPilot:
             and entry.guild <= 16
             and entry.distance <= 2000
             and entry.activity not in {"dialog", "attached", "down"}
+            and (entry.activity != "body" or self.lease is not None or self._acquiring)
             and not self.companion(npc)
             and not self.unavailable(npc)
             and not self.link.party.get(npc, (0, 0))[1]
@@ -295,6 +301,29 @@ class BodyPilot:
         if self.on_body_packet in self.link.raw_body_listeners:
             self.link.raw_body_listeners.remove(self.on_body_packet)
 
+    async def _heartbeats(self, lease: BodyLease) -> None:
+        """Renew from send time, independently of policy calls and ownership polling."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time()
+        while self.lease == lease and not self._closing and self._reason is None:
+            await asyncio.sleep(max(0.0, deadline - loop.time()))
+            if self.lease != lease or self._closing or self._reason is not None:
+                return
+            if self.link.closed.is_set() or self.link.body_leases.get(lease.entity_id) != lease:
+                self._reason = "lease_lost"
+                self._wake.set()
+                return
+            sent_at = loop.time()
+            try:
+                await self.link.body_heartbeat(lease, timeout=HEARTBEAT_TIMEOUT)
+            except Exception:
+                # Never let a detached keepalive task fail silently and leave the
+                # main loop accepting policy decisions for an unrenewed lease.
+                self._reason = self._reason or "lease_lost"
+                self._wake.set()
+                return
+            deadline = sent_at + HEARTBEAT_INTERVAL
+
     async def _tick(self) -> None:
         if self._reason:
             await self._finish(self._reason)
@@ -327,11 +356,11 @@ class BodyPilot:
             ):
                 await self._finish("fight_timeout")
                 return
-            if now - self._last_heartbeat >= HEARTBEAT_INTERVAL:
+            loop = asyncio.get_running_loop()
+            if loop.time() - self._last_events_poll >= EVENTS_INTERVAL:
                 try:
-                    await self.link.body_heartbeat(self.lease, timeout=BRIDGE_TIMEOUT)
+                    self._last_events_poll = loop.time()
                     await self.link.body_events(timeout=BRIDGE_TIMEOUT)
-                    self._last_heartbeat = self.clock()
                 except BRIDGE_ERRORS:
                     await self._finish("lease_lost")
                     return
@@ -344,9 +373,11 @@ class BodyPilot:
             if self._reason:
                 await self._finish(self._reason)
                 break
-            if self.lease is not None and self.clock() - self._last_heartbeat >= HEARTBEAT_INTERVAL:
-                # A continuous observation stream must not keep this drain loop
-                # busy past the watchdog deadline, even with valid slow replies.
+            if (
+                self.lease is not None
+                and asyncio.get_running_loop().time() - self._last_events_poll >= EVENTS_INTERVAL
+            ):
+                # Keep ownership polling responsive under a continuous row stream.
                 self._wake.set()
                 break
 
@@ -422,13 +453,18 @@ class BodyPilot:
                     return
                 if self.clock() - received_at > 0.100 or self.clock() - self._attempt_at >= ACQUIRE_WINDOW:
                     return
-                self.lease = await self.link.body_acquire(
-                    self.npc,
-                    observation,
-                    "neural-body",
-                    mode="realtime",
-                    timeout=BRIDGE_TIMEOUT,
-                )
+                self._acquiring = True
+                try:
+                    self.lease = await self.link.body_acquire(
+                        self.npc,
+                        observation,
+                        "neural-body",
+                        mode="realtime",
+                        timeout_ms=LEASE_TIMEOUT_MS,
+                        timeout=BRIDGE_TIMEOUT,
+                    )
+                finally:
+                    self._acquiring = False
             except (GameDisconnected, ConnectionClosed):
                 self._reason = "disconnected"
             except BRIDGE_ERRORS as error:
@@ -438,7 +474,8 @@ class BodyPilot:
                 self._entity = self.lease.entity_id
                 self._hero = self.lease.target_entity_id
                 self._fight_at = self.clock()
-                self._last_heartbeat = float("-inf")
+                self._last_events_poll = float("-inf")
+                self._heartbeat_task = asyncio.create_task(self._heartbeats(self.lease))
                 log.info(
                     "neural-body start npc=%s lease=%s acquire_refusals=%s",
                     self.npc,
@@ -497,6 +534,10 @@ class BodyPilot:
         if npc is None and lease is None and client is None:
             return
         self._watch_ready = False
+        heartbeat, self._heartbeat_task = self._heartbeat_task, None
+        if heartbeat is not None:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
         try:
             if lease is not None:
                 with contextlib.suppress(*BRIDGE_ERRORS):

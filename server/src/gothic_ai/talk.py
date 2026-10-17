@@ -569,6 +569,8 @@ class TalkDesk:
 
     async def _apply(self, npc: str, choice: str) -> str:
         """Carry the posture out; what the body really does (holding it may fail)."""
+        if self.link.body_owned(npc):
+            return "keep_working"
         match choice:
             case "listen":
                 if await self.listen(npc):
@@ -608,6 +610,8 @@ class TalkDesk:
     async def hold(self, npc: str, why: str) -> bool:
         """Hold a free npc's body for `why` (attach it). An npc someone else holds is lent as it is."""
         npc = npc.upper()
+        if self.link.body_owned(npc):
+            return False
         if npc in self.held:
             self.held[npc].add(why)
             return True
@@ -720,15 +724,15 @@ class TalkDesk:
 
 
 def fights(entry: RosterEntry | None) -> bool:
-    """The npc is in a fight (the scripts' attack state)."""
-    return entry is not None and entry.state.upper() == ATTACK_STATE
+    """The npc is in a fight (native attack state or a combat provider's body)."""
+    return entry is not None and (entry.activity == "body" or entry.state.upper() == ATTACK_STATE)
 
 
 def default_posture(entry: RosterEntry | None) -> str:
     """Without the behavioral model's word: an npc standing about stops and listens, a busy one keeps on."""
     if entry is None:
         return "listen"
-    if entry.moving or entry.activity == "fight":
+    if entry.moving or entry.activity in ("fight", "body"):
         return "keep_working"
     state = entry.state.upper()
     return "listen" if not state or state.startswith(IDLE_STATES) else "keep_working"

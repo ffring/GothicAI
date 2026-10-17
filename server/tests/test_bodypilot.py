@@ -5,6 +5,7 @@ import json
 import socket
 from collections import deque
 from contextlib import asynccontextmanager
+from itertools import pairwise
 
 import pytest
 from websockets.exceptions import ConnectionClosedError
@@ -46,21 +47,80 @@ class Bridge:
 
     def __init__(self):
         self.sent = []
+        self.sent_times = []
         self.link = GameLink(self)
         self.acquire_rejections = deque()
         self.target_is_hero = True
         self.release_pending_polls = 0
         self._released_pending = False
+        self.response_delays = {}
+        self._response_tasks = set()
+        self._roster = {}
+        self._watched_npc = None
+        self._lease_timeout = 0.0
+        self._lease_watchdog = None
+        self.lease_expirations = 0
 
     def commands(self, kind):
         return [command for command in self.sent if command["type"] == kind]
 
+    def command_times(self, kind):
+        return [when for command, when in self.sent_times if command["type"] == kind]
+
+    def roster(self, *entries):
+        self._roster = {entry.id.upper(): entry for entry in entries}
+        self.link._dispatch(NpcRoster(type="npc_roster", t=1, npcs=entries))
+
+    def _activity(self, npc, activity):
+        if npc in self._roster:
+            self._roster[npc] = self._roster[npc].model_copy(update={"activity": activity})
+            # Validate the same activity value that the native bridge puts on the wire.
+            self.link._dispatch(NpcRoster.model_validate({
+                "type": "npc_roster", "t": 1,
+                "npcs": [entry.model_dump(mode="json") for entry in self._roster.values()],
+            }))
+
+    def _background(self, coroutine):
+        task = asyncio.create_task(coroutine)
+        self._response_tasks.add(task)
+        task.add_done_callback(self._response_tasks.discard)
+
+    async def _acquired_roster(self, npc):
+        # A result is resolved before GameLink has installed its lease cache.
+        await eventually(lambda: self.link.body_owned(npc))
+        self._activity(npc, "body")
+
+    def _renew_lease(self):
+        if self._lease_watchdog is not None:
+            self._lease_watchdog.cancel()
+        self._lease_watchdog = asyncio.get_running_loop().call_later(
+            self._lease_timeout, self._expire_lease,
+        )
+
+    def _expire_lease(self):
+        self.lease_expirations += 1
+        if self.link.body_leases:
+            lease = next(iter(self.link.body_leases.values()))
+            self.link._dispatch(events(event(
+                1, entity_id=lease.entity_id, reason="native_restored", owner="native",
+            )))
+            self._activity(lease.npc, "fight")
+
+    async def close(self):
+        if self._lease_watchdog is not None:
+            self._lease_watchdog.cancel()
+        for task in list(self._response_tasks):
+            task.cancel()
+        await asyncio.gather(*self._response_tasks, return_exceptions=True)
+
     async def send(self, raw):
         command = json.loads(raw)
         self.sent.append(command)
+        self.sent_times.append((command, asyncio.get_running_loop().time()))
         kind = command["type"]
         if kind == "body_watch":
             assert not self.link.body_leases, "watch must never change with an active lease"
+            self._watched_npc = command["npcs"][0] if command["npcs"] else None
             value = {"generation": 1, "session_epoch": 1, "world_epoch": 1}
         elif kind == "story_eval":
             expressions = command["exprs"]
@@ -72,6 +132,7 @@ class Bridge:
                     1, entity_id=lease.entity_id, reason="native_restored", owner="native",
                 )).model_dump(mode="json")
                 self._released_pending = False
+                self._activity(lease.npc, "fight")
             else:
                 value = events().model_dump(mode="json")
                 if self._released_pending:
@@ -88,13 +149,34 @@ class Bridge:
             )
             if kind == "body_acquire" and self.acquire_rejections:
                 value.update(accepted=False, reason=self.acquire_rejections.popleft())
+            if kind == "body_acquire" and value["accepted"]:
+                self._lease_timeout = command["timeout_ms"] / 1000
+                self._renew_lease()
+                self._background(self._acquired_roster(self._watched_npc))
+            elif kind == "body_heartbeat":
+                self._renew_lease()
             if kind == "body_release":
+                if self._lease_watchdog is not None:
+                    self._lease_watchdog.cancel()
                 if self.release_pending_polls:
                     self._released_pending = True
                     value.update(owner="scripted", reason="release_pending", release_pending=True)
                 else:
                     value.update(owner="native", reason="native_restored")
-        self.link._dispatch(Result(type="result", req=command["req"], ok=True, value=value))
+                    lease = self.link.body_leases.get(command["entity_id"])
+                    if lease is not None:
+                        self._activity(lease.npc, "fight")
+        result = Result(type="result", req=command["req"], ok=True, value=value)
+        delay = self.response_delays.get(kind, 0)
+        if delay:
+            async def reply():
+                await asyncio.sleep(delay)
+                self.link._dispatch(result)
+
+            # Replies can arrive later while the socket remains writable.
+            self._background(reply())
+        else:
+            self.link._dispatch(result)
 
     def emit(self, *rows, generation=1):
         raw = packet(*rows, generation=generation)
@@ -111,6 +193,7 @@ class Policy:
         self.step_mode = "normal"
         self.reset_mode = "normal"
         self.step_waiter = None
+        self.step_delay = 0
         self.on_step = None
 
     def commands(self, kind):
@@ -135,6 +218,8 @@ class Policy:
                 elif command == "step":
                     if self.on_step is not None:
                         self.on_step(request)
+                    if self.step_delay:
+                        await asyncio.sleep(self.step_delay)
                     if self.step_waiter is not None:
                         await self.step_waiter.wait()
                     if self.step_mode == "disconnect":
@@ -208,13 +293,17 @@ class Rig:
         self.bridge, self.policy, self.pilot, self.clock = bridge, policy, pilot, clock
         self.link = bridge.link
 
-    def roster(self, *, activity="fight", state=None, guild=1, include=True, extra=()):
+    def roster(self, *, activity=None, state=None, guild=1, include=True, extra=()):
+        if activity is None:
+            activity = "body" if self.link.body_owned("NPC") else "fight"
         npcs = [RosterEntry(
             id="NPC", name="Fighter", guild=guild, distance=200.0,
             in_view=True, activity=activity,
-            state=state if state is not None else "ZS_ATTACK" if activity == "fight" else "ZS_SIT_BENCH",
+            state=state if state is not None else (
+                "ZS_ATTACK" if activity in {"body", "fight"} else "ZS_SIT_BENCH"
+            ),
         )] if include else []
-        self.link._dispatch(NpcRoster(type="npc_roster", t=1, npcs=[*npcs, *extra]))
+        self.bridge.roster(*npcs, *extra)
 
     def combat(self, npc="NPC", kind="attack", other="PLAYER"):
         self.link._dispatch(NpcEvent(type="npc_event", npc=npc, kind=kind, other=other, distance=200.0))
@@ -261,6 +350,7 @@ async def running(*, companion=False, unavailable=False):
         server.close()
         await server.wait_closed()
         await policy.close()
+        await bridge.close()
 
 
 async def test_acquire_then_reset_on_first_owned_periodic_row_and_exact_wire_actions():
@@ -298,6 +388,19 @@ async def test_runtime_entity_id_is_bound_from_the_watched_npc_symbol():
         assert rig.bridge.commands("body_action")[0]["entity_id"] == 9
         assert rig.policy.commands("step")[0]["observation"]["entity_id"] == 9
         assert rig.bridge.commands("body_watch")[0]["npcs"] == ["NPC"]
+
+
+async def test_native_body_roster_keeps_the_owned_npc_under_its_current_lease():
+    async with running() as rig:
+        await rig.active()
+        await eventually(lambda: rig.pilot.people["NPC"].activity == "body")
+        assert rig.pilot.people["NPC"].state == "ZS_ATTACK"
+        rig.combat()
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert rig.link.body_owned("NPC")
+        assert not rig.bridge.commands("body_release")
 
 
 async def test_memory_only_periodic_rows_advance_policy_without_sending_commands():
@@ -359,20 +462,41 @@ async def test_policy_backlog_does_not_starve_lease_heartbeats():
     async with running() as rig:
         await rig.active()
         processed = []
+        rig.policy.step_delay = 0.075
 
         def step_received(request):
             processed.append((
                 request["observation"]["observation_seq"],
-                len(rig.bridge.commands("body_heartbeat")),
+                asyncio.get_running_loop().time(),
             ))
-            rig.clock.advance(0.16)
 
         rig.policy.on_step = step_received
-        rig.bridge.emit(*(fighter(seq, owned=True, can_decide=False) for seq in (4, 5, 6)))
-        await eventually(lambda: len(processed) == 3)
-        assert [seq for seq, _ in processed] == [4, 5, 6]
-        assert processed[1][1] > processed[0][1]
-        assert processed[2][1] > processed[1][1]
+        sequences = list(range(4, 13))
+        rig.bridge.emit(*(fighter(seq, owned=True, can_decide=False) for seq in sequences))
+        await eventually(lambda: len(processed) == len(sequences), timeout=2.0)
+        assert [seq for seq, _ in processed] == sequences
+        heartbeats_during_steps = [when for when in rig.bridge.command_times("body_heartbeat")
+                                   if processed[0][1] <= when <= processed[-1][1]]
+        assert len(heartbeats_during_steps) >= 2
+        assert rig.bridge.lease_expirations == 0
+        assert rig.link.body_owned("NPC")
+        assert not rig.bridge.commands("body_release")
+
+
+async def test_delayed_heartbeat_and_event_replies_do_not_accumulate_into_lease_expiry():
+    async with running() as rig:
+        rig.bridge.response_delays.update(body_heartbeat=0.200, body_events=0.240)
+        await rig.active()
+        assert rig.bridge.commands("body_acquire")[0]["timeout_ms"] == 2000
+        await eventually(lambda: len(rig.bridge.commands("body_heartbeat")) >= 10, timeout=3.5)
+        sent = rig.bridge.command_times("body_heartbeat")
+        assert sent[-1] - sent[0] >= 2.0
+        assert max(later - earlier for earlier, later in pairwise(sent)) < 0.400
+        assert len(rig.bridge.commands("body_events")) >= 3
+        assert rig.bridge.lease_expirations == 0
+        assert rig.link.body_owned("NPC")
+        assert not rig.bridge.commands("body_release")
+        assert not rig.policy.commands("end_episode")
 
 
 async def test_old_world_packets_are_excluded_without_rewinding_active_lease():
@@ -744,7 +868,6 @@ async def test_heartbeat_keeps_active_lease_alive_and_close_restores_native(capl
     caplog.set_level("INFO")
     async with running() as rig:
         await rig.active()
-        rig.clock.advance(0.2)
         await eventually(lambda: rig.bridge.commands("body_heartbeat"))
         assert rig.link.body_leases
         await rig.pilot.aclose()

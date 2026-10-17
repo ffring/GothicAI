@@ -393,7 +393,7 @@ async def test_threats_interrupt_investigation_without_waiting_for_its_idle(kind
         assert decider.calls[-1]["lane"] == "urgent" and applier.recent[-1].choice == "flee"
 
 
-@pytest.mark.parametrize("activity", ["talk", "dialog", "fight", "attached"])
+@pytest.mark.parametrize("activity", ["talk", "dialog", "fight", "attached", "body"])
 async def test_dialogue_combat_or_attachment_clear_investigation_and_deferred_greeting(activity) -> None:
     planner, decider, _, clock = await investigating()
     planner.on_event("PATRON", "player_near", clock.t, distance_cm=300)
@@ -447,7 +447,8 @@ async def test_noise_identifies_only_the_witnessed_culprit(other, other_name, se
 
 
 @pytest.mark.parametrize(
-    ("activity", "talking"), [("dialog", False), ("fight", False), ("attached", False), ("routine", True)]
+    ("activity", "talking"),
+    [("dialog", False), ("fight", False), ("attached", False), ("body", False), ("routine", True)]
 )
 async def test_busy_npc_does_not_retain_a_noise(activity, talking) -> None:
     planner, decider, _, clock = make()
@@ -1065,6 +1066,24 @@ async def test_the_conversational_models_intent_moves_a_free_npcs_body() -> None
     assert planner.take_body("PEPE", "flee") is None  # the danger is over: an intent about it is moot
     planner.on_roster([entry("CALM", 5)], clock.t)
     assert planner.take_body("CALM", "fight") is None  # nothing to fight
+
+
+async def test_body_provider_blocks_pending_plans_threats_and_conversational_takeover() -> None:
+    decider = FakeDecider("fight", 0.9)
+    decider.gate = asyncio.Event()
+    planner, _, applier, clock = make(decider)
+    planner.on_roster([entry("PEPE", 8)], clock.t)
+    planner.on_event("PEPE", "monster_near", clock.t, other="WOLF")
+    await step(planner, clock, 0.3)
+    assert len(decider.calls) == 1
+    planner.on_roster([entry("PEPE", 8, activity="body")], clock.t)
+    assert planner.npcs["PEPE"].tier is Tier.OFF
+    assert planner.take_body("PEPE", "flee") is None
+    planner.on_event("PEPE", "npc_attack", clock.t, other="WOLF")
+    decider.gate.set()
+    await step(planner, clock, 1)
+    assert len(decider.calls) == 1 and not applier.recent
+    assert planner.stats.discarded == 1
 
 
 async def test_a_threat_to_an_npc_the_planner_does_not_know_goes_to_the_scripts() -> None:

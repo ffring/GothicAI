@@ -1,7 +1,10 @@
 import asyncio
 import json
 
+import pytest
+
 from gothic_ai.bodies import KEEP, Bodies, BodyOutcome
+from gothic_ai.game import GameError
 from gothic_ai.protocol import parse_game_message
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
@@ -48,6 +51,54 @@ async def test_done_rejected_timeout_lost():
         await asyncio.wait_for(link.closed.wait(), 2)
         assert await bodies.act(LOBART, "go_to_npc") == BodyOutcome("", LOBART, "lost", "game disconnected")
         assert fake.soft[-1] == (LOBART, "go_to_npc") and len(fake.acts) == 6
+
+
+async def test_roster_body_is_busy_before_a_lease_reply_and_blocks_legacy_commands():
+    fake = FakeGame()
+    async with connected(fake) as link:
+        bodies = Bodies(link)
+        link._dispatch(parse_game_message(json.dumps({
+            "type": "npc_roster", "t": 1, "npcs": [
+                {"id": LOBART, "name": "Лобарт", "distance": 300, "activity": "body"},
+            ],
+        })))
+        assert not link.body_leases and link.body_owned(LOBART.lower())
+        assert bodies.busy(LOBART)
+        before = list(fake.received)
+        assert (await bodies.act(LOBART, "go_to_npc")).status == "rejected"
+        for mutation in (link.attach(LOBART), link.detach(LOBART),
+                         link.act(LOBART, "turn_to"), link.npc_act(LOBART, "look_at")):
+            with pytest.raises(GameError, match="owned by the combat provider"):
+                await mutation
+        assert fake.received == before
+
+        # A partial update of another NPC preserves ownership; one of this NPC releases it.
+        def roster(npc: str, activity: str, *, full: bool = False) -> None:
+            link._dispatch(parse_game_message(json.dumps({
+                "type": "npc_roster", "t": 2, "full": full, "npcs": [
+                    {"id": npc, "name": npc, "distance": 300, "activity": activity},
+                ],
+            })))
+
+        roster(HILDA, "routine")
+        assert bodies.busy(LOBART)
+        roster(LOBART, "routine")
+        assert not bodies.busy(LOBART)
+        roster(LOBART, "body")
+        roster(HILDA, "routine", full=True)
+        assert not bodies.busy(LOBART)
+        roster(LOBART, "body")
+        link._dispatch(parse_game_message('{"type":"loading"}'))
+        assert not bodies.busy(LOBART)
+        roster(LOBART, "body")
+        assert link.hello is not None
+        link._dispatch(link.hello)
+        assert not bodies.busy(LOBART)
+        roster(LOBART, "body")
+        assert fake.ws is not None
+        await fake.ws.close()
+        await asyncio.wait_for(link.closed.wait(), 2)
+        assert not bodies.busy(LOBART)
 
 
 async def test_answer_before_waiting_is_kept(monkeypatch):

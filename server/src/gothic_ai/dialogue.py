@@ -1089,7 +1089,7 @@ class DialogueManager:
     def body_busy(self, npc: str) -> bool:
         """A commitment is being carried out (a gesture now would cancel it)."""
         conv = self.conversations.get(npc.upper())
-        return conv is not None and bool(conv.actions)
+        return self.link.body_owned(npc) or (conv is not None and bool(conv.actions))
 
     async def _first_reaction(self, conv: Conversation, phrase: str, request: list[Item] | None) -> str:
         """The npc's first reaction to the hero's phrase, before its answer: with `request`, the quick

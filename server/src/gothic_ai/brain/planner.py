@@ -584,7 +584,7 @@ class NpcPlanner:
         the danger is moot). In-flight answers about the moment are outdated by it; the threats held now stay
         from the scripts."""
         rec = self.npcs.get(npc.upper())
-        if rec is None or rec.activity in ("dialog", "attached"):
+        if rec is None or rec.activity in ("dialog", "attached", "body"):
             log.info("%s: no body to take (%s)", npc, rec.activity if rec else "not around")
             return None
         now = self.clock()

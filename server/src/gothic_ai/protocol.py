@@ -372,7 +372,7 @@ class DealDecline(_GameMessage):
     version: int
 
 
-NpcActivity = Literal["routine", "attached", "dialog", "fight", "down"]
+NpcActivity = Literal["routine", "attached", "dialog", "fight", "body", "down"]
 
 
 class RosterEntry(_GameMessage):

@@ -56,6 +56,7 @@ from .protocol import (
     NpcActResult,
     NpcActType,
     NpcChestsCmd,
+    NpcRoster,
     NpcSpec,
     NpcView,
     NpcViewCmd,
@@ -157,6 +158,7 @@ class GameLink:
         self.body_stale_packets = 0
         self._body_last_seq = 0
         self.body_leases: dict[int, BodyLease] = {}
+        self._roster_bodies: set[str] = set()
         self._body_command_ids = itertools.count(1)
         self._body_control_events: deque[BodyControlEvent] = deque(maxlen=512)
         self._body_control_last_event = 0
@@ -185,6 +187,7 @@ class GameLink:
             pass
         finally:
             self._clear_body_observations()
+            self._roster_bodies.clear()
             self.closed.set()
             self._fail_pending(GameDisconnected("game disconnected"))
 
@@ -192,6 +195,7 @@ class GameLink:
         match msg:
             case Hello():
                 self._clear_body_observations()
+                self._roster_bodies.clear()
                 self.hello = msg
                 if msg.protocol != PROTOCOL_VERSION:
                     log.warning("protocol mismatch: game %s, server %s", msg.protocol, PROTOCOL_VERSION)
@@ -202,6 +206,7 @@ class GameLink:
                 self.session = msg
             case Loading():
                 self._clear_body_observations()
+                self._roster_bodies.clear()
                 self.world = None
                 self._world_ready.clear()
                 self.snapshots.clear()
@@ -221,6 +226,12 @@ class GameLink:
                     self.player = msg.player
                 for fut in self._snapshot_waiters.pop(msg.npc.id, []):
                     _resolve(fut, msg)
+            case NpcRoster():
+                if msg.full:
+                    self._roster_bodies.clear()
+                else:
+                    self._roster_bodies.difference_update(e.id.upper() for e in msg.npcs)
+                self._roster_bodies.update(e.id.upper() for e in msg.npcs if e.activity == "body")
             case BodyObservations():
                 if not self._receive_body_observations(msg.packet):
                     return
@@ -362,9 +373,11 @@ class GameLink:
         return res
 
     async def attach(self, npc: str, timeout: float = 5.0) -> None:
+        self._require_native_body(npc)
         await self._request(AttachCmd(req=self._next_id("r"), npc=npc), timeout)
 
     async def detach(self, npc: str, timeout: float = 5.0) -> None:
+        self._require_native_body(npc)
         await self._request(DetachCmd(req=self._next_id("r"), npc=npc), timeout)
 
     async def body_watch(self, npcs: list[str], rate_hz: int = 20, timeout: float = 5.0) -> dict[str, Any]:
@@ -381,8 +394,13 @@ class GameLink:
         return stats
 
     def body_owned(self, npc: str) -> bool:
-        """Client cache hint; the bridge checks the actual owner before any legacy mutation."""
-        return any(lease.npc == npc.upper() for lease in self.body_leases.values())
+        """A provider owns the body, including ownership first announced by the roster."""
+        npc = npc.upper()
+        return npc in self._roster_bodies or any(lease.npc == npc for lease in self.body_leases.values())
+
+    def _require_native_body(self, npc: str) -> None:
+        if self.body_owned(npc):
+            raise GameError("NPC body is owned by the combat provider")
 
     async def _body_request(self, cmd: _Request, timeout: float) -> BodyControlResult:
         result = BodyControlResult.model_validate((await self._request(cmd, timeout)).value)
@@ -748,6 +766,7 @@ class GameLink:
 
         `args` go to the game as-is, e.g. act(npc, "turn_to", npc="PLAYER").
         """
+        self._require_native_body(npc)
         cmd = ActionCmd(id=self._next_id("a"), npc=npc, action=action, args=args)
         fut: asyncio.Future[ActionResult] = asyncio.get_running_loop().create_future()
         self._actions[cmd.id] = fut
@@ -760,6 +779,7 @@ class GameLink:
     async def npc_act(self, npc: str, action: NpcActType, /, **args: Any) -> str:
         """Queue a soft action for an npc that follows its routine; returns the id. The game answers
         `npc_act_result` at once and `npc_idle` when the npc is done."""
+        self._require_native_body(npc)
         cmd = NpcActCmd(id=self._next_id("n"), npc=npc, action=action, args=args)
         await self.send(cmd)
         return cmd.id
