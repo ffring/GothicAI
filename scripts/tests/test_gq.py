@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+from importlib.machinery import SourceFileLoader
 import importlib.util
 import json
 import os
@@ -937,3 +938,58 @@ def test_unit_lock_holder_detects_orphaned_children_in_its_own_cgroup(gq, tmp_pa
     assert not gq.unit_has_children("abc", membership, tmp_path)
     (group / "cgroup.procs").unlink()
     assert gq.unit_has_children("abc", membership, tmp_path), "unreadable unit fails closed"
+
+
+@pytest.mark.parametrize("source", ["environment", "file", "missing"])
+def test_profile_selection_uses_environment_then_private_file_otherwise_errors(
+        gq, host, monkeypatch, tmp_path, source):
+    private_home = tmp_path / "profile-home"
+    private_home.mkdir()
+    monkeypatch.setenv("HOME", str(private_home))
+    profile_path = private_home / "gothic-ai" / "bin" / "gq.profile"
+    if source == "environment":
+        monkeypatch.setenv("GQ_PROFILE", "ryzen")
+        profile_path.parent.mkdir(parents=True)
+        profile_path.write_text("file-must-not-override-environment\n")
+    else:
+        monkeypatch.delenv("GQ_PROFILE", raising=False)
+        if source == "file":
+            profile_path.parent.mkdir(parents=True)
+            profile_path.write_text("ryzen\n")
+
+    kwargs = dict(home=host["home"], legacy_lock=host["legacy"], proc_locks=host["locks"])
+    if source == "missing":
+        with pytest.raises(gq.QueueError, match="GQ_PROFILE|gq\\.profile"):
+            gq.Queue(**kwargs)
+    else:
+        q = gq.Queue(**kwargs)
+        assert q.profile_name == "ryzen" and q.profile == gq.PROFILES["ryzen"]
+
+
+def test_install_copies_executable_and_private_profile_to_remote_home(gq, monkeypatch, tmp_path):
+    wrapper_path = SCRIPT.with_name("gq")
+    loader = SourceFileLoader("gq_wrapper_test_module", str(wrapper_path))
+    module_spec = importlib.util.spec_from_loader(loader.name, loader)
+    wrapper = importlib.util.module_from_spec(module_spec)
+    loader.exec_module(wrapper)
+    remote_home = tmp_path / "remote-home"
+    remote_home.mkdir()
+    ssh_calls = []
+
+    def local_ssh(args, *, stdin):
+        ssh_calls.append(args)
+        result = subprocess.run(["sh", "-c", args[-1]], stdin=stdin,
+                                env={**os.environ, "HOME": str(remote_home)},
+                                capture_output=True, text=True, timeout=5)
+        assert result.returncode == 0, result.stderr
+        return result.returncode
+
+    monkeypatch.delenv("GQ_PROFILE", raising=False)
+    monkeypatch.setattr(wrapper.subprocess, "call", local_ssh)
+    assert wrapper.install("ryzen") == 0
+    assert len(ssh_calls) == 1 and ssh_calls[0][-2] == "ryzen"
+    installed = remote_home / "gothic-ai" / "bin"
+    assert (installed / "gq").read_bytes() == SCRIPT.read_bytes()
+    assert os.access(installed / "gq", os.X_OK)
+    assert (installed / "gq.profile").read_text() == "ryzen\n"
+    assert sorted(path.name for path in installed.iterdir()) == ["gq", "gq.profile"]

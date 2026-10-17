@@ -17,7 +17,6 @@ import re
 import select
 import shutil
 import signal
-import socket
 import statistics
 import subprocess
 import sys
@@ -38,8 +37,6 @@ PROFILES = {
         "min_disk": 20 * GIB,
     },
 }
-# The SSH alias and the machine hostname select the same host configuration.
-PROFILES["kaifaty-B550I-AORUS-PRO-AX"] = PROFILES["ryzen"]
 TERMINAL = {"done", "cancelled", "timeout", "failed"}
 ACTIVE = {"starting", "running"}
 SCRIPT = str(Path(__file__).resolve())
@@ -102,7 +99,14 @@ class Queue:
         self.legacy_lock = Path(legacy_lock or os.environ.get(
             "GQ_LEGACY_LOCK", "~/gothic-ai/body-simulation.lock")).expanduser().resolve()
         self.proc_locks = Path(proc_locks or "/proc/locks")
-        key = profile or os.environ.get("GQ_PROFILE") or socket.gethostname()
+        key = profile or os.environ.get("GQ_PROFILE")
+        if not key:
+            profile_path = Path.home() / "gothic-ai/bin/gq.profile"
+            try:
+                key = profile_path.read_text().strip()
+            except FileNotFoundError:
+                raise QueueError("профиль не задан: GQ_PROFILE=ryzen или scripts/gq install ryzen "
+                                 f"(создаёт {profile_path})") from None
         if isinstance(key, dict):
             self.profile = key
             self.profile_name = "ryzen"

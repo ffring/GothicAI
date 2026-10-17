@@ -17,6 +17,8 @@ Commands: run, submit, status, wait, logs, cancel.
 Run scripts/gq run --help for job options.
 """
 
+PROFILES = {"ryzen"}
+
 
 def parse_host(argv):
     host = "ryzen"
@@ -66,15 +68,24 @@ def ssh_command(host, command):
 
 
 def install(host):
+    profile = os.environ.get("GQ_PROFILE", host)
+    if profile not in PROFILES:
+        raise ValueError(f"unknown GQ_PROFILE {profile!r}; "
+                         "use GQ_PROFILE=ryzen when installing through an SSH alias")
     # Upload into the destination filesystem and rename only after a full copy.
-    command = """set -eu
+    command = "gq_profile=" + shlex.quote(profile) + "\n" + """set -eu
 umask 022
 mkdir -p "$HOME/gothic-ai/bin"
 gq_upload=$(mktemp "$HOME/gothic-ai/bin/.gq.XXXXXX")
-trap 'rm -f -- "$gq_upload"' EXIT HUP INT TERM
+gq_profile_upload=''
+trap 'rm -f -- "$gq_upload" "$gq_profile_upload"' EXIT HUP INT TERM
+gq_profile_upload=$(mktemp "$HOME/gothic-ai/bin/.gq-profile.XXXXXX")
 cat > "$gq_upload"
+printf '%s\\n' "$gq_profile" > "$gq_profile_upload"
 chmod 755 "$gq_upload"
+chmod 644 "$gq_profile_upload"
 mv -f -- "$gq_upload" "$HOME/gothic-ai/bin/gq"
+mv -f -- "$gq_profile_upload" "$HOME/gothic-ai/bin/gq.profile"
 """
     with Path(__file__).with_name("gq.py").open("rb") as source:
         return subprocess.call(ssh_command(host, command), stdin=source)
