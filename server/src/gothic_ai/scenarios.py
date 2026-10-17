@@ -1073,13 +1073,13 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
         log.info(
             "neural pipeline ms p50/p95: packet_to_request=%s/%s packet_to_response=%s/%s "
             "response_to_action=%s/%s packet_to_action=%s/%s; acquire_refusals=%s action_rejections=%s "
-            "stale_consecutive=%d",
+            "transient_rejections_consecutive=%d",
             summary.packet_to_request_p50_ms, summary.packet_to_request_p95_ms,
             summary.packet_to_response_p50_ms, summary.packet_to_response_p95_ms,
             summary.response_to_action_p50_ms, summary.response_to_action_p95_ms,
             summary.packet_to_action_p50_ms, summary.packet_to_action_p95_ms,
             dict(summary.acquire_refusals), dict(summary.action_rejections),
-            summary.stale_observation_consecutive,
+            summary.transient_rejections_consecutive,
         )
     lease = summary.lease if summary else None
     check(

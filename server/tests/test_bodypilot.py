@@ -3,7 +3,7 @@
 import asyncio
 import json
 import socket
-from collections import deque
+from collections import Counter, deque
 from contextlib import asynccontextmanager
 from dataclasses import FrozenInstanceError
 from itertools import pairwise
@@ -1002,7 +1002,7 @@ async def test_completed_fight_summary_survives_counter_reset_and_the_next_fight
         assert summary.service_p50_ms == latencies[1]
         assert summary.service_p95_ms == latencies[-1]
         assert summary.acquire_refusals == summary.action_rejections == ()
-        assert summary.stale_observation_consecutive == 0
+        assert summary.transient_rejections_consecutive == 0
         assert summary.fight_seconds == pytest.approx(0.75)
         assert summary.release_confirmed
         assert 0 <= summary.release_seconds < bodypilot.FINISH_TIMEOUT
@@ -1053,60 +1053,82 @@ async def test_latency_breakdown_ends_at_action_send_before_bridge_ack(monkeypat
         assert not rig.pilot._response_to_action and not rig.pilot._packet_to_action
 
 
-async def test_nine_stale_action_rejections_wait_for_a_fresh_row_and_success_resets_streak():
+@pytest.mark.parametrize("rejections", [
+    ["stale_observation"] * 9,
+    ["masked"] * 9,
+    ["masked", "stale_observation", "expired", "expired_wall", "target_invalid",
+     "command_busy", "locked", "masked", "stale_observation"],
+])
+async def test_transient_action_rejections_wait_for_a_fresh_row_and_success_resets_streak(rejections):
     async with running() as rig:
         await rig.active()
-        rig.bridge.action_rejections.extend(["stale_observation"] * 9)
+        rig.bridge.action_rejections.extend(rejections)
         for count, seq in enumerate(range(4, 13), 1):
             rig.bridge.emit(fighter(seq, owned=True))
-            await eventually(lambda count=count: rig.pilot._stale_observation_consecutive == count)
+            await eventually(lambda count=count: rig.pilot._transient_rejections_consecutive == count)
             assert rig.link.body_owned("NPC")
             assert not rig.bridge.commands("body_release")
         rig.bridge.emit(fighter(13, owned=True, can_decide=False))
         await eventually(lambda: len(rig.policy.commands("step")) == 11)
-        assert rig.pilot._stale_observation_consecutive == 9  # Memory-only is not an accepted action.
+        assert rig.pilot._transient_rejections_consecutive == 9  # Memory-only is not an accepted action.
         rig.bridge.emit(fighter(14, owned=True))
         await eventually(lambda: rig.pilot._decisions == 2)
-        assert rig.pilot._stale_observation_consecutive == 0
-        # Ten total stale observations are allowed when a successful action separates them.
-        rig.bridge.action_rejections.append("stale_observation")
+        assert rig.pilot._transient_rejections_consecutive == 0
+        # More than ten total refusals are allowed when accepted actions reset the streak.
+        rig.bridge.action_rejections.append("masked")
         rig.bridge.emit(fighter(15, owned=True))
-        await eventually(lambda: rig.pilot._stale_observation_consecutive == 1)
+        await eventually(lambda: rig.pilot._transient_rejections_consecutive == 1)
         assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
-        row = fighter(16, owned=True)
+        rig.bridge.emit(fighter(16, owned=True))
+        await eventually(lambda: rig.pilot._decisions == 3)
+        assert rig.pilot._transient_rejections_consecutive == 0
+        rig.bridge.action_rejections.append("stale_observation")
+        rig.bridge.emit(fighter(17, owned=True))
+        await eventually(lambda: rig.pilot._transient_rejections_consecutive == 1)
+        assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
+        row = fighter(18, owned=True)
         row["self"]["down"] = True
         rig.bridge.emit(row)
         await eventually(lambda: rig.pilot.last_summary is not None)
         summary = rig.pilot.last_summary
-        assert summary.reason == "npc_down" and summary.decisions == 2
-        assert dict(summary.action_rejections) == {"stale_observation": 10}
-        assert summary.stale_observation_consecutive == 1
-        assert not rig.pilot._action_rejections and rig.pilot._stale_observation_consecutive == 0
+        assert summary.reason == "npc_down" and summary.decisions == 3
+        assert dict(summary.action_rejections) == Counter([*rejections, "masked", "stale_observation"])
+        assert summary.transient_rejections_consecutive == 1
+        assert not rig.pilot._action_rejections and rig.pilot._transient_rejections_consecutive == 0
 
 
-async def test_ten_consecutive_stale_action_rejections_restore_native_and_are_reported(caplog):
+@pytest.mark.parametrize("rejections", [
+    ["stale_observation"] * 10,
+    ["masked"] * 10,
+    ["masked", "stale_observation"] * 5,
+])
+async def test_ten_consecutive_transient_action_rejections_restore_native_and_are_reported(
+    caplog, rejections,
+):
     caplog.set_level("INFO", logger="gothic_ai.bodypilot")
     async with running() as rig:
         await rig.active()
-        rig.bridge.action_rejections.extend(["stale_observation"] * 10)
+        rig.bridge.action_rejections.extend(rejections)
         for count, seq in enumerate(range(4, 13), 1):
             rig.bridge.emit(fighter(seq, owned=True))
-            await eventually(lambda count=count: rig.pilot._stale_observation_consecutive == count)
+            await eventually(lambda count=count: rig.pilot._transient_rejections_consecutive == count)
             assert not rig.bridge.commands("body_release")
         rig.bridge.emit(fighter(13, owned=True))
         await rig.ended()
         await eventually(lambda: rig.pilot.last_summary is not None)
         summary = rig.pilot.last_summary
         assert summary.reason == "body_action_rejected" and summary.decisions == 1
-        assert dict(summary.action_rejections) == {"stale_observation": 10}
-        assert summary.stale_observation_consecutive == 10
+        assert dict(summary.action_rejections) == Counter(rejections)
+        assert summary.transient_rejections_consecutive == 10
         assert summary.release_confirmed and summary.watch_removed
-        assert "action_rejections={'stale_observation': 10}" in caplog.text
-        assert "stale_observation_consecutive=10" in caplog.text
+        assert f"action_rejections={dict(sorted(Counter(rejections).items()))}" in caplog.text
+        assert "transient_rejections_consecutive=10" in caplog.text
 
 
-@pytest.mark.parametrize("reason", ["not_safe_boundary", "invalid_action"])
-async def test_nonstale_action_rejection_still_ends_immediately(reason):
+@pytest.mark.parametrize("reason", [
+    "not_owned", "stale_generation", "owner_mismatch", "invalid_command", "weapon_mode", "paused_or_failed",
+])
+async def test_nontransient_action_rejection_still_ends_immediately(reason):
     async with running() as rig:
         await rig.active()
         rig.bridge.action_rejections.append(reason)
@@ -1116,7 +1138,7 @@ async def test_nonstale_action_rejection_still_ends_immediately(reason):
         summary = rig.pilot.last_summary
         assert summary.reason == "body_action_rejected" and summary.decisions == 1
         assert dict(summary.action_rejections) == {reason: 1}
-        assert summary.stale_observation_consecutive == 0
+        assert summary.transient_rejections_consecutive == 0
 
 
 @pytest.mark.parametrize("change", [

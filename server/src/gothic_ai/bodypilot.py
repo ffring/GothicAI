@@ -44,7 +44,14 @@ LEASE_TIMEOUT_MS = 2000
 EVENTS_INTERVAL = 0.150
 FINISH_TIMEOUT = 2.0
 MAX_JSON_BYTES = 256 * 1024
-STALE_OBSERVATION_LIMIT = 10
+TRANSIENT_REJECTION_LIMIT = 10
+# BodyController::validate and FightAlgo::resolve recheck live state after the
+# observation. These refusals retain the lease and need a fresh row, not a retry
+# of the same command. Scope, ownership and protocol failures remain terminal.
+TRANSIENT_ACTION_REJECTIONS = frozenset({
+    "stale_observation", "expired", "expired_wall", "command_busy",
+    "target_invalid", "masked", "locked",
+})
 BRIDGE_ERRORS = (GameError, ConnectionClosed, OSError, TimeoutError)
 TARGET_IS_HERO = [
     "&&",
@@ -153,7 +160,7 @@ class FightSummary:
     acquire_wait_p50_ms: float | None
     acquire_wait_max_ms: float | None
     action_rejections: tuple[tuple[str, int], ...]
-    stale_observation_consecutive: int
+    transient_rejections_consecutive: int
     fight_seconds: float | None
     release_confirmed: bool
     release_seconds: float | None
@@ -210,7 +217,7 @@ class BodyPilot:
         self._acquire_completed = 0
         self._acquire_waits: list[float] = []
         self._action_rejections: Counter[str] = Counter()
-        self._stale_observation_consecutive = 0
+        self._transient_rejections_consecutive = 0
         self._latencies: list[float] = []
         self._packet_to_request: list[float] = []
         self._packet_to_response: list[float] = []
@@ -655,13 +662,13 @@ class BodyPilot:
                 except BRIDGE_ERRORS as error:
                     reason = str(error).removeprefix("body command rejected: ") or type(error).__name__
                     self._action_rejections[reason] += 1
-                    if isinstance(error, GameError) and reason == "stale_observation":
-                        self._stale_observation_consecutive += 1
-                        if self._stale_observation_consecutive >= STALE_OBSERVATION_LIMIT:
+                    if isinstance(error, GameError) and reason in TRANSIENT_ACTION_REJECTIONS:
+                        self._transient_rejections_consecutive += 1
+                        if self._transient_rejections_consecutive >= TRANSIENT_REJECTION_LIMIT:
                             self._reason = "body_action_rejected"
                         return
                     raise
-                self._stale_observation_consecutive = 0
+                self._transient_rejections_consecutive = 0
                 self._decisions += 1
         except TimeoutError:
             self._reason = "policy_timeout"
@@ -836,7 +843,7 @@ class BodyPilot:
             acquire_wait_p50_ms=_percentile(self._acquire_waits, 0.50),
             acquire_wait_max_ms=max(self._acquire_waits, default=None),
             action_rejections=tuple(sorted(self._action_rejections.items())),
-            stale_observation_consecutive=self._stale_observation_consecutive,
+            transient_rejections_consecutive=self._transient_rejections_consecutive,
             fight_seconds=fight_seconds,
             release_confirmed=release_confirmed,
             release_seconds=release_seconds,
@@ -850,7 +857,7 @@ class BodyPilot:
             "packet_to_action_p50_ms=%s packet_to_action_p95_ms=%s "
             "acquire_refusals=%s acquire_requests=%d acquire_completed=%d "
             "acquire_wait_p50_ms=%s acquire_wait_max_ms=%s "
-            "action_rejections=%s stale_observation_consecutive=%d unconfirmed=%s",
+            "action_rejections=%s transient_rejections_consecutive=%d unconfirmed=%s",
             npc,
             reason,
             self._decisions,
@@ -871,7 +878,7 @@ class BodyPilot:
             summary.acquire_wait_p50_ms,
             summary.acquire_wait_max_ms,
             dict(summary.action_rejections),
-            summary.stale_observation_consecutive,
+            summary.transient_rejections_consecutive,
             unconfirmed if reason == "finish_deadline" else None,
         )
         self.npc = self.lease = self.client = None
@@ -886,7 +893,7 @@ class BodyPilot:
         self._acquire_requests = self._acquire_completed = 0
         self._acquire_waits.clear()
         self._action_rejections.clear()
-        self._stale_observation_consecutive = 0
+        self._transient_rejections_consecutive = 0
         self._latencies.clear()
         self._packet_to_request.clear()
         self._packet_to_response.clear()
