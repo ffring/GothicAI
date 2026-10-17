@@ -4,7 +4,8 @@ seconds, a title per beat, the game's sound of the "on" take, -14 LUFS. Optional
 "slow" {"from", "to", "<lang>"} (seconds of its segment) marks a slowed stretch in the corner; "music"
 {"file", "volume"} (the file under the takes' folder, a theme of the game) lies under the whole short; a beat's
 "lines" [{"at", "file", "words": [[word, from, to], ...]}] are voiced lines laid at that second of its segment,
-captioned word by word in place of the beat's title, the music and the game's sound ducked under them. A plan
+captioned word by word in place of the beat's title. Voiced music is calibrated automatically (its plan volume
+is ignored), with music and game ducked by word windows and checked before publication. A plan
 with a voice lives outside the repository (the explainer's workspace): give its path, the short goes into its
 render/ folder. The channel's brand is on unless the plan says "brand": false (the shorts published before it,
 kept as they went out): the seal in the corner, the end sting after the last beat (shorts/brand/sting.py makes
@@ -15,6 +16,9 @@ both, in ~/.local/share/gothic-ai/brand/sting/), PT Serif on warm bands instead 
     uv run --project shorts python shorts/compare/cut.py hits ru ~/.local/share/gothic-ai/explain/hits/plan.json
 """
 
+# Keep the existing visual/caption code and its long FFmpeg commands unchanged.
+# ruff: noqa: E501, B905
+
 from __future__ import annotations
 
 import json
@@ -24,6 +28,8 @@ import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+
+from gothic_shorts import levels
 
 ROOT = Path(__file__).resolve().parents[2]
 W, H, HALF = 1080, 1920, 960
@@ -40,7 +46,6 @@ SEAL = (110, W - 140, 110)  # the corner seal: size, x, y (under the slow-motion
 GRADE = "eq=gamma=1.18:saturation=1.08"  # the game's noon is dark on a phone; the same for both takes
 WHITE, ACCENT = (255, 255, 255, 255), (255, 214, 120, 255)  # a caption's words, the one being said
 PAGE_WORDS = 3  # a caption page: at most this many words, a new one after a comma or a full stop
-DUCK = "threshold=0.02:ratio={}:attack=20:release=350"  # sidechaincompress under the voice
 
 
 def font(spec: tuple[str, int], size: int) -> ImageFont.FreeTypeFont:
@@ -111,11 +116,39 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
-def master(inputs: list[str], mix: str, out: Path, length: float) -> None:
-    """The sound of the joined video brought to -14 LUFS by one gain: the peaks limited, then loudnorm in two passes,
-    linear (one pass is dynamic: it lifts the quiet stretches, a slowed silence under the music), faded out over
-    the last 80 ms (no step at the end). mix: a filter graph from the inputs to the sound, ending where the
-    mastering goes on"""
+def loudnorm_result(stderr: str) -> dict:
+    key = stderr.rindex('"input_i"')
+    return json.loads(stderr[stderr.rindex("{", 0, key):stderr.index("}", key) + 1])
+
+
+def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: bool = False) -> None:
+    """Master the mix and fade its last 80 ms. Voiced mixes use one common gain,
+    verified linear, at -14 LUFS or lower if required by the true-peak ceiling.
+    Unvoiced mixes retain the original limiter and two-pass loudnorm.
+    mix is the filter graph ending where mastering goes on.
+    """
+    if voiced:
+        # No shared limiter: it would change the balance verified on the stems.
+        probe = subprocess.run(
+            ["ffmpeg", "-hide_banner", *inputs, "-filter_complex",
+             f"{mix},loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json", "-vn", "-f", "null", "-"],
+            check=True, capture_output=True, text=True,
+        )
+        loud = levels.linear_master_filter(loudnorm_result(probe.stderr))
+        fade = f"afade=t=out:st={length - 0.08:.3f}:d=0.08"
+        # Only publish after FFmpeg confirms it did not fall back to dynamic mode.
+        with tempfile.TemporaryDirectory(dir=out.parent) as pending:
+            candidate = Path(pending) / out.name
+            rendered = subprocess.run(
+                ["ffmpeg", "-y", *inputs, "-filter_complex", f"{mix},{loud},{fade}[a]",
+                 "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
+                 "-b:a", "192k", "-ar", "48000", str(candidate)],
+                check=True, capture_output=True, text=True,
+            )
+            if loudnorm_result(rendered.stderr)["normalization_type"] != "linear":
+                raise ValueError("loudnorm fell back to dynamic mode; the short was not published")
+            candidate.replace(out)
+        return
     loud = "loudnorm=I=-14:TP=-1.5:LRA=11"
     pre = f"{mix},alimiter=limit=0.75:level=false"
     probe = subprocess.run(["ffmpeg", "-hide_banner", *inputs, "-filter_complex", f"{pre},{loud}:print_format=json",
@@ -140,6 +173,12 @@ def main() -> None:
     takes = ROOT / ".shorts/compare" / name
     out = plan_file.parent / "render" / f"short-{lang}.mp4" if len(sys.argv) > 3 else takes / f"short-{lang}.mp4"
     out.parent.mkdir(parents=True, exist_ok=True)
+    voiced = any(beat.get("lines") for beat in plan["beats"])
+    if voiced:
+        # A failed new check must not leave an older short under the normal name.
+        out.unlink(missing_ok=True)
+        out.with_suffix(".levels.json").unlink(missing_ok=True)
+    speech, total = levels.speech_windows(plan)
     voice = []  # (the line's file, its second in the short)
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -212,32 +251,26 @@ def main() -> None:
         (tmp / "list.txt").write_text("".join(f"file '{p}'\n" for p in parts))
         joined = tmp / "joined.mp4"
         run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(tmp / "list.txt"), "-c", "copy", str(joined)])
-        total = offset
-        inputs, graph, mix = ["-i", str(joined)], [], ["[g]"]
-        if voice:  # the lines at their seconds; the game's sound (and the music below) ducked under them
-            first = len(inputs) // 2 + (1 if "music" in plan else 0)
-            for k, (wav, at) in enumerate(voice):
-                ms = round(at * 1000)
-                graph.append(f"[{first + k}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-                             f"adelay={ms}|{ms}[v{k}]")
-            graph.append("".join(f"[v{k}]" for k in range(len(voice))) +
-                         f"amix=inputs={len(voice)}:duration=longest:normalize=0,apad=whole_dur={length},"
-                         + ("asplit=3[vo][vg][vm]" if "music" in plan else "asplit=2[vo][vg]"))
-            graph.append(f"[0:a][vg]sidechaincompress={DUCK.format(3)}[g]")
-            mix.append("[vo]")
-        else:
-            graph.append("[0:a]anull[g]")
-        if "music" in plan:  # the theme under the game's sound, faded in and out over the whole short
-            music = plan["music"]
-            inputs += ["-i", str(takes / music["file"])]
-            graph.append(f"[1:a]atrim=0:{total},asetpts=PTS-STARTPTS,volume={music['volume']},afade=t=in:d=1,"
-                         f"afade=t=out:st={total - 1.5}:d=1.5" + ("[m0];[m0][vm]sidechaincompress=" +
-                                                                 DUCK.format(8) if voice else "") + "[m]")
-            mix.append("[m]")
-        for wav, _ in voice:
-            inputs += ["-i", str(wav)]
-        graph.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0")
-        master(inputs, ";".join(graph), out, length)
+        music = plan.get("music")
+        try:
+            audio, report = levels.calibrate(
+                joined, takes / music["file"] if music else None, voice, speech, total, length,
+                music_volume=music["volume"] if music and not voiced else 1.0,
+            )
+        except ValueError as error:
+            if not voiced:
+                raise
+            report = levels.check_balance(float("-inf"), None, None, None, None)
+            report["error"] = str(error)
+            levels.print_balance(report)
+            out.with_suffix(".levels.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+            raise SystemExit(str(error)) from error
+        levels.print_balance(report)
+        if voiced:
+            out.with_suffix(".levels.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+            if not report["ok"]:
+                raise SystemExit("Audio balance check failed; the short was not published")
+        master(audio.inputs, audio.mix(), out, length, voiced=voiced)
     # frames over the whole short, for a look
     run(["ffmpeg", "-y", "-i", str(out), "-vf", "fps=1,scale=270:-2,tile=6x3", "-frames:v", "1",
          str(out.with_suffix(".png"))])
