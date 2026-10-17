@@ -179,9 +179,13 @@ def linear_master_filter(measured: dict) -> str:
     target_lra = max(11.0, lra + METER_RESOLUTION_LU)
     if target_i < -70 or target_lra > 50:
         raise ValueError("The mix is outside loudnorm's linear mastering range")
+    # FFmpeg treats measured_LRA=0 as an absent measurement and forces dynamic
+    # mode. Use the smallest positive value at the probe's 0.01-LU precision;
+    # LRA only gates linear mode, so this does not change the common gain.
+    measured_lra = measured["input_lra"] if lra else "0.01"
     return (f"loudnorm=I={target_i:.3f}:TP=-1.5:LRA={target_lra:.3f}"
             f":measured_I={measured['input_i']}:measured_TP={measured['input_tp']}"
-            f":measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}"
+            f":measured_LRA={measured_lra}:measured_thresh={measured['input_thresh']}"
             ":offset=0:linear=true:print_format=json")
 
 

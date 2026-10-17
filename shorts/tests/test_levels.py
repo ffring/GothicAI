@@ -323,3 +323,52 @@ def test_voiced_master_only_publishes_confirmed_linear_audio(
     assert "linear=true" in graph
     # A high peak and LRA require a lower common gain and a wider linear LRA target.
     assert "loudnorm=I=-26.600:TP=-1.5:LRA=18.100" in graph
+
+
+@pytest.mark.parametrize("lra,expected_lra,target_lra", [("0.00", 0.01, 11), ("18.00", 18, 18.1)])
+def test_linear_master_avoids_zero_lra_sentinel_without_changing_targets(
+    lra, expected_lra, target_lra,
+):
+    measured = {
+        "input_i": "-28.0", "input_tp": "-3.0", "input_lra": lra,
+        "input_thresh": "-40.0", "target_offset": "0.2",
+    }
+    options = dict(part.split("=", 1) for part in levels.linear_master_filter(measured).split(":")[1:])
+    assert float(options["measured_LRA"]) == pytest.approx(expected_lra)
+    assert float(options["LRA"]) == pytest.approx(target_lra)
+    assert levels.linear_master_filter(measured).startswith("loudnorm=I=-26.600:")
+    assert options["linear"] == "true"
+
+
+def test_balanced_constant_tones_publish_with_confirmed_linear_mastering(
+    tmp_path, tone_inputs, comparison_cut, monkeypatch,
+):
+    joined, voice, out = (tmp_path / name for name in ("joined.mp4", "voice.wav", "short-ru.mp4"))
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "color=c=black:s=16x16:r=1:d=12", *tone_inputs, "-map", "0:v", "-map", "1:a",
+         "-af", "volume=-12dB", "-c:v", "mpeg4", "-c:a", "aac", str(joined)],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", *tone_inputs,
+         "-c:a", "pcm_s16le", str(voice)],
+        check=True, capture_output=True,
+    )
+    audio, report = levels.calibrate(joined, None, [(voice, 0)], [(0, 12)], 12, 12)
+    assert report["ok"] is True
+    measured_passes = []
+    real_run = subprocess.run
+
+    def record_master_pass(command, **kwargs):
+        result = real_run(command, **kwargs)
+        measured_passes.append(comparison_cut.loudnorm_result(result.stderr))
+        return result
+
+    monkeypatch.setattr(comparison_cut.subprocess, "run", record_master_pass)
+    comparison_cut.master(audio.inputs, audio.mix(), out, 12, voiced=True)
+
+    assert len(measured_passes) == 2
+    assert float(measured_passes[0]["input_lra"]) == 0
+    assert measured_passes[1]["normalization_type"] == "linear"
+    assert out.stat().st_size > 0
