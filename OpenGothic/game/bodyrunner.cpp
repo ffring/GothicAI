@@ -1398,6 +1398,9 @@ int main(int argc, const char** argv) {
   try {
     const auto opts = options(argc,argv);
     Workers::setSerialExecution(opts.serialWorkers);
+    // Jolt steps on this thread unless asked otherwise: one schedule for lockstep and realtime runs,
+    // and a single-threaded template for --fork-reset.
+    setenv("OPENGOTHIC_PHYSICS_THREADS","0",0);
     std::filesystem::create_directories(opts.output);
     CommandLine commandLine(argc,argv);
     Resources resources;
