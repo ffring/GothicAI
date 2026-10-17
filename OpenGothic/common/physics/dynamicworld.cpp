@@ -20,7 +20,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <cassert>
 #include <cstddef>
 #include <list>
@@ -1982,10 +1981,6 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         }
       }
     if(isSpell){
-      if(std::getenv("OPENGOTHIC_FIGHT_TRACE") && hit.body!=nullptr)
-        Tempest::Log::i("[fight-trace] obstacle category=",int(hit.body->category()),
-                        " id=",hit.body->nativeId()," label=",hit.body->label(),
-                        " point=",hit.point.x,",",hit.point.y,",",hit.point.z);
       if(b.cb!=nullptr) {
         BulletWorldHit result;
         result.point=hit.point;

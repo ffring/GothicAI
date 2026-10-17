@@ -985,7 +985,6 @@ class Npc final {
     Sound                          sfxWeapon;
 
   friend class MoveAlgo;
-  friend class NpcController;
   friend class NpcKeys;
   friend bool TestBench::ragdollBodyDrawable(const Npc& npc);
   };

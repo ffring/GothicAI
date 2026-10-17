@@ -95,7 +95,6 @@ class AiQueue {
     static AiAction aiPrintScreen(int time, std::string_view font, int x,int y, std::string_view msg);
 
   private:
-    friend class NpcController;
     std::deque<AiAction> aiActions;
   };
 

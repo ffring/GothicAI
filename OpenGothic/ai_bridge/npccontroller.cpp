@@ -5,9 +5,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <cstdlib>
-#include <sstream>
-#include "physics/charactervirtualdiagnostics.h"
 
 #include "game/gamescript.h"
 #include "game/inventory.h"
@@ -589,10 +586,6 @@ bool NpcController::startScriptState(World& world, Controlled& c, Action& a, std
   a.toPlayer  = target->isPlayer();
   a.target    = target->instanceSymbol();
   a.targetNpc = target;
-  if(std::getenv("OPENGOTHIC_FIGHT_TRACE")) {
-    npc.setCharacterVirtualDiagnosticsEnabled(true);
-    target->setCharacterVirtualDiagnosticsEnabled(true);
-    }
   a.deadline = a.type=="fight" ? 60000 : 20000;
   // Keep perceptions external while queued speech and weapon removal finish.
   // Release script control only once the queue has installed the requested state.
@@ -605,57 +598,6 @@ bool NpcController::startScriptState(World& world, Controlled& c, Action& a, std
 void NpcController::updateStateAction(World& world, Controlled& c, uint64_t now) {
   auto& a  = *c.act;
   Npc&  npc = *c.npc;
-  if(std::getenv("OPENGOTHIC_FIGHT_TRACE") && now>=a.nextFightTrace) {
-    a.nextFightTrace = now+1000;
-    const auto identity = [&](Npc* n) {
-      if(n==nullptr) return std::string("none");
-      if(world.npcId(n)==uint32_t(-1)) return std::string("gone");
-      std::ostringstream s;
-      s << npcId(world,*n) << '#' << reinterpret_cast<uintptr_t>(n) << ":hp=" << n->attribute(ATR_HITPOINTS);
-      return s.str();
-      };
-    const auto trace = [&](Npc& n, std::string_view role) {
-      std::ostringstream s;
-      const auto p=n.position();
-      s << "[fight-trace] t=" << now << " act=" << a.type << " entered=" << a.entered << " role=" << role
-        << " npc=" << identity(&n) << " state=" << n.aiState.hint << " started=" << n.aiState.started
-        << " external=" << n.isExternalControl() << " other=" << identity(n.stateOther())
-        << " target=" << identity(n.target()) << " requested=" << identity(const_cast<Npc*>(a.targetNpc))
-        << " pos=" << p.x << ',' << p.y << ',' << p.z << " weapon=" << int(n.weaponState())
-        << " body=" << n.bodyStateMasked() << " policy=" << int(n.processPolicy())
-        << " anim=" << n.animNames() << " attack=" << n.isAttackAnim() << " cast=" << int(n.castLevel)
-        << " spell=" << n.currentSpellCast << " mana=" << n.attribute(ATR_MANA)
-        << " castNext=" << n.castNextTime << " invested=" << n.manaInvested << " expected=" << n.aiExpectedInvest
-        << " waits=" << n.aniWaitTime << ',' << n.waitTime << ',' << n.faiWaitTime << ',' << n.outWaitTime
-        << " queue=[";
-      for(const auto& q:n.aiQueue.aiActions)
-        s << int(q.act) << ":target=" << identity(q.target) << ":fn=" << q.func.ptr << ":i=" << q.i0 << ',' << q.i1 << ":s=" << q.s0 << ';';
-      s << ']';
-      if(auto* t=n.target()) {
-        auto d=t->position()-p;
-        s << " delta=" << d.x << ',' << d.y << ',' << d.z;
-        auto hit=world.physic()->rayNpc(n.mapWeaponBone(),t->centerPosition(),&n);
-        s << " fireRay=" << hit.hasCol << ":npc=" << identity(hit.npcHit)
-          << ":pos=" << hit.v.x << ',' << hit.v.y << ',' << hit.v.z;
-        }
-      const auto& floor=n.mvAlgo.cache;
-      s << " cv=" << n.mvAlgo.characterVirtualActive() << " nativeFloor=" << floor.hasCol
-        << ":y=" << floor.v.y << ":vob=" << reinterpret_cast<uintptr_t>(floor.vob)
-        << ":object=" << reinterpret_cast<uintptr_t>(floor.uptr) << " inAir=" << n.isInAir();
-      CharacterVirtualDiagnostics d;
-      if(n.characterVirtualDiagnostics(d)) {
-        auto& g=d.afterStairs;
-        s << " ground=" << int(g.groundState) << ':' << g.ground.id << ':' << g.ground.label
-          << ":type=" << g.ground.pointerType << ":layer=" << g.ground.layer
-          << ":y=" << g.groundPosition.y;
-        }
-      Tempest::Log::i(s.str());
-      };
-    trace(npc,"actor");
-    world.detectNpc(npc.position(),6000,[&](Npc& n) {
-      if(&n==a.targetNpc || (&n!=&npc && npcId(world,n)=="WOLF")) trace(n,"wolf");
-      });
-    }
   const bool in = npc.isInState(a.state);
   if(in && npc.isExternalControl())
     npc.setExternalControl(false);

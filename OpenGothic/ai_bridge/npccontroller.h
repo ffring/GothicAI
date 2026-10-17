@@ -65,7 +65,6 @@ class NpcController final {
       uint64_t        stateStart = 0;   // fight/flee: startup clock after queued speech
       const Npc*      targetNpc = nullptr; // fight/flee: exactly whom (symbols of monsters are shared)
       bool            entered  = false; // the npc is in that state already
-      uint64_t        nextFightTrace = 0;
       // use_chest (v28): the chest, what to take out and put in (item, count), how far it got
       Interactive*    chest    = nullptr;
       std::vector<std::pair<size_t,size_t>> take, put;
