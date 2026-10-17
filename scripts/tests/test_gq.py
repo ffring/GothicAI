@@ -391,6 +391,53 @@ def test_eof_from_disconnected_ssh_cancels_waiting_run(queue, gq, monkeypatch):
     assert records(queue)[-1]["reason"] == "cancelled"
 
 
+@pytest.mark.parametrize("action", ["wait", "run"])
+@pytest.mark.parametrize("transition", ["running", "cancelled"])
+def test_wait_progress_survives_a_concurrent_admission_or_cancellation(
+        queue, gq, monkeypatch, capsys, action, transition):
+    ident = enqueue(queue)
+    original_jobs = queue.jobs
+    original_wait = gq.wait_job
+    armed = action == "run"
+    transitioned = False
+
+    def racing_jobs():
+        nonlocal transitioned
+        snapshot = original_jobs()
+        if armed and not transitioned:
+            transitioned = True
+            # Another scheduler changes the state just after this snapshot is read.
+            if transition == "running":
+                with queue.transaction() as state:
+                    state["jobs"][0].update(status="starting", reserved=queue.now())
+                assert queue.started(ident)
+            else:
+                queue.cancel(ident, "session-a")
+        return snapshot
+
+    def wait_with_race(*args, **kwargs):
+        nonlocal armed
+        armed = True
+        return original_wait(*args, **kwargs)
+
+    def complete_after_progress(_seconds):
+        assert transitioned
+        if transition == "running":
+            queue.finish(ident, "success")
+
+    monkeypatch.setattr(queue, "tick", lambda: None)
+    monkeypatch.setattr(queue, "jobs", racing_jobs)
+    monkeypatch.setattr(gq, "Queue", lambda: queue)
+    monkeypatch.setattr(gq, "wait_job", wait_with_race)
+    monkeypatch.setattr(gq.select, "select", lambda *args: ([], [], []))
+    monkeypatch.setattr(gq.time, "sleep", complete_after_progress)
+    code = gq.main(["wait", ident]) if action == "wait" else gq.wait_job(queue, ident, run=True)
+    assert code == (0 if transition == "running" else 143)
+    assert queue.get(ident)["status"] == ("done" if transition == "running" else "cancelled")
+    assert records(queue)[-1]["reason"] == ("done" if transition == "running" else "cancelled")
+    assert "list.index" not in capsys.readouterr().err
+
+
 def make_queue(gq, host, monkeypatch):
     q = gq.Queue(home=host["home"], legacy_lock=host["legacy"], proc_locks=host["locks"])
     monkeypatch.setattr(q, "disk_free", lambda: 100 * GIB)
@@ -602,6 +649,68 @@ def test_reconcile_recovers_missing_unit_after_launcher_died(gq, host, monkeypat
     clock[0] += 6
     q.reconcile()
     assert q.get(ident)["status"] == "failed"
+
+
+def test_live_launcher_keeps_pending_reservations_during_sequential_launches(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(q, "now", lambda: clock[0])
+    monkeypatch.setattr(gq, "process_token", lambda _pid: "live-launcher")
+    original_launch = q.launch
+    starts = []
+
+    def slow_launch(job):
+        q.reconcile()
+        original_launch(job)
+        starts.append(q.started(job["id"]))
+        clock[0] += 11
+
+    monkeypatch.setattr(q, "launch", slow_launch)
+    ids = [q.submit(spec(mem=GIB)) for _ in range(4)]
+    q.tick()
+    assert clock[0] == 1044.0
+    assert starts == [True] * 4
+    assert all(q.get(ident)["status"] == "running" for ident in ids)
+    assert len(calls(host, "systemd-run")) == 4
+    assert not any(record.get("reason") == "failed" for record in records(q))
+
+
+def test_missing_running_unit_is_recovered_even_while_launcher_lives(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(q, "now", lambda: clock[0])
+    monkeypatch.setattr(gq, "process_token", lambda _pid: "live-launcher")
+    ident = q.submit(spec())
+    q.tick()
+    assert q.started(ident)
+    (host["systemd"] / f"gq-{ident}.json").unlink()
+    clock[0] += 6
+    q.reconcile()
+    assert q.get(ident)["status"] == "failed"
+    assert records(q)[-1]["reason"] == "failed"
+
+
+def test_follow_logs_reads_output_written_before_terminal_state(queue, gq, monkeypatch, capsys):
+    ident = start(queue)
+    log = queue.home / "logs" / f"{ident}.log"
+    log.write_text("first\n")
+    original_stream = gq.stream_log
+    completed = False
+
+    def completing_stream(q, job_id, offset):
+        nonlocal completed
+        offset = original_stream(q, job_id, offset)
+        if not completed:
+            completed = True
+            with log.open("a") as output:
+                output.write("last\n")
+            q.finish(job_id, "success")
+        return offset
+
+    monkeypatch.setattr(gq, "Queue", lambda: queue)
+    monkeypatch.setattr(gq, "stream_log", completing_stream)
+    assert gq.main(["logs", ident, "-f"]) == 0
+    assert capsys.readouterr().out == "first\nlast\n"
 
 
 def test_legacy_retry_waits_for_prior_exec_stop_post_to_unload(gq, host, monkeypatch):

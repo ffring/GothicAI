@@ -276,7 +276,9 @@ class Queue:
             missing = props.get("LoadState") == "not-found"
             if result.returncode and not missing:
                 continue  # A transient bus error must not free a live job's resources.
-            if missing and job.get("launcher") and alive(job["launcher"]) and self.now() - job["reserved"] < 30:
+            # One tick can reserve several jobs before launching them in sequence.
+            # A live launcher still owns every unstarted reservation, regardless of age.
+            if missing and job["status"] == "starting" and job.get("launcher") and alive(job["launcher"]):
                 continue
             if missing and self.now() - job.get("reserved", self.now()) > 5:
                 self.finish(job["id"], "failed", "exited", "1")
@@ -550,7 +552,10 @@ def wait_job(queue, job_id, run=False, wait_max=None, follow=True):
             if disconnected:
                 queue.cancel(job_id, queue.get(job_id)["owner"])
             queue.tick()
-            job = queue.get(job_id)
+            jobs = queue.jobs()
+            job = next((j for j in jobs if j["id"] == job_id), None)
+            if job is None:
+                raise QueueError(f"нет заявки {job_id}")
             if follow:
                 offset = stream_log(queue, job_id, offset)
             if job["status"] in TERMINAL:
@@ -560,7 +565,7 @@ def wait_job(queue, job_id, run=False, wait_max=None, follow=True):
                 print("Ryzen занят", file=sys.stderr)
                 return 75
             if job["status"] == "queued" and queue.now() >= next_report:
-                waiting = [j["id"] for j in queue.jobs() if j["status"] == "queued"]
+                waiting = [j["id"] for j in jobs if j["status"] == "queued"]
                 estimate = queue.estimate(job_id)
                 typical = f", медиана имени {estimate['typical']:.0f}s" if estimate["typical"] is not None else ""
                 print(f"gq {job_id}: место {waiting.index(job_id) + 1}, старт ≤ {estimate['upper']:.0f}s{typical}",
@@ -663,7 +668,12 @@ def main(argv=None):
             offset = 0
             while True:
                 offset = stream_log(queue, args.id, offset)
-                if not args.follow or queue.get(args.id)["status"] in TERMINAL:
+                if not args.follow:
+                    break
+                if queue.get(args.id)["status"] in TERMINAL:
+                    # Completion may have happened after the read above. Once terminal,
+                    # the command's output is final, so drain the remaining bytes.
+                    stream_log(queue, args.id, offset)
                     break
                 queue.tick()
                 time.sleep(POLL)
