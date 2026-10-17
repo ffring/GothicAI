@@ -22,10 +22,10 @@ toolchain() {
 }
 
 take_lock() {
-  mkdir -p "$HOME/gothic-ai"
-  exec 9>"$HOME/gothic-ai/body-simulation.lock"
+  mkdir -p "$(dirname "$WORKTREE_LOCK")"
+  exec 9>"$WORKTREE_LOCK"
   local started=$SECONDS monitor waiter status
-  echo "Ryzen: waiting for body-simulation.lock (up to ${LOCK_WAIT}s)"
+  echo "Ryzen: waiting for worktree lock $WORKTREE_LOCK (up to ${LOCK_WAIT}s)"
   # Without a PTY ssh disconnects do not send SIGHUP. EOF cancels our own waiter,
   # so an interrupted Mac command cannot later acquire the lock unattended.
   (IFS= read -r unused || kill -TERM "$$") <&0 &
@@ -205,7 +205,7 @@ PY
   build_storygraph "$state" "$digest"
   started=$SECONDS
   desktop
-  # Resolve dependencies under the same lock, before the e2e server's two-second startup wait.
+  # Resolve dependencies inside the quick job, before the e2e server's two-second startup wait.
   (cd "$ROOT/server" && uv sync --frozen)
   case "${SCENARIO:-m0}" in
     tts|gossip|day|group|interject|programs) (cd "$ROOT/tts-service" && uv sync --frozen) ;;
@@ -229,7 +229,7 @@ WRAPPER
   return "$rc"
 }
 
-# Internal entry point inherits fd 9 from the lock-holding SSH session.
+# Internal entry point runs inside one gq job; the control SSH holds the worktree lock.
 if [[ "${1:-}" == __remote ]]; then
   shift
   if [[ "${1:-}" == bench ]]; then
@@ -266,6 +266,30 @@ remote() {
   for arg in "$@"; do printf -v command '%s %q' "$command" "$arg"; done
   ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" "$command"
 }
+
+if [[ "$ACTION" == setup ]]; then
+  remote bash -s <<'REMOTE'
+set -euo pipefail
+mkdir -p "$HOME/gothic-ai/game"
+REMOTE
+  # Run the same preflight without needing a checkout or configuring a build.
+  { declare -f toolchain; echo 'set -euo pipefail; toolchain; echo "Ryzen: toolchain OK"'; } | remote bash -s
+  GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
+  [[ -d "$GOTHIC_DIR/Data" ]] || { echo "No game Data directory: $GOTHIC_DIR" >&2; exit 1; }
+  started=$SECONDS
+  # rsync writes temporary files and renames them; no machine lock is needed.
+  rsync -a --exclude=.DS_Store "$GOTHIC_DIR/" "$RYZEN_HOST:gothic-ai/game/"
+  echo "Ryzen: game data ready, sync $((SECONDS - started))s"
+  exit
+fi
+
+# Codex worktrees are named .../worktrees/<name>/<repo>; ordinary worktrees use their basename.
+WORKTREE="$(basename "$ROOT")"
+if [[ "$ROOT" == */worktrees/*/* ]]; then WORKTREE="$(basename "$(dirname "$ROOT")")"; fi
+[[ "$WORKTREE" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || { echo 'Unsafe worktree name' >&2; exit 2; }
+REMOTE="gothic-ai/e2e/$WORKTREE"
+REMOTE_HOME="$(remote printenv HOME)"
+STATE="$REMOTE_HOME/$REMOTE"
 
 finish_run() {
   local found
@@ -336,9 +360,10 @@ PY
 }
 
 # Hold one SSH session open across upload and execution. This protects the snapshot
-# even from concurrent invocations in the same worktree (including clean/setup).
+# even from concurrent invocations in the same worktree (including clean).
 SESSION="$(mktemp -d "${TMPDIR:-/tmp}/gothic-ryzen-control.XXXXXX")"
 SSH_PID=''
+GQ_PID=''
 TUNNEL_OPEN=0
 RUN_CREATED=0
 RUN_STARTED=0
@@ -346,12 +371,13 @@ RUN_FINISHED=0
 RUN_RC=0
 cleanup() {
   local status=$?
+  if [[ -n "$GQ_PID" ]]; then kill -TERM "$GQ_PID" 2>/dev/null || true; wait "$GQ_PID" 2>/dev/null || true; fi
+  if [[ "$RUN_CREATED" == 1 ]]; then finish_run || true; fi
   exec 8>&- || true
   if [[ -n "$SSH_PID" ]]; then kill "$SSH_PID" 2>/dev/null || true; wait "$SSH_PID" 2>/dev/null || true; fi
   if [[ "$TUNNEL_OPEN" == 1 ]]; then
     ssh -S "$SESSION/tunnel" -O exit "$RYZEN_HOST" >/dev/null 2>&1 || true
   fi
-  if [[ "$RUN_CREATED" == 1 ]]; then finish_run || true; fi
   rm -rf -- "$SESSION" || true
   return "$status"
 }
@@ -370,13 +396,14 @@ fi
 bootstrap="$(declare -f take_lock disk_usage)
 set -euo pipefail
 LOCK_WAIT=$LOCK_WAIT
+$(printf 'WORKTREE_LOCK=%q' "$STATE.lock")
 take_lock
 disk_usage
 exec bash -se"
 printf -v bootstrap_command 'bash -c %q' "$bootstrap"
 : >"$OUTPUT"
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" "$bootstrap_command" \
-  8>&- <"$SESSION/input" > >(exec 8>&-; tee "$OUTPUT") 2>&1 &
+  8>&- <"$SESSION/input" > >(exec 8>&-; tee -a "$OUTPUT") 2>&1 &
 SSH_PID=$!
 until [[ -f "$OUTPUT" ]] && grep -q '^Ryzen: lock acquired ' "$OUTPUT"; do
   if ! kill -0 "$SSH_PID" 2>/dev/null; then
@@ -411,45 +438,36 @@ PY
   fi
 fi
 
-run_locked() {
-  local arg
+run_quick() {
+  local rc control_lost=0
+  kill -0 "$SSH_PID" 2>/dev/null || { echo 'Ryzen: worktree lock connection lost' >&2; return 255; }
   RUN_STARTED=1
-  printf 'exec' >&8
-  for arg in "$@"; do printf ' %q' "$arg" >&8; done
-  printf '\n' >&8
-  exec 8>&-
-  wait "$SSH_PID" && rc=0 || rc=$?
-  SSH_PID=''
+  # The Mac wrapper owns gq's stdin pipe; running gq inside the control SSH
+  # would close that pipe on command completion and cancel the job at once.
+  "$ROOT/scripts/gq" --host "$RYZEN_HOST" run "${GQ_ARGS[@]}" -- "$@" \
+    8>&- > >(exec 8>&-; tee -a "$OUTPUT") 2>&1 &
+  GQ_PID=$!
+  # A dropped control connection releases the snapshot lock. Stop our job too,
+  # before another invocation can upload over its source/build directories.
+  while kill -0 "$GQ_PID" 2>/dev/null; do
+    if ! kill -0 "$SSH_PID" 2>/dev/null; then
+      echo 'Ryzen: worktree lock connection lost; cancelling our job' >&2
+      control_lost=1
+      kill -TERM "$GQ_PID" 2>/dev/null || true
+      break
+    fi
+    sleep 1
+  done
+  wait "$GQ_PID" && rc=0 || rc=$?
+  GQ_PID=''
+  [[ "$control_lost" == 0 ]] || rc=255
   RUN_FINISHED=1
   RUN_RC="$rc"
   return "$rc"
 }
 
-if [[ "$ACTION" == setup ]]; then
-  remote bash -s <<'REMOTE'
-set -euo pipefail
-mkdir -p "$HOME/gothic-ai/game"
-REMOTE
-  # Run the same preflight without needing a checkout or configuring a build.
-  { declare -f toolchain; echo 'set -euo pipefail; toolchain; echo "Ryzen: toolchain OK"'; } | remote bash -s
-  GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
-  [[ -d "$GOTHIC_DIR/Data" ]] || { echo "No game Data directory: $GOTHIC_DIR" >&2; exit 1; }
-  started=$SECONDS
-  rsync -a --exclude=.DS_Store "$GOTHIC_DIR/" "$RYZEN_HOST:gothic-ai/game/"
-  echo "Ryzen: game data ready, sync $((SECONDS - started))s"
-  run_locked true
-  exit
-fi
-
-# Codex worktrees are named .../worktrees/<name>/<repo>; ordinary worktrees use their basename.
-WORKTREE="$(basename "$ROOT")"
-if [[ "$ROOT" == */worktrees/*/* ]]; then WORKTREE="$(basename "$(dirname "$ROOT")")"; fi
-[[ "$WORKTREE" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || { echo 'Unsafe worktree name' >&2; exit 2; }
-REMOTE="gothic-ai/e2e/$WORKTREE"
-REMOTE_HOME="$(remote printenv HOME)"
-STATE="$REMOTE_HOME/$REMOTE"
 if [[ "$ACTION" == clean ]]; then
-  run_locked rm -rf -- "$STATE"
+  remote rm -rf -- "$STATE"
   echo "Ryzen: removed $REMOTE"
   exit
 fi
@@ -468,7 +486,20 @@ rsync -a --checksum --delete \
   --exclude=/tts-samples/ --exclude=/site/_build/ \
   "$ROOT/" "$RYZEN_HOST:$REMOTE/source/"
 
-ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=${RYZEN_JOBS:-12}")
+if [[ "$ACTION" == pytest ]]; then
+  GQ_ARGS=(--class quick --threads 4 --mem 6G --max "${RYZEN_MAX:-20m}" --name pytest)
+  JOBS=4
+else
+  JOBS="${RYZEN_JOBS:-12}"
+  GQ_ARGS=(--class quick --threads "$JOBS" --mem 8G --display --max "${RYZEN_MAX:-30m}")
+  if [[ "$ACTION" == bench ]]; then
+    GQ_ARGS+=(--gpu-mem 4G --name "bench $(basename "$BENCH_SCENARIO" .bench)")
+  else
+    GQ_ARGS+=(--gpu-mem 2G --name "e2e ${SCENARIO:-m0}")
+  fi
+fi
+GQ_ARGS+=(--wait-max "$LOCK_WAIT")
+ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS")
 if [[ "$ACTION" == bench ]]; then
   REMOTE_OUT="$STATE/runs/$RUN"
   bench_path() {
@@ -546,7 +577,7 @@ PY
     ENV_ARGS+=("SAVE=$STATE/inputs/$RUN/SAVE")
   fi
   echo "Ryzen: upload $((SECONDS - started))s ($WORKTREE)"
-  run_locked env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote bench \
+  run_quick env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote bench \
     "$STATE" "$RUN" "$STATE/inputs/$RUN/$(basename "$BENCH_SCENARIO")" && rc=0 || rc=$?
   exit "$rc"
 fi
@@ -580,7 +611,7 @@ done
 echo "Ryzen: upload $((SECONDS - started))s ($WORKTREE)"
 
 if [[ "$ACTION" == e2e ]]; then
-  run_locked env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote e2e "$STATE" "$RUN" && rc=0 || rc=$?
+  run_quick env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote e2e "$STATE" "$RUN" && rc=0 || rc=$?
   exit "$rc"
 fi
-run_locked env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote pytest "$STATE" "$RUN" "$@"
+run_quick env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote pytest "$STATE" "$RUN" "$@"
