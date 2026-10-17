@@ -219,6 +219,9 @@ class Npc final {
     bool       isSwim() const;
     bool       isInWater() const;
     bool       isDive() const;
+    // Passive navigation-dataset readout; no movement or gaze state is changed.
+    Tempest::Vec3 navigationGroundNormal() const { return mvAlgo.groundNormal(); }
+    bool navigationClimbing() const { return mvAlgo.isClimb(); }
     bool       isCasting() const;
 
     void       setTalentSkill(Talent t,int32_t lvl);

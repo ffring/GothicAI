@@ -1,6 +1,7 @@
 #include "appcadence.h"
 #include "testbench.h"
 #include "navbench.h"
+#include "navdemos.h"
 #include "frameprofile.h"
 
 #include <Tempest/Pixmap>
@@ -6418,6 +6419,12 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
     return;
   }
+  if(c=="navdemos") {
+    if(!Resources::isHeadless()) throw std::runtime_error("navdemos is runner-only");
+    bench.navigationOnly = true;
+    NavDemos::command(a,w,pl,outDir);
+    return;
+  }
   if(c=="navmesh") {
     bench.navigationOnly = true;
     if(a.size()!=2 || a[1]!="wait") NavBench::command(a,w,pl,outDir);
@@ -10600,7 +10607,7 @@ bool waitingForAi() {
   }
 
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
-  if(NavBench::running()) return;
+  if(NavBench::running() || NavDemos::running()) return;
   if(bench.spellEquipPending) {
     if(pl.drawSpell(bench.spellEquipPending)) {bench.spellCastingId=bench.spellEquipPending;bench.spellEquipPending=0;}
     else if(w.tickCount()<bench.spellEquipUntil) return;
@@ -10771,7 +10778,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
-    if(NavBench::running()) return;
+    if(NavBench::running() || NavDemos::running()) return;
     if(bench.spellWaitFrozen>=0 || bench.spellEquipPending) return;
     if(bench.questWait || bench.questStandingWait) return;
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
@@ -11699,6 +11706,7 @@ void TestBench::configure(std::string scenario, std::string output, int64_t seed
   NavigationEyeBench::reset();
   NpcKeysBench::reset();
   NavBench::reset();
+  NavDemos::reset();
   stopRecording();
   if(bench.csv!=nullptr)
     std::fclose(bench.csv);
@@ -12095,6 +12103,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   if(dt==0)
     return false;
   NavBench::tick(*world);
+  NavDemos::tick(*world,dt);
   NavigationEyeBench::tick(world->tickCount());
   NavigationMemoryBench::tick(*world);
   NpcKeysBench::tick(*world,*player,ctrl,dt);

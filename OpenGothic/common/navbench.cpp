@@ -189,6 +189,7 @@ void finish(World& w) {
 }
 
 void NavBench::reset() { trial=Trial{};NavTransitions::reset(); }
+const NavMesh& NavBench::navigationMesh(World& world) { requireMesh(world);return *mesh; }
 bool NavBench::running() { return trial.active || NavTransitions::running(); }
 
 void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const std::string& output) {

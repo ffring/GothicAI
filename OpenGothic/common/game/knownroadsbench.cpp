@@ -394,6 +394,20 @@ std::string bench(World& world,size_t wanted,const std::string& destination,size
 
 void KnownRoadsBench::reset() { state=State{}; }
 
+KnownRoads::Path KnownRoadsBench::readPath(World& world,const Npc& npc,const Vec3& goal,Vec3& next) {
+  requireGraph();
+  for(const auto& actor:state.actors) if(actor.npc==&npc && live(actor,world)) {
+    auto result=state.graph->path(actor.knowledge,npc.position(),goal);
+    next=goal;
+    for(auto node:result.nodes) {
+      next=state.graph->nodes()[node].position;
+      if((next-npc.position()).length()>100.f) break;
+    }
+    return result;
+  }
+  throw std::runtime_error("nav demos requires roads on for the walking actor");
+}
+
 void KnownRoadsBench::tick(World* world) {
   if(state.world==world && (!world || state.worldName==world->name())) return;
   // Loading or switching the world invalidates all NPC pointers and graph IDs.
