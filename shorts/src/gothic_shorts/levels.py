@@ -259,7 +259,8 @@ def print_balance(report: dict) -> None:
     for row in report["rows"]:
         value = row.get("measured_lufs", row.get("measured_dbtp", row.get("count")))
         target = row.get("target_lufs", row.get("target_dbtp"))
-        value = "—" if value is None else f"{value:.1f}"
+        precision = 6 if "measured_dbtp" in row else 1
+        value = "—" if value is None else f"{value:.{precision}f}"
         target = "—" if target is None else f"{target:.1f}"
         result = "ок" if row["ok"] else "нет" if row["ok"] is False else "—"
         print(f"{row['id']:<20} {value:>10} {target:>12}  {row['target']}  {result}")
@@ -290,16 +291,20 @@ def master_filter(speech_lufs: float, length: float, *, voice_probe: bool = Fals
 
 
 def meter_file(path: Path) -> tuple[float, float]:
-    """Measure decoded AAC, including intersample peaks, using EBU R128."""
+    """Measure AAC true peak from linear metadata, avoiding the rounded dB summary."""
     result = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af", "ebur128=peak=true",
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af",
+         "ebur128=peak=true:metadata=1,ametadata=print:key=lavfi.r128.true_peak",
          "-f", "null", "-"], check=True, capture_output=True, text=True,
     )
     loudness = re.findall(r"\bI:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+LUFS", result.stderr)
-    peaks = re.findall(r"Peak:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+dBFS", result.stderr)
+    peaks = [float(value) for value in re.findall(r"\blavfi\.r128\.true_peak=([^\s]+)", result.stderr)]
     if not loudness or not peaks:
         raise ValueError("ffmpeg did not return decoded loudness and true peak")
-    return float(loudness[-1]), float(peaks[-1])
+    if any(not math.isfinite(peak) or peak < 0 for peak in peaks):
+        raise ValueError("ffmpeg returned invalid true-peak metadata")
+    peak = max(peaks)
+    return float(loudness[-1]), 20 * math.log10(peak) if peak > 0 else -math.inf
 
 
 @dataclass

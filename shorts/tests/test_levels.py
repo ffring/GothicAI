@@ -458,6 +458,36 @@ def _mock_mastered_balance(monkeypatch, report):
                         levels.check_balance(voice, None, None, voice - 6, voice - 3))
 
 
+@pytest.mark.parametrize("linear_peak,accepted", [(0.892, False), (0.891, True)])
+def test_decoded_peak_metadata_decides_the_gate_when_the_summary_rounds_to_minus_one(
+    monkeypatch, capsys, linear_peak, accepted,
+):
+    stderr = (
+        f"lavfi.r128.true_peak={linear_peak}\n"
+        "lavfi.r128.true_peak=0.5\n"
+        "  I: -14.0 LUFS\n  True peak:\n    Peak: -1.0 dBFS\n"
+    )
+    run = Mock(return_value=SimpleNamespace(stderr=stderr))
+    monkeypatch.setattr(levels.subprocess, "run", run)
+    voice, peak = levels.meter_file(Path("short.mp4"))
+    assert peak == pytest.approx(20 * math.log10(linear_peak), abs=1e-12)
+    graph = run.call_args.args[0][run.call_args.args[0].index("-af") + 1]
+    assert graph == "ebur128=peak=true:metadata=1,ametadata=print:key=lavfi.r128.true_peak"
+    report = levels.check_balance(voice, None, None, None, None)
+    levels.check_mastering(report, voice, peak, [])
+    assert _rows(report)["true_peak"]["ok"] is accepted
+    assert report["ok"] is accepted
+    levels.print_balance(report)
+    assert f"{peak:.6f}" in capsys.readouterr().out
+
+
+def test_decoded_peak_cannot_fall_back_to_the_rounded_summary(monkeypatch):
+    run = Mock(return_value=SimpleNamespace(stderr="I: -14.0 LUFS\nPeak: -1.0 dBFS\n"))
+    monkeypatch.setattr(levels.subprocess, "run", run)
+    with pytest.raises(ValueError, match="true peak"):
+        levels.meter_file(Path("short.mp4"))
+
+
 @pytest.mark.parametrize("balanced", [True, False])
 def test_comparison_checks_and_writes_levels_before_publication(
     tmp_path, monkeypatch, capsys, comparison_cut, balanced,
@@ -908,3 +938,57 @@ def test_mastering_checks_all_decoded_stems_of_a_balanced_music_mix(tmp_path, co
     assert report["pre_master_rows"] == pre_master_rows
     assert report["ok"] is True
     assert out.stat().st_size > 0
+
+
+def test_mastering_rejects_a_true_peak_hidden_by_the_rounded_summary(
+    tmp_path, comparison_cut, monkeypatch,
+):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for synthetic mastering")
+    voice, joined, out = (tmp_path / name for name in ("voice.wav", "joined.mkv", "short-ru.mp4"))
+    peaky_voice = (
+        "aevalsrc='(0.03+if(lt(mod(t,0.1),0.002),"
+        "0.4*pow(sin(PI*mod(t,0.1)/0.002),2),0))*sin(2*PI*12000*t+0.49)':s=48000:d=3"
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", peaky_voice,
+         "-c:a", "pcm_f32le", str(voice)], check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "color=c=black:s=16x16:r=1:d=3", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo:d=3",
+         "-c:v", "mpeg4", "-c:a", "pcm_f32le", str(joined)], check=True, capture_output=True,
+    )
+    audio, report = levels.calibrate(joined, None, [(voice, 0)], [(0, 3)], 3, 3)
+    assert report["ok"] is True
+    candidate_peak = {}
+    real_meter = levels.meter_file
+
+    def meter(path):
+        result = real_meter(path)
+        if path.name == out.name:
+            # Independently compare the decoded candidate's detailed and rounded R128 output.
+            probe = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af",
+                 "ebur128=peak=true:metadata=1,ametadata=print:key=lavfi.r128.true_peak",
+                 "-f", "null", "-"], check=True, capture_output=True, text=True,
+            ).stderr
+            peaks = [float(line.split("lavfi.r128.true_peak=", 1)[1])
+                     for line in probe.splitlines() if "lavfi.r128.true_peak=" in line]
+            candidate_peak["detailed"] = 20 * math.log10(max(peaks))
+            candidate_peak["rounded"] = float(probe.rsplit("Peak:", 1)[1].split()[0])
+        return result
+
+    monkeypatch.setattr(levels, "meter_file", meter)
+    with pytest.raises(ValueError, match="mastering check failed"):
+        comparison_cut.master(audio.inputs, audio.mix(), out, 3,
+                              voiced=True, audio=audio, report=report)
+    rows = _rows(report)
+    assert candidate_peak["rounded"] == levels.TRUE_PEAK_DBTP
+    assert candidate_peak["detailed"] > levels.TRUE_PEAK_DBTP
+    assert rows["true_peak"]["measured_dbtp"] == pytest.approx(candidate_peak["detailed"], abs=1e-6)
+    assert rows["true_peak"]["ok"] is False
+    assert rows["voice_mastered"]["ok"] is True
+    assert rows["clicks"]["count"] == 0
+    assert report["ok"] is False
+    assert not out.exists()
