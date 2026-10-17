@@ -521,6 +521,8 @@ async def test_busy_waits_and_sleep_is_fact(tmp_path):
         # held by another; a dialog of the scripts around
         await _together(g, hilda={"activity": "attached"})
         assert desk.stage(r, LOBART, HILDA).tier == "wait"
+        await _together(g, hilda={"activity": "body"})
+        assert desk.stage(r, LOBART, HILDA).tier == "wait"
         await _together(g, others=(person(VINO, "Вино", 12, activity="dialog"),))
         assert desk.stage(r, LOBART, HILDA).tier == "wait"
         await _together(g)

@@ -64,12 +64,36 @@ def events(*rows, **updates):
     return BodyControlEvents.model_validate(value)
 
 
+def visibility_diagnostics(**updates):
+    # BodyController::visibilityDiagnosticsJson, included in every live status response.
+    value = {
+        "type": "body_visibility_diagnostics", "enabled": False, "capture_failed": False,
+        "diagnostic_generation": 1, "records_total": 0, "dropped_total": 0,
+        "max_records_per_actor": 8192, "sample_period_ms": 50,
+        "clock_domain": "linux-clock-monotonic", "journal": "events.jsonl",
+        "phase": "visibility_diagnostic",
+    }
+    value.update(updates)
+    return value
+
+
+def control_status(*actors, **updates):
+    value = {
+        "type": "body_control_status", "session_epoch": 1, "world_epoch": 1,
+        "paused": False, "infrastructure_failure": False, "infrastructure_reason": "",
+        "actors": list(actors), "visibility_diagnostics": visibility_diagnostics(),
+    }
+    value.update(updates)
+    return value
+
+
 class Connection:
     def __init__(self):
         self.sent = []
         self.link = None
         self.reject = False
         self.invalidate_after_response = False
+        self.control_status = control_status()
 
     async def send(self, raw):
         cmd = json.loads(raw)
@@ -80,6 +104,8 @@ class Connection:
         )
         if cmd["type"] == "body_release":
             value.update(reason="release_pending", release_pending=True)
+        elif cmd["type"] == "body_control_status":
+            value = self.control_status
         self.link._dispatch(Result(type="result", req=cmd["req"], ok=True, value=value))
         if self.invalidate_after_response:
             self.link._dispatch(Loading(type="loading"))
@@ -180,7 +206,46 @@ async def test_authority_is_not_cleared_by_pending_release_or_old_passive_snapsh
     link._dispatch(message(packet(controlled(control_allowed=False, can_decide=False))))
     assert link.body_leases[1] == lease
     link._dispatch(message(packet(observation(3))))
+    assert link.body_leases[1] == lease
+    link._dispatch(message(packet(controlled(4, control_generation=8))))
     assert not link.body_leases
+
+
+async def test_live_status_with_visibility_diagnostics_clears_restored_native_lease():
+    link, conn = connected()
+    lease = await link.body_acquire("NPC", link.body_latest[1], "scripted")
+    link._dispatch(message(packet(observation(3))))
+    assert link.body_leases[1] == lease
+    actor = receipt(owner="native", control_generation=0)
+    for name in ("type", "accepted", "duplicate", "reason"):
+        actor.pop(name)
+    actor.update(
+        provider="", mode="native", t_game_ms=150, observation_seq=3, observed_game_ms=150,
+        watchdog_timeout_ms=0, control_allowed=False, can_decide=False, action_mask=[False] * 12,
+    )
+    conn.control_status = control_status(actor)
+    status = await link.body_control_status()
+    assert status.visibility_diagnostics is not None
+    assert status.visibility_diagnostics.max_records_per_actor == 8192
+    assert status.actors[0].owner == "native"
+    assert not link.body_leases and not link.body_owned("NPC")
+
+
+@pytest.mark.parametrize("clock_domain", ["linux-clock-monotonic", "cxx-steady-clock"])
+def test_status_parses_live_visibility_diagnostics(clock_domain):
+    diagnostics = visibility_diagnostics(clock_domain=clock_domain, enabled=True, records_total=3)
+    status = BodyControlStatus.model_validate(control_status(visibility_diagnostics=diagnostics))
+    assert status.visibility_diagnostics.model_dump() == diagnostics
+
+
+@pytest.mark.parametrize("updates", [
+    {"enabled": 1}, {"records_total": "0"}, {"dropped_total": -1}, {"unknown": False},
+])
+def test_visibility_diagnostics_remain_strict(updates):
+    with pytest.raises(ValidationError):
+        BodyControlStatus.model_validate(control_status(
+            visibility_diagnostics=visibility_diagnostics(**updates),
+        ))
 
 
 async def test_client_rejects_observation_from_other_actor_before_transmission():
