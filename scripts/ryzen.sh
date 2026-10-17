@@ -393,15 +393,37 @@ SSH_PID=''
 GQ_PID=''
 TUNNEL_OPEN=0
 RUN_CREATED=0
+RUN_ARMED=0
 RUN_STARTED=0
 RUN_FINISHED=0
 RUN_RC=0
+guard_ack() {
+  local message="$1"
+  until grep -qx "$message" "$OUTPUT"; do
+    kill -0 "$SSH_PID" 2>/dev/null || return 1
+    sleep 0.1
+  done
+}
+
 cleanup() {
   local status=$?
+  trap '' HUP INT TERM
   if [[ -n "$GQ_PID" ]]; then kill -TERM "$GQ_PID" 2>/dev/null || true; wait "$GQ_PID" 2>/dev/null || true; fi
+  if [[ "${RUN_ARMED:-0}" == 1 && -n "$SSH_PID" ]]; then
+    # Local SSH exit only starts cancellation. The remote lock owner confirms
+    # the unit's terminal queue state before collection or releasing fd 9.
+    # No submission was launched if interruption happened while arming.
+    if [[ "$RUN_STARTED" == 0 ]]; then printf 'complete %s\n' "$RUN" >&8 || true; fi
+    if printf 'drain %s\n' "$RUN" >&8 && guard_ack "Ryzen: queue guard complete $RUN"; then
+      [[ "$RUN_FINISHED" == 1 ]] || RUN_RC="$status"
+      RUN_FINISHED=1
+    else
+      RUN_RC=255
+    fi
+  fi
   if [[ "$RUN_CREATED" == 1 ]]; then finish_run || true; fi
   exec 8>&- || true
-  if [[ -n "$SSH_PID" ]]; then kill "$SSH_PID" 2>/dev/null || true; wait "$SSH_PID" 2>/dev/null || true; fi
+  if [[ -n "$SSH_PID" ]]; then wait "$SSH_PID" 2>/dev/null || true; fi
   rm -rf -- "$SESSION" || true
   return "$status"
 }
@@ -423,14 +445,15 @@ LOCK_WAIT=$LOCK_WAIT
 $(printf 'WORKTREE_LOCK=%q' "$STATE.lock")
 take_lock
 disk_usage
-exec bash -se"
+$(if [[ -n "${GQ_HOME+set}" ]]; then printf 'export GQ_HOME=%q\n' "$GQ_HOME"; fi)
+$(printf 'exec python3 -u -c %q %q %q' "$(cat "$ROOT/scripts/ryzen-lock.py")" "$STATE" "$REMOTE_HOME/gothic-ai/bin/gq")"
 printf -v bootstrap_command 'bash -c %q' "$bootstrap"
 : >"$OUTPUT"
 ssh -o BatchMode=yes -o ConnectTimeout=10 \
   -o ControlMaster=yes -o ControlPath="$SESSION/control" "$RYZEN_HOST" "$bootstrap_command" \
   8>&- <"$SESSION/input" > >(exec 8>&-; tee -a "$OUTPUT") 2>&1 &
 SSH_PID=$!
-until [[ -f "$OUTPUT" ]] && grep -q '^Ryzen: lock acquired ' "$OUTPUT"; do
+until [[ -f "$OUTPUT" ]] && grep -qx 'Ryzen: queue guard ready' "$OUTPUT"; do
   if ! kill -0 "$SSH_PID" 2>/dev/null; then
     wait "$SSH_PID" && rc=0 || rc=$?
     SSH_PID=''
@@ -488,6 +511,10 @@ start_tunnel() {
 run_quick() {
   local rc control_lost=0 tunnel_failed=0
   kill -0 "$SSH_PID" 2>/dev/null || { echo 'Ryzen: worktree lock connection lost' >&2; return 255; }
+  # Arm the remote guard before submission so EOF cannot race late registration.
+  RUN_ARMED=1
+  printf 'arm %s\n' "$RUN" >&8
+  guard_ack "Ryzen: queue guard armed $RUN" || return 255
   RUN_STARTED=1
   # The Mac wrapper owns gq's stdin pipe; running gq inside the control SSH
   # would close that pipe on command completion and cancel the job at once.
@@ -516,6 +543,9 @@ run_quick() {
   done
   wait "$GQ_PID" && rc=0 || rc=$?
   GQ_PID=''
+  if [[ "$rc" -lt 128 && "$control_lost" == 0 && "$tunnel_failed" == 0 ]]; then
+    printf 'complete %s\n' "$RUN" >&8
+  fi
   [[ "$control_lost" == 0 ]] || rc=255
   [[ "$tunnel_failed" == 0 ]] || rc=1
   RUN_FINISHED=1
@@ -556,7 +586,7 @@ else
   fi
 fi
 GQ_ARGS+=(--wait-max "$LOCK_WAIT")
-ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS")
+ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS" "RYZEN_RUN_ID=$RUN")
 if [[ "$ACTION" == bench ]]; then
   [[ -z "$AI_PORT" ]] || ENV_ARGS+=("RYZEN_AI_TUNNEL=1")
   REMOTE_OUT="$STATE/runs/$RUN"

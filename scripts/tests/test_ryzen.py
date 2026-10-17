@@ -76,6 +76,7 @@ ssh() {
   printf '51234\n'
 }
 remote() { "$@"; }
+guard_ack() { :; }
 '''
         env = dict(os.environ, TEST_SESSION=str(root), TEST_MODE=mode,
                    TEST_FORWARD_FAIL=str(int(forward_fail)), TEST_RESERVED_PORT=str(int(reserved_port)))

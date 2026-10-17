@@ -1,6 +1,4 @@
-"""Worktree leases survive their Mac launcher; no real SSH or queue is used."""
-from __future__ import annotations
-
+"""Real Mac gq wrapper, production cleanup, and an independently stopping job."""
 import fcntl
 import json
 import os
@@ -18,15 +16,16 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def eventually(predicate, timeout=5):
+def eventually(predicate, timeout=7):
     deadline = time.monotonic() + timeout
     while not predicate():
-        assert time.monotonic() < deadline, "subprocess did not reach the expected state"
+        if time.monotonic() >= deadline:
+            raise AssertionError('subprocess did not reach the expected state')
         time.sleep(0.02)
 
 
 def lock_available(path):
-    with path.open("a") as stream:
+    with path.open('a') as stream:
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -34,110 +33,164 @@ def lock_available(path):
         return True
 
 
-def check_quick_lifetime(tmp_path):
-    # Extract production code so closing fd 8 at the gq call breaks this test.
-    source = (ROOT / "scripts/ryzen.sh").read_text()
-    match = re.search(r"^run_quick\(\) \{\n.*?^\}", source, re.MULTILINE | re.DOTALL)
+def function(name):
+    match = re.search(r'^' + name + r'\(\) \{\n.*?^\}',
+                      (ROOT / 'scripts/ryzen.sh').read_text(), re.M | re.S)
     assert match is not None
-    binaries = tmp_path / "bin"
-    binaries.mkdir()
-    fake_ssh = binaries / "ssh"
-    fake_ssh.write_text(
-        f"#!{sys.executable}\n" + r'''
+    return match.group(0)
+
+
+class RyzenLifetimeTests(unittest.TestCase):
+    def start_launcher(self, directory):
+        root = Path(directory)
+        binaries = root / 'bin'
+        binaries.mkdir()
+        (root / 'session').mkdir()
+        (root / 'queue').mkdir()
+        worker = root / 'worker.py'
+        worker.write_text(r'''
 import json
 import os
 from pathlib import Path
 import time
 
-root = Path(os.environ["RYZEN_TEST_HOME"])
-(root / "job.json").write_text(json.dumps({"job": os.getpid(), "wrapper": os.getppid()}))
-while not (root / "finish").exists():
+root = Path(os.environ['RYZEN_TEST_HOME'])
+job = {'id': 'own-job', 'command': ['env', 'RYZEN_RUN_ID=test',
+       str(root / 'state/source/scripts/ryzen.sh')], 'status': 'running'}
+def publish(status):
+    job['status'] = status
+    pending = root / 'queue/state.tmp'
+    pending.write_text(json.dumps({'version': 1, 'jobs': [job]}))
+    pending.replace(root / 'queue/state.json')
+publish('running')
+(root / 'started').touch()
+while not (root / 'stop').exists() and not (root / 'finish').exists():
     time.sleep(0.02)
-(root / "job-finished").touch()
+if (root / 'stop').exists():
+    # The task outlives the SSH client and local gq wrapper by three seconds.
+    time.sleep(3)
+publish('cancelled' if (root / 'stop').exists() else 'done')
+(root / 'job-finished').touch()
 ''')
-    fake_ssh.chmod(0o755)
-    control = tmp_path / "control.py"
-    control.write_text(r'''
+        fake_ssh = binaries / 'ssh'
+        fake_ssh.write_text(f'#!{sys.executable}\n' + r'''
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+root = Path(os.environ['RYZEN_TEST_HOME'])
+job = subprocess.Popen([sys.executable, str(root / 'worker.py')],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, start_new_session=True)
+metadata = root / 'job.tmp'
+metadata.write_text(json.dumps({'job': job.pid, 'wrapper': os.getppid()}))
+metadata.replace(root / 'job.json')
+def stop(_signum, _frame):
+    (root / 'stop').touch()
+    raise SystemExit(143)
+signal.signal(signal.SIGTERM, stop)
+while job.poll() is None:
+    time.sleep(0.02)
+sys.exit(job.returncode)
+''')
+        fake_ssh.chmod(0o755)
+        control = root / 'control.py'
+        control.write_text(r'''
 import fcntl
 import os
 from pathlib import Path
-
-root = Path(os.environ["RYZEN_TEST_HOME"])
-with (root / "worktree.lock").open("a") as lock:
-    fcntl.flock(lock, fcntl.LOCK_EX)
-    (root / "locked").touch()
-    while os.read(0, 4096):
-        pass
+import sys
+root = Path(os.environ['RYZEN_TEST_HOME'])
+lock = (root / 'worktree.lock').open('a')
+fcntl.flock(lock, fcntl.LOCK_EX)
+os.dup2(lock.fileno(), 9)
+os.set_inheritable(9, True)
+os.execv(sys.executable, [sys.executable, '-u', sys.argv[1],
+                         str(root / 'state'), sys.argv[2]])
 ''')
-    os.mkfifo(tmp_path / "input")
-    script = "\n".join([
-        "set -euo pipefail",
-        f"ROOT={shlex.quote(str(ROOT))}",
-        'SESSION="$RYZEN_TEST_HOME"',
-        'OUTPUT="$SESSION/output"',
-        'STATE="$SESSION/state"',
-        "RUN=test RYZEN_HOST=fake AI_PORT='' TUNNEL_OPEN=0",
-        "GQ_ARGS=(--class quick --threads 1 --mem 100M --max 1m)",
-        "exec 8<>\"$SESSION/input\"",
-        f"{shlex.quote(sys.executable)} {shlex.quote(str(control))} 8>&- <\"$SESSION/input\" &",
-        "SSH_PID=$!",
-        'until [[ -f "$SESSION/locked" ]]; do sleep 0.02; done',
-        match.group(0),
-        "run_quick true",
-    ])
-    environment = {
-        **os.environ,
-        "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
-        "RYZEN_TEST_HOME": str(tmp_path),
-    }
-    with (tmp_path / "launcher.log").open("wb") as output:
-        launcher = subprocess.Popen(
-            ["bash", "-c", script], env=environment, stdout=output, stderr=output,
-            start_new_session=True,
-        )
-        completed = False
-        try:
-            eventually(lambda: (tmp_path / "job.json").exists())
-            job = json.loads((tmp_path / "job.json").read_text())
-            assert not lock_available(tmp_path / "worktree.lock")
-            launcher.kill()
-            assert launcher.wait(timeout=5) == -signal.SIGKILL
-            # The launcher's orphaned sleep 1 also inherits fd 8. Outwait it so
-            # only gq's lease can keep the control reader from observing EOF.
-            deadline = time.monotonic() + 1.3
-            while time.monotonic() < deadline:
-                os.kill(job["job"], 0)
-                os.kill(job["wrapper"], 0)
-                assert not lock_available(tmp_path / "worktree.lock"), (
-                    "worktree became writable while the orphaned quick job was still running"
-                )
-                time.sleep(0.02)
-            (tmp_path / "finish").touch()
-            eventually(lambda: (tmp_path / "job-finished").exists())
-            eventually(lambda: lock_available(tmp_path / "worktree.lock"))
-            completed = True
-        finally:
-            (tmp_path / "finish").touch()
-            if not completed:
-                # Kill only remaining members of our isolated process group.
-                # macOS may reject killpg for a group that has already gone;
-                # individual signals also preserve real permission failures.
-                processes = subprocess.check_output(["ps", "-axo", "pid=,pgid="], text=True)
-                for line in processes.splitlines():
-                    pid, group = map(int, line.split())
-                    if group == launcher.pid:
-                        try:
-                            os.kill(pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-            launcher.wait(timeout=5)
+        os.mkfifo(root / 'session/input')
+        harness = '\n'.join([
+            'set -euo pipefail',
+            f'ROOT={shlex.quote(str(ROOT))}',
+            'SESSION="$RYZEN_TEST_HOME/session"',
+            'OUTPUT="$SESSION/output" STATE="$RYZEN_TEST_HOME/state"',
+            "RUN=test RYZEN_HOST=fake AI_PORT='' TUNNEL_OPEN=0",
+            'RUN_CREATED=1 RUN_STARTED=0 RUN_FINISHED=0 RUN_RC=0 SSH_PID= GQ_PID=',
+            'GQ_ARGS=(--class quick --threads 1 --mem 100M --max 1m --name test)',
+            'exec 8<>"$SESSION/input"',
+            function('guard_ack'), function('cleanup'), function('run_quick'),
+            'finish_run() { touch "$RYZEN_TEST_HOME/collected"; }',
+            'trap cleanup EXIT', "trap 'exit 143' TERM", "trap 'exit 130' INT",
+            f'{shlex.quote(sys.executable)} {shlex.quote(str(control))} '
+            f'{shlex.quote(str(ROOT / "scripts/ryzen-lock.py"))} '
+            f'{shlex.quote(str(ROOT / "scripts/gq.py"))} '
+            '8>&- <"$SESSION/input" > >(exec 8>&-; tee -a "$OUTPUT") 2>&1 &',
+            'SSH_PID=$!', 'guard_ack "Ryzen: queue guard ready"',
+            'run_quick env "RYZEN_RUN_ID=$RUN" bash "$STATE/source/scripts/ryzen.sh" __remote pytest "$STATE" "$RUN"',
+        ])
+        environment = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ['PATH'],
+                           RYZEN_TEST_HOME=str(root), GQ_HOME=str(root / 'queue'))
+        output = (root / 'launcher.log').open('wb')
+        self.addCleanup(output.close)
+        launcher = subprocess.Popen(['bash', '-c', harness], env=environment,
+                                    stdout=output, stderr=output, start_new_session=True)
+        self.addCleanup(self.stop_children, launcher, root)
+        eventually(lambda: (root / 'started').exists())
+        eventually(lambda: (root / 'job.json').exists())
+        self.assertFalse(lock_available(root / 'worktree.lock'))
+        return root, launcher
 
+    @staticmethod
+    def stop_children(launcher, root):
+        if (root / 'job.json').exists() and not (root / 'job-finished').exists():
+            pid = json.loads((root / 'job.json').read_text())['job']
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        processes = subprocess.check_output(['ps', '-axo', 'pid=,pgid='], text=True)
+        for line in processes.splitlines():
+            pid, group = map(int, line.split())
+            if group == launcher.pid:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        launcher.wait(timeout=5)
 
-class RyzenLifetimeTests(unittest.TestCase):
     def test_quick_keeps_worktree_lock_after_launcher_is_killed(self):
-        with tempfile.TemporaryDirectory(prefix="ryzen-lifetime-test-") as directory:
-            check_quick_lifetime(Path(directory))
+        directory = self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-kill-test-'))
+        root, launcher = self.start_launcher(directory)
+        launcher.kill()
+        self.assertEqual(launcher.wait(timeout=5), -signal.SIGKILL)
+        deadline = time.monotonic() + 1.3
+        while time.monotonic() < deadline:
+            self.assertFalse(lock_available(root / 'worktree.lock'))
+            time.sleep(0.02)
+        (root / 'finish').touch()
+        eventually(lambda: (root / 'job-finished').exists())
+        eventually(lambda: lock_available(root / 'worktree.lock'))
+
+    def test_term_keeps_lock_and_artifacts_until_remote_job_is_terminal(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-stop-test-'))
+        root, launcher = self.start_launcher(directory)
+        launcher.terminate()
+        eventually(lambda: (root / 'stop').exists())
+        stopped_at = time.monotonic()
+        while not (root / 'job-finished').exists():
+            self.assertIsNone(launcher.poll(), (root / 'launcher.log').read_text())
+            self.assertFalse(lock_available(root / 'worktree.lock'))
+            self.assertFalse((root / 'collected').exists())
+            self.assertLess(time.monotonic() - stopped_at, 7)
+            time.sleep(0.02)
+        self.assertEqual(launcher.wait(timeout=5), 143)
+        self.assertGreaterEqual(time.monotonic() - stopped_at, 2.8)
+        self.assertTrue((root / 'collected').exists())
+        self.assertTrue(lock_available(root / 'worktree.lock'))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()
