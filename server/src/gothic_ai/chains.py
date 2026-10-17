@@ -49,10 +49,12 @@ count=2..8 — только безымянные bandit, в месте с раз
 quests — описания книги: title, give (description, lines, remember), stages (journal, goals),
 done_journal, knows (что заказчик знает), asked (что просит), gold, xp, days, late_journal.
 Награда КАЖДОГО квеста в пределах сводки. Срок days=0, если он не нужен.
+give.description и talk.description — строка героя в меню, до 80 знаков.
 Реплика lines: speaker hero или npc, text. Записи журнала — от первого лица героя.
 В каждой стадии 1–4 цели, всего 1–5 стадий. Последняя стадия заканчивается ровно одним bring или talk.
 Цели: kind, npc, item, count, place, radius, npcs, days, talk, journal.
 - reach: place из сводки (точку выберет код) ИЛИ npc роли/заказчика/жителя сводки;
+  radius от 200 до 3000 см, обычно 500;
 - have: вещь item, count; npc — её держатель (у новой роли она обязана быть в carries),
   или place — код положит вещь там при начале стадии;
 - kill: npcs — список role, убить ВСЕХ персонажей каждой роли; чужих NPC убивать нельзя;
