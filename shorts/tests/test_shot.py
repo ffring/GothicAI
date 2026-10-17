@@ -45,6 +45,17 @@ def test_a_shot_has_to_record(tmp_path):
         load(path)
 
 
+@pytest.mark.parametrize(
+    "setting, expected", [("", True), ("brand = true\n", True), ("brand = false\n", False)]
+)
+def test_brand_defaults_on_and_reads_toml(tmp_path, setting, expected):
+    path = tmp_path / "probe.toml"
+    path.write_text(setting + SHOT)
+    shot = load(path)
+    assert shot.brand is expected
+    assert "brand" not in shot.extra
+
+
 def test_the_shots_in_the_repository_load():
     for path in (Path(__file__).parents[1] / "shots").glob("*.toml"):
         assert load(path).hero_lines

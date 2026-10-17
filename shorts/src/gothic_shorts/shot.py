@@ -40,6 +40,7 @@ class Shot:
     title: str
     script: str
     hook: str = ""
+    brand: bool = True
     npc: str = ""
     save: Path | None = None
     music: float = 0.35
@@ -83,7 +84,7 @@ class Shot:
 
 KNOWN = {
     *("title", "hook", "npc", "save", "music", "sound", "hero_voice", "size", "timeout", "description"),
-    *("script", "server_args"),
+    *("script", "server_args", "brand"),
 }
 
 
@@ -100,6 +101,7 @@ def load(path: Path) -> Shot:
         title=str(data.get("title", path.stem)),
         script=str(data["script"]),
         hook=str(data.get("hook", "")),
+        brand=bool(data.get("brand", True)),
         npc=str(data.get("npc", "")),
         save=(path.parent / save).resolve() if save else None,
         music=float(data.get("music", 0.35)),

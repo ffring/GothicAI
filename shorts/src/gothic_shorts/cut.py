@@ -10,6 +10,8 @@ the Russian short (`subtitles`, a SubRip file YouTube takes).
 from __future__ import annotations
 
 import json
+import math
+import re
 import shutil
 import subprocess
 import textwrap
@@ -29,6 +31,13 @@ HOOK_S = 2.8
 HERO_COLOR = (255, 214, 102)
 NPC_COLOR = (255, 255, 255)
 NAME_COLOR = (230, 190, 120)
+BRAND_FONT = "/System/Library/Fonts/Supplemental/PTSerif.ttc"
+BRAND = Path.home() / ".local/share/gothic-ai/brand/sting"
+SEAL = (W - 140, 110)
+OUTLINE = (20, 12, 8)
+# The Shorts interface covers these edges (shorts/explain/src/theme.ts).
+SAFE = (60, 150, W - 150, H - 380)  # left, top, right, bottom
+LOUD = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
 
 class CutError(RuntimeError):
@@ -123,12 +132,18 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
             raise CutError(f"the take has no {p.name}: was the segment recorded as `rec main`?")
     tl = build(read_events(events))
     subs = load_subs(take, lang, texts(shot, tl))
+    sting_duration = 0.0
+    if shot.brand:
+        for asset in (BRAND / "seal-corner.png", BRAND / "sting.mp4"):
+            if not asset.is_file():
+                raise CutError(f"missing brand asset: {asset}; brand = false disables the brand")
+        sting_duration = _duration(BRAND / "sting.mp4")
     out = out or take / f"short-{lang}.mp4"
     work = take / f"cut-{lang}"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
 
-    overlays = _overlays(shown(shot, tl, subs), work)
+    overlays = _overlays(shown(shot, tl, subs), work, brand=shot.brand)
     keep = tl.keep()
     hero = [line for line in tl.lines if line.hero and line.wav and Path(line.wav).is_file()]
 
@@ -138,6 +153,10 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
     first_png = 2 + len(hero)
     for o in overlays:
         inputs += ["-i", str(o.png)]
+    if shot.brand:
+        seal_input = first_png + len(overlays)
+        sting_input = seal_input + 1
+        inputs += ["-i", str(BRAND / "seal-corner.png"), "-i", str(BRAND / "sting.mp4")]
 
     f: list[str] = []
     # the game's sound and the hero's voice, on the recording's own time
@@ -159,6 +178,7 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
             f"afade=t=in:d={fade:.3f},afade=t=out:st={max(0.0, b - a - fade):.3f}:d={fade:.3f}[a{i}]"
         )
     f.append("".join(f"[v{i}][a{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=1[vc][ac]")
+    body_filters = list(f)
     f.append(f"[vc]scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H}[v]")
     last = "v"
     for i, o in enumerate(overlays):
@@ -167,7 +187,32 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
             f"enable='between(t,{o.start:.3f},{o.end:.3f})'[o{i}]"
         )
         last = f"o{i}"
-    f.append("[ac]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]")
+    duration = tl.cut_duration
+    if shot.brand:
+        # Master each part separately so the sting's own sound and the dialogue match.
+        loud, measured_duration = _normalization(inputs[:2 * first_png], body_filters, video=True)
+        sting_loud, _ = _normalization(
+            ["-i", str(BRAND / "sting.mp4")],
+            ["[0:a]aformat=sample_rates=48000:channel_layouts=stereo[ac]"],
+        )
+        # concat pads audio to each video segment's real end; nominal timeline seconds can be shorter.
+        duration = math.ceil(round(measured_duration, 3) * 30) / 30
+        f += [
+            f"[{last}][{seal_input}:v]overlay=x={SEAL[0]}:y={SEAL[1]}[sealed]",
+            f"[sealed]fps=30,tpad=stop_mode=clone:stop_duration={duration:.6f},"
+            f"trim=duration={duration:.6f},settb=AVTB,setpts=PTS-STARTPTS[bodyv]",
+            f"[ac]{loud},aresample=48000,apad,atrim=duration={duration:.6f},"
+            f"afade=t=out:st={max(0, duration - 0.02):.6f}:d=0.02[bodya]",
+            f"[{sting_input}:v]fps=30,setsar=1,settb=AVTB,setpts=PTS-STARTPTS[stingv]",
+            f"[{sting_input}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"atrim=duration={sting_duration:.6f},asetpts=PTS-STARTPTS,{sting_loud},aresample=48000,"
+            "afade=t=in:d=0.02,"
+            f"afade=t=out:st={max(0, sting_duration - 0.02):.6f}:d=0.02[stinga]",
+            "[bodyv][bodya][stingv][stinga]concat=n=2:v=1:a=1[vout][aout]",
+        ]
+        last = "vout"
+    else:
+        f.append("[ac]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]")
 
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *inputs,
@@ -179,15 +224,58 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
     done = subprocess.run(cmd, capture_output=True, text=True)
     if done.returncode != 0:
         raise CutError(f"ffmpeg failed:\n{done.stderr.strip()[-3000:]}")
-    _sheet(out, out.with_suffix(".png"), tl.cut_duration)
-    _transcript(shot, tl, subs, out.with_suffix(".md"))
+    _sheet(out, out.with_suffix(".png"), duration + sting_duration,
+           sting_start=duration if shot.brand else None)
+    _transcript(shot, tl, subs, out.with_suffix(".md"), sting_duration, body_duration=duration)
     return out
 
 
-def _overlays(on_screen: list[Shown], work: Path) -> list[Overlay]:
+def _duration(video: Path) -> float:
+    done = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(video)],
+        capture_output=True, text=True,
+    )
+    if done.returncode:
+        raise CutError(f"cannot read brand duration: {done.stderr.strip()}")
+    return float(done.stdout)
+
+
+def _normalization(inputs: list[str], filters: list[str], *, video: bool = False) -> tuple[str, float]:
+    """Measure loudness and the concat's real duration before rendering overlays and encoding video."""
+    pre = "alimiter=limit=0.75:level=false"
+    graph = ";".join([*filters, f"[ac]{pre},{LOUD}:print_format=json,aresample=48000,ashowinfo[probe]"])
+    video_map = ["-map", "[vc]"] if video else ["-vn"]
+    done = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", *inputs, "-filter_complex", graph,
+         *video_map, "-map", "[probe]", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    if done.returncode:
+        raise CutError(f"loudness measurement failed:\n{done.stderr.strip()[-3000:]}")
+    start = done.stderr.rindex("{")
+    measured = json.loads(done.stderr[start:done.stderr.index("}", start) + 1])
+    # Progress follows video timestamps; the audio can end later, including gaps inserted by concat.
+    samples = re.findall(r"\bpts:(\d+).*?\bnb_samples:(\d+)", done.stderr)
+    duration = max((int(pts) + int(count)) / 48000 for pts, count in samples)
+    if measured["input_i"] == "-inf":
+        return f"{pre},{LOUD}", duration  # a silent take needs no measured gain
+    return (f"{pre},{LOUD}:measured_I={measured['input_i']}:measured_TP={measured['input_tp']}:"
+            f"measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}:"
+            f"offset={measured['target_offset']}:linear=true"), duration
+
+
+def _overlays(on_screen: list[Shown], work: Path, *, brand: bool = True) -> list[Overlay]:
     out: list[Overlay] = []
     for i, s in enumerate(on_screen):
         png = work / f"{s.kind}{i}.png"
+        if brand:
+            size, chars, stroke = {"hook": (84, 18, 7), "caption": (64, 22, 6), "line": (62, 26, 6)}[s.kind]
+            color = HERO_COLOR if s.hero or s.kind == "caption" else NPC_COLOR
+            h = _brand_text_png(s.text, png, size, color, max_chars=chars, stroke=stroke, name=s.name)
+            center = 1290 if s.kind == "line" else 300
+            y = max(SAFE[1], min(center - h // 2, SAFE[3] - h))
+            out.append(Overlay(png, s.start, s.end, y))
+            continue
         if s.kind == "hook":
             h = _text_png(s.text, png, HOOK_FONT, 84, (255, 255, 255), max_chars=18, stroke=7)
             y = 300 - h // 2
@@ -200,6 +288,47 @@ def _overlays(on_screen: list[Shown], work: Path) -> list[Overlay]:
             y = 1290 - h // 2
         out.append(Overlay(png, s.start, s.end, y))
     return out
+
+
+def _brand_text_png(
+    text: str, path: Path, size: int, color: tuple[int, int, int], *,
+    max_chars: int, stroke: int, name: str,
+) -> int:
+    """Fit the stroked text inside Shorts' safe area, to the left of the fixed corner seal."""
+    width = SAFE[2] - SAFE[0]
+    while True:
+        font = ImageFont.truetype(BRAND_FONT, size, index=3)
+        name_font = ImageFont.truetype(BRAND_FONT, int(size * 0.62), index=3)
+        rows = []
+        for value, face, fill in [(name, name_font, NAME_COLOR), (text, font, color)]:
+            if not value:
+                continue
+            chars = max_chars
+            while True:
+                wrapped = textwrap.wrap(value, chars)
+                boxes = [face.getbbox(r, anchor="mt", stroke_width=stroke) for r in wrapped]
+                if all(b[2] - b[0] <= width for b in boxes) or chars == 1:
+                    break
+                chars -= 1
+            rows.extend((r, face, fill, box) for r, box in zip(wrapped, boxes, strict=True))
+        gap = int(size * 0.18)
+        height = sum(b[3] - b[1] for _, _, _, b in rows) + gap * max(0, len(rows) - 1)
+        if height <= SAFE[3] - SAFE[1]:
+            break
+        size -= 2
+        if size < 12:
+            raise CutError("text is too long for the Shorts safe area")
+    img = Image.new("RGBA", (W, max(1, height)), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    y = 0
+    for row, face, fill, box in rows:
+        # Account for the glyph bearings as well as the stroke when centering.
+        x = (SAFE[0] + SAFE[2] - box[0] - box[2]) / 2
+        draw.text((x, y - box[1]), row, font=face, fill=fill, anchor="mt",
+                  stroke_width=stroke, stroke_fill=OUTLINE)
+        y += box[3] - box[1] + gap
+    img.save(path)
+    return img.height
 
 
 def _text_png(
@@ -236,19 +365,31 @@ def _text_png(
     return height
 
 
-def _sheet(video: Path, png: Path, duration: float, n: int = 12) -> None:
+def _sheet(video: Path, png: Path, duration: float, n: int = 12, *, sting_start: float | None = None) -> None:
     """Frames over the whole short in one image, to look at it without playing it."""
     step = max(duration / n, 0.1)
+    select = f"fps=1/{step:.3f}"
+    if sting_start is not None:
+        # Reserve the last cell for the sting even when it is shorter than the sampling interval.
+        frames = [round(i * max(0, sting_start - 1 / 30) * 30 / (n - 2)) for i in range(n - 1)]
+        frames.append(round((sting_start + (duration - sting_start) / 2) * 30))
+        select = "select='" + "+".join(f"eq(n,{frame})" for frame in frames) + "'"
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(video),
-         "-vf", f"fps=1/{step:.3f},scale=270:480,tile=6x{(n + 5) // 6}", "-frames:v", "1", str(png)],
+         "-vf", f"{select},scale=270:480,tile=6x{(n + 5) // 6}", "-frames:v", "1", str(png)],
         check=False,
     )  # fmt: skip
 
 
-def _transcript(shot: Shot, tl: Timeline, subs: dict[str, str], path: Path) -> None:
+def _transcript(
+    shot: Shot, tl: Timeline, subs: dict[str, str], path: Path, sting_duration: float = 0.0,
+    *, body_duration: float | None = None,
+) -> None:
     rows = [f"# {shot.title}", "", f"Длина {tl.cut_duration:.1f} с (запись {tl.duration:.1f} с, вырезано "
             f"{tl.duration - tl.cut_duration:.1f} с пауз).", ""]  # fmt: skip
+    if sting_duration:
+        total = (tl.cut_duration if body_duration is None else body_duration) + sting_duration
+        rows += [f"С финалом: {total:.1f} с (+{sting_duration:.1f} с).", ""]
     if shot.hook:
         rows += [f"Зацепка: {subs[shot.hook]}", ""]
     heard = iter(tl.heard)
