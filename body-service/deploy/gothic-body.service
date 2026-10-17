@@ -1,0 +1,13 @@
+[Unit]
+Description=Gothic AI: NPC body policy (TCP JSONL port 47835)
+After=network-online.target
+
+[Service]
+# BODY_HOST is the server's listen address; keep it outside the public repository.
+EnvironmentFile=-%h/gothic-ai/gothic-ai.env
+ExecStart=%h/gothic-ai/body-net/body-service/deploy/run.sh
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

@@ -89,6 +89,8 @@ def main(argv=None) -> int:
             raise
     else:
         configure_serve_parser(subparsers)
+    from .serving_net import configure_serve_net_parser
+    configure_serve_net_parser(subparsers)
     args = parser.parse_args(argv)
     if args.command == "build-dataset":
         from .data import dataset_module
@@ -122,6 +124,9 @@ def main(argv=None) -> int:
     elif args.command == "serve":
         from .serving import serve_main
         return serve_main(args)
+    elif args.command == "serve-net":
+        from .serving_net import serve_net_main
+        return serve_net_main(args)
     else:
         raise ValueError("Unhandled policy command")
     print(json.dumps({key: result[key] for key in ("kind", "status", "passed", "checkpoint_sha256", "label_count", "accuracy")
