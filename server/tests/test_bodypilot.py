@@ -407,6 +407,21 @@ def fighter(seq=2, *, owned=False, entity=1, **changes):
     return row
 
 
+def unseen_fighter(seq, *, present=True, target_entity=2, **changes):
+    row = fighter(seq, owned=True, can_decide=False, action_mask_valid=False, **changes)
+    row["action_mask"] = [False] * 12
+    target = row["target"]
+    target.update(entity_id=target_entity, present=present, visible=False, current_valid=False)
+    allowed = {
+        "entity_id", "present", "visible", "current_valid", "last_known_position_world_cm",
+        "last_known_velocity_cm_s", "last_seen_game_ms", "last_known_age_ms",
+    }
+    for key in target:
+        if key not in allowed:
+            target[key] = None
+    return row
+
+
 def player_row(seq=1):
     row = observation(seq, entity=2)
     row["script_symbol"] = 99
@@ -1147,24 +1162,140 @@ async def test_nontransient_action_rejection_still_ends_immediately(reason):
 
 @pytest.mark.parametrize("change", [
     {"down": True}, {"hp": 0}, {"entity_id": 8},
-    {"present": False, "visible": False, "current_valid": False},
-    {"visible": False, "current_valid": False},
 ])
-async def test_hero_down_dead_or_target_lost_or_changed_ends_episode(change):
+async def test_hero_down_dead_or_target_changed_ends_episode(change):
     async with running() as rig:
         await rig.active()
         row = fighter(4, owned=True)
         row["target"].update(change)
-        if not row["target"]["current_valid"]:
-            allowed = {
-                "entity_id", "present", "visible", "current_valid", "last_known_position_world_cm",
-                "last_known_velocity_cm_s", "last_seen_game_ms", "last_known_age_ms",
-            }
-            for key in row["target"]:
-                if key not in allowed:
-                    row["target"][key] = None
         rig.bridge.emit(row)
         await rig.ended()
+
+
+async def test_temporary_target_invisibility_recovers_without_ending_the_fight():
+    async with running() as rig:
+        await rig.active()
+        for seq, game_ms in ((4, 1000), (5, 1250), (6, 1700)):
+            rig.clock.advance(0.6)
+            rig.bridge.emit(unseen_fighter(seq, t_game_ms=game_ms))
+            await eventually(lambda seq=seq: len(rig.policy.commands("step")) == seq - 2)
+            assert rig.pilot._reason is None
+            assert not rig.bridge.commands("body_release")
+        rig.bridge.emit(fighter(7, owned=True, t_game_ms=1750))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        assert rig.pilot._reason is None and rig.pilot._target_absent_game_ms is None
+        assert len(rig.pilot._policy_decisions) == 2  # Locked unseen rows are not policy decisions.
+        row = fighter(8, owned=True, t_game_ms=1800)
+        row["self"]["down"] = True
+        rig.bridge.emit(row)
+        await rig.ended()
+        assert rig.pilot.last_summary.reason == "npc_down"
+
+
+@pytest.mark.parametrize("present,target_entity", [(False, 0), (True, 2)])
+async def test_target_absence_or_invalidity_ends_after_one_game_second(present, target_entity):
+    async with running() as rig:
+        await rig.active()
+        for seq, game_ms in ((4, 1000), (5, 1999)):
+            rig.bridge.emit(unseen_fighter(
+                seq, present=present, target_entity=target_entity, t_game_ms=game_ms,
+            ))
+            await eventually(lambda seq=seq: len(rig.policy.commands("step")) == seq - 2)
+            assert rig.pilot._reason is None and not rig.bridge.commands("body_release")
+        rig.bridge.emit(unseen_fighter(6, present=present, target_entity=target_entity, t_game_ms=2000))
+        await rig.ended()
+        assert rig.pilot.last_summary.reason == "target_lost"
+        assert rig.pilot.last_summary.target_invisible_game_ms == 1000
+
+
+async def test_target_validity_recovery_restarts_the_absence_grace():
+    async with running() as rig:
+        await rig.active()
+        for seq, game_ms, visible in ((4, 1000, False), (5, 1700, True),
+                                      (6, 1900, False), (7, 2899, False)):
+            row = (fighter(seq, owned=True, t_game_ms=game_ms) if visible
+                   else unseen_fighter(seq, t_game_ms=game_ms))
+            rig.bridge.emit(row)
+            await eventually(lambda seq=seq: len(rig.policy.commands("step")) == seq - 2)
+            assert rig.pilot._reason is None and not rig.bridge.commands("body_release")
+        rig.bridge.emit(unseen_fighter(8, t_game_ms=2900))
+        await rig.ended()
+        assert rig.pilot.last_summary.reason == "target_lost"
+
+
+@pytest.mark.parametrize("change,reason", [("target", "target_changed"), ("weapon", "weapon_changed")])
+async def test_target_change_and_weapon_change_remain_immediate_while_unseen(change, reason):
+    async with running() as rig:
+        await rig.active()
+        row = unseen_fighter(4, target_entity=8 if change == "target" else 2)
+        if change == "weapon":
+            row["self"]["weapon_state"] = 0
+        rig.bridge.emit(row)
+        await rig.ended()
+        assert rig.pilot.last_summary.reason == reason
+
+
+@pytest.mark.parametrize("scope", [
+    {"entity_id": 8}, {"session_epoch": 2}, {"world_epoch": 2}, {"control_generation": 8},
+])
+async def test_native_visibility_restoration_respects_lease_identity(scope):
+    async with running() as rig:
+        await rig.active()
+        rig.pilot.on_message(events(event(
+            1, reason="native_restored", release_reason="target_visibility_lost", owner="native", **scope,
+        ), **{key: value for key, value in scope.items() if key in {"session_epoch", "world_epoch"}}))
+        assert rig.pilot._reason is None
+        assert rig.pilot._native_release_reason is None
+        rig.link._dispatch(events(event(
+            2, reason="native_restored", release_reason="target_visibility_lost", owner="native",
+        )))
+        await rig.ended()
+        assert rig.pilot.last_summary.reason == "target_lost"
+        assert rig.pilot.last_summary.native_release_reason == "target_visibility_lost"
+
+
+async def test_visibility_restoration_diagnostics_keep_last_ten_actual_policy_decisions(caplog):
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        await rig.active()
+        rig.bridge.emit(unseen_fighter(4, t_game_ms=1000))
+        await eventually(lambda: len(rig.policy.commands("step")) == 2)
+        rig.clock.advance(0.8)
+        rig.bridge.emit(fighter(5, owned=True, t_game_ms=1800))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        for seq in range(6, 18):
+            if seq == 8:
+                rig.bridge.action_rejections.append("masked")
+            rig.bridge.emit(fighter(seq, owned=True, t_game_ms=1800 + seq))
+            await eventually(lambda seq=seq: len(rig.bridge.commands("body_action")) == seq - 3)
+        rig.bridge.emit(unseen_fighter(18, t_game_ms=2000))
+        await eventually(lambda: len(rig.policy.commands("step")) == 16)
+        rig.clock.advance(0.24)
+        rig.bridge.emit(unseen_fighter(19, t_game_ms=2200))
+        await eventually(lambda: len(rig.policy.commands("step")) == 17)
+        rig.clock.advance(0.35)
+        rig.link._dispatch(events(event(
+            1, reason="native_restored", release_reason="target_visibility_lost", owner="native",
+            t_game_ms=2400,
+        )))
+        await rig.ended()
+        summary = rig.pilot.last_summary
+        assert summary.reason == "target_lost" and summary.release_confirmed
+        assert summary.target_invisible_seconds == pytest.approx(0.8)
+        assert summary.target_invisible_game_ms == 800
+        assert summary.target_invisible_last_seconds == pytest.approx(0.59)
+        assert summary.target_invisible_last_game_ms == 400
+        decisions = summary.last_policy_decisions
+        assert tuple(row.observation_seq for row in decisions) == tuple(range(8, 18))
+        assert all(row.action_id == 1 and row.sent for row in decisions)
+        assert not decisions[0].accepted and decisions[0].reason == "masked"
+        assert all(row.accepted and row.reason == "accepted" for row in decisions[1:])
+        assert not rig.pilot._policy_decisions
+        with pytest.raises(FrozenInstanceError):
+            decisions[0].accepted = True
+        assert "invisible_max_game_ms=800" in caplog.text
+        assert "invisible_last_game_ms=400" in caplog.text
+        assert "native_release_reason=target_visibility_lost release_confirmed=True" in caplog.text
 
 
 @pytest.mark.parametrize("takeover", ["native_restored", "lease_lost", "attached", "dialog", "unavailable"])

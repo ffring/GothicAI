@@ -47,6 +47,7 @@ EVENTS_INTERVAL = 0.150
 FINISH_TIMEOUT = 2.0
 MAX_JSON_BYTES = 256 * 1024
 TRANSIENT_REJECTION_LIMIT = 10
+TARGET_ABSENCE_TIMEOUT_MS = 1000
 # BodyController::validate and FightAlgo::resolve recheck live state after the
 # observation. These refusals retain the lease and need a fresh row, not a retry
 # of the same command. Scope, ownership and protocol failures remain terminal.
@@ -142,6 +143,16 @@ def _percentile(values: list[float], fraction: float) -> float | None:
 
 
 @dataclass(frozen=True)
+class PolicyDecisionTrace:
+    observation_seq: int
+    t_game_ms: int
+    action_id: int
+    sent: bool
+    accepted: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class FightSummary:
     """Completed fight and acknowledged cleanup, independent of mutable pilot state."""
 
@@ -171,6 +182,12 @@ class FightSummary:
     policy_timeouts_consecutive: int
     policy_timeout_wait_p95_ms: float | None
     policy_response_silence_ms: float | None
+    target_invisible_seconds: float
+    target_invisible_game_ms: int
+    target_invisible_last_seconds: float
+    target_invisible_last_game_ms: int
+    native_release_reason: str | None
+    last_policy_decisions: tuple[PolicyDecisionTrace, ...]
     fight_seconds: float | None
     release_confirmed: bool
     release_seconds: float | None
@@ -233,6 +250,15 @@ class BodyPilot:
         self._policy_timeouts = 0
         self._policy_timeouts_consecutive = 0
         self._policy_timeout_waits: list[float] = []
+        self._target_absent_game_ms: int | None = None
+        self._invisible_at: float | None = None
+        self._invisible_game_ms: int | None = None
+        self._invisible_seconds_max = 0.0
+        self._invisible_game_ms_max = 0
+        self._invisible_last_seconds = 0.0
+        self._invisible_last_game_ms = 0
+        self._native_release_reason: str | None = None
+        self._policy_decisions: deque[PolicyDecisionTrace] = deque(maxlen=10)
         self._latencies: list[float] = []
         self._packet_to_request: list[float] = []
         self._packet_to_response: list[float] = []
@@ -300,7 +326,13 @@ class BodyPilot:
                     and event.phase == "ownership"
                     and event.reason == "native_restored"
                 ):
-                    self._reason = "native_restored"
+                    self._capture_invisibility(self.clock(), event.t_game_ms)
+                    self._invisible_at = self._invisible_game_ms = None
+                    self._native_release_reason = event.release_reason
+                    self._reason = (
+                        "target_lost" if event.release_reason == "target_visibility_lost"
+                        else "native_restored"
+                    )
         elif isinstance(message, NpcEvent) and self.npc is None and not self._closing:
             npc = None
             if message.other.upper() in {"PLAYER", "HERO"} and message.kind in {
@@ -524,15 +556,38 @@ class BodyPilot:
     def _is_hero(self, row: dict[str, Any]) -> bool:
         return self._hero is None or row["target"]["entity_id"] == self._hero
 
+    def _capture_invisibility(self, now: float, game_ms: int) -> None:
+        if self._invisible_at is not None:
+            assert self._invisible_game_ms is not None
+            self._invisible_last_seconds = max(0.0, now - self._invisible_at)
+            self._invisible_last_game_ms = max(0, game_ms - self._invisible_game_ms)
+            self._invisible_seconds_max = max(self._invisible_seconds_max, self._invisible_last_seconds)
+            self._invisible_game_ms_max = max(
+                self._invisible_game_ms_max, self._invisible_last_game_ms,
+            )
+
     def _terminal(self, row: dict[str, Any]) -> str | None:
         own, target = row["self"], row["target"]
+        now = self.clock()
+        if not target["visible"]:
+            if self._invisible_at is None:
+                self._invisible_at, self._invisible_game_ms = now, row["t_game_ms"]
+            self._capture_invisibility(now, row["t_game_ms"])
+        else:
+            self._capture_invisibility(now, row["t_game_ms"])
+            self._invisible_at = self._invisible_game_ms = None
         if own["dead"] or own["unconscious"] or own["down"] or own["hp"] <= 0:
             return "npc_down"
-        if not target["present"] or not target["visible"] or not target["current_valid"]:
-            return "target_lost"
-        if not self._is_hero(row):
+        if target["entity_id"] and not self._is_hero(row):
             return "target_changed"
-        if target["down"] or target["hp"] is None or target["hp"] <= 0:
+        if not target["present"] or not target["current_valid"]:
+            if self._target_absent_game_ms is None:
+                self._target_absent_game_ms = row["t_game_ms"]
+            if row["t_game_ms"] - self._target_absent_game_ms >= TARGET_ABSENCE_TIMEOUT_MS:
+                return "target_lost"
+        else:
+            self._target_absent_game_ms = None
+        if target["current_valid"] and (target["down"] or target["hp"] is None or target["hp"] <= 0):
             return "hero_down"
         if own["weapon_state"] != 2:
             return "weapon_changed"
@@ -564,7 +619,8 @@ class BodyPilot:
                 self._reason = terminal
                 return
         elif (
-            self._terminal(raw)
+            not all(raw["target"][key] for key in ("present", "visible", "current_valid"))
+            or self._terminal(raw)
             or self.clock() - received_at > 0.100
             or self._now_game_ms - raw["t_game_ms"] > 100
         ):
@@ -705,6 +761,14 @@ class BodyPilot:
                 action = result.get("action_id")
                 if type(action) is not int or not 0 <= action <= 11 or not raw["action_mask"][action]:
                     raise PolicyError("invalid policy action")
+                self._policy_decisions.append(PolicyDecisionTrace(
+                    observation_seq=observation.observation_seq,
+                    t_game_ms=observation.t_game_ms,
+                    action_id=action,
+                    sent=False,
+                    accepted=False,
+                    reason="observation_superseded",
+                ))
                 latest = self.link.body_latest.get(self.lease.entity_id)
                 if latest is None or latest.observation_seq != observation.observation_seq:
                     return
@@ -719,6 +783,9 @@ class BodyPilot:
                     )
                 except BRIDGE_ERRORS as error:
                     reason = str(error).removeprefix("body command rejected: ") or type(error).__name__
+                    self._policy_decisions[-1] = PolicyDecisionTrace(
+                        observation.observation_seq, observation.t_game_ms, action, True, False, reason,
+                    )
                     self._action_rejections[reason] += 1
                     if isinstance(error, GameError) and reason in TRANSIENT_ACTION_REJECTIONS:
                         self._transient_rejections_consecutive += 1
@@ -726,6 +793,9 @@ class BodyPilot:
                             self._reason = "body_action_rejected"
                         return
                     raise
+                self._policy_decisions[-1] = PolicyDecisionTrace(
+                    observation.observation_seq, observation.t_game_ms, action, True, True, "accepted",
+                )
                 self._transient_rejections_consecutive = 0
                 self._decisions += 1
         except (OSError, ValueError, PolicyError):
@@ -799,6 +869,7 @@ class BodyPilot:
         if npc is None and self.lease is None and client is None:
             return
         finish_at = time.monotonic()
+        self._capture_invisibility(self.clock(), self._now_game_ms)
         fight_seconds = self.clock() - self._fight_at if self.lease is not None else None
         policy_response_age = self._policy_response_age()
         release_confirmed = watch_removed = False
@@ -911,6 +982,12 @@ class BodyPilot:
             policy_response_silence_ms=(
                 policy_response_age * 1000 if policy_response_age is not None else None
             ),
+            target_invisible_seconds=self._invisible_seconds_max,
+            target_invisible_game_ms=self._invisible_game_ms_max,
+            target_invisible_last_seconds=self._invisible_last_seconds,
+            target_invisible_last_game_ms=self._invisible_last_game_ms,
+            native_release_reason=self._native_release_reason,
+            last_policy_decisions=tuple(self._policy_decisions),
             fight_seconds=fight_seconds,
             release_confirmed=release_confirmed,
             release_seconds=release_seconds,
@@ -954,6 +1031,18 @@ class BodyPilot:
             summary.policy_response_silence_ms,
             unconfirmed if reason == "finish_deadline" else None,
         )
+        log.info(
+            "neural-body target diagnostics invisible_max_seconds=%s invisible_max_game_ms=%d "
+            "invisible_last_seconds=%s invisible_last_game_ms=%d "
+            "native_release_reason=%s release_confirmed=%s last_policy_decisions=%s",
+            summary.target_invisible_seconds,
+            summary.target_invisible_game_ms,
+            summary.target_invisible_last_seconds,
+            summary.target_invisible_last_game_ms,
+            summary.native_release_reason,
+            summary.release_confirmed,
+            summary.last_policy_decisions,
+        )
         self.npc = self.lease = self.client = None
         self._watched = self._watch_ready = False
         self._reason = None
@@ -969,6 +1058,13 @@ class BodyPilot:
         self._transient_rejections_consecutive = 0
         self._policy_timeouts = self._policy_timeouts_consecutive = 0
         self._policy_timeout_waits.clear()
+        self._target_absent_game_ms = self._invisible_at = self._invisible_game_ms = None
+        self._invisible_seconds_max = 0.0
+        self._invisible_game_ms_max = 0
+        self._invisible_last_seconds = 0.0
+        self._invisible_last_game_ms = 0
+        self._native_release_reason = None
+        self._policy_decisions.clear()
         self._policy_watchdog_at = None
         self._latencies.clear()
         self._packet_to_request.clear()
