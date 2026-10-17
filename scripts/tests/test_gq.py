@@ -531,6 +531,81 @@ def test_failed_systemd_launch_is_terminal_and_logged(gq, host, monkeypatch):
     assert records(q)[-1]["reason"] == "failed"
 
 
+def test_timed_out_launch_without_a_unit_releases_resources_and_finishes_once(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(q, "now", lambda: clock[0])
+    monkeypatch.setattr(gq, "process_token", lambda _pid: "live-launcher")
+    original_run = gq.subprocess.run
+    timed_out = False
+
+    def timeout_first_launch(args, **kwargs):
+        nonlocal timed_out
+        if args[0] == "systemd-run" and not timed_out:
+            timed_out = True
+            raise subprocess.TimeoutExpired(args, 15)
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(gq.subprocess, "run", timeout_first_launch)
+    ident = q.submit(spec("batch", threads=28, mem=20 * GIB))
+    q.tick()
+    clock[0] += 600
+    q.tick()
+    assert timed_out
+    assert q.get(ident)["status"] in {"cancelled", "failed"}
+    finished = [entry for entry in records(q) if entry["event"] == "finished"]
+    assert len(finished) == 1 and finished[0]["id"] == ident
+    assert not any(entry["event"] == "started" for entry in records(q))
+    q.finish(ident, "signal", "killed", "15")
+    replacement = q.submit(spec("batch", owner="replacement", threads=28, mem=20 * GIB))
+    q.tick()
+    assert q.get(replacement)["status"] == "starting"
+    assert len([entry for entry in records(q) if entry["event"] == "finished"]) == 1
+
+
+def test_timed_out_launch_with_a_live_unit_keeps_resources_until_stopped(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(q, "now", lambda: clock[0])
+    monkeypatch.setattr(gq, "process_token", lambda _pid: "live-launcher")
+    original_run = gq.subprocess.run
+    original_systemctl = gq.systemctl
+    timed_out = False
+    stops = []
+
+    def timeout_after_creating_unit(args, **kwargs):
+        nonlocal timed_out
+        result = original_run(args, **kwargs)
+        if args[0] == "systemd-run" and not timed_out:
+            timed_out = True
+            raise subprocess.TimeoutExpired(args, 15)
+        return result
+
+    def stopping_asynchronously(*args):
+        if "stop" in args:
+            stops.append(args)
+            # --no-block only requests a stop; the unit is still running.
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return original_systemctl(*args)
+
+    monkeypatch.setattr(gq.subprocess, "run", timeout_after_creating_unit)
+    monkeypatch.setattr(gq, "systemctl", stopping_asynchronously)
+    ident = q.submit(spec("batch", threads=28, mem=20 * GIB))
+    q.tick()
+    replacement = q.submit(spec("batch", owner="replacement", threads=28, mem=20 * GIB))
+    clock[0] += 600
+    q.tick()
+    assert stops and q.get(ident)["status"] == "starting"
+    assert q.get(replacement)["status"] == "queued"
+    assert not any(entry["event"] == "finished" for entry in records(q))
+    q.finish(ident, "signal", "killed", "15")
+    q.tick()
+    assert q.get(ident)["status"] == "cancelled"
+    assert q.get(replacement)["status"] == "starting"
+    finished = [entry for entry in records(q) if entry["event"] == "finished"]
+    assert len(finished) == 1 and finished[0]["reason"] == "cancelled"
+
+
 def test_exec_stop_post_callback_records_timeout_even_without_waiter(gq, host, monkeypatch):
     q = make_queue(gq, host, monkeypatch)
     ident = q.submit(spec())
@@ -727,6 +802,127 @@ def test_legacy_retry_waits_for_prior_exec_stop_post_to_unload(gq, host, monkeyp
     q.tick()
     assert q.get(ident)["status"] == "starting"
     assert len(calls(host, "systemd-run")) == 2
+
+
+@pytest.mark.parametrize("readmit", [False, True, "same-clock"])
+def test_stale_reconcile_completion_cannot_finish_a_deferred_or_readmitted_job(
+        gq, host, monkeypatch, readmit):
+    q = make_queue(gq, host, monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(q, "now", lambda: clock[0])
+    ident = q.submit(spec())
+    q.tick()
+    with q.transaction() as state:
+        state["jobs"][0]["retry"] = True
+    clock[0] += 6
+    original_systemctl = gq.systemctl
+    raced = False
+
+    def show_after_stop_callback(*args):
+        nonlocal raced
+        if "show" in args and not raced:
+            raced = True
+            # The old attempt lost the legacy-lock race. ExecStopPost updates
+            # the queue while another process is inspecting that same unit.
+            q.finish(ident, "success")
+            if readmit:
+                (host["systemd"] / f"gq-{ident}.json").unlink()
+                observed_at = clock[0]
+                # A clock adjustment can give the next reservation the same timestamp;
+                # its distinct attempt must still invalidate the stale observation.
+                clock[0] = 1000.0 if readmit == "same-clock" else observed_at + 1
+                q.tick()
+                clock[0] = observed_at + 1
+                assert q.get(ident)["status"] == "starting"
+            return subprocess.CompletedProcess(args, 0, (
+                "LoadState=loaded\nActiveState=inactive\nResult=success\n"
+                "ExecMainCode=1\nExecMainStatus=0\n"), "")
+        return original_systemctl(*args)
+
+    monkeypatch.setattr(gq, "systemctl", show_after_stop_callback)
+    q.reconcile()
+    job = q.get(ident)
+    assert raced
+    assert job["status"] == ("starting" if readmit else "queued")
+    if not readmit:
+        assert job["retry_pending"]
+    assert [entry["event"] for entry in records(q)] == ["submitted", "deferred"]
+    if not readmit:
+        (host["systemd"] / f"gq-{ident}.json").unlink()
+        q.tick()
+    assert q.started(ident)
+    q.finish(ident, "success")
+    assert q.get(ident)["status"] == "done"
+    assert [entry["event"] for entry in records(q)] == ["submitted", "deferred", "started", "finished"]
+    assert len(calls(host, "systemd-run")) == 2
+
+
+def test_stale_unloaded_observation_does_not_clear_a_new_attempts_retry(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    monkeypatch.setattr(q, "now", lambda: 1000.0)
+    ident = q.submit(spec())
+    q.tick()
+
+    def defer_current_attempt():
+        with q.transaction() as state:
+            state["jobs"][0]["retry"] = True
+        q.finish(ident, "success")
+
+    defer_current_attempt()
+    old_attempt = q.get(ident)["attempt"]
+    original_systemctl = gq.systemctl
+    raced = False
+
+    def show_after_next_attempt_deferred(*args):
+        nonlocal raced
+        if "show" in args and not raced:
+            raced = True
+            (host["systemd"] / f"gq-{ident}.json").unlink()
+            q.tick()
+            assert q.get(ident)["status"] == "starting"
+            defer_current_attempt()
+            systemd_state(host, ident, ActiveState="deactivating", SubState="stop-post")
+            return subprocess.CompletedProcess(args, 0, "LoadState=not-found\n", "")
+        return original_systemctl(*args)
+
+    monkeypatch.setattr(gq, "systemctl", show_after_next_attempt_deferred)
+    q.reconcile()
+    current = q.get(ident)
+    assert raced and current["attempt"] != old_attempt
+    assert current["status"] == "queued" and current["retry_pending"]
+    q.tick()
+    assert q.get(ident)["status"] == "queued"
+    assert len(calls(host, "systemd-run")) == 2
+    assert [entry["event"] for entry in records(q)] == ["submitted", "deferred", "deferred"]
+
+
+def test_deferred_batch_keeps_fifo_while_quick_can_run(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    first = q.submit(spec("batch", owner="first", threads=28))
+    q.tick()
+    with q.transaction() as state:
+        state["jobs"][0]["retry"] = True
+    q.finish(first, "success")
+    systemd_state(host, first, ActiveState="deactivating", SubState="stop-post")
+    second = q.submit(spec("batch", owner="second", threads=28))
+    quick = q.submit(spec())
+    q.tick()
+    assert q.get(first)["status"] == "queued" and q.get(first)["retry_pending"]
+    assert q.get(second)["status"] == "queued"
+    assert q.get(quick)["status"] == "starting"
+    assert q.started(quick)
+    q.finish(quick, "success")
+    (host["systemd"] / f"gq-{first}.json").unlink()
+    q.tick()
+    assert q.get(first)["status"] == "starting"
+    assert q.get(second)["status"] == "queued"
+    assert q.started(first)
+    q.finish(first, "success")
+    q.tick()
+    assert q.get(second)["status"] == "starting"
+    assert q.started(second)
+    started = [entry["id"] for entry in records(q) if entry["event"] == "started"]
+    assert started == [quick, first, second]
 
 
 def test_unit_lock_holder_detects_orphaned_children_in_its_own_cgroup(gq, tmp_path):

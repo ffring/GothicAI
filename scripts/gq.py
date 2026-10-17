@@ -82,6 +82,10 @@ def alive(waiter):
     return waiter is None or process_token(waiter["pid"]) == waiter["start"]
 
 
+def same_attempt(job, snapshot):
+    return (job.get("attempt"), job.get("reserved")) == (snapshot.get("attempt"), snapshot.get("reserved"))
+
+
 def systemctl(*args):
     return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
 
@@ -203,7 +207,7 @@ class Queue:
                    wait=(job["start"] or end) - job["submitted"],
                    duration=end - job["start"] if job["start"] else 0)
 
-    def cancel(self, job_id, owner, force=False, reason="cancelled"):
+    def cancel(self, job_id, owner, force=False, reason="cancelled", *, expected=None):
         stop = False
         found = False
         with self.transaction() as state:
@@ -213,6 +217,8 @@ class Queue:
                 found = True
                 if job["owner"] != owner and not force:
                     raise QueueError("чужая заявка: нужен --force")
+                if expected is not None and not same_attempt(job, expected):
+                    continue
                 if job["status"] in ACTIVE:
                     job["cancel_reason"] = reason
                     stop = True
@@ -223,10 +229,12 @@ class Queue:
         if stop:
             systemctl("stop", "--no-block", f"gq-{job_id}.service")
 
-    def finish(self, job_id, result, exit_code="exited", exit_status="0"):
+    def finish(self, job_id, result, exit_code="exited", exit_status="0", *, expected=None):
         with self.transaction() as state:
             for job in state["jobs"]:
-                if job["id"] != job_id or job["status"] in TERMINAL:
+                if job["id"] != job_id or job["status"] not in ACTIVE:
+                    continue
+                if expected is not None and (job["status"] != expected["status"] or not same_attempt(job, expected)):
                     continue
                 if job.get("retry") and not job.get("cancel_reason"):
                     job.update(status="queued", start=None, retry_pending=True)
@@ -264,7 +272,8 @@ class Queue:
                 if "LoadState=not-found" in previous.stdout.splitlines():
                     with self.transaction() as state:
                         for current in state["jobs"]:
-                            if current["id"] == job["id"]:
+                            if (current["id"] == job["id"] and current["status"] == "queued"
+                                    and same_attempt(current, job)):
                                 current.pop("retry_pending", None)
             if job["status"] not in TERMINAL and not alive(job.get("waiter")):
                 self.cancel(job["id"], job["owner"])
@@ -281,13 +290,13 @@ class Queue:
             if missing and job["status"] == "starting" and job.get("launcher") and alive(job["launcher"]):
                 continue
             if missing and self.now() - job.get("reserved", self.now()) > 5:
-                self.finish(job["id"], "failed", "exited", "1")
+                self.finish(job["id"], "failed", "exited", "1", expected=job)
                 continue
             active = props.get("ActiveState", "")
             if active in {"inactive", "failed"} and self.now() - job.get("reserved", self.now()) > 5:
                 self.finish(job["id"], props.get("Result", "failed"),
                             "exited" if props.get("ExecMainCode") == "1" else "killed",
-                            props.get("ExecMainStatus", "1"))
+                            props.get("ExecMainStatus", "1"), expected=job)
 
     def legacy_waiting(self):
         stat = self.legacy_lock.stat()
@@ -336,6 +345,8 @@ class Queue:
             batch_blocked = False
             for job in queued:
                 if job.get("retry_pending"):
+                    if job["class"] == "batch":
+                        batch_blocked = True
                     continue
                 kind = job["class"]
                 if kind == "batch":
@@ -365,7 +376,7 @@ class Queue:
                 with self.legacy_probe(kind == "quiet") as available:
                     if not available:
                         continue
-                job.update(status="starting", reserved=self.now(),
+                job.update(status="starting", reserved=self.now(), attempt=uuid.uuid4().hex,
                            launcher={"pid": os.getpid(), "start": process_token(os.getpid())})
                 active.append(job)
                 launch.append(dict(job))
@@ -377,8 +388,10 @@ class Queue:
     def launch(self, job):
         # Recheck cancellation after releasing the reservation transaction.
         current = self.get(job["id"])
+        if current["status"] != "starting" or not same_attempt(current, job):
+            return
         if current.get("cancel_reason"):
-            self.finish(job["id"], "cancelled", "exited", "143")
+            self.finish(job["id"], "cancelled", "exited", "143", expected=current)
             return
         env = {**job["env"], "GQ_HOME": str(self.home), "GQ_LEGACY_LOCK": str(self.legacy_lock),
                "GQ_PROFILE": self.profile_name}
@@ -404,16 +417,24 @@ class Queue:
             result = subprocess.run(args, capture_output=True, text=True, timeout=15)
             if result.returncode:
                 self.append_log(job["id"], result.stderr)
-                self.finish(job["id"], "failed", "exited", str(result.returncode))
+                self.finish(job["id"], "failed", "exited", str(result.returncode), expected=job)
             elif self.get(job["id"]).get("cancel_reason"):
                 systemctl("stop", "--no-block", "gq-" + job["id"] + ".service")
         except OSError as error:
             self.append_log(job["id"], str(error) + "\n")
-            self.finish(job["id"], "failed", "exited", "127")
+            self.finish(job["id"], "failed", "exited", "127", expected=job)
         except subprocess.TimeoutExpired as error:
             # A timed-out D-Bus request may have started the unit. Stop before releasing resources.
             self.append_log(job["id"], str(error) + "\n")
-            self.cancel(job["id"], job["owner"])
+            self.cancel(job["id"], job["owner"], expected=job)
+        finally:
+            # Only reservations still waiting for their launch call need a live launcher.
+            # Once the call returns (including timeout), reconcile can recover a missing
+            # unit without waiting for this run/pump process itself to exit.
+            with self.transaction() as state:
+                for current in state["jobs"]:
+                    if current["id"] == job["id"] and same_attempt(current, job):
+                        current.pop("launcher", None)
 
     def append_log(self, job_id, text):
         with (self.home / "logs" / f"{job_id}.log").open("a") as output:
