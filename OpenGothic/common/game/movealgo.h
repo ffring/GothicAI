@@ -113,6 +113,7 @@ class MoveAlgo final {
     EdgeProbe edgeAhead(const Tempest::Vec3& direction, float range) const;
 
   private:
+    friend class NpcController;
     // Opt-in native movement observation, scoped to one tick; absent outside a body trace.
     struct MovementTrace;
 

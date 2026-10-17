@@ -633,7 +633,14 @@ void NpcController::updateStateAction(World& world, Controlled& c, uint64_t now)
       if(auto* t=n.target()) {
         auto d=t->position()-p;
         s << " delta=" << d.x << ',' << d.y << ',' << d.z;
+        auto hit=world.physic()->rayNpc(n.mapWeaponBone(),t->centerPosition(),&n);
+        s << " fireRay=" << hit.hasCol << ":npc=" << identity(hit.npcHit)
+          << ":pos=" << hit.v.x << ',' << hit.v.y << ',' << hit.v.z;
         }
+      const auto& floor=n.mvAlgo.cache;
+      s << " cv=" << n.mvAlgo.characterVirtualActive() << " nativeFloor=" << floor.hasCol
+        << ":y=" << floor.v.y << ":vob=" << reinterpret_cast<uintptr_t>(floor.vob)
+        << ":object=" << reinterpret_cast<uintptr_t>(floor.uptr) << " inAir=" << n.isInAir();
       CharacterVirtualDiagnostics d;
       if(n.characterVirtualDiagnostics(d)) {
         auto& g=d.afterStairs;
@@ -641,7 +648,7 @@ void NpcController::updateStateAction(World& world, Controlled& c, uint64_t now)
           << ":type=" << g.ground.pointerType << ":layer=" << g.ground.layer
           << ":y=" << g.groundPosition.y;
         }
-      Log::i(s.str());
+      Tempest::Log::i(s.str());
       };
     trace(npc,"actor");
     world.detectNpc(npc.position(),6000,[&](Npc& n) {
