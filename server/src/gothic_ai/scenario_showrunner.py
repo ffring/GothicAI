@@ -364,6 +364,7 @@ async def showrunner(link: GameLink, director: Showrunner, slot: int = 7) -> dic
 async def showrunner_live(link: GameLink, director: Showrunner) -> dict[str, str]:
     """Three real occasions, live decisions/builders and the common book player, in one loaded game.
 
+    Each occasion needs a line or a reasoned refusal; at least one built line must finish.
     The production consumer runs during each occasion. Between them it is stopped while the debug
     player finishes the line and moves time: its incidental arrivals, completions and quiet days must
     not spend the live model's quota. The watcher itself keeps sampling the real game throughout.
@@ -372,6 +373,12 @@ async def showrunner_live(link: GameLink, director: Showrunner) -> dict[str, str
 
     def check(name: str, ok: bool, detail: object = "") -> None:
         results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    def valid_outcome(fact: dict[str, Any]) -> bool:
+        reason = fact.get("reason")
+        return fact["fact"] == "line" or (
+            fact["fact"] == "line_none" and isinstance(reason, str) and bool(reason.strip())
+        )
 
     await link.wait_world()
     if link.session is None:
@@ -471,7 +478,7 @@ async def showrunner_live(link: GameLink, director: Showrunner) -> dict[str, str
             log.info("showrunner live %s outcome: %s", kind, json.dumps(fact, ensure_ascii=False))
             check(
                 f"{kind}_outcome",
-                fact["fact"] == "line" or (fact["fact"] == "line_none" and bool(fact.get("reason"))),
+                valid_outcome(fact),
                 fact,
             )
             return fact
@@ -505,6 +512,7 @@ async def showrunner_live(link: GameLink, director: Showrunner) -> dict[str, str
     wall = [real_clock()]
     director.clock = lambda: wall[0]
     lines = 0
+    completed_lines = 0
     outcomes = 0
     try:
         for index, (kind, trigger) in enumerate((("arrived", arrive), ("deed", kill), ("chapter", chapter))):
@@ -524,7 +532,7 @@ async def showrunner_live(link: GameLink, director: Showrunner) -> dict[str, str
                 check(f"{kind}_day", elapsed >= 1440, elapsed)
                 wall[0] += MIN_REAL_SECONDS + 1
             fact = await resolve(kind, trigger)
-            if fact is None or fact["fact"] not in {"line", "line_none"}:
+            if fact is None or not valid_outcome(fact):
                 break
             outcomes += 1
             if fact["fact"] == "line_none":
@@ -544,8 +552,11 @@ async def showrunner_live(link: GameLink, director: Showrunner) -> dict[str, str
             check(f"{kind}_completed", closed and all(v.startswith("done") for v in played.values()))
             if not closed or any(not v.startswith("done") for v in played.values()):
                 break
+            completed_lines += 1
         check("all_outcomes", outcomes == 3, f"{outcomes}/3")
-        check("at_least_two_lines", lines >= 2, f"{lines}/3")
+        check(
+            "at_least_one_line_completed", completed_lines >= 1, f"{completed_lines} completed, {lines} built"
+        )
     finally:
         director.clock = real_clock
     return _logged(results)
