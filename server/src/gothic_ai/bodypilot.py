@@ -11,6 +11,7 @@ import math
 import time
 from collections import Counter, deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -32,9 +33,12 @@ from .protocol import (
 
 log = logging.getLogger(__name__)
 SERVICE_TIMEOUT = 0.100
+POLICY_TIMEOUT_LIMIT = 5
+POLICY_RESPONSE_TIMEOUT = 1.0
 BRIDGE_TIMEOUT = 0.250
 ACQUIRE_INTERVAL = 0.150
 ACQUIRE_WINDOW = 5.0
+AWAIT_BOUNDARY_MS = 1500
 MAX_FIGHT_SECONDS = 300.0
 HEARTBEAT_INTERVAL = 0.250
 HEARTBEAT_TIMEOUT = 0.500
@@ -42,6 +46,15 @@ LEASE_TIMEOUT_MS = 2000
 EVENTS_INTERVAL = 0.150
 FINISH_TIMEOUT = 2.0
 MAX_JSON_BYTES = 256 * 1024
+TRANSIENT_REJECTION_LIMIT = 10
+TARGET_ABSENCE_TIMEOUT_MS = 1000
+# BodyController::validate and FightAlgo::resolve recheck live state after the
+# observation. These refusals retain the lease and need a fresh row, not a retry
+# of the same command. Scope, ownership and protocol failures remain terminal.
+TRANSIENT_ACTION_REJECTIONS = frozenset({
+    "stale_observation", "expired", "expired_wall", "command_busy",
+    "target_invalid", "masked", "locked",
+})
 BRIDGE_ERRORS = (GameError, ConnectionClosed, OSError, TimeoutError)
 TARGET_IS_HERO = [
     "&&",
@@ -66,6 +79,8 @@ class PolicyClient:
         self.reader_task: asyncio.Task[None] | None = None
         self.pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self.ids = itertools.count(1)
+        self.last_response_at: float | None = None
+        self.response_received = asyncio.Event()
 
     async def connect(self) -> None:
         async with asyncio.timeout(SERVICE_TIMEOUT):
@@ -80,6 +95,8 @@ class PolicyClient:
                 response = json.loads(line)
                 if not isinstance(response, dict) or type(response.get("id")) is not int:
                     raise PolicyError("invalid policy response identity")
+                self.last_response_at = asyncio.get_running_loop().time()
+                self.response_received.set()
                 future = self.pending.get(response["id"])
                 if future is not None and not future.done():
                     future.set_result(response)
@@ -125,6 +142,58 @@ def _percentile(values: list[float], fraction: float) -> float | None:
     return sorted(values)[math.ceil(len(values) * fraction) - 1] if values else None
 
 
+@dataclass(frozen=True)
+class PolicyDecisionTrace:
+    observation_seq: int
+    t_game_ms: int
+    action_id: int
+    sent: bool
+    accepted: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class FightSummary:
+    """Completed fight and acknowledged cleanup, independent of mutable pilot state."""
+
+    npc: str | None
+    lease: BodyLease | None
+    reason: str
+    decisions: int
+    fallbacks: int
+    service_p50_ms: float | None
+    service_p95_ms: float | None
+    packet_to_request_p50_ms: float | None
+    packet_to_request_p95_ms: float | None
+    packet_to_response_p50_ms: float | None
+    packet_to_response_p95_ms: float | None
+    response_to_action_p50_ms: float | None
+    response_to_action_p95_ms: float | None
+    packet_to_action_p50_ms: float | None
+    packet_to_action_p95_ms: float | None
+    acquire_refusals: tuple[tuple[str, int], ...]
+    acquire_requests: int
+    acquire_completed: int
+    acquire_wait_p50_ms: float | None
+    acquire_wait_max_ms: float | None
+    action_rejections: tuple[tuple[str, int], ...]
+    transient_rejections_consecutive: int
+    policy_timeouts: int
+    policy_timeouts_consecutive: int
+    policy_timeout_wait_p95_ms: float | None
+    policy_response_silence_ms: float | None
+    target_invisible_seconds: float
+    target_invisible_game_ms: int
+    target_invisible_last_seconds: float
+    target_invisible_last_game_ms: int
+    native_release_reason: str | None
+    last_policy_decisions: tuple[PolicyDecisionTrace, ...]
+    fight_seconds: float | None
+    release_confirmed: bool
+    release_seconds: float | None
+    watch_removed: bool
+
+
 class BodyPilot:
     """Single-owner state machine with a separate wall-clock lease keepalive."""
 
@@ -163,18 +232,48 @@ class BodyPilot:
         self._now_game_ms = 0
         self._last_seq = 0
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._policy_watchdog_task: asyncio.Task[None] | None = None
+        self._policy_watchdog_at: float | None = None
         self._last_events_poll = 0.0
         self._acquiring = False
+        self._acquire_cancel = asyncio.Event()
         self._pending_acquire: BodyObservation | None = None
         self._symbol: int | None = None
         self._entity: int | None = None
         self._hero: int | None = None
         self._refusals: Counter[str] = Counter()
+        self._acquire_requests = 0
+        self._acquire_completed = 0
+        self._acquire_waits: list[float] = []
+        self._action_rejections: Counter[str] = Counter()
+        self._transient_rejections_consecutive = 0
+        self._policy_timeouts = 0
+        self._policy_timeouts_consecutive = 0
+        self._policy_timeout_waits: list[float] = []
+        self._target_absent_game_ms: int | None = None
+        self._invisible_at: float | None = None
+        self._invisible_game_ms: int | None = None
+        self._invisible_seconds_max = 0.0
+        self._invisible_game_ms_max = 0
+        self._invisible_last_seconds = 0.0
+        self._invisible_last_game_ms = 0
+        self._native_release_reason: str | None = None
+        self._policy_decisions: deque[PolicyDecisionTrace] = deque(maxlen=10)
         self._latencies: list[float] = []
+        self._packet_to_request: list[float] = []
+        self._packet_to_response: list[float] = []
+        self._response_to_action: list[float] = []
+        self._packet_to_action: list[float] = []
         self._decisions = 0
         self._fallbacks = 0
+        self._last_summary: FightSummary | None = None
         link.listeners.append(self.on_message)
         link.raw_body_listeners.append(self.on_body_packet)
+
+    @property
+    def last_summary(self) -> FightSummary | None:
+        """The last completed cleanup; an active fight never mutates this snapshot."""
+        return self._last_summary
 
     def _allowed(self, npc: str) -> bool:
         entry = self.people.get(npc)
@@ -227,7 +326,13 @@ class BodyPilot:
                     and event.phase == "ownership"
                     and event.reason == "native_restored"
                 ):
-                    self._reason = "native_restored"
+                    self._capture_invisibility(self.clock(), event.t_game_ms)
+                    self._invisible_at = self._invisible_game_ms = None
+                    self._native_release_reason = event.release_reason
+                    self._reason = (
+                        "target_lost" if event.release_reason == "target_visibility_lost"
+                        else "native_restored"
+                    )
         elif isinstance(message, NpcEvent) and self.npc is None and not self._closing:
             npc = None
             if message.other.upper() in {"PLAYER", "HERO"} and message.kind in {
@@ -241,6 +346,8 @@ class BodyPilot:
                 npc = message.other.upper()
             if npc is not None:
                 self._start(npc)
+        if self._reason is not None:
+            self._acquire_cancel.set()
         self._wake.set()
 
     def _start(self, npc: str) -> bool:
@@ -254,6 +361,7 @@ class BodyPilot:
             return False
         self.npc = npc
         self._reason = None
+        self._acquire_cancel.clear()
         self._attempt_at = self.clock()
         entry = self.people[npc]
         if entry.activity == "fight" and entry.state.upper() == "ZS_ATTACK":
@@ -265,6 +373,7 @@ class BodyPilot:
         return lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation
 
     def on_body_packet(self, packet: dict[str, Any]) -> None:
+        received_at = self.clock()
         rows = packet["observations"]
         if rows:
             self._now_game_ms = max(row["t_game_ms"] for row in rows)
@@ -279,7 +388,7 @@ class BodyPilot:
             if len(self._rows) >= 128:
                 self._reason = "observation_overflow"
                 break
-            self._rows.append((row, self.clock()))
+            self._rows.append((row, received_at))
         self._wake.set()
 
     async def run(self) -> None:
@@ -311,6 +420,7 @@ class BodyPilot:
 
     async def aclose(self) -> None:
         self._closing = True
+        self._acquire_cancel.set()
         self._wake.set()
         if self._running:
             await self._done.wait()
@@ -349,6 +459,34 @@ class BodyPilot:
                 self._wake.set()
                 return
             deadline = sent_at + HEARTBEAT_INTERVAL
+
+    def _policy_response_age(self) -> float | None:
+        if self._policy_watchdog_at is None or self.client is None:
+            return None
+        last_response = self.client.last_response_at
+        since = max(self._policy_watchdog_at, last_response or self._policy_watchdog_at)
+        return asyncio.get_running_loop().time() - since
+
+    async def _policy_watchdog(self) -> None:
+        """A missing observation cannot hide an unresponsive policy connection."""
+        assert self.client is not None
+        client = self.client
+        while (
+            self.client is client and self._policy_watchdog_at is not None
+            and not self._closing and self._reason is None
+        ):
+            client.response_received.clear()
+            age = self._policy_response_age()
+            assert age is not None
+            remaining = POLICY_RESPONSE_TIMEOUT - age
+            if remaining <= 0:
+                self._reason = "policy_timeout"
+                self._wake.set()
+                return
+            try:
+                await asyncio.wait_for(client.response_received.wait(), timeout=remaining)
+            except TimeoutError:
+                pass
 
     async def _tick(self) -> None:
         if self._reason:
@@ -418,15 +556,38 @@ class BodyPilot:
     def _is_hero(self, row: dict[str, Any]) -> bool:
         return self._hero is None or row["target"]["entity_id"] == self._hero
 
+    def _capture_invisibility(self, now: float, game_ms: int) -> None:
+        if self._invisible_at is not None:
+            assert self._invisible_game_ms is not None
+            self._invisible_last_seconds = max(0.0, now - self._invisible_at)
+            self._invisible_last_game_ms = max(0, game_ms - self._invisible_game_ms)
+            self._invisible_seconds_max = max(self._invisible_seconds_max, self._invisible_last_seconds)
+            self._invisible_game_ms_max = max(
+                self._invisible_game_ms_max, self._invisible_last_game_ms,
+            )
+
     def _terminal(self, row: dict[str, Any]) -> str | None:
         own, target = row["self"], row["target"]
+        now = self.clock()
+        if not target["visible"]:
+            if self._invisible_at is None:
+                self._invisible_at, self._invisible_game_ms = now, row["t_game_ms"]
+            self._capture_invisibility(now, row["t_game_ms"])
+        else:
+            self._capture_invisibility(now, row["t_game_ms"])
+            self._invisible_at = self._invisible_game_ms = None
         if own["dead"] or own["unconscious"] or own["down"] or own["hp"] <= 0:
             return "npc_down"
-        if not target["present"] or not target["visible"] or not target["current_valid"]:
-            return "target_lost"
-        if not self._is_hero(row):
+        if target["entity_id"] and not self._is_hero(row):
             return "target_changed"
-        if target["down"] or target["hp"] is None or target["hp"] <= 0:
+        if not target["present"] or not target["current_valid"]:
+            if self._target_absent_game_ms is None:
+                self._target_absent_game_ms = row["t_game_ms"]
+            if row["t_game_ms"] - self._target_absent_game_ms >= TARGET_ABSENCE_TIMEOUT_MS:
+                return "target_lost"
+        else:
+            self._target_absent_game_ms = None
+        if target["current_valid"] and (target["down"] or target["hp"] is None or target["hp"] <= 0):
             return "hero_down"
         if own["weapon_state"] != 2:
             return "weapon_changed"
@@ -458,7 +619,8 @@ class BodyPilot:
                 self._reason = terminal
                 return
         elif (
-            self._terminal(raw)
+            not all(raw["target"][key] for key in ("present", "visible", "current_valid"))
+            or self._terminal(raw)
             or self.clock() - received_at > 0.100
             or self._now_game_ms - raw["t_game_ms"] > 100
         ):
@@ -485,6 +647,8 @@ class BodyPilot:
                     return
                 self._acquiring = True
                 self._pending_acquire = observation
+                requested_at = self.clock()
+                self._acquire_requests += 1
                 try:
                     self.lease = await self.link.body_acquire(
                         self.npc,
@@ -492,14 +656,26 @@ class BodyPilot:
                         "neural-body",
                         mode="realtime",
                         timeout_ms=LEASE_TIMEOUT_MS,
+                        await_boundary_ms=min(
+                            AWAIT_BOUNDARY_MS,
+                            max(0, int((ACQUIRE_WINDOW - (requested_at - self._attempt_at)) * 1000)),
+                        ),
                         timeout=BRIDGE_TIMEOUT,
+                        cancel_event=self._acquire_cancel,
                     )
                 except (TimeoutError, OSError, ConnectionClosed):
                     # The bridge may own the body even though no receipt arrived.
                     self._reason = self._reason or "acquire_uncertain"
                     raise
                 except GameError:
-                    self._pending_acquire = None
+                    recovered = self.link.body_leases.get(observation.entity_id)
+                    if recovered is not None and recovered.provider == "neural-body":
+                        self.lease = recovered
+                        self._claimed_fights.add(self.npc)
+                    if self.link.body_acquire_pending(observation.entity_id):
+                        self._reason = self._reason or "acquire_uncertain"
+                    else:
+                        self._pending_acquire = None
                     raise
                 else:
                     self._pending_acquire = None
@@ -508,8 +684,10 @@ class BodyPilot:
             except (GameDisconnected, ConnectionClosed):
                 self._reason = "disconnected"
             except BRIDGE_ERRORS as error:
-                self._refusals[str(error)] += 1
+                self._refusals[str(error).removeprefix("body command rejected: ")] += 1
             else:
+                self._acquire_completed += 1
+                self._acquire_waits.append((self.clock() - requested_at) * 1000)
                 self._claimed_fights.add(self.npc)
                 self._entity = self.lease.entity_id
                 self._hero = self.lease.target_entity_id
@@ -522,25 +700,53 @@ class BodyPilot:
                     self._identity(self.lease),
                     dict(self._refusals),
                 )
+                # Establish the episode while waiting for the first leased row.
+                # The independent heartbeat already protects the lease during TCP
+                # connection and reset, so neither delays that row's first step.
+                self._initial_game_ms = observation.t_game_ms
+                if self._closing or self._reason:
+                    return
+                try:
+                    self.client = PolicyClient(self.url)
+                    await self.client.connect()
+                    await self.client.call(
+                        "reset",
+                        session_epoch=self.lease.session_epoch,
+                        world_epoch=self.lease.world_epoch,
+                        initial_game_ms=self._initial_game_ms,
+                    )
+                except TimeoutError:
+                    self._reason = "policy_timeout"
+                except (OSError, ValueError, PolicyError):
+                    self._reason = "policy_error"
             return
         if raw["observation_seq"] <= self.lease.acquired_observation_seq:
             return
         try:
-            if self.client is None:
-                self.client = PolicyClient(self.url)
-                await self.client.connect()
-                self._initial_game_ms = raw["t_game_ms"]
-                await self.client.call(
-                    "reset",
-                    session_epoch=self.lease.session_epoch,
-                    world_epoch=self.lease.world_epoch,
-                    initial_game_ms=self._initial_game_ms,
-                )
-            started = time.monotonic()
+            assert self.client is not None
+            started = self.clock()
+            if self._policy_watchdog_at is None:
+                self._policy_watchdog_at = asyncio.get_running_loop().time()
+                self._policy_watchdog_task = asyncio.create_task(self._policy_watchdog())
+            self._packet_to_request.append((started - received_at) * 1000)
             try:
                 result = await self.client.call("step", observation=raw, now_game_ms=self._now_game_ms)
+            except TimeoutError:
+                self._policy_timeouts += 1
+                self._policy_timeouts_consecutive += 1
+                self._policy_timeout_waits.append((self.clock() - started) * 1000)
+                if self._policy_timeouts_consecutive >= POLICY_TIMEOUT_LIMIT:
+                    self._reason = "policy_timeout"
+                return
             finally:
-                self._latencies.append((time.monotonic() - started) * 1000)
+                responded_at = self.clock()
+                self._latencies.append((responded_at - started) * 1000)
+            self._policy_timeouts_consecutive = 0
+            self._policy_watchdog_at = None
+            assert self._policy_watchdog_task is not None
+            self._policy_watchdog_task.cancel()
+            self._policy_watchdog_task = None
+            self._packet_to_response.append((responded_at - received_at) * 1000)
             if result.get("status") == "fallback":
                 self._fallbacks += 1
                 self._reason = f"policy_fallback:{result.get('reason')}"
@@ -555,15 +761,43 @@ class BodyPilot:
                 action = result.get("action_id")
                 if type(action) is not int or not 0 <= action <= 11 or not raw["action_mask"][action]:
                     raise PolicyError("invalid policy action")
+                self._policy_decisions.append(PolicyDecisionTrace(
+                    observation_seq=observation.observation_seq,
+                    t_game_ms=observation.t_game_ms,
+                    action_id=action,
+                    sent=False,
+                    accepted=False,
+                    reason="observation_superseded",
+                ))
                 latest = self.link.body_latest.get(self.lease.entity_id)
                 if latest is None or latest.observation_seq != observation.observation_seq:
                     return
-                await self.link.body_action(
-                    self.lease, observation, action, ttl_ms=100, timeout=BRIDGE_TIMEOUT
+                # Record the send boundary before awaiting its acknowledgement;
+                # bridge reply latency is not server decision-processing time.
+                sent_at = self.clock()
+                self._response_to_action.append((sent_at - responded_at) * 1000)
+                self._packet_to_action.append((sent_at - received_at) * 1000)
+                try:
+                    await self.link.body_action(
+                        self.lease, observation, action, ttl_ms=100, timeout=BRIDGE_TIMEOUT
+                    )
+                except BRIDGE_ERRORS as error:
+                    reason = str(error).removeprefix("body command rejected: ") or type(error).__name__
+                    self._policy_decisions[-1] = PolicyDecisionTrace(
+                        observation.observation_seq, observation.t_game_ms, action, True, False, reason,
+                    )
+                    self._action_rejections[reason] += 1
+                    if isinstance(error, GameError) and reason in TRANSIENT_ACTION_REJECTIONS:
+                        self._transient_rejections_consecutive += 1
+                        if self._transient_rejections_consecutive >= TRANSIENT_REJECTION_LIMIT:
+                            self._reason = "body_action_rejected"
+                        return
+                    raise
+                self._policy_decisions[-1] = PolicyDecisionTrace(
+                    observation.observation_seq, observation.t_game_ms, action, True, True, "accepted",
                 )
+                self._transient_rejections_consecutive = 0
                 self._decisions += 1
-        except TimeoutError:
-            self._reason = "policy_timeout"
         except (OSError, ValueError, PolicyError):
             self._reason = "policy_error"
         except BRIDGE_ERRORS:
@@ -579,6 +813,9 @@ class BodyPilot:
                 self._pending_acquire = None
                 return True
             try:
+                # Native status alone cannot prove a queued request was cancelled.
+                # Resolve its request identity before changing the observation watch.
+                await self.link.body_cancel_acquire(pending.entity_id, timeout=BRIDGE_TIMEOUT)
                 status = await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
             except BRIDGE_ERRORS as error:
                 if "unknown_entity" in str(error):
@@ -631,16 +868,26 @@ class BodyPilot:
         npc, client = self.npc, self.client
         if npc is None and self.lease is None and client is None:
             return
+        finish_at = time.monotonic()
+        self._capture_invisibility(self.clock(), self._now_game_ms)
+        fight_seconds = self.clock() - self._fight_at if self.lease is not None else None
+        policy_response_age = self._policy_response_age()
+        release_confirmed = watch_removed = False
+        release_seconds = None
         self._watch_ready = False
         unconfirmed = "acquire_status" if self._pending_acquire is not None else "body_release"
         lease = self.lease
         heartbeat, self._heartbeat_task = self._heartbeat_task, None
+        policy_watchdog, self._policy_watchdog_task = self._policy_watchdog_task, None
         try:
             # One wall-clock budget covers every route into ownership cleanup.
             async with asyncio.timeout(FINISH_TIMEOUT):
                 if heartbeat is not None:
                     heartbeat.cancel()
                     await asyncio.gather(heartbeat, return_exceptions=True)
+                if policy_watchdog is not None:
+                    policy_watchdog.cancel()
+                    await asyncio.gather(policy_watchdog, return_exceptions=True)
                 if self._pending_acquire is not None:
                     await self._recover_acquire()
                 lease = self.lease
@@ -674,6 +921,14 @@ class BodyPilot:
                     async with asyncio.timeout(BRIDGE_TIMEOUT):
                         await self._finish_status(lease)
         finally:
+            release_confirmed = bool(
+                lease is not None
+                and reason not in {"finish_deadline", "disconnected"}
+                and not self.link.closed.is_set()
+                and self.link.body_leases.get(lease.entity_id) != lease
+            )
+            if release_confirmed:
+                release_seconds = time.monotonic() - finish_at
             if reason == "finish_deadline" and lease is not None:
                 if self.link.body_leases.get(lease.entity_id) == lease:
                     self.link.body_leases.pop(lease.entity_id)
@@ -697,17 +952,96 @@ class BodyPilot:
                 with contextlib.suppress(*BRIDGE_ERRORS):
                     async with asyncio.timeout(BRIDGE_TIMEOUT):
                         await self.link.body_watch([], timeout=BRIDGE_TIMEOUT)
+                        watch_removed = True
+        summary = FightSummary(
+            npc=npc,
+            lease=lease,
+            reason=reason,
+            decisions=self._decisions,
+            fallbacks=self._fallbacks,
+            service_p50_ms=_percentile(self._latencies, 0.50),
+            service_p95_ms=_percentile(self._latencies, 0.95),
+            packet_to_request_p50_ms=_percentile(self._packet_to_request, 0.50),
+            packet_to_request_p95_ms=_percentile(self._packet_to_request, 0.95),
+            packet_to_response_p50_ms=_percentile(self._packet_to_response, 0.50),
+            packet_to_response_p95_ms=_percentile(self._packet_to_response, 0.95),
+            response_to_action_p50_ms=_percentile(self._response_to_action, 0.50),
+            response_to_action_p95_ms=_percentile(self._response_to_action, 0.95),
+            packet_to_action_p50_ms=_percentile(self._packet_to_action, 0.50),
+            packet_to_action_p95_ms=_percentile(self._packet_to_action, 0.95),
+            acquire_refusals=tuple(sorted(self._refusals.items())),
+            acquire_requests=self._acquire_requests,
+            acquire_completed=self._acquire_completed,
+            acquire_wait_p50_ms=_percentile(self._acquire_waits, 0.50),
+            acquire_wait_max_ms=max(self._acquire_waits, default=None),
+            action_rejections=tuple(sorted(self._action_rejections.items())),
+            transient_rejections_consecutive=self._transient_rejections_consecutive,
+            policy_timeouts=self._policy_timeouts,
+            policy_timeouts_consecutive=self._policy_timeouts_consecutive,
+            policy_timeout_wait_p95_ms=_percentile(self._policy_timeout_waits, 0.95),
+            policy_response_silence_ms=(
+                policy_response_age * 1000 if policy_response_age is not None else None
+            ),
+            target_invisible_seconds=self._invisible_seconds_max,
+            target_invisible_game_ms=self._invisible_game_ms_max,
+            target_invisible_last_seconds=self._invisible_last_seconds,
+            target_invisible_last_game_ms=self._invisible_last_game_ms,
+            native_release_reason=self._native_release_reason,
+            last_policy_decisions=tuple(self._policy_decisions),
+            fight_seconds=fight_seconds,
+            release_confirmed=release_confirmed,
+            release_seconds=release_seconds,
+            watch_removed=watch_removed,
+        )
         log.info(
             "neural-body end npc=%s reason=%s decisions=%d fallback=%d service_p50_ms=%s "
-            "service_p95_ms=%s acquire_refusals=%s unconfirmed=%s",
+            "service_p95_ms=%s packet_to_request_p50_ms=%s packet_to_request_p95_ms=%s "
+            "packet_to_response_p50_ms=%s packet_to_response_p95_ms=%s "
+            "response_to_action_p50_ms=%s response_to_action_p95_ms=%s "
+            "packet_to_action_p50_ms=%s packet_to_action_p95_ms=%s "
+            "acquire_refusals=%s acquire_requests=%d acquire_completed=%d "
+            "acquire_wait_p50_ms=%s acquire_wait_max_ms=%s "
+            "action_rejections=%s transient_rejections_consecutive=%d "
+            "policy_timeouts=%d policy_timeouts_consecutive=%d policy_timeout_wait_p95_ms=%s "
+            "policy_response_silence_ms=%s unconfirmed=%s",
             npc,
             reason,
             self._decisions,
             self._fallbacks,
-            _percentile(self._latencies, 0.50),
-            _percentile(self._latencies, 0.95),
-            dict(self._refusals),
+            summary.service_p50_ms,
+            summary.service_p95_ms,
+            summary.packet_to_request_p50_ms,
+            summary.packet_to_request_p95_ms,
+            summary.packet_to_response_p50_ms,
+            summary.packet_to_response_p95_ms,
+            summary.response_to_action_p50_ms,
+            summary.response_to_action_p95_ms,
+            summary.packet_to_action_p50_ms,
+            summary.packet_to_action_p95_ms,
+            dict(summary.acquire_refusals),
+            summary.acquire_requests,
+            summary.acquire_completed,
+            summary.acquire_wait_p50_ms,
+            summary.acquire_wait_max_ms,
+            dict(summary.action_rejections),
+            summary.transient_rejections_consecutive,
+            summary.policy_timeouts,
+            summary.policy_timeouts_consecutive,
+            summary.policy_timeout_wait_p95_ms,
+            summary.policy_response_silence_ms,
             unconfirmed if reason == "finish_deadline" else None,
+        )
+        log.info(
+            "neural-body target diagnostics invisible_max_seconds=%s invisible_max_game_ms=%d "
+            "invisible_last_seconds=%s invisible_last_game_ms=%d "
+            "native_release_reason=%s release_confirmed=%s last_policy_decisions=%s",
+            summary.target_invisible_seconds,
+            summary.target_invisible_game_ms,
+            summary.target_invisible_last_seconds,
+            summary.target_invisible_last_game_ms,
+            summary.native_release_reason,
+            summary.release_confirmed,
+            summary.last_policy_decisions,
         )
         self.npc = self.lease = self.client = None
         self._watched = self._watch_ready = False
@@ -718,5 +1052,24 @@ class BodyPilot:
         self._initial_game_ms = None
         self._symbol = self._entity = self._hero = None
         self._refusals.clear()
+        self._acquire_requests = self._acquire_completed = 0
+        self._acquire_waits.clear()
+        self._action_rejections.clear()
+        self._transient_rejections_consecutive = 0
+        self._policy_timeouts = self._policy_timeouts_consecutive = 0
+        self._policy_timeout_waits.clear()
+        self._target_absent_game_ms = self._invisible_at = self._invisible_game_ms = None
+        self._invisible_seconds_max = 0.0
+        self._invisible_game_ms_max = 0
+        self._invisible_last_seconds = 0.0
+        self._invisible_last_game_ms = 0
+        self._native_release_reason = None
+        self._policy_decisions.clear()
+        self._policy_watchdog_at = None
         self._latencies.clear()
+        self._packet_to_request.clear()
+        self._packet_to_response.clear()
+        self._response_to_action.clear()
+        self._packet_to_action.clear()
         self._decisions = self._fallbacks = 0
+        self._last_summary = summary

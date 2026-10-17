@@ -10,6 +10,8 @@
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
 #       intents moving the body, and an incident: the body reacts before the words (behavioral model:
 #       DECIDER_URL, or a fixed stand-in); with QUICK_URL the words are the quick model's line, at once
+#   neural: a one-handed bandit fights the hero under the P30 body pilot through the full lease cycle;
+#       requires GOTHIC_BODY_URL, a new game, >=10 decisions, no fallback, service p95 <=20 ms
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
 #       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
 #       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
@@ -245,6 +247,10 @@ GAME_BIN="${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}"
 LOG_DIR="${LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gothic-e2e.XXXXXX")}"
 TIMEOUT="${TIMEOUT:-240}"
 SCENARIO="${SCENARIO:-m0}"
+if [ "$SCENARIO" = neural ]; then
+  [ -n "${GOTHIC_BODY_URL:-}" ] || { echo 'scenario neural requires GOTHIC_BODY_URL=tcp://host:port' >&2; exit 2; }
+  [ -z "${SAVE:-}" ] || { echo 'scenario neural requires a new game (unset SAVE)' >&2; exit 2; }
+fi
 LLM="${LLM:-fake}"
 ASR="${ASR:-fake}"
 # own ports, so a server / ASR service running for a play session is left alone

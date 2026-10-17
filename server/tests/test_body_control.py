@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 from pathlib import Path
@@ -12,10 +13,12 @@ from gothic_ai.protocol import (
     PROTOCOL_VERSION,
     BodyAcquireCmd,
     BodyActionCmd,
+    BodyCancelAcquireCmd,
     BodyControlEvents,
     BodyControlResult,
     BodyControlStatus,
     BodyDisconnectCmd,
+    BodyReleaseCmd,
     Loading,
     Result,
     parse_game_message,
@@ -232,6 +235,13 @@ async def test_live_status_with_visibility_diagnostics_clears_restored_native_le
 
 
 @pytest.mark.parametrize("clock_domain", ["linux-clock-monotonic", "cxx-steady-clock"])
+def test_control_events_parse_live_engine_timestamps(clock_domain):
+    stream = events(event(1, wall_monotonic_ns=123_000_000, clock_domain=clock_domain))
+    assert stream.events[0].wall_monotonic_ns == 123_000_000
+    assert stream.events[0].clock_domain == clock_domain
+
+
+@pytest.mark.parametrize("clock_domain", ["linux-clock-monotonic", "cxx-steady-clock"])
 def test_status_parses_live_visibility_diagnostics(clock_domain):
     diagnostics = visibility_diagnostics(clock_domain=clock_domain, enabled=True, records_total=3)
     status = BodyControlStatus.model_validate(control_status(visibility_diagnostics=diagnostics))
@@ -363,3 +373,380 @@ def test_actual_native_control_encoder_reaches_strict_models_and_bridge_cache():
     assert link.body_session_epoch == acquire.session_epoch
     assert link.body_latest[acquire.entity_id].control_generation == acquire.control_generation
     assert link.pop_body_control_event().event_seq == stream.events[0].event_seq
+
+
+class PendingConnection(Connection):
+    def __init__(self):
+        super().__init__()
+        self.acquire = None
+        self.before_ack = False
+        self.restore_before_ack = False
+        self.immediate_acquire = False
+        self.drop_acquire_ack = False
+        self.release_races_grant = False
+        self.restore_during_cancel = False
+        self.cancel_error = None
+        self.status_error = None
+
+    def ownership(self, seq=1, **updates):
+        return events(event(
+            seq, provider=self.acquire["provider"], acquire_request_id=self.acquire["acquire_request_id"],
+            observation_seq=9, **updates,
+        ))
+
+    async def send(self, raw):
+        cmd = json.loads(raw)
+        self.sent.append(cmd)
+        if cmd["type"] == "body_acquire":
+            self.acquire = cmd
+            if self.before_ack:
+                ownership = self.ownership()
+                if self.restore_before_ack:
+                    ownership = events(*ownership.events, *self.ownership(
+                        2, reason="native_restored", owner="native", release_reason="watchdog_timeout",
+                    ).events)
+                self.link._dispatch(ownership)
+            if self.drop_acquire_ack:
+                return
+            value = receipt(
+                owner="scripted" if self.immediate_acquire else "native",
+                control_generation=7 if self.immediate_acquire else 0,
+                reason="acquired" if self.immediate_acquire else "acquire_pending",
+                acquire_request_id=cmd["acquire_request_id"],
+                observation_seq=9 if self.immediate_acquire else 0,
+            )
+        elif cmd["type"] == "body_events":
+            value = events().model_dump(mode="json")
+        elif cmd["type"] == "body_release":
+            if self.cancel_error is not None:
+                self.link._dispatch(Result(type="result", req=cmd["req"], ok=False,
+                                           error=self.cancel_error))
+                return
+            if self.restore_during_cancel:
+                self.link._dispatch(self.ownership(
+                    reason="native_restored", owner="native", release_reason="released",
+                ))
+            value = receipt(
+                owner="scripted" if self.release_races_grant else "native",
+                control_generation=7 if self.release_races_grant else 0,
+                release_pending=self.release_races_grant, reason="release_pending",
+                acquire_request_id=cmd["acquire_request_id"],
+            )
+        elif cmd["type"] == "body_control_status":
+            if self.status_error is not None:
+                self.link._dispatch(Result(type="result", req=cmd["req"], ok=False, error=self.status_error))
+                return
+            value = self.control_status
+        elif cmd["type"] == "body_watch":
+            value = {"generation": 1, "session_epoch": 1, "world_epoch": 1}
+        else:
+            raise AssertionError(cmd)
+        self.link._dispatch(Result(type="result", req=cmd["req"], ok=True, value=value))
+
+
+def pending_connected():
+    conn = PendingConnection()
+    link = conn.link = GameLink(conn)
+    link._dispatch(message(packet()))
+    return link, conn
+
+
+@pytest.mark.parametrize("bad", [-1, 2001, True, "1500"])
+def test_await_boundary_window_is_strict_and_bounded(bad):
+    with pytest.raises(ValidationError):
+        BodyAcquireCmd(req="r", entity_id=1, session_epoch=1, world_epoch=1,
+                       provider="scripted", await_boundary_ms=bad)
+
+
+def test_pending_cancel_does_not_weaken_normal_lease_validation():
+    scope = dict(req="r", entity_id=1, session_epoch=1, world_epoch=1, provider="scripted")
+    with pytest.raises(ValidationError):
+        BodyReleaseCmd(**scope, control_generation=0)
+    with pytest.raises(ValidationError):
+        BodyCancelAcquireCmd(**scope, acquire_request_id=0)
+    with pytest.raises(ValidationError):
+        BodyCancelAcquireCmd(**scope, control_generation=7, acquire_request_id=4)
+    assert BodyCancelAcquireCmd(**scope, acquire_request_id=4).control_generation == 0
+
+
+async def test_pending_acquire_accepts_ownership_before_receipt_and_uses_actual_observation_seq():
+    link, conn = pending_connected()
+    conn.before_ack = True
+    lease = await link.body_acquire("NPC", link.body_latest[1], "scripted", await_boundary_ms=1500)
+    assert lease.acquired_observation_seq == 9
+    assert lease.control_generation == 7
+    assert conn.acquire["await_boundary_ms"] == 1500
+    assert conn.acquire["acquire_request_id"] > 0
+    assert not link.body_acquire_pending(1)
+
+
+@pytest.mark.parametrize("same_packet", [True, False])
+async def test_pending_acquire_never_publishes_a_grant_restored_before_it_resumes(same_packet):
+    link, conn = pending_connected()
+    task = asyncio.create_task(link.body_acquire(
+        "NPC", link.body_latest[1], "scripted", await_boundary_ms=1500,
+    ))
+    await asyncio.sleep(0)
+    acquired = conn.ownership().events[0]
+    restored = acquired.model_copy(update={
+        "event_seq": 2, "reason": "native_restored", "owner": "native",
+        "release_reason": "watchdog_timeout",
+    })
+    if same_packet:
+        link._dispatch(events(acquired, restored))
+    else:
+        link._dispatch(events(acquired))
+        link._dispatch(events(restored))
+    with pytest.raises(GameError, match="already released: watchdog_timeout"):
+        await task
+    assert not link.body_owned("NPC") and not link.body_leases
+    assert not link.body_acquire_pending(1)
+    assert not any(cmd["type"] == "body_release" for cmd in conn.sent)
+
+
+@pytest.mark.parametrize("immediate", [False, True])
+async def test_restoration_before_acquire_receipt_also_prevents_publication(immediate):
+    link, conn = pending_connected()
+    conn.before_ack = conn.restore_before_ack = True
+    conn.immediate_acquire = immediate
+    with pytest.raises(GameError, match="already released"):
+        await link.body_acquire("NPC", link.body_latest[1], "scripted", await_boundary_ms=1500)
+    assert not link.body_leases and not link.body_acquire_pending(1)
+    assert not any(cmd["type"] == "body_release" for cmd in conn.sent)
+
+
+@pytest.mark.parametrize("foreign", [
+    {"acquire_request_id": 0}, {"provider": "other"}, {"mode": "lockstep"},
+    {"target_entity_id": 3}, {"control_generation": 8}, {"entity_id": 2},
+    {"session_epoch": 2}, {"world_epoch": 2},
+])
+async def test_foreign_restoration_does_not_invalidate_pending_grant(foreign):
+    link, conn = pending_connected()
+    task = asyncio.create_task(link.body_acquire(
+        "NPC", link.body_latest[1], "scripted", await_boundary_ms=1500,
+    ))
+    await asyncio.sleep(0)
+    link._dispatch(conn.ownership())
+    restored = conn.ownership(
+        2, reason="native_restored", owner="native", release_reason="watchdog_timeout",
+    ).events[0].model_copy(update=foreign)
+    link._dispatch(events(restored, session_epoch=restored.session_epoch, world_epoch=restored.world_epoch))
+    lease = await task
+    assert lease.control_generation == 7 and link.body_owned("NPC")
+
+
+async def test_cancelling_pending_acquire_does_not_cache_an_already_restored_racing_grant():
+    link, conn = pending_connected()
+    conn.release_races_grant = conn.restore_during_cancel = True
+    task = asyncio.create_task(link.body_acquire(
+        "NPC", link.body_latest[1], "scripted", await_boundary_ms=1500,
+    ))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not link.body_leases and not link.body_acquire_pending(1)
+    await link.body_watch([])
+    assert conn.sent[-1]["type"] == "body_watch"
+
+
+async def test_pending_receipt_is_not_a_lease_and_foreign_events_cannot_complete_it():
+    link, conn = pending_connected()
+    task = asyncio.create_task(link.body_acquire(
+        "NPC", link.body_latest[1], "scripted", await_boundary_ms=1500,
+    ))
+    await asyncio.sleep(0)
+    assert not link.body_leases and not task.done()
+    for seq, update in enumerate([
+        {"acquire_request_id": conn.acquire["acquire_request_id"] + 1},
+        {"provider": "other"}, {"target_entity_id": 3},
+    ], 1):
+        wrong = conn.ownership(seq).model_dump(mode="json")
+        wrong["events"][0].update(update)
+        link._dispatch(BodyControlEvents.model_validate(wrong))
+    await asyncio.sleep(0)
+    assert not task.done() and not link.body_leases
+    link._dispatch(conn.ownership(4))
+    assert (await task).acquired_observation_seq == 9
+
+
+@pytest.mark.parametrize("reason", ["expired", "target_changed", "actor_down", "talking", "released",
+                                   "disconnect", "loading"])
+async def test_pending_cancellation_event_never_installs_a_lease(reason):
+    link, conn = pending_connected()
+    task = asyncio.create_task(link.body_acquire(
+        "NPC", link.body_latest[1], "scripted", await_boundary_ms=1500,
+    ))
+    await asyncio.sleep(0)
+    link._dispatch(conn.ownership(
+        reason="acquire_cancelled", acquire_cancel_reason=reason, owner="native", control_generation=0,
+    ))
+    with pytest.raises(GameError, match=reason):
+        await task
+    assert not link.body_leases and not link.body_acquire_pending(1)
+    assert not any(cmd["type"] == "body_release" for cmd in conn.sent)
+
+
+async def test_lost_pending_receipt_is_cancelled_by_client_request_id_before_returning():
+    link, conn = pending_connected()
+    conn.drop_acquire_ack = True
+    with pytest.raises(TimeoutError):
+        await link.body_acquire("NPC", link.body_latest[1], "scripted",
+                                await_boundary_ms=1500, timeout=0.010)
+    cancel = conn.sent[-1]
+    assert cancel["type"] == "body_release" and cancel["control_generation"] == 0
+    assert cancel["acquire_request_id"] == conn.acquire["acquire_request_id"]
+    assert not link.body_leases and not link.body_acquire_pending(1)
+
+
+async def test_pending_task_cancellation_retains_a_racing_grant_for_authoritative_release():
+    link, conn = pending_connected()
+    conn.release_races_grant = True
+    task = asyncio.create_task(link.body_acquire(
+        "NPC", link.body_latest[1], "scripted", await_boundary_ms=1500,
+    ))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not link.body_acquire_pending(1)
+    assert link.body_leases[1].control_generation == 7
+    assert conn.sent[-1]["acquire_request_id"] == conn.acquire["acquire_request_id"]
+
+
+async def test_task_cancellation_after_grant_event_still_releases_the_request():
+    link, conn = pending_connected()
+    task = asyncio.create_task(link.body_acquire(
+        "NPC", link.body_latest[1], "scripted", await_boundary_ms=1500,
+    ))
+    await asyncio.sleep(0)
+    link._dispatch(conn.ownership())
+    assert not link.body_acquire_pending(1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert conn.sent[-1]["type"] == "body_release"
+    assert conn.sent[-1]["acquire_request_id"] == conn.acquire["acquire_request_id"]
+    assert not link.body_leases
+
+
+async def test_grant_before_lost_receipt_survives_failed_cancel_until_native_restoration():
+    link, conn = pending_connected()
+    conn.before_ack = conn.drop_acquire_ack = True
+    conn.cancel_error = "cancel_busy"
+    conn.status_error = "status_busy"
+    with pytest.raises(TimeoutError):
+        await link.body_acquire("NPC", link.body_latest[1], "scripted",
+                                await_boundary_ms=1500, timeout=0.010)
+    assert not link.body_acquire_pending(1)
+    assert link.body_leases[1].control_generation == 7 and link.body_owned("NPC")
+    link._dispatch(conn.ownership(2, reason="native_restored", owner="native"))
+    assert not link.body_leases and not link.body_owned("NPC")
+    await link.body_watch([])
+
+
+async def test_loading_cancels_local_pending_wait_and_late_events_cannot_recreate_lease():
+    link, conn = pending_connected()
+    task = asyncio.create_task(link.body_acquire(
+        "NPC", link.body_latest[1], "scripted", await_boundary_ms=1500,
+    ))
+    await asyncio.sleep(0)
+    link._dispatch(Loading(type="loading"))
+    link._dispatch(conn.ownership())
+    with pytest.raises(GameError, match="invalidated world"):
+        await task
+    assert not link.body_leases and not link.body_acquire_pending(1)
+
+
+@pytest.mark.parametrize("status_error,cleared", [("unknown_entity", True), ("status_busy", False)])
+async def test_pending_actor_removal_clears_scope_only_on_authoritative_status(status_error, cleared):
+    link, conn = pending_connected()
+    task = asyncio.create_task(link.body_acquire(
+        "NPC", link.body_latest[1], "scripted", await_boundary_ms=1500,
+    ))
+    await asyncio.sleep(0)
+    conn.cancel_error = "unknown_entity"
+    conn.status_error = status_error
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert link.body_acquire_pending(1) is not cleared
+    if cleared:
+        await link.body_watch([])
+        assert conn.sent[-1]["type"] == "body_watch"
+    else:
+        with pytest.raises(GameError, match="acquisition is pending"):
+            await link.body_watch(["OTHER"])
+        await link.body_watch([])
+        assert conn.sent[-1]["npcs"] == []
+
+
+async def orphaned_pending():
+    link, conn = pending_connected()
+    conn.drop_acquire_ack = True
+    conn.cancel_error = "cancel_busy"
+    conn.status_error = "status_busy"
+    with pytest.raises(TimeoutError):
+        await link.body_acquire("NPC", link.body_latest[1], "scripted",
+                                await_boundary_ms=1500, timeout=0.010)
+    assert link.body_acquire_pending(1)
+    return link, conn
+
+
+@pytest.mark.parametrize("reason,cancel_reason", [
+    ("acquired", ""), ("acquire_cancelled", "released"), ("acquire_cancelled", "expired"),
+    ("expired", ""),
+])
+async def test_late_terminal_event_clears_orphan_and_allows_watch_and_next_acquire(reason, cancel_reason):
+    link, conn = await orphaned_pending()
+    request_id = conn.acquire["acquire_request_id"]
+    link._dispatch(conn.ownership(
+        reason=reason, acquire_cancel_reason=cancel_reason,
+        owner="scripted" if reason == "acquired" else "native",
+        control_generation=7 if reason == "acquired" else 0,
+    ))
+    assert not link.body_acquire_pending(1)
+    if reason == "acquired":
+        assert link.body_leases[1].control_generation == 7 and link.body_owned("NPC")
+        link._dispatch(conn.ownership(2, reason="native_restored", owner="native"))
+        assert not link.body_leases
+    await link.body_watch([])
+    await link.body_watch(["NPC"])
+    conn.drop_acquire_ack = False
+    conn.immediate_acquire = True
+    lease = await link.body_acquire("NPC", link.body_latest[1], "scripted", await_boundary_ms=1500)
+    assert lease.control_generation == 7
+    assert conn.acquire["acquire_request_id"] != request_id
+
+
+@pytest.mark.parametrize("state,cleared", [
+    ("native", True), ("absent", True), ("pending", False), ("scripted", False),
+    ("old_world", False), ("old_session", False),
+])
+async def test_status_clears_orphan_only_when_current_world_confirms_no_request(state, cleared):
+    link, conn = await orphaned_pending()
+    actor = receipt(owner="scripted" if state == "scripted" else "native", control_generation=0)
+    for name in ("type", "accepted", "duplicate", "reason"):
+        actor.pop(name)
+    actor.update(
+        provider="", mode="native", t_game_ms=150, observation_seq=3, observed_game_ms=150,
+        watchdog_timeout_ms=0, control_allowed=False, can_decide=False, action_mask=[False] * 12,
+        acquire_request_id=conn.acquire["acquire_request_id"] if state == "pending" else 0,
+    )
+    if state == "old_world":
+        actor["world_epoch"] = 0
+    elif state == "old_session":
+        actor["session_epoch"] = 2
+    conn.status_error = None
+    conn.control_status = control_status(
+        *([] if state == "absent" else [actor]),
+        session_epoch=actor["session_epoch"], world_epoch=actor["world_epoch"],
+    )
+    await link.body_control_status()
+    assert link.body_acquire_pending(1) is not cleared
+    await link.body_watch([])
+    if cleared:
+        await link.body_watch(["NPC"])
+    else:
+        with pytest.raises(GameError, match="acquisition is pending"):
+            await link.body_watch(["NPC"])

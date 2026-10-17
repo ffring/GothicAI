@@ -28,6 +28,9 @@ class AiQueue {
       // Extended section, only for print-screen
       int               i2    =0;
       std::string       s1;
+      // Transient provenance, deliberately absent from saves. Only the actor's own
+      // ZS_ATTACK callback may mark actions as replaceable by body authority.
+      Npc*              nativeCombatTarget=nullptr;
       };
 
     void     save(Serialize& fout) const;
@@ -40,6 +43,7 @@ class AiQueue {
     void     pushFront(AiAction&& a);
     AiAction pop();
     int      aiOutputOrderId() const;
+    bool     nativeCombatOnly(const Npc* target) const;
 
     void     onWldItemRemoved(const Item& itm);
 

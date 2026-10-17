@@ -585,6 +585,11 @@ void AiBridge::Impl::onStartLoading() {
     return;
     }
   saving = false;
+  // Deliver cancellation with the old identity before reset invalidates and clears its
+  // bounded event stream. The loading notification follows it on the same transport.
+  BodyController::cancelPending("loading");
+  if(connected)
+    send(BodyController::drainJson());
   resetBodyObservations();
   if(chat!=nullptr) {
     chat->closeInput();
