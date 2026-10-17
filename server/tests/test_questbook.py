@@ -21,6 +21,7 @@ from tests.test_director import QUEST as VANILLA_QUEST
 
 THIEF = "DIR_NPC_2"
 GOODS = "ITFO_WINE"
+FREEPOINT = "FP_ROAM_NW_FARM1_FIELD_01"
 FUNCS = (
     "NPC_HASITEMS",
     "NPC_GETDISTTOWP",
@@ -431,6 +432,40 @@ def test_the_code_goes_through_a_quest_before_it_is_made():
     assert problems(nowhere, _ground()) == ["стадия 1, цель 1: точки NW_NOWHERE нет в книге мест"]
 
 
+@pytest.mark.parametrize("point", ["NW_FARM1_FIELD_01", FREEPOINT])
+def test_reach_requires_a_waypoint_when_the_ground_knows_point_kinds(point):
+    places = PlaceBook({**BOOK, "points": {**BOOK["points"], FREEPOINT: 2}})
+    ground = _ground(point=lambda p: places.of(p) is not None, waypoint=places.is_waypoint)
+    q = _quest(stages=[Stage("Дойти до поля.", [Goal("reach", point=point)]), *_quest().stages[1:]])
+    expected = (
+        [f"стадия 1, цель 1: точка {point} — не вейпоинт: цель «дойти» не работает с фрипоинтами"]
+        if point == FREEPOINT
+        else []
+    )
+    assert problems(q, ground) == expected
+
+
+def test_ground_without_point_kinds_keeps_its_existing_reach_validation():
+    q = _quest(stages=[Stage("Дойти до поля.", [Goal("reach", point=FREEPOINT)]), *_quest().stages[1:]])
+    ground = _ground(point=lambda p: p == FREEPOINT)
+    assert ground.waypoint is None
+    assert problems(q, ground) == []
+
+
+@pytest.mark.parametrize("kind", ["have", "bring"])
+def test_items_may_be_inserted_at_freepoints(kind):
+    goal = Goal(kind, item=GOODS, point=FREEPOINT)
+    if kind == "bring":
+        goal.npc, goal.talk = HILDA, _talk("Вот вино.")
+    q = _quest(
+        stages=[
+            Stage("Забрать вино с поля.", [goal]),
+            Stage("Рассказать Хильде.", [Goal("talk", npc=HILDA, talk=_talk("Всё сделано."))]),
+        ]
+    )
+    assert problems(q, _ground(point=lambda p: p == FREEPOINT, waypoint=lambda p: False)) == []
+
+
 async def _book(fake: FakeGame, store: MemoryStore, graph) -> tuple[Any, QuestBook, StoryPatches, Chronicle]:  # noqa: F811
     fake.vars = {"KAPITEL": 1, "XP_AMBIENT": 50}
     fake.npc_states = {n: {"state": "alive", "name": name} for n, name in NAMES.items()}
@@ -452,6 +487,27 @@ async def _book(fake: FakeGame, store: MemoryStore, graph) -> tuple[Any, QuestBo
     book = QuestBook(link, graph, patches, chronicle, director, places=PlaceBook(BOOK))
     await _until(lambda: patches.branch is not None and chronicle.branch is not None)
     return link_cm, book, patches, chronicle
+
+
+async def test_the_books_ground_knows_waypoints_and_freepoints(graph):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, _, _ = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        book.places = PlaceBook({**BOOK, "points": {**BOOK["points"], FREEPOINT: 2}})
+        ground = await book.ground(_quest())
+        assert ground.waypoint is not None
+        assert ground.waypoint("NW_FARM1_FIELD_01")
+        assert ground.waypoint("nw_farm1_field_01")
+        assert ground.point(FREEPOINT) and not ground.waypoint(FREEPOINT)
+        assert not ground.waypoint("NW_NOWHERE")
+        assert not ground.waypoint("FARM1_FIELD")
+
+        book.places = None
+        unknown = await book.ground(_quest())
+        assert unknown.waypoint is not None
+        assert not unknown.waypoint("NW_FARM1_FIELD_01")
+    finally:
+        await link_cm.__aexit__(None, None, None)
 
 
 async def test_the_book_makes_a_quest_and_follows_it(graph):  # noqa: F811

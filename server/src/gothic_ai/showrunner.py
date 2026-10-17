@@ -53,7 +53,8 @@ INSTRUCTIONS = """\
   поручение; none — сейчас ничего не нужно.
 - giver: id живого несюжетного заказчика из кандидатов для quest/chain, иначе пустая строка.
 - place: id места из сводки для stranger, иначе пустая строка.
-- new_people: для chain нужны новые люди (включая бандитов); false — только существующие.
+- new_people: для quest и chain нужны новые люди (включая бандитов); false — только существующие.
+  Для stranger код создаёт одного заказчика, дополнительные люди не нужны: new_people=false.
 - premise: 2–3 фразы, что случилось и почему именно сейчас. Это замысел для строителя квестов.
 - follows: переменная квеста скриптов из сводки, на который отвечает линия; иначе пустая строка.
 - requires: список условий открытия, иначе []. Условия: {kind: quest, quest: переменная, state:
@@ -64,7 +65,7 @@ INSTRUCTIONS = """\
 закрывает этот квест скриптов: они перечислены в сводке. Не продолжай и не заканчивай работу скриптов,
 не обещай их наград, не требуй их квестовых вещей. Опирайся на записи журнала, которые уже видел герой,
 а не на будущие развязки. Предпочитай небольшое дело рядом, доступное при текущем ванильном состоянии.
-Людей и места выбирай только из сводки. При нехватке бюджета на людей выбери quest, chain без новых
+Людей и места выбирай только из сводки. При нехватке бюджета на людей выбери quest или chain без новых
 людей или none. Отказ кода исправь, не повторяй его."""
 
 
@@ -94,7 +95,10 @@ PROPOSE_TOOL = Tool(
             "kind": {"type": "string", "enum": ["quest", "chain", "stranger", "none"]},
             "giver": {"type": "string"},
             "place": {"type": "string"},
-            "new_people": {"type": "boolean"},
+            "new_people": {
+                "type": "boolean",
+                "description": "Для quest и chain нужны новые люди, включая бандитов; для stranger false.",
+            },
             "premise": {"type": "string"},
             "reason": {"type": "string"},
             "follows": {"type": "string"},
@@ -390,8 +394,7 @@ class Showrunner:
             scripted.append(
                 f"{var}: «{q.title}», {QUEST_STATES.get(value, 'open')}; заказчик: {giver}; "
                 f"выдают или закрывают (не могут быть заказчиками ответа): {', '.join(sorted(people))}; "
-                "известный герою журнал: "
-                + json.dumps(self._told(var), ensure_ascii=False)
+                "известный герою журнал: " + json.dumps(self._told(var), ensure_ascii=False)
             )
         deeds = [
             f
@@ -477,7 +480,7 @@ class Showrunner:
             errors += brief.budget.reasons
             if not p.premise.strip():
                 errors.append("нужен замысел режиссёра: premise")
-            needs_people = p.kind == "stranger" or (p.kind == "chain" and p.new_people)
+            needs_people = p.kind == "stranger" or (p.kind in {"quest", "chain"} and p.new_people)
             if needs_people and not brief.budget.people_left:
                 errors.append("исчерпан бюджет новых людей за главу")
         return errors
@@ -634,11 +637,7 @@ class Showrunner:
         errors = []
         try:
             try:
-                if p.kind == "quest":
-                    made = await self.author.quest(
-                        build.giver, premise=p.premise, follows=p.follows, requires=p.requires
-                    )
-                elif p.kind == "chain":
+                if p.kind in {"quest", "chain"}:
                     made = await self.chains.chain(
                         build.giver,
                         new_people=p.new_people,
@@ -646,13 +645,19 @@ class Showrunner:
                         max_people=brief.budget.people_left if p.new_people else 0,
                         follows=p.follows,
                         requires=p.requires,
+                        **({"quest_count": 1} if p.kind == "quest" else {}),
                     )
                 elif p.kind == "stranger":
                     person = await self.casting.character(p.place, about=p.premise, premise=p.premise)
                     if person is not None:
                         build.giver = person.npc
-                        made = await self.author.quest(
-                            build.giver, premise=p.premise, follows=p.follows, requires=p.requires
+                        made = await self.chains.chain(
+                            build.giver,
+                            premise=p.premise,
+                            follows=p.follows,
+                            requires=p.requires,
+                            quest_count=1,
+                            max_people=0,
                         )
                 if not made:
                     errors.append("строитель не справился")

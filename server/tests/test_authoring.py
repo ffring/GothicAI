@@ -214,6 +214,38 @@ async def test_no_quest_from_the_plot_or_the_dead(graph):
         await link_cm.__aexit__(None, None, None)
 
 
+async def test_the_brief_excludes_items_named_anywhere_in_scripts_and_unknown_to_the_game(graph):
+    # Even a dialog outside Hilda's story reserves the item, in each part of the node.
+    graph.node("DIA_LOBART_WORKNOW").condition = [
+        "call",
+        "NPC_HASITEMS",
+        ["inst", "OTHER"],
+        ["sym", "ITMI_SAW"],
+    ]
+    graph.node("DIA_XARDAS_FIRSTEXIT").condition_effects = [
+        {"do": "call", "call": ["call", "CREATEINVITEM", ["inst", "SELF"], ["sym", "ITMI_RAKE"]]}
+    ]
+    graph.node("DIA_LOBART_WORKNOW_OK").effects.append(
+        {"do": "give", "item": ["sym", "ITMI_HAMMER"], "amount": ["int", 1]}
+    )
+    fake = FakeGame(branch="A")
+    link_cm, author, _ = await _author(fake, FakeBackend(script=[], delay=0), graph, MemoryStore(":memory:"))
+    try:
+        fake.symbols.update({"ITMI_HAMMER": "item", "ITAT_MEATBUGFLESH": "item", "ITPL_FORESTBERRY": "var"})
+        fake.item_names.update(
+            {"ITAT_MEATBUGFLESH": "Мясо жука", "ITPL_FORESTBERRY": "Ягода", "ITFO_CORAGONSBEER": "Пиво"}
+        )
+        brief = await author.brief(HILDA)
+        assert brief is not None and brief.items == {"ITAT_MEATBUGFLESH": "Мясо жука"}
+        assert "Вещи, одна из которых у него пропала" in brief.text()
+        neutral = brief.text(errand=False)
+        assert "Вещи для поручения (id — название):" in neutral
+        assert "Места рядом (id — где, как далеко от его места):" in neutral
+        assert "пропала" not in neutral and "где она может лежать" not in neutral
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 async def test_a_vanilla_response_keeps_its_opening_and_the_givers_knowledge(graph):
     fake = FakeGame(branch="A")
     llm = FakeBackend(script=[FakeStep("", [_quest()])], delay=0)
