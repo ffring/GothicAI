@@ -605,10 +605,15 @@ def execute(queue, job_id):
             with queue.transaction() as state:
                 for current in state["jobs"]:
                     if (current["id"] == job_id and current["status"] == "running"
-                            and same_attempt(current, job) and not current.get("cancel_reason")
-                            and not interrupted and alive(current.get("waiter"))):
-                        with contextlib.suppress(BrokenPipeError):
-                            os.write(write_fd, b"1")
+                            and same_attempt(current, job)):
+                        if not alive(current.get("waiter")):
+                            # EOF can end the child before either monitor loop runs.
+                            # Persist the observed cause before releasing the gate.
+                            if not current.get("cancel_reason"):
+                                current["cancel_reason"] = "cancelled"
+                        elif not current.get("cancel_reason") and not interrupted:
+                            with contextlib.suppress(BrokenPipeError):
+                                os.write(write_fd, b"1")
                         break
             os.close(write_fd)
             write_fd = None

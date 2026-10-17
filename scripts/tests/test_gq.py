@@ -801,6 +801,60 @@ def test_stop_during_spawn_prevents_the_user_command_from_running(
             signal.signal(sig, handler)
 
 
+@pytest.mark.parametrize("waiter_state,existing_reason,expected_reason,expected_code", [
+    ("dead", None, "cancelled", 143),
+    ("live", None, "failed", 143),
+    ("detached", None, "failed", 143),
+    ("dead", "timeout", "timeout", 124),
+])
+def test_dead_waiter_at_gate_records_cancellation_when_child_already_exited(
+        queue, gq, monkeypatch, waiter_state, existing_reason, expected_reason, expected_code):
+    waiter = None if waiter_state == "detached" else {"pid": 999999999, "start": "waiter"}
+    ident = queue.submit(spec(), waiter=waiter)
+    monkeypatch.setattr(queue, "launch", lambda _job: None)
+    queue.tick()
+    assert queue.get(ident)["status"] == "starting"
+    polls = []
+    permits = []
+    original_write = os.write
+
+    class FinishedGate:
+        returncode = 143
+
+        def poll(self):
+            polls.append(self.returncode)
+            return self.returncode
+
+    def already_exited_gate(*_args, **_kwargs):
+        if existing_reason:
+            with queue.transaction() as state:
+                state["jobs"][0]["cancel_reason"] = existing_reason
+        return FinishedGate()
+
+    def capture_permission(fd, token):
+        permits.append(token)
+        return original_write(fd, token)
+
+    def unexpected_retry(*_args, **_kwargs):
+        pytest.fail("the child exited before either monitoring loop could cancel")
+
+    monkeypatch.setattr(gq.subprocess, "Popen", already_exited_gate)
+    monkeypatch.setattr(gq.os, "write", capture_permission)
+    monkeypatch.setattr(gq, "alive", lambda process: process is None or waiter_state == "live")
+    monkeypatch.setattr(gq, "unit_has_children", lambda _ident: False)
+    monkeypatch.setattr(queue, "retry_cancel", unexpected_retry)
+    monkeypatch.setattr(gq.time, "sleep", lambda _seconds: pytest.fail("monitor loop ran"))
+
+    assert gq.execute(queue, ident) == 143
+    assert polls == [143]
+    assert permits == ([b"1"] if waiter_state in {"live", "detached"} else [])
+    queue.finish(ident, "exit-code", "exited", "143")
+    assert queue.get(ident)["status"] == expected_reason
+    finished = [record for record in records(queue) if record["event"] == "finished"]
+    assert len(finished) == 1
+    assert (finished[0]["reason"], finished[0]["code"]) == (expected_reason, expected_code)
+
+
 def test_execute_keeps_the_user_commands_nonzero_exit_code(gq, host, monkeypatch):
     q = make_queue(gq, host, monkeypatch)
     ident = q.submit(spec(command=[sys.executable, "-c", "raise SystemExit(7)"]))
