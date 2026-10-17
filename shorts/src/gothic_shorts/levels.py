@@ -123,8 +123,9 @@ def measure(inputs: list[str], graph: str, output: str,
     Other outputs of graph must already be consumed. Disjoint windows are joined
     without artificial silence. Empty/silent selections return -inf; selections
     shorter than an R128 block are rejected rather than silently passing a check.
-    Metering after the common mastering gain keeps audible quiet stems above the
-    absolute R128 gate; subtract that gain to report their pre-master levels.
+    The common mastering gain usually clears R128's absolute gate. If it does
+    not, normalize the selected signal's measured peak for one metering retry.
+    Subtract every measurement-only gain to preserve the stem's actual level.
     """
     if windows is not None:
         if not windows:
@@ -139,18 +140,33 @@ def measure(inputs: list[str], graph: str, output: str,
         graph += ";" + "".join(f"[level_piece{i}]" for i in range(len(windows)))
         graph += f"concat=n={len(windows)}:v=0:a=1[level_selection]"
         output = "level_selection"
-    meter_gain = f"volume={meter_gain_db:.9f}dB," if meter_gain_db else ""
-    graph += f";[{output}]{meter_gain}ebur128=peak=true[level_meter]"
-    result = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-nostats", *inputs, "-filter_complex", graph,
-         "-map", "[level_meter]", "-vn", "-f", "null", "-"],
-        check=True, capture_output=True, text=True,
-    )
-    readings = re.findall(r"\bI:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+LUFS", result.stderr)
-    if not readings:
-        raise ValueError("ffmpeg did not return an EBU R128 integrated loudness")
-    value = float(readings[-1])
-    return value - meter_gain_db if value > -70 and math.isfinite(value) else -math.inf
+
+    def meter(gain_db: float) -> tuple[float, str]:
+        gain = f"volume={gain_db:.9f}dB:precision=double," if gain_db else ""
+        metering_graph = f"{graph};[{output}]{gain}ebur128=peak=true[level_meter]"
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-nostats", *inputs, "-filter_complex", metering_graph,
+             "-map", "[level_meter]", "-vn", "-f", "null", "-"],
+            check=True, capture_output=True, text=True,
+        )
+        readings = re.findall(r"\bI:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+LUFS", result.stderr)
+        if not readings:
+            raise ValueError("ffmpeg did not return an EBU R128 integrated loudness")
+        return float(readings[-1]), result.stderr
+
+    value, diagnostic = meter(meter_gain_db)
+    if value > -70 and math.isfinite(value):
+        return value - meter_gain_db
+    peaks = re.findall(r"\bPeak:\s*(-?\d+(?:\.\d+)?|[-+]?inf)\s+dBFS", diagnostic)
+    peak = float(peaks[-1]) if peaks else -math.inf
+    if not math.isfinite(peak):
+        return -math.inf  # Actual silence cannot be made measurable by amplification.
+    extra_gain = max(0.0, -10.0 - peak)
+    if not extra_gain:
+        return -math.inf
+    gain = meter_gain_db + extra_gain
+    value, _ = meter(gain)
+    return value - gain if value > -70 and math.isfinite(value) else -math.inf
 
 
 def music_target(speech_lufs: float, game_pause_lufs: float | None = None) -> float:
