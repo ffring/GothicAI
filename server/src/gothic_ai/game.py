@@ -138,6 +138,10 @@ class _PendingBodyAcquire:
     npc: str
     observation_seq: int
     future: asyncio.Future[BodyControlEvent]
+    restored: BodyControlEvent | None = None
+
+    def was_restored(self, generation: int) -> bool:
+        return self.restored is not None and self.restored.control_generation == generation
 
 
 class GameLink:
@@ -333,14 +337,18 @@ class GameLink:
             pending = self._body_acquisitions.get(event.entity_id)
             if pending is not None and (
                 event.phase == "ownership"
-                and event.reason in {"acquired", "acquire_cancelled"}
                 and event.acquire_request_id == pending.cmd.acquire_request_id
                 and (event.provider, event.mode, event.target_entity_id) == (
                     pending.cmd.provider, pending.cmd.mode, pending.cmd.target_entity_id,
                 )
-                and not pending.future.done()
             ):
-                pending.future.set_result(event)
+                # A grant and its restoration can arrive before the acquire task
+                # resumes, including in one packet. Retain the restoration even
+                # after the grant future is done, until publication is resolved.
+                if event.reason == "native_restored":
+                    pending.restored = event
+                elif event.reason in {"acquired", "acquire_cancelled"} and not pending.future.done():
+                    pending.future.set_result(event)
             if len(self._body_control_events) == self._body_control_events.maxlen:
                 self.body_control_dropped_events += 1
             self._body_control_events.append(event)
@@ -517,6 +525,10 @@ class GameLink:
                     }),
                 )
                 acquired_seq = event.observation_seq
+            if pending is not None and pending.was_restored(result.control_generation):
+                completed = True  # Authoritatively native; no cancellation is needed.
+                assert pending.restored is not None
+                raise GameError(f"body acquisition already released: {pending.restored.release_reason}")
             lease = self._body_lease(npc, provider, mode, result, acquired_seq)
             completed = True
             return lease
@@ -608,7 +620,7 @@ class GameLink:
                 self._body_acquisitions.pop(entity_id, None)
                 return
             raise
-        if result.owner == "scripted":
+        if result.owner == "scripted" and not pending.was_restored(result.control_generation):
             self._body_lease(
                 pending.npc, cmd.provider, cmd.mode, result,
                 result.observation_seq or pending.observation_seq,
