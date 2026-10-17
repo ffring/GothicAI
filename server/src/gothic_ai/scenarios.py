@@ -1024,17 +1024,8 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
                     await link.debug("kill", instance=seen.id, near=npc)
 
     await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
-    await link.debug("npc_goto", npc=npc, waypoint="NW_XARDAS_TOWER_VALLEY_091")
-    await clear_animals()
-    # A bloodfly 17 m off can enter ZS_ATTACK after the NPC turns to the hero.
-    # Inspect all four directions before the fights, with corpses kept off the arena.
-    for facing in (
-        [23560, 1032, -10604], [23260, 1032, -10304],
-        [22960, 1032, -10604], [23260, 1032, -10904],
-    ):
-        await link.debug("player_goto", pos=facing)
-        await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
-        await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+    for clearing in ("NW_XARDAS_TOWER_VALLEY_091", arena):
+        await link.debug("npc_goto", npc=npc, waypoint=clearing)
         await clear_animals()
     # npc_goto resolves script instances, so face needs PC_HERO, not the PLAYER alias.
     # This position fixes the direction for both wolf spawns, away from the rocks.
@@ -1045,6 +1036,11 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     # 1. the player draws a weapon next to the npc: the npc perceives it (it is free, scripts run)
     await attach_when_free(link, npc)
     await link.act(npc, "go_to_npc", npc="PLAYER", radius=300)
+    # The approach changes the standing pose and can expose animals hidden from
+    # the relocated book-reading pose. Clear that view before native perceptions resume.
+    await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+    await clear_animals()
+    await link.debug("teleport", near=npc, distance=300)
     await link.act(npc, "return_to_routine")
     # Returning control starts the old tower routine. Hold an ordinary native idle
     # here and wait for its initialization, including its normal enemy perceptions.
@@ -1059,7 +1055,7 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         views = await link.npc_view([npc])
         raise GameError(
             f"m5b arena preparation: {ready.status} {ready.detail}; state={current}; "
-            f"nearby={snap.nearby_npcs}; sees={[v.sees for v in views]}"
+            f"pos={snap.npc.pos}; rot={snap.npc.rot}; nearby={snap.nearby_npcs}; sees={[v.sees for v in views]}"
         )
     events.clear()
     await _m5b_player_weapon(link, "melee")
