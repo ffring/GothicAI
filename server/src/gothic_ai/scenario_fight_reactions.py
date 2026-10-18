@@ -942,6 +942,32 @@ async def fight_reactions(
                         await place_idle(bandit, return_point["name"])
                         await grounded(bandit, "returned", parked_hp, 1200, 2500)
                         await finish_preparation()
+                        # Facing the previous duel can leave the returned defender behind
+                        # Cavalorn, sending an ordinary fight order to its remembered place.
+                        turned = await link.act(CAVALORN, "turn_to", npc=bandit)
+                        if turned.status != "done":
+                            raise GameError(
+                                f"fight_reactions setup: face defender {turned.status}: {turned.detail}"
+                            )
+                        views = await link.npc_view([CAVALORN])
+                        seen = any(n.id.upper() == bandit for view in views for n in view.sees)
+                        response = await link._request(
+                            DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=CAVALORN, to=bandit), 5,
+                        )
+                        ray = response.value or {}
+                        distance = ray.get("distance_cm", 0)
+                        log.info(
+                            "fight_reactions returned defender npc=%s seen=%s distance_cm=%s "
+                            "native_ray=%s view=%s",
+                            bandit, seen, distance, ray, [view.model_dump() for view in views],
+                        )
+                        if not (
+                            seen and 1200 <= distance <= 2500
+                            and (ray.get("center_clear") or ray.get("head_clear"))
+                        ):
+                            raise GameError(
+                                "fight_reactions setup: returned defender is not visibly in range"
+                            )
                     talk.orders.fight_intent(CAVALORN, bandit)
                     await _until(lambda b=bandit: bool(trace.damage.get(b)), 60)
                     hits = trace.damage.get(bandit, [])
