@@ -1,5 +1,5 @@
-"""The short from a take: the pauses while the AI thinks cut down, the hero's voice mixed into the game's
-sound, subtitles, the hook over the first seconds; 1080x1920, loudness for phones.
+"""The short from a take: AI pauses cut down, separate dialogue and effects, one game music bed,
+subtitles and a hook; 1080x1920, calibrated and checked by the shared publication gate.
 
 The texts are burnt in as images (Pillow), so ffmpeg needs no libass. A cut in another language takes
 `subs.<lang>.json` from the take: every text of the short (hook, captions, lines) mapped to its translation;
@@ -9,9 +9,9 @@ the Russian short (`subtitles`, a SubRip file YouTube takes).
 
 from __future__ import annotations
 
+import configparser
 import json
 import math
-import re
 import shutil
 import subprocess
 import textwrap
@@ -20,7 +20,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from . import srt
+from . import bed, levels, srt, stems
 from .shot import Shot
 from .timeline import Timeline, build, read_events
 
@@ -37,7 +37,6 @@ SEAL = (W - 140, 110)
 OUTLINE = (20, 12, 8)
 # The Shorts interface covers these edges (shorts/explain/src/theme.ts).
 SAFE = (60, 150, W - 150, H - 380)  # left, top, right, bottom
-LOUD = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
 
 class CutError(RuntimeError):
@@ -125,12 +124,20 @@ def subtitles(shot: Shot, take: Path, lang: str) -> Path:
 
 
 def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Path:
+    out = out or take / f"short-{lang}.mp4"
+    # A rejected take must not leave an older published video under the same name.
+    out.unlink(missing_ok=True)
+    out.with_suffix(".levels.json").unlink(missing_ok=True)
     events = take / "events.jsonl"
     video, audio = take / "main.mp4", take / "main.wav"
     for p in (events, video, audio):
         if not p.is_file():
             raise CutError(f"the take has no {p.name}: was the segment recorded as `rec main`?")
-    tl = build(read_events(events))
+    _validate_recording(take)
+    rows = read_events(events)
+    tl = build(rows)
+    if not tl.keep():
+        raise CutError("the take has no recorded body")
     subs = load_subs(take, lang, texts(shot, tl))
     sting_duration = 0.0
     if shot.brand:
@@ -138,96 +145,119 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
             if not asset.is_file():
                 raise CutError(f"missing brand asset: {asset}; brand = false disables the brand")
         sting_duration = _duration(BRAND / "sting.mp4")
-    out = out or take / f"short-{lang}.mp4"
     work = take / f"cut-{lang}"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
 
-    overlays = _overlays(shown(shot, tl, subs), work, brand=shot.brand)
-    keep = tl.keep()
-    hero = [line for line in tl.lines if line.hero and line.wav and Path(line.wav).is_file()]
-
-    inputs = ["-i", str(video), "-i", str(audio)]
-    for line in hero:
-        inputs += ["-i", line.wav]
-    first_png = 2 + len(hero)
-    for o in overlays:
-        inputs += ["-i", str(o.png)]
-    if shot.brand:
-        seal_input = first_png + len(overlays)
-        sting_input = seal_input + 1
-        inputs += ["-i", str(BRAND / "seal-corner.png"), "-i", str(BRAND / "sting.mp4")]
-
-    f: list[str] = []
-    # the game's sound and the hero's voice, on the recording's own time
-    mix = ["[1:a]aformat=sample_rates=48000:channel_layouts=stereo[g]"]
-    for i, line in enumerate(hero):
-        ms = int(line.start * 1000)
-        mix.append(f"[{2 + i}:a]aformat=sample_rates=48000:channel_layouts=stereo,adelay={ms}|{ms}[h{i}]")
-    labels = "[g]" + "".join(f"[h{i}]" for i in range(len(hero)))
-    mix.append(f"{labels}amix=inputs={1 + len(hero)}:normalize=0:duration=first[mixed]")
-    f += mix
-    # the parts that stay
-    f.append(f"[0:v]split={len(keep)}" + "".join(f"[vs{i}]" for i in range(len(keep))))
-    f.append("[mixed]asplit=" + str(len(keep)) + "".join(f"[as{i}]" for i in range(len(keep))))
-    for i, (a, b) in enumerate(keep):
-        fade = min(0.02, (b - a) / 4)
-        f.append(f"[vs{i}]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[v{i}]")
-        f.append(
-            f"[as{i}]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS,"
-            f"afade=t=in:d={fade:.3f},afade=t=out:st={max(0.0, b - a - fade):.3f}:d={fade:.3f}[a{i}]"
-        )
-    f.append("".join(f"[v{i}][a{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=1[vc][ac]")
-    body_filters = list(f)
-    f.append(f"[vc]scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H}[v]")
-    last = "v"
-    for i, o in enumerate(overlays):
-        f.append(
-            f"[{last}][{first_png + i}:v]overlay=x=0:y={o.y}:"
-            f"enable='between(t,{o.start:.3f},{o.end:.3f})'[o{i}]"
-        )
-        last = f"o{i}"
-    duration = tl.cut_duration
-    if shot.brand:
-        # Master each part separately so the sting's own sound and the dialogue match.
-        loud, measured_duration = _normalization(inputs[:2 * first_png], body_filters, video=True)
-        sting_loud, _ = _normalization(
-            ["-i", str(BRAND / "sting.mp4")],
-            ["[0:a]aformat=sample_rates=48000:channel_layouts=stereo[ac]"],
-        )
-        # concat pads audio to each video segment's real end; nominal timeline seconds can be shorter.
-        duration = math.ceil(round(measured_duration, 3) * 30) / 30
-        f += [
-            f"[{last}][{seal_input}:v]overlay=x={SEAL[0]}:y={SEAL[1]}[sealed]",
-            f"[sealed]fps=30,tpad=stop_mode=clone:stop_duration={duration:.6f},"
-            f"trim=duration={duration:.6f},settb=AVTB,setpts=PTS-STARTPTS[bodyv]",
-            f"[ac]{loud},aresample=48000,apad,atrim=duration={duration:.6f},"
-            f"afade=t=out:st={max(0, duration - 0.02):.6f}:d=0.02[bodya]",
-            f"[{sting_input}:v]fps=30,setsar=1,settb=AVTB,setpts=PTS-STARTPTS[stingv]",
-            f"[{sting_input}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-            f"atrim=duration={sting_duration:.6f},asetpts=PTS-STARTPTS,{sting_loud},aresample=48000,"
-            "afade=t=in:d=0.02,"
-            f"afade=t=out:st={max(0, sting_duration - 0.02):.6f}:d=0.02[stinga]",
-            "[bodyv][bodya][stingv][stinga]concat=n=2:v=1:a=1[vout][aout]",
-        ]
-        last = "vout"
-    else:
-        f.append("[ac]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]")
-
-    cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *inputs,
-        "-filter_complex", ";".join(f), "-map", f"[{last}]", "-map", "[aout]",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p", "-r", "30",
-        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out),
-    ]  # fmt: skip
-    (work / "ffmpeg.txt").write_text(" ".join(cmd))
-    done = subprocess.run(cmd, capture_output=True, text=True)
-    if done.returncode != 0:
-        raise CutError(f"ffmpeg failed:\n{done.stderr.strip()[-3000:]}")
+    try:
+        clips = stems.collect(rows, tl)
+        voice = stems.render(clips, tl, work / "voice.wav")
+        overlays = _overlays(shown(shot, tl, subs), work, brand=shot.brand)
+        joined, duration = _join(shot, video, audio, tl, overlays, work, sting_duration)
+        music = bed.render(shot.bed, shot.bed_start, duration, work / "music.wav")
+        levels.publish(joined, music, [(voice, 0.0)], stems.speech_windows(clips, tl),
+                       duration, duration + sting_duration, out)
+    except (bed.BedError, ValueError, OSError, subprocess.CalledProcessError) as error:
+        raise CutError(str(error)) from error
     _sheet(out, out.with_suffix(".png"), duration + sting_duration,
            sting_start=duration if shot.brand else None)
     _transcript(shot, tl, subs, out.with_suffix(".md"), sting_duration, body_duration=duration)
     return out
+
+
+def _validate_recording(take: Path) -> None:
+    """The effects stem is usable only when the game's own music and the map's sounds were off."""
+    path = take / "run" / "Gothic.ini"
+    config = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
+    try:
+        config.read_string(path.read_text())
+        volume = config.getfloat("SOUND", "musicVolume")
+        if not math.isfinite(volume) or volume != 0:
+            raise ValueError("musicVolume must be 0")
+        if config.getint("SOUND", "worldSounds") != 0:
+            raise ValueError("worldSounds must be 0")
+    except (OSError, ValueError, configparser.Error) as error:
+        raise CutError(f"{path}: не подтверждены musicVolume=0 и worldSounds=0; переснимите дубль "
+                       "через film без музыки игры и звуков мест") from error
+
+
+def _join(shot: Shot, video: Path, audio: Path, tl: Timeline, overlays: list[Overlay],
+          work: Path, sting_duration: float) -> tuple[Path, float]:
+    """Join picture and effects independently, so video rounding cannot insert audio gaps.
+
+    Only effects (and the ending's own sound) go here. Voice and the continuous
+    bed remain lossless separate stems until levels publishes the final AAC.
+    """
+    keep = tl.keep()
+    # One video-frame boundary, after every audio join has kept its exact duration.
+    duration = math.ceil(round(tl.cut_duration * 30, 6)) / 30
+    inputs = ["-i", str(video), "-i", str(audio)]
+    for overlay in overlays:
+        inputs += ["-i", str(overlay.png)]
+    seal_input = 2 + len(overlays)
+    sting_input = seal_input + 1
+    if shot.brand:
+        inputs += ["-i", str(BRAND / "seal-corner.png"), "-i", str(BRAND / "sting.mp4")]
+    selected = "+".join(f"gte(t,{start:.9f})*lt(t,{end:.9f})" for start, end in keep)
+    removed = "+".join(f"if(gte(PTS*TB,{end:.9f}),{end - start:.9f},0)"
+                       for start, end in tl.cuts) or "0"
+    filters = [
+        # Map every retained frame through to_cut directly. Concatenating rounded
+        # video segments would accumulate a frame fraction at every audio join.
+        f"[0:v]setpts=PTS-STARTPTS,select='{selected}',setpts='PTS-({removed})/TB'[vc]",
+        "[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+        f"apad=whole_dur={tl.duration:.9f},atrim=duration={tl.duration:.9f},"
+        f"asplit={len(keep)}" + "".join(f"[as{i}]" for i in range(len(keep))),
+    ]
+    for i, (start, end) in enumerate(keep):
+        fade = min(0.02, (end - start) / 4)
+        filters += [
+            f"[as{i}]atrim=start={start:.9f}:end={end:.9f},asetpts=PTS-STARTPTS,"
+            f"afade=t=in:d={fade:.9f},afade=t=out:st={end - start - fade:.9f}:d={fade:.9f}[a{i}]",
+        ]
+    filters += [
+        "".join(f"[a{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=0:a=1[ac]",
+        f"[vc]scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop={W}:{H},setsar=1[v]",
+    ]
+    last = "v"
+    for i, overlay in enumerate(overlays):
+        filters.append(f"[{last}][{2 + i}:v]overlay=x=0:y={overlay.y}:"
+                       f"enable='between(t,{overlay.start:.9f},{overlay.end:.9f})'[o{i}]")
+        last = f"o{i}"
+    if shot.brand:
+        filters.append(f"[{last}][{seal_input}:v]overlay=x={SEAL[0]}:y={SEAL[1]}[sealed]")
+        last = "sealed"
+    filters += [
+        f"[{last}]fps=30,tpad=stop_mode=clone:stop_duration={duration:.9f},"
+        f"trim=duration={duration:.9f},settb=AVTB,setpts=PTS-STARTPTS[bodyv]",
+        f"[ac]apad,atrim=duration={duration:.9f},"
+        f"afade=t=out:st={max(0, duration - 0.02):.9f}:d=0.02[bodya]",
+    ]
+    if shot.brand:
+        filters += [
+            f"[{sting_input}:v]scale={W}:{H},fps=30,setsar=1,"
+            "settb=AVTB,setpts=PTS-STARTPTS[stingv]",
+            f"[{sting_input}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"apad,atrim=duration={sting_duration:.9f},asetpts=PTS-STARTPTS,"
+            "afade=t=in:d=0.02,"
+            f"afade=t=out:st={max(0, sting_duration - 0.02):.9f}:d=0.02[stinga]",
+            "[bodyv][bodya][stingv][stinga]concat=n=2:v=1:a=1[vout][aout]",
+        ]
+    else:
+        filters += ["[bodyv]null[vout]", "[bodya]anull[aout]"]
+    joined = work / "joined.mkv"
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *inputs,
+        "-filter_complex", ";".join(filters), "-map", "[vout]", "-map", "[aout]",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p", "-r", "30",
+        "-c:a", "pcm_f32le", str(joined),
+    ]
+    (work / "ffmpeg.txt").write_text(" ".join(command))
+    done = subprocess.run(command, capture_output=True, text=True)
+    if done.returncode:
+        raise CutError(f"ffmpeg failed:\n{done.stderr.strip()[-3000:]}")
+    return joined, duration
 
 
 def _duration(video: Path) -> float:
@@ -238,30 +268,6 @@ def _duration(video: Path) -> float:
     if done.returncode:
         raise CutError(f"cannot read brand duration: {done.stderr.strip()}")
     return float(done.stdout)
-
-
-def _normalization(inputs: list[str], filters: list[str], *, video: bool = False) -> tuple[str, float]:
-    """Measure loudness and the concat's real duration before rendering overlays and encoding video."""
-    pre = "alimiter=limit=0.75:level=false"
-    graph = ";".join([*filters, f"[ac]{pre},{LOUD}:print_format=json,aresample=48000,ashowinfo[probe]"])
-    video_map = ["-map", "[vc]"] if video else ["-vn"]
-    done = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-nostats", *inputs, "-filter_complex", graph,
-         *video_map, "-map", "[probe]", "-f", "null", "-"],
-        capture_output=True, text=True,
-    )
-    if done.returncode:
-        raise CutError(f"loudness measurement failed:\n{done.stderr.strip()[-3000:]}")
-    start = done.stderr.rindex("{")
-    measured = json.loads(done.stderr[start:done.stderr.index("}", start) + 1])
-    # Progress follows video timestamps; the audio can end later, including gaps inserted by concat.
-    samples = re.findall(r"\bpts:(\d+).*?\bnb_samples:(\d+)", done.stderr)
-    duration = max((int(pts) + int(count)) / 48000 for pts, count in samples)
-    if measured["input_i"] == "-inf":
-        return f"{pre},{LOUD}", duration  # a silent take needs no measured gain
-    return (f"{pre},{LOUD}:measured_I={measured['input_i']}:measured_TP={measured['input_tp']}:"
-            f"measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}:"
-            f"offset={measured['target_offset']}:linear=true"), duration
 
 
 def _overlays(on_screen: list[Shown], work: Path, *, brand: bool = True) -> list[Overlay]:

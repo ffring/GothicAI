@@ -15,6 +15,8 @@ from . import cut as cutting
 from . import srt, youtube
 from .align import AlignError, align
 from .dub import DubError, dub_explainer, dub_take
+from .explain import ExplainError
+from .explain import publish as publish_explainer
 from .film import FilmError, film, shorts_dir
 from .gpu import GpuError
 from .shot import Shot, ShotError, load
@@ -179,6 +181,11 @@ def cmd_words(args: argparse.Namespace) -> int:
         w = line["words"]
         print(f"{line['n']:2d} {w[0]['start']:6.2f}-{w[-1]['end']:6.2f}  " + " ".join(x["text"] for x in w))
     print(f"words.{done['lang']}.json: {len(done['lines'])} lines, {done['duration']:.1f} s")
+    return 0
+
+
+def cmd_explain(args: argparse.Namespace) -> int:
+    print(publish_explainer(workspace(args.short), args.plan, Path(args.out) if args.out else None))
     return 0
 
 
@@ -363,6 +370,12 @@ def main() -> None:
     s.add_argument("--language", default="Russian", help="the aligner's language (Russian)")
     s.set_defaults(fn=cmd_words)
 
+    s = sub.add_parser("explain", help="render and publish an explainer with calibrated, checked audio")
+    s.add_argument("short", help="the short's folder, or its name in ~/.local/share/gothic-ai/explain")
+    s.add_argument("--plan", default="plan.json", help="the plan in the workspace (default: plan.json)")
+    s.add_argument("--out", help="the output file (default: <workspace>/render/short-<plan lang>.mp4)")
+    s.set_defaults(fn=cmd_explain)
+
     s = sub.add_parser("youtube", help="YouTube: sign in (the browser opens), the channel, the token's life")
     s.add_argument("action", choices=["login"])
     s.set_defaults(fn=cmd_youtube_login)
@@ -396,6 +409,6 @@ def main() -> None:
     try:
         sys.exit(args.fn(args))
     except (ShotError, FilmError, VoiceError, cutting.CutError, LaunchError, SettingsError,
-            YouTubeError, AlignError, StudioError, DubError, GpuError) as err:
+            YouTubeError, AlignError, StudioError, DubError, GpuError, ExplainError) as err:
         print(f"error: {err}", file=sys.stderr)
         sys.exit(1)

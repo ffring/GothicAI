@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "soundfx.h"
 
 #include <Tempest/Log>
@@ -18,6 +19,7 @@ SoundFx::SoundVar::SoundVar(const float vol, Tempest::Sound &&snd)
   }
 
 SoundFx::SoundFx(std::string_view s) {
+  debugName = std::string(s);
   implLoad(s);
   if(inst.size()!=0)
     return;
@@ -50,6 +52,8 @@ SoundFx::Sample SoundFx::selectSample() const {
   if(inst.size()==0)
     return {};
   const auto& var = inst[size_t(std::rand())%inst.size()];
+  if(std::getenv("OPENGOTHIC_SOUND_LOG")!=nullptr)
+    Tempest::Log::i("sfx play: ",debugName.empty() ? std::string("<raw>") : debugName," vol ",var.vol,var.loop ? " loop" : "");
   return {&var.snd,var.vol,var.loop};
   }
 

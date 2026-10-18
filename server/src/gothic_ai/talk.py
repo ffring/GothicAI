@@ -73,6 +73,7 @@ NAME_CM = 4000.0  # a name is heard this far: it is called out
 FOCUS_CM = 2500.0  # the npc the hero looks at, if not farther than this
 PARTNER_CM = 1500.0  # the current partner stays the addressee this close
 FRONT_CM = 1200.0  # the nearest npc in front of the hero
+COMPANION_CM = 1000.0  # a companion walking beside him hears words after a conversation has ended
 SCENE_CM = 2000.0  # two npc's talking near him (gossip.py), if not farther than this
 ATTACKER_CM = 1000.0  # one fighting this close to the hero is the one he speaks to in the fight
 ATTACK_STATE = "ZS_ATTACK"
@@ -191,7 +192,7 @@ _ADDRESS = frozenset(
 # a phrase to several of those around («Пацаны, здорово», «Всем привет», «Эй, вы двое»): to the conversation.
 # A bare «вы» is the polite one to one person as often: only with a count of them («вы все», «вы двое»)
 _SEVERAL = frozenset(
-    "пацаны пацанва ребята ребят ребятки мужики парни братва народ господа друзья братцы все всем".split()
+    "пацаны пацанва ребята ребят ребятки мужики парни братва народ господа друзья братцы псы все всем".split()
 )
 _COUNTS = frozenset("все двое трое оба обе".split())
 _YOU = frozenset("вы вас вам".split())
@@ -230,7 +231,7 @@ def named(phrase: list[str], name: str, called: list[str] | None = None) -> floa
 class Addressee:
     id: str
     name: str
-    # name | focus | partner | scene | front | group (to several: it answers first) | order (companions who
+    # name | focus | partner | companion | scene | front | group (answers first) | order (companions who
     # obey it) | beast (a wolf)
     why: str
 
@@ -254,14 +255,19 @@ def addressee(
     fighting = [
         e for e in alive.values() if fights(e) and e.earshot <= ATTACKER_CM and not ours(e.id.upper())
     ]
-    group = [e for e in alive.values() if e.earshot <= PARTNER_CM]
+    beside_companion = partner is not None and ours(partner.upper())
+    group = [
+        e
+        for e in alive.values()
+        if e.earshot <= PARTNER_CM and (not beside_companion or ours(e.id.upper()) or e.in_view)
+    ]
     # in a fight «Стой, пацаны!» is to whoever is at him, as before: words to him, not an order to his own
     several = len(group) >= 2 and not fighting
 
     def to_group() -> Addressee:
-        if focus and (e := alive.get(focus.upper())) is not None and e in group:
-            return Addressee(e.id.upper(), e.name, "group")
         others = [e for e in group if not ours(e.id.upper())] or group
+        if focus and (e := alive.get(focus.upper())) is not None and e in others:
+            return Addressee(e.id.upper(), e.name, "group")
         e = min(others, key=lambda e: (-lead(e.id.upper()), e.earshot))
         return Addressee(e.id.upper(), e.name, "group")
 
@@ -300,9 +306,13 @@ def addressee(
         e = min(seen, key=lambda e: e.earshot) if seen else near[0]
         return Addressee(e.id.upper(), e.name, "scene")
     front = [e for e in alive.values() if e.in_view and e.earshot <= FRONT_CM]
-    if front:
-        e = min(front, key=lambda e: e.earshot)
+    companions = [e for e in alive.values() if ours(e.id.upper()) and e.earshot <= COMPANION_CM]
+    companion = min(companions, key=lambda e: e.earshot, default=None)
+    e = min(front, key=lambda e: e.earshot, default=None)
+    if e is not None and (companion is None or e.earshot <= companion.earshot):
         return Addressee(e.id.upper(), e.name, "front")
+    if companion is not None:
+        return Addressee(companion.id.upper(), companion.name, "companion")
     return None
 
 
@@ -361,6 +371,7 @@ class TalkDesk:
         self.orders: Orders | None = None
         # wolves at the hero hear his words (beasts.py)
         self.beasts: BeastDesk | None = None
+        self._phrase = 0
         link.listeners.append(self.on_message)
         dialogue.take_body = self.hold
         dialogue.free_body = self.free
@@ -397,6 +408,7 @@ class TalkDesk:
                 self.attached.discard(npc)
                 self.held.pop(npc, None)  # free again (following ended, handed to its scripts...)
             case Loading():
+                self._phrase += 1
                 self.partner = None
                 self.people.clear()
                 self.held.clear()
@@ -407,7 +419,7 @@ class TalkDesk:
         text = text.strip()
         if not text:
             return
-        now = self.clock()
+        self._phrase += 1
         to = addressee(
             text,
             focus,
@@ -418,11 +430,51 @@ class TalkDesk:
             lead=self.lead,
         )
         order = commands.parse(text, self._is_name)
+        if self.orders is not None:
+            explicit_attack = self.orders.parse_attack(text)
+            order = order or explicit_attack
+            squad = self.orders.squad(to, text)
+            if explicit_attack is not None and order is not None and order.kind == "attack" and squad:
+                self._spawn(self._attack_heard(text, focus, details, to, order, squad, self._phrase))
+                return
+        self._heard(text, focus, details, to, order)
+
+    async def _attack_heard(
+        self,
+        text: str,
+        focus: str | None,
+        details: dict[str, Any] | None,
+        to: Addressee | None,
+        order: commands.Order,
+        squad: list[tuple[str, str]],
+        phrase: int,
+    ) -> None:
+        assert self.orders is not None
+        target = await self.orders.attack_target(focus, squad, text, to)
+        if phrase != self._phrase:
+            return  # newer words superseded this order while the game checked sight
+        self._heard(text, target, details, Addressee(*squad[0], "companion"), order, attack=True)
+
+    def _heard(
+        self,
+        text: str,
+        focus: str | None,
+        details: dict[str, Any] | None,
+        to: Addressee | None,
+        order: commands.Order | None,
+        *,
+        attack: bool = False,
+    ) -> None:
+        now = self.clock()
         squad: list[tuple[str, str]] = []
-        beast = self.beasts.hears(text, focus, to, order) if self.beasts is not None else None
+        # An attack addressed to companions is never submitted to the wolf's tone model, even when
+        # no target can be found and the companion must ask whom the hero means.
+        beast = self.beasts.hears(text, focus, to, order) if self.beasts is not None and not attack else None
+        if attack and self.beasts is not None:
+            self.beasts.resume()
         if beast is not None:  # said to a wolf: it is judging its tone already
             to = beast
-        elif squad := self._order(order, focus, to):  # said to the companions who obey it
+        elif squad := self._order(order, focus, to, resolved_attack=attack):  # companions obey it
             to = Addressee(squad[0][0], squad[0][1], "order")
         self.last = (to, text)
         echo = TranscriptCmd(text=text, to=to.id if to else None, to_name=to.name if to else None)
@@ -455,12 +507,17 @@ class TalkDesk:
         self._spawn(self._answer(talk, text))
 
     def _order(
-        self, order: commands.Order | None, focus: str | None, to: Addressee | None
+        self,
+        order: commands.Order | None,
+        focus: str | None,
+        to: Addressee | None,
+        *,
+        resolved_attack: bool = False,
     ) -> list[tuple[str, str]]:
         """If the phrase is an order and companions obey it, carry it out now; who obeys."""
         if self.orders is None or order is None:
             return []
-        return self.orders.take(order, focus, to)
+        return self.orders.take(order, focus, to, resolved_attack=resolved_attack)
 
     def _is_name(self, word: str) -> bool:
         """The word is the name of someone around ("Горн, стой!")."""

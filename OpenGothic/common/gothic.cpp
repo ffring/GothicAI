@@ -135,6 +135,8 @@ Gothic::Gothic() {
   defaults->set("SOUND", "musicVolume",   0.5f);
   defaults->set("SOUND", "soundEnabled",  1);
   defaults->set("SOUND", "soundVolume",   0.5f);
+  // the world's own sound objects (zCVobSound: a place's loops and stingers); 0 for the shorts, which lay a bed
+  defaults->set("SOUND", "worldSounds",   1);
 
   //defaults->set("ENGINE", "zEnvMappingEnabled", 0);
   //defaults->set("ENGINE", "zCloudShadowScale",  0);

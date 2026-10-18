@@ -102,6 +102,9 @@ namespace TestBench {
   void     aiLine(std::string_view npc, std::string_view name, std::string_view text, uint64_t ms,
                   std::string_view to, bool filler = false);
   void     aiVoiceEnd(std::string_view npc, uint64_t ms);
+  // Opt-in filming: mute AI sources and tap their rendered mono PCM during an audio segment.
+  bool     voiceStems();
+  std::function<void(const int16_t*,size_t)> aiVoiceStem(std::string_view npc, std::string_view line, uint32_t rate);
   void     aiHeard(std::string_view text, std::string_view to);
   // set by the bridge: an npc of the AI speaks now or has a line waiting for its turn
   extern std::function<bool()> aiBusy;

@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <iterator>
 #include <limits>
 #include <new>
@@ -219,9 +220,9 @@ uint64_t wavMs(const std::string& path) {
   return 0;
   }
 
-void writeWavHeader(std::FILE* f, uint32_t rate, uint64_t frames) {
-  const uint32_t data = uint32_t(frames*4), riff = 36+data, fmtSize = 16, byteRate = rate*4;
-  const uint16_t pcm = 1, channels = 2, align = 4, bits = 16;
+void writeWavHeader(std::FILE* f, uint32_t rate, uint64_t frames, uint16_t channels = 2) {
+  const uint16_t pcm = 1, align = uint16_t(channels*2), bits = 16;
+  const uint32_t data = uint32_t(frames*align), riff = 36+data, fmtSize = 16, byteRate = rate*align;
   std::fseek(f,0,SEEK_SET);
   std::fwrite("RIFF",1,4,f); std::fwrite(&riff,4,1,f); std::fwrite("WAVE",1,4,f);
   std::fwrite("fmt ",1,4,f); std::fwrite(&fmtSize,4,1,f); std::fwrite(&pcm,2,1,f); std::fwrite(&channels,2,1,f);
@@ -712,7 +713,7 @@ struct Bench {
   Vec3 destructionMeleeFacing,destructionMeleeStand;
   bool destructionMeleeRestance=false;
   uint64_t destructionMeleeNext=0,destructionMeleeDeadline=0;
-  unsigned destructionMeleeAttempts=0,destructionMeleeHits=0;
+  unsigned destructionMeleeAttempts=0,destructionMeleeHits=0,destructionMeleeBlows=0;
   bool destructionMeleeRunning=false,destructionMeleeArena=false;
   Npc* destructionFarmNpc=nullptr;
   Vec3 destructionFarmNpcStart,destructionFarmStart,destructionFarmEnd;
@@ -1028,6 +1029,15 @@ struct Bench {
   uint64_t    audioFrames = 0;
   uint64_t    audioAcc  = 0;
   std::vector<int16_t> mix;
+  struct VoiceStem {
+    std::mutex           sync;
+    std::string          path;
+    uint32_t             rate = 0;
+    uint64_t             sample = 0;
+    std::vector<int16_t> pcm;
+    bool                 stopped = false;
+    };
+  std::vector<std::shared_ptr<VoiceStem>> voiceStems;
 
   std::chrono::steady_clock::time_point wallStart;
   std::chrono::steady_clock::time_point recWall;  // when the recording started
@@ -1414,6 +1424,22 @@ void release(PlayerControl& ctrl, KeyCodec::Action a) {
 void stopRecording() {
   if(!bench.rec)
     return;
+  for(auto& stem:bench.voiceStems) {
+    std::lock_guard<std::mutex> guard(stem->sync);
+    stem->stopped = true;
+    // OpenAL may request resampler lookahead. Keep only the part within the segment.
+    const uint64_t available = bench.audioFrames>=stem->sample ? bench.audioFrames-stem->sample : 0;
+    const uint64_t limit = available*stem->rate/SoundDevice::loopbackRate();
+    if(stem->pcm.size()>limit)
+      stem->pcm.resize(size_t(limit));
+    if(auto* file = std::fopen(stem->path.c_str(),"wb")) {
+      writeWavHeader(file,stem->rate,stem->pcm.size(),1);
+      std::fwrite(stem->pcm.data(),sizeof(int16_t),stem->pcm.size(),file);
+      std::fclose(file);
+      }
+    stem->pcm.clear();
+    }
+  bench.voiceStems.clear();
   bench.video.reset();  // waits for the frames still queued
   if(bench.audio!=nullptr) {
     writeWavHeader(bench.audio,SoundDevice::loopbackRate(),bench.audioFrames);
@@ -4318,6 +4344,10 @@ void destructionMeleeSetup(World& world,Npc& player,std::string_view kind,std::s
 
 void destructionMeleeTick(World& world) {
   if(!bench.destructionMeleeRunning || !bench.destructionMeleeActor)return;
+  if(bench.destructionMeleeBlows>0 && bench.destructionMeleeAttempts>=bench.destructionMeleeBlows) {
+    if(world.tickCount()>=bench.destructionMeleeNext) {bench.destructionMeleeRunning=false;bench.waitUntil=0;}
+    return;
+    }
   const auto bodies=world.physic()->movableVobSnapshot();
   const auto found=std::find_if(bodies.begin(),bodies.end(),[](const auto& body){return destructionOwns(body.id);});
   if(found==bodies.end() || world.tickCount()>=bench.destructionMeleeDeadline) {
@@ -7590,8 +7620,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="destruction" && a.size()==3 && a[1]=="support" && a[2]=="sample") destructionSupportSample(w);
   else if(c=="destruction2" && (a.size()==4 || a.size()==5) && a[1]=="setup")
     destructionMeleeSetup(w,pl,a[2],a[3],a.size()==5 && a[4]=="npc");
-  else if(c=="destruction2" && a.size()==2 && a[1]=="attack") {
+  else if(c=="destruction2" && (a.size()==2 || a.size()==3) && a[1]=="attack") {
     if(!bench.destructionMeleeActor || bench.destructionIds.empty()) {arenaAbort("destruction melee setup required");return;}
+    // `attack <n>`: n blows and no more, whether the prop broke or not (a take with destruction off)
+    bench.destructionMeleeBlows=a.size()==3 ? unsigned(num(a,2,0)) : 0;
     bench.destructionMeleeRunning=true;bench.destructionMeleeNext=w.tickCount();
     bench.destructionMeleeDeadline=w.tickCount()+90000;bench.waitUntil=bench.time+90034;
     }
@@ -12780,6 +12812,32 @@ std::function<bool()> TestBench::aiBusy;
 std::function<bool(std::string_view,std::string_view)> TestBench::aiReached;
 std::function<bool(World&,std::string_view,float)> TestBench::stuckBegin;
 std::function<bool(World&)> TestBench::stuckEnd;
+
+bool TestBench::voiceStems() {
+  static const bool enabled = envStr("OPENGOTHIC_BENCH_VOICE_STEM")!=nullptr &&
+                             std::string_view(envStr("OPENGOTHIC_BENCH_VOICE_STEM"))=="1";
+  return enabled;
+  }
+
+std::function<void(const int16_t*,size_t)> TestBench::aiVoiceStem(std::string_view npc, std::string_view line, uint32_t rate) {
+  if(!voiceStems() || !bench.rec || bench.audio==nullptr || SoundDevice::loopbackRate()==0)
+    return {};
+  auto stem = std::make_shared<Bench::VoiceStem>();
+  char suffix[48];
+  std::snprintf(suffix,sizeof(suffix),".voice-%02zu.wav",bench.voiceStems.size()+1);
+  stem->path = std::filesystem::absolute(outDir+"/"+bench.recName+suffix).string();
+  stem->rate = rate;
+  // Sources start in the next loopback render, immediately after the recorded mix so far.
+  stem->sample = bench.audioFrames;
+  bench.voiceStems.push_back(stem);
+  event("npc_voice","\"npc\":"+jsonStr(npc)+",\"line\":"+jsonStr(line)+
+                    ",\"wav\":"+jsonStr(stem->path)+",\"sample\":"+std::to_string(stem->sample));
+  return [stem](const int16_t* pcm, size_t n) {
+    std::lock_guard<std::mutex> guard(stem->sync);
+    if(!stem->stopped)
+      stem->pcm.insert(stem->pcm.end(),pcm,pcm+n);
+    };
+  }
 
 bool TestBench::ragdollBodyDrawable(const Npc& npc) {
   const auto& mesh=npc.visual.view;
