@@ -48,7 +48,7 @@
 | Быстрый, поведенческий | Strands Decider 2B (`decider-service`), Gemma 4 12B для реплик в бою | реакции и позы, бегство, следующий час дня, кто вмешается в беседу, подойти ли к герою | `brain/` (`DeciderClient`, `NpcPlanner`, `Reflexes`, `GameApplier`), `--decider-url`, `--quick-url` |
 | Медленный, говорящий | gpt-6.1-sol по подписке ChatGPT | что сказать, намерение, сделки, поручения, обещания | `dialogue.py`, `llm/`, `--llm`, `--model`; лимит самоинициативы — `budget.py` |
 
-Боевое тело — третий слой: `bodypilot.py` берёт NPC в аренду (lease) у движка и ведёт его политикой P30 из `body-service`. Если сервис отвалился, бой возвращается к родному поведению движка. Подробно — [`npc-agent.md`](npc-agent.md), [`npc-body-control-plan.md`](npc-body-control-plan.md), [`npc-body-api.md`](npc-body-api.md).
+Боевое тело — третий слой: `bodypilot.py` берёт до четырёх NPC в аренду (lease) у движка и ведёт независимые бои политикой P30 из `body-service`, каждый со своим TCP-соединением и памятью GRU. Лимит задаёт `--neural-body-max` (1–4, по умолчанию 4). Если соединение с сервисом отвалилось, этот бой возвращается к родному поведению движка. Подробно — [`npc-agent.md`](npc-agent.md), [`npc-body-control-plan.md`](npc-body-control-plan.md), [`npc-body-api.md`](npc-body-api.md).
 После подвисания игры пилот отправляет накопившиеся строки только в память, оставляя действие свежей последней строке. В `gothic-body serve-net` это включено по умолчанию; `--no-allow-stale-memory-only` возвращает проверку возраста для строк памяти.
 
 ## Правда и убеждения
@@ -133,7 +133,7 @@
 - **Модели:** `--llm chatgpt|openai|local|fake`, `--model`, `--reasoning-effort`, `--no-websocket`, `--no-brain` (планировщик быстрого контура), `--no-quick`, `--no-hold-threats`.
 - **Мир NPC:** `--no-wrath`, `--no-apply-threats`, `--no-beasts`, `--no-chests`, `--no-lead`, `--no-meet`, `--no-errands`, `--no-interject`, `--no-free-bandits`, `--no-apply-day`, `--no-knowledge`, `--no-crimes`.
 - **Сюжет:** `--no-director`, `--no-questlog`, `--no-occasions`, `--no-showrunner`, `--story-graph PATH`.
-- **Тело:** `--body-url`, `--no-neural-body`.
+- **Тело:** `--body-url`, `--no-neural-body`, `--neural-body-max` (1–4, по умолчанию 4).
 - **Сценарий:** `--scenario <имя>`, `--exit-after`.
 
 ## Тесты и прогоны

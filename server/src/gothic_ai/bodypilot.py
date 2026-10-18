@@ -1,4 +1,4 @@
-"""One realtime melee lease driven by the remote P30 JSONL policy (no model dependencies)."""
+"""Independent realtime melee leases driven by the remote P30 JSONL policy (no model dependencies)."""
 
 from __future__ import annotations
 
@@ -204,7 +204,7 @@ class FightSummary:
 
 
 class BodyPilot:
-    """Single-owner state machine with a separate wall-clock lease keepalive."""
+    """Dispatch independent fights over one bridge and one shared observation watch."""
 
     def __init__(
         self,
@@ -214,30 +214,270 @@ class BodyPilot:
         companion: Callable[[str], bool] = lambda npc: False,
         unavailable: Callable[[str], bool] = lambda npc: False,
         clock: Callable[[], float] = time.monotonic,
+        max_fights: int = 4,
     ) -> None:
-        self.link = link
-        self.url = url
+        if type(max_fights) is not int or not 1 <= max_fights <= 4:
+            raise ValueError("neural body max must be between 1 and 4")
+        self.link, self.url = link, url
         self.companion, self.unavailable, self.clock = companion, unavailable, clock
+        self.max_fights = max_fights
         self.people: dict[str, RosterEntry] = {}
-        # Repeated attack perceptions belong to the same combat, even after fallback.
+        self.fights: dict[str, BodyFight] = {}
+        self.summaries: deque[FightSummary] = deque(maxlen=32)
         self._claimed_fights: set[str] = set()
         self._retarget_pending: set[str] = set()
         self._reacquire_after: dict[str, float] = {}
-        self._retargeting = False
-        # Periodic roster updates cannot restart an exhausted acquisition window.
         self._roster_attempted: set[str] = set()
-        self.npc: str | None = None
+        self._watch_npcs: list[str] = []
+        self._watch_lock = asyncio.Lock()
+        self._wake = asyncio.Event()
+        self._done = asyncio.Event()
+        self._running = self._closing = self._resetting = False
+        link.listeners.append(self.on_message)
+        link.raw_body_listeners.append(self.on_body_packet)
+
+    @property
+    def last_summary(self) -> FightSummary | None:
+        """The last completed cleanup; active fights never mutate this snapshot."""
+        return self.summaries[-1] if self.summaries else None
+
+    @property
+    def active_count(self) -> int:
+        return len(self.fights)
+
+    def handles(self, npc: str) -> bool:
+        """Include observation, pending acquisition and acknowledged release cleanup."""
+        return npc.upper() in self.fights
+
+    def _allowed(self, npc: str) -> bool:
+        entry = self.people.get(npc)
+        return bool(
+            entry is not None
+            and entry.guild <= 16
+            and entry.distance <= 2000
+            and entry.activity not in {"dialog", "attached", "down"}
+            and (entry.activity != "body" or (fight := self.fights.get(npc)) is not None
+                 and (fight.lease is not None or fight._acquiring))
+            and not self._companion(npc)
+            and not self.unavailable(npc)
+        )
+
+    def _companion(self, npc: str) -> bool:
+        return bool(self.companion(npc) or self.link.party.get(npc, (0, 0))[1])
+
+    def on_message(self, message: GameMessage) -> None:
+        if isinstance(message, NpcRoster):
+            entries = {entry.id.upper(): entry for entry in message.npcs}
+            ended = {
+                npc for npc, entry in entries.items()
+                if entry.activity == "down"
+                or (entry.activity == "routine" and entry.state.upper() not in {"ZS_ATTACK", "ZS_MM_ATTACK"})
+            }
+            self._claimed_fights.difference_update(ended)
+            self._retarget_pending.difference_update(ended)
+            self._roster_attempted.difference_update(ended)
+            for npc in ended:
+                self._reacquire_after.pop(npc, None)
+            self.people = entries if message.full else {**self.people, **entries}
+            for fight in list(self.fights.values()):
+                if not self._allowed(fight.npc):
+                    fight.stop("npc_unavailable")
+            for npc, entry in sorted(entries.items(), key=lambda item: item[1].distance):
+                if entry.activity != "fight" or entry.state.upper() != "ZS_ATTACK":
+                    continue
+                if self.handles(npc):
+                    self._roster_attempted.add(npc)
+                elif npc not in self._roster_attempted:
+                    self._start(npc)
+        elif isinstance(message, (Loading, Hello)):
+            self.people.clear()
+            self._claimed_fights.clear()
+            self._retarget_pending.clear()
+            self._reacquire_after.clear()
+            self._roster_attempted.clear()
+            self._stop_all("loading" if isinstance(message, Loading) else "session_changed")
+        elif isinstance(message, Attached):
+            if fight := self.fights.get(message.npc.upper()):
+                fight.stop("attached")
+        elif isinstance(message, BodyControlEvents):
+            for fight in list(self.fights.values()):
+                fight.on_message(message)
+        elif isinstance(message, NpcEvent) and not self._closing:
+            npc = None
+            if message.other.upper() in {"PLAYER", "HERO"} and message.kind in {
+                "attack", "threatened", "weapon_drawn", "npc_attack",
+            }:
+                npc = message.npc.upper()
+            elif message.kind == "hero_attacked":
+                npc = message.other.upper()
+            if npc is not None:
+                self._start(npc)
+        self._wake.set()
+
+    def _start(self, npc: str) -> bool:
+        npc = npc.upper()
+        if (
+            self.handles(npc) or self._closing or self._resetting
+            or self.active_count >= self.max_fights
+            or npc in self._claimed_fights
+            or self.clock() < self._reacquire_after.get(npc, float("-inf"))
+            or not self._allowed(npc)
+        ):
+            return False
+        self.fights[npc] = BodyFight(self, npc)
+        self._retarget_pending.discard(npc)
+        entry = self.people[npc]
+        if entry.activity == "fight" and entry.state.upper() == "ZS_ATTACK":
+            self._roster_attempted.add(npc)
+        self._wake.set()
+        return True
+
+    async def _watch(self, fight: BodyFight) -> None:
+        # A growing/shrinking watch is a replacement list. Serialize its receipts
+        # so a concurrent finish cannot overwrite a newly admitted actor.
+        async with self._watch_lock:
+            npcs = [npc for npc in self._watch_npcs if npc in self.fights]
+            if fight.npc not in npcs:
+                npcs.append(fight.npc)
+            # A timeout may mean the bridge applied this list without a receipt.
+            previous = self._watch_npcs
+            self._watch_npcs = npcs
+            try:
+                await self.link.body_watch(npcs, timeout=BRIDGE_TIMEOUT)
+            except GameError:
+                self._watch_npcs = previous
+                raise
+
+    async def _unwatch(self, fight: BodyFight) -> bool:
+        async with self._watch_lock:
+            npcs = [npc for npc in self._watch_npcs if npc != fight.npc and npc in self.fights]
+            await self.link.body_watch(npcs, timeout=BRIDGE_TIMEOUT)
+            self._watch_npcs = npcs
+            return True
+
+    def _completed(self, fight: BodyFight, summary: FightSummary) -> None:
+        self.summaries.append(summary)
+        if self.fights.get(summary.npc) is fight:
+            del self.fights[summary.npc]
+        if not self.fights:
+            self._resetting = False
+        self._wake.set()
+
+    def _stop_all(self, reason: str) -> None:
+        self._resetting = bool(self.fights)
+        for fight in list(self.fights.values()):
+            fight.stop(reason)
+        self._wake.set()
+
+    def _drain_events(self) -> None:
+        # GameLink also polls destructively while awaiting an acquisition's safe
+        # boundary. Its queue retains ownership events for every other actor.
+        events = []
+        while (event := self.link.pop_body_control_event()) is not None:
+            events.append(event)
+        if events:
+            self.on_message(BodyControlEvents(
+                type="body_control_events",
+                session_epoch=events[0].session_epoch,
+                world_epoch=events[0].world_epoch,
+                dropped_total=self.link.body_control_dropped_events,
+                events=tuple(events),
+            ))
+
+    def on_body_packet(self, packet: dict[str, Any]) -> None:
+        rows = packet["observations"]
+        now_game_ms = max((row["t_game_ms"] for row in rows), default=None)
+        for fight in list(self.fights.values()):
+            lease = fight.lease
+            if lease is not None and (packet["session_epoch"], packet["world_epoch"]) != (
+                lease.session_epoch, lease.world_epoch,
+            ):
+                self._stop_all("world_changed")
+                return
+        for fight in list(self.fights.values()):
+            own_rows = [row for row in rows if (
+                (fight._entity is None or row["entity_id"] == fight._entity)
+                and row["script_symbol"] == fight._symbol
+            )]
+            if now_game_ms is not None:
+                fight._now_game_ms = now_game_ms
+            if own_rows:
+                fight.on_body_packet({**packet, "observations": own_rows})
+
+    async def run(self) -> None:
+        self._running = True
+        try:
+            while not self._closing:
+                self._wake.clear()
+                self._drain_events()
+                if self.link.closed.is_set():
+                    self._stop_all("disconnected")
+                    break
+                for fight in list(self.fights.values()):
+                    if fight.task is None:
+                        fight.task = asyncio.create_task(fight.run())
+                for npc in sorted(self._retarget_pending):
+                    entry = self.people.get(npc)
+                    if entry is not None and entry.activity == "fight" and entry.state.upper() == "ZS_ATTACK":
+                        self._start(npc)
+                try:
+                    await asyncio.wait_for(self._wake.wait(), timeout=0.025)
+                except TimeoutError:
+                    pass
+        finally:
+            self._closing = True
+            fights = list(self.fights.values())
+            for fight in fights:
+                fight._closing = True
+                fight.stop(fight._reason or "shutdown")
+            try:
+                await asyncio.gather(*[
+                    fight.task if fight.task is not None else fight._finish(fight._reason or "shutdown")
+                    for fight in fights
+                ])
+            finally:
+                self._unregister()
+                self._done.set()
+
+    async def aclose(self) -> None:
+        self._closing = True
+        self._stop_all("shutdown")
+        if self._running:
+            await self._done.wait()
+        else:
+            try:
+                await asyncio.gather(*[fight._finish("shutdown") for fight in list(self.fights.values())])
+            finally:
+                self._unregister()
+                self._done.set()
+
+    def _unregister(self) -> None:
+        if self.on_message in self.link.listeners:
+            self.link.listeners.remove(self.on_message)
+        if self.on_body_packet in self.link.raw_body_listeners:
+            self.link.raw_body_listeners.remove(self.on_body_packet)
+
+
+class BodyFight:
+    """One lease, policy TCP episode and all of its independent combat state."""
+
+    def __init__(self, pilot: BodyPilot, npc: str) -> None:
+        self.pilot, self.link, self.clock = pilot, pilot.link, pilot.clock
+        self.npc: str | None = npc
+        self._retargeting = npc in pilot._retarget_pending
+        self._claimed_fights = pilot._claimed_fights
+        self._retarget_pending = pilot._retarget_pending
+        self._reacquire_after = pilot._reacquire_after
+        self.task: asyncio.Task[None] | None = None
         self.lease: BodyLease | None = None
         self.client: PolicyClient | None = None
         self._rows: deque[tuple[dict[str, Any], float]] = deque()
         self._wake = asyncio.Event()
-        self._done = asyncio.Event()
         self._closing = False
-        self._running = False
         self._reason: str | None = None
         self._watched = False
         self._watch_ready = False
-        self._attempt_at = 0.0
+        self._attempt_at = self.clock()
         self._last_acquire = float("-inf")
         self._fight_at = 0.0
         self._initial_game_ms: int | None = None
@@ -289,29 +529,20 @@ class BodyPilot:
         self._policy_memory_resets = 0
         self._max_batch_rows = 0
         self._max_batch_lag_game_ms = 0
-        self._last_summary: FightSummary | None = None
-        link.listeners.append(self.on_message)
-        link.raw_body_listeners.append(self.on_body_packet)
 
     @property
-    def last_summary(self) -> FightSummary | None:
-        """The last completed cleanup; an active fight never mutates this snapshot."""
-        return self._last_summary
+    def url(self) -> str:
+        return self.pilot.url
+
+    @property
+    def people(self) -> dict[str, RosterEntry]:
+        return self.pilot.people
 
     def _allowed(self, npc: str) -> bool:
-        entry = self.people.get(npc)
-        return bool(
-            entry is not None
-            and entry.guild <= 16
-            and entry.distance <= 2000
-            and entry.activity not in {"dialog", "attached", "down"}
-            and (entry.activity != "body" or self.lease is not None or self._acquiring)
-            and not self._companion(npc)
-            and not self.unavailable(npc)
-        )
+        return self.pilot._allowed(npc)
 
     def _companion(self, npc: str) -> bool:
-        return bool(self.companion(npc) or self.link.party.get(npc, (0, 0))[1])
+        return self.pilot._companion(npc)
 
     async def _live_target(self) -> tuple[str, str | None, str] | None:
         """Classify the engine's current target, never the roster's combat snapshot."""
@@ -337,42 +568,13 @@ class BodyPilot:
                 return "companion", entry.name if entry else npc, npc
         return None
 
+    def stop(self, reason: str) -> None:
+        self._reason = reason
+        self._acquire_cancel.set()
+        self._wake.set()
+
     def on_message(self, message: GameMessage) -> None:
-        if isinstance(message, NpcRoster):
-            entries = {entry.id.upper(): entry for entry in message.npcs}
-            ended = {
-                npc
-                for npc, entry in entries.items()
-                if entry.activity == "down"
-                or (entry.activity == "routine" and entry.state.upper() not in {"ZS_ATTACK", "ZS_MM_ATTACK"})
-            }
-            self._claimed_fights.difference_update(ended)
-            self._retarget_pending.difference_update(ended)
-            for npc in ended:
-                self._reacquire_after.pop(npc, None)
-            self._roster_attempted.difference_update(ended)
-            self.people = entries if message.full else {**self.people, **entries}
-            if self.npc is not None and not self._allowed(self.npc):
-                self._reason = "npc_unavailable"
-            # A lone hostile NPC can attack a passive hero without any combat
-            # perception reaching the server. A drawn weapon alone is not a fight.
-            for npc, entry in sorted(entries.items(), key=lambda item: item[1].distance):
-                if entry.activity != "fight" or entry.state.upper() != "ZS_ATTACK":
-                    continue
-                if npc == self.npc:
-                    self._roster_attempted.add(npc)
-                elif npc not in self._roster_attempted and self._start(npc):
-                    break
-        elif isinstance(message, (Loading, Hello)):
-            self.people.clear()
-            self._claimed_fights.clear()
-            self._retarget_pending.clear()
-            self._reacquire_after.clear()
-            self._roster_attempted.clear()
-            self._reason = "loading" if isinstance(message, Loading) else "session_changed"
-        elif isinstance(message, Attached) and message.npc.upper() == self.npc:
-            self._reason = "attached"
-        elif isinstance(message, BodyControlEvents) and self.lease is not None:
+        if isinstance(message, BodyControlEvents) and self.lease is not None:
             for event in message.events:
                 if (
                     (event.entity_id, event.session_epoch, event.world_epoch, event.control_generation)
@@ -387,43 +589,9 @@ class BodyPilot:
                         "target_lost" if event.release_reason == "target_visibility_lost"
                         else "native_restored"
                     )
-        elif isinstance(message, NpcEvent) and self.npc is None and not self._closing:
-            npc = None
-            if message.other.upper() in {"PLAYER", "HERO"} and message.kind in {
-                "attack",
-                "threatened",
-                "weapon_drawn",
-                "npc_attack",
-            }:
-                npc = message.npc.upper()
-            elif message.kind == "hero_attacked":
-                npc = message.other.upper()
-            if npc is not None:
-                self._start(npc)
         if self._reason is not None:
             self._acquire_cancel.set()
         self._wake.set()
-
-    def _start(self, npc: str) -> bool:
-        if (
-            self.npc is not None
-            or self._closing
-            or npc in self._claimed_fights
-            or self.clock() < self._reacquire_after.get(npc, float("-inf"))
-            or not self._allowed(npc)
-            or self.link.body_leases
-        ):
-            return False
-        self.npc = npc
-        self._retargeting = npc in self._retarget_pending
-        self._retarget_pending.discard(npc)
-        self._reason = None
-        self._acquire_cancel.clear()
-        self._attempt_at = self.clock()
-        entry = self.people[npc]
-        if entry.activity == "fight" and entry.state.upper() == "ZS_ATTACK":
-            self._roster_attempted.add(npc)
-        return True
 
     @staticmethod
     def _identity(lease: BodyLease) -> tuple[int, int, int, int]:
@@ -432,8 +600,6 @@ class BodyPilot:
     def on_body_packet(self, packet: dict[str, Any]) -> None:
         received_at = self.clock()
         rows = packet["observations"]
-        if rows:
-            self._now_game_ms = max(row["t_game_ms"] for row in rows)
         for row in rows:
             self._remember_down(row)
         if self.npc is None or not self._watch_ready:
@@ -442,7 +608,8 @@ class BodyPilot:
             self.lease.session_epoch,
             self.lease.world_epoch,
         ):
-            self._reason = "world_changed"
+            self.pilot._stop_all("world_changed")
+            return
         for row in rows:
             if len(self._rows) >= 128:
                 self._reason = "observation_overflow"
@@ -459,23 +626,16 @@ class BodyPilot:
         self._wake.set()
 
     async def run(self) -> None:
-        self._running = True
         try:
-            while not self._closing:
+            while self.npc is not None:
                 self._wake.clear()
                 if self.link.closed.is_set():
-                    self._reason = "disconnected"
+                    self.pilot._stop_all("disconnected")
+                if self._reason == "disconnected":
+                    self.pilot._stop_all("disconnected")
+                await self._tick()
+                if self.npc is None:
                     break
-                if self.npc is not None:
-                    await self._tick()
-                else:
-                    for npc in sorted(self._retarget_pending):
-                        entry = self.people.get(npc)
-                        if (
-                            entry is not None and entry.activity == "fight"
-                            and entry.state.upper() == "ZS_ATTACK" and self._start(npc)
-                        ):
-                            break
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=0.025)
                 except TimeoutError:
@@ -485,32 +645,9 @@ class BodyPilot:
             raise
         except Exception:
             self._reason = "pilot_error"
-            log.exception("neural-body pilot failed")
+            log.exception("neural-body pilot failed npc=%s", self.npc)
         finally:
-            try:
-                await self._finish(self._reason or "shutdown")
-            finally:
-                self._unregister()
-                self._done.set()
-
-    async def aclose(self) -> None:
-        self._closing = True
-        self._acquire_cancel.set()
-        self._wake.set()
-        if self._running:
-            await self._done.wait()
-        else:
-            try:
-                await self._finish("shutdown")
-            finally:
-                self._unregister()
-                self._done.set()
-
-    def _unregister(self) -> None:
-        if self.on_message in self.link.listeners:
-            self.link.listeners.remove(self.on_message)
-        if self.on_body_packet in self.link.raw_body_listeners:
-            self.link.raw_body_listeners.remove(self.on_body_packet)
+            await self._finish(self._reason or "shutdown")
 
     async def _heartbeats(self, lease: BodyLease) -> None:
         """Renew from send time, independently of policy calls and ownership polling."""
@@ -564,6 +701,7 @@ class BodyPilot:
                 pass
 
     async def _tick(self) -> None:
+        self.pilot._drain_events()
         if self._reason:
             await self._finish(self._reason)
             return
@@ -598,15 +736,24 @@ class BodyPilot:
             self._watched = True
             started = time.monotonic()
             try:
-                await self.link.body_watch(self._watch_npcs(), timeout=BRIDGE_TIMEOUT)
+                await self.pilot._watch(self)
             except BRIDGE_ERRORS as error:
                 log.warning(
                     "neural-body watch setup failed stage=body_watch rpc=body_watch npc=%s "
                     "error_type=%s error=%r elapsed_ms=%.1f",
                     self.npc, type(error).__name__, error, (time.monotonic() - started) * 1000,
                 )
+                refused = isinstance(error, GameError) and any(
+                    other is not self for other in self.pilot.fights.values()
+                )
+                if refused:
+                    self._watched = False
+                    self.pilot._reacquire_after[self.npc] = self.clock() + REACQUIRE_INTERVAL
+                    self.pilot._roster_attempted.discard(self.npc)
                 await self._finish(
-                    "body_watch_timeout" if isinstance(error, TimeoutError) else "body_watch_failed"
+                    "watch_refused" if refused else (
+                        "body_watch_timeout" if isinstance(error, TimeoutError) else "body_watch_failed"
+                    )
                 )
                 return
             self._watch_ready = True
@@ -623,7 +770,7 @@ class BodyPilot:
             if loop.time() - self._last_events_poll >= EVENTS_INTERVAL:
                 try:
                     self._last_events_poll = loop.time()
-                    self.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
+                    self.pilot.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
                 except BRIDGE_ERRORS:
                     await self._finish("lease_lost")
                     return
@@ -643,10 +790,6 @@ class BodyPilot:
                 # Keep ownership polling responsive under a continuous row stream.
                 self._wake.set()
                 break
-
-    def _watch_npcs(self) -> list[str]:
-        assert self.npc is not None
-        return [self.npc]
 
     def _is_leased_target(self, row: dict[str, Any]) -> bool:
         return self._hero is None or row["target"]["entity_id"] == self._hero
@@ -1048,6 +1191,9 @@ class BodyPilot:
         return None
 
     async def _finish(self, reason: str) -> None:
+        self.pilot._drain_events()
+        if reason in {"lease_lost", "native_restored"} and self._reason == "target_lost":
+            reason = "target_lost"
         npc, client = self.npc, self.client
         if npc is None and self.lease is None and client is None:
             return
@@ -1106,7 +1252,7 @@ class BodyPilot:
                     if self.link.closed.is_set():
                         break
                     try:
-                        self.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
+                        self.pilot.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
                     except BRIDGE_ERRORS:
                         pass
                     if self.link.body_leases.get(lease.entity_id) != lease:
@@ -1132,7 +1278,7 @@ class BodyPilot:
                         if (self.link.body_session_epoch, self.link.body_generation) == (
                             lease.session_epoch, lease.world_epoch,
                         ):
-                            self.on_message(events)
+                            self.pilot.on_message(events)
                 if (
                     reason in native_reasons and lease is not None
                     and self._native_release_reason is not None and not self.link.closed.is_set()
@@ -1197,11 +1343,13 @@ class BodyPilot:
                 observed_terminal = observed_terminal or self._latest_terminal(lease)
                 if observed_terminal is not None:
                     reason = observed_terminal
-            if self._watched and not self.link.body_leases:
+            if self._watched and (
+                release_confirmed or (lease is None and self._pending_acquire is None)
+                or not self.link.body_leases
+            ):
                 with contextlib.suppress(*BRIDGE_ERRORS):
                     async with asyncio.timeout(BRIDGE_TIMEOUT):
-                        await self.link.body_watch([], timeout=BRIDGE_TIMEOUT)
-                        watch_removed = True
+                        watch_removed = await self.pilot._unwatch(self)
         summary = FightSummary(
             npc=npc,
             lease=lease,
@@ -1354,4 +1502,4 @@ class BodyPilot:
         self._memory_only_step = self._policy_needs_reset = False
         self._memory_only_lag_rows = self._observation_too_old = self._policy_memory_resets = 0
         self._max_batch_rows = self._max_batch_lag_game_ms = 0
-        self._last_summary = summary
+        self.pilot._completed(self, summary)

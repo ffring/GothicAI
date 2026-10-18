@@ -170,7 +170,8 @@ async def _neural_fight_scenario(
 
     def observe(packet: dict[str, Any]) -> None:
         nonlocal leased_entity, one_handed, down_at, down_reason
-        lease = pilot.lease
+        fight = pilot.fights.get(npc)
+        lease = fight.lease if fight is not None else None
         if lease is None or lease.npc != npc:
             return
         for row in packet["observations"]:
@@ -289,9 +290,9 @@ async def _neural_fight_scenario(
     await asyncio.sleep(0.3)
     check(
         "neural_idle",
-        bool(summary and summary.watch_removed and pilot.npc is None and pilot.lease is None
-             and pilot.client is None and not link.body_leases),
-        f"npc={pilot.npc}, lease={pilot.lease}, watch_removed={summary.watch_removed if summary else False}",
+        bool(summary and summary.watch_removed and pilot.active_count == 0 and not link.body_leases),
+        f"active_fights={pilot.active_count}, leases={len(link.body_leases)}, "
+        f"watch_removed={summary.watch_removed if summary else False}",
     )
     return _logged(results)
 

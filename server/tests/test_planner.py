@@ -1200,7 +1200,11 @@ async def test_native_held_threat_combat_waits_for_the_pilot(claimed) -> None:
 
     for choice in ("fight", "flee"):
         link = Link()
-        pilot = SimpleNamespace(npc=None, _claimed_fights=set(), people={"BANDIT": entry("BANDIT", 5)})
+        handled = set()
+        pilot = SimpleNamespace(
+            handles=lambda npc, handled=handled: npc in handled, _claimed_fights=set(),
+            people={"BANDIT": entry("BANDIT", 5)},
+        )
         applier = GameApplier(
             link, native_body=lambda npc, link=link, pilot=pilot: _native_combat_available(link, pilot, npc)
         )
@@ -1213,7 +1217,7 @@ async def test_native_held_threat_combat_waits_for_the_pilot(claimed) -> None:
         })))
         planner.tick(clock.t)
         # The pilot can start after the model's reaction was scheduled, before its native task runs.
-        pilot.npc = "BANDIT"
+        handled.add("BANDIT")
         await settle()
         assert not link.acts  # no lease or claimed flag yet: the acquisition window itself blocks combat
         assert not link.events  # its server verdict must wait for this same handoff
@@ -1222,7 +1226,7 @@ async def test_native_held_threat_combat_waits_for_the_pilot(claimed) -> None:
                 pilot._claimed_fights.add("BANDIT")
             else:
                 pilot.people["BANDIT"] = entry("BANDIT", 5, activity="body")
-        pilot.npc = None
+        handled.clear()
         await asyncio.sleep(0.06)
         await settle()
         assert link.acts == ([] if claimed else [("BANDIT", choice, {"npc": "CAVALORN"})])

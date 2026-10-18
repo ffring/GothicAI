@@ -328,11 +328,137 @@ class Bridge:
         self.link._dispatch(message(raw), raw_body_packet=raw)
 
 
+class MultiBridge(Bridge):
+    """Native ownership keyed by actor, with both growing and legacy watches."""
+
+    def __init__(self):
+        super().__init__()
+        self.watched = []
+        self.actors = {}
+        self.legacy_watch = False
+        self.refuse_shrink = False
+        self.release_ack = None
+        self.acquire_ack = {}
+        self.event_seq = 0
+        self.observation_seq = 0
+
+    def emit(self, *rows, generation=1):
+        # The native journal sequences all actors together, including several
+        # snapshots in one frame. Their original game timestamps stay intact.
+        for row in rows:
+            self.observation_seq += 1
+            row["observation_seq"] = self.observation_seq
+        super().emit(*rows, generation=generation)
+
+    async def send(self, raw):
+        command = json.loads(raw)
+        self.sent.append(command)
+        self.sent_times.append((command, asyncio.get_running_loop().time()))
+        kind = command["type"]
+        if kind == "body_watch":
+            npcs = command["npcs"]
+            if (self.legacy_watch and self.link.body_leases and npcs != self.watched) or (
+                self.refuse_shrink and set(npcs) < set(self.watched)
+            ):
+                self.link._dispatch(Result(
+                    type="result", req=command["req"], ok=False,
+                    error="release active body owners before changing body_watch",
+                ))
+                return
+            self.watched = npcs
+            value = {"generation": 1, "session_epoch": 1, "world_epoch": 1}
+        elif kind == "story_eval":
+            value = [npc_symbol(expr[1]) if expr[0] == "sym" else 1
+                     for expr in command["exprs"]]
+        elif kind == "body_events":
+            value = events().model_dump(mode="json")
+        elif kind in {"body_acquire", "body_action", "body_heartbeat", "body_release"}:
+            entity = command["entity_id"]
+            value = receipt(
+                entity_id=entity,
+                session_epoch=command["session_epoch"], world_epoch=command["world_epoch"],
+                control_generation=command.get("control_generation", 7),
+                goal_version=command.get("goal_version", 1),
+                target_entity_id=command.get("target_entity_id", 2),
+                command_id=command.get("command_id", 0),
+                acquire_request_id=command.get("acquire_request_id", 0),
+                observation_seq=(
+                    self.link.body_latest[entity].observation_seq
+                    if entity in self.link.body_latest else 1
+                ),
+            )
+            if kind == "body_acquire":
+                npc = next(name for name in self.watched if npc_entity(name) == entity)
+                self.actors[entity] = {"npc": npc, "owned": True}
+                if npc in self.acquire_ack:
+                    self.actors[entity]["owned"] = False
+                    value.update(reason="acquire_pending", owner="native", control_generation=0)
+
+                    async def grant_pending():
+                        await self.acquire_ack[npc].wait()
+                        self.actors[entity]["owned"] = True
+                        self._activity(npc, "body")
+                        self.event_seq += 1
+                        self.link._dispatch(events(event(
+                            self.event_seq, entity_id=entity, provider=command["provider"],
+                            acquire_request_id=command["acquire_request_id"],
+                            observation_seq=self.link.body_latest[entity].observation_seq,
+                        )))
+
+                    self._background(grant_pending())
+                else:
+                    self._activity(npc, "body")
+            elif kind == "body_release":
+                if self.release_ack is not None:
+                    await self.release_ack.wait()
+                self.actors[entity]["owned"] = False
+                value.update(owner="native", reason="native_restored")
+                self._activity(self.actors[entity]["npc"], "fight")
+            else:
+                assert self.actors[entity]["owned"], f"{kind} used another fight's released actor"
+                assert command["provider"] == "neural-body"
+        else:
+            raise AssertionError(f"unexpected multi bridge command: {kind}")
+        self.link._dispatch(Result(type="result", req=command["req"], ok=True, value=value))
+
+
+def npc_symbol(npc):
+    return 100 + int(npc.removeprefix("NPC_"))
+
+
+def npc_entity(npc):
+    return 10 + int(npc.removeprefix("NPC_"))
+
+
+def multi_fighter(npc, seq=2, *, owned=False, **changes):
+    return fighter(seq, owned=owned, entity=npc_entity(npc), script_symbol=npc_symbol(npc), **changes)
+
+
+def multi_entry(npc, *, activity="fight"):
+    return RosterEntry(
+        id=npc, name=f"Fighter {npc}", guild=1, distance=200.0,
+        in_view=True, activity=activity, state="ZS_ATTACK",
+    )
+
+
+async def start_fights(rig, *npcs):
+    rig.bridge.roster(*(multi_entry(npc) for npc in npcs))
+    await eventually(lambda: all(rig.pilot.handles(npc) for npc in npcs))
+    await eventually(lambda: all(rig.pilot.fights[npc]._watch_ready for npc in npcs))
+    rig.bridge.emit(*(multi_fighter(npc) for npc in npcs))
+    await eventually(lambda: len(rig.link.body_leases) == len(npcs))
+    await eventually(lambda: len(rig.policy.commands("reset")) == len(npcs))
+    rig.bridge.emit(*(multi_fighter(npc, 3, owned=True) for npc in npcs))
+    await eventually(lambda: len(rig.bridge.commands("body_action")) == len(npcs))
+
+
 class Policy:
     """The real JSONL wire protocol, without importing the model package."""
 
     def __init__(self):
         self.requests = []
+        self.connections = []
+        self.request_connections = {}
         self.writers = set()
         self.tasks = set()
         self.step_mode = "normal"
@@ -352,11 +478,13 @@ class Policy:
 
     async def handle(self, reader, writer):
         self.writers.add(writer)
+        self.connections.append(writer)
         self.tasks.add(asyncio.current_task())
         try:
             while line := await reader.readline():
                 request = json.loads(line)
                 self.requests.append(request)
+                self.request_connections[id(request)] = self.connections.index(writer)
                 command = request["cmd"]
                 result = {"id": request["id"], "schema_version": 1, "ok": True}
                 if command == "reset":
@@ -474,10 +602,27 @@ def companion_entry():
     )
 
 
+class FightHistory(dict):
+    """Keep completed instances available for the existing cleanup assertions."""
+
+    last = None
+
+    def __setitem__(self, key, value):
+        self.last = value
+        super().__setitem__(key, value)
+
+
 class Rig:
     def __init__(self, bridge, policy, pilot, clock):
         self.bridge, self.policy, self.pilot, self.clock = bridge, policy, pilot, clock
         self.link = bridge.link
+        pilot.fights = FightHistory(pilot.fights)
+
+    @property
+    def fight(self):
+        return self.pilot.fights.get("NPC") or next(
+            iter(self.pilot.fights.values()), self.pilot.fights.last,
+        )
 
     def roster(self, *, activity=None, state=None, guild=1, include=True, extra=()):
         if activity is None:
@@ -525,7 +670,7 @@ class Rig:
         self.bridge.emit(fighter(seq, owned=True, target_entity=target_entity))
         await eventually(lambda: len(self.bridge.commands("body_release")) == releases + 1)
         await eventually(lambda: len(self.policy.commands("end_episode")) == episodes + 1)
-        await eventually(lambda: self.pilot.npc is None)
+        await eventually(lambda: self.pilot.active_count == 0)
         assert not self.link.body_leases
         assert self.pilot.last_summary.reason == "target_changed"
 
@@ -534,7 +679,7 @@ class Rig:
         self.bridge.emit(fighter(seq, target_entity=target_entity))
         await eventually(lambda: len(self.bridge.commands("body_acquire")) == count)
         await eventually(lambda: len(self.policy.commands("reset")) == count)
-        assert self.pilot.lease.target_entity_id == target_entity
+        assert self.fight.lease.target_entity_id == target_entity
 
     async def lose_heartbeat_before_native_event(self, *, target_entity, evidence="matching", down=False):
         original_heartbeat = self.link.body_heartbeat
@@ -550,7 +695,7 @@ class Rig:
         self.link.body_heartbeat = record_heartbeat
         # Keep the ordinary event poll out of this handoff. The next heartbeat
         # discovers native ownership; cleanup must then consume its ownership event.
-        self.pilot._last_events_poll = float("inf")
+        self.fight._last_events_poll = float("inf")
         first_command = len(self.bridge.sent)
         self.bridge.restore_native(release_reason="target_changed_or_lost")
         if evidence == "missing":
@@ -570,14 +715,14 @@ class Rig:
 
 
 @asynccontextmanager
-async def running(*, companion=False, unavailable=False):
-    bridge, policy, clock = Bridge(), Policy(), Clock()
+async def running(*, companion=False, unavailable=False, max_fights=4, multi=False):
+    bridge, policy, clock = MultiBridge() if multi else Bridge(), Policy(), Clock()
     server = await asyncio.start_server(policy.handle, host="localhost", port=0, family=socket.AF_INET)
     port = server.sockets[0].getsockname()[1]
     pilot = BodyPilot(
         bridge.link, f"tcp://localhost:{port}",
         companion=companion if callable(companion) else lambda _: companion,
-        unavailable=lambda _: unavailable, clock=clock,
+        unavailable=lambda _: unavailable, clock=clock, max_fights=max_fights,
     )
     task = asyncio.create_task(pilot.run())
     try:
@@ -630,9 +775,9 @@ async def test_pre_acquire_snapshot_delivered_after_acquire_keeps_lease_and_wait
         assert passive["control_generation"] == 0
         assert passive["observation_seq"] > lease.acquired_observation_seq
         rig.bridge.emit(passive)
-        await eventually(lambda: not rig.pilot._rows)
+        await eventually(lambda: not rig.fight._rows)
         assert rig.link.body_leases == {1: lease}
-        assert rig.pilot.lease == lease
+        assert rig.fight.lease == lease
         assert not rig.policy.commands("step")
         assert not rig.bridge.commands("body_release")
 
@@ -653,7 +798,7 @@ async def test_lost_acquire_reply_reconciles_native_lease_before_clearing_watch(
         rig.bridge.response_delays["body_acquire"] = 0.350
         rig.bridge.acquire_roster_delay = 0.500
         await rig.watch()
-        await eventually(lambda: rig.pilot._watch_ready)
+        await eventually(lambda: rig.fight._watch_ready)
         rig.bridge.emit(player_row(), fighter())
         await eventually(lambda: rig.bridge.provider_owned)
         # The native actor has a lease before its result or body roster arrives.
@@ -664,7 +809,7 @@ async def test_lost_acquire_reply_reconciles_native_lease_before_clearing_watch(
             await asyncio.wait_for(rig.pilot.aclose(), 1.0)
         await eventually(lambda: rig.bridge.commands("body_release"))
         await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         # Drain the delayed reply and roster; neither may revive the discarded lease.
         await eventually(lambda: not rig.bridge._response_tasks)
         assert not rig.bridge.provider_owned
@@ -693,7 +838,7 @@ async def test_lost_acquire_reply_reconciles_native_lease_before_clearing_watch(
             rig.bridge.acquire_roster_delay = 0
             rig.roster(activity="routine", state="ZS_SIT_BENCH")
             await rig.watch()
-            await eventually(lambda: rig.pilot._watch_ready)
+            await eventually(lambda: rig.fight._watch_ready)
             rig.bridge.emit(player_row(4), fighter(5))
             await eventually(lambda: rig.link.body_leases)
             rig.bridge.emit(fighter(6, owned=True))
@@ -744,8 +889,8 @@ async def test_native_attack_roster_rejects_live_target_outside_hero_and_compani
         own["goal"]["target_id"] = 8
         rig.bridge.emit(player_row(), own)
         await eventually(lambda: len(rig.bridge.commands("story_eval")) == 2)
-        await eventually(lambda: rig.pilot._refusals["target_not_allowed"] == 1)
-        assert rig.pilot._refusals == {"target_not_allowed": 1}
+        await eventually(lambda: rig.fight._refusals["target_not_allowed"] == 1)
+        assert rig.fight._refusals == {"target_not_allowed": 1}
         assert not rig.bridge.commands("body_acquire")
         assert not rig.policy.requests
 
@@ -760,7 +905,7 @@ async def test_live_companion_target_is_acquired_and_named_in_summary(membership
         await rig.active(target_entity=3, extra=[companion_entry()])
         acquire = rig.bridge.commands("body_acquire")[0]
         assert acquire["target_entity_id"] == 3
-        assert rig.pilot.lease.target_entity_id == 3
+        assert rig.fight.lease.target_entity_id == 3
         assert len(rig.policy.commands("reset")) == 1
         assert rig.policy.commands("step")[0]["observation"]["target"]["entity_id"] == 3
         assert rig.bridge.commands("body_action")[0]["target_entity_id"] == 3
@@ -781,12 +926,12 @@ async def test_companion_membership_is_rechecked_after_live_target_query():
         rig.bridge.target_is_hero = False
         rig.bridge.target_npc = "CAVALORN"
         await rig.watch(extra=[companion_entry()])
-        await eventually(lambda: rig.pilot._watch_ready)
+        await eventually(lambda: rig.fight._watch_ready)
         rig.bridge.response_delays["story_eval"] = 0.020
         rig.bridge.emit(player_row(), fighter(target_entity=3))
         await eventually(lambda: len(rig.bridge.commands("story_eval")) == 2)
         companions.clear()
-        await eventually(lambda: rig.pilot._refusals["target_not_allowed"] == 1)
+        await eventually(lambda: rig.fight._refusals["target_not_allowed"] == 1)
         assert not rig.bridge.commands("body_acquire")
         assert not rig.policy.requests
 
@@ -901,7 +1046,7 @@ async def test_frame_hitch_burst_updates_memory_in_order_and_only_freshest_row_a
         assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
         # The row following a burst belongs to the same uninterrupted episode.
         rig.bridge.emit(fighter(10, owned=True))
-        await eventually(lambda: rig.pilot._decisions == 3)
+        await eventually(lambda: rig.fight._decisions == 3)
         await rig.pilot.aclose()
         summary = rig.pilot.last_summary
         assert summary.memory_only_lag_rows == 5
@@ -1051,7 +1196,7 @@ async def test_pending_boundary_wait_sends_no_policy_or_actions_until_actual_gra
         rig.clock.advance(0.075)
         await eventually(lambda: rig.policy.commands("reset"))
         assert len(rig.bridge.commands("body_acquire")) == 1
-        assert rig.pilot.lease.acquired_observation_seq == 3
+        assert rig.fight.lease.acquired_observation_seq == 3
         assert not rig.policy.commands("step")
         rig.bridge.emit(fighter(4, owned=True))
         await eventually(lambda: rig.bridge.commands("body_action"))
@@ -1068,9 +1213,9 @@ async def test_expired_boundary_request_retries_without_ending_or_resetting_epis
         rig.bridge.acquire_pending_results.extend(["expired", "acquired"])
         await rig.watch()
         rig.bridge.emit(player_row(), fighter())
-        await eventually(lambda: rig.pilot._refusals)
-        assert dict(rig.pilot._refusals) == {"body acquire cancelled: expired": 1}
-        assert not rig.policy.requests and rig.pilot.npc == "NPC"
+        await eventually(lambda: rig.fight._refusals)
+        assert dict(rig.fight._refusals) == {"body acquire cancelled: expired": 1}
+        assert not rig.policy.requests and rig.fight.npc == "NPC"
         rig.clock.advance(0.151)
         rig.bridge.emit(fighter(4))
         await eventually(lambda: rig.policy.commands("reset"))
@@ -1087,7 +1232,7 @@ async def test_boundary_wait_is_clipped_to_remaining_five_second_acquire_window(
         await rig.watch()
         rig.clock.advance(4.5)
         rig.bridge.emit(player_row(), fighter())
-        await eventually(lambda: rig.pilot._refusals)
+        await eventually(lambda: rig.fight._refusals)
         assert rig.bridge.commands("body_acquire")[0]["await_boundary_ms"] == 500
         rig.clock.advance(0.501)
         rig.bridge.emit(fighter(4))
@@ -1146,7 +1291,7 @@ async def test_repeated_native_attack_roster_does_not_restart_exhausted_acquisit
         rig.clock.advance(5.01)
         rig.roster()
         await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         for seq in range(3, 6):
             rig.roster()
             rig.bridge.emit(fighter(seq))
@@ -1164,7 +1309,7 @@ async def test_native_attack_roster_starts_after_a_precombat_watch_expires():
         rig.clock.advance(5.01)
         rig.roster(activity="fight", state="ZS_WAIT")
         await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         assert not rig.bridge.commands("body_acquire")
         rig.roster(activity="fight", state="ZS_ATTACK")
         await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
@@ -1183,7 +1328,7 @@ async def test_native_attack_during_a_precombat_watch_is_not_retried_after_exhau
         rig.clock.advance(3.01)
         rig.roster(activity="fight", state="ZS_ATTACK")
         await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         for seq in range(2, 5):
             rig.roster(activity="fight", state="ZS_ATTACK")
             rig.bridge.emit(fighter(seq))
@@ -1209,13 +1354,13 @@ async def test_completed_fight_summary_survives_counter_reset_and_the_next_fight
     async with running() as rig:
         assert rig.pilot.last_summary is None
         await rig.active()
-        lease = rig.pilot.lease
+        lease = rig.fight.lease
         for seq in (4, 5):
             rig.bridge.emit(fighter(seq, owned=True))
             await eventually(lambda seq=seq: len(rig.bridge.commands("body_action")) == seq - 2)
         rig.bridge.emit(fighter(6, owned=True, can_decide=False))
-        await eventually(lambda: len(rig.pilot._latencies) == 4)
-        latencies = sorted(rig.pilot._latencies)
+        await eventually(lambda: len(rig.fight._latencies) == 4)
+        latencies = sorted(rig.fight._latencies)
         rig.clock.advance(0.75)
         row = fighter(7, owned=True)
         row["self"]["down"] = True
@@ -1234,9 +1379,9 @@ async def test_completed_fight_summary_survives_counter_reset_and_the_next_fight
         assert summary.release_confirmed
         assert 0 <= summary.release_seconds < bodypilot.FINISH_TIMEOUT
         assert summary.watch_removed
-        assert rig.pilot.npc is rig.pilot.lease is rig.pilot.client is None
+        assert rig.fight.npc is rig.fight.lease is rig.fight.client is None
         assert not rig.link.body_leases and rig.bridge._watched_npc is None
-        assert not rig.pilot._latencies and rig.pilot._decisions == rig.pilot._fallbacks == 0
+        assert not rig.fight._latencies and rig.fight._decisions == rig.fight._fallbacks == 0
         with pytest.raises(FrozenInstanceError):
             summary.decisions = 100
 
@@ -1262,7 +1407,7 @@ async def test_latency_breakdown_ends_at_action_send_before_bridge_ack(monkeypat
         rig.policy.on_step = lambda _: rig.clock.advance(0.010)
         rig.bridge.emit(fighter(3, owned=True))
         rig.clock.advance(0.005)  # Packet waiting in the pilot queue before step.
-        await eventually(lambda: rig.pilot._decisions == 1)
+        await eventually(lambda: rig.fight._decisions == 1)
         row = fighter(4, owned=True)
         row["self"]["down"] = True
         rig.bridge.emit(row)
@@ -1276,8 +1421,8 @@ async def test_latency_breakdown_ends_at_action_send_before_bridge_ack(monkeypat
             assert getattr(summary, f"packet_to_action_{percentile}_ms") == pytest.approx(15)
         assert summary.fight_seconds == pytest.approx(0.065)
         assert "packet_to_action_p95_ms=" in caplog.text
-        assert not rig.pilot._packet_to_request and not rig.pilot._packet_to_response
-        assert not rig.pilot._response_to_action and not rig.pilot._packet_to_action
+        assert not rig.fight._packet_to_request and not rig.fight._packet_to_response
+        assert not rig.fight._response_to_action and not rig.fight._packet_to_action
 
 
 @pytest.mark.parametrize("rejections", [
@@ -1292,26 +1437,26 @@ async def test_transient_action_rejections_wait_for_a_fresh_row_and_success_rese
         rig.bridge.action_rejections.extend(rejections)
         for count, seq in enumerate(range(4, 13), 1):
             rig.bridge.emit(fighter(seq, owned=True))
-            await eventually(lambda count=count: rig.pilot._transient_rejections_consecutive == count)
+            await eventually(lambda count=count: rig.fight._transient_rejections_consecutive == count)
             assert rig.link.body_owned("NPC")
             assert not rig.bridge.commands("body_release")
         rig.bridge.emit(fighter(13, owned=True, can_decide=False))
         await eventually(lambda: len(rig.policy.commands("step")) == 11)
-        assert rig.pilot._transient_rejections_consecutive == 9  # Memory-only is not an accepted action.
+        assert rig.fight._transient_rejections_consecutive == 9  # Memory-only is not an accepted action.
         rig.bridge.emit(fighter(14, owned=True))
-        await eventually(lambda: rig.pilot._decisions == 2)
-        assert rig.pilot._transient_rejections_consecutive == 0
+        await eventually(lambda: rig.fight._decisions == 2)
+        assert rig.fight._transient_rejections_consecutive == 0
         # More than ten total refusals are allowed when accepted actions reset the streak.
         rig.bridge.action_rejections.append("masked")
         rig.bridge.emit(fighter(15, owned=True))
-        await eventually(lambda: rig.pilot._transient_rejections_consecutive == 1)
+        await eventually(lambda: rig.fight._transient_rejections_consecutive == 1)
         assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
         rig.bridge.emit(fighter(16, owned=True))
-        await eventually(lambda: rig.pilot._decisions == 3)
-        assert rig.pilot._transient_rejections_consecutive == 0
+        await eventually(lambda: rig.fight._decisions == 3)
+        assert rig.fight._transient_rejections_consecutive == 0
         rig.bridge.action_rejections.append("stale_observation")
         rig.bridge.emit(fighter(17, owned=True))
-        await eventually(lambda: rig.pilot._transient_rejections_consecutive == 1)
+        await eventually(lambda: rig.fight._transient_rejections_consecutive == 1)
         assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
         row = fighter(18, owned=True)
         row["self"]["down"] = True
@@ -1321,7 +1466,7 @@ async def test_transient_action_rejections_wait_for_a_fresh_row_and_success_rese
         assert summary.reason == "npc_down" and summary.decisions == 3
         assert dict(summary.action_rejections) == Counter([*rejections, "masked", "stale_observation"])
         assert summary.transient_rejections_consecutive == 1
-        assert not rig.pilot._action_rejections and rig.pilot._transient_rejections_consecutive == 0
+        assert not rig.fight._action_rejections and rig.fight._transient_rejections_consecutive == 0
 
 
 @pytest.mark.parametrize("hidden_reset", [True, False])
@@ -1332,15 +1477,15 @@ async def test_one_old_observation_fallback_continues_and_resets_before_next_row
         rig.policy.step_fallback_reason = "observation_too_old"
         rig.policy.step_hidden_reset = hidden_reset
         rig.bridge.emit(fighter(4, owned=True))
-        await eventually(lambda: rig.pilot._transient_rejections_consecutive == 1)
+        await eventually(lambda: rig.fight._transient_rejections_consecutive == 1)
         assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
         assert len(rig.bridge.commands("body_action")) == 1
         assert len(rig.policy.commands("reset")) == 1
         rig.policy.step_mode = "normal"
         next_row = fighter(5, owned=True)
         rig.bridge.emit(next_row)
-        await eventually(lambda: rig.pilot._decisions == 2)
-        assert rig.pilot._transient_rejections_consecutive == 0
+        await eventually(lambda: rig.fight._decisions == 2)
+        assert rig.fight._transient_rejections_consecutive == 0
         assert [command["observation_seq"] for command in rig.bridge.commands("body_action")] == [3, 5]
         commands = [request["cmd"] for request in rig.policy.requests]
         assert commands == ["reset", "step", "step"] + (["reset"] if hidden_reset else []) + ["step"]
@@ -1365,7 +1510,7 @@ async def test_ten_old_observation_fallbacks_end_fight_and_report_memory_resets(
         rig.policy.step_fallback_reason = "observation_too_old"
         for count, seq in enumerate(range(4, 13), 1):
             rig.bridge.emit(fighter(seq, owned=True))
-            await eventually(lambda count=count: rig.pilot._transient_rejections_consecutive == count)
+            await eventually(lambda count=count: rig.fight._transient_rejections_consecutive == count)
             assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
         rig.bridge.emit(fighter(13, owned=True))
         await rig.ended()
@@ -1392,7 +1537,7 @@ async def test_old_observation_and_bridge_rejections_share_consecutive_limit(las
                 rig.bridge.action_rejections.append("masked")
             rig.bridge.emit(fighter(seq, owned=True))
             if count < 10:
-                await eventually(lambda count=count: rig.pilot._transient_rejections_consecutive == count)
+                await eventually(lambda count=count: rig.fight._transient_rejections_consecutive == count)
                 assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
         await rig.ended()
         await eventually(lambda: rig.pilot.last_summary is not None)
@@ -1422,7 +1567,7 @@ async def test_ten_consecutive_transient_action_rejections_restore_native_and_ar
         rig.bridge.action_rejections.extend(rejections)
         for count, seq in enumerate(range(4, 13), 1):
             rig.bridge.emit(fighter(seq, owned=True))
-            await eventually(lambda count=count: rig.pilot._transient_rejections_consecutive == count)
+            await eventually(lambda count=count: rig.fight._transient_rejections_consecutive == count)
             assert not rig.bridge.commands("body_release")
         rig.bridge.emit(fighter(13, owned=True))
         await rig.ended()
@@ -1489,7 +1634,7 @@ async def test_companion_to_hero_target_change_reacquires_and_resets_the_policy(
         rig.bridge.target_is_hero = False
         rig.bridge.target_npc = "CAVALORN"
         await rig.active(target_entity=3, extra=[companion_entry()])
-        old_lease = rig.pilot.lease
+        old_lease = rig.fight.lease
         rig.clock.advance(0.5)
         await rig.retarget(4, target_entity=2)
         summary = rig.pilot.last_summary
@@ -1526,7 +1671,7 @@ async def test_polled_native_target_change_reacquires_without_an_owned_target_ro
         rig.bridge.target_npc = "CAVALORN" if new_target == 3 else None
         rig.bridge.restore_native(release_reason=release_reason)
         await eventually(lambda: rig.pilot.last_summary is not None)
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         summary = rig.pilot.last_summary
         assert summary.reason == "target_changed"
         assert summary.native_release_reason == release_reason
@@ -1555,7 +1700,7 @@ async def test_polled_native_release_keeps_same_or_unrelated_target_combat_claim
         rig.bridge.target_npc = new_target
         rig.bridge.restore_native(release_reason=release_reason)
         await eventually(lambda: rig.pilot.last_summary is not None)
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         summary = rig.pilot.last_summary
         assert summary.reason == "native_restored"
         assert summary.native_release_reason == release_reason
@@ -1638,7 +1783,7 @@ async def test_heartbeat_native_handoff_requires_matching_evidence_for_down_reas
         rig.bridge.target_npc = "CAVALORN" if companion else None
         target_entity = 3 if companion else 2
         await rig.active(target_entity=target_entity, extra=[companion_entry()] if companion else [])
-        original_call = rig.pilot.client.call
+        original_call = rig.fight.client.call
 
         async def close_after_target_cleared(command, **fields):
             if command == "end_episode":
@@ -1650,7 +1795,7 @@ async def test_heartbeat_native_handoff_requires_matching_evidence_for_down_reas
                 ))
             return await original_call(command, **fields)
 
-        rig.pilot.client.call = close_after_target_cleared
+        rig.fight.client.call = close_after_target_cleared
         summary = await rig.lose_heartbeat_before_native_event(
             target_entity=target_entity, evidence=evidence, down=evidence != "alive",
         )
@@ -1714,7 +1859,7 @@ async def test_action_rejection_reconciles_only_confirmed_native_target_change(r
         rig.link.body_action = change_before_action
         rig.bridge.emit(fighter(4, owned=True, target_entity=3))
         await rig.ended()
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         summary = rig.pilot.last_summary
         recapture = handoff == "allowed" and rejection != "invalid_command"
         assert summary.reason == ("target_changed" if recapture else "body_action_rejected")
@@ -1756,7 +1901,7 @@ async def test_native_ack_drains_later_target_change_event_before_unwatch(
         rig.bridge.target_is_hero = False
         rig.bridge.target_npc = "CAVALORN"
         await rig.active(target_entity=3, extra=[companion_entry()])
-        lease = rig.pilot.lease
+        lease = rig.fight.lease
         original_status = rig.link.body_control_status
         original_release = rig.link.body_release
         original_events = rig.link.body_events
@@ -1809,7 +1954,7 @@ async def test_native_ack_drains_later_target_change_event_before_unwatch(
         if evidence == "world_changed":
             monkeypatch.setattr(rig.link, "body_events", change_world_after_final_events)
         # The rejection starts cleanup while the engine still holds the old target.
-        rig.pilot._last_events_poll = float("inf")
+        rig.fight._last_events_poll = float("inf")
         first_command = len(rig.bridge.sent)
         rig.bridge.action_rejections.append("release_pending")
         rig.bridge.emit(fighter(4, owned=True, target_entity=3))
@@ -1907,12 +2052,12 @@ async def test_temporary_target_invisibility_recovers_without_ending_the_fight()
             rig.clock.advance(0.6)
             rig.bridge.emit(unseen_fighter(seq, t_game_ms=game_ms))
             await eventually(lambda seq=seq: len(rig.policy.commands("step")) == seq - 2)
-            assert rig.pilot._reason is None
+            assert rig.fight._reason is None
             assert not rig.bridge.commands("body_release")
         rig.bridge.emit(fighter(7, owned=True, t_game_ms=1750))
         await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
-        assert rig.pilot._reason is None and rig.pilot._target_absent_game_ms is None
-        assert len(rig.pilot._policy_decisions) == 2  # Locked unseen rows are not policy decisions.
+        assert rig.fight._reason is None and rig.fight._target_absent_game_ms is None
+        assert len(rig.fight._policy_decisions) == 2  # Locked unseen rows are not policy decisions.
         row = fighter(8, owned=True, t_game_ms=1800)
         row["self"]["down"] = True
         rig.bridge.emit(row)
@@ -1929,7 +2074,7 @@ async def test_target_absence_or_invalidity_ends_after_one_game_second(present, 
                 seq, present=present, target_entity=target_entity, t_game_ms=game_ms,
             ))
             await eventually(lambda seq=seq: len(rig.policy.commands("step")) == seq - 2)
-            assert rig.pilot._reason is None and not rig.bridge.commands("body_release")
+            assert rig.fight._reason is None and not rig.bridge.commands("body_release")
         rig.bridge.emit(unseen_fighter(6, present=present, target_entity=target_entity, t_game_ms=2000))
         await rig.ended()
         assert rig.pilot.last_summary.reason == "target_lost"
@@ -1945,7 +2090,7 @@ async def test_target_validity_recovery_restarts_the_absence_grace():
                    else unseen_fighter(seq, t_game_ms=game_ms))
             rig.bridge.emit(row)
             await eventually(lambda seq=seq: len(rig.policy.commands("step")) == seq - 2)
-            assert rig.pilot._reason is None and not rig.bridge.commands("body_release")
+            assert rig.fight._reason is None and not rig.bridge.commands("body_release")
         rig.bridge.emit(unseen_fighter(8, t_game_ms=2900))
         await rig.ended()
         assert rig.pilot.last_summary.reason == "target_lost"
@@ -1972,8 +2117,8 @@ async def test_native_visibility_restoration_respects_lease_identity(scope):
         rig.pilot.on_message(events(event(
             1, reason="native_restored", release_reason="target_visibility_lost", owner="native", **scope,
         ), **{key: value for key, value in scope.items() if key in {"session_epoch", "world_epoch"}}))
-        assert rig.pilot._reason is None
-        assert rig.pilot._native_release_reason is None
+        assert rig.fight._reason is None
+        assert rig.fight._native_release_reason is None
         rig.link._dispatch(events(event(
             2, reason="native_restored", release_reason="target_visibility_lost", owner="native",
         )))
@@ -2018,7 +2163,7 @@ async def test_visibility_restoration_diagnostics_keep_last_ten_actual_policy_de
         assert all(row.action_id == 1 and row.sent for row in decisions)
         assert not decisions[0].accepted and decisions[0].reason == "masked"
         assert all(row.accepted and row.reason == "accepted" for row in decisions[1:])
-        assert not rig.pilot._policy_decisions
+        assert not rig.fight._policy_decisions
         with pytest.raises(FrozenInstanceError):
             decisions[0].accepted = True
         assert "invisible_max_game_ms=800" in caplog.text
@@ -2075,7 +2220,7 @@ async def test_lost_native_restoration_event_reconciles_lease_and_allows_the_nex
         assert rig.link.body_leases == {1: lease}
 
         await rig.ended()
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         assert rig.bridge.commands("body_control_status")
         assert rig.bridge._watched_npc is None
         assert len(rig.policy.commands("end_episode")) == 1
@@ -2086,7 +2231,7 @@ async def test_lost_native_restoration_event_reconciles_lease_and_allows_the_nex
         rig.bridge.response_delays.clear()
         rig.roster(activity="routine", state="ZS_SIT_BENCH")
         await rig.watch()
-        await eventually(lambda: rig.pilot._watch_ready)
+        await eventually(lambda: rig.fight._watch_ready)
         rig.bridge.emit(player_row(5), fighter(6))
         await eventually(lambda: len(rig.bridge.commands("body_acquire")) == 2)
         await eventually(lambda: rig.link.body_leases)
@@ -2113,7 +2258,7 @@ async def test_removed_actor_during_release_clears_watch_and_allows_a_different_
             rig.bridge.status_error = "unknown_entity"
         assert rig.link.body_leases == {1: lease}
         rig.link._dispatch(Attached(type="attached", npc="NPC", name="Fighter"))
-        await eventually(lambda: rig.pilot.npc is None, timeout=1.2)
+        await eventually(lambda: rig.pilot.active_count == 0, timeout=1.2)
         assert rig.bridge.commands("body_release")
         assert rig.bridge.commands("body_control_status")
         assert not rig.link.body_leases
@@ -2129,7 +2274,7 @@ async def test_removed_actor_during_release_clears_watch_and_allows_a_different_
             in_view=True, activity="fight", state="ZS_ATTACK",
         ))
         rig.combat("OTHER")
-        await eventually(lambda: rig.pilot._watch_ready)
+        await eventually(lambda: rig.fight._watch_ready)
         assert rig.bridge.commands("body_watch")[-1]["npcs"] == ["OTHER"]
         rig.bridge.emit(player_row(5), fighter(6, entity=4))
         await eventually(lambda: len(rig.bridge.commands("body_acquire")) == 2)
@@ -2154,7 +2299,7 @@ async def test_unconfirmed_release_hits_finish_deadline_and_closes_episode(monke
         rig.link._dispatch(Attached(type="attached", npc="NPC", name="Fighter"))
         await eventually(lambda: rig.bridge.commands("body_control_status"))
         assert rig.link.body_leases == {1: lease}
-        await eventually(lambda: rig.pilot.npc is None, timeout=1.2)
+        await eventually(lambda: rig.pilot.active_count == 0, timeout=1.2)
         assert not rig.link.body_leases
         assert rig.bridge._watched_npc is None
         assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
@@ -2175,15 +2320,15 @@ async def test_uncertain_acquire_recovery_is_bounded_by_finish_deadline(monkeypa
     async with running() as rig:
         rig.bridge.response_delays.update(body_acquire=2.0, body_control_status=2.0)
         await rig.watch()
-        await eventually(lambda: rig.pilot._watch_ready)
+        await eventually(lambda: rig.fight._watch_ready)
         rig.bridge.emit(player_row(), fighter())
         await eventually(lambda: rig.bridge.commands("body_control_status"))
         # The native watchdog has restored the actor, but the adapter never
         # received its acquire receipt or an ownership snapshot.
         rig.bridge.provider_owned = False
         rig.bridge._lease_watchdog.cancel()
-        await eventually(lambda: rig.pilot.npc is None, timeout=1.2)
-        assert rig.pilot._pending_acquire is None
+        await eventually(lambda: rig.pilot.active_count == 0, timeout=1.2)
+        assert rig.fight._pending_acquire is None
         assert not rig.link.body_leases
         assert rig.bridge._watched_npc is None
         assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
@@ -2206,7 +2351,7 @@ async def test_orphaned_boundary_request_unsubscribes_and_allows_the_next_fight(
         rig.bridge.release_rejections.extend(["cancel_busy"] * 100)
         rig.bridge.status_error = "status_busy"
         await rig.watch()
-        await eventually(lambda: rig.pilot._watch_ready)
+        await eventually(lambda: rig.fight._watch_ready)
         rig.bridge.emit(player_row(), fighter())
         await eventually(lambda: rig.pilot.last_summary is not None)
         assert rig.pilot.last_summary.reason == "finish_deadline"
@@ -2229,7 +2374,7 @@ async def test_orphaned_boundary_request_unsubscribes_and_allows_the_next_fight(
 
         rig.roster(activity="routine", state="ZS_SIT_BENCH")
         await rig.watch()
-        await eventually(lambda: rig.pilot._watch_ready)
+        await eventually(lambda: rig.fight._watch_ready)
         rig.bridge.emit(player_row(5), fighter(6))
         await eventually(lambda: rig.link.body_leases)
         rig.bridge.emit(fighter(7, owned=True))
@@ -2244,7 +2389,7 @@ async def test_orphaned_boundary_request_unsubscribes_and_allows_the_next_fight(
 async def test_websocket_closing_during_cleanup_still_closes_policy_and_pilot(failed_command, monkeypatch):
     async with running() as rig:
         await rig.active()
-        client = rig.pilot.client
+        client = rig.fight.client
         assert client is not None
         if failed_command in {"body_events", "body_control_status"}:
             rig.bridge.release_pending_polls = 2
@@ -2333,7 +2478,7 @@ async def test_watch_setup_failure_identifies_rpc_and_failure_type(rpc, stage, f
         watches = [command["npcs"] for command in rig.bridge.commands("body_watch")]
         assert watches == ([["NPC"], []] if rpc == "body_watch" else [])
         assert rig.bridge._watched_npc is None
-        assert not rig.pilot._watched and not rig.pilot._watch_ready
+        assert not rig.fight._watched and not rig.fight._watch_ready
 
         records = [record for record in caplog.records if "watch setup failed stage=" in record.message]
         assert len(records) == 1
@@ -2360,8 +2505,8 @@ async def test_watch_timeout_clears_applied_subscription_and_ignores_late_replie
         await eventually(lambda: not rig.bridge._response_tasks)
         assert [cmd["npcs"] for cmd in rig.bridge.commands("body_watch")] == [["NPC"], []]
         assert rig.bridge._watched_npc is None
-        assert rig.pilot.npc is None
-        assert not rig.pilot._watched and not rig.pilot._watch_ready
+        assert rig.pilot.active_count == 0
+        assert not rig.fight._watched and not rig.fight._watch_ready
         assert not rig.bridge.commands("body_acquire")
         assert not rig.bridge.commands("body_action")
         assert not rig.policy.requests
@@ -2382,17 +2527,17 @@ async def test_late_step_replies_do_not_act_or_steal_the_next_request_and_timely
         rig.policy.step_response_actions.extend([11] * late_count + [1])
         for count, seq in enumerate(range(4, 4 + late_count), 1):
             rig.bridge.emit(fighter(seq, owned=True))
-            await eventually(lambda count=count: rig.pilot._policy_timeouts == count)
-            assert rig.pilot._policy_timeouts_consecutive == count
+            await eventually(lambda count=count: rig.fight._policy_timeouts == count)
+            assert rig.fight._policy_timeouts_consecutive == count
             assert rig.link.body_owned("NPC")
             assert len(rig.bridge.commands("body_action")) == 1
             assert not rig.bridge.commands("body_release")
         fresh_seq = 4 + late_count
         rig.bridge.emit(fighter(fresh_seq, owned=True))
-        await eventually(lambda: rig.pilot._decisions == 2)
-        assert rig.pilot._policy_timeouts_consecutive == 0
-        assert rig.pilot._policy_watchdog_task is None
-        assert not rig.pilot.client.pending
+        await eventually(lambda: rig.fight._decisions == 2)
+        assert rig.fight._policy_timeouts_consecutive == 0
+        assert rig.fight._policy_watchdog_task is None
+        assert not rig.fight.client.pending
         assert [cmd["observation_seq"] for cmd in rig.bridge.commands("body_action")] == [3, fresh_seq]
 
         # A later isolated timeout starts a new streak rather than exhausting the
@@ -2400,10 +2545,10 @@ async def test_late_step_replies_do_not_act_or_steal_the_next_request_and_timely
         rig.policy.step_delays.append(0.120)
         rig.policy.step_response_actions.extend([11, 1])
         rig.bridge.emit(fighter(fresh_seq + 1, owned=True))
-        await eventually(lambda: rig.pilot._policy_timeouts == late_count + 1)
-        assert rig.pilot._policy_timeouts_consecutive == 1
+        await eventually(lambda: rig.fight._policy_timeouts == late_count + 1)
+        assert rig.fight._policy_timeouts_consecutive == 1
         rig.bridge.emit(fighter(fresh_seq + 2, owned=True, can_decide=False))
-        await eventually(lambda: rig.pilot._policy_timeouts_consecutive == 0)
+        await eventually(lambda: rig.fight._policy_timeouts_consecutive == 0)
         assert len(rig.bridge.commands("body_action")) == 2
         row = fighter(fresh_seq + 3, owned=True)
         row["self"]["down"] = True
@@ -2415,7 +2560,7 @@ async def test_late_step_replies_do_not_act_or_steal_the_next_request_and_timely
         assert summary.policy_timeout_wait_p95_ms is not None
         assert summary.policy_response_silence_ms is None
         assert summary.release_confirmed and summary.watch_removed
-        assert rig.pilot._policy_timeouts == rig.pilot._policy_timeouts_consecutive == 0
+        assert rig.fight._policy_timeouts == rig.fight._policy_timeouts_consecutive == 0
 
 
 async def test_five_consecutive_late_steps_end_and_restore_native_before_any_late_action(caplog):
@@ -2426,7 +2571,7 @@ async def test_five_consecutive_late_steps_end_and_restore_native_before_any_lat
         rig.policy.step_response_actions.extend([11] * 5)
         for count, seq in enumerate(range(4, 8), 1):
             rig.bridge.emit(fighter(seq, owned=True))
-            await eventually(lambda count=count: rig.pilot._policy_timeouts_consecutive == count)
+            await eventually(lambda count=count: rig.fight._policy_timeouts_consecutive == count)
             assert not rig.bridge.commands("body_release")
         rig.bridge.emit(fighter(8, owned=True))
         await rig.ended()
@@ -2445,7 +2590,7 @@ async def test_one_second_without_policy_response_ends_even_without_more_observa
         await rig.active()
         rig.policy.step_mode = "timeout"
         rig.bridge.emit(fighter(4, owned=True))
-        await eventually(lambda: rig.pilot._policy_timeouts == 1)
+        await eventually(lambda: rig.fight._policy_timeouts == 1)
         assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
         # The fake game sends no more rows, and its injected game clock never
         # advances. The service-silence guard must still use wall time.
@@ -2517,7 +2662,7 @@ async def test_native_remainder_of_same_combat_is_not_reacquired(end):
             rig.policy.step_mode = end
         rig.bridge.emit(fighter(4, owned=True))
         await rig.ended()
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         # The native bridge emits another attack for every subsequent hero blow.
         for kind in ("attack", "threatened", "weapon_drawn", "npc_attack"):
             rig.combat(kind=kind)
@@ -2534,7 +2679,7 @@ async def test_repeated_native_attack_roster_does_not_reacquire_after_fallback()
         rig.policy.step_mode = "fallback"
         rig.bridge.emit(fighter(4, owned=True))
         await rig.ended()
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         for seq in range(5, 8):
             rig.roster()
             rig.bridge.emit(fighter(seq))
@@ -2550,7 +2695,7 @@ async def test_new_native_attack_roster_rearms_after_the_previous_fight_ends(act
         rig.policy.step_mode = "fallback"
         rig.bridge.emit(fighter(4, owned=True))
         await rig.ended()
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         rig.roster(activity=activity, state=state)
         rig.roster(activity="fight", state="ZS_ATTACK")
         await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
@@ -2565,7 +2710,7 @@ async def test_fallback_npc_can_be_acquired_in_a_new_combat_after_returning_to_r
         rig.policy.step_mode = "fallback"
         rig.bridge.emit(fighter(4, owned=True))
         await rig.ended()
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         seq = 4
         for temporary_roster in (
             {"include": False},
@@ -2598,7 +2743,7 @@ async def test_fallback_for_one_npc_does_not_block_a_different_npc():
         rig.policy.step_mode = "fallback"
         rig.bridge.emit(fighter(4, owned=True))
         await rig.ended()
-        await eventually(lambda: rig.pilot.npc is None)
+        await eventually(lambda: rig.pilot.active_count == 0)
         rig.roster(extra=[RosterEntry(
             id="OTHER", name="Other Fighter", guild=1, distance=250.0,
             in_view=True, activity="fight", state="ZS_ATTACK",
@@ -2650,8 +2795,8 @@ async def test_acquisition_needs_a_visible_hero_target(wrong_target):
         assert not rig.bridge.commands("body_acquire")
 
 
-async def test_second_fight_does_not_change_watch_or_acquire_another_npc():
-    async with running() as rig:
+async def test_max_one_fight_does_not_change_watch_or_acquire_another_npc():
+    async with running(max_fights=1) as rig:
         await rig.active()
         rig.roster(extra=[RosterEntry(
             id="OTHER", name="Other Fighter", guild=1, distance=250.0,
@@ -2686,3 +2831,369 @@ async def test_no_decision_is_sent_after_takeover_during_slow_policy_reply():
         rig.policy.step_waiter.set()
         await rig.ended()
         assert len(rig.bridge.commands("body_action")) == 1
+
+
+async def test_three_fights_have_separate_leases_connections_resets_and_action_streams():
+    async with running(multi=True) as rig:
+        npcs = ("NPC_1", "NPC_2", "NPC_3")
+        assert rig.pilot.active_count == 0
+        assert not any(rig.pilot.handles(npc) for npc in npcs)
+        rig.bridge.roster(*(multi_entry(npc) for npc in npcs))
+        await eventually(lambda: rig.pilot.active_count == 3)
+        assert all(rig.pilot.handles(npc.lower()) for npc in npcs)
+        assert not rig.link.body_leases and not rig.policy.connections
+        await eventually(lambda: all(rig.pilot.fights[npc]._watch_ready for npc in npcs))
+        assert set(rig.bridge.watched) == set(npcs)
+        rig.bridge.emit(player_row(), *(multi_fighter(npc) for npc in npcs))
+        await eventually(lambda: len(rig.policy.commands("reset")) == 3)
+        assert set(rig.link.body_leases) == {npc_entity(npc) for npc in npcs}
+        assert len(rig.policy.connections) == 3
+        assert len({id(fight.client) for fight in rig.pilot.fights.values()}) == 3
+        assert not rig.policy.commands("step")
+        owned_rows = {npc: multi_fighter(npc, 3, owned=True) for npc in npcs}
+        rig.bridge.emit(*owned_rows.values())
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 3)
+        for npc in npcs:
+            lease = rig.pilot.fights[npc].lease
+            assert lease.npc == npc and lease.entity_id == npc_entity(npc)
+            steps = [request for request in rig.policy.commands("step")
+                     if request["observation"]["entity_id"] == lease.entity_id]
+            assert len(steps) == 1 and steps[0]["observation"] == owned_rows[npc]
+            connection = rig.policy.request_connections[id(steps[0])]
+            requests = [request for request in rig.policy.requests
+                        if rig.policy.request_connections[id(request)] == connection]
+            assert [request["cmd"] for request in requests] == ["reset", "step"]
+            action = next(command for command in rig.bridge.commands("body_action")
+                          if command["entity_id"] == lease.entity_id)
+            assert action["control_generation"] == lease.control_generation
+            assert action["goal_version"] == lease.goal_version
+            assert action["observation_seq"] == owned_rows[npc]["observation_seq"]
+            assert action["target_entity_id"] == lease.target_entity_id
+        assert rig.pilot.active_count == 3 and all(rig.pilot.handles(npc) for npc in npcs)
+
+
+async def test_one_npc_down_shrinks_watch_after_release_ack_and_keeps_other_fights_running():
+    async with running(multi=True) as rig:
+        npcs = ("NPC_1", "NPC_2", "NPC_3")
+        await start_fights(rig, *npcs)
+        preserved = {npc: rig.pilot.fights[npc].lease for npc in npcs[1:]}
+        rig.bridge.release_ack = asyncio.Event()
+        down = multi_fighter(npcs[0], 4, owned=True)
+        down["self"]["down"] = True
+        rig.bridge.emit(down)
+        await eventually(lambda: rig.bridge.commands("body_release"))
+        assert rig.pilot.handles(npcs[0])  # Cleanup still owns the subscription slot.
+        assert set(rig.bridge.watched) == set(npcs)
+        assert not rig.policy.commands("end_episode")
+        rig.bridge.emit(*(multi_fighter(npc, 4, owned=True) for npc in npcs[1:]))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 5)
+        rig.bridge.release_ack.set()
+        await eventually(lambda: rig.pilot.active_count == 2)
+        assert not rig.pilot.handles(npcs[0])
+        assert all(rig.pilot.handles(npc) for npc in npcs[1:])
+        assert set(rig.bridge.watched) == set(npcs[1:])
+        assert {npc: rig.pilot.fights[npc].lease for npc in npcs[1:]} == preserved
+        assert len(rig.bridge.commands("body_release")) == 1
+        assert rig.bridge.commands("body_release")[0]["entity_id"] == npc_entity(npcs[0])
+        assert len(rig.policy.commands("end_episode")) == len(rig.policy.commands("close")) == 1
+        summary = rig.pilot.last_summary
+        assert summary.npc == npcs[0] and summary.reason == "npc_down"
+        assert summary.release_confirmed and summary.watch_removed
+        assert list(rig.pilot.summaries) == [summary]
+        release = rig.bridge.commands("body_release")[0]
+        shrink = rig.bridge.commands("body_watch")[-1]
+        assert rig.bridge.sent.index(release) < rig.bridge.sent.index(shrink)
+        assert len(rig.policy.writers) == 2
+        rig.bridge.emit(*(multi_fighter(npc, 5, owned=True) for npc in npcs[1:]))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 7)
+        assert len(rig.policy.commands("reset")) == 3
+
+
+async def test_max_four_keeps_fifth_native_until_a_fight_frees_its_slot():
+    async with running(multi=True, max_fights=4) as rig:
+        npcs = tuple(f"NPC_{index}" for index in range(1, 6))
+        await start_fights(rig, *npcs[:4])
+        rig.bridge.roster(*(multi_entry(npc, activity="body" if index < 4 else "fight")
+                            for index, npc in enumerate(npcs)))
+        rig.combat(npcs[4])
+        rig.bridge.emit(multi_fighter(npcs[4]))
+        await asyncio.sleep(0.02)
+        assert rig.pilot.active_count == len(rig.link.body_leases) == len(rig.policy.connections) == 4
+        assert not rig.pilot.handles(npcs[4])
+        assert npcs[4] not in rig.bridge.watched
+        assert len(rig.bridge.commands("body_acquire")) == 4
+        down = multi_fighter(npcs[0], 4, owned=True)
+        down["self"]["down"] = True
+        rig.bridge.emit(down)
+        await eventually(lambda: not rig.pilot.handles(npcs[0]))
+        rig.clock.advance(bodypilot.REACQUIRE_INTERVAL)
+        rig.combat(npcs[4])
+        rig.bridge.roster(*(multi_entry(npc, activity="body" if npc in npcs[1:4] else "fight")
+                            for npc in npcs))
+        await eventually(lambda: rig.pilot.handles(npcs[4]))
+        await eventually(lambda: rig.pilot.fights[npcs[4]]._watch_ready)
+        rig.bridge.emit(multi_fighter(npcs[4], 3))
+        await eventually(lambda: len(rig.bridge.commands("body_acquire")) == 5)
+        assert rig.pilot.active_count == len(rig.link.body_leases) == 4
+        assert all(rig.pilot.handles(npc) for npc in npcs[1:])
+        assert not rig.pilot.handles(npcs[0])
+
+
+async def test_legacy_watch_growth_refusal_preserves_running_fight_and_retries_after_interval(caplog):
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running(multi=True) as rig:
+        await start_fights(rig, "NPC_1")
+        first = rig.pilot.fights["NPC_1"]
+        lease, client = first.lease, first.client
+        rig.bridge.legacy_watch = True
+        rig.bridge.roster(multi_entry("NPC_1", activity="body"), multi_entry("NPC_2"))
+        rig.combat("NPC_2")
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        assert rig.pilot.last_summary.npc == "NPC_2"
+        assert rig.pilot.last_summary.reason == "watch_refused"
+        assert "release active body owners before changing body_watch" in caplog.text
+        assert rig.pilot.active_count == 1 and rig.pilot.handles("NPC_1")
+        assert not rig.pilot.handles("NPC_2")
+        assert rig.pilot.fights["NPC_1"] is first and first.lease == lease and first.client is client
+        assert rig.bridge.watched == ["NPC_1"]
+        assert rig.link.body_leases == {lease.entity_id: lease}
+        assert len(rig.policy.connections) == len(rig.policy.commands("reset")) == 1
+        assert not rig.bridge.commands("body_release") and not rig.policy.commands("end_episode")
+        attempts = len(rig.bridge.commands("body_watch"))
+        rig.clock.advance(bodypilot.REACQUIRE_INTERVAL - 0.001)
+        rig.combat("NPC_2")
+        rig.bridge.emit(multi_fighter("NPC_1", 4, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        assert len(rig.bridge.commands("body_watch")) == attempts
+        rig.bridge.legacy_watch = False
+        rig.clock.advance(0.002)
+        rig.combat("NPC_2")
+        await eventually(lambda: rig.pilot.handles("NPC_2"))
+        await eventually(lambda: rig.pilot.fights["NPC_2"]._watch_ready)
+        rig.bridge.emit(multi_fighter("NPC_2"))
+        await eventually(lambda: len(rig.policy.commands("reset")) == 2)
+        assert len(rig.link.body_leases) == 2
+        assert first.lease == lease and first.client is client
+
+
+async def test_loading_finishes_every_fight_and_policy_connection():
+    async with running(multi=True) as rig:
+        npcs = ("NPC_1", "NPC_2", "NPC_3")
+        await start_fights(rig, *npcs)
+        rig.link._dispatch(Loading(type="loading"))
+        await eventually(lambda: rig.pilot.active_count == 0)
+        assert not any(rig.pilot.handles(npc) for npc in npcs)
+        assert not rig.link.body_leases and not rig.bridge.watched
+        assert {command["entity_id"] for command in rig.bridge.commands("body_release")} == {
+            npc_entity(npc) for npc in npcs
+        }
+        assert len(rig.policy.commands("end_episode")) == len(rig.policy.commands("close")) == 3
+        assert len(rig.pilot.summaries) == 3
+        assert {summary.npc for summary in rig.pilot.summaries} == set(npcs)
+        assert all(summary.reason == "loading" for summary in rig.pilot.summaries)
+        assert rig.pilot.last_summary is rig.pilot.summaries[-1]
+
+
+async def test_observation_overflow_ends_only_the_actor_whose_queue_filled():
+    async with running(multi=True) as rig:
+        await start_fights(rig, "NPC_1", "NPC_2")
+        second = rig.pilot.fights["NPC_2"]
+        lease, client = second.lease, second.client
+        # Fill one queue synchronously while the event loop cannot drain it.
+        for seq in range(4, 134):
+            rig.bridge.emit(multi_fighter("NPC_1", seq, owned=True, can_decide=False))
+        await eventually(lambda: rig.pilot.active_count == 1)
+        assert rig.pilot.last_summary.reason == "observation_overflow"
+        assert rig.pilot.last_summary.npc == "NPC_1"
+        assert rig.pilot.handles("NPC_2") and not rig.pilot.handles("NPC_1")
+        assert second.lease == lease and second.client is client
+        assert len(rig.bridge.commands("body_release")) == len(rig.policy.commands("end_episode")) == 1
+        # Keep the remaining row fresh relative to the packet's latest game time.
+        rig.bridge.emit(multi_fighter("NPC_2", 134, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 3)
+        assert rig.bridge.commands("body_action")[-1]["entity_id"] == lease.entity_id
+        assert rig.bridge.watched == ["NPC_2"]
+
+
+async def test_shrink_refusal_is_not_fatal_to_remaining_fights():
+    async with running(multi=True) as rig:
+        await start_fights(rig, "NPC_1", "NPC_2")
+        rig.bridge.refuse_shrink = True
+        down = multi_fighter("NPC_1", 4, owned=True)
+        down["self"]["down"] = True
+        rig.bridge.emit(down)
+        await eventually(lambda: rig.pilot.active_count == 1)
+        assert rig.pilot.last_summary.reason == "npc_down"
+        assert rig.pilot.last_summary.release_confirmed and not rig.pilot.last_summary.watch_removed
+        assert rig.pilot.handles("NPC_2") and rig.link.body_owned("NPC_2")
+        rig.bridge.emit(multi_fighter("NPC_2", 4, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 3)
+        assert len(rig.bridge.commands("body_release")) == 1
+        rig.bridge.refuse_shrink = False
+
+
+async def test_pending_acquisition_watch_refusal_keeps_first_fight_and_can_retry():
+    async with running(multi=True) as rig:
+        rig.bridge.acquire_ack["NPC_1"] = asyncio.Event()
+        rig.bridge.roster(multi_entry("NPC_1"))
+        await eventually(lambda: rig.pilot.handles("NPC_1"))
+        await eventually(lambda: rig.pilot.fights["NPC_1"]._watch_ready)
+        rig.bridge.emit(player_row(), multi_fighter("NPC_1"))
+        await eventually(lambda: rig.link.body_acquire_pending(npc_entity("NPC_1")))
+        first = rig.pilot.fights["NPC_1"]
+        rig.bridge.roster(multi_entry("NPC_1"), multi_entry("NPC_2"))
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        assert rig.pilot.last_summary.npc == "NPC_2"
+        assert rig.pilot.last_summary.reason == "watch_refused"
+        assert not rig.pilot.handles("NPC_2") and rig.pilot.handles("NPC_1")
+        assert rig.pilot.fights["NPC_1"] is first
+        assert rig.link.body_acquire_pending(npc_entity("NPC_1"))
+        assert not rig.link.body_leases and not rig.policy.requests
+        assert not rig.bridge.commands("body_release")
+        assert len(rig.bridge.commands("body_watch")) == 1  # Adapter rejects before transmission.
+        rig.clock.advance(bodypilot.REACQUIRE_INTERVAL - 0.001)
+        rig.combat("NPC_2")
+        await asyncio.sleep(0.01)
+        assert not rig.pilot.handles("NPC_2")
+        rig.bridge.acquire_ack["NPC_1"].set()
+        await eventually(lambda: len(rig.policy.commands("reset")) == 1)
+        first_lease = first.lease
+        rig.bridge.emit(multi_fighter("NPC_1", 3, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 1)
+        rig.clock.advance(0.002)
+        rig.combat("NPC_2")
+        await eventually(lambda: rig.pilot.handles("NPC_2"))
+        await eventually(lambda: rig.pilot.fights["NPC_2"]._watch_ready)
+        rig.bridge.emit(multi_fighter("NPC_2"))
+        await eventually(lambda: len(rig.policy.commands("reset")) == 2)
+        assert len(rig.link.body_leases) == 2
+        assert first.lease == first_lease
+        assert len(rig.bridge.commands("body_acquire")) == 2
+        assert not rig.bridge.commands("body_release")
+
+
+async def test_completed_summary_history_keeps_only_last_thirty_two_fights():
+    async with running(multi=True) as rig:
+        completed = []
+        for index in range(34):
+            rig.bridge.roster(multi_entry("NPC_1"))
+            await eventually(lambda: rig.pilot.handles("NPC_1"))
+            await eventually(lambda: rig.pilot.fights["NPC_1"]._watch_ready)
+            seq = 2 + index * 2
+            rig.bridge.emit(player_row(seq), multi_fighter("NPC_1", seq))
+            await eventually(lambda index=index: len(rig.policy.commands("reset")) == index + 1)
+            down = multi_fighter("NPC_1", seq + 1, owned=True)
+            down["self"]["down"] = True
+            rig.bridge.emit(down)
+            await eventually(lambda: rig.pilot.active_count == 0)
+            completed.append(rig.pilot.last_summary)
+            assert len(rig.pilot.summaries) == min(index + 1, 32)
+            assert completed[-1].reason == "npc_down"
+            rig.bridge.roster(multi_entry("NPC_1", activity="routine").model_copy(
+                update={"state": "ZS_SIT_BENCH"},
+            ))
+        assert len(rig.policy.commands("reset")) == len(rig.policy.commands("end_episode")) == 34
+        assert list(rig.pilot.summaries) == completed[-32:]
+        assert rig.pilot.last_summary is completed[-1]
+
+
+@pytest.mark.parametrize("release_reason, expected_reason", [
+    ("target_visibility_lost", "target_lost"),
+    ("target_changed_or_lost", "target_changed"),
+])
+async def test_pending_acquire_event_poll_preserves_another_fights_native_release_reason(
+    release_reason, expected_reason,
+):
+    async with running(multi=True, companion=lambda npc: npc == "CAVALORN") as rig:
+        await start_fights(rig, "NPC_1")
+        first = rig.pilot.fights["NPC_1"]
+        lease = first.lease
+        first._last_events_poll = float("inf")
+        rig.bridge.acquire_ack["NPC_2"] = asyncio.Event()
+        native_events = deque()
+        polled_while_pending = []
+        target_queries = []
+        original_send = rig.bridge.send
+        new_target = False
+
+        async def send(raw):
+            command = json.loads(raw)
+            if command["type"] == "body_events" and native_events:
+                polled_while_pending.append(rig.link.body_acquire_pending(npc_entity("NPC_2")))
+                rig.bridge.sent.append(command)
+                rig.bridge.sent_times.append((command, asyncio.get_running_loop().time()))
+                rig.link._dispatch(Result(
+                    type="result", req=command["req"], ok=True,
+                    value=events(native_events.popleft()).model_dump(mode="json"),
+                ))
+            elif (
+                new_target and command["type"] == "story_eval" and command["npc"] == "NPC_1"
+                and bodypilot.TARGET_IS_HERO in command["exprs"]
+            ):
+                rig.bridge.sent.append(command)
+                rig.bridge.sent_times.append((command, asyncio.get_running_loop().time()))
+                values = [0 if expr == bodypilot.TARGET_IS_HERO else 1 for expr in command["exprs"]]
+                target_queries.append((command["exprs"], values))
+                rig.link._dispatch(Result(type="result", req=command["req"], ok=True, value=values))
+            else:
+                await original_send(raw)
+
+        rig.bridge.send = send
+        rig.bridge.roster(
+            multi_entry("NPC_1", activity="body"), multi_entry("NPC_2"), companion_entry(),
+        )
+        await eventually(lambda: rig.pilot.handles("NPC_2"))
+        await eventually(lambda: rig.pilot.fights["NPC_2"]._watch_ready)
+        rig.bridge.emit(multi_fighter("NPC_2"))
+        await eventually(lambda: rig.link.body_acquire_pending(npc_entity("NPC_2")))
+        new_target = expected_reason == "target_changed"
+        rig.bridge.event_seq += 1
+        native_events.append(event(
+            rig.bridge.event_seq, entity_id=lease.entity_id, control_generation=lease.control_generation,
+            target_entity_id=lease.target_entity_id, reason="native_restored", owner="native",
+            release_reason=release_reason, t_game_ms=200,
+        ))
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert polled_while_pending == [True]
+        if expected_reason == "target_changed":
+            assert target_queries
+            for expressions, values in target_queries:
+                assert expressions[0] == bodypilot.TARGET_IS_HERO and len(expressions) == 2
+                assert values == [0, 1]  # Native target is Cavalorn rather than the hero.
+        else:
+            assert not target_queries
+        assert summary.npc == "NPC_1" and summary.reason == expected_reason
+        assert summary.native_release_reason == release_reason and summary.release_confirmed
+        assert rig.pilot.handles("NPC_2") and not rig.pilot.handles("NPC_1")
+        assert ("NPC_1" in rig.pilot._retarget_pending) == (expected_reason == "target_changed")
+        assert len(rig.bridge.commands("body_release")) == 1
+        assert rig.link.body_acquire_pending(npc_entity("NPC_2"))
+        rig.bridge.acquire_ack["NPC_2"].set()
+        await eventually(lambda: len(rig.policy.commands("reset")) == 2)
+        rig.bridge.emit(multi_fighter("NPC_2", 3, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        assert rig.pilot.active_count == 1
+
+
+async def test_final_fight_clears_stale_watch_entries_after_an_earlier_shrink_refusal():
+    async with running(multi=True) as rig:
+        await start_fights(rig, "NPC_1", "NPC_2")
+        rig.bridge.refuse_shrink = True
+        first_down = multi_fighter("NPC_1", 4, owned=True)
+        first_down["self"]["down"] = True
+        rig.bridge.emit(first_down)
+        await eventually(lambda: rig.pilot.active_count == 1)
+        assert set(rig.bridge.watched) == {"NPC_1", "NPC_2"}
+        assert not rig.pilot.last_summary.watch_removed
+        rig.bridge.refuse_shrink = False
+        second_down = multi_fighter("NPC_2", 4, owned=True)
+        second_down["self"]["down"] = True
+        rig.bridge.emit(second_down)
+        await eventually(lambda: rig.pilot.active_count == 0)
+        assert rig.bridge.watched == []
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
+        assert not rig.link.body_leases
+        assert len(rig.policy.commands("end_episode")) == len(rig.bridge.commands("body_release")) == 2
+        assert rig.pilot.last_summary.npc == "NPC_2"
+        assert rig.pilot.last_summary.reason == "npc_down" and rig.pilot.last_summary.watch_removed

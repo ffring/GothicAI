@@ -39,6 +39,7 @@ PR, который добавляет фичу или выключатель, д
 | NPC сам подходит и заговаривает | нет; без планировщика её нет | `initiative.py`, `concerns.py` | e2e `initiative` | [npc-tools.md](npc-tools.md#сделано-инициатива) |
 | Реакция на физический шум: посмотреть, пойти проверить | нет; без планировщика её нет | `brain/situation.py`, `brain/apply.py` | — | [protocol.md](protocol.md#физический-шум-v36) |
 | Боевое тело P30 | `--no-neural-body`; без `--body-url` его нет | `bodypilot.py`, `body-service/`; движок — `common/game/bodycontroller.*` | e2e `neural`, `neural-companion`; бенчи `body-api`, `body-arena`, `body-observe` | [npc-body-control-plan.md](npc-body-control-plan.md), [npc-body-api.md](npc-body-api.md) |
+| До четырёх независимых боёв P30 | `--neural-body-max 1` ограничивает одним боем; допустимо 1–4, по умолчанию 4 | `bodypilot.py`, `cli.py`; отдельное TCP-соединение и lease у каждого боя | `test_bodypilot.py`; e2e `neural` проверяет одиночный бой | [npc-body-control-plan.md](npc-body-control-plan.md) |
 | Память P30 после подвисаний игры | `gothic-body serve-net --no-allow-stale-memory-only` возвращает проверку возраста строк памяти | `bodypilot.py`, `body-service/src/gothic_body/runtime.py`, `serving_net.py` | `test_bodypilot.py`, `test_runtime.py`, `test_serving_net.py`; e2e `neural`, `neural-companion` | [npc-body-control-plan.md](npc-body-control-plan.md) |
 | Волки слышат тон героя | `--no-beasts` | `beasts.py`; мост — `ai_bridge/beasts*` | e2e `wolf`; бенч `wolf` | [beasts.md](beasts.md) |
 
