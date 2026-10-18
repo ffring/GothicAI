@@ -108,6 +108,11 @@
 #       Matteo witnesses a native theft; Andre stays locked until the next day, charges 50 through
 #       his native voiced dialog and accepts payment. Matteo still remembers. A second theft with
 #       an accepted silence deal never reaches Andre. Native theft perceptions stay enabled.
+#   crime_react: rule reactions at the deed (docs/crime.md, layer 4a), LLM=fake; SAVE=save_slot_1.sav.
+#       Hilda's retained theft witness and own SVM shout; Lobart courage 2 demands restitution, then
+#       a temporary scenario card with courage 3 fights through native AR_THEFT to a living knockout
+#       and the cup's return. Finally deeds:false leaves theft to vanilla without a held perception.
+#       Community guards are covered by unit tests. TIMEOUT=420; no behavioral model.
 #   requires: a book quest depending on vanilla (docs/director.md, stage 5, layer 2), no model: Hilda's
 #       offer stays absent while Lobart's turnip quest is open or running, opens after its success, and
 #       the book's second stage waits for "Сковорода для Хильды" to become running. A save and a load

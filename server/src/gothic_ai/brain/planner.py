@@ -457,6 +457,19 @@ class NpcPlanner:
 
     def on_held(self, msg: PerceptionHeld, now: float) -> None:
         """A threat the game holds from the npc's scripts until the model decides (or 0.6 s pass)."""
+        if msg.deed is not None or msg.other.upper() in {"PLAYER", "HERO", "PC_HERO"}:
+            # CrimeReact alone settles hero deeds. Keep the same scripted context as npc_event,
+            # including when a malformed hold has no deed id and must fall back to scripts.
+            self.on_event(
+                msg.npc,
+                msg.kind,
+                now,
+                other=msg.other,
+                distance_cm=msg.distance,
+                detail=msg.detail,
+                other_name=msg.other_name,
+            )
+            return
         rec = self.npcs.get(msg.npc.upper())
         if rec is not None and rec.activity == "body":
             self.applier.verdict(msg.hold, "server", npc=rec.id)

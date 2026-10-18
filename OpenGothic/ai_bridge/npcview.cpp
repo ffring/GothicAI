@@ -7,6 +7,7 @@
 #include <cmath>
 #include <vector>
 
+#include "game/bodycontroller.h"
 #include "game/constants.h"
 #include "game/gamescript.h"
 #include "camera.h"
@@ -310,6 +311,14 @@ void writeView(Writer& w, World& world, Npc& npc) {
     w.Key("room_guild"); w.Int(world.guildOfRoom(portal));
     }
   str(w,"state",AiNpc::stateName(world,npc.currentState()));
+  // Scene preparation can wait for the routine initializer to install the
+  // native callback. Observing this never enables or dispatches a perception.
+  w.Key("theft_ready");
+  w.Bool(npc.isStateStarted() && npc.hasPerc(PERC_ASSESSTHEFT) &&
+         npc.processPolicy()==NpcProcessPolicy::AiNormal && npc.guild()<GIL_SEPERATOR_HUM &&
+         !npc.isPlayer() && !npc.isDead() && !npc.isDown() &&
+         !npc.isExternalControl() && !BodyController::owns(npc) && !npc.isTalk() && !npc.isAttack() &&
+         !Gothic::inst().isNpcInDialog(npc));
   str(w,"body",body(npc));
   if(auto mob = npc.interactive())
     utf8(w,"mob",mobName(world,mob->focusName()));

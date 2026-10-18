@@ -6243,13 +6243,15 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc,
     }
 
   if(hasPerc(perc)) {
+    // Receipt makes a witness, even when the server takes the reaction. A late
+    // passPerception has no deed, so returning it to scripts cannot add one twice.
+    if(deed!=nullptr)
+      deed->witnessed(*this);
     auto& intercept = Gothic::inst().interceptPerception;
-    if(!percPassThrough && intercept && intercept(*this,pl,victim,perc)) {
+    if(!percPassThrough && intercept && intercept(*this,pl,victim,perc,deed.get())) {
       trace("intercepted",true,false);
       return true;  // taken over by an outside AI (ai_bridge); it may hand it back
       }
-    if(deed!=nullptr)
-      deed->witnessed(*this);
     trace("native_callback",true,true);
     owner.script().invokeState(this,&pl,victim,perception[perc].func);
     return true;
