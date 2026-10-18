@@ -230,6 +230,11 @@
 #   remembers: seen lately (docs/npc-tools.md, step M2): Cavalorn goes into the bandits' cave first, sees them,
 #       comes back out; «там в пещере бандиты, разберись» (model scripted with LLM=fake): it remembers them
 #       though it sees them no more, walks into the cave first and fights Brago
+#   fight_reactions_wolf/sight/bandits/flee: Cavalorn intercepts a hunting wolf before its first bite;
+#       sees a bloodfly at 30 m; charges two bandits (one held listening), which shout and draw before
+#       contact and strike within 3 s; a coward flees Cavalorn while the hero stays passive. Actual
+#       strike/damage timestamps come from body_watch. Models scripted by default, DECIDER_URL optional;
+#       starts TTS (TTS=fake), TIMEOUT=300 for bandits, 180 for the other cases
 #   cave: the map of places (docs/npc-tools.md, step M3): Cavalorn goes with the hero to the steps below
 #       Xardas's tower; the bandits' cave is among the places around him, a cave entered from the steps, and
 #       `where{пещера}` finds it; «Кавалорн, зайди в пещеру.» with no place named takes him into it (model
@@ -310,7 +315,7 @@ ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ] || [ "${SCENARIO#errand}" != "$SCENARIO" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ] || [ "${SCENARIO#errand}" != "$SCENARIO" ] || [ "${SCENARIO#fight_reactions_}" != "$SCENARIO" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")

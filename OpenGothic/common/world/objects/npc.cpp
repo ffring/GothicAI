@@ -3312,7 +3312,7 @@ void Npc::commitDamage() {
   currentTarget->takeDamage(*this,nullptr);
   }
 
-void Npc::takeDamage(Npc &other, const Bullet* b) {
+void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence) {
   if(isDown())
     return;
 
@@ -3320,8 +3320,8 @@ void Npc::takeDamage(Npc &other, const Bullet* b) {
 
   assert(b==nullptr || !b->isSpell());
   const auto& pose    = visual.pose();
-  const bool  isJumpb = pose.isJumpBack(owner.tickCount()) && fghAlgo.isInJumpBackAngle(*this,other);
-  const bool  isBlock = (!other.isMonster() || other.inventory().activeWeapon()!=nullptr) &&
+  const bool  isJumpb = !ignoreDefence && pose.isJumpBack(owner.tickCount()) && fghAlgo.isInJumpBackAngle(*this,other);
+  const bool  isBlock = !ignoreDefence && (!other.isMonster() || other.inventory().activeWeapon()!=nullptr) &&
                          fghAlgo.isInFocusAngle(*this,other) &&
                          pose.isDefence(owner.tickCount());
   if((isBlock || isJumpb) && b==nullptr)

@@ -227,7 +227,7 @@ PY
   # Resolve dependencies inside the quick job, before the e2e server's two-second startup wait.
   (cd "$ROOT/server" && uv sync --frozen)
   case "${SCENARIO:-m0}" in
-    tts|gossip|day|group|interject|programs) (cd "$ROOT/tts-service" && uv sync --frozen) ;;
+    tts|gossip|day|group|interject|programs|fight_reactions_*) (cd "$ROOT/tts-service" && uv sync --frozen) ;;
   esac
   case "${SCENARIO:-m0}" in
     m3|m5e) (cd "$ROOT/asr-service" && uv sync --frozen) ;;
