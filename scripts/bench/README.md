@@ -834,10 +834,15 @@ a close main-mast flag with a native Fireball, and a close furled sail. The city
 scenario fires an arrow through an extracted banner. The Valley of Mines
 scenarios show the native `S_WINDY` orc standard and the Old Camp banner; the
 latter also records both 40 m crossings and exports a moving-cloth save.
+`cloth-arrow-npc` checks the harbour wind and two single-step native arrow paths:
+cloth before the NPC must receive an impulse; cloth behind the stopping NPC must
+not. A fixture NPC is held only for these checks; production NPC logic is unchanged.
+The scenario ends with one normal-clock ON measurement at the densest ship observer.
 
 ```sh
 WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-harbour /absolute/path/cloth/harbour
 WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-city /absolute/path/cloth/city
+BENCH_HOST=ryzen RYZEN_BENCH_CLASS=quiet WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-arrow-npc /absolute/path/cloth/review-arrow-npc
 WORLD=OLDWORLD.ZEN scripts/bench.sh cloth-orc /absolute/path/cloth/orc
 WORLD=OLDWORLD.ZEN scripts/bench.sh cloth /absolute/path/cloth/oldcamp
 SAVE=/absolute/path/cloth/oldcamp/session-cloth-moving.sav scripts/bench.sh cloth-reload /absolute/path/cloth/reload
@@ -882,6 +887,7 @@ to start when its build lacks this option, including after an automatic fallback
 | `cloth camera harbour` | Frame all ten authored ship cloth islands without changing the observer or selected physics target. |
 | `cloth wind calm\|natural\|gust` | Smoothly set the common world wind scale to 0, 1 or 2. |
 | `cloth checkpoint <label>` | Record physical/rendered vertex counts, anchor error, current and lifetime maximum vertex speed, recovery count, projectile counters and the selected cloth's rendered vertices in cm. |
+| `cloth arrow-npc behind\|ahead` | Invoke one synchronous production `moveBullet` segment with a native precise arrow and a fixture NPC behind or ahead of the selected authored banner. Verify the native bone hit and cloth arrow-pass delta 1 or 0. |
 | `cloth shoot fireball\|wind\|arrow` | Launch a real production Bullet at an exposed cloth face. The fixture does not inject a synthetic impulse or introduce an NPC target. |
 | `cloth verify anchors\|fireball\|wind\|arrow` | Require anchors within 0.5 cm, finite vertices, bounded speeds and no solver recovery; require the selected spell hit; or require an arrow contact and its actual Bullet trajectory at least 30 cm beyond the face. |
 | `cloth verify harbour-wind` | At the densest ship observer require all five active furled sails and four active flags to be outdoors and exposed to the common wind. Record separate total and exposed counts. |
