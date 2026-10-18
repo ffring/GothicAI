@@ -421,6 +421,90 @@ async def test_restitution_only_moves_existing_goods_after_proven_unconsciousnes
     assert system.chronicle.facts("crime_restitution")[0]["how"] == "defeated_thief"
 
 
+async def test_second_fighter_returns_goods_when_first_fighter_leaves_the_fight(system):
+    case = crime(system, npc=MATTEO, owner=MATTEO, guild=3)
+    owner_left = asyncio.Event()
+    owner_reads = 0
+
+    async def evaluate(npc, expressions):
+        nonlocal owner_reads
+        if npc == MATTEO:
+            owner_reads += 1
+            if owner_reads == 1:
+                return [0, 0, 0, 2, 1, 0]
+            owner_left.set()
+            return [0, 0, 0, 2, 0, 0]
+        await owner_left.wait()
+        return [1, 0, 0, 2, 1, 0]
+
+    system.link.story_eval = evaluate
+    system.react._track_reclaim(case, MATTEO, 0)
+    system.react._track_reclaim(case, GUARD, 0)
+    await asyncio.wait_for(asyncio.gather(*tuple(system.react._tasks)), 2.0)
+    assert owner_reads == 2
+    assert system.link.effects == [(MATTEO, [{
+        "do": "give", "item": "ITFO_BREAD", "count": 1, "to": "self",
+    }], True)]
+    assert system.chronicle.facts("crime_restitution")[0]["fighter"] == GUARD
+
+
+async def test_two_fighters_observing_same_defeat_return_only_the_stolen_amount(system):
+    case = crime(system, npc=MATTEO, owner=MATTEO, guild=3)
+    observed = set()
+    both_observed, transfer_started, finish_transfer = (asyncio.Event() for _ in range(3))
+
+    async def evaluate(npc, expressions):
+        observed.add(npc)
+        if len(observed) == 2:
+            both_observed.set()
+        await both_observed.wait()
+        return [1, 0, 0, 2, 1, 0]  # the hero has a second, unrelated copy of the item
+
+    async def transfer(npc, effects, *, check=False):
+        system.link.effects.append((npc, effects, check))
+        transfer_started.set()
+        await finish_transfer.wait()
+
+    system.link.story_eval, system.link.story_effect = evaluate, transfer
+    system.react._track_reclaim(case, MATTEO, 0)
+    system.react._track_reclaim(case, MATTEO, 0)  # repeat delivery must not duplicate this fighter
+    system.react._track_reclaim(case, GUARD, 0)
+    tasks = tuple(system.react._tasks)
+    assert len(tasks) == 2
+    await asyncio.wait_for(transfer_started.wait(), 1.0)
+    await asyncio.sleep(0)
+    finish_transfer.set()
+    await asyncio.wait_for(asyncio.gather(*tasks), 1.0)
+    assert len(system.link.effects) == 1
+    assert system.link.effects[0][1][0]["count"] == 1
+    assert len(system.chronicle.facts("crime_restitution")) == 1
+
+
+async def test_session_change_cancels_all_fighters_waiting_to_return_goods(system):
+    case = crime(system, npc=MATTEO, owner=MATTEO, guild=3)
+    observed = set()
+    both_observed = asyncio.Event()
+    pending_reply = asyncio.Event()
+
+    async def evaluate(npc, expressions):
+        observed.add(npc)
+        if len(observed) == 2:
+            both_observed.set()
+        await pending_reply.wait()
+        return [1, 0, 0, 2, 1, 0]
+
+    system.link.story_eval = evaluate
+    system.react._track_reclaim(case, MATTEO, 0)
+    system.react._track_reclaim(case, GUARD, 0)
+    tasks = tuple(system.react._tasks)
+    await asyncio.wait_for(both_observed.wait(), 1.0)
+    system.link.receive(system.link.session.model_copy(update={"branch": "B"}))
+    await asyncio.gather(*tasks, return_exceptions=True)
+    assert all(task.cancelled() for task in tasks)
+    assert not system.react._reclaiming and not system.react._restitution_started
+    assert not system.link.effects and not system.chronicle.facts("crime_restitution")
+
+
 @pytest.mark.parametrize("values", [[1, 1, 0, 1, 1, 0], [1, 0, 1, 1, 1, 0], [1, 0, 0, 0, 1, 0]])
 async def test_dead_hero_dead_witness_or_missing_goods_never_restitute(system, values):
     system.link.eval_values = values

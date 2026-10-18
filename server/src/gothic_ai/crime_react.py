@@ -129,7 +129,8 @@ class CrimeReact:
         self._generation = 0
         self._prepared = False
         self._closed = False
-        self._reclaiming: set[str] = set()
+        self._reclaiming: set[tuple[int, str, str]] = set()
+        self._restitution_started: set[tuple[int, str]] = set()
         link.listeners.append(self._on_message)
         crimes.chronicle.on_fact.append(self._on_fact)
 
@@ -246,6 +247,7 @@ class CrimeReact:
             self._holds.clear()
             self._receipts.clear()
             self._reclaiming.clear()
+            self._restitution_started.clear()
             self._prepared = False
             for task in tuple(self._tasks):
                 task.cancel()
@@ -429,16 +431,18 @@ class CrimeReact:
 
     def _track_reclaim(self, crime: Fact, fighter: str, generation: int) -> None:
         """Vanilla AR_THEFT loots gold, not the stolen cup. Recover only the recorded goods."""
+        watcher = (generation, crime["id"], fighter)
         if (
             crime.get("kind") != "theft"
             or not crime.get("owner")
             or not crime.get("item")
             or crime.get("count", 0) <= 0
-            or crime["id"] in self._reclaiming
+            or watcher in self._reclaiming
+            or (generation, crime["id"]) in self._restitution_started
             or any(f.get("crime") == crime["id"] for f in self.crimes.chronicle.facts("crime_restitution"))
         ):
             return
-        self._reclaiming.add(crime["id"])
+        self._reclaiming.add(watcher)
         task = asyncio.create_task(self._reclaim(crime, fighter, generation))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -448,6 +452,8 @@ class CrimeReact:
         fighting = False
         try:
             while generation == self._generation and self.clock() < deadline:
+                if (generation, crime["id"]) in self._restitution_started:
+                    return
                 values = await self.link.story_eval(fighter, [
                     ["call", "NPC_ISINSTATE", ["inst", "OTHER"], ["sym", "ZS_UNCONSCIOUS"]],
                     ["call", "NPC_ISDEAD", ["inst", "OTHER"]],
@@ -467,6 +473,12 @@ class CrimeReact:
                     amount = min(int(crime["count"]), count)
                     if amount <= 0:
                         return
+                    restitution = (generation, crime["id"])
+                    if restitution in self._restitution_started:
+                        return
+                    # Several witnesses can win the same fight. Claim this case before yielding
+                    # to the transfer, including when its acknowledgement later gets lost.
+                    self._restitution_started.add(restitution)
                     # check=True rechecks the giver's inventory in the engine before a real transfer.
                     await self.link.story_effect(crime["owner"], [{
                         "do": "give", "item": crime["item"], "count": amount, "to": "self",
@@ -485,4 +497,4 @@ class CrimeReact:
         except (GameError, TimeoutError, ConnectionError) as error:
             log.debug("stolen goods %s: %s", crime["id"], error)
         finally:
-            self._reclaiming.discard(crime["id"])
+            self._reclaiming.discard((generation, crime["id"], fighter))
