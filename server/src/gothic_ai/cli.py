@@ -676,8 +676,8 @@ def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -
 
 
 async def serve(args: argparse.Namespace) -> int:
-    if args.scenario == "neural" and (not args.body_url or not args.neural_body):
-        log.error("scenario neural requires GOTHIC_BODY_URL (or --body-url) and --neural-body")
+    if args.scenario in {"neural", "neural-companion"} and (not args.body_url or not args.neural_body):
+        log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
         return 2
     done = asyncio.Event()
     exit_code = 0
@@ -1159,10 +1159,12 @@ async def serve(args: argparse.Namespace) -> int:
         if args.scenario is None:
             return
         try:
-            if args.scenario == "neural":
-                results = await scenarios.neural_scenario(link, bodypilot)
+            if args.scenario in {"neural", "neural-companion"}:
+                scenario = (scenarios.neural_companion_scenario if args.scenario == "neural-companion"
+                            else scenarios.neural_scenario)
+                results = await scenario(link, bodypilot)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
-                log.info("scenario neural: %d checks, %d failed", len(results), len(bad))
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m0":
                 steps = await scenarios.m0_smoke(link, args.npc)
@@ -2165,6 +2167,7 @@ def main() -> None:
             "m5",
             "m5b",
             "neural",
+            "neural-companion",
             "m5c",
             "m5e",
             "orders",
