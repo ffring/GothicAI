@@ -1574,6 +1574,116 @@ async def test_action_rejection_reconciles_only_confirmed_native_target_change(r
             assert len(rig.policy.commands("reset")) == 1
 
 
+@pytest.mark.parametrize("route,release_reason,evidence", [
+    (route, reason, evidence)
+    for route in ("status", "release_ack")
+    for reason in ("native_script_takeover", "target_changed_or_lost")
+    for evidence in ("matching", "missing", "foreign")
+] + [
+    ("release_ack", "native_script_takeover", "timeout"),
+    ("release_ack", "native_script_takeover", "world_changed"),
+])
+async def test_native_ack_drains_later_target_change_event_before_unwatch(
+    route, release_reason, evidence, monkeypatch,
+):
+    async with running(companion=lambda npc: npc == "CAVALORN") as rig:
+        rig.bridge.target_is_hero = False
+        rig.bridge.target_npc = "CAVALORN"
+        await rig.active(target_entity=3, extra=[companion_entry()])
+        lease = rig.pilot.lease
+        original_status = rig.link.body_control_status
+        original_release = rig.link.body_release
+        original_events = rig.link.body_events
+
+        def change_native_target():
+            rig.bridge.target_is_hero = True
+            rig.bridge.target_npc = None
+            if route == "status":
+                rig.bridge.restore_native(release_reason=release_reason)
+                rig.bridge._released_pending = False
+                rig.bridge.release_pending_polls = 0
+            else:
+                # The native acknowledgement will clear GameLink's lease before
+                # the pilot consumes this queued ownership event.
+                rig.bridge.control_events.append(event(
+                    1, entity_id=lease.entity_id, session_epoch=lease.session_epoch,
+                    world_epoch=lease.world_epoch, control_generation=lease.control_generation,
+                    target_entity_id=lease.target_entity_id, reason="native_restored", owner="native",
+                    release_reason=release_reason,
+                ))
+            if evidence == "missing":
+                rig.bridge.control_events.clear()
+            elif evidence == "foreign":
+                rig.bridge.control_events[0]["control_generation"] += 1
+            elif evidence == "timeout":
+                rig.bridge.response_delays["body_events"] = 0.300
+
+        async def native_before_status(*args, **kwargs):
+            assert rig.bridge._released_pending and not rig.bridge.control_events
+            change_native_target()
+            return await original_status(*args, **kwargs)
+
+        async def native_with_release_ack(*args, **kwargs):
+            change_native_target()
+            result = await original_release(*args, **kwargs)
+            assert result.owner == "native" and not result.release_pending
+            assert lease.entity_id not in rig.link.body_leases
+            return result
+
+        async def change_world_after_final_events(*args, **kwargs):
+            result = await original_events(*args, **kwargs)
+            rig.link._dispatch(Loading(type="loading"))
+            return result
+
+        if route == "status":
+            rig.bridge.release_pending_polls = 1
+            monkeypatch.setattr(rig.link, "body_control_status", native_before_status)
+        else:
+            monkeypatch.setattr(rig.link, "body_release", native_with_release_ack)
+        if evidence == "world_changed":
+            monkeypatch.setattr(rig.link, "body_events", change_world_after_final_events)
+        # The rejection starts cleanup while the engine still holds the old target.
+        rig.pilot._last_events_poll = float("inf")
+        first_command = len(rig.bridge.sent)
+        rig.bridge.action_rejections.append("release_pending")
+        rig.bridge.emit(fighter(4, owned=True, target_entity=3))
+        await eventually(lambda: rig.pilot.last_summary is not None, timeout=bodypilot.FINISH_TIMEOUT + 0.5)
+        await eventually(lambda: not rig.bridge._response_tasks)
+        summary = rig.pilot.last_summary
+        recapture = evidence == "matching"
+        assert summary.reason == ("target_changed" if recapture else "body_action_rejected")
+        assert summary.native_release_reason == (release_reason if recapture else None)
+        assert dict(summary.action_rejections) == {"release_pending": 1}
+        assert summary.release_confirmed and summary.watch_removed
+        assert not rig.bridge.control_events
+
+        commands = [command["type"] for command in rig.bridge.sent[first_command:]
+                    if command["type"] != "story_eval"]
+        release_index = commands.index("body_release")
+        assert commands[release_index:] == (
+            ["body_release", "body_events", "body_control_status", "body_events", "body_watch"]
+            if route == "status" else ["body_release", "body_events", "body_watch"]
+        )
+        rig.clock.advance(3)
+        if recapture:
+            # New leases must no longer receive the handoff hooks from this fight.
+            monkeypatch.setattr(rig.link, "body_release", original_release)
+            monkeypatch.setattr(rig.link, "body_control_status", original_status)
+            await rig.reacquire(5, target_entity=2, count=2)
+            assert [command["target_entity_id"] for command in rig.bridge.commands("body_acquire")] == [3, 2]
+            assert [request["initial_game_ms"] for request in rig.policy.commands("reset")] == [100, 250]
+        else:
+            assert "NPC" not in rig.pilot._retarget_pending
+            if evidence != "world_changed":
+                assert "NPC" in rig.pilot._claimed_fights
+                rig.roster(extra=[companion_entry()])
+                rig.combat()
+                rig.bridge.emit(fighter(5))
+            await asyncio.sleep(0.060)
+            assert len(rig.bridge.commands("body_acquire")) == 1
+            assert len(rig.policy.commands("reset")) == 1
+
+
 async def test_target_change_reacquisition_waits_two_seconds_for_each_npc():
     async with running(companion=lambda npc: npc == "CAVALORN") as rig:
         rig.bridge.target_is_hero = False

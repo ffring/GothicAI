@@ -1055,6 +1055,21 @@ class BodyPilot:
                     await asyncio.sleep(0.025)
                 if (
                     reason in native_reasons and lease is not None
+                    and self._native_release_reason is None and not self.link.closed.is_set()
+                    and self.link.body_leases.get(lease.entity_id) != lease
+                    and (self.link.body_session_epoch, self.link.body_generation)
+                    == (lease.session_epoch, lease.world_epoch)
+                ):
+                    # A status/release acknowledgement can confirm native ownership
+                    # after the last event poll. Drain its reason before unwatch discards it.
+                    with contextlib.suppress(*BRIDGE_ERRORS):
+                        events = await self.link.body_events(timeout=BRIDGE_TIMEOUT)
+                        if (self.link.body_session_epoch, self.link.body_generation) == (
+                            lease.session_epoch, lease.world_epoch,
+                        ):
+                            self.on_message(events)
+                if (
+                    reason in native_reasons and lease is not None
                     and self._native_release_reason is not None and not self.link.closed.is_set()
                     and self.link.body_leases.get(lease.entity_id) != lease
                 ):
