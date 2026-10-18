@@ -115,6 +115,7 @@ class Resources final {
       const Tempest::Texture2d* orm    = nullptr;
       float                    scale  = 1.f;
       bool                     present = false;
+      bool                     hasAlbedo = false;
       };
     static MaterialMaps              loadMaterialMaps(std::string_view name);
     static void                      materialAlbedoReplaced(std::string_view name);

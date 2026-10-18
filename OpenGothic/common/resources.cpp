@@ -1218,6 +1218,7 @@ Resources::MaterialMaps Resources::loadMaterialMaps(std::string_view name) {
   ret.orm    = inst->implLoadMaterialTexture(files.orm,false);
   ret.scale  = files.scale;
   ret.present = true;
+  ret.hasAlbedo = !files.albedo.empty();
   return ret;
   }
 

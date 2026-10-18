@@ -21,9 +21,11 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
     maps = Resources::loadMaterialMaps(m.texture);
     // Choose our colour before opening the original. Forward materials keep
     // their existing texture path, just as they do for the other material maps.
-    if(maps.albedo!=nullptr &&
-       !isForwardShading(loadAlphaFunc(m.alpha_func,m.group,m.color.a,maps.albedo,enableAlphaTest)))
-      tex = maps.albedo;
+    if(maps.hasAlbedo) {
+      const auto* albedo = maps.albedo!=nullptr ? maps.albedo : &Resources::fallbackTexture();
+      if(!isForwardShading(loadAlphaFunc(m.alpha_func,m.group,m.color.a,albedo,enableAlphaTest)))
+        tex = albedo;
+      }
     }
   if(tex==nullptr)
     tex = Resources::loadTexture(m.texture);
