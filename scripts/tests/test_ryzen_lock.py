@@ -74,9 +74,9 @@ os.execv(sys.executable, [sys.executable, '-u', *sys.argv[2:]])
         self.process.stdin.write((message + "\n").encode())
         self.process.stdin.flush()
 
-    def arm(self):
-        self.send(f"arm {RUN}")
-        self.wait_output(f"Ryzen: queue guard armed {RUN}")
+    def arm(self, run=RUN):
+        self.send(f"arm {run}")
+        self.wait_output(f"Ryzen: queue guard armed {run}")
 
     def eof(self):
         self.process.stdin.close()
@@ -224,6 +224,39 @@ class RyzenLockTests(unittest.TestCase):
         guardian.wait_output(f"Ryzen: queue guard complete {RUN}")
         self.assertTrue(guardian.locked(), "drain must retain the lease for log collection")
         guardian.eof()
+        guardian.assert_released(self)
+
+    def test_rearm_retains_lock_between_build_and_game(self):
+        guardian = self.guardian()
+        build, game = RUN + '-build', RUN + '-game'
+        guardian.snapshot('done', run=build)
+        guardian.arm(build)
+        guardian.send(f'complete {build}')
+        guardian.send(f'drain {build}')
+        guardian.wait_output(f'Ryzen: queue guard complete {build}')
+        guardian.assert_retained(self)
+        guardian.snapshot('running', run=game)
+        guardian.arm(game)
+        guardian.eof()
+        guardian.assert_retained(self)
+        guardian.snapshot('cancelled', run=game)
+        guardian.assert_released(self)
+
+    def test_eof_after_rearm_waits_for_game_registration(self):
+        guardian = self.guardian()
+        build, game = RUN + '-build', RUN + '-game'
+        guardian.snapshot('done', run=build)
+        guardian.arm(build)
+        guardian.send(f'complete {build}')
+        guardian.send(f'drain {build}')
+        guardian.wait_output(f'Ryzen: queue guard complete {build}')
+        guardian.arm(game)
+        guardian.eof()
+        # Neither complete nor drain from the build may acknowledge the game.
+        guardian.assert_retained(self)
+        guardian.snapshot('running', run=game)
+        guardian.assert_retained(self)
+        guardian.snapshot('done', run=game)
         guardian.assert_released(self)
 
     def test_queued_cancellation_is_terminal(self):
