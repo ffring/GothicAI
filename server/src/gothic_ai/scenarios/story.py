@@ -31,7 +31,6 @@ from ..protocol import (
     NpcSpec,
     NpcThing,
     RoutineEntry,
-    Saved,
     SayCmd,
     Session,
 )
@@ -43,6 +42,7 @@ from .common import (
     RUEBEN,
     RUEBEN_TO_HILDA,
     _logged,
+    _save_or_fail,
     _until,
     _until_async,
     attach_when_free,
@@ -146,9 +146,7 @@ async def graph_dialogs(
 
     await story.apply({"op": "disable", "node": second})
     await asyncio.sleep(0.5)  # the game has the memory head of that change
-    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-    await link.debug("save", slot)
-    await saving
+    await _save_or_fail(link, slot)
     await story.apply({"op": "disable", "node": first})  # after the save: gone with the load
     loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
     await link.debug("load", slot)
@@ -358,9 +356,7 @@ async def graph_programs(
     # a program in place of a condition, made before a save, comes back after loading it
     await story.apply({"op": "program", "node": cond, "part": "condition", "steps": never})
     await asyncio.sleep(0.5)  # the game has the memory head of that change
-    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-    await link.debug("save", slot)
-    await saving
+    await _save_or_fail(link, slot)
     loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
     await link.debug("load", slot)
     await loaded
@@ -969,9 +965,7 @@ async def authored_quest(
 
     # a save and a load in between
     await asyncio.sleep(0.5)  # the game has the memory head of the quest
-    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-    await link.debug("save", slot)
-    await saving
+    await _save_or_fail(link, slot)
     loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
     await link.debug("load", slot)
     await loaded
@@ -1257,9 +1251,7 @@ async def book_stages(
         situation = book.situation(successor) or ""
         check("successor_knows", "принял" in situation.lower() and "Хильд" in situation, situation)
 
-    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-    await link.debug("save", slot)
-    await saving
+    await _save_or_fail(link, slot)
     loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
     await link.debug("load", slot)
     await loaded
@@ -1497,9 +1489,7 @@ async def book_requires(link: GameLink, book: questbook.QuestBook, slot: int = 7
         await vars(status, stage, pan),
     )
 
-    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-    await link.debug("save", slot)
-    await saving
+    await _save_or_fail(link, slot)
     loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
     await link.debug("load", slot)
     await loaded
@@ -1665,9 +1655,7 @@ async def author_chain(
             for t in await link.triggers()
             if any(t["id"].startswith(f"{quest.id}_") for quest in quests)
         }
-        saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-        await link.debug("save", slot)
-        await saving
+        await _save_or_fail(link, slot)
         loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
         await link.debug("load", slot)
         await loaded
@@ -1930,9 +1918,7 @@ async def cast_character(link: GameLink, actors: Cast, slot: int = 7) -> dict[st
     me = spec.npc
 
     async def save(at: int) -> None:
-        saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-        await link.debug("save", at)
-        await saving
+        await _save_or_fail(link, at)
 
     async def load(at: int) -> None:
         loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
@@ -2121,9 +2107,7 @@ async def cast_person(
     await _until(lambda: not dialogue.speaking(HILDA), 15)
 
     # a save and a load
-    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-    await link.debug("save", slot)
-    await saving
+    await _save_or_fail(link, slot)
     loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
     await link.debug("load", slot)
     await loaded
@@ -2220,9 +2204,7 @@ async def own_symbols(link: GameLink, slot: int = 7) -> dict[str, str]:
     vanilla = (shown(before, HILDA), shown(before, like))
 
     async def save_and_load() -> None:
-        saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-        await link.debug("save", slot)
-        await saving
+        await _save_or_fail(link, slot)
         loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
         await link.debug("load", slot)
         await loaded
@@ -2444,9 +2426,7 @@ async def story_triggers(link: GameLink, story: StoryPatches, slot: int = 7) -> 
         )
 
     before = await values()
-    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
-    await link.debug("save", slot)
-    await saving
+    await _save_or_fail(link, slot)
     loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
     await link.debug("load", slot)
     await loaded
