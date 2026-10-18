@@ -127,6 +127,72 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
         self.assert_option(self.queue_options(requests[0]), '--name', 'build e2e stages')
         self.assertIn('compile failure: build log tail', result.stdout)
 
+    def test_errand_preparation_installs_missing_tts_dependencies(self):
+        for scenario in ('errand', 'errand_fork', 'errand_far', 'errand_give'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(prefix='ryzen-deps-test-') as directory:
+                root = Path(directory)
+                source = root / 'source'
+                state = root / 'state'
+                (source / 'server/.venv').mkdir(parents=True)
+                (source / 'server/.venv/ready').touch()
+                (source / 'tts-service').mkdir()
+                (state / 'inputs/run').mkdir(parents=True)
+                (root / 'bin').mkdir()
+                uv = root / 'bin/uv'
+                uv.write_text(f'#!{sys.executable}\n' + r'''
+import json
+import os
+from pathlib import Path
+import sys
+args = sys.argv[1:]
+with Path(os.environ['TEST_UV_CALLS']).open('a') as stream:
+    stream.write(json.dumps({'project': Path.cwd().name, 'args': args}) + '\n')
+marker = Path('.venv/ready')
+if args == ['sync', '--check', '--frozen']:
+    sys.exit(0 if marker.exists() else 1)
+if args == ['sync', '--frozen']:
+    marker.parent.mkdir(exist_ok=True)
+    marker.touch()
+    sys.exit(0)
+sys.exit('unexpected uv arguments: ' + repr(args))
+''')
+                uv.chmod(0o755)
+                harness = r'''
+set -euo pipefail
+ROOT="$TEST_ROOT/source"
+toolchain() { :; }
+source_digest() { echo snapshot-digest; }
+check_protocol() { :; }
+engine_ready() { :; }
+storygraph_ready() { :; }
+build_engine() { :; }
+build_storygraph() { :; }
+'''
+                harness += '\n'.join(function(name) for name in (
+                    'dependency_projects', 'remote_probe', 'remote_prepare'))
+                harness += r'''
+if remote_probe e2e "$TEST_ROOT/state" run "$TEST_SCENARIO"; then
+  echo 'initial probe unexpectedly ready' >&2
+  exit 90
+fi
+remote_prepare e2e "$TEST_ROOT/state" run "$TEST_SCENARIO"
+remote_probe e2e "$TEST_ROOT/state" run "$TEST_SCENARIO"
+'''
+                calls = root / 'uv-calls.jsonl'
+                result = subprocess.run(
+                    ['bash', '-c', harness], capture_output=True, text=True, timeout=5,
+                    env=dict(os.environ, TEST_ROOT=directory, TEST_SCENARIO=scenario,
+                             TEST_UV_CALLS=str(calls), PATH=str(root / 'bin') + os.pathsep + os.environ['PATH']),
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue((source / 'tts-service/.venv/ready').exists())
+                self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()], [
+                    {'project': project, 'args': args}
+                    for args in (['sync', '--check', '--frozen'], ['sync', '--frozen'],
+                                 ['sync', '--check', '--frozen'])
+                    for project in ('server', 'tts-service')
+                ])
+
     def test_game_rejects_stale_engine_without_building(self):
         with tempfile.TemporaryDirectory(prefix='ryzen-stale-test-') as directory:
             state = Path(directory)
