@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("gothic_ai.scenarios")
 CUP = "ITMI_SILVERCUP"
+HERO_POINT = "NW_FARM1_INHOUSE_01"  # the house's walkable entrance, clear of the beds
+WITNESS_POINT = "NW_FARM1_INHOUSE_02"
 
 
 async def crime_react(
@@ -89,23 +91,18 @@ async def crime_react(
             isinstance(m, NpcActResult) and m.id == action.id and m.status == "queued" for m in received
         )
 
-    async def finished(action: str, reason: str, timeout: float = 15) -> bool:
-        return await _until(
-            lambda: any(isinstance(m, NpcIdle) and m.act == action and m.reason == reason for m in received),
-            timeout,
-        )
-
     async def stand(npc: str, point: str, *, face: str | None = None, ready: bool = False) -> bool:
         await link.debug("skip_important", near=npc)
+        # Test placement owns neither the body nor perceptions. npc_goto grounds the NPC,
+        # removes an old interaction and clears its previous walk before the new activity starts.
+        await link.debug("npc_goto", npc=npc, waypoint=point)
         action = await link.npc_act(
             npc,
             "start_activity",
             state="ZS_STAND_WP",
             waypoint=point,
             minutes=120,
-            place=True,
-            arrive=ready,
-            radius=200,
+            place=False,
         )
         await _until(
             lambda: any(isinstance(m, NpcActResult) and m.id == action for m in received),
@@ -114,12 +111,47 @@ async def crime_react(
         queued = any(
             isinstance(m, NpcActResult) and m.id == action and m.status == "queued" for m in received
         )
-        if not queued or (ready and not await finished(action, "arrived")):
+        detail: dict[str, Any] = {"npc": npc, "point": point, "action": action}
+
+        def receipts() -> list[dict[str, Any]]:
+            return [
+                m.model_dump() for m in received if isinstance(m, NpcActResult | NpcIdle) and m.npc == npc
+            ]
+
+        if not queued:
+            log.info("crime_react placement not queued: %s", {**detail, "receipts": receipts()})
+            return False
+
+        async def at_point() -> bool:
+            views = await link.npc_view([npc])
+            snapshot = await link.snapshot(npc, fresh=True)
+            expected = points[point]
+            actual = snapshot.npc.pos
+            horizontal = math.hypot(actual[0] - expected["x"], actual[2] - expected["z"])
+            view = views[0] if views else None
+            detail.update(
+                {
+                    "pos": actual,
+                    "expected": (expected["x"], expected["y"], expected["z"]),
+                    "horizontal": horizontal,
+                    "view": view.model_dump() if view else None,
+                }
+            )
+            return (
+                horizontal <= 200
+                and abs(actual[1] - expected["y"]) <= 300
+                and view is not None
+                and view.state == "ZS_STAND_WP"
+                and view.theft_ready is True
+            )
+
+        if ready and not await _until_async(at_point, bool, 15):
+            log.info("crime_react placement not ready: %s", {**detail, "receipts": receipts()})
             return False
         if face is not None:
-            turning = await link.npc_act(npc, "turn_to", npc=face)
-            if not await finished(turning, "done"):
-                return False
+            # Set the test pose after native initialization, whose AI_AlignToWP may face elsewhere.
+            # Actual visibility is still checked through the engine immediately before taking.
+            await link.debug("npc_goto", npc=npc, waypoint=point, face=face)
         return True
 
     async def drop() -> bool:
@@ -136,30 +168,38 @@ async def crime_react(
 
     async def perception_ready(label: str, witness: str) -> bool:
         last: dict[str, Any] = {}
+        attempted: list[dict[str, Any]] = []
 
         async def read() -> bool:
             views = await link.npc_view([witness])
             if not views:
                 return False
             view = views[0]
-            senses, senses_range, can_see, distance, state_time = await link.story_eval(
+            senses, senses_range, can_see, free_los, distance, state_time = await link.story_eval(
                 witness,
                 [
                     ["field", ["inst", "SELF"], "SENSES"],
                     ["field", ["inst", "SELF"], "SENSES_RANGE"],
                     ["call", "NPC_CANSEENPC", ["inst", "SELF"], ["inst", "HERO"]],
+                    ["call", "NPC_CANSEENPCFREELOS", ["inst", "SELF"], ["inst", "HERO"]],
                     ["call", "NPC_GETDISTTONPC", ["inst", "SELF"], ["inst", "HERO"]],
                     ["call", "NPC_GETSTATETIME", ["inst", "SELF"]],
                 ],
             )
+            snapshot = await link.snapshot(witness, fresh=True)
             last.update(
                 {
                     "view": view.model_dump(),
                     "senses": senses,
                     "senses_range": senses_range,
                     "can_see": can_see,
+                    "free_los": free_los,
                     "distance": distance,
                     "state_time": state_time,
+                    "npc_pos": snapshot.npc.pos,
+                    "npc_rot": snapshot.npc.rot,
+                    "hero_pos": snapshot.player.pos if snapshot.player is not None else None,
+                    "placements": attempted,
                     "receipts": [
                         m.model_dump()
                         for m in received
@@ -178,7 +218,24 @@ async def crime_react(
                 and distance <= 1500
             )
 
-        ready = await _until_async(read, bool, 15)
+        ready = False
+        for distance in (None, 180, 300):
+            # BED_02 lies among furniture, so a grounded hero there may have no head-to-head ray
+            # even after the NPC has turned. Start on the connected walk point; if it is occluded,
+            # move only the hero a short way in front of the NPC's actual current heading.
+            if distance is None:
+                await link.debug("player_goto", waypoint=HERO_POINT)
+                placement: dict[str, Any] = {"waypoint": HERO_POINT}
+            else:
+                await link.debug("teleport", near=witness, distance=distance)
+                placement = {"in_front_of": witness, "distance": distance}
+            # Use the native turn to update its animated pose as well as its body angle. Neither
+            # queued/idle alone nor a hard-set angle proves that the NPC can actually see the hero.
+            placement["turn"] = await link.npc_act(witness, "turn_to", npc="PLAYER")
+            attempted.append(placement)
+            if await _until_async(read, bool, 5):
+                ready = True
+                break
         return check(f"{label}_perception_ready", bool(ready), last)
 
     async def household(label: str) -> bool:
@@ -234,19 +291,29 @@ async def crime_react(
         nonlocal hero_cups_before, owner_cups_before
         if not await household(label):
             return None
-        await link.debug("player_goto", waypoint=HOUSE)
+        await link.debug("player_goto", waypoint=HERO_POINT)
         for npc in farm:
-            if npc != LOBART and not await stand(npc, parked):
+            if npc == witness and npc != LOBART:
+                # The eventual witness needs no parked activity: its actual native routine is
+                # replaced only once, after the cup has landed, avoiding repeated same-state resets.
+                await link.debug("npc_goto", npc=npc, waypoint=parked)
+            elif npc != LOBART and not await stand(npc, parked):
                 check(f"{label}_parked", False, npc)
                 return None
-        if not check(f"{label}_owner_arrived", await stand(LOBART, HOUSE, ready=True), LOBART):
+        owner_point = WITNESS_POINT if witness == LOBART else HOUSE
+        if not check(f"{label}_owner_arrived", await stand(LOBART, owner_point, ready=True), LOBART):
             return None
         if not check(f"{label}_drop", await _until_async(drop, bool, 10), "native Lobart silver cup"):
             return None
         if witness != LOBART and not await stand(LOBART, parked):
             check(f"{label}_owner_parked", False, LOBART)
             return None
-        positioned = await stand(witness, "NW_FARM1_INHOUSE_02", face="PLAYER", ready=True)
+        if witness == LOBART:
+            # Already standing at the final point: retain its initialized state after the drop.
+            await link.debug("npc_goto", npc=witness, waypoint=owner_point, face="PLAYER")
+            positioned = True
+        else:
+            positioned = await stand(witness, WITNESS_POINT, face="PLAYER", ready=True)
         if not check(f"{label}_witness_arrived", positioned, witness):
             return None
         if not await perception_ready(label, witness):
@@ -260,7 +327,7 @@ async def crime_react(
         sent.clear()
         received.clear()
         hero_states.clear()
-        await link.debug("player_take", item=CUP, distance=800)
+        await link.debug("player_take", item=CUP, distance=1200)
         await _until(lambda: any(f["id"] not in before for f in facts("crime")), 10)
         crime = next((f for f in facts("crime") if f["id"] not in before), None)
         if crime is None:
@@ -319,7 +386,11 @@ async def crime_react(
         )
         await link.story_effect(LOBART, [{"do": "end"}])
         points = {p["name"]: p for p in await link.waypoints() if not p.get("fp")}
-        if not check("farm", HOUSE in points and {LOBART, HILDA} <= humans, HOUSE):
+        if not check(
+            "farm",
+            {HOUSE, HERO_POINT, WITNESS_POINT} <= points.keys() and {LOBART, HILDA} <= humans,
+            {"cup": HOUSE, "hero": HERO_POINT, "witness": WITNESS_POINT},
+        ):
             return _logged(results)
         house = points[HOUSE]
         origin = (house["x"], house["y"], house["z"])
