@@ -584,11 +584,11 @@ async def fight_reactions(
                         [
                             [
                                 "call", "NPC_CHANGEATTRIBUTE", ["inst", "SELF"],
-                                ["var", "ATR_HITPOINTSMAX"], ["int", 500 - maximum],
+                                ["int", 1], ["int", 500 - maximum],
                             ],
                             [
                                 "call", "NPC_CHANGEATTRIBUTE", ["inst", "SELF"],
-                                ["var", "ATR_HITPOINTS"], ["int", 500 - hp],
+                                ["int", 0], ["int", 500 - hp],
                             ],
                         ],
                     )
