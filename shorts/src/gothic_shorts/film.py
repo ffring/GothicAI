@@ -1,14 +1,16 @@
-"""A take: the shot played on the test bench with the real AI services, recorded with the game's sound.
+"""A take: the shot played on the test bench with real AI services and separate effects and npc voices.
 
 The services are the launcher's (its settings and keys, gothic-launcher config), on free ports so a play
 session can run alongside; the AI server takes the hero's recordings instead of the microphone
 (--voice-files) and keeps its memory in the take. The game runs the bench in film mode: a window of the
 shot's size, the sound mixed into the recording instead of the speakers (TEMPEST_AUDIO_LOOPBACK), the
 fixed time step kept to the wall clock (OPENGOTHIC_BENCH_REALTIME).
+Game music is off: the cut adds one music bed for the whole short.
 
 A take folder (.shorts/<shot>/take-NN/):
     scenario.bench   what the bench ran
-    main.mp4 main.wav  the recorded segment (one per `rec`), video and the game's sound
+    main.mp4 main.wav  the recorded segment (one per `rec`), video and the game's effects
+    main.voice-NN.wav  each AI npc line, separate from the effects
     events.jsonl     what was said when, in frames of the recording (cut.py)
     journal.jsonl    the AI server's journal: player and npc lines, actions
     bench.log, logs/ the bench, the services and the game
@@ -84,7 +86,7 @@ def film(
     run.mkdir()
     shutil.copy(save, run / "save_slot_1.sav")
     (run / "Gothic.ini").write_text(
-        f"[INTERNAL]\nvidResIndex=0\n[SOUND]\nsoundVolume={shot.sound:g}\nmusicVolume={shot.music:g}\n"
+        f"[INTERNAL]\nvidResIndex=0\n[SOUND]\nsoundVolume={shot.sound:g}\nmusicVolume=0\n"
     )
     logs = take / "logs"
     logs.mkdir()
@@ -104,6 +106,7 @@ def film(
             "OPENGOTHIC_BENCH": str(scenario),
             "OPENGOTHIC_BENCH_OUT": str(take),
             "OPENGOTHIC_BENCH_REALTIME": "1",
+            "OPENGOTHIC_BENCH_VOICE_STEM": "1",
             "OPENGOTHIC_BENCH_ENCODER": "-c:v h264_videotoolbox -b:v 24M",  # x264 slows the game down
             **texture_env(layout),
         },
