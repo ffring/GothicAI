@@ -690,6 +690,10 @@ struct Bench {
   uint64_t waterStart=0,waterSample=0,waterObserverSample=0;
   float waterHeroMaxStep=0,waterRayTop=0;
   bool waterReady=false,waterTrace=false,waterSwim=false,waterSawSwim=false,waterObserver=false;
+  struct WaterActor { Npc* npc=nullptr; std::string role; uint64_t sleepAt=uint64_t(-1); };
+  std::vector<WaterActor> waterActors;
+  bool waterBodiesReady=false,waterLootReady=false,waterKillOnThrow=false;
+  std::string waterLootMode;
   std::vector<std::unique_ptr<MovableFixture>> destructionFixtures;
   std::vector<uintptr_t> destructionIds;
   std::map<std::pair<uintptr_t,size_t>,Vec3> destructionFragmentOrigins;
@@ -4659,12 +4663,43 @@ void saveMovableSession(World& world,const std::string& label) {
   }
 
 bool waterOwns(const DynamicWorld::WaterBodySnapshot& body) {
+  if(body.ragdoll)
+    return std::any_of(bench.waterActors.begin(),bench.waterActors.end(),[&](const auto& actor) {
+      return actor.npc->ragdollBody()==body.ragdoll;
+      });
   return bench.waterIds.contains(body.id) || bench.waterIds.contains(body.parentId);
   }
 
 void waterFields(World& world) {
   if(!bench.waterTrace || bench.movableMeasuring || bench.waterSample==world.tickCount())return;
   bench.waterSample=world.tickCount();
+  if(bench.waterKillOnThrow && !bench.waterActors.empty()) {
+    auto* npc=bench.waterActors.front().npc;
+    const auto velocity=npc->spellVelocity();
+    const auto displacement=(npc->position()-bench.questWater.dry).length();
+    if(!npc->isDown() && velocity.length()>100.f && displacement>50.f) {
+      // Let the real projectile hit a living target first. Death during its
+      // flight inherits ordinary live motion through the production birth path.
+      bench.waterKillOnThrow=false;
+      const auto at=npc->position();npc->setLastHitBy(world.player());
+      if(!npc->setRagdollDown(true)) {arenaAbort("water corpse death during real wind flight refused");return;}
+      npc->prepareRagdoll();
+      const auto* rig=npc->ragdollBody();
+      if(!rig) {arenaAbort("water corpse wind death created no native ragdoll");return;}
+      const auto state=rig->state();
+      event("water_bodies_death","\"actor_id\":"+std::to_string(world.npcId(npc))+
+        ",\"position_cm\":"+ragdollVector(at)+",\"observed_wind_velocity_cm_s\":"+ragdollVector(velocity)+
+        ",\"displacement_from_lip_cm\":"+ragdollNumber(displacement)+
+        ",\"birth_velocity_cm_s\":"+(state.parts.empty()?"null":ragdollVector(state.parts.front().linearVelocity))+
+        ",\"path\":\"production onNoHealth death during genuine live WindFist flight\"");
+      }
+    }
+  for(auto& actor:bench.waterActors)
+    if(const auto* rig=actor.npc->ragdollBody();rig && rig->isSleeping() && actor.sleepAt==uint64_t(-1)) {
+      const auto pelvis=movablePosition(rig->pelvisTransform());
+      const auto water=world.physic()->waterRay(pelvis,300.f);
+      if(water.hasCol && pelvis.y<water.wdepth+50.f)actor.sleepAt=world.tickCount()-bench.waterStart;
+      }
   for(const auto& body:world.physic()->waterBodySnapshot()) {
     if(!waterOwns(body))continue;
     const auto point=movablePosition(body.transform);
@@ -4701,6 +4736,19 @@ std::string waterRows(World& world) {
     auto label=bench.waterLabels[body.id];
     if(label.empty() && body.category!=DynamicWorld::C_Fragment)label=bench.waterLabels[body.parentId];
     if(label.empty())label=body.category==DynamicWorld::C_Fragment?"crate_fragment":body.visual;
+    std::string actorFields;
+    if(body.ragdoll) {
+      for(const auto& actor:bench.waterActors) {
+        if(actor.npc->ragdollBody()!=body.ragdoll)continue;
+        const auto* skeleton=actor.npc->visualSkeleton();
+        const auto bone=skeleton && body.bone<skeleton->nodes.size()?skeleton->nodes[body.bone].name:std::string();
+        label=actor.role+":"+bone;
+        actorFields=",\"actor_id\":"+std::to_string(world.npcId(actor.npc))+
+          ",\"role\":"+jsonStr(actor.role)+",\"bone\":"+std::to_string(body.bone)+
+          ",\"bone_name\":"+jsonStr(bone)+",\"target_fraction\":"+ragdollNumber(body.targetFraction);
+        break;
+        }
+      }
     const auto point=movablePosition(body.transform);
     const bool hasWater=body.inWater && std::isfinite(body.waterY);
     const auto floor=world.physic()->landRay(Vec3(point.x,hasWater?body.waterY+3.f:point.y,point.z),6000.f);
@@ -4734,7 +4782,7 @@ std::string waterRows(World& world) {
       ",\"density_kg_m3\":"+ragdollNumber(body.density)+",\"position_cm\":"+ragdollVector(point)+
       ",\"world_bottom_cm\":"+ragdollNumber(body.worldBounds[0].y)+
       ",\"world_top_cm\":"+ragdollNumber(body.worldBounds[1].y)+
-      ",\"rendered_bbox\":"+rendered+itemFields+
+      ",\"rendered_bbox\":"+rendered+itemFields+actorFields+
       ",\"water_y_cm\":"+(hasWater?ragdollNumber(body.waterY):"null")+
       ",\"water_depth_cm\":"+(hasWater && floor.hasCol?ragdollNumber(body.waterY-floor.v.y):"null")+
       ",\"submerged_fraction\":"+ragdollNumber(body.submergedFraction)+
@@ -5192,6 +5240,239 @@ void waterInitial(World& world,Npc& player,PlayerControl& ctrl,std::string_view 
     ",\"saved_goal_active\":"+(savedGoal.active?"true":"false")+
     ",\"saved_goal_kind\":"+jsonStr(savedGoal.kind)+",\"saved_goal_cm\":"+ragdollVector(savedGoal.position));
 
+  }
+
+std::string waterActorRows(World& world) {
+  std::string rows="[";
+  const auto samples=world.physic()->waterBodySnapshot();
+  for(const auto& actor:bench.waterActors) {
+    if(rows.size()>1)rows+=',';
+    const auto& npc=*actor.npc;const auto* body=npc.ragdollBody();
+    float torso=0,torsoMass=0;
+    const auto* skeleton=npc.visualSkeleton();
+    for(const auto& sample:samples) {
+      if(sample.ragdoll!=body || !skeleton || sample.bone>=skeleton->nodes.size())continue;
+      auto name=skeleton->nodes[sample.bone].name;
+      for(auto& c:name)c=char(std::toupper(static_cast<unsigned char>(c)));
+      if(name.find("SPINE")==std::string::npos && name.find("PELVIS")==std::string::npos)continue;
+      torso+=sample.submergedFraction*sample.mass;torsoMass+=sample.mass;
+      }
+    rows+="{\"actor_id\":"+std::to_string(world.npcId(&npc))+",\"role\":"+jsonStr(actor.role)+
+      ",\"symbol\":"+jsonStr(symName(world,&npc))+",\"dead\":"+(npc.isDead()?"true":"false")+
+      ",\"unconscious\":"+(npc.isUnconscious()?"true":"false")+
+      ",\"part_count\":"+std::to_string(body?body->partCount():0)+
+      ",\"position_cm\":"+ragdollVector(npc.position())+
+      ",\"sleeping\":"+(body && body->isSleeping()?"true":"false")+
+      ",\"first_sleep_ms\":"+(actor.sleepAt==uint64_t(-1)?"null":std::to_string(actor.sleepAt))+
+      ",\"torso_submerged_fraction\":"+(torsoMass>0?ragdollNumber(torso/torsoMass):"null")+
+      ",\"parts\":[";
+    if(body) {
+      const auto state=body->state();
+      for(size_t i=0;i<state.parts.size();++i) {
+        const auto& part=state.parts[i];if(i)rows+=',';
+        rows+="{\"bone\":"+std::to_string(part.bone)+",\"transform\":"+ragdollMatrix(part.transform)+
+          ragdollNativePrecision(part)+",\"angular_velocity_rad_s\":"+ragdollVector(part.angularVelocity)+
+          ",\"sleeping\":"+(part.sleeping?"true":"false")+"}";
+        }
+      }
+    rows+="]}";
+    }
+  return rows+"]";
+  }
+
+void waterBodiesCheckpoint(World& world,std::string_view label) {
+  waterFields(world);
+  event("water_bodies_checkpoint","\"label\":"+jsonStr(label)+",\"case\":"+jsonStr(bench.waterCase)+
+    ",\"elapsed_ms\":"+std::to_string(world.tickCount()-bench.waterStart)+
+    ",\"buoyancy_enabled\":"+(world.physic()->buoyancyEnabled()?"true":"false")+
+    ",\"actors\":"+waterActorRows(world)+",\"bodies\":"+waterRows(world));
+  }
+
+bool waterBodiesAdd(World& world,Npc& player,std::string_view symbol,std::string role,const Vec3& at,bool dead=true) {
+  const auto instance=world.script().findSymbolIndex(symbol);
+  if(instance==size_t(-1)) {arenaAbort("water corpse instance is unavailable: "+std::string(symbol));return false;}
+  auto* npc=world.addNpc(instance,at);
+  if(!npc) {arenaAbort("water corpse insertion failed");return false;}
+  npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
+  npc->handle().flags=zenkit::NpcFlag(uint32_t(npc->handle().flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
+  npc->setDirection(bench.waterDirection);npc->updateTransform();
+  if(npc->isHuman()) {
+    const auto apple=world.script().findSymbolIndex("ITFO_APPLE");
+    if(apple!=size_t(-1))npc->addItem(apple,2);
+    }
+  bench.waterActors.push_back({npc,std::move(role)});
+  bench.crew.push_back(npc);
+  if(dead) {
+    npc->setLastHitBy(&player);
+    if(!npc->setRagdollDown(true)) {arenaAbort("water corpse production death path refused");return false;}
+    npc->prepareRagdoll();
+    if(!npc->ragdollBody()) {arenaAbort("water corpse has no supported native ragdoll");return false;}
+    }
+  return true;
+  }
+
+void prepareWaterBodiesFixture(World& world,Npc& player,std::string_view mode) {
+  if(bench.waterReady || bench.waterBodiesReady || (mode!="deep" && mode!="shallow" && mode!="perf")) {
+    arenaAbort("water-bodies setup expects a fresh deep, shallow or perf fixture");return;
+    }
+  std::vector<Vec3> places;
+  if(mode=="deep") {
+    // Use the existing low harbour shore search: the inland quest-return lake
+    // has rock and lilies between the camera and the floating body.
+    if(bench.spellActors.empty() || !waterFindWindSite(world,places)) {
+      arenaAbort("water corpse film requires a real low harbour water lip");return;
+      }
+    if(bench.waterWaypoint.find("HABOUR")==std::string::npos && bench.waterWaypoint.find("HARB")==std::string::npos) {
+      arenaAbort("water corpse film requires the harbour rather than the inland lake");return;
+      }
+    const auto lip=bench.waterDry;
+    const auto direction=bench.waterDirection;
+    const auto side=Vec3(-direction.z,0,direction.x);
+    Vec3 caster;bool supported=false;
+    for(float distance:{150.f,200.f,250.f,300.f}) {
+      const auto floor=world.physic()->landRay(lip-direction*distance+Vec3(0,400,0),600.f);
+      if(!floor.hasCol || floor.n.y<.99f || world.physic()->waterRay(floor.v,1.f).hasCol ||
+         world.physic()->ray(floor.v+Vec3(0,140,0),lip+Vec3(0,100,0)).hasCol)continue;
+      bool flat=true;
+      for(float dx:{-30.f,30.f})for(float dz:{-30.f,30.f}) {
+        const auto foot=world.physic()->landRay(floor.v+Vec3(dx,100,dz),150.f);
+        if(!foot.hasCol || foot.n.y<.99f || std::abs(foot.v.y-floor.v.y)>5.f ||
+           world.physic()->waterRay(foot.v,1.f).hasCol)flat=false;
+        }
+      if(flat) {caster=floor.v;supported=true;break;}
+      }
+    if(!supported) {arenaAbort("water corpse harbour lip has no supported dry WindFist caster");return;}
+    bool found=false;
+    for(float distance=100.f;distance<=1800.f && !found;distance+=25.f) {
+      Vec3 center,wolf,skeleton;
+      if(!waterProbe(world,lip+direction*distance,220.f,6000.f,center) ||
+         !waterProbe(world,center+side*220.f,220.f,6000.f,wolf) ||
+         !waterProbe(world,center-side*220.f,220.f,6000.f,skeleton))continue;
+      bench.waterCenter=center;places={wolf,skeleton};found=true;
+      }
+    if(!found) {arenaAbort("water corpse lip has no three separated deep-water slots");return;}
+    auto* human=bench.spellActors[0].npc;
+    for(size_t i=1;i<bench.spellActors.size();++i)world.removeNpc(*bench.spellActors[i].npc);
+    bench.spellActors.resize(1);bench.crew.clear();bench.crew.push_back(human);
+    human->handle().flags=zenkit::NpcFlag(uint32_t(human->handle().flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
+    human->setPosition(lip);human->setDirection(direction);human->updateTransform();
+    player.closeWeapon(true);player.clearAiQueue();player.stopWalking();
+    player.setPosition(caster);player.setDirection(direction);player.updateTransform();
+    bench.questWater={true,lip,direction,bench.waterCenter.y,bench.waterWaypoint};
+    bench.waterDry=caster;
+    const auto apple=world.script().findSymbolIndex("ITFO_APPLE");
+    if(apple!=size_t(-1))human->addItem(apple,2);
+    bench.waterActors.push_back({human,"human"});
+    bench.spellGuardTrace=false;
+    if(!waterBodiesAdd(world,player,"Wolf","wolf",places[0]+Vec3(0,55,0)) ||
+       !waterBodiesAdd(world,player,"Skeleton","skeleton",places[1]+Vec3(0,55,0)))return;
+    }
+  else {
+    const bool shallow=mode=="shallow";
+    if(!waterFindSite(world,shallow,shallow?1u:10u,places)) {
+      arenaAbort("water corpse fixture cannot find real separated water positions");return;
+      }
+    player.closeWeapon(true);player.clearAiQueue();player.stopWalking();
+    player.setPosition(bench.waterDry);player.setDirection(bench.waterCenter-bench.waterDry);player.updateTransform();
+    bench.crew.clear();
+    for(size_t i=0;i<places.size();++i)
+      if(!waterBodiesAdd(world,player,"BAU_904_BAUER",shallow?"human":"human_"+std::to_string(i),
+                         places[i]+Vec3(0,shallow?5.f:55.f,0)))return;
+    }
+  bench.waterCase="bodies-"+std::string(mode);bench.waterStart=world.tickCount();
+  bench.waterReady=true;bench.waterBodiesReady=true;bench.waterTrace=true;
+  bench.movableReady=true;bench.movableCenter=bench.waterCenter;
+  for(uint32_t id=0;id<world.npcCount();++id)
+    if(auto* npc=world.npcById(id);npc && npc!=&player && !npc->isDown() &&
+       (npc->position()-bench.waterCenter).length()<2500.f) {
+      npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
+      }
+  noiseBegin(world,"water-body-entry",bench.waterCenter);
+  bench.cam=C_Water;bench.waterCameraTarget=bench.waterCenter;
+  lookFrom(bench.waterCenter+bench.waterDirection*150.f+Vec3(0,850,0),bench.waterCenter);
+  event("water_bodies_setup","\"case\":"+jsonStr(mode)+",\"waypoint\":"+jsonStr(bench.waterWaypoint)+
+    ",\"dry_cm\":"+ragdollVector(bench.waterDry)+",\"center_cm\":"+ragdollVector(bench.waterCenter)+
+    ",\"camera_cm\":"+ragdollVector(bench.camPos)+",\"actors\":"+waterActorRows(world));
+  }
+
+void waterBodiesInitial(World& world,Npc& player,std::string_view label) {
+  bench.waterStart=world.tickCount();bench.waterCase="bodies-reload";
+  bench.waterTrace=true;bench.waterReady=true;bench.waterBodiesReady=true;
+  Vec3 center;size_t count=0;
+  for(uint32_t id=0;id<world.npcCount();++id) {
+    auto* npc=world.npcById(id);
+    if(!npc || !npc->isDead() || !npc->ragdollBody() || (npc->position()-player.position()).length()>3000.f)continue;
+    const auto* rig=npc->ragdollBody();bool wet=false;
+    for(const auto& part:world.physic()->waterBodySnapshot())if(part.ragdoll==rig && part.inWater) {wet=true;break;}
+    if(!wet)continue;
+    auto symbol=symName(world,npc);for(auto& c:symbol)c=char(std::toupper(static_cast<unsigned char>(c)));
+    const std::string role=npc->isHuman()?"human":symbol.find("WOLF")!=std::string::npos?"wolf":
+      symbol.find("SKELETON")!=std::string::npos?"skeleton":symbol;
+    bench.waterActors.push_back({npc,role});center+=movablePosition(rig->pelvisTransform());++count;
+    }
+  if(!count) {arenaAbort("water body reload has no nearby saved wet corpses");return;}
+  // Capture the untouched native pose before restoring transient bench control.
+  waterBodiesCheckpoint(world,label);
+  for(auto& actor:bench.waterActors)actor.npc->setExternalControl(true);
+  player.clearAiQueue();player.stopWalking();player.clearSpeed();player.setExternalControl(true);
+  bench.waterCenter=center/float(count);bench.cam=C_Water;bench.waterCameraTarget=bench.waterCenter;
+  lookFrom(bench.waterCenter+Vec3(0,850,150),bench.waterCenter);
+  }
+
+Npc* waterLootCorpse() {
+  for(auto& actor:bench.waterActors)
+    if(actor.npc->isHuman() && actor.npc->isDead() && actor.npc->ragdollBody())return actor.npc;
+  return nullptr;
+  }
+
+void waterBodiesLootReady(World& world,Npc& player,std::string_view mode) {
+  bench.waterLootMode=mode;bench.waterLootReady=false;
+  auto* corpse=waterLootCorpse();
+  if(!corpse || (mode!="shore" && mode!="swim")) {arenaAbort("water corpse loot expects a human and shore or swim");return;}
+  const auto center=movablePosition(corpse->ragdollBody()->pelvisTransform());
+  Vec3 at;bool found=false;
+  if(mode=="swim") {
+    Vec3 surface;
+    if(waterProbe(world,center,160.f,6000.f,surface)) {
+      at=surface-Vec3(0,100,0)+Vec3(100,0,0);found=true;
+      }
+    }
+  else for(float radius:{80.f,120.f,160.f,200.f,240.f}) {
+    for(unsigned angle=0;angle<32;++angle) {
+      const auto probe=center+Vec3(std::cos(float(angle)*float(M_PI)/16.f)*radius,400.f,
+                                   std::sin(float(angle)*float(M_PI)/16.f)*radius);
+      const auto floor=world.physic()->landRay(probe,1000.f);
+      if(!floor.hasCol || floor.n.y<.98f || world.physic()->waterRay(floor.v,1.f).hasCol ||
+         (floor.v-center).length()>300.f)continue;
+      at=floor.v;found=true;break;
+      }
+    if(found)break;
+    }
+  event("water_bodies_loot_position","\"mode\":"+jsonStr(mode)+",\"available\":"+(found?"true":"false")+
+    ",\"actor_id\":"+std::to_string(world.npcId(corpse))+",\"corpse_cm\":"+ragdollVector(center)+
+    ",\"hero_cm\":"+(found?ragdollVector(at):"null"));
+  if(!found)return;
+  player.setExternalControl(false);player.closeWeapon(true);player.clearAiQueue();player.stopWalking();
+  player.setPosition(at);player.setDirection(center-at);player.updateTransform();
+  bench.waterLootReady=true;
+  }
+
+void waterBodiesLoot(World& world,Npc& player,PlayerControl& ctrl) {
+  auto* corpse=waterLootCorpse();
+  if(!bench.waterLootReady || !corpse) {
+    event("water_bodies_loot","\"mode\":"+jsonStr(bench.waterLootMode)+",\"available\":false");return;
+    }
+  ctrl.clearFocus();ctrl.tickFocus();const auto focus=ctrl.focus();
+  const auto inventory=ragdollInventory(*corpse,world);
+  bench.expectedRagdollLoot=corpse;bench.ragdollLootDidOpen=false;
+  const bool interacted=focus.npc==corpse && ctrl.interact(*corpse);
+  bench.expectedRagdollLoot=nullptr;
+  event("water_bodies_loot","\"mode\":"+jsonStr(bench.waterLootMode)+",\"available\":true"+
+    ",\"actor_id\":"+std::to_string(world.npcId(corpse))+",\"focus_actor_id\":"+std::to_string(world.npcId(focus.npc))+
+    ",\"hero_swimming\":"+(player.isSwim()?"true":"false")+
+    ",\"interacted\":"+(interacted?"true":"false")+",\"opened\":"+(bench.ragdollLootDidOpen?"true":"false")+
+    ",\"inventory_unchanged\":"+(inventory==ragdollInventory(*corpse,world)?"true":"false")+
+    ",\"lootable_inventory\":"+ragdollInventory(*corpse,world,Inventory::T_Ransack));
   }
 
 void prepareWaterSpell(World& world,Npc& player,bool wind) {
@@ -7902,6 +8183,35 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     w.physic()->setBuoyancyEnabled(a[1]=="on");
     }
   else if(c=="water" && a.size()==3 && a[1]=="setup")prepareWaterFixture(w,pl,a[2]);
+  else if(c=="water-bodies" && a.size()==3 && a[1]=="setup") {
+    if(a[2]=="deep")prepareSpellFixture(w,pl,"wind");
+    prepareWaterBodiesFixture(w,pl,a[2]);
+    }
+  else if(c=="water-bodies" && a.size()==2 && a[1]=="kill-human") {
+    if(bench.waterActors.empty() || bench.waterCase!="bodies-deep" || bench.waterActors.front().npc->isDown()) {
+      arenaAbort("water corpse kill requires the living human at the prepared water lip");return;
+      }
+    bench.waterKillOnThrow=true;
+    event("water_bodies_death_armed","\"actor_id\":"+std::to_string(w.npcId(bench.waterActors.front().npc))+
+      ",\"minimum_wind_speed_cm_s\":100,\"minimum_displacement_cm\":50");
+    }
+  else if(c=="water-bodies" && a.size()==3 && a[1]=="checkpoint")waterBodiesCheckpoint(w,a[2]);
+  else if(c=="water-bodies" && a.size()==3 && a[1]=="initial")waterBodiesInitial(w,pl,a[2]);
+  else if(c=="water-bodies" && a.size()==2 && a[1]=="reset-motion") {
+    bench.waterReference.clear();bench.waterTravel.clear();bench.waterSample=uint64_t(-1);waterFields(w);
+    waterBodiesCheckpoint(w,"motion-reference");
+    }
+  else if(c=="water-bodies" && a.size()==3 && a[1]=="save") {
+    try {
+      if(bench.waterActors.empty() || std::any_of(bench.waterActors.begin(),bench.waterActors.end(),[](const auto& actor) {
+        return !actor.npc->ragdollBody() || !actor.npc->ragdollBody()->isSleeping();
+        })) {arenaAbort("water body save requires every observed corpse to have slept");return;}
+      waterBodiesCheckpoint(w,"saved");saveMovableSession(w,a[2]);
+      }
+    catch(const std::exception& error) {arenaAbort(error.what());}
+    }
+  else if(c=="water-bodies" && a.size()==3 && a[1]=="loot-ready")waterBodiesLootReady(w,pl,a[2]);
+  else if(c=="water-bodies" && a.size()==2 && a[1]=="loot")waterBodiesLoot(w,pl,ctrl);
   else if(c=="water" && a.size()==2 && a[1]=="torch")waterTorch(w,pl);
   else if(c=="water" && a.size()==3 && a[1]=="checkpoint")waterCheckpoint(w,a[2]);
   else if(c=="water" && a.size()==3 && a[1]=="initial")waterInitial(w,pl,ctrl,a[2]);
@@ -13147,7 +13457,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       const auto prelude=split(bench.prog[bench.pc]);
       const auto initial=split(bench.prog[bench.pc+1]);
       if(prelude.size()==2 && prelude[0]=="cheat" && prelude[1]=="god" &&
-         initial.size()==3 && initial[0]=="water" && initial[1]=="initial")
+         initial.size()==3 && (initial[0]=="water" || initial[0]=="water-bodies") && initial[1]=="initial")
         exec(bench.prog[bench.pc++],*world,*player,ctrl);
       }
     if(bench.pc<bench.prog.size()) {
@@ -13193,6 +13503,9 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         }
       else if(args.size()==3 && args[0]=="water" && args[1]=="initial") {
         ++bench.pc;waterInitial(*world,*player,ctrl,args[2]);
+        }
+      else if(args.size()==3 && args[0]=="water-bodies" && args[1]=="initial") {
+        ++bench.pc;waterBodiesInitial(*world,*player,args[2]);
         }
       }
     renderSound(dt);
@@ -13503,7 +13816,7 @@ bool TestBench::withUi() {
   }
 
 bool TestBench::ragdollLootOpened(const Npc& player, const Npc& target) {
-  if(!ragdollTrace || !bodyTraceAlive || scenarioPath==nullptr || !bench.started || bench.done || bench.expectedRagdollLoot!=&target)
+  if((!ragdollTrace && !bench.waterBodiesReady) || !bodyTraceAlive || scenarioPath==nullptr || !bench.started || bench.done || bench.expectedRagdollLoot!=&target)
     return false;
   auto* world=Gothic::inst().world();
   if(world==nullptr)

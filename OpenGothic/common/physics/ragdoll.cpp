@@ -2,9 +2,12 @@
 
 #include "collisionworld.h"
 #include "dynamicworld.h"
+#include "game/constants.h"
 #include "graphics/mesh/hitzones.h"
 #include "graphics/mesh/skeleton.h"
+#include "utils/versioninfo.h"
 #include "world/objects/npc.h"
+#include "world/world.h"
 
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
@@ -244,6 +247,15 @@ namespace {
 
   bool named(std::string_view name, std::string_view part) {
     return name.find(part)!=std::string_view::npos;
+    }
+
+  float partBuoyancyFraction(std::string_view name) {
+    if(named(name,"HEAD") || named(name,"NECK") || named(name,"JAW") || named(name,"KIEFER")) return .95f;
+    if(named(name,"CLAVICLE") || named(name,"ARM") || named(name,"HAND") || named(name,"FINGER") ||
+       named(name,"THIGH") || named(name,"CALF") || named(name,"HORSELINK") || named(name,"FOOT") || named(name,"TOE") ||
+       named(name,"LEG") || named(name,"TAIL") || named(name,"CLAW") || named(name,"ZANGE") ||
+       named(name,"PINCER") || named(name,"FUEHLER") || named(name,"WING")) return 1.f;
+    return .9f;
     }
 
   JPH::Vec3 perpendicular(JPH::Vec3Arg axis, JPH::Vec3Arg preferred) {
@@ -715,6 +727,7 @@ struct Ragdoll::Impl final {
   std::vector<AncestorState> ancestors;
   std::vector<JPH::Mat44> ancestorCorrections;
   std::vector<size_t> poseBones;
+  std::vector<BuoyancyPart> waterParts;
   bool legacyAncestors=false;
   uint32_t group=0;
   std::weak_ptr<zenkit::INpc> npc,culprit;
@@ -912,11 +925,13 @@ Ragdoll::Ragdoll(CollisionWorld& world, const Skeleton& skeleton, const HitZones
   impl->initialObject=objectMatrix;
   impl->initialPelvis=JPH::Vec3(world.physicsSystem().GetBodyInterface().GetPosition(impl->native->GetBodyID(0)));
   impl->native->AddToPhysicsSystem(kinematic ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+  resetBuoyancy();
   }
 
 Ragdoll::~Ragdoll() { detach(); }
 
 void Ragdoll::detach() {
+  impl->waterParts.clear();
   if(impl->native!=nullptr) {
     impl->native->RemoveFromPhysicsSystem();
     impl->native=nullptr;
@@ -942,6 +957,49 @@ bool Ragdoll::queueHit(size_t bone, const Tempest::Vec3& pointCm,
 
 void Ragdoll::setNpc(Npc* npc) {
   impl->npc=npc!=nullptr ? npc->handlePtr() : std::weak_ptr<zenkit::INpc>();
+  updateBuoyancyFractions();
+  }
+
+std::vector<Ragdoll::BuoyancyPart>& Ragdoll::buoyancyParts() { return impl->waterParts; }
+const std::vector<Ragdoll::BuoyancyPart>& Ragdoll::buoyancyParts() const { return impl->waterParts; }
+
+void Ragdoll::resetBuoyancy() {
+  impl->waterParts.clear();
+  // isKinematic() also becomes false during living hit reactions. The original
+  // rig policy, rather than the current motion of one limb, excludes all living
+  // bodies from corpse buoyancy.
+  if(!valid() || impl->kinematic) return;
+  impl->waterParts.resize(partCount());
+  for(size_t i=0;i<partCount();++i) {
+    impl->waterParts[i].body=impl->native->GetBodyID(int(i)).GetIndexAndSequenceNumber();
+    // A new corpse can start crossing water on its first native step. Treat
+    // that as entry; restoreRagdollBuoyancy resets this for loaded bodies.
+    impl->waterParts[i].initialized=true;
+    }
+  updateBuoyancyFractions();
+  }
+
+void Ragdoll::updateBuoyancyFractions() {
+  if(impl->waterParts.empty()) return;
+  std::string name=impl->rig->name;
+  for(char& c:name) c=char(std::toupper(static_cast<unsigned char>(c)));
+  bool sinks=named(name,"SKELETON") || named(name,"GOLEM") || named(name,"STONEGUARDIAN");
+  if(const auto* npc=noiseNpc()) {
+    const auto guild=npc->trueGuild();
+    if(npc->world().version().game==2) {
+      sinks=sinks || guild==GIL_GOBBO_SKELETON || guild==GIL_SUMMONED_GOBBO_SKELETON ||
+            guild==GIL_SKELETON || guild==GIL_SUMMONED_SKELETON || guild==GIL_SKELETON_MAGE ||
+            guild==GIL_SHADOWBEAST_SKELETON || guild==GIL_STONEGOLEM || guild==GIL_SUMMONED_GOLEM ||
+            guild==GIL_Stoneguardian || guild==GIL_SummonedGuardian;
+      }
+    else {
+      sinks=sinks || guild==GIL_G1_SKELETON || guild==GIL_G1_GOLEM;
+      }
+    }
+  // A fraction above one leaves weight even when fully immersed. Stone and
+  // bones still receive water drag and entry splashes, but settle on the bed.
+  for(size_t i=0;i<impl->waterParts.size();++i)
+    impl->waterParts[i].fraction=sinks ? 1.5f : partBuoyancyFraction(impl->rig->parts[i].name);
   }
 
 void Ragdoll::setNoiseCulprit(Npc* culprit) {
@@ -1323,6 +1381,8 @@ bool Ragdoll::restore(const State& state) {
   impl->ancestorCorrections=std::move(ancestorCorrections);
   impl->poseBones=std::move(poseBones);
   impl->legacyAncestors=legacyAncestors;
+  resetBuoyancy();
+  impl->world->restoreRagdollBuoyancy(*this);
   return true;
   }
 

@@ -420,6 +420,9 @@ class DynamicWorld final {
     std::vector<FragmentSnapshot> fragmentSnapshot() const;
     struct WaterBodySnapshot {
       uintptr_t id = 0, parentId = 0;
+      const Ragdoll* ragdoll = nullptr;
+      uint32_t bone = 0;
+      float targetFraction = 0;
       uint32_t zenId = uint32_t(-1);
       size_t piece = size_t(-1);
       int category = C_Null;

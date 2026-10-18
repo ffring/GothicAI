@@ -1,0 +1,11 @@
+# Start a new process with session-water-bodies.sav; the first native pose is untouched.
+cheat god
+water-bodies initial restored
+overlay off
+view full
+rec water-bodies-reloaded
+wait 30000
+water-bodies checkpoint continued
+shot water-bodies-reloaded
+stop
+physics stats

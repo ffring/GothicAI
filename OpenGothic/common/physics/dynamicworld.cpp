@@ -1720,9 +1720,16 @@ std::vector<DynamicWorld::WaterBodySnapshot> DynamicWorld::waterBodySnapshot() c
     }
   for(const auto& native:world->waterBodySnapshot()) {
     WaterBodySnapshot entry;
-    entry.id=native.body->nativeId();
-    entry.category=native.body->category();
-    entry.visual=native.body->label();
+    entry.id=native.nativeId;
+    entry.ragdoll=native.ragdoll;
+    entry.bone=native.bone;
+    entry.targetFraction=native.targetFraction;
+    entry.category=native.ragdoll!=nullptr ? C_Ragdoll : native.body->category();
+    entry.visual=native.body!=nullptr ? native.body->label() : "ragdoll";
+    if(native.ragdoll!=nullptr) {
+      entry.parentId=reinterpret_cast<uintptr_t>(native.ragdoll);
+      entry.piece=native.bone;
+      }
     entry.transform=native.transform;
     entry.worldBounds[0]=native.worldBounds[0];
     entry.worldBounds[1]=native.worldBounds[1];

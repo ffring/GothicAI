@@ -1,0 +1,18 @@
+# A dead human lies on the real submerged shoreline floor.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+water on
+overlay off
+view full
+water-bodies setup shallow
+rec water-bodies-shallow
+wait 30000
+water-bodies checkpoint settled
+water-bodies reset-motion
+wait 30000
+water-bodies checkpoint stable
+shot water-bodies-shallow
+stop
+physics stats
