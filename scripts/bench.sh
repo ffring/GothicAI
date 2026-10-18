@@ -245,12 +245,14 @@ HOST=mac
 printf '%s\n' "$HOST" >"$OUT/host.txt"
 REPORT_RC=0
 python3 "$ROOT/scripts/bench_report.py" "$OUT" || REPORT_RC=$?
-python3 - "$OUT/events.jsonl" <<'PY' || REPORT_RC=1
+python3 - "$OUT/events.jsonl" "$SCEN" <<'PY' || REPORT_RC=1
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 path = Path(sys.argv[1])
 failures = []
+observed = Counter()
 if path.exists():
     with path.open() as events:
         for line_number, line in enumerate(events, 1):
@@ -260,8 +262,23 @@ if path.exists():
                 failures.append(f'events.jsonl:{line_number}: invalid JSON')
                 continue
             kind = event.get('kind', '')
+            if kind == 'cloth_verify' and event.get('pass'):
+                observed[('verify', event.get('check'))] += 1
+            elif kind == 'cloth_checkpoint':
+                observed[('checkpoint', event.get('label'))] += 1
+            elif kind == 'cloth_session_initial' and event.get('rest'):
+                observed[('initial', event.get('label'))] += 1
             if kind == 'error' or kind.endswith('_error') or event.get('pass') is False:
                 failures.append(f"{kind}: {event.get('reason', event.get('check', 'check failed'))}")
+scenario = Path(sys.argv[2])
+if scenario.name.startswith('cloth'):
+    expected = Counter()
+    for line in scenario.read_text().splitlines():
+        command = line.split()
+        if len(command) == 3 and command[0] == 'cloth' and command[1] in ('verify', 'checkpoint', 'initial'):
+            expected[(command[1], command[2])] += 1
+    for (command, label), count in (expected - observed).items():
+        failures.append(f'missing cloth {command} {label}: {count} result(s)')
 if failures:
     for failure in failures[:10]:
         print(f'bench: failed: {failure}', file=sys.stderr)

@@ -76,8 +76,8 @@ shot cloth-harbour-flag-after-fireball
 wait 34
 stop
 
-# Furled cloth on the diagonal forestay remains geometrically tied to the stay.
-cloth setup NW_SHIP_SAIL_02:6 harbour-furled-sail
+# The upper-yard sail has a clear view from below, with its whole cloth in frame.
+cloth setup NW_SHIP_SAIL_02:2 harbour-furled-sail
 cloth off
 wait 3000
 rec cloth-harbour-sail-off

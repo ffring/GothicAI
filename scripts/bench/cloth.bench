@@ -61,13 +61,17 @@ shot cloth-radius-inside
 wait 34
 cloth checkpoint radius-inside
 cloth distance 3750
+wait 250
+cloth distance 3850
+wait 250
+cloth distance 3950
+wait 250
+cloth distance 3990
 wait 1000
-cloth distance 3995
-wait 34
 shot cloth-radius-before-exit
 wait 34
 cloth checkpoint radius-before-exit
-cloth distance 4005
+cloth distance 4010
 wait 34
 shot cloth-radius-after-exit
 wait 34
@@ -75,11 +79,12 @@ cloth checkpoint radius-after-exit
 wait 1000
 cloth distance 4500
 wait 1000
-cloth distance 4005
-wait 34
+cloth distance 4010
+wait 1000
 shot cloth-radius-before-entry
 wait 34
-cloth distance 3995
+cloth checkpoint radius-before-entry
+cloth distance 3990
 wait 34
 shot cloth-radius-after-entry
 wait 34

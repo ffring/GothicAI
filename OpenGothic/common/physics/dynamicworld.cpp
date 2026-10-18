@@ -895,6 +895,33 @@ DynamicWorld::RayLandResult DynamicWorld::ray(const Tempest::Vec3& from, const T
   return toResult(world->rayCast(from,to,visualMask,false), to);
   }
 
+DynamicWorld::RayLandResult DynamicWorld::rayClothCamera(const Tempest::Vec3& from,const Tempest::Vec3& to,
+                                                       std::string_view ownVisual,const Tempest::Vec3* bounds,
+                                                       size_t& selfHits,std::string* blockedLabel) const {
+  std::vector<const CollisionWorld::CollisionBody*> excluded;
+  const auto inside=[&](const Tempest::Vec3& point) {
+    return point.x>=bounds[0].x-25.f && point.x<=bounds[1].x+25.f &&
+           point.y>=bounds[0].y-25.f && point.y<=bounds[1].y+25.f &&
+           point.z>=bounds[0].z-25.f && point.z<=bounds[1].z+25.f;
+    };
+  for(;;) {
+    const auto hit=world->rayCast(from,to,visualMask,false,nullptr,&excluded);
+    if(blockedLabel)*blockedLabel=hit.body?hit.body->label():"";
+    if(!hit.hasHit || !hit.body || hit.body->category()!=C_Object || ownVisual.empty() ||
+       hit.body->label()!=ownVisual || !inside(hit.point) || excluded.size()>=8)
+      return toResult(hit,to);
+    JPH::Vec3 low,high;hit.body->getAabb(low,high);
+    const auto minimum=CollisionWorld::toCentimeters(low),maximum=CollisionWorld::toCentimeters(high);
+    if(maximum.x<bounds[0].x-25.f || minimum.x>bounds[1].x+25.f ||
+       maximum.y<bounds[0].y-25.f || minimum.y>bounds[1].y+25.f ||
+       maximum.z<bounds[0].z-25.f || minimum.z>bounds[1].z+25.f)
+      return toResult(hit,to);
+    // Repeat the whole segment with only this exact native body excluded. A
+    // wall behind or intersecting its hull must still reject the camera.
+    excluded.push_back(hit.body);++selfHits;
+    }
+  }
+
 DynamicWorld::RayQueryResult DynamicWorld::rayNpc(const Tempest::Vec3& from, const Tempest::Vec3& to, const Npc* except) const {
   RayQueryResult r;
   static_cast<RayLandResult&>(r) = ray(from,to);

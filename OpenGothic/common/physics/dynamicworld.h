@@ -348,6 +348,11 @@ class DynamicWorld final {
     RayCamResult   cameraRay    (const Tempest::Vec3& from, const Tempest::Vec3& to) const;
 
     RayLandResult  ray          (const Tempest::Vec3& from, const Tempest::Vec3& to) const;
+    // Bench camera only: retain world occlusion while looking past the selected
+    // cloth object's own rigid attachments. Does not alter collision filters.
+    RayLandResult  rayClothCamera(const Tempest::Vec3& from, const Tempest::Vec3& to,
+                                 std::string_view ownVisual, const Tempest::Vec3* clothBounds,
+                                 size_t& selfHits, std::string* blockedLabel = nullptr) const;
     RayLandResult  sweep        (const Tempest::Vec3& from, const Tempest::Vec3& to, float R) const;
     RayQueryResult rayNpc       (const Tempest::Vec3& from, const Tempest::Vec3& to, const Npc* except) const;
     // Physical Jolt hulls used by bodies, plus water and NPC rigs; no duplicate visual meshes.

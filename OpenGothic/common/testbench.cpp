@@ -4841,6 +4841,12 @@ float clothCameraDistance(const std::vector<Vec3>& points,const Vec3& target,con
 bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& cameraTarget,
                 Vec3& cameraNormal,float& span) {
   const auto& reference=body.referenceWorldPositionsCm.empty()?body.worldPositionsCm:body.referenceWorldPositionsCm;
+  if(reference.empty())return false;
+  float referenceLow=reference.front().y,referenceHigh=reference.front().y;
+  for(const auto& point:reference) {referenceLow=std::min(referenceLow,point.y);referenceHigh=std::max(referenceHigh,point.y);}
+  // Only a short original bottom strip can be buried. An EARTH material on an
+  // upper storey or awning must not erase the top of a city banner.
+  const float burialCeiling=referenceLow+std::min(75.f,(referenceHigh-referenceLow)*.2f);
   const auto earthFloor=[&](const Vec3& point)->std::optional<float> {
     auto from=point+Vec3(0,200,0);
     const float bottom=point.y-20.f;
@@ -4857,8 +4863,9 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
   float maximumBurial=0;
   Vec3 buriedLow,buriedHigh;
   for(size_t i=0;i<reference.size();++i) {
+    if(reference[i].y>burialCeiling)continue;
     const auto floor=earthFloor(reference[i]);
-    if(!floor || reference[i].y>=*floor-2.f)continue;
+    if(!floor || *floor>burialCeiling || reference[i].y>=*floor-2.f)continue;
     sourceBuried[i]=true;
     if(!buriedSource)buriedLow=buriedHigh=reference[i];
     ++buriedSource;maximumBurial=std::max(maximumBurial,*floor-reference[i].y);
@@ -4866,7 +4873,7 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
     buriedHigh.x=std::max(buriedHigh.x,reference[i].x);buriedHigh.y=std::max(buriedHigh.y,reference[i].y);buriedHigh.z=std::max(buriedHigh.z,reference[i].z);
     if(i<body.worldPositionsCm.size()) {
       const auto currentFloor=earthFloor(body.worldPositionsCm[i]);
-      if(currentFloor && body.worldPositionsCm[i].y<*currentFloor-2.f) {currentBuried[i]=true;++buriedCurrent;}
+      if(currentFloor && *currentFloor<=burialCeiling && body.worldPositionsCm[i].y<*currentFloor-2.f) {currentBuried[i]=true;++buriedCurrent;}
       }
     }
   std::vector<Vec3> fit;
@@ -4910,11 +4917,16 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
     return false;
     };
   bool cameraClear=false;
-  size_t candidates=0,tested=0,hidden=0,attachments=0,bestBlocked=size_t(-1);
+  size_t candidates=0,tested=0,hidden=0,attachments=0,selfRigidHits=0,bestBlocked=size_t(-1);
+  std::string firstBlockedLabel;
+  Vec3 firstBlockedPosition={},firstBlockedTarget={};
   float selectedAngle=0,selectedElevation=0;
   // A cloth's rear face can be hidden by its own front face. The authored
   // below-ground section also cannot be photographed; neither masks world walls.
-  for(float elevation:{.55f,.8f,1.1f}) {
+  for(float elevation:{.55f,.8f,1.1f,0.f,-.3f,-.55f}) {
+    // High ship cloth hangs underneath its yard/stay. A view from below can
+    // show the fabric without putting the attachment in front of it.
+    if(elevation<=0.f && bounds[0].y<1000.f)continue;
     for(float angle:{0.f,15.f,-15.f,30.f,-30.f,60.f,-60.f,180.f,195.f,165.f,210.f,150.f}) {
       ++candidates;
       const auto normal=rotY(cameraNormal,angle);
@@ -4922,17 +4934,25 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
       const float cameraDistance=clothCameraDistance(fit,cameraTarget,direction);
       const auto eye=cameraTarget+direction*cameraDistance;
       if(bounds[1].y<1000.f && eye.y<bounds[1].y+100.f)continue;
-      size_t blocked=0,candidateTested=0,candidateHidden=0,candidateAttachments=0;
+      size_t blocked=0,candidateTested=0,candidateHidden=0,candidateAttachments=0,candidateSelfHits=0;
+      std::string candidateBlockedLabel;
+      Vec3 candidateBlockedPosition={},candidateBlockedTarget={};
       const auto checkPose=[&](const std::vector<Vec3>& pose,const std::vector<bool>& buried) {
         for(size_t vertex=0;vertex<pose.size();++vertex) {
           if(buried[vertex])continue;
+          // Authored pins can lie inside their beam or stone mount. They
+          // remain in the frame bounds; only the free cloth needs a clear ray.
+          if(std::any_of(body.anchorsCm.begin(),body.anchorsCm.end(),[&](const Vec3& anchor) {
+               return (pose[vertex]-anchor).quadLength()<.0625f;
+               })) {++candidateAttachments;continue;}
           const auto inward=cameraTarget-pose[vertex];
           const float length=inward.length();
           const auto target=pose[vertex]+(length>2.f?inward*(2.f/length):inward);
           const auto end=target-Vec3::normalize(target-eye)*2.f;
           if(hiddenByCloth(eye,end,pose)) {++candidateHidden;continue;}
           ++candidateTested;
-          const auto hit=world.physic()->ray(eye,end);
+          std::string label;
+          const auto hit=world.physic()->rayClothCamera(eye,end,body.visual,bounds,candidateSelfHits,&label);
           if(!hit.hasCol)continue;
           bool attachment=false;
           if(hit.mat!=zenkit::MaterialGroup::EARTH && !hit.vob && (hit.v-target).length()<=20.f) {
@@ -4940,16 +4960,22 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
               if((target-anchor).length()<=25.f && (hit.v-anchor).length()<=25.f) {attachment=true;break;}
             }
           if(attachment)++candidateAttachments;
-          else ++blocked;
+          else {
+            if(!blocked) {candidateBlockedLabel=label;candidateBlockedPosition=hit.v;candidateBlockedTarget=target;}
+            ++blocked;
+            }
           }
         };
       checkPose(reference,sourceBuried);checkPose(body.worldPositionsCm,currentBuried);
       const auto ground=world.physic()->landRay(eye+Vec3(0,500,0),1000);
       const bool groundAccepted=!ground.hasCol || eye.y-ground.v.y>=180.f;
-      if(blocked<bestBlocked) {bestBlocked=blocked;tested=candidateTested;hidden=candidateHidden;attachments=candidateAttachments;}
+      if(blocked<bestBlocked) {
+        bestBlocked=blocked;tested=candidateTested;hidden=candidateHidden;attachments=candidateAttachments;selfRigidHits=candidateSelfHits;
+        firstBlockedLabel=candidateBlockedLabel;firstBlockedPosition=candidateBlockedPosition;firstBlockedTarget=candidateBlockedTarget;
+        }
       if(blocked || !groundAccepted || !candidateTested)continue;
       cameraEye=eye;cameraNormal=normal;cameraClear=true;
-      tested=candidateTested;hidden=candidateHidden;attachments=candidateAttachments;
+      tested=candidateTested;hidden=candidateHidden;attachments=candidateAttachments;selfRigidHits=candidateSelfHits;
       selectedAngle=angle;selectedElevation=elevation;break;
       }
     if(cameraClear)break;
@@ -4960,10 +4986,15 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
     ",\"buried_bounds_min_cm\":"+(buriedSource?ragdollVector(buriedLow):"null")+
     ",\"buried_bounds_max_cm\":"+(buriedSource?ragdollVector(buriedHigh):"null")+
     ",\"maximum_original_burial_cm\":"+ragdollNumber(maximumBurial)+",\"fit_vertices\":"+std::to_string(fit.size())+
+    ",\"burial_strip_ceiling_cm\":"+ragdollNumber(burialCeiling)+",\"self_rigid_hits\":"+std::to_string(selfRigidHits)+
     ",\"tested_visible_vertices\":"+std::to_string(tested)+",\"self_hidden_vertices\":"+std::to_string(hidden)+
     ",\"attachment_allowances\":"+std::to_string(attachments)+",\"minimum_blocked_vertices\":"+std::to_string(bestBlocked)+
     ",\"candidates\":"+std::to_string(candidates)+",\"clear\":"+(cameraClear?"true":"false")+
     ",\"azimuth_deg\":"+ragdollNumber(selectedAngle)+",\"elevation\":"+ragdollNumber(selectedElevation)+
+    ",\"first_blocked_label\":"+jsonStr(firstBlockedLabel)+
+    ",\"first_blocked_position_cm\":"+(bestBlocked?ragdollVector(firstBlockedPosition):"null")+
+    ",\"first_blocked_target_cm\":"+(bestBlocked?ragdollVector(firstBlockedTarget):"null")+
+    ",\"first_blocked_distance_cm\":"+(bestBlocked?ragdollNumber((firstBlockedPosition-firstBlockedTarget).length()):"null")+
     ",\"bounds_min_cm\":"+ragdollVector(bounds[0])+",\"bounds_max_cm\":"+ragdollVector(bounds[1]));
   return cameraClear;
   }
@@ -14936,7 +14967,7 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
   }
 
 void TestBench::arrowAt(const void* arrow, float x, float y, float z) {
-  if(scenarioPath!=nullptr && bench.clothTrace && arrow==bench.clothArrow && bench.time<=bench.clothShotAt+2000) {
+  if(scenarioPath!=nullptr && bench.started && !bench.done && bench.clothTrace && arrow==bench.clothArrow && bench.time<=bench.clothShotAt+2000) {
     const Vec3 point(x,y,z);
     const auto downstream=Vec3::dotProduct(point-bench.clothShotTarget,-bench.clothShotNormal);
     bench.clothArrowDownstream=std::max(bench.clothArrowDownstream,downstream);
