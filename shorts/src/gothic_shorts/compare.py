@@ -8,8 +8,8 @@ captioned word by word in place of the beat's title. Voiced music is calibrated 
 is ignored), with music and game ducked by word windows and checked before publication. A plan
 with a voice lives outside the repository (the explainer's workspace): give its path, the short goes into its
 render/ folder. The channel's brand is on unless the plan says "brand": false (the shorts published before it,
-kept as they went out): the seal in the corner, the end sting after the last beat (shorts/brand/sting.py makes
-both, in ~/.local/share/gothic-ai/brand/sting/), PT Serif on warm bands instead of Arial and Georgia on black.
+kept as they went out): the end sting after the last beat (shorts/brand/sting.py makes it in
+~/.local/share/gothic-ai/brand/sting/), PT Serif on warm bands instead of Arial and Georgia on black.
 
     uv run --project shorts python shorts/compare/cut.py bodies ru
     uv run --project shorts python shorts/compare/cut.py bodies en
@@ -41,9 +41,8 @@ SUP = "/System/Library/Fonts/Supplemental/"
 STYLES = {True: ((SUP + "PTSerif.ttc", 3), (SUP + "PTSerif.ttc", 3), (23, 17, 13, 165), (20, 12, 8, 255)),
           False: ((SUP + "Arial Bold.ttf", 0), (SUP + "Georgia Bold.ttf", 0), (0, 0, 0, 150), (0, 0, 0, 255))}
 LABEL_FONT, HOOK_FONT, BAND, OUTLINE = STYLES[True]
-# the brand's seal and its end sting (shorts/brand/sting.py): generated art and a sound of the game, not in git
+# the brand's end sting (shorts/brand/sting.py): generated art and a sound of the game, not in git
 BRAND = Path.home() / ".local/share/gothic-ai/brand/sting"
-SEAL = (110, W - 140, 110)  # the corner seal: size, x, y (under the slow-motion mark of the top half)
 GRADE = "eq=gamma=1.18:saturation=1.08"  # the game's noon is dark on a phone; the same for both takes
 WHITE, ACCENT = (255, 255, 255, 255), (255, 214, 120, 255)  # a caption's words, the one being said
 PAGE_WORDS = 3  # a caption page: at most this many words, a new one after a comma or a full stop
@@ -202,10 +201,6 @@ def build(plan: dict, takes: Path, lang: str, tmp: Path) -> Built:
                 layers.append(f"[{len(inputs) // 2 - 1}]loop=-1:1,trim=0:{end - start}[c{j}_{k}]")
                 overlay += (f"[q{j}_{k}];[q{j}_{k}][c{j}_{k}]overlay=0:0:shortest=1:"
                             f"enable='between(t,{a:.3f},{b:.3f})'")
-        if brand:  # the seal in the corner, all through
-            inputs += ["-i", str(BRAND / "seal-corner.png")]
-            layers.append(f"[{len(inputs) // 2 - 1}]loop=-1:1,trim=0:{end - start}[k]")
-            overlay += f"[r];[r][k]overlay={SEAL[1]}:{SEAL[2]}:shortest=1"
         offset += end - start
         graph = ";".join([
             f"[0]trim={start}:{end},setpts=PTS-STARTPTS,scale={W}:{HALF},{GRADE}[a]",

@@ -23,7 +23,7 @@ ln -s "$HOME/.local/share/gothic-ai/brand/sting" "$W/brand"
 ```
 
 Remotion serves files through this directory symlink with `--public-dir "$W"`; no copying is needed.
-The renderer uses `brand/seal-corner.png` and `brand/sting.mp4` from it.
+The renderer uses `brand/sting.mp4` from it.
 
 ## Publication
 
@@ -62,8 +62,8 @@ the original plan gains and ducking for Studio and drafts; they do not run the p
 `src/schema.ts` is the format; a missing or misspelt field stops the render with its path. In short:
 
 - `hook`: the big text over the first seconds;
-- `brand`: boolean, defaults to `true`. A 110 × 110 G seal stays at (940, 110) over every beat, then the
-  2.2-second letter sting plays after the last beat (1080 × 1920, 30 fps, its own −14 LUFS source audio).
+- `brand`: boolean, defaults to `true`. The 2.2-second letter sting plays after the last beat
+  (1080 × 1920, 30 fps, its own −14 LUFS source audio).
   Publication calibrates the sting separately from the body effects through `levels`. In drafts it uses
   `brandVolume`. The voice and footage sound stop before it; the music fades out by its start. The render's duration
   includes these extra 66 frames. `false` needs no brand assets and preserves the original frames, captions

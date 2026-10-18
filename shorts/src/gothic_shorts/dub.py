@@ -763,7 +763,7 @@ def dub_compare(
                 required.append(takes_dir / music["file"])
             brand = plan.get("brand", True)
             if brand:
-                required.extend(compare.BRAND / name for name in ("sting.mp4", "seal-corner.png"))
+                required.append(compare.BRAND / "sting.mp4")
             for path in required:
                 if not path.is_file():
                     raise DubError(f"Нет файла сравнения: {path}")

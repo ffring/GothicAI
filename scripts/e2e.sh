@@ -93,6 +93,10 @@
 #       LLM=fake: Hilda's theft rumor, testimony/catch_lie, accepted silence, chest suspicion/concern.
 #       LLM=chatgpt: only the first scene; records Lobart's actual prompt, reply and catch_lie outcome.
 #       TIMEOUT=600. Native theft perceptions stay enabled; Hilda's fight is reset after her sighting.
+#   crime_law: community law (docs/crime.md, layer 3), LLM=fake; SAVE=save_slot_1.sav, TIMEOUT=420.
+#       Matteo witnesses a native theft; Andre stays locked until the next day, charges 50 through
+#       his native voiced dialog and accepts payment. Matteo still remembers. A second theft with
+#       an accepted silence deal never reaches Andre. Native theft perceptions stay enabled.
 #   requires: a book quest depending on vanilla (docs/director.md, stage 5, layer 2), no model: Hilda's
 #       offer stays absent while Lobart's turnip quest is open or running, opens after its success, and
 #       the book's second stage waits for "Сковорода для Хильды" to become running. A save and a load

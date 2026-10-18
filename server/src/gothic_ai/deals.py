@@ -1260,6 +1260,7 @@ def _title(f: Fact) -> str:
 
 async def _day(link: GameLink) -> dict[str, int]:
     try:
-        return {"day": int((await link.story_state()).get("day", 0))}
+        state = await link.story_state()
+        return {key: int(state[key]) for key in ("day", "hour", "minute") if key in state}
     except (GameError, TimeoutError):
         return {}

@@ -1070,7 +1070,9 @@ async def _neural_fight_scenario(
             for field, value in zip(health_fields, health, strict=True)
         ])])
         try:
-            if not await _until_async(lambda: link.story_eval(npc, health_fields), lambda got: got == health, 5):
+            if not await _until_async(
+                lambda: link.story_eval(npc, health_fields), lambda got: got == health, 5
+            ):
                 raise GameError("neural companion preparation: health did not apply")
         finally:
             await link.patch_graph([{"op": "trigger", "id": health_trigger, "steps": None}])
@@ -6402,8 +6404,15 @@ async def vanilla_lie(
 
     # the next morning, Jora by Lobart
     await link.debug("time", hour=7, minute=0)
-    await link.debug("spawn", instance=bystander, near=giver, distance=400)
-    await asyncio.sleep(1)
+    nearby = (await link.snapshot(giver, fresh=True)).npc.nearest_waypoint
+    if nearby is None:
+        return _logged({**results, "bystander": "failed (no waypoint near the giver)"})
+    # Move the world's existing Jora onto a known waypoint. Spawning a duplicate searches for
+    # ground visible from the hero and can fail beside the farm's wall after the clock jump.
+    await link.debug("skip_important", near=bystander)
+    await link.npc_act(
+        bystander, "start_activity", state="ZS_STAND_WP", waypoint=nearby, minutes=120, place=True
+    )
     await link.attach(bystander)  # held there
     ok = await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("rumor")), 20)
     found = next((f for f in facts("found_out") if f.get("quest") == RUEBEN), None)

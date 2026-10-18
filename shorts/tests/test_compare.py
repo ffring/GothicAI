@@ -103,7 +103,6 @@ def comparison_assets(tmp_path_factory):
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2",
         brand / "sting.mp4",
     )
-    Image.new("RGBA", (8, 8), (255, 210, 100, 220)).save(brand / "seal-corner.png")
     placeholder = directory / "published.mp4"
     _ffmpeg(
         "-f", "lavfi", "-i", "color=c=black:s=16x16:r=30:d=14.2",
@@ -126,7 +125,6 @@ def _small_comparison(monkeypatch, brand):
     monkeypatch.setattr(compare, "W", 96)
     monkeypatch.setattr(compare, "H", 192)
     monkeypatch.setattr(compare, "HALF", 96)
-    monkeypatch.setattr(compare, "SEAL", (8, 84, 10))
     monkeypatch.setattr(compare, "BRAND", brand)
 
     def overlay(path, text):
@@ -146,6 +144,7 @@ def test_comparison_dub_publishes_the_russian_effects_ending_and_picture(
     tmp_path, monkeypatch, comparison_assets, brand, music,
 ):
     assets = comparison_assets
+    assert not (assets.brand / "seal-corner.png").exists()  # brand now needs only the ending
     ws = tmp_path / "comparison"
     ws.mkdir()
     plan = _plan(assets.takes, brand=brand, music=music)

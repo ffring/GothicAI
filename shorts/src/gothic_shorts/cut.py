@@ -33,7 +33,6 @@ NPC_COLOR = (255, 255, 255)
 NAME_COLOR = (230, 190, 120)
 BRAND_FONT = "/System/Library/Fonts/Supplemental/PTSerif.ttc"
 BRAND = Path.home() / ".local/share/gothic-ai/brand/sting"
-SEAL = (W - 140, 110)
 OUTLINE = (20, 12, 8)
 # The Shorts interface covers these edges (shorts/explain/src/theme.ts).
 SAFE = (60, 150, W - 150, H - 380)  # left, top, right, bottom
@@ -141,9 +140,9 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
     subs = load_subs(take, lang, texts(shot, tl))
     sting_duration = 0.0
     if shot.brand:
-        for asset in (BRAND / "seal-corner.png", BRAND / "sting.mp4"):
-            if not asset.is_file():
-                raise CutError(f"missing brand asset: {asset}; brand = false disables the brand")
+        asset = BRAND / "sting.mp4"
+        if not asset.is_file():
+            raise CutError(f"missing brand asset: {asset}; brand = false disables the brand")
         sting_duration = _duration(BRAND / "sting.mp4")
     work = take / f"cut-{lang}"
     shutil.rmtree(work, ignore_errors=True)
@@ -251,10 +250,9 @@ def _join(shot: Shot, video: Path, audio: Path, tl: Timeline, overlays: list[Ove
     inputs = ["-i", str(video), "-i", str(audio)]
     for overlay in overlays:
         inputs += ["-i", str(overlay.png)]
-    seal_input = 2 + len(overlays)
-    sting_input = seal_input + 1
+    sting_input = 2 + len(overlays)
     if shot.brand:
-        inputs += ["-i", str(BRAND / "seal-corner.png"), "-i", str(BRAND / "sting.mp4")]
+        inputs += ["-i", str(BRAND / "sting.mp4")]
     selected = "+".join(f"gte(t,{start:.9f})*lt(t,{end:.9f})" for start, end in keep)
     removed = "+".join(f"if(gte(PTS*TB,{end:.9f}),{end - start:.9f},0)"
                        for start, end in tl.cuts) or "0"
@@ -273,9 +271,6 @@ def _join(shot: Shot, video: Path, audio: Path, tl: Timeline, overlays: list[Ove
         filters.append(f"[{last}][{2 + i}:v]overlay=x=0:y={overlay.y}:"
                        f"enable='between(t,{overlay.start:.9f},{overlay.end:.9f})'[o{i}]")
         last = f"o{i}"
-    if shot.brand:
-        filters.append(f"[{last}][{seal_input}:v]overlay=x={SEAL[0]}:y={SEAL[1]}[sealed]")
-        last = "sealed"
     filters += [
         f"[{last}]fps=30,tpad=stop_mode=clone:stop_duration={duration:.9f},"
         f"trim=duration={duration:.9f},settb=AVTB,setpts=PTS-STARTPTS[bodyv]",
@@ -344,7 +339,7 @@ def _brand_text_png(
     text: str, path: Path, size: int, color: tuple[int, int, int], *,
     max_chars: int, stroke: int, name: str,
 ) -> int:
-    """Fit the stroked text inside Shorts' safe area, to the left of the fixed corner seal."""
+    """Fit the stroked text inside Shorts' safe area."""
     width = SAFE[2] - SAFE[0]
     while True:
         font = ImageFont.truetype(BRAND_FONT, size, index=3)

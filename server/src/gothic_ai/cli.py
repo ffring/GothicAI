@@ -44,6 +44,8 @@ from .chronicle import Chronicle
 from .concerns import Concerns
 from .consequences import LieConsequences
 from .contracts import symbol_by_name
+from .crime_law_graph import init_ops as crime_law_ops
+from .crime_law_runtime import CrimeLawRuntime
 from .crimes import COMMUNITIES, Crimes
 from .daylife import DayDesk
 from .deals import Deals
@@ -100,6 +102,7 @@ from .questbook import QuestBook
 from .questlog import QuestLog
 from .quests import QuestBoard
 from .replay import replay as replay_turn
+from .scenario_crime_law import crime_law as crime_law_scenario
 from .scenario_crime_talk import crime_talk as crime_talk_scenario
 from .scenario_crimes import crimes as crimes_scenario
 from .showrunner import Showrunner
@@ -215,6 +218,7 @@ class ServerState:
         self.story: StoryPatches | None = None
         self.chronicle: Chronicle | None = None
         self.crimes: Crimes | None = None
+        self.crime_law: CrimeLawRuntime | None = None
         self.quests: QuestBoard | None = None
         self.director: Director | None = None
         self.occasions: Occasions | None = None
@@ -382,6 +386,9 @@ class Console:
                     print("communities:")
                     for community in COMMUNITIES:
                         print(f"  {community}: {', '.join(crimes.lawkeepers(community)) or '-'}")
+                    if self.state.crime_law is not None:
+                        await self.state.crime_law.tick()
+                        print(self.state.crime_law.law.summary())
             case "lines":
                 if (showrunner := self.state.showrunner) is None:
                     print("lines: off")
@@ -750,7 +757,10 @@ async def serve(args: argparse.Namespace) -> int:
         )
         # the bandits below Xardas's tower are freed of their scripted ambush: our models decide (story.py)
         static = freed(graph.nodes.__contains__) if graph is not None else freed()
-        state.story = StoryPatches(link, memory, static=static if args.free_bandits else None)
+        static = static if args.free_bandits else []
+        if graph is not None and not args.no_crimes:
+            static += crime_law_ops(graph)
+        state.story = StoryPatches(link, memory, static=static)
         # npc's we control: the body's instant reactions (behavioral model) and words for incidents
         reflexes = Reflexes(decider, apply_threats=args.apply_threats) if decider is not None else None
         state.incidents = IncidentDesk(link, state.dialogue, reflexes, budget, trace)
@@ -835,6 +845,8 @@ async def serve(args: argparse.Namespace) -> int:
                 names=lambda npc: personas.cards[npc].name if npc in personas.cards else npc,
             )
             state.dialogue.extensions.append(state.crimes)
+            if graph is not None:
+                state.crime_law = CrimeLawRuntime(link, state.crimes, graph, state.story)
         # the director's triggers fire in the game, with or without the server: the chronicle hears of them
         state.triggers = Triggers(link, state.chronicle)
         talk = state.talk
@@ -978,6 +990,8 @@ async def serve(args: argparse.Namespace) -> int:
         )
         lies = asyncio.create_task(state.quests.run())
         directing: list[asyncio.Task[None]] = []
+        if state.crime_law is not None:
+            directing.append(asyncio.create_task(state.crime_law.run()))
         if place_book is not None and not args.no_occasions:
             state.occasions = Occasions(link, state.chronicle, place_book)
             directing.append(asyncio.create_task(state.occasions.run()))
@@ -1195,6 +1209,8 @@ async def serve(args: argparse.Namespace) -> int:
                 await state.questlog.close()
             if state.crimes is not None:
                 await state.crimes.close()
+            if state.crime_law is not None:
+                await state.crime_law.close()
             if brain is not None:
                 brain.cancel()
 
@@ -1312,6 +1328,22 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario crime_talk: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "crime_law":
+                assert state.crimes is not None and state.crime_law is not None
+                assert state.dialogue is not None and state.talk is not None
+                assert state.rumors is not None and state.deals is not None
+                results = await crime_law_scenario(
+                    link,
+                    state.crimes,
+                    state.crime_law,
+                    state.dialogue,
+                    state.talk,
+                    state.rumors,
+                    state.deals,
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario crime_law: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "ground":
                 assert state.dialogue is not None and state.talk is not None and state.perception is not None
@@ -2276,6 +2308,7 @@ def main() -> None:
             "questlog",
             "crimes",
             "crime_talk",
+            "crime_law",
             "showrunner",
             "showrunner_live",
             "vanilla_line",
@@ -2356,7 +2389,7 @@ def main() -> None:
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
     p.add_argument("--no-questlog", action="store_true", help="do not track the scripts' quest states")
     p.add_argument(
-        "--no-crimes", action="store_true", help="disable crimes, knowledge and rumors about deeds"
+        "--no-crimes", action="store_true", help="disable crimes and law patches; scripts own law entirely"
     )
     p.add_argument(
         "--no-occasions", action="store_true", help="do not watch for the director's story occasions"
