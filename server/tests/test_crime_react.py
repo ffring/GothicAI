@@ -265,6 +265,45 @@ async def test_hold_waits_for_crime_and_keeps_real_seen_before_one_server_verdic
     assert "shout" in system.react.summary("deed-1")
 
 
+@pytest.mark.parametrize("held_first", [False, True])
+async def test_classified_noncrime_releases_immediately_without_waiting_for_deadline(
+    system, monkeypatch, held_first,
+):
+    monkeypatch.setattr(crime_react, "HOLD_SECONDS", 5.0)
+    if held_first:
+        system.link.receive(held())
+        await asyncio.sleep(0)
+        assert not verdicts(system)
+    system.link.receive(deed())  # Crimes explicitly classifies this unowned item as lawful
+    if not held_first:
+        system.link.receive(held())
+    row = await finish(system)  # finishes within the helper's short window, not five seconds
+    assert row["verdict"] == "scripts" and row["reason"] == "noncrime"
+    assert len(verdicts(system)) == 1 and system.link.actions == []
+    system.link.receive(held())
+    await asyncio.sleep(0)
+    assert len(verdicts(system)) == 1
+
+
+async def test_duplicate_deed_still_resolves_to_its_existing_crime(system):
+    crime(system)
+    assert system.crimes.record(deed(owner=LOBART, owner_npc_guild=12)) is None
+    system.link.receive(held())
+    row = await finish(system)
+    assert row["verdict"] == "server" and row["reaction"] == "shout"
+
+
+async def test_unclassified_deed_without_a_session_still_waits_for_real_crime(system):
+    system.chronicle.branch = None
+    system.link.receive(deed())
+    system.link.receive(held())
+    await asyncio.sleep(0)
+    assert not verdicts(system)
+    system.chronicle.branch = "A"
+    crime(system)
+    assert (await finish(system))["verdict"] == "server"
+
+
 async def test_missing_card_uses_three_and_projection_precedes_fight(system):
     seen = []
 

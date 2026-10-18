@@ -133,6 +133,7 @@ class CrimeReact:
         self._restitution_started: set[tuple[int, str]] = set()
         link.listeners.append(self._on_message)
         crimes.chronicle.on_fact.append(self._on_fact)
+        crimes.on_noncrime.append(self._on_noncrime)
 
     async def prepare(self) -> None:
         """Read actual homes once per world; no routine-prefix guesses for stateless households."""
@@ -166,6 +167,8 @@ class CrimeReact:
             self.link.listeners.remove(self._on_message)
         if self._on_fact in self.crimes.chronicle.on_fact:
             self.crimes.chronicle.on_fact.remove(self._on_fact)
+        if self._on_noncrime in self.crimes.on_noncrime:
+            self.crimes.on_noncrime.remove(self._on_noncrime)
         tasks = tuple(self._tasks)
         for task in tasks:
             task.cancel()
@@ -238,6 +241,9 @@ class CrimeReact:
     def _on_fact(self, fact: Fact) -> None:
         if fact.get("fact") == "crime":
             self._fact_wake.set()
+
+    def _on_noncrime(self, deed: str) -> None:
+        self._fact_wake.set()
 
     def _on_message(self, message: GameMessage) -> None:
         if isinstance(message, (Session, Loading)):
@@ -355,6 +361,8 @@ class CrimeReact:
                 if not held.deed:
                     raise _Fallback("missing_deed")
                 while (crime := self.crimes.crime(held.deed or "")) is None:
+                    if self.crimes.classified_noncrime(held.deed):
+                        raise _Fallback("noncrime")
                     self._fact_wake.clear()
                     await self._fact_wake.wait()
                 if held.other.upper() not in HERO or crime.get("method") == "pickpocket":

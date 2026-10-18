@@ -113,6 +113,8 @@ class Crimes:
         self.names = names or (lambda npc: npc)
         self.sightings: Sightings | None = None
         self.people: dict[str, dict[str, Any]] = {}  # static world metadata, never beliefs
+        self._noncrimes: set[str] = set()  # completed negative classifications, only in this world
+        self.on_noncrime: list[Callable[[str], None]] = []
         chronicle.on_fact.append(self._on_fact)
         link.listeners.append(self._on_message)
 
@@ -128,6 +130,16 @@ class Crimes:
 
     def crime(self, crime: str) -> Fact | None:
         return next((f for f in self.facts() if f.get("id") == crime), None)
+
+    def classified_noncrime(self, deed: str) -> bool:
+        """An explicit classification result; an unrecorded or duplicate deed is not one."""
+        return deed in self._noncrimes
+
+    def _noncrime(self, deed: str) -> None:
+        if deed not in self._noncrimes:
+            self._noncrimes.add(deed)
+            for listener in self.on_noncrime:
+                listener(deed)
 
     def seen(self, npc: str) -> list[Fact]:
         ids = {f.get("crime") for f in self.chronicle.facts("crime_seen") if f.get("npc") == npc.upper()}
@@ -498,6 +510,7 @@ class Crimes:
             self.record(msg)
         elif isinstance(msg, Session):
             self.people.clear()
+            self._noncrimes.clear()
 
     def record(self, deed: HeroDeed) -> Fact | None:
         """Classify a raw bridge deed and keep one truth plus one fact per real witness."""
@@ -519,15 +532,16 @@ class Crimes:
                     return None
                 ownership = self._ownership(deed)
                 if ownership is None:
-                    return None
+                    return self._noncrime(deed.id)
                 owner, guild, npctype = ownership
                 victim = owner
                 community = self.community(guild, npctype)
                 kind = "theft"
             case "attack":
+                if not victim:
+                    return None
                 if (
-                    not victim
-                    or deed.victim_is_monster
+                    deed.victim_is_monster
                     or deed.victim_guild > 16
                     or deed.victim_in_fight
                     or deed.victim_enemy
@@ -536,7 +550,7 @@ class Crimes:
                     or deed.victim_tough_guy
                     or deed.victim_guild in TOUGH_GUILDS
                 ):
-                    return None
+                    return self._noncrime(deed.id)
                 community = self.community(deed.victim_guild, deed.victim_npctype)
                 kind = "attack"
             case "murder":
@@ -544,7 +558,7 @@ class Crimes:
                     return None
                 if deed.victim_is_sheep or deed.victim_guild == 18:
                     if deed.victim_tough_guy:  # bought/following sheep, including Betsy
-                        return None
+                        return self._noncrime(deed.id)
                     kind = "sheep"
                     # Vanilla has no sheep -> npc owner. Its crime belongs to a witness's
                     # community. Keep an unwitnessed sheep's community unknown, without guessing
@@ -559,7 +573,7 @@ class Crimes:
                         None,
                     )
                 elif deed.victim_is_monster or deed.victim_guild > 16:
-                    return None
+                    return self._noncrime(deed.id)
                 else:
                     kind = "murder"
                     community = self.community(deed.victim_guild, deed.victim_npctype)
@@ -608,6 +622,7 @@ class Crimes:
             **extra,
             **({"chest": deed.chest} if deed.chest else {}),
         }
+        self._noncrimes.discard(deed.id)
         self.chronicle.record(fact)
         metadata = {self._npc(p.npc): p for p in deed.witnesses_metadata}
         for npc in witnesses:
