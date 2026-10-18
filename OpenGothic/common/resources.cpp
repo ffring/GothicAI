@@ -29,7 +29,14 @@
 #include <limits>
 #include <stdexcept>
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include <rapidjson/document.h>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #include "graphics/mesh/submesh/pfxemittermesh.h"
 #include "graphics/mesh/submesh/packedmesh.h"

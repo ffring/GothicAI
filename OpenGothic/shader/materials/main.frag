@@ -376,6 +376,9 @@ void main() {
 #  endif
 #endif
 
+#if defined(ATEST) && defined(GBUFFER) && defined(MATERIAL_MAPS)
+  const float alphaTest = t.a;
+#endif
 #if defined(MAT_COLOR)
   t *= shInp.color;
 #endif
@@ -383,7 +386,7 @@ void main() {
 #if defined(GBUFFER)
   mainGBuffer(t);
 #if defined(ATEST) && defined(MATERIAL_MAPS)
-  if(t.a<0.5)
+  if(alphaTest<0.5)
     discard;
 #endif
 #elif defined(WATER)
