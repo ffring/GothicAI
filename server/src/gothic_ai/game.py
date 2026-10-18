@@ -343,7 +343,9 @@ class GameLink:
                 event.phase == "ownership" and event.reason == "native_restored"
             ):
                 self.body_leases.pop(event.entity_id, None)
-            pending = self._body_acquire_waiters.get(event.entity_id) or self._body_acquisitions.get(event.entity_id)
+            pending = self._body_acquire_waiters.get(event.entity_id) or self._body_acquisitions.get(
+                event.entity_id
+            )
             if pending is not None and (
                 event.phase == "ownership"
                 and event.acquire_request_id == pending.cmd.acquire_request_id
@@ -358,7 +360,10 @@ class GameLink:
                     pending.restored = event
                 elif event.reason in {"acquired", "acquire_cancelled", "expired"}:
                     self._forget_body_acquire(pending)
-                    if event.reason == "acquired" and self._body_acquire_waiters.get(event.entity_id) is not pending:
+                    if (
+                        event.reason == "acquired"
+                        and self._body_acquire_waiters.get(event.entity_id) is not pending
+                    ):
                         # A late grant still owns the body even if its caller
                         # has already timed out; retain it for release/status.
                         self._body_lease(pending.npc, pending.cmd.provider, pending.cmd.mode,
@@ -495,7 +500,10 @@ class GameLink:
             await_boundary_ms=await_boundary_ms,
             acquire_request_id=(secrets.randbits(63) or 1) if await_boundary_ms else 0,
         )
-        if observation.entity_id in self._body_acquisitions or observation.entity_id in self._body_acquire_waiters:
+        if (
+            observation.entity_id in self._body_acquisitions
+            or observation.entity_id in self._body_acquire_waiters
+        ):
             raise GameError("body acquisition already pending for this actor")
         pending = None
         if await_boundary_ms:
@@ -557,7 +565,8 @@ class GameLink:
                     if completed:
                         self._forget_body_acquire(pending)
                     elif self._body_acquisitions.get(observation.entity_id) is pending or (
-                        self._body_acquire_waiters.get(observation.entity_id) is pending and pending.has_grant()
+                        self._body_acquire_waiters.get(observation.entity_id) is pending
+                        and pending.has_grant()
                     ):
                         # A missing receipt does not prove the engine declined the request.
                         # The client-selected ID can also release a grant racing this cancel.
@@ -597,7 +606,8 @@ class GameLink:
             return pending.future.result()
 
     def _body_lease(
-        self, npc: str, provider: str, mode: BodyMode, result: BodyControlResult | BodyControlEvent, acquired_seq: int,
+        self, npc: str, provider: str, mode: BodyMode,
+        result: BodyControlResult | BodyControlEvent, acquired_seq: int,
     ) -> BodyLease:
         lease = BodyLease(
             npc=npc.upper(), provider=provider, mode=mode, session_epoch=result.session_epoch,

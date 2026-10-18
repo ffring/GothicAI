@@ -1337,9 +1337,16 @@ async def m5c_free_npc(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str
     over with the game's own combat; the moment calls for words, and the conversational model (scripted)
     speaks for the npc on the move."""
     from .brain import GameApplier
+    from .brain.day import Habit
     from .brain.planner import PlannerConfig
 
     await link.wait_world()
+    current = (await link.routine(npc)).current
+    # The native starting pose already is Xardas's only usual habit. The day menu correctly excludes
+    # it, so give this fixed-decider fixture one distinct, executable option for its h1 choice.
+    habit = Habit(
+        "stand quietly and think", "ZS_STAND_WP" if current != "ZS_STAND_WP" else "ZS_STAND_ARMSCROSSED"
+    )
     results: dict[str, str] = {}
     started_lines: list[LineStarted] = []
     link.listeners.append(lambda m: started_lines.append(m) if isinstance(m, LineStarted) else None)
@@ -1352,7 +1359,7 @@ async def m5c_free_npc(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str
         applier,
         config=PlannerConfig(ask_attitude=False, plan_period_s=3.0),
         routine_of=link.routine,
-        habits_of=habits_of,
+        habits_of=lambda who: [habit] if who == npc else habits_of(who),
     )
     link.listeners.append(planner.on_message)
     runner = asyncio.create_task(planner.run())

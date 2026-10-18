@@ -27,6 +27,7 @@
 #include "game/bodyobservations.h"
 #include "game/bodycontroller.h"
 #include "game/inventory.h"
+#include "game/herodeed.h"
 #include "game/serialize.h"
 #include "camera.h"
 #include "commandline.h"
@@ -65,7 +66,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 41;
+constexpr int         ProtocolVersion = 42;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -215,6 +216,7 @@ struct AiBridge::Impl final {
   void onPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   void onObservedPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   void onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise);
+  void onHeroDeed(const HeroDeed& deed);
   // who drives the npc instead of its scripts: "attached" or nobody
   std::string_view npcOwner(std::string_view symbol) const;
   bool onConsoleCommand(std::string_view cmd, std::string& reply);
@@ -280,6 +282,7 @@ struct AiBridge::Impl final {
   std::vector<Inbound> inbound;
 
   bool                 connected = false;
+  uint64_t             nextHeroDeed = 1;
   uint64_t             bodyGeneration = 0;
   bool                 bodyResetPending = false;
   std::string          lastError;
@@ -356,6 +359,7 @@ AiBridge::Impl::Impl() {
   gothic.onExternalPerception.bind(this,&Impl::onPerception);
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
   gothic.onPhysicsNoiseHeard .bind(this,&Impl::onPhysicsNoiseHeard);
+  gothic.onHeroDeed          .bind(this,&Impl::onHeroDeed);
   gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
     World* world = Gothic::inst().world();
     // the wolves' own (they leave the hero be) without the server too: the console drives them on the bench
@@ -463,6 +467,7 @@ AiBridge::Impl::~Impl() {
   gothic.onExternalPerception.ubind(this,&Impl::onPerception);
   gothic.onObservedPerception.ubind(this,&Impl::onObservedPerception);
   gothic.onPhysicsNoiseHeard .ubind(this,&Impl::onPhysicsNoiseHeard);
+  gothic.onHeroDeed          .ubind(this,&Impl::onHeroDeed);
   gothic.interceptPerception = nullptr;
   gothic.consoleCommandFn  = nullptr;
   gothic.externalMessageFn = nullptr;
@@ -719,6 +724,48 @@ void AiBridge::Impl::onObservedPerception(Npc& self, Npc& other, Npc* victim, Pe
     return;
   if(auto world = Gothic::inst().world())
     observer.perception(*world,self,other,victim,perc);
+  }
+
+void AiBridge::Impl::onHeroDeed(const HeroDeed& d) {
+  if(!connected)
+    return;
+  JsonWriter j("hero_deed");
+  j.str("id",session.branch+"/deed-"+std::to_string(nextHeroDeed++))
+   .str("kind",d.kind).str("item",d.item).integer("count",int64_t(d.count))
+   .str("owner",d.owner.npc).integer("owner_guild",d.ownerGuild)
+   .integer("owner_npc_guild",d.owner.guild).integer("owner_npctype",d.owner.npctype)
+   .boolean("item_dropped",d.itemDropped)
+   .str("room",d.room).str("room_owner",d.roomOwner.npc).integer("room_guild",d.roomGuild)
+   .integer("room_owner_guild",d.roomOwner.guild).integer("room_owner_npctype",d.roomOwner.npctype)
+   .str("chest",d.chest).str("chest_owner",d.chestOwner.npc).integer("chest_guild",d.chestGuild)
+   .integer("chest_owner_guild",d.chestOwner.guild).integer("chest_owner_npctype",d.chestOwner.npctype)
+   .str("victim",d.victim.npc).integer("victim_guild",d.victim.guild).integer("victim_npctype",d.victim.npctype)
+   .boolean("victim_is_monster",d.victimIsMonster).boolean("victim_is_sheep",d.victimIsSheep)
+   .boolean("victim_tough_guy",d.victimToughGuy).boolean("victim_in_fight",d.victimInFight)
+   .boolean("victim_enemy",d.victimEnemy).boolean("victim_started_fight",d.victimStartedFight)
+   .integer("hero_guild",d.heroGuild)
+   .object("position").num("x",d.position.x).num("y",d.position.y).num("z",d.position.z).end()
+   .str("waypoint",d.waypoint).integer("day",d.day).integer("hour",d.hour).integer("minute",d.minute)
+   .array("witnesses");
+  for(auto& witness:d.witnesses)
+    j.item(witness.npc);
+  j.endArray().array("witnesses_metadata");
+  for(auto& witness:d.witnesses)
+    j.object().str("npc",witness.npc).integer("guild",witness.guild).integer("npctype",witness.npctype).end();
+  j.endArray();
+  if(d.kind=="pickpocket") {
+    const auto inventory = [&](std::string_view key, const std::vector<HeroDeed::InventoryItem>& items) {
+      j.array(key);
+      for(auto& item:items)
+        j.object().str("item",item.item).integer("count",int64_t(item.count)).end();
+      j.endArray();
+      };
+    inventory("inventory_before",d.inventoryBefore);
+    inventory("inventory_after",d.inventoryAfter);
+    j.integer("picked_pocket_before",d.pickedPocketBefore).integer("picked_pocket_after",d.pickedPocketAfter)
+     .boolean("caught",d.caught);
+    }
+  send(j.finish());
   }
 
 void AiBridge::Impl::onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise) {
@@ -1092,7 +1139,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="npc_los" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="npc_los" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" || cmd=="npc_drop" || cmd=="player_hit" || cmd=="spawn_item" ||
      cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise" || cmd=="physics_traces" || cmd=="destruction_traces") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
@@ -1582,6 +1629,68 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     sendResult(req,dropped,dropped ? "" : "the hero could not drop it now");
     return;
     }
+  if(cmd=="spawn_item") {
+    // A normal world item, with the script instance's own ownership. In particular, a public item
+    // stays unowned; no test-only owner is manufactured here.
+    std::string inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(id==size_t(-1)) {
+      sendResult(req,false,"unknown item " + inst);
+      return;
+      }
+    const float d = float(JsonRead::integer(msg,"distance",100));
+    auto pos = pl->position();
+    pos.x += d*std::cos(pl->rotationRad());
+    pos.z += d*std::sin(pl->rotationRad());
+    const auto land = world->physic()->landRay(pos+Tempest::Vec3(0,100,0),1500);
+    if(land.hasCol)
+      pos.y = land.v.y;
+    Item* item = world->addItem(id,pos);
+    if(item!=nullptr)
+      item->setCount(size_t(std::max<int64_t>(1,JsonRead::integer(msg,"count",1))));
+    sendResult(req,item!=nullptr,item==nullptr ? "the item could not be created" : "");
+    return;
+    }
+  if(cmd=="npc_drop") {
+    // The native drop stamps the item's owner with this NPC's script instance. A fixture must use
+    // that path too: changing an item's owner in the bridge would conceal ownership bugs.
+    Npc* npc = npcBySymbol(*world,JsonRead::str(msg,"npc"));
+    std::string inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(npc==nullptr || npc==pl || npc->isDead() || id==size_t(-1)) {
+      sendResult(req,false,npc==nullptr ? "unknown npc" : "unknown item or unavailable npc");
+      return;
+      }
+    const size_t n = size_t(std::max<int64_t>(1,JsonRead::integer(msg,"count",1)));
+    if(npc->inventory().itemCount(id)<n)
+      npc->addItem(id,n-npc->inventory().itemCount(id));
+    const size_t before = npc->inventory().itemCount(id);
+    npc->dropItem(id,n);
+    const bool dropped = npc->inventory().itemCount(id)<before;
+    sendResult(req,dropped,dropped ? "" : "the npc could not drop it now");
+    return;
+    }
+  if(cmd=="player_hit") {
+    // One real melee hit, including damage calculation and both native damage perceptions.
+    Npc* victim = npcBySymbol(*world,JsonRead::str(msg,"npc"));
+    if(victim==nullptr || victim==pl || victim->isDown()) {
+      sendResult(req,false,"unknown or unavailable victim");
+      return;
+      }
+    if(pl->qDistTo(*victim)>500.f*500.f) {
+      sendResult(req,false,"victim is more than five metres away");
+      return;
+      }
+    const auto before = victim->attribute(ATR_HITPOINTS);
+    victim->takeDamage(*pl,nullptr);
+    const bool damaged = victim->attribute(ATR_HITPOINTS)<before;
+    sendResult(req,damaged,damaged ? "" : "the hit caused no damage");
+    return;
+    }
   if(cmd=="player_take") {
     // the hero picks up the nearest such thing lying within `distance` cm (v29), as with the game's own key
     std::string inst(JsonRead::str(msg,"item"));
@@ -1623,7 +1732,7 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       }
     const size_t n = std::min(chest->inventory().itemCount(id),size_t(std::max<int64_t>(1,JsonRead::integer(msg,"count",1))));
     if(n>0)
-      Inventory::transfer(const_cast<Inventory&>(pl->inventory()),chest->inventory(),nullptr,id,n,*world);
+      pl->addItem(id,*chest,n);
     sendResult(req,n>0,"it is not in the chest",std::to_string(n));
     return;
     }

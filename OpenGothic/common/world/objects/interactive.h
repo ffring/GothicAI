@@ -13,6 +13,7 @@
 class Npc;
 class World;
 class Trigger;
+struct HeroDeed;
 
 class Interactive : public Vob {
   public:
@@ -43,6 +44,9 @@ class Interactive : public Vob {
     std::string_view    focusName() const;
     bool                checkMobName(std::string_view dest) const;
     std::string_view    ownerName() const;
+    std::string_view    ownerGuildName() const { return ownerGuild; }
+    std::shared_ptr<HeroDeed> heroUseDeed() const { return useDeed; }
+    void                setHeroUseDeed(std::shared_ptr<HeroDeed> deed) { useDeed = std::move(deed); }
 
     bool                overrideFocus() const;
 
@@ -152,6 +156,8 @@ class Interactive : public Vob {
     std::string         mdlVisual;
     Tempest::Vec3       bbox[2]={};
     std::string         owner;
+    std::string         ownerGuild;
+    std::shared_ptr<HeroDeed> useDeed;
     bool                focOver=false;
     bool                showVisual=true;
     Tempest::Vec3       displayOffset;

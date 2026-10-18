@@ -18,13 +18,14 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 41
+PROTOCOL_VERSION = 42
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
 ERRAND_PROTOCOL = 39  # inventory items' `mission`; story_effect give to another npc (errands.py)
 BROKEN_TRACE_PROTOCOL = 40  # visible debris, with the time of breakage kept in the engine and save
 BODY_CONTROL_PROTOCOL = 41  # shared body authority and combat API (body_acquire, body_action, ...)
+CRIME_PROTOCOL = 42  # raw hero deeds, ownership, engine perception recipients and pickpocket evidence
 
 # --- game -> server -----------------------------------------------------------
 
@@ -296,6 +297,74 @@ class HeroKill(_GameMessage):
     name: str = ""
     guild: int = 0
     monster: bool = False
+
+
+class DeedPosition(_GameMessage):
+    x: float
+    y: float
+    z: float
+
+
+class DeedItem(_GameMessage):
+    item: str
+    count: int
+
+
+class DeedWitness(_GameMessage):
+    npc: str
+    guild: int
+    npctype: int = 0
+
+
+class HeroDeed(_GameMessage):
+    """Raw action, rather than a crime verdict (v42). Witnesses passed the engine's perception gates.
+
+    Empty owner ids and guild -1 mean unknown; guild 15 is the scripts' public ownership. Inventory and
+    pocket flags bracket the original pickpocket function; the server decides whether it succeeded.
+    """
+
+    type: Literal["hero_deed"]
+    id: str
+    kind: Literal["take_item", "use_mob", "attack", "murder", "pickpocket"]
+    item: str = ""
+    count: int = 0
+    item_dropped: bool = False
+    owner: str = ""
+    owner_guild: int = -1
+    owner_npc_guild: int = -1
+    owner_npctype: int = 0
+    room: str = ""
+    room_owner: str = ""
+    room_guild: int = -1
+    room_owner_guild: int = -1
+    room_owner_npctype: int = 0
+    chest: str = ""
+    chest_owner: str = ""
+    chest_guild: int = -1
+    chest_owner_guild: int = -1
+    chest_owner_npctype: int = 0
+    victim: str = ""
+    victim_guild: int = -1
+    victim_npctype: int = 0
+    victim_is_monster: bool = False
+    victim_is_sheep: bool = False
+    victim_in_fight: bool = False
+    victim_enemy: bool = False
+    victim_started_fight: bool = False
+    victim_tough_guy: bool = False
+    hero_guild: int = 0
+    position: DeedPosition
+    waypoint: str = ""
+    day: int = 0
+    hour: int = 0
+    minute: int = 0
+    witnesses: list[str] = Field(default_factory=list)
+    witnesses_metadata: list[DeedWitness] = Field(default_factory=list)
+    inventory_before: list[DeedItem] = Field(default_factory=list)
+    inventory_after: list[DeedItem] = Field(default_factory=list)
+    picked_pocket_before: int = 0
+    picked_pocket_after: int = 0
+    caught: bool = False
 
 
 class TagNear(_GameMessage):
@@ -1090,6 +1159,7 @@ GameMessage = Annotated[
     | TriggerFired
     | NpcDied
     | HeroKill
+    | HeroDeed
     | StoryWorld
     | DealAccept
     | DealDecline
@@ -1484,6 +1554,9 @@ DebugCommand = Literal[
     "player_drop",
     "chest_take",
     "player_take",
+    "npc_drop",  # v42: an npc drops its own item, retaining the native owner
+    "player_hit",  # v42: the hero damages an npc through the native damage path
+    "spawn_item",  # v42: an unowned world item, without going through an npc inventory
     "own_npc",
     "triggers",
     "physics_noise",  # v36: native tavern fixture, devmode only
@@ -1514,11 +1587,12 @@ class DebugCmd(_Command):
     routine may walk it back); set the player's health and its maximum to `hp` (`player_hp`, v21);
     `player_goto` to a point `pos` [x, y, z] on the ground there (v21); the player throws an `item` down, as
     with the game's own key (`player_drop`, v22: he is given it first if he has none); the player takes
-    `count` of an `item` out of a `chest` unseen (`chest_take`, v28, `value`: how many); the player picks up
+    `count` of an `item` out of a `chest` (`chest_take`, v28, `value`: how many); the player picks up
     the nearest `item` lying within `distance` cm, default 500 (`player_take`, v29); an npc of the
     director's (`own_npc`, v33): a script symbol of ours `npc` (DIR_...) made like the script's npc `like`,
     put at a `waypoint` or `distance` cm (default 300) in front of the player; the save keeps both (`value`:
-    {npc, index: its symbol, name}).
+    {npc, index: its symbol, name}). v42: `npc_drop` (`npc`, `item`, `count`) uses the npc's native drop
+    path, retaining ownership; `player_hit` (`npc`) uses the hero's native damage path.
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
