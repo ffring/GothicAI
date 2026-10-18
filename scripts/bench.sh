@@ -9,6 +9,7 @@
 #      RYZEN_HOST    SSH host for Ryzen (default: ryzen)
 #      RYZEN_LOCK_WAIT seconds to wait for the worktree lock and gq (default: auto 120, ryzen 900)
 #      RYZEN_MAX     gq job time limit, including the build (default: 30m)
+#      RYZEN_BENCH_CLASS quick (default) or quiet for timing without other jobs
 #      GAME_BIN      game executable (default: OpenGothic/build/opengothic/Gothic2Notr)
 #      TEMPEST_WINDOW_SIZE client frame size (default: 800x600)
 #      SAVE          save to start from (default: save_slot_1.sav in the main checkout)
@@ -46,6 +47,8 @@ SCEN="${1:?usage: scripts/bench.sh <scenario> [out dir]}"
 [[ -f "$SCEN" ]] || { echo "no scenario: $1" >&2; exit 2; }
 SCEN="$(cd "$(dirname "$SCEN")" && pwd)/$(basename "$SCEN")"
 NAME="$(basename "$SCEN" .bench)"
+NEEDS_CADENCE=0
+if awk '$1 == "cadence" { found=1 } END { exit !found }' "$SCEN"; then NEEDS_CADENCE=1; fi
 OUT="${2:-$ROOT/.bench/$NAME-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
@@ -139,6 +142,26 @@ if [[ "${NO_BUILD:-}" != 1 ]]; then
     || { tail -30 "$OUT/build.log"; exit 1; }
 fi
 
+# Normal-clock timing is compiled out of ordinary local builds. Refuse an
+# unsupported fallback before opening a game instead of producing empty timings.
+if [[ "${RYZEN_BENCH:-}" != 1 && "$NEEDS_CADENCE" == 1 ]]; then
+  CADENCE_BUILD="$(dirname "$GAME_BIN")"
+  CADENCE_SUPPORTED=0
+  for ((i = 0; i < 4; i++)); do
+    if [[ -f "$CADENCE_BUILD/CMakeCache.txt" ]]; then
+      if grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$CADENCE_BUILD/CMakeCache.txt"; then
+        CADENCE_SUPPORTED=1
+      fi
+      break
+    fi
+    CADENCE_BUILD="$(dirname "$CADENCE_BUILD")"
+  done
+  if [[ "$CADENCE_SUPPORTED" != 1 ]]; then
+    echo 'bench: cadence requires -DOPENGOTHIC_ENABLE_APP_CADENCE=ON; use BENCH_HOST=ryzen to wait for Ryzen' >&2
+    exit 2
+  fi
+fi
+
 # the game reads Gothic.ini and saves from its working directory
 RUN="$OUT/run"
 mkdir -p "$RUN"
@@ -217,6 +240,21 @@ HOST=mac
 printf '%s\n' "$HOST" >"$OUT/host.txt"
 REPORT_RC=0
 python3 "$ROOT/scripts/bench_report.py" "$OUT" || REPORT_RC=$?
+if [[ "$NEEDS_CADENCE" == 1 ]]; then
+  python3 - "$OUT" <<'PY' || REPORT_RC=1
+import json
+import sys
+from pathlib import Path
+out = Path(sys.argv[1])
+try:
+    timing = json.loads((out / 'appcadence.csv.json').read_text())
+    valid = timing['complete'] and timing['frames'] > 0 and timing['overflow'] == 0
+except (OSError, ValueError, KeyError):
+    valid = False
+if not valid:
+    raise SystemExit('bench: normal-clock timing did not complete; no valid cadence measurement')
+PY
+fi
 echo "bench: ran on $HOST"
 echo "$OUT"
 exit "$REPORT_RC"

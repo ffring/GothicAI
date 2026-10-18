@@ -263,6 +263,11 @@ fi
 ACTION="${1:-}"
 case "$ACTION" in setup|e2e|pytest|bench|clean) shift ;; *) echo 'Usage: scripts/ryzen.sh setup|e2e|pytest [args...]|bench <scenario> <out>|clean' >&2; exit 2 ;; esac
 if [[ "$ACTION" == bench ]]; then
+  BENCH_CLASS="${RYZEN_BENCH_CLASS:-quick}"
+  case "$BENCH_CLASS" in
+    quick|quiet) ;;
+    *) echo 'RYZEN_BENCH_CLASS must be quick or quiet' >&2; exit 2 ;;
+  esac
   [[ $# == 2 ]] || { echo 'Usage: scripts/ryzen.sh bench <scenario> <out>' >&2; exit 2; }
   BENCH_SCENARIO="$1"
   [[ -f "$BENCH_SCENARIO" ]] || BENCH_SCENARIO="$ROOT/scripts/bench/$1.bench"
@@ -578,7 +583,7 @@ if [[ "$ACTION" == pytest ]]; then
   JOBS=4
 else
   JOBS="${RYZEN_JOBS:-12}"
-  GQ_ARGS=(--class quick --threads "$JOBS" --mem 8G --display --max "${RYZEN_MAX:-30m}")
+  GQ_ARGS=(--class "${BENCH_CLASS:-quick}" --threads "$JOBS" --mem 8G --display --max "${RYZEN_MAX:-30m}")
   if [[ "$ACTION" == bench ]]; then
     GQ_ARGS+=(--gpu-mem 4G --name "bench $(basename "$BENCH_SCENARIO" .bench)")
   else
