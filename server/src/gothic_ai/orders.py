@@ -235,7 +235,8 @@ class Orders:
         if set(said) & _REPORTED or any(mark in text for mark in ("«", "»", '"')):
             return None
         for i, word in enumerate(said):
-            if word in _ATTACK and not (i and said[i - 1] == "не"):
+            direct = word in _ATTACK or said[i : i + 2] in (["в", "атаку"], ["взять", "его"])
+            if direct and not (i and said[i - 1] == "не"):
                 return Order("attack", word, text)
         return None
 
@@ -252,14 +253,9 @@ class Orders:
         kinds = _species(text)
         if kinds:
             candidates: dict[str, float] = {}
-            if self.talk.beasts is not None:
-                for beast in self.talk.beasts.wolves.values():
-                    if kinds & _species(beast.name):
-                        candidates[beast.id.split("#", 1)[0].upper()] = min(
-                            candidates.get(beast.id.split("#", 1)[0].upper(), float("inf")),
-                            beast.distance,
-                        )
             try:
+                # Fresh engine sight excludes creatures behind walls. Monster script symbols are
+                # shared: evaluating sight through an `inst` would test an arbitrary wolf instead.
                 views = await self.link.npc_view([npc for npc, _ in squad], timeout=1.0)
                 for view in views:
                     for other in view.sees:
@@ -272,17 +268,7 @@ class Orders:
                             candidates[other.id.upper()] = min(
                                 candidates.get(other.id.upper(), float("inf")), distance
                             )
-                targets = sorted(candidates, key=candidates.__getitem__)
-                visible = (
-                    await self.link.story_eval(
-                        squad[0][0],
-                        [["call", "NPC_CANSEENPC", ["inst", "HERO"], ["inst", target]] for target in targets],
-                        timeout=1.0,
-                    )
-                    if targets
-                    else []
-                )
-                return next((target for target, seen in zip(targets, visible, strict=False) if seen), None)
+                return min(candidates, key=candidates.__getitem__, default=None)
             except (GameError, TimeoutError) as err:
                 log.info("attack target sight unavailable: %s", err)
                 return None

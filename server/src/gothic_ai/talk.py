@@ -231,7 +231,7 @@ def named(phrase: list[str], name: str, called: list[str] | None = None) -> floa
 class Addressee:
     id: str
     name: str
-    # name | focus | partner | scene | front | group (to several: it answers first) | order (companions who
+    # name | focus | partner | companion | scene | front | group (answers first) | order (companions who
     # obey it) | beast (a wolf)
     why: str
 
@@ -255,7 +255,12 @@ def addressee(
     fighting = [
         e for e in alive.values() if fights(e) and e.earshot <= ATTACKER_CM and not ours(e.id.upper())
     ]
-    group = [e for e in alive.values() if e.earshot <= PARTNER_CM]
+    beside_companion = partner is not None and ours(partner.upper())
+    group = [
+        e
+        for e in alive.values()
+        if e.earshot <= PARTNER_CM and (not beside_companion or ours(e.id.upper()) or e.in_view)
+    ]
     # in a fight «Стой, пацаны!» is to whoever is at him, as before: words to him, not an order to his own
     several = len(group) >= 2 and not fighting
 
@@ -301,13 +306,13 @@ def addressee(
         e = min(seen, key=lambda e: e.earshot) if seen else near[0]
         return Addressee(e.id.upper(), e.name, "scene")
     front = [e for e in alive.values() if e.in_view and e.earshot <= FRONT_CM]
-    if front:
-        e = min(front, key=lambda e: e.earshot)
-        return Addressee(e.id.upper(), e.name, "front")
     companions = [e for e in alive.values() if ours(e.id.upper()) and e.earshot <= COMPANION_CM]
-    if companions:
-        e = min(companions, key=lambda e: e.earshot)
-        return Addressee(e.id.upper(), e.name, "companion")
+    companion = min(companions, key=lambda e: e.earshot, default=None)
+    e = min(front, key=lambda e: e.earshot, default=None)
+    if e is not None and (companion is None or e.earshot <= companion.earshot):
+        return Addressee(e.id.upper(), e.name, "front")
+    if companion is not None:
+        return Addressee(companion.id.upper(), companion.name, "companion")
     return None
 
 
@@ -426,9 +431,10 @@ class TalkDesk:
         )
         order = commands.parse(text, self._is_name)
         if self.orders is not None:
-            order = order or self.orders.parse_attack(text)
+            explicit_attack = self.orders.parse_attack(text)
+            order = order or explicit_attack
             squad = self.orders.squad(to, text)
-            if order is not None and order.kind == "attack" and squad:
+            if explicit_attack is not None and order is not None and order.kind == "attack" and squad:
                 self._spawn(self._attack_heard(text, focus, details, to, order, squad, self._phrase))
                 return
         self._heard(text, focus, details, to, order)

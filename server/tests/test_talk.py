@@ -111,6 +111,8 @@ def test_words_after_a_fight_find_the_walking_companion():
     assert (hit.id, hit.why) == (npc, "companion")
     people[LOBART] = RosterEntry(**person(LOBART, "Лобарт", 3, True))
     assert addressee(text, None, people, None, ours=ours).id == LOBART
+    people[LOBART] = RosterEntry(**person(LOBART, "Лобарт", 10, True))
+    assert addressee(text, None, people, None, ours=ours).id == npc
     assert addressee(text, None, roster(person(npc, "Кавалорн", 11)), None, ours=ours) is None
     assert addressee(text, None, roster(person(npc, "Кавалорн", 4, heard=20000)), None, ours=ours) is None
 
@@ -122,6 +124,8 @@ def test_plural_address_goes_to_people_in_front_of_the_companion():
         hit = addressee(text, None, people, npc, ours=lambda who: who == npc)
         assert (hit.id, hit.why) == (brago, "group"), text
     assert addressee("Пацаны, здорово!", npc, people, npc, ours=lambda who: who == npc).id == brago
+    people[brago] = people[brago].model_copy(update={"in_view": False})
+    assert addressee("Пацаны, здорово!", None, people, npc, ours=lambda who: who == npc).id == npc
 
 
 def test_the_codes_posture_when_the_behavioral_model_is_unsure():

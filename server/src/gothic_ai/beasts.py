@@ -265,7 +265,7 @@ class BeastDesk:
 
         looked = self._looked_at(focus)
         hearers = self.at_him()
-        if to is not None and to.why in ("name", "focus"):
+        if to is not None and to.why in ("name", "focus", "group"):
             mine = False  # he calls someone by name, or looks at a person
         elif looked is not None:
             mine = True

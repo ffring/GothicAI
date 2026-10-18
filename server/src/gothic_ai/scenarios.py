@@ -1798,7 +1798,38 @@ async def orders_scenario(
     llm = FakeBackend("Это не приказ, а разговор.", delay=0)
     dialogue.llm = llm
     if not await _until(lambda: npc in talk.people, 20):
+        link.act = act  # type: ignore[method-assign]
         return {"roster": f"failed ({npc} is not around the hero)"}
+    # A 9 m offset inside the tower may put the hero on another floor, beyond hearing round its walls.
+    # Stage Xardas on the open road, then hold him without starting follow before testing that action.
+    await link.debug("player_hp", hp=5000)
+    await link.debug("player_goto", waypoint=WOLF_HERO)
+    await asyncio.sleep(1)
+    beasts = talk.beasts
+    if beasts is not None:
+        for _ in range(8):
+            if not beasts.wolves:
+                break
+            wolf = min(beasts.wolves.values(), key=lambda w: w.distance)
+            await link.debug("kill", instance=wolf.id.split("#", 1)[0], by="PLAYER")
+            await _until(lambda wolf=wolf: wolf.id not in beasts.wolves, 5)
+    await link.debug("skip_important", near=npc)
+    await link.debug("npc_goto", npc=npc, waypoint=WOLF_HERO, face="PC_HERO")
+    if not await talk.hold(npc, "follow"):
+        link.act = act  # type: ignore[method-assign]
+        return {"roster": f"failed (cannot hold {npc} for the road setup)"}
+    await link.debug("teleport", near=npc, distance=900)
+    ready = await _until(
+        lambda: npc in talk.people
+        and 750 <= talk.people[npc].distance <= 1150
+        and talk.people[npc].earshot <= 1200,
+        10,
+    )
+    snap = await link.snapshot(npc, fresh=True)
+    level = snap.player is not None and abs(snap.player.pos[1] - snap.npc.pos[1]) <= 200
+    if not ready or not level:
+        link.act = act  # type: ignore[method-assign]
+        return {"roster": f"failed (open road setup: {talk.people.get(npc)}, same floor {level})"}
     dialogue.open(npc, "Ксардас").intent = Intent("follow_hero", "PLAYER", "friendly")
 
     def dist() -> float:
@@ -1818,15 +1849,12 @@ async def orders_scenario(
         done = ok and all(st == "done" for t, _, a, st in calls if t >= t0 and a == action)
         return done, took
 
-    # the tower's walls stop a straight walk: every walk here starts where Xardas can walk from
-    await link.debug("player_goto", near=npc, distance=900)
-    await asyncio.sleep(1)
     ok, took = await order("Ксардас, ко мне!", "follow")
     came = await _until(lambda: 0 <= dist() <= 5, 20)
     results["come"] = f"{'done' if ok and came else 'failed'} (in {took}; {dist():.1f} m from the hero)"
 
     ok, took = await order("Стой!", "stop")
-    await link.debug("player_goto", near=npc, distance=900)
+    await link.debug("teleport", near=npc, distance=900)
     await asyncio.sleep(4)
     stood = dist()
     results["halt"] = f"{'done' if ok and stood >= 7.5 else 'failed'} (in {took}; stays {stood:.1f} m behind)"
@@ -3524,6 +3552,13 @@ async def group_scenario(
     if (failed := await _at_the_steps(link, dialogue, talk, npc, brago, bandit, steps)) is not None:
         return _logged({"roster": f"failed ({failed})"})
 
+    # The plural address overrides a companion only with other people in front of the hero.
+    await link.debug("teleport", near=brago, distance=500)
+    if not await _until(
+        lambda: brago in talk.people and talk.people[brago].in_view
+        and npc in talk.people and talk.people[npc].earshot <= 1000, 15,
+    ):
+        return _logged({"roster": "failed (bandits not in view or companion out of earshot)"})
     talk.end("scenario")
     opened = talk.begin(npc, names[npc])
     check(
