@@ -19,6 +19,7 @@ def metrics(arrived, turn=.2):
 
 def state(arrived=33, decisions=0):
     return dict(baseline_arrival_fraction=arrived / 60, best_arrival_fraction=arrived / 60,
+                selected_arrival_fraction=arrived / 60,
                 best_score=list(loop.validation_score(metrics(arrived))), best_iteration=0,
                 best_policy="round2.navbc", best_checkpoint=None, decisions=decisions,
                 bad_validations=0, stop_reason=None)
@@ -56,6 +57,23 @@ def test_arrival_selects_checkpoint_before_tie_breakers():
     assert improved and current["best_policy"] == "b"
     current, improved = loop.record_validation(current, metrics(33, turn=0), 15, "c", "c.pt")
     assert not improved and current["best_policy"] == "b"
+
+
+def test_both_validation_goals_outrank_higher_arrival_with_excessive_turning():
+    current = state(arrived=53)
+    current["best_score"] = list(loop.validation_score(metrics(53, turn=.25)))
+    current, improved = loop.record_validation(current, metrics(50, turn=.1), 5, "feasible", "feasible.pt")
+    assert improved and current["best_policy"] == "feasible"
+    assert current["best_arrival_fraction"] == 53 / 60
+    assert current["selected_arrival_fraction"] == 50 / 60
+    current, improved = loop.record_validation(current, metrics(51, turn=.1), 10, "more-arrivals", "more-arrivals.pt")
+    assert improved and current["best_policy"] == "more-arrivals"
+    assert current["best_arrival_fraction"] == 53 / 60
+    assert current["selected_arrival_fraction"] == 51 / 60
+    current, improved = loop.record_validation(current, metrics(55, turn=.16), 15, "turns-too-much", "other.pt")
+    assert not improved and current["best_policy"] == "more-arrivals"
+    assert current["best_arrival_fraction"] == 55 / 60
+    assert current["selected_arrival_fraction"] == 51 / 60
 
 
 def test_success_stop_needs_two_strong_validations_after_curriculum():

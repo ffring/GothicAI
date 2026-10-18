@@ -92,10 +92,11 @@ def balanced_routes(values, seed):
 
 
 def validation_score(metrics):
-    """Arrival chooses the checkpoint; ties prefer less turning and blocking."""
+    """Prefer both task targets, then arrival, turning, blocking and time."""
     all_metrics = metrics["all"]
     elapsed = all_metrics.get("median_arrival_s")
-    return (all_metrics["arrived"], -all_metrics["action_fraction"]["turn_only"],
+    feasible = all_metrics["arrived"] >= 42 and all_metrics["action_fraction"]["turn_only"] <= .15
+    return (int(feasible), all_metrics["arrived"], -all_metrics["action_fraction"]["turn_only"],
             -all_metrics["blocked_ms"], -(elapsed if elapsed is not None else 1e30))
 
 
@@ -109,9 +110,10 @@ def record_validation(state, metrics, iteration, policy, checkpoint):
               and metrics["all"]["action_fraction"]["turn_only"] <= .12)
     state["target_validations"] = state.get("target_validations", 0) + 1 if target else 0
     state["last_validation_decisions"] = state["decisions"]
+    state["best_arrival_fraction"] = max(previous_best, rate)
     improved = validation_score(metrics) > tuple(state["best_score"])
     if improved:
-        state.update(best_arrival_fraction=rate, best_score=list(validation_score(metrics)),
+        state.update(selected_arrival_fraction=rate, best_score=list(validation_score(metrics)),
                      best_iteration=iteration, best_policy=str(policy),
                      best_checkpoint=str(checkpoint) if checkpoint else None)
     if state["bad_validations"] >= 2:
@@ -280,7 +282,7 @@ class Loop:
         elif (destination / "last.pt").exists():
             (destination / "last.pt").unlink()
         write_json(destination / "selection.json", {key: state[key] for key in
-                   ("best_iteration", "best_score", "best_arrival_fraction", "best_policy", "best_checkpoint")})
+                   ("best_iteration", "best_score", "best_arrival_fraction", "selected_arrival_fraction", "best_policy", "best_checkpoint")})
 
     def run(self):
         args = self.args
@@ -306,6 +308,8 @@ class Loop:
                         for name in ("training", "validation", "reference")}
         if self.state_path.is_file():
             state = read_json(self.state_path)
+            if "selected_arrival_fraction" not in state or len(state.get("best_score", ())) != 5:
+                raise ValueError("Incompatible checkpoint selection state; use a new --work directory")
             if state["training"] != str(args.training) or state["validation"] != str(args.validation) or state["reference"] != str(args.reference):
                 raise ValueError("Resume requires the original training, validation and round-2 reference")
             if state["input_hashes"] != input_hashes:
@@ -316,7 +320,8 @@ class Loop:
             subprocess.run(["df", "-h", str(self.work)], check=True)
             baseline = self.evaluate(args.reference, self.work / "baseline" / "validation")
             state = dict(iteration=0, decisions=0, baseline_arrival_fraction=baseline["all"]["arrival_fraction"],
-                         best_arrival_fraction=baseline["all"]["arrival_fraction"], best_score=list(validation_score(baseline)),
+                         best_arrival_fraction=baseline["all"]["arrival_fraction"], selected_arrival_fraction=baseline["all"]["arrival_fraction"],
+                         best_score=list(validation_score(baseline)),
                          best_iteration=0, best_policy=str(args.reference), best_checkpoint=None,
                          current_policy=str(args.reference), current_checkpoint=None, bad_validations=0,
                          initial_kl=None, baseline_entropy=None, stop_reason=None,
