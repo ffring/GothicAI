@@ -219,6 +219,10 @@ def plot_examples(episodes, output):
         ax.set_title(f"#{ep['pair']:03d} {ep['region']} · {result}, {ep['elapsed_s']:.1f} s\n"
                      f"{ep['start']} → {ep['goal']}", fontsize=9)
         ax.set(xlabel="World X (m)", ylabel="World Z (m)", aspect="equal")
+        for limits, set_limits in ((ax.get_xlim(), ax.set_xlim), (ax.get_ylim(), ax.set_ylim)):
+            center = (limits[0] + limits[1]) / 2
+            half_span = max(limits[1] - limits[0], 12) / 2
+            set_limits(center - half_span, center + half_span)
         ax.grid(alpha=.2)
         ax.legend(fontsize=7, loc="best")
     for ax in list(axes.flat)[len(selected):]:
