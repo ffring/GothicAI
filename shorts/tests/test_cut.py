@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import shutil
 import subprocess
@@ -10,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from PIL import Image
 
-from gothic_shorts import bed, cli, cut, levels
+from gothic_shorts import bed, cli, compare, cut, levels
 from gothic_shorts.shot import Shot
 from gothic_shorts.timeline import Timeline, build, read_events
 
@@ -181,11 +180,6 @@ def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(
 ):
     if cover_kind and not Path("/System/Library/Fonts/Supplemental/Arial Black.ttf").is_file():
         pytest.skip("macOS Arial Black is unavailable")
-    spec = importlib.util.spec_from_file_location(
-        "comparison_cut", Path(__file__).resolve().parents[1] / "compare/cut.py",
-    )
-    compare = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(compare)
     plan = {
         "brand": brand, "labels": {"ru": ["До", "После"]},
         "hook": {"ru": "Проверка"}, "hook_s": 2,
@@ -281,11 +275,6 @@ def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(
 def test_compare_cover_stacks_clean_graded_takes_with_ffmpeg(tmp_path):
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg is required for a comparison cover")
-    spec = importlib.util.spec_from_file_location(
-        "comparison_cut", Path(__file__).resolve().parents[1] / "compare/cut.py",
-    )
-    compare = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(compare)
     for take, color in [("off", "0x502010"), ("on", "0x102050")]:
         (tmp_path / take).mkdir()
         _ffmpeg(

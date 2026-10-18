@@ -1,6 +1,6 @@
 # Карта проекта
 
-С этой страницы начинается любая работа в репозитории. Она говорит, где что лежит и как части связаны. Подробности — в документах систем, ссылки на них ниже. Правила работы — в [`AGENTS.md`](../AGENTS.md), сборка и запуск — в [`README.md`](../README.md).
+С этой страницы начинается любая работа в репозитории. Она говорит, где что лежит и как части связаны. Подробности — в документах систем, ссылки на них ниже. Правила работы — в [`AGENTS.md`](../AGENTS.md), у `server/`, `OpenGothic/ai_bridge/` и `shorts/` — ещё свои короткие `AGENTS.md`. Сборка и запуск — в [`README.md`](../README.md).
 
 Карта описывает то, что есть сейчас. PR, который добавляет модуль, сервис, флаг, сценарий или документ, правит и эту страницу.
 
@@ -24,7 +24,7 @@
 ```
 
 - **Игра — клиент.** Мост `OpenGothic/ai_bridge/` подключается к серверу по WebSocket, одно JSON-сообщение на кадр. Адрес по умолчанию задан в `aibridge.cpp` (`DefaultUrl`), меняется через `GOTHIC_AI_URL`, мост выключает `GOTHIC_AI=0`.
-- **Версия протокола** — в трёх местах, они должны совпадать: `PROTOCOL_VERSION` в `server/src/gothic_ai/protocol.py`, `ProtocolVersion` в `OpenGothic/ai_bridge/aibridge.cpp`, заголовок [`protocol.md`](protocol.md).
+- **Версия протокола** — в трёх местах, они должны совпадать: `PROTOCOL_VERSION` в `server/src/gothic_ai/protocol.py`, `ProtocolVersion` в `OpenGothic/ai_bridge/aibridge.cpp`, заголовок [`protocol.md`](protocol.md). Новый номер берут через бронь: [`protocol.md`](protocol.md#бронь-номера).
 - **Потоки движка.** WS-поток только кладёт сообщения в очередь. Разбор и вся работа с миром идут в главном потоке (`AiBridge::Impl::onTick`), входящие разбирает `AiBridge::Impl::handle`.
 - **Сервер — один процесс asyncio.** `cli.ServerState` держит все подсистемы (около 45, все необязательные). Каждая получает `GameLink` из `game.py` и подписывается на сообщения игры через `link.listeners`.
 - Где что считается и почему — [`compute.md`](compute.md). Адреса машин лежат вне git.
@@ -92,17 +92,17 @@
 
 `OpenGothic/` — форк Try/OpenGothic. Сторонние библиотеки лежат в `lib/` обычными файлами ([`VENDORED.md`](../OpenGothic/lib/VENDORED.md)). Целиком наше: `ai_bridge/`, `game/bodyrunner.cpp`, `tests/*_contract.cpp`. В `common/` наши `physics/`, части `game/` и `graphics/mesh/`, `testbench.*`, `nav*`; остальное — апстрим с точечными правками.
 
-Всё ниже включено по умолчанию. Выключатели `OPENGOTHIC_*=0` нужны для сравнений.
+Всё ниже включено по умолчанию. Выключатели `OPENGOTHIC_*=0` нужны для сравнений. Каждый выключатель с модулем и проверкой — в [`features.md`](features.md).
 
 | Подсистема | Где | Выключатель | Документ |
 |---|---|---|---|
 | Мост к серверу | `ai_bridge/aibridge.cpp`; NPC — `npccontroller`, `npcview`, `npcchests`; сюжет — `story*`, `dialoggraph`; голос — `voicebuffer`, `linelibrary`; `beasts`, `necromancy` | `GOTHIC_AI=0` | [`protocol.md`](protocol.md) |
-| Физика Jolt вместо Bullet: тела, рэгдоллы, CharacterVirtual, вода, разрушение | `common/physics/` (`collisionworld`, `dynamicworld`, `ragdoll`, `fracture`), `common/world/movablevobs.*` | `OPENGOTHIC_PHYSICS_THREADS`, кэш разрушений `OPENGOTHIC_FRACTURE` | [`physics.md`](physics.md) |
+| Физика Jolt вместо Bullet: тела, рэгдоллы, CharacterVirtual, вода, разрушение | `common/physics/` (`collisionworld`, `dynamicworld`, `ragdoll`, `fracture`), `common/world/movablevobs.*` | ini `[GAME]`: `ragdoll`, `movable_vobs`, `destruction`, `buoyancy`, `character_virtual` и другие; кэш разрушений `OPENGOTHIC_FRACTURE` | [`physics.md`](physics.md) |
 | Анимация: инерциальные переходы, foot IK, моргание, жесты, губы, взгляд, наклон, вздрагивание, натяжение лука, ходьба с прицелом | `common/graphics/mesh/` (`animblend`, `footik`, `eyeblink`, `talkgestures`, `lipsync`, `gaze`, `lean`, `flinch`, `bowdraw`, `aimwalk`, `aim`) | `OPENGOTHIC_ANIBLEND`, `_FOOTIK`, `_BLINK`, `_GESTURES`, `_LIPSYNC`, `_GAZE`, `_LEAN`, `_FLINCH`, `_BOWDRAW`, `_AIMWALK`, `_AIM` | — |
-| Ручной прицел героя и лучники NPC | `common/game/archery.cpp`, `aimcamera.h`, `archerai.*` | `OPENGOTHIC_MANUALAIM`, `OPENGOTHIC_NPCAIM` (или ini `[GAME] manualAim`) | [`manual-aim.md`](manual-aim.md) |
+| Ручной прицел героя и лучники NPC | `common/game/archery.cpp`, `aimcamera.h`, `archerai.*` | `OPENGOTHIC_MANUALAIM`, `OPENGOTHIC_NPCAIM` (или ini `[GAME] manualAim`, `npcManualAim`) | [`manual-aim.md`](manual-aim.md) |
 | Боевое тело NPC: аренда, наблюдения, арена, реплей | `common/game/bodycontroller.*`, `bodyobservations.*`, `bodyarena.*`, `bodyreplay.*` | без `--body-url` на сервере не работает | [`npc-body-api.md`](npc-body-api.md) |
 | Headless-раннер для обучения тела | `game/bodyrunner.cpp` → `gothic-body-runner` (stdio RPC) | — | [`npc-body-headless-runner.md`](npc-body-headless-runner.md) |
-| Навигация NPC | `common/nav*`, `common/game/nav*` | — | [`navigation.md`](navigation.md) |
+| Навигация NPC: обучаемая — пока только на стенде | `common/nav*`, `common/game/nav*` | — | [`navigation.md`](navigation.md) |
 | HD-текстуры | `common/resources.cpp` | работают, если есть каталог `OPENGOTHIC_TEXTURES` | — |
 | Тестовый стенд | `common/testbench.*`, `OPENGOTHIC_BENCH*` | — | [`scripts/bench/README.md`](../scripts/bench/README.md) |
 
@@ -124,7 +124,7 @@
 
 ## Флаги `gothic-ai serve`
 
-Всё включено по умолчанию, флаг `--no-X` выключает. Полный список — `gothic-ai serve --help` или `cli.py` около строки 2200.
+Всё включено по умолчанию, флаг `--no-X` выключает. Полный список — `gothic-ai serve --help` или `cli.py` около строки 2200. Что выключает каждый флаг, где живёт фича и что её проверяет — в [`features.md`](features.md).
 
 - **Голос и вывод:** `--no-voice`, `--no-tts`, `--no-console`, `--no-trace`.
 - **Модели:** `--llm chatgpt|openai|local|fake`, `--model`, `--reasoning-effort`, `--no-websocket`, `--no-brain` (планировщик быстрого контура), `--no-quick`, `--no-hold-threats`.
@@ -153,7 +153,7 @@
 - **жизнь NPC:** `day`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
 - **беседа:** `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
 - **сделки:** `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
-- **ложь и дела:** `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_talk`, `crime_law`, `wrath`;
+- **ложь и дела:** `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_talk`, `crime_law`, `crime_director`, `wrath`;
 - **сюжет:** `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
 
 ## Где лежат данные
@@ -168,7 +168,7 @@
 
 ## Остальные каталоги
 
-- **`shorts/`** — шортсы из игры с живыми NPC: съёмка, монтаж, объясняющие ролики, сравнения «до и после», бренд и обложки шаблона B (`gothic-shorts cover`, поле `cover` плана сравнения); загрузка на YouTube с `--thumbnail` и отдельная команда `thumbnail` ([`shorts/README.md`](../shorts/README.md)).
+- **`shorts/`** — шортсы из игры с живыми NPC: съёмка, монтаж, объясняющие ролики, сравнения «до и после», бренд ([`shorts/README.md`](../shorts/README.md)). Сравнения собирает `gothic_shorts.compare`, точка входа — `shorts/compare/cut.py`; `gothic-shorts dub` распознаёт их планы и берёт папку дублей из `takes` или `--takes DIR`. Обложки шаблона B — модуль `gothic_shorts.cover`, команда `cover` и поле `cover` плана; загрузка на YouTube с `--thumbnail`, отдельная команда `thumbnail`.
 - **`site/`** — сайт и дневник на GitHub Pages ([`site/README.md`](../site/README.md)).
 - **`evals/`** — эталоны: `npc-body/` (бой), `npc-decisions/` (выбор модели решений).
 - **`reports/`** — итоговые исследования и отчёты прогонов.
@@ -178,7 +178,8 @@
 
 | Документ | О чём | Что это |
 |---|---|---|
-| [`protocol.md`](protocol.md) | протокол игра ↔ сервер | справочник |
+| [`protocol.md`](protocol.md) | протокол игра ↔ сервер, версии и бронь номера | справочник |
+| [`features.md`](features.md) | фичи, включённые по умолчанию: выключатели, модули, проверки, пробелы покрытия | реестр |
 | [`compute.md`](compute.md), [`ryzen.md`](ryzen.md) | машины, очередь `gq`, прогоны на Ryzen | справочник |
 | [`npc-agent.md`](npc-agent.md) | агент NPC: два контура, приказы, восприятие | справочник с журналом |
 | [`npc-tools.md`](npc-tools.md) | инструменты NPC: сделки, восприятие, карточки, беседа, поручения | план с журналом |
@@ -186,12 +187,12 @@
 | [`story-graph.md`](story-graph.md) | граф сюжета, ложь, слухи, ремонт квестов | план с журналом |
 | [`director.md`](director.md) | режиссёр-автор: квесты, персонажи, цепочки | план с журналом, этапы 1–5 сделаны |
 | [`crime.md`](crime.md) | преступления и репутация | план, идёт: слои 1–3 сделаны |
-| [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода | план с журналом |
-| [`manual-aim.md`](manual-aim.md) | ручное прицеливание | план с журналом |
-| [`navigation.md`](navigation.md) | обучаемая навигация NPC | план, идёт |
-| [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | план |
+| [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода | сейчас + план с журналом |
+| [`manual-aim.md`](manual-aim.md) | ручное прицеливание | сейчас + план с журналом |
+| [`navigation.md`](navigation.md) | обучаемая навигация NPC | сейчас + план, идёт |
+| [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | сейчас + план |
 | `npc-body-*.md` (`api`, `arena`, `bc`, `combat-contract`, `headless-runner`, `observations`, `trajectories`) | боевое тело по этапам | справочники |
-| [`npc-body-combat-gate.md`](npc-body-combat-gate.md), [`npc-body-stage8-stop-report.md`](npc-body-stage8-stop-report.md) | этап 8: журнал и остановка 14.10 | устарели в шапке: gate пройден 15.10, см. план |
-| [`npc-scheduler.md`](npc-scheduler.md) | планировщик решений NPC | проект от 11.10, статус не обновлялся |
-| [`launcher.md`](launcher.md) | лаунчер | план от 11.10, статус не обновлялся |
+| [`npc-body-combat-gate.md`](npc-body-combat-gate.md), [`npc-body-stage8-stop-report.md`](npc-body-stage8-stop-report.md) | этап 8: журнал до допуска и остановка 14.10 | исторические: gate пройден 15.10, итог в плане |
+| [`npc-scheduler.md`](npc-scheduler.md) | планировщик решений NPC | проект от 11.10; шаги 1–3 сделаны, планировщик работает в `brain/` |
+| [`launcher.md`](launcher.md) | лаунчер | этапы L1–L3 сделаны, лаунчером пользуются |
 | [`MVP.md`](MVP.md) | первая спецификация MVP | исторический |
