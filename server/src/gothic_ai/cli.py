@@ -1767,6 +1767,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario day: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "noise":
+                assert state.sightings is not None
+                results = await scenarios.noise_scenario(link, state.sightings, state.brain)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario noise: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "rumor":
                 dialogue, talk, rumors = state.dialogue, state.talk, state.rumors
                 assert dialogue is not None and talk is not None and rumors is not None
@@ -2370,6 +2376,7 @@ def main() -> None:
             "gossip",
             "gossip_demo",
             "day",
+            "noise",
             "amends_deal",
             "cards",
             "haggle",

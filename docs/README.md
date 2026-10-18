@@ -150,7 +150,7 @@
 - **основа** (`basics.py`): `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`;
 - **спутники и бой** (`companions.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`;
 - **восприятие** (`perception.py`; `broken` — `broken.py`, `places` — прямо в `cli.py`): `see`, `seen`, `hearing`, `cave`, `ground`, `places`, `knows`, `remembers`, `trace`, `broken`;
-- **жизнь NPC** (`npc_life.py`): `day`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
+- **жизнь NPC** (`npc_life.py`): `day`, `noise`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
 - **беседа** (`conversation.py`): `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
 - **сделки** (`deals.py`): `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
 - **ложь и дела** (`lies.py`; `crimes`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_talk`, `crime_law`, `crime_director`, `wrath`;

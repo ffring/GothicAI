@@ -194,6 +194,10 @@
 #       DECIDER_URL the scenario's own planner (a fixed stand-in); with it the server's planner, the choice
 #       pinned and the live model's own answer logged. Starts the TTS service (TTS=fake). Words scripted with LLM=fake;
 #       TIMEOUT=480
+#   noise: a real physical impact near a free human at Lobart's farm: noise event, planner decision,
+#       investigate receipt, walk within 2 m, idle within 45 s, return to routine and heard-noise memory
+#       with place and game time. Without DECIDER_URL a fixed stand-in chooses investigate for this NPC;
+#       with it the server's planner logs the live choice and pins investigate. SAVE=save_slot_1.sav
 #   cards: the model writes character cards (docs/npc-tools.md, wave 1 step 3) for every npc of the world with
 #       lines of its own (GOTHIC_CARDS=SYM,...: those only) into server/src/gothic_ai/gamedata/characters.json;
 #       those with a card are skipped; needs LLM=chatgpt and a long TIMEOUT for all of them
