@@ -363,6 +363,19 @@ class IncidentDesk:
             self.planner.on_event(
                 npc, kind, self.clock(), other=other, other_name=other_name, distance_cm=distance_cm
             )
+            conv = self.dialogue.conversations.get(npc)
+            if conv is not None and conv.calm is not None:
+                intent = conv.intent
+                choice = INTENT_BODY.get(intent.goal)
+                same_threat = intent.target is not None and intent.target.upper() == other.upper()
+                if choice and (
+                    same_threat
+                    or intent.goal == "seek_help"
+                    or (intent.goal == "flee" and intent.target is None)
+                ):
+                    # An attached listener may have already chosen to run in its own words. Preserve
+                    # that live choice after releasing its body, against this actual threat.
+                    self.planner.take_body(npc, choice, target=other)
         except (GameError, TimeoutError) as err:
             log.info("%s: could not free its listening body for %s: %s", npc, kind, err)
         finally:

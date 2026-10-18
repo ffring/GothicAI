@@ -164,6 +164,48 @@ async def test_a_threat_frees_a_listening_npc_before_its_model_starts_native_com
         await cm.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize(
+    ("goal", "target", "live", "expected"),
+    [
+        ("flee", None, True, "flee"),
+        ("flee", "CAVALORN", True, "flee"),
+        ("seek_help", "PLAYER", True, "flee"),
+        ("fight", "CAVALORN", True, "fight"),
+        ("flee", None, False, "comment"),
+        ("flee", "PLAYER", True, "comment"),
+        ("fight", "PLAYER", True, "comment"),
+        ("fight", None, True, "comment"),
+    ],
+)
+async def test_freeing_a_listener_keeps_only_its_live_intent_about_this_threat(
+    tmp_path, goal, target, live, expected
+):
+    from gothic_ai.brain import LogApplier, NpcPlanner, PlannerConfig
+    from gothic_ai.protocol import RosterEntry
+
+    fake = FakeGame()
+    cm, link, dialogue, desk, trace = await _scene(None, FakeBackend("Ах ты!", delay=0), fake, tmp_path)
+    conv = dialogue.conversations[XARDAS]
+    conv.intent = Intent(goal, target)
+    conv.calm = Intent() if live else None
+    applier = LogApplier()
+    planner = NpcPlanner(FakeDecider("comment", 0.95), applier, config=PlannerConfig(ask_attitude=False))
+    planner.on_roster(
+        [RosterEntry(id=XARDAS, name="Ксардас", distance=500, activity="attached")], planner.clock()
+    )
+    link.listeners.append(planner.on_message)
+    desk.follow(planner)
+    try:
+        await fake.send(type="npc_event", npc=XARDAS, kind="npc_threat", other="CAVALORN", distance=1000)
+        await _until(lambda: XARDAS not in fake.attached)
+        for _ in range(10):
+            planner.tick(planner.clock())
+            await asyncio.sleep(0)
+        assert [(d.choice, d.target) for d in applier.recent] == [(expected, "CAVALORN")]
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
 async def test_a_companions_body_in_a_fight_is_left_to_orders_only_its_words_come_from_here(tmp_path):
     fake = FakeGame()
     fake.nearby.append(WOLF)
