@@ -6769,9 +6769,11 @@ void waterFilmSetup(World& world,Npc& player,std::string_view scene) {
     }
   else if(scene=="fireball") {
     const float pierY=(supports[0].y+supports[1].y)*.5f;
-    focus=lip-direction*50.f;focus.y=pierY+50.f;
+    // Behind the target and above its head: it stays low in the frame and the
+    // crate, the barrel and the water where their fragments land stay in view.
+    focus=lip+direction*150.f;focus.y=bench.waterCenter.y;
     for(float lateral:{0.f,-40.f,40.f}) {
-      eye=lip-direction*410.f+side*lateral;eye.y=pierY+160.f;
+      eye=lip-direction*480.f+side*lateral;eye.y=pierY+330.f;
       bool clear=!world.physic()->ray(eye,bench.waterCenter+Vec3(0,20,0)).hasCol;
       for(unsigned i=0;i<2;++i) {
         const auto* mesh=Resources::loadMesh(visuals[i]);
