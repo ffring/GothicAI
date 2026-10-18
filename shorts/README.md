@@ -152,6 +152,8 @@ camera and a fresh scene; `water-film begin` starts its native action and `water
 outcome after six seconds. The off take disables ragdoll, living bodies, spell features, movable objects,
 destruction and water after every setup, with `OPENGOTHIC_FLINCH=0`. The existing `water.bench` and
 `water-bodies.bench` checks keep their own fixtures.
+The fixed body/skeleton camera looks along the throw to retain the stock corpse's full flight and sinking.
+`water_film_framing` checks the NPC bounds and posed bones against the frame on every recorded step.
 
 - `compare/<name>.bench`: the scenario; every `rec` is a beat. Both takes run the same steps on the fixed
   time step, so the halves stay in sync; the "off" take sets `OPENGOTHIC_FOOTIK=0`, `_GAZE`, `_LEAN`, `_AIM`,
