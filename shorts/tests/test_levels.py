@@ -1486,6 +1486,56 @@ def test_publish_calibrates_music_duck_to_the_raw_music_dynamics(
     assert json.loads(out.with_suffix(".levels.json").read_text())["music_duck_db"] == report["music_duck_db"]
 
 
+def test_calibration_and_publication_account_for_music_ramps_in_short_pauses(tmp_path, tone_inputs):
+    joined, voice, music, out = (tmp_path / name for name in (
+        "joined.mkv", "voice.wav", "music.wav", "short.mp4",
+    ))
+    speech = [(0, 1), (1.2, 2.2), (2.4, 3.4), (3.6, 4.6), (4.8, 5.8)]
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "color=c=black:s=16x16:r=1:d=6", "-f", "lavfi", "-i",
+         "sine=frequency=440:sample_rate=48000:duration=6", "-af",
+         "volume=-20dB,afade=t=in:d=0.06,afade=t=out:st=5.94:d=0.06",
+         "-c:v", "mpeg4", "-c:a", "pcm_f32le", str(joined)],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "sine=frequency=1000:sample_rate=48000:duration=6", "-af",
+         "afade=t=in:d=0.06,afade=t=out:st=5.94:d=0.06",
+         "-c:a", "pcm_f32le", str(voice)], check=True, capture_output=True,
+    )
+    active = "+".join(f"between(t,{start},{end})" for start, end in speech)
+    # Each transition is at a zero crossing of the 220 Hz source. The raw
+    # music changes by -2 dB in speech without introducing an edit click.
+    source = (f"aevalsrc='0.125*(1+({10 ** (-2 / 20) - 1:.12f})*({active}))"
+              "*sin(2*PI*220*t)':s=48000:d=6")
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", source,
+         "-c:a", "pcm_f32le", str(music)], check=True, capture_output=True,
+    )
+
+    _audio, calibrated = levels.calibrate(
+        joined, music, [(voice, 0)], speech, 6, 6, music_fades=False,
+    )
+    assert calibrated["ok"] is True
+    report = levels.publish(
+        joined, music, [(voice, 0)], speech, 6, 6, out, music_fades=False,
+    )
+
+    assert report["ok"] is True
+    assert report["balance_stage"] == "mastered_aac"
+    assert out.stat().st_size > 0
+    for rows in (_rows(calibrated), _rows(report)):
+        for key in ("music_pause", "music_speech"):
+            assert rows[key]["ok"] is True
+            assert rows[key]["measured_lufs"] == pytest.approx(
+                rows[key]["target_lufs"], abs=levels.LEVEL_TOLERANCE_LU,
+            )
+    assert _rows(report)["clicks"]["count"] == 0
+    assert json.loads(out.with_suffix(".levels.json").read_text())["ok"] is True
+
+
 @pytest.mark.parametrize("delta_db,expected_duck", [(24, 18), (-24, 0)])
 def test_calibration_bounds_music_duck_without_weakening_the_balance_gate(
     tmp_path, publication_inputs, delta_db, expected_duck,

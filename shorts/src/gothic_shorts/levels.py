@@ -12,7 +12,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from gothic_shorts import clicks
@@ -554,6 +554,28 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
             # A common gain puts raw pauses on target; compensate the bed's
             # own dynamics as well to put speech at that same target minus 6 LU.
             music_duck = min(MAX_MUSIC_DUCK_DB, max(0.0, MUSIC_DUCK_DB + music_speech - music_pause))
+            lower, upper = 0.0, MAX_MUSIC_DUCK_DB
+            for attempt in range(9):
+                # The ramps live in pauses too. Set gain from the actual ducked
+                # pauses, then refine depth if that gain would spoil speech.
+                # Bisection also handles overlapping ramps in short pauses;
+                # eight refinements bound the remaining depth interval to 0.07 dB.
+                ducked_pause = replace(raw, music_duck_db=music_duck).measure(
+                    "music", pauses, meter_gain_db=meter_gain,
+                )
+                music_db = music_gain(s, ducked_pause, game_pause)
+                error = music_speech - music_duck - ducked_pause + MUSIC_DUCK_DB
+                tolerance = LEVEL_TOLERANCE_LU if attempt == 0 else METER_RESOLUTION_LU
+                if abs(error) <= tolerance + 1e-6 or attempt == 8:
+                    break
+                if error > 0:
+                    lower = music_duck
+                else:
+                    upper = music_duck
+                refined = (lower + upper) / 2
+                if refined == music_duck:
+                    break  # A depth bound leaves any remaining error to the gate.
+                music_duck = refined
     final = audio_graph(joined, music, voice, speech, total, length,
                         music_gain_db=music_db, music_duck_db=music_duck,
                         game_gain_db=game_gain, game_duck_db=game_db,
