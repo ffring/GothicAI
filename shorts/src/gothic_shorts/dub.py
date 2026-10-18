@@ -32,7 +32,7 @@ from pathlib import Path
 from gothic_launcher.commands import child_env, tools
 from gothic_launcher.settings import Config
 
-from . import bed, cut, explain, levels, srt, stems
+from . import bed, compare, cut, explain, levels, srt, stems
 from .cut import CutError, load_subs
 from .film import shorts_dir
 from .gpu import GpuError, job
@@ -277,7 +277,8 @@ def _file_version(info: os.stat_result) -> tuple[int, int, int, int, int]:
 
 def _published_russian(directory: Path, command: str, snapshot: Path) -> tuple[Path, dict, float]:
     ru = directory / "short-ru.mp4"
-    message = (f"Сначала опубликуйте русский ролик через gothic-shorts {command}: "
+    invocation = command if command.endswith(".py") else f"gothic-shorts {command}"
+    message = (f"Сначала опубликуйте русский ролик через {invocation}: "
                f"{ru} и его levels.json с ok: true")
     try:
         report_path = ru.with_suffix(".levels.json")
@@ -723,6 +724,83 @@ def dub_explainer(
                      music_fades=False, music_fade_durations=fades)
             return dub
         except (explain.ExplainError, ValueError, OSError, KeyError, IndexError,
+                TypeError, subprocess.CalledProcessError) as error:
+            raise DubError(str(error)) from error
+
+
+def dub_compare(
+    config: Config,
+    ws: Path,
+    lang: str = "en",
+    plan_file: str = "plan.json",
+    tts: str | None = None,
+    reclone: bool = False,
+    takes: str | Path | None = None,
+) -> Dub:
+    """Dub a comparison over its original take effects and brand ending."""
+    ws = ws.resolve()
+    out = ws / f"render/dub.{lang}.mp4"
+    with _publication(out) as publication:
+        work = publication.work
+        try:
+            if lang not in LOCALES:
+                raise DubError(f"no voices for {lang}: the dub speaks {', '.join(LOCALES)}")
+            ru, ru_report, ru_duration = _published_russian(
+                out.parent, "shorts/compare/cut.py", work / "short-ru.mp4",
+            )
+            plan = json.loads((ws / plan_file).read_text())
+            source = takes if takes is not None else plan.get("takes")
+            if not source:
+                raise DubError("Укажите папку дублей сравнения: --takes DIR или ключ takes в плане")
+            takes_dir = Path(source).expanduser()
+            if not takes_dir.is_dir():
+                raise DubError(f"Нет папки дублей {takes_dir}: укажите --takes DIR")
+            required = [takes_dir / side / f"{beat['segment']}.{ext}"
+                        for beat in plan["beats"] for side, ext in
+                        (("off", "mp4"), ("on", "mp4"), ("on", "wav"))]
+            music = plan.get("music")
+            if music:
+                required.append(takes_dir / music["file"])
+            brand = plan.get("brand", True)
+            if brand:
+                required.extend(compare.BRAND / name for name in ("sting.mp4", "seal-corner.png"))
+            for path in required:
+                if not path.is_file():
+                    raise DubError(f"Нет файла сравнения: {path}")
+            _, total = levels.speech_windows(plan)
+            # AAC padding and frame rounding can change the ending's duration.
+            # Measure the same encode as the Russian builder, before replacing outputs.
+            ending_length = compare.build_ending(work)[1] if brand else 0.0
+            length = total + ending_length
+            _check_duration(length, ru_duration)
+            texts_en = english_script(ws, lang)
+            said = [line for beat in plan["beats"] for line in beat.get("lines", [])]
+            if len(texts_en) != len(said):
+                raise DubError(f"script.{lang}.txt has {len(texts_en)} lines for {len(said)} said ones")
+            if not said:
+                raise DubError("В плане сравнения нет озвученных строк")
+            rows, offset = [], 0.0
+            for beat in plan["beats"]:
+                for line in beat.get("lines", []):
+                    words = line["words"]
+                    at = offset + line["at"] - beat["start"]
+                    rows.append(("voice", " ".join(word[0] for word in words), texts_en[len(rows)],
+                                 at + words[0][1], at + words[-1][2]))
+                offset += beat["end"] - beat["start"]
+            line_slots = slots(rows, total)
+            dub = Dub(out.with_suffix(".wav"), None, ru_duration, ru_duration,
+                      None, _voice_mastered(ru_report))
+            publication.start()
+            built = compare.build(plan, takes_dir, "ru", work)
+            joined = _join_picture(ru, built.joined, work / "picture.mp4")
+            voiced = clone(config, ws, texts_en, lang, tts, reclone)
+            voice, speech = _english_stem(
+                dub, line_slots, voiced, ["voice"] * len(rows), total, work, clean=True,
+            )
+            _publish(dub, ru, joined, built.music, voice, speech, built.total, built.length,
+                     out, work, music_fades=True)
+            return dub
+        except (CutError, ValueError, OSError, KeyError, IndexError,
                 TypeError, subprocess.CalledProcessError) as error:
             raise DubError(str(error)) from error
 

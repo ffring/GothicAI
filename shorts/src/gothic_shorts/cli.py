@@ -14,7 +14,7 @@ from gothic_launcher.settings import Config, SettingsError
 from . import cut as cutting
 from . import srt, youtube
 from .align import AlignError, align
-from .dub import DubError, dub_explainer, dub_take
+from .dub import DubError, dub_compare, dub_explainer, dub_take
 from .explain import ExplainError
 from .explain import publish as publish_explainer
 from .film import FilmError, film, shorts_dir
@@ -121,7 +121,7 @@ def cmd_srt(args: argparse.Namespace) -> int:
 
 
 def cmd_dub(args: argparse.Namespace) -> int:
-    """A shot's take, or an explainer's workspace: its English sound track"""
+    """A shot's take, or an explainer/comparison workspace: its English sound track"""
     try:
         shot = _shot(args.short)
     except ShotError:
@@ -130,7 +130,15 @@ def cmd_dub(args: argparse.Namespace) -> int:
         config = _config()
         done = dub_take(config, shot, _take(config, shot, args.take), args.lang, args.tts)
     else:
-        done = dub_explainer(_config(), workspace(args.short), args.lang, args.plan, args.tts, args.reclone)
+        ws = workspace(args.short)
+        try:
+            plan = json.loads((ws / args.plan).read_text())
+        except (OSError, ValueError):
+            plan = {}  # Let the publisher validate its inputs under the publication lock.
+        if any("segment" in beat for beat in plan.get("beats", [])):
+            done = dub_compare(_config(), ws, args.lang, args.plan, args.tts, args.reclone, args.takes)
+        else:
+            done = dub_explainer(_config(), ws, args.lang, args.plan, args.tts, args.reclone)
     ru = f"{done.ru_duration:.3f} s" if done.ru_duration is not None else "no Russian short to compare"
     print(f"{done.wav}: {done.duration:.3f} s (the Russian short: {ru}), "
           f"voice_mastered: EN {_lufs(done.lufs)}, RU {_lufs(done.ru_lufs)}")
@@ -336,12 +344,13 @@ def main() -> None:
     s.add_argument("--lang", default="en")
     s.set_defaults(fn=cmd_srt)
 
-    s = sub.add_parser("dub", help="the English sound track of a short: a take of a shot, or an explainer")
-    s.add_argument("short", help="a shot (its newest take, or `take`), or an explainer's workspace or name")
+    s = sub.add_parser("dub", help="the English sound track of a shot, explainer or comparison")
+    s.add_argument("short", help="a shot (its newest take, or `take`), or a workspace or name")
     s.add_argument("take", nargs="?", help="the shot's take folder or number")
     s.add_argument("--lang", default="en", help="the track's language: en")
     s.add_argument("--tts", help="inworld or voxcpm (default: the launcher's provider, then its fallback)")
-    s.add_argument("--plan", default="plan.json", help="the explainer's plan, the one of its Russian render")
+    s.add_argument("--plan", default="plan.json", help="the workspace's plan, the one of its Russian render")
+    s.add_argument("--takes", help="comparison takes folder (overrides takes in the plan)")
     s.add_argument("--reclone", action="store_true",
                    help="an explainer: the user's voice made anew from its recordings (cloned again)")
     s.set_defaults(fn=cmd_dub)
