@@ -424,6 +424,9 @@ void Gothic::emitGlobalSound(const Tempest::Sound &sfx) {
   }
 
 void Gothic::emitGlobalSoundWav(std::string_view wav) {
+  // a raw wav goes around SoundFx::selectSample: the sound log names it here
+  if(std::getenv("OPENGOTHIC_SOUND_LOG")!=nullptr)
+    Tempest::Log::i("sfx play: ",wav," (global wav)");
   auto raw = Resources::loadSoundBuffer(wav);
   if(!sndDev)
     return;

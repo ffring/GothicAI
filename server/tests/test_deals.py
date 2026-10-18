@@ -3,6 +3,7 @@ import asyncio
 import gothic_ai.deals
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.contracts import gold_text
+from gothic_ai.crimes import Crimes
 from gothic_ai.deals import Deals, LieRef
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import ToolCall
@@ -379,6 +380,129 @@ async def test_he_forgives_a_lie_and_keeps_quiet_about_it():
         assert BOOK not in (deals.situation(XARDAS) or "")
         o = await offer(forgive=[BOOK])
         assert o.status == "rejected" and "уже простил" in o.output
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+def _theft(chronicle: Chronicle, *, witness: str, victim: str = XARDAS, crime_id: str = "C1"):
+    chronicle.record(
+        {
+            "fact": "crime", "id": crime_id, "kind": "theft", "victim": victim, "owner": victim,
+            "item": POTION, "count": 2, "day": 1, "hour": 14, "minute": 20,
+            "place": {"x": 0, "y": 0, "z": 0}, "waypoint": "FARM", "community": "farm",
+        }
+    )
+    chronicle.record({"fact": "crime_seen", "npc": witness, "crime": crime_id})
+
+
+async def test_crime_deals_require_the_victim_or_an_actual_witness():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    deals.crimes = Crimes(dialogue.link, chronicle)
+    try:
+        _theft(chronicle, witness=XARDAS, victim="LESTER")
+        snap = dialogue.link.snapshots[XARDAS]
+        result = await deals.propose(XARDAS, "Ксардас", {"forgive": ["crime:C1"]}, snap)
+        assert result.status == "rejected" and "только пострадавший" in result.output
+        result = await deals.propose(XARDAS, "Ксардас", {"silence": ["crime:invented"]}, snap)
+        assert result.status == "rejected"
+        assert not chronicle.facts("forgiven") and not chronicle.facts("silenced")
+
+        # Knowing a rumor does not make him a witness who can sell his silence.
+        chronicle.record({
+            "fact": "rumor", "kind": "theft", "crime": "C1", "to": "LOBART", "from": XARDAS, "hops": 1,
+        })
+        result = await deals.propose("LOBART", "Лобарт", {"silence": ["crime:C1"]}, None)
+        assert result.status == "rejected" and "только видевший" in result.output
+
+        result = await deals.propose(XARDAS, "Ксардас", {"silence": ["crime:C1"]}, snap)
+        assert result.status == "accepted" and "crime:C1" in (deals.situation(XARDAS) or "")
+        assert not chronicle.facts("silenced")  # the offer alone changes nothing
+        offer = deals.open[XARDAS]
+        await deals.accept(offer.id, offer.version)
+        assert chronicle.facts("silenced")[0]["crime"] == "C1"
+        assert deals.crimes.known(XARDAS)[0].silenced
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_victim_can_forgive_a_crime_he_heard_of():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    deals.crimes = Crimes(dialogue.link, chronicle)
+    try:
+        _theft(chronicle, witness="LESTER")
+        snap = dialogue.link.snapshots[XARDAS]
+        result = await deals.propose(XARDAS, "Ксардас", {"forgive": ["crime:C1"]}, snap)
+        assert result.status == "rejected"  # being the owner is not knowledge
+        chronicle.record({
+            "fact": "rumor", "kind": "theft", "crime": "C1", "to": XARDAS, "from": "LESTER", "hops": 1,
+        })
+        assert "crime:C1" in (deals.situation(XARDAS) or "")
+        result = await deals.propose(XARDAS, "Ксардас", {"forgive": ["crime:C1"]}, snap)
+        assert result.status == "accepted"
+        offer = deals.open[XARDAS]
+        await deals.accept(offer.id, offer.version)
+        forgiven = chronicle.facts("forgiven")[0]
+        assert (forgiven["crime"], forgiven["npc"], forgiven["paid"]) == ("C1", XARDAS, False)
+        assert deals.crimes.known(XARDAS)[0].forgiven
+        assert "crime:C1" not in (deals.situation(XARDAS) or "")
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_repay_a_theft_returns_the_whole_item_quantity_once():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    deals.crimes = Crimes(dialogue.link, chronicle)
+    try:
+        _theft(chronicle, witness=XARDAS)
+        snap = dialogue.link.snapshots[XARDAS]
+        for wanted in ([], [{"item": POTION, "count": 1}]):
+            result = await deals.propose(
+                XARDAS, "Ксардас", {"repay": ["crime:C1"], "hero_gives": wanted}, snap
+            )
+            assert result.status == "rejected" and "все украденные вещи" in result.output
+        result = await deals.propose(XARDAS, "Ксардас", {
+            "repay": ["crime:C1"], "hero_gives": [{"item": POTION, "count": 2}],
+        }, snap)
+        assert result.status == "accepted"
+        fake.hero_items = {POTION: 2}
+        offer = deals.open[XARDAS]
+        await deals.accept(offer.id, offer.version)
+        assert fake.hero_items[POTION] == 0 and fake.npc_items[XARDAS][POTION] == 5
+        forgiven = chronicle.facts("forgiven")[0]
+        assert forgiven["paid"] and forgiven["hero_gives"][0]["count"] == 2
+        assert chronicle.facts("deal")[0]["repay"] == ["crime:C1"]
+        assert not chronicle.facts("debt_paid")
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_repay_a_theft_by_agreed_price_only_forgives_after_transfer():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    deals.crimes = Crimes(dialogue.link, chronicle)
+    try:
+        _theft(chronicle, witness=XARDAS)
+        snap = dialogue.link.snapshots[XARDAS]
+        result = await deals.propose(XARDAS, "Ксардас", {
+            "repay": ["crime:C1"], "hero_gives": [{"item": GOLD, "count": 30}],
+        }, snap)
+        assert result.status == "accepted"
+        offer = deals.open[XARDAS]
+        fake.hero_items = {GOLD: 29}
+        await deals.accept(offer.id, offer.version)
+        assert not chronicle.facts("forgiven") and fake.hero_items[GOLD] == 29
+        assert not deals.crimes.known(XARDAS)[0].forgiven
+        fake.hero_items[GOLD] = 30
+        await deals.accept(offer.id, offer.version)
+        assert fake.hero_items[GOLD] == 0 and fake.npc_items[XARDAS][GOLD] == 30
+        assert chronicle.facts("forgiven")[0]["paid"]
     finally:
         await link_cm.__aexit__(None, None, None)
 

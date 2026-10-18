@@ -100,6 +100,7 @@ from .questbook import QuestBook
 from .questlog import QuestLog
 from .quests import QuestBoard
 from .replay import replay as replay_turn
+from .scenario_crime_talk import crime_talk as crime_talk_scenario
 from .scenario_crimes import crimes as crimes_scenario
 from .showrunner import Showrunner
 from .sightings import Sightings
@@ -844,14 +845,30 @@ async def serve(args: argparse.Namespace) -> int:
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
         if not args.no_crimes:
-            state.crimes = Crimes(link, state.chronicle, graph=graph)
+            state.crimes = Crimes(
+                link,
+                state.chronicle,
+                graph=graph,
+                dialogue=state.dialogue,
+                places=place_book,
+                names=lambda npc: personas.cards[npc].name if npc in personas.cards else npc,
+            )
+            state.dialogue.extensions.append(state.crimes)
         # the director's triggers fire in the game, with or without the server: the chronicle hears of them
         state.triggers = Triggers(link, state.chronicle)
         talk = state.talk
         # what each npc saw itself: where and how it saw the hero and the people it knows (wave 1 step 6)
         state.sightings = Sightings(
-            link, memory, perception, state.chronicle, knows_hero=knows_hero, journal=journal
+            link,
+            memory,
+            perception,
+            state.chronicle,
+            knows_hero=knows_hero,
+            journal=journal,
+            crimes=state.crimes,
         )
+        if state.crimes is not None:
+            state.crimes.sightings = state.sightings
         state.dialogue.extensions.append(state.sightings)
         # whom it saw lately is its intent's target too, and a companion goes where it saw him (step M2)
         perception.remembered = state.sightings.targets
@@ -867,7 +884,7 @@ async def serve(args: argparse.Namespace) -> int:
         )
         state.dialogue.extensions.append(state.whereabouts)
         # what each npc knows of the hero's word: its lies found out, rumors, claims that were true
-        trust = state.trust = Trust(state.chronicle)
+        trust = state.trust = Trust(state.chronicle, crimes=state.crimes)
         state.dialogue.extensions.append(trust)
         # deals the npc's offer the hero in conversation: a window, the player accepts (docs/npc-tools.md)
         state.deals = Deals(
@@ -877,13 +894,14 @@ async def serve(args: argparse.Namespace) -> int:
             journal=journal,
             names=lambda name: symbol_by_name(personas.cards, name),
             things=graph.things_of if graph is not None else None,
+            crimes=state.crimes,
         )
         state.dialogue.extensions.append(state.deals)
         # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)
         state.dialogue.extensions.append(state.deals.contracts)
         if args.chests:
             # what lies in its chest, as it knows, and it goes to take it out (docs/npc-tools.md «Сундуки»)
-            state.chests = ChestDesk(link, memory, places=place_book, journal=journal)
+            state.chests = ChestDesk(link, memory, places=place_book, journal=journal, crimes=state.crimes)
             state.dialogue.extensions.append(state.chests)
             state.deals.in_chests = state.chests.in_chests
         talk.on_talk_end.append(state.deals.end)
@@ -895,6 +913,8 @@ async def serve(args: argparse.Namespace) -> int:
         # what each npc has on its mind about the hero, and what may come of it (wave 2 step 1)
         state.bodies = Bodies(link)
         state.concerns = Concerns(link, state.chronicle, state.deals)
+        if state.crimes is not None:
+            state.concerns.extra.append(state.crimes.concerns)
         state.guard = StoryGuard(graph)
         if args.lead:
             # it leads the hero to a place, a term of a deal (docs/npc-tools.md, wave 2 step 4)
@@ -1075,7 +1095,12 @@ async def serve(args: argparse.Namespace) -> int:
             ]
         # rumors of the hero's lies go round the people that know each other (story graph, stage 5)
         state.rumors = Rumors(
-            link, state.dialogue, state.chronicle, graph, bonds=state.cast.bonds if state.cast else dict
+            link,
+            state.dialogue,
+            state.chronicle,
+            graph,
+            bonds=state.cast.bonds if state.cast else dict,
+            crimes=state.crimes,
         )
         if state.cast is not None:
             state.cast.on_change.append(state.rumors.people_changed)
@@ -1303,6 +1328,27 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario crimes: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "crime_talk":
+                assert state.crimes is not None and state.dialogue is not None and state.talk is not None
+                assert (
+                    state.rumors is not None and state.witnesses is not None and state.sightings is not None
+                )
+                assert state.deals is not None and state.chests is not None and state.concerns is not None
+                results = await crime_talk_scenario(
+                    link,
+                    state.crimes,
+                    state.dialogue,
+                    state.talk,
+                    state.rumors,
+                    state.witnesses,
+                    state.sightings,
+                    state.deals,
+                    state.chests,
+                    state.concerns,
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario crime_talk: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "ground":
                 assert state.dialogue is not None and state.talk is not None and state.perception is not None
                 results = await scenarios.ground_scenario(link, state.dialogue, state.talk, state.perception)
@@ -1454,9 +1500,7 @@ async def serve(args: argparse.Namespace) -> int:
                 from .scenario_broken import broken_memory
 
                 runner = broken_memory if args.scenario == "broken" else scenarios.trace_memory
-                results = await runner(
-                    link, dialogue, talk, sightings, str(Path(args.trace_dir).parent)
-                )
+                results = await runner(link, dialogue, talk, sightings, str(Path(args.trace_dir).parent))
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
@@ -2271,6 +2315,7 @@ def main() -> None:
             "occasions",
             "questlog",
             "crimes",
+            "crime_talk",
             "showrunner",
             "showrunner_live",
             "vanilla_line",
@@ -2350,7 +2395,9 @@ def main() -> None:
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
     p.add_argument("--no-questlog", action="store_true", help="do not track the scripts' quest states")
-    p.add_argument("--no-crimes", action="store_true", help="do not record the hero's crimes and witnesses")
+    p.add_argument(
+        "--no-crimes", action="store_true", help="disable crimes, knowledge and rumors about deeds"
+    )
     p.add_argument(
         "--no-occasions", action="store_true", help="do not watch for the director's story occasions"
     )

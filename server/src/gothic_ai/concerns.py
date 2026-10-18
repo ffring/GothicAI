@@ -39,6 +39,11 @@ FACTS = frozenset(
         "testimony",
         "initiative",
         "meet_raised",
+        "crime_suspected",
+        "crime_seen",
+        "rumor",
+        "forgiven",
+        "silenced",
     }
 )
 # the agendas quests.py sets when the lie comes out

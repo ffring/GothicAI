@@ -4,6 +4,7 @@ from gothic_ai.amends import Lie as AmendsLie
 from gothic_ai.budget import Budget
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.concerns import Concerns
+from gothic_ai.crimes import Crimes
 from gothic_ai.deals import Deals, LieRef
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import Message, ToolCall
@@ -21,7 +22,7 @@ from gothic_ai.witnesses import ASK_TOOL, Inquiry, Witnesses
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
 from tests.test_perception import HILDA, LOBART, MALETH, look
-from tests.test_sightings import BOOK
+from tests.test_sightings import BOOK, record_theft
 
 ANDRE, STRANGER = "MIL_311_ANDRE", "VLK_999_STRANGER"
 DAY = 1440
@@ -131,6 +132,66 @@ ASK_HILDA = FakeStep(
 CATCH = FakeStep(
     "Так ты врёшь!", [ToolCall("catch_lie", {"said": "всё утро был в городе", "seen": "C1"}, "c1")]
 )
+
+
+async def test_ask_witness_reports_its_actual_crime_seen_and_catches_a_denial_by_that_testimony():
+    fake = FakeGame(branch="A")
+    denial = "я ничего не брал"
+    llm = lobart(
+        ("Ответ:", FakeStep("Хильда видела, а ты врёшь.", [
+            ToolCall("catch_lie", {"said": denial, "seen": "С1"}, "catch"),
+        ])),
+        ("ничего", FakeStep("Хильда, ты видела, что он взял?", [
+            ToolCall("ask_witness", {"who": "Хильду", "said": denial}, "ask"),
+        ])),
+        hilda=[("спрашивает тебя", FakeStep("Я своими глазами видела, как он взял вещь."))],
+    )
+    async with connected(fake) as link:
+        w = World(link, fake, llm)
+        crimes = Crimes(link, w.chronicle)
+        w.seen.crimes = w.witnesses.crimes = crimes
+        record_theft(w.chronicle)
+        w.dialogue.open(LOBART, "Лобарт")
+        await w.dialogue.say_as_player(LOBART, "Я ничего не брал.")
+        await _until(lambda: bool(w.chronicle.facts("caught")), 10)
+
+    testimony = w.chronicle.facts("testimony")[0]
+    assert testimony["saw"] == [] and testimony["told"] == []
+    assert testimony["crime_saw"] == testimony["crime_told"] == ["C1"]
+    caught = w.chronicle.facts("caught")[0]
+    assert (caught["crime"], caught["witness"], caught["testimony"]) == ("C1", HILDA, testimony["id"])
+    assert caught["how"].startswith("узнал со слов: Хильда")
+    reaction = next(c for c in llm.calls if "Ответ:" in str(c[1][-1].content))
+    assert "С1: Хильда" in str(reaction[1][-2].content)
+    assert "видел собственными глазами" in str(reaction[1][-2].content)
+    assert "catch_lie" in [tool.name for tool in reaction[2]]
+    assert w.dialogue.conversations[LOBART].intent.attitude == "wary"
+
+
+async def test_crime_testimony_uses_only_what_witness_saw_before_the_claim_with_exact_evidence_rows():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        crimes = Crimes(link, w.chronicle)
+        w.seen.crimes = w.witnesses.crimes = crimes
+        record_theft(w.chronicle, id="before", hour=8)
+        record_theft(w.chronicle, id="earlier", hour=7)
+        record_theft(w.chronicle, id="after", hour=10)
+        record_theft(w.chronicle, id="rumor", witness=MALETH, hour=6)
+        w.chronicle.record({
+            "fact": "rumor", "crime": "rumor", "kind": "theft", "from": MALETH, "to": HILDA,
+            "hops": 1,
+        })
+        t = await w.witnesses._testify(None, LOBART, "Лобарт", HILDA, "Хильда", "ничего не брал", "far", 0)
+        assert t is not None
+        assert set(t.crime_told) == {"before", "earlier"}
+        assert t.crime_told == t.crime_saw
+        situation = w.witnesses.situation(LOBART) or ""
+        assert "С1: Хильда" in situation and "С2: Хильда" in situation
+        first, second = w.witnesses.told(LOBART, "С1"), w.witnesses.told(LOBART, "С2")
+        assert first is not None and second is not None
+        assert {first.crime, second.crime} == {"before", "earlier"}
+        assert len(w.witnesses.concerns(LOBART)) == 1  # even without an ordinary hero sighting
 
 
 async def test_a_witness_called_over_tells_what_it_saw_and_the_lie_is_caught_by_its_word():
