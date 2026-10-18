@@ -4,12 +4,15 @@ starts there — and the candle flickers to the end. 1080×1920, 30 fps, 2.2 s, 
 
 The pictures and the sound are not in the repository (generated art and a sound of the game): they live in
 ~/.local/share/gothic-ai/brand/sting/ — bg.png (the blank letter, top-down), seal-green.png (the seal on chroma
-green), seal.png (the seal on parchment: the avatar), lettering.png (the name, black with alpha), LOGENTRY.WAV
+green), lettering.png (the name, black with alpha), LOGENTRY.WAV
 (from the game's Sounds.vdf).
 
-    uv run --project shorts python shorts/brand/sting.py   -> <assets>/sting.mp4 (+ sting.png, its frames),
-                                                              <assets>/seal-corner.png (the seal for a short's corner)
+    uv run --project shorts python shorts/brand/sting.py   -> <assets>/sting.mp4 (+ sting.png, its frames)
 """
+
+# Keep the existing rendering and audio commands unchanged. Pillow evaluates
+# point() callbacks immediately within each frame, so they do not escape the loop.
+# ruff: noqa: E501, B023
 
 from __future__ import annotations
 
@@ -19,7 +22,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter
 
 ASSETS = Path.home() / ".local/share/gothic-ai/brand/sting"
 W, H, FPS, LENGTH = 1080, 1920, 30, 2.2
@@ -48,22 +51,6 @@ def keyed(path: Path) -> Image.Image:
     img = Image.merge("RGBA", (r, g, b, a.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1))))
     a = img.split()[3]
     return img.crop(a.point(lambda v: 255 if v > 40 else 0).getbbox())
-
-
-def corner(assets: Path, size: int = 110) -> Path:
-    """The seal for a short's corner: the avatar's seal cut round, a soft dark rim so it holds on any picture."""
-    big = size * 4
-    seal = Image.open(assets / "seal.png").convert("RGB").resize((big, big), Image.LANCZOS)
-    mask = Image.new("L", (big, big), 0)
-    ImageDraw.Draw(mask).ellipse((6, 6, big - 7, big - 7), fill=255)
-    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    rim = mask.filter(ImageFilter.GaussianBlur(10)).point(lambda v: int(v * 0.6))
-    img.paste((15, 10, 8, 255), (0, 0), rim)
-    inner = mask.filter(ImageFilter.MinFilter(9))
-    img.paste(seal, (0, 0), inner)
-    out = assets / "seal-corner.png"
-    img.resize((size, size), Image.LANCZOS).save(out)
-    return out
 
 
 def ease_in(t: float) -> float:
@@ -137,5 +124,4 @@ def render(assets: Path = ASSETS) -> Path:
 
 if __name__ == "__main__":
     where = Path(sys.argv[1]) if len(sys.argv) > 1 else ASSETS
-    print(corner(where))
     print(render(where))

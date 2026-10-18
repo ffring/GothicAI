@@ -1,16 +1,18 @@
+import importlib.util
 import json
 import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from PIL import Image
 
 from gothic_shorts import bed, cli, cut, levels
 from gothic_shorts.shot import Shot
-from gothic_shorts.timeline import build, read_events
+from gothic_shorts.timeline import Timeline, build, read_events
 
 
 def _ffmpeg(*args):
@@ -88,7 +90,6 @@ def synthetic_assets(tmp_path_factory):
         "-c:a", "flac", str(music / "khorinis-countryside.flac"),
     )
     (music / "catalog.tsv").write_text("file\tclean_from_s\nkhorinis-countryside.flac\t2\n")
-    Image.new("RGBA", (10, 10), (255, 214, 102, 255)).save(brand / "seal-corner.png")
     _ffmpeg(
         "-f", "lavfi", "-i", "color=c=blue:s=108x192:r=30:d=1.2",
         "-f", "lavfi", "-i", "sine=frequency=350:sample_rate=48000:duration=1.2",
@@ -102,7 +103,6 @@ def synthetic_assets(tmp_path_factory):
 def _small_cut(monkeypatch, assets):
     monkeypatch.setattr(cut, "W", 108)
     monkeypatch.setattr(cut, "H", 192)
-    monkeypatch.setattr(cut, "SEAL", (90, 10))
     monkeypatch.setattr(cut, "BRAND", assets.brand)
     monkeypatch.setattr(bed, "MUSIC", assets.music)
 
@@ -145,6 +145,95 @@ def _pcm(path):
          "-f", "s16le", "-ar", "48000", "-ac", "2", "-"],
         check=True, capture_output=True,
     ).stdout
+
+
+@pytest.mark.parametrize("brand", [True, False])
+@pytest.mark.parametrize("overlay_count", [0, 2])
+def test_ai_filters_only_overlay_text_and_append_the_ending(tmp_path, monkeypatch, brand, overlay_count):
+    video, audio = tmp_path / "main.mp4", tmp_path / "main.wav"
+    overlays = [cut.Overlay(tmp_path / f"line{i}.png", 0, 2, 20) for i in range(overlay_count)]
+    run = Mock(return_value=SimpleNamespace(returncode=0))
+    monkeypatch.setattr(cut.subprocess, "run", run)
+    monkeypatch.setattr(cut, "BRAND", tmp_path / "brand")
+
+    cut._join(Shot("probe", "Проба", "rec main", brand=brand), video, audio,
+              Timeline(3), overlays, tmp_path, 1.2 if brand else 0)
+
+    command = run.call_args.args[0]
+    inputs = [Path(command[i + 1]) for i, arg in enumerate(command) if arg == "-i"]
+    assert inputs == [video, audio, *(overlay.png for overlay in overlays),
+                      *([cut.BRAND / "sting.mp4"] if brand else [])]
+    graph = command[command.index("-filter_complex") + 1]
+    assert graph.count("overlay=") == overlay_count
+    if brand:
+        index = 2 + overlay_count
+        assert f"[{index}:v]scale=" in graph
+        assert f"[{index}:a]aformat=" in graph
+        assert "[bodyv][bodya][stingv][stinga]concat=n=2:v=1:a=1" in graph
+    else:
+        assert "[stingv]" not in graph and "[stinga]" not in graph
+
+
+@pytest.mark.parametrize("brand", [True, False])
+def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(tmp_path, monkeypatch, brand):
+    spec = importlib.util.spec_from_file_location(
+        "comparison_cut", Path(__file__).resolve().parents[1] / "compare/cut.py",
+    )
+    compare = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compare)
+    plan = {
+        "brand": brand, "labels": {"ru": ["До", "После"]},
+        "hook": {"ru": "Проверка"}, "hook_s": 2,
+        "beats": [
+            {"segment": "main", "start": 0, "end": 3,
+             "slow": {"from": 1, "to": 2, "ru": "Замедлено"},
+             "lines": [{"at": 1, "file": "voice.wav", "words": [["Проверка", 0, 0.8]]}]},
+            {"segment": "next", "start": 0, "end": 3, "title": {"ru": "Следом"}},
+        ],
+    }
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text(json.dumps(plan))
+    commands, concat_lists = [], []
+
+    def run(command):
+        commands.append(command)
+        if "concat" in command:
+            concat_lists.append(Path(command[command.index("-i") + 1]).read_text())
+
+    text_image = Mock()
+    caption_image = Mock()
+    publish = Mock()
+    monkeypatch.setattr(compare, "ROOT", tmp_path)
+    monkeypatch.setattr(compare, "BRAND", tmp_path / "brand")
+    monkeypatch.setattr(compare.sys, "argv", ["cut.py", "probe", "ru", str(plan_file)])
+    monkeypatch.setattr(compare, "text_image", text_image)
+    monkeypatch.setattr(compare, "caption_image", caption_image)
+    monkeypatch.setattr(compare, "run", run)
+    monkeypatch.setattr(compare.subprocess, "run", Mock(return_value=SimpleNamespace(stdout="1.2")))
+    monkeypatch.setattr(compare.levels, "publish", publish)
+
+    compare.main()
+
+    beats = [command for command in commands if "-filter_complex" in command]
+    assert len(beats) == 2
+    for command, expected in zip(beats, [["t0.png", "hook.png", "s0.png", "c0_0_0.png"],
+                                        ["t1.png"]], strict=True):
+        inputs = [Path(command[i + 1]) for i, arg in enumerate(command) if arg == "-i"]
+        assert [path.name for path in inputs if path.suffix == ".png"] == expected
+        graph = command[command.index("-filter_complex") + 1]
+        assert graph.count("overlay=") == len(expected)
+        assert graph.count("overlay=0:0") == len(expected)
+        assert f"[{len(inputs) - 1}]atrim=" in graph  # effects follow the remaining image inputs
+    assert "enable='between(t,1,2)'" in beats[0][beats[0].index("-filter_complex") + 1]
+    text_layers = {call.args[0].name: call.args[1] for call in text_image.call_args_list}
+    assert [(item[3], item[5]) for item in text_layers["s0.png"]] == [(40, "r"), (1000, "r")]
+    assert [item[3] for item in text_layers["t1.png"]] == [40, 1000, 810]
+    assert caption_image.call_count == 1
+    ending = [command for command in commands if str(compare.BRAND / "sting.mp4") in command]
+    assert len(ending) == int(brand)
+    assert len(concat_lists) == 1
+    assert ("sting.mp4" in concat_lists[0]) is brand
+    assert publish.call_args.args[4:6] == (6, 7.2 if brand else 6)
 
 
 def test_synthetic_cut_publishes_calibrated_voice_and_complete_artifacts(published_cut):
@@ -317,7 +406,7 @@ def test_brand_pngs_use_pt_serif_bold_warm_outline_and_shorts_safe_area(tmp_path
     for item, overlay in zip(shown, overlays, strict=True):
         with Image.open(overlay.png) as image:
             left, top, right, bottom = image.getchannel("A").getbbox()
-            assert 60 <= left < right <= 930  # to the left of both Shorts UI and the fixed seal
+            assert 60 <= left < right <= 930  # to the left of the Shorts UI
             assert 150 <= overlay.y + top < overlay.y + bottom <= 1540
             colors = {rgba for count, rgba in image.getcolors(image.width * image.height)}
         assert (20, 12, 8, 255) in colors
