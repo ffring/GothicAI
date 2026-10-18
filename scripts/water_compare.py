@@ -86,6 +86,16 @@ def fragments(rows):
         density = piece['density_kg_m3']
         require(math.isfinite(density) and 0 < density < 1000,
                 f'crate fragment {piece["piece"]}: invalid wooden density {density}')
+        bottom, surface, top = (piece['world_bottom_cm'], piece['water_y_cm'],
+                                piece['world_top_cm'])
+        require(all(value is not None and math.isfinite(value)
+                    for value in (bottom, surface, top)) and bottom < surface < top,
+                f'crate fragment {piece["piece"]}: wooden shell is not floating across the surface')
+        fraction = piece['submerged_fraction']
+        require(math.isfinite(fraction) and 0 < fraction < 1,
+                f'crate fragment {piece["piece"]}: invalid floating submerged fraction {fraction}')
+        require(abs(fraction - density / 1000) < .06,
+                f'crate fragment {piece["piece"]}: displaced volume does not match density')
         require(piece['sleeping'], f'crate fragment {piece["piece"]}: still moving after settling')
     return {'crate_zen_id': crate['zen_id'], 'count': len(pieces),
             'sleeping_count': sum(piece['sleeping'] for piece in pieces),
