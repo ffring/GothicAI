@@ -68,8 +68,13 @@ Gothic::Gothic() {
 #endif
   setBenchmarkMode(CommandLine::inst().isBenchmarkMode());
 
-  if(Resources::hasGraphicsDevice() && Resources::device().properties().raytracing.rayQuery)
+  if(Resources::hasGraphicsDevice() && Resources::device().properties().raytracing.rayQuery) {
     opts.doGi = CommandLine::inst().isRtGi();
+    // GI probes by default on a discrete GPU: ≈0.7 ms on an RTX 3080, an M1 is at 99 % with them
+    // (reports/render-features/2026-10-18); the renderer drops them without -rt
+    if(!CommandLine::inst().hasRtGiArg() && Resources::device().properties().type==Tempest::DeviceType::Discrete)
+      opts.doGi = GiMethod::Probes;
+    }
 
   opts.aaPreset = CommandLine::inst().aaPreset();
 
