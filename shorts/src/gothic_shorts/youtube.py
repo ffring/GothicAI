@@ -40,6 +40,8 @@ CAPTIONS_SCOPE = SCOPES[2]
 API = "https://www.googleapis.com/youtube/v3"
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
 UPLOAD_CAPTIONS = "https://www.googleapis.com/upload/youtube/v3/captions"
+UPLOAD_THUMBNAIL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
+THUMBNAIL_LIMIT = 2 * 1024 * 1024
 CHUNK = 8 * 1024 * 1024
 # the project's channel (GothicAI), by its id: nothing is uploaded anywhere else
 CHANNEL = os.environ.get("GOTHIC_YOUTUBE_CHANNEL", "UCbeAoPh3V7yFVpiuWNI-wkw")
@@ -278,6 +280,22 @@ def add_captions(token: str, vid: str, lang: str, subs: Path) -> str:
     if r.status_code != 200:
         raise YouTubeError(f"captions.insert ({lang}): {r.status_code} {r.text[:300]}")
     return r.json()["id"]
+
+
+def set_thumbnail(token: str, vid: str, file: Path) -> None:
+    """Set a JPEG cover using the same youtube.upload scope as the video upload."""
+    if not file.is_file():
+        raise YouTubeError(f"no thumbnail {file}")
+    if file.stat().st_size > THUMBNAIL_LIMIT:
+        raise YouTubeError(f"thumbnail {file} is over YouTube's 2 MB limit")
+    try:
+        r = httpx.post(UPLOAD_THUMBNAIL, params={"videoId": vid, "uploadType": "media"},
+                       headers={"Authorization": f"Bearer {token}", "Content-Type": "image/jpeg"},
+                       content=file.read_bytes(), timeout=120)
+    except httpx.RequestError as err:
+        raise YouTubeError(f"thumbnails.set: {err}") from err
+    if r.status_code != 200:
+        raise YouTubeError(f"thumbnails.set: {r.status_code} {r.text[:300]}")
 
 
 def upload(video: Path, meta: Meta, token: str) -> str:

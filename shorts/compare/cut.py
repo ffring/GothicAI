@@ -22,6 +22,7 @@ kept as they went out): the end sting after the last beat (shorts/brand/sting.py
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -29,7 +30,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from gothic_shorts import clicks, levels
+from gothic_shorts import clicks, cover, levels
 
 ROOT = Path(__file__).resolve().parents[2]
 W, H, HALF = 1080, 1920, 960
@@ -113,6 +114,34 @@ def caption_states(line: dict, start: float, end: float) -> list[tuple[list[str]
 
 def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+def render_cover(plan: dict, takes: Path, lang: str, out: Path) -> Path | None:
+    """A clean off/on pair at a segment's second, graded exactly like the cut, then template B."""
+    spec = plan.get("cover")
+    if spec is None:
+        print("cover: none (plan has no cover)")
+        return None
+    at = float(spec["at"])
+    if not math.isfinite(at) or at < 0:
+        raise cover.CoverError("cover.at must be a finite, nonnegative second of the segment")
+    inputs = []
+    for take in ("off", "on"):
+        inputs += ["-ss", str(at), "-i", str(takes / take / f"{spec['segment']}.mp4")]
+    graph = ";".join([
+        f"[0:v]scale={W}:{HALF},{GRADE}[a]",
+        f"[1:v]scale={W}:{HALF},{GRADE}[b]",
+        "[a][b]vstack,setsar=1[v]",
+    ])
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        frame = Path(tmp_dir) / "cover-frame.png"
+        run(["ffmpeg", "-nostdin", "-y", *inputs, "-filter_complex", graph,
+             "-map", "[v]", "-frames:v", "1", str(frame)])
+        sub = spec.get("sub", {}).get(lang, "БЫЛО → СТАЛО" if lang == "ru" else "BEFORE → AFTER")
+        with Image.open(frame) as image:
+            result = cover.save(cover.render(image, spec["title"][lang], sub), out.parent / f"cover-{lang}.jpg")
+    print(f"cover: {result}")
+    return result
 
 
 def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: bool = False,
@@ -233,6 +262,7 @@ def main() -> None:
             )
             levels.print_balance(report)
             master(audio.inputs, audio.mix(), out, length, voiced=False)
+    render_cover(plan, takes, lang, out)
     # frames over the whole short, for a look
     run(["ffmpeg", "-y", "-i", str(out), "-vf", "fps=1,scale=270:-2,tile=6x3", "-frames:v", "1",
          str(out.with_suffix(".png"))])
