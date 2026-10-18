@@ -1,0 +1,25 @@
+# Revised Vob immersion on a real shore: insufficient depth must end in quiet floor contact.
+seed 73013
+cheat god
+set time 12 0
+movable on
+destruction on
+noise on
+water on
+overlay off
+view full
+water setup shallow
+wait 30000
+water checkpoint settled
+wait 30000
+water checkpoint continued
+wait 15000
+water checkpoint sleeping
+wait 30000
+water checkpoint stable
+water pickup-ready
+wait 1200
+water pickup
+wait 1500
+water checkpoint picked_up
+physics stats

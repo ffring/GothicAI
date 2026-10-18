@@ -160,6 +160,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     wdynamic = wdynamicFut.get();
     wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
     wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
+    wdynamic->setBuoyancyEnabled(Gothic::physicsFlags().buoyancy);
     wdynamic->setPhysicsNoiseCallback([this](const PhysicsNoise& noise) { emitPhysicsNoise(noise); });
     world.world_mesh = zenkit::Mesh();
     loadProgress(70);
@@ -672,6 +673,7 @@ void World::tick(uint64_t dt) {
   wdynamic->setMovableVobsEnabled(Gothic::physicsFlags().movableVobs);
   wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
   wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
+  wdynamic->setBuoyancyEnabled(Gothic::physicsFlags().buoyancy);
   if(!Gothic::physicsFlags().arrowSticking)
     stuckArrows.clear();
   static bool doTicks=true;
@@ -1233,12 +1235,15 @@ void World::emitPhysicsNoise(const PhysicsNoise& noise) {
                        "ST" : materialTag(noise.surface);
   const auto claySurface = noise.surface==zenkit::MaterialGroup::WOOD ? "WO" :
                            noise.surface==zenkit::MaterialGroup::METAL ? "ME" : "ST";
-  std::string name = noise.material==MAT_CLAY ? std::string("CS_IHL_")+claySurface+"_CL.wav" :
-                                              std::string("CS_IHL_")+materialTag(noise.material)+'_'+surface;
+  const bool splash = noise.surface==zenkit::MaterialGroup::WATER;
+  // Reuse the native splash sample already used by MoveAlgo::emitWaterSplash.
+  std::string name = splash ? "CS_INTRO_WATERSPLASH.WAV" :
+                     noise.material==MAT_CLAY ? std::string("CS_IHL_")+claySurface+"_CL.wav" :
+                                               std::string("CS_IHL_")+materialTag(noise.material)+'_'+surface;
   auto sound = Sound(*this,Sound::T_Regular,name,noise.position,noise.radius,false);
   // Some Gothic installations reference clay samples without shipping them.
   // Reuse the existing vessel impact in that case, keeping the event's material.
-  if(sound.isEmpty() && noise.material==MAT_CLAY) {
+  if(sound.isEmpty() && noise.material==MAT_CLAY && !splash) {
     name = std::string("CS_IHL_GL_")+surface;
     sound = Sound(*this,Sound::T_Regular,name,noise.position,noise.radius,false);
     }

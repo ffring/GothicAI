@@ -6,6 +6,7 @@
 #include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/hitzones.h"
 #include "graphics/mesh/submesh/packedmesh.h"
+#include "graphics/bounds.h"
 #include "game/serialize.h"
 
 #include <Tempest/MemReader>
@@ -18,6 +19,7 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/PhysicsSettings.h>
 
 #include <Jolt/Physics/Collision/CastSphereVsTriangles.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -255,6 +257,269 @@ namespace {
     Tempest::MemReader reader(bytes);
     Serialize input(reader);
     world.loadMovableVobs(input);
+    }
+
+  zenkit::Mesh waterBasin(float floorY=-400.f, bool cave=false) {
+    zenkit::Mesh mesh;
+    mesh.materials.resize(2);
+    mesh.materials[0].group=zenkit::MaterialGroup::STONE;
+    mesh.materials[1].group=zenkit::MaterialGroup::WATER;
+    const auto plane=[&](float y,uint32_t material,bool twoSided) {
+      const auto first=uint32_t(mesh.vertices.size());
+      mesh.vertices.insert(mesh.vertices.end(),{{-2000,y,-2000},{-2000,y,2000},
+                                                {2000,y,2000},{2000,y,-2000}});
+      const auto triangle=[&](uint32_t a,uint32_t b,uint32_t c) {
+        mesh.polygons.vertex_indices.insert(mesh.polygons.vertex_indices.end(),{first+a,first+b,first+c});
+        mesh.polygons.material_indices.push_back(material);
+        };
+      triangle(0,2,1);
+      triangle(0,3,2);
+      if(twoSided) {
+        triangle(0,1,2);
+        triangle(0,2,3);
+        }
+      };
+    plane(floorY,0,false);
+    // Gothic's water queries look upwards from below the surface. Preserve
+    // both faces so the fixture also exercises bodies starting above water.
+    plane(0,1,true);
+    if(cave) plane(-100,0,true);
+    return mesh;
+    }
+
+  void tickWater(DynamicWorld& world,int frames) {
+    for(int i=0;i<frames;++i)
+      world.tick(i%3==2 ? 16 : 17);
+    }
+
+  const DynamicWorld::WaterBodySnapshot& waterBody(
+      const std::vector<DynamicWorld::WaterBodySnapshot>& bodies,uint32_t zenId,size_t piece=size_t(-1)) {
+    const auto found=std::find_if(bodies.begin(),bodies.end(),[&](const auto& body) {
+      return body.zenId==zenId && body.piece==piece;
+      });
+    require(found!=bodies.end(),"water snapshots must retain each native body's parent and piece identity");
+    return *found;
+    }
+
+  void testWaterBuoyancy() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableBox({80,80,80}),PackedMesh::PK_Visual),"CONTRACT_FLOAT.MRM");
+    DynamicWorld world(nullptr,waterBasin());
+    require(world.buoyancyEnabled(),"buoyancy must be enabled by default");
+    require(world.waterRay({0,-50,0},0).hasCol,"water fixture must expose its world surface from below");
+    require(world.waterRay({0,30,0},40).hasCol,"a body with its centre above water must still find a submerged surface");
+    requireNear(world.waterRay({0,-50,0},0).wdepth,0,.001f,"the fixture water must be at zero centimetres");
+
+    auto barrel=world.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-350,110,0),.2f,true,"barrel",true,601);
+    auto table=world.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-150,110,0),.8f,true,"table",true,602);
+    auto crate=world.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-750,110,0),.4f,true,"crate",true,604);
+    auto heavyBarrel=world.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-550,110,0),.8f,true,"barrel",true,605);
+    auto cupboard=world.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-950,110,0),.8f,true,"cupboard",true,606);
+    auto otherWood=world.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-1150,110,0),.8f,true,"other",true,607);
+    const float solidMass=.8f*.8f*.8f*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD);
+    requireNear(barrel.mass(),solidMass*.2f,.001f,"barrel buoyancy must preserve its hull density and authored mass multiplier");
+    requireNear(heavyBarrel.mass(),solidMass*.8f,.001f,"a heavier barrel must preserve its distinct authored physical mass");
+    requireNear(heavyBarrel.mass(),barrel.mass()*4.f,.001f,"barrel physical mass must still scale exactly with its mass multiplier");
+    const float barrelMass=barrel.mass(),heavyBarrelMass=heavyBarrel.mass();
+    Bounds cube;
+    cube.assign(std::pair(Tempest::Vec3(-20,-20,-20),Tempest::Vec3(20,20,20)));
+    Bounds arrow;
+    arrow.assign(std::pair(Tempest::Vec3(-1,-1,-30),Tempest::Vec3(1,1,30)));
+    auto wood=world.addDynamicObj(at(100,110,0),cube,zenkit::MaterialGroup::WOOD);
+    auto metal=world.addDynamicObj(at(300,110,0),cube,zenkit::MaterialGroup::METAL);
+    auto stone=world.addDynamicObj(at(500,110,0),cube,zenkit::MaterialGroup::STONE);
+    auto woodenArrow=world.addDynamicObj(at(700,110,0),arrow,zenkit::MaterialGroup::WOOD);
+    auto metalBlade=world.addDynamicObj(at(900,110,0),arrow,zenkit::MaterialGroup::METAL);
+    const std::array<DynamicWorld::Item*,11> objects={&barrel,&heavyBarrel,&table,&crate,&cupboard,&otherWood,
+                                                    &wood,&metal,&stone,&woodenArrow,&metalBlade};
+    const std::array<const char*,11> names={"barrel","heavier barrel","wooden table","wooden crate","wooden cupboard",
+                                           "other wooden vob","wood item","metal item","stone item",
+                                           "thin wooden arrow","thin metal blade"};
+    std::array<int,11> firstSleep;
+    firstSleep.fill(-1);
+    for(auto* object:objects)
+      require(object->mass()>0 && object->addImpulse({0,-object->mass()*.1f,0}),
+              "water fixtures must wake genuine native dynamic bodies");
+    std::vector<PhysicsNoise> splashes;
+    world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) {
+      if(noise.surface==zenkit::MaterialGroup::WATER) splashes.push_back(noise);
+      });
+    for(int frame=0;frame<1800;++frame) {
+      world.tick(frame%3==2 ? 16 : 17);
+      for(size_t i=0;i<objects.size();++i)
+        if(firstSleep[i]<0 && objects[i]->isSleeping()) firstSleep[i]=frame+1;
+      }
+    for(size_t i=0;i<objects.size();++i) {
+      std::printf("Water %s: mass %.6f kg, centre %.6f cm, first sleep %.3f s, speed %.6f cm/s\n",
+                  names[i],double(objects[i]->mass()),double(objects[i]->position().y),
+                  double(firstSleep[i])/60.,double(objects[i]->velocity().length()));
+      require(firstSleep[i]>0 && objects[i]->isSleeping(),"still water must let every floating or grounded fixture sleep within thirty seconds");
+      }
+    const auto floating=world.waterBodySnapshot();
+    for(const uint32_t id:{601u,605u})
+      requireNear(waterBody(floating,id).submergedFraction,1.f/3.f,.04f,
+                  "both barrel masses must settle with one third of their volume submerged");
+    requireNear(waterBody(floating,604).submergedFraction,.5f,.04f,
+                "a wooden crate must settle with half its volume submerged");
+    for(const uint32_t id:{602u,606u})
+      requireNear(waterBody(floating,id).submergedFraction,.9f,.04f,
+                  "wooden tables and cupboards must settle with ninety percent of their volume submerged");
+    requireNear(waterBody(floating,607).submergedFraction,.6f,.04f,
+                "other wooden vobs must settle with sixty percent of their volume submerged");
+    requireNear(barrel.mass(),barrelMass,0.f,"floating must leave the barrel's exact physical mass unchanged");
+    requireNear(heavyBarrel.mass(),heavyBarrelMass,0.f,"floating must leave the heavier barrel's exact physical mass unchanged");
+    requireNear(barrel.position().y,40.f-80.f/3.f,2.5f,"a barrel's class must set its draft to one third immersion");
+    requireNear(heavyBarrel.position().y,barrel.position().y,2.5f,"different barrel mass multipliers must yield the same draft");
+    requireNear(table.position().y,40.f-80.f*.9f,2.5f,"a wooden table's centre must settle below the surface at ninety percent immersion");
+    require(table.position().y<0.f,"a mostly submerged wooden table must have its centre below water");
+    requireNear(crate.position().y,0.f,2.5f,"a half-submerged wooden crate must have its centre at the water surface");
+    require(barrel.position().y-table.position().y>25.f,"hollow barrel must sit visibly higher than a dense wooden table");
+    requireNear(wood.position().y,20.f-40.f*.7f,2.5f,"solid wood items must float with seventy percent of their volume submerged");
+    requireNear(woodenArrow.position().y,1.f-2.f*.7f,1.f,"a thin wooden item must use its actual shell for water draft");
+    require(metal.position().y<-350.f && stone.position().y<-350.f && metalBlade.position().y<-350.f,
+            "metal, stone and a padded thin metal item must sink to the bottom instead of floating");
+    require(!splashes.empty(),"entering water must emit a water noise through the existing NPC noise callback");
+    require(std::all_of(splashes.begin(),splashes.end(),[](const auto& splash) {
+      return splash.volume>0.f && splash.volume<=1.f && splash.radius>0.f;
+      }),"splash noises must have audible finite volume and a positive NPC hearing radius");
+
+    const auto settled=barrel.matrix();
+    const std::array<Tempest::Matrix4x4,4> extraSettled={crate.matrix(),heavyBarrel.matrix(),cupboard.matrix(),otherWood.matrix()};
+    const auto saved=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
+    DynamicWorld disabledRestore(nullptr,waterBasin());
+    disabledRestore.setBuoyancyEnabled(false);
+    auto disabledBarrel=disabledRestore.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-350,110,0),.2f,true,"barrel",true,601);
+    auto disabledTable=disabledRestore.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-150,110,0),.8f,true,"table",true,602);
+    auto disabledCrate=disabledRestore.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-750,110,0),.4f,true,"crate",true,604);
+    auto disabledHeavyBarrel=disabledRestore.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-550,110,0),.8f,true,"barrel",true,605);
+    auto disabledCupboard=disabledRestore.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-950,110,0),.8f,true,"cupboard",true,606);
+    auto disabledOtherWood=disabledRestore.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-1150,110,0),.8f,true,"other",true,607);
+    loadMovables(disabledRestore,saved);
+    requireMatrix(disabledBarrel.matrix(),settled,"loading with buoyancy disabled must initially restore the saved floating pose");
+    tickWater(disabledRestore,1800);
+    require(disabledBarrel.position().y<-340.f && disabledTable.position().y<-340.f,
+            "loading floating sleepers into a fresh buoyancy=0 world must let both props sink to the bottom");
+    require(disabledCrate.position().y<-340.f && disabledHeavyBarrel.position().y<-340.f &&
+            disabledCupboard.position().y<-340.f && disabledOtherWood.position().y<-340.f,
+            "loading buoyancy=0 must let every wooden vob class and mass sink to the bottom");
+    DynamicWorld restored(nullptr,waterBasin());
+    auto loadedBarrel=restored.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-350,110,0),.2f,true,"barrel",true,601);
+    auto loadedTable=restored.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-150,110,0),.8f,true,"table",true,602);
+    auto loadedCrate=restored.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-750,110,0),.4f,true,"crate",true,604);
+    auto loadedHeavyBarrel=restored.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-550,110,0),.8f,true,"barrel",true,605);
+    auto loadedCupboard=restored.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-950,110,0),.8f,true,"cupboard",true,606);
+    auto loadedOtherWood=restored.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-1150,110,0),.8f,true,"other",true,607);
+    const std::array<DynamicWorld::Item*,4> loadedExtra={&loadedCrate,&loadedHeavyBarrel,&loadedCupboard,&loadedOtherWood};
+    loadMovables(restored,saved);
+    require(loadedBarrel.isSleeping() && loadedTable.isSleeping(),"a fresh world must restore floating props asleep");
+    requireMatrix(loadedBarrel.matrix(),settled,"floating save restore must preserve the complete settled pose before any tick");
+    for(size_t i=0;i<loadedExtra.size();++i) {
+      require(loadedExtra[i]->isSleeping(),"every wooden vob class and mass must restore asleep");
+      requireMatrix(loadedExtra[i]->matrix(),extraSettled[i],"every wooden vob class and mass must restore its complete floating pose");
+      }
+    tickWater(restored,1800);
+    require(loadedBarrel.isSleeping() && loadedTable.isSleeping(),"restored floating props must remain asleep for thirty seconds");
+    requireMatrix(loadedBarrel.matrix(),settled,"a restored floating prop must neither sink nor jump over thirty seconds");
+    for(size_t i=0;i<loadedExtra.size();++i) {
+      require(loadedExtra[i]->isSleeping(),"every restored wooden vob class and mass must remain asleep for thirty seconds");
+      requireMatrix(loadedExtra[i]->matrix(),extraSettled[i],"every restored wooden vob class and mass must remain motionless for thirty seconds");
+      }
+    requireNear(loadedBarrel.mass(),barrelMass,0.f,"save restore must preserve the barrel's exact physical mass");
+    requireNear(loadedHeavyBarrel.mass(),heavyBarrelMass,0.f,"save restore must preserve the heavier barrel's exact physical mass");
+    require(loadedBarrel.addImpulse({loadedBarrel.mass()*.1f,0,0}),"a restored sleeping float must still accept native impulses");
+    tickWater(restored,1800);
+    // A real off-centre contact after waking may rotate the cube. Preserve the
+    // former 2.5 cm / 80 cm volume tolerance without forcing its old orientation.
+    requireNear(waterBody(restored.waterBodySnapshot(),601).submergedFraction,1.f/3.f,2.5f/80.f,
+                "a restored float must recover its class displacement after waking in any orientation");
+
+    world.setBuoyancyEnabled(false);
+    require(!world.buoyancyEnabled(),"the runtime water toggle must disable buoyancy");
+    tickWater(world,1800);
+    require(barrel.position().y<-340.f && table.position().y<-340.f && wood.position().y<-350.f,
+            "buoyancy=0 must wake floating sleepers and restore the old sink-to-bottom behaviour");
+    require(crate.position().y<-340.f && heavyBarrel.position().y<-340.f &&
+            cupboard.position().y<-340.f && otherWood.position().y<-340.f,
+            "buoyancy=0 must wake every wooden vob class and mass and let it sink");
+    world.setBuoyancyEnabled(true);
+    require(world.buoyancyEnabled(),"the runtime water toggle must re-enable buoyancy");
+    tickWater(world,1800);
+    require(barrel.position().y>0.f && wood.position().y>-30.f,
+            "re-enabling buoyancy must let submerged wooden sleepers rise again");
+    const auto refloated=world.waterBodySnapshot();
+    for(const auto expected:{std::pair(601u,1.f/3.f),std::pair(602u,.9f),std::pair(604u,.5f),
+                             std::pair(605u,1.f/3.f),std::pair(606u,.9f),std::pair(607u,.6f)})
+      requireNear(waterBody(refloated,expected.first).submergedFraction,expected.second,.04f,
+                  "re-enabling buoyancy must restore each wooden vob's class immersion independently of mass");
+    }
+
+  void testWaterDenseVobs() {
+    Resources resources;
+    auto metalMesh=movableBox({80,80,80}),stoneMesh=movableBox({80,80,80});
+    metalMesh.sub_meshes[0].mat.group=zenkit::MaterialGroup::METAL;
+    stoneMesh.sub_meshes[0].mat.group=zenkit::MaterialGroup::STONE;
+    ProtoMesh metalProto(PackedMesh(metalMesh,PackedMesh::PK_Visual),"CONTRACT_METAL_WATER.MRM");
+    ProtoMesh stoneProto(PackedMesh(stoneMesh,PackedMesh::PK_Visual),"CONTRACT_STONE_WATER.MRM");
+    DynamicWorld world(nullptr,waterBasin());
+    auto metal=world.addMovableVob(metalProto,"CONTRACT_METAL_WATER.MRM",at(-200,110,0),.03f,true,"barrel",true,608);
+    auto stone=world.addMovableVob(stoneProto,"CONTRACT_STONE_WATER.MRM",at(200,110,0),.03f,true,"barrel",true,609);
+    const std::array<DynamicWorld::Item*,2> objects={&metal,&stone};
+    const std::array<zenkit::MaterialGroup,2> materials={zenkit::MaterialGroup::METAL,zenkit::MaterialGroup::STONE};
+    const std::array<float,2> masses={metal.mass(),stone.mass()};
+    for(size_t i=0;i<objects.size();++i) {
+      const float expected=.8f*.8f*.8f*DynamicWorld::materialDensity(materials[i])*.03f;
+      requireNear(masses[i],expected,.001f,"dense vobs must retain their authored hollow mass multiplier");
+      require(objects[i]->addImpulse({0,-masses[i]*.1f,0}),"dense vob water fixtures must wake native dynamic bodies");
+      }
+    tickWater(world,1800);
+    const auto sunken=world.waterBodySnapshot();
+    for(size_t i=0;i<objects.size();++i) {
+      const auto& body=waterBody(sunken,608u+uint32_t(i));
+      std::printf("Water dense barrel %zu: mass %.6f kg, centre %.6f cm, submerged %.6f, sleeping %d\n",
+                  i,double(objects[i]->mass()),double(objects[i]->position().y),
+                  double(body.submergedFraction),int(objects[i]->isSleeping()));
+      requireNear(objects[i]->mass(),masses[i],0.f,"sinking must leave a dense vob's exact physical mass unchanged");
+      require(objects[i]->isSleeping() && objects[i]->position().y<-300.f && body.worldBounds[1].y<0.f,
+              "metal and stone barrel vobs must fully submerge and sleep at the bottom within thirty seconds despite hollow mass multipliers");
+      requireNear(body.submergedFraction,1.f,.001f,"dense barrel vobs must sink with their entire native hull submerged");
+      }
+    }
+
+  void testWaterShallowAndCave() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableBox({80,80,80}),PackedMesh::PK_Visual),"CONTRACT_WATER_FLOOR.MRM");
+    for(const bool cave:{false,true}) {
+      const float floorY=cave ? -400.f : -10.f;
+      DynamicWorld world(nullptr,waterBasin(floorY,cave));
+      const float birthY=cave ? -170.f : 110.f;
+      if(cave)
+        require(!world.waterRay({0,birthY,0},40).hasCol,
+                "the cave fixture must reject world water separated from its body by a stone ceiling");
+      auto object=world.addMovableVob(proto,"CONTRACT_WATER_FLOOR.MRM",at(0,birthY,0),.8f,true,"table",true,603);
+      require(object.addImpulse({0,-object.mass()*.1f,0}),"shallow and cave fixtures must activate their native bodies");
+      tickWater(world,1800);
+      const auto settled=object.matrix();
+      std::printf("Water %s: centre %.6f cm, sleeping %d, speed %.6f cm/s\n",
+                  cave ? "cave below water" : "ten-centimetre shallows",double(object.position().y),
+                  int(object.isSleeping()),double(object.velocity().length()));
+      require(object.isSleeping(),"a float without sufficient water depth must settle on the bottom without jitter");
+      // CollisionWorld keeps Jolt's default contact slop (2 cm). The movable
+      // hull's 1 mm convex radius preserves its outer bounds, so its lowest
+      // transformed corner may penetrate the floor by that slop, not more.
+      float lowest=std::numeric_limits<float>::infinity();
+      for(float x:{-40.f,40.f}) for(float y:{-40.f,40.f}) for(float z:{-40.f,40.f}) {
+        Tempest::Vec3 corner(x,y,z);
+        settled.project(corner);
+        lowest=std::min(lowest,corner.y);
+        }
+      const JPH::PhysicsSettings contact;
+      const float floorClearance=lowest-floorY;
+      require(floorClearance>=-contact.mPenetrationSlop*100.f-.01f &&
+              floorClearance<=contact.mSpeculativeContactDistance*100.f+.01f,
+              "shallow and cave bodies must rest in the native floor contact band, without excess penetration or hovering");
+      tickWater(world,1800);
+      requireMatrix(object.matrix(),settled,"shallow or cave sleepers must remain completely motionless for thirty more seconds");
+      }
     }
 
   const DynamicWorld::MovableVobContacts& movableContact(
@@ -1283,6 +1548,99 @@ namespace {
         }
       require(!object.isBroken() && world.movableVobSnapshot()[0].health==walker.health,
               "walking into a crate must not consume structural health");
+      }
+    {
+      DynamicWorld world(nullptr,waterBasin());
+      const auto birth=at(0,110,0);
+      auto object=make(world,birth);
+      require(object.addImpulse({0,-object.mass()*.1f,0}),"the floating destruction fixture must enter water dynamically");
+      tickWater(world,1800);
+      require(object.isSleeping(),"a wooden crate must be floating and settled before destruction");
+      requireNear(waterBody(world.waterBodySnapshot(),zenId).submergedFraction,.5f,.04f,
+                  "the destruction fixture must settle with half of its crate volume submerged");
+      requireNear(object.position().y,0.f,2.5f,"the half-submerged destruction crate's centre must settle at the surface");
+      const auto fracture=object.fractureMesh();
+      require(fracture!=nullptr,"the floating crate must retain its preloaded native fragment hulls");
+      require(world.meleeMovableVobs({-140,object.position().y,0},{1,0,0},150,40,1000,FractureRule::Melee::OneHand)==1,
+              "the water fixture must destroy its floating crate through the normal damage path");
+      world.tick(17);
+      require(object.isBroken() && world.fragmentSnapshot().size()==8,
+              "breaking a floating crate must install every native fragment");
+      std::array<int,8> firstSleep;
+      firstSleep.fill(-1);
+      for(int frame=0;frame<1800;++frame) {
+        world.tick(frame%3==2 ? 16 : 17);
+        for(const auto& piece:world.fragmentSnapshot())
+          if(piece.piece<firstSleep.size() && piece.sleeping && firstSleep[piece.piece]<0)
+            firstSleep[piece.piece]=frame+1;
+        }
+      const auto pieces=world.fragmentSnapshot();
+      const auto floatingWater=world.waterBodySnapshot();
+      require(pieces.size()==8,"nearby floating fragments must remain present after settling");
+      for(const auto& piece:pieces) {
+        auto center=fracture->pieces[piece.piece].center;
+        piece.transform.project(center);
+        const auto& body=waterBody(floatingWater,zenId,piece.piece);
+        std::printf("Water crate fragment %zu: centre %.6f cm, submerged %.6f, sleeping %d, speed %.6f cm/s, first sleep %.3f s\n",
+                    piece.piece,double(center.y),double(body.submergedFraction),int(piece.sleeping),
+                    double(piece.velocity.length()),double(firstSleep[piece.piece])/60.);
+        }
+      for(const auto& piece:pieces) {
+        auto center=fracture->pieces[piece.piece].center;
+        piece.transform.project(center);
+        require(piece.sleeping && center.y>-50.f && center.y<100.f,
+                "every wooden crate fragment must float and sleep instead of falling to the bottom");
+        require(firstSleep[piece.piece]>0,
+                "every wooden crate fragment must first sleep within thirty seconds");
+        requireNear(waterBody(floatingWater,zenId,piece.piece).submergedFraction,.6f,.05f,
+                    "every wooden crate fragment must settle with sixty percent of its actual hull submerged");
+        }
+      const auto saved=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
+      DynamicWorld disabledRestore(nullptr,waterBasin());
+      disabledRestore.setBuoyancyEnabled(false);
+      auto disabledObject=make(disabledRestore,birth);
+      loadMovables(disabledRestore,saved);
+      require(disabledObject.isBroken() && disabledRestore.fragmentSnapshot().size()==pieces.size(),
+              "loading buoyancy=0 must preserve the broken parent and all saved floating fragments");
+      tickWater(disabledRestore,1800);
+      const auto sunken=disabledRestore.fragmentSnapshot();
+      require(sunken.size()==pieces.size(),"all buoyancy=0 fragments must survive while settling near the observer");
+      for(const auto& piece:sunken) {
+        float highest=-std::numeric_limits<float>::infinity();
+        for(const auto& triangle:fracture->pieces[piece.piece].triangles)
+          for(const auto& vertex:triangle.vertices) {
+            auto point=vertex.position;
+            piece.transform.project(point);
+            highest=std::max(highest,point.y);
+            }
+        // Cut pieces can stack at the bottom. They must all become fully
+        // submerged and stop, rather than each touching the same floor plane.
+        require(piece.sleeping && highest<0.f,
+                "loading floating fragment sleepers into a fresh buoyancy=0 world must let every piece sink and settle underwater");
+        }
+      tickWater(disabledRestore,1800);
+      const auto stillSunken=disabledRestore.fragmentSnapshot();
+      require(stillSunken.size()==sunken.size(),"settled buoyancy=0 fragments must remain present for thirty more seconds");
+      for(size_t i=0;i<sunken.size();++i) {
+        require(stillSunken[i].sleeping,"sunken buoyancy=0 fragment stacks must remain asleep");
+        requireMatrix(stillSunken[i].transform,sunken[i].transform,
+                      "sunken buoyancy=0 fragment stacks must remain completely motionless for thirty more seconds");
+        }
+      DynamicWorld restored(nullptr,waterBasin());
+      auto restoredObject=make(restored,birth);
+      loadMovables(restored,saved);
+      require(restoredObject.isBroken(),"loading floating debris must preserve the broken parent");
+      tickWater(restored,1800);
+      const auto loaded=restored.fragmentSnapshot();
+      const auto loadedWater=restored.waterBodySnapshot();
+      require(loaded.size()==pieces.size(),"fresh-world load must restore every sleeping floating fragment");
+      for(size_t i=0;i<pieces.size();++i) {
+        require(loaded[i].sleeping,"loaded floating fragments must remain asleep over thirty seconds");
+        requireMatrix(loaded[i].transform,pieces[i].transform,
+                      "loaded floating fragments must retain their complete settled poses over thirty seconds");
+        requireNear(waterBody(loadedWater,zenId,loaded[i].piece).submergedFraction,.6f,.05f,
+                    "restored wooden crate fragments must retain sixty percent hull immersion");
+        }
       }
     {
       setenv("OPENGOTHIC_FRACTURE","",1);
@@ -3177,6 +3535,9 @@ int main() {
     testMovableVobGeometryAuthoredToggle();
     testMovableVobClampedSavePose();
     testMovableVobSave();
+    testWaterBuoyancy();
+    testWaterDenseVobs();
+    testWaterShallowAndCave();
     testMovableTraceThresholds();
     testMovableVobArrowIdentity();
     testSkinnedMeshMinimum();

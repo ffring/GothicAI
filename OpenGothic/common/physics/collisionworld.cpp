@@ -13,7 +13,9 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Geometry/GJKClosestPoint.h>
+#include <Jolt/Geometry/Plane.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/PhysicsStepListener.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyFilter.h>
@@ -46,6 +48,18 @@
 #endif
 
 namespace {
+  bool waterThing(int category) {
+    return category==DynamicWorld::C_Item || category==DynamicWorld::C_MovableVob || category==DynamicWorld::C_Fragment;
+    }
+
+  void submergedVolume(const JPH::Body& body, const JPH::Shape& shape, float waterY,
+                       float& total, float& submerged, JPH::Vec3& center) {
+    const auto relative=JPH::RVec3(0,waterY,0)-body.GetCenterOfMassPosition();
+    const auto plane=JPH::Plane::sFromPointAndNormal(JPH::Vec3(relative),JPH::Vec3::sAxisY());
+    shape.GetSubmergedVolume(JPH::Mat44::sRotation(body.GetRotation()),JPH::Vec3::sOne(),
+                             plane,total,submerged,center JPH_IF_DEBUG_RENDERER(,body.GetCenterOfMassPosition()));
+    }
+
   constexpr JPH::BroadPhaseLayer staticLayer(0);
   constexpr JPH::BroadPhaseLayer dynamicLayer(1);
   constexpr JPH::BroadPhaseLayer sensorLayer(2);
@@ -296,7 +310,11 @@ uint32_t Physics::triangleData(const JPH::Shape& shape, JPH::SubShapeID subShape
   return 0;
   }
 
-struct CollisionWorld::Impl final : JPH::ContactListener {
+struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListener {
+  std::function<void(float)> waterStep;
+  void OnStep(const JPH::PhysicsStepListenerContext& context) override {
+    if(waterStep) waterStep(context.mDeltaTime);
+    }
   struct NoiseImpact {
     JPH::BodyID body,other;
     Tempest::Vec3 point;
@@ -1146,6 +1164,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::carry(uint
 CollisionWorld::CollisionWorld() {
   Physics::initialize();
   impl = std::make_unique<Impl>();
+  impl->waterStep=[this](float seconds) { applyBuoyancyStep(seconds); };
   }
 
 CollisionWorld::~CollisionWorld() {
@@ -1190,6 +1209,7 @@ void CollisionWorld::CollisionBody::setObjMatrix(const Tempest::Matrix4x4& matri
   if((scale-transform.scale).LengthSq()>1.0e-10f) {
     scale = transform.scale;
     scaledShape = ::scaledShape(baseShape.GetPtr(),scale);
+    if(buoyancyBaseShape!=nullptr) buoyancyShape=::scaledShape(buoyancyBaseShape.GetPtr(),scale);
     owner->impl->system.GetBodyInterface().SetShape(id,scaledShape.GetPtr(),false,JPH::EActivation::DontActivate);
     }
   owner->impl->system.GetBodyInterface().SetPositionAndRotationWhenChanged(id,transform.position,transform.rotation,JPH::EActivation::DontActivate);
@@ -1197,9 +1217,34 @@ void CollisionWorld::CollisionBody::setObjMatrix(const Tempest::Matrix4x4& matri
 
 void CollisionWorld::CollisionBody::restoreTransform(const Tempest::Matrix4x4& matrix, bool sleeping) {
   setObjMatrix(matrix);
+  // A restored sleeping float is already in equilibrium. Discovering its
+  // water surface must not turn load into a fresh water entry or wake it.
+  bool restoredSleep=sleeping;
+  if(sleeping && !owner->buoyancy && waterThing(categoryId) && owner->waterSurface) {
+    Tempest::Vec3 center;
+    float bottom=0;
+    {
+      JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+      if(lock.Succeeded()) {
+        const auto& body=lock.GetBody();
+        const auto* shape=buoyancyShape!=nullptr ? buoyancyShape.GetPtr() : body.GetShape();
+        const auto bounds=shape->GetWorldSpaceBounds(body.GetCenterOfMassTransform(),JPH::Vec3::sOne());
+        center=toCentimeters(body.GetCenterOfMassPosition());
+        bottom=bounds.mMin.GetY()*100.f;
+        }
+      }
+    // OFF changes a saved float, while dry sleeping props retain the previous
+    // load behaviour. Query outside the native lock, just like ordinary water.
+    float surface=0;
+    if(owner->waterSurface(center,bottom,surface) && surface>bottom) restoredSleep=false;
+    }
+  waterInitialized=false;
+  waterPreserveSleep=restoredSleep;
+  inWater=false;
+  waterRestTime=0;
   auto& bodies = owner->impl->system.GetBodyInterface();
   bodies.SetLinearAndAngularVelocity(id,JPH::Vec3::sZero(),JPH::Vec3::sZero());
-  if(sleeping)
+  if(restoredSleep)
     bodies.DeactivateBody(id);
   else
     bodies.ActivateBody(id);
@@ -1216,6 +1261,7 @@ void CollisionWorld::CollisionBody::setScale(const Tempest::Vec3& value) {
   auto result = ::scaledShape(baseShape.GetPtr(),next);
   scale = next;
   scaledShape = std::move(result);
+  if(buoyancyBaseShape!=nullptr) buoyancyShape=::scaledShape(buoyancyBaseShape.GetPtr(),scale);
   owner->impl->system.GetBodyInterface().SetShape(id,scaledShape.GetPtr(),false,JPH::EActivation::DontActivate);
   }
 
@@ -1229,6 +1275,17 @@ void CollisionWorld::CollisionBody::setShape(JPH::ShapeRefC shape) {
 void CollisionWorld::CollisionBody::setPayload(void* payload, int type) {
   pointer = payload;
   pointerType = type;
+  }
+
+void CollisionWorld::CollisionBody::setBuoyancyShape(JPH::ShapeRefC shape) {
+  buoyancyBaseShape=std::move(shape);
+  buoyancyShape=::scaledShape(buoyancyBaseShape.GetPtr(),scale);
+  waterInitialized=false;
+  waterRestTime=0;
+  }
+
+void CollisionWorld::CollisionBody::setBuoyancyFraction(float fraction) {
+  buoyancyFraction=std::isfinite(fraction) && fraction>0.f ? fraction : 0.f;
   }
 
 void CollisionWorld::CollisionBody::setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what) {
@@ -1918,6 +1975,7 @@ void CollisionWorld::tick(uint64_t dt) {
   const auto started=std::chrono::steady_clock::now();
   constexpr float step = 1.f/60.f;
   bool advanced = false;
+  std::vector<PhysicsNoise> splashes;
   if(!rigid.empty() || !ragdolls.empty()) {
     accumulatedTime += float(dt)/1000.f;
     int wholeSteps = 0;
@@ -1930,6 +1988,7 @@ void CollisionWorld::tick(uint64_t dt) {
     const int count = std::min(wholeSteps,2);
     for(int i=0;i<count;++i) {
       ++impl->simulationStep;
+      prepareBuoyancy(splashes);
       for(auto* body:ragdolls) body->prepareKinematicStep(step);
       const bool dynamicRagdolls=std::any_of(ragdolls.begin(),ragdolls.end(),[](const Ragdoll* body) { return !body->isKinematic(); });
       constexpr int fragmentSteps=4;
@@ -1963,7 +2022,17 @@ void CollisionWorld::tick(uint64_t dt) {
       // and a quarter inner radius per fragment step. A fixed step count alone
       // cannot stop long pieces rotating through a thin terrain triangle.
       // Sleeping fragments leave the previous simulation cost intact.
+      // A dry neighbour may wake a sleeping float during Update. Keep water
+      // support available on the remaining substeps without waking the float.
+      const bool waterSteps=buoyancy && impl->system.GetNumActiveBodies(JPH::EBodyType::RigidBody)>0 &&
+                            std::any_of(rigid.begin(),rigid.end(),[](const DynamicBody* body) { return body->inWater; });
+      // The same fixed step can contain four fragment collision steps or two
+      // rig steps. Support must be applied before each of them, just like
+      // gravity, or still floats acquire a persistent integration velocity.
+      if(waterSteps) impl->system.AddStepListener(impl.get());
       impl->system.Update(float(step),activeFragments ? fragmentSteps : dynamicRagdolls ? 2 : 1,&impl->allocator,&impl->jobs);
+      if(waterSteps) impl->system.RemoveStepListener(impl.get());
+      finishBuoyancy(step);
       for(auto* body:ragdolls) body->finishKinematicStep();
       advanced = true;
       }
@@ -1975,6 +2044,8 @@ void CollisionWorld::tick(uint64_t dt) {
     // bodies, advancing contacts or emitting callbacks, at the main tick boundary.
     impl->system.Update(0.f,1,&impl->allocator,&impl->jobs);
     }
+
+  for(const auto& splash:splashes) emitPhysicsNoise(splash);
 
   std::vector<Impl::Impact> impacts;
   std::vector<Impl::NoiseImpact> noises;
@@ -2160,8 +2231,8 @@ void CollisionWorld::tick(uint64_t dt) {
       m[13] *= 100.f;
       m[14] *= 100.f;
       matrix.setData(m);
-      bool keepSleeping = false;
-      if(!native.IsActive()) {
+      bool keepSleeping = buoyancy && body->inWater;
+      if(!native.IsActive() && !keepSleeping) {
         const float range = toMeters(DynamicWorld::characterItemRange);
         for(const auto* character:impl->virtualCharacters) {
           if((native.GetPosition()-character->impl->character->GetPosition()).LengthSq()<=range*range) {
@@ -2172,10 +2243,11 @@ void CollisionWorld::tick(uint64_t dt) {
         }
       // Legacy items lose their body at rest. A nearby virtual character needs
       // that sleeping body to remain queryable so a native contact can wake it.
-      // Removing the opt-in controller restores the original cleanup policy.
+      // A sleeping water item also retains its native body, independently of
+      // characters, so save/load, pickup and a buoyancy toggle remain physical.
       disable = (!native.IsActive() && !keepSleeping) || native.GetPosition().GetY()<bboxMin.GetY()-100.f;
       }
-    item->setObjMatrix(matrix);
+    item->setPhysicsMatrix(matrix);
     if(disable)
       item->setPhysicsDisable();
     }
@@ -2228,6 +2300,202 @@ size_t CollisionWorld::bodyCount() const { return impl->system.GetNumBodies(); }
 float CollisionWorld::stepMilliseconds() const { return impl->stepMilliseconds; }
 uint64_t CollisionWorld::rayCount() const { return impl->lastRayCount; }
 uint64_t CollisionWorld::simulationStep() const { return impl->simulationStep; }
+
+void CollisionWorld::setWaterSurfaceCallback(std::function<bool(const Tempest::Vec3&,float,float&)> callback) {
+  waterSurface=std::move(callback);
+  }
+
+void CollisionWorld::setBuoyancyEnabled(bool enabled) {
+  if(buoyancy==enabled) return;
+  buoyancy=enabled;
+  for(auto* body:rigid) {
+    if(!waterThing(body->category())) continue;
+    float surface=0;
+    JPH::Vec3 min,max;
+    body->getAabb(min,max);
+    const bool wet=waterSurface && waterSurface(body->centerOfMass(),min.GetY()*100.f,surface) &&
+                   surface>min.GetY()*100.f;
+    {
+      JPH::BodyLockWrite lock(impl->system.GetBodyLockInterface(),body->id);
+      if(lock.Succeeded()) lock.GetBody().SetAllowSleeping(true);
+      }
+    body->waterSleepDisabled=false;
+    body->waterRestTime=0;
+    // Both switching off a sleeping float and switching on a sunken wooden
+    // object must take effect immediately. Unrelated dry props stay asleep.
+    if(wet || body->inWater) impl->system.GetBodyInterface().ActivateBody(body->id);
+    }
+  }
+
+bool CollisionWorld::buoyancyEnabled() const { return buoyancy; }
+
+void CollisionWorld::prepareBuoyancy(std::vector<PhysicsNoise>& splashes) {
+  if(!buoyancy || !waterSurface) return;
+  for(auto* wrapper:rigid) {
+    if(!waterThing(wrapper->category()) || (wrapper->waterInitialized && wrapper->isSleeping())) continue;
+    // Never hold a native body lock while querying the world: rayCast obtains
+    // its own locks, including for overlapping sensors.
+    Tempest::Vec3 center;
+    float bottom=0;
+    {
+      JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),wrapper->id);
+      if(!lock.Succeeded()) continue;
+      const auto& body=lock.GetBody();
+      const auto* shape=wrapper->buoyancyShape!=nullptr ? wrapper->buoyancyShape.GetPtr() : body.GetShape();
+      const auto bounds=shape->GetWorldSpaceBounds(body.GetCenterOfMassTransform(),JPH::Vec3::sOne());
+      bottom=bounds.mMin.GetY()*100.f;
+      center=toCentimeters(body.GetCenterOfMassPosition());
+      }
+    float surface=0;
+    const bool hasWater=waterSurface(center,bottom,surface);
+    bool activate=false;
+    {
+      JPH::BodyLockWrite lock(impl->system.GetBodyLockInterface(),wrapper->id);
+      if(!lock.Succeeded()) continue;
+      auto& body=lock.GetBody();
+      if(!body.IsDynamic()) continue;
+      const auto* shape=wrapper->buoyancyShape!=nullptr ? wrapper->buoyancyShape.GetPtr() : body.GetShape();
+      float total=0,submerged=0;
+      JPH::Vec3 buoyancyCenter=JPH::Vec3::sZero();
+      if(hasWater) submergedVolume(body,*shape,surface*.01f,total,submerged,buoyancyCenter);
+      const bool wet=hasWater && submerged>0.f && total>0.f;
+      const bool entering=wrapper->waterInitialized && !wrapper->inWater && wet;
+      activate=wet && !wrapper->waterInitialized && !wrapper->waterPreserveSleep && !body.IsActive();
+      wrapper->waterPreserveSleep=false;
+      wrapper->waterInitialized=true;
+      wrapper->waterY=surface;
+      wrapper->inWater=wet;
+      if(!wet) {
+        wrapper->waterRestTime=0;
+        if(wrapper->waterSleepDisabled) body.SetAllowSleeping(true);
+        wrapper->waterSleepDisabled=false;
+        continue;
+        }
+      if(entering && body.IsActive() && impl->simulationStep>=wrapper->nextSplashStep) {
+        const float speed=body.GetLinearVelocity().Length();
+        const float momentum=speed/body.GetMotionProperties()->GetInverseMass();
+        if(speed>.2f && momentum>.02f) {
+          PhysicsNoise noise;
+          noise.position={center.x,surface,center.z};
+          noise.material=wrapper->noiseMaterial;
+          noise.surface=zenkit::MaterialGroup::WATER;
+          noise.what=wrapper->noiseWhat+" splash";
+          noise.body=wrapper->nativeId();
+          noise.impulse=momentum;
+          noise.volume=std::clamp(std::sqrt(momentum)/12.f,.015f,1.f);
+          noise.radius=100.f+1500.f*noise.volume;
+          const auto culprit=impl->simulationStep<=wrapper->noiseCulpritUntilStep ? wrapper->noiseCulprit.lock() : nullptr;
+          noise.culprit=culprit!=nullptr ? static_cast<Npc*>(culprit->user_ptr) : nullptr;
+          splashes.push_back(std::move(noise));
+          wrapper->nextSplashStep=impl->simulationStep+45;
+          }
+        }
+      // BodyInterface::ApplyBuoyancyImpulse activates on every call. Calling
+      // Body directly lets settled and restored sleeping things stay asleep.
+      if(!body.IsActive() && !activate) continue;
+      if(wrapper->waterRestTime<2.f && !wrapper->waterSleepDisabled) {
+        body.SetAllowSleeping(false);
+        wrapper->waterSleepDisabled=true;
+        }
+      }
+    if(activate) impl->system.GetBodyInterface().ActivateBody(wrapper->id);
+    }
+  }
+
+void CollisionWorld::applyBuoyancyStep(float seconds) {
+  // Jolt invokes step listeners while all body mutexes are held. Water rays
+  // ran before Update; this callback only touches our cached wet rigid bodies
+  // through the NoLock interface and never invokes game callbacks.
+  for(auto* wrapper:rigid) {
+    if(!wrapper->inWater) continue;
+    JPH::BodyLockWrite lock(impl->system.GetBodyLockInterfaceNoLock(),wrapper->id);
+    if(!lock.Succeeded()) continue;
+    auto& body=lock.GetBody();
+    if(!body.IsActive()) continue;
+    const auto* shape=wrapper->buoyancyShape!=nullptr ? wrapper->buoyancyShape.GetPtr() : body.GetShape();
+    float total=0,submerged=0;
+    JPH::Vec3 buoyancyCenter=JPH::Vec3::sZero();
+    submergedVolume(body,*shape,wrapper->waterY*.01f,total,submerged,buoyancyCenter);
+    if(total<=0.f || submerged<=0.f) continue;
+    const float inverseMass=body.GetMotionProperties()->GetInverseMass();
+    const float factor=wrapper->buoyancyFraction>0.f ? 1.f/wrapper->buoyancyFraction : 1000.f*total*inverseMass;
+    // Dampen old velocity, then add support with the same equilibrium fraction.
+    const float supportedMass=std::clamp((submerged/total)*factor,0.f,1.f);
+    const float damping=std::exp(-2.f*supportedMass*seconds);
+    body.SetLinearVelocity(body.GetLinearVelocity()*damping);
+    body.SetAngularVelocity(body.GetAngularVelocity()*damping);
+    body.ApplyBuoyancyImpulse(total,submerged,buoyancyCenter,factor,.8f,.15f,
+                              JPH::Vec3::sZero(),impl->system.GetGravity(),seconds);
+    }
+  }
+
+void CollisionWorld::finishBuoyancy(float seconds) {
+  if(!buoyancy) return;
+  for(auto* wrapper:rigid) {
+    if(!waterThing(wrapper->category()) || !wrapper->inWater) continue;
+    {
+      JPH::BodyLockWrite lock(impl->system.GetBodyLockInterface(),wrapper->id);
+      if(!lock.Succeeded()) continue;
+      auto& body=lock.GetBody();
+      if(!body.IsActive()) continue;
+      const auto* shape=wrapper->buoyancyShape!=nullptr ? wrapper->buoyancyShape.GetPtr() : body.GetShape();
+      const float radius=shape->GetLocalBounds().GetExtent().Length();
+      const float pointSpeed=body.GetLinearVelocity().Length()+radius*body.GetAngularVelocity().Length();
+      wrapper->waterRestTime=pointSpeed<.01f ? wrapper->waterRestTime+seconds : 0.f;
+      // Let Jolt sleep the whole contact island together. Deactivating one
+      // float by itself can freeze a support while its neighbour still moves,
+      // immediately waking it and dropping its water support mid-update.
+      if(wrapper->waterRestTime>=2.f && wrapper->waterSleepDisabled) {
+        body.SetAllowSleeping(true);
+        wrapper->waterSleepDisabled=false;
+        }
+      else if(wrapper->waterRestTime==0.f && !wrapper->waterSleepDisabled) {
+        body.SetAllowSleeping(false);
+        wrapper->waterSleepDisabled=true;
+        }
+      }
+    }
+  }
+
+std::vector<CollisionWorld::WaterBodySnapshot> CollisionWorld::waterBodySnapshot() const {
+  std::vector<WaterBodySnapshot> result;
+  for(const auto* wrapper:rigid) {
+    if(!waterThing(wrapper->category())) continue;
+    WaterBodySnapshot entry;
+    entry.body=wrapper;
+    entry.transform=wrapper->matrix();
+    Tempest::Vec3 center;
+    {
+      JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),wrapper->id);
+      if(!lock.Succeeded()) continue;
+      const auto& body=lock.GetBody();
+      const auto* shape=wrapper->buoyancyShape!=nullptr ? wrapper->buoyancyShape.GetPtr() : body.GetShape();
+      const auto bounds=shape->GetWorldSpaceBounds(body.GetCenterOfMassTransform(),JPH::Vec3::sOne());
+      entry.worldBounds[0]=toCentimeters(bounds.mMin);
+      entry.worldBounds[1]=toCentimeters(bounds.mMax);
+      entry.mass=1.f/body.GetMotionProperties()->GetInverseMass();
+      entry.density=entry.mass/shape->GetVolume();
+      entry.sleeping=!body.IsActive();
+      entry.velocity=toCentimeters(body.GetLinearVelocity());
+      center=toCentimeters(body.GetCenterOfMassPosition());
+      }
+    if(waterSurface && waterSurface(center,entry.worldBounds[0].y,entry.waterY)) {
+      JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),wrapper->id);
+      if(lock.Succeeded()) {
+        const auto& body=lock.GetBody();
+        const auto* shape=wrapper->buoyancyShape!=nullptr ? wrapper->buoyancyShape.GetPtr() : body.GetShape();
+        float total=0,submerged=0;
+        JPH::Vec3 centerOfBuoyancy;
+        submergedVolume(body,*shape,entry.waterY*.01f,total,submerged,centerOfBuoyancy);
+        entry.submergedFraction=total>0.f ? submerged/total : 0.f;
+        entry.inWater=submerged>0.f;
+        }
+      }
+    else entry.waterY=0.f;
+    result.push_back(std::move(entry));
+    }
+  return result;
+  }
 
 void CollisionWorld::setBBox(JPH::Vec3Arg min, JPH::Vec3Arg) {
   bboxMin = min;

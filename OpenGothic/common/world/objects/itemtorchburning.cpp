@@ -2,21 +2,31 @@
 
 #include "world/world.h"
 
-ItemTorchBurning::ItemTorchBurning(World& owner, size_t inst, Item::Type type)
-  :Item(owner,inst,type) {
+ItemTorchBurning::ItemTorchBurning(World& owner, size_t inst, Item::Type type, const Tempest::Matrix4x4& initial)
+  :Item(owner,inst,type,initial) {
+  view.setVisual(handle(),owner,false);
+  view.setObjMatrix(transform());
+  setPhysicsEnable(owner);
+  }
+
+ItemTorchBurning::ItemTorchBurning(Item&& loaded)
+  :Item(std::move(loaded)) {
+  // The legacy Item stream has already restored the script fields and pose.
+  // Its optional physics entry will create the native body afterwards.
+  view.setVisual(handle(),world,false);
+  view.setObjMatrix(transform());
+  }
+
+void ItemTorchBurning::setPhysicsEnable(World& owner) {
   auto& sc = owner.script();
-
-  auto hitem = std::make_shared<zenkit::IItem>();
-  sc.initializeInstanceItem(hitem, inst);
-  view.setVisual(*hitem,owner,false);
-
   size_t torchId = sc.findSymbolIndex("ItLsTorchburned");
   if(torchId!=size_t(-1)) {
     auto hitem = std::make_shared<zenkit::IItem>();
     sc.initializeInstanceItem(hitem, torchId);
     auto m = Resources::loadMesh(hitem->visual);
-    setPhysicsEnable(m);
+    Item::setPhysicsEnable(m);
     }
+  owner.invalidateVobIndex();
   }
 
 void ItemTorchBurning::clearView() {
@@ -26,6 +36,11 @@ void ItemTorchBurning::clearView() {
 
 bool ItemTorchBurning::isTorchBurn() const {
   return true;
+  }
+
+void ItemTorchBurning::setPhysicsMatrix(const Tempest::Matrix4x4& matrix) {
+  Item::setPhysicsMatrix(matrix);
+  view.setObjMatrix(transform());
   }
 
 void ItemTorchBurning::moveEvent() {
