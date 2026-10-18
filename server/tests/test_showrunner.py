@@ -11,6 +11,8 @@ import pytest
 
 from gothic_ai.cast import Cast, Person
 from gothic_ai.characters import Card
+from gothic_ai.crime_law import CrimeLaw
+from gothic_ai.crimes import Crimes
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.memory import MemoryStore
@@ -198,7 +200,8 @@ async def world(story_graph, *proposals, gather_s=0):
         state = World(fake, clock, runner, author, chains, casting, llm)
 
         async def make_chain(
-            npc, *, new_people=False, premise="", max_people=None, requires=None, follows="", quest_count=None
+            npc, *, new_people=False, premise="", max_people=None, requires=None, follows="",
+            quest_count=None, crime="",
         ):
             first = quest(id=author.book.next_id(), giver=npc)
             quests = [first]
@@ -623,6 +626,7 @@ async def test_an_arrival_and_a_deed_five_seconds_later_make_one_decision(graph)
             deed = {"fact": "died", "npc": "BANDIT", "killer": "PLAYER", "monster": False}
             w.chronicle.record(deed)
             await w.showrunner.occasions.poll()
+            await w.showrunner.occasions.poll()
             assert len(w.showrunner.occasions.pending) == 2 and w.llm.calls == []
             w.clock.t += 5
             w.showrunner.occasions._changed.set()
@@ -703,6 +707,125 @@ def test_proposal_parses_follows_and_all_three_requirements_and_keeps_old_defaul
     assert (p.follows, p.requires) == (SCRIPT_QUEST, requires)
     assert Proposal.of(proposal()).follows == "" and Proposal.of(proposal()).requires == []
     assert {"follows", "requires"} <= set(PROPOSE_TOOL.parameters["required"])
+
+
+def enable_crime(w, **change):
+    crimes = Crimes(w.author.link, w.chronicle, places=w.author.places, names=lambda n: NAMES.get(n, n))
+    crimes.people[HILDA] = {"guild": 8, "npctype": 0}
+    w.showrunner.crimes, w.showrunner.law = crimes, CrimeLaw(crimes)
+    crime = {
+        "fact": "crime", "id": "A/deed-1", "kind": "theft", "victim": LOBART,
+        "owner": LOBART, "community": "farm", "item": "ITFO_BREAD", "count": 2,
+        "chest": "LOBART_CHEST", "waypoint": "NW_FARM1_INHOUSE_01",
+        "day": 10, "hour": 7, "minute": 45, "witnesses": [HILDA], **change,
+    }
+    w.chronicle.record(crime)
+    return crime
+
+
+@pytest.mark.parametrize("status", ["pending", "known", "paid"])
+async def test_crime_brief_separates_truth_beliefs_and_read_only_law(graph, status):
+    async with world(graph) as w:
+        crime = enable_crime(w)
+        cid = crime["id"]
+        w.chronicle.record({"fact": "crime_seen", "npc": HILDA, "crime": cid})
+        w.chronicle.record({"fact": "rumor", "from": HILDA, "to": VINO, "crime": cid, "hops": 2})
+        if status in {"known", "paid"}:
+            w.chronicle.record({"fact": "crime_known", "crime": cid, "community": "farm"})
+        if status == "paid":
+            w.chronicle.record({"fact": "absolved", "crimes": [cid], "community": "farm", "how": "paid"})
+        before = w.chronicle.facts()
+        brief = await w.showrunner.brief(occasion(kind="deed", crime=cid, deed=crime))
+        case = brief.crimes[cid]
+        assert case["truth"] == crime
+        assert {k["npc"]: k["degree"] for k in case["knowledge"]} == {
+            LOBART: "unknown", HILDA: "seen", VINO: "heard",
+        }
+        assert next(k for k in case["knowledge"] if k["npc"] == VINO)["source"] == HILDA
+        assert case["victim_can_notice_missing"] is True
+        assert case["law"]["known"] is (status != "pending")
+        assert case["law"]["paid"] is (status == "paid")
+        [delivery] = case["law"]["deliveries"]
+        assert delivery["status"] == {"pending": "pending", "known": "known", "paid": "absolved"}[status]
+        assert delivery["via"] == HILDA
+        assert w.chronicle.facts() == before
+        text = brief.text()
+        assert all(t in text for t in (cid, "ITFO_BREAD", "unknown", "seen", "heard", "07:45"))
+
+
+@pytest.mark.parametrize(
+    ("kind", "giver", "degree", "allowed"),
+    [
+        ("theft", LOBART, "unknown", True),
+        ("theft", HILDA, "unknown", False),
+        ("theft", HILDA, "seen", True),
+        ("theft", HILDA, "heard", True),
+        ("theft", HILDA, "suspects", True),
+        ("attack", LOBART, "unknown", False),
+        ("attack", LOBART, "heard", True),
+    ],
+)
+async def test_crime_giver_canon_uses_personal_knowledge_or_missing_property(
+    graph, kind, giver, degree, allowed
+):
+    async with world(graph) as w:
+        crime = enable_crime(w, kind=kind)
+        cid = crime["id"]
+        if degree == "seen":
+            w.chronicle.record({"fact": "crime_seen", "npc": giver, "crime": cid})
+        elif degree == "heard":
+            w.chronicle.record({"fact": "rumor", "from": VINO, "to": giver, "crime": cid})
+        elif degree == "suspects":
+            w.chronicle.record({"fact": "crime_suspected", "npc": giver, "crime": cid, "suspect": "PLAYER"})
+        brief = await w.showrunner.brief(occasion(kind="deed", crime=cid, deed=crime))
+        errors = w.showrunner.canon(Proposal.of(proposal(giver=giver, crime=cid)), brief)
+        assert (not errors) is allowed
+        if not allowed:
+            assert "не знает о деле" in str(errors)
+
+
+async def test_a_crime_line_keeps_its_id_through_the_builder_and_load_without_forgiving(graph):
+    async with world(graph, proposal(giver=LOBART, crime="A/deed-1")) as w:
+        crime = enable_crime(w, witnesses=[])
+        result = await w.showrunner.decide(occasion(kind="deed", crime=crime["id"], deed=crime))
+        assert result["fact"] == "line" and result["crime"] == crime["id"]
+        assert w.chains.chain.await_args.kwargs["crime"] == crime["id"]
+        assert w.chains.chain.await_args.args == (LOBART,)
+        assert w.chronicle.facts("forgiven") == []
+        await load(w.fake, w.chronicle, branch="restored")
+        assert w.showrunner.lines == [result]
+
+
+async def test_crime_canon_rejects_unknown_ids_and_requires_id_for_a_deed_line(graph):
+    async with world(graph) as w:
+        crime = enable_crime(w)
+        brief = await w.showrunner.brief(occasion(kind="deed", crime=crime["id"], deed=crime))
+        assert "нет такого дела" in str(w.showrunner.canon(Proposal.of(proposal(crime="invented")), brief))
+        assert "id в crime" in str(w.showrunner.canon(Proposal.of(proposal()), brief))
+        assert "не знает о деле" in str(w.showrunner.canon(
+            Proposal.of(proposal(kind="stranger", place=HOME, giver="", crime=crime["id"])), brief
+        ))
+        assert Proposal.of(proposal()).crime == ""
+        assert "crime" in PROPOSE_TOOL.parameters["required"]
+
+
+async def test_a_crime_can_receive_none_with_a_reason(graph):
+    reason = "Сейчас у фермеров нет нового поручения; свидетель сам решит, говорить ли."
+    async with world(graph, proposal(kind="none", reason=reason)) as w:
+        crime = enable_crime(w)
+        result = await w.showrunner.decide(occasion(kind="deed", crime=crime["id"], deed=crime))
+        assert result["fact"] == "line_none" and result["reason"] == reason
+        assert len(w.llm.calls) == 1
+        w.chains.chain.assert_not_awaited()
+
+
+async def test_no_crimes_does_not_reintroduce_saved_crimes_in_the_brief(graph):
+    async with world(graph) as w:
+        crime = enable_crime(w)
+        w.showrunner.crimes, w.showrunner.law = None, None
+        brief = await w.showrunner.brief(occasion())
+        assert brief.crimes == {} and crime not in brief.deeds
+        assert crime["id"] not in brief.text()
 
 
 @pytest.mark.parametrize(

@@ -7,7 +7,7 @@ import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -20,6 +20,10 @@ from .game import GameError
 from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
 from .places import Place
 from .protocol import NpcSpec
+
+if TYPE_CHECKING:
+    from .chronicle import Fact
+    from .crimes import Crimes
 
 log = logging.getLogger(__name__)
 PROPOSE = "propose_chain"
@@ -169,6 +173,9 @@ class Brief:
     new_people: bool = False  # the chain must bring in someone new: a person or a camp
     max_people: int | None = None  # the whole chain, including already introduced roles on a retry
     quest_count: int | None = None  # None keeps the usual 2–3 quests; otherwise an exact count
+    crime: Fact | None = None
+    crime_context: str = ""
+    crime_items: dict[str, str] = field(default_factory=dict)  # only this deed's actual stolen items
 
     def bandit_ok(self, place: str) -> bool:
         p = self.places.get(place)
@@ -178,6 +185,17 @@ class Brief:
         out = [self.base.text(errand=False), "Места для поручения (точки выбирает код):"]
         if self.quest_count is not None:
             out.append(f"Число квестов: ровно {self.quest_count}.")
+        if self.crime_context:
+            out.append(self.crime_context)
+            if self.crime_items:
+                out.append("Взятые вещи этого дела, дополнительно разрешённые в целях:")
+                out += [f"- {item} — {name}" for item, name in self.crime_items.items()]
+                out.append(
+                    "Добыча может уже быть у героя: для её возврата перед bring поставь have с npc=PC_HERO "
+                    "и item этой вещи. Не создавай её снова в месте или у новой роли. "
+                    "Герой может принести свою же добычу и соврать, что нашёл её: это законный исход. "
+                    "Возврат сам по себе не означает прощения; прощают только отдельной сделкой."
+                )
         out += [
             f"- {p.id} — {p.where_ru}; вид {p.kind}; "
             f"бандиты: {'да' if self.bandit_ok(p.id) else 'нет'}; "
@@ -243,13 +261,14 @@ class ChainModel:
 
 
 class ChainAuthor:
-    def __init__(self, author: Author, casting: Casting) -> None:
+    def __init__(self, author: Author, casting: Casting, *, crimes: Crimes | None = None) -> None:
         self.author = author
         self.casting = casting
         self.book = author.book
         self.chronicle = author.chronicle
         self.link = author.link
         self.model = ChainModel(author.model.llm)
+        self.crimes = crimes
 
     async def brief(
         self,
@@ -258,7 +277,12 @@ class ChainAuthor:
         premise: str = "",
         requires: list[dict[str, Any]] | None = None,
         follows: str = "",
+        crime: str = "",
     ) -> Brief | None:
+        deed = self.crimes.crime(crime) if self.crimes is not None and crime else None
+        if crime and deed is None:
+            log.info("chain: unavailable crime %s", crime)
+            return None
         base = await self.author.brief(npc.upper(), premise, requires=requires, follows=follows)
         places = self.author.places
         if base is None or places is None:
@@ -298,7 +322,63 @@ class ChainAuthor:
             log.info("chain: %s is hostile to the hero", base.npc)
             return None
         people = {npc: name for npc, name in people.items() if npc in safe}
-        return Brief(base, nearby, people, occupied)
+        brief = Brief(base, nearby, people, occupied, crime=deed)
+        if deed is not None:
+            brief.crime_context = self._crime_context(deed, people)
+            if deed.get("kind") == "theft":
+                taken = [
+                    {"item": deed.get("item"), "count": deed.get("count", 0)},
+                    *deed.get("items", []),
+                ]
+                brief.crime_items = {
+                    entry["item"]: str(deed.get("item_name") or entry["item"])
+                    for entry in taken
+                    if entry.get("item") and int(entry.get("count", 0)) > 0
+                }
+        return brief
+
+    def _crime_context(self, deed: Fact, nearby: dict[str, str]) -> str:
+        assert self.crimes is not None
+        crime = deed["id"]
+        out = [
+            f"Дело {crime}. Правда режиссёра: {self.crimes.describe(deed)}.",
+            f"Место дела: {deed.get('waypoint') or deed.get('place')}.",
+            "Люди знают только своё. Правда режиссёра не становится знанием заказчика; "
+            "подозрение не доказывает вину героя. Реплики и knows опирай на знание говорящего.",
+            "Кто что знает:",
+        ]
+        victim = deed.get("victim") or deed.get("owner") or ""
+        candidates = set(nearby) | set(deed.get("witnesses", []))
+        if victim:
+            candidates.add(victim)
+        for fact in self.chronicle.facts():
+            if fact.get("crime") == crime or crime in fact.get("crime_told", []):
+                candidates.update(npc for key in ("npc", "to") if (npc := fact.get(key)))
+        for npc in sorted(candidates):
+            known = [k for k in self.crimes.known(npc) if k.crime["id"] == crime]
+            if not known and npc != victim and npc not in deed.get("witnesses", []):
+                continue
+            role = (
+                "пострадавший"
+                if npc == victim
+                else "свидетель"
+                if npc in deed.get("witnesses", [])
+                else "узнал о деле"
+            )
+            prefix = f"- {npc} — {self.crimes.names(npc)}; {role}; "
+            if not known:
+                out.append(prefix + "о деле и виновнике не знает.")
+                if npc == victim and deed.get("kind") == "theft":
+                    out.append("Пострадавший может заметить пропажу, не узнав, кто взял вещь.")
+            for knowledge in known:
+                degree = {"seen": "видел", "heard": "слышал", "suspects": "подозревает"}[knowledge.degree]
+                out.append(
+                    prefix + f"{degree}; кого: {knowledge.suspect}; "
+                    f"источник: {knowledge.source}; переходов: {knowledge.hops}; "
+                    f"простил: {'да' if knowledge.forgiven else 'нет'}; "
+                    f"обещал молчать: {'да' if knowledge.silenced else 'нет'}."
+                )
+        return "\n".join(out)
 
     async def chain(
         self,
@@ -310,12 +390,13 @@ class ChainAuthor:
         requires: list[dict[str, Any]] | None = None,
         follows: str = "",
         quest_count: int | None = None,
+        crime: str = "",
     ) -> list[questbook.Quest] | None:
         """Build 2–3 quests by default, or exactly `quest_count`; `new_people` requires a nonempty cast."""
         if quest_count is not None and quest_count not in (1, 2, 3):
             raise ValueError("quest_count must be 1, 2, 3 or None")
         open_ahead(self.model.llm, CACHE_KEY, keep=True)
-        brief = await self.brief(npc, premise=premise, requires=requires, follows=follows)
+        brief = await self.brief(npc, premise=premise, requires=requires, follows=follows, crime=crime)
         if brief is None:
             return None
         brief.new_people = new_people
@@ -340,6 +421,7 @@ class ChainAuthor:
                         "roles": {r: [s.npc for s in specs] for r, specs in brief.roles.items()},
                         "quests": [q.id for q in made],
                         "reason": proposal["reason"],
+                        **({"crime": crime} if crime else {}),
                     }
                 )
                 return made
@@ -483,13 +565,19 @@ class ChainAuthor:
                             ):
                                 errors.append(f"роль {ref}: бандит враждебен герою, talk/bring невозможны")
                             goal["npc"] = roles[ref][0].npc
+                        elif (
+                            ref == "PC_HERO"
+                            and goal["kind"] == questbook.HAVE
+                            and goal["item"] in brief.crime_items
+                        ):
+                            pass  # The actual loot can already be in the thief's inventory.
                         elif ref == "giver" or ref == brief.base.npc:
                             goal["npc"] = brief.base.npc
                         elif ref not in brief.people:
                             errors.append(f"NPC {ref!r} нет в сводке и ролях")
                         if goal["npc"] in killed:
                             errors.append(f"NPC {ref} уже убит предыдущей целью")
-                    if goal["item"] and goal["item"] not in brief.base.items:
+                    if goal["item"] and goal["item"] not in brief.base.items | brief.crime_items:
                         errors.append(f"вещи {goal['item']!r} нет в сводке")
                     if goal["kind"] == questbook.HAVE and ref and not place:
                         if ref in descriptions:
