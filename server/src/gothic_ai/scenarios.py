@@ -1186,12 +1186,13 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     await clear_animals()
     await link.debug("teleport", near=npc, distance=300)
     await link.act(npc, "return_to_routine")
-    # Returning control starts the old tower routine. Hold an ordinary native idle
-    # here and wait for its initialization, including its normal enemy perceptions.
+    # Returning control starts the old tower routine, and the approach above moved
+    # Xardas off the arena waypoint. Place this preparation pose directly: this check
+    # needs initialized native perceptions, not an incidental walk back to the arena.
     bodies = Bodies(link)
     ready = await bodies.act(
         npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
-        minutes=60, arrive=True, radius=100, timeout=15,
+        minutes=60, place=True, arrive=True, radius=100, timeout=15,
     )
     if ready.status != "arrived":
         current = (await link.routine(npc)).current
@@ -1199,8 +1200,12 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         views = await link.npc_view([npc])
         raise GameError(
             f"m5b arena preparation: {ready.status} {ready.detail}; state={current}; "
-            f"pos={snap.npc.pos}; rot={snap.npc.rot}; nearby={snap.nearby_npcs}; sees={[v.sees for v in views]}"
+            f"pos={snap.npc.pos}; rot={snap.npc.rot}; nearby={snap.nearby_npcs}; "
+            f"sees={[v.sees for v in views]}"
         )
+    # Scan the final standing position too: the earlier relocated book-reading pose
+    # can hide wildlife that only becomes visible after initialization.
+    await clear_animals()
     events.clear()
     await _m5b_player_weapon(link, "melee")
     e = await event({"weapon_drawn"}, 5)
@@ -1796,6 +1801,40 @@ async def orders_scenario(
     link.act = recorded  # type: ignore[method-assign]
     llm = FakeBackend("Это не приказ, а разговор.", delay=0)
     dialogue.llm = llm
+
+    # Tower walls can hide a companion from shouted orders and leave no supported
+    # ground for the wolf. Prepare the same open corridor as m5b before it follows.
+    arena = "NW_XARDAS_TOWER_VALLEY_09"
+    await link.debug("skip_important", near=npc)
+    await link.debug("player_goto", waypoint=arena)
+    await link.debug("npc_goto", npc=npc, waypoint=arena)
+
+    async def clear_animals() -> None:
+        for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
+            if not other.dead and other.guild >= BEASTS:
+                await link.debug("kill", instance=other.id, near=npc)
+        for view in await link.npc_view([npc]):
+            for seen in view.sees:
+                if seen.guild >= BEASTS and seen.body != "dead":
+                    await link.debug("kill", instance=seen.id, near=npc)
+
+    await clear_animals()
+    # Finish the tower's book-reading state before installing the arena routine,
+    # as m5b does when it returns the briefly attached NPC to native control.
+    await attach_when_free(link, npc)
+    await link.act(npc, "return_to_routine")
+    ready = await Bodies(link).act(
+        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+        minutes=60, place=True, arrive=True, radius=100, timeout=15,
+    )
+    if ready.status != "arrived":
+        state = (await link.routine(npc)).current
+        snap = await link.snapshot(npc, fresh=True)
+        raise GameError(
+            f"orders arena preparation: {ready.status} {ready.detail}; state={state}; "
+            f"pos={snap.npc.pos}; nearby={snap.nearby_npcs}"
+        )
+    await clear_animals()
     if not await _until(lambda: npc in talk.people, 20):
         return {"roster": f"failed ({npc} is not around the hero)"}
     dialogue.open(npc, "Ксардас").intent = Intent("follow_hero", "PLAYER", "friendly")
@@ -1817,7 +1856,7 @@ async def orders_scenario(
         done = ok and all(st == "done" for t, _, a, st in calls if t >= t0 and a == action)
         return done, took
 
-    # the tower's walls stop a straight walk: every walk here starts where Xardas can walk from
+    # Every order starts from supported open ground, in the companion's earshot.
     await link.debug("player_goto", near=npc, distance=900)
     await asyncio.sleep(1)
     ok, took = await order("Ксардас, ко мне!", "follow")
