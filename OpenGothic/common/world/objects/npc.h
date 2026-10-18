@@ -33,6 +33,8 @@ class Interactive;
 class WayPoint;
 struct PhysicsNoise;
 
+struct HeroDeed;
+
 class Npc final {
   public:
     using JumpStatus = MoveAlgo::JumpStatus;
@@ -432,7 +434,7 @@ class Npc final {
     void      setPerceptionDisable(PercType t);
 
     bool      perceptionProcess(Npc& pl);
-    bool      perceptionProcess(Npc& pl, Npc *victim, float quadDist, PercType perc);
+    bool      perceptionProcess(Npc& pl, Npc *victim, float quadDist, PercType perc, const std::shared_ptr<HeroDeed>& deed = {});
     // a perception held back by Gothic::interceptPerception, given to the scripts after all
     bool      passPerception(Npc& other, Npc* victim, PercType perc);
     // A physical impact has a location, independent of a known actor.

@@ -29,6 +29,7 @@ class Interactive;
 class VersionInfo;
 class GlobalFx;
 struct PhysicsNoise;
+struct HeroDeed;
 
 class World final {
   public:
@@ -197,8 +198,8 @@ class World final {
     size_t               spellFieldCount() const { return spellFields.size(); }
 
     void                 sendPassivePerc  (Npc& self, Npc& other, int32_t perc);
-    void                 sendPassivePerc  (Npc& self, Npc& other, Npc& victim, int32_t perc);
-    void                 sendPassivePerc  (Npc& self, Npc& other, Item& item, int32_t perc);
+    void                 sendPassivePerc  (Npc& self, Npc& other, Npc& victim, int32_t perc, std::shared_ptr<HeroDeed> deed = {});
+    void                 sendPassivePerc  (Npc& self, Npc& other, Item& item, int32_t perc, std::shared_ptr<HeroDeed> deed = {});
     void                 sendPassivePerc  (Npc& self, Npc& other, Npc& victim, Item& item, int32_t perc);
 
     void                 sendImmediatePerc(Npc& self, Npc& other, Npc& victim, int32_t perc);
