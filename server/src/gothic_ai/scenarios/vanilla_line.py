@@ -10,29 +10,29 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Sequ
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
-from . import questbook
-from .attitudes import non_hostile
-from .game import GameLink
-from .llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
-from .llm.fake import FakeBackend
-from .protocol import Session
-from .scenario_questlog import ACCEPT, TAKE, TITLE
-from .scenario_showrunner import ErrandScript
-from .scenarios import (
+from .. import questbook
+from ..attitudes import non_hostile
+from ..game import GameLink
+from ..llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
+from ..llm.fake import FakeBackend
+from ..protocol import Session
+from ..showrunner import MIN_REAL_SECONDS, OUTCOMES, occasion_members
+from .common import (
     LOBART,
     RUEBEN,
     _logged,
     _save,
     _until,
     _until_async,
-    play_book_chain,
     wait_message,
 )
-from .showrunner import MIN_REAL_SECONDS, OUTCOMES, occasion_members
+from .questlog import ACCEPT, TAKE, TITLE
+from .showrunner import ErrandScript
+from .story import play_book_chain
 
 if TYPE_CHECKING:
-    from .questlog import QuestLog
-    from .showrunner import Showrunner
+    from ..questlog import QuestLog
+    from ..showrunner import Showrunner
 
 log = logging.getLogger(__name__)
 

@@ -71,7 +71,9 @@ def test_decode_uses_mono_48khz_float_audio(monkeypatch):
 
 
 def test_decode_failure_propagates(monkeypatch):
-    monkeypatch.setattr(clicks.subprocess, "run", Mock(side_effect=subprocess.CalledProcessError(1, "ffmpeg")))
+    monkeypatch.setattr(
+        clicks.subprocess, "run", Mock(side_effect=subprocess.CalledProcessError(1, "ffmpeg")),
+    )
     with pytest.raises(subprocess.CalledProcessError):
         clicks.detect(Path("broken.mp4"))
 

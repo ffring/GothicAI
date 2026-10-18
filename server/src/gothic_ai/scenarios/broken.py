@@ -9,14 +9,17 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .brain.reflex import Reflexes
-from .dialogue import DialogueManager
-from .game import GameError, GameLink
-from .llm import ToolCall
-from .llm.fake import FakeBackend, FakeStep
-from .perception import trace_name
-from .protocol import DebugCmd
-from .scenarios import (
+from ..brain.reflex import Reflexes
+from ..dialogue import DialogueManager
+from ..game import GameError, GameLink
+from ..llm import ToolCall
+from ..llm.fake import FakeBackend, FakeStep
+from ..perception import trace_name
+from ..protocol import DebugCmd
+from ..sightings import Sighting, Sightings
+from ..talk import TalkDesk
+from ..trace import read as read_trace
+from .common import (
     LOBART,
     ClaimScript,
     FixedDecider,
@@ -25,9 +28,6 @@ from .scenarios import (
     _until,
     attach_when_free,
 )
-from .sightings import Sighting, Sightings
-from .talk import TalkDesk
-from .trace import read as read_trace
 
 log = logging.getLogger(__name__)
 

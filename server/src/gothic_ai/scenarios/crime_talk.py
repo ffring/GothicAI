@@ -8,13 +8,12 @@ import math
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
-from .brain.reflex import Reflexes
-from .game import GameError, GameLink
-from .llm import Done, LLMEvent, Message, ToolCall
-from .llm.fake import FakeBackend, FakeStep
-from .protocol import Session
-from .scenario_crimes import HOUSE
-from .scenarios import (
+from ..brain.reflex import Reflexes
+from ..game import GameError, GameLink
+from ..llm import Done, LLMEvent, Message, ToolCall
+from ..llm.fake import FakeBackend, FakeStep
+from ..protocol import Session
+from .common import (
     HILDA,
     LOBART,
     ClaimScript,
@@ -25,17 +24,18 @@ from .scenarios import (
     _until_async,
     wait_message,
 )
+from .crimes import HOUSE
 
 if TYPE_CHECKING:
-    from .chests import ChestDesk
-    from .concerns import Concerns
-    from .crimes import Crimes
-    from .deals import Deals
-    from .dialogue import DialogueManager
-    from .sightings import Sightings
-    from .social import Rumors
-    from .talk import TalkDesk
-    from .witnesses import Witnesses
+    from ..chests import ChestDesk
+    from ..concerns import Concerns
+    from ..crimes import Crimes
+    from ..deals import Deals
+    from ..dialogue import DialogueManager
+    from ..sightings import Sightings
+    from ..social import Rumors
+    from ..talk import TalkDesk
+    from ..witnesses import Witnesses
 
 log = logging.getLogger(__name__)
 DENIAL = "я ничего не брал в твоем доме"  # the game's input normalizes ё to е

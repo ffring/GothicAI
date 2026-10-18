@@ -69,7 +69,7 @@ class Trust:
         amended = {
             (f.get("quest"), f.get("about"))
             for f in facts
-            if f.get("fact") == "amends" and npc in (f.get("npc"), f.get("to"))
+            if f.get("fact") == "amends" and not f.get("crime") and npc in (f.get("npc"), f.get("to"))
         }
         amended |= {
             _lie(key)
@@ -84,7 +84,7 @@ class Trust:
                 case "found_out" | "caught" if f.get("npc") == npc and (quest, npc) not in amended:
                     how = f.get("how", "")
                     r.lied.append(f"«{title}»{f' — {how}' if how else ''}")
-                case "amends" if npc in (f.get("npc"), f.get("to")):
+                case "amends" if not f.get("crime") and npc in (f.get("npc"), f.get("to")):
                     gold = int(f.get("gold", 0))
                     r.amended.append(f"«{title}»{f' — заплатил {gold} золотых' if gold else ''}")
                 case "deal" if f.get("npc") == npc and f.get("forgive"):

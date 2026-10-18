@@ -1,5 +1,8 @@
+import pytest
+
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.concerns import Concerns
+from gothic_ai.concerns import CRIME_WITNESS_EN, Concerns
+from gothic_ai.crimes import Crimes
 from gothic_ai.deals import Deals
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.executor import AGENDA_MAX
@@ -14,13 +17,14 @@ WOLF = f"found_out:{LOBART}:MIS_WOLF"
 BOOK = f"caught:{XARDAS}:MIS_BOOK"
 
 
-async def _setup(fake: FakeGame):
+async def _setup(fake: FakeGame, *, with_crimes: bool = False):
     store = MemoryStore(":memory:")
     link_cm = connected(fake)
     link = await link_cm.__aenter__()
     dialogue = DialogueManager(link, FakeBackend("…", delay=0), PersonaProvider(None), memory=store)
     chronicle = Chronicle(link, store)
-    deals = Deals(link, dialogue, chronicle)
+    crimes = Crimes(link, chronicle) if with_crimes else None
+    deals = Deals(link, dialogue, chronicle, crimes=crimes)
     concerns = Concerns(link, chronicle, deals)
     return link_cm, chronicle, deals, concerns
 
@@ -211,5 +215,114 @@ async def test_the_agenda_set_for_a_lie_ends_with_it():
             concerns.current(XARDAS, "get the hero to bring me a book") == "get the hero to bring me a book"
         )
         assert concerns.current(XARDAS, None) is None
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+def _theft(chronicle: Chronicle, *, witness: str = LOBART, victim: str = XARDAS, **metadata):
+    chronicle.record(
+        {
+            "fact": "crime",
+            "id": "C1",
+            "kind": "theft",
+            "victim": victim,
+            "owner": victim,
+            "item": POTION,
+            "count": 2,
+            "day": 1,
+            "hour": 14,
+            "minute": 20,
+            "waypoint": "FARM",
+            "community": "farm",
+        }
+    )
+    chronicle.record({"fact": "crime_seen", "npc": witness, "crime": "C1", **metadata})
+
+
+async def test_a_crime_witness_has_a_choice_without_a_forced_quest():
+    fake = FakeGame(branch="A")
+    link_cm, chronicle, deals, concerns = await _setup(fake, with_crimes=True)
+    try:
+        _theft(chronicle, guild=8, npctype=0)
+        (c,) = concerns.of(LOBART)
+        assert (c.key, c.npc, c.rank, c.en) == ("crime_witness:C1", LOBART, 1, CRIME_WITNESS_EN)
+        assert len(c.en.split()) <= 15 and len(c.en) <= AGENDA_MAX
+        assert all(
+            t in c.ru for t in ("ты видел сам", POTION, "рассказать", "промолчать", "плату", "crime:C1")
+        )
+        assert "silence" in c.ru and "hero_gives" in c.ru
+        assert not chronicle.facts("line") and not chronicle.facts("amends")
+        # Stable key: duplicate delivery does not create a second concern.
+        chronicle.record({"fact": "crime_seen", "npc": LOBART, "crime": "C1", "guild": 8, "npctype": 0})
+        assert [c.key for c in concerns.of(LOBART)] == ["crime_witness:C1"]
+        chronicle.record({"fact": "rumor", "to": "HEARER", "from": LOBART, "crime": "C1"})
+        chronicle.record({"fact": "crime_suspected", "npc": "SUSPECTER", "crime": "C1"})
+        assert concerns.of("HEARER") == [] and concerns.of("SUSPECTER") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("npc", "victim", "metadata"),
+    [
+        (LOBART, LOBART, {"guild": 8, "npctype": 0}),
+        ("MIL_310_STADTWACHE", XARDAS, {"guild": 1, "npctype": 0}),
+        ("SLD_800_LEE", XARDAS, {}),
+    ],
+)
+async def test_victims_and_guards_do_not_get_the_witness_concern(npc, victim, metadata):
+    link_cm, chronicle, deals, concerns = await _setup(FakeGame(branch="A"), with_crimes=True)
+    try:
+        _theft(chronicle, witness=npc, victim=victim, **metadata)
+        assert concerns.of(npc) == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_priced_silence_deal_ends_the_witness_concern_when_accepted():
+    fake = FakeGame(branch="A")
+    fake.item_names[GOLD] = "Золото"
+    fake.symbols = {GOLD: "item"}
+    fake.hero_items = {GOLD: 10}
+    link_cm, chronicle, deals, concerns = await _setup(fake, with_crimes=True)
+    try:
+        _theft(chronicle, guild=8, npctype=0)
+        result = await deals.propose(
+            LOBART, "Лобарт", {"silence": ["crime:C1"], "hero_gives": [{"item": GOLD, "count": 10}]}, None
+        )
+        assert result.status == "accepted" and concerns.top(LOBART) is not None
+        offer = deals.open[LOBART]
+        await deals.accept(offer.id, offer.version)
+        assert chronicle.facts("silenced")[0]["crime"] == "C1"
+        assert chronicle.facts("deal")[0]["gold"] == 10
+        assert concerns.of(LOBART) == [] and concerns.current(LOBART, CRIME_WITNESS_EN) is None
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("delivery", ["law", "victim_rumor", "victim_testimony"])
+async def test_report_delivery_ends_the_cached_witness_concern(delivery):
+    link_cm, chronicle, deals, concerns = await _setup(FakeGame(branch="A"), with_crimes=True)
+    try:
+        _theft(chronicle, guild=8, npctype=0)
+        assert concerns.agenda(LOBART) == CRIME_WITNESS_EN
+        changed = []
+        concerns.on_change.append(lambda npc: changed.append((npc, concerns.agenda(npc))))
+        fact = {
+            "law": {"fact": "crime_known", "crime": "C1", "community": "farm"},
+            "victim_rumor": {"fact": "rumor", "crime": "C1", "to": XARDAS, "from": LOBART},
+            "victim_testimony": {"fact": "testimony", "npc": XARDAS, "witness": LOBART, "crime_told": ["C1"]},
+        }[delivery]
+        chronicle.record(fact)
+        assert concerns.of(LOBART) == [] and (LOBART, None) in changed
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_disabled_crimes_do_not_create_witness_concerns():
+    link_cm, chronicle, deals, concerns = await _setup(FakeGame(branch="A"))
+    try:
+        _theft(chronicle, guild=8, npctype=0)
+        assert concerns.of(LOBART) == []
     finally:
         await link_cm.__aexit__(None, None, None)

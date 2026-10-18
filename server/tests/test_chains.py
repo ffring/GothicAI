@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from gothic_ai import questbook
 from gothic_ai.chains import CACHE_KEY, PROPOSE, ChainAuthor, Proposal
+from gothic_ai.crimes import Crimes
 from gothic_ai.game import GameError
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
@@ -27,6 +28,7 @@ from tests.test_questbook import FUNCS
 YARD = "FARM1_ENTRANCE"
 FIELD = "FARM1_FIELD"
 GOODS = "ITMI_SAW"
+STOLEN = "ITFO_BREAD"
 
 
 def _talk(description: str) -> dict[str, Any]:
@@ -162,11 +164,13 @@ async def _setup(
     *,
     partial_group: bool = False,
     extra_points: dict[str, int] | None = None,
+    with_crimes: bool = False,
 ) -> AsyncIterator[tuple[FakeGame, ChainAuthor, StubCasting, FakeBackend]]:
     fake = FakeGame(branch="A")
     steps = [FakeStep("", [ToolCall(PROPOSE, raw, f"chain{i}")]) for i, raw in enumerate(script or [])]
     llm = FakeBackend(script=steps, delay=0)
     link_cm, author, _ = await _author(fake, llm, story_graph, MemoryStore(":memory:"))
+    crimes = None
     try:
         data = deepcopy(BOOK)
         data["points"].update(extra_points or {})
@@ -177,10 +181,22 @@ async def _setup(
         fake.symbols.update(dict.fromkeys(FUNCS, "func"))
         fake.people = [{"npc": HILDA, "name": "Хильда", "routine": [{"waypoint": "NW_FARM1_INHOUSE_01"}]}]
         casting = StubCasting(author, partial_group=partial_group)
-        chains = ChainAuthor(author, casting)
+        crimes = (
+            Crimes(
+                author.link,
+                author.chronicle,
+                places=author.places,
+                names=lambda npc: {HILDA: "Хильда", LOBART: "Лобарт"}.get(npc, npc),
+            )
+            if with_crimes
+            else None
+        )
+        chains = ChainAuthor(author, casting, crimes=crimes)
         await _until(lambda: bool(fake.graph))
         yield fake, chains, casting, llm
     finally:
+        if crimes is not None:
+            await crimes.close()
         await link_cm.__aexit__(None, None, None)
 
 
@@ -491,6 +507,137 @@ def _single_proposal() -> dict[str, Any]:
         ],
     )
     return raw
+
+
+def _record_crime(chains: ChainAuthor, **changes: Any) -> dict[str, Any]:
+    fact = {
+        "fact": "crime",
+        "id": "stolen-bread",
+        "kind": "theft",
+        "victim": HILDA,
+        "owner": HILDA,
+        "community": "farm",
+        "item": STOLEN,
+        "item_name": "Хлеб",
+        "count": 1,
+        "waypoint": "NW_FARM1_INHOUSE_01",
+        "place": {"x": 0, "y": 0, "z": 0},
+        "day": 2,
+        "hour": 10,
+        "minute": 15,
+        "witnesses": [LOBART],
+        **changes,
+    }
+    chains.chronicle.record(fact)
+    return fact
+
+
+def _return_loot(item: str = STOLEN) -> dict[str, Any]:
+    raw = _single_proposal()
+    raw["quests"][0].update(
+        title="Пропавший хлеб",
+        knows="Из дома пропал хлеб. Ты не знаешь, кто его взял.",
+        asked="найти пропавший хлеб и вернуть",
+        gold=0,
+        xp=0,
+        stages=[
+            {
+                "journal": "У меня есть пропавший хлеб.",
+                "goals": [{"kind": "have", "npc": "PC_HERO", "item": item}],
+            },
+            {
+                "journal": "Надо вернуть пропавший хлеб.",
+                "goals": [{"kind": "bring", "npc": "giver", "item": item, "talk": _talk("Нашёл твой хлеб.")}],
+            },
+        ],
+        done_journal="Я вернул пропавший хлеб, умолчав о том, что сам его взял.",
+    )
+    return raw
+
+
+async def test_crime_brief_separates_the_directors_truth_from_peoples_knowledge(graph):  # noqa: F811
+    async with _setup(graph, with_crimes=True) as (_, chains, _, _):
+        deed = _record_crime(chains)
+        chains.chronicle.record({"fact": "crime_seen", "crime": deed["id"], "npc": LOBART})
+        chains.chronicle.record(
+            {"fact": "rumor", "crime": deed["id"], "from": LOBART, "to": "BAU_952_MALAK", "hops": 1}
+        )
+        brief = await chains.brief(HILDA, crime=deed["id"])
+        assert brief is not None and brief.crime == deed
+        assert STOLEN not in brief.base.items and brief.crime_items == {STOLEN: "Хлеб"}
+        text = brief.text()
+        assert "Правда режиссёра: герой взял Хлеб" in text
+        assert "в доме Лобарта (день 2, 10:15)" in text
+        assert f"{HILDA} — Хильда; пострадавший; о деле и виновнике не знает" in text
+        assert f"{LOBART} — Лобарт; свидетель; видел" in text
+        assert "BAU_952_MALAK; узнал о деле; слышал" in text
+        assert "Пострадавший может заметить пропажу, не узнав, кто взял вещь" in text
+        assert "npc=PC_HERO" in text
+        assert chains.crimes.known(HILDA) == []
+
+
+async def test_the_hero_can_return_his_own_loot_without_spawning_it_or_being_forgiven(graph):  # noqa: F811
+    async with _setup(graph, [_return_loot()], with_crimes=True) as (fake, chains, casting, _):
+        deed = _record_crime(chains, witnesses=[])
+        fake.symbols.update({STOLEN: "item", "PC_HERO": "npc"})
+        fake.hero_items[STOLEN] = 1
+        made = await chains.chain(HILDA, crime=deed["id"], quest_count=1, max_people=0)
+        assert made is not None and len(made) == 1 and not casting.calls
+        [quest] = made
+        assert quest.stages[0].goals[0].npc == "PC_HERO"
+        assert quest.stages[-1].goals[0].item == STOLEN
+        assert "WLD_INSERTITEM" not in str(fake.graph[-1])
+        assert chains.chronicle.facts("chain")[-1]["crime"] == deed["id"]
+
+        nodes = Patches.of(chains.author.patches.ops()).nodes
+        done = nodes[f"{quest.id}_DONE"]
+        await fake.send(type="dialog_chosen", npc=HILDA, node=f"{quest.id}_GIVE", made=True)
+        await _until(lambda: chains.book.progress(quest.id).state == "given")
+        await fake.send(type="trigger_fired", id=f"{quest.id}_S1G1", count=1, npc="PC_HERO", other="PC_HERO")
+        await fake.send(type="trigger_fired", id=f"{quest.id}_S1", count=1, npc="PC_HERO", other="PC_HERO")
+        await _until(lambda: chains.book.progress(quest.id).stage == 2)
+        fake.vars.update({quest.id: LOG_RUNNING, f"{quest.id}_STAGE": 2})
+        assert fake.evaluate(done["condition"], HILDA) == 1
+        assert fake.give({"npc": HILDA, "effects": done["effects"]}) is None
+        assert fake.hero_items[STOLEN] == 0 and fake.npc_items[HILDA][STOLEN] == 1
+        await fake.send(type="dialog_chosen", npc=HILDA, node=f"{quest.id}_DONE", made=True)
+        await _until(lambda: chains.book.progress(quest.id).state == "done")
+        assert chains.chronicle.facts("forgiven") == []
+        assert chains.crimes.known(HILDA) == []
+
+
+async def test_only_the_item_of_the_linked_crime_is_allowed_beyond_the_item_pool(graph):  # noqa: F811
+    async with _setup(graph, with_crimes=True) as (fake, chains, casting, _):
+        linked = _record_crime(chains)
+        _record_crime(chains, id="other-theft", item="ITFO_WINE")
+        fake.symbols.update({STOLEN: "item", "ITFO_WINE": "item", "PC_HERO": "npc"})
+        brief = await chains.brief(HILDA, crime=linked["id"])
+        assert brief is not None
+        brief.quest_count = 1
+        made, errors = await chains._try(_return_loot("ITFO_WINE"), brief)
+        assert made is None and any("вещи 'ITFO_WINE' нет в сводке" in e for e in errors)
+        assert not casting.calls and not chains.book.all()
+
+
+async def test_extra_crime_loot_cannot_be_created_in_a_new_persons_inventory(graph):  # noqa: F811
+    async with _setup(graph, with_crimes=True) as (_, chains, casting, _):
+        deed = _record_crime(chains)
+        brief = await chains.brief(HILDA, crime=deed["id"])
+        assert brief is not None
+        raw = _proposal()
+        raw["cast"][0]["carries"] = [STOLEN]
+        made, errors = await chains._try(raw, brief)
+        assert made is None and f"вещи '{STOLEN}' нет в сводке" in errors
+        assert not casting.calls
+
+
+@pytest.mark.parametrize("with_crimes", [False, True])
+async def test_disabled_or_unknown_crime_does_not_reach_the_builder_model(graph, with_crimes):  # noqa: F811
+    async with _setup(graph, [_return_loot()], with_crimes=with_crimes) as (_, chains, _, llm):
+        if not with_crimes:
+            _record_crime(chains)
+        assert await chains.chain(HILDA, crime="stolen-bread", quest_count=1) is None
+        assert not llm.calls and not chains.book.all()
 
 
 async def test_a_single_errand_uses_book_goals_and_one_atomic_patch(graph):  # noqa: F811

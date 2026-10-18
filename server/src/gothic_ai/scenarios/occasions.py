@@ -7,12 +7,12 @@ import logging
 import math
 from typing import TYPE_CHECKING, Any
 
-from .game import GameLink
-from .protocol import Saved, Session
-from .scenarios import _logged, _until, wait_message
+from ..game import GameLink
+from ..protocol import Saved, Session
+from .common import _logged, _until, wait_message
 
 if TYPE_CHECKING:
-    from .occasions import Occasions
+    from ..occasions import Occasions
 
 log = logging.getLogger(__name__)
 
@@ -151,13 +151,20 @@ async def occasions(link: GameLink, service: Occasions, slot: int = 7) -> dict[s
         await link.debug("kill", instance=victim, near=victim, by="PLAYER")
         heard = await _until(lambda: len(facts("deed")) > deeds, 15)
         death = (await link.story_state(npcs=[victim])).get("npcs", {}).get(victim, {})
-        caused = [
-            f
-            for f in facts("deed")[deeds:]
-            if f.get("deed", {}).get("fact") == "died"
-            and f["deed"].get("npc") == victim
-            and f["deed"].get("killer") == "PLAYER"
-        ]
+        caused = []
+        for fact in facts("deed")[deeds:]:
+            deed = fact.get("deed", {})
+            if (
+                deed.get("fact") == "crime"
+                and deed.get("kind") == "murder"
+                and deed.get("victim") == victim
+                and fact.get("crime") == deed.get("id")
+            ) or (
+                deed.get("fact") == "died"
+                and deed.get("npc") == victim
+                and deed.get("killer") == "PLAYER"
+            ):
+                caused.append(fact)
         check("deed", heard and death.get("state") == "dead" and len(caused) == 1, f"{victim}: {caused}")
 
     state = await link.story_state()
