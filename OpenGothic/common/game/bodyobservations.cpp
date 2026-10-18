@@ -136,6 +136,16 @@ void clearActors() {
   s.actors.clear();
   }
 
+void validateActors(const std::vector<Npc*>& actors) {
+  if(actors.size()>state().config.maxActors)
+    throw std::invalid_argument("body observation actor limit exceeded");
+  for(size_t i=0;i<actors.size();++i) {
+    auto end = actors.begin()+std::ptrdiff_t(i);
+    if(actors[i]==nullptr || std::find(actors.begin(),end,actors[i])!=end)
+      throw std::invalid_argument("null or duplicate body observation actor");
+    }
+  }
+
 bool visible(const Npc& observer, const Npc& target) {
   return (observer.handlePtr()->senses & int32_t(SensesBit::SENSE_SEE))!=0 && observer.canSeeNpc(target,false);
   }
@@ -223,15 +233,10 @@ void BodyObservations::configure(const Config& config) {
   }
 
 void BodyObservations::watch(const std::vector<Npc*>& actors) {
-  auto& s = state();
-  if(actors.size()>s.config.maxActors)
-    throw std::invalid_argument("body observation actor limit exceeded");
-  for(size_t i=0;i<actors.size();++i) {
-    auto end = actors.begin()+std::ptrdiff_t(i);
-    if(actors[i]==nullptr || std::find(actors.begin(),end,actors[i])!=end)
-      throw std::invalid_argument("null or duplicate body observation actor");
-    }
+  // Initial configuration deliberately starts every actor's history from scratch.
+  validateActors(actors);
   clearActors();
+  auto& s = state();
   for(auto* npc:actors) {
     Actor actor;
     actor.npc = npc;
@@ -241,11 +246,44 @@ void BodyObservations::watch(const std::vector<Npc*>& actors) {
   s.enabled = !s.actors.empty();
   }
 
+void BodyObservations::updateWatch(const std::vector<Npc*>& actors) {
+  validateActors(actors);
+  auto& s = state();
+  std::vector<Actor> updated;
+  updated.reserve(actors.size());
+  for(auto* npc:actors) {
+    if(auto actor=tracked(npc)) {
+      updated.push_back(*actor);
+      } else {
+      Actor added;
+      added.npc = npc;
+      updated.push_back(std::move(added));
+      }
+    idFor(*npc);
+    }
+  for(const auto& actor:s.actors)
+    if(std::find(actors.begin(),actors.end(),actor.npc)==actors.end())
+      s.eventDropped += actor.events.size();
+  // The bridge acknowledges watch before draining. Do not send removed actors afterwards,
+  // including rows waiting behind socket backpressure; retained rows keep their original IDs.
+  for(size_t i=s.queuedRows.size();i>0;--i) {
+    const auto entity=s.queuedRows[i-1].entityId;
+    if(std::any_of(actors.begin(),actors.end(),[&](const Npc* npc) { return s.ids.at(npc)==entity; }))
+      continue;
+    s.queue.erase(s.queue.begin()+std::ptrdiff_t(i-1));
+    s.queuedRows.erase(s.queuedRows.begin()+std::ptrdiff_t(i-1));
+    ++s.dropped;
+    }
+  s.actors = std::move(updated);
+  s.enabled = !s.actors.empty();
+  }
+
 void BodyObservations::disable() { state().enabled = false; clearActors(); }
 bool BodyObservations::enabled() { return state().enabled; }
 size_t BodyObservations::watchedCount() { return state().actors.size(); }
 size_t BodyObservations::queuedCount() { return state().queue.size(); }
 size_t BodyObservations::queueCapacity() { return state().config.queueCapacity; }
+uint64_t BodyObservations::samplePeriodMs() { return state().config.periodMs; }
 void BodyObservations::setSink(std::function<void(std::string_view)> sink) { state().sink = std::move(sink); }
 uint64_t BodyObservations::lastStepCostUs() { return state().stepCost; }
 size_t BodyObservations::lastStepActorCount() { return state().stepActors; }
@@ -555,6 +593,7 @@ void BodyObservations::sample(Npc& npc, uint64_t now, bool force) {
     s.queue.push_back(std::move(j.s));
     BodyObservations::QueuedRow queued;
     queued.entityId=idFor(npc); queued.sessionEpoch=processEpoch(); queued.worldEpoch=s.generation;
+    queued.enqueueIndex=s.queuedTotal+1;
     queued.controlGeneration=control.owned ? control.controlGeneration : 0;
     queued.periodic=periodic; queued.canDecide=control.canDecide; queued.actionMaskValid=control.owned;
     if(control.owned) queued.actionMask=control.mask;
@@ -607,8 +646,10 @@ uint64_t BodyObservations::queuedTotal() { return state().queuedTotal; }
 
 std::vector<BodyObservations::QueuedRow> BodyObservations::queuedSince(uint64_t total) {
   const auto& s = state();
-  const auto fresh = size_t(std::min<uint64_t>(s.queuedTotal-std::min(total,s.queuedTotal),s.queuedRows.size()));
-  return std::vector<QueuedRow>(s.queuedRows.end()-std::ptrdiff_t(fresh),s.queuedRows.end());
+  const auto first=std::find_if(s.queuedRows.begin(),s.queuedRows.end(),[total](const QueuedRow& row) {
+    return row.enqueueIndex>total;
+    });
+  return std::vector<QueuedRow>(first,s.queuedRows.end());
   }
 
 std::string BodyObservations::statsJson() {
