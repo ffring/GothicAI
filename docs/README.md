@@ -24,7 +24,7 @@
 ```
 
 - **Игра — клиент.** Мост `OpenGothic/ai_bridge/` подключается к серверу по WebSocket, одно JSON-сообщение на кадр. Адрес по умолчанию задан в `aibridge.cpp` (`DefaultUrl`), меняется через `GOTHIC_AI_URL`, мост выключает `GOTHIC_AI=0`.
-- **Версия протокола** — в трёх местах, они должны совпадать: `PROTOCOL_VERSION` в `server/src/gothic_ai/protocol.py`, `ProtocolVersion` в `OpenGothic/ai_bridge/aibridge.cpp`, заголовок [`protocol.md`](protocol.md).
+- **Версия протокола** — в трёх местах, они должны совпадать: `PROTOCOL_VERSION` в `server/src/gothic_ai/protocol.py`, `ProtocolVersion` в `OpenGothic/ai_bridge/aibridge.cpp`, заголовок [`protocol.md`](protocol.md). Новый номер берут через бронь: [`protocol.md`](protocol.md#бронь-номера).
 - **Потоки движка.** WS-поток только кладёт сообщения в очередь. Разбор и вся работа с миром идут в главном потоке (`AiBridge::Impl::onTick`), входящие разбирает `AiBridge::Impl::handle`.
 - **Сервер — один процесс asyncio.** `cli.ServerState` держит все подсистемы (около 45, все необязательные). Каждая получает `GameLink` из `game.py` и подписывается на сообщения игры через `link.listeners`.
 - Где что считается и почему — [`compute.md`](compute.md). Адреса машин лежат вне git.
@@ -92,7 +92,7 @@
 
 `OpenGothic/` — форк Try/OpenGothic. Сторонние библиотеки лежат в `lib/` обычными файлами ([`VENDORED.md`](../OpenGothic/lib/VENDORED.md)). Целиком наше: `ai_bridge/`, `game/bodyrunner.cpp`, `tests/*_contract.cpp`. В `common/` наши `physics/`, части `game/` и `graphics/mesh/`, `testbench.*`, `nav*`; остальное — апстрим с точечными правками.
 
-Всё ниже включено по умолчанию. Выключатели `OPENGOTHIC_*=0` нужны для сравнений.
+Всё ниже включено по умолчанию. Выключатели `OPENGOTHIC_*=0` нужны для сравнений. Каждый выключатель с модулем и проверкой — в [`features.md`](features.md).
 
 | Подсистема | Где | Выключатель | Документ |
 |---|---|---|---|
@@ -124,7 +124,7 @@
 
 ## Флаги `gothic-ai serve`
 
-Всё включено по умолчанию, флаг `--no-X` выключает. Полный список — `gothic-ai serve --help` или `cli.py` около строки 2200.
+Всё включено по умолчанию, флаг `--no-X` выключает. Полный список — `gothic-ai serve --help` или `cli.py` около строки 2200. Что выключает каждый флаг, где живёт фича и что её проверяет — в [`features.md`](features.md).
 
 - **Голос и вывод:** `--no-voice`, `--no-tts`, `--no-console`, `--no-trace`.
 - **Модели:** `--llm chatgpt|openai|local|fake`, `--model`, `--reasoning-effort`, `--no-websocket`, `--no-brain` (планировщик быстрого контура), `--no-quick`, `--no-hold-threats`.
@@ -153,7 +153,7 @@
 - **жизнь NPC:** `day`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
 - **беседа:** `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
 - **сделки:** `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
-- **ложь и дела:** `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_talk`, `crime_law`, `wrath`;
+- **ложь и дела:** `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_talk`, `crime_law`, `crime_director`, `wrath`;
 - **сюжет:** `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
 
 ## Где лежат данные
@@ -178,7 +178,8 @@
 
 | Документ | О чём | Что это |
 |---|---|---|
-| [`protocol.md`](protocol.md) | протокол игра ↔ сервер | справочник |
+| [`protocol.md`](protocol.md) | протокол игра ↔ сервер, версии и бронь номера | справочник |
+| [`features.md`](features.md) | фичи, включённые по умолчанию: выключатели, модули, проверки, пробелы покрытия | реестр |
 | [`compute.md`](compute.md), [`ryzen.md`](ryzen.md) | машины, очередь `gq`, прогоны на Ryzen | справочник |
 | [`npc-agent.md`](npc-agent.md) | агент NPC: два контура, приказы, восприятие | справочник с журналом |
 | [`npc-tools.md`](npc-tools.md) | инструменты NPC: сделки, восприятие, карточки, беседа, поручения | план с журналом |
