@@ -1107,13 +1107,23 @@ async def _neural_fight_scenario(
             # weapon-draw perceptions. The passive hero cannot intercept their attacks.
             await link.debug("teleport", near=npc, distance=1500)
             await link.npc_act(npc, "fight", npc=target)
-            [target_matches] = await link.story_eval(npc, [[
-                "&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
-                ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]], ["sym", target]],
-            ]])
-            check("neural_companion_target", bool(target_matches) and (
+            # fight tracks the entire ZS_ATTACK as a soft act, which blocks body_acquire.
+            # A short turn replaces that tracking without changing the native state or target;
+            # its npc_idle confirms the soft act has ended before the lease can be granted.
+            turned = await Bodies(link).act(npc, "turn_to", npc=target, timeout=4)
+            if turned.status != "done":
+                raise GameError(
+                    f"neural companion preparation: combat handoff {turned.status} {turned.detail}"
+                )
+            target_matches, attacking = await link.story_eval(npc, [
+                ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
+                 ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]], ["sym", target]]],
+                ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_ATTACK"]],
+            ])
+            check("neural_companion_target", bool(target_matches) and bool(attacking) and (
                 pilot.companion(target) or bool(link.party.get(target, (0, 0))[1])),
-                  f"target={target}, live_matches={target_matches}, party={link.party.get(target)}")
+                  f"target={target}, live_matches={target_matches}, attacking={attacking}, "
+                  f"party={link.party.get(target)}")
         else:
             await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
             await link.debug("teleport", near=npc, distance=250)
