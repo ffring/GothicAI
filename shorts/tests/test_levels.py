@@ -74,6 +74,17 @@ def test_empty_speech_and_full_speech_have_complementary_pauses():
     assert levels.pause_windows([(0, 5)], duration) == []
 
 
+@pytest.mark.parametrize("duration,fallback", [(1.698, True), (1.7, False)])
+def test_music_plateaus_fall_back_only_below_one_r128_block(duration, fallback):
+    speech = [(0.35, 1.35)]
+    music_speech, music_pauses, used_fallback = levels.music_windows(speech, duration, (0, 0))
+    assert music_speech == speech
+    assert used_fallback is fallback
+    expected = levels.pause_windows(speech, duration) if fallback else [(0, 0.2), (1.5, duration)]
+    for actual, interval in zip(music_pauses, expected, strict=True):
+        assert actual == pytest.approx(interval)
+
+
 def test_merge_speech_windows_sorts_merges_and_clips_to_the_body():
     windows = [(8, 12), (3, 5), (-2, 1), (1, 3), (20, 21), (-4, -1), (6, 7)]
     assert levels.merge_speech_windows(windows, 10) == [(0, 5), (6, 7), (8, 10)]
@@ -317,7 +328,7 @@ def test_calibration_uses_the_render_stems_and_caps_loud_game_pauses(tmp_path, t
     assert report["ok"] is True
     assert report["game_duck_db"] > 0
     assert "sidechaincompress" not in calibrated.mix()
-    assert calibrated.measure("music", pauses) == pytest.approx(
+    assert calibrated.measure("music", report["music_pause_windows"]) == pytest.approx(
         calibrated.measure("voice") - 14, abs=0.5,
     )
     # Half a LU of calibration headroom survives a small decoded-level shift.
@@ -374,15 +385,15 @@ def test_calibration_lowers_music_below_quiet_effects(tmp_path, tone_inputs, gam
     meter_gain = report["master_gain_db"]
     voice = calibrated.measure("voice")
     game = calibrated.measure("game", pauses, meter_gain_db=meter_gain)
-    music = calibrated.measure("music", pauses, meter_gain_db=meter_gain)
-    music_speech = calibrated.measure("music", speech, meter_gain_db=meter_gain)
+    music = calibrated.measure("music", report["music_pause_windows"], meter_gain_db=meter_gain)
+    music_speech = calibrated.measure("music", report["music_speech_windows"], meter_gain_db=meter_gain)
     assert game - 3 < voice - 14
     assert music == pytest.approx(min(voice - 14, game - 3), abs=levels.LEVEL_TOLERANCE_LU)
     assert music_speech == pytest.approx(music - 6, abs=levels.LEVEL_TOLERANCE_LU)
     assert _rows(report)["music_below_game"]["ok"] is True
     if game_gain <= -45:
         # A measurement-only boost clears the gate even if the master gain cannot.
-        assert calibrated.measure("music", speech) == pytest.approx(music_speech, abs=0.2)
+        assert calibrated.measure("music", report["music_speech_windows"]) == pytest.approx(music_speech, abs=0.2)
         assert music_speech < -70
         if game_gain <= -65:
             assert music_speech + meter_gain < -70
@@ -1486,6 +1497,81 @@ def test_publish_calibrates_music_duck_to_the_raw_music_dynamics(
     assert json.loads(out.with_suffix(".levels.json").read_text())["music_duck_db"] == report["music_duck_db"]
 
 
+@pytest.mark.parametrize("pre_faded,fade_in,fade_out", [(False, 1, 1.5), (True, 1.3, 1.8)])
+def test_publish_measures_music_plateaus_outside_short_pause_ramps_and_fades(
+    tmp_path, tone_inputs, pre_faded, fade_in, fade_out,
+):
+    joined, voice, music, out = (tmp_path / name for name in (
+        "joined.mkv", "voice.wav", "music.wav", "short.mp4",
+    ))
+    total = 14.3
+    # The long first/last pauses lie on music fades. Most interior pauses are
+    # only 250–500 ms; removing the duck ramps leaves 700 ms of true plateau.
+    speech = [(0.8, 1.8), (2.05, 3.05), (3.4, 4.4), (4.9, 5.9), (6.35, 7.35),
+              (7.6, 8.6), (9, 10), (10.5, 11.5), (11.8, 12.8)]
+    expected_pauses = [(3.2, 3.25), (4.55, 4.75), (6.05, 6.2), (8.75, 8.85), (10.15, 10.35)]
+    expected_speech = [(max(start, fade_in), min(end, total - fade_out)) for start, end in speech]
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         f"color=c=black:s=16x16:r=10:d={total}", "-f", "lavfi", "-i",
+         f"sine=frequency=440:sample_rate=48000:duration={total}", "-af",
+         f"volume=-20dB,afade=t=in:d=0.06,afade=t=out:st={total - 0.06}:d=0.06",
+         "-c:v", "mpeg4", "-c:a", "pcm_f32le", str(joined)], check=True, capture_output=True,
+    )
+    active = "+".join(
+        f"max(0,min(1,min((t-{start})/0.02,({end}-t)/0.02)))" for start, end in speech
+    )
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         f"aevalsrc='0.03*({active})*sin(2*PI*1000*t)':s=48000:d={total}",
+         "-c:a", "pcm_f32le", str(voice)], check=True, capture_output=True,
+    )
+    # Explain's Remotion stem already carries these fades; calibrating must use
+    # their durations without applying them to the audio for a second time.
+    filters = (f"afade=t=in:d={fade_in},afade=t=out:st={total - fade_out}:d={fade_out}"
+               if pre_faded else "anull")
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         f"sine=frequency=220:sample_rate=48000:duration={total}", "-af", filters,
+         "-c:a", "pcm_f32le", str(music)], check=True, capture_output=True,
+    )
+
+    report = levels.publish(
+        joined, music, [(voice, 0)], speech, total, total, out,
+        music_fades=not pre_faded, music_fade_durations=(fade_in, fade_out),
+    )
+
+    assert report["ok"] is True
+    assert report["balance_stage"] == "mastered_aac"
+    assert report["music_duck_db"] == pytest.approx(6, abs=0.3)
+    assert report["music_pause_windows_fallback"] is False
+    for key, expected in (("music_pause_windows", expected_pauses),
+                          ("music_speech_windows", expected_speech)):
+        for actual, interval in zip(report[key], expected, strict=True):
+            assert actual == pytest.approx(interval)
+    # A separate raw-stem reading at the physical plateau prevents an average
+    # over fades/ramps from hiding music that is too loud between spoken lines.
+    plateau = levels.measure(["-i", str(music)], "[0:a]anull[m]", "m", expected_pauses)
+    pre_rows = _rows({"rows": report["pre_master_rows"]})
+    calibration_gain = report["music_gain_db"] - sum(
+        step.get("music_gain_db", 0) for step in report["balance_corrections_db"]
+    )
+    assert plateau + calibration_gain == pytest.approx(
+        pre_rows["voice"]["measured_lufs"] - 14, abs=0.5,
+    )
+    for rows in (pre_rows, _rows(report)):
+        assert rows["music_pause"]["target_lufs"] == pytest.approx(rows["voice"]["measured_lufs"] - 14)
+        assert rows["music_pause"]["measured_lufs"] == pytest.approx(
+            rows["music_pause"]["target_lufs"], abs=0.5,
+        )
+        assert rows["music_speech"]["ok"] is True
+    assert out.stat().st_size > 0
+    saved = json.loads(out.with_suffix(".levels.json").read_text())
+    assert saved["music_pause_windows_fallback"] is False
+    assert saved["music_pause_windows"] == [list(window) for window in report["music_pause_windows"]]
+    assert saved["music_speech_windows"] == [list(window) for window in report["music_speech_windows"]]
+
+
 def test_calibration_and_publication_account_for_music_ramps_in_short_pauses(tmp_path, tone_inputs):
     joined, voice, music, out = (tmp_path / name for name in (
         "joined.mkv", "voice.wav", "music.wav", "short.mp4",
@@ -1526,6 +1612,10 @@ def test_calibration_and_publication_account_for_music_ramps_in_short_pauses(tmp
     assert report["ok"] is True
     assert report["balance_stage"] == "mastered_aac"
     assert out.stat().st_size > 0
+    for measured in (calibrated, report):
+        assert measured["music_pause_windows_fallback"] is True
+        assert measured["music_pause_windows"] == levels.pause_windows(speech, 6)
+        assert measured["music_speech_windows"] == speech
     for rows in (_rows(calibrated), _rows(report)):
         for key in ("music_pause", "music_speech"):
             assert rows[key]["ok"] is True

@@ -100,6 +100,32 @@ def pause_windows(speech: list[Window], duration: float) -> list[Window]:
     return pauses
 
 
+def music_windows(speech: list[Window], duration: float,
+                  fade_durations: tuple[float, float]) -> tuple[list[Window], list[Window], bool]:
+    """Select music plateaus; retain original pauses if fewer than 400 ms remain.
+
+    Only music measurements use these windows. A boundary next to speech loses
+    its duck ramp, while the body's outer boundaries lose only the music fades.
+    """
+    fade_in, fade_out = fade_durations
+    if any(not math.isfinite(value) or value < 0 for value in fade_durations):
+        raise ValueError("Music fade durations must be finite and non-negative")
+    speech = merge_speech_windows(speech, duration)
+    pauses = pause_windows(speech, duration)
+
+    def clip(windows: list[Window]) -> list[Window]:
+        return [(max(start, fade_in), min(end, duration - fade_out))
+                for start, end in windows
+                if min(end, duration - fade_out) > max(start, fade_in)]
+
+    music_speech = clip(speech)
+    music_pauses = clip([(start + (RAMP_SECONDS if start > 0 else 0),
+                          end - (RAMP_SECONDS if end < duration else 0))
+                         for start, end in pauses])
+    fallback = bool(pauses) and sum(end - start for start, end in music_pauses) < 0.4 - 1e-6
+    return music_speech, pauses if fallback else music_pauses, fallback
+
+
 def duck_filter(windows: list[Window], attenuation_db: float) -> str:
     """Full attenuation throughout each word window, ramps in the adjacent pauses.
 
@@ -268,14 +294,17 @@ def check_mastering(report: dict, voice_lufs: float, true_peak_dbtp: float,
 
 
 def check_mastered_balance(stems: dict[str, Path], speech_lufs: float,
-                           speech: list[Window], pauses: list[Window], ending: list[Window]) -> dict:
+                           speech: list[Window], pauses: list[Window], ending: list[Window],
+                           music_speech: list[Window] | None = None,
+                           music_pauses: list[Window] | None = None) -> dict:
     """Validate decoded AAC stems under the actual mix limiter, using the final voice as S."""
     def reading(track: str, windows: list[Window]) -> float | None:
         if track not in stems or not windows:
             return None
         return measure(["-i", str(stems[track])], "[0:a]anull[stem]", "stem", windows)
 
-    return check_balance(speech_lufs, reading("music", pauses), reading("music", speech),
+    return check_balance(speech_lufs, reading("music", pauses if music_pauses is None else music_pauses),
+                         reading("music", speech if music_speech is None else music_speech),
                          reading("game", speech), reading("game", pauses), reading("game", ending))
 
 
@@ -507,16 +536,30 @@ def audio_graph(joined: Path, music: Path | None, voice: list[tuple[Path, float]
 
 def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
               speech: list[Window], total: float, length: float, *,
-              music_volume: float = 1.0, music_fades: bool = True) -> tuple[AudioGraph, dict]:
+              music_volume: float = 1.0, music_fades: bool = True,
+              music_fade_durations: tuple[float, float] = (0.0, 0.0)) -> tuple[AudioGraph, dict]:
     pauses = pause_windows(speech, total)
+    music_speech_windows, music_pause_windows, music_pause_fallback = music_windows(
+        speech, total, (1.0, 1.5) if music_fades else music_fade_durations,
+    )
+    music_window_report = {
+        "music_speech_windows": music_speech_windows,
+        "music_pause_windows": music_pause_windows,
+        "music_pause_windows_fallback": music_pause_fallback,
+        "music_pause_windows_fallback_reason": (
+            "Music pause plateau is shorter than 400 ms; using original pause windows"
+            if music_pause_fallback else None
+        ),
+    }
     raw = audio_graph(joined, music, voice, speech, total, length,
                       music_volume=music_volume, music_fades=music_fades,
                       music_duck_db=0.0 if voice else MUSIC_DUCK_DB)
     if not voice:
         game = raw.measure("game")
-        music_level = raw.measure("music") if music is not None else None
+        music_level = raw.measure("music", music_pause_windows) if music is not None else None
         report = check_balance(None, music_level, None, None, game)
         report["music_duck_db"] = MUSIC_DUCK_DB
+        report.update(music_window_report)
         return raw, report
     if not speech:
         raise ValueError("The voiced plan has no speech windows inside the video")
@@ -544,24 +587,24 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
     game = audio_graph(joined, None, voice, speech, total, length,
                        game_gain_db=game_gain, game_duck_db=game_db, ending_gain_db=ending_gain)
     game_pause = game.measure("game", pauses, meter_gain_db=meter_gain) if pauses else None
-    music_pause = (raw.measure("music", pauses if pauses else None, meter_gain_db=meter_gain)
+    music_pause = (raw.measure("music", music_pause_windows if pauses else music_speech_windows,
+                               meter_gain_db=meter_gain)
                    if music is not None else None)
     music_db = music_gain(s, music_pause, game_pause) if music_pause is not None else 0.0
     music_duck = MUSIC_DUCK_DB
     if music is not None and pauses:
-        music_speech = raw.measure("music", speech, meter_gain_db=meter_gain)
+        music_speech = raw.measure("music", music_speech_windows, meter_gain_db=meter_gain)
         if math.isfinite(music_speech) and music_pause is not None and math.isfinite(music_pause):
             # A common gain puts raw pauses on target; compensate the bed's
             # own dynamics as well to put speech at that same target minus 6 LU.
             music_duck = min(MAX_MUSIC_DUCK_DB, max(0.0, MUSIC_DUCK_DB + music_speech - music_pause))
             lower, upper = 0.0, MAX_MUSIC_DUCK_DB
-            for attempt in range(9):
-                # The ramps live in pauses too. Set gain from the actual ducked
-                # pauses, then refine depth if that gain would spoil speech.
-                # Bisection also handles overlapping ramps in short pauses;
-                # eight refinements bound the remaining depth interval to 0.07 dB.
+            for attempt in range(9) if music_pause_fallback else ():
+                # Only the reported fallback retains ramps/fades in its pauses.
+                # Preserve its bounded refinement when no measurable plateau
+                # exists; normal plateaus use the raw-level formula unchanged.
                 ducked_pause = replace(raw, music_duck_db=music_duck).measure(
-                    "music", pauses, meter_gain_db=meter_gain,
+                    "music", music_pause_windows, meter_gain_db=meter_gain,
                 )
                 music_db = music_gain(s, ducked_pause, game_pause)
                 error = music_speech - music_duck - ducked_pause + MUSIC_DUCK_DB
@@ -581,9 +624,9 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
                         game_gain_db=game_gain, game_duck_db=game_db,
                         ending_gain_db=ending_gain, music_fades=music_fades)
     report = check_balance(
-        s, final.measure("music", pauses, meter_gain_db=meter_gain)
+        s, final.measure("music", music_pause_windows, meter_gain_db=meter_gain)
         if music is not None and pauses else None,
-        final.measure("music", speech, meter_gain_db=meter_gain) if music is not None else None,
+        final.measure("music", music_speech_windows, meter_gain_db=meter_gain) if music is not None else None,
         final.measure("game", speech, meter_gain_db=meter_gain), game_pause,
         final.measure("game", ending_windows, meter_gain_db=meter_gain) if ending_windows else None,
     )
@@ -592,6 +635,7 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
                    "game_gain_db": game_gain, "game_duck_db": game_db,
                    "ending_gain_db": ending_gain, "speech_windows": speech, "pause_windows": pauses,
                    "ending_windows": ending_windows})
+    report.update(music_window_report)
     return final, report
 
 
@@ -651,7 +695,9 @@ def _master_voiced(audio: AudioGraph | None, report: dict | None, out: Path, len
 
         def measure_balance(voice_lufs: float) -> dict:
             return check_mastered_balance(stems, voice_lufs, report["speech_windows"],
-                                          report["pause_windows"], report["ending_windows"])
+                                          report["pause_windows"], report["ending_windows"],
+                                          report.get("music_speech_windows", report["speech_windows"]),
+                                          report.get("music_pause_windows", report["pause_windows"]))
 
         for attempt in range(MAX_MASTER_CORRECTIONS + 1):
             voice_lufs = render()
@@ -700,12 +746,14 @@ def _master_voiced(audio: AudioGraph | None, report: dict | None, out: Path, len
 def publish(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
             speech: list[Window], total: float, length: float, out: Path, *,
             music_volume: float = 1.0, music_fades: bool = True,
+            music_fade_durations: tuple[float, float] = (0.0, 0.0),
             _master: Callable[..., None] | None = None) -> dict:
     """Calibrate, master and publish a voiced short with its decoded AAC report.
 
     Removes stale output/report first. Every calibration, ffmpeg or gate failure
     writes an error report, removes the output and raises LevelsError. Disable
-    music_fades for a music stem whose fades were already rendered upstream.
+    music_fades for a music stem whose fades were already rendered upstream;
+    pass their durations as music_fade_durations to exclude them from metering.
     All clip offsets and speech intervals use the joined video's timeline;
     total is the body's duration, length includes the optional ending.
     """
@@ -719,7 +767,8 @@ def publish(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
             raise LevelsError("Voiced publication needs voice clips")
         speech = merge_speech_windows(speech, total)
         audio, report = calibrate(joined, music, voice, speech, total, length,
-                                  music_volume=music_volume, music_fades=music_fades)
+                                  music_volume=music_volume, music_fades=music_fades,
+                                  music_fade_durations=music_fade_durations)
         if not report["ok"] or any(row["ok"] is False for row in report["rows"]):
             raise LevelsError(_gate_error(report, "balance"))
         if _master is None:
