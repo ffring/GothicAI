@@ -33,10 +33,12 @@ CEILING_HEADROOM_LU = 0.5
 PEAK_LIMIT = 0.71
 # A sub-threshold pilot follows the limiter's shared gain without influencing it.
 LIMITER_PILOT = 0.01
-MUSIC_BELOW_VOICE_LU = 14.0
+# Keep a quiet bed that is still audible; at S−14 with another −6 dB under
+# speech it disappeared behind the voice. Music stays at least 3 LU below effects.
+MUSIC_BELOW_VOICE_LU = 11.0
 MUSIC_BELOW_GAME_LU = 3.0
-MUSIC_DUCK_DB = 6.0
-# Allow up to 12 LU of extra speech-window energy without extreme ducking
+MUSIC_DUCK_DB = 3.0
+# Allow extra speech-window energy without extreme ducking
 # when a pause is unusually quiet or unrepresentative of the music bed.
 MAX_MUSIC_DUCK_DB = 18.0
 # Keep effects well below the voice: at S−6 / S−3 they competed with it.
@@ -651,7 +653,7 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
         music_speech = raw.measure("music", music_speech_windows, meter_gain_db=meter_gain)
         if math.isfinite(music_speech) and music_pause is not None and math.isfinite(music_pause):
             # A common gain puts raw pauses on target; compensate the bed's
-            # own dynamics as well to put speech at that same target minus 6 LU.
+            # own dynamics as well to apply the configured speech duck below that target.
             music_duck = min(MAX_MUSIC_DUCK_DB, max(0.0, MUSIC_DUCK_DB + music_speech - music_pause))
             lower, upper = 0.0, MAX_MUSIC_DUCK_DB
             for attempt in range(9) if music_pause_fallback else ():
