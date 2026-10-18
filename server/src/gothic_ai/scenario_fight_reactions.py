@@ -12,6 +12,7 @@ import logging
 import math
 import re
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,6 +62,7 @@ class CombatTrace:
     contacts: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     received_contacts: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     event_ids: set[int] = field(default_factory=set)
+    native_events: dict[str, deque[dict[str, Any]]] = field(default_factory=dict)
     damage: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     damage_wall: dict[str, list[float]] = field(default_factory=dict)
     positions: dict[str, tuple[float, float, float]] = field(default_factory=dict)
@@ -71,6 +73,7 @@ class CombatTrace:
     weapons: dict[str, int] = field(default_factory=dict)
     interruptible: dict[str, bool] = field(default_factory=dict)
     latest: dict[str, dict[str, Any]] = field(default_factory=dict)
+    latest_rows: dict[str, dict[str, Any]] = field(default_factory=dict)
     game_ms: dict[str, int] = field(default_factory=dict)
     attacking: dict[str, bool] = field(default_factory=dict)
     events: list[tuple[float, GameMessage]] = field(default_factory=list)
@@ -100,6 +103,7 @@ class CombatTrace:
             self.weapons[who] = own["weapon_state"]
             self.interruptible[who] = own["interruptible"]
             self.latest[who] = own
+            self.latest_rows[who] = row
             self.game_ms[who] = now
             if own["weapon_state"] >= 2:
                 self.armed.setdefault(who, now)
@@ -122,11 +126,16 @@ class CombatTrace:
                     event["perspective"] != "self"
                     or event["source_entity_id"] != row["entity_id"]
                     or event["event_id"] in self.event_ids
-                    or event["code"] not in (3, 9, 10)
                 ):
                     continue
                 self.event_ids.add(event["event_id"])
                 at, code = event["source_game_ms"], event["code"]
+                self.native_events.setdefault(who, deque(maxlen=256)).append({
+                    "event": event, "observed_target": self.target[who],
+                    "attack_anim": attacking, "body_state_base": own.get("body_state_base"),
+                    "defence_active": own.get("defence_active"),
+                    "queued_primitive": own.get("queued_primitive"), "hp": own["hp"],
+                })
                 if code == 3:  # Native hit applied after the real range/focus checks.
                     # Native events omit the victim. This is the target observed with the
                     # event's delivery, retained for diagnostics rather than authoritative attribution.
@@ -135,7 +144,7 @@ class CombatTrace:
                         "fight_reactions contact npc=%s observed_target_entity=%d game_ms=%d event_id=%d",
                         who, self.target[who], at, event["event_id"],
                     )
-                else:  # A contact is real even when armor absorbs all HP loss (code 10).
+                elif code in (9, 10):  # A contact is real even when armor absorbs all HP loss.
                     self.received_contacts.setdefault(who, []).append((at, code))
                     log.info(
                         "fight_reactions contact received npc=%s code=%d game_ms=%d event_id=%d",
@@ -977,10 +986,17 @@ async def fight_reactions(
                     hits = trace.damage.get(bandit, [])
                     hit = hits[0][0] if hits else None
                     if hit is not None:
-                        await _until(
-                            lambda b=bandit, h=hit: trace.strike_after(b, CAVALORN, h) is not None,
-                            3.1,
+                        complete = await _until(
+                            lambda b=bandit, h=hit: (
+                                trace.strike_after(b, CAVALORN, h) is not None
+                                or trace.game_ms.get(b, 0) >= h + 3000
+                            ), 10,
                         )
+                        if not complete:
+                            raise GameError(
+                                f"fight_reactions setup: incomplete 3000 ms observation window; "
+                                f"npc={bandit}, hit={hit}, last_game_ms={trace.game_ms.get(bandit)}"
+                            )
                     first = trace.strike_after(bandit, CAVALORN, hit) if hit is not None else None
                     threat = next(
                         (
@@ -1028,6 +1044,23 @@ async def fight_reactions(
                         f"first_hit_game_ms={hit}, first_return_strike_game_ms={first}, "
                         f"delay_ms={first - hit if first is not None and hit is not None else None}",
                     )
+                    if hit is not None and (first is None or first - hit > 3000):
+                        rows = {n: trace.latest_rows.get(n) for n in (bandit, CAVALORN)}
+                        native_events = {
+                            n: [
+                                e for e in trace.native_events.get(n, ())
+                                if e["event"]["source_game_ms"] >= hit
+                            ]
+                            for n in (bandit, CAVALORN)
+                        }
+                        snapshot = await link.snapshot(bandit, fresh=True)
+                        log.error(
+                            "fight_reactions failed counter npc=%s first_hit_game_ms=%s "
+                            "last_game_ms=%s body_owned=%s rows=%s native_events=%s commands=%s snapshot=%s",
+                            bandit, hit, trace.game_ms.get(bandit), link.body_owned(bandit), rows,
+                            native_events, [c for c in trace.commands if c[1] in {bandit, CAVALORN}][-20:],
+                            snapshot.model_dump(),
+                        )
                     # Its metrics are complete. Remove it without a player blow, then stage the
                     # other still-living defender; no damage/voice/strike history is reset.
                     if bandit == BANDITS[0]:
