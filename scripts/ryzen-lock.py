@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import runpy
 import signal
+import subprocess
 import sys
 import time
 
@@ -62,8 +63,17 @@ def main():
     report("Ryzen: queue guard ready")
     for line in sys.stdin:
         action, request = line.rstrip("\n").split(" ", 1)
-        if action == "arm" and run is None:
+        if action == "probe" and (run is None or confirmed):
+            arguments = json.loads(request)
+            result = subprocess.run(
+                ["bash", str(state / "source/scripts/ryzen.sh"), "__remote", "probe",
+                 arguments["action"], str(state), arguments["run"], arguments["scenario"]],
+                stdin=subprocess.DEVNULL, check=False,
+            )
+            report(f'Ryzen: preparation check {arguments["run"]} exit {result.returncode}')
+        elif action == "arm" and (run is None or confirmed):
             run = request
+            complete = confirmed = False
             report(f"Ryzen: queue guard armed {run}")
         elif request == run and action == "complete":
             complete = True

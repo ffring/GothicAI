@@ -1,4 +1,5 @@
 #include "directmusic.h"
+#include "resources.h"
 
 #include <stdexcept>
 
@@ -76,6 +77,7 @@ Tempest::RFile DirectMusic::implOpen(const char16_t *file) {
     try {
       std::u16string filepath = FileUtil::nestedPath(pt, {file}, Tempest::Dir::FT_File);
       Tempest::RFile fin(filepath);
+      Resources::censusFile(filepath);
       return fin;
       }
     catch(std::system_error&){

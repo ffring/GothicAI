@@ -165,6 +165,7 @@ PR, который добавляет фичу или выключатель, д
 Это не фичи игры, а инструменты и опции. Включаются явно:
 - `gothic-ai serve --scenario <имя>`, `--journal`, `--voice-files`;
 - HD-текстуры: каталог в `OPENGOTHIC_TEXTURES`, его передаёт лаунчер, когда текстуры сделаны;
+- Перепись оригинальных ресурсов: `OPENGOTHIC_CENSUS=<путь к json>`, запись при выходе и Marvin `census`; `common/contentcensus.*`, наблюдатель VFS, `scripts/content-census.py`; проверки — `smoke` на Ryzen и `scripts/test_content_census.py`, [own-content.md](own-content.md);
 - `GOTHIC_AI_STORYCHECK=1` — сверка условий скриптов с поднятыми; в `-devmode` включена сама;
 - `OPENGOTHIC_ANIM_SKIP_FAR=1`, `OPENGOTHIC_FOOTIK_WATCHED_ONLY=1` — экономия на дальних NPC для прогонов тела;
 - `OPENGOTHIC_BENCH*`, `OPENGOTHIC_*_LOG`, `OPENGOTHIC_*_TRACE` — стенд, журналы и трассы.
@@ -172,6 +173,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича стенда | Как включить / выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
+| Офлайн-перепись площадей, масштаба UV и плиточности текстур четырёх миров со статичными vob | `scripts/content-textures.sh`; без запуска скрипта не работает | `scripts/content/world-textures.cpp` | `scripts/content-textures.sh --self-test`, офлайн-прогон четырёх миров со сверкой площади ≤ 0,1 % | [own-content.md](own-content.md), [CSV и отчёт](../reports/content/2026-10-world-textures/README.md) |
 | Популяция навигации: N NPC, независимые состояния, выборка softmax и награды Detour без перезагрузки мира | `navdemos population … sample\|argmax … RECORD`; `navdemos physics cv\|native`, в `nav_rl.py` CV по умолчанию; `RECORD=0` выключает записи; `hero near\|keep`, `kill-slot SLOT AFTER_MS` — проверки стенда | `common/navdemos.*`, минимальные вставки в `worldobjects.cpp`, `npc.cpp`, `MoveAlgo::useCharacterVirtual`; `scripts/nav_rl.py` | `test_nav_rl.py`, `nav_rl.py check/equivalence/population/death-smoke` | [navigation.md](navigation.md) |
 
 Остальная обучаемая навигация ([navigation.md](navigation.md)) — пока исследование, в игру не включена.

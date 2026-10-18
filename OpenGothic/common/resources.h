@@ -25,6 +25,7 @@ class Animation;
 class AttachBinder;
 class PfxEmitterMesh;
 class GthFont;
+class ContentCensus;
 
 namespace Dx8 {
 class DirectMusic;
@@ -155,11 +156,14 @@ class Resources final {
     static bool                      hasFile    (std::string_view fname);
 
     static const zenkit::Vfs&        vdfsIndex();
+    static void                      censusFile(std::u16string_view path);
+    static bool                      writeCensus();
 
     static const Tempest::IndexBuffer<uint16_t>&   cubeIbo();
 
   private:
     static Resources* inst;
+    void initCensus();
 
     struct Archive {
       std::u16string name;
@@ -236,6 +240,7 @@ class Resources final {
     std::recursive_mutex              sync;
     std::unique_ptr<Dx8::DirectMusic> dxMusic;
     DmLoader*                         dmLoader = nullptr;
+    std::unique_ptr<ContentCensus>     census;
     zenkit::Vfs                       gothicAssets;
 
     std::vector<uint8_t>              fBuff, ddsBuf;
