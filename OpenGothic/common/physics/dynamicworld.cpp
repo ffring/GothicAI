@@ -12,6 +12,7 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
@@ -932,11 +933,14 @@ DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, co
   // Use the visual bounds' volume, before the minimum collision proxy padding.
   const float mass = float(materialDensity(mat)*double(extent.GetX())*extent.GetY()*extent.GetZ()*volumeScale);
   const auto halfExtent = JPH::Vec3::sMax(extent*0.5f,JPH::Vec3::sReplicate(0.15f));
-  JPH::ShapeRefC shape = new JPH::BoxShape(halfExtent);
+  const auto center=CollisionWorld::toMeters((b.bbox[0]+b.bbox[1])*.5f);
+  JPH::ShapeRefC shape = new JPH::RotatedTranslatedShape(center,JPH::Quat::sIdentity(),new JPH::BoxShape(halfExtent));
   auto obj = std::make_unique<BodyData>();
   obj->body = world->addDynamicBody(shape,pos,materialFriction(mat),mass);
   // Collision padding keeps small items easy to touch. Water displaces the
   // actual visual envelope so padding cannot make a metal sword float.
+  // The native COM is already at the visual bounds' centre; the unpadded
+  // box shares that centre while the body's transform keeps the visual pivot.
   const auto waterHalfExtent=JPH::Vec3::sMax(extent*.5f,JPH::Vec3::sReplicate(.0005f));
   obj->body->setBuoyancyShape(new JPH::BoxShape(waterHalfExtent,0.f));
   obj->body->setNoiseProfile(impactMaterial(mat),mat,"item");

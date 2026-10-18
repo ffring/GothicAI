@@ -800,8 +800,8 @@ Item* WorldObjects::addItemDyn(size_t itemInstance, const Tempest::Matrix4x4& po
 
   std::unique_ptr<Item> ptr;
   if(itemInstance==ItLsTorchburning)
-    ptr.reset(new ItemTorchBurning(owner,itemInstance,Item::T_WorldDyn)); else
-    ptr.reset(new Item(owner,itemInstance,Item::T_WorldDyn));
+    ptr.reset(new ItemTorchBurning(owner,itemInstance,Item::T_WorldDyn,pos)); else
+    ptr.reset(new Item(owner,itemInstance,Item::T_WorldDyn,pos));
 
   auto* it=ptr.get();
   it->handle().owner = ownerNpc==size_t(-1) ? 0 : int32_t(ownerNpc);

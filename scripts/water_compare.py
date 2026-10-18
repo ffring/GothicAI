@@ -7,6 +7,12 @@ import math
 from pathlib import Path
 
 
+# Stock script materials of the four genuine world Items in prepareWaterFixture.
+# Keep this expectation independent of mass / measured buoyancy-envelope volume:
+# a construction bug must not turn a floating sword into a passing test.
+ITEM_DENSITY_KG_M3 = {'arrow': 700, 'wood_item': 700, 'sword': 7800, 'stone': 2200}
+
+
 def require(condition, message):
     if not condition:
         raise ValueError(message)
@@ -36,7 +42,11 @@ def resting(row):
         fraction = body['submerged_fraction']
         require(math.isfinite(density) and density > 0 and 0 <= fraction <= 1.001,
                 f'invalid water measurement: {body}')
-        floating = density < 1000
+        expected_density = ITEM_DENSITY_KG_M3.get(body['label'], density)
+        require(abs(density - expected_density) <= max(.1, expected_density * .001),
+                f'{body["label"]}: measured density {density:.6f} kg/m3 differs from '
+                f'its expected script-material density {expected_density} kg/m3')
+        floating = expected_density < 1000
         if floating and row['case'] == 'deep':
             require(body['world_bottom_cm'] < body['water_y_cm'] < body['world_top_cm'],
                     f'{body["label"]}: wooden shell is not floating across the surface')

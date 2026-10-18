@@ -22,7 +22,8 @@ class Item : public Vob {
       T_Inventory,
       };
 
-    Item(World& owner, size_t     inst, Type type);
+    Item(World& owner, size_t     inst, Type type,
+         const Tempest::Matrix4x4& initial = Tempest::Matrix4x4::mkIdentity());
     Item(World& owner, Serialize& fin,  Type type);
     Item(Item&&);
     ~Item();

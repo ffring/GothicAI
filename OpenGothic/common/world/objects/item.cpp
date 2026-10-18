@@ -32,13 +32,16 @@ zenkit::MaterialGroup physicsMaterial(int32_t material) {
 
 }
 
-Item::Item(World &owner, size_t itemInstance, Type type)
+Item::Item(World &owner, size_t itemInstance, Type type, const Tempest::Matrix4x4& initial)
   :Vob(owner) {
   assert(itemInstance!=size_t(-1));
   hitem = std::make_shared<zenkit::IItem>();
   hitem->user_ptr=this;
   owner.script().initializeInstanceItem(hitem, itemInstance);
   setCount(1);
+  // Mass and native inertia are fixed when physics is created. The default
+  // Vob transform is zero, so establish the final pose and scale first.
+  setObjMatrix(initial);
 
   if(type!=T_Inventory) {
     visual = world.addView(*hitem);
@@ -79,6 +82,7 @@ Item::Item(World &owner, Serialize &fin, Type type)
   fin.read(amount);
   fin.read(pos,equipped,itSlot);
   fin.read(mat);
+  setLocalTransform(mat);
 
   if(type!=T_Inventory) {
     if(!FileExt::hasExt(hitem->visual,"ZEN"))
@@ -87,7 +91,6 @@ Item::Item(World &owner, Serialize &fin, Type type)
       setPhysicsEnable(visual);
     }
 
-  setLocalTransform(mat);
   visual.setObjMatrix(mat);
   physic.setObjMatrix(mat);
   }

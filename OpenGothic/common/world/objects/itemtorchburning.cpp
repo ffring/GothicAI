@@ -2,8 +2,8 @@
 
 #include "world/world.h"
 
-ItemTorchBurning::ItemTorchBurning(World& owner, size_t inst, Item::Type type)
-  :Item(owner,inst,type) {
+ItemTorchBurning::ItemTorchBurning(World& owner, size_t inst, Item::Type type, const Tempest::Matrix4x4& initial)
+  :Item(owner,inst,type,initial) {
   auto& sc = owner.script();
 
   auto hitem = std::make_shared<zenkit::IItem>();
