@@ -1,6 +1,7 @@
 #include "worldobjects.h"
 
 #include "game/serialize.h"
+#include "game/herodeed.h"
 #include "game/bodyarena.h"
 #include "physics/physicsnoise.h"
 #include "game/bodyobservations.h"
@@ -273,6 +274,9 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
         passivePerceptionProcess(r, *ptr, *pl);
       }
     }
+  for(auto& r:passive)
+    if(r.deed!=nullptr)
+      Gothic::inst().onHeroDeed(*r.deed);
   }
 
 uint32_t WorldObjects::npcId(const Npc *ptr) const {
@@ -963,8 +967,22 @@ void WorldObjects::setMobRoutine(gtime time, std::string_view scheme, int32_t st
   routines.emplace_back(std::move(st));
   }
 
-void WorldObjects::sendPassivePerc(Npc &self, Npc &other, Npc* victim, Item* itm, int32_t perc) {
+void WorldObjects::sendPassivePerc(Npc &self, Npc &other, Npc* victim, Item* itm, int32_t perc, std::shared_ptr<HeroDeed> deed) {
   PerceptionMsg m;
+  m.deed = std::move(deed);
+  if(m.deed==nullptr && other.isPlayer()) {
+    if(perc==PERC_ASSESSTHEFT)
+      m.deed = HeroDeed::capture(other,"take_item",nullptr,itm);
+    if(perc==PERC_ASSESSMURDER)
+      m.deed = HeroDeed::capture(other,"murder",victim);
+    if(perc==PERC_ASSESSUSEMOB) {
+      auto* mob = other.interactive();
+      if(mob!=nullptr && mob->isContainer() && mob->heroUseDeed()==nullptr) {
+        m.deed = HeroDeed::capture(other,"use_mob",nullptr,nullptr,mob);
+        mob->setHeroUseDeed(m.deed);
+        }
+      }
+    }
   m.what   = perc;
   m.pos    = self.position();
   m.self   = &self;
@@ -1021,7 +1039,7 @@ void WorldObjects::passivePerceptionProcess(PerceptionMsg& msg, Npc& npc, Npc& p
 
   if(msg.item!=size_t(-1) && msg.other!=nullptr)
     owner.script().setInstanceItem(*msg.other,msg.item);
-  npc.perceptionProcess(*msg.other,msg.victim,distance,PercType(msg.what));
+  npc.perceptionProcess(*msg.other,msg.victim,distance,PercType(msg.what),msg.deed);
   }
 
 void WorldObjects::emitPhysicsNoise(const PhysicsNoise& noise) {

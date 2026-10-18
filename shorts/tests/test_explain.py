@@ -141,6 +141,7 @@ def test_cli_publishes_synthetic_stems_with_shared_levels(
         assert speech == [(4, 8)]
         assert total == 12 and length == 14.2
         assert kwargs["music_fades"] is False
+        assert kwargs["music_fade_durations"] == ((0.5, 0.5) if music else (0, 0))
         return real_publish(joined, bed, voice, speech, total, length, out, **kwargs)
 
     monkeypatch.setattr(levels, "publish", publish)
@@ -178,6 +179,80 @@ def test_cli_publishes_synthetic_stems_with_shared_levels(
             assert rows[name]["ok"] is None
     output = capsys.readouterr().out
     assert all(track in output for track in ("voice", "music_pause", "game_speech", "true_peak", "clicks"))
+
+
+@pytest.mark.parametrize("fade_settings,expected", [
+    ({}, (1, 1.5)),
+    ({"fadeIn": 0, "fadeOut": 0}, (0, 0)),
+    ({"fadeIn": 0.75, "fadeOut": 2}, (0.75, 2)),
+])
+def test_publish_forwards_plan_fades_with_remotion_defaults(
+    tmp_path, monkeypatch, fade_settings, expected,
+):
+    plan = _plan()
+    plan["music"] = {"file": "music.wav", "volume": 1, **fade_settings}
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    monkeypatch.setattr(explain, "render", lambda *args: None)
+    monkeypatch.setattr(explain, "_run", lambda *args: None)
+    forwarded = []
+    monkeypatch.setattr(levels, "publish", lambda *args, **kwargs: forwarded.append(kwargs))
+
+    explain.publish(tmp_path)
+
+    assert len(forwarded) == 1
+    assert forwarded[0]["music_fades"] is False
+    assert forwarded[0]["music_fade_durations"] == expected
+
+
+def test_publish_measures_plateaus_of_prefaded_music_using_plan_fades(
+    tmp_path, synthetic_stems, monkeypatch,
+):
+    # All three middle pauses are short; the longer edge pauses fall on the
+    # fades already baked into Remotion's stem. Only their plateaus set gain.
+    speech = [(0.8, 2.8), (3.3, 5.3), (5.8, 7.8), (8.3, 9.3)]
+    plan = _plan()
+    plan["lines"] = [[{"text": f"line-{index}", "start": start, "end": end}]
+                     for index, (start, end) in enumerate(speech)]
+    plan["music"].update(fadeIn=1, fadeOut=3)
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    stems = tmp_path / "stems"
+    stems.mkdir()
+    for name in ("picture.mp4", "game.wav"):
+        shutil.copyfile(synthetic_stems / name, stems / name)
+    envelope = "+".join(
+        f"max(0,min(1,min((t-{start})/0.06,({end}-t)/0.06)))"
+        for start, end in speech
+    )
+    for name, frequency, filters in [
+        ("voice", 1000, f"volume=-12dB,aeval='val(0)*({envelope})',apad=whole_dur=14.2"),
+        ("music", 220, "afade=t=in:d=1,afade=t=out:st=9:d=3,apad=whole_dur=14.2"),
+    ]:
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+             f"sine=frequency={frequency}:sample_rate=48000:duration=12",
+             "-af", filters, "-c:a", "pcm_f32le", str(stems / f"{name}.wav")],
+            check=True, capture_output=True,
+        )
+    _prepared_render(monkeypatch, stems)
+
+    out = explain.publish(tmp_path)
+
+    assert out.stat().st_size > 0
+    report = json.loads(out.with_suffix(".levels.json").read_text())
+    assert report["ok"] is True
+    # Subtracting tenth-LU readings can leave 6.300000000000001 at the boundary.
+    assert report["music_duck_db"] == pytest.approx(6, abs=0.3 + 1e-12)
+    expected_pauses = [(2.95, 3.15), (5.45, 5.65), (7.95, 8.15)]
+    for actual, expected in zip(report["music_pause_windows"], expected_pauses, strict=True):
+        assert actual == pytest.approx(expected)
+    expected_speech = [(1, 2.8), (3.3, 5.3), (5.8, 7.8), (8.3, 9)]
+    for actual, expected in zip(report["music_speech_windows"], expected_speech, strict=True):
+        assert actual == pytest.approx(expected)
+    rows = _rows(report)
+    assert rows["music_pause"]["measured_lufs"] == pytest.approx(
+        rows["voice_mastered"]["measured_lufs"] - 14, abs=0.5,
+    )
+    assert all(row["ok"] is not False for row in report["rows"])
 
 
 def test_cli_rejects_loud_music_removes_stale_video_and_writes_failed_report(

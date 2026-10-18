@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from gothic_ai import triggers
 from gothic_ai.protocol import (
     BROKEN_TRACE_PROTOCOL,
+    CRIME_PROTOCOL,
     ERRAND_PROTOCOL,
     NOISE_PROTOCOL,
     PACE_PROTOCOL,
@@ -17,6 +18,7 @@ from gothic_ai.protocol import (
     Chest,
     DebugCmd,
     GraphPatchCmd,
+    HeroDeed,
     HushCmd,
     LineVoice,
     NpcActCmd,
@@ -66,6 +68,67 @@ def test_action_result_ok_only_when_done():
 def test_unknown_message_type_is_rejected():
     with pytest.raises(ValidationError):
         parse_game_message('{"type":"nope"}')
+
+
+def test_hero_deed_retains_ownership_ids_and_engine_witnesses():
+    assert PROTOCOL_VERSION >= CRIME_PROTOCOL == 42
+    msg = parse_game_message(
+        _json(
+            {
+                "type": "hero_deed",
+                "id": "deed-17",
+                "kind": "take_item",
+                "item": "ITFO_BREAD",
+                "count": 2,
+                "owner": "BAU_950_LOBART",
+                "owner_guild": 7,
+                "owner_npc_guild": 7,
+                "owner_npctype": 0,
+                "room": "LOBART",
+                "room_owner": "BAU_950_LOBART",
+                "room_guild": 7,
+                "position": {"x": 1, "y": 2, "z": 3},
+                "waypoint": "NW_FARM1_HOUSE",
+                "day": 1,
+                "hour": 12,
+                "minute": 30,
+                "witnesses": ["BAU_951_HILDA"],
+            }
+        )
+    )
+    assert isinstance(msg, HeroDeed)
+    assert (msg.id, msg.item, msg.count, msg.owner) == ("deed-17", "ITFO_BREAD", 2, "BAU_950_LOBART")
+    assert msg.position.model_dump() == {"x": 1, "y": 2, "z": 3}
+    assert msg.witnesses == ["BAU_951_HILDA"]
+    assert (msg.room_owner, msg.room_guild, msg.waypoint) == ("BAU_950_LOBART", 7, "NW_FARM1_HOUSE")
+
+
+def test_pickpocket_deed_keeps_before_and_after_evidence():
+    msg = parse_game_message(
+        _json(
+            {
+                "type": "hero_deed",
+                "id": "pocket-1",
+                "kind": "pickpocket",
+                "victim": "BAU_950_LOBART",
+                "position": {"x": 1, "y": 2, "z": 3},
+                "inventory_before": [{"item": "ITMI_GOLD", "count": 5}],
+                "inventory_after": [{"item": "ITMI_GOLD", "count": 85}],
+                "picked_pocket_before": 0,
+                "picked_pocket_after": 1,
+                "caught": False,
+            }
+        )
+    )
+    assert isinstance(msg, HeroDeed)
+    assert msg.victim == "BAU_950_LOBART"
+    assert msg.inventory_after[0].count - msg.inventory_before[0].count == 80
+    assert (msg.picked_pocket_before, msg.picked_pocket_after, msg.caught) == (0, 1, False)
+
+
+def test_hero_deed_requires_known_action_and_position():
+    with pytest.raises(ValidationError):
+        parse_game_message(_json({"type": "hero_deed", "id": "x", "kind": "trespass"}))
 
 
 def test_action_command_omits_empty_fields():

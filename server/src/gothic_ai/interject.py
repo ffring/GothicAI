@@ -38,10 +38,10 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 ASK_MAX = 4  # the nearest this many are asked
-# P(word) + P(step in) at least this: it speaks. On the bench (evals/npc-decisions/interject_probe.py),
-# to one of them: Brago 0.84–0.89, Cavalorn and the suspicious bandit 0.55–0.77, the timid one 0.42–0.64;
-# to all of them most are at ~0.9, and the two likeliest add theirs
-SPEAK_P = 0.8
+# P(word) + P(step in) at least this: three to one in favour of speaking. The old 0.8 gate silenced
+# Brago at 0.79 after Cavalorn's threat (2026-10-18). The bench's quiet characters average 0.55–0.74,
+# Brago 0.86; keep the gate above those quiet averages and the existing limits on voices and repeats.
+SPEAK_P = 0.75
 INTERJECTORS_MAX = 2  # after the addressee: at most this many more (and only as many as voices are left)
 WORD_CUE = (
     "[Рядом с тобой говорят, ты всё слышал. Вставь своё короткое слово — одну фразу, как сказал бы ты: "

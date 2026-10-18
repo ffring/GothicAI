@@ -26,6 +26,7 @@ class FightAi;
 class IniFile;
 class Serialize;
 struct PhysicsNoise;
+struct HeroDeed;
 
 class Gothic final {
   public:
@@ -209,6 +210,8 @@ class Gothic final {
     Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onExternalPerception;
     // perceptions of npc's that follow their scripts (seen, not consumed): ai_bridge watches them
     Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onObservedPerception;
+    // A completed hero action and the actual recipients of its passive perception.
+    Tempest::Signal<void(const HeroDeed&)>                              onHeroDeed;
     // A physical impact actually heard, before the listener turns towards it.
     Tempest::Signal<void(Npc&,const PhysicsNoise&)>                     onPhysicsNoiseHeard;
     // a perception the scripts would handle may be taken over (true: the scripts do not get it now);

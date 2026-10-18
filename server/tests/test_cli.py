@@ -58,6 +58,19 @@ def test_questlog_is_enabled_by_default_including_scenarios(monkeypatch, flags):
     assert exit.value.code == 0
 
 
+@pytest.mark.parametrize("flags", [[], ["--scenario", "crimes"], ["--no-crimes"]])
+def test_crimes_is_enabled_by_default_including_scenarios(monkeypatch, flags):
+    async def serve(args):
+        assert args.no_crimes == ("--no-crimes" in flags)
+        return 0
+
+    monkeypatch.setattr(cli, "serve", serve)
+    monkeypatch.setattr("sys.argv", ["gothic-ai", "serve", *flags])
+    with pytest.raises(SystemExit) as exit:
+        cli.main()
+    assert exit.value.code == 0
+
+
 @pytest.mark.parametrize(
     ("flags", "env_url", "enabled", "expected_url", "created"),
     [
