@@ -95,6 +95,12 @@ def same_attempt(job, snapshot):
     return (job.get("attempt"), job.get("reserved")) == (snapshot.get("attempt"), snapshot.get("reserved"))
 
 
+def exclusive_display(job):
+    # Sharing is opt-in: older clients cannot isolate their ports by slot.
+    return job.get("display", False) and (
+        job.get("display_exclusive", False) or not job.get("display_shared", False))
+
+
 def systemctl(*args):
     return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
 
@@ -197,7 +203,7 @@ class Queue:
     def event(self, job, event, **extra):
         # Called only within a transaction: journal lines from different processes never interleave.
         record = {k: job.get(k) for k in ("id", "owner", "class", "name", "threads", "mem",
-                                        "gpu_mem", "display", "display_exclusive", "display_slot",
+                                        "gpu_mem", "display", "display_shared", "display_exclusive", "display_slot",
                                         "cpu_quota", "max", "submitted", "start")}
         record.update(event=event, time=self.now(), **extra)
         with (self.home / "journal.jsonl").open("a", encoding="utf-8") as output:
@@ -265,6 +271,7 @@ class Queue:
         spec = dict(spec)
         spec.setdefault("gpu_mem", 0)
         spec.setdefault("display", False)
+        spec.setdefault("display_shared", False)
         spec.setdefault("display_exclusive", False)
         if spec["display_exclusive"]:
             spec["display"] = True
@@ -459,7 +466,7 @@ class Queue:
             queued = [j for j in jobs if j["status"] == "queued"]
             quiet_waiting = legacy_waiting or any(j["class"] == "quiet" for j in queued)
             exclusive_waiting = next((index for index, j in enumerate(queued)
-                                      if j.get("display_exclusive")), None)
+                                      if exclusive_display(j)), None)
             if free < self.profile["min_disk"] or any(j["class"] == "quiet" for j in active):
                 return
             batch_blocked = False
@@ -512,12 +519,12 @@ class Queue:
                     occupied = set()
                     for current in active:
                         if current["display"]:
-                            # Existing units from before slots occupied the only
-                            # display, so keep slot 0 reserved for them.
-                            occupied.update(range(capacity) if current.get("display_exclusive")
+                            # Persisted jobs without display_shared are legacy
+                            # clients and reserve every slot, even if they have one.
+                            occupied.update(range(capacity) if exclusive_display(current)
                                             else [current.get("display_slot", 0)])
                     available = set(range(capacity)) - occupied
-                    if not available or (job.get("display_exclusive") and occupied):
+                    if not available or (exclusive_display(job) and occupied):
                         if kind == "batch":
                             batch_blocked = True
                         continue
@@ -880,7 +887,7 @@ def status(queue):
     for job in queue.jobs():
         if job["status"] in TERMINAL:
             continue
-        display = "все" if job.get("display_exclusive") else str(int(job["display"]))
+        display = "все" if exclusive_display(job) else str(int(job["display"]))
         slot = job.get("display_slot", 0 if job["display"] and job["status"] in ACTIVE else "—")
         resources = (f"{job['threads']}t {job['mem']/GIB:g}G gpu={job['gpu_mem']/GIB:g}G "
                      f"окно={display} слот={slot}")
@@ -910,6 +917,8 @@ def parser():
         r.add_argument("--mem", type=memory, required=True)
         r.add_argument("--gpu-mem", type=memory, default=0)
         r.add_argument("--display", action="store_true")
+        r.add_argument("--display-shared", action="store_true",
+                       help="делить слоты окна с другими совместимыми заявками --display")
         r.add_argument("--display-exclusive", action="store_true")
         r.add_argument("--cpu-quota", type=cpu_quota)
         r.add_argument("--max", type=duration, required=True)
@@ -955,7 +964,8 @@ def main(argv=None):
             waiter = {"pid": os.getpid(), "start": process_token(os.getpid())} if args.action == "run" else None
             request = {
                 "class": args.class_, "threads": args.threads, "mem": args.mem, "gpu_mem": args.gpu_mem,
-                "display": args.display, "display_exclusive": args.display_exclusive,
+                "display": args.display, "display_shared": args.display_shared,
+                "display_exclusive": args.display_exclusive,
                 "cpu_quota": args.cpu_quota, "max": args.max,
                 "name": args.name, "owner": owner(), "command": command}
             if args.action == "submit":

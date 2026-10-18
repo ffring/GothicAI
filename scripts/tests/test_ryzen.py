@@ -98,6 +98,7 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
                             ('--name', 'bench smoke' if action == 'bench' else 'e2e stages')]:
             self.assert_option(options, name, value)
         self.assertIn('--display', options)
+        self.assertEqual('--display-shared' in options, action == 'e2e')
         self.assertIn('RYZEN_RUN_ID=run-game', request[request.index('--') + 1:])
 
     def test_preparation_and_game_have_separate_resources_and_names(self):
@@ -146,12 +147,14 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
                 game = self.queue_options(requests[1])
                 self.assertIn('--display', game)
                 self.assertEqual('--display-exclusive' in game, exclusive)
+                self.assertEqual('--display-shared' in game, not exclusive)
                 self.assert_option(game, '--name', f'e2e {scenario}')
 
     def test_bench_does_not_use_e2e_exclusive_scenarios(self):
         result, requests = self.run_game(action='bench', scenario='calm')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('--display-exclusive', self.queue_options(requests[-1]))
+        self.assertNotIn('--display-shared', self.queue_options(requests[-1]))
 
     def test_tts_preparation_installs_missing_dependencies(self):
         for scenario in ('errand', 'errand_fork', 'errand_far', 'errand_give',
@@ -302,7 +305,7 @@ print('fake cmake: OK')
         harness = definitions() + r'''
 ROOT="$TEST_ROOT/source"
 toolchain() { :; }
-desktop() { :; }
+desktop() { RYZEN_SCREEN_SIZE="${TEST_SCREEN_SIZE:-1920x1080}"; }
 check_protocol() { :; }
 uv() { :; }
 source_digest() { printf '%s\n' "'''+self.engine_digest+r'''"; }
@@ -348,10 +351,10 @@ remote_run e2e "$TEST_ROOT/worktree" run
         self.assertEqual((self.source / 'OpenGothic/ai_bridge/storygraph/build/storygraph').resolve(),
                          self.cache / 'storygraph' / self.story_digest / 'storygraph')
 
-    def test_e2e_ports_and_window_size_follow_the_assigned_slot(self):
+    def test_e2e_ports_size_and_position_follow_the_assigned_slot(self):
         self.entry(self.engine_digest)
         self.entry(self.story_digest, 'storygraph')
-        names = ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE')
+        names = ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE', 'TEMPEST_WINDOW_POS')
         for name in names:
             self.env.pop(name, None)
         (self.source / 'scripts/e2e.sh').write_text('''
@@ -361,12 +364,12 @@ import os
 import sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps({key: os.environ[key] for key in
-    ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE')}))
+    ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE', 'TEMPEST_WINDOW_POS')}))
 PY
 ''')
         cases = [(slot, {}) for slot in range(3)] + [
             (1, {'PORT': '51000'}),
-            (2, dict(zip(names, ('51001', '51002', '51003', '1280x720')))),
+            (2, dict(zip(names, ('51001', '51002', '51003', '1280x720', '17,29')))),
         ]
         for slot, explicit in cases:
             with self.subTest(slot=slot, explicit=explicit):
@@ -379,7 +382,8 @@ remote_run e2e "$TEST_ROOT/worktree" run
 ''')
                 expected = dict(zip(names, (str(47827 + slot * 100),
                                            str(47829 + slot * 100),
-                                           str(47840 + slot * 100), '640x360')))
+                                           str(47840 + slot * 100), '640x360',
+                                           ('0,0', '660,0', '0,400')[slot])))
                 expected.update(explicit)
                 self.assertEqual(json.loads((self.root / 'e2e-env.json').read_text()), expected)
 
@@ -409,27 +413,33 @@ remote_bench "$TEST_ROOT/worktree" run smoke
                          {'PORT': None, 'ASR_PORT': None, 'TTS_PORT': None,
                           'TEMPEST_WINDOW_SIZE': '960x540'})
 
-    def test_e2e_uses_private_data_and_preserves_cached_graph_mtime(self):
+    def test_e2e_retains_rebuilt_graph_in_worktree_cache(self):
         self.entry(self.engine_digest)
         self.entry(self.story_digest, 'storygraph')
         (self.state / 'data').mkdir()
         graph = self.state / 'data/story.json'
-        graph.write_text('cached graph')
-        graph_time = time.time() - 60
-        os.utime(graph, (graph_time, graph_time))
         (self.source / 'scripts/e2e.sh').write_text('''
 printf '%s' "$GOTHIC_AI_DATA" > "$TEST_ROOT/data-path"
-printf 'private temporary graph' > "$GOTHIC_AI_DATA/story.tmp"
+if [[ ! -f "$GOTHIC_AI_DATA/story.json" ]]; then
+  printf 'rebuilt graph' > "$GOTHIC_AI_DATA/story.tmp"
+  mv "$GOTHIC_AI_DATA/story.tmp" "$GOTHIC_AI_DATA/story.json"
+fi
 ''')
         self.shell(r'''
 remote_probe e2e "$TEST_ROOT/worktree" run stages
 remote_run e2e "$TEST_ROOT/worktree" run
 ''')
-        private = self.state / 'runs/run/data'
-        self.assertEqual((self.root / 'data-path').read_text(), str(private))
-        self.assertEqual((private / 'story.json').read_text(), 'cached graph')
-        self.assertAlmostEqual((private / 'story.json').stat().st_mtime, graph_time, places=5)
-        self.assertFalse((self.state / 'data/story.tmp').exists())
+        self.assertEqual((self.root / 'data-path').read_text(), str(self.state / 'data'))
+        self.assertEqual(graph.read_text(), 'rebuilt graph')
+        graph_time = time.time() - 60
+        os.utime(graph, (graph_time, graph_time))
+        self.shell(r'''
+remote_probe e2e "$TEST_ROOT/worktree" run stages
+remote_run e2e "$TEST_ROOT/worktree" run
+''')
+        self.assertEqual(graph.read_text(), 'rebuilt graph')
+        self.assertAlmostEqual(graph.stat().st_mtime, graph_time, places=5)
+        self.assertFalse((self.state / 'runs/run/data').exists())
 
     def test_miss_builds_and_publishes_engine_and_storygraph(self):
         self.shell(r'''

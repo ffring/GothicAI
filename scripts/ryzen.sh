@@ -55,15 +55,16 @@ disk_usage() {
 desktop() {
   export XDG_RUNTIME_DIR="/run/user/$(id -u)"
   export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-  local auth socket
+  local auth socket info
   command -v xdpyinfo >/dev/null || { echo 'Need xdpyinfo to find the Xwayland display' >&2; exit 1; }
   # Connecting also wakes GNOME's on-demand Xwayland. Never use xhost or change the session.
   for auth in "$XDG_RUNTIME_DIR"/.mutter-Xwaylandauth.* "$HOME/.Xauthority"; do
     [[ -r "$auth" ]] || continue
     for socket in /tmp/.X11-unix/X*; do
       [[ -S "$socket" ]] || continue
-      if DISPLAY=":${socket##*/X}" XAUTHORITY="$auth" xdpyinfo >/dev/null 2>&1; then
+      if info="$(DISPLAY=":${socket##*/X}" XAUTHORITY="$auth" xdpyinfo 2>/dev/null)"; then
         export DISPLAY=":${socket##*/X}" XAUTHORITY="$auth"
+        RYZEN_SCREEN_SIZE="$(printf '%s\n' "$info" | awk '/dimensions:/ {print $2; exit}')"
         export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
         export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
         [[ -r "$VK_DRIVER_FILES" ]] || { echo 'Missing NVIDIA Vulkan ICD' >&2; exit 1; }
@@ -75,6 +76,30 @@ desktop() {
   done
   echo 'No accessible Xwayland display. Need a running user desktop or a GPU-capable headless compositor.' >&2
   exit 1
+}
+
+e2e_window_position() {
+  [[ -z "${TEMPEST_WINDOW_POS+x}" ]] || return 0
+  local slot="$1" width height screen_width screen_height columns x y
+  [[ "$TEMPEST_WINDOW_SIZE" =~ ^([0-9]+)x([0-9]+)$ ]] || {
+    echo 'Invalid TEMPEST_WINDOW_SIZE for e2e placement' >&2; return 2;
+  }
+  width=$((10#${BASH_REMATCH[1]})) height=$((10#${BASH_REMATCH[2]}))
+  [[ "${RYZEN_SCREEN_SIZE:-}" =~ ^([0-9]+)x([0-9]+)$ ]] || {
+    echo 'No screen dimensions from xdpyinfo for e2e placement' >&2; return 2;
+  }
+  screen_width=$((10#${BASH_REMATCH[1]})) screen_height=$((10#${BASH_REMATCH[2]}))
+  (( width > 0 && height > 0 )) || return 2
+  # Allow space for decorations; on 1920x1080 the default windows form a 2x2 grid.
+  columns=$(((screen_width + 20) / (width + 20)))
+  (( columns > 0 )) || columns=1
+  x=$(((slot % columns) * (width + 20)))
+  y=$(((slot / columns) * (height + 40)))
+  if (( x + width > screen_width || y + height > screen_height )); then
+    echo "E2e window $TEMPEST_WINDOW_SIZE in slot $slot does not fit screen $RYZEN_SCREEN_SIZE" >&2
+    return 2
+  fi
+  export TEMPEST_WINDOW_POS="$x,$y"
 }
 
 source_digest() {
@@ -426,13 +451,8 @@ remote_run() {
   fi
   echo 'Ryzen: game admitted'
   export LOG_DIR="$state/runs/$run"
-  export GOTHIC_AI_DATA="$LOG_DIR/data"
-  mkdir -p "$GOTHIC_AI_DATA"
-  # Reuse an old cache without sharing its converter's story.tmp between runs.
-  # storygraph.ensure still checks the preserved mtime against DAT and converter.
-  if [[ -f "$state/data/story.json" ]]; then
-    cp -p "$state/data/story.json" "$GOTHIC_AI_DATA/story.json"
-  fi
+  # The worktree lock spans preparation and the game; retain converted graphs.
+  mkdir -p "$LOG_DIR" "$GOTHIC_AI_DATA"
   # gq assigns the slot when this request starts, after the upload/preparation.
   # Keep explicit caller ports; defaults must not collide with the other slots.
   local display_slot="${GQ_DISPLAY_SLOT:-0}"
@@ -442,10 +462,11 @@ remote_run() {
   export ASR_PORT="${ASR_PORT-$((47829 + 100 * display_slot))}"
   export TTS_PORT="${TTS_PORT-$((47840 + 100 * display_slot))}"
   export TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE-640x360}"
-  echo "Ryzen: e2e slot $display_slot; ports $PORT/$ASR_PORT/$TTS_PORT; window $TEMPEST_WINDOW_SIZE"
   [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
   started=$SECONDS
   desktop
+  e2e_window_position "$display_slot"
+  echo "Ryzen: e2e slot $display_slot; ports $PORT/$ASR_PORT/$TTS_PORT; window $TEMPEST_WINDOW_SIZE at $TEMPEST_WINDOW_POS; screen $RYZEN_SCREEN_SIZE"
   require_prepared "$action" "$state" "$run" "${SCENARIO:-m0}"
   # Dependencies were synchronized without the display; uv run must not rebuild them here.
   export UV_NO_SYNC=1
@@ -832,11 +853,15 @@ e2e_display_exclusive() {
 game_queue_args() {
   GQ_ARGS=(--class "${BENCH_CLASS:-quick}" --threads 4 --mem 5G --display --max "${RYZEN_MAX:-30m}" --wait-max "$LOCK_WAIT")
   if [[ "$ACTION" == bench ]]; then
+    # Arbitrary benchmark windows can cover neighbours and affect their cadence.
+    # Keep the legacy exclusive display reservation even with a private tunnel.
     GQ_ARGS+=(--gpu-mem 4G --name "bench $(basename "$BENCH_SCENARIO" .bench)")
   else
     GQ_ARGS+=(--gpu-mem 2G --name "e2e ${SCENARIO:-m0}")
     if e2e_display_exclusive "${SCENARIO:-m0}"; then
       GQ_ARGS+=(--display-exclusive)
+    else
+      GQ_ARGS+=(--display-shared)
     fi
   fi
 }

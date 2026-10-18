@@ -132,9 +132,11 @@ def queue(gq, host, monkeypatch):
 
 
 def spec(kind="quick", *, owner="session-a", threads=4, mem=GIB,
-         gpu_mem=0, display=False, display_exclusive=False, maximum=60, name="test", command=None):
+         gpu_mem=0, display=False, display_shared=False, display_exclusive=False,
+         maximum=60, name="test", command=None):
     return {"class": kind, "threads": threads, "mem": mem,
-            "gpu_mem": gpu_mem, "display": display, "display_exclusive": display_exclusive,
+            "gpu_mem": gpu_mem, "display": display, "display_shared": display_shared,
+            "display_exclusive": display_exclusive,
             "max": maximum,
             "name": name, "command": command or ["true"], "owner": owner}
 
@@ -170,8 +172,8 @@ def test_quick_waits_for_its_memory_gpu_or_window(queue, resource):
 
 
 def test_three_displays_run_with_distinct_slots_and_fourth_waits(queue):
-    running = [enqueue(queue, display=True) for _ in range(3)]
-    waiting = enqueue(queue, display=True)
+    running = [enqueue(queue, display=True, display_shared=True) for _ in range(3)]
+    waiting = enqueue(queue, display=True, display_shared=True)
     queue.tick()
     assert all(queue.get(ident)["status"] == "running" for ident in running)
     assert {queue.get(ident)["display_slot"] for ident in running} == {0, 1, 2}
@@ -184,8 +186,8 @@ def test_three_displays_run_with_distinct_slots_and_fourth_waits(queue):
 
 
 def test_display_slots_remain_reserved_until_cancelled_unit_stops(queue):
-    running = [start(queue, display=True) for _ in range(3)]
-    waiting = enqueue(queue, display=True)
+    running = [start(queue, display=True, display_shared=True) for _ in range(3)]
+    waiting = enqueue(queue, display=True, display_shared=True)
     queue.cancel(running[0], "session-a")
     queue.tick()
     assert queue.get(waiting)["status"] == "queued"
@@ -197,16 +199,16 @@ def test_display_slots_remain_reserved_until_cancelled_unit_stops(queue):
 
 
 def test_cancelled_queued_game_never_reserves_a_slot(queue):
-    cancelled = enqueue(queue, display=True)
+    cancelled = enqueue(queue, display=True, display_shared=True)
     queue.cancel(cancelled, "session-a")
     assert "display_slot" not in queue.get(cancelled)
-    assert {queue.get(start(queue, display=True))["display_slot"] for _ in range(3)} == {0, 1, 2}
+    assert {queue.get(start(queue, display=True, display_shared=True))["display_slot"] for _ in range(3)} == {0, 1, 2}
 
 
 def test_display_capacity_is_taken_from_profile(queue):
     queue.profile = {**queue.profile, "display": 1}
-    first = start(queue, display=True)
-    second = enqueue(queue, display=True)
+    first = start(queue, display=True, display_shared=True)
+    second = enqueue(queue, display=True, display_shared=True)
     queue.tick()
     assert queue.get(second)["status"] == "queued"
     queue.finish(first, "success")
@@ -214,18 +216,43 @@ def test_display_capacity_is_taken_from_profile(queue):
     assert queue.get(second)["display_slot"] == 0
 
 
-def test_legacy_display_without_slot_keeps_slot_zero_reserved(queue):
+@pytest.mark.parametrize("has_slot", [False, True])
+def test_persisted_legacy_display_reserves_all_slots(queue, has_slot):
     first = start(queue, display=True)
     with queue.transaction() as state:
-        next(job for job in state["jobs"] if job["id"] == first).pop("display_slot")
-    other = [start(queue, display=True) for _ in range(2)]
-    assert {queue.get(ident)["display_slot"] for ident in other} == {1, 2}
+        legacy = next(job for job in state["jobs"] if job["id"] == first)
+        legacy.pop("display_shared")
+        legacy.pop("display_exclusive")
+        if not has_slot:
+            legacy.pop("display_slot")
+    waiting = enqueue(queue, display=True, display_shared=True)
+    queue.tick()
+    assert queue.get(waiting)["status"] == "queued"
+    queue.finish(first, "success")
+    queue.tick()
+    assert queue.get(waiting)["status"] == "running"
+    assert queue.get(waiting)["display_slot"] == 0
 
 
-def test_display_exclusive_drains_all_slots_and_blocks_new_games(queue):
-    running = [start(queue, display=True) for _ in range(3)]
-    exclusive = enqueue(queue, display_exclusive=True)
-    later = enqueue(queue, display=True)
+@pytest.mark.parametrize("exclusive_request", [
+    {"display_exclusive": True},
+    {"display": True},
+    {"display": True, "display_shared": True, "display_exclusive": True},
+])
+@pytest.mark.parametrize("persisted", [False, True])
+def test_display_exclusive_drains_all_slots_and_blocks_new_games(queue, exclusive_request, persisted):
+    running = [start(queue, display=True, display_shared=True) for _ in range(3)]
+    exclusive = enqueue(queue, **exclusive_request)
+    if persisted:
+        with queue.transaction() as state:
+            legacy = next(job for job in state["jobs"] if job["id"] == exclusive)
+            # Old queued requests have neither field; explicit exclusivity does
+            # not depend on whether an old client persisted display_shared.
+            if not exclusive_request.get("display_shared"):
+                legacy.pop("display_shared")
+            if not exclusive_request.get("display_exclusive"):
+                legacy.pop("display_exclusive")
+    later = enqueue(queue, display=True, display_shared=True)
     cpu_only = enqueue(queue)
     queue.tick()
     assert queue.get(cpu_only)["status"] == "running"
@@ -245,10 +272,10 @@ def test_display_exclusive_drains_all_slots_and_blocks_new_games(queue):
 
 
 def test_waiting_exclusive_cannot_be_starved_by_a_stream_of_new_games(queue):
-    running = start(queue, display=True)
+    running = start(queue, display=True, display_shared=True)
     exclusive = enqueue(queue, display_exclusive=True)
     for _ in range(5):
-        later = enqueue(queue, display=True)
+        later = enqueue(queue, display=True, display_shared=True)
         queue.tick()
         assert queue.get(later)["status"] == "queued"
     queue.finish(running, "success")
@@ -259,10 +286,10 @@ def test_waiting_exclusive_cannot_be_starved_by_a_stream_of_new_games(queue):
 
 
 def test_display_exclusives_are_fifo_and_cancellation_reopens_admission(queue):
-    running = start(queue, display=True)
+    running = start(queue, display=True, display_shared=True)
     first = enqueue(queue, display_exclusive=True)
     second = enqueue(queue, display_exclusive=True)
-    later = enqueue(queue, display=True)
+    later = enqueue(queue, display=True, display_shared=True)
     queue.finish(running, "success")
     queue.tick()
     assert queue.get(first)["status"] == "running"
@@ -274,9 +301,9 @@ def test_display_exclusives_are_fifo_and_cancellation_reopens_admission(queue):
 
 
 def test_display_exclusive_preserves_fifo_of_earlier_batches(queue):
-    earlier = enqueue(queue, "batch", display=True)
+    earlier = enqueue(queue, "batch", display=True, display_shared=True)
     exclusive = enqueue(queue, "batch", display_exclusive=True)
-    later = enqueue(queue, "batch", display=True)
+    later = enqueue(queue, "batch", display=True, display_shared=True)
     queue.tick()
     assert queue.get(earlier)["status"] == "running"
     assert queue.get(exclusive)["status"] == queue.get(later)["status"] == "queued"
@@ -291,11 +318,11 @@ def test_display_exclusive_preserves_fifo_of_earlier_batches(queue):
 def test_display_exclusive_keeps_quiet_class_priority_without_deadlock(
         queue, exclusive_kind, quiet_first):
     if quiet_first:
-        quiet = enqueue(queue, "quiet", display=True)
+        quiet = enqueue(queue, "quiet", display=True, display_shared=True)
     exclusive = enqueue(queue, exclusive_kind, display_exclusive=True)
     if not quiet_first:
-        quiet = enqueue(queue, "quiet", display=True)
-    later = enqueue(queue, display=True)
+        quiet = enqueue(queue, "quiet", display=True, display_shared=True)
+    later = enqueue(queue, display=True, display_shared=True)
     queue.tick()
     assert queue.get(quiet)["status"] == "running"
     assert queue.get(exclusive)["status"] == queue.get(later)["status"] == "queued"
@@ -306,10 +333,10 @@ def test_display_exclusive_keeps_quiet_class_priority_without_deadlock(
 
 
 def test_games_already_ahead_of_exclusive_drain_but_later_games_wait(queue):
-    running = start(queue, display=True)
-    earlier = enqueue(queue, display=True)
+    running = start(queue, display=True, display_shared=True)
+    earlier = enqueue(queue, display=True, display_shared=True)
     exclusive = enqueue(queue, display_exclusive=True)
-    later = enqueue(queue, display=True)
+    later = enqueue(queue, display=True, display_shared=True)
     queue.tick()
     assert queue.get(earlier)["status"] == "running"
     assert queue.get(exclusive)["status"] == queue.get(later)["status"] == "queued"
@@ -752,8 +779,8 @@ def test_systemd_launch_sets_affinity_limits_runtime_and_stop_callback(gq, host,
 def test_starting_units_reserve_slots_and_receive_their_slot_environment(gq, host, monkeypatch):
     q = make_queue(gq, host, monkeypatch)
     monkeypatch.setenv("GQ_DISPLAY_SLOT", "99")
-    running = [q.submit(spec(display=True)) for _ in range(3)]
-    waiting = q.submit(spec(display=True))
+    running = [q.submit(spec(display=True, display_shared=True)) for _ in range(3)]
+    waiting = q.submit(spec(display=True, display_shared=True))
     q.tick()
     assert all(q.get(ident)["status"] == "starting" for ident in running)
     assert q.get(waiting)["status"] == "queued"
@@ -762,6 +789,21 @@ def test_starting_units_reserve_slots_and_receive_their_slot_environment(gq, hos
     for slot, args in enumerate(arguments):
         assert f"--setenv=GQ_DISPLAY_SLOT={slot}" in args
         assert "--setenv=GQ_DISPLAY_SLOT=99" not in args
+
+
+@pytest.mark.parametrize("action", ["run", "submit"])
+def test_cli_display_shared_allows_two_games_together(gq, host, monkeypatch, action):
+    q = make_queue(gq, host, monkeypatch)
+    monkeypatch.setattr(gq, "Queue", lambda: q)
+    monkeypatch.setattr(gq, "spawn_pump", lambda *_: None)
+    monkeypatch.setattr(gq, "wait_job", lambda *_args, **_kwargs: 0)
+    for _ in range(2):
+        assert gq.main([action, "--class", "quick", "--threads", "4", "--mem", "5G",
+                        "--display", "--display-shared", "--max", "1m", "--name", "shared",
+                        "--", "true"]) == 0
+    q.tick()
+    assert all(job["status"] == "starting" and job["display_shared"] for job in q.jobs())
+    assert {job["display_slot"] for job in q.jobs()} == {0, 1}
 
 
 @pytest.mark.parametrize("action", ["run", "submit"])
@@ -1416,7 +1458,7 @@ def test_wait_streams_log_and_returns_command_exit_code(queue, gq, capsys):
 
 def test_status_exposes_owner_class_resources_limit_and_estimate(queue, gq, capsys):
     ident = start(queue, "batch", owner="visible-owner", threads=12, mem=8 * GIB,
-                  gpu_mem=2 * GIB, display=True, maximum=90)
+                  gpu_mem=2 * GIB, display=True, display_shared=True, maximum=90)
     gq.status(queue)
     output = capsys.readouterr().out
     assert ident in output and "visible-owner" in output
@@ -1424,6 +1466,17 @@ def test_status_exposes_owner_class_resources_limit_and_estimate(queue, gq, caps
     assert "12t 8G gpu=2G окно=1" in output
     assert "слот=0" in output
     assert "90s" in output and "ОЦЕНКА" in output
+
+
+@pytest.mark.parametrize("persisted", [False, True])
+def test_status_marks_legacy_display_as_all_slots(queue, gq, capsys, persisted):
+    ident = start(queue, display=True)
+    if persisted:
+        with queue.transaction() as state:
+            next(job for job in state["jobs"] if job["id"] == ident).pop("display_shared")
+    gq.status(queue)
+    line = next(line for line in capsys.readouterr().out.splitlines() if ident in line)
+    assert "окно=все" in line
 
 
 def test_fairness_only_counts_other_sessions_still_waiting(queue):
@@ -1663,7 +1716,7 @@ def test_unit_lock_holder_detects_orphaned_children_in_its_own_cgroup(gq, tmp_pa
 
 def test_finish_journals_oom_kill_count_and_memory_peak_from_its_unit(
         queue, gq, tmp_path, monkeypatch):
-    ident = start(queue, display=True)
+    ident = start(queue, display=True, display_shared=True)
     group = f"/user.slice/gq-{ident}.service"
     directory = tmp_path / group.lstrip("/")
     directory.mkdir(parents=True)
