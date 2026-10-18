@@ -1471,6 +1471,99 @@ def _music_with_speech_delta(path, delta_db, *, ramps=True):
     )
 
 
+def _music_with_fade_bump(path):
+    envelope = "max(0,min(1,min((t-0.1)/0.1,(0.9-t)/0.1)))"
+    source = f"aevalsrc='0.125*(1+15*({envelope}))*sin(2*PI*220*t)':s=48000:d=12"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", source,
+         "-c:a", "pcm_f32le", str(path)], check=True, capture_output=True,
+    )
+
+
+@pytest.mark.parametrize("speech_duration", [1.3, 0.8])
+def test_calibration_falls_back_when_fades_leave_less_than_one_speech_r128_block(
+    tmp_path, tone_inputs, speech_duration,
+):
+    game, voice, music = (tmp_path / name for name in ("game.wav", "voice.wav", "music.wav"))
+    sources = [
+        (game, "sine=frequency=440:sample_rate=48000:duration=6", "volume=-20dB"),
+        (voice, f"sine=frequency=1000:sample_rate=48000:duration={speech_duration}", "anull"),
+        (music, f"aevalsrc='0.125*if(lt(t,{speech_duration}),1.258925412,1)"
+                "*sin(2*PI*220*t)':s=48000:d=6", "anull"),
+    ]
+    for path, source, filters in sources:
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", source,
+             "-af", filters, "-c:a", "pcm_f32le", str(path)], check=True, capture_output=True,
+        )
+    speech = [(0, speech_duration)]
+
+    _audio, report = levels.calibrate(game, music, [(voice, 0)], speech, 6, 6)
+
+    assert report["ok"] is True
+    assert report["music_speech_windows"] == speech
+    assert report["music_speech_windows_fallback"] is True
+    assert "400 ms" in report["music_speech_windows_fallback_reason"]
+    assert _rows(report)["music_speech"]["ok"] is True
+    assert math.isfinite(_rows(report)["music_speech"]["measured_lufs"])
+
+
+def test_publish_rejects_loud_music_inside_a_fade_even_when_its_plateau_is_balanced(
+    tmp_path, publication_inputs,
+):
+    joined, _music, voice, speech, total, length = publication_inputs
+    music, out = tmp_path / "fade-bump.wav", tmp_path / "short.mp4"
+    _music_with_fade_bump(music)
+
+    with pytest.raises(levels.LevelsError, match="music_pause_full"):
+        levels.publish(joined, music, voice, speech, total, length, out)
+
+    report = json.loads(out.with_suffix(".levels.json").read_text())
+    rows = _rows(report)
+    assert report["ok"] is False
+    assert not out.exists()
+    assert rows["music_pause"]["ok"] is True
+    assert rows["music_speech"]["ok"] is True
+    assert rows["music_pause_full"]["ok"] is False
+    assert rows["music_pause_full"]["measured_lufs"] > (
+        rows["music_pause"]["target_lufs"] + levels.LEVEL_TOLERANCE_LU
+    )
+
+
+@pytest.mark.parametrize("speech,failed_row", [
+    ([(4, 8)], "music_pause_full"),
+    ([(0, 4)], "music_speech_full"),
+])
+def test_decoded_music_guard_checks_fades_in_both_full_window_types(
+    tmp_path, tone_inputs, speech, failed_row,
+):
+    music, encoded = tmp_path / "fade-bump.wav", tmp_path / "music.m4a"
+    _music_with_fade_bump(music)
+    filters = ("afade=t=in:d=1,afade=t=out:st=10.5:d=1.5,"
+               f"{levels.duck_filter(speech, 6)},volume=-20dB")
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(music), "-af", filters,
+         "-c:a", "aac", "-b:a", "192k", str(encoded)], check=True, capture_output=True,
+    )
+    music_speech, music_pauses, fallback = levels.music_windows(speech, 12, (1, 1.5))
+    assert fallback is False
+    plateau = levels.measure(["-i", str(encoded)], "[0:a]anull[m]", "m", music_pauses)
+
+    report = levels.check_mastered_balance(
+        {"music": encoded}, plateau + 14, speech, levels.pause_windows(speech, 12), [],
+        music_speech=music_speech, music_pauses=music_pauses,
+    )
+
+    rows = _rows(report)
+    assert rows["music_pause"]["ok"] is True
+    assert rows["music_speech"]["ok"] is True
+    assert rows[failed_row]["ok"] is False
+    assert rows[failed_row]["measured_lufs"] > (
+        rows[failed_row]["target_lufs"] + levels.LEVEL_TOLERANCE_LU
+    )
+    assert report["ok"] is False
+
+
 @pytest.mark.parametrize("delta_db,expected_duck", [(3, 9), (-2, 4), (0, 6)])
 def test_publish_calibrates_music_duck_to_the_raw_music_dynamics(
     tmp_path, publication_inputs, delta_db, expected_duck,

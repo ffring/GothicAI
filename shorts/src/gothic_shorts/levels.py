@@ -293,6 +293,23 @@ def check_mastering(report: dict, voice_lufs: float, true_peak_dbtp: float,
     report["ok"] = all(row["ok"] is not False for row in report["rows"])
 
 
+def check_music_full_windows(report: dict, *, music_pause_lufs: float | None = None,
+                             music_speech_lufs: float | None = None) -> dict:
+    """Fades may be quieter than the plateau target, but must not exceed its ceiling."""
+    rows = {row["id"]: row for row in report["rows"]}
+    for key, value in (("music_pause", music_pause_lufs), ("music_speech", music_speech_lufs)):
+        if value is None:
+            continue
+        goal = rows[key]["target_lufs"]
+        report["rows"].append({
+            "id": f"{key}_full", "measured_lufs": _finite(value), "target_lufs": goal,
+            "target": f"≤ {key} target + {LEVEL_TOLERANCE_LU:g} LU (full windows)",
+            "ok": value <= goal + LEVEL_TOLERANCE_LU + 1e-6 if goal is not None else None,
+        })
+    report["ok"] = all(row["ok"] is not False for row in report["rows"])
+    return report
+
+
 def check_mastered_balance(stems: dict[str, Path], speech_lufs: float,
                            speech: list[Window], pauses: list[Window], ending: list[Window],
                            music_speech: list[Window] | None = None,
@@ -303,9 +320,15 @@ def check_mastered_balance(stems: dict[str, Path], speech_lufs: float,
             return None
         return measure(["-i", str(stems[track])], "[0:a]anull[stem]", "stem", windows)
 
-    return check_balance(speech_lufs, reading("music", pauses if music_pauses is None else music_pauses),
-                         reading("music", speech if music_speech is None else music_speech),
-                         reading("game", speech), reading("game", pauses), reading("game", ending))
+    music_speech = speech if music_speech is None else music_speech
+    music_pauses = pauses if music_pauses is None else music_pauses
+    report = check_balance(speech_lufs, reading("music", music_pauses), reading("music", music_speech),
+                           reading("game", speech), reading("game", pauses), reading("game", ending))
+    return check_music_full_windows(
+        report,
+        music_pause_lufs=reading("music", pauses) if pauses != music_pauses else None,
+        music_speech_lufs=reading("music", speech) if speech != music_speech else None,
+    )
 
 
 def print_balance(report: dict) -> None:
@@ -542,9 +565,18 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
     music_speech_windows, music_pause_windows, music_pause_fallback = music_windows(
         speech, total, (1.0, 1.5) if music_fades else music_fade_durations,
     )
+    music_speech_fallback = (bool(speech) and
+                             sum(end - start for start, end in music_speech_windows) < 0.4 - 1e-6)
+    if music_speech_fallback:
+        music_speech_windows = merge_speech_windows(speech, total)
     music_window_report = {
         "music_speech_windows": music_speech_windows,
         "music_pause_windows": music_pause_windows,
+        "music_speech_windows_fallback": music_speech_fallback,
+        "music_speech_windows_fallback_reason": (
+            "Music speech plateau is shorter than 400 ms; using original speech windows"
+            if music_speech_fallback else None
+        ),
         "music_pause_windows_fallback": music_pause_fallback,
         "music_pause_windows_fallback_reason": (
             "Music pause plateau is shorter than 400 ms; using original pause windows"
@@ -629,6 +661,13 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
         final.measure("music", music_speech_windows, meter_gain_db=meter_gain) if music is not None else None,
         final.measure("game", speech, meter_gain_db=meter_gain), game_pause,
         final.measure("game", ending_windows, meter_gain_db=meter_gain) if ending_windows else None,
+    )
+    check_music_full_windows(
+        report,
+        music_pause_lufs=final.measure("music", pauses, meter_gain_db=meter_gain)
+        if music is not None and pauses != music_pause_windows else None,
+        music_speech_lufs=final.measure("music", speech, meter_gain_db=meter_gain)
+        if music is not None and speech != music_speech_windows else None,
     )
     report.update({"speech_lufs": s, "master_gain_db": meter_gain,
                    "music_gain_db": _finite(music_db), "music_duck_db": music_duck,
