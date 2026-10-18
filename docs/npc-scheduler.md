@@ -1,6 +1,8 @@
 # Планировщик решений NPC
 
-Статус: проект, 2026-10-11.
+Статус: шаги 1–3 плана сделаны 2026-10-11 и работают в обычной игре: сервис [decider-service](../decider-service/README.md) на GPU-сервере, планировщик [`brain/`](../server/src/gothic_ai/brain/) в ИИ-сервере (`NpcPlanner`, выключает `gothic-ai serve --no-brain`), мост [`npcobserver.cpp`](../OpenGothic/ai_bridge/npcobserver.cpp). Дальше планировщик рос по этапам агента NPC ([npc-agent.md](npc-agent.md#свободные-npc-m5c)): план дня с `set_routine` (`brain/day.py`, выключает `--no-apply-day`), реакции на угрозы (`brain/reflex.py`), первые слова NPC после `approach_talk` (`initiative.py`). Шаги 4–5 — нагрузочный тест в игре вместе с распознаванием речи и пункты 4–6 ускорения — не сделаны.
+
+Ниже — проект от 2026-10-11. Числа уровней и порогов в нём могли уйти от кода: действующие значения — `TierConfig` в `brain/tiers.py` и `PlannerConfig` в `brain/planner.py`.
 
 Основание:
 - [замеры decision-моделей и нагрузки](../evals/npc-decisions/README.md);

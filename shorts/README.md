@@ -317,6 +317,40 @@ The voice-cloning job (`shorts/deploy/dub`, in `~/gothic-ai/dub` on the server) 
 the engine of the running gothic-voxcpm, with no GPU memory of its own; the game's lines wait their turn
 meanwhile. Files go over by scp into a fresh folder there and it is deleted after.
 
+## Covers
+
+Template B is a 1080×1920 JPEG (at most 2 MB): a dark band with soft 60 px edges at the seam of the
+two takes, an uppercase white topic in Arial Black and an optional gold second line, with a dark outline
+and blurred shadow. It needs macOS's `/System/Library/Fonts/Supplemental/Arial Black.ttf`.
+Both lines stay in the centre square (y 420–1500), also safe in the channel grid's centre 2:3 crop.
+
+A comparison plan can select its clean cover frame, in seconds of the recorded segment:
+
+```json
+"cover": {
+  "segment": "tavern", "at": 1.2,
+  "title": {"ru": "МЕБЕЛЬ", "en": "FURNITURE"},
+  "sub": {"ru": "БЫЛО → СТАЛО", "en": "BEFORE → AFTER"}
+}
+```
+
+`sub` is optional and defaults to those two translations. `compare/cut.py` stacks off/on frames at `at`
+with the cut's `GRADE`, without its labels or subtitles, and writes `cover-<lang>.jpg` beside
+`short-<lang>.mp4`. Without `cover` it only prints that no cover was requested.
+For AI shorts and explainers, use a video frame or an image (centre cropped to 1080×1920):
+
+```bash
+uv run gothic-shorts cover path/to/short-ru.mp4 --at 1.8 --title "МАГИЯ" --sub "БЫЛО → СТАЛО" --out cover-ru.jpg
+uv run gothic-shorts cover frame.png --title "МЕБЕЛЬ"  # -> cover.jpg beside frame.png, no second line
+uv run gothic-shorts upload path/to/short-ru.mp4 --meta path/to/youtube.json --thumbnail cover-ru.jpg
+uv run gothic-shorts thumbnail <video-id> cover-ru.jpg  # asks first; --yes skips confirmation
+```
+
+`--thumbnail` sets the cover after uploading; `thumbnail` sets it on an existing video. Both check the
+channel as `upload` does. The request uses `thumbnails.set`, `uploadType=media`, `image/jpeg`; the existing
+`youtube.upload` scope is enough. If YouTube rejects a cover during `upload`, the video stays up and the command
+prints the error and a reminder to choose a frame in the YouTube app.
+
 ## Uploading to YouTube
 
 ```bash

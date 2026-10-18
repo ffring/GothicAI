@@ -1,5 +1,25 @@
 # Агент NPC: быстрый и медленный контуры
 
+Статус: Два контура, живой разговор, приказы, восприятие и знания работают; есть распорядок и инициатива NPC. [План и журнал](#план-и-журнал).
+
+## Как работает сейчас
+
+- Быстрый контур [brain/](../server/src/gothic_ai/brain/) выбирает реакции, жесты и занятия. Разговорный [dialogue.py](../server/src/gothic_ai/dialogue.py) отвечает и вызывает инструменты; [turn.py](../server/src/gothic_ai/turn.py) задаёт до трёх шагов хода.
+- [talk.py](../server/src/gothic_ai/talk.py) выбирает адресата, ведёт беседу на ходу и позволяет перебить ответ. [commands.py](../server/src/gothic_ai/commands.py) распознаёт приказы, [orders.py](../server/src/gothic_ai/orders.py) исполняет их для спутников без разговорной модели.
+- [perception.py](../server/src/gothic_ai/perception.py) передаёт обеим моделям увиденное NPC, имена — только знакомых. [knowledge.py](../server/src/gothic_ai/knowledge.py) добавляет знания из диалогов и квестов по текущему сюжету.
+- [daylife.py](../server/src/gothic_ai/daylife.py) предлагает занятия и походы из забот NPC. [initiative.py](../server/src/gothic_ai/initiative.py) позволяет подойти к герою и заговорить первым; важные родные диалоги имеют приоритет.
+- [concerns.py](../server/src/gothic_ai/concerns.py) даёт очевидцу преступления повод сообщить о нём, промолчать или потребовать плату за молчание; сам он подходит к герою по одному делу лишь раз. Жертвы и стражи такой повод не получают.
+
+Выключение ([cli.py](../server/src/gothic_ai/cli.py)): `gothic-ai serve --no-brain` убирает быстрый контур и инициативу, `--no-knowledge` — знания из скриптов, `--no-quick` — быстрые реплики. `--no-apply-day` возвращает прежнее меню занятий, а новое только записывает.
+`--no-crimes` убирает новые поводы свидетелей. Отдельных выключателей приказов и восприятия нет; `GOTHIC_AI=0` выключает весь [мост](../OpenGothic/ai_bridge/aibridge.cpp).
+
+Проверки: сценарии `m5e`, `orders`, `m6`, `see`, `initiative`, `day` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios.py](../server/src/gothic_ai/scenarios.py); [test_talk.py](../server/tests/test_talk.py), [test_orders.py](../server/tests/test_orders.py), [test_knowledge.py](../server/tests/test_knowledge.py), [test_perception.py](../server/tests/test_perception.py), [test_initiative.py](../server/tests/test_initiative.py), [test_daylife.py](../server/tests/test_daylife.py).
+
+Ограничения: быстрый контур требует `--decider-url` или `GOTHIC_DECIDER_URL`, знания — загруженного графа сюжета. Распорядок меняется только у NPC из списка движка; сюжетные персонажи и постовые сохраняют место, спящие не получают новых занятий.
+Боевое тело — [отдельный план](npc-body-control-plan.md).
+
+## План и журнал
+
 Статус: M5a сделан 2026-10-11, M5b (мост и движок), M5c (свободные NPC), M5e (живой разговор без окна, [раздел ниже](#живой-разговор-m5e)) M6 (знания о мире из скриптов, [раздел ниже](#знания-о-мире-m6)) и восприятие NPC (шаг 4 первой волны инструментов, [раздел ниже](#восприятие-npc)) — 2026-10-12; названия мест и память увиденного (шаги 5–6) — 2026-10-13. План этапов — [MVP.md](MVP.md), раздел M5. Решения NPC вне разговора — [npc-scheduler.md](npc-scheduler.md). Какие действия дать NPC для живого мира и план первой волны (сделки, восприятие) — [npc-tools.md](npc-tools.md).
 
 ## Зачем
