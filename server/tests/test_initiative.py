@@ -15,6 +15,7 @@ from gothic_ai.brain.planner import NpcRecord
 from gothic_ai.budget import Budget
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.concerns import Concerns
+from gothic_ai.crimes import Crimes
 from gothic_ai.deals import Deals
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.gamedata.storygraph import StoryGraph, load
@@ -76,6 +77,7 @@ async def _scene(
     *,
     graph: StoryGraph | None = None,
     budget: Budget | None = None,
+    with_crimes: bool = False,
 ) -> AsyncIterator[Scene]:
     """The parts as cli.py wires them, around the fake game (branch A, day 1, 08:00). The behavioral model
     picks approach_talk; an npc's soft act ends only when the test says so (npc_idle). The budget's clock
@@ -89,7 +91,8 @@ async def _scene(
             link, llm, PersonaProvider(None), memory=store, journal=Journal(journal.append), trace=trace
         )
         chronicle = Chronicle(link, store)
-        deals = Deals(link, dialogue, chronicle)
+        crimes = Crimes(link, chronicle) if with_crimes else None
+        deals = Deals(link, dialogue, chronicle, crimes=crimes)
         dialogue.extensions.append(deals)
         concerns = Concerns(link, chronicle, deals)
         clock, decider, applier = Clock(), FakeDecider("approach_talk", 0.9), GameApplier(link)
@@ -284,6 +287,35 @@ async def test_the_lender_walks_up_and_speaks_first(tmp_path):
     ]
     assert [(e["npc"], e["occasion"]) for e in s.journal if e["kind"] == "initiative"] == [(LOBART, KEY)]
     assert s.budget.allow(LOBART) and not s.budget.allow(LOBART)  # one call: one of its two tokens is gone
+
+
+async def test_a_witness_can_approach_about_a_case_only_once(tmp_path):
+    async with _scene(tmp_path, with_crimes=True) as s:
+        s.chronicle.record({
+            "fact": "crime", "id": "C1", "kind": "theft", "victim": MALETH, "owner": MALETH,
+            "item": "ITFO_BREAD", "count": 1, "day": 1, "hour": 8, "minute": 0,
+            "community": "farm", "waypoint": "FARM1_IN",
+        })
+        s.chronicle.record({"fact": "crime_seen", "npc": LOBART, "crime": "C1", "guild": 8, "npctype": 0})
+        await _comes_up(s)
+        (fact,) = s.chronicle.facts("initiative")
+        assert fact["occasion"] == "crime_witness:C1"
+        assert "промолчать" in s.llm.calls[0][1][-1].content
+        assert "silence" in s.llm.calls[0][1][-1].content
+        # The concern remains for the conversation; this case never prompts another approach,
+        # including after a day and after reloading the saved initiative facts.
+        assert s.concerns.top(LOBART).key == "crime_witness:C1"
+        s.talk.on_npc_end(LOBART)
+        await _until(lambda: s.planner.npcs[LOBART].activity == "routine")
+        s.desk.now += 1440
+        s.desk._load()
+        assert s.desk.allow(s.planner.npcs[LOBART], "approach_talk") == "уже говорил об этом деле"
+        assert s.desk.walks == 1
+        original = s.chronicle.facts("crime")[0]
+        s.chronicle.record({**original, "id": "C2"})
+        s.chronicle.record({"fact": "crime_seen", "npc": LOBART, "crime": "C2", "guild": 8, "npctype": 0})
+        assert s.desk.occasion(LOBART).key == "crime_witness:C2"
+        assert s.desk.allow(s.planner.npcs[LOBART], "approach_talk") is None
 
 
 async def test_the_heros_next_words_go_to_it(tmp_path):

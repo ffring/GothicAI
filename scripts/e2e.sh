@@ -93,6 +93,10 @@
 #       LLM=fake: Hilda's theft rumor, testimony/catch_lie, accepted silence, chest suspicion/concern.
 #       LLM=chatgpt: only the first scene; records Lobart's actual prompt, reply and catch_lie outcome.
 #       TIMEOUT=600. Native theft perceptions stay enabled; Hilda's fight is reset after her sighting.
+#   crime_director: deeds and story responses (docs/crime.md, layer 5), SAVE=save_slot_1.sav.
+#       LLM=fake: unseen chest theft and its return quest, Hilda's initiative and paid silence,
+#       Lobart's learned grievance and Amends payment. LLM=chatgpt: witnessed theft goes to the
+#       real showrunner; records its line premise or none reason. TIMEOUT=900.
 #   crime_law: community law (docs/crime.md, layer 3), LLM=fake; SAVE=save_slot_1.sav, TIMEOUT=420.
 #       Matteo witnesses a native theft; Andre stays locked until the next day, charges 50 through
 #       his native voiced dialog and accepts payment. Matteo still remembers. A second theft with

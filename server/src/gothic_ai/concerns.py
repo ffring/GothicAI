@@ -9,6 +9,7 @@ what really happened between them:
 - debt_due: today is the last day of his debt to it;
 - witness: someone it asked far away (witnesses.py) saw the hero, and it has not spoken to him of it yet;
 - meet_missed: he did not come to a meeting he promised it (meetings.py), and it has not told him so yet.
+- crime_witness: it saw his crime and may report it, stay quiet or ask payment for silence.
 
 The most pressing one is the npc's agenda for the behavioral model (English, in the planner's wording) and
 the occasion it may come up to the hero with (Russian, for the conversational model). Rumors of his lies to
@@ -21,11 +22,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .chronicle import Chronicle, Fact
+from .crime_law import CrimeLaw
 from .deals import GOLD, Deals, Debt
 from .game import GameLink
 from .protocol import GameMessage, Loading, Session
 
-RANK = {"debt_broken": 0, "lied": 1, "witness": 1, "debt_due": 2, "errand": 2}
+RANK = {"debt_broken": 0, "lied": 1, "witness": 1, "crime_witness": 1, "debt_due": 2, "errand": 2}
+CRIME_WITNESS_EN = "decide whether to report the hero's crime, stay quiet, or demand payment for silence"
 # the facts that change what an npc has on its mind; deals.py updates its debts before it records them
 FACTS = frozenset(
     {
@@ -44,6 +47,7 @@ FACTS = frozenset(
         "rumor",
         "forgiven",
         "silenced",
+        "crime_known",
     }
 )
 # the agendas quests.py sets when the lie comes out
@@ -66,7 +70,10 @@ class Concerns:
     """Each npc's concerns about the hero, kept until a fact or a new game day changes them."""
 
     def __init__(self, link: GameLink, chronicle: Chronicle, deals: Deals) -> None:
+        self.chronicle = chronicle
         self.deals = deals
+        # Query the existing law rules for guards only; this desk never advances or changes the law.
+        self._crime_law = CrimeLaw(deals.crimes) if deals.crimes is not None else None
         self.on_change: list[Callable[[str], None]] = []  # an npc whose concerns may have changed
         self.extra: list[Callable[[str], list[Concern]]] = []  # more kinds, from other desks (witnesses.py)
         self._cache: dict[str, list[Concern]] = {}
@@ -93,6 +100,8 @@ class Concerns:
         settled now (forgiven in a deal, amends made): that one ends with its concern."""
         if agenda in LIED_EN.values() and not any(c.key.startswith("lied:") for c in self.of(npc)):
             return None
+        if agenda == CRIME_WITNESS_EN and not any(c.key.startswith("crime_witness:") for c in self.of(npc)):
+            return None
         return agenda
 
     def _compute(self, npc: str) -> list[Concern]:
@@ -112,14 +121,70 @@ class Concerns:
                 continue  # a rumor of a lie to someone else is not its own grievance
             en = LIED_EN["found_out" if key.startswith("found_out:") else "caught"]
             out.append(Concern(f"lied:{key}", npc, RANK["lied"], en, f"герой {lie.words(npc)}"))
+        out += self._crime_witnesses(npc)
         for more in self.extra:
             out += more(npc)
         return sorted(out, key=lambda c: c.rank)
 
+    def _crime_witnesses(self, npc: str) -> list[Concern]:
+        crimes, law = self.deals.crimes, self._crime_law
+        if crimes is None or law is None:
+            return []
+        facts = self.chronicle.facts()
+        delivered = {f.get("crime") for f in facts if f.get("fact") == "crime_known"}
+        seen = {
+            f.get("crime"): f
+            for f in facts
+            if f.get("fact") == "crime_seen" and f.get("npc") == npc
+        }
+        out = []
+        for knowledge in crimes.known(npc):
+            crime = knowledge.crime
+            victim = crime.get("victim") or crime.get("owner")
+            metadata = seen.get(crime["id"], {})
+            community = law.community_of(npc, metadata)
+            if (
+                knowledge.degree != "seen"
+                or knowledge.suspect != "PLAYER"
+                or knowledge.silenced
+                or knowledge.forgiven
+                or victim == npc
+                or law.is_guard(npc, community, metadata)
+                or crime["id"] in delivered
+                or any(_delivers_crime(f, crime["id"], victim) for f in facts)
+            ):
+                continue
+            ru = (
+                f"ты видел сам: {crimes.describe(crime)}; можешь рассказать, промолчать или потребовать "
+                "плату за молчание. Реши по своему характеру. Если требуешь плату, предложи сделку "
+                f"silence с id crime:{crime['id']} и ценой в hero_gives"
+            )
+            out.append(
+                Concern(f"crime_witness:{crime['id']}", npc, RANK["crime_witness"], CRIME_WITNESS_EN, ru)
+            )
+        return out
+
     def _on_fact(self, f: Fact) -> None:
         if f.get("fact") not in FACTS:
             return
-        for npc in dict.fromkeys(str(n).upper() for n in (f.get("npc"), f.get("to")) if n):
+        affected = [f.get("npc"), f.get("to")]
+        # Reports are about a case, not the witness. Its cached agenda must end at delivery too.
+        if self.deals.crimes is not None and f.get("fact") in {"crime_known", "rumor", "testimony"}:
+            ids = set(f.get("crime_told", []))
+            if f.get("crime"):
+                ids.add(f["crime"])
+            for crime_id in ids:
+                crime = self.deals.crimes.crime(crime_id)
+                if crime is None:
+                    continue
+                victim = crime.get("victim") or crime.get("owner")
+                if f.get("fact") == "crime_known" or _delivers_crime(f, crime_id, victim):
+                    affected += [
+                        seen.get("npc")
+                        for seen in self.chronicle.facts("crime_seen")
+                        if seen.get("crime") == crime_id
+                    ]
+        for npc in dict.fromkeys(str(n).upper() for n in affected if n):
             self._changed(npc)
 
     def _on_day(self, day: int) -> None:
@@ -156,3 +221,11 @@ def _debt_en(d: Debt) -> str:
         return f"make the hero pay back {owed}; his day has passed"
     owed = f"{d.give.count} gold to you" if gold else "what he borrowed from you"
     return f"remind the hero to pay back {owed} by tonight"
+
+
+def _delivers_crime(f: Fact, crime: str, victim: str | None) -> bool:
+    """Personal delivery to the victim also ends the witness's chance to keep this secret."""
+    return bool(victim) and (
+        (f.get("fact") == "rumor" and f.get("crime") == crime and f.get("to") == victim)
+        or (f.get("fact") == "testimony" and f.get("npc") == victim and crime in f.get("crime_told", []))
+    )
