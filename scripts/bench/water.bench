@@ -10,7 +10,9 @@ overlay off
 view full
 water setup deep
 rec water-deep
-wait 45000
+wait 1000
+shot water-deep-overview
+wait 44000
 water checkpoint settled
 shot water-deep-settled
 water swim-ready
@@ -21,9 +23,11 @@ water checkpoint swum
 water fireball-ready
 wait 1200
 spell cast 600
-wait 25000
+# The harbour shot has flight time; observe at least thirty seconds after impact.
+wait 35000
 water checkpoint fragments
 shot water-deep-fragments
+wait 200
 water save water
 stop
 physics stats

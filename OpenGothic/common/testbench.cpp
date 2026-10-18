@@ -523,6 +523,7 @@ enum CamMode : uint8_t {
   C_World,  // around the player, fixed world direction
   C_Fixed,  // fixed position, looking at the player
   C_Hold,   // the camera stays as it is: the position and where it looks
+  C_Water,  // retain the water overview after deferred player teleports
   C_RagdollArena, // benchmark-only fixed view derived from the complete twenty-model group
   C_Face,   // close to the face, relative to the facing of the body
   C_Shoulder, // over the hero's shoulder at an npc (camNpc)
@@ -684,7 +685,7 @@ struct Bench {
   std::unordered_map<uintptr_t,float> waterTravel;
   std::vector<Item*> waterItems;
   std::string waterCase,waterWaypoint;
-  Vec3 waterDry,waterCenter,waterDirection,waterHeroStart,waterHeroLast,waterObserverStart;
+  Vec3 waterDry,waterCenter,waterDirection,waterHeroStart,waterHeroLast,waterObserverStart,waterCameraTarget;
   uint32_t waterBarrelZen=uint32_t(-1),waterCrateZen=uint32_t(-1);
   uint64_t waterStart=0,waterSample=0,waterObserverSample=0;
   float waterHeroMaxStep=0,waterRayTop=0;
@@ -1858,6 +1859,10 @@ void arrowShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
 
 void updateCamera(World& w, Npc& pl) {
   bench.occl = 0;
+  if(bench.cam==C_Water) {
+    lookFrom(bench.camPos,bench.waterCameraTarget);
+    return;
+    }
   if(bench.cam==C_RagdollArena) {
     lookFrom(bench.camPos,bench.ragdollArenaTarget);
     return;
@@ -4764,6 +4769,26 @@ bool waterProbe(World& world,const Vec3& at,float minDepth,float maxDepth,Vec3& 
   surface={at.x,water.wdepth,at.z};return true;
   }
 
+bool waterFireballCaster(World& world,const Vec3& target,float targetRadius,Vec3& caster) {
+  for(float radius:{700.f,900.f,1100.f,1300.f,1500.f,1700.f,1900.f,2100.f,2300.f,2500.f})
+    for(unsigned angle=0;angle<64;++angle) {
+      const float a=float(angle)*float(M_PI)/32.f;
+      const auto probe=target+Vec3(std::cos(a)*radius,2000.f,std::sin(a)*radius);
+      const auto floor=world.physic()->landRay(probe,4000.f);
+      if(!floor.hasCol || floor.n.y<.99f || world.physic()->waterRay(floor.v,1.f).hasCol)continue;
+      bool supported=true;
+      for(float dx:{-35.f,35.f})for(float dz:{-35.f,35.f}) {
+        const auto foot=world.physic()->landRay(floor.v+Vec3(dx,120,dz),160.f);
+        if(!foot.hasCol || foot.n.y<.99f || std::abs(foot.v.y-floor.v.y)>10.f)supported=false;
+        }
+      if(!supported)continue;
+      const auto obstruction=world.physic()->ray(floor.v+Vec3(0,140,0),target);
+      if(obstruction.hasCol && (obstruction.v-target).length()>targetRadius+5.f)continue;
+      caster=floor.v;return true;
+      }
+  return false;
+  }
+
 bool waterFindWindSite(World& world,std::vector<Vec3>& places) {
   std::vector<const WayPoint*> points;
   const auto harbour=[](const std::string& name) {
@@ -4837,7 +4862,17 @@ bool waterFindSite(World& world,bool shallow,unsigned count,std::vector<Vec3>& p
        name.find("BEACH")!=std::string::npos || name.find("COAST")!=std::string::npos)
       points.push_back(&point);
     });
-  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  std::sort(points.begin(),points.end(),[&](const auto* a,const auto* b) {
+    // The deep-water film needs open water rather than the lake's reed beds.
+    // Keep the shallow and thirty-body performance searches unchanged.
+    if(!shallow && count==7) {
+      const auto harbour=[](const std::string& name) {
+        return name.find("HABOUR")!=std::string::npos || name.find("HARB")!=std::string::npos;
+        };
+      if(harbour(a->name)!=harbour(b->name))return harbour(a->name);
+      }
+    return a->name<b->name;
+    });
   for(const auto* point:points) {
     const auto floor=world.physic()->landRay(point->pos+Vec3(0,180,0),700.f);
     if(!floor.hasCol || floor.n.y<.75f || world.physic()->waterRay(floor.v,1.f).hasCol)continue;
@@ -4911,6 +4946,10 @@ bool waterFindSite(World& world,bool shallow,unsigned count,std::vector<Vec3>& p
             if(!found) {densePlaced=false;break;}
             }
           if(!densePlaced)continue;
+          // Reject slots under moored boats or behind a quay before moving
+          // anything. The same supported sight line is checked at the cast.
+          Vec3 caster;
+          if(!waterFireballCaster(world,places[0],0.f,caster))continue;
           }
         bench.waterDry=dry;bench.waterCenter=center;bench.waterDirection=direction;bench.waterWaypoint=point->name;
         return true;
@@ -5077,7 +5116,13 @@ void prepareWaterFixture(World& world,Npc& player,std::string_view mode) {
   noiseBegin(world,"water-entry",bench.waterCenter);
   bench.movableReady=true;bench.movableCenter=bench.waterCenter;
   bench.cam=C_Hold;
-  lookFrom(bench.waterCenter-bench.waterDirection*600.f+Vec3(300,360,0),bench.waterCenter+Vec3(0,25,0));
+  if(mode=="deep") {
+    // Keep the optical path over open water, above the shore's reeds.
+    bench.cam=C_Water;bench.waterCameraTarget=bench.waterCenter;
+    lookFrom(bench.waterCenter+bench.waterDirection*200.f+Vec3(0,1000,0),bench.waterCenter);
+    }
+  else
+    lookFrom(bench.waterCenter-bench.waterDirection*600.f+Vec3(300,360,0),bench.waterCenter+Vec3(0,25,0));
   event("water_setup","\"case\":"+jsonStr(mode)+",\"waypoint\":"+jsonStr(bench.waterWaypoint)+
     ",\"dry_cm\":"+ragdollVector(bench.waterDry)+",\"center_cm\":"+ragdollVector(bench.waterCenter)+
     ",\"bodies\":"+waterRows(world));
@@ -5092,7 +5137,9 @@ void waterInitial(World& world,Npc& player,PlayerControl& ctrl,std::string_view 
   bench.waterCase="reload";bench.waterStart=world.tickCount();bench.waterTrace=true;
   for(const auto& body:world.physic()->waterBodySnapshot()) {
     auto delta=movablePosition(body.transform)-player.position();delta.y=0;
-    if(delta.length()>2500.f || !body.inWater)continue;
+    // Capture sleepers inside the ordinary thirty-metre debris lifetime area
+    // before selecting a dry observer within 27 m of every observed body.
+    if(delta.length()>2900.f || !body.inWater)continue;
     bench.waterIds.insert(body.id);
     bench.waterLabels[body.id]=body.visual;
     observed.push_back((body.worldBounds[0]+body.worldBounds[1])*.5f);
@@ -5155,6 +5202,14 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
   if(found==all.end() || found->broken) {arenaAbort("water spell map target is unavailable");return;}
   auto target=(found->localBounds[0]+found->localBounds[1])*.5f;found->transform.project(target);
   Vec3 caster=bench.waterDry,windDummy;
+  if(!wind) {
+    // A quay or a moored ship may block the route from the original dry WP.
+    // Find a real supported firing position with a clear path to this crate.
+    const float targetRadius=(found->localBounds[1]-found->localBounds[0]).length()*.5f;
+    if(!waterFireballCaster(world,target,targetRadius,caster)) {
+      arenaAbort("water fireball requires supported dry ground and a clear native shot path");return;
+      }
+    }
   if(wind) {
     // Follow the real terrain to the waterline, including any dry terraces
     // above it. A height change alone is not the edge of the water.
@@ -5389,7 +5444,13 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
   else {bench.spellEquipPending=spell;bench.spellEquipUntil=world.tickCount()+3000;}
   auto cameraTarget=target;
   if(wind)cameraTarget.y=(target.y+bench.waterCenter.y)*.5f;
-  bench.cam=C_Hold;lookFrom(caster+Vec3(-direction.z*300.f,210,direction.x*300.f),cameraTarget);
+  bench.cam=C_Hold;
+  if(!wind && bench.waterCase=="deep") {
+    bench.cam=C_Water;bench.waterCameraTarget=cameraTarget;
+    lookFrom(target+bench.waterDirection*380.f+Vec3(0,650,0),cameraTarget);
+    }
+  else
+    lookFrom(caster+Vec3(-direction.z*300.f,210,direction.x*300.f),cameraTarget);
   event("water_spell_ready","\"spell_kind\":"+jsonStr(wind?"wind":"fireball")+",\"spell_id\":"+
     std::to_string(spell)+",\"zen_id\":"+std::to_string(zen)+",\"target_cm\":"+ragdollVector(target)+
     ",\"caster_cm\":"+ragdollVector(caster)+",\"dummy_cm\":"+ragdollVector(dummy));
@@ -7847,7 +7908,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="water" && a.size()==2 && a[1]=="push-ready")prepareWaterSpell(w,pl,true);
   else if(c=="water" && a.size()==2 && a[1]=="fireball-ready")prepareWaterSpell(w,pl,false);
   else if(c=="water" && a.size()==3 && a[1]=="save") {
-    try {waterCheckpoint(w,"saved");saveMovableSession(w,a[2]);}
+    try {
+      for(const auto& body:w.physic()->waterBodySnapshot())
+        if(waterOwns(body) && !body.sleeping) {
+          arenaAbort("water save requires every observed body to have settled and slept");return;
+          }
+      waterCheckpoint(w,"saved");saveMovableSession(w,a[2]);
+      }
     catch(const std::exception& error) {arenaAbort(error.what());}
     }
   else if(c=="water" && a.size()==2 && a[1]=="swim-ready") {
