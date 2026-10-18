@@ -33,6 +33,129 @@ def checkpoint(rows, label):
     return found[0]
 
 
+def one(rows, kind, **fields):
+    found = [row for row in rows if row['kind'] == kind and
+             all(row.get(key) == value for key, value in fields.items())]
+    require(len(found) == 1, f'expected one {kind} {fields}, got {len(found)}')
+    return found[0]
+
+
+def fixture_body(row, label):
+    found = [body for body in row['bodies'] if body['label'] == label]
+    require(len(found) == 1, f'expected one fixture {label}, got {len(found)}')
+    return found[0]
+
+
+def swimming(rows):
+    begin = one(rows, 'water_swim_begin')
+    swum = checkpoint(rows, 'swum')
+    require(swum['hero_saw_swim'], 'hero never entered the swimming state')
+    direction = [begin['direction'][0], begin['direction'][2]]
+    length = math.hypot(*direction)
+    require(math.isfinite(length) and length > 0, 'invalid swimming direction')
+    direction = [value / length for value in direction]
+
+    def projection(position):
+        return sum((position[axis] - begin['barrel_cm'][axis]) * direction[index]
+                   for index, axis in enumerate((0, 2)))
+
+    before, after = projection(begin['hero_cm']), projection(swum['hero_cm'])
+    require(before < 0 < after,
+            f'hero did not cross the original barrel along the swim direction: '
+            f'{before:.3f} -> {after:.3f} cm')
+    original = fixture_body(one(rows, 'water_setup'), 'barrel')
+    settled = fixture_body(checkpoint(rows, 'settled'), 'barrel')
+    barrel = fixture_body(swum, 'barrel')
+    require(barrel['category'] == 10 and
+            barrel['zen_id'] == settled['zen_id'] == original['zen_id'],
+            'swimming checkpoint lost the intact original barrel')
+    maximum_step = swum['hero_max_step_cm']
+    require(math.isfinite(maximum_step) and maximum_step >= 0, 'invalid maximum hero step')
+    return {'hero_saw_swim': True, 'projection_before_cm': before,
+            'projection_after_cm': after, 'hero_max_step_cm': maximum_step,
+            'barrel_displacement_cm': math.dist(settled['position_cm'], barrel['position_cm'])}
+
+
+def fragments(rows):
+    crate = fixture_body(one(rows, 'water_setup'), 'crate')
+    broken = checkpoint(rows, 'fragments')
+    pieces = [body for body in broken['bodies'] if body['category'] == 13 and
+              body['zen_id'] == crate['zen_id']]
+    require(pieces, 'fireball checkpoint has no fragments of the original crate')
+    for piece in pieces:
+        density = piece['density_kg_m3']
+        require(math.isfinite(density) and 0 < density < 1000,
+                f'crate fragment {piece["piece"]}: invalid wooden density {density}')
+        require(piece['sleeping'], f'crate fragment {piece["piece"]}: still moving after settling')
+    return {'crate_zen_id': crate['zen_id'], 'count': len(pieces),
+            'sleeping_count': sum(piece['sleeping'] for piece in pieces),
+            'wet_count': sum(piece['submerged_fraction'] > 0 for piece in pieces)}
+
+
+def pickup(rows):
+    row = one(rows, 'water_pickup')
+    gained = row['inventory_after'] - row['inventory_before']
+    if row['accepted']:
+        require(gained == 1, 'accepted shore pickup did not add exactly one inventory item')
+        rule = 'picked up'
+    else:
+        require(row['swimming'] and gained == 0,
+                'shore pickup failed without the swimming restriction')
+        rule = 'pickup blocked while swimming'
+    return {'accepted': row['accepted'], 'swimming': row['swimming'],
+            'inventory_before': row['inventory_before'],
+            'inventory_after': row['inventory_after'], 'rule': rule}
+
+
+def wind(rows):
+    ready = one(rows, 'water_spell_ready', spell_kind='wind')
+    releases = [row for row in rows if row['kind'] == 'spell_physics_release' and
+                row['id'] == ready['spell_id'] and row['t'] >= ready['t']]
+    require(releases, 'wind fixture never released the prepared wind spell')
+    release = releases[0]
+    require(any(row['kind'] == 'spell_physics_cast' and row['id'] == ready['spell_id'] and
+                ready['t'] <= row['t'] <= release['t'] for row in rows),
+            'wind release has no actual matching spell cast')
+    barrel = fixture_body(checkpoint(rows, 'pushed'), 'barrel')
+    original = fixture_body(one(rows, 'water_setup'), 'barrel')
+    require(barrel['category'] == 10 and barrel['zen_id'] == original['zen_id'] == ready['zen_id'],
+            'wind checkpoint lost the intact targeted barrel')
+    require(barrel['submerged_fraction'] > 0, 'wind-pushed barrel did not enter the water')
+    heard = {}
+    for row in rows:
+        if row['kind'] == 'physics_noise_heard' and row['callback_dispatched']:
+            heard.setdefault((row['body'], row['t_game_ms']), []).append(row['npc_id'])
+    splashes = [row for row in rows if row['kind'] == 'physics_noise' and
+                row['body'] == barrel['id'] and row['surface_material'] == 5 and
+                row['sound'] == 'CS_INTRO_WATERSPLASH.WAV' and row['played'] and
+                row['t'] >= release['t'] and (row['body'], row['t_game_ms']) in heard]
+    require(splashes, 'no audible stock water splash of the pushed barrel dispatched an NPC callback')
+    splash = max(splashes, key=lambda row: row['impulse_ns'])
+    require(math.isfinite(splash['impulse_ns']) and splash['impulse_ns'] > 0 and
+            math.isfinite(splash['volume']) and 0 < splash['volume'] <= 1 and
+            math.isfinite(splash['radius_cm']) and splash['radius_cm'] > 0,
+            'invalid wind barrel splash measurements')
+    return {'barrel_id': barrel['id'], 'barrel_zen_id': barrel['zen_id'],
+            'submerged_fraction': barrel['submerged_fraction'],
+            'splash_t_game_ms': splash['t_game_ms'], 'impulse_ns': splash['impulse_ns'],
+            'volume': splash['volume'], 'radius_cm': splash['radius_cm'],
+            'heard_npc_ids': sorted(set(heard[(splash['body'], splash['t_game_ms'])]))}
+
+
+def disabled(rows):
+    setup = one(rows, 'water_setup')
+    expected = {'crate', 'barrel', 'table', *ITEM_DENSITY_KG_M3}
+    require(len(setup['bodies']) == 7 and
+            {body['label'] for body in setup['bodies']} == expected,
+            'disabled fixture needs the same seven genuine objects')
+    row = checkpoint(rows, 'disabled')
+    require(not row['buoyancy_enabled'], 'disabled checkpoint still has buoyancy enabled')
+    require(row['bodies'] and all(body['submerged_fraction'] >= .99 for body in row['bodies']),
+            'disabled fixture contains a body which did not sink')
+    return {'setup_bodies': len(setup['bodies']), 'submerged_bodies': len(row['bodies']),
+            'sleeping_bodies': sum(body['sleeping'] for body in row['bodies'])}
+
+
 def resting(row):
     bodies = row['bodies']
     require(len(bodies) >= 7, 'water fixture needs crate, barrel, table and four genuine Items')
@@ -121,6 +244,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('functional', type=Path, nargs='?')
     parser.add_argument('--shallow', type=Path)
+    parser.add_argument('--wind', type=Path)
+    parser.add_argument('--disabled', type=Path)
     parser.add_argument('--deep-label', default='settled')
     parser.add_argument('--shallow-label', default='settled')
     parser.add_argument('--reload', type=Path)
@@ -133,13 +258,22 @@ def main():
     if args.functional:
         rows = events(args.functional)
         result['deep'] = resting(checkpoint(rows, args.deep_label))
+        result['swimming'] = swimming(rows)
+        result['deep_fragments'] = fragments(rows)
         if args.reload:
             loaded = events(args.reload)
             saved = checkpoint(rows, args.saved_label)
             result['restore'] = {'initial': restored(saved, checkpoint(loaded, 'restored')),
                                  'after_30_seconds': restored(saved, checkpoint(loaded, args.reload_label))}
     if args.shallow:
-        result['shallow'] = resting(checkpoint(events(args.shallow), args.shallow_label))
+        rows = events(args.shallow)
+        result['shallow'] = resting(checkpoint(rows, args.shallow_label))
+        result['pickup'] = pickup(rows)
+        result['shallow_fragments'] = fragments(rows)
+    if args.wind:
+        result['wind'] = wind(events(args.wind))
+    if args.disabled:
+        result['disabled'] = disabled(events(args.disabled))
     if args.perf_on or args.perf_off:
         require(args.perf_on and args.perf_off, 'performance needs both ON and OFF')
         on, off = measured(args.perf_on), measured(args.perf_off)
@@ -147,7 +281,7 @@ def main():
                                  'fps_change_percent': (on['fps'] / off['fps'] - 1) * 100,
                                  'physics_p95_delta_ms': on['physics_p95_ms'] - off['physics_p95_ms']}
         require(on['physics_p95_ms'] <= 2, 'water physics p95 exceeds the two millisecond budget')
-    require(result, 'choose a functional or performance measurement')
+    require(result, 'choose a functional, shallow, wind, disabled or performance measurement')
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

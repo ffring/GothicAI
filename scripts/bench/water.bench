@@ -13,13 +13,6 @@ rec water-deep
 wait 45000
 water checkpoint settled
 shot water-deep-settled
-water push-ready
-wait 1200
-spell cast 600
-wait 10000
-water checkpoint pushed
-noise checkpoint
-shot water-barrel-pushed
 water swim-ready
 wait 1000
 hold forward 2200

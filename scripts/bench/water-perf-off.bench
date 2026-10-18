@@ -3,6 +3,7 @@ seed 73013
 cheat god
 set time 12 0
 movable on
+destruction off
 water off
 overlay off
 view full
