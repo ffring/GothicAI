@@ -14,13 +14,17 @@ A line still too long is reported for translation changes; lip sync stays Russia
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import math
+import os
+import shutil
 import subprocess
 import tempfile
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -215,33 +219,73 @@ def _clear_outputs(out: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def _failed_outputs(out: Path, error: Exception) -> None:
+def _failed_outputs(out: Path, error: BaseException) -> None:
     out.unlink(missing_ok=True)
     out.with_suffix(".wav").unlink(missing_ok=True)
     report_path = out.with_suffix(".levels.json")
     if report_path.is_file():
-        report = json.loads(report_path.read_text())
-        if report.get("ok") is True:
-            # A mux/decode failure after mastering must not look like a published dub.
-            report.update(ok=False, error=str(error))
+        try:
+            report = json.loads(report_path.read_text())
+        except ValueError:
+            report = {}
+        if not isinstance(report, dict):
+            report = {}
+        if report.get("ok") is not False:
+            # Also invalidate a successful master interrupted during mux/decode.
+            report.update(ok=False, error=str(error) or type(error).__name__)
             report_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
 
 
-def _published_russian(directory: Path, command: str) -> tuple[Path, dict, float]:
+@contextmanager
+def _publication(out: Path) -> Iterator[Path]:
+    """Own the output names until success or cleanup, including interruption."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # Keep this inode after release: unlinking it would let waiters lock different files.
+    with out.with_name(f".{out.stem}.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise DubError(f"Дубляж уже собирается: {out}") from error
+        try:
+            _clear_outputs(out)
+            with tempfile.TemporaryDirectory(prefix=f".{out.stem}-", dir=out.parent) as tmp:
+                yield Path(tmp)
+        except BaseException as error:
+            _failed_outputs(out, error)
+            raise
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _file_version(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def _published_russian(directory: Path, command: str, snapshot: Path) -> tuple[Path, dict, float]:
     ru = directory / "short-ru.mp4"
     message = (f"Сначала опубликуйте русский ролик через gothic-shorts {command}: "
                f"{ru} и его levels.json с ok: true")
     try:
-        report = json.loads(ru.with_suffix(".levels.json").read_text())
-        if not ru.is_file() or not isinstance(report, dict) or report.get("ok") is not True:
-            raise ValueError(message)
-        duration = _probe(ru)
+        report_path = ru.with_suffix(".levels.json")
+        report_version = _file_version(report_path.stat())
+        with ru.open("rb") as source:
+            version = _file_version(os.fstat(source.fileno()))
+            report = json.loads(report_path.read_text())
+            if not isinstance(report, dict) or report.get("ok") is not True:
+                raise ValueError(message)
+            with snapshot.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+            if (version != _file_version(os.fstat(source.fileno()))
+                    or version != _file_version(ru.stat())
+                    or report_version != _file_version(report_path.stat())):
+                raise DubError("Русский ролик изменился при чтении; повторите дубляж после его публикации")
+        duration = _probe(snapshot)
         if duration is None or not math.isfinite(duration) or duration <= 0:
             raise ValueError(message)
         _voice_mastered(report)
     except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
         raise DubError(message) from error
-    return ru, report, duration
+    return snapshot, report, duration
 
 
 def _voice_mastered(report: dict) -> float:
@@ -294,7 +338,11 @@ def _english_stem(dub: Dub, line_slots: list[Slot], recordings: list[Path], name
         _report(dub, slot, timing, gains[clip.who], name)
     filters.append("".join(f"[v{index}]" for index in range(len(clips))) +
                    f"amix=inputs={len(clips)}:duration=longest:normalize=0,"
-                   f"apad=whole_dur={total:.9f},atrim=duration={total:.9f}[voice]")
+                   f"apad=whole_dur={total:.9f},atrim=duration={total:.9f},"
+                   # An overlong final line can reach the body edge before its
+                   # own fade. Fade that cut too, before the ending's silence.
+                   f"afade=t=out:st={max(0, total - stems.CLIP_FADE_S):.9f}:"
+                   f"d={min(stems.CLIP_FADE_S, total):.9f}[voice]")
     voice = work / "voice.en.wav"
     _ffmpeg([*_inputs([clip.path for clip in clips]), "-filter_complex", ";".join(filters),
              "-map", "[voice]", "-c:a", "pcm_f32le", str(voice)], "the English voice stem")
@@ -346,53 +394,51 @@ def npc_voices(config: Config, npcs: list[str]) -> dict[str, dict[str, str]]:
 def dub_take(config: Config, shot: Shot, take: Path, lang: str = "en", provider: str | None = None) -> Dub:
     out = take / f"dub.{lang}.mp4"
     wav = out.with_suffix(".wav")
-    _clear_outputs(out)
-    try:
-        if lang not in LOCALES:
-            raise DubError(f"no voices for {lang}: the dub speaks {', '.join(LOCALES)}")
-        ru, ru_report, ru_duration = _published_russian(take, "cut")
-        for path in (take / "events.jsonl", take / "main.wav"):
-            if not path.is_file():
-                raise DubError(f"the take has no {path.name}")
-        cut._validate_recording(take)
-        rows = read_events(take / "events.jsonl")
-        tl = build(rows)
-        if not tl.keep():
-            raise DubError("the take has no recorded body")
-        stems.collect(rows, tl)
-        total = cut.body_duration(tl)
-        sting_duration = cut._duration(cut.BRAND / "sting.mp4") if shot.brand else 0.0
-        length = total + sting_duration
-        _check_duration(length, ru_duration)
-        subs = load_subs(take, lang, list(dict.fromkeys(line.text for line in tl.lines)))
-        repo, _ = tools(config)
-        work = take / f"dub-{lang}"
-        work.mkdir(exist_ok=True)
-        effects, _ = cut.render_effects(shot, take / "main.wav", tl, work / "game.wav", sting_duration)
-        joined = _join_picture(ru, effects, work / "joined.mkv")
-        music = bed.render(shot.bed, shot.bed_start, total, work / "music.wav")
+    with _publication(out) as pending:
+        try:
+            if lang not in LOCALES:
+                raise DubError(f"no voices for {lang}: the dub speaks {', '.join(LOCALES)}")
+            ru, ru_report, ru_duration = _published_russian(take, "cut", pending / "short-ru.mp4")
+            for path in (take / "events.jsonl", take / "main.wav"):
+                if not path.is_file():
+                    raise DubError(f"the take has no {path.name}")
+            cut._validate_recording(take)
+            rows = read_events(take / "events.jsonl")
+            tl = build(rows)
+            if not tl.keep():
+                raise DubError("the take has no recorded body")
+            stems.collect(rows, tl)
+            total = cut.body_duration(tl)
+            sting_duration = cut._duration(cut.BRAND / "sting.mp4") if shot.brand else 0.0
+            length = total + sting_duration
+            _check_duration(length, ru_duration)
+            subs = load_subs(take, lang, list(dict.fromkeys(line.text for line in tl.lines)))
+            repo, _ = tools(config)
+            work = take / f"dub-{lang}"
+            work.mkdir(exist_ok=True)
+            effects, _ = cut.render_effects(shot, take / "main.wav", tl, work / "game.wav", sting_duration)
+            joined = _join_picture(ru, effects, work / "joined.mkv")
+            music = bed.render(shot.bed, shot.bed_start, total, work / "music.wav")
 
-        npcs = sorted({line.who for line in tl.lines if not line.hero})
-        described = {"hero": (VOICE_ID, shot.hero_voice)}
-        for npc, voice in npc_voices(config, npcs).items():
-            described[npc] = (voice["voice_id"], voice["voice"])
-        said: dict[str, list[str]] = {}
-        for line in tl.lines:
-            said.setdefault(line.who, []).append(subs[line.text])
-        recorded = english_voices(config, described, said, shorts_dir(repo) / "voice" / lang, lang, provider)
-        dub = Dub(wav, None, ru_duration, ru_duration, None, _voice_mastered(ru_report))
-        line_slots = take_slots(tl, subs)
-        voice, speech = _english_stem(
-            dub, line_slots, [recorded[(slot.who, slot.en)] for slot in line_slots],
-            [line.name or "hero" for line in tl.lines], total, work,
-        )
-        _publish(dub, ru, joined, music, voice, speech, total, length, out, work)
-        return dub
-    except Exception as error:
-        _failed_outputs(out, error)
-        if isinstance(error, (CutError, bed.BedError, ValueError, OSError, subprocess.CalledProcessError)):
+            npcs = sorted({line.who for line in tl.lines if not line.hero})
+            described = {"hero": (VOICE_ID, shot.hero_voice)}
+            for npc, voice in npc_voices(config, npcs).items():
+                described[npc] = (voice["voice_id"], voice["voice"])
+            said: dict[str, list[str]] = {}
+            for line in tl.lines:
+                said.setdefault(line.who, []).append(subs[line.text])
+            recorded = english_voices(config, described, said, shorts_dir(repo) / "voice" / lang,
+                                      lang, provider)
+            dub = Dub(wav, None, ru_duration, ru_duration, None, _voice_mastered(ru_report))
+            line_slots = take_slots(tl, subs)
+            voice, speech = _english_stem(
+                dub, line_slots, [recorded[(slot.who, slot.en)] for slot in line_slots],
+                [line.name or "hero" for line in tl.lines], total, work,
+            )
+            _publish(dub, ru, joined, music, voice, speech, total, length, out, work)
+            return dub
+        except (CutError, bed.BedError, ValueError, OSError, subprocess.CalledProcessError) as error:
             raise DubError(str(error)) from error
-        raise
 
 
 def english_voices(
@@ -627,26 +673,24 @@ def dub_explainer(
     ws = ws.resolve()
     out = ws / f"render/dub.{lang}.mp4"
     wav = out.with_suffix(".wav")
-    _clear_outputs(out)
-    try:
-        if lang not in LOCALES:
-            raise DubError(f"no voices for {lang}: the dub speaks {', '.join(LOCALES)}")
-        ru, ru_report, ru_duration = _published_russian(out.parent, "explain")
-        said = json.loads((ws / "words.ru.json").read_text())["lines"]
-        plan = json.loads((ws / plan_file).read_text())
-        _, total, length = explain.speech_windows(plan)
-        _check_duration(length, ru_duration)
-        texts_en = english_script(ws, lang)
-        if len(texts_en) != len(said):
-            raise DubError(f"script.{lang}.txt has {len(texts_en)} lines for {len(said)} said ones")
-        rows = [
-            ("voice", " ".join(word["text"] for word in line["words"]), en,
-             line["words"][0]["start"], line["words"][-1]["end"])
-            for line, en in zip(said, texts_en, strict=True)
-        ]
-        dub = Dub(wav, None, ru_duration, ru_duration, None, _voice_mastered(ru_report))
-        with tempfile.TemporaryDirectory(prefix=".dub-", dir=out.parent) as tmp:
-            work = Path(tmp)
+    with _publication(out) as work:
+        try:
+            if lang not in LOCALES:
+                raise DubError(f"no voices for {lang}: the dub speaks {', '.join(LOCALES)}")
+            ru, ru_report, ru_duration = _published_russian(out.parent, "explain", work / "short-ru.mp4")
+            said = json.loads((ws / "words.ru.json").read_text())["lines"]
+            plan = json.loads((ws / plan_file).read_text())
+            _, total, length = explain.speech_windows(plan)
+            _check_duration(length, ru_duration)
+            texts_en = english_script(ws, lang)
+            if len(texts_en) != len(said):
+                raise DubError(f"script.{lang}.txt has {len(texts_en)} lines for {len(said)} said ones")
+            rows = [
+                ("voice", " ".join(word["text"] for word in line["words"]), en,
+                 line["words"][0]["start"], line["words"][-1]["end"])
+                for line, en in zip(said, texts_en, strict=True)
+            ]
+            dub = Dub(wav, None, ru_duration, ru_duration, None, _voice_mastered(ru_report))
             explain.render(ws, plan, work, stems=("game", "music"))
             joined = _join_picture(ru, work / "game.wav", work / "joined.mkv")
             voiced = clone(config, ws, texts_en, lang, tts, reclone)
@@ -659,13 +703,10 @@ def dub_explainer(
             _publish(dub, ru, joined, work / "music.wav" if music is not None else None,
                      voice, speech, total, length, out, work,
                      music_fades=False, music_fade_durations=fades)
-        return dub
-    except Exception as error:
-        _failed_outputs(out, error)
-        if isinstance(error, (explain.ExplainError, ValueError, OSError, KeyError, IndexError,
-                              TypeError, subprocess.CalledProcessError)):
+            return dub
+        except (explain.ExplainError, ValueError, OSError, KeyError, IndexError,
+                TypeError, subprocess.CalledProcessError) as error:
             raise DubError(str(error)) from error
-        raise
 
 
 def _inputs(files: list[Path]) -> list[str]:
