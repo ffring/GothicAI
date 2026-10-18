@@ -4776,6 +4776,16 @@ bool waterPlaceMap(World& world,const DynamicWorld::MovableVobSnapshot& body,con
   const auto center=(body.localBounds[0]+body.localBounds[1])*.5f;
   matrix.translate(surface.x-center.x,surface.y-body.localBounds[0].y+55.f,surface.z-center.z);
   if(!world.physic()->setMovableVobTransform(body.zenId,matrix))return false;
+  // Restoring an authored map pose intentionally leaves it asleep. This
+  // fixture places it in mid-air, so provide an ordinary tiny native impulse
+  // before observing gravity and water. The hull COM can differ from bbox COM.
+  auto worldCenter=center;matrix.project(worldCenter);
+  const float radius=(body.localBounds[1]-body.localBounds[0]).length()*.5f+1.f;
+  const auto awakened=world.physic()->applyMovableVobImpulse(worldCenter,radius,
+    [mass=body.mass](const Vec3&,float targetMass) {
+      return std::abs(targetMass-mass)<.001f ? Vec3(0,-.1f*mass,0) : Vec3();
+      });
+  if(awakened!=1)return false;
   bench.waterIds.insert(body.id);bench.waterLabels[body.id]=std::move(label);
   bench.movableIds.push_back(body.id);bench.movableMapIds.insert(body.id);
   return true;
@@ -4809,6 +4819,10 @@ void prepareWaterFixture(World& world,Npc& player,std::string_view mode) {
     for(unsigned i=0;i<30;++i) {
       const auto id=destructionAdd(world,visual,places[i]+Vec3(0,55,0));
       if(!id) {arenaAbort("water performance barrel insertion failed");return;}
+      auto& handle=bench.destructionFixtures.back()->body;
+      if(!handle.addImpulse(Vec3(0,-.1f*handle.mass(),0))) {
+        arenaAbort("water performance barrel could not be activated");return;
+        }
       bench.waterIds.insert(id);bench.waterLabels[id]="barrel_"+std::to_string(i);
       }
     }
@@ -4932,14 +4946,40 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
     const auto center=(found->localBounds[0]+found->localBounds[1])*.5f;
     matrix.translate(at.x-center.x,floorPoint.y-found->localBounds[0].y+.5f,at.z-center.z);
     if(!world.physic()->setMovableVobTransform(zen,matrix,&player)) {arenaAbort("water shore barrel placement failed");return;}
-    target=Vec3(at.x,floorPoint.y+center.y-found->localBounds[0].y,at.z);caster=floorPoint-direction*260.f;
-    const auto stand=world.physic()->landRay(caster+Vec3(0,80,0),180.f);
-    if(!stand.hasCol) {arenaAbort("water wind caster requires supported native ground");return;}
-    caster.y=stand.v.y;
+    target=Vec3(at.x,floorPoint.y+center.y-found->localBounds[0].y,at.z);
+    // The ordinary cone's impulse is 450*(1-distance/1000) Ns. Stay below
+    // this native barrel's break threshold while still pushing it off the lip.
+    const float safeDistance=std::clamp(1000.f*(1.f-.8f*found->impactThreshold/450.f),400.f,960.f);
+    bool casterSupported=false;
+    for(float distance=safeDistance;distance<=980.f && !casterSupported;distance+=10.f) {
+      const auto candidate=floorPoint-direction*distance;
+      const auto stand=world.physic()->landRay(candidate+Vec3(0,80,0),180.f);
+      if(!stand.hasCol || stand.n.y<.65f || world.physic()->waterRay(stand.v,1.f).hasCol ||
+         std::abs(stand.v.y-floorPoint.y)>30.f)continue;
+      bool path=true;
+      for(float along=0;along<distance;along+=40.f) {
+        const auto probe=stand.v+direction*along;
+        const auto floor=world.physic()->landRay(probe+Vec3(0,40,0),100.f);
+        if(!floor.hasCol || floor.n.y<.65f || std::abs(floor.v.y-floorPoint.y)>30.f ||
+           world.physic()->waterRay(floor.v,1.f).hasCol) {path=false;break;}
+        }
+      if(!path)continue;
+      const auto obstruction=world.physic()->ray(stand.v+Vec3(0,100,0),target);
+      if(obstruction.hasCol && (obstruction.v-target).length()>extent.length()+5.f)continue;
+      caster=stand.v;casterSupported=true;
+      }
+    if(!casterSupported) {arenaAbort("water safe wind caster requires a supported clear native path");return;}
     noiseRetireListeners();noiseBegin(world,"water-splash",Vec3(lip.x,bench.waterCenter.y,lip.z));
     // A nearby onshore listener is a normal NPC with the #93 perception.
-    const auto listenerAt=world.physic()->landRay(caster+Vec3(-direction.z*150.f,80,direction.x*150.f),240.f);
-    if(!listenerAt.hasCol || !noiseAddListener(world,"water-near",listenerAt.v)) {
+    Npc* listener=nullptr;
+    for(float lateral:{150.f,-150.f,100.f,-100.f}) {
+      const auto shoulder=floorPoint-direction*220.f+Vec3(-direction.z*lateral,80,direction.x*lateral);
+      const auto listenerAt=world.physic()->landRay(shoulder,180.f);
+      if(!listenerAt.hasCol || listenerAt.n.y<.65f ||
+         world.physic()->waterRay(listenerAt.v,1.f).hasCol)continue;
+      listener=noiseAddListener(world,"water-near",listenerAt.v);break;
+      }
+    if(!listener) {
       arenaAbort("water splash requires a real nearby supported listener");return;
       }
     }
@@ -4970,7 +5010,7 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
   if(player.drawSpell(spell))bench.spellCastingId=spell;
   else {bench.spellEquipPending=spell;bench.spellEquipUntil=world.tickCount()+3000;}
   bench.cam=C_Hold;lookFrom(caster+Vec3(-direction.z*300.f,210,direction.x*300.f),target);
-  event("water_spell_ready","\"kind\":"+jsonStr(wind?"wind":"fireball")+",\"spell_id\":"+
+  event("water_spell_ready","\"spell_kind\":"+jsonStr(wind?"wind":"fireball")+",\"spell_id\":"+
     std::to_string(spell)+",\"zen_id\":"+std::to_string(zen)+",\"target_cm\":"+ragdollVector(target)+
     ",\"caster_cm\":"+ragdollVector(caster));
   }
