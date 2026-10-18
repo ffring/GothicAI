@@ -91,9 +91,21 @@ def compose(args):
     require(10 <= duration <= 20, "Both takes must supply 10–20 seconds at normal speed")
     require(duration <= min(before["duration_s"], after["duration_s"]) + 0.001,
             "Requested duration exceeds an input; repeated/frozen frames are not allowed")
-    panel_width = max(640, before["width"], after["width"])
+    crop, crop_filter = None, ""
+    views = (before, after)
+    if args.crop:
+        crop = tuple(int(part) for part in args.crop.split(":"))
+        require(len(crop) == 4, "--crop expects X:Y:W:H in integer pixels")
+        x, y, width, height = crop
+        require(x >= 0 and y >= 0 and width > 0 and height > 0 and width % 2 == height % 2 == 0,
+                "--crop needs nonnegative X/Y and positive even W/H")
+        require(all(x + width <= row["width"] and y + height <= row["height"] for row in views),
+                "--crop rectangle must fit completely inside both source videos")
+        crop_filter = f"crop={width}:{height}:{x}:{y}:exact=1,"
+        views = ({"width": width, "height": height},) * 2
+    panel_width = max(640, *(row["width"] for row in views))
     panel_width += panel_width % 2
-    panel_height = max(round(panel_width * row["height"] / row["width"]) for row in (before, after))
+    panel_height = max(round(panel_width * row["height"] / row["width"]) for row in views)
     panel_height += panel_height % 2
     title = args.title or TITLES.get(output.stem, output.stem.replace("-", " ").replace("_", " "))
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -113,7 +125,7 @@ def compose(args):
         banner_path = temporary / "banner.png"
         banner.save(banner_path)
         panels = ";".join(
-            f"[{index}:v]trim=duration={duration:.6f},setpts=PTS-STARTPTS,fps=30,"
+            f"[{index}:v]{crop_filter}trim=duration={duration:.6f},setpts=PTS-STARTPTS,fps=30,"
             f"scale={panel_width}:{panel_height}:force_original_aspect_ratio=decrease,"
             f"pad={panel_width}:{panel_height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{index}]"
             for index in range(2)
@@ -134,7 +146,7 @@ def compose(args):
             folder = temporary / mode
             folder.mkdir()
             run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source,
-                 "-vf", f"fps=1:start_time=0:round=up,scale={cell_width}:{cell_height}:"
+                 "-vf", crop_filter + f"fps=1:start_time=0:round=up,scale={cell_width}:{cell_height}:"
                  "force_original_aspect_ratio=decrease,"
                  f"pad={cell_width}:{cell_height}:(ow-iw)/2:(oh-ih)/2",
                  "-frames:v", str(samples), folder / "%03d.png"])
@@ -158,7 +170,8 @@ def compose(args):
     require(10 <= final["duration_s"] <= 20.04 and abs(final["duration_s"] - duration) <= 1 / 30 + .002,
             "Encoded duration differs from requested native-speed interval")
     return {"video": str(output), "sheet": str(sheet), "title": title, **final,
-            "samples_s": list(range(samples)), "off": str(off), "on": str(on)}
+            "samples_s": list(range(samples)), "crop_xywh": crop,
+            "off": str(off), "on": str(on)}
 
 
 def finite(value):
@@ -464,6 +477,7 @@ def main():
     video.add_argument("--title")
     video.add_argument("--duration", type=float, help="Native-speed seconds (10–20); defaults to the shorter take, capped at 20")
     video.add_argument("--font", type=Path)
+    video.add_argument("--crop", help="Same fixed X:Y:W:H pixel rectangle for both videos and sheets; W/H must be even")
     data = commands.add_parser("metrics", help="Print native route metrics and attack comparisons as JSON")
     data.add_argument("--off", type=Path, required=True)
     data.add_argument("--on", type=Path, required=True)

@@ -832,10 +832,14 @@ struct Bench {
   struct MonsterCharacterProp {
     std::unique_ptr<MovableFixture> fixture;
     std::string role;
-    Vec3 start;
+    Vec3 start,lastIntact;
+    uintptr_t id=0;
     float travel=0;
+    unsigned fragments=0;
+    bool broken=false;
   };
   std::vector<MonsterCharacterProp> monsterCharacterProps;
+  MonsterCharacterProp monsterCharacterBarrel;
   struct MonsterCharacterPerformance {
     uint64_t time=0,dt=0;
     float physics=0,wall=0,maximumDistance=0;
@@ -2809,7 +2813,7 @@ size_t npcArrowPins(World& world) {
   }
 
 void arenaAbort(std::string_view reason);
-bool chooseRagdollArena(World& world,Npc& player,std::string_view preferredAnchor={});
+bool chooseRagdollArena(World& world,Npc& player);
 
 void stickingFields(World& world) {
   if(!bench.stickingTrace || world.tickCount()==bench.stickingSampleTick) return;
@@ -7336,16 +7340,11 @@ void arenaAbort(std::string_view reason) {
   bench.pc=bench.prog.size(); bench.waitUntil=0;
   }
 
-bool chooseRagdollArena(World& world, Npc& player,std::string_view preferredAnchor) {
+bool chooseRagdollArena(World& world, Npc& player) {
   if(!bench.crew.empty()) return false;
-  const auto* anchor=preferredAnchor.empty()?nullptr:world.findPoint(preferredAnchor);
-  if(!preferredAnchor.empty() && !anchor)return false;
   std::vector<const WayPoint*> candidates;
-  world.findWayPoint(player.position(),[&](const WayPoint& wp) {
-    if(!anchor || (wp.name.starts_with("NW_CITY_") && wp.name.find("DITCH")==std::string::npos))candidates.push_back(&wp);
-    return false;
-    });
-  const auto origin=anchor?anchor->pos:player.position();
+  world.findWayPoint(player.position(),[&](const WayPoint& wp) { candidates.push_back(&wp); return false; });
+  const auto origin=player.position();
   std::sort(candidates.begin(),candidates.end(),[&](const auto* a,const auto* b) {
     const auto da=(a->pos-origin).quadLength(),db=(b->pos-origin).quadLength();
     return da==db ? a->name<b->name : da<db;
@@ -7358,12 +7357,11 @@ bool chooseRagdollArena(World& world, Npc& player,std::string_view preferredAnch
     for(int i=0;i<20 && valid;++i) {
       Vec3 place=waypoint->pos+Vec3(float(i%5)*250.f-500.f,0,float(i/5)*250.f-375.f);
       const auto floor=world.physic()->landRay(place+Vec3(0,300,0),900);
-      if(!floor.hasCol || floor.n.y<.98f || (anchor && floor.mat!=zenkit::MaterialGroup::STONE)) { valid=false; break; }
+      if(!floor.hasCol || floor.n.y<.98f) { valid=false; break; }
       place.y=floor.v.y;
       for(float dx:{-150.f,0.f,150.f}) for(float dz:{-150.f,0.f,150.f}) {
         const auto support=world.physic()->landRay(place+Vec3(dx,300,dz),600);
-        if(!support.hasCol || support.n.y<.98f || std::abs(support.v.y-place.y)>20.f ||
-           (anchor && support.mat!=zenkit::MaterialGroup::STONE)) valid=false;
+        if(!support.hasCol || support.n.y<.98f || std::abs(support.v.y-place.y)>20.f) valid=false;
         }
       if(world.physic()->ray(place+Vec3(0,40,0),place+Vec3(0,3200,0)).hasCol) valid=false;
       lowest=std::min(lowest,place.y); highest=std::max(highest,place.y);
@@ -7380,8 +7378,7 @@ bool chooseRagdollArena(World& world, Npc& player,std::string_view preferredAnch
     bench.ragdollArenaTarget=target;
     event("ragdoll_arena_site","\"waypoint\":"+jsonStr(waypoint->name)+",\"geometry_rejections\":"+
           std::to_string(rejected)+",\"center\":"+ragdollVector(target)+",\"ground_min_cm\":"+
-          std::to_string(lowest)+",\"ground_max_cm\":"+std::to_string(highest)+",\"places\":20,\"preferred_anchor\":"+jsonStr(preferredAnchor)+
-          ",\"stone_only\":"+(anchor?"true":"false"));
+          std::to_string(lowest)+",\"ground_max_cm\":"+std::to_string(highest)+",\"places\":20");
     return true;
     }
   return false;
@@ -7464,7 +7461,8 @@ bool characterLane(World& world,const Vec3& start,const Vec3& end,float maximumS
   return true;
   }
 
-bool characterStairsProfile(World& world,const Vec3& low,const Vec3& high,unsigned& risers,float& maximumRiser) {
+bool characterStairsProfile(World& world,const Vec3& low,const Vec3& high,unsigned& risers,float& maximumRiser,
+                            float minimumRiser=6.f,float minimumRise=45.f) {
   risers=0;maximumRiser=0;unsigned plateaus=0;
   Vec3 previous=low;
   for(unsigned i=1;i<=40;++i) {
@@ -7472,13 +7470,13 @@ bool characterStairsProfile(World& world,const Vec3& low,const Vec3& high,unsign
     if(!characterFloor(world,low+(high-low)*(float(i)/40.f),floor))return false;
     const float rise=floor.y-previous.y;
     if(rise< -2.f || rise>32.f)return false;
-    if(rise>=6.f) {++risers;maximumRiser=std::max(maximumRiser,rise);}
+    if(rise>=minimumRiser) {++risers;maximumRiser=std::max(maximumRiser,rise);}
     if(std::abs(rise)<2.f)++plateaus;
     previous=floor;
     }
   // Several discrete risers and level treads distinguish stairs from one
   // furniture top or a sloping ramp picked by the broad IK roughness probe.
-  return risers>=3 && plateaus>=8 && high.y-low.y>=45.f;
+  return risers>=3 && plateaus>=8 && high.y-low.y>=minimumRise;
   }
 
 void characterFreezeNear(World& world,Npc& player,const Vec3& start,const Vec3& goal) {
@@ -8343,6 +8341,7 @@ void monsterCharacterClear(World& world) {
     auto* npc=actor.npc;actor.npc=nullptr;world.removeNpc(*npc);
     }
   bench.monsterCharacterExtras.clear();bench.monsterCharacterProps.clear();
+  bench.monsterCharacterBarrel=Bench::MonsterCharacterProp();
   bench.monsterCharacterMeasuring=false;bench.monsterCharacterCrowd=false;bench.monsterCharacterPack=false;
   bench.characterProp.reset();bench.characterPropId=0;bench.characterPropTravel=0;
   route=Bench::MonsterCharacterRoute();
@@ -8390,13 +8389,47 @@ bool monsterCharacterProp(World& world,std::string_view role,const Vec3& at) {
   zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
   data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
   data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+  const auto before=world.physic()->movableVobSnapshot();
   auto fixture=std::make_unique<Bench::MovableFixture>();fixture->visual.setVisual(data,world,false,false);fixture->visual.setObjMatrix(matrix);
   fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,rule->massMultiplier,rule->blocksWalking,rule->className,true);
   if(fixture->body.isEmpty()) {monsterCharacterError("stock monster prop body unavailable");return false;}
   fixture->body.setTransformCallback([view=&fixture->visual](const Matrix4x4& m){view->setObjMatrix(m);});
+  fixture->visual.setupFracture(world,fixture->body);
+  uintptr_t id=0;
+  for(const auto& body:world.physic()->movableVobSnapshot())
+    if(std::none_of(before.begin(),before.end(),[&](const auto& old){return old.id==body.id;})) {id=body.id;break;}
+  if(!id) {monsterCharacterError("stock monster prop snapshot unavailable");return false;}
   event("monster_character_prop_setup","\"role\":"+jsonStr(role)+",\"mass_kg\":"+ragdollNumber(fixture->body.mass())+
     ",\"position_cm\":"+ragdollVector(movablePosition(matrix))+",\"blocks_walking\":"+(rule->blocksWalking?"true":"false"));
-  bench.monsterCharacterProps.push_back({std::move(fixture),std::string(role),movablePosition(matrix),0});return true;
+  bench.monsterCharacterProps.push_back({std::move(fixture),std::string(role),movablePosition(matrix),movablePosition(matrix),id});return true;
+  }
+
+void monsterCharacterSampleProps(World& world) {
+  if(bench.monsterCharacterProps.empty() && !bench.monsterCharacterBarrel.id)return;
+  const auto bodies=world.physic()->movableVobSnapshot();
+  const auto fragments=world.physic()->fragmentSnapshot();
+  auto sample=[&](Bench::MonsterCharacterProp& prop) {
+    for(const auto& body:bodies)if(body.id==prop.id) {
+      // Native snapshots retain the last intact matrix after fracture. Item's
+      // body pointer has been released then, so Item::matrix() is identity.
+      prop.lastIntact=movablePosition(body.transform);prop.broken=body.broken;
+      prop.travel=std::max(prop.travel,(prop.lastIntact-prop.start).length());
+      break;
+      }
+    prop.fragments=unsigned(std::count_if(fragments.begin(),fragments.end(),[&](const auto& part){return part.parentId==prop.id;}));
+    };
+  for(auto& prop:bench.monsterCharacterProps)sample(prop);
+  if(bench.monsterCharacterBarrel.id) {
+    sample(bench.monsterCharacterBarrel);
+    bench.characterPropTravel=bench.monsterCharacterBarrel.travel;
+    }
+  }
+
+void monsterCharacterPropEnd(const Bench::MonsterCharacterProp& prop,std::string_view route) {
+  event("monster_character_prop_end","\"route\":"+jsonStr(route)+",\"role\":"+jsonStr(prop.role)+
+    ",\"max_displacement_cm\":"+ragdollNumber(prop.travel)+",\"initial_cm\":"+ragdollVector(prop.start)+
+    ",\"broken\":"+(prop.broken?"true":"false")+",\"last_intact_cm\":"+ragdollVector(prop.lastIntact)+
+    ",\"fragment_count\":"+std::to_string(prop.fragments)+",\"end_cm\":"+(prop.broken?"null":ragdollVector(prop.lastIntact)));
   }
 
 bool monsterCharacterRenderProof(World& world,Npc& npc,std::string_view role) {
@@ -8537,11 +8570,32 @@ void monsterCharacterCamera(World& world,Npc& player,bool requested=false,float 
   if(!rendered)monsterCharacterError("monster fixed camera requires drawable actor meshes and their complete projected poses");
   }
 
+void monsterCharacterRemoveAmbient(World& world,const Npc& player,const Vec3& center,float radius,std::string_view site) {
+  std::vector<Npc*> ambient;
+  for(uint32_t id=0;id<world.npcCount();++id)if(auto* npc=world.npcById(id);npc && npc!=&player && !npc->isHuman() &&
+      npc!=bench.monsterCharacterRoute.npc && (npc->position()-center).length()<=radius &&
+      std::none_of(bench.monsterCharacterExtras.begin(),bench.monsterCharacterExtras.end(),[&](const auto& actor){return actor.npc==npc;}))
+    ambient.push_back(npc);
+  for(auto* npc:ambient) {
+    if(bench.subject==npc)bench.subject=nullptr;
+    world.removeNpc(*npc);
+    }
+  event("monster_character_ambient_removed","\"site\":"+jsonStr(site)+",\"center_cm\":"+ragdollVector(center)+
+    ",\"radius_cm\":"+ragdollNumber(radius)+",\"nonhuman_count\":"+std::to_string(ambient.size()));
+  }
+
 void monsterCharacterPack(World& world,Npc& player) {
   monsterCharacterClear(world);auto& route=bench.monsterCharacterRoute;route.name="wolf_pack";
   std::vector<const WayPoint*> points;world.forEachWayPoint([&](const WayPoint& wp){if(!wp.underWater)points.push_back(&wp);});
   std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
-  std::stable_partition(points.begin(),points.end(),[](const auto* p){return p->name.find("FOREST")!=std::string::npos;});
+  std::stable_partition(points.begin(),points.end(),[](const auto* point) {
+    const auto& name=point->name;
+    return name.find("COAST")!=std::string::npos || name.find("BEACH")!=std::string::npos ||
+           name.find("SEASHORE")!=std::string::npos || name.find("HABOUR")!=std::string::npos ||
+           name.find("HARBOUR")!=std::string::npos || name.find("HARBOR")!=std::string::npos ||
+           name.find("LAKE")!=std::string::npos;
+    });
+  std::stable_partition(points.begin(),points.end(),[](const auto* point){return point->name.find("FOREST")==std::string::npos;});
   std::vector<Vec3> ring;Vec3 center;std::string waypoint;float roughness=0,heightRange=0;unsigned stoneSupports=0;
   for(const auto* point:points) {
     if(!characterFloor(world,point->pos,center))continue;
@@ -8554,7 +8608,8 @@ void monsterCharacterPack(World& world,Npc& player) {
         if(!characterFloor(world,center+Vec3(std::cos(yaw)*radius,0,std::sin(yaw)*radius),floor) ||
            std::abs(floor.y-center.y)>180) {valid=false;break;}
         const auto support=world.physic()->landRay(floor+Vec3(0,15,0),30);
-        if(!support.hasCol || support.n.y<std::cos(30.f*float(M_PI)/180.f)) {valid=false;break;}
+        if(!support.hasCol || support.n.y<std::cos(30.f*float(M_PI)/180.f) ||
+           world.physic()->waterRay(floor+Vec3(0,1,0),0).hasCol) {valid=false;break;}
         stone+=support.mat==zenkit::MaterialGroup::STONE;
         if(!ring.empty() && !characterLane(world,ring.back(),floor,35)) {valid=false;break;}
         low=std::min(low,floor.y);high=std::max(high,floor.y);ring.push_back(floor);
@@ -8567,6 +8622,7 @@ void monsterCharacterPack(World& world,Npc& player) {
     if(!waypoint.empty())break;
     }
   if(waypoint.empty()) {monsterCharacterError("wolf pack lacks a supported uneven stock terrain ring");return;}
+  monsterCharacterRemoveAmbient(world,player,center,2500,"wolf_pack");
   characterFreezeNear(world,player,center,center);player.stopWalking();player.clearAiQueue();player.setPosition(center);player.updateTransform();
   for(unsigned i=0;i<3;++i) {
     const auto index=i*4;auto* npc=monsterCharacterActor(world,"Wolf",ring[index]);if(!npc)return;
@@ -8588,6 +8644,22 @@ void monsterCharacterCliff(World& world,Npc& player) {
   const float limit=float(world.script().guildVal().slide_angle[route.npc->guild()]);
   std::vector<const WayPoint*> points;world.forEachWayPoint([&](const WayPoint& wp){if(!wp.underWater)points.push_back(&wp);});
   std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  std::stable_partition(points.begin(),points.end(),[](const auto* point) {
+    const auto& name=point->name;
+    return name.find("COAST")!=std::string::npos || name.find("BEACH")!=std::string::npos ||
+           name.find("SEASHORE")!=std::string::npos || name.find("HABOUR")!=std::string::npos ||
+           name.find("HARBOUR")!=std::string::npos || name.find("HARBOR")!=std::string::npos ||
+           name.find("LAKE")!=std::string::npos;
+    });
+  std::stable_partition(points.begin(),points.end(),[](const auto* point){return point->name.find("FOREST")==std::string::npos;});
+  auto openSky=[&](const Vec3& start,const Vec3& goal) {
+    for(unsigned i=0;i<=4;++i) {
+      Vec3 floor;
+      if(!characterFloor(world,start+(goal-start)*(float(i)/4.f),floor) ||
+         world.physic()->ray(floor+Vec3(0,25,0),floor+Vec3(0,2025,0)).hasCol)return false;
+      }
+    return true;
+    };
   Vec3 steepStart,steepGoal,edge;float steepAngle=0,walkAngle=0,drop=0;std::string waypoint;
   for(const auto* point:points) {
     if(!waypoint.empty())break;
@@ -8597,7 +8669,8 @@ void monsterCharacterCliff(World& world,Npc& player) {
       float angle=0,rough=0;Vec3 downhill;
       if(!slopeAt(world,center,angle,downhill,rough) || angle<std::max(40.f,limit+3.f) || angle>65 || rough>6)continue;
       Vec3 bottom,top;
-      if(!characterFloor(world,center+downhill*90.f,bottom) || !characterFloor(world,center-downhill*140.f,top) || top.y-bottom.y<140)continue;
+      if(!characterFloor(world,center+downhill*90.f,bottom) || !characterFloor(world,center-downhill*140.f,top) ||
+         top.y-bottom.y<140 || !openSky(bottom,top))continue;
       const auto support=world.physic()->landRay(center+Vec3(0,15,0),30);
       if(!support.hasCol || support.n.y>=std::cos(limit*float(M_PI)/180.f))continue;
       const auto beyond=world.physic()->landRay(center+downhill*450.f+Vec3(0,200,0),2000);
@@ -8608,7 +8681,8 @@ void monsterCharacterCliff(World& world,Npc& player) {
         if(!characterFloor(world,center+across*side+downhill*along,safe))continue;
         float safeAngle=0,safeRough=0;Vec3 safeDown;
         if(!slopeAt(world,safe,safeAngle,safeDown,safeRough) || safeAngle<8 || safeAngle>std::min(30.f,limit-4.f) || safeRough>6)continue;
-        if(!monsterCharacterOpenLane(world,safe,-safeDown,150,30,80,route.start,route.goal,25))continue;
+        if(!monsterCharacterOpenLane(world,safe,-safeDown,150,30,80,route.start,route.goal,25) ||
+           !openSky(route.start,route.goal))continue;
         walkAngle=safeAngle;found=true;
         }
       if(!found)continue;
@@ -8625,7 +8699,7 @@ void monsterCharacterCliff(World& world,Npc& player) {
   auto& actor=monsterCharacterExtra(world,steep,"nonwalkable");monsterCharacterPoint(actor,steepGoal);bench.subject=route.npc;
   event("monster_character_cliff_setup","\"route\":\"molerat_cliff\",\"waypoint\":"+jsonStr(waypoint)+
     ",\"walkable_angle_deg\":"+ragdollNumber(walkAngle)+",\"nonwalkable_angle_deg\":"+ragdollNumber(steepAngle)+
-    ",\"guild_slide_angle_deg\":"+ragdollNumber(limit)+",\"drop_cm\":"+ragdollNumber(drop)+",\"edge_bottom_cm\":"+ragdollVector(edge)+
+    ",\"open_sky\":true,\"sky_ray_height_cm\":2000,\"sky_rays\":10,\"guild_slide_angle_deg\":"+ragdollNumber(limit)+",\"drop_cm\":"+ragdollNumber(drop)+",\"edge_bottom_cm\":"+ragdollVector(edge)+
     ",\"walkable_start_cm\":"+ragdollVector(route.start)+",\"walkable_goal_cm\":"+ragdollVector(route.goal)+
     ",\"nonwalkable_start_cm\":"+ragdollVector(steepStart)+",\"nonwalkable_goal_cm\":"+ragdollVector(steepGoal));
   }
@@ -8634,6 +8708,7 @@ void monsterCharacterCrowd(World& world,Npc& player) {
   monsterCharacterClear(world);
   if(!chooseRagdollArena(world,player)) {monsterCharacterError("monster performance lacks twenty supported stock lanes");return;}
   const auto center=bench.ragdollArenaTarget-Vec3(0,80,0);
+  monsterCharacterRemoveAmbient(world,player,center+Vec3(0,0,-950),2500,"performance");
   characterFreezeNear(world,player,center,center);player.stopWalking();player.clearAiQueue();player.setPosition(center+Vec3(0,0,-950));player.updateTransform();
   const char* species[]={"Wolf","Molerat","Scavenger"};
   for(size_t i=0;i<20;++i) {
@@ -8671,31 +8746,40 @@ bool monsterCharacterSlope(World& world,Vec3& start,Vec3& goal,std::string& wayp
   return false;
   }
 
-bool monsterCharacterCourtyard(World& world,Npc& player,Vec3& start,Vec3& goal,std::string& waypoint) {
+bool monsterCharacterCourtyard(World& world,Npc& player,const Npc& troll,Vec3& start,Vec3& goal,std::string& waypoint) {
   Npc* host=nullptr;
   for(uint32_t id=0;id<world.npcCount();++id)if(auto* npc=world.npcById(id);npc) {
     auto name=symName(world,npc);for(auto& ch:name)ch=char(std::toupper(uint8_t(ch)));
     if(name.find("CORAGON")!=std::string::npos || name.find("KORAGON")!=std::string::npos) {host=npc;break;}
     }
   if(!host)return false;
-  // Use an outdoor courtyard near the tavern. Keep full 136 cm body
-  // clearance and reject roofs or awnings above the entire tested lane.
-  for(float distance:{250.f,500.f,750.f,1000.f,1250.f,1500.f})for(unsigned azimuth=0;azimuth<16;++azimuth) {
+  // A troll's render envelope extends beyond its MDH capsule. Select a real
+  // open courtyard for its arms as well as its body, clear of roofs and walls.
+  const auto bounds=troll.bounds();float halfWidth=350.f;
+  for(unsigned x=0;x<2;++x)for(unsigned z=0;z<2;++z)
+    halfWidth=std::max(halfWidth,std::hypot(bounds.bbox[x].x,bounds.bbox[z].z));
+  const float height=std::max(275.f,bounds.bbox[1].y-bounds.bbox[0].y);
+  for(float distance:{250.f,500.f,750.f,1000.f,1250.f,1500.f,2000.f,2500.f,3000.f})for(unsigned azimuth=0;azimuth<16;++azimuth) {
     const float angle=float(azimuth)*float(M_PI)/8.f;
     const auto candidate=host->position()+Vec3(std::cos(angle)*distance,0,std::sin(angle)*distance);
     Vec3 center;if(!characterFloor(world,candidate,center) || std::abs(center.y-host->position().y)>70)continue;
     for(unsigned yaw=0;yaw<8;++yaw) {
       const float a=float(yaw)*float(M_PI)/4.f;const Vec3 along(std::cos(a),0,std::sin(a));
-      if(!monsterCharacterOpenLane(world,center,along,400,72,275,start,goal,20))continue;
+      if(!monsterCharacterOpenLane(world,center,along,400,halfWidth,height,start,goal,20))continue;
       const Vec3 side(-along.z,0,along.x);bool sky=true;
-      for(unsigned sample=0;sample<=4 && sky;++sample)for(float width:{-72.f,0.f,72.f}) {
+      for(float width:{-halfWidth*.5f,halfWidth*.5f}) {
+        Vec3 laneStart,laneGoal;
+        if(!monsterCharacterOpenLane(world,center+side*width,along,400,0,height,laneStart,laneGoal,20))sky=false;
+        }
+      for(unsigned sample=0;sample<=4 && sky;++sample)for(float width:{-halfWidth,-halfWidth*.5f,0.f,halfWidth*.5f,halfWidth}) {
         const auto point=start+(goal-start)*(float(sample)/4.f)+side*width;Vec3 floor;
         if(!characterFloor(world,point,floor) ||
            world.physic()->ray(floor+Vec3(0,25,0),floor+Vec3(0,2025,0)).hasCol) {sky=false;break;}
         }
       if(!sky)continue;
       waypoint=std::string(symName(world,host));
-      event("monster_character_courtyard_setup","\"outdoor\":true,\"sky_ray_height_cm\":2000,\"sky_rays\":15,\"lane_width_cm\":144");
+      event("monster_character_courtyard_setup","\"outdoor\":true,\"sky_ray_height_cm\":2000,\"sky_rays\":25,\"lane_width_cm\":"+
+        ragdollNumber(halfWidth*2.f)+",\"visual_clearance_height_cm\":"+ragdollNumber(height));
       characterFreezeNear(world,player,start,goal);return true;
       }
     }
@@ -8807,7 +8891,11 @@ bool monsterCharacterStairs(World& world,Npc& npc,Npc& player,Vec3& start,Vec3& 
   std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
   if(stoneOnly)std::stable_partition(points.begin(),points.end(),[](const auto* wp){return wp->name.find("STAIR")!=std::string::npos;});
   std::stable_partition(points.begin(),points.end(),[](const auto* wp){return wp->name=="NW_CITY_TO_FOREST_STAIRS01";});
-  const auto offsets=stoneOnly?std::vector<float>{0.f,-80.f,80.f,-160.f,160.f,-240.f,240.f}:std::vector<float>{0.f,-80.f,80.f};
+  if(stoneOnly)std::stable_partition(points.begin(),points.end(),[](const auto* point) {
+    return point->name.find("_TO_")==std::string::npos && point->name.find("FOREST")==std::string::npos &&
+           point->name.find("DITCH")==std::string::npos;
+    });
+  const auto offsets=stoneOnly?std::vector<float>{0.f,-80.f,80.f,-160.f,160.f,-240.f,240.f,-400.f,400.f,-600.f,600.f}:std::vector<float>{0.f,-80.f,80.f};
   for(const auto* point:points)for(float x:offsets)for(float z:offsets) {
     Vec3 center;if(!characterFloor(world,point->pos+Vec3(x,0,z),center))continue;
     if(stoneOnly) {
@@ -8815,12 +8903,12 @@ bool monsterCharacterStairs(World& world,Npc& npc,Npc& player,Vec3& start,Vec3& 
       if(!support.hasCol || support.mat!=zenkit::MaterialGroup::STONE)continue;
       }
     float angle=0,rough=0;Vec3 downhill;
-    if(!slopeAt(world,center,angle,downhill,rough) || angle<18 || angle>40 || rough<6 || rough>25)continue;
+    if(!slopeAt(world,center,angle,downhill,rough) || angle<(stoneOnly?10.f:18.f) || angle>40 ||
+       rough<(stoneOnly?2.f:6.f) || rough>25)continue;
     Vec3 low,high;
     if(!characterFloor(world,center+downhill*100.f,low) || !characterFloor(world,center-downhill*100.f,high))continue;
     unsigned risers=0;float maximumRiser=0;
-    if(!characterStairsProfile(world,low,high,risers,maximumRiser))continue;
-    if(stoneOnly && (maximumRiser<12.f || high.y-low.y<70.f))continue;
+    if(!characterStairsProfile(world,low,high,risers,maximumRiser,stoneOnly?4.f:6.f,stoneOnly?40.f:45.f))continue;
     Vec3 hero;if(!monsterCharacterChaseGoal(world,npc,player,low,high,hero,true))continue;
     start=low;goal=hero;waypoint=point->name;
     event("monster_character_surface","\"route\":"+jsonStr(stoneOnly?"wolf_terrain":"wolf_stairs")+",\"waypoint\":"+jsonStr(waypoint)+
@@ -8849,7 +8937,7 @@ void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
     if(!monsterCharacterSlope(world,route.start,route.goal,waypoint)) {monsterCharacterError("wolf slope lacks a supported stock lane");return;}
     route.chase=true;
     } else if(name=="troll_barrel") {
-    if(!monsterCharacterCourtyard(world,player,route.start,route.goal,waypoint)) {monsterCharacterError("troll lacks a body-size outdoor courtyard lane");return;}
+    if(!monsterCharacterCourtyard(world,player,*route.npc,route.start,route.goal,waypoint)) {monsterCharacterError("troll lacks a body-size outdoor courtyard lane");return;}
     } else if(name=="wolf_water") {
     // Read the wolf's actual guild instead of assuming human swimming depth.
     const float chest=float(world.script().guildVal().water_depth_chest[route.npc->guild()]);
@@ -8884,11 +8972,18 @@ void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
     zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
     data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
     data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+    const auto before=world.physic()->movableVobSnapshot();
     auto fixture=std::make_unique<Bench::MovableFixture>();fixture->visual.setVisual(data,world,false,false);fixture->visual.setObjMatrix(matrix);
     fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,rule->massMultiplier,rule->blocksWalking,rule->className,true);
     if(fixture->body.isEmpty()) {monsterCharacterError("stock barrel native body unavailable");return;}
     fixture->body.setTransformCallback([view=&fixture->visual](const Matrix4x4& m){view->setObjMatrix(m);});
+    fixture->visual.setupFracture(world,fixture->body);
+    for(const auto& body:world.physic()->movableVobSnapshot())
+      if(std::none_of(before.begin(),before.end(),[&](const auto& old){return old.id==body.id;})) {bench.characterPropId=body.id;break;}
+    if(!bench.characterPropId) {monsterCharacterError("stock barrel snapshot unavailable");return;}
     bench.characterProp=std::move(fixture);bench.characterPropInitial=movablePosition(matrix);bench.characterPropTravel=0;
+    auto& barrel=bench.monsterCharacterBarrel;barrel.role="barrel";barrel.id=bench.characterPropId;
+    barrel.start=bench.characterPropInitial;barrel.lastIntact=barrel.start;
     event("monster_character_barrel","\"mass_kg\":"+ragdollNumber(bench.characterProp->body.mass())+
       ",\"position_cm\":"+ragdollVector(bench.characterPropInitial)+",\"blocks_walking\":"+(rule->blocksWalking?"true":"false"));
     if(!monsterCharacterProp(world,"crate",route.start+(route.goal-route.start)*.68f))return;
@@ -8925,6 +9020,7 @@ void monsterCharacterBegin(World& world) {
 void monsterCharacterEnd(World& world) {
   auto& route=bench.monsterCharacterRoute;
   if(!route.active || !route.npc) {monsterCharacterError("monster end without active fixture");return;}
+  monsterCharacterSampleProps(world);
   route.active=false;
   event("monster_character_route_end","\"route\":"+jsonStr(route.name)+",\"success\":"+(route.reached?"true":"false")+
     ",\"elapsed_ms\":"+std::to_string((route.reached?route.arrived:world.tickCount())-route.began)+
@@ -8947,29 +9043,93 @@ void monsterCharacterEnd(World& world) {
       ",\"start_cm\":"+ragdollVector(actor.start)+",\"end_cm\":"+ragdollVector(actor.npc->position()));
     actor.npc->clearAiQueue();actor.npc->clearGoTo();actor.npc->stopWalking();
     }
-  for(const auto& prop:bench.monsterCharacterProps)
-    event("monster_character_prop_end","\"route\":"+jsonStr(route.name)+",\"role\":"+jsonStr(prop.role)+
-      ",\"max_displacement_cm\":"+ragdollNumber(prop.travel)+",\"initial_cm\":"+ragdollVector(prop.start)+
-      ",\"end_cm\":"+ragdollVector(movablePosition(prop.fixture->body.matrix())));
+  for(const auto& prop:bench.monsterCharacterProps)monsterCharacterPropEnd(prop,route.name);
+  if(bench.monsterCharacterBarrel.id)monsterCharacterPropEnd(bench.monsterCharacterBarrel,route.name);
   route.npc->clearAiQueue();route.npc->clearGoTo();route.npc->stopWalking();
+  }
+
+// The attack needs three supported roots and one short native attack lane,
+// rather than the twenty-place arena used by the performance fixture.
+bool chooseMonsterAttackSite(World& world,const Npc& attacker,const Npc& player,bool withFly,
+                             Vec3& start,Vec3& goal,Vec3& flyAt) {
+  const auto* anchor=world.findPoint("NW_CITY_MERCHANT_PATH_20");
+  if(!anchor)return false;
+  std::vector<const WayPoint*> points;
+  world.forEachWayPoint([&](const WayPoint& wp) {
+    if(!wp.underWater && wp.name.starts_with("NW_CITY_") && wp.name.find("_TO_")==std::string::npos &&
+       wp.name.find("DITCH")==std::string::npos && wp.name.find("FOREST")==std::string::npos)points.push_back(&wp);
+    });
+  std::sort(points.begin(),points.end(),[&](const auto* a,const auto* b) {
+    const auto da=(a->pos-anchor->pos).quadLength(),db=(b->pos-anchor->pos).quadLength();
+    return da==db ? a->name<b->name : da<db;
+    });
+  const float radius=attacker.navigationCapsule().x+10.f;
+  const auto& collision=attacker.visualSkeleton()->bboxCol;
+  const float height=collision[1].y-collision[0].y;
+  auto floorAt=[&](const Vec3& at,Vec3& floor) {
+    if(!characterFloor(world,at,floor))return false;
+    const auto support=world.physic()->landRay(floor+Vec3(0,15,0),30);
+    return support.hasCol && support.mat==zenkit::MaterialGroup::STONE &&
+      (support.n.length()==0 || support.n.y>=.98f) &&
+      !world.physic()->waterRay(floor+Vec3(0,1,0),0).hasCol;
+    };
+  auto supportedRoot=[&](const Vec3& at,float clearance,Vec3& floor) {
+    if(!floorAt(at,floor))return false;
+    for(float x:{-clearance,0.f,clearance})for(float z:{-clearance,0.f,clearance}) {
+      Vec3 support;
+      if(!floorAt(floor+Vec3(x,0,z),support) || std::abs(support.y-floor.y)>20.f)return false;
+      }
+    return !world.physic()->ray(floor+Vec3(0,25,0),floor+Vec3(0,2025,0)).hasCol;
+    };
+  unsigned rejected=0;
+  for(const auto* point:points)for(float x:{0.f,-120.f,120.f,-240.f,240.f,-400.f,400.f})
+      for(float z:{0.f,-120.f,120.f,-240.f,240.f,-400.f,400.f}) {
+    Vec3 from,to,fly;
+    if(!supportedRoot(point->pos+Vec3(x,0,z),radius,from) ||
+       !supportedRoot(from+Vec3(withFly?350.f:1200.f,0,0),player.navigationCapsule().x+10.f,to) ||
+       std::abs(to.y-from.y)>20.f ||
+       (withFly && (!supportedRoot(from+Vec3(150,0,220),80.f,fly) || std::abs(fly.y-from.y)>20.f))) {
+      ++rejected;continue;
+      }
+    bool valid=true;
+    for(float across:{-radius,0.f,radius}) {
+      Vec3 previous;
+      for(unsigned i=0;i<=20;++i) {
+        Vec3 floor;
+        if(!floorAt(from+Vec3(float(i)*20.f,0,across),floor) || std::abs(floor.y-from.y)>20.f) {valid=false;break;}
+        if(i)for(float y:{25.f,height*.5f,height-5.f})
+          if(world.physic()->ray(previous+Vec3(0,y,0),floor+Vec3(0,y,0)).hasCol)valid=false;
+        if(!valid)break;
+        previous=floor;
+        }
+      if(!valid)break;
+      }
+    if(!valid) {++rejected;continue;}
+    start=from;goal=to;flyAt=fly;
+    event("monster_character_attack_site","\"waypoint\":"+jsonStr(point->name)+
+      ",\"anchor\":\"NW_CITY_MERCHANT_PATH_20\",\"geometry_rejections\":"+std::to_string(rejected)+
+      ",\"stone_floor\":true,\"open_sky\":true,\"lane_length_cm\":400,\"lane_radius_cm\":"+ragdollNumber(radius)+
+      ",\"start_cm\":"+ragdollVector(start)+",\"hero_cm\":"+ragdollVector(goal)+
+      ",\"bloodfly_cm\":"+(withFly?ragdollVector(flyAt):"null"));
+    return true;
+    }
+  return false;
   }
 
 void monsterCharacterAttack(World& world,Npc& player,const std::string& species) {
   monsterCharacterClear(world);
   if(species!="wolf" && species!="fieldraider") {monsterCharacterError("unknown monster attack species");return;}
-  if(!chooseRagdollArena(world,player,"NW_CITY_MERCHANT_PATH_20")) {
-    monsterCharacterError("monster attack requires a clear supported stock city stone arena near the market");return;
-    }
   auto& route=bench.monsterCharacterRoute;route.name=species+"_attack";route.attack=true;route.animation="T_FISTATTACKMOVE";
-  route.start=bench.ragdollArenaPlaces.front();route.goal=route.start+Vec3(species=="wolf"?1200.f:350.f,0,0);
+  route.npc=monsterCharacterActor(world,species=="wolf"?"Wolf":"Giant_Bug",player.position());if(!route.npc)return;
+  Vec3 flyAt;
+  if(!chooseMonsterAttackSite(world,*route.npc,player,species=="fieldraider",route.start,route.goal,flyAt)) {
+    monsterCharacterError("monster attack requires supported roots and a clear native attack lane on outdoor city stone near the market");return;
+    }
   characterFreezeNear(world,player,route.start,route.goal);
   player.stopWalking();player.clearAiQueue();player.setPosition(route.goal);player.updateTransform();
-  route.npc=monsterCharacterActor(world,species=="wolf"?"Wolf":"Giant_Bug",route.start);if(!route.npc)return;
-  route.npc->setDirection(Vec3(1,0,0));route.npc->updateTransform();route.npc->setTarget(&player);route.npc->drawWeaponFist();
+  route.npc->setPosition(route.start);route.npc->setDirection(Vec3(1,0,0));route.npc->updateTransform();route.npc->setTarget(&player);route.npc->drawWeaponFist();
   bench.monsterCharacterHeroStart=player.position();
   if(species=="fieldraider") {
-    Vec3 flyAt=route.start+Vec3(150,0,220);Vec3 floor;
-    if(characterFloor(world,flyAt,floor))flyAt=floor;
     auto* fly=monsterCharacterActor(world,"Bloodfly",flyAt);if(!fly)return;
     fly->setDirection(Vec3(1,0,0));fly->updateTransform();monsterCharacterExtra(world,fly,"bloodfly");
     const auto& guild=world.script().guildVal();const auto g=fly->guild();
@@ -9056,7 +9216,11 @@ void monsterCharacterFields(World& world,uint64_t dt) {
         }
       }
     }
-  if(bench.monsterCharacterMeasuring) {
+  if(bench.monsterCharacterMeasuring
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+     && !AppCadence::done()
+#endif
+     ) {
     unsigned nearby=0,virtualNearby=0,moving=0;float maximumDistance=0;
     const auto* player=Gothic::inst().player();
     for(const auto& actor:bench.monsterCharacterExtras)if(actor.npc && player) {
@@ -9076,8 +9240,7 @@ void monsterCharacterFields(World& world,uint64_t dt) {
     bench.monsterCharacterPerformance.push_back({world.tickCount(),dt,world.physic()->physicsStats().stepMilliseconds,wall,
       maximumDistance,nearby,virtualNearby,moving,bench.rec && bench.recVideo,normal});
     }
-  for(auto& prop:bench.monsterCharacterProps)
-    prop.travel=std::max(prop.travel,(movablePosition(prop.fixture->body.matrix())-prop.start).length());
+  if(route.active)monsterCharacterSampleProps(world);
   auto* npc=route.npc;if(!npc)return;
   if(route.restoreSteps) {
     const float delta=(npc->position()-route.savedPosition).length();
@@ -9138,8 +9301,6 @@ void monsterCharacterFields(World& world,uint64_t dt) {
       }
     if(world.tickCount()-route.progressTime>1000 && !route.stalled) {++route.stalls;route.stalled=true;}
     }
-  if(bench.characterProp)bench.characterPropTravel=std::max(bench.characterPropTravel,
-    (movablePosition(bench.characterProp->body.matrix())-bench.characterPropInitial).length());
   }
 
 void npcCharacterPrepare(World& world,Npc& player,const std::string& name) {

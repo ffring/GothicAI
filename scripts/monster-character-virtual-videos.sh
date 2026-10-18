@@ -56,6 +56,10 @@ for scene in "${SCENES[@]}"; do
       echo "incomplete native recording: $destination" >&2; exit 1;
     }
   done
+  mkdir -p "$OUT/pairs"
+  python3 "$ROOT/scripts/monster_character_virtual_videos.py" metrics \
+    --off "$OUT/$scene-off" --on "$OUT/$scene-on" \
+    >"$OUT/pairs/$scene-metrics.json"
   uv run "$ROOT/scripts/monster_character_virtual_videos.py" compose \
     --off "$OUT/$scene-off/$scene.mp4" --on "$OUT/$scene-on/$scene.mp4" \
     --out "$OUT/pairs/$scene.mp4"
