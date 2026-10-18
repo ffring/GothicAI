@@ -1,6 +1,7 @@
 """CLI defaults start the director only for ordinary play."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -88,6 +89,17 @@ def test_crimes_is_enabled_by_default_including_scenarios(monkeypatch, flags):
     with pytest.raises(SystemExit) as exit:
         cli.main()
     assert exit.value.code == 0
+
+
+@pytest.mark.parametrize("crimes", [False, True])
+@pytest.mark.parametrize("planner", [False, True])
+@pytest.mark.parametrize("hold_threats", [False, True])
+def test_deed_control_is_independent_of_the_planner_and_threat_switch(crimes, planner, hold_threats):
+    args = SimpleNamespace(no_crimes=not crimes, no_hold_threats=not hold_threats)
+    command = json.loads(cli._perception_control(args, planner=planner).to_json())
+    assert command["hold"] == (planner and hold_threats)
+    assert command.get("deeds", False) == crimes
+    assert ("deeds" in command) == crimes
 
 
 @pytest.mark.parametrize(

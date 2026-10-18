@@ -10,7 +10,6 @@ from .chronicle import Fact
 from .crime_law import CrimeLaw, game_minutes
 from .crime_law_graph import (
     AMBIENT,
-    CRIME_LEVELS,
     LAWFUL,
     absolution_program,
     ambient_ops,
@@ -21,6 +20,7 @@ from .crime_law_graph import (
     projection_values,
     validate_ops,
 )
+from .crime_memory import memory_value
 from .crimes import COMMUNITIES, Crimes
 from .game import GameError, GameLink
 from .gamedata.storygraph import StoryGraph
@@ -150,7 +150,9 @@ class CrimeLawRuntime:
             if not npc:
                 continue
             if "guild" in fact and "npctype" in fact:
-                self.crimes.people[npc] = {"guild": fact["guild"], "npctype": fact["npctype"]}
+                self.crimes.people[npc] = {
+                    **self.crimes.people.get(npc, {}), "guild": fact["guild"], "npctype": fact["npctype"]
+                }
                 continue
             if "npctype" in self.crimes.people.get(npc, {}):
                 continue
@@ -165,7 +167,9 @@ class CrimeLawRuntime:
             if generation != self._generation:
                 return
             if len(values) == 2 and all(isinstance(value, int) for value in values):
-                self.crimes.people[npc] = {"guild": values[0], "npctype": values[1]}
+                self.crimes.people[npc] = {
+                    **self.crimes.people.get(npc, {}), "guild": values[0], "npctype": values[1]
+                }
 
     def _news_levels(self) -> dict[str, int]:
         recipients = {
@@ -174,10 +178,9 @@ class CrimeLawRuntime:
             if f.get("fact") in {"crime_seen", "rumor", "testimony"} and (f.get("to") or f.get("npc"))
         }
         return {
-            npc: max(levels)
+            npc: level
             for npc in recipients
-            if (levels := [CRIME_LEVELS[k.crime["kind"]] for k in self.crimes.known(npc)
-                           if k.degree != "suspects" and k.suspect == "PLAYER"])
+            if (level := memory_value(self.crimes, npc)[0])
         }
 
     async def tick(self) -> None:

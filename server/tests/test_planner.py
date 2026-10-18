@@ -546,6 +546,23 @@ async def test_scripted_events_are_context_only() -> None:
     assert planner.stats.scripted_events == 1
 
 
+@pytest.mark.parametrize("kind", ["theft", "attack", "murder", "sheep"])
+async def test_held_hero_deeds_are_context_without_model_calls_or_planner_verdicts(kind) -> None:
+    planner, decider, applier, clock = make()
+    planner.on_roster([entry("WITNESS", 8)], clock.t)
+    planner.npcs["WITNESS"].next_check = clock.t + 100
+    planner.on_message(parse_game_message(json.dumps({
+        "type": "perception_held", "npc": "WITNESS", "other": "PLAYER",
+        "kind": kind, "hold": "h1", "deed": "d1",
+    })))
+    await step(planner, clock, 1)
+    assert decider.calls == []
+    assert list(applier.verdicts) == []
+    assert planner.npcs["WITNESS"].holds == []
+    assert planner.npcs["WITNESS"].stimuli[-1].kind == kind
+    assert planner.stats.scripted_events == 1
+
+
 async def test_mid_tier_reacts_only_to_salient_events() -> None:
     planner, decider, _, clock = make()
     planner.on_roster([entry("FARMER", 25)], clock.t)

@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 42
+PROTOCOL_VERSION = 44
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
@@ -26,6 +26,7 @@ ERRAND_PROTOCOL = 39  # inventory items' `mission`; story_effect give to another
 BROKEN_TRACE_PROTOCOL = 40  # visible debris, with the time of breakage kept in the engine and save
 BODY_CONTROL_PROTOCOL = 41  # shared body authority and combat API (body_acquire, body_action, ...)
 CRIME_PROTOCOL = 42  # raw hero deeds, ownership, engine perception recipients and pickpocket evidence
+CRIME_REACT_PROTOCOL = 44  # independently held hero deeds, their ids, and vanilla fight reasons
 
 # --- game -> server -----------------------------------------------------------
 
@@ -637,9 +638,10 @@ class NpcActResult(_GameMessage):
 
 
 class PerceptionHeld(_GameMessage):
-    """A threat to a free npc the game holds back from its scripts for the behavioral model (v6, after
-    `threat_control{hold:true}`): a monster near or attacking, an npc attacking. Fields as in `npc_event`.
-    The server answers `hold_verdict`; without one the scripts get it after 0.6 s."""
+    """A held threat (v6) or hero deed (v44). `deed` links rules to the subsequent HeroDeed.
+
+    The server answers `hold_verdict`; without one the scripts get it after 0.6 s.
+    """
 
     type: Literal["perception_held"]
     hold: str
@@ -649,6 +651,7 @@ class PerceptionHeld(_GameMessage):
     other_name: str | None = None
     distance: float | None = None
     detail: str | None = None
+    deed: str | None = None
 
 
 class RoutineEntry(_GameMessage):
@@ -1354,15 +1357,15 @@ NpcActType = Literal[
 
 
 class ThreatControlCmd(_Command):
-    """Whether threats to free npc's are held from their scripts for the behavioral model (v6)."""
+    """Independent switches for model-owned threats (v6) and rule-owned hero deeds (v44)."""
 
     type: Literal["threat_control"] = "threat_control"
     hold: bool
+    deeds: bool | None = None
 
 
 class HoldVerdictCmd(_Command):
-    """What becomes of a held threat (v6): `server` — the behavioral model took the body over (fight,
-    flee), repeats of it are kept from the scripts for a while; `scripts` — they get it now."""
+    """`server`: a threat's body action, or a deed's rule (including silence); `scripts`: release."""
 
     type: Literal["hold_verdict"] = "hold_verdict"
     hold: str

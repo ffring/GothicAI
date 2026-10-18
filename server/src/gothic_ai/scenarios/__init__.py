@@ -22,6 +22,7 @@ from .conversation import gossip_scenario as gossip_scenario
 from .conversation import group_scenario as group_scenario
 from .conversation import interject_scenario as interject_scenario
 from .conversation import write_cards as write_cards
+from .crime_react import crime_react as crime_react
 from .deals import contract as contract
 from .deals import deal_debt as deal_debt
 from .deals import deal_demo as deal_demo

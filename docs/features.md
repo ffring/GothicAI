@@ -63,6 +63,7 @@ PR, который добавляет фичу или выключатель, д
 | Слухи по знакомым | нет | `social.py` (`Rumors`) | e2e `rumor` | [story-graph.md](story-graph.md) |
 | Пересказ слуха вслух рядом с героем | нет | `gossip.py` | e2e `gossip`; бенч `gossip` | [npc-tools.md](npc-tools.md#сделано-двое-при-герое) |
 | Преступления, свидетели, закон общины | `--no-crimes` | `crimes.py`, `crime_law*.py`; мост — `hero_deed` | e2e `crimes`, `crime_talk`, `crime_law` | [crime.md](crime.md) |
+| Реакция свидетеля на месте: правила роли и характера, родные SVM, зов стражи, память ванили | `--no-crimes` | `crime_react.py`, `crime_memory.py`; мост — `threat_control.deeds`, v44 | e2e `crime_react`, pytest `test_crime_react.py`, `test_crime_memory.py` | [crime.md](crime.md) |
 | Сюжетные ответы на преступления: квест вернуть украденное, свидетель заговаривает, жертва требует возмещения | `--no-crimes`; квесты — ещё и `--no-showrunner` | `crimes.py`, `occasions.py`, `showrunner.py`, `chains.py`, `amends.py` | e2e `crime_director` (с `LLM=chatgpt` — живой шоураннер) | [crime.md](crime.md) |
 | Гнев Ксардаса: ответ некроманта | `--no-wrath` | `wrath.py`; мост — `ai_bridge/necromancy*` | e2e `wrath`; бенч `necro` | [xardas-wrath.md](xardas-wrath.md) |
 

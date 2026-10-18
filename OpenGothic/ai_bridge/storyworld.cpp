@@ -406,22 +406,27 @@ std::string StoryWorld::people(World& world) {
     w.Key("npc");   str(sym);
     w.Key("name");  str(name);
     w.Key("guild"); w.Uint(n->guild());
+    std::string homeRoom;
     w.Key("routine");
     w.StartArray();
     n->forEachRoutine([&](const Npc::RoutineInfo& r) {
       w.StartObject();
       w.Key("start");    w.Int(int(r.start.hour()*60+r.start.minute()));
       w.Key("end");      w.Int(int(r.end.hour()*60+r.end.minute()));
-      w.Key("state");    str(AiNpc::stateName(world,r.state));
+      const auto state = AiNpc::stateName(world,r.state);
+      w.Key("state");    str(state);
       w.Key("waypoint"); str(r.point);
       if(auto* wp = world.findPoint(r.point,false)) {
         auto p = wp->position();
+        if(state=="ZS_SLEEP")
+          homeRoom = world.roomAt(p);
         w.Key("pos");
         w.StartArray(); w.Int(int(p.x)); w.Int(int(p.y)); w.Int(int(p.z)); w.EndArray();
         }
       w.EndObject();
       });
     w.EndArray();
+    w.Key("home_room"); str(homeRoom);
     w.EndObject();
     }
   w.EndArray();
