@@ -8,13 +8,14 @@
 - Смерть и оглушение дают физическое тело; живые NPC рядом с героем толкают вещи и реагируют телом на стрелы. Заклинания передают импульсы.
 - `CharacterVirtual` двигает героя и NPC-людей в радиусе 20 м; возврат к прежней ходьбе NPC — за 22 м. Подвижные опоры переносят персонажа.
 - Мебель из таблицы подвижна; ящики, бочки и ограды с подготовленными обломками разрушаются. Стрелы, сдвиги и поломки оставляют видимые NPC следы, столкновения — слышимый шум.
+- Ткань мира подключается к Jolt SoftBody в пределах 40 м от героя: флаги и знамёна самостоятельных vob, паруса и полотнища из меша уровня. Ветер общий с растительностью; стрелы проходят с толчком. Состояние ткани в сейв не записывается. Игровая приёмка шага 1 ещё идёт.
 - Вода даёт плавучесть и сопротивление вещам и частям мёртвых/оглушённых тел. Скелеты и каменные существа тонут; позы тел, сдвиги вещей и обломки сохраняются.
 
 Основной код: [мир и предметы](../OpenGothic/common/physics/dynamicworld.cpp), [Jolt, ходьба и вода](../OpenGothic/common/physics/collisionworld.cpp), [тела](../OpenGothic/common/physics/ragdoll.cpp), [движение](../OpenGothic/common/game/movealgo.cpp).
 Выбор вещей: [movablevobs.cpp](../OpenGothic/common/world/movablevobs.cpp), [таблица подвижных](../OpenGothic/data/movable-vobs.csv) и [разрушаемых](../OpenGothic/data/destructible-vobs.csv); следы — [world.cpp](../OpenGothic/common/world/world.cpp).
 
 Отключение в `[GAME]` Gothic.ini: `ragdoll=0`, `living_bodies=0`, `arrow_physics=0`, `arrow_sticking=0`, `spell_physics=0`;
-`movable_vobs=0`, `destruction=0`, `physics_noise=0`, `buoyancy=0`, `character_virtual=0`, `npc_character_virtual=0`.
+`movable_vobs=0`, `destruction=0`, `physics_noise=0`, `buoyancy=0`, `character_virtual=0`, `npc_character_virtual=0`, `cloth=0`.
 Все эти возможности включены по умолчанию; соответствующий Marvin `toggle` меняет их на ходу. Ключи — в [gothic.cpp](../OpenGothic/common/gothic.cpp). Общего выключателя Jolt нет.
 
 Проверки: `gothic-physics-contract` ([physics_contract.cpp](../OpenGothic/tests/physics_contract.cpp)), `gothic-ragdoll-contract` и `gothic-ragdoll-save-contract` ([тела](../OpenGothic/tests/physics_ragdoll_contract.cpp), [сохранение](../OpenGothic/tests/ragdoll_save_contract.cpp)).
@@ -295,7 +296,7 @@ Jolt повторяет симуляцию при тех же входах и т
 
 Ткань разделена на шаги:
 
-1. **В работе (2026-10-18): ткань мира рядом с героем.** Реализуется Jolt SoftBody для подтверждённых mesh-vob из `OpenGothic/data/cloth-vobs.csv`, закрепление вершин, общий ветер с растительностью, воздействие стрел и заклинаний, радиус 40 м и плавный переход к прежней анимации. Выключение — `[GAME] cloth=0` / Marvin `toggle cloth`; состояние не сохраняется. Перепись обнаружила, что паруса и флаги гавани и городские знамёна входят в меш уровня, а не mesh-vob. Их включение в этот PR требует решения; шаг не закрыт. [Перепись и проверки — «Шаг 1»](../reports/physics/2026-10-18-cloth/validation-notes.md#шаг-1).
+1. **В работе (2026-10-18): ткань мира рядом с героем.** Реализуется Jolt SoftBody для подтверждённых mesh-vob из `OpenGothic/data/cloth-vobs.csv` и полотнищ меша уровня, закрепление вершин, общий ветер с растительностью, воздействие стрел и заклинаний, радиус 40 м и плавный переход к прежней анимации. Выключение — `[GAME] cloth=0` / Marvin `toggle cloth`; состояние не сохраняется. Перепись обнаружила, что паруса и флаги гавани и городские знамёна входят в меш уровня, а не mesh-vob. По решению 2026-10-18 они включены в этот PR: семь городских знамён, паруса и флаги кораблей. Тканевая вывеска заменена городским знаменем. Для малополигональной ткани добавляется подразделённая сетка с интерполяцией UV; шаг не закрыт до игровой приёмки. [Перепись и проверки — «Шаг 1»](../reports/physics/2026-10-18-cloth/validation-notes.md#шаг-1).
 2. **Открыт: мантии и плащи персонажей.** Закрепление по весам кожи, столкновения с капсулами `HitZones`; в шаг 1 не входят.
 
 ### Этап 7. Бой — под вопросом
