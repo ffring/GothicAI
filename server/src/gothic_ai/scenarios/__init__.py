@@ -13,6 +13,7 @@ from .basics import websocket as websocket
 from .companions import calm_scenario as calm_scenario
 from .companions import companion_scenario as companion_scenario
 from .companions import neural_companion_scenario as neural_companion_scenario
+from .companions import neural_group_scenario as neural_group_scenario
 from .companions import neural_scenario as neural_scenario
 from .companions import orders_scenario as orders_scenario
 from .companions import rescue as rescue

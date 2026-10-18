@@ -103,7 +103,7 @@ async def runtime(monkeypatch):
     memory.close()
 
 
-def case(system, *, crime="theft-1", community="city", guard=False, at=AT):
+def case(system, *, crime="theft-1", community="city", guard=False, at=AT, witness=None):
     fact = {
         "fact": "crime",
         "id": crime,
@@ -117,7 +117,7 @@ def case(system, *, crime="theft-1", community="city", guard=False, at=AT):
         "count": 1,
     }
     system.chronicle.record(fact)
-    npc = ANDRE if guard else CITIZEN
+    npc = witness or (ANDRE if guard else CITIZEN)
     system.chronicle.record(
         {
             "fact": "crime_seen",
@@ -132,6 +132,24 @@ def case(system, *, crime="theft-1", community="city", guard=False, at=AT):
 
 def native_choice(system, node=PAYNOW, *, made=False):
     system.link.receive(DialogChosen(type="dialog_chosen", npc=ANDRE, node=node, made=made))
+
+
+@pytest.mark.parametrize("resolution", ["forgiven", "silenced", "absolved"])
+async def test_resolved_case_stops_native_news_without_erasing_knowledge(runtime, resolution):
+    witness = "BAU_951_HILDA"
+    crime = case(runtime, community="farm", witness=witness)
+    assert runtime.service._news_levels() == {witness: 3}
+
+    fact = {"fact": resolution, "npc": witness, "crime": crime["id"]}
+    if resolution == "absolved":
+        fact = {"fact": resolution, "community": "farm", "crimes": [crime["id"]]}
+    runtime.chronicle.record(fact)
+
+    assert runtime.crimes.known(witness)
+    assert runtime.service._news_levels() == {}
+
+    case(runtime, crime="unresolved-theft", community="farm", witness=witness)
+    assert runtime.service._news_levels() == {witness: 3}
 
 
 async def test_native_pollution_stays_locked_then_known_counters_are_written_before_opening(runtime):
