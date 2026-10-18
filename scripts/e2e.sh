@@ -195,7 +195,8 @@
 #       pinned and the live model's own answer logged. Starts the TTS service (TTS=fake). Words scripted with LLM=fake;
 #       TIMEOUT=480
 #   noise: a real physical impact near a free human at Lobart's farm: noise event, planner decision,
-#       investigate receipt, walk within 2 m, idle within 45 s, return to routine and heard-noise memory
+#       investigate receipt, walk within 2 m, idle within 45 s, return within 1.5 m of the routine post,
+#       and heard-noise memory
 #       with place and game time. Without DECIDER_URL a fixed stand-in chooses investigate for this NPC;
 #       with it the server's planner logs the live choice and pins investigate. SAVE=save_slot_1.sav
 #   cards: the model writes character cards (docs/npc-tools.md, wave 1 step 3) for every npc of the world with

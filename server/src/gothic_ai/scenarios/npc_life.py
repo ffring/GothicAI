@@ -956,6 +956,25 @@ async def noise_scenario(
         info = await link.routine(npc)
         before = await link.snapshot(npc, fresh=True)
         entry = current_entry(info.entries, before.world.hour, before.world.minute)
+        points = await link.waypoints()
+        post = next(
+            (
+                tuple(float(point[axis]) for axis in ("x", "y", "z"))
+                for point in points
+                if entry is not None and point["name"].upper() == entry.waypoint.upper()
+            ),
+            None,
+        )
+        sampling = asyncio.create_task(sample())
+
+        def at_post(after: float = 0.0) -> bool:
+            return bool(
+                post is not None
+                and samples
+                and samples[-1][0] > after
+                and math.dist(samples[-1][1].npc.pos, post) < 150
+            )
+
         ready = await _until(
             lambda: (
                 npc in roster
@@ -965,6 +984,7 @@ async def noise_scenario(
                 and npc in brain.npcs
                 and not brain.npcs[npc].talking
                 and not link.body_owned(npc)
+                and at_post()
             ),
             20,
         )
@@ -972,11 +992,10 @@ async def noise_scenario(
             "setup",
             ready,
             f"ready {int(ready)}, state {roster[npc].state if npc in roster else '?'}; "
-            f"routine entries {len(info.entries)}",
+            f"routine entries {len(info.entries)}, post {entry.waypoint if entry else None}, at {post}",
         )
         if not ready:
             return _logged(results)
-        sampling = asyncio.create_task(sample())
         rows_start = len(tap.rows)
         started = time.monotonic()
         dropped = False
@@ -1106,14 +1125,22 @@ async def noise_scenario(
                 and roster[npc].activity == "routine"
                 and roster[npc].state.upper() == entry.state.upper()
                 and not link.body_owned(npc)
+                # Investigate preserves this script state. Only a fresh position back at the actual
+                # routine waypoint proves that its native routine resumed after the matching idle.
+                and at_post(idle_at)
             ),
             15,
         )
         after = await link.routine(npc)
+        post_distance = (
+            math.dist(samples[-1][1].npc.pos, post) if post is not None and samples else float("inf")
+        )
         check(
             "routine",
             resumed and after.current.upper() == entry.state.upper(),
             f"resumed {int(resumed)}, current {after.current}, expected {entry.state}, "
+            f"post {entry.waypoint}, distance_cm {post_distance:.1f}, "
+            f"snapshots_after_idle {sum(t > idle_at for t, _ in samples)}, "
             f"elapsed_s {time.monotonic() - when_sent:.2f}",
         )
         records = (
