@@ -8,7 +8,7 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
-from test_dub import CONFIG, _packet_hashes
+from test_dub import CONFIG, _assert_unchanged, _packet_hashes, _stale_outputs
 from test_explain import _plan
 from test_explain import synthetic_stems as synthetic_stems
 
@@ -79,6 +79,57 @@ def _outputs(directory):
     return [directory / f"dub.en.{suffix}" for suffix in ("mp4", "wav", "levels.json")]
 
 
+@pytest.mark.parametrize("invalid", [
+    "report-missing", "words-missing", "plan-missing", "script-missing",
+    "script-count", "language", "length",
+])
+def test_explainer_input_refusals_preserve_the_previous_publication(
+    explainer_publication, monkeypatch, invalid,
+):
+    case = explainer_publication
+    lang = "de" if invalid == "language" else "en"
+    before = _stale_outputs(case.directory)
+    if lang != "en":
+        before.update(_stale_outputs(case.directory, lang))
+    if invalid == "report-missing":
+        case.russian.with_suffix(".levels.json").unlink()
+    elif invalid == "words-missing":
+        (case.ws / "words.ru.json").unlink()
+    elif invalid == "plan-missing":
+        (case.ws / "plan.json").unlink()
+    elif invalid == "script-missing":
+        (case.ws / "script.en.txt").unlink()
+    elif invalid == "script-count":
+        (case.ws / "script.en.txt").write_text("First\nLast\n")
+    elif invalid == "length":
+        plan = json.loads((case.ws / "plan.json").read_text())
+        plan["brand"] = False
+        (case.ws / "plan.json").write_text(json.dumps(plan))
+
+    def unexpected_work(*args, **kwargs):
+        raise AssertionError("invalid inputs must be rejected before rendering or requesting voices")
+
+    monkeypatch.setattr(explain, "render", unexpected_work)
+    monkeypatch.setattr(dub, "clone", unexpected_work)
+    with pytest.raises(dub.DubError):
+        dub.dub_explainer(CONFIG, case.ws, lang)
+    _assert_unchanged(before)
+
+
+def test_explainer_clears_previous_outputs_only_when_assembly_starts(explainer_publication, monkeypatch):
+    case = explainer_publication
+    before = _stale_outputs(case.directory)
+
+    def render(*args, **kwargs):
+        assert all(not path.exists() for path in before)
+        raise dub.DubError("render failed after validation")
+
+    monkeypatch.setattr(explain, "render", render)
+    with pytest.raises(dub.DubError, match="render failed after validation"):
+        dub.dub_explainer(CONFIG, case.ws)
+    assert all(not path.exists() for path in before)
+
+
 def test_parallel_dub_rejects_before_touching_the_owners_finished_outputs(
     explainer_publication, monkeypatch,
 ):
@@ -145,7 +196,8 @@ def test_keyboard_interrupt_invalidates_a_master_and_removes_final_media(
 def test_both_dub_entrypoints_share_interruption_cleanup(tmp_path):
     # Both public entrypoints use this context, including the take's longer voice phase.
     out = tmp_path / "dub.en.mp4"
-    with pytest.raises(KeyboardInterrupt), dub._publication(out):
+    with pytest.raises(KeyboardInterrupt), dub._publication(out) as session:
+        session.start()
         out.write_bytes(b"mastered mp4")
         out.with_suffix(".wav").write_bytes(b"partial PCM")
         out.with_suffix(".levels.json").write_text('{"ok": true}')

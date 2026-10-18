@@ -201,9 +201,17 @@ def _rows(report):
     return {row["id"]: row for row in report["rows"]}
 
 
-def _stale_outputs(directory):
-    for name in ("dub.en.wav", "dub.en.mp4", "dub.en.levels.json"):
-        (directory / name).write_bytes(b"stale publication")
+def _stale_outputs(directory, lang="en"):
+    before = {}
+    for suffix in ("wav", "mp4", "levels.json"):
+        path = directory / f"dub.{lang}.{suffix}"
+        before[path] = f"stale publication: {path.name}".encode()
+        path.write_bytes(before[path])
+    return before
+
+
+def _assert_unchanged(before):
+    assert {path: path.read_bytes() for path in before} == before
 
 
 def _no_outputs(directory):
@@ -348,7 +356,7 @@ def test_take_dub_uses_the_russian_effects_bed_and_picture_with_english_speaker_
 @pytest.mark.parametrize("invalid", ["video-missing", "report-missing", "report-false"])
 def test_take_dub_requires_a_successful_russian_publication(take_workspace, monkeypatch, invalid):
     case = take_workspace
-    _stale_outputs(case.take)
+    before = _stale_outputs(case.take)
     russian = case.take / "short-ru.mp4"
     if invalid == "video-missing":
         russian.unlink()
@@ -363,14 +371,13 @@ def test_take_dub_requires_a_successful_russian_publication(take_workspace, monk
     monkeypatch.setattr(dub, "english_voices", unexpected_voices)
     with pytest.raises(dub.DubError, match="gothic-shorts cut"):
         dub.dub_take(CONFIG, case.shot, case.take)
-    _no_outputs(case.take)
-    assert not (case.take / "dub.en.levels.json").exists()
+    _assert_unchanged(before)
 
 
 @pytest.mark.parametrize("old_format", ["npc-mixed-in-game", "game-music", "world-sounds"])
 def test_take_dub_rejects_the_same_old_recordings_as_cut(take_workspace, old_format):
     case = take_workspace
-    _stale_outputs(case.take)
+    before = _stale_outputs(case.take)
     if old_format == "npc-mixed-in-game":
         (case.take / "events.jsonl").write_text("\n".join(
             json.dumps({"seg": "main", **event}) for event in case.events if event["kind"] != "npc_voice"
@@ -381,12 +388,12 @@ def test_take_dub_rejects_the_same_old_recordings_as_cut(take_workspace, old_for
         (case.take / "run/Gothic.ini").write_text("[SOUND]\nmusicVolume=0\n")
     with pytest.raises(dub.DubError, match="переснимите дубль"):
         dub.dub_take(CONFIG, case.shot, case.take)
-    _no_outputs(case.take)
+    _assert_unchanged(before)
 
 
 def test_take_dub_rejects_a_changed_brand_duration(take_workspace, monkeypatch):
     case = take_workspace
-    _stale_outputs(case.take)
+    before = _stale_outputs(case.take)
 
     def unexpected_voices(*args, **kwargs):
         raise AssertionError("changed timeline must be rejected before requesting voices")
@@ -394,7 +401,37 @@ def test_take_dub_rejects_a_changed_brand_duration(take_workspace, monkeypatch):
     monkeypatch.setattr(dub, "english_voices", unexpected_voices)
     with pytest.raises(dub.DubError):
         dub.dub_take(CONFIG, replace(case.shot, brand=False), case.take)
-    _no_outputs(case.take)
+    _assert_unchanged(before)
+
+
+@pytest.mark.parametrize("invalid", [
+    "events-missing", "main-missing", "subs-missing", "subs-incomplete", "language",
+])
+def test_take_dub_input_refusals_preserve_the_previous_publication(take_workspace, monkeypatch, invalid):
+    case = take_workspace
+    lang = "de" if invalid == "language" else "en"
+    before = _stale_outputs(case.take)
+    if lang != "en":
+        before.update(_stale_outputs(case.take, lang))
+    if invalid == "events-missing":
+        (case.take / "events.jsonl").unlink()
+    elif invalid == "main-missing":
+        (case.take / "main.wav").unlink()
+    elif invalid == "subs-missing":
+        (case.take / "subs.en.json").unlink()
+    elif invalid == "subs-incomplete":
+        translations = json.loads((case.take / "subs.en.json").read_text())
+        translations.pop(next(iter(translations)))
+        (case.take / "subs.en.json").write_text(json.dumps(translations))
+
+    def unexpected_work(*args, **kwargs):
+        raise AssertionError("invalid inputs must be rejected before rendering or requesting voices")
+
+    monkeypatch.setattr(cut, "render_effects", unexpected_work)
+    monkeypatch.setattr(dub, "english_voices", unexpected_work)
+    with pytest.raises(dub.DubError):
+        dub.dub_take(CONFIG, case.shot, case.take, lang)
+    _assert_unchanged(before)
 
 
 def test_levels_rejection_removes_both_dub_outputs_and_keeps_the_failed_report(take_workspace, monkeypatch):

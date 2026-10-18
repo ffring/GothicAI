@@ -266,8 +266,9 @@ ending at S−6, and no clicks. It writes `dub.en.levels.json` with the checks a
 each line's timing, speed-up and gain, and both languages' mastered voice levels. `dub.en.mp4` copies the
 Russian picture without re-encoding, with the verified English AAC first (default, `eng`) and the original
 Russian audio second (`rus`), with faststart. `dub.en.wav` decodes that English AAC to 48 kHz stereo,
-24-bit PCM, exactly as long as the Russian short's audio (within 1 ms). Old outputs are removed before
-assembly; on failure neither WAV nor MP4 remains, while a failed levels report is kept.
+24-bit PCM, exactly as long as the Russian short's audio (within 1 ms). Input-check refusals leave previous
+dub files untouched; old outputs are removed only when assembly starts, after which failures leave neither
+WAV nor MP4, while a failed levels report is kept.
 
 - **A shot's take.** Effects, the brand ending and the music bed are built by the same code as the Russian
   cut, with the same removed AI pauses. The recording must have separate `npc_voice` and have been made
