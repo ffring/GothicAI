@@ -53,6 +53,10 @@ Keep these when updating a library from upstream.
   (the test bench records the game's sound in step with the frames).
 - `Tempest/Engine/sound/sound.{h,cpp}`: `Sound::samples16` gives the decoded samples of a sound (lip sync
   measures the loudness of a voice line, `common/graphics/mesh/lipsync.cpp`).
+- `Tempest/Engine/gapi/metal/mtshader.cpp`: shader compile errors (SPIRV-Cross and MSL) go to `Log::e` in
+  every build, not only without `NDEBUG`; the MSL source is still dumped only in debug builds. The
+  unconditional `Log::d(msl)` of every mesh shader is removed (with `-ms 1` it put about 24 000 lines
+  into `game.log`).
 - `rapidjson/include/rapidjson/document.h`: `GenericStringRef::operator=` deleted (GCC 15 diagnoses the
   old one), and `memcpy` into `GenericValue`/`Member` storage goes through `void*`, as upstream does now
   (clang's `-Wnontrivial-memcall`; the engine builds with `-Werror`).
