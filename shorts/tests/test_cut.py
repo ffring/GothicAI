@@ -203,6 +203,31 @@ def test_each_speaker_is_leveled_together_without_flattening_each_line(published
     assert cut._duration(voice) == pytest.approx(result.timeline.cut_duration, abs=1 / 48000)
 
 
+def test_short_npc_reply_publishes_with_the_combined_voice_reference(tmp_path, synthetic_assets, monkeypatch):
+    assets = synthetic_assets
+    take = tmp_path / "short-reply"
+    shutil.copytree(assets.take, take, ignore=shutil.ignore_patterns("cut-*", "short-*"))
+    events = []
+    for event in assets.events:
+        event = dict(event)
+        if "wav" in event:
+            event["wav"] = str(take / Path(event["wav"]).name)
+        events.append(event)
+    _events(take / "events.jsonl", events)
+    _ffmpeg(
+        "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=22050:duration=0.25",
+        "-af", "volume=-15dB,afade=t=in:d=0.01,afade=t=out:st=0.24:d=0.01",
+        "-ac", "1", "-c:a", "pcm_s16le", str(take / "main.voice-01.wav"),
+    )
+    _small_cut(monkeypatch, assets)
+    out = cut.cut(replace(assets.shot, brand=False), take)
+    report = json.loads(out.with_suffix(".levels.json").read_text())
+    assert report["ok"] is True
+    assert _rows(report)["voice_mastered"]["measured_lufs"] == pytest.approx(-14, abs=0.5)
+    start, end = report["speech_windows"][1]
+    assert end - start == pytest.approx(0.25, abs=1 / 22050)
+
+
 @pytest.mark.parametrize("old_format", ["npc-mixed-in-game", "game-music"])
 def test_old_takes_require_refilming(tmp_path, synthetic_assets, monkeypatch, old_format):
     assets = synthetic_assets

@@ -78,8 +78,16 @@ def speaker_gains(clips: list[Clip]) -> dict[str, float]:
             inputs += ["-i", str(clip.path)]
             filters.append(f"[{index}:a]aformat=sample_rates={SAMPLE_RATE}:"
                            f"channel_layouts=stereo,asetpts=PTS-STARTPTS[v{index}]")
+        samples = sum(round((clip.end - clip.start) * SAMPLE_RATE) for clip in lines)
+        repeat = ""
+        if 0 < samples < round(0.4 * SAMPLE_RATE):
+            # EBU R128 needs a complete 400 ms block. Repeat the speaker's
+            # pooled audio only for metering; silence padding would dilute a
+            # short reply's level. The rendered utterances keep their length.
+            copies = math.ceil(SAMPLE_RATE / samples)
+            repeat = f",aloop=loop={copies - 1}:size={samples}"
         filters.append("".join(f"[v{index}]" for index in range(len(lines))) +
-                       f"concat=n={len(lines)}:v=0:a=1[speaker]")
+                       f"concat=n={len(lines)}:v=0:a=1{repeat}[speaker]")
         loudness = levels.measure(inputs, ";".join(filters), "speaker")
         if not math.isfinite(loudness):
             raise ValueError(f"Голос {who} не имеет измеримой громкости EBU R128")

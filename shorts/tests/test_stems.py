@@ -62,6 +62,31 @@ def test_collect_rejects_legacy_npc_and_missing_hero_audio(tmp_path):
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is required")
+@pytest.mark.parametrize("durations", [(0.25,), (0.08,), (0.1, 0.15)])
+def test_short_speaker_audio_is_measurable_without_silence_dilution(tmp_path, durations):
+    hero = tone(tmp_path / "hero.wav", 1, 0.05)
+    clips = [stems.Clip("hero", hero, 0, 1)]
+    for index, duration in enumerate(durations):
+        wav = tone(tmp_path / f"npc-{index}.wav", duration, 0.01)
+        clips.append(stems.Clip("A", wav, 2 + index, 2 + index + duration))
+
+    gains = stems.speaker_gains(clips)
+    assert all(math.isfinite(gain) for gain in gains.values())
+    assert gains["A"] - gains["hero"] == pytest.approx(20 * math.log10(5), abs=0.3)
+    rendered = stems.render(clips, Timeline(5), tmp_path / "voice.wav")
+    # The measurement repeat must never add speech to the actual voice stem.
+    after_reply = levels.measure(["-i", str(rendered)], "[0:a]anull[v]", "v", [(3.5, 4.5)])
+    assert after_reply == -math.inf
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is required")
+def test_short_silent_speaker_is_still_rejected(tmp_path):
+    silent = tone(tmp_path / "silent.wav", 0.25, 0)
+    with pytest.raises(ValueError, match="Голос A не имеет измеримой громкости"):
+        stems.speaker_gains([stems.Clip("A", silent, 0, 0.25)])
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is required")
 def test_speakers_share_loudness_but_retain_dynamics_across_their_utterances(tmp_path):
     quiet = tone(tmp_path / "quiet.wav", 1, 0.01)
     louder = tone(tmp_path / "louder.wav", 1, 0.03)
