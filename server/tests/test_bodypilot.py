@@ -15,6 +15,7 @@ from gothic_ai import bodypilot
 from gothic_ai.bodypilot import BodyPilot
 from gothic_ai.game import GameDisconnected, GameError, GameLink
 from gothic_ai.protocol import (
+    PROTOCOL_VERSION,
     Attached,
     Hello,
     Loading,
@@ -799,7 +800,9 @@ class Rig:
 
 
 @asynccontextmanager
-async def running(*, companion=False, unavailable=False, max_fights=4, multi=False, protocol=45):
+async def running(
+    *, companion=False, unavailable=False, max_fights=4, multi=False, protocol=PROTOCOL_VERSION,
+):
     bridge, policy, clock = MultiBridge() if multi else Bridge(), Policy(), Clock()
     if protocol is not None:
         bridge.link._dispatch(Hello(type="hello", protocol=protocol, client="fake", codepage="utf-8"))
@@ -1213,6 +1216,30 @@ async def test_policy_backlog_does_not_starve_lease_heartbeats():
 
 
 async def test_delayed_heartbeat_and_event_replies_do_not_accumulate_into_lease_expiry():
+    async with running() as rig:
+        rig.bridge.response_delays.update(body_heartbeat=0.200, body_events=0.240)
+        await rig.active()
+        assert rig.bridge.commands("body_acquire")[0]["timeout_ms"] == 2000
+        try:
+            await eventually(lambda: len(rig.bridge.commands("body_heartbeat")) >= 10, timeout=3.5)
+        except TimeoutError as error:
+            sent = rig.bridge.command_times("body_heartbeat")
+            span = sent[-1] - sent[0] if sent else 0.0
+            max_gap = max((later - earlier for earlier, later in pairwise(sent)), default=0.0)
+            raise AssertionError(
+                f"heartbeat timing: count={len(sent)} span_s={span:.3f} max_gap_s={max_gap:.3f}"
+            ) from error
+        sent = rig.bridge.command_times("body_heartbeat")
+        assert sent[-1] - sent[0] >= 2.0
+        assert max(later - earlier for earlier, later in pairwise(sent)) < 0.400
+        assert len(rig.bridge.commands("body_events")) >= 3
+        assert rig.bridge.lease_expirations == 0
+        assert rig.link.body_owned("NPC")
+        assert not rig.bridge.commands("body_release")
+        assert not rig.policy.commands("end_episode")
+
+
+async def test_heartbeat_and_event_requests_overlap_with_acknowledgement_gates():
     async with running() as rig:
         original_dispatch = rig.link._dispatch
         original_heartbeat = rig.link.body_heartbeat
@@ -3383,11 +3410,12 @@ async def test_policy_fixture_connects_to_its_ipv4_listener_without_hostname_res
         assert rig.bridge.commands("body_action")[0]["target_entity_id"] == 2
 
 
-@pytest.mark.parametrize("protocol", [None, 44])
+@pytest.mark.parametrize("protocol", [None, 43, 44])
 @pytest.mark.parametrize("stage", ["observing", "pending", "active"])
 async def test_pre_v45_or_unknown_protocol_keeps_new_fight_native_until_watch_is_free(protocol, stage):
     async with running(multi=True, protocol=protocol) as rig:
         rig.bridge.legacy_watch = True
+        assert rig.pilot.watch_busy == 0
         if stage == "active":
             await start_fights(rig, "NPC_1")
         else:
@@ -3410,10 +3438,8 @@ async def test_pre_v45_or_unknown_protocol_keeps_new_fight_native_until_watch_is
         )
         assert not rig.pilot.handles("NPC_2")
         assert rig.pilot.active_count == 1
-        await eventually(lambda: rig.pilot.last_summary is not None)
-        summary = rig.pilot.last_summary
-        assert summary.npc == "NPC_2" and summary.reason == "watch_busy"
-        assert summary.lease is None and summary.acquire_requests == 0
+        assert rig.pilot.watch_busy == 1
+        assert rig.pilot.last_summary is None and not rig.pilot.summaries
         assert rig.pilot.fights["NPC_1"] is first
         assert first.lease == first_lease and first.client is first_client
         assert all(len(rig.bridge.commands(kind)) == count for kind, count in before.items())
@@ -3433,10 +3459,14 @@ async def test_pre_v45_or_unknown_protocol_keeps_new_fight_native_until_watch_is
         await eventually(lambda: rig.pilot.active_count == 0)
         assert rig.bridge.watched == [] and not rig.link.body_leases
         assert len(rig.policy.commands("end_episode")) == 1
+        summary = rig.pilot.last_summary
+        assert summary.npc == "NPC_1" and summary.reason == "npc_down"
+        assert list(rig.pilot.summaries) == [summary]
         rig.clock.advance(bodypilot.REACQUIRE_INTERVAL - 0.001)
         rig.combat("NPC_2")
         await asyncio.sleep(0.01)
         assert not rig.pilot.handles("NPC_2") and rig.pilot.active_count == 0
+        assert rig.pilot.watch_busy == 1
         rig.clock.advance(0.002)
         rig.combat("NPC_2")
         await eventually(lambda: rig.pilot.handles("NPC_2"))
@@ -3451,6 +3481,8 @@ async def test_pre_v45_or_unknown_protocol_keeps_new_fight_native_until_watch_is
         assert rig.link.body_leases[npc_entity("NPC_2")].target_entity_id == 2
         assert rig.bridge.commands("body_action")[-1]["entity_id"] == npc_entity("NPC_2")
         assert rig.bridge.commands("body_action")[-1]["target_entity_id"] == 2
+        assert rig.pilot.watch_busy == 1
+        assert rig.pilot.last_summary is summary and list(rig.pilot.summaries) == [summary]
 
 
 async def test_failed_shrink_is_retried_without_ending_or_resetting_other_fights():
@@ -3592,3 +3624,45 @@ async def test_disconnection_during_new_acquire_finishes_every_fight_before_sock
         assert all(summary.reason == "disconnected" for summary in rig.pilot.summaries)
         assert len(rig.bridge.commands("body_release")) == len(rig.policy.commands("end_episode")) == 1
         assert len(rig.policy.connections) == 1
+
+
+async def test_forty_watch_busy_refusals_do_not_replace_completed_fight_history():
+    async with running(multi=True, protocol=43) as rig:
+        rig.bridge.legacy_watch = True
+        await start_fights(rig, "NPC_1")
+        down = multi_fighter("NPC_1", 4, owned=True)
+        down["self"]["down"] = True
+        rig.bridge.emit(down)
+        await eventually(lambda: rig.pilot.active_count == 0)
+        completed = rig.pilot.last_summary
+        assert completed.npc == "NPC_1" and completed.reason == "npc_down"
+        assert completed.lease is not None and completed.acquire_completed == 1
+        assert completed.release_confirmed and completed.watch_removed
+        assert list(rig.pilot.summaries) == [completed] and rig.pilot.watch_busy == 0
+        rig.bridge.roster(multi_entry("NPC_2"))
+        await eventually(lambda: rig.pilot.handles("NPC_2"))
+        await eventually(lambda: rig.pilot.fights["NPC_2"]._watch_ready)
+        rig.bridge.emit(multi_fighter("NPC_2", 5))
+        await eventually(lambda: len(rig.policy.commands("reset")) == 2)
+        rig.bridge.emit(multi_fighter("NPC_2", 6, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        active = rig.pilot.fights["NPC_2"]
+        lease, client = active.lease, active.client
+        before = {kind: len(rig.bridge.commands(kind)) for kind in (
+            "story_eval", "body_watch", "body_acquire", "body_release",
+        )}
+        for index in range(40):
+            candidate = f"NPC_{index + 3}"
+            rig.bridge.roster(multi_entry("NPC_2", activity="body"), multi_entry(candidate))
+            assert rig.pilot.watch_busy == index + 1
+            assert not rig.pilot.handles(candidate) and rig.pilot.active_count == 1
+            await asyncio.sleep(0)  # A rejected candidate must not publish a summary in a queued task.
+            assert rig.pilot.last_summary is completed
+            assert list(rig.pilot.summaries) == [completed]
+            assert rig.pilot.fights["NPC_2"] is active
+            assert active.lease == lease and active.client is client
+            assert all(len(rig.bridge.commands(kind)) == count for kind, count in before.items())
+        assert rig.pilot.watch_busy == 40
+        assert len(rig.policy.commands("reset")) == len(rig.policy.connections) == 2
+        assert len(rig.policy.commands("end_episode")) == 1
+        assert rig.bridge.watched == ["NPC_2"] and rig.link.body_leases == {lease.entity_id: lease}

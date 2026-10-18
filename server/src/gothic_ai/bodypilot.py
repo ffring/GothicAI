@@ -224,11 +224,11 @@ class BodyPilot:
         self.people: dict[str, RosterEntry] = {}
         self.fights: dict[str, BodyFight] = {}
         self.summaries: deque[FightSummary] = deque(maxlen=32)
+        self.watch_busy = 0
         self._claimed_fights: set[str] = set()
         self._retarget_pending: set[str] = set()
         self._reacquire_after: dict[str, float] = {}
         self._roster_attempted: set[str] = set()
-        self._watch_refusals: dict[str, BodyFight] = {}
         self._watch_npcs: list[str] = []
         self._pending_unwatch: set[str] = set()
         self._last_watch_attempt = float("-inf")
@@ -328,11 +328,13 @@ class BodyPilot:
         ):
             return False
         if self.fights and not self._watch_can_change():
-            fight = BodyFight(self, npc)
-            fight.stop("watch_busy")
-            self._watch_refusals[npc] = fight
+            self.watch_busy += 1
+            log.info(
+                "neural-body watch refused npc=%s reason=watch_busy active_fights=%d protocol=%s count=%d",
+                npc, self.active_count, self.link.hello.protocol if self.link.hello else None,
+                self.watch_busy,
+            )
             self._reacquire_after[npc] = self.clock() + REACQUIRE_INTERVAL
-            self._wake.set()
             return False
         self.fights[npc] = BodyFight(self, npc)
         self._retarget_pending.discard(npc)
@@ -445,9 +447,6 @@ class BodyPilot:
                 if self.link.closed.is_set():
                     self._stop_all("disconnected")
                     break
-                refusals, self._watch_refusals = self._watch_refusals, {}
-                for fight in refusals.values():
-                    await fight._finish("watch_busy")
                 await self._retry_unwatch()
                 for fight in list(self.fights.values()):
                     if fight.task is None:
@@ -462,8 +461,7 @@ class BodyPilot:
                     pass
         finally:
             self._closing = True
-            fights = [*self.fights.values(), *self._watch_refusals.values()]
-            self._watch_refusals.clear()
+            fights = list(self.fights.values())
             for fight in fights:
                 fight._closing = True
                 fight.stop(fight._reason or "shutdown")
@@ -484,8 +482,7 @@ class BodyPilot:
             await self._done.wait()
         else:
             try:
-                fights = [*self.fights.values(), *self._watch_refusals.values()]
-                self._watch_refusals.clear()
+                fights = list(self.fights.values())
                 await asyncio.gather(*[fight._finish(fight._reason or "shutdown") for fight in fights])
                 await self._retry_unwatch(force=True)
             finally:
