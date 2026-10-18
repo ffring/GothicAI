@@ -282,7 +282,8 @@ async def test_a_companion_intercepts_a_monster_before_any_damage_perception():
         await cm.__aexit__(None, None, None)
 
 
-async def test_a_hostile_monster_closing_on_the_hero_is_intercepted_before_attack_state():
+@pytest.mark.parametrize("flee_state", ["ZS_FLEE", "ZS_MM_FLEE"])
+async def test_a_hostile_monster_closing_on_the_hero_is_intercepted_before_attack_state(flee_state):
     fake = FakeGame()
     cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
     try:
@@ -296,11 +297,17 @@ async def test_a_hostile_monster_closing_on_the_hero_is_intercepted_before_attac
             "moving": True,
             "att_hero": "hostile",
             "hero_cm": 2200,
+            "state": flee_state,
         }
         await fake.push_views({"npc": GORN, "name": "Горн", "sees": [wolf]})
         await asyncio.sleep(0.05)
         assert fights(fake) == []
         await fake.push_views({"npc": GORN, "name": "Горн", "sees": [{**wolf, "hero_cm": 2000}]})
+        await asyncio.sleep(0.05)
+        assert fights(fake) == []  # a fleeing monster can retain the hero as its native target
+        await fake.push_views(
+            {"npc": GORN, "name": "Горн", "sees": [{**wolf, "hero_cm": 1800, "state": "ZS_MM_THREATENENEMY"}]}
+        )
         await _until(lambda: fights(fake) == ["YWOLF"])
     finally:
         await cm.__aexit__(None, None, None)

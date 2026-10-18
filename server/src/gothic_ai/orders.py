@@ -589,7 +589,7 @@ class Orders:
                 and other.att_hero == "hostile"
                 and other.hero_cm is not None
                 and other.hero_cm < before.get(other.id.upper(), 0) - 10
-                and other.state != "ZS_FLEE"
+                and other.state not in {"ZS_FLEE", "ZS_MM_FLEE"}
             )
             if not other.fighting and not closing:
                 continue
