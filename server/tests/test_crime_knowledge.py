@@ -461,6 +461,7 @@ async def test_hearing_the_witness_clears_the_cached_suspicion_question(knowledg
     deals = SimpleNamespace(
         debts={},
         day=3,
+        crimes=None,
         on_day=[],
         on_reload=[],
         lies_of=lambda npc: ({}, set(), set()),
