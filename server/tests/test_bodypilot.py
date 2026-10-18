@@ -65,6 +65,7 @@ class Bridge:
         self.target_npc = None
         self.release_pending_polls = 0
         self._released_pending = False
+        self.request_rejections = {}
         self.response_delays = {}
         self._response_tasks = set()
         self._roster = {}
@@ -179,6 +180,11 @@ class Bridge:
         self.sent.append(command)
         self.sent_times.append((command, asyncio.get_running_loop().time()))
         kind = command["type"]
+        if rejections := self.request_rejections.get(kind):
+            self.link._dispatch(Result(
+                type="result", req=command["req"], ok=False, error=rejections.popleft(),
+            ))
+            return
         if kind == "body_watch":
             assert not self.link.body_leases, "watch must never change with an active lease"
             if self.provider_owned:
@@ -1847,6 +1853,44 @@ async def test_world_or_connection_reset_releases_and_closes_episode(transition,
         await rig.ended()
 
 
+@pytest.mark.parametrize("rpc,stage", [("story_eval", "symbol_eval"), ("body_watch", "body_watch")])
+@pytest.mark.parametrize("failure", ["timeout", "rejected"])
+async def test_watch_setup_failure_identifies_rpc_and_failure_type(rpc, stage, failure, caplog):
+    caplog.set_level("WARNING", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        if failure == "timeout":
+            rig.bridge.response_delays[rpc] = 0.300
+        else:
+            rig.bridge.request_rejections[rpc] = deque([f"fake {rpc} rejected"])
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: rig.bridge.commands(rpc))
+        # The first reply remains delayed, while an unsubscribe may acknowledge promptly.
+        rig.bridge.response_delays.clear()
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        await eventually(lambda: not rig.bridge._response_tasks)
+        summary = rig.pilot.last_summary
+        suffix = "timeout" if failure == "timeout" else "failed"
+        assert summary.reason == f"{stage}_{suffix}"
+        assert summary.lease is None and summary.acquire_requests == 0
+        assert not summary.release_confirmed
+        assert summary.watch_removed == (rpc == "body_watch")
+        assert not rig.bridge.commands("body_acquire") and not rig.policy.requests
+        watches = [command["npcs"] for command in rig.bridge.commands("body_watch")]
+        assert watches == ([["NPC"], []] if rpc == "body_watch" else [])
+        assert rig.bridge._watched_npc is None
+        assert not rig.pilot._watched and not rig.pilot._watch_ready
+
+        records = [record for record in caplog.records if "watch setup failed stage=" in record.message]
+        assert len(records) == 1
+        diagnostic = records[0].message
+        assert f"stage={stage} rpc={rpc} npc=NPC" in diagnostic
+        assert f"error_type={'TimeoutError' if failure == 'timeout' else 'GameError'}" in diagnostic
+        assert "error=" in diagnostic and "elapsed_ms=" in diagnostic
+        assert records[0].args[-1] >= 0
+        if failure == "rejected":
+            assert f"fake {rpc} rejected" in diagnostic
+
+
 async def test_watch_timeout_clears_applied_subscription_and_ignores_late_replies():
     async with running() as rig:
         rig.bridge.response_delays["body_watch"] = 0.300
@@ -1867,7 +1911,7 @@ async def test_watch_timeout_clears_applied_subscription_and_ignores_late_replie
         assert not rig.bridge.commands("body_action")
         assert not rig.policy.requests
         summary = rig.pilot.last_summary
-        assert summary.reason == "watch_failed" and summary.lease is None
+        assert summary.reason == "body_watch_timeout" and summary.lease is None
         assert summary.fight_seconds is None
         assert not summary.release_confirmed and summary.release_seconds is None
         assert not summary.watch_removed

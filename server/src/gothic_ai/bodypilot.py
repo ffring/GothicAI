@@ -552,18 +552,38 @@ class BodyPilot:
             await self._finish("acquire_exhausted")
             return
         if not self._watched:
+            started = time.monotonic()
             try:
                 symbol = await self.link.story_eval(self.npc, [["sym", self.npc]], timeout=BRIDGE_TIMEOUT)
                 if len(symbol) != 1 or type(symbol[0]) is not int or symbol[0] < 0:
                     raise GameError("NPC script symbol unavailable")
                 self._symbol = symbol[0]
-                # A timed-out request may already have enabled observations on
-                # the bridge. Track it before awaiting the reply so cleanup
-                # also unsubscribes when that acknowledgement never arrives.
-                self._watched = True
+            except BRIDGE_ERRORS as error:
+                log.warning(
+                    "neural-body watch setup failed stage=symbol_eval rpc=story_eval npc=%s "
+                    "error_type=%s error=%r elapsed_ms=%.1f",
+                    self.npc, type(error).__name__, error, (time.monotonic() - started) * 1000,
+                )
+                await self._finish(
+                    "symbol_eval_timeout" if isinstance(error, TimeoutError) else "symbol_eval_failed"
+                )
+                return
+            # A timed-out request may already have enabled observations on
+            # the bridge. Track it before awaiting the reply so cleanup
+            # also unsubscribes when that acknowledgement never arrives.
+            self._watched = True
+            started = time.monotonic()
+            try:
                 await self.link.body_watch(self._watch_npcs(), timeout=BRIDGE_TIMEOUT)
-            except BRIDGE_ERRORS:
-                await self._finish("watch_failed")
+            except BRIDGE_ERRORS as error:
+                log.warning(
+                    "neural-body watch setup failed stage=body_watch rpc=body_watch npc=%s "
+                    "error_type=%s error=%r elapsed_ms=%.1f",
+                    self.npc, type(error).__name__, error, (time.monotonic() - started) * 1000,
+                )
+                await self._finish(
+                    "body_watch_timeout" if isinstance(error, TimeoutError) else "body_watch_failed"
+                )
                 return
             self._watch_ready = True
         if self.lease is not None:
