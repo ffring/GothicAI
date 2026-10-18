@@ -20,6 +20,9 @@
 #       for his words while he holds the talk key, is soothed, sits, lets him pass and be; hostility, «Стой!»,
 #       walking right up to a calm one, a threat, a failed roll, and one talked down mid-bite (the tone is the
 #       quick model's with QUICK_URL, the rules' else; the dice are the scenario's)
+#   orders: immediate companion orders, then Cavalorn hears «Бей волка!» with no focus: he fights the
+#       visible wolf before it attacks the hero; the wolf never hears the phrase or asks its tone model.
+#       Scripted with LLM=fake; TIMEOUT=360
 #   m5e: talking without a window: a typed line and the talk key (a wav through the ASR service) with the
 #       hero's own focus, the addressee, the npc's body, the hero's doings, an interruption, a witness, the end
 #       of a conversation when the hero walks away, a walking npc answering on the move
@@ -188,8 +191,9 @@
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)
 #   ground: Cavalorn follows the hero, the hero throws his letter down: Cavalorn sees it lying there, picks it
 #       up when told «бери» (take_item, model scripted with LLM=fake) and follows the hero again (protocol v22)
-#   group: one word at a time (docs/npc-tools.md, step B2): «Пацаны, здорово!» at the bandits' cave, Cavalorn
-#       with the hero: Brago, who leads them, answers first, the others' words wait their turn and are heard
+#   group: one word at a time (docs/npc-tools.md, step B2): «Пацаны, здорово!» at the bandits' cave while
+#       Cavalorn is the current conversation partner: Brago answers first, his line is heard in the game,
+#       the others' words wait their turn and are heard
 #       after his, the second knows what he said, a fourth voice says nothing. Starts the TTS service
 #       (TTS=fake); models scripted with LLM=fake
 #   interject: who speaks up, by character (docs/npc-tools.md, step B3), live only (LLM=chatgpt and
