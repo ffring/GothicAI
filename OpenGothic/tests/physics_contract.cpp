@@ -8,6 +8,7 @@
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/bounds.h"
 #include "game/serialize.h"
+#include "gothic.h"
 
 #include <Tempest/MemReader>
 #include <Tempest/MemWriter>
@@ -3055,7 +3056,40 @@ namespace {
       }
     }
 
+  void testMonsterCharacterVirtualEligibility() {
+    struct Case {
+      const char* name;
+      bool down, flying, allowedWhenEnabled;
+      };
+    const Case cases[]={
+      {"a living ground monster must receive an enabled CV",false,false,true},
+      {"a living flying monster must always retain legacy movement",false,true,false},
+      {"a down ground monster must never receive CV",true,false,false},
+      {"a down flying monster must never receive CV",true,true,false}};
+    Gothic::PhysicsFlags flags;
+    require(!flags.monsterCharacterVirtual,"monster CV must default to disabled");
+    // Exercise the actual MoveAlgo policy for every independent hero/human
+    // flag combination, including an on-the-fly monster flag round trip.
+    for(bool hero:{false,true}) for(bool humans:{false,true}) {
+      flags.characterVirtual=hero;
+      flags.npcCharacterVirtual=humans;
+      for(const auto& sample:cases)
+        require(flags.allowsMonsterCharacterVirtual(sample.down,sample.flying)==false,
+                "a disabled monster CV must reject every state regardless of hero/human flags");
+      flags.monsterCharacterVirtual=true;
+      for(const auto& sample:cases)
+        require(flags.allowsMonsterCharacterVirtual(sample.down,sample.flying)==sample.allowedWhenEnabled,sample.name);
+      flags.monsterCharacterVirtual=false;
+      for(const auto& sample:cases)
+        require(flags.allowsMonsterCharacterVirtual(sample.down,sample.flying)==false,
+                "toggling monster CV off must restore legacy eligibility for every state");
+      }
+    std::printf("Monster CharacterVirtual eligibility: default OFF; four living/down/flying cases "
+                "and four independent hero/human flag combinations passed OFF/ON/OFF\n");
+    }
+
   void testMonsterCharacterVirtual() {
+    testMonsterCharacterVirtualEligibility();
     constexpr float radians=.01745329252f;
     struct Monster {
       const char* name;

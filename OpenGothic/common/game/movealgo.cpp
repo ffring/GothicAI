@@ -680,7 +680,8 @@ bool MoveAlgo::useCharacterVirtual() {
   const auto* hero = npc.world().player();
   const bool human = npc.isHuman();
   const bool enabled = human ? Gothic::physicsFlags().npcCharacterVirtual :
-                               Gothic::physicsFlags().monsterCharacterVirtual && !canFlyOverWater();
+                               Gothic::physicsFlags().monsterCharacterVirtual &&
+                               Gothic::physicsFlags().allowsMonsterCharacterVirtual(npc.isDown(),canFlyOverWater());
   if(!enabled || npc.isDown() || hero==nullptr) {
     npcVirtualInRange = false;
     return false;

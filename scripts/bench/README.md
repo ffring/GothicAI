@@ -708,8 +708,10 @@ NO_BUILD=1 MOVABLE_VOBS=1 MONSTER_CHARACTER_VIRTUAL=0 OPENGOTHIC_BENCH_TAKE=off 
 NO_BUILD=1 MOVABLE_VOBS=1 MONSTER_CHARACTER_VIRTUAL=1 OPENGOTHIC_BENCH_TAKE=on scripts/bench.sh monster-character-virtual .bench/monster-character-on
 ```
 
-The wolf follows the actual hero with native `AI_GoToNpc` across the forest stairs
-and a measured stock-world slope. The hero stands beyond each obstacle so the
+The wolf follows the actual hero with native `AI_GoToNpc` across stock city stairs
+(preferring the forest stair waypoint) and a measured stock-world slope. A continuous
+15 cm support profile validates a hero destination beyond the obstacle using the
+monster's actual step, slope and stopping distance. The hero stands beyond each obstacle so the
 monster's ordinary attack-distance stopping rule cannot finish before crossing it.
 A troll uses native `AI_GoToPoint` through a body-size lane in Coragon's tavern or
 adjacent courtyard, with a real stock barrel in its way. The same wolf enters water
@@ -722,7 +724,7 @@ geometry or animation is an explicit preparation error.
 native tick, actual CV use, airborne/falling/swimming state and playing animations.
 `monster_character_route_end` reports arrival and elapsed time, stalls with less
 than 5 cm horizontal progress for more than 1000 ms, maximum physical and visual
-vertical change per frame, falls more than 100 cm below the last supported root,
+vertical change per frame, InAir/Falling drops more than 100 cm below the last supported root (including the landing frame),
 CV/swimming frames and barrel displacement. Arrival uses the native attack range
 for a chase, or 60 cm horizontal / 80 cm vertical tolerance for point routes. Water
 entry additionally requires actual swimming; the exit requires returning to land.
@@ -732,7 +734,10 @@ into successful arrival.
 
 Two separate authored `T_FISTATTACKMOVE` / `BS_HIT` clips measure wolf lunge and
 field-raider charge through the production animation and movement paths. The
-stand records maximum horizontal travel, upward root travel, observed clip duration
+field-raider starts the native `S_FISTRUNL` base before calling the ordinary
+running-attack entry point; that moving base remains underneath the rootless
+layer-2 attack clip, with the real hero 350 cm ahead.
+The stand records maximum horizontal travel, upward root travel, observed clip duration
 and actual charge collision callbacks. Compare ON/OFF distance and duration to
 10%; the field-raider case also requires the native callback to its real target.
 The stand supplies no synthetic movement or contact response.
