@@ -74,6 +74,22 @@ def test_empty_speech_and_full_speech_have_complementary_pauses():
     assert levels.pause_windows([(0, 5)], duration) == []
 
 
+def test_merge_speech_windows_sorts_merges_and_clips_to_the_body():
+    windows = [(8, 12), (3, 5), (-2, 1), (1, 3), (20, 21), (-4, -1), (6, 7)]
+    assert levels.merge_speech_windows(windows, 10) == [(0, 5), (6, 7), (8, 10)]
+    assert levels.merge_speech_windows([], 0) == []
+    assert windows == [(8, 12), (3, 5), (-2, 1), (1, 3), (20, 21), (-4, -1), (6, 7)]
+
+
+@pytest.mark.parametrize("windows,duration", [
+    ([(1, 1)], 10), ([(2, 1)], 10), ([(math.nan, 2)], 10),
+    ([(1, math.inf)], 10), ([], -1), ([], math.nan), ([], math.inf),
+])
+def test_merge_speech_windows_rejects_invalid_times(windows, duration):
+    with pytest.raises(ValueError):
+        levels.merge_speech_windows(windows, duration)
+
+
 @pytest.mark.parametrize("voice_gain,music_gain", [(-4, 0), (-10, -12)])
 def test_music_calibration_reaches_voice_minus_fourteen_lu(tone_inputs, voice_gain, music_gain):
     pauses = [(1, 3), (9, 11)]
@@ -1367,3 +1383,170 @@ def test_mastering_calibrates_an_ending_audible_only_in_the_last_90_ms(tmp_path,
     assert rows["clicks"]["count"] == 0
     assert report["ok"] is True
     assert out.stat().st_size > 0
+
+
+@pytest.fixture(scope="module")
+def publication_inputs(tmp_path_factory, tone_inputs):
+    root = tmp_path_factory.mktemp("publication-inputs")
+    joined, voice, music = (root / name for name in ("joined.mkv", "voice.wav", "music.wav"))
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "color=c=black:s=16x16:r=1:d=14", "-f", "lavfi", "-i",
+         "sine=frequency=440:sample_rate=48000:duration=14", "-af",
+         "volume=-20dB,afade=t=in:d=0.06,afade=t=out:st=13.94:d=0.06",
+         "-c:v", "mpeg4", "-c:a", "pcm_f32le", str(joined)], check=True, capture_output=True,
+    )
+    for path, frequency, duration, filters in [
+        (voice, 1000, 4, "volume=-12dB,afade=t=in:d=0.06,afade=t=out:st=3.94:d=0.06"),
+        (music, 220, 12, "anull"),
+    ]:
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+             f"sine=frequency={frequency}:sample_rate=48000:duration={duration}",
+             "-af", filters, "-c:a", "pcm_f32le", str(path)], check=True, capture_output=True,
+        )
+    return joined, music, [(voice, 4)], [(4, 8)], 12, 14
+
+
+def test_publish_balanced_synthetic_video_writes_the_final_report(
+    tmp_path, publication_inputs, capsys,
+):
+    out = tmp_path / "short.mp4"
+    out.write_bytes(b"stale video")
+    report_path = out.with_suffix(".levels.json")
+    report_path.write_text('{"stale": true}')
+
+    report = levels.publish(*publication_inputs, out)
+
+    assert out.stat().st_size > 0
+    assert report["ok"] is True
+    assert report["balance_stage"] == "mastered_aac"
+    assert report["pre_master_rows"]
+    rows = _rows(report)
+    assert rows["voice_mastered"]["measured_lufs"] == pytest.approx(-14, abs=0.5)
+    assert rows["true_peak"]["measured_dbtp"] <= -1
+    assert rows["clicks"]["count"] == 0
+    assert all(row["ok"] is not False for row in report["rows"])
+    assert json.loads(report_path.read_text()) == json.loads(json.dumps(report, allow_nan=False))
+    assert "error" not in report
+    output = capsys.readouterr().out
+    assert all(track in output for track in ("voice", "music_pause", "game_speech", "true_peak", "clicks"))
+
+
+def test_publish_rejects_loud_music_and_replaces_stale_artifacts(
+    tmp_path, publication_inputs, monkeypatch,
+):
+    out = tmp_path / "short.mp4"
+    out.write_bytes(b"stale video must be removed")
+    report_path = out.with_suffix(".levels.json")
+    report_path.write_text('{"stale": true}')
+    real_music_gain = levels.music_gain
+    # Exercise real calibration and its measurements, with a deliberately bad
+    # music coefficient rather than a fabricated failed report.
+    monkeypatch.setattr(levels, "music_gain", lambda *args: real_music_gain(*args) + 12)
+
+    with pytest.raises(levels.LevelsError) as failure:
+        levels.publish(*publication_inputs, out)
+
+    report = json.loads(report_path.read_text())
+    assert not out.exists()
+    assert report["ok"] is False
+    assert _rows(report)["music_pause"]["ok"] is False
+    assert _rows(report)["music_speech"]["ok"] is False
+    assert report["error"] == str(failure.value)
+    assert report["error"]
+    assert "stale" not in report
+
+
+@pytest.mark.parametrize("failure", [
+    ValueError("voice is unmeasurable"),
+    subprocess.CalledProcessError(1, ["ffmpeg"], stderr="invalid audio input"),
+])
+def test_publish_records_calibration_and_ffmpeg_errors_after_clearing_old_files(
+    tmp_path, monkeypatch, failure,
+):
+    out = tmp_path / "short.mp4"
+    report_path = out.with_suffix(".levels.json")
+    out.write_bytes(b"old video")
+    report_path.write_text('{"old": true}')
+
+    def calibrate(*_args, **_kwargs):
+        assert not out.exists()
+        assert not report_path.exists()
+        out.write_bytes(b"partial output must be removed too")
+        raise failure
+
+    monkeypatch.setattr(levels, "calibrate", calibrate)
+    with pytest.raises(levels.LevelsError) as raised:
+        levels.publish(tmp_path / "joined.mp4", None, [(tmp_path / "voice.wav", 0)],
+                       [(0, 4)], 4, 4, out)
+
+    report = json.loads(report_path.read_text())
+    assert not out.exists()
+    assert report["ok"] is False
+    assert report["error"] == str(raised.value)
+    assert report["error"]
+    assert "old" not in report
+    assert isinstance(raised.value, ValueError)
+
+
+def test_publish_records_ffmpeg_mastering_failure_and_removes_partial_candidate(tmp_path, monkeypatch):
+    joined, out = tmp_path / "joined.mp4", tmp_path / "short.mp4"
+    out.write_bytes(b"stale video")
+    report_path = out.with_suffix(".levels.json")
+    report_path.write_text('{"old": true}')
+    audio = levels.AudioGraph(["-i", str(joined)], ["[0:a]asplit=2[g][vo]"],
+                              {"game": "g", "voice": "vo"})
+    report = levels.check_balance(-22, None, None, -28.5, -25.5)
+    report.update(speech_lufs=-22, speech_windows=[(0, 4)], pause_windows=[(4, 8)], ending_windows=[])
+    monkeypatch.setattr(levels, "calibrate", Mock(return_value=(audio, report)))
+
+    def broken_render(command, **_kwargs):
+        candidate = Path(command[command.index("-ar") + 2])
+        assert candidate.name == out.name
+        assert candidate.parent != out.parent
+        candidate.write_bytes(b"incomplete AAC render")
+        raise subprocess.CalledProcessError(1, command, stderr=b"encoder stopped")
+
+    renderer = Mock(side_effect=broken_render)
+    monkeypatch.setattr(levels.subprocess, "run", renderer)
+    with pytest.raises(levels.LevelsError) as failure:
+        levels.publish(joined, None, [(tmp_path / "voice.wav", 0)], [(0, 4)], 8, 8, out)
+
+    renderer.assert_called_once()
+    saved = json.loads(report_path.read_text())
+    assert saved["ok"] is False
+    assert saved["master_passes"] == 0
+    assert saved["error"] == str(failure.value)
+    assert "ffmpeg" in saved["error"]
+    assert list(tmp_path.iterdir()) == [report_path]
+
+
+@pytest.mark.parametrize("voiced", [False, True])
+def test_music_fades_can_be_disabled_without_changing_the_music_edges(publication_inputs, voiced):
+    joined, music, voice, _speech, total, length = publication_inputs
+
+    def music_samples(fades):
+        audio = levels.audio_graph(joined, music, voice if voiced else [], [], total, length,
+                                   music_fades=fades)
+        graph = audio.filters + [f"[{output}]anullsink" for track, output in audio.tracks.items()
+                                 if track != "music"]
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", *audio.inputs,
+             "-filter_complex", ";".join(graph), "-map", "[m]",
+             "-f", "f32le", "-ac", "1", "-ar", "48000", "-"],
+            check=True, capture_output=True,
+        )
+        return array("f", result.stdout)
+
+    plain, faded = music_samples(False), music_samples(True)
+
+    def rms(samples, start, end):
+        part = samples[round(start * 48000):round(end * 48000)]
+        return math.sqrt(sum(value * value for value in part) / len(part))
+
+    middle = rms(plain, 5, 6)
+    assert rms(faded, 5, 6) == pytest.approx(middle, rel=0.001)
+    for start, end in [(0.1, 0.2), (11.8, 11.9)]:
+        assert rms(plain, start, end) == pytest.approx(middle, rel=0.001)
+        assert rms(faded, start, end) < middle * 0.25
