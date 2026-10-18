@@ -940,6 +940,8 @@ async def fight_reactions(
                         await link.detach(bandit)
                         parked.remove(bandit)
                         await place_idle(bandit, return_point["name"])
+                        await link.attach(bandit)
+                        parked.add(bandit)
                         await grounded(bandit, "returned", parked_hp, 1200, 2500)
                         await finish_preparation()
                         # Facing the previous duel can leave the returned defender behind
@@ -968,6 +970,8 @@ async def fight_reactions(
                             raise GameError(
                                 "fight_reactions setup: returned defender is not visibly in range"
                             )
+                        await link.detach(bandit)
+                        parked.remove(bandit)
                     talk.orders.fight_intent(CAVALORN, bandit)
                     await _until(lambda b=bandit: bool(trace.damage.get(b)), 60)
                     hits = trace.damage.get(bandit, [])
