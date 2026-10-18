@@ -16,6 +16,7 @@ import statistics
 
 
 HEADS = ("forward", "strafe", "turn", "walk", "jump", "climb")
+REGIONS = ("market", "harbour", "onar", "lobart", "port_streets", "upper_streets")
 COMPONENT_NAMES = {
     "progress_cm": "Detour progress", "arrived": "Arrival", "blocked": "Blocked",
     "fall_damage": "Fall damage", "death": "Death", "jump": "Jump", "climb": "Climb", "time": "Time",
@@ -132,7 +133,7 @@ def plot_curves(run, rows, output):
                   "o-", color=COLORS[0], ms=4, label="Greedy validation")
     turn.set(title="Turning without forward or strafe", ylabel="Decisions, %", ylim=(0, 100))
     blocked.plot(iterations, [100 * value["blocked_fraction"] for value in training], color=COLORS[2])
-    blocked.set(title="Blocked intervals · sample collection", ylabel="Valid decisions, %", ylim=(0, 100))
+    blocked.set(title="Blocked intervals · sample collection", ylabel="Decisions, %", ylim=(0, 100))
 
     critic_iterations = [row["iteration"] for row in trained if row.get("critic_only")]
     selection_path = run / "best" / "selection.json"
@@ -207,6 +208,8 @@ def load_drive(root):
 def matched_episodes(baseline, final):
     if baseline.keys() != final.keys():
         raise ValueError("Round 2 and final drives must contain exactly the same directed test pairs")
+    if len(baseline) != 60 or Counter(episode["region"] for episode in baseline.values()) != Counter({region: 10 for region in REGIONS}):
+        raise ValueError("Final test requires exactly 60 pairs, ten in each of the six standard regions")
     for key in baseline:
         if baseline[key]["region"] != final[key]["region"]:
             raise ValueError(f"Region differs for the same pair: {key}")
