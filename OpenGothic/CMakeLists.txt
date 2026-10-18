@@ -173,7 +173,20 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 add_subdirectory(lib/recastnavigation)
 target_link_libraries(${PROJECT_NAME} Recast Detour)
 
-# Jolt Physics: single precision, static library, portable instruction sets.
+# Jolt Physics: single precision, static library, portable instruction sets by default.
+# x86-64-v3 adds AVX2, F16C, LZCNT and TZCNT (never FMA) for hosts that have them, such as the
+# headless body runner on the Ryzen: there Jolt's SSE2 fallbacks (half floats, popcount, shuffles)
+# cost ~2 ms of a 25 ms tick, mostly in foot IK rays. CROSS_PLATFORM_DETERMINISTIC keeps the
+# results identical across both sets.
+set(OPENGOTHIC_JOLT_X86 "portable" CACHE STRING "Jolt x86 instruction sets: portable or x86-64-v3")
+set_property(CACHE OPENGOTHIC_JOLT_X86 PROPERTY STRINGS portable x86-64-v3)
+if(OPENGOTHIC_JOLT_X86 STREQUAL "x86-64-v3")
+  set(JOLT_X86_ENABLED SSE4_1 SSE4_2 AVX AVX2 LZCNT TZCNT F16C)
+elseif(OPENGOTHIC_JOLT_X86 STREQUAL "portable")
+  set(JOLT_X86_ENABLED "")
+else()
+  message(FATAL_ERROR "OPENGOTHIC_JOLT_X86 must be portable or x86-64-v3")
+endif()
 set(JPH_BUILD_SHARED_LIBS                OFF CACHE INTERNAL "")
 set(DOUBLE_PRECISION                     OFF CACHE INTERNAL "")
 set(CROSS_PLATFORM_DETERMINISTIC          ON CACHE INTERNAL "")
@@ -192,7 +205,11 @@ set(JPH_USE_VK                           OFF CACHE INTERNAL "")
 set(JPH_USE_MTL                          OFF CACHE INTERNAL "")
 set(JPH_USE_CPU_COMPUTE                  OFF CACHE INTERNAL "")
 foreach(JOLT_X86_FEATURE SSE4_1 SSE4_2 AVX AVX2 AVX512 LZCNT TZCNT F16C FMADD)
-  set(USE_${JOLT_X86_FEATURE} OFF CACHE INTERNAL "")
+  if(JOLT_X86_FEATURE IN_LIST JOLT_X86_ENABLED)
+    set(USE_${JOLT_X86_FEATURE} ON CACHE INTERNAL "")
+  else()
+    set(USE_${JOLT_X86_FEATURE} OFF CACHE INTERNAL "")
+  endif()
 endforeach()
 add_subdirectory(lib/JoltPhysics/Build)
 
@@ -201,7 +218,7 @@ add_subdirectory(lib/JoltPhysics/Build)
 get_target_property(JOLT_INCLUDE_DIRECTORIES Jolt INTERFACE_INCLUDE_DIRECTORIES)
 set_property(TARGET Jolt PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
   "${JOLT_INCLUDE_DIRECTORIES}")
-if(XCODE)
+if(XCODE AND OPENGOTHIC_JOLT_X86 STREQUAL "portable")
   # Upstream adds SSE4.2 for Xcode unconditionally; retain the portable x86 baseline.
   set_property(TARGET Jolt PROPERTY XCODE_ATTRIBUTE_OTHER_CPLUSPLUSFLAGS[arch=x86_64]
     "$(inherited) -msse2")

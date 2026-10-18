@@ -6,6 +6,7 @@ not signal dynamics, control ducking. All times refer to the joined video.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import re
@@ -409,6 +410,22 @@ def master_filter(speech_lufs: float, length: float, *, voice_probe: bool = Fals
             f"afade=t=out:st={length - 0.08:.3f}:d=0.08")
 
 
+@functools.lru_cache(maxsize=1)
+def aac_encoder() -> tuple[str, ...]:
+    """The published AAC: AudioToolbox's where ffmpeg has it (macOS), else ffmpeg's own at 256k.
+
+    ffmpeg's own encoder at 192k turned one voice transient of an AI take into a lone +0.15 dBFS
+    sample, 3 dB over the limiter (-2.50 dBTP before it); at 256k, and with AudioToolbox, it stays
+    near -2.6. Popen keeps the probe out of tests that replace subprocess.run.
+    """
+    with subprocess.Popen(["ffmpeg", "-hide_banner", "-encoders"], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, text=True) as probe:
+        listing = probe.communicate()[0]
+    if re.search(r"^\s*A\S*\s+aac_at\b", listing, re.MULTILINE):
+        return ("-c:a", "aac_at", "-b:a", "192k")
+    return ("-c:a", "aac", "-b:a", "256k")
+
+
 def meter_file(path: Path) -> tuple[float, float]:
     """Meter original loudness and a conservative, precise peak including the tail."""
     graph = ("ebur128@loudness=framelog=quiet,"
@@ -724,11 +741,11 @@ def _master_voiced(audio: AudioGraph | None, report: dict | None, out: Path, len
                 balance_corrections=dict(balance_corrections), speech=report["speech_windows"],
             )
             command = ["ffmpeg", "-y", *inputs, "-filter_complex", graph,
-                       "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
-                       "-b:a", "192k", "-ar", "48000", str(candidate)]
+                       "-map", "0:v", "-map", "[a]", "-c:v", "copy", *aac_encoder(),
+                       "-ar", "48000", str(candidate)]
             for track, path in stems.items():
-                command += ["-map", f"[{track}_mastered]", "-vn", "-c:a", "aac",
-                            "-b:a", "192k", "-ar", "48000", str(path)]
+                command += ["-map", f"[{track}_mastered]", "-vn", *aac_encoder(),
+                            "-ar", "48000", str(path)]
             render_command(command)
             report["master_passes"] += 1
             return meter_file(stems["voice"])[0]
