@@ -42,9 +42,12 @@ def _run(command: list[str], *, cwd: Path | None = None) -> None:
         raise ExplainError(str(err)) from err
 
 
-def render(ws: Path, plan: dict, directory: Path) -> None:
-    """Render one muted H.264 picture and three full-length, uncalibrated WAVs."""
-    for stem in (None, "voice", "game", "music"):
+def render(ws: Path, plan: dict, directory: Path, *,
+           stems: tuple[str | None, ...] = (None, "voice", "game", "music")) -> None:
+    """Render selected raw WAVs; None selects the muted H.264 picture."""
+    if any(stem not in (None, "voice", "game", "music") for stem in stems):
+        raise ExplainError("unknown Remotion stem")
+    for stem in stems:
         props = dict(plan)
         props.pop("stem", None)
         if stem is not None:
