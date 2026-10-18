@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from .chronicle import Chronicle, Fact
-from .game import GameLink
+from .game import GameError, GameLink
 from .gamedata.storygraph import StoryGraph
-from .protocol import DeedItem, GameMessage, HeroDeed
+from .protocol import DeedItem, GameMessage, HeroDeed, Session
 
 if TYPE_CHECKING:
     from .concerns import Concern
@@ -205,7 +205,7 @@ class Crimes:
             if k.degree == "seen":
                 line = f"Ты видел сам: {what}."
             elif k.degree == "heard":
-                line = f"Ты слышал со слов {self.names(k.source)}: {what}; переходов: {k.hops}."
+                line = f"Ты слышал (со слов: {self.names(k.source)}): {what}; переходов: {k.hops}."
             else:
                 line = f"Ты подозреваешь: {what}. Ты видел героя рядом, самого дела не видел; это догадка."
             if k.forgiven:
@@ -217,8 +217,7 @@ class Crimes:
 
     def distrust(self, npc: str) -> list[str]:
         """Only direct proof, or a victim's learned grievance, breaks its reliance on his word."""
-        person = self.people.get(npc.upper(), {})
-        community = self.community(int(person.get("guild", -1)), int(person.get("npctype", 0)))
+        community = self._person_community(npc)
         return [
             self.describe(k.crime)
             for k in self.known(npc)
@@ -233,8 +232,7 @@ class Crimes:
         ]
 
     def attitude(self, npc: str) -> str | None:
-        person = self.people.get(npc.upper(), {})
-        community = self.community(int(person.get("guild", -1)), int(person.get("npctype", 0)))
+        community = self._person_community(npc)
         wary = False
         for k in self.known(npc):
             if k.suspect != "PLAYER" or k.degree == "suspects" or k.forgiven:
@@ -245,8 +243,33 @@ class Crimes:
                 wary = True
         return "wary" if wary else None
 
+    def _person_community(self, npc: str) -> str | None:
+        person = self.people.get(npc.upper(), {})
+        guild = int(person.get("guild", -1))
+        if guild in {1, 2, 3} and "npctype" not in person:
+            return None  # do not mistake an OldCamp member for a townsman before reading its type
+        return self.community(guild, int(person.get("npctype", 0)))
+
     async def prepare(self, npc: str) -> None:
-        self._apply_attitude(npc.upper())
+        npc = npc.upper()
+        # story_people has guilds, but OldCamp/BL membership also depends on NPCTYPE. Read both
+        # fields through the existing evaluator rather than guessing a community from a name.
+        if self.known(npc) and "npctype" not in self.people.get(npc, {}):
+            branch = self.chronicle.branch
+            try:
+                values = await self.link.story_eval(
+                    npc,
+                    [["field", ["inst", "SELF"], "GUILD"], ["field", ["inst", "SELF"], "NPCTYPE"]],
+                )
+            except (GameError, TimeoutError):
+                values = []
+            if (
+                self.chronicle.branch == branch
+                and len(values) == 2
+                and all(isinstance(v, int) for v in values)
+            ):
+                self.people[npc] = {**self.people.get(npc, {}), "guild": values[0], "npctype": values[1]}
+        self._apply_attitude(npc)
 
     def _apply_attitude(self, npc: str) -> None:
         attitude = self.attitude(npc)
@@ -432,6 +455,8 @@ class Crimes:
     def _on_message(self, msg: GameMessage) -> None:
         if isinstance(msg, HeroDeed):
             self.record(msg)
+        elif isinstance(msg, Session):
+            self.people.clear()
 
     def record(self, deed: HeroDeed) -> Fact | None:
         """Classify a raw bridge deed and keep one truth plus one fact per real witness."""

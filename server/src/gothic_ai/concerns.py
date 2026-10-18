@@ -40,6 +40,8 @@ FACTS = frozenset(
         "initiative",
         "meet_raised",
         "crime_suspected",
+        "crime_seen",
+        "rumor",
         "forgiven",
         "silenced",
     }

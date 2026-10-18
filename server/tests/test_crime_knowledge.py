@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from gothic_ai.chronicle import Chronicle
+from gothic_ai.concerns import Concerns
 from gothic_ai.crimes import Crimes
 from gothic_ai.memory import MemoryStore
 from gothic_ai.places import PlaceBook
@@ -211,6 +212,27 @@ async def test_unheard_murder_and_forgiven_murder_do_not_make_a_community_hostil
     assert not knowledge.trust.broken(HILDA)
 
 
+@pytest.mark.parametrize("victim_type,expected", [(3, "hostile"), (0, None)])
+async def test_conversation_reads_npctype_for_oldcamp_membership(knowledge, victim_type, expected):
+    crime = knowledge.crimes.record(
+        deed(kind="murder", victim=LOBART, victim_guild=1, victim_npctype=victim_type)
+    )
+    assert crime is not None
+    knowledge.crimes.people[HILDA] = {"guild": 1}  # story_people has no NPCTYPE
+    learn(knowledge, HILDA, crime["id"], "heard")
+    assert knowledge.crimes.attitude(HILDA) is None
+
+    async def identity(npc, expressions):
+        assert npc == HILDA
+        assert [e[2] for e in expressions] == ["GUILD", "NPCTYPE"]
+        return [1, 3]
+
+    knowledge.link.story_eval = identity
+    await knowledge.crimes.prepare(HILDA)
+    assert knowledge.crimes.attitude(HILDA) == expected
+    assert knowledge.trust.broken(HILDA) is (expected == "hostile")
+
+
 async def test_loading_a_saved_branch_restores_only_its_knowledge(knowledge):
     crime = theft(knowledge, witnesses=[HILDA])
     saved = knowledge.memory.head("A")
@@ -321,3 +343,21 @@ async def test_proof_or_forgiveness_ends_the_suspicion_question(knowledge):
     assert knowledge.crimes.concerns(LOBART)
     learn(knowledge, LOBART, second["id"], "heard")
     assert knowledge.crimes.concerns(LOBART) == []
+
+
+async def test_hearing_the_witness_clears_the_cached_suspicion_question(knowledge):
+    deals = SimpleNamespace(
+        debts={},
+        day=3,
+        on_day=[],
+        on_reload=[],
+        lies_of=lambda npc: ({}, set(), set()),
+    )
+    concerns = Concerns(knowledge.link, knowledge.chronicle, deals)
+    concerns.extra.append(knowledge.crimes.concerns)
+    crime = theft(knowledge, chest=CHEST)
+    presence(knowledge)
+    knowledge.crimes.suspect_chest(LOBART, CHEST, {"ITFO_BREAD": 1})
+    assert concerns.of(LOBART)
+    learn(knowledge, LOBART, crime["id"], "heard")
+    assert concerns.of(LOBART) == []

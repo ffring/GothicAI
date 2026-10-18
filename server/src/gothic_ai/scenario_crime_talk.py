@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from .witnesses import Witnesses
 
 log = logging.getLogger(__name__)
-DENIAL = "я ничего не брал в твоём доме"
+DENIAL = "я ничего не брал в твоем доме"  # the game's input normalizes ё to е
 
 
 async def crime_talk(
@@ -211,7 +211,7 @@ async def crime_talk(
                     (
                         "Ответ:",
                         FakeStep(
-                            "Врёшь! Хильда тебя видела.",
+                            "Врёшь! Хильда видела, как ты брал кубок.",
                             [ToolCall("catch_lie", {"said": DENIAL, "seen": "С1"})],
                         ),
                     ),
@@ -256,7 +256,14 @@ async def crime_talk(
         await _until(lambda: bool(replies), 120 if live else 45)
         if not live:
             await _until(lambda: any(f.get("crime") == cid for f in facts("caught")), 90)
-        await _until(lambda: not dialogue.speaking(LOBART) and not dialogue.speaking(HILDA), 30)
+        await _until(
+            lambda: (
+                LOBART not in witnesses._asking
+                and not dialogue.speaking(LOBART)
+                and not dialogue.speaking(HILDA)
+            ),
+            120 if live else 30,
+        )
         prompt = "\n".join(captured)
         check(
             "prompt_knowledge",
@@ -268,7 +275,7 @@ async def crime_talk(
             bool(replies)
             and any(
                 w in " ".join(replies).lower()
-                for w in ("краж", "укра", "вор", "взял", "брал", "кубок", "хильд")
+                for w in ("краж", "укра", "вор", "взял", "брал", "кубок", "стащ", "утащ")
             ),
             replies,
         )
@@ -334,10 +341,26 @@ async def crime_talk(
         await link.debug("player_goto", waypoint="NW_FARM1_INHOUSE_02")
         for npc in farm:
             await stand(npc, parked)
-        await stand(LOBART, HOUSE, face="PLAYER")
-        await sightings.desk.fresh(LOBART)
-        observed = await _until(lambda: bool(sightings.hero_trail(LOBART)), 10)
-        if not check("suspect_visitor", observed, [s.record() for s in sightings.hero_trail(LOBART)]):
+        await stand(LOBART, HOUSE)
+        for distance in (200, 350, 100):
+            await link.debug("teleport", near=LOBART, distance=distance)
+            await link.npc_act(LOBART, "turn_to", npc="PLAYER")
+            observed = await _until_async(
+                lambda: sightings.desk.fresh(LOBART),
+                lambda v: v is not None and v.hero is not None and v.hero.seen,
+                5,
+            )
+            if observed:
+                break
+        view = sightings.desk.view(LOBART)
+        if not check(
+            "suspect_visitor",
+            observed and bool(sightings.hero_trail(LOBART)),
+            {
+                "sightings": [s.record() for s in sightings.hero_trail(LOBART)],
+                "hero": view.hero.model_dump() if view is not None and view.hero is not None else None,
+            },
+        ):
             return _logged(results)
         found = [c for c in await chests.chests(LOBART, fresh=True) if c.items and c.distance < 4000]
         found.sort(key=lambda c: (c.why != "owner", c.why != "key", c.distance))
@@ -357,11 +380,22 @@ async def crime_talk(
             return _logged(results)
         assert crime is not None
         cid = str(crime["id"])
-        await stand(LOBART, HOUSE)
+        # BED_02 is the bed's point, not the chest's interaction slot. Put the free owner on the
+        # floor in front of the chest, then leave its slot while staying inside the active house.
+        await link.debug("player_goto", pos=(chest.pos[0], chest.pos[1], chest.pos[2] + 200))
+        await link.debug("npc_goto", npc=LOBART, to="PC_HERO", distance=0)
+        await link.debug("player_goto", waypoint="NW_FARM1_INHOUSE_02")
         conv = dialogue.open(LOBART, "Лобарт")
         held = await dialogue.borrow_body(conv, "scenario-chest")
         try:
-            opened = await link.act(LOBART, "use_chest", chest=chest.id, take=[], put=[], timeout=90)
+            opened = await link.act(
+                LOBART,
+                "use_chest",
+                chest=chest.id,
+                take=[{"item": item.item, "count": 1}],
+                put=[],
+                timeout=90,
+            )
             note = (
                 await chests.looked(LOBART, chest.id, opened.detail)
                 if opened.status == "done"
@@ -370,7 +404,18 @@ async def crime_talk(
         finally:
             if held:
                 dialogue.return_body(conv, "scenario-chest")
-        check("suspect_opened", opened.status == "done" and "пропало" in (note or ""), note)
+        snap = link.snapshots.get(LOBART)
+        if not check(
+            "suspect_opened",
+            opened.status == "done" and "пропало" in (note or ""),
+            {
+                "status": opened.status,
+                "detail": note,
+                "npc": snap.npc.pos if snap is not None else None,
+                "chest": chest.pos,
+            },
+        ):
+            return _logged(results)
         check(
             "suspect_knowledge",
             knows(LOBART, cid, "suspects") and "подозрева" in (service.situation(LOBART) or ""),
