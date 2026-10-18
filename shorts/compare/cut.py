@@ -118,90 +118,9 @@ def run(cmd: list[str]) -> None:
 
 def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: bool = False,
            audio: levels.AudioGraph | None = None, report: dict | None = None) -> None:
-    """Lift voiced mixes by the voice's gain, limit peaks, then validate decoded AAC.
-
-    Correct the common gain from the decoded voice, with at most two adjustments.
-    Then recalibrate effects, music and ending with at most two adjustments,
-    keeping the common gain fixed.
-    Unvoiced mixes retain the original limiter and two-pass loudnorm.
-    mix is the filter graph ending where mastering goes on.
-    """
+    """Master voiced audio through levels; retain unvoiced two-pass loudnorm."""
     if voiced:
-        out.unlink(missing_ok=True)
-        if audio is None or report is None:
-            raise ValueError("Voiced mastering needs the calibrated stems and balance report")
-        with tempfile.TemporaryDirectory(dir=out.parent) as pending:
-            candidate = Path(pending) / out.name
-            stems = {track: Path(pending) / f"{track}.m4a" for track in audio.tracks}
-            gain_correction = 0.0
-            ending_gain_correction = 0.0
-            balance_corrections = {"game_gain_db": 0.0, "game_duck_db": 0.0, "music_gain_db": 0.0}
-            ending_start = report["ending_windows"][0][0] if report["ending_windows"] else None
-            body_end = ending_start if ending_start is not None else length
-            report["master_passes"] = 0
-            report["master_corrections_db"] = []
-            report["ending_corrections_db"] = []
-            report["balance_corrections_db"] = []
-
-            def render() -> float:
-                # Every stem shares the actual mix limiter's gain and final fade.
-                graph = audio.master_graph(report["speech_lufs"], length, gain_correction_db=gain_correction,
-                                           ending_gain_correction_db=ending_gain_correction, ending_start=body_end,
-                                           balance_corrections=dict(balance_corrections), speech=report["speech_windows"])
-                command = ["ffmpeg", "-y", *inputs, "-filter_complex", graph,
-                           "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
-                           "-b:a", "192k", "-ar", "48000", str(candidate)]
-                for track, path in stems.items():
-                    command += ["-map", f"[{track}_mastered]", "-vn", "-c:a", "aac",
-                                "-b:a", "192k", "-ar", "48000", str(path)]
-                run(command)
-                report["master_passes"] += 1
-                return levels.meter_file(stems["voice"])[0]
-
-            def measure_balance(voice_lufs: float) -> dict:
-                return levels.check_mastered_balance(stems, voice_lufs, report["speech_windows"],
-                                                      report["pause_windows"], report["ending_windows"])
-
-            for attempt in range(levels.MAX_MASTER_CORRECTIONS + 1):
-                voice_lufs = render()
-                report["master_common_passes"] = attempt + 1
-                report["master_gain_db"] = levels.master_gain(report["speech_lufs"]) + gain_correction
-                correction = levels.master_correction(voice_lufs)
-                if not correction or attempt == levels.MAX_MASTER_CORRECTIONS:
-                    break
-                gain_correction += correction
-                report["master_corrections_db"].append(correction)
-            balance = measure_balance(voice_lufs)
-            for _ in range(levels.MAX_BALANCE_CORRECTIONS):
-                ending = next(row["measured_lufs"] for row in balance["rows"] if row["id"] == "ending")
-                correction = levels.ending_correction(voice_lufs, ending)
-                adjustments = levels.balance_correction(balance)
-                if not correction and not any(adjustments.values()):
-                    break
-                ending_gain_correction += correction
-                if correction:
-                    report["ending_corrections_db"].append(correction)
-                if any(adjustments.values()):
-                    report["balance_corrections_db"].append(adjustments)
-                    for key, value in adjustments.items():
-                        balance_corrections[key] += value
-                voice_lufs = render()
-                balance = measure_balance(voice_lufs)
-            for key, value in balance_corrections.items():
-                if value:
-                    report[key] = report.get(key, 0.0) + value
-            if ending_start is not None:
-                report["ending_gain_db"] += ending_gain_correction
-                report["ending_gain_correction_db"] = ending_gain_correction
-                report["ending_target_lufs"] = voice_lufs - levels.ENDING_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU
-            _, peak = levels.meter_file(candidate)
-            report["pre_master_rows"] = report["rows"]
-            report.update(balance)
-            report["balance_stage"] = "mastered_aac"
-            levels.check_mastering(report, voice_lufs, peak, clicks.detect(candidate))
-            if not report["ok"]:
-                raise ValueError("Audio mastering check failed; the short was not published")
-            candidate.replace(out)
+        levels._master_voiced(audio, report, out, length, inputs=inputs, run=run, detect=clicks.detect)
         return
     loud = "loudnorm=I=-14:TP=-1.5:LRA=11"
     pre = f"{mix},alimiter=limit=0.75:level=false"
@@ -306,31 +225,17 @@ def main() -> None:
         joined = tmp / "joined.mp4"
         run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(tmp / "list.txt"), "-c", "copy", str(joined)])
         music = plan.get("music")
-        try:
+        if voiced:
+            try:
+                levels.publish(joined, takes / music["file"] if music else None,
+                               voice, speech, total, length, out, _master=master)
+            except levels.LevelsError as error:
+                raise SystemExit(str(error)) from error
+        else:
             audio, report = levels.calibrate(
                 joined, takes / music["file"] if music else None, voice, speech, total, length,
-                music_volume=music["volume"] if music and not voiced else 1.0,
+                music_volume=music["volume"] if music else 1.0,
             )
-        except (ValueError, subprocess.CalledProcessError) as error:
-            if not voiced:
-                raise
-            report = levels.check_balance(float("-inf"), None, None, None, None)
-            report["error"] = str(error)
-            levels.print_balance(report)
-            out.with_suffix(".levels.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
-            raise SystemExit(str(error)) from error
-        if voiced:
-            if report["ok"]:
-                try:
-                    master(audio.inputs, audio.mix(), out, length, voiced=True, audio=audio, report=report)
-                except (ValueError, subprocess.CalledProcessError) as error:
-                    report["error"] = str(error)
-                    report["ok"] = False
-            levels.print_balance(report)
-            out.with_suffix(".levels.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
-            if not report["ok"]:
-                raise SystemExit(report.get("error", "Audio balance check failed; the short was not published"))
-        else:
             levels.print_balance(report)
             master(audio.inputs, audio.mix(), out, length, voiced=False)
     # frames over the whole short, for a look
