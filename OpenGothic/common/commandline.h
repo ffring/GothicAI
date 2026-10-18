@@ -47,7 +47,7 @@ class CommandLine {
     bool                doForceG1()        const { return forceG1;      }
     bool                doForceG2()        const { return forceG2;      }
     bool                doForceG2NR()      const { return forceG2NR;    }
-    bool                aaPreset()         const { return aaPresetId;   }
+    uint32_t            aaPreset()         const { return aaPresetId;   }
     std::string_view    defaultSave()      const { return saveDef;    }
 
     std::string         wrldDef;
