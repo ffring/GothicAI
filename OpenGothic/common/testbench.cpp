@@ -4840,54 +4840,131 @@ float clothCameraDistance(const std::vector<Vec3>& points,const Vec3& target,con
 
 bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& cameraTarget,
                 Vec3& cameraNormal,float& span) {
-  float area=0;Vec3 bounds[2]={body.center,body.center};
-  for(const auto& point:body.worldPositionsCm) {
+  const auto& reference=body.referenceWorldPositionsCm.empty()?body.worldPositionsCm:body.referenceWorldPositionsCm;
+  const auto earthFloor=[&](const Vec3& point)->std::optional<float> {
+    auto from=point+Vec3(0,200,0);
+    const float bottom=point.y-20.f;
+    for(int pass=0;pass<8 && from.y>bottom;++pass) {
+      const auto hit=world.physic()->landRay(from,from.y-bottom);
+      if(!hit.hasCol)return {};
+      if(hit.mat==zenkit::MaterialGroup::EARTH && hit.n.y>.7f)return hit.v.y;
+      from.y=hit.v.y-.5f;
+      }
+    return {};
+    };
+  std::vector<bool> sourceBuried(reference.size(),false),currentBuried(body.worldPositionsCm.size(),false);
+  size_t buriedSource=0,buriedCurrent=0;
+  float maximumBurial=0;
+  Vec3 buriedLow,buriedHigh;
+  for(size_t i=0;i<reference.size();++i) {
+    const auto floor=earthFloor(reference[i]);
+    if(!floor || reference[i].y>=*floor-2.f)continue;
+    sourceBuried[i]=true;
+    if(!buriedSource)buriedLow=buriedHigh=reference[i];
+    ++buriedSource;maximumBurial=std::max(maximumBurial,*floor-reference[i].y);
+    buriedLow.x=std::min(buriedLow.x,reference[i].x);buriedLow.y=std::min(buriedLow.y,reference[i].y);buriedLow.z=std::min(buriedLow.z,reference[i].z);
+    buriedHigh.x=std::max(buriedHigh.x,reference[i].x);buriedHigh.y=std::max(buriedHigh.y,reference[i].y);buriedHigh.z=std::max(buriedHigh.z,reference[i].z);
+    if(i<body.worldPositionsCm.size()) {
+      const auto currentFloor=earthFloor(body.worldPositionsCm[i]);
+      if(currentFloor && body.worldPositionsCm[i].y<*currentFloor-2.f) {currentBuried[i]=true;++buriedCurrent;}
+      }
+    }
+  std::vector<Vec3> fit;
+  for(size_t i=0;i<reference.size();++i)if(!sourceBuried[i])fit.push_back(reference[i]);
+  for(size_t i=0;i<body.worldPositionsCm.size();++i)if(!currentBuried[i])fit.push_back(body.worldPositionsCm[i]);
+  if(fit.empty())return false;
+  Vec3 bounds[2]={fit.front(),fit.front()};
+  for(const auto& point:fit) {
     bounds[0].x=std::min(bounds[0].x,point.x);bounds[0].y=std::min(bounds[0].y,point.y);bounds[0].z=std::min(bounds[0].z,point.z);
     bounds[1].x=std::max(bounds[1].x,point.x);bounds[1].y=std::max(bounds[1].y,point.y);bounds[1].z=std::max(bounds[1].z,point.z);
     }
+  float area=0;
   for(size_t i=0;i+2<body.indices.size();i+=3) {
     const auto a=body.indices[i],b=body.indices[i+1],c=body.indices[i+2];
-    if(a>=body.worldPositionsCm.size() || b>=body.worldPositionsCm.size() || c>=body.worldPositionsCm.size())continue;
-    const auto normal=Vec3::crossProduct(body.worldPositionsCm[b]-body.worldPositionsCm[a],body.worldPositionsCm[c]-body.worldPositionsCm[a]);
+    if(a>=reference.size() || b>=reference.size() || c>=reference.size())continue;
+    const auto normal=Vec3::crossProduct(reference[b]-reference[a],reference[c]-reference[a]);
     const auto next=normal.length();
     if(next>area && (std::abs(normal.y)<next*.9f || area==0.f)) {area=next;cameraNormal=Vec3::normalize(normal);}
     }
   if(area<.01f)return false;
   cameraTarget=(bounds[0]+bounds[1])*.5f;
   span=(bounds[1]-bounds[0]).length();
-  Vec3 cameraRight=Vec3::normalize(Vec3::crossProduct(cameraNormal,Vec3(0,1,0)));
-  if(cameraRight.length()<.01f)cameraRight=Vec3(1,0,0);
-  const auto cameraUp=Vec3::normalize(Vec3::crossProduct(cameraRight,cameraNormal));
-  float horizontal=0.f,vertical=0.f;
-  for(const auto& point:body.worldPositionsCm) {
-    horizontal=std::max(horizontal,std::abs(Vec3::dotProduct(point-cameraTarget,cameraRight)));
-    vertical=std::max(vertical,std::abs(Vec3::dotProduct(point-cameraTarget,cameraUp)));
-    }
+  const auto hiddenByCloth=[&](const Vec3& from,const Vec3& to,const std::vector<Vec3>& pose) {
+    const auto direction=to-from;
+    for(size_t i=0;i+2<body.indices.size();i+=3) {
+      const auto a=body.indices[i],b=body.indices[i+1],c=body.indices[i+2];
+      if(a>=pose.size() || b>=pose.size() || c>=pose.size())continue;
+      const auto edge1=pose[b]-pose[a],edge2=pose[c]-pose[a];
+      const auto cross=Vec3::crossProduct(direction,edge2);
+      const float determinant=Vec3::dotProduct(edge1,cross);
+      if(std::abs(determinant)<1.e-6f)continue;
+      const auto offset=from-pose[a];
+      const float u=Vec3::dotProduct(offset,cross)/determinant;
+      if(u<0.f || u>1.f)continue;
+      const auto q=Vec3::crossProduct(offset,edge1);
+      const float v=Vec3::dotProduct(direction,q)/determinant;
+      if(v<0.f || u+v>1.f)continue;
+      const float distance=Vec3::dotProduct(edge2,q)/determinant;
+      if(distance>=0.f && distance<.9999f)return true;
+      }
+    return false;
+    };
   bool cameraClear=false;
-  // Look slightly down on low banners to keep grass out of the foreground.
-  // Nine rays include the full frame edges. Higher alternatives clear the
-  // foreground vegetation around the low Valley of Mines banners.
-  for(float elevation:{.55f,.8f,1.1f,.3f}) {
-    for(float side:{1.f,-1.f}) {
-      const auto direction=Vec3::normalize(cameraNormal*side+Vec3(0,elevation,0));
-      const float cameraDistance=clothCameraDistance(body.worldPositionsCm,cameraTarget,direction);
+  size_t candidates=0,tested=0,hidden=0,attachments=0,bestBlocked=size_t(-1);
+  float selectedAngle=0,selectedElevation=0;
+  // A cloth's rear face can be hidden by its own front face. The authored
+  // below-ground section also cannot be photographed; neither masks world walls.
+  for(float elevation:{.55f,.8f,1.1f}) {
+    for(float angle:{0.f,15.f,-15.f,30.f,-30.f,60.f,-60.f,180.f,195.f,165.f,210.f,150.f}) {
+      ++candidates;
+      const auto normal=rotY(cameraNormal,angle);
+      const auto direction=Vec3::normalize(normal+Vec3(0,elevation,0));
+      const float cameraDistance=clothCameraDistance(fit,cameraTarget,direction);
       const auto eye=cameraTarget+direction*cameraDistance;
       if(bounds[1].y<1000.f && eye.y<bounds[1].y+100.f)continue;
-      bool clear=true;
-      for(float x:{0.f,.5f,1.f})for(float y:{0.f,.5f,1.f}) {
-        const auto target=cameraTarget+cameraRight*(horizontal*(x*2.f-1.f))+cameraUp*(vertical*(y*2.f-1.f));
-        // The last centimetres may be an original OFF cloth collision. Ignore
-        // only that target end, retaining poles and every foreground wall.
-        const auto delta=target-eye;
-        clear&=!world.physic()->ray(eye,eye+delta*.97f).hasCol;
-        }
+      size_t blocked=0,candidateTested=0,candidateHidden=0,candidateAttachments=0;
+      const auto checkPose=[&](const std::vector<Vec3>& pose,const std::vector<bool>& buried) {
+        for(size_t vertex=0;vertex<pose.size();++vertex) {
+          if(buried[vertex])continue;
+          const auto inward=cameraTarget-pose[vertex];
+          const float length=inward.length();
+          const auto target=pose[vertex]+(length>2.f?inward*(2.f/length):inward);
+          const auto end=target-Vec3::normalize(target-eye)*2.f;
+          if(hiddenByCloth(eye,end,pose)) {++candidateHidden;continue;}
+          ++candidateTested;
+          const auto hit=world.physic()->ray(eye,end);
+          if(!hit.hasCol)continue;
+          bool attachment=false;
+          if(hit.mat!=zenkit::MaterialGroup::EARTH && !hit.vob && (hit.v-target).length()<=20.f) {
+            for(const auto& anchor:body.anchorsCm)
+              if((target-anchor).length()<=25.f && (hit.v-anchor).length()<=25.f) {attachment=true;break;}
+            }
+          if(attachment)++candidateAttachments;
+          else ++blocked;
+          }
+        };
+      checkPose(reference,sourceBuried);checkPose(body.worldPositionsCm,currentBuried);
       const auto ground=world.physic()->landRay(eye+Vec3(0,500,0),1000);
-      if(ground.hasCol && eye.y-ground.v.y<180.f)clear=false;
-      if(!clear)continue;
-      cameraEye=eye;cameraNormal*=side;cameraClear=true;break;
+      const bool groundAccepted=!ground.hasCol || eye.y-ground.v.y>=180.f;
+      if(blocked<bestBlocked) {bestBlocked=blocked;tested=candidateTested;hidden=candidateHidden;attachments=candidateAttachments;}
+      if(blocked || !groundAccepted || !candidateTested)continue;
+      cameraEye=eye;cameraNormal=normal;cameraClear=true;
+      tested=candidateTested;hidden=candidateHidden;attachments=candidateAttachments;
+      selectedAngle=angle;selectedElevation=elevation;break;
       }
     if(cameraClear)break;
     }
+  event("cloth_camera_frame","\"zen_id\":"+std::to_string(body.zenId)+",\"visual\":"+jsonStr(body.visual)+
+    ",\"reference_vertices\":"+std::to_string(reference.size())+",\"current_vertices\":"+std::to_string(body.worldPositionsCm.size())+
+    ",\"buried_reference_vertices\":"+std::to_string(buriedSource)+",\"buried_current_vertices\":"+std::to_string(buriedCurrent)+
+    ",\"buried_bounds_min_cm\":"+(buriedSource?ragdollVector(buriedLow):"null")+
+    ",\"buried_bounds_max_cm\":"+(buriedSource?ragdollVector(buriedHigh):"null")+
+    ",\"maximum_original_burial_cm\":"+ragdollNumber(maximumBurial)+",\"fit_vertices\":"+std::to_string(fit.size())+
+    ",\"tested_visible_vertices\":"+std::to_string(tested)+",\"self_hidden_vertices\":"+std::to_string(hidden)+
+    ",\"attachment_allowances\":"+std::to_string(attachments)+",\"minimum_blocked_vertices\":"+std::to_string(bestBlocked)+
+    ",\"candidates\":"+std::to_string(candidates)+",\"clear\":"+(cameraClear?"true":"false")+
+    ",\"azimuth_deg\":"+ragdollNumber(selectedAngle)+",\"elevation\":"+ragdollNumber(selectedElevation)+
+    ",\"bounds_min_cm\":"+ragdollVector(bounds[0])+",\"bounds_max_cm\":"+ragdollVector(bounds[1]));
   return cameraClear;
   }
 

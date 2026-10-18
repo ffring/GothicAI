@@ -24,6 +24,7 @@
 #      PHYSICS_NOISE optional initial GAME physics_noise setting (0 or 1), before world loading
 #      DESTRUCTION optional initial GAME destruction setting (0 or 1), before world loading
 #      BUOYANCY     optional initial GAME buoyancy setting (0 or 1), before world loading
+#      CLOTH        optional initial GAME cloth setting (0 or 1), before world loading
 #      CHARACTER_VIRTUAL optional initial GAME character_virtual setting (0 or 1), before world loading
 #      NPC_CHARACTER_VIRTUAL optional initial GAME npc_character_virtual setting (0 or 1)
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
@@ -178,7 +179,7 @@ musicVolume=${MUSIC:-0}
 musicEnabled=$([[ "${MUSIC:-0}" == 0 || "${MUSIC:-0}" == 0.0 ]] && echo 0 || echo 1)
 worldSounds=${WORLD_SOUNDS:-1}
 EOF
-if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${BUOYANCY:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
+if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${BUOYANCY:-}${CLOTH:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
   printf '\n[GAME]\n' >>"$RUN/Gothic.ini"
   if [[ -n "${MOVABLE_VOBS:-}" ]]; then
     [[ "$MOVABLE_VOBS" == 0 || "$MOVABLE_VOBS" == 1 ]] || { echo "MOVABLE_VOBS must be 0 or 1" >&2; exit 2; }
@@ -207,6 +208,10 @@ if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}
   if [[ -n "${BUOYANCY:-}" ]]; then
     [[ "$BUOYANCY" == 0 || "$BUOYANCY" == 1 ]] || { echo "BUOYANCY must be 0 or 1" >&2; exit 2; }
     printf 'buoyancy=%s\n' "$BUOYANCY" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${CLOTH:-}" ]]; then
+    [[ "$CLOTH" == 0 || "$CLOTH" == 1 ]] || { echo "CLOTH must be 0 or 1" >&2; exit 2; }
+    printf 'cloth=%s\n' "$CLOTH" >>"$RUN/Gothic.ini"
   fi
 fi
 
@@ -240,6 +245,28 @@ HOST=mac
 printf '%s\n' "$HOST" >"$OUT/host.txt"
 REPORT_RC=0
 python3 "$ROOT/scripts/bench_report.py" "$OUT" || REPORT_RC=$?
+python3 - "$OUT/events.jsonl" <<'PY' || REPORT_RC=1
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+failures = []
+if path.exists():
+    with path.open() as events:
+        for line_number, line in enumerate(events, 1):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                failures.append(f'events.jsonl:{line_number}: invalid JSON')
+                continue
+            kind = event.get('kind', '')
+            if kind == 'error' or kind.endswith('_error') or event.get('pass') is False:
+                failures.append(f"{kind}: {event.get('reason', event.get('check', 'check failed'))}")
+if failures:
+    for failure in failures[:10]:
+        print(f'bench: failed: {failure}', file=sys.stderr)
+    raise SystemExit(1)
+PY
 if [[ "$NEEDS_CADENCE" == 1 ]]; then
   python3 - "$OUT" <<'PY' || REPORT_RC=1
 import json

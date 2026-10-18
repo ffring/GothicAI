@@ -841,7 +841,7 @@ WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-city /absolute/path/cloth/city
 WORLD=OLDWORLD.ZEN scripts/bench.sh cloth-orc /absolute/path/cloth/orc
 WORLD=OLDWORLD.ZEN scripts/bench.sh cloth /absolute/path/cloth/oldcamp
 SAVE=/absolute/path/cloth/oldcamp/session-cloth-moving.sav scripts/bench.sh cloth-reload /absolute/path/cloth/reload
-SAVE=/absolute/path/older-save.sav scripts/bench.sh cloth-legacy-load /absolute/path/cloth/legacy-load
+CLOTH=0 SAVE=/absolute/path/older-save.sav scripts/bench.sh cloth-legacy-load /absolute/path/cloth/legacy-load
 BENCH_HOST=ryzen RYZEN_BENCH_CLASS=quiet WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-off /absolute/path/cloth/performance/off
 BENCH_HOST=ryzen RYZEN_BENCH_CLASS=quiet WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-on /absolute/path/cloth/performance/on
 ```
@@ -852,6 +852,8 @@ is running first. Other benches use Ryzen by default. `cloth initial` observes
 the untouched loaded world before its first native step: no active soft bodies,
 zero vertex speeds and zero transient hit/recovery counters. Saves use the
 ordinary GameSession archive and can be started in a separate process.
+`CLOTH=0` writes the ini switch before world loading. The legacy-load fixture
+also checks Marvin `toggle cloth` in both directions before enabling simulation.
 
 Use the same binary, world and host for both performance runs. `densest` searches
 cloth centers and local cluster centroids, counts the unchanged 3D 40 m sphere,
