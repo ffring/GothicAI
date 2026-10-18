@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the current worktree on Ryzen. No system packages or training files are changed.
-# Usage: scripts/ryzen.sh setup|e2e|pytest [pytest args...]|bench <scenario> <out>|clean
+# Usage: scripts/ryzen.sh setup|e2e|pytest [pytest args...]|bench <scenario> <out>|clean|clean-cache
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -79,13 +79,20 @@ desktop() {
 
 source_digest() {
   # Content and paths include additions/deletions and uncommitted files, not just HEAD.
-  python3 - "$ROOT/OpenGothic" <<'PY'
+  python3 - "$ROOT/OpenGothic" "${1:-engine}" <<'PY'
 import hashlib
 import sys
 from pathlib import Path
 root = Path(sys.argv[1])
 digest = hashlib.sha256()
-for path in sorted(root.rglob('*')):
+if sys.argv[2] == 'storygraph':
+    inputs = ['ai_bridge/storygraph', 'ai_bridge/textcodec.cpp', 'ai_bridge/textcodec.h',
+              'lib/ZenKit', 'lib/rapidjson/include']
+    paths = [path for name in inputs for path in
+             ((root / name).rglob('*') if (root / name).is_dir() else [root / name])]
+else:
+    paths = root.rglob('*')
+for path in sorted(paths):
     if 'build' in path.relative_to(root).parts:
         continue
     if path.is_file():
@@ -95,9 +102,108 @@ print(digest.hexdigest())
 PY
 }
 
+storygraph_digest() {
+  source_digest storygraph
+}
+
+cache_artifact() {
+  # Copy without the lock, then publish the complete runtime directory with one
+  # rename. Readers, publishers and cleaners share the same short-lived lock.
+  python3 - "$HOME/gothic-ai/engine-cache" "$@" <<'PY'
+import fcntl
+import os
+from pathlib import Path
+import re
+import shutil
+import sys
+import tempfile
+import time
+import uuid
+
+root = Path(sys.argv[1])
+action, kind, digest = sys.argv[2:5]
+assert action in ('get', 'publish', 'prune', 'clean')
+assert kind in ('engine', 'storygraph')
+if action in ('get', 'publish'):
+    assert re.fullmatch('[0-9a-f]{64}', digest), 'invalid cache digest'
+root.mkdir(parents=True, exist_ok=True)
+parent = root if kind == 'engine' else root / 'storygraph'
+binary = 'Gothic2Notr' if kind == 'engine' else 'storygraph'
+entry = parent / digest
+staging = None
+garbage = []
+
+def ready(path, name):
+    return (path / name).is_file() and os.access(path / name, os.X_OK)
+
+def retire(path):
+    # Deletion may take time. Detach under the lock and unlink outside it.
+    trash = root / ('.trash-' + uuid.uuid4().hex)
+    path.rename(trash)
+    garbage.append(trash)
+
+try:
+    if action == 'publish':
+        parent.mkdir(exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix='.publish-', dir=parent))
+        source = Path(sys.argv[5])
+        if kind == 'engine':
+            shutil.copytree(source, staging, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source / binary, staging / binary)
+        assert ready(staging, binary), 'build did not produce an executable'
+    with root.with_suffix('.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if action == 'get' and not ready(entry, binary):
+            sys.exit(1)
+        if action == 'publish' and not ready(entry, binary):
+            if entry.exists():
+                retire(entry)
+            staging.rename(entry)
+        if action in ('get', 'publish'):
+            os.utime(entry, None)
+        removed = protected = 0
+        cutoff = time.time() - 2 * 60 * 60
+        for namespace in (root, root / 'storygraph'):
+            if not namespace.exists():
+                continue
+            entries = sorted((p for p in namespace.iterdir()
+                              if re.fullmatch('[0-9a-f]{64}', p.name) and p.is_dir()),
+                             key=lambda p: (p.stat().st_mtime, p.name))
+            count = len(entries)
+            for old in entries:
+                if action != 'clean' and count <= 8:
+                    break
+                if old.stat().st_mtime > cutoff:
+                    protected += 1
+                    continue
+                retire(old)
+                count -= 1
+                removed += 1
+        if action in ('get', 'publish'):
+            print(entry)
+        elif action == 'clean':
+            print(f'Ryzen: cache removed {removed} entries; kept {protected} younger than 2h')
+finally:
+    if staging is not None and staging.exists():
+        shutil.rmtree(staging)
+    for trash in garbage:
+        shutil.rmtree(trash)
+PY
+}
+
+link_storygraph() {
+  # Both the server and its native-tool tests look for this conventional path.
+  mkdir -p "$ROOT/OpenGothic/ai_bridge/storygraph/build"
+  ln -sfn "$RYZEN_STORYGRAPH_BIN" "$ROOT/OpenGothic/ai_bridge/storygraph/build/storygraph"
+}
+
 build_storygraph() {
   local state="$1" digest="$2" started=$SECONDS
   local build="$state/storygraph-build"
+  if storygraph_ready "$state" "$digest" && [[ "$RYZEN_STORYGRAPH_BIN" != "$build/storygraph" ]]; then
+    return
+  fi
   if [[ ! -x "$build/storygraph" || ! -f "$build/source.sha256" ]] || \
      [[ "$(cat "$build/source.sha256")" != "$digest" ]]; then
     mkdir -p "$build"
@@ -113,23 +219,35 @@ build_storygraph() {
     printf '%s\n' "$digest" >"$build/source.sha256"
     echo "Ryzen: storygraph configure + build $((SECONDS - started))s"
   fi
-  # Both the server and its native-tool tests look for this conventional path.
-  mkdir -p "$ROOT/OpenGothic/ai_bridge/storygraph/build"
-  ln -sfn "$build/storygraph" "$ROOT/OpenGothic/ai_bridge/storygraph/build/storygraph"
+  local cached
+  cached="$(cache_artifact publish storygraph "$digest" "$build")"
+  export RYZEN_STORYGRAPH_BIN="$cached/storygraph"
+  link_storygraph
 }
 
 engine_ready() {
-  local state="$1" digest="$2"
+  local state="$1" digest="$2" cached
+  if cached="$(cache_artifact get engine "$digest")"; then
+    export RYZEN_GAME_BIN="$cached/Gothic2Notr"
+    return
+  fi
   [[ -x "$state/build/opengothic/Gothic2Notr" && -f "$state/build/source.sha256" && -f "$state/build/CMakeCache.txt" ]] && \
      [[ "$(cat "$state/build/source.sha256")" == "$digest" ]] && \
-     grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$state/build/CMakeCache.txt"
+     grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$state/build/CMakeCache.txt" || return 1
+  export RYZEN_GAME_BIN="$state/build/opengothic/Gothic2Notr"
 }
 
 storygraph_ready() {
-  local state="$1" digest="$2" build="$1/storygraph-build"
+  local state="$1" digest="$2" build="$1/storygraph-build" cached
+  if cached="$(cache_artifact get storygraph "$digest")"; then
+    export RYZEN_STORYGRAPH_BIN="$cached/storygraph"
+    link_storygraph
+    return
+  fi
   [[ -x "$build/storygraph" && -f "$build/source.sha256" ]] && \
-    [[ "$(cat "$build/source.sha256")" == "$digest" ]] && \
-    [[ "$ROOT/OpenGothic/ai_bridge/storygraph/build/storygraph" -ef "$build/storygraph" ]]
+    [[ "$(cat "$build/source.sha256")" == "$digest" ]] || return 1
+  export RYZEN_STORYGRAPH_BIN="$build/storygraph"
+  link_storygraph
 }
 
 dependency_projects() {
@@ -166,6 +284,8 @@ remote_probe() {
   if [[ "$action" == e2e ]]; then check_protocol || return 2; fi
   engine_ready "$state" "$digest" || return 1
   if [[ "$action" == e2e ]]; then
+    digest="$(storygraph_digest)"
+    printf '%s\n' "$digest" >"$state/inputs/$run/storygraph.sha256"
     storygraph_ready "$state" "$digest" || return 1
     while IFS= read -r project; do
       (cd "$ROOT/$project" && uv sync --check --frozen) || return 1
@@ -180,6 +300,9 @@ remote_prepare() {
   if [[ "$action" == e2e ]]; then check_protocol; fi
   build_engine "$state" "$digest"
   if [[ "$action" == e2e ]]; then
+    # Probe can stop at the missing engine before scanning the smaller tool tree.
+    digest="$(storygraph_digest)"
+    printf '%s\n' "$digest" >"$state/inputs/$run/storygraph.sha256"
     build_storygraph "$state" "$digest"
     while IFS= read -r project; do
       (cd "$ROOT/$project" && uv sync --frozen)
@@ -195,38 +318,51 @@ require_prepared() {
     echo 'Ryzen: engine does not match snapshot source.sha256; refusing to build with the display reserved. Run preparation again.' >&2
     return 1
   fi
-  if [[ "$action" == e2e ]] && ! storygraph_ready "$state" "$digest"; then
-    echo 'Ryzen: storygraph does not match snapshot source.sha256; refusing to build with the display reserved. Run preparation again.' >&2
-    return 1
+  if [[ "$action" == e2e ]]; then
+    local story_digest
+    story_digest="$(cat "$state/inputs/$run/storygraph.sha256")" || return 1
+    if ! storygraph_ready "$state" "$story_digest"; then
+      echo 'Ryzen: storygraph does not match snapshot storygraph.sha256; refusing to build with the display reserved. Run preparation again.' >&2
+      return 1
+    fi
+  fi
+  if [[ "$RYZEN_GAME_BIN" == "$HOME/gothic-ai/engine-cache/$digest/Gothic2Notr" ]]; then
+    echo "Ryzen: engine from cache ${digest:0:12} (0s)"
   fi
 }
 
 build_engine() {
   local state="$1" digest="$2" started=$SECONDS
   if engine_ready "$state" "$digest"; then
+    if [[ "$RYZEN_GAME_BIN" != "$state/build/opengothic/Gothic2Notr" ]]; then
+      echo "Ryzen: engine from cache ${digest:0:12} (0s)"
+      return
+    fi
     echo "Ryzen: engine unchanged, build skipped ($((SECONDS - started))s)"
-    return
+  else
+    local jobs="${RYZEN_JOBS:-12}"
+    [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; exit 2; }
+    mkdir -p "$state/build"
+    # Reconfigure on tree changes: OpenGothic's source globs need this for new .cpp files.
+    cmake -S "$ROOT/OpenGothic" -B "$state/build" -G Ninja \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DOPENGOTHIC_ENABLE_APP_CADENCE=ON \
+      -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib" \
+      >"$state/build/configure.log" 2>&1 || { local rc=$?; cat "$state/build/configure.log"; return "$rc"; }
+    cmake --build "$state/build" --target Gothic2Notr --parallel "$jobs" \
+      >"$state/build/build.log" 2>&1 || { local rc=$?; tail -80 "$state/build/build.log"; return "$rc"; }
+    tail -5 "$state/build/build.log"
+    printf '%s\n' "$digest" >"$state/build/source.sha256"
+    echo "Ryzen: engine configure + build $((SECONDS - started))s"
   fi
-  local jobs="${RYZEN_JOBS:-12}"
-  [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; exit 2; }
-  mkdir -p "$state/build"
-  # Reconfigure on tree changes: OpenGothic's source globs need this for new .cpp files.
-  cmake -S "$ROOT/OpenGothic" -B "$state/build" -G Ninja \
-    -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    -DOPENGOTHIC_ENABLE_APP_CADENCE=ON \
-    -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib" \
-    >"$state/build/configure.log" 2>&1 || { local rc=$?; cat "$state/build/configure.log"; return "$rc"; }
-  cmake --build "$state/build" --target Gothic2Notr --parallel "$jobs" \
-    >"$state/build/build.log" 2>&1 || { local rc=$?; tail -80 "$state/build/build.log"; return "$rc"; }
-  tail -5 "$state/build/build.log"
-  printf '%s\n' "$digest" >"$state/build/source.sha256"
-  echo "Ryzen: engine configure + build $((SECONDS - started))s"
+  local cached
+  cached="$(cache_artifact publish engine "$digest" "$state/build/opengothic")"
+  export RYZEN_GAME_BIN="$cached/Gothic2Notr"
 }
 
 remote_bench() {
   local state="$1" run="$2" scenario="$3" rc started=$SECONDS
   echo 'Ryzen: game admitted'
-  require_prepared bench "$state" "$run" "$scenario"
   if [[ "${RYZEN_AI_TUNNEL:-0}" == 1 ]]; then
     # This command runs only after gq grants the window. The Mac opens the
     # reverse forwarding on its lock-holding SSH connection, then acknowledges.
@@ -251,9 +387,9 @@ PY
   [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
   command -v ffmpeg >/dev/null || { echo 'Missing tool: ffmpeg' >&2; return 1; }
   desktop
+  require_prepared bench "$state" "$run" "$scenario"
   local out="$state/runs/$run"
   mkdir -p "$out"
-  export RYZEN_GAME_BIN="$state/build/opengothic/Gothic2Notr"
   cat >"$out/game.sh" <<'WRAPPER'
 #!/usr/bin/env bash
 exec "$RYZEN_GAME_BIN" "$@" -g2 -window
@@ -277,7 +413,7 @@ remote_run() {
   local started=$SECONDS rc digest
   [[ "${RYZEN_JOBS:-12}" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; return 2; }
   if [[ "$action" == pytest ]]; then
-    digest="$(source_digest)"
+    digest="$(storygraph_digest)"
     build_storygraph "$state" "$digest"
     cd "$ROOT/server"
     uv run pytest "$@" && rc=0 || rc=$?
@@ -285,15 +421,14 @@ remote_run() {
     return "$rc"
   fi
   echo 'Ryzen: game admitted'
-  require_prepared "$action" "$state" "$run" "${SCENARIO:-m0}"
   export LOG_DIR="$state/runs/$run"
   mkdir -p "$LOG_DIR"
   [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
   started=$SECONDS
   desktop
+  require_prepared "$action" "$state" "$run" "${SCENARIO:-m0}"
   # Dependencies were synchronized without the display; uv run must not rebuild them here.
   export UV_NO_SYNC=1
-  export RYZEN_GAME_BIN="$state/build/opengothic/Gothic2Notr"
   # Windowed on the logged-in desktop; never take it fullscreen or use a software display.
   cat >"$LOG_DIR/game.sh" <<'WRAPPER'
 #!/usr/bin/env bash
@@ -326,7 +461,7 @@ if [[ "${1:-}" == __remote ]]; then
 fi
 
 ACTION="${1:-}"
-case "$ACTION" in setup|e2e|pytest|bench|clean) shift ;; *) echo 'Usage: scripts/ryzen.sh setup|e2e|pytest [args...]|bench <scenario> <out>|clean' >&2; exit 2 ;; esac
+case "$ACTION" in setup|e2e|pytest|bench|clean|clean-cache) shift ;; *) echo 'Usage: scripts/ryzen.sh setup|e2e|pytest [args...]|bench <scenario> <out>|clean|clean-cache' >&2; exit 2 ;; esac
 if [[ "$ACTION" == bench ]]; then
   BENCH_CLASS="${RYZEN_BENCH_CLASS:-quick}"
   case "$BENCH_CLASS" in
@@ -356,6 +491,11 @@ remote() {
   ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" "$command"
 }
 
+if [[ "$ACTION" == clean-cache ]]; then
+  { declare -f cache_artifact; echo 'set -euo pipefail; cache_artifact clean engine unused'; } | remote bash -s
+  exit
+fi
+
 sync_hd_textures() {
   # Upload only into this worktree: another admitted bench may still be reading
   # its own texture files while we prepare a queued job.
@@ -383,6 +523,7 @@ fi
 # Codex worktrees are named .../worktrees/<name>/<repo>; ordinary worktrees use their basename.
 WORKTREE="$(basename "$ROOT")"
 if [[ "$ROOT" == */worktrees/*/* ]]; then WORKTREE="$(basename "$(dirname "$ROOT")")"; fi
+WORKTREE="${RYZEN_WORKTREE:-$WORKTREE}"
 [[ "$WORKTREE" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || { echo 'Unsafe worktree name' >&2; exit 2; }
 REMOTE="gothic-ai/e2e/$WORKTREE"
 REMOTE_HOME="$(remote printenv HOME)"

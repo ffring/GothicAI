@@ -145,6 +145,7 @@
 | Один сценарий e2e | `SCENARIO=<имя> scripts/ryzen.sh e2e`; на Mac — `SCENARIO=<имя> LLM=fake scripts/e2e.sh` |
 | Бенч механики | `scripts/bench.sh <имя>` → `.bench/<имя>-<время>/` (видео, метрики, отчёт) |
 | Очередь Ryzen | `scripts/gq status` |
+| Общий кэш бинарников Ryzen | `scripts/ryzen.sh` использует `~/gothic-ai/engine-cache/` по хэшу исходников; `clean-cache` очищает старые записи, `RYZEN_WORKTREE` задаёт имя папки; [правила](ryzen.md) |
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |
 
@@ -170,7 +171,7 @@
   - `memory.sqlite3` — память NPC и правки сюжета;
   - `traces/`, `story.json`, `saves/original`, `hd-textures/`, `fracture/`, `voices/`, `music/`, `brand/`, `explain/`, `body/`.
 - Логи e2e — в `LOG_DIR`, по умолчанию временная папка `gothic-e2e.*`.
-- На Ryzen — `~/gothic-ai/<задача>/`.
+- На Ryzen — `~/gothic-ai/<задача>/`; общий кэш движка и `storygraph` — `~/gothic-ai/engine-cache/`.
 - Отчёты прогонов — `reports/<область>/<дата-тема>/`.
 
 ## Остальные каталоги
