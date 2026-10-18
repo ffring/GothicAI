@@ -1379,7 +1379,7 @@ async def test_polled_native_release_keeps_down_reason_from_passive_target_obser
         target_entity = 3 if companion else 2
         await rig.active(target_entity=target_entity, extra=[companion_entry()] if companion else [])
         rig.bridge.restore_native(release_reason="target_changed_or_lost")
-        row = fighter(4, target_entity=target_entity, periodic=False)
+        row = fighter(4, target_entity=target_entity, periodic=False, event_only=True)
         row["target"]["down"] = True
         rig.bridge.emit(row)
         await eventually(lambda: rig.pilot.last_summary is not None)
