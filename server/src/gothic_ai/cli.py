@@ -718,7 +718,9 @@ async def _native_combat_available(link: GameLink, pilot: BodyPilot | None, npc:
 
 
 async def serve(args: argparse.Namespace) -> int:
-    if args.scenario in {"neural", "neural-companion"} and (not args.body_url or not args.neural_body):
+    if args.scenario in {"neural", "neural-companion", "neural-group"} and (
+        not args.body_url or not args.neural_body
+    ):
         log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
         return 2
     done = asyncio.Event()
@@ -1251,9 +1253,12 @@ async def serve(args: argparse.Namespace) -> int:
         if args.scenario is None:
             return
         try:
-            if args.scenario in {"neural", "neural-companion"}:
-                scenario = (scenarios.neural_companion_scenario if args.scenario == "neural-companion"
-                            else scenarios.neural_scenario)
+            if args.scenario in {"neural", "neural-companion", "neural-group"}:
+                scenario = {
+                    "neural": scenarios.neural_scenario,
+                    "neural-companion": scenarios.neural_companion_scenario,
+                    "neural-group": scenarios.neural_group_scenario,
+                }[args.scenario]
                 results = await scenario(link, bodypilot)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -2373,6 +2378,7 @@ def main() -> None:
             "m5b",
             "neural",
             "neural-companion",
+            "neural-group",
             "m5c",
             "m5e",
             "orders",
