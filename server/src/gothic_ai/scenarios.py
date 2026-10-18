@@ -1981,44 +1981,68 @@ async def orders_scenario(
     results["draw"] = f"{'done' if ok else 'failed'} (in {took})"
 
     # The follow check is over. Keep the passive hero behind and to the side of
-    # the mage, away from the projectile lane, and stage the target beyond 10 m.
+    # the mage, away from the projectile lane. Its end point is on a slope, so
+    # stage this separate combat check on the pasture's tested flat ground.
     await link.act(npc, "stop")
+    await link.act(npc, "return_to_routine")
+    await _until(lambda: npc not in talk.attached, 5)
+    attack_arena = "NW_FARM1_FIELD_06"
+    await link.debug("player_goto", waypoint=attack_arena)
+    await link.debug("npc_goto", npc=npc, waypoint=attack_arena)
     await clear_animals()
-    attack_origin = await link.snapshot(npc, fresh=True)
-    if attack_origin.player is None:
-        raise GameError("orders attack preparation: no hero")
-    origin = attack_origin.npc.pos
-    toward = (
-        attack_origin.player.pos[0] - origin[0],
-        attack_origin.player.pos[2] - origin[2],
+    ready = await Bodies(link).act(
+        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=attack_arena,
+        minutes=60, place=True, arrive=True, radius=100, timeout=15,
     )
-    toward_len = math.hypot(*toward) or 1
-    dx, dz = toward[0] / toward_len, toward[1] / toward_len
-    await link.act(npc, "turn_to", npc="PLAYER")
-    await link.debug(
-        "player_goto", pos=[origin[0] - 400 * dx - 500 * dz, origin[1], origin[2] - 400 * dz + 500 * dx]
-    )
-    # The waynet has no 13–18 m point after follow. Spawn on the opposite side
-    # from the moved hero; the native gravity and LOS check below validate the lane.
-    await link.story_spawn("WOLF", tag="orders_attack", near=npc, distance=-1400)
-    await link.act(npc, "turn_to", npc="WOLF")
-    await asyncio.sleep(1)
-    views = await link.npc_view([npc])
-    wolf = next(
-        (other for view in views for other in view.sees if other.id == "WOLF" and other.kind == "monster"),
-        None,
-    )
-    response = await link._request(
-        DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=npc, to="WOLF"), 5,
-    )
-    ray = response.value or {}
-    automatic = talk.orders is not None and npc in talk.orders.fights
-    log.info("orders attack preparation: wolf=%s native_ray=%s automatic=%s", wolf, ray, automatic)
-    if (
-        wolf is None or wolf.distance <= 1000 or wolf.hero_cm is None or wolf.hero_cm <= 1500
-        or not (ray.get("center_clear") or ray.get("head_clear")) or automatic
-    ):
-        raise GameError(f"orders attack preparation: wolf={wolf}; ray={ray}; automatic={automatic}")
+    if ready.status != "arrived" or not await talk.hold(npc, "follow"):
+        raise GameError(f"orders attack preparation: native idle {ready.status} {ready.detail}")
+    dialogue.open(npc, "Ксардас").intent = Intent("follow_hero", "PLAYER", "friendly")
+    origin = (await link.snapshot(npc, fresh=True)).npc.pos
+    wolf, ray = None, {}
+    for step in range(8):
+        await clear_animals()
+        angle = step * math.pi / 4
+        dx, dz = math.cos(angle), math.sin(angle)
+        await link.debug("player_goto", pos=[origin[0] + 500 * dx, origin[1], origin[2] + 500 * dz])
+        await link.act(npc, "turn_to", npc="PLAYER")
+        # debug spawn independently tests support and the observer's native ray.
+        try:
+            await link.debug("spawn", instance="WOLF", near=npc, distance=1400)
+        except GameError as err:
+            if not str(err).startswith("no visible supported ground"):
+                raise
+            log.info("orders attack preparation lane=%d: %s", step, err)
+            continue
+        await link.debug(
+            "player_goto",
+            pos=[origin[0] - 400 * dx - 500 * dz, origin[1], origin[2] - 400 * dz + 500 * dx],
+        )
+        await link.act(npc, "turn_to", npc="WOLF")
+        await asyncio.sleep(1)
+        views = await link.npc_view([npc])
+        wolf = next(
+            (other for view in views for other in view.sees
+             if other.id == "WOLF" and other.kind == "monster" and other.body != "dead"),
+            None,
+        )
+        response = await link._request(
+            DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=npc, to="WOLF"), 5,
+        )
+        ray = response.value or {}
+        automatic = talk.orders is not None and npc in talk.orders.fights
+        log.info(
+            "orders attack preparation lane=%d: wolf=%s native_ray=%s automatic=%s",
+            step, wolf, ray, automatic,
+        )
+        if automatic:
+            raise GameError("orders attack preparation: automatic defence before the order")
+        if (
+            wolf is not None and wolf.distance > 1000 and wolf.hero_cm is not None and wolf.hero_cm > 1500
+            and (ray.get("center_clear") or ray.get("head_clear"))
+        ):
+            break
+    else:
+        raise GameError(f"orders attack preparation: no clear lane; wolf={wolf}; ray={ray}")
     ok, took = await order("В атаку!", "fight", focus="WOLF", timeout=60)
     over = await _until(lambda: any(a == "fight" for _, _, a, _ in calls) and calls[-1][2] == "follow", 60)
     fight = next((st for _, _, a, st in reversed(calls) if a == "fight"), "-")
@@ -2088,7 +2112,7 @@ async def _companion_attack_words(
             await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
         except GameError:
             pass
-    arena = "NW_XARDAS_TOWER_VALLEY_09"
+    arena = "NW_FARM1_FIELD_06"
     await link.debug("player_goto", waypoint=arena)
     await asyncio.sleep(1)  # the arena's roster, rather than the one still at Cavalorn's fire
     for _ in range(8):  # clear the arena's own wolves before its one controlled encounter
@@ -2099,7 +2123,7 @@ async def _companion_attack_words(
         await _until(lambda wolf=wolf: wolf.id not in beasts.wolves, 5)
     # Stage the free NPC first: teleporting the hero from the fire after follow starts ends that order
     # with follow_ended (the hero went too far). Its first real follow now covers only two metres.
-    await link.debug("player_goto", pos=[23472, 1032, -10816])
+    await link.debug("player_goto", waypoint=arena)
     await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
     if not await talk.hold(npc, "follow"):
         return {"wolf_ready": f"failed (cannot hold {npc} for the arena setup)"}
@@ -2154,7 +2178,8 @@ async def _companion_attack_words(
     await link.act(npc, "turn_to", npc="WOLF")
     views = await link.npc_view([npc])
     wolf = next(
-        (other for view in views for other in view.sees if other.id == "WOLF" and other.kind == "monster"),
+        (other for view in views for other in view.sees
+         if other.id == "WOLF" and other.kind == "monster" and other.body != "dead"),
         None,
     )
     response = await link._request(

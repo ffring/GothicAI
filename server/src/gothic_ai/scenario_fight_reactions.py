@@ -222,6 +222,15 @@ async def fight_reactions(
     async def recorded(cmd: Any) -> None:
         if isinstance(cmd, ActionCmd | NpcActCmd):
             trace.commands.append((time.monotonic(), cmd.npc.upper(), cmd.action, dict(cmd.args)))
+            if cmd.npc.upper() == CAVALORN and cmd.action == "fight":
+                target = str(cmd.args.get("npc", "")).upper()
+                log.info(
+                    "fight_reactions companion fight target=%s companion_cm=%s hero_cm=%s hp=%s",
+                    target,
+                    trace.distance(CAVALORN, target),
+                    trace.distance("PLAYER", target),
+                    trace.hp,
+                )
         await send(cmd)
 
     async def ready_companion_sword() -> None:
@@ -425,35 +434,68 @@ async def fight_reactions(
                 )
             else:
                 start_hp = trace.hp.get("PLAYER")
-                if not await _until(lambda: any(w.startswith(monster + "#") for w in trace.wolves), 5):
-                    raise GameError("fight_reactions setup: unique wolf absent from native beast watch")
-                wolf_id = next(w for w in trace.wolves if w.startswith(monster + "#"))
                 origin = trace.positions[monster]
                 if (distance := trace.distance(monster, "PLAYER")) is None or distance <= 1500:
                     raise GameError(
                         f"fight_reactions setup: wolf already within hero aggro range: {distance}"
                     )
+                guild, native_attack = await link.story_eval(
+                    monster,
+                    [
+                        ["field", ["inst", "SELF"], "GUILD"],
+                        ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_MM_ATTACK"]],
+                    ],
+                )
+                log.info(
+                    "fight_reactions wolf pre-hunt guild=%s native_attack=%s beasts=%s body=%s",
+                    guild,
+                    native_attack,
+                    trace.wolves,
+                    trace.latest.get(monster),
+                )
+                if guild != 27:
+                    raise GameError(f"fight_reactions setup: wolf has unexpected guild {guild}")
                 trace.targets_seen[monster] = set()
-                trace.wolf_states[wolf_id] = []
                 await finish_preparation()
                 # Only now bring the passive hero into native hunting range: observations,
                 # initial HP and the companion's ready sword precede any possible attack.
                 await link.debug("player_goto", pos=point(500))
-                await link.beast(wolf_id, "attack")
-                hunting = await _until(
-                    lambda: (
-                        "attack" in trace.wolf_states.get(wolf_id, [])
+                # Install the game's monster attack, with OTHER and target both the hero.
+                # Owned instances need not be advertised by the optional wolf voice desk.
+                await link.story_eval(
+                    monster,
+                    [
+                        ["call", "NPC_CLEARAIQUEUE", ["inst", "SELF"]],
+                        ["call", "NPC_SETTARGET", ["inst", "SELF"], ["inst", "OTHER"]],
+                        [
+                            "call", "AI_STARTSTATE", ["inst", "SELF"],
+                            ["sym", "ZS_MM_ATTACK"], ["int", 0], ["str", ""],
+                        ],
+                    ],
+                )
+                hunting = False
+                until = time.monotonic() + 5
+                while time.monotonic() < until:
+                    native_attack = (await link.story_eval(
+                        monster,
+                        [["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_MM_ATTACK"]]],
+                    ))[0]
+                    hunting = (
+                        bool(native_attack)
                         and trace.entities.get("PLAYER") in trace.targets_seen.get(monster, set())
                         and math.dist(origin, trace.positions.get(monster, origin)) >= 100
-                    ),
-                    5,
-                )
+                    )
+                    if hunting:
+                        break
+                    await asyncio.sleep(0.1)
                 wolf_snapshot = await link.snapshot(monster, fresh=True)
                 log.info(
-                    "fight_reactions wolf setup hunting=%s states=%s target=%s hero_entity=%s "
+                    "fight_reactions wolf setup hunting=%s native_attack=%s beasts=%s "
+                    "target=%s hero_entity=%s "
                     "wolf_pos=%s origin=%s hero_cm=%s view=%s",
                     hunting,
-                    trace.wolf_states.get(wolf_id),
+                    native_attack,
+                    trace.wolves,
                     trace.target.get(monster),
                     trace.entities.get("PLAYER"),
                     trace.positions.get(monster),
@@ -468,16 +510,21 @@ async def fight_reactions(
                 await _until(lambda: bool(trace.strikes.get(CAVALORN)), 20)
                 first_companion = next(iter(trace.strikes.get(CAVALORN, [])), None)
                 # Wait through the encounter, so an early command cannot hide a late bite.
-                await _until(lambda: trace.hp.get(monster, 1) <= 0 or bool(trace.strikes.get(monster)), 25)
+                await _until(lambda: trace.hp.get(monster, 1) <= 0 or bool(trace.damage.get("PLAYER")), 25)
                 first_wolf = next(iter(trace.strikes.get(monster, [])), None)
+                first_hero_bite = trace.strike_after(monster, "PLAYER", 0)
+                first_companion_bite = trace.strike_after(monster, CAVALORN, 0)
                 hero_damage = trace.damage.get("PLAYER", [])
                 check(
                     "intercepts_before_bite",
                     first_companion is not None
-                    and (first_wolf is None or first_companion < first_wolf)
+                    and (first_hero_bite is None or first_companion < first_hero_bite)
                     and bool(trace.damage.get(monster))
                     and not hero_damage,
                     f"first_companion_game_ms={first_companion}, first_wolf_game_ms={first_wolf}, "
+                    f"first_wolf_to_hero_game_ms={first_hero_bite}, "
+                    f"first_wolf_to_companion_game_ms={first_companion_bite}, "
+                    f"wolf_strike_targets={trace.strike_targets.get(monster)}, "
                     f"hero_hp={start_hp}->{trace.hp.get('PLAYER')}, wolf_hp={trace.hp.get(monster)}",
                 )
         else:
