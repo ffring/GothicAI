@@ -1052,6 +1052,29 @@ async def _neural_fight_scenario(
         ])
         if not companion_sword:
             raise GameError(f"neural companion preparation: {target} has no one-handed sword")
+        # Stock clones can fall to a few critical hits before six policy decisions.
+        # Prepare both swordsmen with at least the hero scenario's 300 HP, once,
+        # through an existing director trigger, then verify and remove it before combat.
+        attributes = await link.story_eval(npc, [["var", "ATR_HITPOINTSMAX"], ["var", "ATR_HITPOINTS"]])
+        health_fields = [
+            ["field", ["inst", actor], "ATTRIBUTE", attribute]
+            for actor in (npc, target) for attribute in attributes
+        ]
+        before = await link.story_eval(npc, health_fields)
+        if len(before) != 4 or any(type(value) is not int for value in before):
+            raise GameError(f"neural companion preparation: health unavailable {before}")
+        health = [max(300, maximum) for maximum in before[::2] for _ in range(2)]
+        health_trigger = "DIR_NEURAL_COMPANION_HEALTH"
+        await link.patch_graph([triggers.trigger(health_trigger, triggers.STATE, [
+            {"do": "set", "target": field, "value": ["int", value]}
+            for field, value in zip(health_fields, health, strict=True)
+        ])])
+        try:
+            if not await _until_async(lambda: link.story_eval(npc, health_fields), lambda got: got == health, 5):
+                raise GameError("neural companion preparation: health did not apply")
+        finally:
+            await link.patch_graph([{"op": "trigger", "id": health_trigger, "steps": None}])
+        log.info("neural companion arena: hp_max/hp before=%s prepared=%s", before, health)
         await link.story_effect(target, [{"do": "party", "value": 1}])
         drawn = await Bodies(link).act(target, "draw_weapon", kind="melee")
         if drawn.status != "done":
