@@ -28,6 +28,7 @@ class ParticleFx;
 class Interactive;
 class VersionInfo;
 class GlobalFx;
+class ClothVisual;
 struct PhysicsNoise;
 struct HeroDeed;
 
@@ -248,6 +249,7 @@ class World final {
 
     std::unique_ptr<DynamicWorld>         wdynamic;
     std::unique_ptr<WorldView>            wview;
+    std::vector<std::unique_ptr<ClothVisual>> clothSurfaces;
     mutable MeshObjects                  cpuObjects;
     std::unique_ptr<GlobalEffects>        globFx;
     WorldSound                            wsound;

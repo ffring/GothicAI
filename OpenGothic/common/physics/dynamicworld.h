@@ -49,7 +49,7 @@ class DynamicWorld final {
     static constexpr float spellSpeed  = 1; // centimeters per milliseconds
     static constexpr float characterItemRange = 300.f; // centimetres around the opt-in hero
 
-    DynamicWorld(World *world, const zenkit::Mesh& mesh);
+    DynamicWorld(World *world, const zenkit::Mesh& mesh, const zenkit::Mesh* originalCloth = nullptr);
     DynamicWorld(const DynamicWorld&)=delete;
     ~DynamicWorld();
 
@@ -555,6 +555,7 @@ class DynamicWorld final {
 
     std::unique_ptr<PhysicVbo>         landMesh;
     std::unique_ptr<PhysicVbo>         waterMesh;
+    std::unique_ptr<PhysicVbo>         originalClothMesh;
     std::unique_ptr<WorldBodies>       bodies;
 
     std::unique_ptr<NpcBodyList>       npcList;

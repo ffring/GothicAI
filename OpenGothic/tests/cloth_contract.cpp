@@ -91,8 +91,9 @@ int main() {
   require(hit.arrowPasses==1 && hit.projectileHits==2,"one pass-through arrow and one spell are counted");
   constexpr uint32_t solidMask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_ActiveBody);
   require(!collision.rayCast(center+normal*100.f,center-normal*100.f,solidMask,true).hasHit,"cloth never blocks solid or character queries");
+  require(!collision.rayCast(center+normal*100.f,center-normal*100.f,~0u,true).hasHit,"even an all-layer gameplay ray passes through cloth");
   tick(collision,120);
-  instance->setShaderReference([](const Tempest::Vec3& local,const Tempest::Vec3&) { return local+Tempest::Vec3(0,0,5); });
+  instance->setShaderReference([](uint32_t,const Tempest::Vec3& local,const Tempest::Vec3&) { return local+Tempest::Vec3(0,0,5); });
   // Walk through the transition band with fixed geometry and a stationary
   // shader phase: only cloth simulation and the fallback transition can move it.
   for(float distance=3450.f;distance<=3995.f;distance+=5.f) {
@@ -116,10 +117,25 @@ int main() {
   cloth.setObserver({60,100,0});
   tick(collision,40);
   require(instance->active(),"returning observer recreates transient cloth");
+  size_t updateCalls=0;
+  bool callbackEnabled=true;
+  float callbackWeight=instance->simulationWeight();
+  instance->setUpdateCallback([&](const std::vector<Tempest::Vec3>& positions,float weight) {
+    require(positions.size()==flag.vertices.size(),"toggle callback receives complete visible geometry");
+    ++updateCalls;
+    callbackEnabled=cloth.enabled();
+    callbackWeight=weight;
+    });
+  const float weightBeforeDisable=instance->simulationWeight();
   cloth.setEnabled(false);
+  require(updateCalls==1 && !callbackEnabled && callbackWeight==weightBeforeDisable,
+          "cloth OFF synchronizes render callbacks immediately without advancing physics");
   tick(collision,40);
   require(!instance->active() && cloth.bodyCount()==0,"cloth OFF returns entirely to shader");
+  const auto callsBeforeEnable=updateCalls;
   cloth.setEnabled(true);
+  require(updateCalls==callsBeforeEnable+1 && callbackEnabled && callbackWeight==0.f,
+          "cloth ON restores fallback visibility before the next physics tick");
   tick(collision,40);
   require(instance->active(),"cloth ON recreates Jolt simulation");
   instance.reset();
@@ -145,8 +161,55 @@ int main() {
   const float shelteredLateral=lateralSpeed(roofWindBefore,roofWindAfter);
   require(!roofWindAfter.exposed,"shelter persists through strong wind");
   require(shelteredLateral<=calmLateral+.25f,"strong world wind adds no lateral motion under a roof");
-  std::printf("cloth contract passed: calm_10s_max_vertex_cm_s=%.6g max_vertex_cm_s=%.6g anchor_drift_cm=%.6g boundary_delta_cm=%.6g roof_calm_lateral_cm_s=%.6g roof_wind_lateral_cm_s=%.6g recovery=0\n",
+  sheltered.reset();
+  roof.reset();
+  auto beamMatrix=Tempest::Matrix4x4::mkIdentity();
+  beamMatrix.translate(60,250,0);
+  auto beam=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.8f,.05f,.05f)),beamMatrix,.7f,DynamicWorld::C_Object);
+  auto outdoor=cloth.add(flag.vertices,flag.indices,flag.pins,Tempest::Matrix4x4::mkIdentity(),.85f,"crossbar-flag",9);
+  cloth.setWind({0,0,4});
+  tick(collision,60);
+  require(cloth.snapshots().front().exposed,"a narrow attachment crossbar does not suppress outdoor wind");
+  outdoor.reset();
+  beam.reset();
+  auto wideBeam=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.8f,.05f,.4f)),beamMatrix,.7f,DynamicWorld::C_Object);
+  wideBeam->setLabel("OWN-ATTACHMENT.mrm");
+  auto attachmentFlag=flag.vertices;
+  for(auto& vertex:attachmentFlag) vertex-=Tempest::Vec3(60,250,0);
+  auto attached=cloth.add(attachmentFlag,flag.indices,flag.pins,beamMatrix,.85f,"meshes/own-attachment.MMS",12);
+  tick(collision,60);
+  require(cloth.snapshots().front().exposed,"a wide rigid part of the same visual and transform is not its cloth's roof");
+  auto actualRoof=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(4,.1f,4)),roofMatrix,.7f,DynamicWorld::C_Object);
+  actualRoof->setLabel("separate-roof");
+  tick(collision,60);
+  require(!cloth.snapshots().front().exposed,"ignoring an own attachment still detects a separate roof above it");
+  actualRoof.reset();
+  attached.reset();
+  wideBeam.reset();
+  auto wallMatrix=Tempest::Matrix4x4::mkIdentity();
+  wallMatrix.translate(60,100,30);
+  auto wall=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(5,5,.05f)),wallMatrix,.7f,DynamicWorld::C_Object);
+  auto blocked=cloth.add(flag.vertices,flag.indices,flag.pins,Tempest::Matrix4x4::mkIdentity(),.85f,"wall-flag",10);
+  cloth.setWind({0,0,8});
+  tick(collision,600);
+  const auto wallCloth=cloth.snapshots().front();
+  float maxWallZ=0;
+  for(const auto& position:wallCloth.worldPositionsCm) maxWallZ=std::max(maxWallZ,position.z);
+  require(maxWallZ>20.f,"wind carries cloth into a nearby native obstacle");
+  require(maxWallZ<=25.1f,"native static-object contact prevents cloth passing through its pole or a wall");
+  require(wallCloth.maxAnchorErrorCm<=.5f && wallCloth.recoveryCount==0,"obstacle contacts preserve fixed pins without recovery");
+  blocked.reset();
+  wall.reset();
+  auto character=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(5,5,.05f)),wallMatrix,.7f,DynamicWorld::C_ActiveBody);
+  auto passThrough=cloth.add(flag.vertices,flag.indices,flag.pins,Tempest::Matrix4x4::mkIdentity(),.85f,"character-flag",11);
+  tick(collision,600);
+  const auto characterCloth=cloth.snapshots().front();
+  float maxCharacterZ=0;
+  for(const auto& position:characterCloth.worldPositionsCm) maxCharacterZ=std::max(maxCharacterZ,position.z);
+  require(maxCharacterZ>35.f,"cloth passes through the same obstacle on the character layer");
+  require(characterCloth.recoveryCount==0,"ignored character contacts never destabilize cloth");
+  std::printf("cloth contract passed: calm_10s_max_vertex_cm_s=%.6g max_vertex_cm_s=%.6g anchor_drift_cm=%.6g boundary_delta_cm=%.6g roof_calm_lateral_cm_s=%.6g roof_wind_lateral_cm_s=%.6g wall_vertex_max_z_cm=%.6g character_vertex_max_z_cm=%.6g recovery=0\n",
               double(calm.maxSpeedCmPerSec),double(windy.maxSpeedEverCmPerSec),double(windy.maxAnchorErrorCm),
-              double(boundaryDelta),double(calmLateral),double(shelteredLateral));
+              double(boundaryDelta),double(calmLateral),double(shelteredLateral),double(maxWallZ),double(maxCharacterZ));
   return EXIT_SUCCESS;
   }

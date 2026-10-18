@@ -12,6 +12,7 @@
 
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/visualfx.h"
+#include "graphics/clothvisual.h"
 #include "world/objects/globalfx.h"
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
@@ -29,6 +30,7 @@
 #include "frameprofile.h"
 #include "testbench.h"
 #include "physics/physicsnoise.h"
+#include "physics/worldcloth.h"
 #include "world/movablevobs.h"
 
 namespace {
@@ -128,17 +130,24 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
 
     loadProgress(20);
     auto& worldMesh = world.world_mesh;
+    auto worldCloth=WorldCloth::extract(worldMesh);
 
     auto wdynamicFut = std::async(std::launch::async, [&]() {
       Workers::setThreadName("Loading: BVH thread");
-      return std::unique_ptr<DynamicWorld>(new DynamicWorld(this,worldMesh));
+      return std::unique_ptr<DynamicWorld>(new DynamicWorld(this,worldMesh,&worldCloth.original));
       });
     std::future<std::unique_ptr<WorldView>> wviewFut;
     if(!Resources::isHeadless()) {
       wviewFut = std::async(std::launch::async, [&]() {
         Workers::setThreadName("Loading: PackedMesh thread");
         PackedMesh vmesh(worldMesh,PackedMesh::PK_VisualLnd);
-        return std::unique_ptr<WorldView>(new WorldView(vmesh, wname));
+        auto view=std::make_unique<WorldView>(vmesh,wname);
+        if(!worldCloth.original.polygons.material_indices.empty()) {
+          PackedMesh originalCloth(worldCloth.original,PackedMesh::PK_VisualLnd);
+          view->setOriginalClothMesh(originalCloth);
+          view->setOriginalClothVisible(!Gothic::physicsFlags().cloth);
+          }
+        return view;
         });
       }
 
@@ -163,6 +172,9 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     wdynamic->setBuoyancyEnabled(Gothic::physicsFlags().buoyancy);
     wdynamic->setClothEnabled(Gothic::physicsFlags().cloth);
     wdynamic->setPhysicsNoiseCallback([this](const PhysicsNoise& noise) { emitPhysicsNoise(noise); });
+    for(auto& surface:worldCloth.surfaces)
+      if(auto visual=ClothVisual::createSurface(*this,surface.mesh,surface.pins,surface.visual,surface.id,surface.stiffness))
+        clothSurfaces.push_back(std::move(visual));
     world.world_mesh = zenkit::Mesh();
     loadProgress(70);
 

@@ -13,6 +13,8 @@ class Landscape final {
   public:
     Landscape(VisualObjects& visual, const PackedMesh& wmesh);
 
+    void setVisible(bool visible);
+
     const Tempest::StorageBuffer& bvh()   const { return bvhNodes; }
 
   private:

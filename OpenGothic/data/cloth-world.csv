@@ -1,0 +1,5 @@
+# material or texture stem,geometry,attachment,stiffness,island filter
+NW_CITY_FLAG_01,banner,y:max:6,0.86,quad
+NW_SHIP_FLAG_01,flag,z:min:25,0.82,sheet
+NW_SHIP_FLAG_02,flag,z:min:25,0.82,sheet
+NW_SHIP_SAIL_02,furled-sail,ridge:20:15,0.95,bundle

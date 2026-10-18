@@ -251,13 +251,13 @@ void ObjVisual::setVisual(const zenkit::VirtualObject& vob, World& world, bool s
         return;
       setType(M_Mesh);
       mesh.proto = view;
+      const bool windy = (vob.anim_mode!=zenkit::AnimationType::NONE && vob.anim_strength>0);
       if(vob.show_visual) {
         mesh.view = world.addStaticView(view,staticDraw);
         mesh.view.setWind(vob.anim_mode,vob.anim_strength);
-        cloth = ClothVisual::create(mesh.view,world,vob,enableCollision);
+        cloth = ClothVisual::create(mesh.view,world,vob,enableCollision && !windy);
         }
 
-      const bool windy = (vob.anim_mode!=zenkit::AnimationType::NONE && vob.anim_strength>0);
       if(vob.show_visual && enableCollision && !windy && !cloth) {
         mesh.physic = PhysicMesh(*view,*world.physic(),false);
         }

@@ -191,8 +191,10 @@ struct DynamicWorld::BodyData {
 
 struct DynamicWorld::WorldBodies {
   std::vector<JPH::Vec3>                        vertices;
+  std::vector<JPH::Vec3>                        clothVertices;
   std::unique_ptr<CollisionWorld::CollisionBody> landscape;
   std::unique_ptr<CollisionWorld::CollisionBody> water;
+  std::unique_ptr<CollisionWorld::CollisionBody> originalCloth;
   };
 
 struct DynamicWorld::BBoxShape {
@@ -713,7 +715,7 @@ struct DynamicWorld::BBoxList final {
   DynamicWorld&          wrld;
   };
 
-DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
+DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh, const zenkit::Mesh* originalCloth) {
   world.reset(new CollisionWorld());
   ownerWorld=owner;
   clothWorld=std::make_unique<Cloth>(*world);
@@ -762,6 +764,17 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
     }
   }
 
+  if(originalCloth!=nullptr && !originalCloth->polygons.material_indices.empty()) {
+    PackedMesh pkg(*originalCloth,PackedMesh::PK_Physic);
+    bodies->clothVertices.reserve(pkg.vertices.size());
+    for(const auto& vertex:pkg.vertices)
+      bodies->clothVertices.push_back(CollisionWorld::toMeters(Tempest::Vec3(vertex.pos[0],vertex.pos[1],vertex.pos[2])));
+    originalClothMesh=std::make_unique<PhysicVbo>(&bodies->clothVertices);
+    for(const auto& sub:pkg.subMeshes)
+      if(!sub.material.disable_collision && sub.iboLength>0)
+        originalClothMesh->addIndex(pkg.indices,sub.iboOffset,sub.iboLength,sub.material.group);
+    }
+
   JPH::Vec3 bbox[2] = {JPH::Vec3::sZero(), JPH::Vec3::sZero()};
   Tempest::Matrix4x4 mt;
   mt.identity();
@@ -806,7 +819,20 @@ DynamicWorld::~DynamicWorld(){
 
 Cloth& DynamicWorld::cloth() { return *clothWorld; }
 const Cloth& DynamicWorld::cloth() const { return *clothWorld; }
-void DynamicWorld::setClothEnabled(bool value) { clothWorld->setEnabled(value); }
+void DynamicWorld::setClothEnabled(bool value) {
+  clothWorld->setEnabled(value);
+  if(ownerWorld!=nullptr && ownerWorld->view()!=nullptr)
+    ownerWorld->view()->setOriginalClothVisible(!value);
+  if(value) {
+    bodies->originalCloth.reset();
+    } else if(bodies->originalCloth==nullptr && originalClothMesh!=nullptr &&
+              !originalClothMesh->isEmpty() && originalClothMesh->shape()!=nullptr) {
+    bodies->originalCloth=world->addCollisionBody(originalClothMesh->shape(),Tempest::Matrix4x4::mkIdentity(),
+                                                materialFriction(zenkit::MaterialGroup::NONE),
+                                                C_Landscape,false,false,originalClothMesh.get());
+    bodies->originalCloth->setLabel("cloth-fallback");
+    }
+  }
 bool DynamicWorld::clothEnabled() const { return clothWorld->enabled(); }
 
 DynamicWorld::RayLandResult DynamicWorld::landRay(const Tempest::Vec3& from, float maxDy) const {

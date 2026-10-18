@@ -13,7 +13,7 @@ class CollisionWorld;
 // Transient, world-attached Jolt soft bodies. No cloth state enters saves.
 class Cloth final {
   public:
-    using ShaderReference = std::function<Tempest::Vec3(const Tempest::Vec3&, const Tempest::Vec3&)>;
+    using ShaderReference = std::function<Tempest::Vec3(uint32_t, const Tempest::Vec3&, const Tempest::Vec3&)>;
     using UpdateCallback = std::function<void(const std::vector<Tempest::Vec3>&, float)>;
     static constexpr float radiusCm = 4000.f;
     static constexpr float blendStartCm = 3500.f;

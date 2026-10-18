@@ -11,6 +11,7 @@
 #include <cmath>
 #include <map>
 #include <set>
+#include <string_view>
 #include <tuple>
 
 namespace {
@@ -20,6 +21,21 @@ namespace {
     }
   bool finite(const Tempest::Vec3& point) {
     return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+    }
+  bool sameVisual(std::string_view a,std::string_view b) {
+    const auto basename=[](std::string_view value) {
+      const auto slash=value.find_last_of("/\\");
+      if(slash!=std::string_view::npos) value.remove_prefix(slash+1);
+      return value.substr(0,value.find_last_of('.'));
+      };
+    a=basename(a);
+    b=basename(b);
+    if(a.empty() || a.size()!=b.size()) return false;
+    for(size_t i=0;i<a.size();++i) {
+      const auto upper=[](char c) { return c>='a' && c<='z' ? char(c-'a'+'A') : c; };
+      if(upper(a[i])!=upper(b[i])) return false;
+      }
+    return true;
     }
   bool segmentTriangle(const Tempest::Vec3& from, const Tempest::Vec3& to,
                        const Tempest::Vec3& a, const Tempest::Vec3& b, const Tempest::Vec3& c) {
@@ -67,8 +83,25 @@ struct Cloth::Instance::Impl {
   Tempest::Vec3 translation() const { return Tempest::Vec3(matrix.at(3,0),matrix.at(3,1),matrix.at(3,2)); }
   Tempest::Vec3 reference(size_t vertex) const {
     if(!shader) return source[vertex];
-    auto ret=shader(source[vertex],project(matrix,source[vertex]));
+    auto ret=shader(uint32_t(vertex),source[vertex],project(matrix,source[vertex]));
     return finite(ret) ? ret : source[vertex];
+    }
+  Tempest::Vec3 exposureOffset() const {
+    Tempest::Vec3 largestNormal;
+    for(size_t i=0;i+2<indices.size();i+=3) {
+      const auto a=project(matrix,source[indices[i]]);
+      const auto b=project(matrix,source[indices[i+1]]);
+      const auto c=project(matrix,source[indices[i+2]]);
+      auto normal=Tempest::Vec3::crossProduct(b-a,c-a);
+      normal.y=0;
+      if(normal.quadLength()>largestNormal.quadLength()) largestNormal=normal;
+      }
+    if(largestNormal.quadLength()>1.e-6f) return largestNormal*(25.f/largestNormal.length());
+    return Tempest::Vec3(25,0,0);
+    }
+  bool ownAttachment(const CollisionWorld::CollisionBody* collider) const {
+    return collider!=nullptr && sameVisual(visual,collider->label()) &&
+           (collider->position()-translation()).quadLength()<=1.f;
     }
   };
 
@@ -99,22 +132,30 @@ struct Cloth::Impl {
       const auto position=CollisionWorld::toMeters(project(body.matrix,body.source[i])-body.translation());
       body.rest[body.mapping[i]]=position;
       }
-    settings.mVertices.reserve(body.rest.size());
-    for(size_t i=0;i<body.rest.size();++i) {
-      JPH::Float3 point;
-      body.rest[i].StoreFloat3(&point);
-      settings.mVertices.emplace_back(point,JPH::Float3(0,0,0),body.pinned[i] ? 0.f : 40.f);
-      }
+    std::vector<float> vertexArea(body.rest.size(),0.f);
     std::set<std::array<uint32_t,3>> seen;
     for(size_t i=0;i+2<body.indices.size();i+=3) {
       std::array<uint32_t,3> face={body.mapping[body.indices[i]],body.mapping[body.indices[i+1]],body.mapping[body.indices[i+2]]};
       auto key=face;
       std::sort(key.begin(),key.end());
       if(key[0]==key[1] || key[1]==key[2] || !seen.insert(key).second) continue;
-      if((body.rest[face[1]]-body.rest[face[0]]).Cross(body.rest[face[2]]-body.rest[face[0]]).LengthSq()<1.e-12f) continue;
+      const float twiceArea=(body.rest[face[1]]-body.rest[face[0]]).Cross(body.rest[face[2]]-body.rest[face[0]]).Length();
+      if(twiceArea<1.e-6f) continue;
       settings.mFaces.emplace_back(face[0],face[1],face[2]);
+      for(auto vertex:face) vertexArea[vertex]+=twiceArea/6.f;
       }
     if(settings.mFaces.empty()) return;
+    // Each triangle contributes one third of its area to its particles. UV
+    // seams and reversed back faces were welded above, so subdivision changes
+    // resolution rather than the weight of the same piece of cloth.
+    constexpr float densityKgPerSquareMeter=.35f;
+    settings.mVertices.reserve(body.rest.size());
+    for(size_t i=0;i<body.rest.size();++i) {
+      JPH::Float3 point;
+      body.rest[i].StoreFloat3(&point);
+      const float inverseMass=1.f/std::max(vertexArea[i]*densityKgPerSquareMeter,.00025f);
+      settings.mVertices.emplace_back(point,JPH::Float3(0,0,0),body.pinned[i] ? 0.f : inverseMass);
+      }
     const float compliance=1.e-6f+(1.f-body.stiffness)*2.e-5f;
     const JPH::SoftBodySharedSettings::VertexAttributes attributes(compliance,compliance,compliance*10.f,
         JPH::SoftBodySharedSettings::ELRAType::GeodesicDistance,1.03f);
@@ -124,6 +165,7 @@ struct Cloth::Impl {
     creation.mNumIterations=8;
     creation.mLinearDamping=3.f;
     creation.mMaxLinearVelocity=Cloth::maxVelocityMS;
+    creation.mVertexRadius=.005f;
     creation.mUpdatePosition=false;
     creation.mAllowSleeping=false;
     creation.mFacesDoubleSided=true;
@@ -211,7 +253,12 @@ std::shared_ptr<Cloth::Instance> Cloth::add(const std::vector<Tempest::Vec3>& so
   impl->instances.push_back(ret);
   return ret;
   }
-void Cloth::setEnabled(bool value) { impl->enabled=value; }
+void Cloth::setEnabled(bool value) {
+  impl->enabled=value;
+  // The static world-cloth fallback switches in this same call stack. Update
+  // the individual views now so a render between physics ticks has no gap.
+  finishFrame();
+  }
 bool Cloth::enabled() const { return impl->enabled; }
 void Cloth::setObserver(const Tempest::Vec3& position) { if(finite(position)) { impl->observer=position; impl->hasObserver=true; } }
 void Cloth::setWind(const Tempest::Vec3& wind) { impl->wind=finite(wind) ? wind : Tempest::Vec3(); }
@@ -240,8 +287,27 @@ void Cloth::prepareFrame(uint64_t dt) {
     body.shelterTimer-=seconds;
     if(body.targetWeight>0.f && body.shelterTimer<=0.f) {
       constexpr uint32_t mask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object);
-      const auto roof=impl->world.rayCast(center+Tempest::Vec3(0,2,0),center+Tempest::Vec3(0,20000,0),mask,true);
-      body.exposed=!roof.hasHit && (!impl->exposure || impl->exposure(center));
+      body.exposed=false;
+      if(!impl->exposure || impl->exposure(center)) {
+        const auto offset=body.exposureOffset();
+        // A mast or the narrow bar holding a banner is not a roof. Probe both
+        // sides of the cloth as well as its center; a ceiling covers all three.
+        for(int probe=-1;probe<=1;++probe) {
+          const auto origin=center+offset*float(probe);
+          std::vector<const CollisionWorld::CollisionBody*> ignored;
+          for(;;) {
+            const auto roof=impl->world.rayCast(origin+Tempest::Vec3(0,2,0),origin+Tempest::Vec3(0,20000,0),mask,true,
+                                               nullptr,&ignored);
+            if(!roof.hasHit) { body.exposed=true; break; }
+            if(!body.ownAttachment(roof.body)) break;
+            // A standard's skull and crossbar can span all three probes.
+            // Ignore only the rigid part at this cloth's authored transform,
+            // then keep tracing so a real roof above it still shelters cloth.
+            ignored.push_back(roof.body);
+            }
+          if(body.exposed) break;
+          }
+        }
       body.shelterTimer=.5f;
       }
     if(body.targetWeight>0.f && body.body.IsInvalid()) impl->create(body);

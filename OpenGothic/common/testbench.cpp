@@ -695,7 +695,7 @@ struct Bench {
   std::vector<WaterActor> waterActors;
   bool waterBodiesReady=false,waterLootReady=false,waterKillOnThrow=false;
   uint32_t clothZen=uint32_t(-1);
-  std::string clothCase;
+  std::string clothCase,clothObserverSupport="native-floor";
   Vec3 clothCenter,clothDirection=Vec3(1,0,0);
   bool clothTrace=false,clothMeasuring=false,clothOverflow=false,clothHold=false;
   Vec3 clothHeldPosition;
@@ -4674,6 +4674,7 @@ std::string clothRows(World& world,bool geometry=false) {
     rows+="{\"id\":"+std::to_string(body.id)+",\"zen_id\":"+std::to_string(body.zenId)+
       ",\"visual\":"+jsonStr(body.visual)+",\"center_cm\":"+ragdollVector(body.center)+
       ",\"active\":"+(body.active?"true":"false")+",\"exposed\":"+(body.exposed?"true":"false")+",\"vertices\":"+std::to_string(body.vertices)+
+      ",\"rendered_vertices\":"+std::to_string(body.worldPositionsCm.size())+
       ",\"pinned\":"+std::to_string(body.pinned)+",\"weight\":"+ragdollNumber(body.simulationWeight)+
       ",\"anchor_error_cm\":"+ragdollNumber(body.maxAnchorErrorCm)+
       ",\"max_speed_cm_s\":"+ragdollNumber(body.maxSpeedCmPerSec)+
@@ -4748,45 +4749,269 @@ bool clothStandAt(World& world,Npc& player,const Vec3& target,float distance) {
   return false;
   }
 
-void clothSetup(World& world,Npc& player,uint32_t zen,std::string label) {
-  const auto all=world.physic()->cloth().snapshots();
-  const auto found=std::find_if(all.begin(),all.end(),[&](const auto& body){return body.zenId==zen;});
-  if(found==all.end()) {arenaAbort("cloth fixture requires an authored allowlisted zen id");return;}
-  bench.clothZen=zen;bench.clothCase=std::move(label);bench.clothCenter=found->center;
-  Vec3 cameraNormal;
-  float area=0;
-  for(size_t i=0;i+2<found->indices.size();i+=3) {
-    const auto a=found->indices[i],b=found->indices[i+1],c=found->indices[i+2];
-    if(a>=found->worldPositionsCm.size() || b>=found->worldPositionsCm.size() || c>=found->worldPositionsCm.size())continue;
-    const auto normal=Vec3::crossProduct(found->worldPositionsCm[b]-found->worldPositionsCm[a],found->worldPositionsCm[c]-found->worldPositionsCm[a]);
+bool clothObserverFloor(World& world,const Vec3& position,Vec3& supported) {
+  const auto floor=world.physic()->landRay(position+Vec3(0,10000,0),20000);
+  if(!floor.hasCol || floor.n.y<.8f || world.physic()->waterRay(floor.v+Vec3(0,5,0),1).hasCol)
+    return false;
+  supported=floor.v+Vec3(0,1,0);
+  // A native roof or yard is a valid fixture support, provided the hero fits.
+  return !world.physic()->ray(supported+Vec3(0,5,0),supported+Vec3(0,180,0)).hasCol;
+  }
+
+bool clothNearbyObserver(World& world,const Vec3& target,Vec3& supported) {
+  float score=std::numeric_limits<float>::max();
+  // High ship flags cannot be observed from street level within the production
+  // 40 m sphere. Search native yards and decks as well as ordinary ground.
+  for(float radius:{0.f,100.f,200.f,350.f,500.f,750.f,1000.f,1500.f,2000.f,2500.f,3000.f}) {
+    const int steps=radius==0.f?1:48;
+    for(int step=0;step<steps;++step) {
+      const float angle=float(step)*2.f*float(M_PI)/float(steps);
+      Vec3 candidate;
+      if(!clothObserverFloor(world,target+Vec3(std::cos(angle)*radius,0,std::sin(angle)*radius),candidate))continue;
+      const auto distance=(candidate-target).length();
+      if(distance>3400.f)continue;
+      // Prefer a little room around a native support over balancing on a mast.
+      unsigned room=0;
+      for(const auto offset:{Vec3(25,0,0),Vec3(-25,0,0),Vec3(0,0,25),Vec3(0,0,-25)}) {
+        const auto nearby=world.physic()->landRay(candidate+offset+Vec3(0,30,0),60);
+        room+=nearby.hasCol && nearby.n.y>.8f && std::abs(nearby.v.y-candidate.y)<10.f;
+        }
+      const float cost=std::abs(distance-1800.f)+float(4-room)*500.f;
+      if(cost<score) {score=cost;supported=candidate;}
+      }
+    }
+  return std::isfinite(score) && score<std::numeric_limits<float>::max();
+  }
+
+std::string clothUpper(std::string text) {
+  for(auto& c:text)c=char(std::toupper(static_cast<unsigned char>(c)));
+  return text;
+  }
+
+bool clothCamera(World& world,std::string_view group,bool required=true,Vec3* targetOut=nullptr);
+
+bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& cameraTarget,
+                Vec3& cameraNormal,float& span) {
+  float area=0;Vec3 bounds[2]={body.center,body.center};
+  for(const auto& point:body.worldPositionsCm) {
+    bounds[0].x=std::min(bounds[0].x,point.x);bounds[0].y=std::min(bounds[0].y,point.y);bounds[0].z=std::min(bounds[0].z,point.z);
+    bounds[1].x=std::max(bounds[1].x,point.x);bounds[1].y=std::max(bounds[1].y,point.y);bounds[1].z=std::max(bounds[1].z,point.z);
+    }
+  for(size_t i=0;i+2<body.indices.size();i+=3) {
+    const auto a=body.indices[i],b=body.indices[i+1],c=body.indices[i+2];
+    if(a>=body.worldPositionsCm.size() || b>=body.worldPositionsCm.size() || c>=body.worldPositionsCm.size())continue;
+    const auto normal=Vec3::crossProduct(body.worldPositionsCm[b]-body.worldPositionsCm[a],body.worldPositionsCm[c]-body.worldPositionsCm[a]);
     const auto next=normal.length();
-    if(next>area) {area=next;cameraNormal=Vec3::normalize(normal);}
+    if(next>area && (std::abs(normal.y)<next*.9f || area==0.f)) {area=next;cameraNormal=Vec3::normalize(normal);}
     }
-  if(area<1.f) {arenaAbort("cloth fixture has no visible cloth face for its camera");return;}
-  Vec3 cameraEye;
+  if(area<.01f)return false;
+  cameraTarget=(bounds[0]+bounds[1])*.5f;
+  span=(bounds[1]-bounds[0]).length();
+  const float cameraDistance=std::max(650.f,span*1.8f);
+  Vec3 cameraRight=Vec3::normalize(Vec3::crossProduct(cameraNormal,Vec3(0,1,0)));
+  if(cameraRight.length()<.01f)cameraRight=Vec3(1,0,0);
+  const auto cameraUp=Vec3::normalize(Vec3::crossProduct(cameraRight,cameraNormal));
+  float horizontal=0.f,vertical=0.f;
+  for(const auto& point:body.worldPositionsCm) {
+    horizontal=std::max(horizontal,std::abs(Vec3::dotProduct(point-cameraTarget,cameraRight)));
+    vertical=std::max(vertical,std::abs(Vec3::dotProduct(point-cameraTarget,cameraUp)));
+    }
   bool cameraClear=false;
-  for(float side:{1.f,-1.f}) {
-    const auto eye=found->center+cameraNormal*(700.f*side)+Vec3(0,30,0);
-    if(world.physic()->ray(eye,found->center).hasCol || world.physic()->ray(found->center,eye).hasCol)continue;
-    cameraEye=eye;cameraNormal*=side;cameraClear=true;break;
+  // Look slightly down on low banners to keep grass out of the foreground.
+  // Nine rays check the entire cloth's frame, not just its center.
+  for(float elevation:{.3f,.55f,.1f}) {
+    for(float side:{1.f,-1.f}) {
+      const auto eye=cameraTarget+cameraNormal*(cameraDistance*side)+Vec3(0,cameraDistance*elevation,0);
+      bool clear=true;
+      for(float x:{.15f,.5f,.85f})for(float y:{.15f,.5f,.85f}) {
+        const auto target=cameraTarget+cameraRight*(horizontal*(x*2.f-1.f))+cameraUp*(vertical*(y*2.f-1.f));
+        // The last centimetres may be an original OFF cloth collision. Ignore
+        // only that target end, retaining poles and every foreground wall.
+        const auto delta=target-eye;
+        clear&=!world.physic()->ray(eye,eye+delta*.97f).hasCol;
+        }
+      const auto ground=world.physic()->landRay(eye+Vec3(0,500,0),1000);
+      if(ground.hasCol && eye.y-ground.v.y<180.f)clear=false;
+      if(!clear)continue;
+      cameraEye=eye;cameraNormal*=side;cameraClear=true;break;
+      }
+    if(cameraClear)break;
     }
-  if(!cameraClear) {arenaAbort("cloth fixture has no unobstructed face-on camera side");return;}
+  return cameraClear;
+  }
+
+void clothSetup(World& world,Npc& player,std::string selector,std::string label) {
+  const auto all=world.physic()->cloth().snapshots();
+  if(all.empty()) {arenaAbort("cloth fixture world has no authored cloth");return;}
+  auto found=all.end();
+  Vec3 denseObserver;
+  bool dense=false,denseSupported=false;
+  bench.clothObserverSupport="native-floor";
+  if(selector=="densest") {
+    size_t maximum=0;float nearest=std::numeric_limits<float>::max();
+    // Search observer positions and count the unchanged real 3D radius.
+    // Cluster centroids include the gaps between cloth objects, where a larger
+    // number may be active than when standing directly beside one flag.
+    std::vector<Vec3> centers;
+    for(const auto& body:all) {
+      centers.push_back(body.center);
+      Vec3 center;size_t count=0;
+      for(const auto& other:all)if((other.center-body.center).length()<7000.f) {center+=other.center;++count;}
+      if(count)centers.push_back(center/float(count));
+      }
+    for(const auto& center:centers) {
+      Vec3 floor;
+      const bool hasFloor=clothNearbyObserver(world,center,floor);
+      for(bool onFloor:{true,false}) {
+        if(onFloor && !hasFloor)continue;
+        // Static flight is a test-bench observer only, equivalent to Marvin
+        // flying up the mast. Production always keeps its unchanged 3D radius.
+        const auto observer=onFloor?floor:center-Vec3(0,100,0);
+        size_t count=0;float minimum=std::numeric_limits<float>::max();auto target=all.end();
+        for(auto i=all.begin();i!=all.end();++i) {
+          const auto distance=(i->center-observer).length();
+          count+=distance<Cloth::radiusCm;
+          if(distance<minimum) {minimum=distance;target=i;}
+          }
+        if(count>maximum || (count==maximum && onFloor && !denseSupported) ||
+           (count==maximum && onFloor==denseSupported && minimum<nearest)) {
+          maximum=count;nearest=minimum;found=target;denseObserver=observer;dense=true;denseSupported=onFloor;
+          }
+        }
+      }
+    }
+  else if(selector.find_first_not_of("0123456789")==std::string::npos) {
+    const auto zen=uint32_t(std::strtoull(selector.c_str(),nullptr,10));
+    found=std::find_if(all.begin(),all.end(),[&](const auto& body){return body.zenId==zen;});
+    }
+  else {
+    selector=clothUpper(std::move(selector));
+    found=std::find_if(all.begin(),all.end(),[&](const auto& body){return clothUpper(body.visual)==selector;});
+    if(found==all.end())
+      found=std::find_if(all.begin(),all.end(),[&](const auto& body){return clothUpper(body.visual).find(selector)!=std::string::npos;});
+    }
+  if(found==all.end()) {arenaAbort("cloth fixture requires an authored cloth id or visual selector");return;}
+  Vec3 cameraEye,cameraTarget,cameraNormal;float span=0;
+  bool cameraClear=false;
+  if(dense && clothUpper(found->visual).find("NW_SHIP_")!=std::string::npos) {
+    // Density selection is independent of the camera. A nearest furled sail can
+    // sit against its yard, whereas the complete ship has a clear broadside.
+    cameraClear=clothCamera(world,"harbour",false,&cameraTarget);
+    if(cameraClear) {
+      cameraEye=bench.camPos;span=(cameraEye-cameraTarget).length()/1.6f;
+      cameraNormal=Vec3::normalize(cameraEye-cameraTarget);
+      }
+    }
+  else cameraClear=clothFrame(world,*found,cameraEye,cameraTarget,cameraNormal,span);
+  if(!cameraClear && dense) {
+    // Retain the exact observer and active body count. Only the photographed
+    // cloth target changes if another member of the cluster is unobstructed.
+    for(auto candidate=all.begin();candidate!=all.end();++candidate) {
+      if((candidate->center-denseObserver).length()>=Cloth::radiusCm)continue;
+      if(!clothFrame(world,*candidate,cameraEye,cameraTarget,cameraNormal,span))continue;
+      found=candidate;cameraClear=true;break;
+      }
+    }
+  if(!cameraClear) {arenaAbort("cloth fixture has no unobstructed fully framed camera side");return;}
+  bench.clothZen=found->zenId;bench.clothCase=std::move(label);bench.clothCenter=found->center;
   bench.clothDirection=Vec3(cameraNormal.x,0,cameraNormal.z);
   if(bench.clothDirection.length()<.01f)bench.clothDirection=Vec3(1,0,0);
   else bench.clothDirection=Vec3::normalize(bench.clothDirection);
-  if(!clothStandAt(world,player,found->center,1800.f) && !clothStandAt(world,player,found->center,3200.f)) {
-    arenaAbort("cloth fixture lacks nearby dry supported native observer floor");return;
+  bool supported=false;
+  if(dense) {
+    player.closeWeapon(true);player.clearAiQueue();player.stopWalking();player.setPosition(denseObserver);
+    player.setDirection(found->center-denseObserver);player.updateTransform();
+    bench.clothHeldPosition=denseObserver;bench.clothHold=true;supported=true;
+    bench.clothObserverSupport=denseSupported?"native-floor":"fixture-static-flight";
     }
-  // Native floor placement may rotate the hero's radial direction. Keep the
-  // camera on the independently selected cloth-face normal, seven metres away.
-  bench.subject=nullptr;bench.cam=C_Hold;
-  lookFrom(cameraEye,found->center);
+  else supported=clothStandAt(world,player,found->center,1800.f) || clothStandAt(world,player,found->center,3200.f);
+  if(!supported) {
+    Vec3 observer;
+    if(clothNearbyObserver(world,found->center,observer)) {
+      player.closeWeapon(true);player.clearAiQueue();player.stopWalking();player.setPosition(observer);
+      player.setDirection(found->center-observer);player.updateTransform();
+      bench.clothHeldPosition=observer;bench.clothHold=true;supported=true;
+      }
+    }
+  if(!supported) {
+    const auto observer=found->center+bench.clothDirection*1800.f;
+    player.closeWeapon(true);player.clearAiQueue();player.stopWalking();player.setPosition(observer);
+    player.setDirection(found->center-observer);player.updateTransform();
+    bench.clothHeldPosition=observer;bench.clothHold=true;
+    bench.clothObserverSupport="fixture-static-flight";
+    }
+  bench.subject=nullptr;bench.cam=C_Hold;lookFrom(cameraEye,cameraTarget);
   bench.clothPrevious.clear();bench.clothPreviousActive.clear();bench.clothTrace=true;
   world.physic()->cloth().resetStats();
+  size_t nearby=0;for(const auto& body:all)nearby+=(body.center-player.position()).length()<Cloth::radiusCm;
   event("cloth_setup","\"case\":"+jsonStr(bench.clothCase)+",\"world\":"+jsonStr(world.name())+
-    ",\"zen_id\":"+std::to_string(zen)+",\"visual\":"+jsonStr(found->visual)+
+    ",\"selector\":"+jsonStr(selector)+",\"zen_id\":"+std::to_string(found->zenId)+",\"visual\":"+jsonStr(found->visual)+
     ",\"center_cm\":"+ragdollVector(found->center)+",\"hero_cm\":"+ragdollVector(player.position())+
-    ",\"camera_cm\":"+ragdollVector(cameraEye)+",\"camera_face_normal\":"+ragdollVector(cameraNormal));
+    ",\"observer_support\":"+jsonStr(bench.clothObserverSupport)+
+    ",\"nearby_cloth_count\":"+std::to_string(nearby)+",\"camera_cm\":"+ragdollVector(cameraEye)+
+    ",\"camera_target_cm\":"+ragdollVector(cameraTarget)+",\"camera_face_normal\":"+ragdollVector(cameraNormal)+
+    ",\"camera_frame_span_cm\":"+ragdollNumber(span));
+  }
+
+bool clothCamera(World& world,std::string_view group,bool required,Vec3* targetOut) {
+  if(group!="harbour") {if(required)arenaAbort("cloth camera group expects harbour");return false;}
+  const auto all=world.physic()->cloth().snapshots();
+  std::vector<Vec3> points;
+  size_t objects=0;
+  for(const auto& body:all)if(clothUpper(body.visual).find("NW_SHIP_")!=std::string::npos) {
+    points.insert(points.end(),body.worldPositionsCm.begin(),body.worldPositionsCm.end());++objects;
+    }
+  if(points.empty()) {if(required)arenaAbort("harbour camera requires the authored ship cloth");return false;}
+  Vec3 low=points.front(),high=low;
+  for(const auto& point:points) {
+    low.x=std::min(low.x,point.x);low.y=std::min(low.y,point.y);low.z=std::min(low.z,point.z);
+    high.x=std::max(high.x,point.x);high.y=std::max(high.y,point.y);high.z=std::max(high.z,point.z);
+    }
+  const auto target=(low+high)*.5f;
+  const auto distance=(high-low).length()*1.6f;
+  Vec3 eye;bool clear=false;
+  for(float angle:{3.14f,0.f,2.74f,.4f,3.54f,-.4f,2.34f,.8f}) {
+    eye=target+Vec3(std::cos(angle)*distance,distance*.3f,std::sin(angle)*distance);
+    bool visible=true;
+    for(const auto& body:all)if(clothUpper(body.visual).find("NW_SHIP_")!=std::string::npos) {
+      const auto delta=body.center-eye;
+      visible&=!world.physic()->ray(eye,eye+delta*.97f).hasCol;
+      }
+    if(visible) {clear=true;break;}
+    }
+  if(!clear) {if(required)arenaAbort("harbour camera has no unobstructed view of every authored cloth object");return false;}
+  bench.subject=nullptr;bench.cam=C_Hold;lookFrom(eye,target);
+  if(targetOut)*targetOut=target;
+  event("cloth_camera","\"group\":"+jsonStr(group)+",\"objects\":"+std::to_string(objects)+
+    ",\"camera_cm\":"+ragdollVector(eye)+",\"target_cm\":"+ragdollVector(target)+
+    ",\"bounds_min_cm\":"+ragdollVector(low)+",\"bounds_max_cm\":"+ragdollVector(high));
+  return true;
+  }
+
+void clothSaveSession(World& world,const std::string& label) {
+  if(label.empty() || label.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
+    throw std::runtime_error("invalid cloth save label");
+  std::vector<uint8_t> bytes;
+  {MemWriter writer(bytes);Serialize out(writer);Pixmap preview(1,1,TextureFormat::RGBA8);std::memset(preview.data(),0,4);
+  Gothic::inst().gameSession()->save(out,"cloth "+label,preview);}
+  const auto path="session-cloth-"+label+".sav";
+  std::ofstream file(outDir+"/"+path,std::ios::binary);
+  file.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
+  if(!file)throw std::runtime_error("cannot write complete cloth GameSession archive");
+  event("cloth_session_save","\"archive\":"+jsonStr(path)+",\"bytes\":"+std::to_string(bytes.size())+
+    ",\"world\":"+jsonStr(world.name())+",\"cloth\":"+clothRows(world));
+  }
+
+void clothInitial(World& world,std::string_view label) {
+  bool rest=true;size_t count=0;
+  for(const auto& body:world.physic()->cloth().snapshots()) {
+    ++count;
+    rest&=!body.active && body.maxSpeedCmPerSec==0.f && body.maxSpeedEverCmPerSec==0.f &&
+      body.projectileHits==0 && body.arrowPasses==0 && body.recoveryCount==0 && body.maxAnchorErrorCm<=.5f;
+    }
+  event("cloth_session_initial","\"label\":"+jsonStr(label)+",\"world\":"+jsonStr(world.name())+
+    ",\"cloth_count\":"+std::to_string(count)+",\"rest\":"+(rest?"true":"false")+",\"cloth\":"+clothRows(world));
+  if(!count || !rest)arenaAbort("cloth cold load did not start from transient rest");
   }
 
 void clothShoot(World& world,Npc& player,std::string_view kind) {
@@ -8379,7 +8604,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     Gothic::settingsSetI("GAME","cloth",a[1]=="on");
     event("cloth_toggle","\"enabled\":"+std::string(w.physic()->clothEnabled()?"true":"false"));
     }
-  else if(c=="cloth" && a.size()==4 && a[1]=="setup")clothSetup(w,pl,uint32_t(num(a,2,-1)),a[3]);
+  else if(c=="cloth" && a.size()==4 && a[1]=="setup")clothSetup(w,pl,a[2],a[3]);
   else if(c=="cloth" && a.size()==3 && a[1]=="wind") {
     if(a[2]!="calm" && a[2]!="gust" && a[2]!="natural") {arenaAbort("cloth wind expects calm, gust or natural");return;}
     w.physic()->cloth().setWindScale(a[2]=="calm"?0.f:(a[2]=="gust"?2.f:1.f));
@@ -8387,13 +8612,18 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="cloth" && a.size()==3 && a[1]=="checkpoint")clothCheckpoint(w,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="shoot")clothShoot(w,pl,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="save")clothSaveSession(w,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="camera")clothCamera(w,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="initial")clothInitial(w,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="verify") {
     bool pass=true;bool target=false;
     for(const auto& body:w.physic()->cloth().snapshots()) {
       if(a[2]=="anchors") {
         target|=body.zenId==bench.clothZen && body.active && body.pinned>0;
         pass&=std::isfinite(body.maxAnchorErrorCm) && body.maxAnchorErrorCm<=.5f &&
-          std::isfinite(body.maxSpeedEverCmPerSec) && body.recoveryCount==0;
+          std::isfinite(body.maxSpeedEverCmPerSec) && body.maxSpeedEverCmPerSec<=Cloth::maxVelocityMS*100.f+.5f && body.recoveryCount==0;
+        for(const auto& point:body.worldPositionsCm)
+          pass&=std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
         }
       else if(body.zenId==bench.clothZen) {
         target=true;
@@ -8408,8 +8638,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(!pass)arenaAbort("cloth native "+a[2]+" check failed");
     }
   else if(c=="cloth" && a.size()==3 && a[1]=="distance") {
-    if(bench.clothZen==uint32_t(-1) || !clothStandAt(w,pl,bench.clothCenter,num(a,2,4000))) {
-      arenaAbort("cloth boundary requires a dry supported observer at the requested radius");return;
+    if(bench.clothZen==uint32_t(-1)) {arenaAbort("cloth boundary requires a selected target");return;}
+    if(!clothStandAt(w,pl,bench.clothCenter,num(a,2,4000))) {
+      if(bench.clothObserverSupport!="fixture-static-flight") {
+        arenaAbort("cloth boundary requires a dry supported observer at the requested radius");return;
+        }
+      bench.clothHeldPosition=bench.clothCenter+bench.clothDirection*num(a,2,4000);
+      pl.setPosition(bench.clothHeldPosition);pl.updateTransform();
       }
     event("cloth_observer","\"hero_cm\":"+ragdollVector(pl.position())+",\"distance_cm\":"+
       ragdollNumber((pl.position()-bench.clothCenter).length()));
@@ -13775,6 +14010,9 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         // the first native step, after observing the unmodified loaded state.
         if(args[2]=="restored")
           exec("movable observe",*world,*player,ctrl);
+        }
+      else if(args.size()==3 && args[0]=="cloth" && args[1]=="initial") {
+        ++bench.pc;clothInitial(*world,args[2]);
         }
       else if(args.size()==3 && args[0]=="destruction2" && args[1]=="initial") {
         ++bench.pc;destructionSessionSnapshot(*world,args[2]);

@@ -16,6 +16,11 @@ class AnimMesh;
 
 class VisualObjects final {
   public:
+    struct MorphSample {
+      uint32_t frame0 = 0, frame1 = 0;
+      float alpha = 0, intensity = 0;
+      };
+
     class Item final {
       public:
       Item()=default;
@@ -41,11 +46,13 @@ class VisualObjects final {
       void     setAsGhost  (bool g);
       void     setFatness  (float f);
       void     setWind     (zenkit::AnimationType m, float intensity);
+      void     setVisible  (bool visible);
       // Two vec4 entries (local position, local normal) per packed vertex.
       void     setDeformation(const std::vector<Tempest::Vec4>& vertices);
       void     startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly = false);
       void     setMMShape  (std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
       float    morphWeight (std::string_view anim);  // as shown now: intensity and fade
+      MorphSample morphSample(std::string_view anim, uint64_t tick) const;
 
       const Material&    material() const;
       const Bounds&      bounds()   const;
@@ -134,6 +141,7 @@ class VisualObjects final {
       float               windIntensity = 0;
       float               fatness       = 0;
       bool                isGhost       = false;
+      bool                visible       = true;
       };
 
     void     preFrameUpdateWind();

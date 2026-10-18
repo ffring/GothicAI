@@ -1,7 +1,5 @@
-# Authored cloth-vob smoke fixture. Run with WORLD=OLDWORLD.ZEN.
-# OC_LOB_FLAG_SMALL zen 6367; four further cloth-vobs are within 40 m.
-# Harbour sails/flags and Khorinis banners are baked worldmesh surfaces, so this
-# fixture deliberately makes no claim about the requested harbour/city coverage.
+# Old Camp banner acceptance: OFF/ON, calm/gust, native projectiles and 40 m transitions.
+# WORLD=OLDWORLD.ZEN; OC_LOB_FLAG_SMALL authored zen id 6367.
 seed 73013
 cheat god
 set time 12 0
@@ -82,5 +80,8 @@ cloth distance 3450
 wait 3000
 cloth verify anchors
 cloth checkpoint final
+cloth wind gust
+wait 3000
+cloth save moving
 stop
 physics stats

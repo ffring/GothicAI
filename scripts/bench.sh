@@ -128,6 +128,12 @@ else
   START_ARGS=(-save 1)
 fi
 
+# Cloth fixtures compare fixed cameras and clocks; the new-game chapter video
+# otherwise runs before their first command on NEWWORLD.
+if [[ "$NAME" == cloth* ]]; then
+  START_ARGS+=(-nointro)
+fi
+
 if [[ "${NO_BUILD:-}" != 1 ]]; then
   cmake --build "$ROOT/OpenGothic/build" --target Gothic2Notr >"$OUT/build.log" 2>&1 \
     || { tail -30 "$OUT/build.log"; exit 1; }

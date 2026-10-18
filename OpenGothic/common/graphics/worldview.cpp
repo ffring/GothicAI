@@ -112,6 +112,15 @@ void WorldView::setClothWind(bool enabled, float scale) {
   sGlobal.windScale = scale;
   }
 
+void WorldView::setOriginalClothMesh(const PackedMesh& mesh) {
+  originalCloth=std::make_unique<Landscape>(visuals,mesh);
+  }
+
+void WorldView::setOriginalClothVisible(bool visible) {
+  if(originalCloth)
+    originalCloth->setVisible(visible);
+  }
+
 void WorldView::dbgLights(DbgPainter& p) const {
   gLights.dbgLights(p);
   }

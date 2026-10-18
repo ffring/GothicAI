@@ -1,0 +1,84 @@
+# WORLD=NEWWORLD.ZEN; whole ship plus close views of authored worldmesh cloth.
+# The high-mast observer may use explicitly labeled fixture static flight.
+seed 73013
+cheat god
+set time 12 0
+overlay off
+view full
+cloth setup densest harbour-density
+cloth camera harbour
+cloth off
+cloth wind calm
+wait 12000
+rec cloth-harbour-off
+shot cloth-harbour-off-calm
+wait 3000
+cloth wind gust
+wait 10000
+shot cloth-harbour-off-gust
+cloth checkpoint harbour-off-gust
+stop
+cloth wind calm
+cloth on
+wait 2000
+cloth reset-stats
+wait 10000
+cloth checkpoint harbour-calm-10s
+cloth verify anchors
+rec cloth-harbour-on
+shot cloth-harbour-on-calm
+wait 3000
+cloth wind gust
+wait 10000
+shot cloth-harbour-on-gust
+cloth checkpoint harbour-gust
+cloth verify anchors
+stop
+
+# The main mast flag fills the frame for the OFF/ON motion and spell comparison.
+cloth setup NW_SHIP_FLAG_01:1 harbour-main-flag
+cloth off
+cloth wind natural
+wait 3000
+rec cloth-harbour-flag-off
+shot cloth-harbour-flag-off
+wait 10000
+stop
+cloth on
+cloth wind calm
+wait 12000
+rec cloth-harbour-flag-on
+shot cloth-harbour-flag-on-calm
+wait 3000
+cloth wind gust
+wait 10000
+cloth checkpoint harbour-flag-gust
+cloth shoot fireball
+wait 2000
+cloth verify fireball
+cloth verify anchors
+cloth checkpoint harbour-flag-after-fireball
+shot cloth-harbour-flag-after-fireball
+stop
+
+# Furled cloth on the diagonal forestay remains geometrically tied to the stay.
+cloth setup NW_SHIP_SAIL_02:6 harbour-furled-sail
+cloth off
+wait 3000
+rec cloth-harbour-sail-off
+shot cloth-harbour-sail-off
+wait 10000
+stop
+cloth on
+cloth wind calm
+wait 12000
+rec cloth-harbour-sail-on
+shot cloth-harbour-sail-on-calm
+wait 3000
+cloth wind gust
+wait 10000
+cloth verify anchors
+cloth checkpoint harbour-sail-gust
+shot cloth-harbour-sail-on-gust
+stop
+physics stats

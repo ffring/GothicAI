@@ -100,6 +100,21 @@ void VisualObjects::Item::setWind(zenkit::AnimationType m, float intensity) {
     owner->objectsWind.insert(id);
   }
 
+void VisualObjects::Item::setVisible(bool visible) {
+  if(owner==nullptr)
+    return;
+  auto& obj = owner->objects[id];
+  if(obj.visible==visible || obj.isEmpty())
+    return;
+  obj.visible = visible;
+  const auto meshlets = obj.iboLen/PackedMesh::MaxInd;
+  const auto count = obj.type==DrawCommands::Landscape ? meshlets : 1u;
+  for(uint32_t i=0;i<count;++i)
+    owner->clustersMem[obj.clusterId+i].meshletCount = visible ? (obj.type==DrawCommands::Landscape ? 1u : meshlets) : 0u;
+  owner->clustersMem.markClusters(obj.clusterId,count);
+  owner->updateRtAs(id);
+  }
+
 void VisualObjects::Item::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly) {
   if(owner!=nullptr)
     owner->startMMAnim(id, anim, intensity, timeUntil, freeOnly);
@@ -152,6 +167,38 @@ void VisualObjects::Item::setMMShape(std::string_view anim, uint32_t frame0, uin
 
 float VisualObjects::Item::morphWeight(std::string_view anim) {
   return owner!=nullptr ? owner->morphWeight(id, anim) : 0.f;
+  }
+
+VisualObjects::MorphSample VisualObjects::Item::morphSample(std::string_view name, uint64_t tick) const {
+  if(owner==nullptr)
+    return {};
+  auto& obj = owner->objects[id];
+  const auto* mesh = obj.bucketId->staticMesh;
+  if(mesh==nullptr || mesh->morph.anim==nullptr)
+    return {};
+  for(const auto& ani:obj.morphAnim) {
+    if(ani.id>=mesh->morph.anim->size() || ani.timeUntil<tick)
+      continue;
+    const auto& anim = (*mesh->morph.anim)[ani.id];
+    if(anim.name!=name || anim.numFrames==0 || ani.intensity<=0.f)
+      continue;
+    const auto time = tick-ani.timeStart;
+    float weight = 1.f;
+    if(!ani.manual) {
+      if(anim.blendIn>0.f)
+        weight = std::min(weight,float(time)*anim.blendIn);
+      if(anim.blendOut>0.f && ani.timeUntil!=uint64_t(-1))
+        weight = std::min(weight,float(ani.timeUntil-tick)*anim.blendOut);
+      }
+    const auto quantize = [](float x) { return float(uint16_t(std::clamp(x,0.f,1.f)*uint16_t(-1)))/float(uint16_t(-1)); };
+    MorphSample sample;
+    sample.frame0 = ani.manual ? ani.frame0 : uint32_t((time/anim.tickPerFrame+0)%anim.numFrames);
+    sample.frame1 = ani.manual ? ani.frame1 : uint32_t((time/anim.tickPerFrame+1)%anim.numFrames);
+    sample.alpha = quantize(ani.manual ? ani.alpha : float(time%anim.tickPerFrame)/float(anim.tickPerFrame));
+    sample.intensity = quantize(ani.intensity*std::clamp(weight,0.f,1.f));
+    return sample;
+    }
+  return {};
   }
 
 const Material& VisualObjects::Item::material() const {
@@ -741,7 +788,7 @@ bool VisualObjects::updateRtScene(RtScene& out) {
   if(!out.isUpdateRequired())
     return false;
   for(auto& obj:objects) {
-    if(obj.isEmpty())
+    if(obj.isEmpty() || !obj.visible)
       continue;
     auto& bucket = *obj.bucketId;
     auto* mesh   = bucket.staticMesh;
