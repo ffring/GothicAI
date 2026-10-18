@@ -86,11 +86,11 @@
 | Сделки и поручения | `deals` (окно сделки, долги), `contracts` (опыт, обучение, платные задания), `chests`, `errands` (`plan`), `meetings` (`meet`), `guide` (`lead`) |
 | Сюжет | `story`, `validator`, `storyguard`, `programs`, `director`, `questbook`, `questlog`, `triggers`, `occasions`, `showrunner`, `authoring`, `casting`, `cast`, `characters` (карточки характера), `chains` |
 | Данные | `gamedata/`: `characters.json`, `lore.json`, `places.json`, `stash.json`, `ou.py` (реплики OU.BIN), `storygraph.py` |
-| Сценарии e2e | `scenarios/`: общее в `common.py`, модуль каждой области — в списке «Сценарии по областям» ниже; точки входа — в `__init__.py` |
+| Сценарии e2e | `scenarios/`: общее в `common.py`, поддельный Responses WS/HTTP-сервер — в `responses_server.py`; модуль каждой области — в списке «Сценарии по областям» ниже; точки входа — в `__init__.py` |
 
 ## Движок: наши подсистемы
 
-`OpenGothic/` — форк Try/OpenGothic. Сторонние библиотеки лежат в `lib/` обычными файлами ([`VENDORED.md`](../OpenGothic/lib/VENDORED.md)). Целиком наше: `ai_bridge/`, `game/bodyrunner.cpp`, `tests/*_contract.cpp`. В `common/` наши `physics/`, части `game/` и `graphics/mesh/`, `testbench.*`, `nav*`; остальное — апстрим с точечными правками.
+`OpenGothic/` — форк Try/OpenGothic. Сторонние библиотеки лежат в `lib/` обычными файлами ([`VENDORED.md`](../OpenGothic/lib/VENDORED.md)). Целиком наше: `ai_bridge/`, `game/bodyrunner.cpp`, `tests/*_contract.cpp`. В `common/` наши `physics/`, части `game/` и `graphics/mesh/`, `testbench.*`, `nav*`; остальное — апстрим с точечными правками. Эмуляция Ikarus/LeGo апстрима (`common/game/compatibility/`, кроме `phoenix.*`) удалена; при слиянии апстрима конфликт `modify/delete` в этой папке решается сохранением удаления.
 
 Всё ниже включено по умолчанию. Выключатели `OPENGOTHIC_*=0` нужны для сравнений. Каждый выключатель с модулем и проверкой — в [`features.md`](features.md).
 
@@ -147,7 +147,7 @@
 Сценарий считается пройденным, когда все значения результата начинаются с `done`. Описание каждого — в шапке `scripts/e2e.sh`. Тесты сервисов лежат в их `tests/`, тесты скриптов — в `scripts/tests/`.
 
 **Сценарии по областям** (модуль в `server/src/gothic_ai/scenarios/`):
-- **основа** (`basics.py`): `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`;
+- **основа** (`basics.py`): `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`, `websocket`;
 - **спутники и бой** (`companions.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`;
 - **восприятие** (`perception.py`; `broken` — `broken.py`, `places` — прямо в `cli.py`): `see`, `seen`, `hearing`, `cave`, `ground`, `places`, `knows`, `remembers`, `trace`, `broken`;
 - **жизнь NPC** (`npc_life.py`): `day`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;

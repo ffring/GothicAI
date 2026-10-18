@@ -2,6 +2,8 @@
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
 #   m0: takes Xardas over, walks him around and returns him to his routine
 #   m1: Xardas answers a player question line by line (LLM backend: LLM=fake|chatgpt|local)
+#   websocket: Lobart and Hilda speak through Responses against an in-process fake server: per-npc
+#       WebSocket reuse, tool continuation, HTTP fallback and --no-websocket; SAVE=save_slot_1.sav; LLM=fake
 #   m2: npc actions (give_item, follow/stop, gestures)
 #   m3: memory survives save/load and follows the save; push-to-talk from a wav file (streamed at
 #       speaking pace) through the ASR service (ASR=fake|voxtral|chatgpt)
