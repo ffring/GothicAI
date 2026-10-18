@@ -382,6 +382,7 @@ PY
 ''')
         cases = [(slot, {}) for slot in range(3)] + [
             (1, {'PORT': '51000'}),
+            (0, {'TEMPEST_WINDOW_SIZE': '1280x720'}),
             (2, dict(zip(names, ('51001', '51002', '51003', '1280x720', '17,29')))),
         ]
         for slot, explicit in cases:
@@ -396,7 +397,9 @@ remote_run e2e "$TEST_ROOT/worktree" run
                 expected = dict(zip(names, (str(47827 + slot * 100),
                                            str(47829 + slot * 100),
                                            str(47840 + slot * 100), '640x360',
-                                           ('0,0', '660,0', '0,400')[slot])))
+                                           ('100,100', '800,100', '100,560')[slot])))
+                if explicit.get('TEMPEST_WINDOW_SIZE', '640x360') != '640x360':
+                    expected['TEMPEST_WINDOW_POS'] = '0,0'
                 expected.update(explicit)
                 self.assertEqual(json.loads((self.root / 'e2e-env.json').read_text()), expected)
 

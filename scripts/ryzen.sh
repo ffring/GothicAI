@@ -80,6 +80,11 @@ desktop() {
 
 e2e_window_position() {
   [[ -z "${TEMPEST_WINDOW_POS+x}" ]] || return 0
+  if [[ "$TEMPEST_WINDOW_SIZE" != 640x360 ]]; then
+    # Nonstandard windows run exclusively, so preserve their full usable screen.
+    export TEMPEST_WINDOW_POS=0,0
+    return 0
+  fi
   local slot="$1" width height screen_width screen_height columns x y
   [[ "$TEMPEST_WINDOW_SIZE" =~ ^([0-9]+)x([0-9]+)$ ]] || {
     echo 'Invalid TEMPEST_WINDOW_SIZE for e2e placement' >&2; return 2;
@@ -90,11 +95,12 @@ e2e_window_position() {
   }
   screen_width=$((10#${BASH_REMATCH[1]})) screen_height=$((10#${BASH_REMATCH[2]}))
   (( width > 0 && height > 0 )) || return 2
-  # Allow space for decorations; on 1920x1080 the default windows form a 2x2 grid.
-  columns=$(((screen_width + 20) / (width + 20)))
+  # Mutter's measured frames are 690x447 for a 640x360 client. Keep clear of
+  # the dock/panel (which clamp a requested 0,0), decorations and shadows.
+  columns=$(((screen_width - 200 + 60) / (width + 60)))
   (( columns > 0 )) || columns=1
-  x=$(((slot % columns) * (width + 20)))
-  y=$(((slot / columns) * (height + 40)))
+  x=$((100 + (slot % columns) * (width + 60)))
+  y=$((100 + (slot / columns) * (height + 100)))
   if (( x + width > screen_width || y + height > screen_height )); then
     echo "E2e window $TEMPEST_WINDOW_SIZE in slot $slot does not fit screen $RYZEN_SCREEN_SIZE" >&2
     return 2
