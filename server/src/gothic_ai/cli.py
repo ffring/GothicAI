@@ -44,6 +44,7 @@ from .chronicle import Chronicle
 from .concerns import Concerns
 from .consequences import LieConsequences
 from .contracts import symbol_by_name
+from .crimes import COMMUNITIES, Crimes
 from .daylife import DayDesk
 from .deals import Deals
 from .dialogue import DialogueManager
@@ -99,6 +100,7 @@ from .questbook import QuestBook
 from .questlog import QuestLog
 from .quests import QuestBoard
 from .replay import replay as replay_turn
+from .scenario_crimes import crimes as crimes_scenario
 from .showrunner import Showrunner
 from .sightings import Sightings
 from .social import Rumors
@@ -153,6 +155,7 @@ HELP = """commands (npc defaults to the last attached one):
   director look     look for such quests now and repair them
   occasions         the hero's place, queued and recent occasions for the director
   questlog          the scripts' open quests and recent state changes
+  crimes            the current branch's crimes, their witnesses and communities
   lines             the director's plot lines, their state and remaining budget
   pitch             an occasion here and now, subject to the director's budget
   claims            quests of the scripts the hero said were done: believed, lies, found out
@@ -210,6 +213,7 @@ class ServerState:
         self.talk: TalkDesk | None = None
         self.story: StoryPatches | None = None
         self.chronicle: Chronicle | None = None
+        self.crimes: Crimes | None = None
         self.quests: QuestBoard | None = None
         self.director: Director | None = None
         self.occasions: Occasions | None = None
@@ -368,6 +372,15 @@ class Console:
                     print("recent:")
                     for fact in questlog.recent:
                         print("  " + json.dumps(fact, ensure_ascii=False))
+            case "crimes":
+                if (crimes := self.state.crimes) is None:
+                    print("crimes: off")
+                else:
+                    for fact in crimes.chronicle.facts("crime"):
+                        print(json.dumps(fact, ensure_ascii=False))
+                    print("communities:")
+                    for community in COMMUNITIES:
+                        print(f"  {community}: {', '.join(crimes.lawkeepers(community)) or '-'}")
             case "lines":
                 if (showrunner := self.state.showrunner) is None:
                     print("lines: off")
@@ -708,7 +721,9 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("lines in a fight: %s", quick_at or "the conversational model")
     log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
     graph = (
-        None if args.no_director and args.no_knowledge and args.no_questlog else _story_graph(args, game_dir)
+        None
+        if args.no_director and args.no_knowledge and args.no_questlog and args.no_crimes
+        else _story_graph(args, game_dir)
     )
     place_book = places.PlaceBook.load()
     log.info("places: %s", f"{len(place_book.places)} named" if place_book else "no book, waypoints only")
@@ -809,6 +824,8 @@ async def serve(args: argparse.Namespace) -> int:
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
+        if not args.no_crimes:
+            state.crimes = Crimes(link, state.chronicle, graph=graph)
         # the director's triggers fire in the game, with or without the server: the chronicle hears of them
         state.triggers = Triggers(link, state.chronicle)
         talk = state.talk
@@ -1151,6 +1168,8 @@ async def serve(args: argparse.Namespace) -> int:
                 task.cancel()
             if state.questlog is not None:
                 await state.questlog.close()
+            if state.crimes is not None:
+                await state.crimes.close()
             if brain is not None:
                 brain.cancel()
 
@@ -1239,6 +1258,12 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario companion: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "crimes":
+                assert state.crimes is not None
+                results = await crimes_scenario(link, state.crimes)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario crimes: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "ground":
                 assert state.dialogue is not None and state.talk is not None and state.perception is not None
@@ -2202,6 +2227,7 @@ def main() -> None:
             "authored",
             "occasions",
             "questlog",
+            "crimes",
             "showrunner",
             "showrunner_live",
             "vanilla_line",
@@ -2281,6 +2307,7 @@ def main() -> None:
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
     p.add_argument("--no-questlog", action="store_true", help="do not track the scripts' quest states")
+    p.add_argument("--no-crimes", action="store_true", help="do not record the hero's crimes and witnesses")
     p.add_argument(
         "--no-occasions", action="store_true", help="do not watch for the director's story occasions"
     )
