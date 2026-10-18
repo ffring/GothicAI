@@ -278,3 +278,90 @@ def test_thumbnail_cli_refuses_another_channel(monkeypatch, tmp_path, capsys):
         cli.main()
     assert done.value.code == 1 and calls == ["channel"]
     assert "not UC2" in capsys.readouterr().err
+
+
+def _mock_video_api(monkeypatch, localizations=None, update_status=200):
+    """A video already up: its snippet, its translations, and the videos.update it gets."""
+    calls, sent = [], {}
+    snippet = {"title": "Мебель", "description": "Описание", "tags": ["Gothic 2"], "categoryId": "20",
+               "defaultLanguage": "ru", "defaultAudioLanguage": "ru", "channelId": "UC1",
+               "localized": {"title": "Мебель"}}
+    state = {"localizations": dict(localizations or {"ru": {"title": "Мебель", "description": "Описание"}})}
+    monkeypatch.setattr(youtube, "access_token", lambda: "t")
+    monkeypatch.setattr(youtube, "granted", lambda: {youtube.CAPTIONS_SCOPE})
+
+    def get(url, params, headers, timeout):
+        assert headers["Authorization"] == "Bearer t"
+        if url == f"{youtube.API}/channels":
+            calls.append("channel")
+            return httpx.Response(200, json={"items": [{"id": "UC1", "snippet": {"title": "GothicAI"}}]})
+        assert url == f"{youtube.API}/videos" and params["id"] == "v1"
+        calls.append(f"get {params['part']}")
+        return httpx.Response(200, json={"items": [{"snippet": snippet, **state}]})
+
+    def put(url, params, headers, content, timeout):
+        assert url == f"{youtube.API}/videos" and headers["Authorization"] == "Bearer t"
+        calls.append(f"update {params['part']}")
+        sent.update(json.loads(content))
+        if update_status == 200:
+            state["localizations"] = sent["localizations"]
+        return httpx.Response(update_status, json={"error": {"message": "nope"}})
+
+    monkeypatch.setattr(youtube.httpx, "get", get)
+    monkeypatch.setattr(youtube.httpx, "put", put)
+    return calls, sent
+
+
+def test_translations_on_a_video_keep_its_snippet_and_other_languages(monkeypatch):
+    calls, sent = _mock_video_api(monkeypatch, {"ru": {"title": "Мебель", "description": "Описание"},
+                                                "de": {"title": "Möbel", "description": "D"}})
+    en = {"en": {"title": "Furniture", "description": "Everything was nailed down."}}
+    assert youtube.set_translations("t", "v1", en) == {"ru", "de", "en"}
+    assert calls == ["get snippet,localizations", "update snippet,localizations", "get localizations"]
+    assert sent["id"] == "v1"
+    # the snippet goes back as it was (videos.update would drop the tags otherwise), without read-only fields
+    assert sent["snippet"] == {"title": "Мебель", "description": "Описание", "tags": ["Gothic 2"],
+                               "categoryId": "20", "defaultLanguage": "ru", "defaultAudioLanguage": "ru"}
+    assert sent["localizations"]["de"] == {"title": "Möbel", "description": "D"}
+    assert sent["localizations"]["en"] == en["en"]
+
+
+def test_a_translation_into_the_videos_own_language_is_refused(monkeypatch):
+    calls, _ = _mock_video_api(monkeypatch)
+    with pytest.raises(youtube.YouTubeError, match="own language"):
+        youtube.set_translations("t", "v1", {"ru": {"title": "Другое", "description": ""}})
+    assert calls == ["get snippet,localizations"]
+
+
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_translate_cli_asks_then_sets_the_other_sections(monkeypatch, tmp_path, capsys, confirmed):
+    calls, sent = _mock_video_api(monkeypatch)
+    meta = tmp_path / "youtube.json"
+    meta.write_text(json.dumps({"ru": {"title": "Мебель", "description": "Описание"},
+                                "en": {"title": "Furniture", "description": "Nailed down."}}))
+    monkeypatch.setattr("builtins.input", lambda prompt: "y" if confirmed else "n")
+    monkeypatch.setattr(sys, "argv", ["gothic-shorts", "translate", "v1", "--meta", str(meta),
+                                      "--channel", "UC1"])
+    with pytest.raises(SystemExit) as done:
+        cli.main()
+    assert done.value.code == (0 if confirmed else 1)
+    output = capsys.readouterr().out
+    assert "en:      Furniture" in output
+    if confirmed:
+        assert "update snippet,localizations" in calls
+        assert set(sent["localizations"]) == {"ru", "en"}
+        assert "translations: en, ru" in output
+    else:
+        assert not any(c.startswith("update") for c in calls) and "not set" in output
+
+
+def test_translate_cli_reports_a_rejected_update(monkeypatch, tmp_path, capsys):
+    _mock_video_api(monkeypatch, update_status=403)
+    meta = tmp_path / "youtube.json"
+    meta.write_text(json.dumps({"ru": {"title": "М", "description": ""},
+                                "en": {"title": "F", "description": ""}}))
+    monkeypatch.setattr(sys, "argv", ["gothic-shorts", "translate", "v1", "--meta", str(meta),
+                                      "--channel", "UC1", "--yes"])
+    with pytest.raises(SystemExit) as done:
+        cli.main()
+    assert done.value.code == 1 and "videos.update: 403" in capsys.readouterr().err
