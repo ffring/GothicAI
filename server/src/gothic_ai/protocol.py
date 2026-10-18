@@ -26,7 +26,7 @@ ERRAND_PROTOCOL = 39  # inventory items' `mission`; story_effect give to another
 BROKEN_TRACE_PROTOCOL = 40  # visible debris, with the time of breakage kept in the engine and save
 BODY_CONTROL_PROTOCOL = 41  # shared body authority and combat API (body_acquire, body_action, ...)
 CRIME_PROTOCOL = 42  # raw hero deeds, ownership, engine perception recipients and pickpocket evidence
-FIGHT_REACTION_PROTOCOL = 43  # native combat targets, early npc_threat, immediate fight/flee with own SVM
+FIGHT_REACTION_PROTOCOL = 43  # Look.combat_target/fighting, npc_threat, immediate fight/flee with own SVM
 
 # --- game -> server -----------------------------------------------------------
 
