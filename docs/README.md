@@ -106,7 +106,7 @@
 | HD-текстуры | `common/resources.cpp` | работают, если есть каталог `OPENGOTHIC_TEXTURES` | — |
 | Тестовый стенд | `common/testbench.*`, `OPENGOTHIC_BENCH*` | — | [`scripts/bench/README.md`](../scripts/bench/README.md) |
 
-Консоль для агентов: `ai status | attach <npc> | detach | dialogs <npc> | ptt start|stop|cancel` (в `aibridge.cpp`). Флаги командной строки игры — `common/commandline.cpp` (`-nointro`, `-save`, `-window`, …).
+Консоль для агентов: `ai status | attach <npc> | detach | dialogs <npc> | ptt start|stop|cancel` (в `aibridge.cpp`). Флаги командной строки игры — `common/commandline.cpp` (`-nointro`, `-save`, `-window`, …). Флаги рендера (`-ms`, `-rt`, `-gi`, `-vsm`, `-rtsm`, `-aa`): что из них работает на Mac и Ryzen и сколько стоит — [замер 18.10](../reports/render-features/2026-10-18/README.md).
 
 ## Сервисы
 
