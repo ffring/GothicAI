@@ -171,10 +171,6 @@ async def crime_react(
         attempted: list[dict[str, Any]] = []
 
         async def read() -> bool:
-            views = await link.npc_view([witness])
-            if not views:
-                return False
-            view = views[0]
             senses, senses_range, can_see, free_los, distance, state_time = await link.story_eval(
                 witness,
                 [
@@ -187,6 +183,11 @@ async def crime_react(
                 ],
             )
             snapshot = await link.snapshot(witness, fresh=True)
+            # Make the final read one coherent native sample of callback, posture and visibility.
+            views = await link.npc_view([witness])
+            if not views:
+                return False
+            view = views[0]
             last.update(
                 {
                     "view": view.model_dump(),
@@ -220,6 +221,21 @@ async def crime_react(
 
         ready = False
         for distance in (None, 180, 300):
+            views = await link.npc_view([witness])
+            if not views or views[0].state != "ZS_STAND_WP" or views[0].body != "stand":
+                # A native routine can reclaim its NPC between test placements. Re-establish
+                # the standing scene before computing a position relative to it, never relative
+                # to the stove's interaction pose. No further npc_act replaces this activity.
+                if not await stand(witness, WITNESS_POINT, ready=True):
+                    return check(
+                        f"{label}_perception_ready",
+                        False,
+                        {
+                            **last,
+                            "placements": attempted,
+                            "reason": "standing placement lost",
+                        },
+                    )
             # BED_02 lies among furniture, so a grounded hero there may have no head-to-head ray
             # even after the NPC has turned. Start on the connected walk point; if it is occluded,
             # move only the hero a short way in front of the NPC's actual current heading.
@@ -229,13 +245,21 @@ async def crime_react(
             else:
                 await link.debug("teleport", near=witness, distance=distance)
                 placement = {"in_front_of": witness, "distance": distance}
-            # Use the native turn to update its animated pose as well as its body angle. Neither
-            # queued/idle alone nor a hard-set angle proves that the NPC can actually see the hero.
-            placement["turn"] = await link.npc_act(witness, "turn_to", npc="PLAYER")
+            # Keep the initialized activity's tracking intact. A second npc_act would replace it;
+            # debug placement only clears pending movement and sets the pose towards the hero.
+            await link.debug("npc_goto", npc=witness, waypoint=WITNESS_POINT, face="PLAYER")
             attempted.append(placement)
-            if await _until_async(read, bool, 5):
+            if await _until_async(read, bool, 2):
                 ready = True
                 break
+            placement["outcome"] = {
+                "state": last.get("view", {}).get("state"),
+                "body": last.get("view", {}).get("body"),
+                "can_see": last.get("can_see"),
+                "free_los": last.get("free_los"),
+                "npc_pos": last.get("npc_pos"),
+                "hero_pos": last.get("hero_pos"),
+            }
         return check(f"{label}_perception_ready", bool(ready), last)
 
     async def household(label: str) -> bool:
@@ -316,14 +340,14 @@ async def crime_react(
             positioned = await stand(witness, WITNESS_POINT, face="PLAYER", ready=True)
         if not check(f"{label}_witness_arrived", positioned, witness):
             return None
-        if not await perception_ready(label, witness):
-            return None
         before = {f["id"] for f in facts("crime")}
         hero_cups_before, owner_cups_before = await count("HERO"), await count(LOBART)
         # A passive, unarmed hero falls from real melee damage; no debug knockdown or kill is used.
         await link.debug("player_hp", hp=10 if fighting else 5000)
         if fighting:
             await link.body_watch(["PLAYER"], rate_hz=20)
+        if not await perception_ready(label, witness):
+            return None
         sent.clear()
         received.clear()
         hero_states.clear()
