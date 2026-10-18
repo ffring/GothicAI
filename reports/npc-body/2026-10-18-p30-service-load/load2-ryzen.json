@@ -1,0 +1,140 @@
+{
+ "mode": "load",
+ "label": "ryzen",
+ "host": "ryzen",
+ "port": 47835,
+ "streams": 4,
+ "duration_s": 600.0,
+ "elapsed_s": 600.007530457995,
+ "started_at": "2026-10-18T04:12:25.137729Z",
+ "ended_at": "2026-10-18T04:22:25.152865Z",
+ "valid_for_ms": 100,
+ "call_timeout_ms": 1000,
+ "seed": 1,
+ "steps": 43780,
+ "responses": 43780,
+ "decisions": 3837,
+ "fallback": 0,
+ "timeouts": 0,
+ "errors": 0,
+ "reconnects": 0,
+ "stale": 0,
+ "stale_fraction": 0.0,
+ "per_stream": [
+  {
+   "stream": 0,
+   "phase_s": 0.13436424411240122,
+   "steps": 10951,
+   "responses": 10951,
+   "decisions": 953,
+   "fallback": 0,
+   "timeouts": 0,
+   "errors": 0,
+   "reconnects": 0,
+   "stale": 0
+  },
+  {
+   "stream": 1,
+   "phase_s": 0.8474337369372327,
+   "steps": 10931,
+   "responses": 10931,
+   "decisions": 960,
+   "fallback": 0,
+   "timeouts": 0,
+   "errors": 0,
+   "reconnects": 0,
+   "stale": 0
+  },
+  {
+   "stream": 2,
+   "phase_s": 0.763774618976614,
+   "steps": 10935,
+   "responses": 10935,
+   "decisions": 961,
+   "fallback": 0,
+   "timeouts": 0,
+   "errors": 0,
+   "reconnects": 0,
+   "stale": 0
+  },
+  {
+   "stream": 3,
+   "phase_s": 0.2550690257394217,
+   "steps": 10963,
+   "responses": 10963,
+   "decisions": 963,
+   "fallback": 0,
+   "timeouts": 0,
+   "errors": 0,
+   "reconnects": 0,
+   "stale": 0
+  }
+ ],
+ "rtt_ms": {
+  "p50": 4.193457993096672,
+  "p95": 9.108292011660524,
+  "p99": 17.280416999710724,
+  "p99.9": 37.72600000957027,
+  "max": 91.22975000354927
+ },
+ "age_ms": {
+  "p99": 22.151250013848767,
+  "max": 95.46333301113918
+ },
+ "lag_ms": {
+  "p99": 6.680916994810104,
+  "max": 49.50804199324921
+ },
+ "rtt_by_minute": [
+  {
+   "minute": 0,
+   "steps": 4386,
+   "p99": 23.10274999763351
+  },
+  {
+   "minute": 1,
+   "steps": 4353,
+   "p99": 16.7157079995377
+  },
+  {
+   "minute": 2,
+   "steps": 4422,
+   "p99": 17.90574999176897
+  },
+  {
+   "minute": 3,
+   "steps": 4350,
+   "p99": 16.14333399629686
+  },
+  {
+   "minute": 4,
+   "steps": 4368,
+   "p99": 14.489124994724989
+  },
+  {
+   "minute": 5,
+   "steps": 4407,
+   "p99": 15.239000000292435
+  },
+  {
+   "minute": 6,
+   "steps": 4348,
+   "p99": 19.302959000924602
+  },
+  {
+   "minute": 7,
+   "steps": 4425,
+   "p99": 15.475208012503572
+  },
+  {
+   "minute": 8,
+   "steps": 4349,
+   "p99": 15.340458005084656
+  },
+  {
+   "minute": 9,
+   "steps": 4372,
+   "p99": 16.060249996371567
+  }
+ ]
+}
