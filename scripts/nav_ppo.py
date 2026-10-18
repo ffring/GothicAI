@@ -22,6 +22,7 @@ from pathlib import Path
 import random
 import sys
 import time
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import numpy as np
@@ -271,7 +272,7 @@ def prepare_rollouts(args, actor, critic, reference, cache):
         weighted.update(summary["reward_sums"])
         absolute.update(summary["reward_absolute_sums"])
         destination = cache / f"episode-{number:06d}.npz"
-        np.savez_compressed(destination, **episode)
+        save_cache(destination, episode)
         prepared.append(destination)
         del episode, bootstrap
     rejection = summarize_rejections(inventory, rejected, args.output)
@@ -424,6 +425,15 @@ def replay_episode(episode, bootstrap, actor, critic, reference, args):
                    critic_hidden=np.stack([critic_states[int(start)] for start in burn_starts]))
     del episode["recorded_logits"]
     return error, logit_error
+
+
+
+def save_cache(path, arrays):
+    """Write the same lossless NPZ members with bounded, low-cost compression."""
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+        for name, array in arrays.items():
+            with archive.open(f"{name}.npy", "w", force_zip64=True) as member:
+                np.lib.format.write_array(member, array, allow_pickle=False)
 
 
 def load_cache(path):

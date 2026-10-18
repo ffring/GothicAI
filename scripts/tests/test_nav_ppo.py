@@ -419,3 +419,32 @@ def test_reference_entropy_uses_current_batch_and_same_valid_mask(tmp_path):
     assert measured["reference_entropy_by_head"] == pytest.approx(
         {name: np.log(classes) for name, classes in zip(ppo.HEADS, ppo.CLASSES)}, abs=1e-6)
     assert set(measured["entropy_by_head"]) == set(measured["reference_entropy_by_head"])
+
+
+def test_lossless_fast_cache_roundtrip_preserves_all_training_shapes_and_dtypes(tmp_path):
+    rng = np.random.default_rng(2718)
+    floating = lambda shape: rng.standard_normal(shape).astype(np.float32)
+    arrays = dict(near=floating((3, 9, 32, 32)), far=floating((3, 9, 25, 25)),
+                  vector=floating((3, ppo.VECTOR_SIZE)), priv=floating((3, ppo.PRIVILEGED_SIZE)),
+                  actions=np.array([[2, 1, 0, 1, 0, 0], [1, 2, 1, 0, 1, 0], [0, 0, 2, 1, 0, 1]], np.int64),
+                  old_logp=floating((3,)), rewards=floating((3,)), valid=np.array([True, False, True]),
+                  terminated=np.array([False, False, True]), advantage=floating((3,)), returns=floating((3,)),
+                  old_values=floating((3,)), reference_logits=floating((3, sum(ppo.CLASSES))),
+                  starts=np.array([0, 2], np.int64), actor_hidden=floating((2, 256)),
+                  critic_hidden=floating((2, 256)))
+    path = tmp_path / "training-cache.npz"
+    ppo.save_cache(path, arrays)
+    with ppo.zipfile.ZipFile(path) as archive:
+        assert archive.namelist() == [f"{name}.npy" for name in arrays]
+        assert all(member.compress_type == ppo.zipfile.ZIP_DEFLATED for member in archive.infolist())
+    with np.load(path, allow_pickle=False) as independent:
+        assert independent.files == list(arrays)
+        for name, expected in arrays.items():
+            actual = independent[name]
+            assert actual.shape == expected.shape and actual.dtype == expected.dtype
+            np.testing.assert_array_equal(actual, expected)
+            assert actual.tobytes() == expected.tobytes()
+    restored = ppo.load_cache(path)
+    assert list(restored) == list(arrays)
+    for name, expected in arrays.items():
+        np.testing.assert_array_equal(restored[name], expected)
