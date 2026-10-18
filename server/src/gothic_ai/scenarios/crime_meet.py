@@ -262,9 +262,18 @@ async def crime_meet(
             if point not in points:
                 continue
             await link.debug("player_goto", waypoint=point)
-            # Preserve the initialized state's callbacks. A second start_activity would reset them;
-            # the debug pose only turns the standing witness towards the newly entered hero.
-            await link.debug("npc_goto", npc=LOBART, waypoint=WITNESS_POINT, face="PLAYER")
+            # Let the native turn finish after ZS_STAND_WP's alignment. Debug npc_goto resolves
+            # script symbols for face, whereas PLAYER is the soft-action target alias.
+            turn = await link.npc_act(LOBART, "turn_to", npc="PLAYER")
+            if not await _until(
+                lambda turn=turn: any(
+                    isinstance(m, NpcIdle) and m.act == turn and m.reason == "done"
+                    for _, m in received
+                ),
+                10,
+            ):
+                detail["attempts"].append({"point": point, "turn": "not completed"})
+                continue
             last: dict[str, Any] = {"point": point}
 
             async def ready(last: dict[str, Any] = last) -> bool:
@@ -343,7 +352,14 @@ async def crime_meet(
             detail["attempts"].append(last)
             log.info("crime_meet home entry preparation: %s", last)
             if prepared:
-                return True, detail
+                # ASSESSENTERROOM fires at the portal crossing. The first crossing can precede
+                # the completed turn, so make the actual test entry with sight already proved.
+                if not await away():
+                    return False, detail
+                if not await _until(lambda: LOBART not in meets._active, 3):
+                    return False, detail
+                await link.debug("player_goto", waypoint=point)
+                return bool(await _until_async(ready, bool, 3)), detail
             # The next candidate is a new physical entry, not a retry of the reaction. Nothing in
             # this helper calls a perception, changes a room's owner, or supplies a crime memory.
             if not await away() or not await placed(LOBART, WITNESS_POINT, ready=True):
@@ -522,7 +538,22 @@ async def crime_meet(
             ),
             120 if live else 30,
         )
-        if not check("victim_initiative", approached, facts("initiative")[-1:]):
+        detail: object = facts("initiative")[-1:]
+        if not approached:
+            sample = await view()
+            walks = [
+                c for c in sent
+                if isinstance(c, NpcActCmd) and c.npc == LOBART and c.action == "go_to_npc"
+            ]
+            detail = {
+                "view": sample.model_dump() if sample else None,
+                "walks": [c.model_dump() for c in walks],
+                "receipts": [
+                    m.model_dump() for _, m in received
+                    if isinstance(m, NpcActResult | NpcIdle) and m.npc == LOBART
+                ],
+            }
+        if not check("victim_initiative", approached, detail):
             return _logged(results)
         check(
             "victim_meeting",
