@@ -646,6 +646,14 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
     wview.updateFrustrum(frustrum);
     }
 
+  if(world!=nullptr) {
+    // Keep a margin around the camera view so a turning camera resumes cloth
+    // before it becomes visible. The physics tick owns a copy of these planes.
+    world->physic()->cloth().setVisibilityTest([view = frustrum[SceneGlobals::V_Main]](const Vec3& center, float radius) {
+      return view.testPoint(center,radius+200.f);
+      });
+    }
+
   prepareUniforms(wview);
   wview.preFrameUpdate(camera, tickCount, fId);
   wview.prepareGlobals(cmd,fId);

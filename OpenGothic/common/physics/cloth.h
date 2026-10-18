@@ -50,7 +50,7 @@ class Cloth final {
       uint32_t zenId = uint32_t(-1);
       std::string visual;
       Tempest::Vec3 center;
-      bool active = false, exposed = true;
+      bool active = false, exposed = true, visible = true;
       size_t vertices = 0, pinned = 0;
       float simulationWeight = 0;
       float maxAnchorErrorCm = 0, maxSpeedCmPerSec = 0, maxSpeedEverCmPerSec = 0;
@@ -64,6 +64,7 @@ class Cloth final {
       std::string maxSpeedContactBody, maxSpeedEverContactBody;
       std::vector<WindOccluder> windOccluders;
       uint64_t projectileHits = 0, arrowPasses = 0, recoveryCount = 0;
+      uint64_t simulationSteps = 0;
       // Visible vertex order, already blended with the shader reference.
       std::vector<Tempest::Vec3> positionsCm, worldPositionsCm, referenceWorldPositionsCm, anchorsCm;
       std::vector<uint32_t> indices;
@@ -86,6 +87,9 @@ class Cloth final {
     // World portal-room classification. Attachments and ship geometry do not
     // occlude wind; a false result identifies an actual indoor BSP room.
     void setExposureTest(std::function<bool(const Tempest::Vec3&)> test);
+    // The main camera supplies a conservative sphere test with a margin.
+    // Without a renderer (contracts), all nearby cloth remains visible.
+    void setVisibilityTest(std::function<bool(const Tempest::Vec3&,float)> test);
     std::vector<Snapshot> snapshots() const;
     void resetStats();
     size_t bodyCount() const;

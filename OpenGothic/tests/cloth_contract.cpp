@@ -49,9 +49,7 @@ class ClothContractDriver {
         const int count=int(accumulated/step);
         accumulated-=float(count)*step;
         for(int i=0;i<std::min(count,2);++i) {
-          cloth.prepareStep(step,collisionSteps);
           world.physicsSystem().Update(step,int(collisionSteps),&allocator,&jobs);
-          cloth.finishStep();
           }
         cloth.finishFrame();
         }
@@ -157,6 +155,15 @@ namespace {
       distance=std::max(distance,(to.worldPositionsCm[i]-from.worldPositionsCm[i]).length());
     return distance;
     }
+  Cloth::Snapshot fixedCadence(const Flag& flag,uint64_t frameMs) {
+    CollisionWorld world;
+    Cloth cloth(world);
+    auto instance=cloth.add(flag.vertices,flag.indices,flag.pins,Tempest::Matrix4x4::mkIdentity(),.85f,"fixed-cadence",19);
+    cloth.setObserver({60,100,0});
+    cloth.setWind({4,0,1});
+    for(uint64_t now=0;now<1000;now+=frameMs) world.tick(frameMs);
+    return cloth.snapshots().front();
+    }
   }
 
 int main() {
@@ -168,6 +175,86 @@ int main() {
   require(WorldWind::sample(23456,windPeriod,true,0).quadLength()==0.f,"calm world wind is exactly zero");
   require(WorldWind::sample(23456,0,true).quadLength()==0.f,"zero wind period is exactly calm");
   require((WorldWind::sample(0,windPeriod,true)-WorldWind::sample(30000,windPeriod,true)).length()>.1f,"world wind actually changes over time");
+  Flag cadenceFlag;
+  const auto cadenceReference=fixedCadence(cadenceFlag,10);
+  require(cadenceReference.simulationSteps==30,"visible cloth advances exactly thirty fixed steps in one second");
+  float cadenceDelta=0;
+  for(uint64_t frameMs:{5u,20u,40u}) {
+    const auto cadence=fixedCadence(cadenceFlag,frameMs);
+    require(cadence.simulationSteps==30,"cloth's thirty-hertz cadence is independent of rendering frequency");
+    cadenceDelta=std::max(cadenceDelta,maxDisplacement(cadenceReference,cadence));
+    require(cadence.maxAnchorErrorCm<=.5f && cadence.recoveryCount==0,"all rendering frequencies preserve fixed pins and finite simulation");
+    }
+  require(cadenceDelta<.01f,"equal fixed steps give the same visible pose at different rendering frequencies");
+  {
+    CollisionWorld visibilityWorld;
+    Cloth visibilityCloth(visibilityWorld);
+    auto visibilityInstance=visibilityCloth.add(cadenceFlag.vertices,cadenceFlag.indices,cadenceFlag.pins,
+                                               Tempest::Matrix4x4::mkIdentity(),.85f,"visibility-contract",20);
+    visibilityInstance->setShaderReference([](uint32_t,const Tempest::Vec3& local,const Tempest::Vec3&) {
+      return local+Tempest::Vec3(0,0,5);
+      });
+    bool visible=true;
+    visibilityCloth.setVisibilityTest([&](const Tempest::Vec3&,float radius) {
+      require(radius>0.f,"visibility query encloses the complete cloth");
+      return visible;
+      });
+    visibilityCloth.setObserver({60,100,0});
+    visibilityCloth.setWind({4,0,1});
+    tick(visibilityWorld,60);
+    auto interpolationStart=visibilityCloth.snapshots().front();
+    require(interpolationStart.simulationWeight==1.f && interpolationStart.visible,"interpolation comparison starts fully simulated and visible");
+    const auto previousSteps=interpolationStart.simulationSteps;
+    // Locate a fixed-step boundary with less than one millisecond residual.
+    for(size_t i=0;i<34 && interpolationStart.simulationSteps==previousSteps;++i) {
+      visibilityWorld.tick(1);
+      interpolationStart=visibilityCloth.snapshots().front();
+      }
+    require(interpolationStart.simulationSteps==previousSteps+1,"a visible fixed step occurs within one thirty-hertz period");
+    visibilityWorld.tick(5);
+    const auto interpolationMiddle=visibilityCloth.snapshots().front();
+    visibilityWorld.tick(5);
+    const auto interpolationEnd=visibilityCloth.snapshots().front();
+    require(interpolationStart.simulationSteps==interpolationMiddle.simulationSteps &&
+            interpolationStart.simulationSteps==interpolationEnd.simulationSteps,
+            "render interpolation advances without an extra native soft-body step");
+    float interpolationError=0;
+    for(size_t i=0;i<interpolationEnd.positionsCm.size();++i) {
+      const auto first=interpolationMiddle.positionsCm[i]-interpolationStart.positionsCm[i];
+      const auto second=interpolationEnd.positionsCm[i]-interpolationMiddle.positionsCm[i];
+      interpolationError=std::max(interpolationError,(first-second).length());
+      }
+    require(maxDisplacement(interpolationStart,interpolationEnd)>.001f,"rendered cloth keeps moving between fixed simulation steps");
+    require(interpolationError<.001f,"equal render intervals interpolate equal distances between native poses");
+    visible=false;
+    visibilityWorld.tick(0);
+    const auto hiddenStart=visibilityCloth.snapshots().front();
+    require(!hiddenStart.visible && hiddenStart.active,"hidden cloth retains its transient native body");
+    require(maxDisplacement(interpolationEnd,hiddenStart)<.0001f,"leaving the view freezes the last rendered pose immediately");
+    for(size_t i=0;i<200;++i) visibilityWorld.tick(10);
+    const auto hiddenEnd=visibilityCloth.snapshots().front();
+    require(hiddenEnd.simulationSteps==hiddenStart.simulationSteps,"hidden cloth does no simulation work over two seconds");
+    require(maxDisplacement(hiddenStart,hiddenEnd)<.0001f,"hidden cloth preserves its last visible pose");
+    visible=true;
+    visibilityWorld.tick(0);
+    const auto returned=visibilityCloth.snapshots().front();
+    require(returned.visible && returned.simulationSteps==hiddenEnd.simulationSteps,"returning cloth starts without catch-up simulation");
+    require(maxDisplacement(hiddenEnd,returned)<.0001f,"returning to the camera preserves the last pose without a jump");
+    visibilityWorld.tick(10);
+    const auto resumed=visibilityCloth.snapshots().front();
+    require(resumed.simulationSteps==returned.simulationSteps,"a hidden interval never accumulates simulation debt");
+    require(maxDisplacement(returned,resumed)<=Cloth::maxVelocityMS*100.f*.010f+.01f,
+            "the first resumed render interval stays within the native speed bound");
+    visible=false;
+    visibilityWorld.tick(0);
+    visibilityCloth.setEnabled(false);
+    for(size_t i=0;i<60;++i) visibilityWorld.tick(10);
+    const auto hiddenOff=visibilityCloth.snapshots().front();
+    require(!hiddenOff.visible && !hiddenOff.active && hiddenOff.simulationWeight==0.f,"cloth OFF finishes the shader transition while hidden");
+    for(size_t i=0;i<cadenceFlag.vertices.size();++i)
+      require((hiddenOff.positionsCm[i]-cadenceFlag.vertices[i]-Tempest::Vec3(0,0,5)).length()<.001f,
+              "hidden cloth OFF restores the exact shader reference");
+    }
   CollisionWorld collision;
   Cloth cloth(collision);
   Flag flag;
@@ -382,15 +469,18 @@ int main() {
   for(const auto& snapshot:cloth.snapshots())
     require(snapshot.simulationWeight==1.f,"fast-attachment comparison begins after the transition to simulation is complete");
   require(cloth.impulse({60,0,0},50,{0,0,15})==2,"a strong local spell impulse reaches both guarded and reference particles");
-  collision.tick(17);
+  const auto stepsBeforeImpulse=cloth.snapshots().front().simulationSteps;
+  for(size_t i=0;i<34 && cloth.snapshots().front().simulationSteps==stepsBeforeImpulse;++i) collision.tick(1);
+  require(cloth.snapshots().front().simulationSteps==stepsBeforeImpulse+1,"a local impulse reaches the next native cloth step");
+  collision.tick(20); // Show most of the completed fixed step through interpolation.
   const auto fastSnapshots=cloth.snapshots();
   const auto& fastSupportCloth=fastSnapshots.front();
   require(fastSnapshots.back().worldPositionsCm[2].z>13.5f,"without an attachment guard the same fast particle crosses beyond the pole's far side");
   require(fastSupportCloth.worldPositionsCm[2].z<=2.51f,"a fast particle cannot tunnel through its narrow attachment capsule in one physics step");
   require(fastSupportCloth.maxAnchorErrorCm<=.5f && fastSupportCloth.recoveryCount==0,"the swept attachment guard keeps both fixed vertices unchanged");
-  std::printf("cloth contract passed: calm_10s_max_vertex_cm_s=%.6g max_vertex_cm_s=%.6g anchor_drift_cm=%.6g boundary_delta_cm=%.6g roof_calm_lateral_cm_s=%.6g roof_wind_lateral_cm_s=%.6g wall_vertex_max_z_cm=%.6g character_vertex_max_z_cm=%.6g long_flag_gust_max_cm_s=%.6g long_flag_calm_10s_cm_s=%.6g collision_steps_pose_delta_cm=%.6g support_min_radius_cm=%.6g support_fast_vertex_z_cm=%.6g recovery=0\n",
+  std::printf("cloth contract passed: calm_10s_max_vertex_cm_s=%.6g max_vertex_cm_s=%.6g anchor_drift_cm=%.6g boundary_delta_cm=%.6g roof_calm_lateral_cm_s=%.6g roof_wind_lateral_cm_s=%.6g wall_vertex_max_z_cm=%.6g character_vertex_max_z_cm=%.6g long_flag_gust_max_cm_s=%.6g long_flag_calm_10s_cm_s=%.6g collision_steps_pose_delta_cm=%.6g support_min_radius_cm=%.6g support_fast_vertex_z_cm=%.6g cadence_pose_delta_cm=%.6g recovery=0\n",
               double(calm.maxSpeedCmPerSec),double(windy.maxSpeedEverCmPerSec),double(windy.maxAnchorErrorCm),
               double(boundaryDelta),double(calmLateral),double(shelteredLateral),double(maxWallZ),double(maxCharacterZ),
-              double(longGust.maxSpeedEverCmPerSec),double(longCalm.maxSpeedCmPerSec),double(collisionStepDelta),double(closestSupport),double(fastSupportCloth.worldPositionsCm[2].z));
+              double(longGust.maxSpeedEverCmPerSec),double(longCalm.maxSpeedCmPerSec),double(collisionStepDelta),double(closestSupport),double(fastSupportCloth.worldPositionsCm[2].z),double(cadenceDelta));
   return EXIT_SUCCESS;
   }

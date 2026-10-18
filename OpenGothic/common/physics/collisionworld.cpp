@@ -1986,7 +1986,7 @@ void CollisionWorld::tick(uint64_t dt) {
   constexpr float step = 1.f/60.f;
   bool advanced = false;
   std::vector<PhysicsNoise> splashes;
-  if(!rigid.empty() || !ragdolls.empty() || (cloth!=nullptr && cloth->bodyCount()>0)) {
+  if(!rigid.empty() || !ragdolls.empty()) {
     accumulatedTime += float(dt)/1000.f;
     int wholeSteps = 0;
     if(accumulatedTime>=step) {
@@ -2045,12 +2045,10 @@ void CollisionWorld::tick(uint64_t dt) {
       // gravity, or still floats acquire a persistent integration velocity.
       if(waterSteps) impl->system.AddStepListener(impl.get());
       const int collisionSteps=activeFragments ? fragmentSteps : dynamicRagdolls ? 2 : 1;
-      if(cloth!=nullptr) cloth->prepareStep(step,uint32_t(collisionSteps));
       impl->system.Update(float(step),collisionSteps,&impl->allocator,&impl->jobs);
       if(waterSteps) impl->system.RemoveStepListener(impl.get());
       finishBuoyancy(step);
       for(auto* body:ragdolls) body->finishKinematicStep();
-      if(cloth!=nullptr) cloth->finishStep();
       advanced = true;
       }
     }

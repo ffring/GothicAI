@@ -531,6 +531,7 @@ enum CamMode : uint8_t {
   C_World,  // around the player, fixed world direction
   C_Fixed,  // fixed position, looking at the player
   C_Hold,   // the camera stays as it is: the position and where it looks
+  C_Turn,   // yaw at the held camera position, retaining its pitch
   C_Water,  // retain the water overview after deferred player teleports
   C_RagdollArena, // benchmark-only fixed view derived from the complete twenty-model group
   C_Face,   // close to the face, relative to the facing of the body
@@ -608,6 +609,10 @@ struct Bench {
   bool        camAuto   = false;
   int         occlTime  = 0;
   Vec3        camPos;
+  PointF      camHeldAngles;
+  PointF      camTurnAngles;
+  float       camTurnDegrees = 0;
+  uint64_t    camTurnStart = 0, camTurnDuration = 0;
 
   bool        rec       = false;
   bool        recVideo  = false;
@@ -1779,6 +1784,7 @@ void lookFrom(const Vec3& org, const Vec3& tgt) {
   c->setSpin(PointF(-pit,yaw));
   c->setAngles(PointF(-pit,yaw));
   bench.camPos = org;
+  bench.camHeldAngles = PointF(-pit,yaw);
   }
 
 Vec3 rotY(const Vec3& v, float deg) {
@@ -1888,6 +1894,18 @@ void arrowShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
 
 void updateCamera(World& w, Npc& pl) {
   bench.occl = 0;
+  if(bench.cam==C_Turn) {
+    if(auto* camera=Gothic::inst().camera()) {
+      const float progress=std::min(1.f,float(bench.time-bench.camTurnStart)/float(bench.camTurnDuration));
+      const float eased=progress*progress*(3.f-2.f*progress);
+      const PointF angles(bench.camTurnAngles.x,bench.camTurnAngles.y+bench.camTurnDegrees*eased);
+      camera->setPosition(bench.camPos);
+      camera->setSpin(angles);camera->setAngles(angles);
+      bench.camHeldAngles=angles;
+      if(progress>=1.f)bench.cam=C_Hold;
+      }
+    return;
+    }
   if(bench.cam==C_Water) {
     lookFrom(bench.camPos,bench.waterCameraTarget);
     return;
@@ -4681,7 +4699,9 @@ std::string clothRows(World& world,bool geometry=false) {
     if(rows.size()>1)rows+=",";
     rows+="{\"id\":"+std::to_string(body.id)+",\"zen_id\":"+std::to_string(body.zenId)+
       ",\"visual\":"+jsonStr(body.visual)+",\"center_cm\":"+ragdollVector(body.center)+
-      ",\"active\":"+(body.active?"true":"false")+",\"exposed\":"+(body.exposed?"true":"false")+",\"vertices\":"+std::to_string(body.vertices)+
+      ",\"active\":"+(body.active?"true":"false")+",\"exposed\":"+(body.exposed?"true":"false")+
+      ",\"visible\":"+(body.visible?"true":"false")+",\"simulation_steps\":"+std::to_string(body.simulationSteps)+
+      ",\"vertices\":"+std::to_string(body.vertices)+
       ",\"rendered_vertices\":"+std::to_string(body.worldPositionsCm.size())+
       ",\"pinned\":"+std::to_string(body.pinned)+",\"weight\":"+ragdollNumber(body.simulationWeight)+
       ",\"anchor_error_cm\":"+ragdollNumber(body.maxAnchorErrorCm)+
@@ -5154,6 +5174,62 @@ bool clothCamera(World& world,std::string_view group,bool required,Vec3* targetO
     ",\"camera_cm\":"+ragdollVector(eye)+",\"target_cm\":"+ragdollVector(target)+
     ",\"bounds_min_cm\":"+ragdollVector(low)+",\"bounds_max_cm\":"+ragdollVector(high));
   return true;
+  }
+
+void clothCameraRange(World& world,float range) {
+  if(bench.cam!=C_Hold || Gothic::inst().camera()==nullptr || bench.clothZen==uint32_t(-1) ||
+     !std::isfinite(range) || range<=0.f) {
+    arenaAbort("cloth camera-range requires held selected cloth and a positive finite range");return;
+    }
+  const auto all=world.physic()->cloth().snapshots();
+  const auto body=std::find_if(all.begin(),all.end(),[](const auto& value){return value.zenId==bench.clothZen;});
+  if(body==all.end() || body->worldPositionsCm.empty()) {arenaAbort("cloth camera-range selected cloth is absent");return;}
+  auto side=bench.camPos-bench.clothCenter;side.y=0.f;
+  const float previousRange=side.length();
+  if(previousRange<.01f || range<previousRange) {arenaAbort("cloth camera-range must increase its existing horizontal range");return;}
+  const auto eye=bench.clothCenter+side*(range/previousRange)+Vec3(0,bench.camPos.y-bench.clothCenter.y,0);
+  const auto& reference=body->referenceWorldPositionsCm.empty()?body->worldPositionsCm:body->referenceWorldPositionsCm;
+  Vec3 bounds[2]={reference.front(),reference.front()};
+  const auto addBounds=[&](const auto& pose) {
+    for(const auto& point:pose) {
+      bounds[0].x=std::min(bounds[0].x,point.x);bounds[0].y=std::min(bounds[0].y,point.y);bounds[0].z=std::min(bounds[0].z,point.z);
+      bounds[1].x=std::max(bounds[1].x,point.x);bounds[1].y=std::max(bounds[1].y,point.y);bounds[1].z=std::max(bounds[1].z,point.z);
+      }
+    };
+  addBounds(reference);addBounds(body->worldPositionsCm);
+  lookFrom(eye,bench.clothCenter);
+  size_t tested=0,blocked=0,attachments=0,selfHits=0;bool framed=true;
+  const auto checkPose=[&](const auto& pose) {
+    for(const auto& point:pose) {
+      framed&=arenaProjected(point);
+      if(std::any_of(body->anchorsCm.begin(),body->anchorsCm.end(),[&](const Vec3& anchor) {
+           return (point-anchor).quadLength()<.0625f;
+           })) {++attachments;continue;}
+      const auto inward=bench.clothCenter-point;
+      const float length=inward.length();
+      const auto target=point+(length>2.f?inward*(2.f/length):inward);
+      const auto end=target-Vec3::normalize(target-eye)*2.f;
+      ++tested;
+      const auto hit=world.physic()->rayClothCamera(eye,end,body->visual,bounds,selfHits);
+      if(!hit.hasCol)continue;
+      bool attachment=false;
+      if(hit.mat!=zenkit::MaterialGroup::EARTH && !hit.vob && (hit.v-target).length()<=20.f)
+        attachment=std::any_of(body->anchorsCm.begin(),body->anchorsCm.end(),[&](const Vec3& anchor) {
+          return (target-anchor).length()<=25.f && (hit.v-anchor).length()<=25.f;
+          });
+      if(attachment)++attachments;else ++blocked;
+      }
+    };
+  checkPose(reference);checkPose(body->worldPositionsCm);
+  const bool clear=framed && tested>0 && blocked==0;
+  event("cloth_camera_range","\"horizontal_range_cm\":"+ragdollNumber(range)+
+    ",\"previous_horizontal_range_cm\":"+ragdollNumber(previousRange)+",\"camera_cm\":"+ragdollVector(eye)+
+    ",\"target_cm\":"+ragdollVector(bench.clothCenter)+",\"pitch_degrees\":"+ragdollNumber(bench.camHeldAngles.x)+
+    ",\"yaw_degrees\":"+ragdollNumber(bench.camHeldAngles.y)+",\"tested_vertices\":"+std::to_string(tested)+
+    ",\"blocked_vertices\":"+std::to_string(blocked)+",\"attachment_allowances\":"+std::to_string(attachments)+
+    ",\"self_rigid_hits\":"+std::to_string(selfHits)+",\"fully_framed\":"+(framed?"true":"false")+
+    ",\"clear\":"+(clear?"true":"false"));
+  if(!clear)arenaAbort("cloth camera-range has no unobstructed fully framed view");
   }
 
 void clothSaveSession(World& world,const std::string& label) {
@@ -8866,6 +8942,26 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="cloth" && a.size()==3 && a[1]=="arrow-npc")clothArrowNpc(w,pl,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="save")clothSaveSession(w,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="camera")clothCamera(w,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="camera-range") {
+    if(!isNumber(a[2])) {arenaAbort("cloth camera-range expects a numeric range in cm");return;}
+    clothCameraRange(w,num(a,2,0));
+    }
+  else if(c=="cloth" && a.size()==4 && a[1]=="camera-turn") {
+    const float degrees=num(a,2,0),duration=num(a,3,0);
+    auto* camera=Gothic::inst().camera();
+    if(bench.cam==C_Turn && bench.time>=bench.camTurnStart+bench.camTurnDuration)updateCamera(w,pl);
+    if(!isNumber(a[2]) || !isNumber(a[3]) || !std::isfinite(degrees) || !std::isfinite(duration) ||
+       duration<1.f || duration>60000.f || camera==nullptr || bench.cam!=C_Hold) {
+      arenaAbort("cloth camera-turn requires a held camera, finite degrees and duration from 1 to 60000 ms");return;
+      }
+    bench.camTurnAngles=bench.camHeldAngles;bench.camTurnDegrees=degrees;
+    bench.camTurnStart=bench.time;bench.camTurnDuration=uint64_t(duration);bench.cam=C_Turn;
+    bench.waitUntil=bench.time+bench.camTurnDuration+1;
+    event("cloth_camera_turn","\"degrees\":"+ragdollNumber(degrees)+",\"duration_ms\":"+
+      std::to_string(bench.camTurnDuration)+",\"camera_cm\":"+ragdollVector(bench.camPos)+
+      ",\"pitch_degrees\":"+ragdollNumber(bench.camTurnAngles.x)+",\"from_yaw_degrees\":"+
+      ragdollNumber(bench.camTurnAngles.y));
+    }
   else if(c=="cloth" && a.size()==3 && a[1]=="initial")clothInitial(w,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="verify") {
     bool pass=true;bool target=false;

@@ -62,7 +62,7 @@ struct Cloth::Instance::Impl {
   JPH::BodyID body;
   Tempest::Matrix4x4 matrix, inverse;
   Tempest::Vec3 localCenter;
-  std::vector<Tempest::Vec3> source, simulated, rendered;
+  std::vector<Tempest::Vec3> source, simulated, previous, rendered;
   std::vector<uint32_t> mapping, indices;
   std::vector<JPH::Vec3> rest;
   std::vector<bool> pinned;
@@ -84,7 +84,10 @@ struct Cloth::Instance::Impl {
   JPH::BodyID maxSpeedContactBody, maxSpeedEverContactBody;
   std::vector<WindOccluder> windOccluders;
   uint64_t projectileHits = 0, arrowPasses = 0, recoveryCount = 0;
-  bool exposed = true, recover = false;
+  uint64_t simulationSteps = 0;
+  double accumulated = 0;
+  float boundsRadius = 0;
+  bool exposed = true, recover = false, visible = true, stepPending = false, dirty = true;
   Tempest::Vec3 supportFrom, supportTo;
   float supportRadiusCm=0;
   std::vector<JPH::Vec3> supportPrevious;
@@ -103,6 +106,8 @@ struct Cloth::Impl : JPH::SoftBodyContactListener {
   std::vector<std::weak_ptr<Instance>> instances;
   Tempest::Vec3 observer, wind;
   std::function<bool(const Tempest::Vec3&)> exposure;
+  std::function<bool(const Tempest::Vec3&,float)> visibility;
+  double frameSeconds = 0;
   bool enabled = true, hasObserver = false;
   float windScale = 1, currentWindScale = 1;
   explicit Impl(CollisionWorld& world):world(world) {}
@@ -126,11 +131,14 @@ struct Cloth::Impl : JPH::SoftBodyContactListener {
   void remove(Instance::Impl& body) {
     if(body.body.IsInvalid()) return;
     auto& native=system().GetBodyInterface();
-    native.RemoveBody(body.body);
+    // CustomUpdate bodies are registered for locks/lifetime but never added
+    // to broadphase: the world must not simulate them again at 60 Hz.
+    if(native.IsAdded(body.body)) native.RemoveBody(body.body);
     native.DestroyBody(body.body);
     body.body=JPH::BodyID();
     body.contactCount=0;
     body.contacts.clear();
+    body.accumulated=0;
     }
   void create(Instance::Impl& body) {
     if(!body.body.IsInvalid()) return;
@@ -203,7 +211,10 @@ struct Cloth::Impl : JPH::SoftBodyContactListener {
       particle.mPosition=CollisionWorld::toMeters(project(body.matrix,body.reference(i))-body.translation());
       particle.mPreviousPosition=particle.mPosition;
       }
-    system().GetBodyInterface().AddBody(body.body,JPH::EActivation::Activate);
+    for(size_t i=0;i<body.source.size();++i)
+      body.simulated[i]=project(body.inverse,body.translation()+CollisionWorld::toCentimeters(motion.GetVertex(body.mapping[i]).mPosition));
+    body.previous=body.simulated;
+    body.accumulated=0;
     }
 
   template<class F> void each(F&& callback) {
@@ -226,6 +237,10 @@ void Cloth::Instance::setMatrix(const Tempest::Matrix4x4& matrix) {
   impl->inverse.inverse();
   impl->weight=0;
   impl->shelterTimer=0;
+  impl->dirty=true;
+  impl->boundsRadius=0;
+  for(const auto& vertex:impl->source)
+    impl->boundsRadius=std::max(impl->boundsRadius,2.f*(project(matrix,vertex)-impl->center()).length());
   }
 void Cloth::Instance::setAttachmentCapsule(const Tempest::Vec3& from,const Tempest::Vec3& to,float radius) {
   if(!finite(from) || !finite(to) || !std::isfinite(radius) || radius<=0.f) {
@@ -269,7 +284,7 @@ std::shared_ptr<Cloth::Instance> Cloth::add(const std::vector<Tempest::Vec3>& so
   for(auto index:pins) if(index>=source.size()) return {};
   auto body=std::make_unique<Instance::Impl>();
   body->owner=impl.get();
-  body->source=body->simulated=body->rendered=source;
+  body->source=body->simulated=body->previous=body->rendered=source;
   body->indices=indices;
   body->matrix=body->inverse=matrix;
   body->inverse.inverse();
@@ -287,6 +302,10 @@ std::shared_ptr<Cloth::Instance> Cloth::add(const std::vector<Tempest::Vec3>& so
     max.x=std::max(max.x,vertex.x); max.y=std::max(max.y,vertex.y); max.z=std::max(max.z,vertex.z);
     }
   body->localCenter=(min+max)*.5f;
+  // A free corner can fall by its entire span around a fixed attachment.
+  // Twice the authored half-diagonal bounds that swing, including long sails.
+  for(const auto& vertex:source)
+    body->boundsRadius=std::max(body->boundsRadius,2.f*(project(matrix,vertex)-body->center()).length());
   body->pinned.resize(welded.size(),false);
   for(auto index:pins) body->pinned[body->mapping[index]]=true;
   if(std::all_of(body->pinned.begin(),body->pinned.end(),[](bool pin) { return pin; })) return {};
@@ -296,6 +315,7 @@ std::shared_ptr<Cloth::Instance> Cloth::add(const std::vector<Tempest::Vec3>& so
   }
 void Cloth::setEnabled(bool value) {
   impl->enabled=value;
+  impl->each([](Instance::Impl& body) { body.dirty=true; });
   // The static world-cloth fallback switches in this same call stack. Update
   // the individual views now so a render between physics ticks has no gap.
   finishFrame();
@@ -309,6 +329,9 @@ void Cloth::setExposureTest(std::function<bool(const Tempest::Vec3&)> test) {
   impl->exposure=std::move(test);
   impl->each([](Instance::Impl& body) { body.shelterTimer=0; });
   }
+void Cloth::setVisibilityTest(std::function<bool(const Tempest::Vec3&,float)> test) {
+  impl->visibility=std::move(test);
+  }
 size_t Cloth::bodyCount() const {
   size_t count=0;
   for(const auto& weak:impl->instances) if(auto instance=weak.lock()) if(instance->active()) ++count;
@@ -317,6 +340,7 @@ size_t Cloth::bodyCount() const {
 
 void Cloth::prepareFrame(uint64_t dt) {
   const float seconds=std::min(float(dt)*.001f,.1f);
+  impl->frameSeconds=std::min(double(dt)*.001,.1);
   impl->currentWindScale+=(impl->windScale-impl->currentWindScale)*(1.f-std::exp(-seconds*1.5f));
   impl->each([&](Instance::Impl& body) {
     if(body.recover) {
@@ -325,6 +349,7 @@ void Cloth::prepareFrame(uint64_t dt) {
       body.weight=0;
       }
     const auto center=body.center();
+    body.visible=!impl->visibility || impl->visibility(center,body.boundsRadius);
     const float distance=impl->hasObserver ? (center-impl->observer).length() : radiusCm+1.f;
     float target=impl->enabled ? std::clamp((radiusCm-distance)/(radiusCm-blendStartCm),0.f,1.f) : 0.f;
     body.targetWeight=target*target*(3.f-2.f*target);
@@ -341,6 +366,7 @@ void Cloth::prepareFrame(uint64_t dt) {
     if(body.body.IsInvalid()) body.weight=0;
     else body.weight+=std::clamp(body.targetWeight-body.weight,-seconds*2.f,seconds*2.f);
     const float weightChange=std::abs(oldWeight-body.weight);
+    body.dirty|=weightChange>0.f;
     if(weightChange>0.f) {
       for(size_t i=0;i<body.source.size();++i)
         body.transitionMaxDelta=std::max(body.transitionMaxDelta,(body.simulated[i]-body.reference(i)).length()*weightChange);
@@ -349,17 +375,16 @@ void Cloth::prepareFrame(uint64_t dt) {
     });
   }
 void Cloth::prepareStep(float seconds,uint32_t nativeCollisionSteps) {
+  (void)nativeCollisionSteps;
   impl->each([&](Instance::Impl& body) {
-    if(body.body.IsInvalid()) return;
+    if(body.body.IsInvalid() || !body.stepPending) return;
     body.contacts.clear();
     JPH::BodyLockWrite lock(impl->system().GetBodyLockInterface(),body.body);
     if(!lock.Succeeded()) return;
     auto& motion=*static_cast<JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
-    // Other physics features may divide this same 1/60 s update into two or
-    // four native collision steps. Keep cloth's total substeps and XPBD dt
-    // unchanged: accidentally doubling them changes compliance and can excite
-    // long, thin sail triangles even when the wind has already stopped.
-    motion.SetNumIterations(std::max(1u,body.substeps/std::max(1u,nativeCollisionSteps)));
+    // Cloth has its own fixed 30 Hz clock. Ragdoll/fragment collision steps
+    // neither add work here nor change the cloth's XPBD timestep.
+    motion.SetNumIterations(body.substeps);
     if(body.supportRadiusCm>0.f) {
       body.supportPrevious.resize(motion.GetVertices().size());
       for(size_t i=0;i<body.supportPrevious.size();++i)
@@ -372,11 +397,14 @@ void Cloth::prepareStep(float seconds,uint32_t nativeCollisionSteps) {
       // damping remains active in calm weather to settle hanging cloth.
       vertex.mVelocity=limited(vertex.mVelocity+(wind-vertex.mVelocity)*(.8f*seconds));
       }
+    motion.CustomUpdate(seconds,lock.GetBody(),impl->system());
+    ++body.simulationSteps;
     });
   }
 void Cloth::finishStep() {
   impl->each([&](Instance::Impl& body) {
     if(body.body.IsInvalid()) { body.maxSpeed=0; return; }
+    if(!body.stepPending) return;
     JPH::BodyLockWrite lock(impl->system().GetBodyLockInterface(),body.body);
     if(!lock.Succeeded()) return;
     auto& native=lock.GetBody();
@@ -471,13 +499,43 @@ void Cloth::finishStep() {
     });
   }
 void Cloth::finishFrame() {
+  constexpr double step=1.0/30.0;
   impl->each([&](Instance::Impl& body) {
+    // Hidden time is not accumulated. Keep both native state and the render
+    // interpolation phase so returning to the camera resumes the last pose.
+    if(body.visible && !body.body.IsInvalid()) body.accumulated+=impl->frameSeconds;
+    });
+  for(int iteration=0;iteration<2;++iteration) {
+    bool any=false;
+    impl->each([&](Instance::Impl& body) {
+      body.stepPending=body.visible && !body.body.IsInvalid() && body.accumulated+1.e-9>=step;
+      if(!body.stepPending) return;
+      body.accumulated=std::max(0.0,body.accumulated-step);
+      body.previous=body.simulated;
+      any=true;
+      });
+    if(!any) break;
+    prepareStep(float(step));
+    finishStep();
+    }
+  impl->each([&](Instance::Impl& body) {
+    if(body.accumulated>=step) body.accumulated=std::fmod(body.accumulated,step);
+    // A native fallback animates itself. Hidden cloth keeps its last uploaded
+    // mesh; toggles and radius blending still update the views immediately.
+    if(!body.dirty && (!body.visible || body.weight<=0.f)) return;
+    const float alpha=float(std::clamp(body.accumulated/step,0.0,1.0));
     for(size_t i=0;i<body.rendered.size();++i) {
-      const auto reference=body.reference(i);
-      body.rendered[i]=reference+(body.simulated[i]-reference)*body.weight;
+      const auto simulated=body.previous[i]+(body.simulated[i]-body.previous[i])*alpha;
+      if(body.weight>=1.f) body.rendered[i]=simulated;
+      else {
+        const auto reference=body.reference(i);
+        body.rendered[i]=reference+(simulated-reference)*body.weight;
+        }
       }
     if(body.update) body.update(body.rendered,body.weight);
+    body.dirty=false;
     });
+  impl->frameSeconds=0;
   }
 
 std::vector<Cloth::Snapshot> Cloth::snapshots() const {
@@ -493,6 +551,8 @@ std::vector<Cloth::Snapshot> Cloth::snapshots() const {
     snapshot.center=body.center();
     snapshot.active=instance->active();
     snapshot.exposed=body.exposed;
+    snapshot.visible=body.visible;
+    snapshot.simulationSteps=body.simulationSteps;
     snapshot.vertices=body.pinned.size();
     snapshot.pinned=size_t(std::count(body.pinned.begin(),body.pinned.end(),true));
     snapshot.simulationWeight=body.weight;

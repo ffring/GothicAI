@@ -614,7 +614,28 @@ std::unique_ptr<ClothVisual> ClothVisual::createSurface(World& world, const zenk
     if(pins.empty() || pins.size()==vertices.size())
       throw std::runtime_error("cloth surface needs fixed and free vertices");
     const bool furledSail = local.materials.size()==1 && local.materials.front().name=="NW_SHIP_SAIL_02";
-    tessellate(*geometry,vertices,indices,pins,local.materials,triangleMaterials,visual,furledSail);
+    const bool shipFlag = local.materials.size()==1 &&
+                          (local.materials.front().name=="NW_SHIP_FLAG_01" || local.materials.front().name=="NW_SHIP_FLAG_02");
+    if(shipFlag) {
+      // The authored 5x5 flags need a finer simulation, but not every visible
+      // subdivision needs a particle. An intermediate 9x9 grid drives the
+      // unchanged dense mesh through barycentric weights, just like the sails.
+      ClothGeometry::Options options;
+      options.targetEdgeCm=100.f;
+      options.minParticles=0;
+      options.maxParticles=100;
+      options.maxDepth=1;
+      const auto simulation=ClothGeometry::subdivide(vertices,indices,pins,options);
+      const size_t children=size_t(1)<<(simulation.subdivisionDepth*2);
+      std::vector<uint32_t> simulationMaterials;
+      for(auto material:triangleMaterials)
+        simulationMaterials.insert(simulationMaterials.end(),children,material);
+      tessellate(*geometry,simulation.vertices,simulation.indices,simulation.pins,
+                 local.materials,simulationMaterials,visual,true);
+      }
+    else {
+      tessellate(*geometry,vertices,indices,pins,local.materials,triangleMaterials,visual,furledSail);
+      }
     PackedMesh original(local,PackedMesh::PK_Visual);
     geometry->ownedFullProto = std::make_unique<ProtoMesh>(std::move(original),visual);
     geometry->fullProto = geometry->ownedFullProto.get();

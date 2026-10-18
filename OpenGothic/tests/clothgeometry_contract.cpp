@@ -1,6 +1,7 @@
 #include "physics/clothgeometry.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -154,6 +155,89 @@ int main() {
                                   std::vector<uint32_t>{0,1,2},std::vector<uint32_t>{0,1,2},smallTriangle);
   require(triangle.uniquePositions==15 && triangle.pins.size()==12,"three fixed corners keep the triangle boundary fixed while its new interior remains free");
 
+  // Ship flags already contain a curved 5 by 5 sheet. Keep their simulation
+  // coarser than the visible mesh, with bindings relative to the physical grid.
+  std::vector<Vertex> shipFlag;
+  std::vector<uint32_t> shipTriangles,shipPins;
+  for(uint32_t y=0;y<5;++y)
+    for(uint32_t x=0;x<5;++x) {
+      const float u=float(x)*.25f,v=float(y)*.25f;
+      auto point=vertex(510.f*u,360.f*(1.f-v),u,v);
+      point.pos[2]=30.f*std::sin(u*3.14159265f)*std::sin(v*3.14159265f);
+      shipFlag.push_back(point);
+      if(y==0) shipPins.push_back(y*5+x);
+      }
+  for(uint32_t y=0;y<4;++y)
+    for(uint32_t x=0;x<4;++x) {
+      const uint32_t a=y*5+x,b=a+1,c=a+5,d=c+1;
+      shipTriangles.insert(shipTriangles.end(),{a,b,c,b,d,c});
+      }
+  Options coarseOptions;
+  coarseOptions.targetEdgeCm=100.f;
+  coarseOptions.minParticles=0;
+  coarseOptions.maxParticles=100;
+  coarseOptions.maxDepth=1;
+  const auto shipCoarse=subdivide(shipFlag,shipTriangles,shipPins,coarseOptions);
+  const auto shipVisible=subdivide(shipCoarse.vertices,shipCoarse.indices,shipCoarse.pins);
+  const auto shipDirect=subdivide(shipFlag,shipTriangles,shipPins);
+  require(shipFlag.size()==25 && shipCoarse.uniquePositions==81 && shipCoarse.vertices.size()==81,
+          "a curved authored ship flag uses eighty-one physical particles below its hundred-particle budget");
+  require(shipCoarse.subdivisionDepth==1 && shipCoarse.maxEdgeCm<=100.f,
+          "ship physics refines the authored grid exactly once");
+  require(shipVisible.uniquePositions==289 && shipVisible.vertices.size()==289 && shipDirect.vertices.size()==289,
+          "coarse ship physics retains the same dense visible tessellation as the ordinary path");
+  sourceInterpolation(shipCoarse,shipFlag);
+  sourceInterpolation(shipVisible,shipCoarse.vertices);
+  std::map<std::pair<float,float>,const Vertex*> directUv;
+  for(const auto& point:shipDirect.vertices) directUv.emplace(std::make_pair(point.uv[0],point.uv[1]),&point);
+  const std::set<uint32_t> coarseFixed(shipCoarse.pins.begin(),shipCoarse.pins.end());
+  const std::set<uint32_t> visibleFixed(shipVisible.pins.begin(),shipVisible.pins.end());
+  require(shipPins.size()==5 && coarseFixed.size()==9 && visibleFixed.size()==17,
+          "both subdivision stages preserve and refine only the authored attachment edge");
+  const auto affine=[](const Vertex& point) {
+    return std::array<float,3>{1.1f*point.pos[0]+.2f*point.pos[1]-.3f*point.pos[2]+37.f,
+                               -.1f*point.pos[0]+.9f*point.pos[1]+.4f*point.pos[2]-19.f,
+                               .3f*point.pos[0]-.2f*point.pos[1]+1.2f*point.pos[2]+11.f};
+    };
+  bool bindsNewPhysicalVertex=false;
+  for(uint32_t at=0;at<shipVisible.vertices.size();++at) {
+    const auto& point=shipVisible.vertices[at];
+    const auto original=directUv.find({point.uv[0],point.uv[1]});
+    require(original!=directUv.end(),"the two-stage visible grid preserves every ordinary-path UV sample");
+    for(size_t axis=0;axis<3;++axis)
+      require(std::abs(point.pos[axis]-original->second->pos[axis])<1.e-4f,
+              "two-stage subdivision leaves the curved flag's rest surface unchanged");
+    require((point.pos[1]==360.f)==(visibleFixed.count(at)!=0),"dense ship pins stay on the original fixed edge");
+    const auto& binding=shipVisible.sourceWeights[at];
+    std::array<float,3> posed={},fixedPose={};
+    for(size_t k=0;k<3;++k) {
+      const auto source=binding.vertices[k];
+      const float weight=binding.weights[k];
+      const auto transformed=affine(shipCoarse.vertices[source]);
+      for(size_t axis=0;axis<3;++axis) {
+        posed[axis]+=transformed[axis]*weight;
+        fixedPose[axis]+=shipCoarse.vertices[source].pos[axis]*weight;
+        }
+      if(weight>0.f) {
+        bindsNewPhysicalVertex|=source>=shipFlag.size();
+        if(visibleFixed.count(at)!=0)
+          require(coarseFixed.count(source)!=0,"visible attachment vertices bind only to fixed physical particles");
+        // Model an arbitrary moving cloth pose while leaving physical pins fixed.
+        if(coarseFixed.count(source)==0) fixedPose[2]+=(20.f+float(source))*weight;
+        }
+      }
+    const auto expected=affine(point);
+    for(size_t axis=0;axis<3;++axis) {
+      require(std::abs(posed[axis]-expected[axis])<.001f,"visible barycentric bindings exactly reproduce an affine physical pose");
+      if(visibleFixed.count(at)!=0)
+        require(std::abs(fixedPose[axis]-point.pos[axis])<1.e-4f,"deforming free physical particles never moves visible attachments");
+      }
+    }
+  require(bindsNewPhysicalVertex,"dense bindings address the refined physical grid rather than the twenty-five authored vertices");
+  for(const auto* sheet:{&shipCoarse,&shipVisible})
+    for(size_t at=0;at<sheet->indices.size();at+=3)
+      require(winding(*sheet,at)<0.f,"both ship flag grids retain nondegenerate triangles and authored winding");
+
   invalidInput([&] { subdivide(flag,std::vector<uint32_t>{0,1,9},pins); });
   invalidInput([&] { subdivide(flag,triangles,std::vector<uint32_t>{8}); });
   invalidInput([&] { subdivide(flag,std::vector<uint32_t>{0,1},pins); });
@@ -162,8 +246,8 @@ int main() {
   invalidInput([&] { subdivide(invalid,triangles,pins); });
   require(subdivide({}, {}, {}).vertices.empty(),"empty geometry remains empty");
 
-  std::printf("cloth geometry contract passed: banner_particles=%zu banner_visible_vertices=%zu reverse_visible_vertices=%zu depth=%u max_edge_cm=%.6g pins=%zu boundary_edges=%zu\n",
+  std::printf("cloth geometry contract passed: banner_particles=%zu banner_visible_vertices=%zu reverse_visible_vertices=%zu depth=%u max_edge_cm=%.6g pins=%zu boundary_edges=%zu ship_authored_vertices=%zu ship_physics_particles=%zu ship_visible_vertices=%zu\n",
               mesh.uniquePositions,mesh.vertices.size(),reverse.vertices.size(),mesh.subdivisionDepth,
-              double(mesh.maxEdgeCm),mesh.pins.size(),boundaryEdges);
+              double(mesh.maxEdgeCm),mesh.pins.size(),boundaryEdges,shipFlag.size(),shipCoarse.uniquePositions,shipVisible.vertices.size());
   return EXIT_SUCCESS;
   }
