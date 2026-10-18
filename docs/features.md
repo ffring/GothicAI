@@ -146,6 +146,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
+| Карты нормалей и ORM своих материалов мира и статичных vob; Ламберт с AO, без GGX | убрать каталог контента или `OPENGOTHIC_CONTENT=` | `common/resources.cpp`, `graphics/material.*`, `drawbuckets.*`, `renderer.*`, `shader/materials/`, `shader/lighting/` | синтетическая DDS-фикстура `scripts/content/test-material.py`, `rf.bench` Vulkan/Metal | [Своя игра](own-content.md#как-работает-сейчас) |
 | Ray query на Mac: тени точечных светильников, свет не проходит сквозь стены (на Linux и Windows — с апстрима) | `-rt 0` | `common/commandline.h` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
 | GI-пробы на дискретной видеокарте с трассировкой | `-gi 0` | `common/gothic.cpp` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
 | Сглаживание CMAA2 (только при `vidResIndex=0`) | `-aa 0` | `common/commandline.h` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |

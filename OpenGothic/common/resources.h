@@ -108,6 +108,15 @@ class Resources final {
     static auto                      loadTextureAnim(std::string_view name) -> std::vector<const Tempest::Texture2d*>;
     static       Material            loadMaterial(const zenkit::Material& src, bool enableAlphaTest);
 
+    struct MaterialMaps {
+      const Tempest::Texture2d* albedo = nullptr;
+      const Tempest::Texture2d* normal = nullptr;
+      const Tempest::Texture2d* orm    = nullptr;
+      float                    scale  = 1.f;
+      };
+    static MaterialMaps              loadMaterialMaps(std::string_view name);
+    static bool                      materialMapsEnabled();
+
     static const AttachBinder*       bindMesh       (const ProtoMesh& anim, const Skeleton& s);
     static const ProtoMesh*          loadMesh       (std::string_view name);
     static const PfxEmitterMesh*     loadEmiterMesh (std::string_view name);
@@ -187,6 +196,8 @@ class Resources final {
     void                  detectVdf(std::vector<Archive>& ret, const std::u16string& root);
 
     void                  indexHdTextures();
+    void                  indexMaterialMaps();
+    const Tempest::Texture2d* implLoadMaterialTexture(const std::string& path, bool normalMap);
     Tempest::Texture2d*   implLoadTexture(std::string_view cname, bool forceMips);
     Tempest::Texture2d    implLoadTextureUncached(std::string_view name, bool forceMips);
     Tempest::Texture2d    implLoadTextureUncached(std::string_view name, zenkit::Read& data, bool forceMips);
@@ -256,6 +267,13 @@ class Resources final {
     // OPENGOTHIC_TEXTURES: sharper textures of our own (scripts/hd-textures.sh) in place of the game's,
     // upper-case name without .TGA -> the DDS (or PNG) file
     std::unordered_map<std::string,std::string>                       hdTextures;
+    struct MaterialMapFiles {
+      std::string albedo, normal, orm;
+      float       scale = 1.f;
+      };
+    std::unordered_map<std::string,MaterialMapFiles>                  materialMaps;
+    TextureCache                                                     materialTextureCache;
+    bool                                                             materialMapsPresent = false;
     std::map<Tempest::Color,std::unique_ptr<Tempest::Texture2d>,Less> pixCache;
     std::unordered_map<std::string,std::unique_ptr<ProtoMesh>>        aniMeshCache;
     std::unordered_map<DecalK,std::unique_ptr<ProtoMesh>,Hash>        decalMeshCache;

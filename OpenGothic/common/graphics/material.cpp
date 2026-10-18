@@ -42,6 +42,16 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
 
   if(m.environment_mapping!=0)
     ; // envMapping = m.environment_mapping_strength;
+
+  if(isSolid() && m.group!=zenkit::MaterialGroup::WATER &&
+     !hasFrameAnimation() && !hasUvAnimation() && m.wave_mode==zenkit::WaveMode::NONE) {
+    auto maps = Resources::loadMaterialMaps(m.texture);
+    if(maps.albedo!=nullptr)
+      tex = maps.albedo;
+    normal  = maps.normal;
+    orm     = maps.orm;
+    uvScale = maps.scale;
+    }
   }
 
 Material::Material(const zenkit::VisualDecal& decal) {
@@ -64,6 +74,9 @@ Material::Material(const zenkit::IParticleEffect& src) {
 
 bool Material::operator ==(const Material& other) const {
   return tex==other.tex &&
+         normal==other.normal &&
+         orm==other.orm &&
+         uvScale==other.uvScale &&
          frames==other.frames &&
          alpha==other.alpha &&
          alphaWeight==other.alphaWeight &&

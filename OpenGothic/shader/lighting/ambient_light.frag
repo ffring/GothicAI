@@ -13,6 +13,9 @@ layout(binding  = 0, std140) uniform UboScene {
   };
 layout(binding  = 1) uniform texture2D  gbufDiffuse;
 layout(binding  = 2) uniform usampler2D gbufNormal;
+#if defined(MATERIAL_MAPS)
+layout(binding = 12) uniform texture2D gbufOrm;
+#endif
 #if defined(SURFEL_GI)
 layout(binding  = 3) uniform sampler2D  surfGi;
 layout(binding  = 4) uniform sampler2D  ssao;
@@ -80,7 +83,10 @@ void main() {
 
   // const vec3  linear = vec3(1);
   const vec3  linear = textureAlbedo(diff);
-  const float ao     = textureSsao();
+  float ao = textureSsao();
+#if defined(MATERIAL_MAPS)
+  ao *= texelFetch(gbufOrm, fragCoord, 0).r;
+#endif
 
   vec3 color = linear;
   color *= luminance(norm);

@@ -24,6 +24,9 @@ layout(binding = 0, std140) uniform UboScene {
 layout(binding  = 1) uniform texture2D  gbufDiffuse;
 layout(binding  = 2) uniform utexture2D gbufNormal;
 layout(binding  = 3) uniform texture2D  depth;
+#if defined(MATERIAL_MAPS)
+layout(binding = 12) uniform texture2D gbufOrm;
+#endif
 
 #if defined(VIRTUAL_SHADOW)
 layout(binding  = 5, std430) readonly buffer Omni  { uint pageTblOmni[]; };
@@ -122,6 +125,9 @@ void main() {
   const vec3 linear = textureAlbedo(d.rgb);
 
   vec3 ret = linear * (color * light) * max(1.0, scene.exposure) * Fd_Lambert * 0.25;
+#if defined(MATERIAL_MAPS)
+  ret *= texelFetch(gbufOrm, ivec2(gl_FragCoord.xy), 0).r;
+#endif
 
   outColor = vec4(ret, 0.0);
   }
