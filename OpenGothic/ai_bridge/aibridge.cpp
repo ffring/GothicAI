@@ -66,7 +66,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 44;
+constexpr int         ProtocolVersion = 45;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -1073,15 +1073,6 @@ void AiBridge::Impl::onBodyControl(World& world, const rapidjson::Value& msg) {
 
 void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
   const auto req = JsonRead::str(msg,"req");
-  // Changing subscription changes world IDs. Release through the common arbiter first so a
-  // subscription edit cannot bypass a current non-interruptible segment's safe handoff.
-  for(uint32_t i=0;i<world.npcCount();++i) {
-    auto npc = world.npcById(i);
-    if(npc!=nullptr && BodyController::owns(*npc)) {
-      sendResult(req,false,"release active body owners before changing body_watch");
-      return;
-      }
-    }
   auto npcs = msg.FindMember("npcs");
   auto rate = msg.FindMember("rate_hz");
   if(req.empty() || npcs==msg.MemberEnd() || !npcs->value.IsArray() || npcs->value.Size()>4 ||
@@ -1119,17 +1110,26 @@ void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
       }
     watched.push_back(npc);
     }
-  resetBodyObservations();
-  BodyController::pause(Gothic::inst().isPause());
-  if(!watched.empty()) {
-    BodyObservations::Config config;
-    config.periodMs = (rate==msg.MemberEnd() || rate->value.GetInt()==20) ? 50 : 100;
-    config.maxActors = 4;
-    config.queueCapacity = 16;
-    BodyObservations::configure(config);
-    BodyObservations::watch(watched);
+  const uint64_t periodMs = (rate==msg.MemberEnd() || rate->value.GetInt()==20) ? 50 : 100;
+  if(BodyController::hasOwners()) {
+    const auto reason = BodyController::updateWatch(watched,periodMs);
+    if(std::string_view(reason)!="allowed") {
+      sendResult(req,false,reason);
+      return;
+      }
+    } else {
+    resetBodyObservations();
+    if(!watched.empty()) {
+      BodyObservations::Config config;
+      config.periodMs = periodMs;
+      config.maxActors = 4;
+      config.queueCapacity = 16;
+      BodyObservations::configure(config);
+      BodyObservations::watch(watched);
+      }
+    BodyController::setActors(watched);
     }
-  BodyController::setActors(watched);
+  BodyController::pause(Gothic::inst().isPause());
   // Observation alone does not attach a controller, clear AI queues or claim body ownership.
   sendResult(req,true,"",BodyObservations::statsJson());
   }

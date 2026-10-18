@@ -110,7 +110,7 @@ def test_hero_deed_retains_ownership_ids_and_engine_witnesses():
 
 
 def test_v44_independent_deeds_switch_and_held_deed_id():
-    assert PROTOCOL_VERSION == CRIME_REACT_PROTOCOL == 44
+    assert PROTOCOL_VERSION >= CRIME_REACT_PROTOCOL == 44
     assert "deeds" not in json.loads(ThreatControlCmd(hold=True).to_json())
     command = json.loads(ThreatControlCmd(hold=False, deeds=True).to_json())
     assert command == {"type": "threat_control", "hold": False, "deeds": True}
