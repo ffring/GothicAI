@@ -28,7 +28,7 @@ from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Protocol
 
-from . import executor, npc_tools
+from . import commands, executor, npc_tools
 from .budget import Budget
 from .executor import Intent
 from .game import GameError, GameLink
@@ -206,6 +206,58 @@ def first_words(text: str) -> tuple[str, Mood | None]:
 def line_duration(text: str) -> float:
     """Seconds the game gives a line (mirrors LineLibrary::durationFor in ai_bridge)."""
     return min(max(0.8 + 0.065 * len(text.encode("cp1251", "replace")), 1.5), 12.0)
+
+
+_FOLLOW_DELAY = re.compile(
+    r"\b(?:если|когда|пока|сначала|потом|позже|попозже|завтра|послезавтра|подожди|погоди|"
+    r"бы|останусь|остаюсь|никуда|ли|наверное|возможно|может|вряд)\b"
+)
+_FOLLOW_REFUSAL = re.compile(
+    r"\bне\s+(?:иду|пойду|идем|пойдем|пошли|собираюсь|стану|могу|хочу|готов|следую|последую|"
+    r"побегу|думаю|уверен)\b"
+)
+_FOLLOW_REPORTED = re.compile(r"\b(?:сказал|сказали|говорит|говорят|спросил|крикнул)\b")
+_FOLLOW_LEADING = re.compile(r"\b(?:за мной|со мной|я поведу|я веду|я отведу|я покажу дорогу)\b")
+_FOLLOW_ACCEPTED = re.compile(
+    r"(?:^|[.!?;:—–,]\s*)(?:(?:да|ладно|хорошо|тогда|ну)\b[,\s]*)*"
+    r"(?:пойдем(?:те)?|пошли|идем(?:те)?)\b|"
+    r"\b(?:я\s+)?(?:иду|пойду|следую|отправляюсь)\s+(?:за тобой|с тобой)\b|"
+    r"\bя\s+за тобой\b"
+)
+_FOLLOW_SHORT = re.compile(
+    r"^(?:(?:да|ладно|хорошо|ну|ага|угу)\b[\s,.!—–-]*)*(?:я\s+)?(?:иду|пойду)\s*(?:$|[,!.…])"
+)
+
+
+def follow_agreement(heard: str, reply: str, name: str = "") -> bool:
+    """An invitation and an unconditional agreement to go, in these two lines specifically.
+
+    A model's incidental "пойдём разберёмся" does not invite itself into the hero's party: the hero
+    must have asked it to go. Refusals, conditions, later promises and somebody else's words do not
+    commit the body either. Unclear pairs stay the conversational model's responsibility.
+    """
+    names = frozenset(commands.words(name))
+    if not commands.follow_request(heard, names.__contains__):
+        return False
+    answer = reply.lower().replace("ё", "е").strip(" —–-")
+    if (
+        _FOLLOW_DELAY.search(answer)
+        or _FOLLOW_REFUSAL.search(answer)
+        or _FOLLOW_REPORTED.search(answer)
+        or _FOLLOW_LEADING.search(answer)
+        or re.search(
+            r"\b(?:не сейчас|не с тобой|не за тобой|без меня|без тебя|без вас|иди сам|идите сами)\b", answer
+        )
+        or any(mark in answer for mark in ('"', "«", "»"))
+        or re.match(r"нет\b(?!\s+проблем\b)", answer)
+    ):
+        return False
+    sentences = re.split(r"(?<=[.!?…])\s+", answer)
+    return any(
+        bool(_FOLLOW_ACCEPTED.search(line) or _FOLLOW_SHORT.match(line))
+        for line in sentences
+        if not line.endswith("?")
+    )
 
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"»)]*\s+")
@@ -1703,6 +1755,8 @@ class DialogueManager:
                 full.cancel()  # done by now, unless the turn ended before the line
 
         self._commit(conv, trigger, state.text, kind, state.to)
+        if kind == "player" and state.to is None and not state.end_requested:
+            self._repair_follow_agreement(conv, trigger.content, state.text)
         trace.close(status)
         total = time.monotonic() - state.started
         if state.text:
@@ -2111,6 +2165,26 @@ class DialogueManager:
         self._journal_call(conv, call.name, call.arguments)
         self._change_intent(conv, intent, snap)
         return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
+
+    def _repair_follow_agreement(self, conv: Conversation, heard: str, reply: str) -> None:
+        """Carry out a spoken commitment when the conversational model forgot its tool call."""
+        if conv.intent.goal == "follow_hero" or not follow_agreement(heard, reply, conv.persona.name):
+            return
+        outcome = self._set_intent(
+            conv,
+            ToolCall(
+                "set_intent",
+                {
+                    "goal": "follow_hero",
+                    "target": "PLAYER",
+                    "attitude": conv.intent.attitude,
+                    "agenda": None,
+                },
+            ),
+            self.link.snapshots.get(conv.npc),
+        )
+        if outcome.status == "accepted":
+            self._note(conv, f"Герой позвал тебя: «{heard}» — идти за ним. Ты согласился и идёшь за героем.")
 
     def _change_intent(
         self, conv: Conversation, intent: Intent, snap: Snapshot | None, *, body: bool = True

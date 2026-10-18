@@ -191,6 +191,117 @@ async def test_stoi_is_the_wolfs_and_other_orders_the_companions():
     assert cmds(fake) == [("WOLF#1", "calm")]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Он, смотри, волк, волк, бей его.",
+        "¿Я валорн? Бей волка.",
+        "О, волки, волки, бей волков.",
+        "Бей его!",
+        "В атаку!",
+        "Взять его!",
+    ],
+)
+async def test_live_attack_orders_never_reach_the_wolfs_tone_model(text):
+    fake, quick = FakeGame(), FakeBackend("hostile", delay=0)
+    fake.views[GORN] = {
+        "npc": GORN,
+        "name": "Горн",
+        "sees": [
+            {"id": "WOLF", "name": "Волк", "kind": "monster", "distance": 1000, "hero_cm": 900},
+        ],
+    }
+    cm, dialogue, talk, llm = await _desk(fake, quick=quick)
+    try:
+        await _follows(fake, dialogue)
+        await fake.beasts(wolf(1, 9, "threaten"), wolf(2, 12, "threaten"))
+        await _until(lambda: len(talk.beasts.wolves) == 2)
+        await fake.send(type="player_text", text=text)
+        await _until(lambda: fights(fake) == ["WOLF"])
+        assert (talk.last[0].id, talk.last[0].why) == (GORN, "order")
+        assert talk.beasts.verdicts == [] and quick.calls == [] and cmds(fake) == []
+        assert llm.calls == []
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("text", "focus", "target"),
+    [
+        ("Бей волка!", "YBLOODFLY", "YBLOODFLY"),  # focus before species
+        ("Убей муху!", None, "YBLOODFLY"),
+        ("Мочи мух!", None, "YBLOODFLY"),
+        ("Руби волков!", None, "YWOLF"),
+    ],
+)
+async def test_attack_target_is_pointed_or_nearest_visible_species(text, focus, target):
+    fake = FakeGame()
+    fake.views[GORN] = {
+        "npc": GORN,
+        "name": "Горн",
+        "sees": [
+            {"id": "YBLOODFLY", "name": "Кровавая муха", "kind": "monster", "distance": 1200, "hero_cm": 900},
+            {"id": "YWOLF", "name": "Молодой волк", "kind": "monster", "distance": 1400, "hero_cm": 1100},
+        ],
+    }
+    cm, dialogue, talk, _ = await _desk(fake)
+    try:
+        await _follows(fake, dialogue)
+        # A closer wolf behind a wall must not win the named-species lookup.
+        await fake.beasts(wolf(1, 6, "routine"))
+        await _until(lambda: "WOLF#1" in talk.beasts.wolves)
+        await fake.send(type="player_text", text=text, focus=focus)
+        await _until(lambda: fights(fake) == [target])
+        assert cmds(fake) == [] and talk.beasts.verdicts == []
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def test_an_unseen_named_species_is_a_question_to_the_companion():
+    fake, quick = FakeGame(), FakeBackend("hostile", delay=0)
+    cm, dialogue, talk, _ = await _desk(fake, quick=quick)
+    try:
+        await _follows(fake, dialogue)
+        await fake.beasts(wolf())
+        await _until(lambda: "WOLF#1" in talk.beasts.wolves)
+        await fake.send(type="player_text", text="Бей муху!")
+        await _until(lambda: fake.said == ["Что?"])
+        assert talk.last[0].id == GORN and fights(fake) == []
+        assert quick.calls == [] and cmds(fake) == []
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def test_a_request_for_help_does_not_start_a_fight_with_a_threatening_wolf():
+    fake = FakeGame()
+    cm, dialogue, talk, _ = await _desk(fake)
+    try:
+        await _follows(fake, dialogue)
+        await fake.beasts(wolf())
+        await _until(lambda: "WOLF#1" in talk.beasts.wolves)
+        await fake.send(type="player_text", text="Помоги!")
+        await _until(lambda: fake.said == ["Что?"])
+        assert fights(fake) == [] and cmds(fake) == []
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def test_a_plural_greeting_to_people_is_not_heard_by_a_wolf():
+    fake, quick = FakeGame(), FakeBackend("hostile", delay=0)
+    cm, dialogue, talk, _ = await _desk(fake, quick=quick)
+    try:
+        await _follows(fake, dialogue, person(XARDAS, "Ксардас", 6, True))
+        talk.begin(GORN, "Горн")
+        await fake.beasts(wolf())
+        await _until(lambda: "WOLF#1" in talk.beasts.wolves)
+        await fake.send(type="player_text", text="Пацаны, здорово!")
+        await _until(lambda: fake.said == ["Что?"])
+        assert talk.last[0].id == XARDAS and talk.last[0].why == "group"
+        assert quick.calls == [] and cmds(fake) == []
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
 async def test_a_name_or_a_person_looked_at_keeps_the_words_for_people():
     fake = FakeGame()
     llm = FakeBackend("Держись!", delay=0)
