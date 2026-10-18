@@ -36,7 +36,7 @@ def wait_for(path):
 
 
 class QueueSplitTests(unittest.TestCase):
-    def run_game(self, action='e2e', prepare=True, build_exit=0, exclusive=False):
+    def run_game(self, action='e2e', prepare=True, build_exit=0, scenario='stages'):
         directory = self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-phases-test-'))
         root = Path(directory)
         (root / 'scripts').mkdir()
@@ -59,7 +59,7 @@ if name.startswith('build ') and int(os.environ['TEST_BUILD_EXIT']):
 set -euo pipefail
 ROOT="$TEST_SESSION" SESSION="$TEST_SESSION" STATE="$TEST_SESSION/state"
 OUTPUT="$SESSION/output" RUN=run RYZEN_HOST=fake AI_PORT=''
-ACTION="$TEST_ACTION" JOBS=7 LOCK_WAIT=23 SCENARIO=stages
+ACTION="$TEST_ACTION" JOBS=7 LOCK_WAIT=23 SCENARIO="$TEST_SCENARIO"
 BENCH_SCENARIO=/benchmarks/smoke.bench RYZEN_MAX=9m
 if [[ "$ACTION" == bench ]]; then BENCH_CLASS=quiet; else unset BENCH_CLASS; fi
 TUNNEL_OPEN=0 RUN_STARTED=0 RUN_FINISHED=0 RUN_RC=0
@@ -71,13 +71,12 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
 '''
         harness += '\n'.join([function('run_quick'), function('e2e_display_exclusive'),
                               function('game_queue_args'), function('run_game')])
-        if exclusive:
-            harness += '\ne2e_display_exclusive() { [[ "$1" == stages ]]; }\n'
-        harness += '\nrun_game env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote "$ACTION" "$STATE" "$RUN" stages\n'
+        harness += '\nrun_game env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote "$ACTION" "$STATE" "$RUN" "$SCENARIO"\n'
         result = subprocess.run(
             ['bash', '-c', harness], capture_output=True, text=True, timeout=10,
             env=dict(os.environ, TEST_SESSION=str(root), TEST_ACTION=action,
-                     TEST_PREPARE=str(int(prepare)), TEST_BUILD_EXIT=str(build_exit)),
+                     TEST_PREPARE=str(int(prepare)), TEST_BUILD_EXIT=str(build_exit),
+                     TEST_SCENARIO=scenario),
         )
         requests = root / 'requests.jsonl'
         return result, [json.loads(line) for line in requests.read_text().splitlines()] if requests.exists() else []
@@ -135,14 +134,22 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
         self.assertIn('compile failure: build log tail', result.stdout)
 
     def test_exclusive_scenario_only_changes_the_game_request(self):
-        result, requests = self.run_game(exclusive=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(len(requests), 2, requests)
-        self.assertNotIn('--display-exclusive', self.queue_options(requests[0]))
-        self.assertIn('--display-exclusive', self.queue_options(requests[1]))
+        for scenario, exclusive in (('fight_reactions_bandits', True),
+                                    ('calm', True), ('orders', False)):
+            with self.subTest(scenario=scenario):
+                result, requests = self.run_game(scenario=scenario)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(len(requests), 2, requests)
+                build = self.queue_options(requests[0])
+                self.assertNotIn('--display', build)
+                self.assertNotIn('--display-exclusive', build)
+                game = self.queue_options(requests[1])
+                self.assertIn('--display', game)
+                self.assertEqual('--display-exclusive' in game, exclusive)
+                self.assert_option(game, '--name', f'e2e {scenario}')
 
     def test_bench_does_not_use_e2e_exclusive_scenarios(self):
-        result, requests = self.run_game(action='bench', exclusive=True)
+        result, requests = self.run_game(action='bench', scenario='calm')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('--display-exclusive', self.queue_options(requests[-1]))
 

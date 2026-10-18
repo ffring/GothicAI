@@ -821,6 +821,10 @@ e2e_display_exclusive() {
   # Keep timing-sensitive exceptions and their measured reason in this one list.
   # Add an exception only after a passing solo run fails with concurrent games.
   case "$1" in
+    # Solo 2/2 passed; triple 2/2 missed Cavalorn's npc_idle within 15s.
+    fight_reactions_bandits) return 0 ;;
+    # Solo 2/2 passed; triple 1/2 missed attack/addressed (ZS_STAND_ARMSCROSSED).
+    calm) return 0 ;;
     *) return 1 ;;
   esac
 }
