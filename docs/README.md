@@ -1,6 +1,6 @@
 # Карта проекта
 
-С этой страницы начинается любая работа в репозитории. Она говорит, где что лежит и как части связаны. Подробности — в документах систем, ссылки на них ниже. Правила работы — в [`AGENTS.md`](../AGENTS.md), сборка и запуск — в [`README.md`](../README.md).
+С этой страницы начинается любая работа в репозитории. Она говорит, где что лежит и как части связаны. Подробности — в документах систем, ссылки на них ниже. Правила работы — в [`AGENTS.md`](../AGENTS.md), у `server/`, `OpenGothic/ai_bridge/` и `shorts/` — ещё свои короткие `AGENTS.md`. Сборка и запуск — в [`README.md`](../README.md).
 
 Карта описывает то, что есть сейчас. PR, который добавляет модуль, сервис, флаг, сценарий или документ, правит и эту страницу.
 
@@ -191,7 +191,7 @@
 | [`navigation.md`](navigation.md) | обучаемая навигация NPC | план, идёт |
 | [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | план |
 | `npc-body-*.md` (`api`, `arena`, `bc`, `combat-contract`, `headless-runner`, `observations`, `trajectories`) | боевое тело по этапам | справочники |
-| [`npc-body-combat-gate.md`](npc-body-combat-gate.md), [`npc-body-stage8-stop-report.md`](npc-body-stage8-stop-report.md) | этап 8: журнал и остановка 14.10 | устарели в шапке: gate пройден 15.10, см. план |
-| [`npc-scheduler.md`](npc-scheduler.md) | планировщик решений NPC | проект от 11.10, статус не обновлялся |
-| [`launcher.md`](launcher.md) | лаунчер | план от 11.10, статус не обновлялся |
+| [`npc-body-combat-gate.md`](npc-body-combat-gate.md), [`npc-body-stage8-stop-report.md`](npc-body-stage8-stop-report.md) | этап 8: журнал до допуска и остановка 14.10 | исторические: gate пройден 15.10, итог в плане |
+| [`npc-scheduler.md`](npc-scheduler.md) | планировщик решений NPC | проект от 11.10; шаги 1–3 сделаны, планировщик работает в `brain/` |
+| [`launcher.md`](launcher.md) | лаунчер | этапы L1–L3 сделаны, лаунчером пользуются |
 | [`MVP.md`](MVP.md) | первая спецификация MVP | исторический |
