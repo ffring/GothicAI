@@ -1,0 +1,15 @@
+{
+  "off_env": "OPENGOTHIC_FLINCH=0",
+  "hook": {"ru": "Вода в Готике:\nбыло и стало", "en": "Water in Gothic:\nbefore and after"},
+  "hook_s": 2.2,
+  "cover": {"segment": "body", "at": 4.0, "title": {"ru": "ВОДА", "en": "WATER"}},
+  "labels": {"ru": ["Было: OpenGothic как есть", "Стало: физика воды"],
+             "en": ["Before: OpenGothic as it was", "Now: water physics"]},
+  "beats": [
+    {"segment": "body", "start": 0.5, "end": 5.5, "title": {"ru": "Убитый в воде", "en": "Killed in the water"}},
+    {"segment": "skeleton", "start": 0.5, "end": 5.0, "title": {"ru": "Скелет — на дно", "en": "A skeleton sinks"}},
+    {"segment": "fireball", "start": 0.3, "end": 5.0, "title": {"ru": "Обломки на воде", "en": "The pieces float"}},
+    {"segment": "things", "start": 0.3, "end": 5.0, "title": {"ru": "Меч тонет, лютня — нет", "en": "A sword sinks, a lute floats"}}
+  ],
+  "music": {"file": "music/khorinis-city.wav", "volume": 0.8}
+}

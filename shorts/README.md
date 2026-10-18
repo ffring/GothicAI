@@ -145,6 +145,14 @@ at a runner. `hits`: the body physics off (`off:` ragdoll, living bodies, arrow 
 flinch too) and on: three arrows stay in a bandit, one killed on the run, a bandit and a wolf killed on a slope
 over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break in the hook makes it two lines.
 
+`water`: four daytime scenes at Khorinis harbour: a farmer and a skeleton killed by the wind fist, a fireball
+at a crate and barrel, and a sword, ore, lute and arrow dropped into deep water. Run
+`shorts/compare/film.sh water` for both takes. `water-film setup body|skeleton|fireball|things` sets a fixed
+camera and a fresh scene; `water-film begin` starts its native action and `water-film checkpoint` logs the
+outcome after six seconds. The off take disables ragdoll, living bodies, spell features, movable objects,
+destruction and water after every setup, with `OPENGOTHIC_FLINCH=0`. The existing `water.bench` and
+`water-bodies.bench` checks keep their own fixtures.
+
 - `compare/<name>.bench`: the scenario; every `rec` is a beat. Both takes run the same steps on the fixed
   time step, so the halves stay in sync; the "off" take sets `OPENGOTHIC_FOOTIK=0`, `_GAZE`, `_LEAN`, `_AIM`,
   `_FLINCH`, `_ANIBLEND`, `_LIPSYNC` to 0, or what `"off_env"` of `compare/<name>.json` names. A line

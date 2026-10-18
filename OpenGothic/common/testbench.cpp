@@ -694,6 +694,10 @@ struct Bench {
   std::vector<WaterActor> waterActors;
   bool waterBodiesReady=false,waterLootReady=false,waterKillOnThrow=false;
   std::string waterLootMode;
+  std::string waterFilm;
+  Vec3 waterFilmLip;
+  bool waterFilmKill=false;
+  uint64_t waterFilmStart=0;
   std::vector<std::unique_ptr<MovableFixture>> destructionFixtures;
   std::vector<uintptr_t> destructionIds;
   std::map<std::pair<uintptr_t,size_t>,Vec3> destructionFragmentOrigins;
@@ -5737,6 +5741,175 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
     ",\"caster_cm\":"+ragdollVector(caster)+",\"dummy_cm\":"+ragdollVector(dummy));
   }
 
+// Film fixtures are deliberately separate from the water regression fixtures:
+// each shot owns its actors/props and accepts the stock, non-ragdoll outcome.
+std::string waterFilmPosition(World& world,const Vec3& point) {
+  const auto floor=world.physic()->landRay(point+Vec3(0,300,0),6000.f);
+  const auto water=floor.hasCol?world.physic()->waterRay(floor.v+Vec3(0,.1f,0),0):DynamicWorld::RayWaterResult{};
+  return "\"position_cm\":"+ragdollVector(point)+
+    ",\"water_y_cm\":"+(water.hasCol?ragdollNumber(water.wdepth):"null")+
+    ",\"bottom_y_cm\":"+(floor.hasCol?ragdollNumber(floor.v.y):"null");
+  }
+
+void waterFilmCheckpoint(World& world) {
+  std::string actors="[",items="[",fragments="[";
+  for(const auto& actor:bench.waterActors) {
+    if(actors.size()>1)actors+=',';
+    actors+="{\"role\":"+jsonStr(actor.role)+",\"dead\":"+(actor.npc->isDead()?"true":"false")+
+      ",\"swimming\":"+(actor.npc->isSwim()?"true":"false")+
+      ",\"ragdoll\":"+(actor.npc->ragdollBody()?"true":"false")+","+waterFilmPosition(world,actor.npc->position())+"}";
+    }
+  for(size_t i=0;i<bench.waterItems.size();++i) {
+    if(i)items+=',';
+    items+="{\"label\":"+jsonStr(std::array{"sword","ore","lute","arrow"}[i])+","+
+      waterFilmPosition(world,bench.waterItems[i]->midPosition())+"}";
+    }
+  for(const auto& body:world.physic()->waterBodySnapshot()) {
+    if(body.category!=DynamicWorld::C_Fragment || !bench.waterIds.contains(body.parentId))continue;
+    if(fragments.size()>1)fragments+=',';
+    fragments+="{\"parent\":"+jsonStr(bench.waterLabels[body.parentId])+",\"piece\":"+std::to_string(body.piece)+
+      ",\"submerged_fraction\":"+ragdollNumber(body.submergedFraction)+","+
+      waterFilmPosition(world,(body.worldBounds[0]+body.worldBounds[1])*.5f)+"}";
+    }
+  event("water_film_checkpoint","\"scene\":"+jsonStr(bench.waterFilm)+",\"elapsed_ms\":"+
+    std::to_string(world.tickCount()-bench.waterFilmStart)+",\"actors\":"+actors+"],\"items\":"+items+
+    "],\"props\":"+destructionRows(world)+",\"fragments\":"+fragments+"],\"bodies\":"+waterRows(world));
+  }
+
+void waterFilmTick(World& world) {
+  if(!bench.waterFilmKill || bench.waterActors.empty())return;
+  auto& npc=*bench.waterActors.front().npc;
+  const auto velocity=npc.spellVelocity();
+  const auto displacement=(npc.position()-bench.waterFilmLip).length();
+  if(npc.lastHitSpellId()!=26 || npc.lastHitBy()!=world.player() ||
+     velocity.length()<=100.f || displacement<=50.f)return;
+  bench.waterFilmKill=false;
+  const auto at=npc.position();
+  if(!npc.setRagdollDown(true)) {arenaAbort("water film real wind death refused");return;}
+  npc.prepareRagdoll();
+  event("water_film_death","\"scene\":"+jsonStr(bench.waterFilm)+","+waterFilmPosition(world,at)+
+    ",\"observed_wind_velocity_cm_s\":"+ragdollVector(velocity)+
+    ",\"displacement_cm\":"+ragdollNumber(displacement)+
+    ",\"ragdoll\":"+(npc.ragdollBody()?"true":"false")+",\"path\":\"onNoHealth after real WindFist hit\"");
+  }
+
+void waterFilmSetup(World& world,Npc& player,std::string_view scene) {
+  if(scene!="body" && scene!="skeleton" && scene!="fireball" && scene!="things") {
+    arenaAbort("water-film setup expects body, skeleton, fireball or things");return;
+    }
+  if(bench.spellRunes.empty())prepareSpellFixture(world,player,"wind");
+  if(bench.spellRunes.empty())return;
+  player.setTarget(nullptr);player.closeWeapon(true);player.clearAiQueue();player.clearGoTo();player.stopWalking();player.clearSpeed();
+  bench.subject=nullptr;bench.crew.clear();bench.waterActors.clear();bench.waterFilmKill=false;
+  bench.spellTrace=false;bench.spellGuardTrace=false;bench.spellReleaseAt=0;bench.spellEquipPending=0;
+  for(const auto& actor:bench.spellActors)world.removeNpc(*actor.npc);
+  for(auto* item:bench.spellItems)world.removeItem(*item);
+  for(auto* item:bench.waterItems)world.removeItem(*item);
+  bench.spellActors.clear();bench.spellItems.clear();bench.waterItems.clear();
+  bench.destructionFixtures.clear();bench.destructionIds.clear();bench.movableIds.clear();
+  bench.waterIds.clear();bench.waterLabels.clear();bench.waterReference.clear();bench.waterTravel.clear();bench.waterSleepAt.clear();
+  bench.destructionTrace=false;
+  std::vector<Vec3> places;
+  if(!waterFindWindSite(world,places) || bench.waterWaypoint!="NW_CITY_HABOUR_05") {
+    arenaAbort("water film needs the low NW_CITY_HABOUR_05 pier");return;
+    }
+  const auto lip=bench.waterDry,direction=bench.waterDirection,side=Vec3(-direction.z,0,direction.x);
+  bench.waterFilmLip=lip;bench.waterFilm=scene;bench.waterCase="film-"+std::string(scene);
+  bool deep=false;
+  for(float distance=100.f;distance<=200.f;distance+=10.f)
+    if(waterProbe(world,lip+direction*distance,220.f,6000.f,bench.waterCenter)) {deep=true;break;}
+  if(!deep) {arenaAbort("water film needs deep water 1-2m from the pier");return;}
+  const auto dryFloor=[&](const Vec3& at,Vec3& result) {
+    const auto floor=world.physic()->landRay(at+Vec3(0,400,0),600.f);
+    if(!floor.hasCol || floor.n.y<.99f || world.physic()->waterRay(floor.v,1.f).hasCol)return false;
+    for(float dx:{-30.f,30.f})for(float dz:{-30.f,30.f}) {
+      const auto foot=world.physic()->landRay(floor.v+Vec3(dx,100,dz),150.f);
+      if(!foot.hasCol || foot.n.y<.99f || std::abs(foot.v.y-floor.v.y)>5.f ||
+         world.physic()->waterRay(foot.v,1.f).hasCol)return false;
+      }
+    result=floor.v;return true;
+    };
+  Vec3 caster;bool supported=false;
+  for(float distance:scene=="fireball"?std::vector<float>{700,650,750,600,800}:std::vector<float>{200,250,300,150})
+    if(dryFloor(lip-direction*distance,caster) &&
+       !world.physic()->ray(caster+Vec3(0,140,0),lip+Vec3(0,100,0)).hasCol) {supported=true;break;}
+  if(!supported) {arenaAbort("water film caster needs a clear supported dry lane");return;}
+  player.setPosition(caster);player.setDirection(direction);player.updateTransform();
+  player.handle().attribute[ATR_MANA]=player.handle().attribute[ATR_MANAMAX]=50000;player.setTalentSkill(TALENT_MAGE,6);
+  for(uint32_t id=0;id<world.npcCount();++id)
+    if(auto* npc=world.npcById(id);npc && npc!=&player && (npc->position()-lip).length()<2500.f) {
+      npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
+      }
+  if(scene!="things") {
+    if(!waterBodiesAdd(world,player,scene=="skeleton"?"SKELETON":"BAU_904_BAUER",std::string(scene),lip,false))return;
+    auto* target=bench.waterActors.back().npc;
+    target->handle().attribute[ATR_HITPOINTS]=target->handle().attribute[ATR_HITPOINTSMAX]=50000;
+    bench.spellActors.push_back({target,"water_target"});
+    }
+  if(scene=="fireball") {
+    // Fresh owned vobs keep this dry authored pose when movable is disabled.
+    // The real projectile hits the actor in the gap; only its ordinary blast
+    // can break the two props or send their fragments over the edge.
+    for(unsigned i=0;i<2;++i) {
+      const auto visual=i?"NW_HARBOUR_BARREL_01.3DS":"NW_HARBOUR_CRATE_01.3DS";
+      Vec3 support,failed;bool found=false;
+      for(float retreat:{65.f,90.f,115.f,140.f})
+        if(destructionSupported(world,visual,lip-direction*retreat+side*(i?110.f:-110.f),support,failed)) {found=true;break;}
+      const auto id=found?destructionAdd(world,visual,support):0;
+      if(!id) {arenaAbort("water film crate/barrel needs dry full-footprint support");return;}
+      bench.waterIds.insert(id);bench.waterLabels[id]=i?"barrel":"crate";
+      }
+    }
+  bench.waterReady=true;bench.waterTrace=true;bench.waterStart=world.tickCount();bench.waterSample=uint64_t(-1);
+  const auto focus=(lip+bench.waterCenter)*.5f+Vec3(0,40,0);
+  bool camera=false;
+  for(float lateral:{400.f,-400.f,450.f,-450.f}) {
+    const auto eye=focus+side*lateral+direction*120.f+Vec3(0,350,0);
+    if(world.physic()->ray(eye,bench.waterCenter+Vec3(0,20,0)).hasCol ||
+       world.physic()->ray(eye,lip+Vec3(0,110,0)).hasCol)continue;
+    bench.cam=C_Water;bench.waterCameraTarget=focus;lookFrom(eye,focus);camera=true;break;
+    }
+  if(!camera) {arenaAbort("water film camera has no clear low side view");return;}
+  event("water_film_setup","\"scene\":"+jsonStr(scene)+",\"waypoint\":"+jsonStr(bench.waterWaypoint)+
+    ",\"lip_cm\":"+ragdollVector(lip)+",\"water_cm\":"+ragdollVector(bench.waterCenter)+
+    ",\"caster_cm\":"+ragdollVector(caster)+",\"camera_cm\":"+ragdollVector(bench.camPos)+
+    ",\"camera_target_cm\":"+ragdollVector(focus));
+  }
+
+void waterFilmBegin(World& world,Npc& player) {
+  bench.waterFilmStart=world.tickCount();
+  bench.waterFilmKill=bench.waterFilm=="body" || bench.waterFilm=="skeleton";
+  if(bench.waterFilm=="things") {
+    const auto side=Vec3(-bench.waterDirection.z,0,bench.waterDirection.x);
+    const char* symbols[]{"ITMW_1H_SLD_SWORD","ITMI_NUGGET","ITMI_LUTE","ITRW_ARROW"};
+    for(unsigned i=0;i<4;++i) {
+      auto symbol=world.script().findSymbolIndex(symbols[i]);
+      if(symbol==size_t(-1) && i==0)
+        for(size_t candidate=0;candidate<world.script().symbolsCount();++candidate) {
+          const auto* entry=world.script().findSymbol(candidate);
+          if(entry && entry->type()==zenkit::DaedalusDataType::INSTANCE && entry->name().starts_with("ITMW_") &&
+             entry->name().find("SWORD")!=std::string::npos) {symbol=candidate;break;}
+          }
+      if(symbol==size_t(-1)) {arenaAbort("water film item instance missing");return;}
+      Vec3 surface;
+      if(!waterProbe(world,bench.waterCenter+side*(float(i)-1.5f)*65.f,220.f,6000.f,surface)) {
+        arenaAbort("water film item drop needs four adjacent deep-water slots");return;
+        }
+      const auto before=world.physic()->waterBodySnapshot();
+      auto matrix=Matrix4x4::mkIdentity();matrix.translate(surface+Vec3(0,100,0));
+      auto* item=world.addItemDyn(symbol,matrix,world.npcId(&player));
+      if(!item) {arenaAbort("water film native item drop failed");return;}
+      bench.waterItems.push_back(item);
+      for(const auto& body:world.physic()->waterBodySnapshot())
+        if(body.category==DynamicWorld::C_Item &&
+           std::none_of(before.begin(),before.end(),[&](const auto& old){return old.id==body.id;})) {
+          bench.waterIds.insert(body.id);bench.waterLabels[body.id]=std::array{"sword","ore","lute","arrow"}[i];
+          }
+      }
+    }
+  event("water_film_begin","\"scene\":"+jsonStr(bench.waterFilm));
+  }
+
 void arrowFields(World& world) {
   auto* npc=bench.arrowNpc;
   if(!bench.arrowTrace || npc==nullptr || world.tickCount()==bench.arrowSampleTick) return;
@@ -8178,6 +8351,9 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       ",\"waypoint\":"+jsonStr(waypoint)+",\"minimum_debris_distance_cm\":"+ragdollNumber(minimum)+
       ",\"distance_cm\":"+ragdollNumber((destination-origin).length()));
     }
+  else if(c=="water-film" && a.size()==3 && a[1]=="setup")waterFilmSetup(w,pl,a[2]);
+  else if(c=="water-film" && a.size()==2 && a[1]=="begin")waterFilmBegin(w,pl);
+  else if(c=="water-film" && a.size()==2 && a[1]=="checkpoint")waterFilmCheckpoint(w);
   else if(c=="water" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","buoyancy",a[1]=="on");
     w.physic()->setBuoyancyEnabled(a[1]=="on");
@@ -13538,6 +13714,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     }
   movableFields(*world);
   waterFields(*world);
+  waterFilmTick(*world);
   movableCandleFields(*world);
   noiseFields(*world);
   if(bench.spellReleaseAt && world->tickCount()>=bench.spellReleaseAt) {
