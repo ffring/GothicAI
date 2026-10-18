@@ -5757,6 +5757,7 @@ void waterFilmCheckpoint(World& world) {
     if(actors.size()>1)actors+=',';
     actors+="{\"role\":"+jsonStr(actor.role)+",\"dead\":"+(actor.npc->isDead()?"true":"false")+
       ",\"swimming\":"+(actor.npc->isSwim()?"true":"false")+
+      ",\"last_hit_spell\":"+std::to_string(actor.npc->lastHitSpellId())+
       ",\"ragdoll\":"+(actor.npc->ragdollBody()?"true":"false")+","+waterFilmPosition(world,actor.npc->position())+"}";
     }
   for(size_t i=0;i<bench.waterItems.size();++i) {
@@ -5813,14 +5814,8 @@ void waterFilmSetup(World& world,Npc& player,std::string_view scene) {
   if(!waterFindWindSite(world,places) || bench.waterWaypoint!="NW_CITY_HABOUR_05") {
     arenaAbort("water film needs the low NW_CITY_HABOUR_05 pier");return;
     }
-  const auto lip=bench.waterDry,direction=bench.waterDirection,side=Vec3(-direction.z,0,direction.x);
-  bench.waterFilmLip=lip;bench.waterFilm=scene;bench.waterCase="film-"+std::string(scene);
-  bool deep=false;
-  for(float distance=100.f;distance<=200.f;distance+=10.f)
-    if(waterProbe(world,lip+direction*distance,220.f,6000.f,bench.waterCenter)) {deep=true;break;}
-  if(!deep) {arenaAbort("water film needs deep water 1-2m from the pier");return;}
   const auto dryFloor=[&](const Vec3& at,Vec3& result) {
-    const auto floor=world.physic()->landRay(at+Vec3(0,400,0),600.f);
+    const auto floor=world.physic()->landRay(at+Vec3(0,2000,0),4000.f);
     if(!floor.hasCol || floor.n.y<.99f || world.physic()->waterRay(floor.v,1.f).hasCol)return false;
     for(float dx:{-30.f,30.f})for(float dz:{-30.f,30.f}) {
       const auto foot=world.physic()->landRay(floor.v+Vec3(dx,100,dz),150.f);
@@ -5829,11 +5824,96 @@ void waterFilmSetup(World& world,Npc& player,std::string_view scene) {
       }
     result=floor.v;return true;
     };
-  Vec3 caster;bool supported=false;
-  for(float distance:scene=="fireball"?std::vector<float>{700,650,750,600,800}:std::vector<float>{200,250,300,150})
-    if(dryFloor(lip-direction*distance,caster) &&
-       !world.physic()->ray(caster+Vec3(0,140,0),lip+Vec3(0,100,0)).hasCol) {supported=true;break;}
-  if(!supported) {arenaAbort("water film caster needs a clear supported dry lane");return;}
+  auto lip=bench.waterDry;
+  const auto direction=bench.waterDirection;
+  // The regression lip is the last perfectly flat point. Follow the remaining
+  // dry slope to the actual waterline before measuring the 1-2 m drop distance.
+  const auto flatLip=lip;
+  for(float distance=5.f;distance<=200.f;distance+=5.f) {
+    const auto floor=world.physic()->landRay(flatLip+direction*distance+Vec3(0,400,0),600.f);
+    if(!floor.hasCol || floor.n.y<.75f || world.physic()->waterRay(floor.v,1.f).hasCol)break;
+    lip=floor.v;
+    }
+  bool deep=false;
+  for(float distance=100.f;distance<=200.f;distance+=5.f) {
+    Vec3 surface;
+    if(!waterProbe(world,lip+direction*distance,220.f,6000.f,surface))continue;
+    bool slots=true;
+    if(scene=="things")for(unsigned i=0;i<4;++i) {
+      Vec3 drop;
+      if(!waterProbe(world,surface+Vec3(-direction.z,0,direction.x)*(float(i)-1.5f)*65.f,220.f,6000.f,drop))slots=false;
+      }
+    if(slots) {bench.waterCenter=surface;deep=true;break;}
+    }
+  if(!deep) {arenaAbort("water film needs deep water 1-2m from the actual waterline");return;}
+  bench.waterDry=lip;bench.waterDirection=direction;
+  const auto side=Vec3(-direction.z,0,direction.x);
+  bench.waterFilmLip=lip;bench.waterFilm=scene;bench.waterCase="film-"+std::string(scene);
+  std::array<std::string,2> visuals={"NW_HARBOUR_CRATE_01.3DS",""};
+  std::array<Vec3,2> supports;
+  if(scene=="fireball") {
+    // Some stock harbour barrels are authored as stone. Copy a real wooden,
+    // cached barrel visual into a NEW owned vob; never move a map object.
+    float footprint=std::numeric_limits<float>::infinity();
+    const auto native=world.physic()->waterBodySnapshot();
+    for(const auto& body:world.physic()->movableVobSnapshot()) {
+      if(!body.enabled || !body.destructible || body.broken || body.className!="barrel")continue;
+      const bool wood=std::any_of(native.begin(),native.end(),[&](const auto& sample) {
+        return sample.parentId==body.id && sample.targetFraction<1.f;
+        });
+      const auto size=body.localBounds[1]-body.localBounds[0];
+      const float area=size.x*size.z;
+      if(wood && (area<footprint || (area==footprint && body.visual<visuals[1]))) {
+        visuals[1]=body.visual;footprint=area;
+        }
+      }
+    if(visuals[1].empty()) {arenaAbort("water film needs a stock wooden destructible barrel visual");return;}
+    for(unsigned i=0;i<2;++i) {
+      Vec3 failed;bool found=false;
+      for(float retreat:{140.f,165.f,190.f}) {
+        const auto floor=world.physic()->landRay(lip-direction*retreat+side*(i?85.f:-85.f)+Vec3(0,400,0),600.f);
+        if(floor.hasCol && !world.physic()->waterRay(floor.v,1.f).hasCol &&
+           destructionSupported(world,visuals[i],floor.v,supports[i],failed)) {found=true;break;}
+        }
+      if(!found) {arenaAbort("water film crate/barrel needs dry full-footprint support");return;}
+      }
+    }
+  Vec3 caster,spellTarget=lip;bool supported=false;
+  if(scene=="fireball" && !dryFloor(lip-direction*220.f,spellTarget)) {
+    arenaAbort("water film fireball target needs dry native support");return;
+    }
+  std::vector<float> distances={200,250,300,150};
+  if(scene=="fireball") {
+    distances.clear();for(float distance=600.f;distance<=900.f;distance+=10.f)distances.push_back(distance);
+    }
+  for(float distance:distances) {
+    for(unsigned angle=0;angle<(scene=="fireball"?181u:1u);++angle) {
+      const int step=angle==0?0:int((angle+1)/2)*(angle%2?1:-1);
+      const float turn=float(step);
+      if(!dryFloor(lip-rotY(direction,turn)*distance,caster) ||
+         world.physic()->ray(caster+Vec3(0,140,0),spellTarget+Vec3(0,100,0)).hasCol)continue;
+      if(scene=="fireball") {
+        bool range=true;
+        for(unsigned i=0;i<2;++i) {
+          const auto* mesh=Resources::loadMesh(visuals[i]);
+          const auto center=supports[i]+Vec3(0,(mesh->bbox()[1].y-mesh->bbox()[0].y)*.5f,0);
+          for(const auto& at:{supports[i],center})
+            if((caster-at).length()<600.f || (caster-at).length()>800.f)range=false;
+          }
+        if(!range)continue;
+        }
+      supported=true;break;
+      }
+    if(supported)break;
+    }
+  if(!supported) {
+    Vec3 standard;
+    const bool found=scene=="fireball" && waterFireballCaster(world,spellTarget+Vec3(0,100,0),0.f,standard);
+    event("water_film_caster_search","\"scene\":"+jsonStr(scene)+",\"standard_found\":"+(found?"true":"false")+
+      ",\"standard_caster_cm\":"+(found?ragdollVector(standard):"null")+
+      ",\"standard_distance_cm\":"+(found?ragdollNumber((standard-lip).length()):"null"));
+    arenaAbort("water film caster needs a clear supported dry lane");return;
+    }
   player.setPosition(caster);player.setDirection(direction);player.updateTransform();
   player.handle().attribute[ATR_MANA]=player.handle().attribute[ATR_MANAMAX]=50000;player.setTalentSkill(TALENT_MAGE,6);
   for(uint32_t id=0;id<world.npcCount();++id)
@@ -5843,6 +5923,7 @@ void waterFilmSetup(World& world,Npc& player,std::string_view scene) {
   if(scene!="things") {
     if(!waterBodiesAdd(world,player,scene=="skeleton"?"SKELETON":"BAU_904_BAUER",std::string(scene),lip,false))return;
     auto* target=bench.waterActors.back().npc;
+    if(scene=="fireball") {target->setPosition(spellTarget);target->updateTransform();}
     target->handle().attribute[ATR_HITPOINTS]=target->handle().attribute[ATR_HITPOINTSMAX]=50000;
     bench.spellActors.push_back({target,"water_target"});
     }
@@ -5851,17 +5932,14 @@ void waterFilmSetup(World& world,Npc& player,std::string_view scene) {
     // The real projectile hits the actor in the gap; only its ordinary blast
     // can break the two props or send their fragments over the edge.
     for(unsigned i=0;i<2;++i) {
-      const auto visual=i?"NW_HARBOUR_BARREL_01.3DS":"NW_HARBOUR_CRATE_01.3DS";
-      Vec3 support,failed;bool found=false;
-      for(float retreat:{65.f,90.f,115.f,140.f})
-        if(destructionSupported(world,visual,lip-direction*retreat+side*(i?110.f:-110.f),support,failed)) {found=true;break;}
-      const auto id=found?destructionAdd(world,visual,support):0;
-      if(!id) {arenaAbort("water film crate/barrel needs dry full-footprint support");return;}
+      const auto id=destructionAdd(world,visuals[i],supports[i]);
+      if(!id) {arenaAbort("water film fresh crate/barrel insertion failed");return;}
       bench.waterIds.insert(id);bench.waterLabels[id]=i?"barrel":"crate";
       }
     }
   bench.waterReady=true;bench.waterTrace=true;bench.waterStart=world.tickCount();bench.waterSample=uint64_t(-1);
-  const auto focus=(lip+bench.waterCenter)*.5f+Vec3(0,40,0);
+  bench.noiseTrace=true;bench.noisePhase="water-film-"+std::string(scene);
+  const auto focus=(scene=="body" || scene=="skeleton"?lip+direction*300.f:(lip+bench.waterCenter)*.5f)+Vec3(0,40,0);
   bool camera=false;
   for(float lateral:{400.f,-400.f,450.f,-450.f}) {
     const auto eye=focus+side*lateral+direction*120.f+Vec3(0,350,0);
