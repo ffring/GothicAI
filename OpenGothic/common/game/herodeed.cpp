@@ -85,7 +85,9 @@ std::shared_ptr<HeroDeed> HeroDeed::capture(Npc& hero, std::string_view kind, Np
                                           const Item* item, Interactive* chest, size_t count) {
   if(!hero.isPlayer())
     return {};
+  static uint64_t nextId = 1;
   auto d = std::make_shared<HeroDeed>();
+  d->id = nextId++;
   auto& world = hero.world();
   auto& script = world.script();
   d->kind = kind;

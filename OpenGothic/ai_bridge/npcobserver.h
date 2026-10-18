@@ -16,6 +16,7 @@
 class Npc;
 class World;
 struct PhysicsNoise;
+struct HeroDeed;
 
 // NPCs that follow their routine, as seen by the AI server's planner (protocol v5):
 // - npc_roster: npc's around the player, twice a second;
@@ -40,9 +41,11 @@ class NpcObserver final {
     void act(World& world, const rapidjson::Value& msg);
     // threats to free npc's (monsters near or attacking, attacks by npc's) are held back from the scripts
     // for the server's behavioral model; it answers with a verdict, or the scripts get them after HoldMs
-    bool intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc);
+    bool intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc,
+                   const HeroDeed* deed = nullptr, std::string_view deedId = {});
     void verdict(World& world, const rapidjson::Value& msg);
     void setHoldThreats(bool on) { holdThreats = on; }
+    void setHoldDeeds(bool on) { holdDeeds = on; }
     // the server is gone: every held threat goes to the scripts now
     void releaseAll(World& world);
     // `routine`: an npc's daily routine, its routine variants and current state (v6)
@@ -94,6 +97,8 @@ class NpcObserver final {
     struct Held final {
       std::string id;
       std::string key;     // "npc/other": a verdict covers that pair for a while
+      std::string item;    // restore the theft's ITEM before a late script delivery
+      std::string deed;    // hero_deed id: rules may consume it without taking the body
       const Npc*  self   = nullptr;
       const Npc*  other  = nullptr;
       const Npc*  victim = nullptr;
@@ -107,6 +112,7 @@ class NpcObserver final {
     void releaseHeld(World& world, Held& h);
 
     bool                                     holdThreats = false;
+    bool                                     holdDeeds = false;
     uint64_t                                 nextHold    = 1;
     std::vector<Held>                        held;
     std::unordered_map<std::string,Verdict>  verdicts;

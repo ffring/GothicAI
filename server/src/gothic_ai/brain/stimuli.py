@@ -1,8 +1,7 @@
 """What an npc noticed, how urgent it is and how long it matters.
 
-Threats and crimes (weapon drawn, theft, attack, magic) are left to the game's own scripts: the eval
-showed the decision model handles them badly (~45-55%), while the scripts already react correctly.
-They are kept as context for later decisions but never trigger one.
+Hero threats and crimes are context only: the eval scored the decision model at ~45-55%.
+CrimeReact rules settle held deeds; the scripts handle the remaining perceptions.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ class EventPolicy:
     ttl_s: float  # how long it stays relevant
     urgent: bool = False  # the player is right there and expects a reaction now
     salient: bool = False  # worth a decision for MID npc's too (NEAR ones react to any event)
-    scripted: bool = False  # the game's scripts react; context only
+    scripted: bool = False  # scripts or CrimeReact rules react; context only
     threat: bool = (
         False  # danger from someone else (not the hero): the behavioral model reacts, `other` is it
     )
@@ -42,6 +41,7 @@ POLICIES: dict[str, EventPolicy] = {
     "attack": EventPolicy("The hero attacked {detail}.", 300, scripted=True),
     "magic": EventPolicy("The hero cast a spell nearby.", 30, scripted=True),
     "murder": EventPolicy("The hero killed {detail}.", 600, scripted=True),
+    "sheep": EventPolicy("The hero killed someone's sheep.", 600, scripted=True),
     # threats from others (v6): the behavioral model reacts (fight, flee, call for help), worded as in the
     # scenes it was trained on (decider-service/tuning); the bridge's kinds are mapped by `normalize`
     "monster_near": EventPolicy("{other} is coming at you.", 20, urgent=True, salient=True, threat=True),

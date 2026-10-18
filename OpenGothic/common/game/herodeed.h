@@ -33,6 +33,9 @@ struct HeroDeed final {
   static int32_t constant(Npc& npc, std::string_view name, int32_t fallback = -1);
   void witnessed(Npc& npc);
 
+  // Assigned at capture, before any witness may hold the perception. The bridge
+  // prefixes it with the save branch for both hero_deed and perception_held.
+  uint64_t id = 0;
   std::string kind;
   std::string item;
   size_t count = 0;

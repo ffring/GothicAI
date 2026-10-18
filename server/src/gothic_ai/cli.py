@@ -42,6 +42,8 @@ from .consequences import LieConsequences
 from .contracts import symbol_by_name
 from .crime_law_graph import init_ops as crime_law_ops
 from .crime_law_runtime import CrimeLawRuntime
+from .crime_memory import CrimeMemoryRuntime
+from .crime_react import CrimeReact
 from .crimes import COMMUNITIES, Crimes
 from .daylife import DayDesk
 from .deals import Deals
@@ -220,6 +222,8 @@ class ServerState:
         self.chronicle: Chronicle | None = None
         self.crimes: Crimes | None = None
         self.crime_law: CrimeLawRuntime | None = None
+        self.crime_memory: CrimeMemoryRuntime | None = None
+        self.crime_react: CrimeReact | None = None
         self.quests: QuestBoard | None = None
         self.director: Director | None = None
         self.occasions: Occasions | None = None
@@ -384,6 +388,14 @@ class Console:
                 else:
                     for fact in crimes.chronicle.facts("crime"):
                         print(json.dumps(fact, ensure_ascii=False))
+                        for reaction in crimes.chronicle.facts("crime_reaction"):
+                            if reaction.get("crime") == fact["id"]:
+                                print("  " + json.dumps(reaction, ensure_ascii=False))
+                    for reaction in crimes.chronicle.facts("crime_reaction"):
+                        if reaction.get("verdict") == "scripts" and not crimes.crime(
+                            reaction.get("crime", "")
+                        ):
+                            print("  " + json.dumps(reaction, ensure_ascii=False))
                     print("communities:")
                     for community in COMMUNITIES:
                         print(f"  {community}: {', '.join(crimes.lawkeepers(community)) or '-'}")
@@ -698,6 +710,14 @@ def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -
     )
 
 
+def _perception_control(args: argparse.Namespace, *, planner: bool) -> ThreatControlCmd:
+    """Deeds have rules even when no behavioral model is configured."""
+    return ThreatControlCmd(
+        hold=planner and not args.no_hold_threats,
+        deeds=True if not args.no_crimes else None,
+    )
+
+
 async def _native_combat_available(link: GameLink, pilot: BodyPilot | None, npc: str) -> bool:
     """Let acquisition finish before sending native combat that could interrupt it. A refused acquisition
     leaves the native fallback available; an accepted fight stays with its combat provider."""
@@ -868,6 +888,14 @@ async def serve(args: argparse.Namespace) -> int:
             state.dialogue.extensions.append(state.crimes)
             if graph is not None:
                 state.crime_law = CrimeLawRuntime(link, state.crimes, graph, state.story)
+            state.crime_memory = CrimeMemoryRuntime(link, state.crimes)
+            state.crime_react = CrimeReact(
+                link,
+                state.crimes,
+                state.crime_law.law if state.crime_law is not None else None,
+                cards=personas.cards,
+                project=state.crime_memory.project,
+            )
         # the director's triggers fire in the game, with or without the server: the chronicle hears of them
         state.triggers = Triggers(link, state.chronicle)
         talk = state.talk
@@ -1013,6 +1041,10 @@ async def serve(args: argparse.Namespace) -> int:
         directing: list[asyncio.Task[None]] = []
         if state.crime_law is not None:
             directing.append(asyncio.create_task(state.crime_law.run()))
+        if state.crime_memory is not None:
+            directing.append(asyncio.create_task(state.crime_memory.run()))
+        if state.crime_react is not None:
+            directing.append(asyncio.create_task(state.crime_react.run()))
         if place_book is not None and not args.no_occasions:
             state.occasions = Occasions(link, state.chronicle, place_book, crimes=not args.no_crimes)
             directing.append(asyncio.create_task(state.occasions.run()))
@@ -1183,9 +1215,6 @@ async def serve(args: argparse.Namespace) -> int:
             )
             state.incidents.follow(planner)  # free npc's speak when the moment calls for it
             state.talk.planner = planner  # npc's in a conversation are left to it; others overhear
-            if not args.no_hold_threats:
-                # threats to free npc's: the behavioral model first, the scripts if it does not take them
-                await link.send(ThreatControlCmd(hold=True))
             link.listeners.append(planner.on_message)
             # what the npc wants from the hero, from the conversation, steers it afterwards
             def on_intent(npc: str, intent: Intent) -> None:
@@ -1218,6 +1247,7 @@ async def serve(args: argparse.Namespace) -> int:
             if state.errands is not None:  # an npc on an errand
                 state.errands.attach_planner(planner)
             brain = asyncio.create_task(planner.run())
+        await link.send(_perception_control(args, planner=decider is not None))
         bodypilot = _start_bodypilot(args, link, state.talk)
         body_task = asyncio.create_task(bodypilot.run()) if bodypilot is not None else None
         try:
@@ -1239,6 +1269,10 @@ async def serve(args: argparse.Namespace) -> int:
                 task.cancel()
             if state.questlog is not None:
                 await state.questlog.close()
+            if state.crime_react is not None:
+                await state.crime_react.close()
+            if state.crime_memory is not None:
+                await state.crime_memory.close()
             if state.crimes is not None:
                 await state.crimes.close()
             if state.crime_law is not None:
@@ -1358,6 +1392,15 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await crimes_scenario(link, state.crimes)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario crimes: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "crime_react":
+                assert state.crimes is not None and state.crime_react is not None
+                results = await scenarios.crime_react(
+                    link, state.crimes, state.crime_react,
+                    hold_threats=state.brain is not None and not args.no_hold_threats,
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario crime_react: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "crime_talk":
                 assert state.crimes is not None and state.dialogue is not None and state.talk is not None
@@ -2415,6 +2458,7 @@ def main() -> None:
             "occasions",
             "questlog",
             "crimes",
+            "crime_react",
             "crime_talk",
             "trace_crime",
             "crime_director",

@@ -27,6 +27,7 @@ BROKEN_TRACE_PROTOCOL = 40  # visible debris, with the time of breakage kept in 
 BODY_CONTROL_PROTOCOL = 41  # shared body authority and combat API (body_acquire, body_action, ...)
 CRIME_PROTOCOL = 42  # raw hero deeds, ownership, engine perception recipients and pickpocket evidence
 FIGHT_REACTION_PROTOCOL = 43  # Look.combat_target/fighting, npc_threat, immediate fight/flee with own SVM
+CRIME_REACT_PROTOCOL = 44  # independently held hero deeds, their ids, and vanilla fight reasons
 
 # --- game -> server -----------------------------------------------------------
 
@@ -556,6 +557,7 @@ class NpcView(_GameMessage):
     indoors: bool = False
     room_guild: int | None = None  # whose room it is in (the scripts' guilds), indoors only
     state: str = ""
+    theft_ready: bool | None = None  # v44: initialized native ASSESSTHEFT callback, for scene setup
     body: str = "stand"
     mob: str | None = None  # what it uses: a bench, an anvil
     weapon: str = "none"
@@ -642,9 +644,10 @@ class NpcActResult(_GameMessage):
 
 
 class PerceptionHeld(_GameMessage):
-    """A threat to a free npc the game holds back from its scripts for the behavioral model (v6, after
-    `threat_control{hold:true}`): a monster near or attacking, an npc attacking. Fields as in `npc_event`.
-    The server answers `hold_verdict`; without one the scripts get it after 0.6 s."""
+    """A held threat (v6) or hero deed (v44). `deed` links rules to the subsequent HeroDeed.
+
+    The server answers `hold_verdict`; without one the scripts get it after 0.6 s.
+    """
 
     type: Literal["perception_held"]
     hold: str
@@ -654,6 +657,7 @@ class PerceptionHeld(_GameMessage):
     other_name: str | None = None
     distance: float | None = None
     detail: str | None = None
+    deed: str | None = None
 
 
 class RoutineEntry(_GameMessage):
@@ -1359,15 +1363,15 @@ NpcActType = Literal[
 
 
 class ThreatControlCmd(_Command):
-    """Whether threats to free npc's are held from their scripts for the behavioral model (v6)."""
+    """Independent switches for model-owned threats (v6) and rule-owned hero deeds (v44)."""
 
     type: Literal["threat_control"] = "threat_control"
     hold: bool
+    deeds: bool | None = None
 
 
 class HoldVerdictCmd(_Command):
-    """What becomes of a held threat (v6): `server` — the behavioral model took the body over (fight,
-    flee), repeats of it are kept from the scripts for a while; `scripts` — they get it now."""
+    """`server`: a threat's body action, or a deed's rule (including silence); `scripts`: release."""
 
     type: Literal["hold_verdict"] = "hold_verdict"
     hold: str

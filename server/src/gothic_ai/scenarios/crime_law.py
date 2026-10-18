@@ -43,7 +43,7 @@ async def crime_law(
 ) -> dict[str, str]:
     """Exercise native ownership, perceptions, menus, voices and payment without model calls.
 
-    Only the scene is staged: nearby people wait elsewhere, and Matteo's native theft reaction ends
+    Only the scene is staged: nearby people wait elsewhere, and Matteo's rule-based theft reaction ends
     after he has actually witnessed it. Random rumor meetings are disabled so the first scene tests
     the deadline itself. The second scene accepts an ordinary scripted silence deal before it.
     """
@@ -106,12 +106,20 @@ async def crime_law(
         await link.debug("player_take", item="ITMI_SILVERCUP", distance=800)
         await _until(lambda: any(f["id"] not in before for f in facts("crime")), 10)
         crime = next((f for f in facts("crime") if f["id"] not in before), None)
-        # A replacement activity after ASSESSTHEFT stops the fight, without hiding the witness.
+        # Let layer 4a finish the held perception before replacing its fight for the law scene.
+        reacted = crime is not None and await _until(
+            lambda: any(
+                f.get("crime") == crime["id"] and f.get("npc") == CITY_OWNER
+                and f.get("verdict") == "server" for f in facts("crime_reaction")
+            ),
+            10,
+        )
         await stand(CITY_OWNER, CITY_HOUSE, face="PLAYER")
         await law.tick()
         if not check(
             f"{label}_theft",
             crime is not None
+            and reacted
             and crime.get("kind") == "theft"
             and crime.get("owner") == CITY_OWNER
             and crime.get("community") == "city"
@@ -186,11 +194,16 @@ async def crime_law(
             return _logged(results)
         cid = str(crime["id"])
         initial = await values(law_var("city"), *COUNTERS)
+        memory = await link.story_eval(CITY_OWNER, [
+            ["field", ["inst", "SELF"], "AIVAR", 1, "AIV_NPCSAWPLAYERCOMMIT"],
+        ])
         offered = await link.offered_dialogs(ANDRE)
+        # A held theft projects personal memory without B_MemorizePlayerCrime's native PETZ write.
+        # The law counters stay empty until the delayed report below teaches the community law.
         if not check(
             "locked_before_news",
-            not news(cid) and initial[0] == 0 and initial[1] >= 1 and PETZMASTER not in offered,
-            {"gate_and_native_counters": initial, "offered": offered},
+            not news(cid) and initial == [0, 0, 0, 0, 0] and memory == [3] and PETZMASTER not in offered,
+            {"gate_and_native_counters": initial, "owner_memory": memory, "offered": offered},
         ):
             return _logged(results)
         await tomorrow()

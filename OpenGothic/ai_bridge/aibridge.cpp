@@ -282,7 +282,6 @@ struct AiBridge::Impl final {
   std::vector<Inbound> inbound;
 
   bool                 connected = false;
-  uint64_t             nextHeroDeed = 1;
   uint64_t             bodyGeneration = 0;
   bool                 bodyResetPending = false;
   std::string          lastError;
@@ -360,12 +359,13 @@ AiBridge::Impl::Impl() {
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
   gothic.onPhysicsNoiseHeard .bind(this,&Impl::onPhysicsNoiseHeard);
   gothic.onHeroDeed          .bind(this,&Impl::onHeroDeed);
-  gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
+  gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc, const HeroDeed* deed) {
     World* world = Gothic::inst().world();
     // the wolves' own (they leave the hero be) without the server too: the console drives them on the bench
     return world!=nullptr &&
            (beasts.intercept(*world,self,other,victim,perc) ||
-            (connected && observer.intercept(*world,self,other,victim,perc)));
+            (connected && observer.intercept(*world,self,other,victim,perc,deed,
+                                            deed!=nullptr ? session.branch+"/deed-"+std::to_string(deed->id) : "")));
     };
   gothic.consoleCommandFn = [this](std::string_view cmd, std::string& reply) {
     return onConsoleCommand(cmd,reply);
@@ -567,6 +567,7 @@ void AiBridge::Impl::processInbound(World* world, Inbound& in) {
           beasts.releaseAll(*world);
           }
         observer.setHoldThreats(false);
+        observer.setHoldDeeds(false);
         if(chat!=nullptr)
           chat->hideDeal("");  // nobody is there to carry it out
         }
@@ -730,7 +731,7 @@ void AiBridge::Impl::onHeroDeed(const HeroDeed& d) {
   if(!connected)
     return;
   JsonWriter j("hero_deed");
-  j.str("id",session.branch+"/deed-"+std::to_string(nextHeroDeed++))
+  j.str("id",session.branch+"/deed-"+std::to_string(d.id))
    .str("kind",d.kind).str("item",d.item).integer("count",int64_t(d.count))
    .str("owner",d.owner.npc).integer("owner_guild",d.ownerGuild)
    .integer("owner_npc_guild",d.owner.guild).integer("owner_npctype",d.owner.npctype)
@@ -827,7 +828,10 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   if(type=="threat_control") {
     // the server's behavioral model decides threats to free npc's first (held from the scripts)
-    observer.setHoldThreats(JsonRead::boolean(doc,"hold",false));
+    if(doc.HasMember("hold"))
+      observer.setHoldThreats(JsonRead::boolean(doc,"hold",false));
+    if(doc.HasMember("deeds"))
+      observer.setHoldDeeds(JsonRead::boolean(doc,"deeds",false));
     return;
     }
 

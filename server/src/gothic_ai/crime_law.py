@@ -103,6 +103,58 @@ class CrimeLaw:
             return 100  # PETZMASTER's CRIME_SHEEPKILLER branch replaces the computed total
         return min(1000, 50 * total + (500 if counters["MURDER"] else 0))
 
+    def inform(self, crime: str, *, via: str, how: str, at: int) -> Fact | None:
+        """The common arrival path: delayed reports and an on-scene call teach law once."""
+        deed = self.crimes.crime(crime)
+        if deed is None or (community := deed.get("community")) not in LAW_COMMUNITIES:
+            return None
+        if any(f.get("id") == crime for f in self.known(community)):
+            return None
+        fact: Fact = {
+            "fact": "crime_known", "community": community, "crime": crime,
+            "how": how, "via": via.upper(), "at": at,
+        }
+        self.chronicle.record(fact)
+        return fact
+
+    def called(
+        self, crime: str, via: str, guards: Iterable[str], *, at: int | None = None
+    ) -> list[Fact]:
+        """Teach guards who heard the witness and deliver that call to their community law."""
+        deed = self.crimes.crime(crime)
+        if deed is None or deed.get("community") not in LAW_COMMUNITIES:
+            return []
+        when = at if at is not None else self.now
+        if when is None:
+            when = game_minutes(deed)
+        if when is None:
+            return []
+        via = via.upper()
+        listeners = sorted({npc.upper() for npc in guards})
+        source = next(
+            (f["npc"] for f in self.chronicle.facts("crime_seen")
+             if f.get("crime") == crime and f.get("npc")),
+            via,
+        )
+        out = []
+        for npc in listeners:
+            if not self.is_guard(npc, deed["community"]):
+                continue
+            if not any(k.crime["id"] == crime and k.degree != "suspects" for k in self.crimes.known(npc)):
+                fact: Fact = {
+                    "fact": "rumor", "crime": crime, "from": via, "to": npc,
+                    "hops": 1, "at": when, "how": "called",
+                    "quest": f"crime:{crime}", "kind": deed["kind"], "about": source,
+                    "about_name": self.crimes.names(source), "title": self.crimes.describe(deed),
+                    "day": when // DAY_MINUTES,
+                }
+                self.chronicle.record(fact)
+                out.append(fact)
+        if any(self.is_guard(npc, deed["community"]) for npc in listeners):
+            if arrival := self.inform(crime, via=via, how="called", at=when):
+                out.append(arrival)
+        return out
+
     def _times(self, facts: list[Fact]) -> dict[int, int]:
         stamps = {
             int(f["event"]): int(f["at"])
@@ -134,17 +186,11 @@ class CrimeLaw:
             key = (report.community, report.crime["id"])
             if report.status != "pending" or report.due > now or key in known:
                 continue
-            fact = {
-                "fact": "crime_known",
-                "community": report.community,
-                "crime": report.crime["id"],
-                "how": report.how,
-                "via": report.via,
-                "at": report.due,
-            }
-            self.chronicle.record(fact)
-            known.add(key)
-            out.append(fact)
+            if fact := self.inform(
+                report.crime["id"], via=report.via, how=report.how, at=report.due
+            ):
+                known.add(key)
+                out.append(fact)
         return out
 
     def deliveries(self) -> list[LawDelivery]:

@@ -26,10 +26,12 @@ from .common import (
     LOBART,
     ClaimScript,
     FixedDecider,
+    WitnessReaction,
     _logged,
     _save,
     _until,
     _until_async,
+    prepare_theft_witness,
     wait_message,
 )
 from .crimes import HOUSE
@@ -218,7 +220,7 @@ async def crime_director(
         return check(f"{label}_branch", not facts("crime"), f"{len(facts('crime'))} crimes")
 
     async def witnessed(label: str) -> dict[str, Any] | None:
-        await link.debug("player_goto", waypoint=HOUSE)
+        await link.debug("player_goto", waypoint="NW_FARM1_INHOUSE_01")
         for npc in farm:
             await stand(npc, parked)
         await stand(LOBART, HOUSE)
@@ -236,13 +238,19 @@ async def crime_director(
             return None
         await asyncio.sleep(1)
         await stand(LOBART, parked)
-        await stand(HILDA, "NW_FARM1_INHOUSE_02", face="PLAYER")
-        await asyncio.sleep(1)
+        prepared, preparation = await prepare_theft_witness(link, HILDA)
+        if not check(f"{label}_witness_ready", prepared, preparation):
+            return None
         before = {f["id"] for f in facts("crime")}
-        await link.debug("player_take", item="ITMI_SILVERCUP", distance=800)
-        await _until(lambda: any(f["id"] not in before for f in facts("crime")), 10)
-        crime = next((f for f in facts("crime") if f["id"] not in before), None)
-        # End vanilla combat only after its real witness has been recorded, as in crime_talk.
+        with WitnessReaction(link, service.chronicle, HILDA) as reaction:
+            await link.debug("player_take", item="ITMI_SILVERCUP", distance=1200)
+            await _until(lambda: any(f["id"] not in before for f in facts("crime")), 10)
+            crime = next((f for f in facts("crime") if f["id"] not in before), None)
+            if crime is not None and not check(
+                f"{label}_reaction", await reaction.wait(str(crime["id"])), reaction.detail
+            ):
+                return None
+        # Preserve the held rule and native SVM before staging the director's later scene.
         await stand(HILDA, field)
         if not check(
             f"{label}_theft",
