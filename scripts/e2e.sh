@@ -335,7 +335,7 @@ if ! kill -0 "$SRV" 2>/dev/null; then
 fi
 
 # An isolated initial setting also exercises first-load character synchronization.
-if [[ -n "${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
+if [[ -n "${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}${MONSTER_CHARACTER_VIRTUAL:-}" ]]; then
   printf '[GAME]\n' >"$LOG_DIR/Gothic.ini"
   if [[ -n "${CHARACTER_VIRTUAL:-}" ]]; then
     [[ "$CHARACTER_VIRTUAL" == 0 || "$CHARACTER_VIRTUAL" == 1 ]] || { echo "CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
@@ -344,6 +344,10 @@ if [[ -n "${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
   if [[ -n "${NPC_CHARACTER_VIRTUAL:-}" ]]; then
     [[ "$NPC_CHARACTER_VIRTUAL" == 0 || "$NPC_CHARACTER_VIRTUAL" == 1 ]] || { echo "NPC_CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
     printf 'npc_character_virtual=%s\n' "$NPC_CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
+  fi
+  if [[ -n "${MONSTER_CHARACTER_VIRTUAL:-}" ]]; then
+    [[ "$MONSTER_CHARACTER_VIRTUAL" == 0 || "$MONSTER_CHARACTER_VIRTUAL" == 1 ]] || { echo "MONSTER_CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
+    printf 'monster_character_virtual=%s\n' "$MONSTER_CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
   fi
 fi
 if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then

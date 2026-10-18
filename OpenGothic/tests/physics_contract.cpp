@@ -3055,6 +3055,172 @@ namespace {
       }
     }
 
+  void testMonsterCharacterVirtual() {
+    constexpr float radians=.01745329252f;
+    struct Monster {
+      const char* name;
+      float radius, height, stepHeight, slopeDegrees;
+      };
+    // Radius and full height come from the wolf/troll MDH collision bbox. The
+    // CV uses that full height (obj->h), just as the existing human CV path.
+    // The shorter legacy query capsule removes height/2 as ghost padding;
+    // capsuleHeight() reports that query shape rather than the CV's height.
+    // Guild limits are the installed GOTHIC.DAT Gil_Values: wolf 60 cm,
+    // troll 100 cm; both use a fifty-degree slide angle.
+    const Monster monsters[]={{"WOLF",15,83,60,50},{"TROLL",68,272,100,50}};
+    Resources resources;
+    for(const auto& monster:monsters) {
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox={{-monster.radius,0,-monster.radius},
+                                {monster.radius,monster.height,monster.radius}};
+      Skeleton skeleton(hierarchy,nullptr,monster.name);
+      const float mass=Ragdoll::speciesMass(monster.name);
+      const float maxSlope=monster.slopeDegrees*radians;
+      {
+        const float rise=.8f*monster.stepHeight;
+        auto terrain=movableFloor();
+        terrain.vertices.clear();
+        terrain.polygons.vertex_indices.clear();
+        terrain.polygons.material_indices.clear();
+        const auto surface=[&](float x0,float y0,float x1,float y1) {
+          const auto first=uint32_t(terrain.vertices.size());
+          terrain.vertices.insert(terrain.vertices.end(),{{x0,y0,-1000},{x0,y0,1000},
+                                                          {x1,y1,1000},{x1,y1,-1000}});
+          for(uint32_t index:{0u,2u,1u,0u,3u,2u})
+            terrain.polygons.vertex_indices.push_back(first+index);
+          terrain.polygons.material_indices.insert(terrain.polygons.material_indices.end(),{0,0});
+          };
+        surface(-2000,0,100,0);
+        for(int step=0;step<3;++step) {
+          const float x=100.f+200.f*float(step), y=rise*float(step);
+          surface(x,y,x,y+rise);
+          surface(x,y+rise,step==2 ? 2000.f : x+200.f,y+rise);
+          }
+        DynamicWorld world(nullptr,terrain);
+        auto walker=world.addGhostObj(&skeleton);
+        requireNear(walker.capsuleRadius(),monster.radius,.001f,
+                    "monster CV radius must use the legacy MDH landscape capsule");
+        requireNear(walker.capsuleHeight(),std::max(monster.height*.5f,2.f*monster.radius),.001f,
+                    "monster legacy query height must retain MDH ghost padding without changing the full-height CV");
+        walker.setPosition({-100,0,0});
+        auto state=walker.moveVirtual({},0,monster.stepHeight,maxSlope,mass);
+        const auto traverse=[&](bool ascending) {
+          float progress=state.position.x;
+          unsigned stalled=0, maximumStall=0;
+          int frames=0;
+          for(;frames<360 && (ascending ? state.position.x<700.f : state.position.x>-100.f);++frames) {
+            state=walker.moveVirtual({ascending ? 5.f : -5.f,0,0},17,monster.stepHeight,maxSlope,mass);
+            if((ascending ? state.position.x-progress : progress-state.position.x)>=1.f) {
+              progress=state.position.x;
+              stalled=0;
+              } else {
+              stalled+=17;
+              maximumStall=std::max(maximumStall,stalled);
+              }
+            }
+          std::printf("Monster CharacterVirtual %s stairs %s: radius %.3f cm, height %.3f cm, "
+                      "step limit %.3f cm, rise %.3f cm, frames %d, max stall %u ms, feet (%.6f,%.6f,%.6f) cm\n",
+                      monster.name,ascending ? "up" : "down",double(monster.radius),double(monster.height),
+                      double(monster.stepHeight),double(rise),frames,maximumStall,
+                      double(state.position.x),double(state.position.y),double(state.position.z));
+          require(state.grounded && (ascending ? state.position.x>=700.f : state.position.x<=-100.f),
+                  "wolf and troll MDH capsules must finish architectural stairs within their step limit");
+          require(maximumStall<=1000,"monster stairs must not stall requested walking for over one second");
+          requireNear(state.position.y,ascending ? 3.f*rise : 0.f,2.f,
+                      "monster feet must finish at the expected stair landing");
+          };
+        traverse(true);
+        traverse(false);
+        const auto saved=state.position;
+        walker.resetVirtual();
+        const auto restored=walker.moveVirtual({},0,monster.stepHeight,maxSlope,mass);
+        requireNear((restored.position-saved).length(),0.f,.5f,
+                    "recreating a monster's transient CV must preserve its persisted feet within half a centimetre");
+        }
+      for(float angle:{std::min(25.f,monster.slopeDegrees-1.f),monster.slopeDegrees-1.f}) {
+        const float cosine=std::cos(angle*radians), tangent=std::tan(angle*radians);
+        auto terrain=movableFloor();
+        for(auto& vertex:terrain.vertices)
+          vertex.y=vertex.x*tangent;
+        DynamicWorld world(nullptr,terrain);
+        auto walker=world.addGhostObj(&skeleton);
+        const Tempest::Vec3 initial(0,(monster.radius+1.f)/cosine-monster.radius-1.f,0);
+        walker.setPosition(initial);
+        auto state=walker.moveVirtual({},0,monster.stepHeight,maxSlope,mass);
+        require(state.grounded,"monster slope fixture must acquire walkable support without settling");
+        requireNear(state.groundNormal.y,cosine,.001f,"monster slope fixture must retain its actual plane normal");
+        for(int frame=0;frame<90;++frame)
+          state=walker.moveVirtual({4,0,0},17,monster.stepHeight,maxSlope,mass);
+        const auto reached=state.position;
+        require(state.grounded && reached.x>initial.x+100.f && reached.y>initial.y+40.f,
+                "wolf and troll MDH capsules must walk uphill below their guild slope limit");
+        float maximumDrift=0;
+        for(int frame=0;frame<300;++frame) {
+          state=walker.moveVirtual({},frame%3==0 ? 34 : 33,monster.stepHeight,maxSlope,mass);
+          maximumDrift=std::max(maximumDrift,(state.position-reached).length());
+          }
+        std::printf("Monster CharacterVirtual %s slope %.3f deg / limit %.3f deg: "
+                    "uphill %.6f cm, height gain %.6f cm, ten-second idle drift %.6f cm\n",
+                    monster.name,double(angle),double(monster.slopeDegrees),double(reached.x-initial.x),
+                    double(reached.y-initial.y),double(maximumDrift));
+        require(state.grounded && maximumDrift<=.5f,
+                "idle wolf and troll capsules must remain supported without sliding more than half a centimetre in ten seconds");
+        }
+      const auto push=[&](float bodyMass,int category) {
+        CollisionWorld world;
+        auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                          DynamicWorld::C_Landscape);
+        const float start=monster.radius+55.f;
+        auto prop=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.2f,monster.height*.005f,2.f)),
+                                       at(start,monster.height*.5f,0),.7f,bodyMass,category,true);
+        auto walker=world.createVirtualCharacter(monster.radius,monster.height,{0,0,0});
+        CollisionWorld::CharacterMoveResult state;
+        for(int frame=0;frame<60;++frame) {
+          state=walker->move({5,0,0},17,monster.stepHeight,maxSlope,mass,nullptr);
+          // Sample before integration: rotating the box later cannot disguise
+          // a character that has already passed through the blocking side.
+          require(state.position.x<prop->position().x-monster.radius-10.f,
+                  "neither a light nor heavy native dynamic hull may be crossed by a walking monster");
+          world.tick(17);
+          }
+        const float travel=prop->position().x-start;
+        std::printf("Monster CharacterVirtual %s push %.3f kg: object %.6f cm, feet %.6f cm\n",
+                    monster.name,double(bodyMass),double(travel),double(state.position.x));
+        require(prop->touchedByNpc(),"monster walking must attribute a real native prop contact");
+        return travel;
+        };
+      const float light=push(1,DynamicWorld::C_Item), heavy=push(122,DynamicWorld::C_MovableVob);
+      require(light>20.f && heavy<light*.5f,
+              "the shared walking effort must move a light prop faster than heavy furniture for both monster sizes");
+      {
+        CollisionWorld world;
+        // Isolate the walking impulse from gravity and friction, as in the
+        // human contract. Both bodies demand effort from the same move.
+        constexpr float bodyMass=20.f, seconds=.1f;
+        const float x=monster.radius+20.f, y=100.f+monster.height*.5f;
+        const auto dimensions=JPH::Vec3(.1f,monster.height*.005f,monster.radius*.004f);
+        auto a=world.addDynamicBody(new JPH::BoxShape(dimensions),at(x,y,-monster.radius*.6f),.4f,bodyMass,
+                                    DynamicWorld::C_MovableVob,true);
+        auto b=world.addDynamicBody(new JPH::BoxShape(dimensions),at(x,y,monster.radius*.6f),.4f,bodyMass,
+                                    DynamicWorld::C_MovableVob,true);
+        auto walker=world.createVirtualCharacter(monster.radius,monster.height,{0,100,0});
+        walker->move({100,0,0},100,monster.stepHeight,maxSlope,mass,nullptr);
+        const float impulseA=a->velocity().length()*.01f*bodyMass;
+        const float impulseB=b->velocity().length()*.01f*bodyMass;
+        const float strength=std::min(mass*DynamicWorld::gravityMS,450.f);
+        const float totalLimit=strength*seconds, bodyLimit=totalLimit*mass/(mass+bodyMass);
+        std::printf("Monster CharacterVirtual %s shared push: mass %.3f kg, %.6f + %.6f Ns, "
+                    "total limit %.6f Ns, per-body %.6f Ns\n",monster.name,double(mass),double(impulseA),
+                    double(impulseB),double(totalLimit),double(bodyLimit));
+        require(impulseA>1.f && impulseB>1.f,"each monster push fixture must contact two distinct native bodies");
+        require(impulseA<=bodyLimit+.01f && impulseB<=bodyLimit+.01f,
+                "monster contact impulses must preserve the same continuous character/body mass share as humans");
+        require(impulseA+impulseB<=totalLimit+.01f,
+                "all monster contacts and stair probes must share the existing walking force budget capped at 450 newtons");
+        }
+      }
+    }
+
   void testCharacterVirtual() {
     testCharacterVirtualSkippedMove();
     testCharacterVirtualInteractiveStep();
@@ -3064,6 +3230,7 @@ namespace {
     testCharacterVirtualSlopeRest();
     testCharacterVirtualIdleStairIntent();
     testCharacterVirtualSlopedRiser();
+    testMonsterCharacterVirtual();
     constexpr float slope = .785398163f;
     const auto printState=[](const char* stage, int frames, const CollisionWorld::CharacterMoveResult& state) {
       std::fprintf(stderr,"CharacterVirtual %s: frames=%d feet=(%.3f,%.3f,%.3f) velocity=(%.3f,%.3f,%.3f) grounded=%d steep=%d normal=(%.3f,%.3f,%.3f)\n",

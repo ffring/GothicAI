@@ -105,6 +105,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "cloth",               1);
   defaults->set("GAME", "character_virtual",   1);
   defaults->set("GAME", "npc_character_virtual",1);
+  defaults->set("GAME", "monster_character_virtual",0);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -924,7 +925,8 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","buoyancy")!=0,
     settingsGetI("GAME","cloth")!=0,
     settingsGetI("GAME","character_virtual")!=0,
-    settingsGetI("GAME","npc_character_virtual")!=0
+    settingsGetI("GAME","npc_character_virtual")!=0,
+    settingsGetI("GAME","monster_character_virtual")!=0
     };
   }
 

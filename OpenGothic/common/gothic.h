@@ -58,6 +58,7 @@ class Gothic final {
       bool cloth         = true;
       bool characterVirtual = false;
       bool npcCharacterVirtual = false;
+      bool monsterCharacterVirtual = false;
       };
 
     struct Options {

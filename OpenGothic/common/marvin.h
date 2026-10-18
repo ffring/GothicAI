@@ -91,6 +91,7 @@ class Marvin {
       C_ToggleCloth,
       C_ToggleCharacterVirtual,
       C_ToggleNpcCharacterVirtual,
+      C_ToggleMonsterCharacterVirtual,
       };
 
     struct Cmd {

@@ -566,7 +566,7 @@ bool Npc::setPosition(float ix, float iy, float iz) {
   y = iy;
   z = iz;
   resetCharacterVisualHeight();
-  if(!isPlayer() && isHuman())
+  if(!isPlayer() && (isHuman() || Gothic::physicsFlags().monsterCharacterVirtual))
     mvAlgo.resetCharacterVirtual();
   if(liveTeleport) {
     // Recreate at the destination instead of sweeping a kinematic body through
@@ -6404,7 +6404,7 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 
   if(id->attach(*this)) {
     currentInteract = id;
-    if(!isPlayer() && isHuman()) {
+    if(!isPlayer() && (isHuman() || Gothic::physicsFlags().monsterCharacterVirtual)) {
       mvAlgo.resetCharacterVirtual(true);
       resetCharacterVisualHeight();
       }
@@ -6425,7 +6425,7 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 void Npc::quitInteraction() {
   if(currentInteract==nullptr)
     return;
-  if(!isPlayer() && isHuman()) {
+  if(!isPlayer() && (isHuman() || Gothic::physicsFlags().monsterCharacterVirtual)) {
     mvAlgo.resetCharacterVirtual(true);
     resetCharacterVisualHeight();
     }
@@ -7126,7 +7126,10 @@ void Npc::resetCharacterVisualHeight() {
   }
 
 void Npc::updateCharacterVisualHeight() {
-  if(!isPlayer() && (!isHuman() || (!Gothic::physicsFlags().npcCharacterVirtual && characterVisualSteps.empty()))) {
+  const bool characterFlag = isPlayer() ? Gothic::physicsFlags().characterVirtual :
+                             isHuman() ? Gothic::physicsFlags().npcCharacterVirtual :
+                                         Gothic::physicsFlags().monsterCharacterVirtual;
+  if(!isPlayer() && !characterFlag && (!isHuman() || characterVisualSteps.empty())) {
     if(characterVisualHasSample)
       resetCharacterVisualHeight();
     return;
@@ -7139,11 +7142,10 @@ void Npc::updateCharacterVisualHeight() {
   const auto normal = mvAlgo.groundNormal();
   const bool groundState = !isDown() && !spellFrozen() && interactive()==nullptr &&
                            mvAlgo.state()==MoveAlgo::Run &&
+                           (isPlayer() || isHuman() || bodyStateMasked()!=BS_HIT) &&
                            !(bodyStateMasked()==BS_JUMP && isFlyAnim());
-  const bool enabled = (isPlayer() ? Gothic::physicsFlags().characterVirtual :
-                                    Gothic::physicsFlags().npcCharacterVirtual) &&
-                        mvAlgo.characterVirtualActive() && groundState;
-  // A radius/flag handoff keeps the remaining 100 ms of a stair blend. Removing
+  const bool enabled = characterFlag && mvAlgo.characterVirtualActive() && groundState;
+  // A radius handoff (or a human NPC flag handoff) keeps the remaining stair blend. Removing
   // that visual offset immediately would pop the model even though its feet agree.
   const bool finishNpcBlend = !isPlayer() && groundState && !characterVisualSteps.empty();
   const float previousOffset = characterVisualYOffset;
