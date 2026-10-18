@@ -96,10 +96,13 @@ Item::Item(World &owner, Serialize &fin, Type type)
   }
 
 Item::Item(Item &&it)
-  : Vob(it.world), hitem(it.hitem),
-    pos(it.pos),equipped(it.equipped),itSlot(it.itSlot),visual(std::move(it.visual)) {
+  : Vob(it.world), hitem(std::move(it.hitem)),
+    pos(it.pos),amount(it.amount),equipped(it.equipped),itSlot(it.itSlot),visual(std::move(it.visual)) {
+  hitem->user_ptr=this;
   setLocalTransform(it.localTransform());
   physic = std::move(it.physic);
+  if(!physic.isEmpty())
+    physic.setItem(this);
   }
 
 Item::~Item() {

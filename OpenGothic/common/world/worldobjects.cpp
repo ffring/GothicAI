@@ -101,8 +101,11 @@ void WorldObjects::load(Serialize &fin) {
 
   fin.setEntry("worlds/",fin.worldName(),"/items");
   fin.read(sz);
+  const auto burningTorch=owner.script().findSymbolIndex("ItLsTorchburning");
   for(size_t i=0; i<sz; ++i) {
     auto it = std::make_unique<Item>(owner,fin,Item::T_World);
+    if(burningTorch!=size_t(-1) && it->clsId()==burningTorch)
+      it=std::make_unique<ItemTorchBurning>(std::move(*it));
     itemArr.emplace_back(std::move(it));
     items.add(itemArr.back().get());
     }

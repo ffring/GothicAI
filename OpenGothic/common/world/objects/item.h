@@ -46,7 +46,7 @@ class Item : public Vob {
     uint8_t equipCount() const { return equipped;   }
     void    setAsEquipped(bool e);
 
-    void    setPhysicsEnable (World& w);
+    virtual void setPhysicsEnable(World& w);
     void    setPhysicsDisable();
     bool    isDynamic() const override;
     float   physicsMass() const { return physic.mass(); }
