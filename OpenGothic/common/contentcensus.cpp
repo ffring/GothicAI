@@ -1,6 +1,7 @@
 #include "contentcensus.h"
 
 #include <Tempest/Log>
+#include <Tempest/TextCodec>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
@@ -70,7 +71,7 @@ const char* kind(std::string_view name, std::string_view source) {
   }
 }
 
-ContentCensus::ContentCensus(const char* output) : output(std::filesystem::u8path(output)) {
+ContentCensus::ContentCensus(const char* output) : output(Tempest::TextCodec::toUtf16(output)) {
   }
 
 void ContentCensus::opened(std::string_view name, std::string_view source) noexcept {
