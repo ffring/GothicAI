@@ -181,6 +181,64 @@ def _validate_recording(take: Path) -> None:
                        "через film без музыки игры и звуков мест") from error
 
 
+def body_duration(tl: Timeline) -> float:
+    """One video-frame boundary, after audio joins have kept their exact duration."""
+    return math.ceil(round(tl.cut_duration * 30, 6)) / 30
+
+
+def _effects_filters(tl: Timeline, duration: float, audio_input: str,
+                     sting_input: str | None, sting_duration: float) -> tuple[list[str], list[str]]:
+    """The shared cut/dub effects graph, split at the body/ending boundary."""
+    keep = tl.keep()
+    filters = [
+        f"[{audio_input}]aformat=sample_rates=48000:channel_layouts=stereo,"
+        f"apad=whole_dur={tl.duration:.9f},atrim=duration={tl.duration:.9f},"
+        f"asplit={len(keep)}" + "".join(f"[as{i}]" for i in range(len(keep))),
+    ]
+    for i, (start, end) in enumerate(keep):
+        fade = min(0.02, (end - start) / 4)
+        filters += [
+            f"[as{i}]atrim=start={start:.9f}:end={end:.9f},asetpts=PTS-STARTPTS,"
+            f"afade=t=in:d={fade:.9f},afade=t=out:st={end - start - fade:.9f}:d={fade:.9f}[a{i}]",
+        ]
+    filters.append("".join(f"[a{i}]" for i in range(len(keep)))
+                   + f"concat=n={len(keep)}:v=0:a=1[ac]")
+    ending = [
+        f"[ac]apad,atrim=duration={duration:.9f},"
+        f"afade=t=out:st={max(0, duration - 0.02):.9f}:d=0.02[bodya]",
+    ]
+    if sting_input is not None:
+        ending.append(
+            f"[{sting_input}]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"apad,atrim=duration={sting_duration:.9f},asetpts=PTS-STARTPTS,"
+            "afade=t=in:d=0.02,"
+            f"afade=t=out:st={max(0, sting_duration - 0.02):.9f}:d=0.02[stinga]"
+        )
+    return filters, ending
+
+
+def render_effects(shot: Shot, audio: Path, tl: Timeline, out: Path,
+                   sting_duration: float) -> tuple[Path, float]:
+    """Render the same lossless effects and ending as the Russian cut, without picture."""
+    duration = body_duration(tl)
+    inputs = ["-i", str(audio)]
+    if shot.brand:
+        inputs += ["-i", str(BRAND / "sting.mp4")]
+    body, ending = _effects_filters(tl, duration, "0:a", "1:a" if shot.brand else None,
+                                    sting_duration)
+    filters = body + ending
+    filters.append("[bodya][stinga]concat=n=2:v=0:a=1[aout]" if shot.brand
+                   else "[bodya]anull[aout]")
+    done = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *inputs,
+         "-filter_complex", ";".join(filters), "-map", "[aout]", "-c:a", "pcm_f32le", str(out)],
+        capture_output=True, text=True,
+    )
+    if done.returncode:
+        raise CutError(f"ffmpeg failed:\n{done.stderr.strip()[-3000:]}")
+    return out, duration
+
+
 def _join(shot: Shot, video: Path, audio: Path, tl: Timeline, overlays: list[Overlay],
           work: Path, sting_duration: float) -> tuple[Path, float]:
     """Join picture and effects independently, so video rounding cannot insert audio gaps.
@@ -189,8 +247,7 @@ def _join(shot: Shot, video: Path, audio: Path, tl: Timeline, overlays: list[Ove
     bed remain lossless separate stems until levels publishes the final AAC.
     """
     keep = tl.keep()
-    # One video-frame boundary, after every audio join has kept its exact duration.
-    duration = math.ceil(round(tl.cut_duration * 30, 6)) / 30
+    duration = body_duration(tl)
     inputs = ["-i", str(video), "-i", str(audio)]
     for overlay in overlays:
         inputs += ["-i", str(overlay.png)]
@@ -201,22 +258,13 @@ def _join(shot: Shot, video: Path, audio: Path, tl: Timeline, overlays: list[Ove
     selected = "+".join(f"gte(t,{start:.9f})*lt(t,{end:.9f})" for start, end in keep)
     removed = "+".join(f"if(gte(PTS*TB,{end:.9f}),{end - start:.9f},0)"
                        for start, end in tl.cuts) or "0"
+    effects, ending = _effects_filters(tl, duration, "1:a",
+                                       f"{sting_input}:a" if shot.brand else None, sting_duration)
     filters = [
         # Map every retained frame through to_cut directly. Concatenating rounded
         # video segments would accumulate a frame fraction at every audio join.
         f"[0:v]setpts=PTS-STARTPTS,select='{selected}',setpts='PTS-({removed})/TB'[vc]",
-        "[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-        f"apad=whole_dur={tl.duration:.9f},atrim=duration={tl.duration:.9f},"
-        f"asplit={len(keep)}" + "".join(f"[as{i}]" for i in range(len(keep))),
-    ]
-    for i, (start, end) in enumerate(keep):
-        fade = min(0.02, (end - start) / 4)
-        filters += [
-            f"[as{i}]atrim=start={start:.9f}:end={end:.9f},asetpts=PTS-STARTPTS,"
-            f"afade=t=in:d={fade:.9f},afade=t=out:st={end - start - fade:.9f}:d={fade:.9f}[a{i}]",
-        ]
-    filters += [
-        "".join(f"[a{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=0:a=1[ac]",
+        *effects,
         f"[vc]scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,"
         f"crop={W}:{H},setsar=1[v]",
     ]
@@ -231,17 +279,13 @@ def _join(shot: Shot, video: Path, audio: Path, tl: Timeline, overlays: list[Ove
     filters += [
         f"[{last}]fps=30,tpad=stop_mode=clone:stop_duration={duration:.9f},"
         f"trim=duration={duration:.9f},settb=AVTB,setpts=PTS-STARTPTS[bodyv]",
-        f"[ac]apad,atrim=duration={duration:.9f},"
-        f"afade=t=out:st={max(0, duration - 0.02):.9f}:d=0.02[bodya]",
+        ending[0],
     ]
     if shot.brand:
         filters += [
             f"[{sting_input}:v]scale={W}:{H},fps=30,setsar=1,"
             "settb=AVTB,setpts=PTS-STARTPTS[stingv]",
-            f"[{sting_input}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-            f"apad,atrim=duration={sting_duration:.9f},asetpts=PTS-STARTPTS,"
-            "afade=t=in:d=0.02,"
-            f"afade=t=out:st={max(0, sting_duration - 0.02):.9f}:d=0.02[stinga]",
+            ending[1],
             "[bodyv][bodya][stingv][stinga]concat=n=2:v=1:a=1[vout][aout]",
         ]
     else:

@@ -131,12 +131,9 @@ def cmd_dub(args: argparse.Namespace) -> int:
         done = dub_take(config, shot, _take(config, shot, args.take), args.lang, args.tts)
     else:
         done = dub_explainer(_config(), workspace(args.short), args.lang, args.plan, args.tts, args.reclone)
-    print("  start who            length/slot  tempo  gain  text")
-    for row in done.rows:
-        print(f"  {row}")
     ru = f"{done.ru_duration:.3f} s" if done.ru_duration is not None else "no Russian short to compare"
-    print(f"{done.wav}: {done.duration:.3f} s (the Russian short: {ru}), {_lufs(done.lufs)} "
-          f"(the Russian: {_lufs(done.ru_lufs)})")  # fmt: skip
+    print(f"{done.wav}: {done.duration:.3f} s (the Russian short: {ru}), "
+          f"voice_mastered: EN {_lufs(done.lufs)}, RU {_lufs(done.ru_lufs)}")
     if done.preview:
         print(f"{done.preview}: the Russian short with it as the first sound track, the Russian second")
     if done.too_long:

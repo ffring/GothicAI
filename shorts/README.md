@@ -248,42 +248,54 @@ take, text and cleaning have not changed is not aligned again.
 ## The English sound track
 
 ```bash
-scripts/deploy-gpu.sh dub                 # once, from the repository: the jobs on the GPU server
+scripts/deploy-gpu.sh dub                 # once, from the repository: VoxCPM voice-cloning job
 uv run gothic-shorts dub xardas-lie       # a shot's newest take (or `dub xardas-lie 2`) -> <take>/dub.en.wav
 uv run gothic-shorts dub bow              # an explainer -> <workspace>/render/dub.en.wav
 uv run gothic-shorts dub bow --reclone    # the user's kept voice made anew from bow's recordings
 ```
 
 YouTube offers a video's sound in several languages (Studio: Subtitles, the video, the language's Audio
-column; the API has no call for it, and the channel needs YouTube's advanced features). `dub` makes the English one: a WAV (48 kHz stereo,
-24-bit) exactly as long as the Russian short, -14 LUFS like the cut, and `dub.en.mp4`, the Russian short with
-it as the first sound track and the Russian as the second (QuickTime: View, Languages), to hear it as a viewer
-will. It prints every line: where it starts, its length against its slot, the speed-up, the gain.
+column; the API has no call for it, and the channel needs YouTube's advanced features). Publish the Russian
+short with `gothic-shorts cut` or `gothic-shorts explain` first: `short-ru.mp4` and a successful
+`short-ru.levels.json` (`"ok": true`) must be beside the dub's outputs. The current shot or plan must still
+have the published short's duration (within one frame at 30 fps).
 
-- **A shot's take.** The game's sound without the npc's Russian voices: Demucs (htdemucs_ft) on the GPU server
-  splits `main.wav` into the voices and the rest (~10 s for a 45 s take, kept in `<take>/dub-en/`), and the
-  rest stands in for the sound from 0.3 s before an npc's line to 0.3 s after, the recording's own sound
-  elsewhere. Every line in English: the take's `subs.en.json` (what the captions say; the hook and captions
-  stay burnt in in Russian), in the voice the game speaks Russian in: the TTS service voices a Russian
+`dub` replaces the Russian voice stem with English and publishes through the same `levels.publish` as the
+Russian short: voice −14 LUFS, true peak at most −1 dBTP after AAC, voice above effects above music, the
+ending at S−6, and no clicks. It writes `dub.en.levels.json` with the checks and prints the levels table,
+each line's timing, speed-up and gain, and both languages' mastered voice levels. `dub.en.mp4` copies the
+Russian picture without re-encoding, with the verified English AAC first (default, `eng`) and the original
+Russian audio second (`rus`), with faststart. `dub.en.wav` decodes that English AAC to 48 kHz stereo,
+24-bit PCM, exactly as long as the Russian short's audio (within 1 ms). Input-check refusals leave previous
+dub files untouched; old outputs are removed only when assembly starts, after which failures leave neither
+WAV nor MP4, while a failed levels report is kept.
+
+- **A shot's take.** Effects, the brand ending and the music bed are built by the same code as the Russian
+  cut, with the same removed AI pauses. The recording must have separate `npc_voice` and have been made
+  with `musicVolume=0` and `worldSounds=0`, as `cut` requires; older takes must be recorded again. No voice
+  separation or GPU job is needed for the sound stems. Every line in English: the take's `subs.en.json`
+  (what the captions say; the hook and captions stay burnt in in Russian), in the voice the game speaks
+  Russian in: the TTS service voices a Russian
   sample (~17 s) in the npc's voice (its id and description from the AI server, `gothic-ai voices <npc>`;
   the hero's the shot's `hero_voice`), Inworld clones it (Instant Voice Cloning, `gothic-tts say --clone`),
   and the clone says the English lines, so the timbre stays the Russian one. When that fails Inworld
   designs an en-US voice from the description, and then the launcher's fallback takes over, as in the
   game: VoxCPM2 on the GPU server designs one reading an English sample (as the voxcpm bridge does with
   its Russian one) and says the lines in it (`--tts voxcpm` picks it). A fallback says why the way before
-  it failed. Each line starts where its Russian one starts and is as loud as it was in the game's sound
-  (the separated voices measured over it; the hero's recording); the cut's pauses go out with the same
-  parts of the recording. The lines are kept by voice and text in `.shorts/voice/en/`, the voices in the
-  kept voices (below) and Inworld's library (`gothic-ai <id>@en~ru`). The lip sync stays the Russian one.
+  it failed. Each line starts where its Russian one starts; all English lines of each speaker are levelled
+  together with `stems.speaker_gains`, with short fades at their edges, as in the Russian voice stem.
+  The lines are kept by voice and text in `.shorts/voice/en/`, the voices in the kept voices (below) and
+  Inworld's library (`gothic-ai <id>@en~ru`). The lip sync stays the Russian one.
 - **An explainer.** `script.en.txt` (the caption track's text, without its `|`) in the user's own voice: by
   Inworld, the clone `USER` of the kept recording `user.inworld.wav` (20-29 s of the user's lines; its best
   is 10-30 s), or, when Inworld fails, by VoxCPM2 on the GPU server from `user.voxcpm.wav` (8-14 s: its
   encoder takes up to 15 s); cleaned as the Russian takes were (`words.py`'s chain), each line from where
-  its Russian line's first word is said (`words.ru.json`), as loud as the Russian voice, over the plan's
-  music bed (`plan.json`, `--plan` for another) faded and ducked under the English lines as `Explainer.tsx`
-  ducks it under the Russian ones. The lines live in `voice/en/` and are made again only when the voice or
-  a text changes. A plan that plays the footage's own sound (`gameVolume` above 0) is refused: the dub
-  mixes the music and the voice only.
+  its Russian line's first word is said (`words.ru.json`). Remotion renders only the `game` and `music`
+  stems from the Russian plan (`plan.json`, `--plan` for another); the picture comes from the published
+  short, and the English voice replaces its Russian voice stem. Footage sound (`gameVolume` above 0) is
+  supported. English lines are levelled together as one speaker, and `levels.publish` balances the stems
+  using the English speech windows and the Russian publication's music fades. The lines live in `voice/en/`
+  and are made again only when the voice or a text changes.
 
 The voices are kept for every short and every checkout in `~/.local/share/gothic-ai/voices/`, so each is
 cloned or designed once: `user.inworld.wav` and `user.voxcpm.wav` (the user's recorded voice, made from
@@ -300,10 +312,10 @@ kept); one longer still is reported, and `dub` exits with 1 after writing the tr
 the translation and run it again. Inworld and VoxCPM read English at about 12-14 characters a second.
 Inworld bills the lines and the samples: check its credits first (`gothic-launcher` does).
 
-The jobs (`shorts/deploy/dub`, in `~/gothic-ai/dub` on the server): `separate.sh <wav> <out dir>` (Demucs in a
-venv of its own, ~2 GB of GPU memory while it runs) and `clone.sh <reference> <lines.json> <out dir>
-[--design <json>]` (through the engine of the running gothic-voxcpm, no GPU memory of its own; the game's
-lines wait their turn meanwhile). Files go over by scp into a fresh folder there and it is deleted after.
+The voice-cloning job (`shorts/deploy/dub`, in `~/gothic-ai/dub` on the server) is
+`clone.sh <reference> <lines.json> <out dir> [--design <json>]`. It uses only Python's standard library and
+the engine of the running gothic-voxcpm, with no GPU memory of its own; the game's lines wait their turn
+meanwhile. Files go over by scp into a fresh folder there and it is deleted after.
 
 ## Uploading to YouTube
 
