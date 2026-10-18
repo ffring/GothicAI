@@ -1,0 +1,17 @@
+# Same thirty native barrel meshes and camera, with buoyancy disabled.
+seed 73013
+cheat god
+set time 12 0
+movable on
+water off
+overlay off
+view full
+water setup perf
+wait 45000
+water checkpoint settled
+cadence normal
+wait 34
+movable measure off
+cadence wait
+movable report
+water checkpoint measured

@@ -1,0 +1,10 @@
+# A new process loads session-water.sav. Initial observation precedes native physics.
+water initial restored
+overlay off
+view full
+rec water-reloaded
+wait 30000
+water checkpoint continued
+shot water-reloaded
+stop
+physics stats

@@ -10,6 +10,7 @@
 class World;
 class Npc;
 class Serialize;
+class WorldObjects;
 
 class Item : public Vob {
   public:
@@ -101,6 +102,10 @@ class Item : public Vob {
     void                setPhysicsEnable(const ProtoMesh* mesh);
 
   private:
+    friend class WorldObjects;
+    void                savePhysics(Serialize& fout) const;
+    void                restorePhysics(const Tempest::Matrix4x4& matrix, const Tempest::Vec3& velocity,
+                                       const Tempest::Vec3& angular, bool sleeping);
     void                updateMatrix();
 
     std::shared_ptr<zenkit::IItem> hitem={};

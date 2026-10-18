@@ -22,6 +22,7 @@
 #      ARROW_STICKING optional initial GAME arrow_sticking setting (0 or 1), before world loading
 #      PHYSICS_NOISE optional initial GAME physics_noise setting (0 or 1), before world loading
 #      DESTRUCTION optional initial GAME destruction setting (0 or 1), before world loading
+#      BUOYANCY     optional initial GAME buoyancy setting (0 or 1), before world loading
 #      CHARACTER_VIRTUAL optional initial GAME character_virtual setting (0 or 1), before world loading
 #      NPC_CHARACTER_VIRTUAL optional initial GAME npc_character_virtual setting (0 or 1)
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
@@ -146,7 +147,7 @@ vidResIndex=$VID_RES_INDEX
 soundVolume=${SOUND:-0}
 musicVolume=${MUSIC:-0}
 EOF
-if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
+if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${BUOYANCY:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
   printf '\n[GAME]\n' >>"$RUN/Gothic.ini"
   if [[ -n "${MOVABLE_VOBS:-}" ]]; then
     [[ "$MOVABLE_VOBS" == 0 || "$MOVABLE_VOBS" == 1 ]] || { echo "MOVABLE_VOBS must be 0 or 1" >&2; exit 2; }
@@ -171,6 +172,10 @@ if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}
   if [[ -n "${DESTRUCTION:-}" ]]; then
     [[ "$DESTRUCTION" == 0 || "$DESTRUCTION" == 1 ]] || { echo "DESTRUCTION must be 0 or 1" >&2; exit 2; }
     printf 'destruction=%s\n' "$DESTRUCTION" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${BUOYANCY:-}" ]]; then
+    [[ "$BUOYANCY" == 0 || "$BUOYANCY" == 1 ]] || { echo "BUOYANCY must be 0 or 1" >&2; exit 2; }
+    printf 'buoyancy=%s\n' "$BUOYANCY" >>"$RUN/Gothic.ini"
   fi
 fi
 

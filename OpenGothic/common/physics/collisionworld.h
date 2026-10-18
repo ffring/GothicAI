@@ -61,6 +61,7 @@ class CollisionWorld final {
         bool                addImpulseAtPoint(const Tempest::Vec3& impulseNs, const Tempest::Vec3& pointCm,
                                               Npc* culprit = nullptr);
         void                setVelocity(const Tempest::Vec3& velocityCm, const Tempest::Vec3& angularRadians);
+        void                setBuoyancyShape(JPH::ShapeRefC shape); // unpadded envelope; native collision stays unchanged
         void                setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what);
         // The latest engine-known cause survives the short noise attribution
         // window and NPC destruction, until a new impulse replaces it.
@@ -83,6 +84,10 @@ class CollisionWorld final {
         JPH::BodyID         id;
         JPH::ShapeRefC      baseShape;
         JPH::ShapeRefC      scaledShape;
+        JPH::ShapeRefC      buoyancyBaseShape, buoyancyShape;
+        bool                waterInitialized = false, inWater = false, waterSleepDisabled = false, waterPreserveSleep = false;
+        float               waterRestTime = 0, waterY = 0;
+        uint64_t            nextSplashStep = 0;
         JPH::Vec3           scale = JPH::Vec3::sOne();
         const PhysicVbo*    mesh = nullptr;
         int                 categoryId = 0;
@@ -151,6 +156,17 @@ class CollisionWorld final {
     std::unique_ptr<VirtualCharacter> createVirtualCharacter(float radius, float height, const Tempest::Vec3& feet);
 
     void tick(uint64_t dt);
+    void setWaterSurfaceCallback(std::function<bool(const Tempest::Vec3&,float,float&)> callback);
+    void setBuoyancyEnabled(bool enabled);
+    bool buoyancyEnabled() const;
+    struct WaterBodySnapshot {
+      const CollisionBody* body = nullptr;
+      Tempest::Matrix4x4 transform;
+      Tempest::Vec3 worldBounds[2], velocity;
+      float mass = 0, density = 0, waterY = 0, submergedFraction = 0;
+      bool sleeping = true, inWater = false;
+      };
+    std::vector<WaterBodySnapshot> waterBodySnapshot() const;
     void setBBox(JPH::Vec3Arg min, JPH::Vec3Arg max);
     void setItemHitCallback(std::function<void(Item&, zenkit::MaterialGroup, float impulse, float mass)> f);
     void setPhysicsNoiseEnabled(bool enabled);
@@ -235,6 +251,9 @@ class CollisionWorld final {
     void addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
                  bool movable, bool sensor, float mass, bool startSleeping = false);
     void removeBody(CollisionBody& body);
+    void prepareBuoyancy(std::vector<PhysicsNoise>& splashes);
+    void applyBuoyancyStep(float seconds);
+    void finishBuoyancy(float seconds);
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
     void fillRagdoll(QueryResult& result, JPH::BodyID body) const;
     JPH::PhysicsSystem& physicsSystem();
@@ -248,6 +267,8 @@ class CollisionWorld final {
     std::function<void(Item&, zenkit::MaterialGroup, float, float)> hitItem;
     std::function<void(const PhysicsNoise&)> physicsNoise;
     std::function<void(CollisionBody&,float,const Tempest::Vec3&,std::string_view)> bodyImpact;
+    std::function<bool(const Tempest::Vec3&,float,float&)> waterSurface;
+    bool buoyancy = true;
     JPH::Vec3 bboxMin = JPH::Vec3::sZero();
     float accumulatedTime = 0;
     friend class Ragdoll;

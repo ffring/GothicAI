@@ -184,6 +184,10 @@ class DynamicWorld final {
         void setPayloadPtr(void* ptr);
         bool isEmpty() const { return obj==nullptr; }
         float mass() const; // kilograms; zero for empty/static/kinematic handles
+        Tempest::Matrix4x4 matrix() const;
+        Tempest::Vec3 position() const;
+        void restorePhysics(const Tempest::Matrix4x4& matrix, bool sleeping,
+                            const Tempest::Vec3& velocity = {}, const Tempest::Vec3& angular = {});
         Tempest::Vec3 velocity() const; // centimetres/second; zero without dynamics
         Tempest::Vec3 angularVelocity() const; // world radians/second; zero without dynamics
         bool isSleeping() const;
@@ -361,6 +365,8 @@ class DynamicWorld final {
                                  bool legacyCollision = true, uint32_t zenId = uint32_t(-1));
     void           setMovableVobsEnabled(bool enabled);
     void           setDestructionEnabled(bool enabled);
+    void           setBuoyancyEnabled(bool enabled);
+    bool           buoyancyEnabled() const;
     bool           destructionEnabled() const;
     // Called after the complete authored vob tree has installed its collisions.
     void           finalizeMovableVobs();
@@ -412,6 +418,18 @@ class DynamicWorld final {
       int64_t asleepSince = -1;
       };
     std::vector<FragmentSnapshot> fragmentSnapshot() const;
+    struct WaterBodySnapshot {
+      uintptr_t id = 0, parentId = 0;
+      uint32_t zenId = uint32_t(-1);
+      size_t piece = size_t(-1);
+      int category = C_Null;
+      std::string visual;
+      Tempest::Matrix4x4 transform;
+      Tempest::Vec3 worldBounds[2], velocity;
+      float mass = 0, density = 0, waterY = 0, submergedFraction = 0;
+      bool sleeping = true, inWater = false;
+      };
+    std::vector<WaterBodySnapshot> waterBodySnapshot() const;
     struct RagdollSupport {
       size_t        bone = 0;
       uint32_t      partBodyId = uint32_t(-1), supportBodyId = uint32_t(-1);
@@ -505,7 +523,8 @@ class DynamicWorld final {
 
   private:
     void           moveBullet(BulletBody& b, const Tempest::Vec3& dir, uint64_t dt);
-    RayWaterResult implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight) const;
+    RayWaterResult implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight,
+                                 uint32_t solidMask = 0) const;
     bool           hasCollision(const NpcItem &it, CollisionTest& out);
     void           prepareMovableVobShape(BodyData& body);
     void           rebuildMovableVob(BodyData& body);

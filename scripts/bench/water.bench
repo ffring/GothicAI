@@ -1,0 +1,36 @@
+# Existing Khorinis map vobs and persistent native world Items, on real deep water.
+seed 73013
+cheat god
+set time 12 0
+movable on
+destruction on
+noise on
+water on
+overlay off
+view full
+water setup deep
+rec water-deep
+wait 45000
+water checkpoint settled
+shot water-deep-settled
+water push-ready
+wait 1200
+spell cast 600
+wait 10000
+water checkpoint pushed
+noise checkpoint
+shot water-barrel-pushed
+water swim-ready
+wait 1000
+hold forward 2200
+wait 4500
+water checkpoint swum
+water fireball-ready
+wait 1200
+spell cast 600
+wait 25000
+water checkpoint fragments
+shot water-deep-fragments
+water save water
+stop
+physics stats

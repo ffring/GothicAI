@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "game/serialize.h"
+#include "gothic.h"
 #include "game/gamescript.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -13,6 +14,23 @@
 #include "utils/dbgpainter.h"
 
 using namespace Tempest;
+
+namespace {
+
+zenkit::MaterialGroup physicsMaterial(int32_t material) {
+  // Script ItemMaterial values do not match the world mesh MaterialGroup enum.
+  switch(material) {
+    case MAT_WOOD:    return zenkit::MaterialGroup::WOOD;
+    case MAT_STONE:   return zenkit::MaterialGroup::STONE;
+    case MAT_METAL:   return zenkit::MaterialGroup::METAL;
+    case MAT_LEATHER: return zenkit::MaterialGroup::WOOD;
+    case MAT_CLAY:    return zenkit::MaterialGroup::EARTH;
+    case MAT_GLAS:    return zenkit::MaterialGroup::STONE;
+    default:         return zenkit::MaterialGroup::UNDEFINED;
+    }
+  }
+
+}
 
 Item::Item(World &owner, size_t itemInstance, Type type)
   :Vob(owner) {
@@ -133,6 +151,19 @@ void Item::save(Serialize &fout) const {
   fout.write(localTransform());
   }
 
+void Item::savePhysics(Serialize& fout) const {
+  fout.write(uint32_t(clsId()),hitem->visual,localTransform(),physic.velocity(),
+             physic.angularVelocity(),physic.isSleeping());
+  }
+
+void Item::restorePhysics(const Tempest::Matrix4x4& matrix, const Tempest::Vec3& velocity,
+                          const Tempest::Vec3& angular, bool sleeping) {
+  setPhysicsEnable(world);
+  // Native restore preserves dry sleepers and wakes a saved float when
+  // buoyancy is disabled, after body creation and transform callbacks.
+  physic.restorePhysics(matrix,sleeping,velocity,angular);
+  }
+
 void Item::clearView() {
   visual = MeshObjects::Mesh();
   }
@@ -186,7 +217,7 @@ void Item::setPhysicsEnable(const MeshObjects::Mesh& view) {
   if(view.nodesCount()==0)
     return;
   auto& p = *world.physic();
-  physic = p.addDynamicObj(transform(),view.bounds(),zenkit::MaterialGroup(hitem->material));
+  physic = p.addDynamicObj(transform(),view.bounds(),physicsMaterial(hitem->material));
   physic.setItem(this);
   }
 
@@ -196,7 +227,7 @@ void Item::setPhysicsEnable(const ProtoMesh* mesh) {
   auto& p = *world.physic();
   Bounds b;
   b.assign(mesh->bboxMesh);
-  physic = p.addDynamicObj(transform(),b,zenkit::MaterialGroup(hitem->material));
+  physic = p.addDynamicObj(transform(),b,physicsMaterial(hitem->material));
   physic.setItem(this);
   }
 

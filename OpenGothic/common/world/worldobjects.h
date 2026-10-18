@@ -147,6 +147,9 @@ class WorldObjects final {
     void           resetPositionToTA();
 
   private:
+    void           saveItemPhysics(Serialize& fout) const;
+    void           loadItemPhysics(Serialize& fin);
+
     struct MobRoutine {
       gtime   time;
       int32_t state = 0;

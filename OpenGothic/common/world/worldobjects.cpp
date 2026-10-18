@@ -1,6 +1,7 @@
 #include "worldobjects.h"
 
 #include "game/serialize.h"
+#include "game/physicssave.h"
 #include "game/bodyarena.h"
 #include "physics/physicsnoise.h"
 #include "game/bodyobservations.h"
@@ -106,6 +107,8 @@ void WorldObjects::load(Serialize &fin) {
     items.add(itemArr.back().get());
     }
 
+  loadItemPhysics(fin);
+
   for(auto& i:rootVobs)
     i->loadVobTree(fin);
 
@@ -140,6 +143,7 @@ void WorldObjects::save(Serialize &fout) {
   fout.write(uint32_t(itemArr.size()));
   for(auto& i:itemArr)
     i->save(fout);
+  saveItemPhysics(fout);
 
   fout.setEntry("worlds/",fout.worldName(),"/mobsi");
   for(auto& i:rootVobs)
@@ -154,6 +158,69 @@ void WorldObjects::save(Serialize &fout) {
   fout.write(uint32_t(routines.size()));
   for(auto& i:routines)
     i.save(fout);
+  }
+
+void WorldObjects::saveItemPhysics(Serialize& fout) const {
+  uint32_t count=0;
+  for(const auto& item:itemArr)
+    count+=item->isDynamic();
+  if(count==0)
+    return;
+  // World items only; inventory serialization and the legacy /items stream
+  // retain their exact layout. Old saves simply have no optional entry.
+  fout.setEntry("worlds/",fout.worldName(),"/item-physics");
+  fout.write(uint32_t(0x31505449),uint16_t(1),fout.worldName(),uint32_t(itemArr.size()),count);
+  for(size_t i=0;i<itemArr.size();++i) {
+    if(!itemArr[i]->isDynamic())
+      continue;
+    fout.write(uint32_t(i));
+    itemArr[i]->savePhysics(fout);
+    }
+  }
+
+void WorldObjects::loadItemPhysics(Serialize& fin) {
+  if(!fin.setEntry("worlds/",fin.worldName(),"/item-physics"))
+    return;
+  try {
+    uint32_t magic=0,total=0,count=0;
+    uint16_t schema=0;
+    std::string worldName;
+    fin.read(magic,schema,worldName,total,count);
+    if(magic!=0x31505449 || schema!=1 || worldName!=fin.worldName() ||
+       total!=itemArr.size() || count>total || count>100000)
+      return;
+    struct State {
+      uint32_t index=0,symbol=0;
+      std::string visual;
+      Tempest::Matrix4x4 matrix;
+      Tempest::Vec3 velocity,angular;
+      bool sleeping=false;
+      };
+    const auto finiteVelocity=[](const Tempest::Vec3& velocity) {
+      return std::isfinite(velocity.x) && std::isfinite(velocity.y) &&
+             std::isfinite(velocity.z) && velocity.quadLength()<1.e14f;
+      };
+    std::vector<State> states(count);
+    // Validate the complete entry before activating any world item. Indices
+    // refer exclusively to itemArr, never to an NPC or container inventory.
+    for(size_t i=0;i<states.size();++i) {
+      auto& state=states[i];
+      fin.read(state.index,state.symbol,state.visual,state.matrix,state.velocity,state.angular,state.sleeping);
+      if(state.index>=total || (i>0 && state.index<=states[i-1].index))
+        return;
+      const auto& item=*itemArr[state.index];
+      if(state.symbol!=item.clsId() || state.visual!=item.handle().visual ||
+         !PhysicsSave::validTransform(state.matrix) ||
+         !PhysicsSave::sameTransform(state.matrix,item.localTransform()) ||
+         !finiteVelocity(state.velocity) || !finiteVelocity(state.angular))
+        return;
+      }
+    for(const auto& state:states)
+      itemArr[state.index]->restorePhysics(state.matrix,state.velocity,state.angular,state.sleeping);
+    }
+  catch(const std::exception& e) {
+    Tempest::Log::e("item physics load: ",e.what());
+    }
   }
 
 void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {

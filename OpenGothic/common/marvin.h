@@ -87,6 +87,7 @@ class Marvin {
       C_ToggleMovableVobs,
       C_TogglePhysicsNoise,
       C_ToggleDestruction,
+      C_ToggleBuoyancy,
       C_ToggleCharacterVirtual,
       C_ToggleNpcCharacterVirtual,
       };

@@ -1,0 +1,17 @@
+# Thirty identical native barrel copies. Normal cadence, no recording in timing window.
+seed 73013
+cheat god
+set time 12 0
+movable on
+water on
+overlay off
+view full
+water setup perf
+wait 45000
+water checkpoint settled
+cadence normal
+wait 34
+movable measure on
+cadence wait
+movable report
+water checkpoint measured
