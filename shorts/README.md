@@ -18,7 +18,7 @@ included). It prints the levels table and writes `short-<lang>.levels.json`; a f
 published MP4. Old takes without NPC stems or verified `musicVolume=0` and `worldSounds=0` must be filmed again. `--lang en`
 changes the captions and keeps the same sound.
 
-Channel branding is on by default: PT Serif Bold text, the corner seal and the end sting (see below).
+Channel branding is on by default: PT Serif Bold text and the end sting (see below).
 Set `brand = false` in the shot TOML to turn it off.
 
 ```bash
@@ -162,27 +162,27 @@ over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break 
   Such a plan (its script, the voice files) stays outside the repository, in the explainer's workspace: give its
   path as the third argument, the short goes into that folder's `render/`:
   `uv run --project shorts python shorts/compare/cut.py hits ru ~/.local/share/gothic-ai/explain/hits/plan.json`.
-- The channel's brand, on by default: its wax seal with the G in the top right corner all through, and its
-  end sting after the last beat (below); every text of the cut — labels, titles, captions, the hook — in PT Serif
+- The channel's brand, on by default: its end sting after the last beat (below); every text of the cut —
+  labels, titles, captions, the hook — in PT Serif
   Bold (ParaType, OFL, ships with macOS: Cyrillic, bookish like the channel's letters) on warm dark bands. The
   shorts published before it (`bodies`, `archery`, `hits`) say `"brand": false` and cut as they went out: Arial
-  and Georgia on black bands, no seal, no sting. They are not re-uploaded.
+  and Georgia on black bands, no sting. They are not re-uploaded.
 - `cut.py` stacks each beat, grades both halves the same (a little brighter), takes the sound of the "on"
   take (with the bed under it), limits the peaks and brings it to -14 LUFS by one gain (loudnorm in two passes,
   linear: one pass lifts the quiet stretches), fading out over the last 80 ms.
 
-### The brand: the seal and the end sting
+### The brand: the end sting
 
 `shorts/brand/sting.py` renders the end sting, 2.2 s of 1080×1920: a letter on the desk at night, GOTHIC AI written
 in ink from left to right, the red wax seal with the G of that lettering pressed on (the frame jolts) to the game's
-diary-entry sound, the candle flickering; and `seal-corner.png`, the seal for the corner. Its pictures and sound are not in
+diary-entry sound, the candle flickering. Its pictures and sound are not in
 the repository (generated art, a sound of the game): `~/.local/share/gothic-ai/brand/sting/` holds `bg.png` (the
-blank letter, top-down), `seal-green.png` (the seal on chroma green, keyed out), `seal.png` (the seal on parchment),
+blank letter, top-down), `seal-green.png` (the seal on chroma green, keyed out),
 `lettering.png` (the name, traced once from a generated pen master, so it never changes) and `LOGENTRY.WAV`
 (from the game's `Sounds.vdf`).
 
 ```bash
-uv run --project shorts python shorts/brand/sting.py    # -> ~/.local/share/gothic-ai/brand/sting/sting.mp4, seal-corner.png
+uv run --project shorts python shorts/brand/sting.py    # -> ~/.local/share/gothic-ai/brand/sting/sting.mp4
 ```
 
 Pick spots in daylight and open ground (`clear` sends rats and wolves away), and look at both takes before
@@ -248,42 +248,54 @@ take, text and cleaning have not changed is not aligned again.
 ## The English sound track
 
 ```bash
-scripts/deploy-gpu.sh dub                 # once, from the repository: the jobs on the GPU server
+scripts/deploy-gpu.sh dub                 # once, from the repository: VoxCPM voice-cloning job
 uv run gothic-shorts dub xardas-lie       # a shot's newest take (or `dub xardas-lie 2`) -> <take>/dub.en.wav
 uv run gothic-shorts dub bow              # an explainer -> <workspace>/render/dub.en.wav
 uv run gothic-shorts dub bow --reclone    # the user's kept voice made anew from bow's recordings
 ```
 
 YouTube offers a video's sound in several languages (Studio: Subtitles, the video, the language's Audio
-column; the API has no call for it, and the channel needs YouTube's advanced features). `dub` makes the English one: a WAV (48 kHz stereo,
-24-bit) exactly as long as the Russian short, -14 LUFS like the cut, and `dub.en.mp4`, the Russian short with
-it as the first sound track and the Russian as the second (QuickTime: View, Languages), to hear it as a viewer
-will. It prints every line: where it starts, its length against its slot, the speed-up, the gain.
+column; the API has no call for it, and the channel needs YouTube's advanced features). Publish the Russian
+short with `gothic-shorts cut` or `gothic-shorts explain` first: `short-ru.mp4` and a successful
+`short-ru.levels.json` (`"ok": true`) must be beside the dub's outputs. The current shot or plan must still
+have the published short's duration (within one frame at 30 fps).
 
-- **A shot's take.** The game's sound without the npc's Russian voices: Demucs (htdemucs_ft) on the GPU server
-  splits `main.wav` into the voices and the rest (~10 s for a 45 s take, kept in `<take>/dub-en/`), and the
-  rest stands in for the sound from 0.3 s before an npc's line to 0.3 s after, the recording's own sound
-  elsewhere. Every line in English: the take's `subs.en.json` (what the captions say; the hook and captions
-  stay burnt in in Russian), in the voice the game speaks Russian in: the TTS service voices a Russian
+`dub` replaces the Russian voice stem with English and publishes through the same `levels.publish` as the
+Russian short: voice −14 LUFS, true peak at most −1 dBTP after AAC, voice above effects above music, the
+ending at S−6, and no clicks. It writes `dub.en.levels.json` with the checks and prints the levels table,
+each line's timing, speed-up and gain, and both languages' mastered voice levels. `dub.en.mp4` copies the
+Russian picture without re-encoding, with the verified English AAC first (default, `eng`) and the original
+Russian audio second (`rus`), with faststart. `dub.en.wav` decodes that English AAC to 48 kHz stereo,
+24-bit PCM, exactly as long as the Russian short's audio (within 1 ms). Input-check refusals leave previous
+dub files untouched; old outputs are removed only when assembly starts, after which failures leave neither
+WAV nor MP4, while a failed levels report is kept.
+
+- **A shot's take.** Effects, the brand ending and the music bed are built by the same code as the Russian
+  cut, with the same removed AI pauses. The recording must have separate `npc_voice` and have been made
+  with `musicVolume=0` and `worldSounds=0`, as `cut` requires; older takes must be recorded again. No voice
+  separation or GPU job is needed for the sound stems. Every line in English: the take's `subs.en.json`
+  (what the captions say; the hook and captions stay burnt in in Russian), in the voice the game speaks
+  Russian in: the TTS service voices a Russian
   sample (~17 s) in the npc's voice (its id and description from the AI server, `gothic-ai voices <npc>`;
   the hero's the shot's `hero_voice`), Inworld clones it (Instant Voice Cloning, `gothic-tts say --clone`),
   and the clone says the English lines, so the timbre stays the Russian one. When that fails Inworld
   designs an en-US voice from the description, and then the launcher's fallback takes over, as in the
   game: VoxCPM2 on the GPU server designs one reading an English sample (as the voxcpm bridge does with
   its Russian one) and says the lines in it (`--tts voxcpm` picks it). A fallback says why the way before
-  it failed. Each line starts where its Russian one starts and is as loud as it was in the game's sound
-  (the separated voices measured over it; the hero's recording); the cut's pauses go out with the same
-  parts of the recording. The lines are kept by voice and text in `.shorts/voice/en/`, the voices in the
-  kept voices (below) and Inworld's library (`gothic-ai <id>@en~ru`). The lip sync stays the Russian one.
+  it failed. Each line starts where its Russian one starts; all English lines of each speaker are levelled
+  together with `stems.speaker_gains`, with short fades at their edges, as in the Russian voice stem.
+  The lines are kept by voice and text in `.shorts/voice/en/`, the voices in the kept voices (below) and
+  Inworld's library (`gothic-ai <id>@en~ru`). The lip sync stays the Russian one.
 - **An explainer.** `script.en.txt` (the caption track's text, without its `|`) in the user's own voice: by
   Inworld, the clone `USER` of the kept recording `user.inworld.wav` (20-29 s of the user's lines; its best
   is 10-30 s), or, when Inworld fails, by VoxCPM2 on the GPU server from `user.voxcpm.wav` (8-14 s: its
   encoder takes up to 15 s); cleaned as the Russian takes were (`words.py`'s chain), each line from where
-  its Russian line's first word is said (`words.ru.json`), as loud as the Russian voice, over the plan's
-  music bed (`plan.json`, `--plan` for another) faded and ducked under the English lines as `Explainer.tsx`
-  ducks it under the Russian ones. The lines live in `voice/en/` and are made again only when the voice or
-  a text changes. A plan that plays the footage's own sound (`gameVolume` above 0) is refused: the dub
-  mixes the music and the voice only.
+  its Russian line's first word is said (`words.ru.json`). Remotion renders only the `game` and `music`
+  stems from the Russian plan (`plan.json`, `--plan` for another); the picture comes from the published
+  short, and the English voice replaces its Russian voice stem. Footage sound (`gameVolume` above 0) is
+  supported. English lines are levelled together as one speaker, and `levels.publish` balances the stems
+  using the English speech windows and the Russian publication's music fades. The lines live in `voice/en/`
+  and are made again only when the voice or a text changes.
 
 The voices are kept for every short and every checkout in `~/.local/share/gothic-ai/voices/`, so each is
 cloned or designed once: `user.inworld.wav` and `user.voxcpm.wav` (the user's recorded voice, made from
@@ -300,10 +312,44 @@ kept); one longer still is reported, and `dub` exits with 1 after writing the tr
 the translation and run it again. Inworld and VoxCPM read English at about 12-14 characters a second.
 Inworld bills the lines and the samples: check its credits first (`gothic-launcher` does).
 
-The jobs (`shorts/deploy/dub`, in `~/gothic-ai/dub` on the server): `separate.sh <wav> <out dir>` (Demucs in a
-venv of its own, ~2 GB of GPU memory while it runs) and `clone.sh <reference> <lines.json> <out dir>
-[--design <json>]` (through the engine of the running gothic-voxcpm, no GPU memory of its own; the game's
-lines wait their turn meanwhile). Files go over by scp into a fresh folder there and it is deleted after.
+The voice-cloning job (`shorts/deploy/dub`, in `~/gothic-ai/dub` on the server) is
+`clone.sh <reference> <lines.json> <out dir> [--design <json>]`. It uses only Python's standard library and
+the engine of the running gothic-voxcpm, with no GPU memory of its own; the game's lines wait their turn
+meanwhile. Files go over by scp into a fresh folder there and it is deleted after.
+
+## Covers
+
+Template B is a 1080×1920 JPEG (at most 2 MB): a dark band with soft 60 px edges at the seam of the
+two takes, an uppercase white topic in Arial Black and an optional gold second line, with a dark outline
+and blurred shadow. It needs macOS's `/System/Library/Fonts/Supplemental/Arial Black.ttf`.
+Both lines stay in the centre square (y 420–1500), also safe in the channel grid's centre 2:3 crop.
+
+A comparison plan can select its clean cover frame, in seconds of the recorded segment:
+
+```json
+"cover": {
+  "segment": "tavern", "at": 1.2,
+  "title": {"ru": "МЕБЕЛЬ", "en": "FURNITURE"},
+  "sub": {"ru": "БЫЛО → СТАЛО", "en": "BEFORE → AFTER"}
+}
+```
+
+`sub` is optional and defaults to those two translations. `compare/cut.py` stacks off/on frames at `at`
+with the cut's `GRADE`, without its labels or subtitles, and writes `cover-<lang>.jpg` beside
+`short-<lang>.mp4`. Without `cover` it only prints that no cover was requested.
+For AI shorts and explainers, use a video frame or an image (centre cropped to 1080×1920):
+
+```bash
+uv run gothic-shorts cover path/to/short-ru.mp4 --at 1.8 --title "МАГИЯ" --sub "БЫЛО → СТАЛО" --out cover-ru.jpg
+uv run gothic-shorts cover frame.png --title "МЕБЕЛЬ"  # -> cover.jpg beside frame.png, no second line
+uv run gothic-shorts upload path/to/short-ru.mp4 --meta path/to/youtube.json --thumbnail cover-ru.jpg
+uv run gothic-shorts thumbnail <video-id> cover-ru.jpg  # asks first; --yes skips confirmation
+```
+
+`--thumbnail` sets the cover after uploading; `thumbnail` sets it on an existing video. Both check the
+channel as `upload` does. The request uses `thumbnails.set`, `uploadType=media`, `image/jpeg`; the existing
+`youtube.upload` scope is enough. If YouTube rejects a cover during `upload`, the video stays up and the command
+prints the error and a reminder to choose a frame in the YouTube app.
 
 ## Uploading to YouTube
 
@@ -314,6 +360,7 @@ uv run gothic-shorts upload .shorts/xardas-lie/take-02/short-ru.mp4 --meta .shor
     --captions en=.shorts/xardas-lie/take-02/subs.en.srt
 uv run gothic-shorts srt bow                           # an explainer: subs.en.srt from script.en.txt
 uv run gothic-shorts captions <video id> subs.en.srt --lang en   # a track on a video already up
+uv run gothic-shorts translate <video id> --meta youtube.json    # its other languages on a video already up
 ```
 
 A short is one video in every language, not one upload per language: its sound is Russian (the game is;
@@ -324,7 +371,8 @@ them: a shot's take from its `subs.<lang>.json` on the cut's time (an npc's line
 burnt-in hook and captions in brackets), an explainer from `script.<lang>.txt` over its Russian voice
 (`words.ru.json`, the `|` chunks one after another). Caption tracks need the `youtube.force-ssl` scope: a
 sign-in older than it can still upload, but `--captions` asks to `youtube login` again before it sends
-anything. An English audio track (`gothic-shorts dub`) is added in Studio (Subtitles, the video, the
+anything. `translate` adds the other sections' titles and descriptions to a video already up (videos.update,
+the same scope): its own title, description, tags and other translations stay as they are. An English audio track (`gothic-shorts dub`) is added in Studio (Subtitles, the video, the
 language's Audio column); the API has no call for it, and Studio shows the column only to channels with
 YouTube's advanced features.
 

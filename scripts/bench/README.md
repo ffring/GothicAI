@@ -21,6 +21,17 @@ or other Mac-only game paths require local execution (`auto` falls back, `ryzen`
 For performance comparisons (before/after or FPS), run both takes on the same machine:
 pin `BENCH_HOST=ryzen` or `BENCH_HOST=local`. `host.txt` and the report header identify the host.
 
+Corpse water: `water-bodies` records a real harbour WindFist throw, a dead wolf and a
+sinking skeleton, then saves `session-water-bodies.sav` and tries normal corpse loot
+from dry ground and while swimming. `water-bodies-shallow` observes a corpse on the
+submerged shore. Start `water-bodies-reload` in a new process with `SAVE` pointing to
+that complete archive; its initial snapshot precedes the first native step.
+`water-bodies-perf-on` and `water-bodies-perf-off` measure the same ten human corpses
+over a 30-second normal-cadence window without recording video.
+`python3 scripts/water_bodies_compare.py deep DIR`, `shallow DIR`,
+`reload SAVED_DIR LOADED_DIR` and `perf ON_DIR OFF_DIR` check the native parts,
+immersion, sleep, 30-second stability and the 2 ms physics p95 budget.
+
 A run takes the game start (~10 s from a save) plus the scenario time. On Mac the game window is minimized,
 does not take the focus and plays no sound, so it can run while someone works on the same machine.
 The time step is fixed (30 fps), so a run does not depend on the frame rate and repeats (up to the
@@ -813,3 +824,86 @@ spell/arrow contacts and hearing use production paths. `destruction_*` events re
 identity, real drop trajectories, piece movement/sleep and break wall time. The scenario writes PNGs,
 six videos with optional WAV audio, and `session-destruction-scattered.sav` beneath its output directory.
 The save uses the previous format; transient fixture props and fragments are not saved.
+
+
+Cloth acceptance uses authored level surfaces and mesh-vobs. Each functional
+scenario records the original OFF and Jolt ON from the same fixed camera,
+including calm and smoothly increasing gusts. Ship sails are the furled cloth
+already present in the level. The harbour scenario includes the whole ship,
+a close main-mast flag with a native Fireball, and a close furled sail. The city
+scenario fires an arrow through an extracted banner. The Valley of Mines
+scenarios show the native `S_WINDY` orc standard and the Old Camp banner; the
+latter also records both 40 m crossings and exports a moving-cloth save.
+`cloth-arrow-npc` checks the harbour wind and two single-step native arrow paths:
+cloth before the NPC must receive an impulse; cloth behind the stopping NPC must
+not. A fixture NPC is held only for these checks; production NPC logic is unchanged.
+Use the separate `cloth-on`/`cloth-off` scenarios for a clean-world timing pair without the fixture NPC.
+
+```sh
+WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-harbour /absolute/path/cloth/harbour
+WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-city /absolute/path/cloth/city
+BENCH_HOST=ryzen RYZEN_BENCH_CLASS=quiet WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-arrow-npc /absolute/path/cloth/review-arrow-npc
+WORLD=OLDWORLD.ZEN scripts/bench.sh cloth-orc /absolute/path/cloth/orc
+WORLD=OLDWORLD.ZEN scripts/bench.sh cloth /absolute/path/cloth/oldcamp
+SAVE=/absolute/path/cloth/oldcamp/session-cloth-moving.sav scripts/bench.sh cloth-reload /absolute/path/cloth/reload
+CLOTH=0 SAVE=/absolute/path/older-save.sav scripts/bench.sh cloth-legacy-load /absolute/path/cloth/legacy-load
+BENCH_HOST=ryzen RYZEN_BENCH_CLASS=quiet WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-off /absolute/path/cloth/performance/off
+BENCH_HOST=ryzen RYZEN_BENCH_CLASS=quiet WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-on /absolute/path/cloth/performance/on
+```
+
+Videos that verify Metal/MoltenVK run on Mac with `BENCH_HOST=local`; put their
+output beneath `~/.local/share/gothic-ai/saves/cloth/` and check that no other game
+is running first. Other benches use Ryzen by default. `cloth initial` observes
+the untouched loaded world before its first native step: no active soft bodies,
+zero vertex speeds and zero transient hit/recovery counters. Saves use the
+ordinary GameSession archive and can be started in a separate process.
+`CLOTH=0` writes the ini switch before world loading. The legacy-load fixture
+also checks Marvin `toggle cloth` in both directions before enabling simulation.
+
+Use the same binary, world and host for both performance runs. `densest` searches
+cloth centers and local cluster centroids, counts the unchanged 3D 40 m sphere,
+and chooses the observer with the greatest real count. Compare the actual count
+in the Khorinis and Valley fixtures before selecting the final timed scene.
+Supported native floor is preferred. For ship flags more than 40 m above deck,
+the fixture can hold the actual hero in static flight near the mast; this is
+recorded as `observer_support: fixture-static-flight` and changes no production
+activation rule. The camera remains independent of that observer.
+
+`cloth-on` and `cloth-off` use the native game clock for 30 seconds, without
+video or per-frame mesh snapshots. `appcadence.csv` contains completed app frame
+intervals; `cloth-physics.csv` contains native physics step costs.
+`cloth_measure_before` and `cloth_measure_after` include actual soft-body counts
+and physics p95. Capture cadence is not game FPS. Local performance builds need
+`-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`; Ryzen enables this option automatically.
+`RYZEN_BENCH_CLASS=quiet` waits for the other queued work to finish and reserves
+the machine for the timing run; ordinary benches retain `quick`. Set
+`BENCH_HOST=ryzen` for the complete ON/OFF pair. A local cadence scenario refuses
+to start when its build lacks this option, including after an automatic fallback.
+
+| Command | Effect |
+|---|---|
+| `cloth on\|off` | Set the normal `[GAME] cloth` option, also available as Marvin `toggle cloth`. |
+| `cloth setup <zen-id\|visual\|densest> <label>` | Select an authored vob or level cloth island (for example `6367`, `NW_CITY_FLAG_01:1` or `NW_SHIP_FLAG_01:1`), place and hold the observer, and frame the entire cloth from a clear side. Test visible simulated and native-reference vertices against foreground geometry; high ship cloth can be viewed from below its yard. Exact visual labels take precedence over prefix matches. |
+| `cloth camera harbour` | Frame all ten authored ship cloth islands without changing the observer or selected physics target. |
+| `cloth camera-turn <degrees> <duration_ms>` | Smoothly turn a held camera in place, retaining its pitch, then hold the new view. `cloth-visibility` records an authored flag leaving and returning to the camera; checkpoints include `visible` and `simulation_steps` to verify that hidden time is frozen. |
+| `cloth camera-range <cm>` | Move a held cloth camera horizontally to the requested distance from the selected cloth, retain its height and clear side, and verify the whole cloth is unobstructed and framed. Run before recording the turn. |
+| `cloth wind calm\|natural\|gust` | Smoothly set the common world wind scale to 0, 1 or 2. |
+| `cloth checkpoint <label>` | Record physical/rendered vertex counts, anchor error, current and lifetime maximum vertex speed, recovery count, projectile counters and the selected cloth's rendered vertices in cm. |
+| `cloth arrow-npc behind\|ahead` | Invoke one synchronous production `moveBullet` segment with a native precise arrow and a fixture NPC behind or ahead of the selected authored banner. Verify the native bone hit and cloth arrow-pass delta 1 or 0. |
+| `cloth shoot fireball\|wind\|arrow` | Launch a real production Bullet at an exposed cloth face. The fixture does not inject a synthetic impulse or introduce an NPC target. |
+| `cloth verify anchors\|fireball\|wind\|arrow` | Require anchors within 0.5 cm, finite vertices, bounded speeds and no solver recovery; require the selected spell hit; or require an arrow contact and its actual Bullet trajectory at least 30 cm beyond the face. |
+| `cloth verify harbour-wind` | At the densest ship observer require all five active furled sails and four active flags to be outdoors and exposed to the common wind. Record separate total and exposed counts. |
+| `cloth room-check <x> <y> <z> indoor\|outdoor` | Check production room classification at an authored world position, recording the point, legacy BSP room name, actual classification and expected result. This adds no cloth or other fixture object. |
+| `cloth distance <cm>` | Move the actual hero to the requested 3D distance, retaining the camera and existing native-support or static-flight fixture mode. |
+| `cloth reset-stats` | Reset transient solver measurements. |
+| `cloth save <label>` | Write `session-cloth-<label>.sav` as a complete ordinary GameSession archive under the output directory. |
+| `cloth initial <label>` | First command of a fresh process: observe and verify transient cloth rest before the first native world step. |
+| `cloth measure on\|off`, `cloth report` | Start and report the normal-clock timing window after `cadence normal`; complete it with `cadence wait`. |
+
+Functional `cloth_sample` events include the maximum rendered vertex displacement
+since the preceding frame. Active-state changes include the complete rendered
+vertex list; explicit checkpoints and the named before/after PNGs retain both
+sides of each radius crossing. `transition_blend_delta_cm` isolates the blend's
+contribution from natural movement. A calm checkpoint is taken after 10 seconds
+at zero wind following the wind ramp. The arrow's native post-face positions are
+retained as `cloth_arrow_trajectory` events.

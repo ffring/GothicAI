@@ -11,10 +11,10 @@ from pathlib import Path
 from gothic_launcher.commands import LaunchError, find_layout, load_config, tools
 from gothic_launcher.settings import Config, SettingsError
 
+from . import cover, srt, youtube
 from . import cut as cutting
-from . import srt, youtube
 from .align import AlignError, align
-from .dub import DubError, dub_explainer, dub_take
+from .dub import DubError, dub_compare, dub_explainer, dub_take
 from .explain import ExplainError
 from .explain import publish as publish_explainer
 from .film import FilmError, film, shorts_dir
@@ -89,6 +89,13 @@ def cmd_cut(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cover(args: argparse.Namespace) -> int:
+    source = Path(args.source)
+    out = Path(args.out) if args.out else source.with_name("cover.jpg")
+    print(cover.save(cover.render(cover.frame(source, args.at), args.title, args.sub), out))
+    return 0
+
+
 def cmd_subs(args: argparse.Namespace) -> int:
     shot, config = _shot(args.shot), _config()
     take = _take(config, shot, args.take)
@@ -121,7 +128,7 @@ def cmd_srt(args: argparse.Namespace) -> int:
 
 
 def cmd_dub(args: argparse.Namespace) -> int:
-    """A shot's take, or an explainer's workspace: its English sound track"""
+    """A shot's take, or an explainer/comparison workspace: its English sound track"""
     try:
         shot = _shot(args.short)
     except ShotError:
@@ -130,13 +137,18 @@ def cmd_dub(args: argparse.Namespace) -> int:
         config = _config()
         done = dub_take(config, shot, _take(config, shot, args.take), args.lang, args.tts)
     else:
-        done = dub_explainer(_config(), workspace(args.short), args.lang, args.plan, args.tts, args.reclone)
-    print("  start who            length/slot  tempo  gain  text")
-    for row in done.rows:
-        print(f"  {row}")
+        ws = workspace(args.short)
+        try:
+            plan = json.loads((ws / args.plan).read_text())
+        except (OSError, ValueError):
+            plan = {}  # Let the publisher validate its inputs under the publication lock.
+        if any("segment" in beat for beat in plan.get("beats", [])):
+            done = dub_compare(_config(), ws, args.lang, args.plan, args.tts, args.reclone, args.takes)
+        else:
+            done = dub_explainer(_config(), ws, args.lang, args.plan, args.tts, args.reclone)
     ru = f"{done.ru_duration:.3f} s" if done.ru_duration is not None else "no Russian short to compare"
-    print(f"{done.wav}: {done.duration:.3f} s (the Russian short: {ru}), {_lufs(done.lufs)} "
-          f"(the Russian: {_lufs(done.ru_lufs)})")  # fmt: skip
+    print(f"{done.wav}: {done.duration:.3f} s (the Russian short: {ru}), "
+          f"voice_mastered: EN {_lufs(done.lufs)}, RU {_lufs(done.ru_lufs)}")
     if done.preview:
         print(f"{done.preview}: the Russian short with it as the first sound track, the Russian second")
     if done.too_long:
@@ -236,6 +248,9 @@ def cmd_upload(args: argparse.Namespace) -> int:
     video = Path(args.video)
     if not video.is_file():
         raise YouTubeError(f"no video {video}")
+    thumbnail = Path(args.thumbnail) if args.thumbnail else None
+    if thumbnail and not thumbnail.is_file():
+        raise YouTubeError(f"no thumbnail {thumbnail}")
     meta = youtube.load_meta(Path(args.meta), args.lang)
     meta.privacy = args.privacy
     captions = _captions(args.captions or [])
@@ -253,6 +268,14 @@ def cmd_upload(args: argparse.Namespace) -> int:
         return 1
     vid = youtube.upload(video, meta, token)
     print(f"uploaded: https://youtu.be/{vid}  (id {vid})")
+    if thumbnail:
+        try:
+            youtube.set_thumbnail(youtube.access_token(), vid, thumbnail)
+        except YouTubeError as err:
+            print(f"thumbnail: {err}", file=sys.stderr)
+            print("the video is up; choose a cover frame in the YouTube mobile app", file=sys.stderr)
+        else:
+            print(f"thumbnail: {thumbnail}")
     got = youtube.privacy(youtube.access_token(), vid)
     if got != meta.privacy:
         raise YouTubeError(f"YouTube made the video {got}, not {meta.privacy}: the project may need "
@@ -264,6 +287,43 @@ def cmd_upload(args: argparse.Namespace) -> int:
             raise YouTubeError(f"YouTube kept no translation into {', '.join(sorted(missing))}")
         print(f"translations: {', '.join(meta.localizations)}")
     _add_captions(vid, captions)
+    return 0
+
+
+def cmd_thumbnail(args: argparse.Namespace) -> int:
+    file = Path(args.file)
+    if not file.is_file():
+        raise YouTubeError(f"no thumbnail {file}")
+    token = _channel(args.channel)
+    print(f"video:   https://youtu.be/{args.video}")
+    print(f"thumbnail: {file}")
+    if not args.yes and input("set the thumbnail? [y/N] ").strip().lower() != "y":
+        print("not set")
+        return 1
+    youtube.set_thumbnail(token, args.video, file)
+    print(f"thumbnail set: {file}")
+    return 0
+
+
+def cmd_translate(args: argparse.Namespace) -> int:
+    meta = youtube.load_meta(Path(args.meta), args.lang)
+    if not meta.localizations:
+        raise YouTubeError(f"{args.meta} has no language besides {args.lang}")
+    token = _channel(args.channel)
+    if youtube.CAPTIONS_SCOPE not in youtube.granted():
+        raise YouTubeError("the sign-in can not change a video (it has no youtube.force-ssl): "
+                           "gothic-shorts youtube login")
+    print(f"video:   https://youtu.be/{args.video}")
+    for lang, text in meta.localizations.items():
+        print(f"{lang}:      {text['title']}")
+    if not args.yes and input("set these translations? [y/N] ").strip().lower() != "y":
+        print("not set")
+        return 1
+    have = youtube.set_translations(token, args.video, meta.localizations)
+    missing = set(meta.localizations) - have
+    if missing:
+        raise YouTubeError(f"YouTube kept no translation into {', '.join(sorted(missing))}")
+    print(f"translations: {', '.join(sorted(have))}")
     return 0
 
 
@@ -326,6 +386,14 @@ def main() -> None:
     s.add_argument("--out", help="the output file (default: <take>/short-<lang>.mp4)")
     s.set_defaults(fn=cmd_cut)
 
+    s = sub.add_parser("cover", help="render the channel's cover from a video frame or an image")
+    s.add_argument("source", help="a video or image")
+    s.add_argument("--at", type=float, default=0, help="second in the video (default: 0)")
+    s.add_argument("--title", required=True, help="the topic, rendered in uppercase")
+    s.add_argument("--sub", help="optional second line in gold")
+    s.add_argument("--out", help="the JPEG output (default: cover.jpg beside the input)")
+    s.set_defaults(fn=cmd_cover)
+
     s = sub.add_parser("subs", help="write subs.<lang>.json of a take: the texts to translate")
     s.add_argument("shot")
     s.add_argument("take", nargs="?")
@@ -339,12 +407,13 @@ def main() -> None:
     s.add_argument("--lang", default="en")
     s.set_defaults(fn=cmd_srt)
 
-    s = sub.add_parser("dub", help="the English sound track of a short: a take of a shot, or an explainer")
-    s.add_argument("short", help="a shot (its newest take, or `take`), or an explainer's workspace or name")
+    s = sub.add_parser("dub", help="the English sound track of a shot, explainer or comparison")
+    s.add_argument("short", help="a shot (its newest take, or `take`), or a workspace or name")
     s.add_argument("take", nargs="?", help="the shot's take folder or number")
     s.add_argument("--lang", default="en", help="the track's language: en")
     s.add_argument("--tts", help="inworld or voxcpm (default: the launcher's provider, then its fallback)")
-    s.add_argument("--plan", default="plan.json", help="the explainer's plan, the one of its Russian render")
+    s.add_argument("--plan", default="plan.json", help="the workspace's plan, the one of its Russian render")
+    s.add_argument("--takes", help="comparison takes folder (overrides takes in the plan)")
     s.add_argument("--reclone", action="store_true",
                    help="an explainer: the user's voice made anew from its recordings (cloned again)")
     s.set_defaults(fn=cmd_dub)
@@ -390,12 +459,29 @@ def main() -> None:
                         "their translations")
     s.add_argument("--captions", action="append", metavar="LANG=FILE",
                    help="a caption track to add, e.g. en=<take>/subs.en.srt (gothic-shorts srt); repeatable")
+    s.add_argument("--thumbnail", metavar="FILE", help="set this JPEG cover after uploading")
     s.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
                    help="public goes straight out, no audit needed; the status is read back after the upload")
     s.add_argument("--channel", default=youtube.CHANNEL,
                    help="upload only to this channel id (GOTHIC_YOUTUBE_CHANNEL, the project's GothicAI)")
     s.add_argument("--yes", action="store_true", help="do not ask before uploading")
     s.set_defaults(fn=cmd_upload)
+
+    s = sub.add_parser("thumbnail", help="set a JPEG cover on a video already on the channel")
+    s.add_argument("video", help="the video's id")
+    s.add_argument("file", help="the JPEG cover (gothic-shorts cover), at most 2 MB")
+    s.add_argument("--channel", default=youtube.CHANNEL, help="the channel (GOTHIC_YOUTUBE_CHANNEL)")
+    s.add_argument("--yes", action="store_true", help="do not ask before setting")
+    s.set_defaults(fn=cmd_thumbnail)
+
+    s = sub.add_parser("translate", help="add the title and the description in other languages to a video "
+                                         "already on the channel")
+    s.add_argument("video", help="the video's id")
+    s.add_argument("--meta", required=True, help="the short's youtube.json: every section but --lang goes in")
+    s.add_argument("--lang", default="ru", help="the video's own language in youtube.json (default: ru)")
+    s.add_argument("--channel", default=youtube.CHANNEL, help="the channel (GOTHIC_YOUTUBE_CHANNEL)")
+    s.add_argument("--yes", action="store_true", help="do not ask before setting")
+    s.set_defaults(fn=cmd_translate)
 
     s = sub.add_parser("captions", help="add a caption track to a video already on the channel")
     s.add_argument("video", help="the video's id")
@@ -409,6 +495,6 @@ def main() -> None:
     try:
         sys.exit(args.fn(args))
     except (ShotError, FilmError, VoiceError, cutting.CutError, LaunchError, SettingsError,
-            YouTubeError, AlignError, StudioError, DubError, GpuError, ExplainError) as err:
+            YouTubeError, AlignError, StudioError, DubError, GpuError, ExplainError, cover.CoverError) as err:
         print(f"error: {err}", file=sys.stderr)
         sys.exit(1)

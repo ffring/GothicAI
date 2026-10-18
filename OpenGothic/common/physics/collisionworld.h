@@ -22,6 +22,7 @@ class PhysicVbo;
 class Skeleton;
 class HitZones;
 class Ragdoll;
+class Cloth;
 namespace zenkit { struct INpc; }
 namespace JPH { class PhysicsSystem; }
 
@@ -165,6 +166,9 @@ class CollisionWorld final {
     bool buoyancyEnabled() const;
     struct WaterBodySnapshot {
       const CollisionBody* body = nullptr;
+      const Ragdoll* ragdoll = nullptr;
+      uint32_t bone = 0, nativeId = 0;
+      float targetFraction = 0;
       Tempest::Matrix4x4 transform;
       Tempest::Vec3 worldBounds[2], velocity;
       float mass = 0, density = 0, waterY = 0, submergedFraction = 0;
@@ -255,12 +259,16 @@ class CollisionWorld final {
     void addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
                  bool movable, bool sensor, float mass, bool startSleeping = false);
     void removeBody(CollisionBody& body);
+    struct BuoyancyBody;
+    template<class F> void forEachBuoyancyBody(F&& callback) const;
+    void restoreRagdollBuoyancy(Ragdoll& rig);
     void prepareBuoyancy(std::vector<PhysicsNoise>& splashes);
     void applyBuoyancyStep(float seconds);
     void finishBuoyancy(float seconds);
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
     void fillRagdoll(QueryResult& result, JPH::BodyID body) const;
     JPH::PhysicsSystem& physicsSystem();
+    friend class ClothContractDriver;
     uint32_t registerRagdoll(Ragdoll& body);
     void unregisterRagdoll(Ragdoll& body);
     std::unique_ptr<Impl> impl;
@@ -272,8 +280,10 @@ class CollisionWorld final {
     std::function<void(const PhysicsNoise&)> physicsNoise;
     std::function<void(CollisionBody&,float,const Tempest::Vec3&,std::string_view)> bodyImpact;
     std::function<bool(const Tempest::Vec3&,float,float&)> waterSurface;
+    Cloth* cloth = nullptr;
     bool buoyancy = true;
     JPH::Vec3 bboxMin = JPH::Vec3::sZero();
     float accumulatedTime = 0;
     friend class Ragdoll;
+    friend class Cloth;
   };

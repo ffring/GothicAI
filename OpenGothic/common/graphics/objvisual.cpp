@@ -6,6 +6,7 @@
 #include "game/serialize.h"
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/skeleton.h"
+#include "graphics/clothvisual.h"
 #include "utils/fileext.h"
 #include "physics/fracture.h"
 
@@ -120,6 +121,9 @@ ObjVisual::ObjVisual(ObjVisual&& other) {
   fracture = std::move(other.fracture);
   if(fracture)
     fracture->owner = this;
+  cloth = std::move(other.cloth);
+  if(cloth)
+    cloth->setView(mesh.view);
   }
 
 ObjVisual& ObjVisual::operator =(ObjVisual&& other) {
@@ -127,6 +131,7 @@ ObjVisual& ObjVisual::operator =(ObjVisual&& other) {
     return *this;
   renderMatrix = other.renderMatrix;
   fracture.reset();
+  cloth.reset();
   setType(other.type);
   other.type = M_None;
 
@@ -149,6 +154,9 @@ ObjVisual& ObjVisual::operator =(ObjVisual&& other) {
   fracture = std::move(other.fracture);
   if(fracture)
     fracture->owner = this;
+  cloth = std::move(other.cloth);
+  if(cloth)
+    cloth->setView(mesh.view);
   return *this;
   }
 
@@ -167,6 +175,7 @@ void ObjVisual::load(Serialize& fin, Interactive& mob) {
   }
 
 void ObjVisual::cleanup() {
+  cloth.reset();
   fracture.reset();
   switch(type) {
     case M_None:
@@ -242,13 +251,14 @@ void ObjVisual::setVisual(const zenkit::VirtualObject& vob, World& world, bool s
         return;
       setType(M_Mesh);
       mesh.proto = view;
+      const bool windy = (vob.anim_mode!=zenkit::AnimationType::NONE && vob.anim_strength>0);
       if(vob.show_visual) {
         mesh.view = world.addStaticView(view,staticDraw);
         mesh.view.setWind(vob.anim_mode,vob.anim_strength);
+        cloth = ClothVisual::create(mesh.view,world,vob,enableCollision && !windy);
         }
 
-      const bool windy = (vob.anim_mode!=zenkit::AnimationType::NONE && vob.anim_strength>0);
-      if(vob.show_visual && enableCollision && !windy) {
+      if(vob.show_visual && enableCollision && !windy && !cloth) {
         mesh.physic = PhysicMesh(*view,*world.physic(),false);
         }
       break;
@@ -262,6 +272,21 @@ void ObjVisual::setVisual(const zenkit::VirtualObject& vob, World& world, bool s
       auto view = Resources::loadMesh(visual);
       if(!view)
         return;
+      // Authored cloth morph meshes have no skeleton. Keep their normal mesh
+      // morph animation as the distant fallback while binding nearby Jolt cloth.
+      if(vob.visual->type==zenkit::VisualType::MORPH_MESH && ClothVisual::supports(visName)) {
+        setType(M_Mesh);
+        mesh.proto = view;
+        if(vob.show_visual) {
+          mesh.view = world.addStaticView(view,staticDraw);
+          mesh.view.setWind(vob.anim_mode,vob.anim_strength);
+          cloth = ClothVisual::create(mesh.view,world,vob,enableCollision);
+          // If a resource fails to bind, retain the native complete collider.
+          if(!cloth && enableCollision)
+            mesh.physic = PhysicMesh(*view,*world.physic(),true);
+          }
+        break;
+        }
       setType(M_Mdl);
       mdl.proto = view;
       mdl.view.setYTranslationEnable(false);
@@ -319,6 +344,8 @@ void ObjVisual::setObjMatrix(const Tempest::Matrix4x4& obj) {
     case M_Mesh:
       mesh.view.setObjMatrix(fracture && fracture->broken ? hiddenFractureMatrix() : obj);
       mesh.physic.setObjMatrix(obj);
+      if(cloth)
+        cloth->setMatrix(obj);
       break;
     case M_Pfx:
       pfx.setObjMatrix(obj);

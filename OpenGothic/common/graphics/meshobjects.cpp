@@ -80,6 +80,16 @@ void MeshObjects::Mesh::setWind(zenkit::AnimationType m, float intensity) {
     sub[i].setWind(m,intensity);
   }
 
+void MeshObjects::Mesh::setVisible(bool visible) {
+  for(size_t i=0;i<subCount;++i)
+    sub[i].setVisible(visible);
+  }
+
+void MeshObjects::Mesh::setDeformation(const std::vector<Tempest::Vec4>& vertices) {
+  for(size_t i=0;i<subCount;++i)
+    sub[i].setDeformation(vertices);
+  }
+
 void MeshObjects::Mesh::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly) {
   for(size_t i=0;i<subCount;++i)
     sub[i].startMMAnim(anim,intensity,timeUntil,freeOnly);
@@ -95,6 +105,15 @@ float MeshObjects::Mesh::morphWeight(std::string_view anim) const {
   for(size_t i=0;i<subCount;++i)
     w = std::max(w, sub[i].morphWeight(anim));
   return w;
+  }
+
+VisualObjects::MorphSample MeshObjects::Mesh::morphSample(std::string_view anim, uint64_t tick) const {
+  for(size_t i=0;i<subCount;++i) {
+    const auto sample = sub[i].morphSample(anim,tick);
+    if(sample.intensity>0.f)
+      return sample;
+    }
+  return {};
   }
 
 Bounds MeshObjects::Mesh::bounds() const {

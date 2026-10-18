@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Create the asset-free C++/NumPy navigation-policy contract fixture.
 
-The default is deterministic small weights and 1000 synthetic NAVDEMO records.
+The default is deterministic small weights and 1000 synthetic NAVDEMO v2 records.
+Use --navdemo-version 1 for the synthetic v1 preprocessing contract. Supplied
+weights select their input version from their own header.
 For the recorded-step acceptance check, pass the trained weights and an episode
 with at least 1000 decisions (or a recording directory containing such an episode):
 
@@ -32,8 +34,59 @@ from nav_bc_numpy import NumpyPolicy
 import nav_demos as demos
 
 
-def synthetic_weights(path: Path) -> None:
+ROAD_FIELDS = {
+    1: ["next_direction", "next_distance_cm", "goal_direction", "goal_distance_cm", "remaining_visual_cm", "goal_in_known"],
+    2: ["carrot_direction", "carrot_distance_cm", "goal_direction", "goal_distance_cm", "remaining_known_cm", "beyond_known"],
+}
+
+
+def fixture_preprocessing(navdemo_version: int) -> dict:
+    """Describe the checker input without changing the v2-only training path."""
+    if navdemo_version not in ROAD_FIELDS:
+        raise ValueError(f"unsupported NAVDEMO version: {navdemo_version}")
+    preprocessing = {**data.PREPROCESSING, "navdemo_version": navdemo_version,
+                     "roads_schema": "carrot_v2" if navdemo_version == 2 else "next_v1",
+                     "roads_fields": ROAD_FIELDS[navdemo_version].copy()}
+    if navdemo_version == 1:
+        preprocessing["roads"] = (
+            "next_direction[3], next_distance_cm/1000, goal_direction[3], goal_distance_cm/1000, "
+            "remaining_visual_cm/1000, goal_in_known; distances clipped [0,50]")
+        preprocessing["road_baseline"] = (
+            "always forward and walk, turn=-sign(atan2(next_direction.x,next_direction.z)) outside 5deg")
+    return preprocessing
+
+
+def weight_input_version(header: dict, vector_size: int) -> int:
+    """Keep fixture inputs consistent with the supplied policy's declared shape."""
+    preprocessing = header.get("preprocessing", {})
+    if vector_size != data.VECTOR_SIZE or preprocessing.get("vector_order") != ["eye", "roads", "body"]:
+        raise ValueError("weights must declare sensor-only vector_order: eye, roads, body and vector_size=2166")
+    version = preprocessing.get("navdemo_version", 1)
+    if type(version) is not int or version not in ROAD_FIELDS:
+        raise ValueError(f"unsupported weight NAVDEMO version: {version}")
+    expected = fixture_preprocessing(version)
+    for key in ("roads_schema", "roads_fields"):
+        if (version == 2 or key in preprocessing) and preprocessing.get(key) != expected[key]:
+            raise ValueError(f"weight {key} differs from NAVDEMO v{version} preprocessing")
+    return version
+
+
+def fixture_features(record: np.ndarray, layout: np.ndarray, navdemo_version: int) -> dict[str, np.ndarray]:
+    """Encode v1 only here; its ten road slots share the v2 numeric transform."""
+    if navdemo_version not in demos.RECORD_DTYPES or record.dtype != demos.RECORD_DTYPES[navdemo_version]:
+        raise ValueError("record dtype differs from the weight NAVDEMO version")
+    inputs = demos.learner_input(record)
+    if navdemo_version == 1:
+        # Packed road layouts and normalizations match: next/carrot direction,
+        # distance, goal, remainder, then the version's own unchanged flag bit.
+        # The checker only reads this view; the source record stays unchanged.
+        inputs = {**inputs, "roads": inputs["roads"].view(demos.ROADS_V2_DTYPE)}
+    return data.encode_features(inputs, layout)
+
+
+def synthetic_weights(path: Path, navdemo_version: int = 2) -> None:
     """A small valid export built without importing the Torch training module."""
+    preprocessing = fixture_preprocessing(navdemo_version)
     hidden = 8
     shapes = []
     for prefix in ("near_encoder", "far_encoder"):
@@ -72,14 +125,16 @@ def synthetic_weights(path: Path) -> None:
     }
     header = {"format": "gothic-nav-bc", "version": 1, "byte_order": "little", "data_nbytes": offset,
               "offset_origin": "first byte after JSON header newline", "architecture": architecture,
-              "preprocessing": data.PREPROCESSING, "tensors": tensors}
+              "preprocessing": preprocessing, "tensors": tensors}
     with path.open("wb") as stream:
         stream.write(json.dumps(header, separators=(",", ":")).encode() + b"\n")
         for values in payload:
             stream.write(values)
 
 
-def synthetic_records(steps: int) -> tuple[np.ndarray, Iterator[np.ndarray]]:
+def synthetic_records(steps: int, navdemo_version: int = 2) -> tuple[np.ndarray, Iterator[np.ndarray]]:
+    if navdemo_version not in demos.RECORD_DTYPES:
+        raise ValueError(f"unsupported NAVDEMO version: {navdemo_version}")
     layout = np.zeros((demos.RAY_COUNT, 3), dtype=np.float32)
     layout[:, 0] = np.linspace(-179, 179, demos.RAY_COUNT)
     layout[:, 1] = np.tile(np.arange(-3, 4), 34) * 10
@@ -87,7 +142,7 @@ def synthetic_records(steps: int) -> tuple[np.ndarray, Iterator[np.ndarray]]:
 
     def records() -> Iterator[np.ndarray]:
         rng = np.random.default_rng(1731)
-        base = np.zeros(1, dtype=demos.RECORD_DTYPE)
+        base = np.zeros(1, dtype=demos.RECORD_DTYPES[navdemo_version])
         for name in ("memory_near", "memory_far"):
             memory = base[name]
             # A varied small tile keeps the generated contract compact even
@@ -109,12 +164,15 @@ def synthetic_records(steps: int) -> tuple[np.ndarray, Iterator[np.ndarray]]:
             record["body"]["ground_slope_deg"] = rng.uniform(0, 180)
             record["body"]["head_yaw_deg"] = rng.uniform(-180, 180)
             record["body"]["head_pitch_deg"] = rng.uniform(-90, 90)
-            for name in ("next_direction", "goal_direction"):
+            target = "carrot_direction" if navdemo_version == 2 else "next_direction"
+            for name in (target, "goal_direction"):
                 direction = rng.normal(size=3)
                 record["roads"][name] = direction / np.linalg.norm(direction)
-            for name in ("next_distance_cm", "goal_distance_cm", "remaining_visual_cm"):
+            distances = (("carrot_distance_cm", "goal_distance_cm", "remaining_known_cm") if navdemo_version == 2 else
+                         ("next_distance_cm", "goal_distance_cm", "remaining_visual_cm"))
+            for name in distances:
                 record["roads"][name] = rng.uniform(0, 75000)
-            record["roads"]["goal_in_known"] = step % 2
+            record["roads"]["beyond_known" if navdemo_version == 2 else "goal_in_known"] = step % 2
             for name in ("previous_keys", "keys"):
                 for axis in ("forward", "strafe", "turn"):
                     record[name][axis] = rng.integers(-1, 2)
@@ -141,10 +199,12 @@ def synthetic_records(steps: int) -> tuple[np.ndarray, Iterator[np.ndarray]]:
     return layout, records()
 
 
-def recorded_steps(source: Path, steps: int) -> tuple[Path, np.ndarray, Iterator[np.ndarray]]:
+def recorded_steps(source: Path, steps: int, navdemo_version: int = 2) -> tuple[Path, np.ndarray, Iterator[np.ndarray]]:
     candidates = demos.episode_paths(source)
     # Metadata permits selection without decompressing other recordings.
     for samples in candidates:
+        if demos.episode_version(samples) != navdemo_version:
+            continue
         metadata = json.loads((samples.parent / "episode.json").read_text(encoding="utf-8"))
         if metadata.get("decisions", 0) < steps:
             continue
@@ -161,7 +221,7 @@ def recorded_steps(source: Path, steps: int) -> tuple[Path, np.ndarray, Iterator
             if count != steps:
                 raise ValueError(f"episode metadata promised {steps} steps but only {count} were read")
         return samples, layout, records()
-    raise ValueError(f"no episode with {steps} consecutive recorded steps in {source}")
+    raise ValueError(f"no NAVDEMO v{navdemo_version} episode with {steps} consecutive recorded steps in {source}")
 
 
 def main() -> None:
@@ -169,26 +229,29 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--weights", type=Path)
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--navdemo-version", type=int, choices=(1, 2),
+                        help="synthetic weight/record input version (default: 2); supplied weights use their header")
     parser.add_argument("--steps", type=int, default=1000)
     args = parser.parse_args()
     if not args.output.is_absolute() or args.steps < 1:
         parser.error("--output must be absolute and --steps must be positive")
+    if args.weights is not None and args.navdemo_version is not None:
+        parser.error("--navdemo-version is only for generated weights; --weights selects its version from its header")
     args.output.mkdir(parents=True, exist_ok=True)
     weights = args.weights or args.output / "fixture.navbc"
     if args.weights is None:
-        synthetic_weights(weights)
+        synthetic_weights(weights, args.navdemo_version or 2)
     policy = NumpyPolicy(weights)
-    if (policy.vector_size != data.VECTOR_SIZE or
-            policy.header.get("preprocessing", {}).get("vector_order") != data.PREPROCESSING["vector_order"]):
-        raise ValueError("weights must declare sensor-only vector_order: eye, roads, body")
+    navdemo_version = weight_input_version(policy.header, policy.vector_size)
     if args.source:
-        source, layout, records = recorded_steps(args.source, args.steps)
+        source, layout, records = recorded_steps(args.source, args.steps, navdemo_version)
         source_name = str(source)
     else:
-        layout, records = synthetic_records(args.steps)
+        layout, records = synthetic_records(args.steps, navdemo_version)
         source_name = "deterministic synthetic NAVDEMO records"
     header = {"format": "navpolicy-parity", "version": 1, "steps": args.steps,
-              "record_bytes": demos.RECORD_BYTES, "vector_size": data.VECTOR_SIZE,
+              "navdemo_version": navdemo_version,
+              "record_bytes": demos.RECORD_BYTES, "vector_size": policy.vector_size,
               "hidden_size": policy.hidden_size, "heads": list(data.HEADS), "classes": list(data.CLASSES),
               "eye_layout": layout.tolist(), "source": source_name, "carry_hidden": True}
     destination = args.output / "parity.bin.gz"
@@ -197,7 +260,7 @@ def main() -> None:
     with gzip.open(destination, "wb", compresslevel=1) as stream:
         stream.write(json.dumps(header, separators=(",", ":")).encode() + b"\n")
         for record in records:
-            features = data.encode_features(demos.learner_input(record), layout)
+            features = fixture_features(record, layout, navdemo_version)
             logits, hidden = policy.step(features["near"][0], features["far"][0], features["vector"][0], hidden)
             stream.write(record.tobytes())
             for name in ("near", "far", "vector"):
@@ -209,7 +272,8 @@ def main() -> None:
     if count != args.steps:
         raise ValueError(f"expected {args.steps} steps, wrote {count}")
     print(json.dumps({"weights": str(weights), "fixture": str(destination), "steps": count,
-                      "source": source_name, "hidden_size": policy.hidden_size, "carry_hidden": True}))
+                      "source": source_name, "navdemo_version": navdemo_version,
+                      "hidden_size": policy.hidden_size, "carry_hidden": True}))
 
 
 if __name__ == "__main__":

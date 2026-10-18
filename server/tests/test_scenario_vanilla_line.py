@@ -1,8 +1,9 @@
 from types import SimpleNamespace
 
-from gothic_ai import questbook, scenarios
+from gothic_ai import questbook
 from gothic_ai.llm import ToolCall
-from gothic_ai.scenario_vanilla_line import REQUIRES, RUEBEN, Turnips, VanillaLineScript, _giver_ok
+from gothic_ai.scenarios import story as scenarios
+from gothic_ai.scenarios.vanilla_line import REQUIRES, RUEBEN, Turnips, VanillaLineScript, _giver_ok
 
 
 async def test_script_proposes_vanilla_followup() -> None:
@@ -77,7 +78,7 @@ async def test_live_line_must_follow_the_event_and_cannot_reuse_its_script_giver
     async def peaceful(link, people, **kwargs):
         return set(people)
 
-    monkeypatch.setattr("gothic_ai.scenario_vanilla_line.non_hostile", peaceful)
+    monkeypatch.setattr("gothic_ai.scenarios.vanilla_line.non_hostile", peaceful)
     graph = SimpleNamespace(
         quests={RUEBEN: SimpleNamespace(running={"TAKE"}, success={"END"}, failed=set(), obsolete=set())},
         nodes={"TAKE": SimpleNamespace(npc="LOBART"), "END": SimpleNamespace(npc="LOBART")},

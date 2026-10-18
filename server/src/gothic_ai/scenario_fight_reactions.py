@@ -38,7 +38,7 @@ from .protocol import (
     ThreatControlCmd,
     TriggerFired,
 )
-from .scenarios import FixedDecider, _until
+from .scenarios.common import FixedDecider, _until
 from .talk import TalkDesk
 from .triggers import STATE, removal, trigger
 

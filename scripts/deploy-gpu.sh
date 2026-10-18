@@ -9,8 +9,8 @@
 #   scripts/deploy-gpu.sh gemma                the same for the quick model of fights (server/deploy/gemma)
 #   scripts/deploy-gpu.sh aligner              copy asr-service/deploy/aligner and run its install.sh: the
 #                                              forced aligner, a command per job (no service, no restart)
-#   scripts/deploy-gpu.sh dub                  copy shorts/deploy/dub and run its install.sh: the jobs of
-#                                              gothic-shorts dub (Demucs, cloning through gothic-voxcpm)
+#   scripts/deploy-gpu.sh dub                  copy shorts/deploy/dub and run its install.sh: voice cloning
+#                                              for gothic-shorts dub through gothic-voxcpm
 #
 # Settings come from the nearest .env at or above the repository (real environment variables win):
 #   GOTHIC_GPU_SSH       ssh destination of the GPU server (required)

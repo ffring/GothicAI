@@ -546,6 +546,36 @@ NavMesh::Path NavMesh::findPath(const Point& start, const Point& end) const {
   return result;
   }
 
+bool NavMesh::straightWalkable(const Point& start, const Point& end) const {
+  if(!impl->query) return false;
+  for(float value:start) if(!std::isfinite(value)) return false;
+  for(float value:end) if(!std::isfinite(value)) return false;
+  const auto& p=impl->params;
+  const float extents[3]={p.nearestHorizontal,p.nearestVertical,p.nearestHorizontal};
+  dtQueryFilter filter;
+  filter.setIncludeFlags(1);
+  dtPolyRef startRef=0, endRef=0;
+  Point snappedStart{}, snappedEnd{};
+  if(dtStatusFailed(impl->query->findNearestPoly(start.data(),extents,&filter,&startRef,snappedStart.data())) || !startRef ||
+     dtStatusFailed(impl->query->findNearestPoly(end.data(),extents,&filter,&endRef,snappedEnd.data())) || !endRef)
+    return false;
+  // A generous nearest-poly search is useful for Detour routes, but direct steering
+  // must not silently move an endpoint across a wall or onto another elevation.
+  const auto onSurface=[&](const Point& requested,const Point& snapped) {
+    return std::hypot(requested[0]-snapped[0],requested[2]-snapped[2])<=p.cellSize &&
+           std::abs(requested[1]-snapped[1])<=p.climb+2.f*p.cellHeight;
+    };
+  if(!onSurface(start,snappedStart) || !onSurface(end,snappedEnd)) return false;
+  std::vector<dtPolyRef> corridor(maxPath);
+  float t=0;
+  Point normal{};
+  int count=0;
+  const dtStatus status=impl->query->raycast(startRef,snappedStart.data(),snappedEnd.data(),&filter,
+                                            &t,normal.data(),corridor.data(),&count,maxPath);
+  return dtStatusSucceed(status) && !dtStatusDetail(status,DT_BUFFER_TOO_SMALL) &&
+         t>1.f && count>0 && corridor[size_t(count-1)]==endRef;
+  }
+
 std::vector<NavMesh::GapCandidate> NavMesh::gapCandidates(const Point& start, const Point& end,
                                                         float maxHorizontal, float maxVertical,
                                                         size_t maxCandidates) const {

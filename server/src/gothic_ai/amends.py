@@ -1,4 +1,4 @@
-"""The director's own storylets, v0 (docs/story-graph.md, stage 5): a lie comes home.
+"""The director's storylets: a lie or a crime comes home.
 
 When someone the hero deals with learns that he lied — it was lied to and found out, it caught him, or a
 rumor reached it (social.py) — the director may have it ask him to make amends, as a writer of the game
@@ -17,6 +17,10 @@ Its state is in the chronicle (`amends_*` facts) and in the patches of the save 
 back exactly where it was. A lie gets STORYLETS_PER_LIE of them at most, the one lied to first, then those
 the rumor reached, in the order they heard it; the model may find that one does not care, and is asked
 about LOOKS_PER_LIE people at most.
+
+A victim who saw or heard of the hero's theft or assault can ask for compensation through the same
+flow. Suspicion does not qualify. Paying records `forgiven{paid}` for that crime; a quest returning
+property is separate and never forgives it automatically.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from .turn import ToolOutcome
 from .validator import DIRECTOR_PREFIX, Rules, Story, names_in, validate
 
 if TYPE_CHECKING:
+    from .crimes import CrimeKnowledge, Crimes
     from .dialogue import Conversation, DialogueManager
     from .director import Director
 
@@ -58,7 +63,7 @@ SKIP = ("PICKPOCKET", "EXIT", "PETZ", "PMSCHULDEN")  # the scripts' own crime an
 
 INSTRUCTIONS = """\
 Ты — режиссёр сюжета Gothic II. Код следит за миром и зовёт тебя, когда о лжи героя узнал человек, с которым \
-у героя есть дела: обманутый сам, тот, кто его уличил, или тот, до кого дошёл слух. Реши, как этот человек \
+у героя есть дела, или пострадавший узнал, что герой обокрал или ударил его. Реши, как этот человек \
 поступит, — как сделал бы сценарист оригинальной игры: в характере, бережно к миру и тону.
 
 - amends: он требует загладить вину. Пока герой не заплатит, он закрывает для него свои дела — те из \
@@ -69,6 +74,10 @@ INSTRUCTIONS = """\
 при расплате (amends_lines: 1–4 реплики), название темы журнала (title) и две записи от первого лица: \
 journal_now — что от героя требуют, journal_done — что он заплатил.
 - none: ему всё равно или это не его дело. Остальные поля пустые.
+
+Для дела (crime) пострадавший требует возместить ущерб: gold от 1 до предела сводки, с учётом цены \
+вещи или тяжести нападения. Если у него нет доступных дел, close может быть пустым; важный разговор \
+и оплата остаются. Он знает только то, что видел или слышал по сводке. По подозрению виновным не объявляй.
 
 Строго по сводке: не выдумывай, чего человек не знает. Тот, кто знает со слухов, может и сомневаться. \
 Речь — по-русски, в духе Gothic: просто, грубовато, без пафоса и современных слов. Ответ — один вызов \
@@ -85,8 +94,8 @@ _LINES = {
 }
 PROPOSE_TOOL = Tool(
     PROPOSE,
-    "Предложить, как человек из сводки поступит с героем, узнав о его лжи. Код проверит предложение и "
-    "применит его или вернёт причины отказа.",
+    "Предложить, как человек из сводки поступит с героем, узнав о его лжи или деле против него. "
+    "Код проверит предложение и применит его или вернёт причины отказа.",
     {
         "type": "object",
         "properties": {
@@ -150,6 +159,24 @@ class Lie:
 
 
 @dataclass
+class CrimeCase:
+    """A victim's proven grievance, using the same storylet flow as a revealed lie."""
+
+    crime: str
+    victim: str
+    victim_name: str
+    description: str
+    kind: str
+
+    @property
+    def key(self) -> str:
+        return f"crime:{self.crime}"
+
+    def words(self) -> str:
+        return self.description.removeprefix("герой ")
+
+
+@dataclass
 class Stake:
     """A dialog of the npc's the hero would come for."""
 
@@ -160,7 +187,7 @@ class Stake:
 
 @dataclass
 class Brief:
-    lie: Lie
+    lie: Lie | CrimeCase
     npc: str
     name: str
     guild: str
@@ -168,20 +195,28 @@ class Brief:
     stakes: list[Stake]
     victim_alive: bool
     asked: list[str] = field(default_factory=list)  # what others already ask of the hero for this lie
+    gold_limit: int = MAX_GOLD
+    price: int | None = None
 
     def text(self) -> str:
         lines = [
             f"Человек: {self.name} ({self.npc}){f', {self.guild}' if self.guild else ''}.",
             f"Что он знает: герой {self.lie.words()}. Откуда: {self.how}.",
-            f"Обманутый: {self.lie.victim_name} ({self.lie.victim}), "
+            f"{'Пострадавший' if isinstance(self.lie, CrimeCase) else 'Обманутый'}: "
+            f"{self.lie.victim_name} ({self.lie.victim}), "
             f"{'жив' if self.victim_alive else 'мёртв'}.",
             "Его дела, ради которых герой к нему ходит (можно закрыть до расплаты):",
             *(f"- {s.id}: «{s.description}» — {s.what}" for s in self.stakes),
-            f"Предел расплаты: {MAX_GOLD} золотых.",
+            f"Предел расплаты: {self.gold_limit} золотых.",
         ]
+        if isinstance(self.lie, CrimeCase):
+            lines.append(f"Дело: {self.lie.key}; пострадавший знает, что это сделал герой.")
+            if self.price is not None:
+                lines.append(f"Стоимость взятого: {self.price} золотых.")
         if self.asked:
             lines.append(
-                "За эту ложь уже требуют (если он заодно с ними, можно потребовать того же — тогда одна "
+                f"За {'это дело' if isinstance(self.lie, CrimeCase) else 'эту ложь'} уже требуют "
+                "(если он заодно с ними, можно потребовать того же — тогда одна "
                 "расплата закроет оба требования): " + "; ".join(self.asked)
             )
         return "\n".join(lines)
@@ -214,10 +249,10 @@ class Proposal:
 
 @dataclass
 class Storylet:
-    """An npc asking the hero to make amends for a lie, and where it stands."""
+    """An npc asking the hero to make amends, and where it stands."""
 
     id: str
-    lie: str  # Lie.key
+    lie: str  # Lie.key or CrimeCase.key; persisted name kept for existing save branches
     npc: str
     name: str
     close: list[str]
@@ -264,7 +299,7 @@ class AmendsModel:
 
 
 class Amends:
-    """Storylets of amends for the hero's lies; also a TurnExtension: the npc knows what it asked of him."""
+    """Storylets of amends for revealed lies and crimes known to their victims."""
 
     def __init__(
         self,
@@ -277,6 +312,7 @@ class Amends:
         *,
         dialogue: DialogueManager | None = None,
         journal: Journal | None = None,
+        crimes: Crimes | None = None,
     ) -> None:
         self.link = link
         self.graph = graph
@@ -286,8 +322,9 @@ class Amends:
         self.model = AmendsModel(llm)
         self.dialogue = dialogue
         self.journal = journal or Journal()
+        self.crimes = crimes
         self.rules = Rules.of(graph)
-        self.lies: dict[str, Lie] = {}
+        self.lies: dict[str, Lie | CrimeCase] = {}
         self.storylets: dict[str, Storylet] = {}  # by id
         self.looked: dict[str, list[str]] = {}  # lie -> npc's looked at for it
         self._queue: asyncio.Queue[tuple[str, str, str] | None] = asyncio.Queue()
@@ -316,12 +353,57 @@ class Amends:
                 self.lies.setdefault(lie.key, lie)
                 self._queue.put_nowait((lie.key, lie.victim, "lied"))
             case "rumor":
+                if f.get("crime"):
+                    self._queue_crime(f.get("to", ""), f["crime"])
+                    return
                 key = (
                     f"{f.get('kind', 'found_out')}:{f.get('about') or f.get('from', '')}:{f.get('quest', '')}"
                 )
                 self._queue.put_nowait((key, f.get("to", ""), f.get("from_name") or ""))
+            case "crime_seen":
+                self._queue_crime(f.get("npc", ""), f.get("crime", ""))
+            case "testimony":
+                for crime in f.get("crime_told", []):
+                    self._queue_crime(f.get("npc", ""), crime)
             case "deal" if f.get("forgive"):
                 self._spawn(self._forgiven(f))
+            case "forgiven" if self.crimes is not None:
+                self._spawn(self._forgiven(f))
+
+    def _queue_crime(self, npc: str, crime_id: str) -> None:
+        knowledge = self._crime_knowledge(npc, crime_id)
+        if knowledge is None or self.crimes is None:
+            return
+        case = self._crime_case(knowledge.crime)
+        self.lies.setdefault(case.key, case)
+        how = (
+            "видел сам" if knowledge.degree == "seen" else f"слышал от {self.crimes.names(knowledge.source)}"
+        )
+        self._queue.put_nowait((case.key, case.victim, how))
+
+    def _crime_case(self, crime: Fact) -> CrimeCase:
+        assert self.crimes is not None
+        victim = crime.get("victim", "")
+        return CrimeCase(
+            crime["id"], victim, self.crimes.names(victim), self.crimes.describe(crime), crime["kind"]
+        )
+
+    def _crime_knowledge(self, npc: str, crime_id: str) -> CrimeKnowledge | None:
+        if self.crimes is None:
+            return None
+        return next(
+            (
+                k
+                for k in self.crimes.known(npc)
+                if k.crime["id"] == crime_id
+                and k.crime.get("victim") == npc.upper()
+                and k.crime.get("kind") in {"theft", "attack"}
+                and k.degree in {"seen", "heard"}
+                and k.suspect == "PLAYER"
+                and not k.forgiven
+            ),
+            None,
+        )
 
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
@@ -348,11 +430,13 @@ class Amends:
     # --- a storylet ---------------------------------------------------------------------------
 
     async def consider(self, key: str, npc: str, how: str) -> Storylet | None:
-        """Whether `npc`, who has just learnt of the lie `key`, asks the hero to make amends."""
+        """Whether `npc`, who has learnt of the grievance `key`, asks the hero to make amends."""
         lie = self.lies.get(key)
         looked = self.looked.setdefault(key, [])
         opened = sum(1 for s in self.storylets.values() if s.lie == key)
         if lie is None or not npc or npc in looked:
+            return None
+        if isinstance(lie, CrimeCase) and self._crime_knowledge(npc, lie.crime) is None:
             return None
         if len(looked) >= LOOKS_PER_LIE or opened >= STORYLETS_PER_LIE:
             return None
@@ -361,7 +445,7 @@ class Amends:
         if self.rules.plot_npc(npc):
             return None
         stakes = self.stakes(npc)
-        if not stakes:
+        if not stakes and isinstance(lie, Lie):
             return None  # nothing he comes to it for: no reason to write a storylet
         self.model.warm()
         await self.director.pacing.wait(self.director.busy)
@@ -369,10 +453,16 @@ class Amends:
             story = await self.director.story()
             if not story.state.alive(npc):
                 return None
+            if isinstance(lie, CrimeCase) and self._crime_knowledge(npc, lie.crime) is None:
+                return None
             stakes = [s for s in stakes if story.can_offer(s.id)]
-            if not stakes:
+            if not stakes and isinstance(lie, Lie):
                 return None
             looked.append(npc)
+            price = await self._crime_price(lie) if isinstance(lie, CrimeCase) else None
+            limit = MAX_GOLD
+            if isinstance(lie, CrimeCase):
+                limit = min(MAX_GOLD, price) if price else (50 if lie.kind == "theft" else MAX_GOLD)
             brief = Brief(
                 lie,
                 npc,
@@ -386,6 +476,8 @@ class Amends:
                     for x in self.storylets.values()
                     if x.lie == key and x.stage != "done"
                 ],
+                gold_limit=limit,
+                price=price,
             )
             previous: Proposal | None = None
             errors: list[str] = []
@@ -420,19 +512,44 @@ class Amends:
                 out.append(Stake(node.id, node.description, STAKES[what]))
         return out
 
+    async def _crime_price(self, case: CrimeCase) -> int | None:
+        """Read available script item values, without creating items or adding protocol fields."""
+        crime = self.crimes.crime(case.crime) if self.crimes is not None else None
+        if crime is None or case.kind != "theft":
+            return None
+        items = crime.get("items") or [{"item": crime.get("item", ""), "count": crime.get("count", 0)}]
+        items = [item for item in items if item.get("item") and int(item.get("count", 0)) > 0]
+        if not items:
+            return None
+        try:
+            values = await self.link.story_eval(
+                case.victim,
+                [
+                    ["int", 1] if item["item"] == "ITMI_GOLD" else ["field", ["inst", item["item"]], "VALUE"]
+                    for item in items
+                ],
+            )
+        except (GameError, TimeoutError):
+            return None
+        if len(values) != len(items) or not all(isinstance(v, int) and v > 0 for v in values):
+            return None  # an absent VM instance has no price; do not invent one
+        return sum(int(item["count"]) * value for item, value in zip(items, values, strict=True))
+
     async def _try(self, p: Proposal, brief: Brief, story: Story) -> tuple[Storylet | None, list[str]]:
         errors = []
         stakes = {s.id for s in brief.stakes}
         if p.kind != "amends":
             return None, [f"вид: amends или none, а не {p.kind!r}"]
-        if not p.close or len(p.close) > MAX_CLOSE or not set(p.close) <= stakes:
-            errors.append(f"close: от 1 до {MAX_CLOSE} id из списка его дел")
+        minimum = 0 if isinstance(brief.lie, CrimeCase) else 1
+        if len(p.close) < minimum or len(p.close) > MAX_CLOSE or not set(p.close) <= stakes:
+            errors.append(f"close: от {minimum} до {MAX_CLOSE} id из списка его дел")
         if p.to not in ("self", "victim"):
             errors.append("to: self или victim")
         elif p.to == "victim" and not brief.victim_alive:
             errors.append(f"{brief.lie.victim_name} мёртв: расплата — ему самому (to: self)")
-        if not 0 <= p.gold <= MAX_GOLD:
-            errors.append(f"gold: от 0 до {MAX_GOLD}")
+        minimum_gold = 1 if isinstance(brief.lie, CrimeCase) else 0
+        if not minimum_gold <= p.gold <= brief.gold_limit:
+            errors.append(f"gold: от {minimum_gold} до {brief.gold_limit}")
         if not 2 <= len(p.lines) <= 6 or not 1 <= len(p.amends_lines) <= 4:
             errors.append("lines: 2–6 реплик, amends_lines: 1–4")
         if not (
@@ -498,11 +615,12 @@ class Amends:
         self.chronicle.record({"fact": "amends_open", **asdict(s), "reason": p.reason})
         self.journal.add("amends_open", npc=s.npc, name=s.name, lie=s.lie, close=s.close, gold=s.gold)
         if self.dialogue is not None:
+            what = "дело" if isinstance(brief.lie, CrimeCase) else "ложь"
+            closed = " Твои дела для него закрыты до расплаты." if s.close else ""
             self.dialogue.remember(
                 s.npc,
                 s.name,
-                f"Ты решил: пока герой не загладит вину за ложь ({brief.lie.words()}), твои дела для него "
-                f"закрыты. Расплата: {_price(s)}",
+                f"Ты требуешь загладить вину за {what} ({brief.lie.words()}). Расплата: {_price(s)}.{closed}",
             )
         log.info("amends: %s opened (%s): %s", s.id, ", ".join(s.close), p.reason)
         return s, []
@@ -520,7 +638,7 @@ class Amends:
     async def _paid(self, s: Storylet) -> None:
         """The hero made amends: the npc's dialogs open again; so do those of the others asking the same of
         him for the same lie (one confession to Lobart is enough for Hilda too)."""
-        await self._settle(s)
+        await self._settle(s, paid=True)
         for other in list(self.storylets.values()):
             if other.lie == s.lie and other.to == s.to and other.stage != "done" and other.gold <= s.gold:
                 for node in (other.talk, other.pay):
@@ -529,10 +647,13 @@ class Amends:
                 await self._settle(other)
 
     async def _forgiven(self, f: Fact) -> None:
-        """The npc forgave a lie in a deal (deals.py): the storylets of amends for it that it asked for, or
+        """The npc forgave a grievance in a deal: the storylets that it asked for, or
         that were to be made at it, are settled; their dialogs of the talk and the amends leave the menu."""
         npc = f.get("npc", "")
-        for key in f.get("forgive", []):
+        keys = [f"crime:{f['crime']}"] if f.get("fact") == "forgiven" else f.get("forgive", [])
+        for key in keys:
+            if key.startswith("crime:") and f.get("fact") != "forgiven":
+                continue  # wait for the deal's actual transfer and its canonical forgiven fact
             for s in list(self.storylets.values()):
                 if s.lie != key or s.stage == "done" or npc not in (s.npc, s.to):
                     continue
@@ -540,6 +661,12 @@ class Amends:
                     if node in self.patches_nodes():
                         await self._apply({"op": "remove_node", "node": node})
                 s.gold = int(f.get("gold", 0))  # what was agreed on in the end
+                if f.get("fact") == "forgiven":
+                    s.gold = sum(
+                        int(item.get("count", 0))
+                        for item in f.get("hero_gives", [])
+                        if item.get("item") == "ITMI_GOLD"
+                    )
                 await self._settle(s)
 
     def patches_nodes(self) -> set[str]:
@@ -551,13 +678,30 @@ class Amends:
         except GameError as err:
             log.warning("amends: %s: %s", op, err)
 
-    async def _settle(self, s: Storylet) -> None:
+    async def _settle(self, s: Storylet, *, paid: bool = False) -> None:
         s.stage = "done"
         for c in s.close:
             await self._apply({"op": "enable", "node": c})
         lie = self.lies.get(s.lie)
         fact = {"fact": "amends", "id": s.id, "npc": s.npc, "to": s.to, "gold": s.gold, "lie": s.lie}
-        self.chronicle.record({**fact, "quest": lie.quest if lie else "", "about": lie.victim if lie else ""})
+        # Saved storylets remain payable when --no-crimes disables new crime triggers.
+        crime = s.lie.removeprefix("crime:") if s.lie.startswith("crime:") else ""
+        if crime:
+            fact["crime"] = crime
+            if paid:
+                self.chronicle.record(
+                    {
+                        "fact": "forgiven",
+                        "npc": lie.victim if isinstance(lie, CrimeCase) else s.npc,
+                        "crime": crime,
+                        "paid": True,
+                        "gold": s.gold,
+                        "amends": s.id,
+                    }
+                )
+        elif lie is not None:
+            fact.update(quest=lie.quest, about=lie.victim)
+        self.chronicle.record(fact)
         self.journal.add("amends", npc=s.npc, name=s.name, to=s.to, gold=s.gold)
         if self.dialogue is not None:
             self.dialogue.remember(
@@ -573,8 +717,13 @@ class Amends:
         self.lies.clear()
         self.storylets.clear()
         self.looked.clear()
+        while not self._queue.empty():
+            self._queue.get_nowait()
         for f in self.chronicle.facts():
             match f.get("fact"):
+                case "crime" if self.crimes is not None:
+                    case = self._crime_case(f)
+                    self.lies.setdefault(case.key, case)
                 case "found_out" | "caught":
                     lie = Lie(
                         f.get("quest", ""),
@@ -600,6 +749,9 @@ class Amends:
                     self.storylets[f["id"]].stage = "told"
                 case "amends" if f.get("id") in self.storylets:
                     self.storylets[f["id"]].stage = "done"
+        if self.crimes is not None:
+            for crime in self.crimes.facts():
+                self._queue_crime(crime.get("victim", ""), crime["id"])
 
     def _reward(self, quest: str) -> str:
         """What the hero took for the lie, from the chronicle."""
@@ -623,14 +775,19 @@ class Amends:
         lines = []
         for s in self.storylets.values():
             names = [self.graph.nodes[c].description for c in s.close if c in self.graph.nodes]
+            what = "дело" if s.lie.startswith("crime:") else "ложь"
             if s.npc == npc and s.stage != "done":
+                closed = (
+                    f" Пока не заплатит, для него закрыто: {'; '.join(f'«{n}»' for n in names)}."
+                    if names
+                    else ""
+                )
                 lines.append(
-                    f"Ты требуешь от героя загладить вину за ложь ({s.lie}): {_price(s)}. Пока не заплатит, "
-                    f"для него закрыто: {'; '.join(f'«{n}»' for n in names)}. Договоритесь — простишь её в "
-                    "сделке (forgive)."
+                    f"Ты требуешь от героя загладить вину за {what} ({s.lie}): {_price(s)}.{closed} "
+                    "Договоритесь — простишь в сделке (forgive)."
                 )
             elif s.npc == npc:
-                lines.append(f"Герой загладил перед тобой вину за ложь ({_price(s)}).")
+                lines.append(f"Герой загладил перед тобой вину за {what} ({_price(s)}).")
             elif s.to == npc and s.stage != "done":
                 lines.append(
                     f"{s.name} требует, чтобы герой повинился перед тобой и заплатил тебе {s.gold} золотых. "
@@ -688,7 +845,9 @@ def _price(s: Storylet) -> str:
     return f"{s.gold} золотых{to}" if s.gold else f"повиниться{to}"
 
 
-def _how(how: str, lie: Lie) -> str:
+def _how(how: str, lie: Lie | CrimeCase) -> str:
+    if isinstance(lie, CrimeCase):
+        return how
     if how == "lied":
         return "его самого обманули" if lie.kind == "found_out" else "он сам уличил героя"
     return f"слух, рассказал {how}" if how else "слух"

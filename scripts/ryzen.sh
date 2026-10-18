@@ -263,6 +263,11 @@ fi
 ACTION="${1:-}"
 case "$ACTION" in setup|e2e|pytest|bench|clean) shift ;; *) echo 'Usage: scripts/ryzen.sh setup|e2e|pytest [args...]|bench <scenario> <out>|clean' >&2; exit 2 ;; esac
 if [[ "$ACTION" == bench ]]; then
+  BENCH_CLASS="${RYZEN_BENCH_CLASS:-quick}"
+  case "$BENCH_CLASS" in
+    quick|quiet) ;;
+    *) echo 'RYZEN_BENCH_CLASS must be quick or quiet' >&2; exit 2 ;;
+  esac
   [[ $# == 2 ]] || { echo 'Usage: scripts/ryzen.sh bench <scenario> <out>' >&2; exit 2; }
   BENCH_SCENARIO="$1"
   [[ -f "$BENCH_SCENARIO" ]] || BENCH_SCENARIO="$ROOT/scripts/bench/$1.bench"
@@ -578,7 +583,7 @@ if [[ "$ACTION" == pytest ]]; then
   JOBS=4
 else
   JOBS="${RYZEN_JOBS:-12}"
-  GQ_ARGS=(--class quick --threads "$JOBS" --mem 8G --display --max "${RYZEN_MAX:-30m}")
+  GQ_ARGS=(--class "${BENCH_CLASS:-quick}" --threads "$JOBS" --mem 8G --display --max "${RYZEN_MAX:-30m}")
   if [[ "$ACTION" == bench ]]; then
     GQ_ARGS+=(--gpu-mem 4G --name "bench $(basename "$BENCH_SCENARIO" .bench)")
   else
@@ -607,7 +612,7 @@ PY
   while IFS= read -r name; do
     case "$name" in
       GOTHIC_DIR|OPENGOTHIC_TEXTURES|OPENGOTHIC_FRACTURE) continue ;;
-      OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|DESTRUCTION|BUOYANCY|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL)
+      OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|DESTRUCTION|BUOYANCY|CLOTH|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL)
         value="$(bench_path "${!name}")"
         ENV_ARGS+=("$name=$value") ;;
     esac
@@ -675,7 +680,7 @@ while IFS= read -r name; do
       ENV_ARGS+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)
-if [[ "$ACTION" == e2e && "${SCENARIO:-m0}" == broken ]]; then
+if [[ "$ACTION" == e2e && ( "${SCENARIO:-m0}" == broken || "${SCENARIO:-m0}" == trace_crime ) ]]; then
   FRACTURE_CACHE="${OPENGOTHIC_FRACTURE-$HOME/.local/share/gothic-ai/fracture}"
   if [[ -n "$FRACTURE_CACHE" && -d "$FRACTURE_CACHE" ]]; then
     remote mkdir -p "$STATE/fracture"

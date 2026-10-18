@@ -48,6 +48,27 @@ def pairs_path(args):
     return args.pairs or args.output / "pairs.jsonl"
 
 
+def teacher_references(root):
+    """Match v2 teacher starts by pair, independently of the v1 cache IDs."""
+    references = {}
+    for path in sorted(root.rglob("episode.json")):
+        episode = read_json(path)
+        if episode.get("replay") or episode.get("drive") or "dagger" in episode:
+            continue
+        if episode.get("demo_version", episode.get("teacher_version")) != 2:
+            continue
+        if not (path.parent / "samples.bin.gz").is_file():
+            continue
+        pair = (episode["start"], episode["goal"])
+        candidate = (path.parent, episode)
+        # A successful ordinary start is the reference when the pair has repeats.
+        if pair not in references or (not references[pair][1].get("success") and episode.get("success")):
+            references[pair] = candidate
+    if not references:
+        raise ValueError(f"No NAVDEMO v2 teacher references in {root}")
+    return references
+
+
 def prepare(args):
     index = read_json(args.bc_cache / "index.json")
     unique = {}
@@ -75,20 +96,28 @@ def prepare(args):
         if len(group) < 5:
             raise ValueError(f"Need five training pairs in {region}")
         train.extend(sorted(rng.sample(group, 5), key=lambda ep: (ep["start"], ep["goal"])))
+    references = teacher_references(args.teacher_root)
     selected = []
+    excluded_validation = []
     for split, episodes in (("validation", validation), ("train", train)):
-        for split_index, episode in enumerate(episodes):
-            # The BC cache preserves a source-relative identity: episodes/003
-            # becomes episodes__003. No training/cache contents are changed.
-            teacher_dir = args.teacher_root.joinpath(*episode["id"].split("__"))
-            teacher = read_json(teacher_dir / "episode.json")
-            if not teacher.get("success") or (teacher["start"], teacher["goal"]) != tuple(episode["pair"]):
-                raise ValueError(f"Teacher reference mismatch: {teacher_dir}")
+        split_index = 0
+        for source_index, episode in enumerate(episodes):
+            pair = tuple(episode["pair"])
+            if pair not in references:
+                raise ValueError(f"Missing NAVDEMO v2 teacher pair: {pair}")
+            teacher_dir, teacher = references[pair]
+            if split == "validation" and not teacher.get("success"):
+                excluded_validation.append(pair)
+                continue
             selected.append(dict(index=len(selected), split=split, split_index=split_index,
                                  region=episode["region"], start=episode["start"], goal=episode["goal"],
                                  teacher_episode=str(teacher_dir), teacher_elapsed_ms=teacher["elapsed_ms"],
-                                 teacher_success=True, source_cache_id=episode["id"],
+                                 teacher_success=bool(teacher.get("success")), teacher_version=2,
+                                 source_cache_id=episode["id"], source_split_index=source_index,
                                  seed=teacher.get("seed", 7), npc=teacher.get("npc", "BAU_954_MALETH")))
+            split_index += 1
+    if not any(pair["split"] == "validation" for pair in selected):
+        raise ValueError("Teacher v2 reached none of the held-out pairs")
     selected.append(dict(index=len(selected), split="control", split_index=0, region="lobart",
                          start="pasture_fence_current_pose", goal="FP_ROAM_FARM1_SHEEP_09",
                          source_control="reports/navigation/2026-10-16-stuck/intentional.bench",
@@ -98,7 +127,9 @@ def prepare(args):
     if path.exists() and path.read_text(encoding="utf-8") != "".join(json.dumps(p, ensure_ascii=False) + "\n" for p in selected):
         raise ValueError(f"Refusing to replace a different existing selection: {path}")
     path.write_text("".join(json.dumps(p, ensure_ascii=False) + "\n" for p in selected), encoding="utf-8")
-    print(json.dumps(dict(pairs=str(path), validation=len(validation), train=len(train), control=1,
+    print(json.dumps(dict(pairs=str(path), source_validation=len(validation),
+                          validation=sum(p["split"] == "validation" for p in selected),
+                          excluded_validation=excluded_validation, train=len(train), control=1,
                           training_per_region=5, selection_seed=args.selection_seed), ensure_ascii=False))
 
 
@@ -136,6 +167,10 @@ def indices(args, pairs):
 
 
 def collect(args):
+    if not 0 <= args.teacher_beta <= 1:
+        raise ValueError("--teacher-beta must be in [0,1]")
+    if args.teacher_beta and not args.dagger_collection:
+        raise ValueError("Measured drives require --teacher-beta 0; use --dagger-collection for mixed control")
     pairs = load_pairs(args)
     selected = indices(args, pairs)
     if args.list_indices:
@@ -171,12 +206,14 @@ def collect(args):
                 raise ValueError(f"Episode already exists: {directory}; use --resume")
             name = f"drive-{pair['split']}-{pair['split_index']:03d}"
             commands = [f"roads load {args.roads}", f"roads on {pair['npc']}"]
+            mixing_seed = args.mixing_seed + pair["index"]
+            policy_args = f"{args.limit_ms} {args.weights} {args.teacher_beta:.9g} {mixing_seed}"
             if pair["split"] == "control":
                 commands.extend(["goto NW_FARM1_ENTRANCE_03", f"put {pair['npc']} 0 0 -1400",
                                  "goto NW_FARM1_ENTRANCE_01", "wait 1000",
-                                 f"navdemos drive-current {pair['npc']} {pair['goal']} {args.limit_ms} {args.weights}"])
+                                 f"navdemos drive-current {pair['npc']} {pair['goal']} {policy_args}"])
             else:
-                commands.append(f"navdemos drive {pair['npc']} {pair['start']} {pair['goal']} {args.limit_ms} {args.weights}")
+                commands.append(f"navdemos drive {pair['npc']} {pair['start']} {pair['goal']} {policy_args}")
             commands.append("navdemos wait")
             scenario_args = copy(args)
             scenario_args.seed = pair["seed"]
@@ -188,8 +225,15 @@ def collect(args):
             if not completed(directory):
                 raise RuntimeError(f"Incomplete drive: {directory}")
             episode = read_json(directory / "episode.json")
+            if episode.get("physics_mode", "native") != getattr(args, "physics", "native"):
+                raise ValueError(f"Drive physics differs from requested mode: {directory}")
+            if episode.get("demo_version") != 2 or episode.get("teacher_version") != 2:
+                raise ValueError(f"Drive must use NAVDEMO v2 policy/teacher: {directory}")
+            if episode.get("teacher_beta") != args.teacher_beta or episode.get("mixing_seed") != mixing_seed:
+                raise ValueError(f"Runner did not apply the requested mixing settings: {directory}")
             episode.update(pair, drive=True, weights=str(args.weights), limit_ms=args.limit_ms,
-                           collector_wall_s=wall, selection_seed=args.selection_seed)
+                           collector_wall_s=wall, selection_seed=args.selection_seed,
+                           dagger_collection=args.dagger_collection, requested_physics=getattr(args, "physics", "native"))
             write_json(directory / "episode.json", episode)
             print(f"{name}: success={episode['success']} elapsed_ms={episode['elapsed_ms']} "
                   f"distance_cm={episode.get('distance_cm')} wall_s={wall:.2f}", flush=True)
@@ -291,12 +335,16 @@ def episode_metrics(directory, demos):
     teacher_change_steps = 0
     steps = 0
     last = None
+    last_teacher = None
     for data in demos.iter_chunks(directory):
         actual = applied[steps:steps + len(data)]
         teacher = discrete_actions(np.column_stack([data["keys"][head] for head in HEADS]))
-        previous = discrete_actions(np.column_stack([data["previous_keys"][head] for head in HEADS]))
         disagreements = actual != teacher
-        teacher_changes = (teacher != previous).any(axis=1)
+        teacher_changes = np.zeros(len(data), dtype=bool)
+        teacher_changes[1:] = (teacher[1:] != teacher[:-1]).any(axis=1)
+        if last_teacher is not None:
+            teacher_changes[0] = (teacher[0] != last_teacher).any()
+        last_teacher = teacher[-1].copy()
         teacher_change_steps += int(teacher_changes.sum())
         for column, head in enumerate(HEADS):
             counts[head] += int(disagreements[:, column].sum())
@@ -347,7 +395,8 @@ def episode_metrics(directory, demos):
     result = {key: episode.get(key) for key in ("index", "split", "split_index", "region", "start", "goal",
               "success", "elapsed_ms", "decisions", "distance_cm", "failure", "teacher_elapsed_ms",
               "teacher_episode", "teacher_success", "source_cache_id", "final_position", "target_position",
-              "blocked_spans", "blocked_ms", "max_blocked_ms")}
+              "blocked_spans", "blocked_ms", "max_blocked_ms", "teacher_beta", "mixing_seed",
+              "teacher_control_decisions", "dagger_collection")}
     result.update(episode=str(directory), elapsed_s=episode["elapsed_ms"] / 1000, observed_reason=reason,
                   travelled_xz_cm=travelled, last_10s_span_cm=tail_span, last_10s_path_cm=tail_path,
                   last_10s_displacement_cm=tail_displacement, stationary_spells_3s=stationary_spells,
@@ -377,12 +426,17 @@ def group_metrics(episodes):
     action_counts = {key: sum(ep["action_counts"][key] for ep in episodes) for key in episodes[0]["action_counts"]}
     action_changes = {key: sum(ep["action_changes"][key] for ep in episodes) for key in (*HEADS, "any")}
     transitions = sum(max(0, ep["decisions"] - 1) for ep in episodes)
+    teacher_control = sum(ep.get("teacher_control_decisions") or 0 for ep in episodes)
     return dict(n=len(episodes), arrived=len(success), arrival_fraction=len(success) / len(episodes),
+                teacher_beta_values=sorted({ep["teacher_beta"] for ep in episodes if ep.get("teacher_beta") is not None}),
+                teacher_control_decisions=teacher_control, teacher_control_fraction=teacher_control / steps,
+                dagger_collection=any(ep.get("dagger_collection") for ep in episodes),
                 median_elapsed_s=statistics.median(ep["elapsed_s"] for ep in episodes),
                 median_arrival_s=statistics.median(ep["elapsed_s"] for ep in success) if success else None,
                 teacher_arrived=sum(bool(ep.get("teacher_success")) for ep in episodes),
                 teacher_median_arrival_s=statistics.median(ep["teacher_elapsed_ms"] / 1000 for ep in episodes
-                    if ep.get("teacher_elapsed_ms") is not None) if any(ep.get("teacher_elapsed_ms") is not None for ep in episodes) else None,
+                    if ep.get("teacher_success") and ep.get("teacher_elapsed_ms") is not None)
+                    if any(ep.get("teacher_success") and ep.get("teacher_elapsed_ms") is not None for ep in episodes) else None,
                 blocked_spans=sum(ep.get("blocked_spans") or 0 for ep in episodes),
                 blocked_ms=sum(ep.get("blocked_ms") or 0 for ep in episodes),
                 max_blocked_ms=max(ep.get("max_blocked_ms") or 0 for ep in episodes),
@@ -416,7 +470,7 @@ def analyze(args):
                           for region in sorted({ep["region"] for ep in group})}
     result = dict(stationary_definition="Consecutive 3 s 3D endpoint-displacement windows <=25 cm, merged into spells",
                   failure_definition="no_path first; early stop actor_down; last <=10 s 3D path <=50 cm no_motion; path >50 cm and 3D endpoint displacement <=50 cm local_motion; otherwise moving_at_timeout",
-                  action_change_definition="Teacher's six categorical heads differ from recorded previous learner keys; axes use sign, flags use nonzero; accuracy compares applied learner and teacher heads",
+                  action_change_definition="Teacher's six categorical heads differ from the previous teacher decision; first decision excluded; axes use sign, flags use nonzero; accuracy compares applied and teacher heads",
                   action_repeat_definition="Identical consecutive applied six-head decisions, excluding the first decision and terminal reset; turn_only means turn with neither forward nor strafe",
                   groups=groups, by_region=regions, all=group_metrics(episodes), episodes=episodes)
     destination = args.metrics or args.output / "metrics.json"
@@ -493,7 +547,7 @@ def plot(args):
             ax.set_ylabel("World Z, m")
             ax.grid(alpha=.2)
             if column == 0:
-                detail = f"arrived, {ep['teacher_elapsed_ms'] / 1000:.1f} s"
+                detail = f"{'arrived' if ep.get('teacher_success') else 'failed'}, {ep['teacher_elapsed_ms'] / 1000:.1f} s"
             else:
                 detail = f"{'arrived' if ep['success'] else ep['observed_reason']}, {ep['elapsed_s']:.1f} s"
             ax.set_title(f"{title}: {detail}", fontsize=10)
@@ -514,7 +568,7 @@ def main():
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--pairs", type=Path)
     parser.add_argument("--bc-cache", type=Path, default=Path.home() / "gothic-ai/nav-bc/cache")
-    parser.add_argument("--teacher-root", type=Path, default=Path.home() / "gothic-ai/nav-demos")
+    parser.add_argument("--teacher-root", type=Path, default=Path.home() / "gothic-ai/nav-demos-v2")
     parser.add_argument("--selection-seed", type=int, default=17)
     parser.add_argument("--roads", type=Path, default=REPO / "server/src/gothic_ai/gamedata/places.json")
     parser.add_argument("--links", type=Path, default=REPO / "reports/navigation/2026-10-16-teacher/raw/accepted-links.txt")
@@ -530,14 +584,20 @@ def main():
     parser.add_argument("--count", type=int)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--list-indices", action="store_true")
+    parser.add_argument("--teacher-beta", type=float, default=0,
+                        help="Per-decision probability of applying teacher keys; measured drives require 0")
+    parser.add_argument("--mixing-seed", type=int, default=1701,
+                        help="Mixed-control RNG seed, offset by the pair index")
+    parser.add_argument("--dagger-collection", action="store_true", help="Mark this run as DAgger collection")
     parser.add_argument("--plot-count", type=int, default=6)
+    parser.add_argument("--physics", choices=("native", "cv"), default="native")
     args = parser.parse_args()
     if args.limit_ms is None:
         args.limit_ms = 13000 if args.command == "speed" else 240000
     for key, value in vars(args).items():
         if isinstance(value, Path):
             setattr(args, key, value.expanduser().resolve())
-    if args.start_index < 0 or (args.count is not None and args.count < 1) or args.limit_ms < 1000 or not 4 <= args.plot_count <= 6:
+    if args.start_index < 0 or (args.count is not None and args.count < 1) or args.limit_ms < 1000 or not 4 <= args.plot_count <= 6 or args.mixing_seed < 0:
         parser.error("start-index >=0, count >=1, limit-ms >=1000 and plot-count 4..6 required")
     try:
         {"prepare": prepare, "collect": collect, "speed": speed, "analyze": analyze, "plot": plot}[args.command](args)

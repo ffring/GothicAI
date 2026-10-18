@@ -1,0 +1,224 @@
+{
+  "method": {
+    "angle": "3D arccos and horizontal absolute wrapped bearing difference; zero directions excluded",
+    "road_direction": "v1 roads.next_direction; v2 roads.carrot_direction",
+    "teacher_steering": "teacher_hint.next_corner_cm: actual world-space steering target",
+    "turn_rule": "-sign(atan2(body_x,body_z)) outside 10 degrees; keys.turn sign is truth",
+    "rule_denominator": "common valid horizontal directions, pooled decisions",
+    "jump": "wrapped body-frame bearing difference >90 deg; within-episode consecutive 100ms decisions",
+    "jump_3d": "3D body-frame angle >90 deg; within-episode consecutive 100ms nonzero vectors",
+    "near_goal": "later decision roads.goal_distance_cm <=500; 3D Euclidean, not path remaining",
+    "world_jump": "body bearing + body_yaw_deg, to remove the rotating coordinate frame"
+  },
+  "sources": {
+    "source": "/home/kaifaty/gothic-ai/nav-demos-v2"
+  },
+  "excluded": {},
+  "groups": {
+    "source_all": {
+      "episodes": 204,
+      "steps": 228606,
+      "angle_3d": {
+        "steps": 228606,
+        "median_deg": 3.077140460402894e-05,
+        "gt45_count": 32838,
+        "gt45_fraction": 0.14364452376578044,
+        "gt90_count": 18328,
+        "gt90_fraction": 0.08017287385282976
+      },
+      "angle_xz": {
+        "steps": 228606,
+        "median_deg": 1.1494820583379806e-05,
+        "gt45_count": 31055,
+        "gt45_fraction": 0.13584507843188717,
+        "gt90_count": 17633,
+        "gt90_fraction": 0.07713270867781248
+      },
+      "undefined_3d_steps": 0,
+      "undefined_xz_steps": 0,
+      "adjacent_pairs": 228402,
+      "adjacent_pairs_near_goal": 16821,
+      "adjacent_pairs_3d": 228402,
+      "road_jumps_3d": 29,
+      "road_jump_3d_fraction": 0.0001269691158571291,
+      "road_jumps_3d_near_goal": 0,
+      "road_jumps": 29,
+      "road_jump_fraction": 0.0001269691158571291,
+      "road_jumps_near_goal": 0,
+      "near_goal_share_of_jumps": 0.0,
+      "world_road_jumps": 29,
+      "world_road_jumps_near_goal": 0,
+      "roads_rule": {
+        "steps": 228606,
+        "accuracy": 0.7627446348739753,
+        "balanced_accuracy": 0.8155464799568101,
+        "turning_steps": 16357,
+        "turning_accuracy": 0.8529070122883169,
+        "labels": [
+          -1,
+          0,
+          1
+        ],
+        "support": [
+          5415,
+          212249,
+          10942
+        ],
+        "confusion": [
+          [
+            4458,
+            189,
+            768
+          ],
+          [
+            28060,
+            160417,
+            23772
+          ],
+          [
+            1236,
+            213,
+            9493
+          ]
+        ]
+      },
+      "corner_rule": {
+        "steps": 228606,
+        "accuracy": 0.9923799025397408,
+        "balanced_accuracy": 0.9972642195408851,
+        "turning_steps": 16357,
+        "turning_accuracy": 1.0,
+        "labels": [
+          -1,
+          0,
+          1
+        ],
+        "support": [
+          5415,
+          212249,
+          10942
+        ],
+        "confusion": [
+          [
+            5415,
+            0,
+            0
+          ],
+          [
+            0,
+            210507,
+            1742
+          ],
+          [
+            0,
+            0,
+            10942
+          ]
+        ]
+      }
+    },
+    "source_v2": {
+      "episodes": 204,
+      "steps": 228606,
+      "angle_3d": {
+        "steps": 228606,
+        "median_deg": 3.077140460402894e-05,
+        "gt45_count": 32838,
+        "gt45_fraction": 0.14364452376578044,
+        "gt90_count": 18328,
+        "gt90_fraction": 0.08017287385282976
+      },
+      "angle_xz": {
+        "steps": 228606,
+        "median_deg": 1.1494820583379806e-05,
+        "gt45_count": 31055,
+        "gt45_fraction": 0.13584507843188717,
+        "gt90_count": 17633,
+        "gt90_fraction": 0.07713270867781248
+      },
+      "undefined_3d_steps": 0,
+      "undefined_xz_steps": 0,
+      "adjacent_pairs": 228402,
+      "adjacent_pairs_near_goal": 16821,
+      "adjacent_pairs_3d": 228402,
+      "road_jumps_3d": 29,
+      "road_jump_3d_fraction": 0.0001269691158571291,
+      "road_jumps_3d_near_goal": 0,
+      "road_jumps": 29,
+      "road_jump_fraction": 0.0001269691158571291,
+      "road_jumps_near_goal": 0,
+      "near_goal_share_of_jumps": 0.0,
+      "world_road_jumps": 29,
+      "world_road_jumps_near_goal": 0,
+      "roads_rule": {
+        "steps": 228606,
+        "accuracy": 0.7627446348739753,
+        "balanced_accuracy": 0.8155464799568101,
+        "turning_steps": 16357,
+        "turning_accuracy": 0.8529070122883169,
+        "labels": [
+          -1,
+          0,
+          1
+        ],
+        "support": [
+          5415,
+          212249,
+          10942
+        ],
+        "confusion": [
+          [
+            4458,
+            189,
+            768
+          ],
+          [
+            28060,
+            160417,
+            23772
+          ],
+          [
+            1236,
+            213,
+            9493
+          ]
+        ]
+      },
+      "corner_rule": {
+        "steps": 228606,
+        "accuracy": 0.9923799025397408,
+        "balanced_accuracy": 0.9972642195408851,
+        "turning_steps": 16357,
+        "turning_accuracy": 1.0,
+        "labels": [
+          -1,
+          0,
+          1
+        ],
+        "support": [
+          5415,
+          212249,
+          10942
+        ],
+        "confusion": [
+          [
+            5415,
+            0,
+            0
+          ],
+          [
+            0,
+            210507,
+            1742
+          ],
+          [
+            0,
+            0,
+            10942
+          ]
+        ]
+      }
+    }
+  },
+  "max_rss_mib": 79.4609375
+}

@@ -1,0 +1,17 @@
+# The same ten human corpses, native placement and camera with buoyancy disabled.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+water off
+overlay off
+view full
+water-bodies setup perf
+wait 45000
+water-bodies checkpoint settled
+cadence normal
+wait 34
+movable measure off
+cadence wait
+movable report
+water-bodies checkpoint measured

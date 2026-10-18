@@ -2,6 +2,8 @@
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
 #   m0: takes Xardas over, walks him around and returns him to his routine
 #   m1: Xardas answers a player question line by line (LLM backend: LLM=fake|chatgpt|local)
+#   websocket: Lobart and Hilda speak through Responses against an in-process fake server: per-npc
+#       WebSocket reuse, tool continuation, HTTP fallback and --no-websocket; SAVE=save_slot_1.sav; LLM=fake
 #   m2: npc actions (give_item, follow/stop, gestures)
 #   m3: memory survives save/load and follows the save; push-to-talk from a wav file (streamed at
 #       speaking pace) through the ASR service (ASR=fake|voxtral|chatgpt)
@@ -93,6 +95,17 @@
 #       LLM=fake: Hilda's theft rumor, testimony/catch_lie, accepted silence, chest suspicion/concern.
 #       LLM=chatgpt: only the first scene; records Lobart's actual prompt, reply and catch_lie outcome.
 #       TIMEOUT=600. Native theft perceptions stay enabled; Hilda's fight is reset after her sighting.
+#   trace_crime: one reply catches lies by fresh fence debris and Hilda's theft testimony, then save/load.
+#       LLM=fake; SAVE=save_slot_1.sav. Native theft perceptions stay enabled; checks mixed evidence,
+#       both accepted catch_lie calls, crime knowledge and trust without treating debris as authorship proof.
+#   crime_director: deeds and story responses (docs/crime.md, layer 5), SAVE=save_slot_1.sav.
+#       LLM=fake: unseen chest theft and its return quest, Hilda's initiative and paid silence,
+#       Lobart's learned grievance and Amends payment. LLM=chatgpt: witnessed theft goes to the
+#       real showrunner; records its line premise or none reason. TIMEOUT=900.
+#   crime_law: community law (docs/crime.md, layer 3), LLM=fake; SAVE=save_slot_1.sav, TIMEOUT=420.
+#       Matteo witnesses a native theft; Andre stays locked until the next day, charges 50 through
+#       his native voiced dialog and accepts payment. Matteo still remembers. A second theft with
+#       an accepted silence deal never reaches Andre. Native theft perceptions stay enabled.
 #   requires: a book quest depending on vanilla (docs/director.md, stage 5, layer 2), no model: Hilda's
 #       offer stays absent while Lobart's turnip quest is open or running, opens after its success, and
 #       the book's second stage waits for "Сковорода для Хильды" to become running. A save and a load
@@ -186,6 +199,11 @@
 #       DECIDER_URL the scenario's own planner (a fixed stand-in); with it the server's planner, the choice
 #       pinned and the live model's own answer logged. Starts the TTS service (TTS=fake). Words scripted with LLM=fake;
 #       TIMEOUT=480
+#   noise: a real physical impact near a free human at Lobart's farm: noise event, planner decision,
+#       investigate receipt, walk within 2 m, idle within 45 s, return within 1.5 m of the routine post,
+#       and heard-noise memory
+#       with place and game time. Without DECIDER_URL a fixed stand-in chooses investigate for this NPC;
+#       with it the server's planner logs the live choice and pins investigate. SAVE=save_slot_1.sav
 #   cards: the model writes character cards (docs/npc-tools.md, wave 1 step 3) for every npc of the world with
 #       lines of its own (GOTHIC_CARDS=SYM,...: those only) into server/src/gothic_ai/gamedata/characters.json;
 #       those with a card are skipped; needs LLM=chatgpt and a long TIMEOUT for all of them
@@ -351,11 +369,11 @@ if [ "$(uname -s)" = Darwin ]; then
   until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 fi
 GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT")
-if [ "$SCENARIO" = "trace" ] || [ "$SCENARIO" = "broken" ]; then
+if [ "$SCENARIO" = "trace" ] || [ "$SCENARIO" = "broken" ] || [ "$SCENARIO" = "trace_crime" ]; then
   GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/$SCENARIO-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
     "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1")
 fi
-if [ "$SCENARIO" = "broken" ] && [[ -z "${OPENGOTHIC_FRACTURE+set}" ]]; then
+if { [ "$SCENARIO" = "broken" ] || [ "$SCENARIO" = "trace_crime" ]; } && [[ -z "${OPENGOTHIC_FRACTURE+set}" ]]; then
   GAME_ENV+=("OPENGOTHIC_FRACTURE=$HOME/.local/share/gothic-ai/fracture")
 fi
 if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then

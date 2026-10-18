@@ -7,6 +7,7 @@
 
 class Npc;
 class World;
+class ClothVisual;
 
 class ObjVisual {
   public:
@@ -70,6 +71,7 @@ class ObjVisual {
 
     struct FractureView;
     std::shared_ptr<FractureView> fracture;
+    std::unique_ptr<ClothVisual> cloth;
     Tempest::Matrix4x4 renderMatrix = Tempest::Matrix4x4::mkIdentity();
 
     void cleanup();

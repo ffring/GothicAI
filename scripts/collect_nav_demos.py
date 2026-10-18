@@ -126,7 +126,7 @@ def select_indices(args, pairs):
 def scenario_file(args, name, commands):
     path = args.output / "scenarios" / f"{name}.bench"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join([f"seed {args.seed}", "cheat god", "set time 10 0", *commands,
+    path.write_text("\n".join([f"seed {args.seed}", "cheat god", "set time 10 0", f"navdemos physics {getattr(args, 'physics', 'native')}", *commands,
                                 "label done", ""]), encoding="utf-8")
     return path
 
@@ -246,7 +246,8 @@ def record_episode(args, runner, pairs, states, index, state=None, preparation=N
         recorded = args.output / "episodes" / f"{index:03d}"
         commands.append(f"navdemos replay {args.npc} {pair['start']} {pair['goal']} {recorded / 'actions.txt'}")
     else:
-        command = f"navdemos start {args.npc} {pair['start']} {pair['goal']} {limit_ms}"
+        start = "start-v2" if getattr(args, "teacher_version", 1) == 2 else "start"
+        command = f"navdemos {start} {args.npc} {pair['start']} {pair['goal']} {limit_ms}"
         if state:
             command += f" {state['lateral_cm']:.9g} {state['yaw_deg']:.9g} {state['fraction']:.9g}"
         commands.append(command)
@@ -383,6 +384,8 @@ def main():
         parser.add_argument("--" + name, type=Path)
     parser.add_argument("--npc", default=NPC)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--teacher-version", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--physics", choices=("native", "cv"), default="native")
     parser.add_argument("--limit-ms", type=int)
     parser.add_argument("--parallel", type=int, default=1)
     parser.add_argument("--start-index", type=int, default=0)

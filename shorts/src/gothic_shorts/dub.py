@@ -1,64 +1,51 @@
-"""The English audio track of a short (its dub), for YouTube to offer next to the Russian sound: exactly as
-long as the Russian short and as loud as the cut (-14 LUFS). YouTube's API has no call for audio tracks: the
-file is added in Studio (Subtitles, the video, the Audio column), which needs the channel's advanced features.
+"""English dialogue over the Russian short's lossless effects, bed and ending stems.
 
-    gothic-shorts dub <shot> [take]  -> <take>/dub.en.wav, and dub.en.mp4 (the Russian short with it)
-    gothic-shorts dub <explainer>    -> <workspace>/render/dub.en.wav, dub.en.mp4
+    gothic-shorts dub <shot> [take]  -> <take>/dub.en.wav, dub.en.mp4, dub.en.levels.json
+    gothic-shorts dub <explainer>    -> <workspace>/render/dub.en.*
 
-A take of a shot:
-- the game's sound without the npc's Russian voices: Demucs on the GPU server splits main.wav into the voices
-  and the rest (shorts/deploy/dub, installed by `scripts/deploy-gpu.sh dub`); the rest stands in for the sound
-  while an npc speaks, from a beat before its line to a beat after, the recording's own sound elsewhere;
-- every line in English: the take's subs.en.json (what the caption track says), said by Inworld in a clone of
-  the npc's Russian voice (the npc's from the AI server, `gothic-ai voices`; the hero's the shot's
-  hero_voice), or in a voice designed from the same description (english_voices), starting where the
-  Russian line starts, as loud as it;
-- cut as the short is (timeline.keep): the pauses while the AI thinks go out with the same parts.
+The Russian short must already have passed levels.publish. Its picture and Russian
+AAC are copied; the same cut/Remotion stems are published with an English voice
+stem through levels.publish. The WAV is decoded from that checked English AAC.
+Voices and cached lines keep their existing Inworld/VoxCPM cloning paths.
 
-An explainer: its English script (script.en.txt, the caption track's text) in the user's own voice, cloned
-from their recorded lines (voice/clean/) by Inworld, or by VoxCPM2 on the GPU server, and cleaned as those
-were, each line from where its Russian line's first word is said, as loud as the Russian voice, over the
-plan's music bed (plan.json) ducked under the English lines as the render ducks it under the Russian ones.
-
-A line longer than its slot (until the next line starts) is sped up, by MAX_TEMPO at most; one still too long
-is reported, to be shortened in the translation. The lip sync stays the Russian one.
+Lines keep their slots on the Russian timeline, sped up by MAX_TEMPO at most.
+A line still too long is reported for translation changes; lip sync stays Russian.
 """
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
-import re
+import math
+import os
+import shutil
 import subprocess
+import tempfile
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from functools import partial, reduce
+from functools import partial
 from pathlib import Path
 
 from gothic_launcher.commands import child_env, tools
 from gothic_launcher.settings import Config
 
-from . import srt
+from . import bed, compare, cut, explain, levels, srt, stems
 from .cut import CutError, load_subs
 from .film import shorts_dir
 from .gpu import GpuError, job
 from .shot import Shot
 from .timeline import Timeline, build, read_events
-from .voice import LEAD_IN_S, VOICE_ID, VoiceError, recording, say
+from .voice import LEAD_IN_S, VOICE_ID, VoiceError, say
 from .words import LEAD, clean_chain
 
-TARGET_LUFS = -14.0  # as the cut
-PEAK_DB = -1.5  # sample peaks of the track, after the limiter
 LOCALES = {"en": "en-US"}  # a dub's language -> the TTS's
 MAX_TEMPO = 1.15  # a line may be sped up this much to fit its slot
 GAP_S = 0.15  # an English line ends this long before the next one starts
 TAIL_S = 0.3  # and the last one this long before the short ends
-STING_S = 2.2  # the channel's end sting; its mastered sound is kept from the rendered Russian short
 LEAD_S = 0.05  # silence kept before a line's first sound (the line is placed this much early)
-MARGIN_S = 0.3  # the voices are taken out from this long before an npc's line to this long after it
-RAMP_S = 0.1  # fades between the recording's sound and the separated one
-MAX_GAIN_DB = 20.0
 # of the user's recorded lines, for the cloned voice: at least, at most (VoxCPM2's encoder takes up to 15 s;
 # Inworld clones best from 10-30 s)
 REFERENCE_S = (8.0, 14.0)
@@ -76,9 +63,6 @@ RUSSIAN_SAMPLE = (
     "водятся волки. Если встретишь стражу, не беги и не хватайся за оружие: скажи, что идёшь к паладинам. "
     "И возвращайся, когда узнаешь что-нибудь стоящее."
 )
-DUCK_RAMP_S = 0.35  # the explainer's music ducks under a line this fast (Explainer.tsx)
-FPS = 30  # the explainer's frame rate (Root.tsx)
-SEPARATOR = "htdemucs_ft"  # shorts/deploy/dub/separate.py
 
 # the silence at both ends of a TTS line trimmed to LEAD_S before and a breath after
 TRIM = (
@@ -162,34 +146,6 @@ def take_slots(tl: Timeline, subs: dict[str, str]) -> list[Slot]:
     return slots(rows, tl.cut_duration)
 
 
-def merged(spans: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    out: list[tuple[float, float]] = []
-    for a, b in sorted(spans):
-        if out and a <= out[-1][1]:
-            out[-1] = (out[-1][0], max(out[-1][1], b))
-        else:
-            out.append((a, b))
-    return out
-
-
-def mask(spans: list[tuple[float, float]], ramp: float) -> str:
-    """An ffmpeg expression of t: 1 inside the spans, 0 away from them, a linear ramp of `ramp` s at each
-    edge (outside it)."""
-    parts = [
-        f"clip(min((t-{a - ramp:.3f})/{ramp:g},({b + ramp:.3f}-t)/{ramp:g}),0,1)" for a, b in merged(spans)
-    ]
-    return reduce(lambda x, y: f"max({x},{y})", parts) if parts else "0"
-
-
-def music_volume(music: dict, end: float, spans: list[tuple[float, float]]) -> str:
-    """The explainer's bed as Explainer.tsx's Music plays it: `volume` faded in and out, `duck` times that
-    under each line (DUCK_RAMP_S ramps either side of it)."""
-    fade_in, fade_out = float(music.get("fadeIn", 1.0)), float(music.get("fadeOut", 1.5))
-    duck = float(music.get("duck", 0.5))
-    fade = f"min(clip(t/{fade_in:g},0,1),clip(({end:.3f}-t)/{fade_out:g},0,1))"
-    return f"{float(music['volume']):g}*{fade}*(1-{1 - duck:g}*{mask(spans, DUCK_RAMP_S)})"
-
-
 def english_provider(spec: str, locale: str) -> str:
     """The launcher's TTS provider spec for voices designed in `locale`: Inworld designs a voice per language
     (VoxCPM's are designed reading Russian), so another provider gives way to it."""
@@ -249,27 +205,6 @@ def _probe(path: Path, stream: str = "a:0") -> float | None:
         return None
 
 
-def loudness(path: Path, start: float | None = None, length: float | None = None) -> float | None:
-    """Integrated loudness (LUFS) of the file, or of a part of it, as it sounds in a stereo mix (a mono line
-    on both sides); None for silence."""
-    cut = ([] if start is None else ["-ss", f"{max(start, 0.0):.3f}"]) + (
-        [] if length is None else ["-t", f"{length:.3f}"]
-    )
-    err = _ffmpeg([*cut, "-i", str(path), "-af", "aformat=channel_layouts=stereo,loudnorm=print_format=json",
-                   "-f", "null", "-"], f"loudness of {path.name}")  # fmt: skip
-    found = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", err)
-    if not found:
-        return None
-    value = float(json.loads(found.group(0))["input_i"])
-    return value if value > -70 else None
-
-
-def _gain(target: float | None, level: float | None) -> float:
-    if target is None or level is None:
-        return 0.0
-    return max(-MAX_GAIN_DB, min(MAX_GAIN_DB, target - level))
-
-
 def trim(src: Path, dst: Path, chain: str = TRIM) -> float:
     """The line as 48 kHz mono with its silence trimmed (`chain`); returns its length."""
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -278,43 +213,176 @@ def trim(src: Path, dst: Path, chain: str = TRIM) -> float:
     return _seconds(dst)
 
 
-def _line_filters(placed: list[tuple[Path, float, Fit, float]], first: int) -> tuple[list[str], list[str]]:
-    """Each line (file, where its speech starts, its fit, gain dB) as a stream on the short's time."""
-    graph, labels = [], []
-    for i, (_, start, f, gain) in enumerate(placed):
-        ms = max(0, round((start - LEAD_S) * 1000))
-        tempo = f",atempo={f.tempo:.4f}" if f.tempo != 1.0 else ""
-        graph.append(
-            f"[{first + i}:a]aformat=sample_rates=48000:channel_layouts=stereo{tempo},"
-            f"volume={gain:.2f}dB,adelay={ms}|{ms}[l{i}]"
-        )
-        labels.append(f"[l{i}]")
-    return graph, labels
-
-
-def finish(mix: Path, out: Path, duration: float) -> float | None:
-    """The track at TARGET_LUFS: one gain for the whole of it, a limiter for the peaks it raises, exactly
-    `duration` long (48 kHz stereo, 24-bit); returns its loudness."""
-    level = loudness(mix)
-    gain = 0.0 if level is None else TARGET_LUFS - level
-    samples = round(duration * 48000)
+def _clear_outputs(out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
-    _ffmpeg(["-i", str(mix), "-af",
-             f"volume={gain:.2f}dB,alimiter=limit={10 ** (PEAK_DB / 20):.4f}:attack=5:release=50:level=0,"
-             f"aresample=48000,apad,atrim=end_sample={samples}",
-             "-ac", "2", "-c:a", "pcm_s24le", str(out)], "the track's loudness")  # fmt: skip
-    return loudness(out)
+    for path in (out, out.with_suffix(".wav"), out.with_suffix(".levels.json")):
+        path.unlink(missing_ok=True)
 
 
-def preview(short: Path, track: Path, out: Path) -> Path:
-    """The Russian short with the dub as its first (default) sound and the Russian as its second, to check
-    it as a viewer gets it."""
-    _ffmpeg(["-i", str(short), "-i", str(track), "-map", "0:v", "-map", "1:a", "-map", "0:a",
-             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-             "-metadata:s:a:0", "language=eng", "-metadata:s:a:1", "language=rus",
-             "-disposition:a:0", "default", "-disposition:a:1", "0", "-movflags", "+faststart", str(out)],
-            "the preview")  # fmt: skip
+def _failed_outputs(out: Path, error: BaseException) -> None:
+    out.unlink(missing_ok=True)
+    out.with_suffix(".wav").unlink(missing_ok=True)
+    report_path = out.with_suffix(".levels.json")
+    if report_path.is_file():
+        try:
+            report = json.loads(report_path.read_text())
+        except ValueError:
+            report = {}
+        if not isinstance(report, dict):
+            report = {}
+        if report.get("ok") is not False:
+            # Also invalidate a successful master interrupted during mux/decode.
+            report.update(ok=False, error=str(error) or type(error).__name__)
+            report_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+
+
+@dataclass
+class _Publication:
+    out: Path
+    work: Path
+    started: bool = False
+
+    def start(self) -> None:
+        """Replace previous outputs only once every input check has passed."""
+        self.started = True
+        _clear_outputs(self.out)
+
+
+@contextmanager
+def _publication(out: Path) -> Iterator[_Publication]:
+    """Lock through input checks, then clean up only an assembly that started."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # Keep this inode after release: unlinking it would let waiters lock different files.
+    with out.with_name(f".{out.stem}.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise DubError(f"Дубляж уже собирается: {out}") from error
+        publication = None
+        try:
+            with tempfile.TemporaryDirectory(prefix=f".{out.stem}-", dir=out.parent) as tmp:
+                publication = _Publication(out, Path(tmp))
+                yield publication
+        except BaseException as error:
+            if publication is not None and publication.started:
+                _failed_outputs(out, error)
+            raise
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _file_version(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def _published_russian(directory: Path, command: str, snapshot: Path) -> tuple[Path, dict, float]:
+    ru = directory / "short-ru.mp4"
+    invocation = command if command.endswith(".py") else f"gothic-shorts {command}"
+    message = (f"Сначала опубликуйте русский ролик через {invocation}: "
+               f"{ru} и его levels.json с ok: true")
+    try:
+        report_path = ru.with_suffix(".levels.json")
+        report_version = _file_version(report_path.stat())
+        with ru.open("rb") as source:
+            version = _file_version(os.fstat(source.fileno()))
+            report = json.loads(report_path.read_text())
+            if not isinstance(report, dict) or report.get("ok") is not True:
+                raise ValueError(message)
+            with snapshot.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+            if (version != _file_version(os.fstat(source.fileno()))
+                    or version != _file_version(ru.stat())
+                    or report_version != _file_version(report_path.stat())):
+                raise DubError("Русский ролик изменился при чтении; повторите дубляж после его публикации")
+        duration = _probe(snapshot)
+        if duration is None or not math.isfinite(duration) or duration <= 0:
+            raise ValueError(message)
+        _voice_mastered(report)
+    except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
+        raise DubError(message) from error
+    return snapshot, report, duration
+
+
+def _voice_mastered(report: dict) -> float:
+    return float(next(row["measured_lufs"] for row in report["rows"] if row["id"] == "voice_mastered"))
+
+
+def _check_duration(length: float, ru_duration: float) -> None:
+    if abs(length - ru_duration) > 1 / 30 + 1e-6:
+        raise DubError(f"Длина стемов {length:.6f} с расходится с short-ru.mp4 ({ru_duration:.6f} с) "
+                       "больше чем на кадр; сначала заново опубликуйте русский ролик через "
+                       "gothic-shorts cut / gothic-shorts explain")
+
+
+def _join_picture(ru: Path, effects: Path, out: Path) -> Path:
+    _ffmpeg(["-i", str(ru), "-i", str(effects), "-map", "0:v:0", "-map", "1:a:0",
+             "-c", "copy", str(out)], "the Russian picture and effects")
     return out
+
+
+def _english_stem(dub: Dub, line_slots: list[Slot], recordings: list[Path], names: list[str],
+                  total: float, work: Path, *, clean: bool = False) -> tuple[Path, list[levels.Window]]:
+    """Fit the lines before pooling each speaker's gain, then place them on cut time."""
+    clips, fitted, windows = [], [], []
+    lead = LEAD if clean else LEAD_S
+    for index, (slot, raw) in enumerate(zip(line_slots, recordings, strict=True)):
+        trimmed = work / f"line-{index:02d}.wav"
+        duration = trim(raw, trimmed, clean_chain(raw, declick=False) if clean else TRIM)
+        timing = fit(max(0.01, duration - lead), slot)
+        path = work / f"fit-{index:02d}.wav"
+        _ffmpeg(["-i", str(trimmed), "-af", f"atempo={timing.tempo:.4f}",
+                 "-ar", "48000", "-ac", "1", "-c:a", "pcm_s24le", str(path)], "fit the English line")
+        duration = _seconds(path)
+        start = slot.start - lead / timing.tempo
+        clips.append(stems.Clip(slot.who, path, start, start + duration))
+        windows.append((slot.start, max(slot.start + 1 / stems.SAMPLE_RATE, start + duration)))
+        fitted.append(timing)
+    gains = stems.speaker_gains(clips)
+    filters = []
+    for index, (clip, slot, timing, name) in enumerate(zip(clips, line_slots, fitted, names, strict=True)):
+        duration = clip.end - clip.start
+        fade = min(stems.CLIP_FADE_S, duration / 4)
+        trim_start = f"atrim=start={-clip.start:.9f},asetpts=PTS-STARTPTS," if clip.start < 0 else ""
+        delay = max(0, round(clip.start * stems.SAMPLE_RATE))
+        filters.append(
+            f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS,"
+            f"volume={gains[clip.who]:.9f}dB,adeclick=t=1:b=3,"
+            f"afade=t=in:d={fade:.9f},afade=t=out:st={duration - fade:.9f}:d={fade:.9f},"
+            f"{trim_start}adelay=delays={delay}S:all=1[v{index}]"
+        )
+        _report(dub, slot, timing, gains[clip.who], name)
+    filters.append("".join(f"[v{index}]" for index in range(len(clips))) +
+                   f"amix=inputs={len(clips)}:duration=longest:normalize=0,"
+                   f"apad=whole_dur={total:.9f},atrim=duration={total:.9f},"
+                   # An overlong final line can reach the body edge before its
+                   # own fade. Fade that cut too, before the ending's silence.
+                   f"afade=t=out:st={max(0, total - stems.CLIP_FADE_S):.9f}:"
+                   f"d={min(stems.CLIP_FADE_S, total):.9f}[voice]")
+    voice = work / "voice.en.wav"
+    _ffmpeg([*_inputs([clip.path for clip in clips]), "-filter_complex", ";".join(filters),
+             "-map", "[voice]", "-c:a", "pcm_f32le", str(voice)], "the English voice stem")
+    return voice, levels.merge_speech_windows(windows, total)
+
+
+def _publish(dub: Dub, ru: Path, joined: Path, music: Path | None, voice: Path,
+             speech: list[levels.Window], total: float, length: float, out: Path, work: Path,
+             **kwargs) -> None:
+    print("  start who            length/slot  tempo  gain  text")
+    for row in dub.rows:
+        print(f"  {row}")
+    report = levels.publish(joined, music, [(voice, 0.0)], speech, total, length, out=out, **kwargs)
+    dub.lufs = _voice_mastered(report)
+    preview = work / "preview.mp4"
+    # Copy the checked AAC without another encode, alongside the original Russian AAC.
+    _ffmpeg(["-i", str(out), "-i", str(ru), "-map", "0:v:0", "-map", "0:a:0", "-map", "1:a:0",
+             "-c", "copy", "-metadata:s:a:0", "language=eng", "-metadata:s:a:1", "language=rus",
+             "-disposition:a:0", "default", "-disposition:a:1", "0", "-movflags", "+faststart",
+             str(preview)], "the bilingual preview")
+    preview.replace(out)
+    samples = round(dub.duration * stems.SAMPLE_RATE)
+    _ffmpeg(["-i", str(out), "-map", "0:a:0", "-af", f"apad,atrim=end_sample={samples}",
+             "-ar", "48000", "-ac", "2", "-c:a", "pcm_s24le", str(dub.wav)], "the checked AAC as WAV")
+    dub.preview = out
 
 
 def _key(*parts: object) -> str:
@@ -322,25 +390,6 @@ def _key(*parts: object) -> str:
 
 
 # --- a take -------------------------------------------------------------------------------------------------
-
-
-def separate(take: Path, work: Path) -> tuple[Path, Path]:
-    """main.wav as its voices and the rest (Demucs on the GPU server), kept while main.wav stays the same."""
-    main = take / "main.wav"
-    voices, rest, stamp = work / "voices.wav", work / "rest.wav", work / "separated.key"
-    key = _key(main.stat().st_size, main.stat().st_mtime_ns, SEPARATOR)
-    if voices.is_file() and rest.is_file() and stamp.is_file() and stamp.read_text() == key:
-        return voices, rest
-    out = job(
-        [main],
-        "if [ ! -x ~/gothic-ai/dub/separate.sh ]; then echo 'no ~/gothic-ai/dub/separate.sh: run "
-        "scripts/deploy-gpu.sh dub' >&2; exit 1; fi; ~/gothic-ai/dub/separate.sh {dir}/main.wav {dir}/out",
-        {"out/voices.wav": voices, "out/rest.wav": rest},
-        "the voices' separation",
-    )
-    print(out.strip())
-    stamp.write_text(key)
-    return voices, rest
 
 
 def npc_voices(config: Config, npcs: list[str]) -> dict[str, dict[str, str]]:
@@ -358,75 +407,54 @@ def npc_voices(config: Config, npcs: list[str]) -> dict[str, dict[str, str]]:
 
 
 def dub_take(config: Config, shot: Shot, take: Path, lang: str = "en", provider: str | None = None) -> Dub:
-    if lang not in LOCALES:
-        raise DubError(f"no voices for {lang}: the dub speaks {', '.join(LOCALES)}")
-    events = take / "events.jsonl"
-    for p in (events, take / "main.wav"):
-        if not p.is_file():
-            raise DubError(f"the take has no {p.name}")
-    tl = build(read_events(events))
-    try:  # the lines only: the hook and the captions stay burnt in, in Russian
-        subs = load_subs(take, lang, list(dict.fromkeys(line.text for line in tl.lines)))
-    except CutError as err:
-        raise DubError(str(err)) from err
-    repo, _ = tools(config)
-    work = take / f"dub-{lang}"
-    work.mkdir(exist_ok=True)
-    voices, rest = separate(take, work)
+    out = take / f"dub.{lang}.mp4"
+    wav = out.with_suffix(".wav")
+    with _publication(out) as publication:
+        try:
+            if lang not in LOCALES:
+                raise DubError(f"no voices for {lang}: the dub speaks {', '.join(LOCALES)}")
+            ru, ru_report, ru_duration = _published_russian(take, "cut", publication.work / "short-ru.mp4")
+            for path in (take / "events.jsonl", take / "main.wav"):
+                if not path.is_file():
+                    raise DubError(f"the take has no {path.name}")
+            cut._validate_recording(take)
+            rows = read_events(take / "events.jsonl")
+            tl = build(rows)
+            if not tl.keep():
+                raise DubError("the take has no recorded body")
+            stems.collect(rows, tl)
+            total = cut.body_duration(tl)
+            sting_duration = cut._duration(cut.BRAND / "sting.mp4") if shot.brand else 0.0
+            length = total + sting_duration
+            _check_duration(length, ru_duration)
+            subs = load_subs(take, lang, list(dict.fromkeys(line.text for line in tl.lines)))
+            line_slots = take_slots(tl, subs)
+            repo, _ = tools(config)
+            work = take / f"dub-{lang}"
+            publication.start()
+            work.mkdir(exist_ok=True)
+            effects, _ = cut.render_effects(shot, take / "main.wav", tl, work / "game.wav", sting_duration)
+            joined = _join_picture(ru, effects, work / "joined.mkv")
+            music = bed.render(shot.bed, shot.bed_start, total, work / "music.wav")
 
-    # the English voices: the npc's designed from its Russian voice's description, the hero's from the shot's
-    npcs = sorted({line.who for line in tl.lines if not line.hero})
-    described = {"hero": (VOICE_ID, shot.hero_voice)}
-    for npc, v in npc_voices(config, npcs).items():
-        described[npc] = (v["voice_id"], v["voice"])
-    said: dict[str, list[str]] = {}
-    for line in tl.lines:
-        said.setdefault(line.who, []).append(subs[line.text])
-    recorded = english_voices(config, described, said, shorts_dir(repo) / "voice" / lang, lang, provider)
-
-    dub = Dub(take / f"dub.{lang}.wav", None, tl.cut_duration, None, None, None)
-    placed: list[tuple[Path, float, Fit, float]] = []
-    for i, (line, slot) in enumerate(zip(tl.lines, take_slots(tl, subs), strict=True)):
-        trimmed = work / f"line-{i:02d}.wav"
-        seconds = trim(recorded[(line.who, slot.en)], trimmed) - LEAD_S
-        f = fit(seconds, slot)
-        target = _russian_level(shot, line, voices, repo)
-        gain = _gain(target, loudness(trimmed))
-        placed.append((trimmed, slot.start, f, gain))
-        _report(dub, slot, f, gain, line.name or "hero")
-
-    ru = take / "short-ru.mp4"
-    if ru.is_file():
-        dub.ru_duration = _probe(ru)
-        dub.ru_lufs = loudness(ru)
-    dub.duration = dub.ru_duration or tl.cut_duration
-    mix = work / "mix.wav"
-    _mix_take(tl, take / "main.wav", rest, placed, mix)
-    # The rendered short is authoritative: the shot's brand flag may have changed since it was cut.
-    has_sting = dub.ru_duration is not None and dub.ru_duration - tl.cut_duration >= STING_S - 1 / 30
-    if has_sting:
-        body_duration = dub.duration - STING_S
-        body = work / "body.wav"
-        finish(mix, body, body_duration)
-        _take_sting(body, ru, dub.wav, body_duration, dub.duration)
-        dub.lufs = loudness(dub.wav)
-    else:
-        dub.lufs = finish(mix, dub.wav, dub.duration)
-    if ru.is_file():
-        dub.preview = preview(ru, dub.wav, take / f"dub.{lang}.mp4")
-    return dub
-
-
-def _take_sting(body: Path, ru: Path, out: Path, start: float, duration: float) -> None:
-    """Join the mastered English body to the Russian sting, preserving its gain and existing fades."""
-    first, last = round(start * 48000), round(duration * 48000)
-    graph = (
-        f"[0:a]afade=t=out:st={max(0, start - 0.02):.6f}:d=0.02[body];"
-        f"[1:a]aresample=48000,atrim=start_sample={first}:end_sample={last},"
-        "asetpts=PTS-STARTPTS[sting];[body][sting]concat=n=2:v=0:a=1[track]"
-    )
-    _ffmpeg(["-i", str(body), "-i", str(ru), "-filter_complex", graph, "-map", "[track]",
-             "-ac", "2", "-ar", "48000", "-c:a", "pcm_s24le", str(out)], "the dub's end sting")  # fmt: skip
+            npcs = sorted({line.who for line in tl.lines if not line.hero})
+            described = {"hero": (VOICE_ID, shot.hero_voice)}
+            for npc, voice in npc_voices(config, npcs).items():
+                described[npc] = (voice["voice_id"], voice["voice"])
+            said: dict[str, list[str]] = {}
+            for line in tl.lines:
+                said.setdefault(line.who, []).append(subs[line.text])
+            recorded = english_voices(config, described, said, shorts_dir(repo) / "voice" / lang,
+                                      lang, provider)
+            dub = Dub(wav, None, ru_duration, ru_duration, None, _voice_mastered(ru_report))
+            voice, speech = _english_stem(
+                dub, line_slots, [recorded[(slot.who, slot.en)] for slot in line_slots],
+                [line.name or "hero" for line in tl.lines], total, work,
+            )
+            _publish(dub, ru, joined, music, voice, speech, total, length, out, work)
+            return dub
+        except (CutError, bed.BedError, ValueError, OSError, subprocess.CalledProcessError) as error:
+            raise DubError(str(error)) from error
 
 
 def english_voices(
@@ -567,48 +595,6 @@ def voxcpm(ref: Path, lines: dict[str, Path], work: Path, design: dict | None = 
     print(log.strip())
 
 
-def _russian_level(shot: Shot, line, voices: Path, repo: Path) -> float | None:
-    """How loud the Russian line is in the short: an npc's in the separated voices over its line, the hero's
-    recording (by the take's path, or voiced again for this text: the same file)."""
-    if not line.hero:
-        return loudness(voices, line.start, max(line.end - line.start, 0.5))
-    for wav in (Path(line.wav) if line.wav else None, recording(shorts_dir(repo) / "voice", shot.hero_voice,
-                                                                 line.text)):  # fmt: skip
-        if wav is not None and wav.is_file():
-            return loudness(wav)
-    return None
-
-
-def _mix_take(tl: Timeline, main: Path, rest: Path, placed: list, out: Path) -> None:
-    spans = [(line.start - MARGIN_S, line.end + MARGIN_S) for line in tl.lines if not line.hero]
-    m = mask(spans, RAMP_S)
-    keep = tl.keep()
-    fmt = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,asetnsamples=n=240"
-    f = [
-        f"[0:a]{fmt},volume='1-({m})':eval=frame[o]",
-        f"[1:a]{fmt},volume='{m}':eval=frame[r]",
-        "[o][r]amix=inputs=2:normalize=0:duration=first[bg]",
-        f"[bg]asplit={len(keep)}" + "".join(f"[s{i}]" for i in range(len(keep))),
-    ]
-    # the parts of the recording the cut keeps, as the cut joins them
-    for i, (a, b) in enumerate(keep):
-        fade = min(0.02, (b - a) / 4)
-        f.append(
-            f"[s{i}]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS,"
-            f"afade=t=in:d={fade:.3f},afade=t=out:st={max(0.0, b - a - fade):.3f}:d={fade:.3f}[k{i}]"
-        )
-    f.append("".join(f"[k{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=0:a=1[cut]")
-    lines, labels = _line_filters(placed, 2)
-    f += lines
-    f.append(f"[cut]{''.join(labels)}amix=inputs={1 + len(labels)}:normalize=0:duration=first[mix]")
-    inputs = ["-i", str(main), "-i", str(rest)]
-    for wav, *_ in placed:
-        inputs += ["-i", str(wav)]
-    (out.parent / "ffmpeg.txt").write_text(";\n".join(f))
-    _ffmpeg([*inputs, "-filter_complex", ";".join(f), "-map", "[mix]", "-c:a", "pcm_f32le", str(out)],
-            "the dub's mix")  # fmt: skip
-
-
 def _report(dub: Dub, slot: Slot, f: Fit, gain: float, who: str) -> None:
     tempo = "" if f.tempo == 1.0 else f" x{f.tempo:.2f}"
     dub.rows.append(f"{slot.start:6.2f} {who[:14]:14} {f.seconds:4.1f}/{slot.room:4.1f} s{tempo:6} "
@@ -700,80 +686,123 @@ def dub_explainer(
     tts: str | None = None,
     reclone: bool = False,
 ) -> Dub:
-    words_path, plan_path = ws / "words.ru.json", ws / plan_file
-    for p in (words_path, plan_path):
-        if not p.is_file():
-            raise DubError(f"no {p}")
-    said = json.loads(words_path.read_text())["lines"]
-    plan = json.loads(plan_path.read_text())
-    texts_en = english_script(ws, lang)
-    if len(texts_en) != len(said):
-        raise DubError(f"script.{lang}.txt has {len(texts_en)} lines for {len(said)} said ones")
-    sounding = [b for b in plan["beats"] if b.get("src") and b.get("kind") in ("footage", "split")]
-    if float(plan.get("gameVolume", 1)) > 0 and any(float(b.get("game", 1)) > 0 for b in sounding):
-        raise DubError(
-            f"{plan_file} plays the footage's own sound (gameVolume > 0): the dub mixes the music and the "
-            "voice only"
-        )
-    end = round(sum(float(b["dur"]) for b in plan["beats"]) * FPS) / FPS
-    ru = ws / "render/short-ru.mp4"
-    dub = Dub(ws / f"render/dub.{lang}.wav", None, end, None, None, None)
-    if ru.is_file():
-        dub.ru_duration = _probe(ru)
-        dub.ru_lufs = loudness(ru)
-    dub.duration = dub.ru_duration or end
-
-    voiced = clone(config, ws, texts_en, lang, tts, reclone)
-    rows = [
-        ("voice", " ".join(w["text"] for w in r["words"]), en, r["words"][0]["start"], r["words"][-1]["end"])
-        for r, en in zip(said, texts_en, strict=True)
-    ]
-    work = ws / "voice" / lang
-    # cleaned as the Russian lines were (no declick: TTS has no clicks), LEAD kept before the voice
-    cleaned = [trim(v, work / v.name, clean_chain(v, declick=False)) - LEAD for v in voiced]
-    # the English voice as loud as the Russian one, one gain for all of it (the lines keep their differences)
-    ru_level = _level_of([ws / line["file"] for line in said], work / "ru.wav")
-    en_level = _level_of([work / v.name for v in voiced], work / "en.wav")
-    gain = _gain(ru_level, en_level)
-    placed: list[tuple[Path, float, Fit, float]] = []
-    spans = []
-    for v, seconds, slot in zip(voiced, cleaned, slots(rows, dub.duration), strict=True):
-        f = fit(seconds, slot)
-        # the cleaning keeps LEAD before the voice, not LEAD_S: placed so that the voice starts on the first word
-        placed.append((work / v.name, slot.start - (LEAD - LEAD_S), f, gain))
-        spans.append((slot.start, slot.start + f.seconds))
-        _report(dub, slot, f, gain, "voice")
-
-    mix = work / "mix.wav"
-    inputs: list[str] = []
-    music = plan.get("music")
-    if music:
-        inputs += ["-stream_loop", "-1", "-i", str(ws / music["file"])]
-        bed = (f"[0:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
-               f"atrim=end={dub.duration:.3f},asetnsamples=n=240,"
-               f"volume='{music_volume(music, end, spans)}':eval=frame[bed]")  # fmt: skip
-    else:
-        inputs += ["-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo:d={dub.duration:.3f}"]
-        bed = "[0:a]anull[bed]"
-    for wav, *_ in placed:
-        inputs += ["-i", str(wav)]
-    graph, labels = _line_filters(placed, 1)
-    f = [bed, *graph, f"[bed]{''.join(labels)}amix=inputs={1 + len(labels)}:normalize=0:duration=first[mix]"]
-    (work / "ffmpeg.txt").write_text(";\n".join(f))
-    _ffmpeg([*inputs, "-filter_complex", ";".join(f), "-map", "[mix]", "-c:a", "pcm_f32le", str(mix)],
-            "the dub's mix")  # fmt: skip
-    dub.lufs = finish(mix, dub.wav, dub.duration)
-    if ru.is_file():
-        dub.preview = preview(ru, dub.wav, ws / f"render/dub.{lang}.mp4")
-    return dub
+    ws = ws.resolve()
+    out = ws / f"render/dub.{lang}.mp4"
+    wav = out.with_suffix(".wav")
+    with _publication(out) as publication:
+        work = publication.work
+        try:
+            if lang not in LOCALES:
+                raise DubError(f"no voices for {lang}: the dub speaks {', '.join(LOCALES)}")
+            ru, ru_report, ru_duration = _published_russian(out.parent, "explain", work / "short-ru.mp4")
+            said = json.loads((ws / "words.ru.json").read_text())["lines"]
+            plan = json.loads((ws / plan_file).read_text())
+            _, total, length = explain.speech_windows(plan)
+            _check_duration(length, ru_duration)
+            texts_en = english_script(ws, lang)
+            if len(texts_en) != len(said):
+                raise DubError(f"script.{lang}.txt has {len(texts_en)} lines for {len(said)} said ones")
+            rows = [
+                ("voice", " ".join(word["text"] for word in line["words"]), en,
+                 line["words"][0]["start"], line["words"][-1]["end"])
+                for line, en in zip(said, texts_en, strict=True)
+            ]
+            line_slots = slots(rows, total)
+            music = plan.get("music")
+            fades = ((float(music.get("fadeIn", 1.0)), float(music.get("fadeOut", 1.5)))
+                     if music is not None else (0.0, 0.0))
+            dub = Dub(wav, None, ru_duration, ru_duration, None, _voice_mastered(ru_report))
+            publication.start()
+            explain.render(ws, plan, work, stems=("game", "music"))
+            joined = _join_picture(ru, work / "game.wav", work / "joined.mkv")
+            voiced = clone(config, ws, texts_en, lang, tts, reclone)
+            voice, speech = _english_stem(
+                dub, line_slots, voiced, ["voice"] * len(rows), total, work, clean=True,
+            )
+            _publish(dub, ru, joined, work / "music.wav" if music is not None else None,
+                     voice, speech, total, length, out, work,
+                     music_fades=False, music_fade_durations=fades)
+            return dub
+        except (explain.ExplainError, ValueError, OSError, KeyError, IndexError,
+                TypeError, subprocess.CalledProcessError) as error:
+            raise DubError(str(error)) from error
 
 
-def _level_of(wavs: list[Path], joined: Path) -> float | None:
-    """The loudness of the lines said one after another."""
-    one = "".join(f"[{i}:a]" for i in range(len(wavs))) + f"concat=n={len(wavs)}:v=0:a=1"
-    _ffmpeg([*_inputs(wavs), "-filter_complex", one, "-ar", "48000", "-ac", "1", "-c:a", "pcm_s24le",
-             str(joined)], "the voice's loudness")  # fmt: skip
-    return loudness(joined)
+def dub_compare(
+    config: Config,
+    ws: Path,
+    lang: str = "en",
+    plan_file: str = "plan.json",
+    tts: str | None = None,
+    reclone: bool = False,
+    takes: str | Path | None = None,
+) -> Dub:
+    """Dub a comparison over its original take effects and brand ending."""
+    ws = ws.resolve()
+    out = ws / f"render/dub.{lang}.mp4"
+    with _publication(out) as publication:
+        work = publication.work
+        try:
+            if lang not in LOCALES:
+                raise DubError(f"no voices for {lang}: the dub speaks {', '.join(LOCALES)}")
+            ru, ru_report, ru_duration = _published_russian(
+                out.parent, "shorts/compare/cut.py", work / "short-ru.mp4",
+            )
+            plan = json.loads((ws / plan_file).read_text())
+            source = takes if takes is not None else plan.get("takes")
+            if not source:
+                raise DubError("Укажите папку дублей сравнения: --takes DIR или ключ takes в плане")
+            takes_dir = Path(source).expanduser()
+            if not takes_dir.is_dir():
+                raise DubError(f"Нет папки дублей {takes_dir}: укажите --takes DIR")
+            required = [takes_dir / side / f"{beat['segment']}.{ext}"
+                        for beat in plan["beats"] for side, ext in
+                        (("off", "mp4"), ("on", "mp4"), ("on", "wav"))]
+            music = plan.get("music")
+            if music:
+                required.append(takes_dir / music["file"])
+            brand = plan.get("brand", True)
+            if brand:
+                required.append(compare.BRAND / "sting.mp4")
+            for path in required:
+                if not path.is_file():
+                    raise DubError(f"Нет файла сравнения: {path}")
+            _, total = levels.speech_windows(plan)
+            # AAC padding and frame rounding can change the ending's duration.
+            # Measure the same encode as the Russian builder, before replacing outputs.
+            ending_length = compare.build_ending(work)[1] if brand else 0.0
+            length = total + ending_length
+            _check_duration(length, ru_duration)
+            texts_en = english_script(ws, lang)
+            said = [line for beat in plan["beats"] for line in beat.get("lines", [])]
+            if len(texts_en) != len(said):
+                raise DubError(f"script.{lang}.txt has {len(texts_en)} lines for {len(said)} said ones")
+            if not said:
+                raise DubError("В плане сравнения нет озвученных строк")
+            rows, offset = [], 0.0
+            for beat in plan["beats"]:
+                for line in beat.get("lines", []):
+                    words = line["words"]
+                    at = offset + line["at"] - beat["start"]
+                    rows.append(("voice", " ".join(word[0] for word in words), texts_en[len(rows)],
+                                 at + words[0][1], at + words[-1][2]))
+                offset += beat["end"] - beat["start"]
+            line_slots = slots(rows, total)
+            dub = Dub(out.with_suffix(".wav"), None, ru_duration, ru_duration,
+                      None, _voice_mastered(ru_report))
+            publication.start()
+            built = compare.build(plan, takes_dir, "ru", work)
+            joined = _join_picture(ru, built.joined, work / "picture.mp4")
+            voiced = clone(config, ws, texts_en, lang, tts, reclone)
+            voice, speech = _english_stem(
+                dub, line_slots, voiced, ["voice"] * len(rows), total, work, clean=True,
+            )
+            _publish(dub, ru, joined, built.music, voice, speech, built.total, built.length,
+                     out, work, music_fades=True)
+            return dub
+        except (CutError, ValueError, OSError, KeyError, IndexError,
+                TypeError, subprocess.CalledProcessError) as error:
+            raise DubError(str(error)) from error
 
 
 def _inputs(files: list[Path]) -> list[str]:

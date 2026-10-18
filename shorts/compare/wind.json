@@ -5,6 +5,11 @@
     "en": "Magic in Gothic:\nbefore and after"
   },
   "hook_s": 2.2,
+  "cover": {
+    "segment": "fireball",
+    "at": 1.8,
+    "title": {"ru": "МАГИЯ", "en": "MAGIC"}
+  },
   "labels": {
     "ru": [
       "Было: без физики",

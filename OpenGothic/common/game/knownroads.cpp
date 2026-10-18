@@ -8,6 +8,53 @@
 
 using Tempest::Vec3;
 
+namespace {
+struct Projection final {
+  Vec3 point = {};
+  size_t segment = 0;
+  double alongCm = 0;
+  double distanceCm = 0;
+  };
+
+Projection project(const std::vector<Vec3>& line, const Vec3& position) {
+  Projection result;
+  result.point = line.front();
+  double best = double((position-line.front()).quadLength());
+  double along = 0;
+  for(size_t i=0; i+1<line.size(); ++i) {
+    const auto edge = line[i+1]-line[i];
+    const double squared = double(edge.quadLength());
+    const double length = std::sqrt(squared);
+    const auto delta = position-line[i];
+    const double dot = double(delta.x)*edge.x+double(delta.y)*edge.y+double(delta.z)*edge.z;
+    const double t = squared>0 ? std::clamp(dot/squared,0.,1.) : 0.;
+    const auto point = line[i]+edge*float(t);
+    const double distance = double((point-position).quadLength());
+    // Strict comparison preserves the earliest projection at crossings.
+    if(distance<best) {
+      best = distance;
+      result.point = point;
+      result.segment = i;
+      result.alongCm = along+t*length;
+      }
+    along += length;
+    }
+  result.distanceCm = std::sqrt(best);
+  return result;
+  }
+
+Vec3 pointAt(const std::vector<Vec3>& line, double distance) {
+  for(size_t i=0; i+1<line.size(); ++i) {
+    const auto edge = line[i+1]-line[i];
+    const double length = double(edge.length());
+    if(length>0 && distance<length)
+      return line[i]+edge*float(distance/length);
+    distance -= length;
+    }
+  return line.back();
+  }
+}
+
 KnownRoads::KnownRoads(std::vector<Node> nodes, std::vector<Edge> edges)
   : graphNodes(std::move(nodes)), graphEdges(std::move(edges)),
     adjacency(graphNodes.size()), majorNodes(graphNodes.size(),0) {
@@ -244,4 +291,35 @@ KnownRoads::Path KnownRoads::path(const Knowledge& knowledge, const Vec3& start,
   std::reverse(result.nodes.begin(),result.nodes.end());
   std::reverse(result.edges.begin(),result.edges.end());
   return result;
+  }
+
+void KnownRoads::updateGuidance(const Knowledge& knowledge, const Vec3& position,
+                               const Vec3& goal, Guidance& guidance) const {
+  validate(knowledge);
+  guidance.rebuilt = false;
+  bool rebuild = !guidance.initialized || (goal-guidance.goal).quadLength()>.0001f;
+  if(!rebuild && !guidance.polyline.empty()) {
+    const auto projection = project(guidance.polyline,position);
+    rebuild = !guidance.beyondKnown && projection.distanceCm>guidanceReplanCm;
+    if(!rebuild)
+      guidance.progressCm = std::max(guidance.progressCm,projection.alongCm);
+    }
+  if(rebuild) {
+    guidance = Guidance{};
+    guidance.initialized = guidance.rebuilt = true;
+    guidance.goal = goal;
+    guidance.route = path(knowledge,position,goal);
+    for(const auto node:guidance.route.nodes)
+      guidance.polyline.push_back(graphNodes[node].position);
+    for(size_t i=0; i+1<guidance.polyline.size(); ++i)
+      guidance.knownLengthCm += double((guidance.polyline[i+1]-guidance.polyline[i]).length());
+    if(!guidance.polyline.empty())
+      guidance.progressCm = project(guidance.polyline,position).alongCm;
+    }
+  guidance.remainingKnownCm = std::max(0.,guidance.knownLengthCm-guidance.progressCm);
+  // The terminal handoff is permanent for this episode: the subsequent
+  // approach to the goal must not replan back to the familiar endpoint.
+  guidance.beyondKnown = guidance.beyondKnown || guidance.remainingKnownCm<=guidanceLookaheadCm;
+  guidance.carrot = guidance.beyondKnown ? goal :
+      pointAt(guidance.polyline,guidance.progressCm+guidanceLookaheadCm);
   }

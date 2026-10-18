@@ -33,16 +33,20 @@ CEILING_HEADROOM_LU = 0.5
 PEAK_LIMIT = 0.71
 # A sub-threshold pilot follows the limiter's shared gain without influencing it.
 LIMITER_PILOT = 0.01
-MUSIC_BELOW_VOICE_LU = 14.0
+# Keep a quiet bed that is still audible; at S−14 with another −6 dB under
+# speech it disappeared behind the voice. Music stays at least 3 LU below effects.
+MUSIC_BELOW_VOICE_LU = 11.0
 MUSIC_BELOW_GAME_LU = 3.0
-MUSIC_DUCK_DB = 6.0
-# Allow up to 12 LU of extra speech-window energy without extreme ducking
+MUSIC_DUCK_DB = 3.0
+# Allow extra speech-window energy without extreme ducking
 # when a pause is unusually quiet or unrepresentative of the music bed.
 MAX_MUSIC_DUCK_DB = 18.0
-GAME_BELOW_VOICE_LU = 6.0
-GAME_PAUSE_BELOW_VOICE_LU = 3.0
-ENDING_BELOW_VOICE_LU = 6.0
-ENDING_CHECK_BELOW_VOICE_LU = 5.0
+# Keep effects well below the voice: at S−6 / S−3 they competed with it.
+# The ending's quill stays at the same level as effects in pauses.
+GAME_BELOW_VOICE_LU = 12.0
+GAME_PAUSE_BELOW_VOICE_LU = 8.0
+ENDING_BELOW_VOICE_LU = GAME_PAUSE_BELOW_VOICE_LU
+ENDING_CHECK_BELOW_VOICE_LU = ENDING_BELOW_VOICE_LU - 1.0
 LEVEL_TOLERANCE_LU = 1.5
 RAMP_SECONDS = 0.150
 # ebur128's summary is rounded to tenths; keep game gain on the safe side.
@@ -260,7 +264,8 @@ def check_balance(speech_lufs: float | None, music_pause_lufs: float | None,
         goal = target - duck if target is not None else None
         ok = (value == goal or math.isfinite(value) and abs(value - goal) <= LEVEL_TOLERANCE_LU + 1e-6
               if value is not None and goal is not None else None)
-        description = (f"min(S - 14, game_pause - 3) - {duck:g} LU ± {LEVEL_TOLERANCE_LU:g}"
+        description = (f"min(S - {MUSIC_BELOW_VOICE_LU:g}, game_pause - {MUSIC_BELOW_GAME_LU:g})"
+                       f" - {duck:g} LU ± {LEVEL_TOLERANCE_LU:g}"
                        if voiced else "measured")
         row(key, value, goal, description, ok)
     for key, value, below in (("game_speech", game_speech_lufs, GAME_BELOW_VOICE_LU),
@@ -269,13 +274,15 @@ def check_balance(speech_lufs: float | None, music_pause_lufs: float | None,
         goal = s - below if s is not None else None
         row(key, value, goal, f"≤ S - {below:g} LU" if voiced else "measured",
             value <= goal + 1e-6 if value is not None and goal is not None else None)
-    for key, value, reference, name in (
-        ("game_below_voice", game_pause_lufs, s, "voice"),
-        ("music_below_game", music_pause_lufs, game_pause_lufs, "game_pause"),
+    for key, value, reference, name, below, tolerance in (
+        ("game_below_voice", game_pause_lufs, s, "voice", GAME_PAUSE_BELOW_VOICE_LU, 0),
+        ("music_below_game", music_pause_lufs, game_pause_lufs, "game_pause",
+         MUSIC_BELOW_GAME_LU, LEVEL_TOLERANCE_LU),
     ):
-        goal = reference - MUSIC_BELOW_GAME_LU if reference is not None else None
-        row(key, value, goal, f"≤ {name} - 3 LU + {LEVEL_TOLERANCE_LU:g}" if voiced else "measured",
-            value <= goal + LEVEL_TOLERANCE_LU + 1e-6
+        goal = reference - below if reference is not None else None
+        allowance = f" + {tolerance:g}" if tolerance else ""
+        row(key, value, goal, f"≤ {name} - {below:g} LU{allowance}" if voiced else "measured",
+            value <= goal + tolerance + 1e-6
             if voiced and value is not None and goal is not None else None)
     return {"voiced": voiced, "ok": all(r["ok"] is not False for r in rows), "rows": rows}
 
@@ -646,7 +653,7 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
         music_speech = raw.measure("music", music_speech_windows, meter_gain_db=meter_gain)
         if math.isfinite(music_speech) and music_pause is not None and math.isfinite(music_pause):
             # A common gain puts raw pauses on target; compensate the bed's
-            # own dynamics as well to put speech at that same target minus 6 LU.
+            # own dynamics as well to apply the configured speech duck below that target.
             music_duck = min(MAX_MUSIC_DUCK_DB, max(0.0, MUSIC_DUCK_DB + music_speech - music_pause))
             lower, upper = 0.0, MAX_MUSIC_DUCK_DB
             for attempt in range(9) if music_pause_fallback else ():

@@ -4,13 +4,14 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from PIL import Image
 
-from gothic_shorts import bed, cli, cut, levels
+from gothic_shorts import bed, cli, compare, cut, levels
 from gothic_shorts.shot import Shot
-from gothic_shorts.timeline import build, read_events
+from gothic_shorts.timeline import Timeline, build, read_events
 
 
 def _ffmpeg(*args):
@@ -88,7 +89,6 @@ def synthetic_assets(tmp_path_factory):
         "-c:a", "flac", str(music / "khorinis-countryside.flac"),
     )
     (music / "catalog.tsv").write_text("file\tclean_from_s\nkhorinis-countryside.flac\t2\n")
-    Image.new("RGBA", (10, 10), (255, 214, 102, 255)).save(brand / "seal-corner.png")
     _ffmpeg(
         "-f", "lavfi", "-i", "color=c=blue:s=108x192:r=30:d=1.2",
         "-f", "lavfi", "-i", "sine=frequency=350:sample_rate=48000:duration=1.2",
@@ -102,7 +102,6 @@ def synthetic_assets(tmp_path_factory):
 def _small_cut(monkeypatch, assets):
     monkeypatch.setattr(cut, "W", 108)
     monkeypatch.setattr(cut, "H", 192)
-    monkeypatch.setattr(cut, "SEAL", (90, 10))
     monkeypatch.setattr(cut, "BRAND", assets.brand)
     monkeypatch.setattr(bed, "MUSIC", assets.music)
 
@@ -145,6 +144,151 @@ def _pcm(path):
          "-f", "s16le", "-ar", "48000", "-ac", "2", "-"],
         check=True, capture_output=True,
     ).stdout
+
+
+@pytest.mark.parametrize("brand", [True, False])
+@pytest.mark.parametrize("overlay_count", [0, 2])
+def test_ai_filters_only_overlay_text_and_append_the_ending(tmp_path, monkeypatch, brand, overlay_count):
+    video, audio = tmp_path / "main.mp4", tmp_path / "main.wav"
+    overlays = [cut.Overlay(tmp_path / f"line{i}.png", 0, 2, 20) for i in range(overlay_count)]
+    run = Mock(return_value=SimpleNamespace(returncode=0))
+    monkeypatch.setattr(cut.subprocess, "run", run)
+    monkeypatch.setattr(cut, "BRAND", tmp_path / "brand")
+
+    cut._join(Shot("probe", "Проба", "rec main", brand=brand), video, audio,
+              Timeline(3), overlays, tmp_path, 1.2 if brand else 0)
+
+    command = run.call_args.args[0]
+    inputs = [Path(command[i + 1]) for i, arg in enumerate(command) if arg == "-i"]
+    assert inputs == [video, audio, *(overlay.png for overlay in overlays),
+                      *([cut.BRAND / "sting.mp4"] if brand else [])]
+    graph = command[command.index("-filter_complex") + 1]
+    assert graph.count("overlay=") == overlay_count
+    if brand:
+        index = 2 + overlay_count
+        assert f"[{index}:v]scale=" in graph
+        assert f"[{index}:a]aformat=" in graph
+        assert "[bodyv][bodya][stingv][stinga]concat=n=2:v=1:a=1" in graph
+    else:
+        assert "[stingv]" not in graph and "[stinga]" not in graph
+
+
+@pytest.mark.parametrize("brand", [True, False])
+@pytest.mark.parametrize("cover_kind", [None, "default", "custom"])
+def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(
+    tmp_path, monkeypatch, capsys, brand, cover_kind,
+):
+    if cover_kind and not Path("/System/Library/Fonts/Supplemental/Arial Black.ttf").is_file():
+        pytest.skip("macOS Arial Black is unavailable")
+    plan = {
+        "brand": brand, "labels": {"ru": ["До", "После"]},
+        "hook": {"ru": "Проверка"}, "hook_s": 2,
+        "beats": [
+            {"segment": "main", "start": 0, "end": 3,
+             "slow": {"from": 1, "to": 2, "ru": "Замедлено"},
+             "lines": [{"at": 1, "file": "voice.wav", "words": [["Проверка", 0, 0.8]]}]},
+            {"segment": "next", "start": 0, "end": 3, "title": {"ru": "Следом"}},
+        ],
+    }
+    if cover_kind:
+        plan["cover"] = {"segment": "clean", "at": 1.8, "title": {"ru": "МАГИЯ", "en": "MAGIC"}}
+        if cover_kind == "custom":
+            plan["cover"]["sub"] = {"ru": "СВОЯ СТРОКА", "en": "CUSTOM LINE"}
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text(json.dumps(plan))
+    commands, concat_lists = [], []
+
+    def run(command):
+        commands.append(command)
+        if "concat" in command:
+            concat_lists.append(Path(command[command.index("-i") + 1]).read_text())
+        if Path(command[-1]).name == "cover-frame.png":
+            Image.new("RGB", (1080, 1920), (30, 60, 90)).save(command[-1])
+
+    text_image = Mock()
+    caption_image = Mock()
+    publish = Mock()
+    monkeypatch.setattr(compare, "ROOT", tmp_path)
+    monkeypatch.setattr(compare, "BRAND", tmp_path / "brand")
+    monkeypatch.setattr(compare.sys, "argv", ["cut.py", "probe", "ru", str(plan_file)])
+    monkeypatch.setattr(compare, "text_image", text_image)
+    monkeypatch.setattr(compare, "caption_image", caption_image)
+    monkeypatch.setattr(compare, "run", run)
+    monkeypatch.setattr(compare.subprocess, "run", Mock(return_value=SimpleNamespace(stdout="1.2")))
+    monkeypatch.setattr(compare.levels, "publish", publish)
+    render_cover = Mock(wraps=compare.cover.render)
+    monkeypatch.setattr(compare.cover, "render", render_cover)
+
+    compare.main()
+
+    beats = [command for command in commands if "-filter_complex" in command and "-frames:v" not in command]
+    assert len(beats) == 2
+    for command, expected in zip(beats, [["t0.png", "hook.png", "s0.png", "c0_0_0.png"],
+                                        ["t1.png"]], strict=True):
+        inputs = [Path(command[i + 1]) for i, arg in enumerate(command) if arg == "-i"]
+        assert [path.name for path in inputs if path.suffix == ".png"] == expected
+        graph = command[command.index("-filter_complex") + 1]
+        assert graph.count("overlay=") == len(expected)
+        assert graph.count("overlay=0:0") == len(expected)
+        assert f"[{len(inputs) - 1}]atrim=" in graph  # effects follow the remaining image inputs
+    assert "enable='between(t,1,2)'" in beats[0][beats[0].index("-filter_complex") + 1]
+    text_layers = {call.args[0].name: call.args[1] for call in text_image.call_args_list}
+    assert [(item[3], item[5]) for item in text_layers["s0.png"]] == [(40, "r"), (1000, "r")]
+    assert [item[3] for item in text_layers["t1.png"]] == [40, 1000, 810]
+    assert caption_image.call_count == 1
+    ending = [command for command in commands if str(compare.BRAND / "sting.mp4") in command]
+    assert len(ending) == int(brand)
+    assert len(concat_lists) == 1
+    assert ("sting.mp4" in concat_lists[0]) is brand
+    assert publish.call_args.args[4:6] == (6, 7.2 if brand else 6)
+    cover_path = tmp_path / "render/cover-ru.jpg"
+    assert cover_path.is_file() is bool(cover_kind)
+    output = capsys.readouterr().out
+    if cover_kind:
+        with Image.open(cover_path) as image:
+            assert image.size == (1080, 1920)
+            assert image.format == "JPEG"
+        assert cover_path.stat().st_size <= 2_000_000
+        assert str(cover_path) in output
+        assert render_cover.call_args.args[1:] == (
+            "МАГИЯ", "СВОЯ СТРОКА" if cover_kind == "custom" else "БЫЛО → СТАЛО",
+        )
+        extraction = next(command for command in commands if Path(command[-1]).name == "cover-frame.png")
+        assert [extraction[i + 1] for i, arg in enumerate(extraction) if arg == "-ss"] == ["1.8", "1.8"]
+        assert [Path(extraction[i + 1]) for i, arg in enumerate(extraction) if arg == "-i"] == [
+            tmp_path / ".shorts/compare/probe/off/clean.mp4",
+            tmp_path / ".shorts/compare/probe/on/clean.mp4",
+        ]
+        graph = extraction[extraction.index("-filter_complex") + 1]
+        assert graph.count(f"scale=1080:960,{compare.GRADE}") == 2
+        assert "vstack" in graph
+        assert "overlay" not in graph
+    else:
+        assert "cover: none" in output
+        render_cover.assert_not_called()
+
+
+@pytest.mark.skipif(
+    not Path("/System/Library/Fonts/Supplemental/Arial Black.ttf").is_file(),
+    reason="macOS Arial Black is unavailable",
+)
+def test_compare_cover_stacks_clean_graded_takes_with_ffmpeg(tmp_path):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for a comparison cover")
+    for take, color in [("off", "0x502010"), ("on", "0x102050")]:
+        (tmp_path / take).mkdir()
+        _ffmpeg(
+            "-f", "lavfi", "-i", f"color=c={color}:s=108x96:r=10:d=0.4",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(tmp_path / take / "scene.mp4"),
+        )
+    plan = {"cover": {"segment": "scene", "at": 0.2, "title": {"en": "MAGIC"}}}
+    path = compare.render_cover(plan, tmp_path, "en", tmp_path / "short-en.mp4")
+    assert path == tmp_path / "cover-en.jpg"
+    with Image.open(path) as image:
+        assert image.size == (1080, 1920)
+        top, bottom = image.getpixel((100, 100)), image.getpixel((100, 1800))
+    assert top[0] > 80 and top[0] > top[1] > top[2]
+    assert bottom[2] > 80 and bottom[2] > bottom[1] > bottom[0]
 
 
 def test_synthetic_cut_publishes_calibrated_voice_and_complete_artifacts(published_cut):
@@ -317,7 +461,7 @@ def test_brand_pngs_use_pt_serif_bold_warm_outline_and_shorts_safe_area(tmp_path
     for item, overlay in zip(shown, overlays, strict=True):
         with Image.open(overlay.png) as image:
             left, top, right, bottom = image.getchannel("A").getbbox()
-            assert 60 <= left < right <= 930  # to the left of both Shorts UI and the fixed seal
+            assert 60 <= left < right <= 930  # to the left of the Shorts UI
             assert 150 <= overlay.y + top < overlay.y + bottom <= 1540
             colors = {rgba for count, rgba in image.getcolors(image.width * image.height)}
         assert (20, 12, 8, 255) in colors

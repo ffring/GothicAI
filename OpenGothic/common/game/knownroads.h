@@ -16,6 +16,8 @@ class KnownRoads final {
     static constexpr size_t invalid = size_t(-1);
     static constexpr float neighborhoodCm = 4000.f;
     static constexpr float majorRangeCm = 30000.f;
+    static constexpr float guidanceLookaheadCm = 600.f;
+    static constexpr float guidanceReplanCm = 800.f;
 
     struct Node final {
       std::string name;
@@ -40,6 +42,20 @@ class KnownRoads final {
       // another familiar component. Never consults unknown nodes or edges.
       bool goalInKnown = false;
       };
+    // One episode's coarse familiar route. The polyline contains only graph
+    // nodes: lookahead is measured on the road from the actor's projection,
+    // never along an off-road connector. route keeps the graph IDs.
+    struct Guidance final {
+      Path route;
+      std::vector<Tempest::Vec3> polyline;
+      Tempest::Vec3 goal = {}, carrot = {};
+      double progressCm = 0;
+      double knownLengthCm = 0;
+      double remainingKnownCm = 0;
+      bool initialized = false;
+      bool beyondKnown = false;
+      bool rebuilt = false;
+      };
 
     KnownRoads(std::vector<Node> nodes, std::vector<Edge> edges);
     const std::vector<Node>& nodes() const { return graphNodes; }
@@ -58,6 +74,12 @@ class KnownRoads final {
     // reachable familiar component permits. Search never crosses unknown edges.
     Path path(const Knowledge& knowledge, const Tempest::Vec3& start,
               const Tempest::Vec3& goal) const;
+    // No mesh or hidden geometry. Reset Guidance at an episode boundary.
+    // Progress cannot decrease; only a >8 m deviation rebuilds the route.
+    // If the 6 m lookahead passes the familiar endpoint, eyes take over:
+    // carrot becomes the goal and beyondKnown remains true until reset.
+    void updateGuidance(const Knowledge& knowledge, const Tempest::Vec3& position,
+                        const Tempest::Vec3& goal, Guidance& guidance) const;
 
   private:
     struct Search final {

@@ -7,6 +7,7 @@
 
 #include "graphics/mesh/submesh/animmesh.h"
 #include "gothic.h"
+#include "physics/worldwind.h"
 
 using namespace Tempest;
 
@@ -32,8 +33,8 @@ struct VisualObjects::InstanceDesc {
   float    pos[4][3] = {};
   float    fatness   = 0;
   uint32_t animPtr   = 0;
-  uint32_t padd0     = {};
-  uint32_t padd1     = {};
+  uint32_t deformPtr = 0;
+  uint32_t deformCount = 0;
   };
 
 struct VisualObjects::MorphDesc final {
@@ -99,9 +100,64 @@ void VisualObjects::Item::setWind(zenkit::AnimationType m, float intensity) {
     owner->objectsWind.insert(id);
   }
 
+void VisualObjects::Item::setVisible(bool visible) {
+  if(owner==nullptr)
+    return;
+  auto& obj = owner->objects[id];
+  if(obj.visible==visible || obj.isEmpty())
+    return;
+  obj.visible = visible;
+  const auto meshlets = obj.iboLen/PackedMesh::MaxInd;
+  const auto count = obj.type==DrawCommands::Landscape ? meshlets : 1u;
+  for(uint32_t i=0;i<count;++i)
+    owner->clustersMem[obj.clusterId+i].meshletCount = visible ? (obj.type==DrawCommands::Landscape ? 1u : meshlets) : 0u;
+  owner->clustersMem.markClusters(obj.clusterId,count);
+  owner->updateRtAs(id);
+  }
+
 void VisualObjects::Item::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly) {
   if(owner!=nullptr)
     owner->startMMAnim(id, anim, intensity, timeUntil, freeOnly);
+  }
+
+void VisualObjects::Item::setDeformation(const std::vector<Tempest::Vec4>& vertices) {
+  if(owner==nullptr)
+    return;
+  auto& obj = owner->objects[id];
+  const auto count = uint32_t(vertices.size()/2);
+  if(count==0) {
+    if(obj.deformCount==0)
+      return;
+    obj.objDeform = InstanceStorage::Id();
+    obj.deformCount = 0;
+    if(auto mesh=obj.bucketId->staticMesh) {
+      owner->clustersMem[obj.clusterId].r = mesh->bbox.rConservative+obj.bucketId->mat.waveMaxAmplitude;
+      owner->clustersMem.markClusters(obj.clusterId);
+      }
+    owner->updateInstance(id);
+    return;
+    }
+  const auto size = vertices.size()*sizeof(Tempest::Vec4);
+  const bool changed = owner->instanceMem.realloc(obj.objDeform,size);
+  obj.objDeform.set(vertices.data(),0,size);
+  // The authored bounds are shared by every instance. Grow this instance's
+  // sphere to retain cloth that folds beyond the original flat mesh bounds.
+  float radius = 0;
+  for(size_t i=0;i<vertices.size();i+=2) {
+    const auto& p = vertices[i];
+    Vec3 point(p.x,p.y,p.z);
+    float zero = 0;
+    obj.pos.project(point.x,point.y,point.z,zero);
+    radius = std::max(radius,point.length());
+    }
+  if(owner->clustersMem[obj.clusterId].r<radius) {
+    owner->clustersMem[obj.clusterId].r = radius;
+    owner->clustersMem.markClusters(obj.clusterId);
+    }
+  if(changed || obj.deformCount!=count) {
+    obj.deformCount = count;
+    owner->updateInstance(id);
+    }
   }
 
 void VisualObjects::Item::setMMShape(std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity) {
@@ -111,6 +167,38 @@ void VisualObjects::Item::setMMShape(std::string_view anim, uint32_t frame0, uin
 
 float VisualObjects::Item::morphWeight(std::string_view anim) {
   return owner!=nullptr ? owner->morphWeight(id, anim) : 0.f;
+  }
+
+VisualObjects::MorphSample VisualObjects::Item::morphSample(std::string_view name, uint64_t tick) const {
+  if(owner==nullptr)
+    return {};
+  auto& obj = owner->objects[id];
+  const auto* mesh = obj.bucketId->staticMesh;
+  if(mesh==nullptr || mesh->morph.anim==nullptr)
+    return {};
+  for(const auto& ani:obj.morphAnim) {
+    if(ani.id>=mesh->morph.anim->size() || ani.timeUntil<tick)
+      continue;
+    const auto& anim = (*mesh->morph.anim)[ani.id];
+    if(anim.name!=name || anim.numFrames==0 || ani.intensity<=0.f)
+      continue;
+    const auto time = tick-ani.timeStart;
+    float weight = 1.f;
+    if(!ani.manual) {
+      if(anim.blendIn>0.f)
+        weight = std::min(weight,float(time)*anim.blendIn);
+      if(anim.blendOut>0.f && ani.timeUntil!=uint64_t(-1))
+        weight = std::min(weight,float(ani.timeUntil-tick)*anim.blendOut);
+      }
+    const auto quantize = [](float x) { return float(uint16_t(std::clamp(x,0.f,1.f)*uint16_t(-1)))/float(uint16_t(-1)); };
+    MorphSample sample;
+    sample.frame0 = ani.manual ? ani.frame0 : uint32_t((time/anim.tickPerFrame+0)%anim.numFrames);
+    sample.frame1 = ani.manual ? ani.frame1 : uint32_t((time/anim.tickPerFrame+1)%anim.numFrames);
+    sample.alpha = quantize(ani.manual ? ani.alpha : float(time%anim.tickPerFrame)/float(anim.tickPerFrame));
+    sample.intensity = quantize(ani.intensity*std::clamp(weight,0.f,1.f));
+    return sample;
+    }
+  return {};
   }
 
 const Material& VisualObjects::Item::material() const {
@@ -172,6 +260,8 @@ void VisualObjects::updateInstance(size_t id, Matrix4x4* pos) {
   d.setPosition(pos==nullptr ? obj.pos : *pos);
   d.animPtr = obj.animPtr;
   d.fatness = obj.fatness*0.5f;
+  d.deformPtr = obj.objDeform.offsetId<uint32_t>();
+  d.deformCount = obj.deformCount;
   obj.objInstance.set(&d, 0, sizeof(d));
 
   auto cId  = obj.clusterId;
@@ -335,7 +425,7 @@ void VisualObjects::free(size_t id) {
   clustersMem.free(obj.clusterId, numCluster);
   updateRtAs(id);
 
-  if(obj.wind==zenkit::AnimationType::NONE)
+  if(obj.wind!=zenkit::AnimationType::NONE)
     objectsWind.erase(id);
   if(obj.type==DrawCommands::Morph)
     objectsMorph.erase(id);
@@ -586,45 +676,12 @@ void VisualObjects::preFrameUpdate() {
   }
 
 void VisualObjects::preFrameUpdateWind() {
-  if(!scene.zWindEnabled)
-    return;
-
-  const uint64_t period = scene.windPeriod;
-  float ax = float(scene.tickCount%period)/float(period);
-  ax = ax*2.f-1.f;
-
   for(auto id:objectsWind) {
-    auto& i = objects[id];
-    float m = 0;
-
-    switch(i.wind) {
-      case zenkit::AnimationType::WIND:
-        // tree. note: mods tent to bump Intensity to insane values
-        if(i.windIntensity>0.f)
-          m = 0.03f; else
-          m = 0;
-        break;
-      case zenkit::AnimationType::WIND_ALT:
-        // grass
-        if(i.windIntensity>0.f && i.windIntensity<=1.0)
-          m = i.windIntensity * 0.1f; else
-          m = 0;
-        break;
-      case zenkit::AnimationType::NONE:
-      default:
-        // error
-        m = 0.f;
-        break;
-      }
-
-    auto  pos   = i.pos;
-    float shift = i.pos[3][0]*scene.windDir.x + i.pos[3][2]*scene.windDir.y;
-    const float a = m * std::cos(float(ax*M_PI) + shift*0.0001f);
-
-    pos[1][0] += scene.windDir.x*a;
-    pos[1][2] += scene.windDir.y*a;
-
-    updateInstance(id, &pos);
+    auto& object = objects[id];
+    auto position = WorldWind::shaderMatrix(object.pos, scene.tickCount, scene.windPeriod,
+                                            scene.zWindEnabled, object.wind, object.windIntensity,
+                                            scene.windScale, scene.legacyWind);
+    updateInstance(id, &position);
     }
   }
 
@@ -731,7 +788,7 @@ bool VisualObjects::updateRtScene(RtScene& out) {
   if(!out.isUpdateRequired())
     return false;
   for(auto& obj:objects) {
-    if(obj.isEmpty())
+    if(obj.isEmpty() || !obj.visible)
       continue;
     auto& bucket = *obj.bucketId;
     auto* mesh   = bucket.staticMesh;

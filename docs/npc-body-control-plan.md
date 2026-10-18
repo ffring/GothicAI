@@ -1,5 +1,26 @@
 # План реализации GRU слоя управления телом NPC
 
+Статус: боевой пилот подключён к обычной игре; один NPC с одноручным оружием, при заданном адресе сервиса. Развитие обучения — в [плане и журнале](#план-и-журнал).
+
+## Как работает сейчас
+
+- Сервер берёт в аренду одного свободного человека с одноручным оружием, который уже сражается с героем или его спутником; самих спутников пилот не ведёт.
+- Движок передаёт наблюдения с частотой 20 Гц. Удалённая политика выбирает следующий боевой примитив; анимации, движение, столкновения и урон исполняет движок.
+- Захват и возврат родному бою проходят на безопасной границе действия. Просроченные команды не исполняются; потеря связи, ошибки, разговор или загрузка завершают управление.
+- Есть отдельная арена и [раннер без окна](../OpenGothic/game/bodyrunner.cpp) для записи боёв, обучения и оценки; в обычной игре пилот работает в реальном времени.
+
+**Модули:** [bodypilot.py](../server/src/gothic_ai/bodypilot.py), [BodyController](../OpenGothic/common/game/bodycontroller.cpp), [BodyObservations](../OpenGothic/common/game/bodyobservations.cpp), [body-service](../body-service/src/gothic_body/runtime.py).
+
+**Веса:** [запуск сервиса](../body-service/deploy/run.sh) на Ryzen использует CPU и `BODY_CHECKPOINT`, по умолчанию `~/gothic-ai/body/models/working/best.pt`. Имя P30 есть в коде пилота, но конкретные веса задаёт этот файл: версия P30 в настройках не закреплена.
+
+**Как выключить:** `gothic-ai serve --no-neural-body`. Без `--body-url` и `GOTHIC_BODY_URL` пилот также не создаётся; разбор флагов — в [cli.py](../server/src/gothic_ai/cli.py).
+
+**Проверки:** сценарии `neural` и `neural-companion` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios/companions.py](../server/src/gothic_ai/scenarios/companions.py); [test_bodypilot.py](../server/tests/test_bodypilot.py), [test_body_control.py](../server/tests/test_body_control.py), [test_body_observations.py](../server/tests/test_body_observations.py).
+
+**Ограничения:** одновременно один NPC; двуручное оружие, луки, магия, монстры и бой с посторонними NPC остаются родному ИИ. Нужен доступный сервис политики; веса в репозитории не хранятся.
+
+## План и журнал
+
 Статус: **этапы 1–7 готовы; этап 8 — боевой gate пройден (gate v16, 15 октября 2026 года, Ryzen 9 3950X)**: известные сценарии, нагрузка из 4 NPC и свежий screening на 20 seed прошли все боевые пороги; сервисный бюджет на этом хосте не измерялся и остаётся отдельным отчётом. [Итог gate v16](../reports/npc-body/2026-10-15-gate-v16/README.md), [продолжение после остановки](../reports/npc-body/2026-10-15-stage8-resume/README.md), [прежняя остановка](npc-body-stage8-stop-report.md). Релизный gate на 100 seed не начат.
 
 Добраны 37 физических демонстраций, включая поворот, отскок, wait300 и стену; GRU/MLP обучены на общем periodic dataset с 11 классами. Первый checkpoint прошёл 12/12 микро-задач, но 0/6 дуэлей из-за native perception loss и возврата к native AI. Последующее обучение на корпусе207 и known-проверки описаны ниже; итоговый допуск также не пройден. Новые запуски не назначены.
@@ -204,7 +225,7 @@ Mask описывает реально допустимые примитивы. 
 - Отчёт содержит episodes/s, реальных policy transitions/s, reset latency и прогноз `число шагов / фактический throughput` для обучения.
 - Решено, достаточно ли фактической скорости headless runner для небольшого PPO запуска. Если нет, оптимизация серверного runner становится задачей до большого обучения; перенос серий на Mac не является обходом этого gate.
 
-**Код:** общий melee scenario/setup, headless episode runner и адаптер reference для [testbench.cpp](../OpenGothic/common/testbench.cpp); переиспользовать [scenarios.py](../server/src/gothic_ai/scenarios.py) и [bench_report.py](../scripts/bench_report.py), где они подходят без GUI. Проверка — одна серверная серия `body_arena`, pytest и симуляция последовательно.
+**Код:** общий melee scenario/setup, headless episode runner и адаптер reference для [testbench.cpp](../OpenGothic/common/testbench.cpp); переиспользовать [scenarios/companions.py](../server/src/gothic_ai/scenarios/companions.py) и [bench_report.py](../scripts/bench_report.py), где они подходят без GUI. Проверка — одна серверная серия `body_arena`, pytest и симуляция последовательно.
 
 ## Этап 6 Траектории и датасет
 

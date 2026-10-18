@@ -240,8 +240,8 @@ def test_publish_measures_plateaus_of_prefaded_music_using_plan_fades(
     assert out.stat().st_size > 0
     report = json.loads(out.with_suffix(".levels.json").read_text())
     assert report["ok"] is True
-    # Subtracting tenth-LU readings can leave 6.300000000000001 at the boundary.
-    assert report["music_duck_db"] == pytest.approx(6, abs=0.3 + 1e-12)
+    # Subtracting tenth-LU readings can leave a few ULPs beyond the boundary.
+    assert report["music_duck_db"] == pytest.approx(levels.MUSIC_DUCK_DB, abs=0.3 + 1e-12)
     expected_pauses = [(2.95, 3.15), (5.45, 5.65), (7.95, 8.15)]
     for actual, expected in zip(report["music_pause_windows"], expected_pauses, strict=True):
         assert actual == pytest.approx(expected)
@@ -249,8 +249,15 @@ def test_publish_measures_plateaus_of_prefaded_music_using_plan_fades(
     for actual, expected in zip(report["music_speech_windows"], expected_speech, strict=True):
         assert actual == pytest.approx(expected)
     rows = _rows(report)
+    target = min(
+        rows["voice_mastered"]["measured_lufs"] - levels.MUSIC_BELOW_VOICE_LU,
+        rows["game_pause"]["measured_lufs"] - levels.MUSIC_BELOW_GAME_LU,
+    )
     assert rows["music_pause"]["measured_lufs"] == pytest.approx(
-        rows["voice_mastered"]["measured_lufs"] - 14, abs=0.5,
+        target, abs=0.5,
+    )
+    assert rows["music_speech"]["measured_lufs"] == pytest.approx(
+        target - levels.MUSIC_DUCK_DB, abs=0.5,
     )
     assert all(row["ok"] is not False for row in report["rows"])
 

@@ -58,8 +58,8 @@ struct Instance {
   mat4x3 mat;
   float  fatness;
   uint   animPtr;
-  uint   padd0;
-  uint   padd1;
+  uint   deformPtr;
+  uint   deformCount;
   };
 
 struct IndirectCmd {

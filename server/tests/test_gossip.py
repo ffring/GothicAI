@@ -23,7 +23,7 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.perception import PerceptionDesk
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.protocol import PROTOCOL_VERSION, NpcView, RosterEntry
-from gothic_ai.scenarios import _talked_to
+from gothic_ai.scenarios.conversation import _talked_to
 from gothic_ai.social import DAY, Rumor, Rumors, Social
 from gothic_ai.storyguard import StoryGuard
 from gothic_ai.talk import TalkDesk
