@@ -1251,6 +1251,12 @@ async def serve(args: argparse.Namespace) -> int:
             elif args.scenario == "m1":
                 lines = await scenarios.m1_chat(link, state.dialogue, args.npc)
                 log.info("scenario m1: npc spoke %d line(s)", len(lines))
+            elif args.scenario == "websocket":
+                assert state.dialogue
+                results = await scenarios.websocket(link, state.dialogue)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario websocket: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "m4":
                 results = await scenarios.m4_planner_bridge(link, args.npc, state.brain)
                 expected_rejects = ("unknown_npc", "attached_soft_act")
@@ -2296,6 +2302,7 @@ def main() -> None:
         choices=[
             "m0",
             "m1",
+            "websocket",
             "m2",
             "m3",
             "m4",
