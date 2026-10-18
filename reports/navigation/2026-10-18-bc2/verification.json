@@ -7,7 +7,7 @@
     }
   ],
   "max_logit_error": 3.814697265625e-06,
-  "max_hidden_error": 1.9669532775878906e-06,
+  "max_hidden_error": 3.039836883544922e-06,
   "tolerance": 0.0001,
   "macs": {
     "total": 1014344,
@@ -32,15 +32,15 @@
   },
   "parameters": 614223,
   "numpy_cpu": {
-    "median_us": 513.848,
-    "p95_us": 523.07745,
-    "mean_us": 513.967787,
+    "median_us": 514.78,
+    "p95_us": 534.2275,
+    "mean_us": 517.322063,
     "iterations": 1000
   },
   "torch_cpu": {
-    "median_us": 348.296,
-    "p95_us": 361.88955,
-    "mean_us": 351.21988799999997,
+    "median_us": 348.7115,
+    "p95_us": 360.25945,
+    "mean_us": 350.993245,
     "iterations": 1000
   },
   "threads": 1,
