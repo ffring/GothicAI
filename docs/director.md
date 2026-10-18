@@ -13,7 +13,7 @@
 
 Как выключить: `gothic-ai serve --no-showrunner` отключает автоматическое создание линий; `--no-occasions` — сбор поводов, `--no-questlog` — слежение за ванильными квестами. `--no-director` отключает весь авторский и ремонтный контур. Новые поводы и требования по преступлениям выключает `--no-crimes`. Записанные правки эти флаги не удаляют.
 
-Проверки: сценарии `authored`, `chain`, `own_repair` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios.py](../server/src/gothic_ai/scenarios.py); [test_showrunner.py](../server/tests/test_showrunner.py), [test_questbook.py](../server/tests/test_questbook.py), [test_chains.py](../server/tests/test_chains.py), [test_amends.py](../server/tests/test_amends.py).
+Проверки: сценарии `authored`, `chain`, `own_repair` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios/story.py](../server/src/gothic_ai/scenarios/story.py); [test_showrunner.py](../server/tests/test_showrunner.py), [test_questbook.py](../server/tests/test_questbook.py), [test_chains.py](../server/tests/test_chains.py), [test_amends.py](../server/tests/test_amends.py).
 
 Ограничения: автоматическому циклу нужны граф и книга мест; в сценариях он не запускается. Одновременно открыто не больше двух линий, за главу — четырёх линий и восьми новых людей; между линиями — игровые сутки и 15 минут по часам. Цепочки линейные, цели и облик персонажей ограничены наборами кода. Возмещения не требуют по одному подозрению; заказчик линии о преступлении должен знать о деле или заметить пропажу своей вещи.
 

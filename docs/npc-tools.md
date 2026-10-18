@@ -13,7 +13,7 @@
 
 Выключить в `gothic-ai serve`: `--no-chests`, `--no-lead`, `--no-meet`, `--no-errands`, `--no-interject`. Без проводника встречи и поручения тоже отключены. У сделок, карточек, восприятия и общей беседы отдельных выключателей нет; `GOTHIC_AI=0` выключает весь мост игры. Новые условия сделок по преступлениям недоступны с `--no-crimes`.
 
-Проверки: сценарии `deal`, `contract`, `group`, `lead`, `meet`, `errand`, `chests` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios.py](../server/src/gothic_ai/scenarios.py); [test_npc_tools.py](../server/tests/test_npc_tools.py), [test_deals.py](../server/tests/test_deals.py); бенч [deal.bench](../scripts/bench/deal.bench).
+Проверки: сценарии `deal`, `contract`, `group`, `lead`, `meet`, `errand`, `chests` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios/](../server/src/gothic_ai/scenarios/); [test_npc_tools.py](../server/tests/test_npc_tools.py), [test_deals.py](../server/tests/test_deals.py); бенч [deal.bench](../scripts/bench/deal.bench).
 
 Ограничения: вмешательства требуют быстрого контура; на фразу героя — до трёх голосов. Проводник и поручения запрещены сюжетно защищённым NPC; квестовые вещи не передаются поручением. Замену отсутствующего адресата слуха выбирает код. Преступление прощает только пострадавший, молчание обещает только очевидец; подозрения недостаточно.
 

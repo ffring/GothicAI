@@ -13,7 +13,7 @@
 Выключение ([cli.py](../server/src/gothic_ai/cli.py)): `gothic-ai serve --no-brain` убирает быстрый контур и инициативу, `--no-knowledge` — знания из скриптов, `--no-quick` — быстрые реплики. `--no-apply-day` возвращает прежнее меню занятий, а новое только записывает.
 `--no-crimes` убирает новые поводы свидетелей. Отдельных выключателей приказов и восприятия нет; `GOTHIC_AI=0` выключает весь [мост](../OpenGothic/ai_bridge/aibridge.cpp).
 
-Проверки: сценарии `m5e`, `orders`, `m6`, `see`, `initiative`, `day` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios.py](../server/src/gothic_ai/scenarios.py); [test_talk.py](../server/tests/test_talk.py), [test_orders.py](../server/tests/test_orders.py), [test_knowledge.py](../server/tests/test_knowledge.py), [test_perception.py](../server/tests/test_perception.py), [test_initiative.py](../server/tests/test_initiative.py), [test_daylife.py](../server/tests/test_daylife.py).
+Проверки: сценарии `m5e`, `orders`, `m6`, `see`, `initiative`, `day` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios/](../server/src/gothic_ai/scenarios/); [test_talk.py](../server/tests/test_talk.py), [test_orders.py](../server/tests/test_orders.py), [test_knowledge.py](../server/tests/test_knowledge.py), [test_perception.py](../server/tests/test_perception.py), [test_initiative.py](../server/tests/test_initiative.py), [test_daylife.py](../server/tests/test_daylife.py).
 
 Ограничения: быстрый контур требует `--decider-url` или `GOTHIC_DECIDER_URL`, знания — загруженного графа сюжета. Распорядок меняется только у NPC из списка движка; сюжетные персонажи и постовые сохраняют место, спящие не получают новых занятий.
 Боевое тело — [отдельный план](npc-body-control-plan.md).
