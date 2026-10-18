@@ -83,8 +83,8 @@ class Cloth final {
     void setWind(const Tempest::Vec3& worldMetersPerSecond);
     void setWindScale(float scale);
     float windScale() const;
-    // World portal-room classification. Attachments and ship geometry do not
-    // occlude wind; a false result identifies an actual indoor BSP room.
+    // World portal-room classification. A false result shelters immediately;
+    // outdoor points additionally test broad roofs, ignoring narrow attachments.
     void setExposureTest(std::function<bool(const Tempest::Vec3&)> test);
     std::vector<Snapshot> snapshots() const;
     void resetStats();

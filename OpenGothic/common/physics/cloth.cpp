@@ -108,6 +108,50 @@ struct Cloth::Impl : JPH::SoftBodyContactListener {
   explicit Impl(CollisionWorld& world):world(world) {}
 
   auto& system() { return world.physicsSystem(); }
+  bool outdoorRoof(Instance::Impl& body) {
+    constexpr uint32_t mask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object);
+    const auto center=body.center();
+    std::vector<CollisionWorld::QueryResult> above;
+    world.rayCast(center+Tempest::Vec3(0,1,0),center+Tempest::Vec3(0,5000,0),mask,true,&above);
+    const auto ownAttachment=[&](const CollisionWorld::QueryResult& hit) {
+      // Landscape's legacy sector tag retains the full authored material name.
+      // The ship's spars/rigging include wide quads, so footprint alone cannot
+      // distinguish them from a roof. Keep room containment authoritative for
+      // cabins while ignoring these stock ship/support materials outdoors.
+      const std::string_view material=hit.sector ? hit.sector : "";
+      if(body.visual.starts_with("NW_SHIP_") &&
+         (material.find("NW_SHIP_")!=std::string_view::npos ||
+          material.find("WOODBEAM")!=std::string_view::npos || material.find("ROPE")!=std::string_view::npos))
+        return true;
+      return hit.body && hit.body->category()==DynamicWorld::C_Object &&
+             !body.visual.empty() && hit.body->label()==body.visual;
+      };
+    // A mast or yard crossing a vertical ray is not a roof. Require a surface
+    // covering a 1.5 m cross around the sample, with a consistent plane. All
+    // center-ray hits are retained: a narrow yard must not hide a roof above it,
+    // even when both belong to the same landscape collision body.
+    const std::array<Tempest::Vec3,4> offsets={Tempest::Vec3(75,0,0),Tempest::Vec3(-75,0,0),
+                                             Tempest::Vec3(0,0,75),Tempest::Vec3(0,0,-75)};
+    for(const auto& ceiling:above) {
+      if(!ceiling.hasHit || ownAttachment(ceiling) || std::abs(ceiling.normal.y)<.5f) continue;
+      bool covered=true;
+      for(const auto& offset:offsets) {
+        auto point=ceiling.point+offset;
+        point.y-=(ceiling.normal.x*offset.x+ceiling.normal.z*offset.z)/ceiling.normal.y;
+        const auto hit=world.rayCast(point+Tempest::Vec3(0,5,0),point-Tempest::Vec3(0,5,0),mask,true);
+        if(!hit.hasHit || ownAttachment(hit) ||
+           std::abs(Tempest::Vec3::dotProduct(hit.normal,ceiling.normal))<.95f) {
+          covered=false;
+          break;
+          }
+        }
+      if(!covered) continue;
+      body.windOccluders.push_back({ceiling.body ? ceiling.body->label() : "roof",ceiling.point,
+                                   (ceiling.point-center).length()});
+      return true;
+      }
+    return false;
+    }
   void OnSoftBodyContactAdded(const JPH::Body& native,const JPH::SoftBodyManifold& manifold) override {
     if(native.GetObjectLayer()!=DynamicWorld::C_Cloth || native.GetUserData()==0) return;
     auto& body=*reinterpret_cast<Instance::Impl*>(native.GetUserData());
@@ -330,10 +374,11 @@ void Cloth::prepareFrame(uint64_t dt) {
     body.targetWeight=target*target*(3.f-2.f*target);
     body.shelterTimer-=seconds;
     if(body.targetWeight>0.f && body.shelterTimer<=0.f) {
-      // BSP/portal rooms are authoritative. Upward solid rays cannot tell a
-      // ship's own yard, mast or deck from an indoor ceiling in the same mesh.
+      // Rooms shelter unconditionally; outdoors, distinguish broad roofs from
+      // the cloth's own narrow attachment geometry before suppressing wind.
       body.exposed=!impl->exposure || impl->exposure(center);
       body.windOccluders.clear();
+      if(body.exposed && impl->outdoorRoof(body)) body.exposed=false;
       body.shelterTimer=.5f;
       }
     if(body.targetWeight>0.f && body.body.IsInvalid()) impl->create(body);
