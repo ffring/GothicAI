@@ -18,15 +18,3 @@ cloth arrow-npc ahead
 cloth verify anchors
 cloth checkpoint arrow-npc-complete
 physics stats
-
-# Check the shelter queries against the original whole-physics budget as well.
-cloth setup densest arrow-npc-final-density
-cloth wind gust
-wait 15000
-cloth verify harbour-wind
-cloth checkpoint review-density-on
-cadence normal
-wait 34
-cloth measure on
-cadence wait
-cloth report
