@@ -9,8 +9,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -225,6 +227,10 @@ template<class A,class B> double difference(const A& a,const B& b) {
   }
 
 void parity(const std::string& weights,const std::string& path) {
+  // NumPy's multi-axis 4x4 height reduction groups row sums; the live encoder
+  // accumulates cells in row order. Float32 rounding can differ by a few ulps
+  // (1.9e-6 on recorded relative heights). Inference remains checked at 1e-4.
+  constexpr double featureTolerance=1e-5;
   const NavPolicy policy(weights);
   Fixture fixture(path);
   require(policy.hiddenSize()==fixture.hidden,"weight/fixture hidden size mismatch");
@@ -239,8 +245,22 @@ void parity(const std::string& weights,const std::string& path) {
     const double localFeature=std::max({difference(actual.near,fixture.expected.near),
         difference(actual.far,fixture.expected.far),difference(actual.vector,fixture.expected.vector)});
     featureError=std::max(featureError,localFeature);
-    require(localFeature<=1e-6,"encoded features differ at step "+std::to_string(fixture.readSteps)+
-            ": "+std::to_string(localFeature));
+    if(localFeature>featureTolerance) {
+      std::ostringstream message;
+      message<<std::setprecision(10)<<"encoded features differ at step "<<fixture.readSteps
+             <<": "<<localFeature;
+      const auto locate=[&](const auto& actualValues,const auto& expectedValues,const char* name) {
+        for(size_t i=0;i<actualValues.size();++i)
+          if(std::abs(double(actualValues[i])-double(expectedValues[i]))==localFeature) {
+            message<<" ("<<name<<'['<<i<<"] actual="<<actualValues[i]<<", expected="<<expectedValues[i]<<')';
+            break;
+            }
+        };
+      locate(actual.near,fixture.expected.near,"near");
+      locate(actual.far,fixture.expected.far,"far");
+      locate(actual.vector,fixture.expected.vector,"vector");
+      throw std::runtime_error(message.str());
+      }
     const auto result=policy.step(actual,state);
     double localLogit=0;
     for(size_t h=0;h<heads.size();++h)
