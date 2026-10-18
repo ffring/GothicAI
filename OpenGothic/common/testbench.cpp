@@ -4679,9 +4679,36 @@ std::string clothRows(World& world,bool geometry=false) {
       ",\"anchor_error_cm\":"+ragdollNumber(body.maxAnchorErrorCm)+
       ",\"max_speed_cm_s\":"+ragdollNumber(body.maxSpeedCmPerSec)+
       ",\"max_speed_ever_cm_s\":"+ragdollNumber(body.maxSpeedEverCmPerSec)+
+      ",\"contact_vertices\":"+std::to_string(body.contactVertices)+
+      ",\"max_speed_vertex\":"+std::to_string(body.maxSpeedVertex)+
+      ",\"max_speed_source_cm\":"+ragdollVector(body.maxSpeedSourceCm)+
+      ",\"max_speed_world_cm\":"+ragdollVector(body.maxSpeedWorldCm)+
+      ",\"max_speed_contact\":"+(body.maxSpeedContact?"true":"false")+
+      ",\"max_speed_contact_body\":"+jsonStr(body.maxSpeedContactBody)+
+      ",\"max_speed_contact_normal\":"+ragdollVector(body.maxSpeedContactNormal)+
+      ",\"max_speed_ever_vertex\":"+std::to_string(body.maxSpeedEverVertex)+
+      ",\"max_speed_ever_source_cm\":"+ragdollVector(body.maxSpeedEverSourceCm)+
+      ",\"max_speed_ever_world_cm\":"+ragdollVector(body.maxSpeedEverWorldCm)+
+      ",\"max_speed_ever_contact\":"+(body.maxSpeedEverContact?"true":"false")+
+      ",\"max_speed_ever_contact_body\":"+jsonStr(body.maxSpeedEverContactBody)+
+      ",\"max_speed_ever_contact_normal\":"+ragdollVector(body.maxSpeedEverContactNormal)+
       ",\"transition_blend_delta_cm\":"+ragdollNumber(body.transitionMaxDeltaCm)+
       ",\"spell_hits\":"+std::to_string(body.projectileHits)+",\"arrow_passes\":"+std::to_string(body.arrowPasses)+
       ",\"recoveries\":"+std::to_string(body.recoveryCount);
+    rows+=",\"contact_bodies\":[";
+    for(size_t i=0;i<body.contactBodies.size();++i) {
+      if(i) rows+=",";
+      rows+=jsonStr(body.contactBodies[i]);
+      }
+    rows+="]";
+    rows+=",\"wind_occluders\":[";
+    for(size_t i=0;i<body.windOccluders.size();++i) {
+      if(i) rows+=",";
+      const auto& roof=body.windOccluders[i];
+      rows+="{\"body\":"+jsonStr(roof.body)+",\"point_cm\":"+ragdollVector(roof.pointCm)+
+            ",\"distance_cm\":"+ragdollNumber(roof.distanceCm)+"}";
+      }
+    rows+="]";
     if(geometry && body.zenId==bench.clothZen) {
       rows+=",\"rendered_world_vertices_cm\":[";
       for(size_t i=0;i<body.worldPositionsCm.size();++i) {
@@ -4819,7 +4846,7 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
   bool cameraClear=false;
   // Look slightly down on low banners to keep grass out of the foreground.
   // Nine rays check the entire cloth's frame, not just its center.
-  for(float elevation:{.3f,.55f,.1f}) {
+  for(float elevation:{.55f,.3f,.1f}) {
     for(float side:{1.f,-1.f}) {
       const auto eye=cameraTarget+cameraNormal*(cameraDistance*side)+Vec3(0,cameraDistance*elevation,0);
       bool clear=true;

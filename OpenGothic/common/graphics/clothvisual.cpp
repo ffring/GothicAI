@@ -107,16 +107,20 @@ struct Geometry {
   std::vector<ClothGeometry::SourceWeights> sourceWeights;
   std::vector<zenkit::MorphAnimation> animations;
   std::vector<std::vector<int32_t>> morphIndices;
+  bool coarsePhysics = false;
   const ProtoMesh* fullProto = nullptr;
   std::unique_ptr<ProtoMesh> ownedFullProto, rigidProto, clothProto;
   };
 
-// The subdivided surface is both the Jolt mesh and the visible mesh. Packed
-// vertices retain the dense index even when meshlets duplicate a UV seam.
+// Low-poly fabric uses the subdivided surface for both Jolt and rendering.
+// Furled sails already have a sufficiently resolved authored cross-section;
+// their dense visible surface interpolates that smaller simulation instead.
+// Packed vertices retain the dense index across meshlets and UV seams.
 void tessellate(Geometry& out, const std::vector<ClothGeometry::Vertex>& vertices,
                 const std::vector<uint32_t>& indices, const std::vector<uint32_t>& pins,
                 const std::vector<zenkit::Material>& materials,
-                const std::vector<uint32_t>& triangleMaterials, std::string_view visual) {
+                const std::vector<uint32_t>& triangleMaterials, std::string_view visual,
+                bool coarsePhysics = false) {
   const auto dense = ClothGeometry::subdivide(vertices,indices,pins);
   if(dense.vertices.size()>uint16_t(-1))
     throw std::runtime_error("cloth exceeds the wedge index range");
@@ -124,8 +128,9 @@ void tessellate(Geometry& out, const std::vector<ClothGeometry::Vertex>& vertice
   for(const auto& v:vertices)
     out.sourcePositions.emplace_back(v.pos[0],v.pos[1],v.pos[2]);
   out.sourceWeights = dense.sourceWeights;
-  out.pins = dense.pins;
-  out.physicsTriangles = dense.indices;
+  out.coarsePhysics = coarsePhysics;
+  out.pins = coarsePhysics ? pins : dense.pins;
+  out.physicsTriangles = coarsePhysics ? indices : dense.indices;
   out.triangles = dense.indices;
 
   zenkit::MultiResolutionMesh mesh;
@@ -148,7 +153,7 @@ void tessellate(Geometry& out, const std::vector<ClothGeometry::Vertex>& vertice
     out.normals.emplace_back(v.norm[0],v.norm[1],v.norm[2]);
     mesh.positions.push_back({v.pos[0],v.pos[1],v.pos[2]});
     }
-  out.physicsPositions = out.positions;
+  out.physicsPositions = coarsePhysics ? out.sourcePositions : out.positions;
   const size_t childrenPerTriangle = size_t(1)<<(dense.subdivisionDepth*2);
   for(size_t at=0;at<dense.indices.size();at+=3) {
     const auto material = triangleMaterials[(at/3)/childrenPerTriangle];
@@ -181,8 +186,9 @@ void tessellate(Geometry& out, const std::vector<ClothGeometry::Vertex>& vertice
                          std::llround(double(v.pos[2])*100.0));
   Log::i("cloth tessellation: ",visual," source=",vertices.size()," source_positions=",sourcePositions,
          " source_unique=",uniqueSource.size()," dense=",dense.vertices.size(),
-         " particles=",dense.uniquePositions," edge_cm=",dense.maxEdgeCm,
-         " depth=",dense.subdivisionDepth," capped=",dense.budgetLimited);
+         " particles=",coarsePhysics ? uniqueSource.size() : dense.uniquePositions," edge_cm=",dense.maxEdgeCm,
+         " depth=",dense.subdivisionDepth," capped=",dense.budgetLimited,
+         " simulation=",coarsePhysics ? "source" : "dense");
   }
 
 std::vector<uint32_t> pinned(const Definition& def, const std::vector<Vec3>& vertices) {
@@ -327,7 +333,7 @@ struct ClothVisual::State {
   zenkit::AnimationType mode = zenkit::AnimationType::NONE;
   float strength = 0;
   std::vector<Vec4> deformation;
-  std::vector<Vec3> references, normals;
+  std::vector<Vec3> references, normals, interpolatedPositions;
 
   Vec3 reference(uint32_t index, const Vec3& local) {
     const auto tick = world->tickCount();
@@ -363,15 +369,22 @@ struct ClothVisual::State {
       auto inverse = matrix;
       inverse.inverse();
       referenceTransform = inverse*wind;
-      references.resize(geometry->sourceWeights.size());
-      for(size_t i=0;i<references.size();++i) {
-        const auto& weights = geometry->sourceWeights[i];
-        Vec3 point;
-        for(size_t j=0;j<weights.vertices.size();++j)
-          if(weights.weights[j]!=0.f)
-            point += source[weights.vertices[j]]*weights.weights[j];
-        referenceTransform.project(point);
-        references[i] = point;
+      if(geometry->coarsePhysics) {
+        references = std::move(source);
+        for(auto& point:references)
+          referenceTransform.project(point);
+        }
+      else {
+        references.resize(geometry->sourceWeights.size());
+        for(size_t i=0;i<references.size();++i) {
+          const auto& weights = geometry->sourceWeights[i];
+          Vec3 point;
+          for(size_t j=0;j<weights.vertices.size();++j)
+            if(weights.weights[j]!=0.f)
+              point += source[weights.vertices[j]]*weights.weights[j];
+          referenceTransform.project(point);
+          references[i] = point;
+          }
         }
       referenceTick = tick;
       }
@@ -437,9 +450,24 @@ struct ClothVisual::State {
       clothView.setDeformation({});
       return;
       }
+    if(geometry->coarsePhysics) {
+      // The callback has already blended each coarse particle with its exact
+      // native fallback. Barycentric interpolation commutes with that blend,
+      // so every dense visible vertex keeps the same seamless transition.
+      interpolatedPositions.assign(geometry->sourceWeights.size(),Vec3());
+      for(size_t i=0;i<interpolatedPositions.size();++i) {
+        const auto& weights = geometry->sourceWeights[i];
+        for(size_t j=0;j<weights.vertices.size();++j) {
+          const auto source = weights.vertices[j];
+          const auto& point = source<positions.size() ? positions[source] : geometry->sourcePositions[source];
+          interpolatedPositions[i] += point*weights.weights[j];
+          }
+        }
+      }
+    const auto& visiblePositions = geometry->coarsePhysics ? interpolatedPositions : positions;
     normals.assign(geometry->positions.size(),Vec3());
     const auto position = [&](uint32_t id) {
-      return id<positions.size() ? positions[id] : geometry->positions[id];
+      return id<visiblePositions.size() ? visiblePositions[id] : geometry->positions[id];
       };
     for(size_t i=0;i+2<geometry->triangles.size();i+=3) {
       const uint32_t a=geometry->triangles[i], b=geometry->triangles[i+1], c=geometry->triangles[i+2];
@@ -571,7 +599,8 @@ std::unique_ptr<ClothVisual> ClothVisual::createSurface(World& world, const zenk
       }
     if(pins.empty() || pins.size()==vertices.size())
       throw std::runtime_error("cloth surface needs fixed and free vertices");
-    tessellate(*geometry,vertices,indices,pins,local.materials,triangleMaterials,visual);
+    const bool furledSail = local.materials.size()==1 && local.materials.front().name=="NW_SHIP_SAIL_02";
+    tessellate(*geometry,vertices,indices,pins,local.materials,triangleMaterials,visual,furledSail);
     PackedMesh original(local,PackedMesh::PK_Visual);
     geometry->ownedFullProto = std::make_unique<ProtoMesh>(std::move(original),visual);
     geometry->fullProto = geometry->ownedFullProto.get();

@@ -14,6 +14,7 @@ wait 3000
 cloth wind gust
 wait 10000
 shot cloth-orc-off-gust
+wait 34
 cloth checkpoint orc-off-gust
 stop
 cloth wind calm
@@ -29,6 +30,7 @@ wait 3000
 cloth wind gust
 wait 10000
 shot cloth-orc-on-gust
+wait 34
 cloth checkpoint orc-gust
 cloth verify anchors
 wait 3000

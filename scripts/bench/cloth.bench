@@ -16,6 +16,7 @@ wait 3000
 cloth wind gust
 wait 10000
 shot cloth-oldcamp-off-gust
+wait 34
 cloth checkpoint off-gust
 stop
 
@@ -32,12 +33,14 @@ wait 3000
 cloth wind gust
 wait 10000
 shot cloth-oldcamp-on-gust
+wait 34
 cloth checkpoint gust
 cloth shoot fireball
 wait 2000
 cloth verify fireball
 cloth checkpoint after-fireball
 shot cloth-oldcamp-after-fireball
+wait 34
 cloth wind calm
 wait 5000
 cloth shoot arrow
@@ -46,6 +49,7 @@ cloth verify arrow
 cloth verify anchors
 cloth checkpoint after-arrow
 shot cloth-oldcamp-after-arrow
+wait 34
 stop
 
 # Keep the camera on the actual flag while the physical hero crosses the radius.
@@ -54,16 +58,19 @@ cloth distance 3450
 wait 2000
 rec cloth-oldcamp-radius
 shot cloth-radius-inside
+wait 34
 cloth checkpoint radius-inside
 cloth distance 3750
 wait 1000
 cloth distance 3995
 wait 34
 shot cloth-radius-before-exit
+wait 34
 cloth checkpoint radius-before-exit
 cloth distance 4005
 wait 34
 shot cloth-radius-after-exit
+wait 34
 cloth checkpoint radius-after-exit
 wait 1000
 cloth distance 4500
@@ -71,9 +78,11 @@ wait 1000
 cloth distance 4005
 wait 34
 shot cloth-radius-before-entry
+wait 34
 cloth distance 3995
 wait 34
 shot cloth-radius-after-entry
+wait 34
 cloth checkpoint radius-after-entry
 wait 1000
 cloth distance 3450

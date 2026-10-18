@@ -5,10 +5,13 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
+#include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <set>
 #include <string_view>
@@ -61,6 +64,11 @@ namespace {
   }
 
 struct Cloth::Instance::Impl {
+  struct Contact {
+    uint32_t vertex = 0;
+    JPH::BodyID body;
+    Tempest::Vec3 normal;
+    };
   Cloth::Impl* owner = nullptr;
   JPH::BodyID body;
   Tempest::Matrix4x4 matrix, inverse;
@@ -76,6 +84,14 @@ struct Cloth::Instance::Impl {
   uint32_t zenId = uint32_t(-1);
   float stiffness = .8f, weight = 0, targetWeight = 0, shelterTimer = 0;
   float maxAnchorError = 0, maxSpeed = 0, maxSpeedEver = 0, transitionMaxDelta = 0;
+  std::vector<Contact> contacts;
+  size_t contactCount = 0;
+  uint32_t maxSpeedVertex = uint32_t(-1), maxSpeedEverVertex = uint32_t(-1);
+  Tempest::Vec3 maxSpeedSource, maxSpeedWorld, maxSpeedContactNormal;
+  Tempest::Vec3 maxSpeedEverSource, maxSpeedEverWorld, maxSpeedEverContactNormal;
+  bool maxSpeedContact = false, maxSpeedEverContact = false;
+  JPH::BodyID maxSpeedContactBody, maxSpeedEverContactBody;
+  std::vector<WindOccluder> windOccluders;
   uint64_t projectileHits = 0, arrowPasses = 0, recoveryCount = 0;
   bool exposed = true, recover = false;
 
@@ -86,18 +102,38 @@ struct Cloth::Instance::Impl {
     auto ret=shader(uint32_t(vertex),source[vertex],project(matrix,source[vertex]));
     return finite(ret) ? ret : source[vertex];
     }
-  Tempest::Vec3 exposureOffset() const {
-    Tempest::Vec3 largestNormal;
-    for(size_t i=0;i+2<indices.size();i+=3) {
-      const auto a=project(matrix,source[indices[i]]);
-      const auto b=project(matrix,source[indices[i+1]]);
-      const auto c=project(matrix,source[indices[i+2]]);
-      auto normal=Tempest::Vec3::crossProduct(b-a,c-a);
-      normal.y=0;
-      if(normal.quadLength()>largestNormal.quadLength()) largestNormal=normal;
+  std::array<Tempest::Vec3,3> exposureOrigins() const {
+    double meanX=0,meanZ=0;
+    for(const auto& vertex:source) {
+      const auto p=project(matrix,vertex);
+      meanX+=p.x;
+      meanZ+=p.z;
       }
-    if(largestNormal.quadLength()>1.e-6f) return largestNormal*(25.f/largestNormal.length());
-    return Tempest::Vec3(25,0,0);
+    meanX/=double(source.size());
+    meanZ/=double(source.size());
+    double xx=0,xz=0,zz=0;
+    for(const auto& vertex:source) {
+      const auto p=project(matrix,vertex);
+      const double x=double(p.x)-meanX,z=double(p.z)-meanZ;
+      xx+=x*x;
+      xz+=x*z;
+      zz+=z*z;
+      }
+    // In the horizontal plane, the minor axis is normal to a hanging sheet
+    // and across a furled sail. Triangle normals on a wrapped sail can instead
+    // point along its yard, keeping every fixed-size probe under the wood.
+    const double angle=.5*std::atan2(2*xz,xx-zz);
+    const Tempest::Vec3 minor(float(-std::sin(angle)),0,float(std::cos(angle)));
+    const auto middle=center();
+    float lo=std::numeric_limits<float>::max(),hi=-lo;
+    for(const auto& vertex:source) {
+      const float extent=Tempest::Vec3::dotProduct(project(matrix,vertex)-middle,minor);
+      lo=std::min(lo,extent);
+      hi=std::max(hi,extent);
+      }
+    const auto origin=middle+minor*((lo+hi)*.5f);
+    const auto offset=minor*std::max(25.f,(hi-lo)*.5f+2.f);
+    return {origin-offset,origin,origin+offset};
     }
   bool ownAttachment(const CollisionWorld::CollisionBody* collider) const {
     return collider!=nullptr && sameVisual(visual,collider->label()) &&
@@ -105,7 +141,7 @@ struct Cloth::Instance::Impl {
     }
   };
 
-struct Cloth::Impl {
+struct Cloth::Impl : JPH::SoftBodyContactListener {
   CollisionWorld& world;
   std::vector<std::weak_ptr<Instance>> instances;
   Tempest::Vec3 observer, wind;
@@ -115,12 +151,29 @@ struct Cloth::Impl {
   explicit Impl(CollisionWorld& world):world(world) {}
 
   auto& system() { return world.physicsSystem(); }
+  void OnSoftBodyContactAdded(const JPH::Body& native,const JPH::SoftBodyManifold& manifold) override {
+    if(native.GetObjectLayer()!=DynamicWorld::C_Cloth || native.GetUserData()==0) return;
+    auto& body=*reinterpret_cast<Instance::Impl*>(native.GetUserData());
+    body.contacts.clear();
+    const auto& vertices=manifold.GetVertices();
+    const auto transform=native.GetCenterOfMassTransform();
+    // Jolt resets mHasContact and its plane immediately after this callback.
+    // Keep the native identity and normal until the main-thread finishStep.
+    for(uint32_t i=0;i<vertices.size();++i) {
+      if(!manifold.HasContact(vertices[i])) continue;
+      const auto normal=transform.Multiply3x3(vertices[i].mCollisionPlane.GetNormal());
+      body.contacts.push_back({i,manifold.GetContactBodyID(vertices[i]),
+                                Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ())});
+      }
+    }
   void remove(Instance::Impl& body) {
     if(body.body.IsInvalid()) return;
     auto& native=system().GetBodyInterface();
     native.RemoveBody(body.body);
     native.DestroyBody(body.body);
     body.body=JPH::BodyID();
+    body.contactCount=0;
+    body.contacts.clear();
     }
   void create(Instance::Impl& body) {
     if(!body.body.IsInvalid()) return;
@@ -162,7 +215,10 @@ struct Cloth::Impl {
     settings.CreateConstraints(&attributes,1,JPH::SoftBodySharedSettings::EBendType::Distance);
     settings.Optimize();
     JPH::SoftBodyCreationSettings creation(&settings,CollisionWorld::toMeters(body.translation()),JPH::Quat::sIdentity(),DynamicWorld::C_Cloth);
-    creation.mNumIterations=8;
+    creation.mUserData=reinterpret_cast<uint64_t>(&body);
+    // Fixed particles and geodesic long-range attachments bound the cloth;
+    // four XPBD iterations keep nearby groups affordable at the 60 Hz step.
+    creation.mNumIterations=4;
     creation.mLinearDamping=3.f;
     creation.mMaxLinearVelocity=Cloth::maxVelocityMS;
     creation.mVertexRadius=.005f;
@@ -212,9 +268,13 @@ const std::vector<Tempest::Vec3>& Cloth::Instance::positionsCm() const { return 
 float Cloth::Instance::simulationWeight() const { return impl->weight; }
 bool Cloth::Instance::active() const { return !impl->body.IsInvalid(); }
 
-Cloth::Cloth(CollisionWorld& world):impl(std::make_unique<Impl>(world)) { world.cloth=this; }
+Cloth::Cloth(CollisionWorld& world):impl(std::make_unique<Impl>(world)) {
+  world.cloth=this;
+  impl->system().SetSoftBodyContactListener(impl.get());
+  }
 Cloth::~Cloth() {
   impl->each([&](Instance::Impl& body) { impl->remove(body); body.owner=nullptr; });
+  impl->system().SetSoftBodyContactListener(nullptr);
   impl->world.cloth=nullptr;
   }
 std::shared_ptr<Cloth::Instance> Cloth::add(const std::vector<Tempest::Vec3>& source,
@@ -288,18 +348,21 @@ void Cloth::prepareFrame(uint64_t dt) {
     if(body.targetWeight>0.f && body.shelterTimer<=0.f) {
       constexpr uint32_t mask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object);
       body.exposed=false;
+      body.windOccluders.clear();
       if(!impl->exposure || impl->exposure(center)) {
-        const auto offset=body.exposureOffset();
         // A mast or the narrow bar holding a banner is not a roof. Probe both
         // sides of the cloth as well as its center; a ceiling covers all three.
-        for(int probe=-1;probe<=1;++probe) {
-          const auto origin=center+offset*float(probe);
+        for(const auto& origin:body.exposureOrigins()) {
           std::vector<const CollisionWorld::CollisionBody*> ignored;
           for(;;) {
             const auto roof=impl->world.rayCast(origin+Tempest::Vec3(0,2,0),origin+Tempest::Vec3(0,20000,0),mask,true,
                                                nullptr,&ignored);
             if(!roof.hasHit) { body.exposed=true; break; }
-            if(!body.ownAttachment(roof.body)) break;
+            if(!body.ownAttachment(roof.body)) {
+              body.windOccluders.push_back({roof.body!=nullptr ? roof.body->label() : std::string(),
+                                            roof.point,(roof.point-origin).length()});
+              break;
+              }
             // A standard's skull and crossbar can span all three probes.
             // Ignore only the rigid part at this cloth's authored transform,
             // then keep tracing so a real roof above it still shelters cloth.
@@ -325,6 +388,7 @@ void Cloth::prepareFrame(uint64_t dt) {
 void Cloth::prepareStep(float seconds) {
   impl->each([&](Instance::Impl& body) {
     if(body.body.IsInvalid()) return;
+    body.contacts.clear();
     JPH::BodyLockWrite lock(impl->system().GetBodyLockInterface(),body.body);
     if(!lock.Succeeded()) return;
     auto& motion=*static_cast<JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
@@ -345,15 +409,44 @@ void Cloth::finishStep() {
     const auto& native=lock.GetBody();
     const auto& motion=*static_cast<const JPH::SoftBodyMotionProperties*>(native.GetMotionProperties());
     body.maxSpeed=0;
+    body.maxSpeedVertex=uint32_t(-1);
+    body.maxSpeedContact=false;
+    body.maxSpeedContactBody=JPH::BodyID();
+    body.maxSpeedContactNormal=Tempest::Vec3();
+    body.contactCount=body.contacts.size();
     bool invalid=false;
     for(size_t i=0;i<motion.GetVertices().size();++i) {
       const auto& vertex=motion.GetVertex(uint32_t(i));
       const float speed=vertex.mVelocity.Length()*100.f;
       invalid|=!std::isfinite(speed) || vertex.mPosition.IsNaN() || (vertex.mPosition-body.rest[i]).LengthSq()>10000.f;
-      if(std::isfinite(speed)) body.maxSpeed=std::max(body.maxSpeed,speed);
+      if(std::isfinite(speed) && speed>body.maxSpeed) {
+        body.maxSpeed=speed;
+        body.maxSpeedVertex=uint32_t(i);
+        }
       if(body.pinned[i]) body.maxAnchorError=std::max(body.maxAnchorError,(vertex.mPosition-body.rest[i]).Length()*100.f);
       }
-    body.maxSpeedEver=std::max(body.maxSpeedEver,body.maxSpeed);
+    if(body.maxSpeedVertex!=uint32_t(-1)) {
+      const auto& vertex=motion.GetVertex(body.maxSpeedVertex);
+      const auto transform=native.GetCenterOfMassTransform();
+      body.maxSpeedSource=project(body.inverse,body.translation()+CollisionWorld::toCentimeters(body.rest[body.maxSpeedVertex]));
+      body.maxSpeedWorld=CollisionWorld::toCentimeters(JPH::Vec3(transform*vertex.mPosition));
+      for(const auto& contact:body.contacts)
+        if(contact.vertex==body.maxSpeedVertex) {
+          body.maxSpeedContact=true;
+          body.maxSpeedContactBody=contact.body;
+          body.maxSpeedContactNormal=contact.normal;
+          break;
+          }
+      }
+    if(body.maxSpeed>body.maxSpeedEver) {
+      body.maxSpeedEver=body.maxSpeed;
+      body.maxSpeedEverVertex=body.maxSpeedVertex;
+      body.maxSpeedEverSource=body.maxSpeedSource;
+      body.maxSpeedEverWorld=body.maxSpeedWorld;
+      body.maxSpeedEverContact=body.maxSpeedContact;
+      body.maxSpeedEverContactNormal=body.maxSpeedContactNormal;
+      body.maxSpeedEverContactBody=body.maxSpeedContactBody;
+      }
     if(invalid) {
       // Recover on the next main-thread frame by removing the native body.
       // No unchecked vertex ever reaches the renderer.
@@ -397,6 +490,33 @@ std::vector<Cloth::Snapshot> Cloth::snapshots() const {
     snapshot.maxAnchorErrorCm=body.maxAnchorError;
     snapshot.maxSpeedCmPerSec=body.maxSpeed;
     snapshot.maxSpeedEverCmPerSec=body.maxSpeedEver;
+    snapshot.contactVertices=body.contactCount;
+    snapshot.maxSpeedVertex=body.maxSpeedVertex;
+    snapshot.maxSpeedSourceCm=body.maxSpeedSource;
+    snapshot.maxSpeedWorldCm=body.maxSpeedWorld;
+    snapshot.maxSpeedContact=body.maxSpeedContact;
+    snapshot.maxSpeedContactNormal=body.maxSpeedContactNormal;
+    snapshot.maxSpeedEverVertex=body.maxSpeedEverVertex;
+    snapshot.maxSpeedEverSourceCm=body.maxSpeedEverSource;
+    snapshot.maxSpeedEverWorldCm=body.maxSpeedEverWorld;
+    snapshot.maxSpeedEverContact=body.maxSpeedEverContact;
+    snapshot.maxSpeedEverContactNormal=body.maxSpeedEverContactNormal;
+    snapshot.windOccluders=body.windOccluders;
+    const auto label=[&](JPH::BodyID id) -> std::string {
+      if(id.IsInvalid()) return {};
+      JPH::BodyLockRead lock(impl->system().GetBodyLockInterface(),id);
+      if(!lock.Succeeded()) return {};
+      const auto* collider=reinterpret_cast<const CollisionWorld::CollisionBody*>(lock.GetBody().GetUserData());
+      return collider!=nullptr ? collider->label() : std::string();
+      };
+    std::set<std::string> contactLabels;
+    std::set<uint32_t> contactIds;
+    for(const auto& contact:body.contacts)
+      if(contactIds.insert(contact.body.GetIndexAndSequenceNumber()).second)
+        contactLabels.insert(label(contact.body));
+    snapshot.contactBodies.assign(contactLabels.begin(),contactLabels.end());
+    snapshot.maxSpeedContactBody=label(body.maxSpeedContactBody);
+    snapshot.maxSpeedEverContactBody=label(body.maxSpeedEverContactBody);
     snapshot.transitionMaxDeltaCm=body.transitionMaxDelta;
     snapshot.projectileHits=body.projectileHits;
     snapshot.arrowPasses=body.arrowPasses;
@@ -414,6 +534,10 @@ std::vector<Cloth::Snapshot> Cloth::snapshots() const {
 void Cloth::resetStats() {
   impl->each([](Instance::Impl& body) {
     body.maxAnchorError=body.maxSpeedEver=body.transitionMaxDelta=0;
+    body.maxSpeedEverVertex=uint32_t(-1);
+    body.maxSpeedEverSource=body.maxSpeedEverWorld=body.maxSpeedEverContactNormal=Tempest::Vec3();
+    body.maxSpeedEverContact=false;
+    body.maxSpeedEverContactBody=JPH::BodyID();
     body.projectileHits=body.arrowPasses=body.recoveryCount=0;
     });
   }

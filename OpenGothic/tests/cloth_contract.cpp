@@ -186,9 +186,34 @@ int main() {
   actualRoof.reset();
   attached.reset();
   wideBeam.reset();
+  const std::vector<Tempest::Vec3> furledVertices={{0,100,-40},{1000,100,-40},{0,200,-40},{1000,200,-40},
+                                                {0,100,40},{1000,100,40},{0,200,40},{1000,200,40}};
+  const std::vector<uint32_t> furledIndices={0,1,2,1,3,2,4,6,5,5,6,7,0,2,4,2,6,4,1,5,3,3,5,7};
+  auto yardMatrix=Tempest::Matrix4x4::mkIdentity();
+  yardMatrix.translate(500,250,0);
+  auto yard=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(6,.05f,.35f)),yardMatrix,.7f,DynamicWorld::C_Landscape);
+  yard->setLabel("world-yard");
+  auto furled=cloth.add(furledVertices,furledIndices,{2,3,6,7},Tempest::Matrix4x4::mkIdentity(),.85f,"furled-sail-contract",13);
+  cloth.setObserver({500,150,0});
+  tick(collision,60);
+  require(cloth.snapshots().front().exposed,"furled cloth samples across its thickness beyond a narrow world-mesh yard");
+  auto furledRoofMatrix=Tempest::Matrix4x4::mkIdentity();
+  furledRoofMatrix.translate(500,500,0);
+  auto furledRoof=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(8,.1f,4)),furledRoofMatrix,.7f,DynamicWorld::C_Landscape);
+  furledRoof->setLabel("furled-roof");
+  tick(collision,60);
+  const auto roofedSail=cloth.snapshots().front();
+  require(!roofedSail.exposed && roofedSail.windOccluders.size()==3 && roofedSail.windOccluders.front().body=="furled-roof",
+          "wide real landscape roofs still shelter a furled sail and report the native blocker");
+  require(roofedSail.windOccluders.front().distanceCm>300.f,"wind blocker diagnostic preserves the actual roof distance");
+  furled.reset();
+  furledRoof.reset();
+  yard.reset();
+  cloth.setObserver({60,100,0});
   auto wallMatrix=Tempest::Matrix4x4::mkIdentity();
   wallMatrix.translate(60,100,30);
   auto wall=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(5,5,.05f)),wallMatrix,.7f,DynamicWorld::C_Object);
+  wall->setLabel("contract-wall");
   auto blocked=cloth.add(flag.vertices,flag.indices,flag.pins,Tempest::Matrix4x4::mkIdentity(),.85f,"wall-flag",10);
   cloth.setWind({0,0,8});
   tick(collision,600);
@@ -197,6 +222,8 @@ int main() {
   for(const auto& position:wallCloth.worldPositionsCm) maxWallZ=std::max(maxWallZ,position.z);
   require(maxWallZ>20.f,"wind carries cloth into a nearby native obstacle");
   require(maxWallZ<=25.1f,"native static-object contact prevents cloth passing through its pole or a wall");
+  require(wallCloth.contactVertices>0 && std::find(wallCloth.contactBodies.begin(),wallCloth.contactBodies.end(),"contract-wall")!=wallCloth.contactBodies.end(),
+          "native soft-body diagnostic reports actual wall contact vertices and body identity");
   require(wallCloth.maxAnchorErrorCm<=.5f && wallCloth.recoveryCount==0,"obstacle contacts preserve fixed pins without recovery");
   blocked.reset();
   wall.reset();
@@ -207,6 +234,7 @@ int main() {
   float maxCharacterZ=0;
   for(const auto& position:characterCloth.worldPositionsCm) maxCharacterZ=std::max(maxCharacterZ,position.z);
   require(maxCharacterZ>35.f,"cloth passes through the same obstacle on the character layer");
+  require(characterCloth.contactVertices==0 && characterCloth.contactBodies.empty(),"ignored characters produce no native soft-body contacts");
   require(characterCloth.recoveryCount==0,"ignored character contacts never destabilize cloth");
   std::printf("cloth contract passed: calm_10s_max_vertex_cm_s=%.6g max_vertex_cm_s=%.6g anchor_drift_cm=%.6g boundary_delta_cm=%.6g roof_calm_lateral_cm_s=%.6g roof_wind_lateral_cm_s=%.6g wall_vertex_max_z_cm=%.6g character_vertex_max_z_cm=%.6g recovery=0\n",
               double(calm.maxSpeedCmPerSec),double(windy.maxSpeedEverCmPerSec),double(windy.maxAnchorErrorCm),

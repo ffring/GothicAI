@@ -16,6 +16,7 @@ wait 3000
 cloth wind gust
 wait 10000
 shot cloth-harbour-off-gust
+wait 34
 cloth checkpoint harbour-off-gust
 stop
 cloth wind calm
@@ -31,6 +32,7 @@ wait 3000
 cloth wind gust
 wait 10000
 shot cloth-harbour-on-gust
+wait 34
 cloth checkpoint harbour-gust
 cloth verify anchors
 stop
@@ -59,6 +61,7 @@ cloth verify fireball
 cloth verify anchors
 cloth checkpoint harbour-flag-after-fireball
 shot cloth-harbour-flag-after-fireball
+wait 34
 stop
 
 # Furled cloth on the diagonal forestay remains geometrically tied to the stay.
@@ -80,5 +83,6 @@ wait 10000
 cloth verify anchors
 cloth checkpoint harbour-sail-gust
 shot cloth-harbour-sail-on-gust
+wait 34
 stop
 physics stats

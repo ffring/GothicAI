@@ -36,6 +36,11 @@ class Cloth final {
         friend class Cloth;
       };
 
+    struct WindOccluder {
+      std::string body;
+      Tempest::Vec3 pointCm;
+      float distanceCm = 0;
+      };
     struct Snapshot {
       uintptr_t id = 0;
       uint32_t zenId = uint32_t(-1);
@@ -46,6 +51,14 @@ class Cloth final {
       float simulationWeight = 0;
       float maxAnchorErrorCm = 0, maxSpeedCmPerSec = 0, maxSpeedEverCmPerSec = 0;
       float transitionMaxDeltaCm = 0;
+      size_t contactVertices = 0;
+      std::vector<std::string> contactBodies;
+      uint32_t maxSpeedVertex = uint32_t(-1), maxSpeedEverVertex = uint32_t(-1);
+      Tempest::Vec3 maxSpeedSourceCm, maxSpeedWorldCm, maxSpeedContactNormal;
+      Tempest::Vec3 maxSpeedEverSourceCm, maxSpeedEverWorldCm, maxSpeedEverContactNormal;
+      bool maxSpeedContact = false, maxSpeedEverContact = false;
+      std::string maxSpeedContactBody, maxSpeedEverContactBody;
+      std::vector<WindOccluder> windOccluders;
       uint64_t projectileHits = 0, arrowPasses = 0, recoveryCount = 0;
       // Visible vertex order, already blended with the shader reference.
       std::vector<Tempest::Vec3> positionsCm, worldPositionsCm, anchorsCm;
