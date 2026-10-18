@@ -1834,20 +1834,27 @@ async def orders_scenario(
                 if seen.guild >= BEASTS and seen.body != "dead":
                     await link.debug("kill", instance=seen.id, near=npc)
 
-    await clear_animals()
-    await attach_when_free(link, npc)
-    await link.act(npc, "return_to_routine")
-    ready = await Bodies(link).act(
-        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
-        minutes=60, place=True, arrive=True, radius=100, timeout=15,
-    )
-    if ready.status != "arrived":
+    for attempt in range(3):
+        # A newly placed native pose can see a rat hidden from the old reading pose.
+        # Only this setup is retried; no order or combat assertion has started yet.
+        await clear_animals()
+        await attach_when_free(link, npc)
+        await link.act(npc, "return_to_routine")
+        ready = await Bodies(link).act(
+            npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+            minutes=60, place=True, arrive=True, radius=100, timeout=15,
+        )
+        if ready.status == "arrived":
+            break
         state = (await link.routine(npc)).current
         snap = await link.snapshot(npc, fresh=True)
-        raise GameError(
-            f"orders arena preparation: {ready.status} {ready.detail}; state={state}; "
+        reason = (
+            f"{ready.status} {ready.detail}; state={state}; "
             f"pos={snap.npc.pos}; nearby={snap.nearby_npcs}"
         )
+        log.info("orders arena preparation reset %d/3: %s", attempt + 1, reason)
+        if state != "ZS_ATTACK" or attempt == 2:
+            raise GameError(f"orders arena preparation: {reason}")
     await clear_animals()
     if not await talk.hold(npc, "follow"):
         link.act = act  # type: ignore[method-assign]
