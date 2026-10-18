@@ -37,6 +37,7 @@ class SoundFx {
       };
 
     std::vector<SoundVar> inst;
+    std::string           debugName;
     void implLoad    (std::string_view name);
     void loadVariants(std::string_view name);
   };
