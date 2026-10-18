@@ -38,6 +38,7 @@ from .protocol import Chest, GameMessage, Loading, MemoryCmd, Session, Snapshot
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
+    from .crimes import Crimes
     from .dialogue import Conversation, DialogueManager
     from .places import PlaceBook
 
@@ -156,12 +157,14 @@ class ChestDesk:
         *,
         places: PlaceBook | None = None,
         journal: Journal | None = None,
+        crimes: Crimes | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.link = link
         self.memory = memory
         self.places = places
         self.journal = journal or Journal()
+        self.crimes = crimes
         self.clock = clock
         self.branch: str | None = link.session.branch if link.session is not None else None
         self._chests: dict[str, tuple[float, list[Chest]]] = {}  # npc -> (when asked, its chests)
@@ -400,6 +403,18 @@ class ChestDesk:
         note = "; ".join(parts) + "."
         if missing:
             note += f" Из сундука пропало: {text(missing)} — кто-то в нём рылся."
+            if self.crimes is not None:
+                suspicions = self.crimes.suspect_chest(
+                    npc,
+                    chest,
+                    missing,
+                    waypoint=now.waypoint if now is not None else "",
+                )
+                if any(f.get("suspect") == "PLAYER" for f in suspicions):
+                    note += (
+                        " Ты вспоминаешь героя рядом около времени пропажи и подозреваешь его; "
+                        "доказательств нет."
+                    )
         self.journal.add("chest", npc=npc, chest=chest, took=took, put=put, missing=missing)
         log.info("%s at its chest %s: took %s, put %s, missing %s", npc, chest, took, put, missing)
         return note

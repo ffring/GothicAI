@@ -89,6 +89,10 @@
 #   crimes: hero deeds and engine witnesses (docs/crime.md, layer 1), LLM=fake on Lobart's farm:
 #       SAVE=save_slot_1.sav; TIMEOUT=420. Theft, chest, unowned item, attack, sheep, both pocket
 #       outcomes, then save/load and a clean branch. Native script reactions remain enabled.
+#   crime_talk: crime knowledge and speech (docs/crime.md, layer 2), on Lobart's farm/save_slot_1.sav.
+#       LLM=fake: Hilda's theft rumor, testimony/catch_lie, accepted silence, chest suspicion/concern.
+#       LLM=chatgpt: only the first scene; records Lobart's actual prompt, reply and catch_lie outcome.
+#       TIMEOUT=600. Native theft perceptions stay enabled; Hilda's fight is reset after her sighting.
 #   requires: a book quest depending on vanilla (docs/director.md, stage 5, layer 2), no model: Hilda's
 #       offer stays absent while Lobart's turnip quest is open or running, opens after its success, and
 #       the book's second stage waits for "Сковорода для Хильды" to become running. A save and a load

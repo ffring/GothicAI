@@ -278,7 +278,7 @@ class QuestBoard:
 
 @dataclass
 class Lie:
-    """A lie about a quest that is found out, or his words that the npc saw were false (sightings.py)."""
+    """A false quest claim or the hero's words disproved by its own or a witness's evidence."""
 
     quest: str  # its id: Q1 for the director's, MIS_* for the scripts', SAID_* for words
     giver: str
@@ -286,6 +286,7 @@ class Lie:
     title: str  # the quest's title; his words, for words
     reward: str  # what the hero took for it
     said: bool = False  # the lie is his words, not a quest
+    crime: str = ""  # the deed he denied; words still use the same caught/trust/rumor path
 
     def claim(self) -> str:
         """What he claimed, as one says it after «он»: «уверял, что сделал «…»» or «сказал «…»»."""
@@ -353,9 +354,9 @@ async def caught(
     *,
     extra: dict[str, Any] | None = None,
 ) -> None:
-    """The giver sees for itself that the hero lies to it, before it pays: it remembers, takes his word no
-    more (trust.py), is wary of him, and the people around hear it. No beating: he took nothing. `extra`:
-    more of the fact (the witness whose words caught him, witnesses.py)."""
+    """The npc catches a false claim: it remembers, takes his word no more (trust.py), is wary of him,
+    and the people around hear it. A quest, an ordinary claim and denial of a deed share this path.
+    `extra`: more of the fact (the witness whose words caught him, witnesses.py)."""
     day = await _day(link)
     chronicle.record(
         {
@@ -366,13 +367,22 @@ async def caught(
             "title": lie.title,
             "how": how,
             **({"said": True} if lie.said else {}),
+            **({"crime": lie.crime} if lie.crime else {}),
             **(extra or {}),
             **day,
         }
     )
-    belief = {"fact": "belief", "npc": lie.giver, "quest": lie.quest, "claim": "done", "believed": False}
-    chronicle.record({**belief, "source": how})
-    journal.add("lie_caught", npc=lie.giver, name=lie.giver_name, quest=lie.quest, how=how)
+    if not lie.said:
+        belief = {"fact": "belief", "npc": lie.giver, "quest": lie.quest, "claim": "done", "believed": False}
+        chronicle.record({**belief, "source": how})
+    journal.add(
+        "lie_caught",
+        npc=lie.giver,
+        name=lie.giver_name,
+        quest=lie.quest,
+        how=how,
+        **({"crime": lie.crime} if lie.crime else {}),
+    )
     dialogue.remember(
         lie.giver,
         lie.giver_name,
@@ -381,7 +391,13 @@ async def caught(
     conv = dialogue.open(lie.giver, lie.giver_name)
     if conv.intent.attitude != "hostile":
         agenda = "make the hero prove what he claims; never take his word again"
-        dialogue.change_intent(lie.giver, lie.giver_name, attitude="wary", agenda=agenda)
+        dialogue.change_intent(
+            lie.giver, lie.giver_name, body=not bool(lie.crime), attitude="wary", agenda=agenda
+        )
+    if lie.crime:
+        # The caught fact seeds Rumors just like any lie. A deed's news travels through Social's
+        # ties, respecting settlements and outlaw boundaries even on its first transition.
+        return
     try:
         people = await link.story_nearby(lie.giver, RUMOR_CM)
     except (GameError, TimeoutError) as err:
@@ -412,6 +428,7 @@ def _tell(
                 "about_name": lie.giver_name,
                 "title": lie.title,
                 **({"said": True} if lie.said else {}),
+                **({"crime": lie.crime} if lie.crime else {}),
                 "from": lie.giver,
                 "from_name": lie.giver_name,
                 "to": p["npc"],

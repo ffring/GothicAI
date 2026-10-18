@@ -117,6 +117,7 @@ async def test_foreign_item_room_or_chest_is_theft(system, ownership, owner, com
         "hour": 9,
         "minute": 15,
         "witnesses": [HILDA],
+        **({"chest": ownership["chest"]} if ownership.get("chest") else {}),
     }
     assert system.chronicle.facts("crime_seen") == [
         {"fact": "crime_seen", "npc": HILDA, "crime": "deed-1"},

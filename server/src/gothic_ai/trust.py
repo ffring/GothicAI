@@ -26,6 +26,7 @@ from .protocol import Snapshot
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
+    from .crimes import Crimes
     from .dialogue import Conversation, DialogueManager
 
 
@@ -46,17 +47,19 @@ class Record:
     kept: list[str] = field(default_factory=list)  # true claims to it
     amended: list[str] = field(default_factory=list)  # lies he made amends for, with it
     broke: list[str] = field(default_factory=list)  # debts to it not paid back by their day
+    crimes: list[str] = field(default_factory=list)  # proved deeds, or a victim's learned grievance
 
     @property
     def broken(self) -> bool:
-        return bool(self.lied or self.broke)
+        return bool(self.lied or self.broke or self.crimes)
 
 
 class Trust:
     """The hero's word in the eyes of each npc: a TurnExtension with situation lines only."""
 
-    def __init__(self, chronicle: Chronicle) -> None:
+    def __init__(self, chronicle: Chronicle, *, crimes: Crimes | None = None) -> None:
         self.chronicle = chronicle
+        self.crimes = crimes
 
     def of(self, npc: str) -> Record:
         npc = npc.upper()
@@ -87,6 +90,8 @@ class Trust:
                 case "deal" if f.get("npc") == npc and f.get("forgive"):
                     gold = int(f.get("gold", 0))
                     for key in f["forgive"]:
+                        if str(key).startswith("crime:"):
+                            continue
                         what = titles.get(_lie(key)[0]) or _lie(key)[0]
                         r.amended.append(f"«{what}»{f' — заплатил {gold} золотых' if gold else ''}")
                 case "broken" if f.get("npc") == npc and f.get("promise") == "meet":
@@ -99,7 +104,7 @@ class Trust:
                     told = f", со слов: {teller}" if teller else ""
                     what = "не пришёл на встречу" if is_meeting(f.get("quest", "")) else "не вернул долг"
                     r.heard.append(f"{about} ({what}: {f.get('title', '')}{told})")
-                case "rumor" if f.get("to") == npc:
+                case "rumor" if f.get("to") == npc and f.get("kind") in {"caught", "found_out"}:
                     about = f.get("about_name") or f.get("name") or f.get("from", "")
                     teller = f.get("from_name") if int(f.get("hops", 1)) > 1 else None
                     r.heard.append(f"{about} («{title}»{f', со слов: {teller}' if teller else ''})")
@@ -107,6 +112,8 @@ class Trust:
                     r.kept.append(f"«{title}»")
         r.heard = list(dict.fromkeys(r.heard))
         r.amended = list(dict.fromkeys(r.amended))
+        if self.crimes is not None:
+            r.crimes = self.crimes.distrust(npc)
         return r
 
     def broken(self, npc: str) -> bool:
@@ -124,6 +131,8 @@ class Trust:
             lines.append(f"- он уже лгал тебе: {'; '.join(r.lied)}. {WORD_BROKEN}")
         if r.broke:
             lines.append(f"- он не сдержал слово: {'; '.join(r.broke)}.{'' if r.lied else ' ' + WORD_BROKEN}")
+        if r.crimes:
+            lines.append(f"- его дела подорвали твоё доверие: {'; '.join(r.crimes)}. {WORD_BROKEN}")
         if r.heard:
             lines.append(f"- ты слышал, что он обманул других: {', '.join(r.heard)}")
         if r.kept:

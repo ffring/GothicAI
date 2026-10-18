@@ -76,6 +76,7 @@ from .protocol import (
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
+    from .crimes import Crimes
     from .dialogue import Conversation, DialogueManager
     from .guide import Guide, Way
     from .meetings import Meetings, MeetTerm
@@ -142,9 +143,12 @@ PROPOSE_TOOL = Tool(
     "книги, ITMI_… прочие вещи): вещь из твоих дел, которая у него с собой, код подставит сам. Сколько у "
     "него с собой, ты не знаешь, но сделка сама тебя защищает: если у него нет того, что он отдаёт, она "
     "не состоится — осматривать вещь заранее не нужно. "
-    "Кроме вещей: простить ему ложь, о которой ты знаешь (forgive), пообещать о ней молчать (silence), дать "
+    "Кроме вещей: простить ему ложь или дело против тебя, о котором ты знаешь (forgive), пообещать "
+    "молчать о лжи или деле, которое видел сам (silence), дать "
     "в долг — он отдаст позже, к сроку (hero_later), принять возврат его долга тебе (repay); id лжи и долгов "
-    "— в обстановке. Вещи из твоего тайника (если он есть, он в обстановке) отдаёшь так же, через npc_gives. "
+    "— в обстановке. Украденное у тебя тоже можно вернуть через repay по id дела crime:…: впиши в "
+    "hero_gives украденные вещи целиком или оговорённую цену золотом, тогда простишь это дело. "
+    "Вещи из твоего тайника (если он есть, он в обстановке) отдаёшь так же, через npc_gives. "
     "Ещё можешь дать опыт (npc_xp) и научить (npc_teach) за его очки обучения, как учитель в игре: "
     "attribute — ATR_STRENGTH сила, ATR_DEXTERITY ловкость, ATR_MANA_MAX мана, count — очки; fight — "
     "NPC_TALENT_1H, NPC_TALENT_2H, NPC_TALENT_BOW, NPC_TALENT_CROSSBOW, count — проценты; thief — "
@@ -167,8 +171,11 @@ PROPOSE_TOOL = Tool(
         "properties": {
             "npc_gives": {**_GIVES, "description": "что отдаёшь ты"},
             "hero_gives": {**_GIVES, "description": "что отдаёт герой сейчас"},
-            "forgive": {**_IDS, "description": "id лжи героя, которую ты прощаешь"},
-            "silence": {**_IDS, "description": "id лжи героя, о которой ты обещаешь никому не рассказывать"},
+            "forgive": {
+                **_IDS,
+                "description": "id известной лжи или дела героя против тебя, которое прощаешь",
+            },
+            "silence": {**_IDS, "description": "id лжи или виденного тобой дела, о котором обещаешь молчать"},
             "hero_later": {
                 "type": "array",
                 "items": {
@@ -189,7 +196,8 @@ PROPOSE_TOOL = Tool(
             "repay": {
                 **_IDS,
                 "description": "id долгов героя тебе, которые он возвращает сейчас; что он должен, войдёт в "
-                "сделку само — не добавляй это в hero_gives ещё раз",
+                "сделку само — не добавляй это в hero_gives ещё раз. Для кражи — id crime:…; украденное "
+                "или оговорённую цену золотом впиши в hero_gives, тогда простишь дело",
             },
             "npc_xp": {"type": "integer", "description": "опыт, который ты даёшь герою сейчас; 0 — нет"},
             "npc_teach": {**_TEACH, "description": "чему ты учишь его сейчас, за его очки обучения"},
@@ -291,6 +299,32 @@ class LieRef:
 
 
 @dataclass(frozen=True)
+class CrimeRef:
+    """A chronicle deed the npc really knows, referenced like a lie in the same deal window."""
+
+    key: str  # crime:<id>, never a model-created deed
+    title: str
+    victim: str
+    kind: str
+    degree: str
+    items: tuple[tuple[str, int], ...] = ()
+
+    @property
+    def crime(self) -> str:
+        return self.key.removeprefix("crime:")
+
+
+def _amends(ref: LieRef | CrimeRef, *, silence: bool = False, window: bool = False) -> str:
+    if isinstance(ref, CrimeRef):
+        what = f"{'деле' if silence else 'дело'} «{ref.title}»"
+    else:
+        what = f"{'лжи' if silence else 'ложь'} про «{ref.title}»"
+    if silence:
+        return f"Молчит о {what}" if window else f"обещаешь молчать о {what}"
+    return f"Прощает {what}" if window else f"прощаешь ему {what}"
+
+
+@dataclass(frozen=True)
 class Later:
     """What the hero gives later: a debt, due by the end of a game day (0-based, as the game counts)."""
 
@@ -326,8 +360,8 @@ class Deal:
     version: int
     npc_gives: tuple[Give, ...]
     hero_gives: tuple[Give, ...]
-    forgive: tuple[LieRef, ...] = ()
-    silence: tuple[LieRef, ...] = ()
+    forgive: tuple[LieRef | CrimeRef, ...] = ()
+    silence: tuple[LieRef | CrimeRef, ...] = ()
     later: tuple[Later, ...] = ()
     repay: tuple[Debt, ...] = ()
     xp: int = 0  # the npc gives experience now
@@ -336,6 +370,7 @@ class Deal:
     reward: Reward = field(default_factory=Reward)  # ...the npc pays this when it is done (contracts.py)
     lead: Way | None = None  # it leads him there (guide.py)
     meet: MeetTerm | None = None  # they meet there and then; his word to come (meetings.py)
+    crime_repay: tuple[CrimeRef, ...] = ()  # paid amends through hero_gives, no second transfer
     state: DealState = "open"
 
     def same(self, other: Deal) -> bool:
@@ -347,8 +382,9 @@ class Deal:
 
     def terms(self) -> str:
         """In the npc's words: what it gives and what the hero gives."""
-        mine = [f"прощаешь ему ложь про «{lie.title}»" for lie in self.forgive]
-        mine += [f"обещаешь молчать о лжи про «{lie.title}»" for lie in self.silence]
+        mine = [_amends(ref) for ref in self.forgive]
+        mine += [_amends(ref, silence=True) for ref in self.silence]
+        mine += [f"прощаешь дело «{ref.title}» после возмещения" for ref in self.crime_repay]
         if self.xp:
             mine.append(f"даёшь ему опыт +{self.xp}")
         mine += [f"учишь его: {t.text()}" for t in self.teach]
@@ -366,8 +402,14 @@ class Deal:
 
     def show(self) -> DealShowCmd:
         mine = [g.term() for g in self.npc_gives]
-        mine += [DealTerm(item="", count=0, text=f"Прощает ложь про «{lie.title}»") for lie in self.forgive]
-        mine += [DealTerm(item="", count=0, text=f"Молчит о лжи про «{lie.title}»") for lie in self.silence]
+        mine += [DealTerm(item="", count=0, text=_amends(ref, window=True)) for ref in self.forgive]
+        mine += [
+            DealTerm(item="", count=0, text=_amends(ref, silence=True, window=True)) for ref in self.silence
+        ]
+        mine += [
+            DealTerm(item="", count=0, text=f"Прощает дело после возмещения: {ref.title}")
+            for ref in self.crime_repay
+        ]
         if self.xp:
             mine.append(DealTerm(item="", count=0, text=f"Опыт +{self.xp}"))
         mine += [DealTerm(item="", count=0, text=f"Учит: {t.text()}") for t in self.teach]
@@ -413,6 +455,7 @@ class Deals:
         journal: Journal | None = None,
         names: Callable[[str], str | None] | None = None,
         things: Callable[[str], Collection[str]] | None = None,
+        crimes: Crimes | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
@@ -420,6 +463,7 @@ class Deals:
         self.journal = journal or dialogue.journal
         self.names = names  # an npc's name -> its symbol, for whom a task is to kill (the character cards)
         self.things = things  # an npc -> the item ids of its story (StoryGraph.things_of), for a guessed id
+        self.crimes = crimes
         self.stash = Stash(chronicle)
         # what the npc knows it keeps in its chests (chests.py): a thing it offers may be there
         self.in_chests: Callable[[str], dict[str, tuple[int, str]]] = lambda npc: {}
@@ -469,6 +513,22 @@ class Deals:
             for k, lie in open_lies.items():
                 hushed = "; ты уже обещал о ней молчать" if k in silent else ""
                 lines.append(f"- {k}: он {lie.words(npc)}{hushed}")
+        crimes, forgiven_crimes, silent_crimes = self.crimes_of(npc)
+        open_crimes = {k: ref for k, ref in crimes.items() if k not in forgiven_crimes}
+        if open_crimes:
+            lines.append("Дела героя для сделки (используй только эти id):")
+            for key, ref in open_crimes.items():
+                terms = []
+                if ref.victim == npc:
+                    terms.append("простить — forgive")
+                    if ref.kind == "theft" and ref.items:
+                        terms.append("возместить — repay; вещи или оговорённая цена — в hero_gives")
+                if ref.degree == "seen" and key not in silent_crimes:
+                    terms.append("молчать — silence")
+                if key in silent_crimes:
+                    terms.append("ты уже обещал молчать")
+                if terms:
+                    lines.append(f"- {key}: {ref.title}; {'; '.join(terms)}")
         debts = [d for d in self.debts.values() if d.npc == npc and not d.paid]
         if debts:
             lines.append("Долги героя тебе (вернуть — repay в сделке, по id):")
@@ -544,7 +604,7 @@ class Deals:
         forgive, silence, why = self._lies(npc, args.get("forgive"), args.get("silence"))
         if forgive is None or silence is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
-        repay, why = self._repay(npc, args.get("repay"))
+        repay, crime_repay, why = self._repay(npc, args.get("repay"))
         if repay is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
         later_raw, why = _parse_later(args.get("hero_later"))
@@ -560,6 +620,8 @@ class Deals:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
         wanted = _swapped(wanted, swaps)
         hero_gives = tuple(Give(i, c, things[i]) for i, c in wanted.items())
+        if why := self._crime_payment(crime_repay, hero_gives):
+            return ToolOutcome(f"Отклонено: {why}", "rejected")
         later = tuple(Later(Give(i, c, things[i]), day + d) for i, c, d in later_raw)
         task = None
         if kills or bring:
@@ -571,7 +633,20 @@ class Deals:
         meet, why = await self._meet(npc, args.get("meet"), snap)
         if why:
             return ToolOutcome(f"Отклонено: встреча — {why}", "rejected")
-        given = (npc_gives, hero_gives, forgive, silence, later, repay, xp, teach, task, lead, meet)
+        given = (
+            npc_gives,
+            hero_gives,
+            forgive,
+            silence,
+            later,
+            repay,
+            crime_repay,
+            xp,
+            teach,
+            task,
+            lead,
+            meet,
+        )
         if not any(given):
             return ToolOutcome("Отклонено: в сделке ничего нет.", "rejected")
         current = self.open.get(npc)  # he may have accepted the shown terms meanwhile
@@ -595,6 +670,7 @@ class Deals:
             reward,
             lead,
             meet,
+            crime_repay,
         )
         if current is not None and current.same(deal):
             return ToolOutcome(f"Эти условия герой уже видит: {current.terms()}.", "accepted")
@@ -659,6 +735,35 @@ class Deals:
                     forgiven.add(f["lie"])
         return known, forgiven, silent
 
+    def crimes_of(self, npc: str) -> tuple[dict[str, CrimeRef], set[str], set[str]]:
+        """Deal options come exclusively from this npc's certain chronicle knowledge."""
+        known: dict[str, CrimeRef] = {}
+        forgiven, silent = set(), set()
+        if self.crimes is None:
+            return known, forgiven, silent
+        for knowledge in self.crimes.known(npc):
+            if knowledge.degree not in {"seen", "heard"} or knowledge.suspect != "PLAYER":
+                continue
+            crime = knowledge.crime
+            key = f"crime:{crime['id']}"
+            items = crime.get("items") or [{"item": crime.get("item", ""), "count": crime.get("count", 0)}]
+            ref = CrimeRef(
+                key,
+                self.crimes.describe(crime),
+                crime.get("victim") or crime.get("owner") or "",
+                crime["kind"],
+                knowledge.degree,
+                tuple(
+                    (entry["item"], entry["count"]) for entry in items if entry["item"] and entry["count"] > 0
+                ),
+            )
+            known[key] = ref
+            if knowledge.forgiven:
+                forgiven.add(key)
+            if knowledge.silenced:
+                silent.add(key)
+        return known, forgiven, silent
+
     # --- the terms ------------------------------------------------------------------------------
 
     def _npc_gives(self, npc: str, raw: Any, snap: Snapshot | None) -> tuple[tuple[Give, ...] | None, str]:
@@ -693,19 +798,32 @@ class Deals:
 
     def _lies(
         self, npc: str, forgive: Any, silence: Any
-    ) -> tuple[tuple[LieRef, ...] | None, tuple[LieRef, ...] | None, str]:
+    ) -> tuple[tuple[LieRef | CrimeRef, ...] | None, tuple[LieRef | CrimeRef, ...] | None, str]:
         known, forgiven, silent = self.lies_of(npc)
-        out: list[tuple[LieRef, ...]] = []
+        crimes, crime_forgiven, crime_silent = self.crimes_of(npc)
+        refs: dict[str, LieRef | CrimeRef] = {**known, **crimes}
+        forgiven.update(crime_forgiven)
+        silent.update(crime_silent)
+        out: list[tuple[LieRef | CrimeRef, ...]] = []
         for raw, done, what in ((forgive, forgiven, "простил"), (silence, silent, "обещал молчать о")):
             keys = [str(k).strip() for k in (raw or [])]
-            unknown = [k for k in keys if k not in known]
+            unknown = [k for k in keys if k not in refs]
             if unknown:
-                listed = ", ".join(known) or "никакой"
-                return None, None, f"ты не знаешь такой лжи героя: {', '.join(unknown)}. Ты знаешь: {listed}."
+                listed = ", ".join(refs) or "никакой"
+                why = f"ты не знаешь такой лжи или дела героя: {', '.join(unknown)}. Ты знаешь: {listed}."
+                return None, None, why
             again = [k for k in keys if k in done]
             if again:
                 return None, None, f"ты уже {what} этой лжи: {', '.join(again)}."
-            out.append(tuple(known[k] for k in dict.fromkeys(keys)))
+            for key in keys:
+                if key not in crimes:
+                    continue
+                ref = crimes[key]
+                if what == "простил" and ref.victim != npc:
+                    return None, None, f"простить дело {key} может только пострадавший."
+                if what != "простил" and ref.degree != "seen":
+                    return None, None, f"обещать молчать о деле {key} может только видевший его свидетель."
+            out.append(tuple(refs[k] for k in dict.fromkeys(keys)))
         return out[0], out[1], ""
 
     async def _lead(self, npc: str, raw: Any, snap: Snapshot | None) -> tuple[Way | None, str]:
@@ -727,14 +845,37 @@ class Deals:
             return None, "назначать встречи ты не можешь"
         return await self.meetings.term(npc, raw, snap)
 
-    def _repay(self, npc: str, raw: Any) -> tuple[tuple[Debt, ...] | None, str]:
+    def _repay(self, npc: str, raw: Any) -> tuple[tuple[Debt, ...] | None, tuple[CrimeRef, ...], str]:
         ids = [str(k).strip() for k in (raw or [])]
         mine = {d.id: d for d in self.debts.values() if d.npc == npc and not d.paid}
-        unknown = [i for i in ids if i not in mine]
+        crimes, forgiven, _ = self.crimes_of(npc)
+        claims = {
+            key: ref
+            for key, ref in crimes.items()
+            if ref.victim == npc and ref.kind == "theft" and ref.items and key not in forgiven
+        }
+        unknown = [i for i in ids if i not in mine and i not in claims]
         if unknown:
-            listed = ", ".join(f"{d.id} ({d.what()})" for d in mine.values()) or "никаких"
-            return None, f"у героя нет такого долга тебе: {', '.join(unknown)}. Его долги тебе: {listed}."
-        return tuple(mine[i] for i in dict.fromkeys(ids)), ""
+            options = [f"{d.id} ({d.what()})" for d in mine.values()] + list(claims)
+            listed = ", ".join(options) or "никаких"
+            return None, (), f"у героя нет такого долга тебе: {', '.join(unknown)}. Его долги тебе: {listed}."
+        ids = list(dict.fromkeys(ids))
+        return tuple(mine[i] for i in ids if i in mine), tuple(claims[i] for i in ids if i in claims), ""
+
+    @staticmethod
+    def _crime_payment(refs: tuple[CrimeRef, ...], gives: tuple[Give, ...]) -> str:
+        if not refs:
+            return ""
+        paid = {give.item: give.count for give in gives}
+        if paid.get(GOLD, 0) > 0:
+            return ""  # the victim agreed this price; the normal atomic transfer must still succeed
+        wanted: dict[str, int] = {}
+        for ref in refs:
+            for item, count in ref.items:
+                wanted[item] = wanted.get(item, 0) + count
+        if any(paid.get(item, 0) < count for item, count in wanted.items()):
+            return "для возмещения кражи впиши в hero_gives все украденные вещи или оговорённую цену золотом."
+        return ""
 
     async def _items(
         self, npc: str, items: set[str], hero: set[str]
@@ -816,7 +957,7 @@ class Deals:
                 "forgive": [lie.key for lie in deal.forgive],
                 "silence": [lie.key for lie in deal.silence],
                 "later": [{**d.give.fact(), "due": d.due, "debt": d.id} for d in debts],
-                "repay": [d.id for d in deal.repay],
+                "repay": [d.id for d in deal.repay] + [ref.key for ref in deal.crime_repay],
                 **({"xp": deal.xp} if deal.xp else {}),
                 **({"teach": [t.fact() for t in deal.teach]} if deal.teach else {}),
                 **({"lead": deal.lead.place.id} if deal.lead else {}),
@@ -824,6 +965,25 @@ class Deals:
                 **day,
             }
         )
+        repaid = {ref.key for ref in deal.crime_repay}
+        forgiven = {ref.key: ref for ref in (*deal.forgive, *deal.crime_repay) if isinstance(ref, CrimeRef)}
+        for ref in forgiven.values():
+            self.chronicle.record(
+                {
+                    "fact": "forgiven",
+                    "npc": deal.npc,
+                    "crime": ref.crime,
+                    "deal": deal.id,
+                    "paid": ref.key in repaid,
+                    **({"hero_gives": [g.fact() for g in deal.hero_gives]} if ref.key in repaid else {}),
+                    **day,
+                }
+            )
+        for ref in deal.silence:
+            if isinstance(ref, CrimeRef):
+                self.chronicle.record(
+                    {"fact": "silenced", "npc": deal.npc, "crime": ref.crime, "deal": deal.id, **day}
+                )
         if deal.task:
             self.contracts.add(deal.id, deal.npc, deal.name, deal.task, deal.reward, day.get("day"))
         if deal.meet is not None and self.meetings is not None:
