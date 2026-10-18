@@ -47,10 +47,15 @@ int main() {
     floor(geometry,30,0,40,10);
     wall(geometry);
     NavMesh mesh;
+    check(!mesh.straightWalkable({3,0,10},{17,0,10}),"unbuilt mesh must not authorize direct walking");
     mesh.buildOrLoad(geometry,params,cache,"contract");
     check(mesh.stats().complete && !mesh.stats().fromCache,"first build must build complete mesh");
     const auto detour=mesh.findPath({3,0,10},{17,0,10});
     check(detour.complete && detour.corners.size()>=4 && detour.length>18.f,"wall must require a real multi-tile detour");
+    check(!mesh.straightWalkable({3,0,10},{17,0,10}),"wall must block a direct ground ray despite a complete detour");
+    check(mesh.straightWalkable({3,0,2},{17,0,2}),"clear multi-tile ground must permit direct steering");
+    check(!mesh.straightWalkable({3,0,10},{35,0,5}),"disconnected ground must not authorize direct walking");
+    check(!mesh.straightWalkable({100,0,100},{17,0,10}),"off-mesh endpoint must not authorize direct walking");
     check(!mesh.findPath({3,0,10},{35,0,5}).complete,"disconnected island must reject partial paths");
     check(!mesh.findPath({100,0,100},{17,0,10}).complete,"off-mesh start must reject path");
     check(mesh.stats().cacheBytes>0 && mesh.stats().tiles>1,"tiled cache must be populated");
@@ -94,6 +99,13 @@ int main() {
     NavMesh cave;
     cave.buildOrLoad(basin,params,cache,"cave");
     check(cave.findPath({3,0,10},{17,0,10}).complete,"water above a solid ceiling must not flood cave floor");
+    NavMesh::Geometry floors;
+    floor(floors,0,0,20,20);
+    floor(floors,8,0,18,20,3.f);
+    NavMesh layered;
+    layered.buildOrLoad(floors,params,cache,"floors");
+    check(layered.straightWalkable({3,0,10},{12,0,10}),"direct walking must remain on the ground under a balcony");
+    check(!layered.straightWalkable({3,0,10},{12,3,10}),"2D ray success must not confuse a balcony with the ground below");
     NavMesh::Geometry gap;
     floor(gap,0,0,8,8);
     floor(gap,10,0,18,8);
@@ -117,6 +129,7 @@ int main() {
     check(linked.stats().key!=separated.stats().key,"proven transition must invalidate mesh cache");
     const auto crossed=linked.findPath(takeoff,landing);
     check(crossed.complete && crossed.transitions.size()==1,"proven jump must connect islands");
+    check(!linked.straightWalkable(takeoff,landing),"an off-mesh jump must never authorize direct ground steering");
     const auto& transition=crossed.transitions.front();
     check(transition.type==NavMesh::LinkType::Jump && transition.id==42,"path must retain transition kind and identity");
     check(transition.cornerIndex+1<crossed.corners.size() &&
@@ -146,7 +159,7 @@ int main() {
     mesh.writePolygons(cache/"polygons.jsonl");
     check(std::filesystem::file_size(cache/"polygons.jsonl")>0,"polygon plot export must be nonempty");
     std::filesystem::remove_all(cache);
-    std::cout << "navmesh contract: detour, disconnected/off-mesh rejection, tiled cache, invalidation, corruption, deep/shallow water, cave, gap boundaries, directed jump/climb/drop links, export passed\n";
+    std::cout << "navmesh contract: detour, direct-ground rays, layered-floor rejection, disconnected/off-mesh rejection, tiled cache, invalidation, corruption, deep/shallow water, cave, gap boundaries, directed jump/climb/drop links, export passed\n";
     return 0;
   } catch(const std::exception& error) {
     std::filesystem::remove_all(cache);

@@ -1,6 +1,8 @@
 """Synthetic navigation-guidance geometry and streaming checks; run on Ryzen."""
 
 from pathlib import Path
+import gzip
+import json
 import sys
 
 import numpy as np
@@ -8,7 +10,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import nav_demos
-from nav_guidance import analyze_records, turn_rule, world_to_body, wrapped_delta
+import nav_guidance
+from nav_guidance import analyze_records, summarize, turn_rule, world_to_body, wrapped_delta
 
 
 def bearings(degrees):
@@ -16,17 +19,18 @@ def bearings(degrees):
     return np.column_stack((np.sin(radians), np.zeros_like(radians), np.cos(radians)))
 
 
-def records_for(road_vectors, corner_vectors=None, *, yaw=0, goal_distance=1000):
+def records_for(road_vectors, corner_vectors=None, *, yaw=0, goal_distance=1000, version=1):
     """Place teacher corners in world coordinates independently of the analyzer."""
     road_vectors = np.asarray(road_vectors, dtype=np.float64)
     count = len(road_vectors)
     corner_vectors = road_vectors if corner_vectors is None else np.asarray(corner_vectors, dtype=np.float64)
     yaw = np.broadcast_to(np.asarray(yaw, dtype=np.float64), (count,))
-    records = np.zeros(count, dtype=nav_demos.RECORD_DTYPE)
+    records = np.zeros(count, dtype=nav_demos.RECORD_DTYPES[version])
     records["time_ms"] = np.arange(1, count + 1) * nav_demos.PERIOD_MS
     records["body_yaw_deg"] = yaw
     records["position_cm"] = [100, 200, -300]
-    records["roads"]["next_direction"] = road_vectors
+    direction = 'carrot_direction' if version == 2 else 'next_direction'
+    records["roads"][direction] = road_vectors
     records["roads"]["goal_distance_cm"] = goal_distance
     # Inverse of the recorder's local frame: forward is world +X at yaw zero.
     c, s = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
@@ -151,3 +155,56 @@ def test_chunk_boundary_preserves_one_comparison_and_all_episode_statistics():
     for field in ("angles_3d", "angles_xz"):
         np.testing.assert_allclose(np.concatenate((getattr(first, field), getattr(second, field))),
                                    getattr(whole, field), atol=1e-6)
+
+
+def test_v2_compares_carrot_to_actual_steering_and_reports_both_turn_denominators():
+    records = records_for(bearings([25, 0, -25, 0]), bearings([30, 0, -30, 0]), version=2)
+    # The first turn is wrong; neutral decisions must not inflate turning_accuracy.
+    records['keys']['turn'] = [1, 0, 1, 0]
+    result = summarize([analyze_records(records)])
+    np.testing.assert_allclose(result['angle_3d']['median_deg'], 2.5, atol=1e-5)
+    assert result['roads_rule']['accuracy'] == .75
+    assert result['roads_rule']['turning_accuracy'] == .5
+    assert result['roads_rule']['steps'] == 4
+    assert result['roads_rule']['turning_steps'] == 2
+    assert result['road_jump_fraction'] == 0
+
+
+def test_v2_chunk_boundary_counts_jump_once_and_episode_boundary_excludes_it():
+    records = records_for(bearings([0, 120, 125]), version=2)
+    chunks = [analyze_records(records[:1]), analyze_records(records[1:], previous=records[0])]
+    result = summarize([nav_guidance.merge_stats(chunks)])
+    assert result['road_jumps'] == 1
+    assert result['adjacent_pairs'] == 2
+    assert result['road_jump_fraction'] == .5
+    separate = summarize([analyze_records(records[:1]), analyze_records(records[1:])])
+    assert separate['road_jumps'] == 0
+    assert separate['adjacent_pairs'] == 1
+
+
+def test_source_cli_includes_failed_attempts_and_separates_format_versions(tmp_path, monkeypatch):
+    source = tmp_path / 'episodes'
+    for version, bearing, success in ((1, 0, True), (2, 180, False)):
+        directory = source / f'v{version}'
+        directory.mkdir(parents=True)
+        records = records_for(bearings([bearing, bearing]), version=version)
+        with gzip.open(directory / 'samples.bin.gz', 'wb') as stream:
+            stream.write(nav_demos.HEADER.pack(nav_demos.MAGIC, version, nav_demos.RECORD_BYTES,
+                                              nav_demos.RAY_COUNT, nav_demos.NEAR_SIZE,
+                                              nav_demos.FAR_SIZE, nav_demos.PERIOD_MS))
+            stream.write(records.tobytes())
+        (directory / 'episode.json').write_text(json.dumps(dict(decisions=2, success=success)))
+    output = tmp_path / 'guidance.json'
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(sys, 'argv', ['nav_guidance.py', '--source', str(source), '--output', str(output),
+                                    '--no-lock', '--batch-size', '1', '--chunk-records', '1',
+                                    '--pause-seconds', '0'])
+    nav_guidance.main()
+    result = json.loads(output.read_text())
+    assert result['sources'] == {'source': str(source)}
+    assert result['groups']['source_all']['episodes'] == 2
+    assert result['groups']['source_all']['steps'] == 4
+    assert result['groups']['source_all']['adjacent_pairs'] == 2
+    assert result['groups']['source_all']['road_jumps'] == 0
+    assert result['groups']['source_v1']['steps'] == 2
+    assert result['groups']['source_v2']['steps'] == 2

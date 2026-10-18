@@ -178,3 +178,30 @@ NavKeyTeacher::Decision NavKeyTeacher::decide(const State& body,const NavMesh::P
   steer(out.keys,body,out.hint.nextCorner);
   return out;
   }
+
+NavKeyTeacher::Decision NavKeyTeacher::decideV2(const State& body,const NavMesh::Path& localPath,
+                                              const Point& goal,const Point& carrot,
+                                              bool directWalkable) {
+  if(!finite(carrot)) {
+    Decision out;
+    out.keys.walk=true;
+    out.replan=true;
+    return out;
+    }
+  Decision out;
+  if(directWalkable) {
+    NavMesh::Path direct;
+    direct.complete=true;
+    direct.corners={body.position,carrot};
+    // The synthetic ground segment has no Detour corner that could change its aim.
+    out=decide(body,direct,goal);
+    } else {
+    out=decide(body,localPath,goal);
+    }
+  if(out.pathValid && !out.hint.onTransition && !body.climbing) {
+    const float error=angle(body,out.hint.nextCorner);
+    const float deadband=std::max(10.f,body.turnSpeedDegrees*.05f);
+    out.keys.turn=std::abs(error)>deadband ? (error>0 ? -1.f : 1.f) : 0.f;
+    }
+  return out;
+  }
