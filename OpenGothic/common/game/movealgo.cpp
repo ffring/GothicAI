@@ -9,7 +9,6 @@
 #include "gothic.h"
 #include "serialize.h"
 #include "testbench.h"
-#include "navdemos.h"
 
 #include <cstdio>
 #include <algorithm>
@@ -677,9 +676,6 @@ bool MoveAlgo::useCharacterVirtual() {
     npcVirtualInRange = false;
     return false;
     }
-  // Population episodes keep the ordinary controller even outside the hero's radius.
-  if(NavDemos::fullSimulation(npc))
-    return true;
   constexpr float enterRadius = 2000.f, leaveRadius = 2200.f;
   const float distance = npc.qDistTo(*hero);
   npcVirtualInRange = npcVirtualInRange ? distance<=leaveRadius*leaveRadius

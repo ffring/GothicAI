@@ -71,17 +71,24 @@ def write_pairs(path, pairs):
     path.write_text(text, encoding="utf-8")
 
 
-def load_pairs(path):
-    pairs = list(rows(path))
+def load_pairs(path, *, deduplicate=False):
+    """Keep final selections strict; raw bench candidates may repeat point names."""
+    pairs = []
     seen = set()
-    for index, pair in enumerate(pairs):
-        if not all(isinstance(pair.get(key), str) and pair[key] and not any(c.isspace() for c in pair[key])
-                   for key in ("region", "start", "goal")):
+    for index, pair in enumerate(rows(path)):
+        if not isinstance(pair, dict) or not all(
+                isinstance(pair.get(key), str) and pair[key] and not any(c.isspace() for c in pair[key])
+                for key in ("region", "start", "goal")):
             raise ValueError(f"Invalid named pair {index}: {pair}")
         key = pair["start"], pair["goal"]
-        if key[0] == key[1] or key in seen:
+        if key[0] == key[1]:
+            raise ValueError(f"Duplicate or identical pair at {index}: {key}")
+        if key in seen:
+            if deduplicate:
+                continue
             raise ValueError(f"Duplicate or identical pair at {index}: {key}")
         seen.add(key)
+        pairs.append(pair)
     if not pairs:
         raise ValueError(f"No pairs in {path}")
     return pairs
@@ -344,7 +351,7 @@ def generate(args):
         scenario(args, runner, "generate", [f"navmesh pairs {args.seed} {args.candidates_per_region}"], directory)
     finally:
         runner.close()
-    candidates = load_pairs(directory / "pairs.jsonl")
+    candidates = load_pairs(directory / "pairs.jsonl", deduplicate=True)
     candidate_file = runner_pairs(args.output / "candidate-pairs.txt", candidates)
     reach_directory = args.output / "reachability"
     runner = new_runner(args, "reachability")
@@ -369,20 +376,13 @@ def generate(args):
                           historical_directed_pairs=len(excluded), source=str(directory / "pairs.jsonl"))))
 
 
-def qualify(args):
-    checked_paths(args)
-    candidates = load_pairs(args.pairs)
-    # Refuse a finalized output change even if a future teacher behaves differently.
-    destination = args.output / "holdout.jsonl"
-    if destination.exists():
-        raise ValueError(f"Final test set already frozen: {destination}")
-    runner = new_runner(args, "teacher")
+def qualify_region(args, candidates, region, publish):
+    """Visit one region in source order, independently of other runners' clocks."""
+    runner = new_runner(args, f"teacher-{region}")
     chosen = []
-    counts = Counter()
-    attempts = []
     try:
         for index, pair in enumerate(candidates):
-            if counts[pair["region"]] >= args.per_region:
+            if pair["region"] != region:
                 continue
             directory = args.output / "teacher" / f"{index:05d}"
             if (directory / "episode.json").is_file():
@@ -397,46 +397,81 @@ def qualify(args):
             if (episode.get("demo_version") != 2 or episode.get("teacher_version") != 2
                     or (episode.get("start"), episode.get("goal")) != (pair["start"], pair["goal"])):
                 raise ValueError(f"Teacher attempt is not the requested v2 pair: {directory}")
-            attempts.append(dict(candidate=index, region=pair["region"], start=pair["start"], goal=pair["goal"],
-                                 success=bool(episode["success"]), elapsed_ms=episode["elapsed_ms"], episode=str(directory)))
-            write_json(args.output / "teacher-attempts.json", attempts)
+            attempt = dict(candidate=index, region=region, start=pair["start"], goal=pair["goal"],
+                           success=bool(episode["success"]), elapsed_ms=episode["elapsed_ms"], episode=str(directory))
+            publish(attempt)
             if episode["success"]:
-                chosen.append(dict(pair, teacher_episode=str(directory), teacher_success=True,
+                chosen.append(dict(pair, index=index, teacher_episode=str(directory), teacher_success=True,
                                    teacher_elapsed_ms=episode["elapsed_ms"], teacher_version=2, demo_version=2,
                                    npc=args.npc, seed=args.seed))
-                counts[pair["region"]] += 1
-            print(json.dumps(attempts[-1]), flush=True)
-            if all(counts[region] == args.per_region for region in REGIONS):
+            print(json.dumps(attempt), flush=True)
+            if len(chosen) == args.per_region:
                 break
     finally:
         runner.close()
-    if any(counts[region] != args.per_region for region in REGIONS):
-        raise ValueError(f"Insufficient teacher-qualified candidates: {dict(counts)}; need {args.per_region} per region")
-    # Existing nav_drive.collect accepts this exact metadata and only drives with
-    # beta=0. This selection is completed before a learner result is observed.
-    chosen.sort(key=lambda p: (REGIONS.index(p["region"]), p["index"]))
+    if len(chosen) != args.per_region:
+        raise ValueError(f"Insufficient teacher-qualified candidates in {region}: {len(chosen)}; need {args.per_region}")
+    return chosen
+
+
+def qualify(args):
+    checked_paths(args)
+    candidates = load_pairs(args.pairs)
+    if any(pair["region"] not in REGIONS for pair in candidates):
+        raise ValueError("Teacher qualification requires the six known regions")
+    # No learner or weights are consulted before the complete selection is frozen.
+    destination = args.output / "holdout.jsonl"
+    if destination.exists():
+        raise ValueError(f"Final test set already frozen: {destination}")
+    attempts = {}
+    lock = threading.Lock()
+    def publish(attempt):
+        with lock:
+            attempts[attempt["candidate"]] = attempt
+            write_json(args.output / "teacher-attempts.json", [attempts[index] for index in sorted(attempts)])
+    workers = min(args.parallel, len(REGIONS))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(qualify_region, args, candidates, region, publish) for region in REGIONS]
+        groups = [future.result() for future in futures]
+    chosen = sorted((pair for group in groups for pair in group), key=lambda p: (REGIONS.index(p["region"]), p["index"]))
     for index, pair in enumerate(chosen):
         pair.update(index=index, split="validation", split_index=index, final_test=True)
     write_pairs(destination, chosen)
-    print(json.dumps(dict(pairs=str(destination), n=len(chosen), regions=dict(counts), attempts=len(attempts))))
+    print(json.dumps(dict(pairs=str(destination), n=len(chosen),
+                          regions=dict(Counter(pair["region"] for pair in chosen)), attempts=len(attempts), workers=workers)))
 
 
 def drive(args):
     pairs = load_pairs(args.pairs)
     if not all(pair.get("final_test") and pair.get("teacher_success") and pair.get("teacher_version") == 2 for pair in pairs):
         raise ValueError("drive requires a frozen teacher-qualified final test set")
-    worker = copy(args)
-    worker.command = "collect"
-    worker.teacher_beta = 0
-    worker.dagger_collection = False
-    worker.split = "validation"
-    worker.list_indices = False
-    worker.selection_seed = args.seed
-    worker.mixing_seed = args.seed
-    worker.indices = args.indices
-    worker.start_index = 0
-    worker.count = None
-    module("nav_drive").collect(worker)
+    selected = list(range(len(pairs))) if args.indices is None else [int(value) for value in args.indices.split(",")]
+    if len(selected) != len(set(selected)) or any(index < 0 or index >= len(pairs) for index in selected):
+        raise ValueError("--indices must contain distinct valid pair indices")
+    if not selected:
+        raise ValueError("No final-test drive indices selected")
+    workers = min(args.parallel, len(selected))
+    def collect(worker_index):
+        worker = copy(args)
+        # Existing nav_drive.collect owns all mutable workdirs and scenario files
+        # under its output. Each worker gets a disjoint subtree and original IDs.
+        if args.parallel > 1:
+            worker.output = args.output / "drive-workers" / f"w{worker_index}"
+        worker.command = "collect"
+        worker.teacher_beta = 0
+        worker.dagger_collection = False
+        worker.split = "validation"
+        worker.list_indices = False
+        worker.selection_seed = args.seed
+        worker.mixing_seed = args.seed
+        worker.indices = ",".join(map(str, selected[worker_index::workers]))
+        worker.start_index = 0
+        worker.count = None
+        module("nav_drive").collect(worker)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(collect, index) for index in range(workers)]
+        for future in futures:
+            future.result()
 
 
 def population_worker(args, worker_index, barrier=None):
@@ -607,6 +642,48 @@ def equivalence_commands(args, pair, pair_file, mode):
     return [*commands, "navdemos wait"]
 
 
+def record_equivalence(args, runner, index, pair, pair_file, mode):
+    worker = copy(args)
+    worker.seed = pair.get("seed", args.seed)
+    directory = args.output / mode / f"{index:05d}"
+    episode_path = directory / "episode.json" if mode == "reference" else directory / "episodes" / "0" / "episode.json"
+    if episode_path.is_file():
+        if not args.resume:
+            raise ValueError(f"Existing equivalence output: {episode_path}; use --resume")
+    else:
+        scenario(worker, runner, f"equivalence-{mode}-{index:05d}",
+                 equivalence_commands(worker, pair, pair_file, mode), directory)
+    episode = read_json(episode_path)
+    if (episode.get("start"), episode.get("goal")) != (pair["start"], pair["goal"]) or episode.get("demo_version") != 2:
+        raise ValueError(f"Equivalence recorded a different route/schema: {episode_path}")
+    episode.update(region=pair["region"], index=index, split="equivalence", split_index=index,
+                   drive=True, weights=str(args.weights), seed=worker.seed, limit_ms=args.limit_ms)
+    write_json(episode_path, episode)
+    print(json.dumps(dict(pair=index, mode=mode, success=episode["success"],
+                          elapsed_ms=episode["elapsed_ms"], episode=str(episode_path.parent))), flush=True)
+
+
+def distance_comparison_metrics(near, far):
+    """Far simulation must retain reachability and avoid slowing common successes."""
+    symmetric = comparison_metrics(near, far)
+    lost = [dict(start=start, goal=goal) for (start, goal), episode in near.items()
+            if episode["success"] and not far[start, goal]["success"]]
+    common = []
+    for key, episode in near.items():
+        other = far[key]
+        if not (episode["success"] and other["success"]):
+            continue
+        common.append(dict(start=key[0], goal=key[1], near_elapsed_ms=episode["elapsed_ms"],
+                           far_elapsed_ms=other["elapsed_ms"],
+                           passed=other["elapsed_ms"] <= episode["elapsed_ms"] * 1.05))
+    reachability_passed = symmetric["repeated_arrived"] >= symmetric["reference_arrived"]
+    return dict(passed=reachability_passed and all(pair["passed"] for pair in common),
+                criterion="far_arrivals_at_least_near_and_no_more_than_5pct_slower_on_each_common_success",
+                time_tolerance=.05, reachability_passed=reachability_passed,
+                near_arrived=symmetric["reference_arrived"], far_arrived=symmetric["repeated_arrived"],
+                lost_success_routes=lost, common_successes=common, symmetric_diagnostic=symmetric)
+
+
 def equivalence(args):
     checked_paths(args, policy=True)
     pairs = load_pairs(args.pairs)
@@ -615,31 +692,29 @@ def equivalence(args):
     chosen = pairs[:args.count]
     # Route order is fixed by the input file before any policy result is seen.
     write_pairs(args.output / "selected-pairs.jsonl", chosen)
-    runner = new_runner(args, "equivalence")
-    try:
-        for index, pair in enumerate(chosen):
-            worker = copy(args)
-            worker.seed = pair.get("seed", args.seed)
-            pair_file = runner_pairs(args.output / "runner-pairs" / f"equivalence-{index:05d}.txt", [pair])
-            for mode in ("reference", "near", "far"):
-                directory = args.output / mode / f"{index:05d}"
-                episode_path = directory / "episode.json" if mode == "reference" else directory / "episodes" / "0" / "episode.json"
-                if episode_path.is_file():
-                    if not args.resume:
-                        raise ValueError(f"Existing equivalence output: {episode_path}; use --resume")
-                else:
-                    scenario(worker, runner, f"equivalence-{mode}-{index:05d}",
-                             equivalence_commands(worker, pair, pair_file, mode), directory)
-                episode = read_json(episode_path)
-                if (episode.get("start"), episode.get("goal")) != (pair["start"], pair["goal"]) or episode.get("demo_version") != 2:
-                    raise ValueError(f"Equivalence recorded a different route/schema: {episode_path}")
-                episode.update(region=pair["region"], index=index, split="equivalence", split_index=index,
-                               drive=True, weights=str(args.weights), seed=worker.seed, limit_ms=args.limit_ms)
-                write_json(episode_path, episode)
-                print(json.dumps(dict(pair=index, mode=mode, success=episode["success"],
-                                      elapsed_ms=episode["elapsed_ms"], episode=str(episode_path.parent))), flush=True)
-    finally:
-        runner.close()
+    pair_files = [runner_pairs(args.output / "runner-pairs" / f"equivalence-{index:05d}.txt", [pair])
+                  for index, pair in enumerate(chosen)]
+    modes = ("reference", "near", "far")
+    if args.parallel == 1:
+        runner = new_runner(args, "equivalence")
+        try:
+            for index, pair in enumerate(chosen):
+                for mode in modes:
+                    record_equivalence(args, runner, index, pair, pair_files[index], mode)
+        finally:
+            runner.close()
+    else:
+        def record_mode(mode):
+            runner = new_runner(args, f"equivalence-{mode}")
+            try:
+                for index, pair in enumerate(chosen):
+                    record_equivalence(args, runner, index, pair, pair_files[index], mode)
+            finally:
+                runner.close()
+        with ThreadPoolExecutor(max_workers=min(args.parallel, len(modes))) as pool:
+            futures = [pool.submit(record_mode, mode) for mode in modes]
+            for future in futures:
+                future.result()
     reference = comparable_episodes(args.output / "reference")
     near = comparable_episodes(args.output / "near")
     far = comparable_episodes(args.output / "far")
@@ -648,7 +723,7 @@ def equivalence(args):
                       far_enough=episode["min_hero_distance_cm"] >= args.min_far_cm)
                  for (start, goal), episode in far.items()]
     parity = comparison_metrics(reference, near)
-    distance_comparison = comparison_metrics(near, far)
+    distance_comparison = distance_comparison_metrics(near, far)
     result = dict(passed=parity["passed"] and distance_comparison["passed"] and all(p["far_enough"] for p in distances),
                   n=len(chosen), selection="first_count_routes_in_supplied_order_before_policy_results",
                   world_reset="same_save_and_seed_before_every_reference_near_far_episode",

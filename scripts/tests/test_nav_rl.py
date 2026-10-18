@@ -3,6 +3,7 @@ import gzip
 import importlib.util
 import json
 import math
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -223,7 +224,8 @@ def test_comparison_requires_route_identity_success_and_five_percent_time():
         rl.comparison_metrics(reference, {('A', 'C'): dict(success=True, elapsed_ms=100000)})
 
 
-def test_equivalence_selects_first_pairs_and_resets_each_comparison(tmp_path, monkeypatch):
+@pytest.mark.parametrize("parallel", [1, 4])
+def test_equivalence_selects_first_pairs_and_resets_each_comparison(tmp_path, monkeypatch, parallel):
     pairs = candidates()
     monkeypatch.setattr(rl, 'checked_paths', lambda *a, **k: None)
     monkeypatch.setattr(rl, 'load_pairs', lambda _: pairs)
@@ -244,15 +246,158 @@ def test_equivalence_selects_first_pairs_and_resets_each_comparison(tmp_path, mo
     args = SimpleNamespace(pairs=None, count=2, output=tmp_path, seed=7, npc='NPC',
                            roads=Path('/roads.json'), weights=Path('/policy.navbc'),
                            limit_ms=240000, far_waypoint='NW_FARM1_ENTRANCE_01', min_far_cm=6000,
-                           resume=False)
+                           resume=False, parallel=parallel)
     rl.equivalence(args)
-    assert [(index, mode) for index, mode, _, _ in calls] == [
-        (0, 'reference'), (0, 'near'), (0, 'far'), (1, 'reference'), (1, 'near'), (1, 'far')]
+    if parallel == 1:
+        assert [(index, mode) for index, mode, _, _ in calls] == [
+            (0, 'reference'), (0, 'near'), (0, 'far'), (1, 'reference'), (1, 'near'), (1, 'far')]
+    else:
+        for mode in ('reference', 'near', 'far'):
+            assert [index for index, called_mode, _, _ in calls if called_mode == mode] == [0, 1]
     assert all(seed == 7 for _, _, seed, _ in calls)
-    assert closed == [True]
+    assert len(closed) == (1 if parallel == 1 else 3)
     result = rl.read_json(tmp_path / 'equivalence.json')
     assert result['passed']
     assert result['n'] == 2
     assert result['drive_vs_population']['reference_arrived'] == 2
     assert all(pair['far_enough'] for pair in result['far_distances'])
     assert list(rl.rows(tmp_path / 'selected-pairs.jsonl')) == pairs[:2]
+
+
+def test_raw_candidates_deduplicate_names_but_final_lists_remain_strict(tmp_path):
+    path = tmp_path / 'candidates.jsonl'
+    first = dict(region='lobart', start='NW_FARM1_INHOUSE_03_SIT', goal='FP_CAMPFIRE_NW_FARM1_MILL_01', distance_cm=1200)
+    repeated = dict(first, distance_cm=1201)
+    other = dict(region='market', start='A', goal='B')
+    path.write_text(''.join(json.dumps(pair) + '\n' for pair in [first, repeated, other]))
+    assert rl.load_pairs(path, deduplicate=True) == [first, other]
+    with pytest.raises(ValueError, match='Duplicate or identical'):
+        rl.load_pairs(path)
+    path.write_text(json.dumps(dict(region='market', start='A', goal='A')) + '\n')
+    with pytest.raises(ValueError, match='Duplicate or identical'):
+        rl.load_pairs(path, deduplicate=True)
+
+
+def test_generate_deduplicates_before_reachability_preserving_index_alignment(tmp_path, monkeypatch):
+    raw = [dict(region=region, start=f'{region}-S', goal=f'{region}-G') for region in rl.REGIONS]
+    raw.insert(1, dict(raw[0]))
+    monkeypatch.setattr(rl, 'checked_paths', lambda *a, **k: None)
+    monkeypatch.setattr(rl, 'historical_pairs', lambda _: {('OLD_START', 'OLD_GOAL')})
+    monkeypatch.setattr(rl, 'new_runner', lambda *a: SimpleNamespace(close=lambda: None))
+    def scenario(args, runner, name, commands, directory):
+        directory.mkdir(parents=True)
+        if name == 'generate':
+            (directory / 'pairs.jsonl').write_text(''.join(json.dumps(pair) + '\n' for pair in raw))
+        else:
+            runner_list = [line.split() for line in (args.output / 'candidate-pairs.txt').read_text().splitlines()]
+            assert len(runner_list) == 6
+            assert len({tuple(pair) for pair in runner_list}) == 6
+            reached = [dict(pair_index=index, start=start, goal=goal, complete=True, length_cm=1500)
+                       for index, (start, goal) in enumerate(runner_list)]
+            (directory / 'reachable.jsonl').write_text(''.join(json.dumps(pair) + '\n' for pair in reached))
+    monkeypatch.setattr(rl, 'scenario', scenario)
+    args = SimpleNamespace(output=tmp_path, exclude=[], seed=7, candidates_per_region=2, per_region=1)
+    rl.generate(args)
+    selected = rl.load_pairs(tmp_path / 'pairs.jsonl')
+    assert len(selected) == 6
+    assert {pair['region'] for pair in selected} == set(rl.REGIONS)
+    assert all(pair['detour_complete'] and pair['detour_length_cm'] == 1500 for pair in selected)
+
+
+def test_parallel_qualification_selects_in_source_order_despite_reverse_completion(tmp_path, monkeypatch):
+    pool = [dict(region=region, start=f'{region}-S{i}', goal=f'{region}-G{i}')
+            for region in rl.REGIONS for i in range(2)]
+    monkeypatch.setattr(rl, 'checked_paths', lambda *a, **k: None)
+    monkeypatch.setattr(rl, 'load_pairs', lambda _: pool)
+    ready = threading.Barrier(6)
+    finished = {region: threading.Event() for region in rl.REGIONS}
+    completion = []
+    owners = []
+    def new_runner(args, name):
+        region = name.removeprefix('teacher-')
+        owners.append(name)
+        ready.wait(timeout=5)
+        def close():
+            completion.append(region)
+            finished[region].set()
+        return SimpleNamespace(region=region, close=close)
+    monkeypatch.setattr(rl, 'new_runner', new_runner)
+    def scenario(args, runner, name, commands, directory):
+        index = int(name.rsplit('-', 1)[1])
+        pair = pool[index]
+        assert runner.region == pair['region']
+        assert args.seed == 7
+        rank = rl.REGIONS.index(pair['region'])
+        if rank < 5:
+            assert finished[rl.REGIONS[rank + 1]].wait(timeout=5)
+        directory.mkdir(parents=True)
+        episode = dict(start=pair['start'], goal=pair['goal'], success=index % 2 == 1,
+                       elapsed_ms=1000, demo_version=2, teacher_version=2)
+        rl.write_json(directory / 'episode.json', episode)
+        for filename in ('samples.bin.gz', 'trajectory.txt', 'actions.txt'):
+            (directory / filename).touch()
+    monkeypatch.setattr(rl, 'scenario', scenario)
+    args = SimpleNamespace(pairs=None, output=tmp_path, seed=7, parallel=8, per_region=1,
+                           npc='NPC', roads=Path('/roads.json'), limit_ms=240000, resume=False)
+    rl.qualify(args)
+    result = list(rl.rows(tmp_path / 'holdout.jsonl'))
+    assert [pair['start'] for pair in result] == [f'{region}-S1' for region in rl.REGIONS]
+    assert [pair['index'] for pair in result] == list(range(6))
+    assert all(pair['teacher_success'] and pair['final_test'] for pair in result)
+    assert completion == list(reversed(rl.REGIONS))
+    assert set(owners) == {f'teacher-{region}' for region in rl.REGIONS}
+    attempts = rl.read_json(tmp_path / 'teacher-attempts.json')
+    assert [attempt['candidate'] for attempt in attempts] == list(range(12))
+
+
+def test_parallel_drive_partitions_original_indices_and_owns_mutable_subtrees(tmp_path, monkeypatch):
+    pool = [dict(pair, index=index, final_test=True, teacher_success=True, teacher_version=2)
+            for index, pair in enumerate(candidates())]
+    monkeypatch.setattr(rl, 'load_pairs', lambda _: pool)
+    workers = []
+    ready = threading.Barrier(4)
+    def collect(args):
+        workers.append(args)
+        ready.wait(timeout=5)
+    monkeypatch.setattr(rl, 'module', lambda _: SimpleNamespace(collect=collect))
+    args = SimpleNamespace(pairs=Path('/frozen.jsonl'), output=tmp_path, seed=7, parallel=4,
+                           indices='0,2,3,5,7,8', limit_ms=240000, weights=Path('/policy.navbc'))
+    rl.drive(args)
+    ownership = {worker.output.name: worker.indices for worker in workers}
+    assert ownership == {'w0': '0,7', 'w1': '2,8', 'w2': '3', 'w3': '5'}
+    assert len({worker.output for worker in workers}) == 4
+    assert all(worker.output.parent == tmp_path / 'drive-workers' for worker in workers)
+    assert all(worker.teacher_beta == 0 and not worker.dagger_collection and worker.limit_ms == 240000 for worker in workers)
+    assert args.output == tmp_path and args.indices == '0,2,3,5,7,8'
+
+
+def test_single_drive_keeps_original_output_layout(tmp_path, monkeypatch):
+    monkeypatch.setattr(rl, 'load_pairs', lambda _: [dict(final_test=True, teacher_success=True, teacher_version=2)])
+    calls = []
+    monkeypatch.setattr(rl, 'module', lambda _: SimpleNamespace(collect=lambda args: calls.append(args)))
+    args = SimpleNamespace(pairs=None, output=tmp_path, seed=7, parallel=1, indices=None)
+    rl.drive(args)
+    assert calls[0].output == tmp_path
+    assert calls[0].indices == '0'
+
+
+def test_far_comparison_accepts_improved_speed_and_reachability():
+    near = {('A', 'B'): dict(success=True, elapsed_ms=100000),
+            ('C', 'D'): dict(success=False, elapsed_ms=240000)}
+    far = {('A', 'B'): dict(success=True, elapsed_ms=50000),
+           ('C', 'D'): dict(success=True, elapsed_ms=150000)}
+    result = rl.distance_comparison_metrics(near, far)
+    assert result['passed']
+    assert result['far_arrived'] == 2 and result['near_arrived'] == 1
+    assert not result['symmetric_diagnostic']['passed']
+    assert result['lost_success_routes'] == []
+
+
+@pytest.mark.parametrize('success,elapsed', [(False, 240000), (True, 105001)])
+def test_far_comparison_rejects_reachability_or_time_regression(success, elapsed):
+    near = {('A', 'B'): dict(success=True, elapsed_ms=100000)}
+    far = {('A', 'B'): dict(success=success, elapsed_ms=elapsed)}
+    result = rl.distance_comparison_metrics(near, far)
+    assert not result['passed']
+    assert result['lost_success_routes'] == ([] if success else [dict(start='A', goal='B')])
+    assert result['time_tolerance'] == .05
