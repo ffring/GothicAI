@@ -39,6 +39,7 @@ PR, который добавляет фичу или выключатель, д
 | NPC сам подходит и заговаривает | нет; без планировщика её нет | `initiative.py`, `concerns.py` | e2e `initiative` | [npc-tools.md](npc-tools.md#сделано-инициатива) |
 | Реакция на физический шум: посмотреть, пойти проверить | нет; без планировщика её нет | `brain/situation.py`, `brain/apply.py` | — | [protocol.md](protocol.md#физический-шум-v36) |
 | Боевое тело P30 | `--no-neural-body`; без `--body-url` его нет | `bodypilot.py`, `body-service/`; движок — `common/game/bodycontroller.*` | e2e `neural`, `neural-companion`; бенчи `body-api`, `body-arena`, `body-observe` | [npc-body-control-plan.md](npc-body-control-plan.md), [npc-body-api.md](npc-body-api.md) |
+| Память P30 после подвисаний игры | `gothic-body serve-net --no-allow-stale-memory-only` возвращает проверку возраста строк памяти | `bodypilot.py`, `body-service/src/gothic_body/runtime.py`, `serving_net.py` | `test_bodypilot.py`, `test_runtime.py`, `test_serving_net.py`; e2e `neural`, `neural-companion` | [npc-body-control-plan.md](npc-body-control-plan.md) |
 | Волки слышат тон героя | `--no-beasts` | `beasts.py`; мост — `ai_bridge/beasts*` | e2e `wolf`; бенч `wolf` | [beasts.md](beasts.md) |
 
 ## Сервер: восприятие и знание
@@ -120,6 +121,7 @@ PR, который добавляет фичу или выключатель, д
 | Вода: плавучесть вещей и тел | `[GAME] buoyancy=0` | `common/physics/dynamicworld.cpp` | бенчи `water*`, `water-bodies*` | [physics.md](physics.md) |
 | CharacterVirtual героя | `[GAME] character_virtual=0` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | бенчи `character-virtual*` | [physics.md](physics.md) |
 | CharacterVirtual NPC-людей в 20 м от героя | `[GAME] npc_character_virtual=0` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | бенчи `npc-character-virtual*` | [physics.md](physics.md) |
+| CharacterVirtual наземных монстров в 20 м от героя (по умолчанию **0**) | `[GAME] monster_character_virtual=0`; Marvin `toggle monster_character_virtual` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | `check-physics`; бенч `monster-character-virtual`; e2e `wolf` с ON | [Приёмка шага 4, часть 1](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md) |
 
 ## Движок: анимация
 
@@ -162,6 +164,7 @@ PR, который добавляет фичу или выключатель, д
 Это не фичи игры, а инструменты и опции. Включаются явно:
 - `gothic-ai serve --scenario <имя>`, `--journal`, `--voice-files`;
 - HD-текстуры: каталог в `OPENGOTHIC_TEXTURES`, его передаёт лаунчер, когда текстуры сделаны;
+- Перепись оригинальных ресурсов: `OPENGOTHIC_CENSUS=<путь к json>`, запись при выходе и Marvin `census`; `common/contentcensus.*`, наблюдатель VFS, `scripts/content-census.py`; проверки — `smoke` на Ryzen и `scripts/test_content_census.py`, [own-content.md](own-content.md);
 - `GOTHIC_AI_STORYCHECK=1` — сверка условий скриптов с поднятыми; в `-devmode` включена сама;
 - `OPENGOTHIC_ANIM_SKIP_FAR=1`, `OPENGOTHIC_FOOTIK_WATCHED_ONLY=1` — экономия на дальних NPC для прогонов тела;
 - `OPENGOTHIC_BENCH*`, `OPENGOTHIC_*_LOG`, `OPENGOTHIC_*_TRACE` — стенд, журналы и трассы.
@@ -169,6 +172,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича стенда | Как включить / выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
+| Офлайн-перепись площадей, масштаба UV и плиточности текстур четырёх миров со статичными vob | `scripts/content-textures.sh`; без запуска скрипта не работает | `scripts/content/world-textures.cpp` | `scripts/content-textures.sh --self-test`, офлайн-прогон четырёх миров со сверкой площади ≤ 0,1 % | [own-content.md](own-content.md), [CSV и отчёт](../reports/content/2026-10-world-textures/README.md) |
 | Популяция навигации: N NPC, независимые состояния, выборка softmax и награды Detour без перезагрузки мира | `navdemos population … sample\|argmax … RECORD`; `navdemos physics cv\|native`, в `nav_rl.py` CV по умолчанию; `RECORD=0` выключает записи; `hero near\|keep`, `kill-slot SLOT AFTER_MS` — проверки стенда | `common/navdemos.*`, минимальные вставки в `worldobjects.cpp`, `npc.cpp`, `MoveAlgo::useCharacterVirtual`; `scripts/nav_rl.py` | `test_nav_rl.py`, `nav_rl.py check/equivalence/population/death-smoke` | [navigation.md](navigation.md) |
 
 Остальная обучаемая навигация ([navigation.md](navigation.md)) — пока исследование, в игру не включена.

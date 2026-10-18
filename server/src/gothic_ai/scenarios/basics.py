@@ -765,12 +765,13 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     await clear_animals()
     await link.debug("teleport", near=npc, distance=300)
     await link.act(npc, "return_to_routine")
-    # Returning control starts the old tower routine. Hold an ordinary native idle
-    # here and wait for its initialization, including its normal enemy perceptions.
+    # Returning control starts the old tower routine, and the approach above moved
+    # Xardas off the arena waypoint. Place this preparation pose directly: this check
+    # needs initialized native perceptions, not an incidental walk back to the arena.
     bodies = Bodies(link)
     ready = await bodies.act(
         npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
-        minutes=60, arrive=True, radius=100, timeout=15,
+        minutes=60, place=True, arrive=True, radius=100, timeout=15,
     )
     if ready.status != "arrived":
         current = (await link.routine(npc)).current
@@ -781,6 +782,9 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
             f"pos={snap.npc.pos}; rot={snap.npc.rot}; nearby={snap.nearby_npcs}; "
             f"sees={[v.sees for v in views]}"
         )
+    # Scan the final standing position too: the earlier relocated book-reading pose
+    # can hide wildlife that only becomes visible after initialization.
+    await clear_animals()
     events.clear()
     await _m5b_player_weapon(link, "melee")
     e = await event({"weapon_drawn"}, 5)

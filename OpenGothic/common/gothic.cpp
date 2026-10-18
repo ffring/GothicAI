@@ -110,6 +110,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "cloth",               1);
   defaults->set("GAME", "character_virtual",   1);
   defaults->set("GAME", "npc_character_virtual",1);
+  defaults->set("GAME", "monster_character_virtual",0);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -763,6 +764,8 @@ zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const Script
     }
 
   auto buf = zenkit::Read::from(path);
+  if(buf!=nullptr)
+    Resources::censusFile(path);
   zenkit::DaedalusScript script;
   script.load(buf.get());
   return script;
@@ -929,7 +932,8 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","buoyancy")!=0,
     settingsGetI("GAME","cloth")!=0,
     settingsGetI("GAME","character_virtual")!=0,
-    settingsGetI("GAME","npc_character_virtual")!=0
+    settingsGetI("GAME","npc_character_virtual")!=0,
+    settingsGetI("GAME","monster_character_virtual")!=0
     };
   }
 

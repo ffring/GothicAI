@@ -58,6 +58,8 @@ namespace TestBench {
   void     destructionMeleeHit(const Npc& actor, size_t affected, float damage);
   void     movementImpulseHandoff(const Npc& actor, std::string_view backend, uint32_t fromState,
                                   uint32_t toState, const Tempest::Vec3& velocity);
+  // Native monster charge collision callback; inert outside its explicit bench fixture.
+  void     monsterCharacterCollision(const Npc& actor, const Npc* target);
   // Devmode-only live bridge stand, reusing the actual Coragon tavern fixture.
   bool     isPhysicsNoiseDebug();
   void     physicsNoiseBridgeEvent(const Npc& listener, uint64_t tick);

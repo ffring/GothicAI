@@ -127,8 +127,10 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
         self.assert_option(self.queue_options(requests[0]), '--name', 'build e2e stages')
         self.assertIn('compile failure: build log tail', result.stdout)
 
-    def test_errand_preparation_installs_missing_tts_dependencies(self):
-        for scenario in ('errand', 'errand_fork', 'errand_far', 'errand_give'):
+    def test_tts_preparation_installs_missing_dependencies(self):
+        for scenario in ('errand', 'errand_fork', 'errand_far', 'errand_give',
+                         'fight_reactions_wolf', 'fight_reactions_sight',
+                         'fight_reactions_bandits', 'fight_reactions_flee'):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(prefix='ryzen-deps-test-') as directory:
                 root = Path(directory)
                 source = root / 'source'

@@ -63,6 +63,7 @@ class Marvin {
       C_PlayAni,
 
       // opengothic specific
+      C_Census,
       C_ToggleGI,
       C_ToggleVsm,
       C_ToggleRtsm,
@@ -91,6 +92,7 @@ class Marvin {
       C_ToggleCloth,
       C_ToggleCharacterVirtual,
       C_ToggleNpcCharacterVirtual,
+      C_ToggleMonsterCharacterVirtual,
       };
 
     struct Cmd {

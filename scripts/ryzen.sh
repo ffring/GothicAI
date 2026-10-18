@@ -135,7 +135,7 @@ storygraph_ready() {
 dependency_projects() {
   echo server
   case "$1" in
-    tts|gossip|day|group|interject|programs|errand*) echo tts-service ;;
+    tts|gossip|day|group|interject|programs|errand*|fight_reactions_*) echo tts-service ;;
   esac
   case "$1" in
     m3|m5e) echo asr-service ;;
@@ -733,7 +733,7 @@ PY
   while IFS= read -r name; do
     case "$name" in
       GOTHIC_DIR|OPENGOTHIC_TEXTURES|OPENGOTHIC_FRACTURE) continue ;;
-      OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|DESTRUCTION|BUOYANCY|CLOTH|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL)
+      OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|DESTRUCTION|BUOYANCY|CLOTH|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL)
         value="$(bench_path "${!name}")"
         ENV_ARGS+=("$name=$value") ;;
     esac
@@ -797,7 +797,7 @@ fi
 while IFS= read -r name; do
   case "$name" in
     GOTHIC_DIR|GOTHIC_AI_URL|OPENGOTHIC_FRACTURE) ;;
-    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|CHATGPT_*|OPENAI_*)
+    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|CHATGPT_*|OPENAI_*)
       ENV_ARGS+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)
