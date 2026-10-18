@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from nav_bc_model import HEAD_SIZES, NavPolicy, export_weights
 from nav_bc_numpy import NumpyPolicy, _adaptive_avg_pool2d
+from nav_bc_data import PREPROCESSING
 
 
 class NavPolicyReferenceTest(unittest.TestCase):
@@ -36,7 +37,7 @@ class NavPolicyReferenceTest(unittest.TestCase):
         self.path = Path(self.directory.name) / "policy.weights"
         torch.manual_seed(205)
         self.model = NavPolicy(vector_size=37).eval()
-        self.preprocessing = {"near_pool": 2, "far_pool": 4, "vector_fields": ["sensors_only"]}
+        self.preprocessing = dict(PREPROCESSING)
         self.header = export_weights(self.model, self.path, self.preprocessing)
         self.policy = NumpyPolicy(self.path)
 
@@ -47,6 +48,11 @@ class NavPolicyReferenceTest(unittest.TestCase):
             payload = stream.read()
         self.assertEqual(header, self.header)
         self.assertEqual(header["preprocessing"], self.preprocessing)
+        self.assertEqual(header["preprocessing"]["navdemo_version"], 2)
+        self.assertEqual(header["preprocessing"]["roads_fields"], [
+            "carrot_direction", "carrot_distance_cm", "goal_direction",
+            "goal_distance_cm", "remaining_known_cm", "beyond_known"])
+        self.assertNotIn("previous_keys", header["preprocessing"]["input_fields"])
         self.assertEqual(len(payload), header["data_nbytes"])
         offset = 0
         state = self.model.state_dict()

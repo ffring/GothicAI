@@ -39,13 +39,15 @@ class NavPolicy final {
     // the writer's per-cell uint8 quantization. Position, yaw and teacher hints are
     // deliberately absent from this path. Training-cache float16 packing is not
     // part of encode_features and is not applied here.
-    // The weight header selects eye/roads/body, optionally followed by the
-    // previous keys for legacy policies. New policies do not read those keys.
+    // The weight header selects the NAVDEMO road schema (v1 next waypoint or
+    // v2 carrot), then eye/roads/body, optionally followed by previous keys for
+    // legacy v1 policies. New policies do not read those keys.
     Features encode(const NavDemoWriter::Snapshot& observation) const;
     Result step(const Features& features, State& state) const;
     Result step(const NavDemoWriter::Snapshot& observation, State& state) const;
     size_t hiddenSize() const { return hidden; }
     size_t vectorInputSize() const { return vectorEncoder.inputs; }
+    uint32_t navDemoVersion() const { return demoVersion; }
 
   private:
     struct Linear final {
@@ -60,6 +62,7 @@ class NavPolicy final {
     static std::array<float,64> map(const float* input, size_t size, const MapEncoder& encoder);
 
     size_t hidden = 0;
+    uint32_t demoVersion = 1;
     MapEncoder nearEncoder, farEncoder;
     Linear vectorEncoder, fusion, gruInput, gruHidden;
     std::array<Linear,headCount> heads;

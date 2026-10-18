@@ -75,10 +75,26 @@ bool uniqueKeys(const Json& value) {
   return true;
   }
 
-size_t parseVectorInputSize(const Json& preprocessing) {
+size_t parseVectorInputSize(const Json& preprocessing, uint32_t& demoVersion) {
   const auto& order = field(preprocessing,"vector_order");
   if(!order.IsArray() || (order.Size()!=3 && order.Size()!=4))
     fail("unsupported preprocessing vector_order");
+  if(preprocessing.HasMember("navdemo_version")) {
+    const auto& version = preprocessing["navdemo_version"];
+    if(!version.IsUint() || (version.GetUint()!=1 && version.GetUint()!=2))
+      fail("unsupported NAVDEMO input version");
+    demoVersion = version.GetUint();
+    }
+  if(demoVersion==2) {
+    expectStrings(order,{"eye","roads","body"});
+    expectStrings(field(preprocessing,"input_fields"),{"body","roads","eye","memory_near","memory_far"});
+    expectString(field(preprocessing,"roads_schema"),"carrot_v2");
+    expectStrings(field(preprocessing,"roads_fields"),{"carrot_direction","carrot_distance_cm",
+      "goal_direction","goal_distance_cm","remaining_known_cm","beyond_known"});
+    }
+  else if(preprocessing.HasMember("roads_schema")) {
+    expectString(preprocessing["roads_schema"],"next_v1");
+    }
   if(order.Size()==3) {
     expectStrings(order,{"eye","roads","body"});
     return NavPolicy::vectorSize;
@@ -259,7 +275,7 @@ NavPolicy::NavPolicy(const std::string& path) {
   expectInt(field(header,"version"),1);
   expectString(field(header,"byte_order"),"little");
   expectString(field(header,"offset_origin"),"first byte after JSON header newline");
-  const size_t vectorInputs = parseVectorInputSize(field(header,"preprocessing"));
+  const size_t vectorInputs = parseVectorInputSize(field(header,"preprocessing"),demoVersion);
   validateArchitecture(field(header,"architecture"),hidden,vectorInputs);
   const auto& length = field(header,"data_nbytes");
   if(!length.IsUint64() || length.GetUint64()>64*1024*1024)
@@ -394,14 +410,14 @@ NavPolicy::Features NavPolicy::encode(const NavDemoWriter::Snapshot& observation
     vector[cursor++] = ray.hit ? 1.f : 0.f;
     }
   const auto distance = [](float value) { return std::clamp(value/1000.f,0.f,50.f); };
-  for(float value:observation.roads.nextDirection)
+  for(float value:demoVersion==2 ? observation.roads.carrotDirection : observation.roads.nextDirection)
     vector[cursor++] = value;
-  vector[cursor++] = distance(observation.roads.nextDistanceCm);
+  vector[cursor++] = distance(demoVersion==2 ? observation.roads.carrotDistanceCm : observation.roads.nextDistanceCm);
   for(float value:observation.roads.goalDirection)
     vector[cursor++] = value;
   vector[cursor++] = distance(observation.roads.goalDistanceCm);
-  vector[cursor++] = distance(observation.roads.remainingVisualCm);
-  vector[cursor++] = observation.roads.goalInKnown ? 1.f : 0.f;
+  vector[cursor++] = distance(demoVersion==2 ? observation.roads.remainingKnownCm : observation.roads.remainingVisualCm);
+  vector[cursor++] = (demoVersion==2 ? observation.roads.beyondKnown : observation.roads.goalInKnown) ? 1.f : 0.f;
   for(float value:observation.body.velocityCmS)
     vector[cursor++] = std::clamp(value/500.f,-4.f,4.f);
   for(uint8_t flag:observation.body.flags) {

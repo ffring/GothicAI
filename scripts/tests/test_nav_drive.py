@@ -3,6 +3,7 @@ import gzip
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -130,7 +131,7 @@ def write_analysis_episode(path, changing=True):
     np.savetxt(path / "trajectory.txt", positions)
 
 
-def test_drive_metrics_measure_applied_actions_and_teacher_requested_changes(tmp_path):
+def test_drive_metrics_measure_applied_actions_and_teacher_action_changes(tmp_path):
     episode = tmp_path / "changing"
     write_analysis_episode(episode)
     result = drive.episode_metrics(episode, demos)
@@ -145,9 +146,9 @@ def test_drive_metrics_measure_applied_actions_and_teacher_requested_changes(tmp
     assert result["final_action_run_steps"] == 1
     assert result["final_action"]["turn"] == -1
     assert result["disagreement_counts"] == dict(forward=2, strafe=0, turn=2, walk=0, jump=0, climb=0, any=4)
-    assert result["action_change_steps"] == 5
-    assert result["action_change_accuracy"] == dict(forward=.6, strafe=1, turn=.6, walk=1,
-                                                    jump=1, climb=1, all_heads=.2)
+    assert result["action_change_steps"] == 6
+    assert result["action_change_accuracy"] == dict(forward=4 / 6, strafe=1, turn=4 / 6, walk=1,
+                                                    jump=1, climb=1, all_heads=2 / 6)
 
     unchanged = tmp_path / "unchanged"
     write_analysis_episode(unchanged, changing=False)
@@ -156,7 +157,7 @@ def test_drive_metrics_measure_applied_actions_and_teacher_requested_changes(tmp
     assert all(value is None for value in no_changes["action_change_accuracy"].values())
     group = drive.group_metrics([result, no_changes])
     assert group["decisions"] == 14
-    assert group["action_change_steps"] == 5
+    assert group["action_change_steps"] == 6
     assert group["action_change_accuracy"] == result["action_change_accuracy"]
     assert group["action_counts"]["forward"] == 11
     assert group["action_counts"]["idle"] == 0
@@ -165,3 +166,87 @@ def test_drive_metrics_measure_applied_actions_and_teacher_requested_changes(tmp
     assert group["action_repeat_fraction"] == pytest.approx(10 / 12)
     assert group["longest_action_run_steps"] == 7
     assert group["action_runs"] == 4
+
+
+def test_teacher_change_is_counted_at_reader_chunk_boundary(tmp_path):
+    episode = tmp_path / "boundary"
+    write_episode(episode)
+    records = np.concatenate(list(demos.iter_chunks(episode)))
+    records["keys"]["turn"][64] = 1
+    with gzip.open(episode / "samples.bin.gz", "wb") as stream:
+        stream.write(demos.HEADER.pack(demos.MAGIC, demos.VERSION, demos.RECORD_BYTES,
+                                      demos.RAY_COUNT, demos.NEAR_SIZE, demos.FAR_SIZE, demos.PERIOD_MS))
+        stream.write(records.tobytes())
+    positions = np.zeros((66, 5))
+    positions[:, 0] = np.arange(66) * 100
+    np.savetxt(episode / "trajectory.txt", positions)
+    result = drive.episode_metrics(episode, demos)
+    assert result["action_change_steps"] == 1
+    assert result["action_change_accuracy"]["turn"] == 1
+    assert result["action_change_accuracy"]["forward"] == 0
+
+
+def test_prepare_keeps_original_train_pairs_and_only_v2_successful_validation(tmp_path):
+    bc_cache, teacher_root, output = (tmp_path / name for name in ("cache", "teacher-v2", "drive"))
+    bc_cache.mkdir()
+    episodes = []
+    for split, count in (("validation", 31), ("train", 36)):
+        for index in range(count):
+            region = f"region-{index % 6}"
+            episodes.append(dict(id=f"old__{split}__{index:03d}", split=split, region=region,
+                                 pair=[f"{split}-start-{index:03d}", f"{split}-goal-{index:03d}"],
+                                 start=f"{split}-start-{index:03d}", goal=f"{split}-goal-{index:03d}"))
+    (bc_cache / "index.json").write_text(json.dumps(dict(episodes=episodes)))
+    for index, episode in enumerate(reversed(episodes)):
+        directory = teacher_root / "episodes" / f"new-{index:03d}"
+        directory.mkdir(parents=True)
+        teacher = dict(start=episode["start"], goal=episode["goal"], elapsed_ms=1000,
+                       teacher_version=2, demo_version=2,
+                       success=not (episode["split"] == "validation" and int(episode["start"][-3:]) < 4))
+        (directory / "episode.json").write_text(json.dumps(teacher))
+        (directory / "samples.bin.gz").touch()
+    args = SimpleNamespace(bc_cache=bc_cache, teacher_root=teacher_root, output=output,
+                           pairs=None, selection_seed=17)
+    drive.prepare(args)
+    selected = drive.load_pairs(args)
+    validation = [pair for pair in selected if pair["split"] == "validation"]
+    train = [pair for pair in selected if pair["split"] == "train"]
+    assert len(validation) == 27
+    assert all(pair["teacher_success"] for pair in validation)
+    assert len(train) == 30
+    assert len([pair for pair in selected if pair["split"] == "control"]) == 1
+    expected = []
+    rng = drive.random.Random(17)
+    for region in sorted({episode["region"] for episode in episodes if episode["split"] == "train"}):
+        group = sorted((episode for episode in episodes if episode["region"] == region and episode["split"] == "train"),
+                       key=lambda episode: (episode["start"], episode["goal"]))
+        expected.extend(sorted(rng.sample(group, 5), key=lambda episode: (episode["start"], episode["goal"])))
+    assert [pair["source_cache_id"] for pair in train] == [episode["id"] for episode in expected]
+    # A repeated perturbed start cannot replace the ordinary reference.
+    perturbation = teacher_root / "dagger" / "000"
+    perturbation.mkdir(parents=True)
+    (perturbation / "episode.json").write_text(json.dumps(dict(teacher_version=2, demo_version=2,
+        start="validation-start-000", goal="validation-goal-000", success=True, dagger=0)))
+    (perturbation / "samples.bin.gz").touch()
+    drive.prepare(args)
+    assert len([pair for pair in drive.load_pairs(args) if pair["split"] == "validation"]) == 27
+    failed_reference = Path(train[0]["teacher_episode"]) / "episode.json"
+    failed_teacher = json.loads(failed_reference.read_text())
+    failed_teacher["success"] = False
+    failed_reference.write_text(json.dumps(failed_teacher))
+    args.output = tmp_path / "drive-with-train-failure"
+    drive.prepare(args)
+    train_with_failure = [pair for pair in drive.load_pairs(args) if pair["split"] == "train"]
+    assert [pair["source_cache_id"] for pair in train_with_failure] == [pair["source_cache_id"] for pair in train]
+    assert train_with_failure[0]["teacher_success"] is False
+
+
+@pytest.mark.parametrize("beta", [-.1, 1.1, float("nan")])
+def test_collect_rejects_invalid_mixing_probability(beta):
+    with pytest.raises(ValueError, match="teacher-beta"):
+        drive.collect(SimpleNamespace(teacher_beta=beta, dagger_collection=True))
+
+
+def test_measurement_rejects_teacher_control():
+    with pytest.raises(ValueError, match="Measured drives"):
+        drive.collect(SimpleNamespace(teacher_beta=.5, dagger_collection=False))

@@ -5,9 +5,9 @@
         --output /absolute/nav-bc/cache
 
 Only numpy is required. Preparation streams the recordings one episode at a time.
-The cache contains successful teacher episodes and all DAgger episodes from
-training pairs. A saved split keeps exact (start, goal) pairs in their original
-partition across rounds.
+Only NAVDEMO v2 recordings are accepted. The cache contains successful teacher
+episodes and all DAgger episodes from training pairs. A saved split preserves
+the held-out (start, goal) pairs; new successful v2 pairs join training.
 """
 
 from __future__ import annotations
@@ -29,20 +29,24 @@ HEADS = ("forward", "strafe", "turn", "walk", "jump", "climb")
 CLASSES = (3, 3, 3, 2, 2, 2)
 SITUATIONS = ("wall", "turn", "beginning")
 VECTOR_SIZE = nav_demos.RAY_COUNT * 9 + 10 + 14
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 INPUT_NAMES = frozenset(("body", "roads", "previous_keys", "eye", "memory_near", "memory_far"))
 
 PREPROCESSING = {
+    "navdemo_version": 2,
+    "input_fields": ["body", "roads", "eye", "memory_near", "memory_far"],
     "eye": "per ray: distance/max_range, kind one-hot[0:6], normal_y, hit; flatten ray-major",
     "memory": "7 probability channels block mean (near 2x2, far 4x4); known-height mean and validity fraction",
     "height": "subtract nearest valid near-memory ground height (far fallback), /200cm, clip [-10,10]; unknown=0",
     "height_reference": "nearest to body origin in sensor map, no world position/yaw or teacher_hint access",
-    "roads": "next_direction[3], next_distance/1000, goal_direction[3], goal_distance/1000, remaining_visual/1000, goal_in_known; distances clipped [0,50]",
+    "roads_schema": "carrot_v2",
+    "roads_fields": ["carrot_direction", "carrot_distance_cm", "goal_direction", "goal_distance_cm", "remaining_known_cm", "beyond_known"],
+    "roads": "carrot_direction[3], carrot_distance_cm/1000, goal_direction[3], goal_distance_cm/1000, remaining_known_cm/1000, beyond_known; distances clipped [0,50]",
     "body": "velocity[3]/500 clipped [-4,4], flags[5], ground_normal[3], slope/90, head_yaw/180, head_pitch/90",
     "vector_order": ["eye", "roads", "body"],
     "map_order": [*nav_demos.CHANNELS, "relative_ground_height", "height_valid_fraction"],
     "cache_quantization": "vector/height float16, map probabilities/validity round(255*x) uint8, labels uint8",
-    "road_baseline": "always forward and walk, turn=-sign(atan2(next_direction.x,next_direction.z)) outside 5deg",
+    "road_baseline": "always forward and walk, turn=-sign(atan2(carrot_direction.x,carrot_direction.z)) outside 5deg",
 }
 
 
@@ -90,6 +94,8 @@ def encode_features(inputs: dict[str, np.ndarray], layout: np.ndarray) -> dict[s
     """
     if frozenset(inputs) != INPUT_NAMES:
         raise ValueError("encode_features accepts only nav_demos.learner_input() fields")
+    if inputs["roads"].dtype != nav_demos.ROADS_V2_DTYPE:
+        raise ValueError("encode_features requires NAVDEMO v2 carrot guidance")
     layout = np.asarray(layout, dtype=np.float32)
     if layout.shape != (nav_demos.RAY_COUNT, 3) or not np.isfinite(layout).all() or (layout[:, 2] <= 0).any():
         raise ValueError("invalid eye layout")
@@ -110,9 +116,9 @@ def encode_features(inputs: dict[str, np.ndarray], layout: np.ndarray) -> dict[s
         eye["hit"][..., None]), axis=-1).reshape(count, -1)
     roads = inputs["roads"]
     distance = lambda name: np.clip(roads[name] / 1000, 0, 50)[:, None]
-    road_features = np.concatenate((roads["next_direction"], distance("next_distance_cm"),
+    road_features = np.concatenate((roads["carrot_direction"], distance("carrot_distance_cm"),
                                    roads["goal_direction"], distance("goal_distance_cm"),
-                                   distance("remaining_visual_cm"), roads["goal_in_known"][:, None]), axis=1)
+                                   distance("remaining_known_cm"), roads["beyond_known"][:, None]), axis=1)
     body = inputs["body"]
     body_features = np.concatenate((np.clip(body["velocity_cm_s"] / 500, -4, 4), body["flags"],
                                     body["ground_normal"], body["ground_slope_deg"][:, None] / 90,
@@ -133,19 +139,23 @@ def encode_labels(keys: np.ndarray) -> np.ndarray:
     return labels
 
 
-def action_change_mask(records: np.ndarray) -> np.ndarray:
-    """Teacher's six action heads differ from the actor's preceding command.
+def action_change_mask(records: np.ndarray, previous_teacher: np.ndarray | None = None) -> np.ndarray:
+    """Changes between consecutive teacher answers, never preceding actor keys.
 
-    In DAgger recordings the actor is the learner; head yaw/pitch are not policy
-    outputs and therefore do not define an action change.
+    The first episode decision is excluded. Pass the preceding chunk's final
+    six encoded teacher heads when streaming an episode.
     """
-    return np.any(encode_labels(records["keys"]) !=
-                  encode_labels(records["previous_keys"]), axis=1).astype(np.uint8)
+    labels = encode_labels(records["keys"])
+    changed = np.zeros(len(labels), dtype=np.uint8)
+    changed[1:] = np.any(labels[1:] != labels[:-1], axis=1)
+    if len(labels) and previous_teacher is not None:
+        changed[0] = np.any(labels[0] != previous_teacher)
+    return changed
 
 
 def road_baseline(inputs: dict[str, np.ndarray], threshold_deg: float = 5) -> np.ndarray:
     """Road-only baseline uses the engine's negative turn for positive local x."""
-    direction = inputs["roads"]["next_direction"]
+    direction = inputs["roads"]["carrot_direction"]
     angle = np.degrees(np.arctan2(direction[:, 0], direction[:, 2]))
     baseline = np.tile(np.array([2, 1, 1, 1, 0, 0], dtype=np.uint8), (len(direction), 1))
     baseline[:, 2] = np.where(angle > threshold_deg, 0, np.where(angle < -threshold_deg, 2, 1))
@@ -256,6 +266,8 @@ def prepare(source: Path, output: Path, seed: int = 17, validation_fraction: flo
     episodes, failed, unsplit_teacher, excluded_dagger = [], 0, 0, 0
     split = read_pair_split(split_index) if split_index else None
     for samples in nav_demos.episode_paths(source):
+        if nav_demos.episode_version(samples) != 2:
+            raise ValueError(f"only NAVDEMO v2 recordings are accepted: {samples}")
         metadata = json.loads((samples.parent / "episode.json").read_text(encoding="utf-8"))
         if metadata.get("success") is not True:
             failed += 1
@@ -263,9 +275,10 @@ def prepare(source: Path, output: Path, seed: int = 17, validation_fraction: flo
         for key in ("start", "goal", "region"):
             if not isinstance(metadata.get(key), str) or not metadata[key]:
                 raise ValueError(f"missing {key} in {samples.parent / 'episode.json'}")
-        if split is not None and (metadata["start"], metadata["goal"]) not in split:
-            unsplit_teacher += 1
-            continue
+        if split is not None:
+            # Preserve every original held-out pair; successful v2 pairs absent
+            # from the old successful-only index are training examples.
+            split.setdefault((metadata["start"], metadata["goal"]), "train")
         episodes.append({**metadata, "samples": samples, "source": source, "source_kind": "teacher"})
     if not episodes:
         raise ValueError(f"no successful episodes in {source}")
@@ -274,10 +287,13 @@ def prepare(source: Path, output: Path, seed: int = 17, validation_fraction: flo
     seen_samples = {episode["samples"].resolve() for episode in episodes}
     for source_number, dagger_source in enumerate(dagger_sources, start=1):
         for samples in nav_demos.episode_paths(dagger_source):
+            if nav_demos.episode_version(samples) != 2:
+                raise ValueError(f"only NAVDEMO v2 recordings are accepted: {samples}")
             metadata = json.loads((samples.parent / "episode.json").read_text(encoding="utf-8"))
             pair = (metadata.get("start"), metadata.get("goal"))
-            # The original split is authoritative, including for failed drives.
-            # Control drives and new pairs cannot become training examples.
+            # Held-out and control drives cannot become training examples.
+            # Original training pairs remain eligible even when teacher v2
+            # failed on the initial route; the visited states still have labels.
             if metadata.get("split") == "control" or split.get(pair) != "train":
                 excluded_dagger += 1
                 continue
@@ -290,7 +306,8 @@ def prepare(source: Path, output: Path, seed: int = 17, validation_fraction: flo
                              "source_kind": "dagger", "source_number": source_number})
     (output / "episodes").mkdir(parents=True, exist_ok=True)
     index: dict[str, Any] = {
-        "cache_version": CACHE_VERSION, "seed": seed, "validation_fraction": validation_fraction,
+        "cache_version": CACHE_VERSION, "navdemo_version": 2,
+        "seed": seed, "validation_fraction": validation_fraction,
         "heads": list(HEADS), "classes": list(CLASSES), "vector_size": VECTOR_SIZE,
         "near_shape": [9, 32, 32], "far_shape": [9, 25, 25],
         "situations": list(SITUATIONS), "preprocessing": PREPROCESSING,
@@ -321,13 +338,15 @@ def prepare(source: Path, output: Path, seed: int = 17, validation_fraction: flo
             raise ValueError("episodes have inconsistent ray layouts")
         parts: dict[str, list[np.ndarray]] = {}
         steps = 0
+        previous_teacher = None
         for records in nav_demos.iter_chunks(samples, chunk_records):
             inputs = nav_demos.learner_input(records)
             features = _pack(encode_features(inputs, layout))
             labels = encode_labels(records["keys"])
             features.update(labels=labels, baseline=road_baseline(inputs),
                             situations=situation_masks(inputs, layout, labels, steps),
-                            action_change=action_change_mask(records))
+                            action_change=action_change_mask(records, previous_teacher))
+            previous_teacher = labels[-1].copy()
             for name, values in features.items():
                 parts.setdefault(name, []).append(values)
             steps += len(records)
