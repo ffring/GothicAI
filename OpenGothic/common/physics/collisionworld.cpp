@@ -2018,9 +2018,10 @@ void CollisionWorld::tick(uint64_t dt) {
       // and a quarter inner radius per fragment step. A fixed step count alone
       // cannot stop long pieces rotating through a thin terrain triangle.
       // Sleeping fragments leave the previous simulation cost intact.
-      const bool waterSteps=buoyancy && std::any_of(rigid.begin(),rigid.end(),[](const DynamicBody* body) {
-        return body->inWater && body->waterSleepDisabled;
-        });
+      // A dry neighbour may wake a sleeping float during Update. Keep water
+      // support available on the remaining substeps without waking the float.
+      const bool waterSteps=buoyancy && impl->system.GetNumActiveBodies(JPH::EBodyType::RigidBody)>0 &&
+                            std::any_of(rigid.begin(),rigid.end(),[](const DynamicBody* body) { return body->inWater; });
       // The same fixed step can contain four fragment collision steps or two
       // rig steps. Support must be applied before each of them, just like
       // gravity, or still floats acquire a persistent integration velocity.
@@ -2388,8 +2389,10 @@ void CollisionWorld::prepareBuoyancy(std::vector<PhysicsNoise>& splashes) {
       // BodyInterface::ApplyBuoyancyImpulse activates on every call. Calling
       // Body directly lets settled and restored sleeping things stay asleep.
       if(!body.IsActive() && !activate) continue;
-      if(!wrapper->waterSleepDisabled) body.SetAllowSleeping(false);
-      wrapper->waterSleepDisabled=true;
+      if(wrapper->waterRestTime<2.f && !wrapper->waterSleepDisabled) {
+        body.SetAllowSleeping(false);
+        wrapper->waterSleepDisabled=true;
+        }
       }
     if(activate) impl->system.GetBodyInterface().ActivateBody(wrapper->id);
     }
@@ -2400,7 +2403,7 @@ void CollisionWorld::applyBuoyancyStep(float seconds) {
   // ran before Update; this callback only touches our cached wet rigid bodies
   // through the NoLock interface and never invokes game callbacks.
   for(auto* wrapper:rigid) {
-    if(!wrapper->inWater || !wrapper->waterSleepDisabled) continue;
+    if(!wrapper->inWater) continue;
     JPH::BodyLockWrite lock(impl->system.GetBodyLockInterfaceNoLock(),wrapper->id);
     if(!lock.Succeeded()) continue;
     auto& body=lock.GetBody();
@@ -2425,23 +2428,28 @@ void CollisionWorld::applyBuoyancyStep(float seconds) {
 void CollisionWorld::finishBuoyancy(float seconds) {
   if(!buoyancy) return;
   for(auto* wrapper:rigid) {
-    if(!waterThing(wrapper->category()) || !wrapper->inWater || !wrapper->waterSleepDisabled) continue;
-    bool sleep=false;
+    if(!waterThing(wrapper->category()) || !wrapper->inWater) continue;
     {
       JPH::BodyLockWrite lock(impl->system.GetBodyLockInterface(),wrapper->id);
       if(!lock.Succeeded()) continue;
       auto& body=lock.GetBody();
+      if(!body.IsActive()) continue;
       const auto* shape=wrapper->buoyancyShape!=nullptr ? wrapper->buoyancyShape.GetPtr() : body.GetShape();
       const float radius=shape->GetLocalBounds().GetExtent().Length();
       const float pointSpeed=body.GetLinearVelocity().Length()+radius*body.GetAngularVelocity().Length();
       wrapper->waterRestTime=pointSpeed<.01f ? wrapper->waterRestTime+seconds : 0.f;
-      if(wrapper->waterRestTime>=2.f) {
+      // Let Jolt sleep the whole contact island together. Deactivating one
+      // float by itself can freeze a support while its neighbour still moves,
+      // immediately waking it and dropping its water support mid-update.
+      if(wrapper->waterRestTime>=2.f && wrapper->waterSleepDisabled) {
         body.SetAllowSleeping(true);
         wrapper->waterSleepDisabled=false;
-        sleep=true;
+        }
+      else if(wrapper->waterRestTime==0.f && !wrapper->waterSleepDisabled) {
+        body.SetAllowSleeping(false);
+        wrapper->waterSleepDisabled=true;
         }
       }
-    if(sleep) impl->system.GetBodyInterface().DeactivateBody(wrapper->id);
     }
   }
 

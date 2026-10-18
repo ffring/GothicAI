@@ -1462,14 +1462,25 @@ namespace {
       world.tick(17);
       require(object.isBroken() && world.fragmentSnapshot().size()==8,
               "breaking a floating crate must install every native fragment");
-      tickWater(world,1800);
+      std::array<int,8> firstSleep;
+      firstSleep.fill(-1);
+      for(int frame=0;frame<1800;++frame) {
+        world.tick(frame%3==2 ? 16 : 17);
+        for(const auto& piece:world.fragmentSnapshot())
+          if(piece.piece<firstSleep.size() && piece.sleeping && firstSleep[piece.piece]<0)
+            firstSleep[piece.piece]=frame+1;
+        }
       const auto pieces=world.fragmentSnapshot();
       require(pieces.size()==8,"nearby floating fragments must remain present after settling");
       for(const auto& piece:pieces) {
         auto center=fracture->pieces[piece.piece].center;
         piece.transform.project(center);
-        std::printf("Water crate fragment %zu: centre %.6f cm, sleeping %d, speed %.6f cm/s\n",
-                    piece.piece,double(center.y),int(piece.sleeping),double(piece.velocity.length()));
+        std::printf("Water crate fragment %zu: centre %.6f cm, sleeping %d, speed %.6f cm/s, first sleep %.3f s\n",
+                    piece.piece,double(center.y),int(piece.sleeping),double(piece.velocity.length()),double(firstSleep[piece.piece])/60.);
+        }
+      for(const auto& piece:pieces) {
+        auto center=fracture->pieces[piece.piece].center;
+        piece.transform.project(center);
         require(piece.sleeping && center.y>-50.f && center.y<100.f,
                 "every wooden crate fragment must float and sleep instead of falling to the bottom");
         }
