@@ -292,10 +292,24 @@ def bloodfly_comparison(off, on):
     excluded = all(int(row["cv_active"]) == 0 for row in before + after)
     animations = same_count and all(a["animation"] == b["animation"] for a, b in zip(before, after))
     timing = same_count and all(a["dt_ms"] == b["dt_ms"] for a, b in zip(before, after))
+    coverage = {}
+    for mode, evidence, fly in (("off", off, before), ("on", on, after)):
+        primary = [row for row in evidence["frames"] if row["route"] == "fieldraider_attack"]
+        aligned = bool(fly) and len(fly) == len(primary) and all(
+            (a["t_game_ms"], a["dt_ms"]) == (b["t_game_ms"], b["dt_ms"])
+            for a, b in zip(fly, primary))
+        measured_ms = sum(finite(row["dt_ms"]) for row in fly)
+        window_ms = evidence["routes"].get("fieldraider_attack", {}).get("window_ms")
+        allowance = max((finite(row["dt_ms"]) for row in fly), default=0)
+        coverage[mode] = {"primary_frames": len(primary), "aligned_with_primary": aligned,
+                          "sampled_ms": measured_ms, "route_window_ms": window_ms,
+                          "complete": aligned and window_ms is not None and window_ms > 0 and
+                          abs(measured_ms - window_ms) <= allowance}
     return {"off_frames": len(before), "on_frames": len(after), "cv_excluded_both": excluded,
             "max_coordinate_difference_cm": delta, "same_animation_frames": animations,
-            "same_tick_intervals": timing,
-            "identical": same_count and excluded and delta == 0 and animations and timing}
+            "same_tick_intervals": timing, "full_window_coverage": coverage,
+            "identical": same_count and excluded and delta == 0 and animations and timing and
+            all(row["complete"] for row in coverage.values())}
 
 
 def difference(before, after):
@@ -324,11 +338,53 @@ def metrics(args):
                 if "fieldraider" in name:
                     pair["native_collision_both"] = all((row["charge_collision_callbacks"] or 0) > 0 for row in (before, after))
         routes.append(pair)
+    fixtures = fixture_comparison(off["events"], on["events"])
+    bloodfly = bloodfly_comparison(off, on)
+    errors = []
+    for mode, evidence in (("off", off), ("on", on)):
+        if not evidence["bench_complete"]:
+            errors.append(f"{mode}: bench.log has no completed run")
+        if evidence["native_errors"]:
+            errors.append(f"{mode}: native monster preparation/measurement errors")
+    if not off["routes"] or off["routes"].keys() != on["routes"].keys():
+        errors.append("Missing or mismatched native route ends")
+    if not fixtures["exact_payload_match"]:
+        errors.append("Authored setup payloads differ between OFF and ON")
+    recorded = [any(row.get("kind") == "rec" for row in evidence["events"]) for evidence in (off, on)]
+    if any(recorded):
+        if not all(recorded):
+            errors.append("Only one take contains a native recording")
+        for key in ("fixed_camera", "same_seed_and_time", "authored_actor_starts_match", "camera_coordinates_identical"):
+            if not fixtures[key]:
+                errors.append(f"Recorded pair lacks matching {key}")
+        if fixtures["max_hero_start_difference_cm"] != 0:
+            errors.append("Authored hero starts differ or are missing")
+    for pair in routes:
+        name = pair["route"]
+        # The reverse leg starts at the actual wet endpoint of each take. Its
+        # divergence is a measured consequence of the first leg, not a reset.
+        if name == "wolf_water_exit":
+            if (pair.get("goal_difference_cm") != 0 or pair.get("off") is None or pair.get("on") is None or
+                    pair["off"]["window_ms"] != pair["on"]["window_ms"]):
+                errors.append(f"{name}: dry goal or reverse duration differs")
+        elif not pair["matched_start_and_goal"]:
+            errors.append(f"{name}: initial route start/goal or duration differs")
+        if name.endswith("_attack"):
+            if any(pair.get(mode) is None or pair[mode].get("success") is not True for mode in ("off", "on")):
+                errors.append(f"{name}: native attack did not complete successfully in both takes")
+            for key in ("distance_comparison", "duration_comparison"):
+                if pair.get(key, {}).get("within_10_percent") is not True:
+                    errors.append(f"{name}: {key} lacks evidence or exceeds 10%")
+            if "fieldraider" in name and not pair.get("native_collision_both"):
+                errors.append(f"{name}: missing native charge collision in OFF or ON")
+    if "fieldraider_attack" in off["routes"] or "fieldraider_attack" in on["routes"]:
+        if bloodfly is None or not bloodfly["identical"]:
+            errors.append("Bloodfly is not identical and CV-excluded throughout both complete attack windows")
     return {"off_directory": off["directory"], "on_directory": on["directory"], "routes": routes,
             "native_errors": {"off": off["native_errors"], "on": on["native_errors"]},
             "bench_complete": {"off": off["bench_complete"], "on": on["bench_complete"]},
-            "fixtures": fixture_comparison(off["events"], on["events"]),
-            "bloodfly_control": bloodfly_comparison(off, on),
+            "fixtures": fixtures, "bloodfly_control": bloodfly,
+            "validation_errors": errors, "pass": not errors,
             "geometry_review": "Pending actual frame inspection; missing data is not zero penetrations."}
 
 
@@ -418,9 +474,11 @@ def main():
     try:
         result = {"compose": compose, "metrics": metrics, "perf": compare_performance}[args.command](args)
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
-        if args.command == "perf" and not result["pass"]:
+        if args.command in ("metrics", "perf") and not result["pass"]:
             return 1
-    except (ValueError, OSError, KeyError) as error:
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        if args.command in ("metrics", "perf"):
+            print(json.dumps({"pass": False, "validation_errors": [str(error)]}, ensure_ascii=False))
         parser.exit(1, f"error: {error}\n")
 
 
