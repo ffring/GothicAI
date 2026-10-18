@@ -701,6 +701,7 @@ class Npc final {
       const WayPoint*  wp   = nullptr;
       Tempest::Vec3    pos  = {};
       float            pointDistance = 0.f; // transient bench precision; zero keeps normal tolerance
+      Npc*             nativeCombatTarget = nullptr; // transient provenance; not a script goto
 
       void             save(Serialize& fout) const;
       void             load(Serialize&  fin);
@@ -762,6 +763,7 @@ class Npc final {
 
     bool      isPlayerEnabledState(const ::AiState& st) const;
     void      tickRoutine();
+    int       invokeRoutine(ScriptFn function);
     void      nextAiAction(AiQueue& queue, uint64_t dt);
     void      commitDamage();
     Npc*      updateNearestEnemy();
@@ -940,6 +942,7 @@ class Npc final {
     ScriptFn                       aiPrevState;
     AiQueue                        aiQueue;
     AiQueue                        aiQueueOverlay;
+    Npc*                           nativeCombatQueueTarget=nullptr; // only during this actor's ZS_ATTACK callback
     bool                           externalCtrl=false; // transient, not serialized
     bool                           percPassThrough=false; // passPerception: no interception
     std::vector<Routine>           routines;

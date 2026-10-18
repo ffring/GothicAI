@@ -67,6 +67,15 @@ def memory(value):
     return int(float(match[1]) * 1024 ** (" KMGT".index(match[2]) if match[2] else 0))
 
 
+def cpu_quota(value):
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(?:%)?", str(value))
+    if match:
+        number = float(match[1])
+        if math.isfinite(number) and number > 0:
+            return f"{match[1]}%"
+    raise argparse.ArgumentTypeError("квота CPU должна быть положительным числом: 200% или 200")
+
+
 def process_token(pid):
     try:
         # comm may contain spaces and parentheses; fields after the final ')' are stable.
@@ -156,7 +165,7 @@ class Queue:
     def event(self, job, event, **extra):
         # Called only within a transaction: journal lines from different processes never interleave.
         record = {k: job.get(k) for k in ("id", "owner", "class", "name", "threads", "mem",
-                                        "gpu_mem", "display", "max", "submitted", "start")}
+                                        "gpu_mem", "display", "cpu_quota", "max", "submitted", "start")}
         record.update(event=event, time=self.now(), **extra)
         with (self.home / "journal.jsonl").open("a", encoding="utf-8") as output:
             os.chmod(output.name, 0o600)
@@ -223,6 +232,11 @@ class Queue:
         spec = dict(spec)
         spec.setdefault("gpu_mem", 0)
         spec.setdefault("display", False)
+        if spec.get("cpu_quota") is not None:
+            try:
+                spec["cpu_quota"] = cpu_quota(spec["cpu_quota"])
+            except argparse.ArgumentTypeError as error:
+                raise QueueError(str(error)) from None
         if "owner" not in spec:
             spec["owner"] = owner()
         self.validate(spec)
@@ -314,6 +328,9 @@ class Queue:
             for job in state["jobs"]:
                 if job["id"] == job_id and job["status"] == "starting" and not job.get("cancel_reason"):
                     job.update(status="running", start=self.now())
+                    invocation = os.environ.get("INVOCATION_ID", "")
+                    if re.fullmatch(r"[0-9a-f]{32}", invocation):
+                        job["invocation_id"] = invocation
                     self.event(job, "started")
                     return True
         return False
@@ -473,6 +490,8 @@ class Queue:
             "StandardOutput": "append:" + str(self.home / "logs" / f"{job['id']}.log"),
             "StandardError": "inherit",
         }
+        if job.get("cpu_quota") is not None:
+            props["CPUQuota"] = job["cpu_quota"]
         args = ["systemd-run", "--user", "--quiet", "--unit", "gq-" + job["id"]]
         args += [f"--property={k}={v}" for k, v in props.items()]
         args += [f"--setenv={k}={v}" for k, v in env.items() if k not in {
@@ -652,6 +671,50 @@ def spawn_pump(queue, job_id):
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def submit_job(queue, spec):
+    """Own a detached request until its ID has reached the caller.
+
+    A signal may arrive after submit() persists the job but before it returns its
+    ID. Record that signal without unwinding the transaction; once submit()
+    returns we can cancel the exact request. Later signals can interrupt pump
+    startup or stdout immediately because the ID is already known.
+    """
+    class Interrupted(Exception):
+        pass
+
+    job_id = None
+    interrupted = 0
+    delivered = False
+    closing = False
+
+    def stop(signum, _frame):
+        nonlocal interrupted
+        interrupted = interrupted or signum
+        if job_id is not None and not closing:
+            raise Interrupted
+
+    previous = {sig: signal.signal(sig, stop)
+                for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)}
+    try:
+        job_id = queue.submit(spec)
+        if interrupted:
+            raise Interrupted
+        spawn_pump(queue, job_id)
+        print(job_id, flush=True)
+        delivered = True
+        return 0
+    except Interrupted:
+        return 128 + interrupted
+    finally:
+        closing = True
+        try:
+            if job_id is not None and (not delivered or interrupted):
+                queue.retry_cancel(job_id, spec["owner"])
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+
+
 def stream_log(queue, job_id, offset):
     path = queue.home / "logs" / f"{job_id}.log"
     if path.exists():
@@ -771,6 +834,7 @@ def parser():
         r.add_argument("--mem", type=memory, required=True)
         r.add_argument("--gpu-mem", type=memory, default=0)
         r.add_argument("--display", action="store_true")
+        r.add_argument("--cpu-quota", type=cpu_quota)
         r.add_argument("--max", type=duration, required=True)
         r.add_argument("--name", required=True)
         if name == "run":
@@ -812,13 +876,13 @@ def main(argv=None):
                 raise QueueError("--wait-max должен быть неотрицательным")
             command = args.command[1:] if args.command[:1] == ["--"] else args.command
             waiter = {"pid": os.getpid(), "start": process_token(os.getpid())} if args.action == "run" else None
-            job_id = queue.submit({
+            request = {
                 "class": args.class_, "threads": args.threads, "mem": args.mem, "gpu_mem": args.gpu_mem,
-                "display": args.display, "max": args.max, "name": args.name, "owner": owner(), "command": command}, waiter)
+                "display": args.display, "cpu_quota": args.cpu_quota, "max": args.max,
+                "name": args.name, "owner": owner(), "command": command}
             if args.action == "submit":
-                spawn_pump(queue, job_id)
-                print(job_id, flush=True)
-                return 0
+                return submit_job(queue, request)
+            job_id = queue.submit(request, waiter)
             return wait_job(queue, job_id, run=True, wait_max=args.wait_max)
         if args.action == "status":
             status(queue)

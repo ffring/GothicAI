@@ -1,4 +1,4 @@
-"""Deterministic, pre-master balance for the before/after shorts.
+"""Deterministic balance, voiced mastering and publication gates for shorts.
 
 Every measurement taps the very same stem graph used by the mix. Word timings,
 not signal dynamics, control ducking. All times refer to the joined video.
@@ -6,11 +6,16 @@ not signal dynamics, control ducking. All times refer to the joined video.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import subprocess
+import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from gothic_shorts import clicks
 
 BASE_LUFS = -14.0
 TRUE_PEAK_DBTP = -1.0
@@ -41,7 +46,17 @@ METER_RESOLUTION_LU = 0.1
 Window = tuple[float, float]
 
 
-def _merge(windows: list[Window], duration: float) -> list[Window]:
+class LevelsError(ValueError):
+    """A voiced short failed calibration, rendering or a publication gate."""
+
+
+def merge_speech_windows(windows: list[Window], duration: float) -> list[Window]:
+    """Merge touching/overlapping speech intervals and clip them to the body."""
+    if not math.isfinite(duration) or duration < 0:
+        raise ValueError("Invalid speech duration")
+    if any(not math.isfinite(start) or not math.isfinite(end) or end <= start
+           for start, end in windows):
+        raise ValueError("Invalid speech window")
     merged: list[Window] = []
     for start, end in sorted(windows):
         start, end = max(0.0, start), min(duration, end)
@@ -68,12 +83,12 @@ def speech_windows(plan: dict) -> tuple[list[Window], float]:
                 raise ValueError("Invalid speech window")
             windows.append((start, end))
         offset += beat["end"] - beat["start"]
-    return _merge(windows, offset), offset
+    return merge_speech_windows(windows, offset), offset
 
 
 def pause_windows(speech: list[Window], duration: float) -> list[Window]:
     pauses, cursor = [], 0.0
-    for start, end in _merge(speech, duration):
+    for start, end in merge_speech_windows(speech, duration):
         if start > cursor:
             pauses.append((cursor, start))
         cursor = end
@@ -426,8 +441,11 @@ def audio_graph(joined: Path, music: Path | None, voice: list[tuple[Path, float]
                 speech: list[Window], total: float, length: float, *,
                 music_volume: float = 1.0, music_gain_db: float = 0.0,
                 game_gain_db: float = 0.0, game_duck_db: float = 0.0,
-                ending_gain_db: float = 0.0) -> AudioGraph:
-    """One source of truth for the mix and all calibration/validation taps."""
+                ending_gain_db: float = 0.0, music_fades: bool = True) -> AudioGraph:
+    """One source of truth for the mix and all calibration/validation taps.
+
+    Disable music_fades when the supplied music stem already carries its fades.
+    """
     inputs, filters, tracks = ["-i", str(joined)], [], {"game": "g"}
     if music is not None:
         inputs += ["-i", str(music)]
@@ -454,9 +472,9 @@ def audio_graph(joined: Path, music: Path | None, voice: list[tuple[Path, float]
         calibrated_volume = f"{music_gain_db:.9f}dB" if math.isfinite(music_gain_db) else "0"
         volume = calibrated_volume if voice else str(music_volume)
         format_audio = "aformat=sample_rates=48000:channel_layouts=stereo," if voice else ""
+        fades = f",afade=t=in:d=1,afade=t=out:st={total - 1.5}:d=1.5" if music_fades else ""
         filters.append(f"[1:a]{format_audio}atrim=0:{total},asetpts=PTS-STARTPTS,"
-                       f"volume={volume},afade=t=in:d=1,"
-                       f"afade=t=out:st={total - 1.5}:d=1.5" +
+                       f"volume={volume}{fades}" +
                        (f",{duck_filter(speech, MUSIC_DUCK_DB)}" if voice else "") + "[m]")
         tracks["music"] = "m"
     return AudioGraph(inputs, filters, tracks)
@@ -464,9 +482,10 @@ def audio_graph(joined: Path, music: Path | None, voice: list[tuple[Path, float]
 
 def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
               speech: list[Window], total: float, length: float, *,
-              music_volume: float = 1.0) -> tuple[AudioGraph, dict]:
+              music_volume: float = 1.0, music_fades: bool = True) -> tuple[AudioGraph, dict]:
     pauses = pause_windows(speech, total)
-    raw = audio_graph(joined, music, voice, speech, total, length, music_volume=music_volume)
+    raw = audio_graph(joined, music, voice, speech, total, length,
+                      music_volume=music_volume, music_fades=music_fades)
     if not voice:
         game = raw.measure("game")
         music_level = raw.measure("music") if music is not None else None
@@ -502,7 +521,7 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
     music_db = music_gain(s, music_pause, game_pause) if music_pause is not None else 0.0
     final = audio_graph(joined, music, voice, speech, total, length,
                         music_gain_db=music_db, game_gain_db=game_gain, game_duck_db=game_db,
-                        ending_gain_db=ending_gain)
+                        ending_gain_db=ending_gain, music_fades=music_fades)
     report = check_balance(
         s, final.measure("music", pauses, meter_gain_db=meter_gain)
         if music is not None and pauses else None,
@@ -515,3 +534,145 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
                    "ending_gain_db": ending_gain, "speech_windows": speech, "pause_windows": pauses,
                    "ending_windows": ending_windows})
     return final, report
+
+
+def _gate_error(report: dict, stage: str) -> str:
+    failed = ", ".join(row["id"] for row in report["rows"] if row["ok"] is False)
+    reason = f" ({failed})" if failed else ""
+    return f"Audio {stage} check failed{reason}; the short was not published"
+
+
+def _master_voiced(audio: AudioGraph | None, report: dict | None, out: Path, length: float, *,
+                   inputs: list[str] | None = None,
+                   run: Callable[[list[str]], None] | None = None,
+                   detect: Callable[[Path], list[float]] | None = None) -> None:
+    """Master calibrated stems; also used by the comparison cutter's legacy wrapper."""
+    out.unlink(missing_ok=True)
+    if audio is None or report is None:
+        raise LevelsError("Voiced mastering needs the calibrated stems and balance report")
+    inputs = audio.inputs if inputs is None else inputs
+    detect_clicks = clicks.detect if detect is None else detect
+
+    def render_command(command: list[str]) -> None:
+        if run is None:
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        else:
+            run(command)
+
+    with tempfile.TemporaryDirectory(dir=out.parent) as pending:
+        candidate = Path(pending) / out.name
+        stems = {track: Path(pending) / f"{track}.m4a" for track in audio.tracks}
+        gain_correction = 0.0
+        ending_gain_correction = 0.0
+        balance_corrections = {"game_gain_db": 0.0, "game_duck_db": 0.0, "music_gain_db": 0.0}
+        ending_start = report["ending_windows"][0][0] if report["ending_windows"] else None
+        body_end = ending_start if ending_start is not None else length
+        report["master_passes"] = 0
+        report["master_corrections_db"] = []
+        report["ending_corrections_db"] = []
+        report["balance_corrections_db"] = []
+
+        def render() -> float:
+            # Every stem shares the actual mix limiter's gain and final fade.
+            graph = audio.master_graph(
+                report["speech_lufs"], length, gain_correction_db=gain_correction,
+                ending_gain_correction_db=ending_gain_correction, ending_start=body_end,
+                balance_corrections=dict(balance_corrections), speech=report["speech_windows"],
+            )
+            command = ["ffmpeg", "-y", *inputs, "-filter_complex", graph,
+                       "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
+                       "-b:a", "192k", "-ar", "48000", str(candidate)]
+            for track, path in stems.items():
+                command += ["-map", f"[{track}_mastered]", "-vn", "-c:a", "aac",
+                            "-b:a", "192k", "-ar", "48000", str(path)]
+            render_command(command)
+            report["master_passes"] += 1
+            return meter_file(stems["voice"])[0]
+
+        def measure_balance(voice_lufs: float) -> dict:
+            return check_mastered_balance(stems, voice_lufs, report["speech_windows"],
+                                          report["pause_windows"], report["ending_windows"])
+
+        for attempt in range(MAX_MASTER_CORRECTIONS + 1):
+            voice_lufs = render()
+            report["master_common_passes"] = attempt + 1
+            report["master_gain_db"] = master_gain(report["speech_lufs"]) + gain_correction
+            correction = master_correction(voice_lufs)
+            if not correction or attempt == MAX_MASTER_CORRECTIONS:
+                break
+            gain_correction += correction
+            report["master_corrections_db"].append(correction)
+        balance = measure_balance(voice_lufs)
+        for _ in range(MAX_BALANCE_CORRECTIONS):
+            ending = next(row["measured_lufs"] for row in balance["rows"] if row["id"] == "ending")
+            correction = ending_correction(voice_lufs, ending)
+            adjustments = balance_correction(balance)
+            if not correction and not any(adjustments.values()):
+                break
+            ending_gain_correction += correction
+            if correction:
+                report["ending_corrections_db"].append(correction)
+            if any(adjustments.values()):
+                report["balance_corrections_db"].append(adjustments)
+                for key, value in adjustments.items():
+                    balance_corrections[key] += value
+            voice_lufs = render()
+            balance = measure_balance(voice_lufs)
+        for key, value in balance_corrections.items():
+            if value:
+                report[key] = report.get(key, 0.0) + value
+        if ending_start is not None:
+            report["ending_gain_db"] += ending_gain_correction
+            report["ending_gain_correction_db"] = ending_gain_correction
+            report["ending_target_lufs"] = voice_lufs - ENDING_BELOW_VOICE_LU - CEILING_HEADROOM_LU
+        _, peak = meter_file(candidate)
+        report["pre_master_rows"] = report["rows"]
+        report.update(balance)
+        report["balance_stage"] = "mastered_aac"
+        check_mastering(report, voice_lufs, peak, detect_clicks(candidate))
+        if not report["ok"]:
+            raise LevelsError(_gate_error(report, "mastering"))
+        candidate.replace(out)
+
+
+def publish(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
+            speech: list[Window], total: float, length: float, out: Path, *,
+            music_volume: float = 1.0, music_fades: bool = True,
+            _master: Callable[..., None] | None = None) -> dict:
+    """Calibrate, master and publish a voiced short with its decoded AAC report.
+
+    Removes stale output/report first. Every calibration, ffmpeg or gate failure
+    writes an error report, removes the output and raises LevelsError. Disable
+    music_fades for a music stem whose fades were already rendered upstream.
+    All clip offsets and speech intervals use the joined video's timeline;
+    total is the body's duration, length includes the optional ending.
+    """
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    report_path = out.with_suffix(".levels.json")
+    report_path.unlink(missing_ok=True)
+    report = check_balance(-math.inf, None, None, None, None)
+    try:
+        if not voice:
+            raise LevelsError("Voiced publication needs voice clips")
+        speech = merge_speech_windows(speech, total)
+        audio, report = calibrate(joined, music, voice, speech, total, length,
+                                  music_volume=music_volume, music_fades=music_fades)
+        if not report["ok"] or any(row["ok"] is False for row in report["rows"]):
+            raise LevelsError(_gate_error(report, "balance"))
+        if _master is None:
+            _master_voiced(audio, report, out, length)
+        else:
+            # Preserve the comparison cutter's existing master() integration hook.
+            _master(audio.inputs, audio.mix(), out, length, voiced=True, audio=audio, report=report)
+        if not report["ok"] or any(row["ok"] is False for row in report["rows"]):
+            raise LevelsError(_gate_error(report, "mastering"))
+        print_balance(report)
+        report_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        out.unlink(missing_ok=True)
+        report.update(ok=False, error=str(error))
+        print_balance(report)
+        report_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+        raise LevelsError(str(error)) from error
+    return report

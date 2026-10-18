@@ -16,6 +16,8 @@ def _flag(v: str | bool) -> bool:
 class FakeProvider:
     name = "fake"
     rate = 16000
+    tone_phase_step = 1 / 8
+    tone_frequency_hz = rate * tone_phase_step / math.tau
 
     def __init__(
         self, delay: str | float = 0.0, fail: str | bool = False, ms_per_char: str | float = 60
@@ -35,7 +37,7 @@ class FakeProvider:
         if self.fail:
             raise TtsError("fake provider failure")
         n = int(len(text) * self.ms_per_char / 1000 * self.rate)
-        pcm = struct.pack(f"<{n}h", *(int(3000 * math.sin(i / 8)) for i in range(n)))
+        pcm = struct.pack(f"<{n}h", *(int(3000 * math.sin(i * self.tone_phase_step)) for i in range(n)))
         for i in range(0, len(pcm), 3200):
             await on_chunk(pcm[i : i + 3200])
         return n / self.rate

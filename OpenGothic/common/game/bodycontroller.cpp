@@ -46,7 +46,7 @@ struct Command final {
 struct Retry final { uint64_t id=0; std::string signature, result; };
 struct Lease final {
   Npc* npc=nullptr;
-  uint64_t entity=0, generation=0, goal=1, target=0, lastCommand=0, timeout=500, minimumSequence=0;
+  uint64_t entity=0, generation=0, goal=1, target=0, lastCommand=0, timeout=500, minimumSequence=0, acquireRequestId=0;
   std::string provider, mode="realtime", releaseReason;
   bool release=false, command=false, infrastructureEmitted=false, visibilityRecovery=false, movementStopPending=false;
   bool visibilityTurning=false;
@@ -56,14 +56,21 @@ struct Lease final {
   std::deque<Retry> retries;
   std::deque<std::function<void()>> deferred;
   };
+struct PendingAcquire final {
+  Npc* npc=nullptr;
+  uint64_t timeout=500;
+  std::string provider,mode;
+  BodyController::BoundaryRequest boundary;
+  };
 struct State final {
-  uint64_t nextGeneration=0, nextExecution=0, eventSequence=0, dropped=0;
+  uint64_t nextGeneration=0, nextExecution=0, nextAcquireRequest=0, eventSequence=0, dropped=0;
   bool paused=false, infrastructure=false;
   bool visibilityDiagnostics=false, visibilityCaptureFailed=false;
   uint64_t visibilityGeneration=0, visibilityRecords=0, visibilityDropped=0;
   std::string infrastructureReason;
   std::vector<Npc*> actors;
   std::unordered_map<const Npc*,Lease> leases;
+  std::unordered_map<const Npc*,PendingAcquire> pending;
   std::deque<std::string> events;
   std::function<void(std::string_view)> sink;
   };
@@ -96,11 +103,39 @@ void identity(Json& d,const Lease* l,const Npc* actor) {
   u(d,"target_entity_id",l ? l->target : actor && actor->target() ? BodyObservations::entityId(*actor->target()) : 0);
   u(d,"command_id",l && l->command ? l->active.id : 0); u(d,"execution_id",l && l->command ? l->active.execution : 0);
   str(d,"owner",l ? "scripted" : "native"); b(d,"release_pending",l && l->release);
+  if(l && l->acquireRequestId) u(d,"acquire_request_id",l->acquireRequestId);
   }
-void event(const Lease& l,std::string_view phase,std::string_view reason,const Command* command=nullptr) {
+void enqueueEvent(const Json& d) {
+  const auto row=encode(d);
+  if(state().events.size()==MaxEvents) { state().events.pop_front(); ++state().dropped; }
+  state().events.push_back(row);
+  if(state().sink) state().sink(row);
+  }
+void event(const Lease& l,std::string_view phase,std::string_view reason,const Command* command=nullptr,
+           std::string_view acquireCancelReason={});
+void cancelAcquire(PendingAcquire& pending,std::string_view reason) {
+  pending.boundary.cancel();
+  // Encode the same complete event schema as an ordinary lease event, while retaining
+  // native ownership and generation zero: a waiting request never owned the body.
+  Lease cancelled; cancelled.npc=pending.npc; cancelled.entity=BodyObservations::entityId(*pending.npc);
+  cancelled.goal=0; cancelled.target=pending.boundary.target; cancelled.acquireRequestId=pending.boundary.id;
+  cancelled.minimumSequence=BodyObservations::latestSequence(*pending.npc);
+  cancelled.provider=pending.provider; cancelled.mode=pending.mode; cancelled.timeout=pending.timeout;
+  event(cancelled,"ownership","acquire_cancelled",nullptr,reason);
+  }
+void cancelAcquire(const Npc* actor,std::string_view reason) {
+  auto it=state().pending.find(actor);
+  if(it==state().pending.end()) return;
+  cancelAcquire(it->second,reason); state().pending.erase(it);
+  }
+void event(const Lease& l,std::string_view phase,std::string_view reason,const Command* command,
+           std::string_view acquireCancelReason) {
   Json d=object(); u(d,"schema_version",1); str(d,"event","body_control_event"); str(d,"phase",phase); str(d,"reason",reason);
   identity(d,&l,l.npc);
-  if(phase=="ownership" && reason=="native_restored") { d["owner"].SetString("native",d.GetAllocator()); d["release_pending"].SetBool(false); }
+  if(phase=="ownership" && (reason=="native_restored" || reason=="acquire_cancelled")) {
+    d["owner"].SetString("native",d.GetAllocator()); d["release_pending"].SetBool(false);
+    }
+  if(!acquireCancelReason.empty()) str(d,"acquire_cancel_reason",acquireCancelReason);
   str(d,"provider",l.provider); str(d,"mode",l.mode);
   u(d,"event_seq",++state().eventSequence); u(d,"t_wall_ms",wallMs()); u(d,"t_game_ms",l.npc->world().tickCount());
   u(d,"wall_monotonic_ns",wallNs()); str(d,"clock_domain",ClockDomain);
@@ -110,7 +145,8 @@ void event(const Lease& l,std::string_view phase,std::string_view reason,const C
   const auto& c=command ? *command : l.active;
   d["command_id"].SetUint64(command || l.command ? c.id : 0);
   d["execution_id"].SetUint64(command || l.command ? c.execution : 0);
-  u(d,"observation_seq",command || l.command ? c.observation : 0);
+  u(d,"observation_seq",phase=="ownership" && (reason=="acquired" || reason=="acquire_cancelled") && l.acquireRequestId ? l.minimumSequence :
+                         command || l.command ? c.observation : 0);
   u(d,"action_id",uint64_t(c.action)); u(d,"effective_primitive",uint64_t(c.primitive));
   str(d,"segment_identity",c.identity); str(d,"pose_before",c.beforeIdentity); str(d,"pose_after",c.identity);
   str(d,"release_reason",l.releaseReason);
@@ -119,10 +155,7 @@ void event(const Lease& l,std::string_view phase,std::string_view reason,const C
   b(d,"segment_started",c.started); b(d,"primitive_consumed",c.consumed);
   u(d,"issued_game_ms",c.issued); u(d,"ttl_ms",c.ttl); u(d,"watchdog_timeout_ms",l.timeout);
   b(d,"infrastructure_failure",state().infrastructure);
-  const auto row=encode(d);
-  if(state().events.size()==MaxEvents) { state().events.pop_front(); ++state().dropped; }
-  state().events.push_back(row);
-  if(state().sink) state().sink(row);
+  enqueueEvent(d);
   }
 void cancel(Lease& l,std::string_view reason) {
   if(l.command) {
@@ -142,6 +175,13 @@ std::string result(const Lease* l,const Npc* actor,bool accepted,std::string_vie
   Json d=object(); str(d,"type","body_control_result"); identity(d,l,actor);
   b(d,"accepted",accepted); b(d,"duplicate",duplicate); str(d,"reason",reason);
   if(command) d["command_id"].SetUint64(command);
+  if(l && l->acquireRequestId) u(d,"observation_seq",l->minimumSequence);
+  return encode(d);
+  }
+std::string pendingResult(const PendingAcquire& pending,bool duplicate=false) {
+  Json d; d.Parse(result(nullptr,pending.npc,true,"acquire_pending",duplicate).c_str());
+  d["target_entity_id"].SetUint64(pending.boundary.target);
+  u(d,"acquire_request_id",pending.boundary.id);
   return encode(d);
   }
 bool integer(const rapidjson::Value& d,const char* key,uint64_t& out,bool required=true) {
@@ -258,7 +298,10 @@ void BodyController::activateBenchReaction(Npc& primary,Npc& opponent,bool nativ
     if(owns(primary)) throw std::logic_error("idle reaction defender did not return to native authority");
     }
   }
-void BodyController::takeover(Npc& actor,std::string_view reason) { if(auto l=lease(actor)) requestRelease(*l,reason); }
+void BodyController::takeover(Npc& actor,std::string_view reason) {
+  cancelAcquire(&actor,reason);
+  if(auto l=lease(actor)) requestRelease(*l,reason);
+  }
 bool BodyController::deferNative(Npc& actor,std::function<void()> mutation) {
   auto l=lease(actor); if(!l) return false;
   if(l->deferred.size()>=32) throw std::runtime_error("body deferred native mutation limit");
@@ -267,22 +310,32 @@ bool BodyController::deferNative(Npc& actor,std::function<void()> mutation) {
 void BodyController::legacyRejected(Npc& actor,std::string_view reason) {
   if(auto l=lease(actor)) { Command rejected; event(*l,"rejected",reason,&rejected); }
   }
+void BodyController::cancelPending(std::string_view reason) {
+  for(auto& pair:state().pending) cancelAcquire(pair.second,reason);
+  state().pending.clear();
+  }
 void BodyController::disconnect(std::string_view provider) {
+  for(auto it=state().pending.begin();it!=state().pending.end();) {
+    if(provider.empty() || it->second.provider==provider) { cancelAcquire(it->second,"disconnect"); it=state().pending.erase(it); }
+    else ++it;
+    }
   for(auto& pair:state().leases) if(provider.empty() || pair.second.provider==provider) requestRelease(pair.second,"disconnect");
   pumpWatchdogs();
   }
 void BodyController::forget(const Npc* actor) {
+  cancelAcquire(actor,"destroyed");
   auto it=state().leases.find(actor);
   if(it!=state().leases.end()) { cancel(it->second,"destroyed"); state().leases.erase(it); }
   auto& actors=state().actors;
   actors.erase(std::remove(actors.begin(),actors.end(),actor),actors.end());
   }
 void BodyController::reset(std::string_view reason) {
+  cancelPending(reason);
   for(auto& pair:state().leases) { cancel(pair.second,reason); event(pair.second,"ownership",reason); }
   // Final reset events have already reached the journal sink. Old-world IPC rows must not
   // be wrapped in the next world epoch; reconnect/load explicitly invalidate that stream.
   state().events.clear();
-  state().leases.clear(); state().actors.clear(); state().infrastructure=false; state().infrastructureReason.clear();
+  state().leases.clear(); state().pending.clear(); state().actors.clear(); state().infrastructure=false; state().infrastructureReason.clear();
   state().paused=false;
   state().visibilityDiagnostics=false; state().visibilityCaptureFailed=false;
   ++state().visibilityGeneration; state().visibilityRecords=state().visibilityDropped=0;
@@ -290,6 +343,10 @@ void BodyController::reset(std::string_view reason) {
 void BodyController::pause(bool paused) {
   if(state().paused==paused) return;
   state().paused=paused;
+  if(paused) {
+    for(auto& pair:state().pending) cancelAcquire(pair.second,"pause");
+    state().pending.clear();
+    }
   if(paused) for(auto& pair:state().leases) requestRelease(pair.second,"pause");
   }
 bool BodyController::isPaused() { return state().paused; }
@@ -315,6 +372,12 @@ std::string BodyController::visibilityDiagnosticsJson() {
 
 void BodyController::pumpWatchdogs() {
   const auto now=Clock::now();
+  // Cancellation/expiration is wall-clock driven even when simulation does not advance.
+  // Only the actor's simulation tick may grant a waiting request before native combat runs.
+  for(auto it=state().pending.begin();it!=state().pending.end();) {
+    const auto actor=it->second.npc; ++it;
+    pollAcquire(*actor,false);
+    }
   for(auto it=state().leases.begin();it!=state().leases.end();) {
     auto& l=it->second;
     const bool isTerminal=terminal(*l.npc);
@@ -361,6 +424,13 @@ std::string BodyController::statusJson(const Npc* actor) {
   auto add=[&](const Npc& npc) {
     const auto l=lease(npc); const auto s=snapshot(npc);
     Json row=object(); identity(row,l,&npc); str(row,"provider",l ? l->provider : ""); str(row,"mode",l ? l->mode : "native");
+    const auto pending=state().pending.find(&npc);
+    if(pending!=state().pending.end()) {
+      u(row,"acquire_request_id",pending->second.boundary.id); b(row,"acquire_pending",true);
+      row["provider"].SetString(pending->second.provider.c_str(),row.GetAllocator());
+      row["mode"].SetString(pending->second.mode.c_str(),row.GetAllocator());
+      row["target_entity_id"].SetUint64(pending->second.boundary.target);
+      }
     u(row,"t_game_ms",npc.owner.tickCount()); u(row,"observation_seq",BodyObservations::latestSequence(npc));
     u(row,"observed_game_ms",BodyObservations::latestGameMs(npc)); u(row,"watchdog_timeout_ms",l ? l->timeout : 0);
     b(row,"control_allowed",s.controlAllowed); b(row,"can_decide",s.canDecide);
@@ -395,6 +465,53 @@ std::string BodyController::drainJson() {
   state().events.clear(); d.AddMember("events",events,d.GetAllocator()); return encode(d);
   }
 
+BodyController::AcquireState BodyController::acquireState(const Npc& actor,uint64_t target) {
+  AcquireState acquire;
+  acquire.targetValid=targetValid(actor,target); acquire.externalControl=actor.externalCtrl;
+  acquire.player=actor.isPlayer(); acquire.talking=actor.isTalk(); acquire.terminal=terminal(actor);
+  acquire.safeBoundary=safeBoundary(actor);
+  acquire.nativeCombat=actor.aiState.started && std::string_view(actor.aiState.hint)=="ZS_ATTACK";
+  acquire.queueEmpty=actor.aiQueue.size()==0; acquire.overlayEmpty=actor.aiQueueOverlay.size()==0;
+  acquire.queueCombatOnly=actor.aiQueue.nativeCombatOnly(actor.target());
+  acquire.gotoEmpty=actor.go2.empty();
+  acquire.gotoToTarget=nativeCombatGoto(actor.go2.flag,actor.target(),actor.go2.nativeCombatTarget,
+                                       actor.go2.npc,actor.go2.wp!=nullptr);
+  return acquire;
+  }
+
+void BodyController::grantAcquire(Npc& actor,uint64_t target,uint64_t timeout,const std::string& provider,
+                                  const std::string& mode,uint64_t requestId) {
+  Lease newLease; newLease.npc=&actor; newLease.entity=BodyObservations::entityId(actor);
+  newLease.generation=++state().nextGeneration; newLease.acquireRequestId=requestId;
+  newLease.minimumSequence=BodyObservations::latestSequence(actor);
+  newLease.provider=provider; newLease.mode=mode; newLease.target=target; newLease.timeout=timeout;
+  newLease.heartbeat=Clock::now();
+  // The caller validated only this target's replaceable native combat work, on a real
+  // safe boundary. Neither pending requests nor refusal paths mutate native execution.
+  if(actor.aiQueue.size()!=0) actor.aiQueue.clear();
+  if(!actor.go2.empty()) { actor.go2.clear(); actor.wayPath.clear(); newLease.movementStopPending=true; }
+  actor.fghAlgo.onClearTarget();
+  auto l=&state().leases.emplace(&actor,std::move(newLease)).first->second;
+  if(l->movementStopPending && stopOwnedMovement(actor)) l->movementStopPending=false;
+  event(*l,"ownership","acquired");
+  }
+
+void BodyController::pollAcquire(Npc& actor,bool grant) {
+  auto it=state().pending.find(&actor);
+  if(it==state().pending.end()) return;
+  auto acquire=acquireState(actor,it->second.boundary.target);
+  if(!grant) acquire.safeBoundary=false;
+  const auto currentTarget=actor.target() ? BodyObservations::entityId(*actor.target()) : 0;
+  const auto outcome=it->second.boundary.advance(acquire,currentTarget,wallMs());
+  if(std::string_view(outcome)=="waiting") return;
+  if(std::string_view(outcome)=="acquired") {
+    const auto pending=std::move(it->second); state().pending.erase(it);
+    grantAcquire(actor,pending.boundary.target,pending.timeout,pending.provider,pending.mode,pending.boundary.id);
+    } else {
+    cancelAcquire(it->second,outcome); state().pending.erase(it);
+    }
+  }
+
 std::string BodyController::handleJson(const rapidjson::Value& req) {
   pumpWatchdogs();
   if(!req.IsObject()) return result(nullptr,nullptr,false,"invalid_request");
@@ -427,22 +544,62 @@ std::string BodyController::handleJson(const rapidjson::Value& req) {
       return result(nullptr,actor,false,"body_control_disabled");
     if(std::find(state().actors.begin(),state().actors.end(),actor)==state().actors.end())
       return result(nullptr,actor,false,"scenario_actor_required");
-    if(state().leases.size()>=MaxActors) return result(nullptr,actor,false,"owner_limit");
-    uint64_t target=actor->target() ? BodyObservations::entityId(*actor->target()) : 0, timeout=500;
-    if(!integer(req,"target_entity_id",target,false) || !integer(req,"timeout_ms",timeout,false) || timeout<100 || timeout>5000)
+    uint64_t target=actor->target() ? BodyObservations::entityId(*actor->target()) : 0, timeout=500,awaitMs=0,requestId=0;
+    if(!integer(req,"target_entity_id",target,false) || !integer(req,"timeout_ms",timeout,false) || timeout<100 || timeout>5000 ||
+       !integer(req,"await_boundary_ms",awaitMs,false) || awaitMs>2000 ||
+       !integer(req,"acquire_request_id",requestId,false))
       return result(nullptr,actor,false,"invalid_acquire");
     const auto mode=textField(req,"mode");
     if(mode!="realtime" && mode!="lockstep") return result(nullptr,actor,false,"invalid_mode");
-    if(!targetValid(*actor,target) || actor->externalCtrl || actor->isPlayer() || actor->isTalk() || terminal(*actor) ||
-       actor->aiQueue.size()>0 || !actor->go2.empty() || !safeBoundary(*actor)) return result(nullptr,actor,false,"actor_unavailable");
-    Lease newLease; newLease.npc=actor; newLease.entity=entity; newLease.generation=++state().nextGeneration;
-    newLease.minimumSequence=BodyObservations::latestSequence(*actor);
-    newLease.provider=provider; newLease.mode=mode; newLease.target=target; newLease.timeout=timeout; newLease.heartbeat=Clock::now();
-    actor->fghAlgo.onClearTarget();
-    l=&state().leases.emplace(actor,std::move(newLease)).first->second;
-    event(*l,"ownership","acquired"); return result(l,actor,true,"acquired");
+    const auto pending=state().pending.find(actor);
+    if(pending!=state().pending.end()) {
+      const auto& p=pending->second;
+      if(awaitMs>0 && provider==p.provider && mode==p.mode && target==p.boundary.target && timeout==p.timeout &&
+         (requestId==0 || requestId==p.boundary.id)) return pendingResult(p,true);
+      return result(nullptr,actor,false,"acquire_pending_busy");
+      }
+    if(state().leases.size()+state().pending.size()>=MaxActors) return result(nullptr,actor,false,"owner_limit");
+    const auto acquire=acquireState(*actor,target);
+    const auto refusal=validateAcquire(acquire);
+    if(std::string_view(refusal)!="allowed") {
+      if(awaitMs==0 || std::string_view(refusal)!="not_safe_boundary" || !acquire.nativeCombat)
+        return result(nullptr,actor,false,refusal);
+      auto boundary=acquire; boundary.safeBoundary=true;
+      const auto otherRefusal=validateAcquire(boundary);
+      if(std::string_view(otherRefusal)!="allowed") return result(nullptr,actor,false,otherRefusal);
+      if(requestId==0) { requestId=++state().nextAcquireRequest; if(requestId==0) requestId=++state().nextAcquireRequest; }
+      PendingAcquire pending; pending.npc=actor; pending.timeout=timeout;
+      pending.provider=provider; pending.mode=mode; pending.boundary.begin(requestId,target,wallMs(),awaitMs);
+      return pendingResult(state().pending.emplace(actor,std::move(pending)).first->second);
+      }
+    if(awaitMs>0 && requestId==0) { requestId=++state().nextAcquireRequest; if(requestId==0) requestId=++state().nextAcquireRequest; }
+    grantAcquire(*actor,target,timeout,provider,mode,awaitMs>0 ? requestId : 0);
+    return result(lease(*actor),actor,true,"acquired");
     }
   uint64_t generation=0;
+  // A cancellation can race the boundary grant. The request identity is valid for both
+  // the waiting request and its resulting lease, never for a later unrelated owner.
+  if(type=="body_release" || type=="body_disconnect") {
+    uint64_t requestId=0;
+    if(integer(req,"control_generation",generation) && generation==0 &&
+       integer(req,"acquire_request_id",requestId,false) && requestId>0) {
+      const auto pending=state().pending.find(actor);
+      if(pending!=state().pending.end()) {
+        if(provider!=pending->second.provider) return result(nullptr,actor,false,"owner_mismatch");
+        if(requestId!=pending->second.boundary.id) return result(nullptr,actor,false,"stale_acquire_request");
+        const auto reason=type=="body_disconnect" ? "disconnect" : "released";
+        cancelAcquire(pending->second,reason); state().pending.erase(pending);
+        Json response; response.Parse(result(nullptr,actor,true,"acquire_cancelled").c_str());
+        u(response,"acquire_request_id",requestId); str(response,"acquire_cancel_reason",reason);
+        return encode(response);
+        }
+      if(l && l->acquireRequestId==requestId && provider==l->provider) {
+        requestRelease(*l,type=="body_disconnect" ? "disconnect" : "released");
+        const auto r=result(l,actor,true,"release_pending"); pumpWatchdogs(); return r;
+        }
+      return result(l,actor,false,"stale_acquire_request");
+      }
+    }
   if(!l) return result(nullptr,actor,false,"not_owned");
   if(!integer(req,"control_generation",generation) || generation!=l->generation)
     return result(l,actor,false,"stale_generation");
@@ -508,6 +665,7 @@ void BodyController::takeHit(Npc& actor) { if(auto l=lease(actor)) cancel(*l,"hi
 
 bool BodyController::tick(Npc& actor,uint64_t dt) {
   pumpWatchdogs();
+  pollAcquire(actor,true);
   auto l=lease(actor);
   if(!l) return false;
   if(l->movementStopPending && stopOwnedMovement(actor)) l->movementStopPending=false;
@@ -741,6 +899,53 @@ void BodyController::fixtureLock(Npc& actor,uint64_t durationMs) {
   if(durationMs==0 || durationMs>5000) throw std::invalid_argument("body fixture lock outside [1,5000]");
   // This is the same real game-time lock used by native combat waits, never a lifecycle event.
   actor.implFaiWait(durationMs);
+  }
+
+bool BodyController::nativeCombatGoto(uint8_t hint,const Npc* target,const Npc* provenance,const Npc* gotoNpc,bool gotoWaypoint) {
+  if(target==nullptr || provenance!=target)
+    return false;
+  if(hint==Npc::GT_Enemy)
+    return gotoNpc==target && !gotoWaypoint;
+  if(hint==Npc::GT_Way)
+    return (gotoNpc==target && !gotoWaypoint) || (gotoNpc==nullptr && gotoWaypoint);
+  return false;
+  }
+
+const char* BodyController::validateAcquire(const AcquireState& s) {
+  if(!s.targetValid) return "target_invalid";
+  if(s.externalControl) return "external_control";
+  if(s.player) return "player_actor";
+  if(s.talking) return "talking";
+  if(s.terminal) return "actor_down";
+  if(!s.safeBoundary) return "not_safe_boundary";
+  if(!s.overlayEmpty) return "native_overlay_busy";
+  if(!s.queueEmpty && (!s.nativeCombat || !s.queueCombatOnly)) return "native_queue_busy";
+  if(!s.gotoEmpty && (!s.nativeCombat || !s.gotoToTarget)) return "goto_busy";
+  return "allowed";
+  }
+
+bool BodyController::BoundaryRequest::begin(uint64_t request,uint64_t enemy,uint64_t nowMs,uint64_t awaitMs) {
+  if(pending || request==0 || enemy==0 || awaitMs==0 || awaitMs>2000) return false;
+  id=request; target=enemy; deadlineMs=nowMs+awaitMs; pending=true; return true;
+  }
+
+const char* BodyController::BoundaryRequest::advance(const AcquireState& state,uint64_t currentTarget,uint64_t nowMs) {
+  if(!pending) return "not_pending";
+  const auto finish=[&](const char* reason) { pending=false; return reason; };
+  if(nowMs>=deadlineMs) return finish("expired");
+  if(state.terminal) return finish("actor_down");
+  if(state.talking) return finish("talking");
+  if(currentTarget!=target) return finish("target_changed");
+  if(!state.nativeCombat) return finish("native_combat_ended");
+  auto unlocked=state; unlocked.safeBoundary=true;
+  const auto reason=BodyController::validateAcquire(unlocked);
+  if(std::string_view(reason)!="allowed") return finish(reason);
+  if(!state.safeBoundary) return "waiting";
+  return finish("acquired");
+  }
+
+bool BodyController::BoundaryRequest::cancel() {
+  const bool wasPending=pending; pending=false; return wasPending;
   }
 
 std::string BodyController::selfTestJson() {

@@ -12,9 +12,15 @@ RUN_NAME="${2:-stage5-arena-$(date -u +%Y%m%dT%H%M%SZ)}"
 [[ "$RUN_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { echo 'Invalid run name' >&2; exit 2; }
 
 remote_script() {
-  local remote_args="" arg
+  local remote_args="" remote_env="" arg key
   for arg in "$@"; do printf -v remote_args '%s %q' "$remote_args" "$arg"; done
-  ssh -o BatchMode=yes "$HOST" "bash -s --$remote_args"
+  for key in GQ_BIN GQ_OWNER GQ_HOME GQ_LEGACY_LOCK GQ_PROFILE; do
+    if [[ -n "${!key:-}" ]]; then
+      printf -v remote_env '%s %q' "$remote_env" "$key=${!key}"
+    fi
+  done
+  { cat "$ROOT/scripts/gq-job.sh"; cat; } |
+    ssh -o BatchMode=yes "$HOST" "env$remote_env bash -s --$remote_args"
 }
 
 preflight() {
@@ -71,10 +77,16 @@ suite_args=()
 binary="$engine_root/build/opengothic/gothic-body-runner"
 out="$task_root/runs/$run_name"
 [[ -x "$binary" && -f "$engine_root/build/libOpenGothic.a" ]] || { echo 'Build runner first' >&2; exit 1; }
+if gq_available; then
+  exec 8>"$engine_root/build.lock"
+  flock -n 8 || { echo 'Build owns the engine snapshot; wait for its owner' >&2; exit 1; }
+fi
 [[ ! -e "$engine_root/build-active" ]] || { echo 'Wait for build' >&2; exit 1; }
-exec 9>"$HOME/gothic-ai/body-simulation.lock"
-flock -n 9 || { echo 'Another simulation owns shared lock' >&2; exit 1; }
-if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
+if ! gq_available; then
+  exec 9>"$HOME/gothic-ai/body-simulation.lock"
+  flock -n 9 || { echo 'Another simulation owns shared lock' >&2; exit 1; }
+fi
+if ! gq_available && pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
 [[ ! -e "$out" ]] || { echo 'Run exists; choose fresh name' >&2; exit 1; }
@@ -85,10 +97,32 @@ cp "$task_root/provenance/source-head.txt" "$task_root/provenance/source.patch" 
    "$task_root/provenance/resolver-tests.json" "$out/"
 cp "$engine_root/build/opengothic/gothic-body-resolver-test" "$out/reference/"
 nice -n 10 tar -czf "$out/source.tar.gz" -C "$engine_root/source" OpenGothic -C "$task_root/source" scripts evals
+suite_source="$task_root/source"
+engine_source="$engine_root/source/OpenGothic"
+engine_library="$engine_root/build/libOpenGothic.a"
+if gq_available; then
+  # Execute the archived bytes even if sync/build replaces this workspace while queued.
+  suite_source="$out/reference/source"
+  mkdir -p "$suite_source"
+  tar -xzf "$out/source.tar.gz" -C "$suite_source"
+  engine_source="$suite_source/OpenGothic"
+  cp "$engine_library" "$out/reference/libOpenGothic.a"
+  engine_library="$out/reference/libOpenGothic.a"
+  flock -u 8
+  exec 8>&-
+fi
 unit="gothic-body-arena-$run_name"
-trap 'systemctl --user stop "$unit.service" >/dev/null 2>&1 || true' INT TERM
-set +e
-systemd-run --user --wait --pipe --collect --unit="$unit" \
+if gq_available; then
+  cd "$out/run"
+  launch=(gq_job --class quiet --threads 2 --mem 12G --cpu-quota 200% \
+    --max 40m --name "body-arena-$run_name" -- env \
+    "DISPLAY=" "WAYLAND_DISPLAY=" \
+    "GOTHIC_AI=0" "VK_DRIVER_FILES=/nonexistent/body-arena-no-vulkan.json" \
+    "VK_ICD_FILENAMES=/nonexistent/body-arena-no-vulkan.json" "OPENGOTHIC_TEXTURES=" \
+    "OPENGOTHIC_BODY_TRACE=1" "OPENGOTHIC_BODY_ANIMATION_RNG=isolated")
+else
+  trap 'systemctl --user stop "$unit.service" >/dev/null 2>&1 || true' INT TERM
+  launch=(systemd-run --user --wait --pipe --collect --unit="$unit" \
   --property=Nice=10 --property=CPUQuota=200% --property=MemoryMax=12G \
   --property=TasksMax=128 --property=RuntimeMaxSec=2400 \
   --working-directory="$out/run" \
@@ -96,18 +130,21 @@ systemd-run --user --wait --pipe --collect --unit="$unit" \
   --setenv="VK_DRIVER_FILES=/nonexistent/body-arena-no-vulkan.json" \
   --setenv="VK_ICD_FILENAMES=/nonexistent/body-arena-no-vulkan.json" \
   --setenv="OPENGOTHIC_TEXTURES=" --setenv="OPENGOTHIC_BODY_TRACE=1" \
-  --setenv="OPENGOTHIC_BODY_ANIMATION_RNG=isolated" \
+  --setenv="OPENGOTHIC_BODY_ANIMATION_RNG=isolated")
+fi
+set +e
+"${launch[@]}" \
   /usr/bin/time -v -o "$out/resources.txt" \
-  python3 "$task_root/source/scripts/body_arena_suite.py" \
+  python3 "$suite_source/scripts/body_arena_suite.py" \
     --runner "$out/reference/gothic-body-runner" \
     --assets "$HOME/gothic-ai/body-baseline/assets" --save "$reference/run/save_slot_1.sav" \
     --reference "$reference" \
     --native-reference "$HOME/gothic-ai/body-headless/runs/stage3-v1/native-off" \
-    --source "$engine_root/source/OpenGothic" --engine-library "$engine_root/build/libOpenGothic.a" \
-    --config "$task_root/source/evals/npc-body/body-arena-v1.json" \
-    --scenario "$task_root/source/scripts/bench/body-arena.bench" \
-    --melee-scenario "$task_root/source/scripts/bench/body-melee.bench" \
-    --output "$out" "${suite_args[@]}" > "$out/launcher.log" 2>&1
+    --source "$engine_source" --engine-library "$engine_library" \
+    --config "$suite_source/evals/npc-body/body-arena-v1.json" \
+    --scenario "$suite_source/scripts/bench/body-arena.bench" \
+    --melee-scenario "$suite_source/scripts/bench/body-melee.bench" \
+    --output "$out" ${suite_args[@]+"${suite_args[@]}"} > "$out/launcher.log" 2>&1
 result=$?
 set -e
 trap - INT TERM

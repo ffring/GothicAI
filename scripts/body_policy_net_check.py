@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """Replay a collector's periodic primary observations through the body service.
 
-The net command uses only the Python standard library and can run on the Mac.
+The net and load commands use only the standard library and run on the Mac.
+Load replays independent NPC sessions at recorded wall-clock intervals.
 The runtime command loads the same frozen checkpoint in-process on dev-ubuntu
 to write an exact JSONL reference for net --expect.
 """
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from datetime import datetime, timezone
 import json
 import math
 from pathlib import Path
+import random
 import socket
 import sys
+import threading
 import time
 
 # Keep the Mac client independent of gothic_body (and of any model packages).
@@ -82,11 +87,20 @@ class NetworkClient:
         self.input = self.socket.makefile("rb")
 
     def call(self, request: dict) -> dict:
+        encoded = self.encode(request)
+        self.socket.sendall(encoded)
+        line = self.input.readline(MAX_REQUEST_BYTES + 1)
+        return self.decode(request, line)
+
+    @staticmethod
+    def encode(request: dict) -> bytes:
         encoded = (json.dumps(request, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
         if len(encoded) > MAX_REQUEST_BYTES:
             raise ValueError("request exceeds MAX_REQUEST_BYTES")
-        self.socket.sendall(encoded)
-        line = self.input.readline(MAX_REQUEST_BYTES + 1)
+        return encoded
+
+    @staticmethod
+    def decode(request: dict, line: bytes) -> dict:
         if not line:
             raise ValueError("service disconnected before replying")
         if len(line) > MAX_REQUEST_BYTES or not line.endswith(b"\n"):
@@ -97,6 +111,29 @@ class NetworkClient:
         if response.get("id") != request["id"]:
             raise ValueError(f"response id {response.get('id')!r} differs from request {request['id']!r}")
         return response
+
+    def call_until(self, request: dict, encoded: bytes, deadline: float) -> dict:
+        """Load-only exchange with a total deadline, even for a trickled reply.
+
+        Do not mix this raw socket reader with call()'s buffered reader within
+        one connection. Load uses this method for every command in its session.
+        """
+        def remaining():
+            seconds = deadline - time.perf_counter()
+            if seconds <= 0:
+                raise socket.timeout("call deadline exceeded")
+            self.socket.settimeout(seconds)
+
+        remaining()
+        self.socket.sendall(encoded)
+        line = bytearray()
+        while b"\n" not in line and len(line) <= MAX_REQUEST_BYTES:
+            remaining()
+            chunk = self.socket.recv(MAX_REQUEST_BYTES + 1 - len(line))
+            if not chunk:
+                break
+            line.extend(chunk)
+        return self.decode(request, bytes(line))
 
     def close(self):
         try:
@@ -251,6 +288,177 @@ def check(args) -> int:
     return int(mismatches != 0)
 
 
+def wait_until(target: float, deadline: float) -> bool:
+    """Sleep against the absolute clock; never start work after the run ends."""
+    delay = min(target, deadline) - time.perf_counter()
+    if delay > 0:
+        time.sleep(delay)
+    return time.perf_counter() < deadline
+
+
+def load_stream(index, phase, episodes, args, gate, clock, write_sample):
+    counts = dict(stream=index, phase_s=phase, steps=0, responses=0, decisions=0,
+                  fallback=0, timeouts=0, errors=0, reconnects=0, stale=0)
+    timings = {"rtt_ms": [], "age_ms": [], "lag_ms": [], "minutes": {}}
+    client = None
+    connection_attempted = False
+    episode_index = index % len(episodes)
+    timeout = args.call_timeout_ms / 1000
+
+    def failure(error):
+        counts["timeouts" if isinstance(error, socket.timeout) else "errors"] += 1
+
+    def call(request, encoded):
+        reply = client.call_until(request, encoded, time.perf_counter() + timeout)
+        if reply.get("ok") is not True:
+            raise ValueError(f"request rejected: {reply.get('reason')}: {reply.get('error', '')}")
+        return reply
+
+    gate.wait()
+    origin, deadline = clock["origin"], clock["deadline"]
+    try:
+        ready = wait_until(origin + phase, deadline)
+        while ready and time.perf_counter() < deadline:
+            path, requests = episodes[episode_index]
+            try:
+                if client is None:
+                    reconnecting = connection_attempted
+                    connection_attempted = True
+                    client = NetworkClient(args.host, args.port, timeout)
+                    counts["reconnects"] += int(reconnecting)
+                if time.perf_counter() >= deadline:
+                    break
+                # Reset first: recurrent history always starts at the recording's
+                # native boundary, including after a failed previous episode.
+                call(*requests[0])
+                episode_start = time.perf_counter()
+                first_game_ms = requests[1][0]["now_game_ms"]
+                for request, encoded in requests[1:]:
+                    if request["cmd"] != "step":
+                        if time.perf_counter() < deadline:
+                            call(request, encoded)
+                        break
+                    scheduled = episode_start + (request["now_game_ms"] - first_game_ms) / 1000
+                    if not wait_until(scheduled, deadline):
+                        break
+                    sent = time.perf_counter()
+                    counts["steps"] += 1
+                    lag = (sent - scheduled) * 1000
+                    timings["lag_ms"].append(lag)
+                    sample = dict(stream=index, episode=str(path), episode_index=episode_index,
+                                  request_id=request["id"], t_game_ms=request["now_game_ms"],
+                                  scheduled_s=scheduled - origin, sent_s=sent - origin, received_s=None,
+                                  rtt_ms=None, lag_ms=lag, age_ms=None, stale=False,
+                                  status=None, error=None)
+                    try:
+                        reply = call(request, encoded)
+                        received = time.perf_counter()
+                        rtt, age = (received - sent) * 1000, (received - scheduled) * 1000
+                        stale = age > args.valid_for_ms
+                        counts["responses"] += 1
+                        counts["decisions"] += int(reply.get("status") == "decision"
+                                                   and reply.get("action_id") is not None)
+                        counts["fallback"] += int(reply.get("status") == "fallback")
+                        counts["stale"] += int(stale)
+                        timings["rtt_ms"].append(rtt)
+                        timings["age_ms"].append(age)
+                        minute = int((sent - origin) // 60)
+                        timings["minutes"].setdefault(minute, []).append(rtt)
+                        sample.update(received_s=received - origin, rtt_ms=rtt, age_ms=age,
+                                      stale=stale, status=reply.get("status"))
+                    except (OSError, ValueError) as error:
+                        sample.update(status="timeout" if isinstance(error, socket.timeout) else "error",
+                                      error=str(error))
+                        raise
+                    finally:
+                        write_sample(sample)
+            except (OSError, ValueError) as error:
+                failure(error)
+                if client is not None:
+                    client.close()
+                    client = None
+            episode_index = (episode_index + 1) % len(episodes)
+            ready = wait_until(time.perf_counter() + 1, deadline)
+    finally:
+        if client is not None:
+            try:
+                request = {"id": "load-close", "cmd": "close"}
+                call(request, NetworkClient.encode(request))
+            except (OSError, ValueError) as error:
+                failure(error)
+            finally:
+                client.close()
+    return counts, timings
+
+
+def load(args) -> int:
+    episodes = []
+    for path in args.episode_dirs:
+        requests = list(replay_requests(path / "observations.jsonl"))[:-1]
+        steps = [request for request in requests if request["cmd"] == "step"]
+        if not steps:
+            raise ValueError(f"{path}: journal contains no periodic primary observations")
+        if any(right["now_game_ms"] < left["now_game_ms"] for left, right in zip(steps, steps[1:])):
+            raise ValueError(f"{path}: periodic primary observations must be ordered by t_game_ms")
+        episodes.append((path, [(request, NetworkClient.encode(request)) for request in requests]))
+    rng = random.Random(args.seed)
+    phases = [rng.uniform(0, 1) for _ in range(args.streams)]
+    gate, clock, sample_lock = threading.Event(), {}, threading.Lock()
+    with ExitStack() as stack:
+        samples = stack.enter_context(args.samples.open("w", encoding="utf-8")) if args.samples else None
+
+        def write_sample(sample):
+            if samples is not None:
+                line = json.dumps(sample, allow_nan=False) + "\n"
+                try:
+                    with sample_lock:
+                        samples.write(line)
+                except OSError as error:
+                    raise RuntimeError(f"cannot write load samples: {error}") from error
+
+        with ThreadPoolExecutor(max_workers=args.streams) as executor:
+            futures = [executor.submit(load_stream, index, phase, episodes, args, gate, clock, write_sample)
+                       for index, phase in enumerate(phases)]
+            started_at = datetime.now(timezone.utc)
+            clock["origin"] = time.perf_counter()
+            clock["deadline"] = clock["origin"] + args.duration_s
+            gate.set()
+            results = [future.result() for future in futures]
+        ended_at = datetime.now(timezone.utc)
+        elapsed = time.perf_counter() - clock["origin"]
+    per_stream = [counts for counts, _ in results]
+    totals = {key: sum(counts[key] for counts in per_stream)
+              for key in ("steps", "responses", "decisions", "fallback", "timeouts", "errors", "reconnects", "stale")}
+    summary = dict(mode="load", label=args.label or args.host, host=args.host, port=args.port,
+                   streams=args.streams, duration_s=args.duration_s, elapsed_s=elapsed,
+                   started_at=started_at.isoformat().replace("+00:00", "Z"),
+                   ended_at=ended_at.isoformat().replace("+00:00", "Z"),
+                   valid_for_ms=args.valid_for_ms, call_timeout_ms=args.call_timeout_ms, seed=args.seed,
+                   **totals, stale_fraction=totals["stale"] / totals["responses"] if totals["responses"] else 0,
+                   per_stream=per_stream)
+    for name, fractions in (("rtt_ms", (0.50, 0.95, 0.99, 0.999)),
+                            ("age_ms", (0.99,)), ("lag_ms", (0.99,))):
+        values = [value for _, timings in results for value in timings[name]]
+        summary[name] = {f"p{fraction * 100:g}": percentile(values, fraction) for fraction in fractions}
+        summary[name]["max"] = max(values, default=None)
+    summary["rtt_by_minute"] = []
+    for minute in range(math.ceil(args.duration_s / 60)):
+        values = [value for _, timings in results for value in timings["minutes"].get(minute, [])]
+        summary["rtt_by_minute"].append(dict(minute=minute, steps=len(values), p99=percentile(values, 0.99)))
+    encoded = json.dumps(summary, allow_nan=False)
+    if args.output:
+        args.output.write_text(encoded + "\n", encoding="utf-8")
+    print(encoded)
+    return 0
+
+
+def positive_float(value):
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be a finite positive number")
+    return number
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="mode", required=True)
@@ -266,7 +474,41 @@ def main(argv=None) -> int:
         else:
             subparser.add_argument("--checkpoint", type=Path, required=True)
             subparser.add_argument("--inference-cpu-threads", type=int, choices=(1, 2), default=2)
+    load_parser = subparsers.add_parser(
+        "load", help="replay concurrent NPC sessions in real time",
+        description="RTT, age and stale_fraction use successful step replies; lag uses all step attempts. "
+                    "Timeout/error counters also include connect, reset, end_episode and close failures. "
+                    "The duration bounds step sends; in-flight calls and close may finish afterward.")
+    load_parser.add_argument("episode_dirs", type=Path, nargs="+", metavar="EPISODE_DIR")
+    load_parser.add_argument("--host", required=True)
+    load_parser.add_argument("--port", type=int, default=47835)
+    load_parser.add_argument("--streams", type=int, default=4)
+    load_parser.add_argument("--duration-s", type=positive_float, default=600)
+    load_parser.add_argument("--valid-for-ms", type=positive_float, default=100)
+    load_parser.add_argument("--call-timeout-ms", type=positive_float, default=1000)
+    load_parser.add_argument("--seed", type=int, default=0,
+                             help="seed for each stream's initial delay, uniform in [0, 1) seconds")
+    load_parser.add_argument("--label", help="host label in the summary; defaults to --host")
+    load_parser.add_argument("--output", type=Path, help="write the JSON summary (also printed to stdout)")
+    load_parser.add_argument("--samples", type=Path, help="write one JSONL row per attempted step")
     args = parser.parse_args(argv)
+    if args.mode == "load":
+        if args.streams <= 0:
+            parser.error("--streams must be positive")
+        if not 1 <= args.port <= 65535:
+            parser.error("--port must be between 1 and 65535")
+        outputs = [path.resolve() for path in (args.output, args.samples) if path is not None]
+        if len(outputs) != len(set(outputs)):
+            parser.error("--output and --samples must be different files")
+        sources = {(path / name).resolve() for path in args.episode_dirs
+                   for name in ("observations.jsonl", "arena-events.jsonl", "episode.json", "trajectory-manifest.json")}
+        if any(path in sources for path in outputs):
+            parser.error("load output files must differ from episode input files")
+        try:
+            return load(args)
+        except (OSError, ValueError, RuntimeError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
     if args.output and args.expect and args.output.resolve() == args.expect.resolve():
         parser.error("--output and --expect must be different files")
     if args.output and args.output.resolve() == args.observations.resolve():

@@ -90,6 +90,7 @@ void Npc::GoTo::save(Serialize& fout) const {
 
 void Npc::GoTo::load(Serialize& fin) {
   pointDistance = 0.f;
+  nativeCombatTarget = nullptr;
   fin.read(npc, reinterpret_cast<uint8_t&>(flag), wp, pos);
   //NOTE: no real need to version check
   //if(fin.version()<53) {
@@ -125,32 +126,38 @@ void Npc::GoTo::clear() {
   wp   = nullptr;
   flag = Npc::GT_No;
   pointDistance = 0.f;
+  nativeCombatTarget = nullptr;
   }
 
 void Npc::GoTo::set(Npc* to, Npc::GoToHint hnt) {
+  nativeCombatTarget = nullptr;
   npc  = to;
   wp   = nullptr;
   flag = hnt;
   }
 
 void Npc::GoTo::set(const WayPoint* to, GoToHint hnt) {
+  nativeCombatTarget = nullptr;
   npc  = nullptr;
   wp   = to;
   flag = hnt;
   }
 
 void Npc::GoTo::set(const Item* to) {
+  nativeCombatTarget = nullptr;
   pos  = to->position();
   flag = Npc::GT_Item;
   }
 
 void Npc::GoTo::set(const Vec3& to) {
+  nativeCombatTarget = nullptr;
   pos  = to;
   flag = GT_Point;
   pointDistance = 0.f;
   }
 
 void Npc::GoTo::setFlee() {
+  nativeCombatTarget = nullptr;
   flag = GT_Flee;
   }
 
@@ -2691,6 +2698,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
           if(near!=wayPath.last()) {
             wayPath = owner.wayTo(*this,*near);
             go2.set(wayPath.first(), GT_Way);
+            go2.nativeCombatTarget = currentTarget;
             }
           return false;
           }
@@ -2710,6 +2718,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
         }
       setAnim(AnimationSolver::Move);
       go2.set(currentTarget, GT_Enemy);
+      go2.nativeCombatTarget = currentTarget;
       mvAlgo.tick(dt, MoveAlgo::FaiMove);
       go2.clear();
       wayPath.clear();
@@ -3917,6 +3926,7 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
         }
       attachToPoint(nullptr);
       go2.set(act.target);
+      go2.nativeCombatTarget = act.nativeCombatTarget==act.target ? act.nativeCombatTarget : nullptr;
       wayPath.clear();
       break;
     case AI_GoToNextFp: {
@@ -4464,6 +4474,19 @@ bool Npc::isPlayerEnabledState(const ::AiState& st) const {
   return false;
   }
 
+int Npc::invokeRoutine(ScriptFn function) {
+  // A state alone is not provenance: a perception or a bridge command can append
+  // story actions while ZS_ATTACK is active. Mark only this state's own callbacks.
+  struct Restore final {
+    Npc*& slot;
+    Npc* previous;
+    ~Restore() { slot=previous; }
+    } restore{nativeCombatQueueTarget,nativeCombatQueueTarget};
+  nativeCombatQueueTarget=std::string_view(aiState.hint)=="ZS_ATTACK" &&
+                          (function==aiState.funcIni || function==aiState.funcLoop) ? currentTarget : nullptr;
+  return owner.script().invokeState(this,currentOther,currentVictim,function);
+  }
+
 void Npc::tickRoutine() {
   if(!aiState.funcIni.isValid() && !isPlayer()) {
     auto r = currentRoutine();
@@ -4481,13 +4504,12 @@ void Npc::tickRoutine() {
   if(!aiState.funcIni.isValid())
     return;
 
-  auto& sc = owner.script();
   if(!aiState.started) {
     aiState.started      = true;
     aiState.loopNextTime = owner.tickCount();
     // WA: for gothic1 dialogs
     perceptionNextTime   = owner.tickCount();
-    sc.invokeState(this,currentOther,currentVictim,aiState.funcIni);
+    invokeRoutine(aiState.funcIni);
     return;
     }
 
@@ -4502,10 +4524,10 @@ void Npc::tickRoutine() {
         }
       else if(fastPath && currentFp!=nullptr) {
         // for debugging
-        loop = sc.invokeState(this,currentOther,currentVictim,aiState.funcLoop);
+        loop = invokeRoutine(aiState.funcLoop);
         }
       else {
-        loop = sc.invokeState(this,currentOther,currentVictim,aiState.funcLoop);
+        loop = invokeRoutine(aiState.funcLoop);
         }
       } else {
       // ZS_DEATH   have no loop-function, in G1, G2-classic
@@ -4528,6 +4550,8 @@ void Npc::tickRoutine() {
   }
 
 void Npc::setTarget(Npc *t) {
+  if(!BodyController::owns(*this) && currentTarget!=t)
+    BodyController::takeover(*this,"target_changed");
   if(BodyController::owns(*this) && currentTarget!=t) {
     const auto bodyTargetId=t ? BodyObservations::entityId(*t) : 0;
     BodyController::deferNative(*this,[this,bodyTargetId] { setTarget(BodyObservations::findEntity(bodyTargetId)); });
@@ -4906,6 +4930,7 @@ void Npc::aiPush(AiQueue::AiAction&& a) {
   // collision, and OTHER may be null or a distant culprit, so native turning owns it.
   if(physicsNoiseCallback && (a.act==AI_TurnToNpc || a.act==AI_LookAtNpc))
     return;
+  a.nativeCombatTarget=nativeCombatQueueTarget;
   if(BodyController::owns(*this) && a.act!=AI_OutputSvmOverlay)
     BodyController::takeover(*this,"native_script_queue");
   if(a.act==AI_OutputSvmOverlay)

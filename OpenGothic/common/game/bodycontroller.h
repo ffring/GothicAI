@@ -24,6 +24,20 @@ class BodyController final {
       FightAlgo::PolicyAction action=FightAlgo::PolicyAction::Continue;
       };
     static const char* validate(const GateState& state,const GateCommand& command);
+    struct AcquireState final {
+      bool targetValid=false,externalControl=false,player=false,talking=false,terminal=false,safeBoundary=false;
+      bool nativeCombat=false,queueEmpty=true,queueCombatOnly=false,overlayEmpty=true,gotoEmpty=true,gotoToTarget=false;
+      };
+    static const char* validateAcquire(const AcquireState& state);
+    // The live pending-request lifecycle, with an explicit wall clock for deterministic tests.
+    struct BoundaryRequest final {
+      uint64_t id=0,target=0,deadlineMs=0;
+      bool pending=false;
+      bool begin(uint64_t request,uint64_t enemy,uint64_t nowMs,uint64_t awaitMs);
+      const char* advance(const AcquireState& state,uint64_t currentTarget,uint64_t nowMs);
+      bool cancel();
+      };
+    static bool nativeCombatGoto(uint8_t hint,const Npc* target,const Npc* provenance,const Npc* gotoNpc,bool gotoWaypoint);
     struct Snapshot final {
       bool owned=false, releasePending=false, controlAllowed=false, canDecide=false;
       uint64_t controlGeneration=0, goalVersion=0, commandId=0, executionId=0;
@@ -46,6 +60,8 @@ class BodyController final {
     static void takeover(Npc& actor, std::string_view reason);
     static bool deferNative(Npc& actor, std::function<void()> mutation);
     static void legacyRejected(Npc& actor, std::string_view reason);
+    // Cancel requests without changing epochs, so an adapter can deliver their final events.
+    static void cancelPending(std::string_view reason);
     static void disconnect(std::string_view provider);
     static void forget(const Npc* actor);
     static void reset(std::string_view reason="reset");
@@ -70,5 +86,9 @@ class BodyController final {
     static std::string visibilityDiagnosticsJson();
 
   private:
+    static AcquireState acquireState(const Npc& actor,uint64_t target);
+    static void grantAcquire(Npc& actor,uint64_t target,uint64_t timeout,const std::string& provider,
+                             const std::string& mode,uint64_t requestId=0);
+    static void pollAcquire(Npc& actor,bool grant);
     static bool stopOwnedMovement(Npc& actor);
   };

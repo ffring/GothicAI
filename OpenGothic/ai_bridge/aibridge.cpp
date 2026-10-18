@@ -585,6 +585,11 @@ void AiBridge::Impl::onStartLoading() {
     return;
     }
   saving = false;
+  // Deliver cancellation with the old identity before reset invalidates and clears its
+  // bounded event stream. The loading notification follows it on the same transport.
+  BodyController::cancelPending("loading");
+  if(connected)
+    send(BodyController::drainJson());
   resetBodyObservations();
   if(chat!=nullptr) {
     chat->closeInput();
@@ -2062,7 +2067,9 @@ void AiBridge::Impl::startVoice(const LineLibrary::Line& line) {
   if(!v.effect.isEmpty()) {
     v.effect.setPosition(npc->mapHeadBone());
     v.effect.setMaxDistance(WorldSound::talkRange);
-    v.effect.setVolume(2.f);  // as WorldSound does for dialog speech
+    v.effect.setVolume(TestBench::voiceStems() ? 0.f : 2.f);  // as WorldSound does for dialog speech
+    if(TestBench::voiceStems())
+      line.voice->record(TestBench::aiVoiceStem(line.npc,line.id,line.voice->rate()));
     v.effect.play();
     npc->startSpeech(line.voice->lipTrack());  // the mouth follows what the audio thread plays
     }
