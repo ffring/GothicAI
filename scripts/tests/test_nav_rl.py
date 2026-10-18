@@ -194,6 +194,64 @@ def test_parallel_population_recording_keeps_worker_outputs_and_pair_provenance(
         assert pair_file.read_text().splitlines()[0] == f"{pairs[pair_index]['start']} {pairs[pair_index]['goal']}"
 
 
+@pytest.mark.parametrize("record", [False, True])
+@pytest.mark.parametrize("initial_failure", [False, True])
+def test_population_keeps_clean_workers_and_counts_rejected_episode_in_denominator(
+        tmp_path, monkeypatch, record, initial_failure):
+    pairs = [dict(pair, index=index) for index, pair in enumerate(candidates())]
+    monkeypatch.setattr(rl, "checked_paths", lambda *a, **k: None)
+    monkeypatch.setattr(rl, "load_pairs", lambda p: pairs)
+    monkeypatch.setattr(rl, "new_runner", lambda *a: SimpleNamespace(close=lambda: None))
+    diagnostic = dict(stage="observation", time_ms=1234, elapsed_ms=100,
+                      diagnostic="NAVBC nonfinite body input",
+                      fields=[dict(name="body.flags[2]", value="nan"), dict(name="ground_normal.y", value="nan")])
+    def scenario(args, runner, name, commands, directory):
+        worker = int(name.rsplit("w", 1)[1])
+        if worker == 0:
+            rejected = dict(pair_index=0, decisions=0 if initial_failure else 3, success=False,
+                            failure="nonfinite_observation", termination="nonfinite_observation",
+                            training_valid=False, nonfinite_observation=diagnostic)
+            episodes = [rejected] if initial_failure else [dict(pair_index=1, decisions=4, success=True), rejected]
+        else:
+            episodes = [dict(pair_index=0, decisions=7, success=True, training_valid=True)]
+        rl.write_json(directory / "population.json", dict(decisions=sum(ep["decisions"] for ep in episodes),
+                      episodes=len(episodes), invalid_observation_episodes=int(worker == 0),
+                      training_valid_episodes=len(episodes) - int(worker == 0)))
+        for index, episode_data in enumerate(episodes):
+            destination = directory / "episodes" / str(index)
+            rl.write_json(destination / "episode.json", episode_data)
+            # Collection accounting uses metadata only. Corrupt rejected records
+            # must not abort the worker or remove its clean neighbours.
+            (destination / "samples.bin.gz").write_bytes(b"not-a-gzip-stream")
+    monkeypatch.setattr(rl, "scenario", scenario)
+    args = SimpleNamespace(parallel=4, pairs=None, output=tmp_path, population=20,
+                           record=record, action_mode="sample", seed=3, npc="NPC",
+                           roads=Path("/roads.json"), weights=Path("/policy.navbc"),
+                           limit_ms=40000, episodes=20, hero="far", run_ms=40000,
+                           watchdog_seconds=30)
+    rl.population(args)
+    result = rl.read_json(tmp_path / "throughput-n20-r4.json")
+    assert len(result["workers"]) == 4
+    assert result["episodes"] == (4 if initial_failure else 5)
+    assert result["decisions"] == (21 if initial_failure else 28)
+    assert result["training_valid_episodes"] == (3 if initial_failure else 4)
+    assert result["rejected_nonfinite_episodes"] == 1
+    assert result["rejected_nonfinite_decisions"] == (0 if initial_failure else 3)
+    assert result["rejected_nonfinite_fraction"] == pytest.approx(1 / result["episodes"])
+    assert result["episode_terminations"]["nonfinite_observation"] == 1
+    assert len(result["rejected_nonfinite_diagnostics"]) == 1
+    rejected = result["rejected_nonfinite_diagnostics"][0]
+    assert rejected["worker"] == 0
+    assert rejected["metadata"]["nonfinite_observation"] == diagnostic
+    assert rejected["metadata"]["training_valid"] is False
+    assert Path(rejected["episode"]).is_dir()
+    for worker in result["workers"]:
+        directory = Path(worker["directory"])
+        assert (directory / "measurement.json").is_file()
+        for path in directory.rglob("samples.bin.gz"):
+            assert path.read_bytes() == b"not-a-gzip-stream"
+
+
 def test_population_cli_allows_parallel_recording(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(rl, "population", calls.append)

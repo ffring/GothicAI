@@ -7,7 +7,9 @@ sampled episode is replayed from zero state before optimization; sampled logits
 and log probabilities must match the collector. PPO windows start from recorded
 recurrent states, then replay a detached burn-in. The privileged critic has its
 own recurrent state. Truncated populations bootstrap from bootstrap.bin.gz,
-whereas true terminal transitions bootstrap zero. Invalid-path intervals carry
+whereas true terminal transitions bootstrap zero. Nonfinite observations reject
+an entire episode before optimization; a rejection rate above 0.1% stops updates.
+Invalid-path intervals carry
 no reward or loss and cut GAE recursion.
 """
 from __future__ import annotations
@@ -33,6 +35,23 @@ from nav_bc_numpy import NumpyPolicy
 from nav_rl import categorical_log_probs, iter_samples
 
 PRIVILEGED_SIZE = 6
+MAX_REJECTED_FRACTION = .001
+REPLAY_CHUNK = 128
+
+
+class NonFiniteObservation(ValueError):
+    """Data rejection only; schema, policy replay and optimizer errors remain fatal."""
+    def __init__(self, diagnostic, *, stage="observation", fields=None, time_ms=None):
+        super().__init__(diagnostic)
+        self.detail = dict(stage=stage, diagnostic=diagnostic, fields=fields or [])
+        if time_ms is not None:
+            self.detail["time_ms"] = int(time_ms)
+
+
+class RejectionRateError(ValueError):
+    pass
+
+
 REWARD_WEIGHTS = dict(progress_cm=.01, arrived=10., blocked=-.05,
                       fall_damage=-.1, death=-10., jump=-.1, climb=-.1, time=-.01)
 
@@ -48,13 +67,17 @@ def resolve_device(requested):
 def privileged(state):
     """Only the critic receives true Detour distance/direction and contact flags."""
     direction = np.asarray(state["first_direction"], dtype=np.float32)
-    if direction.shape != (3,) or not np.isfinite(direction).all():
-        raise ValueError("critic first_direction must contain three finite values")
+    if direction.shape != (3,):
+        raise ValueError("critic first_direction must contain three values")
     path = float(state["path_cm"])
-    if not np.isfinite(path) or path < 0:
-        raise ValueError("critic Detour path must be finite and nonnegative")
-    return np.asarray([min(path / 1000., 50.), *direction,
-                       float(state["blocked"]), float(state["in_air"])], dtype=np.float32)
+    flags = [float(state["blocked"]), float(state["in_air"])]
+    for name, values in (("first_direction", direction), ("path_cm", [path]), ("flags", flags)):
+        if not np.isfinite(values).all():
+            raise NonFiniteObservation(f"nonfinite critic {name}", stage="critic",
+                                       fields=[dict(name=name, value=str(values))])
+    if path < 0 or any(value not in (0., 1.) for value in flags):
+        raise ValueError("critic path must be nonnegative and flags boolean")
+    return np.asarray([min(path / 1000., 50.), *direction, *flags], dtype=np.float32)
 
 
 def reward_components(sample, weights=REWARD_WEIGHTS, previous_action=None):
@@ -158,6 +181,108 @@ def tensor_features(episode, start, stop, device):
             for name in ("near", "far", "vector")}
 
 
+
+def actor_observation_features(records, layout, stage):
+    """Reject raw nonfinite actor observations before any normalizing clips."""
+    def check(values, name):
+        if values.dtype.names:
+            for field in values.dtype.names:
+                check(values[field], f"{name}.{field}")
+        elif values.dtype.kind == "f":
+            bad = np.flatnonzero(~np.isfinite(values))
+            if len(bad):
+                index = np.unravel_index(int(bad[0]), values.shape)
+                label = name + "[" + ",".join(map(str, index)) + "]"
+                raise NonFiniteObservation(f"nonfinite {label}", stage=stage,
+                      fields=[dict(name=label, value=str(float(values[index])))],
+                      time_ms=records["time_ms"][index[0]])
+    # previous_keys and teacher/debug annotations are not encoded by the actor.
+    for name in PREPROCESSING["input_fields"]:
+        check(records[name], name)
+    try:
+        return encode_features(nav_demos.learner_input(records), layout)
+    except ValueError as exc:
+        if str(exc) != "non-finite learner feature":
+            raise
+        raise NonFiniteObservation(str(exc), stage=stage) from exc
+
+
+def rollout_inventory(source):
+    """Inventory includes zero-decision rejected episodes with no readable payload."""
+    directories = sorted(path.parent for path in source.rglob("episode.json"))
+    if not directories:
+        raise ValueError(f"No population episode metadata in {source}")
+    missing = {path.parent for path in source.rglob("samples.jsonl")} - set(directories)
+    if missing:
+        raise ValueError(f"Missing episode metadata: {sorted(missing)[0]}")
+    entries = []
+    for directory in directories:
+        metadata = json.loads((directory / "episode.json").read_text())
+        count = metadata["decisions"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError(f"Invalid episode decision count: {directory}")
+        valid = metadata.get("training_valid", True)
+        if not isinstance(valid, bool):
+            raise ValueError(f"training_valid must be boolean: {directory}")
+        rejected = not valid or metadata.get("termination") == "nonfinite_observation"
+        entries.append((directory, metadata, rejected))
+    return entries
+
+
+def summarize_rejections(inventory, rejected, output):
+    """Persist evidence and enforce the strict >0.1% stop before training."""
+    rejection = dict(collected_episodes=len(inventory),
+        collected_decisions=sum(metadata["decisions"] for _, metadata, _ in inventory),
+        rejected_nonfinite_episodes=len(rejected),
+        rejected_nonfinite_decisions=sum(item["decisions"] for item in rejected),
+        rejected_nonfinite_fraction=len(rejected)/len(inventory), rejected_episode_details=rejected)
+    (output / "rejected-episodes.json").write_text(json.dumps(rejection, indent=2, allow_nan=False) + "\n")
+    if rejection["rejected_nonfinite_fraction"] > MAX_REJECTED_FRACTION:
+        raise RejectionRateError(f"Nonfinite episode rejection rate {len(rejected)}/{len(inventory)} "
+                                 f"> {MAX_REJECTED_FRACTION:.3%}; no optimizer update")
+    return rejection
+
+
+def prepare_rollouts(args, actor, critic, reference, cache):
+    """Preflight every episode and the rejection rate before any optimizer step."""
+    inventory = rollout_inventory(args.source)
+    total, weighted, absolute, prepared, rejected = Counter(), Counter(), Counter(), [], []
+    advantage_sum = advantage_square = replay_error = replay_logits_error = 0.
+    for number, (directory, metadata, marked) in enumerate(inventory):
+        if marked:
+            rejected.append(dict(episode=str(directory), decisions=metadata["decisions"],
+                 reason="nonfinite_observation", detected_by="collector",
+                 detail=metadata.get("nonfinite_observation", metadata.get("observation_failure", {}))))
+            continue
+        try:
+            episode, bootstrap, summary = read_episode(directory, REWARD_WEIGHTS)
+        except NonFiniteObservation as exc:
+            rejected.append(dict(episode=str(directory), decisions=metadata["decisions"],
+                 reason="nonfinite_observation", detected_by="updater", detail=exc.detail))
+            continue
+        # Wrong log probabilities, recurrent states or schema are never quarantined.
+        error, logit_error = replay_episode(episode, bootstrap, actor, critic, reference, args)
+        replay_error, replay_logits_error = max(replay_error, error), max(replay_logits_error, logit_error)
+        valid = episode["valid"]
+        advantage_sum += float(episode["advantage"][valid].astype(np.float64).sum())
+        advantage_square += float(np.square(episode["advantage"][valid].astype(np.float64)).sum())
+        for name in ("decisions", "valid_decisions", "turn_count", "blocked_count", "jump_presses", "climb_presses", "success"):
+            total[name] += summary[name]
+        weighted.update(summary["reward_sums"])
+        absolute.update(summary["reward_absolute_sums"])
+        destination = cache / f"episode-{number:06d}.npz"
+        np.savez_compressed(destination, **episode)
+        prepared.append(destination)
+        del episode, bootstrap
+    rejection = summarize_rejections(inventory, rejected, args.output)
+    if not total["valid_decisions"]:
+        raise ValueError("No valid Detour intervals for PPO")
+    return dict(prepared=prepared, total=total, weighted=weighted, absolute=absolute,
+        advantage_mean=advantage_sum/total["valid_decisions"],
+        advantage_square=advantage_square, replay_error=replay_error,
+        replay_logits_error=replay_logits_error, rejection=rejection)
+
+
 def read_episode(directory, weights):
     """Stream NAVDEMO raw records, retaining only actor inputs and compact metadata."""
     metadata = json.loads((directory / "episode.json").read_text())
@@ -177,7 +302,7 @@ def read_episode(directory, weights):
     sums, absolute = Counter(), Counter()
     offset, last, turn_count, blocked, jump_presses, climb_presses = 0, None, 0, 0, 0, 0
     for records in nav_demos.iter_chunks(directory, chunk_records=32):
-        features = encode_features(nav_demos.learner_input(records), layout)
+        features = actor_observation_features(records, layout, "decision")
         size = len(records)
         if offset + size > count:
             raise ValueError(f"NAVDEMO count exceeds episode metadata: {directory}")
@@ -194,8 +319,11 @@ def read_episode(directory, weights):
             index = offset + local
             action = np.asarray(sample["action_indices"])
             expected = categorical_log_probs(sample["logits"], action)
-            if (np.max(np.abs(expected - np.asarray(sample["log_probs"]))) > 1e-4 or
-                    abs(float(expected.sum()) - sample["log_prob"]) > 1e-4):
+            stored_logp = np.asarray(sample["log_probs"], dtype=np.float64)
+            joint_logp = float(sample["log_prob"])
+            if (stored_logp.shape != expected.shape or not np.isfinite(stored_logp).all() or
+                    not np.isfinite(joint_logp) or np.max(np.abs(expected - stored_logp)) > 1e-4 or
+                    abs(float(expected.sum()) - joint_logp) > 1e-4):
                 raise ValueError(f"Corrupt sampled log probabilities: {directory}:{index}")
             arrays["actions"][index] = action
             arrays["old_logp"][index] = sample["log_prob"]
@@ -224,7 +352,7 @@ def read_episode(directory, weights):
         records = list(nav_demos.iter_chunks(endpoint, 2))
         if len(records) != 1 or len(records[0]) != 1 or records[0]["time_ms"][0] != last["next_time_ms"]:
             raise ValueError(f"Invalid bootstrap observation: {endpoint}")
-        bootstrap = encode_features(nav_demos.learner_input(records[0]), layout)
+        bootstrap = actor_observation_features(records[0], layout, "bootstrap")
         bootstrap["priv"] = privileged(last["critic_after"])[None]
         if not last["critic_after"].get("valid", True):
             bootstrap = None
@@ -234,27 +362,49 @@ def read_episode(directory, weights):
                climb_presses=climb_presses, success=bool(metadata["success"]))
 
 
+def forward_with_recurrent_states(model, **inputs):
+    """Observe unchanged one-layer GRU outputs; always remove the temporary hook."""
+    captured = []
+    handle = model.gru.register_forward_hook(lambda _module, _inputs, result: captured.append(result[0]))
+    try:
+        outputs, hidden = model(**inputs)
+        if len(captured) != 1 or model.gru.num_layers != 1:
+            raise ValueError("Recurrent replay requires exactly one single-layer GRU call")
+        return outputs, hidden, captured[0]
+    finally:
+        handle.remove()
+
+
 @torch.inference_mode()
 def replay_episode(episode, bootstrap, actor, critic, reference, args):
     count = len(episode["actions"])
     starts = np.arange(0, count, args.segment)
     burn_starts = np.maximum(0, starts - args.burn_in)
-    boundaries = sorted(set([0, count, *burn_starts.tolist(), *range(0, count, args.segment)]))
-    actor_states, critic_states = {}, {}
+    actor_states = {0: np.zeros(actor.hidden_size, np.float32)}
+    critic_states = {0: np.zeros(critic.hidden_size, np.float32)}
     actor_h = critic_h = reference_h = None
     values, reference_logits = np.empty(count, np.float32), np.empty((count, sum(CLASSES)), np.float32)
     error, logit_error = 0., 0.
-    for start, stop in zip(boundaries, boundaries[1:]):
-        actor_states[start] = (np.zeros(actor.hidden_size, np.float32) if actor_h is None else actor_h[0, 0].cpu().numpy().copy())
-        critic_states[start] = (np.zeros(critic.hidden_size, np.float32) if critic_h is None else critic_h[0, 0].cpu().numpy().copy())
+    for start in range(0, count, REPLAY_CHUNK):
+        stop = min(start + REPLAY_CHUNK, count)
         features = tensor_features(episode, start, stop, args.device)
-        logits, actor_h = actor(**features, hidden=actor_h)
+        logits, actor_h, actor_recurrent = forward_with_recurrent_states(actor, **features, hidden=actor_h)
         reference_heads, reference_h = reference(**features, hidden=reference_h)
         priv = torch.from_numpy(episode["priv"][None, start:stop]).to(args.device)
-        value, critic_h = critic(**features, priv=priv, hidden=critic_h)
+        value, critic_h, critic_recurrent = forward_with_recurrent_states(critic, **features, priv=priv, hidden=critic_h)
+        boundaries = np.unique(burn_starts[(burn_starts > start) & (burn_starts <= stop)])
+        if len(boundaries):
+            indices = torch.as_tensor(boundaries - start - 1, device=args.device)
+            # GRU output at t-1 is its complete state BEFORE consuming observation t.
+            actor_saved = actor_recurrent[0].index_select(0, indices).cpu().numpy().copy()
+            critic_saved = critic_recurrent[0].index_select(0, indices).cpu().numpy().copy()
+            actor_states.update(zip(map(int, boundaries), actor_saved))
+            critic_states.update(zip(map(int, boundaries), critic_saved))
         actions = torch.from_numpy(episode["actions"][None, start:stop]).to(args.device)
         logp, _, _ = policy_terms(logits, actions)
         flat = torch.cat([logits[name] for name in HEADS], -1)[0].cpu().numpy()
+        if not np.isfinite(flat).all():
+            raise ValueError("Nonfinite policy replay outputs; actor/checkpoint error")
         logit_error = max(logit_error, float(np.abs(flat - episode["recorded_logits"][start:stop]).max()))
         error = max(error, float(np.abs(logp[0].cpu().numpy() - episode["old_logp"][start:stop]).max()))
         if error > args.replay_tolerance or logit_error > args.replay_tolerance:
@@ -265,6 +415,8 @@ def replay_episode(episode, bootstrap, actor, critic, reference, args):
     if bootstrap is not None:
         features = {key: torch.from_numpy(value[None]).to(args.device) for key, value in bootstrap.items()}
         final_value = float(critic(**features, hidden=critic_h)[0][0, 0])
+    if not np.isfinite(values).all() or not np.isfinite(reference_logits).all() or not np.isfinite(final_value):
+        raise ValueError("Nonfinite critic/reference replay outputs; checkpoint error")
     episode["advantage"], episode["returns"] = generalized_advantage(
         episode["rewards"], values, episode["valid"], episode["terminated"], final_value, args.gamma, args.gae_lambda)
     episode.update(old_values=values, reference_logits=reference_logits, starts=starts,
@@ -361,8 +513,8 @@ def post_update_statistics(paths, actor, args):
     for path in paths:
         episode = load_cache(path)
         hidden = None
-        for start in range(0, len(episode["actions"]), args.segment):
-            stop = min(start + args.segment, len(episode["actions"]))
+        for start in range(0, len(episode["actions"]), REPLAY_CHUNK):
+            stop = min(start + REPLAY_CHUNK, len(episode["actions"]))
             features = tensor_features(episode, start, stop, args.device)
             logits, hidden = actor(**features, hidden=hidden)
             actions = torch.from_numpy(episode["actions"][None, start:stop]).to(args.device)
@@ -429,30 +581,12 @@ def update(args):
             group["lr"] = args.critic_lr
     actor.eval()
     critic.eval()
-    paths = sorted(path.parent for path in args.source.rglob("samples.jsonl"))
-    if not paths:
-        raise ValueError(f"No population recordings in {args.source}")
-    started, total, weighted, absolute, prepared = time.monotonic(), Counter(), Counter(), Counter(), []
-    advantage_sum = advantage_square = replay_error = replay_logits_error = 0.
-    for number, directory in enumerate(paths):
-        episode, bootstrap, summary = read_episode(directory, REWARD_WEIGHTS)
-        error, logit_error = replay_episode(episode, bootstrap, actor, critic, reference, args)
-        replay_error, replay_logits_error = max(replay_error, error), max(replay_logits_error, logit_error)
-        valid = episode["valid"]
-        advantage_sum += float(episode["advantage"][valid].astype(np.float64).sum())
-        advantage_square += float(np.square(episode["advantage"][valid].astype(np.float64)).sum())
-        for name in ("decisions", "valid_decisions", "turn_count", "blocked_count", "jump_presses", "climb_presses", "success"):
-            total[name] += summary[name]
-        weighted.update(summary["reward_sums"])
-        absolute.update(summary["reward_absolute_sums"])
-        destination = cache / f"episode-{number:06d}.npz"
-        np.savez_compressed(destination, **episode)
-        prepared.append(destination)
-        del episode, bootstrap
-    if not total["valid_decisions"]:
-        raise ValueError("No valid Detour intervals for PPO")
-    advantage_mean = advantage_sum / total["valid_decisions"]
-    advantage_std = max(0., advantage_square / total["valid_decisions"] - advantage_mean**2)**.5
+    started = time.monotonic()
+    preparation = prepare_rollouts(args, actor, critic, reference, cache)
+    prepared, total = preparation["prepared"], preparation["total"]
+    weighted, absolute = preparation["weighted"], preparation["absolute"]
+    advantage_mean = preparation["advantage_mean"]
+    advantage_std = max(0., preparation["advantage_square"] / total["valid_decisions"] - advantage_mean**2)**.5
     actor.requires_grad_(not args.critic_only)
     aggregate, trained_steps = Counter(), 0
     rng = random.Random(args.seed + args.iteration)
@@ -467,16 +601,17 @@ def update(args):
             trained_steps += steps
             del episode
     post = post_update_statistics(prepared, actor, args)
-    stats = dict(iteration=args.iteration, episodes=len(paths), decisions=total["decisions"],
+    stats = dict(iteration=args.iteration, episodes=len(prepared), decisions=total["decisions"],
+                 **preparation["rejection"],
                  valid_decisions=total["valid_decisions"], invalid_path_fraction=1-total["valid_decisions"]/total["decisions"],
                  mean_reward=sum(weighted.values())/total["valid_decisions"],
                  reward_components={key: value/total["valid_decisions"] for key, value in weighted.items()},
                  reward_component_abs_fraction={key: value/max(sum(absolute.values()), 1e-12) for key, value in absolute.items()},
-                 collected_success_rate=total["success"]/len(paths),
+                 collected_success_rate=total["success"]/len(prepared),
                  turn_in_place_fraction=total["turn_count"]/total["decisions"],
                  blocked_fraction=total["blocked_count"]/total["decisions"],
                  jump_presses=total["jump_presses"], climb_presses=total["climb_presses"],
-                 replay_log_prob_max_error=replay_error, replay_logits_max_error=replay_logits_error,
+                 replay_log_prob_max_error=preparation["replay_error"], replay_logits_max_error=preparation["replay_logits_error"],
                  actor_updated=not args.critic_only, kl_coef=args.kl_coef, entropy_coef=args.entropy_coef,
                  reward_weights=REWARD_WEIGHTS, advantage_mean=advantage_mean, advantage_std=advantage_std,
                  timeout_bootstrap="final_observation_and_recurrent_critic_state", **post,

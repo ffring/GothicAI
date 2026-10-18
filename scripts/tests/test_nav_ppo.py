@@ -97,10 +97,9 @@ def args(**kwargs):
            max_grad_norm=.5, clip=.2, kl_coef=.1, entropy_coef=.003) | kwargs))
 
 
-def make_episode(tmp_path, truncated=False):
+def make_episode(tmp_path, truncated=False, count=6):
     directory = tmp_path / "episode"
     directory.mkdir()
-    count = 6
     records = np.zeros(count + 1, dtype=ppo.nav_demos.RECORD_V2_DTYPE)
     records["time_ms"] = np.arange(count + 1) * 100
     records["roads"]["carrot_direction"][:, 2] = 1
@@ -128,7 +127,7 @@ def make_episode(tmp_path, truncated=False):
         action = [2, 1, 1, 1, int(index < 2), 0]
         flat = [float(value) for head in ppo.HEADS for value in logits[head][0, index]]
         logp = ppo.categorical_log_probs(flat, np.array(action))
-        critic = dict(path_cm=1000-index*100, first_direction=[0, 0, 1], blocked=False, in_air=False, valid=True)
+        critic = dict(path_cm=max(100, 1000-index*4), first_direction=[0, 0, 1], blocked=False, in_air=False, valid=True)
         row = sample(action)
         row.update(time_ms=index * 100, next_time_ms=(index + 1) * 100,
                    log_probs=logp.tolist(), log_prob=float(logp.sum()), logits=flat,
@@ -229,3 +228,176 @@ def test_actor_ppo_update_uses_sampled_actions_and_changes_actor(tmp_path):
         args(), random.Random(5), 0., 1.)
     assert count == 6 and np.isfinite(measures["policy_loss"])
     assert not torch.equal(actor.head_forward.weight, initial)
+
+
+def rejected_metadata(count=0, **extra):
+    return dict(decisions=count, training_valid=False, termination="nonfinite_observation",
+                nonfinite_observation=dict(stage="decision", diagnostic="head yaw is nan",
+                                           fields=[dict(name="body.head_yaw_deg", value="nan")]), **extra)
+
+
+@pytest.mark.parametrize("marker", ["training_valid", "termination"])
+def test_whole_marked_episode_is_skipped_before_payload_including_initial_failure(tmp_path, monkeypatch, marker):
+    clean, actor, _ = make_episode(tmp_path)
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    metadata = rejected_metadata(13)
+    del metadata["termination" if marker == "training_valid" else "training_valid"]
+    (bad / "episode.json").write_text(json.dumps(metadata))
+    (bad / "samples.bin.gz").write_bytes(b"deliberately unreadable rejected prefix")
+    (bad / "samples.jsonl").write_text("deliberately unreadable rejected transitions")
+    initial = tmp_path / "bad-initial"
+    initial.mkdir()
+    (initial / "episode.json").write_text(json.dumps(rejected_metadata()))
+    # Test filtering independently of the separately tested production rate limit.
+    monkeypatch.setattr(ppo, "MAX_REJECTED_FRACTION", 1.)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    state_before = {key: value.detach().clone() for key, value in actor.state_dict().items()}
+    preparation = ppo.prepare_rollouts(args(source=tmp_path, output=tmp_path), actor,
+                                       ppo.NavCritic(actor).eval(), actor, cache)
+    rejection = preparation["rejection"]
+    assert rejection["collected_episodes"] == 3
+    assert rejection["collected_decisions"] == 19
+    assert rejection["rejected_nonfinite_episodes"] == 2
+    assert rejection["rejected_nonfinite_decisions"] == 13
+    assert preparation["total"]["decisions"] == 6
+    assert len(preparation["prepared"]) == 1
+    assert len(list(cache.iterdir())) == 1
+    assert rejection["rejected_episode_details"][0]["detail"]["fields"][0]["value"] == "nan"
+    for name, value in actor.state_dict().items():
+        torch.testing.assert_close(value, state_before[name], rtol=0, atol=0)
+
+
+def test_rejection_threshold_is_strictly_greater_than_one_tenth_percent(tmp_path):
+    metadata = dict(decisions=3)
+    inventory = [(Path(f"episode-{index}"), metadata, index == 0) for index in range(1000)]
+    rejected = [dict(episode="episode-0", decisions=3)]
+    summary = ppo.summarize_rejections(inventory, rejected, tmp_path)
+    assert summary["rejected_nonfinite_fraction"] == .001
+    with pytest.raises(ppo.RejectionRateError, match="no optimizer update"):
+        ppo.summarize_rejections(inventory[:-1], rejected, tmp_path)
+    persisted = json.loads((tmp_path / "rejected-episodes.json").read_text())
+    assert persisted["collected_episodes"] == 999
+    assert persisted["collected_decisions"] == 2997
+    assert persisted["rejected_nonfinite_episodes"] == 1
+    assert persisted["rejected_nonfinite_decisions"] == 3
+
+
+def test_nonfinite_raw_input_is_rejected_before_preprocessing_can_clip_it():
+    records = np.zeros(2, dtype=ppo.nav_demos.RECORD_V2_DTYPE)
+    records["time_ms"] = [100, 200]
+    records["body"]["velocity_cm_s"][1, 0] = np.inf
+    layout = np.zeros((ppo.nav_demos.RAY_COUNT, 3), np.float32)
+    layout[:, 2] = 1000
+    with pytest.raises(ppo.NonFiniteObservation, match="velocity_cm_s") as rejected:
+        ppo.actor_observation_features(records, layout, "decision")
+    assert rejected.value.detail["time_ms"] == 200
+    assert rejected.value.detail["fields"][0]["value"] == "inf"
+
+
+def test_unmarked_nonfinite_bootstrap_rejects_entire_clean_prefix_before_training(tmp_path):
+    directory, actor, _ = make_episode(tmp_path, truncated=True)
+    endpoint = directory / "bootstrap.bin.gz"
+    records = next(ppo.nav_demos.iter_chunks(endpoint)).copy()
+    records["body"]["head_yaw_deg"] = np.nan
+    with gzip.open(endpoint, "wb") as stream:
+        stream.write(ppo.nav_demos.HEADER.pack(ppo.nav_demos.MAGIC, 2, ppo.nav_demos.RECORD_BYTES,
+                ppo.nav_demos.RAY_COUNT, ppo.nav_demos.NEAR_SIZE, ppo.nav_demos.FAR_SIZE, 100))
+        stream.write(records.tobytes())
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    with pytest.raises(ppo.RejectionRateError, match="1/1"):
+        ppo.prepare_rollouts(args(source=tmp_path, output=tmp_path), actor,
+                             ppo.NavCritic(actor).eval(), actor, cache)
+    assert not list(cache.iterdir())
+    assert not (tmp_path / "last.pt").exists()
+    assert not (tmp_path / "policy.navbc").exists()
+    rejection = json.loads((tmp_path / "rejected-episodes.json").read_text())
+    assert rejection["rejected_nonfinite_decisions"] == 6
+    assert rejection["rejected_episode_details"][0]["detected_by"] == "updater"
+    assert rejection["rejected_episode_details"][0]["detail"]["stage"] == "bootstrap"
+
+
+def test_corrupt_log_probability_is_a_fatal_error_and_never_quarantined(tmp_path):
+    directory, actor, _ = make_episode(tmp_path)
+    path = directory / "samples.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[0]["log_prob"] = float("nan")
+    path.write_text("".join(json.dumps(row)+"\n" for row in rows))
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    with pytest.raises(ValueError, match="Corrupt sampled log probabilities") as error:
+        ppo.prepare_rollouts(args(source=tmp_path, output=tmp_path), actor,
+                             ppo.NavCritic(actor).eval(), actor, cache)
+    assert not isinstance(error.value, ppo.NonFiniteObservation)
+    assert not (tmp_path / "rejected-episodes.json").exists()
+
+
+def legacy_boundary_replay(episode, bootstrap, actor, critic, options):
+    """Original 16-step boundary replay is an independent oracle for long chunks."""
+    count = len(episode["actions"])
+    starts = np.arange(0, count, options.segment)
+    burn_starts = np.maximum(0, starts-options.burn_in)
+    boundaries = sorted(set([0, count, *burn_starts.tolist(), *starts.tolist()]))
+    actor_states, critic_states = {}, {}
+    actor_h = critic_h = None
+    logits = np.empty((count, sum(ppo.CLASSES)), np.float32)
+    values = np.empty(count, np.float32)
+    with torch.no_grad():
+        for start, stop in zip(boundaries, boundaries[1:]):
+            actor_states[start] = (np.zeros(actor.hidden_size, np.float32) if actor_h is None
+                                   else actor_h[0, 0].cpu().numpy().copy())
+            critic_states[start] = (np.zeros(critic.hidden_size, np.float32) if critic_h is None
+                                    else critic_h[0, 0].cpu().numpy().copy())
+            features = ppo.tensor_features(episode, start, stop, options.device)
+            heads, actor_h = actor(**features, hidden=actor_h)
+            value, critic_h = critic(**features,
+                    priv=torch.from_numpy(episode["priv"][None, start:stop]), hidden=critic_h)
+            logits[start:stop] = torch.cat([heads[name] for name in ppo.HEADS], -1)[0].numpy()
+            values[start:stop] = value[0].numpy()
+        final = float(critic(**{key: torch.from_numpy(value[None]) for key, value in bootstrap.items()},
+                              hidden=critic_h)[0][0, 0])
+    return dict(logits=logits, values=values, bootstrap=final,
+                actor_hidden=np.stack([actor_states[int(start)] for start in burn_starts]),
+                critic_hidden=np.stack([critic_states[int(start)] for start in burn_starts]))
+
+
+def test_large_replay_chunks_match_original_boundary_hidden_logits_and_bootstrap(tmp_path):
+    directory, actor, _ = make_episode(tmp_path, truncated=True, count=150)
+    episode, bootstrap, _ = ppo.read_episode(directory, ppo.REWARD_WEIGHTS)
+    critic = ppo.NavCritic(actor).eval()
+    with torch.no_grad():
+        critic.value.weight.fill_(.03)
+    options = args(segment=16, burn_in=16)
+    expected = legacy_boundary_replay(episode, bootstrap, actor, critic, options)
+    expected_advantage, expected_returns = ppo.generalized_advantage(
+          episode["rewards"], expected["values"], episode["valid"], episode["terminated"],
+          expected["bootstrap"], options.gamma, options.gae_lambda)
+    np.testing.assert_allclose(expected["logits"], episode["recorded_logits"], rtol=0, atol=1e-5)
+    actor_hooks, critic_hooks = len(actor.gru._forward_hooks), len(critic.gru._forward_hooks)
+    error, logits_error = ppo.replay_episode(episode, bootstrap, actor, critic, actor, options)
+    assert error < 1e-4 and logits_error < 1e-4
+    assert len(actor.gru._forward_hooks) == actor_hooks
+    assert len(critic.gru._forward_hooks) == critic_hooks
+    for name in ("actor_hidden", "critic_hidden"):
+        np.testing.assert_allclose(episode[name], expected[name], rtol=0, atol=1e-5)
+    np.testing.assert_allclose(episode["old_values"], expected["values"], rtol=0, atol=1e-5)
+    np.testing.assert_allclose(episode["reference_logits"], expected["logits"], rtol=0, atol=1e-5)
+    np.testing.assert_allclose(episode["advantage"], expected_advantage, rtol=0, atol=1e-5)
+    np.testing.assert_allclose(episode["returns"], expected_returns, rtol=0, atol=1e-5)
+
+
+def test_recurrent_capture_hook_is_removed_if_model_forward_fails(tmp_path, monkeypatch):
+    directory, actor, _ = make_episode(tmp_path)
+    episode, _, _ = ppo.read_episode(directory, ppo.REWARD_WEIGHTS)
+    features = ppo.tensor_features(episode, 0, 2, "cpu")
+    original_forward = actor.forward
+    def broken_forward(**inputs):
+        original_forward(**inputs)
+        raise RuntimeError("injected downstream failure")
+    monkeypatch.setattr(actor, "forward", broken_forward)
+    original_hooks = len(actor.gru._forward_hooks)
+    with pytest.raises(RuntimeError, match="injected downstream failure"):
+        ppo.forward_with_recurrent_states(actor, **features)
+    assert len(actor.gru._forward_hooks) == original_hooks

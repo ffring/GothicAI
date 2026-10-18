@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -188,3 +189,115 @@ def test_cli_preserves_venv_python_symlink_while_resolving_data_paths(tmp_path, 
     assert captured["args"].python.is_symlink()
     assert captured["args"].python != base_python.resolve()
     assert captured["args"].training == (tmp_path / "training").resolve()
+
+
+@pytest.mark.parametrize("episodes,rejected,exceeded", [(1000, 0, False), (1000, 1, False),
+                                                       (1001, 1, False), (999, 1, True), (1000, 2, True)])
+def test_nonfinite_rate_uses_all_episodes_and_strict_point_one_percent(episodes, rejected, exceeded):
+    health = loop.collection_health(dict(episodes=episodes, decisions=10000,
+                                         rejected_nonfinite_episodes=rejected, rejected_nonfinite_decisions=rejected * 10))
+    assert health["episodes"] == episodes
+    assert health["accepted_episodes"] == episodes - rejected
+    assert health["rejected_nonfinite_fraction"] == rejected / episodes
+    assert health["limit_exceeded"] is exceeded
+
+
+def test_rejected_episode_excludes_its_prefix_without_discarding_other_worker():
+    result = dict(decisions=100_000, workers=[dict(episodes=500, decisions=50_000,
+                  rejected_nonfinite_episodes=1, rejected_nonfinite_decisions=7),
+                  dict(episodes=500, decisions=50_000)])
+    health = loop.collection_health(result)
+    assert not health["limit_exceeded"]
+    # All 50,000 decisions in the unaffected worker remain in the update.
+    stats = dict(decisions=99_993, collected_decisions=100_000, collected_episodes=1000,
+                 rejected_nonfinite_episodes=1, rejected_nonfinite_decisions=7,
+                 rejected_episode_details=[dict(termination="nonfinite_observation", directory="w0/ep7")])
+    updated = loop.updated_collection_health(result, stats)
+    assert updated["accepted_decisions"] == 49_993 + 50_000
+    assert updated["rejected_nonfinite_diagnostics"] == stats["rejected_episode_details"]
+    with pytest.raises(ValueError, match="accepted/rejected counts"):
+        loop.updated_collection_health(result, dict(stats, decisions=49_993))
+
+
+def test_zero_action_nonfinite_episode_counts_towards_threshold():
+    health = loop.collection_health(dict(episodes=1, decisions=0, rejected_nonfinite_episodes=1,
+                                         rejected_nonfinite_decisions=0))
+    assert health["limit_exceeded"]
+    assert health["rejected_nonfinite_fraction"] == 1
+    assert health["accepted_decisions"] == 0
+
+
+def test_updater_discovered_nonfinite_rejections_use_same_episode_threshold():
+    result = dict(episodes=1000, decisions=100_000)
+    stats = dict(collected_episodes=1000, collected_decisions=100_000, decisions=99_980,
+                 rejected_nonfinite_episodes=2, rejected_nonfinite_decisions=20)
+    health = loop.updated_collection_health(result, stats)
+    assert health["limit_exceeded"]
+    assert health["accepted_episodes"] == 998
+    assert health["accepted_decisions"] == 99_980
+
+
+def test_nonfinite_stop_is_durable_counts_all_decisions_and_preserves_clean_recordings(tmp_path, monkeypatch):
+    collector = tmp_path / "iter-000004/collect"
+    clean = collector / "population/w1/episodes/clean/samples.jsonl"
+    clean.parent.mkdir(parents=True)
+    clean.write_text("clean worker's data\n")
+    health = loop.collection_health(dict(episodes=1000, decisions=100_000, rejected_nonfinite_episodes=2,
+                                         rejected_nonfinite_decisions=20,
+                                         rejected_nonfinite_diagnostics=[dict(directory="w0/bad")]))
+    driver = loop.Loop(SimpleNamespace(work=tmp_path, threads=1, critic_warmup=3))
+    previous = dict(state(decisions=900), iteration=3, current_policy="safe.navbc", current_checkpoint="safe.pt")
+    loop.write_json(driver.state_path, previous)
+    restored = []
+    def fail_collection():
+        raise loop.RejectedCollectionError(collector, 4, health)
+    monkeypatch.setattr(driver, "_run", fail_collection)
+    monkeypatch.setattr(driver, "restore_best", lambda value: restored.append(value))
+    driver.run()
+    stopped = loop.read_json(driver.state_path)
+    assert stopped["stop_reason"] == "nonfinite_observation_rate_gt_0_1_percent"
+    assert stopped["iteration"] == 4 and stopped["decisions"] == 100_900
+    assert stopped["current_policy"] == "safe.navbc" and stopped["current_checkpoint"] == "safe.pt"
+    assert stopped["collection_health"]["rejected_nonfinite_fraction"] == .002
+    assert clean.read_text() == "clean worker's data\n"
+    assert restored and restored[0]["stop_reason"] == stopped["stop_reason"]
+    row = loop.read_json(collector.parent / "iteration.json")
+    assert row["training"] is None and row["collection_health"]["rejected_nonfinite_episodes"] == 2
+    # Re-entering the same failed phase cannot charge its decisions twice.
+    driver.run()
+    assert loop.read_json(driver.state_path)["decisions"] == 100_900
+
+
+def test_existing_null_pilot_selection_stops_durably_without_losing_or_double_counting_budget(tmp_path, monkeypatch):
+    collector = tmp_path / "iter-000004/collect"
+    collector.mkdir(parents=True)
+    selection_file = collector.parent / "pilot-selection.json"
+    diagnosis = dict(selected=None, candidates=[dict(coefficient=100, stats=dict(kl_reference=.5))])
+    loop.write_json(selection_file, diagnosis)
+    health = loop.collection_health(dict(episodes=1500, decisions=320_000))
+    driver = loop.Loop(SimpleNamespace(work=tmp_path, threads=1, critic_warmup=3))
+    previous = dict(state(decisions=950_000), iteration=3,
+                    current_policy="safe.navbc", current_checkpoint="safe.pt")
+    loop.write_json(driver.state_path, previous)
+    restored = []
+    monkeypatch.setattr(driver, "_run", lambda: loop.load_pilot_selection(selection_file, collector, 4, health))
+    monkeypatch.setattr(driver, "restore_best", lambda value: restored.append(value))
+    driver.run()
+    stopped = loop.read_json(driver.state_path)
+    assert stopped["stop_reason"] == "kl_pilot_no_viable_candidate"
+    assert stopped["iteration"] == 4 and stopped["decisions"] == 1_270_000
+    assert stopped["current_policy"] == "safe.navbc" and stopped["current_checkpoint"] == "safe.pt"
+    assert stopped["best_policy"] == previous["best_policy"]
+    assert stopped["pilot_diagnosis"] == dict(iteration=4, **diagnosis)
+    row = loop.read_json(collector.parent / "iteration.json")
+    assert row["training"] is None and row["iteration_decisions"] == 320_000
+    assert row["pilot_diagnosis"] == stopped["pilot_diagnosis"]
+    assert restored and (tmp_path / "curves.jsonl").is_file()
+    # Even an old explicit reset followed by the same saved null selection is
+    # safe: it stops again, with no None indexing and no duplicate env charge.
+    stopped["stop_reason"] = None
+    loop.write_json(driver.state_path, stopped)
+    driver.run()
+    resumed = loop.read_json(driver.state_path)
+    assert resumed["stop_reason"] == "kl_pilot_no_viable_candidate"
+    assert resumed["decisions"] == 1_270_000 and resumed["iteration"] == 4

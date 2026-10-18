@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <unordered_set>
+#include <utility>
 
 namespace {
 using Tempest::Vec3;
@@ -33,12 +34,22 @@ struct CriticState {
   std::array<float,3> firstDirection={};
   bool blocked=false,inAir=false,valid=false;
 };
+struct NonfiniteObservation final : std::runtime_error {
+  using Field=std::pair<std::string,std::string>;
+  NonfiniteObservation(std::string message,uint64_t time,std::vector<Field> badFields)
+    :std::runtime_error(std::move(message)),timeMs(time),fields(std::move(badFields)) {}
+  uint64_t timeMs=0;
+  std::vector<Field> fields;
+};
 struct Episode {
   Npc* npc=nullptr;
   Vec3 goal,previousPosition,velocity;
   std::string output,from,to,failure,initialState;
   bool active=false,replay=false,drive=false,success=false;
   bool population=false,record=true,sampled=false,pending=false,fell=false;
+  bool trainingValid=true,accounted=false;
+  std::string nonfiniteStage;
+  std::unique_ptr<NonfiniteObservation> nonfinite;
   bool cvMode=false,heroNear=true,killInjected=false,resetAfterDeath=false;
   uint64_t killAt=0;
   Vec3 expectedStart;
@@ -88,6 +99,7 @@ struct Pair {std::string from,to;};
 struct Population {
   bool active=false,record=true,sampled=false,near=false;
   size_t instance=0,targetEpisodes=0,started=0,completed=0,initialDecisions=0;
+  size_t invalidObservationEpisodes=0;
   uint64_t seed=0,limit=0,began=0,runMs=0,decisions=0;
   Vec3 home;
   std::string output;
@@ -117,7 +129,10 @@ double micros(Clock::time_point start) {return std::chrono::duration<double,std:
 NavMesh::Point meters(const Vec3& p) {return {p.x*.01f,p.y*.01f,p.z*.01f};}
 Vec3 cm(const NavMesh::Point& p) {return {p[0]*100,p[1]*100,p[2]*100};}
 std::array<float,3> array(const Vec3& p) {return {p.x,p.y,p.z};}
-void vector(std::ostream& out,const Vec3& p) {out<<'['<<p.x<<','<<p.y<<','<<p.z<<']';}
+void jsonNumber(std::ostream& out,double value) {if(std::isfinite(value))out<<value;else out<<"null";}
+void vector(std::ostream& out,const Vec3& p) {
+  out<<'[';jsonNumber(out,p.x);out<<',';jsonNumber(out,p.y);out<<',';jsonNumber(out,p.z);out<<']';
+}
 double hiddenL2(const Episode& ep) {
   double square=0;
   for(const auto& state:ep.policyStates)for(float value:state.hidden)square+=double(value)*double(value);
@@ -257,7 +272,8 @@ void finish(Episode& ep,World& world) {
   const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-ep.wallStart).count();
   out<<"{\"success\":"<<ep.success<<",\"replay\":"<<ep.replay<<",\"drive\":"<<ep.drive<<",\"start\":"<<std::quoted(ep.from)
      <<",\"goal\":"<<std::quoted(ep.to)<<",\"elapsed_ms\":"<<elapsed<<",\"limit_ms\":"<<ep.limit
-     <<",\"distance_cm\":"<<(ep.npc->position()-ep.goal).length()<<",\"failure\":"<<std::quoted(ep.failure)
+     <<",\"distance_cm\":";jsonNumber(out,(ep.npc->position()-ep.goal).length());
+  out<<",\"failure\":"<<std::quoted(ep.failure)
      <<",\"teacher_version\":"<<ep.teacherVersion<<",\"demo_version\":"<<ep.teacherVersion
      <<",\"decisions\":"<<ep.decisions<<",\"record_us_mean\":"<<(ep.decisions?ep.writeUs/double(ep.decisions):0)
      <<",\"record_us_max\":"<<ep.maxWriteUs<<",\"wall_seconds\":"<<seconds
@@ -302,8 +318,21 @@ void finish(Episode& ep,World& world) {
   if(ep.population)
     out<<",\"population_index\":"<<ep.slot<<",\"pair_index\":"<<ep.pairIndex
        <<",\"episode_index\":"<<ep.sequence<<",\"sampling\":"<<ep.sampled
+       <<",\"training_valid\":"<<ep.trainingValid
+       <<",\"termination\":"<<std::quoted(ep.success?"arrived":ep.failure)
        <<",\"start_path_cm\":"<<ep.startPathCm<<",\"remaining_path_cm\":"<<ep.lastPathCm
        <<",\"progress_cm\":"<<ep.progressCm<<",\"invalid_reward_paths\":"<<ep.invalidRewardPaths;
+  if(ep.nonfinite) {
+    out<<",\"nonfinite_observation\":{\"stage\":"<<std::quoted(ep.nonfiniteStage)
+       <<",\"time_ms\":"<<ep.nonfinite->timeMs<<",\"elapsed_ms\":"<<ep.nonfinite->timeMs-ep.began
+       <<",\"diagnostic\":"<<std::quoted(ep.nonfinite->what())<<",\"fields\":[";
+    for(size_t i=0;i<ep.nonfinite->fields.size();++i) {
+      if(i)out<<',';
+      const auto& field=ep.nonfinite->fields[i];
+      out<<"{\"name\":"<<std::quoted(field.first)<<",\"value\":"<<std::quoted(field.second)<<'}';
+    }
+    out<<"]}";
+  }
   out<<",\"min_hero_distance_cm\":"<<ep.minHeroDistanceCm<<",\"max_hero_distance_cm\":"<<ep.maxHeroDistanceCm
      <<",\"physics_mode\":"<<std::quoted(ep.cvMode?"cv":"native")
      <<",\"hero_mode\":"<<std::quoted(ep.heroNear?"near":"keep")
@@ -398,25 +427,54 @@ NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance
   sample.previous=ep.previous;sample.eye=&ep.eye.samples();sample.memory=&ep.view;
   return sample;
 }
-void bootstrap(Episode& ep,World& w) {
-  // Evaluate a continuing task at the real truncated endpoint, without another
-  // action or GRU step. Road progress is refreshed on a private guidance copy.
-  observe(ep,w);
-  auto guidance=ep.guidance;
-  KnownRoadsBench::readGuidance(w,*ep.npc,NpcKeys::physicalPosition(*ep.npc),ep.goal,guidance);
-  const auto sample=snapshot(ep,w,&guidance);
-  NavDemoWriter writer((std::filesystem::path(ep.output)/"bootstrap.bin.gz").string(),2);
-  writer.append(sample);writer.finish();
-}
-NavPolicy::Features policyFeatures(Episode& ep,const NavDemoWriter::Snapshot& sample) {
-  try {
-    return ep.policy->encode(sample);
+std::vector<NonfiniteObservation::Field> nonfiniteFields(const NavDemoWriter::Snapshot& sample,bool sensors) {
+  std::vector<NonfiniteObservation::Field> result;
+  const auto scalar=[&](const std::string& name,float value) {
+    if(std::isfinite(value))return;
+    std::ostringstream out;out<<std::setprecision(9)<<value;
+    result.emplace_back(name,out.str());
+  };
+  const auto values=[&](const std::string& name,const std::array<float,3>& value) {
+    for(size_t i=0;i<value.size();++i)
+      if(!std::isfinite(value[i]))scalar(name+'['+std::to_string(i)+']',value[i]);
+  };
+  values("position_cm",sample.position);scalar("body_yaw_deg",sample.bodyYawDeg);
+  values("body_velocity_cm_s",sample.body.velocityCmS);values("ground_normal",sample.body.groundNormal);
+  scalar("ground_slope_deg",sample.body.groundSlopeDeg);
+  scalar("head_yaw_deg",sample.body.headYawDeg);scalar("head_pitch_deg",sample.body.headPitchDeg);
+  values("roads_carrot_direction",sample.roads.carrotDirection);values("roads_next_direction",sample.roads.nextDirection);
+  values("roads_goal_direction",sample.roads.goalDirection);
+  scalar("carrot_distance_cm",sample.roads.carrotDistanceCm);scalar("next_distance_cm",sample.roads.nextDistanceCm);
+  scalar("goal_distance_cm",sample.roads.goalDistanceCm);scalar("remaining_known_cm",sample.roads.remainingKnownCm);
+  scalar("remaining_visual_cm",sample.roads.remainingVisualCm);
+  if(sensors && sample.eye)for(size_t i=0;i<sample.eye->size();++i) {
+    const auto& ray=(*sample.eye)[i];
+    if(!std::isfinite(ray.maxRangeCm))scalar("eye["+std::to_string(i)+"].max_range_cm",ray.maxRangeCm);
+    if(!std::isfinite(ray.distanceCm))scalar("eye["+std::to_string(i)+"].distance_cm",ray.distanceCm);
+    if(!std::isfinite(ray.normalY))scalar("eye["+std::to_string(i)+"].normal_y",ray.normalY);
   }
-  catch(const std::exception& error) {
+  if(sensors && sample.memory) {
+    const auto layer=[&](const char* name,const NavigationMemory::Layer& value) {
+      for(size_t i=0;i<value.cells.size();++i) {
+        const auto& cell=value.cells[i];
+        const float channels[]={cell.confidence,cell.free,cell.wall,cell.ledge,cell.drop,cell.water,cell.movable};
+        constexpr const char* names[]={"confidence","free","wall","ledge","drop","water","movable"};
+        for(size_t c=0;c<7;++c)
+          if(!std::isfinite(channels[c]))scalar(std::string(name)+'['+std::to_string(i)+"]."+names[c],channels[c]);
+        // NaN ground height is the memory's documented unknown-cell sentinel.
+        if(std::isinf(cell.groundHeightCm))scalar(std::string(name)+'['+std::to_string(i)+"].ground_height_cm",cell.groundHeightCm);
+      }
+    };
+    layer("memory_near",sample.memory->near);layer("memory_far",sample.memory->far);
+  }
+  return result;
+}
+NonfiniteObservation observationError(Episode& ep,const NavDemoWriter::Snapshot& sample,const char* error,
+                                     std::vector<NonfiniteObservation::Field> fields) {
     // Preserve the exact failed observation in the exception: encode precedes
     // recording, so this state cannot be recovered from the last good record.
     std::ostringstream out;out<<std::setprecision(9)<<std::boolalpha;
-    out<<error.what()<<"; navdemos slot="<<ep.slot<<" episode="<<ep.sequence
+    out<<error<<"; navdemos slot="<<ep.slot<<" episode="<<ep.sequence
        <<" from="<<std::quoted(ep.from)<<" to="<<std::quoted(ep.to)
        <<" time_ms="<<sample.gameMs<<" elapsed_ms="<<sample.gameMs-ep.began;
     const auto values=[&](const char* name,const std::array<float,3>& v) {
@@ -436,8 +494,53 @@ NavPolicy::Features policyFeatures(Episode& ep,const NavDemoWriter::Snapshot& sa
        <<" remaining_known_cm="<<sample.roads.remainingKnownCm
        <<" remaining_visual_cm="<<sample.roads.remainingVisualCm
        <<" beyond_known="<<sample.roads.beyondKnown;
-    throw std::runtime_error(out.str());
+    return {out.str(),sample.gameMs,std::move(fields)};
+}
+NavPolicy::Features policyFeatures(Episode& ep,const NavDemoWriter::Snapshot& sample) {
+  // Reject raw infinities too: distance and velocity normalization may otherwise
+  // clamp them into finite features. Never replace a learner observation.
+  auto fields=nonfiniteFields(sample,false);
+  if(!fields.empty())throw observationError(ep,sample,"nav policy: non-finite observation",std::move(fields));
+  try {
+    return ep.policy->encode(sample);
   }
+  catch(const std::runtime_error& error) {
+    const std::string message=error.what();
+    if(message!="nav policy: non-finite learner feature" &&
+       message!="nav policy: invalid eye range or hit kind" &&
+       message!="nav policy: infinite memory ground height" &&
+       message!="nav policy: memory channel outside [0,1]")throw;
+    fields=nonfiniteFields(sample,true);
+    if(fields.empty())throw; // Shape, range and unrelated failures stay fatal.
+    throw observationError(ep,sample,error.what(),std::move(fields));
+  }
+}
+void rejectObservation(Episode& ep,World& w,const NonfiniteObservation& error,const char* stage) {
+  ep.trainingValid=false;ep.success=false;ep.failure="nonfinite_observation";
+  ep.nonfiniteStage=stage;ep.nonfinite=std::make_unique<NonfiniteObservation>(error);
+  // The entire episode is excluded by the updater, including its valid prefix.
+  // Closing must not request another observation or a truncated bootstrap.
+  ep.pending=false;finish(ep,w);
+}
+void bootstrap(Episode& ep,World& w) {
+  // Evaluate a continuing task at the real truncated endpoint, without another
+  // action or GRU step. Road progress is refreshed on a private guidance copy.
+  observe(ep,w);
+  auto guidance=ep.guidance;
+  KnownRoadsBench::readGuidance(w,*ep.npc,NpcKeys::physicalPosition(*ep.npc),ep.goal,guidance);
+  const auto sample=snapshot(ep,w,&guidance);
+  const auto features=policyFeatures(ep,sample);
+  std::vector<NonfiniteObservation::Field> fields;
+  const auto map=[&](const char* name,const auto& values) {
+    for(size_t i=0;i<values.size();++i)if(!std::isfinite(values[i])) {
+      std::ostringstream value;value<<std::setprecision(9)<<values[i];
+      fields.emplace_back(std::string(name)+'['+std::to_string(i)+']',value.str());
+    }
+  };
+  map("encoded_near",features.near);map("encoded_far",features.far);
+  if(!fields.empty())throw observationError(ep,sample,"nav policy: non-finite bootstrap map feature",std::move(fields));
+  NavDemoWriter writer((std::filesystem::path(ep.output)/"bootstrap.bin.gz").string(),2);
+  writer.append(sample);writer.finish();
 }
 NpcKeys::KeyState select(Episode& ep,NavPolicy::Result result) {
   ep.selected=std::move(result);
@@ -536,7 +639,23 @@ void decide(Episode& ep,World& w) {
     if(ep.population)ep.phaseUs[3]+=encodeCost;
     for(size_t i=0;i<ep.policyStates.size();++i) {
       const auto began=std::chrono::steady_clock::now();
-      auto result=ep.policy->step(features,ep.policyStates[i]);
+      NavPolicy::Result result;
+      try {
+        result=ep.policy->step(features,ep.policyStates[i]);
+      }
+      catch(const std::runtime_error& error) {
+        const std::string message=error.what();
+        if(message!="nav policy: non-finite near map feature" && message!="nav policy: non-finite far map feature")throw;
+        auto fields=nonfiniteFields(sample,true);
+        const auto map=[&](const char* name,const auto& values) {
+          for(size_t j=0;j<values.size();++j)if(!std::isfinite(values[j])) {
+            std::ostringstream value;value<<std::setprecision(9)<<values[j];
+            fields.emplace_back(std::string(name)+'['+std::to_string(j)+']',value.str());
+          }
+        };
+        map("encoded_near",features.near);map("encoded_far",features.far);
+        throw observationError(ep,sample,error.what(),std::move(fields));
+      }
       const auto policyCost=micros(began);
       if(measure)ep.policyUs.push_back(policyCost);
       if(ep.population)ep.phaseUs[4]+=policyCost;
@@ -636,7 +755,9 @@ void startPopulationEpisode(World& w,Npc& player,size_t slot,Npc* original=nullp
     ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(ep.output)/"samples.bin.gz").string(),2);
   }
   ep.initialState=initialState(ep);
-  observe(ep,w);decide(ep,w);ep.next=ep.began+100;
+  observe(ep,w);
+  try {decide(ep,w);ep.next=ep.began+100;}
+  catch(const NonfiniteObservation& error) {rejectObservation(ep,w,error,"decision");}
 }
 void populationSummary(World& w) {
   auto& pop=population;
@@ -648,6 +769,8 @@ void populationSummary(World& w) {
   out<<std::setprecision(10)<<std::boolalpha
      <<"{\"population\":"<<pop.slots.size()<<",\"seed\":"<<pop.seed<<",\"sampling\":"<<pop.sampled
      <<",\"record\":"<<pop.record<<",\"near\":"<<pop.near<<",\"episodes\":"<<pop.completed
+     <<",\"invalid_observation_episodes\":"<<pop.invalidObservationEpisodes
+     <<",\"training_valid_episodes\":"<<pop.completed-pop.invalidObservationEpisodes
      <<",\"physics_mode\":"<<std::quoted(settings.cv?"cv":"native")
      <<",\"kill_fixture_fired\":"<<settings.killFired
      <<",\"decisions\":"<<pop.decisions<<",\"measured_decisions\":"<<pop.decisions-pop.initialDecisions
@@ -701,7 +824,8 @@ void beginPopulation(const std::vector<std::string>& a,World& w,Npc& player,cons
   if(!pop.episodes)throw std::runtime_error("navdemos cannot write population episodes");
   pop.wallStart=Clock::now();pop.began=w.tickCount();pop.active=true;
   for(size_t i=0;i<count;++i)startPopulationEpisode(w,player,i,i==0?original:nullptr);
-  pop.initialDecisions=count;pop.startupSeconds=std::chrono::duration<double>(Clock::now()-pop.wallStart).count();
+  for(const auto& slot:pop.slots)pop.initialDecisions+=slot->decisions;
+  pop.startupSeconds=std::chrono::duration<double>(Clock::now()-pop.wallStart).count();
   for(auto& slot:pop.slots)slot->phaseUs={};
 }
 void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
@@ -721,7 +845,10 @@ void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
     if(!ep.success && ep.failure.empty())ep.failure=n.isDown()?"actor_down":truncate?"collection_limit":"path_timeout";
     if(ep.population) {
       measureBlocked(ep,elapsed);reward(ep,w,arrived || n.isDown(),!arrived && !n.isDown());
-      if(ep.record && !arrived && !n.isDown())bootstrap(ep,w);
+      if(ep.record && !arrived && !n.isDown()) {
+        try {bootstrap(ep,w);}
+        catch(const NonfiniteObservation& error) {rejectObservation(ep,w,error,"bootstrap");return;}
+      }
     }
     finish(ep,w);return;
   }
@@ -731,9 +858,10 @@ void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
 void tickPopulation(World& w,uint64_t dt) {
   auto& pop=population;const bool stop=pop.runMs && w.tickCount()-pop.began>=pop.runMs;
   for(size_t i=0;i<pop.slots.size();++i) {
-    auto& ep=*pop.slots[i];if(!ep.active)continue;
+    auto& ep=*pop.slots[i];if(ep.accounted)continue;
     const auto previousDecisions=ep.decisions;
-    tickEpisode(ep,w,dt,stop);
+    try {tickEpisode(ep,w,dt,stop);}
+    catch(const NonfiniteObservation& error) {rejectObservation(ep,w,error,"decision");}
     // Inject after a decision boundary so the final transition still fits one
     // decision period. Leave the episode alive for a real world tick: native
     // ZS_Dead initialization, ragdoll animation and physics run before closure.
@@ -744,7 +872,8 @@ void tickPopulation(World& w,uint64_t dt) {
       ep.killInjected=true;ep.killAt=w.tickCount()-pop.began;ep.failure="actor_down";settings.killFired=true;
     }
     if(ep.active)continue;
-    ++pop.completed;pop.decisions+=ep.decisions;
+    ++pop.completed;pop.decisions+=ep.decisions;ep.accounted=true;
+    if(!ep.trainingValid)++pop.invalidObservationEpisodes;
     for(size_t j=0;j<7;++j)pop.phaseUs[j]+=ep.phaseUs[j];
     std::ifstream input(std::filesystem::path(ep.output)/"episode.json");pop.episodes<<input.rdbuf();
     if(!pop.episodes)throw std::runtime_error("navdemos population episodes write failed");
@@ -755,7 +884,8 @@ void tickPopulation(World& w,uint64_t dt) {
       pop.members.erase(ep.npc);
     }
   }
-  if(std::none_of(pop.slots.begin(),pop.slots.end(),[](const auto& slot){return slot->active;}))populationSummary(w);
+  if(pop.completed==pop.started &&
+     std::none_of(pop.slots.begin(),pop.slots.end(),[](const auto& slot){return slot->active;}))populationSummary(w);
 }
 
 }

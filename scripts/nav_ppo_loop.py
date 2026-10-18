@@ -159,6 +159,66 @@ def collect_complete(directory, workers, population):
     return path.is_file()
 
 
+def collection_health(result):
+    """Count rejected episodes against all episodes, including zero-action ones."""
+    workers = result.get("workers", [])
+    episodes = result.get("episodes", result.get("collected_episodes", sum(worker.get("episodes", 0) for worker in workers)))
+    rejected = result.get("rejected_nonfinite_episodes", sum(worker.get("rejected_nonfinite_episodes", 0) for worker in workers))
+    rejected_decisions = result.get("rejected_nonfinite_decisions", sum(worker.get("rejected_nonfinite_decisions", 0) for worker in workers))
+    decisions = result.get("collected_decisions", result.get("decisions"))
+    if any(not isinstance(value, int) or value < 0 for value in (episodes, rejected, rejected_decisions, decisions)):
+        raise ValueError("Collection health counts must be nonnegative integers")
+    if episodes == 0 or rejected > episodes or rejected_decisions > decisions:
+        raise ValueError("Collection health counts are inconsistent")
+    diagnostics = result.get("rejected_nonfinite_diagnostics", result.get("rejected_episode_details", []))
+    return dict(episodes=episodes, accepted_episodes=episodes - rejected, decisions=decisions,
+                accepted_decisions=decisions - rejected_decisions,
+                rejected_nonfinite_episodes=rejected, rejected_nonfinite_decisions=rejected_decisions,
+                rejected_nonfinite_fraction=rejected / episodes,
+                rejected_nonfinite_diagnostics=diagnostics, rejected_nonfinite_limit=.001,
+                # Integer arithmetic preserves the inclusive 0.1% boundary.
+                limit_exceeded=rejected * 1000 > episodes)
+
+
+def updated_collection_health(result, stats):
+    """Accept updater quarantine discoveries without losing collected decisions."""
+    summary = dict(result)
+    for destination, source in (("episodes", "collected_episodes"), ("decisions", "collected_decisions"),
+                                ("rejected_nonfinite_episodes", "rejected_nonfinite_episodes"),
+                                ("rejected_nonfinite_decisions", "rejected_nonfinite_decisions"),
+                                ("rejected_nonfinite_diagnostics", "rejected_episode_details")):
+        if source in stats:
+            summary[destination] = stats[source]
+    health = collection_health(summary)
+    original = collection_health(result)
+    if (health["decisions"] != original["decisions"] or health["episodes"] != original["episodes"]
+            or health["rejected_nonfinite_episodes"] < original["rejected_nonfinite_episodes"]
+            or health["rejected_nonfinite_decisions"] < original["rejected_nonfinite_decisions"]
+            or stats["decisions"] != health["accepted_decisions"]):
+        raise ValueError("PPO accepted/rejected counts differ from population collection")
+    return health
+
+
+class RejectedCollectionError(ValueError):
+    def __init__(self, collect, iteration, health):
+        super().__init__("Nonfinite observations rejected more than 0.1% of collected episodes")
+        self.collect, self.iteration, self.health = collect, iteration, health
+
+
+class NoViablePilotError(ValueError):
+    def __init__(self, collect, iteration, health, selection):
+        super().__init__("KL pilot has no viable candidate")
+        self.collect, self.iteration, self.health = collect, iteration, health
+        self.diagnosis = dict(iteration=iteration, **selection)
+
+
+def load_pilot_selection(path, collect, iteration, health):
+    selection = read_json(path)
+    if selection["selected"] is None:
+        raise NoViablePilotError(collect, iteration, health, selection)
+    return selection["selected"]
+
+
 def remove_raw(directory):
     """Retain episode outcomes; remove observations, videos and runner scratch."""
     for path in list(directory.rglob("*")):
@@ -257,8 +317,18 @@ class Loop:
             command += ["--resume", previous]
         if critic_only:
             command += ["--critic-only"]
-        self.queued(f"nav PPO iter-{iteration:06d} {'critic' if critic_only else 'update'} kl={coefficient:g}",
-                    command, output.parent / f"launcher-{output.name}.log", gpu=True, threads=self.args.threads)
+        try:
+            self.queued(f"nav PPO iter-{iteration:06d} {'critic' if critic_only else 'update'} kl={coefficient:g}",
+                        command, output.parent / f"launcher-{output.name}.log", gpu=True, threads=self.args.threads)
+        except subprocess.CalledProcessError:
+            # Unexpected nonfinite raw observations may be quarantined by the
+            # updater's prepass. Its threshold check runs before optimization.
+            rejected = output / "rejected-episodes.json"
+            if rejected.is_file():
+                health = collection_health(read_json(rejected))
+                if health["limit_exceeded"]:
+                    raise RejectedCollectionError(collect, iteration, health) from None
+            raise
         if not update_complete(output):
             raise ValueError(f"Update did not create all checkpoint outputs: {output}")
         stats = read_json(output / "stats.json")
@@ -285,6 +355,43 @@ class Loop:
                    ("best_iteration", "best_score", "best_arrival_fraction", "selected_arrival_fraction", "best_policy", "best_checkpoint")})
 
     def run(self):
+        try:
+            self._run()
+        except RejectedCollectionError as exc:
+            self.stop_iteration(exc.collect, exc.iteration, exc.health,
+                                "nonfinite_observation_rate_gt_0_1_percent")
+        except NoViablePilotError as exc:
+            self.stop_iteration(exc.collect, exc.iteration, exc.health,
+                                "kl_pilot_no_viable_candidate", exc.diagnosis)
+
+    def stop_iteration(self, collect, iteration, health, reason, pilot_diagnosis=None):
+        # A stopped phase consumes its environment decisions exactly once. Its
+        # checkpoint stays at the previous successful update; only an explicit
+        # caller reset can allow a later iteration to run.
+        state = read_json(self.state_path)
+        if state["iteration"] < iteration:
+            state["iteration"] = iteration
+            state["decisions"] += health["decisions"]
+        state.update(stop_reason=reason, collection_health=health)
+        row = dict(iteration=iteration, decisions=state["decisions"],
+                   iteration_decisions=health["decisions"],
+                   critic_only=iteration <= self.args.critic_warmup,
+                   collection_health=health, training=None, validation=None,
+                   validation_by_region=None, stop_reason=reason)
+        if pilot_diagnosis is not None:
+            state["pilot_diagnosis"] = pilot_diagnosis
+            row["pilot_diagnosis"] = pilot_diagnosis
+        directory = collect.parent
+        write_json(directory / "collection-health.json", health)
+        write_json(directory / "iteration.json", row)
+        write_json(self.state_path, state)
+        self.curves()
+        self.restore_best(state)
+        self.event("stopped", reason=reason, decisions=state["decisions"],
+                   rejected_nonfinite_episodes=health["rejected_nonfinite_episodes"],
+                   rejected_nonfinite_fraction=health["rejected_nonfinite_fraction"])
+
+    def _run(self):
         args = self.args
         self.work.mkdir(parents=True, exist_ok=True)
         # Keep this descriptor open until the process exits, including queue waits.
@@ -367,6 +474,10 @@ class Loop:
                 result = read_json(collect / f"throughput-n{args.population}-r{args.workers}.json")
                 write_json(summary, result)
             result = read_json(summary)
+            health = collection_health(result)
+            write_json(directory / "collection-health.json", health)
+            if health["limit_exceeded"]:
+                raise RejectedCollectionError(collect, iteration, health)
             coefficient = kl_coefficient(state["initial_kl"] or args.pilot_kl[0], state["decisions"], args.max_decisions)
             if state["initial_kl"] is None and not critic_only:
                 selection_file = directory / "pilot-selection.json"
@@ -385,19 +496,14 @@ class Loop:
                                 pass
                         candidate_output = directory / f"pilot-{index}"
                         stats = self.update(collect, candidate_output, state["current_checkpoint"], iteration, value, False)
+                        health = updated_collection_health(result, stats)
                         candidates.append(dict(coefficient=value, directory=str(candidate_output), stats=stats))
                     try:
                         selected = select_pilot(candidates, state["baseline_entropy"], args.target_kl)
                     except ValueError:
-                        write_json(selection_file, dict(selected=None, candidates=candidates))
-                        state["stop_reason"] = "kl_pilot_no_viable_candidate"
-                        write_json(self.state_path, state)
-                        self.restore_best(state)
-                        self.event("stopped", reason=state["stop_reason"], decisions=state["decisions"])
-                        return
+                        selected = None
                     write_json(selection_file, dict(selected=selected, candidates=candidates))
-                selection = read_json(selection_file)
-                selected = selection["selected"]
+                selected = load_pilot_selection(selection_file, collect, iteration, health)
                 if not update_complete(output):
                     if output.exists():
                         shutil.rmtree(output)
@@ -407,15 +513,18 @@ class Loop:
                 stats = read_json(output / "stats.json")
             else:
                 stats = self.update(collect, output, state["current_checkpoint"], iteration, coefficient, critic_only)
-            if stats["decisions"] != result["decisions"]:
-                raise ValueError("PPO sample count differs from population decisions")
+            health = updated_collection_health(result, stats)
+            write_json(directory / "collection-health.json", health)
+            if health["limit_exceeded"]:
+                raise RejectedCollectionError(collect, iteration, health)
             if not state["baseline_entropy"]:
                 state["baseline_entropy"] = stats["entropy_by_head"]
             if any(not math.isfinite(stats["entropy_by_head"][head]) for head in HEADS):
                 raise ValueError("Non-finite policy entropy")
             entropy_warning = [head for head in HEADS if stats["entropy_by_head"][head] < .5 * state["baseline_entropy"][head]]
             next_state = dict(state, iteration=iteration, decisions=state["decisions"] + result["decisions"],
-                              current_policy=str(output / "policy.navbc"), current_checkpoint=str(output / "last.pt"))
+                              current_policy=str(output / "policy.navbc"), current_checkpoint=str(output / "last.pt"),
+                              collection_health=health)
             # A resumed phase can delete raw only after selected update files and
             # its metrics are durable; checkpoint state never depends on cache.
             remove_raw(collect)
@@ -436,6 +545,7 @@ class Loop:
             row = dict(iteration=iteration, decisions=next_state["decisions"], iteration_decisions=result["decisions"],
                        critic_only=critic_only, curriculum="short" if state["decisions"] < args.curriculum_decisions else "all",
                        kl_coefficient=coefficient, entropy_warning_heads=entropy_warning, training=stats,
+                       collection_health=health,
                        validation=metrics["all"] if metrics else None, validation_by_region=metrics["by_region"] if metrics else None,
                        stop_reason=next_state["stop_reason"])
             write_json(directory / "iteration.json", row)

@@ -40,14 +40,19 @@ def load_curves(run):
         try:
             row = json.loads(line)
             training = row["training"]
-            values = [row["iteration"], row["decisions"], training["mean_reward"], training["kl_reference"],
-                      training["turn_in_place_fraction"], training["blocked_fraction"],
-                      *(training["entropy_by_head"][head] for head in HEADS),
-                      *training["reward_components"].values(), *training["reward_component_abs_fraction"].values()]
+            values = [row["iteration"], row["decisions"]]
+            if training is not None:
+                values.extend([training["mean_reward"], training["kl_reference"],
+                               training["turn_in_place_fraction"], training["blocked_fraction"],
+                               *(training["entropy_by_head"][head] for head in HEADS),
+                               *training["reward_components"].values(), *training["reward_component_abs_fraction"].values()])
+            elif not row.get("stop_reason"):
+                raise ValueError("An iteration without an update must state its stop reason")
             if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in values):
                 raise ValueError("Non-finite or nonnumeric metric")
-            if rows and (row["iteration"] <= rows[-1]["iteration"] or row["decisions"] <= rows[-1]["decisions"]):
-                raise ValueError("Iterations and cumulative decisions must increase")
+            if rows and (row["iteration"] <= rows[-1]["iteration"] or row["decisions"] < rows[-1]["decisions"]
+                         or training is not None and row["decisions"] == rows[-1]["decisions"]):
+                raise ValueError("Iterations must increase and cumulative decisions cannot decrease")
             if row.get("validation") is not None:
                 validation = row["validation"]
                 if not 0 <= validation["arrived"] <= validation["n"] or validation["n"] <= 0:
@@ -76,8 +81,10 @@ def plot_curves(run, rows, output):
 
     fig, axes = plt.subplots(4, 2, figsize=(13, 15), sharex=True)
     arrival, reward, components, shares, kl, entropy, turn, blocked = axes.flat
-    iterations = [row["iteration"] for row in rows]
-    training = [row["training"] for row in rows]
+    trained = [row for row in rows if row["training"] is not None]
+    iterations = [row["iteration"] for row in trained]
+    training = [row["training"] for row in trained]
+    stopped = [row for row in rows if row.get("stop_reason")]
     evaluated = [row for row in rows if row.get("validation") is not None]
     baseline_path = run / "baseline" / "validation" / "metrics.json"
     baseline = read_json(baseline_path)["all"] if baseline_path.is_file() else None
@@ -127,7 +134,7 @@ def plot_curves(run, rows, output):
     blocked.plot(iterations, [100 * value["blocked_fraction"] for value in training], color=COLORS[2])
     blocked.set(title="Blocked intervals · sample collection", ylabel="Valid decisions, %", ylim=(0, 100))
 
-    critic_iterations = [row["iteration"] for row in rows if row.get("critic_only")]
+    critic_iterations = [row["iteration"] for row in trained if row.get("critic_only")]
     selection_path = run / "best" / "selection.json"
     selected = read_json(selection_path).get("best_iteration") if selection_path.is_file() else None
     for axis in axes.flat:
@@ -136,6 +143,10 @@ def plot_curves(run, rows, output):
             axis.axvspan(min(critic_iterations) - .5, max(critic_iterations) + .5, color="#999999", alpha=.12)
         if selected is not None:
             axis.axvline(selected, color=COLORS[1], lw=1, ls=":", alpha=.8)
+        for row in stopped:
+            axis.axvline(row["iteration"], color=COLORS[2], lw=1, ls="--", alpha=.8)
+        axis.set_xlim(min(rows[0]["iteration"], selected if selected is not None else rows[0]["iteration"]) - .4,
+                      rows[-1]["iteration"] + .4)
         if axis.get_legend_handles_labels()[0]:
             axis.legend(fontsize=7, loc="best", ncol=2 if axis in (components, shares, entropy) else 1)
     axes[-1, 0].set_xlabel("PPO iteration")
@@ -145,6 +156,10 @@ def plot_curves(run, rows, output):
         detail += f" · dotted green: selected iteration {selected}"
     if critic_iterations:
         detail += " · grey: critic warm-up"
+    if stopped:
+        detail += "\n" + "; ".join(f"Stop at iteration {row['iteration']}: {row['stop_reason']}" for row in stopped)
+    if not trained:
+        detail += "\nNo optimizer updates; training metrics are unavailable"
     fig.suptitle("Navigation recurrent PPO\n" + detail, fontsize=13)
     fig.tight_layout(rect=(0, 0, 1, .96))
     paths = save_figure(fig, output / "curves")
@@ -343,6 +358,11 @@ def main():
         baseline, final = load_drive(args.baseline), load_drive(args.final)
         selected = select_comparisons(baseline, final, args.plot_count)
         metrics = final_metrics(baseline, final, selected)
+        metrics["collection_health"] = [dict(iteration=row["iteration"], cumulative_decisions=row["decisions"],
+                                              **row["collection_health"])
+                                        for row in rows if row.get("collection_health") is not None]
+        metrics["stops"] = [dict(iteration=row["iteration"], decisions=row["decisions"], reason=row["stop_reason"])
+                            for row in rows if row.get("stop_reason")]
         args.output.mkdir(parents=True, exist_ok=True)
         figures = [*plot_curves(args.run, rows, args.output), *plot_comparison(baseline, final, selected, args.output)]
         write_json(args.output / "final_metrics.json", metrics)
