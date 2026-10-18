@@ -97,8 +97,12 @@ set -euo pipefail
 task_root="$1"
 export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
 export PATH="$VULKAN_SDK/bin:$PATH"
+# Jolt on x86-64-v3 (AVX2, F16C, BMI1, LZCNT; never FMA) where the host has it: same results, shorter tick.
+jolt_x86=portable
+grep -qw avx2 /proc/cpuinfo && grep -qw f16c /proc/cpuinfo && grep -qw bmi1 /proc/cpuinfo &&
+  grep -qw abm /proc/cpuinfo && jolt_x86=x86-64-v3
 nice -n 10 cmake -S "$task_root/source/OpenGothic" -B "$task_root/build" -G Ninja \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DOPENGOTHIC_JOLT_X86="$jolt_x86" \
   -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib" \
   > "$task_root/provenance/configure.log" 2>&1
 nice -n 10 cmake --build "$task_root/build" --target gothic-body-runner Gothic2Notr gothic-body-resolver-test --parallel 2 \
@@ -112,8 +116,11 @@ GQ_BUILD
 else
   export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
   export PATH="$VULKAN_SDK/bin:$PATH"
+  jolt_x86=portable
+  grep -qw avx2 /proc/cpuinfo && grep -qw f16c /proc/cpuinfo && grep -qw bmi1 /proc/cpuinfo &&
+    grep -qw abm /proc/cpuinfo && jolt_x86=x86-64-v3
   nice -n 10 cmake -S "$task_root/source/OpenGothic" -B "$task_root/build" -G Ninja \
-    -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DOPENGOTHIC_JOLT_X86="$jolt_x86" \
     -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib" \
     > "$task_root/provenance/configure.log" 2>&1
   nice -n 10 cmake --build "$task_root/build" --target gothic-body-runner Gothic2Notr gothic-body-resolver-test --parallel 2 \
