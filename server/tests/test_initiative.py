@@ -320,6 +320,119 @@ async def test_rule_approach_releases_native_talk_gate_only_after_completed_walk
             await approach.close()
 
 
+@pytest.mark.parametrize("start,distance", [(8, 2), (8, 5), (3, 3)])
+async def test_rule_approach_releases_at_native_dialog_range_without_walk_idle(tmp_path, start, distance):
+    async with _scene(tmp_path) as s:
+        s.fake.vars["PERC_DIST_DIALOG"] = 500
+        await _around(s, person(LOBART, "Лобарт", start))
+        approach = ImportantApproach(s.desk.link, s.desk.bodies, s.talk, s.desk.guard, s.chronicle)
+        entered, restore = asyncio.Event(), asyncio.Event()
+        valid, told = True, False
+
+        @asynccontextmanager
+        async def release() -> AsyncIterator[None]:
+            entered.set()
+            try:
+                yield
+            finally:
+                restore.set()
+
+        task = asyncio.create_task(approach.approach(
+            LOBART, "crime:C1", valid=lambda: valid, told=lambda: told, release=release
+        ))
+        try:
+            await _walks(s, 1)
+            await asyncio.sleep(0)
+            if start > 5:
+                assert not entered.is_set()
+            # Terrain can prevent the last metres of AI_GotoNpc. No npc_idle arrives.
+            await _around(s, person(LOBART, "Лобарт", distance))
+            await asyncio.wait_for(entered.wait(), 1)
+            await _around(s, person(LOBART, "Лобарт", distance, activity="dialog", state="ZS_TALK"))
+            told = True
+            assert await task
+            assert restore.is_set()
+            assert s.chronicle.facts("initiative")[-1]["occasion"] == "crime:C1"
+            assert not s.desk.bodies.busy(LOBART)
+            assert not any(m.get("exprs") == [["call", "NPC_CLEARAIQUEUE", ["inst", "SELF"]]]
+                           for m in s.fake.story)
+        finally:
+            valid = False
+            await asyncio.gather(task, return_exceptions=True)
+            await approach.close()
+
+
+async def test_rule_approach_keeps_gate_released_while_native_talk_is_still_playing(tmp_path, monkeypatch):
+    monkeypatch.setattr("gothic_ai.initiative.IMPORTANT_WAIT_S", 0.05)
+    async with _scene(tmp_path) as s:
+        s.fake.vars["PERC_DIST_DIALOG"] = 500
+        await _around(s, person(LOBART, "Лобарт", 3))
+        approach = ImportantApproach(s.desk.link, s.desk.bodies, s.talk, s.desk.guard, s.chronicle)
+        entered, restored = asyncio.Event(), asyncio.Event()
+        told = False
+
+        @asynccontextmanager
+        async def release() -> AsyncIterator[None]:
+            entered.set()
+            try:
+                yield
+            finally:
+                restored.set()
+
+        task = asyncio.create_task(approach.approach(
+            LOBART, "crime:C1", valid=lambda: True, told=lambda: told, release=release
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            await _around(s, person(LOBART, "Лобарт", 3, activity="dialog", state="ZS_TALK"))
+            await asyncio.sleep(0.4)  # beyond the perception deadline and one WATCH_S poll
+            assert not task.done() and not restored.is_set()
+            told = True
+            assert await task
+            assert restored.is_set()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await approach.close()
+
+
+@pytest.mark.parametrize("cancel", ["crime_resolved", "talk_ended"])
+async def test_rule_approach_restores_released_gate_when_cancelled_before_told(tmp_path, cancel):
+    async with _scene(tmp_path) as s:
+        s.fake.vars["PERC_DIST_DIALOG"] = 500
+        await _around(s, person(LOBART, "Лобарт", 3))
+        approach = ImportantApproach(s.desk.link, s.desk.bodies, s.talk, s.desk.guard, s.chronicle)
+        entered, restore = asyncio.Event(), asyncio.Event()
+        valid = True
+
+        @asynccontextmanager
+        async def release() -> AsyncIterator[None]:
+            entered.set()
+            try:
+                yield
+            finally:
+                restore.set()
+
+        task = asyncio.create_task(approach.approach(
+            LOBART, "crime:C1", valid=lambda: valid, told=lambda: False, release=release
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            if cancel == "talk_ended":
+                await _around(s, person(LOBART, "Лобарт", 3, activity="dialog", state="ZS_TALK"))
+                await asyncio.sleep(0.4)  # let one WATCH_S poll observe the started TALK
+                await _around(s, person(LOBART, "Лобарт", 3))
+            else:
+                valid = False
+            assert not await asyncio.wait_for(task, 1)
+            assert restore.is_set() and not s.chronicle.facts("initiative")
+            assert not s.desk.bodies.busy(LOBART)
+        finally:
+            valid = False
+            await asyncio.gather(task, return_exceptions=True)
+            await approach.close()
+
+
 @pytest.mark.parametrize(
     "entry,partner",
     [

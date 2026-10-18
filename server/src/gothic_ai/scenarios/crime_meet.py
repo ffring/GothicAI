@@ -595,11 +595,13 @@ async def crime_meet(
         )
         if not check(
             "victim_approached",
-            accepted_walk and moved >= 25,
+            # A hero already in native dialogue range may get TALK before the first step.
+            accepted_walk and (moved >= 25 or storylet.stage != "open"),
             {
                 "origin": meeting_origin,
                 "arrived": arrived.npc.pos,
                 "moved_cm": moved,
+                "native_talk": storylet.stage != "open",
                 "walks": [c.model_dump() for c in walks],
             },
         ):

@@ -55,6 +55,7 @@ FLOOR_WAIT_S = 45.0  # come up while two talk next to the hero: it waits this lo
 TOOLS = ("set_intent", "give_item", "recall", "end_conversation", "propose_deal", "withdraw_deal")
 CHECKINFO = ["call", "NPC_CHECKINFO", ["inst", "SELF"], ["int", 1]]
 IMPORTANT_WAIT_S = 12.0  # native perception gets its next polls after the soft approach
+IMPORTANT_TALK_S = 60.0  # a started native conversation may still be playing its lines
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,13 @@ class ImportantApproach:
                 return False
             if state.get("dialog") or state.get("cutscene"):
                 return False
+            dialog_distance = 0
+            if release is not None:
+                values = await self.link.story_eval(npc, [["var", "PERC_DIST_DIALOG"]])
+                if len(values) == 1 and type(values[0]) is int and values[0] > 0:
+                    dialog_distance = values[0]
+                if world != self._world or not valid() or not self._free(npc):
+                    return False
             self.link.listeners.append(receipt)
             walk = asyncio.create_task(self.bodies.act(npc, action))
             while not queued.done() and not walk.done() and world == self._world and valid():
@@ -142,29 +150,41 @@ class ImportantApproach:
                 return False
             act = queued.result().id
             while not walk.done() and world == self._world and valid():
+                current = self.talk.people.get(npc)
+                if replaced:
+                    return False
+                if current is not None and current.distance <= dialog_distance:
+                    break
                 await asyncio.wait((walk,), timeout=WATCH_S)
             if world != self._world or not valid() or replaced:
                 return False
-            if walk.result().status != "done":
+            if walk.done() and walk.result().status != "done":
                 if walk.result().status == "gone" and told():
                     self._record_important(npc, entry.name, key, state)
                     return True  # native TALK took over an approach already under way
                 return False
-            # A nonzero crime blocks native important dialogs. Keep that gate until the walk
-            # finishes: releasing it merely after queuing could start TALK before the first step.
+            # AI_GotoNpc aims for melee range and can stop against terrain before that distance.
+            # Native important TALK is already possible within PERC_DIST_DIALOG, including before
+            # the first step when the hero approaches. Its crime gate must not wait for melee range.
             async with release() if release is not None else nullcontext():
-                deadline: float | None = None
-                while world == self._world and valid():
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + IMPORTANT_WAIT_S
+                talk_deadline: float | None = None
+                while world == self._world and valid() and not replaced:
                     if told():
                         self._record_important(npc, entry.name, key, state)
                         return True
+                    current = self.talk.people.get(npc)
+                    talking = current is not None and current.activity == "dialog"
+                    if talking and talk_deadline is None:
+                        talk_deadline = loop.time() + IMPORTANT_TALK_S
+                    if talk_deadline is not None and not talking:
+                        return False  # a cancelled native TALK no longer needs the crime gate open
                     if walk.done():
-                        if walk.result().status not in {"done", "gone"}:
+                        if walk.result().status not in {"done", "gone"} and not talking:
                             return False
-                        if deadline is None:
-                            deadline = asyncio.get_running_loop().time() + IMPORTANT_WAIT_S
-                        if asyncio.get_running_loop().time() >= deadline:
-                            return False
+                    if loop.time() >= (talk_deadline if talk_deadline is not None else deadline):
+                        return False
                     await asyncio.sleep(WATCH_S)
             return False
         finally:
