@@ -175,9 +175,25 @@ def follow_request(text: str, is_name: Callable[[str], bool] = lambda w: False) 
     rest = words(text)
     while rest and (rest[0] in EXTRA or is_name(rest[0])):
         rest.pop(0)
-    if not rest or any(w in rest for w in ("не", "если", "бы", "когда", "потом", "позже")):
+    if not rest or any(
+        w in rest
+        for w in (
+            "не",
+            "если",
+            "бы",
+            "когда",
+            "потом",
+            "позже",
+            "завтра",
+            "послезавтра",
+            "сначала",
+            "ли",
+        )
+    ):
         return False
     if any(mark in text for mark in ('"', "«", "»")):
+        return False
+    if rest[:2] in (["пошли", "слухи"], ["пошли", "разговоры"]):
         return False
     if rest[0] in {"пойдем", "пойдемте", "пошли", "пошлите", "идем", "идемте"}:
         return True

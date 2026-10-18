@@ -217,6 +217,7 @@ _FOLLOW_REFUSAL = re.compile(
     r"побегу|думаю|уверен)\b"
 )
 _FOLLOW_REPORTED = re.compile(r"\b(?:сказал|сказали|говорит|говорят|спросил|крикнул)\b")
+_FOLLOW_LEADING = re.compile(r"\b(?:за мной|со мной|я поведу|я веду|я отведу|я покажу дорогу)\b")
 _FOLLOW_ACCEPTED = re.compile(
     r"(?:^|[.!?;:—–,]\s*)(?:(?:да|ладно|хорошо|тогда|ну)\b[,\s]*)*"
     r"(?:пойдем(?:те)?|пошли|идем(?:те)?)\b|"
@@ -243,7 +244,10 @@ def follow_agreement(heard: str, reply: str, name: str = "") -> bool:
         _FOLLOW_DELAY.search(answer)
         or _FOLLOW_REFUSAL.search(answer)
         or _FOLLOW_REPORTED.search(answer)
-        or re.search(r"\b(?:не сейчас|не с тобой|не за тобой|без меня|иди сам|идите сами)\b", answer)
+        or _FOLLOW_LEADING.search(answer)
+        or re.search(
+            r"\b(?:не сейчас|не с тобой|не за тобой|без меня|без тебя|без вас|иди сам|идите сами)\b", answer
+        )
         or any(mark in answer for mark in ('"', "«", "»"))
         or re.match(r"нет\b(?!\s+проблем\b)", answer)
     ):

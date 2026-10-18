@@ -82,6 +82,8 @@ def test_follow_requests_can_have_more_words_or_be_questions(text):
         "Мы пойдём туда завтра.",
         "Кто пойдет со мной?",
         "Я за тобой иду.",
+        "Пошли слухи, что бандиты вернулись.",
+        "Пойдём ли мы завтра к бандитам?",
     ],
 )
 def test_follow_words_in_a_story_or_route_question_are_not_requests(text):
