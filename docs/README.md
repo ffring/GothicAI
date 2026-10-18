@@ -86,7 +86,7 @@
 | Сделки и поручения | `deals` (окно сделки, долги), `contracts` (опыт, обучение, платные задания), `chests`, `errands` (`plan`), `meetings` (`meet`), `guide` (`lead`) |
 | Сюжет | `story`, `validator`, `storyguard`, `programs`, `director`, `questbook`, `questlog`, `triggers`, `occasions`, `showrunner`, `authoring`, `casting`, `cast`, `characters` (карточки характера), `chains` |
 | Данные | `gamedata/`: `characters.json`, `lore.json`, `places.json`, `stash.json`, `ou.py` (реплики OU.BIN), `storygraph.py` |
-| Сценарии e2e | `scenarios/` (общее в `common.py`, по модулю на область) |
+| Сценарии e2e | `scenarios/`: общее в `common.py`, модуль каждой области — в списке «Сценарии по областям» ниже; точки входа — в `__init__.py` |
 
 ## Движок: наши подсистемы
 
@@ -146,15 +146,15 @@
 
 Сценарий считается пройденным, когда все значения результата начинаются с `done`. Описание каждого — в шапке `scripts/e2e.sh`. Тесты сервисов лежат в их `tests/`, тесты скриптов — в `scripts/tests/`.
 
-**Сценарии по областям:**
-- **основа:** `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`;
-- **спутники и бой:** `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`;
-- **восприятие:** `see`, `seen`, `hearing`, `cave`, `ground`, `places`, `knows`, `remembers`, `trace`, `broken`;
-- **жизнь NPC:** `day`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
-- **беседа:** `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
-- **сделки:** `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
-- **ложь и дела:** `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_talk`, `crime_law`, `crime_director`, `wrath`;
-- **сюжет:** `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
+**Сценарии по областям** (модуль в `server/src/gothic_ai/scenarios/`):
+- **основа** (`basics.py`): `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`;
+- **спутники и бой** (`companions.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`;
+- **восприятие** (`perception.py`; `broken` — `broken.py`, `places` — прямо в `cli.py`): `see`, `seen`, `hearing`, `cave`, `ground`, `places`, `knows`, `remembers`, `trace`, `broken`;
+- **жизнь NPC** (`npc_life.py`): `day`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
+- **беседа** (`conversation.py`): `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
+- **сделки** (`deals.py`): `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
+- **ложь и дела** (`lies.py`; `crimes`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_talk`, `crime_law`, `crime_director`, `wrath`;
+- **сюжет** (`story.py`; `occasions`, `questlog`, `showrunner*`, `vanilla_line*` — одноимённые модули): `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
 
 ## Где лежат данные
 
