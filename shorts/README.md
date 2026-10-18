@@ -360,6 +360,7 @@ uv run gothic-shorts upload .shorts/xardas-lie/take-02/short-ru.mp4 --meta .shor
     --captions en=.shorts/xardas-lie/take-02/subs.en.srt
 uv run gothic-shorts srt bow                           # an explainer: subs.en.srt from script.en.txt
 uv run gothic-shorts captions <video id> subs.en.srt --lang en   # a track on a video already up
+uv run gothic-shorts translate <video id> --meta youtube.json    # its other languages on a video already up
 ```
 
 A short is one video in every language, not one upload per language: its sound is Russian (the game is;
@@ -370,7 +371,8 @@ them: a shot's take from its `subs.<lang>.json` on the cut's time (an npc's line
 burnt-in hook and captions in brackets), an explainer from `script.<lang>.txt` over its Russian voice
 (`words.ru.json`, the `|` chunks one after another). Caption tracks need the `youtube.force-ssl` scope: a
 sign-in older than it can still upload, but `--captions` asks to `youtube login` again before it sends
-anything. An English audio track (`gothic-shorts dub`) is added in Studio (Subtitles, the video, the
+anything. `translate` adds the other sections' titles and descriptions to a video already up (videos.update,
+the same scope): its own title, description, tags and other translations stay as they are. An English audio track (`gothic-shorts dub`) is added in Studio (Subtitles, the video, the
 language's Audio column); the API has no call for it, and Studio shows the column only to channels with
 YouTube's advanced features.
 
