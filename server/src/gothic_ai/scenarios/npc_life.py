@@ -884,9 +884,10 @@ async def noise_scenario(
     from ..brain.day import current_entry
 
     npc = "BAU_954_MALETH"
-    results = {k: "failed (0 observations)" for k in (
-        "heard", "decided", "sent", "went", "idle", "routine", "memory"
-    )}
+    results = {
+        k: "failed (0 observations)"
+        for k in ("heard", "decided", "sent", "went", "idle", "routine", "memory")
+    }
 
     def check(name: str, ok: bool, detail: str) -> None:
         results[name] = f"{'done' if ok else 'failed'} ({detail})"
@@ -956,61 +957,121 @@ async def noise_scenario(
         before = await link.snapshot(npc, fresh=True)
         entry = current_entry(info.entries, before.world.hour, before.world.minute)
         ready = await _until(
-            lambda: npc in roster and roster[npc].activity == "routine"
-            and entry is not None and roster[npc].state.upper() == entry.state.upper()
-            and npc in brain.npcs and not brain.npcs[npc].talking and not link.body_owned(npc),
+            lambda: (
+                npc in roster
+                and roster[npc].activity == "routine"
+                and entry is not None
+                and roster[npc].state.upper() == entry.state.upper()
+                and npc in brain.npcs
+                and not brain.npcs[npc].talking
+                and not link.body_owned(npc)
+            ),
             20,
         )
-        check("setup", ready, f"ready {int(ready)}, state {roster[npc].state if npc in roster else '?'}; "
-              f"routine entries {len(info.entries)}")
+        check(
+            "setup",
+            ready,
+            f"ready {int(ready)}, state {roster[npc].state if npc in roster else '?'}; "
+            f"routine entries {len(info.entries)}",
+        )
         if not ready:
             return _logged(results)
         sampling = asyncio.create_task(sample())
         rows_start = len(tap.rows)
         started = time.monotonic()
-        await link.debug("player_drop", item="ITMW_2H_BAU_AXE")
+        dropped = False
+        attempts = 0
+        for _ in range(20):
+            attempts += 1
+            try:
+                await link.debug("player_drop", item="ITAR_PAL_H")
+                dropped = True
+                break
+            except GameError as err:
+                if str(err) != "the hero could not drop it now":
+                    raise
+                await asyncio.sleep(0.2)  # the saved or newly closed weapon may still be animating
+        check("setup_drop", dropped, f"attempts {attempts}, dropped {int(dropped)}")
+        if not dropped:
+            return _logged(results)
         await _until(lambda: bool(events), 15)
         event = events[0] if events else None
-        check("heard", event is not None and event.at is not None and bool(event.place)
-              and (event.loudness or 0) >= 0.35 and bool(event.source)
-              and event.distance is not None and event.distance > 200
-              and not event.other and not event.other_name,
-              f"events {len(events)}, at {event.at if event else None}, "
-              f"place {event.place if event else None}, loudness {event.loudness if event else 0}, "
-              f"source {event.source if event else None}, distance_cm {event.distance if event else 0}, "
-              f"other {event.other if event else None!r}")
+        check(
+            "heard",
+            event is not None
+            and event.at is not None
+            and bool(event.place)
+            and (event.loudness or 0) >= 0.35
+            and bool(event.source)
+            and event.distance is not None
+            and event.distance > 200
+            and not event.other
+            and not event.other_name,
+            f"events {len(events)}, at {event.at if event else None}, "
+            f"place {event.place if event else None}, loudness {event.loudness if event else 0}, "
+            f"source {event.source if event else None}, distance_cm {event.distance if event else 0}, "
+            f"other {event.other if event else None!r}",
+        )
         if event is None or event.at is None:
             return _logged(results)
 
         def decision() -> dict[str, Any] | None:
-            return next((r for r in tap.rows[rows_start:] if r.get("npc") == npc
-                         and r.get("question") == "react" and "noise" in r.get("stimuli", [])
-                         and r.get("choice") == "investigate" and r.get("applied")), None)
+            return next(
+                (
+                    r
+                    for r in tap.rows[rows_start:]
+                    if r.get("npc") == npc
+                    and r.get("question") == "react"
+                    and "noise" in r.get("stimuli", [])
+                    and r.get("choice") == "investigate"
+                    and r.get("applied")
+                ),
+                None,
+            )
 
         await _until(lambda: decision() is not None, 15)
         row = decision()
-        noise_rows = [r for r in tap.rows[rows_start:]
-                      if r.get("npc") == npc and "noise" in r.get("stimuli", [])]
-        check("decided", row is not None,
-              f"applied {int(row is not None)}, noise decisions {len(noise_rows)}, "
-              f"latency_ms {row.get('latency_ms', 0) if row else 0}")
+        noise_rows = [
+            r for r in tap.rows[rows_start:] if r.get("npc") == npc and "noise" in r.get("stimuli", [])
+        ]
+        check(
+            "decided",
+            row is not None,
+            f"applied {int(row is not None)}, noise decisions {len(noise_rows)}, "
+            f"latency_ms {row.get('latency_ms', 0) if row else 0}",
+        )
         if recorder is not None:
             questions = [q for n, q in recorder.requests if n == npc]
             answers = [a for n, a in recorder.own if n == npc]
-            answer = next((a.get("react", {}) for q, a in zip(questions, answers, strict=False)
-                           if "investigate" in q.get("react", {}).get("criteria", {})), {})
+            answer = next(
+                (
+                    a.get("react", {})
+                    for q, a in zip(questions, answers, strict=False)
+                    if "investigate" in q.get("react", {}).get("criteria", {})
+                ),
+                {},
+            )
             # A live model may choose any option (or return no answer); its choice is informational.
-            check("model_answer", True, f"answers {len(recorder.own)}, choice {answer.get('choice')}, "
-                  f"P(investigate) {answer.get('probabilities', {}).get('investigate', 0):.3f}")
+            check(
+                "model_answer",
+                True,
+                f"answers {len(recorder.own)}, choice {answer.get('choice')}, "
+                f"P(investigate) {answer.get('probabilities', {}).get('investigate', 0):.3f}",
+            )
         await _until(lambda: any(c.action == "investigate" for _, c in sent), 5)
         when_sent, act = next(((t, c) for t, c in sent if c.action == "investigate"), (0.0, None))
         await _until(lambda: act is not None and any(m.id == act.id for _, m in receipts), 5)
         receipt = next((m for _, m in receipts if act is not None and m.id == act.id), None)
-        check("sent", act is not None and act.args.get("at") == list(event.at)
-              and 2000 <= act.args.get("ms", 0) <= 8000 and receipt is not None
-              and receipt.status == "queued",
-              f"acts {len(sent)}, id {act.id if act else None}, at {act.args.get('at') if act else None}, "
-              f"ms {act.args.get('ms', 0) if act else 0}, receipt {receipt.status if receipt else None}")
+        check(
+            "sent",
+            act is not None
+            and act.args.get("at") == list(event.at)
+            and 2000 <= act.args.get("ms", 0) <= 8000
+            and receipt is not None
+            and receipt.status == "queued",
+            f"acts {len(sent)}, id {act.id if act else None}, at {act.args.get('at') if act else None}, "
+            f"ms {act.args.get('ms', 0) if act else 0}, receipt {receipt.status if receipt else None}",
+        )
         if act is None:
             return _logged(results)
         # B_ASSESSQUIETSOUND can keep the native AI queue busy for ~2 s: allow the real investigation
@@ -1019,38 +1080,72 @@ async def noise_scenario(
             lambda: any(m.act == act.id for _, m in idles), max(0, when_sent + 45 - time.monotonic())
         )
         idle_at, idle = next(((t, m) for t, m in idles if m.act == act.id), (0.0, None))
-        distances = [math.dist(s.npc.pos, event.at) for t, s in samples
-                     if when_sent <= t <= (idle_at or time.monotonic())]
+        distances = [
+            math.dist(s.npc.pos, event.at)
+            for t, s in samples
+            if when_sent <= t <= (idle_at or time.monotonic())
+        ]
         closest = min(distances, default=float("inf"))
-        check("went", closest < 200, f"snapshots {len(distances)}, closest_cm {closest:.1f}, "
-              f"start_cm {event.distance}")
+        check(
+            "went",
+            closest < 200,
+            f"snapshots {len(distances)}, closest_cm {closest:.1f}, start_cm {event.distance}",
+        )
         elapsed = idle_at - when_sent if idle else time.monotonic() - when_sent
-        check("idle", idle is not None and idle.reason in (None, "done") and 0 <= elapsed <= 45,
-              f"matching {int(idle is not None)}, id {idle.act if idle else None}, "
-              f"reason {idle.reason if idle else None}, elapsed_s {elapsed:.2f}")
+        check(
+            "idle",
+            idle is not None and idle.reason in (None, "done") and 0 <= elapsed <= 45,
+            f"matching {int(idle is not None)}, id {idle.act if idle else None}, "
+            f"reason {idle.reason if idle else None}, elapsed_s {elapsed:.2f}",
+        )
         resumed = await _until(
-            lambda: idle is not None and roster_at > idle_at
-            and npc in roster and roster[npc].activity == "routine"
-            and roster[npc].state.upper() == entry.state.upper() and not link.body_owned(npc), 15,
+            lambda: (
+                idle is not None
+                and roster_at > idle_at
+                and npc in roster
+                and roster[npc].activity == "routine"
+                and roster[npc].state.upper() == entry.state.upper()
+                and not link.body_owned(npc)
+            ),
+            15,
         )
         after = await link.routine(npc)
-        check("routine", resumed and after.current.upper() == entry.state.upper(),
-              f"resumed {int(resumed)}, current {after.current}, expected {entry.state}, "
-              f"elapsed_s {time.monotonic() - when_sent:.2f}")
-        records = [json.loads(raw) for raw in sightings.memory.seen(sightings.branch, npc)
-                   ] if sightings.branch else []
+        check(
+            "routine",
+            resumed and after.current.upper() == entry.state.upper(),
+            f"resumed {int(resumed)}, current {after.current}, expected {entry.state}, "
+            f"elapsed_s {time.monotonic() - when_sent:.2f}",
+        )
+        records = (
+            [json.loads(raw) for raw in sightings.memory.seen(sightings.branch, npc)]
+            if sightings.branch
+            else []
+        )
         book = sightings.desk.places
         place = book.of(event.place) if book is not None and event.place else None
-        sounds = [s for s in sightings.mind(npc).heard if s.time == event.time
-                  and (s.place_id == place.id if place else event.place in s.place)]
-        saved = [r for r in records if r.get("observation") == "heard" and r.get("time") == event.time
-                 and any(r == s.record() for s in sounds)]
+        sounds = [
+            s
+            for s in sightings.mind(npc).heard
+            if s.time == event.time and (s.place_id == place.id if place else event.place in s.place)
+        ]
+        saved = [
+            r
+            for r in records
+            if r.get("observation") == "heard"
+            and r.get("time") == event.time
+            and any(r == s.record() for s in sounds)
+        ]
         words = sightings.situation(npc) or ""
         clock = f"{(event.time or 0) % 1440 // 60:02d}:{(event.time or 0) % 60:02d}"
-        check("memory", bool(sounds) and bool(saved) and clock in words
-              and any(f"слышал грохот {s.place}" in words for s in sounds),
-              f"heard {len(sounds)}, saved {len(saved)}, game_minute {event.time}, clock {clock}, "
-              f"places {[s.place for s in sounds]}")
+        check(
+            "memory",
+            bool(sounds)
+            and bool(saved)
+            and clock in words
+            and any(f"слышал грохот {s.place}" in words for s in sounds),
+            f"heard {len(sounds)}, saved {len(saved)}, game_minute {event.time}, clock {clock}, "
+            f"places {[s.place for s in sounds]}",
+        )
     finally:
         if sampling is not None:
             sampling.cancel()
