@@ -61,6 +61,38 @@ int main() {
     d=NavKeyTeacher::decide(body,elbow,elbow.corners.back());
     check(d.hint.cornerIndex>=2 && d.keys.forward==1,"a passed corner must not pull the body backwards");
 
+    const Point carrot={6,0,6}, finalGoal={20,0,6};
+    const auto local=route({{0,0,0},{6,0,0},carrot});
+    body={};body.yawDegrees=45;
+    d=NavKeyTeacher::decideV2(body,local,finalGoal,carrot,true);
+    check(d.pathValid && !d.arrived && d.keys.walk && d.keys.forward==1 && d.keys.turn==0 &&
+          d.hint.nextCorner==carrot,
+          "v2 clear ground must steer to the learner carrot instead of a mesh corner");
+    const auto v1Local=NavKeyTeacher::decide(body,local,finalGoal);
+    d=NavKeyTeacher::decideV2(body,local,finalGoal,carrot,false);
+    check(d.hint.nextCorner==v1Local.hint.nextCorner && d.keys.turn==v1Local.keys.turn &&
+          d.keys.forward==v1Local.keys.forward,
+          "v2 obstacle avoidance must use the local Detour corner with v1 digital steering");
+    body={};body.position={5.6f,0,6};
+    d=NavKeyTeacher::decideV2(body,local,finalGoal,carrot,true);
+    check(!d.arrived && d.keys.forward==1 && d.hint.nextCorner==carrot,
+          "reaching a local carrot must not satisfy final-goal arrival");
+    body.position=finalGoal;
+    check(NavKeyTeacher::decideV2(body,local,finalGoal,carrot,true).arrived,
+          "v2 must retain final-goal arrival even if the local carrot differs");
+    for(float yaw:{-9.f,9.f}) {
+      body={};body.yawDegrees=yaw;
+      check(NavKeyTeacher::decideV2(body,straight,{20,0,0},{6,0,0},true).keys.turn==0,
+            "v2 ground steering must leave errors inside ten degrees unlabelled");
+      check(NavKeyTeacher::decideV2(body,straight,{20,0,0},{6,0,0},false).keys.turn==0,
+            "v2 local Detour steering must share the ten-degree ground deadband");
+      }
+    for(float yaw:{-11.f,11.f}) {
+      body={};body.yawDegrees=yaw;
+      check(NavKeyTeacher::decideV2(body,straight,{20,0,0},{6,0,0},true).keys.turn==(yaw>0 ? 1.f : -1.f),
+            "v2 ground errors outside ten degrees must turn toward the carrot");
+      }
+
     for(const auto type:{NavMesh::LinkType::Jump,NavMesh::LinkType::Climb,NavMesh::LinkType::Drop}) {
       auto linked=route({{0,0,0},{2,0,0},{4,1,0},{7,1,0}});
       NavMesh::Path::Transition link;
@@ -72,6 +104,11 @@ int main() {
             "link takeoff must aim at its directed landing and use running input");
       check(d.keys.jump==(type==NavMesh::LinkType::Jump) && d.keys.climb==(type==NavMesh::LinkType::Climb),
             "jump/climb/drop links must retain their keyboard action");
+      const auto v2=NavKeyTeacher::decideV2(body,linked,{20,1,0},linked.corners.back(),false);
+      check(v2.hint.onTransition && v2.hint.transitionId==d.hint.transitionId &&
+            v2.keys.jump==d.keys.jump && v2.keys.climb==d.keys.climb &&
+            v2.keys.walk==d.keys.walk && v2.keys.forward==d.keys.forward,
+            "v2 local paths must preserve v1 jump/climb/drop transitions");
       if(type==NavMesh::LinkType::Climb) {
         body.standing=false;
         d=NavKeyTeacher::decide(body,linked,linked.corners.back());
@@ -105,7 +142,11 @@ int main() {
     body.position[0]=std::numeric_limits<float>::quiet_NaN();
     d=NavKeyTeacher::decide(body,straight,{10,0,0});
     check(d.replan && std::isfinite(d.keys.turn),"non-finite body must not create non-finite actions");
-    std::cout<<"navkeyteacher contract: digital yaw, walking, little graph, five off-route states, passed corner, jump/climb/drop, climb standing gate, midair reconstruction, landing, invalid input passed\n";
+    body={};
+    d=NavKeyTeacher::decideV2(body,straight,{10,0,0},{std::numeric_limits<float>::quiet_NaN(),0,0},true);
+    check(d.replan && !d.pathValid && d.keys.forward==0,
+          "invalid v2 carrot must request replanning without movement");
+    std::cout<<"navkeyteacher contract: digital yaw, walking, little graph, five off-route states, passed corner, v2 shared carrot and local detour, jump/climb/drop, climb standing gate, midair reconstruction, landing, invalid input passed\n";
     return 0;
   } catch(const std::exception& error) {
     std::cerr<<"navkeyteacher contract: "<<error.what()<<'\n';

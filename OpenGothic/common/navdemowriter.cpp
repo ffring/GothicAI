@@ -78,7 +78,9 @@ void layer(std::vector<uint8_t>& out, const NavigationMemory::Layer& value,
   }
 }
 
-NavDemoWriter::NavDemoWriter(const std::string& path) {
+NavDemoWriter::NavDemoWriter(const std::string& path, uint32_t formatVersion):fileVersion(formatVersion) {
+  if(fileVersion!=1 && fileVersion!=2)
+    throw std::invalid_argument("nav demo: unsupported format version");
   buffer.reserve(recordBytes);
   stream = gzopen(path.c_str(),"wb1");
   if(stream==nullptr)
@@ -91,7 +93,7 @@ NavDemoWriter::NavDemoWriter(const std::string& path) {
     }
   const char magic[] = "NAVDEMO";
   buffer.insert(buffer.end(),magic,magic+8);
-  u32(buffer,version);
+  u32(buffer,fileVersion);
   u32(buffer,recordBytes);
   u32(buffer,rayCount);
   u32(buffer,nearSize);
@@ -145,12 +147,12 @@ double NavDemoWriter::append(const Snapshot& sample) {
   f32(buffer,sample.body.groundSlopeDeg);
   f32(buffer,sample.body.headYawDeg);
   f32(buffer,sample.body.headPitchDeg);
-  vec(buffer,sample.roads.nextDirection);
-  f32(buffer,sample.roads.nextDistanceCm);
+  vec(buffer,fileVersion==2 ? sample.roads.carrotDirection : sample.roads.nextDirection);
+  f32(buffer,fileVersion==2 ? sample.roads.carrotDistanceCm : sample.roads.nextDistanceCm);
   vec(buffer,sample.roads.goalDirection);
   f32(buffer,sample.roads.goalDistanceCm);
-  f32(buffer,sample.roads.remainingVisualCm);
-  byte(buffer,sample.roads.goalInKnown);
+  f32(buffer,fileVersion==2 ? sample.roads.remainingKnownCm : sample.roads.remainingVisualCm);
+  byte(buffer,fileVersion==2 ? sample.roads.beyondKnown : sample.roads.goalInKnown);
   keys(buffer,sample.previous);
   keys(buffer,sample.keys);
   for(const auto& ray:*sample.eye) {

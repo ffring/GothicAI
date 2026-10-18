@@ -408,6 +408,16 @@ KnownRoads::Path KnownRoadsBench::readPath(World& world,const Npc& npc,const Vec
   throw std::runtime_error("nav demos requires roads on for the walking actor");
 }
 
+void KnownRoadsBench::readGuidance(World& world,const Npc& npc,const Vec3& position,
+                                 const Vec3& goal,KnownRoads::Guidance& guidance) {
+  requireGraph();
+  for(const auto& actor:state.actors) if(actor.npc==&npc && live(actor,world)) {
+    state.graph->updateGuidance(actor.knowledge,position,goal,guidance);
+    return;
+    }
+  throw std::runtime_error("nav demos requires roads on for the walking actor");
+}
+
 void KnownRoadsBench::tick(World* world) {
   if(state.world==world && (!world || state.worldName==world->name())) return;
   // Loading or switching the world invalidates all NPC pointers and graph IDs.

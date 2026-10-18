@@ -11,9 +11,10 @@
 
 // Stand-only demonstration storage. No world queries, teacher decisions or bridge traffic.
 // samples.bin.gz is gzip (level 1), followed after decompression by a 32-byte header:
-// char[8] "NAVDEMO\0", uint32 version=1, recordBytes, rays=238, near=64, far=100,
+// char[8] "NAVDEMO\0", uint32 version=1|2, recordBytes, rays=238, near=64, far=100,
 // periodMs=100. Integers and IEEE float32 are little endian, without struct padding.
-// Records match scripts/nav_demos.py::RECORD_DTYPE, in declaration order below.
+// Records match scripts/nav_demos.py::RECORD_DTYPES[version]. V2 road slots are
+// carrot direction/distance, goal direction/distance, known remainder, beyond-known.
 class NavDemoWriter final {
   public:
     static constexpr uint32_t version = 1, rayCount = 238, nearSize = 64, farSize = 100;
@@ -43,6 +44,11 @@ class NavDemoWriter final {
       std::array<float,3> goalDirection = {};
       float goalDistanceCm = 0, remainingVisualCm = 0;
       bool goalInKnown = false;
+      // Version 2 replaces next/remainingVisual/goalInKnown on disk with these
+      // familiar-road-only guidance fields, retaining the same packed size.
+      std::array<float,3> carrotDirection = {};
+      float carrotDistanceCm = 0, remainingKnownCm = 0;
+      bool beyondKnown = false;
       };
 
     struct Snapshot final {
@@ -60,7 +66,7 @@ class NavDemoWriter final {
       float teacherPathCm = 0;
       };
 
-    explicit NavDemoWriter(const std::string& path);
+    explicit NavDemoWriter(const std::string& path, uint32_t formatVersion = version);
     ~NavDemoWriter();
     NavDemoWriter(const NavDemoWriter&) = delete;
     NavDemoWriter& operator=(const NavDemoWriter&) = delete;
@@ -76,4 +82,5 @@ class NavDemoWriter final {
     void* stream = nullptr;
     std::vector<uint8_t> buffer;
     uint64_t count = 0, previousMs = 0;
+    uint32_t fileVersion = version;
   };

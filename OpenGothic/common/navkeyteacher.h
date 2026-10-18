@@ -24,8 +24,8 @@ class NavKeyTeacher final {
       };
 
     struct Hint final {
-      NavMesh::Point nextCorner = {};     // privileged mesh corner, metres
-      float remainingLength = 0;          // current position to goal along route, metres
+      NavMesh::Point nextCorner = {};     // actual steering target: mesh corner or v2 carrot, metres
+      float remainingLength = 0;          // current position to route endpoint, metres
       size_t cornerIndex = 0;
       uint32_t transitionId = 0;
       NavMesh::LinkType transitionType = NavMesh::LinkType::Jump;
@@ -44,4 +44,13 @@ class NavKeyTeacher final {
     // the pre-takeoff path: a new Detour query can legitimately fail between the two banks.
     static Decision decide(const State& body, const NavMesh::Path& path,
                            const NavMesh::Point& goal);
+
+    // V2 shares the learner's carrot. Clear ground steers directly to that point;
+    // obstacles and transitions use the local mesh route ending at the carrot.
+    // Only the final goal can satisfy arrival. Pass false for directWalkable beyond
+    // the familiar road, where the mesh route leads to the final goal. Ground turns
+    // use a 10-degree deadband; transitions retain the v1 digital steering contract.
+    static Decision decideV2(const State& body, const NavMesh::Path& localPath,
+                             const NavMesh::Point& goal, const NavMesh::Point& carrot,
+                             bool directWalkable);
   };

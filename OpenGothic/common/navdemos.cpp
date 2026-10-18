@@ -30,6 +30,8 @@ struct Episode {
   Vec3 goal,previousPosition,velocity;
   std::string output,from,to,failure;
   bool active=false,replay=false,drive=false,success=false;
+  uint32_t teacherVersion=1;
+  KnownRoads::Guidance guidance;
   uint64_t began=0,limit=240000,next=0,decisions=0,frames=0,cvFrames=0;
   uint64_t progressAt=0;
   float best=std::numeric_limits<float>::max();
@@ -50,7 +52,7 @@ struct Episode {
   NavigationMemory memory;
   NavigationMemory::View view;
   std::unique_ptr<NavDemoWriter> writer;
-  std::ofstream actions,trajectory;
+  std::ofstream actions,trajectory,knownPaths;
   std::vector<RecordedKeys> replayActions;
 } ep;
 
@@ -115,12 +117,13 @@ void finish(World& world) {
   closeBlocked(elapsed);
   trajectory(elapsed);
   if(!ep.replay) {NpcKeys::KeyState end;end.walk=true;action(elapsed,end);ep.writer->finish();}
-  ep.trajectory.close();ep.actions.close();
+  ep.trajectory.close();ep.actions.close();ep.knownPaths.close();
   auto out=file("episode.json");
   const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-ep.wallStart).count();
   out<<"{\"success\":"<<ep.success<<",\"replay\":"<<ep.replay<<",\"drive\":"<<ep.drive<<",\"start\":"<<std::quoted(ep.from)
      <<",\"goal\":"<<std::quoted(ep.to)<<",\"elapsed_ms\":"<<elapsed<<",\"limit_ms\":"<<ep.limit
      <<",\"distance_cm\":"<<(ep.npc->position()-ep.goal).length()<<",\"failure\":"<<std::quoted(ep.failure)
+     <<",\"teacher_version\":"<<ep.teacherVersion<<",\"demo_version\":"<<ep.teacherVersion
      <<",\"decisions\":"<<ep.decisions<<",\"record_us_mean\":"<<(ep.decisions?ep.writeUs/double(ep.decisions):0)
      <<",\"record_us_max\":"<<ep.maxWriteUs<<",\"wall_seconds\":"<<seconds
      <<",\"decisions_per_second\":"<<double(ep.decisions)/seconds<<",\"frames\":"<<ep.frames
@@ -216,25 +219,51 @@ void decide(World& w) {
     if(a.time!=elapsed)throw std::runtime_error("navdemos replay clock mismatch");
     NpcKeys::set(n,a.keys,1000);ep.previous=a.keys;++ep.decisions;return;
   }
-  if(ep.drive)measureBlocked(elapsed);
+  if(ep.drive || ep.teacherVersion==2)measureBlocked(elapsed);
   NavKeyTeacher::State body;
-  body.position=meters(n.position());body.velocity=meters(ep.velocity);body.yawDegrees=n.rotation();
+  const auto position=ep.teacherVersion==2 ? NpcKeys::physicalPosition(n) : n.position();
+  body.position=meters(position);body.velocity=meters(ep.velocity);body.yawDegrees=n.rotation();
   body.inAir=n.isInAir();body.falling=n.isFalling();body.sliding=n.isSlide();
   body.climbing=n.navigationClimbing();body.swimming=n.isSwim();body.jumping=n.isJump()||n.isJumpUp();
   body.standing=n.isStanding();
   body.supported=NavTransitions::supported(w,n);
   body.turnSpeedDegrees=n.weaponState()==WeaponState::NoWeapon?90.f:180.f;
-  const auto present=NavKeyTeacher::decide(body,ep.path,meters(ep.goal));
-  const bool followingRoad=ep.path.reason=="waynet_fallback" && present.pathValid && !present.replan;
-  if((body.supported && !followingRoad) || ep.path.corners.empty()) {
-    // A commanded step with no body velocity chooses a road alternative directly from
-    // the present state. Recovery has no timeout or hidden action phase to reconstruct.
-    const bool blocked=ep.previous.forward>0 && ep.previous.turn==0 &&
-                       std::hypot(ep.velocity.x,ep.velocity.z)<5.f;
-    ep.path=plan(w,blocked);++ep.replans;
-    if(ep.path.reason=="waynet_fallback")++ep.fallbacks;
+  NavKeyTeacher::Decision d;
+  if(ep.teacherVersion==2) {
+    KnownRoadsBench::readGuidance(w,n,position,ep.goal,ep.guidance);
+    if(ep.guidance.rebuilt) {
+      ep.knownPaths<<"{\"elapsed_ms\":"<<elapsed<<",\"points_cm\":[";
+      for(size_t i=0;i<ep.guidance.polyline.size();++i) {
+        if(i)ep.knownPaths<<',';
+        vector(ep.knownPaths,ep.guidance.polyline[i]);
+      }
+      ep.knownPaths<<"]}\n";
+      if(!ep.knownPaths)throw std::runtime_error("navdemos known path write failed");
+    }
+    const auto carrot=meters(ep.guidance.carrot);
+    const auto& mesh=NavBench::navigationMesh(w);
+    const bool airborne=body.inAir || body.falling || body.jumping || body.climbing;
+    // The only privileged query is a local obstacle route to the shared carrot.
+    // In flight retain the takeoff route, just as in version 1.
+    if(!airborne || ep.path.corners.empty()) {
+      ep.path=mesh.findPath(body.position,carrot);++ep.replans;
+    }
+    const bool direct=!airborne && !ep.guidance.beyondKnown &&
+                      mesh.straightWalkable(body.position,carrot);
+    d=NavKeyTeacher::decideV2(body,ep.path,meters(ep.goal),carrot,direct);
+  } else {
+    const auto present=NavKeyTeacher::decide(body,ep.path,meters(ep.goal));
+    const bool followingRoad=ep.path.reason=="waynet_fallback" && present.pathValid && !present.replan;
+    if((body.supported && !followingRoad) || ep.path.corners.empty()) {
+      // A commanded step with no body velocity chooses a road alternative directly from
+      // the present state. Recovery has no timeout or hidden action phase to reconstruct.
+      const bool blocked=ep.previous.forward>0 && ep.previous.turn==0 &&
+                         std::hypot(ep.velocity.x,ep.velocity.z)<5.f;
+      ep.path=plan(w,blocked);++ep.replans;
+      if(ep.path.reason=="waynet_fallback")++ep.fallbacks;
+    }
+    d=NavKeyTeacher::decide(body,ep.path,meters(ep.goal));
   }
-  const auto d=NavKeyTeacher::decide(body,ep.path,meters(ep.goal));
   ep.memory.view(ep.view);
   NavDemoWriter::Snapshot sample;
   sample.gameMs=w.tickCount();sample.position=array(NpcKeys::physicalPosition(n));sample.bodyYawDeg=n.rotation();
@@ -245,13 +274,20 @@ void decide(World& w) {
   const auto head=n.navigationEyePose().forward;
   sample.body.headYawDeg=std::remainder(std::atan2(head.z,head.x)*180.f/Pi-n.rotation(),360.f);
   sample.body.headPitchDeg=std::atan2(head.y,std::hypot(head.x,head.z))*180.f/Pi;
-  Vec3 next;const auto roads=KnownRoadsBench::readPath(w,n,ep.goal,next);
-  sample.roads.nextDirection=direction(next-n.position(),n.rotationRad());sample.roads.nextDistanceCm=(next-n.position()).length();
-  sample.roads.goalDirection=direction(ep.goal-n.position(),n.rotationRad());sample.roads.goalDistanceCm=(ep.goal-n.position()).length();
-  sample.roads.remainingVisualCm=float(roads.remainingCm);sample.roads.goalInKnown=roads.goalInKnown;
+  if(ep.teacherVersion==2) {
+    sample.roads.carrotDirection=direction(ep.guidance.carrot-position,n.rotationRad());
+    sample.roads.carrotDistanceCm=(ep.guidance.carrot-position).length();
+    sample.roads.remainingKnownCm=float(ep.guidance.remainingKnownCm);
+    sample.roads.beyondKnown=ep.guidance.beyondKnown;
+  } else {
+    Vec3 next;const auto roads=KnownRoadsBench::readPath(w,n,ep.goal,next);
+    sample.roads.nextDirection=direction(next-n.position(),n.rotationRad());sample.roads.nextDistanceCm=(next-n.position()).length();
+    sample.roads.remainingVisualCm=float(roads.remainingCm);sample.roads.goalInKnown=roads.goalInKnown;
+  }
+  sample.roads.goalDirection=direction(ep.goal-position,n.rotationRad());sample.roads.goalDistanceCm=(ep.goal-position).length();
   sample.previous=ep.previous;sample.keys=d.keys;sample.eye=&ep.eye.samples();sample.memory=&ep.view;
   auto hint=d.hint;
-  if(ep.path.reason=="waynet_fallback") {
+  if(ep.teacherVersion==1 && ep.path.reason=="waynet_fallback") {
     const auto meshPath=NavBench::navigationMesh(w).findPath(body.position,meters(ep.goal));
     hint=NavKeyTeacher::decide(body,meshPath,meters(ep.goal)).hint;
   }
@@ -280,7 +316,7 @@ void decide(World& w) {
   action(elapsed,executed);NpcKeys::set(n,executed,1000);ep.previous=executed;++ep.decisions;
   if(d.hint.remainingLength*100+20<ep.best) {ep.best=d.hint.remainingLength*100;ep.progressAt=w.tickCount();}
   if(!d.pathValid)ep.failure="no_path:"+ep.path.reason;
-  else if(ep.drive?ep.blocked:w.tickCount()-ep.progressAt>=3000)ep.failure="body_blocked";
+  else if((ep.drive || ep.teacherVersion==2)?ep.blocked:w.tickCount()-ep.progressAt>=3000)ep.failure="body_blocked";
   else ep.failure.clear();
 }
 }
@@ -294,13 +330,15 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
   const bool current=a.size()==6 && a[1]=="drive-current";
   const bool speed=a.size()==8 && a[1]=="speed";
   const bool learner=drive || current || speed;
-  if(!replay && !learner && !((a.size()==6 || a.size()==8 || a.size()==9) && a[1]=="start"))
-    throw std::runtime_error("navdemos start NPC FROM TO LIMIT [lateral_cm yaw_deg fraction] | replay NPC FROM TO ACTIONS | drive NPC FROM TO LIMIT WEIGHTS | drive-current NPC GOAL LIMIT WEIGHTS | speed NPC FROM TO LIMIT WEIGHTS POPULATION");
+  const bool carrot=a.size()>=2 && a[1]=="start-v2";
+  if(!replay && !learner && !((a.size()==6 || a.size()==8 || a.size()==9) && (a[1]=="start" || carrot)))
+    throw std::runtime_error("navdemos start|start-v2 NPC FROM TO LIMIT [lateral_cm yaw_deg fraction] | replay NPC FROM TO ACTIONS | drive NPC FROM TO LIMIT WEIGHTS | drive-current NPC GOAL LIMIT WEIGHTS | speed NPC FROM TO LIMIT WEIGHTS POPULATION");
   if(ep.active)throw std::runtime_error("navdemos already active");
   const auto* from=current?nullptr:w.findPoint(a[3],false);const auto* to=w.findPoint(a[current?3:4],false);
   auto* npc=w.findNpcByInstance(w.script().findSymbolIndex(a[2]));
   if((!from && !current) || !to || !npc)throw std::runtime_error("navdemos missing NPC/waypoint");
   ep=Episode{};ep.npc=npc;ep.from=current?"intentional":a[3];ep.to=a[current?3:4];ep.output=output;
+  ep.teacherVersion=carrot?2:1;
   ep.goal=to->groundPos;ep.replay=replay;ep.drive=learner;
   // Optional start arguments begin at 6.
   ep.limit=replay?0:std::stoull(a[current?4:5]);
@@ -357,7 +395,8 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     if(!input.eof() || ep.replayActions.size()<2)throw std::runtime_error("invalid actions replay");
     ep.limit=ep.replayActions.back().time;
   } else {
-    ep.actions=file("actions.txt");ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string());
+    ep.actions=file("actions.txt");ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),ep.teacherVersion);
+    if(carrot)ep.knownPaths=file("known-paths.jsonl");
   }
   observe(w);decide(w);ep.next=ep.began+100;
 }

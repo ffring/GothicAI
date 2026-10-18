@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Compare recorded road guidance with mesh corners and teacher turn labels.
+"""Compare recorded road guidance with actual teacher steering and turn labels.
 
-Read-only analysis on Ryzen; no engine, policy or training imports. The original
-BC index selects training pairs, but every successful teacher episode of those
-pairs is read through nav_demos.iter_chunks(). All round-one DAgger drives are
-read, including failures and control. A shared flock is released between small
-episode batches. Output is aggregate numeric evidence, never sensor recordings.
+Read-only analysis on Ryzen; no engine, policy or training imports. --source
+reads all episodes (including failed attempts) in a version 1 or 2 dataset.
+Alternatively, the original teacher/DAgger/split arguments retain the training
+comparison. A shared flock is released between small episode batches; --no-lock
+is for callers already admitted through gq. Output is aggregate numeric evidence.
 """
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -45,6 +45,10 @@ def turn_rule(angles_deg):
     return np.where(angle > 10., -1, np.where(angle < -10., 1, 0)).astype(np.int8)
 
 
+def road_direction_name(records):
+    return 'carrot_direction' if 'carrot_direction' in records['roads'].dtype.names else 'next_direction'
+
+
 @dataclass
 class EpisodeStats:
     steps: int = 0
@@ -66,7 +70,8 @@ class EpisodeStats:
 
 def analyze_records(records, previous=None):
     """One chunk; previous is the preceding raw record of THIS episode only."""
-    roads = records['roads']['next_direction'].astype(np.float64)
+    direction_name = road_direction_name(records)
+    roads = records['roads'][direction_name].astype(np.float64)
     delta = (records['teacher_hint']['next_corner_cm'].astype(np.float64) -
              records['position_cm'].astype(np.float64))
     yaw = records['body_yaw_deg'].astype(np.float64)
@@ -94,7 +99,7 @@ def analyze_records(records, previous=None):
     jump_roads = roads
     if previous is not None:
         previous = np.asarray(previous).reshape(-1)[-1]
-        old_road = previous['roads']['next_direction'].astype(np.float64)
+        old_road = previous['roads'][direction_name].astype(np.float64)
         jump_roads = np.vstack((old_road, roads))
         road_angle = np.r_[np.degrees(np.arctan2(old_road[0], old_road[2])), road_angle]
         road_valid = np.r_[np.hypot(old_road[0], old_road[2]) > EPS, road_valid]
@@ -157,6 +162,7 @@ def rule_summary(cm):
     recall = np.divide(cm.diagonal(), support, out=np.zeros(3), where=support > 0)
     return dict(steps=int(cm.sum()), accuracy=ratio(cm.trace(), cm.sum()),
                 balanced_accuracy=float(recall[support > 0].mean()) if support.any() else None,
+                turning_steps=int(support[0] + support[2]),
                 turning_accuracy=ratio(cm[0, 0] + cm[2, 2], support[0] + support[2]),
                 labels=[-1, 0, 1], support=support.tolist(), confusion=cm.tolist())
 
@@ -209,6 +215,18 @@ def select_episodes(teacher_source, dagger_source, split_index):
     return selected, excluded
 
 
+def select_source_episodes(source):
+    """Every recorded attempt, without filtering by outcome or training split."""
+    selected = []
+    for path in demos.episode_paths(source):
+        metadata = json.loads((path.parent / 'episode.json').read_text())
+        version = demos.episode_version(path)
+        selected.append((f'source_v{version}', path, metadata))
+    if not selected:
+        raise ValueError(f'no samples.bin.gz episodes found in {source}')
+    return selected, {}
+
+
 @contextmanager
 def shared_lock(path):
     import fcntl
@@ -222,9 +240,12 @@ def shared_lock(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('teacher-source', 'dagger-source', 'split-index', 'output'):
-        parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--source', type=Path, help='analyze every episode of one dataset')
+    for name in ('teacher-source', 'dagger-source', 'split-index'):
+        parser.add_argument('--' + name, type=Path)
+    parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--lock', type=Path, default=Path.home() / 'gothic-ai/body-simulation.lock')
+    parser.add_argument('--no-lock', action='store_true', help='caller already holds a gq allocation')
     parser.add_argument('--batch-size', type=int, default=4)
     parser.add_argument('--chunk-records', type=int, default=32)
     parser.add_argument('--pause-seconds', type=float, default=1.)
@@ -239,16 +260,34 @@ def main():
             setattr(args, name, value.resolve())
     if args.batch_size < 1 or args.chunk_records < 1 or args.pause_seconds < 0:
         parser.error('positive batch/chunk size and nonnegative pause required')
-    for root in (args.teacher_source, args.dagger_source):
+    comparison_sources = (args.teacher_source, args.dagger_source, args.split_index)
+    if args.source is not None:
+        if any(path is not None for path in comparison_sources):
+            parser.error('--source cannot be combined with teacher/DAgger/split sources')
+        roots = (args.source,)
+        selected, excluded = select_source_episodes(args.source)
+        groups = {'source_all': []}
+        groups.update({name: [] for name, _, _ in selected})
+        source_names = ('source',)
+    else:
+        if any(path is None for path in comparison_sources):
+            parser.error('use --source or all of --teacher-source, --dagger-source and --split-index')
+        roots = (args.teacher_source, args.dagger_source)
+        selected, excluded = select_episodes(*comparison_sources)
+        groups = {name: [] for name in ('teacher_train', 'dagger_all', 'dagger_train',
+                                       'dagger_validation', 'dagger_control')}
+        source_names = ('teacher_source', 'dagger_source', 'split_index')
+    for root in roots:
         if args.output == root or root in args.output.parents:
             parser.error('output must be outside the read-only recordings')
-    selected, excluded = select_episodes(args.teacher_source, args.dagger_source, args.split_index)
-    groups = {name: [] for name in ('teacher_train', 'dagger_all', 'dagger_train',
-                                   'dagger_validation', 'dagger_control')}
+
+    def allocation():
+        return nullcontext() if args.no_lock else shared_lock(args.lock)
+
     for start in range(0, len(selected), args.batch_size):
         batch = selected[start:start + args.batch_size]
-        print(f'waiting for shared lock: episodes {start + 1}-{start + len(batch)}/{len(selected)}', flush=True)
-        with shared_lock(args.lock):
+        print(f'analyzing episodes {start + 1}-{start + len(batch)}/{len(selected)}', flush=True)
+        with allocation():
             for group, path, meta in batch:
                 chunks, previous = [], None
                 for records in demos.iter_chunks(path, args.chunk_records):
@@ -258,21 +297,25 @@ def main():
                 if not stats.steps or stats.steps != meta['decisions']:
                     raise ValueError(f'episode decision count mismatch: {path}')
                 groups[group].append(stats)
+                if group.startswith('source_v'):
+                    groups['source_all'].append(stats)
                 if group.startswith('dagger_'):
                     groups['dagger_all'].append(stats)
                 print(f'{group} {path.parent.name}: {stats.steps} decisions', flush=True)
         if start + len(batch) < len(selected):
             time.sleep(args.pause_seconds)
-    with shared_lock(args.lock):
+    with allocation():
         result = dict(
             method=dict(angle='3D arccos and horizontal absolute wrapped bearing difference; zero directions excluded',
+                        road_direction='v1 roads.next_direction; v2 roads.carrot_direction',
+                        teacher_steering='teacher_hint.next_corner_cm: actual world-space steering target',
                         turn_rule='-sign(atan2(body_x,body_z)) outside 10 degrees; keys.turn sign is truth',
                         rule_denominator='common valid horizontal directions, pooled decisions',
                         jump='wrapped body-frame bearing difference >90 deg; within-episode consecutive 100ms decisions',
                         jump_3d='3D body-frame angle >90 deg; within-episode consecutive 100ms nonzero vectors',
                         near_goal='later decision roads.goal_distance_cm <=500; 3D Euclidean, not path remaining',
                         world_jump='body bearing + body_yaw_deg, to remove the rotating coordinate frame'),
-            sources={k: str(getattr(args, k)) for k in ('teacher_source', 'dagger_source', 'split_index')},
+            sources={k: str(getattr(args, k)) for k in source_names},
             excluded=excluded, groups={k: summarize(v) for k, v in groups.items()},
             max_rss_mib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024,
         )

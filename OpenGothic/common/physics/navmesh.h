@@ -95,6 +95,10 @@ class NavMesh final {
     void buildOrLoad(const Geometry& geometry, const Params& params,
                      const std::filesystem::path& cacheDirectory, const std::string& worldName);
     Path findPath(const Point& start, const Point& end) const;
+    // A ground ray must reach the end's actual polygon. Detour's raycast alone ignores
+    // end height; checking its final polygon also rejects a balcony above the ray.
+    // Off-mesh links never make a segment directly walkable.
+    bool straightWalkable(const Point& start, const Point& end) const;
     // Nearest opposing boundaries of the two disconnected ground components.
     // Candidates are geometric probe sites, never permission to add a link.
     std::vector<GapCandidate> gapCandidates(const Point& start, const Point& end,
