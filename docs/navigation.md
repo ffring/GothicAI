@@ -1,5 +1,23 @@
 # Навигация: NPC сам ходит по миру
 
+Статус: родная ходьба работает; сетка, глаз, память, знакомые дороги и политика — на стенде. Перенос в обычную игру впереди; [план и журнал](#план-и-журнал).
+
+## Как работает сейчас
+
+- В обычной игре NPC ходят по сети путей авторов; к свободным точкам идут напрямую. При упоре родной `MoveAlgo` пробует повернуть, обойти или залезть. Обученная навигация эту ходьбу пока не заменяет.
+- На стенде Recast/Detour строят сетку по геометрии Jolt; учитель ведёт по ней и использует переходы для прыжков, залезаний и спусков. В обычной игре сетка не строится и не загружается.
+- Глаз, короткая зрительная память и знакомые дороги подключены только на стенде. В учебных эпизодах глаз даёт 238 лучей в поле 200°; память хранит только увиденное, дороги — знакомую часть сети.
+- `navdemos` записывает примеры учителя, повторяет команды и запускает ученика с явно указанными весами в `gothic-body-runner`. Сеть с памятью выдаёт клавиши движения, поворота, прыжка и залезания через `NpcKeys`.
+
+Основные файлы: родная ходьба — [npc.cpp](../OpenGothic/common/world/objects/npc.cpp), [world.cpp](../OpenGothic/common/world/world.cpp), [movealgo.cpp](../OpenGothic/common/game/movealgo.cpp); сетка и учитель — [navmesh.cpp](../OpenGothic/common/physics/navmesh.cpp), [navkeyteacher.cpp](../OpenGothic/common/navkeyteacher.cpp).
+Датчики и обучение: [navigationeye.cpp](../OpenGothic/common/game/navigationeye.cpp), [navigationmemory.cpp](../OpenGothic/common/game/navigationmemory.cpp), [knownroads.cpp](../OpenGothic/common/game/knownroads.cpp), [navdemos.cpp](../OpenGothic/common/navdemos.cpp), [navpolicy.cpp](../OpenGothic/common/navpolicy.cpp), [npckeys.cpp](../OpenGothic/common/game/npckeys.cpp).
+
+Как выключить: отдельного флага сервера или переменной для обучаемой навигации нет; в обычной игре она не включена. Команда стенда `keys <NPC> off` снимает управление клавишами.
+Проверки: `gothic-navmesh-contract` ([сетка](../OpenGothic/tests/navmesh_contract.cpp)), `gothic-navkeyteacher-contract` ([учитель](../OpenGothic/tests/navkeyteacher_contract.cpp)), `gothic-navigation-eye-contract` ([глаз](../OpenGothic/tests/navigation_eye_contract.cpp)), `gothic-navigation-memory-contract` ([память](../OpenGothic/tests/navigation_memory_contract.cpp)), `gothic-navigation-roads-contract` ([дороги](../OpenGothic/tests/navigation_roads_contract.cpp)), `gothic-navpolicy-contract` ([политика](../OpenGothic/tests/navpolicy_contract.cpp)).
+Ограничения: для постройки сетки стенд требует `[GAME] movable_vobs=0` до загрузки мира; дальность глаза пока не зависит от ночи и тумана. Внедрения ученика в обычную игру и общего выключателя ещё нет.
+
+## План и журнал
+
 Концепт, 2026-10-16. Этапы 0, 1, 2а и 3 сделаны: обучение займёт часы, а не недели; обычные распорядки по сети путей не застревают, застревают прямые ходы — к свободной точке, за целью, по команде сервера ([ниже](#этапы)). NPC знает дороги и видит мир своими глазами, навигационная сетка — только учитель ([решения](#решения)).
 
 ## Зачем
