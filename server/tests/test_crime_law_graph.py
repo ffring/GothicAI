@@ -1,5 +1,8 @@
 import copy
+import json
 import os
+import shutil
+import subprocess
 from collections import Counter
 from functools import reduce
 from pathlib import Path
@@ -478,10 +481,73 @@ def test_gate_law_projects_zero_when_unknown_and_blocks_only_native_severity(kin
 def test_real_gate_programs_pass_the_scoped_validator(real_graph):
     ops = [
         {"op": "program", "node": node, "part": part,
-         "steps": city_entry_program(node, part, [{"do": "return", "value": ["int", 1]}])}
+         "steps": city_entry_program(node, part, [
+             {"do": "return", **({"value": ["int", 1]} if part == "condition" else {})}
+         ])}
         for node in sorted(city_entry_nodes(real_graph))
         for part in ("condition", "information")
     ]
     state = WorldState(symbols={name: "var" for name in names_in(ops)})
     story = Story(real_graph, state).then(init_ops(real_graph))
     assert validate_ops(ops, story) == []
+
+
+@pytest.fixture(scope="module")
+def native_program_reader(tmp_path_factory):
+    """Use the bridge's exact JSON program reader, including native return-type checks."""
+    compiler = shutil.which("c++")
+    if compiler is None:
+        pytest.skip("needs a C++ compiler for the native bridge program reader")
+    repo = Path(__file__).resolve().parents[2]
+    bridge = repo / "OpenGothic" / "ai_bridge"
+    directory = tmp_path_factory.mktemp("crime-gate-reader")
+    source = directory / "reader.cpp"
+    source.write_text(
+        '#include "exprjson.h"\n'
+        '#include <iostream>\n'
+        '#include <iterator>\n'
+        'int main() {\n'
+        '  std::string input((std::istreambuf_iterator<char>(std::cin)), {});\n'
+        '  rapidjson::Document document; document.Parse(input.c_str());\n'
+        '  if(document.HasParseError() || !document.IsArray()) return 2;\n'
+        '  bool failed = false;\n'
+        '  for(auto& item : document.GetArray()) {\n'
+        '    auto program = storygraph::readProgram(item["steps"], item["returns"].GetBool());\n'
+        '    if(!program.error.empty()) { std::cerr << program.error << "\\n"; failed = true; }\n'
+        '  }\n'
+        '  return failed ? 1 : 0;\n'
+        '}\n', encoding="utf-8",
+    )
+    executable = directory / "reader"
+    subprocess.run(
+        [compiler, "-std=c++20", "-O0", "-I", str(bridge / "storygraph"), "-I", str(bridge),
+         "-isystem", str(bridge.parent / "lib" / "rapidjson" / "include"), str(source),
+         str(bridge / "storygraph" / "exprjson.cpp"), str(bridge / "storygraph" / "expr.cpp"),
+         str(bridge / "textcodec.cpp"), "-o", str(executable)],
+        check=True, capture_output=True, text=True, timeout=60,
+    )
+    return executable
+
+
+def test_native_reader_accepts_gate_programs_and_rejects_value_in_void_information(native_program_reader):
+    programs = [
+        {"returns": part == "condition", "steps": city_entry_program(
+            f"DIA_MIL_{number}_STADTWACHE_{suffix}", part,
+            [{"do": "return", **({"value": ["int", 1]} if part == "condition" else {})}],
+        )}
+        for number in ("310", "333")
+        for suffix in ("FIRSTWARN", "BRIBE", "PASSIERSCHEIN", "ZUMSCHMIED", "CONSTANTINO", "PERM")
+        for part in ("condition", "information")
+    ]
+    accepted = subprocess.run(
+        [str(native_program_reader)], input=json.dumps(programs), text=True,
+        capture_output=True, timeout=10,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    bad = [{"returns": False, "steps": [{"do": "return", "value": ["int", 0]}]}]
+    rejected = subprocess.run(
+        [str(native_program_reader)], input=json.dumps(bad), text=True,
+        capture_output=True, timeout=10,
+    )
+    assert rejected.returncode == 1
+    assert "the function returns nothing" in rejected.stderr

@@ -151,7 +151,7 @@ def city_entry_program(node: str, part: str, own: list[Step]) -> list[Step]:
     else:
         prefix.append({
             "do": "if", "cond": city_entry_blocked(),
-            "then": [{"do": "return", "value": ["int", 0]}],
+            "then": [{"do": "return", **({"value": ["int", 0]} if part == "condition" else {})}],
         })
     return [*prefix, *projected[1:]]
 

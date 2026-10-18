@@ -39,6 +39,7 @@ CUP, GOLD = "ITMI_SILVERCUP", "ITMI_GOLD"
 HERO_POINT, WITNESS_POINT = "NW_FARM1_INHOUSE_01", "NW_FARM1_INHOUSE_02"
 MEET_POINT, MEET_PATH = "NW_FARM1_PATH_01", "NW_FARM1_ENTRANCE_03"
 NEAR_REPEAT_S = 31.0  # bridge NearPeriodMs=30000; leaving alone does not reset the throttle
+PUBLIC_PORTAL_GUILDS = {-1, 0, 15}  # unknown, GIL_NONE and the positive GIL_PUBLIC
 
 
 class MeetAmendsScript(FakeBackend):
@@ -158,6 +159,7 @@ async def crime_meet(
             return (
                 views[0].state == "ZS_STAND_WP"
                 and views[0].body == "stand"
+                and views[0].theft_ready is True
                 and math.hypot(actual[0] - expected["x"], actual[2] - expected["z"]) <= 200
             )
 
@@ -245,6 +247,86 @@ async def crime_meet(
             return None
         return crime
 
+    async def home_entry() -> tuple[bool, dict[str, Any]]:
+        """Prove the actual private portal and sight, independently of a waypoint's name.
+
+        Re-entering at the theft's entrance alone proves neither: ZS_STAND_WP aligns its NPC to the
+        waypoint again, and the threshold can belong to a different portal. Keep the theft setup on
+        the shared 01/02 pair; only this later room scene chooses a visible private standing point.
+        """
+        detail: dict[str, Any] = {"attempts": []}
+        for point in ("NW_FARM1_INHOUSE_03", "NW_FARM1_INHOUSE_03_SIT", HERO_POINT):
+            if point not in points:
+                continue
+            await link.debug("player_goto", waypoint=point)
+            # Preserve the initialized state's callbacks. A second start_activity would reset them;
+            # the debug pose only turns the standing witness towards the newly entered hero.
+            await link.debug("npc_goto", npc=LOBART, waypoint=WITNESS_POINT, face="PLAYER")
+            last: dict[str, Any] = {"point": point}
+
+            async def ready(last: dict[str, Any] = last) -> bool:
+                (
+                    player_portal,
+                    npc_portal,
+                    same_room,
+                    can_see,
+                    free_los,
+                    distance,
+                    attitude,
+                    bothered,
+                ) = await link.story_eval(
+                    LOBART,
+                    [
+                        ["call", "WLD_GETPLAYERPORTALGUILD"],
+                        ["call", "NPC_GETPORTALGUILD", ["inst", "SELF"]],
+                        ["call", "NPC_ISINPLAYERSROOM", ["inst", "SELF"]],
+                        ["call", "NPC_CANSEENPC", ["inst", "SELF"], ["inst", "HERO"]],
+                        ["call", "NPC_CANSEENPCFREELOS", ["inst", "SELF"], ["inst", "HERO"]],
+                        ["call", "NPC_GETDISTTONPC", ["inst", "SELF"], ["inst", "HERO"]],
+                        ["call", "NPC_GETATTITUDE", ["inst", "SELF"], ["inst", "HERO"]],
+                        ["fn", "C_NPCISBOTHEREDBYPLAYERROOMGUILD", ["inst", "SELF"]],
+                    ],
+                )
+                sample = await view()
+                snapshot = await link.snapshot(LOBART, fresh=True)
+                last.update(
+                    {
+                        "view": sample.model_dump() if sample is not None else None,
+                        "player_portal_guild": player_portal,
+                        "npc_portal_guild": npc_portal,
+                        "same_room": same_room,
+                        "can_see": can_see,
+                        "free_los": free_los,
+                        "distance": distance,
+                        "attitude": attitude,
+                        "bothered_guild": bothered,
+                        "npc_pos": snapshot.npc.pos,
+                        "hero_pos": snapshot.player.pos if snapshot.player is not None else None,
+                    }
+                )
+                return (
+                    player_portal not in PUBLIC_PORTAL_GUILDS
+                    and player_portal == npc_portal
+                    and bool(same_room)
+                    and bool(bothered)
+                    and bool(can_see)
+                    and sample is not None
+                    and sample.hero is not None
+                    and sample.hero.seen
+                    and distance <= 1000
+                )
+
+            prepared = await _until_async(ready, bool, 3)
+            detail["attempts"].append(last)
+            log.info("crime_meet home entry preparation: %s", last)
+            if prepared:
+                return True, detail
+            # The next candidate is a new physical entry, not a retry of the reaction. Nothing in
+            # this helper calls a perception, changes a room's owner, or supplies a crime memory.
+            if not await away() or not await placed(LOBART, WITNESS_POINT):
+                break
+        return False, detail
+
     async def next_meeting() -> float | None:
         nonlocal meeting_origin
         if not await away():
@@ -328,9 +410,11 @@ async def crime_meet(
             if not check("home_owner_ready", await placed(LOBART, WITNESS_POINT)):
                 return _logged(results)
             await link.body_watch(["PLAYER"], rate_hz=20)
-            await link.debug("player_hp", hp=10)
             entered = time.monotonic()
-            await link.debug("player_goto", waypoint=HERO_POINT)
+            prepared, preparation = await home_entry()
+            if not check("home_entry_ready", prepared, preparation):
+                return _logged(results)
+            await link.debug("player_hp", hp=10)
             if not check("home_enter_room", await _until(lambda: bool(events("enter_room", entered)), 15)):
                 return _logged(results)
             states: list[dict[str, Any]] = []
