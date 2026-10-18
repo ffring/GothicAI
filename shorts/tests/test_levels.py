@@ -1197,6 +1197,8 @@ def test_mastering_rejects_a_true_peak_hidden_by_the_rounded_summary(
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg is required for synthetic mastering")
     # The earlier limiter overshoots -1 dBTP; the current default must keep this source publishable.
+    # ffmpeg's own AAC at 192k produces that overshoot on every platform; AudioToolbox does not.
+    monkeypatch.setattr(levels, "aac_encoder", lambda: ("-c:a", "aac", "-b:a", "192k"))
     if unsafe_limit:
         monkeypatch.setattr(levels, "PEAK_LIMIT", 0.79)
     else:
