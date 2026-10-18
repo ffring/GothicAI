@@ -536,6 +536,7 @@ class DynamicWorld final {
     std::string_view validateSectorName(std::string_view name) const;
 
   private:
+    friend class ClothBulletBenchDriver;
     void           moveBullet(BulletBody& b, const Tempest::Vec3& dir, uint64_t dt);
     RayWaterResult implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight,
                                  uint32_t solidMask = 0) const;

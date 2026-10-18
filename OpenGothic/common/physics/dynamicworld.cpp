@@ -440,7 +440,7 @@ struct DynamicWorld::NpcBodyList final {
     return true;
     }
 
-  auto rayTest(const Tempest::Vec3& s, const Tempest::Vec3& e, float extR, const Npc* except) {
+  auto rayTest(const Tempest::Vec3& s, const Tempest::Vec3& e, float extR, const Npc* except, float* distance = nullptr) {
     NpcBody* ret     = nullptr;
     auto     dir     = Tempest::Vec3::normalize(e-s);
     auto     tMax    = (e-s).length();
@@ -464,6 +464,8 @@ struct DynamicWorld::NpcBodyList final {
           }
         }
       }
+    if(distance!=nullptr)
+      *distance=tHit;
     return ret;
     }
 
@@ -2099,38 +2101,50 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   ArrowTrace::write(b,b.cb,"world_query",dt,nullptr,hit.hasHit,hit.fraction,hit.point,hit.normal,
                     unsigned(matId),hit.body!=nullptr ? unsigned(hit.body->category()) : 0);
 
+  // Cloth has no blocking collision shape. Notify only the travelled part of
+  // this step: either a solid world contact or an accepted NPC contact ends it.
+  const bool hasCloth=clothWorld->enabled() && clothWorld->bodyCount()!=0;
+  const auto notifyCloth=[&](const Tempest::Vec3& end) {
+    if(!hasCloth)
+      return;
+    const auto incoming=to-pos;
+    if(incoming.quadLength()<=1.e-8f)
+      return;
+    if(!isSpell) {
+      clothWorld->projectile(pos,end,Tempest::Vec3::normalize(incoming)*.35f,true);
+      }
+    else if(ownerWorld!=nullptr) {
+      const auto kind=ownerWorld->script().physicalSpell(b.spellId());
+      if(kind==GameScript::PhysicalSpell::Fireball || kind==GameScript::PhysicalSpell::WindFist)
+        clothWorld->projectile(pos,end,Tempest::Vec3::normalize(incoming)*(kind==GameScript::PhysicalSpell::WindFist ? 8.f : 5.f),false);
+      }
+    };
+
   // an arrow aimed by hand: the npcs on the way to the wall first (one stands right before it), hit
   // where their bones are
   const bool precise = !isSpell && b.cb!=nullptr && b.cb->isPrecise();
   if(precise) {
     const float a   = matId!=zenkit::MaterialGroup::NONE ? hit.fraction : 1.f;
     const auto  end = pos + (to-pos)*a;
-    if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) { return b.cb->onCollidePrecise(npc,pos,end); })) {
+    if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) {
+      // Capture the same bone intersection before damage can alter its pose.
+      float distance=0;
+      const bool boneHit=hasCloth && npc.rayHitZone(pos,end,distance)!=HitZones::None;
+      if(!b.cb->onCollidePrecise(npc,pos,end))
+        return false;
+      const auto impact=boneHit ? pos+Tempest::Vec3::normalize(end-pos)*distance : end;
+      notifyCloth(impact);
+      return true;
+      })) {
       b.cb->onStop();
       ArrowTrace::write(b,b.cb,"end",dt);
       return;
       }
     }
 
-  // Cloth has no blocking collision shape. Test the actual travelled segment
-  // before solid impact, then leave arrows' flight and attachments unchanged.
-  const auto clothEnd=hit.hasHit ? pos+(to-pos)*hit.fraction : to;
-  if(!isSpell) {
-    const auto incoming=to-pos;
-    if(incoming.quadLength()>1.e-8f)
-      clothWorld->projectile(pos,clothEnd,Tempest::Vec3::normalize(incoming)*.35f,true);
-    }
-  else if(ownerWorld!=nullptr) {
-    const auto kind=ownerWorld->script().physicalSpell(b.spellId());
-    if(kind==GameScript::PhysicalSpell::Fireball || kind==GameScript::PhysicalSpell::WindFist) {
-      const auto incoming=to-pos;
-      if(incoming.quadLength()>1.e-8f)
-        clothWorld->projectile(pos,clothEnd,Tempest::Vec3::normalize(incoming)*(kind==GameScript::PhysicalSpell::WindFist ? 8.f : 5.f),false);
-      }
-    }
-
   bool stopBullet = false;
   if(matId != zenkit::MaterialGroup::NONE) {
+    notifyCloth(pos+(to-pos)*hit.fraction);
     if(!isSpell && hit.body!=nullptr && hit.body->ptrType()==P_MovableVob) {
       auto& target=*static_cast<BodyData*>(hit.body->payload());
       // Direction is cm/ms; a 120 gram arrow transfers SI momentum at its
@@ -2192,14 +2206,19 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         }
       }
     } else {
+    auto clothEnd=to;
+    float npcDistance=0;
     if(precise)
       ; // tested above
-    else if(auto ptr = npcList->rayTest(pos,to,b.targetRange(),nullptr)) {
+    else if(auto ptr = npcList->rayTest(pos,to,b.targetRange(),nullptr,&npcDistance)) {
       ArrowTrace::write(b,b.cb,"npc_collision",dt,ptr->toNpc());
       if(b.cb!=nullptr)
         stopBullet |= b.cb->onCollide(*ptr->toNpc()); else
         stopBullet  = true;
+      if(stopBullet)
+        clothEnd=pos+Tempest::Vec3::normalize(to-pos)*npcDistance;
       }
+    notifyCloth(clothEnd);
     const float l = b.speed();
     auto        d = b.direction();
     if(!isSpell)

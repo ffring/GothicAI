@@ -97,6 +97,13 @@
 
 using namespace Tempest;
 
+class ClothBulletBenchDriver final {
+  public:
+    static void step(DynamicWorld& world,DynamicWorld::BulletBody& bullet,const Vec3& direction,uint64_t dt) {
+      world.moveBullet(bullet,direction,dt);
+      }
+  };
+
 namespace {
 
 const char* envStr(const char* name) {
@@ -708,6 +715,7 @@ struct Bench {
   float clothArrowDownstream=0;
   uint64_t clothShotAt=0,clothShotHitsBefore=0;
   std::string clothShotKind;
+  Npc* clothArrowNpc=nullptr;
 
 
   std::string waterLootMode;
@@ -5229,6 +5237,75 @@ void clothShoot(World& world,Npc& player,std::string_view kind) {
     ",\"direction\":"+ragdollVector(-normal));
   }
 
+void clothArrowNpc(World& world,Npc& player,std::string_view order) {
+  if(order!="behind" && order!="ahead") {arenaAbort("cloth arrow-npc expects behind or ahead");return;}
+  const auto all=world.physic()->cloth().snapshots();
+  const auto found=std::find_if(all.begin(),all.end(),[](const auto& body){return body.zenId==bench.clothZen;});
+  if(found==all.end() || !found->active) {arenaAbort("cloth arrow-npc requires an active authored banner");return;}
+  float bestArea=0;Vec3 target,normal;
+  for(size_t i=0;i+2<found->indices.size();i+=3) {
+    const auto p=found->worldPositionsCm[found->indices[i]],q=found->worldPositionsCm[found->indices[i+1]],r=found->worldPositionsCm[found->indices[i+2]];
+    const auto cross=Vec3::crossProduct(q-p,r-p);
+    if(cross.length()<=bestArea)continue;
+    const auto center=(p+q+r)/3.f;
+    for(float side:{1.f,-1.f}) {
+      const auto direction=Vec3::normalize(cross)*side;
+      if(std::abs(direction.y)>.25f || world.physic()->ray(center+direction*200.f,center-direction*150.f).hasCol)continue;
+      target=center;normal=direction;bestArea=cross.length();break;
+      }
+    }
+  if(bestArea<1.f) {arenaAbort("cloth arrow-npc has no unobstructed face and NPC segment");return;}
+  if(bench.clothArrowNpc==nullptr) {
+    const auto symbol=world.script().findSymbolIndex("BAU_904_BAUER");
+    if(symbol==size_t(-1)) {arenaAbort("cloth arrow-npc fixture instance unavailable");return;}
+    bench.clothArrowNpc=world.addNpc(symbol,target);
+    if(!bench.clothArrowNpc) {arenaAbort("cloth arrow-npc fixture insertion failed");return;}
+    bench.crew.push_back(bench.clothArrowNpc);
+    }
+  auto& npc=*bench.clothArrowNpc;
+  npc.clearAiQueue();npc.clearState(false);npc.stopWalking();npc.clearSpeed();npc.setExternalControl(true);
+  npc.handle().attribute[ATR_HITPOINTS]=npc.handle().attribute[ATR_HITPOINTSMAX]=50000;
+  const auto from=target+normal*200.f,to=target-normal*150.f;
+  Vec3 expectedImpact;bool prepared=false;
+  const float npcSide=order=="behind"?-70.f:70.f;
+  for(float height:{100.f,120.f,80.f,140.f,160.f}) {
+    npc.setPosition(target+normal*npcSide-Vec3(0,height,0));npc.setDirection(normal);npc.updateTransform();
+    float distance=0;
+    if(npc.rayHitZone(from,to,distance)==HitZones::None)continue;
+    expectedImpact=from+Vec3::normalize(to-from)*distance;
+    const float side=Vec3::dotProduct(expectedImpact-target,normal);
+    if((order=="behind" && side< -5.f) || (order=="ahead" && side>5.f)) {prepared=true;break;}
+    }
+  if(!prepared) {arenaAbort("cloth arrow-npc fixture bones do not lie strictly before or after its banner");return;}
+  const auto arrowSymbol=world.script().findSymbolIndex("ITRW_ARROW");
+  if(arrowSymbol==size_t(-1)) {arenaAbort("cloth arrow-npc native arrow item unavailable");return;}
+  Item item(world,arrowSymbol,Item::T_Inventory);
+  constexpr uint64_t dt=100;
+  // One synchronous native moveBullet call, with gravity compensated in its
+  // initial velocity. The native Bullet callback still resolves bones, damage,
+  // attachments and stop. Its registered body cannot tick during this call.
+  Bullet arrow(world,item,from);
+  arrow.setOrigin(&player);arrow.setPrecise(1.f);
+  const auto direction=(to-from)/float(dt)+Vec3(0,.5f*DynamicWorld::gravity*float(dt),0);
+  arrow.setDirection(direction);
+  DynamicWorld::BulletBody step(world.physic(),&arrow);
+  step.setPosition(from);step.setDirection(direction);
+  const auto before=found->arrowPasses;
+  ClothBulletBenchDriver::step(*world.physic(),step,direction,dt);
+  const auto afterRows=world.physic()->cloth().snapshots();
+  const auto after=std::find_if(afterRows.begin(),afterRows.end(),[](const auto& body){return body.zenId==bench.clothZen;});
+  const auto passes=after==afterRows.end()?before:after->arrowPasses;
+  const bool nativeHit=arrow.isFinished() && arrow.hitZone()!=HitZones::None && (arrow.impactPoint()-expectedImpact).length()<.1f;
+  const bool pass=nativeHit && passes-before==(order=="behind"?1u:0u);
+  event("cloth_arrow_npc_verify","\"order\":"+jsonStr(order)+",\"pass\":"+(pass?"true":"false")+
+    ",\"move_bullet_calls\":1,\"dt_ms\":"+std::to_string(dt)+",\"native_precise_hit\":"+(nativeHit?"true":"false")+
+    ",\"arrow_passes_before\":"+std::to_string(before)+",\"arrow_passes_after\":"+std::to_string(passes)+
+    ",\"from_cm\":"+ragdollVector(from)+",\"step_end_cm\":"+ragdollVector(to)+",\"cloth_target_cm\":"+ragdollVector(target)+
+    ",\"npc_impact_cm\":"+ragdollVector(arrow.impactPoint())+",\"npc_impact_side_cm\":"+
+    ragdollNumber(Vec3::dotProduct(arrow.impactPoint()-target,normal)));
+  if(!pass)arenaAbort("cloth single-step arrow/NPC ordering check failed");
+  }
+
 void saveMovableSession(World& world,const std::string& label) {
   if(label.empty() || label.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
     throw std::runtime_error("invalid movable save label");
@@ -8786,6 +8863,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="cloth" && a.size()==3 && a[1]=="checkpoint")clothCheckpoint(w,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="shoot")clothShoot(w,pl,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="arrow-npc")clothArrowNpc(w,pl,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="save")clothSaveSession(w,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="camera")clothCamera(w,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="initial")clothInitial(w,a[2]);
