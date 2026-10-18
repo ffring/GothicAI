@@ -1299,7 +1299,10 @@ void MainWindow::render(){
 
     static bool once=true;
     if(once) {
-      Gothic::inst().emitGlobalSoundWav("GAMESTART.WAV");
+      // the start's jingle is music (43 s in the addon) played on the sound channel: it stays off with the music,
+      // else it plays under the first takes of a bench filmed with music off
+      if(Gothic::settingsGetI("SOUND","musicEnabled")!=0)
+        Gothic::inst().emitGlobalSoundWav("GAMESTART.WAV");
       once=false;
       }
 
