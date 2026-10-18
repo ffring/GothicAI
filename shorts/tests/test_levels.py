@@ -1819,12 +1819,9 @@ def test_calibration_and_publication_account_for_music_ramps_in_short_pauses(tmp
          "afade=t=in:d=0.06,afade=t=out:st=5.94:d=0.06",
          "-c:a", "pcm_f32le", str(voice)], check=True, capture_output=True,
     )
-    active = "+".join(f"between(t,{start},{end})" for start, end in speech)
-    # Each transition is at a zero crossing of the 220 Hz source. The raw
-    # music is already quieter in speech, leaving some ducking for calibration.
-    raw_duck = levels.MUSIC_DUCK_DB / 3
-    source = (f"aevalsrc='0.125*(1+({10 ** (-raw_duck / 20) - 1:.12f})*({active}))"
-              "*sin(2*PI*220*t)':s=48000:d=6")
+    # Keep raw music steady so duck ramps in the short pauses require
+    # fallback refinement rather than leaving their error within tolerance.
+    source = "aevalsrc='0.125*sin(2*PI*220*t)':s=48000:d=6"
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", source,
          "-c:a", "pcm_f32le", str(music)], check=True, capture_output=True,
