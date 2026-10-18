@@ -4,6 +4,7 @@
 
 #include "camera.h"
 #include "game/definitions/musicdefinitions.h"
+#include "gothic.h"
 #include "game/gamesession.h"
 #include "world/triggers/abstracttrigger.h"
 #include "world/objects/npc.h"
@@ -229,7 +230,10 @@ void WorldSound::tick(Npc& player) {
 
   game.updateListenerPos(cx);
 
+  const bool worldSounds = Gothic::settingsGetI("SOUND","worldSounds")!=0;
   for(auto& i:worldEff) {
+    if(!worldSounds)
+      break;
     if(!i.active || !i.current.isFinished())
       continue;
     if(i.current.isFinished())

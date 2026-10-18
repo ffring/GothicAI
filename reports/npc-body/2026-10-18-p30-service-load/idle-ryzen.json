@@ -1,0 +1,100 @@
+{
+ "mode": "load",
+ "label": "ryzen",
+ "host": "ryzen",
+ "port": 47835,
+ "streams": 4,
+ "duration_s": 120.0,
+ "elapsed_s": 120.38366487500025,
+ "started_at": "2026-10-18T03:54:07.449197Z",
+ "ended_at": "2026-10-18T03:56:07.834604Z",
+ "valid_for_ms": 100,
+ "call_timeout_ms": 1000,
+ "seed": 1,
+ "steps": 8727,
+ "responses": 8727,
+ "decisions": 770,
+ "fallback": 0,
+ "timeouts": 0,
+ "errors": 0,
+ "reconnects": 0,
+ "stale": 2,
+ "stale_fraction": 0.00022917382834880258,
+ "per_stream": [
+  {
+   "stream": 0,
+   "phase_s": 0.13436424411240122,
+   "steps": 2192,
+   "responses": 2192,
+   "decisions": 192,
+   "fallback": 0,
+   "timeouts": 0,
+   "errors": 0,
+   "reconnects": 0,
+   "stale": 0
+  },
+  {
+   "stream": 1,
+   "phase_s": 0.8474337369372327,
+   "steps": 2171,
+   "responses": 2171,
+   "decisions": 193,
+   "fallback": 0,
+   "timeouts": 0,
+   "errors": 0,
+   "reconnects": 0,
+   "stale": 1
+  },
+  {
+   "stream": 2,
+   "phase_s": 0.763774618976614,
+   "steps": 2173,
+   "responses": 2173,
+   "decisions": 193,
+   "fallback": 0,
+   "timeouts": 0,
+   "errors": 0,
+   "reconnects": 0,
+   "stale": 1
+  },
+  {
+   "stream": 3,
+   "phase_s": 0.2550690257394217,
+   "steps": 2191,
+   "responses": 2191,
+   "decisions": 192,
+   "fallback": 0,
+   "timeouts": 0,
+   "errors": 0,
+   "reconnects": 0,
+   "stale": 0
+  }
+ ],
+ "rtt_ms": {
+  "p50": 3.4538340114522725,
+  "p95": 11.788832998718135,
+  "p99": 22.806042004958726,
+  "p99.9": 40.79591600748245,
+  "max": 659.8187079944182
+ },
+ "age_ms": {
+  "p99": 27.61608398577664,
+  "max": 662.9091250069905
+ },
+ "lag_ms": {
+  "p99": 10.349125004722737,
+  "max": 55.34395799622871
+ },
+ "rtt_by_minute": [
+  {
+   "minute": 0,
+   "steps": 4386,
+   "p99": 21.77958399988711
+  },
+  {
+   "minute": 1,
+   "steps": 4341,
+   "p99": 24.04983299493324
+  }
+ ]
+}

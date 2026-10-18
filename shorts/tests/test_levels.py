@@ -168,7 +168,7 @@ def balanced_tracks(tone_inputs):
         "music_speech_lufs": _tone_level(tone_inputs, -20),
         "game_speech_lufs": _tone_level(tone_inputs, -6),
         "game_pause_lufs": _tone_level(tone_inputs, -3),
-        "ending_lufs": _tone_level(tone_inputs, -3),
+        "ending_lufs": _tone_level(tone_inputs, -levels.ENDING_BELOW_VOICE_LU),
     }
 
 
@@ -184,7 +184,8 @@ def test_balance_accepts_calibrated_synthetic_tracks(balanced_tracks):
     assert rows["music_speech"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 20)
     assert rows["game_speech"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 6)
     assert rows["game_pause"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 3)
-    assert rows["ending"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 2)
+    assert rows["ending"]["target_lufs"] == pytest.approx(
+        balanced_tracks["speech_lufs"] - levels.ENDING_CHECK_BELOW_VOICE_LU)
     assert rows["game_below_voice"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 3)
     assert rows["music_below_game"]["target_lufs"] == pytest.approx(balanced_tracks["game_pause_lufs"] - 3)
     assert all({"id", "measured_lufs", "target_lufs", "ok", "target"} <= row.keys()
@@ -420,8 +421,8 @@ def test_calibration_leaves_headroom_in_effects_and_ending(tmp_path, tone_inputs
     assert report["ok"] is True
     assert report["ending_gain_db"] < 0
     assert levels.CEILING_HEADROOM_LU == 0.5
-    assert ending == pytest.approx(s - 3.5, abs=0.2)
-    assert ending <= s - 2
+    assert ending == pytest.approx(s - (levels.ENDING_BELOW_VOICE_LU + levels.CEILING_HEADROOM_LU), abs=0.2)
+    assert ending <= s - levels.ENDING_CHECK_BELOW_VOICE_LU
     assert _rows(report)["ending"]["ok"] is True
     rows = _rows(report)
     assert rows["game_pause"]["measured_lufs"] == pytest.approx(s - 3.5, abs=0.2)
@@ -431,7 +432,7 @@ def test_calibration_leaves_headroom_in_effects_and_ending(tmp_path, tone_inputs
     assert shifted["ok"] is True
     assert _rows(shifted)["game_pause"]["target_lufs"] == s - 3
     assert _rows(shifted)["game_speech"]["target_lufs"] == s - 6
-    assert _rows(shifted)["ending"]["target_lufs"] == s - 2
+    assert _rows(shifted)["ending"]["target_lufs"] == s - levels.ENDING_CHECK_BELOW_VOICE_LU
 
 
 def test_calibration_boosts_a_quiet_ending_without_a_body_surge(tmp_path):
@@ -454,10 +455,12 @@ def test_calibration_boosts_a_quiet_ending_without_a_body_surge(tmp_path):
     calibrated, report = levels.calibrate(game, None, [(voice, 4)], [(4, 8)], 12, 14)
     rows = _rows(report)
     s = report["speech_lufs"]
-    assert report["ending_gain_db"] > 24
+    # the ending tone is 40 dB under the body; it is lifted to its place under the voice
+    assert report["ending_gain_db"] > 27 - levels.ENDING_BELOW_VOICE_LU
     assert report["ok"] is True
     assert rows["game_pause"]["measured_lufs"] <= s - 3
-    assert rows["ending"]["measured_lufs"] == pytest.approx(s - 3.5, abs=0.2)
+    assert rows["ending"]["measured_lufs"] == pytest.approx(
+        s - (levels.ENDING_BELOW_VOICE_LU + levels.CEILING_HEADROOM_LU), abs=0.2)
     # No sample in the body's fade may exceed the same body with a constant gain.
     result = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", *calibrated.inputs,
@@ -744,7 +747,7 @@ def test_voiced_master_checks_decoded_audio_before_publication(
     graph = commands[0][commands[0].index("-filter_complex") + 1]
     assert "volume=14.000000000dB" in graph
     assert graph.count("alimiter=") == 1
-    assert "alimiter=limit=0.79:level=false:latency=true" in graph
+    assert f"alimiter=limit={levels.PEAK_LIMIT}:level=false:latency=true" in graph
     assert "aeval='val(0)|val(1)|0.01':c=2.1" in graph
     assert "amultiply[voice_mastered]" in graph
     assert "loudnorm" not in graph
@@ -1114,12 +1117,13 @@ def test_mastering_recalibrates_decoded_effects_after_peaky_voice_corrections(
     assert measured_voice[-1] == pytest.approx(-14, abs=levels.VOICE_TOLERANCE_LU)
     assert rows["voice_mastered"]["measured_lufs"] == measured_voice[-1]
     assert rows["voice_mastered"]["ok"] is True
-    for key, below in (("game_pause", 3), ("game_speech", 6), ("ending", 2)):
+    for key, below in (("game_pause", 3), ("game_speech", 6), ("ending", levels.ENDING_CHECK_BELOW_VOICE_LU)):
         assert rows[key]["target_lufs"] == pytest.approx(measured_voice[-1] - below)
         assert rows[key]["ok"] is True
     assert rows["game_pause"]["measured_lufs"] == pytest.approx(measured_voice[-1] - 3.5, abs=0.2)
     assert rows["game_speech"]["measured_lufs"] <= measured_voice[-1] - 6.5 + 0.2
-    assert rows["ending"]["measured_lufs"] == pytest.approx(measured_voice[-1] - 3.5, abs=0.5)
+    assert rows["ending"]["measured_lufs"] == pytest.approx(
+        measured_voice[-1] - levels.ENDING_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU, abs=0.5)
     if with_music:
         assert any(step["music_gain_db"] for step in report["balance_corrections_db"])
         assert balances[0]["music_pause"]["ok"] is False
@@ -1183,6 +1187,8 @@ def test_mastering_rejects_a_true_peak_hidden_by_the_rounded_summary(
 ):
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg is required for synthetic mastering")
+    # built to overshoot -1 dBTP through the earlier, higher limiter; the gate must still catch it
+    monkeypatch.setattr(levels, "PEAK_LIMIT", 0.79)
     voice, joined, out = (tmp_path / name for name in ("voice.wav", "joined.mkv", "short-ru.mp4"))
     peaky_voice = (
         "aevalsrc='(0.03+if(lt(mod(t,0.1),0.002),"
@@ -1417,7 +1423,7 @@ def test_mastering_calibrates_an_ending_audible_only_in_the_last_90_ms(tmp_path,
         abs=0.2,
     )
     assert _rows(report)["ending"]["measured_lufs"] == pytest.approx(
-        report["speech_lufs"] - 3.5, abs=0.2,
+        report["speech_lufs"] - levels.ENDING_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU, abs=0.2,
     )
     comparison_cut.master(audio.inputs, audio.mix(), out, 8.29,
                           voiced=True, audio=audio, report=report)

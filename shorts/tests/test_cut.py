@@ -32,7 +32,7 @@ def synthetic_assets(tmp_path_factory):
     take, brand, music = (root / name for name in ("take", "brand", "music"))
     for directory in (take, brand, music, take / "run"):
         directory.mkdir()
-    (take / "run/Gothic.ini").write_text("[SOUND]\nmusicVolume=0\nsoundVolume=1\n")
+    (take / "run/Gothic.ini").write_text("[SOUND]\nmusicVolume=0\nsoundVolume=1\nworldSounds=0\n")
     _ffmpeg(
         "-f", "lavfi", "-i", "testsrc2=size=108x192:rate=30:duration=18",
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(take / "main.mp4"),
@@ -228,15 +228,17 @@ def test_short_npc_reply_publishes_with_the_combined_voice_reference(tmp_path, s
     assert end - start == pytest.approx(0.25, abs=1 / 22050)
 
 
-@pytest.mark.parametrize("old_format", ["npc-mixed-in-game", "game-music"])
+@pytest.mark.parametrize("old_format", ["npc-mixed-in-game", "game-music", "world-sounds"])
 def test_old_takes_require_refilming(tmp_path, synthetic_assets, monkeypatch, old_format):
     assets = synthetic_assets
     take = tmp_path / "old-take"
     shutil.copytree(assets.take, take, ignore=shutil.ignore_patterns("cut-*", "short-*"))
     if old_format == "npc-mixed-in-game":
         _events(take / "events.jsonl", [event for event in assets.events if event["kind"] != "npc_voice"])
-    else:
-        (take / "run/Gothic.ini").write_text("[SOUND]\nmusicVolume=0.35\n")
+    elif old_format == "game-music":
+        (take / "run/Gothic.ini").write_text("[SOUND]\nmusicVolume=0.35\nworldSounds=0\n")
+    else:  # filmed before worldSounds: the map's looping place sounds are in the effects
+        (take / "run/Gothic.ini").write_text("[SOUND]\nmusicVolume=0\n")
     _small_cut(monkeypatch, assets)
     with pytest.raises(cut.CutError, match="переснимите дубль"):
         cut.cut(assets.shot, take)

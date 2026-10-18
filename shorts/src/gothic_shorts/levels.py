@@ -28,7 +28,8 @@ MASTER_CORRECTION_TOLERANCE_LU = 0.1
 MAX_MASTER_CORRECTIONS = 2
 MAX_BALANCE_CORRECTIONS = 2
 CEILING_HEADROOM_LU = 0.5
-PEAK_LIMIT = 0.79  # Leave AAC/intersample headroom below the final true-peak ceiling.
+# -3 dBFS: AAC and intersample headroom under the -1 dBTP ceiling (sharp spell attacks overshot it at 0.79)
+PEAK_LIMIT = 0.71
 # A sub-threshold pilot follows the limiter's shared gain without influencing it.
 LIMITER_PILOT = 0.01
 MUSIC_BELOW_VOICE_LU = 14.0
@@ -39,8 +40,8 @@ MUSIC_DUCK_DB = 6.0
 MAX_MUSIC_DUCK_DB = 18.0
 GAME_BELOW_VOICE_LU = 6.0
 GAME_PAUSE_BELOW_VOICE_LU = 3.0
-ENDING_BELOW_VOICE_LU = 3.0
-ENDING_CHECK_BELOW_VOICE_LU = 2.0
+ENDING_BELOW_VOICE_LU = 6.0
+ENDING_CHECK_BELOW_VOICE_LU = 5.0
 LEVEL_TOLERANCE_LU = 1.5
 RAMP_SECONDS = 0.150
 # ebur128's summary is rounded to tenths; keep game gain on the safe side.

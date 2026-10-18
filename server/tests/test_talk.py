@@ -99,6 +99,35 @@ def test_the_heros_voice_does_not_go_through_rock():
     assert addressee("Ну что, идём?", None, corner, "BAU_4300_ADDON_CAVALORN") is None
 
 
+def test_words_after_a_fight_find_the_walking_companion():
+    npc = "BAU_4300_ADDON_CAVALORN"
+    text = "Ну ты молодец. Как ты их вообще... Одной левой."
+    people = roster(person(npc, "Кавалорн", 8))
+
+    def ours(who):
+        return who == npc
+
+    hit = addressee(text, None, people, None, ours=ours)
+    assert (hit.id, hit.why) == (npc, "companion")
+    people[LOBART] = RosterEntry(**person(LOBART, "Лобарт", 3, True))
+    assert addressee(text, None, people, None, ours=ours).id == LOBART
+    people[LOBART] = RosterEntry(**person(LOBART, "Лобарт", 10, True))
+    assert addressee(text, None, people, None, ours=ours).id == npc
+    assert addressee(text, None, roster(person(npc, "Кавалорн", 11)), None, ours=ours) is None
+    assert addressee(text, None, roster(person(npc, "Кавалорн", 4, heard=20000)), None, ours=ours) is None
+
+
+def test_plural_address_goes_to_people_in_front_of_the_companion():
+    npc, brago = "BAU_4300_ADDON_CAVALORN", "BDT_1014_BANDIT_L"
+    people = roster(person(npc, "Кавалорн", 2), person(brago, "Браго", 5, True))
+    for text in ("Здарова, псы.", "Пацаны, здорово!", "Ребята, слушайте", "Мужики, здорово", "Всем привет"):
+        hit = addressee(text, None, people, npc, ours=lambda who: who == npc)
+        assert (hit.id, hit.why) == (brago, "group"), text
+    assert addressee("Пацаны, здорово!", npc, people, npc, ours=lambda who: who == npc).id == brago
+    people[brago] = people[brago].model_copy(update={"in_view": False})
+    assert addressee("Пацаны, здорово!", None, people, npc, ours=lambda who: who == npc).id == npc
+
+
 def test_the_codes_posture_when_the_behavioral_model_is_unsure():
     stand = RosterEntry(id="A", name="A", distance=300, state="ZS_STAND_ARMSCROSSED")
     assert default_posture(stand) == "listen"

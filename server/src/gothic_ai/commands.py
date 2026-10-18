@@ -1,9 +1,10 @@
 """Orders the hero gives by voice: a short fixed phrase ("За мной!", "Стой!", "В атаку!").
 
 The conversational model takes seconds to answer, and in a fight that is too long for "Стой!". An order
-is not a conversation: it is one of a few fixed phrases, told apart by code from the transcript in no
-time (orders.py carries it out at once). Anything else — "Иди за мной в город", "Не стой столбом",
-"Он сказал: стой" — is not an order here and goes to the conversational model as before.
+is told apart by code from the transcript in no time (orders.py carries it out at once). Follow
+requests may include a destination or a question ("Пошли к пещере", "Ну ты идёшь, нет?"): an existing
+companion obeys, while anyone else decides in conversation. Other orders stay short fixed phrases;
+"Не стой столбом" and "Он сказал: стой" go to the conversational model as before.
 
 A phrase is an order when, without words of address ("эй", "ребята", the npc's name) and of hurry
 ("быстро", "живо"), what is left is one of the forms of the order, said once or repeated ("Стой, стой!",
@@ -165,9 +166,61 @@ def match(rest: str) -> str | None:
     return min(near)[1] if near else None
 
 
+def follow_request(text: str, is_name: Callable[[str], bool] = lambda w: False) -> bool:
+    """A direct invitation to go with the speaker, including its destination or a reminder question.
+
+    Only the opening may be words of address: finding "пойдём" inside a story, a conditional or a
+    question about somebody's route must not move a companion (or repair an unmade commitment).
+    """
+    rest = words(text)
+    while rest and (rest[0] in EXTRA or is_name(rest[0])):
+        rest.pop(0)
+    if not rest or any(
+        w in rest
+        for w in (
+            "не",
+            "если",
+            "бы",
+            "когда",
+            "потом",
+            "позже",
+            "завтра",
+            "послезавтра",
+            "сначала",
+            "ли",
+        )
+    ):
+        return False
+    if any(mark in text for mark in ('"', "«", "»")):
+        return False
+    if rest[:2] in (["пошли", "слухи"], ["пошли", "разговоры"]):
+        return False
+    if rest[0] in {"пойдем", "пойдемте", "пошли", "пошлите", "идем", "идемте"}:
+        return True
+    if rest[:2] == ["за", "мной"]:
+        return True
+    if rest[0] in {"иди", "идите", "следуй", "следуйте"}:
+        return rest[1:3] in (["за", "мной"], ["со", "мной"])
+    # "Ну ты идешь, нет?" is an invitation/reminder; "Ты идешь в город?" asks about a route.
+    if rest[0] in {"ты", "вы"}:
+        rest = rest[1:]
+    if rest in (["со", "мной"], ["за", "мной"]):
+        return True
+    if not rest or rest[0] not in {"идешь", "идете", "пойдешь", "пойдете"}:
+        return False
+    tail = rest[1:]
+    return tail in ([], ["нет"], ["или", "нет"]) or tail[:2] in (
+        ["со", "мной"],
+        ["за", "мной"],
+    )
+
+
 def parse(text: str, is_name: Callable[[str], bool] = lambda w: False) -> Order | None:
     """The order in the hero's phrase, if it is one (see the module's doc). `is_name`: whether a word is
-    the name of someone around, said to call him ("Горн, за мной!"). A question ("Сюда?") is not."""
+    the name of someone around, said to call him ("Горн, за мной!"). Only follow requests may be
+    questions; other questions ("Сюда?") are not orders."""
+    if follow_request(text, is_name):
+        return Order("follow", "замной", text)
     if text.rstrip().endswith("?"):
         return None
     rest = [w for w in words(text) if w not in EXTRA and not is_name(w)]

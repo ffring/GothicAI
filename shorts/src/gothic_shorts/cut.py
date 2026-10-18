@@ -166,7 +166,7 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
 
 
 def _validate_recording(take: Path) -> None:
-    """The effects stem is usable only when the game's own music was off."""
+    """The effects stem is usable only when the game's own music and the map's sounds were off."""
     path = take / "run" / "Gothic.ini"
     config = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
     try:
@@ -174,9 +174,11 @@ def _validate_recording(take: Path) -> None:
         volume = config.getfloat("SOUND", "musicVolume")
         if not math.isfinite(volume) or volume != 0:
             raise ValueError("musicVolume must be 0")
+        if config.getint("SOUND", "worldSounds") != 0:
+            raise ValueError("worldSounds must be 0")
     except (OSError, ValueError, configparser.Error) as error:
-        raise CutError(f"{path}: не подтверждён musicVolume=0; переснимите дубль "
-                       "через film с выключенной музыкой игры") from error
+        raise CutError(f"{path}: не подтверждены musicVolume=0 и worldSounds=0; переснимите дубль "
+                       "через film без музыки игры и звуков мест") from error
 
 
 def _join(shot: Shot, video: Path, audio: Path, tl: Timeline, overlays: list[Overlay],
