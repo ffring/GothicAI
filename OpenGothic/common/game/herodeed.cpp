@@ -24,7 +24,7 @@ HeroDeed::Person person(Npc& npc) {
   return p;
   }
 
-HeroDeed::Person owner(Npc& hero, std::string_view name) {
+HeroDeed::Person resolveOwner(Npc& hero, std::string_view name) {
   auto& script = hero.world().script();
   auto* s = script.findSymbol(name);
   if(s==nullptr)
@@ -47,15 +47,15 @@ HeroDeed::Person owner(Npc& hero, std::string_view name) {
   return p;
   }
 
-HeroDeed::Person roomOwner(Npc& hero, std::string_view portal) {
+HeroDeed::Person resolveRoomOwner(Npc& hero, std::string_view portal) {
   const auto colon = portal.find(':');
   if(colon==std::string_view::npos)
-    return owner(hero,portal);
+    return resolveOwner(hero,portal);
   // Portal materials contain two room names separated by '_'. NPC instance
   // names themselves can contain '_', so accept the longest actual C_NPC name.
   auto name = portal.substr(colon+1);
   for(size_t end=name.size(); end!=std::string_view::npos;) {
-    auto p = owner(hero,name.substr(0,end));
+    auto p = resolveOwner(hero,name.substr(0,end));
     if(!p.npc.empty())
       return p;
     if(end==0)
@@ -93,7 +93,7 @@ std::shared_ptr<HeroDeed> HeroDeed::capture(Npc& hero, std::string_view kind, Np
   d->position = hero.position();
   d->room = hero.portalName();
   d->roomGuild = world.guildOfRoom(d->room);
-  d->roomOwner = roomOwner(hero,d->room);
+  d->roomOwner = resolveRoomOwner(hero,d->room);
   if(auto* wp = world.findWayPoint(hero.position()))
     d->waypoint = wp->name;
   const auto time = world.time();
@@ -107,13 +107,13 @@ std::shared_ptr<HeroDeed> HeroDeed::capture(Npc& hero, std::string_view kind, Np
     d->ownerGuild = item->handle().owner_guild;
     if(item->handle().owner>0)
       if(auto* sym = script.findSymbol(size_t(item->handle().owner)))
-        d->owner = owner(hero,sym->name());
+        d->owner = resolveOwner(hero,sym->name());
     const int32_t dropped = constant(hero,"ITEM_DROPPED",0);
     d->itemDropped = dropped!=0 && (item->itemFlag()&dropped)!=0;
     }
   if(chest!=nullptr) {
     d->chest = chest->vobNameStr();
-    d->chestOwner = owner(hero,chest->ownerName());
+    d->chestOwner = resolveOwner(hero,chest->ownerName());
     d->chestGuild = constant(hero,chest->ownerGuildName());
     }
   if(victim!=nullptr) {

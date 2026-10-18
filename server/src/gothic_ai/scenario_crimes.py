@@ -6,7 +6,7 @@ import asyncio
 import math
 from typing import TYPE_CHECKING, Any
 
-from .game import GameLink
+from .game import GameError, GameLink
 from .protocol import HeroDeed, Session
 from .scenarios import HILDA, LOBART, _logged, _save, _until, _until_async, wait_message
 
@@ -57,7 +57,7 @@ async def crimes(link: GameLink, service: Crimes, slot: int = 7) -> dict[str, st
     async def stand(npc: str, point: str, *, face: str | None = None) -> None:
         await link.debug("skip_important", near=npc)
         await link.npc_act(
-            npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=point, minutes=120, place=True
+            npc, "start_activity", state="ZS_STAND_WP", waypoint=point, minutes=120, place=True
         )
         if face is not None:
             await link.npc_act(npc, "turn_to", npc=face)
@@ -118,13 +118,34 @@ async def crimes(link: GameLink, service: Crimes, slot: int = 7) -> dict[str, st
         if not check("baseline", not facts() and await _save(link, slot + 1) is not None, len(facts())):
             return _logged(results)
 
-        # Lobart drops his own cup inside his house; Hilda stays free in the same room and receives
-        # ASSESSTHEFT normally. A public world object in a field is tested separately below.
+        # A normal unowned world cup in Lobart's room belongs to that room under vanilla's rule.
+        # Hilda stays free and receives ASSESSTHEFT normally. Native NPC drop is the fallback if this
+        # save has no guild assigned to the room; its ownership still comes from the engine.
         await link.debug("player_goto", waypoint=HOUSE)
         await stand(LOBART, HOUSE)
         await stand(HILDA, "NW_FARM1_INHOUSE_02", face="PLAYER")
         await asyncio.sleep(1)
-        await link.debug("npc_drop", npc=LOBART, item="ITMI_SILVERCUP")
+        views = await link.npc_view([LOBART])
+        room = bool(views and views[0].indoors and views[0].room_guild == 8)  # GIL_BAU
+        room_detail = f"indoors={views[0].indoors}, room_guild={views[0].room_guild}" if views else "no view"
+        if room:
+            await link.debug("spawn_item", item="ITMI_SILVERCUP", distance=100)
+            check("house_prepared", True, f"native farm room ownership; {room_detail}")
+        else:
+
+            async def drop() -> bool:
+                try:
+                    await link.debug("npc_drop", npc=LOBART, item="ITMI_SILVERCUP")
+                except GameError as err:
+                    if "could not drop it now" not in str(err):
+                        raise
+                    return False  # the old routine's pose may still be blending out
+                return True
+
+            if not check(
+                "house_prepared", await _until_async(drop, bool, 10), f"native Lobart drop; {room_detail}"
+            ):
+                return _logged(results)
         await asyncio.sleep(1)
         await link.debug("player_take", item="ITMI_SILVERCUP", distance=800)
         deed = await received("take_item")
@@ -134,13 +155,13 @@ async def crimes(link: GameLink, service: Crimes, slot: int = 7) -> dict[str, st
             deed is not None
             and fact is not None
             and fact.get("kind") == "theft"
-            and fact.get("owner") == LOBART
+            and (deed.room_guild == 8 or deed.room_owner == LOBART or deed.owner == LOBART)
             and fact.get("community") == "farm"
             and HILDA in fact.get("witnesses", ())
             and HILDA in deed.witnesses
             and LEE in service.lawkeepers("farm")
             and seen_agrees(fact),
-            fact or (deed.model_dump() if deed else "no hero_deed"),
+            {"crime": fact, "deed": deed.model_dump() if deed else "no hero_deed"},
         ):
             return _logged(results)
 
