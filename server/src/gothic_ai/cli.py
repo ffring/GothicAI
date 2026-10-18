@@ -738,7 +738,7 @@ async def _native_combat_available(link: GameLink, pilot: BodyPilot | None, npc:
 
 
 async def serve(args: argparse.Namespace) -> int:
-    if args.scenario in {"neural", "neural-companion", "neural-group"} and (
+    if args.scenario in {"neural", "neural-companion", "neural-group", "neural-talk", "neural-load"} and (
         not args.body_url or not args.neural_body
     ):
         log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
@@ -1287,11 +1287,17 @@ async def serve(args: argparse.Namespace) -> int:
         if args.scenario is None:
             return
         try:
-            if args.scenario in {"neural", "neural-companion", "neural-group"}:
+            if args.scenario == "neural-talk":
+                results = await scenarios.neural_talk_scenario(link, state.dialogue, bodypilot)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario in {"neural", "neural-companion", "neural-group", "neural-load"}:
                 scenario = {
                     "neural": scenarios.neural_scenario,
                     "neural-companion": scenarios.neural_companion_scenario,
                     "neural-group": scenarios.neural_group_scenario,
+                    "neural-load": scenarios.neural_load_scenario,
                 }[args.scenario]
                 results = await scenario(link, bodypilot)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
@@ -2422,6 +2428,8 @@ def main() -> None:
             "neural",
             "neural-companion",
             "neural-group",
+            "neural-talk",
+            "neural-load",
             "m5c",
             "m5e",
             "orders",
