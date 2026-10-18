@@ -1,0 +1,23 @@
+# Identical real water lip and corpse placement, with buoyancy disabled.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+living on
+noise on
+water off
+overlay off
+view full
+water-bodies setup deep
+wait 1200
+spell equip 26
+wait 1200
+rec water-bodies-disabled
+water-bodies kill-human
+wait 34
+spell cast 600
+wait 45000
+water-bodies checkpoint disabled
+shot water-bodies-disabled
+stop
+physics stats

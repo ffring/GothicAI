@@ -829,6 +829,299 @@ void testDropSleepWake() {
   require(world.bodyCount()==emptyCount,"destroying the owner must remove all ragdoll parts and joints");
   }
 
+zenkit::ModelHierarchy wolfHierarchy() {
+  auto source=hierarchy();
+  // A quadruped's bind pose is not a human silhouette with a different mass.
+  // Keep the anatomical bone names but put the spine/snout forward, with four
+  // real descending leg chains and a long tail behind its pelvis.
+  const Tempest::Vec3 offsets[]={
+    {0,0,0},{0,58,-30},{0,0,28},{0,0,30},{0,4,22},{0,2,22},
+    {15,-5,0},{0,-24,0},{0,-25,4},
+    {-15,-5,0},{0,-24,0},{0,-25,4},
+    {13,-5,0},{0,-23,-8},{0,-25,7},{0,0,12},
+    {-13,-5,0},{0,-23,-8},{0,-25,7},{0,0,12},{0,0,14}
+    };
+  static_assert(sizeof(offsets)/sizeof(offsets[0])==21);
+  for(size_t i=0;i<source.nodes.size();++i) {
+    const auto frame=at(offsets[i].x,offsets[i].y,offsets[i].z);
+    std::memcpy(&source.nodes[i].transform,&frame,sizeof(frame));
+    }
+  for(const auto parent:{int16_t(1),int16_t(21)}) {
+    zenkit::ModelHierarchyNode tail;
+    tail.name=parent==1 ? "BIP01 TAIL" : "BIP01 TAIL1";
+    tail.parent_index=parent;
+    const auto frame=at(0,0,-25);
+    std::memcpy(&tail.transform,&frame,sizeof(frame));
+    source.nodes.push_back(tail);
+    }
+  source.bbox.min={-30,0,-50}; source.bbox.max={30,90,100};
+  source.collision_bbox=source.bbox;
+  return source;
+  }
+
+struct WaterRagdollFixture final {
+  Skeleton skeleton;
+  HitZones zones;
+
+  explicit WaterRagdollFixture(const char* name,bool quadruped=false)
+    :skeleton(quadruped ? wolfHierarchy() : hierarchy(),nullptr,name) {
+    zones.setSkeleton(&skeleton);
+    require(zones.isValid(),"water ragdoll fixture must have valid anatomical capsules");
+    }
+
+  std::unique_ptr<Ragdoll> create(CollisionWorld& world,const Tempest::Matrix4x4& object,
+                                const Tempest::Vec3& velocity={}) const {
+    auto pose=skeleton.tr;
+    for(auto& bone:pose) bone=object*bone;
+    auto result=world.createRagdoll(skeleton,zones,pose.data(),pose.size(),object,velocity);
+    require(result && result->valid(),"water fixture must create a native limp ragdoll");
+    near(result->mass(),Ragdoll::speciesMass(skeleton.name())*scaleVolume(object),.001f,
+         "water setup must retain the actual species and scaled native mass");
+    return result;
+    }
+  };
+
+void waterSurface(CollisionWorld& world) {
+  world.setWaterSurfaceCallback([](const Tempest::Vec3&,float,float& surface) {
+    surface=0;
+    return true;
+    });
+  }
+
+auto waterFloor(CollisionWorld& world,float surface=-500.f) {
+  return world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,surface-50.f,0),
+                                .75f,DynamicWorld::C_Landscape);
+  }
+
+void tickWater(CollisionWorld& world,int frames) {
+  for(int i=0;i<frames;++i) world.tick(i%3==2 ? 16 : 17);
+  }
+
+float maxWaterDrift(const Ragdoll::State& current,const Ragdoll::State& initial) {
+  require(current.parts.size()==initial.parts.size(),"water stability must retain all native parts");
+  float result=0;
+  for(size_t i=0;i<current.parts.size();++i) {
+    require(current.parts[i].bone==initial.parts[i].bone,"water stability must retain bone identity");
+    result=std::max(result,(position(current.parts[i].transform)-position(initial.parts[i].transform)).length());
+    }
+  return result;
+  }
+
+float waterTorsoImmersion(const CollisionWorld& world,const Ragdoll& body,const Skeleton& skeleton) {
+  float weighted=0,mass=0;
+  bool visible=false;
+  size_t count=0;
+  const auto snapshots=world.waterBodySnapshot();
+  for(const auto& part:snapshots) {
+    if(part.ragdoll!=&body) continue;
+    ++count;
+    require(part.body==nullptr && part.bone<skeleton.nodes.size(),
+            "water parts must expose their ragdoll and physical bone instead of an item payload");
+    const auto& name=skeleton.nodes[part.bone].name;
+    const bool torso=name.find("PELVIS")!=std::string::npos || name.find("SPINE")!=std::string::npos;
+    const bool head=name.find("HEAD")!=std::string::npos || name.find("NECK")!=std::string::npos;
+    near(part.targetFraction,torso ? .9f : head ? .95f : 1.f,.00001f,
+         "water displacement must come from anatomy independently of each part's native mass");
+    require(part.mass>0.f && std::isfinite(part.submergedFraction),"native wet part measurements must remain finite");
+    if(torso) { weighted+=part.submergedFraction*part.mass; mass+=part.mass; }
+    visible=visible || part.worldBounds[1].y>.1f;
+    }
+  require(count==body.partCount(),"every limp dynamic part must appear once in the native water diagnostic");
+  require(mass>0.f,"water fixture must measure a real pelvis/spine");
+  require(visible,"a floating corpse must leave some of its body visible above the surface");
+  const float immersion=weighted/mass;
+  near(immersion,.9f,.12f,"constrained pelvis/spine must float mostly submerged near ninety percent");
+  require(position(body.pelvisTransform()).y>-200.f,"a floating corpse must stay by the surface instead of reaching the deep bottom");
+  return immersion;
+  }
+
+void testRagdollWaterFloatSleepRestoreAndToggle() {
+  for(const bool wolf:{false,true}) {
+    WaterRagdollFixture fixture(wolf ? "WOLF.MDS" : "HUMANS.MDS",wolf);
+    CollisionWorld world;
+    waterSurface(world);
+    auto ground=waterFloor(world);
+    auto object=at(0,180,0);
+    object.rotateOX(90);
+    auto body=fixture.create(world,object,{0,-100,0});
+    const float nativeMass=body->mass();
+    int firstSleep=-1;
+    for(int frame=0;frame<1800;++frame) {
+      world.tick(frame%3==2 ? 16 : 17);
+      if(firstSleep<0 && body->isSleeping()) firstSleep=frame+1;
+      }
+    finite(body->state());
+    if(firstSleep<=0 || !body->isSleeping()) {
+      std::fprintf(stderr,"water sleep diagnostic skeleton=%.*s asleep=%d first_sleep_frame=%d pelvis_y_cm=%.9g\n",
+                   int(fixture.skeleton.name().size()),fixture.skeleton.name().data(),int(body->isSleeping()),firstSleep,
+                   double(position(body->pelvisTransform()).y));
+      for(const auto& part:world.waterBodySnapshot())
+        if(part.ragdoll==body.get())
+          std::fprintf(stderr,"water sleep part bone=%u fraction=%.9g target=%.9g velocity_cm_s=[%.9g,%.9g,%.9g] active=%d\n",
+                       part.bone,double(part.submergedFraction),double(part.targetFraction),double(part.velocity.x),double(part.velocity.y),
+                       double(part.velocity.z),int(!part.sleeping));
+      }
+    require(firstSleep>0 && body->isSleeping(),"a human or wolf corpse must float and sleep within thirty seconds");
+    near(body->mass(),nativeMass,0.f,"water forces must leave the corpse's native mass unchanged");
+    const float immersion=waterTorsoImmersion(world,*body,fixture.skeleton);
+    const auto saved=body->state();
+
+    // Fresh native bodies/world exercise the cold restore path: no old water
+    // flags, BodyIDs or solver island are available to keep the corpse afloat.
+    CollisionWorld loadedWorld;
+    waterSurface(loadedWorld);
+    auto loadedGround=waterFloor(loadedWorld);
+    auto loaded=fixture.create(loadedWorld,at(300,400,100));
+    require(loaded->restore(saved) && loaded->isSleeping(),"a fresh world must restore a sleeping floating corpse");
+    same(loaded->state(),saved,.001f);
+    float maxDrift=0;
+    for(int frame=0;frame<1800;++frame) {
+      loadedWorld.tick(frame%3==2 ? 16 : 17);
+      maxDrift=std::max(maxDrift,maxWaterDrift(loaded->state(),saved));
+      require(loaded->isSleeping(),"a restored floating corpse must remain asleep over thirty seconds");
+      }
+    near(maxDrift,0,1.f,"cold restored floating parts must stay within one centimetre for thirty seconds");
+    waterTorsoImmersion(loadedWorld,*loaded,fixture.skeleton);
+
+    CollisionWorld disabledWorld;
+    waterSurface(disabledWorld);
+    disabledWorld.setBuoyancyEnabled(false);
+    auto disabledGround=waterFloor(disabledWorld);
+    auto disabled=fixture.create(disabledWorld,at(0,400,0));
+    require(disabled->restore(saved),"buoyancy=0 must still accept a floating sleeping corpse save");
+    near(maxWaterDrift(disabled->state(),saved),0,.001f,"loading buoyancy=0 must retain every saved part position before it starts sinking");
+    require(!disabled->isSleeping(),"loading buoyancy=0 must wake a saved floating sleeper immediately");
+    tickWater(disabledWorld,1800);
+    require(disabled->isSleeping() && position(disabled->pelvisTransform()).y<-350.f,
+            "a floating sleeper loaded with buoyancy=0 must wake, sink and settle at the bottom");
+
+    loadedWorld.setBuoyancyEnabled(false);
+    tickWater(loadedWorld,1800);
+    require(loaded->isSleeping() && position(loaded->pelvisTransform()).y<-350.f,
+            "switching buoyancy off must wake a floating corpse and restore its former sinking behavior");
+    loadedWorld.setBuoyancyEnabled(true);
+    tickWater(loadedWorld,1800);
+    require(loaded->isSleeping(),"reenabling buoyancy must lift and settle a sunken human or wolf corpse");
+    waterTorsoImmersion(loadedWorld,*loaded,fixture.skeleton);
+    std::printf("Water ragdoll %.*s mass_kg=%.9g torso_fraction=%.9g sleep_s=%.9g cold_30s_drift_cm=%.9g\n",
+                int(fixture.skeleton.name().size()),fixture.skeleton.name().data(),double(nativeMass),double(immersion),double(firstSleep)/60.,double(maxDrift));
+    }
+  }
+
+void testRagdollWaterDenseAndShallow() {
+  for(const char* name:{"SKELETON.MDS","STONEGOLEM.MDS"}) {
+    WaterRagdollFixture fixture(name);
+    CollisionWorld world;
+    waterSurface(world);
+    auto ground=waterFloor(world);
+    auto object=at(0,180,0); object.rotateOX(90);
+    auto body=fixture.create(world,object);
+    tickWater(world,1800);
+    require(body->isSleeping() && position(body->pelvisTransform()).y<-350.f,
+            "a skeleton or stone golem must sink and sleep at the deep bottom");
+    size_t count=0;
+    for(const auto& part:world.waterBodySnapshot()) {
+      if(part.ragdoll!=body.get()) continue;
+      ++count;
+      require(part.targetFraction>1.f && part.submergedFraction>.99f,
+              "all skeleton/golem parts must remain denser than water and fully submerged");
+      }
+    require(count==body->partCount(),"dense corpse water diagnostics must retain all parts");
+    std::printf("Water ragdoll %s sunk_pelvis_cm=%.9g sleeping=1\n",name,double(position(body->pelvisTransform()).y));
+    }
+
+  WaterRagdollFixture fixture("HUMANS.MDS");
+  CollisionWorld world;
+  waterSurface(world);
+  auto ground=waterFloor(world,-10.f);
+  auto object=at(0,100,0); object.rotateOX(90);
+  auto body=fixture.create(world,object);
+  tickWater(world,1800);
+  require(body->isSleeping(),"a corpse touching a ten-centimetre shallow bottom must settle without jitter");
+  bool partlyWet=false;
+  for(const auto& part:world.waterBodySnapshot())
+    if(part.ragdoll==body.get() && part.submergedFraction>0.f && part.submergedFraction<.99f) partlyWet=true;
+  require(partlyWet,"shallow stability must exercise a genuinely partly immersed corpse");
+  const auto settled=body->state();
+  float maxDrift=0;
+  for(int frame=0;frame<1800;++frame) {
+    world.tick(frame%3==2 ? 16 : 17);
+    maxDrift=std::max(maxDrift,maxWaterDrift(body->state(),settled));
+    require(body->isSleeping(),"a shallow corpse must stay asleep while water and ground support it together");
+    }
+  near(maxDrift,0,.1f,"a partly submerged corpse must remain motionless for thirty more seconds");
+  std::printf("Water ragdoll shallow_10cm thirty_second_drift_cm=%.9g\n",double(maxDrift));
+  }
+
+void testRagdollWaterExcludesLivingReactions() {
+  Fixture fixture;
+  CollisionWorld wet,dry;
+  waterSurface(wet);
+  const auto object=at(0,-180,0);
+  auto pose=fixture.skeleton.tr;
+  for(auto& bone:pose) bone=object*bone;
+  auto living=wet.createKinematicBody(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+  auto control=dry.createKinematicBody(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+  require(living && control,"living water exclusion needs native kinematic controls");
+  std::vector<PhysicsNoise> noises;
+  wet.setPhysicsNoiseEnabled(true);
+  wet.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { if(noise.surface==zenkit::MaterialGroup::WATER) noises.push_back(noise); });
+  tickWater(wet,10); tickWater(dry,10);
+  require(living->isKinematic() && wet.waterBodySnapshot().empty(),"animation driven living parts must stay outside buoyancy");
+  const auto point=position(pose[6])+Tempest::Vec3(10,0,0);
+  require(living->queueHit(6,point,{0,0,3},1.f) && control->queueHit(6,point,{0,0,3},1.f),
+          "living exclusion must also exercise a real dynamic hit reaction");
+  float maxDifference=0;
+  for(int frame=0;frame<120;++frame) {
+    wet.tick(frame%3==2 ? 16 : 17); dry.tick(frame%3==2 ? 16 : 17);
+    if(frame==0) require(!living->isKinematic() && !living->reactionBones().empty(),"the exclusion control must promote a living limb to native dynamics");
+    require(wet.waterBodySnapshot().empty(),"an active living reaction must never be enrolled as a floating corpse");
+    std::vector<Tempest::Matrix4x4> actual,expected;
+    require(living->getPose(actual) && control->getPose(expected),"living wet/dry native poses must remain available");
+    for(const auto bone:living->poseIndices())
+      for(size_t component=0;component<16;++component) {
+        const float error=std::abs(actual[bone].data()[component]-expected[bone].data()[component]);
+        if(component>=12 && component<=14) maxDifference=std::max(maxDifference,error);
+        near(actual[bone].data()[component],expected[bone].data()[component],
+             component>=12 && component<=14 ? .02f : .00002f,
+             "water must not change the pose, velocity response or recovery of a living native rig");
+        }
+    }
+  require(noises.empty(),"kinematic and active living parts must not emit corpse splash noise");
+  std::printf("Water living exclusion active_frames=120 maximum_pose_delta_cm=%.9g splashes=0\n",double(maxDifference));
+  }
+
+void testRagdollWaterSplashOnceAndMomentum() {
+  struct Splash { float impulse=0,volume=0; };
+  const auto drop=[](float scale,float speed) {
+    WaterRagdollFixture fixture("HUMANS.MDS");
+    CollisionWorld world;
+    waterSurface(world);
+    world.setPhysicsNoiseEnabled(true);
+    std::vector<PhysicsNoise> noises;
+    world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { if(noise.surface==zenkit::MaterialGroup::WATER) noises.push_back(noise); });
+    auto object=at(0,35.f,0); object.rotateOX(90); object.scale(scale);
+    auto body=fixture.create(world,object,{0,-speed,0});
+    // All horizontal parts enter in the same short impact. A single corpse
+    // must not make one NPC noise for every limb in that impact window.
+    tickWater(world,40);
+    require(noises.size()==1,"one corpse entering water must dispatch one aggregated splash through the physics noise callback");
+    const auto& splash=noises.front();
+    require(splash.body!=0 && splash.impulse>0.f && std::isfinite(splash.impulse) &&
+            splash.volume>0.f && splash.volume<=1.f && splash.radius>0.f &&
+            splash.what.find("splash")!=std::string::npos,"corpse splash must carry finite audible momentum and hearing metadata");
+    near(splash.position.y,0.f,.001f,"corpse splash noise must originate at the water surface");
+    return Splash{splash.impulse,splash.volume};
+    };
+  const auto light=drop(.5f,40.f),heavy=drop(1.f,40.f),fast=drop(.5f,500.f);
+  require(heavy.impulse>light.impulse && heavy.volume>=light.volume,
+          "a heavier corpse must give greater entry momentum and at least as loud a splash");
+  require(fast.impulse>light.impulse && fast.volume>=light.volume,
+          "a faster corpse must give greater entry momentum and at least as loud a splash");
+  std::printf("Water ragdoll splash impulses_Ns=[%.9g,%.9g,%.9g] volumes=[%.9g,%.9g,%.9g] noises_per_entry=1\n",
+              double(light.impulse),double(heavy.impulse),double(fast.impulse),double(light.volume),double(heavy.volume),double(fast.volume));
+  }
+
 void testSlopeAndCliff() {
   Fixture fixture;
   {
@@ -1973,7 +2266,7 @@ void testPoseFarWorldAttachments() {
         }
       if(producer==2) {
         require(pose.aimWalk().isValid(),"far-world fixture must have an actual AimWalk hierarchy");
-        AimWalk::Input input; input.legs=&steps; input.walk=1; input.dt=200; pose.updateAimWalk(input);
+        AimWalk::Input input; input.legs=&steps; input.walk=1; input.dt=200; input.active=true; pose.updateAimWalk(input);
         require(pose.aimWalk().isActive(),"far-world fixture must exercise active AimWalk");
         }
       if(producer==3 || producer==4) {
@@ -2336,7 +2629,15 @@ int main(int argc, const char** argv) {
       replayCreation(argv[2]);
       return EXIT_SUCCESS;
       }
-    require(argc==1,"usage: gothic-ragdoll-contract [--benchmark20 output.json | --preflight20 output.json | --replay-creation captured.jsonl]");
+    if(argc==2 && std::string_view(argv[1])=="--water") {
+      testRagdollWaterFloatSleepRestoreAndToggle();
+      testRagdollWaterDenseAndShallow();
+      testRagdollWaterExcludesLivingReactions();
+      testRagdollWaterSplashOnceAndMomentum();
+      std::puts("Ragdoll water contracts passed");
+      return EXIT_SUCCESS;
+      }
+    require(argc==1,"usage: gothic-ragdoll-contract [--water | --benchmark20 output.json | --preflight20 output.json | --replay-creation captured.jsonl]");
     testInvalidCreationAndScale();
     testKinematicPoseAndInteraction();
     testLocalMotorReactions();
@@ -2357,6 +2658,10 @@ int main(int argc, const char** argv) {
     testFiniteRecoveryHierarchy();
     testBenchmarkSleepPolicy();
     testDropSleepWake();
+    testRagdollWaterFloatSleepRestoreAndToggle();
+    testRagdollWaterDenseAndShallow();
+    testRagdollWaterExcludesLivingReactions();
+    testRagdollWaterSplashOnceAndMomentum();
     testSlopeAndCliff();
     testStateRoundTripAndAtomicRejection();
     testMovedStateRebaseAndReference();

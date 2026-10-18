@@ -106,6 +106,16 @@ class Ragdoll final {
     static float speciesMass(std::string_view skeletonName);
 
   private:
+    // Native ragdoll parts have no CollisionBody wrapper. CollisionWorld keeps
+    // their water support on the same fixed-step path through this small cache.
+    // A living rig, including a temporary dynamic hit reaction, has no entries.
+    struct BuoyancyPart final {
+      uint32_t body = 0;
+      float fraction = .9f;
+      bool initialized = false, inWater = false, sleepDisabled = false, preserveSleep = false;
+      float restTime = 0, waterY = 0;
+      uint64_t nextSplashStep = 0;
+      };
     struct Impl;
     Ragdoll(CollisionWorld& world, const Skeleton& skeleton, const HitZones& zones,
             const Tempest::Matrix4x4* worldPose, size_t numBones,
@@ -119,6 +129,10 @@ class Ragdoll final {
     Npc* noiseCulprit() const;
     bool acceptNoise(uint64_t step);
     uint64_t noiseId() const;
+    std::vector<BuoyancyPart>& buoyancyParts();
+    const std::vector<BuoyancyPart>& buoyancyParts() const;
+    void resetBuoyancy();
+    void updateBuoyancyFractions();
     void detach();
     std::unique_ptr<Impl> impl;
     friend class CollisionWorld;

@@ -1,0 +1,34 @@
+# A real WindFist throws a human from a supported water lip; death follows in flight.
+# Wolf and skeleton use separate sampled deep-water slots at the same site.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+living on
+noise on
+water on
+overlay off
+view full
+water-bodies setup deep
+wait 1200
+spell equip 26
+wait 1200
+rec water-bodies-deep
+water-bodies kill-human
+wait 34
+spell cast 600
+wait 45000
+water-bodies checkpoint settled
+shot water-bodies-deep-settled
+water-bodies reset-motion
+wait 30000
+water-bodies checkpoint stable
+water-bodies save water-bodies
+stop
+water-bodies loot-ready shore
+wait 1200
+water-bodies loot
+water-bodies loot-ready swim
+wait 1200
+water-bodies loot
+physics stats

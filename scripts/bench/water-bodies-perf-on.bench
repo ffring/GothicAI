@@ -1,0 +1,17 @@
+# Ten identical native human corpses. Normal cadence, no video in the timing window.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+water on
+overlay off
+view full
+water-bodies setup perf
+wait 45000
+water-bodies checkpoint settled
+cadence normal
+wait 34
+movable measure on
+cadence wait
+movable report
+water-bodies checkpoint measured
