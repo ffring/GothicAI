@@ -1034,6 +1034,9 @@ async def _neural_fight_scenario(
         await link.story_npc(NpcSpec(
             npc=target, like="BDT_1002_BANDIT_L", at=arena,
             name=cast(str, target_name), guild="GIL_VLK",
+            routine=[RoutineEntry(
+                start="00:00", end="23:59", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+            )],
         ))
         await link.debug("skip_important", near=target)
         ready = await Bodies(link).act(
