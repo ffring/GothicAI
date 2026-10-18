@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import math
 import re
@@ -11,7 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from gothic_shorts import levels
+from gothic_shorts import compare, levels
 
 
 @pytest.fixture(scope="module")
@@ -573,12 +572,7 @@ def test_unvoiced_graph_keeps_plan_volume_and_does_not_duck(tmp_path):
 
 @pytest.fixture
 def comparison_cut():
-    spec = importlib.util.spec_from_file_location(
-        "comparison_cut", Path(__file__).resolve().parents[1] / "compare" / "cut.py",
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return compare
 
 
 def _mock_mastered_balance(monkeypatch, report):
