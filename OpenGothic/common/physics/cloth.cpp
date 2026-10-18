@@ -182,12 +182,14 @@ struct Cloth::Impl : JPH::SoftBodyContactListener {
     JPH::SoftBodyCreationSettings creation(&settings,CollisionWorld::toMeters(body.translation()),JPH::Quat::sIdentity(),DynamicWorld::C_Cloth);
     creation.mUserData=reinterpret_cast<uint64_t>(&body);
     // Fixed particles and geodesic long-range attachments bound the cloth.
-    // Long, side-pinned ship flags need finer substeps while they fall from
-    // their authored extended pose; smaller flags and tied sails use four.
+    // Jolt iterations are integration substeps, not repeated solver sweeps.
+    // Keep the original 60 Hz material's 1/240 or 1/480 s XPBD step when the
+    // outer cloth clock runs at 30 Hz. Otherwise coarse, side-pinned flags
+    // acquire different compliance and keep moving long after wind stops.
     float freeSpan=0;
     for(const auto& attachment:settings.mLRAConstraints)
       freeSpan=std::max(freeSpan,attachment.mMaxDistance);
-    body.substeps=freeSpan>6.f ? 8 : 4;
+    body.substeps=freeSpan>6.f ? 16 : 8;
     creation.mNumIterations=body.substeps;
     // Together with aerodynamic drag this is close to critical damping for
     // a ship flag's seven-metre free span. Excess damping makes those long

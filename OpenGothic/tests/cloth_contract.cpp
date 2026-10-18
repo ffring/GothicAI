@@ -5,7 +5,9 @@
 #include "world/portalrooms.h"
 
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
 
@@ -21,6 +23,7 @@
 // fragment, NPC or test-mode switch to the game itself.
 class ClothContractDriver {
   public:
+    static JPH::PhysicsSystem& system(CollisionWorld& world) { return world.physicsSystem(); }
     static std::array<Cloth::Snapshot,2> run(const std::vector<Tempest::Vec3>& vertices,
                                             const std::vector<uint32_t>& indices,
                                             const std::vector<uint32_t>& pins,
@@ -84,8 +87,8 @@ namespace {
   struct LongFlag {
     std::vector<Tempest::Vec3> vertices;
     std::vector<uint32_t> indices,pins;
-    LongFlag() {
-      constexpr uint32_t width=17,height=17;
+    explicit LongFlag(uint32_t grid=17) {
+      const uint32_t width=grid,height=grid;
       for(uint32_t y=0;y<height;++y)
         for(uint32_t x=0;x<width;++x) {
           const float u=float(x)/float(width-1),v=float(y)/float(height-1);
@@ -163,6 +166,81 @@ namespace {
     cloth.setWind({4,0,1});
     for(uint64_t now=0;now<1000;now+=frameMs) world.tick(frameMs);
     return cloth.snapshots().front();
+    }
+  std::vector<Tempest::Vec3> nativeVelocities(CollisionWorld& world) {
+    JPH::BodyIDVector bodies;
+    auto& system=ClothContractDriver::system(world);
+    system.GetBodies(bodies);
+    require(bodies.size()==1,"the isolated calm fixture owns exactly one native body");
+    JPH::BodyLockRead lock(system.GetBodyLockInterface(),bodies.front());
+    require(lock.Succeeded() && lock.GetBody().GetBodyType()==JPH::EBodyType::SoftBody,
+            "the coarse flag retains a registered native soft body outside broadphase");
+    const auto& motion=*static_cast<const JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
+    std::vector<Tempest::Vec3> result;
+    for(const auto& vertex:motion.GetVertices())
+      result.emplace_back(vertex.mVelocity.GetX(),vertex.mVelocity.GetY(),vertex.mVelocity.GetZ());
+    return result;
+    }
+  Cloth::Snapshot coarseFlagCalm(const LongFlag& flag,float damping,bool freeze) {
+    CollisionWorld world;
+    Cloth cloth(world);
+    auto instance=cloth.add(flag.vertices,flag.indices,flag.pins,Tempest::Matrix4x4::mkIdentity(),.82f,"coarse-long-flag-calm",21);
+    instance->setLinearDamping(damping);
+    bool visible=true;
+    cloth.setVisibilityTest([&](const Tempest::Vec3&,float) { return visible; });
+    cloth.setObserver({350,350,0});
+    cloth.setWindScale(2.f);
+    uint64_t now=0;
+    const auto advance=[&](uint64_t durationMs) {
+      for(uint64_t elapsed=0;elapsed<durationMs;elapsed+=10) {
+        cloth.setWind(WorldWind::sample(now,10000,true));
+        world.tick(10);
+        now+=10;
+        }
+      };
+    advance(3000);
+    const auto gust=cloth.snapshots().front();
+    require(gust.vertices==81 && gust.pinned==9,"coarse seven-metre flag uses eighty-one physical particles and a fixed side edge");
+    require(gust.visible && gust.active && gust.simulationWeight==1.f && gust.simulationSteps==90,
+            "three exact seconds of visible gusts advance ninety cloth steps");
+    require(gust.maxSpeedEverCmPerSec<=Cloth::maxVelocityMS*100.f+1.f,"coarse long-flag gusts obey the native vertex speed cap");
+    if(freeze) {
+      require(gust.maxSpeedCmPerSec>1.f,"the freeze comparison starts while the coarse flag is still moving");
+      const auto movingVelocities=nativeVelocities(world);
+      visible=false;
+      world.tick(0);
+      advance(2000);
+      const auto hidden=cloth.snapshots().front();
+      require(!hidden.visible && hidden.active && hidden.simulationSteps==gust.simulationSteps,
+              "two hidden seconds preserve the coarse flag without native steps");
+      require(maxDisplacement(gust,hidden)<.0001f && hidden.maxSpeedCmPerSec==gust.maxSpeedCmPerSec,
+              "hidden time preserves both the moving pose and its recorded native velocity");
+      const auto hiddenVelocities=nativeVelocities(world);
+      require(movingVelocities.size()==81 && hiddenVelocities.size()==movingVelocities.size(),"hidden time preserves the coarse native particle array");
+      for(size_t i=0;i<movingVelocities.size();++i)
+        require((movingVelocities[i]-hiddenVelocities[i]).quadLength()==0.f,"hiding moving cloth never resets or advances its native vertex velocities");
+      visible=true;
+      world.tick(0);
+      const auto returned=cloth.snapshots().front();
+      require(returned.visible && returned.simulationSteps==gust.simulationSteps && maxDisplacement(hidden,returned)<.0001f,
+              "a moving coarse flag returns without a pose jump or catch-up steps");
+      }
+    cloth.setWindScale(0.f);
+    const auto calmStartSteps=cloth.snapshots().front().simulationSteps;
+    advance(10000);
+    const auto calm=cloth.snapshots().front();
+    std::printf("coarse cloth calm: damping=%.2f hidden_ms=%u visible_calm_ms=10000 calm_steps=%llu max_vertex_cm_s=%.6g anchor_drift_cm=%.6g recovery=%llu\n",
+                double(damping),freeze ? 2000u : 0u,static_cast<unsigned long long>(calm.simulationSteps-calmStartSteps),
+                double(calm.maxSpeedCmPerSec),double(calm.maxAnchorErrorCm),static_cast<unsigned long long>(calm.recoveryCount));
+    require(calm.visible && calm.active && calm.simulationWeight==1.f && calm.simulationSteps-calmStartSteps==300,
+            "ten exact seconds of visible calm advance three hundred coarse cloth steps");
+    // This broadside synthetic sheet retains about 2.82 cm/s in the original
+    // 60 Hz / eight-substep reference. A 3 cm/s guard preserves that material's
+    // calm response while catching the doubled-XPBD-step regression (~4.86).
+    // Authored ship geometry is also measured separately by the live fixture.
+    require(calm.maxSpeedCmPerSec<3.f,"a coarse seven-metre flag preserves the original calm response below three centimetres per second");
+    require(calm.maxAnchorErrorCm<=.5f && calm.recoveryCount==0,"coarse long flags stay attached and finite through gusts and calm");
+    return calm;
     }
   }
 
@@ -435,6 +513,11 @@ int main() {
   require(longGust.maxSpeedEverCmPerSec<=Cloth::maxVelocityMS*100.f+1.f,"long flags stay below the same native velocity cap during gusts");
   require(longCalm.maxAnchorErrorCm<=.5f && longCalm.recoveryCount==0,"a seven-metre side-pinned flag stays attached and finite after gusts and ten seconds calm");
   longInstance.reset();
+  const LongFlag coarseFlag(9);
+  for(float damping:{.5f,1.5f}) {
+    coarseFlagCalm(coarseFlag,damping,false);
+    coarseFlagCalm(coarseFlag,damping,true);
+    }
   const auto oneCollisionStep=ClothContractDriver::run(longFlag.vertices,longFlag.indices,longFlag.pins,1);
   float collisionStepDelta=0;
   for(uint32_t collisionSteps:{2u,4u}) {

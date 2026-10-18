@@ -8,7 +8,7 @@ cloth setup densest harbour-visibility-density
 cloth camera harbour
 cloth on
 cloth wind gust
-wait 15000
+wait 3000
 cloth wind calm
 cloth reset-stats
 wait 10000
