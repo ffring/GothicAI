@@ -9,9 +9,9 @@ from gothic_ai.budget import Budget
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.group import GroupTalk
 from gothic_ai.interject import STEP_IN_CUE, WORD_CUE, Interjections
-from gothic_ai.llm import FakeBackend
+from gothic_ai.llm import FakeBackend, FakeStep
 from gothic_ai.persona import PersonaProvider
-from gothic_ai.talk import TalkDesk
+from gothic_ai.talk import Addressee, TalkDesk
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import HILDA, LOBART, _until
 from tests.test_talk import person
@@ -135,3 +135,43 @@ async def test_no_budget_no_words():
     finally:
         await cm.__aexit__(None, None, None)
     assert cues(dialogue, HILDA) == [] and len(llm.calls) == 1
+
+
+@pytest.mark.parametrize("brago_p, speaks", [(0.79, True), (0.74, False)])
+async def test_bandit_replies_after_cavalorns_threat_from_live_game(brago_p, speaks):
+    # 2026-10-18 06:32:40: 0.79 appeared in the log, but the 0.8 gate never started a turn.
+    # Reproduce the already routed exchange independently of the plural-address fix in talk.py.
+    cavalorn, brago, mate = "BAU_4300_ADDON_CAVALORN", "BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"
+    fake = FakeGame()
+    llm = FakeBackend(script=[FakeStep("Прикрой мне спину!"), FakeStep("Сам ты свинья!")], delay=0)
+    decider = ByCharacter({"Браго": (brago_p, 0.0), "Бандит": (0.17, 0.0)})
+    cm, dialogue, talk, interject = await _desk(fake, llm, decider)
+    try:
+        await fake.roster(
+            person(cavalorn, "Кавалорн", 2),
+            person(brago, "Браго", 4, True),
+            person(mate, "Бандит", 5, True),
+        )
+        await _until(lambda: len(talk.people) == 3)
+        talk.last = (Addressee(cavalorn, "Кавалорн", "partner"), "Здарова, псы.")
+        interject.group.on_phrase(*talk.last)
+        dialogue.open(cavalorn, "Кавалорн")
+        await dialogue.say_as_player(cavalorn, talk.last[1])
+        await _until(lambda: bool(interject.asked))
+        if speaks:
+            await _until(lambda: any(m["npc"] == brago for m, _ in fake.says), 5)
+            await _until(lambda: not dialogue.speaking(brago))
+        else:
+            await _until(lambda: not dialogue.speaking(cavalorn))
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    assert interject.spoke == ({brago} if speaks else set())
+    assert cues(dialogue, brago) == ([WORD_CUE] if speaks else [])
+    assert not any(m["npc"] == mate for m, _ in fake.says)  # 0.17 still keeps quiet
+    assert len(llm.calls) == (2 if speaks else 1)
+    if speaks:
+        heard = [(m["npc"], at) for m, at in fake.says]
+        assert [npc for npc, _ in heard] == [cavalorn, brago]
+        assert heard[1][1] >= heard[0][1] + 0.15  # the bandit's actual say follows Cavalorn's line
+        assert fake.says[1][0]["text"] == "Сам ты свинья!"

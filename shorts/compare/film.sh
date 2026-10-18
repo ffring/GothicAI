@@ -7,7 +7,10 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 NAME="${1:?usage: film.sh <scenario in shorts/compare>}"
 OUT="$ROOT/.shorts/compare/$NAME"
 mkdir -p "$OUT"
-export TEMPEST_WINDOW_SIZE="${SIZE:-1080x960}" TEMPEST_AUDIO_LOOPBACK=48000 SOUND="${SOUND:-1}" MUSIC="${MUSIC:-0}"
+# the game's sound without its music and without the world's own sound objects (a place's loops and stingers:
+# birds and wind, MYSTERY_*, torches); the blows, spells, steps and voices stay. The short lays one bed of its own
+export TEMPEST_WINDOW_SIZE="${SIZE:-1080x960}" TEMPEST_AUDIO_LOOPBACK=48000 SOUND="${SOUND:-1}" MUSIC="${MUSIC:-0}" \
+       WORLD_SOUNDS="${WORLD_SOUNDS:-0}"
 export OPENGOTHIC_BENCH_ENCODER="-c:v h264_videotoolbox -b:v 24M" GOTHIC_AI=0 NO_BUILD="${NO_BUILD:-1}"
 export BENCH_HOST=local
 # what the "off" take switches off: "off_env" of compare/<name>.json, else the animation work

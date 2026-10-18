@@ -145,6 +145,8 @@ vidResIndex=$VID_RES_INDEX
 [SOUND]
 soundVolume=${SOUND:-0}
 musicVolume=${MUSIC:-0}
+musicEnabled=$([[ "${MUSIC:-0}" == 0 || "${MUSIC:-0}" == 0.0 ]] && echo 0 || echo 1)
+worldSounds=${WORLD_SOUNDS:-1}
 EOF
 if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
   printf '\n[GAME]\n' >>"$RUN/Gothic.ini"

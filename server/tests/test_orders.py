@@ -18,6 +18,20 @@ GORN = "PC_FIGHTER"
 BANDIT = "BDT_1013_BANDIT"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Не бей волка.",
+        "Он сказал: бей волка.",
+        "Если увидишь волка, бей его.",
+        "Он крикнул «убей волка».",
+        "Как убить волка?",
+    ],
+)
+def test_long_attack_parser_ignores_negation_and_reported_speech(text):
+    assert Orders.parse_attack(text) is None
+
+
 async def _desk(fake: FakeGame, llm, **orders):
     cm = connected(fake)
     link = await cm.__aenter__()
@@ -71,6 +85,20 @@ async def test_an_order_to_someone_who_is_no_companion_is_words_to_him():
 
     assert talk.orders.standing == {}
     assert (LOBART, "follow") not in acts(fake)  # he decides in words
+
+
+@pytest.mark.parametrize("text", ["Ну ты идешь, нет?", "Давай за мной к пещере.", "Пошли бандитов бить."])
+async def test_long_follow_requests_move_an_existing_companion_without_a_model(text):
+    fake, llm = FakeGame(), FakeBackend("Иду!", delay=0)
+    cm, dialogue, talk = await _desk(fake, llm)
+    try:
+        await fake.roster(person(GORN, "Горн", 4))
+        companion(dialogue, GORN, "Горн")
+        await fake.send(type="player_text", text=text)
+        await _until(lambda: (GORN, "follow") in acts(fake))
+        assert llm.calls == [] and talk.last[0].why == "order"
+    finally:
+        await cm.__aexit__(None, None, None)
 
 
 async def test_attack_whom_the_hero_looks_at_then_back_to_him():
