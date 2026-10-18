@@ -1794,6 +1794,8 @@ async def orders_scenario(
     line with his own focus (the attack with a set focus, through the server), the body obeys at once,
     no model is asked. Each check notes how long from the words to the game's answer for the first
     action ("in N ms")."""
+    from contextlib import asynccontextmanager
+
     from .executor import Intent
 
     await link.wait_world()
@@ -1815,24 +1817,42 @@ async def orders_scenario(
         return {"roster": f"failed ({npc} is not around the hero)"}
     initial = await link.snapshot(npc, fresh=True)
     home = initial.npc.waypoint or initial.npc.nearest_waypoint
-    # A 9 m offset inside the tower may put the hero on another floor, beyond hearing round its walls.
-    # Stage Xardas on the open road, then hold him without starting follow before testing that action.
+    # The open southeast corridor used by m5b keeps the mage's shots away from the
+    # road's slopes and trees. Finish the tower state before placing an ordinary idle.
+    arena = "NW_XARDAS_TOWER_VALLEY_09"
     await link.debug("player_hp", hp=5000)
-    await link.debug("player_goto", waypoint=WOLF_HERO)
-    await asyncio.sleep(1)
-    beasts = talk.beasts
-    if beasts is not None:
-        for _ in range(8):
-            if not beasts.wolves:
-                break
-            wolf = min(beasts.wolves.values(), key=lambda w: w.distance)
-            await link.debug("kill", instance=wolf.id.split("#", 1)[0], by="PLAYER")
-            await _until(lambda wolf=wolf: wolf.id not in beasts.wolves, 5)
+    await link.debug("player_goto", pos=[23472, 1032, -10816])
     await link.debug("skip_important", near=npc)
-    await link.debug("npc_goto", npc=npc, waypoint=WOLF_HERO, face="PC_HERO")
+    await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
+
+    async def clear_animals() -> None:
+        for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
+            if not other.dead and other.guild >= BEASTS:
+                await link.debug("kill", instance=other.id, near=npc)
+        for view in await link.npc_view([npc]):
+            for seen in view.sees:
+                if seen.guild >= BEASTS and seen.body != "dead":
+                    await link.debug("kill", instance=seen.id, near=npc)
+
+    await clear_animals()
+    await attach_when_free(link, npc)
+    await link.act(npc, "return_to_routine")
+    ready = await Bodies(link).act(
+        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+        minutes=60, place=True, arrive=True, radius=100, timeout=15,
+    )
+    if ready.status != "arrived":
+        state = (await link.routine(npc)).current
+        snap = await link.snapshot(npc, fresh=True)
+        raise GameError(
+            f"orders arena preparation: {ready.status} {ready.detail}; state={state}; "
+            f"pos={snap.npc.pos}; nearby={snap.nearby_npcs}"
+        )
+    await clear_animals()
     if not await talk.hold(npc, "follow"):
         link.act = act  # type: ignore[method-assign]
-        return {"roster": f"failed (cannot hold {npc} for the road setup)"}
+        return {"roster": f"failed (cannot hold {npc} for the arena setup)"}
+    await link.act(npc, "turn_to", npc="PLAYER")
     await link.debug("teleport", near=npc, distance=900)
     ready = await _until(
         lambda: npc in talk.people
@@ -1844,8 +1864,63 @@ async def orders_scenario(
     level = snap.player is not None and abs(snap.player.pos[1] - snap.npc.pos[1]) <= 200
     if not ready or not level:
         link.act = act  # type: ignore[method-assign]
-        return {"roster": f"failed (open road setup: {talk.people.get(npc)}, same floor {level})"}
+        return {"roster": f"failed (open arena setup: {talk.people.get(npc)}, same floor {level})"}
     dialogue.open(npc, "Ксардас").intent = Intent("follow_hero", "PLAYER", "friendly")
+
+    companion = "BAU_4300_ADDON_CAVALORN"
+    watched = (npc, "PC_HERO", "WOLF", companion)
+    symbols = await link.story_eval(npc, [["sym", who] for who in watched])
+    names = dict(zip(symbols, (npc, "PLAYER", "WOLF", companion), strict=True))
+
+    async def diagnose(stage: str, who: str = npc) -> None:
+        try:
+            snap = await link.snapshot(who, fresh=True)
+            views = await link.npc_view([who])
+            log.info(
+                "orders snapshot stage=%s npc=%s pos=%s hp=%d/%d busy=%s action=%s "
+                "hero=%s roster=%s views=%s",
+                stage, who, snap.npc.pos, snap.npc.hp, snap.npc.hp_max,
+                snap.npc.busy, snap.npc.action,
+                snap.player.model_dump() if snap.player else None,
+                talk.people.get(who), [view.model_dump() for view in views],
+            )
+        except (GameError, TimeoutError) as err:
+            log.info("orders snapshot stage=%s failed: %s", stage, err)
+
+    @asynccontextmanager
+    async def observe(stage: str, actors: list[str]) -> AsyncIterator[None]:
+        last: dict[str, tuple[int, int, int]] = {}
+
+        def body(packet: dict[str, Any]) -> None:
+            for row in packet["observations"]:
+                who = names.get(row["script_symbol"], str(row["script_symbol"]))
+                own, target = row["self"], row["target"]
+                now, hp, foe = row["t_game_ms"], own["hp"], target["entity_id"]
+                before = last.get(who)
+                if before is not None and now - before[0] < 1000 and (hp, foe) == before[1:]:
+                    continue
+                last[who] = (now, hp, foe)
+                log.info(
+                    "orders body stage=%s npc=%s game_ms=%d %s",
+                    stage, who, now,
+                    {"entity": row["entity_id"], "pos": own["position_world_cm"],
+                     "velocity": own["linear_velocity_cm_s"], "hp": hp,
+                     "weapon": own["weapon_state"], "body": own["body_state_base"],
+                     "attack": own["attack_anim"], "gates": own["gates"],
+                     "target": foe, "target_pos": target["position_world_cm"],
+                     "target_hp": target["hp"], "target_visible": target["visible"]},
+                )
+
+        link.raw_body_listeners.append(body)
+        try:
+            await link.body_watch(actors, rate_hz=10)
+            yield
+        finally:
+            link.raw_body_listeners.remove(body)
+            try:
+                await link.body_watch([])
+            except (GameError, TimeoutError) as err:
+                log.info("orders body watch cleanup failed: %s", err)
 
     def dist() -> float:
         return talk.people[npc].distance / 100 if npc in talk.people else -1.0
@@ -1855,31 +1930,42 @@ async def orders_scenario(
     async def order(
         text: str, action: str, focus: str | None = None, timeout: float = 15
     ) -> tuple[bool, str]:
-        t0 = time.monotonic()
-        given.add(text)
-        if focus is None:
-            await link.debug("type", text=text)
-        else:
-            talk.hear(text, focus, {"via": "scenario"})
-        ok = await _until(lambda: any(a == action and t >= t0 for t, _, a, _ in calls), timeout)
-        first = next(((t1, a, st) for t, t1, a, st in calls if t >= t0), None)
-        took = f"{(first[0] - t0) * 1000:.0f} ms to {first[1]} {first[2]}" if first else "no action"
-        done = ok and all(st == "done" for t, _, a, st in calls if t >= t0 and a == action)
-        return done, took
+        await diagnose(f"before_{action}")
+        actors = [npc, "PLAYER", "WOLF"] if action == "fight" else [npc, "PLAYER"]
+        async with observe(action, actors):
+            t0 = time.monotonic()
+            given.add(text)
+            if focus is None:
+                await link.debug("type", text=text)
+            else:
+                talk.hear(text, focus, {"via": "scenario"})
+            ok = await _until(lambda: any(a == action and t >= t0 for t, _, a, _ in calls), timeout)
+            first = next(((t1, a, st) for t, t1, a, st in calls if t >= t0), None)
+            took = f"{(first[0] - t0) * 1000:.0f} ms to {first[1]} {first[2]}" if first else "no action"
+            done = ok and all(st == "done" for t, _, a, st in calls if t >= t0 and a == action)
+            if not done:
+                await diagnose(f"failed_{action}")
+            return done, took
 
     ok, took = await order("Ксардас, ко мне!", "follow")
     came = await _until(lambda: 0 <= dist() <= 5, 20)
     results["come"] = f"{'done' if ok and came else 'failed'} (in {took}; {dist():.1f} m from the hero)"
+    if not ok or not came:
+        await diagnose("come_failed")
 
     ok, took = await order("Стой!", "stop")
     await link.debug("teleport", near=npc, distance=900)
     await asyncio.sleep(4)
     stood = dist()
     results["halt"] = f"{'done' if ok and stood >= 7.5 else 'failed'} (in {took}; stays {stood:.1f} m behind)"
+    if not ok or stood < 7.5:
+        await diagnose("halt_failed")
 
     ok, took = await order("За мной!", "follow")
     closer = await _until(lambda: 0 <= dist() <= stood - 2, 15)
     results["follow"] = f"{'done' if ok and closer else 'failed'} (in {took}; {stood:.1f} -> {dist():.1f} m)"
+    if not ok or not closer:
+        await diagnose("follow_failed")
 
     ok, took = await order("К оружию!", "draw_weapon")
     results["draw"] = f"{'done' if ok else 'failed'} (in {took})"
@@ -1893,6 +1979,8 @@ async def orders_scenario(
         f"{'done' if ok and over and fight == 'done' else 'failed'} "
         f"(in {took}; fight {fight}, follows after {over})"
     )
+    if not ok or not over or fight != "done":
+        await diagnose("attack_failed")
 
     ok, took = await order("Убери оружие.", "remove_weapon")
     results["sheathe"] = f"{'done' if ok else 'failed'} (in {took})"
@@ -1914,7 +2002,12 @@ async def orders_scenario(
     link.act = act  # type: ignore[method-assign]
     if home is not None:
         await link.debug("npc_goto", npc=npc, waypoint=home)
-    results.update(await _companion_attack_words(link, dialogue, talk))
+    async with observe("companion_attack_words", [companion, "PLAYER"]):
+        await diagnose("companion_attack_words_before", companion)
+        attack_words = await _companion_attack_words(link, dialogue, talk)
+        if any(not result.startswith("done") for result in attack_words.values()):
+            await diagnose("companion_attack_words_failed", companion)
+        results.update(attack_words)
     for name, outcome in results.items():
         log.info("%-12s %s", name, outcome)
     return results
