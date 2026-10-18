@@ -37,6 +37,14 @@ REWARD_WEIGHTS = dict(progress_cm=.01, arrived=10., blocked=-.05,
                       fall_damage=-.1, death=-10., jump=-.1, climb=-.1, time=-.01)
 
 
+def resolve_device(requested):
+    """CUDA allocator controls require an explicit device index in recent torch."""
+    device = torch.device(requested)
+    if device.type == "cuda" and device.index is None:
+        device = torch.device("cuda", torch.cuda.current_device())
+    return str(device)
+
+
 def privileged(state):
     """Only the critic receives true Detour distance/direction and contact flags."""
     direction = np.asarray(state["first_direction"], dtype=np.float32)
@@ -385,7 +393,7 @@ def update(args):
         setattr(args, name, path.resolve())
     if args.resume is not None and not args.resume.is_absolute():
         raise ValueError("--resume must be an absolute path")
-    args.device = str(torch.device(args.device))
+    args.device = resolve_device(args.device)
     torch.set_num_threads(args.threads)
     random.seed(args.seed)
     np.random.seed(args.seed)

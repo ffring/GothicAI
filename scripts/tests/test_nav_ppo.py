@@ -24,6 +24,17 @@ def single_thread():
     torch.set_num_threads(1)
 
 
+def test_cuda_allocator_device_is_explicit_without_initializing_a_gpu(monkeypatch):
+    calls = []
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: calls.append(True) or 2)
+    assert ppo.resolve_device("cuda") == "cuda:2"
+    assert calls == [True]
+    calls.clear()
+    assert ppo.resolve_device("cuda:3") == "cuda:3"
+    assert ppo.resolve_device("cpu") == "cpu"
+    assert calls == []
+
+
 def sample(action=(2, 1, 1, 1, 1, 0), valid=True):
     return dict(path_valid=valid, action_indices=list(action),
                 rewards=dict(progress_cm=125, arrived=1, blocked=1, fall_damage=2,
