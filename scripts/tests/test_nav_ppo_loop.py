@@ -164,3 +164,27 @@ def test_validation_retains_curves_outcomes_actions_and_trajectories(tmp_path):
         (tmp_path / name).write_text("saved")
     loop.trim_validation(tmp_path)
     assert {path.name for path in tmp_path.iterdir()} == {"metrics.json", "episode.json", "actions.txt", "trajectory.txt"}
+
+
+def test_cli_preserves_venv_python_symlink_while_resolving_data_paths(tmp_path, monkeypatch):
+    base_python = tmp_path / "base-python"
+    base_python.write_text("#!/usr/bin/env python3\n")
+    venv_python = tmp_path / "venv/bin/python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(base_python)
+    input_directory = tmp_path / "inputs"
+    input_directory.mkdir()
+    command = ["nav_ppo_loop.py", "--python", str(venv_python)]
+    for name in ("runner", "assets", "save", "cache", "links", "roads", "reference", "training", "validation"):
+        path = tmp_path / name
+        path.write_text("{}\n")
+        command += ["--" + name, str(input_directory / ".." / name)]
+    captured = {}
+    monkeypatch.setattr(loop.sys, "argv", command)
+    monkeypatch.setattr(loop.sys, "platform", "linux")
+    monkeypatch.setattr(loop.Loop, "run", lambda self: captured.update(args=self.args))
+    loop.main()
+    assert captured["args"].python == venv_python
+    assert captured["args"].python.is_symlink()
+    assert captured["args"].python != base_python.resolve()
+    assert captured["args"].training == (tmp_path / "training").resolve()

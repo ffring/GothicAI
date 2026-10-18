@@ -476,7 +476,9 @@ def main():
         if isinstance(value, Path):
             if not value.is_absolute():
                 parser.error(f"--{key.replace('_', '-')} must be absolute")
-            setattr(args, key, value.resolve())
+            # A venv interpreter is commonly a symlink to the base Python.
+            # Executing that resolved target loses the venv's installed packages.
+            setattr(args, key, value if key == "python" else value.resolve())
     if sys.platform != "linux":
         parser.error("Run navigation PPO on Ryzen/Linux")
     if "holdout-cv" in str(args.validation) or "holdout-cv" in str(args.training):
