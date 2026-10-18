@@ -4,6 +4,8 @@
     hook = "Я соврал NPC в Готике"       # big text over the first seconds of the cut
     npc = "NONE_100_XARDAS"              # {npc} in the script
     music = 0.0                          # game music stays off during filming
+    bed = "khorinis-countryside"          # music/game/<bed>.flac, added once across the cut
+    # bed_start = 12.0                    # override catalog.tsv's clean_from_s, in seconds
     sound = 1.0                          # the game's effects, 0..1
     script = '''
     overlay off
@@ -22,6 +24,7 @@ game's music off, including for older shot files that set `music` above zero.
 
 from __future__ import annotations
 
+import math
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +49,8 @@ class Shot:
     npc: str = ""
     save: Path | None = None
     music: float = 0.0
+    bed: str = "khorinis-countryside"
+    bed_start: float | None = None
     sound: float = 1.0
     hero_voice: str = DEFAULT_HERO_VOICE
     # the window in points: 972x1728 pixels on a Retina screen, the cut scales it to 1080x1920 (the full
@@ -86,7 +91,7 @@ class Shot:
 
 KNOWN = {
     *("title", "hook", "npc", "save", "music", "sound", "hero_voice", "size", "timeout", "description"),
-    *("script", "server_args", "brand"),
+    *("script", "server_args", "brand", "bed", "bed_start"),
 }
 
 
@@ -97,6 +102,15 @@ def load(path: Path) -> Shot:
         raise ShotError(f"{path}: {err}") from err
     if "script" not in data:
         raise ShotError(f"{path}: no script")
+    bed = str(data.get("bed", Shot.bed))
+    if not bed or Path(bed).name != bed or bed in {".", ".."}:
+        raise ShotError(f"{path}: bed must be a music theme name, without a path")
+    try:
+        bed_start = float(data["bed_start"]) if "bed_start" in data else None
+    except (TypeError, ValueError) as err:
+        raise ShotError(f"{path}: bed_start must be a nonnegative number of seconds") from err
+    if bed_start is not None and (not math.isfinite(bed_start) or bed_start < 0):
+        raise ShotError(f"{path}: bed_start must be a nonnegative number of seconds")
     save = data.get("save")
     shot = Shot(
         name=path.stem,
@@ -107,6 +121,8 @@ def load(path: Path) -> Shot:
         npc=str(data.get("npc", "")),
         save=(path.parent / save).resolve() if save else None,
         music=float(data.get("music", Shot.music)),
+        bed=bed,
+        bed_start=bed_start,
         sound=float(data.get("sound", 1.0)),
         hero_voice=str(data.get("hero_voice", DEFAULT_HERO_VOICE)),
         size=str(data.get("size", Shot.size)),
