@@ -1,7 +1,8 @@
 """Project known, unresolved deeds into the native NPC encounter memory.
 
 The native B_GetPlayerCrime remains in charge of its two-day expiry for sheep/assault and of
-encounter behavior until layer 4b. The projection never calls B_MemorizePlayerCrime: that would
+home warnings. Murder is projected as theft: CrimeMeet owns the lethal encounter decision.
+The projection never calls B_MemorizePlayerCrime: that would
 increment the script law counters again. Unchanged projections are not repeated, preserving native
 Charm's local clearing until this NPC's projected knowledge changes or the world is loaded again.
 """
@@ -10,8 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from .chronicle import Fact
+from .crime_law import CrimeLaw
 from .crimes import Crimes
 from .game import GameError, GameLink
 from .protocol import GameMessage, Loading, Session
@@ -21,12 +25,16 @@ CRIME_LEVELS = {"sheep": 1, "attack": 2, "theft": 3, "murder": 4}
 POLL_SECONDS = 1.0
 
 
-def _memory_cases(crimes: Crimes, npc: str) -> list[Fact]:
+def _memory_cases(crimes: Crimes, npc: str, *, law: CrimeLaw | None = None) -> list[Fact]:
     npc = npc.upper()
-    if any(f.get("npc") == npc for f in crimes.chronicle.facts("died")):
+    if any(str(f.get("npc", "")).upper() == npc for f in crimes.chronicle.facts("died")):
         return []
     absolved = {
         crime for fact in crimes.chronicle.facts("absolved") for crime in fact.get("crimes", [])
+    }
+    law_absolved = {
+        (fact.get("community"), crime)
+        for fact in crimes.chronicle.facts("absolved") for crime in fact.get("crimes", [])
     }
     return [
         k.crime for k in crimes.known(npc)
@@ -34,7 +42,12 @@ def _memory_cases(crimes: Crimes, npc: str) -> list[Fact]:
         and k.suspect == "PLAYER"
         and not k.forgiven
         and not k.silenced
-        and k.crime["id"] not in absolved
+        and not (
+            k.crime["id"] in absolved if law is None else (
+                law.is_guard(npc, k.crime.get("community"))
+                and (k.crime.get("community"), k.crime["id"]) in law_absolved
+            )
+        )
         and k.crime.get("kind") in CRIME_LEVELS
     ]
 
@@ -44,17 +57,20 @@ def memory_value(crimes: Crimes, npc: str) -> tuple[int, int]:
     return _native_value(_memory_cases(crimes, npc))
 
 
-def _native_value(cases: list[Fact]) -> tuple[int, int]:
+def _native_value(cases: list[Fact], *, encounter: bool = False) -> tuple[int, int]:
     return max(
-        ((CRIME_LEVELS[c["kind"]], int(c.get("day", 0))) for c in cases), default=(0, 0)
+        ((min(CRIME_LEVELS[c["kind"]], 3) if encounter else CRIME_LEVELS[c["kind"]],
+          int(c.get("day", 0))) for c in cases), default=(0, 0)
     )
 
 
 class CrimeMemoryRuntime:
     def __init__(self, link: GameLink, crimes: Crimes) -> None:
         self.link, self.crimes, self.chronicle = link, crimes, crimes.chronicle
+        self.law = CrimeLaw(crimes)
         self._generation = 0
         self._projection: dict[str, tuple[int, int, tuple[str, ...]]] = {}
+        self._suspended: dict[str, int] = {}
         self._lock = asyncio.Lock()
         self._wake = asyncio.Event()
         self.link.listeners.append(self._on_message)
@@ -64,6 +80,7 @@ class CrimeMemoryRuntime:
         if isinstance(message, (Session, Loading)):
             self._generation += 1
             self._projection.clear()
+            self._suspended.clear()
             self._wake.set()
 
     def _on_fact(self, fact: Fact) -> None:
@@ -79,16 +96,37 @@ class CrimeMemoryRuntime:
                 return
             npc = npc.upper()
             generation, branch = self._generation, self.chronicle.branch
-            cases = _memory_cases(self.crimes, npc)
-            value = _native_value(cases)
-            state = (*value, tuple(sorted(c["id"] for c in cases)))
-            if self._projection.get(npc) == state:
-                return
-            await self.link.story_effect(
-                npc, [{"do": "crime_memory", "value": value[0], "day": value[1]}]
-            )
-            if generation == self._generation and branch == self.chronicle.branch:
+            while generation == self._generation and branch == self.chronicle.branch:
+                cases = _memory_cases(self.crimes, npc, law=self.law)
+                value = (0, 0) if npc in self._suspended else _native_value(cases, encounter=True)
+                state = (*value, tuple(sorted(c["id"] for c in cases)))
+                if self._projection.get(npc) == state:
+                    return
+                await self.link.story_effect(
+                    npc, [{"do": "crime_memory", "value": value[0], "day": value[1]}]
+                )
+                if generation != self._generation or branch != self.chronicle.branch:
+                    return
                 self._projection[npc] = state
+                # A payment during the await must clear this very flush, not the next poll.
+
+    @asynccontextmanager
+    async def suspend(self, npc: str) -> AsyncIterator[None]:
+        """Let native important TALK start despite its B_GetPlayerCrime gate; keep news raw."""
+        npc = npc.upper()
+        generation, branch = self._generation, self.chronicle.branch
+        self._suspended[npc] = self._suspended.get(npc, 0) + 1
+        try:
+            await self.project(npc)
+            yield
+        finally:
+            if generation == self._generation and branch == self.chronicle.branch:
+                count = self._suspended.get(npc, 0) - 1
+                if count > 0:
+                    self._suspended[npc] = count
+                else:
+                    self._suspended.pop(npc, None)
+                await self.project(npc)
 
     async def tick(self) -> None:
         recipients = {

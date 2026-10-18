@@ -44,8 +44,9 @@ async def system():
     memory.close()
 
 
-def case(system, *, crime="theft-1", kind="theft", day=3, npc=NPC, degree="seen"):
-    system.chronicle.record({"fact": "crime", "id": crime, "kind": kind, "day": day})
+def case(system, *, crime="theft-1", kind="theft", day=3, npc=NPC, degree="seen", community=None):
+    system.chronicle.record({"fact": "crime", "id": crime, "kind": kind, "day": day,
+                             **({"community": community} if community is not None else {})})
     fact = {"fact": "crime_seen", "npc": npc, "crime": crime}
     if degree == "heard":
         fact = {"fact": "rumor", "to": npc, "crime": crime, "from": "WITNESS"}
@@ -59,7 +60,9 @@ def case(system, *, crime="theft-1", kind="theft", day=3, npc=NPC, degree="seen"
 async def test_proven_knowledge_projects_native_level_and_day(system, kind, value, degree):
     case(system, kind=kind, degree=degree)
     await system.runtime.tick()
-    assert system.link.effects == [(NPC, [{"do": "crime_memory", "value": value, "day": 3}])]
+    # Native murder memory makes all non-bandits fight. The encounter table now owns that choice;
+    # news still receives the original level through memory_value().
+    assert system.link.effects == [(NPC, [{"do": "crime_memory", "value": min(value, 3), "day": 3}])]
     assert memory_value(system.crimes, NPC.lower()) == (value, 3)
 
 
@@ -74,16 +77,19 @@ async def test_maximum_severity_wins_then_latest_day_without_transferring_suspic
 
 @pytest.mark.parametrize("kind", ["silenced", "forgiven", "absolved", "died"])
 async def test_personal_resolution_or_absolution_removes_native_memory(system, kind):
-    case(system)
+    npc = "MIL_305_JERGEL" if kind == "absolved" else NPC
+    if kind == "absolved":
+        system.crimes.people[npc] = {"guild": 2, "npctype": 0}
+    case(system, npc=npc, community="city" if kind == "absolved" else None)
     await system.runtime.tick()
-    fact = {"fact": kind, "npc": NPC, "crime": "theft-1"}
+    fact = {"fact": kind, "npc": npc, "crime": "theft-1"}
     if kind == "absolved":
         fact = {"fact": kind, "community": "city", "crimes": ["theft-1"]}
     system.chronicle.record(fact)
     assert system.runtime._wake.is_set()
     await system.runtime.tick()
-    assert system.link.effects[-1] == (NPC, [{"do": "crime_memory", "value": 0, "day": 0}])
-    assert system.crimes.known(NPC)  # the fact remains; only the native encounter projection is cleared
+    assert system.link.effects[-1] == (npc, [{"do": "crime_memory", "value": 0, "day": 0}])
+    assert system.crimes.known(npc)  # the fact remains; only the native encounter projection is cleared
 
 
 async def test_other_npcs_forgiveness_and_other_cases_absolution_do_not_erase_memory(system):
@@ -139,3 +145,77 @@ async def test_loading_new_branch_forgets_process_projection_and_uses_current_fa
     case(system, crime="new", kind="attack", day=7)
     await system.runtime.tick()
     assert system.link.effects[-1] == (NPC, [{"do": "crime_memory", "value": 2, "day": 7}])
+
+
+async def test_law_payment_does_not_release_a_private_victims_home_or_personal_claim(system):
+    case(system)
+    system.chronicle.record({"fact": "absolved", "community": "city", "crimes": ["theft-1"]})
+    await system.runtime.project(NPC)
+    assert system.link.effects[-1] == (NPC, [{"do": "crime_memory", "value": 3, "day": 3}])
+    assert memory_value(system.crimes, NPC) == (0, 0)  # preserve the layer-3 news contract
+
+
+async def test_suspend_allows_important_talk_without_changing_raw_news_knowledge(system):
+    case(system, kind="murder")
+    await system.runtime.project(NPC)
+    async with system.runtime.suspend(NPC):
+        assert system.link.effects[-1] == (NPC, [{"do": "crime_memory", "value": 0, "day": 0}])
+        assert memory_value(system.crimes, NPC) == (4, 3)
+        await system.runtime.tick()
+        assert system.link.effects[-1][1][0]["value"] == 0
+    assert system.link.effects[-1] == (NPC, [{"do": "crime_memory", "value": 3, "day": 3}])
+
+
+async def test_nested_suspend_and_payment_restore_current_knowledge_only(system):
+    case(system)
+    async with system.runtime.suspend(NPC):
+        async with system.runtime.suspend(NPC):
+            system.chronicle.record({"fact": "forgiven", "npc": NPC, "crime": "theft-1", "paid": 50})
+        await system.runtime.project(NPC)
+        assert system.link.effects[-1][1][0]["value"] == 0
+    assert system.runtime._suspended == {}
+    assert system.link.effects[-1] == (NPC, [{"do": "crime_memory", "value": 0, "day": 0}])
+
+
+async def test_cancelled_suspend_restores_home_memory(system):
+    case(system)
+    started = asyncio.Event()
+
+    async def walk():
+        async with system.runtime.suspend(NPC):
+            started.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(walk())
+    await started.wait()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    assert system.runtime._suspended == {}
+    assert system.link.effects[-1][1][0]["value"] == 3
+
+
+async def test_old_suspension_does_not_write_or_decrement_new_world_state(system):
+    case(system)
+    async with system.runtime.suspend(NPC):
+        system.link.receive(Loading(type="loading"))
+        system.link.receive(Session(type="session", branch="B"))
+        case(system, kind="attack", day=7)
+        await system.runtime.project(NPC)
+        effect_count = len(system.link.effects)
+    assert system.runtime._suspended == {}
+    assert len(system.link.effects) == effect_count
+    assert system.link.effects[-1] == (NPC, [{"do": "crime_memory", "value": 2, "day": 7}])
+
+
+async def test_payment_during_projection_is_cleared_before_the_same_flush_returns(system, monkeypatch):
+    case(system)
+    send = system.link.story_effect
+
+    async def paying(npc, effects):
+        await send(npc, effects)
+        if effects[0]["value"] == 3:
+            system.chronicle.record({"fact": "forgiven", "npc": NPC, "crime": "theft-1", "paid": 50})
+
+    monkeypatch.setattr(system.link, "story_effect", paying)
+    await system.runtime.project(NPC)
+    assert [effects[0]["value"] for _, effects in system.link.effects] == [3, 0]

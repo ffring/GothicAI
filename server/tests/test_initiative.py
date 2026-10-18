@@ -19,12 +19,13 @@ from gothic_ai.crimes import Crimes
 from gothic_ai.deals import Deals
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.gamedata.storygraph import StoryGraph, load
-from gothic_ai.initiative import CHECKINFO, TOOLS, InitiativeDesk
+from gothic_ai.initiative import CHECKINFO, TOOLS, ImportantApproach, InitiativeDesk
 from gothic_ai.journal import Journal
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.memory import MemoryStore
 from gothic_ai.perception import PerceptionDesk
 from gothic_ai.persona import PersonaProvider
+from gothic_ai.protocol import NpcActResult
 from gothic_ai.storyguard import StoryGuard
 from gothic_ai.talk import TalkDesk
 from gothic_ai.trace import TraceWriter, read
@@ -207,6 +208,140 @@ async def _comes_up(s: Scene, *others: dict) -> None:
 def _skipped(s: Scene) -> list[str]:
     """Why the desk let walk-ups go (the journal)."""
     return [e["why"] for e in s.journal if e["kind"] == "initiative_skipped"]
+
+
+async def test_rule_approach_leaves_existing_important_dialog_to_native_perception(tmp_path):
+    async with _scene(tmp_path) as s:
+        await _around(s, person(LOBART, "Лобарт", 5))
+        approach = ImportantApproach(s.desk.link, s.desk.bodies, s.talk, s.desk.guard, s.chronicle)
+        told = False
+        task = asyncio.create_task(
+            approach.approach(LOBART, "crime:C1", valid=lambda: True, told=lambda: told)
+        )
+        try:
+            await _walks(s, 1)
+            assert s.fake.acts[-1]["action"] == "go_to_npc"
+            # Native B_AssessPlayer can take the NPC into TALK before its soft walk finishes.
+            await _around(s, person(LOBART, "Лобарт", 2, activity="dialog", state="ZS_TALK"))
+            told = True
+            await _idle(s, "gone")
+            assert await task
+            assert s.chronicle.facts("initiative")[-1]["occasion"] == "crime:C1"
+            assert not s.fake.debug_calls and not s.llm.calls and not s.fake.attached
+        finally:
+            await approach.close()
+
+
+async def test_rule_approach_clears_only_its_unfinished_walk_when_claim_is_removed(tmp_path):
+    async with _scene(tmp_path) as s:
+        await _around(s, person(LOBART, "Лобарт", 5))
+        approach = ImportantApproach(s.desk.link, s.desk.bodies, s.talk, s.desk.guard, s.chronicle)
+        valid = True
+        task = asyncio.create_task(
+            approach.approach(LOBART, "crime:C1", valid=lambda: valid, told=lambda: False)
+        )
+        try:
+            await _walks(s, 1)
+            valid = False
+            assert not await task
+            assert any(
+                m.get("exprs") == [["call", "NPC_CLEARAIQUEUE", ["inst", "SELF"]]]
+                for m in s.fake.story
+            )
+            assert not s.chronicle.facts("initiative") and not s.fake.debug_calls
+        finally:
+            await approach.close()
+
+
+async def test_rule_approach_load_does_not_clear_ai_of_new_world(tmp_path):
+    async with _scene(tmp_path) as s:
+        await _around(s, person(LOBART, "Лобарт", 5))
+        approach = ImportantApproach(s.desk.link, s.desk.bodies, s.talk, s.desk.guard, s.chronicle)
+        task = asyncio.create_task(
+            approach.approach(LOBART, "crime:C1", valid=lambda: True, told=lambda: False)
+        )
+        try:
+            await _walks(s, 1)
+            await s.fake.send(type="loading")
+            assert not await task
+            assert not any(
+                m.get("exprs") == [["call", "NPC_CLEARAIQUEUE", ["inst", "SELF"]]]
+                for m in s.fake.story
+            )
+        finally:
+            await approach.close()
+
+
+@pytest.mark.parametrize("rejected", [False, True])
+async def test_rule_approach_releases_native_talk_gate_only_after_completed_walk(tmp_path, rejected):
+    async with _scene(tmp_path) as s:
+        await _around(s, person(LOBART, "Лобарт", 5))
+        approach = ImportantApproach(s.desk.link, s.desk.bodies, s.talk, s.desk.guard, s.chronicle)
+        accepted: list[str] = []
+        entered = False
+        exited = False
+        told = False
+
+        def receipt(message: Any) -> None:
+            if isinstance(message, NpcActResult) and message.status == "queued":
+                accepted.append(message.id)
+
+        @asynccontextmanager
+        async def release() -> AsyncIterator[None]:
+            nonlocal entered, exited, told
+            assert accepted
+            entered = True
+            told = True
+            try:
+                yield
+            finally:
+                exited = True
+
+        s.desk.link.listeners.append(receipt)
+        if rejected:
+            s.fake.busy_npcs.add(LOBART)
+        try:
+            task = asyncio.create_task(
+                approach.approach(
+                    LOBART, "crime:C1", valid=lambda: True, told=lambda: told, release=release
+                )
+            )
+            await _walks(s, 1)
+            if not rejected:
+                await _until(lambda: bool(accepted))
+                assert not entered
+                await _idle(s)
+            result = await task
+            assert result is not rejected
+            assert entered is not rejected and exited is not rejected
+            assert bool(s.chronicle.facts("initiative")) is not rejected
+        finally:
+            s.desk.link.listeners.remove(receipt)
+            await approach.close()
+
+
+@pytest.mark.parametrize(
+    "entry,partner",
+    [
+        (person(LOBART, "Лобарт", 4, state="ZS_SLEEP"), None),
+        (person(LOBART, "Лобарт", 4, activity="fight"), None),
+        (person(GUARD, "Страж", 8, state="ZS_GUARD_PASSAGE"), None),
+        (person(LOBART, "Лобарт", 4), MALETH),
+    ],
+)
+async def test_rule_approach_respects_sleep_busy_posts_and_other_conversation(tmp_path, entry, partner):
+    async with _scene(tmp_path) as s:
+        await _around(s, entry)
+        if partner is not None:
+            s.talk.begin(partner, "Малет")
+        approach = ImportantApproach(s.desk.link, s.desk.bodies, s.talk, s.desk.guard, s.chronicle)
+        try:
+            assert not await approach.approach(
+                entry["id"], "crime:C1", valid=lambda: True, told=lambda: False
+            )
+            assert not s.fake.acts and not s.fake.debug_calls
+        finally:
+            await approach.close()
 
 
 def _decided(s: Scene) -> list[tuple[str, str, str]]:
