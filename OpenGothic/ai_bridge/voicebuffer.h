@@ -3,6 +3,7 @@
 #include <Tempest/SoundEffect>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -28,6 +29,10 @@ class VoiceBuffer final {
     // the audio thread: `n` mono samples, silence where none has arrived yet
     void     render(int16_t* out, size_t n);
 
+    // Installed before play, only for bench voice stems. Receives the actual rendered PCM,
+    // including streaming underruns, but not padding after the finished line.
+    void     record(std::function<void(const int16_t*,size_t)> sink);
+
     // its loudness for the speaker's mouth, filled as the audio arrives and plays
     std::shared_ptr<LipSync::Track> lipTrack() const { return lips; }
 
@@ -41,4 +46,5 @@ class VoiceBuffer final {
     bool                 ended = false;
     uint32_t             freq  = 0;
     std::shared_ptr<LipSync::Track> lips;
+    std::function<void(const int16_t*,size_t)> recording;
   };
