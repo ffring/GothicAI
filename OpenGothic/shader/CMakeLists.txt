@@ -266,6 +266,7 @@ add_shader(ambient_light_surf_orm.frag lighting/ambient_light.frag -DSSAO -DSURF
 add_shader(light_orm.frag              lighting/light.frag -DMATERIAL_MAPS)
 add_shader(light_rq_orm.frag           lighting/light.frag -DRAY_QUERY -DMATERIAL_MAPS)
 add_shader(light_rq_at_orm.frag        lighting/light.frag -DRAY_QUERY -DRAY_QUERY_AT -DMATERIAL_MAPS)
+add_shader(light_vsm_orm.frag          lighting/light.frag -DVIRTUAL_SHADOW -DMATERIAL_MAPS)
 
 add_shader(irradiance.comp           lighting/irradiance.comp)
 add_shader(sky_exposure.comp         lighting/sky_exposure.comp)

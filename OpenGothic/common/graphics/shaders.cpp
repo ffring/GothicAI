@@ -181,7 +181,7 @@ void Shaders::compileShaders() noexcept {
     lightsRq = device.pipeline(Triangles, state, vsLight, fsLight);
     }
   if(Shaders::isVsmSupported()) {
-    sh      = GothicShader::get("light_vsm.frag.sprv");
+    sh      = GothicShader::get(string_frm("light_vsm", materialMaps, ".frag.sprv"));
     fsLight = device.shader(sh.data,sh.len);
     lightsVsm = device.pipeline(Triangles, state, vsLight, fsLight);
     }
