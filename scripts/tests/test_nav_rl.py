@@ -558,3 +558,30 @@ def test_four_mode_equivalence_completes_all_routes_and_counts_unique_outliers(t
     assert report['passed'] == (outlier_count <= 2)
     assert not report['strict_passed']
     assert all(len(route['comparisons']) == 2 for route in report['outlier_routes'])
+
+
+def test_far_improvement_with_exact_drive_population_parity_uses_no_outlier_budget(tmp_path, monkeypatch):
+    chosen = [dict(region='market', start='A', goal='B'), dict(region='market', start='C', goal='D')]
+    for mode in ('drive-near', 'pop-near', 'drive-far', 'pop-far'):
+        for index, pair in enumerate(chosen):
+            far = mode.endswith('-far')
+            directory = tmp_path / mode / f'{index:05d}'
+            if mode.startswith('pop-'):
+                directory = directory / 'episodes/0'
+            rl.write_json(directory / 'episode.json', dict(pair, drive=True, decisions=10,
+                          success=True if far else index == 0,
+                          elapsed_ms=(130667 if index == 0 else 187133) if far else (143233 if index == 0 else 240000),
+                          min_hero_distance_cm=12000, max_hero_distance_cm=15000))
+    monkeypatch.setattr(rl, 'trajectory_divergence', lambda *a: dict(available=True))
+    def forbid_runner(*args):
+        raise AssertionError('Summary must not restart a runner')
+    monkeypatch.setattr(rl, 'new_runner', forbid_runner)
+    args = SimpleNamespace(output=tmp_path, far_waypoint='FAR', min_far_cm=10000, physics='cv')
+    report = rl.summarize_equivalence(args, chosen)
+    assert report['passed']
+    assert not report['strict_passed']
+    assert report['outlier_routes'] == []
+    assert len(report['raw_symmetric_outlier_routes']) == 2
+    assert all(metric['passed'] for metric in report['distance_noninferiority'].values())
+    assert report['comparisons']['drive_vs_population_near']['passed']
+    assert report['comparisons']['drive_vs_population_far']['passed']

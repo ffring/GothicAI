@@ -736,8 +736,8 @@ def distance_comparison_metrics(near, far):
                            far_elapsed_ms=other["elapsed_ms"],
                            passed=other["elapsed_ms"] <= episode["elapsed_ms"] * 1.05))
     reachability_passed = symmetric["repeated_arrived"] >= symmetric["reference_arrived"]
-    return dict(passed=reachability_passed and all(pair["passed"] for pair in common),
-                criterion="far_arrivals_at_least_near_and_no_more_than_5pct_slower_on_each_common_success",
+    return dict(passed=reachability_passed and not lost and all(pair["passed"] for pair in common),
+                criterion="no_lost_near_success_and_no_more_than_5pct_slower_on_each_common_success",
                 time_tolerance=.05, reachability_passed=reachability_passed,
                 near_arrived=symmetric["reference_arrived"], far_arrived=symmetric["repeated_arrived"],
                 lost_success_routes=lost, common_successes=common, symmetric_diagnostic=symmetric)
@@ -773,6 +773,12 @@ def equivalence(args):
             futures = [pool.submit(record_mode, mode) for mode in modes]
             for future in futures:
                 future.result()
+    return summarize_equivalence(args, chosen)
+
+
+def summarize_equivalence(args, chosen):
+    """Aggregate existing four-mode recordings; never prepare or restart a world."""
+    modes = ("drive-near", "pop-near", "drive-far", "pop-far")
     recorded = {mode: comparable_episodes(args.output / mode) for mode in modes}
     comparisons = {}
     for label, first, second in (("drive_vs_population_near", "drive-near", "pop-near"),
@@ -784,25 +790,43 @@ def equivalence(args):
                       max_hero_distance_cm=episode["max_hero_distance_cm"],
                       far_enough=episode["min_hero_distance_cm"] >= args.min_far_cm)
                  for mode in ("drive-far", "pop-far") for (start, goal), episode in recorded[mode].items()]
-    outliers = defaultdict(list)
+    raw_outliers = defaultdict(list)
     for label, comparison in comparisons.items():
         for pair in comparison["pairs"]:
+            if not pair["passed"]:
+                raw_outliers[pair["start"], pair["goal"]].append(label)
+    outliers = defaultdict(list)
+    for label in ("drive_vs_population_near", "drive_vs_population_far"):
+        for pair in comparisons[label]["pairs"]:
+            if not pair["passed"]:
+                outliers[pair["start"], pair["goal"]].append(label)
+    distance_noninferiority = {}
+    for controller, near, far, label in (("drive", "drive-near", "drive-far", "drive_near_vs_far"),
+                                         ("population", "pop-near", "pop-far", "population_near_vs_far")):
+        metric = distance_comparison_metrics(recorded[near], recorded[far])
+        distance_noninferiority[controller] = metric
+        for pair in metric["lost_success_routes"]:
+            outliers[pair["start"], pair["goal"]].append(label)
+        for pair in metric["common_successes"]:
             if not pair["passed"]:
                 outliers[pair["start"], pair["goal"]].append(label)
     preparation_passed = all(pair["far_enough"] for pair in distances)
     result = dict(passed=preparation_passed and len(outliers) <= 2,
-                  strict_passed=preparation_passed and not outliers, preparation_passed=preparation_passed,
+                  strict_passed=preparation_passed and not raw_outliers, preparation_passed=preparation_passed,
                   n=len(chosen), physics=getattr(args, "physics", "cv"), time_tolerance=.05,
                   max_tolerated_outlier_routes=2, outlier_routes=[dict(start=key[0], goal=key[1], comparisons=labels)
                       for key, labels in sorted(outliers.items())],
                   selection="first_count_routes_in_supplied_order_before_policy_results",
                   world_reset="same_save_and_seed_before_every_episode_in_each_of_four_modes",
                   far_waypoint=args.far_waypoint, min_required_hero_distance_cm=args.min_far_cm,
-                  comparisons=comparisons, far_distances=distances)
+                  comparisons=comparisons, distance_noninferiority=distance_noninferiority,
+                  raw_symmetric_outlier_routes=[dict(start=key[0], goal=key[1], comparisons=labels)
+                      for key, labels in sorted(raw_outliers.items())], far_distances=distances)
     write_json(args.output / "equivalence.json", result)
     print(json.dumps(result, ensure_ascii=False))
     if not result["passed"]:
         raise ValueError("Navigation equivalence failed setup or more than two unique routes; see equivalence.json")
+    return result
 
 
 def death_reset_metrics(episodes):
