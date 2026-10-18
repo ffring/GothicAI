@@ -1801,6 +1801,8 @@ async def orders_scenario(
     if not await _until(lambda: npc in talk.people, 20):
         link.act = act  # type: ignore[method-assign]
         return {"roster": f"failed ({npc} is not around the hero)"}
+    initial = await link.snapshot(npc, fresh=True)
+    home = initial.npc.waypoint or initial.npc.nearest_waypoint
     # A 9 m offset inside the tower may put the hero on another floor, beyond hearing round its walls.
     # Stage Xardas on the open road, then hold him without starting follow before testing that action.
     await link.debug("player_hp", hp=5000)
@@ -1836,10 +1838,13 @@ async def orders_scenario(
     def dist() -> float:
         return talk.people[npc].distance / 100 if npc in talk.people else -1.0
 
+    given: set[str] = set()
+
     async def order(
         text: str, action: str, focus: str | None = None, timeout: float = 15
     ) -> tuple[bool, str]:
         t0 = time.monotonic()
+        given.add(text)
         if focus is None:
             await link.debug("type", text=text)
         else:
@@ -1888,8 +1893,15 @@ async def orders_scenario(
         f"(in {took}; detached {free}, goal {goal})"
     )
 
-    results["no_model"] = f"{'done' if not llm.calls else 'failed'} ({len(llm.calls)} model call(s))"
+    # Combat incidents may speak on their own. Only the hero's orders must skip a dialogue turn.
+    order_calls = sum(1 for _, messages, _ in llm.calls if messages and messages[-1].content in given)
+    results["no_model"] = (
+        f"{'done' if not order_calls else 'failed'} "
+        f"({order_calls} order model call(s), {len(llm.calls) - order_calls} incident call(s))"
+    )
     link.act = act  # type: ignore[method-assign]
+    if home is not None:
+        await link.debug("npc_goto", npc=npc, waypoint=home)
     results.update(await _companion_attack_words(link, dialogue, talk))
     for name, outcome in results.items():
         log.info("%-12s %s", name, outcome)
