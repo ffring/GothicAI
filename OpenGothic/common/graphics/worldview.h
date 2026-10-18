@@ -48,6 +48,7 @@ class WorldView {
     void setHiZ(const Tempest::Texture2d& hiZ);
     void setSceneImages(const Tempest::Texture2d& clr, const Tempest::Texture2d& depthAux, const Tempest::ZBuffer& depthNative);
     void setWindEnabled(bool enabled, uint64_t period);
+    void setClothWind(bool enabled, float scale);
 
     void dbgLights      (DbgPainter& p) const;
 

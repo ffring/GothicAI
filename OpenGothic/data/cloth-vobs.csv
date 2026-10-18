@@ -1,0 +1,8 @@
+# Visual basename (case-insensitive, no extension),attachment rule,stiffness,material glob
+# Attachment rules select a local-space bounding-box edge; tolerance is cm.
+# The measured original geometry and exclusions are documented in
+# reports/physics/2026-10-18-cloth/validation-notes.md (Step 1, census).
+OC_LOB_FLAG_SMALL,y:max:1.5,0.85,*
+ADD_PIRATEFLAG,x:min:1.5,0.80,*
+# Keep the pole/skull rigid; disabling cloth restores the native full collider.
+NW_MORPH_ORC_STANDART_01,y:max:22,0.85,*ORC_STANDART_FLAG*

@@ -71,6 +71,7 @@ class MeshObjects final {
         void   setAsGhost  (bool g);
         void   setFatness  (float f);
         void   setWind     (zenkit::AnimationType m, float intensity);
+        void   setDeformation(const std::vector<Tempest::Vec4>& vertices);
         // freeOnly: not in place of another anim of the head (a blink gives way to the faces)
         void   startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly = false);
         void   setMMShape  (std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity);

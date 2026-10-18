@@ -80,6 +80,11 @@ void MeshObjects::Mesh::setWind(zenkit::AnimationType m, float intensity) {
     sub[i].setWind(m,intensity);
   }
 
+void MeshObjects::Mesh::setDeformation(const std::vector<Tempest::Vec4>& vertices) {
+  for(size_t i=0;i<subCount;++i)
+    sub[i].setDeformation(vertices);
+  }
+
 void MeshObjects::Mesh::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly) {
   for(size_t i=0;i<subCount;++i)
     sub[i].startMMAnim(anim,intensity,timeUntil,freeOnly);

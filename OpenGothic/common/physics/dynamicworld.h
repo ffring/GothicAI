@@ -29,6 +29,7 @@ class DbgPainter;
 class Serialize;
 
 class CollisionWorld;
+class Cloth;
 
 class DynamicWorld final {
   private:
@@ -66,6 +67,7 @@ class DynamicWorld final {
       C_MovableQuery = 11,
       C_SmallVobQuery = 12,
       C_Fragment = 13,
+      C_Cloth = 14,
       };
 
     enum PtrType {
@@ -368,6 +370,10 @@ class DynamicWorld final {
     void           setBuoyancyEnabled(bool enabled);
     bool           buoyancyEnabled() const;
     bool           destructionEnabled() const;
+    Cloth&         cloth();
+    const Cloth&   cloth() const;
+    void           setClothEnabled(bool enabled);
+    bool           clothEnabled() const;
     // Called after the complete authored vob tree has installed its collisions.
     void           finalizeMovableVobs();
     double         movableVobValidationMilliseconds() const;
@@ -542,6 +548,8 @@ class DynamicWorld final {
     void           loadDestructionVobs(Serialize& fin);
 
     std::unique_ptr<CollisionWorld>    world;
+    std::unique_ptr<Cloth>             clothWorld;
+    World*                            ownerWorld = nullptr;
 
     std::vector<std::string>           sectors;
 

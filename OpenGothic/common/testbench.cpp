@@ -73,6 +73,7 @@
 #include "graphics/mesh/flinch.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
+#include "physics/cloth.h"
 #include "physics/physicmesh.h"
 #include "world/triggers/movetrigger.h"
 #include "physics/ragdoll.h"
@@ -693,6 +694,22 @@ struct Bench {
   struct WaterActor { Npc* npc=nullptr; std::string role; uint64_t sleepAt=uint64_t(-1); };
   std::vector<WaterActor> waterActors;
   bool waterBodiesReady=false,waterLootReady=false,waterKillOnThrow=false;
+  uint32_t clothZen=uint32_t(-1);
+  std::string clothCase;
+  Vec3 clothCenter,clothDirection=Vec3(1,0,0);
+  bool clothTrace=false,clothMeasuring=false,clothOverflow=false,clothHold=false;
+  Vec3 clothHeldPosition;
+  uint64_t clothSample=uint64_t(-1);
+  std::vector<LivingPhysics> clothPhysics;
+  std::unordered_map<uintptr_t,std::vector<Vec3>> clothPrevious;
+  std::unordered_map<uintptr_t,bool> clothPreviousActive;
+  const void* clothArrow=nullptr;
+  Vec3 clothShotTarget,clothShotNormal;
+  float clothArrowDownstream=0;
+  uint64_t clothShotAt=0,clothShotHitsBefore=0;
+  std::string clothShotKind;
+
+
   std::string waterLootMode;
   std::vector<std::unique_ptr<MovableFixture>> destructionFixtures;
   std::vector<uintptr_t> destructionIds;
@@ -4648,6 +4665,185 @@ void pushMovablePinnedTable(World& world) {
   arenaAbort("movable pinned map furniture is absent");
   }
 
+// These fixtures only observe authored cloth and launch ordinary Bullet objects. No
+// synthetic impulse, replacement cloth or NPC target participates in acceptance.
+std::string clothRows(World& world,bool geometry=false) {
+  std::string rows="[";
+  for(const auto& body:world.physic()->cloth().snapshots()) {
+    if(rows.size()>1)rows+=",";
+    rows+="{\"id\":"+std::to_string(body.id)+",\"zen_id\":"+std::to_string(body.zenId)+
+      ",\"visual\":"+jsonStr(body.visual)+",\"center_cm\":"+ragdollVector(body.center)+
+      ",\"active\":"+(body.active?"true":"false")+",\"exposed\":"+(body.exposed?"true":"false")+",\"vertices\":"+std::to_string(body.vertices)+
+      ",\"pinned\":"+std::to_string(body.pinned)+",\"weight\":"+ragdollNumber(body.simulationWeight)+
+      ",\"anchor_error_cm\":"+ragdollNumber(body.maxAnchorErrorCm)+
+      ",\"max_speed_cm_s\":"+ragdollNumber(body.maxSpeedCmPerSec)+
+      ",\"max_speed_ever_cm_s\":"+ragdollNumber(body.maxSpeedEverCmPerSec)+
+      ",\"transition_blend_delta_cm\":"+ragdollNumber(body.transitionMaxDeltaCm)+
+      ",\"spell_hits\":"+std::to_string(body.projectileHits)+",\"arrow_passes\":"+std::to_string(body.arrowPasses)+
+      ",\"recoveries\":"+std::to_string(body.recoveryCount);
+    if(geometry && body.zenId==bench.clothZen) {
+      rows+=",\"rendered_world_vertices_cm\":[";
+      for(size_t i=0;i<body.worldPositionsCm.size();++i) {
+        if(i)rows+=",";
+        rows+=ragdollVector(body.worldPositionsCm[i]);
+        }
+      rows+="]";
+      }
+    rows+="}";
+    }
+  return rows+"]";
+  }
+
+void clothFields(World& world) {
+  if(!bench.clothTrace || bench.clothMeasuring || bench.clothSample==world.tickCount())return;
+  bench.clothSample=world.tickCount();
+  float frameDelta=0;
+  bool changed=false;
+  for(const auto& body:world.physic()->cloth().snapshots()) {
+    auto& old=bench.clothPrevious[body.id];
+    if(body.zenId==bench.clothZen && old.size()==body.worldPositionsCm.size())
+      for(size_t i=0;i<old.size();++i)frameDelta=std::max(frameDelta,(old[i]-body.worldPositionsCm[i]).length());
+    if(const auto i=bench.clothPreviousActive.find(body.id);i!=bench.clothPreviousActive.end())
+      changed|=body.zenId==bench.clothZen && i->second!=body.active;
+    bench.clothPreviousActive[body.id]=body.active;old=body.worldPositionsCm;
+    }
+  event("cloth_sample","\"case\":"+jsonStr(bench.clothCase)+",\"t_game_ms\":"+std::to_string(world.tickCount())+
+    ",\"hero_cm\":"+ragdollVector(world.player()->position())+
+    ",\"hero_target_distance_cm\":"+ragdollNumber((world.player()->position()-bench.clothCenter).length())+
+    ",\"target_max_frame_delta_cm\":"+ragdollNumber(frameDelta)+
+    ",\"target_active_changed\":"+(changed?"true":"false")+",\"cloth\":"+clothRows(world,changed));
+  }
+
+void clothCheckpoint(World& world,std::string_view label) {
+  event("cloth_checkpoint","\"case\":"+jsonStr(bench.clothCase)+",\"label\":"+jsonStr(label)+
+    ",\"t_game_ms\":"+std::to_string(world.tickCount())+",\"enabled\":"+
+    (world.physic()->clothEnabled()?"true":"false")+",\"wind_scale\":"+
+    ragdollNumber(world.physic()->cloth().windScale())+",\"cloth\":"+clothRows(world,true));
+  }
+
+bool clothStandAt(World& world,Npc& player,const Vec3& target,float distance) {
+  for(float angle:{0.f,.4f,-.4f,.8f,-.8f,1.6f,-1.6f,3.14f}) {
+    const float ca=std::cos(angle),sa=std::sin(angle);
+    const auto base=bench.clothDirection;
+    const Vec3 direction(base.x*ca-base.z*sa,0,base.x*sa+base.z*ca);
+    float horizontal=distance;
+    Vec3 point;
+    bool supported=true;
+    // Resolve the horizontal distance against the native floor, retaining the
+    // requested 3D observer radius when a banner is well above street level.
+    for(int pass=0;pass<4;++pass) {
+      const auto floor=world.physic()->landRay(target+direction*horizontal+Vec3(0,6000,0),12000);
+      if(!floor.hasCol || floor.n.y<.8f || std::abs(floor.v.y-target.y)>=distance ||
+         world.physic()->waterRay(floor.v+Vec3(0,5,0),1).hasCol) {supported=false;break;}
+      point=floor.v+Vec3(0,1,0);
+      horizontal=std::sqrt(std::max(0.f,distance*distance-(point.y-target.y)*(point.y-target.y)));
+      }
+    if(!supported || std::abs((point-target).length()-distance)>1.f)continue;
+    player.closeWeapon(true);player.clearAiQueue();player.stopWalking();player.setPosition(point);
+    player.setDirection(target-point);player.updateTransform();
+    bench.clothDirection=direction;
+    bench.clothHeldPosition=point;bench.clothHold=true;
+    return true;
+    }
+  return false;
+  }
+
+void clothSetup(World& world,Npc& player,uint32_t zen,std::string label) {
+  const auto all=world.physic()->cloth().snapshots();
+  const auto found=std::find_if(all.begin(),all.end(),[&](const auto& body){return body.zenId==zen;});
+  if(found==all.end()) {arenaAbort("cloth fixture requires an authored allowlisted zen id");return;}
+  bench.clothZen=zen;bench.clothCase=std::move(label);bench.clothCenter=found->center;
+  Vec3 cameraNormal;
+  float area=0;
+  for(size_t i=0;i+2<found->indices.size();i+=3) {
+    const auto a=found->indices[i],b=found->indices[i+1],c=found->indices[i+2];
+    if(a>=found->worldPositionsCm.size() || b>=found->worldPositionsCm.size() || c>=found->worldPositionsCm.size())continue;
+    const auto normal=Vec3::crossProduct(found->worldPositionsCm[b]-found->worldPositionsCm[a],found->worldPositionsCm[c]-found->worldPositionsCm[a]);
+    const auto next=normal.length();
+    if(next>area) {area=next;cameraNormal=Vec3::normalize(normal);}
+    }
+  if(area<1.f) {arenaAbort("cloth fixture has no visible cloth face for its camera");return;}
+  Vec3 cameraEye;
+  bool cameraClear=false;
+  for(float side:{1.f,-1.f}) {
+    const auto eye=found->center+cameraNormal*(700.f*side)+Vec3(0,30,0);
+    if(world.physic()->ray(eye,found->center).hasCol || world.physic()->ray(found->center,eye).hasCol)continue;
+    cameraEye=eye;cameraNormal*=side;cameraClear=true;break;
+    }
+  if(!cameraClear) {arenaAbort("cloth fixture has no unobstructed face-on camera side");return;}
+  bench.clothDirection=Vec3(cameraNormal.x,0,cameraNormal.z);
+  if(bench.clothDirection.length()<.01f)bench.clothDirection=Vec3(1,0,0);
+  else bench.clothDirection=Vec3::normalize(bench.clothDirection);
+  if(!clothStandAt(world,player,found->center,1800.f) && !clothStandAt(world,player,found->center,3200.f)) {
+    arenaAbort("cloth fixture lacks nearby dry supported native observer floor");return;
+    }
+  // Native floor placement may rotate the hero's radial direction. Keep the
+  // camera on the independently selected cloth-face normal, seven metres away.
+  bench.subject=nullptr;bench.cam=C_Hold;
+  lookFrom(cameraEye,found->center);
+  bench.clothPrevious.clear();bench.clothPreviousActive.clear();bench.clothTrace=true;
+  world.physic()->cloth().resetStats();
+  event("cloth_setup","\"case\":"+jsonStr(bench.clothCase)+",\"world\":"+jsonStr(world.name())+
+    ",\"zen_id\":"+std::to_string(zen)+",\"visual\":"+jsonStr(found->visual)+
+    ",\"center_cm\":"+ragdollVector(found->center)+",\"hero_cm\":"+ragdollVector(player.position())+
+    ",\"camera_cm\":"+ragdollVector(cameraEye)+",\"camera_face_normal\":"+ragdollVector(cameraNormal));
+  }
+
+void clothShoot(World& world,Npc& player,std::string_view kind) {
+  const auto all=world.physic()->cloth().snapshots();
+  const auto found=std::find_if(all.begin(),all.end(),[](const auto& body){return body.zenId==bench.clothZen;});
+  if(found==all.end() || !found->active) {arenaAbort("cloth projectile requires its active authored target");return;}
+  float bestArea=0;Vec3 target,normal;
+  for(size_t i=0;i+2<found->indices.size();i+=3) {
+    const auto a=found->indices[i],b=found->indices[i+1],c=found->indices[i+2];
+    if(a>=found->worldPositionsCm.size() || b>=found->worldPositionsCm.size() || c>=found->worldPositionsCm.size())continue;
+    const auto p=found->worldPositionsCm[a],q=found->worldPositionsCm[b],r=found->worldPositionsCm[c];
+    const auto cross=Vec3::crossProduct(q-p,r-p);
+    const auto area=cross.length();
+    const auto center=(p+q+r)/3.f;
+    bool pinned=false;
+    for(const auto& anchor:found->anchorsCm)if((center-anchor).length()<15.f)pinned=true;
+    if(pinned || area<=bestArea)continue;
+    const auto direction=Vec3::normalize(cross);
+    for(float side:{1.f,-1.f}) {
+      const auto from=center+direction*(250.f*side);
+      const auto hit=world.physic()->ray(from,center-direction*(100.f*side));
+      if(hit.hasCol)continue;
+      bestArea=area;target=center;normal=direction*side;break;
+      }
+    }
+  if(bestArea<1.f) {arenaAbort("cloth projectile has no exposed native cloth face");return;}
+  const bool arrow=kind=="arrow";
+  size_t symbol=size_t(-1);
+  if(arrow)symbol=world.script().findSymbolIndex("ITRW_ARROW");
+  else if(kind=="fireball" || kind=="wind") {
+    for(size_t i=0;i<world.script().symbolsCount();++i) {
+      const auto* entry=world.script().findSymbol(i);
+      if(!entry || entry->type()!=zenkit::DaedalusDataType::INSTANCE)continue;
+      auto name=entry->name();for(auto& c:name)c=char(std::toupper(static_cast<unsigned char>(c)));
+      if(!name.starts_with("ITRU_") && !name.starts_with("ITSC_"))continue;
+      Item candidate(world,i,Item::T_Inventory);
+      if(world.script().physicalSpell(candidate.spellId())==
+         (kind=="wind"?GameScript::PhysicalSpell::WindFist:GameScript::PhysicalSpell::Fireball)) {symbol=i;break;}
+      }
+    }
+  if(symbol==size_t(-1)) {arenaAbort("cloth fixture native projectile instance is unavailable");return;}
+  Item item(world,symbol,Item::T_Inventory);
+  const auto from=target+normal*250.f;
+  // shootArrow is the public free-direction entry to WorldObjects::shootBullet;
+  // the Item still creates the native spell Bullet, spell VFX and collision path.
+  auto& bullet=world.shootArrow(item,from,-normal,arrow?DynamicWorld::bulletSpeed:DynamicWorld::spellSpeed);
+  bench.clothShotKind=std::string(kind);bench.clothShotAt=bench.time;
+  bench.clothShotHitsBefore=arrow?found->arrowPasses:found->projectileHits;
+  bench.clothArrow=arrow?&bullet:nullptr;bench.clothShotTarget=target;bench.clothShotNormal=normal;
+  bench.clothArrowDownstream=0;
+  bullet.setOrigin(&player);if(arrow)bullet.setPrecise(1.f);
+  event("cloth_projectile","\"kind\":"+jsonStr(kind)+",\"zen_id\":"+std::to_string(bench.clothZen)+
+    ",\"native_spell\":"+(bullet.isSpell()?"true":"false")+",\"spell_id\":"+std::to_string(bullet.spellId())+
+    ",\"from_cm\":"+ragdollVector(from)+",\"face_target_cm\":"+ragdollVector(target)+
+    ",\"direction\":"+ragdollVector(-normal));
+  }
+
 void saveMovableSession(World& world,const std::string& label) {
   if(label.empty() || label.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
     throw std::runtime_error("invalid movable save label");
@@ -8061,7 +8257,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       {"arrow_physics",&Gothic::PhysicsFlags::arrowPhysics},
       {"arrow_sticking",&Gothic::PhysicsFlags::arrowSticking},
       {"spell_physics",&Gothic::PhysicsFlags::spellPhysics},
-      {"movable_vobs",&Gothic::PhysicsFlags::movableVobs}
+      {"movable_vobs",&Gothic::PhysicsFlags::movableVobs},
+      {"cloth",&Gothic::PhysicsFlags::cloth}
       };
     auto& npc=subjectOf(pl);
     const auto tick=w.tickCount();
@@ -8178,6 +8375,79 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       ",\"waypoint\":"+jsonStr(waypoint)+",\"minimum_debris_distance_cm\":"+ragdollNumber(minimum)+
       ",\"distance_cm\":"+ragdollNumber((destination-origin).length()));
     }
+  else if(c=="cloth" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+    Gothic::settingsSetI("GAME","cloth",a[1]=="on");
+    event("cloth_toggle","\"enabled\":"+std::string(w.physic()->clothEnabled()?"true":"false"));
+    }
+  else if(c=="cloth" && a.size()==4 && a[1]=="setup")clothSetup(w,pl,uint32_t(num(a,2,-1)),a[3]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="wind") {
+    if(a[2]!="calm" && a[2]!="gust" && a[2]!="natural") {arenaAbort("cloth wind expects calm, gust or natural");return;}
+    w.physic()->cloth().setWindScale(a[2]=="calm"?0.f:(a[2]=="gust"?2.f:1.f));
+    event("cloth_wind","\"mode\":"+jsonStr(a[2]));
+    }
+  else if(c=="cloth" && a.size()==3 && a[1]=="checkpoint")clothCheckpoint(w,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="shoot")clothShoot(w,pl,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="verify") {
+    bool pass=true;bool target=false;
+    for(const auto& body:w.physic()->cloth().snapshots()) {
+      if(a[2]=="anchors") {
+        target|=body.zenId==bench.clothZen && body.active && body.pinned>0;
+        pass&=std::isfinite(body.maxAnchorErrorCm) && body.maxAnchorErrorCm<=.5f &&
+          std::isfinite(body.maxSpeedEverCmPerSec) && body.recoveryCount==0;
+        }
+      else if(body.zenId==bench.clothZen) {
+        target=true;
+        if(a[2]=="arrow")pass&=bench.clothShotKind=="arrow" && body.arrowPasses>bench.clothShotHitsBefore && bench.clothArrowDownstream>=30.f;
+        else if(a[2]=="fireball" || a[2]=="wind")pass&=bench.clothShotKind==a[2] && body.projectileHits>bench.clothShotHitsBefore;
+        else pass=false;
+        }
+      }
+    pass&=target;
+    event("cloth_verify","\"check\":"+jsonStr(a[2])+",\"pass\":"+(pass?"true":"false")+
+      ",\"arrow_downstream_cm\":"+ragdollNumber(bench.clothArrowDownstream)+",\"cloth\":"+clothRows(w));
+    if(!pass)arenaAbort("cloth native "+a[2]+" check failed");
+    }
+  else if(c=="cloth" && a.size()==3 && a[1]=="distance") {
+    if(bench.clothZen==uint32_t(-1) || !clothStandAt(w,pl,bench.clothCenter,num(a,2,4000))) {
+      arenaAbort("cloth boundary requires a dry supported observer at the requested radius");return;
+      }
+    event("cloth_observer","\"hero_cm\":"+ragdollVector(pl.position())+",\"distance_cm\":"+
+      ragdollNumber((pl.position()-bench.clothCenter).length()));
+    }
+  else if(c=="cloth" && a.size()==2 && a[1]=="reset-stats")w.physic()->cloth().resetStats();
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  else if(c=="cloth" && a.size()==3 && a[1]=="measure") {
+    if(!AppCadence::normalClock() || !AppCadence::arm(a[2]=="on")) {arenaAbort("cloth normal cadence arm failed");return;}
+    bench.clothMeasuring=true;bench.clothPhysics.clear();bench.clothPhysics.reserve(20000);bench.clothOverflow=false;
+    const auto all=w.physic()->cloth().snapshots();
+    const auto active=std::count_if(all.begin(),all.end(),[](const auto& body){return body.active;});
+    AppCadence::counts(true,uint32_t(active),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    event("cloth_measure_before","\"mode\":"+jsonStr(a[2])+",\"active_soft_bodies\":"+
+      std::to_string(active)+",\"cloth\":"+clothRows(w));
+    }
+  else if(c=="cloth" && a.size()==2 && a[1]=="report") {
+    bench.clothMeasuring=false;
+    const auto all=w.physic()->cloth().snapshots();
+    const auto active=std::count_if(all.begin(),all.end(),[](const auto& body){return body.active;});
+    AppCadence::counts(false,uint32_t(active),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    std::vector<float> costs;costs.reserve(bench.clothPhysics.size());
+    if(auto* file=std::fopen((outDir+"/cloth-physics.csv").c_str(),"w")) {
+      std::fprintf(file,"sample,t_game_ms,dt_ms,step_ms,native_bodies\n");
+      for(size_t i=0;i<bench.clothPhysics.size();++i) {
+        const auto& row=bench.clothPhysics[i];costs.push_back(row.milliseconds);
+        std::fprintf(file,"%zu,%llu,%llu,%.9g,%zu\n",i,(unsigned long long)row.time,
+          (unsigned long long)row.dt,double(row.milliseconds),row.bodies);
+        }
+      std::fclose(file);
+      }
+    else {arenaAbort("cannot write cloth native step timings");return;}
+    std::sort(costs.begin(),costs.end());
+    const auto p95=costs.empty()?0.f:costs[std::min(costs.size()-1,size_t(std::ceil(double(costs.size())*.95)-1))];
+    event("cloth_measure_after","\"active_soft_bodies\":"+std::to_string(active)+
+      ",\"samples\":"+std::to_string(costs.size())+",\"physics_p95_ms\":"+ragdollNumber(p95)+
+      ",\"overflow\":"+(bench.clothOverflow?"true":"false")+",\"cloth\":"+clothRows(w));
+    }
+#endif
   else if(c=="water" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","buoyancy",a[1]=="on");
     w.physic()->setBuoyancyEnabled(a[1]=="on");
@@ -13279,6 +13549,14 @@ uint64_t TestBench::frameDt(uint64_t dt) {
   }
 
 void TestBench::beforeWorldTick(uint64_t dt) {
+  // Keep the native observer at the fixture's supported point. Nearby enemies
+  // retain their ordinary behaviour and cannot push this measurement out of range.
+  if(scenarioPath!=nullptr && bench.started && !bench.done && bench.clothTrace && bench.clothHold) {
+    if(auto* player=Gothic::inst().player()) {
+      player->stopWalking();player->clearAiQueue();
+      player->setPosition(bench.clothHeldPosition);player->updateTransform();
+      }
+    }
   // A reload observer accepts no live keyboard or mouse movement. Its actor
   // remains subject to ordinary native support and gravity, with no pose pin.
   if(scenarioPath!=nullptr && bench.started && !bench.done && bench.waterObserver && bench.ctrl)
@@ -13538,6 +13816,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     }
   movableFields(*world);
   waterFields(*world);
+  clothFields(*world);
   movableCandleFields(*world);
   noiseFields(*world);
   if(bench.spellReleaseAt && world->tickCount()>=bench.spellReleaseAt) {
@@ -13629,6 +13908,12 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         }
     }
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  if(bench.clothMeasuring && !AppCadence::done()) {
+    const auto stats=world->physic()->physicsStats();
+    if(bench.clothPhysics.size()<20000)
+      bench.clothPhysics.push_back({world->tickCount(),dt,stats.stepMilliseconds,stats.bodies});
+    else bench.clothOverflow=true;
+    }
   if(bench.movableMeasuring && !AppCadence::done()) {
     const auto stats=world->physic()->physicsStats();
     bench.noiseMeasuredRays+=stats.rays;
@@ -14246,6 +14531,13 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
   }
 
 void TestBench::arrowAt(const void* arrow, float x, float y, float z) {
+  if(scenarioPath!=nullptr && bench.clothTrace && arrow==bench.clothArrow && bench.time<=bench.clothShotAt+2000) {
+    const Vec3 point(x,y,z);
+    const auto downstream=Vec3::dotProduct(point-bench.clothShotTarget,-bench.clothShotNormal);
+    bench.clothArrowDownstream=std::max(bench.clothArrowDownstream,downstream);
+    event("cloth_arrow_trajectory","\"position_cm\":"+ragdollVector(point)+
+      ",\"downstream_cm\":"+ragdollNumber(downstream));
+    }
   if(scenarioPath==nullptr || !bench.trailOn)
     return;
   const Vec3 p = {x,y,z};

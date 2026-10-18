@@ -161,6 +161,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
     wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
     wdynamic->setBuoyancyEnabled(Gothic::physicsFlags().buoyancy);
+    wdynamic->setClothEnabled(Gothic::physicsFlags().cloth);
     wdynamic->setPhysicsNoiseCallback([this](const PhysicsNoise& noise) { emitPhysicsNoise(noise); });
     world.world_mesh = zenkit::Mesh();
     loadProgress(70);
@@ -674,6 +675,7 @@ void World::tick(uint64_t dt) {
   wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
   wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
   wdynamic->setBuoyancyEnabled(Gothic::physicsFlags().buoyancy);
+  wdynamic->setClothEnabled(Gothic::physicsFlags().cloth);
   if(!Gothic::physicsFlags().arrowSticking)
     stuckArrows.clear();
   static bool doTicks=true;

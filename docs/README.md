@@ -97,7 +97,8 @@
 | Подсистема | Где | Выключатель | Документ |
 |---|---|---|---|
 | Мост к серверу | `ai_bridge/aibridge.cpp`; NPC — `npccontroller`, `npcview`, `npcchests`; сюжет — `story*`, `dialoggraph`; голос — `voicebuffer`, `linelibrary`; `beasts`, `necromancy` | `GOTHIC_AI=0` | [`protocol.md`](protocol.md) |
-| Физика Jolt вместо Bullet: тела, рэгдоллы, CharacterVirtual, вода, разрушение | `common/physics/` (`collisionworld`, `dynamicworld`, `ragdoll`, `fracture`), `common/world/movablevobs.*` | `OPENGOTHIC_PHYSICS_THREADS`, кэш разрушений `OPENGOTHIC_FRACTURE` | [`physics.md`](physics.md) |
+| Физика Jolt вместо Bullet: тела, рэгдоллы, CharacterVirtual, вода, разрушение | `common/physics/` (`collisionworld`, `dynamicworld`, `ragdoll`, `fracture`, `cloth`, `worldwind`), `common/world/movablevobs.*` | `OPENGOTHIC_PHYSICS_THREADS`, кэш разрушений `OPENGOTHIC_FRACTURE` | [`physics.md`](physics.md) |
+| Тканевые mesh-vob рядом с героем (в работе; ткань уровня требует отдельного решения) | `common/physics/cloth.*`, `common/graphics/clothvisual.*`, таблица `data/cloth-vobs.csv` | `[GAME] cloth=0`, Marvin `toggle cloth` | [Перепись и проверки](../reports/physics/2026-10-18-cloth/validation-notes.md#шаг-1) |
 | Анимация: инерциальные переходы, foot IK, моргание, жесты, губы, взгляд, наклон, вздрагивание, натяжение лука, ходьба с прицелом | `common/graphics/mesh/` (`animblend`, `footik`, `eyeblink`, `talkgestures`, `lipsync`, `gaze`, `lean`, `flinch`, `bowdraw`, `aimwalk`, `aim`) | `OPENGOTHIC_ANIBLEND`, `_FOOTIK`, `_BLINK`, `_GESTURES`, `_LIPSYNC`, `_GAZE`, `_LEAN`, `_FLINCH`, `_BOWDRAW`, `_AIMWALK`, `_AIM` | — |
 | Ручной прицел героя и лучники NPC | `common/game/archery.cpp`, `aimcamera.h`, `archerai.*` | `OPENGOTHIC_MANUALAIM`, `OPENGOTHIC_NPCAIM` (или ini `[GAME] manualAim`) | [`manual-aim.md`](manual-aim.md) |
 | Боевое тело NPC: аренда, наблюдения, арена, реплей | `common/game/bodycontroller.*`, `bodyobservations.*`, `bodyarena.*`, `bodyreplay.*` | без `--body-url` на сервере не работает | [`npc-body-api.md`](npc-body-api.md) |
@@ -144,7 +145,7 @@
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |
 
-Сценарий считается пройденным, когда все значения результата начинаются с `done`. Описание каждого — в шапке `scripts/e2e.sh`. Тесты сервисов лежат в их `tests/`, тесты скриптов — в `scripts/tests/`.
+Сценарий считается пройденным, когда все значения результата начинаются с `done`. Описание каждого — в шапке `scripts/e2e.sh`. Стенды ткани `cloth`, `cloth-on`, `cloth-off` проверяют реальные mesh-vob в OLDWORLD; приёмка гавани и города ожидает решения о геометрии уровня. Тесты сервисов лежат в их `tests/`, тесты скриптов — в `scripts/tests/`.
 
 **Сценарии по областям:**
 - **основа:** `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`;
@@ -186,7 +187,7 @@
 | [`story-graph.md`](story-graph.md) | граф сюжета, ложь, слухи, ремонт квестов | план с журналом |
 | [`director.md`](director.md) | режиссёр-автор: квесты, персонажи, цепочки | план с журналом, этапы 1–5 сделаны |
 | [`crime.md`](crime.md) | преступления и репутация | план, идёт: слои 1–3 сделаны |
-| [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода | план с журналом |
+| [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода, ткань | план с журналом |
 | [`manual-aim.md`](manual-aim.md) | ручное прицеливание | план с журналом |
 | [`navigation.md`](navigation.md) | обучаемая навигация NPC | план, идёт |
 | [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | план |

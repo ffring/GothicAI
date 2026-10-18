@@ -107,6 +107,11 @@ void WorldView::setWindEnabled(bool enabled, uint64_t period) {
   sGlobal.windPeriod   = period;
   }
 
+void WorldView::setClothWind(bool enabled, float scale) {
+  sGlobal.legacyWind = !enabled;
+  sGlobal.windScale = scale;
+  }
+
 void WorldView::dbgLights(DbgPainter& p) const {
   gLights.dbgLights(p);
   }

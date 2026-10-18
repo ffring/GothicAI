@@ -824,3 +824,45 @@ spell/arrow contacts and hearing use production paths. `destruction_*` events re
 identity, real drop trajectories, piece movement/sleep and break wall time. The scenario writes PNGs,
 six videos with optional WAV audio, and `session-destruction-scattered.sav` beneath its output directory.
 The save uses the previous format; transient fixture props and fragments are not saved.
+
+
+`cloth` exercises the authored `OC_LOB_FLAG_SMALL` mesh-vob in the Old Camp
+(`WORLD=OLDWORLD.ZEN`, zen id 6367 (exposed to outdoor wind)). It records shader OFF and Jolt ON,
+calm and gusty wind, an ordinary Fireball projectile, a passing arrow, and both
+40 m boundary crossings. The fixture is an independent smoke check; harbour
+sails/flags and the Khorinis banners are baked worldmesh surfaces and require
+their own coverage. This scenario does not claim harbour or city acceptance.
+
+```sh
+WORLD=OLDWORLD.ZEN scripts/bench.sh cloth /absolute/path/cloth-functional
+WORLD=OLDWORLD.ZEN scripts/bench.sh cloth-off /absolute/path/cloth-performance/off
+WORLD=OLDWORLD.ZEN scripts/bench.sh cloth-on /absolute/path/cloth-performance/on
+```
+
+Use the same binary and host for the two performance runs. `cloth-on` and
+`cloth-off` use the native game clock for 30 seconds, without video or per-frame
+mesh snapshots. `appcadence.csv` contains completed app frame intervals;
+`cloth-physics.csv` contains native physics step costs. `cloth_measure_before`
+and `cloth_measure_after` include actual soft-body counts and physics p95.
+Capture cadence is not game FPS. Local performance builds need
+`-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`; Ryzen enables this option automatically.
+
+| Command | Effect |
+|---|---|
+| `cloth on\|off` | Set the normal `[GAME] cloth` option, also available as Marvin `toggle cloth`. |
+| `cloth setup <zen-id> <label>` | Select an authored allowlisted cloth-vob, place the hero on native dry floor about 18 m away, and independently place a fixed camera 7 m from the largest cloth face on a side with clear solid rays. The fixture holds only the hero at that supported position; NPC behaviour continues. |
+| `cloth wind calm\|natural\|gust` | Smoothly set the common world wind scale to 0, 1 or 2. |
+| `cloth checkpoint <label>` | Record anchor error, current and lifetime maximum vertex speed, recovery count, projectile counters and the selected cloth's rendered vertices in cm. |
+| `cloth shoot fireball\|wind\|arrow` | Launch a real production Bullet at an exposed cloth face. The fixture does not inject a synthetic impulse or introduce an NPC target. |
+| `cloth verify anchors\|fireball\|wind\|arrow` | Require anchors within 0.5 cm and finite speeds without solver recovery; require the selected spell hit; or require an arrow contact and its actual Bullet trajectory at least 30 cm beyond the face. |
+| `cloth distance <cm>` | Place the actual hero on native dry floor at that 3D distance from the selected cloth, retaining the camera. |
+| `cloth reset-stats` | Reset transient solver measurements. |
+| `cloth measure on\|off`, `cloth report` | Start and report the normal-clock timing window after `cadence normal`; complete it with `cadence wait`. |
+
+Functional `cloth_sample` events include the maximum rendered vertex displacement
+since the preceding frame. Active-state changes include the complete rendered
+vertex list; explicit checkpoints and the named before/after PNGs retain both
+sides of each radius crossing. `transition_blend_delta_cm` isolates the blend's
+contribution from natural movement. A calm checkpoint is taken after 10 seconds
+at zero wind following the wind ramp. The arrow's native post-face positions are
+retained as `cloth_arrow_trajectory` events.

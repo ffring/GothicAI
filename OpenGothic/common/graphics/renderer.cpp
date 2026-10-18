@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "physics/cloth.h"
 
 #include <Tempest/Color>
 #include <Tempest/Fence>
@@ -358,6 +359,8 @@ void Renderer::prepareUniforms(WorldView& wview) {
   wview.setGbuffer(textureCast<const Texture2d&>(gbufDiffuse), textureCast<const Texture2d&>(gbufNormal));
   wview.setSceneImages(textureCast<const Texture2d&>(sceneOpaque), textureCast<const Texture2d&>(sceneDepth), zbuffer);
   wview.setWindEnabled(settings.zWindEnabled, settings.windPeriod);
+  if(auto* world = Gothic::inst().world())
+    wview.setClothWind(world->physic()->clothEnabled(),world->physic()->cloth().windScale());
   }
 
 void Renderer::resetViewport(Tempest::Size res, Tempest::Size fullRes) {

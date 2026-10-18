@@ -4,6 +4,9 @@
 #include "physicmeshshape.h"
 #include "physicvbo.h"
 #include "ragdoll.h"
+#include "cloth.h"
+#include "worldwind.h"
+#include "gothic.h"
 #include "arrowtrace.h"
 #include <Tempest/Log>
 #include "graphics/mesh/skeleton.h"
@@ -38,6 +41,7 @@
 #include "world/world.h"
 #include "game/serialize.h"
 #include "game/physicssave.h"
+#include "game/gamescript.h"
 
 #include "utils/dbgpainter.h"
 
@@ -711,6 +715,8 @@ struct DynamicWorld::BBoxList final {
 
 DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   world.reset(new CollisionWorld());
+  ownerWorld=owner;
+  clothWorld=std::make_unique<Cloth>(*world);
   bodies.reset(new WorldBodies());
   movableVobs.reset(new MovableVobs());
   world->setWaterSurfaceCallback([this](const Tempest::Vec3& center,float bottom,float& surface) {
@@ -797,6 +803,11 @@ DynamicWorld::~DynamicWorld(){
   for(auto* body:movableVobs->bodies)
     body->movableOwner = nullptr;
   }
+
+Cloth& DynamicWorld::cloth() { return *clothWorld; }
+const Cloth& DynamicWorld::cloth() const { return *clothWorld; }
+void DynamicWorld::setClothEnabled(bool value) { clothWorld->setEnabled(value); }
+bool DynamicWorld::clothEnabled() const { return clothWorld->enabled(); }
 
 DynamicWorld::RayLandResult DynamicWorld::landRay(const Tempest::Vec3& from, float maxDy) const {
   world->updateAabbs();
@@ -1553,6 +1564,7 @@ void DynamicWorld::setTraceTime(int64_t minutes) {
   }
 
 void DynamicWorld::setFragmentObserver(const Tempest::Vec3& position) {
+  clothWorld->setObserver(position);
   fragmentObserver=position;
   hasFragmentObserver=true;
   }
@@ -2047,6 +2059,23 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
       }
     }
 
+  // Cloth has no blocking collision shape. Test the actual travelled segment
+  // before solid impact, then leave arrows' flight and attachments unchanged.
+  const auto clothEnd=hit.hasHit ? pos+(to-pos)*hit.fraction : to;
+  if(!isSpell) {
+    const auto incoming=to-pos;
+    if(incoming.quadLength()>1.e-8f)
+      clothWorld->projectile(pos,clothEnd,Tempest::Vec3::normalize(incoming)*.35f,true);
+    }
+  else if(ownerWorld!=nullptr) {
+    const auto kind=ownerWorld->script().physicalSpell(b.spellId());
+    if(kind==GameScript::PhysicalSpell::Fireball || kind==GameScript::PhysicalSpell::WindFist) {
+      const auto incoming=to-pos;
+      if(incoming.quadLength()>1.e-8f)
+        clothWorld->projectile(pos,clothEnd,Tempest::Vec3::normalize(incoming)*(kind==GameScript::PhysicalSpell::WindFist ? 8.f : 5.f),false);
+      }
+    }
+
   bool stopBullet = false;
   if(matId != zenkit::MaterialGroup::NONE) {
     if(!isSpell && hit.body!=nullptr && hit.body->ptrType()==P_MovableVob) {
@@ -2155,6 +2184,13 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   }
 
 void DynamicWorld::tick(uint64_t dt) {
+  if(ownerWorld!=nullptr) {
+    const float cycle=Gothic::settingsGetF("ENGINE","zWindCycleTime")+
+                      Gothic::settingsGetF("ENGINE","zWindCycleTimeVar");
+    const uint64_t period=std::isfinite(cycle) && cycle>0.f ? uint64_t(cycle*1000.f) : 0;
+    clothWorld->setWind(WorldWind::sample(ownerWorld->tickCount(),period,
+                                        Gothic::settingsGetI("ENGINE","zWindEnabled")!=0));
+    }
   npcList   ->tickAabbs();
   bulletList->tick(dt);
   world     ->tick(dt);

@@ -1,0 +1,401 @@
+#include "cloth.h"
+#include "collisionworld.h"
+#include "dynamicworld.h"
+
+#include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <map>
+#include <set>
+#include <tuple>
+
+namespace {
+  Tempest::Vec3 project(const Tempest::Matrix4x4& matrix, Tempest::Vec3 point) {
+    matrix.project(point);
+    return point;
+    }
+  bool finite(const Tempest::Vec3& point) {
+    return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+    }
+  bool segmentTriangle(const Tempest::Vec3& from, const Tempest::Vec3& to,
+                       const Tempest::Vec3& a, const Tempest::Vec3& b, const Tempest::Vec3& c) {
+    const auto dir=to-from, e1=b-a, e2=c-a;
+    const auto p=Tempest::Vec3::crossProduct(dir,e2);
+    const float det=Tempest::Vec3::dotProduct(e1,p);
+    if(std::abs(det)<1.e-6f) return false;
+    const auto t=from-a;
+    const float u=Tempest::Vec3::dotProduct(t,p)/det;
+    if(u<0.f || u>1.f) return false;
+    const auto q=Tempest::Vec3::crossProduct(t,e1);
+    const float v=Tempest::Vec3::dotProduct(dir,q)/det;
+    if(v<0.f || u+v>1.f) return false;
+    const float distance=Tempest::Vec3::dotProduct(e2,q)/det;
+    return distance>=0.f && distance<=1.f;
+    }
+  JPH::Vec3 limited(JPH::Vec3Arg velocity) {
+    if(velocity.IsNaN()) return JPH::Vec3::sZero();
+    const float speed=velocity.Length();
+    if(!std::isfinite(speed)) return JPH::Vec3::sZero();
+    return speed>Cloth::maxVelocityMS ? velocity*(Cloth::maxVelocityMS/speed) : velocity;
+    }
+  }
+
+struct Cloth::Instance::Impl {
+  Cloth::Impl* owner = nullptr;
+  JPH::BodyID body;
+  Tempest::Matrix4x4 matrix, inverse;
+  Tempest::Vec3 localCenter;
+  std::vector<Tempest::Vec3> source, simulated, rendered;
+  std::vector<uint32_t> mapping, indices;
+  std::vector<JPH::Vec3> rest;
+  std::vector<bool> pinned;
+  JPH::Ref<JPH::SoftBodySharedSettings> settings;
+  ShaderReference shader;
+  UpdateCallback update;
+  std::string visual;
+  uint32_t zenId = uint32_t(-1);
+  float stiffness = .8f, weight = 0, targetWeight = 0, shelterTimer = 0;
+  float maxAnchorError = 0, maxSpeed = 0, maxSpeedEver = 0, transitionMaxDelta = 0;
+  uint64_t projectileHits = 0, arrowPasses = 0, recoveryCount = 0;
+  bool exposed = true, recover = false;
+
+  Tempest::Vec3 center() const { return project(matrix,localCenter); }
+  Tempest::Vec3 translation() const { return Tempest::Vec3(matrix.at(3,0),matrix.at(3,1),matrix.at(3,2)); }
+  Tempest::Vec3 reference(size_t vertex) const {
+    if(!shader) return source[vertex];
+    auto ret=shader(source[vertex],project(matrix,source[vertex]));
+    return finite(ret) ? ret : source[vertex];
+    }
+  };
+
+struct Cloth::Impl {
+  CollisionWorld& world;
+  std::vector<std::weak_ptr<Instance>> instances;
+  Tempest::Vec3 observer, wind;
+  std::function<bool(const Tempest::Vec3&)> exposure;
+  bool enabled = true, hasObserver = false;
+  float windScale = 1, currentWindScale = 1;
+  explicit Impl(CollisionWorld& world):world(world) {}
+
+  auto& system() { return world.physicsSystem(); }
+  void remove(Instance::Impl& body) {
+    if(body.body.IsInvalid()) return;
+    auto& native=system().GetBodyInterface();
+    native.RemoveBody(body.body);
+    native.DestroyBody(body.body);
+    body.body=JPH::BodyID();
+    }
+  void create(Instance::Impl& body) {
+    if(!body.body.IsInvalid()) return;
+    body.settings=new JPH::SoftBodySharedSettings();
+    auto& settings=*body.settings;
+    body.rest.clear();
+    body.rest.resize(body.pinned.size());
+    for(size_t i=0;i<body.source.size();++i) {
+      const auto position=CollisionWorld::toMeters(project(body.matrix,body.source[i])-body.translation());
+      body.rest[body.mapping[i]]=position;
+      }
+    settings.mVertices.reserve(body.rest.size());
+    for(size_t i=0;i<body.rest.size();++i) {
+      JPH::Float3 point;
+      body.rest[i].StoreFloat3(&point);
+      settings.mVertices.emplace_back(point,JPH::Float3(0,0,0),body.pinned[i] ? 0.f : 40.f);
+      }
+    std::set<std::array<uint32_t,3>> seen;
+    for(size_t i=0;i+2<body.indices.size();i+=3) {
+      std::array<uint32_t,3> face={body.mapping[body.indices[i]],body.mapping[body.indices[i+1]],body.mapping[body.indices[i+2]]};
+      auto key=face;
+      std::sort(key.begin(),key.end());
+      if(key[0]==key[1] || key[1]==key[2] || !seen.insert(key).second) continue;
+      if((body.rest[face[1]]-body.rest[face[0]]).Cross(body.rest[face[2]]-body.rest[face[0]]).LengthSq()<1.e-12f) continue;
+      settings.mFaces.emplace_back(face[0],face[1],face[2]);
+      }
+    if(settings.mFaces.empty()) return;
+    const float compliance=1.e-6f+(1.f-body.stiffness)*2.e-5f;
+    const JPH::SoftBodySharedSettings::VertexAttributes attributes(compliance,compliance,compliance*10.f,
+        JPH::SoftBodySharedSettings::ELRAType::GeodesicDistance,1.03f);
+    settings.CreateConstraints(&attributes,1,JPH::SoftBodySharedSettings::EBendType::Distance);
+    settings.Optimize();
+    JPH::SoftBodyCreationSettings creation(&settings,CollisionWorld::toMeters(body.translation()),JPH::Quat::sIdentity(),DynamicWorld::C_Cloth);
+    creation.mNumIterations=8;
+    creation.mLinearDamping=3.f;
+    creation.mMaxLinearVelocity=Cloth::maxVelocityMS;
+    creation.mUpdatePosition=false;
+    creation.mAllowSleeping=false;
+    creation.mFacesDoubleSided=true;
+    auto* native=system().GetBodyInterface().CreateSoftBody(creation);
+    if(native==nullptr) return;
+    body.body=native->GetID();
+    // Keep constraints authored at rest. Seeding positions never changes their
+    // rest lengths, and pins always start at their real world attachments.
+    auto& motion=*static_cast<JPH::SoftBodyMotionProperties*>(native->GetMotionProperties());
+    for(size_t i=0;i<body.source.size();++i) {
+      const auto vertex=body.mapping[i];
+      if(body.pinned[vertex]) continue;
+      auto& particle=motion.GetVertex(vertex);
+      particle.mPosition=CollisionWorld::toMeters(project(body.matrix,body.reference(i))-body.translation());
+      particle.mPreviousPosition=particle.mPosition;
+      }
+    system().GetBodyInterface().AddBody(body.body,JPH::EActivation::Activate);
+    }
+
+  template<class F> void each(F&& callback) {
+    for(auto it=instances.begin();it!=instances.end();) {
+      if(auto instance=it->lock()) {
+        callback(*instance->impl);
+        ++it;
+        } else it=instances.erase(it);
+      }
+    }
+  };
+
+Cloth::Instance::Instance(std::unique_ptr<Impl> impl):impl(std::move(impl)) {}
+Cloth::Instance::~Instance() { if(impl->owner!=nullptr) impl->owner->remove(*impl); }
+void Cloth::Instance::setMatrix(const Tempest::Matrix4x4& matrix) {
+  if(matrix==impl->matrix) return;
+  if(impl->owner!=nullptr) impl->owner->remove(*impl);
+  impl->matrix=matrix;
+  impl->inverse=matrix;
+  impl->inverse.inverse();
+  impl->weight=0;
+  impl->shelterTimer=0;
+  }
+void Cloth::Instance::setShaderReference(ShaderReference reference) { impl->shader=std::move(reference); }
+void Cloth::Instance::setUpdateCallback(UpdateCallback callback) { impl->update=std::move(callback); }
+const std::vector<Tempest::Vec3>& Cloth::Instance::positionsCm() const { return impl->rendered; }
+float Cloth::Instance::simulationWeight() const { return impl->weight; }
+bool Cloth::Instance::active() const { return !impl->body.IsInvalid(); }
+
+Cloth::Cloth(CollisionWorld& world):impl(std::make_unique<Impl>(world)) { world.cloth=this; }
+Cloth::~Cloth() {
+  impl->each([&](Instance::Impl& body) { impl->remove(body); body.owner=nullptr; });
+  impl->world.cloth=nullptr;
+  }
+std::shared_ptr<Cloth::Instance> Cloth::add(const std::vector<Tempest::Vec3>& source,
+                                         const std::vector<uint32_t>& indices,
+                                         const std::vector<uint32_t>& pins,
+                                         const Tempest::Matrix4x4& matrix,float stiffness,
+                                         std::string visual,uint32_t zenId) {
+  if(source.empty() || indices.empty() || pins.empty() || indices.size()%3!=0) return {};
+  if(std::any_of(source.begin(),source.end(),[](const auto& v) { return !finite(v); })) return {};
+  for(auto index:indices) if(index>=source.size()) return {};
+  for(auto index:pins) if(index>=source.size()) return {};
+  auto body=std::make_unique<Instance::Impl>();
+  body->owner=impl.get();
+  body->source=body->simulated=body->rendered=source;
+  body->indices=indices;
+  body->matrix=body->inverse=matrix;
+  body->inverse.inverse();
+  body->stiffness=std::clamp(stiffness,0.f,1.f);
+  body->visual=std::move(visual);
+  body->zenId=zenId;
+  std::map<std::tuple<int64_t,int64_t,int64_t>,uint32_t> welded;
+  auto min=source.front(),max=source.front();
+  for(const auto& vertex:source) {
+    // 0.01 cm: weld UV seams and the reversed back faces of Gothic cloth.
+    const auto key=std::make_tuple(int64_t(std::llround(vertex.x*100)),int64_t(std::llround(vertex.y*100)),int64_t(std::llround(vertex.z*100)));
+    const auto result=welded.emplace(key,uint32_t(welded.size()));
+    body->mapping.push_back(result.first->second);
+    min.x=std::min(min.x,vertex.x); min.y=std::min(min.y,vertex.y); min.z=std::min(min.z,vertex.z);
+    max.x=std::max(max.x,vertex.x); max.y=std::max(max.y,vertex.y); max.z=std::max(max.z,vertex.z);
+    }
+  body->localCenter=(min+max)*.5f;
+  body->pinned.resize(welded.size(),false);
+  for(auto index:pins) body->pinned[body->mapping[index]]=true;
+  if(std::all_of(body->pinned.begin(),body->pinned.end(),[](bool pin) { return pin; })) return {};
+  auto ret=std::shared_ptr<Instance>(new Instance(std::move(body)));
+  impl->instances.push_back(ret);
+  return ret;
+  }
+void Cloth::setEnabled(bool value) { impl->enabled=value; }
+bool Cloth::enabled() const { return impl->enabled; }
+void Cloth::setObserver(const Tempest::Vec3& position) { if(finite(position)) { impl->observer=position; impl->hasObserver=true; } }
+void Cloth::setWind(const Tempest::Vec3& wind) { impl->wind=finite(wind) ? wind : Tempest::Vec3(); }
+void Cloth::setWindScale(float value) { if(std::isfinite(value)) impl->windScale=std::clamp(value,0.f,4.f); }
+float Cloth::windScale() const { return impl->currentWindScale; }
+void Cloth::setExposureTest(std::function<bool(const Tempest::Vec3&)> test) { impl->exposure=std::move(test); }
+size_t Cloth::bodyCount() const {
+  size_t count=0;
+  for(const auto& weak:impl->instances) if(auto instance=weak.lock()) if(instance->active()) ++count;
+  return count;
+  }
+
+void Cloth::prepareFrame(uint64_t dt) {
+  const float seconds=std::min(float(dt)*.001f,.1f);
+  impl->currentWindScale+=(impl->windScale-impl->currentWindScale)*(1.f-std::exp(-seconds*1.5f));
+  impl->each([&](Instance::Impl& body) {
+    if(body.recover) {
+      impl->remove(body);
+      body.recover=false;
+      body.weight=0;
+      }
+    const auto center=body.center();
+    const float distance=impl->hasObserver ? (center-impl->observer).length() : radiusCm+1.f;
+    float target=impl->enabled ? std::clamp((radiusCm-distance)/(radiusCm-blendStartCm),0.f,1.f) : 0.f;
+    body.targetWeight=target*target*(3.f-2.f*target);
+    body.shelterTimer-=seconds;
+    if(body.targetWeight>0.f && body.shelterTimer<=0.f) {
+      constexpr uint32_t mask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object);
+      const auto roof=impl->world.rayCast(center+Tempest::Vec3(0,2,0),center+Tempest::Vec3(0,20000,0),mask,true);
+      body.exposed=!roof.hasHit && (!impl->exposure || impl->exposure(center));
+      body.shelterTimer=.5f;
+      }
+    if(body.targetWeight>0.f && body.body.IsInvalid()) impl->create(body);
+    const float oldWeight=body.weight;
+    if(body.body.IsInvalid()) body.weight=0;
+    else body.weight+=std::clamp(body.targetWeight-body.weight,-seconds*2.f,seconds*2.f);
+    const float weightChange=std::abs(oldWeight-body.weight);
+    if(weightChange>0.f) {
+      for(size_t i=0;i<body.source.size();++i)
+        body.transitionMaxDelta=std::max(body.transitionMaxDelta,(body.simulated[i]-body.reference(i)).length()*weightChange);
+      }
+    if(body.weight<=0.f && body.targetWeight<=0.f) impl->remove(body);
+    });
+  }
+void Cloth::prepareStep(float seconds) {
+  impl->each([&](Instance::Impl& body) {
+    if(body.body.IsInvalid()) return;
+    JPH::BodyLockWrite lock(impl->system().GetBodyLockInterface(),body.body);
+    if(!lock.Succeeded()) return;
+    auto& motion=*static_cast<JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
+    const auto wind=body.exposed ? CollisionWorld::toMeters(impl->wind*100.f*impl->currentWindScale) : JPH::Vec3::sZero();
+    for(auto& vertex:motion.GetVertices()) {
+      if(vertex.mInvMass==0.f) { vertex.mVelocity=JPH::Vec3::sZero(); continue; }
+      // Aerodynamic drag gives a bounded, gradual response to gusts. Native
+      // damping remains active in calm weather to settle hanging cloth.
+      vertex.mVelocity=limited(vertex.mVelocity+(wind-vertex.mVelocity)*(.8f*seconds));
+      }
+    });
+  }
+void Cloth::finishStep() {
+  impl->each([&](Instance::Impl& body) {
+    if(body.body.IsInvalid()) { body.maxSpeed=0; return; }
+    JPH::BodyLockRead lock(impl->system().GetBodyLockInterface(),body.body);
+    if(!lock.Succeeded()) return;
+    const auto& native=lock.GetBody();
+    const auto& motion=*static_cast<const JPH::SoftBodyMotionProperties*>(native.GetMotionProperties());
+    body.maxSpeed=0;
+    bool invalid=false;
+    for(size_t i=0;i<motion.GetVertices().size();++i) {
+      const auto& vertex=motion.GetVertex(uint32_t(i));
+      const float speed=vertex.mVelocity.Length()*100.f;
+      invalid|=!std::isfinite(speed) || vertex.mPosition.IsNaN() || (vertex.mPosition-body.rest[i]).LengthSq()>10000.f;
+      if(std::isfinite(speed)) body.maxSpeed=std::max(body.maxSpeed,speed);
+      if(body.pinned[i]) body.maxAnchorError=std::max(body.maxAnchorError,(vertex.mPosition-body.rest[i]).Length()*100.f);
+      }
+    body.maxSpeedEver=std::max(body.maxSpeedEver,body.maxSpeed);
+    if(invalid) {
+      // Recover on the next main-thread frame by removing the native body.
+      // No unchecked vertex ever reaches the renderer.
+      ++body.recoveryCount;
+      body.recover=true;
+      body.simulated=body.source;
+      return;
+      }
+    for(size_t i=0;i<body.source.size();++i) {
+      const auto world=CollisionWorld::toCentimeters(JPH::Vec3(native.GetCenterOfMassTransform()*motion.GetVertex(body.mapping[i]).mPosition));
+      body.simulated[i]=project(body.inverse,world);
+      }
+    });
+  }
+void Cloth::finishFrame() {
+  impl->each([&](Instance::Impl& body) {
+    for(size_t i=0;i<body.rendered.size();++i) {
+      const auto reference=body.reference(i);
+      body.rendered[i]=reference+(body.simulated[i]-reference)*body.weight;
+      }
+    if(body.update) body.update(body.rendered,body.weight);
+    });
+  }
+
+std::vector<Cloth::Snapshot> Cloth::snapshots() const {
+  std::vector<Snapshot> result;
+  for(const auto& weak:impl->instances) {
+    const auto instance=weak.lock();
+    if(!instance) continue;
+    const auto& body=*instance->impl;
+    Snapshot snapshot;
+    snapshot.id=reinterpret_cast<uintptr_t>(instance.get());
+    snapshot.zenId=body.zenId;
+    snapshot.visual=body.visual;
+    snapshot.center=body.center();
+    snapshot.active=instance->active();
+    snapshot.exposed=body.exposed;
+    snapshot.vertices=body.pinned.size();
+    snapshot.pinned=size_t(std::count(body.pinned.begin(),body.pinned.end(),true));
+    snapshot.simulationWeight=body.weight;
+    snapshot.maxAnchorErrorCm=body.maxAnchorError;
+    snapshot.maxSpeedCmPerSec=body.maxSpeed;
+    snapshot.maxSpeedEverCmPerSec=body.maxSpeedEver;
+    snapshot.transitionMaxDeltaCm=body.transitionMaxDelta;
+    snapshot.projectileHits=body.projectileHits;
+    snapshot.arrowPasses=body.arrowPasses;
+    snapshot.recoveryCount=body.recoveryCount;
+    snapshot.positionsCm=body.rendered;
+    snapshot.indices=body.indices;
+    for(size_t i=0;i<body.rendered.size();++i) {
+      snapshot.worldPositionsCm.push_back(project(body.matrix,body.rendered[i]));
+      if(body.pinned[body.mapping[i]]) snapshot.anchorsCm.push_back(project(body.matrix,body.source[i]));
+      }
+    result.push_back(std::move(snapshot));
+    }
+  return result;
+  }
+void Cloth::resetStats() {
+  impl->each([](Instance::Impl& body) {
+    body.maxAnchorError=body.maxSpeedEver=body.transitionMaxDelta=0;
+    body.projectileHits=body.arrowPasses=body.recoveryCount=0;
+    });
+  }
+size_t Cloth::projectile(const Tempest::Vec3& from,const Tempest::Vec3& to,const Tempest::Vec3& kick,bool arrow) {
+  if(!impl->enabled || !finite(kick) || !finite(from) || !finite(to)) return 0;
+  size_t hitCount=0;
+  impl->each([&](Instance::Impl& body) {
+    if(body.body.IsInvalid() || body.weight<=0.f) return;
+    std::set<uint32_t> touched;
+    for(size_t i=0;i+2<body.indices.size();i+=3) {
+      const auto a=body.indices[i],b=body.indices[i+1],c=body.indices[i+2];
+      if(!segmentTriangle(from,to,project(body.matrix,body.rendered[a]),project(body.matrix,body.rendered[b]),project(body.matrix,body.rendered[c]))) continue;
+      touched.insert(body.mapping[a]); touched.insert(body.mapping[b]); touched.insert(body.mapping[c]);
+      }
+    if(touched.empty()) return;
+    JPH::BodyLockWrite lock(impl->system().GetBodyLockInterface(),body.body);
+    if(!lock.Succeeded()) return;
+    auto& motion=*static_cast<JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
+    const auto velocity=CollisionWorld::toMeters(kick*100.f);
+    for(auto index:touched) {
+      auto& vertex=motion.GetVertex(index);
+      if(vertex.mInvMass>0.f) vertex.mVelocity=limited(vertex.mVelocity+velocity);
+      }
+    ++body.projectileHits;
+    if(arrow) ++body.arrowPasses;
+    ++hitCount;
+    });
+  return hitCount;
+  }
+size_t Cloth::impulse(const Tempest::Vec3& center,float radius,const Tempest::Vec3& kick) {
+  if(!impl->enabled || radius<=0.f || !std::isfinite(radius) || !finite(center) || !finite(kick)) return 0;
+  size_t count=0;
+  impl->each([&](Instance::Impl& body) {
+    if(body.body.IsInvalid()) return;
+    JPH::BodyLockWrite lock(impl->system().GetBodyLockInterface(),body.body);
+    if(!lock.Succeeded()) return;
+    auto& native=lock.GetBody();
+    auto& motion=*static_cast<JPH::SoftBodyMotionProperties*>(native.GetMotionProperties());
+    bool hit=false;
+    for(auto& vertex:motion.GetVertices()) {
+      if(vertex.mInvMass<=0.f) continue;
+      const auto world=CollisionWorld::toCentimeters(JPH::Vec3(native.GetCenterOfMassTransform()*vertex.mPosition));
+      const float distance=(world-center).length();
+      if(distance>=radius) continue;
+      vertex.mVelocity=limited(vertex.mVelocity+CollisionWorld::toMeters(kick*100.f)*(1.f-distance/radius));
+      hit=true;
+      }
+    if(hit) { ++count; ++body.projectileHits; }
+    });
+  return count;
+  }
