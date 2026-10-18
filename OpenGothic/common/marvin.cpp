@@ -186,6 +186,7 @@ Marvin::Marvin() {
     {"toggle cloth",              C_ToggleCloth},
     {"toggle character_virtual",  C_ToggleCharacterVirtual},
     {"toggle npc_character_virtual",C_ToggleNpcCharacterVirtual},
+    {"toggle monster_character_virtual",C_ToggleMonsterCharacterVirtual},
     };
   }
 
@@ -602,6 +603,12 @@ bool Marvin::exec(std::string_view v) {
       const bool enabled = !Gothic::physicsFlags().npcCharacterVirtual;
       Gothic::settingsSetI("GAME","npc_character_virtual",enabled ? 1 : 0);
       print(enabled ? "CharacterVirtual: ON (nearby human NPCs)" : "CharacterVirtual: OFF (NPCs)");
+      return true;
+      }
+    case C_ToggleMonsterCharacterVirtual: {
+      const bool enabled = !Gothic::physicsFlags().monsterCharacterVirtual;
+      Gothic::settingsSetI("GAME","monster_character_virtual",enabled ? 1 : 0);
+      print(enabled ? "CharacterVirtual: ON (nearby ground monsters)" : "CharacterVirtual: OFF (monsters)");
       return true;
       }
     }
