@@ -156,7 +156,11 @@ PR, который добавляет фичу или выключатель, д
 - `OPENGOTHIC_BENCH*`, `OPENGOTHIC_*_LOG`, `OPENGOTHIC_*_TRACE` — стенд, журналы и трассы.
 - Обложки шортсов шаблона B: поле `cover` плана сравнения, `gothic-shorts cover`, `upload --thumbnail` и `thumbnail`; модули `shorts/src/gothic_shorts/{cover,compare,youtube,cli}.py`, проверки `shorts/tests/test_{cut,cover,youtube}.py`, [команды и шаблон](../shorts/README.md#covers). Без поля или команды обложки нет.
 
-Вне реестра: обучаемая навигация ([navigation.md](navigation.md)) — пока исследование, в игру не включена.
+| Фича стенда | Как включить / выключить | Модуль | Проверка | Документ |
+|---|---|---|---|---|
+| Популяция навигации: N NPC, независимые состояния, выборка softmax и награды Detour без перезагрузки мира | `navdemos population … sample\|argmax … RECORD`; без команды не работает, `RECORD=0` выключает записи | `common/navdemos.*`, минимальные радиусы в `worldobjects.cpp`, `movealgo.cpp`, `npc.cpp`; `scripts/nav_rl.py` | `test_nav_rl.py`, `nav_rl.py check/equivalence/population` | [navigation.md](navigation.md) |
+
+Остальная обучаемая навигация ([navigation.md](navigation.md)) — пока исследование, в игру не включена.
 
 ## Пробелы покрытия
 
