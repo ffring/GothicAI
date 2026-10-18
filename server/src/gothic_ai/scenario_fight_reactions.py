@@ -33,9 +33,11 @@ from .protocol import (
     NpcEvent,
     PerceptionHeld,
     ThreatControlCmd,
+    TriggerFired,
 )
 from .scenarios import FixedDecider, _until
 from .talk import TalkDesk
+from .triggers import STATE, removal, trigger
 
 log = logging.getLogger(__name__)
 
@@ -232,6 +234,28 @@ async def fight_reactions(
                     trace.hp,
                 )
         await send(cmd)
+
+    async def setup_program(npc: str, tag: str, calls: list[Any]) -> None:
+        """Execute native setup through a one-time program; story_eval accepts only predicates."""
+        id = f"DIR_FIGHT_SETUP_{case.upper()}_{tag}"
+        fired: asyncio.Future[TriggerFired] = asyncio.get_running_loop().create_future()
+
+        def heard(msg: GameMessage) -> None:
+            if isinstance(msg, TriggerFired) and msg.id == id and not fired.done():
+                fired.set_result(msg)
+
+        link.listeners.append(heard)
+        try:
+            await link.patch_graph([
+                trigger(id, STATE, [{"do": "call", "call": call} for call in calls], npc=npc),
+            ])
+            result = await asyncio.wait_for(fired, 5)
+            log.info("fight_reactions setup program %s result=%s", id, result)
+            if result.error:
+                raise GameError(f"fight_reactions setup: {id}: {result.error}")
+        finally:
+            link.listeners.remove(heard)
+            await link.patch_graph([removal(id)])
 
     async def ready_companion_sword() -> None:
         # Attaching ends the idle script but its pose can still have occupied hands.
@@ -462,8 +486,9 @@ async def fight_reactions(
                 await link.debug("player_goto", pos=point(500))
                 # Install the game's monster attack, with OTHER and target both the hero.
                 # Owned instances need not be advertised by the optional wolf voice desk.
-                await link.story_eval(
+                await setup_program(
                     monster,
+                    "HUNT",
                     [
                         ["call", "NPC_CLEARAIQUEUE", ["inst", "SELF"]],
                         ["call", "NPC_SETTARGET", ["inst", "SELF"], ["inst", "OTHER"]],
@@ -553,8 +578,9 @@ async def fight_reactions(
                         bandit,
                         [["field", ["inst", "SELF"], "ATTRIBUTE", i] for i in (0, 1)],
                     )
-                    await link.story_eval(
+                    await setup_program(
                         bandit,
+                        f"HP_{i}",
                         [
                             [
                                 "call", "NPC_CHANGEATTRIBUTE", ["inst", "SELF"],
