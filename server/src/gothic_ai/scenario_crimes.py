@@ -17,7 +17,9 @@ HOUSE = "NW_FARM1_INHOUSE_BED_02"
 POCKET = "DIA_LOBART_PICKPOCKET"
 DOIT = f"{POCKET}_DOIT"
 PREPARE = "DIR_CRIMES_PREPARE"
-LEE = "SLD_800_LEE"
+CITY_OWNER = "VLK_416_MATTEO"
+CITY_HOUSE = "NW_CITY_BED_MATTEO"
+ANDRE = "MIL_311_ANDRE"
 
 
 async def crimes(link: GameLink, service: Crimes, slot: int = 7) -> dict[str, str]:
@@ -65,6 +67,15 @@ async def crimes(link: GameLink, service: Crimes, slot: int = 7) -> dict[str, st
     async def received(kind: str, start: int = 0) -> HeroDeed | None:
         ready = await _until(lambda: any(d.kind == kind for d in deeds[start:]), 10)
         return next((d for d in deeds[start:] if d.kind == kind), None) if ready else None
+
+    async def drop(npc: str, item: str) -> bool:
+        try:
+            await link.debug("npc_drop", npc=npc, item=item)
+        except GameError as err:
+            if "could not drop it now" not in str(err):
+                raise
+            return False  # the old routine's pose may still be blending out
+        return True
 
     async def crime_of(deed: HeroDeed | None) -> dict[str, Any] | None:
         if deed is None:
@@ -118,34 +129,21 @@ async def crimes(link: GameLink, service: Crimes, slot: int = 7) -> dict[str, st
         if not check("baseline", not facts() and await _save(link, slot + 1) is not None, len(facts())):
             return _logged(results)
 
-        # A normal unowned world cup in Lobart's room belongs to that room under vanilla's rule.
-        # Hilda stays free and receives ASSESSTHEFT normally. Native NPC drop is the fallback if this
-        # save has no guild assigned to the room; its ownership still comes from the engine.
+        # Lobart and Hilda are OUT in this save: the household theft has no vanilla community or
+        # lawkeeper. Hilda stays free and receives ASSESSTHEFT normally. The native drop owns the cup;
+        # the room's ownership is reported as it is, without assigning it a farmer guild.
         await link.debug("player_goto", waypoint=HOUSE)
         await stand(LOBART, HOUSE)
         await stand(HILDA, "NW_FARM1_INHOUSE_02", face="PLAYER")
         await asyncio.sleep(1)
         views = await link.npc_view([LOBART])
-        room = bool(views and views[0].indoors and views[0].room_guild == 8)  # GIL_BAU
         room_detail = f"indoors={views[0].indoors}, room_guild={views[0].room_guild}" if views else "no view"
-        if room:
-            await link.debug("spawn_item", item="ITMI_SILVERCUP", distance=100)
-            check("house_prepared", True, f"native farm room ownership; {room_detail}")
-        else:
-
-            async def drop() -> bool:
-                try:
-                    await link.debug("npc_drop", npc=LOBART, item="ITMI_SILVERCUP")
-                except GameError as err:
-                    if "could not drop it now" not in str(err):
-                        raise
-                    return False  # the old routine's pose may still be blending out
-                return True
-
-            if not check(
-                "house_prepared", await _until_async(drop, bool, 10), f"native Lobart drop; {room_detail}"
-            ):
-                return _logged(results)
+        if not check(
+            "house_prepared",
+            await _until_async(lambda: drop(LOBART, "ITMI_SILVERCUP"), bool, 10),
+            f"native Lobart drop; {room_detail}",
+        ):
+            return _logged(results)
         await asyncio.sleep(1)
         await link.debug("player_take", item="ITMI_SILVERCUP", distance=800)
         deed = await received("take_item")
@@ -155,11 +153,55 @@ async def crimes(link: GameLink, service: Crimes, slot: int = 7) -> dict[str, st
             deed is not None
             and fact is not None
             and fact.get("kind") == "theft"
-            and (deed.room_guild == 8 or deed.room_owner == LOBART or deed.owner == LOBART)
-            and fact.get("community") == "farm"
+            and deed.owner == LOBART
+            and fact.get("community") is None
+            and not service.lawkeepers(fact.get("community"))
             and HILDA in fact.get("witnesses", ())
             and HILDA in deed.witnesses
-            and LEE in service.lawkeepers("farm")
+            and seen_agrees(fact),
+            {"crime": fact, "deed": deed.model_dump() if deed else "no hero_deed"},
+        ):
+            return _logged(results)
+
+        # Matteo's actual house is just inside the south gate, the nearest lower-city house on the
+        # road from Lobart. Its real VLK owner supplies the community; no guild or room is rewritten.
+        if not await fresh():
+            return _logged(results)
+        if not check("city_house", CITY_OWNER in humans and CITY_HOUSE in points, CITY_HOUSE):
+            return _logged(results)
+        await stand(CITY_OWNER, CITY_HOUSE)
+        await link.debug("player_goto", waypoint=CITY_HOUSE)
+        await asyncio.sleep(1)
+        views = await link.npc_view([CITY_OWNER])
+        identity = await link.story_eval(
+            CITY_OWNER,
+            [["field", ["inst", "SELF"], "GUILD"], ["field", ["inst", "SELF"], "NPCTYPE"]],
+        )
+        if not check(
+            "city_house_prepared",
+            bool(views)
+            and views[0].indoors
+            and len(identity) == 2
+            and service.community(*identity) == "city"
+            and await _until_async(lambda: drop(CITY_OWNER, "ITMI_SILVERCUP"), bool, 10),
+            f"{CITY_HOUSE}, guild/npctype={identity}, indoors={views[0].indoors if views else None}",
+        ):
+            return _logged(results)
+        await asyncio.sleep(1)
+        await link.debug("player_take", item="ITMI_SILVERCUP", distance=800)
+        deed = await received("take_item")
+        fact = await crime_of(deed)
+        if not check(
+            "city_theft",
+            deed is not None
+            and deed.owner == CITY_OWNER
+            and fact is not None
+            and fact.get("kind") == "theft"
+            and fact.get("owner") == CITY_OWNER
+            and fact.get("community") == "city"
+            and bool(fact.get("witnesses"))
+            and set(fact.get("witnesses", ())) == set(deed.witnesses)
+            and ANDRE in service.lawkeepers(fact.get("community"))
             and seen_agrees(fact),
             {"crime": fact, "deed": deed.model_dump() if deed else "no hero_deed"},
         ):
