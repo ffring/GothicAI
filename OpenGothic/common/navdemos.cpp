@@ -17,6 +17,7 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <random>
 #include <stdexcept>
 
 namespace {
@@ -31,6 +32,9 @@ struct Episode {
   std::string output,from,to,failure;
   bool active=false,replay=false,drive=false,success=false;
   uint32_t teacherVersion=1;
+  double teacherBeta=0;
+  uint64_t mixingSeed=7,teacherControlDecisions=0;
+  std::mt19937_64 mixingRng;
   KnownRoads::Guidance guidance;
   uint64_t began=0,limit=240000,next=0,decisions=0,frames=0,cvFrames=0;
   uint64_t progressAt=0;
@@ -132,7 +136,9 @@ void finish(World& world) {
   out<<",\"target_position\":";vector(out,ep.goal);
   out<<",\"next_corner\":";vector(out,ep.path.corners.empty()?ep.goal:cm(ep.path.corners.back()));
   if(ep.drive) {
-    out<<",\"policy_population\":"<<ep.policyStates.size()
+    out<<",\"teacher_beta\":"<<ep.teacherBeta<<",\"mixing_seed\":"<<ep.mixingSeed
+       <<",\"teacher_control_decisions\":"<<ep.teacherControlDecisions
+       <<",\"policy_population\":"<<ep.policyStates.size()
        <<",\"policy_warmup_decisions\":"<<std::min(ep.decisions,PolicyWarmupDecisions)
        <<",\"policy_measured_calls\":"<<ep.policyUs.size()
        <<",\"population_measured_ticks\":"<<ep.populationUs.size()
@@ -311,6 +317,11 @@ void decide(World& w) {
     const std::array<bool,6> disagree={executed.forward!=d.keys.forward,executed.strafe!=d.keys.strafe,
       executed.turn!=d.keys.turn,executed.walk!=d.keys.walk,executed.jump!=d.keys.jump,executed.climb!=d.keys.climb};
     for(size_t i=0;i<disagree.size();++i)ep.disagreements[i]+=disagree[i];
+    // The recurrent student observes every visited state. The same state's
+    // teacher label is always recorded, regardless of who presses the keys.
+    if(std::bernoulli_distribution(ep.teacherBeta)(ep.mixingRng)) {
+      executed=d.keys;++ep.teacherControlDecisions;
+    }
   }
   const double cost=ep.writer->append(sample);ep.writeUs+=cost;ep.maxWriteUs=std::max(ep.maxWriteUs,cost);
   action(elapsed,executed);NpcKeys::set(n,executed,1000);ep.previous=executed;++ep.decisions;
@@ -326,13 +337,13 @@ void NavDemos::reset() {ep=Episode{};}
 void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,const std::string& output) {
   if(a.size()==2 && a[1]=="wait")return;
   const bool replay=a.size()==6 && a[1]=="replay";
-  const bool drive=a.size()==7 && a[1]=="drive";
-  const bool current=a.size()==6 && a[1]=="drive-current";
+  const bool drive=a.size()>=7 && a.size()<=9 && a[1]=="drive";
+  const bool current=a.size()>=6 && a.size()<=8 && a[1]=="drive-current";
   const bool speed=a.size()==8 && a[1]=="speed";
   const bool learner=drive || current || speed;
   const bool carrot=a.size()>=2 && a[1]=="start-v2";
   if(!replay && !learner && !((a.size()==6 || a.size()==8 || a.size()==9) && (a[1]=="start" || carrot)))
-    throw std::runtime_error("navdemos start|start-v2 NPC FROM TO LIMIT [lateral_cm yaw_deg fraction] | replay NPC FROM TO ACTIONS | drive NPC FROM TO LIMIT WEIGHTS | drive-current NPC GOAL LIMIT WEIGHTS | speed NPC FROM TO LIMIT WEIGHTS POPULATION");
+    throw std::runtime_error("navdemos start|start-v2 NPC FROM TO LIMIT [lateral_cm yaw_deg fraction] | replay NPC FROM TO ACTIONS | drive NPC FROM TO LIMIT WEIGHTS [BETA SEED] | drive-current NPC GOAL LIMIT WEIGHTS [BETA SEED] | speed NPC FROM TO LIMIT WEIGHTS POPULATION");
   if(ep.active)throw std::runtime_error("navdemos already active");
   const auto* from=current?nullptr:w.findPoint(a[3],false);const auto* to=w.findPoint(a[current?3:4],false);
   auto* npc=w.findNpcByInstance(w.script().findSymbolIndex(a[2]));
@@ -346,6 +357,13 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     const auto population=speed?std::stoul(a[7]):1;
     if(population==0 || population>1000)throw std::runtime_error("navdemos invalid policy population");
     ep.policy=std::make_unique<NavPolicy>(a[current?5:6]);
+    ep.teacherVersion=ep.policy->navDemoVersion();
+    const size_t betaIndex=current?6:7;
+    if(!speed && a.size()>betaIndex)ep.teacherBeta=std::stod(a[betaIndex]);
+    if(!std::isfinite(ep.teacherBeta) || ep.teacherBeta<0 || ep.teacherBeta>1)
+      throw std::runtime_error("navdemos teacher beta must be in [0,1]");
+    if(!speed && a.size()>betaIndex+1)ep.mixingSeed=std::stoull(a[betaIndex+1]);
+    ep.mixingRng.seed(ep.mixingSeed);
     ep.policyStates.resize(population);
     ep.policyUs.reserve(size_t((ep.limit+99)/100)*population);
     ep.encodeUs.reserve(size_t((ep.limit+99)/100));
@@ -396,7 +414,7 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     ep.limit=ep.replayActions.back().time;
   } else {
     ep.actions=file("actions.txt");ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),ep.teacherVersion);
-    if(carrot)ep.knownPaths=file("known-paths.jsonl");
+    if(ep.teacherVersion==2)ep.knownPaths=file("known-paths.jsonl");
   }
   observe(w);decide(w);ep.next=ep.began+100;
 }

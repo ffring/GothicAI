@@ -16,6 +16,8 @@ batch_size="${NAV_DRIVE_BATCH_SIZE:-2}"
 lock_wait="${RYZEN_LOCK_WAIT:-900}"
 pause_seconds="${NAV_DRIVE_PAUSE_SECONDS:-1}"
 watchdog_seconds=900
+teacher_beta=0
+drive_kind=drive
 collector_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,6 +26,9 @@ while [[ $# -gt 0 ]]; do
     --pause-seconds) pause_seconds="$2"; shift 2 ;;
     --watchdog-seconds) watchdog_seconds="$2"; collector_args+=("$1" "$2"); shift 2 ;;
     --watchdog-seconds=*) watchdog_seconds="${1#*=}"; collector_args+=("$1"); shift ;;
+    --teacher-beta) teacher_beta="$2"; collector_args+=("$1" "$2"); shift 2 ;;
+    --teacher-beta=*) teacher_beta="${1#*=}"; collector_args+=("$1"); shift ;;
+    --dagger-collection) drive_kind=dagger; collector_args+=("$1"); shift ;;
     *) collector_args+=("$1"); shift ;;
   esac
 done
@@ -58,7 +63,7 @@ for ((first = 0; first < ${#indices[@]}; first += batch_size)); do
       "${#batch[@]}" "$watchdog_seconds")
     df -h "$HOME"
     gq_job --class batch --threads 2 --mem 3G --max "${max_seconds}s" \
-      --name "nav drive indices=$joined" -- \
+      --name "nav $drive_kind beta=$teacher_beta indices=$joined" -- \
       python3 -I "$ROOT/scripts/nav_drive.py" collect "${collector_args[@]}" --indices "$joined"
   else
     (

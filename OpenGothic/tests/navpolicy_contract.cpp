@@ -9,8 +9,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -67,16 +69,26 @@ struct Observation final {
   std::vector<NavigationEye::Ray> eye;
   NavigationMemory::View memory;
 
-  void decode(const std::vector<uint8_t>& bytes,const std::vector<std::array<float,3>>& layout) {
+  void decode(const std::vector<uint8_t>& bytes,const std::vector<std::array<float,3>>& layout,uint32_t version) {
     Cursor in(bytes);
     snapshot.gameMs=in.u64();snapshot.position=in.vec();snapshot.bodyYawDeg=in.f32();
     snapshot.body.velocityCmS=in.vec();
     for(auto& flag:snapshot.body.flags) flag=in.u8();
     snapshot.body.groundNormal=in.vec();snapshot.body.groundSlopeDeg=in.f32();
     snapshot.body.headYawDeg=in.f32();snapshot.body.headPitchDeg=in.f32();
-    snapshot.roads.nextDirection=in.vec();snapshot.roads.nextDistanceCm=in.f32();
+    if(version==2) {
+      snapshot.roads.carrotDirection=in.vec();snapshot.roads.carrotDistanceCm=in.f32();
+      }
+    else {
+      snapshot.roads.nextDirection=in.vec();snapshot.roads.nextDistanceCm=in.f32();
+      }
     snapshot.roads.goalDirection=in.vec();snapshot.roads.goalDistanceCm=in.f32();
-    snapshot.roads.remainingVisualCm=in.f32();snapshot.roads.goalInKnown=in.u8()!=0;
+    if(version==2) {
+      snapshot.roads.remainingKnownCm=in.f32();snapshot.roads.beyondKnown=in.u8()!=0;
+      }
+    else {
+      snapshot.roads.remainingVisualCm=in.f32();snapshot.roads.goalInKnown=in.u8()!=0;
+      }
     snapshot.previous=in.keys();snapshot.keys=in.keys();
     eye.resize(NavDemoWriter::rayCount);
     for(size_t i=0;i<eye.size();++i) {
@@ -111,6 +123,7 @@ struct Observation final {
 struct Fixture final {
   gzFile stream=nullptr;
   size_t steps=0,hidden=0,readSteps=0;
+  uint32_t demoVersion=1;
   std::vector<std::array<float,3>> layout;
   std::string source;
   std::vector<uint8_t> raw;
@@ -139,6 +152,8 @@ struct Fixture final {
         return size_t(header[name].GetUint());
         };
       steps=number("steps");hidden=number("hidden_size");
+      if(header.HasMember("navdemo_version")) demoVersion=uint32_t(number("navdemo_version"));
+      require(demoVersion==1 || demoVersion==2,"unsupported fixture NAVDEMO version");
       require(steps>0 && steps<=100000 && hidden>0 && hidden<=4096,"fixture dimensions out of bounds");
       const auto vectorSize=number("vector_size");
       require(number("record_bytes")==NavDemoWriter::recordBytes &&
@@ -212,21 +227,40 @@ template<class A,class B> double difference(const A& a,const B& b) {
   }
 
 void parity(const std::string& weights,const std::string& path) {
+  // NumPy's multi-axis 4x4 height reduction groups row sums; the live encoder
+  // accumulates cells in row order. Float32 rounding can differ by a few ulps
+  // (1.9e-6 on recorded relative heights). Inference remains checked at 1e-4.
+  constexpr double featureTolerance=1e-5;
   const NavPolicy policy(weights);
   Fixture fixture(path);
   require(policy.hiddenSize()==fixture.hidden,"weight/fixture hidden size mismatch");
   require(policy.vectorInputSize()==fixture.expected.vector.size(),"weight/fixture vector size mismatch");
+  require(policy.navDemoVersion()==fixture.demoVersion,"weight/fixture NAVDEMO version mismatch");
   NavPolicy::State state;
   Observation observation;
   double featureError=0,logitError=0,hiddenError=0;
   while(fixture.next()) {
-    observation.decode(fixture.raw,fixture.layout);
+    observation.decode(fixture.raw,fixture.layout,fixture.demoVersion);
     const auto actual=policy.encode(observation.snapshot);
     const double localFeature=std::max({difference(actual.near,fixture.expected.near),
         difference(actual.far,fixture.expected.far),difference(actual.vector,fixture.expected.vector)});
     featureError=std::max(featureError,localFeature);
-    require(localFeature<=1e-6,"encoded features differ at step "+std::to_string(fixture.readSteps)+
-            ": "+std::to_string(localFeature));
+    if(localFeature>featureTolerance) {
+      std::ostringstream message;
+      message<<std::setprecision(10)<<"encoded features differ at step "<<fixture.readSteps
+             <<": "<<localFeature;
+      const auto locate=[&](const auto& actualValues,const auto& expectedValues,const char* name) {
+        for(size_t i=0;i<actualValues.size();++i)
+          if(std::abs(double(actualValues[i])-double(expectedValues[i]))==localFeature) {
+            message<<" ("<<name<<'['<<i<<"] actual="<<actualValues[i]<<", expected="<<expectedValues[i]<<')';
+            break;
+            }
+        };
+      locate(actual.near,fixture.expected.near,"near");
+      locate(actual.far,fixture.expected.far,"far");
+      locate(actual.vector,fixture.expected.vector,"vector");
+      throw std::runtime_error(message.str());
+      }
     const auto result=policy.step(actual,state);
     double localLogit=0;
     for(size_t h=0;h<heads.size();++h)
@@ -258,6 +292,18 @@ void parity(const std::string& weights,const std::string& path) {
       observation.memory.traveledCm=987654;
       observation.snapshot.teacherCorner={-99,88,77};
       observation.snapshot.teacherPathCm=88888;
+      if(policy.navDemoVersion()==2) {
+        observation.snapshot.roads.nextDirection={-99,88,77};
+        observation.snapshot.roads.nextDistanceCm=std::numeric_limits<float>::quiet_NaN();
+        observation.snapshot.roads.remainingVisualCm=std::numeric_limits<float>::quiet_NaN();
+        observation.snapshot.roads.goalInKnown=!observation.snapshot.roads.goalInKnown;
+        }
+      else {
+        observation.snapshot.roads.carrotDirection={-99,88,77};
+        observation.snapshot.roads.carrotDistanceCm=std::numeric_limits<float>::quiet_NaN();
+        observation.snapshot.roads.remainingKnownCm=std::numeric_limits<float>::quiet_NaN();
+        observation.snapshot.roads.beyondKnown=!observation.snapshot.roads.beyondKnown;
+        }
       const auto other=policy.encode(observation.snapshot);
       require(difference(actual.near,other.near)==0 && difference(actual.far,other.far)==0 &&
               difference(actual.vector,other.vector)==0,"privileged annotation leaked into features");
@@ -269,6 +315,7 @@ void parity(const std::string& weights,const std::string& path) {
     }
   fixture.finish();
   std::cout<<"{\"contract\":\"navpolicy\",\"steps\":"<<fixture.readSteps
+           <<",\"navdemo_version\":"<<fixture.demoVersion
            <<",\"carry_hidden\":true,\"max_feature_error\":"<<featureError
            <<",\"max_logit_error\":"<<logitError<<",\"max_hidden_error\":"<<hiddenError<<"}\n";
   }
@@ -289,7 +336,7 @@ void benchmark(const std::string& weights,const std::string& path,size_t npcs,si
   std::vector<std::vector<uint8_t>> records;
   Observation observation;
   for(size_t i=0;i<16 && fixture.next();++i) {
-    observation.decode(fixture.raw,fixture.layout);
+    observation.decode(fixture.raw,fixture.layout,fixture.demoVersion);
     features.push_back(policy.encode(observation.snapshot));
     records.push_back(fixture.raw);
     }
@@ -320,7 +367,7 @@ void benchmark(const std::string& weights,const std::string& path,size_t npcs,si
     }
   // Decode and I/O are excluded; live sensor preprocessing is reported separately.
   for(size_t i=0;i<decisions;++i) {
-    observation.decode(records[i%records.size()],fixture.layout);
+    observation.decode(records[i%records.size()],fixture.layout,fixture.demoVersion);
     const auto before=Clock::now();
     const auto encoded=policy.encode(observation.snapshot);
     const auto after=Clock::now();
