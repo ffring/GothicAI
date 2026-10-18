@@ -101,16 +101,36 @@ def test_conservative_collection_bound_includes_resets_and_stays_below_ceiling()
 
 def test_pilot_rejects_head_collapse_even_when_total_kl_is_small():
     base = {head: .5 for head in loop.HEADS}
-    low = dict(coefficient=.03, stats=dict(kl_reference=.001, entropy_by_head=dict(base, forward=.1)))
-    good = dict(coefficient=.1, stats=dict(kl_reference=.02, entropy_by_head=base))
-    high = dict(coefficient=.3, stats=dict(kl_reference=.005, entropy_by_head=base))
-    assert loop.select_pilot([low, high, good], base) is good
+    low = dict(coefficient=.03, stats=dict(kl_reference=.001, entropy_by_head=dict(base, forward=.1),
+                                         reference_entropy_by_head=base))
+    good = dict(coefficient=.1, stats=dict(kl_reference=.02, entropy_by_head=base, reference_entropy_by_head=base))
+    high = dict(coefficient=.3, stats=dict(kl_reference=.005, entropy_by_head=base, reference_entropy_by_head=base))
+    assert loop.select_pilot([low, high, good]) is good
     with pytest.raises(ValueError, match="no candidate"):
-        loop.select_pilot([low], base)
+        loop.select_pilot([low])
     values = [loop.kl_coefficient(.1, step, 150_000_000) for step in (0, 30_000_000, 150_000_000)]
     assert values[0] == pytest.approx(.1)
     assert values[-1] == pytest.approx(.003)
     assert values[0] > values[1] > values[2]
+
+
+def test_pilot_accepts_unchanged_actor_when_current_batch_entropy_is_lower_than_iteration_one():
+    historical = {head: .5 for head in loop.HEADS}
+    current_batch = {head: .05 for head in loop.HEADS}
+    assert all(current_batch[head] < .75 * historical[head] for head in loop.HEADS)
+    unchanged = dict(coefficient=.1, stats=dict(kl_reference=0., entropy_by_head=current_batch,
+                                              reference_entropy_by_head=current_batch))
+    assert loop.select_pilot([unchanged]) is unchanged
+    collapsed = dict(coefficient=.1, stats=dict(kl_reference=0., entropy_by_head=dict(current_batch, turn=.02),
+                                              reference_entropy_by_head=current_batch))
+    with pytest.raises(ValueError, match="no candidate"):
+        loop.select_pilot([collapsed])
+
+
+def test_pilot_requires_current_batch_reference_entropy_metric():
+    old_stats = dict(coefficient=.1, stats=dict(kl_reference=0., entropy_by_head={head: .5 for head in loop.HEADS}))
+    with pytest.raises(KeyError, match="reference_entropy_by_head"):
+        loop.select_pilot([old_stats])
 
 
 def test_training_validation_reverse_overlap_is_rejected():

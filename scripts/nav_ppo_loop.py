@@ -136,14 +136,18 @@ def collection_decision_bound(run_ms, workers, population):
     return workers * population * (1 + math.ceil(run_ms / 33) + math.ceil(run_ms / 100))
 
 
-def select_pilot(results, baseline_entropy, target_kl=.03):
-    """Take the least constraint that respects drift and head entropy bounds."""
+def select_pilot(results, target_kl=.03):
+    """Constrain drift and entropy relative to round 2 on this same batch."""
     viable = []
     for candidate in results:
         metrics = candidate["stats"]
+        if "reference_entropy_by_head" not in metrics:
+            raise KeyError("KL pilot requires current-batch reference_entropy_by_head; rerun cached pilot updates")
+        reference_entropy = metrics["reference_entropy_by_head"]
         if (math.isfinite(metrics["kl_reference"]) and metrics["kl_reference"] <= target_kl
                 and all(math.isfinite(metrics["entropy_by_head"][head])
-                        and metrics["entropy_by_head"][head] >= .75 * baseline_entropy[head] for head in HEADS)):
+                        and math.isfinite(reference_entropy[head]) and reference_entropy[head] >= 0
+                        and metrics["entropy_by_head"][head] >= .75 * reference_entropy[head] for head in HEADS)):
             viable.append(candidate)
     if not viable:
         raise ValueError("KL pilot has no candidate below target KL with >=75% entropy in every head")
@@ -490,7 +494,7 @@ class Loop:
                     for index, value in enumerate(coefficients):
                         if index >= len(args.pilot_kl):
                             try:
-                                select_pilot(candidates, state["baseline_entropy"], args.target_kl)
+                                select_pilot(candidates, args.target_kl)
                                 break
                             except ValueError:
                                 pass
@@ -499,7 +503,7 @@ class Loop:
                         health = updated_collection_health(result, stats)
                         candidates.append(dict(coefficient=value, directory=str(candidate_output), stats=stats))
                     try:
-                        selected = select_pilot(candidates, state["baseline_entropy"], args.target_kl)
+                        selected = select_pilot(candidates, args.target_kl)
                     except ValueError:
                         selected = None
                     write_json(selection_file, dict(selected=selected, candidates=candidates))

@@ -525,12 +525,19 @@ def post_update_statistics(paths, actor, args):
             old = torch.from_numpy(episode["old_logp"][None, start:stop]).to(args.device)
             logratio = (logp - old).clamp(-20, 20)
             sums["post_approx_kl_old"] += float((logratio.exp() - 1 - logratio)[mask].sum())
-            for name, value in entropy.items():
-                sums[f"entropy_{name}"] += float(value[mask].sum())
+            offset = 0
+            for name, classes in zip(HEADS, CLASSES):
+                sums[f"entropy_{name}"] += float(entropy[name][mask].sum())
+                reference_logp = reference[..., offset:offset+classes].log_softmax(-1)
+                reference_entropy = -(reference_logp.exp() * reference_logp).sum(-1)
+                sums[f"reference_entropy_{name}"] += float(reference_entropy[mask].sum())
+                offset += classes
             count += int(mask.sum())
     return {"kl_reference": sums["kl_reference"] / max(count, 1),
             "post_approx_kl_old": sums["post_approx_kl_old"] / max(count, 1),
-            "entropy_by_head": {name: sums[f"entropy_{name}"] / max(count, 1) for name in HEADS}}
+            "entropy_by_head": {name: sums[f"entropy_{name}"] / max(count, 1) for name in HEADS},
+            "reference_entropy_by_head": {name: sums[f"reference_entropy_{name}"] / max(count, 1)
+                                           for name in HEADS}}
 
 
 def update(args):

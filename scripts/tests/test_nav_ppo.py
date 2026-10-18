@@ -401,3 +401,21 @@ def test_recurrent_capture_hook_is_removed_if_model_forward_fails(tmp_path, monk
     with pytest.raises(RuntimeError, match="injected downstream failure"):
         ppo.forward_with_recurrent_states(actor, **features)
     assert len(actor.gru._forward_hooks) == original_hooks
+
+
+def test_reference_entropy_uses_current_batch_and_same_valid_mask(tmp_path):
+    directory, actor, _ = make_episode(tmp_path)
+    episode, _, _ = ppo.read_episode(directory, ppo.REWARD_WEIGHTS)
+    episode["valid"] = np.array([True, False, True, False, True, False])
+    episode["reference_logits"] = np.zeros((6, sum(ppo.CLASSES)), np.float32)
+    offset = 0
+    for classes in ppo.CLASSES:
+        # Excluded intervals have nearly zero entropy; accepted ones are uniform.
+        episode["reference_logits"][~episode["valid"], offset] = 10000.
+        offset += classes
+    path = tmp_path / "episode-cache.npz"
+    np.savez_compressed(path, **episode)
+    measured = ppo.post_update_statistics([path], actor, args())
+    assert measured["reference_entropy_by_head"] == pytest.approx(
+        {name: np.log(classes) for name, classes in zip(ppo.HEADS, ppo.CLASSES)}, abs=1e-6)
+    assert set(measured["entropy_by_head"]) == set(measured["reference_entropy_by_head"])
