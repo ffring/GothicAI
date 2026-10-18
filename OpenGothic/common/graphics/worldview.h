@@ -48,6 +48,9 @@ class WorldView {
     void setHiZ(const Tempest::Texture2d& hiZ);
     void setSceneImages(const Tempest::Texture2d& clr, const Tempest::Texture2d& depthAux, const Tempest::ZBuffer& depthNative);
     void setWindEnabled(bool enabled, uint64_t period);
+    void setClothWind(bool enabled, float scale);
+    void setOriginalClothMesh(const PackedMesh& mesh);
+    void setOriginalClothVisible(bool visible);
 
     void dbgLights      (DbgPainter& p) const;
 
@@ -96,6 +99,7 @@ class WorldView {
     MeshObjects   objGroup;
     PfxObjects    pfxGroup;
     Landscape     land;
+    std::unique_ptr<Landscape> originalCloth;
 
     bool needToUpdateCmd(uint8_t frameId) const;
     void invalidateCmd();

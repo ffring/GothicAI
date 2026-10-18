@@ -22,6 +22,7 @@ class PhysicVbo;
 class Skeleton;
 class HitZones;
 class Ragdoll;
+class Cloth;
 namespace zenkit { struct INpc; }
 namespace JPH { class PhysicsSystem; }
 
@@ -267,6 +268,7 @@ class CollisionWorld final {
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
     void fillRagdoll(QueryResult& result, JPH::BodyID body) const;
     JPH::PhysicsSystem& physicsSystem();
+    friend class ClothContractDriver;
     uint32_t registerRagdoll(Ragdoll& body);
     void unregisterRagdoll(Ragdoll& body);
     std::unique_ptr<Impl> impl;
@@ -278,8 +280,10 @@ class CollisionWorld final {
     std::function<void(const PhysicsNoise&)> physicsNoise;
     std::function<void(CollisionBody&,float,const Tempest::Vec3&,std::string_view)> bodyImpact;
     std::function<bool(const Tempest::Vec3&,float,float&)> waterSurface;
+    Cloth* cloth = nullptr;
     bool buoyancy = true;
     JPH::Vec3 bboxMin = JPH::Vec3::sZero();
     float accumulatedTime = 0;
     friend class Ragdoll;
+    friend class Cloth;
   };

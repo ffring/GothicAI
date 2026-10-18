@@ -98,7 +98,7 @@ PR, который добавляет фичу или выключатель, д
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
 | Мост к ИИ-серверу | `GOTHIC_AI=0` | `ai_bridge/aibridge.cpp` | все e2e | [protocol.md](protocol.md) |
-| Диалоговые функции скриптов как программы без VM | `GOTHIC_AI_STORYEXEC=0`; на скриптах с Ikarus выключается само | `ai_bridge/dialoggraph.cpp` | e2e `graph`, `programs` | [story-graph.md](story-graph.md) |
+| Диалоговые функции скриптов как программы без VM | `GOTHIC_AI_STORYEXEC=0` | `ai_bridge/dialoggraph.cpp` | e2e `graph`, `programs` | [story-graph.md](story-graph.md) |
 
 ## Движок: физика Jolt
 
@@ -115,6 +115,7 @@ PR, который добавляет фичу или выключатель, д
 | Подвижные vob и их сохранение | `[GAME] movable_vobs=0` | `common/world/movablevobs.*` | бенчи `movable-vobs*`, `movable-candle`, `movable-census` | [physics.md](physics.md) |
 | Физический шум: звук и восприятие NPC | `[GAME] physics_noise=0` | `common/physics/physicsnoise.h` | бенчи `physics-noise`, `physics-noise-on`, `physics-noise-off` | [physics.md](physics.md) |
 | Физические следы в восприятии NPC | нет | `ai_bridge/npcview*` | e2e `trace`; бенчи `physics-traces`, `trace-e2e` | [physics.md](physics.md) |
+| Ткань мира в радиусе 40 м: флаги, знамёна и паруса | `[GAME] cloth=0`; Marvin `toggle cloth` | `common/physics/cloth.*`, `clothgeometry.*`, `worldcloth.*`, `common/graphics/clothvisual.*`; `data/cloth-vobs.csv`, `cloth-world.csv` | `check-cloth`; бенчи `cloth*` | [physics.md](physics.md#этап-6-разрушение-вода-ткань) |
 | Разрушение вещей и оград, обломки как улики | `[GAME] destruction=0`; без кэша резки — пустой `OPENGOTHIC_FRACTURE` | `common/physics/fracture.cpp` | бенчи `destruction*`, `broken-e2e`; e2e `broken` | [physics.md](physics.md) |
 | Вода: плавучесть вещей и тел | `[GAME] buoyancy=0` | `common/physics/dynamicworld.cpp` | бенчи `water*`, `water-bodies*` | [physics.md](physics.md) |
 | CharacterVirtual героя | `[GAME] character_virtual=0` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | бенчи `character-virtual*` | [physics.md](physics.md) |
@@ -156,7 +157,11 @@ PR, который добавляет фичу или выключатель, д
 - `OPENGOTHIC_BENCH*`, `OPENGOTHIC_*_LOG`, `OPENGOTHIC_*_TRACE` — стенд, журналы и трассы.
 - Обложки шортсов шаблона B: поле `cover` плана сравнения, `gothic-shorts cover`, `upload --thumbnail` и `thumbnail`; модули `shorts/src/gothic_shorts/{cover,compare,youtube,cli}.py`, проверки `shorts/tests/test_{cut,cover,youtube}.py`, [команды и шаблон](../shorts/README.md#covers). Без поля или команды обложки нет.
 
-Вне реестра: обучаемая навигация ([navigation.md](navigation.md)) — пока исследование, в игру не включена.
+| Фича стенда | Как включить / выключить | Модуль | Проверка | Документ |
+|---|---|---|---|---|
+| Популяция навигации: N NPC, независимые состояния, выборка softmax и награды Detour без перезагрузки мира | `navdemos population … sample\|argmax … RECORD`; `navdemos physics cv\|native`, в `nav_rl.py` CV по умолчанию; `RECORD=0` выключает записи; `hero near\|keep`, `kill-slot SLOT AFTER_MS` — проверки стенда | `common/navdemos.*`, минимальные вставки в `worldobjects.cpp`, `npc.cpp`, `MoveAlgo::useCharacterVirtual`; `scripts/nav_rl.py` | `test_nav_rl.py`, `nav_rl.py check/equivalence/population/death-smoke` | [navigation.md](navigation.md) |
+
+Остальная обучаемая навигация ([navigation.md](navigation.md)) — пока исследование, в игру не включена.
 
 ## Пробелы покрытия
 

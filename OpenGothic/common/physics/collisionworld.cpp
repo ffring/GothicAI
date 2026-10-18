@@ -2,6 +2,7 @@
 #include "physicvbo.h"
 #include "dynamicworld.h"
 #include "ragdoll.h"
+#include "cloth.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -71,6 +72,8 @@ namespace {
         return dynamicLayer;
       if(layer==DynamicWorld::C_Water || layer==DynamicWorld::C_Ghost || layer==DynamicWorld::C_MovableQuery || layer==DynamicWorld::C_SmallVobQuery)
         return sensorLayer;
+      if(layer==DynamicWorld::C_Cloth)
+        return dynamicLayer;
       return staticLayer;
       }
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
@@ -82,6 +85,8 @@ namespace {
 
   struct LayerPairFilter final : JPH::ObjectLayerPairFilter {
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
+      if(a==DynamicWorld::C_Cloth || b==DynamicWorld::C_Cloth)
+        return false;
       if(a==DynamicWorld::C_MovableQuery || a==DynamicWorld::C_SmallVobQuery ||
          b==DynamicWorld::C_MovableQuery || b==DynamicWorld::C_SmallVobQuery)
         return false;
@@ -103,6 +108,8 @@ namespace {
 
   struct BroadPhaseFilter final : JPH::ObjectVsBroadPhaseLayerFilter {
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad) const override {
+      if(layer==DynamicWorld::C_Cloth)
+        return false;
       if(layer==DynamicWorld::C_LivingBody)
         return broad==dynamicLayer;
       if(layer==DynamicWorld::C_MovableQuery || layer==DynamicWorld::C_SmallVobQuery)
@@ -115,7 +122,9 @@ namespace {
   struct QueryLayerFilter final : JPH::ObjectLayerFilter {
     explicit QueryLayerFilter(uint32_t mask):mask(mask) {}
     bool ShouldCollide(JPH::ObjectLayer layer) const override {
-      return layer<32 && (mask & (1u<<layer))!=0;
+      // Cloth has only its attachment guard; it never contacts the world or
+      // becomes a solid target for gameplay rays, sweeps or character queries.
+      return layer!=DynamicWorld::C_Cloth && layer<32 && (mask & (1u<<layer))!=0;
       }
     const uint32_t mask;
     };
@@ -1973,6 +1982,7 @@ bool CollisionWorld::hasCollision(const JPH::Shape* shape, const Tempest::Vec3& 
 
 void CollisionWorld::tick(uint64_t dt) {
   const auto started=std::chrono::steady_clock::now();
+  if(cloth!=nullptr) cloth->prepareFrame(dt);
   constexpr float step = 1.f/60.f;
   bool advanced = false;
   std::vector<PhysicsNoise> splashes;
@@ -2034,7 +2044,8 @@ void CollisionWorld::tick(uint64_t dt) {
       // rig steps. Support must be applied before each of them, just like
       // gravity, or still floats acquire a persistent integration velocity.
       if(waterSteps) impl->system.AddStepListener(impl.get());
-      impl->system.Update(float(step),activeFragments ? fragmentSteps : dynamicRagdolls ? 2 : 1,&impl->allocator,&impl->jobs);
+      const int collisionSteps=activeFragments ? fragmentSteps : dynamicRagdolls ? 2 : 1;
+      impl->system.Update(float(step),collisionSteps,&impl->allocator,&impl->jobs);
       if(waterSteps) impl->system.RemoveStepListener(impl.get());
       finishBuoyancy(step);
       for(auto* body:ragdolls) body->finishKinematicStep();
@@ -2048,6 +2059,7 @@ void CollisionWorld::tick(uint64_t dt) {
     // bodies, advancing contacts or emitting callbacks, at the main tick boundary.
     impl->system.Update(0.f,1,&impl->allocator,&impl->jobs);
     }
+  if(cloth!=nullptr) cloth->finishFrame();
 
   for(const auto& splash:splashes) emitPhysicsNoise(splash);
 
