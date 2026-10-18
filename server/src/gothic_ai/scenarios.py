@@ -1938,8 +1938,11 @@ async def orders_scenario(
         text: str, action: str, focus: str | None = None, timeout: float = 15
     ) -> tuple[bool, str]:
         await diagnose(f"before_{action}")
-        actors = [npc, "PLAYER", "WOLF"] if action == "fight" else [npc, "PLAYER"]
-        async with observe(action, actors):
+        # WOLF is a shared instance symbol; its position/HP arrive through Xardas's
+        # actual target, while body_watch requires each actor's symbol to be unique.
+        async with observe(action, [npc, "PLAYER"]):
+            if action == "fight" and talk.orders is not None and npc in talk.orders.fights:
+                raise GameError("orders attack preparation: automatic defence started before the order")
             t0 = time.monotonic()
             given.add(text)
             if focus is None:
@@ -1977,8 +1980,57 @@ async def orders_scenario(
     ok, took = await order("К оружию!", "draw_weapon")
     results["draw"] = f"{'done' if ok else 'failed'} (in {took})"
 
-    await link.debug("spawn", instance="WOLF", near=npc, distance=500)
+    # The follow check is over. Keep the passive hero behind and to the side of
+    # the mage, away from the projectile lane, and stage the target beyond 10 m.
+    await link.act(npc, "stop")
+    await clear_animals()
+    attack_origin = await link.snapshot(npc, fresh=True)
+    if attack_origin.player is None:
+        raise GameError("orders attack preparation: no hero")
+    origin = attack_origin.npc.pos
+    toward = (
+        attack_origin.player.pos[0] - origin[0],
+        attack_origin.player.pos[2] - origin[2],
+    )
+    toward_len = math.hypot(*toward) or 1
+    points = await link.waypoints()
+    ground = [
+        p for p in points if not p["fp"] and abs(p["y"] - origin[1]) < 250
+        and 1300 <= math.hypot(p["x"] - origin[0], p["z"] - origin[2]) <= 1800
+    ]
+    if not ground:
+        raise GameError(f"orders attack preparation: no 13–18 m waypoint from {origin}")
+    at = min(
+        ground,
+        key=lambda p: math.hypot(
+            p["x"] - origin[0] - 1400 * toward[0] / toward_len,
+            p["z"] - origin[2] - 1400 * toward[1] / toward_len,
+        ),
+    )
+    length = math.hypot(at["x"] - origin[0], at["z"] - origin[2])
+    dx, dz = (at["x"] - origin[0]) / length, (at["z"] - origin[2]) / length
+    await link.debug(
+        "player_goto", pos=[origin[0] - 400 * dx - 500 * dz, origin[1], origin[2] - 400 * dz + 500 * dx]
+    )
+    await link.story_spawn("WOLF", tag="orders_attack", waypoint=at["name"])
+    await link.act(npc, "turn_to", npc="WOLF")
     await asyncio.sleep(1)
+    views = await link.npc_view([npc])
+    wolf = next(
+        (other for view in views for other in view.sees if other.id == "WOLF" and other.kind == "monster"),
+        None,
+    )
+    response = await link._request(
+        DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=npc, to="WOLF"), 5,
+    )
+    ray = response.value or {}
+    automatic = talk.orders is not None and npc in talk.orders.fights
+    log.info("orders attack preparation: wolf=%s native_ray=%s automatic=%s", wolf, ray, automatic)
+    if (
+        wolf is None or wolf.distance <= 1000 or wolf.hero_cm is None or wolf.hero_cm <= 1500
+        or not (ray.get("center_clear") or ray.get("head_clear")) or automatic
+    ):
+        raise GameError(f"orders attack preparation: wolf={wolf}; ray={ray}; automatic={automatic}")
     ok, took = await order("В атаку!", "fight", focus="WOLF", timeout=60)
     over = await _until(lambda: any(a == "fight" for _, _, a, _ in calls) and calls[-1][2] == "follow", 60)
     fight = next((st for _, _, a, st in reversed(calls) if a == "fight"), "-")
@@ -2048,9 +2100,10 @@ async def _companion_attack_words(
             await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
         except GameError:
             pass
-    await link.debug("player_goto", waypoint=WOLF_HERO)
-    await asyncio.sleep(1)  # the road's roster, rather than the one still at Cavalorn's fire
-    for _ in range(8):  # clear the road's own wolves before its one controlled encounter
+    arena = "NW_XARDAS_TOWER_VALLEY_09"
+    await link.debug("player_goto", waypoint=arena)
+    await asyncio.sleep(1)  # the arena's roster, rather than the one still at Cavalorn's fire
+    for _ in range(8):  # clear the arena's own wolves before its one controlled encounter
         if not beasts.wolves:
             break
         wolf = min(beasts.wolves.values(), key=lambda w: w.distance)
@@ -2058,7 +2111,11 @@ async def _companion_attack_words(
         await _until(lambda wolf=wolf: wolf.id not in beasts.wolves, 5)
     # Stage the free NPC first: teleporting the hero from the fire after follow starts ends that order
     # with follow_ended (the hero went too far). Its first real follow now covers only two metres.
-    await link.debug("npc_goto", npc=npc, waypoint=WOLF_HERO, face="PC_HERO")
+    await link.debug("player_goto", pos=[23472, 1032, -10816])
+    await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
+    if not await talk.hold(npc, "follow"):
+        return {"wolf_ready": f"failed (cannot hold {npc} for the arena setup)"}
+    await link.act(npc, "turn_to", npc="PLAYER")
     await link.debug("teleport", near=npc, distance=700)
     if not await _until(
         lambda: npc in talk.people
@@ -2084,7 +2141,14 @@ async def _companion_attack_words(
         return {**results, "wolf_ready": "failed (no hero in Cavalorn's snapshot)"}
     hero = snap.player.pos
     points = {p["name"]: p for p in await link.waypoints()}
-    ground = [p for p in points.values() if abs(p["y"] - hero[1]) < 250 and not p["fp"]]
+    origin = snap.npc.pos
+    ground = [
+        p for p in points.values() if abs(p["y"] - hero[1]) < 250 and not p["fp"]
+        and 1300 <= math.hypot(p["x"] - origin[0], p["z"] - origin[2]) <= 1800
+        and 700 <= math.hypot(p["x"] - hero[0], p["z"] - hero[2]) <= 1400
+    ]
+    if not ground:
+        raise GameError(f"orders Cavalorn attack preparation: no waypoint from npc={origin}, hero={hero}")
     at = min(ground, key=lambda p: abs(math.hypot(p["x"] - hero[0], p["z"] - hero[2]) - 1000))
     hp = snap.player.hp if snap.player is not None else None
     talk.hear("Кавалорн, отступай!", None, {"via": "scenario"})
@@ -2098,6 +2162,33 @@ async def _companion_attack_words(
     check("wolf_ready", ready, f"{wolf_id} at {at['name']}, before its first attack")
     if not ready:
         return results
+
+    # The wolf has growled, as this check requires. Now keep the hero away from
+    # both the attacker's reach and Cavalorn's projectile lane before giving the order.
+    await link.act(npc, "stop")
+    origin = (await link.snapshot(npc, fresh=True)).npc.pos
+    length = math.hypot(at["x"] - origin[0], at["z"] - origin[2])
+    dx, dz = (at["x"] - origin[0]) / length, (at["z"] - origin[2]) / length
+    await link.debug(
+        "player_goto", pos=[origin[0] - 400 * dx - 500 * dz, origin[1], origin[2] - 400 * dz + 500 * dx]
+    )
+    await link.act(npc, "turn_to", npc="WOLF")
+    views = await link.npc_view([npc])
+    wolf = next(
+        (other for view in views for other in view.sees if other.id == "WOLF" and other.kind == "monster"),
+        None,
+    )
+    response = await link._request(
+        DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=npc, to="WOLF"), 5,
+    )
+    ray = response.value or {}
+    automatic = npc in talk.orders.fights
+    log.info("orders Cavalorn attack preparation: wolf=%s native_ray=%s automatic=%s", wolf, ray, automatic)
+    if (
+        wolf is None or wolf.distance <= 1000 or wolf.hero_cm is None or wolf.hero_cm <= 1500
+        or not (ray.get("center_clear") or ray.get("head_clear")) or automatic
+    ):
+        raise GameError(f"orders Cavalorn attack preparation: wolf={wolf}; ray={ray}; automatic={automatic}")
 
     actions: list[tuple[float, str, str]] = []  # dispatch time, target, wolf state at dispatch
     finished: list[str] = []
