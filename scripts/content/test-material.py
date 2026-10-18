@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 
 
-DEFAULT_TEXTURES = ("NW_CITY_PFLASTERSTEIN_01.TGA", "NW_CITY_STONEWALL_01.TGA")
+DEFAULT_TEXTURES = ("NW_MISC_OLDSTONEPATH_01.TGA", "NW_CITY_WALL_03.TGA")
 
 
 def smoothstep(value: np.ndarray) -> np.ndarray:
