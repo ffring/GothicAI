@@ -837,7 +837,7 @@ latter also records both 40 m crossings and exports a moving-cloth save.
 `cloth-arrow-npc` checks the harbour wind and two single-step native arrow paths:
 cloth before the NPC must receive an impulse; cloth behind the stopping NPC must
 not. A fixture NPC is held only for these checks; production NPC logic is unchanged.
-The scenario ends with one normal-clock ON measurement at the densest ship observer.
+Use the separate `cloth-on`/`cloth-off` scenarios for a clean-world timing pair without the fixture NPC.
 
 ```sh
 WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-harbour /absolute/path/cloth/harbour
