@@ -64,7 +64,7 @@ async def neural_companion_scenario(link: GameLink, pilot: BodyPilot | None) -> 
 async def neural_talk_scenario(
     link: GameLink, dialogue: DialogueManager, pilot: BodyPilot | None,
 ) -> dict[str, str]:
-    """Words, escape, another conversation and a native knockout around two P30 episodes."""
+    """Words, escape, native reattack or another conversation, then a native knockout."""
     from .neural_load import _policy_resets
 
     if pilot is None:
@@ -108,12 +108,13 @@ async def neural_talk_scenario(
                      if summary.npc == npc and id(summary) not in previous), None)
 
     def ended(name: str, summary: FightSummary | None, allowed: set[str], since: float) -> bool:
+        active = pilot.fights.get(npc)
         return check(name, bool(summary and summary.reason in allowed and summary.decisions >= 5
                                and summary.fallbacks == 0 and summary.release_confirmed
                                and summary.release_seconds is not None and summary.release_seconds <= 2),
-                     f"decisions={summary.decisions if summary else 0}, "
-                     f"fallback={summary.fallbacks if summary else 0}, "
-                     f"reason={summary.reason if summary else 'missing'}, "
+                     f"decisions={summary.decisions if summary else active._decisions if active else 0}, "
+                     f"fallback={summary.fallbacks if summary else active._fallbacks if active else 0}, "
+                     f"reason={summary.reason if summary else 'active' if active else 'missing'}, "
                      f"release_s={summary.release_seconds if summary else None}, "
                      f"transition_s={time.monotonic() - since:.3f}")
 
@@ -203,45 +204,77 @@ async def neural_talk_scenario(
                          f"state={state}, wait_s={time.monotonic() - fled_at:.3f}"):
                 return results
 
-            await link.debug("teleport", near=npc, distance=600)
-            roster_ready = await _until(lambda: npc in pilot.people
-                                       and pilot.people[npc].activity == "routine"
-                                       and pilot.people[npc].state == "ZS_STAND_ARMSCROSSED", 10)
-            mark = len(lines)
-            # Go through the hero's actual input and addressee selection again.
-            await link.debug("type", text="Бандит, я вернулся. Поговорим?")
-            answered = await _until(lambda: any(
-                "Опять ты" in dialogue._lines.get(line.line, ("", None))[0]
-                for line in lines[mark:]
-            ), 15)
-            if not check("return_to_talk", roster_ready and answered,
-                         f"lines={len(lines) - mark}, roster={pilot.people.get(npc)}"):
-                return results
-            await _until(lambda: not dialogue.speaking(npc), 12)
             previous = {id(summary) for summary in pilot.summaries}
-            # AR_NONE is a beating, rather than the first dialogue's lethal bandit
-            # intent. Native scripts handle the unconscious hero after P30 releases.
             await link.debug("player_hp", hp=1200)
-            await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
+            # Match neural's actual combat loadout once the conversation is over.
+            # This watch is still safe while the hero is far and the pilot is idle.
+            await _m5b_player_weapon(link, "melee")
+            await link.debug("teleport", near=npc, distance=600)
+
+            def attacking() -> bool:
+                entry = pilot.people.get(npc)
+                return bool(entry and entry.activity in {"fight", "body"} and entry.state == "ZS_ATTACK")
+
+            # GIL_BDT sees a returning enemy: another native attack is expected.
+            # Only ask for another conversation when that perception did not attack.
+            reattacked = await _until(attacking, 5)
+            branch = "native_reattack" if reattacked else "talk_then_attack"
+            if not reattacked:
+                await _m5b_player_weapon(link, "none")
+                mark = len(lines)
+                await link.debug("type", text="Бандит, я вернулся. Поговорим?")
+                answered = await _until(lambda: any(
+                    "Опять ты" in dialogue._lines.get(line.line, ("", None))[0]
+                    for line in lines[mark:]
+                ), 15)
+                if not check("return_to_talk", answered,
+                             f"branch={branch}, lines={len(lines) - mark}, roster={pilot.people.get(npc)}"):
+                    return results
+                await _until(lambda: not dialogue.speaking(npc), 12)
+                await _m5b_player_weapon(link, "melee")
+                await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
             ready = await _until(fight_ready, 25)
             second = pilot.fights.get(npc)
             second_lease = second.lease if second else None
             second_client = second.client if second else None
-            if not check("talk_to_second_fight", bool(
+            if not check("return_to_second_fight", bool(
                 ready and second_lease and second_lease != first_lease
                 and second_client is not first_client and resets.get(second_client)
-            ), f"lease={second_lease.control_generation if second_lease else 0}, "
+                and second._fallbacks == 0
+            ), f"branch={branch}, lease={second_lease.control_generation if second_lease else 0}, "
                f"previous_lease={first_lease.control_generation if first_lease else 0}, "
                f"decisions={second._decisions if second else 0}, "
+               f"fallback={second._fallbacks if second else 0}, "
                f"resets={len(resets.get(second_client, []))}, "
                f"independent_client={second_client is not first_client}"):
                 return results
+            last_row: dict[str, Any] = {}
+
+            def observe_knockout(packet: dict[str, Any]) -> None:
+                for row in packet["observations"]:
+                    if second_lease is not None and (
+                        row["entity_id"], row["session_epoch"], row["world_epoch"]
+                    ) == (second_lease.entity_id, second_lease.session_epoch, second_lease.world_epoch):
+                        own, target = row["self"], row["target"]
+                        last_row.update({
+                            "game_ms": row["t_game_ms"], "npc_pos": own["position_world_cm"],
+                            "hero_pos": target["position_world_cm"], "hero_hp": target["hp"],
+                            "hero_weapon": target["weapon_state"], "hero_down": target["down"],
+                            "distance_cm": target["fight_distance_cm"],
+                        })
+
             down_at = time.monotonic()
-            await link.debug("player_hp", hp=1)
-            await _until(lambda: summary_after(previous) is not None, 35)
+            link.raw_body_listeners.append(observe_knockout)
+            try:
+                await link.debug("player_hp", hp=1)
+                await _until(lambda: summary_after(previous) is not None, 35)
+            finally:
+                link.raw_body_listeners.remove(observe_knockout)
             summary = summary_after(previous)
             ended_at = time.monotonic()
-            if not ended("fight_to_knockout", summary, {"hero_down"}, down_at):
+            if not ended("fight_to_hero_down", summary, {"hero_down"}, down_at):
+                log.info("neural-talk knockout diagnostics: row=%s decisions=%s",
+                         last_row, tuple(second._policy_decisions) if second else ())
                 return results
             clean, detail = await idle_after(ended_at)
             if not check("knockout_release", clean, detail):
@@ -263,17 +296,21 @@ async def neural_talk_scenario(
                   f"closest_cm={nearest:.0f}, wait_s={time.monotonic() - ended_at:.3f}, "
                   f"roster={pilot.people.get(npc)}")
 
+            hero_status: list[int] = []
+
             async def standing() -> bool:
                 down, dead = await link.story_eval(npc, [
-                    ["call", "NPC_ISUNCONSCIOUS", ["inst", "HERO"]],
+                    ["call", "NPC_ISINSTATE", ["inst", "HERO"], ["sym", "ZS_UNCONSCIOUS"]],
                     ["call", "NPC_ISDEAD", ["inst", "HERO"]],
                 ])
+                hero_status[:] = [down, dead]
                 return not down and not dead
 
             up = await _until_async(standing, bool, 35)
             snap = await link.snapshot(npc, fresh=True)
             check("hero_gets_up", up and snap.player is not None and bool(snap.player.hp),
                   f"standing={int(up)}, hp={snap.player.hp if snap.player else None}, "
+                  f"unconscious={hero_status[0]}, dead={hero_status[1]}, "
                   f"wait_s={time.monotonic() - ended_at:.3f}")
     finally:
         dialogue.llm = original_llm

@@ -19,7 +19,7 @@
 #   neural-group: three one-handed bandits fight the hero and his swordsman companion under P30 at once;
 #       each gets >=10 decisions, no fallback, release <=2 s, service p95 <=20 ms; requires GOTHIC_BODY_URL
 #   neural-talk: a one-handed bandit talks, attacks under P30, loses the fleeing hero, returns to his routine,
-#       talks again, starts a fresh fight and knocks the hero out; LLM=fake, requires GOTHIC_BODY_URL
+#       reattacks or talks again, fights with a fresh lease and knocks the hero out; LLM=fake, requires GOTHIC_BODY_URL
 #   neural-load: load an initial save while three bandits hold P30 leases; all fights end with loading,
 #       release their leases and watch, then one bandit fights under P30 again; requires GOTHIC_BODY_URL
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
