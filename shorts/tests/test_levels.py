@@ -243,6 +243,14 @@ def test_balance_rejects_an_ending_louder_than_voice_minus_two(balanced_tracks):
     assert _rows(report)["ending"]["ok"] is False
 
 
+def test_ending_keeps_its_calibration_target_and_publication_ceiling():
+    report = levels.check_balance(-14, None, None, None, None, -17)
+    assert report["ok"] is False
+    assert _rows(report)["ending"]["ok"] is False
+    assert _rows(report)["ending"]["target_lufs"] == -19
+    assert levels.ending_correction(-14, -17.5) == pytest.approx(-3)
+
+
 def test_unvoiced_balance_only_reports_levels(balanced_tracks):
     report = levels.check_balance(**{**balanced_tracks, "speech_lufs": None})
     assert report["ok"] is True
@@ -1182,13 +1190,17 @@ def test_mastering_checks_all_decoded_stems_of_a_balanced_music_mix(tmp_path, co
     assert out.stat().st_size > 0
 
 
+@pytest.mark.parametrize("unsafe_limit", [True, False], ids=["earlier-limiter", "current-limiter"])
 def test_mastering_rejects_a_true_peak_hidden_by_the_rounded_summary(
-    tmp_path, comparison_cut, monkeypatch,
+    tmp_path, comparison_cut, monkeypatch, unsafe_limit,
 ):
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg is required for synthetic mastering")
-    # built to overshoot -1 dBTP through the earlier, higher limiter; the gate must still catch it
-    monkeypatch.setattr(levels, "PEAK_LIMIT", 0.79)
+    # The earlier limiter overshoots -1 dBTP; the current default must keep this source publishable.
+    if unsafe_limit:
+        monkeypatch.setattr(levels, "PEAK_LIMIT", 0.79)
+    else:
+        assert levels.PEAK_LIMIT == 0.71
     voice, joined, out = (tmp_path / name for name in ("voice.wav", "joined.mkv", "short-ru.mp4"))
     peaky_voice = (
         "aevalsrc='(0.03+if(lt(mod(t,0.1),0.002),"
@@ -1224,19 +1236,29 @@ def test_mastering_rejects_a_true_peak_hidden_by_the_rounded_summary(
         return result
 
     monkeypatch.setattr(levels, "meter_file", meter)
-    with pytest.raises(ValueError, match="mastering check failed"):
+    if unsafe_limit:
+        with pytest.raises(ValueError, match="mastering check failed"):
+            comparison_cut.master(audio.inputs, audio.mix(), out, 3,
+                                  voiced=True, audio=audio, report=report)
+    else:
         comparison_cut.master(audio.inputs, audio.mix(), out, 3,
                               voiced=True, audio=audio, report=report)
     rows = _rows(report)
-    assert candidate_peak["rounded"] == levels.TRUE_PEAK_DBTP
-    assert candidate_peak["detailed"] > levels.TRUE_PEAK_DBTP
+    if unsafe_limit:
+        assert candidate_peak["rounded"] == levels.TRUE_PEAK_DBTP
+        assert candidate_peak["detailed"] > levels.TRUE_PEAK_DBTP
+    else:
+        assert candidate_peak["detailed"] <= levels.TRUE_PEAK_DBTP
+        assert rows["true_peak"]["measured_dbtp"] <= levels.TRUE_PEAK_DBTP
+        assert out.stat().st_size > 0
     # The old linear metadata itself rounds to 0.001, about 0.005 dB here.
     assert rows["true_peak"]["measured_dbtp"] == pytest.approx(candidate_peak["detailed"], abs=0.005)
-    assert rows["true_peak"]["ok"] is False
+    assert rows["true_peak"]["ok"] is (not unsafe_limit)
     assert rows["voice_mastered"]["ok"] is True
+    assert rows["clicks"]["ok"] is True
     assert rows["clicks"]["count"] == 0
-    assert report["ok"] is False
-    assert not out.exists()
+    assert report["ok"] is (not unsafe_limit)
+    assert out.exists() is (not unsafe_limit)
 
 
 def test_decoded_peak_catches_a_peak_in_the_last_eighty_milliseconds(tmp_path):
