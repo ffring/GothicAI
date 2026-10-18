@@ -942,21 +942,29 @@ class BodyPilot:
             self.link.body_leases.pop(lease.entity_id)
         return True
 
+    def _latest_terminal(self, lease: BodyLease) -> str | None:
+        latest = self.link.body_latest.get(lease.entity_id)
+        if latest is not None and latest.observation_seq > lease.acquired_observation_seq and (
+            latest.session_epoch, latest.world_epoch, latest.control_generation
+        ) in {
+            (lease.session_epoch, lease.world_epoch, 0),
+            (lease.session_epoch, lease.world_epoch, lease.control_generation),
+        }:
+            terminal = self._terminal(latest.model_dump(mode="json"))
+            if terminal in {"target_changed", "hero_down", "target_down", "npc_down"}:
+                return terminal
+        return None
+
     async def _finish(self, reason: str) -> None:
         npc, client = self.npc, self.client
         if npc is None and self.lease is None and client is None:
             return
-        if reason == "native_restored" and self.lease is not None:
-            latest = self.link.body_latest.get(self.lease.entity_id)
-            if latest is not None and (
-                latest.session_epoch, latest.world_epoch, latest.control_generation
-            ) in {
-                (self.lease.session_epoch, self.lease.world_epoch, 0),
-                (self.lease.session_epoch, self.lease.world_epoch, self.lease.control_generation),
-            }:
-                terminal = self._terminal(latest.model_dump(mode="json"))
-                if terminal in {"target_changed", "hero_down", "target_down", "npc_down"}:
-                    reason = terminal
+        observed_terminal = (
+            self._latest_terminal(self.lease)
+            if reason in {"native_restored", "lease_lost"} and self.lease is not None else None
+        )
+        if reason == "native_restored" and observed_terminal is not None:
+            reason = observed_terminal
         # Native setTarget defers its mutation until after native_restored, so
         # no owned observation of the new target is guaranteed to reach us.
         if (
@@ -1000,7 +1008,7 @@ class BodyPilot:
                     if self.link.closed.is_set():
                         break
                     try:
-                        await self.link.body_events(timeout=BRIDGE_TIMEOUT)
+                        self.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
                     except BRIDGE_ERRORS:
                         pass
                     if self.link.body_leases.get(lease.entity_id) != lease:
@@ -1012,6 +1020,25 @@ class BodyPilot:
                     except BRIDGE_ERRORS as error:
                         unconfirmed = f"body_control_status:{error}"
                     await asyncio.sleep(0.025)
+                if (
+                    reason in {"lease_lost", "native_restored"} and lease is not None
+                    and self._native_release_reason is not None and not self.link.closed.is_set()
+                    and self.link.body_leases.get(lease.entity_id) != lease
+                ):
+                    # A heartbeat can discover native ownership before the
+                    # destructive event poll receives its matching restoration.
+                    observed_terminal = observed_terminal or self._latest_terminal(lease)
+                    if observed_terminal is not None:
+                        reason = observed_terminal
+                    elif (
+                        reason == "lease_lost"
+                        and self._native_release_reason in {"native_script_takeover", "target_changed_or_lost"}
+                        and npc is not None and self._allowed(npc) and not self._closing
+                    ):
+                        with contextlib.suppress(*BRIDGE_ERRORS):
+                            target = await self._live_target()
+                            if target is not None and target[2] != self._target_npc:
+                                reason = "target_changed"
         except TimeoutError:
             reason = "finish_deadline"
             # Make a final authoritative check before discarding local ownership.
@@ -1048,6 +1075,13 @@ class BodyPilot:
                     with contextlib.suppress(OSError, TimeoutError):
                         async with asyncio.timeout(SERVICE_TIMEOUT):
                             await client.close()
+            if (
+                reason in {"lease_lost", "native_restored"} and release_confirmed
+                and self._native_release_reason is not None
+            ):
+                observed_terminal = observed_terminal or self._latest_terminal(lease)
+                if observed_terminal is not None:
+                    reason = observed_terminal
             if self._watched and not self.link.body_leases:
                 with contextlib.suppress(*BRIDGE_ERRORS):
                     async with asyncio.timeout(BRIDGE_TIMEOUT):

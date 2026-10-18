@@ -13,7 +13,7 @@ from websockets.exceptions import ConnectionClosedError
 
 from gothic_ai import bodypilot
 from gothic_ai.bodypilot import BodyPilot
-from gothic_ai.game import GameLink
+from gothic_ai.game import GameError, GameLink
 from gothic_ai.protocol import (
     Attached,
     Hello,
@@ -524,6 +524,38 @@ class Rig:
         await eventually(lambda: len(self.bridge.commands("body_acquire")) == count)
         await eventually(lambda: len(self.policy.commands("reset")) == count)
         assert self.pilot.lease.target_entity_id == target_entity
+
+    async def lose_heartbeat_before_native_event(self, *, target_entity, evidence="matching", down=False):
+        original_heartbeat = self.link.body_heartbeat
+        heartbeat_errors = []
+
+        async def record_heartbeat(*args, **kwargs):
+            try:
+                return await original_heartbeat(*args, **kwargs)
+            except GameError as error:
+                heartbeat_errors.append(str(error))
+                raise
+
+        self.link.body_heartbeat = record_heartbeat
+        # Keep the ordinary event poll out of this handoff. The next heartbeat
+        # discovers native ownership; cleanup must then consume its ownership event.
+        self.pilot._last_events_poll = float("inf")
+        first_command = len(self.bridge.sent)
+        self.bridge.restore_native(release_reason="target_changed_or_lost")
+        if evidence == "missing":
+            self.bridge.control_events.clear()
+        elif evidence == "foreign":
+            self.bridge.control_events[0]["control_generation"] += 1
+        row = fighter(4, target_entity=target_entity, periodic=False, event_only=True)
+        row["target"]["down"] = down
+        self.bridge.emit(row)
+        await eventually(lambda: self.pilot.last_summary is not None)
+        assert heartbeat_errors == ["body command rejected: not_owned"]
+        commands = [command["type"] for command in self.bridge.sent[first_command:]]
+        assert (
+            commands.index("body_heartbeat") < commands.index("body_release") < commands.index("body_events")
+        )
+        return self.pilot.last_summary
 
 
 @asynccontextmanager
@@ -1393,6 +1425,59 @@ async def test_polled_native_release_keeps_down_reason_from_passive_target_obser
         assert summary.reason == ("target_down" if companion else "hero_down")
         assert summary.release_confirmed and summary.watch_removed
         assert len(rig.policy.commands("reset")) == 1
+
+
+@pytest.mark.parametrize("companion", [False, True])
+@pytest.mark.parametrize("evidence", ["matching", "missing", "foreign", "alive"])
+async def test_heartbeat_native_handoff_requires_matching_evidence_for_down_reason(companion, evidence):
+    async with running(companion=lambda npc: companion and npc == "CAVALORN") as rig:
+        rig.bridge.target_is_hero = not companion
+        rig.bridge.target_npc = "CAVALORN" if companion else None
+        target_entity = 3 if companion else 2
+        await rig.active(target_entity=target_entity, extra=[companion_entry()] if companion else [])
+        original_call = rig.pilot.client.call
+
+        async def close_after_target_cleared(command, **fields):
+            if command == "end_episode":
+                # Native combat clears the fallen target while policy cleanup awaits.
+                # That later snapshot must not erase the scoped down evidence.
+                rig.bridge.emit(unseen_fighter(
+                    5, present=False, target_entity=0, control_generation=0,
+                    periodic=False, event_only=True,
+                ))
+            return await original_call(command, **fields)
+
+        rig.pilot.client.call = close_after_target_cleared
+        summary = await rig.lose_heartbeat_before_native_event(
+            target_entity=target_entity, evidence=evidence, down=evidence != "alive",
+        )
+        expected = (
+            ("target_down" if companion else "hero_down") if evidence == "matching" else "lease_lost"
+        )
+        assert summary.reason == expected
+        assert summary.release_confirmed and summary.watch_removed
+        assert summary.native_release_reason == (
+            "target_changed_or_lost" if evidence in {"matching", "alive"} else None
+        )
+        assert len(rig.policy.commands("reset")) == 1
+
+
+async def test_heartbeat_native_target_change_reacquires_and_resets_after_cleanup_event():
+    async with running(companion=lambda npc: npc == "CAVALORN") as rig:
+        rig.bridge.target_is_hero = False
+        rig.bridge.target_npc = "CAVALORN"
+        await rig.active(target_entity=3, extra=[companion_entry()])
+        rig.bridge.target_is_hero = True
+        rig.bridge.target_npc = None
+        summary = await rig.lose_heartbeat_before_native_event(target_entity=3)
+        assert summary.reason == "target_changed"
+        assert summary.native_release_reason == "target_changed_or_lost"
+        assert summary.target_kind == "companion"
+        assert summary.release_confirmed and summary.watch_removed
+        rig.clock.now = 12.0
+        await rig.reacquire(5, target_entity=2, count=2)
+        assert [command["target_entity_id"] for command in rig.bridge.commands("body_acquire")] == [3, 2]
+        assert len(rig.policy.commands("reset")) == 2
 
 
 async def test_target_change_reacquisition_waits_two_seconds_for_each_npc():
