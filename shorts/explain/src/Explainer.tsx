@@ -12,7 +12,7 @@ import {
   useVideoConfig,
 } from 'remotion';
 import './fonts';
-import {BrandSeal, BrandSting, STING_FRAMES} from './Brand';
+import {BrandSting, STING_FRAMES} from './Brand';
 import {Captions} from './parts/Captions';
 import {BarsView, DotsView, FormulaView, StatsView} from './parts/Cards';
 import {DiceChart} from './parts/DiceChart';
@@ -190,7 +190,6 @@ export const Explainer: React.FC<Plan> = (plan) => {
           ))}
         <Captions lines={plan.lines} brand={plan.brand} />
         <Hook text={plan.hook.text} until={plan.hook.until} />
-        {plan.brand && <BrandSeal />}
       </Sequence>
       {plan.brand && (
         <Sequence from={contentFrames} durationInFrames={STING_FRAMES} name="brand sting">
