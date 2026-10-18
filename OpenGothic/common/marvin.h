@@ -63,6 +63,7 @@ class Marvin {
       C_PlayAni,
 
       // opengothic specific
+      C_Census,
       C_ToggleGI,
       C_ToggleVsm,
       C_ToggleRtsm,
