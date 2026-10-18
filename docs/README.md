@@ -168,7 +168,7 @@
 
 ## Остальные каталоги
 
-- **`shorts/`** — шортсы из игры с живыми NPC: съёмка, монтаж, объясняющие ролики, сравнения «до и после», бренд ([`shorts/README.md`](../shorts/README.md)).
+- **`shorts/`** — шортсы из игры с живыми NPC: съёмка, монтаж, объясняющие ролики, сравнения «до и после», бренд ([`shorts/README.md`](../shorts/README.md)). Сравнения собирает `gothic_shorts.compare`, точка входа — `shorts/compare/cut.py`; `gothic-shorts dub` распознаёт их планы и берёт папку дублей из `takes` или `--takes DIR`.
 - **`site/`** — сайт и дневник на GitHub Pages ([`site/README.md`](../site/README.md)).
 - **`evals/`** — эталоны: `npc-body/` (бой), `npc-decisions/` (выбор модели решений).
 - **`reports/`** — итоговые исследования и отчёты прогонов.

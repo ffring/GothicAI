@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import shutil
 import subprocess
@@ -10,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from PIL import Image
 
-from gothic_shorts import bed, cli, cut, levels
+from gothic_shorts import bed, cli, compare, cut, levels
 from gothic_shorts.shot import Shot
 from gothic_shorts.timeline import Timeline, build, read_events
 
@@ -176,11 +175,6 @@ def test_ai_filters_only_overlay_text_and_append_the_ending(tmp_path, monkeypatc
 
 @pytest.mark.parametrize("brand", [True, False])
 def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(tmp_path, monkeypatch, brand):
-    spec = importlib.util.spec_from_file_location(
-        "comparison_cut", Path(__file__).resolve().parents[1] / "compare/cut.py",
-    )
-    compare = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(compare)
     plan = {
         "brand": brand, "labels": {"ru": ["До", "После"]},
         "hook": {"ru": "Проверка"}, "hook_s": 2,
