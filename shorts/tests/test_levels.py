@@ -162,12 +162,14 @@ def test_duck_ramps_smoothly_before_and_after_the_word_window(tone_inputs):
 
 @pytest.fixture(scope="module")
 def balanced_tracks(tone_inputs):
+    music_gain = min(-levels.MUSIC_BELOW_VOICE_LU,
+                     -levels.GAME_PAUSE_BELOW_VOICE_LU - levels.MUSIC_BELOW_GAME_LU)
     return {
         "speech_lufs": _tone_level(tone_inputs),
-        "music_pause_lufs": _tone_level(tone_inputs, -14),
-        "music_speech_lufs": _tone_level(tone_inputs, -20),
-        "game_speech_lufs": _tone_level(tone_inputs, -6),
-        "game_pause_lufs": _tone_level(tone_inputs, -3),
+        "music_pause_lufs": _tone_level(tone_inputs, music_gain),
+        "music_speech_lufs": _tone_level(tone_inputs, music_gain - levels.MUSIC_DUCK_DB),
+        "game_speech_lufs": _tone_level(tone_inputs, -levels.GAME_BELOW_VOICE_LU),
+        "game_pause_lufs": _tone_level(tone_inputs, -levels.GAME_PAUSE_BELOW_VOICE_LU),
         "ending_lufs": _tone_level(tone_inputs, -levels.ENDING_BELOW_VOICE_LU),
     }
 
@@ -180,16 +182,28 @@ def test_balance_accepts_calibrated_synthetic_tracks(balanced_tracks):
         "voice", "music_pause", "music_speech", "game_speech", "game_pause", "ending",
         "game_below_voice", "music_below_game",
     }
-    assert rows["music_pause"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 14)
-    assert rows["music_speech"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 20)
-    assert rows["game_speech"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 6)
-    assert rows["game_pause"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 3)
+    music_target = min(balanced_tracks["speech_lufs"] - levels.MUSIC_BELOW_VOICE_LU,
+                       balanced_tracks["game_pause_lufs"] - levels.MUSIC_BELOW_GAME_LU)
+    assert rows["music_pause"]["target_lufs"] == pytest.approx(music_target)
+    assert rows["music_speech"]["target_lufs"] == pytest.approx(music_target - levels.MUSIC_DUCK_DB)
+    assert rows["game_speech"]["target_lufs"] == pytest.approx(
+        balanced_tracks["speech_lufs"] - levels.GAME_BELOW_VOICE_LU)
+    assert rows["game_pause"]["target_lufs"] == pytest.approx(
+        balanced_tracks["speech_lufs"] - levels.GAME_PAUSE_BELOW_VOICE_LU)
     assert rows["ending"]["target_lufs"] == pytest.approx(
         balanced_tracks["speech_lufs"] - levels.ENDING_CHECK_BELOW_VOICE_LU)
-    assert rows["game_below_voice"]["target_lufs"] == pytest.approx(balanced_tracks["speech_lufs"] - 3)
+    assert rows["game_below_voice"]["target_lufs"] == pytest.approx(
+        balanced_tracks["speech_lufs"] - levels.GAME_PAUSE_BELOW_VOICE_LU)
     assert rows["music_below_game"]["target_lufs"] == pytest.approx(balanced_tracks["game_pause_lufs"] - 3)
     assert all({"id", "measured_lufs", "target_lufs", "ok", "target"} <= row.keys()
                for row in report["rows"])
+    for key, below in (("game_speech", levels.GAME_BELOW_VOICE_LU),
+                       ("game_pause", levels.GAME_PAUSE_BELOW_VOICE_LU),
+                       ("ending", levels.ENDING_CHECK_BELOW_VOICE_LU)):
+        assert rows[key]["target"] == f"≤ S - {below:g} LU"
+    assert rows["game_below_voice"]["target"] == (
+        f"≤ voice - {levels.GAME_PAUSE_BELOW_VOICE_LU:g} LU"
+    )
 
 
 def test_balance_rejects_music_that_is_too_loud(tone_inputs, balanced_tracks):
@@ -210,17 +224,21 @@ def test_balance_rejects_music_without_the_full_speech_duck(tone_inputs, balance
     assert _rows(report)["music_speech"]["ok"] is False
 
 
-def test_balance_rejects_game_audio_that_is_too_loud_during_speech(tone_inputs, balanced_tracks):
+def test_balance_rejects_game_audio_that_is_too_loud_during_speech(balanced_tracks):
+    excess = min(0.1, levels.LEVEL_TOLERANCE_LU / 2)
     report = levels.check_balance(**{
-        **balanced_tracks, "game_speech_lufs": _tone_level(tone_inputs, -2),
+        **balanced_tracks,
+        "game_speech_lufs": balanced_tracks["speech_lufs"] - levels.GAME_BELOW_VOICE_LU + excess,
     })
     assert report["ok"] is False
     assert _rows(report)["game_speech"]["ok"] is False
 
 
-def test_balance_rejects_game_audio_that_is_too_loud_in_pauses(tone_inputs, balanced_tracks):
+def test_balance_rejects_game_audio_that_is_too_loud_in_pauses(balanced_tracks):
+    excess = min(0.1, levels.LEVEL_TOLERANCE_LU / 2)
     report = levels.check_balance(**{
-        **balanced_tracks, "game_pause_lufs": _tone_level(tone_inputs, 4),
+        **balanced_tracks,
+        "game_pause_lufs": balanced_tracks["speech_lufs"] - levels.GAME_PAUSE_BELOW_VOICE_LU + excess,
     })
     assert report["ok"] is False
     assert _rows(report)["game_pause"]["ok"] is False
@@ -235,20 +253,24 @@ def test_balance_rejects_music_above_the_game_ordering_limit(balanced_tracks):
     assert _rows(report)["music_below_game"]["ok"] is False
 
 
-def test_balance_rejects_an_ending_louder_than_voice_minus_two(balanced_tracks):
+def test_balance_rejects_an_ending_above_the_publication_ceiling(balanced_tracks):
     report = levels.check_balance(**{
-        **balanced_tracks, "ending_lufs": balanced_tracks["speech_lufs"] - 1,
+        **balanced_tracks,
+        "ending_lufs": balanced_tracks["speech_lufs"] - levels.ENDING_CHECK_BELOW_VOICE_LU + 1,
     })
     assert report["ok"] is False
     assert _rows(report)["ending"]["ok"] is False
 
 
 def test_ending_keeps_its_calibration_target_and_publication_ceiling():
-    report = levels.check_balance(-14, None, None, None, None, -17)
+    voice = -14
+    ceiling = voice - levels.ENDING_CHECK_BELOW_VOICE_LU
+    calibration_target = voice - levels.ENDING_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU
+    report = levels.check_balance(voice, None, None, None, None, ceiling + 1)
     assert report["ok"] is False
     assert _rows(report)["ending"]["ok"] is False
-    assert _rows(report)["ending"]["target_lufs"] == -19
-    assert levels.ending_correction(-14, -17.5) == pytest.approx(-3)
+    assert _rows(report)["ending"]["target_lufs"] == ceiling
+    assert levels.ending_correction(voice, calibration_target + 1) == pytest.approx(-1)
 
 
 def test_unvoiced_balance_only_reports_levels(balanced_tracks):
@@ -340,10 +362,16 @@ def test_calibration_uses_the_render_stems_and_caps_loud_game_pauses(tmp_path, t
     assert calibrated.measure("music", report["music_pause_windows"]) == pytest.approx(
         calibrated.measure("voice") - 14, abs=0.5,
     )
-    # Half a LU of calibration headroom survives a small decoded-level shift.
+    # Calibration headroom survives a small decoded-level shift.
     assert report["game_gain_db"] < 0
-    assert calibrated.measure("game", pauses) == pytest.approx(calibrated.measure("voice") - 3.5, abs=0.2)
-    assert calibrated.measure("game", speech) <= calibrated.measure("voice") - 6.5
+    pause_level = calibrated.measure("game", pauses)
+    pause_target = calibrated.measure("voice") - levels.GAME_PAUSE_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU
+    assert pause_level <= pause_target
+    # R128 rounds to tenths; ignore float error at the tolerance boundary.
+    assert pause_level == pytest.approx(pause_target, abs=0.2 + 1e-6)
+    assert calibrated.measure("game", speech) <= (
+        calibrated.measure("voice") - levels.GAME_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU
+    )
 
     # The plan's music volume has no effect on a voiced graph; only calibrated dB do.
     other_volume = levels.audio_graph(
@@ -357,7 +385,8 @@ def test_calibration_uses_the_render_stems_and_caps_loud_game_pauses(tmp_path, t
 
 def test_calibration_keeps_game_pauses_that_are_quiet_enough(tmp_path, tone_inputs):
     paths = {}
-    for track, gain, duration in [("game", -16, 12), ("voice", -12, 4)]:
+    game_gain = -12 - levels.GAME_PAUSE_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU - 1
+    for track, gain, duration in [("game", game_gain, 12), ("voice", -12, 4)]:
         paths[track] = tmp_path / f"{track}.wav"
         subprocess.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", *tone_inputs, "-t", str(duration),
@@ -402,7 +431,9 @@ def test_calibration_lowers_music_below_quiet_effects(tmp_path, tone_inputs, gam
     assert _rows(report)["music_below_game"]["ok"] is True
     if game_gain <= -45:
         # A measurement-only boost clears the gate even if the master gain cannot.
-        assert calibrated.measure("music", report["music_speech_windows"]) == pytest.approx(music_speech, abs=0.2)
+        assert calibrated.measure("music", report["music_speech_windows"]) == pytest.approx(
+            music_speech, abs=0.2,
+        )
         assert music_speech < -70
         if game_gain <= -65:
             assert music_speech + meter_gain < -70
@@ -428,18 +459,20 @@ def test_calibration_leaves_headroom_in_effects_and_ending(tmp_path, tone_inputs
     s = calibrated.measure("voice")
     assert report["ok"] is True
     assert report["ending_gain_db"] < 0
-    assert levels.CEILING_HEADROOM_LU == 0.5
     assert ending == pytest.approx(s - (levels.ENDING_BELOW_VOICE_LU + levels.CEILING_HEADROOM_LU), abs=0.2)
     assert ending <= s - levels.ENDING_CHECK_BELOW_VOICE_LU
     assert _rows(report)["ending"]["ok"] is True
     rows = _rows(report)
-    assert rows["game_pause"]["measured_lufs"] == pytest.approx(s - 3.5, abs=0.2)
-    assert rows["game_speech"]["measured_lufs"] == pytest.approx(s - 6.5, abs=0.2)
-    shifted = levels.check_balance(s, None, None, rows["game_speech"]["measured_lufs"] + 0.3,
-                                   rows["game_pause"]["measured_lufs"] + 0.3, ending + 0.3)
+    assert rows["game_pause"]["measured_lufs"] == pytest.approx(
+        s - levels.GAME_PAUSE_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU, abs=0.2)
+    assert rows["game_speech"]["measured_lufs"] == pytest.approx(
+        s - levels.GAME_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU, abs=0.2)
+    shift = levels.CEILING_HEADROOM_LU * 0.6
+    shifted = levels.check_balance(s, None, None, rows["game_speech"]["measured_lufs"] + shift,
+                                   rows["game_pause"]["measured_lufs"] + shift, ending + shift)
     assert shifted["ok"] is True
-    assert _rows(shifted)["game_pause"]["target_lufs"] == s - 3
-    assert _rows(shifted)["game_speech"]["target_lufs"] == s - 6
+    assert _rows(shifted)["game_pause"]["target_lufs"] == s - levels.GAME_PAUSE_BELOW_VOICE_LU
+    assert _rows(shifted)["game_speech"]["target_lufs"] == s - levels.GAME_BELOW_VOICE_LU
     assert _rows(shifted)["ending"]["target_lufs"] == s - levels.ENDING_CHECK_BELOW_VOICE_LU
 
 
@@ -466,7 +499,7 @@ def test_calibration_boosts_a_quiet_ending_without_a_body_surge(tmp_path):
     # the ending tone is 40 dB under the body; it is lifted to its place under the voice
     assert report["ending_gain_db"] > 27 - levels.ENDING_BELOW_VOICE_LU
     assert report["ok"] is True
-    assert rows["game_pause"]["measured_lufs"] <= s - 3
+    assert rows["game_pause"]["measured_lufs"] <= s - levels.GAME_PAUSE_BELOW_VOICE_LU
     assert rows["ending"]["measured_lufs"] == pytest.approx(
         s - (levels.ENDING_BELOW_VOICE_LU + levels.CEILING_HEADROOM_LU), abs=0.2)
     # No sample in the body's fade may exceed the same body with a constant gain.
@@ -537,18 +570,23 @@ def _mock_mastered_balance(monkeypatch, report):
     """Keep loop/peak/click unit tests independent of synthetic stem decoding."""
     report.update(speech_windows=[(4, 8)], pause_windows=[(0, 4), (8, 12)], ending_windows=[])
     monkeypatch.setattr(levels, "check_mastered_balance", lambda _stems, voice, *_windows:
-                        levels.check_balance(voice, None, None, voice - 6.5, voice - 3.5))
+                        levels.check_balance(
+                            voice, None, None,
+                            voice - levels.GAME_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU,
+                            voice - levels.GAME_PAUSE_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU))
 
 
-@pytest.mark.parametrize("game_speech,game_pause,body_change,extra_duck", [
-    (-20, -16, -1.5, 0),  # Lowering the whole body also resolves the speech excess.
-    (-19, -18, 0, 1.5),  # Quiet pauses need no attenuation; duck only the speech.
-    (-18, -16, -1.5, 1),
-    (-21, -18, 0, 0),  # Already quiet effects are never raised toward the ceiling.
+@pytest.mark.parametrize("speech_excess,pause_excess,body_change,extra_duck", [
+    (0.5, 1.5, -1.5, 0),  # Lowering the whole body also resolves the speech excess.
+    (1.5, -0.5, 0, 1.5),  # Quiet pauses need no attenuation; duck only the speech.
+    (2.5, 1.5, -1.5, 1),
+    (-0.5, -0.5, 0, 0),  # Already quiet effects are never raised toward the ceiling.
 ])
 def test_balance_correction_attenuates_effects_without_double_ducking(
-    game_speech, game_pause, body_change, extra_duck,
+    speech_excess, pause_excess, body_change, extra_duck,
 ):
+    game_speech = -14 - levels.GAME_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU + speech_excess
+    game_pause = -14 - levels.GAME_PAUSE_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU + pause_excess
     report = levels.check_balance(-14, None, None, game_speech, game_pause)
     correction = levels.balance_correction(report)
     assert correction.get("game_gain_db", 0) == pytest.approx(body_change)
@@ -676,7 +714,10 @@ def test_comparison_checks_and_writes_levels_before_publication(
     out = tmp_path / "render" / "short-ru.mp4"
     out.parent.mkdir()
     out.write_bytes(b"stale short must not survive a failed balance check")
-    report = levels.check_balance(-22, -36, -42, -28 if balanced else -20, -25)
+    game_speech = -22 - levels.GAME_BELOW_VOICE_LU + (0 if balanced else 1)
+    report = levels.check_balance(
+        -22, -36, -42, game_speech, -22 - levels.GAME_PAUSE_BELOW_VOICE_LU,
+    )
     audio = SimpleNamespace(inputs=["-i", "game.mp4"], mix=lambda: "[0:a]anull")
     calibrate = Mock(return_value=(audio, report))
     master = Mock(side_effect=lambda _inputs, _mix, path, _length, **_kwargs: path.touch())
@@ -715,7 +756,10 @@ def test_comparison_checks_and_writes_levels_before_publication(
 def test_voiced_master_checks_decoded_audio_before_publication(
     tmp_path, monkeypatch, comparison_cut, voice_lufs, peak, click_times, failed_row,
 ):
-    report = levels.check_balance(-28, None, None, -34, -31)
+    report = levels.check_balance(
+        -28, None, None, -28 - levels.GAME_BELOW_VOICE_LU,
+        -28 - levels.GAME_PAUSE_BELOW_VOICE_LU,
+    )
     report["speech_lufs"] = -28
     _mock_mastered_balance(monkeypatch, report)
     audio = levels.AudioGraph(["-i", "joined.mp4"], ["[0:a]asplit=2[g][vo]"],
@@ -773,7 +817,10 @@ def test_voiced_master_checks_decoded_audio_before_publication(
 def test_master_corrections_change_only_common_gain_and_stop_after_two(
     tmp_path, monkeypatch, comparison_cut, readings, corrections, passes_ok,
 ):
-    report = levels.check_balance(-28, None, None, -34, -31)
+    report = levels.check_balance(
+        -28, None, None, -28 - levels.GAME_BELOW_VOICE_LU,
+        -28 - levels.GAME_PAUSE_BELOW_VOICE_LU,
+    )
     report["speech_lufs"] = -28
     _mock_mastered_balance(monkeypatch, report)
     audio = levels.AudioGraph(["-i", "joined.mp4"], ["[0:a]asplit=2[g][vo]"],
@@ -819,13 +866,18 @@ def test_master_corrections_change_only_common_gain_and_stop_after_two(
 def test_mastering_rejects_effects_still_above_the_caps_after_two_corrections(
     tmp_path, monkeypatch, comparison_cut,
 ):
-    report = levels.check_balance(-28, None, None, -34.5, -31.5)
+    report = levels.check_balance(
+        -28, None, None, -28 - levels.GAME_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU,
+        -28 - levels.GAME_PAUSE_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU,
+    )
     report["speech_lufs"] = -28
     _mock_mastered_balance(monkeypatch, report)
     # Simulate an unresponsive source/render: attenuation fails to change the
     # decoded levels. The bound must preserve the normal publication failure.
     balance = Mock(side_effect=lambda _stems, voice, *_windows:
-                   levels.check_balance(voice, None, None, voice - 4, voice - 2))
+                   levels.check_balance(
+                       voice, None, None, voice - levels.GAME_BELOW_VOICE_LU + 1,
+                       voice - levels.GAME_PAUSE_BELOW_VOICE_LU + 1))
     monkeypatch.setattr(levels, "check_mastered_balance", balance)
     audio = levels.AudioGraph(["-i", "joined.mp4"], ["[0:a]asplit=2[g][vo]"],
                               {"game": "g", "voice": "vo"})
@@ -868,7 +920,10 @@ def test_mastering_failure_writes_report_and_click_times(
     out = tmp_path / "render" / "short-ru.mp4"
     out.parent.mkdir()
     out.touch()
-    report = levels.check_balance(-22, None, None, -28, -25)
+    report = levels.check_balance(
+        -22, None, None, -22 - levels.GAME_BELOW_VOICE_LU,
+        -22 - levels.GAME_PAUSE_BELOW_VOICE_LU,
+    )
     report["speech_lufs"] = -22
     _mock_mastered_balance(monkeypatch, report)
     audio = levels.AudioGraph(["-i", "game.mp4"], ["[0:a]asplit=2[g][vo]"],
@@ -952,8 +1007,12 @@ def test_voice_correction_uses_the_mix_limiter_and_matches_the_published_channel
          "aevalsrc='0.03*sin(2*PI*1000*t)|0':s=48000:d=6:c=stereo",
          "-c:a", "pcm_s24le", str(voice)], check=True, capture_output=True,
     )
-    impulses = ("aevalsrc='0|if(lt(mod(t,0.1),0.002),"
-                "0.2*sin(PI*mod(t,0.1)/0.002)^2*sin(2*PI*1000*mod(t,0.1)),0)':s=48000:d=6:c=stereo")
+    # Keep impulse energy proportional to the effects target so calibrated
+    # peaks still exercise the mix limiter as that target changes.
+    impulse_width = 0.008 * 10 ** (-levels.GAME_BELOW_VOICE_LU / 10)
+    impulses = (f"aevalsrc='0|if(lt(mod(t,0.1),{impulse_width}),"
+                f"0.2*sin(PI*mod(t,0.1)/{impulse_width})^2*sin(2*PI*1000*mod(t,0.1)),0)'"
+                ":s=48000:d=6:c=stereo")
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
          "color=c=black:s=16x16:r=1:d=6", "-f", "lavfi", "-i", impulses,
@@ -1125,11 +1184,15 @@ def test_mastering_recalibrates_decoded_effects_after_peaky_voice_corrections(
     assert measured_voice[-1] == pytest.approx(-14, abs=levels.VOICE_TOLERANCE_LU)
     assert rows["voice_mastered"]["measured_lufs"] == measured_voice[-1]
     assert rows["voice_mastered"]["ok"] is True
-    for key, below in (("game_pause", 3), ("game_speech", 6), ("ending", levels.ENDING_CHECK_BELOW_VOICE_LU)):
+    for key, below in (("game_pause", levels.GAME_PAUSE_BELOW_VOICE_LU),
+                       ("game_speech", levels.GAME_BELOW_VOICE_LU),
+                       ("ending", levels.ENDING_CHECK_BELOW_VOICE_LU)):
         assert rows[key]["target_lufs"] == pytest.approx(measured_voice[-1] - below)
         assert rows[key]["ok"] is True
-    assert rows["game_pause"]["measured_lufs"] == pytest.approx(measured_voice[-1] - 3.5, abs=0.2)
-    assert rows["game_speech"]["measured_lufs"] <= measured_voice[-1] - 6.5 + 0.2
+    assert rows["game_pause"]["measured_lufs"] == pytest.approx(
+        measured_voice[-1] - levels.GAME_PAUSE_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU, abs=0.2)
+    assert rows["game_speech"]["measured_lufs"] <= (
+        measured_voice[-1] - levels.GAME_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU + 0.2)
     assert rows["ending"]["measured_lufs"] == pytest.approx(
         measured_voice[-1] - levels.ENDING_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU, abs=0.5)
     if with_music:
@@ -1351,7 +1414,9 @@ def test_four_aac_beats_keep_the_ending_on_target_after_voice_corrections(
         ending = index == 4
         duration = 2.2 if ending else 3
         frequency = 1000 if ending else 440
-        gain = -12 if ending else -20
+        # This regression isolates the ending: body effects stay comfortably
+        # below their speech ceiling while the voice receives common gain.
+        gain = -12 if ending else -14 - levels.GAME_BELOW_VOICE_LU
         fade = "" if ending else ",afade=t=in:d=0.06,afade=t=out:st=2.94:d=0.06"
         part = tmp_path / f"part-{index}.mp4"
         subprocess.run(
@@ -1456,7 +1521,8 @@ def test_mastering_calibrates_an_ending_audible_only_in_the_last_90_ms(tmp_path,
     assert math.isfinite(rows["ending"]["measured_lufs"])
     assert rows["ending"]["measured_lufs"] == pytest.approx(published_ending, abs=0.1)
     assert published_ending == pytest.approx(report["ending_target_lufs"], abs=0.5)
-    assert published_ending <= rows["voice_mastered"]["measured_lufs"] - 2
+    assert published_ending <= (
+        rows["voice_mastered"]["measured_lufs"] - levels.ENDING_CHECK_BELOW_VOICE_LU)
     assert rows["ending"]["ok"] is True
     assert rows["true_peak"]["ok"] is True
     assert rows["clicks"]["count"] == 0
@@ -1914,7 +1980,10 @@ def test_publish_records_ffmpeg_mastering_failure_and_removes_partial_candidate(
     report_path.write_text('{"old": true}')
     audio = levels.AudioGraph(["-i", str(joined)], ["[0:a]asplit=2[g][vo]"],
                               {"game": "g", "voice": "vo"})
-    report = levels.check_balance(-22, None, None, -28.5, -25.5)
+    report = levels.check_balance(
+        -22, None, None, -22 - levels.GAME_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU,
+        -22 - levels.GAME_PAUSE_BELOW_VOICE_LU - levels.CEILING_HEADROOM_LU,
+    )
     report.update(speech_lufs=-22, speech_windows=[(0, 4)], pause_windows=[(4, 8)], ending_windows=[])
     monkeypatch.setattr(levels, "calibrate", Mock(return_value=(audio, report)))
 

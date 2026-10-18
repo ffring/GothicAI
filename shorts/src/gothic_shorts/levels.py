@@ -39,10 +39,12 @@ MUSIC_DUCK_DB = 6.0
 # Allow up to 12 LU of extra speech-window energy without extreme ducking
 # when a pause is unusually quiet or unrepresentative of the music bed.
 MAX_MUSIC_DUCK_DB = 18.0
-GAME_BELOW_VOICE_LU = 6.0
-GAME_PAUSE_BELOW_VOICE_LU = 3.0
-ENDING_BELOW_VOICE_LU = 6.0
-ENDING_CHECK_BELOW_VOICE_LU = 5.0
+# Keep effects well below the voice: at S−6 / S−3 they competed with it.
+# The ending's quill stays at the same level as effects in pauses.
+GAME_BELOW_VOICE_LU = 12.0
+GAME_PAUSE_BELOW_VOICE_LU = 8.0
+ENDING_BELOW_VOICE_LU = GAME_PAUSE_BELOW_VOICE_LU
+ENDING_CHECK_BELOW_VOICE_LU = ENDING_BELOW_VOICE_LU - 1.0
 LEVEL_TOLERANCE_LU = 1.5
 RAMP_SECONDS = 0.150
 # ebur128's summary is rounded to tenths; keep game gain on the safe side.
@@ -260,7 +262,8 @@ def check_balance(speech_lufs: float | None, music_pause_lufs: float | None,
         goal = target - duck if target is not None else None
         ok = (value == goal or math.isfinite(value) and abs(value - goal) <= LEVEL_TOLERANCE_LU + 1e-6
               if value is not None and goal is not None else None)
-        description = (f"min(S - 14, game_pause - 3) - {duck:g} LU ± {LEVEL_TOLERANCE_LU:g}"
+        description = (f"min(S - {MUSIC_BELOW_VOICE_LU:g}, game_pause - {MUSIC_BELOW_GAME_LU:g})"
+                       f" - {duck:g} LU ± {LEVEL_TOLERANCE_LU:g}"
                        if voiced else "measured")
         row(key, value, goal, description, ok)
     for key, value, below in (("game_speech", game_speech_lufs, GAME_BELOW_VOICE_LU),
@@ -269,13 +272,15 @@ def check_balance(speech_lufs: float | None, music_pause_lufs: float | None,
         goal = s - below if s is not None else None
         row(key, value, goal, f"≤ S - {below:g} LU" if voiced else "measured",
             value <= goal + 1e-6 if value is not None and goal is not None else None)
-    for key, value, reference, name in (
-        ("game_below_voice", game_pause_lufs, s, "voice"),
-        ("music_below_game", music_pause_lufs, game_pause_lufs, "game_pause"),
+    for key, value, reference, name, below, tolerance in (
+        ("game_below_voice", game_pause_lufs, s, "voice", GAME_PAUSE_BELOW_VOICE_LU, 0),
+        ("music_below_game", music_pause_lufs, game_pause_lufs, "game_pause",
+         MUSIC_BELOW_GAME_LU, LEVEL_TOLERANCE_LU),
     ):
-        goal = reference - MUSIC_BELOW_GAME_LU if reference is not None else None
-        row(key, value, goal, f"≤ {name} - 3 LU + {LEVEL_TOLERANCE_LU:g}" if voiced else "measured",
-            value <= goal + LEVEL_TOLERANCE_LU + 1e-6
+        goal = reference - below if reference is not None else None
+        allowance = f" + {tolerance:g}" if tolerance else ""
+        row(key, value, goal, f"≤ {name} - {below:g} LU{allowance}" if voiced else "measured",
+            value <= goal + tolerance + 1e-6
             if voiced and value is not None and goal is not None else None)
     return {"voiced": voiced, "ok": all(r["ok"] is not False for r in rows), "rows": rows}
 
