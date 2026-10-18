@@ -34,6 +34,7 @@
 #include <chrono>
 #include <iomanip>
 #include <locale>
+#include <memory>
 #include <sstream>
 
 using namespace Tempest;
@@ -750,8 +751,11 @@ void Npc::resetNavigationEpisode() {
   spellImpulseCulprit.reset();
   visual.clearPhysicalPose();
   visual.pose().stopAllAnim();
-  // This existing handoff clears speed and returns the movement state to Run.
-  mvAlgo.takeRagdollControl();
+  // Called between world ticks: reconstruct transient state (including bounce,
+  // cached ground, speed multipliers and controller hysteresis) for a fresh episode.
+  mvAlgo.resetCharacterVirtual();
+  std::destroy_at(&mvAlgo);
+  std::construct_at(&mvAlgo,*this);
   currentTarget = nearestEnemy = currentOther = currentVictim = lastHit = nullptr;
   outWaitTime = aiOutputBarrier = physicsNoiseUntil = 0;
   castLevel = CS_NoCast;

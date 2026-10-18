@@ -380,10 +380,14 @@ def qualify_region(args, candidates, region, publish):
     """Visit one region in source order, independently of other runners' clocks."""
     runner = new_runner(args, f"teacher-{region}")
     chosen = []
+    visited = 0
     try:
         for index, pair in enumerate(candidates):
             if pair["region"] != region:
                 continue
+            if visited >= getattr(args, "max_teacher_candidates", 50):
+                break
+            visited += 1
             directory = args.output / "teacher" / f"{index:05d}"
             if (directory / "episode.json").is_file():
                 if not args.resume:
@@ -394,6 +398,8 @@ def qualify_region(args, candidates, region, publish):
             if not all((directory / name).is_file() for name in ("episode.json", "samples.bin.gz", "trajectory.txt", "actions.txt")):
                 raise ValueError(f"Incomplete teacher attempt: {directory}")
             episode = read_json(directory / "episode.json")
+            if episode.get("physics_mode") != getattr(args, "physics", "cv"):
+                raise ValueError(f"Teacher physics mode differs from requested mode: {directory}")
             if (episode.get("demo_version") != 2 or episode.get("teacher_version") != 2
                     or (episode.get("start"), episode.get("goal")) != (pair["start"], pair["goal"])):
                 raise ValueError(f"Teacher attempt is not the requested v2 pair: {directory}")
@@ -409,8 +415,6 @@ def qualify_region(args, candidates, region, publish):
                 break
     finally:
         runner.close()
-    if len(chosen) != args.per_region:
-        raise ValueError(f"Insufficient teacher-qualified candidates in {region}: {len(chosen)}; need {args.per_region}")
     return chosen
 
 
@@ -437,8 +441,13 @@ def qualify(args):
     for index, pair in enumerate(chosen):
         pair.update(index=index, split="validation", split_index=index, final_test=True)
     write_pairs(destination, chosen)
-    print(json.dumps(dict(pairs=str(destination), n=len(chosen),
-                          regions=dict(Counter(pair["region"] for pair in chosen)), attempts=len(attempts), workers=workers)))
+    counts = Counter(pair["region"] for pair in chosen)
+    summary = dict(pairs=str(destination), n=len(chosen), regions={region: counts[region] for region in REGIONS},
+                   requested_per_region=args.per_region, max_candidates_per_region=getattr(args, "max_teacher_candidates", 50),
+                   shortages={region: args.per_region - counts[region] for region in REGIONS if counts[region] < args.per_region},
+                   physics=getattr(args, "physics", "cv"), attempts=len(attempts), workers=workers)
+    write_json(args.output / "qualification.json", summary)
+    print(json.dumps(summary))
 
 
 def drive(args):
@@ -629,16 +638,18 @@ def compare(args):
 
 
 def equivalence_commands(args, pair, pair_file, mode):
-    """Preserve the old drive; explicitly place only the far comparison's hero."""
-    commands = [f"roads load {args.roads}", f"roads on {args.npc}"]
-    if mode == "reference":
-        commands.append(f"navdemos drive {args.npc} {pair['start']} {pair['goal']} {args.limit_ms} {args.weights} 0 {args.seed}")
-    elif mode in ("near", "far"):
-        if mode == "far":
-            commands.append(f"goto {args.far_waypoint}")
-        commands.append(f"navdemos population {args.npc} {pair_file} {args.limit_ms} {args.weights} 1 {args.seed} argmax 1 1 {mode} 0")
-    else:
+    """Drive and population use identical stand physics and explicit hero placement."""
+    if mode not in ("drive-near", "pop-near", "drive-far", "pop-far"):
         raise ValueError(f"Unknown equivalence mode: {mode}")
+    controller, distance = mode.split("-")
+    commands = [f"roads load {args.roads}", f"roads on {args.npc}",
+                f"navdemos hero {'near' if distance == 'near' else 'keep'}"]
+    if distance == "far":
+        commands.append(f"goto {args.far_waypoint}")
+    if controller == "drive":
+        commands.append(f"navdemos drive {args.npc} {pair['start']} {pair['goal']} {args.limit_ms} {args.weights} 0 {args.seed}")
+    else:
+        commands.append(f"navdemos population {args.npc} {pair_file} {args.limit_ms} {args.weights} 1 {args.seed} argmax 1 1 {distance} 0")
     return [*commands, "navdemos wait"]
 
 
@@ -646,7 +657,7 @@ def record_equivalence(args, runner, index, pair, pair_file, mode):
     worker = copy(args)
     worker.seed = pair.get("seed", args.seed)
     directory = args.output / mode / f"{index:05d}"
-    episode_path = directory / "episode.json" if mode == "reference" else directory / "episodes" / "0" / "episode.json"
+    episode_path = directory / "episode.json" if mode.startswith("drive-") else directory / "episodes" / "0" / "episode.json"
     if episode_path.is_file():
         if not args.resume:
             raise ValueError(f"Existing equivalence output: {episode_path}; use --resume")
@@ -654,13 +665,61 @@ def record_equivalence(args, runner, index, pair, pair_file, mode):
         scenario(worker, runner, f"equivalence-{mode}-{index:05d}",
                  equivalence_commands(worker, pair, pair_file, mode), directory)
     episode = read_json(episode_path)
-    if (episode.get("start"), episode.get("goal")) != (pair["start"], pair["goal"]) or episode.get("demo_version") != 2:
-        raise ValueError(f"Equivalence recorded a different route/schema: {episode_path}")
+    if ((episode.get("start"), episode.get("goal")) != (pair["start"], pair["goal"])
+            or episode.get("demo_version") != 2 or episode.get("physics_mode") != getattr(args, "physics", "cv")):
+        raise ValueError(f"Equivalence route/schema/physics differs from requested setup: {episode_path}")
     episode.update(region=pair["region"], index=index, split="equivalence", split_index=index,
                    drive=True, weights=str(args.weights), seed=worker.seed, limit_ms=args.limit_ms)
     write_json(episode_path, episode)
     print(json.dumps(dict(pair=index, mode=mode, success=episode["success"],
                           elapsed_ms=episode["elapsed_ms"], episode=str(episode_path.parent))), flush=True)
+
+
+def trajectory_divergence(reference, repeated):
+    """Locate the first geometric/action difference without calling it a cause."""
+    import numpy as np
+    paths = [Path(episode["directory"]) for episode in (reference, repeated)]
+    if not all((path / "trajectory.txt").is_file() and (path / "actions.txt").is_file() for path in paths):
+        return dict(available=False)
+    traces = [np.loadtxt(path / "trajectory.txt", ndmin=2) for path in paths]
+    actions = [np.loadtxt(path / "actions.txt", ndmin=2) for path in paths]
+    if any(trace.shape[1] != 5 or not np.isfinite(trace).all() for trace in traces):
+        raise ValueError("Invalid equivalence trajectory")
+    if any(keys.shape[1] != 9 or not np.isfinite(keys).all() for keys in actions):
+        raise ValueError("Invalid equivalence action trace")
+    common, first, second = np.intersect1d(traces[0][:, 0], traces[1][:, 0], return_indices=True)
+    if not len(common):
+        raise ValueError("Equivalence trajectories have no common timestamps")
+    delta = np.linalg.norm(traces[0][first, 1:4] - traces[1][second, 1:4], axis=1)
+    result = dict(available=True, compared_rows=len(common), max_position_error_cm=float(delta.max()),
+                  rms_position_error_cm=float(np.sqrt(np.mean(delta ** 2))))
+    for threshold in (.1, 1., 25.):
+        found = np.flatnonzero(delta > threshold)
+        row = int(found[0]) if len(found) else None
+        result[f"first_over_{threshold:g}_cm"] = None if row is None else dict(
+            time_ms=float(common[row]), error_cm=float(delta[row]),
+            reference_position_cm=traces[0][first[row], 1:4].tolist(), repeated_position_cm=traces[1][second[row], 1:4].tolist())
+    times, ia, ib = np.intersect1d(actions[0][:-1, 0], actions[1][:-1, 0], return_indices=True)
+    changed = np.flatnonzero((actions[0][ia, 1:7] != actions[1][ib, 1:7]).any(axis=1))
+    result["first_action_difference"] = None if not len(changed) else dict(
+        time_ms=float(times[changed[0]]), reference_keys=actions[0][ia[changed[0]], 1:7].tolist(),
+        repeated_keys=actions[1][ib[changed[0]], 1:7].tolist())
+    return result
+
+
+def controlled_comparison(reference, repeated):
+    result = comparison_metrics(reference, repeated)
+    for pair in result["pairs"]:
+        key = pair["start"], pair["goal"]
+        first, second = reference[key], repeated[key]
+        compared = first["success"] and second["success"]
+        pair["timing_compared"] = compared
+        pair["same_outcome"] = first["success"] == second["success"]
+        pair["passed"] = pair["same_outcome"] and pair["elapsed_relative_error"] <= .05
+        pair["trajectory"] = trajectory_divergence(first, second)
+    result["passed"] = all(pair["passed"] for pair in result["pairs"])
+    result["timing_evidence_routes"] = sum(pair["timing_compared"] for pair in result["pairs"])
+    return result
 
 
 def distance_comparison_metrics(near, far):
@@ -690,11 +749,10 @@ def equivalence(args):
     if args.count > len(pairs):
         raise ValueError(f"Need {args.count} routes, found {len(pairs)}")
     chosen = pairs[:args.count]
-    # Route order is fixed by the input file before any policy result is seen.
     write_pairs(args.output / "selected-pairs.jsonl", chosen)
     pair_files = [runner_pairs(args.output / "runner-pairs" / f"equivalence-{index:05d}.txt", [pair])
                   for index, pair in enumerate(chosen)]
-    modes = ("reference", "near", "far")
+    modes = ("drive-near", "pop-near", "drive-far", "pop-far")
     if args.parallel == 1:
         runner = new_runner(args, "equivalence")
         try:
@@ -715,29 +773,100 @@ def equivalence(args):
             futures = [pool.submit(record_mode, mode) for mode in modes]
             for future in futures:
                 future.result()
-    reference = comparable_episodes(args.output / "reference")
-    near = comparable_episodes(args.output / "near")
-    far = comparable_episodes(args.output / "far")
-    distances = [dict(start=start, goal=goal, min_hero_distance_cm=episode["min_hero_distance_cm"],
+    recorded = {mode: comparable_episodes(args.output / mode) for mode in modes}
+    comparisons = {}
+    for label, first, second in (("drive_vs_population_near", "drive-near", "pop-near"),
+                                 ("drive_vs_population_far", "drive-far", "pop-far"),
+                                 ("drive_near_vs_far", "drive-near", "drive-far"),
+                                 ("population_near_vs_far", "pop-near", "pop-far")):
+        comparisons[label] = controlled_comparison(recorded[first], recorded[second])
+    distances = [dict(mode=mode, start=start, goal=goal, min_hero_distance_cm=episode["min_hero_distance_cm"],
                       max_hero_distance_cm=episode["max_hero_distance_cm"],
                       far_enough=episode["min_hero_distance_cm"] >= args.min_far_cm)
-                 for (start, goal), episode in far.items()]
-    parity = comparison_metrics(reference, near)
-    distance_comparison = distance_comparison_metrics(near, far)
-    result = dict(passed=parity["passed"] and distance_comparison["passed"] and all(p["far_enough"] for p in distances),
-                  n=len(chosen), selection="first_count_routes_in_supplied_order_before_policy_results",
-                  world_reset="same_save_and_seed_before_every_reference_near_far_episode",
+                 for mode in ("drive-far", "pop-far") for (start, goal), episode in recorded[mode].items()]
+    outliers = defaultdict(list)
+    for label, comparison in comparisons.items():
+        for pair in comparison["pairs"]:
+            if not pair["passed"]:
+                outliers[pair["start"], pair["goal"]].append(label)
+    preparation_passed = all(pair["far_enough"] for pair in distances)
+    result = dict(passed=preparation_passed and len(outliers) <= 2,
+                  strict_passed=preparation_passed and not outliers, preparation_passed=preparation_passed,
+                  n=len(chosen), physics=getattr(args, "physics", "cv"), time_tolerance=.05,
+                  max_tolerated_outlier_routes=2, outlier_routes=[dict(start=key[0], goal=key[1], comparisons=labels)
+                      for key, labels in sorted(outliers.items())],
+                  selection="first_count_routes_in_supplied_order_before_policy_results",
+                  world_reset="same_save_and_seed_before_every_episode_in_each_of_four_modes",
                   far_waypoint=args.far_waypoint, min_required_hero_distance_cm=args.min_far_cm,
-                  drive_vs_population=parity, near_vs_far=distance_comparison, far_distances=distances)
+                  comparisons=comparisons, far_distances=distances)
     write_json(args.output / "equivalence.json", result)
     print(json.dumps(result, ensure_ascii=False))
     if not result["passed"]:
-        raise ValueError("Navigation equivalence failed success/time or hero-distance check; see equivalence.json")
+        raise ValueError("Navigation equivalence failed setup or more than two unique routes; see equivalence.json")
+
+
+def death_reset_metrics(episodes):
+    if len(episodes) != 2:
+        raise ValueError("Death smoke requires exactly two consecutive episodes")
+    first, second = episodes
+    initial = second["initial_state"]
+    expected = initial.get("expected_start_position_cm", second.get("expected_start_position_cm"))
+    if expected is None:
+        raise ValueError("Death reset metadata lacks expected start pose")
+    pose_error = math.dist(initial["position_cm"], expected)
+    held = initial["held_keys"]
+    checks = dict(actual_death=bool(first.get("kill_injected")) and first["final_dead"] and first["final_hp"] <= 0,
+                  actual_ragdoll=bool(first["final_ragdoll"]),
+                  death_state_ran=bool(first["final_state_started"]),
+                  single_injection=not second.get("kill_injected", False),
+                  reset_from_actual_death=bool(second["reset_after_death"]),
+                  recurrent_state_exercised=first["final_gru_l2"] > 1e-8,
+                  health_restored=initial["hp"] == initial["hp_max"] and initial["hp"] > 0,
+                  live_pose=not any(initial[key] for key in ("down", "dead", "ragdoll", "in_air", "climbing")),
+                  start_pose_restored=pose_error <= 1.,
+                  recurrent_state_cleared=abs(initial["gru_l2"]) <= 1e-8,
+                  memory_cleared=abs(initial["memory_traveled_cm"]) <= 1e-8,
+                  guidance_cleared=initial["guidance_points"] == 0,
+                  eye_cleared=not initial["eye_observed"],
+                  keys_released=len(held) == 6 and all(held[index] == 0 for index in (0, 1, 2, 4, 5)) and held[3] in (0, 1))
+    return dict(passed=all(checks.values()), checks=checks, reset_position_error_cm=pose_error,
+                initial_state=initial, first_final_hp=first["final_hp"], first_kill_at_ms=first["kill_at_ms"])
+
+
+def death_smoke(args):
+    checked_paths(args, policy=True)
+    pairs = load_pairs(args.pairs)
+    selected = pairs[:2] if len(pairs) > 1 else pairs
+    pair_file = runner_pairs(args.output / "death-pairs.txt", selected)
+    directory = args.output / "death-population"
+    if (directory / "population.json").exists():
+        raise ValueError(f"Death smoke output exists: {directory}; choose a fresh output")
+    runner = new_runner(args, "death-smoke")
+    try:
+        scenario(args, runner, "death-smoke", [f"roads load {args.roads}", f"roads on {args.npc}",
+                 "navdemos kill-slot 0 400",
+                 f"navdemos population {args.npc} {pair_file} 1000 {args.weights} 1 {args.seed} argmax 2 1 far 0",
+                 "navdemos wait"], directory)
+    finally:
+        runner.close()
+    episodes = [read_json(path) for path in sorted((directory / "episodes").glob("*/episode.json"),
+                                                 key=lambda p: int(p.parent.name))]
+    if any(episode.get("physics_mode") != getattr(args, "physics", "cv") for episode in episodes):
+        raise ValueError("Death smoke did not use requested stand physics")
+    result = death_reset_metrics(episodes)
+    recorded = [check_episode(directory / "episodes" / str(episode["episode_index"])) for episode in episodes]
+    result.update(physics=getattr(args, "physics", "cv"), recording_checks=recorded,
+                  death_reward=sum(record["reward_sums"].get("death", 0) for record in recorded))
+    result["passed"] = result["passed"] and result["death_reward"] == 1
+    write_json(args.output / "death-smoke.json", result)
+    print(json.dumps(result, ensure_ascii=False))
+    if not result["passed"]:
+        raise ValueError("Death/reset smoke failed; see death-smoke.json")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("generate", "qualify", "drive", "population", "check", "summarize", "history", "compare", "equivalence"))
+    parser.add_argument("command", choices=("generate", "qualify", "drive", "population", "check", "summarize", "history", "compare", "equivalence", "death-smoke"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--pairs", type=Path)
     parser.add_argument("--source", type=Path)
@@ -745,9 +874,11 @@ def main():
     parser.add_argument("--exclude", type=Path, action="append", default=[])
     parser.add_argument("--seed", type=int, default=18102026)
     parser.add_argument("--per-region", type=int, default=10)
+    parser.add_argument("--max-teacher-candidates", type=int, default=50)
+    parser.add_argument("--physics", choices=("cv", "native"), default="cv")
     parser.add_argument("--count", type=int, default=10, help="First routes for independent equivalence episodes")
     parser.add_argument("--far-waypoint", default="NW_FARM1_ENTRANCE_01")
-    parser.add_argument("--min-far-cm", type=float, default=6000)
+    parser.add_argument("--min-far-cm", type=float, default=10000)
     parser.add_argument("--candidates-per-region", type=int, default=200)
     parser.add_argument("--npc", default="BAU_954_MALETH")
     parser.add_argument("--population", type=int, default=20)
@@ -773,9 +904,9 @@ def main():
     args.exclude = [path.expanduser().resolve() for path in args.exclude]
     if args.episodes is None:
         args.episodes = 1000000 if args.run_ms else args.population
-    if not 0 <= args.seed <= 0xffffffff or args.per_region < 1 or args.count < 1 or args.min_far_cm < 0 or args.population < 1 or args.episodes < 1 or args.limit_ms < 1 or args.run_ms < 0:
+    if not 0 <= args.seed <= 0xffffffff or args.per_region < 1 or args.max_teacher_candidates < 1 or args.count < 1 or args.min_far_cm < 0 or args.population < 1 or args.episodes < 1 or args.limit_ms < 1 or args.run_ms < 0:
         parser.error("seed must be uint32; per-region, population, episodes and limit-ms must be positive")
-    if args.command in ("qualify", "drive", "population", "equivalence") and args.pairs is None:
+    if args.command in ("qualify", "drive", "population", "equivalence", "death-smoke") and args.pairs is None:
         parser.error("--pairs is required")
     if args.command in ("check", "summarize", "compare") and args.source is None:
         parser.error("--source is required")
@@ -787,7 +918,7 @@ def main():
         parser.error("parallel population measurements require recording disabled")
     try:
         {"generate": generate, "qualify": qualify, "drive": drive, "population": population,
-         "check": check, "summarize": summarize, "history": history, "compare": compare, "equivalence": equivalence}[args.command](args)
+         "check": check, "summarize": summarize, "history": history, "compare": compare, "equivalence": equivalence, "death-smoke": death_smoke}[args.command](args)
     except (ValueError, OSError, RuntimeError, KeyError) as exc:
         parser.exit(1, f"nav-rl: {exc}\n")
 

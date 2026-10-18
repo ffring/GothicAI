@@ -31,9 +31,12 @@ struct MotionSample { uint64_t time=0; Vec3 position; bool commanded=false; };
 struct Episode {
   Npc* npc=nullptr;
   Vec3 goal,previousPosition,velocity;
-  std::string output,from,to,failure;
+  std::string output,from,to,failure,initialState;
   bool active=false,replay=false,drive=false,success=false;
   bool population=false,record=true,sampled=false,pending=false,fell=false;
+  bool cvMode=false,heroNear=true,killInjected=false,resetAfterDeath=false;
+  uint64_t killAt=0;
+  Vec3 expectedStart;
   size_t slot=0,pairIndex=0,sequence=0;
   uint64_t actionAt=0;
   int32_t health=0;
@@ -92,6 +95,16 @@ struct Population {
   std::chrono::steady_clock::time_point wallStart;
   double startupSeconds=0;
 } population;
+struct Settings {
+  bool cv=false,heroNear=true,killArmed=false,killFired=false;
+  size_t killSlot=0;
+  uint64_t killAfterMs=0;
+} settings;
+Npc* preparingLegacy=nullptr;
+struct PrepareLegacy {
+  explicit PrepareLegacy(Npc* npc) {preparingLegacy=npc;}
+  ~PrepareLegacy() {preparingLegacy=nullptr;}
+};
 using Clock=std::chrono::steady_clock;
 double micros(Clock::time_point start) {return std::chrono::duration<double,std::micro>(Clock::now()-start).count();}
 
@@ -99,6 +112,27 @@ NavMesh::Point meters(const Vec3& p) {return {p.x*.01f,p.y*.01f,p.z*.01f};}
 Vec3 cm(const NavMesh::Point& p) {return {p[0]*100,p[1]*100,p[2]*100};}
 std::array<float,3> array(const Vec3& p) {return {p.x,p.y,p.z};}
 void vector(std::ostream& out,const Vec3& p) {out<<'['<<p.x<<','<<p.y<<','<<p.z<<']';}
+double hiddenL2(const Episode& ep) {
+  double square=0;
+  for(const auto& state:ep.policyStates)for(float value:state.hidden)square+=double(value)*double(value);
+  return std::sqrt(square);
+}
+std::string initialState(const Episode& ep) {
+  const auto& npc=*ep.npc;const auto held=NpcKeys::status(npc).keys;
+  size_t hidden=0,observed=0;
+  for(const auto& state:ep.policyStates)hidden+=state.hidden.size();
+  for(const auto& ray:ep.eye.samples())observed+=ray.complete;
+  std::ostringstream out;out<<std::setprecision(9)<<std::boolalpha;
+  out<<"{\"hp\":"<<npc.attribute(ATR_HITPOINTS)<<",\"hp_max\":"<<npc.attribute(ATR_HITPOINTSMAX)
+     <<",\"down\":"<<npc.isDown()<<",\"dead\":"<<npc.isDead()<<",\"ragdoll\":"<<npc.hasRagdoll()
+     <<",\"body_state\":"<<uint32_t(npc.bodyStateMasked())<<",\"in_air\":"<<npc.isInAir()
+     <<",\"climbing\":"<<npc.navigationClimbing()<<",\"gru_hidden_size\":"<<hidden<<",\"gru_l2\":"<<hiddenL2(ep)
+     <<",\"memory_traveled_cm\":"<<ep.memory.traveledCm()<<",\"guidance_points\":"<<ep.guidance.polyline.size()
+     <<",\"eye_observed\":"<<observed<<",\"held_keys\":["<<held.forward<<','<<held.strafe<<','<<held.turn
+     <<','<<int(held.walk)<<','<<int(held.jump)<<','<<int(held.climb)<<"],\"position_cm\":";
+  vector(out,NpcKeys::physicalPosition(npc));out<<",\"body_yaw_deg\":"<<npc.rotation()<<'}';
+  return out.str();
+}
 std::array<float,3> local(const Vec3& p,float yaw) {
   const float c=std::cos(yaw),s=std::sin(yaw);
   return {-p.x*s+p.z*c,p.y,p.x*c+p.z*s};
@@ -246,9 +280,17 @@ void finish(Episode& ep,World& world) {
        <<",\"episode_index\":"<<ep.sequence<<",\"sampling\":"<<ep.sampled
        <<",\"start_path_cm\":"<<ep.startPathCm<<",\"remaining_path_cm\":"<<ep.lastPathCm
        <<",\"progress_cm\":"<<ep.progressCm<<",\"invalid_reward_paths\":"<<ep.invalidRewardPaths;
-  if(ep.population)
-    out<<",\"min_hero_distance_cm\":"<<ep.minHeroDistanceCm<<",\"max_hero_distance_cm\":"<<ep.maxHeroDistanceCm
-       <<",\"directory\":"<<std::quoted(ep.output);
+  out<<",\"min_hero_distance_cm\":"<<ep.minHeroDistanceCm<<",\"max_hero_distance_cm\":"<<ep.maxHeroDistanceCm
+     <<",\"physics_mode\":"<<std::quoted(ep.cvMode?"cv":"native")
+     <<",\"hero_mode\":"<<std::quoted(ep.heroNear?"near":"keep")
+     <<",\"initial_state\":"<<(ep.initialState.empty()?"{}":ep.initialState)
+     <<",\"expected_start_position_cm\":";vector(out,ep.expectedStart);
+  out<<",\"final_hp\":"<<ep.npc->attribute(ATR_HITPOINTS)<<",\"final_dead\":"<<ep.npc->isDead()
+     <<",\"final_down\":"<<ep.npc->isDown()<<",\"final_ragdoll\":"<<ep.npc->hasRagdoll()
+     <<",\"final_state_started\":"<<ep.npc->isStateStarted()<<",\"final_gru_l2\":"<<hiddenL2(ep)
+     <<",\"reset_after_death\":"<<ep.resetAfterDeath<<",\"kill_injected\":"<<ep.killInjected
+     <<",\"kill_at_ms\":"<<ep.killAt;
+  if(ep.population)out<<",\"directory\":"<<std::quoted(ep.output);
   out<<"}\n";
   NpcKeys::enable(*ep.npc,false);ep.npc->stopWalking();ep.active=false;
 }
@@ -480,6 +522,7 @@ void startPopulationEpisode(World& w,Npc& player,size_t slot,Npc* original=nullp
   if(pop.started>=pop.targetEpisodes)return;
   auto& ep=*pop.slots[slot];
   auto* actor=original?original:ep.npc;
+  const bool afterDeath=actor && actor->isDead();
   if(actor && !original)actor->resetNavigationEpisode();
   // Slots retain the same physical NPC across episodes. Besides avoiding a world
   // load, this bounds memory: World::removeNpc keeps removed NPCs for script refs.
@@ -487,6 +530,7 @@ void startPopulationEpisode(World& w,Npc& player,size_t slot,Npc* original=nullp
   if(!ep.npc)throw std::runtime_error("navdemos cannot spawn population actor");
   pop.members.insert(ep.npc);
   ep.population=true;ep.drive=true;ep.record=pop.record;ep.sampled=pop.sampled;
+  ep.cvMode=settings.cv;ep.heroNear=pop.near;ep.resetAfterDeath=afterDeath;
   ep.slot=slot;ep.sequence=pop.started++;ep.pairIndex=ep.sequence%pop.pairs.size();
   const auto& pair=pop.pairs[ep.pairIndex];ep.from=pair.from;ep.to=pair.to;
   ep.output=(std::filesystem::path(pop.output)/"episodes"/std::to_string(ep.sequence)).string();
@@ -495,6 +539,7 @@ void startPopulationEpisode(World& w,Npc& player,size_t slot,Npc* original=nullp
   const auto* from=w.findPoint(ep.from,false);const auto* to=w.findPoint(ep.to,false);
   if(!from || !to)throw std::runtime_error("navdemos population missing waypoint");
   ep.goal=to->groundPos;
+  ep.expectedStart=from->groundPos;
   auto& npc=*ep.npc;
   npc.setProcessPolicy(NpcProcessPolicy::AiNormal);
   npc.setInteraction(nullptr,true);npc.clearAiQueue();npc.clearState(false);npc.clearSpeed();
@@ -517,6 +562,7 @@ void startPopulationEpisode(World& w,Npc& player,size_t slot,Npc* original=nullp
     ep.knownPaths=file(ep,"known-paths.jsonl");ep.samples=file(ep,"samples.jsonl");
     ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(ep.output)/"samples.bin.gz").string(),2);
   }
+  ep.initialState=initialState(ep);
   observe(ep,w);decide(ep,w);ep.next=ep.began+100;
 }
 void populationSummary(World& w) {
@@ -529,6 +575,8 @@ void populationSummary(World& w) {
   out<<std::setprecision(10)<<std::boolalpha
      <<"{\"population\":"<<pop.slots.size()<<",\"seed\":"<<pop.seed<<",\"sampling\":"<<pop.sampled
      <<",\"record\":"<<pop.record<<",\"near\":"<<pop.near<<",\"episodes\":"<<pop.completed
+     <<",\"physics_mode\":"<<std::quoted(settings.cv?"cv":"native")
+     <<",\"kill_fixture_fired\":"<<settings.killFired
      <<",\"decisions\":"<<pop.decisions<<",\"measured_decisions\":"<<pop.decisions-pop.initialDecisions
      <<",\"elapsed_ms\":"<<w.tickCount()-pop.began<<",\"wall_seconds\":"<<wallSeconds
      <<",\"startup_seconds\":"<<pop.startupSeconds<<",\"collect_seconds\":"<<collectSeconds
@@ -561,6 +609,7 @@ void beginPopulation(const std::vector<std::string>& a,World& w,Npc& player,cons
   pop.near=a.size()>11 && a[11]=="near";pop.runMs=a.size()>12?std::stoull(a[12]):0;
   if(!count || count>1000 || pop.targetEpisodes<count || !pop.limit || (pop.near && count!=1))
     throw std::runtime_error("navdemos invalid population/episode count, limit, or near mode");
+  if(settings.killArmed && settings.killSlot>=count)throw std::runtime_error("navdemos kill slot outside population");
   // Validate the entire file once, including pairs reached only after an episode reset.
   const auto& mesh=NavBench::navigationMesh(w);
   for(const auto& pair:pop.pairs) {
@@ -586,12 +635,11 @@ void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
   if(!ep.active)return;
   auto& n=*ep.npc;++ep.frames;if(n.characterVirtualActive())++ep.cvFrames;
   const auto p=NpcKeys::physicalPosition(n);if(dt)ep.velocity=(p-ep.previousPosition)*(1000.f/float(dt));ep.previousPosition=p;
-  if(ep.population) {
+  if(ep.population)
     ep.fell=ep.fell || n.isFalling() || n.isInAir();
-    if(const auto* player=w.player()) {
-      const double distance=(n.position()-player->position()).length();
-      ep.minHeroDistanceCm=std::min(ep.minHeroDistanceCm,distance);ep.maxHeroDistanceCm=std::max(ep.maxHeroDistanceCm,distance);
-    }
+  if(const auto* player=w.player()) {
+    const double distance=(n.position()-player->position()).length();
+    ep.minHeroDistanceCm=std::min(ep.minHeroDistanceCm,distance);ep.maxHeroDistanceCm=std::max(ep.maxHeroDistanceCm,distance);
   }
   const auto elapsed=w.tickCount()-ep.began;
   const bool arrived=(n.position()-ep.goal).length()<100.f && !n.isInAir() && !n.navigationClimbing();
@@ -608,7 +656,17 @@ void tickPopulation(World& w,uint64_t dt) {
   auto& pop=population;const bool stop=pop.runMs && w.tickCount()-pop.began>=pop.runMs;
   for(size_t i=0;i<pop.slots.size();++i) {
     auto& ep=*pop.slots[i];if(!ep.active)continue;
+    const auto previousDecisions=ep.decisions;
     tickEpisode(ep,w,dt,stop);
+    // Inject after a decision boundary so the final transition still fits one
+    // decision period. Leave the episode alive for a real world tick: native
+    // ZS_Dead initialization, ragdoll animation and physics run before closure.
+    if(ep.active && settings.killArmed && !settings.killFired && i==settings.killSlot &&
+       w.tickCount()-pop.began>=settings.killAfterMs && ep.decisions>previousDecisions) {
+      NpcKeys::enable(*ep.npc,false);ep.npc->setExternalControl(false);
+      ep.npc->setRagdollDown(true);ep.npc->prepareRagdoll();
+      ep.killInjected=true;ep.killAt=w.tickCount()-pop.began;ep.failure="actor_down";settings.killFired=true;
+    }
     if(ep.active)continue;
     ++pop.completed;pop.decisions+=ep.decisions;
     for(size_t j=0;j<7;++j)pop.phaseUs[j]+=ep.phaseUs[j];
@@ -627,10 +685,26 @@ void tickPopulation(World& w,uint64_t dt) {
 }
 
 bool NavDemos::running() {return legacy.active || population.active;}
-bool NavDemos::fullSimulation(const Npc& npc) {return population.active && population.members.contains(&npc);}
-void NavDemos::reset() {legacy=Episode{};population=Population{};}
+bool NavDemos::forceCharacterVirtual(const Npc& npc) {
+  return settings.cv && ((legacy.active && legacy.npc==&npc) || preparingLegacy==&npc ||
+                          (population.active && population.members.contains(&npc)));
+}
+bool NavDemos::fullSimulation(const Npc& npc) {
+  return (population.active && population.members.contains(&npc)) || forceCharacterVirtual(npc);
+}
+void NavDemos::reset() {legacy=Episode{};population=Population{};settings=Settings{};preparingLegacy=nullptr;}
 void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,const std::string& output) {
   auto& ep=legacy;
+  if(a.size()>=2 && (a[1]=="physics" || a[1]=="hero" || a[1]=="kill-slot")) {
+    if(running())throw std::runtime_error("navdemos cannot change settings during an episode");
+    if(a[1]=="physics" && a.size()==3 && (a[2]=="cv" || a[2]=="native"))settings.cv=a[2]=="cv";
+    else if(a[1]=="hero" && a.size()==3 && (a[2]=="near" || a[2]=="keep"))settings.heroNear=a[2]=="near";
+    else if(a[1]=="kill-slot" && a.size()==4) {
+      settings.killSlot=std::stoull(a[2]);settings.killAfterMs=std::stoull(a[3]);
+      settings.killArmed=true;settings.killFired=false;
+    } else throw std::runtime_error("navdemos physics cv|native | hero near|keep | kill-slot SLOT AFTER_MS");
+    return;
+  }
   if(a.size()>=2 && a[1]=="population") {beginPopulation(a,w,player,output);return;}
   if(a.size()==3 && a[1]=="reachable") {reachable(w,a[2],output);return;}
   if(a.size()==2 && a[1]=="wait")return;
@@ -647,6 +721,7 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
   auto* npc=w.findNpcByInstance(w.script().findSymbolIndex(a[2]));
   if((!from && !current) || !to || !npc)throw std::runtime_error("navdemos missing NPC/waypoint");
   ep=Episode{};ep.npc=npc;ep.from=current?"intentional":a[3];ep.to=a[current?3:4];ep.output=output;
+  ep.cvMode=settings.cv;ep.heroNear=!current && settings.heroNear;
   ep.teacherVersion=carrot?2:1;
   ep.goal=to->groundPos;ep.replay=replay;ep.drive=learner;
   // Optional start arguments begin at 6.
@@ -667,6 +742,8 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     ep.encodeUs.reserve(size_t((ep.limit+99)/100));
     ep.populationUs.reserve(size_t((ep.limit+99)/100));
   }
+  const PrepareLegacy preparing(npc);
+  if(settings.cv)npc->setProcessPolicy(NpcProcessPolicy::AiNormal);
   npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->clearSpeed();
   npc->setExternalControl(true);npc->clearGoTo();
   if(!current) {npc->setPosition(from->groundPos);npc->updateTransform();}
@@ -699,9 +776,11 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     point=floor.v;
     npc->setPosition(point);npc->updateTransform();npc->setDirection(std::stof(a[7]));
   }
-  if(!current) {player.setPosition(npc->position()+Vec3(0,0,500));player.updateTransform();}
+  if(!current && settings.heroNear) {player.setPosition(npc->position()+Vec3(0,0,500));player.updateTransform();}
   NpcKeys::enable(*npc,true);ep.previousPosition=NpcKeys::physicalPosition(*npc);
   ep.began=ep.next=ep.progressAt=w.tickCount();ep.active=true;ep.wallStart=std::chrono::steady_clock::now();
+  ep.expectedStart=NpcKeys::physicalPosition(*npc);
+  ep.minHeroDistanceCm=ep.maxHeroDistanceCm=(npc->position()-player.position()).length();
   ep.trajectory=file(ep,"trajectory.txt");
   if(replay) {
     std::ifstream input(a[5]);RecordedKeys row;int walk=0,jump=0,climb=0;
@@ -714,6 +793,7 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     ep.actions=file(ep,"actions.txt");ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),ep.teacherVersion);
     if(ep.teacherVersion==2)ep.knownPaths=file(ep,"known-paths.jsonl");
   }
+  ep.initialState=initialState(ep);
   observe(ep,w);decide(ep,w);ep.next=ep.began+100;
 }
 void NavDemos::tick(World& w,uint64_t dt) {

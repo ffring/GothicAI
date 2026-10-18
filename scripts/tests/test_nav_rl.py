@@ -199,20 +199,18 @@ def test_sidecar_clock_must_equal_navdemo_input_clock(tmp_path):
         rl.check_episode(path)
 
 
-def test_equivalence_keeps_reference_command_and_places_only_far_hero(tmp_path):
+def test_equivalence_keeps_drive_and_population_under_explicit_hero_control(tmp_path):
     args = SimpleNamespace(roads=Path('/roads.json'), npc='NPC', limit_ms=240000,
                            weights=Path('/policy.navbc'), seed=7,
                            far_waypoint='NW_FARM1_ENTRANCE_01')
     pair = dict(start='START', goal='GOAL')
-    reference = rl.equivalence_commands(args, pair, tmp_path / 'pair.txt', 'reference')
-    near = rl.equivalence_commands(args, pair, tmp_path / 'pair.txt', 'near')
-    far = rl.equivalence_commands(args, pair, tmp_path / 'pair.txt', 'far')
-    assert reference == ['roads load /roads.json', 'roads on NPC',
-                         'navdemos drive NPC START GOAL 240000 /policy.navbc 0 7', 'navdemos wait']
-    assert not any(command.startswith('goto ') for command in near)
-    assert near[2].endswith('1 7 argmax 1 1 near 0')
-    assert far[2] == 'goto NW_FARM1_ENTRANCE_01'
-    assert far[3].endswith('1 7 argmax 1 1 far 0')
+    near = rl.equivalence_commands(args, pair, tmp_path / 'pair.txt', 'drive-near')
+    assert near == ['roads load /roads.json', 'roads on NPC', 'navdemos hero near',
+                    'navdemos drive NPC START GOAL 240000 /policy.navbc 0 7', 'navdemos wait']
+    for mode in ('drive-far', 'pop-far'):
+        far = rl.equivalence_commands(args, pair, tmp_path / 'pair.txt', mode)
+        assert far[2:4] == ['navdemos hero keep', 'goto NW_FARM1_ENTRANCE_01']
+    assert rl.equivalence_commands(args, pair, tmp_path / 'pair.txt', 'pop-near')[-2].endswith('1 7 argmax 1 1 near 0')
 
 
 def test_comparison_requires_route_identity_success_and_five_percent_time():
@@ -233,33 +231,36 @@ def test_equivalence_selects_first_pairs_and_resets_each_comparison(tmp_path, mo
     monkeypatch.setattr(rl, 'new_runner', lambda *a: SimpleNamespace(close=lambda: closed.append(True)))
     calls = []
     def scenario(args, runner, name, commands, directory):
-        _, mode, index = name.split('-')
+        prefix, index = name.rsplit('-', 1)
+        mode = prefix.removeprefix('equivalence-')
         index = int(index)
         calls.append((index, mode, args.seed, commands))
         episode = dict(start=pairs[index]['start'], goal=pairs[index]['goal'], success=True,
-                       elapsed_ms=1000, decisions=10, demo_version=2, drive=True,
-                       min_hero_distance_cm=7000 if mode == 'far' else 500,
-                       max_hero_distance_cm=8000 if mode == 'far' else 1500)
-        destination = directory / 'episode.json' if mode == 'reference' else directory / 'episodes/0/episode.json'
+                       elapsed_ms=1000, decisions=10, demo_version=2, drive=True, physics_mode='cv',
+                       min_hero_distance_cm=12000 if mode.endswith('-far') else 500,
+                       max_hero_distance_cm=15000 if mode.endswith('-far') else 1500)
+        destination = directory / 'episode.json' if mode.startswith('drive-') else directory / 'episodes/0/episode.json'
         rl.write_json(destination, episode)
+        np.savetxt(destination.parent / 'trajectory.txt', [[0, 0, 0, 0, 0], [1000, 100, 0, 0, 0]])
+        np.savetxt(destination.parent / 'actions.txt', np.zeros((2, 9)))
     monkeypatch.setattr(rl, 'scenario', scenario)
     args = SimpleNamespace(pairs=None, count=2, output=tmp_path, seed=7, npc='NPC',
                            roads=Path('/roads.json'), weights=Path('/policy.navbc'),
-                           limit_ms=240000, far_waypoint='NW_FARM1_ENTRANCE_01', min_far_cm=6000,
+                           limit_ms=240000, far_waypoint='NW_FARM1_ENTRANCE_01', min_far_cm=10000,
                            resume=False, parallel=parallel)
     rl.equivalence(args)
     if parallel == 1:
         assert [(index, mode) for index, mode, _, _ in calls] == [
-            (0, 'reference'), (0, 'near'), (0, 'far'), (1, 'reference'), (1, 'near'), (1, 'far')]
+            (index, mode) for index in range(2) for mode in ('drive-near', 'pop-near', 'drive-far', 'pop-far')]
     else:
-        for mode in ('reference', 'near', 'far'):
+        for mode in ('drive-near', 'pop-near', 'drive-far', 'pop-far'):
             assert [index for index, called_mode, _, _ in calls if called_mode == mode] == [0, 1]
     assert all(seed == 7 for _, _, seed, _ in calls)
-    assert len(closed) == (1 if parallel == 1 else 3)
+    assert len(closed) == (1 if parallel == 1 else 4)
     result = rl.read_json(tmp_path / 'equivalence.json')
     assert result['passed']
     assert result['n'] == 2
-    assert result['drive_vs_population']['reference_arrived'] == 2
+    assert result['comparisons']['drive_vs_population_near']['reference_arrived'] == 2
     assert all(pair['far_enough'] for pair in result['far_distances'])
     assert list(rl.rows(tmp_path / 'selected-pairs.jsonl')) == pairs[:2]
 
@@ -332,7 +333,7 @@ def test_parallel_qualification_selects_in_source_order_despite_reverse_completi
             assert finished[rl.REGIONS[rank + 1]].wait(timeout=5)
         directory.mkdir(parents=True)
         episode = dict(start=pair['start'], goal=pair['goal'], success=index % 2 == 1,
-                       elapsed_ms=1000, demo_version=2, teacher_version=2)
+                       elapsed_ms=1000, demo_version=2, teacher_version=2, physics_mode='cv')
         rl.write_json(directory / 'episode.json', episode)
         for filename in ('samples.bin.gz', 'trajectory.txt', 'actions.txt'):
             (directory / filename).touch()
@@ -401,3 +402,159 @@ def test_far_comparison_rejects_reachability_or_time_regression(success, elapsed
     assert not result['passed']
     assert result['lost_success_routes'] == ([] if success else [dict(start='A', goal='B')])
     assert result['time_tolerance'] == .05
+
+
+def test_shared_scenario_propagates_cv_and_preserves_historical_native_default(tmp_path):
+    collector = rl.module('collect_nav_demos')
+    args = SimpleNamespace(output=tmp_path, seed=7)
+    native = collector.scenario_file(args, 'native', ['navdemos wait']).read_text()
+    assert 'navdemos physics native\n' in native
+    args.physics = 'cv'
+    cv = collector.scenario_file(args, 'cv', ['navdemos wait']).read_text()
+    assert cv.index('navdemos physics cv\n') < cv.index('navdemos wait\n')
+    args.physics = 'native'
+    assert 'navdemos physics native\n' in collector.scenario_file(args, 'optout', []).read_text()
+
+
+def test_teacher_resume_rejects_mixed_physics_metadata(tmp_path, monkeypatch):
+    pair = dict(region='market', start='A', goal='B')
+    directory = tmp_path / 'teacher/00000'
+    directory.mkdir(parents=True)
+    rl.write_json(directory / 'episode.json', dict(pair, demo_version=2, teacher_version=2,
+                                                  success=True, elapsed_ms=1000, physics_mode='native'))
+    for filename in ('samples.bin.gz', 'trajectory.txt', 'actions.txt'):
+        (directory / filename).touch()
+    closed = []
+    monkeypatch.setattr(rl, 'new_runner', lambda *a: SimpleNamespace(close=lambda: closed.append(True)))
+    args = SimpleNamespace(output=tmp_path, physics='cv', resume=True, per_region=10)
+    with pytest.raises(ValueError, match='physics mode differs'):
+        rl.qualify_region(args, [pair], 'market', lambda _: None)
+    assert closed == [True]
+
+
+def test_teacher_keeps_every_success_when_fifty_candidates_cannot_fill_quota(tmp_path, monkeypatch):
+    pool = [dict(region='market', start=f'A{i}', goal=f'B{i}') for i in range(3)]
+    monkeypatch.setattr(rl, 'new_runner', lambda *a: SimpleNamespace(close=lambda: None))
+    visited = []
+    def scenario(args, runner, name, commands, directory):
+        index = int(name.rsplit('-', 1)[1])
+        visited.append(index)
+        directory.mkdir(parents=True)
+        rl.write_json(directory / 'episode.json', dict(pool[index], success=index == 1,
+                     elapsed_ms=1000, demo_version=2, teacher_version=2, physics_mode='cv'))
+        for filename in ('samples.bin.gz', 'trajectory.txt', 'actions.txt'):
+            (directory / filename).touch()
+    monkeypatch.setattr(rl, 'scenario', scenario)
+    args = SimpleNamespace(output=tmp_path, resume=False, per_region=10, max_teacher_candidates=2,
+                           npc='NPC', roads=Path('/roads'), limit_ms=240000, seed=7, physics='cv')
+    chosen = rl.qualify_region(args, pool, 'market', lambda _: None)
+    assert visited == [0, 1]
+    assert [pair['start'] for pair in chosen] == ['A1']
+
+
+def test_qualification_reports_sparse_regions_before_any_drive(tmp_path, monkeypatch):
+    pool = [dict(region=region, start=f'{region}-A', goal=f'{region}-B') for region in rl.REGIONS]
+    monkeypatch.setattr(rl, 'checked_paths', lambda *a, **k: None)
+    monkeypatch.setattr(rl, 'load_pairs', lambda _: pool)
+    def region(args, candidates, name, publish):
+        if name == 'market':
+            return [dict(pool[0], index=0, teacher_success=True)]
+        return []
+    monkeypatch.setattr(rl, 'qualify_region', region)
+    args = SimpleNamespace(output=tmp_path, pairs=None, parallel=8, per_region=10, physics='cv')
+    rl.qualify(args)
+    report = rl.read_json(tmp_path / 'qualification.json')
+    assert report['n'] == 1
+    assert report['regions']['market'] == 1
+    assert report['shortages']['market'] == 9
+    assert report['shortages']['lobart'] == 10
+    assert report['physics'] == 'cv'
+
+
+def test_trajectory_diagnostic_locates_first_geometric_and_action_divergence(tmp_path):
+    first, second = tmp_path / 'first', tmp_path / 'second'
+    first.mkdir()
+    second.mkdir()
+    np.savetxt(first / 'trajectory.txt', [[0, 0, 0, 0, 0], [100, 10, 0, 0, 0], [200, 20, 0, 0, 0]])
+    np.savetxt(second / 'trajectory.txt', [[0, 0, 0, 0, 0], [100, 10.5, 0, 0, 0], [200, 50, 0, 0, 0]])
+    keys = np.zeros((4, 9))
+    keys[:, 0] = [0, 100, 200, 300]
+    np.savetxt(first / 'actions.txt', keys)
+    keys[1, 1] = 1
+    np.savetxt(second / 'actions.txt', keys)
+    result = rl.trajectory_divergence(dict(directory=str(first)), dict(directory=str(second)))
+    assert result['first_over_0.1_cm']['time_ms'] == 100
+    assert result['first_over_1_cm']['time_ms'] == 200
+    assert result['first_over_25_cm']['error_cm'] == 30
+    assert result['first_action_difference']['time_ms'] == 100
+
+
+def test_failed_timeouts_are_not_successful_timing_evidence(monkeypatch):
+    monkeypatch.setattr(rl, 'trajectory_divergence', lambda *a: dict(available=True))
+    first = {('A', 'B'): dict(success=False, elapsed_ms=240000)}
+    second = {('A', 'B'): dict(success=False, elapsed_ms=240000)}
+    result = rl.controlled_comparison(first, second)
+    assert result['passed']
+    assert result['timing_evidence_routes'] == 0
+    assert not result['pairs'][0]['timing_compared']
+    second[('A', 'B')]['elapsed_ms'] = 1000
+    assert not rl.controlled_comparison(first, second)['passed']
+
+
+def death_metadata():
+    state = dict(hp=100, hp_max=100, down=False, dead=False, ragdoll=False,
+                 in_air=False, climbing=False, gru_hidden_size=0, gru_l2=0,
+                 memory_traveled_cm=0, guidance_points=0, eye_observed=False, held_keys=[0, 0, 0, 1, 0, 0],
+                 position_cm=[100, 200, 300], expected_start_position_cm=[100, 200, 300], body_yaw_deg=45)
+    return [dict(kill_injected=True, final_dead=True, final_hp=0, final_ragdoll=True,
+                 final_state_started=True, final_gru_l2=.5, kill_at_ms=400),
+            dict(initial_state=state, kill_injected=False, reset_after_death=True)]
+
+
+def test_death_smoke_requires_actual_death_and_clean_state_before_first_step():
+    result = rl.death_reset_metrics(death_metadata())
+    assert result['passed']
+    assert result['reset_position_error_cm'] == 0
+
+
+@pytest.mark.parametrize('field,value,check', [('hp', 50, 'health_restored'), ('ragdoll', True, 'live_pose'),
+                                             ('gru_l2', .001, 'recurrent_state_cleared'),
+                                             ('position_cm', [300, 200, 300], 'start_pose_restored')])
+def test_death_smoke_rejects_contaminated_reset(field, value, check):
+    episodes = death_metadata()
+    episodes[1]['initial_state'][field] = value
+    result = rl.death_reset_metrics(episodes)
+    assert not result['passed']
+    assert not result['checks'][check]
+
+
+@pytest.mark.parametrize('outlier_count', [1, 3])
+def test_four_mode_equivalence_completes_all_routes_and_counts_unique_outliers(tmp_path, monkeypatch, outlier_count):
+    pool = candidates()[:10]
+    monkeypatch.setattr(rl, 'checked_paths', lambda *a, **k: None)
+    monkeypatch.setattr(rl, 'load_pairs', lambda _: pool)
+    monkeypatch.setattr(rl, 'new_runner', lambda *a: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(rl, 'trajectory_divergence', lambda *a: dict(available=True))
+    calls = []
+    def record(args, runner, index, pair, pair_file, mode):
+        calls.append((index, mode))
+        path = args.output / mode / f'{index:05d}'
+        if mode.startswith('pop-'):
+            path = path / 'episodes/0'
+        rl.write_json(path / 'episode.json', dict(pair, drive=True, decisions=10, success=True,
+                      elapsed_ms=1200 if index < outlier_count and mode.endswith('-far') else 1000,
+                      min_hero_distance_cm=12000, max_hero_distance_cm=15000))
+    monkeypatch.setattr(rl, 'record_equivalence', record)
+    args = SimpleNamespace(pairs=None, output=tmp_path, count=10, parallel=1, seed=7,
+                           far_waypoint='FAR', min_far_cm=10000, physics='cv')
+    if outlier_count > 2:
+        with pytest.raises(ValueError, match='more than two unique routes'):
+            rl.equivalence(args)
+    else:
+        rl.equivalence(args)
+    report = rl.read_json(tmp_path / 'equivalence.json')
+    assert len(calls) == 40
+    assert len(report['outlier_routes']) == outlier_count
+    assert report['passed'] == (outlier_count <= 2)
+    assert not report['strict_passed']
+    assert all(len(route['comparisons']) == 2 for route in report['outlier_routes'])

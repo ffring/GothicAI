@@ -102,7 +102,7 @@
 | Ручной прицел героя и лучники NPC | `common/game/archery.cpp`, `aimcamera.h`, `archerai.*` | `OPENGOTHIC_MANUALAIM`, `OPENGOTHIC_NPCAIM` (или ini `[GAME] manualAim`, `npcManualAim`) | [`manual-aim.md`](manual-aim.md) |
 | Боевое тело NPC: аренда, наблюдения, арена, реплей | `common/game/bodycontroller.*`, `bodyobservations.*`, `bodyarena.*`, `bodyreplay.*` | без `--body-url` на сервере не работает | [`npc-body-api.md`](npc-body-api.md) |
 | Headless-раннер для обучения тела | `game/bodyrunner.cpp` → `gothic-body-runner` (stdio RPC) | — | [`npc-body-headless-runner.md`](npc-body-headless-runner.md) |
-| Навигация NPC: обучаемая — пока только на стенде; популяция N NPC, эпизоды без перезагрузки, выборка и награды | `common/nav*`, `common/game/nav*`; `scripts/nav_rl.py` — пары, сбор, финальный замер, проверки | `navdemos population`: `sample/argmax`, `RECORD=0` выключает запись; обычная игра не включает режим | [`navigation.md`](navigation.md) |
+| Навигация NPC: обучаемая — пока только на стенде; популяция N NPC, эпизоды без перезагрузки, выборка и награды | `common/nav*`, `common/game/nav*`; `scripts/nav_rl.py` — пары, сбор, финальный замер, проверки | `navdemos population`: `sample/argmax`, `RECORD=0` выключает запись; `navdemos physics cv` закрепляет CV для ученика и учителя (`nav_rl.py` по умолчанию); обычная игра не включает режим | [`navigation.md`](navigation.md) |
 | HD-текстуры | `common/resources.cpp` | работают, если есть каталог `OPENGOTHIC_TEXTURES` | — |
 | Тестовый стенд | `common/testbench.*`, `OPENGOTHIC_BENCH*` | — | [`scripts/bench/README.md`](../scripts/bench/README.md) |
 

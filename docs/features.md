@@ -158,7 +158,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича стенда | Как включить / выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
-| Популяция навигации: N NPC, независимые состояния, выборка softmax и награды Detour без перезагрузки мира | `navdemos population … sample\|argmax … RECORD`; без команды не работает, `RECORD=0` выключает записи | `common/navdemos.*`, минимальные радиусы в `worldobjects.cpp`, `npc.cpp`; `scripts/nav_rl.py` | `test_nav_rl.py`, `nav_rl.py check/equivalence/population` | [navigation.md](navigation.md) |
+| Популяция навигации: N NPC, независимые состояния, выборка softmax и награды Detour без перезагрузки мира | `navdemos population … sample\|argmax … RECORD`; `navdemos physics cv\|native`, в `nav_rl.py` CV по умолчанию; `RECORD=0` выключает записи; `hero near\|keep`, `kill-slot SLOT AFTER_MS` — проверки стенда | `common/navdemos.*`, минимальные вставки в `worldobjects.cpp`, `npc.cpp`, `MoveAlgo::useCharacterVirtual`; `scripts/nav_rl.py` | `test_nav_rl.py`, `nav_rl.py check/equivalence/population/death-smoke` | [navigation.md](navigation.md) |
 
 Остальная обучаемая навигация ([navigation.md](navigation.md)) — пока исследование, в игру не включена.
 
