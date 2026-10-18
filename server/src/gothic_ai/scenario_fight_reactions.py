@@ -676,9 +676,9 @@ async def fight_reactions(
                         f"fight_reactions setup: wolf did not hunt hero; snapshot={wolf_snapshot}"
                     )
                 await _until(lambda: trace.first_received_contact(monster) is not None, 20)
-                first_companion = next(iter(trace.strikes.get(CAVALORN, [])), None)
                 # Wait through the encounter, so an early command cannot hide a late bite.
                 await _until(lambda: trace.hp.get(monster, 1) <= 0 or bool(trace.damage.get("PLAYER")), 25)
+                first_companion = next(iter(trace.strikes.get(CAVALORN, [])), None)
                 first_wolf = next(iter(trace.strikes.get(monster, [])), None)
                 first_hero_bite = trace.strike_after(monster, "PLAYER", 0)
                 first_companion_bite = trace.strike_after(monster, CAVALORN, 0)
