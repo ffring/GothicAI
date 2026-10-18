@@ -248,6 +248,14 @@ class BeastDesk:
     def at_him(self) -> list[BeastEntry]:
         return [w for w in self.wolves.values() if w.state in AT_HIM and w.distance <= HEAR_CM]
 
+    def selected(self, focus: str | None) -> BeastEntry | None:
+        """The wolf his words would go to, without judging their tone or making it hear them."""
+        return self._looked_at(focus) or min(self.at_him(), key=lambda w: w.distance, default=None)
+
+    def resume(self) -> None:
+        """The phrase went to a person: stop waiting for words meant for the wolves."""
+        self._resume_listeners()
+
     def hears(
         self, text: str, focus: str | None, to: Addressee | None, order: Order | None
     ) -> Addressee | None:
@@ -268,7 +276,8 @@ class BeastDesk:
         if not mine:
             self._resume_listeners()
             return None
-        main = looked or min(hearers, key=lambda w: w.distance)
+        main = self.selected(focus)
+        assert main is not None
         # the wolves at him hear it; one he looks at that is not at him pays no heed
         self._spawn(self.judge(text, hearers))
         return Addressee(main.id, main.name, "beast")

@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.executor import Intent
 from gothic_ai.llm import FakeBackend, FakeStep, ToolCall
@@ -14,6 +16,20 @@ from tests.test_talk import person
 
 GORN = "PC_FIGHTER"
 BANDIT = "BDT_1013_BANDIT"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Не бей волка.",
+        "Он сказал: бей волка.",
+        "Если увидишь волка, бей его.",
+        "Он крикнул «убей волка».",
+        "Как убить волка?",
+    ],
+)
+def test_long_attack_parser_ignores_negation_and_reported_speech(text):
+    assert Orders.parse_attack(text) is None
 
 
 async def _desk(fake: FakeGame, llm, **orders):

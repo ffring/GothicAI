@@ -60,6 +60,7 @@ from .persona import PersonaProvider, habits_of
 from .places import SIDES, PlaceBook
 from .protocol import (
     ActionResult,
+    Beasts,
     DebugCmd,
     Detached,
     DialogChosen,
@@ -1860,8 +1861,153 @@ async def orders_scenario(
 
     results["no_model"] = f"{'done' if not llm.calls else 'failed'} ({len(llm.calls)} model call(s))"
     link.act = act  # type: ignore[method-assign]
+    results.update(await _companion_attack_words(link, dialogue, talk))
     for name, outcome in results.items():
         log.info("%-12s %s", name, outcome)
+    return results
+
+
+async def _companion_attack_words(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, npc: str = "BAU_4300_ADDON_CAVALORN"
+) -> dict[str, str]:
+    """2026-10-18: «бей волка» without focus belongs to Cavalorn, before a wolf bites the hero.
+
+    Retreat during setup keeps an automatic monster defence from satisfying the attack check. The
+    explicit attack must replace it; the wolf's tone model and judge must never receive the words.
+    """
+    from .executor import Intent
+
+    beasts = talk.beasts
+    if beasts is None or talk.orders is None:
+        return {"wolf_ready": "failed (no beasts or companion orders)"}
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object) -> None:
+        results[name] = f"{'done' if ok else 'failed'} ({detail})"
+
+    def dist() -> float:
+        return talk.people[npc].distance / 100 if npc in talk.people else -1.0
+
+    await link.debug("player_hp", hp=5000)
+    await link.debug("skip_important", near=npc)
+    for _ in range(2):
+        try:
+            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+        except GameError:
+            pass
+    await link.debug("player_goto", to=npc, distance=300)
+    if not await _until(lambda: 0 <= dist() <= 10, 20):
+        return {"wolf_ready": f"failed (Cavalorn {dist():.1f} m from the hero)"}
+    dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
+    talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+    await link.debug("player_goto", waypoint=WOLF_HERO)
+    await asyncio.sleep(1)  # the road's roster, rather than the one still at Cavalorn's fire
+    for _ in range(8):  # clear the road's own wolves before its one controlled encounter
+        if not beasts.wolves:
+            break
+        wolf = min(beasts.wolves.values(), key=lambda w: w.distance)
+        await link.debug("kill", instance=wolf.id.split("#", 1)[0], by="PLAYER")
+        await _until(lambda wolf=wolf: wolf.id not in beasts.wolves, 5)
+    following = await _until(lambda: 0 <= dist() <= 5, 30)
+    check("wolf_follow", following, f"Cavalorn {dist():.1f} m from the hero")
+    if not following:
+        return results
+
+    points = {p["name"]: p for p in await link.waypoints()}
+    hero = points[WOLF_HERO]
+    ground = [p for p in points.values() if abs(p["y"] - hero["y"]) < 250 and not p["fp"]]
+    at = min(ground, key=lambda p: abs(math.hypot(p["x"] - hero["x"], p["z"] - hero["z"]) - 1000))
+    snap = await link.snapshot(npc, fresh=True)
+    hp = snap.player.hp if snap.player is not None else None
+    talk.hear("Кавалорн, отступай!", None, {"via": "scenario"})
+    await _until(lambda: getattr(talk.orders.standing.get(npc), "kind", "") == "retreat", 5)
+    before = set(beasts.wolves)
+    await link.story_spawn("WOLF", tag="companion_attack_words", waypoint=at["name"])
+    ready = await _until(
+        lambda: any(w.id not in before and w.state == "threaten" for w in beasts.wolves.values()), 15
+    )
+    wolf_id = next((w.id for w in beasts.wolves.values() if w.id not in before), "")
+    check("wolf_ready", ready, f"{wolf_id} at {at['name']}, before its first attack")
+    if not ready:
+        return results
+
+    actions: list[tuple[float, str, str]] = []  # dispatch time, target, wolf state at dispatch
+    finished: list[str] = []
+    states: list[tuple[float, str]] = []
+    judged: list[str] = []
+    heard: list[str] = []
+    act, judge, hears, quick = link.act, beasts.judge, beasts.hears, beasts.quick
+    tone_model = FakeBackend("hostile", delay=0)
+    beasts.quick = tone_model
+
+    async def record_act(who: str, action: Any, /, **kw: Any) -> Any:
+        mine = who.upper() == npc and action == "fight"
+        if mine:
+            w = beasts.wolves.get(wolf_id)
+            actions.append((time.monotonic(), str(kw.get("npc", "")), w.state if w else "gone"))
+        result = await act(who, action, **kw)
+        if mine:
+            finished.append(result.status)
+        return result
+
+    async def record_judge(text: str, hearers: Any) -> Any:
+        judged.append(text)
+        return await judge(text, hearers)
+
+    def record_hears(text: str, *args: Any) -> Any:
+        heard.append(text)
+        return hears(text, *args)
+
+    def on_beasts(msg: GameMessage) -> None:
+        if isinstance(msg, Beasts):
+            states.extend((time.monotonic(), w.state) for w in msg.wolves if w.id == wolf_id)
+
+    link.act = record_act  # type: ignore[method-assign]
+    beasts.judge = record_judge  # type: ignore[method-assign]
+    beasts.hears = record_hears  # type: ignore[method-assign]
+    link.listeners.append(on_beasts)
+    try:
+        mark = time.monotonic()
+        talk.hear("Бей волка!", None, {"via": "scenario"})
+        dispatched = await _until(lambda: bool(actions), 10)
+        fought = await _until(lambda: any(state == "fight" for _, state in states), 15)
+        to = talk.last[0] if talk.last else None
+        check(
+            "attack_without_focus",
+            dispatched
+            and fought
+            and to is not None
+            and to.id == npc
+            and to.why == "order"
+            and actions[0][1].split("#", 1)[0] == wolf_id.split("#", 1)[0],
+            f"to {to}; fights {actions}, wolf fought Cavalorn {fought}",
+        )
+        before_bite = (
+            dispatched
+            and actions[0][2] != "attack"
+            and not any(state == "attack" and t <= actions[0][0] for t, state in states)
+        )
+        snap = await link.snapshot(npc, fresh=True)
+        after_hp = snap.player.hp if snap.player is not None else None
+        check(
+            "attack_before_bite",
+            before_bite and hp is not None and after_hp == hp,
+            f"dispatch in {actions[0][0] - mark:.2f} s, hp {hp} -> {after_hp}"
+            if actions
+            else f"no fight, hp {hp} -> {after_hp}",
+        )
+        check(
+            "wolf_unheard",
+            not heard and not judged and not tone_model.calls,
+            f"hears {len(heard)}, judge {len(judged)}, tone model {len(tone_model.calls)}",
+        )
+        await _until(lambda: bool(finished), 60)
+    finally:
+        link.act = act  # type: ignore[method-assign]
+        beasts.judge = judge  # type: ignore[method-assign]
+        beasts.hears = hears  # type: ignore[method-assign]
+        beasts.quick = quick
+        link.listeners.remove(on_beasts)
     return results
 
 
@@ -3334,9 +3480,12 @@ async def group_scenario(
     """One word at a time (step B2 of docs/npc-tools.md; the user, 2026-10-13: talking to two bandits and
     Cavalorn, all three answered at once). The hero, Cavalorn with him, at the bandits' cave with Brago, his
     mate and the bandit from the steps; the models are scripted (LLM=fake), lines voiced (TTS=fake). The hero
-    says «Пацаны, здорово!» to nobody in particular; at once three others ask for words, as the fast loop's
-    escalations do. Checks:
+    says «Пацаны, здорово!» while Cavalorn is still his conversation partner (2026-10-18: the greeting
+    wrongly went to the companion); at once three others ask for words, as the fast loop's escalations
+    do. Checks:
+    - current_companion: a conversation with the following companion is open before the greeting;
     - first: Brago, who leads them, answers first;
+    - bandits_answer: the first line is actually heard from Brago;
     - one_at_a_time: no voice starts before the one before it has been heard;
     - heard: the second answers with the first's words in mind;
     - three: three voices to the hero's phrase, the fourth says nothing.
@@ -3375,6 +3524,17 @@ async def group_scenario(
     if (failed := await _at_the_steps(link, dialogue, talk, npc, brago, bandit, steps)) is not None:
         return _logged({"roster": f"failed ({failed})"})
 
+    talk.end("scenario")
+    opened = talk.begin(npc, names[npc])
+    check(
+        "current_companion",
+        opened
+        and talk.partner is not None
+        and talk.partner.npc == npc
+        and talk.orders is not None
+        and talk.orders.companion(npc),
+        talk.partner,
+    )
     t0 = time.monotonic()
     talk.hear("Пацаны, здорово!", None, {"via": "scenario"})
     first = talk.last[0] if talk.last else None
@@ -3387,7 +3547,8 @@ async def group_scenario(
     )
     voices = [n for n in names if models[n].calls]
     # each voice starts after the one before it has been heard: its lines' starts and lengths
-    order, overlaps = _overlaps(dialogue, started, names)
+    order, overlaps = _overlaps(dialogue, [s for s in started if s[0] >= t0], names)
+    check("bandits_answer", bool(order) and order[0] == brago, [names[n] for n in order])
     check("one_at_a_time", quiet and len(order) >= 2 and not overlaps, overlaps or [names[n] for n in order])
     second = models[order[1]].calls[0][1] if len(order) > 1 and models[order[1]].calls else []
     heard = "Ты слышал, как Браго говорит герою" in " ".join(str(getattr(m, "content", "")) for m in second)

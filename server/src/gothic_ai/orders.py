@@ -114,6 +114,14 @@ GO_TO_TOOL = Tool(
     },
 )
 
+_ATTACK = frozenset("бей бейте убей убейте атакуй атакуйте мочи мочите руби рубите".split())
+_REPORTED = frozenset("сказал сказала сказали говорил говорила крикнул приказал спросил если чтобы".split())
+_KINDS = ("волк", "мух", "гоблин", "падальщик", "крыса", "крыс", "шершн", "шныг", "варг", "мракорис")
+
+
+def _species(text: str) -> set[str]:
+    return {kind for w in words(text) for kind in _KINDS if w.startswith(kind)}
+
 
 @dataclass(eq=False)
 class Standing:
@@ -220,6 +228,70 @@ class Orders:
         e = self.talk.people.get(focus)
         return None if e is not None and e.activity == "down" else focus
 
+    @staticmethod
+    def parse_attack(text: str) -> Order | None:
+        """An explicit imperative inside a longer live transcript, never a report or a negation."""
+        said = words(text)
+        if set(said) & _REPORTED or any(mark in text for mark in ("«", "»", '"')):
+            return None
+        for i, word in enumerate(said):
+            if word in _ATTACK and not (i and said[i - 1] == "не"):
+                return Order("attack", word, text)
+        return None
+
+    async def attack_target(
+        self,
+        focus: str | None,
+        squad: list[tuple[str, str]],
+        text: str,
+        to: Addressee | None,
+    ) -> str | None:
+        """Pointed target, else the nearest visible named species, else the wolf hearing pronouns."""
+        if target := self.target(focus, squad):
+            return target
+        kinds = _species(text)
+        if kinds:
+            candidates: dict[str, float] = {}
+            if self.talk.beasts is not None:
+                for beast in self.talk.beasts.wolves.values():
+                    if kinds & _species(beast.name):
+                        candidates[beast.id.split("#", 1)[0].upper()] = min(
+                            candidates.get(beast.id.split("#", 1)[0].upper(), float("inf")),
+                            beast.distance,
+                        )
+            try:
+                views = await self.link.npc_view([npc for npc, _ in squad], timeout=1.0)
+                for view in views:
+                    for other in view.sees:
+                        if (
+                            other.kind == "monster"
+                            and other.body not in ("dead", "down")
+                            and kinds & _species(other.name)
+                        ):
+                            distance = other.hero_cm if other.hero_cm is not None else other.distance
+                            candidates[other.id.upper()] = min(
+                                candidates.get(other.id.upper(), float("inf")), distance
+                            )
+                targets = sorted(candidates, key=candidates.__getitem__)
+                visible = (
+                    await self.link.story_eval(
+                        squad[0][0],
+                        [["call", "NPC_CANSEENPC", ["inst", "HERO"], ["inst", target]] for target in targets],
+                        timeout=1.0,
+                    )
+                    if targets
+                    else []
+                )
+                return next((target for target, seen in zip(targets, visible, strict=False) if seen), None)
+            except (GameError, TimeoutError) as err:
+                log.info("attack target sight unavailable: %s", err)
+                return None
+        if self.talk.beasts is not None and (beast := self.talk.beasts.selected(None)) is not None:
+            return beast.id.split("#", 1)[0].upper()
+        if to is not None and to.why == "name" and not self.companion(to.id):
+            return to.id
+        return self.latest_foe()
+
     def latest_foe(self, near: str | None = None) -> str | None:
         """Whoever struck the hero or a companion last and is still about (near the companion `near`, if
         given: a monster is not in the roster, only the companion sees it)."""
@@ -235,7 +307,14 @@ class Orders:
             return npc
         return None
 
-    def take(self, order: Order, focus: str | None, to: Addressee | None) -> list[tuple[str, str]]:
+    def take(
+        self,
+        order: Order,
+        focus: str | None,
+        to: Addressee | None,
+        *,
+        resolved_attack: bool = False,
+    ) -> list[tuple[str, str]]:
         """Carry the order out at once, if anyone obeys it; who does ([]: nobody, it is words)."""
         if (
             order.kind in TO_FOE
@@ -249,7 +328,7 @@ class Orders:
         else:
             squad = self.squad(to, order.heard)
             if order.kind == "attack":
-                target = self.target(focus, squad) or self.latest_foe()
+                target = self.target(focus, squad) or (None if resolved_attack else self.latest_foe())
         if not squad or (order.kind == "attack" and target is None):
             return []
         for npc, name in squad:
