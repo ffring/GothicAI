@@ -72,6 +72,8 @@ struct Cloth::Instance::Impl {
   std::string visual;
   uint32_t zenId = uint32_t(-1);
   float stiffness = .8f, weight = 0, targetWeight = 0, shelterTimer = 0;
+  uint32_t substeps = 4;
+  float linearDamping = 1.5f;
   float maxAnchorError = 0, maxSpeed = 0, maxSpeedEver = 0, transitionMaxDelta = 0;
   std::vector<Contact> contacts;
   size_t contactCount = 0;
@@ -177,11 +179,12 @@ struct Cloth::Impl : JPH::SoftBodyContactListener {
     float freeSpan=0;
     for(const auto& attachment:settings.mLRAConstraints)
       freeSpan=std::max(freeSpan,attachment.mMaxDistance);
-    creation.mNumIterations=freeSpan>6.f ? 8 : 4;
+    body.substeps=freeSpan>6.f ? 8 : 4;
+    creation.mNumIterations=body.substeps;
     // Together with aerodynamic drag this is close to critical damping for
     // a ship flag's seven-metre free span. Excess damping makes those long
     // side-pinned flags creep towards their hanging pose for many seconds.
-    creation.mLinearDamping=1.5f;
+    creation.mLinearDamping=body.linearDamping;
     creation.mMaxLinearVelocity=Cloth::maxVelocityMS;
     creation.mVertexRadius=.005f;
     creation.mUpdatePosition=false;
@@ -232,6 +235,13 @@ void Cloth::Instance::setAttachmentCapsule(const Tempest::Vec3& from,const Tempe
   impl->supportFrom=from;
   impl->supportTo=to;
   impl->supportRadiusCm=radius;
+  }
+void Cloth::Instance::setLinearDamping(float value) {
+  if(!std::isfinite(value) || value<0.f) return;
+  impl->linearDamping=value;
+  if(impl->body.IsInvalid() || impl->owner==nullptr) return;
+  JPH::BodyLockWrite lock(impl->owner->system().GetBodyLockInterface(),impl->body);
+  if(lock.Succeeded()) lock.GetBody().GetMotionProperties()->SetLinearDamping(value);
   }
 void Cloth::Instance::setShaderReference(ShaderReference reference) { impl->shader=std::move(reference); }
 void Cloth::Instance::setUpdateCallback(UpdateCallback callback) { impl->update=std::move(callback); }
@@ -338,13 +348,18 @@ void Cloth::prepareFrame(uint64_t dt) {
     if(body.weight<=0.f && body.targetWeight<=0.f) impl->remove(body);
     });
   }
-void Cloth::prepareStep(float seconds) {
+void Cloth::prepareStep(float seconds,uint32_t nativeCollisionSteps) {
   impl->each([&](Instance::Impl& body) {
     if(body.body.IsInvalid()) return;
     body.contacts.clear();
     JPH::BodyLockWrite lock(impl->system().GetBodyLockInterface(),body.body);
     if(!lock.Succeeded()) return;
     auto& motion=*static_cast<JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
+    // Other physics features may divide this same 1/60 s update into two or
+    // four native collision steps. Keep cloth's total substeps and XPBD dt
+    // unchanged: accidentally doubling them changes compliance and can excite
+    // long, thin sail triangles even when the wind has already stopped.
+    motion.SetNumIterations(std::max(1u,body.substeps/std::max(1u,nativeCollisionSteps)));
     if(body.supportRadiusCm>0.f) {
       body.supportPrevious.resize(motion.GetVertices().size());
       for(size_t i=0;i<body.supportPrevious.size();++i)
@@ -519,6 +534,7 @@ std::vector<Cloth::Snapshot> Cloth::snapshots() const {
     snapshot.indices=body.indices;
     for(size_t i=0;i<body.rendered.size();++i) {
       snapshot.worldPositionsCm.push_back(project(body.matrix,body.rendered[i]));
+      snapshot.referenceWorldPositionsCm.push_back(project(body.matrix,body.reference(i)));
       if(body.pinned[body.mapping[i]]) snapshot.anchorsCm.push_back(project(body.matrix,body.source[i]));
       }
     result.push_back(std::move(snapshot));

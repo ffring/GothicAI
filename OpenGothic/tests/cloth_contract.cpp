@@ -5,12 +5,60 @@
 #include "world/portalrooms.h"
 
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Core/JobSystemSingleThreaded.h>
+#include <Jolt/Core/TempAllocator.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+
+// The production engine may ask Jolt for extra collision steps to support
+// unrelated rigid bodies. Exercise those real Update paths without adding a
+// fragment, NPC or test-mode switch to the game itself.
+class ClothContractDriver {
+  public:
+    static std::array<Cloth::Snapshot,2> run(const std::vector<Tempest::Vec3>& vertices,
+                                            const std::vector<uint32_t>& indices,
+                                            const std::vector<uint32_t>& pins,
+                                            uint32_t collisionSteps) {
+      CollisionWorld world;
+      Cloth cloth(world);
+      auto instance=cloth.add(vertices,indices,pins,Tempest::Matrix4x4::mkIdentity(),.82f,"substep-invariance",18);
+      cloth.setObserver({350,350,0});
+      cloth.setWindScale(2.f);
+      JPH::TempAllocatorImpl allocator(16*1024*1024);
+      JPH::JobSystemSingleThreaded jobs(4096);
+      std::array<Cloth::Snapshot,2> result;
+      float accumulated=0;
+      uint64_t now=0;
+      bool calm=false;
+      for(;now<13000;now+=17) {
+        if(!calm && now>=3000) {
+          result[0]=cloth.snapshots().front();
+          cloth.setWindScale(0.f);
+          calm=true;
+          }
+        cloth.setWind(WorldWind::sample(now,10000,true));
+        cloth.prepareFrame(17);
+        constexpr float step=1.f/60.f;
+        accumulated+=.017f;
+        const int count=int(accumulated/step);
+        accumulated-=float(count)*step;
+        for(int i=0;i<std::min(count,2);++i) {
+          cloth.prepareStep(step,collisionSteps);
+          world.physicsSystem().Update(step,int(collisionSteps),&allocator,&jobs);
+          cloth.finishStep();
+          }
+        cloth.finishFrame();
+        }
+      result[1]=cloth.snapshots().front();
+      return result;
+      }
+  };
 
 namespace {
   void require(bool condition,const char* message) {
@@ -300,6 +348,17 @@ int main() {
   require(longGust.maxSpeedEverCmPerSec<=Cloth::maxVelocityMS*100.f+1.f,"long flags stay below the same native velocity cap during gusts");
   require(longCalm.maxAnchorErrorCm<=.5f && longCalm.recoveryCount==0,"a seven-metre side-pinned flag stays attached and finite after gusts and ten seconds calm");
   longInstance.reset();
+  const auto oneCollisionStep=ClothContractDriver::run(longFlag.vertices,longFlag.indices,longFlag.pins,1);
+  float collisionStepDelta=0;
+  for(uint32_t collisionSteps:{2u,4u}) {
+    const auto subdivided=ClothContractDriver::run(longFlag.vertices,longFlag.indices,longFlag.pins,collisionSteps);
+    for(size_t phase=0;phase<subdivided.size();++phase) {
+      collisionStepDelta=std::max(collisionStepDelta,maxDisplacement(oneCollisionStep[phase],subdivided[phase]));
+      require(subdivided[phase].maxAnchorErrorCm<=.5f && subdivided[phase].recoveryCount==0,
+              "additional native collision steps preserve cloth attachments and stability");
+      }
+    }
+  require(collisionStepDelta<.01f,"unrelated native collision subdivision leaves gust and calm cloth poses unchanged");
   auto supported=cloth.add(flag.vertices,flag.indices,flag.pins,Tempest::Matrix4x4::mkIdentity(),.85f,"support-capsule-flag",15);
   supported->setAttachmentCapsule({60,-50,35},{60,250,35},5.f);
   cloth.setObserver({60,100,0});
@@ -329,9 +388,9 @@ int main() {
   require(fastSnapshots.back().worldPositionsCm[2].z>13.5f,"without an attachment guard the same fast particle crosses beyond the pole's far side");
   require(fastSupportCloth.worldPositionsCm[2].z<=2.51f,"a fast particle cannot tunnel through its narrow attachment capsule in one physics step");
   require(fastSupportCloth.maxAnchorErrorCm<=.5f && fastSupportCloth.recoveryCount==0,"the swept attachment guard keeps both fixed vertices unchanged");
-  std::printf("cloth contract passed: calm_10s_max_vertex_cm_s=%.6g max_vertex_cm_s=%.6g anchor_drift_cm=%.6g boundary_delta_cm=%.6g roof_calm_lateral_cm_s=%.6g roof_wind_lateral_cm_s=%.6g wall_vertex_max_z_cm=%.6g character_vertex_max_z_cm=%.6g long_flag_gust_max_cm_s=%.6g long_flag_calm_10s_cm_s=%.6g support_min_radius_cm=%.6g support_fast_vertex_z_cm=%.6g recovery=0\n",
+  std::printf("cloth contract passed: calm_10s_max_vertex_cm_s=%.6g max_vertex_cm_s=%.6g anchor_drift_cm=%.6g boundary_delta_cm=%.6g roof_calm_lateral_cm_s=%.6g roof_wind_lateral_cm_s=%.6g wall_vertex_max_z_cm=%.6g character_vertex_max_z_cm=%.6g long_flag_gust_max_cm_s=%.6g long_flag_calm_10s_cm_s=%.6g collision_steps_pose_delta_cm=%.6g support_min_radius_cm=%.6g support_fast_vertex_z_cm=%.6g recovery=0\n",
               double(calm.maxSpeedCmPerSec),double(windy.maxSpeedEverCmPerSec),double(windy.maxAnchorErrorCm),
               double(boundaryDelta),double(calmLateral),double(shelteredLateral),double(maxWallZ),double(maxCharacterZ),
-              double(longGust.maxSpeedEverCmPerSec),double(longCalm.maxSpeedCmPerSec),double(closestSupport),double(fastSupportCloth.worldPositionsCm[2].z));
+              double(longGust.maxSpeedEverCmPerSec),double(longCalm.maxSpeedCmPerSec),double(collisionStepDelta),double(closestSupport),double(fastSupportCloth.worldPositionsCm[2].z));
   return EXIT_SUCCESS;
   }

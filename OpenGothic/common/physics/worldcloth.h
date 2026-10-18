@@ -17,6 +17,7 @@ struct Surface {
   std::string visual;
   uint32_t id = 0;
   float stiffness = 0.85f;
+  float linearDamping = 1.5f;
   };
 
 struct Extracted {

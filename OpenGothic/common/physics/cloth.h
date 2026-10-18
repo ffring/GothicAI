@@ -27,6 +27,7 @@ class Cloth final {
         // A cheap local-space support guard. General world/character contacts
         // stay disabled; the visible cloth cannot cross its own narrow pole.
         void setAttachmentCapsule(const Tempest::Vec3& fromCm,const Tempest::Vec3& toCm,float radiusCm);
+        void setLinearDamping(float perSecond);
         void setShaderReference(ShaderReference reference);
         void setUpdateCallback(UpdateCallback callback);
         const std::vector<Tempest::Vec3>& positionsCm() const;
@@ -64,7 +65,7 @@ class Cloth final {
       std::vector<WindOccluder> windOccluders;
       uint64_t projectileHits = 0, arrowPasses = 0, recoveryCount = 0;
       // Visible vertex order, already blended with the shader reference.
-      std::vector<Tempest::Vec3> positionsCm, worldPositionsCm, anchorsCm;
+      std::vector<Tempest::Vec3> positionsCm, worldPositionsCm, referenceWorldPositionsCm, anchorsCm;
       std::vector<uint32_t> indices;
       };
 
@@ -97,8 +98,9 @@ class Cloth final {
     struct Impl;
     std::unique_ptr<Impl> impl;
     void prepareFrame(uint64_t dt);
-    void prepareStep(float seconds);
+    void prepareStep(float seconds,uint32_t nativeCollisionSteps = 1);
     void finishStep();
     void finishFrame();
     friend class CollisionWorld;
+    friend class ClothContractDriver;
   };

@@ -25,7 +25,7 @@ class ClothVisual final {
                                                const zenkit::VirtualObject& vob, bool enableCollision);
     static std::unique_ptr<ClothVisual> createSurface(World& world, const zenkit::Mesh& source,
                                                      const std::vector<uint32_t>& pinnedSourcePositionIds,
-                                                     std::string visual, uint32_t id, float stiffness);
+                                                     std::string visual, uint32_t id, float stiffness, float linearDamping);
     ~ClothVisual();
     void setView(MeshObjects::Mesh& view);
     void setMatrix(const Tempest::Matrix4x4& matrix);

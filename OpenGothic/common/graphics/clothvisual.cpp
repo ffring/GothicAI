@@ -561,7 +561,7 @@ std::unique_ptr<ClothVisual> ClothVisual::create(MeshObjects::Mesh& view, World&
 
 std::unique_ptr<ClothVisual> ClothVisual::createSurface(World& world, const zenkit::Mesh& source,
                                                       const std::vector<uint32_t>& pinnedSourcePositionIds,
-                                                      std::string visual, uint32_t id, float stiffness) {
+                                                      std::string visual, uint32_t id, float stiffness, float linearDamping) {
   try {
     if(source.vertices.empty() || source.polygons.vertex_indices.empty())
       return nullptr;
@@ -632,6 +632,7 @@ std::unique_ptr<ClothVisual> ClothVisual::createSurface(World& world, const zenk
     state.bindPhysics(stiffness,std::move(visual),id);
     if(!state.physics)
       return nullptr;
+    state.physics->setLinearDamping(linearDamping);
     state.setupViews();
     state.setupCallbacks(out->state);
     return out;

@@ -17,6 +17,7 @@ namespace {
 struct Rule {
   std::string material, geometry, attachment, filter;
   float stiffness = .85f;
+  float linearDamping = 1.5f;
   };
 
 std::string materialKey(std::string name) {
@@ -35,7 +36,7 @@ const std::vector<Rule>& rules() {
     while(std::getline(csv,line)) {
       if(line.empty() || line[0]=='#')
         continue;
-      std::array<std::string,5> field;
+      std::array<std::string,6> field;
       std::istringstream row(line);
       for(auto& f:field)
         std::getline(row,f,',');
@@ -45,6 +46,8 @@ const std::vector<Rule>& rules() {
       rule.attachment=field[2];
       rule.stiffness=std::clamp(std::strtof(field[3].c_str(),nullptr),0.f,1.f);
       rule.filter=field[4];
+      if(!field[5].empty())
+        rule.linearDamping=std::clamp(std::strtof(field[5].c_str(),nullptr),0.f,10.f);
       result.emplace_back(std::move(rule));
       }
     return result;
@@ -219,6 +222,7 @@ WorldCloth::Extracted WorldCloth::extract(zenkit::Mesh& landscape) {
       surface.id=0x80000000u|island.front();
       surface.visual=rule.material+":"+std::to_string(++ordinal);
       surface.stiffness=rule.stiffness;
+      surface.linearDamping=rule.linearDamping;
       surface.mesh=std::move(mesh);
       result.surfaces.emplace_back(std::move(surface));
       for(auto f:island)

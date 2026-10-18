@@ -176,7 +176,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     wdynamic->setClothEnabled(Gothic::physicsFlags().cloth);
     wdynamic->setPhysicsNoiseCallback([this](const PhysicsNoise& noise) { emitPhysicsNoise(noise); });
     for(auto& surface:worldCloth.surfaces)
-      if(auto visual=ClothVisual::createSurface(*this,surface.mesh,surface.pins,surface.visual,surface.id,surface.stiffness))
+      if(auto visual=ClothVisual::createSurface(*this,surface.mesh,surface.pins,surface.visual,surface.id,surface.stiffness,surface.linearDamping))
         clothSurfaces.push_back(std::move(visual));
     world.world_mesh = zenkit::Mesh();
     loadProgress(70);

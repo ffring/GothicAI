@@ -2000,7 +2000,6 @@ void CollisionWorld::tick(uint64_t dt) {
       ++impl->simulationStep;
       prepareBuoyancy(splashes);
       for(auto* body:ragdolls) body->prepareKinematicStep(step);
-      if(cloth!=nullptr) cloth->prepareStep(step);
       const bool dynamicRagdolls=std::any_of(ragdolls.begin(),ragdolls.end(),[](const Ragdoll* body) { return !body->isKinematic(); });
       constexpr int fragmentSteps=4;
       bool activeFragments=false;
@@ -2045,7 +2044,9 @@ void CollisionWorld::tick(uint64_t dt) {
       // rig steps. Support must be applied before each of them, just like
       // gravity, or still floats acquire a persistent integration velocity.
       if(waterSteps) impl->system.AddStepListener(impl.get());
-      impl->system.Update(float(step),activeFragments ? fragmentSteps : dynamicRagdolls ? 2 : 1,&impl->allocator,&impl->jobs);
+      const int collisionSteps=activeFragments ? fragmentSteps : dynamicRagdolls ? 2 : 1;
+      if(cloth!=nullptr) cloth->prepareStep(step,uint32_t(collisionSteps));
+      impl->system.Update(float(step),collisionSteps,&impl->allocator,&impl->jobs);
       if(waterSteps) impl->system.RemoveStepListener(impl.get());
       finishBuoyancy(step);
       for(auto* body:ragdolls) body->finishKinematicStep();
