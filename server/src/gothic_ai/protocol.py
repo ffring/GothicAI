@@ -1559,6 +1559,7 @@ DebugCommand = Literal[
     "player_take",
     "npc_drop",  # v42: an npc drops its own item, retaining the native owner
     "player_hit",  # v42: the hero damages an npc through the native damage path
+    "npc_hit",  # v43: confirmed npc melee contact, with native damage and attacker perceptions
     "spawn_item",  # v42: an unowned world item, without going through an npc inventory
     "own_npc",
     "triggers",
@@ -1595,7 +1596,11 @@ class DebugCmd(_Command):
     director's (`own_npc`, v33): a script symbol of ours `npc` (DIR_...) made like the script's npc `like`,
     put at a `waypoint` or `distance` cm (default 300) in front of the player; the save keeps both (`value`:
     {npc, index: its symbol, name}). v42: `npc_drop` (`npc`, `item`, `count`) uses the npc's native drop
-    path, retaining ownership; `player_hit` (`npc`) uses the hero's native damage path.
+    path, retaining ownership; `player_hit` (`npc`) uses the hero's native damage path. v43: `npc_hit`
+    (`npc`, `by`) confirms one melee contact between distinct living npcs within 500 cm, bypassing only
+    parry/backstep. It requires a drawn melee weapon and a mortal victim vulnerable to its damage;
+    armour, damage calculation and perceptions stay native. `value` contains `attacker`, `victim`,
+    `game_ms`, `hp_before`, `hp_after`; no HP loss is a failed command.
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;

@@ -913,6 +913,41 @@ async def fight_reactions(
                         link.listeners.remove(heard)
                     # Physical completion is proved by grounded(), not by leaving a long idle state.
 
+                async def hit_from_companion(bandit: str) -> int:
+                    # Test the defender's response to a confirmed contact, independently of
+                    # whether Cavalorn's native tactics choose or land an attack animation.
+                    close = await _until(
+                        lambda: (
+                            (distance := trace.distance(CAVALORN, bandit)) is not None
+                            and distance <= 300
+                            and trace.target.get(CAVALORN) == trace.entities.get(bandit)
+                        ), 15,
+                    )
+                    if not close:
+                        raise GameError("fight_reactions setup: companion did not reach the defender")
+                    response = await link._request(
+                        DebugCmd(req=link._next_id("r"), cmd="npc_hit", npc=bandit, by=CAVALORN), 5,
+                    )
+                    proof = response.value or {}
+                    hit = proof.get("game_ms")
+                    log.info("fight_reactions guaranteed hit evidence=%s", proof)
+                    if not (
+                        type(hit) is int
+                        and proof.get("attacker") == CAVALORN and proof.get("victim") == bandit
+                        and proof.get("hp_before", 0) > proof.get("hp_after", 0) > 0
+                    ):
+                        raise GameError("fight_reactions setup: native hit evidence is invalid")
+                    observed = await _until(
+                        lambda: (
+                            any(t == hit for t, _ in trace.contacts.get(CAVALORN, ()))
+                            and (hit, 9) in trace.received_contacts.get(bandit, ())
+                            and trace.hp.get(bandit, proof["hp_before"]) <= proof["hp_after"]
+                        ), 5,
+                    )
+                    if not observed:
+                        raise GameError("fight_reactions setup: native hit is absent from body history")
+                    return hit
+
                 # Both defenders have reacted. Isolate their post-hit measurements so a native
                 # target switch or two opponents pinning Cavalorn cannot prevent the first hit.
                 await stop_companion()
@@ -982,9 +1017,7 @@ async def fight_reactions(
                         await link.detach(bandit)
                         parked.remove(bandit)
                     talk.orders.fight_intent(CAVALORN, bandit)
-                    await _until(lambda b=bandit: bool(trace.damage.get(b)), 60)
-                    hits = trace.damage.get(bandit, [])
-                    hit = hits[0][0] if hits else None
+                    hit = await hit_from_companion(bandit)
                     if hit is not None:
                         complete = await _until(
                             lambda b=bandit, h=hit: (

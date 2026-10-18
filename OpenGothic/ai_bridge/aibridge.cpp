@@ -1139,7 +1139,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="npc_los" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" || cmd=="npc_drop" || cmd=="player_hit" || cmd=="spawn_item" ||
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="npc_los" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" || cmd=="npc_drop" || cmd=="player_hit" || cmd=="npc_hit" || cmd=="spawn_item" ||
      cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise" || cmd=="physics_traces" || cmd=="destruction_traces") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
@@ -1689,6 +1689,51 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     victim->takeDamage(*pl,nullptr);
     const bool damaged = victim->attribute(ATR_HITPOINTS)<before;
     sendResult(req,damaged,damaged ? "" : "the hit caused no damage");
+    return;
+    }
+  if(cmd=="npc_hit") {
+    // A confirmed melee contact for a bench: only parry/backstep are bypassed. Native damage,
+    // armour, hit reactions and perceptions still identify the real attacker.
+    Npc* victim = npcBySymbol(*world,JsonRead::str(msg,"npc"));
+    Npc* by     = npcBySymbol(*world,JsonRead::str(msg,"by"));
+    if(victim==nullptr || by==nullptr || victim==by || victim==pl || by==pl ||
+       victim->isDown() || by->isDown() || victim->isImmortal()) {
+      sendResult(req,false,"npc_hit needs distinct living npcs and a mortal victim");
+      return;
+      }
+    if(by->qDistTo(*victim)>500.f*500.f) {
+      sendResult(req,false,"victim is more than five metres from the attacker");
+      return;
+      }
+    const auto mode = by->weaponState();
+    const auto* weapon = by->inventory().activeWeapon();
+    if((mode!=WeaponState::W1H && mode!=WeaponState::W2H) || weapon==nullptr) {
+      sendResult(req,false,"npc_hit needs a drawn melee weapon");
+      return;
+      }
+    bool vulnerable = false;
+    for(size_t i=0; i<zenkit::DamageType::NUM; ++i)
+      if((weapon->handle().damage_type&(1<<i))!=0 && victim->handle().protection[i]>=0)
+        vulnerable = true;
+    if(!vulnerable) {
+      sendResult(req,false,"victim is immune to the attacker's damage");
+      return;
+      }
+    const auto before = victim->attribute(ATR_HITPOINTS);
+    const auto gameMs = world->tickCount();
+    BodyObservations::noteEvent(*by,victim,"applied",gameMs);
+    victim->takeDamage(*by,nullptr,true);
+    const auto after = victim->attribute(ATR_HITPOINTS);
+    rapidjson::StringBuffer buf;
+    rapidjson::Writer<rapidjson::StringBuffer> value(buf);
+    value.StartObject();
+    value.Key("attacker"); value.String(npcSymbol(*world,*by).c_str());
+    value.Key("victim"); value.String(npcSymbol(*world,*victim).c_str());
+    value.Key("game_ms"); value.Uint64(gameMs);
+    value.Key("hp_before"); value.Int(before);
+    value.Key("hp_after"); value.Int(after);
+    value.EndObject();
+    sendResult(req,after<before,after<before ? "" : "the hit caused no damage",std::string_view(buf.GetString(),buf.GetSize()));
     return;
     }
   if(cmd=="player_take") {

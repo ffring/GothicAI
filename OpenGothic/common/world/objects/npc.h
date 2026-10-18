@@ -655,7 +655,8 @@ class Npc final {
 
     bool      doAttack(Anim anim, BodyState bs);
     void      commitSpell();
-    void      takeDamage(Npc& other, const Bullet* b);
+    // ignoreDefence is reserved for a confirmed contact in the devmode npc_hit fixture.
+    void      takeDamage(Npc& other, const Bullet* b, bool ignoreDefence = false);
     void      takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t splId);
     bool      isTargetableBySpell(TargetType t) const;
 
