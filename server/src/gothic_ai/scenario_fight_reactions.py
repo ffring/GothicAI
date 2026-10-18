@@ -331,12 +331,15 @@ async def fight_reactions(
                 ready = True
                 break
             await asyncio.sleep(0.05)
-        snapshot = await link.snapshot(npc, fresh=True)
+        snapshot = await link.snapshot(CAVALORN if npc == "PLAYER" else npc, fresh=True)
+        actual_hp = (
+            snapshot.player.hp if npc == "PLAYER" and snapshot.player is not None else snapshot.npc.hp
+        )
         log.info(
             "fight_reactions stage=%s npc=%s ready=%s body_game_ms=%s body=%s snapshot=%s",
             stage, npc, ready, trace.game_ms[npc], trace.latest[npc], snapshot.model_dump(),
         )
-        if not ready or snapshot.npc.hp != hp:
+        if not ready or actual_hp != hp:
             raise GameError(f"fight_reactions setup: {npc} not safely grounded for {stage}")
 
     link.send = recorded  # type: ignore[method-assign]
@@ -400,7 +403,6 @@ async def fight_reactions(
             monster = f"DIR_NPC_FIGHT_{case.upper()}"
             kind = "WOLF" if case == "wolf" else "BLOODFLY"
             # Neither the hero nor Cavalorn overlaps the creature during preparation.
-            hero_point: dict[str, Any] | None = None
             if case == "wolf":
                 points = [
                     p for p in await link.waypoints()
@@ -410,26 +412,21 @@ async def fight_reactions(
                 def position(p: dict[str, Any]) -> tuple[float, float, float]:
                     return p["x"], p["y"], p["z"]
 
-                pairs = [
-                    (wolf, hero)
-                    for wolf in points if 1700 <= math.dist(anchor, position(wolf)) <= 2400
-                    for hero in points if 300 <= math.dist(anchor, position(hero)) <= 1200
-                    and 1250 <= math.dist(position(wolf), position(hero)) <= 1450
-                ]
-                if not pairs:
-                    raise GameError("fight_reactions setup: no authored wolf/hero points at hunting distance")
-                wolf_point, hero_point = min(
-                    pairs,
-                    key=lambda pair: abs(math.dist(anchor, position(pair[0])) - 1800)
-                    + abs(math.dist(anchor, position(pair[1])) - 500),
-                )
-                log.info("fight_reactions authored wolf=%s hero=%s", wolf_point, hero_point)
+                candidates = [p for p in points if 1700 <= math.dist(anchor, position(p)) <= 2400]
+                if not candidates:
+                    raise GameError(
+                        f"fight_reactions setup: no authored wolf point 17–24 m away; points={points}"
+                    )
+                wolf_point = min(candidates, key=lambda p: abs(math.dist(anchor, position(p)) - 1800))
+                log.info("fight_reactions authored wolf=%s", wolf_point)
                 await link.debug("player_goto", waypoint=PARKING)
             else:
                 await link.debug("player_goto", pos=point(300))
             await link.debug("npc_goto", npc=CAVALORN, waypoint=ARENA, face="PC_HERO")
             if case == "wolf":
                 await link.own_npc(monster, like=kind, waypoint=wolf_point["name"])
+                await link.attach(monster)
+                parked.add(monster)
             else:
                 await link.own_npc(monster, like=kind, distance=5000)
                 await link.debug("npc_goto", npc=monster, to=CAVALORN, distance=3000)
@@ -557,8 +554,16 @@ async def fight_reactions(
                 await finish_preparation()
                 # Only now bring the passive hero into native hunting range: observations,
                 # initial HP and the companion's ready sword precede any possible attack.
-                assert hero_point is not None
-                await link.debug("player_goto", waypoint=hero_point["name"])
+                wolf_pos, companion_pos = trace.positions[monster], trace.positions[CAVALORN]
+                toward = (companion_pos[0] - wolf_pos[0], companion_pos[2] - wolf_pos[2])
+                length = math.hypot(*toward)
+                hero_at = [
+                    wolf_pos[0] + 1350 * toward[0] / length,
+                    companion_pos[1],
+                    wolf_pos[2] + 1350 * toward[1] / length,
+                ]
+                await link.debug("player_goto", pos=hero_at)
+                await grounded("PLAYER", "hero_hunt_position", start_hp, 200, 1400)
                 hero_snapshot = await link.snapshot(monster, fresh=True)
                 response = await link._request(
                     DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=CAVALORN, to=monster), 5,
@@ -581,6 +586,8 @@ async def fight_reactions(
                     raise GameError(
                         "fight_reactions setup: wolf hunt requires clear sight and hero 12–15 m away"
                     )
+                await link.detach(monster)
+                parked.remove(monster)
                 # Install the game's monster attack, with OTHER and target both the hero.
                 # Owned instances need not be advertised by the optional wolf voice desk.
                 await setup_program(
