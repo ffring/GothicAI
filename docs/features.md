@@ -154,6 +154,7 @@ PR, который добавляет фичу или выключатель, д
 - `GOTHIC_AI_STORYCHECK=1` — сверка условий скриптов с поднятыми; в `-devmode` включена сама;
 - `OPENGOTHIC_ANIM_SKIP_FAR=1`, `OPENGOTHIC_FOOTIK_WATCHED_ONLY=1` — экономия на дальних NPC для прогонов тела;
 - `OPENGOTHIC_BENCH*`, `OPENGOTHIC_*_LOG`, `OPENGOTHIC_*_TRACE` — стенд, журналы и трассы.
+- Обложки шортсов шаблона B: поле `cover` плана сравнения, `gothic-shorts cover`, `upload --thumbnail` и `thumbnail`; модули `shorts/src/gothic_shorts/{cover,compare,youtube,cli}.py`, проверки `shorts/tests/test_{cut,cover,youtube}.py`, [команды и шаблон](../shorts/README.md#covers). Без поля или команды обложки нет.
 
 Вне реестра: обучаемая навигация ([navigation.md](navigation.md)) — пока исследование, в игру не включена.
 

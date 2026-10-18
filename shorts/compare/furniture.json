@@ -5,6 +5,11 @@
     "en": "Furniture in Gothic:\nbefore and after"
   },
   "hook_s": 2.2,
+  "cover": {
+    "segment": "tavern",
+    "at": 1.2,
+    "title": {"ru": "МЕБЕЛЬ", "en": "FURNITURE"}
+  },
   "labels": {
     "ru": [
       "Было: всё прибито",
