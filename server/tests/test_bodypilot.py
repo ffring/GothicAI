@@ -155,7 +155,7 @@ class Bridge:
             )))
             self._activity(self._control_npc, "fight")
 
-    def restore_native(self):
+    def restore_native(self, *, release_reason=""):
         """Restore the native actor, leaving ownership events for the next destructive poll."""
         lease = next(iter(self.link.body_leases.values()))
         self.provider_owned = False
@@ -163,6 +163,7 @@ class Bridge:
             self._lease_watchdog.cancel()
         self.control_events.append(event(
             1, entity_id=lease.entity_id, reason="native_restored", owner="native",
+            target_entity_id=lease.target_entity_id, release_reason=release_reason,
         ))
         self._activity(lease.npc, "fight")
 
@@ -1303,6 +1304,89 @@ async def test_companion_to_hero_target_change_reacquires_and_resets_the_policy(
         rig.bridge.emit(fighter(6, owned=True))
         await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
         assert rig.bridge.commands("body_action")[-1]["target_entity_id"] == 2
+
+
+@pytest.mark.parametrize("release_reason", ["native_script_takeover", "target_changed_or_lost"])
+@pytest.mark.parametrize("old_target,new_target", [(3, 2), (2, 3)])
+async def test_polled_native_target_change_reacquires_without_an_owned_target_row(
+    release_reason, old_target, new_target,
+):
+    async with running(companion=lambda npc: npc == "CAVALORN") as rig:
+        rig.bridge.target_is_hero = old_target == 2
+        rig.bridge.target_npc = "CAVALORN" if old_target == 3 else None
+        await rig.active(target_entity=old_target, extra=[companion_entry()])
+        rig.clock.advance(0.25)
+        # Native setTarget restores ownership before applying the deferred new target.
+        # The event poll therefore reaches the pilot before any owned row with that target.
+        rig.bridge.target_is_hero = new_target == 2
+        rig.bridge.target_npc = "CAVALORN" if new_target == 3 else None
+        rig.bridge.restore_native(release_reason=release_reason)
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        await eventually(lambda: rig.pilot.npc is None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "target_changed"
+        assert summary.native_release_reason == release_reason
+        assert summary.target_kind == ("hero" if old_target == 2 else "companion")
+        assert summary.release_confirmed and summary.watch_removed
+        assert len(rig.policy.commands("step")) == 1
+
+        rig.clock.now = 12.0
+        await rig.reacquire(4, target_entity=new_target, count=2)
+        assert [command["target_entity_id"] for command in rig.bridge.commands("body_acquire")] == [
+            old_target, new_target,
+        ]
+        assert len(rig.policy.commands("reset")) == 2
+
+
+@pytest.mark.parametrize("release_reason", ["native_script_takeover", "target_changed_or_lost"])
+@pytest.mark.parametrize("new_target", ["CAVALORN", "OTHER"])
+async def test_polled_native_release_keeps_same_or_unrelated_target_combat_claimed(
+    release_reason, new_target,
+):
+    async with running(companion=lambda npc: npc == "CAVALORN") as rig:
+        rig.bridge.target_is_hero = False
+        rig.bridge.target_npc = "CAVALORN"
+        await rig.active(target_entity=3, extra=[companion_entry()])
+        rig.clock.advance(0.25)
+        rig.bridge.target_npc = new_target
+        rig.bridge.restore_native(release_reason=release_reason)
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        await eventually(lambda: rig.pilot.npc is None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "native_restored"
+        assert summary.native_release_reason == release_reason
+        assert summary.release_confirmed and summary.watch_removed
+        assert "NPC" in rig.pilot._claimed_fights
+
+        rig.clock.advance(3)
+        rig.bridge.target_is_hero = True
+        rig.bridge.target_npc = None
+        rig.roster(extra=[companion_entry()])
+        rig.combat()
+        rig.bridge.emit(fighter(4))
+        await asyncio.sleep(0.060)
+        assert len(rig.bridge.commands("body_watch")) == 2
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert len(rig.policy.commands("reset")) == 1
+        assert not rig.link.body_leases
+
+
+@pytest.mark.parametrize("companion", [False, True])
+async def test_polled_native_release_keeps_down_reason_from_passive_target_observation(companion):
+    async with running(companion=lambda npc: companion and npc == "CAVALORN") as rig:
+        rig.bridge.target_is_hero = not companion
+        rig.bridge.target_npc = "CAVALORN" if companion else None
+        target_entity = 3 if companion else 2
+        await rig.active(target_entity=target_entity, extra=[companion_entry()] if companion else [])
+        rig.bridge.restore_native(release_reason="target_changed_or_lost")
+        row = fighter(4, target_entity=target_entity, periodic=False)
+        row["target"]["down"] = True
+        rig.bridge.emit(row)
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == ("target_down" if companion else "hero_down")
+        assert summary.release_confirmed and summary.watch_removed
+        assert len(rig.policy.commands("reset")) == 1
 
 
 async def test_target_change_reacquisition_waits_two_seconds_for_each_npc():

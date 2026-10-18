@@ -249,6 +249,7 @@ class BodyPilot:
         self._hero: int | None = None
         self._target_kind: str | None = None
         self._target_name: str | None = None
+        self._target_npc: str | None = None
         self._refusals: Counter[str] = Counter()
         self._acquire_requests = 0
         self._acquire_completed = 0
@@ -298,7 +299,7 @@ class BodyPilot:
     def _companion(self, npc: str) -> bool:
         return bool(self.companion(npc) or self.link.party.get(npc, (0, 0))[1])
 
-    async def _live_target(self) -> tuple[str, str | None] | None:
+    async def _live_target(self) -> tuple[str, str | None, str] | None:
         """Classify the engine's current target, never the roster's combat snapshot."""
         assert self.npc is not None
         companions = sorted(
@@ -315,11 +316,11 @@ class BodyPilot:
         if len(matches) != len(expressions):
             raise GameError("target identity unavailable")
         if matches[0] == 1:
-            return "hero", None
+            return "hero", None, "HERO"
         for npc, matched in zip(companions, matches[1:], strict=True):
             if matched == 1 and self._companion(npc):
                 entry = self.people.get(npc)
-                return "companion", entry.name if entry else npc
+                return "companion", entry.name if entry else npc, npc
         return None
 
     def on_message(self, message: GameMessage) -> None:
@@ -578,7 +579,7 @@ class BodyPilot:
             if loop.time() - self._last_events_poll >= EVENTS_INTERVAL:
                 try:
                     self._last_events_poll = loop.time()
-                    await self.link.body_events(timeout=BRIDGE_TIMEOUT)
+                    self.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
                 except BRIDGE_ERRORS:
                     await self._finish("lease_lost")
                     return
@@ -745,7 +746,7 @@ class BodyPilot:
                 self._reacquire_after[self.npc] = self.clock() + REACQUIRE_INTERVAL
                 self._entity = self.lease.entity_id
                 self._hero = self.lease.target_entity_id
-                self._target_kind, self._target_name = target
+                self._target_kind, self._target_name, self._target_npc = target
                 self._fight_at = self.clock()
                 self._last_events_poll = float("-inf")
                 self._heartbeat_task = asyncio.create_task(self._heartbeats(self.lease))
@@ -925,6 +926,28 @@ class BodyPilot:
         npc, client = self.npc, self.client
         if npc is None and self.lease is None and client is None:
             return
+        if reason == "native_restored" and self.lease is not None:
+            latest = self.link.body_latest.get(self.lease.entity_id)
+            if latest is not None and (
+                latest.session_epoch, latest.world_epoch, latest.control_generation
+            ) in {
+                (self.lease.session_epoch, self.lease.world_epoch, 0),
+                (self.lease.session_epoch, self.lease.world_epoch, self.lease.control_generation),
+            }:
+                terminal = self._terminal(latest.model_dump(mode="json"))
+                if terminal in {"target_changed", "hero_down", "target_down", "npc_down"}:
+                    reason = terminal
+        # Native setTarget defers its mutation until after native_restored, so
+        # no owned observation of the new target is guaranteed to reach us.
+        if (
+            reason == "native_restored"
+            and self._native_release_reason in {"native_script_takeover", "target_changed_or_lost"}
+            and npc is not None and self._allowed(npc) and not self._closing
+        ):
+            with contextlib.suppress(*BRIDGE_ERRORS):
+                target = await self._live_target()
+                if target is not None and target[2] != self._target_npc:
+                    reason = "target_changed"
         finish_at = time.monotonic()
         self._capture_invisibility(self.clock(), self._now_game_ms)
         fight_seconds = self.clock() - self._fight_at if self.lease is not None else None
@@ -1124,6 +1147,7 @@ class BodyPilot:
         self._initial_game_ms = None
         self._symbol = self._entity = self._hero = None
         self._target_kind = self._target_name = None
+        self._target_npc = None
         self._retargeting = False
         self._refusals.clear()
         self._acquire_requests = self._acquire_completed = 0
