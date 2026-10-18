@@ -28,6 +28,8 @@ namespace {
 struct Definition {
   std::string visual, pins, material;
   float stiffness = .8f;
+  Vec3 attachmentFrom, attachmentTo;
+  float attachmentRadius = 0.f;
   };
 
 std::string canonical(std::string_view name) {
@@ -80,9 +82,19 @@ const Definition* definition(std::string_view visual) {
       std::getline(row,def.material,',');
       try {
         def.stiffness = std::clamp(std::stof(stiffness),0.f,1.f);
+        std::string attachment;
+        if(std::getline(row,attachment,',') && !attachment.empty()) {
+          for(auto& c:attachment)
+            if(c==':' || c==';') c=' ';
+          std::istringstream capsule(attachment);
+          if(!(capsule>>def.attachmentFrom.x>>def.attachmentFrom.y>>def.attachmentFrom.z>>
+                        def.attachmentTo.x>>def.attachmentTo.y>>def.attachmentTo.z>>def.attachmentRadius) ||
+             !std::isfinite(def.attachmentRadius) || def.attachmentRadius<=0.f)
+            throw std::runtime_error("invalid attachment capsule");
+          }
         }
       catch(const std::exception&) {
-        Log::e("invalid cloth stiffness: ",def.visual);
+        Log::e("invalid cloth definition: ",def.visual);
         continue;
         }
       def.visual = canonical(def.visual);
@@ -534,6 +546,8 @@ std::unique_ptr<ClothVisual> ClothVisual::create(MeshObjects::Mesh& view, World&
     state.bindPhysics(def->stiffness,vob.visual->name,vob.id);
     if(!state.physics)
       return nullptr;
+    if(def->attachmentRadius>0.f)
+      state.physics->setAttachmentCapsule(def->attachmentFrom,def->attachmentTo,def->attachmentRadius);
     state.setupViews();
     state.setupCallbacks(out->state);
     state.syncCollider();

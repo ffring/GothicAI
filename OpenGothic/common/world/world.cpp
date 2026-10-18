@@ -30,6 +30,7 @@
 #include "frameprofile.h"
 #include "testbench.h"
 #include "physics/physicsnoise.h"
+#include "physics/cloth.h"
 #include "physics/worldcloth.h"
 #include "world/movablevobs.h"
 
@@ -130,6 +131,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
 
     loadProgress(20);
     auto& worldMesh = world.world_mesh;
+    windRooms.reset(worldMesh,world.world_bsp_tree);
     auto worldCloth=WorldCloth::extract(worldMesh);
 
     auto wdynamicFut = std::async(std::launch::async, [&]() {
@@ -167,6 +169,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     loadProgress(60);
 
     wdynamic = wdynamicFut.get();
+    wdynamic->cloth().setExposureTest([this](const Tempest::Vec3& point) { return !isIndoor(point); });
     wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
     wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
     wdynamic->setBuoyancyEnabled(Gothic::physicsFlags().buoyancy);
@@ -665,6 +668,10 @@ std::string_view World::roomAt(const zenkit::BspNode& node) {
     }
   static std::string empty;
   return empty;
+  }
+
+bool World::isIndoor(const Tempest::Vec3& point) const {
+  return windRooms.isIndoor(point);
   }
 
 World::BspSector* World::portalAt(std::string_view tag) {

@@ -24,6 +24,9 @@ class Cloth final {
         ~Instance();
         Instance(const Instance&) = delete;
         void setMatrix(const Tempest::Matrix4x4& matrix);
+        // A cheap local-space support guard. General world/character contacts
+        // stay disabled; the visible cloth cannot cross its own narrow pole.
+        void setAttachmentCapsule(const Tempest::Vec3& fromCm,const Tempest::Vec3& toCm,float radiusCm);
         void setShaderReference(ShaderReference reference);
         void setUpdateCallback(UpdateCallback callback);
         const std::vector<Tempest::Vec3>& positionsCm() const;
@@ -79,6 +82,8 @@ class Cloth final {
     void setWind(const Tempest::Vec3& worldMetersPerSecond);
     void setWindScale(float scale);
     float windScale() const;
+    // World portal-room classification. Attachments and ship geometry do not
+    // occlude wind; a false result identifies an actual indoor BSP room.
     void setExposureTest(std::function<bool(const Tempest::Vec3&)> test);
     std::vector<Snapshot> snapshots() const;
     void resetStats();

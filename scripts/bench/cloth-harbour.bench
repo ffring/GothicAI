@@ -6,6 +6,16 @@ set time 12 0
 overlay off
 view full
 cloth setup densest harbour-density
+# Authored room controls: ship bow cabin and town hall, followed by open air
+# directly above each. The actual upper-yard sail is outdoors despite BUG's
+# legacy BSP leaf extending up the mast. No test cloth or prop is added.
+cloth room-check -9898.855 116.9855 -12361.95 indoor
+cloth room-check -9898.855 5000 -12361.95 outdoor
+cloth room-check -10000 0 -16000 indoor
+cloth room-check -10000 5000 -16000 outdoor
+cloth room-check 15108.85 1140.04 -369.6025 indoor
+cloth room-check 15108.85 5000 -369.6025 outdoor
+cloth room-check -9929.7305 4543.2056 -12290.5566 outdoor
 cloth camera harbour
 cloth off
 cloth wind calm
@@ -35,6 +45,7 @@ shot cloth-harbour-on-gust
 wait 34
 cloth checkpoint harbour-gust
 cloth verify anchors
+cloth verify harbour-wind
 stop
 
 # The main mast flag fills the frame for the OFF/ON motion and spell comparison.
@@ -49,6 +60,7 @@ stop
 cloth on
 cloth wind calm
 wait 12000
+cloth checkpoint harbour-flag-calm-10s
 rec cloth-harbour-flag-on
 shot cloth-harbour-flag-on-calm
 wait 3000

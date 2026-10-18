@@ -2,6 +2,7 @@
 #include "physics/collisionworld.h"
 #include "physics/dynamicworld.h"
 #include "physics/worldwind.h"
+#include "world/portalrooms.h"
 
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 
@@ -32,6 +33,65 @@ namespace {
           const uint32_t a=y*width+x,b=a+1,c=a+width,d=c+1;
           indices.insert(indices.end(),{a,b,c,b,d,c});
           }
+      }
+    };
+  struct LongFlag {
+    std::vector<Tempest::Vec3> vertices;
+    std::vector<uint32_t> indices,pins;
+    LongFlag() {
+      constexpr uint32_t width=17,height=17;
+      for(uint32_t y=0;y<height;++y)
+        for(uint32_t x=0;x<width;++x) {
+          const float u=float(x)/float(width-1),v=float(y)/float(height-1);
+          vertices.emplace_back(730.f*u,500.f-335.f*v,30.f*std::sin(u*3.14159265f));
+          if(x==0) pins.push_back(uint32_t(vertices.size()-1));
+          }
+      for(uint32_t y=0;y+1<height;++y)
+        for(uint32_t x=0;x+1<width;++x) {
+          const uint32_t a=y*width+x,b=a+1,c=a+width,d=c+1;
+          indices.insert(indices.end(),{a,b,c,b,d,c});
+          }
+      }
+    };
+  struct RoomFixture {
+    zenkit::Mesh mesh;
+    zenkit::BspTree bsp;
+    RoomFixture() {
+      const auto quad=[&](zenkit::Vec3 a,zenkit::Vec3 b,zenkit::Vec3 c,zenkit::Vec3 d,bool portal=false,bool sector=true) {
+        zenkit::Polygon polygon={};
+        polygon.index_count=4;
+        polygon.index_offset=mesh.polygon_vertex_indices.size();
+        polygon.flags.is_sector=sector;
+        polygon.flags.is_portal=portal;
+        polygon.flags.sector_index=-1; // Stock worlds do not populate this.
+        for(const auto& vertex:{a,b,c,d}) {
+          mesh.polygon_vertex_indices.push_back(uint32_t(mesh.vertices.size()));
+          mesh.vertices.push_back(vertex);
+          }
+        mesh.geometry.push_back(polygon);
+        };
+      quad({-400,-100,-400},{400,-100,-400},{400,-100,400},{-400,-100,400});
+      quad({-400,450,-400},{-400,450,400},{400,450,400},{400,450,-400});
+      quad({-400,-100,-400},{-400,450,-400},{400,450,-400},{400,-100,-400});
+      quad({-400,-100,-400},{-400,-100,400},{-400,450,400},{-400,450,-400});
+      quad({400,-100,-400},{400,450,-400},{400,450,400},{400,-100,400});
+      quad({-400,-100,400},{400,-100,400},{400,450,400},{-400,450,400},true,false);
+      // A wide yard in the same broad BSP leaf is ordinary world geometry.
+      quad({-500,800,-500},{1500,800,-500},{1500,800,500},{-500,800,500},false,false);
+      bsp.mode=zenkit::BspTreeType::OUTDOOR;
+      zenkit::BspNode leaf={};
+      leaf.bbox.min={-10000,-10000,-10000};
+      leaf.bbox.max={10000,10000,10000};
+      leaf.polygon_index=0;
+      leaf.polygon_count=uint32_t(mesh.geometry.size());
+      bsp.nodes.push_back(leaf);
+      bsp.leaf_node_indices.push_back(0);
+      for(uint32_t i=0;i<mesh.geometry.size();++i) bsp.polygon_indices.push_back(i);
+      zenkit::BspSector room;
+      room.name="HALL";
+      room.node_indices={0};
+      room.portal_polygon_indices={5};
+      bsp.sectors.push_back(std::move(room));
       }
     };
   void tick(CollisionWorld& world,size_t count) { for(size_t i=0;i<count;++i) world.tick(17); }
@@ -140,6 +200,20 @@ int main() {
   require(instance->active(),"cloth ON recreates Jolt simulation");
   instance.reset();
   require(cloth.bodyCount()==0 && cloth.snapshots().empty(),"visual RAII releases native body");
+  RoomFixture roomFixture;
+  PortalRooms::Volumes rooms;
+  rooms.reset(roomFixture.mesh,roomFixture.bsp);
+  require(rooms.isIndoor({60,100,0}),"authored room surfaces enclose an indoor point");
+  require(rooms.isIndoor({60,100,350}),"an authored portal cap closes the room at its door");
+  require(!rooms.isIndoor({60,100,450}),"a point beyond the portal door is outdoors");
+  require(!rooms.isIndoor({60,700,0}),"a room's BSP leaf reaching the sky does not shelter a flag above its ceiling");
+  require(!rooms.isIndoor({500,150,0}),"a wide world-mesh yard outside room surfaces does not create a room");
+  roomFixture.bsp.mode=zenkit::BspTreeType::INDOOR;
+  rooms.reset(roomFixture.mesh,roomFixture.bsp);
+  require(rooms.isIndoor({500,150,0}),"an entirely indoor BSP world has no outdoor wind");
+  roomFixture.bsp.mode=zenkit::BspTreeType::OUTDOOR;
+  rooms.reset(roomFixture.mesh,roomFixture.bsp);
+  cloth.setExposureTest([&](const Tempest::Vec3& point) { return !rooms.isIndoor(point); });
   auto roofMatrix=Tempest::Matrix4x4::mkIdentity();
   roofMatrix.translate(60,500,0);
   auto roof=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(4,.1f,4)),roofMatrix,.7f,DynamicWorld::C_Object);
@@ -151,7 +225,7 @@ int main() {
   const auto roofCalmBefore=cloth.snapshots().front();
   collision.tick(17);
   const auto roofCalmAfter=cloth.snapshots().front();
-  require(!roofCalmAfter.exposed,"a real native roof shelters cloth from world wind");
+  require(!roofCalmAfter.exposed,"cloth in the actual authored hall is sheltered from world wind");
   const float calmLateral=lateralSpeed(roofCalmBefore,roofCalmAfter);
   cloth.setWind({8,0,4});
   tick(collision,600);
@@ -159,33 +233,10 @@ int main() {
   collision.tick(17);
   const auto roofWindAfter=cloth.snapshots().front();
   const float shelteredLateral=lateralSpeed(roofWindBefore,roofWindAfter);
-  require(!roofWindAfter.exposed,"shelter persists through strong wind");
+  require(!roofWindAfter.exposed,"indoor shelter persists through strong wind");
   require(shelteredLateral<=calmLateral+.25f,"strong world wind adds no lateral motion under a roof");
   sheltered.reset();
   roof.reset();
-  auto beamMatrix=Tempest::Matrix4x4::mkIdentity();
-  beamMatrix.translate(60,250,0);
-  auto beam=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.8f,.05f,.05f)),beamMatrix,.7f,DynamicWorld::C_Object);
-  auto outdoor=cloth.add(flag.vertices,flag.indices,flag.pins,Tempest::Matrix4x4::mkIdentity(),.85f,"crossbar-flag",9);
-  cloth.setWind({0,0,4});
-  tick(collision,60);
-  require(cloth.snapshots().front().exposed,"a narrow attachment crossbar does not suppress outdoor wind");
-  outdoor.reset();
-  beam.reset();
-  auto wideBeam=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.8f,.05f,.4f)),beamMatrix,.7f,DynamicWorld::C_Object);
-  wideBeam->setLabel("OWN-ATTACHMENT.mrm");
-  auto attachmentFlag=flag.vertices;
-  for(auto& vertex:attachmentFlag) vertex-=Tempest::Vec3(60,250,0);
-  auto attached=cloth.add(attachmentFlag,flag.indices,flag.pins,beamMatrix,.85f,"meshes/own-attachment.MMS",12);
-  tick(collision,60);
-  require(cloth.snapshots().front().exposed,"a wide rigid part of the same visual and transform is not its cloth's roof");
-  auto actualRoof=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(4,.1f,4)),roofMatrix,.7f,DynamicWorld::C_Object);
-  actualRoof->setLabel("separate-roof");
-  tick(collision,60);
-  require(!cloth.snapshots().front().exposed,"ignoring an own attachment still detects a separate roof above it");
-  actualRoof.reset();
-  attached.reset();
-  wideBeam.reset();
   const std::vector<Tempest::Vec3> furledVertices={{0,100,-40},{1000,100,-40},{0,200,-40},{1000,200,-40},
                                                 {0,100,40},{1000,100,40},{0,200,40},{1000,200,40}};
   const std::vector<uint32_t> furledIndices={0,1,2,1,3,2,4,6,5,5,6,7,0,2,4,2,6,4,1,5,3,3,5,7};
@@ -195,20 +246,19 @@ int main() {
   yard->setLabel("world-yard");
   auto furled=cloth.add(furledVertices,furledIndices,{2,3,6,7},Tempest::Matrix4x4::mkIdentity(),.85f,"furled-sail-contract",13);
   cloth.setObserver({500,150,0});
+  cloth.setWind({0,0,4});
   tick(collision,60);
-  require(cloth.snapshots().front().exposed,"furled cloth samples across its thickness beyond a narrow world-mesh yard");
+  require(cloth.snapshots().front().exposed,"a furled sail outside portal rooms receives wind under its world-mesh yard");
   auto furledRoofMatrix=Tempest::Matrix4x4::mkIdentity();
   furledRoofMatrix.translate(500,500,0);
   auto furledRoof=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(8,.1f,4)),furledRoofMatrix,.7f,DynamicWorld::C_Landscape);
   furledRoof->setLabel("furled-roof");
   tick(collision,60);
-  const auto roofedSail=cloth.snapshots().front();
-  require(!roofedSail.exposed && roofedSail.windOccluders.size()==3 && roofedSail.windOccluders.front().body=="furled-roof",
-          "wide real landscape roofs still shelter a furled sail and report the native blocker");
-  require(roofedSail.windOccluders.front().distanceCm>300.f,"wind blocker diagnostic preserves the actual roof distance");
+  require(cloth.snapshots().front().exposed,"ordinary landscape above an exterior sail is not an indoor ceiling");
   furled.reset();
   furledRoof.reset();
   yard.reset();
+  cloth.setExposureTest({});
   cloth.setObserver({60,100,0});
   auto wallMatrix=Tempest::Matrix4x4::mkIdentity();
   wallMatrix.translate(60,100,30);
@@ -221,10 +271,9 @@ int main() {
   float maxWallZ=0;
   for(const auto& position:wallCloth.worldPositionsCm) maxWallZ=std::max(maxWallZ,position.z);
   require(maxWallZ>20.f,"wind carries cloth into a nearby native obstacle");
-  require(maxWallZ<=25.1f,"native static-object contact prevents cloth passing through its pole or a wall");
-  require(wallCloth.contactVertices>0 && std::find(wallCloth.contactBodies.begin(),wallCloth.contactBodies.end(),"contract-wall")!=wallCloth.contactBodies.end(),
-          "native soft-body diagnostic reports actual wall contact vertices and body identity");
-  require(wallCloth.maxAnchorErrorCm<=.5f && wallCloth.recoveryCount==0,"obstacle contacts preserve fixed pins without recovery");
+  require(maxWallZ>35.f,"general world contacts are disabled to keep dense cloth groups within the physics budget");
+  require(wallCloth.contactVertices==0 && wallCloth.contactBodies.empty(),"world geometry produces no native soft-body contacts");
+  require(wallCloth.maxAnchorErrorCm<=.5f && wallCloth.recoveryCount==0,"fixed pins bound cloth without world contacts or recovery");
   blocked.reset();
   wall.reset();
   auto character=collision.addCollisionBody(new JPH::BoxShape(JPH::Vec3(5,5,.05f)),wallMatrix,.7f,DynamicWorld::C_ActiveBody);
@@ -236,8 +285,53 @@ int main() {
   require(maxCharacterZ>35.f,"cloth passes through the same obstacle on the character layer");
   require(characterCloth.contactVertices==0 && characterCloth.contactBodies.empty(),"ignored characters produce no native soft-body contacts");
   require(characterCloth.recoveryCount==0,"ignored character contacts never destabilize cloth");
-  std::printf("cloth contract passed: calm_10s_max_vertex_cm_s=%.6g max_vertex_cm_s=%.6g anchor_drift_cm=%.6g boundary_delta_cm=%.6g roof_calm_lateral_cm_s=%.6g roof_wind_lateral_cm_s=%.6g wall_vertex_max_z_cm=%.6g character_vertex_max_z_cm=%.6g recovery=0\n",
+  passThrough.reset();
+  character.reset();
+  LongFlag longFlag;
+  auto longInstance=cloth.add(longFlag.vertices,longFlag.indices,longFlag.pins,Tempest::Matrix4x4::mkIdentity(),.82f,"long-side-pinned-flag",14);
+  cloth.setObserver({350,350,0});
+  cloth.setWind({0,0,5});
+  tick(collision,180);
+  const auto longGust=cloth.snapshots().front();
+  cloth.setWind({0,0,0});
+  tick(collision,600);
+  const auto longCalm=cloth.snapshots().front();
+  require(longCalm.maxSpeedCmPerSec<10.f,"a seven-metre side-pinned flag settles below ten centimetres per second after ten seconds calm");
+  require(longGust.maxSpeedEverCmPerSec<=Cloth::maxVelocityMS*100.f+1.f,"long flags stay below the same native velocity cap during gusts");
+  require(longCalm.maxAnchorErrorCm<=.5f && longCalm.recoveryCount==0,"a seven-metre side-pinned flag stays attached and finite after gusts and ten seconds calm");
+  longInstance.reset();
+  auto supported=cloth.add(flag.vertices,flag.indices,flag.pins,Tempest::Matrix4x4::mkIdentity(),.85f,"support-capsule-flag",15);
+  supported->setAttachmentCapsule({60,-50,35},{60,250,35},5.f);
+  cloth.setObserver({60,100,0});
+  cloth.setWind({0,0,8});
+  tick(collision,600);
+  const auto supportCloth=cloth.snapshots().front();
+  float closestSupport=10000.f;
+  for(const auto& point:supportCloth.worldPositionsCm) {
+    const float dx=point.x-60.f,dz=point.z-35.f;
+    closestSupport=std::min(closestSupport,std::sqrt(dx*dx+dz*dz));
+    }
+  require(closestSupport>=5.49f,"the cloth's own attachment capsule excludes particles without broadphase contacts");
+  require(supportCloth.contactVertices==0 && supportCloth.maxAnchorErrorCm<=.5f && supportCloth.recoveryCount==0,
+          "the attachment guard preserves fixed vertices without native contacts or recovery");
+  supported.reset();
+  auto fastSupport=cloth.add({{0,200,0},{120,200,0},{60,0,0}},{0,1,2},{0,1},Tempest::Matrix4x4::mkIdentity(),.85f,"support-fast-hit",16);
+  auto fastReference=cloth.add({{0,200,0},{120,200,0},{60,0,0}},{0,1,2},{0,1},Tempest::Matrix4x4::mkIdentity(),.85f,"support-fast-reference",17);
+  fastSupport->setAttachmentCapsule({60,-50,8},{60,250,8},5.f);
+  cloth.setWind({0,0,0});
+  tick(collision,40); // Complete the native/fallback blend before comparing motion.
+  for(const auto& snapshot:cloth.snapshots())
+    require(snapshot.simulationWeight==1.f,"fast-attachment comparison begins after the transition to simulation is complete");
+  require(cloth.impulse({60,0,0},50,{0,0,15})==2,"a strong local spell impulse reaches both guarded and reference particles");
+  collision.tick(17);
+  const auto fastSnapshots=cloth.snapshots();
+  const auto& fastSupportCloth=fastSnapshots.front();
+  require(fastSnapshots.back().worldPositionsCm[2].z>13.5f,"without an attachment guard the same fast particle crosses beyond the pole's far side");
+  require(fastSupportCloth.worldPositionsCm[2].z<=2.51f,"a fast particle cannot tunnel through its narrow attachment capsule in one physics step");
+  require(fastSupportCloth.maxAnchorErrorCm<=.5f && fastSupportCloth.recoveryCount==0,"the swept attachment guard keeps both fixed vertices unchanged");
+  std::printf("cloth contract passed: calm_10s_max_vertex_cm_s=%.6g max_vertex_cm_s=%.6g anchor_drift_cm=%.6g boundary_delta_cm=%.6g roof_calm_lateral_cm_s=%.6g roof_wind_lateral_cm_s=%.6g wall_vertex_max_z_cm=%.6g character_vertex_max_z_cm=%.6g long_flag_gust_max_cm_s=%.6g long_flag_calm_10s_cm_s=%.6g support_min_radius_cm=%.6g support_fast_vertex_z_cm=%.6g recovery=0\n",
               double(calm.maxSpeedCmPerSec),double(windy.maxSpeedEverCmPerSec),double(windy.maxAnchorErrorCm),
-              double(boundaryDelta),double(calmLateral),double(shelteredLateral),double(maxWallZ),double(maxCharacterZ));
+              double(boundaryDelta),double(calmLateral),double(shelteredLateral),double(maxWallZ),double(maxCharacterZ),
+              double(longGust.maxSpeedEverCmPerSec),double(longCalm.maxSpeedCmPerSec),double(closestSupport),double(fastSupportCloth.worldPositionsCm[2].z));
   return EXIT_SUCCESS;
   }

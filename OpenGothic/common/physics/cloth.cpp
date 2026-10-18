@@ -8,13 +8,12 @@
 #include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
 #include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <Jolt/Geometry/RayCapsule.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
 #include <map>
 #include <set>
-#include <string_view>
 #include <tuple>
 
 namespace {
@@ -24,21 +23,6 @@ namespace {
     }
   bool finite(const Tempest::Vec3& point) {
     return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
-    }
-  bool sameVisual(std::string_view a,std::string_view b) {
-    const auto basename=[](std::string_view value) {
-      const auto slash=value.find_last_of("/\\");
-      if(slash!=std::string_view::npos) value.remove_prefix(slash+1);
-      return value.substr(0,value.find_last_of('.'));
-      };
-    a=basename(a);
-    b=basename(b);
-    if(a.empty() || a.size()!=b.size()) return false;
-    for(size_t i=0;i<a.size();++i) {
-      const auto upper=[](char c) { return c>='a' && c<='z' ? char(c-'a'+'A') : c; };
-      if(upper(a[i])!=upper(b[i])) return false;
-      }
-    return true;
     }
   bool segmentTriangle(const Tempest::Vec3& from, const Tempest::Vec3& to,
                        const Tempest::Vec3& a, const Tempest::Vec3& b, const Tempest::Vec3& c) {
@@ -60,6 +44,11 @@ namespace {
     const float speed=velocity.Length();
     if(!std::isfinite(speed)) return JPH::Vec3::sZero();
     return speed>Cloth::maxVelocityMS ? velocity*(Cloth::maxVelocityMS/speed) : velocity;
+    }
+  JPH::Vec3 closestOnSegment(JPH::Vec3Arg point,JPH::Vec3Arg from,JPH::Vec3Arg to) {
+    const auto axis=to-from;
+    const float lengthSq=axis.LengthSq();
+    return from+axis*(lengthSq>1.e-12f ? std::clamp((point-from).Dot(axis)/lengthSq,0.f,1.f) : 0.f);
     }
   }
 
@@ -94,6 +83,9 @@ struct Cloth::Instance::Impl {
   std::vector<WindOccluder> windOccluders;
   uint64_t projectileHits = 0, arrowPasses = 0, recoveryCount = 0;
   bool exposed = true, recover = false;
+  Tempest::Vec3 supportFrom, supportTo;
+  float supportRadiusCm=0;
+  std::vector<JPH::Vec3> supportPrevious;
 
   Tempest::Vec3 center() const { return project(matrix,localCenter); }
   Tempest::Vec3 translation() const { return Tempest::Vec3(matrix.at(3,0),matrix.at(3,1),matrix.at(3,2)); }
@@ -101,43 +93,6 @@ struct Cloth::Instance::Impl {
     if(!shader) return source[vertex];
     auto ret=shader(uint32_t(vertex),source[vertex],project(matrix,source[vertex]));
     return finite(ret) ? ret : source[vertex];
-    }
-  std::array<Tempest::Vec3,3> exposureOrigins() const {
-    double meanX=0,meanZ=0;
-    for(const auto& vertex:source) {
-      const auto p=project(matrix,vertex);
-      meanX+=p.x;
-      meanZ+=p.z;
-      }
-    meanX/=double(source.size());
-    meanZ/=double(source.size());
-    double xx=0,xz=0,zz=0;
-    for(const auto& vertex:source) {
-      const auto p=project(matrix,vertex);
-      const double x=double(p.x)-meanX,z=double(p.z)-meanZ;
-      xx+=x*x;
-      xz+=x*z;
-      zz+=z*z;
-      }
-    // In the horizontal plane, the minor axis is normal to a hanging sheet
-    // and across a furled sail. Triangle normals on a wrapped sail can instead
-    // point along its yard, keeping every fixed-size probe under the wood.
-    const double angle=.5*std::atan2(2*xz,xx-zz);
-    const Tempest::Vec3 minor(float(-std::sin(angle)),0,float(std::cos(angle)));
-    const auto middle=center();
-    float lo=std::numeric_limits<float>::max(),hi=-lo;
-    for(const auto& vertex:source) {
-      const float extent=Tempest::Vec3::dotProduct(project(matrix,vertex)-middle,minor);
-      lo=std::min(lo,extent);
-      hi=std::max(hi,extent);
-      }
-    const auto origin=middle+minor*((lo+hi)*.5f);
-    const auto offset=minor*std::max(25.f,(hi-lo)*.5f+2.f);
-    return {origin-offset,origin,origin+offset};
-    }
-  bool ownAttachment(const CollisionWorld::CollisionBody* collider) const {
-    return collider!=nullptr && sameVisual(visual,collider->label()) &&
-           (collider->position()-translation()).quadLength()<=1.f;
     }
   };
 
@@ -216,10 +171,17 @@ struct Cloth::Impl : JPH::SoftBodyContactListener {
     settings.Optimize();
     JPH::SoftBodyCreationSettings creation(&settings,CollisionWorld::toMeters(body.translation()),JPH::Quat::sIdentity(),DynamicWorld::C_Cloth);
     creation.mUserData=reinterpret_cast<uint64_t>(&body);
-    // Fixed particles and geodesic long-range attachments bound the cloth;
-    // four XPBD iterations keep nearby groups affordable at the 60 Hz step.
-    creation.mNumIterations=4;
-    creation.mLinearDamping=3.f;
+    // Fixed particles and geodesic long-range attachments bound the cloth.
+    // Long, side-pinned ship flags need finer substeps while they fall from
+    // their authored extended pose; smaller flags and tied sails use four.
+    float freeSpan=0;
+    for(const auto& attachment:settings.mLRAConstraints)
+      freeSpan=std::max(freeSpan,attachment.mMaxDistance);
+    creation.mNumIterations=freeSpan>6.f ? 8 : 4;
+    // Together with aerodynamic drag this is close to critical damping for
+    // a ship flag's seven-metre free span. Excess damping makes those long
+    // side-pinned flags creep towards their hanging pose for many seconds.
+    creation.mLinearDamping=1.5f;
     creation.mMaxLinearVelocity=Cloth::maxVelocityMS;
     creation.mVertexRadius=.005f;
     creation.mUpdatePosition=false;
@@ -261,6 +223,15 @@ void Cloth::Instance::setMatrix(const Tempest::Matrix4x4& matrix) {
   impl->inverse.inverse();
   impl->weight=0;
   impl->shelterTimer=0;
+  }
+void Cloth::Instance::setAttachmentCapsule(const Tempest::Vec3& from,const Tempest::Vec3& to,float radius) {
+  if(!finite(from) || !finite(to) || !std::isfinite(radius) || radius<=0.f) {
+    impl->supportRadiusCm=0;
+    return;
+    }
+  impl->supportFrom=from;
+  impl->supportTo=to;
+  impl->supportRadiusCm=radius;
   }
 void Cloth::Instance::setShaderReference(ShaderReference reference) { impl->shader=std::move(reference); }
 void Cloth::Instance::setUpdateCallback(UpdateCallback callback) { impl->update=std::move(callback); }
@@ -324,7 +295,10 @@ void Cloth::setObserver(const Tempest::Vec3& position) { if(finite(position)) { 
 void Cloth::setWind(const Tempest::Vec3& wind) { impl->wind=finite(wind) ? wind : Tempest::Vec3(); }
 void Cloth::setWindScale(float value) { if(std::isfinite(value)) impl->windScale=std::clamp(value,0.f,4.f); }
 float Cloth::windScale() const { return impl->currentWindScale; }
-void Cloth::setExposureTest(std::function<bool(const Tempest::Vec3&)> test) { impl->exposure=std::move(test); }
+void Cloth::setExposureTest(std::function<bool(const Tempest::Vec3&)> test) {
+  impl->exposure=std::move(test);
+  impl->each([](Instance::Impl& body) { body.shelterTimer=0; });
+  }
 size_t Cloth::bodyCount() const {
   size_t count=0;
   for(const auto& weak:impl->instances) if(auto instance=weak.lock()) if(instance->active()) ++count;
@@ -346,31 +320,10 @@ void Cloth::prepareFrame(uint64_t dt) {
     body.targetWeight=target*target*(3.f-2.f*target);
     body.shelterTimer-=seconds;
     if(body.targetWeight>0.f && body.shelterTimer<=0.f) {
-      constexpr uint32_t mask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object);
-      body.exposed=false;
+      // BSP/portal rooms are authoritative. Upward solid rays cannot tell a
+      // ship's own yard, mast or deck from an indoor ceiling in the same mesh.
+      body.exposed=!impl->exposure || impl->exposure(center);
       body.windOccluders.clear();
-      if(!impl->exposure || impl->exposure(center)) {
-        // A mast or the narrow bar holding a banner is not a roof. Probe both
-        // sides of the cloth as well as its center; a ceiling covers all three.
-        for(const auto& origin:body.exposureOrigins()) {
-          std::vector<const CollisionWorld::CollisionBody*> ignored;
-          for(;;) {
-            const auto roof=impl->world.rayCast(origin+Tempest::Vec3(0,2,0),origin+Tempest::Vec3(0,20000,0),mask,true,
-                                               nullptr,&ignored);
-            if(!roof.hasHit) { body.exposed=true; break; }
-            if(!body.ownAttachment(roof.body)) {
-              body.windOccluders.push_back({roof.body!=nullptr ? roof.body->label() : std::string(),
-                                            roof.point,(roof.point-origin).length()});
-              break;
-              }
-            // A standard's skull and crossbar can span all three probes.
-            // Ignore only the rigid part at this cloth's authored transform,
-            // then keep tracing so a real roof above it still shelters cloth.
-            ignored.push_back(roof.body);
-            }
-          if(body.exposed) break;
-          }
-        }
       body.shelterTimer=.5f;
       }
     if(body.targetWeight>0.f && body.body.IsInvalid()) impl->create(body);
@@ -392,6 +345,11 @@ void Cloth::prepareStep(float seconds) {
     JPH::BodyLockWrite lock(impl->system().GetBodyLockInterface(),body.body);
     if(!lock.Succeeded()) return;
     auto& motion=*static_cast<JPH::SoftBodyMotionProperties*>(lock.GetBody().GetMotionProperties());
+    if(body.supportRadiusCm>0.f) {
+      body.supportPrevious.resize(motion.GetVertices().size());
+      for(size_t i=0;i<body.supportPrevious.size();++i)
+        body.supportPrevious[i]=motion.GetVertex(uint32_t(i)).mPosition;
+      }
     const auto wind=body.exposed ? CollisionWorld::toMeters(impl->wind*100.f*impl->currentWindScale) : JPH::Vec3::sZero();
     for(auto& vertex:motion.GetVertices()) {
       if(vertex.mInvMass==0.f) { vertex.mVelocity=JPH::Vec3::sZero(); continue; }
@@ -404,10 +362,46 @@ void Cloth::prepareStep(float seconds) {
 void Cloth::finishStep() {
   impl->each([&](Instance::Impl& body) {
     if(body.body.IsInvalid()) { body.maxSpeed=0; return; }
-    JPH::BodyLockRead lock(impl->system().GetBodyLockInterface(),body.body);
+    JPH::BodyLockWrite lock(impl->system().GetBodyLockInterface(),body.body);
     if(!lock.Succeeded()) return;
-    const auto& native=lock.GetBody();
-    const auto& motion=*static_cast<const JPH::SoftBodyMotionProperties*>(native.GetMotionProperties());
+    auto& native=lock.GetBody();
+    auto& motion=*static_cast<JPH::SoftBodyMotionProperties*>(native.GetMotionProperties());
+    if(body.supportRadiusCm>0.f) {
+      const auto from=CollisionWorld::toMeters(project(body.matrix,body.supportFrom)-body.translation());
+      const auto to=CollisionWorld::toMeters(project(body.matrix,body.supportTo)-body.translation());
+      const auto x=project(body.matrix,{1,0,0})-body.translation();
+      const auto y=project(body.matrix,{0,1,0})-body.translation();
+      const auto z=project(body.matrix,{0,0,1})-body.translation();
+      const float radius=(body.supportRadiusCm+.5f)*.01f*std::max({x.length(),y.length(),z.length()});
+      const auto axis=to-from;
+      const float halfHeight=axis.Length()*.5f;
+      const auto inverseRotation=JPH::Quat::sFromTo(JPH::Vec3::sAxisY(),axis.NormalizedOr(JPH::Vec3::sAxisY())).Conjugated();
+      const auto midpoint=(from+to)*.5f;
+      for(size_t i=0;i<motion.GetVertices().size();++i) {
+        auto& vertex=motion.GetVertex(uint32_t(i));
+        if(vertex.mInvMass==0.f) continue;
+        const auto previous=i<body.supportPrevious.size() ? body.supportPrevious[i] : vertex.mPreviousPosition;
+        const auto sweep=vertex.mPosition-previous;
+        const float fraction=JPH::RayCapsule(inverseRotation*(previous-midpoint),inverseRotation*sweep,halfHeight,radius);
+        if(fraction>0.f && fraction<1.f) {
+          const auto contact=previous+sweep*fraction;
+          const auto normal=(contact-closestOnSegment(contact,from,to)).NormalizedOr(JPH::Vec3::sAxisZ());
+          const float inward=(vertex.mPosition-contact).Dot(normal);
+          if(inward<0.f) vertex.mPosition-=normal*inward;
+          const float incoming=vertex.mVelocity.Dot(normal);
+          if(incoming<0.f) vertex.mVelocity-=normal*incoming;
+          }
+        const auto center=closestOnSegment(vertex.mPosition,from,to);
+        auto delta=vertex.mPosition-center;
+        const float distanceSq=delta.LengthSq();
+        if(distanceSq>=radius*radius) continue;
+        const auto oldDelta=previous-closestOnSegment(previous,from,to);
+        const auto normal=distanceSq>1.e-12f ? delta/std::sqrt(distanceSq) : oldDelta.NormalizedOr(JPH::Vec3::sAxisZ());
+        vertex.mPosition=center+normal*radius;
+        const float incoming=vertex.mVelocity.Dot(normal);
+        if(incoming<0.f) vertex.mVelocity-=normal*incoming;
+        }
+      }
     body.maxSpeed=0;
     body.maxSpeedVertex=uint32_t(-1);
     body.maxSpeedContact=false;

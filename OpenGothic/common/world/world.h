@@ -18,6 +18,7 @@
 #include "worldsound.h"
 #include "waypoint.h"
 #include "waymatrix.h"
+#include "portalrooms.h"
 
 class GameSession;
 class Focus;
@@ -135,6 +136,7 @@ class World final {
     Npc*                 findNpcByInstance(size_t instance, size_t n = 0);
     Item*                findItemByInstance(size_t instance, size_t n = 0);
     std::string_view     roomAt(const Tempest::Vec3& arr);
+    bool                 isIndoor(const Tempest::Vec3& point) const;
 
     void                 scaleTime(uint64_t& dt);
     void                 tick(uint64_t dt);
@@ -244,6 +246,7 @@ class World final {
       std::vector<std::uint64_t>          leaf_node_indices;
       std::vector<BspSector>              sectorsData;
       } bsp;
+    PortalRooms::Volumes                  windRooms;
 
     Npc*                                  npcPlayer=nullptr;
 

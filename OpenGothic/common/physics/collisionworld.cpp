@@ -85,10 +85,8 @@ namespace {
 
   struct LayerPairFilter final : JPH::ObjectLayerPairFilter {
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
-      if(a==DynamicWorld::C_Cloth || b==DynamicWorld::C_Cloth) {
-        const auto other=a==DynamicWorld::C_Cloth ? b : a;
-        return other==DynamicWorld::C_Landscape || other==DynamicWorld::C_Object;
-        }
+      if(a==DynamicWorld::C_Cloth || b==DynamicWorld::C_Cloth)
+        return false;
       if(a==DynamicWorld::C_MovableQuery || a==DynamicWorld::C_SmallVobQuery ||
          b==DynamicWorld::C_MovableQuery || b==DynamicWorld::C_SmallVobQuery)
         return false;
@@ -111,7 +109,7 @@ namespace {
   struct BroadPhaseFilter final : JPH::ObjectVsBroadPhaseLayerFilter {
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad) const override {
       if(layer==DynamicWorld::C_Cloth)
-        return broad==staticLayer;
+        return false;
       if(layer==DynamicWorld::C_LivingBody)
         return broad==dynamicLayer;
       if(layer==DynamicWorld::C_MovableQuery || layer==DynamicWorld::C_SmallVobQuery)
@@ -124,8 +122,8 @@ namespace {
   struct QueryLayerFilter final : JPH::ObjectLayerFilter {
     explicit QueryLayerFilter(uint32_t mask):mask(mask) {}
     bool ShouldCollide(JPH::ObjectLayer layer) const override {
-      // Cloth responds to the static scene through soft-body contacts. It is
-      // never a solid target for gameplay rays, sweeps, or character queries.
+      // Cloth has only its attachment guard; it never contacts the world or
+      // becomes a solid target for gameplay rays, sweeps or character queries.
       return layer!=DynamicWorld::C_Cloth && layer<32 && (mask & (1u<<layer))!=0;
       }
     const uint32_t mask;

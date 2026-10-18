@@ -4817,6 +4817,27 @@ std::string clothUpper(std::string text) {
 
 bool clothCamera(World& world,std::string_view group,bool required=true,Vec3* targetOut=nullptr);
 
+float clothCameraDistance(const std::vector<Vec3>& points,const Vec3& target,const Vec3& direction) {
+  const auto* camera=Gothic::inst().camera();
+  const float halfY=(camera?camera->fovY():67.5f)*float(M_PI)/360.f;
+  const auto projection=camera?camera->projective():Matrix4x4();
+  const float aspect=camera?std::abs(projection.at(1,1)/projection.at(0,0)):4.f/3.f;
+  const float tanY=std::tan(halfY),tanX=tanY*aspect;
+  auto right=Vec3::crossProduct(direction,Vec3(0,1,0));
+  if(right.length()<.01f)right=Vec3(1,0,0);
+  else right=Vec3::normalize(right);
+  const auto up=Vec3::normalize(Vec3::crossProduct(right,direction));
+  float distance=650.f;
+  for(const auto& point:points) {
+    const auto delta=point-target;
+    const float depth=Vec3::dotProduct(delta,direction);
+    // Fit the actual projected geometry, with room for flutter at all edges.
+    distance=std::max(distance,depth+1.2f*(std::abs(Vec3::dotProduct(delta,right))+25.f)/tanX);
+    distance=std::max(distance,depth+1.2f*(std::abs(Vec3::dotProduct(delta,up))+25.f)/tanY);
+    }
+  return distance;
+  }
+
 bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& cameraTarget,
                 Vec3& cameraNormal,float& span) {
   float area=0;Vec3 bounds[2]={body.center,body.center};
@@ -4834,7 +4855,6 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
   if(area<.01f)return false;
   cameraTarget=(bounds[0]+bounds[1])*.5f;
   span=(bounds[1]-bounds[0]).length();
-  const float cameraDistance=std::max(650.f,span*1.8f);
   Vec3 cameraRight=Vec3::normalize(Vec3::crossProduct(cameraNormal,Vec3(0,1,0)));
   if(cameraRight.length()<.01f)cameraRight=Vec3(1,0,0);
   const auto cameraUp=Vec3::normalize(Vec3::crossProduct(cameraRight,cameraNormal));
@@ -4845,12 +4865,16 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
     }
   bool cameraClear=false;
   // Look slightly down on low banners to keep grass out of the foreground.
-  // Nine rays check the entire cloth's frame, not just its center.
-  for(float elevation:{.55f,.3f,.1f}) {
+  // Nine rays include the full frame edges. Higher alternatives clear the
+  // foreground vegetation around the low Valley of Mines banners.
+  for(float elevation:{.55f,.8f,1.1f,.3f}) {
     for(float side:{1.f,-1.f}) {
-      const auto eye=cameraTarget+cameraNormal*(cameraDistance*side)+Vec3(0,cameraDistance*elevation,0);
+      const auto direction=Vec3::normalize(cameraNormal*side+Vec3(0,elevation,0));
+      const float cameraDistance=clothCameraDistance(body.worldPositionsCm,cameraTarget,direction);
+      const auto eye=cameraTarget+direction*cameraDistance;
+      if(bounds[1].y<1000.f && eye.y<bounds[1].y+100.f)continue;
       bool clear=true;
-      for(float x:{.15f,.5f,.85f})for(float y:{.15f,.5f,.85f}) {
+      for(float x:{0.f,.5f,1.f})for(float y:{0.f,.5f,1.f}) {
         const auto target=cameraTarget+cameraRight*(horizontal*(x*2.f-1.f))+cameraUp*(vertical*(y*2.f-1.f));
         // The last centimetres may be an original OFF cloth collision. Ignore
         // only that target end, retaining poles and every foreground wall.
@@ -4995,10 +5019,11 @@ bool clothCamera(World& world,std::string_view group,bool required,Vec3* targetO
     high.x=std::max(high.x,point.x);high.y=std::max(high.y,point.y);high.z=std::max(high.z,point.z);
     }
   const auto target=(low+high)*.5f;
-  const auto distance=(high-low).length()*1.6f;
   Vec3 eye;bool clear=false;
   for(float angle:{3.14f,0.f,2.74f,.4f,3.54f,-.4f,2.34f,.8f}) {
-    eye=target+Vec3(std::cos(angle)*distance,distance*.3f,std::sin(angle)*distance);
+    const auto direction=Vec3::normalize(Vec3(std::cos(angle),.3f,std::sin(angle)));
+    const auto distance=clothCameraDistance(points,target,direction);
+    eye=target+direction*distance;
     bool visible=true;
     for(const auto& body:all)if(clothUpper(body.visual).find("NW_SHIP_")!=std::string::npos) {
       const auto delta=body.center-eye;
@@ -8632,6 +8657,20 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("cloth_toggle","\"enabled\":"+std::string(w.physic()->clothEnabled()?"true":"false"));
     }
   else if(c=="cloth" && a.size()==4 && a[1]=="setup")clothSetup(w,pl,a[2],a[3]);
+  else if(c=="cloth" && a.size()==6 && a[1]=="room-check") {
+    if(!isNumber(a[2]) || !isNumber(a[3]) || !isNumber(a[4]) || (a[5]!="indoor" && a[5]!="outdoor")) {
+      arenaAbort("cloth room-check expects finite x y z and indoor or outdoor");return;
+      }
+    const Vec3 point(num(a,2,0),num(a,3,0),num(a,4,0));
+    if(!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+      arenaAbort("cloth room-check expects finite coordinates");return;
+      }
+    const bool indoor=w.isIndoor(point),expected=a[5]=="indoor";
+    const bool pass=indoor==expected;
+    event("cloth_room_check","\"point_cm\":"+ragdollVector(point)+",\"bsp_room\":"+jsonStr(w.roomAt(point))+
+      ",\"indoor\":"+(indoor?"true":"false")+",\"expected\":"+jsonStr(a[5])+",\"pass\":"+(pass?"true":"false"));
+    if(!pass)arenaAbort("cloth room classification check failed");
+    }
   else if(c=="cloth" && a.size()==3 && a[1]=="wind") {
     if(a[2]!="calm" && a[2]!="gust" && a[2]!="natural") {arenaAbort("cloth wind expects calm, gust or natural");return;}
     w.physic()->cloth().setWindScale(a[2]=="calm"?0.f:(a[2]=="gust"?2.f:1.f));
@@ -8644,8 +8683,18 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="cloth" && a.size()==3 && a[1]=="initial")clothInitial(w,a[2]);
   else if(c=="cloth" && a.size()==3 && a[1]=="verify") {
     bool pass=true;bool target=false;
+    size_t sails=0,flags=0,exposedSails=0,exposedFlags=0;
     for(const auto& body:w.physic()->cloth().snapshots()) {
-      if(a[2]=="anchors") {
+      if(a[2]=="harbour-wind") {
+        if(!body.active)continue;
+        if(body.visual.starts_with("NW_SHIP_SAIL_02:")) {
+          ++sails;exposedSails+=body.exposed;
+          }
+        else if(body.visual.starts_with("NW_SHIP_FLAG_01:") || body.visual.starts_with("NW_SHIP_FLAG_02:")) {
+          ++flags;exposedFlags+=body.exposed;
+          }
+        }
+      else if(a[2]=="anchors") {
         target|=body.zenId==bench.clothZen && body.active && body.pinned>0;
         pass&=std::isfinite(body.maxAnchorErrorCm) && body.maxAnchorErrorCm<=.5f &&
           std::isfinite(body.maxSpeedEverCmPerSec) && body.maxSpeedEverCmPerSec<=Cloth::maxVelocityMS*100.f+.5f && body.recoveryCount==0;
@@ -8659,8 +8708,14 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
         else pass=false;
         }
       }
+    if(a[2]=="harbour-wind") {
+      target=sails==5 && flags==4;
+      pass&=exposedSails==sails && exposedFlags==flags;
+      }
     pass&=target;
     event("cloth_verify","\"check\":"+jsonStr(a[2])+",\"pass\":"+(pass?"true":"false")+
+      ",\"active_sails\":"+std::to_string(sails)+",\"exposed_sails\":"+std::to_string(exposedSails)+
+      ",\"active_flags\":"+std::to_string(flags)+",\"exposed_flags\":"+std::to_string(exposedFlags)+
       ",\"arrow_downstream_cm\":"+ragdollNumber(bench.clothArrowDownstream)+",\"cloth\":"+clothRows(w));
     if(!pass)arenaAbort("cloth native "+a[2]+" check failed");
     }
@@ -8708,6 +8763,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("cloth_measure_after","\"active_soft_bodies\":"+std::to_string(active)+
       ",\"samples\":"+std::to_string(costs.size())+",\"physics_p95_ms\":"+ragdollNumber(p95)+
       ",\"overflow\":"+(bench.clothOverflow?"true":"false")+",\"cloth\":"+clothRows(w));
+    }
+#else
+  else if(c=="cloth" && a.size()>=2 && (a[1]=="measure" || a[1]=="report")) {
+    arenaAbort("cloth timing requires a build with OPENGOTHIC_ENABLE_APP_CADENCE=ON");
     }
 #endif
   else if(c=="water" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
@@ -9435,6 +9494,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       if(const auto* body=npc->ragdollBody()) { parts+=uint32_t(body->partCount());if(body->isSleeping())++asleep; }
       }
     AppCadence::counts(false,models,dead,parts,asleep,bench.cadenceDown);
+    }
+#else
+  else if(c=="cadence") {
+    arenaAbort("cadence requires a build with OPENGOTHIC_ENABLE_APP_CADENCE=ON");
     }
 #endif
   else if(c=="ragdoll" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
