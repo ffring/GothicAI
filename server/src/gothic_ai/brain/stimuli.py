@@ -46,6 +46,13 @@ POLICIES: dict[str, EventPolicy] = {
     # scenes it was trained on (decider-service/tuning); the bridge's kinds are mapped by `normalize`
     "monster_near": EventPolicy("{other} is coming at you.", 20, urgent=True, salient=True, threat=True),
     "npc_attack": EventPolicy("{other} attacked you.", 60, urgent=True, salient=True, threat=True),
+    "npc_threat": EventPolicy(
+        "{other} is hostile and running toward you with a drawn weapon.",
+        10,
+        urgent=True,
+        salient=True,
+        threat=True,
+    ),
     "fight_nearby": EventPolicy("A fight broke out nearby: {detail}.", 30, salient=True, threat=True),
     "cry_for_help": EventPolicy("{other} is shouting for help nearby.", 30, salient=True, threat=True),
     # the end of such a danger: the monster is dead (the threats from it are dropped, see `NpcPlanner`)
@@ -63,6 +70,7 @@ def policy(kind: str) -> EventPolicy:
 # monster_killed: what the dead monster had been doing, by the threats from it the npc had in mind
 THREAT_CONTEXT = {
     "npc_attack": ", which attacked you",
+    "npc_threat": ", which ran at you with a drawn weapon",
     "monster_near": ", which was coming at you",
     "fight_nearby": ", which was attacking someone nearby",
 }

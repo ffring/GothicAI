@@ -49,6 +49,7 @@
 | Медленный, говорящий | gpt-6.1-sol по подписке ChatGPT | что сказать, намерение, сделки, поручения, обещания | `dialogue.py`, `llm/`, `--llm`, `--model`; лимит самоинициативы — `budget.py` |
 
 Боевое тело — третий слой: `bodypilot.py` берёт NPC в аренду (lease) у движка и ведёт его политикой P30 из `body-service`. Если сервис отвалился, бой возвращается к родному поведению движка. Подробно — [`npc-agent.md`](npc-agent.md), [`npc-body-control-plan.md`](npc-body-control-plan.md), [`npc-body-api.md`](npc-body-api.md).
+После подвисания игры пилот отправляет накопившиеся строки только в память, оставляя действие свежей последней строке. В `gothic-body serve-net` это включено по умолчанию; `--no-allow-stale-memory-only` возвращает проверку возраста для строк памяти.
 
 ## Правда и убеждения
 
@@ -93,13 +94,14 @@
 
 `OpenGothic/` — форк Try/OpenGothic. Сторонние библиотеки лежат в `lib/` обычными файлами ([`VENDORED.md`](../OpenGothic/lib/VENDORED.md)). Целиком наше: `ai_bridge/`, `game/bodyrunner.cpp`, `tests/*_contract.cpp`. В `common/` наши `physics/`, части `game/` и `graphics/mesh/`, `testbench.*`, `nav*`; остальное — апстрим с точечными правками. Эмуляция Ikarus/LeGo апстрима (`common/game/compatibility/`, кроме `phoenix.*`) удалена; при слиянии апстрима конфликт `modify/delete` в этой папке решается сохранением удаления.
 
-Всё ниже включено по умолчанию. Выключатели `OPENGOTHIC_*=0` нужны для сравнений. Каждый выключатель с модулем и проверкой — в [`features.md`](features.md).
+Если не указано иное, подсистемы ниже включены по умолчанию. Выключатели `OPENGOTHIC_*=0` нужны для сравнений. Каждый выключатель с модулем и проверкой — в [`features.md`](features.md).
 
 | Подсистема | Где | Выключатель | Документ |
 |---|---|---|---|
 | Мост к серверу | `ai_bridge/aibridge.cpp`; NPC — `npccontroller`, `npcview`, `npcchests`; сюжет — `story*`, `dialoggraph`; голос — `voicebuffer`, `linelibrary`; `beasts`, `necromancy` | `GOTHIC_AI=0` | [`protocol.md`](protocol.md) |
 | Физика Jolt вместо Bullet: тела, рэгдоллы, CharacterVirtual, вода, разрушение | `common/physics/` (`collisionworld`, `dynamicworld`, `ragdoll`, `fracture`, `cloth`, `worldwind`), `common/world/movablevobs.*` | ini `[GAME]`: `ragdoll`, `movable_vobs`, `destruction`, `buoyancy`, `character_virtual` и другие; кэш разрушений `OPENGOTHIC_FRACTURE` | [`physics.md`](physics.md) |
 | Ткань мира рядом с героем: mesh-vob и полотнища уровня | `common/physics/cloth.*`, `clothgeometry.*`, `worldcloth.*`, `common/graphics/clothvisual.*`, `common/world/portalrooms.h`; таблицы `data/cloth-vobs.csv`, `cloth-world.csv` | `[GAME] cloth=0`, Marvin `toggle cloth` | [Перепись и проверки](../reports/physics/2026-10-18-cloth/validation-notes.md#шаг-1) |
+| Наземные живые монстры на CharacterVirtual в 20 м от героя (выход 22 м), эксперимент по умолчанию **OFF** | `common/game/movealgo.cpp`, общий `common/physics/` | `[GAME] monster_character_virtual=0`; Marvin `toggle monster_character_virtual` | [Числа и приёмка шага 4, часть 1](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md) |
 | Анимация: инерциальные переходы, foot IK, моргание, жесты, губы, взгляд, наклон, вздрагивание, натяжение лука, ходьба с прицелом | `common/graphics/mesh/` (`animblend`, `footik`, `eyeblink`, `talkgestures`, `lipsync`, `gaze`, `lean`, `flinch`, `bowdraw`, `aimwalk`, `aim`) | `OPENGOTHIC_ANIBLEND`, `_FOOTIK`, `_BLINK`, `_GESTURES`, `_LIPSYNC`, `_GAZE`, `_LEAN`, `_FLINCH`, `_BOWDRAW`, `_AIMWALK`, `_AIM` | — |
 | Ручной прицел героя и лучники NPC | `common/game/archery.cpp`, `aimcamera.h`, `archerai.*` | `OPENGOTHIC_MANUALAIM`, `OPENGOTHIC_NPCAIM` (или ini `[GAME] manualAim`, `npcManualAim`) | [`manual-aim.md`](manual-aim.md) |
 | Боевое тело NPC: аренда, наблюдения, арена, реплей | `common/game/bodycontroller.*`, `bodyobservations.*`, `bodyarena.*`, `bodyreplay.*` | без `--body-url` на сервере не работает | [`npc-body-api.md`](npc-body-api.md) |
@@ -146,6 +148,8 @@
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |
 
+Стенд `monster-character-virtual` сравнивает OFF/ON для волка, тролля, воды и атак без парных видео; `check-physics` проверяет их капсулы, e2e `wolf` запускается с `MONSTER_CHARACTER_VIRTUAL=1`.
+
 Сценарий считается пройденным, когда все значения результата начинаются с `done`. Описание каждого — в шапке `scripts/e2e.sh`. Стенды ткани `cloth`, `cloth-orc`, `cloth-city`, `cloth-harbour` проверяют самостоятельные и извлечённые из уровня полотнища; `cloth-arrow-npc` проверяет пересечение ткани и NPC одним отрезком стрелы в обоих порядках; `cloth-visibility` проверяет заморозку вне камеры и плавный возврат; `cloth-on/off` измеряют плотное скопление, `cloth-reload` и `cloth-legacy-load` проверяют загрузку; приёмка включает извлечённые из уровня паруса, корабельные флаги и городские знамёна. Тесты сервисов лежат в их `tests/`, тесты скриптов — в `scripts/tests/`.
 
 **Сценарии по областям** (модуль в `server/src/gothic_ai/scenarios/`):
@@ -171,7 +175,7 @@
 
 ## Остальные каталоги
 
-- **`shorts/`** — шортсы из игры с живыми NPC: съёмка, монтаж, объясняющие ролики, сравнения «до и после», бренд ([`shorts/README.md`](../shorts/README.md)). Сравнения собирает `gothic_shorts.compare`, точка входа — `shorts/compare/cut.py`; `gothic-shorts dub` распознаёт их планы и берёт папку дублей из `takes` или `--takes DIR`. Обложки шаблона B — модуль `gothic_shorts.cover`, команда `cover` и поле `cover` плана; загрузка на YouTube с `--thumbnail`, отдельная команда `thumbnail`.
+- **`shorts/`** — шортсы из игры с живыми NPC: съёмка, монтаж, объясняющие ролики, сравнения «до и после», бренд ([`shorts/README.md`](../shorts/README.md)). Сравнения собирает `gothic_shorts.compare`, точка входа — `shorts/compare/cut.py`; `gothic-shorts dub` распознаёт их планы и берёт папку дублей из `takes` или `--takes DIR`. Сравнение воды — `shorts/compare/water.bench` и `water.json`: `shorts/compare/film.sh water` снимает три сцены в гавани (крестьянин, огненный шар и вещи) крупными боковыми камерами через отдельные постановки `water-film` стенда; в дубле off тело может выйти из кадра. Обложки шаблона B — модуль `gothic_shorts.cover`, команда `cover` и поле `cover` плана; загрузка на YouTube с `--thumbnail`, отдельная команда `thumbnail`.
 - **`site/`** — сайт и дневник на GitHub Pages ([`site/README.md`](../site/README.md)).
 - **`evals/`** — эталоны: `npc-body/` (бой), `npc-decisions/` (выбор модели решений).
 - **`reports/`** — итоговые исследования и отчёты прогонов.
@@ -193,6 +197,7 @@
 | [`director.md`](director.md) | режиссёр-автор: квесты, персонажи, цепочки | сейчас + план с журналом, этапы 1–5 сделаны |
 | [`crime.md`](crime.md) | преступления и репутация | сейчас + план: слои 1–3, 4а и 5; встречи слоя 4б — дальше |
 | [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода, ткань | сейчас + план с журналом |
+| [`own-content.md`](own-content.md) | своя игра: замена ресурсов, скриптов и мира Gothic своими, этапы 0–9 | сейчас + план с журналом, идёт: этапы 0–1 |
 | [`manual-aim.md`](manual-aim.md) | ручное прицеливание | сейчас + план с журналом |
 | [`navigation.md`](navigation.md) | обучаемая навигация NPC; [популяционный стенд на CV и независимый набор 60 пар](../reports/navigation/2026-10-18-rl-env/README.md) | сейчас + план, идёт |
 | [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | сейчас + план |

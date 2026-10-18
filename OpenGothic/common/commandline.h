@@ -37,6 +37,7 @@ class CommandLine {
     bool                isWindowMode()     const { return isWindow;     }
     bool                isRayQuery()       const { return isRQuery;     }
     GiMethod            isRtGi()           const { return isGi;         }
+    bool                hasRtGiArg()       const { return isGiSet;      }
     bool                isMeshShading()    const { return isMeshSh;     }
     bool                isBindless()       const { return isBindlessSh; }
     bool                isVirtualShadow()  const { return isVsm;        }
@@ -66,9 +67,12 @@ class CommandLine {
     Benchmark           isBenchmark  = Benchmark::None;
     bool                isWindow     = false;
     bool                isDebug      = false;
-#if defined(__OSX__) || defined(__ANDROID__)
+#if defined(__ANDROID__)
     bool                isRQuery     = false;
     bool                isMeshSh     = false;
+#elif defined(__OSX__)
+    bool                isRQuery     = true;   // shadows of point lights; works on M1 without hardware RT
+    bool                isMeshSh     = false;  // slower on M1 (reports/render-features/2026-10-18)
 #else
     bool                isRQuery     = true;
     bool                isMeshSh     = true;
@@ -77,9 +81,10 @@ class CommandLine {
     bool                isVsm        = false;
     bool                isRtSm       = false;
     GiMethod            isGi         = GiMethod::None;
+    bool                isGiSet      = false;  // -gi given: else Gothic picks by the device
     bool                forceG1      = false;
     bool                forceG2      = false;
     bool                forceG2NR    = false;
-    uint32_t            aaPresetId = 0;
+    uint32_t            aaPresetId = 1;        // CMAA2; -aa 0 turns it off
   };
 

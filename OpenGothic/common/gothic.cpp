@@ -68,8 +68,13 @@ Gothic::Gothic() {
 #endif
   setBenchmarkMode(CommandLine::inst().isBenchmarkMode());
 
-  if(Resources::hasGraphicsDevice() && Resources::device().properties().raytracing.rayQuery)
+  if(Resources::hasGraphicsDevice() && Resources::device().properties().raytracing.rayQuery) {
     opts.doGi = CommandLine::inst().isRtGi();
+    // GI probes by default on a discrete GPU: ≈0.7 ms on an RTX 3080, an M1 is at 99 % with them
+    // (reports/render-features/2026-10-18); the renderer drops them without -rt
+    if(!CommandLine::inst().hasRtGiArg() && Resources::device().properties().type==Tempest::DeviceType::Discrete)
+      opts.doGi = GiMethod::Probes;
+    }
 
   opts.aaPreset = CommandLine::inst().aaPreset();
 
@@ -105,6 +110,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "cloth",               1);
   defaults->set("GAME", "character_virtual",   1);
   defaults->set("GAME", "npc_character_virtual",1);
+  defaults->set("GAME", "monster_character_virtual",0);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -924,7 +930,8 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","buoyancy")!=0,
     settingsGetI("GAME","cloth")!=0,
     settingsGetI("GAME","character_virtual")!=0,
-    settingsGetI("GAME","npc_character_virtual")!=0
+    settingsGetI("GAME","npc_character_virtual")!=0,
+    settingsGetI("GAME","monster_character_virtual")!=0
     };
   }
 

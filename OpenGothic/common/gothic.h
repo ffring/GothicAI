@@ -58,6 +58,11 @@ class Gothic final {
       bool cloth         = true;
       bool characterVirtual = false;
       bool npcCharacterVirtual = false;
+      bool monsterCharacterVirtual = false;
+
+      bool allowsMonsterCharacterVirtual(bool down, bool flying) const {
+        return monsterCharacterVirtual && !down && !flying;
+        }
       };
 
     struct Options {

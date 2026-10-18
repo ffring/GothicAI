@@ -277,7 +277,21 @@ async def test_missing_card_uses_three_and_projection_precedes_fight(system):
     row = await finish(system)
     assert row["reaction"] == "fight"
     assert seen == [(LOBART, [])]
-    assert system.link.actions[-1] == (LOBART, "fight", {"npc": "PLAYER", "reason": "AR_THEFT"})
+    assert system.link.actions == [(LOBART, "fight", {
+        "npc": "PLAYER", "reason": "AR_THEFT", "svm": "DIRTYTHIEF",
+    })]
+
+
+async def test_flee_svm_is_part_of_native_state_start_instead_of_a_cleared_queue(system):
+    system.react.cards = {HILDA: card(HILDA, courage=2)}
+    system.link.receive(deed(
+        kind="murder", victim=LOBART, victim_guild=12, witnesses=[HILDA],
+        witnesses_metadata=[{"npc": HILDA, "guild": 12, "npctype": 0}],
+    ))
+    system.link.receive(held().model_copy(update={"kind": "murder"}))
+    row = await finish(system)
+    assert row["reaction"] == "flee" and row["verdict"] == "server"
+    assert system.link.actions == [(HILDA, "flee", {"npc": "PLAYER", "svm": "HELP"})]
 
 
 async def test_silence_and_ignore_are_valid_server_verdicts_without_body_action(system):

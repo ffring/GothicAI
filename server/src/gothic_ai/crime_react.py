@@ -378,13 +378,16 @@ class CrimeReact:
                     raise _Fallback("no_rule")
                 if self.project is not None:
                     await self.project(npc)
-                if reaction.svm:
+                if reaction.svm and reaction.kind not in {"fight", "flee"}:
                     await self._act(npc, "say_svm", svm=reaction.svm, overlay=True)
+                voice = {"svm": reaction.svm} if reaction.svm else {}
                 if reaction.kind == "fight":
-                    await self._act(npc, "fight", npc="PLAYER", reason=reaction.fight_reason)
+                    # Native startState clears queued speech. The bridge's existing personal SVM
+                    # argument speaks after the state starts, preserving the witness's own voice.
+                    await self._act(npc, "fight", npc="PLAYER", reason=reaction.fight_reason, **voice)
                     fighter = npc
                 elif reaction.kind == "flee":
-                    await self._act(npc, "flee", npc="PLAYER")
+                    await self._act(npc, "flee", npc="PLAYER", **voice)
                 elif reaction.kind == "call_guards":
                     self.law.called(crime["id"], npc, guards)
                     guard = next((guard for guard in guards if self._free(guard)), None)

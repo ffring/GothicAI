@@ -39,6 +39,7 @@ PR, который добавляет фичу или выключатель, д
 | NPC сам подходит и заговаривает | нет; без планировщика её нет | `initiative.py`, `concerns.py` | e2e `initiative` | [npc-tools.md](npc-tools.md#сделано-инициатива) |
 | Реакция на физический шум: посмотреть, пойти проверить | нет; без планировщика её нет | `brain/situation.py`, `brain/apply.py` | — | [protocol.md](protocol.md#физический-шум-v36) |
 | Боевое тело P30 | `--no-neural-body`; без `--body-url` его нет | `bodypilot.py`, `body-service/`; движок — `common/game/bodycontroller.*` | e2e `neural`, `neural-companion`; бенчи `body-api`, `body-arena`, `body-observe` | [npc-body-control-plan.md](npc-body-control-plan.md), [npc-body-api.md](npc-body-api.md) |
+| Память P30 после подвисаний игры | `gothic-body serve-net --no-allow-stale-memory-only` возвращает проверку возраста строк памяти | `bodypilot.py`, `body-service/src/gothic_body/runtime.py`, `serving_net.py` | `test_bodypilot.py`, `test_runtime.py`, `test_serving_net.py`; e2e `neural`, `neural-companion` | [npc-body-control-plan.md](npc-body-control-plan.md) |
 | Волки слышат тон героя | `--no-beasts` | `beasts.py`; мост — `ai_bridge/beasts*` | e2e `wolf`; бенч `wolf` | [beasts.md](beasts.md) |
 
 ## Сервер: восприятие и знание
@@ -121,6 +122,7 @@ PR, который добавляет фичу или выключатель, д
 | Вода: плавучесть вещей и тел | `[GAME] buoyancy=0` | `common/physics/dynamicworld.cpp` | бенчи `water*`, `water-bodies*` | [physics.md](physics.md) |
 | CharacterVirtual героя | `[GAME] character_virtual=0` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | бенчи `character-virtual*` | [physics.md](physics.md) |
 | CharacterVirtual NPC-людей в 20 м от героя | `[GAME] npc_character_virtual=0` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | бенчи `npc-character-virtual*` | [physics.md](physics.md) |
+| CharacterVirtual наземных монстров в 20 м от героя (по умолчанию **0**) | `[GAME] monster_character_virtual=0`; Marvin `toggle monster_character_virtual` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | `check-physics`; бенч `monster-character-virtual`; e2e `wolf` с ON | [Приёмка шага 4, часть 1](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md) |
 
 ## Движок: анимация
 
@@ -140,6 +142,16 @@ PR, который добавляет фичу или выключатель, д
 | Тетива натягивается рукой | `OPENGOTHIC_BOWDRAW=0` | `bowdraw.*` | бенч `bow-draw` | [manual-aim.md](manual-aim.md) |
 | Шаги с поднятым луком | `OPENGOTHIC_AIMWALK=0` | `aimwalk.*` | бенч `aim-walk` | [manual-aim.md](manual-aim.md) |
 | Зоны попадания по костям | нет | `hitzones.*` | бенч `zones` | — |
+
+## Движок: рендер
+
+Что включилось, пишет строка `render:` в логе игры.
+
+| Фича | Как выключить | Модуль | Проверка | Документ |
+|---|---|---|---|---|
+| Ray query на Mac: тени точечных светильников, свет не проходит сквозь стены (на Linux и Windows — с апстрима) | `-rt 0` | `common/commandline.h` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
+| GI-пробы на дискретной видеокарте с трассировкой | `-gi 0` | `common/gothic.cpp` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
+| Сглаживание CMAA2 (только при `vidResIndex=0`) | `-aa 0` | `common/commandline.h` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
 
 ## Движок: стрельба
 

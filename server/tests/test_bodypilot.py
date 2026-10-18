@@ -336,6 +336,9 @@ class Policy:
         self.writers = set()
         self.tasks = set()
         self.step_mode = "normal"
+        self.memory_only_step = True
+        self.step_fallback_reason = "fake_fallback"
+        self.step_hidden_reset = True
         self.reset_mode = "normal"
         self.reset_waiter = None
         self.step_waiter = None
@@ -365,6 +368,8 @@ class Policy:
                         continue
                     else:
                         result.update(reason="episode_reset", hidden_reset=True)
+                        if self.memory_only_step and request.get("include_capabilities") is True:
+                            result["memory_only_step"] = True
                 elif command == "step":
                     if self.on_step is not None:
                         self.on_step(request)
@@ -380,10 +385,16 @@ class Policy:
                     if self.step_mode == "error":
                         result.update(ok=False, reason="inference_error", error="fake policy failure")
                     elif self.step_mode == "fallback":
-                        result.update(status="fallback", action_id=None, reason="fake_fallback")
+                        result.update(
+                            status="fallback", action_id=None, reason=self.step_fallback_reason,
+                            process={"hidden_reset": self.step_hidden_reset},
+                        )
                     else:
                         row = request["observation"]
-                        eligible = row["can_decide"] and row["action_mask_valid"]
+                        eligible = (
+                            row["can_decide"] and row["action_mask_valid"]
+                            and not request.get("memory_only", False)
+                        )
                         action = self.step_response_actions.popleft() if self.step_response_actions else 1
                         result.update(
                             status="decision" if eligible else "locked",
@@ -874,6 +885,77 @@ async def test_every_owned_periodic_row_in_a_packet_reaches_policy_as_received()
         assert len(rig.bridge.commands("body_action")) == 1
 
 
+async def test_frame_hitch_burst_updates_memory_in_order_and_only_freshest_row_acts():
+    async with running() as rig:
+        await rig.active()
+        rows = [fighter(seq, owned=True) for seq in range(4, 10)]
+        assert rows[-1]["t_game_ms"] - rows[0]["t_game_ms"] == 250
+        rig.bridge.emit(*rows)
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        steps = rig.policy.commands("step")[-6:]
+        assert [step["observation"] for step in steps] == rows
+        assert [step.get("memory_only", False) for step in steps] == [True] * 5 + [False]
+        assert all(step["now_game_ms"] == rows[-1]["t_game_ms"] for step in steps)
+        assert [command["observation_seq"] for command in rig.bridge.commands("body_action")] == [3, 9]
+        assert len(rig.policy.commands("reset")) == 1
+        assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
+        # The row following a burst belongs to the same uninterrupted episode.
+        rig.bridge.emit(fighter(10, owned=True))
+        await eventually(lambda: rig.pilot._decisions == 3)
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.memory_only_lag_rows == 5
+        assert summary.observation_too_old == summary.policy_memory_resets == 0
+        assert summary.max_batch_rows == 6 and summary.max_batch_lag_game_ms == 250
+
+
+@pytest.mark.parametrize("age_ms, memory_only", [(100, False), (101, True)])
+async def test_latest_owned_row_uses_memory_only_after_one_hundred_game_ms(age_ms, memory_only):
+    async with running() as rig:
+        await rig.active()
+        own = fighter(4, owned=True)
+        newer = player_row(10)
+        newer["t_game_ms"] = own["t_game_ms"] + age_ms
+        rig.bridge.emit(own, newer)
+        await eventually(lambda: len(rig.policy.commands("step")) == 2)
+        if memory_only:
+            await asyncio.sleep(0.01)
+        else:
+            await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        step = rig.policy.commands("step")[-1]
+        assert step["observation"] == own
+        assert step.get("memory_only", False) is memory_only
+        assert step["now_game_ms"] == newer["t_game_ms"]
+        assert len(rig.bridge.commands("body_action")) == (1 if memory_only else 2)
+        assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
+        await rig.pilot.aclose()
+        assert rig.pilot.last_summary.memory_only_lag_rows == int(memory_only)
+
+
+async def test_legacy_service_gets_original_step_shape_and_historical_actions_are_suppressed():
+    async with running() as rig:
+        rig.policy.memory_only_step = False
+        await rig.active()
+        rows = [fighter(seq, owned=True) for seq in range(4, 10)]
+        rig.bridge.emit(*rows)
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        steps = rig.policy.commands("step")
+        assert all(set(step) == {"cmd", "id", "observation", "now_game_ms"}
+                   for step in steps)
+        assert [step["observation"] for step in steps[-6:]] == rows
+        assert [command["observation_seq"] for command in rig.bridge.commands("body_action")] == [3, 9]
+        assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
+        # Even a lone historical row must not act when an old service ignores its age.
+        old = fighter(10, owned=True)
+        newer = player_row(12)
+        newer["t_game_ms"] = old["t_game_ms"] + 101
+        rig.bridge.emit(old, newer)
+        await eventually(lambda: len(rig.policy.commands("step")) == 8)
+        await asyncio.sleep(0.01)
+        assert len(rig.bridge.commands("body_action")) == 2
+        assert "memory_only" not in rig.policy.commands("step")[-1]
+
+
 async def test_policy_backlog_does_not_starve_lease_heartbeats():
     async with running() as rig:
         await rig.active()
@@ -1240,6 +1322,90 @@ async def test_transient_action_rejections_wait_for_a_fresh_row_and_success_rese
         assert dict(summary.action_rejections) == Counter([*rejections, "masked", "stale_observation"])
         assert summary.transient_rejections_consecutive == 1
         assert not rig.pilot._action_rejections and rig.pilot._transient_rejections_consecutive == 0
+
+
+@pytest.mark.parametrize("hidden_reset", [True, False])
+async def test_one_old_observation_fallback_continues_and_resets_before_next_row_if_needed(hidden_reset):
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_mode = "fallback"
+        rig.policy.step_fallback_reason = "observation_too_old"
+        rig.policy.step_hidden_reset = hidden_reset
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: rig.pilot._transient_rejections_consecutive == 1)
+        assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
+        assert len(rig.bridge.commands("body_action")) == 1
+        assert len(rig.policy.commands("reset")) == 1
+        rig.policy.step_mode = "normal"
+        next_row = fighter(5, owned=True)
+        rig.bridge.emit(next_row)
+        await eventually(lambda: rig.pilot._decisions == 2)
+        assert rig.pilot._transient_rejections_consecutive == 0
+        assert [command["observation_seq"] for command in rig.bridge.commands("body_action")] == [3, 5]
+        commands = [request["cmd"] for request in rig.policy.requests]
+        assert commands == ["reset", "step", "step"] + (["reset"] if hidden_reset else []) + ["step"]
+        if hidden_reset:
+            reset = rig.policy.commands("reset")[-1]
+            assert (reset["session_epoch"], reset["world_epoch"], reset["initial_game_ms"]) == (
+                next_row["session_epoch"], next_row["world_epoch"], next_row["t_game_ms"],
+            )
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.observation_too_old == summary.fallbacks == 1
+        assert summary.policy_memory_resets == int(hidden_reset)
+        assert summary.transient_rejections_consecutive == 0
+        assert summary.memory_only_lag_rows == 0
+
+
+async def test_ten_old_observation_fallbacks_end_fight_and_report_memory_resets(caplog):
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_mode = "fallback"
+        rig.policy.step_fallback_reason = "observation_too_old"
+        for count, seq in enumerate(range(4, 13), 1):
+            rig.bridge.emit(fighter(seq, owned=True))
+            await eventually(lambda count=count: rig.pilot._transient_rejections_consecutive == count)
+            assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
+        rig.bridge.emit(fighter(13, owned=True))
+        await rig.ended()
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "policy_fallback:observation_too_old"
+        assert summary.decisions == 1 and len(rig.bridge.commands("body_action")) == 1
+        assert summary.observation_too_old == summary.policy_memory_resets == summary.fallbacks == 10
+        assert summary.transient_rejections_consecutive == 10
+        assert len(rig.policy.commands("reset")) == 10
+        assert summary.release_confirmed and summary.watch_removed
+        assert "observation_too_old=10" in caplog.text and "policy_memory_resets=10" in caplog.text
+
+
+@pytest.mark.parametrize("last_failure", ["observation_too_old", "masked"])
+async def test_old_observation_and_bridge_rejections_share_consecutive_limit(last_failure):
+    async with running() as rig:
+        await rig.active()
+        rig.policy.step_fallback_reason = "observation_too_old"
+        failures = ["observation_too_old", "masked"] * 4 + ["masked", last_failure]
+        for count, (seq, failure) in enumerate(zip(range(4, 14), failures, strict=True), 1):
+            rig.policy.step_mode = "fallback" if failure == "observation_too_old" else "normal"
+            if failure == "masked":
+                rig.bridge.action_rejections.append("masked")
+            rig.bridge.emit(fighter(seq, owned=True))
+            if count < 10:
+                await eventually(lambda count=count: rig.pilot._transient_rejections_consecutive == count)
+                assert rig.link.body_owned("NPC") and not rig.bridge.commands("body_release")
+        await rig.ended()
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        expected_old = failures.count("observation_too_old")
+        assert summary.transient_rejections_consecutive == 10
+        assert summary.observation_too_old == summary.policy_memory_resets == expected_old
+        assert dict(summary.action_rejections) == {"masked": failures.count("masked")}
+        assert summary.reason == (
+            "policy_fallback:observation_too_old" if last_failure == "observation_too_old"
+            else "body_action_rejected"
+        )
+        assert summary.decisions == 1 and summary.release_confirmed and summary.watch_removed
 
 
 @pytest.mark.parametrize("rejections", [

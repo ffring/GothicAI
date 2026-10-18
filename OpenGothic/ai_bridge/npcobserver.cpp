@@ -1,6 +1,8 @@
 #include "npcobserver.h"
 #include "game/bodycontroller.h"
 
+#include <Tempest/Log>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -44,6 +46,8 @@ constexpr float    NearEnter      = 500;   // cm: "player_near" when the player 
 constexpr float    NearLeave      = 700;   // and forgets it once they are this far again
 constexpr uint64_t EventPeriodMs  = 1000;  // per npc, kind and who did it
 constexpr uint64_t MonsterNearPeriodMs = 10000;
+constexpr float    ArmedThreatRange = 1200;
+constexpr uint64_t ArmedThreatPeriodMs = 5000;
 constexpr uint64_t NearPeriodMs   = 30000;
 constexpr uint64_t NoisePeriodMs  = 10000; // per listener, regardless of body or culprit
 constexpr float    NoiseMinVolume = .35f; // source gain, 0..1, after the engine's hearing gate
@@ -228,6 +232,7 @@ NpcObserver::NpcObserver(Emit emit, Owner owner):emit(std::move(emit)), owner(st
 void NpcObserver::clear() {
   close.clear();
   lastEvent.clear();
+  previousPositions.clear();
   running.clear();
   held.clear();
   verdicts.clear();
@@ -275,6 +280,8 @@ void NpcObserver::emitRoster(World& world) {
    .array("npcs");
   struct Near { std::string symbol; float dist; };
   std::vector<Near> cameClose;  // reported after the roster, so the server already knows these npc's
+  std::vector<std::pair<Npc*,std::string>> people;
+  std::unordered_map<const Npc*,Tempest::Vec3> positions;
   const Tempest::Vec3 head = pl->mapHeadBone();
   const WayPoint*     way  = nullptr;  // the player's, once someone is behind a wall
   bool                wayFound = false;
@@ -298,6 +305,9 @@ void NpcObserver::emitRoster(World& world) {
     if(symbol.empty())
       return;
     const float dist = std::sqrt(npc.qDistTo(*pl));
+    positions[&npc] = npc.position();
+    if(dist<=EventRadius)
+      people.emplace_back(&npc,symbol);
     if(trackProximity(world,npc,symbol,dist))
       cameClose.push_back({symbol,dist});
     j.object()
@@ -316,6 +326,34 @@ void NpcObserver::emitRoster(World& world) {
   emit(j.finish());
   for(auto& n:cameClose)
     emitEvent(n.symbol,"player_near","PLAYER",double(n.dist),"","");
+  for(auto& n:people)
+    armedApproach(world,*n.first,n.second);
+  previousPositions = std::move(positions);
+  }
+
+void NpcObserver::armedApproach(World& world, Npc& self, std::string_view symbol) {
+  const auto who = owner(symbol);
+  if((!who.empty() && who!="attached") || self.isDown() || self.isTalk() || self.isAttack())
+    return;
+  world.detectNpc(self.position(),ArmedThreatRange,[&](Npc& other) {
+    if(&other==&self || other.isPlayer() || other.isMonster() || other.isDown() ||
+       other.weaponState()==WeaponState::NoWeapon || other.weaponState()==WeaponState::Fist ||
+       !AiNpc::isMoving(other))
+      return;
+    if(!(other.isAttack() && other.target()==&self) && world.script().personAttitude(other,self)!=ATT_HOSTILE)
+      return;
+    const auto previous = previousPositions.find(&other);
+    const float dist = std::sqrt(self.qDistTo(other));
+    // Compare the attacker's actual movement to the victim's current position: the victim walking
+    // towards a stationary armed npc is not an approaching attacker.
+    if(previous==previousPositions.end() || (previous->second-self.position()).length()<dist+15 ||
+       !self.canSeeNpc(other,true))
+      return;
+    const auto otherId = npcId(world,other);
+    if(otherId.empty() || throttled(symbol,"npc_threat/"+otherId,world.tickCount(),ArmedThreatPeriodMs))
+      return;
+    emitEvent(symbol,"npc_threat",otherId,dist,"you",TextCodec::toUtf8(other.displayName()));
+    });
   }
 
 bool NpcObserver::trackProximity(World& world, Npc& npc, std::string_view symbol, float dist) {
@@ -444,8 +482,10 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   Held h;
   h.id     = "h" + std::to_string(nextHold++);
   h.key    = key;
-  if(hero)
+  if(hero) {
     h.item = deed->item;
+    h.deed = deedId;
+    }
   h.self   = &self;
   h.other  = &other;
   h.victim = victim;
@@ -455,8 +495,8 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   j.str("hold",h.id).str("npc",symbol).str("kind",seen.kind).str("other",otherId)
    .str("other_name",TextCodec::toUtf8(other.displayName()))
    .num("distance",std::sqrt(double(self.qDistTo(other))));
-  if(hero)
-    j.str("deed",deedId);
+  if(!h.deed.empty())
+    j.str("deed",h.deed);
   if(seen.about==&self)
     j.str("detail","you"); else
   if(seen.about!=nullptr)
@@ -471,7 +511,24 @@ void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
   auto it = std::find_if(held.begin(),held.end(),[&](const Held& h){ return h.id==id; });
   if(it==held.end())
     return;  // released already (too late)
-  const bool server = JsonRead::str(msg,"to")=="server";
+  bool server = JsonRead::str(msg,"to")=="server";
+  // A witnessed hero deed can deliberately end in silence, a shout or no
+  // reaction. Only that explicit hold kind may consume a verdict without a body.
+  if(server && it->deed.empty()) {
+    // A decision is not ownership: a busy attachment or a rejected command may leave no body acting
+    // on the verdict. Accept an actual combat provider, or the requested native fight/flee.
+    Npc* self = nullptr;
+    Npc* other = nullptr;
+    if(auto* pl = world.player())
+      world.detectNpc(pl->position(),RosterRadius,[&](Npc& npc) {
+        if(&npc==it->self)  self = &npc;
+        if(&npc==it->other) other = &npc;
+        });
+    const auto flee = AiNpc::scriptState(world,"ZS_FLEE");
+    server = self!=nullptr && other!=nullptr && !self->isDown() && self->target()==other &&
+             (BodyController::owns(*self) ||
+              (!self->isExternalControl() && (self->isAttack() || (flee.isValid() && self->isInState(flee)))));
+    }
   verdicts[it->key] = Verdict{server,world.tickCount()+VerdictMs};
   if(!server)
     releaseHeld(world,*it);
@@ -647,8 +704,41 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
         aiv[size_t(comment)] = 0;
         }
       }
+    // An urgent verdict owns the body now, rather than waiting behind a routine walk, listening or
+    // queued speech. Install the same state as AI_StartState(behavior=0), then add its fresh readiness
+    // and shout: startState clears both native queues, including the overlay queue.
+    npc->stopListening();
+    npc->thinkOfAnswer(0);
+    npc->clearAiQueue();
+    if(!npc->startState(state,"",gtime::endOfTime(),true)) {
+      result("rejected","npc could not start the state");
+      return;
+      }
+    npc->setOther(target);
+    npc->setVictim(nullptr);
     npc->setTarget(target);
-    npc->aiPush(AiQueue::aiStartState(state,0,target,nullptr,""));
+    if(action=="fight" && npc->weaponState()==WeaponState::NoWeapon)
+      npc->aiPush(AiQueue::aiDrawWeapon());
+    if(auto svm = upper(JsonRead::str(args,"svm")); !svm.empty()) {
+      if(svm[0]!='$')
+        svm.insert(svm.begin(),'$');
+      // Explicit combat shouts belong to each defender. Ambient SVM overlays share one global
+      // barrier and silently discard the second npc's shout; play this npc's own resolved voice
+      // through the same sound/lip-sync path, without that ambient barrier or a movement wait.
+      const auto line = world.script().messageFromSvm(svm,npc->handle().voice);
+      if(!line.empty()) {
+        uint64_t audioMs = 0;
+        std::shared_ptr<LipSync::Track> voice;
+        world.addDlgSound(std::string(line)+".WAV",npc->mapHeadBone(),WorldSound::talkRange,audioMs,&voice);
+        if(audioMs>0) {
+          npc->startSpeech(std::move(voice));
+          npc->setAiOutputBarrier(world.script().messageTime(line),true);
+          TestBench::npcOutput(*npc,svm,target,audioMs);
+          Tempest::Log::i("[ai] ",symbol," combat shout ",svm," audio_ms=",audioMs,
+                         " game_ms=",world.tickCount());
+          }
+        }
+      }
     }
   else if(action=="draw_weapon") {
     const auto kind = JsonRead::str(args,"kind");

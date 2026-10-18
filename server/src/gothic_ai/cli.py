@@ -717,6 +717,25 @@ def _perception_control(args: argparse.Namespace, *, planner: bool) -> ThreatCon
     )
 
 
+async def _native_combat_available(link: GameLink, pilot: BodyPilot | None, npc: str) -> bool:
+    """Let acquisition finish before sending native combat that could interrupt it. A refused acquisition
+    leaves the native fallback available; an accepted fight stays with its combat provider."""
+    npc = npc.upper()
+    while True:
+        if link.body_owned(npc):
+            return False
+        if pilot is None:
+            return True
+        entry = pilot.people.get(npc)
+        if (entry is not None and entry.activity == "body") or npc in pilot._claimed_fights:
+            return False
+        if pilot.npc != npc:
+            return True
+        # _start sets npc synchronously, before any acquire request or claim. Checking only the lease
+        # or claimed set here would let a native command reset the state during that initial window.
+        await asyncio.sleep(0.05)
+
+
 async def serve(args: argparse.Namespace) -> int:
     if args.scenario in {"neural", "neural-companion"} and (not args.body_url or not args.neural_body):
         log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
@@ -1169,6 +1188,7 @@ async def serve(args: argparse.Namespace) -> int:
             journal=journal,
         )
         brain = None
+        bodypilot: BodyPilot | None = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
             concerns = state.concerns
@@ -1181,7 +1201,7 @@ async def serve(args: argparse.Namespace) -> int:
 
             planner = state.brain = NpcPlanner(
                 decider,
-                GameApplier(link),
+                GameApplier(link, native_body=lambda npc: _native_combat_available(link, bodypilot, npc)),
                 agenda_of=agenda_of,
                 routine_of=link.routine,
                 habits_of=habits_of,
@@ -1196,9 +1216,12 @@ async def serve(args: argparse.Namespace) -> int:
             state.talk.planner = planner  # npc's in a conversation are left to it; others overhear
             link.listeners.append(planner.on_message)
             # what the npc wants from the hero, from the conversation, steers it afterwards
-            state.dialogue.on_intent = lambda npc, intent: planner.set_agenda(
-                npc, concerns.current(npc, intent.agenda or None) or concerns.agenda(npc)
-            )
+            def on_intent(npc: str, intent: Intent) -> None:
+                if intent.goal not in {"fight", "flee", "seek_help"}:
+                    planner.clear_body_intent(npc)
+                planner.set_agenda(npc, concerns.current(npc, intent.agenda or None) or concerns.agenda(npc))
+
+            state.dialogue.on_intent = on_intent
             concerns.on_change.append(lambda npc: planner.set_agenda(npc, agenda_of(npc)))
             # an npc with something on its mind comes up to the hero and speaks first (wave 2 step 1)
             state.initiative = InitiativeDesk(
@@ -1335,6 +1358,19 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.orders_scenario(link, state.dialogue, state.talk, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario orders: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario.startswith("fight_reactions_"):
+                from .scenario_fight_reactions import fight_reactions
+
+                assert state.dialogue is not None and state.talk is not None and state.incidents is not None
+                results = await fight_reactions(
+                    link, state.dialogue, state.talk, state.incidents, state.brain,
+                    args.scenario.removeprefix("fight_reactions_"),
+                    str(Path(args.memory_db).parent),
+                    native_body=lambda npc: _native_combat_available(link, bodypilot, npc),
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "wolf":
                 assert state.talk is not None and state.beasts is not None
@@ -2382,6 +2418,10 @@ def main() -> None:
             "m5c",
             "m5e",
             "orders",
+            "fight_reactions_wolf",
+            "fight_reactions_sight",
+            "fight_reactions_bandits",
+            "fight_reactions_flee",
             "companion",
             "wolf",
             "calm",

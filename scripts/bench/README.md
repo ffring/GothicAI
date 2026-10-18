@@ -697,6 +697,63 @@ incomplete; the analyzer also writes JSON beside the Markdown output.
 For a deliberately reduced series, repeat `--window-spot market --window-spot harbour` in the
 analyzer; the report then explicitly states the selected coverage.
 
+### Nearby ground-monster CharacterVirtual comparison
+
+`monster-character-virtual` is the first numerical stand for the independent
+`[GAME] monster_character_virtual` switch (production default **0**). It records no
+video. Run the same binary and save in separate fresh OFF/ON processes:
+
+```sh
+NO_BUILD=1 MOVABLE_VOBS=1 MONSTER_CHARACTER_VIRTUAL=0 OPENGOTHIC_BENCH_TAKE=off scripts/bench.sh monster-character-virtual .bench/monster-character-off
+NO_BUILD=1 MOVABLE_VOBS=1 MONSTER_CHARACTER_VIRTUAL=1 OPENGOTHIC_BENCH_TAKE=on scripts/bench.sh monster-character-virtual .bench/monster-character-on
+```
+
+The wolf follows the actual hero with native `AI_GoToNpc` across stock city stairs
+(preferring the forest stair waypoint) and a measured stock-world slope. A continuous
+15 cm support profile validates a hero destination beyond the obstacle using the
+monster's actual step, slope and stopping distance. The hero stands beyond each obstacle so the
+monster's ordinary attack-distance stopping rule cannot finish before crossing it.
+A troll uses native `AI_GoToPoint` through a body-size lane in Coragon's tavern or
+adjacent courtyard, with a real stock barrel in its way. The same wolf enters water
+along a continuous stock bank, then returns to its dry start without teleporting.
+Preparation logs the selected points and MDH radius/height, guild step/slope limits,
+water depths and mass in `monster_character_body` and route-setup events. Missing
+geometry or animation is an explicit preparation error.
+
+`monster-character-frames.csv` contains physical and visual positions after every
+native tick, actual CV use, airborne/falling/swimming state and playing animations.
+`monster_character_route_end` reports arrival and elapsed time, stalls with less
+than 5 cm horizontal progress for more than 1000 ms, maximum physical and visual
+vertical change per frame, InAir/Falling drops more than 100 cm below the last supported root (including the landing frame),
+CV/swimming frames and barrel displacement. Arrival uses the native attack range
+for a chase, or 60 cm horizontal / 80 cm vertical tolerance for point routes. Water
+entry additionally requires actual swimming; the exit requires returning to land.
+Falls exclude the deliberate attack root and swimming transition. A legacy barrel
+stall is retained as a measured result; route summaries do not silently turn it
+into successful arrival.
+
+Two separate authored `T_FISTATTACKMOVE` / `BS_HIT` clips measure wolf lunge and
+field-raider charge through the production animation and movement paths. The
+field-raider starts the native `S_FISTRUNL` base before calling the ordinary
+running-attack entry point; that moving base remains underneath the rootless
+layer-2 attack clip, with the real hero 350 cm ahead.
+The stand records maximum horizontal travel, upward root travel, observed clip duration
+and actual charge collision callbacks. Compare ON/OFF distance and duration to
+10%; the field-raider case also requires the native callback to its real target.
+The stand supplies no synthetic movement or contact response.
+
+After the comparison windows, the stand enables only the monster flag and checks
+20/22 m hysteresis, both live Marvin toggles and exclusion of Bloodfly, Harpie,
+Demon and Wisp on dry ground. `monster_character_expect` records expected and actual
+CV activity. It also saves `session-monster.sav` and performs a native `Npc::save` /
+`Npc::load` round trip with immediate and first-two-tick position checks to 0.5 cm.
+For a full session reload, use `SAVE=<absolute output>/session-monster.sav`,
+`MONSTER_CHARACTER_VIRTUAL=1`, and a small scenario whose first command is
+`monstercharacter initial`, followed by `wait 100` and
+`monstercharacter snapshot loaded`. The initial event precedes the first positive
+world step; compare its actor IDs and roots against the `saved` snapshot to 0.5 cm.
+Temporary barrel fixtures belong only to their measured route and are not saved.
+
 ## NPC movement keys (CPU runner)
 
 `keys` is a test-bench command, available in `gothic-body-runner`; it does not change the AI bridge.
