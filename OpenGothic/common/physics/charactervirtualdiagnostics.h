@@ -68,6 +68,9 @@ struct CharacterVirtualDiagnostics {
     };
 
   uint64_t dt = 0;
+  // Cumulative invalid/near-zero native normal reads for this controller;
+  // includes ordinary airborne zero sentinels and diagnostic reads.
+  uint64_t groundNormalFallbacks = 0;
   Tempest::Vec3 requested = {};
   Tempest::Vec3 requestedVelocity = {}, stairDesiredVelocity = {};
   float maxSlopeRadians = 0.f, stairHeight = 0.f;

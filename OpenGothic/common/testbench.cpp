@@ -8013,6 +8013,7 @@ std::string npcCharacterSample(World& world,const Npc& npc,float physicalJump,fl
     if(npcCharacterNeedsMovableLookup(d.before) || npcCharacterNeedsMovableLookup(d.afterExtendedUpdate) ||
        npcCharacterNeedsMovableLookup(d.afterStairs))movable=world.physic()->movableVobSnapshot();
     row+=",\"dt_ms\":"+std::to_string(d.dt)+",\"requested_cm\":"+ragdollVector(d.requested)+
+      ",\"ground_normal_fallbacks\":"+std::to_string(d.groundNormalFallbacks)+
       ",\"requested_velocity_cm_s\":"+ragdollVector(d.requestedVelocity)+
       ",\"stair_desired_velocity_cm_s\":"+ragdollVector(d.stairDesiredVelocity)+
       ",\"max_slope_rad\":"+ragdollNumber(d.maxSlopeRadians)+",\"stair_height_cm\":"+ragdollNumber(d.stairHeight)+
