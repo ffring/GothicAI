@@ -23,6 +23,10 @@ def function(name):
     return match.group(0)
 
 
+def definitions():
+    return SCRIPT.read_text().split('# Internal entry point', 1)[0]
+
+
 def wait_for(path):
     deadline = time.monotonic() + 5
     while not path.exists():
@@ -164,9 +168,10 @@ set -euo pipefail
 ROOT="$TEST_ROOT/source"
 toolchain() { :; }
 source_digest() { echo snapshot-digest; }
+storygraph_digest() { echo storygraph-digest; }
 check_protocol() { :; }
-engine_ready() { :; }
-storygraph_ready() { :; }
+engine_ready() { export RYZEN_GAME_BIN="$HOME/gothic-ai/engine-cache/$2/Gothic2Notr"; }
+storygraph_ready() { export RYZEN_STORYGRAPH_BIN="$HOME/gothic-ai/engine-cache/storygraph/$2/storygraph"; }
 build_engine() { :; }
 build_storygraph() { :; }
 '''
@@ -199,18 +204,18 @@ remote_probe e2e "$TEST_ROOT/state" run "$TEST_SCENARIO"
         with tempfile.TemporaryDirectory(prefix='ryzen-stale-test-') as directory:
             state = Path(directory)
             (state / 'inputs/run').mkdir(parents=True)
-            (state / 'inputs/run/source.sha256').write_text('snapshot-digest\n')
+            (state / 'inputs/run/source.sha256').write_text('a' * 64 + '\n')
             (state / 'build/opengothic').mkdir(parents=True)
             binary = state / 'build/opengothic/Gothic2Notr'
             binary.touch()
             binary.chmod(0o755)
-            (state / 'build/source.sha256').write_text('previous-digest\n')
+            (state / 'build/source.sha256').write_text('c' * 64 + '\n')
             (state / 'build/CMakeCache.txt').write_text('OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON\n')
             harness = '\n'.join([
-                'set -euo pipefail',
+                definitions(),
+                'ROOT="$TEST_STATE/source" HOME="$TEST_STATE/home"',
                 'build_engine() { touch "$TEST_STATE/build-was-called"; }',
                 'source_digest() { echo "unexpected source scan" >&2; exit 99; }',
-                function('engine_ready'), function('require_prepared'),
                 'require_prepared bench "$TEST_STATE" run stages',
             ])
             result = subprocess.run(['bash', '-c', harness], capture_output=True, text=True, timeout=5,
@@ -219,6 +224,277 @@ remote_probe e2e "$TEST_ROOT/state" run "$TEST_SCENARIO"
             self.assertIn('source.sha256', result.stdout + result.stderr)
             self.assertIn('refusing to build', (result.stdout + result.stderr).lower())
             self.assertFalse((state / 'build-was-called').exists())
+
+
+class CacheTests(unittest.TestCase):
+    engine_digest = 'a' * 64
+    story_digest = 'b' * 64
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-cache-test-'))).resolve()
+        self.source = self.root / 'source'
+        self.home = self.root / 'home'
+        self.state = self.root / 'worktree'
+        self.cache = self.home / 'gothic-ai/engine-cache'
+        self.bin = self.root / 'bin'
+        self.bin.mkdir()
+        (self.source / 'scripts').mkdir(parents=True)
+        (self.source / 'server').mkdir()
+        (self.source / 'OpenGothic/ai_bridge/storygraph').mkdir(parents=True)
+        (self.home / 'gothic-ai/game/Data').mkdir(parents=True)
+        (self.state / 'inputs/run').mkdir(parents=True)
+        (self.source / 'scripts/e2e.sh').write_text('"$GAME_BIN" --test\n')
+        self.env = dict(os.environ, HOME=str(self.home), TEST_ROOT=str(self.root),
+                        TEST_GAME_PATH=str(self.root / 'game-path'),
+                        TEST_CMAKE_CALLS=str(self.root / 'cmake-calls.jsonl'),
+                        VULKAN_SDK='/unused-test-sdk', SCENARIO='stages',
+                        PATH=str(self.bin) + os.pathsep + os.environ['PATH'])
+        cmake = self.bin / 'cmake'
+        cmake.write_text(f'#!{sys.executable}\n' + r'''
+import json
+import os
+from pathlib import Path
+import sys
+args = sys.argv[1:]
+with Path(os.environ['TEST_CMAKE_CALLS']).open('a') as stream:
+    stream.write(json.dumps(args) + '\n')
+if '--build' in args:
+    build = Path(args[args.index('--build') + 1])
+    target = args[args.index('--target') + 1]
+    output = build / ('opengothic/Gothic2Notr' if target == 'Gothic2Notr' else 'storygraph')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text('#!/usr/bin/env python3\nimport os, sys\nfrom pathlib import Path\n'
+                      'Path(os.environ["TEST_GAME_PATH"]).write_text(str(Path(sys.argv[0]).resolve()))\n'
+                      'assert Path(sys.argv[0]).with_name("runtime.dat").read_text() == "runtime"\n')
+    output.chmod(0o755)
+    output.with_name('runtime.dat').write_text('runtime')
+else:
+    build = Path(args[args.index('-B') + 1])
+    build.mkdir(parents=True, exist_ok=True)
+    (build / 'CMakeCache.txt').write_text('OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON\n')
+print('fake cmake: OK')
+''')
+        cmake.chmod(0o755)
+
+    def shell(self, commands, *, popen=False):
+        harness = definitions() + r'''
+ROOT="$TEST_ROOT/source"
+toolchain() { :; }
+desktop() { :; }
+check_protocol() { :; }
+uv() { :; }
+source_digest() { printf '%s\n' "'''+self.engine_digest+r'''"; }
+storygraph_digest() { printf '%s\n' "'''+self.story_digest+r'''"; }
+'''+commands
+        if popen:
+            return subprocess.Popen(['bash', '-c', harness], env=self.env,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(['bash', '-c', harness], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result
+
+    def entry(self, digest, kind='engine', *, age=0, marker='runtime'):
+        entry = self.cache / ('' if kind == 'engine' else 'storygraph') / digest
+        entry.mkdir(parents=True)
+        binary = entry / ('Gothic2Notr' if kind == 'engine' else 'storygraph')
+        binary.write_text(f'#!{sys.executable}\n' + r'''
+import os
+from pathlib import Path
+import sys
+Path(os.environ['TEST_GAME_PATH']).write_text(str(Path(sys.argv[0]).resolve()))
+assert Path(sys.argv[0]).with_name('runtime.dat').read_text() == 'runtime'
+''')
+        binary.chmod(0o755)
+        (entry / 'runtime.dat').write_text(marker)
+        timestamp = time.time() - age
+        os.utime(entry, (timestamp, timestamp))
+        return entry
+
+    def test_cache_hit_runs_cached_game_without_a_worktree_build(self):
+        cached = self.entry(self.engine_digest)
+        self.entry(self.story_digest, 'storygraph')
+        result = self.shell(r'''
+remote_probe e2e "$TEST_ROOT/worktree" run stages
+remote_run e2e "$TEST_ROOT/worktree" run
+''')
+        self.assertIn(f'engine from cache {self.engine_digest[:12]} (0s)', result.stdout)
+        self.assertEqual((self.root / 'game-path').read_text(), str(cached / 'Gothic2Notr'))
+        self.assertFalse((self.state / 'build').exists())
+        self.assertFalse((self.state / 'storygraph-build').exists())
+        self.assertFalse((self.root / 'cmake-calls.jsonl').exists())
+        self.assertEqual((self.source / 'OpenGothic/ai_bridge/storygraph/build/storygraph').resolve(),
+                         self.cache / 'storygraph' / self.story_digest / 'storygraph')
+
+    def test_miss_builds_and_publishes_engine_and_storygraph(self):
+        self.shell(r'''
+build_engine "$TEST_ROOT/worktree" "'''+self.engine_digest+r'''"
+build_storygraph "$TEST_ROOT/worktree" "'''+self.story_digest+r'''"
+''')
+        calls = [json.loads(line) for line in (self.root / 'cmake-calls.jsonl').read_text().splitlines()]
+        self.assertEqual(len(calls), 4)
+        self.assertEqual([call[call.index('--target') + 1] for call in calls if '--build' in call],
+                         ['Gothic2Notr', 'storygraph'])
+        for entry, name in [(self.cache / self.engine_digest, 'Gothic2Notr'),
+                            (self.cache / 'storygraph' / self.story_digest, 'storygraph')]:
+            self.assertTrue(os.access(entry / name, os.X_OK))
+        self.assertEqual((self.cache / self.engine_digest / 'runtime.dat').read_text(), 'runtime')
+        self.assertTrue((self.state / 'build/opengothic/Gothic2Notr').exists())
+        self.assertTrue((self.state / 'storygraph-build/storygraph').exists())
+
+    def test_evicted_cache_republishes_ready_local_artifacts_without_rebuilding(self):
+        self.shell(r'''
+build_engine "$TEST_ROOT/worktree" "'''+self.engine_digest+r'''"
+build_storygraph "$TEST_ROOT/worktree" "'''+self.story_digest+r'''"
+''')
+        engine = self.cache / self.engine_digest
+        storygraph = self.cache / 'storygraph' / self.story_digest
+        calls = self.root / 'cmake-calls.jsonl'
+        game_path = self.root / 'game-path'
+        for evicted in ('engine', 'storygraph', 'both'):
+            with self.subTest(evicted=evicted):
+                for entry in ([engine] if evicted == 'engine' else
+                              [storygraph] if evicted == 'storygraph' else
+                              [engine, storygraph]):
+                    shutil.rmtree(entry)
+                calls.unlink(missing_ok=True)
+                game_path.unlink(missing_ok=True)
+                result = self.shell(r'''
+if remote_probe e2e "$TEST_ROOT/worktree" run stages; then
+  echo 'local-only artifacts unexpectedly skipped cache publication' >&2
+  exit 90
+fi
+remote_prepare e2e "$TEST_ROOT/worktree" run stages
+remote_probe e2e "$TEST_ROOT/worktree" run stages
+remote_run e2e "$TEST_ROOT/worktree" run
+''')
+                self.assertIn(f'engine from cache {self.engine_digest[:12]} (0s)', result.stdout)
+                self.assertEqual(game_path.read_text(), str(engine / 'Gothic2Notr'))
+                self.assertEqual((engine / 'runtime.dat').read_text(), 'runtime')
+                self.assertTrue(os.access(storygraph / 'storygraph', os.X_OK))
+                self.assertEqual((self.source / 'OpenGothic/ai_bridge/storygraph/build/storygraph').resolve(),
+                                 storygraph / 'storygraph')
+                self.assertFalse(calls.exists(), 'publishing ready local artifacts must not invoke cmake')
+
+    def test_simultaneous_publications_leave_one_complete_entry(self):
+        for name in ('one', 'two'):
+            source = self.root / name
+            source.mkdir()
+            binary = source / 'Gothic2Notr'
+            binary.write_bytes((name.encode() + b'\n') * 200000)
+            binary.chmod(0o755)
+            (source / 'runtime.dat').write_text(name)
+        processes = []
+        try:
+            for name in ('one', 'two') * 3:
+                processes.append(self.shell(
+                    f'cache_artifact publish engine {self.engine_digest} "$TEST_ROOT/{name}"\n',
+                    popen=True))
+            for process in processes:
+                stdout, stderr = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 0, stdout + stderr)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+        entry = self.cache / self.engine_digest
+        name = (entry / 'runtime.dat').read_text()
+        self.assertIn(name, ('one', 'two'))
+        self.assertEqual((entry / 'Gothic2Notr').read_bytes(), (name.encode() + b'\n') * 200000)
+        self.assertEqual([path.name for path in self.cache.iterdir() if path.is_dir()], [self.engine_digest])
+
+    def test_eviction_uses_last_access_and_preserves_recent_entries(self):
+        entries = [self.entry(f'{index:064x}', age=(20 - index) * 3600) for index in range(10)]
+        fresh = [self.entry(f'{index:064x}', age=60) for index in range(10, 12)]
+        oldest = entries[0]
+        self.shell(f'cache_artifact get engine {oldest.name}\ncache_artifact prune engine unused\n')
+        retained = [path for path in self.cache.iterdir() if path.is_dir()]
+        self.assertEqual(len(retained), 8)
+        self.assertTrue(oldest.exists())
+        self.assertGreater(oldest.stat().st_mtime, time.time() - 10)
+        self.assertTrue(all(path.exists() for path in fresh + entries[5:]))
+        self.assertTrue(all(not path.exists() for path in entries[1:5]))
+
+    def test_more_than_eight_recent_entries_are_protected(self):
+        entries = [self.entry(f'{index:064x}', age=3600) for index in range(10)]
+        self.shell('cache_artifact prune engine unused\n')
+        self.assertTrue(all(path.exists() for path in entries))
+
+    def test_clean_cache_removes_old_entries_and_protects_recent_ones(self):
+        old_engine = self.entry('c' * 64, age=3 * 3600)
+        old_storygraph = self.entry('d' * 64, 'storygraph', age=3 * 3600)
+        recent_engine = self.entry('e' * 64, age=3600)
+        recent_storygraph = self.entry('f' * 64, 'storygraph', age=3600)
+        with self.cache.with_suffix('.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            process = self.shell('cache_artifact clean engine unused\n', popen=True)
+            try:
+                time.sleep(0.15)
+                self.assertIsNone(process.poll(), 'cache cleanup ignored the shared cache lock')
+                self.assertTrue(old_engine.exists())
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stdout + stderr)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+        self.assertFalse(old_engine.exists())
+        self.assertFalse(old_storygraph.exists())
+        self.assertTrue(recent_engine.exists())
+        self.assertTrue(recent_storygraph.exists())
+
+    def test_clean_removes_only_its_worktree(self):
+        engine = self.entry(self.engine_digest, age=3 * 3600)
+        storygraph = self.entry(self.story_digest, 'storygraph', age=3 * 3600)
+        (self.state / 'owned-file').touch()
+        clean = re.search(r'^if \[\[ "\$ACTION" == clean \]\]; then\n.*?^fi',
+                          SCRIPT.read_text(), re.M | re.S)
+        self.assertIsNotNone(clean)
+        self.shell(r'''
+ACTION=clean STATE="$TEST_ROOT/worktree" REMOTE=gothic-ai/e2e/test
+remote() { "$@"; }
+'''+clean.group(0))
+        self.assertFalse(self.state.exists())
+        self.assertTrue((engine / 'Gothic2Notr').exists())
+        self.assertTrue((storygraph / 'storygraph').exists())
+
+    def test_storygraph_digest_tracks_dependencies_independently(self):
+        inputs = ['ai_bridge/storygraph/main.cpp', 'ai_bridge/textcodec.cpp',
+                  'ai_bridge/textcodec.h', 'lib/ZenKit/src/Archive.cc',
+                  'lib/rapidjson/include/rapidjson/document.h']
+        for relative in inputs + ['game/main.cpp']:
+            path = self.source / 'OpenGothic' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(relative)
+
+        def digest(kind=''):
+            result = subprocess.run(
+                ['bash', '-c', definitions() + '\nROOT="$TEST_ROOT/source"\nsource_digest ' + kind],
+                env=self.env, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout.strip()
+
+        original = digest('storygraph')
+        for relative in inputs:
+            with self.subTest(source=relative):
+                path = self.source / 'OpenGothic' / relative
+                path.write_text(relative + ' changed')
+                self.assertNotEqual(digest('storygraph'), original)
+                path.write_text(relative)
+        engine_before = digest()
+        (self.source / 'OpenGothic/game/main.cpp').write_text('engine-only edit')
+        self.assertEqual(digest('storygraph'), original)
+        self.assertNotEqual(digest(), engine_before)
+        engine_before = digest()
+        for relative in ['ai_bridge/storygraph/build/generated.cpp', 'build/generated.cpp',
+                         'lib/ZenKit/build/generated.cpp']:
+            path = self.source / 'OpenGothic' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('generated output')
+        self.assertEqual(digest('storygraph'), original)
+        self.assertEqual(digest(), engine_before)
 
 
 class TunnelTests(unittest.TestCase):

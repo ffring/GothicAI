@@ -174,6 +174,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича стенда | Как включить / выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
+| Общий кэш Linux-бинарников движка и `storygraph` по хэшу исходников | включён в `scripts/ryzen.sh`; `clean-cache` удаляет записи старше двух часов; `RYZEN_WORKTREE` задаёт имя папки worktree | `scripts/ryzen.sh` | `test_ryzen`, `test_ryzen_lifetime`, `test_ryzen_lock`; e2e `stages` в двух worktree | [ryzen.md](ryzen.md), [compute.md](compute.md) |
 | Офлайн-перепись площадей, масштаба UV и плиточности текстур четырёх миров со статичными vob | `scripts/content-textures.sh`; без запуска скрипта не работает | `scripts/content/world-textures.cpp` | `scripts/content-textures.sh --self-test`, офлайн-прогон четырёх миров со сверкой площади ≤ 0,1 % | [own-content.md](own-content.md), [CSV и отчёт](../reports/content/2026-10-world-textures/README.md) |
 | Популяция навигации: N NPC, независимые состояния, выборка softmax и награды Detour без перезагрузки мира | `navdemos population … sample\|argmax … RECORD`; `navdemos physics cv\|native`, в `nav_rl.py` CV по умолчанию; `RECORD=0` выключает записи; `hero near\|keep`, `kill-slot SLOT AFTER_MS` — проверки стенда | `common/navdemos.*`, минимальные вставки в `worldobjects.cpp`, `npc.cpp`, `MoveAlgo::useCharacterVirtual`; `scripts/nav_rl.py` | `test_nav_rl.py`, `nav_rl.py check/equivalence/population/death-smoke` | [navigation.md](navigation.md) |
 
