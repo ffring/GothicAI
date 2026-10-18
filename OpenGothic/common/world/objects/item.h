@@ -40,6 +40,7 @@ class Item : public Vob {
     void    setPosition  (float x,float y,float z);
     void    setDirection (float x,float y,float z);
     void    setObjMatrix (const Tempest::Matrix4x4& m);
+    virtual void setPhysicsMatrix(const Tempest::Matrix4x4& m);
 
     bool    isMission() const;
     bool    isEquipped() const { return equipped>0; }

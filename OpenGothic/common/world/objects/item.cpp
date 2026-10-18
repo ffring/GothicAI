@@ -194,6 +194,17 @@ void Item::setObjMatrix(const Tempest::Matrix4x4 &m) {
   visual.setObjMatrix(m);
   }
 
+void Item::setPhysicsMatrix(const Tempest::Matrix4x4& m) {
+  pos.x = m.at(3,0);
+  pos.y = m.at(3,1);
+  pos.z = m.at(3,2);
+  // This pose already came from Jolt. Echoing it through moveEvent converts
+  // its rotation/COM back to native coordinates and can reset the sleep timer
+  // on rounding differences, keeping the whole floating contact island awake.
+  setGlobalTransform(m);
+  visual.setObjMatrix(m);
+  }
+
 bool Item::isMission() const {
   return (uint32_t(hitem->flags)&ITM_MISSION);
   }

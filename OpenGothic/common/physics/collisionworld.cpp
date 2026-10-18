@@ -2247,7 +2247,7 @@ void CollisionWorld::tick(uint64_t dt) {
       // characters, so save/load, pickup and a buoyancy toggle remain physical.
       disable = (!native.IsActive() && !keepSleeping) || native.GetPosition().GetY()<bboxMin.GetY()-100.f;
       }
-    item->setObjMatrix(matrix);
+    item->setPhysicsMatrix(matrix);
     if(disable)
       item->setPhysicsDisable();
     }

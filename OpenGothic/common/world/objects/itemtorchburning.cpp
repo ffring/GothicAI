@@ -38,6 +38,11 @@ bool ItemTorchBurning::isTorchBurn() const {
   return true;
   }
 
+void ItemTorchBurning::setPhysicsMatrix(const Tempest::Matrix4x4& matrix) {
+  Item::setPhysicsMatrix(matrix);
+  view.setObjMatrix(transform());
+  }
+
 void ItemTorchBurning::moveEvent() {
   Item::moveEvent();
   view.setObjMatrix(transform());

@@ -11,6 +11,7 @@ class ItemTorchBurning : public Item {
     void      clearView() override;
     bool      isTorchBurn() const override;
     void      setPhysicsEnable(World& world) override;
+    void      setPhysicsMatrix(const Tempest::Matrix4x4& m) override;
 
   protected:
     void      moveEvent() override;
