@@ -68,6 +68,13 @@ def publish(ws: Path, plan_file: str = "plan.json", out: Path | None = None) -> 
         if lang not in ("ru", "en"):
             raise ValueError("The plan's lang must be ru or en")
         speech, total, length = speech_windows(plan)
+        music = plan.get("music")
+        # Remotion has already applied these fades to its music stem. Match
+        # schema.ts defaults, preserving an explicitly disabled (zero) fade.
+        music_fade_durations = (
+            (float(music.get("fadeIn", 1.0)), float(music.get("fadeOut", 1.5)))
+            if music is not None else (0.0, 0.0)
+        )
         out = Path(out).expanduser().resolve() if out is not None else ws / f"render/short-{lang}.mp4"
         out.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".explain-", dir=out.parent) as tmp:
@@ -77,9 +84,9 @@ def publish(ws: Path, plan_file: str = "plan.json", out: Path | None = None) -> 
             _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
                   "-i", str(directory / "picture.mp4"), "-i", str(directory / "game.wav"),
                   "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", str(joined)])
-            levels.publish(joined, directory / "music.wav" if plan.get("music") is not None else None,
+            levels.publish(joined, directory / "music.wav" if music is not None else None,
                            [(directory / "voice.wav", 0)], speech, total, length, out,
-                           music_fades=False)
+                           music_fades=False, music_fade_durations=music_fade_durations)
     except (OSError, ValueError, KeyError, TypeError) as err:
         raise ExplainError(str(err)) from err
     return out
