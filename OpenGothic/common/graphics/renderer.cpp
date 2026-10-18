@@ -173,6 +173,9 @@ void Renderer::setupSettings() {
     settings.giMethod = GiMethod::None;
     }
 
+  Log::i("render: ray query = ", int(Shaders::options().doRayQuery), ", meshlets = ", int(Shaders::options().doMeshShading),
+         ", gi = ", int(settings.giMethod), ", aa = ", settings.aaEnabled ? int(Gothic::options().aaPreset) : 0);
+
   if(settings.giMethod!=GiMethod::None) {
     // need a projective shadow, for gi
     resetShadowmap();
