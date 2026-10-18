@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Train/evaluate navigation imitation on cached, pair-disjoint demonstrations.
 
-Run on Ryzen under body-simulation.lock. No simulator or server is involved.
+Run on Ryzen through gq (batch class). No simulator or server is involved.
 Example: python scripts/nav_bc_train.py train --cache /abs/cache --output /abs/run
 Torch is imported only by this training/validation driver, never by the numpy reader.
 """
@@ -30,8 +30,8 @@ def write_json(path, value):
 def read_index(cache):
     index = json.loads((cache / "index.json").read_text())
     if (index.get("cache_version") != CACHE_VERSION or index.get("vector_size") != VECTOR_SIZE or
-            index.get("preprocessing", {}).get("vector_order") != PREPROCESSING["vector_order"]):
-        raise ValueError("rebuild cache for sensor-only inputs without previous_keys")
+            index.get("preprocessing") != PREPROCESSING):
+        raise ValueError("rebuild cache for NAVDEMO v2 carrot inputs without previous_keys")
     train = {tuple(ep["pair"]) for ep in index["episodes"] if ep["split"] == "train"}
     valid = {tuple(ep["pair"]) for ep in index["episodes"] if ep["split"] != "train"}
     if train & valid:
@@ -58,7 +58,42 @@ def metrics(truth, prediction):
     return result
 
 
-def batch_tensors(episodes, start, length, device):
+def training_batches(entries, batch_size, seed):
+    """Keep teacher episodes in every mixed batch; never over half DAgger rows."""
+    if batch_size < 1:
+        raise ValueError("batch size must be positive")
+    rng = random.Random(seed)
+    teacher = [entry for entry in entries if entry.get("source_kind", "teacher") == "teacher"]
+    dagger = [entry for entry in entries if entry.get("source_kind") == "dagger"]
+    rng.shuffle(teacher)
+    rng.shuffle(dagger)
+    if not teacher:
+        raise ValueError("training requires successful teacher episodes")
+    if not dagger:
+        return [teacher[offset:offset + batch_size] for offset in range(0, len(teacher), batch_size)]
+    if batch_size < 2:
+        raise ValueError("DAgger requires batch size at least two")
+    dagger_slots = batch_size // 2
+    teacher_slots = batch_size - dagger_slots
+    count = max((len(teacher) + teacher_slots - 1) // teacher_slots,
+                (len(dagger) + dagger_slots - 1) // dagger_slots)
+    return [[teacher[(number * teacher_slots + slot) % len(teacher)] for slot in range(teacher_slots)] +
+            dagger[number * dagger_slots:(number + 1) * dagger_slots]
+            for number in range(count)]
+
+
+def cap_dagger_steps(mask, dagger_rows, rng):
+    """Cap valid labelled DAgger steps, including unequal episode lengths/padding."""
+    dagger_rows = np.asarray(dagger_rows, dtype=bool)
+    teacher_steps = int(mask[~dagger_rows].sum())
+    selected = np.argwhere(mask & dagger_rows[:, None])
+    excess = len(selected) - teacher_steps
+    if excess > 0:
+        omitted = selected[rng.choice(len(selected), excess, replace=False)]
+        mask[omitted[:, 0], omitted[:, 1]] = False
+
+
+def batch_tensors(episodes, start, length, device, dagger_rows=None, rng=None):
     stop = start + length
     arrays = {}
     for name in ("near", "far", "vector"):
@@ -74,6 +109,8 @@ def batch_tensors(episodes, start, length, device):
         n = max(0, min(stop, len(ep["labels"])) - start)
         labels[row, :n] = ep["labels"][start:start+n]
         mask[row, :n] = True
+    if dagger_rows is not None:
+        cap_dagger_steps(mask, dagger_rows, rng)
     return arrays, torch.from_numpy(labels).to(device), torch.from_numpy(mask).to(device)
 
 
@@ -161,18 +198,22 @@ def train(args):
         weights.append(torch.tensor(w, device=device))
     write_json(out / "training_config.json", {**vars(args), "architecture": model.architecture(),
                "class_counts": [c.tolist() for c in counts], "class_weights": [w.cpu().tolist() for w in weights],
-               "loss_head_weights": [2, 1, 2, 1, 1, 1]})
+               "loss_head_weights": [2, 1, 2, 1, 1, 1], "max_dagger_fraction": .5})
     for epoch in range(len(history), args.epochs):
         started = time.perf_counter()
         model.train()
-        order = list(train_eps)
-        random.Random(args.seed + epoch).shuffle(order)
+        batches = training_batches(train_eps, args.batch, args.seed + epoch)
+        sample_rng = np.random.default_rng(args.seed + epoch)
         total_loss = total_steps = 0
-        for offset in range(0, len(order), args.batch):
-            group = [load(cache, meta) for meta in order[offset:offset+args.batch]]
+        for entries in batches:
+            group = [load(cache, meta) for meta in entries]
+            dagger_rows = [meta.get("source_kind") == "dagger" for meta in entries]
             hidden = None
             for start in range(0, max(len(ep["labels"]) for ep in group), args.segment):
-                features, labels, mask = batch_tensors(group, start, args.segment, device)
+                features, labels, mask = batch_tensors(group, start, args.segment, device,
+                                                       dagger_rows, sample_rng)
+                if not mask.any():
+                    break
                 optimizer.zero_grad(set_to_none=True)
                 logits, hidden = model(**features, hidden=hidden)
                 hidden = hidden.detach()

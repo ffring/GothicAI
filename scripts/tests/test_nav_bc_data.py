@@ -16,10 +16,10 @@ demos = data.nav_demos
 
 
 def fixture_records(count=3):
-    records = np.zeros(count, dtype=demos.RECORD_DTYPE)
+    records = np.zeros(count, dtype=demos.RECORD_V2_DTYPE)
     layout = np.tile(np.array([0, 0, 1000], dtype=np.float32), (demos.RAY_COUNT, 1))
     records["eye"]["distance_cm"] = 1000
-    records["roads"]["next_direction"][:, 2] = 1
+    records["roads"]["carrot_direction"][:, 2] = 1
     for name in ("memory_near", "memory_far"):
         memory = records[name]
         middle = memory.shape[1] // 2
@@ -52,19 +52,47 @@ def test_feature_boundary_excludes_privileged_fields_and_absolute_height():
         data.encode_features({**demos.learner_input(records), "teacher_hint": records["teacher_hint"]}, layout)
     assert data.VECTOR_SIZE == 2166
     assert data.PREPROCESSING["vector_order"] == ["eye", "roads", "body"]
+    assert data.PREPROCESSING["navdemo_version"] == 2
+    assert data.PREPROCESSING["roads_schema"] == "carrot_v2"
+    assert "previous_keys" not in data.PREPROCESSING["input_fields"]
     assert "previous_keys" not in data.PREPROCESSING
 
 
 def test_action_change_compares_only_six_output_heads():
-    records, _ = fixture_records(8)
+    records, _ = fixture_records(10)
     for index, name in enumerate(data.HEADS):
-        records["keys"][name][index] = 1
-    records["keys"]["head_yaw_deg"][6] = 90
-    records["previous_keys"]["head_pitch_deg"][6] = -45
-    # Both nonzero values mean the same flag action.
-    records["keys"]["walk"][7] = 1
-    records["previous_keys"]["walk"][7] = 1
-    np.testing.assert_array_equal(data.action_change_mask(records), [1, 1, 1, 1, 1, 1, 0, 0])
+        records["keys"][name][index + 1:] = 1
+    records["keys"]["head_yaw_deg"][7:] = 90
+    records["keys"]["head_pitch_deg"][8:] = -45
+    # Actor commands can differ throughout DAgger without a teacher change.
+    records["previous_keys"]["turn"] = -1
+    expected = [0, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+    np.testing.assert_array_equal(data.action_change_mask(records), expected)
+    first = data.action_change_mask(records[:4])
+    last_teacher = data.encode_labels(records[:4]["keys"])[-1]
+    rest = data.action_change_mask(records[4:], last_teacher)
+    np.testing.assert_array_equal(np.concatenate((first, rest)), expected)
+
+
+def test_v1_guidance_is_rejected():
+    records = np.zeros(1, dtype=demos.RECORD_DTYPE)
+    _, layout = fixture_records(1)
+    with pytest.raises(ValueError, match="NAVDEMO v2"):
+        data.encode_features(demos.learner_input(records), layout)
+
+
+def test_v2_guidance_vector_has_carrot_remaining_route_and_beyond_flag():
+    records, layout = fixture_records(1)
+    records["roads"]["carrot_direction"] = [1, 0, 0]
+    records["roads"]["carrot_distance_cm"] = 200
+    records["roads"]["goal_direction"] = [0, 0, -1]
+    records["roads"]["goal_distance_cm"] = 75000
+    records["roads"]["remaining_known_cm"] = 1234
+    records["roads"]["beyond_known"] = 1
+    vector = data.encode_features(demos.learner_input(records), layout)["vector"]
+    offset = demos.RAY_COUNT * 9
+    np.testing.assert_allclose(vector[0, offset:offset + 10],
+                               [1, 0, 0, .2, 0, 0, -1, 50, 1.234, 1])
 
 
 def test_pooling_ignores_unknown_ground_and_averages_channels():
@@ -84,7 +112,7 @@ def test_axis_labels_and_engine_turn_sign():
     records, _ = fixture_records()
     records["keys"]["forward"] = [-1, 0, 1]
     records["keys"]["turn"] = [-1, 0, 1]
-    records["roads"]["next_direction"] = [[1, 0, 0], [0, 0, 1], [-1, 0, 0]]
+    records["roads"]["carrot_direction"] = [[1, 0, 0], [0, 0, 1], [-1, 0, 0]]
     labels = data.encode_labels(records["keys"])
     np.testing.assert_array_equal(labels[:, 0], [0, 1, 2])
     np.testing.assert_array_equal(labels[:, 2], [0, 1, 2])
@@ -113,11 +141,12 @@ def test_prepare_reads_success_only_and_cache_round_trips(tmp_path):
                     "region": "forest", "decisions": 2, "eye_layout": layout.tolist()}
         (episode / "episode.json").write_text(json.dumps(metadata))
         with gzip.open(episode / "samples.bin.gz", "wb") as stream:
-            stream.write(demos.HEADER.pack(demos.MAGIC, demos.VERSION, demos.RECORD_BYTES,
+            stream.write(demos.HEADER.pack(demos.MAGIC, 2, demos.RECORD_BYTES,
                                            demos.RAY_COUNT, demos.NEAR_SIZE, demos.FAR_SIZE, demos.PERIOD_MS))
             stream.write(records.tobytes())
     index = data.prepare(source, output, chunk_records=1)
     assert index["excluded_unsuccessful_episodes"] == 1
+    assert index["navdemo_version"] == 2
     assert len(index["episodes"]) == 5
     assignments = {}
     for entry in index["episodes"]:
@@ -139,12 +168,12 @@ def write_episode(source, identity, records, layout, start, success=True, **extr
                 "decisions": len(records), "eye_layout": layout.tolist(), **extra}
     (episode / "episode.json").write_text(json.dumps(metadata))
     with gzip.open(episode / "samples.bin.gz", "wb") as stream:
-        stream.write(demos.HEADER.pack(demos.MAGIC, demos.VERSION, demos.RECORD_BYTES,
+        stream.write(demos.HEADER.pack(demos.MAGIC, 2, demos.RECORD_BYTES,
                                       demos.RAY_COUNT, demos.NEAR_SIZE, demos.FAR_SIZE, demos.PERIOD_MS))
         stream.write(records.tobytes())
 
 
-def test_dagger_keeps_failed_training_drives_without_changing_saved_split(tmp_path):
+def test_dagger_preserves_heldout_and_trains_new_successful_v2_pairs(tmp_path):
     teacher, first, second, output = (tmp_path / name for name in ("teacher", "drive1", "drive2", "cache"))
     split_path = tmp_path / "old-index.json"
     old_index = {"episodes": [{"pair": ["train", "goal"], "split": "train"},
@@ -161,19 +190,20 @@ def test_dagger_keeps_failed_training_drives_without_changing_saved_split(tmp_pa
     write_episode(first, "001", records, layout, "heldout", success=False, split="validation")
     write_episode(first, "002", records, layout, "new", success=False, split="train")
     write_episode(first, "003", records, layout, "train", success=False, split="control")
+    write_episode(first, "004", records, layout, "no-teacher", success=False, split="train")
     write_episode(second, "000", records, layout, "train")
     index = data.prepare(teacher, output, chunk_records=1, split_index=split_path,
                          dagger_sources=[first, second])
     assert index["excluded_unsuccessful_episodes"] == 1
-    assert index["excluded_unsplit_teacher_episodes"] == 1
+    assert index["excluded_unsplit_teacher_episodes"] == 0
     assert index["excluded_dagger_episodes"] == 3
-    assert len(index["episodes"]) == 4
-    assert index["splits"]["train"] == {"pairs": 1, "episodes": 3, "steps": 6}
+    assert len(index["episodes"]) == 6
+    assert index["splits"]["train"] == {"pairs": 2, "episodes": 5, "steps": 10}
     assert index["splits"]["validation"] == {"pairs": 1, "episodes": 1, "steps": 2}
     dagger = [ep for ep in index["episodes"] if ep["source_kind"] == "dagger"]
-    assert len(dagger) == 2 and any(not ep["success"] for ep in dagger)
-    assert all(ep["split"] == "train" and ep["start"] == "train" for ep in dagger)
-    assert len({ep["id"] for ep in index["episodes"]}) == 4
+    assert len(dagger) == 3 and any(not ep["success"] for ep in dagger)
+    assert all(ep["split"] == "train" and ep["start"] in ("train", "new") for ep in dagger)
+    assert len({ep["id"] for ep in index["episodes"]}) == 6
     for ep in index["episodes"]:
         np.testing.assert_array_equal(data.load_cached(output / ep["file"])["action_change"], [0, 1])
     assert json.loads(split_path.read_text()) == old_index
@@ -182,6 +212,26 @@ def test_dagger_keeps_failed_training_drives_without_changing_saved_split(tmp_pa
 def test_dagger_requires_saved_split(tmp_path):
     with pytest.raises(ValueError, match="--split-index"):
         data.prepare(tmp_path / "teacher", tmp_path / "cache", dagger_sources=[tmp_path / "drive"])
+
+
+def test_dagger_retains_original_train_pair_when_initial_teacher_failed(tmp_path):
+    teacher, drive, output = (tmp_path / name for name in ("teacher", "drive", "cache"))
+    split_path = tmp_path / "old-index.json"
+    split_path.write_text(json.dumps({"episodes": [
+        {"pair": ["successful", "goal"], "split": "train"},
+        {"pair": ["teacher-failed", "goal"], "split": "train"},
+        {"pair": ["heldout", "goal"], "split": "validation"},
+    ]}))
+    records, layout = fixture_records(2)
+    write_episode(teacher, "000", records, layout, "successful")
+    write_episode(teacher, "001", records, layout, "heldout")
+    write_episode(teacher, "002", records, layout, "teacher-failed", success=False)
+    write_episode(drive, "000", records, layout, "teacher-failed", success=False, split="train")
+    index = data.prepare(teacher, output, split_index=split_path, dagger_sources=[drive])
+    assert index["excluded_unsuccessful_episodes"] == 1
+    assert index["excluded_dagger_episodes"] == 0
+    assert [(ep["pair"], ep["split"]) for ep in index["episodes"] if ep["source_kind"] == "dagger"] == [
+        (["teacher-failed", "goal"], "train")]
 
 
 def test_saved_split_rejects_pair_leakage(tmp_path):

@@ -79,7 +79,9 @@ def synthetic_weights(path: Path) -> None:
             stream.write(values)
 
 
-def synthetic_records(steps: int) -> tuple[np.ndarray, Iterator[np.ndarray]]:
+def synthetic_records(steps: int, navdemo_version: int = 2) -> tuple[np.ndarray, Iterator[np.ndarray]]:
+    if navdemo_version not in demos.RECORD_DTYPES:
+        raise ValueError(f"unsupported NAVDEMO version: {navdemo_version}")
     layout = np.zeros((demos.RAY_COUNT, 3), dtype=np.float32)
     layout[:, 0] = np.linspace(-179, 179, demos.RAY_COUNT)
     layout[:, 1] = np.tile(np.arange(-3, 4), 34) * 10
@@ -87,7 +89,7 @@ def synthetic_records(steps: int) -> tuple[np.ndarray, Iterator[np.ndarray]]:
 
     def records() -> Iterator[np.ndarray]:
         rng = np.random.default_rng(1731)
-        base = np.zeros(1, dtype=demos.RECORD_DTYPE)
+        base = np.zeros(1, dtype=demos.RECORD_DTYPES[navdemo_version])
         for name in ("memory_near", "memory_far"):
             memory = base[name]
             # A varied small tile keeps the generated contract compact even
@@ -109,12 +111,15 @@ def synthetic_records(steps: int) -> tuple[np.ndarray, Iterator[np.ndarray]]:
             record["body"]["ground_slope_deg"] = rng.uniform(0, 180)
             record["body"]["head_yaw_deg"] = rng.uniform(-180, 180)
             record["body"]["head_pitch_deg"] = rng.uniform(-90, 90)
-            for name in ("next_direction", "goal_direction"):
+            target = "carrot_direction" if navdemo_version == 2 else "next_direction"
+            for name in (target, "goal_direction"):
                 direction = rng.normal(size=3)
                 record["roads"][name] = direction / np.linalg.norm(direction)
-            for name in ("next_distance_cm", "goal_distance_cm", "remaining_visual_cm"):
+            distances = (("carrot_distance_cm", "goal_distance_cm", "remaining_known_cm") if navdemo_version == 2 else
+                         ("next_distance_cm", "goal_distance_cm", "remaining_visual_cm"))
+            for name in distances:
                 record["roads"][name] = rng.uniform(0, 75000)
-            record["roads"]["goal_in_known"] = step % 2
+            record["roads"]["beyond_known" if navdemo_version == 2 else "goal_in_known"] = step % 2
             for name in ("previous_keys", "keys"):
                 for axis in ("forward", "strafe", "turn"):
                     record[name][axis] = rng.integers(-1, 2)
@@ -141,10 +146,12 @@ def synthetic_records(steps: int) -> tuple[np.ndarray, Iterator[np.ndarray]]:
     return layout, records()
 
 
-def recorded_steps(source: Path, steps: int) -> tuple[Path, np.ndarray, Iterator[np.ndarray]]:
+def recorded_steps(source: Path, steps: int, navdemo_version: int = 2) -> tuple[Path, np.ndarray, Iterator[np.ndarray]]:
     candidates = demos.episode_paths(source)
     # Metadata permits selection without decompressing other recordings.
     for samples in candidates:
+        if demos.episode_version(samples) != navdemo_version:
+            continue
         metadata = json.loads((samples.parent / "episode.json").read_text(encoding="utf-8"))
         if metadata.get("decisions", 0) < steps:
             continue
@@ -161,7 +168,7 @@ def recorded_steps(source: Path, steps: int) -> tuple[Path, np.ndarray, Iterator
             if count != steps:
                 raise ValueError(f"episode metadata promised {steps} steps but only {count} were read")
         return samples, layout, records()
-    raise ValueError(f"no episode with {steps} consecutive recorded steps in {source}")
+    raise ValueError(f"no NAVDEMO v{navdemo_version} episode with {steps} consecutive recorded steps in {source}")
 
 
 def main() -> None:
@@ -181,14 +188,18 @@ def main() -> None:
     if (policy.vector_size != data.VECTOR_SIZE or
             policy.header.get("preprocessing", {}).get("vector_order") != data.PREPROCESSING["vector_order"]):
         raise ValueError("weights must declare sensor-only vector_order: eye, roads, body")
+    navdemo_version = policy.header["preprocessing"].get("navdemo_version", 1)
+    if navdemo_version != data.PREPROCESSING.get("navdemo_version", 1):
+        raise ValueError("weight NAVDEMO version differs from feature preprocessing")
     if args.source:
-        source, layout, records = recorded_steps(args.source, args.steps)
+        source, layout, records = recorded_steps(args.source, args.steps, navdemo_version)
         source_name = str(source)
     else:
-        layout, records = synthetic_records(args.steps)
+        layout, records = synthetic_records(args.steps, navdemo_version)
         source_name = "deterministic synthetic NAVDEMO records"
     header = {"format": "navpolicy-parity", "version": 1, "steps": args.steps,
-              "record_bytes": demos.RECORD_BYTES, "vector_size": data.VECTOR_SIZE,
+              "navdemo_version": navdemo_version,
+              "record_bytes": demos.RECORD_BYTES, "vector_size": policy.vector_size,
               "hidden_size": policy.hidden_size, "heads": list(data.HEADS), "classes": list(data.CLASSES),
               "eye_layout": layout.tolist(), "source": source_name, "carry_hidden": True}
     destination = args.output / "parity.bin.gz"
@@ -209,7 +220,8 @@ def main() -> None:
     if count != args.steps:
         raise ValueError(f"expected {args.steps} steps, wrote {count}")
     print(json.dumps({"weights": str(weights), "fixture": str(destination), "steps": count,
-                      "source": source_name, "hidden_size": policy.hidden_size, "carry_hidden": True}))
+                      "source": source_name, "navdemo_version": navdemo_version,
+                      "hidden_size": policy.hidden_size, "carry_hidden": True}))
 
 
 if __name__ == "__main__":
