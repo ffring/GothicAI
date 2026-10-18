@@ -191,3 +191,9 @@ PR, который добавляет фичу или выключатель, д
 Проверяются не в каждом прогоне:
 - **только с моделями на dev-ubuntu:** реплики в бою от Gemma, трейс хода (`m5` с `QUICK_URL`), планировщик в `day` и `initiative` (с `DECIDER_URL`);
 - **только живыми прогонами:** кто вклинится в беседу (`interject`), карточки характера (`haggle`), шоураннер на настоящей модели (`showrunner_live`, `vanilla_line_live`).
+
+## Инструменты разработки
+
+| Фича | Как выключить | Модуль | Проверка | Документ |
+|---|---|---|---|---|
+| Три игры e2e на Ryzen: слоты и отдельные порты | `--display-exclusive` занимает всё окно; ёмкость задаёт профиль `gq` | `scripts/gq.py`, `scripts/ryzen.sh`, `scripts/e2e.sh` | `scripts/tests/test_gq.py`, `test_ryzen.py`; одиночные и тройные `orders`, `fight_reactions_bandits`, `calm_companion` | [compute.md](compute.md#очередь-gq), [ryzen.md](ryzen.md) |

@@ -36,7 +36,7 @@ def wait_for(path):
 
 
 class QueueSplitTests(unittest.TestCase):
-    def run_game(self, action='e2e', prepare=True, build_exit=0):
+    def run_game(self, action='e2e', prepare=True, build_exit=0, exclusive=False):
         directory = self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-phases-test-'))
         root = Path(directory)
         (root / 'scripts').mkdir()
@@ -69,7 +69,10 @@ exec 8>"$SESSION/control"
 guard_ack() { :; }
 preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
 '''
-        harness += '\n'.join([function('run_quick'), function('game_queue_args'), function('run_game')])
+        harness += '\n'.join([function('run_quick'), function('e2e_display_exclusive'),
+                              function('game_queue_args'), function('run_game')])
+        if exclusive:
+            harness += '\ne2e_display_exclusive() { [[ "$1" == stages ]]; }\n'
         harness += '\nrun_game env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote "$ACTION" "$STATE" "$RUN" stages\n'
         result = subprocess.run(
             ['bash', '-c', harness], capture_output=True, text=True, timeout=10,
@@ -90,7 +93,7 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
     def assert_game_request(self, request, action):
         options = self.queue_options(request)
         for name, value in [('--class', 'quiet' if action == 'bench' else 'quick'),
-                            ('--threads', '4'), ('--mem', '8G'), ('--max', '9m'),
+                            ('--threads', '4'), ('--mem', '5G'), ('--max', '9m'),
                             ('--gpu-mem', '4G' if action == 'bench' else '2G'),
                             ('--wait-max', '23'),
                             ('--name', 'bench smoke' if action == 'bench' else 'e2e stages')]:
@@ -130,6 +133,18 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
         self.assertEqual(len(requests), 1, requests)
         self.assert_option(self.queue_options(requests[0]), '--name', 'build e2e stages')
         self.assertIn('compile failure: build log tail', result.stdout)
+
+    def test_exclusive_scenario_only_changes_the_game_request(self):
+        result, requests = self.run_game(exclusive=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(requests), 2, requests)
+        self.assertNotIn('--display-exclusive', self.queue_options(requests[0]))
+        self.assertIn('--display-exclusive', self.queue_options(requests[1]))
+
+    def test_bench_does_not_use_e2e_exclusive_scenarios(self):
+        result, requests = self.run_game(action='bench', exclusive=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('--display-exclusive', self.queue_options(requests[-1]))
 
     def test_tts_preparation_installs_missing_dependencies(self):
         for scenario in ('errand', 'errand_fork', 'errand_far', 'errand_give',
@@ -326,6 +341,89 @@ remote_run e2e "$TEST_ROOT/worktree" run
         self.assertEqual((self.source / 'OpenGothic/ai_bridge/storygraph/build/storygraph').resolve(),
                          self.cache / 'storygraph' / self.story_digest / 'storygraph')
 
+    def test_e2e_ports_and_window_size_follow_the_assigned_slot(self):
+        self.entry(self.engine_digest)
+        self.entry(self.story_digest, 'storygraph')
+        names = ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE')
+        for name in names:
+            self.env.pop(name, None)
+        (self.source / 'scripts/e2e.sh').write_text('''
+python3 - "$TEST_ROOT/e2e-env.json" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({key: os.environ[key] for key in
+    ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE')}))
+PY
+''')
+        cases = [(slot, {}) for slot in range(3)] + [
+            (1, {'PORT': '51000'}),
+            (2, dict(zip(names, ('51001', '51002', '51003', '1280x720')))),
+        ]
+        for slot, explicit in cases:
+            with self.subTest(slot=slot, explicit=explicit):
+                for name in names:
+                    self.env.pop(name, None)
+                self.env.update(explicit, GQ_DISPLAY_SLOT=str(slot))
+                self.shell(r'''
+remote_probe e2e "$TEST_ROOT/worktree" run stages
+remote_run e2e "$TEST_ROOT/worktree" run
+''')
+                expected = dict(zip(names, (str(47827 + slot * 100),
+                                           str(47829 + slot * 100),
+                                           str(47840 + slot * 100), '640x360')))
+                expected.update(explicit)
+                self.assertEqual(json.loads((self.root / 'e2e-env.json').read_text()), expected)
+
+    def test_bench_keeps_its_window_size_and_ports(self):
+        self.entry(self.engine_digest)
+        self.entry(self.story_digest, 'storygraph')
+        for name in ('PORT', 'ASR_PORT', 'TTS_PORT'):
+            self.env.pop(name, None)
+        self.env.update(GQ_DISPLAY_SLOT='2', TEMPEST_WINDOW_SIZE='960x540')
+        (self.bin / 'ffmpeg').write_text('#!/bin/sh\nexit 0\n')
+        (self.bin / 'ffmpeg').chmod(0o755)
+        (self.source / 'scripts/bench.sh').write_text('''
+python3 - "$TEST_ROOT/bench-env.json" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({key: os.environ.get(key) for key in
+    ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE')}))
+PY
+''')
+        self.shell(r'''
+remote_probe bench "$TEST_ROOT/worktree" run smoke
+remote_bench "$TEST_ROOT/worktree" run smoke
+''')
+        self.assertEqual(json.loads((self.root / 'bench-env.json').read_text()),
+                         {'PORT': None, 'ASR_PORT': None, 'TTS_PORT': None,
+                          'TEMPEST_WINDOW_SIZE': '960x540'})
+
+    def test_e2e_uses_private_data_and_preserves_cached_graph_mtime(self):
+        self.entry(self.engine_digest)
+        self.entry(self.story_digest, 'storygraph')
+        (self.state / 'data').mkdir()
+        graph = self.state / 'data/story.json'
+        graph.write_text('cached graph')
+        graph_time = time.time() - 60
+        os.utime(graph, (graph_time, graph_time))
+        (self.source / 'scripts/e2e.sh').write_text('''
+printf '%s' "$GOTHIC_AI_DATA" > "$TEST_ROOT/data-path"
+printf 'private temporary graph' > "$GOTHIC_AI_DATA/story.tmp"
+''')
+        self.shell(r'''
+remote_probe e2e "$TEST_ROOT/worktree" run stages
+remote_run e2e "$TEST_ROOT/worktree" run
+''')
+        private = self.state / 'runs/run/data'
+        self.assertEqual((self.root / 'data-path').read_text(), str(private))
+        self.assertEqual((private / 'story.json').read_text(), 'cached graph')
+        self.assertAlmostEqual((private / 'story.json').stat().st_mtime, graph_time, places=5)
+        self.assertFalse((self.state / 'data/story.tmp').exists())
+
     def test_miss_builds_and_publishes_engine_and_storygraph(self):
         self.shell(r'''
 build_engine "$TEST_ROOT/worktree" "'''+self.engine_digest+r'''"
@@ -498,7 +596,7 @@ remote() { "$@"; }
 
 
 class TunnelTests(unittest.TestCase):
-    def run_job(self, directory, mode='run', forward_fail=False, reserved_port=False):
+    def run_job(self, directory, mode='run', forward_fail=False, reserved_port=0):
         root = Path(directory)
         (root / 'scripts').mkdir()
         (root / 'inputs/run').mkdir(parents=True)
@@ -535,9 +633,9 @@ ssh() {
   printf '%s\n' "$*" >> "$SESSION/forward"
   [[ -f "$SESSION/admitted" && "$TEST_FORWARD_FAIL" == 0 ]] || return 255
   [[ "$*" != *'-O cancel'* ]] || return 0
-  if [[ "$TEST_RESERVED_PORT" == 1 && ! -f "$SESSION/retried" ]]; then
+  if [[ "$TEST_RESERVED_PORT" != 0 && ! -f "$SESSION/retried" ]]; then
     touch "$SESSION/retried"
-    printf '47827\n'
+    printf '%s\n' "$TEST_RESERVED_PORT"
     return 0
   fi
   printf '51234\n'
@@ -603,17 +701,20 @@ guard_ack() { :; }
         self.assertFalse((root / 'job-ran').exists())
 
     def test_e2e_port_is_cancelled_and_reallocated(self):
-        directory = self.enterContext(tempfile.TemporaryDirectory())
-        root, process = self.run_job(directory, reserved_port=True)
-        wait_for(root / 'submitted')
-        (root / 'admitted').touch()
-        output, _ = process.communicate(timeout=8)
-        self.assertEqual(process.returncode, 0, output)
-        calls = (root / 'forward').read_text().splitlines()
-        self.assertEqual(len(calls), 3)
-        self.assertIn('-O cancel', calls[1])
-        self.assertIn('127.0.0.1:0:127.0.0.1:47827', calls[1])
-        self.assertEqual((root / 'inputs/run/tunnel-ready').read_text(), '51234\n')
+        for slot in range(3):
+            for base in (47827, 47829, 47840):
+                with self.subTest(port=base + slot * 100):
+                    directory = self.enterContext(tempfile.TemporaryDirectory())
+                    root, process = self.run_job(directory, reserved_port=base + slot * 100)
+                    wait_for(root / 'submitted')
+                    (root / 'admitted').touch()
+                    output, _ = process.communicate(timeout=8)
+                    self.assertEqual(process.returncode, 0, output)
+                    calls = (root / 'forward').read_text().splitlines()
+                    self.assertEqual(len(calls), 3)
+                    self.assertIn('-O cancel', calls[1])
+                    self.assertIn('127.0.0.1:0:127.0.0.1:47827', calls[1])
+                    self.assertEqual((root / 'inputs/run/tunnel-ready').read_text(), '51234\n')
 
     def test_remote_bench_waits_then_preserves_url_components(self):
         with tempfile.TemporaryDirectory() as directory:

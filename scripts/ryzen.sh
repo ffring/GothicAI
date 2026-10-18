@@ -426,7 +426,23 @@ remote_run() {
   fi
   echo 'Ryzen: game admitted'
   export LOG_DIR="$state/runs/$run"
-  mkdir -p "$LOG_DIR"
+  export GOTHIC_AI_DATA="$LOG_DIR/data"
+  mkdir -p "$GOTHIC_AI_DATA"
+  # Reuse an old cache without sharing its converter's story.tmp between runs.
+  # storygraph.ensure still checks the preserved mtime against DAT and converter.
+  if [[ -f "$state/data/story.json" ]]; then
+    cp -p "$state/data/story.json" "$GOTHIC_AI_DATA/story.json"
+  fi
+  # gq assigns the slot when this request starts, after the upload/preparation.
+  # Keep explicit caller ports; defaults must not collide with the other slots.
+  local display_slot="${GQ_DISPLAY_SLOT:-0}"
+  [[ "$display_slot" =~ ^[0-9]+$ ]] || { echo 'Invalid GQ_DISPLAY_SLOT' >&2; return 2; }
+  display_slot=$((10#$display_slot))
+  export PORT="${PORT-$((47827 + 100 * display_slot))}"
+  export ASR_PORT="${ASR_PORT-$((47829 + 100 * display_slot))}"
+  export TTS_PORT="${TTS_PORT-$((47840 + 100 * display_slot))}"
+  export TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE-640x360}"
+  echo "Ryzen: e2e slot $display_slot; ports $PORT/$ASR_PORT/$TTS_PORT; window $TEMPEST_WINDOW_SIZE"
   [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
   started=$SECONDS
   desktop
@@ -708,7 +724,7 @@ start_tunnel() {
       echo 'Ryzen: invalid allocated tunnel port' >&2; return 1;
     }
     case "$port" in
-      47827|47829|47840)
+      47827|47829|47840|47927|47929|47940|48027|48029|48040)
         ssh -S "$SESSION/control" -O cancel \
           -R "127.0.0.1:0:127.0.0.1:$AI_PORT" "$RYZEN_HOST" 8>&- || return 1
         continue ;;
@@ -801,12 +817,23 @@ PY
   esac
 }
 
+e2e_display_exclusive() {
+  # Keep timing-sensitive exceptions and their measured reason in this one list.
+  # The solo/triple stability check has not identified any exceptions yet.
+  case "$1" in
+    *) return 1 ;;
+  esac
+}
+
 game_queue_args() {
-  GQ_ARGS=(--class "${BENCH_CLASS:-quick}" --threads 4 --mem 8G --display --max "${RYZEN_MAX:-30m}" --wait-max "$LOCK_WAIT")
+  GQ_ARGS=(--class "${BENCH_CLASS:-quick}" --threads 4 --mem 5G --display --max "${RYZEN_MAX:-30m}" --wait-max "$LOCK_WAIT")
   if [[ "$ACTION" == bench ]]; then
     GQ_ARGS+=(--gpu-mem 4G --name "bench $(basename "$BENCH_SCENARIO" .bench)")
   else
     GQ_ARGS+=(--gpu-mem 2G --name "e2e ${SCENARIO:-m0}")
+    if e2e_display_exclusive "${SCENARIO:-m0}"; then
+      GQ_ARGS+=(--display-exclusive)
+    fi
   fi
 }
 
@@ -942,7 +969,7 @@ fi
 while IFS= read -r name; do
   case "$name" in
     GOTHIC_DIR|GOTHIC_AI_URL|OPENGOTHIC_FRACTURE) ;;
-    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|CHATGPT_*|OPENAI_*)
+    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|TEMPEST_*|CHATGPT_*|OPENAI_*)
       ENV_ARGS+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)
