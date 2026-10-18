@@ -6,7 +6,8 @@ through speech recognition and answer with the language model, the test bench fi
 effects and separate AI npc voices, and the cut makes a 1080x1920 short with subtitles.
 
 Game music is not recorded: `film` always writes `musicVolume=0` in the take's `Gothic.ini`, including
-for old shots with a nonzero `music` value. The cut adds one music bed for the whole short, starting
+for old shots with a nonzero `music` value, and `worldSounds=0`: the map's looping place sounds
+(zCVobSound: wind and birds, surf, torches) would be a second tune under the bed. The cut adds one music bed for the whole short, starting
 at its `clean_from_s` in the local `catalog.tsv`; set `bed_start` in the shot when no clean start is
 catalogued. All three Xardas shots use `xardas-tower`.
 
@@ -14,7 +15,7 @@ The hero and each NPC are levelled by speaker using all their recorded lines. Th
 is cut on the same timeline as the picture and effects. `levels.publish` calibrates the effects, music
 and ending against that voice, masters it to −14 LUFS, and checks the decoded AAC (true peak and clicks
 included). It prints the levels table and writes `short-<lang>.levels.json`; a failed check leaves no
-published MP4. Old takes without NPC stems or verified `musicVolume=0` must be filmed again. `--lang en`
+published MP4. Old takes without NPC stems or verified `musicVolume=0` and `worldSounds=0` must be filmed again. `--lang en`
 changes the captions and keeps the same sound.
 
 Channel branding is on by default: PT Serif Bold text, the corner seal and the end sting (see below).
