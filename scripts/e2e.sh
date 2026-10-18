@@ -46,6 +46,7 @@
 #   places: not a check: dumps the world's waypoints and its people's routines into $LOG_DIR/world_points.json
 #       for the book of places (gothic-ai places <dump>, server/src/gothic_ai/places.py)
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
+#       GOTHIC_TTS_RECORD=1 also records the reply and its bench events for check-voice-stem.sh
 #   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
 #        rumor and has it in mind when the hero speaks to her (story graph, stage 4)
@@ -247,6 +248,10 @@ GAME_BIN="${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}"
 LOG_DIR="${LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gothic-e2e.XXXXXX")}"
 TIMEOUT="${TIMEOUT:-240}"
 SCENARIO="${SCENARIO:-m0}"
+if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 && "$SCENARIO" != tts ]]; then
+  echo 'GOTHIC_TTS_RECORD requires SCENARIO=tts' >&2
+  exit 2
+fi
 if [ "$SCENARIO" = neural ]; then
   [ -n "${GOTHIC_BODY_URL:-}" ] || { echo 'scenario neural requires GOTHIC_BODY_URL=tcp://host:port' >&2; exit 2; }
   [ -z "${SAVE:-}" ] || { echo 'scenario neural requires a new game (unset SAVE)' >&2; exit 2; }
@@ -310,6 +315,10 @@ if [[ -n "${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
     printf 'npc_character_virtual=%s\n' "$NPC_CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
   fi
 fi
+if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
+  # Keep effects audible, with no music masking the controlled fake voice.
+  printf '\n[INTERNAL]\nvidResIndex=0\n[SOUND]\nsoundVolume=1\nmusicVolume=0\n' >>"$LOG_DIR/Gothic.ini"
+fi
 START_ARGS=(-nomenu)
 if [ -n "${SAVE:-}" ]; then
   cp "$SAVE" "$LOG_DIR/save_slot_1.sav"
@@ -331,6 +340,12 @@ fi
 if [ "$SCENARIO" = "broken" ] && [[ -z "${OPENGOTHIC_FRACTURE+set}" ]]; then
   GAME_ENV+=("OPENGOTHIC_FRACTURE=$HOME/.local/share/gothic-ai/fracture")
 fi
+if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
+  GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/tts-record.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
+    "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1"
+    "TEMPEST_AUDIO_LOOPBACK=48000" "TEMPEST_WINDOW_SIZE=320x180"
+    "OPENGOTHIC_BENCH_ENCODER=-c:v libx264 -preset ultrafast -crf 28")
+fi
 (cd "$LOG_DIR" && exec env "${GAME_ENV[@]}" "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
 
@@ -348,6 +363,24 @@ if kill -0 "$SRV" 2>/dev/null; then
   exit 1
 fi
 wait "$SRV" && rc=0 || rc=$?
+
+if [[ "$rc" == 0 && "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
+  # The ordinary tts scenario exits after the last line starts. Let the bench
+  # close the WAV/video itself, after that voice has drained, before killing it.
+  recorded=0
+  for _ in $(seq 1 60); do
+    if [[ -f "$LOG_DIR/events.jsonl" ]] && grep -q '"kind":"rec_stop"' "$LOG_DIR/events.jsonl"; then
+      recorded=1
+      break
+    fi
+    kill -0 "$GAME" 2>/dev/null || break
+    sleep 1
+  done
+  if [[ "$recorded" == 0 ]]; then
+    echo "tts recording did not close, see $LOG_DIR/game.log" >&2
+    rc=1
+  fi
+fi
 
 grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|timing|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|incident|reflex|rejected_give|give|intent_|story|director|ERROR" "$LOG_DIR/server.log" || true
 grep -E "^\[(ai|story)\]" "$LOG_DIR/game.log" || true

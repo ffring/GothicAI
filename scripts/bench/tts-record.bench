@@ -1,0 +1,13 @@
+# The existing tts scenario asks Xardas once. Start rec before it speaks and
+# leave enough quiet after the reply to include every npc_voice_end event.
+seed 73013
+cheat god
+# The tower's nearby fire masks the fake tone in total RMS. Use the quiet,
+# flat valley fixture shared with the aim/flinch benches, keeping effects on.
+goto NW_XARDAS_TOWER_VALLEY_091
+put NONE_100_XARDAS 100 0
+watch NONE_100_XARDAS
+cam face 80 0 1
+rec tts
+waitreply 120000 4000
+stop
