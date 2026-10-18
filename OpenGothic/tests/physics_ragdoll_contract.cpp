@@ -846,6 +846,13 @@ zenkit::ModelHierarchy wolfHierarchy() {
     const auto frame=at(offsets[i].x,offsets[i].y,offsets[i].z);
     std::memcpy(&source.nodes[i].transform,&frame,sizeof(frame));
     }
+  // Gothic wolves have a digitigrade hock between calf and foot. Preserve
+  // those real leg chains so an unrecognized HORSELINK cannot pass through
+  // the generic torso buoyancy fallback in an otherwise floating wolf.
+  source.nodes[14].name="BIP01 L HORSELINK";
+  source.nodes[15].name="BIP01 L FOOT";
+  source.nodes[18].name="BIP01 R HORSELINK";
+  source.nodes[19].name="BIP01 R FOOT";
   for(const auto parent:{int16_t(1),int16_t(21)}) {
     zenkit::ModelHierarchyNode tail;
     tail.name=parent==1 ? "BIP01 TAIL" : "BIP01 TAIL1";
@@ -933,6 +940,39 @@ float waterTorsoImmersion(const CollisionWorld& world,const Ragdoll& body,const 
   near(immersion,.9f,.12f,"constrained pelvis/spine must float mostly submerged near ninety percent");
   require(position(body.pelvisTransform()).y>-200.f,"a floating corpse must stay by the surface instead of reaching the deep bottom");
   return immersion;
+  }
+
+void testRagdollWaterWolfHockTargetIndependentOfMass() {
+  WaterRagdollFixture wolf("WOLF.MDS",true),warg("WARG.MDS",true);
+  CollisionWorld lightWorld,heavyWorld;
+  waterSurface(lightWorld);waterSurface(heavyWorld);
+  const auto object=at(0,-30,0);
+  auto light=wolf.create(lightWorld,object),heavy=warg.create(heavyWorld,object);
+  const auto lightParts=lightWorld.waterBodySnapshot(),heavyParts=heavyWorld.waterBodySnapshot();
+  for(const char* side:{"L","R"}) {
+    const auto prefix=std::string("BIP01 ")+side;
+    const auto hock=wolf.skeleton.findNode(prefix+" HORSELINK");
+    const auto calf=wolf.skeleton.findNode(prefix+" CALF"),foot=wolf.skeleton.findNode(prefix+" FOOT");
+    require(hock<wolf.skeleton.nodes.size() && calf<wolf.skeleton.nodes.size() && foot<wolf.skeleton.nodes.size() &&
+            wolf.skeleton.nodes[hock].parent==calf && wolf.skeleton.nodes[foot].parent==hock,
+            "the wolf hock regression must use a real calf-hock-foot chain");
+    require(std::find(light->boneIndices().begin(),light->boneIndices().end(),hock)!=light->boneIndices().end() &&
+            std::find(heavy->boneIndices().begin(),heavy->boneIndices().end(),hock)!=heavy->boneIndices().end(),
+            "both differently weighted wolf hocks must be genuine dynamic native parts");
+    const auto locate=[&](const auto& parts,const Ragdoll* ragdoll) -> const CollisionWorld::WaterBodySnapshot& {
+      const auto found=std::find_if(parts.begin(),parts.end(),[&](const auto& part) {return part.ragdoll==ragdoll && part.bone==hock;});
+      require(found!=parts.end(),"every physical wolf hock must participate in buoyancy diagnostics");
+      return *found;
+      };
+    const auto& lightHock=locate(lightParts,light.get());
+    const auto& heavyHock=locate(heavyParts,heavy.get());
+    require(lightHock.mass>0.f && heavyHock.mass>lightHock.mass,"the hock regression must compare distinct actual native masses");
+    near(heavyHock.mass/lightHock.mass,1.5f,.00001f,"identical wolf/warg hocks must carry their independent species mass");
+    near(lightHock.targetFraction,1.f,.00001f,"a wolf HORSELINK must hang as a fully immersed limb");
+    near(heavyHock.targetFraction,1.f,.00001f,"a heavier HORSELINK must retain the same limb displacement target");
+    std::printf("Water wolf hock side=%s bone=%zu masses_kg=[%.9g,%.9g] target_fractions=[%.9g,%.9g]\n",side,hock,
+                double(lightHock.mass),double(heavyHock.mass),double(lightHock.targetFraction),double(heavyHock.targetFraction));
+    }
   }
 
 void testRagdollWaterFloatSleepRestoreAndToggle() {
@@ -2630,6 +2670,7 @@ int main(int argc, const char** argv) {
       return EXIT_SUCCESS;
       }
     if(argc==2 && std::string_view(argv[1])=="--water") {
+      testRagdollWaterWolfHockTargetIndependentOfMass();
       testRagdollWaterFloatSleepRestoreAndToggle();
       testRagdollWaterDenseAndShallow();
       testRagdollWaterExcludesLivingReactions();
@@ -2658,6 +2699,7 @@ int main(int argc, const char** argv) {
     testFiniteRecoveryHierarchy();
     testBenchmarkSleepPolicy();
     testDropSleepWake();
+    testRagdollWaterWolfHockTargetIndependentOfMass();
     testRagdollWaterFloatSleepRestoreAndToggle();
     testRagdollWaterDenseAndShallow();
     testRagdollWaterExcludesLivingReactions();

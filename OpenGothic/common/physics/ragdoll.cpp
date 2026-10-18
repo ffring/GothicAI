@@ -252,7 +252,7 @@ namespace {
   float partBuoyancyFraction(std::string_view name) {
     if(named(name,"HEAD") || named(name,"NECK") || named(name,"JAW") || named(name,"KIEFER")) return .95f;
     if(named(name,"CLAVICLE") || named(name,"ARM") || named(name,"HAND") || named(name,"FINGER") ||
-       named(name,"THIGH") || named(name,"CALF") || named(name,"FOOT") || named(name,"TOE") ||
+       named(name,"THIGH") || named(name,"CALF") || named(name,"HORSELINK") || named(name,"FOOT") || named(name,"TOE") ||
        named(name,"LEG") || named(name,"TAIL") || named(name,"CLAW") || named(name,"ZANGE") ||
        named(name,"PINCER") || named(name,"FUEHLER") || named(name,"WING")) return 1.f;
     return .9f;
