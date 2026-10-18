@@ -604,3 +604,58 @@ async def test_cancelled_demand_removes_talk_already_sent_without_storylet(graph
     finally:
         amends.patches.apply = original_apply
         await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("callback", ["talk", "paid", "forgiven"])
+@pytest.mark.parametrize("loading", [False, True])
+async def test_dialog_callback_does_not_write_loaded_branch_during_pending_patch_ack(
+    graph, callback, loading
+):
+    fake = FakeGame(branch="A")
+    llm = FakeBackend(script=[FakeStep("", [_crime_proposal()])], delay=0)
+    link_cm, amends, chronicle = await _amends(fake, llm, graph, MemoryStore(":memory:"), crimes=True)
+    original_patch = amends.link.patch_graph
+    sent, acknowledge = asyncio.Event(), asyncio.Event()
+
+    async def waiting_for_ack(ops, *, replace=False):
+        await original_patch(ops, replace=replace)
+        if not replace and not sent.is_set():
+            # The native operation already ran; its delayed acknowledgement must not
+            # let StoryPatches or the callback record that old operation in branch B.
+            sent.set()
+            await acknowledge.wait()
+
+    try:
+        _crime(chronicle)
+        _crime_proof(chronicle, "seen")
+        storylet = await amends.demand(LOBART, CRIME)
+        assert storylet is not None
+        # Restored Amends can also reopen native dialogs. Two entries prove that
+        # loading during the first await cannot send the next mutation to the new world.
+        storylet.close = [JOIN, MISSION]
+        amends.link.patch_graph = waiting_for_ack
+        if callback == "forgiven":
+            chronicle.record({"fact": "forgiven", "npc": LOBART, "crime": CRIME})
+        else:
+            await fake.send(
+                type="dialog_chosen", npc=LOBART,
+                node=storylet.talk if callback == "talk" else storylet.pay, made=True,
+            )
+        await asyncio.wait_for(sent.wait(), 1)
+        pending = tuple(amends._background)
+        old_ops = len(_ops(fake))
+        if loading:
+            await fake.send(type="loading")
+            await _until(lambda: amends._loading)
+        await fake.send(type="session", branch="B", parent=None, parent_seq=0, reason="load")
+        await _until(lambda: chronicle.branch == "B")
+        acknowledge.set()
+        await asyncio.gather(*pending, return_exceptions=True)
+        assert not amends.storylets
+        assert amends.patches.ops() == []
+        assert chronicle.facts() == []
+        assert _ops(fake)[old_ops:] == []
+    finally:
+        acknowledge.set()
+        amends.link.patch_graph = original_patch
+        await link_cm.__aexit__(None, None, None)

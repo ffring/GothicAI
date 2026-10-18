@@ -421,6 +421,12 @@ class Amends:
         )
 
     def _on_message(self, msg: GameMessage) -> None:
+        if isinstance(msg, (Loading, Session)):
+            # StoryPatches records acknowledgements in the current branch. Stop old
+            # dialog callbacks before an acknowledgement can cross a load boundary.
+            for task in tuple(self._background):
+                if not task.done() and not task.cancelling():
+                    task.cancel()
         match msg:
             case Loading():
                 self._world += 1
@@ -752,8 +758,11 @@ class Amends:
 
     async def _told(self, s: Storylet) -> None:
         """The talk is over: the amends are offered."""
+        world = self._world
+        if self._loading:
+            return
         if s.lie.startswith("crime:") and self.crimes is not None and not self.active_crime(s.npc, s.lie[6:]):
-            await self._withdraw_crimes(self._world)
+            await self._withdraw_crimes(world)
             return
         s.stage = "told"
         try:
@@ -761,7 +770,8 @@ class Amends:
         except GameError as err:
             log.warning("amends: %s: %s", s.id, err)
             return
-        self.chronicle.record({"fact": "amends_told", "id": s.id})
+        if world == self._world and not self._loading:
+            self.chronicle.record({"fact": "amends_told", "id": s.id})
 
     async def _withdraw_crimes(self, world: int) -> None:
         """A silenced or dead victim no longer has a native important demand waiting."""
@@ -786,28 +796,40 @@ class Amends:
     async def _paid(self, s: Storylet) -> None:
         """The hero made amends: the npc's dialogs open again; so do those of the others asking the same of
         him for the same lie (one confession to Lobart is enough for Hilda too)."""
-        await self._settle(s, paid=True)
+        world = self._world
+        await self._settle(s, paid=True, world=world)
         for other in list(self.storylets.values()):
+            if world != self._world or self._loading:
+                return
             if other.lie == s.lie and other.to == s.to and other.stage != "done" and other.gold <= s.gold:
                 for node in (other.talk, other.pay):
+                    if world != self._world or self._loading:
+                        return
                     if node in self.patches_nodes():
                         await self._apply({"op": "remove_node", "node": node})
-                await self._settle(other)
+                await self._settle(other, world=world)
 
     async def _forgiven(self, f: Fact) -> None:
         """The npc forgave a grievance in a deal: the storylets that it asked for, or
         that were to be made at it, are settled; their dialogs of the talk and the amends leave the menu."""
+        world = self._world
         npc = f.get("npc", "")
         keys = [f"crime:{f['crime']}"] if f.get("fact") == "forgiven" else f.get("forgive", [])
         for key in keys:
             if key.startswith("crime:") and f.get("fact") != "forgiven":
                 continue  # wait for the deal's actual transfer and its canonical forgiven fact
             for s in list(self.storylets.values()):
+                if world != self._world or self._loading:
+                    return
                 if s.lie != key or s.stage == "done" or npc not in (s.npc, s.to):
                     continue
                 for node in (s.talk, s.pay):
+                    if world != self._world or self._loading:
+                        return
                     if node in self.patches_nodes():
                         await self._apply({"op": "remove_node", "node": node})
+                if world != self._world or self._loading:
+                    return
                 s.gold = int(f.get("gold", 0))  # what was agreed on in the end
                 if f.get("fact") == "forgiven":
                     s.gold = sum(
@@ -815,7 +837,7 @@ class Amends:
                         for item in f.get("hero_gives", [])
                         if item.get("item") == "ITMI_GOLD"
                     )
-                await self._settle(s)
+                await self._settle(s, world=world)
 
     def patches_nodes(self) -> set[str]:
         return {op["node"]["id"] for op in self.patches.ops() if op.get("op") == "add_node"}
@@ -826,10 +848,17 @@ class Amends:
         except GameError as err:
             log.warning("amends: %s: %s", op, err)
 
-    async def _settle(self, s: Storylet, *, paid: bool = False) -> None:
+    async def _settle(self, s: Storylet, *, paid: bool = False, world: int | None = None) -> None:
+        world = self._world if world is None else world
+        if world != self._world or self._loading:
+            return
         s.stage = "done"
         for c in s.close:
+            if world != self._world or self._loading:
+                return
             await self._apply({"op": "enable", "node": c})
+        if world != self._world or self._loading:
+            return
         lie = self.lies.get(s.lie)
         fact = {"fact": "amends", "id": s.id, "npc": s.npc, "to": s.to, "gold": s.gold, "lie": s.lie}
         # Saved storylets remain payable when --no-crimes disables new crime triggers.
