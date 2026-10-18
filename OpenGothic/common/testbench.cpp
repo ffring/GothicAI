@@ -687,7 +687,7 @@ struct Bench {
   Vec3 waterDry,waterCenter,waterDirection,waterHeroStart,waterHeroLast,waterObserverStart;
   uint32_t waterBarrelZen=uint32_t(-1),waterCrateZen=uint32_t(-1);
   uint64_t waterStart=0,waterSample=0,waterObserverSample=0;
-  float waterHeroMaxStep=0;
+  float waterHeroMaxStep=0,waterRayTop=0;
   bool waterReady=false,waterTrace=false,waterSwim=false,waterSawSwim=false,waterObserver=false;
   std::vector<std::unique_ptr<MovableFixture>> destructionFixtures;
   std::vector<uintptr_t> destructionIds;
@@ -4701,6 +4701,13 @@ std::string waterRows(World& world) {
     const auto floor=world.physic()->landRay(Vec3(point.x,hasWater?body.waterY+3.f:point.y,point.z),6000.f);
     const auto asleep=bench.waterSleepAt.find(body.id);
     std::string rendered="null";
+    std::string itemFields;
+    if(body.category==DynamicWorld::C_Item)
+      world.detectItem(point,.1f,[&](Item& item) {
+        if(std::abs(item.physicsMass()-body.mass)>.001f)return;
+        itemFields=",\"item_instance\":"+std::to_string(item.clsId())+
+          ",\"torch_burning\":"+(item.isTorchBurn()?"true":"false");
+        });
     if(body.category==DynamicWorld::C_Item)
       if(const auto* mesh=Resources::loadMesh(body.visual)) {
         const auto* bounds=mesh->bbox();
@@ -4722,7 +4729,7 @@ std::string waterRows(World& world) {
       ",\"density_kg_m3\":"+ragdollNumber(body.density)+",\"position_cm\":"+ragdollVector(point)+
       ",\"world_bottom_cm\":"+ragdollNumber(body.worldBounds[0].y)+
       ",\"world_top_cm\":"+ragdollNumber(body.worldBounds[1].y)+
-      ",\"rendered_bbox\":"+rendered+
+      ",\"rendered_bbox\":"+rendered+itemFields+
       ",\"water_y_cm\":"+(hasWater?ragdollNumber(body.waterY):"null")+
       ",\"water_depth_cm\":"+(hasWater && floor.hasCol?ragdollNumber(body.waterY-floor.v.y):"null")+
       ",\"submerged_fraction\":"+ragdollNumber(body.submergedFraction)+
@@ -4757,7 +4764,70 @@ bool waterProbe(World& world,const Vec3& at,float minDepth,float maxDepth,Vec3& 
   surface={at.x,water.wdepth,at.z};return true;
   }
 
+bool waterFindWindSite(World& world,std::vector<Vec3>& places) {
+  std::vector<const WayPoint*> points;
+  const auto harbour=[](const std::string& name) {
+    return name.find("HABOUR")!=std::string::npos || name.find("HARB")!=std::string::npos;
+    };
+  world.forEachWayPoint([&](const WayPoint& point) {
+    const auto& name=point.name;
+    if(harbour(name) || name.find("WATER")!=std::string::npos || name.find("LAKE")!=std::string::npos ||
+       name.find("BEACH")!=std::string::npos || name.find("COAST")!=std::string::npos)
+      points.push_back(&point);
+    });
+  std::sort(points.begin(),points.end(),[&](const auto* a,const auto* b) {
+    if(harbour(a->name)!=harbour(b->name))return harbour(a->name);
+    return a->name<b->name;
+    });
+  unsigned dryPoints=0,waterlines=0,diagnostics=0;
+  for(const auto* point:points) {
+    const auto support=world.physic()->landRay(point->pos+Vec3(0,400,0),3000.f);
+    if(!support.hasCol || support.n.y<.75f || world.physic()->waterRay(support.v,1.f).hasCol)continue;
+    ++dryPoints;
+    for(unsigned angle=0;angle<16;++angle) {
+      const Vec3 direction(std::cos(float(angle)*float(M_PI)/8.f),0,std::sin(float(angle)*float(M_PI)/8.f));
+      for(float distance=25.f;distance<=1800.f;distance+=25.f) {
+        Vec3 surface;
+        if(!waterProbe(world,support.v+direction*distance,10.f,6000.f,surface))continue;
+        ++waterlines;
+        bool found=false;Vec3 lowDry(0,0,0);float bestDrop=std::numeric_limits<float>::infinity();
+        // Trace this actual shoreline, rather than requiring the seven-body
+        // deep-water grid. A low pier or bank avoids a destructive cliff fall.
+        for(float d=std::max(0.f,distance-400.f);d<distance;d+=5.f) {
+          const auto probe=support.v+direction*d;
+          const auto floor=world.physic()->landRay(probe+Vec3(0,400,0),3000.f);
+          if(!floor.hasCol || floor.n.y<.99f)continue;
+          const float drop=floor.v.y-surface.y;
+          bestDrop=std::min(bestDrop,drop);
+          if(drop<0.f || drop>100.f || world.physic()->waterRay(floor.v,1.f).hasCol)continue;
+          lowDry=floor.v;found=true;
+          }
+        if(diagnostics<24 || found) {
+          ++diagnostics;
+          event("water_wind_candidate","\"waypoint\":"+jsonStr(point->name)+
+            ",\"authored_cm\":"+ragdollVector(point->pos)+",\"floor_cm\":"+ragdollVector(support.v)+
+            ",\"floor_normal\":"+ragdollVector(support.n)+",\"water_cm\":"+ragdollVector(surface)+
+            ",\"distance_cm\":"+ragdollNumber(distance)+",\"lowest_flat_drop_cm\":"+
+            (std::isfinite(bestDrop)?ragdollNumber(bestDrop):"null")+",\"found_low_support\":"+(found?"true":"false")+
+            ",\"low_dry_cm\":"+ragdollVector(lowDry));
+          }
+        if(found) {
+          bench.waterDry=lowDry;bench.waterCenter=surface;bench.waterDirection=direction;bench.waterWaypoint=point->name;
+          bench.waterRayTop=std::max(point->pos.y,support.v.y)+400.f;
+          places={surface};return true;
+          }
+        break;
+        }
+      }
+    }
+  event("water_wind_site_search","\"points\":"+std::to_string(points.size())+
+    ",\"dry_points\":"+std::to_string(dryPoints)+",\"waterlines\":"+std::to_string(waterlines)+
+    ",\"max_drop_cm\":100,\"min_depth_cm\":10");
+  return false;
+  }
+
 bool waterFindSite(World& world,bool shallow,unsigned count,std::vector<Vec3>& places,bool harbourOnly=false) {
+  if(harbourOnly)return waterFindWindSite(world,places);
   std::vector<const WayPoint*> points;
   world.forEachWayPoint([&](const WayPoint& point) {
     const auto& name=point.name;
@@ -4870,13 +4940,52 @@ bool waterPlaceMap(World& world,const DynamicWorld::MovableVobSnapshot& body,con
   return true;
   }
 
+void waterTorch(World& world,Npc& player) {
+  if(!bench.waterReady || bench.waterCase!="deep" || bench.waterItems.size()!=4) {
+    arenaAbort("water torch requires the seven-object deep-water fixture");return;
+    }
+  const auto symbol=world.script().findSymbolIndex("ItLsTorchburning");
+  if(symbol==size_t(-1)) {arenaAbort("water torch script instance is unavailable");return;}
+  const auto before=world.physic()->waterBodySnapshot();
+  Vec3 surface;bool found=false;
+  for(int radius=0;radius<=900 && !found;radius+=50)
+    for(unsigned angle=0;angle<32 && !found;++angle) {
+      const auto probe=bench.waterCenter+Vec3(std::cos(float(angle)*float(M_PI)/16.f)*float(radius),0,
+                                             std::sin(float(angle)*float(M_PI)/16.f)*float(radius));
+      if(!waterProbe(world,probe,220.f,6000.f,surface) ||
+         (surface-bench.waterDry).quadLength()>2500.f*2500.f)continue;
+      found=std::none_of(before.begin(),before.end(),[&](const auto& body) {
+        if(!waterOwns(body))return false;
+        auto delta=movablePosition(body.transform)-surface;delta.y=0;
+        return delta.quadLength()<190.f*190.f;
+        });
+      }
+  if(!found) {arenaAbort("water torch has no separate real deep-water position");return;}
+  auto matrix=Matrix4x4::mkIdentity();matrix.translate(surface+Vec3(0,100,0));
+  auto* item=world.addItemDyn(symbol,matrix,world.npcId(&player));
+  if(!item || !item->isTorchBurn() || item->physicsMass()<=0) {
+    arenaAbort("water torch lacks the burning subtype or native dynamic body");return;
+    }
+  uintptr_t id=0;
+  for(const auto& body:world.physic()->waterBodySnapshot())
+    if(body.category==DynamicWorld::C_Item &&
+       std::none_of(before.begin(),before.end(),[&](const auto& previous){return previous.id==body.id;})) {
+      if(id) {arenaAbort("water torch inserted more than one native body");return;}
+      id=body.id;
+      }
+  if(!id) {arenaAbort("water torch inserted no native body");return;}
+  bench.waterItems.push_back(item);bench.waterIds.insert(id);bench.waterLabels[id]="torch";
+  event("water_torch_inserted","\"id\":"+std::to_string(id)+",\"item_instance\":"+std::to_string(symbol)+
+    ",\"torch_burning\":true,\"surface_cm\":"+ragdollVector(surface)+",\"bodies\":"+waterRows(world));
+  }
+
 void prepareWaterFixture(World& world,Npc& player,std::string_view mode) {
   if(bench.waterReady || (mode!="deep" && mode!="shallow" && mode!="perf" && mode!="wind")) {
     arenaAbort("water setup expects a fresh fixture and deep, shallow, perf or wind");return;
     }
   const bool shallow=mode=="shallow",perf=mode=="perf",harbourOnly=mode=="wind";
   std::vector<Vec3> places;
-  if(!waterFindSite(world,shallow,perf?30u:7u,places,harbourOnly)) {
+  if(!waterFindSite(world,shallow,perf?30u:harbourOnly?1u:7u,places,harbourOnly)) {
     arenaAbort(shallow?"water fixture cannot find seven real shallow-water positions":
                        "water fixture cannot find a sufficiently deep unobstructed stock-world water area");return;
     }
@@ -4906,6 +5015,7 @@ void prepareWaterFixture(World& world,Npc& player,std::string_view mode) {
       }
     }
   else for(const std::string name:{"crate","barrel","table"}) {
+    if(harbourOnly && name!="barrel")continue;
     const DynamicWorld::MovableVobSnapshot* found=nullptr;
     float area=std::numeric_limits<float>::infinity(),density=std::numeric_limits<float>::infinity();
     for(const auto& body:all) {
@@ -4927,7 +5037,7 @@ void prepareWaterFixture(World& world,Npc& player,std::string_view mode) {
     if(selected[i].className=="barrel")bench.waterBarrelZen=selected[i].zenId;
     if(selected[i].className=="crate")bench.waterCrateZen=selected[i].zenId;
     }
-  if(!perf) {
+  if(!perf && !harbourOnly) {
     const char* symbols[]{"ITRW_ARROW","ITMW_1H_SLD_SWORD","ITMI_STONE","ITMI_LUTE"};
     const char* labels[]{"arrow","sword","stone","wood_item"};
     for(unsigned i=0;i<4;++i) {
@@ -5044,7 +5154,7 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
   const auto found=std::find_if(all.begin(),all.end(),[&](const auto& body){return body.zenId==zen;});
   if(found==all.end() || found->broken) {arenaAbort("water spell map target is unavailable");return;}
   auto target=(found->localBounds[0]+found->localBounds[1])*.5f;found->transform.project(target);
-  Vec3 caster=bench.waterDry;
+  Vec3 caster=bench.waterDry,windDummy;
   if(wind) {
     // Follow the real terrain to the waterline, including any dry terraces
     // above it. A height change alone is not the edge of the water.
@@ -5076,6 +5186,11 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
     // Find the nearest small dry support footprint behind the real edge.
     // The rest of the hull may overhang, so normal wind still reaches water.
     const auto side=Vec3(-direction.z,0,direction.x);
+    // The shoreline can be several metres below the dry dock. Start every
+    // placement ray above both levels so it can still find that upper support.
+    const auto shoreFloor=[&](const Vec3& probe) {
+      return world.physic()->landRay(Vec3(probe.x,std::max(probe.y+400.f,bench.waterRayTop),probe.z),4000.f);
+      };
     unsigned supportTrials=0,supportNoFloor=0,supportSteep=0,supportWet=0,supportUneven=0,supportRejected=0;
     std::string supportRejections="[";
     const auto rejectSupport=[&](std::string_view why,const Vec3& probe,const DynamicWorld::RayLandResult& support,bool hasWater,float waterY) {
@@ -5087,11 +5202,12 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
         ",\"water_y_cm\":"+(hasWater?ragdollNumber(waterY):"null")+"}";
       };
     const auto drySupport=[&](const Vec3& probe,DynamicWorld::RayLandResult& support) {
-      support=world.physic()->landRay(probe+Vec3(0,400,0),1000.f);
+      support=shoreFloor(probe);
       if(!support.hasCol) {++supportNoFloor;rejectSupport("no_floor",probe,support,false,0);return false;}
       const auto water=world.physic()->waterRay(support.v+Vec3(0,.1f,0),0);
       if(support.n.y<.99f) {++supportSteep;rejectSupport("steep_floor",probe,support,water.hasCol,water.wdepth);return false;}
       if(water.hasCol && water.wdepth>support.v.y) {++supportWet;rejectSupport("wet_floor",probe,support,true,water.wdepth);return false;}
+      if(support.v.y-shoreWaterY>100.f) {++supportUneven;rejectSupport("high_above_water",probe,support,true,shoreWaterY);return false;}
       return true;
       };
     Vec3 at,floorPoint,floorNormal;float chosenRetreat=0,chosenLateral=0;bool footprint=false;
@@ -5153,54 +5269,92 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
         ",\"floor_found\":"+(floor.hasCol?"true":"false")+",\"floor_cm\":"+ragdollVector(floor.v)+
         ",\"floor_normal\":"+ragdollVector(floor.n)+",\"obstruction_cm\":"+(obstruction?ragdollVector(*obstruction):"null")+"}";
       };
-    for(unsigned a=0;a<32 && !casterSupported;++a) {
-      const int turn=a==0?0:int((a+1)/2)*(a%2==1?1:-1);
-      const float angle=float(turn)*float(M_PI)/16.f;
-      const auto radial=direction*(-std::cos(angle))+side*std::sin(angle);
-      for(float distance=safeDistance;distance<=980.f && !casterSupported;distance+=10.f) {
-        const auto candidate=floorPoint+radial*distance;
-        const auto stand=world.physic()->landRay(candidate+Vec3(0,400,0),1000.f);
+    const auto actorCenterOffset=player.collosionCenter()-player.position();
+    float chosenNativeDistance=0,chosenConeCosine=0;
+    for(float distance=safeDistance;distance<=980.f && !casterSupported;distance+=10.f)
+      for(unsigned a=0;a<64 && !casterSupported;++a) {
+        const int turn=a==0?0:int((a+1)/2)*(a%2==1?1:-1);
+        const float angle=float(turn)*float(M_PI)/32.f;
+        const auto radial=direction*(-std::cos(angle))+side*std::sin(angle);
+        // The real cone uses three-dimensional distance from the caster's
+        // collision centre. A high quay needs a smaller horizontal radius.
+        if(Vec3::dotProduct(radial,direction)>-.25f)continue;
+        float horizontal=distance;
+        DynamicWorld::RayLandResult stand;
+        Vec3 candidate;bool converged=false;
+        for(unsigned iteration=0;iteration<6;++iteration) {
+          candidate=floorPoint+radial*horizontal;
+          stand=shoreFloor(candidate);
+          if(!stand.hasCol)break;
+          const float height=stand.v.y+actorCenterOffset.y-target.y;
+          const float along=Vec3::dotProduct(radial,actorCenterOffset);
+          const float perpendicular=actorCenterOffset.x*actorCenterOffset.x+actorCenterOffset.z*actorCenterOffset.z;
+          const float discriminant=along*along+distance*distance-height*height-perpendicular;
+          if(discriminant<=0.f)break;
+          const float next=std::sqrt(discriminant)-along;
+          if(next<=0.f)break;
+          if(std::abs(next-horizontal)<.25f) {converged=true;break;}
+          horizontal=next;
+          }
         if(!stand.hasCol) {++noFloor;reject("no_floor",candidate,stand);continue;}
-        if(stand.n.y<.65f) {++steepFloor;reject("steep_floor",candidate,stand);continue;}
+        if(!converged || stand.n.y<.99f) {++steepFloor;reject("unsupported_cast_floor",candidate,stand);continue;}
         const auto standWater=world.physic()->waterRay(stand.v+Vec3(0,.1f,0),0);
         if(standWater.hasCol && standWater.wdepth>stand.v.y) {++wetFloor;reject("wet_floor",candidate,stand);continue;}
-        // The caster stays here: only support and the real spell's sight line
-        // matter, rather than a walking route over every intervening terrace.
-        const auto obstruction=world.physic()->ray(stand.v+Vec3(0,100,0),target);
+        const auto casterCenter=stand.v+actorCenterOffset;
+        const auto obstruction=world.physic()->ray(casterCenter,target);
         if(obstruction.hasCol && (obstruction.v-target).length()>extent.length()+5.f) {
           ++occluded;reject("occluded",candidate,stand,&obstruction.v);continue;
           }
-        caster=stand.v;casterSupported=true;
+        auto firing=target-stand.v;firing.y=0;firing=Vec3::normalize(firing);
+        const auto targetFloor=shoreFloor(target-firing*250.f);
+        if(!targetFloor.hasCol || targetFloor.n.y<.99f) {++steepFloor;reject("unsupported_spell_target",candidate,stand);continue;}
+        const auto targetWater=world.physic()->waterRay(targetFloor.v+Vec3(0,.1f,0),0);
+        if(targetWater.hasCol && targetWater.wdepth>targetFloor.v.y) {++wetFloor;reject("wet_spell_target",candidate,stand);continue;}
+        const auto axis=Vec3::normalize(targetFloor.v+actorCenterOffset-casterCenter);
+        const float cosine=Vec3::dotProduct(Vec3::normalize(target-casterCenter),axis);
+        if(cosine<.819152f) {++occluded;reject("outside_native_cone",candidate,stand);continue;}
+        caster=stand.v;windDummy=targetFloor.v;casterSupported=true;
+        chosenNativeDistance=(target-casterCenter).length();chosenConeCosine=cosine;
         }
-      }
     event("water_wind_site","\"lip_cm\":"+ragdollVector(lip)+",\"shore_water_y_cm\":"+ragdollNumber(shoreWaterY)+
       ",\"floor_cm\":"+ragdollVector(floorPoint)+",\"target_cm\":"+ragdollVector(target)+
       ",\"local_native_com_cm\":"+ragdollVector(center)+",\"extent_cm\":"+ragdollVector(extent)+
       ",\"safe_distance_cm\":"+ragdollNumber(safeDistance)+",\"caster_found\":"+(casterSupported?"true":"false")+
+      ",\"native_caster_distance_cm\":"+ragdollNumber(chosenNativeDistance)+",\"native_cone_cosine\":"+ragdollNumber(chosenConeCosine)+
+      ",\"ray_top_cm\":"+ragdollNumber(bench.waterRayTop)+
       ",\"no_floor\":"+std::to_string(noFloor)+",\"steep_floor\":"+std::to_string(steepFloor)+
       ",\"wet_floor\":"+std::to_string(wetFloor)+",\"occluded\":"+std::to_string(occluded)+",\"first_rejections\":"+rejections+"]");
     if(!casterSupported) {arenaAbort("water safe wind caster requires dry support and a clear native sight line");return;}
-    noiseRetireListeners();noiseBegin(world,"water-splash",Vec3(lip.x,shoreWaterY,lip.z));
-    // A nearby onshore listener is a normal NPC with the #93 perception.
-    Npc* listener=nullptr;
-    for(float lateral:{150.f,-150.f,100.f,-100.f}) {
-      const auto shoulder=lip-direction*220.f+Vec3(-direction.z*lateral,400,direction.x*lateral);
-      const auto listenerAt=world.physic()->landRay(shoulder,1000.f);
-      if(!listenerAt.hasCol || listenerAt.n.y<.65f)continue;
-      const auto listenerWater=world.physic()->waterRay(listenerAt.v+Vec3(0,.1f,0),0);
-      if(listenerWater.hasCol && listenerWater.wdepth>listenerAt.v.y)continue;
-      listener=noiseAddListener(world,"water-near",listenerAt.v);break;
-      }
-    for(unsigned a=0;a<32 && !listener;++a) {
-      const int turn=a==0?0:int((a+1)/2)*(a%2==1?1:-1);
-      const float angle=float(turn)*float(M_PI)/16.f;
-      const auto radial=direction*(-std::cos(angle))+side*std::sin(angle);
-      const auto listenerAt=world.physic()->landRay(lip+radial*220.f+Vec3(0,400,0),1000.f);
-      if(!listenerAt.hasCol || listenerAt.n.y<.65f)continue;
-      const auto water=world.physic()->waterRay(listenerAt.v+Vec3(0,.1f,0),0);
-      if(water.hasCol && water.wdepth>listenerAt.v.y)continue;
-      listener=noiseAddListener(world,"water-near",listenerAt.v);
-      }
+    const auto splashSource=Vec3(floorPoint.x,shoreWaterY,floorPoint.z)+direction*(chosenRetreat+80.f);
+    noiseRetireListeners();noiseBegin(world,"water-splash",splashSource);
+    // Choose a supported listener outside the quiet dry-contact radius, but
+    // within the real acoustic range of a splash from this low shoreline.
+    Npc* listener=nullptr;unsigned listenerNoFloor=0,listenerWet=0,listenerBlocked=0;
+    float listenerOcclusion=0,listenerDistance=0;
+    for(float radius:{350.f,400.f,450.f,500.f,550.f})
+      for(unsigned a=0;a<32 && !listener;++a) {
+        const float angle=float(a)*float(M_PI)/16.f;
+        const auto offset=direction*std::cos(angle)*radius+side*std::sin(angle)*radius;
+        // Keep the observer out of the projectile's line through its target.
+        if(std::abs(Vec3::dotProduct(offset,side))<150.f)continue;
+        const auto listenerAt=shoreFloor(floorPoint+offset);
+        if(!listenerAt.hasCol || listenerAt.n.y<.65f) {++listenerNoFloor;continue;}
+        if((listenerAt.v-floorPoint).length()<=300.f)continue;
+        const auto water=world.physic()->waterRay(listenerAt.v+Vec3(0,.1f,0),0);
+        if(water.hasCol && water.wdepth>listenerAt.v.y) {++listenerWet;continue;}
+        const auto head=listenerAt.v+Vec3(0,160,0);
+        const float occlusion=world.physic()->soundOclusion(splashSource,head);
+        const float distance=(splashSource-head).length();
+        const float setupOcclusion=world.physic()->soundOclusion(bench.waterCenter,head);
+        if(distance>=650.f*(1.f-occlusion) ||
+           (bench.waterCenter-head).length()>=650.f*(1.f-setupOcclusion)) {++listenerBlocked;continue;}
+        listener=noiseAddListener(world,"water-near",listenerAt.v);
+        listenerOcclusion=occlusion;listenerDistance=distance;
+        }
+    event("water_wind_listener",std::string("\"found\":")+(listener?"true":"false")+
+      ",\"source_cm\":"+ragdollVector(splashSource)+",\"distance_cm\":"+ragdollNumber(listenerDistance)+
+      ",\"occlusion\":"+ragdollNumber(listenerOcclusion)+",\"no_floor\":"+std::to_string(listenerNoFloor)+
+      ",\"wet_floor\":"+std::to_string(listenerWet)+",\"acoustically_blocked\":"+std::to_string(listenerBlocked));
     if(!listener) {
       arenaAbort("water splash requires a real nearby supported listener");return;
       }
@@ -5208,7 +5362,9 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
   auto direction=target-caster;direction.y=0;
   if(direction.length()<1.f) {arenaAbort("water spell target has no horizontal firing direction");return;}
   direction=Vec3::normalize(direction);
-  auto* npc=world.addNpc(world.script().findSymbolIndex("BAU_904_BAUER"),target+direction*(wind?250.f:100.f)-Vec3(0,80,0));
+  auto dummy=target+direction*100.f-Vec3(0,80,0);
+  if(wind)dummy=windDummy; // Already checked with the actual caster and native cone.
+  auto* npc=world.addNpc(world.script().findSymbolIndex("BAU_904_BAUER"),dummy);
   if(!npc) {arenaAbort("water real spell target insertion failed");return;}
   npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
   npc->handle().attribute[ATR_HITPOINTS]=npc->handle().attribute[ATR_HITPOINTSMAX]=50000;
@@ -5231,10 +5387,12 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
   player.useItem(bench.spellRunes[spell],Item::NSLOT,true);
   if(player.drawSpell(spell))bench.spellCastingId=spell;
   else {bench.spellEquipPending=spell;bench.spellEquipUntil=world.tickCount()+3000;}
-  bench.cam=C_Hold;lookFrom(caster+Vec3(-direction.z*300.f,210,direction.x*300.f),target);
+  auto cameraTarget=target;
+  if(wind)cameraTarget.y=(target.y+bench.waterCenter.y)*.5f;
+  bench.cam=C_Hold;lookFrom(caster+Vec3(-direction.z*300.f,210,direction.x*300.f),cameraTarget);
   event("water_spell_ready","\"spell_kind\":"+jsonStr(wind?"wind":"fireball")+",\"spell_id\":"+
     std::to_string(spell)+",\"zen_id\":"+std::to_string(zen)+",\"target_cm\":"+ragdollVector(target)+
-    ",\"caster_cm\":"+ragdollVector(caster));
+    ",\"caster_cm\":"+ragdollVector(caster)+",\"dummy_cm\":"+ragdollVector(dummy));
   }
 
 void arrowFields(World& world) {
@@ -7683,6 +7841,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     w.physic()->setBuoyancyEnabled(a[1]=="on");
     }
   else if(c=="water" && a.size()==3 && a[1]=="setup")prepareWaterFixture(w,pl,a[2]);
+  else if(c=="water" && a.size()==2 && a[1]=="torch")waterTorch(w,pl);
   else if(c=="water" && a.size()==3 && a[1]=="checkpoint")waterCheckpoint(w,a[2]);
   else if(c=="water" && a.size()==3 && a[1]=="initial")waterInitial(w,pl,ctrl,a[2]);
   else if(c=="water" && a.size()==2 && a[1]=="push-ready")prepareWaterSpell(w,pl,true);

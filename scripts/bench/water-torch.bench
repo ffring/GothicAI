@@ -1,0 +1,17 @@
+# A real burning world Item must keep its native water body in a fresh process.
+seed 73013
+cheat god
+set time 12 0
+movable on
+destruction on
+noise on
+water on
+overlay off
+view full
+water setup deep
+water torch
+wait 30000
+water checkpoint torch-settled
+water save water
+stop
+physics stats

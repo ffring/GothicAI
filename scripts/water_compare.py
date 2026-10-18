@@ -113,14 +113,38 @@ def wind(rows):
                 row['id'] == ready['spell_id'] and row['t'] >= ready['t']]
     require(releases, 'wind fixture never released the prepared wind spell')
     release = releases[0]
-    require(any(row['kind'] == 'spell_physics_cast' and row['id'] == ready['spell_id'] and
-                ready['t'] <= row['t'] <= release['t'] for row in rows),
-            'wind release has no actual matching spell cast')
+    placed = checkpoint(rows, 'wind-placed')
+    resting = checkpoint(rows, 'wind-resting')
+    require(ready['t'] <= placed['t'] < resting['t'] < release['t'],
+            'wind barrel placement and resting checkpoints must precede the real release')
+    placed_barrel = fixture_body(placed, 'barrel')
+    resting_barrel = fixture_body(resting, 'barrel')
+    for body in (placed_barrel, resting_barrel):
+        require(body['zen_id'] == ready['zen_id'] and body['category'] == 10,
+                'wind preparation lost the intact targeted barrel')
+        require(body['submerged_fraction'] == 0,
+                'wind barrel entered the water before the real release')
+    drift = math.dist(placed_barrel['position_cm'], resting_barrel['position_cm'])
+    horizontal_drift = math.hypot(*(resting_barrel['position_cm'][axis] -
+                                   placed_barrel['position_cm'][axis] for axis in (0, 2)))
+    require(horizontal_drift <= 1,
+            f'wind barrel did not stand on its own before release: XZ drift {horizontal_drift:.6f} cm')
+    precast_speed = math.hypot(*resting_barrel['velocity_cm_s'])
+    require(math.isfinite(precast_speed) and precast_speed < 1,
+            f'wind barrel still moved before release: {precast_speed:.6f} cm/s')
+    casts = [row for row in rows if row['kind'] == 'spell_physics_cast' and
+             row['id'] == ready['spell_id'] and ready['t'] <= row['t'] <= release['t']]
+    require(casts, 'wind release has no actual matching spell cast')
+    require(not casts[0]['target_in_air'],
+            'wind projectile target was unsupported at the actual cast')
     barrel = fixture_body(checkpoint(rows, 'pushed'), 'barrel')
     original = fixture_body(one(rows, 'water_setup'), 'barrel')
     require(barrel['category'] == 10 and barrel['zen_id'] == original['zen_id'] == ready['zen_id'],
             'wind checkpoint lost the intact targeted barrel')
     require(barrel['submerged_fraction'] > 0, 'wind-pushed barrel did not enter the water')
+    postcast_speed = math.hypot(*barrel['velocity_cm_s'])
+    require(barrel['sleeping'] and postcast_speed == 0,
+            'wind-pushed floating barrel did not settle and sleep')
     heard = {}
     for row in rows:
         if row['kind'] == 'physics_noise_heard' and row['callback_dispatched']:
@@ -136,6 +160,9 @@ def wind(rows):
             math.isfinite(splash['radius_cm']) and splash['radius_cm'] > 0,
             'invalid wind barrel splash measurements')
     return {'barrel_id': barrel['id'], 'barrel_zen_id': barrel['zen_id'],
+            'precast_drift_cm': drift, 'precast_horizontal_drift_cm': horizontal_drift,
+            'precast_speed_cm_s': precast_speed,
+            'postcast_sleeping': barrel['sleeping'], 'postcast_speed_cm_s': postcast_speed,
             'submerged_fraction': barrel['submerged_fraction'],
             'splash_t_game_ms': splash['t_game_ms'], 'impulse_ns': splash['impulse_ns'],
             'volume': splash['volume'], 'radius_cm': splash['radius_cm'],
