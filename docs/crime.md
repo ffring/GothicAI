@@ -14,7 +14,7 @@
 
 Выключение: `gothic-ai serve --no-crimes` отключает учёт дел, закон и создание новых откликов на преступления. Уже записанные поручения и требования возмещения остаются; флаг не удаляет их из сохранения.
 
-Проверки: `crimes`, `crime_talk`, `crime_law`, `crime_director`, `trace_crime` в [scripts/e2e.sh](../scripts/e2e.sh). [trace_crime.py](../server/src/gothic_ai/scenarios/trace_crime.py) сводит свежие обломки и слова Хильды о настоящей краже в одной ветке и одном ходе Лобарта, затем проверяет сохранение знания, фактов и доверия после загрузки. Тесты: [test_crimes.py](../server/tests/test_crimes.py), [test_crime_knowledge.py](../server/tests/test_crime_knowledge.py), [test_sightings.py](../server/tests/test_sightings.py), [test_trust.py](../server/tests/test_trust.py), [test_crime_law.py](../server/tests/test_crime_law.py), [test_amends.py](../server/tests/test_amends.py).
+Проверки: `crimes`, `crime_talk`, `crime_law`, `crime_director`, `trace_crime` в [scripts/e2e.sh](../scripts/e2e.sh). [trace_crime.py](../server/src/gothic_ai/scenarios/trace_crime.py) сводит свежие обломки и слова Хильды о настоящей краже в одной ветке и одном ходе Лобарта, затем проверяет сохранение знания, фактов и доверия после загрузки. Тесты: [test_crimes.py](../server/tests/test_crimes.py), [test_crime_knowledge.py](../server/tests/test_crime_knowledge.py), [test_sightings.py](../server/tests/test_sightings.py), [test_crime_law.py](../server/tests/test_crime_law.py), [test_amends.py](../server/tests/test_amends.py).
 
 Ограничения: телесные реакции на преступления остаются скриптам; охотников за наградой нет. У бандитов нет законника, `GIL_OUT=12` не входит в общины. Режиссёр может не создавать линию; возмещение ограничено 100 золотыми.
 
