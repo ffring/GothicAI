@@ -51,6 +51,7 @@
 #include "utils/gthfont.h"
 
 #include "gothic.h"
+#include "contentcensus.h"
 #include "utils/string_frm.h"
 
 #include <dmusic.h>
@@ -74,6 +75,7 @@ static void emplaceTag(char* buf, char tag){
 
 Resources::Resources() {
   inst=this;
+  initCensus();
   // Sound buffers remain CPU data: native sound selection consumes RNG and
   // dialogue uses their durations even when playback is disabled.
   fBuff.reserve(8*1024*1024);
@@ -82,6 +84,7 @@ Resources::Resources() {
 Resources::Resources(Tempest::Device &device)
   : dev(&device), sound(std::make_unique<Tempest::SoundDevice>()) {
   inst=this;
+  initCensus();
 
   static const uint16_t index[] = {
       0, 1, 2, 0, 2, 3,
@@ -211,7 +214,29 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
 Resources::~Resources() {
   if(dmLoader!=nullptr)
     DmLoader_release(dmLoader);
+  writeCensus();
   inst=nullptr;
+  }
+
+void Resources::initCensus() {
+  const char* path = std::getenv("OPENGOTHIC_CENSUS");
+  if(path==nullptr || path[0]=='\0')
+    return;
+  census = std::make_unique<ContentCensus>(path);
+  gothicAssets.set_open_observer([this](std::string_view name, std::string_view source) {
+    census->opened(name,source);
+    });
+  }
+
+void Resources::censusFile(std::u16string_view path) {
+  if(inst==nullptr || inst->census==nullptr)
+    return;
+  const auto source = TextCodec::toUtf8(path);
+  inst->census->opened(source,source);
+  }
+
+bool Resources::writeCensus() {
+  return inst==nullptr || inst->census==nullptr || inst->census->write();
   }
 
 Tempest::Device& Resources::device() {
@@ -625,7 +650,10 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMi
     if(auto it = hdTextures.find(key); it!=hdTextures.end()) {
       try {
         Tempest::Pixmap pm(it->second);
-        return device().texture(pm,true);
+        auto texture = device().texture(pm,true);
+        if(census)
+          census->replaced(name,it->second);
+        return texture;
         }
       catch(...) {
         Log::e("textures: unable to load \"",it->second,"\"");

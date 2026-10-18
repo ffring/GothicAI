@@ -764,6 +764,8 @@ zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const Script
     }
 
   auto buf = zenkit::Read::from(path);
+  if(buf!=nullptr)
+    Resources::censusFile(path);
   zenkit::DaedalusScript script;
   script.load(buf.get());
   return script;
