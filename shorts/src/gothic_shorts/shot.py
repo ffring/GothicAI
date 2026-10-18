@@ -3,8 +3,8 @@
     title = "Соврал Ксардасу"            # the short's name
     hook = "Я соврал NPC в Готике"       # big text over the first seconds of the cut
     npc = "NONE_100_XARDAS"              # {npc} in the script
-    music = 0.35                         # the game's music and sound, 0..1
-    sound = 1.0
+    music = 0.0                          # game music stays off during filming
+    sound = 1.0                          # the game's effects, 0..1
     script = '''
     overlay off
     cam shoulder {npc}
@@ -16,6 +16,8 @@
 
 The script is the bench's own language (scripts/bench/README.md) plus `hero <text>`, which becomes
 `ptt <wav> <text>` once the line is voiced (voice.py).
+Game music is not recorded: the cut adds one music bed for the whole short. `film` always keeps the
+game's music off, including for older shot files that set `music` above zero.
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ class Shot:
     brand: bool = True
     npc: str = ""
     save: Path | None = None
-    music: float = 0.35
+    music: float = 0.0
     sound: float = 1.0
     hero_voice: str = DEFAULT_HERO_VOICE
     # the window in points: 972x1728 pixels on a Retina screen, the cut scales it to 1080x1920 (the full
@@ -104,7 +106,7 @@ def load(path: Path) -> Shot:
         brand=bool(data.get("brand", True)),
         npc=str(data.get("npc", "")),
         save=(path.parent / save).resolve() if save else None,
-        music=float(data.get("music", 0.35)),
+        music=float(data.get("music", Shot.music)),
         sound=float(data.get("sound", 1.0)),
         hero_voice=str(data.get("hero_voice", DEFAULT_HERO_VOICE)),
         size=str(data.get("size", Shot.size)),

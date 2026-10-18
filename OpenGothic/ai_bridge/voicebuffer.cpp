@@ -56,8 +56,15 @@ void VoiceBuffer::render(int16_t* out, size_t n) {
   const size_t have = std::min(n, pcm.size()-pos);
   std::memcpy(out, pcm.data()+pos, have*sizeof(int16_t));
   std::memset(out+have, 0, (n-have)*sizeof(int16_t));
+  if(recording)
+    recording(out,ended ? have : n);
   pos += have;
   lips->setPlayed(freq>0 ? uint64_t(pos)*1000/freq : 0);
+  }
+
+void VoiceBuffer::record(std::function<void(const int16_t*,size_t)> sink) {
+  std::lock_guard<std::mutex> guard(sync);
+  recording = std::move(sink);
   }
 
 std::unique_ptr<Tempest::SoundProducer> VoiceBuffer::producer(std::shared_ptr<VoiceBuffer> buf) {

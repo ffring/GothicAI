@@ -3,7 +3,10 @@
 Vertical videos of the game with the real AI npc's, made without a person at the keyboard: a shot file is a
 scene with the hero's lines, the hero says them with a TTS voice through the talk key, the npc's hear them
 through speech recognition and answer with the language model, the test bench films it with the game's
-sound, and the cut makes a 1080x1920 short with subtitles.
+effects and separate AI npc voices, and the cut makes a 1080x1920 short with subtitles.
+
+Game music is not recorded: `film` always writes `musicVolume=0` in the take's `Gothic.ini`, including
+for old shots with a nonzero `music` value. The cut adds one music bed for the whole short.
 
 Channel branding is on by default: PT Serif Bold text, the corner seal and the end sting (see below).
 Set `brand = false` in the shot TOML to turn it off.
@@ -33,8 +36,8 @@ on free ports, so a play session can run at the same time; the game window is mi
 title = "Соврал Ксардасу"
 hook = "Я попробовал обмануть Ксардаса"   # big text over the first seconds
 npc = "NONE_100_XARDAS"                   # {npc} in the script
-music = 0.35                              # the game's music and sound volume, 0..1
-sound = 1.0
+music = 0.0                               # the default; film keeps game music off
+sound = 1.0                               # the game's effects volume, 0..1
 # save = "my.sav"                         # relative to the shot file
 # hero_voice = "A young man ..."          # a description: the voice is designed, not cloned
 script = """
@@ -96,8 +99,12 @@ Say so in the description.
   server like the launcher (with `--voice-files`: a `ptt_start` may name a wav instead of the microphone),
   and the game with the bench in film mode:
   - `TEMPEST_WINDOW_SIZE`: the frame (486x864 points, 972x1728 pixels);
-  - `TEMPEST_AUDIO_LOOPBACK=48000`: nothing plays; OpenAL mixes the game's sound when the bench asks, a
+  - `TEMPEST_AUDIO_LOOPBACK=48000`: nothing plays; OpenAL mixes the game's effects when the bench asks, a
     frame's worth per frame, into `main.wav` next to `main.mp4`;
+  - `OPENGOTHIC_BENCH_VOICE_STEM=1`: AI npc voices stay out of `main.wav`; each line starting during a
+    segment gets its own `<segment>.voice-NN.wav` (16-bit mono, at the voice buffer's sample rate), cut
+    off at the segment's end. `npc_voice` in `events.jsonl` gives the npc, line id, absolute wav path and
+    starting sample in the 48 kHz segment, alongside the usual video frame;
   - `OPENGOTHIC_BENCH_REALTIME`: the fixed steps keep to the wall clock (the AI server lives in real time);
     the window is not drawn, the captured frame is the frame; `rec stop ... speed=99%` in `bench.log` says
     how well the game kept up (below ~95% lines said on the move start too early);
