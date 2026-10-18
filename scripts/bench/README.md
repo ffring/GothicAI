@@ -21,6 +21,17 @@ or other Mac-only game paths require local execution (`auto` falls back, `ryzen`
 For performance comparisons (before/after or FPS), run both takes on the same machine:
 pin `BENCH_HOST=ryzen` or `BENCH_HOST=local`. `host.txt` and the report header identify the host.
 
+Corpse water: `water-bodies` records a real harbour WindFist throw, a dead wolf and a
+sinking skeleton, then saves `session-water-bodies.sav` and tries normal corpse loot
+from dry ground and while swimming. `water-bodies-shallow` observes a corpse on the
+submerged shore. Start `water-bodies-reload` in a new process with `SAVE` pointing to
+that complete archive; its initial snapshot precedes the first native step.
+`water-bodies-perf-on` and `water-bodies-perf-off` measure the same ten human corpses
+over a 30-second normal-cadence window without recording video.
+`python3 scripts/water_bodies_compare.py deep DIR`, `shallow DIR`,
+`reload SAVED_DIR LOADED_DIR` and `perf ON_DIR OFF_DIR` check the native parts,
+immersion, sleep, 30-second stability and the 2 ms physics p95 budget.
+
 A run takes the game start (~10 s from a save) plus the scenario time. On Mac the game window is minimized,
 does not take the focus and plays no sound, so it can run while someone works on the same machine.
 The time step is fixed (30 fps), so a run does not depend on the frame rate and repeats (up to the

@@ -21,17 +21,21 @@ def vector(value, size, name):
 
 
 def catalog(snapshot):
-    actors, parts, water = {}, {}, {}
+    actors, parts, water, current_ids = {}, {}, {}, {}
     for actor in snapshot['actors']:
-        actor_id = actor['actor_id']
-        require(isinstance(actor_id, int) and 0 <= actor_id < 2**32-1 and actor_id not in actors,
+        actor_id, role = actor['actor_id'], actor['role']
+        require(isinstance(actor_id, int) and 0 <= actor_id < 2**32-1 and actor_id not in current_ids,
                 f'invalid/duplicate actor identity {actor_id}')
+        require(isinstance(role, str) and role and role not in actors,
+                f'invalid/duplicate fixture actor role {role}')
         require(actor['dead'] and actor['symbol'] and actor['part_count'] > 0,
                 f'{actor_id}: fixture must contain an actual dead NPC with native parts')
         require(actor['part_count'] == len(actor['parts']), f'{actor_id}: native corpse part count differs')
-        actors[actor_id] = actor
+        # World sorting changes npcId even while the bench retains the same
+        # WaterActor pointer. Only its explicit unique fixture role persists.
+        actors[role], current_ids[actor_id] = actor, role
         for part in actor['parts']:
-            key = (actor_id, part['bone'])
+            key = (role, part['bone'])
             require(isinstance(key[1], int) and key[1] >= 0 and key not in parts,
                     f'invalid/duplicate native actor/bone {key}')
             vector(part['transform'], 16, f'{key} transform')
@@ -41,7 +45,9 @@ def catalog(snapshot):
             parts[key] = part
     require(actors, 'fixture has no actual corpse actors')
     for body in snapshot['bodies']:
-        key = (body['actor_id'], body['bone'])
+        require(body['actor_id'] in current_ids and current_ids[body['actor_id']] == body['role'],
+                f'water part {body["actor_id"]}/{body["bone"]}: current actor id and fixture role differ')
+        key = (body['role'], body['bone'])
         require(key in parts and key not in water and body['category'] == 7,
                 f'water part {key} is missing, duplicated or outside the corpse collision layer')
         vector(body['transform'], 16, f'{key} water transform')
@@ -56,6 +62,17 @@ def catalog(snapshot):
     return actors, parts, water
 
 
+def same_setup(setup, actors):
+    expected = {actor['role']: actor for actor in setup['actors']}
+    require(len(expected) == len(setup['actors']) and expected.keys() == actors.keys(),
+            'fixture setup and checkpoint have different or duplicate actor roles')
+    for role, actor in actors.items():
+        original = expected[role]
+        require(original['symbol'] == actor['symbol'] and
+                (original['part_count'] == 0 or original['part_count'] == actor['part_count']),
+                f'{role}: fixture changed NPC species or an existing native part count')
+
+
 def asleep(actors, parts, water):
     require(all(actor['sleeping'] for actor in actors.values()) and
             all(part['sleeping'] for part in parts.values()) and
@@ -66,9 +83,18 @@ def asleep(actors, parts, water):
 def immersion(snapshot, floating):
     actors, parts, water = catalog(snapshot)
     asleep(actors, parts, water)
+    sinking_surface = None
+    if not floating or 'skeleton' in actors:
+        known = [body['water_y_cm'] for body in water.values() if body['water_y_cm'] is not None]
+        require(known and all(math.isfinite(surface) for surface in known),
+                'sinking verification needs a measured water plane from native parts at this stand')
+        require(max(known)-min(known) <= .1,
+                f'sinking verification has inconsistent water planes: {min(known):.6f}..{max(known):.6f} cm')
+        sinking_surface = min(known)
     result = []
-    for actor_id, actor in actors.items():
-        bodies = [body for key, body in water.items() if key[0] == actor_id]
+    for role, actor in actors.items():
+        actor_id = actor['actor_id']
+        bodies = [body for key, body in water.items() if key[0] == role]
         torso = [body for body in bodies if any(name in body['bone_name'].upper()
                                                for name in ('PELVIS', 'SPINE'))]
         require(torso, f'{actor_id}: no native torso capsules were measured')
@@ -84,8 +110,14 @@ def immersion(snapshot, floating):
             require(.78 <= fraction <= 1 and visible,
                     f'{actor["role"]}: torso fraction={fraction:.6f}, visible={visible}; corpse did not float mostly submerged')
         else:
-            require(all(body['submerged_fraction'] >= .99 for body in bodies),
-                    f'{actor["role"]}: corpse did not sink fully under water')
+            # A part touching the sloped seabed can lose its own upward water
+            # query to the solid/cave filter. Its full native bounds below the
+            # independently measured sea plane still prove it has sunk.
+            require(all(math.isfinite(body['world_bottom_cm']) and math.isfinite(body['world_top_cm']) and
+                        body['world_bottom_cm'] <= body['world_top_cm'] <= sinking_surface and
+                        (body['water_y_cm'] is None or body['submerged_fraction'] >= .99)
+                        for body in bodies),
+                    f'{actor["role"]}: native bounds or measured volume are not fully below the water plane')
         for body in bodies:
             name = body['bone_name'].upper()
             target = (1.5 if actor['role'] == 'skeleton' else .9 if any(
@@ -100,6 +132,10 @@ def immersion(snapshot, floating):
                        'parts': actor['part_count'], 'behavior': 'floats' if floats else 'sinks',
                        'torso_submerged_fraction': fraction, 'visible': visible,
                        'first_sleep_ms': sleep_ms})
+        if not floats:
+            result[-1].update(sinking_surface_cm=sinking_surface,
+                              highest_native_top_cm=max(body['world_top_cm'] for body in bodies),
+                              parts_without_own_water_query=sum(body['water_y_cm'] is None for body in bodies))
     return result
 
 
@@ -107,7 +143,7 @@ def displacement(before, after):
     old_actors, old_parts, _ = catalog(before)
     new_actors, new_parts, new_water = catalog(after)
     require(old_actors.keys() == new_actors.keys() and old_parts.keys() == new_parts.keys(),
-            'continuation changed the actor/bone identity set')
+            'continuation changed the fixture role/bone identity set')
     require(all((actor['symbol'], actor['role'], actor['part_count']) ==
                 (new_actors[key]['symbol'], new_actors[key]['role'], new_actors[key]['part_count'])
                 for key, actor in old_actors.items()), 'continuation changed corpse species, role or part count')
@@ -127,7 +163,9 @@ def displacement(before, after):
             'whole corpse sleep changed during restore/continuation')
     return {'actors': len(new_actors), 'parts': len(new_parts), 'maximum_bone_displacement_cm': maximum,
             'maximum_native_com_displacement_cm': native_maximum,
-            'maximum_quaternion_component_change': rotation_maximum}
+            'maximum_quaternion_component_change': rotation_maximum,
+            'actor_ids_before': {role: actor['actor_id'] for role, actor in old_actors.items()},
+            'actor_ids_after': {role: actor['actor_id'] for role, actor in new_actors.items()}}
 
 
 def stable(rows, beginning='motion-reference', ending='stable'):
@@ -145,11 +183,10 @@ def stable(rows, beginning='motion-reference', ending='stable'):
 def deep(directory):
     rows = events(directory)
     setup = one(rows, 'water_bodies_setup', case='deep')
-    expected = {actor['actor_id'] for actor in setup['actors']}
     settled = checkpoint(rows, 'settled')
     actors, _, _ = catalog(settled)
-    require(settled['buoyancy_enabled'] and len(actors) == len(expected) == 3 and
-            actors.keys() == expected and {actor['role'] for actor in actors.values()} == {'human', 'wolf', 'skeleton'},
+    same_setup(setup, actors)
+    require(settled['buoyancy_enabled'] and actors.keys() == {'human', 'wolf', 'skeleton'},
             'deep fixture needs the original human, wolf and skeleton with buoyancy enabled')
     return {'pass': True, 'actors': immersion(settled, True), 'stable': stable(rows)}
 
@@ -159,9 +196,9 @@ def shallow(directory):
     setup = one(rows, 'water_bodies_setup', case='shallow')
     settled = checkpoint(rows, 'settled')
     actors, parts, water = catalog(settled)
-    require(settled['buoyancy_enabled'] and len(actors) == 1 and
-            actors.keys() == {actor['actor_id'] for actor in setup['actors']} and
-            next(iter(actors.values()))['role'] == 'human', 'shallow fixture needs its original human corpse')
+    same_setup(setup, actors)
+    require(settled['buoyancy_enabled'] and actors.keys() == {'human'},
+            'shallow fixture needs its original human corpse')
     asleep(actors, parts, water)
     require(any(0 < body['submerged_fraction'] < .99 for body in water.values()),
             'shallow corpse has no genuinely partly immersed native part')
@@ -194,10 +231,12 @@ def measured(directory, enabled):
     settled, measured = checkpoint(rows, 'settled'), checkpoint(rows, 'measured')
     actors, parts, water = catalog(settled)
     final_actors, final_parts, _ = catalog(measured)
+    same_setup(setup, actors)
+    same_setup(settled, final_actors)
     require(settled['buoyancy_enabled'] is enabled and measured['buoyancy_enabled'] is enabled,
             'performance buoyancy setting differs from its requested mode')
     require(len(actors) == len(setup['actors']) == len(final_actors) == 10 and
-            actors.keys() == {actor['actor_id'] for actor in setup['actors']} == final_actors.keys() and
+            actors.keys() == final_actors.keys() and
             parts.keys() == final_parts.keys() and all(actor['role'].startswith('human_') for actor in actors.values()),
             'performance requires the same ten actual human corpses and every native part throughout the window')
     immersion(settled, enabled)
