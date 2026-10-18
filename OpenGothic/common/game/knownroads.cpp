@@ -298,7 +298,7 @@ void KnownRoads::updateGuidance(const Knowledge& knowledge, const Vec3& position
   validate(knowledge);
   guidance.rebuilt = false;
   bool rebuild = !guidance.initialized || (goal-guidance.goal).quadLength()>.0001f;
-  if(!rebuild) {
+  if(!rebuild && !guidance.polyline.empty()) {
     const auto projection = project(guidance.polyline,position);
     rebuild = !guidance.beyondKnown && projection.distanceCm>guidanceReplanCm;
     if(!rebuild)
@@ -309,22 +309,12 @@ void KnownRoads::updateGuidance(const Knowledge& knowledge, const Vec3& position
     guidance.initialized = guidance.rebuilt = true;
     guidance.goal = goal;
     guidance.route = path(knowledge,position,goal);
-    guidance.polyline.push_back(position);
-    if(guidance.route.nodes.size()>1) {
-      std::vector<Vec3> line;
-      for(const auto node:guidance.route.nodes)
-        line.push_back(graphNodes[node].position);
-      const auto projection = project(line,position);
-      // Start from the forward projection, not the closest node behind us.
-      // Retain a pose-to-road connector when starting away from the road.
-      if((projection.point-position).quadLength()>.0001f)
-        guidance.polyline.push_back(projection.point);
-      for(size_t i=projection.segment+1; i<line.size(); ++i)
-        if((line[i]-guidance.polyline.back()).quadLength()>.0001f)
-          guidance.polyline.push_back(line[i]);
-      }
+    for(const auto node:guidance.route.nodes)
+      guidance.polyline.push_back(graphNodes[node].position);
     for(size_t i=0; i+1<guidance.polyline.size(); ++i)
       guidance.knownLengthCm += double((guidance.polyline[i+1]-guidance.polyline[i]).length());
+    if(!guidance.polyline.empty())
+      guidance.progressCm = project(guidance.polyline,position).alongCm;
     }
   guidance.remainingKnownCm = std::max(0.,guidance.knownLengthCm-guidance.progressCm);
   // The terminal handoff is permanent for this episode: the subsequent

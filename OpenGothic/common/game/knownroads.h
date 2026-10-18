@@ -42,9 +42,9 @@ class KnownRoads final {
       // another familiar component. Never consults unknown nodes or edges.
       bool goalInKnown = false;
       };
-    // One episode's coarse familiar route. The polyline starts at the pose
-    // which built it, joins the nearest projection on the known route, and
-    // retains only its forward suffix. route keeps the original graph IDs.
+    // One episode's coarse familiar route. The polyline contains only graph
+    // nodes: lookahead is measured on the road from the actor's projection,
+    // never along an off-road connector. route keeps the graph IDs.
     struct Guidance final {
       Path route;
       std::vector<Tempest::Vec3> polyline;

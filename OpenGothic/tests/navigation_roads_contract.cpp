@@ -171,16 +171,17 @@ void forwardGuidance() {
   const Vec3 goal{5000,0,0};
   roads.updateGuidance(knowledge,{500,0,0},goal,guidance);
   require(guidance.rebuilt && !guidance.beyondKnown,"initial guidance builds one familiar route");
+  close(guidance.progressCm,500,"initial progress is the projection on the familiar path");
   close(guidance.carrot.x,1100,"initial carrot is ahead of projection, not behind at closest node");
   close(guidance.remainingKnownCm,3500,"known remainder excludes already passed prefix");
   require(guidance.route.nodes==std::vector<size_t>({0,1,2}),"guidance preserves original familiar node IDs");
 
   roads.updateGuidance(knowledge,{1200,0,0},goal,guidance);
   require(!guidance.rebuilt,"following a route does not rebuild it");
-  close(guidance.progressCm,700,"projection advances along fixed route");
+  close(guidance.progressCm,1200,"projection advances along fixed route");
   close(guidance.carrot.x,1800,"carrot remains six metres ahead");
   roads.updateGuidance(knowledge,{900,0,0},goal,guidance);
-  close(guidance.progressCm,700,"backward movement cannot decrease projection progress");
+  close(guidance.progressCm,1200,"backward movement cannot decrease projection progress");
   close(guidance.carrot.x,1800,"backward movement cannot move carrot backwards");
 
   roads.updateGuidance(knowledge,{3500,0,0},goal,guidance);
@@ -191,7 +192,7 @@ void forwardGuidance() {
   roads.updateGuidance(knowledge,{5000,0,0},goal,guidance);
   require(guidance.beyondKnown && !guidance.rebuilt,"goal approach never rebuilds back to familiar endpoint");
   close(guidance.carrot.x,goal.x,"terminal carrot remains the goal");
-  std::puts("guidance: initial projection clips passed prefix; progress and carrot remain forward; terminal goal handoff persists");
+  std::puts("guidance: initial projection passes closest node; progress and carrot remain forward; terminal goal handoff persists");
   }
 
 void guidanceDeviationAndHeight() {
@@ -206,10 +207,22 @@ void guidanceDeviationAndHeight() {
   const Vec3 departed{1200,0,801};
   roads.updateGuidance(knowledge,departed,goal,guidance);
   require(guidance.rebuilt,"greater than eight metre deviation rebuilds route");
-  close((guidance.polyline.front()-departed).length(),0,"rebuilt route begins at current pose");
-  close(guidance.progressCm,0,"replanned route begins a new forward projection");
-  roads.updateGuidance(knowledge,departed,goal,guidance);
-  require(!guidance.rebuilt,"initial connector prevents repeated replans away from road");
+  const auto rebuilt = roads.path(knowledge,departed,goal);
+  require(guidance.route.nodes==rebuilt.nodes && guidance.route.edges==rebuilt.edges,
+          "deviation rebuilds familiar route from current pose");
+  require(guidance.route.nodes==std::vector<size_t>({1,2}),"replan starts at currently closest familiar node");
+  close(guidance.polyline.front().x,2000,"rebuilt polyline contains road nodes without pose connector");
+  close(guidance.progressCm,0,"rebuilt projection starts at the new route's first node");
+
+  Roads::Guidance offroad;
+  roads.updateGuidance(knowledge,{500,0,500},goal,offroad);
+  close(offroad.carrot.x,1100,"five metres off road preserves full six metre lookahead from projection");
+  close(offroad.carrot.z,0,"five metres off road carrot remains on familiar path");
+  roads.updateGuidance(knowledge,{500,0,900},goal,offroad);
+  require(offroad.rebuilt,"nine metres off road rebuilds from current pose");
+  close(offroad.progressCm,500,"off-road distance does not count as route progress");
+  close(offroad.carrot.x,1100,"nine metres off road preserves full six metre lookahead from projection");
+  close(offroad.carrot.z,0,"nine metres off road carrot remains on familiar path");
 
   // Coincident XZ road decks must not project onto the upper road's future.
   const Roads stacked({{"a",{0,0,0}},{"b",{2000,0,0}},
@@ -227,7 +240,9 @@ void guidanceDeviationAndHeight() {
   empty.updateGuidance(empty.build({},{0,0,0}),{0,0,0},{300,0,400},unknown);
   require(unknown.beyondKnown && unknown.route.nodes.empty(),"empty knowledge hands off immediately");
   close((unknown.carrot-Vec3{300,0,400}).length(),0,"empty knowledge carrot is goal");
-  std::puts("guidance deviation: >8 m rebuild from current pose with connector; 3D stacked roads and empty graph handled");
+  empty.updateGuidance(empty.build({},{0,0,0}),{100,0,0},{300,0,400},unknown);
+  require(!unknown.rebuilt && unknown.beyondKnown,"empty familiar path remains a stable goal handoff");
+  std::puts("guidance deviation: >8 m rebuild from current pose; off-road carrot stays six metres ahead on road; stacked roads and empty graph handled");
   }
 }
 
