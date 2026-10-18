@@ -1,6 +1,6 @@
 # Лаунчер
 
-Статус: план, 2026-10-11.
+Статус: этапы L1–L3 сделаны 2026-10-11, лаунчером пользуются: приложение `Gothic AI.app` запускает ядро [`launcher/core`](../launcher/core/) (`gothic-launcher up`, `control`), а оно — сервисы и игру. После 11.10 ядро научилось передавать серверу адреса быстрых моделей и боевого тела (`llm.decider_url`, `llm.quick_url`, `llm.body_url` → `--decider-url`, `--quick-url`, `--body-url`), игре — HD-текстуры и кэш разрушений (`OPENGOTHIC_TEXTURES`, `OPENGOTHIC_FRACTURE`), а проверка Inworld смотрит и остаток кредитов. Пункты «Не проверено» в этапах ниже с 11.10 не перепроверяли. Тесты ядра — `cd launcher/core && uv run pytest -q`.
 
 ## Цель
 
