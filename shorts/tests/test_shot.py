@@ -55,6 +55,25 @@ def test_game_music_defaults_off(tmp_path):
     assert load(path).music == Shot("probe", "Проба", "rec main").music == 0.0
 
 
+def test_music_bed_defaults_and_shot_override(tmp_path):
+    path = tmp_path / "probe.toml"
+    path.write_text('script = "rec main"')
+    assert load(path).bed == Shot("probe", "Проба", "rec main").bed == "khorinis-countryside"
+    assert load(path).bed_start is None
+    path.write_text('bed = "xardas-tower"\nbed_start = 12.5\nscript = "rec main"')
+    shot = load(path)
+    assert (shot.bed, shot.bed_start) == ("xardas-tower", 12.5)
+    assert "bed" not in shot.extra and "bed_start" not in shot.extra
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf", '"later"'])
+def test_bed_start_must_be_nonnegative_seconds(tmp_path, value):
+    path = tmp_path / "probe.toml"
+    path.write_text(f'bed_start = {value}\nscript = "rec main"')
+    with pytest.raises(ShotError, match="bed_start"):
+        load(path)
+
+
 def test_film_records_effects_and_separate_voices_without_game_music(tmp_path, monkeypatch):
     save = tmp_path / "source.sav"
     save.write_bytes(b"save")
@@ -89,4 +108,6 @@ def test_brand_defaults_on_and_reads_toml(tmp_path, setting, expected):
 
 def test_the_shots_in_the_repository_load():
     for path in (Path(__file__).parents[1] / "shots").glob("*.toml"):
-        assert load(path).hero_lines
+        shot = load(path)
+        assert shot.hero_lines
+        assert shot.bed == "xardas-tower"
