@@ -44,6 +44,7 @@ log = logging.getLogger(__name__)
 CAVALORN = "BAU_4300_ADDON_CAVALORN"
 BANDITS = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L")
 ARENA = "NW_FARM1_FIELD_06"
+PARKING = "NW_FARM1_PATH_CITY_16"
 IDLE = "ZS_STAND_ARMSCROSSED"
 
 
@@ -65,6 +66,7 @@ class CombatTrace:
     weapons: dict[str, int] = field(default_factory=dict)
     interruptible: dict[str, bool] = field(default_factory=dict)
     latest: dict[str, dict[str, Any]] = field(default_factory=dict)
+    game_ms: dict[str, int] = field(default_factory=dict)
     attacking: dict[str, bool] = field(default_factory=dict)
     events: list[tuple[float, GameMessage]] = field(default_factory=list)
     commands: list[tuple[float, str, str, dict[str, Any]]] = field(default_factory=list)
@@ -93,6 +95,7 @@ class CombatTrace:
             self.weapons[who] = own["weapon_state"]
             self.interruptible[who] = own["interruptible"]
             self.latest[who] = own
+            self.game_ms[who] = now
             if own["weapon_state"] >= 2:
                 self.armed.setdefault(who, now)
             attacking = bool(own["attack_anim"])
@@ -123,6 +126,10 @@ class CombatTrace:
     def distance(self, one: str, other: str) -> float | None:
         a, b = self.positions.get(one), self.positions.get(other)
         return math.dist(a, b) if a is not None and b is not None else None
+
+    def horizontal_distance(self, one: str, other: str) -> float | None:
+        a, b = self.positions.get(one), self.positions.get(other)
+        return math.dist(a[::2], b[::2]) if a is not None and b is not None else None
 
     def strike_after(self, npc: str, target: str, after: int) -> int | None:
         """A real post-hit strike at the attacker, with the target captured when the strike began."""
@@ -297,6 +304,40 @@ async def fight_reactions(
         if drawn.status != "done" or not actual:
             raise GameError("fight_reactions setup: companion melee preparation did not finish")
 
+    async def grounded(npc: str, stage: str, hp: int, low: int, high: int) -> None:
+        stable_at: int | None = None
+        stable_y: float | None = None
+        ready = False
+        until = time.monotonic() + 5
+        while time.monotonic() < until:
+            own = trace.latest[npc]
+            now = trace.game_ms[npc]
+            y = own["position_world_cm"][1]
+            distance = trace.distance(npc, CAVALORN)
+            velocity = own.get("linear_velocity_cm_s")
+            on_ground = (
+                own["hp"] == hp and hp > 0
+                and not own["in_air"] and not own["down"]
+                and velocity is not None and abs(velocity[1]) <= 20
+                and distance is not None and low <= distance <= high
+            )
+            if not on_ground:
+                stable_at = None
+            elif stable_at is None or stable_y is None or abs(y - stable_y) > 5:
+                stable_at = now
+                stable_y = y
+            elif now - stable_at >= 750:
+                ready = True
+                break
+            await asyncio.sleep(0.05)
+        snapshot = await link.snapshot(npc, fresh=True)
+        log.info(
+            "fight_reactions stage=%s npc=%s ready=%s body_game_ms=%s body=%s snapshot=%s",
+            stage, npc, ready, trace.game_ms[npc], trace.latest[npc], snapshot.model_dump(),
+        )
+        if not ready or snapshot.npc.hp != hp:
+            raise GameError(f"fight_reactions setup: {npc} not safely grounded for {stage}")
+
     link.send = recorded  # type: ignore[method-assign]
     await link.send(ThreatControlCmd(hold=True))
     try:
@@ -358,10 +399,39 @@ async def fight_reactions(
             monster = f"DIR_NPC_FIGHT_{case.upper()}"
             kind = "WOLF" if case == "wolf" else "BLOODFLY"
             # Neither the hero nor Cavalorn overlaps the creature during preparation.
-            await link.debug("player_goto", pos=point(100 if case == "wolf" else 300))
+            hero_point: dict[str, Any] | None = None
+            if case == "wolf":
+                points = [
+                    p for p in await link.waypoints()
+                    if p["name"].startswith("NW_FARM1_") and not p["fp"]
+                    and abs(p["y"] - anchor[1]) < 500
+                ]
+                def position(p: dict[str, Any]) -> tuple[float, float, float]:
+                    return p["x"], p["y"], p["z"]
+
+                pairs = [
+                    (wolf, hero)
+                    for wolf in points if 1700 <= math.dist(anchor, position(wolf)) <= 2400
+                    for hero in points if 300 <= math.dist(anchor, position(hero)) <= 1200
+                    and 1250 <= math.dist(position(wolf), position(hero)) <= 1450
+                ]
+                if not pairs:
+                    raise GameError("fight_reactions setup: no authored wolf/hero points at hunting distance")
+                wolf_point, hero_point = min(
+                    pairs,
+                    key=lambda pair: abs(math.dist(anchor, position(pair[0])) - 1800)
+                    + abs(math.dist(anchor, position(pair[1])) - 500),
+                )
+                log.info("fight_reactions authored wolf=%s hero=%s", wolf_point, hero_point)
+                await link.debug("player_goto", waypoint=PARKING)
+            else:
+                await link.debug("player_goto", pos=point(300))
             await link.debug("npc_goto", npc=CAVALORN, waypoint=ARENA, face="PC_HERO")
-            await link.own_npc(monster, like=kind, distance=5000)
-            await link.debug("npc_goto", npc=monster, to=CAVALORN, distance=1800 if case == "wolf" else 3000)
+            if case == "wolf":
+                await link.own_npc(monster, like=kind, waypoint=wolf_point["name"])
+            else:
+                await link.own_npc(monster, like=kind, distance=5000)
+                await link.debug("npc_goto", npc=monster, to=CAVALORN, distance=3000)
             if case == "sight":
                 creature_pos = (await link.snapshot(monster, fresh=True)).npc.pos
                 lane = None
@@ -388,7 +458,8 @@ async def fight_reactions(
                 if lane is None:
                     raise GameError("fight_reactions setup: no independently verified clear 30 m sight line")
                 anchor = lane
-            await link.debug("player_goto", pos=point(100 if case == "wolf" else -900))
+            if case == "sight":
+                await link.debug("player_goto", pos=point(-900))
             if not await talk.hold(CAVALORN, "follow"):
                 raise GameError("fight_reactions setup: cannot hold companion")
             await link.act(CAVALORN, "stop")
@@ -404,6 +475,7 @@ async def fight_reactions(
             if not await _until(lambda: all(n in trace.positions for n in (CAVALORN, monster, "PLAYER")), 5):
                 raise GameError("fight_reactions setup: missing body observations")
             if case == "wolf":
+                await grounded(monster, "wolf_spawn", trace.hp[monster], 1600, 2600)
                 await ready_companion_sword()
 
             if case == "sight":
@@ -484,7 +556,30 @@ async def fight_reactions(
                 await finish_preparation()
                 # Only now bring the passive hero into native hunting range: observations,
                 # initial HP and the companion's ready sword precede any possible attack.
-                await link.debug("player_goto", pos=point(500))
+                assert hero_point is not None
+                await link.debug("player_goto", waypoint=hero_point["name"])
+                hero_snapshot = await link.snapshot(monster, fresh=True)
+                response = await link._request(
+                    DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=CAVALORN, to=monster), 5,
+                )
+                ray = response.value or {}
+                hero_cm = (
+                    math.dist(hero_snapshot.npc.pos, hero_snapshot.player.pos)
+                    if hero_snapshot.player is not None else 0
+                )
+                origin = hero_snapshot.npc.pos
+                hero_xz_cm = (
+                    math.dist(origin[::2], hero_snapshot.player.pos[::2])
+                    if hero_snapshot.player is not None else 0
+                )
+                log.info(
+                    "fight_reactions wolf ready hero_cm=%s hero_xz_cm=%s native_ray=%s body=%s",
+                    hero_cm, hero_xz_cm, ray, trace.latest[monster],
+                )
+                if not 1200 <= hero_cm <= 1500 or not (ray.get("center_clear") or ray.get("head_clear")):
+                    raise GameError(
+                        "fight_reactions setup: wolf hunt requires clear sight and hero 12–15 m away"
+                    )
                 # Install the game's monster attack, with OTHER and target both the hero.
                 # Owned instances need not be advertised by the optional wolf voice desk.
                 await setup_program(
@@ -509,7 +604,11 @@ async def fight_reactions(
                     hunting = (
                         bool(native_attack)
                         and trace.entities.get("PLAYER") in trace.targets_seen.get(monster, set())
-                        and math.dist(origin, trace.positions.get(monster, origin)) >= 100
+                        and math.dist(origin[::2], trace.positions.get(monster, origin)[::2]) >= 100
+                        and (current_xz := trace.horizontal_distance(monster, "PLAYER")) is not None
+                        and current_xz < hero_xz_cm - 75
+                        and (velocity := trace.latest[monster]["linear_velocity_cm_s"]) is not None
+                        and abs(velocity[1]) < 300
                     )
                     if hunting:
                         break
@@ -701,24 +800,54 @@ async def fight_reactions(
                     if not await _until(lambda: CAVALORN not in talk.orders.fights, 3):
                         raise GameError("fight_reactions setup: prior companion duel did not stop")
 
+                async def place_idle(npc: str, waypoint: str) -> None:
+                    ready = await Bodies(link).act(
+                        npc, "start_activity", state=IDLE, waypoint=waypoint,
+                        place=True, arrive=True, minutes=60, radius=100, timeout=15,
+                    )
+                    if ready.status != "arrived":
+                        raise GameError(
+                            f"fight_reactions setup: {npc} placement {ready.status}: {ready.detail}"
+                        )
+
                 # Both defenders have reacted. Isolate their post-hit measurements so a native
                 # target switch or two opponents pinning Cavalorn cannot prevent the first hit.
                 await stop_companion()
-                await link.debug("npc_goto", npc=BANDITS[1], to=CAVALORN, distance=5000)
+                parked_hp = (await link.snapshot(BANDITS[1], fresh=True)).npc.hp
+                preparing.add(BANDITS[1])
+                planner.allow = setup_allow
+                await place_idle(BANDITS[1], PARKING)
+                await grounded(BANDITS[1], "before_hold", parked_hp, 4000, 50000)
                 await link.attach(BANDITS[1])
                 parked.add(BANDITS[1])
-                companion_pos = (await link.snapshot(CAVALORN, fresh=True)).npc.pos
-                parked_pos = (await link.snapshot(BANDITS[1], fresh=True)).npc.pos
-                separation = math.dist(companion_pos, parked_pos)
-                log.info("fight_reactions parked npc=%s distance_cm=%.1f", BANDITS[1], separation)
-                if separation < 4000:
-                    raise GameError(f"fight_reactions setup: second defender not isolated ({separation} cm)")
+                await grounded(BANDITS[1], "parked", parked_hp, 4000, 50000)
+                await finish_preparation()
                 for bandit in BANDITS:
                     if bandit in parked:
                         await stop_companion()
+                        await grounded(bandit, "before_return", parked_hp, 4000, 50000)
+                        preparing.add(bandit)
+                        planner.allow = setup_allow
+                        companion_pos = (await link.snapshot(CAVALORN, fresh=True)).npc.pos
+                        points = [
+                            p for p in await link.waypoints()
+                            if p["name"].startswith("NW_FARM1_FIELD_")
+                            and not p["fp"]
+                            and abs(p["y"] - companion_pos[1]) < 500
+                            and 1300 <= math.dist(companion_pos, (p["x"], p["y"], p["z"])) <= 2200
+                        ]
+                        if not points:
+                            raise GameError("fight_reactions setup: no authored return point 13–22 m away")
+                        return_point = min(
+                            points,
+                            key=lambda p: abs(math.dist(companion_pos, (p["x"], p["y"], p["z"])) - 1800),
+                        )
+                        log.info("fight_reactions authored return point=%s", return_point)
                         await link.detach(bandit)
                         parked.remove(bandit)
-                        await link.debug("npc_goto", npc=bandit, to=CAVALORN, distance=1800, face=CAVALORN)
+                        await place_idle(bandit, return_point["name"])
+                        await grounded(bandit, "returned", parked_hp, 1200, 2500)
+                        await finish_preparation()
                     talk.orders.fight_intent(CAVALORN, bandit)
                     await _until(lambda b=bandit: bool(trace.damage.get(b)), 35)
                     hits = trace.damage.get(bandit, [])
