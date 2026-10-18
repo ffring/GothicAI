@@ -525,7 +525,7 @@ class Rumors:
             "how": how,
             "day": at // DAY,
             **({"said": True} if r.said else {}),
-            **({"crime": r.crime} if r.crime else {}),
+            **({"crime": r.crime, "at": at} if r.crime else {}),
             **(extra or {}),
         }
         self.chronicle.record(fact)

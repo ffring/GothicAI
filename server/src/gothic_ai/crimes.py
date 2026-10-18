@@ -1,7 +1,8 @@
 """The hero's deeds and their actual witnesses, while vanilla still owns every reaction.
 
 The bridge supplies ownership and pre-reaction combat state. Truth and each npc's knowledge are read
-from the Chronicle's save branch; this module neither intercepts perceptions nor changes PETZ.
+from the Chronicle's save branch; this module never intercepts perceptions. Community law lives in
+crime_law.py and supplies the scripts' PETZ counters through the existing story commands.
 Rules were checked against GOTHIC.DAT: C_IsTakenItemMyPossession, B_AssessTheft,
 B_AssessDamage/B_Attack, B_AssessMurder, and the lifted C_NpcBelongsTo* helpers.
 """
@@ -608,6 +609,13 @@ class Crimes:
             **({"chest": deed.chest} if deed.chest else {}),
         }
         self.chronicle.record(fact)
+        metadata = {self._npc(p.npc): p for p in deed.witnesses_metadata}
         for npc in witnesses:
-            self.chronicle.record({"fact": "crime_seen", "npc": npc, "crime": deed.id})
+            person = metadata.get(npc)
+            self.chronicle.record(
+                {
+                    "fact": "crime_seen", "npc": npc, "crime": deed.id,
+                    **({"guild": person.guild, "npctype": person.npctype} if person else {}),
+                }
+            )
         return fact
