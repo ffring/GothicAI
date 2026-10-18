@@ -704,9 +704,8 @@ def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -
         args.body_url,
         max_fights=args.neural_body_max,
         companion=talk.orders.companion,
-        unavailable=lambda npc: (
-            npc.upper() in talk.attached or (talk.partner is not None and talk.partner.npc == npc.upper())
-        ),
+        unavailable=lambda npc: npc.upper() in talk.attached,
+        talking=lambda npc: talk.partner is not None and talk.partner.npc == npc.upper(),
     )
 
 

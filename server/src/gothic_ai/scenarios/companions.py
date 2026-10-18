@@ -119,11 +119,13 @@ async def neural_talk_scenario(
 
     # This bandit has the same native sword as neural. Give its daily routine a
     # known local waypoint, so returning to it can be observed without issuing stop/calm.
+    log.info("neural-talk preparation: place hero, create bandit")
     await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
     await link.story_npc(NpcSpec(
         npc=npc, like="BDT_1002_BANDIT_L", at=arena, name="Бандит", guild="GIL_BDT",
         routine=[RoutineEntry(start="00:00", end="23:59", state="ZS_STAND_ARMSCROSSED", waypoint=arena)],
     ))
+    log.info("neural-talk preparation: bandit created, clear wildlife")
     await link.debug("skip_important", near=npc)
     for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
         if not other.dead and other.guild >= BEASTS:
@@ -145,6 +147,8 @@ async def neural_talk_scenario(
     if not sword:
         raise GameError("neural-talk preparation: no one-handed sword")
     await link.debug("player_hp", hp=1200)
+    await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
+    await _m5b_player_weapon(link, "none")
     await link.debug("teleport", near=npc, distance=250)
     if not await _until(lambda: npc in pilot.people and pilot.people[npc].distance <= 400, 10):
         raise GameError("neural-talk preparation: bandit missing from roster")
@@ -154,10 +158,10 @@ async def neural_talk_scenario(
     })
     original_llm = dialogue.llm
     dialogue.llm = _ByNpc(
-        {"Бандит": _OnWords([
-            ("проверим твою шпагу", FakeStep("Сам напросился!", [attack])),
-            ("я вернулся", FakeStep("Опять ты. Что тебе?")),
-        ], FakeStep("Ну?"))}, FakeBackend("Хм.", delay=0),
+        {"Бандит": FakeBackend(script=[
+            FakeStep("Ну что, герой, решил проверить мою шпагу? Сам напросился!", [attack]),
+            FakeStep("Опять ты. Что тебе?"),
+        ], delay=0.15)}, FakeBackend("Хм.", delay=0),
     )
     link.listeners.append(heard)
     try:
@@ -176,6 +180,11 @@ async def neural_talk_scenario(
                          f"decisions={first._decisions if first else 0}, "
                          f"fallback={first._fallbacks if first else 0}, "
                          f"resets={len(resets.get(first_client, []))}"):
+                snap = await link.snapshot(npc, fresh=True)
+                log.info("neural-talk handoff: roster=%s routine=%s hero_hp=%s summaries=%s",
+                         pilot.people.get(npc), (await link.routine(npc)).current,
+                         snap.player.hp if snap.player else None,
+                         [(s.reason, s.decisions, dict(s.acquire_refusals)) for s in pilot.summaries])
                 return results
 
             fled_at = time.monotonic()
@@ -194,7 +203,7 @@ async def neural_talk_scenario(
                          f"state={state}, wait_s={time.monotonic() - fled_at:.3f}"):
                 return results
 
-            await link.debug("teleport", near=npc, distance=250)
+            await link.debug("teleport", near=npc, distance=600)
             roster_ready = await _until(lambda: npc in pilot.people
                                        and pilot.people[npc].activity == "routine"
                                        and pilot.people[npc].state == "ZS_STAND_ARMSCROSSED", 10)

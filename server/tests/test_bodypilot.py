@@ -801,7 +801,8 @@ class Rig:
 
 @asynccontextmanager
 async def running(
-    *, companion=False, unavailable=False, max_fights=4, multi=False, protocol=PROTOCOL_VERSION,
+    *, companion=False, unavailable=False, talking=False,
+    max_fights=4, multi=False, protocol=PROTOCOL_VERSION,
 ):
     bridge, policy, clock = MultiBridge() if multi else Bridge(), Policy(), Clock()
     if protocol is not None:
@@ -812,6 +813,7 @@ async def running(
         bridge.link, f"tcp://{host}:{port}",
         companion=companion if callable(companion) else lambda _: companion,
         unavailable=lambda _: unavailable, clock=clock, max_fights=max_fights,
+        talking=talking if callable(talking) else lambda _: talking,
     )
     task = asyncio.create_task(pilot.run())
     try:
@@ -954,6 +956,62 @@ async def test_native_attack_roster_starts_episode_without_hero_combat_events(pl
         await eventually(lambda: rig.bridge.commands("body_action"))
         assert [request["cmd"] for request in rig.policy.requests[:2]] == ["reset", "step"]
         assert rig.policy.commands("step")[0]["observation"] == own
+
+
+async def test_conversation_partner_native_attack_acquires_resets_and_keeps_body_lease():
+    async with running(talking=True) as rig:
+        rig.roster(activity="routine", state="ZS_TALK")
+        rig.combat()
+        await asyncio.sleep(0.04)
+        assert not rig.bridge.commands("body_watch")
+
+        # The talk desk can still name the speaker after story_effect detached
+        # him and the native scripts entered combat. The roster is authoritative.
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: rig.bridge.commands("body_watch"))
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.policy.commands("reset"))
+        lease = rig.link.body_leases[1]
+        rig.bridge.emit(fighter(3, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        await eventually(lambda: rig.pilot.people["NPC"].activity == "body")
+        assert rig.pilot.people["NPC"].state == "ZS_ATTACK"
+
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        assert rig.link.body_leases == {1: lease}
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert len(rig.policy.commands("reset")) == 1
+        assert not rig.bridge.commands("body_release")
+        assert not rig.pilot.summaries
+
+
+@pytest.mark.parametrize(("activity", "state"), [
+    ("routine", "ZS_TALK"), ("routine", "ZS_ATTACK"), ("fight", "ZS_WAIT"),
+    ("dialog", "ZS_ATTACK"), ("attached", "ZS_ATTACK"),
+])
+async def test_conversation_partner_without_native_fight_does_not_acquire(activity, state):
+    async with running(talking=True) as rig:
+        rig.roster(activity=activity, state=state)
+        rig.combat()
+        rig.bridge.emit(player_row(), fighter())
+        await asyncio.sleep(0.04)
+        assert not rig.pilot.handles("NPC")
+        assert not rig.bridge.commands("body_watch")
+        assert not rig.bridge.commands("body_acquire")
+        assert not rig.policy.requests
+
+
+async def test_unavailable_conversation_partner_still_blocks_native_attack_acquisition():
+    async with running(talking=True, unavailable=True) as rig:
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        rig.combat()
+        rig.bridge.emit(player_row(), fighter())
+        await asyncio.sleep(0.04)
+        assert not rig.pilot.handles("NPC")
+        assert not rig.bridge.commands("body_watch")
+        assert not rig.bridge.commands("body_acquire")
+        assert not rig.policy.requests
 
 
 async def test_fight_activity_without_native_attack_state_does_not_start_watch():
@@ -2152,7 +2210,10 @@ async def test_native_ack_drains_later_target_change_event_before_unwatch(
         await eventually(lambda: not rig.bridge._response_tasks)
         summary = rig.pilot.last_summary
         recapture = evidence == "matching"
-        assert summary.reason == ("target_changed" if recapture else "body_action_rejected")
+        expected_reason = "loading" if evidence == "world_changed" else (
+            "target_changed" if recapture else "body_action_rejected"
+        )
+        assert summary.reason == expected_reason
         assert summary.native_release_reason == (release_reason if recapture else None)
         assert dict(summary.action_rejections) == {"release_pending": 1}
         assert summary.release_confirmed and summary.watch_removed
@@ -2647,6 +2708,84 @@ async def test_world_or_connection_reset_releases_and_closes_episode(transition,
             assert [command["npcs"] for command in rig.bridge.commands("body_watch")] == [["NPC"]]
             return
         await rig.ended()
+
+
+@pytest.mark.parametrize("transition", ["loading", "hello"])
+@pytest.mark.parametrize("rpc", ["body_action", "body_events", "reset", "step"])
+async def test_world_reset_reason_survives_late_rpc_failure(transition, rpc):
+    async with running() as rig:
+        waiter = asyncio.Event()
+        if rpc == "reset":
+            rig.policy.reset_waiter = waiter
+            rig.policy.reset_mode = "error"
+            await rig.acquire()
+            await eventually(lambda: rig.policy.commands("reset"))
+        else:
+            await rig.active()
+            if rpc == "step":
+                rig.policy.step_waiter = waiter
+                rig.policy.step_mode = "error"
+                before = len(rig.policy.commands("step"))
+                rig.bridge.emit(fighter(4, owned=True))
+                await eventually(lambda: len(rig.policy.commands("step")) == before + 1)
+            else:
+                before = len(rig.bridge.commands(rpc))
+                rig.bridge.response_delays[rpc] = 0.075
+                if rpc == "body_action":
+                    rig.bridge.emit(fighter(4, owned=True))
+                else:
+                    rig.fight._last_events_poll = float("-inf")
+                    rig.fight._wake.set()
+                await eventually(lambda: len(rig.bridge.commands(rpc)) == before + 1)
+        if transition == "loading":
+            rig.link._dispatch(Loading(type="loading"))
+        else:
+            rig.link._dispatch(Hello(
+                type="hello", protocol=PROTOCOL_VERSION, client="fake", codepage="utf-8",
+            ))
+        waiter.set()
+        await rig.ended()
+        summary = rig.pilot.last_summary
+        assert summary.reason == ("loading" if transition == "loading" else "session_changed")
+        assert summary.release_confirmed and summary.watch_removed
+        assert not rig.link.body_leases and not rig.link.body_latest
+        assert len(rig.policy.commands("end_episode")) == len(rig.policy.commands("close")) == 1
+
+
+async def test_loading_reason_survives_late_heartbeat_failure_while_policy_is_in_flight(monkeypatch):
+    monkeypatch.setattr(bodypilot, "HEARTBEAT_INTERVAL", 0.010)
+    async with running() as rig:
+        await rig.active()
+        waiter = asyncio.Event()
+        rig.policy.step_waiter = waiter
+        rig.policy.step_mode = "error"
+        rig.bridge.response_delays["body_heartbeat"] = 0.050
+        original = rig.link.body_heartbeat
+        failures = []
+
+        async def heartbeat(*args, **kwargs):
+            try:
+                return await original(*args, **kwargs)
+            except GameError as error:
+                failures.append(str(error))
+                raise
+
+        monkeypatch.setattr(rig.link, "body_heartbeat", heartbeat)
+        steps = len(rig.policy.commands("step"))
+        beats = len(rig.bridge.commands("body_heartbeat"))
+        try:
+            rig.bridge.emit(fighter(4, owned=True))
+            await eventually(lambda: len(rig.policy.commands("step")) == steps + 1)
+            await eventually(lambda: len(rig.bridge.commands("body_heartbeat")) == beats + 1)
+            rig.link._dispatch(Loading(type="loading"))
+            await eventually(lambda: failures)
+        finally:
+            waiter.set()
+        await rig.ended()
+        assert failures == ["body response belongs to an invalidated world"]
+        assert rig.pilot.last_summary.reason == "loading"
+        assert rig.pilot.last_summary.release_confirmed and rig.pilot.last_summary.watch_removed
+        assert not rig.link.body_leases and not rig.link.body_latest
 
 
 @pytest.mark.parametrize("rpc,stage", [("story_eval", "symbol_eval"), ("body_watch", "body_watch")])

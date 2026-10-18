@@ -147,7 +147,7 @@ def test_serve_arguments_create_bodypilot_only_with_flag_and_url(
     assert exit.value.code == 0
 
 
-def test_bodypilot_excludes_current_conversation_and_attached_npcs(monkeypatch):
+def test_bodypilot_distinguishes_conversation_partner_from_attached_npcs(monkeypatch):
     factory = Mock()
     monkeypatch.setattr(cli, "BodyPilot", factory)
     talk = SimpleNamespace(orders=SimpleNamespace(companion=Mock()), attached=set(), partner=None)
@@ -155,14 +155,19 @@ def test_bodypilot_excludes_current_conversation_and_attached_npcs(monkeypatch):
         SimpleNamespace(neural_body=True, body_url="tcp://policy:47835", neural_body_max=4), Mock(), talk,
     )
     unavailable = factory.call_args.kwargs["unavailable"]
+    talking = factory.call_args.kwargs["talking"]
     assert not unavailable("npc")
+    assert not talking("npc")
     talk.partner = SimpleNamespace(npc="NPC")
-    assert unavailable("npc")
+    assert talking("npc")
+    assert not unavailable("npc")
     talk.partner = None
     talk.attached.add("NPC")
     assert unavailable("npc")
+    assert not talking("npc")
     talk.attached.clear()
     assert not unavailable("NPC")
+    assert not talking("NPC")
 
 
 @pytest.mark.parametrize("maximum", [1, 4])

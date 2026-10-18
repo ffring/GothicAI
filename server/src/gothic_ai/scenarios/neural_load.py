@@ -223,6 +223,8 @@ async def neural_load_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[
                   f"active={len(link.body_leases)}, max_active={max_active}, expected=3, "
                   f"decisions={[pilot.fights[npc]._decisions if pilot.handles(npc) else 0 for npc in npcs]}, "
                   f"resets={[len(resets.get(old_clients.get(npc), [])) for npc in npcs]}")
+            if not acquired:
+                return _logged(results)
             await link.patch_graph([triggers.removal(attack_trigger)])
             loaded = asyncio.create_task(wait_message(link, Session, lambda msg: msg.reason == "load"))
             try:
@@ -270,6 +272,10 @@ async def neural_load_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[
                f"packets_last_0.5s={recent_packets}")
 
             npc = npcs[0]
+            # Only one post-load attacker: bandits left in earshot would join
+            # B_ATTACK through their native guild perceptions, creating extra fights.
+            for other in npcs[1:]:
+                await link.debug("npc_goto", npc=other, waypoint="NW_XARDAS_TOWER_VALLEY_01")
             await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
             await link.debug("teleport", near=npc, distance=250)
             await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
@@ -305,14 +311,14 @@ async def neural_load_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[
             # Finish the post-load probe through a native loss of the distant hero.
             escaped_at = time.monotonic()
             await link.debug("teleport", near=npc, distance=6000)
-            await _until(lambda: not pilot.handles(npc), 8)
+            await _until(lambda: not pilot.active_count and not link.body_leases, 8)
             summary = next((summary for summary in reversed(pilot.summaries) if (
                 summary.npc == npc and summary.lease == lease
             )), None)
             check("neural_load_release", bool(
                 summary and summary.reason in {"target_lost", "npc_unavailable"}
                 and summary.release_confirmed and summary.watch_removed
-                and not pilot.handles(npc) and not link.body_leases
+                and not pilot.active_count and not link.body_leases and not link.body_latest
             ), f"decisions={summary.decisions if summary else 0}, "
                f"reason={summary.reason if summary else None}, "
                f"release_s={summary.release_seconds if summary else None}, "
