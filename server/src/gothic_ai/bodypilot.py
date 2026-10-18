@@ -37,6 +37,7 @@ POLICY_TIMEOUT_LIMIT = 5
 POLICY_RESPONSE_TIMEOUT = 1.0
 BRIDGE_TIMEOUT = 0.250
 ACQUIRE_INTERVAL = 0.150
+REACQUIRE_INTERVAL = 2.0
 ACQUIRE_WINDOW = 5.0
 AWAIT_BOUNDARY_MS = 1500
 MAX_FIGHT_SECONDS = 300.0
@@ -158,6 +159,8 @@ class FightSummary:
 
     npc: str | None
     lease: BodyLease | None
+    target_kind: str | None
+    target_name: str | None
     reason: str
     decisions: int
     fallbacks: int
@@ -212,6 +215,9 @@ class BodyPilot:
         self.people: dict[str, RosterEntry] = {}
         # Repeated attack perceptions belong to the same combat, even after fallback.
         self._claimed_fights: set[str] = set()
+        self._retarget_pending: set[str] = set()
+        self._reacquire_after: dict[str, float] = {}
+        self._retargeting = False
         # Periodic roster updates cannot restart an exhausted acquisition window.
         self._roster_attempted: set[str] = set()
         self.npc: str | None = None
@@ -241,6 +247,10 @@ class BodyPilot:
         self._symbol: int | None = None
         self._entity: int | None = None
         self._hero: int | None = None
+        self._target_kind: str | None = None
+        self._target_name: str | None = None
+        self._target_npc: str | None = None
+        self._observed_down: str | None = None
         self._refusals: Counter[str] = Counter()
         self._acquire_requests = 0
         self._acquire_completed = 0
@@ -283,10 +293,36 @@ class BodyPilot:
             and entry.distance <= 2000
             and entry.activity not in {"dialog", "attached", "down"}
             and (entry.activity != "body" or self.lease is not None or self._acquiring)
-            and not self.companion(npc)
+            and not self._companion(npc)
             and not self.unavailable(npc)
-            and not self.link.party.get(npc, (0, 0))[1]
         )
+
+    def _companion(self, npc: str) -> bool:
+        return bool(self.companion(npc) or self.link.party.get(npc, (0, 0))[1])
+
+    async def _live_target(self) -> tuple[str, str | None, str] | None:
+        """Classify the engine's current target, never the roster's combat snapshot."""
+        assert self.npc is not None
+        companions = sorted(
+            npc for npc in self.people.keys() | self.link.party.keys()
+            if self._companion(npc)
+        )
+        expressions = [TARGET_IS_HERO, *[
+            ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
+             ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
+              ["call", "HLP_GETINSTANCEID", ["inst", npc]]]]
+            for npc in companions
+        ]]
+        matches = await self.link.story_eval(self.npc, expressions, timeout=BRIDGE_TIMEOUT)
+        if len(matches) != len(expressions):
+            raise GameError("target identity unavailable")
+        if matches[0] == 1:
+            return "hero", None, "HERO"
+        for npc, matched in zip(companions, matches[1:], strict=True):
+            if matched == 1 and self._companion(npc):
+                entry = self.people.get(npc)
+                return "companion", entry.name if entry else npc, npc
+        return None
 
     def on_message(self, message: GameMessage) -> None:
         if isinstance(message, NpcRoster):
@@ -298,6 +334,9 @@ class BodyPilot:
                 or (entry.activity == "routine" and entry.state.upper() not in {"ZS_ATTACK", "ZS_MM_ATTACK"})
             }
             self._claimed_fights.difference_update(ended)
+            self._retarget_pending.difference_update(ended)
+            for npc in ended:
+                self._reacquire_after.pop(npc, None)
             self._roster_attempted.difference_update(ended)
             self.people = entries if message.full else {**self.people, **entries}
             if self.npc is not None and not self._allowed(self.npc):
@@ -314,6 +353,8 @@ class BodyPilot:
         elif isinstance(message, (Loading, Hello)):
             self.people.clear()
             self._claimed_fights.clear()
+            self._retarget_pending.clear()
+            self._reacquire_after.clear()
             self._roster_attempted.clear()
             self._reason = "loading" if isinstance(message, Loading) else "session_changed"
         elif isinstance(message, Attached) and message.npc.upper() == self.npc:
@@ -355,11 +396,14 @@ class BodyPilot:
             self.npc is not None
             or self._closing
             or npc in self._claimed_fights
+            or self.clock() < self._reacquire_after.get(npc, float("-inf"))
             or not self._allowed(npc)
             or self.link.body_leases
         ):
             return False
         self.npc = npc
+        self._retargeting = npc in self._retarget_pending
+        self._retarget_pending.discard(npc)
         self._reason = None
         self._acquire_cancel.clear()
         self._attempt_at = self.clock()
@@ -377,6 +421,8 @@ class BodyPilot:
         rows = packet["observations"]
         if rows:
             self._now_game_ms = max(row["t_game_ms"] for row in rows)
+        for row in rows:
+            self._remember_down(row)
         if self.npc is None or not self._watch_ready:
             return
         if self.lease is not None and (packet["session_epoch"], packet["world_epoch"]) != (
@@ -401,6 +447,14 @@ class BodyPilot:
                     break
                 if self.npc is not None:
                     await self._tick()
+                else:
+                    for npc in sorted(self._retarget_pending):
+                        entry = self.people.get(npc)
+                        if (
+                            entry is not None and entry.activity == "fight"
+                            and entry.state.upper() == "ZS_ATTACK" and self._start(npc)
+                        ):
+                            break
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=0.025)
                 except TimeoutError:
@@ -501,18 +555,38 @@ class BodyPilot:
             await self._finish("acquire_exhausted")
             return
         if not self._watched:
+            started = time.monotonic()
             try:
                 symbol = await self.link.story_eval(self.npc, [["sym", self.npc]], timeout=BRIDGE_TIMEOUT)
                 if len(symbol) != 1 or type(symbol[0]) is not int or symbol[0] < 0:
                     raise GameError("NPC script symbol unavailable")
                 self._symbol = symbol[0]
-                # A timed-out request may already have enabled observations on
-                # the bridge. Track it before awaiting the reply so cleanup
-                # also unsubscribes when that acknowledgement never arrives.
-                self._watched = True
+            except BRIDGE_ERRORS as error:
+                log.warning(
+                    "neural-body watch setup failed stage=symbol_eval rpc=story_eval npc=%s "
+                    "error_type=%s error=%r elapsed_ms=%.1f",
+                    self.npc, type(error).__name__, error, (time.monotonic() - started) * 1000,
+                )
+                await self._finish(
+                    "symbol_eval_timeout" if isinstance(error, TimeoutError) else "symbol_eval_failed"
+                )
+                return
+            # A timed-out request may already have enabled observations on
+            # the bridge. Track it before awaiting the reply so cleanup
+            # also unsubscribes when that acknowledgement never arrives.
+            self._watched = True
+            started = time.monotonic()
+            try:
                 await self.link.body_watch(self._watch_npcs(), timeout=BRIDGE_TIMEOUT)
-            except BRIDGE_ERRORS:
-                await self._finish("watch_failed")
+            except BRIDGE_ERRORS as error:
+                log.warning(
+                    "neural-body watch setup failed stage=body_watch rpc=body_watch npc=%s "
+                    "error_type=%s error=%r elapsed_ms=%.1f",
+                    self.npc, type(error).__name__, error, (time.monotonic() - started) * 1000,
+                )
+                await self._finish(
+                    "body_watch_timeout" if isinstance(error, TimeoutError) else "body_watch_failed"
+                )
                 return
             self._watch_ready = True
         if self.lease is not None:
@@ -528,7 +602,7 @@ class BodyPilot:
             if loop.time() - self._last_events_poll >= EVENTS_INTERVAL:
                 try:
                     self._last_events_poll = loop.time()
-                    await self.link.body_events(timeout=BRIDGE_TIMEOUT)
+                    self.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
                 except BRIDGE_ERRORS:
                     await self._finish("lease_lost")
                     return
@@ -553,7 +627,7 @@ class BodyPilot:
         assert self.npc is not None
         return [self.npc]
 
-    def _is_hero(self, row: dict[str, Any]) -> bool:
+    def _is_leased_target(self, row: dict[str, Any]) -> bool:
         return self._hero is None or row["target"]["entity_id"] == self._hero
 
     def _capture_invisibility(self, now: float, game_ms: int) -> None:
@@ -578,7 +652,7 @@ class BodyPilot:
             self._invisible_at = self._invisible_game_ms = None
         if own["dead"] or own["unconscious"] or own["down"] or own["hp"] <= 0:
             return "npc_down"
-        if target["entity_id"] and not self._is_hero(row):
+        if target["entity_id"] and not self._is_leased_target(row):
             return "target_changed"
         if not target["present"] or not target["current_valid"]:
             if self._target_absent_game_ms is None:
@@ -588,7 +662,7 @@ class BodyPilot:
         else:
             self._target_absent_game_ms = None
         if target["current_valid"] and (target["down"] or target["hp"] is None or target["hp"] <= 0):
-            return "hero_down"
+            return "target_down" if self._target_kind == "companion" else "hero_down"
         if own["weapon_state"] != 2:
             return "weapon_changed"
         return None
@@ -637,9 +711,12 @@ class BodyPilot:
                 # NPC_GETTARGET sets OTHER to the actual current target; story_eval
                 # restores SELF/OTHER afterward. Acquire independently checks that
                 # the observation's numeric target still matches this live target.
-                hero = await self.link.story_eval(self.npc, [TARGET_IS_HERO], timeout=BRIDGE_TIMEOUT)
-                if hero != [1]:
-                    self._refusals["target_not_hero"] += 1
+                target = await self._live_target()
+                if target is None:
+                    self._refusals["target_not_allowed"] += 1
+                    if self._retargeting:
+                        self._claimed_fights.add(self.npc)
+                        self._reason = "target_not_allowed"
                     return
                 if self._reason or self._closing or not self._allowed(self.npc):
                     return
@@ -689,14 +766,19 @@ class BodyPilot:
                 self._acquire_completed += 1
                 self._acquire_waits.append((self.clock() - requested_at) * 1000)
                 self._claimed_fights.add(self.npc)
+                self._reacquire_after[self.npc] = self.clock() + REACQUIRE_INTERVAL
                 self._entity = self.lease.entity_id
                 self._hero = self.lease.target_entity_id
+                self._target_kind, self._target_name, self._target_npc = target
+                self._observed_down = None
                 self._fight_at = self.clock()
                 self._last_events_poll = float("-inf")
                 self._heartbeat_task = asyncio.create_task(self._heartbeats(self.lease))
                 log.info(
-                    "neural-body start npc=%s lease=%s acquire_refusals=%s",
+                    "neural-body start npc=%s target_kind=%s target_name=%s lease=%s acquire_refusals=%s",
                     self.npc,
+                    self._target_kind,
+                    self._target_name,
                     self._identity(self.lease),
                     dict(self._refusals),
                 )
@@ -864,10 +946,69 @@ class BodyPilot:
             self.link.body_leases.pop(lease.entity_id)
         return True
 
+    def _remember_down(self, row: dict[str, Any]) -> None:
+        lease = self.lease
+        if lease is None or (
+            row["entity_id"], row["session_epoch"], row["world_epoch"]
+        ) != (lease.entity_id, lease.session_epoch, lease.world_epoch) or (
+            row["control_generation"] not in {0, lease.control_generation}
+            or row["observation_seq"] <= lease.acquired_observation_seq
+        ):
+            return
+        # Native/event-only rows do not drive policy steps, but a later empty
+        # target must not erase their evidence of this lease's fallen actor.
+        own, target = row["self"], row["target"]
+        if own["dead"] or own["unconscious"] or own["down"] or own["hp"] <= 0:
+            self._observed_down = "npc_down"
+        elif (
+            self._observed_down is None and target["entity_id"] == lease.target_entity_id
+            and target["current_valid"]
+            and (target["down"] or target["hp"] is None or target["hp"] <= 0)
+        ):
+            self._observed_down = "target_down" if self._target_kind == "companion" else "hero_down"
+
+    def _latest_terminal(self, lease: BodyLease) -> str | None:
+        if self.lease == lease and self._observed_down is not None:
+            return self._observed_down
+        latest = self.link.body_latest.get(lease.entity_id)
+        if latest is not None and latest.observation_seq > lease.acquired_observation_seq and (
+            latest.session_epoch, latest.world_epoch, latest.control_generation
+        ) in {
+            (lease.session_epoch, lease.world_epoch, 0),
+            (lease.session_epoch, lease.world_epoch, lease.control_generation),
+        }:
+            terminal = self._terminal(latest.model_dump(mode="json"))
+            if terminal in {"target_changed", "hero_down", "target_down", "npc_down"}:
+                return terminal
+        return None
+
     async def _finish(self, reason: str) -> None:
         npc, client = self.npc, self.client
         if npc is None and self.lease is None and client is None:
             return
+        native_reasons = {"native_restored", "lease_lost"}
+        if (
+            reason == "body_action_rejected" and self._policy_decisions
+            and self._policy_decisions[-1].reason in {"not_owned", "release_pending"}
+        ):
+            native_reasons.add(reason)
+        observed_terminal = (
+            self._latest_terminal(self.lease)
+            if reason in native_reasons and self.lease is not None else None
+        )
+        if reason == "native_restored" and observed_terminal is not None:
+            reason = observed_terminal
+        # Native setTarget defers its mutation until after native_restored, so
+        # no owned observation of the new target is guaranteed to reach us.
+        if (
+            reason == "native_restored"
+            and self._native_release_reason in {"native_script_takeover", "target_changed_or_lost"}
+            and npc is not None and self._allowed(npc) and not self._closing
+        ):
+            with contextlib.suppress(*BRIDGE_ERRORS):
+                target = await self._live_target()
+                if target is not None and target[2] != self._target_npc:
+                    reason = "target_changed"
         finish_at = time.monotonic()
         self._capture_invisibility(self.clock(), self._now_game_ms)
         fight_seconds = self.clock() - self._fight_at if self.lease is not None else None
@@ -900,7 +1041,7 @@ class BodyPilot:
                     if self.link.closed.is_set():
                         break
                     try:
-                        await self.link.body_events(timeout=BRIDGE_TIMEOUT)
+                        self.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
                     except BRIDGE_ERRORS:
                         pass
                     if self.link.body_leases.get(lease.entity_id) != lease:
@@ -912,6 +1053,40 @@ class BodyPilot:
                     except BRIDGE_ERRORS as error:
                         unconfirmed = f"body_control_status:{error}"
                     await asyncio.sleep(0.025)
+                if (
+                    reason in native_reasons and lease is not None
+                    and self._native_release_reason is None and not self.link.closed.is_set()
+                    and self.link.body_leases.get(lease.entity_id) != lease
+                    and (self.link.body_session_epoch, self.link.body_generation)
+                    == (lease.session_epoch, lease.world_epoch)
+                ):
+                    # A status/release acknowledgement can confirm native ownership
+                    # after the last event poll. Drain its reason before unwatch discards it.
+                    with contextlib.suppress(*BRIDGE_ERRORS):
+                        events = await self.link.body_events(timeout=BRIDGE_TIMEOUT)
+                        if (self.link.body_session_epoch, self.link.body_generation) == (
+                            lease.session_epoch, lease.world_epoch,
+                        ):
+                            self.on_message(events)
+                if (
+                    reason in native_reasons and lease is not None
+                    and self._native_release_reason is not None and not self.link.closed.is_set()
+                    and self.link.body_leases.get(lease.entity_id) != lease
+                ):
+                    # A heartbeat or action can discover native ownership before
+                    # the destructive event poll receives its matching restoration.
+                    observed_terminal = observed_terminal or self._latest_terminal(lease)
+                    if observed_terminal is not None:
+                        reason = observed_terminal
+                    elif (
+                        reason != "native_restored"
+                        and self._native_release_reason in {"native_script_takeover", "target_changed_or_lost"}
+                        and npc is not None and self._allowed(npc) and not self._closing
+                    ):
+                        with contextlib.suppress(*BRIDGE_ERRORS):
+                            target = await self._live_target()
+                            if target is not None and target[2] != self._target_npc:
+                                reason = "target_changed"
         except TimeoutError:
             reason = "finish_deadline"
             # Make a final authoritative check before discarding local ownership.
@@ -948,6 +1123,13 @@ class BodyPilot:
                     with contextlib.suppress(OSError, TimeoutError):
                         async with asyncio.timeout(SERVICE_TIMEOUT):
                             await client.close()
+            if (
+                reason in native_reasons and release_confirmed
+                and self._native_release_reason is not None
+            ):
+                observed_terminal = observed_terminal or self._latest_terminal(lease)
+                if observed_terminal is not None:
+                    reason = observed_terminal
             if self._watched and not self.link.body_leases:
                 with contextlib.suppress(*BRIDGE_ERRORS):
                     async with asyncio.timeout(BRIDGE_TIMEOUT):
@@ -956,6 +1138,8 @@ class BodyPilot:
         summary = FightSummary(
             npc=npc,
             lease=lease,
+            target_kind=self._target_kind,
+            target_name=self._target_name,
             reason=reason,
             decisions=self._decisions,
             fallbacks=self._fallbacks,
@@ -994,7 +1178,8 @@ class BodyPilot:
             watch_removed=watch_removed,
         )
         log.info(
-            "neural-body end npc=%s reason=%s decisions=%d fallback=%d service_p50_ms=%s "
+            "neural-body end npc=%s target_kind=%s target_name=%s reason=%s "
+            "decisions=%d fallback=%d service_p50_ms=%s "
             "service_p95_ms=%s packet_to_request_p50_ms=%s packet_to_request_p95_ms=%s "
             "packet_to_response_p50_ms=%s packet_to_response_p95_ms=%s "
             "response_to_action_p50_ms=%s response_to_action_p95_ms=%s "
@@ -1005,6 +1190,8 @@ class BodyPilot:
             "policy_timeouts=%d policy_timeouts_consecutive=%d policy_timeout_wait_p95_ms=%s "
             "policy_response_silence_ms=%s unconfirmed=%s",
             npc,
+            summary.target_kind,
+            summary.target_name,
             reason,
             self._decisions,
             self._fallbacks,
@@ -1043,6 +1230,16 @@ class BodyPilot:
             summary.release_confirmed,
             summary.last_policy_decisions,
         )
+        if (
+            reason == "target_changed" and release_confirmed and watch_removed
+            and not self._closing and self._reason in {None, "target_changed", "native_restored"}
+            and npc is not None
+            and self._allowed(npc)
+        ):
+            with contextlib.suppress(*BRIDGE_ERRORS):
+                if await self._live_target() is not None:
+                    self._claimed_fights.discard(npc)
+                    self._retarget_pending.add(npc)
         self.npc = self.lease = self.client = None
         self._watched = self._watch_ready = False
         self._reason = None
@@ -1051,6 +1248,10 @@ class BodyPilot:
         self._last_acquire = float("-inf")
         self._initial_game_ms = None
         self._symbol = self._entity = self._hero = None
+        self._target_kind = self._target_name = None
+        self._target_npc = None
+        self._observed_down = None
+        self._retargeting = False
         self._refusals.clear()
         self._acquire_requests = self._acquire_completed = 0
         self._acquire_waits.clear()
