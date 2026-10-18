@@ -72,6 +72,7 @@ from .protocol import (
     NpcActCmd,
     NpcActResult,
     NpcActType,
+    NpcDied,
     NpcEvent,
     NpcIdle,
     NpcLook,
@@ -1923,11 +1924,6 @@ async def _companion_attack_words(
             await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
         except GameError:
             pass
-    await link.debug("player_goto", to=npc, distance=300)
-    if not await _until(lambda: 0 <= dist() <= 10, 20):
-        return {"wolf_ready": f"failed (Cavalorn {dist():.1f} m from the hero)"}
-    dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
-    talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
     await link.debug("player_goto", waypoint=WOLF_HERO)
     await asyncio.sleep(1)  # the road's roster, rather than the one still at Cavalorn's fire
     for _ in range(8):  # clear the road's own wolves before its one controlled encounter
@@ -1936,16 +1932,36 @@ async def _companion_attack_words(
         wolf = min(beasts.wolves.values(), key=lambda w: w.distance)
         await link.debug("kill", instance=wolf.id.split("#", 1)[0], by="PLAYER")
         await _until(lambda wolf=wolf: wolf.id not in beasts.wolves, 5)
-    following = await _until(lambda: 0 <= dist() <= 5, 30)
+    # Stage the free NPC first: teleporting the hero from the fire after follow starts ends that order
+    # with follow_ended (the hero went too far). Its first real follow now covers only two metres.
+    await link.debug("npc_goto", npc=npc, waypoint=WOLF_HERO, face="PC_HERO")
+    await link.debug("teleport", near=npc, distance=700)
+    if not await _until(
+        lambda: npc in talk.people
+        and 500 <= talk.people[npc].distance <= 900
+        and talk.people[npc].earshot <= 1000,
+        15,
+    ):
+        return {"wolf_ready": f"failed (Cavalorn {dist():.1f} m from the hero)"}
+    dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
+    talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+    following = await _until(
+        lambda: 0 <= dist() <= 5
+        and npc in talk.attached
+        and getattr(talk.orders.standing.get(npc), "kind", "") == "follow",
+        20,
+    )
     check("wolf_follow", following, f"Cavalorn {dist():.1f} m from the hero")
     if not following:
         return results
 
-    points = {p["name"]: p for p in await link.waypoints()}
-    hero = points[WOLF_HERO]
-    ground = [p for p in points.values() if abs(p["y"] - hero["y"]) < 250 and not p["fp"]]
-    at = min(ground, key=lambda p: abs(math.hypot(p["x"] - hero["x"], p["z"] - hero["z"]) - 1000))
     snap = await link.snapshot(npc, fresh=True)
+    if snap.player is None:
+        return {**results, "wolf_ready": "failed (no hero in Cavalorn's snapshot)"}
+    hero = snap.player.pos
+    points = {p["name"]: p for p in await link.waypoints()}
+    ground = [p for p in points.values() if abs(p["y"] - hero[1]) < 250 and not p["fp"]]
+    at = min(ground, key=lambda p: abs(math.hypot(p["x"] - hero[0], p["z"] - hero[2]) - 1000))
     hp = snap.player.hp if snap.player is not None else None
     talk.hear("Кавалорн, отступай!", None, {"via": "scenario"})
     await _until(lambda: getattr(talk.orders.standing.get(npc), "kind", "") == "retreat", 5)
@@ -1962,6 +1978,7 @@ async def _companion_attack_words(
     actions: list[tuple[float, str, str]] = []  # dispatch time, target, wolf state at dispatch
     finished: list[str] = []
     states: list[tuple[float, str]] = []
+    killed: list[str] = []
     judged: list[str] = []
     heard: list[str] = []
     act, judge, hears, quick = link.act, beasts.judge, beasts.hears, beasts.quick
@@ -1989,6 +2006,8 @@ async def _companion_attack_words(
     def on_beasts(msg: GameMessage) -> None:
         if isinstance(msg, Beasts):
             states.extend((time.monotonic(), w.state) for w in msg.wolves if w.id == wolf_id)
+        elif isinstance(msg, NpcDied) and msg.tag == "companion_attack_words":
+            killed.append(msg.killer.upper())
 
     link.act = record_act  # type: ignore[method-assign]
     beasts.judge = record_judge  # type: ignore[method-assign]
@@ -1998,7 +2017,9 @@ async def _companion_attack_words(
         mark = time.monotonic()
         talk.hear("Бей волка!", None, {"via": "scenario"})
         dispatched = await _until(lambda: bool(actions), 10)
-        fought = await _until(lambda: any(state == "fight" for _, state in states), 15)
+        # A weak wolf can die to Cavalorn's first blow between the 500 ms beast reports. Its tagged
+        # death names the actual killer, so that is also proof of the companion's real fight.
+        fought = await _until(lambda: any(state == "fight" for _, state in states) or npc in killed, 15)
         to = talk.last[0] if talk.last else None
         check(
             "attack_without_focus",
@@ -2008,7 +2029,7 @@ async def _companion_attack_words(
             and to.id == npc
             and to.why == "order"
             and actions[0][1].split("#", 1)[0] == wolf_id.split("#", 1)[0],
-            f"to {to}; fights {actions}, wolf fought Cavalorn {fought}",
+            f"to {to}; fights {actions}, wolf fought Cavalorn {fought}, killers {killed}",
         )
         before_bite = (
             dispatched
