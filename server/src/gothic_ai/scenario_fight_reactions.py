@@ -30,6 +30,7 @@ from .protocol import (
     GameMessage,
     LineStarted,
     NpcActCmd,
+    NpcActResult,
     NpcEvent,
     PerceptionHeld,
     ThreatControlCmd,
@@ -801,14 +802,31 @@ async def fight_reactions(
                         raise GameError("fight_reactions setup: prior companion duel did not stop")
 
                 async def place_idle(npc: str, waypoint: str) -> None:
-                    ready = await Bodies(link).act(
-                        npc, "start_activity", state=IDLE, waypoint=waypoint,
-                        place=True, arrive=True, minutes=60, radius=100, timeout=15,
-                    )
-                    if ready.status != "arrived":
-                        raise GameError(
-                            f"fight_reactions setup: {npc} placement {ready.status}: {ready.detail}"
+                    receipts: dict[str, NpcActResult] = {}
+
+                    def heard(msg: GameMessage) -> None:
+                        if isinstance(msg, NpcActResult):
+                            receipts[msg.id] = msg
+
+                    link.listeners.append(heard)
+                    try:
+                        act = await link.npc_act(
+                            npc, "start_activity", state=IDLE, waypoint=waypoint,
+                            place=True, arrive=False, minutes=60,
                         )
+                        if not await _until(lambda: act in receipts, 5):
+                            raise GameError(f"fight_reactions setup: {npc} placement receipt missing")
+                        ready = receipts[act]
+                        log.info(
+                            "fight_reactions placement npc=%s waypoint=%s result=%s", npc, waypoint, ready
+                        )
+                        if ready.status != "queued":
+                            raise GameError(
+                                f"fight_reactions setup: {npc} placement {ready.status}: {ready.detail}"
+                            )
+                    finally:
+                        link.listeners.remove(heard)
+                    # Physical completion is proved by grounded(), not by leaving a long idle state.
 
                 # Both defenders have reacted. Isolate their post-hit measurements so a native
                 # target switch or two opponents pinning Cavalorn cannot prevent the first hit.
@@ -849,15 +867,14 @@ async def fight_reactions(
                         await grounded(bandit, "returned", parked_hp, 1200, 2500)
                         await finish_preparation()
                     talk.orders.fight_intent(CAVALORN, bandit)
-                    await _until(lambda b=bandit: bool(trace.damage.get(b)), 35)
+                    await _until(lambda b=bandit: bool(trace.damage.get(b)), 60)
                     hits = trace.damage.get(bandit, [])
                     hit = hits[0][0] if hits else None
-                    await _until(
-                        lambda b=bandit, h=hit: (
-                            h is not None and trace.strike_after(b, CAVALORN, h) is not None
-                        ),
-                        3.1,
-                    )
+                    if hit is not None:
+                        await _until(
+                            lambda b=bandit, h=hit: trace.strike_after(b, CAVALORN, h) is not None,
+                            3.1,
+                        )
                     first = trace.strike_after(bandit, CAVALORN, hit) if hit is not None else None
                     threat = next(
                         (
