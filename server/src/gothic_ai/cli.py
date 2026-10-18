@@ -1103,9 +1103,12 @@ async def serve(args: argparse.Namespace) -> int:
                 await link.send(ThreatControlCmd(hold=True))
             link.listeners.append(planner.on_message)
             # what the npc wants from the hero, from the conversation, steers it afterwards
-            state.dialogue.on_intent = lambda npc, intent: planner.set_agenda(
-                npc, concerns.current(npc, intent.agenda or None) or concerns.agenda(npc)
-            )
+            def on_intent(npc: str, intent: Intent) -> None:
+                if intent.goal not in {"fight", "flee", "seek_help"}:
+                    planner.clear_body_intent(npc)
+                planner.set_agenda(npc, concerns.current(npc, intent.agenda or None) or concerns.agenda(npc))
+
+            state.dialogue.on_intent = on_intent
             concerns.on_change.append(lambda npc: planner.set_agenda(npc, agenda_of(npc)))
             # an npc with something on its mind comes up to the hero and speaks first (wave 2 step 1)
             state.initiative = InitiativeDesk(
@@ -1225,6 +1228,18 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.orders_scenario(link, state.dialogue, state.talk, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario orders: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario.startswith("fight_reactions_"):
+                from .scenario_fight_reactions import fight_reactions
+
+                assert state.dialogue is not None and state.talk is not None and state.incidents is not None
+                results = await fight_reactions(
+                    link, state.dialogue, state.talk, state.incidents, state.brain,
+                    args.scenario.removeprefix("fight_reactions_"),
+                    str(Path(args.memory_db).parent),
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "wolf":
                 assert state.talk is not None and state.beasts is not None
@@ -2168,6 +2183,10 @@ def main() -> None:
             "m5c",
             "m5e",
             "orders",
+            "fight_reactions_wolf",
+            "fight_reactions_sight",
+            "fight_reactions_bandits",
+            "fight_reactions_flee",
             "companion",
             "wolf",
             "calm",

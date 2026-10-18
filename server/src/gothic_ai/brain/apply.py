@@ -86,6 +86,7 @@ COMMENT_SVM = {
     "monster_near": "HELP",
     "monster_attack": "HELP",
     "npc_attack": "HELP",
+    "npc_threat": "WEAPONDOWN",
     "fight_nearby": "OHMYGODITSAFIGHT",
     "monster_killed": "GOODMONSTERKILL",
     "noise": "WHATWASTHAT",
@@ -119,6 +120,12 @@ def actions_for(decision: Decision) -> list[tuple[str, dict[str, Any]]]:
         acts = [
             (a, {k: decision.target if v == "{target}" else v for k, v in args.items()}) for a, args in acts
         ]
+    if "npc_threat" in decision.stimuli and decision.target:
+        # The warning is shouted on the move. Do not wait for spoken dialogue before defending against
+        # the armed attacker; the native fight state takes the body immediately afterwards.
+        if decision.choice in {"fight", "flee"}:
+            svm = "WEAPONDOWN" if decision.choice == "fight" else "HELP"
+            return [(decision.choice, {"npc": decision.target, "svm": svm})]
     return acts
 
 
@@ -129,7 +136,7 @@ def call_help(decision: Decision) -> list[tuple[str, dict[str, Any]]]:
     is dropped while this one sounds: the game plays one overlay line at a time."""
     if not decision.target:
         return [("say_svm", {"svm": "HELP"})]
-    return [("say_svm", {"svm": "HELP", "overlay": True}), ("flee", {"npc": decision.target})]
+    return [("flee", {"npc": decision.target, "svm": "HELP"})]
 
 
 class GameApplier(LogApplier):

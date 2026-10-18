@@ -832,7 +832,7 @@ def test_decisions_become_soft_actions() -> None:
     assert actions_for(d("call_help", ("npc_attack",))) == [("say_svm", {"svm": "HELP"})]
     # a call for help is shouted on the move, running away from the threat
     help_ = Decision("A", "react", "call_help", 0.9, {}, ("npc_attack",), target="WOLF")
-    assert actions_for(help_) == [("say_svm", {"svm": "HELP", "overlay": True}), ("flee", {"npc": "WOLF"})]
+    assert actions_for(help_) == [("flee", {"npc": "WOLF", "svm": "HELP"})]
     # a monster killed: a stock line, unless the npc killed it itself (its scripts end the fight with one)
     killed = Decision("A", "react", "comment", 0.9, {}, ("monster_killed",))
     assert actions_for(killed) == [("say_svm", {"svm": "GOODMONSTERKILL"})]
@@ -960,6 +960,95 @@ async def test_threats_from_others_go_to_the_behavioral_model() -> None:
     game.apply(Decision("PEPE", "react", "fight", 0.9, {}))  # a fight with nobody: nothing is sent
     await settle()
     assert len(link.sent) == 1
+
+
+@pytest.mark.parametrize("choice,svm", [("fight", "WEAPONDOWN"), ("flee", "HELP")])
+async def test_an_armed_npc_approach_has_a_voice_and_targets_the_attacker(choice, svm) -> None:
+    from gothic_ai.brain.apply import actions_for
+
+    planner, decider, applier, clock = make(FakeDecider(choice, 0.95))
+    planner.on_roster([entry("BANDIT", 5)], clock.t)
+    planner.on_event(
+        "BANDIT", "npc_threat", clock.t, other="CAVALORN", other_name="Кавалорн", distance_cm=1100
+    )
+    await step(planner, clock, 0.05)
+
+    assert decider.calls[0]["lane"] == "urgent"
+    assert "Кавалорн is hostile and running toward you with a drawn weapon." in decider.calls[0]["state"]
+    assert {"fight", "flee", "call_help"} <= decider.calls[0]["questions"]["react"]["criteria"].keys()
+    decision = applier.recent[-1]
+    assert decision.target == "CAVALORN"
+    assert actions_for(decision) == [(choice, {"npc": "CAVALORN", "svm": svm})]
+
+
+async def test_a_spoken_flight_waits_briefly_for_the_actual_npc_threat() -> None:
+    order = []
+
+    class OrderedApplier(LogApplier):
+        def apply(self, decision):
+            order.append("body")
+            super().apply(decision)
+
+        def verdict(self, hold, to):
+            order.append(to)
+            super().verdict(hold, to)
+
+    planner, decider, _, clock = make(FakeDecider("fight", 0.95))
+    planner.applier = applier = OrderedApplier()
+    planner.on_roster([entry("BANDIT", 5)], clock.t)
+    planner.on_event("BANDIT", "player_near", clock.t)
+    assert planner.take_body("BANDIT", "flee") is None  # no assumed flight from the passive hero
+    clock.t += 1
+    planner.on_held(
+        parse_game_message(
+            json.dumps(
+                {
+                    "type": "perception_held",
+                    "hold": "h1",
+                    "npc": "BANDIT",
+                    "kind": "npc_attack",
+                    "other": "CAVALORN",
+                }
+            )
+        ),
+        clock.t,
+    )
+    await step(planner, clock, 0.05)
+    assert [(d.choice, d.target) for d in applier.recent] == [("flee", "CAVALORN")]
+    assert list(applier.verdicts) == [("h1", "server")]
+    assert order == ["body", "server"]  # the native state must exist before its held hit is swallowed
+    assert not decider.calls
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_a_flight_waiting_for_a_threat_expires_or_can_be_cancelled(cancel) -> None:
+    planner, _, applier, clock = make(FakeDecider("fight", 0.95))
+    planner.on_roster([entry("BANDIT", 5)], clock.t)
+    assert planner.take_body("BANDIT", "flee") is None
+    if cancel:
+        planner.clear_body_intent("BANDIT")
+    else:
+        clock.t += 11
+    planner.on_event("BANDIT", "npc_attack", clock.t, other="CAVALORN")
+    await step(planner, clock, 0.05)
+    assert [(d.choice, d.target) for d in applier.recent] == [("fight", "CAVALORN")]
+
+
+@pytest.mark.parametrize("activity", ["attached", "dialog", "body", "down"])
+def test_a_pending_body_choice_does_not_survive_losing_its_body(activity) -> None:
+    planner, _, _, clock = make()
+    planner.on_roster([entry("BANDIT", 5)], clock.t)
+    assert planner.take_body("BANDIT", "flee") is None
+    planner.on_roster([entry("BANDIT", 5, activity=activity)], clock.t)
+    assert planner.npcs["BANDIT"].waiting_body is None
+
+
+def test_an_explicit_intent_target_is_used_without_assuming_the_hero() -> None:
+    planner, _, applier, clock = make()
+    planner.on_roster([entry("BANDIT", 5)], clock.t)
+    flight = planner.take_body("BANDIT", "flee", target="CAVALORN")
+    assert flight is not None and flight.target == "CAVALORN"
+    assert applier.recent[-1].target == "CAVALORN"
 
 
 def test_an_attack_on_someone_else_is_a_fight_nearby() -> None:

@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.executor import Intent
 from gothic_ai.llm import FakeBackend, FakeStep, ToolCall
@@ -191,6 +193,116 @@ async def test_a_monster_close_by_is_fought_one_far_off_is_not():
         assert fights(fake) == []
         await fake.perception(GORN, "ASSESSENEMY", "YWOLF", distance=700)
         await _until(lambda: fights(fake) == ["YWOLF"])
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"combat_target": "OTHER_NPC"},
+        {"distance": 2600},
+        {"fighting": False, "moving": False},
+        {"kind": "human"},
+        {"body": "down"},
+    ],
+)
+async def test_a_companion_does_not_mistake_other_monster_activity_for_a_hunt(changes):
+    fake = FakeGame()
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
+    try:
+        await _follows(fake, dialogue)
+        wolf = {
+            "id": "YWOLF",
+            "name": "Волк",
+            "kind": "monster",
+            "distance": 2300,
+            "combat_target": "PLAYER",
+            "fighting": True,
+            **changes,
+        }
+        await fake.push_views({"npc": GORN, "name": "Горн", "sees": [wolf]})
+        await asyncio.sleep(0.05)
+        assert fights(fake) == []
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def test_a_companion_intercepts_a_monster_before_any_damage_perception():
+    fake = FakeGame()
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
+    try:
+        await _follows(fake, dialogue)
+        await fake.push_views(
+            {
+                "npc": GORN,
+                "name": "Горн",
+                "sees": [
+                    {
+                        "id": "YWOLF",
+                        "name": "Волк",
+                        "kind": "monster",
+                        "distance": 2300,
+                        "combat_target": "PLAYER",
+                        "fighting": True,
+                    },
+                ],
+            }
+        )
+        await _until(lambda: fights(fake) == ["YWOLF"])
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def test_a_hostile_monster_closing_on_the_hero_is_intercepted_before_attack_state():
+    fake = FakeGame()
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
+    try:
+        await _follows(fake, dialogue)
+        wolf = {
+            "id": "YWOLF",
+            "name": "Волк",
+            "kind": "monster",
+            "distance": 2400,
+            "combat_target": "PLAYER",
+            "moving": True,
+            "att_hero": "hostile",
+            "hero_cm": 2200,
+        }
+        await fake.push_views({"npc": GORN, "name": "Горн", "sees": [wolf]})
+        await asyncio.sleep(0.05)
+        assert fights(fake) == []
+        await fake.push_views({"npc": GORN, "name": "Горн", "sees": [{**wolf, "hero_cm": 2000}]})
+        await _until(lambda: fights(fake) == ["YWOLF"])
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def test_a_retreating_companion_does_not_intercept_a_monster_hunt():
+    fake = FakeGame()
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
+    try:
+        await _follows(fake, dialogue)
+        await fake.send(type="player_text", text="Отступаем!")
+        await _until(lambda: acts(fake).count((GORN, "follow")) == 2)
+        await fake.push_views(
+            {
+                "npc": GORN,
+                "name": "Горн",
+                "sees": [
+                    {
+                        "id": "YWOLF",
+                        "name": "Волк",
+                        "kind": "monster",
+                        "distance": 1300,
+                        "combat_target": "PLAYER",
+                        "fighting": True,
+                    },
+                ],
+            }
+        )
+        await asyncio.sleep(0.05)
+        assert fights(fake) == []
     finally:
         await cm.__aexit__(None, None, None)
 

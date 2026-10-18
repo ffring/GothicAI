@@ -441,6 +441,8 @@ class Look(_GameMessage):
     from_hero: Side | None = None
     hero_cm: float | None = None
     noticed: bool = False  # v18: close by, out of the viewer's field of view: it notices it all the same
+    combat_target: str | None = None  # native combat target, distinct from the hero's focus
+    fighting: bool = False  # native attack state, including approach before the first blow
 
 
 class HeroLook(Look):
