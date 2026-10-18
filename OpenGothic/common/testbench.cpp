@@ -4660,6 +4660,21 @@ std::string waterRows(World& world) {
     const bool hasWater=body.inWater && std::isfinite(body.waterY);
     const auto floor=world.physic()->landRay(Vec3(point.x,hasWater?body.waterY+3.f:point.y,point.z),6000.f);
     const auto asleep=bench.waterSleepAt.find(body.id);
+    std::string rendered="null";
+    if(body.category==DynamicWorld::C_Item)
+      if(const auto* mesh=Resources::loadMesh(body.visual)) {
+        const auto* bounds=mesh->bbox();
+        const float infinity=std::numeric_limits<float>::infinity();
+        Vec3 low(infinity,infinity,infinity),high(-infinity,-infinity,-infinity);
+        for(unsigned corner=0;corner<8;++corner) {
+          Vec3 at(bounds[corner&1].x,bounds[(corner>>1)&1].y,bounds[(corner>>2)&1].z);
+          body.transform.project(at);
+          low.x=std::min(low.x,at.x);low.y=std::min(low.y,at.y);low.z=std::min(low.z,at.z);
+          high.x=std::max(high.x,at.x);high.y=std::max(high.y,at.y);high.z=std::max(high.z,at.z);
+          }
+        rendered="{\"center_cm\":"+ragdollVector((low+high)*.5f)+
+          ",\"min_cm\":"+ragdollVector(low)+",\"max_cm\":"+ragdollVector(high)+"}";
+        }
     rows+="{\"label\":"+jsonStr(label)+",\"id\":"+std::to_string(body.id)+
       ",\"parent_id\":"+std::to_string(body.parentId)+",\"zen_id\":"+std::to_string(body.zenId)+
       ",\"piece\":"+std::to_string(body.piece)+",\"category\":"+std::to_string(body.category)+
@@ -4667,6 +4682,7 @@ std::string waterRows(World& world) {
       ",\"density_kg_m3\":"+ragdollNumber(body.density)+",\"position_cm\":"+ragdollVector(point)+
       ",\"world_bottom_cm\":"+ragdollNumber(body.worldBounds[0].y)+
       ",\"world_top_cm\":"+ragdollNumber(body.worldBounds[1].y)+
+      ",\"rendered_bbox\":"+rendered+
       ",\"water_y_cm\":"+(hasWater?ragdollNumber(body.waterY):"null")+
       ",\"water_depth_cm\":"+(hasWater && floor.hasCol?ragdollNumber(body.waterY-floor.v.y):"null")+
       ",\"submerged_fraction\":"+ragdollNumber(body.submergedFraction)+
@@ -7443,12 +7459,15 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="water" && a.size()==2 && a[1]=="pickup") {
     if(bench.waterItems.empty()) {arenaAbort("water pickup fixture arrow is absent");return;}
     auto* item=bench.waterItems.front();
+    const auto symbol=item->clsId();
+    const auto before=pl.itemCount(symbol);
     const auto point=item->midPosition();const auto state=pl.bodyStateMasked();
     const bool swimming=pl.isSwim();
     const bool accepted=ctrl.interact(*item);
     if(accepted)bench.waterItems.erase(bench.waterItems.begin());
     event("water_pickup","\"accepted\":"+std::string(accepted?"true":"false")+
       ",\"body_state\":"+std::to_string(unsigned(state))+",\"swimming\":"+(swimming?"true":"false")+
+      ",\"inventory_before\":"+std::to_string(before)+",\"inventory_after\":"+std::to_string(pl.itemCount(symbol))+
       ",\"distance_cm\":"+ragdollNumber((pl.position()-point).length())+
       ",\"item_cm\":"+ragdollVector(point));
     }
@@ -12470,7 +12489,8 @@ void TestBench::beforeWorldTick(uint64_t dt) {
   const bool destructionCast=bench.destructionTrace &&
                              (bench.destructionCase=="fireball" || bench.destructionCase=="five");
   const bool movableCast=bench.movableTrace && bench.movablePhase=="blast";
-  if(scenarioPath!=nullptr && bench.started && !bench.done && (destructionCast || movableCast) && !bench.spellActors.empty()) {
+  const bool waterCast=bench.waterReady && !bench.spellActors.empty() && bench.spellActors[0].role=="water_target";
+  if(scenarioPath!=nullptr && bench.started && !bench.done && (destructionCast || movableCast || waterCast) && !bench.spellActors.empty()) {
     // PlayerControl refreshes auto-focus after each world step. Keep this
     // fixture's selected native target until commitSpell has emitted the real
     // projectile, so a nearby tavern host cannot steal the cast mid-animation.

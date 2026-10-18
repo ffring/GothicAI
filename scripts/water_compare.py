@@ -81,7 +81,14 @@ def percentile(values):
 
 
 def measured(directory):
-    events(directory)
+    rows = events(directory)
+    setup = [row for row in rows if row['kind'] == 'water_setup']
+    require(len(setup) == 1 and setup[0]['case'] == 'perf' and len(setup[0]['bodies']) == 30,
+            'performance requires thirty native fixture bodies')
+    settled = checkpoint(rows, 'settled')
+    require(len(settled['bodies']) == 30, 'performance fixture lost a barrel before the timing window')
+    require(not settled['buoyancy_enabled'] or all(body['submerged_fraction'] > 0 for body in settled['bodies']),
+            'enabled performance fixture is not floating in the real water')
     meta = json.loads((directory / 'appcadence.csv.json').read_text())
     require(meta['clock'] == 'normal' and meta['complete'] and meta['overflow'] == 0,
             'performance requires complete normal-game cadence')
@@ -95,7 +102,9 @@ def measured(directory):
     return {'fps': len(frames) / ((meta['final_end_ns'] - meta['start_ns']) / 1e9),
             'frame_p95_ms': percentile([int(frame['interval_ns']) / 1e6 for frame in frames]),
             'physics_p95_ms': percentile([float(row['step_ms']) for row in physics]),
-            'physics_samples': len(physics), 'frames': len(frames)}
+            'physics_samples': len(physics), 'frames': len(frames),
+            'fixture_bodies': len(settled['bodies']),
+            'sleeping_bodies': sum(body['sleeping'] for body in settled['bodies'])}
 
 
 def main():
@@ -115,8 +124,10 @@ def main():
         rows = events(args.functional)
         result['deep'] = resting(checkpoint(rows, args.deep_label))
         if args.reload:
-            result['restore'] = restored(checkpoint(rows, args.saved_label),
-                                         checkpoint(events(args.reload), args.reload_label))
+            loaded = events(args.reload)
+            saved = checkpoint(rows, args.saved_label)
+            result['restore'] = {'initial': restored(saved, checkpoint(loaded, 'restored')),
+                                 'after_30_seconds': restored(saved, checkpoint(loaded, args.reload_label))}
     if args.shallow:
         result['shallow'] = resting(checkpoint(events(args.shallow), args.shallow_label))
     if args.perf_on or args.perf_off:
