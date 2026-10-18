@@ -102,6 +102,7 @@ from .questbook import QuestBook
 from .questlog import QuestLog
 from .quests import QuestBoard
 from .replay import replay as replay_turn
+from .scenario_crime_director import crime_director as crime_director_scenario
 from .scenario_crime_law import crime_law as crime_law_scenario
 from .scenario_crime_talk import crime_talk as crime_talk_scenario
 from .scenario_crimes import crimes as crimes_scenario
@@ -993,7 +994,7 @@ async def serve(args: argparse.Namespace) -> int:
         if state.crime_law is not None:
             directing.append(asyncio.create_task(state.crime_law.run()))
         if place_book is not None and not args.no_occasions:
-            state.occasions = Occasions(link, state.chronicle, place_book)
+            state.occasions = Occasions(link, state.chronicle, place_book, crimes=not args.no_crimes)
             directing.append(asyncio.create_task(state.occasions.run()))
         if graph is not None and not args.no_questlog:
             state.questlog = QuestLog(link, graph, state.chronicle)
@@ -1030,6 +1031,7 @@ async def serve(args: argparse.Namespace) -> int:
                 llm,
                 dialogue=state.dialogue,
                 journal=journal,
+                crimes=state.crimes,
             )
             # the director's own characters (docs/director.md, stage 2): the branch keeps them, and whoever
             # reads npc's by id reads them as the scripts' own: their cards, persona and voice
@@ -1066,10 +1068,16 @@ async def serve(args: argparse.Namespace) -> int:
                 book=state.book,
             )
             if state.casting is not None:
-                state.chains = ChainAuthor(state.author, state.casting)
+                state.chains = ChainAuthor(state.author, state.casting, crimes=state.crimes)
                 if state.occasions is not None:
                     state.showrunner = Showrunner(
-                        state.occasions, state.author, state.chains, state.casting, llm
+                        state.occasions,
+                        state.author,
+                        state.chains,
+                        state.casting,
+                        llm,
+                        crimes=state.crimes,
+                        law=state.crime_law.law if state.crime_law is not None else None,
                     )
                     if (task := _start_showrunner(args, state.showrunner)) is not None:
                         directing.append(task)
@@ -1328,6 +1336,32 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario crime_talk: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "crime_director":
+                assert state.crimes is not None and state.showrunner is not None
+                assert state.dialogue is not None and state.talk is not None and state.rumors is not None
+                assert state.sightings is not None and state.deals is not None and state.chests is not None
+                assert state.concerns is not None and state.amends is not None and state.bodies is not None
+                assert state.guard is not None and state.perception is not None
+                results = await crime_director_scenario(
+                    link,
+                    state.crimes,
+                    state.showrunner,
+                    state.dialogue,
+                    state.talk,
+                    state.rumors,
+                    state.sightings,
+                    state.deals,
+                    state.chests,
+                    state.concerns,
+                    state.amends,
+                    guard=state.guard,
+                    bodies=state.bodies,
+                    perception=state.perception,
+                    initiative=state.initiative,
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario crime_director: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "crime_law":
                 assert state.crimes is not None and state.crime_law is not None
@@ -2308,6 +2342,7 @@ def main() -> None:
             "questlog",
             "crimes",
             "crime_talk",
+            "crime_director",
             "crime_law",
             "showrunner",
             "showrunner_live",

@@ -1080,7 +1080,9 @@ class BodyPilot:
                         reason = observed_terminal
                     elif (
                         reason != "native_restored"
-                        and self._native_release_reason in {"native_script_takeover", "target_changed_or_lost"}
+                        and self._native_release_reason in {
+                            "native_script_takeover", "target_changed_or_lost"
+                        }
                         and npc is not None and self._allowed(npc) and not self._closing
                     ):
                         with contextlib.suppress(*BRIDGE_ERRORS):

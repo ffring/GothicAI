@@ -11,7 +11,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -21,6 +21,8 @@ from .authoring import Author
 from .casting import Casting
 from .chains import ChainAuthor
 from .chronicle import Fact
+from .crime_law import CrimeLaw
+from .crimes import Crimes
 from .game import GameError
 from .gamedata.storygraph import QUEST_STATES
 from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
@@ -57,6 +59,7 @@ INSTRUCTIONS = """\
   Для stranger код создаёт одного заказчика, дополнительные люди не нужны: new_people=false.
 - premise: 2–3 фразы, что случилось и почему именно сейчас. Это замысел для строителя квестов.
 - follows: переменная квеста скриптов из сводки, на который отвечает линия; иначе пустая строка.
+- crime: id дела из сводки, на которое отвечает линия; иначе пустая строка.
 - requires: список условий открытия, иначе []. Условия: {kind: quest, quest: переменная, state:
   running|success|failed}, {kind: knows, node: id ванильного диалога}, {kind: chapter, chapter: 1–6}.
 - reason: почему такая линия или почему сейчас не нужна.
@@ -65,6 +68,14 @@ INSTRUCTIONS = """\
 закрывает этот квест скриптов: они перечислены в сводке. Не продолжай и не заканчивай работу скриптов,
 не обещай их наград, не требуй их квестовых вещей. Опирайся на записи журнала, которые уже видел герой,
 а не на будущие развязки. Предпочитай небольшое дело рядом, доступное при текущем ванильном состоянии.
+Дела героя: ты знаешь правду, люди — только своё знание из сводки. Знание режиссёра не передавай людям.
+Пострадавший может попросить вернуть вещь или найти вора, если знает о деле или заметил пропажу.
+Пострадавший от кражи может заметить пропажу, не зная вора. Вором может быть сам герой: он вправе
+«найти» свою добычу, соврать, вернуть или не вернуть. Ложь не запрещай. Возврат вещи сам по себе
+не означает прощения: для этого нужна отдельная сделка. У линии про дело укажи crime; её заказчик
+должен знать о деле или быть пострадавшим от кражи. Свидетель решает свою заботу в разговоре:
+рассказать, промолчать или потребовать плату за молчание; ради этого отдельную линию не создавай.
+Не каждому делу нужна линия: none с причиной — обычный ответ, если сейчас нечего добавить.
 Людей и места выбирай только из сводки. При нехватке бюджета на людей выбери quest или chain без новых
 людей или none. Отказ кода исправь, не повторяй его."""
 
@@ -79,6 +90,7 @@ class Proposal(BaseModel):
     premise: str = ""
     reason: str = ""
     follows: str = ""
+    crime: str = ""
     requires: list[dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
@@ -102,6 +114,7 @@ PROPOSE_TOOL = Tool(
             "premise": {"type": "string"},
             "reason": {"type": "string"},
             "follows": {"type": "string"},
+            "crime": {"type": "string"},
             "requires": {
                 "type": "array",
                 "items": {
@@ -138,7 +151,9 @@ PROPOSE_TOOL = Tool(
                 },
             },
         },
-        "required": ["kind", "giver", "place", "new_people", "premise", "reason", "follows", "requires"],
+        "required": [
+            "kind", "giver", "place", "new_people", "premise", "reason", "follows", "crime", "requires"
+        ],
         "additionalProperties": False,
     },
 )
@@ -187,6 +202,7 @@ class Brief:
     vanilla: list[Fact]
     history: list[str]
     budget: Budget
+    crimes: dict[str, Fact] = field(default_factory=dict)
 
     def text(self) -> str:
         leading, *others = occasion_members(self.occasion)
@@ -215,6 +231,13 @@ class Brief:
                 "Открытые квесты режиссёра (тема, состояние, стадия):",
                 *[f"- {s}" for s in self.quests],
                 "Последние поступки героя: " + json.dumps(self.deeds, ensure_ascii=False),
+                *(
+                    [
+                        "Дела героя (правда режиссёра отдельно от знания людей; unknown — не знает):",
+                        json.dumps(self.crimes, ensure_ascii=False),
+                    ]
+                    if self.crimes else []
+                ),
                 "Последние ванильные события: " + json.dumps(self.vanilla, ensure_ascii=False),
                 "Что режиссёр уже сделал на ветке, не повторяться:",
                 *[f"- {s}" for s in self.history],
@@ -275,11 +298,14 @@ class Showrunner:
         llm: LLMBackend,
         *,
         clock: Callable[[], float] = time.time,
+        crimes: Crimes | None = None,
+        law: CrimeLaw | None = None,
     ) -> None:
         self.occasions, self.author, self.chains, self.casting = occasions, author, chains, casting
         self.link, self.chronicle, self.places = occasions.link, occasions.chronicle, occasions.places
         self.book, self.rules = author.book, author.rules
         self.model, self.clock = ShowrunnerModel(llm), clock
+        self.crimes, self.law = crimes, law
         self._lock = asyncio.Lock()
         self._generation = 0
         self._work: asyncio.Task[Fact | None] | None = None
@@ -446,8 +472,23 @@ class Showrunner:
         deeds = [
             f
             for f in facts
-            if f.get("fact") in DEEDS or (f.get("fact") == "died" and f.get("killer") == "PLAYER")
+            if (
+                f.get("fact") in DEEDS
+                and (f.get("fact") != "crime" or self.crimes is not None)
+            )
+            or (
+                f.get("fact") == "died"
+                and f.get("killer") == "PLAYER"
+                and not (
+                    self.crimes is not None
+                    and any(
+                        c.get("kind") == "murder" and c.get("victim") == f.get("npc")
+                        for c in self.crimes.facts()
+                    )
+                )
+            )
         ][-RECENT_DEEDS:]
+        crimes = self._crime_briefs(occasion, facts)
         history = []
         line_quests = set()
         for f in facts:
@@ -480,7 +521,70 @@ class Showrunner:
             vanilla,
             history,
             budget,
+            crimes,
         )
+
+    def _crime_briefs(self, occasion: Fact, facts: list[Fact]) -> dict[str, Fact]:
+        """A read-only view: omniscient truth, npc beliefs and the existing law's projection."""
+        if self.crimes is None:
+            return {}
+        ids = {c["id"] for c in self.crimes.facts()[-RECENT_DEEDS:]}
+        ids.update(o["crime"] for o in occasion_members(occasion) if o.get("crime"))
+        deliveries = self.law.deliveries() if self.law is not None else []
+        out = {}
+        for crime in self.crimes.facts():
+            cid = crime["id"]
+            if cid not in ids:
+                continue
+            victim = crime.get("victim") or crime.get("owner") or ""
+            witnesses = set(crime.get("witnesses", []))
+            people = {victim, *witnesses} - {""}
+            for fact in facts:
+                if fact.get("crime") == cid:
+                    people.update(n for n in (fact.get("npc"), fact.get("to")) if n)
+                elif cid in fact.get("crime_told", []):
+                    if fact.get("npc"):
+                        people.add(fact["npc"])
+            knowledge = []
+            for npc in sorted(people):
+                role = "victim" if npc == victim else "witness" if npc in witnesses else "informed"
+                known = [k for k in self.crimes.known(npc) if k.crime["id"] == cid]
+                if not known:
+                    knowledge.append({"npc": npc, "role": role, "degree": "unknown"})
+                for k in known:
+                    knowledge.append(
+                        {
+                            "npc": npc, "role": role, "degree": k.degree, "source": k.source,
+                            "hops": k.hops, "suspect": k.suspect,
+                            "forgiven": k.forgiven, "silenced": k.silenced,
+                        }
+                    )
+            community = crime.get("community")
+            out[cid] = {
+                "truth": crime,
+                "description": self.crimes.describe(crime),
+                "knowledge": knowledge,
+                "victim_can_notice_missing": crime.get("kind") == "theft" and bool(victim),
+                "law": {
+                    "community": community,
+                    "known": any(
+                        f.get("crime") == cid and f.get("community") == community
+                        for f in facts if f.get("fact") == "crime_known"
+                    ),
+                    "paid": any(
+                        cid in f.get("crimes", []) and f.get("community") == community
+                        for f in facts if f.get("fact") == "absolved"
+                    ),
+                    "deliveries": [
+                        {"via": d.via, "due": d.due, "status": d.status, "reason": d.reason}
+                        for d in deliveries if d.crime["id"] == cid
+                    ],
+                    "settlements": [
+                        f for f in facts if f.get("fact") == "forgiven" and f.get("crime") == cid
+                    ],
+                },
+            }
+        return out
 
     def _told(self, var: str) -> list[str]:
         # As in the repair director: the running quest's journal, without its future endings.
@@ -523,6 +627,24 @@ class Showrunner:
                     f"{p.giver} выдаёт или закрывает квест скриптов {p.follows}: "
                     "выбери соседа, линия отвечает рядом"
                 )
+        if p.crime:
+            crime = brief.crimes.get(p.crime)
+            if crime is None:
+                errors.append(f"crime {p.crime!r} — нет такого дела в сводке")
+            elif p.kind != "none":
+                victim = crime["truth"].get("victim") or crime["truth"].get("owner")
+                knows = any(
+                    k["npc"] == p.giver.upper() and k["degree"] != "unknown"
+                    for k in crime["knowledge"]
+                )
+                notices = crime["truth"].get("kind") == "theft" and victim == p.giver.upper()
+                if p.kind not in {"quest", "chain"} or not (knows or notices):
+                    errors.append(
+                        f"{p.giver or 'новый человек'} не знает о деле {p.crime}: заказчик должен "
+                        "знать о деле или быть пострадавшим от кражи, который заметит пропажу"
+                    )
+        elif p.kind != "none" and brief.occasion.get("crime") and self.crimes is not None:
+            errors.append("линия по поводу дела должна указать его id в crime")
         if p.kind != "none":
             errors += brief.budget.reasons
             if not p.premise.strip():
@@ -700,6 +822,7 @@ class Showrunner:
                         max_people=brief.budget.people_left if p.new_people else 0,
                         follows=p.follows,
                         requires=p.requires,
+                        **({"crime": p.crime} if p.crime else {}),
                         **({"quest_count": 1} if p.kind == "quest" else {}),
                     )
                 elif p.kind == "stranger":
@@ -756,6 +879,7 @@ class Showrunner:
             giver=giver,
             premise=p.premise,
             follows=p.follows,
+            **({"crime": p.crime} if p.crime else {}),
             requires=p.requires,
             reason=p.reason,
             quests=quests,
