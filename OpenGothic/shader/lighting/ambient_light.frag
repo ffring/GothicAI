@@ -95,8 +95,7 @@ void main() {
   ao *= texelFetch(gbufOrm, fragCoord, 0).r;
 #endif
 
-  vec3 color = linear;
-  color *= luminance(norm);
+  vec3 color;
 #if defined(MATERIAL_MAPS) && !defined(SURFEL_GI)
   const vec4 orm = texelFetch(gbufOrm, fragCoord, 0);
   if(orm.a>0.5) {
@@ -115,10 +114,14 @@ void main() {
     const vec3 sharpSky = textureSkyLUT(skyViewLut, vec3(0,RPlanet,0), reflection, scene.sunDir) * scene.GSunIntensity;
     // The existing sky LUT has no roughness mips. Its diffuse convolution
     // supplies the broad lobe without another pass; split-sum attenuates it.
-    const vec3 reflectedSky = mix(sharpSky, skyIrradiance(reflection), orm.g*orm.g);
+    const vec3 reflectedSky = mix(sharpSky, sky, orm.g*orm.g);
     color += reflectedSky * materialEnvBrdf(materialF0(linear, orm.b), orm.g, noV);
-    }
+    } else
 #endif
+    {
+    color = linear;
+    color *= luminance(norm);
+    }
 #if defined(SURFEL_GI)
   //NOTE: pre-exposed already
   color *= ao;

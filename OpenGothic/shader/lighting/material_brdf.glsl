@@ -28,7 +28,9 @@ vec3 materialSpecular(vec3 normal, vec3 view, vec3 light, vec3 f0, float roughne
   const float lambdaV = noL * sqrt(noV*noV*(1.0 - a2) + a2);
   const float lambdaL = noV * sqrt(noL*noL*(1.0 - a2) + a2);
   const float visibility = 0.5 / max(lambdaV + lambdaL, 1e-8);
-  const float schlick = pow(1.0 - voH, 5.0);
+  const float f = 1.0 - voH;
+  const float f2 = f*f;
+  const float schlick = f2*f2*f;
   const vec3 fresnel = f0 + (vec3(1.0) - f0)*schlick;
   return d * visibility * fresnel;
   }

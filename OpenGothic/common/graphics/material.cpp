@@ -19,12 +19,12 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
      (m.texture_anim_map_mode==zenkit::AnimationMapping::NONE ||
       (m.texture_anim_map_dir.x==0.f && m.texture_anim_map_dir.y==0.f))) {
     maps = Resources::loadMaterialMaps(m.texture);
-    // Choose our colour before opening the original. Forward materials keep
-    // their existing texture path, just as they do for the other material maps.
+    // Our colour also determines alpha classification; consulting the original
+    // texture format here would open an asset that this record replaces.
     if(maps.hasAlbedo) {
-      const auto* albedo = maps.albedo!=nullptr ? maps.albedo : &Resources::fallbackTexture();
-      if(!isForwardShading(loadAlphaFunc(m.alpha_func,m.group,m.color.a,albedo,enableAlphaTest)))
-        tex = albedo;
+      tex = maps.albedo!=nullptr ? maps.albedo : &Resources::fallbackTexture();
+      if(maps.albedo!=nullptr)
+        Resources::materialAlbedoReplaced(m.texture);
       }
     }
   if(tex==nullptr)
@@ -62,10 +62,6 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
      !hasFrameAnimation() && !hasUvAnimation() && m.wave_mode==zenkit::WaveMode::NONE) {
     if(!maps.present)
       maps = Resources::loadMaterialMaps(m.texture);
-    if(maps.albedo!=nullptr) {
-      tex = maps.albedo;
-      Resources::materialAlbedoReplaced(m.texture);
-      }
     normal  = maps.normal;
     orm     = maps.orm;
     uvScale = maps.scale;
