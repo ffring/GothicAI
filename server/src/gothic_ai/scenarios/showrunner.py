@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING, Any
 from ..game import GameLink
 from ..llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
 from ..llm.fake import FakeBackend
-from ..protocol import Saved, Session
+from ..protocol import Session
 from ..showrunner import MIN_REAL_SECONDS, OUTCOMES, occasion_members
-from .common import _logged, _until, wait_message
+from .common import _logged, _save_or_fail, _until, wait_message
 from .story import play_book_chain
 
 if TYPE_CHECKING:
@@ -412,10 +412,7 @@ async def showrunner(link: GameLink, director: Showrunner, slot: int = 7) -> dic
         budget = director.budget(chapter, at).text()
         opened = [director.is_open(old) for old in lines]
         await asyncio.sleep(0.5)  # the game's save includes the latest chronicle memory head
-        saving = asyncio.create_task(wait_message(link, Saved, timeout=60))
-        await asyncio.sleep(0)
-        await link.debug("save", slot)
-        await saving
+        await _save_or_fail(link, slot)
         loaded = asyncio.create_task(wait_message(link, Session, lambda m: m.reason == "load"))
         await asyncio.sleep(0)
         await link.debug("load", slot)
