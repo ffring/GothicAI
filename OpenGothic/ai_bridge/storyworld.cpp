@@ -12,6 +12,7 @@
 #include <zenkit/addon/daedalus.hh>
 
 #include "game/inventory.h"
+#include "physics/dynamicworld.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -418,8 +419,13 @@ std::string StoryWorld::people(World& world) {
       w.Key("waypoint"); str(r.point);
       if(auto* wp = world.findPoint(r.point,false)) {
         auto p = wp->position();
-        if(state=="ZS_SLEEP")
-          homeRoom = world.roomAt(p);
+        if(state=="ZS_GOTOBED" || state=="ZS_SLEEP") {
+          // TA_Sleep schedules ZS_GotoBed. Use the same ground sector as the
+          // actor's portalName; a bed can hide it, so retain the BSP room then.
+          const auto ground = world.physic()->landRay(p+Tempest::Vec3(0,50,0),500);
+          homeRoom = ground.hasCol && ground.sector!=nullptr && ground.sector[0]!='\0' ?
+                     std::string_view(ground.sector) : world.roomAt(p);
+          }
         w.Key("pos");
         w.StartArray(); w.Int(int(p.x)); w.Int(int(p.y)); w.Int(int(p.z)); w.EndArray();
         }

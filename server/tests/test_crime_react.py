@@ -13,6 +13,7 @@ from gothic_ai.crime_law import CrimeLaw
 from gothic_ai.crime_react import CrimeReact, reaction_for
 from gothic_ai.crimes import Crimes
 from gothic_ai.memory import MemoryStore
+from gothic_ai.places import PlaceBook
 from gothic_ai.protocol import HoldVerdictCmd, NpcActResult, NpcRoster, PerceptionHeld
 from tests.test_crimes import HILDA, LOBART, Link, deed
 
@@ -184,6 +185,70 @@ async def test_room_and_chest_owner_are_owners_even_when_item_owner_is_another_n
     assert system.react.role("CHESTKEEPER", case) == "owner"
 
 
+@pytest.mark.parametrize("unknown", [HILDA, LOBART])
+async def test_household_requires_observer_and_owner_home_metadata(system, unknown):
+    case = crime(system)
+    del system.crimes.people[unknown]["home_room"]
+    assert system.react.role(HILDA, case) is None
+
+
+@pytest.mark.parametrize("observer_home,owner_home", [("", "LOBART"), ("LOBART", ""), ("", "")])
+async def test_empty_home_is_uncertain_even_when_the_key_is_present(system, observer_home, owner_home):
+    case = crime(system)
+    system.crimes.people[HILDA]["home_room"] = observer_home
+    system.crimes.people[LOBART]["home_room"] = owner_home
+    assert system.react.role(HILDA, case) is None
+
+
+def sleeping_house(system, npc, waypoint, *, state="ZS_GOTOBED", room=""):
+    system.crimes.people[npc].update({
+        "home_room": room, "routine": [{"state": state, "waypoint": waypoint}],
+    })
+
+
+@pytest.mark.parametrize("state", ["ZS_GOTOBED", "ZS_SLEEP"])
+async def test_real_lobart_beds_share_a_house_without_portal_rooms(system, state):
+    system.crimes.places = PlaceBook.load()
+    assert system.crimes.places is not None
+    case = crime(system)
+    sleeping_house(system, HILDA, "NW_FARM1_INHOUSE_BED_01", state=state, room="HILDA_BEDROOM")
+    sleeping_house(system, LOBART, "NW_FARM1_INHOUSE_BED_02", room="LOBART_BEDROOM")
+    assert system.react.role(HILDA, case) == "member"
+    assert system.react.home(HILDA) == system.react.home(LOBART) == "place:FARM1_INHOUSE"
+    system.crimes.people[HILDA]["home_room"] = ""
+    system.crimes.people[LOBART]["home_room"] = ""
+    assert system.react.role(HILDA, case) == "member"
+
+
+async def test_distinct_mapped_houses_are_not_a_household_even_with_equal_guilds(system):
+    system.crimes.places = PlaceBook.load()
+    case = crime(system)
+    sleeping_house(system, HILDA, "NW_FARM1_INSTABLE_BED_02")
+    sleeping_house(system, LOBART, "NW_FARM1_INHOUSE_BED_02")
+    assert system.react.role(HILDA, case) == "stranger"
+
+
+@pytest.mark.parametrize("waypoint,state", [
+    ("NW_FARM1_OUT_01", "ZS_GOTOBED"),  # a known yard is not evidence of a shared house
+    ("UNKNOWN_BED", "ZS_GOTOBED"),
+    ("NW_FARM1_INHOUSE_BED_01", "ZS_STAND_GUARDING"),  # working inside is not living together
+])
+async def test_household_fallback_requires_known_sleep_routine_inside_a_house(system, waypoint, state):
+    system.crimes.places = PlaceBook.load()
+    case = crime(system)
+    sleeping_house(system, HILDA, waypoint, state=state)
+    sleeping_house(system, LOBART, "NW_FARM1_INHOUSE_BED_02")
+    assert system.react.role(HILDA, case) is None
+
+
+async def test_mapped_beds_without_the_place_book_stay_uncertain(system):
+    case = crime(system)
+    sleeping_house(system, HILDA, "NW_FARM1_INHOUSE_BED_01")
+    sleeping_house(system, LOBART, "NW_FARM1_INHOUSE_BED_02")
+    assert system.react.role(HILDA, case) is None
+    assert system.react.home(HILDA) is None
+
+
 async def test_hold_waits_for_crime_and_keeps_real_seen_before_one_server_verdict(system):
     system.link.receive(held())
     await asyncio.sleep(0)
@@ -293,12 +358,43 @@ async def test_guard_witness_fights_and_law_knows_without_model(system):
     assert system.law.tick(3 * 1440 + 9 * 60 + 15)[0]["how"] == "guard"
 
 
+async def test_cold_guard_metadata_is_shared_with_called_law_path(system):
+    guard = "SLD_900_FARM_GUARD"
+    case = crime(system, owner=MATTEO, guild=8)
+    system.link.nearby = [{"npc": guard, "guild": 7, "distance": 300}]
+    assert guard not in system.crimes.people
+    guards = await system.react._guards(HILDA, case)
+    assert guards == [guard]
+    assert system.crimes.people[guard]["guild"] == 7
+    system.law.called(case["id"], HILDA, guards)
+    assert system.crimes.known(guard)[0].degree == "heard"
+    assert system.chronicle.facts("crime_known")[0]["how"] == "called"
+
+
 async def test_prepare_uses_real_house_metadata_and_preserves_npctype(system):
     system.link.people = [{"npc": HILDA, "guild": 12, "home_room": "NW_HOUSE_LOBART"}]
     await system.react.prepare()
     assert system.crimes.people[HILDA] == {
         "npc": HILDA, "guild": 12, "npctype": 0, "home_room": "NW_HOUSE_LOBART",
     }
+
+
+async def test_identity_read_preserves_home_loaded_while_vm_reply_is_pending(system):
+    system.crimes.people[HILDA] = {"guild": 12}
+    reply = asyncio.get_running_loop().create_future()
+
+    async def evaluate(npc, expressions):
+        return await reply
+
+    system.link.story_eval = evaluate
+    pending = asyncio.create_task(system.react._person(HILDA))
+    await asyncio.sleep(0)
+    system.link.people = [{"npc": HILDA, "guild": 12, "home_room": "LOBART"}]
+    await system.react.prepare()
+    reply.set_result([12, 0])
+    await pending
+    assert system.crimes.people[HILDA]["home_room"] == "LOBART"
+    assert system.crimes.people[HILDA]["npctype"] == 0
 
 
 async def test_restitution_only_moves_existing_goods_after_proven_unconsciousness(system):

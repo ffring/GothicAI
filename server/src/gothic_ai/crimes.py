@@ -1,7 +1,7 @@
-"""The hero's deeds and their actual witnesses, while vanilla still owns every reaction.
+"""The hero's deeds and their actual witnesses, independent of the on-scene reaction.
 
 The bridge supplies ownership and pre-reaction combat state. Truth and each npc's knowledge are read
-from the Chronicle's save branch; this module never intercepts perceptions. Community law lives in
+from the Chronicle's save branch; crime_react.py settles held deeds. Community law lives in
 crime_law.py and supplies the scripts' PETZ counters through the existing story commands.
 Rules were checked against GOTHIC.DAT: C_IsTakenItemMyPossession, B_AssessTheft,
 B_AssessDamage/B_Attack, B_AssessMurder, and the lifted C_NpcBelongsTo* helpers.

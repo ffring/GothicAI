@@ -89,13 +89,38 @@ async def crime_react(
             isinstance(m, NpcActResult) and m.id == action.id and m.status == "queued" for m in received
         )
 
-    async def stand(npc: str, point: str, *, face: str | None = None) -> None:
-        await link.debug("skip_important", near=npc)
-        await link.npc_act(
-            npc, "start_activity", state="ZS_STAND_WP", waypoint=point, minutes=120, place=True
+    async def finished(action: str, reason: str, timeout: float = 15) -> bool:
+        return await _until(
+            lambda: any(isinstance(m, NpcIdle) and m.act == action and m.reason == reason for m in received),
+            timeout,
         )
+
+    async def stand(npc: str, point: str, *, face: str | None = None, ready: bool = False) -> bool:
+        await link.debug("skip_important", near=npc)
+        action = await link.npc_act(
+            npc,
+            "start_activity",
+            state="ZS_STAND_WP",
+            waypoint=point,
+            minutes=120,
+            place=True,
+            arrive=ready,
+            radius=200,
+        )
+        await _until(
+            lambda: any(isinstance(m, NpcActResult) and m.id == action for m in received),
+            5,
+        )
+        queued = any(
+            isinstance(m, NpcActResult) and m.id == action and m.status == "queued" for m in received
+        )
+        if not queued or (ready and not await finished(action, "arrived")):
+            return False
         if face is not None:
-            await link.npc_act(npc, "turn_to", npc=face)
+            turning = await link.npc_act(npc, "turn_to", npc=face)
+            if not await finished(turning, "done"):
+                return False
+        return True
 
     async def drop() -> bool:
         try:
@@ -108,6 +133,87 @@ async def crime_react(
 
     async def count(npc: str) -> int:
         return int(await link.evaluate(["call", "NPC_HASITEMS", ["inst", npc], ["sym", CUP]]))
+
+    async def perception_ready(label: str, witness: str) -> bool:
+        last: dict[str, Any] = {}
+
+        async def read() -> bool:
+            views = await link.npc_view([witness])
+            if not views:
+                return False
+            view = views[0]
+            senses, senses_range, can_see, distance, state_time = await link.story_eval(
+                witness,
+                [
+                    ["field", ["inst", "SELF"], "SENSES"],
+                    ["field", ["inst", "SELF"], "SENSES_RANGE"],
+                    ["call", "NPC_CANSEENPC", ["inst", "SELF"], ["inst", "HERO"]],
+                    ["call", "NPC_GETDISTTONPC", ["inst", "SELF"], ["inst", "HERO"]],
+                    ["call", "NPC_GETSTATETIME", ["inst", "SELF"]],
+                ],
+            )
+            last.update(
+                {
+                    "view": view.model_dump(),
+                    "senses": senses,
+                    "senses_range": senses_range,
+                    "can_see": can_see,
+                    "distance": distance,
+                    "state_time": state_time,
+                    "receipts": [
+                        m.model_dump()
+                        for m in received
+                        if isinstance(m, NpcActResult | NpcIdle) and m.npc == witness
+                    ],
+                }
+            )
+            return (
+                view.theft_ready is True
+                and view.state == "ZS_STAND_WP"
+                and view.weapon == "none"
+                and view.body == "stand"
+                and bool(can_see)
+                and view.hero is not None
+                and view.hero.seen
+                and distance <= 1500
+            )
+
+        ready = await _until_async(read, bool, 15)
+        return check(f"{label}_perception_ready", bool(ready), last)
+
+    async def household(label: str) -> bool:
+        # Read the native sleep routines before moving anybody. The household must come from
+        # production metadata; giving Hilda a test-only home would hide a broken role resolver.
+        await reactions.prepare()
+        people = {npc: service.people.get(npc, {}) for npc in (HILDA, LOBART)}
+        detail = {
+            npc: {
+                "guild": person.get("guild"),
+                "home_room": person.get("home_room"),
+                "household": reactions.home(npc),
+                "sleep": [
+                    r for r in person.get("routine", ()) if r.get("state") in {"ZS_SLEEP", "ZS_GOTOBED"}
+                ],
+            }
+            for npc, person in people.items()
+        }
+        # Ask the same resolver that handles the actual deed below. This read-only probe only
+        # names the cup's intended native owner; it creates no deed or belief in the Chronicle.
+        role = reactions.role(
+            HILDA,
+            {
+                "id": "",
+                "kind": "theft",
+                "owner": LOBART,
+                "victim": LOBART,
+                "community": None,
+            },
+        )
+        return check(
+            f"{label}_household",
+            role == "member" and all(person["household"] for person in detail.values()),
+            {"role": role, "people": detail},
+        )
 
     async def clean(label: str) -> bool:
         reactions.cards = original_cards
@@ -126,17 +232,25 @@ async def crime_react(
         label: str, witness: str, *, fighting: bool = False, held: bool = True
     ) -> dict[str, Any] | None:
         nonlocal hero_cups_before, owner_cups_before
+        if not await household(label):
+            return None
         await link.debug("player_goto", waypoint=HOUSE)
         for npc in farm:
-            await stand(npc, parked)
-        await stand(LOBART, HOUSE)
-        await asyncio.sleep(0.5)
+            if npc != LOBART and not await stand(npc, parked):
+                check(f"{label}_parked", False, npc)
+                return None
+        if not check(f"{label}_owner_arrived", await stand(LOBART, HOUSE, ready=True), LOBART):
+            return None
         if not check(f"{label}_drop", await _until_async(drop, bool, 10), "native Lobart silver cup"):
             return None
-        await asyncio.sleep(0.5)
-        await stand(LOBART, parked)
-        await stand(witness, "NW_FARM1_INHOUSE_02", face="PLAYER")
-        await asyncio.sleep(1)
+        if witness != LOBART and not await stand(LOBART, parked):
+            check(f"{label}_owner_parked", False, LOBART)
+            return None
+        positioned = await stand(witness, "NW_FARM1_INHOUSE_02", face="PLAYER", ready=True)
+        if not check(f"{label}_witness_arrived", positioned, witness):
+            return None
+        if not await perception_ready(label, witness):
+            return None
         before = {f["id"] for f in facts("crime")}
         hero_cups_before, owner_cups_before = await count("HERO"), await count(LOBART)
         # A passive, unarmed hero falls from real melee damage; no debug knockdown or kill is used.

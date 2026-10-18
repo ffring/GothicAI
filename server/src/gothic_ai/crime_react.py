@@ -171,6 +171,28 @@ class CrimeReact:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    def _sleep_house(self, npc: str) -> str | None:
+        """A house in the existing place book, identified by actual native sleep routines."""
+        if self.crimes.places is None:
+            return None
+        houses = set()
+        for routine in self.crimes.people.get(npc.upper(), {}).get("routine", []):
+            if str(routine.get("state", "")).upper() not in {"ZS_GOTOBED", "ZS_SLEEP"}:
+                continue
+            place = self.crimes.places.of(routine.get("waypoint"))
+            if place is None or place.kind != "house" or not place.inside:
+                return None
+            houses.add(place.id)
+        return next(iter(houses)) if len(houses) == 1 else None
+
+    def home(self, npc: str) -> str | None:
+        """The best household identity for diagnostics; rooms can subdivide a mapped house."""
+        house = self._sleep_house(npc)
+        if house is not None:
+            return "place:" + house
+        room = self.crimes.people.get(npc.upper(), {}).get("home_room")
+        return "room:" + room if room else None
+
     def role(self, npc: str, crime: Fact) -> Role | None:
         npc = npc.upper()
         deed = self._deeds.get(crime["id"])
@@ -191,16 +213,16 @@ class CrimeReact:
         if not community:
             owner = str(crime.get("owner") or crime.get("victim") or "").upper()
             home = self.crimes.people.get(owner, {})
-            if person.get("guild") == home.get("guild") and (
-                "home_room" not in person or "home_room" not in home
-            ):
-                return None
-            if (
-                person.get("guild") == home.get("guild")
-                and person.get("home_room")
-                and person.get("home_room") == home.get("home_room")
-            ):
-                return "member"
+            if person.get("guild") == home.get("guild"):
+                # BED waypoints can lack BSP rooms (Lobart's beds do), and one house may have
+                # several rooms. The existing mapped house is a stronger identity than a sector.
+                observer_house, owner_house = self._sleep_house(npc), self._sleep_house(owner)
+                if observer_house is not None and owner_house is not None:
+                    return "member" if observer_house == owner_house else "stranger"
+                observer_room, owner_room = person.get("home_room"), home.get("home_room")
+                if observer_room and owner_room:
+                    return "member" if observer_room == owner_room else "stranger"
+                return None  # missing rooms and unresolved house maps are uncertainty, not separation
             if owner and not home:
                 return None  # without the owner's household, an outsider classification is a guess
         return "stranger"
@@ -280,7 +302,9 @@ class CrimeReact:
         )
         if len(values) != 2 or any(type(v) is not int for v in values):
             raise _Fallback("unknown_role")
-        self.crimes.people[npc] = {**person, "guild": values[0], "npctype": values[1]}
+        self.crimes.people[npc] = {
+            **self.crimes.people.get(npc, {}), "guild": values[0], "npctype": values[1],
+        }
 
     async def _guards(self, npc: str, crime: Fact) -> list[str]:
         if not crime.get("community"):
@@ -300,6 +324,9 @@ class CrimeReact:
                 await self._person(guard)
                 metadata = {**self.crimes.people.get(guard, {}), **person}
             if self.law.is_guard(guard, crime.get("community"), metadata):
+                # Farm/monastery guards can be identified from the nearby guild alone, before
+                # prepare() has filled the world cache. called() uses that shared identity too.
+                self.crimes.people[guard] = metadata
                 guards.append(guard)
         return guards
 

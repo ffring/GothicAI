@@ -44,7 +44,8 @@ class StoryWorld final {
     // absent), the names of `items` (instances), whether a dialog or a cutscene runs now, and the game time
     std::string state(World& world, const rapidjson::Value& msg);
     // story_people: every person of the world (alive, not the hero, no monsters) and its day, as JSON
-    // [{"npc", "name", "guild", "home_room" (room at the sleeping waypoint), "routine": [{"start", "end" (minutes of the day), "state", "waypoint",
+    // [{"npc", "name", "guild", "home_room" (ground sector/BSP room at ZS_GOTOBED or ZS_SLEEP),
+    // "routine": [{"start", "end" (minutes of the day), "state", "waypoint",
     // "pos": [x, y, z] (if the world has the point)}]}]: who meets whom, for the rumors
     std::string people(World& world);
     // deaths of people and of tagged creatures (npc_died) and, once a second, the tags (story_world)

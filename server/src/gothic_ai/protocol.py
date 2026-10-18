@@ -554,6 +554,7 @@ class NpcView(_GameMessage):
     indoors: bool = False
     room_guild: int | None = None  # whose room it is in (the scripts' guilds), indoors only
     state: str = ""
+    theft_ready: bool | None = None  # v44: initialized native ASSESSTHEFT callback, for scene setup
     body: str = "stand"
     mob: str | None = None  # what it uses: a bench, an anvil
     weapon: str = "none"
