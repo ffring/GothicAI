@@ -283,10 +283,14 @@ remote_probe() {
   printf '%s\n' "$digest" >"$state/inputs/$run/source.sha256"
   if [[ "$action" == e2e ]]; then check_protocol || return 2; fi
   engine_ready "$state" "$digest" || return 1
+  # A ready worktree build still needs publication in the no-display preparation
+  # job. Never copy the runtime directory in this probe or the game request.
+  [[ "$RYZEN_GAME_BIN" == "$HOME/gothic-ai/engine-cache/$digest/Gothic2Notr" ]] || return 1
   if [[ "$action" == e2e ]]; then
     digest="$(storygraph_digest)"
     printf '%s\n' "$digest" >"$state/inputs/$run/storygraph.sha256"
     storygraph_ready "$state" "$digest" || return 1
+    [[ "$RYZEN_STORYGRAPH_BIN" == "$HOME/gothic-ai/engine-cache/storygraph/$digest/storygraph" ]] || return 1
     while IFS= read -r project; do
       (cd "$ROOT/$project" && uv sync --check --frozen) || return 1
     done < <(dependency_projects "$scenario")

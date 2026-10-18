@@ -170,8 +170,8 @@ toolchain() { :; }
 source_digest() { echo snapshot-digest; }
 storygraph_digest() { echo storygraph-digest; }
 check_protocol() { :; }
-engine_ready() { :; }
-storygraph_ready() { :; }
+engine_ready() { export RYZEN_GAME_BIN="$HOME/gothic-ai/engine-cache/$2/Gothic2Notr"; }
+storygraph_ready() { export RYZEN_STORYGRAPH_BIN="$HOME/gothic-ai/engine-cache/storygraph/$2/storygraph"; }
 build_engine() { :; }
 build_storygraph() { :; }
 '''
@@ -341,6 +341,40 @@ build_storygraph "$TEST_ROOT/worktree" "'''+self.story_digest+r'''"
         self.assertEqual((self.cache / self.engine_digest / 'runtime.dat').read_text(), 'runtime')
         self.assertTrue((self.state / 'build/opengothic/Gothic2Notr').exists())
         self.assertTrue((self.state / 'storygraph-build/storygraph').exists())
+
+    def test_evicted_cache_republishes_ready_local_artifacts_without_rebuilding(self):
+        self.shell(r'''
+build_engine "$TEST_ROOT/worktree" "'''+self.engine_digest+r'''"
+build_storygraph "$TEST_ROOT/worktree" "'''+self.story_digest+r'''"
+''')
+        engine = self.cache / self.engine_digest
+        storygraph = self.cache / 'storygraph' / self.story_digest
+        calls = self.root / 'cmake-calls.jsonl'
+        game_path = self.root / 'game-path'
+        for evicted in ('engine', 'storygraph', 'both'):
+            with self.subTest(evicted=evicted):
+                for entry in ([engine] if evicted == 'engine' else
+                              [storygraph] if evicted == 'storygraph' else
+                              [engine, storygraph]):
+                    shutil.rmtree(entry)
+                calls.unlink(missing_ok=True)
+                game_path.unlink(missing_ok=True)
+                result = self.shell(r'''
+if remote_probe e2e "$TEST_ROOT/worktree" run stages; then
+  echo 'local-only artifacts unexpectedly skipped cache publication' >&2
+  exit 90
+fi
+remote_prepare e2e "$TEST_ROOT/worktree" run stages
+remote_probe e2e "$TEST_ROOT/worktree" run stages
+remote_run e2e "$TEST_ROOT/worktree" run
+''')
+                self.assertIn(f'engine from cache {self.engine_digest[:12]} (0s)', result.stdout)
+                self.assertEqual(game_path.read_text(), str(engine / 'Gothic2Notr'))
+                self.assertEqual((engine / 'runtime.dat').read_text(), 'runtime')
+                self.assertTrue(os.access(storygraph / 'storygraph', os.X_OK))
+                self.assertEqual((self.source / 'OpenGothic/ai_bridge/storygraph/build/storygraph').resolve(),
+                                 storygraph / 'storygraph')
+                self.assertFalse(calls.exists(), 'publishing ready local artifacts must not invoke cmake')
 
     def test_simultaneous_publications_leave_one_complete_entry(self):
         for name in ('one', 'two'):
