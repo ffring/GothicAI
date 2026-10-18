@@ -4,7 +4,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${GOTHIC_BODY_SSH:-dev-ubuntu}"
 REMOTE="gothic-ai/body"
-ENGINE="gothic-ai/body-api"
+# Another engine workspace (source, build, provenance under ~/), e.g. a merged-main runner.
+ENGINE="${GOTHIC_BODY_ENGINE:-gothic-ai/body-api}"
+[[ "$ENGINE" =~ ^gothic-ai/[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { echo 'Invalid engine workspace' >&2; exit 2; }
+# prepare: freeze this code root (scripts, evals, body-service under ~/) instead of the synced source,
+# e.g. the gate's frozen code with a new run name.
+PREPARE_CODE="${GOTHIC_BODY_PREPARE_CODE:-$REMOTE/source}"
+[[ "$PREPARE_CODE" =~ ^gothic-ai/[a-zA-Z0-9/_.-]+$ && "$PREPARE_CODE" != *..* ]] || { echo 'Invalid prepare code root' >&2; exit 2; }
+# Phases: the archived native-off episode the setup parity replays (the stage 3 one belongs to the pre-Jolt engine).
+NATIVE_REFERENCE="${GOTHIC_BODY_NATIVE_REFERENCE:-gothic-ai/body-headless/runs/stage3-v1/native-off}"
+[[ "$NATIVE_REFERENCE" =~ ^gothic-ai/[a-zA-Z0-9/_.-]+$ && "$NATIVE_REFERENCE" != *..* ]] || { echo 'Invalid native reference' >&2; exit 2; }
 ACTION="${1:-preflight}"
 RUN_NAME="${2:-stage7-bc-$(date -u +%Y%m%dT%H%M%SZ)}"
 CAPTURE_RUN="${3:-}"
@@ -118,11 +127,16 @@ REMOTE_SCRIPT
 }
 
 prepare_run() {
-  remote_script "$REMOTE" "$ENGINE" "$RUN_NAME" <<'REMOTE_SCRIPT'
+  remote_script "$REMOTE" "$ENGINE" "$RUN_NAME" "$PREPARE_CODE" <<'REMOTE_SCRIPT'
 set -euo pipefail
 task_root="$HOME/$1"
 engine_root="$HOME/$2"
 out="$task_root/data/$3"
+code_root="$HOME/$4"
+# The default engine's provenance is mirrored into the task root; another engine keeps its own.
+provenance="$task_root/provenance"
+[[ "$2" == gothic-ai/body-api ]] || provenance="$engine_root/provenance"
+[[ -d "$code_root/scripts" && -d "$code_root/evals" && -d "$code_root/body-service" ]] || { echo 'Prepare code root is incomplete' >&2; exit 1; }
 [[ ! -e "$out" ]] || { echo 'Run exists; choose a fresh name' >&2; exit 1; }
 [[ -x "$engine_root/build/opengothic/gothic-body-runner" ]] || { echo 'Build runner first' >&2; exit 1; }
 if gq_available; then
@@ -132,10 +146,10 @@ fi
 [[ ! -e "$engine_root/build-active" ]] || { echo 'Wait for the private build' >&2; exit 1; }
 mkdir -p "$out/code" "$out/reference" "$out/models" "$out/validation"
 rsync -a --exclude=__pycache__/ --exclude=.pytest_cache/ \
-  "$task_root/source/scripts" "$task_root/source/evals" "$task_root/source/body-service" "$out/code/"
+  "$code_root/scripts" "$code_root/evals" "$code_root/body-service" "$out/code/"
 cp "$engine_root/build/opengothic/gothic-body-runner" \
    "$engine_root/build/opengothic/gothic-body-resolver-test" "$out/reference/"
-cp "$task_root/provenance/"{source-head.txt,source.patch,configure.log,build.log,resolver-tests.json,body-environment.txt} "$out/"
+cp "$provenance/"{source-head.txt,source.patch,configure.log,build.log,resolver-tests.json} "$task_root/provenance/body-environment.txt" "$out/"
 nice -n 10 tar --exclude=__pycache__ --exclude=.pytest_cache -czf "$out/source.tar.gz" \
   -C "$engine_root/source" OpenGothic -C "$out/code" scripts evals body-service
 if gq_available; then
@@ -315,7 +329,7 @@ REMOTE_SCRIPT
 }
 
 run_phase() {
-  remote_script "$REMOTE" "$ENGINE" "$RUN_NAME" "$1" "$CAPTURE_RUN" "$LOCK_WAIT_SECONDS" <<'REMOTE_SCRIPT'
+  remote_script "$REMOTE" "$ENGINE" "$RUN_NAME" "$1" "$CAPTURE_RUN" "$LOCK_WAIT_SECONDS" "$NATIVE_REFERENCE" <<'REMOTE_SCRIPT'
 set -euo pipefail
 task_root="$HOME/$1"
 engine_root="$HOME/$2"
@@ -323,6 +337,7 @@ out="$task_root/data/$3"
 phase="$4"
 capture_run="$5"
 lock_wait_seconds="$6"
+native_reference="$HOME/${7:-gothic-ai/body-headless/runs/stage3-v1/native-off}"
 [[ "$lock_wait_seconds" =~ ^[0-9]{1,5}$ ]] && ((lock_wait_seconds <= 36000)) || { echo 'Invalid remote lock wait' >&2; exit 2; }
 code="$out/code"
 [[ -f "$out/environment.json" && -x "$out/reference/gothic-body-runner" ]] || {
@@ -371,7 +386,7 @@ common=(--runner "$out/reference/gothic-body-runner" --assets "$HOME/gothic-ai/b
  --reference "$HOME/gothic-ai/body-baseline/runs/melee-reference-stage1-v4"
  --source "$engine_source" --engine-library "$engine_library"
  --scenario "$code/scripts/bench/body-arena.bench" --melee-scenario "$code/scripts/bench/body-melee.bench"
- --native-reference "$HOME/gothic-ai/body-headless/runs/stage3-v1/native-off")
+ --native-reference "$native_reference")
 budget=2400
 case "$phase" in
   runtime-cpu-profile-tests)

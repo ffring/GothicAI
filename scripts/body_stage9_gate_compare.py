@@ -5,6 +5,8 @@ Reads the closed phases (shadow, realtime, realtime-reaction, fresh screening, f
 preregistered BC gate run and of a candidate run with the same readers and thresholds the gate uses.
 The candidate run is not preregistered: its declaration is the gate's with the candidate's own GRU
 checkpoint, run and engine binary substituted. Cases are paired by name (same task, seed, side).
+--baseline pairs the candidate with another run of the procedure instead of the gate, e.g. the native
+base on a new engine; the candidate's native episodes must then replay the baseline's.
 Measurement only: no stage 8 credit.
 """
 from __future__ import annotations
@@ -107,6 +109,29 @@ def evaluate(root, gate, readers):
     return result, cases
 
 
+def native_episodes(root):
+    """Native episodes of every phase by name: what another run on the same engine must replay."""
+    rows = {}
+    for phase in ("shadow", "realtime", "realtime-reaction", "screening", "load"):
+        path = root/phase/"suite.json"
+        if not path.exists():
+            continue
+        for record in json.loads(path.read_text())["cases"]:
+            if record["policy"] == "native":
+                final = record["final"]
+                rows[f"{phase}/{record['name']}"] = {"outcome": final["outcome"], "reason": final.get("reason"),
+                                                    "elapsed_game_ms": final["elapsed_game_ms"],
+                                                    "hp": [actor.get("hp") for actor in final["actors"]]}
+    return rows
+
+
+def native_replay(base, candidate):
+    names = sorted(set(base) & set(candidate))
+    differ = [name for name in names if base[name] != candidate[name]]
+    return {"episodes": len(names), "identical": len(names)-len(differ), "unpaired": sorted(set(base) ^ set(candidate)),
+            "differ": [{"episode": name, "baseline": base[name], "candidate": candidate[name]} for name in differ]}
+
+
 def paired(base, candidate, phase, task, policy="gru"):
     keys = sorted(key for key in base if key[0] == phase and key[2] == policy and base[key]["task"] == task)
     rows = [(base[key], candidate[key]) for key in keys if key in candidate]
@@ -128,6 +153,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gate", type=Path, required=True, help="preregistered BC gate run")
     parser.add_argument("--candidate", type=Path, required=True, help="candidate run with the same phases")
+    parser.add_argument("--baseline", type=Path,
+                        help="run of the same procedure the candidate is paired with and whose native episodes it must "
+                             "replay (default: the gate)")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--wire-max-ulps", type=int, default=2,
                         help="RapidJSON roundtrip tolerance of the native/wire observation check (the gate's: 2); "
@@ -143,18 +171,21 @@ def main() -> int:
     readers = (load("stage9_final_reader", scripts/"body_stage8_final_report.py"), bc, combat,
                load("stage9_reaction_reader", scripts/"body_block_reaction_report.py"))
     gate, candidate = args.gate.resolve(), args.candidate.resolve()
-    base, base_cases = evaluate(gate, gate, readers)
+    baseline = (args.baseline or args.gate).resolve()
+    base, base_cases = evaluate(baseline, gate, readers)
     other, other_cases = evaluate(candidate, gate, readers)
     comparison = {phase: {task: paired(base_cases, other_cases, phase, task) for task in ("distance", "attack", "block", "native_duel")}
                   for phase in ("realtime", "realtime-reaction", "screening")}
     mlp_control = {task: paired(base_cases, other_cases, "screening", task, "mlp") for task in ("native_duel",)}
+    natives = native_replay(native_episodes(baseline), native_episodes(candidate))
     value = {"schema_version": 1, "kind": "body_stage9_gate_procedure_comparison", "stage8_quality_credit": False,
-             "candidate_preregistered": False, "bc": base, "candidate": other, "paired_gru": comparison,
-             "paired_mlp_same_weights": mlp_control,
+             "candidate_preregistered": False, "baseline_run": str(baseline), "bc": base, "candidate": other,
+             "paired_gru": comparison, "paired_mlp_same_weights": mlp_control, "native_replay": natives,
              "reader_deviations": [] if args.wire_max_ulps == 2 else
              [{"check": "native_wire_relation", "gate_max_ulps": 2, "used_max_ulps": args.wire_max_ulps}]}
     args.output.write_text(json.dumps(value, indent=2)+"\n")
-    for name, run in (("BC", base), ("candidate", other)):
+    print(f"native replay: {natives['identical']}/{natives['episodes']} identical, {len(natives['unpaired'])} unpaired")
+    for name, run in (("BC" if baseline == gate else "baseline", base), ("candidate", other)):
         print(name, run["gru_sha256"][:12], "passed" if run["passed"] else "FAILED", run["issues"][:5])
         for phase in ("ordinary_realtime", "realtime_reaction", "four_actor_load"):
             print(" ", phase, json.dumps(run[phase]))
