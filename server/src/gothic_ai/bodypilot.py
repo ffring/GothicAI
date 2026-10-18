@@ -228,7 +228,10 @@ class BodyPilot:
         self._retarget_pending: set[str] = set()
         self._reacquire_after: dict[str, float] = {}
         self._roster_attempted: set[str] = set()
+        self._watch_refusals: dict[str, BodyFight] = {}
         self._watch_npcs: list[str] = []
+        self._pending_unwatch: set[str] = set()
+        self._last_watch_attempt = float("-inf")
         self._watch_lock = asyncio.Lock()
         self._wake = asyncio.Event()
         self._done = asyncio.Event()
@@ -324,6 +327,13 @@ class BodyPilot:
             or not self._allowed(npc)
         ):
             return False
+        if self.fights and not self._watch_can_change():
+            fight = BodyFight(self, npc)
+            fight.stop("watch_busy")
+            self._watch_refusals[npc] = fight
+            self._reacquire_after[npc] = self.clock() + REACQUIRE_INTERVAL
+            self._wake.set()
+            return False
         self.fights[npc] = BodyFight(self, npc)
         self._retarget_pending.discard(npc)
         entry = self.people[npc]
@@ -332,11 +342,16 @@ class BodyPilot:
         self._wake.set()
         return True
 
+    def _watch_can_change(self) -> bool:
+        return self.link.hello is not None and self.link.hello.protocol >= 45
+
     async def _watch(self, fight: BodyFight) -> None:
         # A growing/shrinking watch is a replacement list. Serialize its receipts
         # so a concurrent finish cannot overwrite a newly admitted actor.
         async with self._watch_lock:
-            npcs = [npc for npc in self._watch_npcs if npc in self.fights]
+            npcs = [npc for npc in self._watch_npcs if (
+                npc in self.fights and npc not in self._pending_unwatch
+            )]
             if fight.npc not in npcs:
                 npcs.append(fight.npc)
             # A timeout may mean the bridge applied this list without a receipt.
@@ -347,13 +362,30 @@ class BodyPilot:
             except GameError:
                 self._watch_npcs = previous
                 raise
+            self._pending_unwatch.difference_update(set(previous) - set(npcs))
+            self._pending_unwatch.discard(fight.npc)
 
     async def _unwatch(self, fight: BodyFight) -> bool:
+        self._pending_unwatch.add(fight.npc)
+        return await self._flush_unwatch()
+
+    async def _flush_unwatch(self) -> bool:
         async with self._watch_lock:
-            npcs = [npc for npc in self._watch_npcs if npc != fight.npc and npc in self.fights]
+            pending = self._pending_unwatch.copy()
+            npcs = [npc for npc in self._watch_npcs if npc not in pending and npc in self.fights]
+            self._last_watch_attempt = asyncio.get_running_loop().time()
             await self.link.body_watch(npcs, timeout=BRIDGE_TIMEOUT)
             self._watch_npcs = npcs
+            self._pending_unwatch.difference_update(pending)
             return True
+
+    async def _retry_unwatch(self, *, force: bool = False) -> None:
+        if self._pending_unwatch and (
+            force or asyncio.get_running_loop().time() - self._last_watch_attempt >= ACQUIRE_INTERVAL
+        ):
+            with contextlib.suppress(*BRIDGE_ERRORS):
+                async with asyncio.timeout(BRIDGE_TIMEOUT):
+                    await self._flush_unwatch()
 
     def _completed(self, fight: BodyFight, summary: FightSummary) -> None:
         self.summaries.append(summary)
@@ -413,6 +445,10 @@ class BodyPilot:
                 if self.link.closed.is_set():
                     self._stop_all("disconnected")
                     break
+                refusals, self._watch_refusals = self._watch_refusals, {}
+                for fight in refusals.values():
+                    await fight._finish("watch_busy")
+                await self._retry_unwatch()
                 for fight in list(self.fights.values()):
                     if fight.task is None:
                         fight.task = asyncio.create_task(fight.run())
@@ -426,7 +462,8 @@ class BodyPilot:
                     pass
         finally:
             self._closing = True
-            fights = list(self.fights.values())
+            fights = [*self.fights.values(), *self._watch_refusals.values()]
+            self._watch_refusals.clear()
             for fight in fights:
                 fight._closing = True
                 fight.stop(fight._reason or "shutdown")
@@ -435,6 +472,7 @@ class BodyPilot:
                     fight.task if fight.task is not None else fight._finish(fight._reason or "shutdown")
                     for fight in fights
                 ])
+                await self._retry_unwatch(force=True)
             finally:
                 self._unregister()
                 self._done.set()
@@ -446,7 +484,10 @@ class BodyPilot:
             await self._done.wait()
         else:
             try:
-                await asyncio.gather(*[fight._finish("shutdown") for fight in list(self.fights.values())])
+                fights = [*self.fights.values(), *self._watch_refusals.values()]
+                self._watch_refusals.clear()
+                await asyncio.gather(*[fight._finish(fight._reason or "shutdown") for fight in fights])
+                await self._retry_unwatch(force=True)
             finally:
                 self._unregister()
                 self._done.set()
@@ -771,7 +812,11 @@ class BodyFight:
                 try:
                     self._last_events_poll = loop.time()
                     self.pilot.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
-                except BRIDGE_ERRORS:
+                except BRIDGE_ERRORS as error:
+                    log.warning(
+                        "neural-body ownership poll failed npc=%s rpc=body_events error_type=%s error=%r",
+                        self.npc, type(error).__name__, error,
+                    )
                     await self._finish("lease_lost")
                     return
                 if self._reason or self.link.body_leases.get(self.lease.entity_id) != self.lease:
@@ -949,7 +994,7 @@ class BodyFight:
                 finally:
                     self._acquiring = False
             except (GameDisconnected, ConnectionClosed):
-                self._reason = "disconnected"
+                self.pilot._stop_all("disconnected")
             except BRIDGE_ERRORS as error:
                 self._refusals[str(error).removeprefix("body command rejected: ")] += 1
             else:
@@ -1457,7 +1502,7 @@ class BodyFight:
             summary.last_policy_decisions,
         )
         if (
-            reason == "target_changed" and release_confirmed and watch_removed
+            reason == "target_changed" and release_confirmed
             and not self._closing and self._reason in {None, "target_changed", "native_restored"}
             and npc is not None
             and self._allowed(npc)
