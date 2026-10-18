@@ -88,7 +88,8 @@ def test_film_records_effects_and_separate_voices_without_game_music(tmp_path, m
     take = film.film(shot, Config.load(tmp_path / "config"), layout)
 
     assert (take / "run" / "Gothic.ini").read_text() == (
-        "[INTERNAL]\nvidResIndex=0\n[SOUND]\nsoundVolume=0.7\nmusicVolume=0\n"
+        "[INTERNAL]\nvidResIndex=0\n[SOUND]\nsoundVolume=0.7\nmusicVolume=0\nmusicEnabled=0\n"
+        "worldSounds=0\n"
     )
     game = supervisor.call_args.args[1]
     assert game.env["OPENGOTHIC_BENCH_VOICE_STEM"] == "1"

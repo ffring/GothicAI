@@ -86,7 +86,9 @@ def film(
     run.mkdir()
     shutil.copy(save, run / "save_slot_1.sav")
     (run / "Gothic.ini").write_text(
-        f"[INTERNAL]\nvidResIndex=0\n[SOUND]\nsoundVolume={shot.sound:g}\nmusicVolume=0\n"
+        # no music and no looping sounds of the map's places (zCVobSound): the cut lays one bed
+        f"[INTERNAL]\nvidResIndex=0\n[SOUND]\nsoundVolume={shot.sound:g}\nmusicVolume=0\nmusicEnabled=0\n"
+        "worldSounds=0\n"
     )
     logs = take / "logs"
     logs.mkdir()
