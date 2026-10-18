@@ -12,6 +12,7 @@ from gothic_ai.chronicle import Chronicle
 from gothic_ai.crime_law_graph import law_var
 from gothic_ai.crime_law_runtime import CrimeLawRuntime
 from gothic_ai.crimes import Crimes
+from gothic_ai.game import GameError
 from gothic_ai.gamedata.storygraph import Node, StoryGraph
 from gothic_ai.memory import MemoryStore
 from gothic_ai.protocol import DialogChosen, Loading, Session
@@ -284,3 +285,34 @@ async def test_a_clock_reply_from_previous_branch_cannot_publish_law_state(runti
     await runtime.service.tick()
     assert runtime.link.variables[law_var("city")] == 0
     assert runtime.law.known("city") == []
+
+
+async def test_unavailable_legacy_witness_does_not_block_a_current_local_guard_report(runtime, monkeypatch):
+    remote = "MIL_OLDWORLD_WITNESS"
+    runtime.chronicle.record(
+        {
+            "fact": "crime",
+            "id": "legacy-oldcamp",
+            "kind": "theft",
+            "community": "oldcamp",
+            "day": AT // 1440,
+            "hour": AT % 1440 // 60,
+            "minute": AT % 60,
+        }
+    )
+    runtime.chronicle.record({"fact": "crime_seen", "crime": "legacy-oldcamp", "npc": remote})
+    current = case(runtime, crime="current-city", guard=True)
+    requested = []
+
+    async def unavailable(npc, expressions):
+        requested.append(npc)
+        assert npc == remote  # the current deed already carries its guard's metadata
+        raise GameError("npc is in another world")
+
+    monkeypatch.setattr(runtime.link, "story_eval", unavailable)
+    await runtime.service.tick()
+    assert requested == [remote]
+    assert runtime.law.unpaid("city") == [current]
+    assert runtime.law.known("oldcamp") == []
+    assert runtime.link.variables["PETZCOUNTER_CITY_THEFT"] == 1
+    assert runtime.link.variables[law_var("city")] == 1

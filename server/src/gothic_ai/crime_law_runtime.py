@@ -154,9 +154,14 @@ class CrimeLawRuntime:
                 continue
             if "npctype" in self.crimes.people.get(npc, {}):
                 continue
-            values = await self.link.story_eval(
-                npc, [["field", ["inst", "SELF"], "GUILD"], ["field", ["inst", "SELF"], "NPCTYPE"]]
-            )
+            try:
+                values = await self.link.story_eval(
+                    npc, [["field", ["inst", "SELF"], "GUILD"], ["field", ["inst", "SELF"], "NPCTYPE"]]
+                )
+            except (GameError, TimeoutError):
+                # A legacy eyewitness can be in another world. Its missing identity must not
+                # prevent other communities' news, payments or already classified reports.
+                continue
             if generation != self._generation:
                 return
             if len(values) == 2 and all(isinstance(value, int) for value in values):
@@ -222,7 +227,7 @@ class CrimeLawRuntime:
                 values[law_var(community)] = int(bool(cases))
                 if self._projection.get(community) != cases:
                     await self.link.story_effect(
-                        COMMUNITIES[community].lawkeepers[0],
+                        "PC_HERO",  # pure global stores also work when this keeper is in another world
                         [{"do": "set", "var": var, "value": value} for var, value in values.items()],
                     )
                     if generation != self._generation or branch != self.chronicle.branch:

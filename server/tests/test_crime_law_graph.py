@@ -8,6 +8,7 @@ import pytest
 from gothic_ai.crime_law_graph import (
     AMBIENT,
     LAWFUL,
+    NEWS_CRIME,
     absolution_program,
     ambient_ops,
     ambient_program,
@@ -15,7 +16,6 @@ from gothic_ai.crime_law_graph import (
     gate_nodes,
     init_ops,
     law_var,
-    news_expr,
     project_program,
     projection_values,
     validate_ops,
@@ -59,6 +59,7 @@ def test_additive_lock_keeps_native_condition_and_effects(graph):
     before = copy.deepcopy(graph)
     ops = init_ops(graph)
     assert graph == before
+    assert ops[0]["vars"][NEWS_CRIME] == 0
     assert ops[1:] == [{"op": "condition", "node": PETZMASTER, "expr": ["var", law_var("city")]}]
     patched = Story(graph, WorldState(), Patches.of(ops))
     assert patched.graph.nodes[PETZMASTER].condition == before.nodes[PETZMASTER].condition
@@ -139,19 +140,67 @@ def test_news_uses_actual_speaker_known_crime_and_keeps_native_voice(graph):
         {"do": "return"},
     ]
     levels = {"VLK_400_MATTEO": 3, ANDRE: 2}
-    expected = news_expr(levels)
+    original = copy.deepcopy(own)
     made = ambient_program(own, levels)
-    assert made[0]["cond"] == ["==", expected, ["int", 3]]
-    assert made[0]["then"] == own[0]["then"] == [native_voice]
-    assert made[1] == own[1]
+    body = made[1 + len(levels) :]
+    assert body[0]["cond"] == ["==", ["var", NEWS_CRIME], ["int", 3]]
+    assert body[0]["then"] == own[0]["then"] == [native_voice]
+    assert body[1] == own[1]
+    assert own == original
     assert player_crime in list(walk(own[0]["cond"]))
-    assert all(e[:2] != ["fn", "B_GETPLAYERCRIME"] for e in walk(made[0]["cond"]))
-    # Unknown NPCs fall through cases to zero. No mutable "current NPC" global can leak knowledge.
-    assert expected[1] == ["==", ["call", "HLP_GETINSTANCEID", ["inst", "SELF"]], ["sym", ANDRE]]
-    assert news_expr({}) == ["int", 0]
+    assert made[0] == {"do": "set", "target": ["var", NEWS_CRIME], "value": ["int", 0]}
+    assert made[1]["cond"] == ["==", ["call", "HLP_GETINSTANCEID", ["inst", "SELF"]], ["sym", ANDRE]]
+    assert ambient_program(own, {}) == [made[0], *body]
     ops = ambient_ops(graph, own, levels)
     assert {op["part"] for op in ops} == {"condition", "information"}
     assert all(op["node"] == AMBIENT for op in ops)
+
+    # Execute the emitted ordinary steps across speakers using the same scratch state. In
+    # particular, a stranger immediately after Matteo must neither know nor utter his theft.
+    variables = {NEWS_CRIME: 99}
+    symbols = {ANDRE: 311, "VLK_400_MATTEO": 400}
+    spoken = []
+
+    def value(expr, speaker):
+        match expr:
+            case ["int", integer]:
+                return integer
+            case ["var", name]:
+                return variables[name]
+            case ["sym", name]:
+                return symbols[name]
+            case ["call", "HLP_GETINSTANCEID", ["inst", "SELF"]]:
+                return speaker
+            case ["==", left, right]:
+                return int(value(left, speaker) == value(right, speaker))
+            case ["!=", left, right]:
+                return int(value(left, speaker) != value(right, speaker))
+            case _:
+                raise AssertionError(f"unsupported program expression: {expr}")
+
+    def execute(steps, speaker):
+        for step in steps:
+            match step["do"]:
+                case "set":
+                    variables[step["target"][1]] = value(step["value"], speaker)
+                case "if":
+                    if value(step["cond"], speaker):
+                        execute(step["then"], speaker)
+                case "call":
+                    assert step == native_voice
+                    spoken.append(speaker)
+                case "return":
+                    return value(step["value"], speaker) if "value" in step else None
+                case _:
+                    raise AssertionError(f"unsupported program step: {step}")
+
+    condition = next(op["steps"] for op in ops if op["part"] == "condition")
+    for speaker, expected in ((400, 3), (999, 0), (311, 2), (999, 0), (400, 3)):
+        assert execute(condition, speaker) == int(bool(expected))
+        assert variables[NEWS_CRIME] == expected
+        execute(made, speaker)
+        assert variables[NEWS_CRIME] == expected
+    assert spoken == [400, 400]
 
 
 def test_scoped_validator_does_not_authorize_other_plot_dialogs(graph):
@@ -163,7 +212,8 @@ def test_scoped_validator_does_not_authorize_other_plot_dialogs(graph):
     ) == [f"unexpected community law condition: {PETZMASTER}"]
 
 
-REAL_GRAPH = Path(os.environ.get("GOTHIC_STORY_GRAPH", Path.home() / ".local/share/gothic-ai/story.json"))
+DATA_ROOT = Path(os.environ.get("GOTHIC_AI_DATA", Path.home() / ".local/share/gothic-ai"))
+REAL_GRAPH = Path(os.environ.get("GOTHIC_STORY_GRAPH", DATA_ROOT / "story.json"))
 
 
 @pytest.fixture(scope="module")

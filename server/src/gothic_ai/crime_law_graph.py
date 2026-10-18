@@ -23,6 +23,7 @@ SUFFIXES = {"sheep": "SHEEPKILLER", "attack": "ATTACK", "theft": "THEFT", "murde
 CRIME_LEVELS = {"sheep": 1, "attack": 2, "theft": 3, "murder": 4}
 LOCATIONS = {1: "oldcamp", 2: "city", 3: "monastery", 4: "farm"}
 AMBIENT = "DIA_AMBIENT_NEWS"
+NEWS_CRIME = "DIR_NEWS_CRIME"
 
 
 def law_var(community: str) -> str:
@@ -67,6 +68,7 @@ def gate_nodes(graph: StoryGraph) -> dict[str, str]:
 
 def init_ops(graph: StoryGraph) -> list[dict[str, Any]]:
     variables = {law_var(community): 0 for community in LAWFUL}
+    variables[NEWS_CRIME] = 0
     for community in LAWFUL:
         variables.update(projection_values(community, []))
     return [
@@ -138,39 +140,34 @@ def absolution_program(own: list[Step]) -> list[Step]:
     return result
 
 
-def news_expr(levels: Mapping[str, int]) -> list:
-    """A branch-derived knowledge lookup for the actual speaker, never a shared current-NPC global.
-
-    Instance expressions cannot be compared by this engine's evaluator; Hlp_GetInstanceID and sym
-    both produce the script symbol's integer index. Unlisted speakers receive CRIME_NONE.
-    """
-    expr: list = ["cases"]
-    for npc, level in sorted(levels.items()):
-        if level not in CRIME_LEVELS.values():
-            continue
-        expr.extend(
-            [
-                ["==", ["call", "HLP_GETINSTANCEID", ["inst", "SELF"]], ["sym", npc.upper()]],
-                ["int", level],
-            ]
-        )
-    return expr if len(expr) > 1 else ["int", 0]
-
-
 def ambient_program(own: list[Step], levels: Mapping[str, int]) -> list[Step]:
-    """Keep native lines and guards; only the source of the speaker's crime knowledge changes."""
-    replacement = news_expr(levels)
+    """Compute this speaker's knowledge with ordinary steps, then keep the native body.
+
+    Both the condition and information reset the scratch variable before choosing the actual
+    speaker's level, so one NPC can never inherit another's knowledge. Programs cannot contain
+    the lifted graph's `cases` expressions; these stores and flat `if` steps are native forms.
+    """
+    prefix: list[Step] = [{"do": "set", "target": ["var", NEWS_CRIME], "value": ["int", 0]}]
+    prefix.extend(
+        {
+            "do": "if",
+            "cond": ["==", ["call", "HLP_GETINSTANCEID", ["inst", "SELF"]], ["sym", npc.upper()]],
+            "then": [{"do": "set", "target": ["var", NEWS_CRIME], "value": ["int", level]}],
+        }
+        for npc, level in sorted(levels.items())
+        if level in CRIME_LEVELS.values()
+    )
 
     def rewrite(value: Any) -> Any:
         if isinstance(value, list):
             if value == ["fn", "B_GETPLAYERCRIME", ["inst", "SELF"]]:
-                return copy.deepcopy(replacement)
+                return ["var", NEWS_CRIME]
             return [rewrite(part) for part in value]
         if isinstance(value, dict):
             return {key: rewrite(part) for key, part in value.items()}
         return value
 
-    return rewrite(own)
+    return [*prefix, *rewrite(own)]
 
 
 def ambient_ops(
