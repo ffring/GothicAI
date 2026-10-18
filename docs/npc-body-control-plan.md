@@ -204,7 +204,7 @@ Mask описывает реально допустимые примитивы. 
 - Отчёт содержит episodes/s, реальных policy transitions/s, reset latency и прогноз `число шагов / фактический throughput` для обучения.
 - Решено, достаточно ли фактической скорости headless runner для небольшого PPO запуска. Если нет, оптимизация серверного runner становится задачей до большого обучения; перенос серий на Mac не является обходом этого gate.
 
-**Код:** общий melee scenario/setup, headless episode runner и адаптер reference для [testbench.cpp](../OpenGothic/common/testbench.cpp); переиспользовать [scenarios.py](../server/src/gothic_ai/scenarios.py) и [bench_report.py](../scripts/bench_report.py), где они подходят без GUI. Проверка — одна серверная серия `body_arena`, pytest и симуляция последовательно.
+**Код:** общий melee scenario/setup, headless episode runner и адаптер reference для [testbench.cpp](../OpenGothic/common/testbench.cpp); переиспользовать [scenarios/companions.py](../server/src/gothic_ai/scenarios/companions.py) и [bench_report.py](../scripts/bench_report.py), где они подходят без GUI. Проверка — одна серверная серия `body_arena`, pytest и симуляция последовательно.
 
 ## Этап 6 Траектории и датасет
 

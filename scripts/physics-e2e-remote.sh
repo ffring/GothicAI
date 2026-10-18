@@ -42,7 +42,7 @@ REMOTE
   remote_script "$REMOTE" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
-python3 - "$HOME/$1/source/server/src/gothic_ai/scenarios.py" <<'PY'
+python3 - "$HOME/$1/source/server/src/gothic_ai/scenarios/perception.py" <<'PY'
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -56,7 +56,7 @@ if section.count(anchor) != 1:
 # Daylight is applied only to the farm phase, after the original Xardas front/wall commands.
 collector = '''    # Passive diagnostic: preserve the exact pushed actors, clock and native tick.
     import json
-    from .protocol import NpcViews
+    from ..protocol import NpcViews
     recent_push = {"tick": -1, "views": [], "received_wall": 0.0}
 
     def capture_push(message: GameMessage) -> None:

@@ -20,10 +20,6 @@ from . import (
     npc_tools,
     places,
     programs,
-    scenario_occasions,
-    scenario_questlog,
-    scenario_showrunner,
-    scenario_vanilla_line,
     scenarios,
 )
 from .amends import Amends
@@ -102,10 +98,14 @@ from .questbook import QuestBook
 from .questlog import QuestLog
 from .quests import QuestBoard
 from .replay import replay as replay_turn
-from .scenario_crime_director import crime_director as crime_director_scenario
-from .scenario_crime_law import crime_law as crime_law_scenario
-from .scenario_crime_talk import crime_talk as crime_talk_scenario
-from .scenario_crimes import crimes as crimes_scenario
+from .scenarios import occasions as scenario_occasions
+from .scenarios import questlog as scenario_questlog
+from .scenarios import showrunner as scenario_showrunner
+from .scenarios import vanilla_line as scenario_vanilla_line
+from .scenarios.crime_director import crime_director as crime_director_scenario
+from .scenarios.crime_law import crime_law as crime_law_scenario
+from .scenarios.crime_talk import crime_talk as crime_talk_scenario
+from .scenarios.crimes import crimes as crimes_scenario
 from .showrunner import Showrunner
 from .sightings import Sightings
 from .social import Rumors
@@ -1527,7 +1527,7 @@ async def serve(args: argparse.Namespace) -> int:
                 dialogue, talk, sightings = state.dialogue, state.talk, state.sightings
                 assert dialogue is not None and talk is not None and sightings is not None
                 assert args.trace_dir is not None
-                from .scenario_broken import broken_memory
+                from .scenarios.broken import broken_memory
 
                 runner = broken_memory if args.scenario == "broken" else scenarios.trace_memory
                 results = await runner(link, dialogue, talk, sightings, str(Path(args.trace_dir).parent))

@@ -11,17 +11,17 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
-from . import questbook
-from .brain import GameApplier, NpcPlanner
-from .brain.reflex import Reflexes
-from .budget import Budget
-from .game import GameError, GameLink
-from .initiative import InitiativeDesk
-from .llm import LLMEvent, Message, ToolCall
-from .llm.fake import FakeBackend, FakeStep
-from .protocol import Session
-from .scenario_crimes import HOUSE
-from .scenarios import (
+from .. import questbook
+from ..brain import GameApplier, NpcPlanner
+from ..brain.reflex import Reflexes
+from ..budget import Budget
+from ..game import GameError, GameLink
+from ..initiative import InitiativeDesk
+from ..llm import LLMEvent, Message, ToolCall
+from ..llm.fake import FakeBackend, FakeStep
+from ..protocol import Session
+from ..showrunner import occasion_members
+from .common import (
     HILDA,
     LOBART,
     ClaimScript,
@@ -32,22 +32,22 @@ from .scenarios import (
     _until_async,
     wait_message,
 )
-from .showrunner import occasion_members
+from .crimes import HOUSE
 
 if TYPE_CHECKING:
-    from .amends import Amends
-    from .bodies import Bodies
-    from .chests import ChestDesk
-    from .concerns import Concerns
-    from .crimes import Crimes
-    from .deals import Deals
-    from .dialogue import DialogueManager
-    from .perception import PerceptionDesk
-    from .showrunner import Showrunner
-    from .sightings import Sightings
-    from .social import Rumors
-    from .storyguard import StoryGuard
-    from .talk import TalkDesk
+    from ..amends import Amends
+    from ..bodies import Bodies
+    from ..chests import ChestDesk
+    from ..concerns import Concerns
+    from ..crimes import Crimes
+    from ..deals import Deals
+    from ..dialogue import DialogueManager
+    from ..perception import PerceptionDesk
+    from ..showrunner import Showrunner
+    from ..sightings import Sightings
+    from ..social import Rumors
+    from ..storyguard import StoryGuard
+    from ..talk import TalkDesk
 
 log = logging.getLogger(__name__)
 GOLD = "ITMI_GOLD"

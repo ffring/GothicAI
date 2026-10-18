@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from gothic_ai import scenarios
 from gothic_ai.game import GameDisconnected, GameError
+from gothic_ai.scenarios import basics as scenarios
 from tests.fake_game import FakeGame, connected
 
 XARDAS = "NONE_100_XARDAS"

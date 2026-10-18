@@ -1,6 +1,6 @@
 import pytest
 
-from gothic_ai.scenarios import _trace_evidence_line
+from gothic_ai.scenarios.common import _trace_evidence_line
 from gothic_ai.sightings import Sighting
 
 FARM = "во дворе фермы Лобарта"

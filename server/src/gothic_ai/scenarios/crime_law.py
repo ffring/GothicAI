@@ -7,22 +7,22 @@ import logging
 import math
 from typing import TYPE_CHECKING, Any
 
-from .brain.reflex import Reflexes
-from .crime_law_graph import law_var
-from .game import GameError, GameLink
-from .llm import ToolCall
-from .llm.fake import FakeBackend, FakeStep
-from .protocol import DialogChosen, Session
-from .scenario_crimes import ANDRE, CITY_HOUSE, CITY_OWNER
-from .scenarios import ClaimScript, FixedDecider, _logged, _save, _until, _until_async, wait_message
+from ..brain.reflex import Reflexes
+from ..crime_law_graph import law_var
+from ..game import GameError, GameLink
+from ..llm import ToolCall
+from ..llm.fake import FakeBackend, FakeStep
+from ..protocol import DialogChosen, Session
+from .common import ClaimScript, FixedDecider, _logged, _save, _until, _until_async, wait_message
+from .crimes import ANDRE, CITY_HOUSE, CITY_OWNER
 
 if TYPE_CHECKING:
-    from .crime_law_runtime import CrimeLawRuntime
-    from .crimes import Crimes
-    from .deals import Deals
-    from .dialogue import DialogueManager
-    from .social import Rumors
-    from .talk import TalkDesk
+    from ..crime_law_runtime import CrimeLawRuntime
+    from ..crimes import Crimes
+    from ..deals import Deals
+    from ..dialogue import DialogueManager
+    from ..social import Rumors
+    from ..talk import TalkDesk
 
 log = logging.getLogger(__name__)
 PETZMASTER = "DIA_ANDRE_PETZMASTER"

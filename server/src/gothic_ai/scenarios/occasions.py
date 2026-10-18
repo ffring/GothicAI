@@ -7,12 +7,12 @@ import logging
 import math
 from typing import TYPE_CHECKING, Any
 
-from .game import GameLink
-from .protocol import Saved, Session
-from .scenarios import _logged, _until, wait_message
+from ..game import GameLink
+from ..protocol import Saved, Session
+from .common import _logged, _until, wait_message
 
 if TYPE_CHECKING:
-    from .occasions import Occasions
+    from ..occasions import Occasions
 
 log = logging.getLogger(__name__)
 
