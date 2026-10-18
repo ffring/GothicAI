@@ -25,11 +25,14 @@ class BodyObservations final {
     static void reset(uint64_t generation);
     static void configure(const Config& config);
     static void watch(const std::vector<Npc*>& actors);
+    // Same-period subscription edit: retain identity, history and rows of remaining actors.
+    static void updateWatch(const std::vector<Npc*>& actors);
     static void disable();
     static bool enabled();
     static size_t watchedCount();
     static size_t queuedCount();
     static size_t queueCapacity();
+    static uint64_t samplePeriodMs();
     static void setSink(std::function<void(std::string_view)> sink);
     static uint64_t lastStepCostUs();
     static size_t lastStepActorCount();
@@ -68,6 +71,7 @@ class BodyObservations final {
     // arena_advance stops on them exactly where a per-tick client would make its next decision.
     struct QueuedRow final {
       uint64_t entityId = 0, sessionEpoch = 0, worldEpoch = 0, controlGeneration = 0;
+      uint64_t enqueueIndex = 0; // queue cursor, including rows removed by subscription edits
       bool periodic = false, canDecide = false, actionMaskValid = false;
       std::array<bool,12> actionMask = {};
       };
