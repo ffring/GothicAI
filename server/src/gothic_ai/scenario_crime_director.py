@@ -52,6 +52,10 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 GOLD = "ITMI_GOLD"
 PREMISE = "Лобарт заметил пропажу из сундука и просит найти и принести вещь; кто вор, он не знает."
+# The gossip scenario's open farm path: 10.6 m between two actual waypoints. An arbitrary heading
+# from FIELD_01 can put the hero past field obstacles, outside the soft walk's reachable endpoint.
+WITNESS_SPOT = "NW_FARM1_PATH_01"
+WITNESS_HERO = "NW_FARM1_ENTRANCE_03"
 
 
 class CrimeAmendsScript(FakeBackend):
@@ -333,7 +337,24 @@ async def crime_director(
         concerns.on_change.append(agenda)
         agenda(HILDA)
         try:
-            await link.debug("teleport", near=HILDA, distance=1200)
+            await stand(HILDA, WITNESS_SPOT)
+            await link.debug("player_goto", waypoint=WITNESS_HERO)
+            await link.npc_act(HILDA, "turn_to", npc="PLAYER")
+            positioned = await _until(
+                lambda: HILDA in talk.people and 500 <= talk.people[HILDA].distance <= 1500, 10
+            )
+            snap = await link.snapshot(HILDA, fresh=True)
+            level = snap.player is not None and abs(snap.player.pos[1] - snap.npc.pos[1]) <= 200
+            if not check(
+                "witness_position",
+                positioned and level,
+                {
+                    "npc": snap.npc.pos,
+                    "hero": snap.player.pos if snap.player is not None else None,
+                    "distance": talk.people[HILDA].distance if HILDA in talk.people else None,
+                },
+            ):
+                return False
             if own:
                 runner = asyncio.create_task(planner.run())
             approached = await _until(

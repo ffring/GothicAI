@@ -281,6 +281,7 @@ async def test_victims_and_guards_do_not_get_the_witness_concern(npc, victim, me
 
 async def test_a_priced_silence_deal_ends_the_witness_concern_when_accepted():
     fake = FakeGame(branch="A")
+    fake.item_names[GOLD] = "Золото"
     link_cm, chronicle, deals, concerns = await _setup(fake, with_crimes=True)
     try:
         _theft(chronicle, guild=8, npctype=0)
