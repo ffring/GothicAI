@@ -1,4 +1,6 @@
-from gothic_ai.commands import FORMS, parse
+import pytest
+
+from gothic_ai.commands import FORMS, follow_request, parse
 
 
 def kind(text: str, names: tuple[str, ...] = ()) -> str | None:
@@ -37,7 +39,6 @@ def test_words_of_an_order_that_are_not_one():
         "Не стой столбом, помоги мне.",
         "Сколько это стоит?",
         "Сюда?",  # a question
-        "Иди за мной в город.",  # more to it: the conversational model's
         "Он крикнул мне: стой!",
         "Убил его.",
         "Стою.",
@@ -49,6 +50,43 @@ def test_words_of_an_order_that_are_not_one():
         "",
     ):
         assert kind(text) is None, text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Пойдем, бодитов, пиздеть.",
+        "Ну ты идешь, нет?",
+        "Ты идёшь?",
+        "Давай за мной.",
+        "Пошли к бандитам, разберемся с ними вместе.",
+        "Иди за мной в город.",
+        "Пойдёшь со мной к пещере?",
+        "Кавалорн, давай, иди за мной.",
+    ],
+)
+def test_follow_requests_can_have_more_words_or_be_questions(text):
+    assert follow_request(text, lambda w: w == "кавалорн")
+    assert kind(text, ("кавалорн",)) == "follow"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Куда ты идешь?",
+        "Ты идешь в город?",
+        "Он сказал: пойдем к бандитам.",
+        "Не пойдем туда.",
+        "Если пойдем, прикрой мне спину.",
+        "Пойдем туда позже.",
+        "Мы пойдём туда завтра.",
+        "Кто пойдет со мной?",
+        "Я за тобой иду.",
+    ],
+)
+def test_follow_words_in_a_story_or_route_question_are_not_requests(text):
+    assert not follow_request(text)
+    assert kind(text) is None
 
 
 def test_every_form_is_its_order():
