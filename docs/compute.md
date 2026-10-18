@@ -181,6 +181,7 @@ scripts/gq cancel <id>
 1. `gq` и резерв ядер 0–1 вводятся раньше сервиса.
 2. Если сервис не ответил, арбитр отдаёт бой native. По желанию — второй экземпляр на dev-ubuntu как горячий резерв: шлюз переключается на него с новым `control_generation`.
 3. Перед приёмкой этапа 10 — прогон по 10 минут на каждом хосте. Записанный поток решений четырёх NPC из настоящего боя проигрывается с Mac в реальном времени. На Ryzen в это время идёт lockstep-сбор, на dev-ubuntu — сборка CI. Меряем от Mac: p50/p95/p99 и долю ответов старше `valid_for_ms`. Если Ryzen не держит p99 ≤ 20 мс, основным становится dev-ubuntu.
+   Команда с Mac: `python3 scripts/body_policy_net_check.py load ~/.local/share/gothic-ai/body/load-episodes/* --host HOST --streams 4 --duration-s 600 --label HOST --output summary.json` (при необходимости добавить `--samples samples.jsonl`).
 
 ## Порядок внедрения
 
