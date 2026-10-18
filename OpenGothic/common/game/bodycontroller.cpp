@@ -226,6 +226,28 @@ void BodyController::setActors(const std::vector<Npc*>& actors) {
   state().actors=actors;
   }
 
+bool BodyController::hasOwners() { return !state().leases.empty() || !state().pending.empty(); }
+
+const char* BodyController::updateWatch(const std::vector<Npc*>& actors, uint64_t periodMs) {
+  if(actors.size()>MaxActors || (periodMs!=50 && periodMs!=100))
+    return "body_watch needs up to 4 actors and rate_hz 10 or 20";
+  for(size_t i=0;i<actors.size();++i)
+    if(actors[i]==nullptr || std::find(actors.begin(),actors.begin()+std::ptrdiff_t(i),actors[i])!=actors.begin()+std::ptrdiff_t(i))
+      return "null or duplicate body_watch actor";
+  const auto included=[&](const auto& owners) {
+    return std::all_of(owners.begin(),owners.end(),[&](const auto& owner) {
+      return std::find(actors.begin(),actors.end(),owner.first)!=actors.end();
+      });
+    };
+  if(!included(state().leases) || !included(state().pending))
+    return "body_watch must retain active body owners and pending acquisitions";
+  if(periodMs!=BodyObservations::samplePeriodMs())
+    return "release active body owners before changing body_watch rate_hz";
+  BodyObservations::updateWatch(actors);
+  setActors(actors);
+  return "allowed";
+  }
+
 FightAlgo::ResolverState BodyController::resolverState(const Npc& npc) {
   const auto own=npc.bodyObservationState();
   FightAlgo::ResolverState s;

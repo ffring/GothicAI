@@ -1,4 +1,4 @@
-# Протокол игра ↔ ИИ-сервер (v43)
+# Протокол игра ↔ ИИ-сервер (v45)
 
 ## Версии
 
@@ -16,7 +16,6 @@
 Брони:
 
 - v44 — занято: `codex/crime-react` (слой 4a преступлений, работа Codex ещё не в `main`)
-- v45 — занято: `codex/body-watch-grow` (подписка тела растёт под lease, этап 10 шаг 5)
 
 ### Что добавила каждая версия
 
@@ -65,6 +64,7 @@
 | v41 | боевой API, body lease и единый арбитр | [npc-body-api.md](npc-body-api.md) |
 | v42 | дела героя, владельцы и свидетели (`hero_deed`) | [Дела героя](#дела-героя-v42) |
 | v43 | ранние реакции в бою: `Look.combat_target`, `fighting`, `npc_threat`; видимость враждебных монстров спутнику до 40 м; немедленные `fight/flee` с собственной SVM-репликой | [Восприятие NPC](#восприятие-npc-v11), [Планировщик NPC](#планировщик-npc-v5) |
+| v45 | изменение списка `body_watch` при сохранении всех NPC под lease или с `acquire_pending`, без сброса их identity, заявок и последовательности наблюдений | [npc-body-api.md](npc-body-api.md) |
 
 `ProtocolVersion` в мосту отставал от серверного номера на v22 и с v27 снова равен ему.
 
@@ -96,11 +96,11 @@ Native-защитник явно возвращается арбитром с `r
 
 Мост сам переподключается раз в 0,5–3 с. Если связь с сервером рвётся, все NPC под управлением возвращаются к распорядку.
 
-`body_watch` — отдельная подписка без захвата тела: native AI продолжает работать. Она сбрасывается при reconnect, загрузке и выгрузке мира; после `hello` или `world_loaded` подписку нужно запросить заново. Символ NPC должен однозначно указывать на одного актёра: копии одного script instance этим API не выбираются. Без body lease в числовом потоке `can_decide`, `control_allowed` и `action_mask_valid` равны `false`. `native_decision_eligible` и `availability_mask` служат наблюдаемыми признаками. С v41 после `body_acquire` общий арбитр публикует отдельную authoritative `action_mask` и актуальные control/goal версии. Смена подписки при занятом теле отклоняется; disconnect/reconnect отдаёт native текущий непрерываемый segment перед сбросом IDs.
+`body_watch` — отдельная подписка без захвата тела: native AI продолжает работать. Она сбрасывается при reconnect, загрузке и выгрузке мира; после `hello` или `world_loaded` подписку нужно запросить заново. Символ NPC должен однозначно указывать на одного актёра: копии одного script instance этим API не выбираются. Без body lease в числовом потоке `can_decide`, `control_allowed` и `action_mask_valid` равны `false`. `native_decision_eligible` и `availability_mask` служат наблюдаемыми признаками. С v41 после `body_acquire` общий арбитр публикует отдельную authoritative `action_mask` и актуальные control/goal версии. С v45 обычный мост принимает смену списка при занятом теле, если все NPC под lease или с `acquire_pending` остаются в списке и частота не меняется. Их identity, lease, заявки и последовательность наблюдений сохраняются. Удалять можно только свободных NPC; пустой список при владельцах отклоняется. Disconnect/reconnect отдаёт native текущий непрерываемый segment перед сбросом IDs.
 
 Сообщение обычного моста имеет оболочку `{"type":"body_observations","packet":…}`. В `packet` лежит та же схема, что возвращает headless API: `kind:"body_observations"`, `schema_version:1`, generation и `observations[]`. Нативная очередь обычного моста хранит до 16 строк. При socket buffer от 64 KiB отправка этого потока ждёт, а вытеснения отражаются в `dropped_total` / `dropped_since_drain`. `GameLink.body_latest` хранит последнее наблюдение до четырёх актёров, `pop_body_observations()` читает очередь из четырёх пакетов; `body_buffer_dropped_packets` считает переполнение этой очереди, `body_sequence_gaps` — недоставленные номера наблюдений. Старые generation и повторные sequence не обновляют состояние и не вызывают listener повторно.
 
-`packet.generation` и `world_epoch` обозначают эпоху наблюдений: она меняется также при новой подписке, поэтому не равна счётчику reset headless runner. `motion_discontinuity` помечает разрыв движения; после него скорость имеет `null` и `velocity_valid=false`, хотя `dt_game_ms` остаётся фактическим. `self.skill_talent` и `skill_valid` обозначают, какому native weapon talent соответствует числовой `skill` и доступен ли этот признак.
+`packet.generation` и `world_epoch` обозначают эпоху наблюдений: она меняется также при новой подписке без владельцев тела, поэтому не равна счётчику reset headless runner. При изменении списка обычного моста под lease или с `acquire_pending` эпоха сохраняется. `motion_discontinuity` помечает разрыв движения; после него скорость имеет `null` и `velocity_valid=false`, хотя `dt_game_ms` остаётся фактическим. `self.skill_talent` и `skill_valid` обозначают, какому native weapon talent соответствует числовой `skill` и доступен ли этот признак.
 
 ## Игра → сервер
 
@@ -157,7 +157,7 @@ Native-защитник явно возвращается арбитром с `r
 | `detach` | `req`, `npc` |
 | `action` | `id`, `npc`, `action`, `args{}` |
 | `snapshot` | `npc`: запросить снимок сейчас |
-| `body_watch` | `req`, `npcs[]` (до 4 явных символов NPC), `rate_hz` (10 или 20, по умолчанию 20). Пустой список выключает подписку; ответ `result`. Неизвестные, повторяющиеся и неоднозначные символы отклоняются |
+| `body_watch` | `req`, `npcs[]` (до 4 явных символов NPC), `rate_hz` (10 или 20, по умолчанию 20). Ответ `result`. С v45 список может расти и сжиматься при прежней частоте, сохраняя всех NPC под lease или с `acquire_pending`; иначе отказ. Без владельцев пустой список выключает подписку, любая перенастройка полностью сбрасывает наблюдения. Неизвестные, повторяющиеся и неоднозначные символы отклоняются |
 | `body_acquire` | `req`, `entity_id`, `session_epoch`, `world_epoch`, `provider`, `target_entity_id`, `body_control:true`, `mode:"realtime"`, `timeout_ms` |
 | `body_action` | `req`, полная lease identity, `goal_version`, `target_entity_id`, `observation_seq`, `issued_game_ms`, `command_id`, `action_id` (0–11), `ttl_ms` (1–1000); [словарь и проверки](npc-body-api.md) |
 | `body_goal` | `req`, lease identity, возрастающая `goal_version`, текущая native `target_entity_id`; после обновления нужен свежий sample |

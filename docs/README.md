@@ -147,6 +147,7 @@
 | Очередь Ryzen | `scripts/gq status` |
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |
+| Подписка тела под lease и с заявкой на захват | `gothic-body-watch-test` в `OpenGothic/tests/body_watch_test.cpp`, настоящие NPC без окна; правила — [`npc-body-api.md`](npc-body-api.md) |
 
 Стенд `monster-character-virtual` сравнивает OFF/ON для волка, тролля, воды и атак без парных видео; `check-physics` проверяет их капсулы, e2e `wolf` запускается с `MONSTER_CHARACTER_VIRTUAL=1`.
 
