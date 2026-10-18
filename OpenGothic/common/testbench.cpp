@@ -800,7 +800,8 @@ struct Bench {
   } npcCharacterRoute;
   struct MonsterCharacterRoute {
     Npc* npc=nullptr;
-    WayPoint destination;
+    WayPoint destination,entry;
+    bool viaEntry=false,entryReached=false;
     std::string name,animation;
     Vec3 start,goal,lastPosition,lastVisual,progressPosition,lastSupported,attackStart;
     uint64_t began=0,arrived=0,progressTime=0,attackEnded=0;
@@ -845,6 +846,7 @@ struct Bench {
   std::vector<MonsterCharacterPerformance> monsterCharacterPerformance;
   bool monsterCharacterMeasuring=false,monsterCharacterHasWall=false,monsterCharacterCrowd=false,monsterCharacterPack=false;
   std::chrono::steady_clock::time_point monsterCharacterLastWall;
+  const Npc* monsterCharacterRenderRequest=nullptr;
   Vec3 monsterCharacterHeroStart;
   uint32_t monsterCharacterSeed=1;
   unsigned monsterCharacterMinNearby=20,monsterCharacterMaxNearby=0;
@@ -8391,21 +8393,71 @@ bool monsterCharacterProp(World& world,std::string_view role,const Vec3& at) {
   bench.monsterCharacterProps.push_back({std::move(fixture),std::string(role),movablePosition(matrix),0});return true;
   }
 
-void monsterCharacterCamera(World& world,Npc& player) {
+bool monsterCharacterRenderProof(World& world,Npc& npc,std::string_view role) {
+  npc.updateTransform();
+  const auto* camera=Gothic::inst().camera();const auto* skeleton=npc.visualSkeleton();
+  const auto bounds=npc.bounds();const auto object=npc.transform();
+  const float infinity=std::numeric_limits<float>::infinity();
+  Vec3 low(infinity,infinity,infinity),high(-infinity,-infinity,-infinity);
+  Vec3 ndcLow(infinity,infinity,infinity),ndcHigh(-infinity,-infinity,-infinity);
+  bool projected=camera && skeleton;unsigned behind=0;std::string bones="[";
+  auto add=[&](const Vec3& point) {
+    low.x=std::min(low.x,point.x);low.y=std::min(low.y,point.y);low.z=std::min(low.z,point.z);
+    high.x=std::max(high.x,point.x);high.y=std::max(high.y,point.y);high.z=std::max(high.z,point.z);
+    if(!camera)return;
+    float x=point.x,y=point.y,z=point.z,w=1;camera->viewProj().project(x,y,z,w);
+    if(w<=0 || !std::isfinite(w)) {++behind;projected=false;return;}
+    const Vec3 ndc(x/w,y/w,z/w);
+    ndcLow.x=std::min(ndcLow.x,ndc.x);ndcLow.y=std::min(ndcLow.y,ndc.y);ndcLow.z=std::min(ndcLow.z,ndc.z);
+    ndcHigh.x=std::max(ndcHigh.x,ndc.x);ndcHigh.y=std::max(ndcHigh.y,ndc.y);ndcHigh.z=std::max(ndcHigh.z,ndc.z);
+    projected&=std::isfinite(ndc.x) && std::isfinite(ndc.y) && std::isfinite(ndc.z) &&
+      std::abs(ndc.x)<=.98f && std::abs(ndc.y)<=.98f && ndc.z>=0 && ndc.z<=1;
+    };
+  for(unsigned i=0;i<8;++i) {
+    Vec3 point(bounds.bbox[i&1].x,bounds.bbox[(i>>1)&1].y,bounds.bbox[(i>>2)&1].z);object.project(point);add(point);
+    }
+  if(skeleton)for(const auto& bone:skeleton->nodes) {
+    const auto point=npc.mapBone(bone.name);add(point);
+    if(bone.name.find("FOOT")==std::string::npos && bone.name.find("HEAD")==std::string::npos && bone.name.find("PELVIS")==std::string::npos)continue;
+    if(bones.size()>1)bones+=',';
+    bones+="{\"name\":"+jsonStr(bone.name)+",\"position_cm\":"+ragdollVector(point)+
+      ",\"occluded\":"+(hidden(world,bench.camPos,point+Vec3(0,5,0))?"true":"false")+"}";
+    }
+  bench.monsterCharacterRenderRequest=&npc;const bool drawable=TestBench::ragdollBodyDrawable(npc);bench.monsterCharacterRenderRequest=nullptr;
+  event("monster_character_render","\"route\":"+jsonStr(bench.monsterCharacterRoute.name)+",\"role\":"+jsonStr(role)+
+    ",\"npc_id\":"+std::to_string(world.npcId(&npc))+",\"instance\":"+jsonStr(symName(world,&npc))+
+    ",\"root_cm\":"+ragdollVector(npc.position())+",\"visual_root_cm\":"+ragdollVector(npc.characterVisualPosition())+
+    ",\"world_min_cm\":"+ragdollVector(low)+",\"world_max_cm\":"+ragdollVector(high)+
+    ",\"ndc_min\":"+ragdollVector(ndcLow)+",\"ndc_max\":"+ragdollVector(ndcHigh)+
+    ",\"behind_camera_points\":"+std::to_string(behind)+",\"full_pose_projected\":"+(projected?"true":"false")+
+    ",\"body_drawable\":"+(drawable?"true":"false")+",\"hidden_draw_types\":"+std::to_string(DrawCommands::hiddenTypes)+
+    ",\"near_clip_cm\":"+ragdollNumber(camera?camera->zNear():0)+",\"bones\":"+bones+"]");
+  return drawable && projected;
+  }
+
+void monsterCharacterCamera(World& world,Npc& player,bool requested=false,float preferredYaw=0,float preferredElevation=.42f) {
+  if(requested && (!std::isfinite(preferredYaw) || !std::isfinite(preferredElevation) || preferredElevation<=0 || preferredElevation>=1)) {
+    monsterCharacterError("monster camera expects a finite yaw and elevation fraction strictly between 0 and 1");return;
+    }
   const auto& route=bench.monsterCharacterRoute;
   if(bench.monsterCharacterCrowd) {
+    if(requested) {monsterCharacterError("monster camera angle selection requires a prepared video fixture");return;}
     event("monster_character_camera","\"route\":\"performance\",\"eye_cm\":"+ragdollVector(bench.camPos)+",\"fixed\":true");return;
     }
   if(!route.npc) {monsterCharacterError("monster camera requires a prepared fixture");return;}
   std::vector<Vec3> points{route.start,route.goal,bench.monsterCharacterHeroStart};
+  if(route.viaEntry)points.push_back(route.entry.pos);
   for(const auto& actor:bench.monsterCharacterExtras) {
     if(actor.npc)points.push_back(actor.start);
     for(const auto& point:actor.points)points.push_back(point.pos);
     }
   // Include the ground along the entire lane, not only the endpoints. The
   // resulting held camera is identical in OFF and ON and never tracks roots.
-  for(unsigned i=1;i<10;++i) {
-    Vec3 floor;const auto at=route.start+(route.goal-route.start)*(float(i)/10.f);
+  std::vector<std::pair<Vec3,Vec3>> legs;
+  if(route.viaEntry) {legs.emplace_back(route.start,route.entry.pos);legs.emplace_back(route.entry.pos,route.goal);}
+  else legs.emplace_back(route.start,route.goal);
+  for(const auto& leg:legs)for(unsigned i=1;i<10;++i) {
+    Vec3 floor;const auto at=leg.first+(leg.second-leg.first)*(float(i)/10.f);
     if(characterFloor(world,at,floor))points.push_back(floor);
     }
   const float infinity=std::numeric_limits<float>::infinity();
@@ -8425,9 +8477,13 @@ void monsterCharacterCamera(World& world,Npc& player) {
   const float aspect=std::abs(projection.at(1,1)/projection.at(0,0));
   const float halfFov=std::min(halfY,std::atan(std::tan(halfY)*aspect));
   const float distance=std::max(600.f,((high-low)*.5f).length()*1.1f/std::sin(halfFov));
-  Vec3 eye;bool found=false;
-  for(float elevation:{.42f,.62f,.85f})for(float yaw:{0.f,180.f,30.f,-30.f,150.f,210.f,60.f,-60.f}) {
-    if(found)continue;
+  Vec3 eye;bool found=false;float selectedYaw=0,selectedElevation=0;bool fallback=false;
+  std::vector<std::pair<float,float>> shots;
+  if(requested)shots.emplace_back(preferredYaw,preferredElevation);
+  for(float elevation:{.42f,.62f,.85f})for(float yaw:{0.f,180.f,30.f,-30.f,150.f,210.f,60.f,-60.f})
+    if(!requested || std::abs(yaw-preferredYaw)>.001f || std::abs(elevation-preferredElevation)>.001f)shots.emplace_back(yaw,elevation);
+  for(size_t shot=0;shot<shots.size();++shot) {
+    const auto [yaw,elevation]=shots[shot];
     const auto direction=rotY(side,yaw);const auto candidate=target+direction*(distance*std::sqrt(1.f-elevation*elevation))+Vec3(0,distance*elevation,0);
     bool visible=true;
     for(const auto& point:points)for(float y:{15.f,height*.5f,height}) {
@@ -8442,7 +8498,8 @@ void monsterCharacterCamera(World& world,Npc& player) {
         }
       if(!propFootprint && hidden(world,candidate,point+Vec3(0,y,0))) {visible=false;break;}
       }
-    if(!visible)continue;eye=candidate;found=true;
+    if(!visible)continue;
+    eye=candidate;found=true;selectedYaw=yaw;selectedElevation=elevation;fallback=requested && shot!=0;break;
     }
   if(!found) {monsterCharacterError("monster fixed camera cannot see the complete route and feet");return;}
   bench.cam=C_Water;bench.waterCameraTarget=target;bench.camAuto=false;bench.smValid=false;lookFrom(eye,target);
@@ -8453,11 +8510,19 @@ void monsterCharacterCamera(World& world,Npc& player) {
   for(const auto& actor:bench.monsterCharacterExtras)if(actor.npc && actor.npc!=route.npc)
     ready+=",{\"npc_id\":"+std::to_string(world.npcId(actor.npc))+",\"root_cm\":"+ragdollVector(actor.npc->position())+"}";
   event("monster_character_camera","\"route\":"+jsonStr(route.name)+",\"camera_cm\":"+ragdollVector(eye)+
+    ",\"requested_shot\":"+(requested?"true":"false")+",\"requested_yaw_deg\":"+ragdollNumber(preferredYaw)+
+    ",\"requested_elevation_fraction\":"+ragdollNumber(preferredElevation)+",\"selected_yaw_deg\":"+ragdollNumber(selectedYaw)+
+    ",\"selected_elevation_fraction\":"+ragdollNumber(selectedElevation)+",\"used_fallback\":"+(fallback?"true":"false")+
     ",\"seed\":"+std::to_string(bench.monsterCharacterSeed)+",\"hour\":"+std::to_string(world.time().hour())+
     ",\"minute\":"+std::to_string(world.time().minute())+",\"hero_cm\":"+ragdollVector(bench.monsterCharacterHeroStart)+",\"actors\":"+actors+"]"+
     ",\"ready_actors\":"+ready+"],\"hero_ready_cm\":"+ragdollVector(player.position())+
     ",\"target_cm\":"+ragdollVector(target)+",\"bounds_min_cm\":"+ragdollVector(low)+",\"bounds_max_cm\":"+ragdollVector(high)+
     ",\"fov_y\":"+ragdollNumber(camera->fovY())+",\"aspect\":"+ragdollNumber(aspect)+",\"fixed\":true");
+  bool rendered=monsterCharacterRenderProof(world,player,"hero");
+  rendered=monsterCharacterRenderProof(world,*route.npc,"primary") && rendered;
+  for(auto& actor:bench.monsterCharacterExtras)if(actor.npc && actor.npc!=route.npc)
+    rendered=monsterCharacterRenderProof(world,*actor.npc,actor.role) && rendered;
+  if(!rendered)monsterCharacterError("monster fixed camera requires drawable actor meshes and their complete projected poses");
   }
 
 void monsterCharacterPack(World& world,Npc& player) {
@@ -8735,11 +8800,88 @@ bool monsterCharacterStairs(World& world,Npc& npc,Npc& player,Vec3& start,Vec3& 
   return false;
   }
 
+bool monsterCharacterSupportedLeg(World& world,const Npc& npc,const Vec3& start,const Vec3& target,Vec3& end) {
+  const auto& guild=world.script().guildVal();const auto g=npc.guild();
+  const float step=guild.step_height[g]>0?float(guild.step_height[g]):50.f;
+  const float cosine=std::cos(float(guild.slide_angle[g])*float(M_PI)/180.f);
+  const auto capsule=npc.navigationCapsule();const float height=npc.visualSkeleton()->bboxCol[1].y-npc.visualSkeleton()->bboxCol[0].y;
+  auto along=target-start;along.y=0;if(along.length()<1)return false;
+  const unsigned count=unsigned(std::ceil(along.length()/10.f));along=Vec3::normalize(along);const Vec3 side(-along.z,0,along.x);
+  for(float width:{0.f,-capsule.x,capsule.x}) {
+    Vec3 previous;
+    if(!characterFloor(world,start+side*width,previous))return false;
+    for(unsigned sample=1;sample<=count;++sample) {
+      const float fraction=float(sample)/float(count);
+      Vec3 floor;const Vec3 probe(start.x+(target.x-start.x)*fraction+side.x*width,previous.y,
+                                  start.z+(target.z-start.z)*fraction+side.z*width);
+      if(!characterFloor(world,probe,floor) || std::abs(floor.y-previous.y)>step)return false;
+      const auto support=world.physic()->landRay(floor+Vec3(0,15,0),30);const float normalLength=support.n.length();
+      if(!support.hasCol || normalLength<=0 || support.n.y/normalLength<cosine)return false;
+      for(float y:{std::min(25.f,height*.3f),std::max(step+5.f,height-5.f)})
+        if(world.physic()->ray(previous+Vec3(0,y,0),floor+Vec3(0,y,0)).hasCol)return false;
+      previous=floor;
+      }
+    if(width==0)end=previous;
+    }
+  return true;
+  }
+
+bool monsterCharacterTerrainStairs(World& world,Npc& npc,Npc& player,Vec3& start,Vec3& landing,Vec3& hero,std::string& waypoint) {
+  std::vector<const WayPoint*> points;
+  world.forEachWayPoint([&](const WayPoint& wp){if(!wp.underWater && wp.name.starts_with("NW_CITY_") && wp.name.find("BED")==std::string::npos)points.push_back(&wp);});
+  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  std::stable_partition(points.begin(),points.end(),[](const auto* point){return point->name.find("STAIR")!=std::string::npos;});
+  std::stable_partition(points.begin(),points.end(),[](const auto* point){return point->name=="NW_CITY_TO_FOREST_STAIRS01";});
+  const float nativeStop=npc.bodyObservationTarget(player).attackRangeCm;const auto capsule=npc.navigationCapsule();
+  const float height=npc.visualSkeleton()->bboxCol[1].y-npc.visualSkeleton()->bboxCol[0].y;
+  unsigned candidates=0,unsafeLanding=0;
+  for(const auto* point:points)for(float x:{0.f,-80.f,80.f,-160.f,160.f,-240.f,240.f})for(float z:{0.f,-80.f,80.f,-160.f,160.f,-240.f,240.f}) {
+    Vec3 center;if(!characterFloor(world,point->pos+Vec3(x,0,z),center))continue;
+    const auto surface=world.physic()->landRay(center+Vec3(0,15,0),30);
+    // A named nearby waypoint can sit on grass-covered ledges. Require the
+    // actual selected surface to be the city's authored stone construction.
+    if(!surface.hasCol || surface.mat!=zenkit::MaterialGroup::STONE)continue;
+    float angle=0,rough=0;Vec3 downhill;
+    if(!slopeAt(world,center,angle,downhill,rough) || angle<18 || angle>40 || rough<6 || rough>25)continue;
+    Vec3 low,high;
+    if(!monsterCharacterOpenLane(world,center,-downhill,100,capsule.x,height,low,high,32))continue;
+    unsigned risers=0;float maximumRiser=0;
+    if(!characterStairsProfile(world,low,high,risers,maximumRiser))continue;
+    ++candidates;auto uphill=high-low;uphill.y=0;uphill=Vec3::normalize(uphill);Vec3 beyond;
+    if(!monsterCharacterSupportedLeg(world,npc,high,high+uphill*150.f,beyond)) {++unsafeLanding;continue;}
+    bool foundHero=false;
+    for(float distance:{120.f,160.f,200.f})for(float yaw:{0.f,45.f,-45.f,90.f,-90.f}) {
+      if(foundHero || distance>nativeStop-30)continue;
+      if(monsterCharacterSupportedLeg(world,npc,high,high+rotY(uphill,yaw)*distance,hero))foundHero=true;
+      }
+    if(!foundHero)continue;
+    start=low;landing=high;waypoint=point->name;
+    event("monster_character_surface","\"route\":\"wolf_terrain\",\"waypoint\":"+jsonStr(waypoint)+
+      ",\"angle_deg\":"+ragdollNumber(angle)+",\"roughness_cm\":"+ragdollNumber(rough)+
+      ",\"riser_count\":"+std::to_string(risers)+",\"maximum_riser_cm\":"+ragdollNumber(maximumRiser)+
+      ",\"stone_surface\":true,\"landing_forward_support_cm\":150,\"candidates\":"+std::to_string(candidates)+
+      ",\"unsafe_landings\":"+std::to_string(unsafeLanding));return true;
+    }
+  event("monster_character_terrain_unavailable","\"candidates\":"+std::to_string(candidates)+",\"unsafe_landings\":"+std::to_string(unsafeLanding));
+  return false;
+  }
+
 void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
   monsterCharacterClear(world);auto& route=bench.monsterCharacterRoute;route.name=name;
   route.npc=monsterCharacterActor(world,name=="troll_barrel"?"Troll":"Wolf",player.position());if(!route.npc)return;
   std::string waypoint;
-  if(name=="wolf_stairs") {
+  if(name=="wolf_terrain") {
+    Vec3 high;
+    if(!monsterCharacterTerrainStairs(world,*route.npc,player,route.start,high,route.goal,waypoint)) {
+      monsterCharacterError("wolf terrain requires actual stone stairs and a capsule-wide supported 150 cm landing continuation");return;
+      }
+    route.entry=WayPoint(high,"FP_MONSTER_CHARACTER_STAIRS_LANDING");route.entry.groundPos=high;route.viaEntry=true;route.chase=true;
+    const float nativeStop=route.npc->bodyObservationTarget(player).attackRangeCm;
+    event("monster_character_terrain_legs","\"waypoint\":"+jsonStr(waypoint)+",\"start_cm\":"+ragdollVector(route.start)+
+      ",\"stair_landing_cm\":"+ragdollVector(high)+",\"hero_cm\":"+ragdollVector(route.goal)+
+      ",\"hero_leg_capsule_validated\":true,\"hero_leg_sample_cm\":10,\"native_stop_cm\":"+ragdollNumber(nativeStop)+
+      ",\"native_actions\":[\"AI_GoToPoint\",\"AI_GoToNpc\"]");
+    } else if(name=="wolf_stairs") {
     if(!monsterCharacterStairs(world,*route.npc,player,route.start,route.goal,waypoint)) {
       monsterCharacterError("wolf stairs lack a supported native chase continuation");return;
       }
@@ -8768,7 +8910,7 @@ void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
       }
     player.stopWalking();player.clearAiQueue();player.setPosition(route.goal);player.updateTransform();
     } else npcCharacterPlaceHero(world,player,route.start,route.goal);
-  route.npc->setPosition(route.start);route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();bench.subject=route.npc;
+  route.npc->setPosition(route.start);route.npc->setDirection((route.viaEntry?route.entry.pos:route.goal)-route.start);route.npc->updateTransform();bench.subject=route.npc;
   bench.monsterCharacterHeroStart=player.position();
   if(route.chase)route.tolerance=route.npc->bodyObservationTarget(player).attackRangeCm+30.f;
   route.destination=WayPoint(route.goal,"FP_MONSTER_CHARACTER_GOAL");route.destination.groundPos=route.goal;
@@ -8801,7 +8943,7 @@ void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
 void monsterCharacterBegin(World& world) {
   auto& route=bench.monsterCharacterRoute;
   if(!route.npc) {monsterCharacterError("monster begin requires fixture actor");return;}
-  route.active=true;route.reached=false;route.stalled=false;route.falling=false;route.wasAirborne=false;route.began=world.tickCount();
+  route.active=true;route.reached=false;route.entryReached=false;route.stalled=false;route.falling=false;route.wasAirborne=false;route.began=world.tickCount();
   route.arrived=0;route.progressTime=route.began;route.stalls=0;route.falls=0;route.cvFrames=0;route.swimFrames=0;
   route.maxPhysicalJump=0;route.maxVisualJump=0;route.lastPosition=route.npc->position();
   route.lastVisual=route.npc->characterVisualPosition();route.progressPosition=route.lastPosition;route.lastSupported=route.lastPosition;
@@ -8814,6 +8956,7 @@ void monsterCharacterBegin(World& world) {
     }
   if(!route.attack && !bench.monsterCharacterPack) {
     route.npc->clearAiQueue();route.npc->stopWalking();
+    if(route.viaEntry)route.npc->aiPush(AiQueue::aiGoToPoint(route.entry));
     if(route.chase)route.npc->aiPush(AiQueue::aiGoToNpc(Gothic::inst().player()));
     else route.npc->aiPush(AiQueue::aiGoToPoint(route.destination));
     }
@@ -8835,6 +8978,7 @@ void monsterCharacterEnd(World& world) {
     ",\"attack_distance_cm\":"+ragdollNumber(route.attackDistance)+",\"attack_rise_cm\":"+ragdollNumber(route.attackRise)+
     ",\"attack_duration_ms\":"+(route.attackEnded?std::to_string(route.attackEnded-route.began):"null")+
     ",\"charge_collision_callbacks\":"+std::to_string(route.callbacks)+",\"barrel_displacement_cm\":"+ragdollNumber(bench.characterPropTravel)+
+    ",\"stair_entry_reached\":"+(route.entryReached?"true":"false")+
     ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","monster_character_virtual")?"true":"false"));
   for(auto& actor:bench.monsterCharacterExtras)if(actor.npc) {
     event("monster_character_actor_end","\"route\":"+jsonStr(route.name)+",\"role\":"+jsonStr(actor.role)+
@@ -9017,9 +9161,27 @@ void monsterCharacterFields(World& world,uint64_t dt) {
     if(route.name=="wolf_water")arrived&=npc->isSwim();
     if(route.name=="wolf_water_exit") {route.leftWater=route.sawSwim && !npc->isSwim() && !npc->isInAir();arrived&=route.leftWater;}
     }
+  if(route.viaEntry) {
+    const auto entryDelta=at-route.entry.pos;
+    if(!route.entryReached && entryDelta.length()<60 && !npc->isInAir()) {
+      route.entryReached=true;
+      event("monster_character_stair_entry","\"elapsed_ms\":"+std::to_string(world.tickCount()-route.began)+
+        ",\"root_cm\":"+ragdollVector(at)+",\"landing_cm\":"+ragdollVector(route.entry.pos));
+      }
+    arrived&=route.entryReached;
+    }
   if(bench.monsterCharacterPack)arrived=std::all_of(bench.monsterCharacterExtras.begin(),bench.monsterCharacterExtras.end(),
     [](const auto& actor){return actor.arrivals>=3;});
-  if(arrived && !route.reached) {route.reached=true;route.arrived=world.tickCount();}
+  if(arrived && !route.reached) {
+    route.reached=true;route.arrived=world.tickCount();
+    if(route.viaEntry) {
+      // The test ends the authored chase after a measured catch. Keep native
+      // idle physics running for the rest of the movie without a second goal.
+      npc->clearAiQueue();npc->clearGoTo();npc->stopWalking();
+      event("monster_character_native_goal_stop","\"route\":"+jsonStr(route.name)+",\"elapsed_ms\":"+
+        std::to_string(route.arrived-route.began)+",\"root_cm\":"+ragdollVector(at)+",\"native_idle\":true");
+      }
+    }
   if(!route.attack && !route.reached && npc->navigationGoal().active) {
     if(std::hypot(at.x-route.progressPosition.x,at.z-route.progressPosition.z)>=5.f) {
       route.progressPosition=at;route.progressTime=world.tickCount();route.stalled=false;
@@ -9519,7 +9681,12 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("monster_character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
     }
   else if(c=="monstercharacter" && a.size()==3 && a[1]=="route")monsterCharacterPrepare(w,pl,a[2]);
-  else if(c=="monstercharacter" && a.size()==2 && a[1]=="camera")monsterCharacterCamera(w,pl);
+  else if(c=="monstercharacter" && a.size()>=2 && a[1]=="camera") {
+    if((a.size()!=2 && a.size()!=4) || (a.size()==4 && (!isNumber(a[2]) || !isNumber(a[3])))) {
+      monsterCharacterError("monster camera expects no arguments or yaw_degrees elevation_fraction");return;
+      }
+    monsterCharacterCamera(w,pl,a.size()==4,a.size()==4?num(a,2,NAN):0,a.size()==4?num(a,3,NAN):.42f);
+    }
   else if(c=="monstercharacter" && a.size()==2 && a[1]=="pack")monsterCharacterPack(w,pl);
   else if(c=="monstercharacter" && a.size()==2 && a[1]=="cliff")monsterCharacterCliff(w,pl);
   else if(c=="monstercharacter" && a.size()==2 && a[1]=="crowd")monsterCharacterCrowd(w,pl);
@@ -15542,6 +15709,26 @@ std::function<void(const int16_t*,size_t)> TestBench::aiVoiceStem(std::string_vi
 
 bool TestBench::ragdollBodyDrawable(const Npc& npc) {
   const auto& mesh=npc.visual.view;
+  if(bench.monsterCharacterRenderRequest==&npc) {
+    std::string parts="[";
+    for(size_t i=0;i<mesh.subCount;++i) {
+      const auto& item=mesh.sub[i];if(item.isEmpty())continue;
+      const auto matrix=item.position();const auto& bounds=item.bounds();const auto& material=item.material();
+      auto center=(bounds.bbox[0]+bounds.bbox[1])*.5f;matrix.project(center);
+      const auto root=Vec3(matrix.at(3,0),matrix.at(3,1),matrix.at(3,2));
+      float x=center.x,y=center.y,z=center.z,w=1;
+      if(auto* camera=Gothic::inst().camera())camera->viewProj().project(x,y,z,w);
+      if(parts.size()>1)parts+=',';
+      parts+="{\"part\":"+std::to_string(i)+",\"indices\":"+std::to_string(item.meshSlice().second)+
+        ",\"root_cm\":"+ragdollVector(root)+",\"center_cm\":"+ragdollVector(center)+
+        ",\"clip_cm\":["+ragdollNumber(x)+","+ragdollNumber(y)+","+ragdollNumber(z)+","+ragdollNumber(w)+"]"+
+        ",\"radius_cm\":"+ragdollNumber(bounds.rConservative)+",\"alpha\":"+ragdollNumber(material.alphaWeight)+
+        ",\"ghost\":"+(material.isGhost?"true":"false")+",\"texture\":"+
+        (material.tex && !material.tex->isEmpty()?"true":"false")+"}";
+      }
+    event("monster_character_render_mesh","\"npc_id\":"+std::to_string(npc.world().npcId(&npc))+
+      ",\"cpu_only\":"+(mesh.cpuOnly?"true":"false")+",\"submeshes\":"+std::to_string(mesh.subCount)+",\"parts\":"+parts+"]");
+    }
   if(mesh.cpuOnly) return false;
   if(bench.destructionSkinRequest==&npc && mesh.protoMesh()!=nullptr)
     destructionSkinSample(npc,*mesh.protoMesh(),npc.visual.transform(),npc.visual.pose());

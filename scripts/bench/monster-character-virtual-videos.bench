@@ -10,7 +10,7 @@ view full
 overlay off
 
 # scene wolf_terrain
-monstercharacter route wolf_stairs
+monstercharacter route wolf_terrain
 wait 600
 monstercharacter camera
 rec wolf_terrain

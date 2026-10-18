@@ -6,6 +6,7 @@ OUT="${1:-$ROOT/.bench/monster-character-virtual-videos}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 export LC_ALL=C
+export GOTHIC_AI=0
 HOST="${BENCH_HOST:-ryzen}"
 SCENES=(wolf_terrain wolf_pack troll_props cliff wolf_water fieldraider_bloodfly)
 if [[ -n "${SCENE:-}" ]]; then SCENES=("$SCENE"); fi
@@ -20,6 +21,10 @@ for scene in scenes:
     (output / 'scenarios' / f'monster-character-virtual-{name}.bench').write_text(prelude + commands)
 PY
 wait_mac() {
+  if [[ "${NO_BUILD:-1}" != 0 && ! -x "${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}" ]]; then
+    echo 'Build Gothic2Notr before recording (or set NO_BUILD=0).' >&2
+    return 2
+  fi
   until ! pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr' >/dev/null; do sleep 5; done
   pgrep -fl Gothic2Notr >"$OUT/mac-process-check.log" || echo 'no game' >"$OUT/mac-process-check.log"
 }
@@ -47,6 +52,9 @@ for scene in "${SCENES[@]}"; do
     elif [[ "$rc" != 0 ]]; then
       exit "$rc"
     fi
+    [[ -s "$destination/$scene.mp4" && -s "$destination/events.jsonl" ]] || {
+      echo "incomplete native recording: $destination" >&2; exit 1;
+    }
   done
   uv run "$ROOT/scripts/monster_character_virtual_videos.py" compose \
     --off "$OUT/$scene-off/$scene.mp4" --on "$OUT/$scene-on/$scene.mp4" \
