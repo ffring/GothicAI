@@ -305,6 +305,28 @@ def cmd_thumbnail(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_translate(args: argparse.Namespace) -> int:
+    meta = youtube.load_meta(Path(args.meta), args.lang)
+    if not meta.localizations:
+        raise YouTubeError(f"{args.meta} has no language besides {args.lang}")
+    token = _channel(args.channel)
+    if youtube.CAPTIONS_SCOPE not in youtube.granted():
+        raise YouTubeError("the sign-in can not change a video (it has no youtube.force-ssl): "
+                           "gothic-shorts youtube login")
+    print(f"video:   https://youtu.be/{args.video}")
+    for lang, text in meta.localizations.items():
+        print(f"{lang}:      {text['title']}")
+    if not args.yes and input("set these translations? [y/N] ").strip().lower() != "y":
+        print("not set")
+        return 1
+    have = youtube.set_translations(token, args.video, meta.localizations)
+    missing = set(meta.localizations) - have
+    if missing:
+        raise YouTubeError(f"YouTube kept no translation into {', '.join(sorted(missing))}")
+    print(f"translations: {', '.join(sorted(have))}")
+    return 0
+
+
 def cmd_captions(args: argparse.Namespace) -> int:
     captions = _captions([f"{args.lang}={args.file}"])
     _channel(args.channel)
@@ -451,6 +473,15 @@ def main() -> None:
     s.add_argument("--channel", default=youtube.CHANNEL, help="the channel (GOTHIC_YOUTUBE_CHANNEL)")
     s.add_argument("--yes", action="store_true", help="do not ask before setting")
     s.set_defaults(fn=cmd_thumbnail)
+
+    s = sub.add_parser("translate", help="add the title and the description in other languages to a video "
+                                         "already on the channel")
+    s.add_argument("video", help="the video's id")
+    s.add_argument("--meta", required=True, help="the short's youtube.json: every section but --lang goes in")
+    s.add_argument("--lang", default="ru", help="the video's own language in youtube.json (default: ru)")
+    s.add_argument("--channel", default=youtube.CHANNEL, help="the channel (GOTHIC_YOUTUBE_CHANNEL)")
+    s.add_argument("--yes", action="store_true", help="do not ask before setting")
+    s.set_defaults(fn=cmd_translate)
 
     s = sub.add_parser("captions", help="add a caption track to a video already on the channel")
     s.add_argument("video", help="the video's id")

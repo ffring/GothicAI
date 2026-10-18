@@ -259,6 +259,34 @@ def translated(token: str, vid: str) -> set[str]:
     return set(_video(token, vid, "localizations").get("localizations", {}))
 
 
+def set_translations(token: str, vid: str, translations: dict[str, dict[str, str]]) -> set[str]:
+    """Add the title and the description in other languages ({"en": {"title", "description"}}) to a video
+    already on the channel, keeping its own snippet and the translations it has; the languages it has after.
+    videos.update replaces what it is given, so the snippet goes back as YouTube has it."""
+    have = _video(token, vid, "snippet,localizations")
+    snippet = have["snippet"]
+    default = snippet.get("defaultLanguage")
+    if not default:
+        raise YouTubeError(f"the video {vid} has no default language: YouTube keeps no translation "
+                           "without one")
+    for lang, text in translations.items():
+        if lang == default:
+            raise YouTubeError(f"{lang} is the video's own language, not a translation")
+        if len(text["title"]) > 100:
+            raise YouTubeError(f"the {lang} title is {len(text['title'])} characters, YouTube takes 100")
+    kept = {k: snippet[k] for k in ("title", "description", "tags", "categoryId", "defaultLanguage",
+                                    "defaultAudioLanguage") if k in snippet}  # fmt: skip
+    body = {"id": vid, "snippet": kept,
+            "localizations": {**have.get("localizations", {}), **translations}}
+    r = httpx.put(f"{API}/videos", params={"part": "snippet,localizations"},
+                  headers={"Authorization": f"Bearer {token}",
+                           "Content-Type": "application/json; charset=UTF-8"},
+                  content=json.dumps(body).encode(), timeout=30)  # fmt: skip
+    if r.status_code != 200:
+        raise YouTubeError(f"videos.update: {r.status_code} {r.text[:300]}")
+    return translated(token, vid)
+
+
 def check_captions_scope(scopes: set[str]) -> None:
     if CAPTIONS_SCOPE not in scopes:
         raise YouTubeError("the sign-in can not add caption tracks (it has no youtube.force-ssl): "
