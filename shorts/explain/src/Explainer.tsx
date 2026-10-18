@@ -90,15 +90,17 @@ const HalfLabel: React.FC<{text: string; top: number; color: string}> = ({text, 
   </div>
 );
 
-const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number; game: number}> = ({
+const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number; game: number; stem?: Plan['stem']}> = ({
   beat,
   start,
   spans,
   duck,
   game,
+  stem,
 }) => {
   const {fps} = useVideoConfig();
-  const volume = (f: number) => game * beat.game * ducked(start + f / fps, spans, duck);
+  const volume = (f: number) =>
+    stem ? (stem === 'game' ? beat.game : 0) : game * beat.game * ducked(start + f / fps, spans, duck);
   let body: React.ReactNode = null;
   const card = beat.chart;
   if (beat.kind === 'card' && card) {
@@ -140,7 +142,12 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
 };
 
 // the music bed: under the beats, fading in and out, lower while the voice speaks (slow ramps)
-const Music: React.FC<{music: NonNullable<Plan['music']>; spans: Spans; frames: number}> = ({music, spans, frames}) => {
+const Music: React.FC<{music: NonNullable<Plan['music']>; spans: Spans; frames: number; stem?: boolean}> = ({
+  music,
+  spans,
+  frames,
+  stem,
+}) => {
   const {fps} = useVideoConfig();
   const end = frames / fps;
   const volume = (f: number) => {
@@ -149,9 +156,9 @@ const Music: React.FC<{music: NonNullable<Plan['music']>; spans: Spans; frames: 
       interpolate(t, [0, music.fadeIn], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}),
       interpolate(t, [end - music.fadeOut, end], [1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}),
     );
-    return music.volume * fade * ducked(t, spans, music.duck, 0.35);
+    return stem ? fade : music.volume * fade * ducked(t, spans, music.duck, 0.35);
   };
-  return <Audio src={staticFile(music.file)} volume={volume} loop />;
+  return <Audio src={staticFile(music.file)} volume={volume} loop loopVolumeCurveBehavior={stem ? 'extend' : 'repeat'} />;
 };
 
 export const Explainer: React.FC<Plan> = (plan) => {
@@ -168,23 +175,26 @@ export const Explainer: React.FC<Plan> = (plan) => {
           t += beat.dur;
           return (
             <Sequence key={beat.id} from={from} durationInFrames={Math.round(t * fps) - from} name={beat.id}>
-              <BeatView beat={beat} start={start} spans={spans} duck={plan.duck} game={plan.gameVolume} />
+              <BeatView beat={beat} start={start} spans={spans} duck={plan.duck} game={plan.gameVolume} stem={plan.stem} />
             </Sequence>
           );
         })}
-        {plan.music && <Music music={plan.music} spans={spans} frames={contentFrames} />}
-        {plan.voice.map((v) => (
-          <Sequence key={v.file} from={Math.round(v.start * fps)} name={v.file}>
-            <Audio src={staticFile(v.file)} />
-          </Sequence>
-        ))}
+        {plan.music && (!plan.stem || plan.stem === 'music') && (
+          <Music music={plan.music} spans={spans} frames={contentFrames} stem={plan.stem === 'music'} />
+        )}
+        {(!plan.stem || plan.stem === 'voice') &&
+          plan.voice.map((v) => (
+            <Sequence key={v.file} from={Math.round(v.start * fps)} name={v.file}>
+              <Audio src={staticFile(v.file)} />
+            </Sequence>
+          ))}
         <Captions lines={plan.lines} brand={plan.brand} />
         <Hook text={plan.hook.text} until={plan.hook.until} />
         {plan.brand && <BrandSeal />}
       </Sequence>
       {plan.brand && (
         <Sequence from={contentFrames} durationInFrames={STING_FRAMES} name="brand sting">
-          <BrandSting volume={plan.brandVolume} />
+          <BrandSting volume={plan.stem ? (plan.stem === 'game' ? 1 : 0) : plan.brandVolume} />
         </Sequence>
       )}
     </AbsoluteFill>

@@ -139,7 +139,7 @@ const Beat = z.object({
   labelColors: z.tuple([z.string(), z.string()]).optional(), // default: the old rule's grey, the new one's gold
   freeze: z.number().optional(), // footage stops here (seconds into the beat)
   zoom: z.object({at: z.number(), dur: z.number(), scale: z.number(), x: z.number(), y: z.number()}).optional(),
-  game: z.number().default(1), // the game's volume in this beat (ducked under the voice on top of it)
+  game: z.number().default(1), // the beat's relative game level, also kept in the game stem
   texts: z.array(Text).default([]),
   tags: z.array(Tag).default([]),
   strokes: z.array(Stroke).default([]),
@@ -150,21 +150,22 @@ const Beat = z.object({
 const Word = z.object({text: z.string(), start: z.number(), end: z.number()});
 
 export const Plan = z.object({
+  stem: z.enum(['voice', 'game', 'music']).optional(), // uncalibrated sources for publication through gothic_shorts.levels
   brand: z.boolean().default(true),
-  brandVolume: z.number().nonnegative().default(0.355),
+  brandVolume: z.number().nonnegative().default(0.355), // draft mix only; levels sets the published sting level
   lang: z.enum(['ru', 'en']),
   hook: z.object({text: z.string(), until: z.number()}),
   beats: z.array(Beat).min(1),
   lines: z.array(z.array(Word)).default([]), // the captions: the voice's words, a sentence per line
   voice: z.array(z.object({file: z.string(), start: z.number()})).default([]),
-  duck: z.number().default(0.3), // the game's volume while the voice speaks
-  gameVolume: z.number().default(1), // the footage's own sound, all of it (0: none)
-  // one music bed under the whole short, ducked under the voice (linear volumes)
+  duck: z.number().default(0.3), // draft game ducking; ignored by publication through levels
+  gameVolume: z.number().default(1), // draft footage volume (0: none); levels calibrates the published game stem
+  // one music bed under the beats; publication keeps its fades and loop but levels sets its level and ducking
   music: z
     .object({
       file: z.string(),
-      volume: z.number(), // in the voice's pauses
-      duck: z.number().default(0.5), // times that while the voice speaks
+      volume: z.number(), // draft level in the voice's pauses
+      duck: z.number().default(0.5), // draft multiplier while the voice speaks
       fadeIn: z.number().default(1),
       fadeOut: z.number().default(1.5),
     })

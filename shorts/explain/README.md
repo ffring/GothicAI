@@ -10,7 +10,7 @@ cd shorts/explain
 npm ci
 npx remotion studio --props '{"brand":false}'                           # the demo plan: the dice chart, no assets
 npx remotion still Explainer --public-dir "$W" --props "$W/plan.json" --frame 120 "$W/render/f120.png"
-npx remotion render Explainer --public-dir "$W" --props "$W/plan.json" --codec h264 --crf 18 "$W/render/short-ru.mp4"
+npx remotion render Explainer --public-dir "$W" --props "$W/plan.json" --codec h264 --crf 18 "$W/render/preview.mp4"
 ```
 
 `$W` is the short's own folder (outside the repository): footage, stills and voice lines referenced by the plan
@@ -25,6 +25,38 @@ ln -s "$HOME/.local/share/gothic-ai/brand/sting" "$W/brand"
 Remotion serves files through this directory symlink with `--public-dir "$W"`; no copying is needed.
 The renderer uses `brand/seal-corner.png` and `brand/sting.mp4` from it.
 
+## Publication
+
+After `npm ci` above, publish from `shorts/`:
+
+```bash
+uv run gothic-shorts explain <name-or-workspace>
+uv run gothic-shorts explain "$W" --plan plan.en.json --out "$W/render/short-en.mp4"
+```
+
+The plan is relative to the workspace, as with `dub`; the workspace is a folder or a name under
+`~/.local/share/gothic-ai/explain/`, as with `words` and `studio`. The default output is
+`<workspace>/render/short-<plan.lang>.mp4`.
+
+Remotion renders the muted picture (H.264, CRF 18) and three WAV stems. The command joins the picture with
+the game/ending stem, takes each speech window from the first to the last word of a nonempty `lines` entry,
+and calls `gothic_shorts.levels.publish`. That shared function calibrates the voice, effects, music and ending,
+masters the mix, and checks the decoded AAC: voice −14 LUFS, true peak ≤ −1 dBTP, the balance between stems,
+and zero clicks. It prints the table and writes a sibling `.levels.json` report. A failed check returns a
+nonzero exit code and removes the output video. Temporary pictures and stems are removed on success or failure.
+Without `music` in the plan, music rows have no data, as in the shared publisher.
+
+`stem` is optional: `voice` plays only the voice lines at 1; `game` plays the footage at each beat's `game`
+level, then the brand sting at 1; `music` plays the looped bed at 1 with its `fadeIn`/`fadeOut`. Stems have no
+ducking or plan mix gains. All stems cover the full video, including the sting; music and voice stop at the
+end of the beats. Music fades are already rendered, so publication passes `music_fades=False` to `levels`.
+The body duration is the summed beats rounded to frames; the full length adds `STING_FRAMES` (66) when branded.
+
+For publication, `gameVolume`, `duck`, `music.volume`, `music.duck` and `brandVolume` are ignored: `levels`
+sets the levels. `beat.game` remains a relative level within the effects stem. Record footage with `MUSIC=0`
+and sound effects enabled, then add one music bed in the plan. Direct Remotion renders without `stem` keep
+the original plan gains and ducking for Studio and drafts; they do not run the publication checks.
+
 ## The plan
 
 `src/schema.ts` is the format; a missing or misspelt field stops the render with its path. In short:
@@ -32,11 +64,11 @@ The renderer uses `brand/seal-corner.png` and `brand/sting.mp4` from it.
 - `hook`: the big text over the first seconds;
 - `brand`: boolean, defaults to `true`. A 110 × 110 G seal stays at (940, 110) over every beat, then the
   2.2-second letter sting plays after the last beat (1080 × 1920, 30 fps, its own −14 LUFS source audio).
-  Mastering raises the sting together with the whole short, so the renderer attenuates it to voice level before
-  mastering. The voice and game sound stop before it; the music fades out by its start. The render's duration
+  Publication calibrates the sting separately from the body effects through `levels`. In drafts it uses
+  `brandVolume`. The voice and footage sound stop before it; the music fades out by its start. The render's duration
   includes these extra 66 frames. `false` needs no brand assets and preserves the original frames, captions
   and duration;
-- `brandVolume`: nonnegative linear gain for the sting's audio, defaults to `0.355` (about −9 dB);
+- `brandVolume`: draft-only nonnegative linear gain for the sting's audio, defaults to `0.355` (about −9 dB);
 - `beats`: in order, each `footage` (an mp4, `freeze` and `zoom` optional), `still` (a png), `split` (two takes,
   top and bottom, with labels) or `card` (a chart); `texts` on top of a beat, `tags` (a label pinned to a point
   of the picture, to its left or right with `side`, lines appearing one by one, a roll counter that stops on the
@@ -52,11 +84,11 @@ The renderer uses `brand/seal-corner.png` and `brand/sting.mp4` from it.
   pages of 2-4 words of them, the word being said in gold. A page never ends on a preposition or a conjunction
   (`в`, `как`, `of the`, `than`): it goes to the next one. For captions in another language than the voice, the
   plan's maker spreads the translated words over the spoken ones (a part per pause);
-- `voice`: the recorded lines and where they start; the game's sound ducks under them (`duck`), `gameVolume`
-  sets it as a whole (0: the footage is silent);
-- `music`: one bed under the whole short (`file`, `volume` in the voice's pauses, `duck` times that while it
-  speaks, fades at both ends), looped. Footage of different moments carries different parts of the game's
-  soundtrack: one bed and `gameVolume: 0` keep it from jumping at every cut.
+- `voice`: the recorded lines and where they start; in drafts the game's sound ducks under them (`duck`),
+  and `gameVolume` sets it as a whole (0: the draft footage is silent). Publication uses the word windows
+  and shared `levels` rules instead;
+- `music`: one looped bed under the beats (`file`, `fadeIn`, `fadeOut`); `volume` in the voice's pauses and
+  `duck` times that while it speaks apply only to drafts. Publication calibrates and ducks this stem in `levels`.
 
 `{chance:exe:40:16}` in a tag is the chance by that rule (`exe`: Gothic2.exe's dice, `opengothic`: OpenGothic's
 before it) for that talent and distance, computed by `src/dice.ts` from the same formulas as
