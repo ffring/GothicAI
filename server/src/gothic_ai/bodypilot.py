@@ -229,6 +229,7 @@ class BodyPilot:
         self.summaries: deque[FightSummary] = deque(maxlen=32)
         self.watch_busy = 0
         self._claimed_fights: set[str] = set()
+        self._lost_fights: set[str] = set()
         self._retarget_pending: set[str] = set()
         self._reacquire_after: dict[str, float] = {}
         self._roster_attempted: set[str] = set()
@@ -282,11 +283,11 @@ class BodyPilot:
                 if entry.activity == "down"
                 or (entry.activity == "routine" and entry.state.upper() not in {"ZS_ATTACK", "ZS_MM_ATTACK"})
             }
-            self._claimed_fights.difference_update(ended)
-            self._retarget_pending.difference_update(ended)
-            self._roster_attempted.difference_update(ended)
-            for npc in ended:
-                self._reacquire_after.pop(npc, None)
+            ended.update(npc for npc in self._lost_fights if (
+                npc in entries and entries[npc].distance > 2000
+                or message.full and npc not in entries
+            ))
+            self._forget_ended(ended)
             self.people = entries if message.full else {**self.people, **entries}
             for fight in list(self.fights.values()):
                 if not self._allowed(fight.npc):
@@ -301,6 +302,7 @@ class BodyPilot:
         elif isinstance(message, (Loading, Hello)):
             self.people.clear()
             self._claimed_fights.clear()
+            self._lost_fights.clear()
             self._retarget_pending.clear()
             self._reacquire_after.clear()
             self._roster_attempted.clear()
@@ -322,6 +324,14 @@ class BodyPilot:
             if npc is not None:
                 self._start(npc)
         self._wake.set()
+
+    def _forget_ended(self, npcs: set[str]) -> None:
+        self._claimed_fights.difference_update(npcs)
+        self._lost_fights.difference_update(npcs)
+        self._retarget_pending.difference_update(npcs)
+        self._roster_attempted.difference_update(npcs)
+        for npc in npcs:
+            self._reacquire_after.pop(npc, None)
 
     def _start(self, npc: str) -> bool:
         npc = npc.upper()
@@ -399,6 +409,16 @@ class BodyPilot:
         self.summaries.append(summary)
         if self.fights.get(summary.npc) is fight:
             del self.fights[summary.npc]
+        if summary.npc in self._claimed_fights and summary.release_confirmed and summary.reason in {
+            "npc_unavailable", "target_lost",
+        }:
+            # A distant NPC can return straight to native combat. Its routine
+            # while outside the roster is not observable, so range exit ends
+            # this lost episode without requiring an intervening routine row.
+            self._lost_fights.add(summary.npc)
+            entry = self.people.get(summary.npc)
+            if entry is None or entry.distance > 2000:
+                self._forget_ended({summary.npc})
         if not self.fights:
             self._resetting = False
         self._wake.set()

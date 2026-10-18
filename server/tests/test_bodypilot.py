@@ -3023,6 +3023,58 @@ async def test_repeated_native_attack_roster_does_not_reacquire_after_fallback()
         assert len(rig.bridge.commands("body_acquire")) == 1
 
 
+@pytest.mark.parametrize("end", ["npc_unavailable", "target_lost"])
+@pytest.mark.parametrize("range_exit", ["missing_full", "distant"])
+async def test_lost_fight_reacquires_with_fresh_reset_when_distant_npc_returns_attacking(end, range_exit):
+    async with running() as rig:
+        await rig.active()
+        first_lease, first_client = rig.fight.lease, rig.fight.client
+
+        def leave_range():
+            if range_exit == "missing_full":
+                rig.roster(include=False)
+            else:
+                rig.bridge.roster(RosterEntry(
+                    id="NPC", name="Fighter", guild=1, distance=2500,
+                    activity="body" if rig.link.body_owned("NPC") else "fight", state="ZS_ATTACK",
+                ))
+
+        if end == "npc_unavailable":
+            # The full roster can lose the NPC before release has completed.
+            leave_range()
+        else:
+            rig.link._dispatch(events(event(
+                1, reason="native_restored", release_reason="target_visibility_lost", owner="native",
+            )))
+        await rig.ended()
+        await eventually(lambda: not rig.pilot.active_count)
+        assert rig.pilot.last_summary.reason == end
+        assert rig.pilot.last_summary.release_confirmed
+        if end == "target_lost":
+            # A partial roster omitting him is not evidence that he left range.
+            rig.link._dispatch(NpcRoster(type="npc_roster", t=2, npcs=[], full=False))
+            assert "NPC" in rig.pilot._claimed_fights
+            # Here range exit arrives only after the old fight was cleaned up.
+            leave_range()
+        assert "NPC" not in rig.pilot._claimed_fights
+        assert "NPC" not in rig.pilot._roster_attempted
+
+        rig.clock.advance(bodypilot.REACQUIRE_INTERVAL + 0.1)
+        # No routine row or new attack event is delivered while the hero returns.
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
+        rig.bridge.emit(player_row(4), fighter(5))
+        await eventually(lambda: len(rig.policy.commands("reset")) == 2)
+        second = rig.fight
+        assert second.lease != first_lease and second.client is not first_client
+        rig.bridge.emit(fighter(6, owned=True))
+        await eventually(lambda: second._decisions == 1)
+        assert len(rig.bridge.commands("body_acquire")) == 2
+        assert [request["initial_game_ms"] for request in rig.policy.commands("reset")] == [100, 250]
+        assert len(rig.policy.connections) == 2
+        assert len(rig.pilot.summaries) == 1
+
+
 @pytest.mark.parametrize("activity,state", [("routine", "ZS_SIT_BENCH"), ("down", "ZS_UNCONSCIOUS")])
 async def test_new_native_attack_roster_rearms_after_the_previous_fight_ends(activity, state):
     async with running() as rig:
