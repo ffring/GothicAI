@@ -1,5 +1,6 @@
 """Queue admission and per-worktree uploads without a game or real SSH."""
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
@@ -28,6 +29,196 @@ def wait_for(path):
         if time.monotonic() >= deadline:
             raise AssertionError(f'no marker: {path}')
         time.sleep(0.02)
+
+
+class QueueSplitTests(unittest.TestCase):
+    def run_game(self, action='e2e', prepare=True, build_exit=0):
+        directory = self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-phases-test-'))
+        root = Path(directory)
+        (root / 'scripts').mkdir()
+        queue = root / 'scripts/gq'
+        queue.write_text(f'#!{sys.executable}\n' + r'''
+import json
+import os
+from pathlib import Path
+import sys
+root = Path(os.environ['TEST_SESSION'])
+with (root / 'requests.jsonl').open('a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\n')
+name = sys.argv[sys.argv.index('--name') + 1]
+if name.startswith('build ') and int(os.environ['TEST_BUILD_EXIT']):
+    print('compile failure: build log tail', flush=True)
+    sys.exit(int(os.environ['TEST_BUILD_EXIT']))
+''')
+        queue.chmod(0o755)
+        harness = r'''
+set -euo pipefail
+ROOT="$TEST_SESSION" SESSION="$TEST_SESSION" STATE="$TEST_SESSION/state"
+OUTPUT="$SESSION/output" RUN=run RYZEN_HOST=fake AI_PORT=''
+ACTION="$TEST_ACTION" JOBS=7 LOCK_WAIT=23 SCENARIO=stages
+BENCH_SCENARIO=/benchmarks/smoke.bench RYZEN_MAX=9m
+if [[ "$ACTION" == bench ]]; then BENCH_CLASS=quiet; else unset BENCH_CLASS; fi
+TUNNEL_OPEN=0 RUN_STARTED=0 RUN_FINISHED=0 RUN_RC=0
+SSH_PID=$$ ENV_ARGS=(RYZEN_JOBS=7) GQ_ARGS=()
+exec 8>"$SESSION/control"
+: > "$OUTPUT"
+guard_ack() { :; }
+preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
+'''
+        harness += '\n'.join([function('run_quick'), function('game_queue_args'), function('run_game')])
+        harness += '\nrun_game env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote "$ACTION" "$STATE" "$RUN" stages\n'
+        result = subprocess.run(
+            ['bash', '-c', harness], capture_output=True, text=True, timeout=10,
+            env=dict(os.environ, TEST_SESSION=str(root), TEST_ACTION=action,
+                     TEST_PREPARE=str(int(prepare)), TEST_BUILD_EXIT=str(build_exit)),
+        )
+        requests = root / 'requests.jsonl'
+        return result, [json.loads(line) for line in requests.read_text().splitlines()] if requests.exists() else []
+
+    @staticmethod
+    def queue_options(request):
+        return request[:request.index('--')]
+
+    def assert_option(self, options, name, expected):
+        self.assertIn(name, options)
+        self.assertEqual(options[options.index(name) + 1], expected)
+
+    def assert_game_request(self, request, action):
+        options = self.queue_options(request)
+        for name, value in [('--class', 'quiet' if action == 'bench' else 'quick'),
+                            ('--threads', '4'), ('--mem', '8G'), ('--max', '9m'),
+                            ('--gpu-mem', '4G' if action == 'bench' else '2G'),
+                            ('--wait-max', '23'),
+                            ('--name', 'bench smoke' if action == 'bench' else 'e2e stages')]:
+            self.assert_option(options, name, value)
+        self.assertIn('--display', options)
+        self.assertIn('RYZEN_RUN_ID=run-game', request[request.index('--') + 1:])
+
+    def test_preparation_and_game_have_separate_resources_and_names(self):
+        for action in ('e2e', 'bench'):
+            with self.subTest(action=action):
+                result, requests = self.run_game(action)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(len(requests), 2, requests)
+                build = self.queue_options(requests[0])
+                for name, value in [('--class', 'quick'), ('--threads', '7'), ('--mem', '12G'),
+                                    ('--max', '9m'),
+                                    ('--name', 'build bench smoke' if action == 'bench' else 'build e2e stages')]:
+                    self.assert_option(build, name, value)
+                for option in ('--display', '--gpu-mem', '--wait-max'):
+                    self.assertNotIn(option, build)
+                command = requests[0][requests[0].index('--') + 1:]
+                self.assertIn('RYZEN_RUN_ID=run-build', command)
+                self.assertEqual(command[command.index('__remote') + 1:][:2], ['prepare', action])
+                self.assert_game_request(requests[1], action)
+
+    def test_ready_snapshot_submits_only_game(self):
+        for action in ('e2e', 'bench'):
+            with self.subTest(action=action):
+                result, requests = self.run_game(action, prepare=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(len(requests), 1, requests)
+                self.assert_game_request(requests[0], action)
+
+    def test_build_failure_returns_its_status_without_game_submission(self):
+        result, requests = self.run_game(build_exit=42)
+        self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+        self.assertEqual(len(requests), 1, requests)
+        self.assert_option(self.queue_options(requests[0]), '--name', 'build e2e stages')
+        self.assertIn('compile failure: build log tail', result.stdout)
+
+    def test_tts_preparation_installs_missing_dependencies(self):
+        for scenario in ('errand', 'errand_fork', 'errand_far', 'errand_give',
+                         'fight_reactions_wolf', 'fight_reactions_sight',
+                         'fight_reactions_bandits', 'fight_reactions_flee'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(prefix='ryzen-deps-test-') as directory:
+                root = Path(directory)
+                source = root / 'source'
+                state = root / 'state'
+                (source / 'server/.venv').mkdir(parents=True)
+                (source / 'server/.venv/ready').touch()
+                (source / 'tts-service').mkdir()
+                (state / 'inputs/run').mkdir(parents=True)
+                (root / 'bin').mkdir()
+                uv = root / 'bin/uv'
+                uv.write_text(f'#!{sys.executable}\n' + r'''
+import json
+import os
+from pathlib import Path
+import sys
+args = sys.argv[1:]
+with Path(os.environ['TEST_UV_CALLS']).open('a') as stream:
+    stream.write(json.dumps({'project': Path.cwd().name, 'args': args}) + '\n')
+marker = Path('.venv/ready')
+if args == ['sync', '--check', '--frozen']:
+    sys.exit(0 if marker.exists() else 1)
+if args == ['sync', '--frozen']:
+    marker.parent.mkdir(exist_ok=True)
+    marker.touch()
+    sys.exit(0)
+sys.exit('unexpected uv arguments: ' + repr(args))
+''')
+                uv.chmod(0o755)
+                harness = r'''
+set -euo pipefail
+ROOT="$TEST_ROOT/source"
+toolchain() { :; }
+source_digest() { echo snapshot-digest; }
+check_protocol() { :; }
+engine_ready() { :; }
+storygraph_ready() { :; }
+build_engine() { :; }
+build_storygraph() { :; }
+'''
+                harness += '\n'.join(function(name) for name in (
+                    'dependency_projects', 'remote_probe', 'remote_prepare'))
+                harness += r'''
+if remote_probe e2e "$TEST_ROOT/state" run "$TEST_SCENARIO"; then
+  echo 'initial probe unexpectedly ready' >&2
+  exit 90
+fi
+remote_prepare e2e "$TEST_ROOT/state" run "$TEST_SCENARIO"
+remote_probe e2e "$TEST_ROOT/state" run "$TEST_SCENARIO"
+'''
+                calls = root / 'uv-calls.jsonl'
+                result = subprocess.run(
+                    ['bash', '-c', harness], capture_output=True, text=True, timeout=5,
+                    env=dict(os.environ, TEST_ROOT=directory, TEST_SCENARIO=scenario,
+                             TEST_UV_CALLS=str(calls), PATH=str(root / 'bin') + os.pathsep + os.environ['PATH']),
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue((source / 'tts-service/.venv/ready').exists())
+                self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()], [
+                    {'project': project, 'args': args}
+                    for args in (['sync', '--check', '--frozen'], ['sync', '--frozen'],
+                                 ['sync', '--check', '--frozen'])
+                    for project in ('server', 'tts-service')
+                ])
+
+    def test_game_rejects_stale_engine_without_building(self):
+        with tempfile.TemporaryDirectory(prefix='ryzen-stale-test-') as directory:
+            state = Path(directory)
+            (state / 'inputs/run').mkdir(parents=True)
+            (state / 'inputs/run/source.sha256').write_text('snapshot-digest\n')
+            (state / 'build/opengothic').mkdir(parents=True)
+            binary = state / 'build/opengothic/Gothic2Notr'
+            binary.touch()
+            binary.chmod(0o755)
+            (state / 'build/source.sha256').write_text('previous-digest\n')
+            (state / 'build/CMakeCache.txt').write_text('OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON\n')
+            harness = '\n'.join([
+                'set -euo pipefail',
+                'build_engine() { touch "$TEST_STATE/build-was-called"; }',
+                'source_digest() { echo "unexpected source scan" >&2; exit 99; }',
+                function('engine_ready'), function('require_prepared'),
+                'require_prepared bench "$TEST_STATE" run stages',
+            ])
+            result = subprocess.run(['bash', '-c', harness], capture_output=True, text=True, timeout=5,
+                                    env=dict(os.environ, TEST_STATE=directory))
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('source.sha256', result.stdout + result.stderr)
+            self.assertIn('refusing to build', (result.stdout + result.stderr).lower())
+            self.assertFalse((state / 'build-was-called').exists())
 
 
 class TunnelTests(unittest.TestCase):
@@ -153,6 +344,7 @@ guard_ack() { :; }
             root = Path(directory)
             (root / 'inputs/run').mkdir(parents=True)
             harness = function('remote_bench') + r'''
+require_prepared() { :; }
 toolchain() { printf '%s' "$GOTHIC_AI_URL" > "$TEST_SESSION/rewritten"; exit 0; }
 remote_bench "$TEST_SESSION" run unused
 '''
@@ -161,6 +353,7 @@ remote_bench "$TEST_SESSION" run unused
                                        text=True, env=dict(os.environ, TEST_SESSION=str(root), RYZEN_AI_TUNNEL='1',
                                                            GOTHIC_AI_URL='ws://user:secret@localhost:47827/ws?q=x#fragment'))
             try:
+                self.assertEqual(process.stdout.readline().strip(), 'Ryzen: game admitted')
                 self.assertEqual(process.stdout.readline().strip(), 'Ryzen: waiting for AI tunnel')
                 self.assertFalse((root / 'rewritten').exists())
                 (root / 'inputs/run/tunnel-ready').write_text('51234\n')
