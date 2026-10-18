@@ -878,7 +878,7 @@ to start when its build lacks this option, including after an automatic fallback
 | Command | Effect |
 |---|---|
 | `cloth on\|off` | Set the normal `[GAME] cloth` option, also available as Marvin `toggle cloth`. |
-| `cloth setup <zen-id\|visual\|densest> <label>` | Select an authored vob or level cloth island (for example `6367`, `NW_CITY_FLAG_01:1` or `NW_SHIP_FLAG_01:1`), place and hold the observer, and frame the entire cloth from an elevated side with nine clear foreground rays. Exact visual labels take precedence over prefix matches. |
+| `cloth setup <zen-id\|visual\|densest> <label>` | Select an authored vob or level cloth island (for example `6367`, `NW_CITY_FLAG_01:1` or `NW_SHIP_FLAG_01:1`), place and hold the observer, and frame the entire cloth from a clear side. Test visible simulated and native-reference vertices against foreground geometry; high ship cloth can be viewed from below its yard. Exact visual labels take precedence over prefix matches. |
 | `cloth camera harbour` | Frame all ten authored ship cloth islands without changing the observer or selected physics target. |
 | `cloth wind calm\|natural\|gust` | Smoothly set the common world wind scale to 0, 1 or 2. |
 | `cloth checkpoint <label>` | Record physical/rendered vertex counts, anchor error, current and lifetime maximum vertex speed, recovery count, projectile counters and the selected cloth's rendered vertices in cm. |
