@@ -178,6 +178,39 @@ async def fight_reactions(
             else "A bold, hardened bandit. Defends himself against armed attackers."
         )
     planner.builder.traits = traits
+    old_allow = planner.allow
+    preparing = {CAVALORN, *BANDITS}
+
+    def setup_allow(record: Any, choice: str) -> str | None:
+        if record.id in preparing:
+            return "scenario_setup"
+        return old_allow(record, choice) if old_allow is not None else None
+
+    # A live model may greet the teleported hero and replace start_activity while we arrange
+    # the actors. Restore its ordinary authority before any measured threat is introduced.
+    planner.allow = setup_allow
+
+    async def finish_preparation() -> None:
+        # A setup answer already in flight must not acquire authority when the gate opens.
+        # Use the planner's normal conversation lifecycle to age it out, preserving any
+        # real listen/follow hold, then let all setup requests settle behind the gate.
+        for npc in preparing:
+            record = planner.npcs.get(npc)
+            if record is not None:
+                was_talking = record.talking
+                planner.talking(npc, not was_talking)
+                planner.talking(npc, was_talking)
+        if not await _until(
+            lambda: all(
+                record.flight is None and record.pending is None
+                for npc in preparing
+                if (record := planner.npcs.get(npc)) is not None
+            ),
+            10,
+        ):
+            raise GameError("fight_reactions setup: planner requests did not settle")
+        preparing.clear()
+        planner.allow = old_allow
 
     trace = CombatTrace({})
     link.listeners.append(trace.message)
@@ -250,7 +283,7 @@ async def fight_reactions(
             monster = f"DIR_NPC_FIGHT_{case.upper()}"
             kind = "WOLF" if case == "wolf" else "BLOODFLY"
             # Neither the hero nor Cavalorn overlaps the creature during preparation.
-            await link.debug("player_goto", pos=point(300))
+            await link.debug("player_goto", pos=point(100 if case == "wolf" else 300))
             await link.debug("npc_goto", npc=CAVALORN, waypoint=ARENA, face="PC_HERO")
             await link.own_npc(monster, like=kind, distance=5000)
             await link.debug("npc_goto", npc=monster, to=CAVALORN, distance=1800 if case == "wolf" else 3000)
@@ -280,7 +313,7 @@ async def fight_reactions(
                 if lane is None:
                     raise GameError("fight_reactions setup: no independently verified clear 30 m sight line")
                 anchor = lane
-            await link.debug("player_goto", pos=point(500 if case == "wolf" else -900))
+            await link.debug("player_goto", pos=point(100 if case == "wolf" else -900))
             if not await talk.hold(CAVALORN, "follow"):
                 raise GameError("fight_reactions setup: cannot hold companion")
             await link.act(CAVALORN, "stop")
@@ -308,6 +341,7 @@ async def fight_reactions(
                 raise GameError("fight_reactions setup: companion melee preparation did not finish")
 
             if case == "sight":
+                await finish_preparation()
                 companion = await link.snapshot(CAVALORN, fresh=True)
                 creature = await link.snapshot(monster, fresh=True)
                 party, senses, guild, hostile, to_companion, to_hero, native_los = await link.story_eval(
@@ -363,8 +397,16 @@ async def fight_reactions(
                     raise GameError("fight_reactions setup: unique wolf absent from native beast watch")
                 wolf_id = next(w for w in trace.wolves if w.startswith(monster + "#"))
                 origin = trace.positions[monster]
+                if (distance := trace.distance(monster, "PLAYER")) is None or distance <= 1500:
+                    raise GameError(
+                        f"fight_reactions setup: wolf already within hero aggro range: {distance}"
+                    )
                 trace.targets_seen[monster] = set()
                 trace.wolf_states[wolf_id] = []
+                await finish_preparation()
+                # Only now bring the passive hero into native hunting range: observations,
+                # initial HP and the companion's ready sword precede any possible attack.
+                await link.debug("player_goto", pos=point(500))
                 await link.beast(wolf_id, "attack")
                 hunting = await _until(
                     lambda: (
@@ -450,6 +492,7 @@ async def fight_reactions(
                 raise GameError(f"fight_reactions setup: companion not holding melee weapon: {trace.weapons}")
             if not await _until(lambda: all(n in planner.npcs for n in BANDITS), 5):
                 raise GameError("fight_reactions setup: bandits absent from planner roster")
+            await finish_preparation()
 
             if case == "flee":
                 bandit = BANDITS[1]
@@ -569,6 +612,7 @@ async def fight_reactions(
         link.raw_body_listeners.remove(trace.body)
         await link.body_watch([])
         planner.builder.traits = old_traits
+        planner.allow = old_allow
         if runner is not None:
             await link.send(ThreatControlCmd(hold=False))
             runner.cancel()
