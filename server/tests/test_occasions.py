@@ -41,7 +41,7 @@ def places():
 
 
 @asynccontextmanager
-async def world(places, *, gather=False):
+async def world(places, *, gather=False, crimes=True):
     fake, clock, store = FakeGame(), Clock(), MemoryStore(":memory:")
     fake.nearest_waypoint = "ROAD_1"
     fake.vars["KAPITEL"] = 1
@@ -62,7 +62,9 @@ async def world(places, *, gather=False):
     async with connected(fake) as link:
         chronicle = Chronicle(link, store)
         options = {} if gather else {"gather_s": 0}
-        occasions = Occasions(link, chronicle, places, clock=clock, busy_poll_s=0.01, **options)
+        occasions = Occasions(
+            link, chronicle, places, clock=clock, busy_poll_s=0.01, crimes=crimes, **options
+        )
         yield fake, clock, chronicle, occasions
 
 
@@ -326,12 +328,80 @@ async def test_only_a_person_killed_by_the_hero_is_a_deed(places):
         human = {"fact": "died", "npc": HILDA, "killer": "PLAYER", "tag": None}
         chronicle.record(human)
         await occasions.poll()
+        await occasions.poll()
         assert kinds(occasions) == ["deed"]
         assert (await occasions.next())["deed"] == human
         tagged = {"fact": "died", "npc": "HUMAN", "killer": "PLAYER", "tag": "cast", "monster": False}
         chronicle.record(tagged)
         await occasions.poll()
+        await occasions.poll()
         assert (await occasions.next())["deed"] == tagged
+
+
+def crime_fact(kind="theft"):
+    return {
+        "fact": "crime", "id": "A/deed-1", "kind": kind, "victim": LOBART,
+        "item": "ITFO_BREAD", "count": 1, "day": 1, "hour": 8, "minute": 0,
+    }
+
+
+async def test_a_crime_is_a_deed_with_its_id(places):
+    async with world(places, crimes=True) as (_, _, chronicle, occasions):
+        deed = crime_fact()
+        chronicle.record(deed)
+        await occasions.poll()
+        [result] = occasions.pending
+        assert result["kind"] == "deed" and result["crime"] == deed["id"]
+        assert result["deed"] == deed
+
+
+@pytest.mark.parametrize("death_first", [False, True])
+async def test_a_murder_and_its_death_have_one_crime_occasion(places, death_first):
+    async with world(places, crimes=True) as (_, _, chronicle, occasions):
+        crime = crime_fact("murder")
+        death = {"fact": "died", "npc": LOBART, "killer": "PLAYER", "monster": False}
+        for fact in ([death, crime] if death_first else [crime, death]):
+            chronicle.record(fact)
+        await occasions.poll()
+        await occasions.poll()
+        [result] = chronicle.facts("occasion")
+        assert result["crime"] == crime["id"] and result["deed"] == crime
+        assert chronicle.facts("died") == [death]
+
+
+async def test_a_poll_between_death_and_crime_does_not_duplicate_the_occasion(places):
+    async with world(places, crimes=True) as (_, _, chronicle, occasions):
+        chronicle.record({"fact": "died", "npc": LOBART, "killer": "PLAYER", "monster": False})
+        await occasions.poll()
+        assert occasions.pending == []
+        crime = crime_fact("murder")
+        chronicle.record(crime)
+        await occasions.poll()
+        [result] = chronicle.facts("occasion")
+        assert result["crime"] == crime["id"] and result["deed"] == crime
+
+
+async def test_an_unpaired_death_falls_back_on_the_next_sample(places):
+    async with world(places, crimes=True) as (_, _, chronicle, occasions):
+        death = {"fact": "died", "npc": LOBART, "killer": "PLAYER", "monster": False}
+        chronicle.record(death)
+        await occasions.poll()
+        assert occasions.pending == []
+        await occasions.poll()
+        [result] = occasions.pending
+        assert result["deed"] == death and "crime" not in result
+
+
+async def test_no_crimes_ignores_crime_facts_and_keeps_immediate_death_deeds(places):
+    async with world(places, crimes=False) as (_, _, chronicle, occasions):
+        chronicle.record(crime_fact("murder"))
+        await occasions.poll()
+        assert occasions.pending == []
+        death = {"fact": "died", "npc": LOBART, "killer": "PLAYER", "monster": False}
+        chronicle.record(death)
+        await occasions.poll()
+        [result] = occasions.pending
+        assert result["deed"] == death and "crime" not in result
 
 
 async def test_live_death_messages_keep_the_bridge_human_or_monster_distinction(places):
@@ -345,6 +415,7 @@ async def test_live_death_messages_keep_the_bridge_human_or_monster_distinction(
         await fake.send(type="hero_kill", npc=LOBART, monster=False)
         await fake.send(type="npc_died", npc=LOBART, tag="cast", killer="PLAYER")
         await chronicle.link.story_state()
+        await occasions.poll()
         await occasions.poll()
         assert kinds(occasions) == ["deed"]
         assert (await occasions.next())["deed"]["npc"] == LOBART

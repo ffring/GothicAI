@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 PRIORITY = {"deed": 0, "vanilla": 1, "chapter": 2, "arrived": 3, "quiet": 4}
 # `claim` is recorded after the ending/reward succeeds. Only a truthful accepted claim counts;
 # a paid lie is no completed quest (vanilla.py and quests.py).
-DEEDS = {"found_out", "story_quest_done", "authored_done", "claim"}
+DEEDS = {"found_out", "story_quest_done", "authored_done", "claim", "crime"}
 LINES = {"story_quest", "chain", "authored"}
 DAY_MINUTES = 24 * 60
 AWAY_CM = 5000
@@ -63,11 +63,13 @@ class Occasions:
         gather_s: float = 10.0,
         max_gather_s: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
+        crimes: bool = True,
     ) -> None:
         self.link, self.chronicle, self.places = link, chronicle, places
         self.poll_s, self.settle_s, self.chapter_s = poll_s, settle_s, chapter_s
         self.busy_poll_s, self.clock = busy_poll_s, clock
         self.gather_s, self.max_gather_s = gather_s, max_gather_s
+        self.crimes = crimes
         self.current: Place | None = None
         self.waypoint: str | None = None
         self.visited: set[str] = set()
@@ -78,6 +80,7 @@ class Occasions:
         self._changed = asyncio.Event()
         self._wake = asyncio.Event()
         self._events: deque[Fact] = deque()
+        self._deaths: list[Fact] = []
         self._people: list[dict[str, Any]] | None = None
         self._context = "PC_HERO"
         self._residents: dict[str, set[str]] = {}
@@ -105,6 +108,7 @@ class Occasions:
         self.pending.clear()
         self._queued_at.clear()
         self._events.clear()
+        self._deaths.clear()
         self._people = None
         self._context = "PC_HERO"
         self._residents.clear()
@@ -139,6 +143,7 @@ class Occasions:
             self.pending.clear()
             self._queued_at.clear()
             self._events.clear()
+            self._deaths.clear()
             self._changed.set()
         elif isinstance(message, WorldLoaded):
             self._wake.set()
@@ -242,6 +247,7 @@ class Occasions:
                         if previous is not None:
                             self._occasion("chapter", chapter=value)
                     self._chapter_checked = self.clock()
+            deaths, self._deaths = self._deaths, []
             while self._events:
                 fact = self._events.popleft()
                 if fact["fact"] in LINES:
@@ -249,6 +255,17 @@ class Occasions:
                 elif fact["fact"] == "vanilla_quest":
                     self._occasion("vanilla", vanilla=fact)
                 elif self._is_deed(fact):
+                    if self.crimes and self._human_killed(fact):
+                        # A death scan may precede the passive perception's crime by a frame. Wait
+                        # for one more sample before falling back to the older, less detailed deed.
+                        self._deaths.append(fact)
+                    else:
+                        self._occasion(
+                            "deed", deed=fact,
+                            **({"crime": fact["id"]} if fact["fact"] == "crime" else {}),
+                        )
+            for fact in deaths:
+                if self._is_deed(fact):
                     self._occasion("deed", deed=fact)
             at = _minutes(self._time)
             if self.current is not None and at is not None and at - self._activity >= DAY_MINUTES:
@@ -265,9 +282,18 @@ class Occasions:
         return not fact.get("tag") or any(p["npc"] == fact.get("npc") for p in self._people or ())
 
     def _is_deed(self, fact: Fact) -> bool:
+        if fact.get("fact") == "crime":
+            return self.crimes
         if fact.get("fact") == "claim":
             return fact.get("truth") is True and fact.get("believed") is True
-        return fact.get("fact") in DEEDS or self._human_killed(fact)
+        if self._human_killed(fact):
+            # The crime carries the full truth and owns this occasion; the death remains in the
+            # Chronicle for its other readers.
+            return not self.crimes or not any(
+                crime.get("kind") == "murder" and crime.get("victim") == fact.get("npc")
+                for crime in self.chronicle.facts("crime")
+            )
+        return fact.get("fact") in DEEDS
 
     def _set_time(self, state: Fact) -> None:
         self._time = {k: state[k] for k in ("day", "hour", "minute") if isinstance(state.get(k), int)}
