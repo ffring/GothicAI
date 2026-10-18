@@ -36,6 +36,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <mutex>
 #include <limits>
 #include <iterator>
@@ -528,7 +529,33 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
                       contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
     }
 
-  JPH::Vec3 initialIdleGravity(JPH::Vec3Arg gravity) const {
+  JPH::Vec3 finiteGroundNormal(const char* phase) {
+    const auto normal=character->GetGroundNormal();
+    const float x=normal.GetX(),y=normal.GetY(),z=normal.GetZ();
+    const bool finite=std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+    const double squared=double(x)*x+double(y)*y+double(z)*z;
+    if(finite && squared>1.e-12) {
+      lastGroundNormal=normal;
+      return normal; // Keep every valid native normal bit-for-bit, without normalization.
+    }
+    ++groundNormalFallbacks;
+    // A zero normal while airborne is Jolt's ordinary no-contact sentinel. Log
+    // anomalous support only; all fallback reads still count in diagnostics.
+    if(!finite || character->IsSupported()) {
+      const auto position=toCentimeters(JPH::Vec3(character->GetPosition()));
+      std::fprintf(stderr,"CV_GROUND_NORMAL_FALLBACK phase=%s count=%llu tick_ms=%llu body=%u subshape=%u state=%u "
+                          "position_cm=(%.9g,%.9g,%.9g) raw=(%.9g,%.9g,%.9g) fallback=(%.9g,%.9g,%.9g) contacts=%zu\n",
+                   phase,static_cast<unsigned long long>(groundNormalFallbacks),
+                   static_cast<unsigned long long>(culprit!=nullptr?culprit->world().tickCount():0),
+                   character->GetGroundBodyID().GetIndexAndSequenceNumber(),character->GetGroundSubShapeID().GetValue(),
+                   unsigned(character->GetGroundState()),double(position.x),double(position.y),double(position.z),
+                   double(x),double(y),double(z),double(lastGroundNormal.GetX()),double(lastGroundNormal.GetY()),
+                   double(lastGroundNormal.GetZ()),static_cast<size_t>(character->GetActiveContacts().size()));
+    }
+    return lastGroundNormal;
+    }
+
+  JPH::Vec3 initialIdleGravity(JPH::Vec3Arg gravity) {
     // A tangent pose can have tiny negative distances from floating-point
     // contact calculations. Anything beyond one percent of the solver's
     // collision tolerance still needs the ordinary initial recovery solve.
@@ -537,6 +564,7 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
       if(!contact.mWasDiscarded && !contact.mIsSensorB && contact.mDistance < -numericalPenetration)
         return gravity;
 
+    const auto groundNormal=finiteGroundNormal("initial_idle");
     const auto id = character->GetGroundBodyID();
     JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),id);
     if(!lock.SucceededAndIsInBroadPhase() || !lock.GetBody().IsStatic())
@@ -551,7 +579,7 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
     // resolve their leaf's face in the body's world transform.
     const auto face = body.GetWorldSpaceSurfaceNormal(subShape,character->GetGroundPosition());
     constexpr float cosTwoDegrees = .999390827f;
-    if(character->IsSlopeTooSteep(face) || face.Dot(character->GetGroundNormal())<cosTwoDegrees)
+    if(character->IsSlopeTooSteep(face) || face.Dot(groundNormal)<cosTwoDegrees)
       return gravity;
     for(const auto& contact:character->GetActiveContacts()) {
       if(contact.mBodyB!=id || contact.mSubShapeIDB!=subShape || !contact.mHadCollision ||
@@ -596,12 +624,12 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
     return result;
     }
 
-  CharacterVirtualDiagnostics::Pose diagnosticPose() const {
+  CharacterVirtualDiagnostics::Pose diagnosticPose() {
     CharacterVirtualDiagnostics::Pose result;
     result.position = toCentimeters(JPH::Vec3(character->GetPosition()));
     result.velocity = toCentimeters(character->GetLinearVelocity());
     result.groundPosition = toCentimeters(JPH::Vec3(character->GetGroundPosition()));
-    const auto normal = character->GetGroundNormal();
+    const auto normal = finiteGroundNormal("diagnostic");
     result.groundNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
     result.groundVelocity = toCentimeters(character->GetGroundVelocity());
     result.ground = diagnosticBody(character->GetGroundBodyID(),character->GetGroundPosition());
@@ -796,6 +824,8 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   bool idleSupportMotionObserved = false;
   float radius = 0.f;
   float height = 0.f;
+  JPH::Vec3 lastGroundNormal = JPH::Vec3::sAxisY();
+  uint64_t groundNormalFallbacks = 0;
   JPH::BodyID ground;
   JPH::RMat44 groundTransform = JPH::RMat44::sIdentity();
   };
@@ -849,6 +879,7 @@ bool CollisionWorld::VirtualCharacter::diagnostics(CharacterVirtualDiagnostics& 
   if(impl->diagnostic==nullptr || !impl->diagnostic->valid)
     return false;
   out = *impl->diagnostic;
+  out.groundNormalFallbacks = impl->groundNormalFallbacks;
   return true;
   }
 
@@ -942,7 +973,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
       if(state.needsInitialUpdate)
         gravityStep = state.initialIdleGravity(gravityStep);
       else {
-        const auto normal = character.GetGroundNormal();
+        const auto normal = state.finiteGroundNormal("idle_gravity");
         gravityStep = normal*gravityStep.Dot(normal);
         }
       }
@@ -1092,7 +1123,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
   result.velocity = toCentimeters(solvedVelocity);
   result.groundVelocity = toCentimeters(inferredGroundVelocity && previousGround==state.ground ?
                                         inheritedGroundVelocity : character.GetGroundVelocity());
-  const auto normal = character.GetGroundNormal();
+  const auto normal = state.finiteGroundNormal("move_output");
   result.groundNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
   result.grounded = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;
   result.steep = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnSteepGround;
@@ -1152,7 +1183,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::carry(uint
   result.position = toCentimeters(JPH::Vec3(character.GetPosition()));
   result.velocity = toCentimeters(velocity);
   result.groundVelocity = toCentimeters(delta/seconds);
-  const auto normal = character.GetGroundNormal();
+  const auto normal = state.finiteGroundNormal("carry_output");
   result.groundNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
   result.grounded = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;
   result.steep = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnSteepGround;
