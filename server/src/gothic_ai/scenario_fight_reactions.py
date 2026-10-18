@@ -217,6 +217,7 @@ async def fight_reactions(
         planner.allow = old_allow
 
     trace = CombatTrace({})
+    parked: set[str] = set()
     link.listeners.append(trace.message)
     link.raw_body_listeners.append(trace.body)
     send = link.send
@@ -663,7 +664,61 @@ async def fight_reactions(
             else:
                 assert talk.orders is not None
                 charge_started = time.monotonic()
+                talk.orders.fight_intent(CAVALORN, BANDITS[0])
+
+                def both_prepared() -> bool:
+                    for bandit in BANDITS:
+                        threat = any(
+                            t >= charge_started
+                            and isinstance(m, NpcEvent | PerceptionHeld)
+                            and m.npc == bandit
+                            and m.kind == "npc_threat"
+                            and m.other == CAVALORN
+                            for t, m in trace.events
+                        )
+                        draw = trace.armed.get(bandit)
+                        shouts = combat_shouts(Path(log_dir) / "game.log", bandit)
+                        hit = next(iter(trace.damage.get(bandit, [])), (None, 0))[0]
+                        if not (
+                            threat and draw is not None and shouts
+                            and (hit is None or (draw < hit and any(t < hit for t in shouts)))
+                        ):
+                            return False
+                    return True
+
+                prepared = await _until(both_prepared, 15)
+                check(
+                    "both_respond_before_contact",
+                    prepared,
+                    f"draw_game_ms={trace.armed}, native_shout_game_ms="
+                    f"{ {b: combat_shouts(Path(log_dir) / 'game.log', b) for b in BANDITS} }",
+                )
+                if not prepared:
+                    return results
+
+                async def stop_companion() -> None:
+                    await link.act(CAVALORN, "stop")
+                    if not await _until(lambda: CAVALORN not in talk.orders.fights, 3):
+                        raise GameError("fight_reactions setup: prior companion duel did not stop")
+
+                # Both defenders have reacted. Isolate their post-hit measurements so a native
+                # target switch or two opponents pinning Cavalorn cannot prevent the first hit.
+                await stop_companion()
+                await link.debug("npc_goto", npc=BANDITS[1], to=CAVALORN, distance=5000)
+                await link.attach(BANDITS[1])
+                parked.add(BANDITS[1])
+                companion_pos = (await link.snapshot(CAVALORN, fresh=True)).npc.pos
+                parked_pos = (await link.snapshot(BANDITS[1], fresh=True)).npc.pos
+                separation = math.dist(companion_pos, parked_pos)
+                log.info("fight_reactions parked npc=%s distance_cm=%.1f", BANDITS[1], separation)
+                if separation < 4000:
+                    raise GameError(f"fight_reactions setup: second defender not isolated ({separation} cm)")
                 for bandit in BANDITS:
+                    if bandit in parked:
+                        await stop_companion()
+                        await link.detach(bandit)
+                        parked.remove(bandit)
+                        await link.debug("npc_goto", npc=bandit, to=CAVALORN, distance=1800, face=CAVALORN)
                     talk.orders.fight_intent(CAVALORN, bandit)
                     await _until(lambda b=bandit: bool(trace.damage.get(b)), 35)
                     hits = trace.damage.get(bandit, [])
@@ -721,15 +776,10 @@ async def fight_reactions(
                         f"first_hit_game_ms={hit}, first_return_strike_game_ms={first}, "
                         f"delay_ms={first - hit if first is not None and hit is not None else None}",
                     )
-                    # Finish this target before charging the other, preserving attribution of damage.
+                    # Its metrics are complete. Remove it without a player blow, then stage the
+                    # other still-living defender; no damage/voice/strike history is reset.
                     if bandit == BANDITS[0]:
-                        await _until(
-                            lambda b=bandit: (
-                                trace.hp.get(b, 1) <= 1
-                                or (b in talk.people and talk.people[b].activity == "down")
-                            ),
-                            50,
-                        )
+                        await link.debug("kill", npc=bandit)
                 check(
                     "hero_passive",
                     not trace.strikes.get("PLAYER") and not trace.damage.get("PLAYER"),
@@ -737,6 +787,8 @@ async def fight_reactions(
                     f"hero_damage={trace.damage.get('PLAYER', [])}",
                 )
     finally:
+        for npc in parked:
+            await link.detach(npc)
         link.send = send  # type: ignore[method-assign]
         link.listeners.remove(trace.message)
         link.raw_body_listeners.remove(trace.body)
