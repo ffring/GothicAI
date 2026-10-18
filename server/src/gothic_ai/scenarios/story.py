@@ -194,7 +194,14 @@ async def graph_programs(
     check("vanilla", len(base) >= 2, " ".join(base))
     if len(base) < 2:
         return results
-    info, cond = base[0], base[1]
+    info = base[0]
+    for cond in base[1:]:
+        condition = await link.story_program(cond, "condition", own=True)
+        if not any(e == ["sym", info] for e in programs.exprs_of(condition.get("steps"))):
+            break
+    else:
+        check("vanilla", False, f"no offered dialog has a condition independent of {info}: {base[1:]}")
+        return results
 
     own = await link.story_program(info)
     steps = own.get("steps") or []
