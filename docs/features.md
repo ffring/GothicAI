@@ -120,6 +120,7 @@ PR, который добавляет фичу или выключатель, д
 | Вода: плавучесть вещей и тел | `[GAME] buoyancy=0` | `common/physics/dynamicworld.cpp` | бенчи `water*`, `water-bodies*` | [physics.md](physics.md) |
 | CharacterVirtual героя | `[GAME] character_virtual=0` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | бенчи `character-virtual*` | [physics.md](physics.md) |
 | CharacterVirtual NPC-людей в 20 м от героя | `[GAME] npc_character_virtual=0` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | бенчи `npc-character-virtual*` | [physics.md](physics.md) |
+| CharacterVirtual наземных монстров в 20 м от героя (по умолчанию **0**) | `[GAME] monster_character_virtual=0`; Marvin `toggle monster_character_virtual` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | `check-physics`; бенч `monster-character-virtual`; e2e `wolf` с ON | [Приёмка шага 4, часть 1](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md) |
 
 ## Движок: анимация
 

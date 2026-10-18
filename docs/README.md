@@ -92,13 +92,14 @@
 
 `OpenGothic/` — форк Try/OpenGothic. Сторонние библиотеки лежат в `lib/` обычными файлами ([`VENDORED.md`](../OpenGothic/lib/VENDORED.md)). Целиком наше: `ai_bridge/`, `game/bodyrunner.cpp`, `tests/*_contract.cpp`. В `common/` наши `physics/`, части `game/` и `graphics/mesh/`, `testbench.*`, `nav*`; остальное — апстрим с точечными правками. Эмуляция Ikarus/LeGo апстрима (`common/game/compatibility/`, кроме `phoenix.*`) удалена; при слиянии апстрима конфликт `modify/delete` в этой папке решается сохранением удаления.
 
-Всё ниже включено по умолчанию. Выключатели `OPENGOTHIC_*=0` нужны для сравнений. Каждый выключатель с модулем и проверкой — в [`features.md`](features.md).
+Если не указано иное, подсистемы ниже включены по умолчанию. Выключатели `OPENGOTHIC_*=0` нужны для сравнений. Каждый выключатель с модулем и проверкой — в [`features.md`](features.md).
 
 | Подсистема | Где | Выключатель | Документ |
 |---|---|---|---|
 | Мост к серверу | `ai_bridge/aibridge.cpp`; NPC — `npccontroller`, `npcview`, `npcchests`; сюжет — `story*`, `dialoggraph`; голос — `voicebuffer`, `linelibrary`; `beasts`, `necromancy` | `GOTHIC_AI=0` | [`protocol.md`](protocol.md) |
 | Физика Jolt вместо Bullet: тела, рэгдоллы, CharacterVirtual, вода, разрушение | `common/physics/` (`collisionworld`, `dynamicworld`, `ragdoll`, `fracture`, `cloth`, `worldwind`), `common/world/movablevobs.*` | ini `[GAME]`: `ragdoll`, `movable_vobs`, `destruction`, `buoyancy`, `character_virtual` и другие; кэш разрушений `OPENGOTHIC_FRACTURE` | [`physics.md`](physics.md) |
 | Ткань мира рядом с героем: mesh-vob и полотнища уровня | `common/physics/cloth.*`, `clothgeometry.*`, `worldcloth.*`, `common/graphics/clothvisual.*`, `common/world/portalrooms.h`; таблицы `data/cloth-vobs.csv`, `cloth-world.csv` | `[GAME] cloth=0`, Marvin `toggle cloth` | [Перепись и проверки](../reports/physics/2026-10-18-cloth/validation-notes.md#шаг-1) |
+| Наземные живые монстры на CharacterVirtual в 20 м от героя (выход 22 м), эксперимент по умолчанию **OFF** | `common/game/movealgo.cpp`, общий `common/physics/` | `[GAME] monster_character_virtual=0`; Marvin `toggle monster_character_virtual` | [Числа и приёмка шага 4, часть 1](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md) |
 | Анимация: инерциальные переходы, foot IK, моргание, жесты, губы, взгляд, наклон, вздрагивание, натяжение лука, ходьба с прицелом | `common/graphics/mesh/` (`animblend`, `footik`, `eyeblink`, `talkgestures`, `lipsync`, `gaze`, `lean`, `flinch`, `bowdraw`, `aimwalk`, `aim`) | `OPENGOTHIC_ANIBLEND`, `_FOOTIK`, `_BLINK`, `_GESTURES`, `_LIPSYNC`, `_GAZE`, `_LEAN`, `_FLINCH`, `_BOWDRAW`, `_AIMWALK`, `_AIM` | — |
 | Ручной прицел героя и лучники NPC | `common/game/archery.cpp`, `aimcamera.h`, `archerai.*` | `OPENGOTHIC_MANUALAIM`, `OPENGOTHIC_NPCAIM` (или ini `[GAME] manualAim`, `npcManualAim`) | [`manual-aim.md`](manual-aim.md) |
 | Боевое тело NPC: аренда, наблюдения, арена, реплей | `common/game/bodycontroller.*`, `bodyobservations.*`, `bodyarena.*`, `bodyreplay.*` | без `--body-url` на сервере не работает | [`npc-body-api.md`](npc-body-api.md) |
@@ -144,6 +145,8 @@
 | Очередь Ryzen | `scripts/gq status` |
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |
+
+Стенд `monster-character-virtual` сравнивает OFF/ON для волка, тролля, воды и атак без парных видео; `check-physics` проверяет их капсулы, e2e `wolf` запускается с `MONSTER_CHARACTER_VIRTUAL=1`.
 
 Сценарий считается пройденным, когда все значения результата начинаются с `done`. Описание каждого — в шапке `scripts/e2e.sh`. Стенды ткани `cloth`, `cloth-orc`, `cloth-city`, `cloth-harbour` проверяют самостоятельные и извлечённые из уровня полотнища; `cloth-arrow-npc` проверяет пересечение ткани и NPC одним отрезком стрелы в обоих порядках; `cloth-visibility` проверяет заморозку вне камеры и плавный возврат; `cloth-on/off` измеряют плотное скопление, `cloth-reload` и `cloth-legacy-load` проверяют загрузку; приёмка включает извлечённые из уровня паруса, корабельные флаги и городские знамёна. Тесты сервисов лежат в их `tests/`, тесты скриптов — в `scripts/tests/`.
 

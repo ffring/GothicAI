@@ -309,7 +309,10 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     };
 
   if(virtualWalking) {
-    if(state!=Slide)
+    // Monster attacks can put a deliberate vertical displacement in the root
+    // (the wolf's T_FISTATTACKMOVE). Keep it, unlike ordinary walking bob.
+    const bool attackRoot = !npc.isPlayer() && !npc.isHuman() && bs==BS_HIT;
+    if(state!=Slide && !attackRoot)
       dp.y = 0.f; // walking root bob cannot detach the controller from its support
     const bool moved = tickCharacterVirtual(dt,dp);
     if(impulseGeneration!=movementImpulseGeneration)
@@ -675,7 +678,11 @@ bool MoveAlgo::useCharacterVirtual() {
   if(NavDemos::forceCharacterVirtual(npc) && npc.isHuman() && !npc.isDown())
     return true;
   const auto* hero = npc.world().player();
-  if(!Gothic::physicsFlags().npcCharacterVirtual || !npc.isHuman() || npc.isDown() || hero==nullptr) {
+  const bool human = npc.isHuman();
+  const bool enabled = human ? Gothic::physicsFlags().npcCharacterVirtual :
+                               Gothic::physicsFlags().monsterCharacterVirtual &&
+                               Gothic::physicsFlags().allowsMonsterCharacterVirtual(npc.isDown(),canFlyOverWater());
+  if(!enabled || npc.isDown() || hero==nullptr) {
     npcVirtualInRange = false;
     return false;
     }
@@ -797,6 +804,21 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
     return true;
     }
 
+  if(!npc.isPlayer() && !npc.isHuman() && npc.bodyStateMasked()==BS_HIT &&
+     validGround && pos.y-ground<stepHeight()) {
+    // Legacy grounded attacks retain their root until they leave the floor by
+    // a full step. A wolf lunge can briefly detach native support while its
+    // animation still owns both vertical and horizontal travel. Do not replace
+    // the remaining attack root with the airborne velocity integrator early.
+    setState(Run);
+    clearSpeed();
+    if(moved.blocked) {
+      onMoveFailed(displacement,collision,dt);
+      return false;
+      }
+    return true;
+    }
+
   // Falling and landing remain on the old path. Hand over the actual world velocity,
   // including a departing support, at the exact current origin.
   fallSpeed = moved.velocity*0.001f;
@@ -834,7 +856,8 @@ void MoveAlgo::resetCharacterVirtual(bool mobTransition) {
   virtualMovementActive = false;
   virtualGroundVelocity = {};
   virtualJumpVelocity = {};
-  npcVirtualMobTransition |= mobTransition && !npc.isPlayer() && npc.isHuman();
+  npcVirtualMobTransition |= mobTransition && !npc.isPlayer() &&
+                            (npc.isHuman() || Gothic::physicsFlags().monsterCharacterVirtual);
   }
 
 void MoveAlgo::carryCharacterVirtual(uint64_t dt) {
@@ -1427,6 +1450,7 @@ void MoveAlgo::onMoveFailed(const Tempest::Vec3& dp, const DynamicWorld::Collisi
   if(forward && !info.preFall && npc.currentTarget==info.npc && npc.bodyStateMasked()==BS_HIT) {
     // if charge attack run into npc, FAI should be reengaged
     // makes ai behaviour more consistent with vanilla, when fighting field-raiders
+    TestBench::monsterCharacterCollision(npc,info.npc);
     npc.implFaiWait(0);
     return;
     }
