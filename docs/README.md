@@ -145,7 +145,7 @@
 | pytest одного модуля | `cd server && uv run pytest tests/test_<модуль>.py -q`; на Ryzen — `scripts/ryzen.sh pytest tests/test_<модуль>.py` |
 | Один сценарий e2e | `SCENARIO=<имя> scripts/ryzen.sh e2e`; на Mac — `SCENARIO=<имя> LLM=fake scripts/e2e.sh` |
 | Бенч механики | `scripts/bench.sh <имя>` → `.bench/<имя>-<время>/` (видео, метрики, отчёт) |
-| Очередь Ryzen | `scripts/gq status`: три слота окна, `GQ_DISPLAY_SLOT`, `--display-exclusive`; [ресурсы и допуск](compute.md#очередь-gq), [порты](ryzen.md) |
+| Очередь Ryzen | `scripts/gq status`: три слота окна, `GQ_DISPLAY_SLOT`, `--display-exclusive`; [ресурсы и допуск](compute.md#очередь-gq), [порты](ryzen.md), [проверка и приёмка](../reports/compute/2026-10-19-ryzen-three-windows/README.md) |
 | Общий кэш бинарников Ryzen | `scripts/ryzen.sh` использует `~/gothic-ai/engine-cache/` по хэшу исходников; `clean-cache` очищает старые записи, `RYZEN_WORKTREE` задаёт имя папки; [правила](ryzen.md) |
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |

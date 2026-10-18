@@ -196,4 +196,4 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
-| Три игры e2e на Ryzen: слоты и отдельные порты | `--display-exclusive` занимает всё окно; ёмкость задаёт профиль `gq` | `scripts/gq.py`, `scripts/ryzen.sh`, `scripts/e2e.sh` | `scripts/tests/test_gq.py`, `test_ryzen.py`; одиночные и тройные `orders`, `fight_reactions_bandits`, `calm_companion` | [compute.md](compute.md#очередь-gq), [ryzen.md](ryzen.md) |
+| Три игры e2e на Ryzen: слоты и отдельные порты | `--display-exclusive` занимает всё окно; ёмкость задаёт профиль `gq` | `scripts/gq.py`, `scripts/ryzen.sh`, `scripts/e2e.sh` | `scripts/tests/test_gq.py`, `test_ryzen.py`; приёмочные e2e ожидают уточнения третьего сценария ([отчёт](../reports/compute/2026-10-19-ryzen-three-windows/README.md)) | [compute.md](compute.md#очередь-gq), [ryzen.md](ryzen.md) |

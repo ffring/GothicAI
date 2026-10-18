@@ -819,7 +819,7 @@ PY
 
 e2e_display_exclusive() {
   # Keep timing-sensitive exceptions and their measured reason in this one list.
-  # The solo/triple stability check has not identified any exceptions yet.
+  # Add an exception only after a passing solo run fails with concurrent games.
   case "$1" in
     *) return 1 ;;
   esac

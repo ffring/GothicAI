@@ -10,7 +10,7 @@
 
 Игра e2e пишет в отдельный `LOG_DIR`, включая настройки, сохранения, память и трассы. `e2e.sh` печатает код или сигнал её завершения; `gq` записывает в событие завершения счётчик `oom_kill` из `memory.events` cgroup, если он доступен. Игры на Ryzen по имени не останавливают: свою заявку отменяют через `scripts/gq cancel <id>`. На Mac сохраняется одна игра за раз.
 
-Проверки: `unittest` для обёртки Ryzen, pytest для `test_gq.py` и `test_gq_job.py`, одиночные и тройные e2e `orders`, `fight_reactions_bandits`, `calm_companion`. Подробности допуска — в разделе [«Очередь gq»](#очередь-gq), запусков — в [ryzen.md](ryzen.md).
+Проверки: `unittest` для обёртки Ryzen, pytest для `test_gq.py` и `test_gq_job.py`. Приёмка на Ryzen требует одиночных и тройных e2e `orders`, `fight_reactions_bandits` и третьего сценария: запрошенного `calm_companion` в этой ветке нет, нужно уточнить его имя. [Состояние проверки](../reports/compute/2026-10-19-ryzen-three-windows/README.md). Подробности допуска — в разделе [«Очередь gq»](#очередь-gq), запусков — в [ryzen.md](ryzen.md).
 
 ## План и журнал
 
