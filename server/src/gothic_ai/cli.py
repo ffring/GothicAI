@@ -690,6 +690,7 @@ def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -
     return BodyPilot(
         link,
         args.body_url,
+        max_fights=args.neural_body_max,
         companion=talk.orders.companion,
         unavailable=lambda npc: (
             npc.upper() in talk.attached or (talk.partner is not None and talk.partner.npc == npc.upper())
@@ -709,10 +710,10 @@ async def _native_combat_available(link: GameLink, pilot: BodyPilot | None, npc:
         entry = pilot.people.get(npc)
         if (entry is not None and entry.activity == "body") or npc in pilot._claimed_fights:
             return False
-        if pilot.npc != npc:
+        if not pilot.handles(npc):
             return True
-        # _start sets npc synchronously, before any acquire request or claim. Checking only the lease
-        # or claimed set here would let a native command reset the state during that initial window.
+        # The dispatcher registers a fight before any acquire request or claim. Checking only the
+        # lease or claimed set would let a native command reset that fight during its initial window.
         await asyncio.sleep(0.05)
 
 
@@ -2484,7 +2485,14 @@ def main() -> None:
         "--neural-body",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="let the body policy fight the hero with one eligible npc at a time (requires --body-url)",
+        help="let the body policy fight the hero or companions with eligible npcs (requires --body-url)",
+    )
+    p.add_argument(
+        "--neural-body-max",
+        type=int,
+        choices=range(1, 5),
+        default=4,
+        help="maximum simultaneous body policy fights (1-4; default: 4)",
     )
     p.add_argument(
         "--quick-url",
