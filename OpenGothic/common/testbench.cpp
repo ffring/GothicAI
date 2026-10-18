@@ -6528,30 +6528,84 @@ void waterFilmTick(World& world) {
     ",\"ragdoll\":"+(npc.ragdollBody()?"true":"false")+",\"path\":\"onNoHealth after real WindFist hit\"");
   }
 
-void waterFilmFraming() {
-  if(!bench.rec || (bench.waterFilm!="body" && bench.waterFilm!="skeleton") || bench.waterActors.empty())return;
+// Measure the rendered pose/model in the actual capture viewport. A stock
+// corpse may leave the close shot; that is evidence, not a fixture failure.
+struct WaterFilmPixels {
+  Matrix4x4 vp;
+  float width,height;
+  std::vector<Vec2> points;
+  bool inFrame=true;
+
+  WaterFilmPixels(const Matrix4x4& viewProjection,uint32_t w,uint32_t h)
+    :vp(viewProjection),width(float(w)),height(float(h)) {}
+
+  void point(const Vec3& p) {
+    float x=p.x,y=p.y,z=p.z,w=1;vp.project(x,y,z,w);
+    if(!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(w) || w<=0) {
+      inFrame=false;return;
+      }
+    inFrame&=std::abs(x)<=w && std::abs(y)<=w && z>=0 && z<=w;
+    // The Vulkan projection already points Y down, like the captured pixmap.
+    points.emplace_back((x/w+1.f)*width*.5f,(y/w+1.f)*height*.5f);
+    }
+
+  void box(const Vec3* bounds,const Matrix4x4& object) {
+    if(!bounds)return;
+    for(unsigned i=0;i<8;++i) {
+      Vec3 p(bounds[i&1].x,bounds[(i>>1)&1].y,bounds[(i>>2)&1].z);
+      object.project(p);point(p);
+      }
+    }
+
+  std::string json() const {
+    if(points.empty())return "null";
+    auto lo=points.front(),hi=lo;float span=0;
+    for(const auto& p:points) {
+      lo.x=std::min(lo.x,p.x);lo.y=std::min(lo.y,p.y);
+      hi.x=std::max(hi.x,p.x);hi.y=std::max(hi.y,p.y);
+      for(const auto& q:points)span=std::max(span,(p-q).length());
+      }
+    return "{\"width_px\":"+ragdollNumber(hi.x-lo.x)+",\"height_px\":"+ragdollNumber(hi.y-lo.y)+
+      ",\"span_px\":"+ragdollNumber(span)+",\"rect_px\":["+ragdollNumber(lo.x)+","+ragdollNumber(lo.y)+","+
+      ragdollNumber(hi.x)+","+ragdollNumber(hi.y)+"],\"in_frame\":"+(inFrame?"true":"false")+"}";
+    }
+  };
+
+void waterFilmFraming(World& world,uint32_t width,uint32_t height) {
+  if(!bench.rec || bench.waterFilm.empty())return;
   const auto* camera=Gothic::inst().camera();
   if(!camera)return;
-  const auto& npc=*bench.waterActors.front().npc;
-  const auto vp=camera->viewProj(),object=npc.transform();
-  float maxX=0,maxY=0;bool visible=true;
-  const auto project=[&](const Vec3& point) {
-    float x=point.x,y=point.y,z=point.z,w=1;vp.project(x,y,z,w);
-    const bool front=std::isfinite(w) && w>0 && std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
-    if(front) {maxX=std::max(maxX,std::abs(x/w));maxY=std::max(maxY,std::abs(y/w));}
-    visible&=front && std::abs(x)<=.98f*w && std::abs(y)<=.98f*w && z>=0 && z<=w;
+  std::string objects="[";
+  const auto row=[&](std::string_view label,std::string_view method,const WaterFilmPixels& pixels) {
+    if(objects.size()>1)objects+=',';
+    objects+="{\"label\":"+jsonStr(label)+",\"method\":"+jsonStr(method)+",\"pixels\":"+pixels.json()+"}";
     };
-  const auto bounds=npc.bounds();
-  for(unsigned corner=0;corner<8;++corner) {
-    Vec3 at(bounds.bbox[corner&1].x,bounds.bbox[(corner>>1)&1].y,bounds.bbox[(corner>>2)&1].z);
-    object.project(at);project(at);
+  if(bench.waterFilm=="body" || bench.waterFilm=="skeleton")
+    for(const auto& actor:bench.waterActors) {
+      WaterFilmPixels pixels(camera->viewProj(),width,height);
+      const auto& npc=*actor.npc;
+      if(const auto* skeleton=npc.visualSkeleton())
+        for(size_t i=0;i<skeleton->nodes.size();++i) {
+          if(!skeleton->nodes[i].name.starts_with("BIP01"))continue;
+          Vec3 point{};npc.renderedBone(i).project(point);pixels.point(point);
+          }
+      row(actor.role,"rendered_bones",pixels);
+      }
+  for(size_t i=0;i<bench.waterItems.size();++i) {
+    WaterFilmPixels pixels(camera->viewProj(),width,height);
+    pixels.box(bench.waterItems[i]->bBox(),bench.waterItems[i]->transform());
+    row(std::array{"sword","ore","lute","arrow"}[i],"native_mesh_bbox",pixels);
     }
-  if(const auto* skeleton=npc.visualSkeleton())
-    for(const auto& bone:skeleton->nodes)project(npc.mapBone(bone.name));
-  event("water_film_framing","\"scene\":"+jsonStr(bench.waterFilm)+",\"in_frame\":"+(visible?"true":"false")+
-    ",\"max_abs_ndc_x\":"+ragdollNumber(maxX)+",\"max_abs_ndc_y\":"+ragdollNumber(maxY)+
-    ",\"position_cm\":"+ragdollVector(npc.position()));
-  if(!visible)arenaAbort("water film body left the fixed camera frame");
+  if(bench.waterFilm=="fireball")
+    for(const auto& body:world.physic()->movableVobSnapshot()) {
+      if(!bench.waterIds.contains(body.id) || body.broken)continue;
+      WaterFilmPixels pixels(camera->viewProj(),width,height);
+      if(const auto* mesh=Resources::loadMesh(body.visual))pixels.box(mesh->bbox(),body.transform);
+      row(bench.waterLabels[body.id],"native_mesh_bbox",pixels);
+      }
+  event("water_film_framing","\"scene\":"+jsonStr(bench.waterFilm)+",\"elapsed_ms\":"+
+    std::to_string(bench.time-bench.recStart)+",\"viewport_px\":["+std::to_string(width)+","+
+    std::to_string(height)+"],\"objects\":"+objects+"]");
   }
 
 void waterFilmSetup(World& world,Npc& player,std::string_view scene) {
@@ -6700,20 +6754,43 @@ void waterFilmSetup(World& world,Npc& player,std::string_view scene) {
   bench.waterReady=true;bench.waterTrace=true;bench.waterStart=world.tickCount();bench.waterSample=uint64_t(-1);
   bench.noiseTrace=true;bench.noisePhase="water-film-"+std::string(scene);
   const bool bodies=scene=="body" || scene=="skeleton";
-  // Look along the throw: stock corpses travel over ten metres and sink six
-  // metres, while the buoyant body stops near the pier. The same close fixed
-  // view must contain both complete paths, not only their first splash.
-  const auto focus=bodies?lip+direction*100.f+Vec3(0,50,0):(lip+bench.waterCenter)*.5f+Vec3(0,40,0);
+  // Broadside close shots keep the surface legible. Do not widen the body
+  // shot to chase the stock corpse ten metres away from its buoyant partner.
+  Vec3 focus,eye;
   bool camera=false;
-  for(float lateral:bodies?std::vector<float>{200,-200,225,-225}:std::vector<float>{400,-400,450,-450}) {
-    const auto eye=bodies?lip+side*lateral-direction*175.f+Vec3(0,300,0):
-                          focus+side*lateral+direction*120.f+Vec3(0,350,0);
-    if(world.physic()->ray(eye,bench.waterCenter+Vec3(0,20,0)).hasCol ||
-       world.physic()->ray(eye,lip+Vec3(0,110,0)).hasCol)continue;
-    if(bodies && world.physic()->ray(eye,lip+direction*1100.f-Vec3(0,500,0)).hasCol)continue;
-    bench.cam=C_Water;bench.waterCameraTarget=focus;lookFrom(eye,focus);camera=true;break;
+  if(bodies) {
+    focus=lip+direction*450.f;focus.y=bench.waterCenter.y;
+    for(float lateral:{420.f,-420.f}) {
+      eye=focus+side*lateral+Vec3(0,160,0);
+      if(world.physic()->ray(eye,bench.waterCenter+Vec3(0,20,0)).hasCol ||
+         world.physic()->ray(eye,lip+Vec3(0,110,0)).hasCol)continue;
+      camera=true;break;
+      }
     }
-  if(!camera) {arenaAbort("water film camera has no clear low side view");return;}
+  else if(scene=="fireball") {
+    const float pierY=(supports[0].y+supports[1].y)*.5f;
+    focus=lip-direction*50.f;focus.y=pierY+50.f;
+    for(float lateral:{0.f,-40.f,40.f}) {
+      eye=lip-direction*410.f+side*lateral;eye.y=pierY+160.f;
+      bool clear=!world.physic()->ray(eye,bench.waterCenter+Vec3(0,20,0)).hasCol;
+      for(unsigned i=0;i<2;++i) {
+        const auto* mesh=Resources::loadMesh(visuals[i]);
+        const auto center=supports[i]+Vec3(0,(mesh->bbox()[1].y-mesh->bbox()[0].y)*.5f,0);
+        const auto hit=world.physic()->ray(eye,center);
+        if(hit.hasCol && (hit.v-center).length()>85.f)clear=false;
+        }
+      if(clear) {camera=true;break;}
+      }
+    }
+  else {
+    focus=bench.waterCenter+Vec3(0,3,0);
+    eye=bench.waterCenter-direction*210.f+Vec3(0,100,0);
+    camera=true;
+    for(unsigned i=0;i<4;++i)
+      if(world.physic()->ray(eye,bench.waterCenter+side*(float(i)-1.5f)*65.f+Vec3(0,5,0)).hasCol)camera=false;
+    }
+  if(!camera) {arenaAbort("water film camera has no clear close side view");return;}
+  bench.cam=C_Water;bench.waterCameraTarget=focus;lookFrom(eye,focus);
   event("water_film_setup","\"scene\":"+jsonStr(scene)+",\"waypoint\":"+jsonStr(bench.waterWaypoint)+
     ",\"lip_cm\":"+ragdollVector(lip)+",\"water_cm\":"+ragdollVector(bench.waterCenter)+
     ",\"caster_cm\":"+ragdollVector(caster)+",\"camera_cm\":"+ragdollVector(bench.camPos)+
@@ -14963,7 +15040,6 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   bench.hasPrev = true;
 
   updateCamera(*world,subjectOf(*player));
-  waterFilmFraming();
 
   if(bench.ragdollCoverageActive) {
     auto sample=ragdollCoverageSample(*world);
@@ -15330,6 +15406,9 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
   if(frame.w()>0 && frame.format()!=TextureFormat::RGBA8)
     pm = Pixmap(frame,TextureFormat::RGBA8); else
     pm = std::move(frame);
+
+  if(pm.w()>0)
+    if(auto* world=Gothic::inst().world())waterFilmFraming(*world,pm.w(),pm.h());
 
   if(pm.w()>0 && bench.overlay)
     drawOverlay(pm);

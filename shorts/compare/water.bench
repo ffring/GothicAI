@@ -1,4 +1,4 @@
-# Water: four harbour scenes filmed twice, OpenGothic as it was and our water physics on.
+# Water: three harbour scenes filmed twice, OpenGothic as it was and our water physics on.
 # Each setup restores the features it needs; the off take disables all six afterwards.
 # Actions use real spells, native death and falling items in both takes. No AI server.
 seed 73013
@@ -26,30 +26,6 @@ off: water off
 spell equip 26
 wait 1200
 rec body
-water-film begin
-spell cast 600
-wait 6000
-water-film checkpoint
-wait 2500
-stop
-
-# skeleton: the same wind fist and harbour edge, with a living skeleton
-ragdoll on
-living on
-spell feature on
-movable on
-destruction on
-water on
-water-film setup skeleton
-off: ragdoll off
-off: living off
-off: spell feature off
-off: movable off
-off: destruction off
-off: water off
-spell equip 26
-wait 1200
-rec skeleton
 water-film begin
 spell cast 600
 wait 6000
