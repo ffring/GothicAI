@@ -800,7 +800,8 @@ struct Bench {
   } npcCharacterRoute;
   struct MonsterCharacterRoute {
     Npc* npc=nullptr;
-    WayPoint destination;
+    WayPoint destination,heroDestination;
+    bool heroRun=false;
     std::string name,animation;
     Vec3 start,goal,lastPosition,lastVisual,progressPosition,lastSupported,attackStart;
     uint64_t began=0,arrived=0,progressTime=0,attackEnded=0;
@@ -8586,16 +8587,8 @@ void monsterCharacterRemoveAmbient(World& world,const Npc& player,const Vec3& ce
 
 void monsterCharacterPack(World& world,Npc& player) {
   monsterCharacterClear(world);auto& route=bench.monsterCharacterRoute;route.name="wolf_pack";
-  std::vector<const WayPoint*> points;world.forEachWayPoint([&](const WayPoint& wp){if(!wp.underWater)points.push_back(&wp);});
-  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
-  std::stable_partition(points.begin(),points.end(),[](const auto* point) {
-    const auto& name=point->name;
-    return name.find("COAST")!=std::string::npos || name.find("BEACH")!=std::string::npos ||
-           name.find("SEASHORE")!=std::string::npos || name.find("HABOUR")!=std::string::npos ||
-           name.find("HARBOUR")!=std::string::npos || name.find("HARBOR")!=std::string::npos ||
-           name.find("LAKE")!=std::string::npos;
-    });
-  std::stable_partition(points.begin(),points.end(),[](const auto* point){return point->name.find("FOREST")==std::string::npos;});
+  std::vector<const WayPoint*> points;
+  if(const auto* known=world.findPoint("FP_ROAM_NW_BIGFARM_LAKE_MONSTER_02_01"))points.push_back(known);
   std::vector<Vec3> ring;Vec3 center;std::string waypoint;float roughness=0,heightRange=0;unsigned stoneSupports=0;
   for(const auto* point:points) {
     if(!characterFloor(world,point->pos,center))continue;
@@ -8622,13 +8615,13 @@ void monsterCharacterPack(World& world,Npc& player) {
     if(!waypoint.empty())break;
     }
   if(waypoint.empty()) {monsterCharacterError("wolf pack lacks a supported uneven stock terrain ring");return;}
-  monsterCharacterRemoveAmbient(world,player,center,2500,"wolf_pack");
+  monsterCharacterRemoveAmbient(world,player,center,3000,"wolf_pack");
   characterFreezeNear(world,player,center,center);player.stopWalking();player.clearAiQueue();player.setPosition(center);player.updateTransform();
   for(unsigned i=0;i<3;++i) {
     const auto index=i*4;auto* npc=monsterCharacterActor(world,"Wolf",ring[index]);if(!npc)return;
-    npc->setDirection(ring[(index+1)%12]-ring[index]);npc->updateTransform();
+    npc->setDirection(ring[(index+11)%12]-ring[index]);npc->updateTransform();
     auto& actor=monsterCharacterExtra(world,npc,"wolf"+std::to_string(i+1));actor.loop=true;
-    for(unsigned j=1;j<=12;++j)monsterCharacterPoint(actor,ring[(index+j)%12]);
+    for(unsigned j=1;j<=12;++j)monsterCharacterPoint(actor,ring[(index+24-j)%12]);
     if(i==0)route.npc=npc;
     }
   route.start=ring.front();route.goal=ring[6];bench.subject=route.npc;bench.monsterCharacterPack=true;bench.monsterCharacterHeroStart=player.position();
@@ -8638,70 +8631,29 @@ void monsterCharacterPack(World& world,Npc& player) {
     ",\"ring_supports\":12,\"native_action\":\"AI_GoToPoint\"");
   }
 
-void monsterCharacterCliff(World& world,Npc& player) {
-  monsterCharacterClear(world);auto& route=bench.monsterCharacterRoute;route.name="molerat_cliff";
-  route.npc=monsterCharacterActor(world,"Molerat",player.position());if(!route.npc)return;
-  const float limit=float(world.script().guildVal().slide_angle[route.npc->guild()]);
-  std::vector<const WayPoint*> points;world.forEachWayPoint([&](const WayPoint& wp){if(!wp.underWater)points.push_back(&wp);});
-  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
-  std::stable_partition(points.begin(),points.end(),[](const auto* point) {
-    const auto& name=point->name;
-    return name.find("COAST")!=std::string::npos || name.find("BEACH")!=std::string::npos ||
-           name.find("SEASHORE")!=std::string::npos || name.find("HABOUR")!=std::string::npos ||
-           name.find("HARBOUR")!=std::string::npos || name.find("HARBOR")!=std::string::npos ||
-           name.find("LAKE")!=std::string::npos;
-    });
-  std::stable_partition(points.begin(),points.end(),[](const auto* point){return point->name.find("FOREST")==std::string::npos;});
-  auto openSky=[&](const Vec3& start,const Vec3& goal) {
-    for(unsigned i=0;i<=4;++i) {
-      Vec3 floor;
-      if(!characterFloor(world,start+(goal-start)*(float(i)/4.f),floor) ||
-         world.physic()->ray(floor+Vec3(0,25,0),floor+Vec3(0,2025,0)).hasCol)return false;
-      }
-    return true;
-    };
-  Vec3 steepStart,steepGoal,edge;float steepAngle=0,walkAngle=0,drop=0;std::string waypoint;
-  for(const auto* point:points) {
-    if(!waypoint.empty())break;
-    for(float x:{0.f,-120.f,120.f,-240.f,240.f})for(float z:{0.f,-120.f,120.f,-240.f,240.f}) {
-      if(!waypoint.empty())continue;Vec3 center;
-      if(!characterFloor(world,point->pos+Vec3(x,0,z),center))continue;
-      float angle=0,rough=0;Vec3 downhill;
-      if(!slopeAt(world,center,angle,downhill,rough) || angle<std::max(40.f,limit+3.f) || angle>65 || rough>6)continue;
-      Vec3 bottom,top;
-      if(!characterFloor(world,center+downhill*90.f,bottom) || !characterFloor(world,center-downhill*140.f,top) ||
-         top.y-bottom.y<140 || !openSky(bottom,top))continue;
-      const auto support=world.physic()->landRay(center+Vec3(0,15,0),30);
-      if(!support.hasCol || support.n.y>=std::cos(limit*float(M_PI)/180.f))continue;
-      const auto beyond=world.physic()->landRay(center+downhill*450.f+Vec3(0,200,0),2000);
-      if(!beyond.hasCol || center.y-beyond.v.y<180)continue;
-      const Vec3 across(-downhill.z,0,downhill.x);bool found=false;
-      for(float side:{200.f,-200.f,350.f,-350.f,500.f,-500.f})for(float along:{0.f,200.f,-200.f}) {
-        if(found)continue;Vec3 safe;
-        if(!characterFloor(world,center+across*side+downhill*along,safe))continue;
-        float safeAngle=0,safeRough=0;Vec3 safeDown;
-        if(!slopeAt(world,safe,safeAngle,safeDown,safeRough) || safeAngle<8 || safeAngle>std::min(30.f,limit-4.f) || safeRough>6)continue;
-        if(!monsterCharacterOpenLane(world,safe,-safeDown,150,30,80,route.start,route.goal,25) ||
-           !openSky(route.start,route.goal))continue;
-        walkAngle=safeAngle;found=true;
-        }
-      if(!found)continue;
-      steepStart=bottom;steepGoal=top;edge=beyond.v;drop=center.y-beyond.v.y;steepAngle=angle;waypoint=point->name;
-      }
+void monsterCharacterCliff(World& world,Npc& player,bool higher=false) {
+  monsterCharacterClear(world);auto& route=bench.monsterCharacterRoute;
+  route.name=higher?"molerat_cliff_46":"molerat_cliff_36";
+  const std::string waypoint=higher?"NW_XARDAS_TOWER_VALLEY_02":"NW_XARDAS_TOWER_VALLEY_03_C";
+  const auto* point=world.findPoint(waypoint);
+  Vec3 center,downhill;float angle=0,rough=0;
+  if(!point || !characterFloor(world,point->groundPos,center,2000) || !slopeAt(world,center,angle,downhill,rough) ||
+     !characterFloor(world,center-rotY(Vec3(1,0,0),higher?135.f:90.f)*100.f,route.start,2000) ||
+     !characterFloor(world,center+rotY(Vec3(1,0,0),higher?135.f:90.f)*500.f,route.goal,2000)) {
+    monsterCharacterError("known cliff waypoint has no supported ledge endpoints: "+waypoint);return;
     }
-  if(waypoint.empty()) {monsterCharacterError("molerat cliff lacks adjacent walkable and non-walkable stock slopes");return;}
-  characterFreezeNear(world,player,route.start,steepStart);npcCharacterPlaceHero(world,player,route.start,route.goal);
-  route.npc->setPosition(route.start);route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();
+  monsterCharacterRemoveAmbient(world,player,center,3000,"cliff");
+  characterFreezeNear(world,player,route.start,route.goal);npcCharacterPlaceHero(world,player,route.start,route.goal);
+  route.npc=monsterCharacterActor(world,"Molerat",route.start);if(!route.npc)return;
+  route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();bench.subject=route.npc;
+  route.destination=WayPoint(route.goal,"FP_MONSTER_CHARACTER_LEDGE");route.destination.groundPos=route.goal;
   bench.monsterCharacterHeroStart=player.position();
-  route.destination=WayPoint(route.goal,"FP_MONSTER_CHARACTER_WALKABLE");route.destination.groundPos=route.goal;route.tolerance=55;
-  auto* steep=monsterCharacterActor(world,"Molerat",steepStart);if(!steep)return;
-  steep->setDirection(steepGoal-steepStart);steep->updateTransform();
-  auto& actor=monsterCharacterExtra(world,steep,"nonwalkable");monsterCharacterPoint(actor,steepGoal);bench.subject=route.npc;
-  event("monster_character_cliff_setup","\"route\":\"molerat_cliff\",\"waypoint\":"+jsonStr(waypoint)+
-    ",\"walkable_angle_deg\":"+ragdollNumber(walkAngle)+",\"nonwalkable_angle_deg\":"+ragdollNumber(steepAngle)+
-    ",\"open_sky\":true,\"sky_ray_height_cm\":2000,\"sky_rays\":10,\"guild_slide_angle_deg\":"+ragdollNumber(limit)+",\"drop_cm\":"+ragdollNumber(drop)+",\"edge_bottom_cm\":"+ragdollVector(edge)+
-    ",\"walkable_start_cm\":"+ragdollVector(route.start)+",\"walkable_goal_cm\":"+ragdollVector(route.goal)+
-    ",\"nonwalkable_start_cm\":"+ragdollVector(steepStart)+",\"nonwalkable_goal_cm\":"+ragdollVector(steepGoal));
+  const float limit=float(world.script().guildVal().slide_angle[route.npc->guild()]);
+  const auto support=world.physic()->landRay(center+Vec3(0,15,0),30);
+  event("monster_character_cliff_setup","\"route\":"+jsonStr(route.name)+",\"waypoint\":"+jsonStr(waypoint)+
+    ",\"angle_deg\":"+ragdollNumber(angle)+",\"guild_slide_angle_deg\":"+ragdollNumber(limit)+
+    ",\"support_walkable\":"+(support.hasCol && support.n.y>=std::cos(limit*float(M_PI)/180.f)?"true":"false")+
+    ",\"start_cm\":"+ragdollVector(route.start)+",\"goal_cm\":"+ragdollVector(route.goal));
   }
 
 void monsterCharacterCrowd(World& world,Npc& player) {
@@ -8746,44 +8698,12 @@ bool monsterCharacterSlope(World& world,Vec3& start,Vec3& goal,std::string& wayp
   return false;
   }
 
-bool monsterCharacterCourtyard(World& world,Npc& player,const Npc& troll,Vec3& start,Vec3& goal,std::string& waypoint) {
-  Npc* host=nullptr;
-  for(uint32_t id=0;id<world.npcCount();++id)if(auto* npc=world.npcById(id);npc) {
-    auto name=symName(world,npc);for(auto& ch:name)ch=char(std::toupper(uint8_t(ch)));
-    if(name.find("CORAGON")!=std::string::npos || name.find("KORAGON")!=std::string::npos) {host=npc;break;}
-    }
-  if(!host)return false;
-  // A troll's render envelope extends beyond its MDH capsule. Select a real
-  // open courtyard for its arms as well as its body, clear of roofs and walls.
-  const auto bounds=troll.bounds();float halfWidth=350.f;
-  for(unsigned x=0;x<2;++x)for(unsigned z=0;z<2;++z)
-    halfWidth=std::max(halfWidth,std::hypot(bounds.bbox[x].x,bounds.bbox[z].z));
-  const float height=std::max(275.f,bounds.bbox[1].y-bounds.bbox[0].y);
-  for(float distance:{250.f,500.f,750.f,1000.f,1250.f,1500.f,2000.f,2500.f,3000.f})for(unsigned azimuth=0;azimuth<16;++azimuth) {
-    const float angle=float(azimuth)*float(M_PI)/8.f;
-    const auto candidate=host->position()+Vec3(std::cos(angle)*distance,0,std::sin(angle)*distance);
-    Vec3 center;if(!characterFloor(world,candidate,center) || std::abs(center.y-host->position().y)>70)continue;
-    for(unsigned yaw=0;yaw<8;++yaw) {
-      const float a=float(yaw)*float(M_PI)/4.f;const Vec3 along(std::cos(a),0,std::sin(a));
-      if(!monsterCharacterOpenLane(world,center,along,400,halfWidth,height,start,goal,20))continue;
-      const Vec3 side(-along.z,0,along.x);bool sky=true;
-      for(float width:{-halfWidth*.5f,halfWidth*.5f}) {
-        Vec3 laneStart,laneGoal;
-        if(!monsterCharacterOpenLane(world,center+side*width,along,400,0,height,laneStart,laneGoal,20))sky=false;
-        }
-      for(unsigned sample=0;sample<=4 && sky;++sample)for(float width:{-halfWidth,-halfWidth*.5f,0.f,halfWidth*.5f,halfWidth}) {
-        const auto point=start+(goal-start)*(float(sample)/4.f)+side*width;Vec3 floor;
-        if(!characterFloor(world,point,floor) ||
-           world.physic()->ray(floor+Vec3(0,25,0),floor+Vec3(0,2025,0)).hasCol) {sky=false;break;}
-        }
-      if(!sky)continue;
-      waypoint=std::string(symName(world,host));
-      event("monster_character_courtyard_setup","\"outdoor\":true,\"sky_ray_height_cm\":2000,\"sky_rays\":25,\"lane_width_cm\":"+
-        ragdollNumber(halfWidth*2.f)+",\"visual_clearance_height_cm\":"+ragdollNumber(height));
-      characterFreezeNear(world,player,start,goal);return true;
-      }
-    }
-  return false;
+bool monsterCharacterCourtyard(World& world,Npc& player,const Npc&,Vec3& start,Vec3& goal,std::string& waypoint) {
+  if(!characterFloor(world,Vec3(8727.44434f,128.25412f,-745.565796f),start) ||
+     !characterFloor(world,Vec3(8727.44434f,128.269653f,54.4342041f),goal))return false;
+  waypoint="KNOWN_CORAGON_COURTYARD";
+  event("monster_character_courtyard_setup","\"outdoor\":true,\"known_site\":true,\"lane_width_cm\":700");
+  characterFreezeNear(world,player,start,goal);return true;
   }
 
 bool monsterCharacterWater(World& world,float chest,Vec3& dry,Vec3& wet,std::string& waypoint) {
@@ -8924,10 +8844,25 @@ void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
   route.npc=monsterCharacterActor(world,name=="troll_barrel"?"Troll":"Wolf",player.position());if(!route.npc)return;
   std::string waypoint;
   if(name=="wolf_terrain") {
-    if(!monsterCharacterStairs(world,*route.npc,player,route.start,route.goal,waypoint,true)) {
-      monsterCharacterError("wolf terrain lacks visible stone stairs with a supported straight native chase continuation");return;
+    if(!prepareCharacterRoute(world,player,"stairs_up",true,"NW_CITY_TO_FOREST_STAIRS01"))return;
+    const auto& stairs=bench.characterRoute;
+    auto direction=stairs.goal-stairs.start;direction.y=0;
+    if(direction.length()<1) {monsterCharacterError("known stairs lack a forward direction");return;}
+    direction=Vec3::normalize(direction);
+    auto floor=[&](const Vec3& at,Vec3& result) {
+      const auto hit=world.physic()->landRay(at+Vec3(0,500,0),1000);
+      if(!hit.hasCol || std::abs(hit.v.y-at.y)>180)return false;
+      result=hit.v;return true;
+      };
+    Vec3 escape;
+    if(!floor(stairs.start-direction*150.f,route.start) || !floor(stairs.goal,route.goal) ||
+       !floor(stairs.goal+direction*150.f,escape)) {
+      monsterCharacterError("known stairs lack supported chase and hero escape endpoints");return;
       }
-    route.chase=true;
+    waypoint=stairs.waypoint;route.chase=true;route.heroRun=true;
+    route.heroDestination=WayPoint(escape,"FP_MONSTER_VIDEO_HERO_ESCAPE");route.heroDestination.groundPos=escape;
+    event("monster_character_surface","\"route\":\"wolf_terrain\",\"waypoint\":"+jsonStr(waypoint)+
+      ",\"known_stairs\":true,\"hero_escape_cm\":"+ragdollVector(escape));
     } else if(name=="wolf_stairs") {
     if(!monsterCharacterStairs(world,*route.npc,player,route.start,route.goal,waypoint)) {
       monsterCharacterError("wolf stairs lack a supported native chase continuation");return;
@@ -8957,6 +8892,11 @@ void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
       }
     player.stopWalking();player.clearAiQueue();player.setPosition(route.goal);player.updateTransform();
     } else npcCharacterPlaceHero(world,player,route.start,route.goal);
+  if(name=="troll_barrel") {
+    Vec3 hero;
+    if(!characterFloor(world,Vec3(9127.44434f,128.25412f,-745.565796f),hero)) {monsterCharacterError("courtyard hero has no floor");return;}
+    player.setPosition(hero);player.updateTransform();
+    }
   route.npc->setPosition(route.start);route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();bench.subject=route.npc;
   bench.monsterCharacterHeroStart=player.position();
   if(route.chase)route.tolerance=route.npc->bodyObservationTarget(player).attackRangeCm+30.f;
@@ -9008,6 +8948,10 @@ void monsterCharacterBegin(World& world) {
     actor.next=0;actor.queued=false;actor.stalled=false;actor.falling=false;actor.wasAirborne=false;
     actor.arrived=0;actor.arrivals=0;actor.stalls=0;actor.falls=0;actor.cvFrames=0;actor.maxVisualJump=0;actor.maxPhysicalJump=0;actor.travel=0;
     }
+  if(route.heroRun)if(auto* hero=Gothic::inst().player()) {
+    hero->clearAiQueue();hero->clearGoTo();hero->setWalkMode(WalkBit::WM_Run);
+    hero->aiPush(AiQueue::aiGoToPoint(route.heroDestination));
+    }
   if(!route.attack && !bench.monsterCharacterPack) {
     route.npc->clearAiQueue();route.npc->stopWalking();
     if(route.chase)route.npc->aiPush(AiQueue::aiGoToNpc(Gothic::inst().player()));
@@ -9050,70 +8994,13 @@ void monsterCharacterEnd(World& world) {
 
 // The attack needs three supported roots and one short native attack lane,
 // rather than the twenty-place arena used by the performance fixture.
-bool chooseMonsterAttackSite(World& world,const Npc& attacker,const Npc& player,bool withFly,
-                             Vec3& start,Vec3& goal,Vec3& flyAt) {
-  const auto* anchor=world.findPoint("NW_CITY_MERCHANT_PATH_20");
-  if(!anchor)return false;
-  std::vector<const WayPoint*> points;
-  world.forEachWayPoint([&](const WayPoint& wp) {
-    if(!wp.underWater && wp.name.starts_with("NW_CITY_") && wp.name.find("_TO_")==std::string::npos &&
-       wp.name.find("DITCH")==std::string::npos && wp.name.find("FOREST")==std::string::npos)points.push_back(&wp);
-    });
-  std::sort(points.begin(),points.end(),[&](const auto* a,const auto* b) {
-    const auto da=(a->pos-anchor->pos).quadLength(),db=(b->pos-anchor->pos).quadLength();
-    return da==db ? a->name<b->name : da<db;
-    });
-  const float radius=attacker.navigationCapsule().x+10.f;
-  const auto& collision=attacker.visualSkeleton()->bboxCol;
-  const float height=collision[1].y-collision[0].y;
-  auto floorAt=[&](const Vec3& at,Vec3& floor) {
-    if(!characterFloor(world,at,floor))return false;
-    const auto support=world.physic()->landRay(floor+Vec3(0,15,0),30);
-    return support.hasCol && support.mat==zenkit::MaterialGroup::STONE &&
-      (support.n.length()==0 || support.n.y>=.98f) &&
-      !world.physic()->waterRay(floor+Vec3(0,1,0),0).hasCol;
-    };
-  auto supportedRoot=[&](const Vec3& at,float clearance,Vec3& floor) {
-    if(!floorAt(at,floor))return false;
-    for(float x:{-clearance,0.f,clearance})for(float z:{-clearance,0.f,clearance}) {
-      Vec3 support;
-      if(!floorAt(floor+Vec3(x,0,z),support) || std::abs(support.y-floor.y)>20.f)return false;
-      }
-    return !world.physic()->ray(floor+Vec3(0,25,0),floor+Vec3(0,2025,0)).hasCol;
-    };
-  unsigned rejected=0;
-  for(const auto* point:points)for(float x:{0.f,-120.f,120.f,-240.f,240.f,-400.f,400.f})
-      for(float z:{0.f,-120.f,120.f,-240.f,240.f,-400.f,400.f}) {
-    Vec3 from,to,fly;
-    if(!supportedRoot(point->pos+Vec3(x,0,z),radius,from) ||
-       !supportedRoot(from+Vec3(withFly?350.f:1200.f,0,0),player.navigationCapsule().x+10.f,to) ||
-       std::abs(to.y-from.y)>20.f ||
-       (withFly && (!supportedRoot(from+Vec3(150,0,220),80.f,fly) || std::abs(fly.y-from.y)>20.f))) {
-      ++rejected;continue;
-      }
-    bool valid=true;
-    for(float across:{-radius,0.f,radius}) {
-      Vec3 previous;
-      for(unsigned i=0;i<=20;++i) {
-        Vec3 floor;
-        if(!floorAt(from+Vec3(float(i)*20.f,0,across),floor) || std::abs(floor.y-from.y)>20.f) {valid=false;break;}
-        if(i)for(float y:{25.f,height*.5f,height-5.f})
-          if(world.physic()->ray(previous+Vec3(0,y,0),floor+Vec3(0,y,0)).hasCol)valid=false;
-        if(!valid)break;
-        previous=floor;
-        }
-      if(!valid)break;
-      }
-    if(!valid) {++rejected;continue;}
-    start=from;goal=to;flyAt=fly;
-    event("monster_character_attack_site","\"waypoint\":"+jsonStr(point->name)+
-      ",\"anchor\":\"NW_CITY_MERCHANT_PATH_20\",\"geometry_rejections\":"+std::to_string(rejected)+
-      ",\"stone_floor\":true,\"open_sky\":true,\"lane_length_cm\":400,\"lane_radius_cm\":"+ragdollNumber(radius)+
-      ",\"start_cm\":"+ragdollVector(start)+",\"hero_cm\":"+ragdollVector(goal)+
-      ",\"bloodfly_cm\":"+(withFly?ragdollVector(flyAt):"null"));
-    return true;
-    }
-  return false;
+bool chooseMonsterAttackSite(World& world,const Npc&,const Npc&,bool withFly,Vec3& start,Vec3& goal,Vec3& flyAt) {
+  const auto* anchor=world.findPoint("NW_XARDAS_TOWER_VALLEY_091");
+  if(!anchor || !characterFloor(world,anchor->groundPos,start,2000) ||
+     !characterFloor(world,start+Vec3(withFly?350.f:1200.f,0,0),goal) ||
+     (withFly && !characterFloor(world,start+Vec3(150,0,-140),flyAt)))return false;
+  event("monster_character_attack_site","\"waypoint\":\"NW_XARDAS_TOWER_VALLEY_091\",\"known_site\":true");
+  return true;
   }
 
 void monsterCharacterAttack(World& world,Npc& player,const std::string& species) {
@@ -9125,6 +9012,7 @@ void monsterCharacterAttack(World& world,Npc& player,const std::string& species)
   if(!chooseMonsterAttackSite(world,*route.npc,player,species=="fieldraider",route.start,route.goal,flyAt)) {
     monsterCharacterError("monster attack requires supported roots and a clear native attack lane on outdoor city stone near the market");return;
     }
+  monsterCharacterRemoveAmbient(world,player,route.start,3000,"attack");
   characterFreezeNear(world,player,route.start,route.goal);
   player.stopWalking();player.clearAiQueue();player.setPosition(route.goal);player.updateTransform();
   route.npc->setPosition(route.start);route.npc->setDirection(Vec3(1,0,0));route.npc->updateTransform();route.npc->setTarget(&player);route.npc->drawWeaponFist();
@@ -9278,7 +9166,8 @@ void monsterCharacterFields(World& world,uint64_t dt) {
       }
     arrived=route.attackEnded && (route.name!="fieldraider_attack" || route.callbacks>0);
     } else {
-    const auto delta=at-route.goal;
+    const auto* hero=Gothic::inst().player();
+    const auto delta=at-(route.heroRun && hero?hero->position():route.goal);
     arrived=std::hypot(delta.x,delta.z)<=route.tolerance && std::abs(delta.y)<80;
     if(route.name=="wolf_water")arrived&=npc->isSwim();
     if(route.name=="wolf_water_exit") {route.leftWater=route.sawSwim && !npc->isSwim() && !npc->isInAir();arrived&=route.leftWater;}
@@ -9288,6 +9177,7 @@ void monsterCharacterFields(World& world,uint64_t dt) {
   if(arrived && !route.reached) {
     route.reached=true;route.arrived=world.tickCount();
     if(route.name=="wolf_terrain") {
+      if(route.heroRun)if(auto* hero=Gothic::inst().player()) {hero->clearAiQueue();hero->clearGoTo();hero->stopWalking();}
       // The test ends the authored chase after a measured catch. Keep native
       // idle physics running for the rest of the movie without a second goal.
       npc->clearAiQueue();npc->clearGoTo();npc->stopWalking();
@@ -9798,8 +9688,27 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     monsterCharacterCamera(w,pl,a.size()==4,a.size()==4?num(a,2,NAN):0,a.size()==4?num(a,3,NAN):.42f);
     }
+  else if(c=="monstercharacter" && a.size()==5 && a[1]=="follow") {
+    auto& route=bench.monsterCharacterRoute;
+    auto* watched=route.npc;
+    if(bench.monsterCharacterPack && bench.monsterCharacterExtras.size()>=2)watched=bench.monsterCharacterExtras[1].npc;
+    if(!watched) {monsterCharacterError("follow requires prepared monster");return;}
+    exec("watch id:"+std::to_string(w.npcId(watched)),w,pl,ctrl);
+    exec("cam follow "+a[2]+" "+a[3]+" "+a[4],w,pl,ctrl);
+    exec("cam look "+ragdollNumber(std::min(130.f,std::max(45.f,(watched->bounds().bbox[1].y-watched->bounds().bbox[0].y)*.45f))),w,pl,ctrl);
+    exec(route.name=="troll_barrel"?"view clean 500":"view clean 300",w,pl,ctrl);
+    updateCamera(w,*watched);
+    std::string actors="[{\"npc_id\":"+std::to_string(w.npcId(route.npc))+",\"role\":\"primary\",\"start_cm\":"+ragdollVector(route.start)+"}";
+    for(const auto& actor:bench.monsterCharacterExtras)if(actor.npc && actor.npc!=route.npc)
+      actors+=",{\"npc_id\":"+std::to_string(w.npcId(actor.npc))+",\"role\":"+jsonStr(actor.role)+",\"start_cm\":"+ragdollVector(actor.start)+"}";
+    event("monster_character_camera","\"route\":"+jsonStr(route.name)+",\"mode\":\"follow\",\"fixed\":false,\"watch_npc_id\":"+std::to_string(w.npcId(watched))+
+      ",\"distance_cm\":"+ragdollNumber(bench.camDist)+",\"height_cm\":"+ragdollNumber(bench.camHeight)+",\"angle_deg\":"+ragdollNumber(bench.camAngle)+
+      ",\"look_height_cm\":"+ragdollNumber(bench.camLook)+",\"seed\":"+std::to_string(bench.monsterCharacterSeed)+",\"hour\":"+std::to_string(w.time().hour())+
+      ",\"minute\":"+std::to_string(w.time().minute())+",\"hero_cm\":"+ragdollVector(bench.monsterCharacterHeroStart)+",\"actors\":"+actors+"]");
+    monsterCharacterRenderProof(w,*watched,"followed");
+    }
   else if(c=="monstercharacter" && a.size()==2 && a[1]=="pack")monsterCharacterPack(w,pl);
-  else if(c=="monstercharacter" && a.size()==2 && a[1]=="cliff")monsterCharacterCliff(w,pl);
+  else if(c=="monstercharacter" && a.size()==2 && (a[1]=="cliff" || a[1]=="cliff46"))monsterCharacterCliff(w,pl,a[1]=="cliff46");
   else if(c=="monstercharacter" && a.size()==2 && a[1]=="crowd")monsterCharacterCrowd(w,pl);
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
   else if(c=="monstercharacter" && a.size()==3 && a[1]=="measure") {

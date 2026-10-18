@@ -232,7 +232,14 @@ def load(directory, enabled):
             "start_cm", "goal_cm", "end_cm", "attack_distance_cm", "attack_duration_ms",
             "charge_collision_callbacks", "barrel_displacement_cm",
         )}
+        begins = [row for row in journal if row.get("kind") == "monster_character_route_begin" and row.get("route") == name]
+        ends[name]["actual_start_cm"] = begins[0].get("start_cm") if len(begins) == 1 else None
         ends[name].update(frame_summary(selected))
+        primary_id = int(selected[0]["npc_id"])
+        ends[name]["ground_cv_actors"] = [{
+            "npc_id": primary_id, "roles": ["primary"], "csv_frames": len(selected),
+            "cv_frames": sum(int(row["cv_active"]) for row in selected),
+        }]
         ends[name]["actors"] = []
         for actor in (row for row in journal if row.get("kind") == "monster_character_actor_end" and row["route"] == name):
             actor = {key: value for key, value in actor.items() if key not in ("kind", "t", "seg", "frame")}
@@ -240,6 +247,16 @@ def load(directory, enabled):
             require(actor_frames, f"No native frames for extra actor {name}/{actor['role']}")
             actor.update(frame_summary(actor_frames))
             ends[name]["actors"].append(actor)
+            if actor["role"] != "bloodfly":
+                if int(actor["npc_id"]) == primary_id:
+                    # The pack's first wolf is also recorded as the primary.
+                    ends[name]["ground_cv_actors"][0]["roles"].append(actor["role"])
+                else:
+                    ends[name]["ground_cv_actors"].append({
+                        "npc_id": int(actor["npc_id"]), "roles": [actor["role"]],
+                        "csv_frames": len(actor_frames),
+                        "cv_frames": sum(int(row["cv_active"]) for row in actor_frames),
+                    })
         ends[name]["props"] = [{key: value for key, value in row.items() if key not in ("kind", "t", "seg", "frame")}
                                 for row in journal if row.get("kind") == "monster_character_prop_end" and row["route"] == name]
     return {"directory": str(directory.resolve()), "routes": ends, "native_errors": errors,
@@ -282,6 +299,10 @@ def fixture_comparison(off, on):
             "mismatches": mismatches,
             "camera_events": len(cameras),
             "fixed_camera": paired and all(row.get("fixed") is True for row in cameras + other_cameras),
+            "follow_camera": paired and all(row.get("mode") == "follow" for row in cameras + other_cameras) and all(
+                all(a.get(key) == b.get(key) and key in a for key in
+                    ("watch_npc_id", "distance_cm", "height_cm", "angle_deg", "look_height_cm"))
+                for a,b in zip(cameras, other_cameras)),
             "same_seed_and_time": paired and all(all(key in a and key in b and a[key] == b[key]
                 for key in time_fields) for a, b in zip(cameras, other_cameras)),
             "authored_actor_starts_match": paired and all("actors" in a and a["actors"] == b.get("actors")
@@ -340,7 +361,10 @@ def metrics(args):
     for name in sorted(off["routes"].keys() | on["routes"].keys()):
         before, after = off["routes"].get(name), on["routes"].get(name)
         pair = {"route": name, "off": before, "on": after, "matched_start_and_goal": None}
+        pair["actual_start_difference_cm"] = None
         if before and after:
+            if before["actual_start_cm"] is not None and after["actual_start_cm"] is not None:
+                pair["actual_start_difference_cm"] = math.dist(position(before["actual_start_cm"]), position(after["actual_start_cm"]))
             pair["start_difference_cm"] = math.dist(position(before["start_cm"]), position(after["start_cm"]))
             pair["goal_difference_cm"] = math.dist(position(before["goal_cm"]), position(after["goal_cm"]))
             pair["matched_start_and_goal"] = (pair["start_difference_cm"] == pair["goal_difference_cm"] == 0 and
@@ -367,13 +391,18 @@ def metrics(args):
     if any(recorded):
         if not all(recorded):
             errors.append("Only one take contains a native recording")
-        for key in ("fixed_camera", "same_seed_and_time", "authored_actor_starts_match", "camera_coordinates_identical"):
+        for key in ("same_seed_and_time", "authored_actor_starts_match"):
             if not fixtures[key]:
                 errors.append(f"Recorded pair lacks matching {key}")
+        if not (fixtures["follow_camera"] or (fixtures["fixed_camera"] and fixtures["camera_coordinates_identical"])):
+            errors.append("Recorded pair lacks identical follow parameters or matching fixed cameras")
         if fixtures["max_hero_start_difference_cm"] != 0:
             errors.append("Authored hero starts differ or are missing")
     for pair in routes:
         name = pair["route"]
+        for actor in (pair.get("on") or {}).get("ground_cv_actors", []):
+            if actor["cv_frames"] == 0:
+                errors.append(f"{name}: ON ground actor {actor['npc_id']} ({'/'.join(actor['roles'])}) has no active CV frames")
         # The reverse leg starts at the actual wet endpoint of each take. Its
         # divergence is a measured consequence of the first leg, not a reset.
         if name == "wolf_water_exit":

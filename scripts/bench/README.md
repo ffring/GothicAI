@@ -970,10 +970,17 @@ six independent fresh-world OFF/ON pairs (seed 73024, noon). It first asks Ryzen
 `bench.sh`; exit 75 selects Mac for the remaining series, with the Mac game/pytest wait.
 `SCENE=wolf_terrain|wolf_pack|troll_props|cliff|wolf_water|fieldraider_bloodfly` selects one
 pair. Build `Gothic2Notr` first (`NO_BUILD=0` enables local incremental builds).
-The six `OUT/pairs/*.mp4` keep OFF on the left and ON on the right; the accompanying
-`*-frames.png` sheets show OFF above ON once a second. Composition can also be repeated
+The candidate `OUT/pairs/*.mp4` keep OFF on the left and ON on the right; the accompanying
+`*-frames.png` sheets show OFF above ON once a second. Each scene follows its monster
+with matching `watch id`, `cam follow` and `view clean` settings; the pack follows its
+middle wolf. Review framing and visible geometry before accepting a candidate. The
+[validation report](../../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md#шаг-4-часть-2--парные-видео)
+lists accepted pairs and skipped preparations. Composition can also be repeated
 with `uv run scripts/monster_character_virtual_videos.py compose --off OFF.mp4 --on ON.mp4
 --out PAIR.mp4`; `metrics --off OFF_DIR --on ON_DIR` reads native movement evidence.
+`--crop X:Y:W:H` applies the same fixed crop to both videos and their contact sheet.
+Metrics include actual settled route starts and reject ON ground actors with no CV frames;
+the bloodfly control must stay on the legacy path.
 `monster-character-virtual-attacks` checks wolf lunge and fieldraider charge numerically;
 `monster-character-virtual-performance` measures twenty ground monsters for 30 seconds
 without capture. Run performance on Mac with `BENCH_HOST=local` and a build configured

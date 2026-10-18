@@ -40,14 +40,14 @@ for scene in "${SCENES[@]}"; do
     rc=0
     env BENCH_HOST="$HOST" RYZEN_LOCK_WAIT="${RYZEN_LOCK_WAIT:-120}" WORLD=NEWWORLD.ZEN \
       MOVABLE_VOBS=1 MONSTER_CHARACTER_VIRTUAL="$enabled" OPENGOTHIC_BENCH_TAKE="$take" \
-      NO_BUILD="${NO_BUILD:-1}" TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE:-800x600}" \
+      NO_BUILD="${NO_BUILD:-1}" TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE:-1280x720}" \
       TIMEOUT="${TIMEOUT:-600}" "$ROOT/scripts/bench.sh" "$scenario" "$destination" || rc=$?
     if [[ "$rc" == 75 ]]; then
       HOST=local
       wait_mac
       env BENCH_HOST=local WORLD=NEWWORLD.ZEN MOVABLE_VOBS=1 MONSTER_CHARACTER_VIRTUAL="$enabled" \
         OPENGOTHIC_BENCH_TAKE="$take" NO_BUILD="${NO_BUILD:-1}" \
-        TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE:-800x600}" TIMEOUT="${TIMEOUT:-600}" \
+        TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE:-1280x720}" TIMEOUT="${TIMEOUT:-600}" \
         "$ROOT/scripts/bench.sh" "$scenario" "$destination"
     elif [[ "$rc" != 0 ]]; then
       exit "$rc"
@@ -55,6 +55,9 @@ for scene in "${SCENES[@]}"; do
     [[ -s "$destination/$scene.mp4" && -s "$destination/events.jsonl" ]] || {
       echo "incomplete native recording: $destination" >&2; exit 1;
     }
+  done
+  for take in off on; do
+    ffmpeg -v error -y -i "$OUT/$scene-$take/$scene.mp4" -frames:v 1 "$OUT/$scene-$take/first-frame.png"
   done
   mkdir -p "$OUT/pairs"
   python3 "$ROOT/scripts/monster_character_virtual_videos.py" metrics \
