@@ -29,10 +29,12 @@
 #include "gothic.h"
 #include "resources.h"
 #include "frameprofile.h"
+#include "navdemos.h"
 
 #include <chrono>
 #include <iomanip>
 #include <locale>
+#include <memory>
 #include <sstream>
 
 using namespace Tempest;
@@ -727,6 +729,45 @@ void Npc::clearSpeed() {
   mvAlgo.clearSpeed();
   }
 
+void Npc::resetNavigationEpisode() {
+  if(!NavDemos::fullSimulation(*this))
+    return;
+  setInteraction(nullptr,true);
+  clearAiQueue();
+  clearState(true);
+  hnpc->attribute[ATR_HITPOINTS] = hnpc->attribute[ATR_HITPOINTSMAX];
+  releaseRagdoll(false);
+  ragdollDormant.reset();
+  ragdollLegacyDown = ragdollRecovering = ragdollHasLastPosition = false;
+  ragdollLastVelocity = {};
+  ragdollQuestReturn = {};
+  ragdollQuestSpellThrow = false;
+  ragdollQuestSampleTick = 0;
+  living.reset();
+  livingRetryTick = 0;
+  livingNeedsRebuild = livingWasFrozen = livingWasInteracting = false;
+  arrowImpacts.clear();
+  pendingSpellImpulse = {};
+  spellImpulseCulprit.reset();
+  visual.clearPhysicalPose();
+  visual.pose().stopAllAnim();
+  // Called between world ticks: reconstruct transient state (including bounce,
+  // cached ground, speed multipliers and controller hysteresis) for a fresh episode.
+  mvAlgo.resetCharacterVirtual();
+  std::destroy_at(&mvAlgo);
+  std::construct_at(&mvAlgo,*this);
+  currentTarget = nearestEnemy = currentOther = currentVictim = lastHit = nullptr;
+  outWaitTime = aiOutputBarrier = physicsNoiseUntil = 0;
+  castLevel = CS_NoCast;
+  currentSpellCast = size_t(-1);
+  castNextTime = 0;
+  lastEventTime = owner.tickCount();
+  resetCharacterVisualHeight();
+  angleY = runAng = 0;
+  stopWalking();
+  physic.setEnable(true);
+  }
+
 void Npc::setProcessPolicy(NpcProcessPolicy t) {
   if(aiPolicy==t)
     return;
@@ -1224,8 +1265,10 @@ void Npc::prepareLivingBody() {
     arrowImpacts.clear();
     }
   const auto* hero = owner.player();
-  const bool outside = hero!=nullptr && (living ? qDistTo(*hero)>leaveRadius*leaveRadius
-                                               : qDistTo(*hero)>=enterRadius*enterRadius);
+  // Population actors retain the same contact rig as actors near the hero.
+  const bool outside = !NavDemos::fullSimulation(*this) && hero!=nullptr &&
+                       (living ? qDistTo(*hero)>leaveRadius*leaveRadius
+                               : qDistTo(*hero)>=enterRadius*enterRadius);
   if(isDown() || ragdoll || interacting || (!frozen && (isPlayer() || hero==nullptr ||
      !Gothic::physicsFlags().livingBodies || outside))) {
     living.reset();

@@ -122,6 +122,8 @@ class Npc final {
     void       stopDlgAnim();
     void       clearSpeed();
     bool       resetPositionToTA();
+    // Stand-only reuse after death or an airborne/climbing episode timeout.
+    void       resetNavigationEpisode();
 
     void       setProcessPolicy(NpcProcessPolicy t);
     auto       processPolicy() const -> NpcProcessPolicy { return aiPolicy; }
