@@ -63,6 +63,17 @@ ItemMaterial impactMaterial(zenkit::MaterialGroup material) {
     }
   }
 
+float vobBuoyancyFraction(zenkit::MaterialGroup material, std::string_view className = {}) {
+  if(material!=zenkit::MaterialGroup::WOOD)
+    return DynamicWorld::materialDensity(material)/1000.f;
+  // Water displacement is independent of native push mass and its CSV multipliers.
+  // Classless wood, including broken pieces, uses the solid-wood target.
+  if(className=="barrel") return 1.f/3.f;
+  if(className=="crate") return .5f;
+  if(className=="table" || className=="cupboard") return .9f;
+  return .6f;
+  }
+
 double volumeScale(const Tempest::Matrix4x4& matrix) {
   const auto* m = matrix.data();
   return std::abs(double(m[0])*(double(m[5])*m[10]-double(m[9])*m[6])-
@@ -1088,6 +1099,7 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
     obj.body->setPayload(&obj,P_MovableVob);
     obj.body->setLabel(obj.visual);
     obj.body->setNoiseProfile(impactMaterial(shape.material),shape.material,obj.visual);
+    obj.body->setBuoyancyFraction(vobBuoyancyFraction(shape.material,obj.className));
     }
   // cd_dynamic controls the original mesh queries independently of simulation.
   // The hull can move and receive impacts without becoming a new walking/ray obstacle.
@@ -1500,6 +1512,7 @@ void DynamicWorld::loadDestructionVobs(Serialize& fin) {
           auto body=world->addDynamicBody(mesh.pieces[i].hull,piece.matrix,obj->movableShape->friction,mass,C_Fragment);
           body->setLabel(obj->visual+" fragment");
           body->setNoiseProfile(impactMaterial(obj->movableShape->material),obj->movableShape->material,obj->visual+" fragment");
+          body->setBuoyancyFraction(vobBuoyancyFraction(obj->movableShape->material));
           body->restoreTransform(piece.matrix,piece.sleeping);
           if(!piece.sleeping)
             body->setVelocity(piece.velocity,piece.omega);
@@ -1855,6 +1868,7 @@ void DynamicWorld::breakMovableVob(BodyData& obj) {
     auto body=world->addDynamicBody(piece.hull,matrix,obj.movableShape->friction,mass,C_Fragment);
     body->setLabel(obj.visual+" fragment");
     body->setNoiseProfile(impactMaterial(obj.movableShape->material),obj.movableShape->material,obj.visual+" fragment");
+    body->setBuoyancyFraction(vobBuoyancyFraction(obj.movableShape->material));
     const auto r=(body->centerOfMass()-center)*.01f;
     const Tempest::Vec3 tangential(omega.y*r.z-omega.z*r.y,omega.z*r.x-omega.x*r.z,omega.x*r.y-omega.y*r.x);
     // A small separation velocity releases touching cut faces. Linear and

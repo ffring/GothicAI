@@ -11,6 +11,10 @@ from pathlib import Path
 # Keep this expectation independent of mass / measured buoyancy-envelope volume:
 # a construction bug must not turn a floating sword into a passing test.
 ITEM_DENSITY_KG_M3 = {'arrow': 700, 'wood_item': 700, 'sword': 7800, 'stone': 2200}
+# Wooden Vobs keep their native push masses. Their water displacement instead
+# follows the fixture class, and pieces use the independent solid-wood target.
+VOB_SUBMERGED_FRACTION = {'barrel': 1 / 3, 'crate': .5, 'table': .9}
+WOOD_FRAGMENT_SUBMERGED_FRACTION = .6
 
 
 def require(condition, message):
@@ -94,8 +98,8 @@ def fragments(rows):
         fraction = piece['submerged_fraction']
         require(math.isfinite(fraction) and 0 < fraction < 1,
                 f'crate fragment {piece["piece"]}: invalid floating submerged fraction {fraction}')
-        require(abs(fraction - density / 1000) < .06,
-                f'crate fragment {piece["piece"]}: displaced volume does not match density')
+        require(abs(fraction - WOOD_FRAGMENT_SUBMERGED_FRACTION) < .06,
+                f'crate fragment {piece["piece"]}: displaced volume does not match wooden fragment target')
         require(piece['sleeping'], f'crate fragment {piece["piece"]}: still moving after settling')
     return {'crate_zen_id': crate['zen_id'], 'count': len(pieces),
             'sleeping_count': sum(piece['sleeping'] for piece in pieces),
@@ -206,12 +210,14 @@ def resting(row):
         require(abs(density - expected_density) <= max(.1, expected_density * .001),
                 f'{body["label"]}: measured density {density:.6f} kg/m3 differs from '
                 f'its expected script-material density {expected_density} kg/m3')
-        floating = expected_density < 1000
+        expected_fraction = VOB_SUBMERGED_FRACTION.get(body['label'], expected_density / 1000)
+        floating = expected_fraction < 1
         if floating and row['case'] == 'deep':
             require(body['world_bottom_cm'] < body['water_y_cm'] < body['world_top_cm'],
                     f'{body["label"]}: wooden shell is not floating across the surface')
-            require(abs(fraction - density / 1000) < .06,
-                    f'{body["label"]}: displaced volume does not match density')
+            require(abs(fraction - expected_fraction) < .06,
+                    f'{body["label"]}: displaced volume does not match its target '
+                    f'{expected_fraction:.6f}')
         elif not floating and row['case'] == 'deep':
             require(fraction >= .99, f'{body["label"]}: dense shell did not sink')
         require(body['sleeping'], f'{body["label"]}: still moving after settling')

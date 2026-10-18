@@ -62,6 +62,9 @@ class CollisionWorld final {
                                               Npc* culprit = nullptr);
         void                setVelocity(const Tempest::Vec3& velocityCm, const Tempest::Vec3& angularRadians);
         void                setBuoyancyShape(JPH::ShapeRefC shape); // unpadded envelope; native collision stays unchanged
+        // Target submerged-volume fraction, independent of native push mass.
+        // Zero uses physical density; a target above one makes the body sink.
+        void                setBuoyancyFraction(float fraction);
         void                setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what);
         // The latest engine-known cause survives the short noise attribution
         // window and NPC destruction, until a new impulse replaces it.
@@ -85,6 +88,7 @@ class CollisionWorld final {
         JPH::ShapeRefC      baseShape;
         JPH::ShapeRefC      scaledShape;
         JPH::ShapeRefC      buoyancyBaseShape, buoyancyShape;
+        float               buoyancyFraction = 0.f;
         bool                waterInitialized = false, inWater = false, waterSleepDisabled = false, waterPreserveSleep = false;
         float               waterRestTime = 0, waterY = 0;
         uint64_t            nextSplashStep = 0;

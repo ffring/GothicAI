@@ -1284,6 +1284,10 @@ void CollisionWorld::CollisionBody::setBuoyancyShape(JPH::ShapeRefC shape) {
   waterRestTime=0;
   }
 
+void CollisionWorld::CollisionBody::setBuoyancyFraction(float fraction) {
+  buoyancyFraction=std::isfinite(fraction) && fraction>0.f ? fraction : 0.f;
+  }
+
 void CollisionWorld::CollisionBody::setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what) {
   noiseMaterial=material;
   noiseSurface=surface;
@@ -2414,9 +2418,9 @@ void CollisionWorld::applyBuoyancyStep(float seconds) {
     submergedVolume(body,*shape,wrapper->waterY*.01f,total,submerged,buoyancyCenter);
     if(total<=0.f || submerged<=0.f) continue;
     const float inverseMass=body.GetMotionProperties()->GetInverseMass();
-    const float factor=1000.f*total*inverseMass;
-    // Dampen old velocity, then add support, leaving equilibrium density exact.
-    const float supportedMass=std::clamp(1000.f*submerged*inverseMass,0.f,1.f);
+    const float factor=wrapper->buoyancyFraction>0.f ? 1.f/wrapper->buoyancyFraction : 1000.f*total*inverseMass;
+    // Dampen old velocity, then add support with the same equilibrium fraction.
+    const float supportedMass=std::clamp((submerged/total)*factor,0.f,1.f);
     const float damping=std::exp(-2.f*supportedMass*seconds);
     body.SetLinearVelocity(body.GetLinearVelocity()*damping);
     body.SetAngularVelocity(body.GetAngularVelocity()*damping);
