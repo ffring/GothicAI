@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "game/serialize.h"
+#include "gothic.h"
 #include "game/gamescript.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -14,13 +15,33 @@
 
 using namespace Tempest;
 
-Item::Item(World &owner, size_t itemInstance, Type type)
+namespace {
+
+zenkit::MaterialGroup physicsMaterial(int32_t material) {
+  // Script ItemMaterial values do not match the world mesh MaterialGroup enum.
+  switch(material) {
+    case MAT_WOOD:    return zenkit::MaterialGroup::WOOD;
+    case MAT_STONE:   return zenkit::MaterialGroup::STONE;
+    case MAT_METAL:   return zenkit::MaterialGroup::METAL;
+    case MAT_LEATHER: return zenkit::MaterialGroup::WOOD;
+    case MAT_CLAY:    return zenkit::MaterialGroup::EARTH;
+    case MAT_GLAS:    return zenkit::MaterialGroup::STONE;
+    default:         return zenkit::MaterialGroup::UNDEFINED;
+    }
+  }
+
+}
+
+Item::Item(World &owner, size_t itemInstance, Type type, const Tempest::Matrix4x4& initial)
   :Vob(owner) {
   assert(itemInstance!=size_t(-1));
   hitem = std::make_shared<zenkit::IItem>();
   hitem->user_ptr=this;
   owner.script().initializeInstanceItem(hitem, itemInstance);
   setCount(1);
+  // Mass and native inertia are fixed when physics is created. The default
+  // Vob transform is zero, so establish the final pose and scale first.
+  setObjMatrix(initial);
 
   if(type!=T_Inventory) {
     visual = world.addView(*hitem);
@@ -61,6 +82,7 @@ Item::Item(World &owner, Serialize &fin, Type type)
   fin.read(amount);
   fin.read(pos,equipped,itSlot);
   fin.read(mat);
+  setLocalTransform(mat);
 
   if(type!=T_Inventory) {
     if(!FileExt::hasExt(hitem->visual,"ZEN"))
@@ -69,16 +91,18 @@ Item::Item(World &owner, Serialize &fin, Type type)
       setPhysicsEnable(visual);
     }
 
-  setLocalTransform(mat);
   visual.setObjMatrix(mat);
   physic.setObjMatrix(mat);
   }
 
 Item::Item(Item &&it)
-  : Vob(it.world), hitem(it.hitem),
-    pos(it.pos),equipped(it.equipped),itSlot(it.itSlot),visual(std::move(it.visual)) {
+  : Vob(it.world), hitem(std::move(it.hitem)),
+    pos(it.pos),amount(it.amount),equipped(it.equipped),itSlot(it.itSlot),visual(std::move(it.visual)) {
+  hitem->user_ptr=this;
   setLocalTransform(it.localTransform());
   physic = std::move(it.physic);
+  if(!physic.isEmpty())
+    physic.setItem(this);
   }
 
 Item::~Item() {
@@ -133,6 +157,19 @@ void Item::save(Serialize &fout) const {
   fout.write(localTransform());
   }
 
+void Item::savePhysics(Serialize& fout) const {
+  fout.write(uint32_t(clsId()),hitem->visual,localTransform(),physic.velocity(),
+             physic.angularVelocity(),physic.isSleeping());
+  }
+
+void Item::restorePhysics(const Tempest::Matrix4x4& matrix, const Tempest::Vec3& velocity,
+                          const Tempest::Vec3& angular, bool sleeping) {
+  setPhysicsEnable(world);
+  // Native restore preserves dry sleepers and wakes a saved float when
+  // buoyancy is disabled, after body creation and transform callbacks.
+  physic.restorePhysics(matrix,sleeping,velocity,angular);
+  }
+
 void Item::clearView() {
   visual = MeshObjects::Mesh();
   }
@@ -154,6 +191,17 @@ void Item::setObjMatrix(const Tempest::Matrix4x4 &m) {
   pos.y = m.at(3,1);
   pos.z = m.at(3,2);
   setLocalTransform(m);
+  visual.setObjMatrix(m);
+  }
+
+void Item::setPhysicsMatrix(const Tempest::Matrix4x4& m) {
+  pos.x = m.at(3,0);
+  pos.y = m.at(3,1);
+  pos.z = m.at(3,2);
+  // This pose already came from Jolt. Echoing it through moveEvent converts
+  // its rotation/COM back to native coordinates and can reset the sleep timer
+  // on rounding differences, keeping the whole floating contact island awake.
+  setGlobalTransform(m);
   visual.setObjMatrix(m);
   }
 
@@ -186,7 +234,7 @@ void Item::setPhysicsEnable(const MeshObjects::Mesh& view) {
   if(view.nodesCount()==0)
     return;
   auto& p = *world.physic();
-  physic = p.addDynamicObj(transform(),view.bounds(),zenkit::MaterialGroup(hitem->material));
+  physic = p.addDynamicObj(transform(),view.bounds(),physicsMaterial(hitem->material));
   physic.setItem(this);
   }
 
@@ -196,7 +244,7 @@ void Item::setPhysicsEnable(const ProtoMesh* mesh) {
   auto& p = *world.physic();
   Bounds b;
   b.assign(mesh->bboxMesh);
-  physic = p.addDynamicObj(transform(),b,zenkit::MaterialGroup(hitem->material));
+  physic = p.addDynamicObj(transform(),b,physicsMaterial(hitem->material));
   physic.setItem(this);
   }
 

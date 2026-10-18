@@ -1,0 +1,16 @@
+# Same real seven objects and deep-water placement, with the feature disabled.
+seed 73013
+cheat god
+set time 12 0
+movable on
+destruction on
+water off
+overlay off
+view full
+water setup deep
+rec water-disabled
+wait 45000
+water checkpoint disabled
+shot water-disabled
+stop
+physics stats

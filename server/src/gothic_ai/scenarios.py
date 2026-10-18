@@ -979,17 +979,31 @@ async def _m5b_player_weapon(link: GameLink, state: Literal["none", "melee"], *,
 
 async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, str]:
     """A real one-handed bandit/hero fight, from native acquisition through confirmed release."""
+    return await _neural_fight_scenario(link, pilot, companion=False)
+
+
+async def neural_companion_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, str]:
+    """A one-handed bandit attacks the hero's swordsman companion, with native combat on both sides."""
+    return await _neural_fight_scenario(link, pilot, companion=True)
+
+
+async def _neural_fight_scenario(
+    link: GameLink, pilot: BodyPilot | None, *, companion: bool,
+) -> dict[str, str]:
+    scenario = "neural-companion" if companion else "neural"
     if pilot is None:
-        raise GameError("scenario neural requires GOTHIC_BODY_URL and --neural-body")
+        raise GameError(f"scenario {scenario} requires GOTHIC_BODY_URL and --neural-body")
     await link.wait_world()
     npc = "DIR_NPC_NEURAL_BANDIT"
+    target = "DIR_NPC_NEURAL_COMPANION" if companion else "PLAYER"
+    target_name = "Спутник-мечник" if companion else None
     arena = "NW_XARDAS_TOWER_VALLEY_09"
     results: dict[str, str] = {}
 
     def check(name: str, ok: bool, detail: object) -> None:
         results[name] = f"{'done' if ok else 'failed'} ({detail})"
 
-    # Prepare while separated: no scripted opening conversation, wildlife or allies in the duel.
+    # Prepare while separated: no scripted opening conversation or wildlife in the duel.
     await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
     # Stock BDT_1002 carries a sword but has several instances in the world. Give this
     # new bandit its own symbol so body_watch and the lease identify exactly one actor.
@@ -1016,10 +1030,60 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
     if not sword:
         raise GameError(f"neural arena preparation: {npc} has no one-handed sword ({weapon_name})")
     log.info("neural arena: npc=%s weapon=%s", npc, weapon_name)
-    # The passive hero survives enough decisions, then falls to actual melee damage.
-    await link.debug("player_hp", hp=300)
-    await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
-    await _m5b_player_weapon(link, "melee")
+    if companion:
+        # A separate symbol makes the companion unambiguous. Its native melee loadout and
+        # skills match the attacker; the party effect is the server's companion flag as well.
+        await link.story_npc(NpcSpec(
+            npc=target, like="BDT_1002_BANDIT_L", at=arena,
+            name=cast(str, target_name), guild="GIL_VLK",
+            routine=[RoutineEntry(
+                start="00:00", end="23:59", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+            )],
+        ))
+        await link.debug("skip_important", near=target)
+        ready = await Bodies(link).act(
+            target, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+            minutes=60, arrive=True, radius=100, timeout=15,
+        )
+        if ready.status != "arrived":
+            raise GameError(f"neural companion preparation: {ready.status} {ready.detail}")
+        [companion_sword] = await link.story_eval(target, [
+            ["&", ["field", weapon, "FLAGS"], ["var", "ITEM_SWD"]],
+        ])
+        if not companion_sword:
+            raise GameError(f"neural companion preparation: {target} has no one-handed sword")
+        # Stock clones can fall to a few critical hits before six policy decisions.
+        # Prepare both swordsmen with at least the hero scenario's 300 HP, once,
+        # through an existing director trigger, then verify and remove it before combat.
+        attributes = await link.story_eval(npc, [["var", "ATR_HITPOINTSMAX"], ["var", "ATR_HITPOINTS"]])
+        health_fields = [
+            ["field", ["inst", actor], "ATTRIBUTE", attribute]
+            for actor in (npc, target) for attribute in attributes
+        ]
+        before = await link.story_eval(npc, health_fields)
+        if len(before) != 4 or any(type(value) is not int for value in before):
+            raise GameError(f"neural companion preparation: health unavailable {before}")
+        health = [max(300, maximum) for maximum in before[::2] for _ in range(2)]
+        health_trigger = "DIR_NEURAL_COMPANION_HEALTH"
+        await link.patch_graph([triggers.trigger(health_trigger, triggers.STATE, [
+            {"do": "set", "target": field, "value": ["int", value]}
+            for field, value in zip(health_fields, health, strict=True)
+        ])])
+        try:
+            if not await _until_async(lambda: link.story_eval(npc, health_fields), lambda got: got == health, 5):
+                raise GameError("neural companion preparation: health did not apply")
+        finally:
+            await link.patch_graph([{"op": "trigger", "id": health_trigger, "steps": None}])
+        log.info("neural companion arena: hp_max/hp before=%s prepared=%s", before, health)
+        await link.story_effect(target, [{"do": "party", "value": 1}])
+        drawn = await Bodies(link).act(target, "draw_weapon", kind="melee")
+        if drawn.status != "done":
+            raise GameError(f"neural companion preparation: sword draw {drawn.status} {drawn.detail}")
+    else:
+        # The passive hero survives enough decisions, then falls to actual melee damage.
+        await link.debug("player_hp", hp=300)
+        await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
+        await _m5b_player_weapon(link, "melee")
     drawn = await Bodies(link).act(npc, "draw_weapon", kind="melee")
     if drawn.status != "done":
         raise GameError(f"neural arena preparation: sword draw {drawn.status} {drawn.detail}")
@@ -1037,13 +1101,17 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
         for row in packet["observations"]:
             if (
                 row["script_symbol"] != symbol
-                or (row["entity_id"], row["session_epoch"], row["world_epoch"], row["control_generation"])
-                != (lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation)
-                or not row["periodic"]
+                or (row["entity_id"], row["session_epoch"], row["world_epoch"])
+                != (lease.entity_id, lease.session_epoch, lease.world_epoch)
+                or row["control_generation"] not in {0, lease.control_generation}
+                or row["observation_seq"] <= lease.acquired_observation_seq
             ):
                 continue
-            leased_entity = row["entity_id"]
-            one_handed |= row["self"]["weapon_state"] == 2
+            if row["periodic"] and row["control_generation"] == lease.control_generation:
+                leased_entity = row["entity_id"]
+                one_handed |= row["self"]["weapon_state"] == 2
+            # Falling can restore native ownership before the next periodic row.
+            # These scoped event-only/native rows still independently prove the end.
             own, target = row["self"], row["target"]
             if down_at is None:
                 if own["dead"] or own["unconscious"] or own["down"] or own["hp"] <= 0:
@@ -1051,16 +1119,42 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
                 elif target["entity_id"] == lease.target_entity_id and (
                     target["down"] or (target["hp"] is not None and target["hp"] <= 0)
                 ):
-                    down_reason = "hero_down"
+                    down_reason = "target_down" if companion else "hero_down"
                 if down_reason is not None:
                     down_at = time.monotonic()
 
     link.raw_body_listeners.append(observe)
     started = time.monotonic()
     try:
-        await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
-        await link.debug("teleport", near=npc, distance=250)
-        await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
+        if companion:
+            await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
+            await link.debug("npc_goto", npc=target, to=npc, distance=250, face=npc)
+            await link.debug("npc_goto", npc=npc, waypoint=arena, face=target)
+            # Still within the pilot's 20 m range, outside the swordsmen's melee and
+            # weapon-draw perceptions. The passive hero cannot intercept their attacks.
+            await link.debug("teleport", near=npc, distance=1500)
+            await link.npc_act(npc, "fight", npc=target)
+            # fight tracks the entire ZS_ATTACK as a soft act, which blocks body_acquire.
+            # A short turn replaces that tracking without changing the native state or target;
+            # its npc_idle confirms the soft act has ended before the lease can be granted.
+            turned = await Bodies(link).act(npc, "turn_to", npc=target, timeout=4)
+            if turned.status != "done":
+                raise GameError(
+                    f"neural companion preparation: combat handoff {turned.status} {turned.detail}"
+                )
+            target_matches, attacking = await link.story_eval(npc, [
+                ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
+                 ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]], ["sym", target]]],
+                ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_ATTACK"]],
+            ])
+            check("neural_companion_target", bool(target_matches) and bool(attacking) and (
+                pilot.companion(target) or bool(link.party.get(target, (0, 0))[1])),
+                  f"target={target}, live_matches={target_matches}, attacking={attacking}, "
+                  f"party={link.party.get(target)}")
+        else:
+            await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
+            await link.debug("teleport", near=npc, distance=250)
+            await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
         finished = await _until(lambda: pilot.last_summary is not previous, 92)
         completed_at = time.monotonic()
     finally:
@@ -1090,14 +1184,21 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
              and lease.provider == "neural-body" and lease.mode == "realtime" and one_handed),
         f"npc={npc}, entity={leased_entity}, sword={bool(sword)}, one_handed={one_handed}, lease={lease}",
     )
-    check("neural_decisions", summary is not None and summary.decisions >= 10,
-          f"decisions={summary.decisions if summary else None}, minimum=10")
+    if companion:
+        check("neural_companion_lease",
+              bool(summary and summary.target_kind == "companion" and summary.target_name == target_name),
+              f"kind={summary.target_kind if summary else None}, "
+              f"name={summary.target_name if summary else None}, expected={target_name}")
+    minimum = 6 if companion else 10
+    check("neural_decisions", summary is not None and summary.decisions >= minimum,
+          f"decisions={summary.decisions if summary else None}, minimum={minimum}")
     check("neural_fallback", summary is not None and summary.fallbacks == 0,
           f"fallback={summary.fallbacks if summary else None}")
     duration = down_at - started if down_at is not None else None
     check(
         "neural_outcome",
-        bool(summary and summary.reason in {"npc_down", "hero_down"} and summary.reason == down_reason
+        bool(summary and summary.reason in {"npc_down", "target_down" if companion else "hero_down"}
+             and summary.reason == down_reason
              and duration is not None and duration <= 90),
         f"reason={summary.reason if summary else None}, observed={down_reason}, duration_s={duration}",
     )

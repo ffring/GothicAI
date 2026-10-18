@@ -10,6 +10,7 @@
 class World;
 class Npc;
 class Serialize;
+class WorldObjects;
 
 class Item : public Vob {
   public:
@@ -21,7 +22,8 @@ class Item : public Vob {
       T_Inventory,
       };
 
-    Item(World& owner, size_t     inst, Type type);
+    Item(World& owner, size_t     inst, Type type,
+         const Tempest::Matrix4x4& initial = Tempest::Matrix4x4::mkIdentity());
     Item(World& owner, Serialize& fin,  Type type);
     Item(Item&&);
     ~Item();
@@ -38,13 +40,14 @@ class Item : public Vob {
     void    setPosition  (float x,float y,float z);
     void    setDirection (float x,float y,float z);
     void    setObjMatrix (const Tempest::Matrix4x4& m);
+    virtual void setPhysicsMatrix(const Tempest::Matrix4x4& m);
 
     bool    isMission() const;
     bool    isEquipped() const { return equipped>0; }
     uint8_t equipCount() const { return equipped;   }
     void    setAsEquipped(bool e);
 
-    void    setPhysicsEnable (World& w);
+    virtual void setPhysicsEnable(World& w);
     void    setPhysicsDisable();
     bool    isDynamic() const override;
     float   physicsMass() const { return physic.mass(); }
@@ -101,6 +104,10 @@ class Item : public Vob {
     void                setPhysicsEnable(const ProtoMesh* mesh);
 
   private:
+    friend class WorldObjects;
+    void                savePhysics(Serialize& fout) const;
+    void                restorePhysics(const Tempest::Matrix4x4& matrix, const Tempest::Vec3& velocity,
+                                       const Tempest::Vec3& angular, bool sleeping);
     void                updateMatrix();
 
     std::shared_ptr<zenkit::IItem> hitem={};

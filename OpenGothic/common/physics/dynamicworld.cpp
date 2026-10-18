@@ -12,6 +12,7 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
@@ -60,6 +61,17 @@ ItemMaterial impactMaterial(zenkit::MaterialGroup material) {
     case zenkit::MaterialGroup::WOOD:  return MAT_WOOD;
     default:                          return MAT_CLAY;
     }
+  }
+
+float vobBuoyancyFraction(zenkit::MaterialGroup material, std::string_view className = {}) {
+  if(material!=zenkit::MaterialGroup::WOOD)
+    return DynamicWorld::materialDensity(material)/1000.f;
+  // Water displacement is independent of native push mass and its CSV multipliers.
+  // Classless wood, including broken pieces, uses the solid-wood target.
+  if(className=="barrel") return 1.f/3.f;
+  if(className=="crate") return .5f;
+  if(className=="table" || className=="cupboard") return .9f;
+  return .6f;
   }
 
 double volumeScale(const Tempest::Matrix4x4& matrix) {
@@ -701,6 +713,16 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   world.reset(new CollisionWorld());
   bodies.reset(new WorldBodies());
   movableVobs.reset(new MovableVobs());
+  world->setWaterSurfaceCallback([this](const Tempest::Vec3& center,float bottom,float& surface) {
+    // Start below the entire envelope: the centre of a floating barrel is
+    // usually above water. Only solids can separate an underwater body from
+    // the lake above a cave; the body's own movable query mesh cannot.
+    constexpr uint32_t solids=(1u<<C_Landscape)|(1u<<C_Object);
+    const auto water=implWaterRay(center,center+Tempest::Vec3(0,worldHeight,0),
+                                 std::max(0.f,center.y-bottom)+.1f,solids);
+    surface=water.wdepth;
+    return water.hasCol;
+    });
   world->setBodyImpactCallback([this](CollisionWorld::CollisionBody& body,float impulse,const Tempest::Vec3& point,
                                      std::string_view culprit) {
     if(body.ptrType()==P_MovableVob && body.payload()!=nullptr)
@@ -800,15 +822,16 @@ DynamicWorld::RayWaterResult DynamicWorld::waterRay(const Tempest::Vec3& from, f
   return implWaterRay(from, Tempest::Vec3(from.x,from.y+worldHeight,from.z), stepHeight);
   }
 
-DynamicWorld::RayWaterResult DynamicWorld::implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight) const {
+DynamicWorld::RayWaterResult DynamicWorld::implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight, uint32_t solidMask) const {
   const auto sFrom = from-Tempest::Vec3(0,stepHeight,0);
   const auto hit = world->rayCast(sFrom,to,waterMask,false);
 
   RayWaterResult ret;
   if(hit.hasHit) {
     const float waterY = hit.point.y;
-    const auto  cave   = ray(from,Tempest::Vec3(to.x,std::max(waterY,from.y),to.z));
-    if(cave.hasCol && cave.v.y<waterY) {
+    const auto cave=world->rayCast(from,Tempest::Vec3(to.x,std::max(waterY,from.y),to.z),
+                                   solidMask!=0 ? solidMask : visualMask,false);
+    if(cave.hasHit && cave.point.y<waterY) {
       ret.wdepth = -std::numeric_limits<float>::infinity();
       ret.hasCol = false;
       } else {
@@ -921,9 +944,16 @@ DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, co
   // Use the visual bounds' volume, before the minimum collision proxy padding.
   const float mass = float(materialDensity(mat)*double(extent.GetX())*extent.GetY()*extent.GetZ()*volumeScale);
   const auto halfExtent = JPH::Vec3::sMax(extent*0.5f,JPH::Vec3::sReplicate(0.15f));
-  JPH::ShapeRefC shape = new JPH::BoxShape(halfExtent);
+  const auto center=CollisionWorld::toMeters((b.bbox[0]+b.bbox[1])*.5f);
+  JPH::ShapeRefC shape = new JPH::RotatedTranslatedShape(center,JPH::Quat::sIdentity(),new JPH::BoxShape(halfExtent));
   auto obj = std::make_unique<BodyData>();
   obj->body = world->addDynamicBody(shape,pos,materialFriction(mat),mass);
+  // Collision padding keeps small items easy to touch. Water displaces the
+  // actual visual envelope so padding cannot make a metal sword float.
+  // The native COM is already at the visual bounds' centre; the unpadded
+  // box shares that centre while the body's transform keeps the visual pivot.
+  const auto waterHalfExtent=JPH::Vec3::sMax(extent*.5f,JPH::Vec3::sReplicate(.0005f));
+  obj->body->setBuoyancyShape(new JPH::BoxShape(waterHalfExtent,0.f));
   obj->body->setNoiseProfile(impactMaterial(mat),mat,"item");
   return Item(this,obj.release());
   }
@@ -1069,6 +1099,7 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
     obj.body->setPayload(&obj,P_MovableVob);
     obj.body->setLabel(obj.visual);
     obj.body->setNoiseProfile(impactMaterial(shape.material),shape.material,obj.visual);
+    obj.body->setBuoyancyFraction(vobBuoyancyFraction(shape.material,obj.className));
     }
   // cd_dynamic controls the original mesh queries independently of simulation.
   // The hull can move and receive impacts without becoming a new walking/ray obstacle.
@@ -1126,6 +1157,14 @@ void DynamicWorld::setMovableVobsEnabled(bool enabled) {
       rebuildMovableVob(*obj);
   if(enabled && movableVobs->finalized && movableVobs->census.empty())
     validateMovableVobs();
+  }
+
+void DynamicWorld::setBuoyancyEnabled(bool enabled) {
+  world->setBuoyancyEnabled(enabled);
+  }
+
+bool DynamicWorld::buoyancyEnabled() const {
+  return world->buoyancyEnabled();
   }
 
 void DynamicWorld::setDestructionEnabled(bool enabled) {
@@ -1472,6 +1511,8 @@ void DynamicWorld::loadDestructionVobs(Serialize& fin) {
           const float mass=float(obj->movableMass*mesh.pieces[i].volume/mesh.volume);
           auto body=world->addDynamicBody(mesh.pieces[i].hull,piece.matrix,obj->movableShape->friction,mass,C_Fragment);
           body->setLabel(obj->visual+" fragment");
+          body->setNoiseProfile(impactMaterial(obj->movableShape->material),obj->movableShape->material,obj->visual+" fragment");
+          body->setBuoyancyFraction(vobBuoyancyFraction(obj->movableShape->material));
           body->restoreTransform(piece.matrix,piece.sleeping);
           if(!piece.sleeping)
             body->setVelocity(piece.velocity,piece.omega);
@@ -1669,6 +1710,39 @@ std::vector<DynamicWorld::FragmentSnapshot> DynamicWorld::fragmentSnapshot() con
   return result;
   }
 
+std::vector<DynamicWorld::WaterBodySnapshot> DynamicWorld::waterBodySnapshot() const {
+  std::vector<WaterBodySnapshot> result;
+  std::unordered_map<const CollisionWorld::CollisionBody*,std::pair<const BodyData*,size_t>> identity;
+  for(const auto* obj:movableVobs->bodies) {
+    if(obj->body!=nullptr) identity.emplace(obj->body.get(),std::make_pair(obj,size_t(-1)));
+    for(size_t i=0;i<obj->fragments.size();++i)
+      if(obj->fragments[i]!=nullptr) identity.emplace(obj->fragments[i].get(),std::make_pair(obj,i));
+    }
+  for(const auto& native:world->waterBodySnapshot()) {
+    WaterBodySnapshot entry;
+    entry.id=native.body->nativeId();
+    entry.category=native.body->category();
+    entry.visual=native.body->label();
+    entry.transform=native.transform;
+    entry.worldBounds[0]=native.worldBounds[0];
+    entry.worldBounds[1]=native.worldBounds[1];
+    entry.velocity=native.velocity;
+    entry.mass=native.mass;
+    entry.density=native.density;
+    entry.waterY=native.waterY;
+    entry.submergedFraction=native.submergedFraction;
+    entry.sleeping=native.sleeping;
+    entry.inWater=native.inWater;
+    if(const auto found=identity.find(native.body);found!=identity.end()) {
+      entry.zenId=found->second.first->pose->zenId;
+      entry.parentId=reinterpret_cast<uintptr_t>(found->second.first);
+      entry.piece=found->second.second;
+      }
+    result.push_back(std::move(entry));
+    }
+  return result;
+  }
+
 std::vector<DynamicWorld::RagdollSupport> DynamicWorld::ragdollSupports(const Ragdoll& ragdoll,float marginCm) const {
   std::vector<RagdollSupport> result;
   for(const auto& contact:world->ragdollContacts(ragdoll,marginCm)) {
@@ -1793,6 +1867,8 @@ void DynamicWorld::breakMovableVob(BodyData& obj) {
     const float mass=float(obj.movableMass*piece.volume/mesh.volume);
     auto body=world->addDynamicBody(piece.hull,matrix,obj.movableShape->friction,mass,C_Fragment);
     body->setLabel(obj.visual+" fragment");
+    body->setNoiseProfile(impactMaterial(obj.movableShape->material),obj.movableShape->material,obj.visual+" fragment");
+    body->setBuoyancyFraction(vobBuoyancyFraction(obj.movableShape->material));
     const auto r=(body->centerOfMass()-center)*.01f;
     const Tempest::Vec3 tangential(omega.y*r.z-omega.z*r.y,omega.z*r.x-omega.x*r.z,omega.x*r.y-omega.y*r.x);
     // A small separation velocity releases touching cut faces. Linear and
@@ -2692,6 +2768,21 @@ void DynamicWorld::Item::setPayloadPtr(void* ptr) {
   if(obj!=nullptr)
     for(auto& query:obj->query)
       query->setPayload(ptr,P_Editor);
+  }
+
+Tempest::Matrix4x4 DynamicWorld::Item::matrix() const {
+  return obj!=nullptr && obj->body!=nullptr ? obj->body->matrix() : Tempest::Matrix4x4::mkIdentity();
+  }
+
+Tempest::Vec3 DynamicWorld::Item::position() const {
+  return obj!=nullptr && obj->body!=nullptr ? obj->body->position() : Tempest::Vec3();
+  }
+
+void DynamicWorld::Item::restorePhysics(const Tempest::Matrix4x4& matrix, bool sleeping,
+                                      const Tempest::Vec3& velocity, const Tempest::Vec3& angular) {
+  if(obj==nullptr || obj->body==nullptr) return;
+  obj->body->restoreTransform(matrix,sleeping);
+  if(!sleeping) obj->body->setVelocity(velocity,angular);
   }
 
 float DynamicWorld::Item::mass() const {

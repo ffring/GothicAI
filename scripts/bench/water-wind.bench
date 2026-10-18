@@ -1,0 +1,24 @@
+# Real wind-fist push from the shoreline; independent of the deep save fixture.
+seed 73013
+cheat god
+set time 12 0
+movable on
+destruction on
+noise on
+water on
+overlay off
+view full
+water setup wind
+wait 10000
+water push-ready
+rec water-wind
+water checkpoint wind-placed
+wait 1200
+water checkpoint wind-resting
+spell cast 600
+wait 30000
+water checkpoint pushed
+noise checkpoint
+shot water-barrel-pushed
+stop
+physics stats

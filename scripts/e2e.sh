@@ -12,6 +12,8 @@
 #       DECIDER_URL, or a fixed stand-in); with QUICK_URL the words are the quick model's line, at once
 #   neural: a one-handed bandit fights the hero under the P30 body pilot through the full lease cycle;
 #       requires GOTHIC_BODY_URL, a new game, >=10 decisions, no fallback, service p95 <=20 ms
+#   neural-companion: the bandit attacks the hero's swordsman companion, >=6 decisions, no fallback,
+#       a companion target in the fight summary, natural fight end and confirmed release
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
 #       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
 #       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
@@ -264,9 +266,9 @@ if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 && "$SCENARIO" != tts ]]; then
   echo 'GOTHIC_TTS_RECORD requires SCENARIO=tts' >&2
   exit 2
 fi
-if [ "$SCENARIO" = neural ]; then
-  [ -n "${GOTHIC_BODY_URL:-}" ] || { echo 'scenario neural requires GOTHIC_BODY_URL=tcp://host:port' >&2; exit 2; }
-  [ -z "${SAVE:-}" ] || { echo 'scenario neural requires a new game (unset SAVE)' >&2; exit 2; }
+if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion ]]; then
+  [ -n "${GOTHIC_BODY_URL:-}" ] || { echo "scenario $SCENARIO requires GOTHIC_BODY_URL=tcp://host:port" >&2; exit 2; }
+  [ -z "${SAVE:-}" ] || { echo "scenario $SCENARIO requires a new game (unset SAVE)" >&2; exit 2; }
 fi
 LLM="${LLM:-fake}"
 ASR="${ASR:-fake}"
