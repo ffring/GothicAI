@@ -16,5 +16,5 @@ waitai broken hero_attack 120000
 destruction2 attack
 wait 1200
 mark hero_broken
-waitai broken done 180000
+# KEEP=1 leaves the game running; finish the fixture before the server loads a new world.
 quit
