@@ -1078,13 +1078,17 @@ async def _neural_fight_scenario(
         for row in packet["observations"]:
             if (
                 row["script_symbol"] != symbol
-                or (row["entity_id"], row["session_epoch"], row["world_epoch"], row["control_generation"])
-                != (lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation)
-                or not row["periodic"]
+                or (row["entity_id"], row["session_epoch"], row["world_epoch"])
+                != (lease.entity_id, lease.session_epoch, lease.world_epoch)
+                or row["control_generation"] not in {0, lease.control_generation}
+                or row["observation_seq"] <= lease.acquired_observation_seq
             ):
                 continue
-            leased_entity = row["entity_id"]
-            one_handed |= row["self"]["weapon_state"] == 2
+            if row["periodic"] and row["control_generation"] == lease.control_generation:
+                leased_entity = row["entity_id"]
+                one_handed |= row["self"]["weapon_state"] == 2
+            # Falling can restore native ownership before the next periodic row.
+            # These scoped event-only/native rows still independently prove the end.
             own, target = row["self"], row["target"]
             if down_at is None:
                 if own["dead"] or own["unconscious"] or own["down"] or own["hp"] <= 0:
