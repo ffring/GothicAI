@@ -858,7 +858,9 @@ game_queue_args() {
     GQ_ARGS+=(--gpu-mem 4G --name "bench $(basename "$BENCH_SCENARIO" .bench)")
   else
     GQ_ARGS+=(--gpu-mem 2G --name "e2e ${SCENARIO:-m0}")
-    if e2e_display_exclusive "${SCENARIO:-m0}"; then
+    # A custom size or position cannot share the default slot layout safely.
+    if [[ "${TEMPEST_WINDOW_SIZE:-640x360}" != 640x360 || -n "${TEMPEST_WINDOW_POS+x}" ]] || \
+       e2e_display_exclusive "${SCENARIO:-m0}"; then
       GQ_ARGS+=(--display-exclusive)
     else
       GQ_ARGS+=(--display-shared)

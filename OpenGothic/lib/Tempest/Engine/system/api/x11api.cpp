@@ -136,14 +136,19 @@ struct WPayload {
   Tempest::Window* owner = nullptr;
   XIC              xic   = nullptr;
   bool             fullscreen = false;
+  bool             positionPending = false;
+  int              initialX = 0, initialY = 0;
   };
 
 struct X11Api::Private {
   std::unordered_map<SystemApi::Window*,WPayload> windows;
 
-  void onCreateWindow(SystemApi::Window* w, Tempest::Window *owner) {
+  void onCreateWindow(SystemApi::Window* w, Tempest::Window *owner, bool positioned, int x, int y) {
     WPayload p;
     p.owner = owner;
+    p.positionPending = positioned;
+    p.initialX = x;
+    p.initialY = y;
     windows[w] = p;
     }
 
@@ -331,13 +336,10 @@ SystemApi::Window *X11Api::implCreateWindow(Tempest::Window *owner, uint32_t w, 
   XFree(vi);
 
   auto ret = reinterpret_cast<SystemApi::Window*>(win.ptr());
-  impl->onCreateWindow(ret, owner);
+  impl->onCreateWindow(ret, owner, positioned, windowX, windowY);
   XMapWindow(dpy, win);
   XSync(dpy,False);
   if(positioned) {
-    // Some window managers place a new window themselves despite USPosition.
-    XMoveWindow(dpy,win,windowX,windowY);
-    XSync(dpy,False);
     Log::i("[window] requested client size=",w,"x",h," position=",windowX,",",windowY);
     }
 
@@ -592,6 +594,17 @@ void X11Api::implProcessEvents(SystemApi::AppCallBack &cb) {
       return;
     Tempest::Window& cb = *it->owner;
     switch( xev.type ) {
+      case MapNotify: {
+        if(it->positionPending) {
+          // Move only after the window manager has mapped/reparented the client.
+          // XSync after XMapWindow alone does not wait for the window manager.
+          XMoveWindow(dpy,hWnd,it->initialX,it->initialY);
+          XFlush(dpy);
+          it->positionPending = false;
+          Log::i("[window] applied position after MapNotify=",it->initialX,",",it->initialY);
+          }
+        break;
+        }
       case ClientMessage: {
         if(xev.xclient.data.l[0] == long(WM_DELETE_WINDOW())){
           SystemApi::exit();

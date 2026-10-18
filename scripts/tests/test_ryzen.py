@@ -36,7 +36,7 @@ def wait_for(path):
 
 
 class QueueSplitTests(unittest.TestCase):
-    def run_game(self, action='e2e', prepare=True, build_exit=0, scenario='stages'):
+    def run_game(self, action='e2e', prepare=True, build_exit=0, scenario='stages', window=None):
         directory = self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-phases-test-'))
         root = Path(directory)
         (root / 'scripts').mkdir()
@@ -76,7 +76,7 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
             ['bash', '-c', harness], capture_output=True, text=True, timeout=10,
             env=dict(os.environ, TEST_SESSION=str(root), TEST_ACTION=action,
                      TEST_PREPARE=str(int(prepare)), TEST_BUILD_EXIT=str(build_exit),
-                     TEST_SCENARIO=scenario),
+                     TEST_SCENARIO=scenario, **(window or {})),
         )
         requests = root / 'requests.jsonl'
         return result, [json.loads(line) for line in requests.read_text().splitlines()] if requests.exists() else []
@@ -155,6 +155,19 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('--display-exclusive', self.queue_options(requests[-1]))
         self.assertNotIn('--display-shared', self.queue_options(requests[-1]))
+
+    def test_custom_window_does_not_overlap_shared_slot_layout(self):
+        for window, shared in (({'TEMPEST_WINDOW_SIZE': '640x360'}, True),
+                               ({'TEMPEST_WINDOW_SIZE': '320x180'}, False),
+                               ({'TEMPEST_WINDOW_SIZE': '1280x720'}, False),
+                               ({'TEMPEST_WINDOW_POS': '20,40'}, False),
+                               ({'TEMPEST_WINDOW_POS': ''}, False)):
+            with self.subTest(window=window):
+                result, requests = self.run_game(scenario='orders', window=window)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                options = self.queue_options(requests[-1])
+                self.assertEqual('--display-shared' in options, shared)
+                self.assertEqual('--display-exclusive' in options, not shared)
 
     def test_tts_preparation_installs_missing_dependencies(self):
         for scenario in ('errand', 'errand_fork', 'errand_far', 'errand_give',
