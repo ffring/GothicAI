@@ -329,6 +329,7 @@ def test_calibration_uses_the_render_stems_and_caps_loud_game_pauses(tmp_path, t
     other_volume = levels.audio_graph(
         paths["game"], paths["music"], voice, speech, 12, 12, music_volume=0.9,
         music_gain_db=report["music_gain_db"], game_gain_db=report["game_gain_db"],
+        music_duck_db=report["music_duck_db"],
         game_duck_db=report["game_duck_db"], ending_gain_db=report["ending_gain_db"],
     )
     assert other_volume.mix() == calibrated.mix()
@@ -552,6 +553,43 @@ def test_balance_correction_retargets_music_below_quiet_decoded_effects(
     assert correction.get("music_gain_db", 0) == pytest.approx(expected)
     corrected = levels.check_balance(-14, music_pause + expected, music_speech + expected, -38, -35)
     assert corrected["ok"] is True
+
+
+@pytest.mark.parametrize("music_pause,music_speech,gain,duck", [
+    (-24, -28, -4, 2),
+    (-32, -42, 4, -4),
+    (-24, -34, -4, -4),  # Correct speech too when the pause gain moves it off target.
+    (-28, -31, 0, 3),
+    (-28, -37, 0, -3),
+    (-27, -34, 0, 0),  # Keep the existing tolerance for both rows.
+])
+def test_balance_correction_adjusts_music_gain_and_duck_in_one_step(
+    music_pause, music_speech, gain, duck,
+):
+    report = levels.check_balance(-14, music_pause, music_speech, None, None)
+    correction = levels.balance_correction(report)
+    assert correction["music_gain_db"] == pytest.approx(gain)
+    assert correction["music_duck_db"] == pytest.approx(duck)
+    corrected = levels.check_balance(
+        -14, music_pause + gain, music_speech + gain - duck, None, None,
+    )
+    assert corrected["ok"] is True
+
+
+@pytest.mark.parametrize("depth,music_speech,duck", [
+    (0, -37, 0),
+    (2, -39, -2),
+    (17, -30, 1),
+    (18, -31, 0),
+])
+def test_balance_correction_keeps_music_duck_between_zero_and_eighteen_db(
+    depth, music_speech, duck,
+):
+    report = levels.check_balance(-14, -28, music_speech, None, None)
+    correction = levels.balance_correction(report, music_duck_db=depth)
+    assert correction["music_gain_db"] == 0
+    assert correction["music_duck_db"] == pytest.approx(duck)
+    assert 0 <= depth + correction["music_duck_db"] <= 18
 
 
 @pytest.mark.parametrize("linear_peak,accepted", [(0.892, False), (0.891, True)])
@@ -1406,6 +1444,122 @@ def publication_inputs(tmp_path_factory, tone_inputs):
              "-af", filters, "-c:a", "pcm_f32le", str(path)], check=True, capture_output=True,
         )
     return joined, music, [(voice, 4)], [(4, 8)], 12, 14
+
+
+def _music_with_speech_delta(path, delta_db, *, ramps=True):
+    gain = 10 ** (delta_db / 20)
+    # Reach the new level at 4 s and hold it through 8 s; smooth transitions in
+    # the adjacent pauses keep the synthetic source free of edit clicks.
+    envelope = ("max(0,min(1,min((t-3.85)/0.15,(8.15-t)/0.15)))"
+                if ramps else "between(t,4,8)")
+    source = (f"aevalsrc='0.125*(1+({gain - 1:.12f})*({envelope}))"
+              "*sin(2*PI*220*t)':s=48000:d=12")
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", source,
+         "-c:a", "pcm_f32le", str(path)], check=True, capture_output=True,
+    )
+
+
+@pytest.mark.parametrize("delta_db,expected_duck", [(3, 9), (-2, 4), (0, 6)])
+def test_publish_calibrates_music_duck_to_the_raw_music_dynamics(
+    tmp_path, publication_inputs, delta_db, expected_duck,
+):
+    joined, _music, voice, speech, total, length = publication_inputs
+    music, out = tmp_path / "dynamic-music.wav", tmp_path / "short.mp4"
+    _music_with_speech_delta(music, delta_db)
+
+    report = levels.publish(joined, music, voice, speech, total, length, out, music_fades=False)
+
+    assert out.stat().st_size > 0
+    assert report["ok"] is True
+    assert report["balance_stage"] == "mastered_aac"
+    assert report["music_duck_db"] == pytest.approx(expected_duck, abs=0.3)
+    for rows in (_rows(report), _rows({"rows": report["pre_master_rows"]})):
+        for key in ("music_pause", "music_speech"):
+            assert rows[key]["ok"] is True
+            assert rows[key]["measured_lufs"] == pytest.approx(
+                rows[key]["target_lufs"], abs=levels.LEVEL_TOLERANCE_LU,
+            )
+        assert rows["music_speech"]["target_lufs"] == pytest.approx(
+            rows["music_pause"]["target_lufs"] - 6,
+        )
+    assert json.loads(out.with_suffix(".levels.json").read_text())["music_duck_db"] == report["music_duck_db"]
+
+
+@pytest.mark.parametrize("delta_db,expected_duck", [(24, 18), (-24, 0)])
+def test_calibration_bounds_music_duck_without_weakening_the_balance_gate(
+    tmp_path, publication_inputs, delta_db, expected_duck,
+):
+    joined, _music, voice, speech, total, length = publication_inputs
+    music = tmp_path / "extreme-music.wav"
+    # Keep extreme energy entirely in speech: loud adjacent ramps can make
+    # R128 gate out the quiet pauses and erase the intended raw level gap.
+    _music_with_speech_delta(music, delta_db, ramps=False)
+
+    _audio, report = levels.calibrate(
+        joined, music, voice, speech, total, length, music_fades=False,
+    )
+
+    assert report["music_duck_db"] == expected_duck
+    assert _rows(report)["music_pause"]["ok"] is True
+    assert _rows(report)["music_speech"]["ok"] is False
+    assert report["ok"] is False
+
+
+@pytest.mark.parametrize("voiced", [False, True])
+def test_calibration_keeps_six_db_music_duck_without_both_window_types(publication_inputs, voiced):
+    joined, music, voice, _speech, total, length = publication_inputs
+    _audio, report = levels.calibrate(
+        joined, music, voice if voiced else [], [(0, total)] if voiced else [], total, length,
+        music_fades=False,
+    )
+    assert report["music_duck_db"] == 6
+    assert report["ok"] is True
+
+
+def test_mastering_corrects_music_pause_gain_and_reduces_duck_in_one_render(
+    tmp_path, publication_inputs, monkeypatch,
+):
+    joined, music, voice, speech, total, length = publication_inputs
+    _audio, report = levels.calibrate(
+        joined, music, voice, speech, total, length, music_fades=False,
+    )
+    original_gain, original_duck = report["music_gain_db"], report["music_duck_db"]
+    # Model a decoded/rendered music stem whose pause is 4 LU too loud while
+    # speech is still in tolerance. Lowering its gain needs a shallower duck in
+    # the same pass, otherwise fixing the pause pushes speech below its target.
+    report["music_gain_db"] += 4
+    report["music_duck_db"] += 3
+    audio = levels.audio_graph(
+        joined, music, voice, speech, total, length,
+        music_gain_db=report["music_gain_db"], music_duck_db=report["music_duck_db"],
+        game_gain_db=report["game_gain_db"], game_duck_db=report["game_duck_db"],
+        ending_gain_db=report["ending_gain_db"], music_fades=False,
+    )
+    real_balance, balances = levels.check_mastered_balance, []
+
+    def balance(*args):
+        result = real_balance(*args)
+        balances.append(_rows(result))
+        return result
+
+    monkeypatch.setattr(levels, "check_mastered_balance", balance)
+    out = tmp_path / "short.mp4"
+    levels._master_voiced(audio, report, out, length)
+
+    assert balances[0]["music_pause"]["ok"] is False
+    assert balances[0]["music_speech"]["ok"] is True
+    assert len(report["balance_corrections_db"]) == 1
+    correction = report["balance_corrections_db"][0]
+    assert correction["music_gain_db"] == pytest.approx(-4, abs=0.3)
+    assert correction["music_duck_db"] == pytest.approx(-3, abs=0.3)
+    assert report["music_gain_db"] == pytest.approx(original_gain, abs=0.3)
+    assert report["music_duck_db"] == pytest.approx(original_duck, abs=0.3)
+    assert report["master_passes"] == report["master_common_passes"] + 1
+    assert _rows(report)["music_pause"]["ok"] is True
+    assert _rows(report)["music_speech"]["ok"] is True
+    assert report["ok"] is True
+    assert out.stat().st_size > 0
 
 
 def test_publish_balanced_synthetic_video_writes_the_final_report(

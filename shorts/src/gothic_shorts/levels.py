@@ -12,7 +12,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from gothic_shorts import clicks
@@ -34,6 +34,9 @@ LIMITER_PILOT = 0.01
 MUSIC_BELOW_VOICE_LU = 14.0
 MUSIC_BELOW_GAME_LU = 3.0
 MUSIC_DUCK_DB = 6.0
+# Allow up to 12 LU of extra speech-window energy without extreme ducking
+# when a pause is unusually quiet or unrepresentative of the music bed.
+MAX_MUSIC_DUCK_DB = 18.0
 GAME_BELOW_VOICE_LU = 6.0
 GAME_PAUSE_BELOW_VOICE_LU = 3.0
 ENDING_BELOW_VOICE_LU = 3.0
@@ -312,10 +315,11 @@ def ending_correction(voice_lufs: float, ending_lufs: float | None) -> float:
     return correction if abs(correction) > MASTER_CORRECTION_TOLERANCE_LU + 1e-6 else 0.0
 
 
-def balance_correction(balance: dict) -> dict[str, float]:
+def balance_correction(balance: dict, *, music_duck_db: float = MUSIC_DUCK_DB) -> dict[str, float]:
     """Lower decoded effects and retarget music at the fixed common mastering gain."""
     readings = {row["id"]: row["measured_lufs"] for row in balance["rows"]}
-    correction = {"game_gain_db": 0.0, "game_duck_db": 0.0, "music_gain_db": 0.0}
+    correction = {"game_gain_db": 0.0, "game_duck_db": 0.0,
+                  "music_gain_db": 0.0, "music_duck_db": 0.0}
     s = readings["voice"]
     if s is None or not math.isfinite(s):
         return correction
@@ -328,13 +332,19 @@ def balance_correction(balance: dict) -> dict[str, float]:
         speech += correction["game_gain_db"]
         correction["game_duck_db"] = max(0.0, speech - (s - GAME_BELOW_VOICE_LU - CEILING_HEADROOM_LU))
     target = music_target(s, pause)
-    for key, duck in (("music_pause", 0.0), ("music_speech", MUSIC_DUCK_DB)):
-        measured = readings[key]
-        if measured is not None and math.isfinite(measured):
-            difference = target - duck - measured
-            if abs(difference) > LEVEL_TOLERANCE_LU + 1e-6:
-                correction["music_gain_db"] = difference
-                break
+    measured = readings["music_pause"]
+    if measured is not None and math.isfinite(measured):
+        difference = target - measured
+        if abs(difference) > LEVEL_TOLERANCE_LU + 1e-6:
+            correction["music_gain_db"] = difference
+    measured = readings["music_speech"]
+    if measured is not None and math.isfinite(measured):
+        # The pause gain also changes speech: correct its remaining error with
+        # duck depth in this same pass, without pulling pauses off their target.
+        difference = measured + correction["music_gain_db"] - (target - MUSIC_DUCK_DB)
+        if abs(difference) > LEVEL_TOLERANCE_LU + 1e-6:
+            depth = min(MAX_MUSIC_DUCK_DB, max(0.0, music_duck_db + difference))
+            correction["music_duck_db"] = depth - music_duck_db
     return {key: value if abs(value) > 1e-6 else 0.0 for key, value in correction.items()}
 
 
@@ -375,18 +385,33 @@ class AudioGraph:
     inputs: list[str]
     filters: list[str]
     tracks: dict[str, str]
+    music_duck_db: float = MUSIC_DUCK_DB
+    speech: list[Window] = field(default_factory=list)
+
+    def _stems(self, music_duck_correction_db: float = 0.0,
+               speech: list[Window] | None = None) -> tuple[list[str], dict[str, str]]:
+        filters, tracks = list(self.filters), dict(self.tracks)
+        windows = self.speech if speech is None else speech
+        if "music" in tracks and windows:
+            depth = min(MAX_MUSIC_DUCK_DB, max(0.0, self.music_duck_db + music_duck_correction_db))
+            # Rebuild the full envelope so a negative correction reduces the
+            # original duck, including its ramps, without boosting above unity.
+            filters.append(f"[{tracks['music']}]{duck_filter(windows, depth)}[music_ducked]")
+            tracks["music"] = "music_ducked"
+        return filters, tracks
 
     def measure(self, track: str, windows: list[Window] | None = None, *,
                 meter_gain_db: float = 0.0) -> float:
-        graph = self.filters + [f"[{label}]anullsink" for key, label in self.tracks.items() if key != track]
-        return measure(self.inputs, ";".join(graph), self.tracks[track], windows,
+        filters, tracks = self._stems()
+        graph = filters + [f"[{label}]anullsink" for key, label in tracks.items() if key != track]
+        return measure(self.inputs, ";".join(graph), tracks[track], windows,
                        meter_gain_db=meter_gain_db)
 
     def mix(self, *, stem_probes: bool = False, ending_gain_correction_db: float = 0.0,
             ending_start: float | None = None, balance_corrections: dict[str, float] | None = None,
             speech: list[Window] | None = None) -> str:
-        filters, tracks = list(self.filters), dict(self.tracks)
         corrections = balance_corrections or {}
+        filters, tracks = self._stems(corrections.get("music_duck_db", 0.0), speech)
         game_gain = corrections.get("game_gain_db", 0.0)
         game_duck = corrections.get("game_duck_db", 0.0)
         if ending_gain_correction_db or game_gain or game_duck:
@@ -440,6 +465,7 @@ class AudioGraph:
 def audio_graph(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
                 speech: list[Window], total: float, length: float, *,
                 music_volume: float = 1.0, music_gain_db: float = 0.0,
+                music_duck_db: float = MUSIC_DUCK_DB,
                 game_gain_db: float = 0.0, game_duck_db: float = 0.0,
                 ending_gain_db: float = 0.0, music_fades: bool = True) -> AudioGraph:
     """One source of truth for the mix and all calibration/validation taps.
@@ -474,10 +500,9 @@ def audio_graph(joined: Path, music: Path | None, voice: list[tuple[Path, float]
         format_audio = "aformat=sample_rates=48000:channel_layouts=stereo," if voice else ""
         fades = f",afade=t=in:d=1,afade=t=out:st={total - 1.5}:d=1.5" if music_fades else ""
         filters.append(f"[1:a]{format_audio}atrim=0:{total},asetpts=PTS-STARTPTS,"
-                       f"volume={volume}{fades}" +
-                       (f",{duck_filter(speech, MUSIC_DUCK_DB)}" if voice else "") + "[m]")
+                       f"volume={volume}{fades}[m]")
         tracks["music"] = "m"
-    return AudioGraph(inputs, filters, tracks)
+    return AudioGraph(inputs, filters, tracks, music_duck_db, speech if voice else [])
 
 
 def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
@@ -485,11 +510,14 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
               music_volume: float = 1.0, music_fades: bool = True) -> tuple[AudioGraph, dict]:
     pauses = pause_windows(speech, total)
     raw = audio_graph(joined, music, voice, speech, total, length,
-                      music_volume=music_volume, music_fades=music_fades)
+                      music_volume=music_volume, music_fades=music_fades,
+                      music_duck_db=0.0 if voice else MUSIC_DUCK_DB)
     if not voice:
         game = raw.measure("game")
         music_level = raw.measure("music") if music is not None else None
-        return raw, check_balance(None, music_level, None, None, game)
+        report = check_balance(None, music_level, None, None, game)
+        report["music_duck_db"] = MUSIC_DUCK_DB
+        return raw, report
     if not speech:
         raise ValueError("The voiced plan has no speech windows inside the video")
     s = raw.measure("voice")
@@ -519,8 +547,16 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
     music_pause = (raw.measure("music", pauses if pauses else None, meter_gain_db=meter_gain)
                    if music is not None else None)
     music_db = music_gain(s, music_pause, game_pause) if music_pause is not None else 0.0
+    music_duck = MUSIC_DUCK_DB
+    if music is not None and pauses:
+        music_speech = raw.measure("music", speech, meter_gain_db=meter_gain)
+        if math.isfinite(music_speech) and music_pause is not None and math.isfinite(music_pause):
+            # A common gain puts raw pauses on target; compensate the bed's
+            # own dynamics as well to put speech at that same target minus 6 LU.
+            music_duck = min(MAX_MUSIC_DUCK_DB, max(0.0, MUSIC_DUCK_DB + music_speech - music_pause))
     final = audio_graph(joined, music, voice, speech, total, length,
-                        music_gain_db=music_db, game_gain_db=game_gain, game_duck_db=game_db,
+                        music_gain_db=music_db, music_duck_db=music_duck,
+                        game_gain_db=game_gain, game_duck_db=game_db,
                         ending_gain_db=ending_gain, music_fades=music_fades)
     report = check_balance(
         s, final.measure("music", pauses, meter_gain_db=meter_gain)
@@ -530,7 +566,8 @@ def calibrate(joined: Path, music: Path | None, voice: list[tuple[Path, float]],
         final.measure("game", ending_windows, meter_gain_db=meter_gain) if ending_windows else None,
     )
     report.update({"speech_lufs": s, "master_gain_db": meter_gain,
-                   "music_gain_db": _finite(music_db), "game_gain_db": game_gain, "game_duck_db": game_db,
+                   "music_gain_db": _finite(music_db), "music_duck_db": music_duck,
+                   "game_gain_db": game_gain, "game_duck_db": game_db,
                    "ending_gain_db": ending_gain, "speech_windows": speech, "pause_windows": pauses,
                    "ending_windows": ending_windows})
     return final, report
@@ -564,7 +601,8 @@ def _master_voiced(audio: AudioGraph | None, report: dict | None, out: Path, len
         stems = {track: Path(pending) / f"{track}.m4a" for track in audio.tracks}
         gain_correction = 0.0
         ending_gain_correction = 0.0
-        balance_corrections = {"game_gain_db": 0.0, "game_duck_db": 0.0, "music_gain_db": 0.0}
+        balance_corrections = {"game_gain_db": 0.0, "game_duck_db": 0.0,
+                               "music_gain_db": 0.0, "music_duck_db": 0.0}
         ending_start = report["ending_windows"][0][0] if report["ending_windows"] else None
         body_end = ending_start if ending_start is not None else length
         report["master_passes"] = 0
@@ -606,7 +644,9 @@ def _master_voiced(audio: AudioGraph | None, report: dict | None, out: Path, len
         for _ in range(MAX_BALANCE_CORRECTIONS):
             ending = next(row["measured_lufs"] for row in balance["rows"] if row["id"] == "ending")
             correction = ending_correction(voice_lufs, ending)
-            adjustments = balance_correction(balance)
+            adjustments = balance_correction(
+                balance, music_duck_db=audio.music_duck_db + balance_corrections["music_duck_db"],
+            )
             if not correction and not any(adjustments.values()):
                 break
             ending_gain_correction += correction
