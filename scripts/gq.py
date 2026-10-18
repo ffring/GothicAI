@@ -458,12 +458,13 @@ class Queue:
             active = [j for j in jobs if j["status"] in ACTIVE]
             queued = [j for j in jobs if j["status"] == "queued"]
             quiet_waiting = legacy_waiting or any(j["class"] == "quiet" for j in queued)
-            exclusive_waiting = next((j["id"] for j in queued if j.get("display_exclusive")), None)
+            exclusive_waiting = next((index for index, j in enumerate(queued)
+                                      if j.get("display_exclusive")), None)
             if free < self.profile["min_disk"] or any(j["class"] == "quiet" for j in active):
                 return
             batch_blocked = False
             skipped_owners = set()
-            for job in queued:
+            for index, job in enumerate(queued):
                 if job.get("retry_pending"):
                     if job["class"] == "batch":
                         batch_blocked = True
@@ -499,9 +500,11 @@ class Queue:
                     continue
                 slot = None
                 if job["display"]:
-                    # A waiting exclusive drains the display pool, just as quiet
-                    # drains batch. Later games cannot keep it waiting forever.
-                    if exclusive_waiting is not None and job["id"] != exclusive_waiting:
+                    # Drain games ahead of the oldest exclusive, then admit no
+                    # later games. Earlier batches retain FIFO; quiet retains its
+                    # class priority, otherwise the two admission gates can cycle.
+                    if (exclusive_waiting is not None and index > exclusive_waiting
+                            and kind != "quiet"):
                         if kind == "batch":
                             batch_blocked = True
                         continue

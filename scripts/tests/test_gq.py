@@ -273,6 +273,55 @@ def test_display_exclusives_are_fifo_and_cancellation_reopens_admission(queue):
     assert queue.get(later)["status"] == "running"
 
 
+def test_display_exclusive_preserves_fifo_of_earlier_batches(queue):
+    earlier = enqueue(queue, "batch", display=True)
+    exclusive = enqueue(queue, "batch", display_exclusive=True)
+    later = enqueue(queue, "batch", display=True)
+    queue.tick()
+    assert queue.get(earlier)["status"] == "running"
+    assert queue.get(exclusive)["status"] == queue.get(later)["status"] == "queued"
+    queue.finish(earlier, "success")
+    queue.tick()
+    assert queue.get(exclusive)["status"] == "running"
+    assert queue.get(later)["status"] == "queued"
+
+
+@pytest.mark.parametrize("exclusive_kind", ["quick", "batch"])
+@pytest.mark.parametrize("quiet_first", [True, False])
+def test_display_exclusive_keeps_quiet_class_priority_without_deadlock(
+        queue, exclusive_kind, quiet_first):
+    if quiet_first:
+        quiet = enqueue(queue, "quiet", display=True)
+    exclusive = enqueue(queue, exclusive_kind, display_exclusive=True)
+    if not quiet_first:
+        quiet = enqueue(queue, "quiet", display=True)
+    later = enqueue(queue, display=True)
+    queue.tick()
+    assert queue.get(quiet)["status"] == "running"
+    assert queue.get(exclusive)["status"] == queue.get(later)["status"] == "queued"
+    queue.finish(quiet, "success")
+    queue.tick()
+    assert queue.get(exclusive)["status"] == "running"
+    assert queue.get(later)["status"] == "queued"
+
+
+def test_games_already_ahead_of_exclusive_drain_but_later_games_wait(queue):
+    running = start(queue, display=True)
+    earlier = enqueue(queue, display=True)
+    exclusive = enqueue(queue, display_exclusive=True)
+    later = enqueue(queue, display=True)
+    queue.tick()
+    assert queue.get(earlier)["status"] == "running"
+    assert queue.get(exclusive)["status"] == queue.get(later)["status"] == "queued"
+    queue.finish(running, "success")
+    queue.tick()
+    assert queue.get(exclusive)["status"] == queue.get(later)["status"] == "queued"
+    queue.finish(earlier, "success")
+    queue.tick()
+    assert queue.get(exclusive)["status"] == "running"
+    assert queue.get(later)["status"] == "queued"
+
+
 def test_batch_thread_budget_includes_all_running_batches(queue):
     first = start(queue, "batch", threads=16)
     second = start(queue, "batch", owner="session-b", threads=12)
