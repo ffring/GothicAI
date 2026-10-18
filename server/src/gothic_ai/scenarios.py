@@ -1199,7 +1199,8 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         views = await link.npc_view([npc])
         raise GameError(
             f"m5b arena preparation: {ready.status} {ready.detail}; state={current}; "
-            f"pos={snap.npc.pos}; rot={snap.npc.rot}; nearby={snap.nearby_npcs}; sees={[v.sees for v in views]}"
+            f"pos={snap.npc.pos}; rot={snap.npc.rot}; nearby={snap.nearby_npcs}; "
+            f"sees={[v.sees for v in views]}"
         )
     events.clear()
     await _m5b_player_weapon(link, "melee")
