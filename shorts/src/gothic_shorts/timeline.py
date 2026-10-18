@@ -1,10 +1,12 @@
 """What the cut needs from a take, in seconds of the recording: who said what when, the pauses while the
-AI thinks (cut down to a beat; after a sound said at once, "Хм...", too), the captions. Pure: events in,
-timeline out."""
+AI thinks (cut down to a beat; after a sound said at once, "Хм...", too), the captions. Separate WAVs
+provide exact voice lengths; older/missing files fall back to the event timing."""
 
 from __future__ import annotations
 
 import json
+import wave
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,7 +22,7 @@ class Line:
     text: str
     start: float
     end: float
-    wav: str | None = None  # the hero's recording
+    wav: str | None = None  # a separate hero or NPC recording
     filler: bool = False  # a sound the npc makes at once while the model thinks ("Хм...")
 
     @property
@@ -80,6 +82,43 @@ def read_events(path: Path, segment: str = "main") -> list[dict]:
     return events
 
 
+def wav_duration(path: str | Path | None) -> float | None:
+    """Read a PCM recording's duration; old/missing recordings keep the event timing."""
+    if not path:
+        return None
+    try:
+        with wave.open(str(path), "rb") as audio:
+            return audio.getnframes() / audio.getframerate()
+    except (OSError, EOFError, wave.Error):
+        return None
+
+
+def npc_voice_events(events: list[dict]) -> dict[int, dict]:
+    """Pair NPC text events with their nearest playback, independently per NPC.
+
+    The voice event's ``line`` is an internal ID, absent from npc_line. Voices
+    usually precede their text event in the same frame, but can arrive later.
+    Event order breaks ties when several utterances share a frame.
+    """
+    voices = defaultdict(list)
+    for index, event in enumerate(events):
+        if event["kind"] == "npc_voice":
+            voices[event.get("npc")].append((index, event))
+    paired = {}
+    for index, event in enumerate(events):
+        if event["kind"] == "npc_line":
+            matching = voices[event.get("npc")]
+            if matching:
+                position, voice = min(
+                    enumerate(matching),
+                    key=lambda item: (abs(item[1][1]["frame"] - event["frame"]),
+                                      item[1][0]),
+                )
+                paired[index] = voice[1]
+                matching.pop(position)
+    return paired
+
+
 def build(events: list[dict], *, max_gap: float = MAX_GAP_S, keep_gap: float = KEEP_GAP_S) -> Timeline:
     def at(e: dict) -> float:
         return float(e["frame"]) / FPS
@@ -87,12 +126,14 @@ def build(events: list[dict], *, max_gap: float = MAX_GAP_S, keep_gap: float = K
     stop = next((e for e in events if e["kind"] == "rec_stop"), None)
     duration = float(stop["frames"]) / FPS if stop else max((at(e) for e in events), default=0.0)
     tl = Timeline(duration)
+    voices = npc_voice_events(events)
 
     for i, e in enumerate(events):
         match e["kind"]:
             case "hero":
                 start = at(e)
-                end = start + e["ms"] / 1000
+                length = wav_duration(e.get("wav"))
+                end = start + (length if length is not None else e["ms"] / 1000)
                 tl.lines.append(Line("hero", "", e.get("text", ""), start, end, e.get("wav")))
             case "npc_line":
                 start = at(e)
@@ -107,10 +148,19 @@ def build(events: list[dict], *, max_gap: float = MAX_GAP_S, keep_gap: float = K
                     if later["kind"] == "npc_line":
                         end = min(end, at(later))
                         break
+                voice = voices.get(i)
+                if voice is not None:
+                    # Samples refer to the effects recording, independently of
+                    # when the engine got around to writing the frame event.
+                    start = voice.get("sample", voice["frame"] * 1600) / 48_000
+                    length = wav_duration(voice.get("wav"))
+                    if length is not None:
+                        end = start + length
                 name = e.get("name", e["npc"])
                 filler = bool(e.get("filler"))
                 tl.lines.append(
-                    Line(e["npc"], name, e.get("text", ""), start, min(end, duration), filler=filler)
+                    Line(e["npc"], name, e.get("text", ""), start, min(end, duration),
+                         voice.get("wav") if voice else None, filler=filler)
                 )
             case "caption":
                 if tl.captions and tl.captions[-1].end >= duration:

@@ -95,3 +95,53 @@ def test_events_outside_the_recording_are_ignored(tmp_path):
     rows = [ev(0, "rec"), before, ev(9, "rec_stop", frames=9), {**ev(0, "rec"), "seg": "other"}]
     path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
     assert [e["kind"] for e in read_events(path)] == ["rec", "rec_stop"]
+
+
+def _silent_wav(path, duration, rate=24_000):
+    import wave
+
+    with wave.open(str(path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(rate)
+        audio.writeframes(b"\0\0" * round(duration * rate))
+    return str(path)
+
+
+def test_real_wav_lengths_and_npc_samples_set_the_timeline(tmp_path):
+    hero = _silent_wav(tmp_path / "hero.wav", 1.5)
+    npc = _silent_wav(tmp_path / "npc.wav", 2.0)
+    events = [
+        ev(30, "hero", ms=500, wav=hero, text="Эй"),
+        # Voice precedes its text event, with an internal ID rather than text.
+        ev(156, "npc_voice", npc="A", line="ai-0001", wav=npc, sample=241_200),
+        ev(156, "npc_line", npc="A", text="Да?", ms=9000),
+        ev(285, "npc_voice_end", npc="A"),
+        ev(300, "rec_stop", frames=300),
+    ]
+    tl = build(events)
+    first, second = tl.lines
+    assert (first.start, first.end) == (1.0, 2.5)
+    assert (second.start, second.end, second.wav) == (5.025, 7.025, npc)
+    assert tl.cuts == [(pytest.approx(2.725), pytest.approx(4.8))]
+
+
+def test_npc_voice_pairing_handles_interleaved_symbols_and_same_frame(tmp_path):
+    first = _silent_wav(tmp_path / "first.wav", 0.5)
+    other = _silent_wav(tmp_path / "other.wav", 1.0)
+    second = _silent_wav(tmp_path / "second.wav", 1.5)
+    events = [
+        ev(30, "npc_voice", npc="A", line="id-a1", wav=first, sample=48_000),
+        ev(30, "npc_line", npc="A", text="Повтор", ms=5000),
+        ev(30, "npc_voice", npc="B", line="id-b", wav=other, sample=48_000),
+        ev(30, "npc_line", npc="B", text="Текст Б", ms=5000),
+        ev(30, "npc_line", npc="A", text="Повтор", ms=5000),
+        ev(30, "npc_voice", npc="A", line="id-a2", wav=second, sample=72_000),
+        ev(150, "rec_stop", frames=150),
+    ]
+    tl = build(events)
+    assert [(line.who, line.start, line.end, line.wav) for line in tl.lines] == [
+        ("A", 1.0, 1.5, first),
+        ("B", 1.0, 2.0, other),
+        ("A", 1.5, 3.0, second),
+    ]
