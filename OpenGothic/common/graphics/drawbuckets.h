@@ -48,6 +48,8 @@ class DrawBuckets {
     auto buckets() -> const std::vector<Bucket>&;
 
     auto& textures() const { return desc.tex;     }
+    auto& normals()  const { return desc.normal;  }
+    auto& orm()      const { return desc.orm;     }
     auto& vbo()      const { return desc.vbo;     }
     auto& ibo()      const { return desc.ibo;     }
     auto& morphId()  const { return desc.morphId; }
@@ -63,6 +65,8 @@ class DrawBuckets {
       BK_SKIN  = 0x2,
       BK_MORPH = 0x4,
       BK_WATER = 0x8,
+      BK_NORMAL = 0x10,
+      BK_ORM    = 0x20,
       };
 
     struct BucketGpu final {
@@ -73,11 +77,13 @@ class DrawBuckets {
       float          alphaWeight      = 1;
       float          envMapping       = 0;
       uint32_t       flags            = 0;
-      uint32_t       padd[1]          = {};
+      float          uvScale          = 1.f;
       };
 
     struct {
       Tempest::DescriptorArray tex;
+      Tempest::DescriptorArray normal;
+      Tempest::DescriptorArray orm;
       Tempest::DescriptorArray vbo;
       Tempest::DescriptorArray ibo;
       Tempest::DescriptorArray morphId;

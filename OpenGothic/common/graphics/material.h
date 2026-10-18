@@ -26,6 +26,9 @@ class Material final {
       };
 
     const Tempest::Texture2d* tex=nullptr;
+    const Tempest::Texture2d* normal=nullptr;
+    const Tempest::Texture2d* orm=nullptr;
+    float                     uvScale          = 1.f;
     std::vector<const Tempest::Texture2d*> frames;
     AlphaFunc                 alpha            = AlphaTest;
     float                     alphaWeight      = 1;
@@ -39,6 +42,7 @@ class Material final {
 
     bool isSolid() const;
 
+    bool hasMaterialMaps()       const { return normal!=nullptr || orm!=nullptr || uvScale!=1.f; }
     bool hasFrameAnimation()     const { return !frames.empty() && texAniFPSInv!=0;    }
     bool hasUvAnimation()        const { return texAniMapDirPeriod!=Tempest::Point(0); }
     bool isTesselated()          const { return isTesselated(alpha);                   }

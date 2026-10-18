@@ -28,6 +28,9 @@ layout(location = DEBUG_DRAW_LOC) in flat uint debugId;
 #if defined(GBUFFER)
 layout(location = 0) out vec4 outDiffuse;
 layout(location = 1) out uint outNormal;
+#if defined(MATERIAL_MAPS)
+layout(location = 2) out vec4 outOrm;
+#endif
 #elif defined(WATER)
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outDiffuse;
@@ -158,9 +161,13 @@ vec4 diffuseTex() {
       texAnim.y  = float(fract)/float(texAniMapDirPeriod.y);
       }
   }
-  const vec2 uv = shInp.uv + texAnim;
+  vec2 uv = shInp.uv + texAnim;
 #else
-  const vec2 uv = shInp.uv;
+  vec2 uv = shInp.uv;
+#endif
+
+#if defined(MATERIAL_MAPS) && (MESH_TYPE!=T_PFX)
+  uv *= bucket[bucketId].uvScale;
 #endif
 
 #if defined(BINDLESS)
@@ -181,10 +188,48 @@ vec4 diffuseTex() {
 #endif
 
 #if defined(GBUFFER)
+#if defined(MATERIAL_MAPS) && (MESH_TYPE!=T_PFX)
+vec3 mappedNormal(vec3 normal, vec3 dpdx, vec3 dpdy, vec2 duvdx, vec2 duvdy, vec4 tex) {
+  // Cotangent frame: Gothic meshes have no stored tangents. This also follows
+  // mirrored UVs and uses the same scaled coordinates as all three textures.
+  vec3 n = normalize(normal);
+  vec3 py = cross(dpdy, n);
+  vec3 px = cross(n, dpdx);
+  vec3 t = py * duvdx.x + px * duvdy.x;
+  vec3 b = py * duvdx.y + px * duvdy.y;
+  float len2 = max(dot(t,t), dot(b,b));
+  if(len2 <= 1e-20)
+    return n;
+  vec2 xy = tex.ag * 2.0 - 1.0; // DXT5nm: X in alpha, Y in green (linear).
+  vec3 tangentNormal = vec3(xy, sqrt(max(0.0, 1.0 - dot(xy,xy))));
+  return normalize(mat3(t * inversesqrt(len2), b * inversesqrt(len2), n) * tangentNormal);
+  }
+#endif
+
 void mainGBuffer(vec4 t) {
   outDiffuse.rgb = t.rgb;
   outDiffuse.a   = encodeHintBits();
   outNormal      = encodeNormal(shInp.normal);
+#if defined(MATERIAL_MAPS)
+  outOrm = vec4(1,1,0,0);
+#if (MESH_TYPE!=T_PFX)
+  const vec2 uv = shInp.uv * bucket[bucketId].uvScale;
+  // Derivatives must precede nonuniform material branches and alpha discard.
+  vec3 dpdx = dFdx(shInp.pos), dpdy = dFdy(shInp.pos);
+  vec2 duvdx = dFdx(uv), duvdy = dFdy(uv);
+#if defined(BINDLESS)
+  nonuniformEXT uint tId = bucketId;
+#else
+  const uint tId = 0;
+#endif
+  if((bucket[bucketId].flags & BK_NORMAL)!=0) {
+    vec4 nm = textureGrad(sampler2D(textureNormal[tId], samplerMain), uv, duvdx, duvdy);
+    outNormal = encodeNormal(mappedNormal(shInp.normal, dpdx, dpdy, duvdx, duvdy, nm));
+    }
+  if((bucket[bucketId].flags & BK_ORM)!=0)
+    outOrm.rgb = textureGrad(sampler2D(textureOrm[tId], samplerMain), uv, duvdx, duvdy).rgb;
+#endif
+#endif
   // outNormal      = vec4(flatNormal()*0.5 + vec3(0.5), 1.0);
 #if DEBUG_DRAW
   outDiffuse.rgb *= debugColors[debugId%debugColors.length()];
@@ -325,18 +370,25 @@ void mainWater(vec4 t) {
 void main() {
 #if defined(MAT_UV)
   vec4 t = diffuseTex();
-#  if defined(ATEST)
+#  if defined(ATEST) && !(defined(GBUFFER) && defined(MATERIAL_MAPS))
   if(t.a<0.5)
     discard;
 #  endif
 #endif
 
+#if defined(ATEST) && defined(GBUFFER) && defined(MATERIAL_MAPS)
+  const float alphaTest = t.a;
+#endif
 #if defined(MAT_COLOR)
   t *= shInp.color;
 #endif
 
 #if defined(GBUFFER)
   mainGBuffer(t);
+#if defined(ATEST) && defined(MATERIAL_MAPS)
+  if(alphaTest<0.5)
+    discard;
+#endif
 #elif defined(WATER)
   mainWater(t);
 #elif defined(FORWARD) && !defined(DEPTH_ONLY)

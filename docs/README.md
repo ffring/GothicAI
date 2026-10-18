@@ -107,6 +107,7 @@
 | Headless-раннер для обучения тела | `game/bodyrunner.cpp` → `gothic-body-runner` (stdio RPC) | — | [`npc-body-headless-runner.md`](npc-body-headless-runner.md) |
 | Навигация NPC: обучаемая — пока только на стенде; популяция N NPC, эпизоды без перезагрузки, выборка и награды | `common/nav*`, `common/game/nav*`; `scripts/nav_rl.py` — пары, сбор, финальный замер, проверки | `navdemos population`: `sample/argmax`, `RECORD=0` выключает запись; `navdemos physics cv` закрепляет CV для ученика и учителя (`nav_rl.py` по умолчанию); обычная игра не включает режим | [`navigation.md`](navigation.md) |
 | HD-текстуры | `common/resources.cpp` | работают, если есть каталог `OPENGOTHIC_TEXTURES` | — |
+| Свои материалы мира: нормали и ORM, Ламберт с AO | `common/resources.cpp`, `common/graphics/material.*`, `drawbuckets.*`, `renderer.*`, `shader/materials/`, `shader/lighting/`; фикстура `scripts/content/test-material.py` | убрать каталог контента или `OPENGOTHIC_CONTENT=` | [`own-content.md`](own-content.md#как-работает-сейчас) |
 | Перепись ресурсов сессии (инструмент) | `common/contentcensus.*`, наблюдатель VFS; сводка `scripts/content-census.py` | `OPENGOTHIC_CENSUS=<путь к json>`, запись при выходе и Marvin `census`; `scripts/test_content_census.py`, бенч `smoke` | [`own-content.md`](own-content.md) |
 | Тестовый стенд | `common/testbench.*`, `OPENGOTHIC_BENCH*` | — | [`scripts/bench/README.md`](../scripts/bench/README.md) |
 
