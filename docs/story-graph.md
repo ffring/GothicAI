@@ -14,7 +14,7 @@
 Как выключить: `gothic-ai serve --no-director` отключает ремонт, авторский контур, расплату и последствия лжи. У хроники, доверия, слухов и свидетелей отдельного выключателя нет; сохранённые правки остаются. Новые требования по преступлениям выключает `--no-crimes`.
 `GOTHIC_AI_STORYEXEC=0` возвращает ванильные диалоги VM, но сохраняет программы режиссёра; `GOTHIC_AI=0` выключает весь мост.
 
-Проверки: сценарии `graph`, `programs`, `repair` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios.py](../server/src/gothic_ai/scenarios.py); [test_validator.py](../server/tests/test_validator.py), [test_social.py](../server/tests/test_social.py), [test_consequences.py](../server/tests/test_consequences.py), [test_amends.py](../server/tests/test_amends.py).
+Проверки: сценарии `graph`, `programs`, `repair` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios/story.py](../server/src/gothic_ai/scenarios/story.py); [test_validator.py](../server/tests/test_validator.py), [test_social.py](../server/tests/test_social.py), [test_consequences.py](../server/tests/test_consequences.py), [test_amends.py](../server/tests/test_amends.py).
 
 Ограничения: неподнятые программы остаются VM; сюжет вне диалогов перенесён не целиком. Оценка достижимости у валидатора приблизительная. Возмещение за кражу или удар доступно пострадавшему, который видел или слышал о вине героя; одного подозрения мало.
 

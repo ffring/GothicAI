@@ -15,7 +15,7 @@
 
 **Как выключить:** `gothic-ai serve --no-neural-body`. Без `--body-url` и `GOTHIC_BODY_URL` пилот также не создаётся; разбор флагов — в [cli.py](../server/src/gothic_ai/cli.py).
 
-**Проверки:** сценарии `neural` и `neural-companion` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios.py](../server/src/gothic_ai/scenarios.py); [test_bodypilot.py](../server/tests/test_bodypilot.py), [test_body_control.py](../server/tests/test_body_control.py), [test_body_observations.py](../server/tests/test_body_observations.py).
+**Проверки:** сценарии `neural` и `neural-companion` в [scripts/e2e.sh](../scripts/e2e.sh) и [scenarios/companions.py](../server/src/gothic_ai/scenarios/companions.py); [test_bodypilot.py](../server/tests/test_bodypilot.py), [test_body_control.py](../server/tests/test_body_control.py), [test_body_observations.py](../server/tests/test_body_observations.py).
 
 **Ограничения:** одновременно один NPC; двуручное оружие, луки, магия, монстры и бой с посторонними NPC остаются родному ИИ. Нужен доступный сервис политики; веса в репозитории не хранятся.
 
@@ -225,7 +225,7 @@ Mask описывает реально допустимые примитивы. 
 - Отчёт содержит episodes/s, реальных policy transitions/s, reset latency и прогноз `число шагов / фактический throughput` для обучения.
 - Решено, достаточно ли фактической скорости headless runner для небольшого PPO запуска. Если нет, оптимизация серверного runner становится задачей до большого обучения; перенос серий на Mac не является обходом этого gate.
 
-**Код:** общий melee scenario/setup, headless episode runner и адаптер reference для [testbench.cpp](../OpenGothic/common/testbench.cpp); переиспользовать [scenarios.py](../server/src/gothic_ai/scenarios.py) и [bench_report.py](../scripts/bench_report.py), где они подходят без GUI. Проверка — одна серверная серия `body_arena`, pytest и симуляция последовательно.
+**Код:** общий melee scenario/setup, headless episode runner и адаптер reference для [testbench.cpp](../OpenGothic/common/testbench.cpp); переиспользовать [scenarios/companions.py](../server/src/gothic_ai/scenarios/companions.py) и [bench_report.py](../scripts/bench_report.py), где они подходят без GUI. Проверка — одна серверная серия `body_arena`, pytest и симуляция последовательно.
 
 ## Этап 6 Траектории и датасет
 

@@ -86,7 +86,7 @@
 | Сделки и поручения | `deals` (окно сделки, долги), `contracts` (опыт, обучение, платные задания), `chests`, `errands` (`plan`), `meetings` (`meet`), `guide` (`lead`) |
 | Сюжет | `story`, `validator`, `storyguard`, `programs`, `director`, `questbook`, `questlog`, `triggers`, `occasions`, `showrunner`, `authoring`, `casting`, `cast`, `characters` (карточки характера), `chains` |
 | Данные | `gamedata/`: `characters.json`, `lore.json`, `places.json`, `stash.json`, `ou.py` (реплики OU.BIN), `storygraph.py` |
-| Сценарии e2e | `scenarios.py` и `scenario_*.py` |
+| Сценарии e2e | `scenarios/` (общее в `common.py`, по модулю на область) |
 
 ## Движок: наши подсистемы
 

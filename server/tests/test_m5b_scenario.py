@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gothic_ai.game import GameDisconnected, GameError
-from gothic_ai.scenarios import _m5b_player_weapon
+from gothic_ai.scenarios.common import _m5b_player_weapon
 
 
 @pytest.fixture

@@ -8,12 +8,12 @@ import pytest
 from websockets.asyncio.server import serve
 
 from gothic_ai import dialogue as dialogue_module
-from gothic_ai import scenarios
 from gothic_ai.dialogue import QUIET_STYLE, SCENE_GAP_S, TTS_PAUSE, DialogueManager, FirstReaction
 from gothic_ai.journal import Journal
 from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
+from gothic_ai.scenarios import basics as scenarios
 from gothic_ai.tts import TtsClient
 from tests.fake_game import FakeGame, connected
 

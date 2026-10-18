@@ -11,15 +11,16 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Sequ
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
-from .game import GameLink
-from .llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
-from .llm.fake import FakeBackend
-from .protocol import Saved, Session
-from .scenarios import _logged, _until, play_book_chain, wait_message
-from .showrunner import MIN_REAL_SECONDS, OUTCOMES, occasion_members
+from ..game import GameLink
+from ..llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
+from ..llm.fake import FakeBackend
+from ..protocol import Saved, Session
+from ..showrunner import MIN_REAL_SECONDS, OUTCOMES, occasion_members
+from .common import _logged, _until, wait_message
+from .story import play_book_chain
 
 if TYPE_CHECKING:
-    from .showrunner import Showrunner
+    from ..showrunner import Showrunner
 
 log = logging.getLogger(__name__)
 
