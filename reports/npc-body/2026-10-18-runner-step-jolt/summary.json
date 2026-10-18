@@ -1,0 +1,546 @@
+{
+ "schema_version": 1,
+ "kind": "body_stage9_runner_step_jolt",
+ "quality_credit": false,
+ "runner": {
+  "source_head": "aa13181f1fbe8e6f5101781ea70bcf16ebaeb10e",
+  "source_patch_sha256": "fcd15eb49890afa72cc13260422d464fe34d66fc6f2c86973f47ca5c7417dcfb",
+  "binary_sha256": "df94b627607201c7fc18181d24b55bf5720b9e5a8f239466d4de66b987253e16",
+  "engine_library_sha256": "cf0b00972957e38071576f6295fe14f36ddd6bb032bc157244b93aeda88a3bba",
+  "opengothic_jolt_x86": "x86-64-v3",
+  "jolt_cache": [
+   "USE_AVX2:INTERNAL=ON",
+   "USE_AVX512:INTERNAL=OFF",
+   "USE_AVX:INTERNAL=ON",
+   "USE_CPU_COMPUTE:INTERNAL=OFF",
+   "USE_DX12:INTERNAL=OFF",
+   "USE_F16C:INTERNAL=ON",
+   "USE_FMADD:INTERNAL=OFF",
+   "USE_LZCNT:INTERNAL=ON",
+   "USE_MTL:INTERNAL=OFF",
+   "USE_SSE4_1:INTERNAL=ON",
+   "USE_SSE4_2:INTERNAL=ON",
+   "USE_STATIC_MSVC_RUNTIME_LIBRARY:INTERNAL=OFF",
+   "USE_TZCNT:INTERNAL=ON",
+   "USE_VK:INTERNAL=OFF"
+  ],
+  "resolver_tests_passed": true,
+  "physics_threads_default": 0
+ },
+ "profile_16_duels": {
+  "old": {
+   "steps": 4994,
+   "wall_ms_per_step": 22.159,
+   "cpu_ms_per_step": {
+    "all": 22.07,
+    "first_second": 25.533,
+    "later": 21.689
+   },
+   "later_cpu_ms_by_pc_group": {
+    "engine": 12.942,
+    "bullet": 7.65,
+    "libc": 1.096
+   },
+   "later_inclusive_ms": {
+    "WorldObjects::updateAnimation": 19.219,
+    "MdlVisual::updateFootIk": 11.08,
+    "FootIk::mkInput const": 7.322,
+    "DynamicWorld::ray const": 7.429,
+    "JPH::NarrowPhaseQuery::CastRay const": 0.0,
+    "btCollisionWorld::rayTest const": 7.342,
+    "Pose::update": 6.397,
+    "Pose::updateFootIk": 3.67,
+    "Aim::finish": 0.0,
+    "World::tick": 2.232,
+    "DynamicWorld::tick": 0.027,
+    "WorldObjects::prepareRagdolls": 0.0,
+    "PhysicMesh::setPose": 0.061,
+    "JPH::PhysicsSystem::Update": 0.0
+   },
+   "later_sse2_fallbacks_inclusive_ms": {
+    "JPH::HalfFloatConversion::ToFloatFallback": 0.0,
+    "__popcountdi2": 0.0,
+    "JPH::UVec4::ShiftComponents4Minus const": 0.0,
+    "JPH::Vec4::sSelect": 0.0
+   }
+  },
+  "new": {
+   "steps": 4963,
+   "wall_ms_per_step": 25.759,
+   "cpu_ms_per_step": {
+    "all": 25.688,
+    "first_second": 28.929,
+    "later": 25.33
+   },
+   "later_cpu_ms_by_pc_group": {
+    "engine": 15.227,
+    "jolt": 8.364,
+    "libc": 1.739
+   },
+   "later_inclusive_ms": {
+    "WorldObjects::updateAnimation": 21.851,
+    "MdlVisual::updateFootIk": 13.059,
+    "FootIk::mkInput const": 9.064,
+    "DynamicWorld::ray const": 8.989,
+    "JPH::NarrowPhaseQuery::CastRay const": 7.953,
+    "btCollisionWorld::rayTest const": 0.0,
+    "Pose::update": 6.829,
+    "Pose::updateFootIk": 3.919,
+    "Aim::finish": 0.423,
+    "World::tick": 3.217,
+    "DynamicWorld::tick": 0.41,
+    "WorldObjects::prepareRagdolls": 0.318,
+    "PhysicMesh::setPose": 0.246,
+    "JPH::PhysicsSystem::Update": 0.23
+   },
+   "later_sse2_fallbacks_inclusive_ms": {
+    "JPH::HalfFloatConversion::ToFloatFallback": 0.844,
+    "__popcountdi2": 0.412,
+    "JPH::UVec4::ShiftComponents4Minus const": 0.914,
+    "JPH::Vec4::sSelect": 1.104
+   }
+  },
+  "v3": {
+   "steps": 4943,
+   "wall_ms_per_step": 23.207,
+   "cpu_ms_per_step": {
+    "all": 23.245,
+    "first_second": 26.147,
+    "later": 22.921
+   },
+   "later_cpu_ms_by_pc_group": {
+    "engine": 15.42,
+    "jolt": 6.142,
+    "libc": 1.36
+   },
+   "later_inclusive_ms": null,
+   "later_sse2_fallbacks_inclusive_ms": null
+  }
+ },
+ "realtime": {
+  "before_merge": {
+   "open": {
+    "duels": 64,
+    "wins": 64,
+    "hp_mean": 293.97,
+    "no_damage": 55,
+    "win_s_mean": 10.01,
+    "accepted_commands": 1136,
+    "rejected_commands": 0,
+    "duels_with_rejected": 0,
+    "neural_control_min": 1.0,
+    "duels_below_095": 0,
+    "fallbacks": 0,
+    "step_ms_first_second": {
+     "p50": 24.57,
+     "p95": 26.57
+    },
+    "step_ms_later": {
+     "p50": 20.67,
+     "p95": 24.02
+    },
+    "window_ms_first_second": {
+     "p5": 6.47,
+     "p50": 8.74
+    },
+    "window_ms_later": {
+     "p5": 9.38,
+     "p50": 12.6
+    }
+   },
+   "near_wall": {
+    "duels": 64,
+    "wins": 64,
+    "hp_mean": 282.47,
+    "no_damage": 43,
+    "win_s_mean": 9.94,
+    "accepted_commands": 1057,
+    "rejected_commands": 1,
+    "duels_with_rejected": 1,
+    "neural_control_min": 0.941,
+    "duels_below_095": 1,
+    "fallbacks": 0,
+    "step_ms_first_second": {
+     "p50": 24.11,
+     "p95": 26.01
+    },
+    "step_ms_later": {
+     "p50": 20.2,
+     "p95": 23.5
+    },
+    "window_ms_first_second": {
+     "p5": 7.02,
+     "p50": 9.14
+    },
+    "window_ms_later": {
+     "p5": 9.95,
+     "p50": 13.04
+    }
+   }
+  },
+  "merged": {
+   "open": {
+    "duels": 64,
+    "wins": 64,
+    "hp_mean": 289.41,
+    "no_damage": 50,
+    "win_s_mean": 10.28,
+    "accepted_commands": 1159,
+    "rejected_commands": 50,
+    "duels_with_rejected": 36,
+    "neural_control_min": 0.833,
+    "duels_below_095": 29,
+    "fallbacks": 0,
+    "step_ms_first_second": {
+     "p50": 29.06,
+     "p95": 31.36
+    },
+    "step_ms_later": {
+     "p50": 25.26,
+     "p95": 28.49
+    },
+    "window_ms_first_second": {
+     "p5": 1.95,
+     "p50": 4.26
+    },
+    "window_ms_later": {
+     "p5": 4.84,
+     "p50": 8.01
+    }
+   },
+   "near_wall": {
+    "duels": 64,
+    "wins": 64,
+    "hp_mean": 281.38,
+    "no_damage": 44,
+    "win_s_mean": 10.04,
+    "accepted_commands": 1102,
+    "rejected_commands": 50,
+    "duels_with_rejected": 44,
+    "neural_control_min": 0.857,
+    "duels_below_095": 29,
+    "fallbacks": 0,
+    "step_ms_first_second": {
+     "p50": 28.84,
+     "p95": 31.6
+    },
+    "step_ms_later": {
+     "p50": 25.05,
+     "p95": 28.26
+    },
+    "window_ms_first_second": {
+     "p5": 1.72,
+     "p50": 4.47
+    },
+    "window_ms_later": {
+     "p5": 5.07,
+     "p50": 8.2
+    }
+   }
+  },
+  "merged_jolt_x86_64_v3": {
+   "open": {
+    "duels": 64,
+    "wins": 64,
+    "hp_mean": 293.69,
+    "no_damage": 55,
+    "win_s_mean": 9.99,
+    "accepted_commands": 1116,
+    "rejected_commands": 0,
+    "duels_with_rejected": 0,
+    "neural_control_min": 1.0,
+    "duels_below_095": 0,
+    "fallbacks": 0,
+    "step_ms_first_second": {
+     "p50": 25.71,
+     "p95": 27.59
+    },
+    "step_ms_later": {
+     "p50": 22.25,
+     "p95": 25.23
+    },
+    "window_ms_first_second": {
+     "p5": 5.52,
+     "p50": 7.55
+    },
+    "window_ms_later": {
+     "p5": 8.12,
+     "p50": 10.99
+    }
+   },
+   "near_wall": {
+    "duels": 64,
+    "wins": 64,
+    "hp_mean": 285.94,
+    "no_damage": 45,
+    "win_s_mean": 9.86,
+    "accepted_commands": 1070,
+    "rejected_commands": 2,
+    "duels_with_rejected": 1,
+    "neural_control_min": 0.882,
+    "duels_below_095": 1,
+    "fallbacks": 0,
+    "step_ms_first_second": {
+     "p50": 25.62,
+     "p95": 27.95
+    },
+    "step_ms_later": {
+     "p50": 22.2,
+     "p95": 25.21
+    },
+    "window_ms_first_second": {
+     "p5": 5.09,
+     "p50": 7.63
+    },
+    "window_ms_later": {
+     "p5": 8.11,
+     "p50": 11.04
+    }
+   }
+  }
+ },
+ "equivalence": {
+  "before_merge": {
+   "open": {
+    "pairs": 64,
+    "identical": 64,
+    "identical_commands": 64,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 0,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 1,
+    "realtime_late_commands": 0,
+    "realtime_rejected_commands": 0,
+    "realtime_accepted_commands": 1136
+   },
+   "near_wall": {
+    "pairs": 64,
+    "identical": 63,
+    "identical_commands": 63,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 1,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 20,
+    "realtime_late_commands": 0,
+    "realtime_rejected_commands": 1,
+    "realtime_accepted_commands": 1057
+   }
+  },
+  "merged": {
+   "open": {
+    "pairs": 64,
+    "identical": 25,
+    "identical_commands": 25,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 39,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 81,
+    "realtime_late_commands": 8,
+    "realtime_rejected_commands": 50,
+    "realtime_accepted_commands": 1159
+   },
+   "near_wall": {
+    "pairs": 64,
+    "identical": 15,
+    "identical_commands": 15,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 49,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 72,
+    "realtime_late_commands": 5,
+    "realtime_rejected_commands": 50,
+    "realtime_accepted_commands": 1102
+   }
+  },
+  "merged_jolt_x86_64_v3": {
+   "open": {
+    "pairs": 64,
+    "identical": 62,
+    "identical_commands": 62,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 2,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 8,
+    "realtime_late_commands": 1,
+    "realtime_rejected_commands": 0,
+    "realtime_accepted_commands": 1116
+   },
+   "near_wall": {
+    "pairs": 64,
+    "identical": 63,
+    "identical_commands": 63,
+    "same_outcome": 64,
+    "diverged_after_realtime_fault": 1,
+    "diverged_without_fault": 0,
+    "realtime_skipped_polls": 2,
+    "realtime_late_commands": 1,
+    "realtime_rejected_commands": 2,
+    "realtime_accepted_commands": 1070
+   }
+  }
+ },
+ "lockstep_journals_v3_vs_merged": {
+  "open": {
+   "episodes": "episodes: 64 vs 64, common 64",
+   "observations.jsonl": "64/64",
+   "events.jsonl": "64/64",
+   "arena-events.jsonl": "64/64",
+   "body-control-events.jsonl": "64/64"
+  },
+  "near_wall": {
+   "episodes": "episodes: 64 vs 64, common 64",
+   "observations.jsonl": "64/64",
+   "events.jsonl": "64/64",
+   "arena-events.jsonl": "64/64",
+   "body-control-events.jsonl": "64/64"
+  }
+ },
+ "gate_v6": {
+  "gru_sha256": "edcb77c36358a2d2646e78621c529d5efb818537c9f6bcbede476d9a4d67b97a",
+  "passed": true,
+  "issues": [],
+  "ordinary_realtime": {
+   "episodes": 6,
+   "neural_control_min": 1.0,
+   "model_step_ms_p95_max": 1.204388,
+   "collector_to_command_send_ms_p95_max": 1.601646,
+   "observation_to_arbitration_ms_p95_max": 2.998888
+  },
+  "realtime_reaction": {
+   "episodes": 2,
+   "neural_control_min": 1.0,
+   "model_step_ms_p95_max": 1.163982,
+   "collector_to_command_send_ms_p95_max": 6.990865,
+   "observation_to_arbitration_ms_p95_max": 8.616457
+  },
+  "four_actor_load": {
+   "episodes": 4,
+   "neural_control_min": 0.9852941176470589,
+   "model_step_ms_p95_max": 1.134527,
+   "collector_to_command_send_ms_p95_max": 3.734383,
+   "observation_to_arbitration_ms_p95_max": 5.721325
+  },
+  "block_reactions": [
+   {
+    "episode": "block-reaction-223-0-gru",
+    "block_after_windup_game_ms": 66,
+    "window_game_ms": 166,
+    "hp_preserved": true
+   },
+   {
+    "episode": "block-reaction-223-1-gru",
+    "block_after_windup_game_ms": 66,
+    "window_game_ms": 166,
+    "hp_preserved": true
+   }
+  ],
+  "screening_comparisons": {
+   "gru": {
+    "distance": {
+     "episodes": 20,
+     "native_successes": 20,
+     "candidate_successes": 20,
+     "native_success_rate": 1.0,
+     "candidate_success_rate": 1.0,
+     "delta": 0.0,
+     "passed": true
+    },
+    "attack": {
+     "episodes": 20,
+     "native_successes": 20,
+     "candidate_successes": 20,
+     "native_success_rate": 1.0,
+     "candidate_success_rate": 1.0,
+     "delta": 0.0,
+     "passed": true
+    },
+    "block": {
+     "episodes": 20,
+     "native_successes": 0,
+     "candidate_successes": 20,
+     "native_success_rate": 0.0,
+     "candidate_success_rate": 1.0,
+     "delta": 1.0,
+     "passed": true
+    },
+    "native_duel": {
+     "episodes": 20,
+     "native_successes": 11,
+     "candidate_successes": 20,
+     "native_success_rate": 0.55,
+     "candidate_success_rate": 1.0,
+     "delta": 0.44999999999999996,
+     "passed": true
+    }
+   },
+   "mlp": {
+    "distance": {
+     "episodes": 20,
+     "native_successes": 20,
+     "candidate_successes": 20,
+     "native_success_rate": 1.0,
+     "candidate_success_rate": 1.0,
+     "delta": 0.0,
+     "passed": true
+    },
+    "attack": {
+     "episodes": 20,
+     "native_successes": 20,
+     "candidate_successes": 20,
+     "native_success_rate": 1.0,
+     "candidate_success_rate": 1.0,
+     "delta": 0.0,
+     "passed": true
+    },
+    "block": {
+     "episodes": 20,
+     "native_successes": 0,
+     "candidate_successes": 20,
+     "native_success_rate": 0.0,
+     "candidate_success_rate": 1.0,
+     "delta": 1.0,
+     "passed": true
+    },
+    "native_duel": {
+     "episodes": 20,
+     "native_successes": 11,
+     "candidate_successes": 20,
+     "native_success_rate": 0.55,
+     "candidate_success_rate": 1.0,
+     "delta": 0.44999999999999996,
+     "passed": true
+    }
+   }
+  },
+  "baseline_v5": {
+   "passed": false,
+   "issues": [
+    "four-actor-gru-0: healthy control below .95",
+    "four-actor-gru-1: healthy control below .95",
+    "four-actor-gru-2: healthy control below .95",
+    "four-actor-gru-3: healthy control below .95"
+   ],
+   "four_actor_load": {
+    "episodes": 4,
+    "neural_control_min": 0.9178082191780822,
+    "model_step_ms_p95_max": 1.171777,
+    "collector_to_command_send_ms_p95_max": 5.494287,
+    "observation_to_arbitration_ms_p95_max": 36.590198
+   }
+  },
+  "native_replay_vs_v5": {
+   "episodes": 95,
+   "identical": 95
+  },
+  "native_off_parity_vs_base_v1": "matched"
+ },
+ "evidence_sha256": {
+  "runner-step/prof/step-profile-3.json": "a0f7bb3392de9aafbed6483e8623cd92288462fd2888ddf745b57b0fee3c1341",
+  "runner-step/v3-rt/suite.json": "ce6cbd4aa11fe1b983a035a20d98d4e0156f40de6efff3d7dddd810a4b9915f7",
+  "runner-step/v3-rt-wall/suite.json": "0befd042dec00f967c4d4ebf098de5603df9a29e8446714530c07711b6f8ba4e",
+  "runner-step/lockstep-v3.log": "6ee3d7d7560a770dd83a6189118d47fb357bbec5170a446a43e2e311e39b4ca3",
+  "runner-step/lockstep-v3-open/summary.json": "5e99209b0a7604e74cbc3be284b215460fafa9d5ca0c45e18f9597df2ddaf52d",
+  "runner-step/lockstep-v3-near_wall/summary.json": "15145c01b44eea968f770a46643711b649507063a58a98b0cbb41234c9678cbd",
+  "runner-step/compare-v5-v6.json": "48cfe560ff0c11bab8b26e9cefaff5a5cb1b43c4305b3bbe3859636bfd5c2915"
+ }
+}
