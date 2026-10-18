@@ -28,6 +28,11 @@ constexpr float Pi=3.14159265358979323846f;
 constexpr uint64_t PolicyWarmupDecisions=30;
 struct RecordedKeys { uint64_t time=0; NpcKeys::KeyState keys; };
 struct MotionSample { uint64_t time=0; Vec3 position; bool commanded=false; };
+struct CriticState {
+  double pathCm=0;
+  std::array<float,3> firstDirection={};
+  bool blocked=false,inAir=false,valid=false;
+};
 struct Episode {
   Npc* npc=nullptr;
   Vec3 goal,previousPosition,velocity;
@@ -44,6 +49,7 @@ struct Episode {
   double minHeroDistanceCm=std::numeric_limits<double>::max(),maxHeroDistanceCm=0;
   bool rewardPathValid=true;
   uint64_t invalidRewardPaths=0;
+  CriticState critic;
   NavPolicy::Result selected;
   std::array<size_t,6> selectedIndices={};
   std::array<double,6> selectedLogProb={};
@@ -188,15 +194,31 @@ void measureBlocked(Episode& ep,uint64_t elapsed) {
   else if(!stalled)closeBlocked(ep,elapsed);
 }
 double rewardPath(Episode& ep,World& world) {
-  const auto route=NavBench::navigationMesh(world).findPath(meters(NpcKeys::physicalPosition(*ep.npc)),meters(ep.goal));
+  const auto position=NpcKeys::physicalPosition(*ep.npc);
+  const auto route=NavBench::navigationMesh(world).findPath(meters(position),meters(ep.goal));
   ep.rewardPathValid=route.complete;
+  // Training-only state shares the reward query to the final goal. The actor's
+  // observation and the teacher's local carrot route remain unchanged.
+  ep.critic={ep.lastPathCm,{},ep.blocked,ep.npc->isInAir(),route.complete};
   if(!route.complete) {++ep.invalidRewardPaths;return ep.lastPathCm;}
-  return double(route.length)*100.;
+  ep.critic.pathCm=double(route.length)*100.;
+  if(!route.corners.empty()) {
+    // The first corner is the projected start; the next is the first target.
+    const size_t first=route.corners.size()>1?1:0;
+    ep.critic.firstDirection=direction(cm(route.corners[first])-position,ep.npc->rotationRad());
+  }
+  return ep.critic.pathCm;
+}
+void criticState(std::ostream& out,const CriticState& state) {
+  out<<"{\"path_cm\":"<<state.pathCm<<",\"first_direction\":["
+     <<state.firstDirection[0]<<','<<state.firstDirection[1]<<','<<state.firstDirection[2]
+     <<"],\"blocked\":"<<state.blocked<<",\"in_air\":"<<state.inAir<<",\"valid\":"<<state.valid<<'}';
 }
 void reward(Episode& ep,World& world,bool terminated=false,bool truncated=false) {
   if(!ep.population || !ep.pending)return;
   const auto start=Clock::now();
   const bool beforeValid=ep.rewardPathValid;
+  const auto beforeCritic=ep.critic;
   const double after=rewardPath(ep,world),progress=ep.lastPathCm-after;
   ep.progressCm+=progress;
   const auto now=world.tickCount();
@@ -213,7 +235,9 @@ void reward(Episode& ep,World& world,bool terminated=false,bool truncated=false)
     out<<"],\"log_probs\":[";double joint=0;
     for(size_t i=0;i<6;++i) {if(i)out<<',';out<<ep.selectedLogProb[i];joint+=ep.selectedLogProb[i];}
     out<<"],\"log_prob\":"<<joint<<",\"path_before_cm\":"<<ep.lastPathCm<<",\"path_after_cm\":"<<after
-       <<",\"path_valid\":"<<(beforeValid && ep.rewardPathValid)<<",\"terminated\":"<<terminated<<",\"truncated\":"<<truncated
+       <<",\"path_valid\":"<<(beforeValid && ep.rewardPathValid)<<",\"critic_before\":";
+    criticState(out,beforeCritic);out<<",\"critic_after\":";criticState(out,ep.critic);
+    out<<",\"terminated\":"<<terminated<<",\"truncated\":"<<truncated
        <<",\"rewards\":{\"progress_cm\":"<<progress<<",\"arrived\":"<<int(ep.success)
        <<",\"blocked\":"<<int(ep.blocked)<<",\"fall_damage\":"<<(ep.fell?std::max(0,ep.health-health):0)
        <<",\"death\":"<<int(ep.npc->isDead())<<",\"jump\":"<<int(ep.previous.jump)
@@ -343,6 +367,47 @@ void observe(Episode& ep,World& w) {
   ep.memory.update(ep.eye.samples(),pose);
   if(ep.population)ep.phaseUs[1]+=micros(memoryStart);
 }
+NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance* guidance=nullptr) {
+  auto& n=*ep.npc;
+  const auto position=ep.teacherVersion==2 ? NpcKeys::physicalPosition(n) : n.position();
+  const auto viewStart=Clock::now();
+  ep.memory.view(ep.view);
+  if(ep.population)ep.phaseUs[1]+=micros(viewStart);
+  NavDemoWriter::Snapshot sample;
+  sample.gameMs=w.tickCount();sample.position=array(NpcKeys::physicalPosition(n));sample.bodyYawDeg=n.rotation();
+  sample.body.velocityCmS=local(ep.velocity,n.rotationRad());
+  sample.body.flags={uint8_t(n.isInAir()),uint8_t(n.isFalling()),uint8_t(n.isSlide()),
+                     uint8_t(n.navigationClimbing()),uint8_t(n.isSwim())};
+  const auto normal=n.navigationGroundNormal();sample.body.groundNormal=local(normal,n.rotationRad());
+  sample.body.groundSlopeDeg=std::acos(std::clamp(normal.y,-1.f,1.f))*180.f/Pi;
+  const auto head=n.navigationEyePose().forward;
+  sample.body.headYawDeg=std::remainder(std::atan2(head.z,head.x)*180.f/Pi-n.rotation(),360.f);
+  sample.body.headPitchDeg=std::atan2(head.y,std::hypot(head.x,head.z))*180.f/Pi;
+  if(ep.teacherVersion==2) {
+    const auto& roads=guidance?*guidance:ep.guidance;
+    sample.roads.carrotDirection=direction(roads.carrot-position,n.rotationRad());
+    sample.roads.carrotDistanceCm=(roads.carrot-position).length();
+    sample.roads.remainingKnownCm=float(roads.remainingKnownCm);
+    sample.roads.beyondKnown=roads.beyondKnown;
+  } else {
+    Vec3 next;const auto roads=KnownRoadsBench::readPath(w,n,ep.goal,next);
+    sample.roads.nextDirection=direction(next-n.position(),n.rotationRad());sample.roads.nextDistanceCm=(next-n.position()).length();
+    sample.roads.remainingVisualCm=float(roads.remainingCm);sample.roads.goalInKnown=roads.goalInKnown;
+  }
+  sample.roads.goalDirection=direction(ep.goal-position,n.rotationRad());sample.roads.goalDistanceCm=(ep.goal-position).length();
+  sample.previous=ep.previous;sample.eye=&ep.eye.samples();sample.memory=&ep.view;
+  return sample;
+}
+void bootstrap(Episode& ep,World& w) {
+  // Evaluate a continuing task at the real truncated endpoint, without another
+  // action or GRU step. Road progress is refreshed on a private guidance copy.
+  observe(ep,w);
+  auto guidance=ep.guidance;
+  KnownRoadsBench::readGuidance(w,*ep.npc,NpcKeys::physicalPosition(*ep.npc),ep.goal,guidance);
+  const auto sample=snapshot(ep,w,&guidance);
+  NavDemoWriter writer((std::filesystem::path(ep.output)/"bootstrap.bin.gz").string(),2);
+  writer.append(sample);writer.finish();
+}
 NpcKeys::KeyState select(Episode& ep,NavPolicy::Result result) {
   ep.selected=std::move(result);
   for(size_t i=0;i<6;++i) {
@@ -421,30 +486,7 @@ void decide(Episode& ep,World& w) {
     d=NavKeyTeacher::decide(body,ep.path,meters(ep.goal));
   }
   if(ep.population)ep.phaseUs[2]+=micros(teacherStart);
-  const auto viewStart=Clock::now();
-  ep.memory.view(ep.view);
-  if(ep.population)ep.phaseUs[1]+=micros(viewStart);
-  NavDemoWriter::Snapshot sample;
-  sample.gameMs=w.tickCount();sample.position=array(NpcKeys::physicalPosition(n));sample.bodyYawDeg=n.rotation();
-  sample.body.velocityCmS=local(ep.velocity,n.rotationRad());
-  sample.body.flags={uint8_t(body.inAir),uint8_t(body.falling),uint8_t(body.sliding),uint8_t(body.climbing),uint8_t(body.swimming)};
-  const auto normal=n.navigationGroundNormal();sample.body.groundNormal=local(normal,n.rotationRad());
-  sample.body.groundSlopeDeg=std::acos(std::clamp(normal.y,-1.f,1.f))*180.f/Pi;
-  const auto head=n.navigationEyePose().forward;
-  sample.body.headYawDeg=std::remainder(std::atan2(head.z,head.x)*180.f/Pi-n.rotation(),360.f);
-  sample.body.headPitchDeg=std::atan2(head.y,std::hypot(head.x,head.z))*180.f/Pi;
-  if(ep.teacherVersion==2) {
-    sample.roads.carrotDirection=direction(ep.guidance.carrot-position,n.rotationRad());
-    sample.roads.carrotDistanceCm=(ep.guidance.carrot-position).length();
-    sample.roads.remainingKnownCm=float(ep.guidance.remainingKnownCm);
-    sample.roads.beyondKnown=ep.guidance.beyondKnown;
-  } else {
-    Vec3 next;const auto roads=KnownRoadsBench::readPath(w,n,ep.goal,next);
-    sample.roads.nextDirection=direction(next-n.position(),n.rotationRad());sample.roads.nextDistanceCm=(next-n.position()).length();
-    sample.roads.remainingVisualCm=float(roads.remainingCm);sample.roads.goalInKnown=roads.goalInKnown;
-  }
-  sample.roads.goalDirection=direction(ep.goal-position,n.rotationRad());sample.roads.goalDistanceCm=(ep.goal-position).length();
-  sample.previous=ep.previous;sample.keys=d.keys;sample.eye=&ep.eye.samples();sample.memory=&ep.view;
+  auto sample=snapshot(ep,w);sample.keys=d.keys;
   auto hint=d.hint;
   if(ep.teacherVersion==1 && ep.path.reason=="waynet_fallback") {
     const auto meshPath=NavBench::navigationMesh(w).findPath(body.position,meters(ep.goal));
@@ -646,7 +688,10 @@ void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
   if((!ep.replay && arrived) || elapsed>=ep.limit || n.isDown() || truncate) {
     ep.success=arrived;
     if(!ep.success && ep.failure.empty())ep.failure=n.isDown()?"actor_down":truncate?"collection_limit":"path_timeout";
-    if(ep.population) {measureBlocked(ep,elapsed);reward(ep,w,arrived || n.isDown(),!arrived && !n.isDown());}
+    if(ep.population) {
+      measureBlocked(ep,elapsed);reward(ep,w,arrived || n.isDown(),!arrived && !n.isDown());
+      if(ep.record && !arrived && !n.isDown())bootstrap(ep,w);
+    }
     finish(ep,w);return;
   }
   observe(ep,w);

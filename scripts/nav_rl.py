@@ -491,8 +491,8 @@ def population_worker(args, worker_index, barrier=None):
     try:
         runner = new_runner(worker, name)
         pairs = load_pairs(args.pairs)
-        # Rotate the route order between workers, preserving all pair provenance.
-        offset = worker_index % len(pairs)
+        # Separate initial slot populations between workers, preserving provenance.
+        offset = (worker_index * args.population) % len(pairs)
         selected = pairs[offset:] + pairs[:offset]
         pair_file = runner_pairs(args.output / "runner-pairs" / f"{name}.txt", selected)
         directory = args.output / "population" / name
@@ -938,8 +938,6 @@ def main():
         parser.error("--reference is required")
     if args.command == "population" and (args.episodes < args.population or (args.hero == "near" and args.population != 1)):
         parser.error("population requires episodes >= N; near hero mode requires N=1")
-    if args.command == "population" and args.parallel > 1 and args.record:
-        parser.error("parallel population measurements require recording disabled")
     try:
         {"generate": generate, "qualify": qualify, "drive": drive, "population": population,
          "check": check, "summarize": summarize, "history": history, "compare": compare, "equivalence": equivalence, "death-smoke": death_smoke}[args.command](args)

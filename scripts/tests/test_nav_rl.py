@@ -164,6 +164,46 @@ def test_population_throughput_uses_concurrent_span_not_sum(tmp_path, monkeypatc
     assert result["decisions_per_second"] == pytest.approx(406 / 13)
 
 
+def test_parallel_population_recording_keeps_worker_outputs_and_pair_provenance(tmp_path, monkeypatch):
+    pairs = [dict(pair, index=index, split="train", split_index=index)
+             for index, pair in enumerate(candidates())]
+    monkeypatch.setattr(rl, "checked_paths", lambda *a, **k: None)
+    monkeypatch.setattr(rl, "load_pairs", lambda p: pairs)
+    monkeypatch.setattr(rl, "new_runner", lambda *a: SimpleNamespace(close=lambda: None))
+    def scenario(args, runner, name, commands, directory):
+        assert commands[-2].split()[-3] == "1"  # RECORD flag, followed by hero/run-ms.
+        rl.write_json(directory / "population.json", dict(decisions=7))
+        rl.write_json(directory / "episodes/0/episode.json", dict(pair_index=0))
+    monkeypatch.setattr(rl, "scenario", scenario)
+    args = SimpleNamespace(parallel=4, pairs=None, output=tmp_path, population=20,
+                           record=True, action_mode="sample", seed=3, npc="NPC",
+                           roads=Path("/roads.json"), weights=Path("/policy.navbc"),
+                           limit_ms=40000, episodes=20, hero="far", run_ms=40000,
+                           watchdog_seconds=30)
+    rl.population(args)
+    result = rl.read_json(tmp_path / "throughput-n20-r4.json")
+    directories = [Path(worker["directory"]) for worker in result["workers"]]
+    assert len(set(directories)) == 4
+    assert result["decisions"] == 28
+    for index, directory in enumerate(directories):
+        pair_index = (index * args.population) % len(pairs)
+        selected = rl.read_json(directory / "episodes/0/episode.json")
+        assert selected["region"] == pairs[pair_index]["region"]
+        assert selected["index"] == selected["split_index"] == pair_index
+        pair_file = tmp_path / "runner-pairs" / f"n20-r4-w{index}.txt"
+        assert pair_file.read_text().splitlines()[0] == f"{pairs[pair_index]['start']} {pairs[pair_index]['goal']}"
+
+
+def test_population_cli_allows_parallel_recording(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(rl, "population", calls.append)
+    monkeypatch.setattr(rl.sys, "argv", ["nav_rl.py", "population", "--output", str(tmp_path),
+                                      "--pairs", str(tmp_path / "pairs.jsonl"),
+                                      "--parallel", "4", "--record"])
+    rl.main()
+    assert len(calls) == 1 and calls[0].parallel == 4 and calls[0].record
+
+
 def test_drive_requires_previously_frozen_teacher_set():
     with pytest.raises(ValueError, match="frozen"):
         # Exercise the guard before any runner or weights can be loaded.
