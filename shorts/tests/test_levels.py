@@ -698,7 +698,7 @@ def test_voiced_master_checks_decoded_audio_before_publication(
     graph = commands[0][commands[0].index("-filter_complex") + 1]
     assert "volume=14.000000000dB" in graph
     assert graph.count("alimiter=") == 1
-    assert "alimiter=limit=0.79:level=false:latency=true" in graph
+    assert f"alimiter=limit={levels.PEAK_LIMIT}:level=false:latency=true" in graph
     assert "aeval='val(0)|val(1)|0.01':c=2.1" in graph
     assert "amultiply[voice_mastered]" in graph
     assert "loudnorm" not in graph
@@ -1138,6 +1138,8 @@ def test_mastering_rejects_a_true_peak_hidden_by_the_rounded_summary(
 ):
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg is required for synthetic mastering")
+    # built to overshoot -1 dBTP through the earlier, higher limiter; the gate must still catch it
+    monkeypatch.setattr(levels, "PEAK_LIMIT", 0.79)
     voice, joined, out = (tmp_path / name for name in ("voice.wav", "joined.mkv", "short-ru.mp4"))
     peaky_voice = (
         "aevalsrc='(0.03+if(lt(mod(t,0.1),0.002),"

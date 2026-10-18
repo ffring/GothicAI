@@ -28,7 +28,8 @@ MASTER_CORRECTION_TOLERANCE_LU = 0.1
 MAX_MASTER_CORRECTIONS = 2
 MAX_BALANCE_CORRECTIONS = 2
 CEILING_HEADROOM_LU = 0.5
-PEAK_LIMIT = 0.79  # Leave AAC/intersample headroom below the final true-peak ceiling.
+# -3 dBFS: AAC and intersample headroom under the -1 dBTP ceiling (sharp spell attacks overshot it at 0.79)
+PEAK_LIMIT = 0.71
 # A sub-threshold pilot follows the limiter's shared gain without influencing it.
 LIMITER_PILOT = 0.01
 MUSIC_BELOW_VOICE_LU = 14.0
