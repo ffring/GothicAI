@@ -435,6 +435,14 @@ async def _save(link: GameLink, slot: int, attempts: int = 15) -> Saved | None:
     return None
 
 
+async def _save_or_fail(link: GameLink, slot: int) -> Saved:
+    """Save with retries, failing the scenario if the game never saves."""
+    saved = await _save(link, slot)
+    if saved is None:
+        raise RuntimeError(f"Game did not save to slot {slot}")
+    return saved
+
+
 def _passes_text(facts: list[Fact]) -> str:
     """Rumor facts in short, for a check's detail."""
     passes = [f"from {f.get('from')}, how {f.get('how')}, hops {f.get('hops')}" for f in facts]
