@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 42
+PROTOCOL_VERSION = 43
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
@@ -26,6 +26,7 @@ ERRAND_PROTOCOL = 39  # inventory items' `mission`; story_effect give to another
 BROKEN_TRACE_PROTOCOL = 40  # visible debris, with the time of breakage kept in the engine and save
 BODY_CONTROL_PROTOCOL = 41  # shared body authority and combat API (body_acquire, body_action, ...)
 CRIME_PROTOCOL = 42  # raw hero deeds, ownership, engine perception recipients and pickpocket evidence
+FIGHT_REACTION_PROTOCOL = 43  # Look.combat_target/fighting, npc_threat, immediate fight/flee with own SVM
 
 # --- game -> server -----------------------------------------------------------
 
@@ -510,6 +511,8 @@ class Look(_GameMessage):
     from_hero: Side | None = None
     hero_cm: float | None = None
     noticed: bool = False  # v18: close by, out of the viewer's field of view: it notices it all the same
+    combat_target: str | None = None  # v43: native combat target, distinct from the hero's focus
+    fighting: bool = False  # v43: native attack state, including approach before the first blow
 
 
 class HeroLook(Look):
@@ -582,6 +585,8 @@ class NpcEvent(_GameMessage):
     Threats from others (`other` is their script symbol, `other_name` the shown name): a monster it
     senses (`monster_near`), a monster attacking it or someone near (`monster_attack`, `detail`: "you"
     or the victim), an npc attacking it (`npc_attack`), someone attacking the hero (`hero_attacked`).
+    v43: `npc_threat` — a hostile armed npc approaching it before contact, including a listening npc
+    whose body the server must release before reacting; `other` identifies that attacker.
     The end of it: a monster killed (`monster_killed`; `other` is the killer, the npc itself too, `victim`
     the monster's symbol, `detail` its name).
     Noise (v36): `at` is the impact point in cm, `place` its nearest waypoint (named by the server's
@@ -1547,12 +1552,14 @@ DebugCommand = Literal[
     "player_equip",
     "waypoints",
     "npc_goto",
+    "npc_los",
     "player_hp",
     "player_drop",
     "chest_take",
     "player_take",
     "npc_drop",  # v42: an npc drops its own item, retaining the native owner
     "player_hit",  # v42: the hero damages an npc through the native damage path
+    "npc_hit",  # v43: confirmed npc melee contact, with native damage and attacker perceptions
     "spawn_item",  # v42: an unowned world item, without going through an npc inventory
     "own_npc",
     "triggers",
@@ -1589,7 +1596,11 @@ class DebugCmd(_Command):
     director's (`own_npc`, v33): a script symbol of ours `npc` (DIR_...) made like the script's npc `like`,
     put at a `waypoint` or `distance` cm (default 300) in front of the player; the save keeps both (`value`:
     {npc, index: its symbol, name}). v42: `npc_drop` (`npc`, `item`, `count`) uses the npc's native drop
-    path, retaining ownership; `player_hit` (`npc`) uses the hero's native damage path.
+    path, retaining ownership; `player_hit` (`npc`) uses the hero's native damage path. v43: `npc_hit`
+    (`npc`, `by`) confirms one melee contact between distinct living npcs within 500 cm, bypassing only
+    parry/backstep. It requires a drawn melee weapon and a mortal victim vulnerable to its damage;
+    armour, damage calculation and perceptions stay native. `value` contains `attacker`, `victim`,
+    `game_ms`, `hp_before`, `hp_after`; no HP loss is a failed command.
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;

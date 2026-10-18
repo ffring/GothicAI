@@ -62,6 +62,7 @@ EVENT_OPTIONS = {
     # threats from others: the body fights or flees with the game's own combat (npc_act fight / flee)
     "monster_near": {"call_help": "shout for help", "flee": "run away", "fight": "fight it"},
     "npc_attack": {"call_help": "shout for help", "flee": "run away", "fight": "fight back"},
+    "npc_threat": {"call_help": "shout for help", "flee": "run away", "fight": "ready your weapon and fight"},
     "fight_nearby": {"call_guards": "call the guards", "fight": "join the fight", "flee": "get away"},
 }
 

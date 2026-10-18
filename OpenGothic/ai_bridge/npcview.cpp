@@ -27,6 +27,7 @@ constexpr float    PushRadius   = 2000;  // cm from the player: npc's whose view
 constexpr size_t   PushLimit    = 12;
 constexpr size_t   SeenLimit    = 12;    // people and creatures in one view
 constexpr float    SightMax     = 3000;  // cm: never further, whatever the senses range says
+constexpr float    MonsterSight = 4000;  // cm: companions spot hostile creatures further than people
 constexpr float    FacingCos    = 0.7f;  // within ~45 degrees: it faces you
 constexpr float    NoticeRange  = 1500;  // cm: this close it notices someone out of its field of view too
 constexpr size_t   ItemLimit    = 6;     // things lying about in one view (v22)
@@ -124,6 +125,27 @@ std::string_view attitude(Attitude a) {
   return "neutral";
   }
 
+bool partyMember(World& world, const Npc& npc) {
+  auto* s = world.script().getVm().find_symbol_by_name("AIV_PARTYMEMBER");
+  if(s==nullptr || s->type()!=zenkit::DaedalusDataType::INT)
+    return false;
+  const int32_t aiv = s->get_int(0);
+  return aiv>=0 && uint32_t(aiv)<zenkit::INpc::aivar_count && npc.handlePtr()->aivar[size_t(aiv)]!=0;
+  }
+
+bool distantMonster(World& world, const Npc& self, const Npc& other) {
+  const auto* pl = world.player();
+  return !other.isDown() && other.isMonster() && partyMember(world,self) &&
+         (world.script().personAttitude(other,self)==ATT_HOSTILE ||
+          (pl!=nullptr && world.script().personAttitude(other,*pl)==ATT_HOSTILE));
+  }
+
+bool monsterInSight(const Npc& self, const Npc& other) {
+  const float extra = std::max(0.f,MonsterSight-float(self.handlePtr()->senses_range));
+  return self.canRayHitPoint(other.centerPosition(),false,extra) ||
+         self.canRayHitPoint(other.mapHeadBone(),false,extra);
+  }
+
 // where `other` is from the player, as he faces (v18): ahead, left, right or behind him. Left and right
 // are as the player sees them on the screen: the side is checked against the camera when there is one
 std::string_view fromHero(const Npc& pl, const Tempest::Vec3& at) {
@@ -183,6 +205,9 @@ void writeLook(Writer& w, World& world, Npc& self, Npc& other, float dist) {
     }
   if(other.isPlayer())
     return;
+  w.Key("fighting"); w.Bool(other.isAttack());
+  if(auto* target = other.target(); target!=nullptr && target!=&other)
+    str(w,"combat_target",npcId(world,*target));
   // v18: how it treats the viewer and the hero, and where it is from the hero
   auto& vm = world.script();
   str(w,"att",attitude(vm.personAttitude(other,self)));
@@ -312,11 +337,13 @@ void writeView(Writer& w, World& world, Npc& npc) {
   struct Seen { Npc* npc; float dist; bool noticed; };
   std::vector<Seen> seen;
   const float range = std::min(float(npc.handle().senses_range),SightMax);
-  world.detectNpc(npc.position(),range,[&](Npc& other) {
+  const bool companion = partyMember(world,npc);
+  world.detectNpc(npc.position(),companion ? std::max(range,MonsterSight) : range,[&](Npc& other) {
     if(&other==&npc || other.isPlayer())
       return;
     const float dist = std::sqrt(npc.qDistTo(other));
-    if(npc.canSeeNpc(other,false))
+    const bool extended = companion && dist<=MonsterSight && distantMonster(world,npc,other);
+    if((dist<=range && npc.canSeeNpc(other,false)) || (extended && monsterInSight(npc,other)))
       seen.push_back({&other,dist,false});
     else if(dist<=NoticeRange && npc.canSeeNpc(other,true))
       seen.push_back({&other,dist,true});

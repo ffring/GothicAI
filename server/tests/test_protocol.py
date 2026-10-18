@@ -6,6 +6,7 @@ from gothic_ai.protocol import (
     BROKEN_TRACE_PROTOCOL,
     CRIME_PROTOCOL,
     ERRAND_PROTOCOL,
+    FIGHT_REACTION_PROTOCOL,
     NOISE_PROTOCOL,
     PACE_PROTOCOL,
     PROTOCOL_VERSION,
@@ -101,6 +102,53 @@ def test_hero_deed_retains_ownership_ids_and_engine_witnesses():
     assert msg.position.model_dump() == {"x": 1, "y": 2, "z": 3}
     assert msg.witnesses == ["BAU_951_HILDA"]
     assert (msg.room_owner, msg.room_guild, msg.waypoint) == ("BAU_950_LOBART", 7, "NW_FARM1_HOUSE")
+
+
+def test_v43_native_combat_target_and_armed_npc_threat():
+    assert PROTOCOL_VERSION >= FIGHT_REACTION_PROTOCOL == 43
+    views = parse_game_message(
+        _json(
+            {
+                "type": "npc_views",
+                "t": 1000,
+                "views": [
+                    {
+                        "npc": "CAVALORN",
+                        "name": "Кавалорн",
+                        "sees": [
+                            {
+                                "id": "WOLF",
+                                "name": "Волк",
+                                "kind": "monster",
+                                "distance": 2300,
+                                "combat_target": "PLAYER",
+                                "fighting": True,
+                            },
+                            {"id": "BRAGO", "name": "Браго", "distance": 300},
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    assert isinstance(views, NpcViews)
+    wolf, legacy = views.views[0].sees
+    assert (wolf.combat_target, wolf.fighting) == ("PLAYER", True)
+    assert (legacy.combat_target, legacy.fighting) == (None, False)
+    threat = parse_game_message(
+        _json(
+            {
+                "type": "npc_event",
+                "npc": "BRAGO",
+                "kind": "npc_threat",
+                "other": "CAVALORN",
+                "distance": 1100,
+                "detail": "you",
+            }
+        )
+    )
+    assert isinstance(threat, NpcEvent)
+    assert (threat.kind, threat.other) == ("npc_threat", "CAVALORN")
 
 
 def test_pickpocket_deed_keeps_before_and_after_evidence():

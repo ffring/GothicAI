@@ -72,6 +72,7 @@ class NpcObserver final {
       };
 
     void emitRoster(World& world);
+    void armedApproach(World& world, Npc& self, std::string_view symbol);
     // true when the player just came close: the caller emits player_near after the roster
     bool trackProximity(World& world, Npc& npc, std::string_view symbol, float dist);
     void checkRunning(World& world, uint64_t now);
@@ -87,6 +88,7 @@ class NpcObserver final {
     uint64_t                              nextRoster = 0;
     std::unordered_map<std::string,bool>  close;      // npc -> the player is within reach
     std::unordered_map<std::string,uint64_t> lastEvent;  // "npc/kind" -> time
+    std::unordered_map<const Npc*,Tempest::Vec3> previousPositions;
     std::vector<Running>                  running;
 
     struct Held final {
