@@ -23,19 +23,58 @@ def test_synthetic_records_use_requested_road_schema(version):
     np.testing.assert_array_equal(roads["beyond_known" if version == 2 else "goal_in_known"], [0, 1])
 
 
-def test_synthetic_weight_header_declares_v2_input_composition(tmp_path):
+@pytest.mark.parametrize("version", [1, 2])
+def test_synthetic_weight_header_declares_input_composition(tmp_path, version):
     weights = tmp_path / "fixture.navbc"
-    contract.synthetic_weights(weights)
+    contract.synthetic_weights(weights, version)
     with weights.open("rb") as stream:
         header = json.loads(stream.readline())
     preprocessing = header["preprocessing"]
-    assert preprocessing["navdemo_version"] == 2
-    assert preprocessing["roads_schema"] == "carrot_v2"
-    assert preprocessing["roads_fields"] == ["carrot_direction", "carrot_distance_cm", "goal_direction",
-                                              "goal_distance_cm", "remaining_known_cm", "beyond_known"]
+    assert preprocessing["navdemo_version"] == version
+    assert preprocessing["roads_schema"] == ("carrot_v2" if version == 2 else "next_v1")
+    assert preprocessing["roads_fields"] == contract.ROAD_FIELDS[version]
     assert preprocessing["input_fields"] == ["body", "roads", "eye", "memory_near", "memory_far"]
     assert preprocessing["vector_order"] == ["eye", "roads", "body"]
     assert header["architecture"]["inputs"]["vector"] == [2166]
+    assert contract.weight_input_version(header, 2166) == version
+    # Fixture generation must not alter the training metadata globally.
+    assert contract.data.PREPROCESSING["navdemo_version"] == 2
+    assert contract.data.PREPROCESSING["roads_schema"] == "carrot_v2"
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_fixture_features_preserve_each_versions_road_values(version):
+    layout, samples = contract.synthetic_records(1, version)
+    record = next(samples)
+    roads = record["roads"]
+    target, distance, goal, goal_distance, remainder, flag = contract.ROAD_FIELDS[version]
+    roads[target] = [.25, -.5, .75]
+    roads[distance] = 1500
+    roads[goal] = [-.1, .2, .3]
+    roads[goal_distance] = 60000
+    roads[remainder] = 1750
+    roads[flag] = 1
+    original = record.copy()
+    features = contract.fixture_features(record, layout, version)
+    offset = contract.demos.RAY_COUNT * 9
+    np.testing.assert_array_equal(features["vector"][0, offset:offset + 10],
+                                  np.array([.25, -.5, .75, 1.5, -.1, .2, .3, 50, 1.75, 1], dtype=np.float32))
+    np.testing.assert_array_equal(record, original)
+    if version == 1:
+        with pytest.raises(ValueError, match="requires NAVDEMO v2"):
+            contract.data.encode_features(contract.demos.learner_input(record), layout)
+    with pytest.raises(ValueError, match="record dtype"):
+        contract.fixture_features(record, layout, 3 - version)
+
+
+def test_supplied_weights_require_matching_vector_size_and_version_schema():
+    header = {"preprocessing": contract.fixture_preprocessing(2)}
+    with pytest.raises(ValueError, match="vector_size=2166"):
+        contract.weight_input_version(header, 2174)
+    with pytest.raises(ValueError, match="roads_schema"):
+        contract.weight_input_version({"preprocessing": {**header["preprocessing"], "navdemo_version": 1}}, 2166)
+    legacy_header = {"preprocessing": {"vector_order": ["eye", "roads", "body"]}}
+    assert contract.weight_input_version(legacy_header, 2166) == 1
 
 
 def test_recorded_fixture_filters_navdemo_version(tmp_path):

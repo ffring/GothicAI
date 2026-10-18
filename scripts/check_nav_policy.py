@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Create the asset-free C++/NumPy navigation-policy contract fixture.
 
-The default is deterministic small weights and 1000 synthetic NAVDEMO records.
+The default is deterministic small weights and 1000 synthetic NAVDEMO v2 records.
+Use --navdemo-version 1 for the synthetic v1 preprocessing contract. Supplied
+weights select their input version from their own header.
 For the recorded-step acceptance check, pass the trained weights and an episode
 with at least 1000 decisions (or a recording directory containing such an episode):
 
@@ -32,8 +34,59 @@ from nav_bc_numpy import NumpyPolicy
 import nav_demos as demos
 
 
-def synthetic_weights(path: Path) -> None:
+ROAD_FIELDS = {
+    1: ["next_direction", "next_distance_cm", "goal_direction", "goal_distance_cm", "remaining_visual_cm", "goal_in_known"],
+    2: ["carrot_direction", "carrot_distance_cm", "goal_direction", "goal_distance_cm", "remaining_known_cm", "beyond_known"],
+}
+
+
+def fixture_preprocessing(navdemo_version: int) -> dict:
+    """Describe the checker input without changing the v2-only training path."""
+    if navdemo_version not in ROAD_FIELDS:
+        raise ValueError(f"unsupported NAVDEMO version: {navdemo_version}")
+    preprocessing = {**data.PREPROCESSING, "navdemo_version": navdemo_version,
+                     "roads_schema": "carrot_v2" if navdemo_version == 2 else "next_v1",
+                     "roads_fields": ROAD_FIELDS[navdemo_version].copy()}
+    if navdemo_version == 1:
+        preprocessing["roads"] = (
+            "next_direction[3], next_distance_cm/1000, goal_direction[3], goal_distance_cm/1000, "
+            "remaining_visual_cm/1000, goal_in_known; distances clipped [0,50]")
+        preprocessing["road_baseline"] = (
+            "always forward and walk, turn=-sign(atan2(next_direction.x,next_direction.z)) outside 5deg")
+    return preprocessing
+
+
+def weight_input_version(header: dict, vector_size: int) -> int:
+    """Keep fixture inputs consistent with the supplied policy's declared shape."""
+    preprocessing = header.get("preprocessing", {})
+    if vector_size != data.VECTOR_SIZE or preprocessing.get("vector_order") != ["eye", "roads", "body"]:
+        raise ValueError("weights must declare sensor-only vector_order: eye, roads, body and vector_size=2166")
+    version = preprocessing.get("navdemo_version", 1)
+    if type(version) is not int or version not in ROAD_FIELDS:
+        raise ValueError(f"unsupported weight NAVDEMO version: {version}")
+    expected = fixture_preprocessing(version)
+    for key in ("roads_schema", "roads_fields"):
+        if (version == 2 or key in preprocessing) and preprocessing.get(key) != expected[key]:
+            raise ValueError(f"weight {key} differs from NAVDEMO v{version} preprocessing")
+    return version
+
+
+def fixture_features(record: np.ndarray, layout: np.ndarray, navdemo_version: int) -> dict[str, np.ndarray]:
+    """Encode v1 only here; its ten road slots share the v2 numeric transform."""
+    if navdemo_version not in demos.RECORD_DTYPES or record.dtype != demos.RECORD_DTYPES[navdemo_version]:
+        raise ValueError("record dtype differs from the weight NAVDEMO version")
+    inputs = demos.learner_input(record)
+    if navdemo_version == 1:
+        # Packed road layouts and normalizations match: next/carrot direction,
+        # distance, goal, remainder, then the version's own unchanged flag bit.
+        # The checker only reads this view; the source record stays unchanged.
+        inputs = {**inputs, "roads": inputs["roads"].view(demos.ROADS_V2_DTYPE)}
+    return data.encode_features(inputs, layout)
+
+
+def synthetic_weights(path: Path, navdemo_version: int = 2) -> None:
     """A small valid export built without importing the Torch training module."""
+    preprocessing = fixture_preprocessing(navdemo_version)
     hidden = 8
     shapes = []
     for prefix in ("near_encoder", "far_encoder"):
@@ -72,7 +125,7 @@ def synthetic_weights(path: Path) -> None:
     }
     header = {"format": "gothic-nav-bc", "version": 1, "byte_order": "little", "data_nbytes": offset,
               "offset_origin": "first byte after JSON header newline", "architecture": architecture,
-              "preprocessing": data.PREPROCESSING, "tensors": tensors}
+              "preprocessing": preprocessing, "tensors": tensors}
     with path.open("wb") as stream:
         stream.write(json.dumps(header, separators=(",", ":")).encode() + b"\n")
         for values in payload:
@@ -176,21 +229,20 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--weights", type=Path)
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--navdemo-version", type=int, choices=(1, 2),
+                        help="synthetic weight/record input version (default: 2); supplied weights use their header")
     parser.add_argument("--steps", type=int, default=1000)
     args = parser.parse_args()
     if not args.output.is_absolute() or args.steps < 1:
         parser.error("--output must be absolute and --steps must be positive")
+    if args.weights is not None and args.navdemo_version is not None:
+        parser.error("--navdemo-version is only for generated weights; --weights selects its version from its header")
     args.output.mkdir(parents=True, exist_ok=True)
     weights = args.weights or args.output / "fixture.navbc"
     if args.weights is None:
-        synthetic_weights(weights)
+        synthetic_weights(weights, args.navdemo_version or 2)
     policy = NumpyPolicy(weights)
-    if (policy.vector_size != data.VECTOR_SIZE or
-            policy.header.get("preprocessing", {}).get("vector_order") != data.PREPROCESSING["vector_order"]):
-        raise ValueError("weights must declare sensor-only vector_order: eye, roads, body")
-    navdemo_version = policy.header["preprocessing"].get("navdemo_version", 1)
-    if navdemo_version != data.PREPROCESSING.get("navdemo_version", 1):
-        raise ValueError("weight NAVDEMO version differs from feature preprocessing")
+    navdemo_version = weight_input_version(policy.header, policy.vector_size)
     if args.source:
         source, layout, records = recorded_steps(args.source, args.steps, navdemo_version)
         source_name = str(source)
@@ -208,7 +260,7 @@ def main() -> None:
     with gzip.open(destination, "wb", compresslevel=1) as stream:
         stream.write(json.dumps(header, separators=(",", ":")).encode() + b"\n")
         for record in records:
-            features = data.encode_features(demos.learner_input(record), layout)
+            features = fixture_features(record, layout, navdemo_version)
             logits, hidden = policy.step(features["near"][0], features["far"][0], features["vector"][0], hidden)
             stream.write(record.tobytes())
             for name in ("near", "far", "vector"):
