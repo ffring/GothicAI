@@ -192,7 +192,7 @@
 | [`crime.md`](crime.md) | преступления и репутация | сейчас + план, идёт: слои 1–3 и 5 сделаны |
 | [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода | сейчас + план с журналом |
 | [`manual-aim.md`](manual-aim.md) | ручное прицеливание | сейчас + план с журналом |
-| [`navigation.md`](navigation.md) | обучаемая навигация NPC; [популяционный стенд на CV и независимый набор 60 пар](../reports/navigation/2026-10-18-rl-env/README.md) | сейчас + план, идёт |
+| [`navigation.md`](navigation.md) | обучаемая навигация NPC; [популяционный стенд на CV и независимый набор 60 пар](../reports/navigation/2026-10-18-rl-env/README.md); [PPO-цикл и остановка на NaN нормали CV](../reports/navigation/2026-10-18-ppo/README.md) | сейчас + план, PPO заблокирован стендом |
 | [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | сейчас + план |
 | `npc-body-*.md` (`api`, `arena`, `bc`, `combat-contract`, `headless-runner`, `observations`, `trajectories`) | боевое тело по этапам | справочники |
 | [`npc-body-combat-gate.md`](npc-body-combat-gate.md), [`npc-body-stage8-stop-report.md`](npc-body-stage8-stop-report.md) | этап 8: журнал до допуска и остановка 14.10 | исторические: gate пройден 15.10, итог в плане |

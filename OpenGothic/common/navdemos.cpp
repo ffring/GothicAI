@@ -408,6 +408,37 @@ void bootstrap(Episode& ep,World& w) {
   NavDemoWriter writer((std::filesystem::path(ep.output)/"bootstrap.bin.gz").string(),2);
   writer.append(sample);writer.finish();
 }
+NavPolicy::Features policyFeatures(Episode& ep,const NavDemoWriter::Snapshot& sample) {
+  try {
+    return ep.policy->encode(sample);
+  }
+  catch(const std::exception& error) {
+    // Preserve the exact failed observation in the exception: encode precedes
+    // recording, so this state cannot be recovered from the last good record.
+    std::ostringstream out;out<<std::setprecision(9)<<std::boolalpha;
+    out<<error.what()<<"; navdemos slot="<<ep.slot<<" episode="<<ep.sequence
+       <<" from="<<std::quoted(ep.from)<<" to="<<std::quoted(ep.to)
+       <<" time_ms="<<sample.gameMs<<" elapsed_ms="<<sample.gameMs-ep.began;
+    const auto values=[&](const char* name,const std::array<float,3>& v) {
+      out<<' '<<name<<"=["<<v[0]<<','<<v[1]<<','<<v[2]<<']';
+    };
+    values("position_cm",sample.position);
+    out<<" body_yaw_deg="<<sample.bodyYawDeg;
+    values("body_velocity_cm_s",sample.body.velocityCmS);
+    values("ground_normal",sample.body.groundNormal);
+    out<<" ground_slope_deg="<<sample.body.groundSlopeDeg
+       <<" head_yaw_deg="<<sample.body.headYawDeg<<" head_pitch_deg="<<sample.body.headPitchDeg;
+    values("roads_carrot_direction",sample.roads.carrotDirection);
+    values("roads_next_direction",sample.roads.nextDirection);
+    values("roads_goal_direction",sample.roads.goalDirection);
+    out<<" carrot_distance_cm="<<sample.roads.carrotDistanceCm
+       <<" next_distance_cm="<<sample.roads.nextDistanceCm<<" goal_distance_cm="<<sample.roads.goalDistanceCm
+       <<" remaining_known_cm="<<sample.roads.remainingKnownCm
+       <<" remaining_visual_cm="<<sample.roads.remainingVisualCm
+       <<" beyond_known="<<sample.roads.beyondKnown;
+    throw std::runtime_error(out.str());
+  }
+}
 NpcKeys::KeyState select(Episode& ep,NavPolicy::Result result) {
   ep.selected=std::move(result);
   for(size_t i=0;i<6;++i) {
@@ -499,7 +530,7 @@ void decide(Episode& ep,World& w) {
     // the teacher's label, while previous keeps the action that the student actually held.
     const bool measure=ep.decisions>=PolicyWarmupDecisions;
     const auto populationStart=std::chrono::steady_clock::now();
-    const auto features=ep.policy->encode(sample);
+    const auto features=policyFeatures(ep,sample);
     const auto encodeCost=micros(populationStart);
     if(measure)ep.encodeUs.push_back(encodeCost);
     if(ep.population)ep.phaseUs[3]+=encodeCost;
