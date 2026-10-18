@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 42
+PROTOCOL_VERSION = 43
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
@@ -26,6 +26,7 @@ ERRAND_PROTOCOL = 39  # inventory items' `mission`; story_effect give to another
 BROKEN_TRACE_PROTOCOL = 40  # visible debris, with the time of breakage kept in the engine and save
 BODY_CONTROL_PROTOCOL = 41  # shared body authority and combat API (body_acquire, body_action, ...)
 CRIME_PROTOCOL = 42  # raw hero deeds, ownership, engine perception recipients and pickpocket evidence
+FIGHT_REACTION_PROTOCOL = 43  # native combat targets, early npc_threat, immediate fight/flee with own SVM
 
 # --- game -> server -----------------------------------------------------------
 
@@ -510,8 +511,8 @@ class Look(_GameMessage):
     from_hero: Side | None = None
     hero_cm: float | None = None
     noticed: bool = False  # v18: close by, out of the viewer's field of view: it notices it all the same
-    combat_target: str | None = None  # native combat target, distinct from the hero's focus
-    fighting: bool = False  # native attack state, including approach before the first blow
+    combat_target: str | None = None  # v43: native combat target, distinct from the hero's focus
+    fighting: bool = False  # v43: native attack state, including approach before the first blow
 
 
 class HeroLook(Look):
@@ -584,6 +585,8 @@ class NpcEvent(_GameMessage):
     Threats from others (`other` is their script symbol, `other_name` the shown name): a monster it
     senses (`monster_near`), a monster attacking it or someone near (`monster_attack`, `detail`: "you"
     or the victim), an npc attacking it (`npc_attack`), someone attacking the hero (`hero_attacked`).
+    v43: `npc_threat` — a hostile armed npc approaching it before contact, including a listening npc
+    whose body the server must release before reacting; `other` identifies that attacker.
     The end of it: a monster killed (`monster_killed`; `other` is the killer, the npc itself too, `victim`
     the monster's symbol, `detail` its name).
     Noise (v36): `at` is the impact point in cm, `place` its nearest waypoint (named by the server's

@@ -458,6 +458,9 @@ class NpcPlanner:
     def on_held(self, msg: PerceptionHeld, now: float) -> None:
         """A threat the game holds from the npc's scripts until the model decides (or 0.6 s pass)."""
         rec = self.npcs.get(msg.npc.upper())
+        if rec is not None and rec.activity == "body":
+            self.applier.verdict(msg.hold, "server", npc=rec.id)
+            return  # a late held perception must not hand an owned body back to native scripts
         if rec is None or rec.tier is Tier.OFF:
             self.applier.verdict(msg.hold, "scripts")
             return
@@ -477,7 +480,9 @@ class NpcPlanner:
     def _settle_holds(self, rec: NpcRecord, upto: float, decision: Decision | None) -> None:
         """Held threats up to `upto`: kept from the scripts only if the body took them over, by this
         decision or before (an unsure answer while running for help: it goes on running)."""
-        if decision is not None:
+        if rec.activity == "body":
+            taken = True
+        elif decision is not None:
             taken = decision.choice in TAKES_BODY
         else:
             taken = rec.body is not None and self.clock() - rec.body[1] < BODY_MAX_S
@@ -485,7 +490,7 @@ class NpcPlanner:
         keep = []
         for hold, at in rec.holds:
             if at <= upto:
-                self.applier.verdict(hold, to)
+                self.applier.verdict(hold, to, npc=rec.id)
             else:
                 keep.append((hold, at))
         rec.holds = keep
@@ -969,6 +974,8 @@ class NpcPlanner:
         if rec.tier is Tier.OFF or rec.version != flight.version or rec.investigation is not None:
             self.stats.discarded += 1  # something happened meanwhile: a new pending request covers it
             self._settled(npc, flight, answer, False, "outdated")
+            if rec.activity == "body":
+                self._settle_holds(rec, flight.sent, None)
             self._shadow(npc, flight, outcome)
             if rec.pending is None:
                 self._schedule(rec, now)

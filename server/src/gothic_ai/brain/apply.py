@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -35,7 +36,7 @@ class Decision:
 class Applier(Protocol):
     def apply(self, decision: Decision) -> None: ...
 
-    def verdict(self, hold: str, to: str) -> None:
+    def verdict(self, hold: str, to: str, *, npc: str | None = None) -> None:
         """A held threat: `server` (the model took the body over) or `scripts` (they get it now)."""
         ...
 
@@ -45,7 +46,7 @@ class LogApplier:
         self.recent: deque[Decision] = deque(maxlen=keep)
         self.verdicts: deque[tuple[str, str]] = deque(maxlen=keep)
 
-    def verdict(self, hold: str, to: str) -> None:
+    def verdict(self, hold: str, to: str, *, npc: str | None = None) -> None:
         self.verdicts.append((hold, to))
         log.info("held threat %s -> %s", hold, to)
 
@@ -142,29 +143,44 @@ def call_help(decision: Decision) -> list[tuple[str, dict[str, Any]]]:
 class GameApplier(LogApplier):
     """Sends decisions to the game as soft actions."""
 
-    def __init__(self, link: GameLink, keep: int = 200) -> None:
+    def __init__(
+        self,
+        link: GameLink,
+        keep: int = 200,
+        *,
+        native_body: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> None:
         super().__init__(keep)
         self.link = link
+        self.native_body = native_body
         self._tasks: set[asyncio.Task[None]] = set()
+        self._combat_tasks: dict[str, asyncio.Task[None]] = {}
 
     def apply(self, decision: Decision) -> None:
         super().apply(decision)
         acts = actions_for(decision)
         if acts:
             task = asyncio.get_running_loop().create_task(self._send(decision.npc, acts))
+            if any(action in {"fight", "flee"} for action, _ in acts):
+                self._combat_tasks[decision.npc.upper()] = task
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
 
-    def verdict(self, hold: str, to: str) -> None:
-        super().verdict(hold, to)
+    def verdict(self, hold: str, to: str, *, npc: str | None = None) -> None:
+        super().verdict(hold, to, npc=npc)
         from ..protocol import HoldVerdictCmd
 
-        task = asyncio.get_running_loop().create_task(self._verdict(HoldVerdictCmd(hold=hold, to=to)))  # type: ignore[arg-type]
+        after = self._combat_tasks.get(npc.upper()) if npc is not None else None
+        task = asyncio.get_running_loop().create_task(
+            self._verdict(HoldVerdictCmd(hold=hold, to=to), after=after)  # type: ignore[arg-type]
+        )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _verdict(self, cmd: Any) -> None:
+    async def _verdict(self, cmd: Any, *, after: asyncio.Task[None] | None = None) -> None:
         try:
+            if after is not None:
+                await after  # acquisition resolves and the native action is sent or skipped first
             await self.link.send(cmd)
         except Exception as err:  # the game went away: it hands held threats to the scripts itself
             log.debug("hold_verdict failed: %s", err)
@@ -172,6 +188,9 @@ class GameApplier(LogApplier):
     async def _send(self, npc: str, acts: list[tuple[str, dict[str, Any]]]) -> None:
         try:
             for action, args in acts:
+                if action in {"fight", "flee"} and self.native_body is not None:
+                    if not await self.native_body(npc):
+                        continue  # a combat provider owns or has claimed this fight
                 if action == "investigate":
                     hello = self.link.hello
                     if hello is None or hello.protocol < NOISE_PROTOCOL:

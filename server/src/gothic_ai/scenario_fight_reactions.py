@@ -12,6 +12,7 @@ import logging
 import math
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -191,6 +192,8 @@ async def fight_reactions(
     planner: NpcPlanner | None,
     case: str,
     log_dir: str,
+    *,
+    native_body: Callable[[str], Awaitable[bool]] | None = None,
 ) -> dict[str, str]:
     """wolf: intercept before its bite; sight: bloodfly at 30 m; bandits: two armed responses;
     flee: a coward runs from Cavalorn, while the unarmed hero stands still.
@@ -210,7 +213,7 @@ async def fight_reactions(
                 {"escalate": 3.6},
                 npcs=BANDITS,
             ),
-            GameApplier(link),
+            GameApplier(link, native_body=native_body),
             config=PlannerConfig(ask_attitude=False),
         )
         link.listeners.append(planner.on_message)

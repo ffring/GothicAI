@@ -989,9 +989,9 @@ async def test_a_spoken_flight_waits_briefly_for_the_actual_npc_threat() -> None
             order.append("body")
             super().apply(decision)
 
-        def verdict(self, hold, to):
+        def verdict(self, hold, to, *, npc=None):
             order.append(to)
-            super().verdict(hold, to)
+            super().verdict(hold, to, npc=npc)
 
     planner, decider, _, clock = make(FakeDecider("fight", 0.95))
     planner.applier = applier = OrderedApplier()
@@ -1173,6 +1173,68 @@ async def test_body_provider_blocks_pending_plans_threats_and_conversational_tak
     await step(planner, clock, 1)
     assert len(decider.calls) == 1 and not applier.recent
     assert planner.stats.discarded == 1
+
+
+@pytest.mark.parametrize("claimed", [True, False], ids=["pilot-acquires", "pilot-refuses"])
+async def test_native_held_threat_combat_waits_for_the_pilot(claimed) -> None:
+    from types import SimpleNamespace
+
+    from gothic_ai.brain.apply import GameApplier
+    from gothic_ai.cli import _native_combat_available
+
+    class Link:
+        def __init__(self):
+            self.acts = []
+            self.events = []
+
+        def body_owned(self, npc):
+            return False
+
+        async def npc_act(self, npc, action, /, **args):
+            self.acts.append((npc, action, args))
+            self.events.append(action)
+            return "n1"
+
+        async def send(self, cmd):
+            self.events.append(cmd.to)
+
+    for choice in ("fight", "flee"):
+        link = Link()
+        pilot = SimpleNamespace(npc=None, _claimed_fights=set(), people={"BANDIT": entry("BANDIT", 5)})
+        applier = GameApplier(
+            link, native_body=lambda npc, link=link, pilot=pilot: _native_combat_available(link, pilot, npc)
+        )
+        planner, _, _, clock = make(FakeDecider(choice, 0.95))
+        planner.applier = applier
+        planner.on_roster([entry("BANDIT", 5)], clock.t)
+        planner.on_message(parse_game_message(json.dumps({
+            "type": "perception_held", "hold": "h1", "npc": "BANDIT",
+            "kind": "npc_attack", "other": "CAVALORN"
+        })))
+        planner.tick(clock.t)
+        # The pilot can start after the model's reaction was scheduled, before its native task runs.
+        pilot.npc = "BANDIT"
+        await settle()
+        assert not link.acts  # no lease or claimed flag yet: the acquisition window itself blocks combat
+        assert not link.events  # its server verdict must wait for this same handoff
+        if claimed:
+            if choice == "fight":
+                pilot._claimed_fights.add("BANDIT")
+            else:
+                pilot.people["BANDIT"] = entry("BANDIT", 5, activity="body")
+        pilot.npc = None
+        await asyncio.sleep(0.06)
+        await settle()
+        assert link.acts == ([] if claimed else [("BANDIT", choice, {"npc": "CAVALORN"})])
+        assert link.events == (["server"] if claimed else [choice, "server"])
+        if claimed and choice == "flee":
+            planner.on_roster([entry("BANDIT", 5, activity="body")], clock.t)
+            planner.on_message(parse_game_message(json.dumps({
+                "type": "perception_held", "hold": "h2", "npc": "BANDIT",
+                "kind": "npc_attack", "other": "CAVALORN"
+            })))
+            await settle()
+            assert not link.acts and link.events == ["server", "server"]
 
 
 async def test_a_threat_to_an_npc_the_planner_does_not_know_goes_to_the_scripts() -> None:

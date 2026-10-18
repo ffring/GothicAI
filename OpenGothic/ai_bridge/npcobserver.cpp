@@ -476,7 +476,7 @@ void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
   bool server = JsonRead::str(msg,"to")=="server";
   if(server) {
     // A decision is not ownership: a busy attachment or a rejected command may leave no body acting
-    // on the verdict. Swallow script perceptions only once the requested native fight/flee exists.
+    // on the verdict. Accept an actual combat provider, or the requested native fight/flee.
     Npc* self = nullptr;
     Npc* other = nullptr;
     if(auto* pl = world.player())
@@ -485,8 +485,9 @@ void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
         if(&npc==it->other) other = &npc;
         });
     const auto flee = AiNpc::scriptState(world,"ZS_FLEE");
-    server = self!=nullptr && other!=nullptr && !self->isDown() && !self->isExternalControl() &&
-             self->target()==other && (self->isAttack() || (flee.isValid() && self->isInState(flee)));
+    server = self!=nullptr && other!=nullptr && !self->isDown() && self->target()==other &&
+             (BodyController::owns(*self) ||
+              (!self->isExternalControl() && (self->isAttack() || (flee.isValid() && self->isInState(flee)))));
     }
   verdicts[it->key] = Verdict{server,world.tickCount()+VerdictMs};
   if(!server)
