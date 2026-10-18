@@ -1,7 +1,7 @@
 """The hero's deeds and their actual witnesses, while vanilla still owns every reaction.
 
-The bridge supplies ownership and pre-reaction combat state. This module records truth in the
-Chronicle's save branch; it neither intercepts perceptions nor changes PETZ or anyone's knowledge.
+The bridge supplies ownership and pre-reaction combat state. Truth and each npc's knowledge are read
+from the Chronicle's save branch; this module neither intercepts perceptions nor changes PETZ.
 Rules were checked against GOTHIC.DAT: C_IsTakenItemMyPossession, B_AssessTheft,
 B_AssessDamage/B_Attack, B_AssessMurder, and the lifted C_NpcBelongsTo* helpers.
 """
@@ -9,14 +9,34 @@ B_AssessDamage/B_Attack, B_AssessMurder, and the lifted C_NpcBelongsTo* helpers.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .chronicle import Chronicle, Fact
 from .game import GameLink
 from .gamedata.storygraph import StoryGraph
 from .protocol import DeedItem, GameMessage, HeroDeed
+
+if TYPE_CHECKING:
+    from .concerns import Concern
+    from .dialogue import DialogueManager
+    from .places import PlaceBook
+    from .sightings import Sightings
+
+SUSPECT_MIN = 30  # a remembered presence within half an hour of the theft, at the same place
+
+
+@dataclass(frozen=True)
+class CrimeKnowledge:
+    crime: Fact
+    degree: Literal["seen", "heard", "suspects"]
+    source: str = ""
+    hops: int = 0
+    suspect: str = "PLAYER"
+    forgiven: bool = False
+    silenced: bool = False
+
 
 HERO = {"PLAYER", "HERO", "PC_HERO"}
 PUBLIC_GUILDS = {-1, 0, 15}  # absent, GIL_NONE, GIL_PUBLIC
@@ -74,10 +94,25 @@ def pickpocket_outcome(
 
 
 class Crimes:
-    def __init__(self, link: GameLink, chronicle: Chronicle, *, graph: StoryGraph | None = None) -> None:
+    def __init__(
+        self,
+        link: GameLink,
+        chronicle: Chronicle,
+        *,
+        graph: StoryGraph | None = None,
+        dialogue: DialogueManager | None = None,
+        places: PlaceBook | None = None,
+        names: Callable[[str], str] | None = None,
+    ) -> None:
         self.link = link
         self.chronicle = chronicle
         self.graph = graph
+        self.dialogue = dialogue
+        self.places = places
+        self.names = names or (lambda npc: npc)
+        self.sightings: Sightings | None = None
+        self.people: dict[str, dict[str, Any]] = {}  # static world metadata, never beliefs
+        chronicle.on_fact.append(self._on_fact)
         link.listeners.append(self._on_message)
 
     def facts(self) -> list[Fact]:
@@ -87,6 +122,228 @@ class Crimes:
     async def close(self) -> None:
         if self._on_message in self.link.listeners:
             self.link.listeners.remove(self._on_message)
+        if self._on_fact in self.chronicle.on_fact:
+            self.chronicle.on_fact.remove(self._on_fact)
+
+    def crime(self, crime: str) -> Fact | None:
+        return next((f for f in self.facts() if f.get("id") == crime), None)
+
+    def seen(self, npc: str) -> list[Fact]:
+        ids = {f.get("crime") for f in self.chronicle.facts("crime_seen") if f.get("npc") == npc.upper()}
+        return [f for f in self.facts() if f.get("id") in ids]
+
+    def known(self, npc: str) -> list[CrimeKnowledge]:
+        """The single view of an npc's knowledge. Ownership alone never teaches it anything."""
+        npc = npc.upper()
+        facts = self.chronicle.facts()
+        crimes = {f["id"]: f for f in facts if f.get("fact") == "crime"}
+        out: dict[tuple[str, str], CrimeKnowledge] = {}
+        rank = {"suspects": 0, "heard": 1, "seen": 2}
+        for f in facts:
+            entries: list[tuple[str, str, str, int, str]] = []
+            if f.get("fact") == "crime_seen" and f.get("npc") == npc:
+                entries.append((f["crime"], "seen", npc, 0, "PLAYER"))
+            elif f.get("fact") == "rumor" and f.get("to") == npc and f.get("crime"):
+                entries.append((f["crime"], "heard", f.get("from", ""), int(f.get("hops", 1)), "PLAYER"))
+            elif f.get("fact") == "testimony" and f.get("npc") == npc:
+                entries += [(c, "heard", f.get("witness", ""), 1, "PLAYER") for c in f.get("crime_told", [])]
+            elif f.get("fact") == "crime_suspected" and f.get("npc") == npc:
+                entries.append((f["crime"], "suspects", npc, 0, f.get("suspect", "PLAYER")))
+            for crime, degree, source, hops, suspect in entries:
+                if crime not in crimes:
+                    continue
+                key = (crime, suspect)
+                previous = out.get(key)
+                if previous is None or rank[degree] > rank[previous.degree]:
+                    forgiven = any(
+                        s.get("fact") == "forgiven" and s.get("npc") == npc and s.get("crime") == crime
+                        for s in facts
+                    )
+                    silenced = any(
+                        s.get("fact") == "silenced" and s.get("npc") == npc and s.get("crime") == crime
+                        for s in facts
+                    )
+                    out[key] = CrimeKnowledge(
+                        crimes[crime], degree, source, hops, suspect, forgiven, silenced
+                    )
+        return list(out.values())
+
+    def describe(self, crime: Fact) -> str:
+        """Describe a real deed; callers decide whether it is known or merely suspected."""
+        victim = self.names(crime.get("victim") or crime.get("owner") or "")
+        item = crime.get("item_name") or crime.get("item") or "чужую вещь"
+        count = int(crime.get("count", 0))
+        amount = f" ×{count}" if count > 1 else ""
+        match crime.get("kind"):
+            case "theft":
+                action = f"взял {item}{amount}"
+                if crime.get("outcome") == "failure":
+                    action = "пытался обчистить карман"
+                elif crime.get("method") == "pickpocket":
+                    action += " из кармана"
+                elif crime.get("chest"):
+                    action += " из сундука"
+                if victim:
+                    action += f" (пострадавший: {victim})"
+            case "attack":
+                action = f"напал на {victim}"
+            case "murder":
+                action = f"убил человека: {victim}"
+            case _:
+                action = "убил чужую овцу"
+        place = self.places.of(crime.get("waypoint")) if self.places is not None else None
+        where = f" {place.where_ru}" if place is not None else ""
+        when = f"день {crime.get('day', 0)}, {int(crime.get('hour', 0)):02}:{int(crime.get('minute', 0)):02}"
+        return f"герой {action}{where} ({when})"
+
+    def situation(self, npc: str) -> str | None:
+        lines = []
+        for k in self.known(npc):
+            if k.suspect != "PLAYER":
+                continue
+            what = self.describe(k.crime)
+            if k.degree == "seen":
+                line = f"Ты видел сам: {what}."
+            elif k.degree == "heard":
+                line = f"Ты слышал со слов {self.names(k.source)}: {what}; переходов: {k.hops}."
+            else:
+                line = f"Ты подозреваешь: {what}. Ты видел героя рядом, самого дела не видел; это догадка."
+            if k.forgiven:
+                line += " Ты простил это дело."
+            if k.silenced:
+                line += " Ты обещал молчать об этом деле."
+            lines.append(line)
+        return "Что ты знаешь о делах героя:\n" + "\n".join(lines) if lines else None
+
+    def distrust(self, npc: str) -> list[str]:
+        """Only direct proof, or a victim's learned grievance, breaks its reliance on his word."""
+        person = self.people.get(npc.upper(), {})
+        community = self.community(int(person.get("guild", -1)), int(person.get("npctype", 0)))
+        return [
+            self.describe(k.crime)
+            for k in self.known(npc)
+            if k.suspect == "PLAYER"
+            and k.degree != "suspects"
+            and not k.forgiven
+            and (
+                k.degree == "seen"
+                or k.crime.get("victim") == npc.upper()
+                or (k.crime.get("kind") == "murder" and community and k.crime.get("community") == community)
+            )
+        ]
+
+    def attitude(self, npc: str) -> str | None:
+        person = self.people.get(npc.upper(), {})
+        community = self.community(int(person.get("guild", -1)), int(person.get("npctype", 0)))
+        wary = False
+        for k in self.known(npc):
+            if k.suspect != "PLAYER" or k.degree == "suspects" or k.forgiven:
+                continue
+            if k.crime.get("kind") == "murder" and community and k.crime.get("community") == community:
+                return "hostile"
+            if k.degree == "seen" or k.crime.get("victim") == npc.upper():
+                wary = True
+        return "wary" if wary else None
+
+    async def prepare(self, npc: str) -> None:
+        self._apply_attitude(npc.upper())
+
+    def _apply_attitude(self, npc: str) -> None:
+        attitude = self.attitude(npc)
+        if self.dialogue is None or attitude is None:
+            return
+        name = self.names(npc)
+        current = self.dialogue.open(npc, name).intent.attitude
+        if current != "hostile" and current != attitude:
+            # This is a belief change only; vanilla still owns every physical reaction in this layer.
+            self.dialogue.change_intent(npc, name, body=False, attitude=attitude)
+
+    def _on_fact(self, fact: Fact) -> None:
+        if fact.get("fact") in {"crime_seen", "rumor", "testimony"}:
+            npc = fact.get("npc") or fact.get("to")
+            if npc:
+                self._apply_attitude(npc)
+
+    def suspect_chest(
+        self,
+        npc: str,
+        chest: str,
+        missing: Mapping[str, int],
+        *,
+        waypoint: str = "",
+    ) -> list[Fact]:
+        """A missing item plus a remembered presence is suspicion, never proof of the thief."""
+        if self.sightings is None:
+            return []
+        npc = npc.upper()
+        out = []
+        for crime in self.facts():
+            if (
+                crime.get("kind") != "theft"
+                or crime.get("chest") != chest
+                or crime.get("victim") != npc
+                or crime.get("item") not in missing
+            ):
+                continue
+            at = (
+                int(crime.get("day", 0)) * 1440 + int(crime.get("hour", 0)) * 60 + int(crime.get("minute", 0))
+            )
+            place = self.places.of(crime.get("waypoint") or waypoint) if self.places is not None else None
+            if place is None:
+                continue  # no spatial evidence is better than accusing everyone seen that day
+            for s in self.sightings.mind(npc).sightings:
+                if (
+                    s.trace_kind
+                    or s.end < at - SUSPECT_MIN
+                    or s.start > at + SUSPECT_MIN
+                    or place.id not in s.place_ids
+                ):
+                    continue
+                if any(
+                    f.get("npc") == npc and f.get("crime") == crime["id"] and f.get("suspect") == s.who
+                    for f in self.chronicle.facts("crime_suspected")
+                ):
+                    continue
+                fact = {
+                    "fact": "crime_suspected",
+                    "npc": npc,
+                    "crime": crime["id"],
+                    "suspect": s.who,
+                    "chest": chest,
+                    "sighting": s.record(),
+                }
+                self.chronicle.record(fact)
+                out.append(fact)
+        return out
+
+    def concerns(self, npc: str) -> list[Concern]:
+        from .concerns import Concern
+
+        raised = {
+            f.get("occasion") for f in self.chronicle.facts("initiative") if f.get("npc") == npc.upper()
+        }
+        return [
+            Concern(
+                f"crime_suspected:{k.crime['id']}",
+                npc.upper(),
+                1,
+                "ask the hero about missing property; you suspect him, without proof",
+                f"из твоего сундука пропало; подозреваешь героя: {self.describe(k.crime)}",
+            )
+            for k in self.known(npc)
+            if k.degree == "suspects"
+            and k.suspect == "PLAYER"
+            and not k.forgiven
+            and f"crime_suspected:{k.crime['id']}" not in raised
+        ]
+
+    all_tools = ()
+
+    def tools(self, npc: str) -> list:
+        return []
+
+    async def handle(self, dialogue: Any, conv: Any, call: Any, snap: Any) -> None:
+        return None
 
     def lawkeepers(self, community: str | None) -> tuple[str, ...]:
         definition = COMMUNITIES.get(community or "")
@@ -283,6 +540,7 @@ class Crimes:
             "minute": deed.minute,
             "witnesses": witnesses,
             **extra,
+            **({"chest": deed.chest} if deed.chest else {}),
         }
         self.chronicle.record(fact)
         for npc in witnesses:

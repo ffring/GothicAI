@@ -39,7 +39,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .chronicle import Chronicle
+from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
 from .journal import Journal
 from .knowledge import roots
@@ -65,6 +65,7 @@ from .quests import Lie, caught
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
+    from .crimes import Crimes
     from .dialogue import Conversation, DialogueManager
     from .perception import PerceptionDesk
 
@@ -104,8 +105,9 @@ CATCH_TOOL = Tool(
     "видел тот, кого ты расспросил (строка С1 из «Что тебе рассказали о герое другие»). "
     "Уликой может быть и след из «Следы, которые ты видел», если слова героя прямо ему противоречат "
     "(например, он говорит, что стрела старая, а ты видел, что она свежая). "
-    "Или говорит, что забор сломан с весны, а ты видел свежие обломки. Только если его "
-    "слова прямо противоречат увиденному. Ты это запомнишь, люди вокруг услышат.",
+    "Или говорит, что забор сломан с весны, а ты видел свежие обломки. Дело героя, которое ты видел сам "
+    "(строка Д1), тоже улика, если он отрицает его. Только если его слова прямо противоречат "
+    "увиденному. Ты это запомнишь, люди вокруг услышат.",
     {
         "type": "object",
         "properties": {
@@ -115,7 +117,7 @@ CATCH_TOOL = Tool(
             },
             "seen": {
                 "type": "string",
-                "description": "что ты видел сам или что тебе рассказали: номер строки, например В2 или С1",
+                "description": "номер строки: что ты видел сам или тебе рассказали, например В2, Д1 или С1",
             },
         },
         "required": ["said", "seen"],
@@ -221,6 +223,7 @@ class Told:
     words: str  # the line, in words
     said: str  # the hero's words it was asked about (they were his: checked when it was asked)
     id: str  # the testimony's
+    crime: str = ""  # the exact deed in this evidence row, witnessed by the source itself
 
 
 class Hearsay(Protocol):
@@ -247,6 +250,7 @@ class Sightings:
         *,
         knows_hero: Callable[[str], bool] = lambda npc: False,
         journal: Journal | None = None,
+        crimes: Crimes | None = None,
     ) -> None:
         self.link = link
         self.memory = memory
@@ -254,11 +258,13 @@ class Sightings:
         self.chronicle = chronicle
         self.knows_hero = knows_hero
         self.journal = journal or Journal()
+        self.crimes = crimes
         self.branch: str | None = link.session.branch if link.session is not None else None
         self.now = 0  # the game's clock as the latest view had it (minutes)
         self._clock_known = False
         self._minds: dict[str, Mind] = {}
         self._shown: dict[str, dict[str, Sighting]] = {}  # npc -> the hero's sightings by id, last turn
+        self._crime_shown: dict[str, dict[str, Fact]] = {}  # npc -> its own crime_seen evidence, last turn
         self._caught: set[tuple[str, str]] = set()  # (npc, his words) caught already
         self.hearsay: Hearsay | None = None  # what witnesses told the npc (witnesses.py)
         self._background: set[asyncio.Task[Any]] = set()
@@ -282,6 +288,7 @@ class Sightings:
     def _forget(self) -> None:
         self._minds.clear()
         self._shown.clear()
+        self._crime_shown.clear()
         self._caught.clear()
         self.now = 0
         self._clock_known = False
@@ -333,7 +340,12 @@ class Sightings:
                 if s is None:
                     where, place = self._where(view, trace)
                     s = Sighting(
-                        who, trace.name, now, now, [where], place_ids=[place] if place else [],
+                        who,
+                        trace.name,
+                        now,
+                        now,
+                        [where],
+                        place_ids=[place] if place else [],
                         trace_kind=trace.kind,
                         trace_age=trace.age if trace.kind == "broken" else None,
                     )
@@ -494,6 +506,14 @@ class Sightings:
                 sid = f"В{len(shown) + 1}"
                 shown[sid] = s
                 lines.append(f"- {sid}: {self.words(s)}.")
+        deeds = self.crimes.seen(npc) if self.crimes is not None else []
+        self._crime_shown[npc] = {f"Д{i}": deed for i, deed in enumerate(reversed(deeds), 1)}
+        if deeds:
+            lines.append("Дела героя, которые ты видел сам (улики для catch_lie):")
+            lines += [
+                f"- {sid}: ты видел, как {self.crimes.describe(deed)}."
+                for sid, deed in self._crime_shown[npc].items()
+            ]
         view = self.desk.view(npc)
         in_sight = {o.id.upper() for o in view.sees} if view is not None else set()
         others: list[Sighting] = []
@@ -566,7 +586,8 @@ class Sightings:
 
     def tools(self, npc: str) -> list[Tool]:
         told = self.hearsay is not None and self.hearsay.any(npc)
-        return [CATCH_TOOL] if self.hero_trail(npc) or self.mind(npc).traces or told else []
+        deeds = self.crimes is not None and bool(self.crimes.seen(npc))
+        return [CATCH_TOOL] if self.hero_trail(npc) or self.mind(npc).traces or told or deeds else []
 
     async def handle(
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
@@ -585,12 +606,24 @@ class Sightings:
                     "другие» (С1, С2…).",
                     "rejected",
                 )
-            if not told.sightings:
+            if not told.sightings and not told.crime:
                 return ToolOutcome(
                     f"Отклонено: со слов: {told.witness_name} — героя не видели, уличить нечем.", "rejected"
                 )
             how = f"узнал со слов: {told.words}"
             extra = {"witness": told.witness, "witness_name": told.witness_name, "testimony": told.id}
+            if told.crime:
+                if self.crimes is None or self.crimes.crime(told.crime) is None:
+                    return ToolOutcome("Отклонено: в этой ветке нет такого дела.", "rejected")
+                extra["crime"] = told.crime
+        elif sid.startswith("Д"):
+            deed = self._crime_shown.get(conv.npc, {}).get(sid)
+            if deed is None or self.crimes is None:
+                return ToolOutcome(
+                    "Отклонено: такого дела ты сам не видел — укажи строку Д1, Д2….", "rejected"
+                )
+            how = f"сам видел: {self.crimes.describe(deed)}"
+            extra = {"crime": deed["id"]}
         else:
             s = self._shown.get(conv.npc, {}).get(sid)
             if s is None:
@@ -611,7 +644,15 @@ class Sightings:
         if key in self._caught or self._caught_before(conv.npc, said):
             return ToolOutcome("Отклонено: в этом ты его уже уличил.", "rejected")
         self._caught.add(key)
-        lie = Lie(f"SAID_{conv.npc}_{self.now}", conv.npc, conv.persona.name, said, "", said=True)
+        lie = Lie(
+            f"SAID_{conv.npc}_{self.now}",
+            conv.npc,
+            conv.persona.name,
+            said,
+            "",
+            said=True,
+            crime=str(extra.get("crime", "")),
+        )
 
         async def job() -> tuple[str, bool]:
             await caught(self.link, dialogue, self.chronicle, self.journal, lie, how, extra=extra)
@@ -775,8 +816,8 @@ def _wore(s: Sighting) -> str:
 def _sid(text: str) -> str:
     """The id of a sighting as the model wrote it: «В2», «B2» (Latin), «2»; of what it was told: «С1»,
     «C1»."""
-    t = text.strip().upper().replace("B", "В").replace("C", "С")
-    return t if t.startswith(("В", "С")) else f"В{t}"
+    t = text.strip().upper().replace("B", "В").replace("C", "С").replace("D", "Д")
+    return t if t.startswith(("В", "С", "Д")) else f"В{t}"
 
 
 def heard(conv: Conversation, said: str) -> bool:

@@ -3,6 +3,7 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -306,6 +307,161 @@ def test_a_debt_not_paid_back_goes_round(graph, monkeypatch):
     told = next(f for f in facts if f["to"] == HILDA)
     assert (told["kind"], told["title"], told["quest"]) == ("broken", "25 золотых до конца дня 2", "d1")
     assert "задолжал человеку по имени Лобарт и не вернул в срок" in broken.told("Лобарт")
+
+
+def _crime_rumors(s: Social, kind: str = "theft", witness: str = HILDA) -> tuple[Rumors, Rumor, list[dict]]:
+    r, _, facts = _rumors(s)
+    r.rumors.clear()
+    crime = {"fact": "crime", "id": "c1", "kind": kind, "victim": LOBART, "day": 1}
+    facts.extend([crime, {"fact": "crime_seen", "npc": witness, "crime": "c1"}])
+    r.chronicle.facts = lambda kind=None: [f for f in facts if kind is None or f.get("fact") == kind]
+    r.crimes = SimpleNamespace(
+        facts=lambda: r.chronicle.facts("crime"),
+        describe=lambda f: f"герой совершил {f['kind']} (день {f['day']})",
+    )
+    for f in list(facts):
+        r._on_fact(f)
+    return r, next(iter(r.rumors.values())), facts
+
+
+def test_crime_witnesses_share_one_rumor_and_keep_the_speaker(graph, monkeypatch):
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    monkeypatch.setattr(social, "P_DEAL", 0.0)
+    r, rumor, facts = _crime_rumors(Social(PEOPLE, graph))
+    assert rumor.known == {HILDA: 0} and rumor.quest == "crime:c1"
+    assert LOBART not in rumor.known  # a victim who did not see it does not magically know
+    r._on_fact({"fact": "crime_seen", "npc": VINO, "crime": "c1"})
+    assert len(r.rumors) == 1 and rumor.known[VINO] == 0
+    r.spread(DAY + _h(9), DAY + _h(10))
+    [told] = [f for f in facts if f.get("fact") == "rumor"]
+    assert (told["crime"], told["from"], told["from_name"], told["to"], told["hops"]) == (
+        "c1",
+        HILDA,
+        "Хильда",
+        LOBART,
+        1,
+    )
+    assert rumor.told("Хильда") == "Слух (со слов: Хильда): герой совершил theft (день 1)"
+
+
+@pytest.mark.parametrize("kind,hops", [("theft", 2), ("sheep", 2), ("attack", 3), ("murder", 4)])
+def test_crime_severity_limits_its_retellings(kind, hops, monkeypatch):
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    people = [_person(f"N{i}", f"NPC {i}", (_h(8), _h(22), [2000 * i, 0, 0])) for i in range(6)]
+    r, rumor, facts = _crime_rumors(Social(people), kind, witness="N0")
+    r.spread(DAY + _h(9), DAY + _h(10))
+    assert rumor.known == {f"N{i}": i for i in range(hops + 1)}
+    assert len([f for f in facts if f.get("fact") == "rumor"]) == hops
+
+
+def test_murder_remains_news_longer_than_theft():
+    for kind, last_day in (("theft", 2), ("attack", 2), ("sheep", 2), ("murder", 4)):
+        rumor = Rumor("crime:c1", kind, HILDA, "Хильда", "герой совершил дело", crime="c1")
+        rumor.known[HILDA], rumor.since[HILDA] = 0, 1
+        assert rumor.tells(HILDA, last_day)
+        assert not rumor.tells(HILDA, last_day + 1)
+
+
+@pytest.mark.parametrize("settlement", ["silenced", "forgiven"])
+def test_crime_settlement_stops_the_settled_npc_but_not_other_knowers(graph, monkeypatch, settlement):
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    monkeypatch.setattr(social, "P_DEAL", 1.0)
+    r, rumor, facts = _crime_rumors(Social(PEOPLE, graph))
+    settled = {"fact": settlement, "npc": HILDA, "crime": "c1", "day": 1}
+    facts.append(settled)
+    r._on_fact(settled)
+    assert r.spread(DAY + _h(9), DAY + _h(23)) == 0
+    assert LOBART not in rumor.known and HILDA in rumor.silent
+    # A different actual witness remains free to tell, including after branch reconstruction.
+    facts.append({"fact": "crime_seen", "npc": LOBART, "crime": "c1"})
+    r._load()
+    [rumor] = r.rumors.values()
+    assert HILDA in rumor.silent and rumor.known == {HILDA: 0, LOBART: 0}
+    r.spread(DAY + _h(9), DAY + _h(23))
+    assert ANDRE in rumor.known  # Lobart can still tell his acquaintance
+    assert VINO not in rumor.known  # only Hilda meets Vino, and she promised not to tell
+    assert not any(f.get("from") == HILDA for f in facts if f.get("fact") == "rumor")
+
+
+def test_crime_rumors_reload_only_the_current_branch(graph, monkeypatch):
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    monkeypatch.setattr(social, "P_DEAL", 0.0)
+    r, _, facts = _crime_rumors(Social(PEOPLE, graph))
+    r.spread(DAY + _h(9), DAY + _h(10))
+    r._load()
+    [rumor] = r.rumors.values()
+    assert rumor.known == {HILDA: 0, LOBART: 1}
+    facts[:] = [{"fact": "crime", "id": "other", "kind": "murder", "day": 2}]
+    r._load()
+    assert not r.rumors  # unwitnessed truth in a different branch is nobody's news
+
+
+def test_crime_rumors_are_disabled_without_crimes(graph):
+    r, _, facts = _crime_rumors(Social(PEOPLE, graph))
+    r.crimes = None
+    r._load()
+    assert not r.rumors and not any(f.get("fact") == "rumor" for f in facts)
+
+
+def test_an_outlaw_crime_witness_tells_only_outlaws(graph, monkeypatch):
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    monkeypatch.setattr(social, "P_DEAL", 1.0)
+    other = "BDT_1014_BANDIT"
+    s = Social([*PEOPLE, _person(other, "Другой разбойник", (0, DAY, FARM), guild=9)], graph)
+    r, rumor, _ = _crime_rumors(s, witness=BANDIT)
+    r.spread(DAY + _h(9), DAY + _h(23))
+    assert rumor.known == {BANDIT: 0, other: 1}
+
+
+@pytest.mark.parametrize(
+    "kind,hops,day,expected",
+    [
+        ("theft", 0, 1, "told"),
+        ("theft", 2, 1, "no"),
+        ("theft", 0, 3, "no"),
+        ("murder", 0, 4, "told"),
+        ("murder", 0, 5, "no"),
+    ],
+)
+def test_explicit_crime_telling_keeps_the_severity_and_freshness_limits(graph, kind, hops, day, expected):
+    r, rumor, facts = _crime_rumors(Social(PEOPLE, graph), kind)
+    rumor.known[HILDA] = hops
+    r.clock = day * DAY + _h(9)
+    assert r.tell(rumor, HILDA, LOBART) == expected
+    assert len([f for f in facts if f.get("fact") == "rumor"]) == (expected == "told")
+
+
+def test_explicit_crime_telling_keeps_the_outlaw_boundary(graph):
+    other = "BDT_1014_BANDIT"
+    s = Social([*PEOPLE, _person(other, "Другой разбойник", (0, DAY, FARM), guild=9)], graph)
+    r, rumor, facts = _crime_rumors(s, witness=BANDIT)
+    r.clock = DAY + _h(9)
+    assert r.tell(rumor, BANDIT, HILDA) == "no"
+    assert r.tell(rumor, BANDIT, other) == "told"
+    [told] = [f for f in facts if f.get("fact") == "rumor"]
+    assert told["to"] == other
+
+
+def test_crime_testimony_recipient_can_retell_the_same_story(graph):
+    r, rumor, facts = _crime_rumors(Social(PEOPLE, graph))
+    testimony = {
+        "fact": "testimony",
+        "npc": LOBART,
+        "witness": HILDA,
+        "crime_told": ["c1"],
+        "minute": 2 * DAY + _h(9),
+    }
+    facts.append(testimony)
+    r._on_fact(testimony)
+    assert len(r.rumors) == 1 and rumor.known == {HILDA: 0, LOBART: 1}
+    assert rumor.since[LOBART] == 2 and rumor.since[HILDA] == 1
+    r.clock = 2 * DAY + _h(10)
+    assert r.tell(rumor, LOBART, ANDRE) == "told"
+    [told] = [f for f in facts if f.get("fact") == "rumor"]
+    assert (told["crime"], told["from"], told["to"], told["hops"]) == ("c1", LOBART, ANDRE, 2)
+    r._load()
+    [restored] = r.rumors.values()
+    assert restored.known == {HILDA: 0, LOBART: 1, ANDRE: 2}
 
 
 # --- staging (gossip.py): how a live pass looks ---------------------------------------------------

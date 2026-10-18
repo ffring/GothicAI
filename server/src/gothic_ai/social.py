@@ -43,6 +43,7 @@ from .gamedata.storygraph import StoryGraph, walk
 from .protocol import GameMessage, Session
 
 if TYPE_CHECKING:
+    from .crimes import Crimes
     from .dialogue import DialogueManager
     from .gossip import Staging  # gossip imports this module
 
@@ -53,7 +54,8 @@ DEAL_MAX = 6  # a quest with more people in it makes no acquaintances
 OUTLAWS = frozenset({9, 10, 11})  # bandits, convicts, seekers: they have no dealings with the rest
 # retellings away from the one lied to: a lie seen through on the spot is talked about nearby, one he took
 # a reward for goes further
-HOPS = {"caught": 2, "found_out": 3, "broken": 2}  # broken: a debt not paid back by its day (deals.py)
+HOPS = {"caught": 2, "found_out": 3, "broken": 2, "theft": 2, "attack": 3, "murder": 4, "sheep": 2}
+CRIME_KINDS = frozenset({"theft", "attack", "murder", "sheep"})
 TELLS_PER_DAY = 3  # one tells a rumor to this many a day at most: it goes round in chains, not in a flood
 FRESH_DAYS = 2  # and only while it is news: the day one heard it and the next
 P_MEET = 0.7  # how often a day's meeting passes a rumor on
@@ -254,7 +256,7 @@ class Social:
 
 @dataclass
 class Rumor:
-    """That the hero lied to someone, as it goes round: who knows it, how many retellings away."""
+    """News of the hero, as it goes round: who knows it, how many retellings away."""
 
     quest: str
     kind: str  # found_out: he took a reward for it; caught: he tried to
@@ -265,6 +267,7 @@ class Rumor:
     since: dict[str, int] = field(default_factory=dict)  # npc -> the game day it heard it (if known)
     silent: set[str] = field(default_factory=set)  # promised the hero in a deal to tell nobody (deals.py)
     said: bool = False  # the lie was his words (title), not a quest: seen false (sightings.py)
+    crime: str = ""  # the deed's Chronicle id, also for a lie about that deed
 
     @property
     def hops(self) -> int:
@@ -275,7 +278,8 @@ class Rumor:
         heard = self.since.get(npc)
         if npc in self.silent:
             return False
-        return self.known.get(npc, self.hops) < self.hops and (heard is None or day < heard + FRESH_DAYS)
+        fresh = 4 if self.kind == "murder" else FRESH_DAYS
+        return self.known.get(npc, self.hops) < self.hops and (heard is None or day < heard + fresh)
 
     @property
     def key(self) -> str:
@@ -283,6 +287,8 @@ class Rumor:
 
     def told(self, teller: str) -> str:
         """The remark for the one it is told to (names stay as they are: nothing to decline)."""
+        if self.kind in CRIME_KINDS:
+            return f"Слух (со слов: {teller}): {self.title}"
         if self.kind == "broken" and self.quest.startswith("meet-"):  # meetings.py
             return (
                 f"Слух (со слов: {teller}): герой обещал человеку по имени {self.about_name} прийти на "
@@ -304,7 +310,7 @@ class Rumor:
 
 
 class Rumors:
-    """Rumors about the hero's lies going round the people that know each other, by the game's clock."""
+    """News about the hero going round the people that know each other, by the game's clock."""
 
     # class-level defaults: tests build Rumors with __new__
     stage: Callable[[Rumor, str, str], Staging] | None = None  # gossip.py: how a live pass looks
@@ -312,6 +318,7 @@ class Rumors:
     gate: Callable[[Rumor, str, str], bool | None] | None = None  # e2e: False holds a pass, True forces it
     clock: int | None = None  # the game minute gone through
     waiting: dict[tuple[str, str, str], int] | None = None  # (rumor, teller, listener) -> first minute
+    crimes: Crimes | None = None  # absent with --no-crimes: truth then never seeds a crime rumor
 
     def __init__(
         self,
@@ -320,12 +327,14 @@ class Rumors:
         chronicle: Chronicle,
         graph: StoryGraph | None = None,
         bonds: Callable[[], Mapping[str, Mapping[str, str]]] = dict,
+        crimes: Crimes | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
         self.chronicle = chronicle
         self.graph = graph
         self.bonds = bonds  # whom the director's characters know (cast.py)
+        self.crimes = crimes
         self.social: Social | None = None
         self.rumors: dict[str, Rumor] = {}
         self.dead: set[str] = set()
@@ -347,7 +356,10 @@ class Rumors:
     async def tick(self) -> None:
         """Who met whom since the last tick, and what they told each other."""
         if self.social is None:
-            self.social = Social(await self.link.story_people(), self.graph, self.bonds())
+            people = await self.link.story_people()
+            self.social = Social(people, self.graph, self.bonds())
+            if self.crimes is not None:
+                self.crimes.people = {p["npc"]: p for p in people}
             log.info("rumors: %d people, %d ties", len(self.social.names), _count(self.social))
         state = await self.link.story_state()
         now = int(state.get("day", 0)) * DAY + int(state.get("hour", 0)) * 60 + int(state.get("minute", 0))
@@ -422,6 +434,11 @@ class Rumors:
             return "no"
         if a not in r.known or b in r.known or a in r.silent:
             return "no"
+        if r.crime and (
+            not r.tells(a, clock // DAY)
+            or (self.social.guilds.get(a) in OUTLAWS) != (self.social.guilds.get(b) in OUTLAWS)
+        ):
+            return "no"
         staging = self._staging(r, a, b)
         if staging is not None and staging.tier == "wait":
             return "wait"
@@ -492,6 +509,8 @@ class Rumors:
         self.tells[(r.key, teller, at // DAY)] += 1
         teller_name = self.social.names.get(teller, teller)
         name = self.social.names.get(listener, listener)
+        if not r.about_name or r.about_name == r.about:
+            r.about_name = self.social.names.get(r.about, r.about)
         fact: Fact = {
             "fact": "rumor",
             "quest": r.quest,
@@ -506,6 +525,7 @@ class Rumors:
             "how": how,
             "day": at // DAY,
             **({"said": True} if r.said else {}),
+            **({"crime": r.crime} if r.crime else {}),
             **(extra or {}),
         }
         self.chronicle.record(fact)
@@ -532,12 +552,49 @@ class Rumors:
                     f.get("name") or f.get("npc", ""),
                     f.get("title") or f.get("quest", ""),
                     said=bool(f.get("said")),
+                    crime=f.get("crime", ""),
                 )
                 r.known[r.about] = 0
                 if "day" in f:
                     r.since[r.about] = int(f["day"])
+                if r.crime:
+                    self._crime_silence(r)
                 self.rumors.setdefault(r.key, r)
+            case "crime_seen" if self.crimes is not None:
+                crime = next((c for c in self.crimes.facts() if c.get("id") == f.get("crime")), None)
+                if crime is None or crime.get("kind") not in CRIME_KINDS or not f.get("npc"):
+                    return
+                r = next(
+                    (r for r in self.rumors.values() if r.crime == crime["id"] and r.kind in CRIME_KINDS),
+                    None,
+                )
+                if r is None:
+                    npc = f["npc"]
+                    r = Rumor(
+                        f"crime:{crime['id']}",
+                        crime["kind"],
+                        npc,
+                        self.social.names.get(npc, npc) if self.social else npc,
+                        self.crimes.describe(crime),
+                        crime=crime["id"],
+                    )
+                    self._crime_silence(r)
+                    self.rumors[r.key] = r
+                r.known[f["npc"]] = 0
+                if "day" in crime:
+                    r.since[f["npc"]] = int(crime["day"])
+            case "testimony" if self.crimes is not None and f.get("npc"):
+                for crime in f.get("crime_told", []):
+                    r = next(
+                        (r for r in self.rumors.values() if r.crime == crime and r.kind in CRIME_KINDS),
+                        None,
+                    )
+                    if r is not None and f["npc"] not in r.known:
+                        r.known[f["npc"]] = 1
+                        r.since[f["npc"]] = int(f.get("minute", int(f.get("day", 0)) * DAY)) // DAY
             case "rumor":
+                if f.get("kind") in CRIME_KINDS and self.crimes is None:
+                    return
                 about = f.get("about") or f.get("from", "")
                 for r in self.rumors.values():
                     if r.quest == f.get("quest") and r.about == about and f.get("kind", r.kind) == r.kind:
@@ -559,8 +616,20 @@ class Rumors:
                 for key in f["silence"]:
                     if key in self.rumors:
                         self.rumors[key].silent.add(f.get("npc", ""))
+            case "forgiven" | "silenced" if f.get("crime"):
+                for r in self.rumors.values():
+                    if r.crime == f["crime"]:
+                        r.silent.add(f.get("npc", ""))
             case "died":
                 self.dead.add(f.get("npc", ""))
+
+    def _crime_silence(self, r: Rumor) -> None:
+        """A settlement also applies when a later lie starts another rumor about the same deed."""
+        r.silent.update(
+            f.get("npc", "")
+            for f in self.chronicle.facts()
+            if f.get("fact") in {"forgiven", "silenced"} and f.get("crime") == r.crime
+        )
 
     def _on_message(self, msg: GameMessage) -> None:
         if isinstance(msg, Session):

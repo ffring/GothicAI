@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from gothic_ai.chronicle import Chronicle
+from gothic_ai.crimes import Crimes
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import ToolCall, ToolResult
 from gothic_ai.llm.fake import FakeBackend, FakeStep
@@ -23,6 +24,7 @@ from gothic_ai.protocol import (
     NpcViews,
 )
 from gothic_ai.sightings import Sightings, when
+from gothic_ai.social import Rumors
 from gothic_ai.trust import Trust
 from tests.fake_game import FakeGame, connected
 from tests.fakes import Clock
@@ -85,6 +87,69 @@ def sightings(store: MemoryStore, link: Link | None = None, clock: Clock | None 
     link = link or Link()
     desk = PerceptionDesk(link, social=Social, places=BOOK, clock=clock or Clock())  # type: ignore[arg-type]
     return Sightings(link, store, desk, Chronicle(link, store))  # type: ignore[arg-type]
+
+
+def record_theft(chronicle: Chronicle, *, id: str = "C1", witness: str = HILDA, hour: int = 8) -> None:
+    chronicle.record({
+        "fact": "crime", "id": id, "kind": "theft", "victim": LOBART, "owner": LOBART,
+        "community": "farm", "item": "ITFO_CHEESE", "count": 1, "waypoint": "NW_FARM1_OUT_01",
+        "day": 1, "hour": hour, "minute": 10, "witnesses": [witness],
+    })
+    chronicle.record({"fact": "crime_seen", "npc": witness, "crime": id})
+
+
+async def test_a_crime_seen_is_evidence_for_the_same_caught_memory_trust_and_rumor_path():
+    fake = FakeGame(branch="A")
+    fake.people_near = [{"npc": HILDA, "name": "Хильда", "distance": 400, "guild": 0}]
+    llm = FakeBackend(script=[
+        FakeStep("Хм.", [ToolCall("catch_lie", {"said": "убил волка", "seen": "Д1"}, "wrong")]),
+        FakeStep("Я сам видел!", [ToolCall("catch_lie", {"said": "я ничего не брал", "seen": "D1"}, "c")]),
+        FakeStep("Больше на слово не поверю."),
+    ], delay=0)
+    store = MemoryStore(":memory:")
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), memory=store)
+        chronicle = Chronicle(link, store)
+        crimes = Crimes(link, chronicle)
+        rumors = Rumors(link, dialogue, chronicle, crimes=crimes)
+        desk = PerceptionDesk(link, social=Social, places=BOOK)
+        seen = Sightings(link, store, desk, chronicle, crimes=crimes)
+        dialogue.extensions += [seen, Trust(chronicle)]
+        record_theft(chronicle, witness=LOBART)
+        dialogue.open(LOBART, "Лобарт")
+        await dialogue.say_as_player(LOBART, "Я ничего не брал.")
+        await _until(lambda: chronicle.facts("caught") != [], 5)
+
+    assert "Д1:" in str(llm.calls[0][1][-2].content)
+    outputs = [i.output for c in llm.calls for i in c[1] if isinstance(i, ToolResult)]
+    assert outputs[0].startswith("Отклонено: он этого не говорил")
+    caught = chronicle.facts("caught")
+    assert len(caught) == 1 and caught[0]["crime"] == "C1" and caught[0]["said"]
+    assert caught[0]["how"].startswith("сам видел:")
+    assert chronicle.facts("belief") == []  # ordinary denials are not quest completion beliefs
+    assert any(
+        r.kind == "caught" and r.crime == "C1" and r.known[LOBART] == 0 for r in rumors.rumors.values()
+    )
+    assert dialogue.conversations[LOBART].intent.attitude == "wary"
+    assert any("Ты уличил героя во лжи" in e.content for e in dialogue.conversations[LOBART].memory.entries)
+    assert "он уже лгал тебе" in (Trust(chronicle).situation(LOBART) or "")
+
+
+async def test_crime_rumors_and_suspicions_do_not_become_own_seen_evidence():
+    store = MemoryStore(":memory:")
+    store.ensure_branch("A")
+    seen = sightings(store)
+    seen.crimes = Crimes(seen.link, seen.chronicle)
+    record_theft(seen.chronicle)
+    seen.chronicle.record({
+        "fact": "rumor", "crime": "C1", "kind": "theft", "from": HILDA, "to": LOBART, "hops": 1,
+    })
+    seen.chronicle.record({"fact": "crime_suspected", "npc": LOBART, "crime": "C1", "suspect": "PLAYER"})
+    assert seen.situation(LOBART) is None
+    assert seen.tools(LOBART) == []
+    assert "Д1:" in (seen.situation(HILDA) or "")
+    assert [tool.name for tool in seen.tools(HILDA)] == ["catch_lie"]
+    await asyncio.gather(*seen._background, *seen.chronicle._background)
 
 
 async def test_what_it_saw_stays_where_and_how_and_follows_the_save():
