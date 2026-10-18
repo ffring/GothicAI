@@ -8,12 +8,13 @@
 # adds space-separated KEY=VALUE pairs to the unit environment; DUELS_CHECKPOINTS ("name=path ...")
 # names GRU checkpoints beyond bc and round2. DUELS_LOCK_WAIT: legacy flock wait (3600 s).
 # With gq, copy gq-job.sh beside this script or into DUELS_CODE/scripts.
+# DUELS_ENGINE: the engine workspace (source + build) recorded with DUELS_RUNNER (default body-api).
 set -euo pipefail
 phase="${1:-realtime}"
 suffix="${DUELS_SUFFIX-}"
 [[ -n "$suffix" || "$phase" == realtime ]] || suffix="-lockstep"
 task_root="$HOME/gothic-ai/body"
-engine_root="$HOME/gothic-ai/body-api"
+engine_root="${DUELS_ENGINE:-$HOME/gothic-ai/body-api}"
 run="$task_root/data/stage9-rt-eval-v1"
 code="${DUELS_CODE:-$run/code}"
 work="${DUELS_WORK:-$task_root/rl/rt-duels-v1}"
