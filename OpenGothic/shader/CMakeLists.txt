@@ -347,9 +347,11 @@ add_shader(probe_vote.comp           lighting/rt/probe_allocation.comp -DVOTE)
 add_shader(probe_allocation.comp     lighting/rt/probe_allocation.comp -DALLOC)
 add_shader(probe_trace.comp          lighting/rt/probe_trace.comp      -DRAY_QUERY -DRAY_QUERY_AT)
 add_shader(probe_lighting.comp       lighting/rt/probe_lighting.comp)
+add_shader(probe_lighting_orm.comp   lighting/rt/probe_lighting.comp -DMATERIAL_MAPS)
 
 add_shader(probe_ambient.vert        triangle.vert)
 add_shader(probe_ambient.frag        lighting/rt/probe_ambient.frag)
+add_shader(probe_ambient_orm.frag     lighting/rt/probe_ambient.frag -DMATERIAL_MAPS)
 
 # Surfels
 add_shader(surf_dbg.vert             lighting/surfels/surf_dbg.vert)
