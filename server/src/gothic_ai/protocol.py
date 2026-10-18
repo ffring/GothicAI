@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 45
+PROTOCOL_VERSION = 46
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
@@ -28,6 +28,7 @@ BODY_CONTROL_PROTOCOL = 41  # shared body authority and combat API (body_acquire
 CRIME_PROTOCOL = 42  # raw hero deeds, ownership, engine perception recipients and pickpocket evidence
 FIGHT_REACTION_PROTOCOL = 43  # Look.combat_target/fighting, npc_threat, immediate fight/flee with own SVM
 CRIME_REACT_PROTOCOL = 44  # independently held hero deeds, their ids, and vanilla fight reasons
+CRIME_MEET_PROTOCOL = 46  # deeds switch also holds room entry; rule verdicts need no body action
 
 # --- game -> server -----------------------------------------------------------
 
@@ -644,7 +645,9 @@ class NpcActResult(_GameMessage):
 
 
 class PerceptionHeld(_GameMessage):
-    """A held threat (v6) or hero deed (v44). `deed` links rules to the subsequent HeroDeed.
+    """A held threat (v6), hero deed (v44) or hero room entry (v46).
+
+    `deed` links deed rules to the subsequent HeroDeed; room entry has no deed id.
 
     The server answers `hold_verdict`; without one the scripts get it after 0.6 s.
     """
@@ -1363,7 +1366,7 @@ NpcActType = Literal[
 
 
 class ThreatControlCmd(_Command):
-    """Independent switches for model-owned threats (v6) and rule-owned hero deeds (v44)."""
+    """Independent switches for model-owned threats (v6) and rule-owned deeds (v44) / rooms (v46)."""
 
     type: Literal["threat_control"] = "threat_control"
     hold: bool
@@ -1371,7 +1374,7 @@ class ThreatControlCmd(_Command):
 
 
 class HoldVerdictCmd(_Command):
-    """`server`: a threat's body action, or a deed's rule (including silence); `scripts`: release."""
+    """`server`: a threat's body action, or deed/room rules (including silence); `scripts`: release."""
 
     type: Literal["hold_verdict"] = "hold_verdict"
     hold: str

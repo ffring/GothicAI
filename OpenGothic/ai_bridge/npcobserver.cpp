@@ -434,11 +434,16 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   if(&other==&self)
     return false;
   const bool hero = other.isPlayer();
+  const bool room = hero && perc==PERC_ASSESSENTERROOM;
   Seen seen;
   if(hero) {
-    if(!holdDeeds || deed==nullptr || deedId.empty())
+    if(!holdDeeds)
       return false;
-    if(perc==PERC_ASSESSTHEFT && deed->kind=="take_item" && !deed->item.empty()) {
+    if(room) {
+      seen = Seen{"enter_room"};
+      } else if(deed==nullptr || deedId.empty()) {
+      return false;
+      } else if(perc==PERC_ASSESSTHEFT && deed->kind=="take_item" && !deed->item.empty()) {
       seen = Seen{"theft"};
       } else if(perc==PERC_ASSESSOTHERSDAMAGE && deed->kind=="attack" && victim!=nullptr && !deed->victimIsMonster) {
       seen = Seen{"attack",victim};
@@ -448,7 +453,7 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
       if(!deed->victimIsMonster)
         seen = Seen{"murder",victim};
       }
-    // Self-defence, weapon warnings, room entry and all uncertain events stay vanilla.
+    // Self-defence, weapon warnings and all uncertain events stay vanilla.
     if(seen.kind.empty())
       return false;
     } else {
@@ -474,7 +479,7 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   const uint64_t now = world.tickCount();
   // Separate actions of the hero must never inherit a verdict about an earlier
   // theft or strike. Threats from other actors keep their existing pair cache.
-  const auto     key = symbol + "/" + otherId + (hero ? "/"+std::string(deedId) : "");
+  const auto     key = symbol + "/" + otherId + (room ? "/room" : (hero ? "/"+std::string(deedId) : ""));
   if(auto v = verdicts.find(key); v!=verdicts.end() && now<v->second.until)
     return v->second.server;  // decided a moment ago: the server acts, or the scripts take it
   verdicts[key] = Verdict{true,now+HoldMs};  // repeats while it is being decided are held too
@@ -482,10 +487,11 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   Held h;
   h.id     = "h" + std::to_string(nextHold++);
   h.key    = key;
-  if(hero) {
+  if(hero && !room) {
     h.item = deed->item;
     h.deed = deedId;
     }
+  h.room   = room;
   h.self   = &self;
   h.other  = &other;
   h.victim = victim;
@@ -512,9 +518,9 @@ void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
   if(it==held.end())
     return;  // released already (too late)
   bool server = JsonRead::str(msg,"to")=="server";
-  // A witnessed hero deed can deliberately end in silence, a shout or no
-  // reaction. Only that explicit hold kind may consume a verdict without a body.
-  if(server && it->deed.empty()) {
+  // Deed and room rules may deliberately end in silence, a warning or time to
+  // leave. Threats still require an actual body action before they are swallowed.
+  if(server && it->deed.empty() && !it->room) {
     // A decision is not ownership: a busy attachment or a rejected command may leave no body acting
     // on the verdict. Accept an actual combat provider, or the requested native fight/flee.
     Npc* self = nullptr;
@@ -529,7 +535,9 @@ void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
              (BodyController::owns(*self) ||
               (!self->isExternalControl() && (self->isAttack() || (flee.isValid() && self->isInState(flee)))));
     }
-  verdicts[it->key] = Verdict{server,world.tickCount()+VerdictMs};
+  // A new entry must be reconsidered against current knowledge, including after
+  // the hero left or made amends. Only in-flight room repeats share the hold.
+  verdicts[it->key] = Verdict{server,world.tickCount()+(it->room ? 0 : VerdictMs)};
   if(!server)
     releaseHeld(world,*it);
   held.erase(it);
@@ -559,7 +567,7 @@ void NpcObserver::releaseHeld(World& world, Held& h) {
   if(self==nullptr || other==nullptr || self->isDead() || self->isDown() || other->isDead())
     return;
   if(auto v = verdicts.find(h.key); v!=verdicts.end())
-    v->second = Verdict{false,world.tickCount()+VerdictMs};
+    v->second = Verdict{false,world.tickCount()+(h.room ? 0 : VerdictMs)};
   if(!h.item.empty()) {
     const auto item = world.script().findSymbolIndex(h.item);
     if(item!=size_t(-1))

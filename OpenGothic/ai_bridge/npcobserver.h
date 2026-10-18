@@ -39,8 +39,8 @@ class NpcObserver final {
     void perception(World& world, Npc& self, Npc& other, Npc* victim, PercType perc);
     void physicsNoise(World& world, Npc& self, const PhysicsNoise& noise);
     void act(World& world, const rapidjson::Value& msg);
-    // threats to free npc's (monsters near or attacking, attacks by npc's) are held back from the scripts
-    // for the server's behavioral model; it answers with a verdict, or the scripts get them after HoldMs
+    // threats, hero deeds and room entry are held from free npc's scripts for the server;
+    // it answers with a verdict, or the scripts get them after HoldMs
     bool intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc,
                    const HeroDeed* deed = nullptr, std::string_view deedId = {});
     void verdict(World& world, const rapidjson::Value& msg);
@@ -96,9 +96,10 @@ class NpcObserver final {
 
     struct Held final {
       std::string id;
-      std::string key;     // "npc/other": a verdict covers that pair for a while
+      std::string key;     // actor pair, with separate deed/room keys for the hero
       std::string item;    // restore the theft's ITEM before a late script delivery
       std::string deed;    // hero_deed id: rules may consume it without taking the body
+      bool        room   = false;  // entry rules may warn or grant time to leave without taking the body
       const Npc*  self   = nullptr;
       const Npc*  other  = nullptr;
       const Npc*  victim = nullptr;

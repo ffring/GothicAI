@@ -12,7 +12,8 @@ from gothic_ai.crime_memory import CrimeMemoryRuntime
 from gothic_ai.crime_react import CrimeReact
 from gothic_ai.crimes import Crimes
 from gothic_ai.memory import MemoryStore
-from gothic_ai.protocol import Loading, NpcEvent, NpcRoster, Session
+from gothic_ai.places import PlaceBook
+from gothic_ai.protocol import HoldVerdictCmd, Loading, NpcEvent, NpcIdle, NpcRoster, PerceptionHeld, Session
 from tests.test_crime_react import GUARD, OTHER_GUARD, ReactLink, card
 from tests.test_crimes import HILDA, LOBART
 
@@ -50,6 +51,12 @@ class MeetLink(ReactLink):
         self.refusal: dict[str, int] = {}
         self.projection: dict[str, int] = {}
         self.visible = True
+        self.room_indoor = True
+        self.room_point: str | None = None
+        self.hero_point: str | None = None
+        self.player_portal = 15
+        self.same_room = True
+        self.room_distance = 400
         self.evaluations: list[tuple[str, list[Any]]] = []
         self.before_act: Any = None
         self.before_metadata: asyncio.Event | None = None
@@ -101,12 +108,25 @@ class MeetLink(ReactLink):
                 values.append(0)
             elif call == "NPC_CLEARAIQUEUE":
                 values.append(0)
+            elif call == "NPC_ISINPLAYERSROOM":
+                values.append(int(self.same_room))
+            elif call == "NPC_CANSEENPC":
+                values.append(int(self.visible))
+            elif call == "NPC_GETDISTTONPC":
+                values.append(self.room_distance)
+            elif call == "WLD_GETPLAYERPORTALGUILD":
+                values.append(self.player_portal)
+            elif call == "NPC_GETNEARESTWP":
+                values.append(self.hero_point)
             else:
                 raise AssertionError(expr)
         return values
 
     async def npc_view(self, npcs):
-        return [SimpleNamespace(npc=npc, hero=SimpleNamespace(seen=self.visible)) for npc in npcs]
+        return [SimpleNamespace(
+            npc=npc, hero=SimpleNamespace(seen=self.visible), indoors=self.room_indoor,
+            nearest_waypoint=self.room_point,
+        ) for npc in npcs]
 
 
 class Writer:
@@ -160,7 +180,10 @@ async def system():
     projection = CrimeMemoryRuntime(link, crimes)  # type: ignore[arg-type]
     writer = Writer()
     approach = Approach(link, writer)
-    meets = CrimeMeet(link, crimes, reactions, projection, amends=writer, approach=approach)  # type: ignore
+    clock = SimpleNamespace(now=0.0)
+    meets = CrimeMeet(  # type: ignore[arg-type]
+        link, crimes, reactions, projection, amends=writer, approach=approach, clock=lambda: clock.now,
+    )
     crimes.people.update({
         LOBART: {"guild": 12, "npctype": 0, "home_room": "LOBART"},
         HILDA: {"guild": 12, "npctype": 0, "home_room": "LOBART"},
@@ -171,7 +194,7 @@ async def system():
     })
     yield SimpleNamespace(
         link=link, memory=memory, chronicle=chronicle, crimes=crimes,
-        react=reactions, projection=projection, meet=meets, writer=writer, approach=approach,
+        react=reactions, projection=projection, meet=meets, writer=writer, approach=approach, clock=clock,
     )
     await meets.close()
     await projection.close()
@@ -613,3 +636,275 @@ async def test_fact_wake_and_poll_do_not_cancel_a_writer_rollback_twice(system, 
     await poll
     assert cancellations == [1]
     assert LOBART not in system.meet._active
+
+
+def public_home(system, *, npc=LOBART, degree="seen"):
+    system.crimes.places = PlaceBook.load()
+    assert system.crimes.places is not None
+    system.crimes.people[LOBART]["routine"] = [{
+        "state": "ZS_GOTOBED", "waypoint": "NW_FARM1_INHOUSE_BED_02",
+    }]
+    system.crimes.people[HILDA]["routine"] = [{
+        "state": "ZS_GOTOBED", "waypoint": "NW_FARM1_INHOUSE_BED_01",
+    }]
+    system.link.room_point = "NW_FARM1_INHOUSE_01"
+    system.link.hero_point = "NW_FARM1_INHOUSE_02"
+    assert system.crimes.places.of(system.link.room_point).id == "FARM1_INHOUSE"
+    assert system.crimes.places.of(system.link.hero_point).id == "FARM1_INHOUSE"
+    case(system, npc=npc, degree=degree)
+
+
+def held_room(system, *, npc=LOBART, hold="room-1"):
+    system.link.receive(PerceptionHeld(
+        type="perception_held", hold=hold, npc=npc, kind="enter_room", other="PLAYER", distance=400,
+    ))
+
+
+async def finish_room(system, *, voiced=True):
+    tasks = tuple(system.meet._room_tasks)
+    assert tasks
+    await asyncio.wait_for(asyncio.gather(*tasks), 0.7)
+    verdict = [message for message in system.link.sent if isinstance(message, HoldVerdictCmd)][-1].to
+    if voiced:
+        for npc, active in tuple(system.meet._active.items()):
+            if active.room_warning_id is not None and active.room_warned_at is None:
+                system.link.receive(NpcIdle(
+                    type="npc_idle", npc=npc, act=active.room_warning_id, reason="done",
+                ))
+        await system.meet.tick()
+    return verdict
+
+
+@pytest.mark.parametrize("npc", [LOBART, HILDA])
+async def test_known_public_home_warns_only_its_owner_or_household_with_native_voice(system, npc):
+    public_home(system, npc=npc)
+    held_room(system, npc=npc)
+    assert await finish_room(system) == "server"
+    assert system.link.actions == [(npc, "say_svm", {"svm": "GETOUTOFHERE"})]
+    fact = system.chronicle.facts("crime_meet")[-1]
+    assert fact["reaction"] == "room" and fact["event"] == "enter_room"
+    assert fact["svm"] == "GETOUTOFHERE" and fact["outcome"] == "warned"
+    assert system.link.player_portal == 15  # room ownership was never changed to make vanilla work
+
+
+async def test_public_home_grace_then_native_nonlethal_fight_is_idempotent(system):
+    public_home(system)
+    held_room(system)
+    assert await finish_room(system) == "server"
+    system.clock.now = 4.99
+    await system.meet.tick()
+    assert len(system.link.actions) == 1
+    held_room(system, hold="room-2")
+    assert await finish_room(system) == "server"
+    assert len(system.link.actions) == 1  # a repeated native poll cannot restart the warning's grace
+    system.clock.now = 5.0
+    await system.meet.tick()
+    assert system.link.actions[-1] == (LOBART, "fight", {"npc": "PLAYER", "reason": "AR_CLEARROOM"})
+    assert system.chronicle.facts("crime_meet")[-1]["outcome"] == "fight"
+    system.clock.now = 100
+    await system.meet.tick()
+    assert len(system.link.actions) == 2
+
+
+async def test_public_home_grace_starts_only_after_queued_warning_actually_finishes(system):
+    public_home(system)
+    held_room(system)
+    assert await finish_room(system, voiced=False) == "server"
+    assert not system.chronicle.facts("crime_meet")
+    system.clock.now = 100
+    await system.meet.tick()
+    assert len(system.link.actions) == 1
+    active = system.meet._active[LOBART]
+    system.link.receive(NpcIdle(type="npc_idle", npc=LOBART, act=active.room_warning_id, reason="done"))
+    await system.meet.tick()
+    assert active.room_warned_at == 100
+    assert system.chronicle.facts("crime_meet")[-1]["outcome"] == "warned"
+    system.clock.now = 104.99
+    await system.meet.tick()
+    assert len(system.link.actions) == 1
+    system.clock.now = 105
+    await system.meet.tick()
+    assert system.link.actions[-1] == (LOBART, "fight", {"npc": "PLAYER", "reason": "AR_CLEARROOM"})
+
+
+@pytest.mark.parametrize("reason", ["failed", "timeout", "interrupted", "gone"])
+async def test_public_home_unsuccessful_warning_never_escalates_or_clears_later_native_work(system, reason):
+    public_home(system)
+    held_room(system)
+    assert await finish_room(system, voiced=False) == "server"
+    active = system.meet._active[LOBART]
+    system.link.native[LOBART] = "ZS_OTHER"
+    system.link.receive(NpcIdle(type="npc_idle", npc=LOBART, act=active.room_warning_id, reason=reason))
+    await system.meet.tick()
+    assert LOBART not in system.meet._active
+    assert system.link.native[LOBART] == "ZS_OTHER"
+    system.clock.now = 100
+    await system.meet.tick()
+    assert len(system.link.actions) == 1
+    assert not any(
+        expr[1] == "NPC_CLEARAIQUEUE" for _, exprs in system.link.evaluations for expr in exprs
+    )
+
+
+async def test_public_home_replaced_warning_never_escalates_or_clears_the_new_action(system):
+    public_home(system)
+    held_room(system)
+    assert await finish_room(system, voiced=False) == "server"
+    await system.link.npc_act(LOBART, "say_svm", svm="SMALLTALK")
+    system.link.native[LOBART] = "ZS_OTHER"
+    system.clock.now = 100
+    await system.meet.tick()
+    assert LOBART not in system.meet._active
+    assert system.link.native[LOBART] == "ZS_OTHER"
+    assert len(system.link.actions) == 2
+    assert not any(
+        expr[1] == "NPC_CLEARAIQUEUE" for _, exprs in system.link.evaluations for expr in exprs
+    )
+
+
+async def test_public_home_pending_own_warning_is_cancelled_when_knowledge_is_settled(system):
+    public_home(system)
+    held_room(system)
+    assert await finish_room(system, voiced=False) == "server"
+    system.chronicle.record({"fact": "forgiven", "npc": LOBART, "crime": "case-1"})
+    await system.meet.tick()
+    assert LOBART not in system.meet._active
+    assert any(expr[1] == "NPC_CLEARAIQUEUE" for _, exprs in system.link.evaluations for expr in exprs)
+    assert len(system.link.actions) == 1
+
+
+@pytest.mark.parametrize("left", ["room", "range"])
+async def test_public_home_same_nearest_waypoint_cannot_start_fight_after_leaving_actual_room(system, left):
+    public_home(system)
+    held_room(system)
+    assert await finish_room(system) == "server"
+    if left == "room":
+        system.link.same_room = False
+    else:
+        system.link.room_distance = 1001
+    system.clock.now = 100
+    await system.meet.tick()
+    assert LOBART not in system.meet._active
+    assert len(system.link.actions) == 1
+    assert system.chronicle.facts("crime_meet")[-1]["outcome"] == "left"
+
+
+async def test_leaving_public_home_during_grace_stops_its_warning_and_allows_new_entry(system):
+    public_home(system)
+    held_room(system)
+    assert await finish_room(system) == "server"
+    system.link.player_portal = 0
+    system.link.hero_point = "NW_FARM1_OUT_01"
+    await system.meet.tick()
+    system.clock.now = 100
+    await system.meet.tick()
+    assert all(action != "fight" for _, action, _ in system.link.actions)
+    assert LOBART not in system.meet._active
+    assert system.chronicle.facts("crime_meet")[-1]["outcome"] == "left"
+    system.link.player_portal = 15
+    system.link.hero_point = "NW_FARM1_INHOUSE_02"
+    held_room(system, hold="room-2")
+    assert await finish_room(system) == "server"
+    assert len(system.link.actions) == 2
+
+
+@pytest.mark.parametrize("settlement", ["silenced", "forgiven", "paid", "died"])
+@pytest.mark.parametrize("fighting", [False, True])
+async def test_public_home_personal_resolution_stops_warning_or_its_own_fight(system, settlement, fighting):
+    public_home(system)
+    held_room(system)
+    assert await finish_room(system) == "server"
+    if fighting:
+        system.clock.now = 5.0
+        await system.meet.tick()
+        assert system.link.reason[LOBART] == "AR_CLEARROOM"
+    system.chronicle.record({
+        "fact": "forgiven" if settlement == "paid" else settlement,
+        "npc": LOBART, "crime": "case-1", **({"paid": 50} if settlement == "paid" else {}),
+    })
+    await system.meet.tick()
+    assert LOBART not in system.meet._active
+    assert system.link.projection[LOBART] == 0
+    if settlement != "died":
+        assert system.link.native.get(LOBART, "ZS_STAND") == "ZS_STAND"
+    actions = len(system.link.actions)
+    system.clock.now = 100
+    await system.meet.tick()
+    assert len(system.link.actions) == actions
+
+
+@pytest.mark.parametrize("degree", [None, "suspects"])
+async def test_public_home_ownership_or_suspicion_cannot_own_a_room_hold(system, degree):
+    public_home(system, degree=degree)
+    held_room(system)
+    assert await finish_room(system) == "scripts"
+    assert not system.link.actions
+    assert not system.chronicle.facts("crime_meet")
+
+
+@pytest.mark.parametrize("missing", ["indoors", "seen", "same_room", "distance", "actual_house", "home"])
+async def test_public_home_requires_actual_own_house_and_present_identifiable_hero(system, missing):
+    public_home(system)
+    if missing == "indoors":
+        system.link.room_indoor = False
+    elif missing == "seen":
+        system.link.visible = False
+    elif missing == "same_room":
+        system.link.same_room = False
+    elif missing == "distance":
+        system.link.room_distance = 1001
+    elif missing == "actual_house":
+        system.link.room_point = "NW_FARM1_OUT_01"
+    else:
+        system.crimes.people[LOBART].pop("routine")
+    held_room(system)
+    assert await finish_room(system) == "scripts"
+    assert not system.link.actions
+
+
+async def test_private_home_retains_its_existing_native_warning_and_observer(system):
+    public_home(system)
+    system.link.player_portal = 12
+    held_room(system)
+    assert await finish_room(system) == "scripts"
+    assert not system.link.actions
+    roster(system, LOBART, state="ZS_CLEARROOM")
+    await system.meet.tick()
+    fact = system.chronicle.facts("crime_meet")[-1]
+    assert fact["reaction"] == "room" and "outcome" not in fact
+
+
+async def test_public_home_does_not_interrupt_another_combat_provider(system):
+    public_home(system)
+    system.link.owned.add(LOBART)
+    held_room(system)
+    assert await finish_room(system) == "scripts"
+    assert not system.link.actions
+
+
+async def test_public_home_hold_deadline_falls_back_without_starting_a_late_warning(system, monkeypatch):
+    public_home(system)
+    waiting = asyncio.Event()
+
+    async def unavailable(npcs):
+        await waiting.wait()
+        raise AssertionError("the timed out read must have been cancelled")
+
+    monkeypatch.setattr(system.link, "npc_view", unavailable)
+    monkeypatch.setattr("gothic_ai.crime_meet.ROOM_HOLD_SECONDS", 0.01)
+    held_room(system)
+    assert await finish_room(system) == "scripts"
+    assert not system.link.actions
+
+
+async def test_loading_cancels_public_home_grace_without_replaying_into_new_branch(system):
+    public_home(system)
+    held_room(system)
+    assert await finish_room(system) == "server"
+    system.link.receive(Loading(type="loading"))
+    system.link.receive(Session(type="session", branch="B"))
+    system.clock.now = 100
+    await system.meet.tick()
+    assert not system.meet._active
+    assert not system.chronicle.facts("crime_meet")
+    assert len(system.link.actions) == 1

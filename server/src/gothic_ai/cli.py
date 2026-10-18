@@ -1242,6 +1242,7 @@ async def serve(args: argparse.Namespace) -> int:
                 config=PlannerConfig(apply_day=args.apply_day),
                 trace=trace,  # its decisions: data for fine-tuning (M5d)
             )
+            planner.crime_rooms = state.crimes is not None
             state.incidents.follow(planner)  # free npc's speak when the moment calls for it
             state.talk.planner = planner  # npc's in a conversation are left to it; others overhear
             link.listeners.append(planner.on_message)
