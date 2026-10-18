@@ -32,6 +32,7 @@ Interactive::Interactive(Vob* parent, World &world, const zenkit::VMovableObject
   bbox[0]       = {vob.bbox.min.x, vob.bbox.min.y, vob.bbox.min.z};
   bbox[1]       = {vob.bbox.max.x, vob.bbox.max.y, vob.bbox.max.z};
   owner         = vob.owner;
+  ownerGuild    = vob.owner_guild;
   focOver       = vob.focus_override;
   showVisual    = vob.show_visual;
 
@@ -775,6 +776,8 @@ bool Interactive::canQuitAtState(const Npc& npc, int32_t state) const {
   }
 
 bool Interactive::attach(Npc& npc, Interactive::Pos& to) {
+  if(npc.isPlayer())
+    useDeed.reset();
   assert(to.user==nullptr);
 
   auto mat = nodeTranform(&npc,to);

@@ -8,6 +8,7 @@
 #include "graphics/mesh/skeleton.h"
 #include "graphics/visualfx.h"
 #include "game/damagecalculator.h"
+#include "game/herodeed.h"
 #include "game/bodyobservations.h"
 #include "game/bodycontroller.h"
 #include "game/bodytrajectory.h"
@@ -3339,9 +3340,11 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         dmg[i] = spl.damage_per_level;
     }
 
+  // Capture the victim's state before its damage script changes attack reason/state.
+  auto heroAttack = HeroDeed::capture(other,"attack",this);
   if(!isSpell || splCat==SpellCategory::SPELL_BAD) {
     stopPhysicsInvestigation(false);
-    perceptionProcess(other,this,0,PERC_ASSESSDAMAGE);
+    perceptionProcess(other,this,0,PERC_ASSESSDAMAGE,heroAttack);
     const auto tracePrimitiveBefore = fghAlgo.queuedAction();
     fghAlgo.onTakeHit();
     BodyController::takeHit(*this);
@@ -3422,7 +3425,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     changeAttribute(ATR_HITPOINTS,-hitResult.value,dontKill);
 
     if(bMask&(COLL_APPLYVICTIMSTATE|COLL_DOEVERYTHING)) {
-      owner.sendPassivePerc(*this,other,*this,PERC_ASSESSOTHERSDAMAGE);
+      owner.sendPassivePerc(*this,other,*this,PERC_ASSESSOTHERSDAMAGE,std::move(heroAttack));
       if(isUnconscious()){
         owner.sendPassivePerc(*this,other,*this,PERC_ASSESSDEFEAT);
         }
@@ -4985,9 +4988,10 @@ Item* Npc::takeItem(Item& item) {
   if(it==nullptr)
     return nullptr;
 
+  auto deed = HeroDeed::capture(*this,"take_item",nullptr,it);
   it = addItem(std::move(ptr));
   if(isPlayer() && it!=nullptr)
-    owner.sendPassivePerc(*this,*this,*it,PERC_ASSESSTHEFT);
+    owner.sendPassivePerc(*this,*this,*it,PERC_ASSESSTHEFT,std::move(deed));
 
   implAniWait(uint64_t(sq->totalTime()));
   return it;
@@ -4999,7 +5003,17 @@ void Npc::onWldItemRemoved(const Item& itm) {
   }
 
 void Npc::addItem(size_t id, Interactive &chest, size_t count) {
+  auto* item = chest.inventory().getItem(id);
+  auto deed = HeroDeed::capture(*this,"take_item",nullptr,item,&chest,
+                                std::min(count,chest.inventory().itemCount(id)));
+  const auto before = invent.itemCount(id);
   Inventory::transfer(invent,chest.inventory(),nullptr,id,count,owner);
+  if(deed!=nullptr && invent.itemCount(id)>before) {
+    deed->count = invent.itemCount(id)-before;
+    if(auto use = chest.heroUseDeed())
+      deed->witnesses = use->witnesses;
+    Gothic::inst().onHeroDeed(*deed);
+    }
   }
 
 void Npc::addItem(size_t id, Npc &from, size_t count) {
@@ -6094,7 +6108,7 @@ bool Npc::passPerception(Npc& other, Npc* victim, PercType perc) {
   return ret;
   }
 
-bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc) {
+bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc, const std::shared_ptr<HeroDeed>& deed) {
   const auto trace = [&](std::string_view gate, bool result, bool dispatched) {
     if(!TestBench::bodyTracing() || currentTarget==nullptr)
       return;
@@ -6108,6 +6122,8 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
                          ",\"result\":"+(result ? "true" : "false"));
     };
   if(BodyController::owns(*this)) {
+    if(deed!=nullptr)
+      deed->witnessed(*this);
     Gothic::inst().onObservedPerception(*this,pl,victim,perc);
     trace("body_control_owned",false,false);
     return false;
@@ -6127,6 +6143,8 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
     }
 
   if(externalCtrl) {
+    if(deed!=nullptr)
+      deed->witnessed(*this);
     Gothic::inst().onExternalPerception(*this,pl,victim,perc);
     trace("external_control",false,false);
     return false;
@@ -6183,6 +6201,8 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
       trace("intercepted",true,false);
       return true;  // taken over by an outside AI (ai_bridge); it may hand it back
       }
+    if(deed!=nullptr)
+      deed->witnessed(*this);
     trace("native_callback",true,true);
     owner.script().invokeState(this,&pl,victim,perception[perc].func);
     return true;

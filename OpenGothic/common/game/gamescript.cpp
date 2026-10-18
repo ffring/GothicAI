@@ -10,6 +10,7 @@
 #include "game/compatibility/directmemory.h"
 #include "game/definitions/spelldefinitions.h"
 #include "game/serialize.h"
+#include "game/herodeed.h"
 #include "utils/string_frm.h"
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
@@ -1026,8 +1027,26 @@ void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
         ++i;
       }
     }
-  dialogFunction(vm.find_symbol_by_index(dlg.scriptFn),false);
+  auto* function = vm.find_symbol_by_index(dlg.scriptFn);
+  std::shared_ptr<HeroDeed> pickpocket;
+  if(function!=nullptr && function->name().ends_with("_DOIT") &&
+     (function->name().find("PICKPOCKET")!=std::string::npos || function->name()=="DIA_CASSIA_PICKME_DOIT")) {
+    pickpocket = HeroDeed::capture(player,"pickpocket",&npc);
+    if(pickpocket!=nullptr) {
+      pickpocket->inventoryBefore = HeroDeed::inventory(player);
+      pickpocket->pickedPocketBefore = HeroDeed::aivar(npc,"AIV_PLAYERHASPICKEDMYPOCKET");
+      }
+    }
+  dialogFunction(function,false);
   Gothic::inst().onDialogChosen(dlg,player,npc);
+  if(pickpocket!=nullptr) {
+    pickpocket->inventoryAfter = HeroDeed::inventory(player);
+    pickpocket->pickedPocketAfter = HeroDeed::aivar(npc,"AIV_PLAYERHASPICKEDMYPOCKET");
+    pickpocket->caught = HeroDeed::aivar(npc,"AIV_ATTACKREASON")==HeroDeed::constant(npc,"AR_Theft");
+    if(pickpocket->caught)
+      pickpocket->witnessed(npc);
+    Gothic::inst().onHeroDeed(*pickpocket);
+    }
   }
 
 int32_t GameScript::dialogFunction(zenkit::DaedalusSymbol* fn, bool returns) {

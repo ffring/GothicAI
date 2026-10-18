@@ -2,8 +2,10 @@
 
 #include <Tempest/Point>
 #include <cstdint>
+#include <memory>
 
 class Npc;
+struct HeroDeed;
 
 class PerceptionMsg final {
   public:
@@ -13,4 +15,5 @@ class PerceptionMsg final {
     Npc*          other =nullptr;
     Npc*          victim=nullptr;
     size_t        item  =size_t(-1);
+    std::shared_ptr<HeroDeed> deed;
   };
