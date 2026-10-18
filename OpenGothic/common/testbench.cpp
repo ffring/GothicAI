@@ -701,7 +701,7 @@ struct Bench {
   Vec3 destructionMeleeFacing,destructionMeleeStand;
   bool destructionMeleeRestance=false;
   uint64_t destructionMeleeNext=0,destructionMeleeDeadline=0;
-  unsigned destructionMeleeAttempts=0,destructionMeleeHits=0;
+  unsigned destructionMeleeAttempts=0,destructionMeleeHits=0,destructionMeleeBlows=0;
   bool destructionMeleeRunning=false,destructionMeleeArena=false;
   Npc* destructionFarmNpc=nullptr;
   Vec3 destructionFarmNpcStart,destructionFarmStart,destructionFarmEnd;
@@ -4332,6 +4332,10 @@ void destructionMeleeSetup(World& world,Npc& player,std::string_view kind,std::s
 
 void destructionMeleeTick(World& world) {
   if(!bench.destructionMeleeRunning || !bench.destructionMeleeActor)return;
+  if(bench.destructionMeleeBlows>0 && bench.destructionMeleeAttempts>=bench.destructionMeleeBlows) {
+    if(world.tickCount()>=bench.destructionMeleeNext) {bench.destructionMeleeRunning=false;bench.waitUntil=0;}
+    return;
+    }
   const auto bodies=world.physic()->movableVobSnapshot();
   const auto found=std::find_if(bodies.begin(),bodies.end(),[](const auto& body){return destructionOwns(body.id);});
   if(found==bodies.end() || world.tickCount()>=bench.destructionMeleeDeadline) {
@@ -7020,8 +7024,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="destruction" && a.size()==3 && a[1]=="support" && a[2]=="sample") destructionSupportSample(w);
   else if(c=="destruction2" && (a.size()==4 || a.size()==5) && a[1]=="setup")
     destructionMeleeSetup(w,pl,a[2],a[3],a.size()==5 && a[4]=="npc");
-  else if(c=="destruction2" && a.size()==2 && a[1]=="attack") {
+  else if(c=="destruction2" && (a.size()==2 || a.size()==3) && a[1]=="attack") {
     if(!bench.destructionMeleeActor || bench.destructionIds.empty()) {arenaAbort("destruction melee setup required");return;}
+    // `attack <n>`: n blows and no more, whether the prop broke or not (a take with destruction off)
+    bench.destructionMeleeBlows=a.size()==3 ? unsigned(num(a,2,0)) : 0;
     bench.destructionMeleeRunning=true;bench.destructionMeleeNext=w.tickCount();
     bench.destructionMeleeDeadline=w.tickCount()+90000;bench.waitUntil=bench.time+90034;
     }
