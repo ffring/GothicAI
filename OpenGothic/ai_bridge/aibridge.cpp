@@ -1092,7 +1092,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="npc_los" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
      cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise" || cmd=="physics_traces" || cmd=="destruction_traces") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
@@ -1144,6 +1144,27 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
   Npc*       pl    = world!=nullptr ? world->player() : nullptr;
   if(world==nullptr || pl==nullptr) {
     sendResult(req,false,"no world loaded");
+    return;
+    }
+  if(cmd=="npc_los") {
+    // Read-only scene preparation: the observer's real eye/terrain rays, independent of its ordinary
+    // senses range and field of view. No target, pose or AI state is changed.
+    Npc* observer = npcBySymbol(*world,JsonRead::str(msg,"npc"));
+    Npc* target = observer!=nullptr ? AiNpc::findNpc(*world,JsonRead::str(msg,"to"),observer) : nullptr;
+    if(observer==nullptr || target==nullptr || observer==target) {
+      sendResult(req,false,"npc_los needs distinct npc and to targets");
+      return;
+      }
+    const float distance = std::sqrt(observer->qDistTo(*target));
+    const float extra = std::max(0.f,5000.f-float(observer->handle().senses_range));
+    rapidjson::StringBuffer buf;
+    rapidjson::Writer<rapidjson::StringBuffer> value(buf);
+    value.StartObject();
+    value.Key("distance_cm"); value.Double(distance);
+    value.Key("center_clear"); value.Bool(distance<=5000 && observer->canRayHitPoint(target->centerPosition(),true,extra));
+    value.Key("head_clear"); value.Bool(distance<=5000 && observer->canRayHitPoint(target->mapHeadBone(),true,extra));
+    value.EndObject();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
     return;
     }
   if(cmd=="physics_noise") {

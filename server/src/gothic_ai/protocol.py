@@ -1479,6 +1479,7 @@ DebugCommand = Literal[
     "player_equip",
     "waypoints",
     "npc_goto",
+    "npc_los",
     "player_hp",
     "player_drop",
     "chest_take",

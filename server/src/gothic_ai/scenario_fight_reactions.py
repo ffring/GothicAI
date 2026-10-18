@@ -26,6 +26,7 @@ from .incidents import IncidentDesk
 from .protocol import (
     ActionCmd,
     Beasts,
+    DebugCmd,
     GameMessage,
     LineStarted,
     NpcActCmd,
@@ -56,12 +57,15 @@ class CombatTrace:
     damage_wall: dict[str, list[float]] = field(default_factory=dict)
     positions: dict[str, tuple[float, float, float]] = field(default_factory=dict)
     target: dict[str, int] = field(default_factory=dict)
+    targets_seen: dict[str, set[int]] = field(default_factory=dict)
     entities: dict[str, int] = field(default_factory=dict)
     hp: dict[str, int] = field(default_factory=dict)
+    weapons: dict[str, int] = field(default_factory=dict)
     attacking: dict[str, bool] = field(default_factory=dict)
     events: list[tuple[float, GameMessage]] = field(default_factory=list)
     commands: list[tuple[float, str, str, dict[str, Any]]] = field(default_factory=list)
     wolves: list[str] = field(default_factory=list)
+    wolf_states: dict[str, list[str]] = field(default_factory=dict)
 
     def body(self, packet: dict[str, Any]) -> None:
         for row in packet["observations"]:
@@ -69,9 +73,20 @@ class CombatTrace:
             if who is None:
                 continue
             own, now = row["self"], row["t_game_ms"]
+            if who not in self.entities:
+                log.info(
+                    "fight_reactions body npc=%s entity=%d pos=%s weapon=%d hp=%d",
+                    who,
+                    row["entity_id"],
+                    own["position_world_cm"],
+                    own["weapon_state"],
+                    own["hp"],
+                )
             self.positions[who] = tuple(own["position_world_cm"])
             self.target[who] = row["target"]["entity_id"]
+            self.targets_seen.setdefault(who, set()).add(self.target[who])
             self.entities[who] = row["entity_id"]
+            self.weapons[who] = own["weapon_state"]
             if own["weapon_state"] >= 2:
                 self.armed.setdefault(who, now)
             attacking = bool(own["attack_anim"])
@@ -92,6 +107,10 @@ class CombatTrace:
     def message(self, msg: GameMessage) -> None:
         if isinstance(msg, Beasts):
             self.wolves = [w.id for w in msg.wolves]
+            for wolf in msg.wolves:
+                history = self.wolf_states.setdefault(wolf.id, [])
+                if not history or history[-1] != wolf.state:
+                    history.append(wolf.state)
         if isinstance(msg, LineStarted | NpcEvent | PerceptionHeld):
             self.events.append((time.monotonic(), msg))
 
@@ -228,12 +247,38 @@ async def fight_reactions(
         if case in {"wolf", "sight"}:
             monster = f"DIR_NPC_FIGHT_{case.upper()}"
             kind = "WOLF" if case == "wolf" else "BLOODFLY"
-            # Create separated from the hero, then relocate before the companion is attached.
-            await link.debug("player_goto", pos=point(-8000))
-            await link.own_npc(monster, like=kind, waypoint=ARENA)
-            await put(monster, 1800 if case == "wolf" else 3000)
-            await put(CAVALORN, 0, face=monster)
-            await link.debug("player_goto", pos=point(-600 if case == "wolf" else -900))
+            # Neither the hero nor Cavalorn overlaps the creature during preparation.
+            await link.debug("player_goto", pos=point(300))
+            await link.debug("npc_goto", npc=CAVALORN, waypoint=ARENA, face="PC_HERO")
+            await link.own_npc(monster, like=kind, distance=5000)
+            await link.debug("npc_goto", npc=monster, to=CAVALORN, distance=1800 if case == "wolf" else 3000)
+            if case == "sight":
+                creature_pos = (await link.snapshot(monster, fresh=True)).npc.pos
+                lane = None
+                # Choose an open 30 m line using an independent, unrestricted collision ray.
+                # Move only the viewer around the creature: nobody approaches within aggro range.
+                for step in range(8):
+                    angle = math.pi + step * math.pi / 4
+                    dx, dz = math.cos(angle), math.sin(angle)
+                    at = [creature_pos[0] + 3000 * dx, creature_pos[1], creature_pos[2] + 3000 * dz]
+                    await link.debug("player_goto", pos=at)
+                    await link.debug("npc_goto", npc=CAVALORN, to="PC_HERO", distance=0, face=monster)
+                    await link.debug("player_goto", pos=[at[0] + 900 * dx, at[1], at[2] + 900 * dz])
+                    response = await link._request(
+                        DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=CAVALORN, to=monster),
+                        5,
+                    )
+                    ray = response.value or {}
+                    log.info("fight_reactions sight lane=%d origin=%s native_ray=%s", step, at, ray)
+                    if 2850 <= ray.get("distance_cm", 0) <= 3250 and (
+                        ray.get("center_clear") or ray.get("head_clear")
+                    ):
+                        lane = (await link.snapshot(CAVALORN, fresh=True)).npc.pos
+                        break
+                if lane is None:
+                    raise GameError("fight_reactions setup: no independently verified clear 30 m sight line")
+                anchor = lane
+            await link.debug("player_goto", pos=point(300 if case == "wolf" else -900))
             if not await talk.hold(CAVALORN, "follow"):
                 raise GameError("fight_reactions setup: cannot hold companion")
             await link.act(CAVALORN, "stop")
@@ -304,7 +349,35 @@ async def fight_reactions(
                 if not await _until(lambda: any(w.startswith(monster + "#") for w in trace.wolves), 5):
                     raise GameError("fight_reactions setup: unique wolf absent from native beast watch")
                 wolf_id = next(w for w in trace.wolves if w.startswith(monster + "#"))
+                origin = trace.positions[monster]
+                trace.targets_seen[monster] = set()
+                trace.wolf_states[wolf_id] = []
                 await link.beast(wolf_id, "attack")
+                hunting = await _until(
+                    lambda: (
+                        "attack" in trace.wolf_states.get(wolf_id, [])
+                        and trace.entities.get("PLAYER") in trace.targets_seen.get(monster, set())
+                        and math.dist(origin, trace.positions.get(monster, origin)) >= 100
+                    ),
+                    5,
+                )
+                wolf_snapshot = await link.snapshot(monster, fresh=True)
+                log.info(
+                    "fight_reactions wolf setup hunting=%s states=%s target=%s hero_entity=%s "
+                    "wolf_pos=%s origin=%s hero_cm=%s view=%s",
+                    hunting,
+                    trace.wolf_states.get(wolf_id),
+                    trace.target.get(monster),
+                    trace.entities.get("PLAYER"),
+                    trace.positions.get(monster),
+                    origin,
+                    trace.distance(monster, "PLAYER"),
+                    [v.model_dump() for v in await link.npc_view([CAVALORN])],
+                )
+                if not hunting:
+                    raise GameError(
+                        f"fight_reactions setup: wolf did not hunt hero; snapshot={wolf_snapshot}"
+                    )
                 await _until(lambda: bool(trace.strikes.get(CAVALORN)), 20)
                 first_companion = next(iter(trace.strikes.get(CAVALORN, [])), None)
                 # Wait through the encounter, so an early command cannot hide a late bite.
@@ -344,6 +417,9 @@ async def fight_reactions(
             if not await talk.hold(CAVALORN, "follow"):
                 raise GameError("fight_reactions setup: cannot hold companion")
             await link.act(CAVALORN, "stop")
+            drawn = await link.act(CAVALORN, "draw_weapon", kind="melee")
+            if drawn.status != "done":
+                raise GameError(f"fight_reactions setup: companion melee draw {drawn.status}: {drawn.detail}")
             if not await talk.hold(BANDITS[1], "listen"):
                 raise GameError("fight_reactions setup: cannot hold listening bandit")
             watch = [CAVALORN, *BANDITS, "PLAYER"]
@@ -354,6 +430,8 @@ async def fight_reactions(
             await link.body_watch(watch)
             if not await _until(lambda: all(n in trace.positions for n in watch), 5):
                 raise GameError("fight_reactions setup: missing bandit body observations")
+            if not await _until(lambda: trace.weapons.get(CAVALORN) in (2, 3), 5):
+                raise GameError(f"fight_reactions setup: companion not holding melee weapon: {trace.weapons}")
             if not await _until(lambda: all(n in planner.npcs for n in BANDITS), 5):
                 raise GameError("fight_reactions setup: bandits absent from planner roster")
 
