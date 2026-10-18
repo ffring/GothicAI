@@ -39,6 +39,13 @@ The `process` receipt omits only local `inference_ms` and `backend_timing` diagn
 so network and in-process replay responses can be compared exactly.
 Each request is bounded by the same `MAX_REQUEST_BYTES` as `serve`.
 
+`reset` with `include_capabilities: true` advertises `memory_only_step: true`.
+An optional `step` field `memory_only: true`
+updates recurrent memory without an action, even when the row permits a decision.
+`serve-net` defaults to `--allow-stale-memory-only`, accepting these rows beyond the
+100 game-ms action deadline; `--no-allow-stale-memory-only` restores age checks for all rows.
+The runtime's default age check and the arena/collector behavior are unchanged.
+
 Deploy into a separate directory so the training environment remains independent.
 The editable package needs `scripts/` beside `body-service/` for its feature packer:
 

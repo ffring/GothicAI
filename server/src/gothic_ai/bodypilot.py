@@ -48,6 +48,7 @@ EVENTS_INTERVAL = 0.150
 FINISH_TIMEOUT = 2.0
 MAX_JSON_BYTES = 256 * 1024
 TRANSIENT_REJECTION_LIMIT = 10
+MAX_OBSERVATION_AGE_GAME_MS = 100
 TARGET_ABSENCE_TIMEOUT_MS = 1000
 # BodyController::validate and FightAlgo::resolve recheck live state after the
 # observation. These refusals retain the lease and need a fresh row, not a retry
@@ -164,6 +165,11 @@ class FightSummary:
     reason: str
     decisions: int
     fallbacks: int
+    memory_only_lag_rows: int
+    observation_too_old: int
+    policy_memory_resets: int
+    max_batch_rows: int
+    max_batch_lag_game_ms: int
     service_p50_ms: float | None
     service_p95_ms: float | None
     packet_to_request_p50_ms: float | None
@@ -276,6 +282,13 @@ class BodyPilot:
         self._packet_to_action: list[float] = []
         self._decisions = 0
         self._fallbacks = 0
+        self._memory_only_step = False
+        self._policy_needs_reset = False
+        self._memory_only_lag_rows = 0
+        self._observation_too_old = 0
+        self._policy_memory_resets = 0
+        self._max_batch_rows = 0
+        self._max_batch_lag_game_ms = 0
         self._last_summary: FightSummary | None = None
         link.listeners.append(self.on_message)
         link.raw_body_listeners.append(self.on_body_packet)
@@ -435,6 +448,14 @@ class BodyPilot:
                 self._reason = "observation_overflow"
                 break
             self._rows.append((row, received_at))
+        if self.lease is not None:
+            pending = [row for row, _ in self._rows if self._leased_periodic(row)]
+            if pending:
+                self._max_batch_rows = max(self._max_batch_rows, len(pending))
+                self._max_batch_lag_game_ms = max(
+                    self._max_batch_lag_game_ms,
+                    self._now_game_ms - min(row["t_game_ms"] for row in pending),
+                )
         self._wake.set()
 
     async def run(self) -> None:
@@ -630,6 +651,32 @@ class BodyPilot:
     def _is_leased_target(self, row: dict[str, Any]) -> bool:
         return self._hero is None or row["target"]["entity_id"] == self._hero
 
+    def _leased_periodic(self, row: dict[str, Any]) -> bool:
+        return bool(
+            self.lease is not None and row["periodic"] and row["script_symbol"] == self._symbol
+            and (row["entity_id"], row["session_epoch"], row["world_epoch"], row["control_generation"])
+            == self._identity(self.lease)
+            and row["observation_seq"] > self._last_seq
+        )
+
+    def _lagging(self, row: dict[str, Any]) -> bool:
+        return (
+            self._now_game_ms - row["t_game_ms"] > MAX_OBSERVATION_AGE_GAME_MS
+            or any(
+                self._leased_periodic(pending) and pending["observation_seq"] > row["observation_seq"]
+                for pending, _ in self._rows
+            )
+        )
+
+    async def _reset_policy(self, initial_game_ms: int) -> None:
+        assert self.client is not None and self.lease is not None
+        result = await self.client.call(
+            "reset", session_epoch=self.lease.session_epoch, world_epoch=self.lease.world_epoch,
+            initial_game_ms=initial_game_ms, include_capabilities=True,
+        )
+        self._memory_only_step = result.get("memory_only_step") is True
+        self._policy_needs_reset = False
+
     def _capture_invisibility(self, now: float, game_ms: int) -> None:
         if self._invisible_at is not None:
             assert self._invisible_game_ms is not None
@@ -791,12 +838,7 @@ class BodyPilot:
                 try:
                     self.client = PolicyClient(self.url)
                     await self.client.connect()
-                    await self.client.call(
-                        "reset",
-                        session_epoch=self.lease.session_epoch,
-                        world_epoch=self.lease.world_epoch,
-                        initial_game_ms=self._initial_game_ms,
-                    )
+                    await self._reset_policy(self._initial_game_ms)
                 except TimeoutError:
                     self._reason = "policy_timeout"
                 except (OSError, ValueError, PolicyError):
@@ -806,13 +848,25 @@ class BodyPilot:
             return
         try:
             assert self.client is not None
+            if self._policy_needs_reset:
+                try:
+                    await self._reset_policy(raw["t_game_ms"])
+                except TimeoutError:
+                    self._reason = "policy_timeout"
+                    return
+            memory_only = self._lagging(raw)
+            if memory_only:
+                self._memory_only_lag_rows += 1
             started = self.clock()
             if self._policy_watchdog_at is None:
                 self._policy_watchdog_at = asyncio.get_running_loop().time()
                 self._policy_watchdog_task = asyncio.create_task(self._policy_watchdog())
             self._packet_to_request.append((started - received_at) * 1000)
             try:
-                result = await self.client.call("step", observation=raw, now_game_ms=self._now_game_ms)
+                fields = {"memory_only": True} if memory_only and self._memory_only_step else {}
+                result = await self.client.call(
+                    "step", observation=raw, now_game_ms=self._now_game_ms, **fields,
+                )
             except TimeoutError:
                 self._policy_timeouts += 1
                 self._policy_timeouts_consecutive += 1
@@ -831,6 +885,14 @@ class BodyPilot:
             self._packet_to_response.append((responded_at - received_at) * 1000)
             if result.get("status") == "fallback":
                 self._fallbacks += 1
+                if result.get("reason") == "observation_too_old":
+                    self._observation_too_old += 1
+                    if result.get("process", {}).get("hidden_reset") is True:
+                        self._policy_memory_resets += 1
+                        self._policy_needs_reset = True
+                    self._transient_rejections_consecutive += 1
+                    if self._transient_rejections_consecutive < TRANSIENT_REJECTION_LIMIT:
+                        return
                 self._reason = f"policy_fallback:{result.get('reason')}"
                 return
             if self._closing or self._reason or not self._allowed(self.npc):
@@ -839,7 +901,10 @@ class BodyPilot:
             if self.link.body_leases.get(self.lease.entity_id) != self.lease:
                 self._reason = "lease_lost"
                 return
-            if result.get("status") == "decision" and raw["can_decide"] and raw["action_mask_valid"]:
+            if (
+                not memory_only and not self._lagging(raw)
+                and result.get("status") == "decision" and raw["can_decide"] and raw["action_mask_valid"]
+            ):
                 action = result.get("action_id")
                 if type(action) is not int or not 0 <= action <= 11 or not raw["action_mask"][action]:
                     raise PolicyError("invalid policy action")
@@ -1145,6 +1210,11 @@ class BodyPilot:
             reason=reason,
             decisions=self._decisions,
             fallbacks=self._fallbacks,
+            memory_only_lag_rows=self._memory_only_lag_rows,
+            observation_too_old=self._observation_too_old,
+            policy_memory_resets=self._policy_memory_resets,
+            max_batch_rows=self._max_batch_rows,
+            max_batch_lag_game_ms=self._max_batch_lag_game_ms,
             service_p50_ms=_percentile(self._latencies, 0.50),
             service_p95_ms=_percentile(self._latencies, 0.95),
             packet_to_request_p50_ms=_percentile(self._packet_to_request, 0.50),
@@ -1181,7 +1251,8 @@ class BodyPilot:
         )
         log.info(
             "neural-body end npc=%s target_kind=%s target_name=%s reason=%s "
-            "decisions=%d fallback=%d service_p50_ms=%s "
+            "decisions=%d fallback=%d memory_only_lag_rows=%d observation_too_old=%d "
+            "policy_memory_resets=%d max_batch_rows=%d max_batch_lag_game_ms=%d service_p50_ms=%s "
             "service_p95_ms=%s packet_to_request_p50_ms=%s packet_to_request_p95_ms=%s "
             "packet_to_response_p50_ms=%s packet_to_response_p95_ms=%s "
             "response_to_action_p50_ms=%s response_to_action_p95_ms=%s "
@@ -1197,6 +1268,11 @@ class BodyPilot:
             reason,
             self._decisions,
             self._fallbacks,
+            summary.memory_only_lag_rows,
+            summary.observation_too_old,
+            summary.policy_memory_resets,
+            summary.max_batch_rows,
+            summary.max_batch_lag_game_ms,
             summary.service_p50_ms,
             summary.service_p95_ms,
             summary.packet_to_request_p50_ms,
@@ -1275,4 +1351,7 @@ class BodyPilot:
         self._response_to_action.clear()
         self._packet_to_action.clear()
         self._decisions = self._fallbacks = 0
+        self._memory_only_step = self._policy_needs_reset = False
+        self._memory_only_lag_rows = self._observation_too_old = self._policy_memory_resets = 0
+        self._max_batch_rows = self._max_batch_lag_game_ms = 0
         self._last_summary = summary
