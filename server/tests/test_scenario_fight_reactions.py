@@ -1,7 +1,7 @@
 from gothic_ai.scenario_fight_reactions import CombatTrace, combat_shouts
 
 
-def row(symbol=10, *, t=100, hp=100, attack=False, weapon=0, pos=(1.0, 2.0, 3.0), target=20):
+def row(symbol=10, *, t=100, hp=100, attack=False, weapon=0, pos=(1.0, 2.0, 3.0), target=20, events=()):
     return {
         "script_symbol": symbol,
         "entity_id": symbol + 100,
@@ -14,6 +14,7 @@ def row(symbol=10, *, t=100, hp=100, attack=False, weapon=0, pos=(1.0, 2.0, 3.0)
             "position_world_cm": pos,
         },
         "target": {"entity_id": target},
+        "events": list(events),
     }
 
 
@@ -67,3 +68,39 @@ def test_native_voice_requires_successful_audio_playback(tmp_path):
     )
     assert combat_shouts(game_log, "BANDIT") == [300]
     assert combat_shouts(tmp_path / "absent.log", "BANDIT") == []
+
+
+def test_native_contacts_deduplicate_keep_victim_and_include_absorbed_bites():
+    trace = CombatTrace({10: "wolf", 11: "companion", 12: "PLAYER"})
+    trace.body({"observations": [row(symbol=10), row(symbol=11), row(symbol=12)]})
+    wolf_contact = {
+        "event_id": 7, "source_entity_id": 110, "source_game_ms": 200,
+        "perspective": "self", "code": 3,
+    }
+    trace.body({"observations": [row(t=200, target=111, events=[wolf_contact])]})
+    trace.body({"observations": [row(t=250, target=112, events=[wolf_contact])]})
+    assert trace.contacts["wolf"] == [(200, 111)]
+    assert trace.first_contact("wolf", "companion") == 200
+    assert trace.first_contact("wolf", "PLAYER") is None
+
+    wolf_received = {
+        "event_id": 8, "source_entity_id": 110, "source_game_ms": 250,
+        "perspective": "self", "code": 9,
+    }
+    trace.body({"observations": [
+        row(symbol=11, t=275, target=0),
+        row(t=275, hp=95, events=[wolf_received]),
+    ]})
+    assert trace.first_contact("companion", "wolf") is None
+    assert trace.first_received_contact("wolf") == 250
+
+    absorbed_bite = {
+        "event_id": 9, "source_entity_id": 112, "source_game_ms": 300,
+        "perspective": "self", "code": 10,
+    }
+    packet = {"observations": [row(symbol=12, t=350, hp=100, events=[absorbed_bite])]}
+    trace.body(packet)
+    trace.body(packet)
+    assert not trace.damage.get("PLAYER")
+    assert trace.received_contacts["PLAYER"] == [(300, 10)]
+    assert trace.first_received_contact("PLAYER") == 300

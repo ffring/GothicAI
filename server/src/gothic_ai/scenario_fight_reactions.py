@@ -57,6 +57,9 @@ class CombatTrace:
     armed: dict[str, int] = field(default_factory=dict)
     strikes: dict[str, list[int]] = field(default_factory=dict)
     strike_targets: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    contacts: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    received_contacts: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    event_ids: set[int] = field(default_factory=set)
     damage: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     damage_wall: dict[str, list[float]] = field(default_factory=dict)
     positions: dict[str, tuple[float, float, float]] = field(default_factory=dict)
@@ -113,6 +116,30 @@ class CombatTrace:
                 self.damage_wall.setdefault(who, []).append(time.monotonic())
                 log.info("fight_reactions damage npc=%s game_ms=%d hp_lost=%d", who, now, before - own["hp"])
             self.hp[who] = own["hp"]
+            for event in row.get("events", []):
+                if (
+                    event["perspective"] != "self"
+                    or event["source_entity_id"] != row["entity_id"]
+                    or event["event_id"] in self.event_ids
+                    or event["code"] not in (3, 9, 10)
+                ):
+                    continue
+                self.event_ids.add(event["event_id"])
+                at, code = event["source_game_ms"], event["code"]
+                if code == 3:  # Native hit applied after the real range/focus checks.
+                    # Native events omit the victim. This is the target observed with the
+                    # event's delivery, retained for diagnostics rather than authoritative attribution.
+                    self.contacts.setdefault(who, []).append((at, self.target[who]))
+                    log.info(
+                        "fight_reactions contact npc=%s observed_target_entity=%d game_ms=%d event_id=%d",
+                        who, self.target[who], at, event["event_id"],
+                    )
+                else:  # A contact is real even when armor absorbs all HP loss (code 10).
+                    self.received_contacts.setdefault(who, []).append((at, code))
+                    log.info(
+                        "fight_reactions contact received npc=%s code=%d game_ms=%d event_id=%d",
+                        who, code, at, event["event_id"],
+                    )
 
     def message(self, msg: GameMessage) -> None:
         if isinstance(msg, Beasts):
@@ -138,6 +165,14 @@ class CombatTrace:
         return next(
             (t for t, victim in self.strike_targets.get(npc, []) if t >= after and victim == entity), None
         )
+
+    def first_contact(self, npc: str, target: str) -> int | None:
+        """Diagnostic applied event with its target observed on delivery, possibly already changed."""
+        entity = self.entities.get(target)
+        return min((t for t, victim in self.contacts.get(npc, []) if victim == entity), default=None)
+
+    def first_received_contact(self, npc: str) -> int | None:
+        return min((t for t, _ in self.received_contacts.get(npc, [])), default=None)
 
 
 def combat_shouts(log_file: Path, npc: str) -> list[int]:
@@ -640,20 +675,31 @@ async def fight_reactions(
                     raise GameError(
                         f"fight_reactions setup: wolf did not hunt hero; snapshot={wolf_snapshot}"
                     )
-                await _until(lambda: bool(trace.strikes.get(CAVALORN)), 20)
+                await _until(lambda: trace.first_received_contact(monster) is not None, 20)
                 first_companion = next(iter(trace.strikes.get(CAVALORN, [])), None)
                 # Wait through the encounter, so an early command cannot hide a late bite.
                 await _until(lambda: trace.hp.get(monster, 1) <= 0 or bool(trace.damage.get("PLAYER")), 25)
                 first_wolf = next(iter(trace.strikes.get(monster, [])), None)
                 first_hero_bite = trace.strike_after(monster, "PLAYER", 0)
                 first_companion_bite = trace.strike_after(monster, CAVALORN, 0)
+                # The hero is passive and Cavalorn is the wolf's sole attacker. A victim's
+                # native receive event survives a target clear/retarget in that same tick.
+                first_companion_contact = trace.first_received_contact(monster)
+                companion_applied = trace.first_contact(CAVALORN, monster)
+                first_wolf_contact = trace.first_contact(monster, "PLAYER")
+                first_hero_contact = trace.first_received_contact("PLAYER")
                 hero_damage = trace.damage.get("PLAYER", [])
                 check(
                     "intercepts_before_bite",
-                    first_companion is not None
-                    and (first_hero_bite is None or first_companion < first_hero_bite)
+                    first_companion_contact is not None
+                    and (first_hero_contact is None or first_companion_contact < first_hero_contact)
                     and bool(trace.damage.get(monster))
-                    and not hero_damage,
+                    and not hero_damage
+                    and not trace.strikes.get("PLAYER"),
+                    f"first_companion_contact_game_ms={first_companion_contact}, "
+                    f"first_hero_received_contact_game_ms={first_hero_contact}, "
+                    f"companion_applied_observed_target_game_ms={companion_applied}, "
+                    f"wolf_applied_observed_hero_game_ms={first_wolf_contact}, "
                     f"first_companion_game_ms={first_companion}, first_wolf_game_ms={first_wolf}, "
                     f"first_wolf_to_hero_game_ms={first_hero_bite}, "
                     f"first_wolf_to_companion_game_ms={first_companion_bite}, "
