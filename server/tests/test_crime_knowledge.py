@@ -9,7 +9,10 @@ import pytest
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.concerns import Concerns
 from gothic_ai.crimes import Crimes
+from gothic_ai.dialogue import DialogueManager
+from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.memory import MemoryStore
+from gothic_ai.persona import PersonaProvider
 from gothic_ai.places import PlaceBook
 from gothic_ai.protocol import Session
 from gothic_ai.sightings import Sighting, Sightings
@@ -54,6 +57,22 @@ async def knowledge():
     if chronicle._background:
         await asyncio.gather(*chronicle._background)
     memory.close()
+
+
+@pytest.fixture
+async def attitude_dialogue(knowledge):
+    knowledge.link.snapshots = {}
+
+    async def identity(npc, expressions):
+        return [8, 0]
+
+    knowledge.link.story_eval = identity
+    dialogue = DialogueManager(knowledge.link, FakeBackend(), PersonaProvider(None), memory=knowledge.memory)
+    knowledge.crimes.dialogue = dialogue
+    knowledge.crimes.people[LOBART] = {"guild": 8, "npctype": 0}
+    yield dialogue
+    if dialogue._background:
+        await asyncio.gather(*dialogue._background)
 
 
 def theft(knowledge, **fields: Any):
@@ -183,6 +202,99 @@ async def test_attitude_depends_on_proof_victim_and_murdered_community(
         crime = {"id": "murder"}
     learn(knowledge, npc, crime["id"], degree)
     assert knowledge.crimes.attitude(npc) == expected
+
+
+@pytest.mark.parametrize("evidence", ["seen", "heard", "testimony"])
+async def test_learning_a_crime_reacts_once_and_preserves_the_models_decision_after_load(
+    knowledge, attitude_dialogue, evidence
+):
+    crime = theft(knowledge)
+
+    def tell():
+        if evidence == "testimony":
+            knowledge.chronicle.record(
+                {"fact": "testimony", "npc": LOBART, "witness": HILDA, "crime_told": [crime["id"]]}
+            )
+        else:
+            learn(knowledge, LOBART, crime["id"], evidence)
+
+    tell()
+    assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == "wary"
+    attitude_dialogue.change_intent(LOBART, "Лобарт", body=False, attitude="friendly")
+    await knowledge.crimes.prepare(LOBART)
+    tell()  # Hearing the same evidence again does not overturn the conversation.
+    assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == "friendly"
+
+    saved = knowledge.memory.head("A")
+    knowledge.link.receive(
+        Session(type="session", branch="loaded", parent="A", parent_seq=saved, reason="load")
+    )
+    await knowledge.crimes.prepare(LOBART)
+    tell()
+    assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == "friendly"
+    knowledge.link.receive(Session(type="session", branch="A", reason="connect"))
+    await knowledge.crimes.prepare(LOBART)
+    assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == "friendly"
+
+
+async def test_an_older_branch_can_react_to_the_same_crime_independently(knowledge, attitude_dialogue):
+    crime = theft(knowledge)
+    saved = knowledge.memory.head("A")
+    learn(knowledge, LOBART, crime["id"], "seen")
+    attitude_dialogue.change_intent(LOBART, "Лобарт", body=False, attitude="friendly")
+
+    knowledge.link.receive(
+        Session(type="session", branch="older", parent="A", parent_seq=saved, reason="load")
+    )
+    assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == "neutral"
+    learn(knowledge, LOBART, crime["id"], "seen")
+    assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == "wary"
+
+    knowledge.link.receive(Session(type="session", branch="A", reason="connect"))
+    await knowledge.crimes.prepare(LOBART)
+    assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == "friendly"
+
+
+@pytest.mark.parametrize("initial", ["wary", "hostile"])
+async def test_existing_caution_still_consumes_the_crime_reaction(knowledge, attitude_dialogue, initial):
+    attitude_dialogue.change_intent(LOBART, "Лобарт", body=False, attitude=initial)
+    crime = theft(knowledge)
+    learn(knowledge, LOBART, crime["id"], "seen")
+    assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == initial
+
+    attitude_dialogue.change_intent(LOBART, "Лобарт", body=False, attitude="friendly")
+    learn(knowledge, LOBART, crime["id"], "heard")
+    await knowledge.crimes.prepare(LOBART)
+    assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == "friendly"
+
+
+async def test_oldcamp_murder_can_apply_delayed_hostility_only_once(knowledge, attitude_dialogue):
+    knowledge.crimes.people[HILDA] = {"guild": 1}
+    crime = knowledge.crimes.record(
+        deed(kind="murder", victim=LOBART, victim_guild=1, victim_npctype=3, witnesses=[HILDA])
+    )
+    assert crime is not None
+    assert attitude_dialogue.open(HILDA, "Хильда").intent.attitude == "wary"
+
+    async def identity(npc, expressions):
+        assert npc == HILDA
+        assert [e[2] for e in expressions] == ["GUILD", "NPCTYPE"]
+        return [1, 3]
+
+    knowledge.link.story_eval = identity
+    await knowledge.crimes.prepare(HILDA)
+    assert attitude_dialogue.open(HILDA, "Хильда").intent.attitude == "hostile"
+    attitude_dialogue.change_intent(HILDA, "Хильда", body=False, attitude="friendly")
+    await knowledge.crimes.prepare(HILDA)
+    learn(knowledge, HILDA, crime["id"], "seen")
+    assert attitude_dialogue.open(HILDA, "Хильда").intent.attitude == "friendly"
+
+    saved = knowledge.memory.head("A")
+    knowledge.link.receive(
+        Session(type="session", branch="loaded", parent="A", parent_seq=saved, reason="load")
+    )
+    await knowledge.crimes.prepare(HILDA)
+    assert attitude_dialogue.open(HILDA, "Хильда").intent.attitude == "friendly"
 
 
 @pytest.mark.parametrize(

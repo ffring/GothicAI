@@ -232,16 +232,18 @@ class Crimes:
         ]
 
     def attitude(self, npc: str) -> str | None:
+        """The initial reaction to this knowledge, not the npc's current intent."""
+        attitudes = {self._attitude_of(npc, k) for k in self.known(npc)}
+        return "hostile" if "hostile" in attitudes else "wary" if "wary" in attitudes else None
+
+    def _attitude_of(self, npc: str, knowledge: CrimeKnowledge) -> str | None:
+        if knowledge.suspect != "PLAYER" or knowledge.degree == "suspects" or knowledge.forgiven:
+            return None
         community = self._person_community(npc)
-        wary = False
-        for k in self.known(npc):
-            if k.suspect != "PLAYER" or k.degree == "suspects" or k.forgiven:
-                continue
-            if k.crime.get("kind") == "murder" and community and k.crime.get("community") == community:
-                return "hostile"
-            if k.degree == "seen" or k.crime.get("victim") == npc.upper():
-                wary = True
-        return "wary" if wary else None
+        crime = knowledge.crime
+        if crime.get("kind") == "murder" and community and crime.get("community") == community:
+            return "hostile"
+        return "wary" if knowledge.degree == "seen" or crime.get("victim") == npc.upper() else None
 
     def _person_community(self, npc: str) -> str | None:
         person = self.people.get(npc.upper(), {})
@@ -269,23 +271,61 @@ class Crimes:
                 and all(isinstance(v, int) for v in values)
             ):
                 self.people[npc] = {**self.people.get(npc, {}), "guild": values[0], "npctype": values[1]}
-        self._apply_attitude(npc)
+        # Only a deferred murder reaction may begin here. Ordinary turns never reassert wariness.
+        self._apply_attitude(npc, hostile_only=True)
 
-    def _apply_attitude(self, npc: str) -> None:
-        attitude = self.attitude(npc)
-        if self.dialogue is None or attitude is None:
+    def _apply_attitude(
+        self,
+        npc: str,
+        *,
+        crimes: set[str] | None = None,
+        hostile_only: bool = False,
+    ) -> None:
+        if self.dialogue is None:
             return
+        npc = npc.upper()
+        applied = {
+            (f.get("crime"), f.get("attitude"))
+            for f in self.chronicle.facts("crime_attitude")
+            if f.get("npc") == npc
+        }
+        pending = []
+        for knowledge in self.known(npc):
+            crime = knowledge.crime["id"]
+            if crimes is not None and crime not in crimes:
+                continue
+            attitude = self._attitude_of(npc, knowledge)
+            if (
+                attitude is None
+                or (hostile_only and attitude != "hostile")
+                or (crime, attitude) in applied
+                or (crime, "hostile") in applied
+            ):
+                continue
+            pending.append((crime, attitude))
+        if not pending:
+            return
+        attitude = "hostile" if any(a == "hostile" for _, a in pending) else "wary"
         name = self.names(npc)
         current = self.dialogue.open(npc, name).intent.attitude
         if current != "hostile" and current != attitude:
             # This is a belief change only; vanilla still owns every physical reaction in this layer.
             self.dialogue.change_intent(npc, name, body=False, attitude=attitude)
+        # Consume the reaction even when an existing wary/hostile intent already covers it. The
+        # conversational model may soften later, and a load must not revive the old reaction.
+        for crime, reaction in pending:
+            self.chronicle.record(
+                {"fact": "crime_attitude", "npc": npc, "crime": crime, "attitude": reaction}
+            )
 
     def _on_fact(self, fact: Fact) -> None:
         if fact.get("fact") in {"crime_seen", "rumor", "testimony"}:
             npc = fact.get("npc") or fact.get("to")
-            if npc:
-                self._apply_attitude(npc)
+            crimes = set(fact.get("crime_told", []))
+            if fact.get("crime"):
+                crimes.add(fact["crime"])
+            if npc and crimes:
+                self._apply_attitude(npc, crimes=crimes)
 
     def suspect_chest(
         self,
