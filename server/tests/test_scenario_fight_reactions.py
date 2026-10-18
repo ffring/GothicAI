@@ -10,6 +10,7 @@ def row(symbol=10, *, t=100, hp=100, attack=False, weapon=0, pos=(1.0, 2.0, 3.0)
             "hp": hp,
             "attack_anim": attack,
             "weapon_state": weapon,
+            "interruptible": True,
             "position_world_cm": pos,
         },
         "target": {"entity_id": target},
