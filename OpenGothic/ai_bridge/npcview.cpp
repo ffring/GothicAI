@@ -141,7 +141,7 @@ bool distantMonster(World& world, const Npc& self, const Npc& other) {
   }
 
 bool monsterInSight(const Npc& self, const Npc& other) {
-  const float extra = std::max(0.f,MonsterSight-float(self.handle().senses_range));
+  const float extra = std::max(0.f,MonsterSight-float(self.handlePtr()->senses_range));
   return self.canRayHitPoint(other.centerPosition(),false,extra) ||
          self.canRayHitPoint(other.mapHeadBone(),false,extra);
   }

@@ -237,6 +237,10 @@ async def fight_reactions(
             if not await talk.hold(CAVALORN, "follow"):
                 raise GameError("fight_reactions setup: cannot hold companion")
             await link.act(CAVALORN, "stop")
+            before_turn = await link.snapshot(CAVALORN, fresh=True)
+            turned = await link.act(CAVALORN, "turn_to", npc=monster)
+            if turned.status != "done":
+                raise GameError(f"fight_reactions setup: face monster {turned.status}: {turned.detail}")
             # Marked party members get the companion sight range in the bridge.
             await link.story_effect(CAVALORN, [{"do": "party", "value": 1}])
             symbols = await link.story_eval(CAVALORN, [["sym", n] for n in (CAVALORN, monster, "PC_HERO")])
@@ -246,7 +250,47 @@ async def fight_reactions(
                 raise GameError("fight_reactions setup: missing body observations")
 
             if case == "sight":
+                companion = await link.snapshot(CAVALORN, fresh=True)
+                creature = await link.snapshot(monster, fresh=True)
+                party, senses, guild, hostile, to_companion, to_hero, native_los = await link.story_eval(
+                    CAVALORN,
+                    [
+                        ["field", ["inst", CAVALORN], "AIVAR", 15],
+                        ["field", ["inst", CAVALORN], "SENSES_RANGE"],
+                        ["field", ["inst", monster], "GUILD"],
+                        ["var", "ATT_HOSTILE"],
+                        ["call", "NPC_GETATTITUDE", ["inst", monster], ["inst", CAVALORN]],
+                        ["call", "NPC_GETATTITUDE", ["inst", monster], ["inst", "PC_HERO"]],
+                        ["call", "NPC_CANSEENPCFREELOS", ["inst", CAVALORN], ["inst", monster]],
+                    ],
+                )
+                dx = creature.npc.pos[0] - companion.npc.pos[0]
+                dz = creature.npc.pos[2] - companion.npc.pos[2]
+                yaw = math.radians(companion.npc.rot)
+                facing = (dx * math.cos(yaw) + dz * math.sin(yaw)) / max(1, math.hypot(dx, dz))
+                log.info(
+                    "fight_reactions sight setup companion_pos=%s rot_before_turn=%.1f rot=%.1f "
+                    "monster_pos=%s facing_cos=%.3f party=%s senses=%s monster_guild=%s "
+                    "att_to_companion=%s att_to_hero=%s hostile=%s native_los_at_range=%s",
+                    companion.npc.pos,
+                    before_turn.npc.rot,
+                    companion.npc.rot,
+                    creature.npc.pos,
+                    facing,
+                    party,
+                    senses,
+                    guild,
+                    to_companion,
+                    to_hero,
+                    hostile,
+                    native_los,
+                )
+                if party != 1 or guild < 16 or hostile not in (to_companion, to_hero) or facing < 0.866:
+                    raise GameError(
+                        "fight_reactions setup: sight requires party, hostile monster and facing it"
+                    )
                 views = await link.npc_view([CAVALORN])
+                log.info("fight_reactions sight view=%s", [v.model_dump() for v in views])
                 seen = next((o for v in views for o in v.sees if o.id.upper() == monster), None)
                 distance = trace.distance(CAVALORN, monster)
                 check(
