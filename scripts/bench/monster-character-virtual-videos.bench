@@ -1,0 +1,74 @@
+# Each scene is extracted into its own fresh process by the video launcher.
+# Preparation precedes recording; actors then use ordinary native movement.
+seed 73024
+cheat god
+set time 12 0
+movable on
+off: monstercharacter off
+on: monstercharacter on
+view full
+overlay off
+
+# scene wolf_terrain
+monstercharacter route wolf_stairs
+wait 600
+monstercharacter camera
+rec wolf_terrain
+monstercharacter begin
+wait 12000
+monstercharacter end
+stop
+
+# scene wolf_pack
+monstercharacter pack
+wait 600
+monstercharacter camera
+rec wolf_pack
+monstercharacter begin
+wait 14000
+monstercharacter end
+stop
+
+# scene troll_props
+monstercharacter route troll_barrel
+wait 1800
+monstercharacter camera
+rec troll_props
+monstercharacter begin
+wait 18000
+monstercharacter end
+stop
+
+# scene cliff
+monstercharacter cliff
+wait 600
+monstercharacter camera
+rec cliff
+monstercharacter begin
+wait 14000
+monstercharacter end
+stop
+
+# scene wolf_water
+monstercharacter route wolf_water
+wait 600
+monstercharacter camera
+rec wolf_water
+monstercharacter begin
+wait 8000
+monstercharacter end
+monstercharacter reverse
+monstercharacter begin
+wait 8000
+monstercharacter end
+stop
+
+# scene fieldraider_bloodfly
+monstercharacter attack fieldraider
+wait 600
+monstercharacter camera
+rec fieldraider_bloodfly
+monstercharacter attack-start
+wait 12000
+monstercharacter end
+stop

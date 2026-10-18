@@ -964,3 +964,17 @@ sides of each radius crossing. `transition_blend_delta_cm` isolates the blend's
 contribution from natural movement. A calm checkpoint is taken after 10 seconds
 at zero wind following the wind ramp. The arrow's native post-face positions are
 retained as `cloth_arrow_trajectory` events.
+
+Monster CharacterVirtual videos: `scripts/monster-character-virtual-videos.sh OUT` records
+six independent fresh-world OFF/ON pairs (seed 73024, noon). It first asks Ryzen through
+`bench.sh`; exit 75 selects Mac for the remaining series, with the Mac game/pytest wait.
+`SCENE=wolf_terrain|wolf_pack|troll_props|cliff|wolf_water|fieldraider_bloodfly` selects one
+pair. Build `Gothic2Notr` first (`NO_BUILD=0` enables local incremental builds).
+The six `OUT/pairs/*.mp4` keep OFF on the left and ON on the right; the accompanying
+`*-frames.png` sheets show OFF above ON once a second. Composition can also be repeated
+with `uv run scripts/monster_character_virtual_videos.py compose --off OFF.mp4 --on ON.mp4
+--out PAIR.mp4`; `metrics --off OFF_DIR --on ON_DIR` reads native movement evidence.
+`monster-character-virtual-attacks` checks wolf lunge and fieldraider charge numerically;
+`monster-character-virtual-performance` measures twenty ground monsters for 30 seconds
+without capture. Run performance on Mac with `BENCH_HOST=local` and a build configured
+with `-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`. The opt-in flag remains OFF by default.
