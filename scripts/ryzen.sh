@@ -106,9 +106,9 @@ build_storygraph() {
     cmake -S "$ROOT/OpenGothic/ai_bridge/storygraph" -B "$build" -G Ninja \
       -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
       -DCMAKE_CXX_FLAGS='-include algorithm' \
-      >"$build/configure.log" 2>&1 || { cat "$build/configure.log"; return 1; }
+      >"$build/configure.log" 2>&1 || { local rc=$?; cat "$build/configure.log"; return "$rc"; }
     cmake --build "$build" --target storygraph --parallel "${RYZEN_JOBS:-12}" \
-      >"$build/build.log" 2>&1 || { tail -80 "$build/build.log"; return 1; }
+      >"$build/build.log" 2>&1 || { local rc=$?; tail -80 "$build/build.log"; return "$rc"; }
     tail -3 "$build/build.log"
     printf '%s\n' "$digest" >"$build/source.sha256"
     echo "Ryzen: storygraph configure + build $((SECONDS - started))s"
@@ -118,11 +118,92 @@ build_storygraph() {
   ln -sfn "$build/storygraph" "$ROOT/OpenGothic/ai_bridge/storygraph/build/storygraph"
 }
 
+engine_ready() {
+  local state="$1" digest="$2"
+  [[ -x "$state/build/opengothic/Gothic2Notr" && -f "$state/build/source.sha256" && -f "$state/build/CMakeCache.txt" ]] && \
+     [[ "$(cat "$state/build/source.sha256")" == "$digest" ]] && \
+     grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$state/build/CMakeCache.txt"
+}
+
+storygraph_ready() {
+  local state="$1" digest="$2" build="$1/storygraph-build"
+  [[ -x "$build/storygraph" && -f "$build/source.sha256" ]] && \
+    [[ "$(cat "$build/source.sha256")" == "$digest" ]] && \
+    [[ "$ROOT/OpenGothic/ai_bridge/storygraph/build/storygraph" -ef "$build/storygraph" ]]
+}
+
+dependency_projects() {
+  echo server
+  case "$1" in
+    tts|gossip|day|group|interject|programs) echo tts-service ;;
+  esac
+  case "$1" in
+    m3|m5e) echo asr-service ;;
+  esac
+}
+
+check_protocol() {
+  python3 - "$ROOT" <<'PY'
+import re
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+server = int(re.search(r'^PROTOCOL_VERSION\s*=\s*(\d+)',
+                      (root / 'server/src/gothic_ai/protocol.py').read_text(), re.M)[1])
+engine = int(re.search(r'\bProtocolVersion\s*=\s*(\d+)\s*;',
+                      (root / 'OpenGothic/ai_bridge/aibridge.cpp').read_text())[1])
+if server != engine:
+    raise SystemExit(f'Protocol mismatch: server={server}, engine={engine}')
+print(f'Ryzen: protocol {engine} (engine = server)', flush=True)
+PY
+}
+
+remote_probe() {
+  local action="$1" state="$2" run="$3" scenario="$4" digest project
+  toolchain
+  digest="$(source_digest)"
+  printf '%s\n' "$digest" >"$state/inputs/$run/source.sha256"
+  if [[ "$action" == e2e ]]; then check_protocol || return 2; fi
+  engine_ready "$state" "$digest" || return 1
+  if [[ "$action" == e2e ]]; then
+    storygraph_ready "$state" "$digest" || return 1
+    while IFS= read -r project; do
+      (cd "$ROOT/$project" && uv sync --check --frozen) || return 1
+    done < <(dependency_projects "$scenario")
+  fi
+}
+
+remote_prepare() {
+  local action="$1" state="$2" run="$3" scenario="$4" digest project started=$SECONDS
+  toolchain
+  digest="$(cat "$state/inputs/$run/source.sha256")"
+  if [[ "$action" == e2e ]]; then check_protocol; fi
+  build_engine "$state" "$digest"
+  if [[ "$action" == e2e ]]; then
+    build_storygraph "$state" "$digest"
+    while IFS= read -r project; do
+      (cd "$ROOT/$project" && uv sync --frozen)
+    done < <(dependency_projects "$scenario")
+  fi
+  echo "Ryzen: build preparation $((SECONDS - started))s"
+}
+
+require_prepared() {
+  local action="$1" state="$2" run="$3" scenario="$4" digest
+  digest="$(cat "$state/inputs/$run/source.sha256")" || return 1
+  if [[ -z "$digest" ]] || ! engine_ready "$state" "$digest"; then
+    echo 'Ryzen: engine does not match snapshot source.sha256; refusing to build with the display reserved. Run preparation again.' >&2
+    return 1
+  fi
+  if [[ "$action" == e2e ]] && ! storygraph_ready "$state" "$digest"; then
+    echo 'Ryzen: storygraph does not match snapshot source.sha256; refusing to build with the display reserved. Run preparation again.' >&2
+    return 1
+  fi
+}
+
 build_engine() {
   local state="$1" digest="$2" started=$SECONDS
-  if [[ -x "$state/build/opengothic/Gothic2Notr" && -f "$state/build/source.sha256" && -f "$state/build/CMakeCache.txt" ]] && \
-     [[ "$(cat "$state/build/source.sha256")" == "$digest" ]] && \
-     grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$state/build/CMakeCache.txt"; then
+  if engine_ready "$state" "$digest"; then
     echo "Ryzen: engine unchanged, build skipped ($((SECONDS - started))s)"
     return
   fi
@@ -134,16 +215,18 @@ build_engine() {
     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DOPENGOTHIC_ENABLE_APP_CADENCE=ON \
     -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib" \
-    >"$state/build/configure.log" 2>&1 || { cat "$state/build/configure.log"; return 1; }
+    >"$state/build/configure.log" 2>&1 || { local rc=$?; cat "$state/build/configure.log"; return "$rc"; }
   cmake --build "$state/build" --target Gothic2Notr --parallel "$jobs" \
-    >"$state/build/build.log" 2>&1 || { tail -80 "$state/build/build.log"; return 1; }
+    >"$state/build/build.log" 2>&1 || { local rc=$?; tail -80 "$state/build/build.log"; return "$rc"; }
   tail -5 "$state/build/build.log"
   printf '%s\n' "$digest" >"$state/build/source.sha256"
   echo "Ryzen: engine configure + build $((SECONDS - started))s"
 }
 
 remote_bench() {
-  local state="$1" run="$2" scenario="$3" digest rc started=$SECONDS
+  local state="$1" run="$2" scenario="$3" rc started=$SECONDS
+  echo 'Ryzen: game admitted'
+  require_prepared bench "$state" "$run" "$scenario"
   if [[ "${RYZEN_AI_TUNNEL:-0}" == 1 ]]; then
     # This command runs only after gq grants the window. The Mac opens the
     # reverse forwarding on its lock-holding SSH connection, then acknowledges.
@@ -167,8 +250,6 @@ PY
   export GOTHIC_DIR="$HOME/gothic-ai/game"
   [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
   command -v ffmpeg >/dev/null || { echo 'Missing tool: ffmpeg' >&2; return 1; }
-  digest="$(source_digest)"
-  build_engine "$state" "$digest"
   desktop
   local out="$state/runs/$run"
   mkdir -p "$out"
@@ -195,43 +276,23 @@ remote_run() {
   export GOTHIC_AI_DATA="$state/data"
   local started=$SECONDS rc digest
   [[ "${RYZEN_JOBS:-12}" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; return 2; }
-  digest="$(source_digest)"
   if [[ "$action" == pytest ]]; then
+    digest="$(source_digest)"
     build_storygraph "$state" "$digest"
     cd "$ROOT/server"
     uv run pytest "$@" && rc=0 || rc=$?
     echo "Ryzen: pytest $((SECONDS - started))s, exit $rc"
     return "$rc"
   fi
+  echo 'Ryzen: game admitted'
+  require_prepared "$action" "$state" "$run" "${SCENARIO:-m0}"
   export LOG_DIR="$state/runs/$run"
   mkdir -p "$LOG_DIR"
   [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
-  # This version is compiled into the only binary we ever launch, from this snapshot.
-  python3 - "$ROOT" <<'PY'
-import re
-import sys
-from pathlib import Path
-root = Path(sys.argv[1])
-server = int(re.search(r'^PROTOCOL_VERSION\s*=\s*(\d+)',
-                      (root / 'server/src/gothic_ai/protocol.py').read_text(), re.M)[1])
-engine = int(re.search(r'\bProtocolVersion\s*=\s*(\d+)\s*;',
-                      (root / 'OpenGothic/ai_bridge/aibridge.cpp').read_text())[1])
-if server != engine:
-    raise SystemExit(f'Protocol mismatch: server={server}, engine={engine}')
-print(f'Ryzen: protocol {engine} (engine = server)', flush=True)
-PY
-  build_engine "$state" "$digest"
-  build_storygraph "$state" "$digest"
   started=$SECONDS
   desktop
-  # Resolve dependencies inside the quick job, before the e2e server's two-second startup wait.
-  (cd "$ROOT/server" && uv sync --frozen)
-  case "${SCENARIO:-m0}" in
-    tts|gossip|day|group|interject|programs) (cd "$ROOT/tts-service" && uv sync --frozen) ;;
-  esac
-  case "${SCENARIO:-m0}" in
-    m3|m5e) (cd "$ROOT/asr-service" && uv sync --frozen) ;;
-  esac
+  # Dependencies were synchronized without the display; uv run must not rebuild them here.
+  export UV_NO_SYNC=1
   export RYZEN_GAME_BIN="$state/build/opengothic/Gothic2Notr"
   # Windowed on the logged-in desktop; never take it fullscreen or use a software display.
   cat >"$LOG_DIR/game.sh" <<'WRAPPER'
@@ -251,6 +312,10 @@ WRAPPER
 # Internal entry point runs inside one gq job; the control SSH holds the worktree lock.
 if [[ "${1:-}" == __remote ]]; then
   shift
+  case "${1:-}" in
+    probe) shift; remote_probe "$@"; exit $? ;;
+    prepare) shift; remote_prepare "$@"; exit $? ;;
+  esac
   if [[ "${1:-}" == bench ]]; then
     shift
     remote_bench "$@"
@@ -418,8 +483,8 @@ cleanup() {
     # Local SSH exit only starts cancellation. The remote lock owner confirms
     # the unit's terminal queue state before collection or releasing fd 9.
     # No submission was launched if interruption happened while arming.
-    if [[ "$RUN_STARTED" == 0 ]]; then printf 'complete %s\n' "$RUN" >&8 || true; fi
-    if printf 'drain %s\n' "$RUN" >&8 && guard_ack "Ryzen: queue guard complete $RUN"; then
+    if [[ "$RUN_STARTED" == 0 ]]; then printf 'complete %s\n' "${QUEUE_RUN:-$RUN}" >&8 || true; fi
+    if printf 'drain %s\n' "${QUEUE_RUN:-$RUN}" >&8 && guard_ack "Ryzen: queue guard complete ${QUEUE_RUN:-$RUN}"; then
       [[ "$RUN_FINISHED" == 1 ]] || RUN_RC="$status"
       RUN_FINISHED=1
     else
@@ -514,23 +579,28 @@ start_tunnel() {
 }
 
 run_quick() {
-  local rc control_lost=0 tunnel_failed=0
+  local rc control_lost=0 tunnel_failed=0 requested=$SECONDS window_wait=''
+  QUEUE_RUN="${QUEUE_RUN:-$RUN}"
   kill -0 "$SSH_PID" 2>/dev/null || { echo 'Ryzen: worktree lock connection lost' >&2; return 255; }
   # Arm the remote guard before submission so EOF cannot race late registration.
   RUN_ARMED=1
-  printf 'arm %s\n' "$RUN" >&8
-  guard_ack "Ryzen: queue guard armed $RUN" || return 255
+  RUN_STARTED=0 RUN_FINISHED=0
+  printf 'arm %s\n' "$QUEUE_RUN" >&8
+  guard_ack "Ryzen: queue guard armed $QUEUE_RUN" || return 255
   RUN_STARTED=1
   # The Mac wrapper owns gq's stdin pipe; running gq inside the control SSH
   # would close that pipe on command completion and cancel the job at once.
   # Keep fd 8 in the wrapper: even SIGKILL of this shell must not release the
   # worktree lock while its gq job is still alive. tee must not retain that fd.
-  "$ROOT/scripts/gq" --host "$RYZEN_HOST" run "${GQ_ARGS[@]}" -- "$@" \
+  "$ROOT/scripts/gq" --host "$RYZEN_HOST" run "${GQ_ARGS[@]}" -- env "RYZEN_RUN_ID=$QUEUE_RUN" "$@" \
     > >(exec 8>&-; tee -a "$OUTPUT") 2>&1 &
   GQ_PID=$!
   # A dropped control connection releases the snapshot lock. Stop our job too,
   # before another invocation can upload over its source/build directories.
   while kill -0 "$GQ_PID" 2>/dev/null; do
+    if [[ -z "$window_wait" && " ${GQ_ARGS[*]} " == *' --display '* ]] && grep -qx 'Ryzen: game admitted' "$OUTPUT"; then
+      window_wait=$((SECONDS - requested))
+    fi
     if ! kill -0 "$SSH_PID" 2>/dev/null; then
       echo 'Ryzen: worktree lock connection lost; cancelling our job' >&2
       control_lost=1
@@ -548,14 +618,70 @@ run_quick() {
   done
   wait "$GQ_PID" && rc=0 || rc=$?
   GQ_PID=''
+  if [[ " ${GQ_ARGS[*]} " == *' --display '* ]]; then
+    echo "Ryzen: window wait ${window_wait:-$((SECONDS - requested))}s" | tee -a "$OUTPUT"
+  fi
   if [[ "$rc" -lt 128 && "$control_lost" == 0 && "$tunnel_failed" == 0 ]]; then
-    printf 'complete %s\n' "$RUN" >&8
+    printf 'complete %s\n' "$QUEUE_RUN" >&8
   fi
   [[ "$control_lost" == 0 ]] || rc=255
   [[ "$tunnel_failed" == 0 ]] || rc=1
   RUN_FINISHED=1
   RUN_RC="$rc"
+  printf 'drain %s\n' "$QUEUE_RUN" >&8
+  guard_ack "Ryzen: queue guard complete $QUEUE_RUN" || { RUN_RC=255; return 255; }
+  RUN_ARMED=0
   return "$rc"
+}
+
+preparation_needed() {
+  local request rc
+  request="$(python3 - "$ACTION" "$RUN" "${SCENARIO:-m0}" <<'PY'
+import json
+import sys
+print(json.dumps(dict(zip(('action', 'run', 'scenario'), sys.argv[1:]))))
+PY
+)"
+  # The lock owner runs this cheap read-only probe on the same SSH connection.
+  printf 'probe %s\n' "$request" >&8
+  until grep -q "^Ryzen: preparation check $RUN exit " "$OUTPUT"; do
+    kill -0 "$SSH_PID" 2>/dev/null || return 255
+    sleep 0.1
+  done
+  rc="$(sed -n "s/^Ryzen: preparation check $RUN exit //p" "$OUTPUT" | tail -1)"
+  case "$rc" in
+    0) return 1 ;;  # Ready: do not submit a build request.
+    1) return 0 ;;
+    *) return "$rc" ;;
+  esac
+}
+
+game_queue_args() {
+  GQ_ARGS=(--class "${BENCH_CLASS:-quick}" --threads 4 --mem 8G --display --max "${RYZEN_MAX:-30m}" --wait-max "$LOCK_WAIT")
+  if [[ "$ACTION" == bench ]]; then
+    GQ_ARGS+=(--gpu-mem 4G --name "bench $(basename "$BENCH_SCENARIO" .bench)")
+  else
+    GQ_ARGS+=(--gpu-mem 2G --name "e2e ${SCENARIO:-m0}")
+  fi
+}
+
+run_game() {
+  local rc name
+  if preparation_needed; then
+    if [[ "$ACTION" == bench ]]; then name="bench $(basename "$BENCH_SCENARIO" .bench)"; else name="e2e ${SCENARIO:-m0}"; fi
+    GQ_ARGS=(--class quick --threads "$JOBS" --mem 12G --max "${RYZEN_MAX:-30m}" --name "build $name")
+    QUEUE_RUN="$RUN-build"
+    run_quick env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote prepare \
+      "$ACTION" "$STATE" "$RUN" "${SCENARIO:-m0}" && rc=0 || rc=$?
+    [[ "$rc" == 0 ]] || return "$rc"
+  else
+    rc=$?
+    [[ "$rc" == 1 ]] || return "$rc"
+    echo 'Ryzen: build preparation 0s (unchanged, request skipped)' | tee -a "$OUTPUT"
+  fi
+  game_queue_args
+  QUEUE_RUN="$RUN-game"
+  run_quick "$@"
 }
 
 if [[ "$ACTION" == clean ]]; then
@@ -583,15 +709,10 @@ if [[ "$ACTION" == pytest ]]; then
   JOBS=4
 else
   JOBS="${RYZEN_JOBS:-12}"
-  GQ_ARGS=(--class "${BENCH_CLASS:-quick}" --threads "$JOBS" --mem 8G --display --max "${RYZEN_MAX:-30m}")
-  if [[ "$ACTION" == bench ]]; then
-    GQ_ARGS+=(--gpu-mem 4G --name "bench $(basename "$BENCH_SCENARIO" .bench)")
-  else
-    GQ_ARGS+=(--gpu-mem 2G --name "e2e ${SCENARIO:-m0}")
-  fi
+  [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; exit 2; }
 fi
-GQ_ARGS+=(--wait-max "$LOCK_WAIT")
-ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS" "RYZEN_RUN_ID=$RUN")
+if [[ "$ACTION" == pytest ]]; then GQ_ARGS+=(--wait-max "$LOCK_WAIT"); fi
+ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS")
 if [[ "$ACTION" == bench ]]; then
   [[ -z "$AI_PORT" ]] || ENV_ARGS+=("RYZEN_AI_TUNNEL=1")
   REMOTE_OUT="$STATE/runs/$RUN"
@@ -668,7 +789,7 @@ PY
     ENV_ARGS+=("SAVE=$STATE/inputs/$RUN/SAVE")
   fi
   echo "Ryzen: upload $((SECONDS - started))s ($WORKTREE)"
-  run_quick env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote bench \
+  run_game env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote bench \
     "$STATE" "$RUN" "$STATE/inputs/$RUN/$(basename "$BENCH_SCENARIO")" && rc=0 || rc=$?
   exit "$rc"
 fi
@@ -702,7 +823,7 @@ done
 echo "Ryzen: upload $((SECONDS - started))s ($WORKTREE)"
 
 if [[ "$ACTION" == e2e ]]; then
-  run_quick env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote e2e "$STATE" "$RUN" && rc=0 || rc=$?
+  run_game env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote e2e "$STATE" "$RUN" && rc=0 || rc=$?
   exit "$rc"
 fi
 run_quick env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote pytest "$STATE" "$RUN" "$@"
