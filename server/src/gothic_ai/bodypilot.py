@@ -250,6 +250,7 @@ class BodyPilot:
         self._target_kind: str | None = None
         self._target_name: str | None = None
         self._target_npc: str | None = None
+        self._observed_down: str | None = None
         self._refusals: Counter[str] = Counter()
         self._acquire_requests = 0
         self._acquire_completed = 0
@@ -420,6 +421,8 @@ class BodyPilot:
         rows = packet["observations"]
         if rows:
             self._now_game_ms = max(row["t_game_ms"] for row in rows)
+        for row in rows:
+            self._remember_down(row)
         if self.npc is None or not self._watch_ready:
             return
         if self.lease is not None and (packet["session_epoch"], packet["world_epoch"]) != (
@@ -767,6 +770,7 @@ class BodyPilot:
                 self._entity = self.lease.entity_id
                 self._hero = self.lease.target_entity_id
                 self._target_kind, self._target_name, self._target_npc = target
+                self._observed_down = None
                 self._fight_at = self.clock()
                 self._last_events_poll = float("-inf")
                 self._heartbeat_task = asyncio.create_task(self._heartbeats(self.lease))
@@ -942,7 +946,30 @@ class BodyPilot:
             self.link.body_leases.pop(lease.entity_id)
         return True
 
+    def _remember_down(self, row: dict[str, Any]) -> None:
+        lease = self.lease
+        if lease is None or (
+            row["entity_id"], row["session_epoch"], row["world_epoch"]
+        ) != (lease.entity_id, lease.session_epoch, lease.world_epoch) or (
+            row["control_generation"] not in {0, lease.control_generation}
+            or row["observation_seq"] <= lease.acquired_observation_seq
+        ):
+            return
+        # Native/event-only rows do not drive policy steps, but a later empty
+        # target must not erase their evidence of this lease's fallen actor.
+        own, target = row["self"], row["target"]
+        if own["dead"] or own["unconscious"] or own["down"] or own["hp"] <= 0:
+            self._observed_down = "npc_down"
+        elif (
+            self._observed_down is None and target["entity_id"] == lease.target_entity_id
+            and target["current_valid"]
+            and (target["down"] or target["hp"] is None or target["hp"] <= 0)
+        ):
+            self._observed_down = "target_down" if self._target_kind == "companion" else "hero_down"
+
     def _latest_terminal(self, lease: BodyLease) -> str | None:
+        if self.lease == lease and self._observed_down is not None:
+            return self._observed_down
         latest = self.link.body_latest.get(lease.entity_id)
         if latest is not None and latest.observation_seq > lease.acquired_observation_seq and (
             latest.session_epoch, latest.world_epoch, latest.control_generation
@@ -959,9 +986,15 @@ class BodyPilot:
         npc, client = self.npc, self.client
         if npc is None and self.lease is None and client is None:
             return
+        native_reasons = {"native_restored", "lease_lost"}
+        if (
+            reason == "body_action_rejected" and self._policy_decisions
+            and self._policy_decisions[-1].reason in {"not_owned", "release_pending"}
+        ):
+            native_reasons.add(reason)
         observed_terminal = (
             self._latest_terminal(self.lease)
-            if reason in {"native_restored", "lease_lost"} and self.lease is not None else None
+            if reason in native_reasons and self.lease is not None else None
         )
         if reason == "native_restored" and observed_terminal is not None:
             reason = observed_terminal
@@ -1021,17 +1054,17 @@ class BodyPilot:
                         unconfirmed = f"body_control_status:{error}"
                     await asyncio.sleep(0.025)
                 if (
-                    reason in {"lease_lost", "native_restored"} and lease is not None
+                    reason in native_reasons and lease is not None
                     and self._native_release_reason is not None and not self.link.closed.is_set()
                     and self.link.body_leases.get(lease.entity_id) != lease
                 ):
-                    # A heartbeat can discover native ownership before the
-                    # destructive event poll receives its matching restoration.
+                    # A heartbeat or action can discover native ownership before
+                    # the destructive event poll receives its matching restoration.
                     observed_terminal = observed_terminal or self._latest_terminal(lease)
                     if observed_terminal is not None:
                         reason = observed_terminal
                     elif (
-                        reason == "lease_lost"
+                        reason != "native_restored"
                         and self._native_release_reason in {"native_script_takeover", "target_changed_or_lost"}
                         and npc is not None and self._allowed(npc) and not self._closing
                     ):
@@ -1076,7 +1109,7 @@ class BodyPilot:
                         async with asyncio.timeout(SERVICE_TIMEOUT):
                             await client.close()
             if (
-                reason in {"lease_lost", "native_restored"} and release_confirmed
+                reason in native_reasons and release_confirmed
                 and self._native_release_reason is not None
             ):
                 observed_terminal = observed_terminal or self._latest_terminal(lease)
@@ -1202,6 +1235,7 @@ class BodyPilot:
         self._symbol = self._entity = self._hero = None
         self._target_kind = self._target_name = None
         self._target_npc = None
+        self._observed_down = None
         self._retargeting = False
         self._refusals.clear()
         self._acquire_requests = self._acquire_completed = 0

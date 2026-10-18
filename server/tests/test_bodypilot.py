@@ -1428,6 +1428,43 @@ async def test_polled_native_release_keeps_down_reason_from_passive_target_obser
 
 
 @pytest.mark.parametrize("companion", [False, True])
+@pytest.mark.parametrize("scope", ["matching", "actor", "target", "generation"])
+async def test_native_down_evidence_survives_target_clear_before_event_poll(companion, scope):
+    async with running(companion=lambda npc: companion and npc == "CAVALORN") as rig:
+        rig.bridge.target_is_hero = not companion
+        rig.bridge.target_npc = "CAVALORN" if companion else None
+        target_entity = 3 if companion else 2
+        await rig.active(target_entity=target_entity, extra=[companion_entry()] if companion else [])
+        rig.bridge.restore_native(release_reason="target_changed_or_lost")
+        fallen = fighter(
+            4, entity=4 if scope == "actor" else 1,
+            target_entity=8 if scope == "target" else target_entity,
+            control_generation=8 if scope == "generation" else 0,
+            control_allowed=False, periodic=False, event_only=True,
+        )
+        fallen["target"]["down"] = True
+        rig.bridge.emit(fallen)
+        rig.bridge.emit(unseen_fighter(
+            5, present=False, target_entity=0, control_generation=0,
+            control_allowed=False, periodic=False, event_only=True,
+        ))
+        # Both validated snapshots arrive before the pilot can poll native_restored.
+        latest = rig.link.body_latest[1]
+        assert latest.observation_seq == 5 and latest.target.entity_id == 0
+        assert not latest.target.present and not latest.control_allowed
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        expected = ("target_down" if companion else "hero_down") if scope == "matching" else (
+            "lease_lost" if scope == "generation" else "native_restored"
+        )
+        assert summary.reason == expected
+        assert summary.target_kind == ("companion" if companion else "hero")
+        assert summary.release_confirmed and summary.watch_removed
+        assert len(rig.policy.commands("step")) == 1
+        assert len(rig.policy.commands("end_episode")) == 1
+
+
+@pytest.mark.parametrize("companion", [False, True])
 @pytest.mark.parametrize("evidence", ["matching", "missing", "foreign", "alive"])
 async def test_heartbeat_native_handoff_requires_matching_evidence_for_down_reason(companion, evidence):
     async with running(companion=lambda npc: companion and npc == "CAVALORN") as rig:
@@ -1443,7 +1480,7 @@ async def test_heartbeat_native_handoff_requires_matching_evidence_for_down_reas
                 # That later snapshot must not erase the scoped down evidence.
                 rig.bridge.emit(unseen_fighter(
                     5, present=False, target_entity=0, control_generation=0,
-                    periodic=False, event_only=True,
+                    control_allowed=False, periodic=False, event_only=True,
                 ))
             return await original_call(command, **fields)
 
@@ -1460,6 +1497,11 @@ async def test_heartbeat_native_handoff_requires_matching_evidence_for_down_reas
             "target_changed_or_lost" if evidence in {"matching", "alive"} else None
         )
         assert len(rig.policy.commands("reset")) == 1
+        assert len(rig.policy.commands("end_episode")) == 1
+        latest = rig.link.body_latest[1]
+        assert latest.observation_seq == 5
+        assert latest.control_generation == 0 and not latest.control_allowed
+        assert latest.target.entity_id == 0 and not latest.target.present
 
 
 async def test_heartbeat_native_target_change_reacquires_and_resets_after_cleanup_event():
@@ -1478,6 +1520,58 @@ async def test_heartbeat_native_target_change_reacquires_and_resets_after_cleanu
         await rig.reacquire(5, target_entity=2, count=2)
         assert [command["target_entity_id"] for command in rig.bridge.commands("body_acquire")] == [3, 2]
         assert len(rig.policy.commands("reset")) == 2
+
+
+@pytest.mark.parametrize("rejection,handoff", [
+    (rejection, handoff)
+    for rejection in ("not_owned", "release_pending")
+    for handoff in ("allowed", "unrelated", "missing", "foreign")
+] + [("invalid_command", "allowed")])
+async def test_action_rejection_reconciles_only_confirmed_native_target_change(rejection, handoff):
+    async with running(companion=lambda npc: npc == "CAVALORN") as rig:
+        rig.bridge.target_is_hero = False
+        rig.bridge.target_npc = "CAVALORN"
+        await rig.active(target_entity=3, extra=[companion_entry()])
+        original_action = rig.link.body_action
+
+        async def change_before_action(*args, **kwargs):
+            rig.bridge.target_is_hero = handoff != "unrelated"
+            rig.bridge.target_npc = "OTHER" if handoff == "unrelated" else None
+            rig.bridge.restore_native(release_reason="target_changed_or_lost")
+            if handoff == "missing":
+                rig.bridge.control_events.clear()
+            elif handoff == "foreign":
+                rig.bridge.control_events[0]["control_generation"] += 1
+            rig.bridge.action_rejections.append(rejection)
+            return await original_action(*args, **kwargs)
+
+        rig.link.body_action = change_before_action
+        rig.bridge.emit(fighter(4, owned=True, target_entity=3))
+        await rig.ended()
+        await eventually(lambda: rig.pilot.npc is None)
+        summary = rig.pilot.last_summary
+        recapture = handoff == "allowed" and rejection != "invalid_command"
+        assert summary.reason == ("target_changed" if recapture else "body_action_rejected")
+        assert dict(summary.action_rejections) == {rejection: 1}
+        assert summary.target_kind == "companion"
+        assert summary.release_confirmed and summary.watch_removed
+        assert summary.native_release_reason == (
+            "target_changed_or_lost" if handoff in {"allowed", "unrelated"} else None
+        )
+        rig.clock.advance(3)
+        if recapture:
+            await rig.reacquire(5, target_entity=2, count=2)
+            assert [command["target_entity_id"] for command in rig.bridge.commands("body_acquire")] == [3, 2]
+            assert [request["initial_game_ms"] for request in rig.policy.commands("reset")] == [100, 250]
+        else:
+            rig.bridge.target_is_hero = True
+            rig.bridge.target_npc = None
+            rig.roster(extra=[companion_entry()])
+            rig.combat()
+            rig.bridge.emit(fighter(5))
+            await asyncio.sleep(0.060)
+            assert len(rig.bridge.commands("body_acquire")) == 1
+            assert len(rig.policy.commands("reset")) == 1
 
 
 async def test_target_change_reacquisition_waits_two_seconds_for_each_npc():
