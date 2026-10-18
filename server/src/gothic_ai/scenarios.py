@@ -1990,13 +1990,12 @@ async def orders_scenario(
     await link.debug("player_goto", waypoint=attack_arena)
     await link.debug("npc_goto", npc=npc, waypoint=attack_arena)
     await clear_animals()
-    ready = await Bodies(link).act(
-        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=attack_arena,
-        minutes=60, place=True, arrive=True, radius=100, timeout=15,
-    )
-    if ready.status != "arrived" or not await talk.hold(npc, "follow"):
-        raise GameError(f"orders attack preparation: native idle {ready.status} {ready.detail}")
+    if not await talk.hold(npc, "follow"):
+        raise GameError("orders attack preparation: cannot hold the mage")
+    await link.act(npc, "stop")
+    await asyncio.sleep(0.5)  # settle on npc_goto's native ground before choosing the lane
     dialogue.open(npc, "Ксардас").intent = Intent("follow_hero", "PLAYER", "friendly")
+    await diagnose("attack_arena_placed")
     origin = (await link.snapshot(npc, fresh=True)).npc.pos
     wolf, ray = None, {}
     for step in range(8):

@@ -545,6 +545,38 @@ async def fight_reactions(
                 )
                 if ready.status != "arrived":
                     raise GameError(f"fight_reactions setup: {bandit} idle {ready.status}: {ready.detail}")
+                if case == "bandits":
+                    # Stock bandits have 40 HP: Cavalorn can kill one with its first hit,
+                    # leaving no living defender on which to measure the post-hit response.
+                    # Set this baseline once, before combat; every measured hit stays native.
+                    hp, maximum = await link.story_eval(
+                        bandit,
+                        [["field", ["inst", "SELF"], "ATTRIBUTE", i] for i in (0, 1)],
+                    )
+                    await link.story_eval(
+                        bandit,
+                        [
+                            [
+                                "call", "NPC_CHANGEATTRIBUTE", ["inst", "SELF"],
+                                ["var", "ATR_HITPOINTSMAX"], ["int", 500 - maximum],
+                            ],
+                            [
+                                "call", "NPC_CHANGEATTRIBUTE", ["inst", "SELF"],
+                                ["var", "ATR_HITPOINTS"], ["int", 500 - hp],
+                            ],
+                        ],
+                    )
+                    baseline = (await link.snapshot(bandit, fresh=True)).npc
+                    log.info(
+                        "fight_reactions bandit baseline npc=%s hp=%s/%s -> %s/%s",
+                        bandit,
+                        hp,
+                        maximum,
+                        baseline.hp,
+                        baseline.hp_max,
+                    )
+                    if (baseline.hp, baseline.hp_max) != (500, 500):
+                        raise GameError(f"fight_reactions setup: {bandit} HP baseline was not installed")
                 await put(bandit, 1200, i * 500)
             await put(CAVALORN, -600, 0, face=BANDITS[0])
             await link.debug("player_goto", pos=point(400, -650))
