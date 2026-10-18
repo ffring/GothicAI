@@ -50,6 +50,21 @@ def test_texture_aliases_and_partial_replacement_never_hide_an_original():
     assert "| **Всего** | **2** | **1** | **33.3%** |" in markdown
 
 
+def test_opened_texture_source_and_compiled_file_keep_individual_counts():
+    summary = census.summarize([
+        run([original("A.TGA", opens=2), original("A-C.TEX", opens=5)],
+            [replacement("a.tga"), replacement("a-c.tex")]),
+    ])
+    assert summary["counts"] == [{"kind": "texture", "original": 2, "own": 0}]
+    assert [(row["name"], row["opens"]) for row in summary["top"]] == [
+        ("A-C.TEX", 5), ("A.TGA", 2),
+    ]
+    markdown = census.render_markdown(summary)
+    assert "| A-C.TEX | texture | Textures.vdf | 5 |" in markdown
+    assert "| A.TGA | texture | Textures.vdf | 2 |" in markdown
+    assert "| texture | 2 | 0 | 0.0% |" in markdown
+
+
 def test_replacement_only_resources_count_once_and_kinds_follow_canonical_order():
     summary = census.summarize([
         run([original("GOTHIC.DAT", "script"), original("HERO.MDL", "model")],

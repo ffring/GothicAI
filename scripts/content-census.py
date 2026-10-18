@@ -17,7 +17,7 @@ def _normalized(value):
     return value.replace("\\", "/").casefold()
 
 
-def _resource_key(row):
+def _replacement_key(row):
     name = _normalized(row["name"])
     if row["kind"] == "texture":
         if name.endswith(".tga"):
@@ -51,25 +51,27 @@ def validate_document(document, label="JSON"):
 
 
 def summarize(documents):
-    """Count logical resources; keep each source separately in the access ranking."""
+    """Count original filenames; match texture aliases only against replacements."""
     originals = set()
+    original_aliases = set()
     replacements = set()
     accesses = {}
     for index, document in enumerate(documents):
         validate_document(document, f"прогон {index + 1}")
         for row in document["files"]:
-            resource = _resource_key(row)
+            resource = row["kind"], _normalized(row["name"])
             originals.add(resource)
+            original_aliases.add(_replacement_key(row))
             key = (*resource, _normalized(row["source"]))
             if key not in accesses:
                 accesses[key] = dict(row)
             else:
                 accesses[key]["opens"] += row["opens"]
-        replacements.update(_resource_key(row) for row in document["replacements"])
+        replacements.update(_replacement_key(row) for row in document["replacements"])
 
     # A replacement does not eliminate a resource opened from an original source
     # elsewhere in the same session or another supplied run.
-    own = replacements - originals
+    own = replacements - original_aliases
     counts = []
     for kind in KINDS:
         original_count = sum(key[0] == kind for key in originals)
@@ -94,9 +96,10 @@ def render_markdown(summary):
     lines = [
         "# Перепись ресурсов Gothic",
         "",
-        "Уникальные ресурсы объединены между прогонами без учёта регистра. "
-        "Текстуры NAME.TGA и NAME-C.TEX считаются одним ресурсом. "
-        "Ресурс считается своим, только если оригинал не открывался ни в одном прогоне.",
+        "Оригинальные файлы считаются по фактическому имени без учёта регистра "
+        "и объединяются между прогонами. Для сопоставления подмен текстуры "
+        "NAME.TGA и NAME-C.TEX считаются одним ресурсом. "
+        "Ресурс считается своим, только если ни один его оригинал не открывался ни в одном прогоне.",
         "",
         "| Вид | Оригинальных файлов | Подменено своими | Доля своих |",
         "|---|---:|---:|---:|",
