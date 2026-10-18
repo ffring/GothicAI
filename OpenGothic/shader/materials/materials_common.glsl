@@ -190,6 +190,8 @@ Instance pullInstance(uint i) {
   ret.mat[3][2] = uintBitsToFloat(instanceMem[i+11]);
   ret.fatness   = uintBitsToFloat(instanceMem[i+12]);
   ret.animPtr   = instanceMem[i+13];
+  ret.deformPtr = instanceMem[i+14];
+  ret.deformCount = instanceMem[i+15];
   return ret;
   }
 

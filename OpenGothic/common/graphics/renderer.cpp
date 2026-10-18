@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "physics/cloth.h"
 
 #include <Tempest/Color>
 #include <Tempest/Fence>
@@ -358,6 +359,8 @@ void Renderer::prepareUniforms(WorldView& wview) {
   wview.setGbuffer(textureCast<const Texture2d&>(gbufDiffuse), textureCast<const Texture2d&>(gbufNormal));
   wview.setSceneImages(textureCast<const Texture2d&>(sceneOpaque), textureCast<const Texture2d&>(sceneDepth), zbuffer);
   wview.setWindEnabled(settings.zWindEnabled, settings.windPeriod);
+  if(auto* world = Gothic::inst().world())
+    wview.setClothWind(world->physic()->clothEnabled(),world->physic()->cloth().windScale());
   }
 
 void Renderer::resetViewport(Tempest::Size res, Tempest::Size fullRes) {
@@ -641,6 +644,14 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
     frustrum[SceneGlobals::V_HiZ] = frustrum[SceneGlobals::V_Main];
     frustrum[SceneGlobals::V_Vsm] = frustrum[SceneGlobals::V_Shadow1]; //TODO: remove
     wview.updateFrustrum(frustrum);
+    }
+
+  if(world!=nullptr) {
+    // Keep a margin around the camera view so a turning camera resumes cloth
+    // before it becomes visible. The physics tick owns a copy of these planes.
+    world->physic()->cloth().setVisibilityTest([view = frustrum[SceneGlobals::V_Main]](const Vec3& center, float radius) {
+      return view.testPoint(center,radius+200.f);
+      });
     }
 
   prepareUniforms(wview);

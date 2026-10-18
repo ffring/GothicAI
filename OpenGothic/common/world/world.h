@@ -18,6 +18,7 @@
 #include "worldsound.h"
 #include "waypoint.h"
 #include "waymatrix.h"
+#include "portalrooms.h"
 
 class GameSession;
 class Focus;
@@ -28,6 +29,7 @@ class ParticleFx;
 class Interactive;
 class VersionInfo;
 class GlobalFx;
+class ClothVisual;
 struct PhysicsNoise;
 struct HeroDeed;
 
@@ -134,6 +136,7 @@ class World final {
     Npc*                 findNpcByInstance(size_t instance, size_t n = 0);
     Item*                findItemByInstance(size_t instance, size_t n = 0);
     std::string_view     roomAt(const Tempest::Vec3& arr);
+    bool                 isIndoor(const Tempest::Vec3& point) const;
 
     void                 scaleTime(uint64_t& dt);
     void                 tick(uint64_t dt);
@@ -243,11 +246,13 @@ class World final {
       std::vector<std::uint64_t>          leaf_node_indices;
       std::vector<BspSector>              sectorsData;
       } bsp;
+    PortalRooms::Volumes                  windRooms;
 
     Npc*                                  npcPlayer=nullptr;
 
     std::unique_ptr<DynamicWorld>         wdynamic;
     std::unique_ptr<WorldView>            wview;
+    std::vector<std::unique_ptr<ClothVisual>> clothSurfaces;
     mutable MeshObjects                  cpuObjects;
     std::unique_ptr<GlobalEffects>        globFx;
     WorldSound                            wsound;
