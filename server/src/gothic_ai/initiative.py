@@ -151,6 +151,8 @@ class InitiativeDesk:
         if (why := self.guard.body(rec.id, state)) is not None and rec.distance_cm > STAY_CM:
             return why
         occ = self.occasion(rec.id, rec.agenda)
+        if occ is not None and occ.key.startswith("crime_witness:") and (rec.id, occ.key) in self.spoken:
+            return "уже говорил об этом деле"
         if occ is not None and (ago := self._since(rec.id, occ)) is not None and ago < REPEAT_GAME_MIN:
             return "уже говорил об этом"
         return None
@@ -171,7 +173,17 @@ class InitiativeDesk:
 
     def occasion(self, npc: str, agenda: str | None = None) -> Occasion | None:
         """What it would come up about: its most pressing concern, else the agenda it was given."""
-        if (c := self.concerns.top(npc)) is not None:
+        concerns = self.concerns.of(npc)
+        # A witness may still be deciding what to do after speaking. That case must not hide a
+        # new concern it has not brought up yet; keep the spoken case only when nothing else waits.
+        c = next(
+            (
+                c for c in concerns
+                if not (c.key.startswith("crime_witness:") and (npc.upper(), c.key) in self.spoken)
+            ),
+            next(iter(concerns), None),
+        )
+        if c is not None:
             return Occasion(c.key, c.ru, c.en)
         if agenda:
             return Occasion("agenda:" + hashlib.sha1(agenda.encode()).hexdigest()[:8], f"«{agenda}»", agenda)
