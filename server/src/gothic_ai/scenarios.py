@@ -1993,26 +1993,14 @@ async def orders_scenario(
         attack_origin.player.pos[2] - origin[2],
     )
     toward_len = math.hypot(*toward) or 1
-    points = await link.waypoints()
-    ground = [
-        p for p in points if not p["fp"] and abs(p["y"] - origin[1]) < 250
-        and 1300 <= math.hypot(p["x"] - origin[0], p["z"] - origin[2]) <= 1800
-    ]
-    if not ground:
-        raise GameError(f"orders attack preparation: no 13–18 m waypoint from {origin}")
-    at = min(
-        ground,
-        key=lambda p: math.hypot(
-            p["x"] - origin[0] - 1400 * toward[0] / toward_len,
-            p["z"] - origin[2] - 1400 * toward[1] / toward_len,
-        ),
-    )
-    length = math.hypot(at["x"] - origin[0], at["z"] - origin[2])
-    dx, dz = (at["x"] - origin[0]) / length, (at["z"] - origin[2]) / length
+    dx, dz = toward[0] / toward_len, toward[1] / toward_len
+    await link.act(npc, "turn_to", npc="PLAYER")
     await link.debug(
         "player_goto", pos=[origin[0] - 400 * dx - 500 * dz, origin[1], origin[2] - 400 * dz + 500 * dx]
     )
-    await link.story_spawn("WOLF", tag="orders_attack", waypoint=at["name"])
+    # The waynet has no 13–18 m point after follow. Spawn on the opposite side
+    # from the moved hero; the native gravity and LOS check below validate the lane.
+    await link.story_spawn("WOLF", tag="orders_attack", near=npc, distance=-1400)
     await link.act(npc, "turn_to", npc="WOLF")
     await asyncio.sleep(1)
     views = await link.npc_view([npc])
@@ -2139,27 +2127,20 @@ async def _companion_attack_words(
     snap = await link.snapshot(npc, fresh=True)
     if snap.player is None:
         return {**results, "wolf_ready": "failed (no hero in Cavalorn's snapshot)"}
-    hero = snap.player.pos
-    points = {p["name"]: p for p in await link.waypoints()}
-    origin = snap.npc.pos
-    ground = [
-        p for p in points.values() if abs(p["y"] - hero[1]) < 250 and not p["fp"]
-        and 1300 <= math.hypot(p["x"] - origin[0], p["z"] - origin[2]) <= 1800
-        and 700 <= math.hypot(p["x"] - hero[0], p["z"] - hero[2]) <= 1400
-    ]
-    if not ground:
-        raise GameError(f"orders Cavalorn attack preparation: no waypoint from npc={origin}, hero={hero}")
-    at = min(ground, key=lambda p: abs(math.hypot(p["x"] - hero[0], p["z"] - hero[2]) - 1000))
+    toward = (snap.player.pos[0] - snap.npc.pos[0], snap.player.pos[2] - snap.npc.pos[2])
+    toward_len = math.hypot(*toward) or 1
+    dx, dz = toward[0] / toward_len, toward[1] / toward_len
     hp = snap.player.hp if snap.player is not None else None
     talk.hear("Кавалорн, отступай!", None, {"via": "scenario"})
     await _until(lambda: getattr(talk.orders.standing.get(npc), "kind", "") == "retreat", 5)
+    await link.act(npc, "turn_to", npc="PLAYER")
     before = set(beasts.wolves)
-    await link.story_spawn("WOLF", tag="companion_attack_words", waypoint=at["name"])
+    await link.story_spawn("WOLF", tag="companion_attack_words", near=npc, distance=1400)
     ready = await _until(
         lambda: any(w.id not in before and w.state == "threaten" for w in beasts.wolves.values()), 15
     )
     wolf_id = next((w.id for w in beasts.wolves.values() if w.id not in before), "")
-    check("wolf_ready", ready, f"{wolf_id} at {at['name']}, before its first attack")
+    check("wolf_ready", ready, f"{wolf_id} spawned 14 m from Cavalorn, before its first attack")
     if not ready:
         return results
 
@@ -2167,8 +2148,6 @@ async def _companion_attack_words(
     # both the attacker's reach and Cavalorn's projectile lane before giving the order.
     await link.act(npc, "stop")
     origin = (await link.snapshot(npc, fresh=True)).npc.pos
-    length = math.hypot(at["x"] - origin[0], at["z"] - origin[2])
-    dx, dz = (at["x"] - origin[0]) / length, (at["z"] - origin[2]) / length
     await link.debug(
         "player_goto", pos=[origin[0] - 400 * dx - 500 * dz, origin[1], origin[2] - 400 * dz + 500 * dx]
     )

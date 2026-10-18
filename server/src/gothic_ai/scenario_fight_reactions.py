@@ -62,6 +62,7 @@ class CombatTrace:
     hp: dict[str, int] = field(default_factory=dict)
     weapons: dict[str, int] = field(default_factory=dict)
     interruptible: dict[str, bool] = field(default_factory=dict)
+    latest: dict[str, dict[str, Any]] = field(default_factory=dict)
     attacking: dict[str, bool] = field(default_factory=dict)
     events: list[tuple[float, GameMessage]] = field(default_factory=list)
     commands: list[tuple[float, str, str, dict[str, Any]]] = field(default_factory=list)
@@ -89,6 +90,7 @@ class CombatTrace:
             self.entities[who] = row["entity_id"]
             self.weapons[who] = own["weapon_state"]
             self.interruptible[who] = own["interruptible"]
+            self.latest[who] = own
             if own["weapon_state"] >= 2:
                 self.armed.setdefault(who, now)
             attacking = bool(own["attack_anim"])
@@ -222,6 +224,45 @@ async def fight_reactions(
             trace.commands.append((time.monotonic(), cmd.npc.upper(), cmd.action, dict(cmd.args)))
         await send(cmd)
 
+    async def ready_companion_sword() -> None:
+        # Attaching ends the idle script but its pose can still have occupied hands.
+        # AI_ReadyMeleeWeapon drops its request if that pose cannot switch weapons.
+        neutral = await link.act(CAVALORN, "play_ani", name="S_RUN")
+        if neutral.status != "done":
+            raise GameError(f"fight_reactions setup: neutral pose {neutral.status}: {neutral.detail}")
+        ready = await _until(
+            lambda: (
+                trace.latest[CAVALORN].get("body_state_base") in (0, 1, 2, 3)
+                and trace.interruptible.get(CAVALORN)
+                and not any(trace.latest[CAVALORN].get("gates", {}).values())
+            ),
+            5,
+        )
+        before = await link.snapshot(CAVALORN, fresh=True)
+        log.info(
+            "fight_reactions companion pre-draw neutral=%s body=%s snapshot=%s",
+            ready,
+            trace.latest.get(CAVALORN),
+            before.model_dump(),
+        )
+        if not ready:
+            raise GameError("fight_reactions setup: companion did not reach switchable neutral pose")
+        drawn = await link.act(CAVALORN, "draw_weapon", kind="melee")
+        actual = await _until(
+            lambda: trace.weapons.get(CAVALORN) in (2, 3) and trace.interruptible.get(CAVALORN),
+            5,
+        )
+        after = await link.snapshot(CAVALORN, fresh=True)
+        log.info(
+            "fight_reactions companion post-draw receipt=%s actual=%s body=%s snapshot=%s",
+            drawn,
+            actual,
+            trace.latest.get(CAVALORN),
+            after.model_dump(),
+        )
+        if drawn.status != "done" or not actual:
+            raise GameError("fight_reactions setup: companion melee preparation did not finish")
+
     link.send = recorded  # type: ignore[method-assign]
     await link.send(ThreatControlCmd(hold=True))
     try:
@@ -321,12 +362,6 @@ async def fight_reactions(
             turned = await link.act(CAVALORN, "turn_to", npc=monster)
             if turned.status != "done":
                 raise GameError(f"fight_reactions setup: face monster {turned.status}: {turned.detail}")
-            if case == "wolf":
-                drawn = await link.act(CAVALORN, "draw_weapon", kind="melee")
-                if drawn.status != "done":
-                    raise GameError(
-                        f"fight_reactions setup: companion melee draw {drawn.status}: {drawn.detail}"
-                    )
             # Marked party members get the companion sight range in the bridge.
             await link.story_effect(CAVALORN, [{"do": "party", "value": 1}])
             symbols = await link.story_eval(CAVALORN, [["sym", n] for n in (CAVALORN, monster, "PC_HERO")])
@@ -334,11 +369,8 @@ async def fight_reactions(
             await link.body_watch([CAVALORN, monster, "PLAYER"])
             if not await _until(lambda: all(n in trace.positions for n in (CAVALORN, monster, "PLAYER")), 5):
                 raise GameError("fight_reactions setup: missing body observations")
-            if case == "wolf" and not await _until(
-                lambda: trace.weapons.get(CAVALORN) in (2, 3) and trace.interruptible.get(CAVALORN),
-                5,
-            ):
-                raise GameError("fight_reactions setup: companion melee preparation did not finish")
+            if case == "wolf":
+                await ready_companion_sword()
 
             if case == "sight":
                 await finish_preparation()
@@ -472,9 +504,6 @@ async def fight_reactions(
             if not await talk.hold(CAVALORN, "follow"):
                 raise GameError("fight_reactions setup: cannot hold companion")
             await link.act(CAVALORN, "stop")
-            drawn = await link.act(CAVALORN, "draw_weapon", kind="melee")
-            if drawn.status != "done":
-                raise GameError(f"fight_reactions setup: companion melee draw {drawn.status}: {drawn.detail}")
             if not await talk.hold(BANDITS[1], "listen"):
                 raise GameError("fight_reactions setup: cannot hold listening bandit")
             watch = [CAVALORN, *BANDITS, "PLAYER"]
@@ -485,11 +514,7 @@ async def fight_reactions(
             await link.body_watch(watch)
             if not await _until(lambda: all(n in trace.positions for n in watch), 5):
                 raise GameError("fight_reactions setup: missing bandit body observations")
-            if not await _until(
-                lambda: trace.weapons.get(CAVALORN) in (2, 3) and trace.interruptible.get(CAVALORN),
-                5,
-            ):
-                raise GameError(f"fight_reactions setup: companion not holding melee weapon: {trace.weapons}")
+            await ready_companion_sword()
             if not await _until(lambda: all(n in planner.npcs for n in BANDITS), 5):
                 raise GameError("fight_reactions setup: bandits absent from planner roster")
             await finish_preparation()
