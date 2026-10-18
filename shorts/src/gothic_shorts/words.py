@@ -38,7 +38,8 @@ CLEAN = (
 # a recorded take's clicks out first (mouth clicks, samples the browser dropped; the default leaves some, and
 # this is slow: ~40 s a line). Speech from TTS has none.
 DECLICK = "adeclick=t=1:b=3,"
-# the silence at both ends trimmed to a breath: 80 ms before the first sound over -50 dB, 120 ms after the last.
+# the silence at both ends trimmed to a breath: 80 ms before the first sound over -50 dB,
+# 120 ms after the last.
 # Cut with atrim: silenceremove left a step in the waveform where it cut (a click 80 ms into most lines).
 QUIET, LEAD, TAIL, MIN_SOUND = "-50dB", 0.08, 0.12, 0.08
 
@@ -52,7 +53,7 @@ def _duration(wav: Path) -> float:
 
 
 def _trim(raw: Path) -> str:
-    """the atrim keeping the take's speech: from LEAD before its first sound over QUIET to TAIL after its last"""
+    """Keep speech with atrim: from LEAD before its first sound over QUIET to TAIL after its last."""
     out = subprocess.run(
         ["ffmpeg", "-v", "info", "-i", str(raw), "-af", f"silencedetect=n={QUIET}:d=0.05", "-f", "null", "-"],
         capture_output=True, text=True,
@@ -63,7 +64,7 @@ def _trim(raw: Path) -> str:
     quiet = [(s, ends[i] if i < len(ends) else dur) for i, s in enumerate(starts)]
     # the sounds between the quiet spans; a few ms over QUIET (a click as the recording starts) is not speech
     edges = [0.0] + [t for span in quiet for t in span] + [dur]
-    sounds = [(a, b) for a, b in zip(edges[::2], edges[1::2]) if b - a >= MIN_SOUND]
+    sounds = [(a, b) for a, b in zip(edges[::2], edges[1::2], strict=False) if b - a >= MIN_SOUND]
     if not sounds:  # all of it under QUIET: keep it whole
         sounds = [(0.0, dur)]
     begin, finish = sounds[0][0], sounds[-1][1]

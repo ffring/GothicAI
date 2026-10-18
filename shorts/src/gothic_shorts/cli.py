@@ -11,8 +11,8 @@ from pathlib import Path
 from gothic_launcher.commands import LaunchError, find_layout, load_config, tools
 from gothic_launcher.settings import Config, SettingsError
 
+from . import cover, srt, youtube
 from . import cut as cutting
-from . import srt, youtube
 from .align import AlignError, align
 from .dub import DubError, dub_compare, dub_explainer, dub_take
 from .explain import ExplainError
@@ -86,6 +86,13 @@ def cmd_cut(args: argparse.Namespace) -> int:
     out = cutting.cut(shot, take, args.lang, Path(args.out) if args.out else None)
     print(out)
     print(out.with_suffix(".md").read_text())
+    return 0
+
+
+def cmd_cover(args: argparse.Namespace) -> int:
+    source = Path(args.source)
+    out = Path(args.out) if args.out else source.with_name("cover.jpg")
+    print(cover.save(cover.render(cover.frame(source, args.at), args.title, args.sub), out))
     return 0
 
 
@@ -241,6 +248,9 @@ def cmd_upload(args: argparse.Namespace) -> int:
     video = Path(args.video)
     if not video.is_file():
         raise YouTubeError(f"no video {video}")
+    thumbnail = Path(args.thumbnail) if args.thumbnail else None
+    if thumbnail and not thumbnail.is_file():
+        raise YouTubeError(f"no thumbnail {thumbnail}")
     meta = youtube.load_meta(Path(args.meta), args.lang)
     meta.privacy = args.privacy
     captions = _captions(args.captions or [])
@@ -258,6 +268,14 @@ def cmd_upload(args: argparse.Namespace) -> int:
         return 1
     vid = youtube.upload(video, meta, token)
     print(f"uploaded: https://youtu.be/{vid}  (id {vid})")
+    if thumbnail:
+        try:
+            youtube.set_thumbnail(youtube.access_token(), vid, thumbnail)
+        except YouTubeError as err:
+            print(f"thumbnail: {err}", file=sys.stderr)
+            print("the video is up; choose a cover frame in the YouTube mobile app", file=sys.stderr)
+        else:
+            print(f"thumbnail: {thumbnail}")
     got = youtube.privacy(youtube.access_token(), vid)
     if got != meta.privacy:
         raise YouTubeError(f"YouTube made the video {got}, not {meta.privacy}: the project may need "
@@ -269,6 +287,21 @@ def cmd_upload(args: argparse.Namespace) -> int:
             raise YouTubeError(f"YouTube kept no translation into {', '.join(sorted(missing))}")
         print(f"translations: {', '.join(meta.localizations)}")
     _add_captions(vid, captions)
+    return 0
+
+
+def cmd_thumbnail(args: argparse.Namespace) -> int:
+    file = Path(args.file)
+    if not file.is_file():
+        raise YouTubeError(f"no thumbnail {file}")
+    token = _channel(args.channel)
+    print(f"video:   https://youtu.be/{args.video}")
+    print(f"thumbnail: {file}")
+    if not args.yes and input("set the thumbnail? [y/N] ").strip().lower() != "y":
+        print("not set")
+        return 1
+    youtube.set_thumbnail(token, args.video, file)
+    print(f"thumbnail set: {file}")
     return 0
 
 
@@ -330,6 +363,14 @@ def main() -> None:
     s.add_argument("--lang", default="ru", help="ru, or a language with subs.<lang>.json in the take")
     s.add_argument("--out", help="the output file (default: <take>/short-<lang>.mp4)")
     s.set_defaults(fn=cmd_cut)
+
+    s = sub.add_parser("cover", help="render the channel's cover from a video frame or an image")
+    s.add_argument("source", help="a video or image")
+    s.add_argument("--at", type=float, default=0, help="second in the video (default: 0)")
+    s.add_argument("--title", required=True, help="the topic, rendered in uppercase")
+    s.add_argument("--sub", help="optional second line in gold")
+    s.add_argument("--out", help="the JPEG output (default: cover.jpg beside the input)")
+    s.set_defaults(fn=cmd_cover)
 
     s = sub.add_parser("subs", help="write subs.<lang>.json of a take: the texts to translate")
     s.add_argument("shot")
@@ -396,12 +437,20 @@ def main() -> None:
                         "their translations")
     s.add_argument("--captions", action="append", metavar="LANG=FILE",
                    help="a caption track to add, e.g. en=<take>/subs.en.srt (gothic-shorts srt); repeatable")
+    s.add_argument("--thumbnail", metavar="FILE", help="set this JPEG cover after uploading")
     s.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
                    help="public goes straight out, no audit needed; the status is read back after the upload")
     s.add_argument("--channel", default=youtube.CHANNEL,
                    help="upload only to this channel id (GOTHIC_YOUTUBE_CHANNEL, the project's GothicAI)")
     s.add_argument("--yes", action="store_true", help="do not ask before uploading")
     s.set_defaults(fn=cmd_upload)
+
+    s = sub.add_parser("thumbnail", help="set a JPEG cover on a video already on the channel")
+    s.add_argument("video", help="the video's id")
+    s.add_argument("file", help="the JPEG cover (gothic-shorts cover), at most 2 MB")
+    s.add_argument("--channel", default=youtube.CHANNEL, help="the channel (GOTHIC_YOUTUBE_CHANNEL)")
+    s.add_argument("--yes", action="store_true", help="do not ask before setting")
+    s.set_defaults(fn=cmd_thumbnail)
 
     s = sub.add_parser("captions", help="add a caption track to a video already on the channel")
     s.add_argument("video", help="the video's id")
@@ -415,6 +464,6 @@ def main() -> None:
     try:
         sys.exit(args.fn(args))
     except (ShotError, FilmError, VoiceError, cutting.CutError, LaunchError, SettingsError,
-            YouTubeError, AlignError, StudioError, DubError, GpuError, ExplainError) as err:
+            YouTubeError, AlignError, StudioError, DubError, GpuError, ExplainError, cover.CoverError) as err:
         print(f"error: {err}", file=sys.stderr)
         sys.exit(1)

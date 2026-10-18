@@ -174,7 +174,12 @@ def test_ai_filters_only_overlay_text_and_append_the_ending(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("brand", [True, False])
-def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(tmp_path, monkeypatch, brand):
+@pytest.mark.parametrize("cover_kind", [None, "default", "custom"])
+def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(
+    tmp_path, monkeypatch, capsys, brand, cover_kind,
+):
+    if cover_kind and not Path("/System/Library/Fonts/Supplemental/Arial Black.ttf").is_file():
+        pytest.skip("macOS Arial Black is unavailable")
     plan = {
         "brand": brand, "labels": {"ru": ["До", "После"]},
         "hook": {"ru": "Проверка"}, "hook_s": 2,
@@ -185,6 +190,10 @@ def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(tmp_path
             {"segment": "next", "start": 0, "end": 3, "title": {"ru": "Следом"}},
         ],
     }
+    if cover_kind:
+        plan["cover"] = {"segment": "clean", "at": 1.8, "title": {"ru": "МАГИЯ", "en": "MAGIC"}}
+        if cover_kind == "custom":
+            plan["cover"]["sub"] = {"ru": "СВОЯ СТРОКА", "en": "CUSTOM LINE"}
     plan_file = tmp_path / "plan.json"
     plan_file.write_text(json.dumps(plan))
     commands, concat_lists = [], []
@@ -193,6 +202,8 @@ def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(tmp_path
         commands.append(command)
         if "concat" in command:
             concat_lists.append(Path(command[command.index("-i") + 1]).read_text())
+        if Path(command[-1]).name == "cover-frame.png":
+            Image.new("RGB", (1080, 1920), (30, 60, 90)).save(command[-1])
 
     text_image = Mock()
     caption_image = Mock()
@@ -205,10 +216,12 @@ def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(tmp_path
     monkeypatch.setattr(compare, "run", run)
     monkeypatch.setattr(compare.subprocess, "run", Mock(return_value=SimpleNamespace(stdout="1.2")))
     monkeypatch.setattr(compare.levels, "publish", publish)
+    render_cover = Mock(wraps=compare.cover.render)
+    monkeypatch.setattr(compare.cover, "render", render_cover)
 
     compare.main()
 
-    beats = [command for command in commands if "-filter_complex" in command]
+    beats = [command for command in commands if "-filter_complex" in command and "-frames:v" not in command]
     assert len(beats) == 2
     for command, expected in zip(beats, [["t0.png", "hook.png", "s0.png", "c0_0_0.png"],
                                         ["t1.png"]], strict=True):
@@ -228,6 +241,54 @@ def test_compare_filters_keep_text_and_slow_marks_and_append_the_ending(tmp_path
     assert len(concat_lists) == 1
     assert ("sting.mp4" in concat_lists[0]) is brand
     assert publish.call_args.args[4:6] == (6, 7.2 if brand else 6)
+    cover_path = tmp_path / "render/cover-ru.jpg"
+    assert cover_path.is_file() is bool(cover_kind)
+    output = capsys.readouterr().out
+    if cover_kind:
+        with Image.open(cover_path) as image:
+            assert image.size == (1080, 1920)
+            assert image.format == "JPEG"
+        assert cover_path.stat().st_size <= 2_000_000
+        assert str(cover_path) in output
+        assert render_cover.call_args.args[1:] == (
+            "МАГИЯ", "СВОЯ СТРОКА" if cover_kind == "custom" else "БЫЛО → СТАЛО",
+        )
+        extraction = next(command for command in commands if Path(command[-1]).name == "cover-frame.png")
+        assert [extraction[i + 1] for i, arg in enumerate(extraction) if arg == "-ss"] == ["1.8", "1.8"]
+        assert [Path(extraction[i + 1]) for i, arg in enumerate(extraction) if arg == "-i"] == [
+            tmp_path / ".shorts/compare/probe/off/clean.mp4",
+            tmp_path / ".shorts/compare/probe/on/clean.mp4",
+        ]
+        graph = extraction[extraction.index("-filter_complex") + 1]
+        assert graph.count(f"scale=1080:960,{compare.GRADE}") == 2
+        assert "vstack" in graph
+        assert "overlay" not in graph
+    else:
+        assert "cover: none" in output
+        render_cover.assert_not_called()
+
+
+@pytest.mark.skipif(
+    not Path("/System/Library/Fonts/Supplemental/Arial Black.ttf").is_file(),
+    reason="macOS Arial Black is unavailable",
+)
+def test_compare_cover_stacks_clean_graded_takes_with_ffmpeg(tmp_path):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for a comparison cover")
+    for take, color in [("off", "0x502010"), ("on", "0x102050")]:
+        (tmp_path / take).mkdir()
+        _ffmpeg(
+            "-f", "lavfi", "-i", f"color=c={color}:s=108x96:r=10:d=0.4",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(tmp_path / take / "scene.mp4"),
+        )
+    plan = {"cover": {"segment": "scene", "at": 0.2, "title": {"en": "MAGIC"}}}
+    path = compare.render_cover(plan, tmp_path, "en", tmp_path / "short-en.mp4")
+    assert path == tmp_path / "cover-en.jpg"
+    with Image.open(path) as image:
+        assert image.size == (1080, 1920)
+        top, bottom = image.getpixel((100, 100)), image.getpixel((100, 1800))
+    assert top[0] > 80 and top[0] > top[1] > top[2]
+    assert bottom[2] > 80 and bottom[2] > bottom[1] > bottom[0]
 
 
 def test_synthetic_cut_publishes_calibrated_voice_and_complete_artifacts(published_cut):
