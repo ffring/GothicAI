@@ -101,6 +101,7 @@ PR, который добавляет фичу или выключатель, д
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
 | Мост к ИИ-серверу | `GOTHIC_AI=0` | `ai_bridge/aibridge.cpp` | все e2e | [protocol.md](protocol.md) |
+| Изменение списка `body_watch` под lease или с заявкой на захват (v45) | нет; без владельцев остаётся полный сброс | `ai_bridge/aibridge.cpp`, `common/game/bodyobservations.*`, `common/game/bodycontroller.*` | `gothic-body-watch-test`; e2e `neural` | [npc-body-api.md](npc-body-api.md), [npc-body-observations.md](npc-body-observations.md) |
 | Диалоговые функции скриптов как программы без VM | `GOTHIC_AI_STORYEXEC=0` | `ai_bridge/dialoggraph.cpp` | e2e `graph`, `programs` | [story-graph.md](story-graph.md) |
 
 ## Движок: физика Jolt
@@ -166,6 +167,7 @@ PR, который добавляет фичу или выключатель, д
 Это не фичи игры, а инструменты и опции. Включаются явно:
 - `gothic-ai serve --scenario <имя>`, `--journal`, `--voice-files`;
 - HD-текстуры: каталог в `OPENGOTHIC_TEXTURES`, его передаёт лаунчер, когда текстуры сделаны;
+- Перепись оригинальных ресурсов: `OPENGOTHIC_CENSUS=<путь к json>`, запись при выходе и Marvin `census`; `common/contentcensus.*`, наблюдатель VFS, `scripts/content-census.py`; проверки — `smoke` на Ryzen и `scripts/test_content_census.py`, [own-content.md](own-content.md);
 - `GOTHIC_AI_STORYCHECK=1` — сверка условий скриптов с поднятыми; в `-devmode` включена сама;
 - `OPENGOTHIC_ANIM_SKIP_FAR=1`, `OPENGOTHIC_FOOTIK_WATCHED_ONLY=1` — экономия на дальних NPC для прогонов тела;
 - `OPENGOTHIC_BENCH*`, `OPENGOTHIC_*_LOG`, `OPENGOTHIC_*_TRACE` — стенд, журналы и трассы.

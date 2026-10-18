@@ -45,6 +45,9 @@ class BodyController final {
       std::string provider;
       };
     static void setActors(const std::vector<Npc*>& actors);
+    static bool hasOwners();
+    // Validate before editing the subscription. Leases and pending boundary requests survive.
+    static const char* updateWatch(const std::vector<Npc*>& actors, uint64_t periodMs);
     static void fixturePrepare(Npc& actor, Npc& target, float distanceCm, float yawOffsetDeg);
     static void fixtureLock(Npc& actor, uint64_t durationMs);
     static std::string selfTestJson();
