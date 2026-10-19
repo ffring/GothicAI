@@ -14,8 +14,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from ..bodypilot import BodyPilot, FightSummary, PolicyClient
+from ..bodypilot import BodyFight, BodyPilot, FightSummary, PolicyClient
 from ..game import GameLink
+from ..protocol import BodyLease
 
 WAIT_200 = 10
 FAULT_ENDINGS = frozenset({
@@ -24,6 +25,18 @@ FAULT_ENDINGS = frozenset({
     "bridge_error", "symbol_eval_timeout", "symbol_eval_failed",
     "body_watch_timeout", "body_watch_failed", "disconnected",
 })
+
+
+def _release_delay(summary: FightSummary) -> float | None:
+    delays = [value for value in (summary.release_seconds, summary.release_late_seconds)
+              if value is not None]
+    return max(delays) if delays and min(delays) >= 0 else None
+
+
+def release_within_deadline(summary: FightSummary, limit: float = 2) -> bool:
+    """A late native confirmation is not a fallback, but still has a release deadline."""
+    delay = _release_delay(summary)
+    return summary.release_confirmed and delay is not None and delay <= limit
 
 
 def percentile(values: list[float], fraction: float) -> float | None:
@@ -83,7 +96,8 @@ class SoakMetrics:
 
     ``PolicyClient.call`` is wrapped by delegation, so nested ``_policy_resets``
     observations retain their behavior. Summary interception runs before the pilot's
-    bounded deque can discard a completed fight. All wrappers are removed on exit.
+    bounded deque can discard a completed fight. The finish observer timestamps the
+    end trigger before asynchronous cleanup. All wrappers are removed on exit.
     """
 
     def __init__(
@@ -97,6 +111,8 @@ class SoakMetrics:
         self.summaries: list[FightSummary] = []
         self.fight_records: list[dict[str, Any]] = []
         self._summary_indices: dict[tuple[int, ...], int] = {}
+        self._finish_started: dict[tuple[int, ...], float] = {}
+        self._release_started: dict[tuple[int, ...], float] = {}
         self.samples: list[dict[str, Any]] = []
         self.actions_by_client: dict[PolicyClient, Counter[int]] = defaultdict(Counter)
         self.latencies_by_client: dict[PolicyClient, list[float]] = defaultdict(list)
@@ -157,6 +173,24 @@ class SoakMetrics:
         return (lease.session_epoch, lease.world_epoch, lease.entity_id,
                 lease.control_generation) if lease is not None else None
 
+    def finish_started_at(self, lease: BodyLease) -> float | None:
+        scope = (lease.session_epoch, lease.world_epoch, lease.entity_id, lease.control_generation)
+        return self._finish_started.get(scope)
+
+    def note_fight_end(self, lease: BodyLease, at: float) -> None:
+        scope = (lease.session_epoch, lease.world_epoch, lease.entity_id, lease.control_generation)
+        self._finish_started[scope] = min(at, self._finish_started.get(scope, at))
+
+    def release_elapsed_seconds(self, summary: FightSummary) -> float | None:
+        delay = _release_delay(summary)
+        scope = self._lease_scope(summary)
+        if delay is None or scope not in self._finish_started:
+            return delay
+        start = self._finish_started[scope]
+        # The pilot can await terminal diagnostics before starting its release
+        # budget. The soak's two seconds start at the original finish trigger.
+        return delay + max(0, self._release_started.get(scope, start) - start)
+
     def sync_summaries(self) -> None:
         """Retain late native confirmations before the pilot's bounded history evicts them."""
         for summary in getattr(self.pilot, "summaries", ()):
@@ -168,13 +202,16 @@ class SoakMetrics:
             self.fight_records[index]["summary"] = asdict(summary)
             self.event("release_update", summary=asdict(summary))
 
-    def _completed(self, fight: Any, summary: FightSummary) -> None:
+    def _completed(self, fight: Any, summary: FightSummary, finish_at: float | None = None) -> None:
         self.summaries.append(summary)
         # BodyFight clears its mutable client/lease before invoking _completed.
         # A scoped immutable lease identifies the policy client from step input.
         scope = self._lease_scope(summary)
         if scope is not None:
             self._summary_indices[scope] = len(self.summaries) - 1
+            if finish_at is not None:
+                self._finish_started.setdefault(scope, finish_at)
+                self._release_started[scope] = finish_at
         client = self._clients_by_scope.get(scope)
         actions = self.actions_by_client.get(client, Counter())
         decisions = sum(actions.values())
@@ -197,6 +234,7 @@ class SoakMetrics:
     @contextmanager
     def observe(self) -> Iterator[SoakMetrics]:
         original_call = PolicyClient.call
+        original_finish = BodyFight._finish
         original_completed = self.pilot._completed
         had_completed = "_completed" in vars(self.pilot)
         self._stream = (self.log_dir / "neural_soak.jsonl").open("a")
@@ -229,12 +267,19 @@ class SoakMetrics:
                 self._latencies.append(elapsed)
                 self._service_window.append(elapsed)
 
+        async def finishing(fight: BodyFight, *args: Any, **kwargs: Any) -> None:
+            lease = fight.lease
+            if lease is not None:
+                self.note_fight_end(lease, self.clock())
+            await original_finish(fight, *args, **kwargs)
+
         def completed(fight: Any, summary: FightSummary, *args: Any, **kwargs: Any) -> None:
             self.sync_summaries()
-            self._completed(fight, summary)
+            self._completed(fight, summary, args[0] if args else kwargs.get("finish_at"))
             original_completed(fight, summary, *args, **kwargs)
 
         PolicyClient.call = observed
+        BodyFight._finish = finishing
         self.pilot._completed = completed
         self.link.raw_body_listeners.append(self._packet)
         try:
@@ -244,6 +289,7 @@ class SoakMetrics:
             self.sample(force=True)
             self.link.raw_body_listeners.remove(self._packet)
             PolicyClient.call = original_call
+            BodyFight._finish = original_finish
             if had_completed:
                 self.pilot._completed = original_completed
             else:
@@ -310,6 +356,19 @@ class SoakMetrics:
         late_releases = [summary.release_late_seconds for summary in self.summaries
                          if summary.release_confirmed and summary.release_late_seconds is not None]
         orphan_timeouts = getattr(self.pilot, "release_orphan_timeout", 0)
+        release_deadline_issues = []
+        for summary in self.summaries:
+            if summary.lease is None:
+                continue
+            elapsed = self.release_elapsed_seconds(summary)
+            if not release_within_deadline(summary) or elapsed is None or elapsed > 2:
+                release_deadline_issues.append({
+                    "npc": summary.npc, "lease": summary.lease.model_dump(mode="json"),
+                    "release_confirmed": summary.release_confirmed,
+                    "release_seconds": summary.release_seconds,
+                    "release_late_seconds": summary.release_late_seconds,
+                    "release_elapsed_seconds": elapsed,
+                })
         timeouts = sum(summary.policy_timeouts for summary in self.summaries)
         faulty_fallbacks: Counter[str] = Counter()
         for fallbacks in self.fallbacks_by_client.values():
@@ -335,7 +394,8 @@ class SoakMetrics:
         accept_fraction = accepted / decisions if decisions else None
         check("accepted_commands", accept_fraction is not None and accept_fraction >= 0.95,
               f"accepted={accepted}/{decisions}, minimum=95%")
-        check("release_clean", not release_issues, f"issues={len(release_issues)}, limit=2s")
+        check("release_clean", not release_issues and not release_deadline_issues,
+              f"issues={len(release_issues)}, deadline_issues={len(release_deadline_issues)}, limit=2s")
         for name, window in (("game_rss", game_rss), ("server_rss", server_rss)):
             short = window["short_window"] and window.get("growth_percent") is not None
             check(name, window["ok"] or short,
@@ -366,7 +426,8 @@ class SoakMetrics:
                 ) for summary in finish_deadlines),
                 "release_late_count": len(late_releases),
                 "release_late_max_seconds": max(late_releases, default=None),
-                "release_issues": release_issues, "game_rss": game_rss, "server_rss": server_rss,
+                "release_issues": release_issues, "release_deadline_issues": release_deadline_issues,
+                "game_rss": game_rss, "server_rss": server_rss,
                 "service_calls": len(self._latencies), "service_p95_ms": p95, "service_p99_ms": p99,
                 "max_batch_rows": self._max_batch_rows_all,
                 "max_batch_lag_game_ms": self._max_batch_lag_all,

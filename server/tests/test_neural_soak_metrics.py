@@ -1,5 +1,6 @@
 """The soak must retain evidence and reject real gate failures in short runs too."""
 
+import asyncio
 import json
 from collections import deque
 from dataclasses import dataclass, replace
@@ -7,9 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from gothic_ai.bodypilot import PolicyClient
+from gothic_ai.bodypilot import BodyFight, PolicyClient
 from gothic_ai.protocol import BodyLease
 from gothic_ai.scenarios.neural_load import _policy_resets
+from gothic_ai.scenarios.neural_soak import Episode
 from gothic_ai.scenarios.neural_soak_metrics import SoakMetrics, rss_window, scan_server_errors
 
 
@@ -55,6 +57,7 @@ class Summary:
     fight_seconds: float = 10
     lease: BodyLease | None = None
     release_confirmed: bool = True
+    release_seconds: float | None = 0
     release_late_seconds: float | None = None
     end_trigger: str = "target_lost"
 
@@ -161,7 +164,8 @@ def test_late_release_updates_retained_snapshots_before_history_eviction(tmp_pat
 
     checks = metrics.write_result(eligible=1, captured=1, release_issues=[])
     assert checks["fault_fallbacks"].startswith("done")
-    assert checks["release_clean"].startswith("done")
+    assert checks["release_clean"].startswith("failed")
+    assert metrics.data["metrics"]["release_deadline_issues"][0]["release_late_seconds"] == 2.75
     assert metrics.data["metrics"]["finish_deadline_count"] == 1
     assert metrics.data["metrics"]["finish_deadline_unconfirmed"] == 0
     assert metrics.data["metrics"]["release_late_count"] == 1
@@ -257,3 +261,98 @@ def test_game_intervals_ignore_unleased_resubscription_gaps(tmp_path):
     assert sample["game_interval_count"] == 2
     assert sample["game_interval_p95_ms"] == 50
     assert sample["game_interval_max_ms"] == 50
+
+
+@pytest.mark.parametrize(("release_seconds", "late_seconds", "confirmed", "clean"), [
+    (2.0, None, True, True),
+    (2.75, None, True, False),
+    (None, 2.0, True, True),
+    (1.0, 2.75, True, False),
+    (2.75, 1.0, True, False),
+    (None, None, True, False),
+    (.5, None, False, False),
+])
+def test_release_gate_enforces_elapsed_time_without_external_issues(
+    tmp_path, release_seconds, late_seconds, confirmed, clean,
+):
+    lease = BodyLease(
+        npc="BANDIT", provider="neural-body", mode="realtime", session_epoch=1,
+        world_epoch=1, entity_id=1, control_generation=1, goal_version=1,
+        target_entity_id=2, acquired_observation_seq=1,
+    )
+    metrics = SoakMetrics(
+        SimpleNamespace(body_leases={}), SimpleNamespace(people={}, active_count=0), tmp_path,
+    )
+    metrics.summaries.append(Summary(
+        lease=lease, release_confirmed=confirmed, release_seconds=release_seconds,
+        release_late_seconds=late_seconds,
+    ))
+    checks = metrics.write_result(eligible=1, captured=1, release_issues=[])
+    assert checks["release_clean"].startswith("done" if clean else "failed")
+    assert len(metrics.data["metrics"]["release_deadline_issues"]) == (0 if clean else 1)
+
+
+@pytest.mark.parametrize(("diagnostics_delay", "release_delay", "terminal_lead", "clean"), [
+    (0, 2.75, 0, False),
+    (.75, 1.5, 0, False),
+    (0, 1.75, .5, False),
+    (0, 2.0, 0, True),
+])
+async def test_escape_deadline_starts_before_cleanup_removes_the_fight(
+    tmp_path, monkeypatch, diagnostics_delay, release_delay, terminal_lead, clean,
+):
+    now = [10.0]
+    lease = BodyLease(
+        npc="BANDIT", provider="neural-body", mode="realtime", session_epoch=1,
+        world_epoch=1, entity_id=1, control_generation=1, goal_version=1,
+        target_entity_id=2, acquired_observation_seq=1,
+    )
+    fight = SimpleNamespace(lease=lease)
+    link = SimpleNamespace(body_leases={1: lease}, raw_body_listeners=[])
+    history = deque()
+    pilot = SimpleNamespace(
+        people={}, active_count=1, fights={"BANDIT": fight}, summaries=history,
+        _completed=lambda fight, summary, *args: history.append(summary),
+    )
+    entered, proceed = asyncio.Event(), asyncio.Event()
+
+    async def delayed_finish(fight, reason):
+        entered.set()
+        await proceed.wait()
+        # Native confirmation uses the pilot's own release start, which can
+        # follow asynchronous terminal diagnostics. The fight still exists.
+        finish_at = 10 + diagnostics_delay
+        now[0] = finish_at + release_delay
+        link.body_leases.clear()
+        pilot.fights.clear()
+        pilot.active_count = 0
+        pilot._completed(fight, Summary(
+            reason=reason, lease=lease, release_seconds=release_delay,
+        ), finish_at, finish_at + 10)
+
+    monkeypatch.setattr(BodyFight, "_finish", delayed_finish)
+    metrics = SoakMetrics(link, pilot, tmp_path, clock=lambda: now[0])
+    episode = Episode(fight, "BANDIT", lease, "hero", 1, now[0], now[0])
+    with metrics.observe():
+        if terminal_lead:
+            # A fallen actor can be observed before the pilot begins finishing.
+            metrics.note_fight_end(lease, 10 - terminal_lead)
+        task = asyncio.create_task(BodyFight._finish(fight, "target_lost"))
+        await entered.wait()
+        now[0] = 12
+        episode.update_end(
+            current=True, finish_started=metrics.finish_started_at(lease), now=now[0],
+        )
+        assert episode.ended == 10 - terminal_lead and pilot.fights["BANDIT"] is fight
+        proceed.set()
+        await task
+        episode.update_end(
+            current=False, finish_started=metrics.finish_started_at(lease), now=now[0],
+        )
+        assert episode.ended == 10 - terminal_lead  # Cleanup cannot restart the grace period.
+        assert metrics.release_elapsed_seconds(history[0]) == pytest.approx(
+            terminal_lead + diagnostics_delay + release_delay,
+        )
+        checks = metrics.write_result(eligible=1, captured=1, release_issues=[])
+        assert checks["release_clean"].startswith("done" if clean else "failed")
+    assert BodyFight._finish is delayed_finish

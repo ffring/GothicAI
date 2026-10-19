@@ -7,13 +7,14 @@ import contextlib
 import logging
 import os
 import time
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .. import triggers
 from ..bodies import Bodies
-from ..bodypilot import ACQUIRE_WINDOW, BodyFight, BodyPilot
+from ..bodypilot import ACQUIRE_WINDOW, BodyFight, BodyPilot, FightSummary
 from ..dialogue import DialogueManager
 from ..game import GameError, GameLink
 from ..llm.fake import FakeBackend
@@ -21,7 +22,7 @@ from ..protocol import BodyLease, GameMessage, LineStarted, NpcSpec, RoutineEntr
 from .common import _m5b_player_weapon, _save_or_fail, _until, _until_async, wait_message
 from .neural_load import _policy_resets
 from .neural_soak_capture import CaptureTracker
-from .neural_soak_metrics import SoakMetrics
+from .neural_soak_metrics import SoakMetrics, release_within_deadline
 
 log = logging.getLogger("gothic_ai.scenarios")
 BANDITS = tuple(f"DIR_NPC_SOAK_BANDIT_{i}" for i in range(1, 5))
@@ -48,6 +49,52 @@ class Episode:
     ended: float | None = None
     checked: bool = False
     target_attackers_peak: int = 1
+
+    def update_end(self, *, current: bool, finish_started: float | None, now: float) -> None:
+        if self.ended is not None:
+            return
+        if finish_started is not None:
+            self.ended = finish_started
+        elif not current:
+            self.ended = now
+        if self.ended is not None and self.ended - self.last_damage >= 15:
+            self.stalls.append(self.ended - self.last_damage)
+
+
+def _load_summaries_ok(
+    old_leases: Collection[BodyLease], summaries: Sequence[FightSummary], *, cause: str,
+) -> bool:
+    """A dying hero may finish an old fight while the load command is in flight."""
+    allowed_reasons = {"loading", "hero_down"} if cause == "hero_death" else {"loading"}
+    expected = set(old_leases)
+    return (
+        len(summaries) == len(expected)
+        and {summary.lease for summary in summaries} == expected
+        and all(
+            summary.reason in allowed_reasons and summary.fallbacks == 0
+            and (summary.reason != "hero_down" or summary.target_kind == "hero")
+            and release_within_deadline(summary)
+            for summary in summaries
+        )
+    )
+
+
+def _has_scheduled_combat_load(load_checks: Sequence[dict[str, Any]]) -> bool:
+    return any(item["mid_fight"] and item["cause"].startswith("scheduled_") for item in load_checks)
+
+
+def _scheduled_load_due(
+    elapsed: float, duration: float, scheduled_loads: set[int],
+    load_checks: Sequence[dict[str, Any]], *, combat: bool,
+) -> int | None:
+    # A death reload does not cover the planned combat checkpoint. Reserve a
+    # marker for a later wave instead of spending both markers in peaceful gaps.
+    if not combat and not _has_scheduled_combat_load(load_checks):
+        return None
+    return next((minute for minute in (10, 20) if (
+        minute not in scheduled_loads
+        and elapsed >= minute * (60 if duration >= 1200 else duration / 30)
+    )), None)
 
 
 async def neural_soak_scenario(
@@ -156,9 +203,10 @@ async def neural_soak_scenario(
                         hero_dead = True
                 own = row["self"]
                 if episode.ended is None and (episode.down or own["down"] or own["hp"] <= 0):
-                    episode.ended = now
-                    if now - episode.last_damage >= 15:
-                        episode.stalls.append(now - episode.last_damage)
+                    metrics.note_fight_end(lease, now)
+                    episode.update_end(
+                        current=True, finish_started=metrics.finish_started_at(lease), now=now,
+                    )
 
     def heard(message: GameMessage) -> None:
         if isinstance(message, LineStarted) and message.npc.upper() == TALKER:
@@ -225,10 +273,9 @@ async def neural_soak_scenario(
                     and (other.session_epoch, other.world_epoch) == (lease.session_epoch, lease.world_epoch)
                     for other in link.body_leases.values()
                 ))
-            if episode.ended is None and not current:
-                episode.ended = now
-                if now - episode.last_damage >= 15:
-                    episode.stalls.append(now - episode.last_damage)
+            episode.update_end(
+                current=current, finish_started=metrics.finish_started_at(lease), now=now,
+            )
             if episode.ended is not None and not episode.checked and now >= episode.ended + 2:
                 episode.checked = True
                 entry = pilot.people.get(npc)
@@ -237,10 +284,13 @@ async def neural_soak_scenario(
                 ))
                 old_lease = link.body_leases.get(lease.entity_id) == lease
                 summary = next((s for s in metrics.summaries if s.lease == lease), None)
-                ok = bool(not old_lease and not orphan and summary and summary.release_confirmed)
+                elapsed = metrics.release_elapsed_seconds(summary) if summary else None
+                ok = bool(not old_lease and not orphan and summary
+                          and release_within_deadline(summary) and elapsed is not None and elapsed <= 2)
                 detail = dict(npc=npc, wave=episode.wave, old_lease=old_lease,
                               orphan=orphan, release_s=summary.release_seconds if summary else None,
                               release_late_s=summary.release_late_seconds if summary else None,
+                              release_elapsed_s=elapsed,
                               checked_after_s=now - episode.ended)
                 metrics.event("release_check", ok=ok, **detail)
                 metrics.event(
@@ -304,9 +354,7 @@ async def neural_soak_scenario(
         ok = bool(
             session.parent == saved.branch and session.parent_seq == saved.seq
             and new_world not in [list(scope) for scope in old_worlds]
-            and len(old_summaries) == len(old)
-            and all(s.reason == "loading" and s.release_confirmed and s.fallbacks == 0
-                    and s.release_seconds is not None and s.release_seconds <= 2 for s in old_summaries)
+            and _load_summaries_ok([item[0] for item in old.values()], old_summaries, cause=cause)
             and not pilot.active_count and not link.body_leases and not packets
             and not pilot._watch_npcs and not pilot._pending_unwatch
             and not any(entry.activity == "body" for entry in pilot.people.values())
@@ -384,19 +432,18 @@ async def neural_soak_scenario(
                     next_wave = min(next_wave, max(time.monotonic(), started + duration - 15))
                 deadline = started + duration + (30 if pending_probe() else 0)
                 while time.monotonic() < min(next_wave, deadline):
-                    # Once a combat load is covered, the second scheduled load
+                    # Once a planned combat load is covered, the second scheduled load
                     # may run in the peaceful gap even if the next wave is later.
                     elapsed = time.monotonic() - started
-                    for minute in (10, 20):
-                        due = minute * (60 if duration >= 1200 else duration / 30)
-                        if (minute not in scheduled_loads and elapsed >= due and not pending_probe() and any(
-                            item["mid_fight"] for item in load_checks
-                        )):
-                            saved = await _save_or_fail(link, 7)
-                            await load_wave(saved, cause=f"scheduled_{minute}m")
-                            scheduled_loads.add(minute)
-                            if duration < 1200:
-                                next_wave = min(next_wave, time.monotonic() + 1)
+                    marker = _scheduled_load_due(
+                        elapsed, duration, scheduled_loads, load_checks, combat=False,
+                    )
+                    if marker is not None and not pending_probe():
+                        saved = await _save_or_fail(link, 7)
+                        await load_wave(saved, cause=f"scheduled_{marker}m")
+                        scheduled_loads.add(marker)
+                        if duration < 1200:
+                            next_wave = min(next_wave, time.monotonic() + 1)
                     await pause(min(.1, max(0, min(next_wave, deadline) - time.monotonic())))
                 if time.monotonic() - started >= duration and not pending_probe():
                     break
@@ -475,10 +522,9 @@ async def neural_soak_scenario(
                         loaded = True
                         break
                     elapsed = time.monotonic() - started
-                    marker = next((minute for minute in (10, 20) if (
-                        minute not in scheduled_loads
-                        and elapsed >= minute * (60 if duration >= 1200 else duration / 30)
-                    )), None)
+                    marker = _scheduled_load_due(
+                        elapsed, duration, scheduled_loads, load_checks, combat=True,
+                    )
                     if (marker is not None and link.body_leases and not pending_probe()
                             and time.monotonic() - wave_start >= ACQUIRE_WINDOW):
                         # Keep a combat checkpoint, then restore the peaceful
@@ -541,7 +587,7 @@ async def neural_soak_scenario(
                 all(reacquire_checks)
             ) and (
                 duration < 180 or scheduled_loads == {10, 20}
-                and any(item["mid_fight"] and item["cause"].startswith("scheduled_") for item in load_checks)
+                and _has_scheduled_combat_load(load_checks)
             )
             deaths = sum(item["cause"] == "hero_death" for item in load_checks)
             extra_checks["soak_loads"] = (
