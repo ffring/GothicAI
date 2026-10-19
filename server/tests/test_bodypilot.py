@@ -57,8 +57,10 @@ class Bridge:
         self.acquire_pending_delay = 0.020
         self.pending_acquire = None
         self._acquire_request_id = 0
-        self._pending_event_seq = 0
+        self._control_event_seq = 0
+        self._observation_steps = {}
         self.action_rejections = deque()
+        self.action_accepted_events = True
         self.release_rejections = deque()
         self.status_error = None
         self.acquire_roster_delay = 0
@@ -86,6 +88,32 @@ class Bridge:
 
     def command_times(self, kind):
         return [when for command, when in self.sent_times if command["type"] == kind]
+
+    def control_event(self, **updates):
+        self._control_event_seq = max(self._control_event_seq, self.link._body_control_last_event) + 1
+        return event(self._control_event_seq, **updates)
+
+    def accept_action(self, command, **updates):
+        fields = {name: command[name] for name in (
+            "entity_id", "session_epoch", "world_epoch", "control_generation", "goal_version",
+            "target_entity_id", "command_id", "observation_seq", "action_id", "issued_game_ms", "ttl_ms",
+            "provider",
+        )}
+        fields.update(
+            phase="accepted", reason="accepted", t_game_ms=command["issued_game_ms"],
+            sim_step=self._observation_steps[command["entity_id"], command["observation_seq"]],
+        )
+        fields.update(updates)
+        self.link._dispatch(events(self.control_event(**fields)))
+
+    def _accept_action(self, command, value):
+        if not (
+            self.action_accepted_events and command["type"] == "body_action"
+            and command["action_id"] != 0 and value["accepted"]
+        ):
+            return
+        # Native events may reach the listener before the RPC coroutine resumes.
+        self.accept_action(command)
 
     def roster(self, *entries):
         self._roster = {entry.id.upper(): entry for entry in entries}
@@ -136,16 +164,15 @@ class Bridge:
         if self.pending_acquire is not command:
             return
         self.pending_acquire = None
-        self._pending_event_seq += 1
         if outcome == "acquired":
             self._grant(command)
-            self.control_events.append(event(
-                self._pending_event_seq, **self._control_scope, provider=command["provider"],
+            self.control_events.append(self.control_event(
+                **self._control_scope, provider=command["provider"],
                 acquire_request_id=command["acquire_request_id"], observation_seq=3,
             ))
         else:
-            self.control_events.append(event(
-                self._pending_event_seq, entity_id=command["entity_id"], provider=command["provider"],
+            self.control_events.append(self.control_event(
+                entity_id=command["entity_id"], provider=command["provider"],
                 acquire_request_id=command["acquire_request_id"], reason="acquire_cancelled",
                 acquire_cancel_reason=outcome, owner="native", control_generation=0, goal_version=0,
             ))
@@ -154,8 +181,8 @@ class Bridge:
         self.lease_expirations += 1
         if self.provider_owned:
             self.provider_owned = False
-            self.link._dispatch(events(event(
-                1, **self._control_scope, reason="native_restored", owner="native",
+            self.link._dispatch(events(self.control_event(
+                **self._control_scope, reason="native_restored", owner="native",
             )))
             self._activity(self._control_npc, "fight")
 
@@ -165,8 +192,8 @@ class Bridge:
         self.provider_owned = False
         if self._lease_watchdog is not None:
             self._lease_watchdog.cancel()
-        self.control_events.append(event(
-            1, entity_id=lease.entity_id, reason="native_restored", owner="native",
+        self.control_events.append(self.control_event(
+            entity_id=lease.entity_id, reason="native_restored", owner="native",
             target_entity_id=lease.target_entity_id, release_reason=release_reason,
         ))
         self._activity(lease.npc, "fight")
@@ -220,8 +247,8 @@ class Bridge:
                 self.control_events.clear()
             elif self._released_pending and self.release_pending_polls <= 0:
                 lease = next(iter(self.link.body_leases.values()))
-                value = events(event(
-                    1, entity_id=lease.entity_id, reason="native_restored", owner="native",
+                value = events(self.control_event(
+                    entity_id=lease.entity_id, reason="native_restored", owner="native",
                 )).model_dump(mode="json")
                 self._released_pending = False
                 self.provider_owned = False
@@ -314,6 +341,7 @@ class Bridge:
                     self.provider_owned = False
                     value.update(owner="native", reason="native_restored")
                     self._activity(self._control_npc, "fight")
+        self._accept_action(command, value)
         result = Result(type="result", req=command["req"], ok=True, value=value)
         delays = self.response_delays.get(kind, 0)
         if isinstance(delays, deque):
@@ -331,6 +359,9 @@ class Bridge:
             self.link._dispatch(result)
 
     def emit(self, *rows, generation=1):
+        self._observation_steps.update({
+            (row["entity_id"], row["observation_seq"]): row["sim_step"] for row in rows
+        })
         raw = packet(*rows, generation=generation)
         self.link._dispatch(message(raw), raw_body_packet=raw)
 
@@ -347,7 +378,6 @@ class MultiBridge(Bridge):
         self.refuse_shrink = False
         self.release_ack = None
         self.acquire_ack = {}
-        self.event_seq = 0
         self.observation_seq = 0
         self.pending_releases = set()
 
@@ -437,9 +467,8 @@ class MultiBridge(Bridge):
                         await self.acquire_ack[npc].wait()
                         self.actors[entity]["owned"] = True
                         self._activity(npc, "body")
-                        self.event_seq += 1
-                        self.link._dispatch(events(event(
-                            self.event_seq, entity_id=entity, provider=command["provider"],
+                        self.link._dispatch(events(self.control_event(
+                            entity_id=entity, provider=command["provider"],
                             acquire_request_id=command["acquire_request_id"],
                             observation_seq=self.link.body_latest[entity].observation_seq,
                         )))
@@ -461,6 +490,7 @@ class MultiBridge(Bridge):
                 assert command["provider"] == "neural-body"
         else:
             raise AssertionError(f"unexpected multi bridge command: {kind}")
+        self._accept_action(command, value)
         self.link._dispatch(Result(type="result", req=command["req"], ok=True, value=value))
 
 
@@ -1475,6 +1505,283 @@ async def test_memory_only_periodic_rows_advance_policy_without_sending_commands
         await asyncio.sleep(0.01)
         assert rig.policy.commands("step")[-1]["observation"] == own
         assert len(rig.bridge.commands("body_action")) == count
+
+
+async def test_rows_sampled_before_action_acceptance_update_memory_until_the_acceptance_step():
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._decisions == 1)
+        before_acceptance = fighter(4, owned=True, sim_step=7)
+        rig.bridge.emit(before_acceptance)
+        await asyncio.sleep(0.01)
+        assert len(rig.policy.commands("step")) == 1
+
+        rig.bridge.accept_action(first, sim_step=8)
+        await eventually(lambda: len(rig.policy.commands("step")) == 2)
+        step = rig.policy.commands("step")[-1]
+        assert step["observation"] == before_acceptance
+        assert step["memory_only"] is True
+        assert len(rig.bridge.commands("body_action")) == 1
+
+        # onTick accepts the command before sampling the same simulation step.
+        rig.bridge.action_accepted_events = True
+        after_acceptance = fighter(5, owned=True, sim_step=8)
+        rig.bridge.emit(after_acceptance)
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        assert not rig.policy.commands("step")[-1].get("memory_only", False)
+        assert rig.bridge.commands("body_action")[-1]["observation_seq"] == 5
+        assert rig.fight._memory_only_lag_rows == 1
+        assert not rig.bridge.commands("body_release")
+
+
+async def test_action_acceptance_arriving_before_the_receipt_is_retained(monkeypatch):
+    async with running() as rig:
+        receipt_ready = asyncio.Event()
+        release_receipt = asyncio.Event()
+        original_action = rig.link.body_action
+
+        async def held_receipt(*args, **kwargs):
+            result = await original_action(*args, **kwargs)
+            receipt_ready.set()
+            await release_receipt.wait()
+            return result
+
+        monkeypatch.setattr(rig.link, "body_action", held_receipt)
+        await rig.active()
+        await asyncio.wait_for(receipt_ready.wait(), 0.1)
+        first = rig.bridge.commands("body_action")[0]
+        assert rig.fight._accepted_command_id == first["command_id"]
+        assert rig.fight._accepted_sim_step == fighter(3)["sim_step"]
+        assert rig.fight._decisions == 0  # The receipt has not resumed its coroutine yet.
+        release_receipt.set()
+        await eventually(lambda: rig.fight._decisions == 1)
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: len(rig.bridge.commands("body_action")) == 2)
+        assert not rig.bridge.commands("body_release")
+
+
+async def test_action_acceptance_wait_requires_the_lease_scope_phase_and_command():
+    async with running() as rig:
+        await rig.acquire()
+        wait = asyncio.create_task(rig.fight._wait_action_accepted(9))
+        try:
+            await asyncio.sleep(0)
+            for changes in (
+                {"entity_id": 8}, {"session_epoch": 2}, {"world_epoch": 2},
+                {"control_generation": 8}, {"phase": "started"}, {"action_id": 0},
+            ):
+                fields = {"phase": "accepted", "action_id": 1, "command_id": 9, "sim_step": 8}
+                fields.update(changes)
+                row = rig.bridge.control_event(**fields)
+                rig.pilot.on_message(events(
+                    row, session_epoch=row["session_epoch"], world_epoch=row["world_epoch"],
+                ))
+                await asyncio.sleep(0)
+                assert not wait.done()
+                assert rig.fight._accepted_command_id == rig.fight._accepted_sim_step == 0
+            rig.pilot.on_message(events(rig.bridge.control_event(
+                phase="accepted", action_id=1, command_id=8, sim_step=7,
+            )))
+            await asyncio.sleep(0)
+            assert not wait.done(), "an earlier command cannot acknowledge this action"
+            rig.pilot.on_message(events(rig.bridge.control_event(
+                phase="accepted", action_id=1, command_id=9, sim_step=8,
+            )))
+            await asyncio.wait_for(wait, 0.1)
+            assert (rig.fight._accepted_command_id, rig.fight._accepted_sim_step) == (9, 8)
+        finally:
+            wait.cancel()
+            await asyncio.gather(wait, return_exceptions=True)
+
+
+async def test_continue_needs_no_acceptance_event_and_preserves_the_action_barrier():
+    async with running() as rig:
+        await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._accepted_command_id == first["command_id"])
+        barrier = rig.fight._accepted_sim_step
+        rig.bridge.action_accepted_events = False
+        rig.policy.step_response_actions.extend([0, 0])
+        rig.bridge.emit(fighter(4, owned=True, action_mask=[True] + [False] * 11))
+        await eventually(lambda: rig.fight._decisions == 2)
+        continued = rig.bridge.commands("body_action")[-1]
+        assert continued["action_id"] == 0
+        rig.bridge.accept_action(continued, sim_step=999)
+        assert (rig.fight._accepted_command_id, rig.fight._accepted_sim_step) == (
+            first["command_id"], barrier,
+        )
+        rig.bridge.emit(fighter(5, owned=True, action_mask=[True] + [False] * 11))
+        await eventually(lambda: rig.fight._decisions == 3)
+        assert len(rig.bridge.commands("body_action")) == 3
+        assert not rig.bridge.commands("body_release")
+
+
+async def test_one_missing_action_acceptance_event_continues_and_is_reported(monkeypatch, caplog):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.025)
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        assert rig.fight._decisions == 1 and rig.link.body_owned("NPC")
+        assert not rig.bridge.commands("body_release")
+        assert rig.pilot.last_summary is None
+
+        # A lost event leaves the last known barrier intact; the next eligible row
+        # can make its ordinary decision without waiting for the missing message.
+        rig.bridge.action_accepted_events = True
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: rig.fight._decisions == 2)
+        assert rig.bridge.commands("body_action")[-1]["observation_seq"] == 4
+        assert not rig.policy.commands("step")[-1].get("memory_only", False)
+        assert not rig.bridge.commands("body_release")
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.reason == "shutdown"
+        assert summary.accept_wait_timeouts == 1
+        assert summary.decisions == 2 and summary.action_rejections == ()
+        assert all(decision.accepted for decision in summary.last_policy_decisions)
+        assert "accept_wait_timeouts=1" in caplog.text
+        assert rig.fight._accept_wait_timeouts == 0
+        assert not rig.bridge.provider_owned
+
+
+async def test_late_action_acceptance_after_wait_timeout_still_sets_the_memory_barrier(monkeypatch):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.025)
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        before_acceptance = fighter(4, owned=True, sim_step=7)
+        rig.bridge.emit(before_acceptance)
+        rig.bridge.accept_action(first, sim_step=8)
+        await eventually(lambda: len(rig.policy.commands("step")) == 2)
+        step = rig.policy.commands("step")[-1]
+        assert step["observation"] == before_acceptance and step["memory_only"] is True
+        assert rig.fight._accepted_sim_step == 8
+        assert len(rig.bridge.commands("body_action")) == 1
+
+        rig.bridge.action_accepted_events = True
+        rig.bridge.emit(fighter(5, owned=True, sim_step=8))
+        await eventually(lambda: rig.fight._decisions == 2)
+        assert rig.bridge.commands("body_action")[-1]["observation_seq"] == 5
+        assert not rig.policy.commands("step")[-1].get("memory_only", False)
+        assert rig.fight._accept_wait_timeouts == 1
+        assert not rig.bridge.commands("body_release")
+
+
+async def test_late_acceptance_before_a_new_receipt_restarts_the_full_silence_window(monkeypatch):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.025)
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        receipt_ready = asyncio.Event()
+        release_receipt = asyncio.Event()
+        original_action = rig.link.body_action
+
+        async def held_receipt(*args, **kwargs):
+            result = await original_action(*args, **kwargs)
+            receipt_ready.set()
+            await release_receipt.wait()
+            return result
+
+        monkeypatch.setattr(rig.link, "body_action", held_receipt)
+        rig.bridge.emit(fighter(4, owned=True))
+        await asyncio.wait_for(receipt_ready.wait(), 0.1)
+        second = rig.bridge.commands("body_action")[-1]
+        assert second["command_id"] > first["command_id"]
+        rig.bridge.accept_action(first, sim_step=8)
+        accepted_at = rig.fight._last_accept_at
+        assert accepted_at is not None
+        assert rig.bridge.command_times("body_action")[-1] < accepted_at
+        assert rig.fight._accept_wait_since is None
+
+        release_receipt.set()
+        await eventually(lambda: (
+            rig.fight._awaiting_accept_command_id == second["command_id"]
+            and rig.fight._accept_wait_since is not None
+        ))
+        assert rig.fight._accept_wait_since >= accepted_at
+        rig.bridge.accept_action(second, sim_step=8)
+        await eventually(lambda: rig.fight._accept_wait_since is None)
+        assert rig.fight._last_accept_command_id == second["command_id"]
+        assert rig.fight._accept_wait_timeouts == 1
+        assert not rig.bridge.commands("body_release")
+
+
+async def test_accepted_receipts_without_acceptance_events_expire_after_the_lease_window(monkeypatch):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.015)
+    monkeypatch.setattr(bodypilot, "LEASE_TIMEOUT_MS", 200)
+    monkeypatch.setattr(bodypilot, "HEARTBEAT_INTERVAL", 0.010)
+    monkeypatch.setattr(bodypilot, "EVENTS_INTERVAL", 0.010)
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        for seq in range(4, 7):
+            rig.bridge.emit(fighter(seq, owned=True))
+            await eventually(lambda seq=seq: rig.fight._accept_wait_timeouts == seq - 2)
+        assert len(rig.bridge.commands("body_action")) == 4
+        assert len(rig.bridge.commands("body_heartbeat")) > 1
+        assert rig.bridge.lease_expirations == 0
+        await rig.ended()
+        summary = rig.pilot.last_summary
+        assert summary.reason == "acceptance_timeout"
+        assert summary.accept_wait_timeouts == summary.decisions == 4
+        assert summary.action_rejections == () and summary.policy_timeouts == 0
+        assert all(decision.accepted for decision in summary.last_policy_decisions)
+        assert not rig.bridge.provider_owned and rig.bridge.lease_expirations == 0
+
+
+async def test_acknowledged_actions_allow_idle_longer_than_the_acceptance_silence_window(monkeypatch):
+    monkeypatch.setattr(bodypilot, "LEASE_TIMEOUT_MS", 200)
+    monkeypatch.setattr(bodypilot, "HEARTBEAT_INTERVAL", 0.010)
+    monkeypatch.setattr(bodypilot, "EVENTS_INTERVAL", 0.010)
+    async with running() as rig:
+        await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._last_accept_command_id == first["command_id"])
+        assert rig.fight._accept_wait_since is None
+        await asyncio.sleep(0.250)
+        assert rig.fight._reason is None and rig.link.body_owned("NPC")
+        assert rig.pilot.last_summary is None and rig.bridge.lease_expirations == 0
+        assert not rig.fight._accept_wait_expired()
+        assert rig.fight._accept_wait_timeouts == 0
+        assert len(rig.bridge.commands("body_action")) == 1
+        assert not rig.bridge.commands("body_release")
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: rig.fight._decisions == 2)
+        assert rig.bridge.commands("body_action")[-1]["observation_seq"] == 4
+
+
+async def test_late_acceptance_after_the_silence_deadline_cannot_revive_the_fight(monkeypatch):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.025)
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        # Deliver the late event before the next _tick can observe the expired
+        # deadline. Its own guard must preserve the same terminal outcome.
+        rig.fight._accept_wait_since = (
+            asyncio.get_running_loop().time() - bodypilot.LEASE_TIMEOUT_MS / 1000 - 0.001
+        )
+        assert rig.fight._accept_wait_expired()
+        rig.bridge.accept_action(first, sim_step=8)
+        assert rig.fight._reason == "acceptance_timeout"
+        assert rig.fight._last_accept_command_id == 0
+        assert rig.fight._accept_wait_expired()
+        await rig.ended()
+        summary = rig.pilot.last_summary
+        assert summary.reason == "acceptance_timeout"
+        assert summary.accept_wait_timeouts == summary.decisions == 1
+        assert summary.action_rejections == ()
+        assert len(rig.bridge.commands("body_action")) == 1
 
 
 async def test_reset_precedes_first_periodic_row_with_the_acquired_identity():
@@ -2958,8 +3265,8 @@ async def test_native_ack_drains_later_target_change_event_before_unwatch(
             else:
                 # The native acknowledgement will clear GameLink's lease before
                 # the pilot consumes this queued ownership event.
-                rig.bridge.control_events.append(event(
-                    1, entity_id=lease.entity_id, session_epoch=lease.session_epoch,
+                rig.bridge.control_events.append(rig.bridge.control_event(
+                    entity_id=lease.entity_id, session_epoch=lease.session_epoch,
                     world_epoch=lease.world_epoch, control_generation=lease.control_generation,
                     target_entity_id=lease.target_entity_id, reason="native_restored", owner="native",
                     release_reason=release_reason,
@@ -3159,13 +3466,13 @@ async def test_target_change_and_weapon_change_remain_immediate_while_unseen(cha
 async def test_native_visibility_restoration_respects_lease_identity(scope):
     async with running() as rig:
         await rig.active()
-        rig.pilot.on_message(events(event(
-            1, reason="native_restored", release_reason="target_visibility_lost", owner="native", **scope,
+        rig.pilot.on_message(events(rig.bridge.control_event(
+            reason="native_restored", release_reason="target_visibility_lost", owner="native", **scope,
         ), **{key: value for key, value in scope.items() if key in {"session_epoch", "world_epoch"}}))
         assert rig.fight._reason is None
         assert rig.fight._native_release_reason is None
-        rig.link._dispatch(events(event(
-            2, reason="native_restored", release_reason="target_visibility_lost", owner="native",
+        rig.link._dispatch(events(rig.bridge.control_event(
+            reason="native_restored", release_reason="target_visibility_lost", owner="native",
         )))
         await rig.ended()
         assert rig.pilot.last_summary.reason == "target_lost"
@@ -3192,8 +3499,8 @@ async def test_visibility_restoration_diagnostics_keep_last_ten_actual_policy_de
         rig.bridge.emit(unseen_fighter(19, t_game_ms=2200))
         await eventually(lambda: len(rig.policy.commands("step")) == 17)
         rig.clock.advance(0.35)
-        rig.link._dispatch(events(event(
-            1, reason="native_restored", release_reason="target_visibility_lost", owner="native",
+        rig.link._dispatch(events(rig.bridge.control_event(
+            reason="native_restored", release_reason="target_visibility_lost", owner="native",
             t_game_ms=2400,
         )))
         await rig.ended()
@@ -3221,7 +3528,9 @@ async def test_native_ownership_or_dialogue_takeover_ends_episode(takeover):
     async with running() as rig:
         await rig.active()
         if takeover == "native_restored":
-            rig.link._dispatch(events(event(1, reason="native_restored", owner="native")))
+            rig.link._dispatch(events(rig.bridge.control_event(
+                reason="native_restored", owner="native",
+            )))
         elif takeover == "lease_lost":
             rig.bridge.emit(fighter(4, owned=True, control_generation=8))
         elif takeover == "attached":
@@ -3394,8 +3703,8 @@ async def test_finished_owner_retains_watch_across_new_fight_until_native(monkey
         rig.bridge.actors[entity]["owned"] = False
         rig.bridge.pending_releases.discard(entity)
         if confirmation == "event":
-            rig.link._dispatch(events(event(
-                1, entity_id=entity, reason="native_restored", owner="native",
+            rig.link._dispatch(events(rig.bridge.control_event(
+                entity_id=entity, reason="native_restored", owner="native",
             )))
         elif confirmation == "timeout":
             rig.clock.advance(bodypilot.LEASE_TIMEOUT_MS / 1000 + bodypilot.RELEASE_ORPHAN_GRACE + 0.01)
@@ -3438,8 +3747,8 @@ async def test_unconfirmed_release_reserves_one_of_four_watch_slots(monkeypatch)
 
         rig.bridge.actors[entity]["owned"] = False
         rig.bridge.pending_releases.discard(entity)
-        rig.link._dispatch(events(event(
-            1, entity_id=entity, reason="native_restored", owner="native",
+        rig.link._dispatch(events(rig.bridge.control_event(
+            entity_id=entity, reason="native_restored", owner="native",
         )))
         await eventually(lambda: set(rig.bridge.watched) == set(npcs[1:]))
         rig.bridge.roster(
@@ -3468,8 +3777,8 @@ async def test_native_restored_during_end_episode_confirms_late_release(monkeypa
                 assert rig.link.body_leases == {1: lease}
                 rig.bridge.provider_owned = False
                 rig.bridge._released_pending = False
-                rig.link._dispatch(events(event(
-                    1, entity_id=lease.entity_id, reason="native_restored", owner="native",
+                rig.link._dispatch(events(rig.bridge.control_event(
+                    entity_id=lease.entity_id, reason="native_restored", owner="native",
                 )))
                 if end_trigger in {"hero_down", "target_down"}:
                     # A native routine during cleanup can clear the claim before
@@ -3519,8 +3828,8 @@ async def test_late_release_allows_lost_fighter_to_return_without_routine(
 
         rig.bridge.actors[entity]["owned"] = False
         rig.bridge.pending_releases.discard(entity)
-        rig.link._dispatch(events(event(
-            1, entity_id=entity, reason="native_restored", owner="native",
+        rig.link._dispatch(events(rig.bridge.control_event(
+            entity_id=entity, reason="native_restored", owner="native",
         )))
         if range_exit == "after_native":
             assert "NPC_1" in rig.pilot._claimed_fights and "NPC_1" in rig.pilot._lost_fights
@@ -3563,8 +3872,8 @@ async def test_late_release_after_target_change_reacquires_against_live_companio
         rig.bridge.actors[entity]["owned"] = False
         rig.bridge.pending_releases.discard(entity)
         if confirmation == "event":
-            rig.link._dispatch(events(event(
-                1, entity_id=entity, reason="native_restored", owner="native",
+            rig.link._dispatch(events(rig.bridge.control_event(
+                entity_id=entity, reason="native_restored", owner="native",
             )))
         await eventually(lambda: rig.pilot.last_summary.release_confirmed)
         await eventually(lambda: "NPC_1" in rig.pilot._retarget_pending)
@@ -3608,8 +3917,8 @@ async def test_late_target_change_does_not_reacquire_against_unrelated_native_ta
         assert rig.pilot.last_summary.end_trigger == "target_changed"
         rig.bridge.actors[entity]["owned"] = False
         rig.bridge.pending_releases.discard(entity)
-        rig.link._dispatch(events(event(
-            1, entity_id=entity, reason="native_restored", owner="native",
+        rig.link._dispatch(events(rig.bridge.control_event(
+            entity_id=entity, reason="native_restored", owner="native",
         )))
         await eventually(lambda: not rig.bridge.watched)
 
@@ -3702,8 +4011,8 @@ async def test_delayed_release_keeps_closed_fight_claimed_until_native_routine(
         rig.bridge.actors[entity]["owned"] = False
         rig.bridge.pending_releases.discard(entity)
         if confirmation == "event":
-            rig.link._dispatch(events(event(
-                1, entity_id=entity, reason="native_restored", owner="native",
+            rig.link._dispatch(events(rig.bridge.control_event(
+                entity_id=entity, reason="native_restored", owner="native",
             )))
         else:
             rig.clock.advance(bodypilot.LEASE_TIMEOUT_MS / 1000 + bodypilot.RELEASE_ORPHAN_GRACE + 0.01)
@@ -4353,8 +4662,8 @@ async def test_lost_fight_reacquires_with_fresh_reset_when_distant_npc_returns_a
             # The full roster can lose the NPC before release has completed.
             leave_range()
         else:
-            rig.link._dispatch(events(event(
-                1, reason="native_restored", release_reason="target_visibility_lost", owner="native",
+            rig.link._dispatch(events(rig.bridge.control_event(
+                reason="native_restored", release_reason="target_visibility_lost", owner="native",
             )))
         await rig.ended()
         await eventually(lambda: not rig.pilot.active_count)
@@ -4845,9 +5154,8 @@ async def test_pending_acquire_event_poll_preserves_another_fights_native_releas
         rig.bridge.emit(multi_fighter("NPC_2"))
         await eventually(lambda: rig.link.body_acquire_pending(npc_entity("NPC_2")))
         new_target = expected_reason == "target_changed"
-        rig.bridge.event_seq += 1
-        native_events.append(event(
-            rig.bridge.event_seq, entity_id=lease.entity_id, control_generation=lease.control_generation,
+        native_events.append(rig.bridge.control_event(
+            entity_id=lease.entity_id, control_generation=lease.control_generation,
             target_entity_id=lease.target_entity_id, reason="native_restored", owner="native",
             release_reason=release_reason, t_game_ms=200,
         ))

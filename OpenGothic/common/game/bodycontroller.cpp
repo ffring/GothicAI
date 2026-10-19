@@ -589,7 +589,7 @@ void BodyController::pollAcquire(Npc& actor,bool grant) {
     }
   }
 
-std::string BodyController::handleJson(const rapidjson::Value& req) {
+std::string BodyController::handleJson(const rapidjson::Value& req,bool sentObservations) {
   pumpWatchdogs();
   if(!req.IsObject()) return result(nullptr,nullptr,false,"invalid_request");
   const auto type=textField(req,"type");
@@ -714,8 +714,11 @@ std::string BodyController::handleJson(const rapidjson::Value& req) {
   if(c.observation<=l->minimumSequence) return reject("stale_observation");
   GateState gate;
   gate.session=session; gate.world=world; gate.generation=l->generation; gate.goal=l->goal; gate.target=l->target;
-  gate.observation=BodyObservations::latestSequence(*actor); gate.observedGame=BodyObservations::latestGameMs(*actor);
-  gate.gameNow=actor->world().tickCount(); gate.wallAge=wallMs()-BodyObservations::latestWallMs(*actor);
+  auto observation=BodyObservations::SentObservation{BodyObservations::latestSequence(*actor),
+                     BodyObservations::latestGameMs(*actor),BodyObservations::latestWallMs(*actor)};
+  if(sentObservations && l->mode=="realtime") observation=BodyObservations::latestSent(*actor);
+  gate.observation=observation.sequence; gate.observedGame=observation.gameMs;
+  gate.gameNow=actor->world().tickCount(); gate.wallAge=wallMs()-observation.wallMs;
   gate.targetValid=targetValid(*actor,c.target); gate.paused=state().paused; gate.infrastructure=state().infrastructure;
   gate.busy=l->command || l->movementStopPending; gate.realtime=l->mode=="realtime"; gate.resolver=resolverState(*actor);
   GateCommand requested{session,world,generation,c.goal,c.target,c.observation,c.issued,c.ttl,c.action};
@@ -723,7 +726,7 @@ std::string BodyController::handleJson(const rapidjson::Value& req) {
   if(std::string_view(refusal)!="allowed") return reject(refusal);
   const auto resolution=FightAlgo::resolve(c.action,gate.resolver);
   c.primitive=resolution.primitive;
-  c.deadline=Clock::time_point(std::chrono::milliseconds(BodyObservations::latestWallMs(*actor)+c.ttl));
+  c.deadline=Clock::time_point(std::chrono::milliseconds(observation.wallMs+c.ttl));
   if(l->mode=="realtime" && Clock::now()>=c.deadline) return reject("expired_wall");
   l->heartbeat=Clock::now();
   if(c.action==PolicyAction::Continue) {

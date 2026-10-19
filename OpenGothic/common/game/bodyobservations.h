@@ -48,6 +48,10 @@ class BodyObservations final {
     static uint64_t latestGameMs(const Npc& actor);
     static bool latestPeriodic(const Npc& actor);
     static uint64_t latestWallMs(const Npc& actor);
+    struct SentObservation final {
+      uint64_t sequence = 0, gameMs = 0, wallMs = 0;
+      };
+    static SentObservation latestSent(const Npc& actor);
     static void forget(const Npc* actor);
     // Explicit teleport/fixture relocation; ordinary MoveAlgo correction is not a discontinuity.
     static void discontinuity(const Npc& actor);
@@ -65,6 +69,8 @@ class BodyObservations final {
     // The packet is valid JSON even when empty. Rows share one generation-wide sequence;
     // dropped counters account for bounded-queue losses. Draining never advances game time.
     static std::string drainJson();
+    // Ordinary bridge only: acknowledge the last drained packet after transport accepts it.
+    static void markDrainedSent();
     static std::string statsJson();
 
     // Decision-relevant fields of one queued row, kept beside the serialized queue. The runner's
@@ -72,6 +78,7 @@ class BodyObservations final {
     struct QueuedRow final {
       uint64_t entityId = 0, sessionEpoch = 0, worldEpoch = 0, controlGeneration = 0;
       uint64_t enqueueIndex = 0; // queue cursor, including rows removed by subscription edits
+      SentObservation observation;
       bool periodic = false, canDecide = false, actionMaskValid = false;
       std::array<bool,12> actionMask = {};
       };
