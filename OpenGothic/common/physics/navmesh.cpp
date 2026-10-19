@@ -615,34 +615,46 @@ NavMesh::TakeoffSite NavMesh::takeoffSite(const Point& source, float insetDistan
   Point center{};
   for(unsigned int vertex=0; vertex<poly->vertCount; ++vertex)
     for(size_t axis=0; axis<3; ++axis) center[axis]+=tile->verts[size_t(poly->verts[vertex])*3+axis]/poly->vertCount;
-  result.inset=result.snapped;
-  const float dx=center[0]-result.snapped[0],dz=center[2]-result.snapped[2],length=std::hypot(dx,dz);
-  if(length>1.e-5f) {
-    // As in the old approach-path inset, stop before the interior anchor. Both
-    // endpoints stay in this convex ground polygon, rather than a nearest-poly
-    // projection that could jump across a wall to another ground component.
-    const float amount=std::min(insetDistance,length*.5f);
-    result.inset[0]+=dx/length*amount;result.inset[2]+=dz/length*amount;
-    }
-  Point adjusted{};bool over=false;
-  if(dtStatusFailed(impl->query->closestPointOnPoly(ref,result.inset.data(),adjusted.data(),&over)) || !over) {
-    result.reason="inset_left_source_polygon";return result;
-    }
-  result.inset=adjusted;
-  result.insetDistance=std::hypot(result.inset[0]-result.snapped[0],result.inset[2]-result.snapped[2]);
-  if(result.insetDistance>insetDistance+1.e-4f || std::abs(result.inset[1]-source[1])>maxVerticalSnap) {
-    result.reason="inset_correction_too_far";return result;
-    }
   Point wall{},normal{};
   if(dtStatusFailed(impl->query->findDistanceToWall(ref,result.snapped.data(),5.f,&filter,&result.sourceWallDistance,
-                                                   wall.data(),normal.data())) ||
-     dtStatusFailed(impl->query->findDistanceToWall(ref,result.inset.data(),5.f,&filter,&result.insetWallDistance,
-                                                   wall.data(),normal.data()))) {
-    result.reason="source_wall_query_failed";return result;
-    }
-  if(!std::isfinite(result.sourceWallDistance) || !std::isfinite(result.insetWallDistance)) {
+                                                   wall.data(),normal.data())) || !std::isfinite(result.sourceWallDistance)) {
     result.sourceWallDistance=0;result.insetWallDistance=0;result.reason="source_wall_query_failed";return result;
     }
+  // A tile polygon can be much longer along a boundary than across it. Its
+  // centroid then gives a nearly tangential move with negligible wall clearance.
+  // Maximize actual ground-wall clearance over bounded directions, always on
+  // this same convex polygon. Do not use findDistanceToWall's normal: at a wall
+  // its zero-length normalization can be non-finite.
+  bool found=false;
+  auto consider=[&](const Point& requested) {
+    Point adjusted{};bool over=false;
+    if(dtStatusFailed(impl->query->closestPointOnPoly(ref,requested.data(),adjusted.data(),&over)) || !over ||
+       std::hypot(adjusted[0]-requested[0],adjusted[2]-requested[2])>1.e-4f ||
+       std::abs(adjusted[1]-source[1])>maxVerticalSnap) return;
+    const float amount=std::hypot(adjusted[0]-result.snapped[0],adjusted[2]-result.snapped[2]);
+    if(amount>insetDistance+1.e-4f) return;
+    float clearance=0;
+    if(dtStatusFailed(impl->query->findDistanceToWall(ref,adjusted.data(),5.f,&filter,&clearance,wall.data(),normal.data())) ||
+       !std::isfinite(clearance)) return;
+    if(!found || clearance>result.insetWallDistance ||
+       (clearance==result.insetWallDistance && adjusted<result.inset)) {
+      found=true;result.inset=adjusted;result.insetDistance=amount;result.insetWallDistance=clearance;
+      }
+    };
+  const float dx=center[0]-result.snapped[0],dz=center[2]-result.snapped[2],length=std::hypot(dx,dz);
+  Point towardsCenter=result.snapped;
+  if(length>1.e-5f) {
+    const float amount=std::min(insetDistance,length*.5f);
+    towardsCenter[0]+=dx/length*amount;towardsCenter[2]+=dz/length*amount;
+    }
+  consider(towardsCenter);
+  for(unsigned i=0; i<32; ++i) {
+    const float angle=float(i)*(2.f*3.14159265358979323846f/32.f);
+    auto requested=result.snapped;
+    requested[0]+=std::cos(angle)*insetDistance;requested[2]+=std::sin(angle)*insetDistance;
+    consider(requested);
+    }
+  if(!found) {result.reason="inset_left_source_polygon";return result;}
   result.valid=true;result.reason="ok";
   return result;
   }

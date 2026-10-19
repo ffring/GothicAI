@@ -144,9 +144,19 @@ int main() {
     const auto prepared=separated.takeoffSite(candidates.front().start);
     check(prepared.valid && prepared.sourcePolygon!=0 && prepared.insetDistance>0.f && prepared.insetDistance<=.1501f,
           "boundary takeoff must inset by a bounded positive amount inside its source ground polygon");
-    check(prepared.insetWallDistance>prepared.sourceWallDistance+.05f &&
-          separated.findPath(takeoff,prepared.inset,false).complete && !separated.findPath(prepared.inset,landing,false).complete,
-          "takeoff inset must gain wall clearance on the original island without crossing the gap");
+    const bool insetReachable=separated.findPath(takeoff,prepared.inset,false).complete;
+    const bool insetCrossesGap=separated.findPath(prepared.inset,landing,false).complete;
+    if(prepared.insetWallDistance<=prepared.sourceWallDistance+.05f || !insetReachable || insetCrossesGap) {
+      const auto& source=candidates.front().start;
+      std::cerr<<"takeoff fixture source=["<<source[0]<<','<<source[1]<<','<<source[2]<<"] inset=["
+               <<prepared.inset[0]<<','<<prepared.inset[1]<<','<<prepared.inset[2]<<"] source_wall_m="
+               <<prepared.sourceWallDistance<<" inset_wall_m="<<prepared.insetWallDistance
+               <<" inset_m="<<prepared.insetDistance<<" original_island="<<insetReachable
+               <<" crosses_gap="<<insetCrossesGap<<'\n';
+      }
+    check(prepared.insetWallDistance>prepared.sourceWallDistance+.05f,
+          "bounded takeoff inset must gain more than 5cm of actual ground-wall clearance");
+    check(insetReachable && !insetCrossesGap,"takeoff inset must remain on the original island without crossing the gap");
     check(!separated.takeoffSite({9.f,0.f,4.f}).valid,
           "takeoff preparation must reject a source in a gap instead of snapping across it");
     const auto balconyTakeoff=layered.takeoffSite({12.f,3.f,10.f});
