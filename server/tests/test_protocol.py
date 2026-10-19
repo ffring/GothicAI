@@ -13,6 +13,7 @@ from gothic_ai.protocol import (
     FIGHT_REACTION_PROTOCOL,
     NOISE_PROTOCOL,
     NPC_CRIME_PROTOCOL,
+    NPC_FAR_PROTOCOL,
     PACE_PROTOCOL,
     PROTOCOL_VERSION,
     TRACE_PROTOCOL,
@@ -128,7 +129,7 @@ def test_v44_independent_deeds_switch_and_held_deed_id():
 
 @pytest.mark.parametrize("kind", ["take_item", "attack"])
 def test_v47_npc_deed_keeps_shared_snapshot_and_culprit_separate_from_hero(kind):
-    assert PROTOCOL_VERSION == NPC_CRIME_PROTOCOL == 47
+    assert PROTOCOL_VERSION >= NPC_CRIME_PROTOCOL == 47
     msg = parse_game_message(_json({
         "type": "npc_deed", "id": "npc-deed-1", "kind": kind, "culprit": "VINO",
         "culprit_guild": 7, "culprit_npctype": 0, "victim": "MALAK", "owner": "LOBART",
@@ -185,6 +186,48 @@ def test_v47_other_damage_readiness_is_independent_of_theft(theft, damage):
     assert message.views[0].theft_ready is theft
     assert message.views[0].others_damage_ready is damage
     assert message.views[0].others_damage_range == (800.0 if theft is not None else None)
+
+
+@pytest.mark.parametrize("ready,distance", [(True, 1800.0), (False, 2500.0), (None, None)])
+def test_v48_theft_range_is_observed_even_without_a_ready_callback(ready, distance):
+    view = {"npc": "HILDA", "name": "Хильда"}
+    if distance is not None:
+        view.update(theft_ready=ready, theft_range=distance)
+    message = parse_game_message(_json({"type": "npc_views", "t": 1, "views": [view]}))
+    assert isinstance(message, NpcViews)
+    assert message.views[0].theft_ready is ready
+    assert message.views[0].theft_range == distance
+
+
+def test_v48_chest_take_names_the_source_and_keeps_self_as_taker():
+    assert PROTOCOL_VERSION == NPC_FAR_PROTOCOL == 48
+    take = StoryEffectCmd(
+        req="far-theft", npc="BAU_951_HILDA",
+        effects=[{"do": "chest_take", "chest": "CHEST_LOBART", "item": "ITMI_GOLD", "count": 2}],
+        check=True,
+    )
+    assert json.loads(take.to_json()) == {
+        "type": "story_effect", "req": "far-theft", "npc": "BAU_951_HILDA", "check": True,
+        "effects": [{"do": "chest_take", "chest": "CHEST_LOBART", "item": "ITMI_GOLD", "count": 2}],
+    }
+
+
+def test_v48_story_state_preserves_batch_world_positions_and_legacy_absence():
+    command = StoryStateCmd(req="far-positions", npcs=["HILDA", "LOBART", "PC_HERO"])
+    assert json.loads(command.to_json())["npcs"] == ["HILDA", "LOBART", "PC_HERO"]
+    people = {
+        "HILDA": {"state": "alive", "name": "Хильда", "pos": [120.5, 10.0, -500.0]},
+        "LOBART": {"state": "absent"},
+        "PC_HERO": {"state": "alive", "name": "Я", "pos": [30000.0, 20.0, 18000.0]},
+    }
+    message = parse_game_message(_json({
+        "type": "result", "req": command.req, "ok": True, "value": {"npcs": people},
+    }))
+    assert message.type == "result" and message.value["npcs"] == people
+    legacy = parse_game_message(_json({
+        "type": "result", "req": "old", "ok": True, "value": {"npcs": {"HILDA": {"state": "alive"}}},
+    }))
+    assert "pos" not in legacy.value["npcs"]["HILDA"]
 
 
 def test_v46_held_room_entry_has_no_deed_and_uses_the_deeds_switch():

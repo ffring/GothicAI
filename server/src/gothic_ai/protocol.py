@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 47
+PROTOCOL_VERSION = 48
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
@@ -30,6 +30,7 @@ FIGHT_REACTION_PROTOCOL = 43  # Look.combat_target/fighting, npc_threat, immedia
 CRIME_REACT_PROTOCOL = 44  # independently held hero deeds, their ids, and vanilla fight reasons
 CRIME_MEET_PROTOCOL = 46  # deeds switch also holds room entry; rule verdicts need no body action
 NPC_CRIME_PROTOCOL = 47  # marked NPC theft/attack and separate npc_deed snapshots
+NPC_FAR_PROTOCOL = 48  # story_effect chest_take: a checked chest-to-self transfer without a body action
 
 # --- game -> server -----------------------------------------------------------
 
@@ -573,6 +574,7 @@ class NpcView(_GameMessage):
     room_guild: int | None = None  # whose room it is in (the scripts' guilds), indoors only
     state: str = ""
     theft_ready: bool | None = None  # v44: initialized native ASSESSTHEFT callback, for scene setup
+    theft_range: float | None = None  # v48: native ASSESSTHEFT range, cm; also available outside AiNormal
     others_damage_ready: bool | None = None  # v47: initialized native ASSESSOTHERSDAMAGE callback
     others_damage_range: float | None = None  # v47: native range of that perception, cm
     body: str = "stand"
@@ -1773,7 +1775,12 @@ class StoryEffectCmd(_Command):
     (`error`: what is missing, "missing: hero ITMI_GOLD 30 (has 12)").
 
     v39: `give` with `to: "npc"` and `npc` (an instance symbol): the npc gives it to that other npc (an
-    errand far from the hero, errands.py); a mission item never (`error`: "a mission item: …")."""
+    errand far from the hero, errands.py); a mission item never (`error`: "a mission item: …").
+
+    v48: `chest_take` with `chest`, `item`, `count`: the self npc takes the exact count into its own
+    inventory, without walking, animation or script perceptions. Every source chest is checked before
+    any effect runs, even without `check`; missing quantities and mission items reject the whole batch.
+    The server's StoryGuard protects plot items before sending this effect."""
 
     type: Literal["story_effect"] = "story_effect"
     req: str
@@ -1838,7 +1845,8 @@ class DealHideCmd(_Command):
 
 class StoryStateCmd(_Command):
     """What the director's rules read (v8, stage 5). `result.value`: {"vars": {name: int}, "npcs": {symbol:
-    {"state": "alive" | "dead" | "absent", "name", "distance": cm from `near`, alive or dead, and "seen":
+    {"state": "alive" | "dead" | "absent", "name", "pos": live world coordinates [x,y,z] (v48, if
+    present in the world, including far NPCs), "distance": cm from `near`, alive or dead, and "seen":
     `near` sees it now (v12), if given}}, "knows": {dialog: bool} (the hero has heard it), "symbols": {name:
     "npc" | "item" | "info" | "var" | "const" | "func" | "other"} (unknown names are left out), "items":
     {instance: name in the game}, "dialog": bool, "cutscene": bool, "day", "hour", "minute": the game
