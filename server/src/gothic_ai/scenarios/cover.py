@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 HOUSE = "NW_FARM1_INHOUSE_01"
 DENIAL = "На вашей ферме я утром не был и твой кубок не брал"
-VOUCH = "Всё утро он был со мной в поле, в дом не заходил и кубок не брал"
+VOUCH = "Всё утро он был со мной в городе, на вашей ферме его не было и кубок он не брал"
 REQUEST = "Если Лобарт спросит, прикрой меня"
 
 
@@ -93,12 +93,42 @@ async def cover_scenario(
 
     async def stand(npc: str, point: str, *, face: str | None = None) -> None:
         await link.debug("skip_important", near=npc)
-        await link.npc_act(
-            npc, "start_activity", state="ZS_STAND_WP", waypoint=point, minutes=120, place=True
-        )
         await link.debug("npc_goto", npc=npc, waypoint=point)
+        await link.npc_act(
+            npc, "start_activity", state="ZS_STAND_WP", waypoint=point, minutes=120, place=False
+        )
         if face is not None:
             await link.npc_act(npc, "turn_to", npc=face)
+
+    async def stage_investigation(point: str) -> tuple[bool, dict[str, Any]]:
+        trio = (HILDA, VINO, LOBART)
+        for npc in trio:
+            await stand(npc, point)
+        await link.debug("player_goto", to=LOBART, distance=300)
+        detail: dict[str, Any] = {}
+
+        async def ready() -> bool:
+            state = await link.story_state(npcs=trio, near=LOBART)
+            views = {view.npc: view for view in await link.npc_view(trio)}
+            detail.update({"npcs": state.get("npcs", {}), "views": [v.model_dump() for v in views.values()]})
+            detail["roster"] = {
+                npc: {"name": e.name, "distance": e.distance, "earshot": e.earshot}
+                for npc in trio if (e := talk.people.get(npc)) is not None
+            }
+            return all(
+                npc in views
+                and views[npc].state == "ZS_STAND_WP"
+                and views[npc].body == "stand"
+                and (st := detail["npcs"].get(npc, {})).get("distance") is not None
+                and float(st["distance"]) <= 500
+                for npc in trio
+            ) and all(
+                npc in talk.people and talk.people[npc].earshot <= 1000
+                and talk.people[npc].distance <= 1000
+                for npc in trio
+            ) and talk.people[LOBART].name == "Лобарт"
+
+        return await _until_async(ready, bool, 20), detail
 
     async def drop() -> bool:
         try:
@@ -291,6 +321,12 @@ async def cover_scenario(
             return _logged(results)
         await settled()
         talk.end("gone")
+        if not check(
+            "deal_released",
+            await _until(lambda: HILDA not in talk.attached, 20),
+            "Hilda detached before the next native activity",
+        ):
+            return _logged(results)
 
         # Vino independently sees the hero on the farm. He need not see the cup: the exact same
         # denial also claims the hero was never on the farm, which his real sighting disproves.
@@ -311,13 +347,8 @@ async def cover_scenario(
         # JUST_MIN omits the current encounter from testimony: ask about the earlier morning,
         # after Vino's independent sighting and Hilda's actual theft perception have aged.
         await link.debug("time", hour=9, minute=0)
-        await stand(LOBART, field, face="PLAYER")
-        await link.debug("player_goto", to=LOBART, distance=300)
-        if not check(
-            "ask_near",
-            await _until(lambda: all(n in talk.people for n in (LOBART, HILDA, VINO)), 20),
-            "Lobart, Hilda and Vino within hearing",
-        ):
+        ready, preparation = await stage_investigation(field)
+        if not check("ask_near", ready, preparation):
             return _logged(results)
 
         class EvidenceScript:
@@ -461,11 +492,10 @@ async def cover_scenario(
             return _logged(results)
         # ask_witness reuses an answer for an hour; cross that window to prove the loaded cover is
         # applied again, rather than merely displaying the saved testimony.
-        await link.debug("time", hour=10, minute=15)
-        for npc in (HILDA, VINO, LOBART):
-            await stand(npc, field)
-        await link.debug("player_goto", to=LOBART, distance=300)
-        await _until(lambda: LOBART in talk.people and talk.people[LOBART].distance <= 600, 20)
+        await link.debug("time", hour=12, minute=0)
+        ready, preparation = await stage_investigation(field)
+        if not check("loaded_ask_near", ready, preparation):
+            return _logged(results)
         before_testimony = len(facts("testimony"))
         await investigate(HILDA, "Хильда")
         reloaded = facts("testimony")[before_testimony:]
@@ -481,8 +511,15 @@ async def cover_scenario(
             ),
             reloaded,
         )
-        await investigate(VINO, "Вино")
-        check("no_duplicate_exposed", len(exposed()) == 1 and exposed()[0] in snapshot, exposed())
+        _, repeated = await investigate(VINO, "Вино")
+        check(
+            "no_duplicate_exposed",
+            len(repeated) == 1
+            and repeated[0].get("outcome") == "rejected"
+            and len(exposed()) == 1
+            and exposed()[0] in snapshot,
+            {"calls": repeated, "exposed": exposed()},
+        )
         return _logged(results)
     finally:
         dialogue.llm, talk.reflexes = original_llm, original_reflexes
