@@ -529,6 +529,404 @@
         ],
         "source": "docs/npc-body-control-plan.md · этап 8; reports/npc-body/2026-10-15-gate-v16"
       }
+    },
+    {
+      "id": "observation-rays",
+      "kind": "card",
+      "dur": 8,
+      "chart": {
+        "type": "rays",
+        "title": "184 числа · демо",
+        "maxCm": 600,
+        "rays": [
+          {
+            "cm": 600,
+            "hit": false
+          },
+          {
+            "cm": 600,
+            "hit": false
+          },
+          {
+            "cm": 340,
+            "hit": true
+          },
+          {
+            "cm": 280,
+            "hit": true
+          },
+          {
+            "cm": 250,
+            "hit": true
+          },
+          {
+            "cm": 315,
+            "hit": true
+          },
+          {
+            "cm": 600,
+            "hit": false
+          },
+          {
+            "cm": 600,
+            "hit": false
+          },
+          {
+            "cm": 440,
+            "hit": true
+          },
+          {
+            "cm": 600,
+            "hit": false
+          },
+          {
+            "cm": 600,
+            "hit": false
+          },
+          {
+            "cm": 390,
+            "hit": true
+          },
+          {
+            "cm": 325,
+            "hit": true
+          },
+          {
+            "cm": 370,
+            "hit": true
+          },
+          {
+            "cm": 600,
+            "hit": false
+          },
+          {
+            "cm": 600,
+            "hit": false
+          }
+        ],
+        "target": {
+          "x": 150,
+          "y": 230,
+          "label": "противник",
+          "at": 0.8
+        },
+        "hideAt": 5.8,
+        "panels": [
+          {
+            "title": "я",
+            "lines": [
+              "HP · оружие · поза",
+              "движение · доступные действия"
+            ],
+            "color": "#FFD678",
+            "at": 0.4
+          },
+          {
+            "title": "противник",
+            "lines": [
+              "дальность · направление",
+              "движение · видимая поза"
+            ],
+            "color": "#7EC8FF",
+            "at": 0.8
+          }
+        ],
+        "raysAt": [
+          1.3,
+          1.6
+        ],
+        "source": "демо лучей; реальные данные: observations.jsonl дуэли · scripts/body_trajectory_dataset.py; скрытая цель: docs/npc-body-observations.md:31–32"
+      }
+    },
+    {
+      "id": "vision-cone",
+      "kind": "card",
+      "dur": 7,
+      "chart": {
+        "type": "cone",
+        "title": "Конус зрения и доворот",
+        "halfDeg": 35,
+        "rangeCm": 420,
+        "path": [
+          {
+            "t": 0.4,
+            "x": 0,
+            "y": 270
+          },
+          {
+            "t": 1.6,
+            "x": 70,
+            "y": 270
+          },
+          {
+            "t": 3,
+            "x": 240,
+            "y": 220
+          },
+          {
+            "t": 6.5,
+            "x": 240,
+            "y": 220
+          }
+        ],
+        "turn": {
+          "at": 4.2,
+          "dur": 0.4,
+          "deg": 48,
+          "label": "≤ 400 мс"
+        },
+        "texts": [
+          {
+            "text": "Противник выходит из конуса",
+            "at": 3,
+            "color": "#7EC8FF"
+          },
+          {
+            "text": "BC: 0 из 6 дуэлей",
+            "at": 3.2,
+            "color": "#FF5A5A"
+          },
+          {
+            "text": "Доворот возвращает цель",
+            "at": 4.6,
+            "color": "#FFD678"
+          }
+        ],
+        "source": "reports/npc-body/2026-10-14-bc/validation-notes.md:60–67; docs/npc-body-combat-gate.md:109–120; reports/npc-body/2026-10-15-stage8-resume"
+      }
+    },
+    {
+      "id": "decision-ticks",
+      "kind": "card",
+      "dur": 6,
+      "chart": {
+        "type": "ticks",
+        "title": "20 раз в секунду",
+        "rows": [
+          {
+            "label": "сеть",
+            "cells": "DBBBBDBBBBDBBBBDBBBB",
+            "offset": 0,
+            "at": 0.5
+          }
+        ],
+        "dur": 3,
+        "legend": {
+          "D": "решение",
+          "B": "тело занято"
+        },
+        "source": "журнал повтора: 300 строк → 60 решений · docs/npc-body-control-plan.md:654"
+      }
+    },
+    {
+      "id": "action-grid",
+      "kind": "card",
+      "dur": 7,
+      "chart": {
+        "type": "grid",
+        "title": "12 действий",
+        "columns": 4,
+        "tiles": [
+          {
+            "label": "подойти",
+            "at": 0.3
+          },
+          {
+            "label": "повернуться",
+            "at": 0.7
+          },
+          {
+            "label": "шаг влево",
+            "at": 1.1
+          },
+          {
+            "label": "шаг вправо",
+            "at": 1.5
+          },
+          {
+            "label": "отскок",
+            "at": 1.9
+          },
+          {
+            "label": "удар прямо",
+            "at": 2.3
+          },
+          {
+            "label": "удар слева",
+            "at": 2.7
+          },
+          {
+            "label": "удар справа",
+            "at": 3.1
+          },
+          {
+            "label": "блок",
+            "at": 3.5
+          },
+          {
+            "label": "пауза 200",
+            "at": 3.9
+          },
+          {
+            "label": "пауза 300",
+            "at": 4.3
+          },
+          {
+            "label": "продолжать",
+            "at": 4.7
+          }
+        ],
+        "source": "docs/npc-body-api.md:93–102 · примитивы боевого тела"
+      }
+    },
+    {
+      "id": "self-imitation-flow",
+      "kind": "card",
+      "dur": 7,
+      "chart": {
+        "type": "flow",
+        "title": "Самоимитация",
+        "nodes": [
+          {
+            "id": "play",
+            "label": "Играть\n2016 дуэлей",
+            "x": 0.2,
+            "y": 0.56,
+            "w": 0.22,
+            "color": "#FFD678",
+            "at": 0.4
+          },
+          {
+            "id": "select",
+            "label": "Отобрать\n25% лучших",
+            "x": 0.5,
+            "y": 0.56,
+            "w": 0.22,
+            "color": "#FFD678",
+            "at": 1.4
+          },
+          {
+            "id": "train",
+            "label": "Доучить",
+            "x": 0.8,
+            "y": 0.56,
+            "w": 0.22,
+            "color": "#FFD678",
+            "at": 2.4
+          }
+        ],
+        "edges": [
+          {
+            "from": "play",
+            "to": "select",
+            "at": 1.4
+          },
+          {
+            "from": "select",
+            "to": "train",
+            "at": 2.4
+          },
+          {
+            "from": "train",
+            "to": "play",
+            "label": "снова",
+            "at": 3.4,
+            "curve": 0.23,
+            "packets": {
+              "every": 0.9,
+              "dur": 1.5
+            }
+          }
+        ],
+        "source": "reports/npc-body/2026-10-15-self-imitation · 2016 дуэлей → 25% лучших → доучивание"
+      }
+    },
+    {
+      "id": "one-tick",
+      "kind": "card",
+      "dur": 7,
+      "chart": {
+        "type": "ticks",
+        "title": "Один тик",
+        "rows": [
+          {
+            "label": "игра",
+            "cells": "DBBBBDBBBBDBBBBDBBBB",
+            "offset": 0,
+            "at": 0.5
+          },
+          {
+            "label": "стенд",
+            "cells": "DBBBBDBBBBDBBBBDBBBB",
+            "offset": 1,
+            "at": 0.9
+          }
+        ],
+        "dur": 2.4,
+        "legend": {
+          "D": "решение",
+          "B": "тело занято"
+        },
+        "align": {
+          "at": 4.2,
+          "dur": 0.8
+        },
+        "source": "reports/npc-body/2026-10-15-schedule-equivalence · выравнивание на один тик → 64/64"
+      }
+    },
+    {
+      "id": "service-flow",
+      "kind": "card",
+      "dur": 7,
+      "chart": {
+        "type": "flow",
+        "title": "Mac (игра + сервер) ⇄ Ryzen (сеть)",
+        "nodes": [
+          {
+            "id": "mac",
+            "label": "Mac\nигра + сервер",
+            "x": 0.25,
+            "y": 0.52,
+            "w": 0.28,
+            "color": "#D8D8D8",
+            "at": 0.4
+          },
+          {
+            "id": "ryzen",
+            "label": "Ryzen\nсеть P30",
+            "x": 0.75,
+            "y": 0.52,
+            "w": 0.28,
+            "color": "#FFD678",
+            "at": 1
+          }
+        ],
+        "edges": [
+          {
+            "from": "mac",
+            "to": "ryzen",
+            "label": "наблюдение",
+            "at": 1.4,
+            "curve": 0.13,
+            "packets": {
+              "every": 0.55,
+              "dur": 1.4
+            }
+          },
+          {
+            "from": "ryzen",
+            "to": "mac",
+            "label": "действие",
+            "at": 2.2,
+            "curve": 0.13,
+            "packets": {
+              "every": 0.55,
+              "dur": 1.4
+            }
+          }
+        ],
+        "source": "docs/npc-body-control-plan.md:549–554; reports/npc-body/2026-10-18-p30-service-load · p99 17,3 мс"
+      }
     }
   ],
   "lines": [[

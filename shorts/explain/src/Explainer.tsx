@@ -16,6 +16,7 @@ import {BrandSting, STING_FRAMES} from './Brand';
 import {Captions} from './parts/Captions';
 import {BarsView, DotsView, FormulaView, StatsView} from './parts/Cards';
 import {BigView, CellsView, LineView, TableView} from './parts/WideCards';
+import {ConeView, FlowView, GridView, RaysView, TicksView} from './parts/WideDiagrams';
 import {DiceChart} from './parts/DiceChart';
 import {Sight} from './parts/Sight';
 import {Tags} from './parts/Tags';
@@ -118,6 +119,11 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
     else if (card.type === 'big') body = <BigView spec={card} />;
     else if (card.type === 'table') body = <TableView spec={card} />;
     else if (card.type === 'cells') body = <CellsView spec={card} />;
+    else if (card.type === 'rays') body = <RaysView spec={card} />;
+    else if (card.type === 'cone') body = <ConeView spec={card} />;
+    else if (card.type === 'ticks') body = <TicksView spec={card} />;
+    else if (card.type === 'grid') body = <GridView spec={card} />;
+    else if (card.type === 'flow') body = <FlowView spec={card} />;
   } else if (beat.kind === 'split' && beat.src && beat.srcBottom) {
     const half = height / 2;
     body = wide ? (
