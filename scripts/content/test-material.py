@@ -14,6 +14,21 @@ with --flat-normal or --no-ao. Removing the directory, or OPENGOTHIC_CONTENT=,
 restores the original materials. Output is a local fixture, never game content
 to commit. Only numpy and the Python standard library are required, including
 for the DDS compressor. DXT5nm stores X in alpha, Y in green, positive Z implicit.
+
+Antitiling fixture (always includes an albedo with one conspicuous dark spot):
+    uv run --no-project --with numpy python scripts/content/test-material.py \
+        --output /tmp/gothic-antitile-rotate --pattern antitile --antitile rotate
+Its asymmetric raised spot makes normal-map rotation visible under sun or lamp.
+Use identical --scale/--antitile-cell in off, offset and rotate directories.
+
+Screenshot measurements additionally require Pillow. Choose one planar surface
+crop and the tile period in screen pixels from the off frame; reuse both for
+every mode. The result is the largest Pearson luminance correlation in the
+specified lag window (inclusive). PSNR compares full RGB frames unless cropped:
+    uv run --no-project --with numpy --with Pillow python scripts/content/test-material.py \
+        --autocorrelation off.png --crop 100,200,400,200 --period 60 --lag-radius 3
+    uv run --no-project --with numpy --with Pillow python scripts/content/test-material.py \
+        --psnr current.png --reference baseline.png
 """
 
 from __future__ import annotations
@@ -64,6 +79,66 @@ def tile(size: int, strength: float) -> tuple[np.ndarray, np.ndarray, np.ndarray
     albedo = albedo * (1 - metal[:, :, None]) + np.array((0.83, 0.59, 0.28)) * metal[:, :, None]
     orm = np.stack((ao, roughness, metal), axis=2)
     return albedo, normal, orm
+
+
+def antitile_spot(size: int, strength: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One periodic dark spot with an asymmetric ridge to inspect UV rotation."""
+    y, x = np.mgrid[:size, :size].astype(np.float32)
+    u, v = (x + 0.5) / size, (y + 0.5) / size
+    dx, dy = (u - 0.31 + 0.5) % 1 - 0.5, (v - 0.43 + 0.5) % 1 - 0.5
+    radius = np.sqrt((dx / 0.115) ** 2 + (dy / 0.095) ** 2)
+    spot = 1 - smoothstep((radius - 0.65) / 0.55)
+    grain = np.sin(2 * np.pi * u * 23) * np.sin(2 * np.pi * v * 19)
+    tone = 0.82 - 0.63 * spot + 0.012 * grain
+    albedo = tone[:, :, None] * np.array((1.0, 0.92, 0.79), dtype=np.float32)
+
+    # A broad bump with a displaced narrow crest is deliberately asymmetric:
+    # rotating the sampled UV and tangent normal together must rotate its light.
+    height = np.exp(-0.5 * ((dx / 0.10) ** 2 + (dy / 0.07) ** 2))
+    height += 0.55 * np.exp(-0.5 * (((dx - 0.035) / 0.025) ** 2 + ((dy + 0.015) / 0.07) ** 2))
+    du = (np.roll(height, -1, axis=1) - np.roll(height, 1, axis=1)) * size * 0.5
+    dv = (np.roll(height, -1, axis=0) - np.roll(height, 1, axis=0)) * size * 0.5
+    normal = np.stack((-du * strength, -dv * strength, np.ones_like(du)), axis=2)
+    normal /= np.linalg.norm(normal, axis=2, keepdims=True)
+    orm = np.stack((1 - 0.20 * spot, 0.70 + 0.20 * spot, np.zeros_like(spot)), axis=2)
+    return albedo, normal, orm
+
+
+def image_rgb(path: Path, crop: str | None) -> np.ndarray:
+    try:
+        from PIL import Image
+    except ImportError as error:
+        raise ValueError("screenshot measurements require Pillow (--with Pillow)") from error
+    with Image.open(path) as image:
+        rgb = np.asarray(image.convert("RGB"), dtype=np.float64) / 255
+    if crop is not None:
+        try:
+            x, y, width, height = (int(value) for value in crop.split(","))
+        except ValueError as error:
+            raise ValueError("--crop must be x,y,width,height in pixels") from error
+        if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > rgb.shape[1] or y + height > rgb.shape[0]:
+            raise ValueError("--crop must lie inside the image and have positive size")
+        rgb = rgb[y:y + height, x:x + width]
+    return rgb
+
+
+def autocorrelation(rgb: np.ndarray, period: int, radius: int, axis: str) -> dict:
+    # Rec. 709 luminance of screenshot code values; no exposure normalization or
+    # filtering that could change the measured period between fixture modes.
+    luminance = rgb @ np.array((0.2126, 0.7152, 0.0722))
+    dimension = 1 if axis == "x" else 0
+    if period - radius < 1 or period + radius >= luminance.shape[dimension]:
+        raise ValueError("period +/- lag radius must be positive and smaller than the crop along --axis")
+    values = []
+    for lag in range(period - radius, period + radius + 1):
+        a, b = (luminance[:, :-lag], luminance[:, lag:]) if axis == "x" else (luminance[:-lag, :], luminance[lag:, :])
+        a, b = a - a.mean(), b - b.mean()
+        denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+        if denominator <= 1e-12:
+            raise ValueError("crop has no luminance variation at a requested lag")
+        values.append({"lag": lag, "correlation": float(np.sum(a * b) / denominator)})
+    peak = max(values, key=lambda value: value["correlation"])
+    return {"axis": axis, "period": period, "lag_radius": radius, "peak": peak, "samples": values}
 
 
 def quantize(image: np.ndarray) -> np.ndarray:
@@ -168,16 +243,51 @@ def main() -> None:
     parser.add_argument("--size", type=int, default=256, help="square power-of-two map size (default: %(default)s)")
     parser.add_argument("--scale", type=float, default=1.0, help="UV multiplier stored in materials.json")
     parser.add_argument("--strength", type=float, default=0.045, help="normal relief depth in UV units")
+    parser.add_argument("--pattern", choices=("tiles", "antitile"), default="tiles", help="synthetic pattern (default: %(default)s)")
+    parser.add_argument("--antitile", choices=("off", "offset", "rotate"), help="antitiling mode stored in materials.json; absent keeps the legacy off behavior")
+    parser.add_argument("--antitile-cell", type=float, default=1.0, help="antitiling cell size in texture tiles (default: %(default)s)")
     parser.add_argument("--albedo", action="store_true", help="also replace the original colour with neutral synthetic tiles")
     parser.add_argument("--flat-normal", action="store_true", help="neutral normal map for the relief comparison")
     parser.add_argument("--no-ao", action="store_true", help="white AO for the occlusion comparison")
+    measurement = parser.add_mutually_exclusive_group()
+    measurement.add_argument("--autocorrelation", type=Path, metavar="FRAME", help="measure screenshot luminance autocorrelation instead of generating maps")
+    measurement.add_argument("--psnr", type=Path, metavar="FRAME", help="measure RGB PSNR against --reference instead of generating maps")
+    parser.add_argument("--reference", type=Path, metavar="FRAME", help="baseline screenshot for --psnr")
+    parser.add_argument("--crop", help="measurement rectangle x,y,width,height in screen pixels")
+    parser.add_argument("--period", type=int, help="off-frame tile period in screen pixels for --autocorrelation")
+    parser.add_argument("--lag-radius", type=int, default=0, help="search radius around the tile period in pixels (default: %(default)s)")
+    parser.add_argument("--axis", choices=("x", "y"), default="x", help="autocorrelation direction (default: %(default)s)")
     args = parser.parse_args()
+    if args.autocorrelation or args.psnr:
+        try:
+            rgb = image_rgb(args.autocorrelation or args.psnr, args.crop)
+            if args.autocorrelation:
+                if args.period is None or args.lag_radius < 0:
+                    parser.error("--autocorrelation requires --period and a non-negative --lag-radius")
+                result = autocorrelation(rgb, args.period, args.lag_radius, args.axis)
+                result["frame"] = str(args.autocorrelation)
+            else:
+                if args.reference is None:
+                    parser.error("--psnr requires --reference")
+                reference = image_rgb(args.reference, args.crop)
+                if reference.shape != rgb.shape:
+                    parser.error("PSNR frames must have the same dimensions")
+                mse = float(np.mean((rgb - reference) ** 2))
+                result = {"frame": str(args.psnr), "reference": str(args.reference), "mse": mse,
+                          "psnr_db": 10 * math.log10(1 / mse) if mse > 0 else "infinity"}
+            result["crop"] = args.crop
+            print(json.dumps(result, indent=2))
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
+        return
     if not 16 <= args.size <= 2048 or args.size & (args.size - 1):
         parser.error("--size must be a power of two from 16 through 2048")
     if not math.isfinite(args.scale) or args.scale <= 0:
         parser.error("--scale must be finite and greater than zero")
     if not math.isfinite(args.strength) or args.strength < 0:
         parser.error("--strength must be finite and non-negative")
+    if not math.isfinite(args.antitile_cell) or args.antitile_cell <= 0:
+        parser.error("--antitile-cell must be finite and greater than zero")
 
     material_dir = args.output.expanduser().resolve() / "materials"
     fixture_dir = material_dir / "test-material"
@@ -186,7 +296,8 @@ def main() -> None:
     index = json.loads(index_path.read_text()) if index_path.exists() else {}
     if not isinstance(index, dict):
         parser.error(f"{index_path} must contain a JSON object")
-    albedo, normal, orm = tile(args.size, args.strength)
+    pattern = antitile_spot if args.pattern == "antitile" else tile
+    albedo, normal, orm = pattern(args.size, args.strength)
     if args.flat_normal:
         normal[:, :, :] = (0, 0, 1)
     if args.no_ao:
@@ -195,7 +306,9 @@ def main() -> None:
     write_dds(fixture_dir / "tile-normal.dds", normal, normal=True)
     write_dds(fixture_dir / "tile-orm.dds", orm)
     entry = {"normal": "test-material/tile-normal.dds", "orm": "test-material/tile-orm.dds", "scale": args.scale}
-    if args.albedo:
+    if args.antitile is not None or args.pattern == "antitile":
+        entry.update(antitile=args.antitile or "off", antitile_cell=args.antitile_cell)
+    if args.albedo or args.pattern == "antitile":
         write_dds(fixture_dir / "tile-albedo.dds", albedo)
         entry["albedo"] = "test-material/tile-albedo.dds"
     for name in args.textures:

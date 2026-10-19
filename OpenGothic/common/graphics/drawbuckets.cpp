@@ -155,6 +155,12 @@ bool DrawBuckets::commit(Encoder<CommandBuffer>& cmd, uint8_t fId) {
           bx.flags |= BK_ORM;
         if(i.mat.hasMaterialMaps())
           bx.flags |= BK_MATERIAL_MAPS;
+        if(i.mat.hasMaterialMaps() && i.mat.antitile!=Material::Antitile::Off) {
+          bx.antitileCell = i.mat.antitileCell;
+          bx.flags |= BK_ANTITILE;
+          if(i.mat.antitile==Material::Antitile::Rotate)
+            bx.flags |= BK_ANTITILE_ROTATE;
+          }
         }
       }
     else if(i.animMesh!=nullptr) {

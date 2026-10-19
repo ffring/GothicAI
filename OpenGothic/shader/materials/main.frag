@@ -138,8 +138,104 @@ vec4 dbgLambert() {
   }
 #endif
 
+#if defined(MATERIAL_MAPS) && defined(MAT_UV) && (MESH_TYPE!=T_PFX) && !defined(WATER)
+#define ANTITILE_MATERIAL 1
+
+// Mikkelsen, Practical Real-Time Hex-Tiling (JCGT 2022), section 2:
+// https://jcgt.org/published/0011/03/05/
+// Keep the three cells and the albedo-derived weights for every material map.
+struct MaterialSampling {
+  vec2 uv;
+  vec2 duvdx, duvdy;
+#if defined(GBUFFER)
+  vec3 dpdx, dpdy;
+#endif
+  vec2 tileUv[3];
+  mat2 rotation[3];
+  vec3 weights;
+  bool antitile;
+  };
+
+vec3 antitileRandom(ivec2 cell) {
+  uint seed = uint(cell.x) * 0x9E3779B9u ^ uint(cell.y) * 0x85EBCA6Bu;
+  uint x = wangHash(seed);
+  uint y = wangHash(seed);
+  uint z = wangHash(seed);
+  return vec3(x >> 8, y >> 8, z >> 8) * (1.0 / 16777216.0);
+  }
+
+void antitileGrid(inout MaterialSampling maps) {
+  const float cellSize = bucket[bucketId].antitileCell;
+  // Unit-distance equilateral lattice; its vertices are the hexagon centres.
+  // Cell size changes only the lattice, never the source texture's UV scale.
+  vec2 grid = maps.uv / cellSize;
+  vec2 skew = vec2(grid.x - grid.y * 0.57735026919, grid.y * 1.15470053838);
+  ivec2 base = ivec2(floor(skew));
+  vec2 f = fract(skew);
+  ivec2 cells[3];
+  if(f.x + f.y < 1.0) {
+    cells[0] = base;
+    cells[1] = base + ivec2(1,0);
+    cells[2] = base + ivec2(0,1);
+    maps.weights = vec3(1.0 - f.x - f.y, f.x, f.y);
+    } else {
+    cells[0] = base + ivec2(1,1);
+    cells[1] = base + ivec2(0,1);
+    cells[2] = base + ivec2(1,0);
+    maps.weights = vec3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y);
+    }
+
+  const bool rotate = (bucket[bucketId].flags & BK_ANTITILE_ROTATE)!=0;
+  for(int i=0; i<3; ++i) {
+    vec3 random = antitileRandom(cells[i]);
+    float angle = rotate ? random.z * (2.0 * M_PI) : 0.0;
+    float c = cos(angle), s = sin(angle);
+    mat2 rotation = mat2(c,s,-s,c);
+    vec2 centre = vec2(float(cells[i].x) + 0.5 * float(cells[i].y),
+                       0.86602540378 * float(cells[i].y)) * cellSize;
+    maps.rotation[i] = rotation;
+    maps.tileUv[i] = rotation * (maps.uv - centre) + centre + random.xy;
+    }
+  }
+
+vec4 antitileDiffuse(inout MaterialSampling maps, uint tId) {
+  antitileGrid(maps);
+#if defined(BINDLESS)
+  nonuniformEXT uint texId = tId;
+#else
+  const uint texId = 0;
+#endif
+  vec4 a = textureGrad(sampler2D(textureMain[texId], samplerMain), maps.tileUv[0],
+                       maps.rotation[0] * maps.duvdx, maps.rotation[0] * maps.duvdy);
+  vec4 b = textureGrad(sampler2D(textureMain[texId], samplerMain), maps.tileUv[1],
+                       maps.rotation[1] * maps.duvdx, maps.rotation[1] * maps.duvdy);
+  vec4 c = textureGrad(sampler2D(textureMain[texId], samplerMain), maps.tileUv[2],
+                       maps.rotation[2] * maps.duvdx, maps.rotation[2] * maps.duvdy);
+  const vec3 luminance = vec3(0.299, 0.587, 0.114);
+  vec3 brightness = vec3(dot(a.rgb,luminance), dot(b.rgb,luminance), dot(c.rgb,luminance));
+  // The exponent limits ghosting, while luminance breaks up straight seams.
+  maps.weights = mix(vec3(1.0), brightness, 0.6) * pow(max(maps.weights,vec3(0)),vec3(7));
+  maps.weights /= dot(maps.weights,vec3(1));
+  return a * maps.weights.x + b * maps.weights.y + c * maps.weights.z;
+  }
+#endif
+
 #if defined(MAT_UV)
+#if defined(ANTITILE_MATERIAL)
+vec4 diffuseTex(out MaterialSampling maps) {
+#else
 vec4 diffuseTex() {
+#endif
+#if defined(ANTITILE_MATERIAL)
+  // Take derivatives before any nonuniform animation/material/cell branch.
+  vec2 scaledUv = shInp.uv * bucket[bucketId].uvScale;
+  maps.duvdx = dFdx(scaledUv);
+  maps.duvdy = dFdy(scaledUv);
+#if defined(GBUFFER)
+  maps.dpdx = dFdx(shInp.pos);
+  maps.dpdy = dFdy(shInp.pos);
+#endif
+#endif
 #if !defined(SIMPLE_MAT) && (MESH_TYPE!=T_PFX)
   ivec2 texAniMapDirPeriod = bucket[bucketId].texAniMapDirPeriod;
   float alphaWeight        = bucket[bucketId].alphaWeight;
@@ -170,13 +266,27 @@ vec4 diffuseTex() {
   uv *= bucket[bucketId].uvScale;
 #endif
 
+#if defined(ANTITILE_MATERIAL)
+  maps.uv = uv;
+  maps.antitile = (bucket[bucketId].flags & (BK_MATERIAL_MAPS | BK_ANTITILE)) ==
+                  (BK_MATERIAL_MAPS | BK_ANTITILE);
+#endif
+
 #if defined(BINDLESS)
   nonuniformEXT uint tId = bucketId;
 #else
   const         uint tId = 0;
 #endif
 
+#if defined(ANTITILE_MATERIAL)
+  vec4 tex;
+  if(maps.antitile)
+    tex = antitileDiffuse(maps, tId);
+  else
+    tex = textureGrad(sampler2D(textureMain[tId], samplerMain),uv, maps.duvdx, maps.duvdy);
+#else
   vec4 tex = texture(sampler2D(textureMain[tId], samplerMain),uv);
+#endif
 
 #if !defined(SIMPLE_MAT)
   tex.a *= alphaWeight;
@@ -189,7 +299,7 @@ vec4 diffuseTex() {
 
 #if defined(GBUFFER)
 #if defined(MATERIAL_MAPS) && (MESH_TYPE!=T_PFX)
-vec3 mappedNormal(vec3 normal, vec3 dpdx, vec3 dpdy, vec2 duvdx, vec2 duvdy, vec4 tex) {
+vec3 mappedNormal(vec3 normal, vec3 dpdx, vec3 dpdy, vec2 duvdx, vec2 duvdy, vec3 tangentNormal) {
   // Cotangent frame: Gothic meshes have no stored tangents. This also follows
   // mirrored UVs and uses the same scaled coordinates as all three textures.
   vec3 n = normalize(normal);
@@ -200,13 +310,21 @@ vec3 mappedNormal(vec3 normal, vec3 dpdx, vec3 dpdy, vec2 duvdx, vec2 duvdy, vec
   float len2 = max(dot(t,t), dot(b,b));
   if(len2 <= 1e-20)
     return n;
+  return normalize(mat3(t * inversesqrt(len2), b * inversesqrt(len2), n) * tangentNormal);
+  }
+
+vec3 mappedNormal(vec3 normal, vec3 dpdx, vec3 dpdy, vec2 duvdx, vec2 duvdy, vec4 tex) {
   vec2 xy = tex.ag * 2.0 - 1.0; // DXT5nm: X in alpha, Y in green (linear).
   vec3 tangentNormal = vec3(xy, sqrt(max(0.0, 1.0 - dot(xy,xy))));
-  return normalize(mat3(t * inversesqrt(len2), b * inversesqrt(len2), n) * tangentNormal);
+  return mappedNormal(normal, dpdx, dpdy, duvdx, duvdy, tangentNormal);
   }
 #endif
 
+#if defined(ANTITILE_MATERIAL)
+void mainGBuffer(vec4 t, MaterialSampling maps) {
+#else
 void mainGBuffer(vec4 t) {
+#endif
   outDiffuse.rgb = t.rgb;
   outDiffuse.a   = encodeHintBits();
   outNormal      = encodeNormal(shInp.normal);
@@ -217,20 +335,43 @@ void mainGBuffer(vec4 t) {
   // defaults, or if the record only replaces albedo. Legacy pixels stay zero.
   outOrm.a = (bucket[bucketId].flags & BK_MATERIAL_MAPS)!=0 ? 1.0 : 0.0;
   const vec2 uv = shInp.uv * bucket[bucketId].uvScale;
-  // Derivatives must precede nonuniform material branches and alpha discard.
-  vec3 dpdx = dFdx(shInp.pos), dpdy = dFdy(shInp.pos);
-  vec2 duvdx = dFdx(uv), duvdy = dFdy(uv);
+  vec3 dpdx = maps.dpdx, dpdy = maps.dpdy;
+  vec2 duvdx = maps.duvdx, duvdy = maps.duvdy;
 #if defined(BINDLESS)
   nonuniformEXT uint tId = bucketId;
 #else
   const uint tId = 0;
 #endif
-  if((bucket[bucketId].flags & BK_NORMAL)!=0) {
-    vec4 nm = textureGrad(sampler2D(textureNormal[tId], samplerMain), uv, duvdx, duvdy);
-    outNormal = encodeNormal(mappedNormal(shInp.normal, dpdx, dpdy, duvdx, duvdy, nm));
+  if(maps.antitile) {
+    if((bucket[bucketId].flags & BK_NORMAL)!=0) {
+      vec2 slope = vec2(0);
+      for(int i=0; i<3; ++i) {
+        vec4 nm = textureGrad(sampler2D(textureNormal[tId], samplerMain), maps.tileUv[i],
+                              maps.rotation[i] * duvdx, maps.rotation[i] * duvdy);
+        vec2 xy = nm.ag * 2.0 - 1.0;
+        float z = sqrt(max(0.0, 1.0 - dot(xy,xy)));
+        // q = R * uv: the height gradient (and normal XY) returns with R^T.
+        // Blend height derivatives so flat areas do not flatten nearby relief.
+        slope += maps.weights[i] * (transpose(maps.rotation[i]) * xy) / max(z,1e-3);
+        }
+      outNormal = encodeNormal(mappedNormal(shInp.normal, dpdx, dpdy, duvdx, duvdy,
+                                           normalize(vec3(slope,1))));
+      }
+    if((bucket[bucketId].flags & BK_ORM)!=0) {
+      vec3 orm = vec3(0);
+      for(int i=0; i<3; ++i)
+        orm += maps.weights[i] * textureGrad(sampler2D(textureOrm[tId], samplerMain), maps.tileUv[i],
+                                             maps.rotation[i] * duvdx, maps.rotation[i] * duvdy).rgb;
+      outOrm.rgb = orm;
+      }
+    } else {
+    if((bucket[bucketId].flags & BK_NORMAL)!=0) {
+      vec4 nm = textureGrad(sampler2D(textureNormal[tId], samplerMain), uv, duvdx, duvdy);
+      outNormal = encodeNormal(mappedNormal(shInp.normal, dpdx, dpdy, duvdx, duvdy, nm));
+      }
+    if((bucket[bucketId].flags & BK_ORM)!=0)
+      outOrm.rgb = textureGrad(sampler2D(textureOrm[tId], samplerMain), uv, duvdx, duvdy).rgb;
     }
-  if((bucket[bucketId].flags & BK_ORM)!=0)
-    outOrm.rgb = textureGrad(sampler2D(textureOrm[tId], samplerMain), uv, duvdx, duvdy).rgb;
 #endif
 #endif
   // outNormal      = vec4(flatNormal()*0.5 + vec3(0.5), 1.0);
@@ -372,7 +513,12 @@ void mainWater(vec4 t) {
 
 void main() {
 #if defined(MAT_UV)
+#if defined(ANTITILE_MATERIAL)
+  MaterialSampling maps;
+  vec4 t = diffuseTex(maps);
+#else
   vec4 t = diffuseTex();
+#endif
 #  if defined(ATEST) && !(defined(GBUFFER) && defined(MATERIAL_MAPS))
   if(t.a<0.5)
     discard;
@@ -387,7 +533,11 @@ void main() {
 #endif
 
 #if defined(GBUFFER)
+#if defined(ANTITILE_MATERIAL)
+  mainGBuffer(t, maps);
+#else
   mainGBuffer(t);
+#endif
 #if defined(ATEST) && defined(MATERIAL_MAPS)
   if(alphaTest<0.5)
     discard;
