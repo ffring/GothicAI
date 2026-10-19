@@ -113,6 +113,38 @@ class NavMesh final {
       const char* method = "ambiguous";
       };
 
+    // Privileged evaluation-only 2.5D truth raster. Ground is sampled at exact
+    // native cell centres, never by snapping an uncovered XZ point across a gap.
+    // Off-mesh jump/climb/drop links do not make ground cells traversable.
+    struct RasterCell {
+      bool traversable = false, heightValid = false;
+      float groundHeight = 0; // world metres; valid only when heightValid
+      uint64_t polygon = 0;
+      bool heightBoundary = false; // blocked ground/floor seam, not free ground
+      };
+    struct RasterLayer {
+      size_t size = 0;
+      float cellSize = 0; // metres
+      // Row-major [forward,right], centre=(index+.5-size/2)*cellSize.
+      std::vector<RasterCell> cells;
+      };
+    struct LocalRaster {
+      bool supportValid = false, supportExact = false;
+      Point support = {};
+      uint64_t supportPolygon = 0;
+      float supportSnapDistance = 0, supportHorizontalDistance = 0, supportVerticalOffset = 0;
+      RasterLayer near, far; // 64x64 at .25m; 100x100 at 2m
+      };
+    // bodyYawDegrees: NPC convention, 0=+X, 90=+Z; positive right maps to
+    // (-sin(yaw),0,cos(yaw)). Proper floors are selected by ground-only walk
+    // distance from the support anchor, without a global Y cutoff. The anchor
+    // alone may snap by nearestHorizontal and climb+2*cellHeight; this handles
+    // physical feet outside already eroded mesh edges without filling any gap.
+    // Mesh erosion (Params::radius) is retained; no second erosion is applied.
+    // Quantized edges that cannot join their exact selected ground polygons are
+    // conservatively blocked, including near/far seams and stacked floor edges.
+    LocalRaster rasterLocal(const Point& feet, float bodyYawDegrees) const;
+
     NavMesh();
     ~NavMesh();
     NavMesh(const NavMesh&) = delete;

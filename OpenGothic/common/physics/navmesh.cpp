@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <queue>
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
@@ -162,9 +163,15 @@ struct NavMesh::Impl {
   Params params;
   Stats stats;
   std::unordered_map<dtPolyRef,uint64_t> groundComponents;
+  std::unordered_map<dtPolyRef,Point> groundCenters;
+  // One current support's ground distances only. Never retain one world-sized
+  // table per visited support polygon in a long oracle campaign.
+  mutable dtPolyRef rasterSupport = 0;
+  mutable std::unordered_map<dtPolyRef,float> rasterGroundDistance;
 
   void initializeQuery() {
-    groundComponents.clear();
+    groundComponents.clear();groundCenters.clear();
+    rasterSupport=0;rasterGroundDistance.clear();
     std::vector<dtPolyRef> groundPolygons;
     // Cache v2 predates the ground-only query bit. Apply it in memory on both
     // freshly built and cached ground polygons without changing existing routes.
@@ -175,7 +182,15 @@ struct NavMesh::Impl {
         if(tile->polys[j].getType()==DT_POLYTYPE_GROUND) {
           const auto ref=mesh->getPolyRefBase(tile)|dtPolyRef(j);
           mesh->setPolyFlags(ref,tile->polys[j].flags|groundOnlyFlag);
-          if(tile->polys[j].flags&1) groundPolygons.push_back(ref);
+          if(tile->polys[j].flags&1) {
+            groundPolygons.push_back(ref);
+            Point center{};
+            const auto& poly=tile->polys[j];
+            for(unsigned int vertex=0;vertex<poly.vertCount;++vertex)
+              for(size_t axis=0;axis<3;++axis)
+                center[axis]+=tile->verts[size_t(poly.verts[vertex])*3+axis]/float(poly.vertCount);
+            groundCenters.emplace(ref,center);
+            }
           }
       }
     query.reset(dtAllocNavMeshQuery());
@@ -203,6 +218,54 @@ struct NavMesh::Impl {
           }
         }
       }
+    }
+
+  bool containsGround(dtPolyRef ref,const Point& requested,Point& surface) const {
+    bool over=false;
+    if(groundCenters.find(ref)==groundCenters.end() ||
+       dtStatusFailed(query->closestPointOnPoly(ref,requested.data(),surface.data(),&over)) || !over ||
+       std::hypot(surface[0]-requested[0],surface[2]-requested[2])>1.e-4f) return false;
+    float height=0;
+    if(dtStatusFailed(query->getPolyHeight(ref,requested.data(),&height)) || !std::isfinite(height)) return false;
+    surface={requested[0],height,requested[2]};
+    return true;
+    }
+
+  void supportDistances(dtPolyRef root) const {
+    if(rasterSupport==root) return;
+    rasterSupport=root;rasterGroundDistance.clear();
+    using Entry=std::pair<float,dtPolyRef>;
+    std::priority_queue<Entry,std::vector<Entry>,std::greater<Entry>> pending;
+    rasterGroundDistance.emplace(root,0.f);pending.push({0.f,root});
+    while(!pending.empty()) {
+      const auto item=pending.top();pending.pop();
+      const auto found=rasterGroundDistance.find(item.second);
+      if(found==rasterGroundDistance.end() || item.first!=found->second) continue;
+      const dtMeshTile* tile=nullptr;const dtPoly* poly=nullptr;
+      if(dtStatusFailed(mesh->getTileAndPolyByRef(item.second,&tile,&poly))) continue;
+      const auto center=groundCenters.find(item.second);
+      if(center==groundCenters.end()) continue;
+      for(auto link=poly->firstLink;link!=DT_NULL_LINK;link=tile->links[link].next) {
+        const auto next=tile->links[link].ref;
+        const auto other=groundCenters.find(next);
+        if(other==groundCenters.end()) continue; // Never cross off-mesh links.
+        const float score=item.first+distance(center->second,other->second);
+        const auto old=rasterGroundDistance.find(next);
+        if(old!=rasterGroundDistance.end() && old->second<=score) continue;
+        rasterGroundDistance[next]=score;pending.push({score,next});
+        }
+      }
+    }
+
+  bool exactGroundSegment(dtPolyRef from,const Point& a,dtPolyRef to,const Point& b) const {
+    if(from==to) return true; // A covered segment of one convex ground polygon.
+    dtQueryFilter filter;filter.setIncludeFlags(groundOnlyFlag);
+    std::array<dtPolyRef,256> corridor{};
+    float fraction=0;Point normal{};int count=0;
+    const auto status=query->raycast(from,a.data(),b.data(),&filter,&fraction,normal.data(),
+                                    corridor.data(),&count,int(corridor.size()));
+    return dtStatusSucceed(status) && !dtStatusDetail(status,DT_BUFFER_TOO_SMALL) &&
+           fraction>1.f && count>0 && corridor[size_t(count-1)]==to;
     }
 
   bool load(uint64_t key) {
@@ -582,6 +645,150 @@ NavMesh::Path NavMesh::findPath(const Point& start, const Point& end, bool allow
   for(size_t i=1; i<result.corners.size(); ++i) result.length += distance(result.corners[i-1],result.corners[i]);
   result.complete=true;
   result.reason="ok";
+  return result;
+  }
+
+NavMesh::LocalRaster NavMesh::rasterLocal(const Point& feet,float bodyYawDegrees) const {
+  for(float value:feet) if(!std::isfinite(value)) throw std::invalid_argument("navmesh raster non-finite feet");
+  if(!std::isfinite(bodyYawDegrees)) throw std::invalid_argument("navmesh raster non-finite yaw");
+  LocalRaster result;
+  result.near.size=64;result.near.cellSize=.25f;result.near.cells.resize(64*64);
+  result.far.size=100;result.far.cellSize=2.f;result.far.cells.resize(100*100);
+  if(!impl->query) return result;
+  const float radians=bodyYawDegrees*(3.14159265358979323846f/180.f);
+  const float cosine=std::cos(radians),sine=std::sin(radians);
+  const auto world=[&](float right,float forward) -> Point {
+    return {feet[0]+forward*cosine-right*sine,feet[1],feet[2]+forward*sine+right*cosine};
+    };
+  const auto local=[&](const float* point) -> std::array<float,2> {
+    const float x=point[0]-feet[0],z=point[2]-feet[2];
+    return {-x*sine+z*cosine,x*cosine+z*sine};
+    };
+  // One broad-phase query, then polygon bounding-box rasterization. No
+  // per-cell nearest-poly queries and no horizontal snapping across cracks.
+  const float extents[3]={142.f,100000.f,142.f};
+  dtQueryFilter filter;filter.setIncludeFlags(groundOnlyFlag);
+  std::vector<dtPolyRef> polygons(1024);int count=0;
+  for(;;) {
+    const auto status=impl->query->queryPolygons(feet.data(),extents,&filter,polygons.data(),&count,int(polygons.size()));
+    if(dtStatusFailed(status)) throw std::runtime_error("navmesh raster polygon query failed");
+    if(!dtStatusDetail(status,DT_BUFFER_TOO_SMALL)) break;
+    if(polygons.size()>=(1u<<20)) throw std::runtime_error("navmesh raster polygon query capacity");
+    polygons.resize(polygons.size()*2);
+    }
+  polygons.resize(size_t(count));std::sort(polygons.begin(),polygons.end());
+  dtPolyRef support=0;float supportError=std::numeric_limits<float>::infinity();
+  for(const auto ref:polygons) {
+    if(impl->groundCenters.find(ref)==impl->groundCenters.end()) continue;
+    Point surface{};bool over=false;
+    if(dtStatusFailed(impl->query->closestPointOnPoly(ref,feet.data(),surface.data(),&over))) continue;
+    const float horizontal=std::hypot(surface[0]-feet[0],surface[2]-feet[2]);
+    const float vertical=surface[1]-feet[1];
+    // Only support selection may snap. The raster below still demands exact
+    // XZ containment for every native cell, including the body and real gaps.
+    if(!std::isfinite(horizontal) || !std::isfinite(vertical) || horizontal>impl->params.nearestHorizontal ||
+       std::abs(vertical)>impl->params.climb+2.f*impl->params.cellHeight) continue;
+    const float error=horizontal*horizontal+vertical*vertical;
+    if(error<supportError || (error==supportError && ref<support)) {
+      support=ref;supportError=error;result.support=surface;
+      result.supportExact=over && horizontal<=1.e-4f;
+      result.supportSnapDistance=std::sqrt(error);result.supportHorizontalDistance=horizontal;
+      result.supportVerticalOffset=vertical;
+      }
+    }
+  if(!support) return result;
+  result.supportValid=true;result.supportPolygon=uint64_t(support);
+  impl->supportDistances(support);
+  const auto fill=[&](RasterLayer& layer) {
+    const int size=int(layer.size);const float step=layer.cellSize;
+    std::vector<float> ranks(layer.cells.size(),std::numeric_limits<float>::infinity());
+    for(const auto ref:polygons) {
+      const dtMeshTile* tile=nullptr;const dtPoly* poly=nullptr;
+      if(impl->groundCenters.find(ref)==impl->groundCenters.end() ||
+         dtStatusFailed(impl->mesh->getTileAndPolyByRef(ref,&tile,&poly))) continue;
+      float minRight=std::numeric_limits<float>::infinity(),maxRight=-minRight;
+      float minForward=minRight,maxForward=-minRight;
+      for(unsigned int vertex=0;vertex<poly->vertCount;++vertex) {
+        const auto point=local(&tile->verts[size_t(poly->verts[vertex])*3]);
+        minRight=std::min(minRight,point[0]);maxRight=std::max(maxRight,point[0]);
+        minForward=std::min(minForward,point[1]);maxForward=std::max(maxForward,point[1]);
+        }
+      const int x0=std::max(0,int(std::ceil(minRight/step+float(size)*.5f-.5f)));
+      const int x1=std::min(size-1,int(std::floor(maxRight/step+float(size)*.5f-.5f)));
+      const int z0=std::max(0,int(std::ceil(minForward/step+float(size)*.5f-.5f)));
+      const int z1=std::min(size-1,int(std::floor(maxForward/step+float(size)*.5f-.5f)));
+      const auto reachable=impl->rasterGroundDistance.find(ref);
+      const bool connected=reachable!=impl->rasterGroundDistance.end();
+      const float rank=connected ? reachable->second : std::numeric_limits<float>::infinity();
+      for(int z=z0;z<=z1;++z)for(int x=x0;x<=x1;++x) {
+        const size_t index=size_t(z)*layer.size+size_t(x);
+        const Point requested=world((float(x)+.5f-float(size)*.5f)*step,(float(z)+.5f-float(size)*.5f)*step);
+        Point surface{};
+        if(!impl->containsGround(ref,requested,surface)) continue;
+        auto& cell=layer.cells[index];
+        const float heightError=std::abs(surface[1]-feet[1]);
+        const float oldHeightError=std::abs(cell.groundHeight-feet[1]);
+        if(cell.heightValid && ((cell.traversable && !connected) ||
+           (cell.traversable==connected && (ranks[index]<rank ||
+             (ranks[index]==rank && (oldHeightError<heightError ||
+               (oldHeightError==heightError && cell.polygon<=uint64_t(ref)))))))) continue;
+        cell.heightValid=true;cell.traversable=connected;cell.groundHeight=surface[1];cell.polygon=uint64_t(ref);
+        ranks[index]=rank;
+        }
+      }
+    };
+  fill(result.near);fill(result.far);
+  // A single height per XZ cannot represent stacked floors. Keep the sheet
+  // closest in ground-walk distance to support, and remove shortcuts at its
+  // discontinuities rather than painting the lower floor green across a ledge.
+  const auto position=[&](const RasterLayer& layer,size_t index) {
+    const float right=(float(index%layer.size)+.5f-float(layer.size)*.5f)*layer.cellSize;
+    const float forward=(float(index/layer.size)+.5f-float(layer.size)*.5f)*layer.cellSize;
+    auto point=world(right,forward);point[1]=layer.cells[index].groundHeight;return point;
+    };
+  std::vector<uint8_t> nearBoundary(result.near.cells.size()),farBoundary(result.far.cells.size());
+  const auto compare=[&](const RasterLayer& a,size_t ai,const RasterLayer& b,size_t bi,
+                         std::vector<uint8_t>& amask,std::vector<uint8_t>& bmask) {
+    const auto& first=a.cells[ai];const auto& second=b.cells[bi];
+    if(!first.traversable || !second.traversable || first.polygon==second.polygon) return;
+    if(!impl->exactGroundSegment(dtPolyRef(first.polygon),position(a,ai),dtPolyRef(second.polygon),position(b,bi)) ||
+       !impl->exactGroundSegment(dtPolyRef(second.polygon),position(b,bi),dtPolyRef(first.polygon),position(a,ai))) {
+      amask[ai]=1;bmask[bi]=1;
+      }
+    };
+  const auto edges=[&](const RasterLayer& layer,std::vector<uint8_t>& mask,bool far) {
+    for(size_t z=0;z<layer.size;++z)for(size_t x=0;x<layer.size;++x) {
+      const size_t i=z*layer.size+x;
+      const float right=(float(x)+.5f-float(layer.size)*.5f)*layer.cellSize;
+      const float forward=(float(z)+.5f-float(layer.size)*.5f)*layer.cellSize;
+      if(far && std::abs(right)<8.f && std::abs(forward)<8.f) continue;
+      if(x+1<layer.size) {
+        const float other=right+layer.cellSize;
+        if(!far || !(std::abs(other)<8.f && std::abs(forward)<8.f)) compare(layer,i,layer,i+1,mask,mask);
+        }
+      if(z+1<layer.size) {
+        const float other=forward+layer.cellSize;
+        if(!far || !(std::abs(right)<8.f && std::abs(other)<8.f)) compare(layer,i,layer,i+layer.size,mask,mask);
+        }
+      }
+    };
+  edges(result.near,nearBoundary,false);edges(result.far,farBoundary,true);
+  // Compare the nearest outside far cell at each fine-layer boundary. Far
+  // cells hidden under the near layer never dictate fine-grid wall clearance.
+  for(size_t z=0;z<64;++z)for(size_t x=0;x<64;++x) {
+    if(x!=0 && x!=63 && z!=0 && z!=63) continue;
+    const float right=(float(x)+.5f-32.f)*.25f,forward=(float(z)+.5f-32.f)*.25f;
+    int fx=int(std::floor(right/2.f+50.f)),fz=int(std::floor(forward/2.f+50.f));
+    if(x==0)fx=45;else if(x==63)fx=54;
+    if(z==0)fz=45;else if(z==63)fz=54;
+    compare(result.near,z*64+x,result.far,size_t(fz)*100+size_t(fx),nearBoundary,farBoundary);
+    }
+  const auto finish=[](RasterLayer& layer,const std::vector<uint8_t>& mask) {
+    for(size_t i=0;i<layer.cells.size();++i)if(mask[i]) {
+      layer.cells[i].heightBoundary=true;layer.cells[i].traversable=false;
+      }
+    };
+  finish(result.near,nearBoundary);finish(result.far,farBoundary);
   return result;
   }
 

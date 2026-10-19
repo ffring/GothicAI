@@ -349,6 +349,15 @@ if(NOT ANDROID AND NOT IOS)
   add_custom_target(check-navmesh
     COMMAND $<TARGET_FILE:gothic-navmesh-contract>
     DEPENDS gothic-navmesh-contract USES_TERMINAL)
+  add_executable(gothic-navoracle-contract EXCLUDE_FROM_ALL
+    tests/navoracle_contract.cpp common/physics/navmesh.cpp)
+  target_link_libraries(gothic-navoracle-contract PRIVATE Recast Detour)
+  if(NOT MSVC)
+    target_compile_options(gothic-navoracle-contract PRIVATE -Wall -Wconversion -Werror)
+  endif()
+  add_custom_target(check-navoracle
+    COMMAND $<TARGET_FILE:gothic-navoracle-contract>
+    DEPENDS gothic-navoracle-contract USES_TERMINAL)
   add_executable(gothic-aim-contract EXCLUDE_FROM_ALL tests/aim_contract.cpp)
   target_link_libraries(gothic-aim-contract PRIVATE OpenGothic AiBridge)
   add_custom_target(check-aim

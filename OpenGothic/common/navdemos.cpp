@@ -21,6 +21,7 @@
 #include <random>
 #include <stdexcept>
 #include <sstream>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
@@ -54,11 +55,15 @@ struct Episode {
   std::mt19937_64 targetRng;
   double detourLengthCm=0,travelCm=0;
   uint64_t backwardDecisions=0,strafeDecisions=0;
+  uint64_t oracleUnsupportedDecisions=0,startNotFoundDecisions=0;
+  uint64_t oracleSnappedSupportDecisions=0;
+  float oracleSupportSnapMaxCm=0,oracleSupportHorizontalMaxCm=0,oracleSupportVerticalAbsMaxCm=0;
   NavMemoryTeacher memoryTeacher;
   Vec3 goal,previousPosition,velocity;
   std::string output,from,to,failure,initialState;
   std::string tracedPlan;
   bool active=false,replay=false,drive=false,success=false;
+  bool oracle=false;
   bool population=false,record=true,sampled=false,pending=false,fell=false;
   bool trainingValid=true,accounted=false;
   std::string nonfiniteStage;
@@ -130,6 +135,7 @@ struct Population {
 } population;
 struct Settings {
   bool cv=false,heroNear=true,killArmed=false,killFired=false;
+  bool oracle=false,recordDemos=true;
   size_t killSlot=0;
   uint64_t killAfterMs=0;
 } settings;
@@ -295,7 +301,24 @@ void finish(Episode& ep,World& world) {
      <<",\"distance_cm\":";jsonNumber(out,(ep.npc->position()-ep.goal).length());
   out<<",\"failure\":"<<std::quoted(ep.failure)
      <<",\"teacher_version\":"<<ep.teacherVersion<<",\"demo_version\":"<<(ep.teacherVersion==3?2:ep.teacherVersion)
-     <<",\"decisions\":"<<ep.decisions<<",\"record_us_mean\":"<<(ep.decisions?ep.writeUs/double(ep.decisions):0)
+     <<",\"oracle\":"<<ep.oracle<<",\"record\":"<<bool(ep.writer)
+     <<",\"demonstration_recorded\":"<<bool(ep.writer)<<",\"demo_recorded\":"<<bool(ep.writer)
+     <<",\"solver\":"<<std::quoted(ep.teacherVersion==3?"memory_teacher_v3":ep.teacherVersion==2?"teacher_v2":"teacher_v1")
+     <<",\"observation_source\":"
+     <<std::quoted(ep.oracle?"detour_raster":ep.teacherVersion==3?"learner_memory":ep.teacherVersion==2?"detour_teacher_v2":"detour_teacher_v1")
+     <<",\"oracle_unsupported_decisions\":"<<ep.oracleUnsupportedDecisions
+     <<",\"oracle_snapped_support_decisions\":"<<ep.oracleSnappedSupportDecisions
+     <<",\"oracle_support_snap_max_cm\":"<<ep.oracleSupportSnapMaxCm
+     <<",\"oracle_support_horizontal_max_cm\":"<<ep.oracleSupportHorizontalMaxCm
+     <<",\"oracle_support_vertical_abs_max_cm\":"<<ep.oracleSupportVerticalAbsMaxCm
+     <<",\"start_not_found_decisions\":";
+  if(ep.teacherVersion==3) {
+    out<<ep.startNotFoundDecisions;
+  }
+  else {
+    out<<"null";
+  }
+  out<<",\"decisions\":"<<ep.decisions<<",\"record_us_mean\":"<<(ep.decisions?ep.writeUs/double(ep.decisions):0)
      <<",\"record_us_max\":"<<ep.maxWriteUs<<",\"wall_seconds\":"<<seconds
      <<",\"decisions_per_second\":"<<double(ep.decisions)/seconds<<",\"frames\":"<<ep.frames
      <<",\"cv_frames\":"<<ep.cvFrames<<",\"replans\":"<<ep.replans<<",\"fallbacks\":"<<ep.fallbacks
@@ -512,6 +535,181 @@ void detourPlanV3(World& world,std::ostream& out,const std::string& label,
   out<<"]}\n";
   if(!out) {
     throw std::runtime_error("navdemos detour-plans-v3 write failed");
+  }
+}
+float pointSegmentXZSquared(const Vec3& point,const Vec3& start,const Vec3& end) {
+  const float dx=end.x-start.x,dz=end.z-start.z;
+  const float square=dx*dx+dz*dz;
+  const float t=square>0?std::clamp(((point.x-start.x)*dx+(point.z-start.z)*dz)/square,0.f,1.f):0.f;
+  const float x=point.x-start.x-t*dx,z=point.z-start.z-t*dz;
+  return x*x+z*z;
+}
+float segmentSquareXZSquared(const Vec3& start,const Vec3& end,float x0,float z0,float x1,float z1) {
+  const std::array<float,2> a={start.x,start.z},delta={end.x-start.x,end.z-start.z};
+  const std::array<float,2> low={x0,z0},high={x1,z1};
+  float enter=0,leave=1;
+  bool intersects=true;
+  for(size_t axis=0;axis<2;++axis) {
+    if(std::abs(delta[axis])<.000001f) {
+      if(a[axis]<low[axis] || a[axis]>high[axis]) {
+        intersects=false;break;
+      }
+      continue;
+    }
+    float first=(low[axis]-a[axis])/delta[axis],last=(high[axis]-a[axis])/delta[axis];
+    if(first>last) {
+      std::swap(first,last);
+    }
+    enter=std::max(enter,first);leave=std::min(leave,last);
+    if(enter>leave) {
+      intersects=false;break;
+    }
+  }
+  if(intersects) {
+    return 0;
+  }
+  const auto pointSquare=[&](const Vec3& point) {
+    const float dx=std::max({0.f,x0-point.x,point.x-x1});
+    const float dz=std::max({0.f,z0-point.z,point.z-z1});
+    return dx*dx+dz*dz;
+  };
+  float square=std::min(pointSquare(start),pointSquare(end));
+  for(float x:{x0,x1}) {
+    for(float z:{z0,z1}) {
+      square=std::min(square,pointSegmentXZSquared(Vec3(x,0,z),start,end));
+    }
+  }
+  return square;
+}
+void oracleCorridor(World& world,std::ostream& out,const std::string& label,
+                    const std::string& from,float yaw,const std::string& to) {
+  constexpr float Begin=500,End=1500,Radius=15;
+  const auto start=demoPoint(world,from),goal=demoPoint(world,to);
+  const auto& mesh=NavBench::navigationMesh(world);
+  const auto path=mesh.findPath(meters(start),meters(goal));
+  const float pathCm=path.length*100.f;
+  const char* status=!path.complete?"incomplete_path":!path.transitions.empty()?"offmesh_transition":
+                     pathCm<=Begin?"short_path":"ok";
+  NavMesh::LocalRaster raster;
+  const bool evaluated=std::string_view(status)=="ok";
+  if(evaluated) {
+    raster=mesh.rasterLocal(meters(start),yaw);
+    if(!raster.supportValid) {
+      status="unsupported_pose";
+    }
+  }
+  const bool available=std::string_view(status)=="ok";
+  std::vector<std::pair<Vec3,Vec3>> corridor;
+  if(available) {
+    float offset=0;
+    const float radians=yaw*Pi/180.f;
+    for(size_t i=1;i<path.corners.size();++i) {
+      const auto a=cm(path.corners[i-1]),b=cm(path.corners[i]);
+      const float extent=(b-a).length();
+      if(extent>0 && offset+extent>Begin && offset<End) {
+        const float first=std::clamp((Begin-offset)/extent,0.f,1.f);
+        const float last=std::clamp((End-offset)/extent,0.f,1.f);
+        const auto near=local(a+(b-a)*first-start,radians),far=local(a+(b-a)*last-start,radians);
+        corridor.emplace_back(Vec3(near[0],0,near[2]),Vec3(far[0],0,far[2]));
+      }
+      offset+=extent;
+      if(offset>=End) {
+        break;
+      }
+    }
+  }
+  out<<"{\"label\":"<<std::quoted(label)<<",\"start\":"<<std::quoted(from)<<",\"goal\":"<<std::quoted(to)
+     <<",\"start_cm\":";vector(out,start);out<<",\"goal_cm\":";vector(out,goal);
+  out<<",\"yaw_deg\":"<<yaw<<",\"complete\":"<<path.complete<<",\"reason\":"<<std::quoted(path.reason)
+     <<",\"length_cm\":";jsonNumber(out,pathCm);
+  out<<",\"transition_count\":"<<path.transitions.size()<<",\"corridor_begin_cm\":"<<Begin
+     <<",\"corridor_end_cm\":"<<End<<",\"radius_cm\":"<<Radius
+     <<",\"corridor_arclength\":\"detour_3d\",\"corridor_available\":"<<available
+     <<",\"corridor_status\":"<<std::quoted(status)<<",\"raster_evaluated\":"<<evaluated<<",\"raster_support_valid\":";
+  if(evaluated) {
+    out<<raster.supportValid;
+  }
+  else {
+    out<<"null";
+  }
+  out<<",\"raster_support_exact\":";
+  if(evaluated) {
+    out<<raster.supportExact;
+  }
+  else {
+    out<<"null";
+  }
+  out<<",\"raster_support_snap_cm\":";
+  if(evaluated && raster.supportValid) {
+    jsonNumber(out,raster.supportSnapDistance*100.f);
+  }
+  else {
+    out<<"null";
+  }
+  out<<",\"raster_support_horizontal_cm\":";
+  if(evaluated && raster.supportValid) {
+    jsonNumber(out,raster.supportHorizontalDistance*100.f);
+  }
+  else {
+    out<<"null";
+  }
+  out<<",\"raster_support_vertical_offset_cm\":";
+  if(evaluated && raster.supportValid) {
+    jsonNumber(out,raster.supportVerticalOffset*100.f);
+  }
+  else {
+    out<<"null";
+  }
+  out<<",\"corners_cm\":[";
+  for(size_t i=0;i<path.corners.size();++i) {
+    if(i!=0) {
+      out<<',';
+    }
+    vector(out,cm(path.corners[i]));
+  }
+  out<<"],\"native_cells\":[";
+  size_t count=0;
+  if(available) {
+    const auto layer=[&](const NavMesh::RasterLayer& value,bool near) {
+      if(value.size==0 || value.cells.size()!=value.size*value.size) {
+        throw std::runtime_error("navdemos oracle corridor raster shape mismatch");
+      }
+      const float step=value.cellSize*100.f,half=float(value.size)*.5f;
+      for(size_t row=0;row<value.size;++row) {
+        for(size_t column=0;column<value.size;++column) {
+          const float x0=(float(column)-half)*step,z0=(float(row)-half)*step;
+          if(!near && std::abs(x0+step*.5f)<800 && std::abs(z0+step*.5f)<800) {
+            continue;
+          }
+          const bool touched=std::any_of(corridor.begin(),corridor.end(),[&](const auto& segment) {
+            return segmentSquareXZSquared(segment.first,segment.second,x0,z0,x0+step,z0+step)<=Radius*Radius;
+          });
+          if(!touched) {
+            continue;
+          }
+          if(count!=0) {
+            out<<',';
+          }
+          const auto& cell=value.cells[row*value.size+column];
+          if(cell.heightBoundary && cell.traversable) {
+            throw std::runtime_error("navdemos oracle corridor has a traversable height boundary");
+          }
+          if(cell.traversable && !cell.heightValid) {
+            throw std::runtime_error("navdemos oracle corridor has traversable ground without height");
+          }
+          out<<"{\"layer\":"<<std::quoted(near?"near":"far")<<",\"row\":"<<row<<",\"column\":"<<column
+             <<",\"truth_passable\":"<<cell.traversable<<",\"height_valid\":"<<cell.heightValid
+             <<",\"ground_height_cm\":";jsonNumber(out,cell.heightValid?cell.groundHeight*100.f:0.f);
+          out<<",\"height_boundary\":"<<cell.heightBoundary<<'}';
+          ++count;
+        }
+      }
+    };
+    layer(raster.near,true);layer(raster.far,false);
+  }
+  out<<"],\"native_cell_count\":"<<count<<"}\n";
+  if(!out) {
+    throw std::runtime_error("navdemos oracle-corridors write failed");
   }
 }
 void probeObject(World& world,Npc& npc,std::ostream& out,const std::string& label,
@@ -850,14 +1048,55 @@ void guidanceFor(Episode& ep,World& w,const Vec3& position) {
     ep.guidance={};ep.guidance.carrot=ep.goal;ep.guidance.beyondKnown=true;
   }
 }
+void oracleMemory(NavMemoryTeacher::Input& input,const NavMesh::LocalRaster& raster) {
+  const auto layer=[](auto& target,const NavMesh::RasterLayer& source,size_t size,float step) {
+    if(source.size!=size || source.cellSize!=step || source.cells.size()!=target.size()) {
+      throw std::runtime_error("navdemos oracle raster shape mismatch");
+    }
+    for(size_t i=0;i<target.size();++i) {
+      const auto& cell=source.cells[i];
+      if(cell.heightBoundary && cell.traversable) {
+        throw std::runtime_error("navdemos oracle raster has a traversable height boundary");
+      }
+      if(cell.traversable && !cell.heightValid) {
+        throw std::runtime_error("navdemos oracle raster has traversable ground without height");
+      }
+      auto& value=target[i];
+      value={};
+      value.channels[0]=255;
+      value.channels[cell.traversable?1u:2u]=255;
+      if(cell.heightBoundary) {
+        value.channels[4]=255;
+      }
+      value.heightValid=uint8_t(cell.heightValid);
+      value.groundHeightCm=cell.heightValid?cell.groundHeight*100.f:0.f;
+    }
+  };
+  layer(input.near,raster.near,64,.25f);
+  layer(input.far,raster.far,100,2.f);
+}
 void decideMemory(Episode& ep,World& w,uint64_t elapsed) {
   // This is the entire steering boundary. Snapshot construction may read the
   // world, but the teacher receives only fields exposed by learner_input().
   const auto position=NpcKeys::physicalPosition(*ep.npc);
   guidanceFor(ep,w,position);
   auto sample=snapshot(ep,w);
-  const auto input=NavMemoryTeacher::Input::fromLearner(sample.body,sample.roads,sample.previous,*sample.memory);
+  auto input=NavMemoryTeacher::Input::fromLearner(sample.body,sample.roads,sample.previous,*sample.memory);
+  if(ep.oracle) {
+    // Evaluation adapter only: the frozen teacher and its other learner fields
+    // are unchanged. Truth observations are never written as demonstrations.
+    const auto raster=NavBench::navigationMesh(w).rasterLocal(meters(position),ep.npc->rotation());
+    ep.oracleUnsupportedDecisions+=!raster.supportValid;
+    if(raster.supportValid) {
+      ep.oracleSnappedSupportDecisions+=!raster.supportExact;
+      ep.oracleSupportSnapMaxCm=std::max(ep.oracleSupportSnapMaxCm,raster.supportSnapDistance*100.f);
+      ep.oracleSupportHorizontalMaxCm=std::max(ep.oracleSupportHorizontalMaxCm,raster.supportHorizontalDistance*100.f);
+      ep.oracleSupportVerticalAbsMaxCm=std::max(ep.oracleSupportVerticalAbsMaxCm,std::abs(raster.supportVerticalOffset)*100.f);
+    }
+    oracleMemory(input,raster);
+  }
   sample.keys=ep.memoryTeacher.decide(input);++ep.replans;
+  ep.startNotFoundDecisions+=!ep.memoryTeacher.lastPlanStatus().startFound;
   const auto& points=ep.memoryTeacher.plan();
   auto& out=ep.teacherPaths;
   out<<"{\"elapsed_ms\":"<<elapsed<<",\"position_cm\":";vector(out,position);
@@ -874,7 +1113,9 @@ void decideMemory(Episode& ep,World& w,uint64_t elapsed) {
                                            p.forwardCm*std::sin(yaw)+p.rightCm*std::cos(yaw)));
   }
   sample.teacherPathCm=ep.memoryTeacher.planLengthCm();
-  const double cost=ep.writer->append(sample);ep.writeUs+=cost;ep.maxWriteUs=std::max(ep.maxWriteUs,cost);
+  if(ep.writer) {
+    const double cost=ep.writer->append(sample);ep.writeUs+=cost;ep.maxWriteUs=std::max(ep.maxWriteUs,cost);
+  }
   ep.backwardDecisions+=sample.keys.forward<0;ep.strafeDecisions+=sample.keys.strafe!=0;
   action(ep,elapsed,sample.keys);NpcKeys::set(*ep.npc,sample.keys,1000);ep.previous=sample.keys;++ep.decisions;
   ep.failure=ep.blocked?"body_blocked":"";
@@ -1261,6 +1502,59 @@ void NavDemos::reset() {legacy=Episode{};population=Population{};settings=Settin
 void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player,const std::string& output) {
   auto a=args;
   auto& ep=legacy;
+  if(a.size()>=2 && (a[1]=="oracle" || a[1]=="record")) {
+    if(running() || NavBench::running()) {
+      throw std::runtime_error("navdemos cannot change evaluation settings during episode");
+    }
+    if(a.size()!=3 || (a[2]!="on" && a[2]!="off")) {
+      throw std::runtime_error("navdemos oracle on|off | record on|off");
+    }
+    if(a[1]=="oracle") {
+      settings.oracle=a[2]=="on";
+    }
+    else {
+      settings.recordDemos=a[2]=="on";
+    }
+    return;
+  }
+  if(a.size()>=2 && a[1]=="oracle-corridors") {
+    if(running() || NavBench::running()) {
+      throw std::runtime_error("navdemos cannot query oracle corridors during episode");
+    }
+    if(a.size()!=3) {
+      throw std::runtime_error("navdemos oracle-corridors FILE (rows LABEL START YAW_DEG GOAL)");
+    }
+    std::ifstream input(a[2]);
+    if(!input) {
+      throw std::runtime_error("navdemos cannot read oracle-corridors file");
+    }
+    std::ofstream out(std::filesystem::path(output)/"oracle-corridors.jsonl");
+    if(!out) {
+      throw std::runtime_error("navdemos cannot write oracle-corridors.jsonl");
+    }
+    out<<std::setprecision(9)<<std::boolalpha;
+    std::string line;
+    while(std::getline(input,line)) {
+      std::istringstream row(line);
+      std::string label,from,to,extra;
+      float yaw=0;
+      if(!(row>>label) || label[0]=='#') {
+        continue;
+      }
+      if(!(row>>from>>yaw>>to) || (row>>extra) || !std::isfinite(yaw)) {
+        throw std::runtime_error("navdemos oracle-corridors rows LABEL START YAW_DEG GOAL");
+      }
+      oracleCorridor(w,out,label,from,yaw,to);
+    }
+    if(!input.eof()) {
+      throw std::runtime_error("navdemos oracle-corridors read failed");
+    }
+    out.close();
+    if(!out) {
+      throw std::runtime_error("navdemos oracle-corridors write failed");
+    }
+    return;
+  }
   if(a.size()>=2 && a[1]=="detour-plans-v3") {
     if(running() || NavBench::running()) {
       throw std::runtime_error("navdemos cannot query Detour plans during episode");
@@ -1398,7 +1692,12 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     } else throw std::runtime_error("navdemos physics cv|native | hero near|keep | kill-slot SLOT AFTER_MS");
     return;
   }
-  if(a.size()>=2 && a[1]=="population") {beginPopulation(a,w,player,output);return;}
+  if(a.size()>=2 && a[1]=="population") {
+    if(settings.oracle) {
+      throw std::runtime_error("navdemos oracle evaluation requires a single v3 episode");
+    }
+    beginPopulation(a,w,player,output);return;
+  }
   if(a.size()==3 && a[1]=="reachable") {reachable(w,a[2],output);return;}
   if(a.size()==2 && a[1]=="wait")return;
   const bool memory=a.size()>=2 && a[1]=="start-v3";
@@ -1446,6 +1745,13 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
   ep=Episode{};ep.npc=npc;ep.from=current?"intentional":a[3];ep.to=a[current?3:4];ep.output=output;
   ep.cvMode=settings.cv;ep.heroNear=!current && settings.heroNear;
   ep.teacherVersion=(memory || object || moving)?scenarioTeacher:(carrot?2:1);
+  ep.oracle=settings.oracle;
+  if(ep.oracle && ep.teacherVersion!=3) {
+    throw std::runtime_error("navdemos oracle evaluation requires teacher v3");
+  }
+  if((ep.oracle || !settings.recordDemos) && std::filesystem::exists(std::filesystem::path(output)/"samples.bin.gz")) {
+    throw std::runtime_error("navdemos evaluation output already contains demonstration samples");
+  }
   ep.goalKind=goalKind;ep.scenarioSeed=scenarioSeed;
   ep.goal=goalPosition;ep.replay=replay;ep.drive=learner;
   // Optional start arguments begin at 6.
@@ -1534,7 +1840,10 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     if(!input.eof() || ep.replayActions.size()<2)throw std::runtime_error("invalid actions replay");
     ep.limit=ep.replayActions.back().time;
   } else {
-    ep.actions=file(ep,"actions.txt");ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),ep.teacherVersion==3?2:ep.teacherVersion);
+    ep.actions=file(ep,"actions.txt");
+    if(settings.recordDemos && !ep.oracle) {
+      ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),ep.teacherVersion==3?2:ep.teacherVersion);
+    }
     if(ep.teacherVersion>=2) {
       ep.knownPaths=file(ep,"known-paths.jsonl");
       if(!ep.drive) {

@@ -2,8 +2,8 @@
 # Submit a bounded phase and return its gq id. Never trains a student.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-teacher-v3-remote.sh build|bootstrap|prepare|campaign|evaluate|diagnose|retry|visible}"
-case "$stage" in build|bootstrap|prepare|campaign|evaluate|diagnose|retry|visible) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
+stage="${1:?Usage: nav-teacher-v3-remote.sh build|bootstrap|prepare|campaign|evaluate|diagnose|retry|visible|oracle}"
+case "$stage" in build|bootstrap|prepare|campaign|evaluate|diagnose|retry|visible|oracle) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 export GQ_OWNER=nav-teacher-v3
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-teacher-v3" "$HOME"')"
 ssh ryzen "mkdir -p '$task/source' '$task/input'"
@@ -44,6 +44,11 @@ if [[ "$stage" != prepare && "$stage" != evaluate && "$stage" != visible ]]; the
       tests+=(scripts/tests/test_nav_teacher_v3.py scripts/tests/test_nav_teacher_v3_campaign.py)
     fi
   fi
+  if [[ "$stage" == oracle ]]; then
+    targets+=(check-navmesh check-navoracle)
+    tests=(scripts/tests/test_nav_teacher_v3_oracle.py scripts/tests/test_nav_teacher_v3_coverage.py
+      scripts/tests/test_nav_teacher_v3.py scripts/tests/test_nav_demos.py)
+  fi
   cmake --build "$task/build" --target "${targets[@]}" --parallel 3
   "$task/.venv/bin/python" -m pytest -q "${tests[@]}"
 fi
@@ -55,7 +60,12 @@ if [[ "$stage" == visible ]]; then
   "$task/.venv/bin/python" -I scripts/nav_teacher_v3_point_analysis.py \
     --task "$task" --data "$HOME/gothic-ai/nav-demos-v3" --output "$task/point-retry-analysis"
 fi
-if [[ "$stage" == diagnose ]]; then
+if [[ "$stage" == oracle ]]; then
+  "$task/.venv/bin/python" -I scripts/nav_teacher_v3_oracle.py \
+    --task "$task" --data "$HOME/gothic-ai/nav-demos-v3" --parallel 3
+  "$task/.venv/bin/python" -I scripts/nav_teacher_v3_coverage.py \
+    --task "$task" --data "$HOME/gothic-ai/nav-demos-v3" --output "$task/oracle-experiment/coverage"
+elif [[ "$stage" == diagnose ]]; then
   analysis=(--task "$task" --data "$HOME/gothic-ai/nav-demos-v3" --output "$task/failures-v3-first")
   "$task/.venv/bin/python" -I scripts/nav_teacher_v3_failures.py prepare "${analysis[@]}"
   "$task/.venv/bin/python" -I scripts/nav_teacher_v3_failures.py detour "${analysis[@]}"
@@ -93,7 +103,7 @@ fi
 PHASE
 threads=4
 cpu_args=()
-if [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == diagnose || "$stage" == retry || "$stage" == visible ]]; then
+if [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == diagnose || "$stage" == retry || "$stage" == visible || "$stage" == oracle ]]; then
   threads=12
   cpu_args=(--cpu-quota 1200%)
 fi
