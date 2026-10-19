@@ -130,13 +130,43 @@ def kl_coefficient(initial, decisions, maximum, floor=.003):
     return initial * (floor / initial) ** fraction
 
 
+def training_coefficient(state):
+    schedule = state["kl_schedule"]
+    return kl_coefficient(schedule["initial"], state["decisions"] - schedule["start_decisions"],
+                          schedule["decay_decisions"], schedule["floor"])
+
+
+def configure_training(state, args):
+    """Record an operator change once; resuming never restarts its KL clock."""
+    config = dict(actor_lr=args.lr, batch_windows=args.batch, target_kl=args.target_kl,
+                  kl_start=args.kl_start, kl_floor=args.kl_floor,
+                  kl_decay_decisions=args.kl_decay_decisions)
+    if state.get("training_config") == config:
+        return state
+    previous = state.get("training_config", dict(actor_lr=3e-5, batch_windows=8, target_kl=.03,
+                         kl_start=None, kl_floor=.003, kl_decay_decisions=args.max_decisions))
+    initial = args.kl_start
+    if initial is None:
+        initial = training_coefficient(state) if "kl_schedule" in state else kl_coefficient(
+            state["initial_kl"] or args.pilot_kl[0], state["decisions"], args.max_decisions)
+    result = dict(state, training_config=config, kl_schedule=dict(initial=initial, floor=args.kl_floor,
+                  start_decisions=state["decisions"], decay_decisions=args.kl_decay_decisions))
+    if state["iteration"]:
+        change = dict(after_iteration=state["iteration"], effective_from_iteration=state["iteration"] + 1,
+                      decisions=state["decisions"], previous=previous, current=config,
+                      kl_schedule=result["kl_schedule"],
+                      time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        result["parameter_changes"] = [*state.get("parameter_changes", []), change]
+    return result
+
+
 def collection_decision_bound(run_ms, workers, population):
     # Runner simulation ticks are 33ms. A reset can introduce at most one
     # additional initial action per tick, besides the ordinary 100ms decisions.
     return workers * population * (1 + math.ceil(run_ms / 33) + math.ceil(run_ms / 100))
 
 
-def select_pilot(results, target_kl=.03):
+def select_pilot(results, target_kl=.1):
     """Constrain drift and entropy relative to round 2 on this same batch."""
     viable = []
     for candidate in results:
@@ -254,7 +284,8 @@ class Loop:
     def interrupted(self, signum, frame):
         if self.process and self.process.poll() is None:
             self.process.send_signal(signum)
-            self.process.wait()
+        # Popen.wait may already hold its non-reentrant waitpid lock when the
+        # signal arrives. Reap only after unwinding that wait, in queued.finally.
         raise SystemExit(128 + signum)
 
     def event(self, phase, **values):
@@ -279,6 +310,8 @@ class Loop:
                 if result:
                     raise subprocess.CalledProcessError(result, queued_command)
             finally:
+                if self.process.poll() is None:
+                    self.process.wait()
                 self.process = None
 
     def common(self):
@@ -316,7 +349,8 @@ class Loop:
             shutil.rmtree(output)
         command = [self.args.python, self.script / "nav_ppo.py", "update", "--source", collect, "--output", output,
                    "--reference", self.args.reference, "--iteration", str(iteration), "--kl-coef", str(coefficient),
-                   "--device", "cuda", "--threads", str(self.args.threads)]
+                   "--device", "cuda", "--threads", str(self.args.threads),
+                   "--lr", str(self.args.lr), "--batch", str(self.args.batch)]
         if previous:
             command += ["--resume", previous]
         if critic_only:
@@ -444,6 +478,12 @@ class Loop:
             self.restore_best(state)
             self.event("stopped", reason=state["stop_reason"], decisions=state["decisions"], best=state["best_iteration"])
             return
+        configured = configure_training(state, args)
+        if configured != state:
+            state = configured
+            write_json(self.state_path, state)
+            self.event("training_configured", iteration=state["iteration"], decisions=state["decisions"],
+                       config=state["training_config"], kl_schedule=state["kl_schedule"])
         while state["decisions"] < args.max_decisions:
             bound = collection_decision_bound(args.run_ms, args.workers, args.population)
             if state["decisions"] + bound > args.max_decisions:
@@ -482,7 +522,7 @@ class Loop:
             write_json(directory / "collection-health.json", health)
             if health["limit_exceeded"]:
                 raise RejectedCollectionError(collect, iteration, health)
-            coefficient = kl_coefficient(state["initial_kl"] or args.pilot_kl[0], state["decisions"], args.max_decisions)
+            coefficient = training_coefficient(state)
             if state["initial_kl"] is None and not critic_only:
                 selection_file = directory / "pilot-selection.json"
                 if not selection_file.is_file():
@@ -514,6 +554,7 @@ class Loop:
                     shutil.copytree(selected["directory"], output)
                 state["initial_kl"] = selected["coefficient"]
                 coefficient = selected["coefficient"]
+                state["kl_schedule"].update(initial=coefficient, start_decisions=state["decisions"])
                 stats = read_json(output / "stats.json")
             else:
                 stats = self.update(collect, output, state["current_checkpoint"], iteration, coefficient, critic_only)
@@ -549,6 +590,7 @@ class Loop:
             row = dict(iteration=iteration, decisions=next_state["decisions"], iteration_decisions=result["decisions"],
                        critic_only=critic_only, curriculum="short" if state["decisions"] < args.curriculum_decisions else "all",
                        kl_coefficient=coefficient, entropy_warning_heads=entropy_warning, training=stats,
+                       training_config=state["training_config"],
                        collection_health=health,
                        validation=metrics["all"] if metrics else None, validation_by_region=metrics["by_region"] if metrics else None,
                        stop_reason=next_state["stop_reason"])
@@ -575,6 +617,8 @@ def main():
     parser.add_argument("--workers", type=int, choices=(1, 4, 8), default=8)
     parser.add_argument("--population", type=int, default=100)
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--run-ms", type=int, default=40000)
     parser.add_argument("--limit-ms", type=int, default=240000)
     parser.add_argument("--seed", type=int, default=19102026)
@@ -584,7 +628,10 @@ def main():
     parser.add_argument("--max-decisions", type=int, default=150_000_000)
     parser.add_argument("--min-free-gb", type=float, default=20)
     parser.add_argument("--pilot-kl", type=float, nargs="+", default=[.1, 1., 10.])
-    parser.add_argument("--target-kl", type=float, default=.03)
+    parser.add_argument("--target-kl", type=float, default=.1)
+    parser.add_argument("--kl-start", type=float)
+    parser.add_argument("--kl-floor", type=float, default=.01)
+    parser.add_argument("--kl-decay-decisions", type=int, default=10_000_000)
     args = parser.parse_args()
     for key, value in vars(args).items():
         if isinstance(value, Path):
@@ -602,6 +649,11 @@ def main():
             or not 0 < args.max_decisions <= 150_000_000 or args.curriculum_decisions < 0
             or args.min_free_gb < 20 or any(value < .003 or not math.isfinite(value) for value in args.pilot_kl)):
         parser.error("Invalid safety limits, iteration schedule or KL coefficients")
+    if (not math.isfinite(args.lr) or args.lr <= 0 or args.batch < 1
+            or not math.isfinite(args.target_kl) or args.target_kl <= 0
+            or not math.isfinite(args.kl_floor) or args.kl_floor <= 0 or args.kl_decay_decisions < 1
+            or args.kl_start is not None and (not math.isfinite(args.kl_start) or args.kl_start < args.kl_floor)):
+        parser.error("Invalid training parameters or KL decay schedule")
     try:
         Loop(args).run()
     except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as exc:

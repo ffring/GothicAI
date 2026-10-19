@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import signal
 from types import SimpleNamespace
 
 import pytest
@@ -131,6 +132,89 @@ def test_pilot_requires_current_batch_reference_entropy_metric():
     old_stats = dict(coefficient=.1, stats=dict(kl_reference=0., entropy_by_head={head: .5 for head in loop.HEADS}))
     with pytest.raises(KeyError, match="reference_entropy_by_head"):
         loop.select_pilot([old_stats])
+
+
+def training_args(**changes):
+    return SimpleNamespace(**(dict(lr=1e-4, batch=32, target_kl=.1, kl_start=.083,
+        kl_floor=.01, kl_decay_decisions=10_000_000, max_decisions=150_000_000,
+        pilot_kl=[.1, 1., 10.]) | changes))
+
+
+def test_parameter_change_keeps_budget_best_checkpoint_and_absolute_kl_deadline():
+    current = dict(state(arrived=41, decisions=8_643_602), iteration=27, initial_kl=.1,
+                   current_policy="iteration27.navbc", current_checkpoint="iteration27.pt",
+                   best_iteration=15, best_policy="iteration15.navbc", best_checkpoint="iteration15.pt")
+    updated = loop.configure_training(current, training_args())
+    for name in ("iteration", "decisions", "best_iteration", "best_policy", "best_checkpoint",
+                 "current_policy", "current_checkpoint", "bad_validations", "baseline_arrival_fraction"):
+        assert updated[name] == current[name]
+    change = updated["parameter_changes"][0]
+    assert change["after_iteration"] == 27 and change["effective_from_iteration"] == 28
+    assert change["previous"]["actor_lr"] == 3e-5
+    assert change["current"]["actor_lr"] == 1e-4
+    assert change["current"]["batch_windows"] == 32
+    assert change["current"]["target_kl"] == .1
+    assert loop.training_coefficient(updated) == pytest.approx(.083)
+    halfway = dict(updated, decisions=13_643_602)
+    assert loop.training_coefficient(halfway) == pytest.approx((.083 * .01) ** .5)
+    final = dict(updated, decisions=18_643_602)
+    assert loop.training_coefficient(final) == pytest.approx(.01)
+    assert loop.training_coefficient(dict(final, decisions=30_000_000)) == pytest.approx(.01)
+    # Restarting after progress neither adds another change nor rebases the decay.
+    resumed = loop.configure_training(halfway, training_args())
+    assert resumed == halfway
+    assert len(resumed["parameter_changes"]) == 1
+    assert resumed["kl_schedule"]["start_decisions"] == 8_643_602
+
+
+def test_interrupt_unwinds_active_wait_before_reaping(tmp_path, monkeypatch):
+    args = SimpleNamespace(work=tmp_path, threads=1, workers=8)
+    driver = loop.Loop(args)
+    calls = []
+    class Process:
+        returncode = None
+        waiting = False
+        def poll(self):
+            return self.returncode
+        def send_signal(self, value):
+            calls.append(("signal", value))
+        def wait(self):
+            assert not self.waiting, "reentrant Popen.wait would deadlock its waitpid lock"
+            calls.append("wait")
+            if calls == ["wait"]:
+                self.waiting = True
+                try:
+                    driver.interrupted(signal.SIGTERM, None)
+                finally:
+                    self.waiting = False
+            self.returncode = 143
+            return 143
+    process = Process()
+    monkeypatch.setattr(loop.subprocess, "Popen", lambda *a, **kw: process)
+    with pytest.raises(SystemExit) as result:
+        driver.queued("test", ["never-executed"], tmp_path / "launcher.log")
+    assert result.value.code == 143
+    assert calls == ["wait", ("signal", signal.SIGTERM), "wait"]
+    assert driver.process is None
+
+
+def test_update_passes_actor_lr_and_window_batch_to_optimizer(tmp_path, monkeypatch):
+    args = SimpleNamespace(work=tmp_path, threads=4, workers=8, python=Path("/venv/python"),
+                           reference=Path("/round2.navbc"), lr=1e-4, batch=32)
+    driver = loop.Loop(args)
+    destination = tmp_path / "update"
+    seen = []
+    def queued(name, command, log, **resources):
+        seen.extend(map(str, command))
+        destination.mkdir()
+        for name in ("last.pt", "policy.navbc"):
+            (destination / name).touch()
+        loop.write_json(destination / "stats.json", dict(peak_cuda_gb=.2))
+    monkeypatch.setattr(driver, "queued", queued)
+    driver.update(tmp_path / "collect", destination, Path("/iteration27.pt"), 28, .083, False)
+    assert seen[seen.index("--lr") + 1] == "0.0001"
+    assert seen[seen.index("--batch") + 1] == "32"
+    assert seen[seen.index("--resume") + 1] == "/iteration27.pt"
 
 
 def test_training_validation_reverse_overlap_is_rejected():

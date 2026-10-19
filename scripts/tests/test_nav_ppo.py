@@ -4,12 +4,14 @@ Model tests run on Ryzen under gq; never launch them on the development Mac.
 """
 from __future__ import annotations
 
+import gc
 import gzip
 import json
 from pathlib import Path
 import random
 import sys
 from types import SimpleNamespace
+import weakref
 
 import numpy as np
 import pytest
@@ -228,6 +230,136 @@ def test_actor_ppo_update_uses_sampled_actions_and_changes_actor(tmp_path):
         args(), random.Random(5), 0., 1.)
     assert count == 6 and np.isfinite(measures["policy_loss"])
     assert not torch.equal(actor.head_forward.weight, initial)
+
+
+def synthetic_training_episode(episode_id, count, options):
+    """Tiny identifiable arrays test packing without needing an actor forward."""
+    values = (episode_id * 1000 + np.arange(count)).astype(np.float32)
+    episode = {name: values.copy() for name in
+               ("old_logp", "advantage", "returns", "old_values")}
+    episode.update(near=values[:, None, None, None].copy(),
+                   far=(values + .5)[:, None, None, None],
+                   vector=np.column_stack((np.full(count, episode_id), np.arange(count))).astype(np.float32),
+                   priv=np.tile(values[:, None], (1, ppo.PRIVILEGED_SIZE)),
+                   actions=np.tile(np.array([2, 1, 1, 1, 0, 0], np.int64), (count, 1)),
+                   reference_logits=np.tile(values[:, None], (1, sum(ppo.CLASSES))),
+                   valid=np.ones(count, bool), starts=np.arange(0, count, options.segment))
+    episode["valid"][count // 2] = False
+    starts = episode["starts"].astype(np.float32)
+    episode["actor_hidden"] = np.column_stack((np.full(len(starts), episode_id), starts, starts + 10)).astype(np.float32)
+    episode["critic_hidden"] = episode["actor_hidden"] + 100
+    return episode
+
+
+def test_cross_episode_batches_visit_each_window_once_and_preserve_own_hidden_burn_and_padding():
+    options = args(batch=4)
+    episodes = [synthetic_training_episode(index + 1, count, options)
+                for index, count in enumerate((5, 7, 4, 3))]
+    by_id = {index + 1: episode for index, episode in enumerate(episodes)}
+    batches = list(ppo.iter_training_batches(iter(episodes), options, random.Random(17)))
+    assert all(1 <= len(batch) <= options.batch for batch in batches)
+    assert any(len(batch) == options.batch and len({int(row["batch"]["vector"][0, 0]) for row in batch}) > 1
+               for batch in batches)
+    seen = []
+    padded = 0
+    for rows in batches:
+        assert len({row["burn_length"] for row in rows}) == 1
+        batch, burn, actor_h, critic_h = ppo.training_batch_tensors(rows, options)
+        assert actor_h.shape == critic_h.shape == (1, len(rows), 3)
+        for row_index, row in enumerate(rows):
+            episode_id, start = map(int, row["batch"]["vector"][0])
+            seen.append((episode_id, start))
+            original = by_id[episode_id]
+            window = int(np.flatnonzero(original["starts"] == start)[0])
+            real_length = min(options.segment, len(original["valid"]) - start)
+            for name in ppo.BATCH_FIELDS:
+                expected = original[name][start:start+real_length]
+                np.testing.assert_array_equal(row["batch"][name][:real_length], expected)
+                np.testing.assert_array_equal(row["batch"][name][real_length:],
+                                              np.zeros_like(row["batch"][name][real_length:]))
+                assert not np.shares_memory(row["batch"][name], original[name])
+                np.testing.assert_array_equal(batch[name][row_index].numpy(), row["batch"][name])
+            if real_length < options.segment:
+                padded += 1
+                assert not batch["valid"][row_index, real_length:].any()
+            np.testing.assert_array_equal(actor_h[0, row_index].numpy(), original["actor_hidden"][window])
+            np.testing.assert_array_equal(critic_h[0, row_index].numpy(), original["critic_hidden"][window])
+            assert not np.shares_memory(row["actor_hidden"], original["actor_hidden"])
+            assert not np.shares_memory(row["critic_hidden"], original["critic_hidden"])
+            length = min(options.burn_in, start)
+            assert row["burn_length"] == length
+            if length:
+                for name in ppo.BURN_FIELDS:
+                    np.testing.assert_array_equal(burn[name][row_index].numpy(), original[name][start-length:start])
+                    assert not np.shares_memory(row["burn"][name], original[name])
+            else:
+                assert burn is None
+    expected = {(index + 1, int(start)) for index, episode in enumerate(episodes) for start in episode["starts"]}
+    assert len(seen) == len(set(seen)) == len(expected)
+    assert set(seen) == expected
+    assert padded == 3
+
+
+def test_cross_episode_queues_are_bounded_independently_of_episode_count():
+    options = args(batch=32)
+    buffer_stats = {}
+    source = (synthetic_training_episode(index + 1, 5, options) for index in range(100))
+    windows = 0
+    for batch in ppo.iter_training_batches(source, options, random.Random(3), buffer_stats):
+        assert len(batch) <= options.batch
+        windows += len(batch)
+    assert windows == 300
+    assert buffer_stats["buffered_windows_per_group_max"] == options.batch
+    # Equal-length queues hold fewer than one batch each until the ready queue
+    # reaches its bound and is immediately yielded. There are two burn groups.
+    assert options.batch <= buffer_stats["buffered_windows_max"] <= 2 * options.batch - 1
+
+
+def test_cross_episode_queues_do_not_retain_consumed_episode_arrays():
+    options = args(batch=2)
+    references = {}
+    def source():
+        for index in range(1, 4):
+            episode = synthetic_training_episode(index, 5, options)
+            references[index] = weakref.ref(episode["near"])
+            yield episode
+            del episode
+    batches = ppo.iter_training_batches(source(), options, random.Random(3))
+    first = next(batches)  # The two burn-in windows from episode 1.
+    second = next(batches)  # Initial windows from episodes 1 and 2.
+    gc.collect()
+    assert references[1]() is None
+    assert references[2]() is not None  # The actively streamed episode only.
+    assert len(first) == len(second) == options.batch
+    assert {int(row["batch"]["vector"][0, 0]) for row in second} == {1, 2}
+    batches.close()
+
+
+def test_actor_optimizer_uses_full_32_window_cross_episode_batch(tmp_path):
+    directories = [tmp_path / name for name in ("one", "two")]
+    for directory in directories:
+        directory.mkdir()
+    episodes = []
+    actor = None
+    for directory in directories:
+        recorded, actor, _ = make_episode(directory, count=2)
+        episode, bootstrap, _ = ppo.read_episode(recorded, ppo.REWARD_WEIGHTS)
+        episodes.append((episode, bootstrap))
+    critic = ppo.NavCritic(actor).eval()
+    options = args(batch=32)
+    for episode, bootstrap in episodes:
+        ppo.replay_episode(episode, bootstrap, actor, critic, actor, options)
+    # Thirty-two independently copied episode windows share one real update.
+    source = (episodes[index % len(episodes)][0] for index in range(options.batch))
+    batches = ppo.iter_training_batches(source, options, random.Random(5))
+    measures, count = ppo.train_batches(batches, actor, critic,
+        torch.optim.Adam(actor.parameters(), lr=1e-3), torch.optim.Adam(critic.parameters(), lr=1e-3),
+        options, 0., 1.)
+    assert count == 64
+    assert measures["optimizer_steps"] == 1
+    assert measures["batch_windows_max"] == measures["batch_windows_sum"] == 32
+    assert measures["batch_windows_sum"] / measures["optimizer_steps"] == 32
+    assert np.isfinite(measures["policy_loss"])
 
 
 def rejected_metadata(count=0, **extra):

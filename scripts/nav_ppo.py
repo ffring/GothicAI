@@ -462,57 +462,131 @@ def features_of(batch):
     return {name: batch[name] for name in ("near", "far", "vector")}
 
 
-def train_episode(episode, actor, critic, actor_optimizer, critic_optimizer, args, rng, advantage_mean, advantage_std):
-    # Group only the episode-start window separately, since its burn-in is zero.
-    grouped = {}
-    for window, start in enumerate(episode["starts"]):
-        grouped.setdefault(min(args.burn_in, int(start)), []).append(window)
+BATCH_FIELDS = ("near", "far", "vector", "priv", "actions", "old_logp", "advantage",
+                "returns", "old_values", "reference_logits", "valid")
+BURN_FIELDS = ("near", "far", "vector", "priv")
+
+
+def copy_training_window(episode, window, args):
+    """Own every buffered byte, so a short window never retains its full episode."""
+    start = int(episode["starts"][window])
+    burn_length = min(args.burn_in, start)
+
+    def copied_slice(name, begin, length):
+        source = episode[name]
+        data = np.zeros((length, *source.shape[1:]), dtype=source.dtype)
+        stop = min(begin + length, len(source))
+        data[:stop-begin] = source[begin:stop]
+        return data
+
+    return dict(burn_length=burn_length,
+                batch={name: copied_slice(name, start, args.segment) for name in BATCH_FIELDS},
+                burn={name: copied_slice(name, start-burn_length, burn_length) for name in BURN_FIELDS},
+                actor_hidden=episode["actor_hidden"][window].copy(),
+                critic_hidden=episode["critic_hidden"][window].copy())
+
+
+def iter_training_batches(episodes, args, rng, buffer_stats=None):
+    """Mix episodes in bounded CPU queues; visit every window once per epoch.
+
+    Equal burn lengths share a queue, avoiding artificial padded recurrent steps.
+    Each queue holds at most args.batch rows (normally just the 0/16 groups).
+    Only copied windows survive advancing the streaming episode iterator.
+    """
+    queues = {}
+    for episode in episodes:
+        grouped = {}
+        for window, start in enumerate(episode["starts"]):
+            grouped.setdefault(min(args.burn_in, int(start)), []).append(window)
+        for burn_length, windows in grouped.items():
+            rng.shuffle(windows)
+            for window in windows:
+                queue = queues.setdefault(burn_length, [])
+                queue.append(copy_training_window(episode, window, args))
+                if buffer_stats is not None:
+                    buffer_stats["buffered_windows_max"] = max(buffer_stats.get("buffered_windows_max", 0),
+                                                               sum(map(len, queues.values())))
+                    buffer_stats["buffered_windows_per_group_max"] = max(
+                        buffer_stats.get("buffered_windows_per_group_max", 0), len(queue))
+                if len(queue) == args.batch:
+                    # Remove the ready queue before yielding; the driver owns it
+                    # until this minibatch's optimizer steps have finished.
+                    ready = queues.pop(burn_length)
+                    yield ready
+                    del ready, queue
+        del episode
+    for burn_length in list(queues):
+        yield queues.pop(burn_length)
+
+
+def training_batch_tensors(rows, args):
+    """Stack independently owned rows, preserving their own hidden/burn/mask."""
+    burn_length = rows[0]["burn_length"]
+    if any(row["burn_length"] != burn_length for row in rows):
+        raise ValueError("Mixed burn-in lengths in one recurrent minibatch")
+
+    def tensor(values):
+        return torch.from_numpy(np.stack(values)).to(args.device)
+
+    batch = {name: tensor([row["batch"][name] for row in rows]) for name in BATCH_FIELDS}
+    burn = {name: tensor([row["burn"][name] for row in rows]) for name in BURN_FIELDS} if burn_length else None
+    actor_h = tensor([row["actor_hidden"] for row in rows])[None]
+    critic_h = tensor([row["critic_hidden"] for row in rows])[None]
+    return batch, burn, actor_h, critic_h
+
+
+def train_batches(batches, actor, critic, actor_optimizer, critic_optimizer, args, advantage_mean, advantage_std):
     stats, steps = Counter(), 0
     actor.train(not args.critic_only)
     critic.train()
-    for burn_length, windows in grouped.items():
-        rng.shuffle(windows)
-        for offset in range(0, len(windows), args.batch):
-            selected = windows[offset:offset+args.batch]
-            batch = batch_arrays(episode, selected, args)
-            mask = batch["valid"]
-            count = int(mask.sum())
-            if not count:
-                continue
-            actor_h = torch.from_numpy(episode["actor_hidden"][selected][None]).to(args.device)
-            critic_h = torch.from_numpy(episode["critic_hidden"][selected][None]).to(args.device)
-            if burn_length:
-                burn = batch_arrays(episode, selected, args, burn=True)
-                with torch.no_grad():
-                    if not args.critic_only:
-                        _, actor_h = actor(**features_of(burn), hidden=actor_h)
-                    _, critic_h = critic(**features_of(burn), priv=burn["priv"], hidden=critic_h)
-            critic_optimizer.zero_grad(set_to_none=True)
-            values, _ = critic(**features_of(batch), priv=batch["priv"], hidden=critic_h.detach())
-            value_loss = (values[mask] - batch["returns"][mask]).square().mean() * .5
-            (args.value_coef * value_loss).backward()
-            nn.utils.clip_grad_norm_(critic.parameters(), args.max_grad_norm, error_if_nonfinite=True)
-            critic_optimizer.step()
-            stats["value_loss"] += float(value_loss.detach()) * count
-            if not args.critic_only:
-                actor_optimizer.zero_grad(set_to_none=True)
-                logits, _ = actor(**features_of(batch), hidden=actor_h.detach())
-                logp, entropy, kl = policy_terms(logits, batch["actions"], batch["reference_logits"])
-                advantage = (batch["advantage"] - advantage_mean) / max(advantage_std, 1e-6)
-                losses, ratio = clipped_policy_loss(logp, batch["old_logp"], advantage, args.clip)
-                entropy_total = sum(entropy.values())
-                policy_loss = losses[mask].mean()
-                loss = policy_loss + args.kl_coef * kl[mask].mean() - args.entropy_coef * entropy_total[mask].mean()
-                loss.backward()
-                nn.utils.clip_grad_norm_(actor.parameters(), args.max_grad_norm, error_if_nonfinite=True)
-                actor_optimizer.step()
-                stats["policy_loss"] += float(policy_loss.detach()) * count
-                with torch.no_grad():
-                    logratio = logp - batch["old_logp"]
-                    stats["approx_kl_old"] += float(((ratio - 1) - logratio)[mask].sum())
-                    stats["clip_fraction"] += float(((ratio - 1).abs() > args.clip)[mask].sum())
-            steps += count
+    for rows in batches:
+        batch, burn, actor_h, critic_h = training_batch_tensors(rows, args)
+        mask = batch["valid"]
+        count = int(mask.sum())
+        if not count:
+            continue
+        if burn is not None:
+            with torch.no_grad():
+                if not args.critic_only:
+                    _, actor_h = actor(**features_of(burn), hidden=actor_h)
+                _, critic_h = critic(**features_of(burn), priv=burn["priv"], hidden=critic_h)
+        critic_optimizer.zero_grad(set_to_none=True)
+        values, _ = critic(**features_of(batch), priv=batch["priv"], hidden=critic_h.detach())
+        value_loss = (values[mask] - batch["returns"][mask]).square().mean() * .5
+        (args.value_coef * value_loss).backward()
+        nn.utils.clip_grad_norm_(critic.parameters(), args.max_grad_norm, error_if_nonfinite=True)
+        critic_optimizer.step()
+        stats["value_loss"] += float(value_loss.detach()) * count
+        if not args.critic_only:
+            actor_optimizer.zero_grad(set_to_none=True)
+            logits, _ = actor(**features_of(batch), hidden=actor_h.detach())
+            logp, entropy, kl = policy_terms(logits, batch["actions"], batch["reference_logits"])
+            advantage = (batch["advantage"] - advantage_mean) / max(advantage_std, 1e-6)
+            losses, ratio = clipped_policy_loss(logp, batch["old_logp"], advantage, args.clip)
+            entropy_total = sum(entropy.values())
+            policy_loss = losses[mask].mean()
+            loss = policy_loss + args.kl_coef * kl[mask].mean() - args.entropy_coef * entropy_total[mask].mean()
+            loss.backward()
+            nn.utils.clip_grad_norm_(actor.parameters(), args.max_grad_norm, error_if_nonfinite=True)
+            actor_optimizer.step()
+            stats["policy_loss"] += float(policy_loss.detach()) * count
+            with torch.no_grad():
+                logratio = logp - batch["old_logp"]
+                stats["approx_kl_old"] += float(((ratio - 1) - logratio)[mask].sum())
+                stats["clip_fraction"] += float(((ratio - 1).abs() > args.clip)[mask].sum())
+        # One optimizer step here means one paired actor/critic minibatch update
+        # (only the critic during warmup), with the actual row count recorded.
+        stats["optimizer_steps"] += 1
+        stats["batch_windows_sum"] += len(rows)
+        stats["batch_windows_max"] = max(stats["batch_windows_max"], len(rows))
+        steps += count
     return stats, steps
+
+
+def train_episode(episode, actor, critic, actor_optimizer, critic_optimizer, args, rng, advantage_mean, advantage_std):
+    """Compatibility wrapper; the update driver streams across all episodes."""
+    return train_batches(iter_training_batches(iter([episode]), args, rng), actor, critic,
+                         actor_optimizer, critic_optimizer, args, advantage_mean, advantage_std)
 
 
 @torch.inference_mode()
@@ -605,18 +679,19 @@ def update(args):
     advantage_mean = preparation["advantage_mean"]
     advantage_std = max(0., preparation["advantage_square"] / total["valid_decisions"] - advantage_mean**2)**.5
     actor.requires_grad_(not args.critic_only)
-    aggregate, trained_steps = Counter(), 0
+    aggregate, trained_steps, buffer_stats = Counter(), 0, {}
     rng = random.Random(args.seed + args.iteration)
     for _ in range(args.epochs):
         order = prepared.copy()
         rng.shuffle(order)
-        for path in order:
-            episode = load_cache(path)
-            measures, steps = train_episode(episode, actor, critic, actor_optimizer, critic_optimizer,
-                                             args, rng, advantage_mean, advantage_std)
-            aggregate.update(measures)
-            trained_steps += steps
-            del episode
+        episodes = (load_cache(path) for path in order)
+        batches = iter_training_batches(episodes, args, rng, buffer_stats)
+        measures, steps = train_batches(batches, actor, critic, actor_optimizer, critic_optimizer,
+                                        args, advantage_mean, advantage_std)
+        maximum = measures.pop("batch_windows_max", 0)
+        aggregate.update(measures)
+        aggregate["batch_windows_max"] = max(aggregate["batch_windows_max"], maximum)
+        trained_steps += steps
     post = post_update_statistics(prepared, actor, args)
     stats = dict(iteration=args.iteration, episodes=len(prepared), decisions=total["decisions"],
                  **preparation["rejection"],
@@ -630,6 +705,11 @@ def update(args):
                  jump_presses=total["jump_presses"], climb_presses=total["climb_presses"],
                  replay_log_prob_max_error=preparation["replay_error"], replay_logits_max_error=preparation["replay_logits_error"],
                  actor_updated=not args.critic_only, kl_coef=args.kl_coef, entropy_coef=args.entropy_coef,
+                 lr=args.lr, batch=args.batch, epochs=args.epochs,
+                 optimizer_steps=aggregate["optimizer_steps"],
+                 batch_windows_max=aggregate["batch_windows_max"],
+                 batch_windows_mean=aggregate["batch_windows_sum"]/max(aggregate["optimizer_steps"], 1),
+                 **buffer_stats,
                  reward_weights=REWARD_WEIGHTS, advantage_mean=advantage_mean, advantage_std=advantage_std,
                  timeout_bootstrap="final_observation_and_recurrent_critic_state", **post,
                  **{name: aggregate[name]/max(trained_steps, 1) for name in ("policy_loss", "value_loss", "approx_kl_old", "clip_fraction")},
@@ -659,10 +739,10 @@ def main():
     command.add_argument("--threads", type=int, default=4)
     command.add_argument("--max-gpu-gb", type=float, default=3.8)
     command.add_argument("--epochs", type=int, default=2)
-    command.add_argument("--batch", type=int, default=8)
+    command.add_argument("--batch", type=int, default=32)
     command.add_argument("--segment", type=int, default=32)
     command.add_argument("--burn-in", type=int, default=16)
-    command.add_argument("--lr", type=float, default=3e-5)
+    command.add_argument("--lr", type=float, default=1e-4)
     command.add_argument("--critic-lr", type=float, default=3e-4)
     command.add_argument("--kl-coef", type=float, default=.1)
     command.add_argument("--entropy-coef", type=float, default=.003)
