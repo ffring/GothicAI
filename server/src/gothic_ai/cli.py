@@ -1117,7 +1117,10 @@ async def serve(args: argparse.Namespace) -> int:
         if state.crime_react is not None:
             directing.append(asyncio.create_task(state.crime_react.run()))
         if place_book is not None and not args.no_occasions:
-            state.occasions = Occasions(link, state.chronicle, place_book, crimes=not args.no_crimes)
+            state.occasions = Occasions(
+                link, state.chronicle, place_book, crimes=not args.no_crimes,
+                npc_crimes=not args.no_crimes and not args.no_npc_crimes,
+            )
             directing.append(asyncio.create_task(state.occasions.run()))
         if graph is not None and not args.no_questlog:
             state.questlog = QuestLog(link, graph, state.chronicle)
@@ -1193,7 +1196,10 @@ async def serve(args: argparse.Namespace) -> int:
                 book=state.book,
             )
             if state.casting is not None:
-                state.chains = ChainAuthor(state.author, state.casting, crimes=state.crimes)
+                state.chains = ChainAuthor(
+                    state.author, state.casting, crimes=state.crimes,
+                    npc_crimes=not args.no_crimes and not args.no_npc_crimes,
+                )
                 if state.occasions is not None:
                     state.showrunner = Showrunner(
                         state.occasions,
@@ -1362,6 +1368,8 @@ async def serve(args: argparse.Namespace) -> int:
                 task.cancel()
             if state.questlog is not None:
                 await state.questlog.close()
+            if state.book is not None:
+                await state.book.close()
             if state.crime_react is not None:
                 await state.crime_react.close()
             if state.npc_crime_law is not None:
@@ -1570,6 +1578,17 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario npc_deeds: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "npc_director":
+                assert state.npc_will is not None and state.showrunner is not None
+                assert state.chests is not None and state.dialogue is not None and state.talk is not None
+                assert state.witnesses is not None and args.trace_dir is not None
+                results = await scenarios.npc_director(
+                    link, state.npc_will, state.showrunner, state.chests, state.dialogue,
+                    state.talk, state.witnesses, str(Path(args.trace_dir).parent),
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario npc_director: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "npc_will":
                 assert state.npc_will is not None and state.chests is not None
@@ -2683,6 +2702,7 @@ def main() -> None:
             "crimes",
             "crime_react",
             "npc_deeds",
+            "npc_director",
             "npc_will",
             "npc_far",
             "frame",

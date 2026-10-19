@@ -845,6 +845,194 @@ async def test_no_crimes_does_not_reintroduce_saved_crimes_in_the_brief(graph):
         assert crime["id"] not in brief.text()
 
 
+def enable_npc_crime(w, **change):
+    enable_crime(w)
+    crime = {
+        "fact": "npc_crime", "id": "A/npc-deed-1", "kind": "theft", "culprit": VINO,
+        "victim": LOBART, "owner": LOBART, "community": "farm", "item": "ITFO_BREAD",
+        "count": 2, "place": HOME, "waypoint": "NW_FARM1_INHOUSE_01",
+        "day": 10, "hour": 7, "minute": 45, "witnesses": [HILDA], **change,
+    }
+    w.chronicle.record(crime)
+    return crime
+
+
+def npc_rumor(crime, to, **change):
+    return {
+        "fact": "rumor", "quest": f"npc_crime_seen:{crime['id']}", "kind": "npc_theft",
+        "subject": crime["culprit"], "about": crime["victim"], "from": HILDA, "to": to,
+        "hops": 1, **change,
+    }
+
+
+async def test_npc_crime_brief_keeps_truth_and_live_property_separate_from_each_person(graph):
+    async with world(graph) as w:
+        crime = enable_npc_crime(w, far=True)
+        cid = crime["id"]
+        for fact in [
+            {"fact": "npc_crime_seen", "npc": HILDA, "crime": cid},
+            {"fact": "crime_seen", "npc": DEAD, "crime": cid},
+            npc_rumor(crime, OWN),
+            {"fact": "npc_crime_suspected", "npc": XARDAS, "crime": cid, "suspect": HILDA},
+            {"fact": "blamed", "id": "B1", "npc": LOBART, "culprit": HILDA,
+             "crime": cid, "because": "hero_words", "truth": False},
+            {"fact": "npc_crime_known", "crime": cid, "community": "farm", "via": HILDA},
+            {"fact": "npc_crime_settled", "crime": cid, "by": "GUARD", "how": "fight"},
+            {"fact": "exposed", "npc": LOBART, "liar": HILDA, "testimony": "T1"},
+            {"fact": "betrayed", "npc": DEAD, "deal": "unrelated", "to": "OTHER"},
+        ]:
+            w.chronicle.record(fact)
+        evaluate = w.fake.evaluate
+
+        def with_inventory(expr, npc):
+            if expr[:2] == ["call", "NPC_HASITEMS"]:
+                return {VINO: 0, LOBART: 1, "HERO": 2}.get(expr[2][1], 0)
+            return evaluate(expr, npc)
+
+        w.fake.evaluate = with_inventory
+        before = w.chronicle.facts()
+        case = (await w.showrunner.brief(occasion(kind="deed", crime=cid, deed=crime))).npc_crimes[cid]
+        assert case["truth"]["culprit"] == VINO and case["truth"]["distance"] == "far"
+        assert case["truth"]["item_holders_checked"] is True
+        assert case["truth"]["item_holders"] == [
+            {"npc": LOBART, "count": 1}, {"npc": "PLAYER", "count": 2},
+        ]
+        known = {k["npc"]: k for k in case["knowledge"]}
+        assert (known[HILDA]["degree"], known[HILDA]["suspect"]) == ("seen", VINO)
+        assert (known[OWN]["degree"], known[OWN]["source"]) == ("heard", HILDA)
+        assert (known[XARDAS]["degree"], known[XARDAS]["suspect"]) == ("suspects", HILDA)
+        assert (known[LOBART]["degree"], known[LOBART]["source"], known[LOBART]["suspect"]) == (
+            "blames", "PLAYER", HILDA,
+        )
+        assert not any("truth" in k for k in case["knowledge"])
+        assert DEAD not in known
+        assert case["belief_truth"] == [
+            {"blamed": "B1", "npc": LOBART, "suspect": HILDA, "truth": False, "refuted": False},
+        ]
+        assert case["law"] == {"community": "farm", "known": True, "settled": True}
+        assert [f["fact"] for f in case["people_context"]] == ["exposed"]
+        assert w.chronicle.facts() == before
+
+
+@pytest.mark.parametrize("via", ["seen", "heard", "testimony", "blames", "suspects", "unknown"])
+async def test_npc_crime_canon_uses_own_knowledge_belief_or_the_victims_loss(graph, via):
+    async with world(graph) as w:
+        crime = enable_npc_crime(w)
+        cid = crime["id"]
+        if via == "seen":
+            w.chronicle.record({"fact": "npc_crime_seen", "npc": HILDA, "crime": cid})
+        elif via == "heard":
+            w.chronicle.record(npc_rumor(crime, HILDA, **{"from": LOBART}))
+        elif via == "testimony":
+            w.chronicle.record({"fact": "testimony", "id": "T1", "npc": HILDA,
+                                "witness": LOBART, "about": VINO, "crime_told": [cid]})
+        elif via == "blames":
+            w.chronicle.record({"fact": "blamed", "id": "B1", "npc": HILDA,
+                                "culprit": VINO, "crime": cid, "because": "hunch", "truth": True})
+        elif via == "suspects":
+            w.chronicle.record({"fact": "npc_crime_suspected", "npc": HILDA,
+                                "crime": cid, "suspect": VINO})
+        brief = await w.showrunner.brief(occasion(kind="deed", crime=cid, deed=crime))
+        assert not w.showrunner.canon(Proposal.of(proposal(giver=LOBART, crime=cid)), brief)
+        errors = w.showrunner.canon(Proposal.of(proposal(giver=HILDA, crime=cid)), brief)
+        assert bool(errors) is (via in {"unknown", "suspects"})
+        assert "id в crime" in str(w.showrunner.canon(Proposal.of(proposal()), brief))
+        # Even a thief with personal evidence cannot commission a line about his own deed.
+        w.fake.npc_states[VINO]["distance"] = 200
+        brief = await w.showrunner.brief(occasion(kind="deed", crime=cid, deed=crime))
+        assert "виновник" in str(w.showrunner.canon(Proposal.of(proposal(giver=VINO, crime=cid)), brief))
+
+
+async def test_npc_crime_line_and_its_knowledge_survive_load_without_entering_hero_cases(graph):
+    async with world(graph, proposal(giver=LOBART, crime="A/npc-deed-1")) as w:
+        crime = enable_npc_crime(w)
+        w.chronicle.record({"fact": "npc_crime_seen", "npc": HILDA, "crime": crime["id"]})
+        current = occasion(kind="deed", crime=crime["id"], deed=crime)
+        result = await w.showrunner.decide(current)
+        assert result["fact"] == "line" and result["crime"] == crime["id"]
+        assert w.chains.chain.await_args.kwargs["crime"] == crime["id"]
+        assert crime["id"] not in w.showrunner._crime_briefs(current, w.chronicle.facts())
+        before = (await w.showrunner.brief(current)).npc_crimes
+        await load(w.fake, w.chronicle, branch="restored")
+        assert w.showrunner.lines == [result]
+        assert (await w.showrunner.brief(current)).npc_crimes == before
+
+
+@pytest.mark.parametrize("how", ["unpaid", "no_show"])
+async def test_broken_npc_promise_brief_names_promise_failure_and_hearers_without_a_false_giver(graph, how):
+    async with world(graph) as w:
+        enable_crime(w)
+        await w.showrunner.occasions.poll()
+        await w.showrunner.occasions.next()
+        promise = {"fact": "deal", "deal": "D1", "npc": HILDA, "name": "Хильда",
+                   "npc_later": {"items": {"ITMI_GOLD": 10}, "day": 12}}
+        failure = {"fact": "npc_broken", "deal": "D1", "npc": HILDA, "how": how,
+                   "witnesses": [LOBART] if how == "unpaid" else [], "day": 12, "hour": 8, "minute": 0}
+        w.chronicle.record(promise)
+        w.chronicle.record(failure)
+        await w.showrunner.occasions.poll()
+        assert w.showrunner.occasions.pending == []
+        assert not w.llm.calls
+        brief = await w.showrunner.brief(occasion())
+        case = brief.npc_broken["D1"]
+        assert case["promise"] == promise and case["failed"]["how"] == how
+        assert case["heard"] == failure["witnesses"]
+        assert case["claimant"] == "PLAYER" and case["giver"] is None
+        assert "герой не может быть заказчиком" in brief.text()
+        assert (await w.showrunner.brief(occasion(people=[VINO]))).npc_broken == {}
+        await load(w.fake, w.chronicle, branch="restored")
+        assert (await w.showrunner.brief(occasion())).npc_broken == brief.npc_broken
+        assert not w.llm.calls
+
+
+@pytest.mark.parametrize("current", [
+    occasion(people=[], also=[occasion(people=[HILDA])]),
+    occasion(kind="deed", people=[], deed={"fact": "npc_crime", "culprit": HILDA}),
+    occasion(kind="vanilla", people=[], vanilla={"giver": HILDA}),
+    occasion(people=[LOBART]),
+])
+async def test_broken_npc_promise_context_follows_people_of_the_current_occasion(graph, current):
+    async with world(graph) as w:
+        enable_crime(w)
+        # Keep an older relevant breach despite unrelated recent breaches elsewhere.
+        w.chronicle.record({"fact": "npc_broken", "deal": "D1", "npc": HILDA,
+                            "how": "unpaid", "witnesses": [LOBART]})
+        for i in range(12):
+            w.chronicle.record({"fact": "npc_broken", "deal": f"AWAY_{i}", "npc": VINO,
+                                "how": "no_show"})
+        brief = await w.showrunner.brief(current)
+        assert set(brief.npc_broken) == {"D1"}
+        assert not w.llm.calls
+
+
+async def test_npc_director_switch_hides_saved_npc_cases_and_allows_none_with_reason(graph):
+    reason = "Лобарт занят своим делом; сейчас новая линия не нужна."
+    async with world(graph, proposal(kind="none", reason=reason)) as w:
+        crime = enable_npc_crime(w)
+        result = await w.showrunner.decide(occasion(kind="deed", crime=crime["id"], deed=crime))
+        assert result["fact"] == "line_none" and result["reason"] == reason
+        w.chains.chain.assert_not_awaited()
+        w.showrunner.occasions.npc_crimes = False
+        brief = await w.showrunner.brief(occasion())
+        assert brief.npc_crimes == {} and crime["id"] not in brief.text()
+
+
+async def test_director_cast_card_keeps_dishonesty_and_greed_for_npc_rules(graph):
+    from gothic_ai.npc_cheat import decide
+
+    async with world(graph) as w:
+        person = Person(
+            ru="Ты — жадный лжец, готовый обмануть ради наживы.", en="A greedy liar.",
+            greed=5, honesty=1, courage=3, talk=3, pushy=3, strangers=3,
+            voice="A rough middle aged man with a low voice.",
+        )
+        await w.author.patches.introduce(spec(), person.model_dump())
+        cards = w.casting.cast.cards()
+        assert (cards[OWN].honesty, cards[OWN].greed) == (1, 5)
+        intent = decide(w.chronicle, OWN, "D1", ["contract"], cards=cards)
+        assert intent["keeps"] is False
+
+
 @pytest.mark.parametrize(
     ("bad", "reason"),
     [

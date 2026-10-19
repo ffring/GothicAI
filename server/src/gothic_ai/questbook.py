@@ -1,6 +1,6 @@
 """Quests as objects (docs/director.md, stage 3, layer 2): one model of a quest of the director's, from which
 the code builds the primitives of the story graph. Nothing here runs a quest: the bridge and the graph run
-what is built.
+what is built. Server-owned blame goals set their declared variables after an accepted accusation.
 
 A quest has a giver, a journal topic, the dialog that gives it, stages, a reward, maybe a deadline and the
 quest it opens after. A stage has the journal entry it begins with and goals; all done, the next stage
@@ -13,6 +13,7 @@ begins, the last one ends the quest. The goals are what the code checks:
   while the bridge forgets creatures under a tag (story_spawn) after one;
 - `wait` — so many days gone: a trigger on Wld_GetDay and the day the stage began.
 - `vanilla` — a scripts' quest reaches a state: a state trigger on its variable.
+- `blame` — convince the giver who stole: a server-set variable after his `blamed` fact, true or false.
 The last stage ends in a talk: its one goal that is a dialog (bring or talk) is the turn-in, which pays and
 closes the quest.
 
@@ -35,6 +36,7 @@ the code owns the truth, the npc's their beliefs.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 from collections.abc import Callable
@@ -48,7 +50,7 @@ from .gamedata.storygraph import QUEST_STATES, Expr, StoryGraph
 from .journal import Journal
 from .llm import Tool, ToolCall
 from .places import PlaceBook
-from .protocol import DialogChosen, GameMessage, Session, Snapshot, TriggerFired
+from .protocol import DialogChosen, GameMessage, Loading, Session, Snapshot, TriggerFired
 from .story import QUEST, StoryPatches
 from .turn import ToolOutcome
 from .validator import (
@@ -77,7 +79,8 @@ Op = dict[str, Any]
 Step = dict[str, Any]
 
 BRING, TALK, REACH, HAVE, KILL, WAIT, VANILLA = "bring", "talk", "reach", "have", "kill", "wait", "vanilla"
-KINDS = (BRING, TALK, REACH, HAVE, KILL, WAIT, VANILLA)
+BLAME = "blame"
+KINDS = (BRING, TALK, REACH, HAVE, KILL, WAIT, VANILLA, BLAME)
 VANILLA_STATES = {name: value for value, name in QUEST_STATES.items() if value != LOG_OBSOLETE}
 TALKS = (BRING, TALK)  # the goals that are dialogs
 GOLD = "ITMI_GOLD"
@@ -128,6 +131,7 @@ class Goal:
     journal: str = ""  # an entry when it is done
     quest: str = ""  # vanilla: a quest variable of the scripts
     state: str = ""  # vanilla: running, success, failed
+    crime: str = ""  # blame: the NPC deed whose culprit the giver must believe
 
     @classmethod
     def of(cls, d: dict[str, Any]) -> Goal:
@@ -333,9 +337,9 @@ def build(q: Quest) -> list[Op]:
         variables[day_var(q)] = 0
     if q.days:
         variables[due_var(q)] = 0
-    for k, s in enumerate(q.stages[:-1], 1):
+    for k, s in enumerate(q.stages, 1):
         for j, g in enumerate(s.goals, 1):
-            if g.kind in TALKS:
+            if g.kind == BLAME or (g.kind in TALKS and k < len(q.stages)):
                 variables[goal_id(q, k, j)] = 0
     ops: list[Op] = [{"op": "vars", "vars": variables}]
 
@@ -371,6 +375,8 @@ def build(q: Quest) -> list[Op]:
             if g.kind in TALKS and last:
                 continue
             done.append(gid)
+            if g.kind == BLAME:
+                continue  # The server sets this variable; no world truth check may decide belief.
             if g.kind not in TALKS:
                 ops.append(
                     triggers.trigger(
@@ -471,6 +477,7 @@ class Ground:
     quests: dict[str, Quest] = field(default_factory=dict)  # the branch's others
     story: Story | None = None  # vanilla graph, its current state and the branch's changes
     waypoint: Callable[[str], bool] | None = None  # if known: reach needs a waypoint, not a freepoint
+    npc_crimes: set[str] = field(default_factory=set)  # blame may refer only to actual NPC deeds
 
 
 def problems(q: Quest, ground: Ground) -> list[str]:
@@ -638,6 +645,11 @@ def _goal(g: Goal, ground: Ground, killed: set[str], held: set[str]) -> list[str
                 errors.append(f"нет такого NPC {n}")
     if g.kind == WAIT and not 1 <= g.days <= MAX_WAIT:
         errors.append(f"ждать: от 1 до {MAX_WAIT} дней, а не {g.days}")
+    if g.kind == BLAME:
+        if not g.crime or g.crime not in ground.npc_crimes:
+            errors.append("blame: нужно существующее дело NPC")
+        if g.npc or g.item or g.point or g.npcs or g.talk is not None:
+            errors.append("blame: указывается только crime; убедить нужно заказчика")
     if g.kind == VANILLA:
         errors += _vanilla({"kind": "quest", "quest": g.quest, "state": g.state}, ground)
     return errors
@@ -701,9 +713,23 @@ class QuestBook:
         self.rules = Rules.of(graph)
         self.quests: dict[str, Quest] = {}  # by id, in the order they were made
         self._version = -1
+        self._generation = 0
+        self._blame_tasks: set[asyncio.Task[Any]] = set()
+        self._blame_lock = asyncio.Lock()
+        chronicle.on_fact.append(self._on_fact)
         link.listeners.append(self._on_message)
         if dialogue is not None:
             dialogue.extensions.append(self)
+
+    async def close(self) -> None:
+        if self._on_fact in self.chronicle.on_fact:
+            self.chronicle.on_fact.remove(self._on_fact)
+        if self._on_message in self.link.listeners:
+            self.link.listeners.remove(self._on_message)
+        for task in tuple(self._blame_tasks):
+            task.cancel()
+        if self._blame_tasks:
+            await asyncio.gather(*tuple(self._blame_tasks), return_exceptions=True)
 
     # --- the branch -----------------------------------------------------------------------------
 
@@ -940,6 +966,7 @@ class QuestBook:
             quests=self.all(),
             story=await self.director.story() if vanilla else None,
             waypoint=lambda p: places is not None and places.is_waypoint(p),
+            npc_crimes={str(f["id"]) for f in self.chronicle.facts("npc_crime")},
         )
 
     async def make(self, q: Quest, *, gold: int | None = None, xp: int | None = None) -> list[str]:
@@ -1005,7 +1032,10 @@ class QuestBook:
 
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
-            case Session():
+            case Loading() | Session():
+                self._generation += 1
+                for task in tuple(self._blame_tasks):
+                    task.cancel()
                 self._version = -1
             case DialogChosen(made=True):
                 for q in self.all().values():
@@ -1014,6 +1044,61 @@ class QuestBook:
             case TriggerFired():
                 for q in self.all().values():
                     self._fired(q, msg.id)
+
+    def _on_fact(self, fact: Fact) -> None:
+        if fact.get("fact") != "blamed":
+            return
+        task = asyncio.create_task(self._settle_blame(list(self.all().values())))
+        self._blame_tasks.add(task)
+        task.add_done_callback(self._blame_tasks.discard)
+
+    async def _settle_blame(self, quests: list[Quest]) -> None:
+        """A belief satisfies the task, even a lie. The stage graph still advances and pays normally."""
+        generation = self._generation
+        async with self._blame_lock:
+            if generation != self._generation:
+                return
+            for q in quests:
+                p = self.progress(q.id)
+                if p.state != "given" or not 1 <= p.stage <= len(q.stages):
+                    continue
+                goals = [(j, g) for j, g in enumerate(q.stages[p.stage - 1].goals, 1) if g.kind == BLAME]
+                if not goals:
+                    continue
+                facts = self.chronicle.facts()
+                began = max((i for i, f in enumerate(facts) if f.get("id") == q.id and (
+                    f.get("fact") == "story_quest_given" and p.stage == 1
+                    or f.get("fact") == "story_quest_stage" and f.get("stage") == p.stage
+                )), default=len(facts))
+                names = [q.id, stage_var(q), *(goal_id(q, p.stage, j) for j, _ in goals)]
+                try:
+                    state = (await self.link.story_state(vars=names)).get("vars") or {}
+                    if generation != self._generation:
+                        return
+                    if state.get(q.id) != LOG_RUNNING or state.get(stage_var(q)) != p.stage:
+                        continue
+                    for j, goal in goals:
+                        gid = goal_id(q, p.stage, j)
+                        if state.get(gid):
+                            continue
+                        belief = next((f for f in facts[began + 1:] if f.get("fact") == "blamed"
+                                       and f.get("crime") == goal.crime and f.get("npc") == q.giver), None)
+                        if belief is None:
+                            continue
+                        recorded = any(f.get("fact") == "story_quest_goal" and f.get("id") == q.id
+                                       and f.get("goal") == gid for f in facts)
+                        effects: list[dict[str, Any]] = [{"do": "set", "var": gid, "value": 1}]
+                        if goal.journal and not recorded:
+                            effects.append({"do": "journal", "topic": q.title, "text": goal.journal,
+                                            "status": "LOG_RUNNING"})
+                        await self.link.story_effect(q.giver, effects)
+                        if generation != self._generation:
+                            return
+                        if not recorded:
+                            self._fact(q, "story_quest_goal", stage=p.stage, goal=gid,
+                                       crime=goal.crime, blamed=belief.get("id", ""))
+                except (GameError, TimeoutError) as err:
+                    log.warning("questbook: blame goal: %s", err)
 
     def _chosen(self, q: Quest, node: str, npc: str, talk: Talk | None) -> None:
         if node == give_node(q) and self.progress(q.id).state == "open":
@@ -1046,6 +1131,7 @@ class QuestBook:
         ]
         if not mine:
             return
+        await self._settle_blame(mine)
         names = [v for q in mine for v in (q.id, stage_var(q))]
         try:
             vars = (await self.link.story_state(vars=names)).get("vars") or {}

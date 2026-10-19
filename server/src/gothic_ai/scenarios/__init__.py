@@ -47,6 +47,7 @@ from .memprobe import memprobe_scenario as memprobe_scenario
 from .neural_load import neural_load_scenario as neural_load_scenario
 from .neural_soak import neural_soak_scenario as neural_soak_scenario
 from .npc_deeds import npc_deeds as npc_deeds
+from .npc_director import npc_director as npc_director
 from .npc_far import npc_far as npc_far
 from .npc_life import chests_scenario as chests_scenario
 from .npc_life import day_scenario as day_scenario
