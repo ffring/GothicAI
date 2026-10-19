@@ -80,7 +80,7 @@ RUN="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 STAGING="$OUT/$RUN"
 mkdir -p "$STAGING/content" "$STAGING/tools"
 uv run --no-project --with numpy --with pillow python3 "$ROOT/scripts/content/pack_materials.py" \
-  --registry "$REGISTRY" --content-root "$CONTENT" --output "$STAGING/content" "${PACK_ARGS[@]}"
+  --registry "$REGISTRY" --content-root "$CONTENT" --output "$STAGING/content" ${PACK_ARGS[@]+"${PACK_ARGS[@]}"}
 
 # Mirror scripts/ryzen.sh's content hash exactly. The engine is reused only if
 # its entire current source tree, including uncommitted inputs, matches cache.

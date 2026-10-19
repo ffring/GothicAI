@@ -11,7 +11,8 @@ replaces exactly one fixture texture, leaving the other city material original.
 The DDS compressor and mip generation are shared with test-material.py:
 opaque albedo and ORM are DXT1; normals are DXT5nm (X alpha, Y green).
 Input normals are XYZ encoded in [0, 1], with the generator's Y convention
-already normalized by the generation recipe. No game pixels are read.
+is OpenGL (+Y toward the image top). Packing flips green into the engine's
+positive texture-V basis, matching the synthetic fixture's height gradient. No game pixels are read.
 """
 
 from __future__ import annotations
@@ -78,6 +79,7 @@ def read_maps(record: dict, content_root: Path) -> dict[str, np.ndarray]:
     if any(value.shape[:2] != (h, w) for value in maps.values()):
         raise ValueError(f"{record['id']}: all maps must have the same size")
     normal = maps["normal"] * 2 - 1
+    normal[:, :, 1] *= -1  # PNG +Y up -> engine bitangent follows texture V down.
     if (normal[:, :, 2] < -0.01).any():
         raise ValueError(f"{record['id']}: DXT5nm requires a positive-Z tangent normal")
     normal /= np.maximum(np.linalg.norm(normal, axis=2, keepdims=True), 1e-8)

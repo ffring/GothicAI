@@ -11,7 +11,6 @@ import gc
 import json
 import os
 from pathlib import Path
-import socket
 import subprocess
 import time
 import urllib.request
@@ -75,6 +74,7 @@ def prepare(path):
                     'roughness_base': roughness, 'tileable': True,
                     'tiling': 'native feature rolling and padded decode' if base == 'stablematerials' else 'circular Conv2d padding in UNet and VAE, including asymmetric downsample padding',
                     'height_filter': {'sigma_small_px_at_1024': 2, 'sigma_large_px_at_1024': 32, 'normal_strength': .025},
+                    'normal_convention': 'OpenGL: X right, Y up, Z toward viewer; DDS pack flips Y for engine texture-V basis',
                     'input': 'text only; map estimators see only the generated source image'},
                 'generation': {'outcome': 'pending'},
             }
@@ -190,13 +190,12 @@ def run_stage(records, registry, root, stage):
     from PIL import Image
     torch.set_num_threads(4)
     torch.backends.cuda.matmul.allow_tf32 = True
-    gpu_state(root, stage, 'load', 3000 if stage == 'stablematerials' else 8500)
+    gpu_state(root, stage, 'load', 8500)
     before_load = time.monotonic()
     if stage == 'sdxl':
         from diffusers import StableDiffusionXLPipeline
         pipe = StableDiffusionXLPipeline.from_pretrained(str(model_path(records, root, 'sdxl')), torch_dtype=torch.float16, variant='fp16', use_safetensors=True, local_files_only=True, add_watermarker=False)
         circular(pipe.unet); circular(pipe.vae)
-        pipe.enable_attention_slicing()
         pipe.enable_model_cpu_offload()
     elif stage == 'stablematerials':
         from stable_materials_adapter import load_pipeline
@@ -206,7 +205,6 @@ def run_stage(records, registry, root, stage):
         cls = MarigoldNormalsPipeline if stage == 'normals' else MarigoldIntrinsicsPipeline
         pipe = cls.from_pretrained(str(model_path(records, root, stage)), torch_dtype=torch.float16, variant='fp16', use_safetensors=True, local_files_only=True)
         circular(pipe.unet); circular(pipe.vae)
-        pipe.enable_attention_slicing()
         pipe.enable_model_cpu_offload()
     load_seconds = time.monotonic() - before_load
     for material, _, _ in MATERIALS:
@@ -260,7 +258,7 @@ def run_stage(records, registry, root, stage):
                 save_maps(root, record, maps)
         record['generation'][stage] = {'seconds': round(time.monotonic()-started,3), 'load_seconds': round(load_seconds,3),
             'peak_allocated_mib': round(torch.cuda.max_memory_allocated()/1024**2,1), 'peak_reserved_mib': round(torch.cuda.max_memory_reserved()/1024**2,1), 'gpu_before': sample,
-            'host': socket.gethostname(), 'utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+            'host': 'dev-ubuntu', 'utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
         print(material, stage, json.dumps(record['generation'][stage]), flush=True)
         write_registry(registry, records)
     del pipe

@@ -6,7 +6,14 @@ STAGE="${1:?stage required}"
 case "$STAGE" in sdxl|normals|appearance|stablematerials) ;; *) exit 2 ;; esac
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 started=$SECONDS
-while pgrep -fl Gothic2Notr; do
+while true; do
+  set +e
+  # Exact process name excludes other agents whose prompt mentions the binary.
+  LC_ALL=C pgrep -lx Gothic2Notr
+  game_status=$?
+  set -e
+  [[ "$game_status" == 1 ]] && break
+  [[ "$game_status" == 0 ]] || { echo "Mac game preflight failed: pgrep exit $game_status" >&2; exit 1; }
   (( SECONDS - started < 3600 )) || { echo 'Mac game still running after 60 minutes; no units stopped' >&2; exit 75; }
   echo 'Waiting for the Mac game before temporarily stopping a model service'
   sleep 30
