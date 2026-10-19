@@ -2,6 +2,13 @@
 
 TARGET_LUMINANCE_TOLERANCE = 0.002
 CITY_2_SETS = frozenset({"city-2", "city-2-imagegen"})
+CITY_3_SET = "city-3"
+CITY_3_DECISIONS = frozenset({"include", "module", "panel", "strip"})
+CITY_3_EXCLUDED_CLASSES = frozenset({
+    "cloth_panel", "foliage_panel", "rope_panel", "rope_strip", "net_panel", "net_strip",
+    "iron_panel", "banded_metal_tile", "iron_strip",
+})
+PLACEMENT_SETS = CITY_2_SETS | {CITY_3_SET}
 
 CITY_2_MODULES = (
     "NW_CITY_WALL_03.TGA",
@@ -34,9 +41,13 @@ ANTITILE_BY_CLASS = {
 
 
 def selected_rows(rows, set_name):
-    """Keep CSV order and deduplicate the facade/include overlap in city-2 sets."""
-    selected = [row for row in rows if row.get("decision") == "include"
-                or (set_name in CITY_2_SETS and row.get("texture") in CITY_2_MODULES)]
+    """Keep CSV order and use one scope for generation, packing and measurement."""
+    if set_name == CITY_3_SET:
+        selected = [row for row in rows if row.get("decision") in CITY_3_DECISIONS
+                    and row.get("class") not in CITY_3_EXCLUDED_CLASSES]
+    else:
+        selected = [row for row in rows if row.get("decision") == "include"
+                    or (set_name in CITY_2_SETS and row.get("texture") in CITY_2_MODULES)]
     names = [row["texture"] for row in selected]
     if len(names) != len(set(names)):
         raise ValueError(f"mapping repeats selected texture in {set_name}")
@@ -44,5 +55,5 @@ def selected_rows(rows, set_name):
 
 
 def antitile_mode(row):
-    """The city-2 brief uses class policy for homogeneous surfaces."""
+    """Homogeneous surfaces use class policy; authored modules keep their UVs."""
     return ANTITILE_BY_CLASS[row["class"]] if row["decision"] == "include" else "off"

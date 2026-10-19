@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure city-2 original brightness as scalars, optionally updating only that CSV column.
+"""Measure original brightness as scalars, optionally updating only that CSV column.
 
     python scripts/content/measure_luminance.py --extractor /path/to/texture-luminance \
         --game '/path/to/Gothic II' --write
@@ -35,7 +35,7 @@ def read_mapping(path):
     return rows
 
 
-def parse_measurements(value, expected):
+def parse_measurements(value, expected, set_name="city-2"):
     reader = csv.DictReader(io.StringIO(value), strict=True)
     if reader.fieldnames != ["texture", "target_luminance"]:
         raise ValueError("extractor must return only texture,target_luminance")
@@ -51,27 +51,27 @@ def parse_measurements(value, expected):
             raise ValueError(f"{texture}: target_luminance must be finite and in [0, 1]")
         result[texture] = luminance
     if set(result) != set(expected):
-        raise ValueError("extractor texture set differs from the city-2 pilot")
+        raise ValueError(f"extractor texture set differs from {set_name}")
     return result
 
 
-def measure(extractor, game, rows):
-    names = [row["texture"] for row in selected_rows(rows, "city-2")]
+def measure(extractor, game, rows, set_name="city-2"):
+    names = [row["texture"] for row in selected_rows(rows, set_name)]
     if not names:
-        raise ValueError("city-2 pilot has no textures")
+        raise ValueError(f"{set_name} has no textures")
     result = subprocess.run([str(extractor), str(game), *names], check=True,
                             capture_output=True, text=True)
-    return parse_measurements(result.stdout, names)
+    return parse_measurements(result.stdout, names, set_name)
 
 
-def update_mapping(path, rows, measurements):
-    names = {row["texture"] for row in selected_rows(rows, "city-2")}
+def update_mapping(path, rows, measurements, set_name="city-2"):
+    names = {row["texture"] for row in selected_rows(rows, set_name)}
     if set(measurements) != names:
-        raise ValueError("measurement texture set differs from the city-2 pilot")
+        raise ValueError(f"measurement texture set differs from {set_name}")
     if any(isinstance(value, bool) or not isinstance(value, (int, float))
            or not math.isfinite(value) or not 0 <= value <= 1 for value in measurements.values()):
         raise ValueError("target_luminance must be finite and in [0, 1]")
-    # Preserve every pre-existing field, including any non-pilot scalar.
+    # Preserve every pre-existing field, including scalars outside this set.
     updated = [dict(row, target_luminance=(format(measurements[row["texture"]], ".12g")
                     if row["texture"] in names else row.get("target_luminance", ""))) for row in rows]
     temporary = None
@@ -94,13 +94,15 @@ def main(argv=None):
     parser.add_argument("--extractor", type=Path, required=True)
     parser.add_argument("--game", type=Path, required=True)
     parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
+    parser.add_argument("--set", dest="set_name", choices=("city-2", "city-3"), default="city-2",
+                        help="material scope to measure (default: city-2)")
     parser.add_argument("--write", action="store_true", help="atomically add/update only target_luminance")
     args = parser.parse_args(argv)
     try:
         rows = read_mapping(args.mapping)
-        values = measure(args.extractor, args.game, rows)
+        values = measure(args.extractor, args.game, rows, args.set_name)
         if args.write:
-            update_mapping(args.mapping, rows, values)
+            update_mapping(args.mapping, rows, values, args.set_name)
         writer = csv.writer(sys.stdout, lineterminator="\n")
         writer.writerow(("texture", "target_luminance"))
         writer.writerows((texture, format(value, ".12g")) for texture, value in values.items())

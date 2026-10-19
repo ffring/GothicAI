@@ -249,7 +249,7 @@ def make_set_sheet(set_name: str, records: list[dict], root: Path, output: Path,
     sheet = Image.new("RGB", (width, height), (24, 28, 34))
     draw = ImageDraw.Draw(sheet)
     draw.text((margin, 14), f"Khorinis / {set_name} / {len(records)} materials", font=font(25), fill=(242, 243, 245))
-    draw.text((margin, 47), "FLUX.1-schnell + generated height filter / same camera, oblique light and exposure", font=font(14), fill=(169, 181, 197))
+    draw.text((margin, 47), f"{set_generator_label(records)} / same camera, oblique light and exposure", font=font(14), fill=(169, 181, 197))
     for index, record in enumerate(records):
         maps, reason = read_maps(record, root)
         if maps is None:
@@ -292,6 +292,13 @@ def make_set_sheet(set_name: str, records: list[dict], root: Path, output: Path,
     destination = output / "materials.jpg"
     sheet.save(destination, quality=88, optimize=True, subsampling=0)
     return destination
+
+
+def set_generator_label(records: list[dict]) -> str:
+    """Describe the generators actually selected for this sheet."""
+    names = {"imagegen-filter": "image_gen", "flux-filter": "FLUX.1-schnell"}
+    generators = sorted({names.get(record["pipeline"], record["pipeline"]) for record in records})
+    return " + ".join(generators) + " + generated height filter"
 
 
 def read_registry(path: Path) -> dict[str, dict[str, dict]]:

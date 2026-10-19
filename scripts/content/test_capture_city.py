@@ -13,6 +13,7 @@ import pytest
 SCRIPT = Path(__file__).with_name("capture-city.sh")
 SCENARIO = SCRIPT.with_name("city.bench")
 CITY2_SCENARIO = SCRIPT.with_name("city-2.bench")
+CITY3_SCENARIO = SCRIPT.with_name("city-3.bench")
 ROOT = SCRIPT.parents[2]
 
 
@@ -67,8 +68,70 @@ def test_city2_preserves_city_camera_and_captures_house_in_both_lights():
     assert "goto pos 9162 2350 3207" in scenario
 
 
-@pytest.mark.parametrize("set_name", ["city-2", "city-2-imagegen"])
-def test_city2_remote_rejects_other_set_directory(set_name):
+def test_city3_preserves_city_measurement_and_covers_every_requested_view():
+    def commands(path):
+        return [line.split("#", 1)[0].strip() for line in path.read_text().splitlines()
+                if line.split("#", 1)[0].strip()]
+
+    original = commands(SCENARIO)
+    scenario = commands(CITY3_SCENARIO)
+    end = original.index("shot city_night") + 1
+    assert scenario[:end] == original[:end]
+    at_shot = {}
+    hour = None
+    for command in scenario:
+        if command.startswith("set time "):
+            hour = command.removeprefix("set time ")
+        elif command.startswith("shot "):
+            assert command[5:] not in at_shot
+            at_shot[command[5:]] = hour
+    day = {"city", "market", "harbour", "upper", "house", "facade_close",
+           "facade_corner", "facade_full", "upper_modules", "harbour_modules", "interior_modules"}
+    assert set(at_shot) == day | {"city_a", "city_night", "market_night", "facade_close_night"}
+    assert all(at_shot[name] == "12 0" for name in day)
+    assert all(at_shot[name] == "23 0" for name in ("city_night", "market_night", "facade_close_night"))
+    assert scenario.count("cam hold") == 6
+
+
+def test_city3_census_tour_visits_selected_remote_surfaces_without_extra_shots(tmp_path):
+    scenario = tmp_path / "city.bench"
+    prefix = CITY3_SCENARIO.read_text()
+    scenario.write_text(prefix)
+    index = tmp_path / "materials.json"
+    targets = ("NW_CITY_DOOR_02.TGA", "NW_CITY_DUNGEONFLOOR_03.TGA")
+    index.write_text(json.dumps({name: {"albedo": "albedo.dds"} for name in targets}))
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--append-census", str(scenario), str(SCRIPT.with_name("city-intent.bench")), str(index)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    prepared = scenario.read_text()
+    assert prepared.startswith(prefix)
+    tail = prepared[len(prefix):]
+    assert "Census tour: 2 packed materials; no additional shots" in result.stdout
+    assert "goto pos 1350 -2385 820" in tail
+    assert "goto pos 30730 5079 -14675" in tail
+    assert tail.count("cam hold") == 2
+    assert "shot " not in tail
+    assert "rec " not in tail
+
+
+def test_census_preparation_rejects_missing_camera_without_changing_scenario(tmp_path):
+    scenario = tmp_path / "city.bench"
+    scenario.write_text("shot city\n")
+    index = tmp_path / "materials.json"
+    index.write_text(json.dumps({"MISSING.TGA": {"albedo": "albedo.dds"}}))
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--append-census", str(scenario), str(SCRIPT.with_name("city-intent.bench")), str(index)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "missing census camera: MISSING.TGA" in result.stderr
+    assert scenario.read_text() == "shot city\n"
+
+
+@pytest.mark.parametrize("set_name", ["city-2", "city-2-imagegen", "city-3"])
+def test_remote_rejects_other_set_directory(set_name):
     result = subprocess.run(
         ["bash", str(SCRIPT), "--remote", str(Path.home() / "gothic-ai/city-set-1"),
          "fixture", set_name],
@@ -91,6 +154,7 @@ def test_capture_rejects_unsafe_set_before_creating_output(tmp_path):
 @pytest.mark.parametrize("set_name,flux,reason", [
     ("city-2-imagegen", False, "requires --flux-root"),
     ("city-2", True, "--flux-root requires --set city-2-imagegen"),
+    ("city-3", True, "--flux-root requires --set city-2-imagegen"),
 ])
 def test_flux_root_is_required_only_for_triple_capture(tmp_path, set_name, flux, reason):
     output = tmp_path / "output"
@@ -149,6 +213,7 @@ def test_census_accepts_original_baseline_and_own_replacement(tmp_path, variant,
     ("city-1", ("before", "after"), 10),
     ("city-2", ("before", "after"), 8),
     ("city-2-imagegen", ("before", "flux", "after"), 5),
+    ("city-3", ("before", "after"), 13),
 ])
 def test_composition_preserves_pairs_and_builds_required_triple_columns(tmp_path, set_name, variants, count):
     captures = tmp_path / "captures"
@@ -156,7 +221,8 @@ def test_composition_preserves_pairs_and_builds_required_triple_columns(tmp_path
     for variant in variants:
         directory = captures / variant
         directory.mkdir(parents=True)
-        for spot in ("city", "market", "harbour", "upper", "house", "facade_close", "facade_corner"):
+        for spot in ("city", "market", "harbour", "upper", "house", "facade_close", "facade_corner",
+                     "facade_full", "upper_modules", "harbour_modules", "interior_modules"):
             for suffix in ("", "_night"):
                 Image.new("RGB", (96, 54), colors[variant]).save(directory / f"{spot}{suffix}.png")
     output = tmp_path / "boards"
@@ -168,6 +234,11 @@ def test_composition_preserves_pairs_and_builds_required_triple_columns(tmp_path
     if set_name == "city-2-imagegen":
         assert {path.stem for path in boards} == {
             "facade_close", "facade_close_night", "market", "facade_corner", "harbour"}
+    elif set_name == "city-3":
+        assert {path.stem for path in boards} == {
+            "city", "market", "harbour", "upper", "house", "facade_close", "facade_corner",
+            "facade_full", "upper_modules", "harbour_modules", "interior_modules",
+            "facade_close_night", "market_night"}
     for path in boards:
         with Image.open(path) as board:
             assert board.size == (96 * len(variants), 94)
@@ -179,6 +250,7 @@ def test_composition_preserves_pairs_and_builds_required_triple_columns(tmp_path
 @pytest.mark.parametrize("set_name,variants", [
     ("city-2", ("before", "after")),
     ("city-2-imagegen", ("before", "flux", "after")),
+    ("city-3", ("before", "after")),
 ])
 def test_remote_dispatch_checks_each_variant_against_its_index(tmp_path, set_name, variants):
     task = tmp_path / "gothic-ai" / ("city-set-" + set_name.removeprefix("city-"))
@@ -229,6 +301,25 @@ def test_census_rejects_compiled_original_alias_even_with_replacement(tmp_path):
     result = run_check(directory, scenario, index)
     assert result.returncode != 0
     assert "original target textures opened: WALL" in result.stderr
+
+
+def test_census_requires_every_packed_material_for_the_city_tour(tmp_path):
+    directory, scenario, index, _, _ = fixture_capture(tmp_path)
+    index.write_text(json.dumps({
+        "WALL.TGA": {"albedo": "wall/albedo.dds"},
+        "WINDOW.TGA": {"albedo": "window/albedo.dds"},
+    }))
+    log = directory / "game.log"
+    log.write_text(log.read_text().replace("materials: 1 entries", "materials: 2 entries"))
+    result = run_check(directory, scenario, index)
+    assert result.returncode != 0
+    assert "target textures not replaced: WINDOW" in result.stderr
+    # The city-only Mac FPS measurement may see a strict subset of the tour.
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--check", str(directory), str(scenario), str(index), "after", "seen"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("failure", ["missing_replacement", "wrong_map", "missing_shot", "goto_failed", "bad_event"])
