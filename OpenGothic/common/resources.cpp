@@ -585,6 +585,31 @@ void Resources::indexMaterialMaps() {
       return true;
       };
     bool valid = path("albedo", maps.albedo, &maps.albedoReplacement) && path("normal", maps.normal) && path("orm", maps.orm);
+    if(const auto mode = entry.value.FindMember("antitile"); mode!=entry.value.MemberEnd()) {
+      if(!mode->value.IsString()) {
+        valid = false;
+        } else {
+        const std::string_view value(mode->value.GetString(), mode->value.GetStringLength());
+        if(value=="offset")
+          maps.antitile = Material::Antitile::Offset;
+        else if(value=="rotate")
+          maps.antitile = Material::Antitile::Rotate;
+        else if(value!="off")
+          valid = false;
+        }
+      }
+    if(const auto cell = entry.value.FindMember("antitile_cell"); cell!=entry.value.MemberEnd()) {
+      if(!cell->value.IsNumber()) {
+        valid = false;
+        } else {
+        const auto value = cell->value.GetDouble();
+        if(!std::isfinite(value) || value<=0 || value>std::numeric_limits<float>::max() ||
+           float(value)<=0 || !std::isfinite(1.f/float(value)))
+          valid = false;
+        else
+          maps.antitileCell = float(value);
+        }
+      }
     if(const auto scale = entry.value.FindMember("scale"); scale!=entry.value.MemberEnd()) {
       if(!scale->value.IsNumber()) {
         valid = false;
@@ -1217,6 +1242,8 @@ Resources::MaterialMaps Resources::loadMaterialMaps(std::string_view name) {
   ret.normal = inst->implLoadMaterialTexture(files.normal,true);
   ret.orm    = inst->implLoadMaterialTexture(files.orm,false);
   ret.scale  = files.scale;
+  ret.antitileCell = files.antitileCell;
+  ret.antitile = files.antitile;
   ret.present = true;
   ret.hasAlbedo = !files.albedo.empty();
   return ret;

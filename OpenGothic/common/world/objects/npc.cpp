@@ -7249,14 +7249,16 @@ void Npc::updateCharacterVisualHeight() {
   const auto now = owner.tickCount();
   const auto at = position();
   const auto normal = mvAlgo.groundNormal();
-  const bool groundState = !isDown() && !spellFrozen() && interactive()==nullptr &&
-                           mvAlgo.state()==MoveAlgo::Run &&
-                           (isPlayer() || isHuman() || bodyStateMasked()!=BS_HIT) &&
-                           !(bodyStateMasked()==BS_JUMP && isFlyAnim());
+  const bool groundedState = !isDown() && !spellFrozen() && interactive()==nullptr &&
+                             mvAlgo.state()==MoveAlgo::Run &&
+                             !(bodyStateMasked()==BS_JUMP && isFlyAnim());
+  const bool monsterAttack = !isPlayer() && !isHuman() && bodyStateMasked()==BS_HIT;
+  const bool groundState = groundedState && !monsterAttack;
   const bool enabled = characterFlag && mvAlgo.characterVirtualActive() && groundState;
   // A radius handoff (or a human NPC flag handoff) keeps the remaining stair blend. Removing
   // that visual offset immediately would pop the model even though its feet agree.
-  const bool finishNpcBlend = !isPlayer() && groundState && !characterVisualSteps.empty();
+  // An attack does not create stair corrections, but must finish a pending one.
+  const bool finishNpcBlend = !isPlayer() && groundedState && !characterVisualSteps.empty();
   const float previousOffset = characterVisualYOffset;
 
   if((!enabled && !finishNpcBlend) || (characterVisualHasSample && now<characterVisualSampleTick)) {
@@ -7307,10 +7309,27 @@ void Npc::updateCharacterVisualHeight() {
       }
     }
 
+  if(!isPlayer() && !isHuman() && (enabled || finishNpcBlend) &&
+     characterVisualHasSample && characterVisualGroundSample && now>=characterVisualSampleTick) {
+    // Releasing an earlier stair blend can add to a small physical rise.
+    // Keep that presentation remainder in the blend. A high guild-sized
+    // ledge may still snap: the human ten-centimetre lag limit takes priority.
+    constexpr float maxVisualStep = 12.f; // cm per movement update
+    const float previousY = characterVisualSamplePosition.y+previousOffset;
+    const float desiredY = at.y+characterVisualYOffset;
+    const float blendedY = std::clamp(desiredY,previousY-maxVisualStep,previousY+maxVisualStep);
+    const float limitedY = std::clamp(blendedY,at.y-maxVisualLag,at.y+maxVisualLag);
+    const float correction = limitedY-desiredY;
+    if(correction!=0) {
+      characterVisualSteps.push_back({now,correction});
+      characterVisualYOffset += correction;
+      }
+    }
+
   // Keep a baseline even while the freshly loaded controller is inactive. Its first
   // floor correction can then blend from the saved height, while airborne handoffs snap.
   characterVisualHasSample = true;
-  characterVisualGroundSample = groundState;
+  characterVisualGroundSample = groundedState;
   characterVisualSamplePosition = at;
   characterVisualSampleNormal = normal;
   characterVisualSampleTick = now;

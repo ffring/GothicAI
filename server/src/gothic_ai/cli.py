@@ -1344,7 +1344,17 @@ async def serve(args: argparse.Namespace) -> int:
         if args.scenario is None:
             return
         try:
-            if args.scenario == "neural-talk":
+            if args.scenario == "memprobe":
+                where = Path(os.environ.get("LOG_DIR") or Path(args.trace_dir).parent)
+                assert state.bodies is not None
+                results = await scenarios.memprobe_scenario(
+                    link, bodies=state.bodies, log_dir=where, llm_name=state.dialogue.llm.name,
+                    body_enabled=bodypilot is not None or bool(args.body_url),
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "neural-talk":
                 results = await scenarios.neural_talk_scenario(link, state.dialogue, bodypilot)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -2545,6 +2555,7 @@ def main() -> None:
             "neural-group",
             "neural-talk",
             "neural-load",
+            "memprobe",
             "m5c",
             "m5e",
             "orders",

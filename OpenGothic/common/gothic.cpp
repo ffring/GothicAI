@@ -7,6 +7,12 @@
 #include <cctype>
 #include <cassert>
 
+#if defined(__GLIBC__)
+#include <chrono>
+#include <cstdlib>
+#include <malloc.h>
+#endif
+
 #include <zenkit/addon/daedalus.hh>
 
 #include "game/definitions/visualfxdefinitions.h"
@@ -110,7 +116,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "cloth",               1);
   defaults->set("GAME", "character_virtual",   1);
   defaults->set("GAME", "npc_character_virtual",1);
-  defaults->set("GAME", "monster_character_virtual",0);
+  defaults->set("GAME", "monster_character_virtual",1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -515,11 +521,23 @@ bool Gothic::finishLoading() {
     return false;
   if(loadingFlag.compare_exchange_strong(state,LoadState::Idle)){
     loaderTh.join();
+#if defined(__GLIBC__)
+    const bool loadedWorld = state==LoadState::Finalize && loadingWorld && pendingGame!=nullptr;
+#endif
     if(pendingGame!=nullptr)
       game = std::move(pendingGame);
     saveTex = Texture2d();
     loadTex = Texture2d();
     onWorldLoaded();
+#if defined(__GLIBC__)
+    const char* trim = std::getenv("OPENGOTHIC_MALLOC_TRIM");
+    if(loadedWorld && (trim==nullptr || std::strcmp(trim,"0")!=0)) {
+      const auto started = std::chrono::steady_clock::now();
+      malloc_trim(0);
+      const auto elapsed = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+      Log::i("malloc_trim after world load: ",elapsed," ms");
+      }
+#endif
     return true;
     }
   return false;
@@ -547,6 +565,9 @@ void Gothic::implStartLoadSave(std::string_view banner,
   if(!loadingFlag.compare_exchange_strong(zero,one)){
     return; // loading already
     }
+#if defined(__GLIBC__)
+  loadingWorld = load;
+#endif
 
   onStartLoading();
   auto g = clearGame().release();

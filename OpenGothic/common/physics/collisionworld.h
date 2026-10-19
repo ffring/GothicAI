@@ -135,8 +135,11 @@ class CollisionWorld final {
 
     struct CharacterMoveResult {
       Tempest::Vec3 position = {}, velocity = {}, groundNormal = {}, groundVelocity = {};
+      // Opposing, non-walkable world contact left unresolved by the stair pass.
+      Tempest::Vec3 steepContactNormal = {};
       bool grounded = false;
       bool steep = false;
+      bool steepContact = false;
       bool supportMoved = false;
       };
 
@@ -145,7 +148,8 @@ class CollisionWorld final {
       public:
         ~VirtualCharacter();
         CharacterMoveResult move(const Tempest::Vec3& displacement, uint64_t dt,
-                                 float stepHeight, float maxSlope, float mass, Npc* culprit);
+                                 float stepHeight, float maxSlope, float mass, Npc* culprit,
+                                 bool limitStairAdvance = false);
         CharacterMoveResult carry(uint64_t dt);
         void setPosition(const Tempest::Vec3& feet);
         void setDiagnosticsEnabled(bool enabled);

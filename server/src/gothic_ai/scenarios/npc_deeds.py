@@ -449,7 +449,9 @@ async def npc_deeds(
             return _logged(results)
         if not await place(MALETH, ROAD, to=VINO, distance=250, face=VINO):
             return _logged(results)
-        if not await place(ATTACK_WITNESS, ROAD, to=VINO, distance=-450, face=VINO):
+        # Leave room for WATCHFIGHT's native 300 cm dodge while keeping a 550 cm margin
+        # to the victim-centred damage perception range when the victim retreats.
+        if not await place(ATTACK_WITNESS, ROAD, to=MALETH, distance=-450, face=VINO):
             return _logged(results)
         if not await visible("fight_lane_ready", MALETH, VINO):
             return _logged(results)

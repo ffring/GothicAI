@@ -16,7 +16,10 @@ import {BrandSting, STING_FRAMES} from './Brand';
 import {Captions} from './parts/Captions';
 import {BarsView, DotsView, FormulaView, StatsView} from './parts/Cards';
 import {BigView, CellsView, LineView, TableView} from './parts/WideCards';
+import {ConeView, FlowView, GridView, RaysView, TicksView} from './parts/WideDiagrams';
 import {DiceChart} from './parts/DiceChart';
+import {CombatOverlay} from './parts/CombatOverlay';
+import {sourceFrame, zoomScale, type Viewport} from './parts/followMath';
 import {Sight} from './parts/Sight';
 import {Tags} from './parts/Tags';
 import {Hook, Texts} from './parts/Texts';
@@ -51,9 +54,7 @@ const Picture: React.FC<{
   const {fps} = useVideoConfig();
   const t = useCurrentFrame() / fps;
   const z = beat.zoom;
-  const s = z
-    ? interpolate(t, [z.at, z.at + z.dur], [1, z.scale], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
-    : 1;
+  const s = zoomScale(z, t);
   const style: React.CSSProperties = {
     width,
     height,
@@ -64,9 +65,9 @@ const Picture: React.FC<{
   if (src.endsWith('.png') || src.endsWith('.jpg')) {
     return <Img src={staticFile(src)} style={style} />;
   }
-  const video = <OffthreadVideo src={staticFile(src)} startFrom={Math.round(from * fps)} volume={volume} style={style} />;
+  const video = <OffthreadVideo src={staticFile(src)} startFrom={sourceFrame(from, 0, fps)} volume={volume} style={style} />;
   if (beat.freeze !== undefined && t >= beat.freeze) {
-    return <Freeze frame={Math.round(beat.freeze * fps)}>{video}</Freeze>;
+    return <Freeze frame={sourceFrame(0, beat.freeze, fps)}>{video}</Freeze>;
   }
   return video;
 };
@@ -107,6 +108,10 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
   const volume = (f: number) =>
     stem ? (stem === 'game' ? beat.game : 0) : game * beat.game * ducked(start + f / fps, spans, duck);
   let body: React.ReactNode = null;
+  const split = beat.kind === 'split';
+  const viewport: Viewport = {left: 0, top: 0,
+    width: split && wide ? width / 2 : width, height: split && !wide ? height / 2 : height};
+  const bottomViewport: Viewport = {...viewport, left: wide ? width / 2 : 0, top: wide ? 0 : height / 2};
   const card = beat.chart;
   if (beat.kind === 'card' && card) {
     if (card.type === 'dice') body = <DiceChart spec={card} />;
@@ -118,6 +123,11 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
     else if (card.type === 'big') body = <BigView spec={card} />;
     else if (card.type === 'table') body = <TableView spec={card} />;
     else if (card.type === 'cells') body = <CellsView spec={card} />;
+    else if (card.type === 'rays') body = <RaysView spec={card} />;
+    else if (card.type === 'cone') body = <ConeView spec={card} />;
+    else if (card.type === 'ticks') body = <TicksView spec={card} />;
+    else if (card.type === 'grid') body = <GridView spec={card} />;
+    else if (card.type === 'flow') body = <FlowView spec={card} />;
   } else if (beat.kind === 'split' && beat.src && beat.srcBottom) {
     const half = height / 2;
     body = wide ? (
@@ -157,6 +167,14 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
   return (
     <AbsoluteFill style={{background: '#000', overflow: 'hidden'}}>
       {body}
+      {beat.kind !== 'card' && (beat.follow || beat.hp) && (
+        <CombatOverlay follow={beat.follow} hp={beat.hp} from={beat.from} beat={beat} viewport={viewport}
+          insetTop={split && beat.labels ? (wide ? 122 : 236) : (wide ? 32 : 160)} />
+      )}
+      {split && (beat.followBottom || beat.hpBottom) && (
+        <CombatOverlay follow={beat.followBottom} hp={beat.hpBottom} from={beat.fromBottom} beat={beat} viewport={bottomViewport}
+          insetTop={beat.labels ? (wide ? 122 : 106) : 32} />
+      )}
       <Sight strokes={beat.strokes} fans={beat.fans} />
       <Tags tags={beat.tags} />
       <Texts texts={beat.texts} />
