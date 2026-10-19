@@ -19,7 +19,7 @@
 - Нарушитель встречи не начинает путь; в час встречи получает `npc_broken{how: no_show}`. Это не `meet_failed`, герой за такую встречу не получает `broken`. Проводник `lead` остаётся честным.
 - `npc_broken` — общий источник `SOURCES` для знания и слуха о нарушителе. Первые знающие — слышавшие отказ по актуальному восприятию или ростеру, кроме него самого; описатель источника поддерживает несколько первых знающих. У `no_show` свидетелей нет, слуха не возникает. Загрузка восстанавливает намерения, оплаты и нарушения из хроники без дублей. `--no-npc-cheat` и `--no-crimes` заставляют держать слово и не пишут новых `npc_intent`.
 
-Проверки: `tests/test_cover.py`, `tests/test_people_knowledge.py`, `tests/test_social_subject.py`, `tests/test_rumor_subject_readers.py`, `tests/test_witness_subject.py`, целевые тесты сделок, доверия, знания, закона, слухов и забот; e2e `cover` и `cover_subject` на сохранении 1. Журнал проверок — ниже.
+Проверки: `tests/test_npc_cheat.py`, `tests/test_npc_later.py`, `tests/test_contracts.py`, `tests/test_meetings.py`, `tests/test_cover.py`, `tests/test_people_knowledge.py`, `tests/test_social_subject.py`, `tests/test_rumor_subject_readers.py`, `tests/test_witness_subject.py`, целевые тесты сделок, доверия, знания, закона, слухов и забот; e2e `cover` и `cover_subject` на сохранении 1. Журнал проверок — ниже.
 
 ## План и журнал
 

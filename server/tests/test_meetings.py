@@ -279,6 +279,45 @@ async def test_dishonest_npc_never_sets_off_and_its_absence_does_not_break_the_h
     assert again_chronicle.facts("broken") == [] and again_chronicle.facts("meet_failed") == []
 
 
+async def test_combined_deals_unpaid_reward_does_not_hide_the_later_no_show_on_reload():
+    intent = {
+        "fact": "npc_intent",
+        "npc": MALETH,
+        "deal": "D1",
+        "keeps": False,
+        "how": ["contract", "meet"],
+        "why": "dishonesty",
+    }
+    meetings, link, _, _, bodies, chronicle, _ = _desk([intent])
+    term, _ = await meetings.term(MALETH, DAWN, link.snapshots[MALETH])
+    assert term is not None
+    meeting = meetings.add(MALETH, "Малет", term, "D1")
+    unpaid = {
+        "fact": "npc_broken",
+        "npc": MALETH,
+        "deal": "D1",
+        "how": "unpaid",
+        "contract": "C1",
+        "witnesses": ["HEARER"],
+    }
+    chronicle.record(unpaid)
+
+    meetings.tick(term.start)
+    meetings.tick(term.end)
+    assert meeting.state == "no_show" and bodies.acts == []
+    breaches = chronicle.facts("npc_broken")
+    assert breaches[0] == unpaid
+    assert [(f["deal"], f["how"]) for f in breaches] == [("D1", "unpaid"), ("D1", "no_show")]
+    assert breaches[1]["meet"] == meeting.id and not breaches[1].get("witnesses")
+
+    again, _, _, _, again_bodies, again_chronicle, _ = _desk(chronicle.facts())
+    assert again.meetings[meeting.id].state == "no_show"
+    again.tick(term.end + 60)
+    again.tick(term.end + 120)
+    assert again_chronicle.facts("npc_broken") == breaches and again_bodies.acts == []
+    assert again_chronicle.facts("broken") == [] and again_chronicle.facts("meet_failed") == []
+
+
 async def test_a_meeting_is_a_term_of_a_deal_in_its_window():
     fake = FakeGame(branch="A")
     offer = FakeStep("Встретимся на рассвете.", [ToolCall("propose_deal", {"meet": DAWN}, "c1")])

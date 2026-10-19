@@ -71,7 +71,7 @@ def keeps(chronicle: Chronicle, deal_id: str, how: str) -> bool:
 
 
 def breach(chronicle: Chronicle, npc: str, deal: str, how: str, **fields: Any) -> Fact | None:
-    if any(f.get("deal") == deal for f in chronicle.facts("npc_broken")):
+    if any(f.get("deal") == deal and f.get("how") == how for f in chronicle.facts("npc_broken")):
         return None
     fact = {**fields, "fact": "npc_broken", "npc": npc.upper(), "deal": deal, "how": how}
     chronicle.record(fact)

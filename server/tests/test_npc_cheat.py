@@ -80,13 +80,16 @@ def test_no_card_disabled_immediate_and_fixed_after_reload():
     assert keeps(chronicle, "D4", "meet")
 
 
-def test_breach_and_betrayal_once_per_deal():
+def test_each_kind_of_breach_and_betrayal_once_per_deal():
     chronicle = Facts()
     assert breach(chronicle, NPC, "D1", "unpaid", witnesses=["HEARER"])
+    assert breach(chronicle, NPC, "D1", "unpaid", contract="another-obligation") is None
+    assert breach(chronicle, NPC, "D1", "no_show")
     assert breach(chronicle, NPC, "D1", "no_show") is None
     assert betrayed(chronicle, NPC, "D1", "told", "HEARER")
     assert betrayed(chronicle, NPC, "D1", "reported", "LAW") is None
-    assert len(chronicle.facts("npc_broken")) == len(chronicle.facts("betrayed")) == 1
+    assert [f["how"] for f in chronicle.facts("npc_broken")] == ["unpaid", "no_show"]
+    assert len(chronicle.facts("betrayed")) == 1
 
 
 def test_hearers_use_current_roster_and_exclude_self_far_and_down():

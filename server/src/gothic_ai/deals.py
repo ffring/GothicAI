@@ -583,6 +583,7 @@ class Deals:
         self.debts: dict[str, Debt] = {}  # by id, of the save branch
         self.npc_later: dict[str, NpcLater] = {}
         self._paying: dict[str, asyncio.Task[bool]] = {}
+        self._world_generation = 0
         self.day: int | None = None  # the game day, as last read
         self.on_day: list[Callable[[int], None]] = []  # a new game day (concerns.py: a debt due today)
         self.on_reload: list[Callable[[], None]] = []  # the debts were read again (concerns.py)
@@ -598,6 +599,8 @@ class Deals:
             case DealDecline():
                 self._spawn(self.decline(msg.deal, msg.version))
             case Loading():
+                self._cancel_payments()
+                self.npc_later.clear()
                 self.open.clear()  # the game drops its window with the world
                 self.day = None  # the world loaded may be of another day
             case Session():
@@ -606,20 +609,30 @@ class Deals:
     # --- the conversation (TurnExtension) ------------------------------------------------------
 
     async def prepare(self, npc: str) -> None:
+        generation = self._world_generation
         pending = [x for x in self.npc_later.values() if x.npc == npc.upper() and not x.paid]
         if not pending:
             return
         day = await _day(self.link)
-        if "day" not in day:
+        if generation != self._world_generation or "day" not in day:
             return
         self._set_day(day["day"])
         for later in pending:
+            if generation != self._world_generation:
+                return
             if day["day"] < later.day:
                 continue
             task = self._paying.get(later.deal)
             if task is None or task.done():
-                task = self._paying[later.deal] = asyncio.create_task(self.pay_later(later, day))
-            await asyncio.shield(task)
+                task = self._paying[later.deal] = asyncio.create_task(
+                    self.pay_later(later, day, generation=generation)
+                )
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if generation != self._world_generation:
+                    return
+                raise
 
     def situation(self, npc: str) -> str | None:
         npc = npc.upper()
@@ -633,7 +646,8 @@ class Deals:
             if later.npc != npc or later.paid:
                 continue
             if not keeps(self.chronicle, later.deal, "npc_later") and any(
-                f.get("deal") == later.deal for f in self.chronicle.facts("npc_broken")
+                f.get("deal") == later.deal and f.get("how") == "unpaid"
+                for f in self.chronicle.facts("npc_broken")
             ):
                 lines.append("[Герой ждёт обещанные вещи или деньги; ты решил не отдавать]")
             else:
@@ -1308,8 +1322,12 @@ class Deals:
 
     # --- the debts --------------------------------------------------------------------------------
 
-    async def pay_later(self, later: NpcLater, day: dict[str, int]) -> bool:
+    async def pay_later(self, later: NpcLater, day: dict[str, int], *, generation: int | None = None) -> bool:
         """The NPC's deferred items, once due: an honest transfer or its recorded refusal."""
+        if generation is None:
+            generation = self._world_generation
+        if generation != self._world_generation:
+            return False
         if later.paid:
             return True
         if not keeps(self.chronicle, later.deal, "npc_later"):
@@ -1337,10 +1355,14 @@ class Deals:
         try:
             await self.link.story_effect(later.npc, effects, check=True)
         except (GameError, TimeoutError) as err:
+            if generation != self._world_generation:
+                return False
             if "missing: npc" in str(err):
                 later.missing = "тебе нечем заплатить: у тебя уже нет того, что ты обещал"
             else:
                 log.info("npc_later %s: %s", later.deal, err)
+            return False
+        if generation != self._world_generation:
             return False
         later.paid, later.missing = True, ""
         self.chronicle.record(
@@ -1413,9 +1435,9 @@ class Deals:
             listener()
 
     def _load(self) -> None:
+        self._cancel_payments()
         self.debts.clear()
         self.npc_later.clear()
-        self._paying.clear()
         ids = [d.id for d in self.open.values()]
         for f in self.chronicle.facts():
             self._on_fact(f)
@@ -1423,6 +1445,13 @@ class Deals:
                 ids.append(f.get("deal", ""))
         highest = max((int(i[1:]) for i in ids if i.startswith("D") and i[1:].isdigit()), default=0)
         self._ids = itertools.count(highest + 1)
+
+    def _cancel_payments(self) -> None:
+        """An in-flight payment belongs only to the world in which the conversation started."""
+        self._world_generation += 1
+        for task in self._paying.values():
+            task.cancel()
+        self._paying.clear()
 
     def _on_fact(self, f: Fact) -> None:
         match f.get("fact"):
