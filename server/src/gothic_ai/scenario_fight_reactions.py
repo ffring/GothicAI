@@ -202,9 +202,18 @@ async def wait_attack_gap(
     if quiet():
         return True
     changed = asyncio.Event()
+    samples = 0
+    states = [(trace.game_ms.get(one), trace.game_ms.get(other),
+               trace.attacking.get(one), trace.attacking.get(other))]
 
     def observed(_packet: dict[str, Any]) -> None:
+        nonlocal samples
         # CombatTrace.body is registered first, so these states belong to this packet.
+        samples += 1
+        state = (trace.game_ms.get(one), trace.game_ms.get(other),
+                 trace.attacking.get(one), trace.attacking.get(other))
+        if state[2:] != states[-1][2:]:
+            states.append(state)
         changed.set()
 
     link.raw_body_listeners.append(observed)
@@ -215,6 +224,11 @@ async def wait_attack_gap(
                 changed.clear()
         return True
     except TimeoutError:
+        log.error(
+            "fight_reactions attack gap timeout npcs=%s samples=%s "
+            "states=(one_ms,other_ms,one_attack,other_attack)=%s last_game_ms=%s",
+            (one, other), samples, states, (trace.game_ms.get(one), trace.game_ms.get(other)),
+        )
         return False
     finally:
         link.raw_body_listeners.remove(observed)
