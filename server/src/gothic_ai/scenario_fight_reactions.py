@@ -27,6 +27,7 @@ from .game import GameError, GameLink
 from .incidents import IncidentDesk
 from .protocol import (
     ActionCmd,
+    ActionResult,
     Beasts,
     DebugCmd,
     GameMessage,
@@ -183,6 +184,32 @@ class CombatTrace:
             [t for t, _ in self.contacts.get(npc, ()) if start < t <= end],
         )
 
+    def hit_ready(self, attacker: str, defender: str) -> bool:
+        a, b = self.latest_rows.get(attacker, {}), self.latest_rows.get(defender, {})
+        own, target = a.get("self", {}), b.get("target", {})
+        return (
+            not own.get("attack_anim", True) and not own.get("prehit", True)
+            and attacker in self.entities and target.get("entity_id") == self.entities[attacker]
+            and all(target.get(k) is True for k in ("visible", "melee_line_clear", "in_w_range", "focus_30"))
+            and obstacles_clear(a, 120) and obstacles_clear(b, 120)
+        )
+
+    def hit_geometry(self, attacker: str, defender: str) -> dict[str, Any]:
+        target = self.latest_rows.get(defender, {}).get("target", {})
+        return {
+            "positions": {n: self.positions.get(n) for n in (attacker, defender)},
+            "body_game_ms": {n: self.game_ms.get(n) for n in (attacker, defender)},
+            "distance_cm": self.distance(attacker, defender),
+            "target_entity": target.get("entity_id"),
+            **{k: target.get(k) for k in ("visible", "melee_line_clear", "in_w_range", "focus_30")},
+            "attacker_attack_anim": self.latest.get(attacker, {}).get("attack_anim"),
+            "attacker_prehit": self.latest.get(attacker, {}).get("prehit"),
+            "defender_attack_anim": self.latest.get(defender, {}).get("attack_anim"),
+            "local_obstacles": {
+                n: self.latest_rows.get(n, {}).get("local_obstacles") for n in (attacker, defender)
+            },
+        }
+
     def first_contact(self, npc: str, target: str) -> int | None:
         """Diagnostic applied event with its target observed on delivery, possibly already changed."""
         entity = self.entities.get(target)
@@ -192,46 +219,63 @@ class CombatTrace:
         return min((t for t, _ in self.received_contacts.get(npc, [])), default=None)
 
 
-async def wait_attack_gap(
-    link: GameLink, trace: CombatTrace, one: str, other: str, timeout: float = 2,
-) -> bool:
-    """Catch the first observed gap between attacks, including gaps shorter than a polling tick."""
-    def quiet() -> bool:
-        return not trace.attacking.get(one, True) and not trace.attacking.get(other, True)
+def obstacles_clear(row: dict[str, Any], clearance_cm: float) -> bool:
+    scan = row.get("local_obstacles", {})
+    rays = scan.get("rays", ())
+    return (
+        scan.get("ray_range_cm", 0) >= clearance_cm and len(rays) == 16
+        and all(not ray.get("hit", True) or ray.get("distance_cm", 0) >= clearance_cm for ray in rays)
+    )
 
-    if quiet():
+
+async def wait_hit_geometry(
+    link: GameLink, trace: CombatTrace, attacker: str, defender: str, timeout: float = 5,
+) -> bool:
+    """Wait for a current open melee line; an in-flight defender attack is allowed."""
+    if trace.hit_ready(attacker, defender):
         return True
     changed = asyncio.Event()
-    samples = 0
-    states = [(trace.game_ms.get(one), trace.game_ms.get(other),
-               trace.attacking.get(one), trace.attacking.get(other))]
 
     def observed(_packet: dict[str, Any]) -> None:
-        nonlocal samples
         # CombatTrace.body is registered first, so these states belong to this packet.
-        samples += 1
-        state = (trace.game_ms.get(one), trace.game_ms.get(other),
-                 trace.attacking.get(one), trace.attacking.get(other))
-        if state[2:] != states[-1][2:]:
-            states.append(state)
         changed.set()
 
     link.raw_body_listeners.append(observed)
     try:
         async with asyncio.timeout(timeout):
-            while not quiet():
+            while not trace.hit_ready(attacker, defender):
                 await changed.wait()
                 changed.clear()
         return True
     except TimeoutError:
-        log.error(
-            "fight_reactions attack gap timeout npcs=%s samples=%s "
-            "states=(one_ms,other_ms,one_attack,other_attack)=%s last_game_ms=%s",
-            (one, other), samples, states, (trace.game_ms.get(one), trace.game_ms.get(other)),
-        )
         return False
     finally:
         link.raw_body_listeners.remove(observed)
+
+
+async def stop_and_hit(link: GameLink, attacker: str, defender: str) -> dict[str, Any]:
+    """Send stop then hit on the same WS before awaiting either receipt."""
+    stop = ActionCmd(id=link._next_id("a"), npc=attacker, action="stop")
+    stopped: asyncio.Future[ActionResult] = asyncio.get_running_loop().create_future()
+
+    def heard(msg: GameMessage) -> None:
+        if isinstance(msg, ActionResult) and msg.id == stop.id and not stopped.done():
+            stopped.set_result(msg)
+
+    link.listeners.append(heard)
+    try:
+        await link.send(stop)
+        response = await link._request(
+            DebugCmd(req=link._next_id("r"), cmd="npc_hit", npc=defender, by=attacker), 5,
+        )
+        receipt = await asyncio.wait_for(stopped, 5)
+        if not receipt.ok:
+            raise GameError(f"fight_reactions setup: stop {receipt.status}: {receipt.detail}")
+        return response.value or {}
+    finally:
+        link.listeners.remove(heard)
+        if not stopped.done():
+            stopped.cancel()
 
 
 def combat_shouts(log_file: Path, npc: str) -> list[int]:
@@ -819,9 +863,11 @@ async def fight_reactions(
                     )
                     if (baseline.hp, baseline.hp_max) != (500, 500):
                         raise GameError(f"fight_reactions setup: {bandit} HP baseline was not installed")
-                await put(bandit, 1200, i * 500)
-            await put(CAVALORN, -600, 0, face=BANDITS[0])
-            await link.debug("player_goto", pos=point(400, -650))
+                # Face into the open field near FARM1_FIELD, away from the static
+                # obstacle east of FIELD_06 that blocked the former +x approach.
+                await put(bandit, -500 + i * 500, -1300)
+            await put(CAVALORN, -500, 500, face=BANDITS[0])
+            await link.debug("player_goto", pos=point(-1150, -500))
             if not await talk.hold(CAVALORN, "follow"):
                 raise GameError("fight_reactions setup: cannot hold companion")
             await link.act(CAVALORN, "stop")
@@ -854,6 +900,76 @@ async def fight_reactions(
             await link.body_watch(watch)
             if not await _until(lambda: all(n in trace.positions for n in watch), 5):
                 raise GameError("fight_reactions setup: missing bandit body observations")
+
+            async def ground_scan(position: tuple[float, ...] | list[float]) -> dict[str, Any]:
+                before = trace.game_ms.get("PLAYER", 0)
+                await link.debug("player_goto", pos=list(position))
+                settled = await _until(
+                    lambda: (
+                        trace.game_ms.get("PLAYER", 0) > before
+                        and math.dist(trace.positions["PLAYER"][::2], position[::2]) < 25
+                        and not trace.latest["PLAYER"].get("in_air", True)
+                        and abs((trace.latest["PLAYER"].get("linear_velocity_cm_s") or (0, 999, 0))[1]) < 20
+                    ), 3,
+                )
+                if not settled:
+                    raise GameError(
+                        f"fight_reactions setup: terrain probe did not settle at {position}; "
+                        f"geometry={trace.hit_geometry(CAVALORN, 'PLAYER')}"
+                    )
+                return trace.latest_rows["PLAYER"]
+
+            async def arena_geometry(
+                stage: str, defenders: list[str], *, candidate: tuple[float, ...] | None = None,
+            ) -> dict[str, Any]:
+                # PLAYER is a passive terrain probe. Keep every NPC fixed, and inspect
+                # the 3 m discs at the defender and 3/6 m beyond it along the approach.
+                hero = trace.positions["PLAYER"]
+                report: dict[str, Any] = {"stage": stage, "clear": True, "pairs": {}}
+                try:
+                    if candidate is not None:
+                        await ground_scan(candidate)
+                    for defender in defenders:
+                        geometry = trace.hit_geometry(CAVALORN, defender)
+                        response = await link._request(
+                            DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=CAVALORN,
+                                     to="PC_HERO" if defender == "PLAYER" else defender), 5,
+                        )
+                        ray = response.value or {}
+                        origin, companion = trace.positions[defender], trace.positions[CAVALORN]
+                        dx, dz = origin[0] - companion[0], origin[2] - companion[2]
+                        length = math.hypot(dx, dz)
+                        corridor = []
+                        clear = (
+                            length > 0 and ray.get("center_clear") and ray.get("head_clear")
+                            and obstacles_clear(trace.latest_rows[CAVALORN], 300)
+                            and obstacles_clear(trace.latest_rows[defender], 300)
+                        )
+                        if length > 0:
+                            for beyond in (300, 600):
+                                row = await ground_scan((
+                                    origin[0] + beyond * dx / length, origin[1],
+                                    origin[2] + beyond * dz / length,
+                                ))
+                                corridor.append({
+                                    "beyond_cm": beyond, "position": row["self"]["position_world_cm"],
+                                    "local_obstacles": row["local_obstacles"],
+                                })
+                                clear = clear and obstacles_clear(row, 300)
+                        report["pairs"][defender] = {
+                            "geometry": geometry, "npc_los": ray, "corridor": corridor, "clear": bool(clear),
+                        }
+                        report["clear"] = report["clear"] and bool(clear)
+                finally:
+                    await ground_scan(hero)
+                    log.info("fight_reactions arena_geometry=%s", report)
+                return report
+
+            initial_geometry = await arena_geometry("initial", list(BANDITS))
+            if not initial_geometry["clear"]:
+                raise GameError(
+                    f"fight_reactions setup: obstructed initial arena; geometry={initial_geometry}"
+                )
             await ready_companion_sword()
             if not await _until(lambda: all(n in planner.npcs for n in BANDITS), 5):
                 raise GameError("fight_reactions setup: bandits absent from planner roster")
@@ -972,35 +1088,56 @@ async def fight_reactions(
                             and trace.target.get(CAVALORN) == trace.entities.get(bandit)
                         ), 15,
                     )
-                    if not close:
-                        raise GameError("fight_reactions setup: companion did not reach the defender")
-                    if not await wait_attack_gap(link, trace, CAVALORN, bandit):
-                        raise GameError("fight_reactions setup: attack animations did not settle before hit")
-                    # End the ordered duel with no blow in flight. stop keeps the weapon drawn;
-                    # npc_hit must still succeed, and later self-defence remains native.
-                    await stop_companion()
-                    response = await link._request(
-                        DebugCmd(req=link._next_id("r"), cmd="npc_hit", npc=bandit, by=CAVALORN), 5,
-                    )
-                    proof = response.value or {}
-                    hit = proof.get("game_ms")
-                    log.info("fight_reactions guaranteed hit evidence=%s", proof)
-                    if not (
-                        type(hit) is int
-                        and proof.get("attacker") == CAVALORN and proof.get("victim") == bandit
-                        and proof.get("hp_before", 0) > proof.get("hp_after", 0) > 0
-                    ):
-                        raise GameError("fight_reactions setup: native hit evidence is invalid")
-                    observed = await _until(
-                        lambda: (
-                            any(t == hit for t, _ in trace.contacts.get(CAVALORN, ()))
-                            and (hit, 9) in trace.received_contacts.get(bandit, ())
-                            and trace.hp.get(bandit, proof["hp_before"]) <= proof["hp_after"]
-                        ), 5,
-                    )
-                    if not observed:
-                        raise GameError("fight_reactions setup: native hit is absent from body history")
-                    return hit
+                    if not close or not await wait_hit_geometry(link, trace, CAVALORN, bandit):
+                        geometry = trace.hit_geometry(CAVALORN, bandit)
+                        log.error("fight_reactions H=None geometry=%s", geometry)
+                        raise GameError(
+                            f"fight_reactions setup: no open melee geometry before hit; {geometry}"
+                        )
+                    selected = trace.hit_geometry(CAVALORN, bandit)
+                    contacts: dict[int, dict[str, Any]] = {}
+
+                    def capture_hit(packet: dict[str, Any]) -> None:
+                        for row in packet["observations"]:
+                            if row["entity_id"] != trace.entities[bandit]:
+                                continue
+                            for event in row.get("events", ()):
+                                if event["perspective"] == "self" and event["code"] == 9:
+                                    contacts.setdefault(
+                                        event["source_game_ms"], trace.hit_geometry(CAVALORN, bandit),
+                                    )
+
+                    hit: int | None = None
+                    link.raw_body_listeners.append(capture_hit)
+                    try:
+                        # Consecutive WS sends, with no stop receipt awaited between them.
+                        proof = await stop_and_hit(link, CAVALORN, bandit)
+                        hit = proof.get("game_ms")
+                        log.info("fight_reactions guaranteed hit evidence=%s", proof)
+                        if not (
+                            type(hit) is int
+                            and proof.get("attacker") == CAVALORN and proof.get("victim") == bandit
+                            and proof.get("hp_before", 0) > proof.get("hp_after", 0) > 0
+                        ):
+                            raise GameError("fight_reactions setup: native hit evidence is invalid")
+                        if not await _until(lambda: CAVALORN not in talk.orders.fights, 3):
+                            raise GameError("fight_reactions setup: prior companion duel did not stop")
+                        observed = await _until(
+                            lambda: (
+                                any(t == hit for t, _ in trace.contacts.get(CAVALORN, ()))
+                                and (hit, 9) in trace.received_contacts.get(bandit, ())
+                                and trace.hp.get(bandit, proof["hp_before"]) <= proof["hp_after"]
+                            ), 5,
+                        )
+                        if not observed:
+                            raise GameError("fight_reactions setup: native hit is absent from body history")
+                        return hit
+                    finally:
+                        link.raw_body_listeners.remove(capture_hit)
+                        log.info(
+                            "fight_reactions H=%s geometry=%s selected_geometry=%s",
+                            hit, contacts.get(hit, selected), selected,
+                        )
 
                 # Both defenders have reacted. Isolate their post-hit measurements so a native
                 # target switch or two opponents pinning Cavalorn cannot prevent the first hit.
@@ -1018,7 +1155,7 @@ async def fight_reactions(
                     if bandit in parked:
                         await stop_companion()
                         await grounded(bandit, "before_return", parked_hp, 4000, 50000)
-                        preparing.add(bandit)
+                        preparing.update((CAVALORN, bandit))
                         planner.allow = setup_allow
                         companion_pos = (await link.snapshot(CAVALORN, fresh=True)).npc.pos
                         points = [
@@ -1029,11 +1166,27 @@ async def fight_reactions(
                             and 1300 <= math.dist(companion_pos, (p["x"], p["y"], p["z"])) <= 2200
                         ]
                         if not points:
-                            raise GameError("fight_reactions setup: no authored return point 13–22 m away")
-                        return_point = min(
+                            raise GameError(
+                                "fight_reactions setup: no authored return point 13–22 m away; "
+                                f"companion_position={companion_pos}"
+                            )
+                        return_point = None
+                        for candidate in sorted(
                             points,
                             key=lambda p: abs(math.dist(companion_pos, (p["x"], p["y"], p["z"])) - 1800),
-                        )
+                        ):
+                            report = await arena_geometry(
+                                f"return_candidate_{candidate['name']}", ["PLAYER"],
+                                candidate=(candidate["x"], candidate["y"], candidate["z"]),
+                            )
+                            if report["clear"]:
+                                return_point = candidate
+                                break
+                        if return_point is None:
+                            raise GameError(
+                                "fight_reactions setup: no open authored return corridor 13–22 m away; "
+                                f"geometry={report}"
+                            )
                         log.info("fight_reactions authored return point=%s", return_point)
                         await link.detach(bandit)
                         parked.remove(bandit)
@@ -1041,6 +1194,12 @@ async def fight_reactions(
                         await link.attach(bandit)
                         parked.add(bandit)
                         await grounded(bandit, "returned", parked_hp, 1200, 2500)
+                        returned_geometry = await arena_geometry("returned", [bandit])
+                        if not returned_geometry["clear"]:
+                            raise GameError(
+                                "fight_reactions setup: obstructed returned arena; "
+                                f"geometry={returned_geometry}"
+                            )
                         await finish_preparation()
                         # Facing the previous duel can leave the returned defender behind
                         # Cavalorn, sending an ordinary fight order to its remembered place.

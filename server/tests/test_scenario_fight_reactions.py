@@ -3,10 +3,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from gothic_ai.scenario_fight_reactions import CombatTrace, combat_shouts, wait_attack_gap
+from gothic_ai.game import GameError
+from gothic_ai.protocol import ActionCmd, ActionResult, DebugCmd
+from gothic_ai.scenario_fight_reactions import (
+    CombatTrace,
+    combat_shouts,
+    obstacles_clear,
+    stop_and_hit,
+    wait_hit_geometry,
+)
 
 
-def row(symbol=10, *, t=100, hp=100, attack=False, weapon=0, pos=(1.0, 2.0, 3.0), target=20, events=()):
+def row(
+    symbol=10, *, t=100, hp=100, attack=False, prehit=False, weapon=0,
+    pos=(1.0, 2.0, 3.0), target=20, events=(),
+):
     return {
         "script_symbol": symbol,
         "entity_id": symbol + 100,
@@ -14,11 +25,25 @@ def row(symbol=10, *, t=100, hp=100, attack=False, weapon=0, pos=(1.0, 2.0, 3.0)
         "self": {
             "hp": hp,
             "attack_anim": attack,
+            "prehit": prehit,
             "weapon_state": weapon,
             "interruptible": True,
             "position_world_cm": pos,
         },
-        "target": {"entity_id": target},
+        "target": {
+            "entity_id": target,
+            "visible": True,
+            "melee_line_clear": True,
+            "in_w_range": True,
+            "focus_30": True,
+        },
+        "local_obstacles": {
+            "ray_range_cm": 300.0,
+            "rays": [
+                {"angle_rad": i * 0.392699, "distance_cm": 300.0, "hit": False}
+                for i in range(16)
+            ],
+        },
         "events": list(events),
     }
 
@@ -138,24 +163,119 @@ def test_window_interference_is_empty_for_quiet_companion():
     assert trace.window_interference("companion", 100, 200) == ([], [])
 
 
-async def test_wait_attack_gap_rechecks_transient_gap_before_accepting_current_quiet():
+def ready_trace(*, attacker_attack=False, attacker_prehit=False, defender_attack=False):
     trace = CombatTrace({10: "bandit", 11: "companion"})
-    trace.body({"observations": [row(attack=True), row(symbol=11, attack=True)]})
+    trace.body({"observations": [
+        row(target=111, attack=defender_attack),
+        row(symbol=11, target=110, attack=attacker_attack, prehit=attacker_prehit),
+    ]})
+    return trace
+
+
+def test_hit_ready_allows_defender_strike_already_in_flight():
+    trace = ready_trace(defender_attack=True)
+    assert trace.hit_ready("companion", "bandit")
+
+
+@pytest.mark.parametrize("attacker_state", [{"attacker_attack": True}, {"attacker_prehit": True}])
+def test_hit_ready_rejects_attacker_attack_or_prehit(attacker_state):
+    trace = ready_trace(**attacker_state)
+    assert not trace.hit_ready("companion", "bandit")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("entity_id", 999),
+    ("visible", False),
+    ("melee_line_clear", False),
+    ("in_w_range", False),
+    ("focus_30", False),
+])
+def test_hit_ready_requires_current_defender_target_and_open_melee_geometry(field, value):
+    trace = ready_trace()
+    trace.latest_rows["bandit"]["target"][field] = value
+    assert not trace.hit_ready("companion", "bandit")
+
+
+@pytest.mark.parametrize("who,section,field", [
+    ("companion", "self", "attack_anim"),
+    ("companion", "self", "prehit"),
+    ("bandit", "target", "entity_id"),
+    ("bandit", "target", "visible"),
+    ("bandit", "target", "melee_line_clear"),
+    ("bandit", "target", "in_w_range"),
+    ("bandit", "target", "focus_30"),
+])
+def test_hit_ready_rejects_missing_readiness_fields(who, section, field):
+    trace = ready_trace()
+    del trace.latest_rows[who][section][field]
+    assert not trace.hit_ready("companion", "bandit")
+
+
+@pytest.mark.parametrize("missing", ["companion", "bandit"])
+def test_hit_ready_rejects_missing_body(missing):
+    trace = ready_trace()
+    del trace.latest_rows[missing]
+    assert not trace.hit_ready("companion", "bandit")
+
+
+@pytest.mark.parametrize("who", ["companion", "bandit"])
+def test_hit_ready_requires_clear_obstacles_for_both_bodies(who):
+    trace = ready_trace()
+    trace.latest_rows[who]["local_obstacles"]["rays"][7].update(hit=True, distance_cm=119.9)
+    assert not trace.hit_ready("companion", "bandit")
+
+
+@pytest.mark.parametrize("clearance", [120.0, 300.0])
+def test_obstacles_clear_includes_clearance_boundary_and_ignores_no_hit_distance(clearance):
+    observation = row()
+    ray = observation["local_obstacles"]["rays"][0]
+    ray.update(hit=True, distance_cm=clearance)
+    assert obstacles_clear(observation, clearance)
+    ray["distance_cm"] = clearance - 0.1
+    assert not obstacles_clear(observation, clearance)
+    ray.update(hit=False, distance_cm=0.0)
+    assert obstacles_clear(observation, clearance)
+
+
+@pytest.mark.parametrize("clearance", [120.0, 300.0])
+@pytest.mark.parametrize("invalid_scan", ["missing", "short_range", "fewer_rays", "extra_rays"])
+def test_obstacles_clear_requires_complete_scan_covering_clearance(clearance, invalid_scan):
+    observation = row()
+    scan = observation["local_obstacles"]
+    if invalid_scan == "missing":
+        del observation["local_obstacles"]
+    elif invalid_scan == "short_range":
+        scan["ray_range_cm"] = clearance - 0.1
+    elif invalid_scan == "fewer_rays":
+        scan["rays"].pop()
+    else:
+        scan["rays"].append(scan["rays"][0].copy())
+    assert not obstacles_clear(observation, clearance)
+
+
+async def test_wait_hit_geometry_accepts_current_ready_body_without_listener():
+    trace = ready_trace(defender_attack=True)
     link = SimpleNamespace(raw_body_listeners=[trace.body])
-    waiting = asyncio.create_task(wait_attack_gap(link, trace, "companion", "bandit", timeout=1))
+    assert await wait_hit_geometry(link, trace, "companion", "bandit")
+    assert link.raw_body_listeners == [trace.body]
+
+
+async def test_wait_hit_geometry_rechecks_transient_geometry_until_current_body_is_ready():
+    trace = ready_trace(attacker_attack=True, defender_attack=True)
+    link = SimpleNamespace(raw_body_listeners=[trace.body])
+    waiting = asyncio.create_task(wait_hit_geometry(link, trace, "companion", "bandit", timeout=1))
     await asyncio.sleep(0)
 
     for packet in (
-        {"observations": [row(t=150), row(symbol=11, t=150)]},
-        {"observations": [row(t=160, attack=True), row(symbol=11, t=160, attack=True)]},
+        {"observations": [row(symbol=11, t=150)]},
+        {"observations": [row(symbol=11, t=160, prehit=True)]},
     ):
         for listener in tuple(link.raw_body_listeners):
             listener(packet)
 
     await asyncio.sleep(0)
-    assert trace.attacking == {"bandit": True, "companion": True}
     assert not waiting.done()
-    packet = {"observations": [row(t=170), row(symbol=11, t=170)]}
+    packet = {"observations": [row(symbol=11, t=170)]}
     for listener in tuple(link.raw_body_listeners):
         listener(packet)
 
@@ -165,25 +285,23 @@ async def test_wait_attack_gap_rechecks_transient_gap_before_accepting_current_q
     assert link.raw_body_listeners == [trace.body]
 
 
-async def test_wait_attack_gap_unknown_bodies_timeout_and_remove_listener():
+async def test_wait_hit_geometry_unknown_bodies_timeout_and_remove_listener():
     trace = CombatTrace({10: "bandit", 11: "companion"})
     link = SimpleNamespace(raw_body_listeners=[trace.body])
-    waiting = asyncio.create_task(wait_attack_gap(link, trace, "companion", "bandit", timeout=0.01))
+    waiting = asyncio.create_task(wait_hit_geometry(link, trace, "companion", "bandit", timeout=0.01))
     await asyncio.sleep(0)
     packet = {"observations": [row(symbol=11)]}
     for listener in tuple(link.raw_body_listeners):
         listener(packet)
 
     assert not await waiting
-    assert trace.attacking == {"companion": False}
     assert link.raw_body_listeners == [trace.body]
 
 
-async def test_wait_attack_gap_cancellation_removes_listener():
-    trace = CombatTrace({10: "bandit", 11: "companion"})
-    trace.body({"observations": [row(attack=True), row(symbol=11, attack=True)]})
+async def test_wait_hit_geometry_cancellation_removes_listener():
+    trace = ready_trace(attacker_prehit=True)
     link = SimpleNamespace(raw_body_listeners=[trace.body])
-    waiting = asyncio.create_task(wait_attack_gap(link, trace, "companion", "bandit"))
+    waiting = asyncio.create_task(wait_hit_geometry(link, trace, "companion", "bandit"))
     await asyncio.sleep(0)
     assert len(link.raw_body_listeners) == 2
     waiting.cancel()
@@ -191,6 +309,64 @@ async def test_wait_attack_gap_cancellation_removes_listener():
     with pytest.raises(asyncio.CancelledError):
         await waiting
     assert link.raw_body_listeners == [trace.body]
+
+
+class StopHitLink:
+    def __init__(self, *, fail_hit=False):
+        self.listeners = []
+        self.sent = []
+        self.fail_hit = fail_hit
+        self.proof = {"attacker": "companion", "victim": "bandit", "game_ms": 100}
+
+    def _next_id(self, prefix):
+        return f"{prefix}-{len(self.sent)}"
+
+    async def send(self, command):
+        assert isinstance(command, ActionCmd)
+        self.sent.append(command)
+
+    async def _request(self, command, timeout):
+        assert len(self.sent) == 1
+        stop = self.sent[0]
+        assert isinstance(stop, ActionCmd) and stop.action == "stop"
+        assert isinstance(command, DebugCmd)
+        self.sent.append(command)
+        if self.fail_hit:
+            raise GameError("npc_hit: weapon not drawn")
+        receipt = ActionResult(type="action_result", id=stop.id, npc=stop.npc, status="done")
+        for listener in tuple(self.listeners):
+            listener(receipt)
+        return SimpleNamespace(value=self.proof)
+
+
+async def test_stop_and_hit_sends_both_before_waiting_for_stop_receipt():
+    link = StopHitLink()
+    received = []
+    existing = received.append
+    link.listeners.append(existing)
+
+    proof = await asyncio.wait_for(stop_and_hit(link, "companion", "bandit"), timeout=0.1)
+
+    assert [(command.type, command.npc) for command in link.sent] == [
+        ("action", "companion"), ("debug", "bandit"),
+    ]
+    assert link.sent[0].action == "stop"
+    assert link.sent[1].cmd == "npc_hit" and link.sent[1].by == "companion"
+    assert proof is link.proof
+    assert link.listeners == [existing]
+
+
+async def test_stop_and_hit_removes_stop_listener_when_hit_request_fails():
+    link = StopHitLink(fail_hit=True)
+    received = []
+    existing = received.append
+    link.listeners.append(existing)
+
+    with pytest.raises(GameError, match="weapon not drawn"):
+        await stop_and_hit(link, "companion", "bandit")
+
+    assert len(link.sent) == 2
+    assert link.listeners == [existing]
 
 
 def test_native_voice_requires_successful_audio_playback(tmp_path):
