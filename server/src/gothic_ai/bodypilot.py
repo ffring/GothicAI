@@ -290,6 +290,29 @@ class BodyPilot:
     def _companion(self, npc: str) -> bool:
         return bool(self.companion(npc) or self.link.party.get(npc, (0, 0))[1])
 
+    async def _live_target(self, actor_npc: str) -> tuple[str, str | None, str] | None:
+        """Classify the engine's current target, never the roster's combat snapshot."""
+        companions = sorted(
+            npc for npc in self.people.keys() | self.link.party.keys()
+            if self._companion(npc)
+        )
+        expressions = [TARGET_IS_HERO, *[
+            ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
+             ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
+              ["call", "HLP_GETINSTANCEID", ["inst", npc]]]]
+            for npc in companions
+        ]]
+        matches = await self.link.story_eval(actor_npc, expressions, timeout=BRIDGE_TIMEOUT)
+        if len(matches) != len(expressions):
+            raise GameError("target identity unavailable")
+        if matches[0] == 1:
+            return "hero", None, "HERO"
+        for npc, matched in zip(companions, matches[1:], strict=True):
+            if matched == 1 and self._companion(npc):
+                entry = self.people.get(npc)
+                return "companion", entry.name if entry else npc, npc
+        return None
+
     def on_message(self, message: GameMessage) -> None:
         if isinstance(message, NpcRoster):
             entries = {entry.id.upper(): entry for entry in message.npcs}
@@ -445,12 +468,15 @@ class BodyPilot:
                 if summary is pending.summary:
                     self.summaries[index] = updated
                     break
-            self._remember_lost_fight(updated)
+            self._remember_retarget(updated)
             log.info(
                 "neural-body end npc=%s reason=%s end_trigger=%s release_late_seconds=%.3f "
                 "release_confirmed=True",
                 npc, updated.reason, updated.end_trigger, late_seconds,
             )
+        self._remember_lost_fight(
+            updated if confirmed else pending.summary, orphan_expired=not confirmed,
+        )
         self._wake.set()
 
     async def _poll_releases(self) -> None:
@@ -485,18 +511,53 @@ class BodyPilot:
                        for actor in status.actors):
                     self._released(npc, pending)
 
-    def _remember_lost_fight(self, summary: FightSummary) -> None:
+    def _remember_lost_fight(self, summary: FightSummary, *, orphan_expired: bool = False) -> None:
         reason = summary.end_trigger if summary.reason == "finish_deadline" else summary.reason
-        if summary.npc in self._claimed_fights and summary.release_confirmed and reason in {
-            "npc_unavailable", "target_lost",
-        }:
+        if (
+            summary.npc in self._claimed_fights and (summary.release_confirmed or orphan_expired)
+            and reason in {"npc_unavailable", "target_lost"}
+        ):
             # A distant NPC can return straight to native combat. Its routine
             # while outside the roster is not observable, so range exit ends
             # this lost episode without requiring an intervening routine row.
+            # Lease expiry permits the same bookkeeping without fabricating a
+            # release confirmation in the summary.
             self._lost_fights.add(summary.npc)
             entry = self.people.get(summary.npc)
             if entry is None or entry.distance > 2000:
                 self._forget_ended({summary.npc})
+
+    def _remember_retarget(self, summary: FightSummary) -> None:
+        if (
+            summary.npc is not None and summary.end_trigger == "target_changed"
+            and summary.release_confirmed and not self._closing and not self._resetting
+        ):
+            # Keep the claim until the dispatcher can check the live target.
+            # The completed BodyFight has already discarded its mutable state.
+            self._retarget_pending.add(summary.npc)
+
+    async def _resume_retargets(self) -> None:
+        for npc in sorted(self._retarget_pending):
+            entry = self.people.get(npc)
+            if entry is None or entry.activity != "fight" or entry.state.upper() != "ZS_ATTACK":
+                continue
+            if npc in self._claimed_fights:
+                if (
+                    self.handles(npc) or not self._allowed(npc)
+                    or self.clock() < self._reacquire_after.get(npc, float("-inf"))
+                ):
+                    continue
+                try:
+                    target = await self._live_target(npc)
+                except BRIDGE_ERRORS:
+                    continue
+                if self._closing or self._resetting or npc not in self._retarget_pending or self.handles(npc):
+                    continue
+                if target is None:
+                    self._retarget_pending.discard(npc)
+                    continue
+                self._claimed_fights.discard(npc)
+            self._start(npc)
 
     def _completed(self, fight: BodyFight, summary: FightSummary, finish_at: float,
                    release_deadline: float) -> None:
@@ -539,6 +600,8 @@ class BodyPilot:
         self._remember_lost_fight(summary)
         if not self.fights:
             self._resetting = False
+        if summary.reason == "finish_deadline":
+            self._remember_retarget(summary)
         self._wake.set()
 
     def _stop_all(self, reason: str) -> None:
@@ -596,10 +659,7 @@ class BodyPilot:
                 for fight in list(self.fights.values()):
                     if fight.task is None:
                         fight.task = asyncio.create_task(fight.run())
-                for npc in sorted(self._retarget_pending):
-                    entry = self.people.get(npc)
-                    if entry is not None and entry.activity == "fight" and entry.state.upper() == "ZS_ATTACK":
-                        self._start(npc)
+                await self._resume_retargets()
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=0.025)
                 except TimeoutError:
@@ -728,28 +788,8 @@ class BodyFight:
         return self.pilot._companion(npc)
 
     async def _live_target(self) -> tuple[str, str | None, str] | None:
-        """Classify the engine's current target, never the roster's combat snapshot."""
         assert self.npc is not None
-        companions = sorted(
-            npc for npc in self.people.keys() | self.link.party.keys()
-            if self._companion(npc)
-        )
-        expressions = [TARGET_IS_HERO, *[
-            ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
-             ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
-              ["call", "HLP_GETINSTANCEID", ["inst", npc]]]]
-            for npc in companions
-        ]]
-        matches = await self.link.story_eval(self.npc, expressions, timeout=BRIDGE_TIMEOUT)
-        if len(matches) != len(expressions):
-            raise GameError("target identity unavailable")
-        if matches[0] == 1:
-            return "hero", None, "HERO"
-        for npc, matched in zip(companions, matches[1:], strict=True):
-            if matched == 1 and self._companion(npc):
-                entry = self.people.get(npc)
-                return "companion", entry.name if entry else npc, npc
-        return None
+        return await self.pilot._live_target(self.npc)
 
     def stop(self, reason: str) -> None:
         self._set_reason(reason)
