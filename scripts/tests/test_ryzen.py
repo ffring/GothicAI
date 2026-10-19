@@ -322,12 +322,31 @@ exec(compile(sys.stdin.read(), '<auto-clean-test>', 'exec'), {'__name__': '__mai
         flock = self.bin / 'flock'
         flock.write_text(f'#!{sys.executable}\n' + r'''
 import fcntl
+import os
+from pathlib import Path
 import sys
-assert sys.argv[1] == '-n', sys.argv
-try:
-    fcntl.flock(int(sys.argv[2]), fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError:
-    sys.exit(1)
+import time
+if sys.argv[1] == '-n':
+    try:
+        fcntl.flock(int(sys.argv[2]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(1)
+else:
+    assert sys.argv[1] == '-w', sys.argv
+    # Delay the legacy wrapper after exec 9>lock but before its flock call.
+    Path(os.environ['TEST_FLOCK_OPENED']).touch()
+    while not Path(os.environ['TEST_FLOCK_CONTINUE']).exists():
+        time.sleep(0.02)
+    deadline = time.monotonic() + float(sys.argv[2])
+    while True:
+        try:
+            fcntl.flock(int(sys.argv[3]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            Path(os.environ['TEST_FLOCK_WAITING']).touch()
+            if time.monotonic() >= deadline:
+                sys.exit(1)
+            time.sleep(0.02)
 ''')
         flock.chmod(0o755)
         uv = self.home / '.local/bin/uv'
@@ -381,8 +400,10 @@ space.write_text(str(int(space.read_text()) + 2 * 1024 ** 3))
     def uv_calls(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
 
-    def test_removes_idle_unlocked_worktree_and_lock_only(self):
+    def test_removes_idle_unlocked_worktree_but_preserves_lock_inode(self):
         stale = self.worktree('stale')
+        stale_lock = self.worktrees / 'stale.lock'
+        lock_inode = stale_lock.stat().st_ino
         fresh = self.worktree('fresh', hours=1)
         own = self.worktree('own')
         locked = self.worktree('locked')
@@ -390,7 +411,7 @@ space.write_text(str(int(space.read_text()) + 2 * 1024 ** 3))
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             result = self.shell()
         self.assertFalse(stale.exists())
-        self.assertFalse((self.worktrees / 'stale.lock').exists())
+        self.assertEqual(stale_lock.stat().st_ino, lock_inode)
         for state in (fresh, own, locked):
             self.assertTrue(state.exists(), state)
             self.assertTrue(state.with_suffix('.lock').exists(), state)
@@ -398,6 +419,75 @@ space.write_text(str(int(space.read_text()) + 2 * 1024 ** 3))
         self.assertEqual(len(result.stdout.splitlines()), 1, result.stdout)
         self.assertIn('stale', result.stdout)
         self.assertEqual(self.uv_calls(), [])
+
+    def test_cleanup_preserves_lock_for_legacy_waiter_that_already_opened_it(self):
+        stale = self.worktree('legacy')
+        lock_path = self.worktrees / 'legacy.lock'
+        inode = lock_path.stat().st_ino
+        opened = self.root / 'legacy-opened'
+        proceed = self.root / 'legacy-continue'
+        waiting = self.root / 'legacy-waiting'
+        acquired = self.root / 'legacy-acquired'
+        finish = self.root / 'legacy-finish'
+        # Keep the old take_lock implementation here: older worktrees have no
+        # inode check and must still serialize with every subsequent wrapper.
+        harness = r'''
+set -euo pipefail
+LOCK_WAIT=5
+take_lock() {
+  mkdir -p "$(dirname "$WORKTREE_LOCK")"
+  exec 9>"$WORKTREE_LOCK"
+  local started=$SECONDS monitor waiter status
+  echo "Ryzen: waiting for worktree lock $WORKTREE_LOCK (up to ${LOCK_WAIT}s)"
+  (IFS= read -r unused || kill -TERM "$$") <&0 &
+  monitor=$!
+  flock -w "$LOCK_WAIT" 9 &
+  waiter=$!
+  trap 'kill "$monitor" "$waiter" 2>/dev/null || true; exit 143' HUP INT TERM
+  wait "$waiter" && status=0 || status=$?
+  kill "$monitor" 2>/dev/null || true
+  wait "$monitor" 2>/dev/null || true
+  trap - HUP INT TERM
+  [[ "$status" == 0 ]] || { echo 'Ryzen занят' >&2; exit 75; }
+  echo "Ryzen: lock acquired in $((SECONDS - started))s"
+}
+take_lock
+touch "$TEST_ACQUIRED"
+while [[ ! -e "$TEST_FINISH" ]]; do sleep 0.02; done
+'''
+        legacy = subprocess.Popen(
+            ['bash', '-c', harness], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, start_new_session=True,
+            env=dict(self.env, WORKTREE_LOCK=str(lock_path),
+                     TEST_FLOCK_OPENED=str(opened), TEST_FLOCK_CONTINUE=str(proceed),
+                     TEST_FLOCK_WAITING=str(waiting), TEST_ACQUIRED=str(acquired),
+                     TEST_FINISH=str(finish)),
+        )
+        try:
+            wait_for(opened)
+            self.shell()
+            self.assertFalse(stale.exists())
+            self.assertEqual(lock_path.stat().st_ino, inode)
+            # The next wrapper can recreate this directory, but its lock must
+            # conflict with the fd that the legacy wrapper opened before GC.
+            stale.mkdir()
+            with lock_path.open('a') as contender:
+                fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                proceed.touch()
+                wait_for(waiting)
+                self.assertFalse(acquired.exists())
+                fcntl.flock(contender, fcntl.LOCK_UN)
+                wait_for(acquired)
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finish.touch()
+            stdout, stderr = legacy.communicate(timeout=5)
+            self.assertEqual(legacy.returncode, 0, stdout + stderr)
+            self.assertIn('lock acquired', stdout)
+        finally:
+            if legacy.poll() is None:
+                os.killpg(legacy.pid, signal.SIGKILL)
+                legacy.communicate(timeout=5)
 
     def test_missing_marker_uses_newest_mtime_through_two_levels(self):
         old = self.worktree('old-without-marker', marker=False)

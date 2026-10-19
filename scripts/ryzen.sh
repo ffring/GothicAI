@@ -39,7 +39,7 @@ take_lock() {
     trap 'kill "$monitor" "$waiter" 2>/dev/null || true; exit 143' HUP INT TERM
     wait "$waiter" && status=0 || status=$?
     [[ "$status" == 0 ]] || break
-    # Auto-clean may have unlinked the file while we waited on its old inode.
+    # The lock path may have been replaced while we waited on its old inode.
     # Never upload under that retired lock: reopen the current path instead.
     if python3 - "$WORKTREE_LOCK" <<'PY'
 import os
@@ -124,13 +124,15 @@ if idle_hours:
             with lock_file(path) as lock:
                 if not try_lock(lock):
                     continue
-                # Another cleaner can retire the lock between open and flock.
+                # Skip a lock path replaced between open and flock.
                 if path.stat().st_ino != os.fstat(lock.fileno()).st_ino:
                     continue
                 if directory.is_symlink() or activity(directory) >= cutoff:
                     continue
                 shutil.rmtree(directory)
-                path.unlink()
+                # Legacy wrappers may already have this inode open, but not
+                # locked yet. Keep the named lock so they cannot later acquire
+                # a detached inode alongside a new invocation of this worktree.
                 removed.append(directory.name)
         except FileNotFoundError:
             continue  # A concurrent cleaner already removed this entry.
