@@ -120,6 +120,15 @@ async def neural_soak_scenario(
             for attribute in (1, 0)
         ])
 
+    async def check_companion() -> None:
+        dead, = await link.story_eval(TALKER, [["call", "NPC_ISDEAD", ["inst", COMPANION]]])
+        snapshot = await link.snapshot(COMPANION, fresh=True)
+        if dead or snapshot.npc.hp <= 0:
+            raise GameError(
+                f"neural-soak preparation: companion dead={dead}, "
+                f"hp={snapshot.npc.hp}/{snapshot.npc.hp_max}, pos={snapshot.npc.pos}"
+            )
+
     def observe(packet: dict[str, Any]) -> None:
         nonlocal hero_dead
         now = time.monotonic()
@@ -342,7 +351,19 @@ async def neural_soak_scenario(
                                   waypoint=REFUGE)],
         ))
         await link.debug("skip_important", near=npc)
+        # story_npc uses the authored point, which can float above the floor.
+        # Ground the fixture before the initial 30-second gap can accumulate
+        # a fall; healing a ZS_Dead NPC later does not revive it.
+        await link.debug("npc_goto", npc=npc, waypoint=REFUGE)
+        ready = await Bodies(link).act(
+            npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=REFUGE,
+            minutes=60, arrive=True, radius=100, timeout=15,
+        )
+        if ready.status != "arrived":
+            raise GameError(f"neural-soak preparation: {npc} {ready.status}")
     await link.story_effect(COMPANION, [{"do": "party", "value": 1}])
+    await heal()
+    await check_companion()
     await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
     original_llm = dialogue.llm
     dialogue.llm = FakeBackend("Пока спокойно. Держи меч наготове.", delay=.15)
@@ -394,6 +415,7 @@ async def neural_soak_scenario(
                     snapshot = await link.snapshot(TALKER, fresh=True)
                     log.error("neural-soak weapon preparation: hero=%s", snapshot.player)
                     raise
+                await check_companion()
                 saved = await _save_or_fail(link, 7)
                 await calls([["call", "WLD_INSERTNPC", ["sym", npc], ["str", PLACES[1]]]
                              for npc in BANDITS[:count]])
