@@ -316,6 +316,18 @@ if(NOT ANDROID AND NOT IOS)
   add_custom_target(check-navkeyteacher
     COMMAND $<TARGET_FILE:gothic-navkeyteacher-contract>
     DEPENDS gothic-navkeyteacher-contract USES_TERMINAL)
+  add_executable(gothic-navmemoryteacher-contract EXCLUDE_FROM_ALL
+    tests/navmemoryteacher_contract.cpp common/navmemoryteacher.cpp)
+  target_include_directories(gothic-navmemoryteacher-contract PRIVATE
+    common lib/Tempest/Engine/include lib/Tempest/Engine
+    lib/Tempest/Engine/thirdparty/zlib ${CMAKE_BINARY_DIR}/lib/Tempest/thirdparty/zlib)
+  target_link_libraries(gothic-navmemoryteacher-contract PRIVATE zlibstatic)
+  if(NOT MSVC)
+    target_compile_options(gothic-navmemoryteacher-contract PRIVATE -Wall -Wconversion -Werror)
+  endif()
+  add_custom_target(check-navmemoryteacher
+    COMMAND $<TARGET_FILE:gothic-navmemoryteacher-contract> --self-test
+    DEPENDS gothic-navmemoryteacher-contract USES_TERMINAL)
   add_executable(gothic-navmesh-contract EXCLUDE_FROM_ALL
     tests/navmesh_contract.cpp common/physics/navmesh.cpp)
   target_link_libraries(gothic-navmesh-contract PRIVATE Recast Detour)
