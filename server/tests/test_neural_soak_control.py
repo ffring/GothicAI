@@ -31,6 +31,9 @@ class NativeWorld:
         self.wave_sizes = []
         self.wave_started = None
         self.dead = False
+        self.companion_dead = False
+        self.death_target = "hero"
+        self.death_after_last_fight = False
         self.death_used = False
         self.watched = []
         self.watches = []
@@ -73,9 +76,11 @@ class NativeWorld:
         pass
 
     async def story_effect(self, *args):
+        assert args[0] != soak.COMPANION or not self.companion_dead
         self.reply()
 
     async def snapshot(self, *args, **kwargs):
+        assert args[0] != soak.COMPANION or not self.companion_dead
         return SimpleNamespace(npc=SimpleNamespace(hp=900, hp_max=900, pos=(0, 0, 0)))
 
     async def body_watch(self, npcs, **kwargs):
@@ -88,19 +93,30 @@ class NativeWorld:
         if npc in soak.BANDITS:
             return [soak.BANDITS.index(npc) + 100, True, True]
         if expressions[0] == ["call", "NPC_ISDEAD", ["inst", soak.COMPANION]]:
-            return [False]
+            return [self.companion_dead]
         assert expressions[0] == ["call", "NPC_ISDEAD", ["inst", "HERO"]]
+        assert expressions[1] == ["call", "NPC_ISDEAD", ["inst", soak.COMPANION]]
+        was_dead = self.companion_dead
         if (not self.death_used and self.wave_started is not None
                 and self.now - self.wave_started >= 8):
-            self.dead = self.death_used = True
+            self.death_used = True
+            if self.death_target == "hero":
+                self.dead = True
+            else:
+                self.companion_dead = True
         # Native attacks stay live until a load or the escape deadline. No
         # lease, policy reset or body-control method exists on this fake link.
-        return [self.dead, *[True for _ in expressions[1:]]]
+        companion = was_dead if self.death_after_last_fight else self.companion_dead
+        attacking = not (self.death_after_last_fight and self.companion_dead)
+        return [self.dead, companion, *[attacking for _ in expressions[2:]]]
 
     async def patch_graph(self, operations):
         for operation in operations:
             if operation["steps"] is None:
                 continue
+            if self.companion_dead:
+                assert not any(["inst", soak.COMPANION] in step["call"]
+                               for step in operation["steps"])
             self.trigger_counts.append({"id": operation["id"], "count": 1})
             attacks = [step["call"] for step in operation["steps"]
                        if step["call"][:2] == ["fn", "B_ATTACK"]]
@@ -113,6 +129,7 @@ class NativeWorld:
         return self.trigger_counts
 
     async def debug(self, command, *args, **kwargs):
+        assert kwargs.get("npc") != soak.COMPANION or not self.companion_dead
         if command == "player_hp":
             self.heals += 1
         elif command == "load":
@@ -121,6 +138,7 @@ class NativeWorld:
             self.body_generation += 1
             self.branch = f"loaded-{self.body_generation}"
             self.dead = False
+            self.companion_dead = False
             self.wave_started = None
             self.emit(Session(type="session", branch=self.branch, parent=saved.branch,
                               parent_seq=saved.seq, reason="load"))
@@ -137,6 +155,7 @@ class NativeWorld:
         pass
 
     async def save(self, slot):
+        assert not self.companion_dead
         saved = Saved(type="saved", branch=self.branch, seq=len(self.save_slots) + 1)
         self.saves[slot] = saved
         self.save_slots.append(slot)
@@ -145,9 +164,10 @@ class NativeWorld:
 
 class ReadyBodies:
     def __init__(self, link):
-        pass
+        self.link = link
 
     async def act(self, *args, **kwargs):
+        assert args[0] != soak.COMPANION or not self.link.companion_dead
         return SimpleNamespace(status="arrived")
 
 
@@ -226,6 +246,30 @@ async def test_control_runs_native_waves_death_and_scheduled_loads(
     assert not world.raw_body_listeners and not world.listeners
 
 
+@pytest.mark.parametrize("death_after_last_fight", [False, True])
+async def test_companion_death_loads_without_commands_on_dead_npc_and_runs_next_wave(
+    tmp_path, control_world, death_after_last_fight,
+):
+    world, dialogue, _ = control_world
+    world.death_target = "companion"
+    world.death_after_last_fight = death_after_last_fight
+
+    checks = await soak.neural_soak_scenario(world, dialogue, None, log_dir=tmp_path)
+
+    assert all(value.startswith("done") for value in checks.values())
+    result = json.loads((tmp_path / "neural_soak_result.json").read_text())
+    assert result["extra"]["hero_death"] == 0
+    assert result["extra"]["companion_death"] == 1
+    assert [item["cause"] for item in result["extra"]["loads"]] == [
+        "companion_death", "scheduled_10m", "scheduled_20m",
+    ]
+    assert result["extra"]["loads"][0]["ok"]
+    assert len(world.wave_sizes) == 4
+    assert len(world.loads) == 3
+    assert world.conversations == len(world.wave_sizes)
+    assert "companion_death=1" in checks["soak_loads"]
+
+
 @pytest.mark.parametrize("response", [
     [0, None, 1, 1],
     [None, 1, 1, 1],
@@ -242,7 +286,7 @@ async def test_unavailable_native_state_cannot_end_the_wave(
     async def unavailable(npc, expressions):
         # Only the batch observing the hero and current attackers is faulty;
         # preparation and companion health still succeed normally.
-        if npc == soak.TALKER and len(expressions) > 1:
+        if npc == soak.TALKER and len(expressions) > 2:
             return response
         return await native_eval(npc, expressions)
 

@@ -41,6 +41,34 @@ def test_hero_death_accepts_cleanup_published_between_snapshot_and_load():
     assert not _load_summaries_ok(old, summaries, cause="scheduled_10m")
 
 
+def test_companion_death_accepts_cleanup_published_between_snapshot_and_load():
+    old = [lease(1), lease(2)]
+    summaries = [Summary(old[0], reason="target_down", target_kind="companion"), Summary(old[1])]
+
+    assert _load_summaries_ok(old, summaries, cause="companion_death")
+    assert not _load_summaries_ok(old, summaries, cause="hero_death")
+    assert not _load_summaries_ok(old, summaries, cause="scheduled_10m")
+
+
+@pytest.mark.parametrize("cause", ["hero_death", "companion_death"])
+def test_simultaneous_deaths_allow_only_known_dead_targets(cause):
+    old = [lease(1), lease(2)]
+    summaries = [Summary(old[0], reason="hero_down", target_kind="hero"),
+                 Summary(old[1], reason="target_down", target_kind="companion")]
+    assert _load_summaries_ok(old, summaries, cause=cause, dead_targets={"hero", "companion"})
+    assert not _load_summaries_ok(old, summaries, cause=cause)
+    assert not _load_summaries_ok(
+        old, summaries, cause="scheduled_10m", dead_targets={"hero", "companion"},
+    )
+
+
+@pytest.mark.parametrize("target_kind", ["hero", "other", None])
+def test_companion_death_does_not_exempt_another_targets_summary(target_kind):
+    old = lease(1)
+    summary = Summary(old, reason="target_down", target_kind=target_kind)
+    assert not _load_summaries_ok([old], [summary], cause="companion_death")
+
+
 @pytest.mark.parametrize("reason", ["target_down", "target_lost", "native_restored", "pilot_error"])
 def test_hero_death_does_not_accept_unrelated_endings(reason):
     old = lease(1)
@@ -54,6 +82,10 @@ def test_hero_death_does_not_exempt_another_targets_summary(target_kind):
     assert not _load_summaries_ok([old], [summary], cause="hero_death")
 
 
+@pytest.mark.parametrize("cause, reason, target_kind", [
+    ("hero_death", "hero_down", "hero"),
+    ("companion_death", "target_down", "companion"),
+])
 @pytest.mark.parametrize("fields", [
     {"release_confirmed": False},
     {"fallbacks": 1},
@@ -61,10 +93,10 @@ def test_hero_death_does_not_exempt_another_targets_summary(target_kind):
     {"release_seconds": 2.001},
     {"release_late_seconds": 2.75},
 ])
-def test_hero_death_race_keeps_release_and_fallback_checks(fields):
+def test_death_race_keeps_release_and_fallback_checks(fields, cause, reason, target_kind):
     old = lease(1)
-    summary = replace(Summary(old, reason="hero_down"), **fields)
-    assert not _load_summaries_ok([old], [summary], cause="hero_death")
+    summary = replace(Summary(old, reason=reason, target_kind=target_kind), **fields)
+    assert not _load_summaries_ok([old], [summary], cause=cause)
 
 
 def test_load_cleanup_requires_every_exact_old_lease_once():
