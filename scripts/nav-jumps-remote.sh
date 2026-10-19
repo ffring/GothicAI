@@ -128,13 +128,9 @@ PY
     --routes "$task/routes/routes.jsonl" --indices "$pilot_indices" --count 30 --require-70pct \
     --output "$pilot_output" --storage-root "$HOME/gothic-ai/nav-demos-jumps"
   "$task/.venv/bin/python" -I "$task/source/scripts/nav_demos.py" check "$pilot_output"
-  if [[ "$1" == demo-pilot ]]; then
-    GQ_OWNER=nav-jumps "$HOME/gothic-ai/bin/gq" submit --class batch --threads 2 --mem 6G --max 2h \
-      --name "nav jumps record 267 goal action landing side CV" -- bash "$task/record.sh"
-  fi
+
 fi
 BUILD
-    if [[ "$stage" == demo-pilot ]]; then write_record_script; fi
     "$ROOT/scripts/gq" submit --class batch --threads 4 --mem 6G --max 2h \
       --name "nav jumps $stage engine runner tests" -- bash "$task/build.sh" "$stage" "$attempt"
     ;;
