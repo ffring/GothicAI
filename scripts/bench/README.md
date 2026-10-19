@@ -985,3 +985,14 @@ the bloodfly control must stay on the legacy path.
 `monster-character-virtual-performance` measures twenty ground monsters for 30 seconds
 without capture. Run performance on Mac with `BENCH_HOST=local` and a build configured
 with `-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`. The opt-in flag remains OFF by default.
+
+`monster-character-virtual-stairs` pins the part-1 chase to `NW_CITY_TO_FARM2_09`
+and records a twelve-second `wolf_stairs` take with `watch id`, `cam follow` and
+`view clean`. Its `monster_character_stair_step` events include body state, signed
+physical/visual Y changes, requested animation movement and separate CV
+ExtendedUpdate/WalkStairs positions. A recorded take still needs framing review;
+the report documents the current foliage obstruction.
+`monster-character-virtual-stair-attack` enters `T_FISTATTACKMOVE` while a stair
+presentation correction is pending, without resetting that correction. It tests
+the grounded attack handoff separately from physical lunge range. The numerical
+wolf lunge uses its previously verified lane; the bloodfly scene is unchanged.

@@ -8806,7 +8806,9 @@ bool monsterCharacterChaseGoal(World& world,const Npc& npc,const Npc& player,con
 
 bool monsterCharacterStairs(World& world,Npc& npc,Npc& player,Vec3& start,Vec3& goal,std::string& waypoint,bool stoneOnly=false) {
   std::vector<const WayPoint*> points;
-  world.forEachWayPoint([&](const WayPoint& wp) {
+  if(!stoneOnly) {
+    if(const auto* point=world.findPoint("NW_CITY_TO_FARM2_09"))points.push_back(point);
+    } else world.forEachWayPoint([&](const WayPoint& wp) {
     if(!wp.underWater && wp.name.starts_with("NW_CITY_") && wp.name.find("BED")==std::string::npos &&
        (!stoneOnly || wp.name.find("DITCH")==std::string::npos))points.push_back(&wp);
     });
@@ -8866,6 +8868,7 @@ void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
     event("monster_character_surface","\"route\":\"wolf_terrain\",\"waypoint\":"+jsonStr(waypoint)+
       ",\"known_stairs\":true,\"hero_escape_cm\":"+ragdollVector(escape));
     } else if(name=="wolf_stairs") {
+    route.npc->setCharacterVirtualDiagnosticsEnabled(true);
     if(!monsterCharacterStairs(world,*route.npc,player,route.start,route.goal,waypoint)) {
       monsterCharacterError("wolf stairs lack a supported native chase continuation");return;
       }
@@ -8997,6 +9000,14 @@ void monsterCharacterEnd(World& world) {
 // The attack needs three supported roots and one short native attack lane,
 // rather than the twenty-place arena used by the performance fixture.
 bool chooseMonsterAttackSite(World& world,const Npc&,const Npc&,bool withFly,Vec3& start,Vec3& goal,Vec3& flyAt) {
+  if(!withFly) {
+    // Keep the wolf's numerical lunge on its already verified part-2 lane.
+    // The bloodfly scene's short valley lane has no supported 12 m endpoint.
+    if(!characterFloor(world,Vec3(38674.5156f,4308.43604f,11976.749f),start) ||
+       !characterFloor(world,Vec3(39874.5156f,4308.43604f,11976.749f),goal))return false;
+    event("monster_character_attack_site","\"site\":\"verified_wolf_lunge\",\"known_site\":true");
+    return true;
+    }
   const auto* anchor=world.findPoint("NW_XARDAS_TOWER_VALLEY_091");
   if(!anchor || !characterFloor(world,anchor->groundPos,start,2000) ||
      !characterFloor(world,start+Vec3(withFly?350.f:1200.f,0,0),goal) ||
@@ -9143,6 +9154,24 @@ void monsterCharacterFields(World& world,uint64_t dt) {
   bench.monsterCharacterFrames.push_back({route.name,animation,world.tickCount(),dt,world.npcId(npc),at,visual,
     bool(Gothic::settingsGetI("GAME","monster_character_virtual")),npc->characterVirtualActive(),npc->navigationGoal().active,
     npc->isInAir(),npc->isFalling(),npc->isSwim()});
+  if(route.name=="wolf_stairs") {
+    CharacterVirtualDiagnostics d;
+    const bool valid=npc->characterVirtualDiagnostics(d);
+    event("monster_character_stair_step","\"route\":"+jsonStr(route.name)+",\"tick\":"+std::to_string(world.tickCount())+
+      ",\"dt_ms\":"+std::to_string(dt)+",\"body_state\":"+std::to_string(unsigned(npc->bodyStateMasked()))+
+      ",\"attack_state\":"+(npc->bodyStateMasked()==BS_HIT?"true":"false")+
+      ",\"root_cm\":"+ragdollVector(at)+",\"visual_root_cm\":"+ragdollVector(visual)+
+      ",\"physical_dy_cm\":"+ragdollNumber(at.y-route.lastPosition.y)+
+      ",\"visual_dy_cm\":"+ragdollNumber(visual.y-route.lastVisual.y)+
+      ",\"visual_offset_cm\":"+ragdollNumber(visual.y-at.y)+",\"animation\":"+jsonStr(animation)+
+      ",\"in_air\":"+(npc->isInAir()?"true":"false")+",\"diagnostics_valid\":"+(valid?"true":"false")+
+      ",\"requested_cm\":"+ragdollVector(d.requested)+",\"stair_height_cm\":"+ragdollNumber(d.stairHeight)+
+      ",\"cv_before_cm\":"+ragdollVector(d.before.position)+
+      ",\"cv_extended_cm\":"+ragdollVector(d.afterExtendedUpdate.position)+
+      ",\"cv_stairs_cm\":"+ragdollVector(d.afterStairs.position)+
+      ",\"stair_attempted\":"+(d.stairAttempted?"true":"false")+
+      ",\"stair_succeeded\":"+(d.stairSucceeded?"true":"false")+",\"stair_reason\":"+jsonStr(d.stairProbe.reason));
+    }
   route.cvFrames+=npc->characterVirtualActive();route.swimFrames+=npc->isSwim();route.sawSwim|=npc->isSwim();
   route.maxPhysicalJump=std::max(route.maxPhysicalJump,std::abs(at.y-route.lastPosition.y));
   route.maxVisualJump=std::max(route.maxVisualJump,std::abs(visual.y-route.lastVisual.y));
@@ -9741,6 +9770,18 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("monster_character_water_reverse","\"start_cm\":"+ragdollVector(route.start)+",\"goal_cm\":"+ragdollVector(route.goal));
     }
   else if(c=="monstercharacter" && a.size()==3 && a[1]=="attack")monsterCharacterAttack(w,pl,a[2]);
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="stair-attack") {
+    auto& route=bench.monsterCharacterRoute;
+    if(!route.npc || !route.active || route.name!="wolf_stairs") {
+      monsterCharacterError("stair-attack requires the active stair chase");return;
+      }
+    const float pending=route.npc->characterVisualPosition().y-route.npc->position().y;
+    route.npc->clearAiQueue();route.npc->clearGoTo();route.npc->stopWalking();
+    const auto* attack=route.npc->playAnimByName("T_FISTATTACKMOVE",BS_HIT);
+    event("monster_character_stair_attack","\"pending_offset_cm\":"+ragdollNumber(pending)+
+      ",\"accepted\":"+(attack?"true":"false"));
+    if(!attack)monsterCharacterError("stair handoff lacks the wolf lunge animation");
+    }
   else if(c=="monstercharacter" && a.size()==2 && a[1]=="attack-start") {
     auto& route=bench.monsterCharacterRoute;
     if(!route.npc || !route.attack) {monsterCharacterError("attack-start requires an authored monster attack fixture");return;}
