@@ -42,8 +42,10 @@ from .lies import vanilla_given as vanilla_given
 from .lies import vanilla_lie as vanilla_lie
 from .lies import witness_check as witness_check
 from .lies import xardas_wrath as xardas_wrath
+from .memprobe import memprobe_scenario as memprobe_scenario
 from .neural_load import neural_load_scenario as neural_load_scenario
 from .neural_soak import neural_soak_scenario as neural_soak_scenario
+from .npc_deeds import npc_deeds as npc_deeds
 from .npc_life import chests_scenario as chests_scenario
 from .npc_life import day_scenario as day_scenario
 from .npc_life import errand_give_scenario as errand_give_scenario

@@ -70,7 +70,9 @@ Json request(const char* type,const Npc& actor) {
   return d;
   }
 
-Json call(const Json& request) { return parse(BodyController::handleJson(request)); }
+Json call(const Json& request,bool sentObservations=false) {
+  return parse(BodyController::handleJson(request,sentObservations));
+  }
 
 Json action(Npc& actor,FightAlgo::PolicyAction policy) {
   auto d=request("body_action",actor);
@@ -188,6 +190,60 @@ void liveLease(Npc& a,Npc& b,PlayerControl& player) {
   for(const auto& row:rows["observations"].GetArray())
     expect(row["entity_id"].GetUint64()==stable[2],"removed B emits no new rows");
   release(a);
+  }
+
+void realtimeSentObservation(Npc& actor,Npc& target,PlayerControl& player) {
+  ++cases;
+  BodyController::fixturePrepare(actor,target,300,0);
+  actor.setExternalControl(false);
+  initialWatch(actor,600);
+  expect(acquire(actor,0,"realtime")["accepted"].GetBool(),"sent observation fixture acquired realtime lease");
+  step(player,2);
+  const auto sent=status(actor);
+  const auto sequence=sent["observation_seq"].GetUint64();
+  const auto gameMs=sent["observed_game_ms"].GetUint64();
+  BodyObservations::drainJson();
+  BodyObservations::markDrainedSent();
+  expect(BodyObservations::latestSent(actor).sequence==sequence,"successful send records the drained observation");
+  const auto command=[&](uint64_t id,uint64_t ttl=1000) {
+    auto d=request("body_action",actor);
+    for(const char* key:{"goal_version","target_entity_id","observation_seq"})
+      number(d,key,sent[key].GetUint64());
+    number(d,"issued_game_ms",gameMs);
+    number(d,"command_id",id); number(d,"action_id",uint64_t(FightAlgo::PolicyAction::Continue));
+    number(d,"ttl_ms",ttl);
+    return d;
+    };
+  const auto rejected=[&](const Json& response,const char* reason,std::string_view message) {
+    expect(!response["accepted"].GetBool() && std::string_view(response["reason"].GetString())==reason,message);
+    };
+
+  step(player,2);
+  const auto nextSequence=BodyObservations::latestSequence(actor);
+  expect(nextSequence>sequence,"next frame samples a newer observation");
+  rejected(call(command(1)),"stale_observation","runner still rejects an older sampled observation");
+  expect(call(command(2),true)["accepted"].GetBool(),"realtime accepts the sent observation while a newer row is only sampled");
+  BodyObservations::drainJson();
+  expect(call(command(3),true)["accepted"].GetBool(),"draining without a successful send does not stale the observation");
+  auto mismatched=command(4);
+  mismatched["issued_game_ms"].SetUint64(gameMs+1);
+  rejected(call(mismatched,true),"stale_observation","realtime still checks the sent observation timestamp");
+  const auto gameAge=actor.world().tickCount()-gameMs;
+  expect(gameAge>0 && gameAge<250,"fixture advances less game time than its wall TTL");
+  rejected(call(command(5,gameAge),true),"expired","a newer unsent sample does not refresh the original game TTL");
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(270));
+  step(player);
+  BodyObservations::sampleAll(true);
+  expect(BodyObservations::latestSequence(actor)>nextSequence,"wall TTL fixture has a fresh unsent sample");
+  expect(actor.world().tickCount()-gameMs<250,"original observation remains within the game TTL");
+  rejected(call(command(6,250),true),"expired_wall","a newer unsent sample does not refresh the original wall TTL");
+  BodyObservations::markDrainedSent();
+  expect(BodyObservations::latestSent(actor).sequence==nextSequence,"successful send marks only the last drained rows");
+  rejected(call(command(7),true),"stale_observation","sending the newer row makes the previous observation stale");
+  release(actor);
+  expect(std::string_view(BodyController::updateWatch({},50))=="allowed","sent observation fixture can leave watch after release");
+  expect(BodyObservations::latestSent(actor).sequence==0,"removing an actor clears its sent observation");
   }
 
 void pendingAcquire(Npc& a,Npc& b,PlayerControl& player) {
@@ -610,6 +666,7 @@ int main(int argc,const char** argv) {
     for(const char* field:{"process_policy","segment_remaining_ms","fai_gate","ani_gate","ai_gate","output_gate","interruptible"})
       expect(!wireStatus["actors"][0].HasMember(field),"wire status keeps the strict server schema; boundary diagnostics are opt-in");
     liveLease(a,b,player);
+    realtimeSentObservation(a,b,player);
     movementRelease(a,b,player);
     pendingAcquire(a,b,player);
     std::vector<std::string> farFailures;

@@ -35,7 +35,7 @@ Lease identity: `session_epoch`, `world_epoch`, `entity_id`, `control_generation
 
 `command_id` положителен и возрастает внутри lease. Последние 64 receipts кэшируются: точный повтор возвращает прежний ответ с `duplicate=true`, изменённый повтор отклоняется, слишком старый ID не исполняется. Pending command slot один; во время исполнения новое действие отклоняется, а `continue` сохраняет тот же execution ID.
 
-Snapshot должен быть последним для этого NPC, с точным game timestamp. После acquire и смены goal нужен новый sample; прежнее наблюдение нельзя присвоить новому управлению. TTL 1–1000 мс проверяется при принятии и снова перед фактическим началом. В realtime учитываются game age и wall age исходного engine snapshot. В lockstep TTL определяется game time, а wall потеря provider отдельно завершает аварийный эпизод.
+Snapshot должен быть последним для этого NPC, с точным game timestamp; в realtime обычного моста — последним отправленным провайдеру, ещё не отправленные строки его не устаревают. После acquire и смены goal нужен новый sample; прежнее наблюдение нельзя присвоить новому управлению. TTL 1–1000 мс проверяется при принятии и снова перед фактическим началом. В realtime учитываются game age и wall age исходного engine snapshot. В lockstep TTL определяется game time, а wall потеря provider отдельно завершает аварийный эпизод.
 
 Режим lease привязан к runner mode; в обычной игре разрешён только realtime. Timeout provider — 100–5000 wall мс, измеряется локальным `steady_clock`. Часы Mac и сервера не сравниваются.
 

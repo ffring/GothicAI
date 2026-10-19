@@ -19,7 +19,7 @@ from .game import GameError, GameLink
 from .gamedata.storygraph import StoryGraph
 from .people_knowledge import rumor_subject
 from .promise_breach import silence_facts
-from .protocol import DeedItem, GameMessage, HeroDeed, Session
+from .protocol import DeedItem, DeedSnapshot, GameMessage, HeroDeed, Session
 
 if TYPE_CHECKING:
     from .concerns import Concern
@@ -506,7 +506,7 @@ class Crimes:
         symbol = symbol.upper()
         return self.graph.npc(symbol) if self.graph is not None else symbol
 
-    def _ownership(self, deed: HeroDeed) -> tuple[str, int, int] | None:
+    def _ownership(self, deed: DeedSnapshot, *, culprit: str = "") -> tuple[str, int, int] | None:
         """Whose property was taken, strongest explicit ownership first; None means lawful.
 
         An explicitly owned item stays its owner's even in a public room. Conversely a dropped
@@ -525,9 +525,13 @@ class Crimes:
         for owner, npc_guild, npctype, guild in sources:
             if owner:
                 owner = self._npc(owner)
-                return None if owner in HERO else (owner, npc_guild, npctype)
+                own = owner == culprit if culprit else owner in HERO
+                return None if own else (owner, npc_guild, npctype)
             if guild not in PUBLIC_GUILDS:
-                return None if guild == deed.hero_guild else ("", guild, 0)
+                actor_guild = (
+                    getattr(deed, "culprit_guild", deed.hero_guild) if culprit else deed.hero_guild
+                )
+                return None if guild == actor_guild else ("", guild, 0)
         return None
 
     def _on_message(self, msg: GameMessage) -> None:

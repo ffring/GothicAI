@@ -143,6 +143,20 @@ async def test_no_crimes_starts_no_encounter_worker_or_approach(monkeypatch):
     approach.assert_not_called()
 
 
+@pytest.mark.parametrize("flags", [[], ["--no-npc-crimes"], ["--no-crimes"], ["--scenario", "npc_deeds"]])
+def test_npc_crimes_switch_and_scenario(monkeypatch, flags):
+    async def serve(args):
+        assert args.no_npc_crimes == ("--no-npc-crimes" in flags)
+        assert args.no_crimes == ("--no-crimes" in flags)
+        return 0
+
+    monkeypatch.setattr(cli, "serve", serve)
+    monkeypatch.setattr("sys.argv", ["gothic-ai", "serve", *flags])
+    with pytest.raises(SystemExit) as exit:
+        cli.main()
+    assert exit.value.code == 0
+
+
 async def test_encounter_worker_starts_without_a_behavioral_planner(monkeypatch):
     meeting = Mock(return_value=SimpleNamespace(run=AsyncMock(), refuses=Mock(return_value=False)))
     monkeypatch.setattr(cli, "CrimeMeet", meeting)

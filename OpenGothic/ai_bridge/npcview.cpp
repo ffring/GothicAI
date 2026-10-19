@@ -313,12 +313,16 @@ void writeView(Writer& w, World& world, Npc& npc) {
   str(w,"state",AiNpc::stateName(world,npc.currentState()));
   // Scene preparation can wait for the routine initializer to install the
   // native callback. Observing this never enables or dispatches a perception.
-  w.Key("theft_ready");
-  w.Bool(npc.isStateStarted() && npc.hasPerc(PERC_ASSESSTHEFT) &&
-         npc.processPolicy()==NpcProcessPolicy::AiNormal && npc.guild()<GIL_SEPERATOR_HUM &&
-         !npc.isPlayer() && !npc.isDead() && !npc.isDown() &&
-         !npc.isExternalControl() && !BodyController::owns(npc) && !npc.isTalk() && !npc.isAttack() &&
-         !Gothic::inst().isNpcInDialog(npc));
+  const auto perceptionReady = [&](PercType perception) {
+    return npc.isStateStarted() && npc.hasPerc(perception) &&
+           npc.processPolicy()==NpcProcessPolicy::AiNormal && npc.guild()<GIL_SEPERATOR_HUM &&
+           !npc.isPlayer() && !npc.isDead() && !npc.isDown() &&
+           !npc.isExternalControl() && !BodyController::owns(npc) && !npc.isTalk() && !npc.isAttack() &&
+           !Gothic::inst().isNpcInDialog(npc);
+    };
+  w.Key("theft_ready"); w.Bool(perceptionReady(PERC_ASSESSTHEFT));
+  w.Key("others_damage_ready"); w.Bool(perceptionReady(PERC_ASSESSOTHERSDAMAGE));
+  w.Key("others_damage_range"); w.Double(npc.perceptionRange(PERC_ASSESSOTHERSDAMAGE));
   str(w,"body",body(npc));
   if(auto mob = npc.interactive())
     utf8(w,"mob",mobName(world,mob->focusName()));

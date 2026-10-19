@@ -82,6 +82,7 @@ struct Actor final {
   bool motionDiscontinuity = false;
   bool lastPeriodic = false;
   uint64_t lastWallMs = 0, lastSequence = 0, lastTime = 0, lastBucket = 0, lastSeen = 0, targetId = 0, goalVersion = 0;
+  BodyObservations::SentObservation sent, drained;
   Vec3 lastPosition = {}, lastSeenPosition = {}, lastSeenVelocity = {};
   std::array<uint64_t,18> fingerprint = {};
   std::deque<Event> events;
@@ -316,6 +317,10 @@ uint64_t BodyObservations::latestSequence(const Npc& npc) { const auto a=tracked
 uint64_t BodyObservations::latestGameMs(const Npc& npc) { const auto a=tracked(&npc); return a ? a->lastTime : 0; }
 bool BodyObservations::latestPeriodic(const Npc& npc) { const auto a=tracked(&npc); return a && a->lastPeriodic; }
 uint64_t BodyObservations::latestWallMs(const Npc& npc) { const auto a=tracked(&npc); return a ? a->lastWallMs : 0; }
+BodyObservations::SentObservation BodyObservations::latestSent(const Npc& npc) {
+  const auto a=tracked(&npc);
+  return a ? a->sent : SentObservation{};
+  }
 
 void BodyObservations::forget(const Npc* npc) {
   BodyTrajectory::forget(npc);
@@ -594,6 +599,7 @@ void BodyObservations::sample(Npc& npc, uint64_t now, bool force) {
     BodyObservations::QueuedRow queued;
     queued.entityId=idFor(npc); queued.sessionEpoch=processEpoch(); queued.worldEpoch=s.generation;
     queued.enqueueIndex=s.queuedTotal+1;
+    queued.observation={actor->lastSequence,now,actor->lastWallMs};
     queued.controlGeneration=control.owned ? control.controlGeneration : 0;
     queued.periodic=periodic; queued.canDecide=control.canDecide; queued.actionMaskValid=control.owned;
     if(control.owned) queued.actionMask=control.mask;
@@ -635,11 +641,24 @@ std::string BodyObservations::drainJson() {
     j.s += row;
     }
   j.s += "]}";
+  for(auto& actor:s.actors) {
+    actor.drained={};
+    const auto entity=s.ids.at(actor.npc);
+    for(const auto& row:s.queuedRows)
+      if(row.entityId==entity) actor.drained=row.observation;
+    }
   s.queue.clear();
   s.queuedRows.clear();
   s.lastDrainDropped = s.dropped;
   s.drainCost += micros(start);
   return std::move(j.s);
+  }
+
+void BodyObservations::markDrainedSent() {
+  for(auto& actor:state().actors) {
+    if(actor.drained.sequence>actor.sent.sequence) actor.sent=actor.drained;
+    actor.drained={};
+    }
   }
 
 uint64_t BodyObservations::queuedTotal() { return state().queuedTotal; }

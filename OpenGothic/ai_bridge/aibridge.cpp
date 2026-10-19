@@ -66,7 +66,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 46;
+constexpr int         ProtocolVersion = 47;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -203,7 +203,13 @@ struct AiBridge::Impl final {
   void onTick(uint64_t dt);
   void processInbound(World* world, Inbound& in);
   void onStartLoading();
-  void onSessionUnload() { voices.clear(); resetBodyObservations(); }
+  void onSessionUnload() {
+    if(auto world = Gothic::inst().world())
+      observer.cancelDeeds(*world);
+    observer.clear();
+    voices.clear();
+    resetBodyObservations();
+    }
   void onWorldLoaded();
   bool takePendingSession();
   void skipIntro(World& world);
@@ -511,7 +517,8 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
       // Do not keep appending this optional stream to IXWebSocket's unbounded transmit buffer.
       if(BodyObservations::enabled() && BodyObservations::queuedCount()>0 && ws.bufferedAmount()<65536) {
         auto packet = BodyObservations::drainJson();
-        send(JsonWriter("body_observations").raw("packet",packet).finish());
+        if(ws.sendText(JsonWriter("body_observations").raw("packet",packet).finish()).success)
+          BodyObservations::markDrainedSent();
         }
       if(BodyObservations::enabled() && ws.bufferedAmount()<65536) {
         auto events = BodyController::drainJson();
@@ -606,6 +613,8 @@ void AiBridge::Impl::onStartLoading() {
   originalLines.clear();
   originalTo.clear();
   lines.clear();
+  if(auto world = Gothic::inst().world())
+    observer.cancelDeeds(*world);
   observer.clear();
   Log::i("[story] ",graph.status(),"; ",triggers.status());
   // the server sends the patches of the new branch
@@ -730,7 +739,11 @@ void AiBridge::Impl::onObservedPerception(Npc& self, Npc& other, Npc* victim, Pe
 void AiBridge::Impl::onHeroDeed(const HeroDeed& d) {
   if(!connected)
     return;
-  JsonWriter j("hero_deed");
+  const bool npcDeed = d.culprit.npc!="PLAYER";
+  JsonWriter j(npcDeed ? "npc_deed" : "hero_deed");
+  if(npcDeed)
+    j.str("culprit",d.culprit.npc).integer("culprit_guild",d.culprit.guild)
+     .integer("culprit_npctype",d.culprit.npctype);
   j.str("id",session.branch+"/deed-"+std::to_string(d.id))
    .str("kind",d.kind).str("item",d.item).integer("count",int64_t(d.count))
    .str("owner",d.owner.npc).integer("owner_guild",d.ownerGuild)
@@ -1068,7 +1081,7 @@ void AiBridge::Impl::onBodyControl(World& world, const rapidjson::Value& msg) {
     }
   // Exactly the same parser, scope checks, lease and resolver as the headless IPC adapter.
   send(JsonWriter("result").str("req",req).boolean("ok",true)
-       .raw("value",BodyController::handleJson(msg)).finish());
+       .raw("value",BodyController::handleJson(msg,true)).finish());
   }
 
 void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {

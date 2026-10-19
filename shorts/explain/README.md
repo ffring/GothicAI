@@ -11,6 +11,9 @@ The plan's `format` selects `tall` (1080 × 1920, the default) or `wide` (1920 �
 `Root.tsx` calculates the composition dimensions and duration from that plan. `Explainer.tsx` lays out the
 picture and overlays; `parts/` draws the cards and captions. `brand: false` disables the ending and needs no
 external assets. Wide diagrams live in `parts/WideDiagrams.tsx`: `rays`, `cone`, `ticks`, `grid`, and `flow`.
+`parts/CombatOverlay.tsx` reads recorded actions, head tracks and HP from the public dir. Its action badge
+follows the footage in either format; `parts/followMath.ts` shares the frame/zoom math with `Picture` and
+maps source pixels through cover, split and zoom. These overlays are opt-in through `follow` and `hp`.
 Their plan timings drive every reveal, turn, alignment and packet; the diagrams need no game or model process.
 Omit a diagram beat to leave it out; these five types are rejected in tall plans. Publication of either format
 uses the same `gothic_shorts.levels.publish` checks.
@@ -114,6 +117,42 @@ the original plan gains and ducking for Studio and drafts; they do not run the p
 `{chance:exe:40:16}` in a tag is the chance by that rule (`exe`: Gothic2.exe's dice, `opengothic`: OpenGothic's
 before it) for that talent and distance, computed by `src/dice.ts` from the same formulas as
 `OpenGothic/common/game/damagecalculator.cpp`.
+
+### `follow` and `hp` — recorded combat overlays (wide and tall)
+
+On a footage beat, `follow` pins the current named decision above the tracked fighter's head. `hp` puts
+two HP bars in the upper corner, gold for self and blue for target; 300 is full HP. Both read a workspace-relative
+`actions.json` through the render's `--public-dir`, just like footage. Neither field changes existing plans.
+
+```json
+{
+  "id": "duel", "kind": "footage", "src": "footage/p30-100000/duel.mp4", "from": 1, "dur": 8,
+  "follow": {
+    "data": "footage/p30-100000/actions.json",
+    "names": {"approach": "подойти", "attack_front": "удар прямо"},
+    "at": 0, "until": 8, "offsetY": -42, "hold": 1.2
+  },
+  "hp": {"data": "footage/p30-100000/actions.json", "labels": ["P30", "противник"], "at": 0}
+}
+```
+
+`at` (default 0) and `until` gate the overlay in beat seconds. `offsetY` is in output pixels, negative
+above the head (default −42). A decision starts on its source `frame`, replaces the previous decision,
+and expires after `hold` source seconds (default 1.2). An action absent from `names` clears the badge.
+Different names crossfade over 0.1 s. Head motion uses a deterministic centred 0.1 s triangular filter;
+null tracking cuts that filter and fades the badge at its last visible position over 0.1 s.
+
+The recording contains `fps`, `frames`, `size: [width, height]`, ordered `track: [[frame, x, y], …]`
+(or `[frame, null, null]`), ordered `hp: [[frame, self_hp, target_hp], …]`, and ordered
+`actions: [{frame, t, action, id}, …]`. HP uses the latest sample at or before the footage frame,
+without interpolating damage. Data is validated and loaded before a frame renders; failures stop the render.
+
+Footage time includes `from`; trimming and `freeze` use the same frame rounding as `Picture`.
+Actions, tracking and HP stop with frozen footage, while the optional zoom continues as it does on the image.
+Head coordinates first pass through centred `cover`, then through zoom about its local output-pixel origin.
+The badge offset and text size stay in output pixels. Each split half clips its own overlays.
+On a `split` beat, `follow`/`hp` use `src`/`from`; `followBottom`/`hpBottom` use `srcBottom`/`fromBottom`:
+the right half in `wide`, the lower half in `tall`.
 
 ### `line` — point-driven lines (only wide)
 
@@ -388,6 +427,8 @@ up to three people. The versions are pinned in `package.json`.
 
 ## План и журнал
 
+- 2026-10-19: added opt-in `follow`/`hp` and split `followBottom`/`hpBottom`, with recorded action
+  names, hold/crossfade, smoothed head tracking, HP samples and shared cover/zoom/freeze math.
 - 2026-10-19: removed tick-cell letters and replaced legend letters with coloured squares;
   curved flow arrowheads now follow the drawn arc length, with a 2 px regression tolerance.
 - 2026-10-19: added wide-only `rays`, `cone`, `ticks`, `grid`, `flow` with voice-relative reveals,
