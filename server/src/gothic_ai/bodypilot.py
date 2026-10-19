@@ -983,13 +983,15 @@ class BodyFight:
             if self.clock() - received_at > 0.100 or self._now_game_ms - raw["t_game_ms"] > 100:
                 return
             terminal = self._terminal(raw)
-            if terminal in {"npc_down", "hero_down", "target_down", "target_lost"}:
+            if terminal in {"npc_down", "target_lost"}:
                 self._set_reason(terminal)
                 return
-            # A pre-lease weapon transition can still finish normally. A down
-            # or vanished target cannot: its native cleanup must not keep an
-            # observing episode and subscription alive until acquire timeout.
-            if terminal or not all(raw["target"][key] for key in ("present", "visible", "current_valid")):
+            # A pre-lease weapon transition can still finish normally. A fallen
+            # target needs the same live allowlist check as an acquisition before
+            # closing its episode: unrelated fights must not claim this NPC.
+            if terminal not in {None, "hero_down", "target_down"} or not all(
+                raw["target"][key] for key in ("present", "visible", "current_valid")
+            ):
                 return
         observation = self.link.body_latest.get(raw["entity_id"])
         if observation is None or observation.observation_seq != raw["observation_seq"]:
@@ -1013,6 +1015,10 @@ class BodyFight:
                 if self._reason or self._closing or not self._allowed(self.npc):
                     return
                 if self.clock() - received_at > 0.100 or self.clock() - self._attempt_at >= ACQUIRE_WINDOW:
+                    return
+                if terminal in {"hero_down", "target_down"}:
+                    self._target_kind, self._target_name, self._target_npc = target
+                    self._set_reason("target_down" if self._target_kind == "companion" else "hero_down")
                     return
                 self._acquiring = True
                 self._pending_acquire = observation

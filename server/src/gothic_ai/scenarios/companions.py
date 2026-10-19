@@ -65,7 +65,12 @@ async def neural_talk_scenario(
     link: GameLink, dialogue: DialogueManager, pilot: BodyPilot | None,
 ) -> dict[str, str]:
     """A non-bandit knockout, then words, escape and a fresh fight with a hostile bandit."""
-    from .neural_knockout import HeroDownWait, _wait_hero_down, neural_knockout_segment
+    from .neural_knockout import (
+        HeroDownWait,
+        _hero_release_state,
+        _wait_hero_down,
+        neural_knockout_segment,
+    )
     from .neural_load import _policy_resets
 
     if pilot is None:
@@ -111,25 +116,8 @@ async def neural_talk_scenario(
 
     async def idle_after(ended_at: float, summary: FightSummary) -> tuple[bool, str]:
         await asyncio.sleep(max(0, ended_at + 2 - time.monotonic()))
-        lease = summary.lease
-        assert lease is not None
-        entry = pilot.people.get(npc)
-        active = pilot.fights.get(npc)
-        hero_fight = bool(active and active._target_kind == "hero" and active.lease)
-        own_lease = link.body_leases.get(lease.entity_id) == lease
-        cached = link.body_latest.get(lease.entity_id)
-        own_cached = bool(cached and (
-            cached.entity_id, cached.session_epoch, cached.world_epoch, cached.control_generation,
-        ) == (lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation))
-        own_watch = hero_fight and npc in pilot._watch_npcs
-        own_body = bool(entry and entry.activity == "body" and (hero_fight or own_lease))
-        clean = bool(not hero_fight and not own_lease and not own_cached and not own_watch
-                     and not own_body and summary.release_confirmed and summary.watch_removed)
-        return clean, (f"after_s={time.monotonic() - ended_at:.3f}, "
-                       f"hero_leases={int(own_lease)}, hero_watched={int(own_watch)}, "
-                       f"cached_rows={int(own_cached)}, hero_body={int(own_body)}, "
-                       f"watch_removed={int(summary.watch_removed)}, "
-                       f"ignored_observers={int(active is not None and not hero_fight)}")
+        clean, detail = _hero_release_state(link, pilot, npc, summary)
+        return clean, f"after_s={time.monotonic() - ended_at:.3f}, {detail}"
 
     async def routine() -> bool:
         state = (await link.routine(npc)).current

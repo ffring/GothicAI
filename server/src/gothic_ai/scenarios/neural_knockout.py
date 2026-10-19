@@ -30,6 +30,32 @@ class HeroDownWait:
     elapsed_seconds: float
 
 
+def _hero_release_state(
+    link: GameLink, pilot: BodyPilot, npc: str, summary: FightSummary,
+) -> tuple[bool, str]:
+    """Check the hero episode's cleanup and the NPC's independently reported owner."""
+    lease = summary.lease
+    assert lease is not None
+    entry = pilot.people.get(npc)
+    active = pilot.fights.get(npc)
+    hero_fight = bool(active and active._target_kind == "hero" and active.lease)
+    own_lease = link.body_leases.get(lease.entity_id) == lease
+    cached = link.body_latest.get(lease.entity_id)
+    own_cached = bool(cached and (
+        cached.entity_id, cached.session_epoch, cached.world_epoch, cached.control_generation,
+    ) == (lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation))
+    own_watch = hero_fight and npc in pilot._watch_npcs
+    # Roster ownership must clear even if local fight/lease state has vanished.
+    # Unleased observers of unrelated native fights still don't own this body.
+    own_body = bool(entry and entry.activity == "body")
+    clean = bool(not hero_fight and not own_lease and not own_cached and not own_watch
+                 and not own_body and summary.release_confirmed and summary.watch_removed)
+    return clean, (f"hero_leases={int(own_lease)}, hero_watched={int(own_watch)}, "
+                   f"cached_rows={int(own_cached)}, hero_body={int(own_body)}, "
+                   f"watch_removed={int(summary.watch_removed)}, "
+                   f"ignored_observers={int(active is not None and not hero_fight)}")
+
+
 async def _wait_hero_down(
     link: GameLink,
     pilot: BodyPilot,
@@ -344,21 +370,9 @@ async def neural_knockout_segment(
 
             log.info("neural-talk knockout after down: beasts_cleared=%d", await _clear_beasts(link, npc))
             await asyncio.sleep(max(0, ended_at + 2 - time.monotonic()))
-            entry = pilot.people.get(npc)
-            own_fight = pilot.fights.get(npc) is fight
-            own_lease = link.body_leases.get(lease.entity_id) == lease
-            cached = link.body_latest.get(lease.entity_id)
-            own_cached = bool(cached and (
-                cached.entity_id, cached.session_epoch, cached.world_epoch, cached.control_generation,
-            ) == (lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation))
-            own_watch = own_fight and npc in pilot._watch_npcs
-            own_body = bool(entry and entry.activity == "body" and (own_fight or own_lease))
-            if not check("release", bool(
-                not own_fight and not own_lease and not own_cached and not own_watch and not own_body
-                and summary.release_confirmed and summary.watch_removed
-            ), f"after_down_s={time.monotonic() - ended_at:.3f}, leases={int(own_lease)}, "
-               f"watched={int(own_watch)}, cached_rows={int(own_cached)}, body={int(own_body)}, "
-               f"entity_id={lease.entity_id}, watch_removed={int(summary.watch_removed)}"):
+            clean, detail = _hero_release_state(link, pilot, npc, summary)
+            if not check("release", clean,
+                         f"after_down_s={time.monotonic() - ended_at:.3f}, {detail}"):
                 return results
 
             nearest = float("inf")

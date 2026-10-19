@@ -1042,6 +1042,40 @@ async def test_native_attack_roster_rejects_live_target_outside_hero_and_compani
         assert not rig.policy.requests
 
 
+async def test_foreign_target_down_before_lease_does_not_block_switch_to_hero_without_routine():
+    async with running() as rig:
+        rig.bridge.target_is_hero = False
+        rig.bridge.target_npc = "OTHER"
+        await rig.watch(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: rig.fight._watch_ready)
+        foreign = fighter(target_entity=8)
+        foreign["target"].update(down=True, hp=0)
+        rig.bridge.emit(player_row(), foreign)
+        await eventually(lambda: rig.fight._refusals["target_not_allowed"] == 1)
+        assert rig.pilot.handles("NPC")
+        assert "NPC" not in rig.pilot._claimed_fights
+        assert not rig.pilot.summaries
+        assert not rig.bridge.commands("body_acquire") and not rig.policy.requests
+
+        # Native combat can switch directly from an unrelated fallen actor to
+        # the hero, with no intervening routine/down roster to clear a claim.
+        rig.bridge.target_is_hero = True
+        rig.bridge.target_npc = None
+        rig.clock.advance(bodypilot.ACQUIRE_INTERVAL + 0.1)
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        rig.combat()
+        rig.bridge.emit(fighter(3))
+        await eventually(lambda: rig.policy.commands("reset"))
+        assert rig.pilot.active_count == 1
+        assert rig.fight.lease.target_entity_id == 2
+        assert rig.fight._target_kind == "hero"
+        assert len(rig.bridge.commands("body_watch")) == 1
+        assert len(rig.bridge.commands("body_acquire")) == len(rig.policy.commands("reset")) == 1
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert not rig.pilot.summaries
+
+
 @pytest.mark.parametrize("membership", ["orders", "party"])
 async def test_live_companion_target_is_acquired_and_named_in_summary(membership):
     async with running(companion=lambda npc: membership == "orders" and npc == "CAVALORN") as rig:
@@ -2052,6 +2086,26 @@ async def test_fresh_prelease_down_or_absent_target_unwatches_without_policy(tar
         assert not rig.pilot._watch_npcs and not rig.pilot._pending_unwatch
         assert len(rig.bridge.commands("body_watch")) == 2
         assert not rig.bridge.commands("body_acquire") and not rig.policy.requests
+
+
+async def test_fresh_prelease_companion_down_is_classified_before_claiming_episode():
+    async with running(companion=lambda npc: npc == "CAVALORN") as rig:
+        rig.bridge.target_is_hero = False
+        rig.bridge.target_npc = "CAVALORN"
+        await rig.watch(extra=[companion_entry()])
+        await eventually(lambda: rig.fight._watch_ready)
+        row = fighter(target_entity=3)
+        row["target"].update(down=True, hp=1)
+        rig.bridge.emit(row)
+        await eventually(lambda: not rig.pilot.active_count)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "target_down"
+        assert summary.target_kind == "companion" and summary.target_name == "Кавалорн"
+        assert summary.lease is None and summary.decisions == 0
+        assert summary.watch_removed and "NPC" in rig.pilot._claimed_fights
+        assert not rig.bridge.commands("body_acquire") and not rig.policy.requests
+        assert not rig.link.body_leases and not rig.link.body_latest
+        assert not rig.pilot._watch_npcs and not rig.pilot._pending_unwatch
 
 
 async def test_stale_prelease_down_row_does_not_suppress_current_live_fight():
