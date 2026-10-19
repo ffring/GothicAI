@@ -7204,9 +7204,9 @@ void Npc::updateCharacterVisualHeight() {
 
   if(!isPlayer() && !isHuman() && (enabled || finishNpcBlend) &&
      characterVisualHasSample && characterVisualGroundSample && now>=characterVisualSampleTick) {
-    // Releasing an earlier stair blend can add to this update's bounded
-    // physical rise. Keep that small presentation remainder in the blend,
-    // while retaining the same ten-centimetre lag limit as human NPCs.
+    // Releasing an earlier stair blend can add to a small physical rise.
+    // Keep that presentation remainder in the blend. A high guild-sized
+    // ledge may still snap: the human ten-centimetre lag limit takes priority.
     constexpr float maxVisualStep = 12.f; // cm per movement update
     const float previousY = characterVisualSamplePosition.y+previousOffset;
     const float desiredY = at.y+characterVisualYOffset;

@@ -3088,6 +3088,111 @@ namespace {
                 "and four independent hero/human flag combinations passed OFF/ON/OFF\n");
     }
 
+  void testMonsterCharacterVirtualIsolatedLedges() {
+    struct Ledge {
+      const char* monster;
+      float radius, height, stepHeight, rise;
+      };
+    constexpr std::array<Ledge,5> ledges={{{"WOLF",15,83,60,20},
+                                            {"WOLF",15,83,60,40},
+                                            {"WOLF",15,83,60,55},
+                                            {"TROLL",68,272,100,40},
+                                            {"TROLL",68,272,100,80}}};
+    struct Result {
+      bool supported=false, diagnostics=true, success=false;
+      uint64_t elapsed=0;
+      unsigned stalls=0, maximumStall=0;
+      int stairAttempts=0;
+      float maximumRise=0;
+      };
+    std::array<std::array<Result,2>,ledges.size()> results;
+    constexpr float maxSlope=50.f*.01745329252f;
+    Resources resources;
+    for(size_t index=0;index<ledges.size();++index) {
+      const auto& ledge=ledges[index];
+      auto terrain=movableFloor();
+      terrain.vertices.clear();
+      terrain.polygons.vertex_indices.clear();
+      terrain.polygons.material_indices.clear();
+      const auto surface=[&](float x0,float y0,float x1,float y1) {
+        const auto first=uint32_t(terrain.vertices.size());
+        terrain.vertices.insert(terrain.vertices.end(),{{x0,y0,-1000},{x0,y0,1000},
+                                                        {x1,y1,1000},{x1,y1,-1000}});
+        for(uint32_t vertex:{0u,2u,1u,0u,3u,2u})
+          terrain.polygons.vertex_indices.push_back(first+vertex);
+        terrain.polygons.material_indices.insert(terrain.polygons.material_indices.end(),{0,0});
+        };
+      // One vertical face with a broad flat landing, rather than a flight of
+      // short risers. The approach leaves both capsules clear of the ledge.
+      surface(-2000,0,100,0);
+      surface(100,0,100,ledge.rise);
+      surface(100,ledge.rise,2000,ledge.rise);
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox={{-ledge.radius,0,-ledge.radius},
+                                {ledge.radius,ledge.height,ledge.radius}};
+      Skeleton skeleton(hierarchy,nullptr,ledge.monster);
+      const float mass=Ragdoll::speciesMass(ledge.monster);
+      for(int policy=0;policy<2;++policy) {
+        const bool limitStairAdvance=policy!=0;
+        auto& result=results[index][size_t(policy)];
+        DynamicWorld world(nullptr,terrain);
+        auto monster=world.addGhostObj(&skeleton);
+        monster.setPosition({-200,0,0});
+        monster.setVirtualDiagnosticsEnabled(true);
+        auto state=monster.moveVirtual({},0,ledge.stepHeight,maxSlope,mass,nullptr,limitStairAdvance);
+        result.supported=state.grounded;
+        const float target=100.f+ledge.radius+80.f;
+        float progress=state.position.x;
+        unsigned stalled=0;
+        int frames=0;
+        for(;frames<300 && state.position.x<target;++frames) {
+          const uint64_t dt=frames%3==0 ? 34 : 33;
+          const auto previous=state.position;
+          // The same running approach for both actual controller policies:
+          // 210 cm/s at the video bench's 30 Hz update cadence.
+          state=monster.moveVirtual({.21f*float(dt),0,0},dt,ledge.stepHeight,maxSlope,mass,nullptr,limitStairAdvance);
+          result.elapsed+=dt;
+          result.maximumRise=std::max(result.maximumRise,state.position.y-previous.y);
+          if(state.position.x-progress>=1.f) {
+            progress=state.position.x;
+            stalled=0;
+            } else {
+            const unsigned next=stalled+unsigned(dt);
+            if(stalled<=1000 && next>1000)
+              ++result.stalls;
+            stalled=next;
+            result.maximumStall=std::max(result.maximumStall,stalled);
+            }
+          CharacterVirtualDiagnostics diagnostic;
+          const bool hasDiagnostic=monster.virtualDiagnostics(diagnostic);
+          result.diagnostics&=hasDiagnostic;
+          if(hasDiagnostic && diagnostic.stairAttempted)
+            ++result.stairAttempts;
+          }
+        result.success=state.grounded && state.position.x>=target && std::abs(state.position.y-ledge.rise)<=2.f;
+        std::printf("Monster CharacterVirtual %s isolated %.0f cm ledge, policy %s: "
+                    "success %d, time %llu ms, frames %d, stalls %u, max stall %u ms, "
+                    "max root rise %.6f cm, stair attempts %d, feet (%.6f,%.6f,%.6f) cm\n",
+                    ledge.monster,double(ledge.rise),limitStairAdvance ? "monster" : "old",
+                    int(result.success),static_cast<unsigned long long>(result.elapsed),frames,
+                    result.stalls,result.maximumStall,double(result.maximumRise),result.stairAttempts,
+                    double(state.position.x),double(state.position.y),double(state.position.z));
+        }
+      }
+    // Finish all ten runs before asserting, so a failed policy still leaves
+    // the measurements of every requested ledge available to the caller.
+    for(const auto& pair:results) for(const auto& result:pair) {
+      require(result.supported,"isolated monster ledges must start with native flat-ground support");
+      require(result.diagnostics,"isolated monster ledges must retain actual controller diagnostics");
+      }
+    for(const auto& pair:results)
+      require(pair[0].success,"the old controller must establish that each isolated ledge is traversable within the guild step");
+    for(const auto& pair:results) {
+      require(pair[1].success,"the monster stair policy must preserve traversal of an isolated ledge within the guild step");
+      require(pair[1].stalls==0,"an isolated ledge within the monster guild step must not stall walking for over one second");
+      }
+    }
+
   void testMonsterCharacterVirtualShortRisers() {
     constexpr float radius=15.f, height=83.f, stepHeight=60.f;
     constexpr float maxSlope=50.f*.01745329252f;
@@ -3099,7 +3204,7 @@ namespace {
     Skeleton skeleton(hierarchy,nullptr,"WOLF");
     const float mass=Ragdoll::speciesMass("WOLF");
     // Both stair pitches are below the fifty-degree limit. Include a narrow
-    // tread so the ascent budget is checked with closely spaced risers too.
+    // tread so the requested stair advance is checked with closely spaced risers too.
     for(float tread:{10.f,20.f}) {
       auto terrain=movableFloor();
       terrain.vertices.clear();
@@ -3119,7 +3224,7 @@ namespace {
         surface(x,y,x,y+riser);
         surface(x,y+riser,step+1==stepCount ? 1000.f : x+tread,y+riser);
         }
-      for(bool limitStairRise:{false,true}) {
+      for(bool limitStairAdvance:{false,true}) {
         DynamicWorld world(nullptr,terrain);
         auto wolf=world.addGhostObj(&skeleton);
         wolf.setPosition({50,0,0});
@@ -3127,7 +3232,7 @@ namespace {
         // Use the monster policy of the actual walking controller. The 60 cm
         // guild step is deliberately much higher than these repeated city-sized
         // risers; limiting a test-only stepHeight would conceal the old shortcut.
-        auto state=wolf.moveVirtual({},0,stepHeight,maxSlope,mass,nullptr,limitStairRise);
+        auto state=wolf.moveVirtual({},0,stepHeight,maxSlope,mass,nullptr,limitStairAdvance);
         require(state.grounded,"wolf short-riser contract must start supported on the flat approach");
         const float target=100.f+float(stepCount-1)*tread+80.f;
         float maximumRise=0.f, maximumDrop=0.f, progress=state.position.x;
@@ -3137,7 +3242,7 @@ namespace {
           const uint64_t dt=frames%3==0 ? 34 : 33;
           const auto previous=state.position;
           // 210 cm/s at the same 30 Hz cadence as the paired video bench.
-          state=wolf.moveVirtual({.21f*float(dt),0,0},dt,stepHeight,maxSlope,mass,nullptr,limitStairRise);
+          state=wolf.moveVirtual({.21f*float(dt),0,0},dt,stepHeight,maxSlope,mass,nullptr,limitStairAdvance);
           maximumRise=std::max(maximumRise,state.position.y-previous.y);
           maximumDrop=std::max(maximumDrop,previous.y-state.position.y);
           if(state.position.x-progress>=1.f) {
@@ -3156,9 +3261,9 @@ namespace {
         std::printf("Monster CharacterVirtual WOLF 10 cm risers / %.0f cm treads at 30 Hz, limited %d: "
                     "frames %d, stair attempts %d, max root rise %.6f cm, max drop %.6f cm, "
                     "max stall %u ms, max airborne %u ms, feet (%.6f,%.6f,%.6f) cm\n",
-                    double(tread),int(limitStairRise),frames,stairAttempts,double(maximumRise),double(maximumDrop),maximumStall,maximumAirborne,
+                    double(tread),int(limitStairAdvance),frames,stairAttempts,double(maximumRise),double(maximumDrop),maximumStall,maximumAirborne,
                     double(state.position.x),double(state.position.y),double(state.position.z));
-        if(!limitStairRise)
+        if(!limitStairAdvance)
           continue;
         require(stairAttempts>0,"the ten-centimetre wolf staircase must exercise native automatic stair walking");
         require(maximumRise<=12.01f,"a walking monster must not raise its physical root by over twelve centimetres per city-stair update");
@@ -3173,6 +3278,7 @@ namespace {
   void testMonsterCharacterVirtual() {
     testMonsterCharacterVirtualEligibility();
     testMonsterCharacterVirtualShortRisers();
+    testMonsterCharacterVirtualIsolatedLedges();
     constexpr float radians=.01745329252f;
     struct Monster {
       const char* name;

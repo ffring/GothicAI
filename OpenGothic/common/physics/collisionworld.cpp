@@ -863,7 +863,7 @@ bool CollisionWorld::VirtualCharacter::diagnostics(CharacterVirtualDiagnostics& 
 
 CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit,
-    bool limitStairRise) {
+    bool limitStairAdvance) {
   const auto started = std::chrono::steady_clock::now();
   auto& state = *impl;
   auto& character = *state.character;
@@ -1030,6 +1030,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
       if(achievedLength+1.e-4f<desiredLength) {
         auto direction = forward;
         float best = settings.mWalkStairsCosAngleForwardContact;
+        bool extendedSteepFace = false;
         for(const auto& contact:character.GetActiveContacts()) {
           if(!contact.mHadCollision || contact.mWasDiscarded ||
              contact.mSurfaceNormal.Dot(desiredVelocity-contact.mLinearVelocity)>=0.f ||
@@ -1041,24 +1042,32 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
             direction = candidate/length;
             best = direction.Dot(forward);
             }
+          if(limitStairAdvance && !contact.mIsSensorB) {
+            JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
+            if(lock.SucceededAndIsInBroadPhase()) {
+              JPH::Shape::SupportingFace face;
+              lock.GetBody().GetTransformedShape().GetSupportingFace(contact.mSubShapeIDB,contact.mSurfaceNormal,oldPosition,face);
+              if(face.size()>=3) {
+                float low = std::numeric_limits<float>::infinity(), high = -low;
+                for(const auto& vertex:face) {
+                  low = std::min(low,vertex.Dot(up));
+                  high = std::max(high,vertex.Dot(up));
+                  }
+                extendedSteepFace |= high-low>step+character.GetCharacterPadding();
+                }
+              }
+            }
           }
-        // Monster guild steps are high enough to span several architectural
-        // risers. Jolt's minimum forward step must not turn one animation
-        // update into an extra 20 cm of chase movement. Lift only as far as
-        // this update permits and sweep the remaining requested distance; the
-        // ordinary up/forward/down casts still choose a nonpenetrating landing.
+        // Keep a monster's stair advance within the remaining animation travel
+        // instead of imposing Jolt's 2 cm minimum. A face taller than the guild
+        // step is extended steep terrain rather than a single permitted riser:
+        // ascend it gradually. Ordinary ledges and shapes without polygonal
+        // faces retain the full guild step and the native safe landing sweeps.
         const float forwardDistance = desiredLength-achievedLength;
-        const auto forwardStep = direction*(limitStairRise ? forwardDistance :
+        const auto forwardStep = direction*(limitStairAdvance ? forwardDistance :
                                             std::max(settings.mWalkStairsMinStepForward,forwardDistance));
-        float stairUp = step;
-        if(limitStairRise) {
-          constexpr float oneRiser = .10f; // metres, an ordinary low stair riser
-          constexpr float maxRise = .12f; // one riser plus capsule/contact tolerance
-          const float slopeRise = desiredLength*std::tan(std::clamp(maxSlope,0.f,1.553343f));
-          const float riseBudget = std::min({step,slopeRise+oneRiser,maxRise});
-          const float achievedRise = std::max(0.f,achieved.Dot(up));
-          stairUp = std::max(0.f,riseBudget-achievedRise);
-          }
+        const float stairUp = extendedSteepFace ?
+                                std::max(0.f,std::min(step,.12f)-std::max(0.f,achieved.Dot(up))) : step;
         JPH::CharacterVirtual::WalkStairsDiagnostics stairProbe;
         const bool stepped = stairUp>0.f && character.WalkStairs(seconds,up*stairUp,forwardStep,direction*settings.mWalkStairsStepForwardTest,
                                                 settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator,

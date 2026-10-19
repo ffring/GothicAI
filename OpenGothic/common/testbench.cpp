@@ -75,6 +75,8 @@
 #include "physics/dynamicworld.h"
 #include "physics/cloth.h"
 #include "physics/physicmesh.h"
+#include "physics/physicmeshshape.h"
+#include "graphics/mesh/submesh/packedmesh.h"
 #include "world/triggers/movetrigger.h"
 #include "physics/ragdoll.h"
 #include "physics/physicsnoise.h"
@@ -801,7 +803,7 @@ struct Bench {
   struct MonsterCharacterRoute {
     Npc* npc=nullptr;
     WayPoint destination,heroDestination;
-    bool heroRun=false;
+    bool heroRun=false,isolatedLedge=false;
     std::string name,animation;
     Vec3 start,goal,lastPosition,lastVisual,progressPosition,lastSupported,attackStart;
     uint64_t began=0,arrived=0,progressTime=0,attackEnded=0;
@@ -811,6 +813,9 @@ struct Bench {
     Vec3 savedPosition;
     unsigned restoreSteps=0;
   } monsterCharacterRoute;
+  // Source shape must outlive the collision handle that borrows its mesh.
+  std::unique_ptr<PhysicMeshShape> monsterCharacterLedgeShape;
+  DynamicWorld::Item monsterCharacterLedgeBody;
   struct MonsterCharacterFrame {
     std::string route,animation;
     uint64_t time=0,dt=0,npc=0;
@@ -1615,6 +1620,7 @@ void finish() {
       } else event("monster_character_error","\"reason\":\"cannot write monster performance samples\"");
     }
   bench.monsterCharacterProps.clear();
+  bench.monsterCharacterLedgeBody=DynamicWorld::Item();bench.monsterCharacterLedgeShape.reset();
   bench.characterProp.reset();bench.characterPlatform.reset();bench.characterPlatformVisual.reset();
   bench.destructionFixtures.clear();
   bench.movableFixtures.clear();
@@ -8347,7 +8353,65 @@ void monsterCharacterClear(World& world) {
   bench.monsterCharacterBarrel=Bench::MonsterCharacterProp();
   bench.monsterCharacterMeasuring=false;bench.monsterCharacterCrowd=false;bench.monsterCharacterPack=false;
   bench.characterProp.reset();bench.characterPropId=0;bench.characterPropTravel=0;
+  bench.monsterCharacterLedgeBody=DynamicWorld::Item();bench.monsterCharacterLedgeShape.reset();
   route=Bench::MonsterCharacterRoute();
+  }
+
+void monsterCharacterLedge(World& world,Npc& player,std::string_view species,float height) {
+  const bool wolf=species=="wolf",troll=species=="troll";
+  if((!wolf && !troll) || (wolf && height!=20.f && height!=40.f && height!=55.f) ||
+     (troll && height!=40.f && height!=80.f)) {
+    monsterCharacterError("ledge expects wolf 20|40|55 or troll 40|80 centimetres");return;
+    }
+  monsterCharacterClear(world);
+  Vec3 anchor;
+  if(!characterFloor(world,Vec3(38674.5156f,4308.43604f,11976.749f),anchor)) {
+    monsterCharacterError("isolated ledge lacks its verified stock anchor");return;
+    }
+  // One analytic riser, with a 6 m running approach and 15 m landing. The
+  // elevated support excludes stock rocks/actors while remaining part of the
+  // real World queried by both legacy MoveAlgo and CharacterVirtual.
+  anchor.y+=10000.f;
+  zenkit::Mesh mesh;mesh.materials.resize(1);mesh.materials[0].group=zenkit::MaterialGroup::STONE;
+  const auto quad=[&](Vec3 a,Vec3 b,Vec3 c,Vec3 d) {
+    const auto index=uint32_t(mesh.vertices.size());
+    for(const auto& point:{a,b,c,d})mesh.vertices.push_back({point.x,point.y,point.z});
+    mesh.polygons.vertex_indices.insert(mesh.polygons.vertex_indices.end(),
+      {index,index+2,index+1,index,index+3,index+2});
+    mesh.polygons.material_indices.insert(mesh.polygons.material_indices.end(),{0,0});
+    };
+  // Gothic source winding is reversed by PhysicVbo.
+  quad({-1200,0,-900},{-1200,0,900},{1500,0,900},{1500,0,-900});
+  quad({0,height,-900},{0,height,900},{1500,height,900},{1500,height,-900});
+  quad({0,0,-900},{0,0,900},{0,height,900},{0,height,-900});
+  bench.monsterCharacterLedgeShape.reset(PhysicMeshShape::load(PackedMesh(mesh,PackedMesh::PK_Physic)));
+  auto matrix=Matrix4x4::mkIdentity();matrix.translate(anchor);
+  bench.monsterCharacterLedgeBody=world.physic()->addStaticObj(bench.monsterCharacterLedgeShape.get(),matrix,"BENCH_MONSTER_SINGLE_LEDGE");
+  if(bench.monsterCharacterLedgeBody.isEmpty()) {monsterCharacterError("isolated ledge collision creation failed");return;}
+  auto& route=bench.monsterCharacterRoute;
+  route.name=std::string(species)+"_ledge_"+std::to_string(unsigned(height));route.isolatedLedge=true;
+  route.start=anchor+Vec3(-600,0,0);route.goal=anchor+Vec3(800,height,0);route.tolerance=60;
+  for(const auto& point:{route.start,anchor+Vec3(200,height,0),route.goal}) {
+    const auto floor=world.physic()->landRay(point+Vec3(0,20,0),40);
+    if(!floor.hasCol || std::abs(floor.v.y-point.y)>.1f) {
+      monsterCharacterError("isolated ledge floor proof disagrees with authored surface");return;
+      }
+    }
+  const auto face=world.physic()->ray(anchor+Vec3(-30,height*.5f,0),anchor+Vec3(30,height*.5f,0));
+  if(!face.hasCol || std::abs(face.v.x-anchor.x)>.1f) {
+    monsterCharacterError("isolated ledge lacks its single vertical face");return;
+    }
+  player.setInteraction(nullptr,true);player.clearAiQueue();player.clearGoTo();player.stopWalking();
+  player.setPosition(anchor+Vec3(-600,0,500));player.updateTransform();
+  route.npc=monsterCharacterActor(world,wolf?"Wolf":"Troll",route.start);if(!route.npc)return;
+  route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();
+  route.npc->setCharacterVirtualDiagnosticsEnabled(true);
+  bench.subject=route.npc;bench.monsterCharacterHeroStart=player.position();
+  event("monster_character_route_setup","\"route\":"+jsonStr(route.name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
+    ",\"waypoint\":\"verified_wolf_lunge+100m\",\"start_cm\":"+ragdollVector(route.start)+",\"goal_cm\":"+ragdollVector(route.goal)+
+    ",\"hero_cm\":"+ragdollVector(player.position())+",\"arrival_radius_cm\":60,\"arrival_height_tolerance_cm\":5"+
+    ",\"ledge_height_cm\":"+ragdollNumber(height)+",\"running_approach_cm\":600,\"landing_length_cm\":1500"+
+    ",\"native_action\":\"Npc::goToPosition\",\"synthetic_geometry\":true,\"floor_probes\":3,\"face_proof\":true");
   }
 
 bool monsterCharacterOpenLane(World& world,const Vec3& center,const Vec3& direction,float halfLength,float radius,float height,
@@ -8959,7 +9023,10 @@ void monsterCharacterBegin(World& world) {
     }
   if(!route.attack && !bench.monsterCharacterPack) {
     route.npc->clearAiQueue();route.npc->stopWalking();
-    if(route.chase)route.npc->aiPush(AiQueue::aiGoToNpc(Gothic::inst().player()));
+    if(route.isolatedLedge) {
+      if(!route.npc->goToPosition(route.goal)) {monsterCharacterError("isolated ledge native running goal was rejected");return;}
+      }
+    else if(route.chase)route.npc->aiPush(AiQueue::aiGoToNpc(Gothic::inst().player()));
     else route.npc->aiPush(AiQueue::aiGoToPoint(route.destination));
     }
   event("monster_character_route_begin","\"route\":"+jsonStr(route.name)+",\"cv_enabled\":"+
@@ -9200,6 +9267,7 @@ void monsterCharacterFields(World& world,uint64_t dt) {
     const auto* hero=Gothic::inst().player();
     const auto delta=at-(route.heroRun && hero?hero->position():route.goal);
     arrived=std::hypot(delta.x,delta.z)<=route.tolerance && std::abs(delta.y)<80;
+    if(route.isolatedLedge)arrived&=std::abs(delta.y)<5.f && !npc->isInAir() && !npc->isFalling();
     if(route.name=="wolf_water")arrived&=npc->isSwim();
     if(route.name=="wolf_water_exit") {route.leftWater=route.sawSwim && !npc->isSwim() && !npc->isInAir();arrived&=route.leftWater;}
     }
@@ -9207,7 +9275,7 @@ void monsterCharacterFields(World& world,uint64_t dt) {
     [](const auto& actor){return actor.arrivals>=3;});
   if(arrived && !route.reached) {
     route.reached=true;route.arrived=world.tickCount();
-    if(route.name=="wolf_terrain" || route.name=="wolf_stairs") {
+    if(route.name=="wolf_terrain" || route.name=="wolf_stairs" || route.isolatedLedge) {
       if(route.heroRun)if(auto* hero=Gothic::inst().player()) {hero->clearAiQueue();hero->clearGoTo();hero->stopWalking();}
       // The test ends the authored chase after a measured catch. Keep native
       // idle physics running for the rest of the movie without a second goal.
@@ -9216,7 +9284,7 @@ void monsterCharacterFields(World& world,uint64_t dt) {
         std::to_string(route.arrived-route.began)+",\"root_cm\":"+ragdollVector(at)+",\"native_idle\":true");
       }
     }
-  if(!route.attack && !route.reached && npc->navigationGoal().active) {
+  if(!route.attack && !route.reached && (npc->navigationGoal().active || route.isolatedLedge)) {
     if(std::hypot(at.x-route.progressPosition.x,at.z-route.progressPosition.z)>=5.f) {
       route.progressPosition=at;route.progressTime=world.tickCount();route.stalled=false;
       }
@@ -9713,6 +9781,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("monster_character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
     }
   else if(c=="monstercharacter" && a.size()==3 && a[1]=="route")monsterCharacterPrepare(w,pl,a[2]);
+  else if(c=="monstercharacter" && a.size()==4 && a[1]=="ledge")monsterCharacterLedge(w,pl,a[2],num(a,3,NAN));
   else if(c=="monstercharacter" && a.size()>=2 && a[1]=="camera") {
     if((a.size()!=2 && a.size()!=4) || (a.size()==4 && (!isNumber(a[2]) || !isNumber(a[3])))) {
       monsterCharacterError("monster camera expects no arguments or yaw_degrees elevation_fraction");return;

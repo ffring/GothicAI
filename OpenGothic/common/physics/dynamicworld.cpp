@@ -2607,8 +2607,8 @@ bool DynamicWorld::NpcItem::virtualDiagnostics(CharacterVirtualDiagnostics& out)
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit,
-    bool limitStairRise) {
-  return implMoveVirtual(displacement,dt,stepHeight,maxSlope,mass,culprit,false,limitStairRise);
+    bool limitStairAdvance) {
+  return implMoveVirtual(displacement,dt,stepHeight,maxSlope,mass,culprit,false,limitStairAdvance);
   }
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::carryVirtual(uint64_t dt, Npc* culprit) {
@@ -2617,7 +2617,7 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::carryVirtual(uin
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
     const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry,
-    bool limitStairRise) {
+    bool limitStairAdvance) {
   VirtualMoveResult result;
   if(obj==nullptr)
     return result;
@@ -2704,7 +2704,7 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
   const auto requested = clipNpc(initial+displacement,requestClipped,
                                  npcDiagnostic!=nullptr ? &npcDiagnostic->requestCollision : nullptr)-initial;
   auto moved = carry ? obj->virtualCharacter->carry(dt) :
-                       obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit,limitStairRise);
+                       obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit,limitStairAdvance);
   if(carry && !moved.supportMoved)
     return result;
   bool resolvedClipped = false;

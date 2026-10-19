@@ -996,10 +996,25 @@ For the stair pair, `uv run scripts/monster_character_virtual_videos.py foliage 
 creates twelve transparent leaf/grass PNG overrides. Pass the same absolute
 `OPENGOTHIC_TEXTURES=DIR` to both fresh processes: ground, trunks and all collision
 meshes remain intact. The video title discloses the render-only foliage removal.
-The monster stair policy limits physical automatic rise to the guild/slope budget
-and at most 12 cm per update, while using only the remaining horizontal request.
-Player/human paths retain the native policy; the ten-centimetre-riser contract
-explicitly selects the monster policy. Presentation lag stays within 10 cm.
+The monster stair policy uses only the remaining horizontal request instead of
+Jolt's extra 2 cm minimum advance. It retains the full guild step (wolf 60 cm,
+troll 100 cm) for a single ledge. A blocking steep polygon taller than the guild
+step plus contact padding is treated as extended steep terrain and retains a
+12 cm rise budget. Unknown/non-polygonal shapes retain the full guild step.
+Player/human paths retain the native policy.
+The contract covers both repeated ten-centimetre risers and isolated ledges.
+Presentation lag stays within 10 cm; a high single ledge may visibly snap as in
+legacy movement.
+
+`monster-character-virtual-ledges` compares five isolated ledges: wolf 20/40/55 cm
+and troll 40/80 cm. `monstercharacter ledge wolf|troll HEIGHT` creates one static
+source mesh 100 m above a verified stock anchor, checks three support rays and
+the vertical face, and runs production `Npc::goToPosition`/MoveAlgo over a 6 m
+approach to a 15 m landing. OFF/ON use the same native running animation and
+geometry. Each eight-second window reports arrival, time, stalls, root/model
+height changes and falls. Arrival requires 60 cm horizontal / 5 cm vertical
+tolerance and actual support; all five results are retained even after a
+mechanical failure. The synthetic geometry supplies no movement or response.
 `monster-character-virtual-stair-attack` enters `T_FISTATTACKMOVE` while a stair
 presentation correction is pending, without resetting that correction. It tests
 the grounded attack handoff separately from physical lunge range. The numerical
