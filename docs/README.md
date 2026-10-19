@@ -156,6 +156,7 @@
 | Общий кэш бинарников Ryzen | `scripts/ryzen.sh` использует `~/gothic-ai/engine-cache/` по хэшу исходников; `clean-cache` очищает старые записи, `RYZEN_WORKTREE` задаёт имя папки; [правила](ryzen.md) |
 | Автоочистка диска Ryzen | Перед загрузкой исходников `ryzen.sh` удаляет свободные e2e-worktree после `RYZEN_CLEAN_IDLE_HOURS=48` часов без активности (`0` отключает проход); при свободном месте меньше 60 ГиБ обрезает `uv` не чаще раза в 12 часов; [границы и метки](ryzen.md#как-работает-сейчас) |
 | Съёмка записанных дуэлей | `scripts/body_replay_film.py prepare/render`: Mac Metal, `--size 1920x1080`, MP4 + звук боя WAV; Linux Xvfb/lavapipe; сверка `body_schedule_equivalence.py`, [описание](npc-body-control-plan.md), [съёмка P30 на Mac](../reports/npc-body/2026-10-19-replay-mac/README.md) |
+| Трек головы и подписи действий P30 | `body_replay_film.py prepare --track-head`, затем `labels DIR --output actions.json`: координаты головы, HP и начало исполнения команд по кадрам; [описание](npc-body-control-plan.md), [сверка с Mac](../reports/npc-body/2026-10-19-replay-track/README.md) |
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |
 | Подписка тела под lease и с заявкой на захват | `gothic-body-watch-test` в `OpenGothic/tests/body_watch_test.cpp`, настоящие NPC без окна; правила — [`npc-body-api.md`](npc-body-api.md) |
