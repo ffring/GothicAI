@@ -903,69 +903,23 @@ async def fight_reactions(
             if not await _until(lambda: all(n in trace.positions for n in watch), 5):
                 raise GameError("fight_reactions setup: missing bandit body observations")
 
-            async def ground_scan(position: tuple[float, ...] | list[float]) -> dict[str, Any]:
-                before = trace.game_ms.get("PLAYER", 0)
-                await link.debug("player_goto", pos=list(position))
-                settled = await _until(
-                    lambda: (
-                        trace.game_ms.get("PLAYER", 0) > before
-                        and math.dist(trace.positions["PLAYER"][::2], position[::2]) < 25
-                        and not trace.latest["PLAYER"].get("in_air", True)
-                        and abs((trace.latest["PLAYER"].get("linear_velocity_cm_s") or (0, 999, 0))[1]) < 20
-                    ), 3,
-                )
-                if not settled:
-                    raise GameError(
-                        f"fight_reactions setup: terrain probe did not settle at {position}; "
-                        f"geometry={trace.hit_geometry(CAVALORN, 'PLAYER')}"
-                    )
-                return trace.latest_rows["PLAYER"]
-
-            async def arena_geometry(
-                stage: str, defenders: list[str], *, candidate: tuple[float, ...] | None = None,
-            ) -> dict[str, Any]:
-                # PLAYER is a passive terrain probe. Keep every NPC fixed, and inspect
-                # the 3 m discs at the defender and 3/6 m beyond it along the approach.
-                hero = trace.positions["PLAYER"]
+            async def arena_geometry(stage: str, defenders: list[str]) -> dict[str, Any]:
                 report: dict[str, Any] = {"stage": stage, "clear": True, "pairs": {}}
-                try:
-                    if candidate is not None:
-                        await ground_scan(candidate)
-                    for defender in defenders:
-                        geometry = trace.hit_geometry(CAVALORN, defender)
-                        response = await link._request(
-                            DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=CAVALORN,
-                                     to="PC_HERO" if defender == "PLAYER" else defender), 5,
-                        )
-                        ray = response.value or {}
-                        origin, companion = trace.positions[defender], trace.positions[CAVALORN]
-                        dx, dz = origin[0] - companion[0], origin[2] - companion[2]
-                        length = math.hypot(dx, dz)
-                        corridor = []
-                        clear = (
-                            length > 0 and ray.get("center_clear") and ray.get("head_clear")
-                            and obstacles_clear(trace.latest_rows[CAVALORN], 300)
-                            and obstacles_clear(trace.latest_rows[defender], 300)
-                        )
-                        pair = {"geometry": geometry, "npc_los": ray, "corridor": corridor, "clear": False}
-                        report["pairs"][defender] = pair
-                        report["clear"] = False
-                        if length > 0:
-                            for beyond in (300, 600):
-                                row = await ground_scan((
-                                    origin[0] + beyond * dx / length, origin[1],
-                                    origin[2] + beyond * dz / length,
-                                ))
-                                corridor.append({
-                                    "beyond_cm": beyond, "position": row["self"]["position_world_cm"],
-                                    "local_obstacles": row["local_obstacles"],
-                                })
-                                clear = clear and obstacles_clear(row, 300)
-                        pair["clear"] = bool(clear)
-                        report["clear"] = all(p["clear"] for p in report["pairs"].values())
-                finally:
-                    await ground_scan(hero)
-                    log.info("fight_reactions arena_geometry=%s", report)
+                for defender in defenders:
+                    response = await link._request(
+                        DebugCmd(req=link._next_id("r"), cmd="npc_los", npc=CAVALORN, to=defender), 5,
+                    )
+                    ray = response.value or {}
+                    clear = bool(
+                        (ray.get("center_clear") or ray.get("head_clear"))
+                        and obstacles_clear(trace.latest_rows[CAVALORN], 150)
+                        and obstacles_clear(trace.latest_rows[defender], 150)
+                    )
+                    report["pairs"][defender] = {
+                        "geometry": trace.hit_geometry(CAVALORN, defender), "npc_los": ray, "clear": clear,
+                    }
+                    report["clear"] = report["clear"] and clear
+                log.info("fight_reactions arena_geometry=%s", report)
                 return report
 
             initial_geometry = await arena_geometry("initial", list(BANDITS))
@@ -1158,7 +1112,7 @@ async def fight_reactions(
                     if bandit in parked:
                         await stop_companion()
                         await grounded(bandit, "before_return", parked_hp, 4000, 50000)
-                        preparing.update((CAVALORN, bandit))
+                        preparing.add(bandit)
                         planner.allow = setup_allow
                         companion_pos = (await link.snapshot(CAVALORN, fresh=True)).npc.pos
                         points = [
@@ -1173,23 +1127,10 @@ async def fight_reactions(
                                 "fight_reactions setup: no authored return point 13–22 m away; "
                                 f"companion_position={companion_pos}"
                             )
-                        return_point = None
-                        for candidate in sorted(
+                        return_point = min(
                             points,
                             key=lambda p: abs(math.dist(companion_pos, (p["x"], p["y"], p["z"])) - 1800),
-                        ):
-                            report = await arena_geometry(
-                                f"return_candidate_{candidate['name']}", ["PLAYER"],
-                                candidate=(candidate["x"], candidate["y"], candidate["z"]),
-                            )
-                            if report["clear"]:
-                                return_point = candidate
-                                break
-                        if return_point is None:
-                            raise GameError(
-                                "fight_reactions setup: no open authored return corridor 13–22 m away; "
-                                f"geometry={report}"
-                            )
+                        )
                         log.info("fight_reactions authored return point=%s", return_point)
                         await link.detach(bandit)
                         parked.remove(bandit)

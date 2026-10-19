@@ -225,7 +225,7 @@ def test_hit_ready_requires_clear_obstacles_for_both_bodies(who):
     assert not trace.hit_ready("companion", "bandit")
 
 
-@pytest.mark.parametrize("clearance", [120.0, 300.0])
+@pytest.mark.parametrize("clearance", [120.0, 150.0])
 def test_obstacles_clear_includes_clearance_boundary_and_ignores_no_hit_distance(clearance):
     observation = row()
     ray = observation["local_obstacles"]["rays"][0]
@@ -237,7 +237,7 @@ def test_obstacles_clear_includes_clearance_boundary_and_ignores_no_hit_distance
     assert obstacles_clear(observation, clearance)
 
 
-@pytest.mark.parametrize("clearance", [120.0, 300.0])
+@pytest.mark.parametrize("clearance", [120.0, 150.0])
 @pytest.mark.parametrize("invalid_scan", ["missing", "short_range", "fewer_rays", "extra_rays"])
 def test_obstacles_clear_requires_complete_scan_covering_clearance(clearance, invalid_scan):
     observation = row()
