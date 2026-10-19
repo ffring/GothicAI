@@ -8,7 +8,7 @@ OUT="$(cd "$OUT" && pwd)"
 export LC_ALL=C
 export GOTHIC_AI=0
 HOST="${BENCH_HOST:-ryzen}"
-SCENES=(wolf_terrain wolf_pack troll_props cliff wolf_water fieldraider_bloodfly)
+SCENES=(wolf_terrain wolf_stairs wolf_pack troll_props cliff wolf_water fieldraider_bloodfly)
 if [[ -n "${SCENE:-}" ]]; then SCENES=("$SCENE"); fi
 python3 - "$ROOT/scripts/bench/monster-character-virtual-videos.bench" "$OUT" <<'PY'
 from pathlib import Path

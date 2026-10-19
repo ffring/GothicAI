@@ -373,6 +373,14 @@ endif()
 
 # editor
 
+if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-npc-deeds-contract EXCLUDE_FROM_ALL tests/npc_deeds_contract.cpp)
+  target_include_directories(gothic-npc-deeds-contract PRIVATE common)
+  add_custom_target(check-npc-deeds
+    COMMAND $<TARGET_FILE:gothic-npc-deeds-contract>
+    DEPENDS gothic-npc-deeds-contract USES_TERMINAL)
+endif()
+
 # Navigation eye has an independent contract block to keep parallel navigation work isolated.
 if(NOT ANDROID AND NOT IOS)
   add_executable(gothic-navigation-eye-contract EXCLUDE_FROM_ALL tests/navigation_eye_contract.cpp)

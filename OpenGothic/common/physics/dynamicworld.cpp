@@ -2607,8 +2607,8 @@ bool DynamicWorld::NpcItem::virtualDiagnostics(CharacterVirtualDiagnostics& out)
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit,
-    bool limitStairAdvance) {
-  return implMoveVirtual(displacement,dt,stepHeight,maxSlope,mass,culprit,false,limitStairAdvance);
+    bool limitStairAdvance, bool bounceOnSteepContact) {
+  return implMoveVirtual(displacement,dt,stepHeight,maxSlope,mass,culprit,false,limitStairAdvance,bounceOnSteepContact);
   }
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::carryVirtual(uint64_t dt, Npc* culprit) {
@@ -2617,7 +2617,7 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::carryVirtual(uin
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
     const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry,
-    bool limitStairAdvance) {
+    bool limitStairAdvance, bool bounceOnSteepContact) {
   VirtualMoveResult result;
   if(obj==nullptr)
     return result;
@@ -2632,7 +2632,10 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
   const auto initial = obj->pos;
   auto* npcDiagnostic = carry ? nullptr : obj->virtualDiagnosticMove.get();
   if(npcDiagnostic!=nullptr) {
+    const auto sequence = npcDiagnostic->sequence+1;
     *npcDiagnostic = {};
+    npcDiagnostic->sequence = sequence;
+    npcDiagnostic->dt = dt;
     npcDiagnostic->initial = initial;
     npcDiagnostic->requested = displacement;
     }
@@ -2756,20 +2759,34 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
   result.groundVelocity = moved.groundVelocity;
   result.grounded = moved.grounded;
   result.steep = moved.steep;
+  result.steepContact = moved.steepContact;
+  result.steepContactNormal = moved.steepContactNormal;
   result.blocked = preFall;
   result.supportMoved = moved.supportMoved;
   const Tempest::Vec3 horizontal(displacement.x,0,displacement.z);
   const float desiredLength = horizontal.length();
   if(!isNpcMoveSkipped(displacement) && desiredLength>0.1f) {
     const float advancement = Tempest::Vec3::dotProduct(accepted-initial,horizontal)/desiredLength;
+    result.advancementRatio = advancement/desiredLength;
     result.blocked |= advancement<=std::max(0.1f,desiredLength*0.1f);
+    // Keep neighbour clipping and charge callbacks on their existing path.
+    // World sliding can retain half the requested advance, so the old ten
+    // percent stall test alone never asks a monster to use its native bounce.
+    const bool steepBlocked = bounceOnSteepContact && moved.grounded && moved.steepContact &&
+                              !requestClipped && !resolvedClipped && !preFall && result.advancementRatio<.6f;
+    result.blocked |= steepBlocked;
     if(result.blocked && !requestClipped && !resolvedClipped && !preFall) {
       result.collision.landCol = true;
-      result.collision.normal = Tempest::Vec3::normalize(accepted-initial-horizontal);
+      result.collision.normal = steepBlocked ? moved.steepContactNormal :
+                                              Tempest::Vec3::normalize(accepted-initial-horizontal);
       }
     }
-  if(npcDiagnostic!=nullptr)
+  if(npcDiagnostic!=nullptr) {
     npcDiagnostic->blocked = result.blocked;
+    npcDiagnostic->steepContact = result.steepContact;
+    npcDiagnostic->steepContactNormal = result.steepContactNormal;
+    npcDiagnostic->advancementRatio = result.advancementRatio;
+    }
   return result;
   }
 

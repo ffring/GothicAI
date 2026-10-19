@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Run one GPU stage on dev-ubuntu. Invoke from the Mac worktree, never remotely.
-# Usage: scripts/content/run-materials.sh flux|sdxl|normals|appearance|stablematerials [--base flux|sdxl]
+# Usage: scripts/content/run-materials.sh city|flux|sdxl|normals|appearance|stablematerials [--base flux|sdxl]
 set -euo pipefail
 STAGE="${1:?stage required}"
 shift
-case "$STAGE" in flux|sdxl|normals|appearance|stablematerials) ;; *) exit 2 ;; esac
+case "$STAGE" in city|flux|sdxl|normals|appearance|stablematerials) ;; *) exit 2 ;; esac
 BASE=sdxl
 if (( $# > 0 )); then
   [[ "$STAGE" == normals || "$STAGE" == appearance ]] || exit 2
@@ -13,7 +13,7 @@ if (( $# > 0 )); then
 fi
 case "$BASE" in flux|sdxl) ;; *) exit 2 ;; esac
 MIN_FREE_MIB=8500
-[[ "$STAGE" != flux ]] || MIN_FREE_MIB=10000
+[[ "$STAGE" != flux && "$STAGE" != city ]] || MIN_FREE_MIB=10000
 MIN_FREE_MIB="${GPU_MIN_FREE_MIB:-$MIN_FREE_MIB}"
 [[ "$MIN_FREE_MIB" =~ ^[1-9][0-9]*$ ]] || exit 2
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -28,9 +28,12 @@ while true; do
   [[ "$game_status" == 0 ]] || { echo "Mac game preflight failed: pgrep exit $game_status" >&2; exit 1; }
   (( SECONDS - started < 3600 )) || { echo 'Mac game still running after 60 minutes; no units stopped' >&2; exit 75; }
   echo 'Waiting for the Mac game before temporarily stopping a model service'
-  sleep 30
+  sleep 5
 done
 scp "$ROOT/scripts/content/bakeoff.py" "$ROOT/scripts/content/stable_materials_adapter.py" dev-ubuntu:gothic-ai/materials/
+if [[ "$STAGE" == city ]]; then
+  scp "$ROOT/scripts/content/generate.py" "$ROOT/scripts/content/material_colour.py" "$ROOT/data/content/city-materials.csv" "$ROOT/docs/content-style.md" dev-ubuntu:gothic-ai/materials/
+fi
 # registry.jsonl is copied once at preparation. Preserve remote stage progress.
 ssh -T dev-ubuntu bash -s -- "$STAGE" "$BASE" "$MIN_FREE_MIB" <<'REMOTE'
 set -euo pipefail
@@ -43,6 +46,10 @@ export XDG_CACHE_HOME="$PWD/cache" TMPDIR="$PWD/tmp"
 mkdir -p "$TMPDIR"
 exec 9>gpu.lock
 flock -n 9 || { echo 'our material generation is already running' >&2; exit 75; }
+if [[ "$stage" == city ]]; then
+  # Keep city progress separate from the completed bakeoff registry.
+  .venv/bin/python generate.py prepare --registry city-1.jsonl --mapping city-materials.csv --bible content-style.md
+fi
 # No file or weight may be installed outside the task directory.
 bytes=$(du -sb . | cut -f1)
 (( bytes < 80000000000 )) || { echo '80 GB task limit reached' >&2; exit 1; }
@@ -140,8 +147,13 @@ if (( stop_epoch > 0 )); then budget=$(( budget - $(date +%s) + stop_epoch )); f
 (( budget > 60 )) || { echo 'Cumulative stopped-unit budget exhausted' >&2; exit 75; }
 # Hard wall deadline reserves at least 600 seconds for bounded recovery.
 args=("$stage" --registry registry.jsonl --root "$PWD")
+program=bakeoff.py
+if [[ "$stage" == city ]]; then
+  program=generate.py
+  args=(run --registry city-1.jsonl --root "$PWD" --set city-1)
+fi
 [[ "$stage" != normals && "$stage" != appearance ]] || args+=(--base "$base")
 log="$stage"
 [[ "$stage" != normals && "$stage" != appearance ]] || log="$stage-$base"
-timeout -k 10 "$budget" .venv/bin/python -u bakeoff.py "${args[@]}" > "$log.log" 2>&1
+timeout -k 10 "$budget" .venv/bin/python -u "$program" "${args[@]}" > "$log.log" 2>&1
 REMOTE

@@ -185,7 +185,96 @@ const CellsCard = z.object({
   source: z.string(),
 });
 
-const Chart = z.discriminatedUnion('type', [DiceChart, FormulaCard, BarsCard, DotsCard, StatsCard, LineCard, BigCard, TableCard, CellsCard]);
+// Top-down observations in centimetres; x points right, y points forward (up on the card).
+const RaysCard = z.object({
+  type: z.literal('rays'),
+  title: z.string().optional(),
+  maxCm: NumberValue.positive(),
+  rays: z.array(z.object({cm: NumberValue.nonnegative(), hit: z.boolean()})).length(16),
+  target: z.object({x: NumberValue, y: NumberValue, label: z.string(), at: At.default(0)}),
+  hideAt: At.optional(),
+  panels: z.array(z.object({title: z.string(), lines: z.array(z.string()), color: z.string(), at: At})),
+  raysAt: z.tuple([At, NumberValue.positive()]),
+  source: z.string(),
+});
+
+const ConeCard = z.object({
+  type: z.literal('cone'),
+  title: z.string().optional(),
+  halfDeg: NumberValue.positive().lt(180),
+  rangeCm: NumberValue.positive(),
+  path: z.array(z.object({t: At, x: NumberValue, y: NumberValue})).min(1),
+  targetLabel: z.string().default('противник'),
+  turn: z.object({at: At, dur: NumberValue.positive(), deg: NumberValue, label: z.string()}).optional(),
+  texts: z.array(z.object({text: z.string(), at: At, color: z.string()})).default([]),
+  source: z.string(),
+});
+
+const TicksCard = z.object({
+  type: z.literal('ticks'),
+  title: z.string().optional(),
+  rows: z.array(z.object({
+    label: z.string(), cells: z.string().regex(/^[DB]+$/, 'cells должны содержать только D и B'),
+    offset: NumberValue.nonnegative().default(0), at: At,
+  })).min(1),
+  dur: NumberValue.positive(),
+  legend: z.object({D: z.string(), B: z.string()}),
+  align: z.object({at: At, dur: NumberValue.positive()}).optional(),
+  source: z.string(),
+});
+
+const GridCard = z.object({
+  type: z.literal('grid'),
+  title: z.string(),
+  tiles: z.array(z.object({label: z.string(), at: At})).min(1),
+  columns: z.number().int().positive(),
+  source: z.string(),
+});
+
+const FlowCard = z.object({
+  type: z.literal('flow'),
+  title: z.string().optional(),
+  nodes: z.array(z.object({
+    id: z.string(), label: z.string(), x: NumberValue.min(0).max(1), y: NumberValue.min(0).max(1),
+    w: NumberValue.positive().max(1).optional(), color: z.string().optional(), at: At,
+  })).min(1),
+  edges: z.array(z.object({
+    from: z.string(), to: z.string(), label: z.string().optional(), at: At,
+    curve: NumberValue.optional(), // signed bend, as a fraction of the frame height
+    packets: z.object({every: NumberValue.positive(), dur: NumberValue.positive()}).optional(),
+  })),
+  source: z.string(),
+});
+
+const Chart = z.discriminatedUnion('type', [DiceChart, FormulaCard, BarsCard, DotsCard, StatsCard, LineCard, BigCard, TableCard, CellsCard, RaysCard, ConeCard, TicksCard, GridCard, FlowCard]);
+
+const Follow = z.object({
+  data: z.string().min(1), // actions.json, relative to the workspace's public dir
+  names: z.record(z.string()), // only named actions are shown
+  at: At.default(0),
+  until: At.optional(),
+  offsetY: NumberValue.default(-42), // display pixels from the head; negative is above it
+  hold: NumberValue.positive().default(1.2),
+});
+
+const Hp = z.object({
+  data: z.string().min(1),
+  labels: z.tuple([z.string(), z.string()]),
+  at: At.default(0),
+});
+
+// Recorded footage pixels and frames, before cover/zoom. Null means the fighter is off camera.
+export const CombatData = z.object({
+  fps: NumberValue.positive(),
+  frames: z.number().int().positive(),
+  size: z.tuple([NumberValue.positive(), NumberValue.positive()]),
+  track: z.array(z.union([
+    z.tuple([At, NumberValue, NumberValue]),
+    z.tuple([At, z.null(), z.null()]),
+  ])),
+  hp: z.array(z.tuple([At, NumberValue, NumberValue])),
+  actions: z.array(z.object({frame: At, t: At, action: z.string(), id: z.number().int()})),
+});
 
 const Beat = z.object({
   id: z.string(),
@@ -204,6 +293,10 @@ const Beat = z.object({
   tags: z.array(Tag).default([]),
   strokes: z.array(Stroke).default([]),
   fans: z.array(Fan).default([]),
+  follow: Follow.optional(),
+  followBottom: Follow.optional(), // split: bottom in tall, right in wide
+  hp: Hp.optional(),
+  hpBottom: Hp.optional(),
   chart: Chart.optional(),
 });
 
@@ -237,7 +330,7 @@ export const Plan = z.object({
     if (!chart) return;
     const issue = (path: (string | number)[], message: string) =>
       ctx.addIssue({code: z.ZodIssueCode.custom, path: ['beats', bi, 'chart', ...path], message});
-    if (['line', 'big', 'table', 'cells'].includes(chart.type) && plan.format !== 'wide') {
+    if (['line', 'big', 'table', 'cells', 'rays', 'cone', 'ticks', 'grid', 'flow'].includes(chart.type) && plan.format !== 'wide') {
       issue(['type'], `${chart.type}: только wide`);
     }
     if (chart.type === 'line') {
@@ -262,6 +355,25 @@ export const Plan = z.object({
       chart.spans.forEach((span, i) => {
         if (span.to < span.from || span.to >= chart.cells.length) issue(['spans', i, 'to'], 'диапазон вне cells: from ≤ to < cells.length');
       });
+    } else if (chart.type === 'rays') {
+      chart.rays.forEach((ray, i) => {
+        if (ray.cm > chart.maxCm) issue(['rays', i, 'cm'], 'длина луча должна быть ≤ maxCm');
+      });
+    } else if (chart.type === 'cone') {
+      chart.path.forEach((point, i) => {
+        if (i > 0 && point.t <= chart.path[i - 1].t) issue(['path', i, 't'], 't должны строго возрастать');
+      });
+    } else if (chart.type === 'flow') {
+      const ids = new Set<string>();
+      chart.nodes.forEach((node, i) => {
+        if (ids.has(node.id)) issue(['nodes', i, 'id'], 'id узлов должны быть уникальными');
+        ids.add(node.id);
+      });
+      chart.edges.forEach((edge, i) => {
+        for (const endpoint of ['from', 'to'] as const) {
+          if (!ids.has(edge[endpoint])) issue(['edges', i, endpoint], 'ссылка на неизвестный узел');
+        }
+      });
     } else if (chart.type === 'bars' && chart.log) {
       if (!Number.isFinite(chart.max) || chart.max <= 0) issue(['max'], 'для log нужен max > 0');
       chart.groups.forEach((g, gi) => g.values.forEach((v, vi) => {
@@ -272,6 +384,9 @@ export const Plan = z.object({
 });
 
 export type Plan = z.infer<typeof Plan>;
+export type CombatData = z.infer<typeof CombatData>;
+export type Follow = z.infer<typeof Follow>;
+export type Hp = z.infer<typeof Hp>;
 export type Beat = z.infer<typeof Beat>;
 export type DiceChart = z.infer<typeof DiceChart>;
 export type FormulaCard = z.infer<typeof FormulaCard>;
@@ -282,6 +397,11 @@ export type LineCard = z.infer<typeof LineCard>;
 export type BigCard = z.infer<typeof BigCard>;
 export type TableCard = z.infer<typeof TableCard>;
 export type CellsCard = z.infer<typeof CellsCard>;
+export type RaysCard = z.infer<typeof RaysCard>;
+export type ConeCard = z.infer<typeof ConeCard>;
+export type TicksCard = z.infer<typeof TicksCard>;
+export type GridCard = z.infer<typeof GridCard>;
+export type FlowCard = z.infer<typeof FlowCard>;
 export type TagT = z.infer<typeof Tag>;
 export type StrokeT = z.infer<typeof Stroke>;
 export type FanT = z.infer<typeof Fan>;

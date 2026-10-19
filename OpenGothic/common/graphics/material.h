@@ -25,10 +25,18 @@ class Material final {
       AdditiveLight,
       };
 
+    enum class Antitile : uint8_t {
+      Off,
+      Offset,
+      Rotate,
+      };
+
     const Tempest::Texture2d* tex=nullptr;
     const Tempest::Texture2d* normal=nullptr;
     const Tempest::Texture2d* orm=nullptr;
     float                     uvScale          = 1.f;
+    float                     antitileCell     = 1.f;
+    Antitile                  antitile         = Antitile::Off;
     bool                      materialMaps     = false;
     std::vector<const Tempest::Texture2d*> frames;
     AlphaFunc                 alpha            = AlphaTest;
