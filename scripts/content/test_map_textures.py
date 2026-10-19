@@ -41,7 +41,7 @@ def dataset(tmp_path):
         "object": "town street", "role": "walking surface", "depicts": "small stone paving",
         "colour": "warm grey", "weathering": "dirt between stones", "orientation": "no fixed top",
         "layout": "tiled", "layout_share": "tiled:0.8;panel:0.1;strip:0.1;atlas:0",
-        "anti_repeat": "on",
+        "anti_repeat": "on", "target_luminance": "0.12",
     } for row in source]
     rows[-4].update(decision="module", **{"class": "timber_frame_tile", "scale": "1", "anti_repeat": "off"})
     rows[-3].update(decision="panel", **{"class": "plaster_panel", "scale": "1",
@@ -274,6 +274,34 @@ def test_directional_tiled_surface_can_disable_anti_repeat(dataset):
     assert mapping.check_mapping(mapping_path, census_path)[0]["anti_repeat"] == "off"
 
 
+@pytest.mark.parametrize("value", ["", "NaN", "Infinity", "-0.1", "1.01", "unknown"])
+def test_pilot_requires_finite_unit_interval_target_luminance(dataset, value):
+    _, rows, census_path, mapping_path, save = dataset
+    rows[0]["target_luminance"] = value
+    save()
+    with pytest.raises(mapping.MappingError, match="target_luminance"):
+        mapping.check_mapping(mapping_path, census_path)
+
+
+def test_facade_requires_target_but_other_modules_may_leave_it_empty(dataset):
+    source, rows, census_path, mapping_path, save = dataset
+    rows[-4]["target_luminance"] = ""
+    save()
+    mapping.check_mapping(mapping_path, census_path)
+    source[-4]["texture"] = rows[-4]["texture"] = "NW_CITY_WALL_03.TGA"
+    save()
+    with pytest.raises(mapping.MappingError, match="target_luminance"):
+        mapping.check_mapping(mapping_path, census_path)
+
+
+def test_mapping_update_preserves_target_luminance(dataset):
+    _, rows, census_path, mapping_path, save = dataset
+    targets = [row["target_luminance"] for row in rows]
+    rows[0]["scale"] = "9.99"
+    save()
+    assert [row["target_luminance"] for row in mapping.update_mapping(mapping_path, census_path)] == targets
+
+
 @pytest.mark.parametrize("index", [-4, -3, -2, -1])
 def test_noninclude_decisions_require_anti_repeat_off(dataset, index):
     source, rows, census_path, mapping_path, save = dataset
@@ -337,7 +365,7 @@ def test_invalid_update_does_not_write_partial_results(dataset):
     ("", "empty CSV"),
     ("texture,texture\n", "duplicate CSV column"),
     ("texture,decision\n", "expected CSV columns in order"),
-    (",".join(mapping.FIELDS) + "\nshort,row\n", "expected 17 CSV fields, got 2"),
+    (",".join(mapping.FIELDS) + "\nshort,row\n", "expected 18 CSV fields, got 2"),
 ])
 def test_malformed_mapping_csv(dataset, text, message):
     source, rows, census_path, mapping_path, save = dataset

@@ -10,6 +10,7 @@ import pytest
 
 SCRIPT = Path(__file__).with_name("capture-city.sh")
 SCENARIO = SCRIPT.with_name("city.bench")
+CITY2_SCENARIO = SCRIPT.with_name("city-2.bench")
 ROOT = SCRIPT.parents[2]
 
 
@@ -31,6 +32,57 @@ def test_city_scenario_preserves_render_measurement_and_visits_authored_sites():
         assert scenario.count(f"shot {spot}_night") == 1
     assert scenario.count("set time 12 0") == 5
     assert scenario.count("set time 23 0") == 5
+
+
+def test_city2_preserves_city_camera_and_captures_house_in_both_lights():
+    def commands(path):
+        return [line.split("#", 1)[0].strip() for line in path.read_text().splitlines()
+                if line.split("#", 1)[0].strip()]
+
+    original = commands(SCENARIO)
+    scenario = commands(CITY2_SCENARIO)
+    end = original.index("shot city_night") + 1
+    assert scenario[:end] == original[:end]
+    shots = [line[5:] for line in scenario if line.startswith("shot ")]
+    assert len(shots) == len(set(shots))
+    assert set(shots) == {
+        "city_a", "city", "city_night", "harbour", "market", "market_night",
+        "facade_close", "facade_close_night", "facade_corner", "facade_corner_night",
+    }
+    hour = None
+    at_shot = {}
+    for command in scenario:
+        if command.startswith("set time "):
+            hour = command.removeprefix("set time ")
+        elif command.startswith("shot "):
+            at_shot[command[5:]] = hour
+    for name in ("city", "harbour", "market", "facade_close", "facade_corner"):
+        assert at_shot[name] == "12 0"
+    for name in ("market", "facade_close", "facade_corner"):
+        assert at_shot[name + "_night"] == "23 0"
+    assert scenario.count("cam hold") == 2
+    assert "goto pos 9137 2725 3745" in scenario
+    assert "goto pos 8744 2500 4005" in scenario
+
+
+def test_city2_remote_rejects_other_set_directory():
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--remote", str(Path.home() / "gothic-ai/city-set-1"),
+         "fixture", "city-2"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 2
+
+
+def test_capture_rejects_unsafe_set_before_creating_output(tmp_path):
+    output = tmp_path / "output"
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--set", "../../other", "--content-root", str(tmp_path),
+         "--output", str(output)], capture_output=True, text=True,
+    )
+    assert result.returncode == 2
+    assert "--set must be city-1 or city-2" in result.stderr
+    assert not output.exists()
 
 
 def fixture_capture(tmp_path, variant="after"):

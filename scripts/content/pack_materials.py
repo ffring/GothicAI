@@ -36,6 +36,8 @@ import sys
 import numpy as np
 from PIL import Image
 
+from pilot import antitile_mode, selected_rows
+
 
 TARGETS = {
     "cobblestone": "NW_MISC_OLDSTONEPATH_01.TGA",
@@ -67,15 +69,13 @@ def select_set_records(records: list[dict], set_name: str, mapping: Path) -> lis
         raise ValueError(f"unsafe set name: {set_name!r}")
     with mapping.open(newline="", encoding="utf-8") as stream:
         expected = {}
-        for row in csv.DictReader(stream):
-            if row.get("decision") != "include":
-                continue
+        for row in selected_rows(list(csv.DictReader(stream)), set_name):
             texture = row["texture"]
             if texture in expected:
                 raise ValueError(f"mapping repeats included texture {texture}")
             expected[texture] = row
     if not expected:
-        raise ValueError("mapping has no include textures")
+        raise ValueError("mapping has no selected textures")
     selected = {}
     ids = set()
     for record in records:
@@ -94,7 +94,7 @@ def select_set_records(records: list[dict], set_name: str, mapping: Path) -> lis
             raise ValueError(f"{resource_id}: set material must replace exactly one texture")
         texture = replaces[0]
         if texture not in expected:
-            raise ValueError(f"{resource_id}: {texture} is not an include texture")
+            raise ValueError(f"{resource_id}: {texture} is not an include texture or selected facade texture")
         if texture in selected or resource_id in ids:
             raise ValueError(f"duplicate selected material: {texture} ({resource_id})")
         row = expected[texture]
@@ -105,6 +105,20 @@ def select_set_records(records: list[dict], set_name: str, mapping: Path) -> lis
             raise ValueError(f"{resource_id}: scale differs from mapping for {texture}")
         if params.get("material_class") != row["class"]:
             raise ValueError(f"{resource_id}: material_class differs from mapping for {texture}")
+        if set_name == "city-2":
+            target = params.get("target_luminance")
+            if (isinstance(target, bool) or not isinstance(target, (int, float))
+                    or not math.isfinite(target) or not 0 <= target <= 1):
+                raise ValueError(f"{resource_id}: target_luminance must be finite and in [0, 1]")
+            if not math.isclose(target, float(row["target_luminance"]), abs_tol=1e-10, rel_tol=0):
+                raise ValueError(f"{resource_id}: target_luminance differs from mapping for {texture}")
+            if params.get("antitile") != antitile_mode(row):
+                raise ValueError(f"{resource_id}: antitile differs from class policy for {texture}")
+            cell = params.get("antitile_cell", 1.0)
+            if isinstance(cell, bool) or not isinstance(cell, (int, float)) or not math.isfinite(cell) or cell <= 0:
+                raise ValueError(f"{resource_id}: antitile_cell must be finite and positive")
+            if row["decision"] != "include" and scale != 1:
+                raise ValueError(f"{resource_id}: architectural modules require scale=1")
         ids.add(resource_id)
         selected[texture] = record
     missing = expected.keys() - selected.keys()
@@ -207,6 +221,9 @@ def pack_set(records: list[dict], content_root: Path, output: Path) -> Path:
         write_dds(directory / "orm.dds", np.stack((maps["ao"], maps["roughness"], maps["metallic"]), axis=2))
         entry = {name: f"{resource_id}/{name}.dds" for name in ("albedo", "normal", "orm")}
         entry["scale"] = record["parameters"]["scale"]
+        if record["parameters"].get("set") == "city-2":
+            entry["antitile"] = record["parameters"]["antitile"]
+            entry["antitile_cell"] = record["parameters"].get("antitile_cell", 1.0)
         index[record["replaces"][0]] = entry
     target = output / "materials" / "materials.json"
     if target.is_symlink():

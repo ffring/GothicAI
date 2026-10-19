@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Capture the complete packed city set against an explicitly empty content root.
 # Usage: capture-city.sh --content-root <packed staging root> --output <outside-git directory>
-# Optional: --mac-city-fps (profiled BIN and GOTHIC_DIR required; waits at most 40 minutes).
-# Ryzen: source-matching cached engine, private ~/gothic-ai/city-set-1 runtime, gq.
+# Optional: --set city-1|city-2; --mac-city-fps (profiled BIN and GOTHIC_DIR; waits <=40 minutes).
+# Ryzen: source-matching cached engine, private ~/gothic-ai/city-set-N runtime, gq.
 # No build, default content installation, model service or engine change is performed.
 set -euo pipefail
 
@@ -150,8 +150,9 @@ PY
 fi
 
 if [[ "${1:-}" == --remote ]]; then
-  TASK="${2:?remote task directory}"; RUN="${3:?run id}"
-  [[ "$TASK" == "$HOME/gothic-ai/city-set-1" && "$RUN" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
+  TASK="${2:?remote task directory}"; RUN="${3:?run id}"; SET="${4:-city-1}"
+  [[ "$SET" == city-1 || "$SET" == city-2 ]] || exit 2
+  [[ "$TASK" == "$HOME/gothic-ai/city-set-${SET#city-}" && "$RUN" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
   CAPTURE="$TASK/inputs/$RUN"
   export CITY_CAPTURE_ROOT="$CAPTURE/runtime"
   OUT="$TASK/runs/$RUN"
@@ -169,16 +170,18 @@ fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HOST="${RYZEN_HOST:-ryzen}"
-CONTENT=''; OUT=''; MAC=0
+CONTENT=''; OUT=''; MAC=0; SET=city-1
 while (( $# )); do
   case "$1" in
     --content-root) CONTENT="${2:?--content-root needs a directory}"; shift 2 ;;
     --output) OUT="${2:?--output needs a directory}"; shift 2 ;;
+    --set) SET="${2:?--set needs city-1 or city-2}"; shift 2 ;;
     --mac-city-fps) MAC=1; shift ;;
     -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+[[ "$SET" == city-1 || "$SET" == city-2 ]] || { echo '--set must be city-1 or city-2' >&2; exit 2; }
 [[ -n "$CONTENT" && -n "$OUT" ]] || { echo 'need --content-root and --output' >&2; exit 2; }
 [[ -d "$CONTENT" ]] || { echo 'content root does not exist' >&2; exit 2; }
 CONTENT="$(cd "$CONTENT" && pwd -P)"
@@ -223,7 +226,10 @@ fi
 [[ -r "$SAVE" ]] || { echo "missing standard bench save: $SAVE" >&2; exit 2; }
 cp "$SAVE" "$STAGING/save_slot_1.sav"
 TOOLS="$ROOT/reports/render-features/2026-10-18/tools"
-cp "$ROOT/scripts/content/city.bench" "$ROOT/scripts/content/capture-city.sh" "$STAGING/tools/"
+SCENARIO="$ROOT/scripts/content/city.bench"
+[[ "$SET" != city-2 || "$MAC" == 1 ]] || SCENARIO="$ROOT/scripts/content/city-2.bench"
+cp "$SCENARIO" "$STAGING/tools/city.bench"
+cp "$ROOT/scripts/content/capture-city.sh" "$STAGING/tools/"
 cp "$TOOLS/analyze.py" "$TOOLS/discard-ffmpeg.sh" "$STAGING/tools/"
 
 if [[ "$MAC" == 1 ]]; then
@@ -300,12 +306,15 @@ if text.count(old) != 1:
 output.write_text(text.replace(old, 'R="${CITY_CAPTURE_ROOT:?}"'))
 PY
 cp "$TOOLS/gpu-nvidia.py" "$STAGING/tools/"
-TASK="$(ssh -T -o BatchMode=yes -o ConnectTimeout=10 "$HOST" 'printf "%s" "$HOME/gothic-ai/city-set-1"')"
-printf -v REMOTE_ARGS '%q %q %q' "$TASK" "$DIGEST" "$RUN"
+TASK_NAME="city-set-${SET#city-}"
+printf -v TASK_QUERY 'printf "%%s" "$HOME/gothic-ai/%s"' "$TASK_NAME"
+TASK="$(ssh -T -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "$TASK_QUERY")"
+printf -v REMOTE_ARGS '%q %q %q %q' "$TASK" "$DIGEST" "$RUN" "$SET"
 ssh -T "$HOST" "bash -s -- $REMOTE_ARGS" <<'SH'
 set -euo pipefail
-task="$1"; digest="$2"; run="$3"
-[[ "$task" == "$HOME/gothic-ai/city-set-1" && "$digest" =~ ^[a-f0-9]{64}$ && "$run" =~ ^[a-zA-Z0-9_-]+$ ]]
+task="$1"; digest="$2"; run="$3"; set_name="$4"
+[[ "$set_name" == city-1 || "$set_name" == city-2 ]]
+[[ "$task" == "$HOME/gothic-ai/city-set-${set_name#city-}" && "$digest" =~ ^[a-f0-9]{64}$ && "$run" =~ ^[a-zA-Z0-9_-]+$ ]]
 df -h "$HOME"
 bin="$HOME/gothic-ai/engine-cache/$digest/Gothic2Notr"
 [[ -x "$bin" ]] || { echo "no source-matching engine cache for $digest" >&2; exit 2; }
@@ -326,28 +335,36 @@ rsync -a -- "$STAGING/tools/gpu-nvidia.py" "$STAGING/tools/discard-ffmpeg.sh" "$
 rsync -a -- "$STAGING/content/" "$HOST:$TASK/inputs/$RUN/content/"
 rsync -a -- "$STAGING/save_slot_1.sav" "$HOST:$RUNTIME/save_slot_1.sav"
 set +e
-GQ_OWNER=city-set-1 "$ROOT/scripts/gq" --host "$HOST" run \
+GQ_OWNER="$TASK_NAME" "$ROOT/scripts/gq" --host "$HOST" run \
   --class quick --threads 4 --mem 5G --gpu-mem 4G --display --display-exclusive \
   --max "${CITY_CAPTURE_MAX:-20m}" --wait-max "${RYZEN_LOCK_WAIT:-900}" \
-  --name 'city set 1 before-after captures' -- \
-  bash "$RUNTIME/tools/capture-city.sh" --remote "$TASK" "$RUN" 2>&1 | tee "$STAGING/capture.log"
+  --name "$SET before-after captures" -- \
+  bash "$RUNTIME/tools/capture-city.sh" --remote "$TASK" "$RUN" "$SET" 2>&1 | tee "$STAGING/capture.log"
 rc="${PIPESTATUS[0]}"
 set -e
 rsync -a -- "$HOST:$TASK/runs/$RUN/" "$STAGING/captures/" || { [[ "$rc" != 0 ]] || rc=1; }
 if [[ "$rc" == 0 ]]; then
-  python3 "$STAGING/tools/analyze.py" "$STAGING/captures" city market harbour upper house
-  uv run --no-project --with pillow python3 - "$STAGING/captures" "$STAGING/pairs" <<'PY'
+  SPOTS=(city market harbour upper house)
+  [[ "$SET" != city-2 ]] || SPOTS=(city)
+  python3 "$STAGING/tools/analyze.py" "$STAGING/captures" "${SPOTS[@]}"
+  uv run --no-project --with pillow python3 - "$STAGING/captures" "$STAGING/pairs" "$SET" <<'PY'
 from pathlib import Path
 import sys
 from PIL import Image, ImageDraw, ImageFont
-captures, output = map(Path, sys.argv[1:])
+captures, output = map(Path, sys.argv[1:3])
 output.mkdir()
 try:
     font = ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial.ttf', 22)
 except OSError:
     font = ImageFont.load_default()
-for spot in ('city', 'market', 'harbour', 'upper', 'house'):
-    for suffix, hour in (('', '12:00'), ('_night', '23:00')):
+spots = ('city', 'market', 'harbour', 'upper', 'house') if sys.argv[3] == 'city-1' else (
+    'city', 'harbour', 'market', 'facade_close', 'facade_corner')
+count = 0
+for spot in spots:
+    times = (('', '12:00'), ('_night', '23:00'))
+    if sys.argv[3] == 'city-2' and spot in ('city', 'harbour'):
+        times = times[:1]
+    for suffix, hour in times:
         images = []
         for variant in ('before', 'after'):
             with Image.open(captures / variant / f'{spot}{suffix}.png') as source:
@@ -361,7 +378,8 @@ for spot in ('city', 'market', 'harbour', 'upper', 'house'):
             pair.paste(image, (position * width, 40))
             draw.text((position * width + 12, 8), f'{spot} {hour} | {variant}', font=font, fill='white')
         pair.save(output / f'{spot}{suffix}.jpg', quality=88, optimize=True)
-print(f'10 before/after JPG pairs: {output}')
+        count += 1
+print(f'{count} before/after JPG pairs: {output}')
 PY
 fi
 printf 'City capture output: %s\n' "$STAGING"

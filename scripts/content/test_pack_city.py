@@ -189,3 +189,51 @@ def test_bakeoff_pack_keeps_separate_single_texture_roots(small_set, tmp_path):
     index = json.loads((output / "materials/materials.json").read_text())
     assert set(index) == {"NW_CITY_WALL_03.TGA"}
     assert index["NW_CITY_WALL_03.TGA"]["scale"] == 1.0
+
+
+@pytest.fixture
+def city2_set(tmp_path):
+    rows = [
+        {"texture": "NW_CITY_HAFENKAI_BODEN_01.TGA", "decision": "include", "class": "flagstone",
+         "scale": "2.00", "target_luminance": "0.15", "anti_repeat": "on"},
+        {"texture": "NW_CITY_WALL_03.TGA", "decision": "module", "class": "timber_frame_tile",
+         "scale": "1.00", "target_luminance": "0.21", "anti_repeat": "off"},
+    ]
+    root, records, mapping = fixture_records(tmp_path, rows)
+    for record, row in zip(records, rows):
+        record["parameters"].update(set="city-2", target_luminance=float(row["target_luminance"]),
+                                    antitile=packer.antitile_mode(row), antitile_cell=1.0)
+    with mapping.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+        writer.writerow({"texture": "OTHER_MODULE.TGA", "decision": "module", "class": "window_wall_tile",
+                         "scale": "1", "anti_repeat": "off", "target_luminance": ""})
+    return root, records, mapping
+
+
+def test_city2_packs_include_and_facade_with_recorded_antitile(city2_set, tmp_path):
+    root, records, mapping = city2_set
+    records[1]["generation"].update(selected_failed=True, failure_warning="best of three attempts")
+    selected = packer.select_set_records(records, "city-2", mapping)
+    output = packer.pack_set(selected, root, tmp_path / "city-2")
+    index = json.loads((output / "materials/materials.json").read_text())
+    assert len(index) == 2
+    assert index["NW_CITY_HAFENKAI_BODEN_01.TGA"]["antitile"] == "rotate"
+    assert index["NW_CITY_WALL_03.TGA"]["antitile"] == "off"
+    assert index["NW_CITY_WALL_03.TGA"]["scale"] == 1
+    assert all(entry["antitile_cell"] == 1 for entry in index.values())
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("target_luminance", 0.19, "target_luminance differs"),
+    ("target_luminance", float("nan"), "finite and in"),
+    ("target_luminance", True, "finite and in"),
+    ("antitile", "off", "antitile differs"),
+    ("antitile_cell", 0, "antitile_cell must be finite and positive"),
+])
+def test_city2_selection_validates_scalar_target_and_antitile(city2_set, field, value, message):
+    _, records, mapping = city2_set
+    records[0]["parameters"][field] = value
+    with pytest.raises(ValueError, match=message):
+        packer.select_set_records(records, "city-2", mapping)

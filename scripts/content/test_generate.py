@@ -96,7 +96,8 @@ def test_black_source_is_rejected_instead_of_claiming_valid_colour():
 def test_prompt_rules_and_saturation_thresholds_come_from_bible():
     for record in recipes():
         cls = record['parameters']['material_class']
-        assert record['parameters']['saturation_limit'] == (.4 if cls == 'roof_tiles' else .3)
+        styles, _ = generate.read_style(ROOT/'docs/content-style.md')
+        assert record['parameters']['saturation_limit'] == styles[cls]['saturation_limit']
         assert 'evenly distributed small details, no large isolated features' in record['prompt']
         if cls in ('mud', 'dirt_path'):
             assert 'grime in the cracks' not in record['prompt']
@@ -197,3 +198,61 @@ def test_refresh_preserves_budget_already_granted_by_older_generator():
     snapshot = deepcopy(records)
     generate.refresh(records, mapping, bible, 'city-1', records[0]['replaces'], 'repeat after upgrade')
     assert records == snapshot
+
+
+def city2_recipes(tmp_path):
+    source = ROOT/'data/content/city-materials.csv'
+    with source.open(newline='') as stream:
+        reader = csv.DictReader(stream)
+        fields = list(reader.fieldnames)
+        rows = list(reader)
+    if 'target_luminance' not in fields:
+        fields.append('target_luminance')
+    mapping = tmp_path/'mapping.csv'
+    with mapping.open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            row['target_luminance'] = '.18'
+            writer.writerow(row)
+    return generate.recipes(mapping, ROOT/'docs/content-style.md', 'city-2')
+
+
+def test_city2_preserves_facade_layout_and_generates_only_twenty_two_unique_surfaces(tmp_path):
+    records = city2_recipes(tmp_path)
+    assert len(records) == len({r['replaces'][0] for r in records}) == 22
+    modules = [r for r in records if r['parameters']['decision'] != 'include']
+    assert len(modules) == 6
+    for record in modules:
+        params = record['parameters']
+        assert params['scale'] == 1 and params['antitile'] == 'off'
+        assert params['depicts'] in record['prompt']
+        assert 'evenly distributed small details' not in record['prompt']
+        assert params['source_width']/params['source_height'] == pytest.approx(params['source_aspect'], rel=.015)
+        assert params['source_width'] % 16 == params['source_height'] % 16 == 0
+        assert params['tiling_axes'] == ('uv' if params['layout'] == 'tiled' else
+            'v' if params['layout'] == 'strip' else '')
+    beam = next(r for r in modules if r['replaces'] == ['NW_CITY_WOODBEAM_02.TGA'])
+    assert beam['parameters']['source_height'] > 8*beam['parameters']['source_width']
+    for record in records:
+        params = record['parameters']
+        assert params['target_luminance'] == .18
+        if params['decision'] == 'include':
+            assert params['antitile'] in ('rotate', 'offset')
+        if params['material_class'] == 'flagstone':
+            assert 'not a regular grid' in record['prompt']
+        if params['material_class'] == 'roof_tiles':
+            assert params['saturation_limit'] == .25
+
+
+def test_city2_target_takes_precedence_over_class_range_and_is_measured_after_quantization(tmp_path):
+    record = city2_recipes(tmp_path)[0]
+    record['parameters'].update(target_luminance=.32, luminance_range=[.06, .14])
+    maps, correction, rejection = generate.corrected_maps(Image.new('RGB', (32,32), (190,80,30)), record)
+    assert rejection is None
+    assert abs(correction['linear_mean_after']-.32) <= .002
+    assert correction['outside_class_range'] and correction['class_range_advisory']
+    stored = np.rint(maps['albedo']*255)/255
+    linear = np.where(stored <= .04045, stored/12.92, ((stored+.055)/1.055)**2.4)
+    assert float((linear @ np.array([.2126,.7152,.0722])).mean()) == pytest.approx(
+        correction['linear_mean_after'], abs=1e-7)

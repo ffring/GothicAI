@@ -19,6 +19,8 @@ import re
 import sys
 import tempfile
 
+from pilot import selected_rows
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MAPPING = ROOT / "data/content/city-materials.csv"
@@ -27,7 +29,7 @@ FIELDS = (
     "texture", "decision", "class", "state", "scale", "area_m2",
     "uv_m_per_unit_median", "reason",
     "object", "role", "depicts", "colour", "weathering", "orientation",
-    "layout", "layout_share", "anti_repeat",
+    "layout", "layout_share", "anti_repeat", "target_luminance",
 )
 CENSUS_FIELDS = frozenset({
     "world", "texture", "area_m2", "uv_m_per_unit_median", "tiled_area_fraction",
@@ -202,9 +204,15 @@ def validate_mapping(
 ) -> None:
     """Validate manual decisions, source measurements and derived scales."""
     _check_coverage(rows, census, path)
+    pilot = {row["texture"] for row in selected_rows(rows, "city-2")}
     for line, row in enumerate(rows, 2):
         texture = row["texture"]
         where = f"{path}:{line}: {texture}"
+        target = row["target_luminance"]
+        if target or texture in pilot:
+            luminance = _number(target, f"{where}: target_luminance")
+            if luminance > 1:
+                raise MappingError(f"{where}: target_luminance must be at most 1")
         if row["decision"] not in DECISIONS:
             raise MappingError(f"{where}: decision must be {', '.join(DECISIONS)}")
         if not row["reason"].strip():

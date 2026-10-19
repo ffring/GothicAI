@@ -17,8 +17,13 @@ import re
 import time
 
 import bakeoff
+from pilot import (MODULE_ASPECT_RATIOS, MODULE_REPEAT_AXES,
+    TARGET_LUMINANCE_TOLERANCE, antitile_mode, selected_rows)
 
 ROOT = Path(__file__).resolve().parents[2]
+
+MODULE_SUBSTRATES = dict(timber_frame_tile='plaster', framed_masonry_tile='masonry_rubble',
+    window_wall_tile='plaster', bound_timber_tile='timber_beam')
 
 
 def read_style(path):
@@ -44,7 +49,45 @@ def read_style(path):
     default_limit, roof_limit = (float(v.replace(',', '.')) for v in limits.groups())
     for name, style in classes.items():
         style['saturation_limit'] = roof_limit if name == 'roof_tiles' else default_limit
+    # Module composition is a separate table, with a substrate supplying only
+    # numeric roughness/colour guidance. The words always come from its own core.
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+        if len(cells) == 7 and cells[0].strip('`') in MODULE_SUBSTRATES:
+            name = cells[0].strip('`')
+            classes[name] = dict(classes[MODULE_SUBSTRATES[name]], prompt=cells[2])
     return classes, template[1]
+
+
+def generation_size(aspect):
+    """Use physical U/V proportions before the original UV square stretch."""
+    import math
+    height = 1024 / math.sqrt(aspect)
+    width = height * aspect
+    if min(width, height) < 256:
+        factor = 256 / min(width, height)
+        width, height = width * factor, height * factor
+    return int(round(width/16))*16, int(round(height/16))*16
+
+
+def recipe_prompt(row, style, template, set_name):
+    if row['decision'] != 'include':
+        axes = MODULE_REPEAT_AXES.get(row['texture'], 'uv' if row['layout'] == 'tiled' else '')
+        seamless = {'uv': 'seamless at left and right and top and bottom boundaries',
+            'u': 'seamless along the horizontal length only, fixed top and bottom boundaries',
+            'v': 'seamless along the vertical length only, fixed left and right boundaries',
+            '': 'complete bounded panel, fixed boundaries'}[axes]
+        return (f'{style["prompt"]}, {row["depicts"]}, {seamless}, '
+            'late medieval poor harbour town, weathered, damp, muted earthy colors, '
+            'front orthographic view, even overcast light, no shadows, no highlights, no text, no logos')
+    core = style['prompt']
+    if set_name == 'city-2' and row['class'] == 'flagstone':
+        core = ('irregular worn stone flag slabs of different sizes, uneven joints filled with dirt and mud, '
+            'chipped and sunken edges, not a regular grid')
+    if set_name == 'city-2' and row['class'] == 'plaster':
+        core += ', uniform weathering with small stains and hairline cracks evenly spread, no large stains'
+    prompt = template.replace('<ядро класса>', core).replace('<состояние из записи>', row['state'])
+    return prompt.replace(', grime in the cracks', '') if row['class'] in ('dirt_path', 'mud') else prompt
 
 
 def seed_for(texture, attempt=1):
@@ -58,18 +101,14 @@ def recipes(mapping, bible, set_name):
         rows = list(csv.DictReader(stream))
     result = []
     seen = set()
-    for row in rows:
-        if row['decision'] != 'include':
-            continue
+    for row in selected_rows(rows, set_name):
         texture = row['texture']
         if texture in seen:
             raise ValueError(f'duplicate included texture: {texture}')
         seen.add(texture)
         style = classes[row['class']]
         resource_id = set_name + '-' + Path(texture).stem.lower().replace('_', '-')
-        prompt = template.replace('<ядро класса>', style['prompt']).replace('<состояние из записи>', row['state'])
-        if row['class'] in ('dirt_path', 'mud'):
-            prompt = prompt.replace(', grime in the cracks', '')
+        prompt = recipe_prompt(row, style, template, set_name)
         result.append(dict(id=resource_id, kind='material', replaces=[texture], pipeline='flux-filter',
             models=[dict(id=bakeoff.MODELS['flux'][0], revision=bakeoff.FLUX_REVISION, license='Apache-2.0')],
             prompt=prompt, negative='', seed=seed_for(texture), status='draft', files={},
@@ -85,6 +124,29 @@ def recipes(mapping, bible, set_name):
                 input='text only; no original pixels', seed_algorithm='first 32 bits SHA256(uppercase texture + colon + 1-based attempt), big endian',
                 mapping_sha256=hashlib.sha256(mapping.read_bytes()).hexdigest(), bible_sha256=hashlib.sha256(bible.read_bytes()).hexdigest()),
             generation=dict(outcome='pending', attempts=[])))
+        if set_name == 'city-2':
+            record = result[-1]
+            try:
+                target = float(row['target_luminance'])
+            except (KeyError, ValueError) as error:
+                raise ValueError(f'{texture}: city-2 requires target_luminance') from error
+            if not 0 < target < 1:
+                raise ValueError(f'{texture}: invalid target_luminance')
+            is_module = row['decision'] != 'include'
+            aspect = MODULE_ASPECT_RATIOS[texture] if is_module else 1.
+            axes = MODULE_REPEAT_AXES.get(texture, 'uv' if row['layout'] == 'tiled' else '') if is_module else 'uv'
+            width, height = generation_size(aspect)
+            record['parameters'].update(decision=row['decision'], layout=row['layout'],
+                object=row['object'], role=row['role'], depicts=row['depicts'],
+                target_luminance=target, target_luminance_tolerance=TARGET_LUMINANCE_TOLERANCE,
+                luminance_policy='original mean linear luminance only; class range is advisory',
+                source_aspect=aspect, source_width=width, source_height=height,
+                output_width=1024, output_height=1024,
+                tiling_axes=axes, tileable=bool(axes),
+                tiling='periodic latent roll and VAE padding only along designated UV axes',
+                scale=1. if is_module else float(row['scale']),
+                antitile=antitile_mode(row), antitile_cell=1.,
+                saturation_limit=.25 if row['class'] == 'roof_tiles' else style['saturation_limit'])
     if not result:
         raise ValueError('mapping has no included materials')
     return result
@@ -197,6 +259,8 @@ def postprocess(records, root, set_name):
 
 
 def corrected_maps(image, record):
+    if 'target_luminance' in record['parameters']:
+        return target_corrected_maps(image, record)
     import numpy as np
     from PIL import Image
     from material_colour import limit_saturation
@@ -246,6 +310,43 @@ def corrected_maps(image, record):
     return maps, correction, numeric_rejection(record, correction)
 
 
+def target_corrected_maps(image, record):
+    """Match one original scalar; never use the original image in generation."""
+    import numpy as np
+    from PIL import Image
+    from material_colour import limit_saturation
+    rgb = np.asarray(image.convert('RGB'), dtype=np.float32)/255
+    linear = np.where(rgb <= .04045, rgb/12.92, ((rgb+.055)/1.055)**2.4)
+    weights = np.array([.2126, .7152, .0722])
+    before = float((linear @ weights).mean())
+    target = record['parameters']['target_luminance']
+    left, right = 0., 1.
+    while float((np.clip(linear*right, 0, 1) @ weights).mean()) < target and right < 65536:
+        right *= 2
+    for _ in range(36):
+        gain = (left+right)/2
+        if float((np.clip(linear*gain, 0, 1) @ weights).mean()) < target:
+            left = gain
+        else:
+            right = gain
+    adjusted = np.clip(linear*gain, 0, 1)
+    encoded = np.where(adjusted <= .0031308, adjusted*12.92, 1.055*adjusted**(1/2.4)-.055)
+    pixels, saturation = limit_saturation(np.clip(encoded, 0, 1), record['parameters']['saturation_limit'])
+    lo, hi = record['parameters']['luminance_range']
+    correction = dict(method='uniform linear RGB gain with clipping; no spatial edits',
+        linear_mean_before=before, linear_mean_after=saturation['linear_mean_after'],
+        target=target, gain=gain, clipped_channel_fraction=float((linear*gain > 1).mean()),
+        range=[lo, hi], class_range_advisory=True,
+        outside_class_range=not lo <= saturation['linear_mean_after'] <= hi,
+        target_tolerance=record['parameters'].get('target_luminance_tolerance', TARGET_LUMINANCE_TOLERANCE),
+        saturation=saturation)
+    maps = bakeoff.filtered_maps(Image.fromarray(pixels), record)
+    maps['albedo'] = pixels.astype(np.float32)/255
+    rlo, rhi = record['parameters']['roughness_range']
+    maps['roughness'] = np.clip(maps['roughness'], np.ceil(rlo*255)/255, np.floor(rhi*255)/255)
+    return maps, correction, numeric_rejection(record, correction)
+
+
 def save_attempt(root, record, maps, number):
     import numpy as np
     from PIL import Image
@@ -263,6 +364,11 @@ def reject(records, resource_id, reason, explore_remaining=False):
     if record['generation']['outcome'] != 'complete' or not attempts:
         raise ValueError('only a completed tile can be rejected')
     if len(attempts) >= record['generation'].get('attempt_limit', 3):
+        if record['parameters'].get('set') == 'city-2':
+            attempts[-1].update(outcome='rejected', reason=reason)
+            retain_best_candidate(record)
+            record['generation']['failure_warning'] = 'Visual review failed at attempt limit: '+reason
+            return
         raise ValueError('three attempts exhausted; a decision is required')
     attempts[-1].update(outcome='rejected', reason=reason)
     record['generation']['outcome'] = 'pending'
@@ -278,7 +384,12 @@ def numeric_rejection(record, correction):
     # authoritative when present, including the final 8-bit rounding.
     after = saturation.get('linear_mean_after', correction.get('linear_mean_after'))
     lo, hi = record['parameters']['luminance_range']
-    if not isinstance(after, (int, float)) or not math.isfinite(after) or not lo <= after <= hi:
+    if 'target_luminance' in record['parameters']:
+        target = record['parameters']['target_luminance']
+        tolerance = record['parameters'].get('target_luminance_tolerance', TARGET_LUMINANCE_TOLERANCE)
+        if not isinstance(after, (int, float)) or not math.isfinite(after) or abs(after-target) > tolerance:
+            return 'brightness correction could not reach original mean within quantization tolerance'
+    elif not isinstance(after, (int, float)) or not math.isfinite(after) or not lo <= after <= hi:
         return 'brightness correction could not reach class range'
     clipped = correction.get('clipped_channel_fraction')
     if not isinstance(clipped, (int, float)) or not math.isfinite(clipped) or not 0 <= clipped <= .4:
@@ -305,6 +416,20 @@ def retain_best_candidate(record):
         reason = f'{len(series)} attempts in current series exhausted with no numerically valid candidate'
         if details:
             reason += ': ' + '; '.join(details)
+        # City-2 keeps the strongest available result with an explicit warning,
+        # so a single difficult surface does not stop the rest of the pilot.
+        available = [a for a in series if a.get('files')]
+        if record['parameters'].get('set') == 'city-2' and available:
+            def distance(attempt):
+                correction = attempt.get('brightness_correction', {})
+                after = correction.get('saturation', {}).get('linear_mean_after',
+                    correction.get('linear_mean_after', 0.))
+                return abs(after-record['parameters']['target_luminance'])
+            best = min(available, key=distance)
+            select_attempt(record, best, 'Attempt limit reached; best failed candidate retained: '+reason,
+                allow_failed=True)
+            generation['failure_warning'] = reason
+            return None
         generation.update(outcome='pending', failure_reason=reason)
         for key in ('selected_attempt', 'brightness_correction', 'saturation_correction', 'selection_note'):
             generation.pop(key, None)
@@ -317,15 +442,17 @@ def retain_best_candidate(record):
     return None
 
 
-def select_attempt(record, attempt, note=''):
+def select_attempt(record, attempt, note='', allow_failed=False):
     reason = numeric_rejection(record, attempt.get('brightness_correction', {}))
-    if reason:
+    if reason and not allow_failed:
         raise ValueError(f'{record["id"]}: cannot select numerically invalid attempt: {reason}')
     record.update(seed=attempt['seed'], files=deepcopy(attempt['files']))
     generation = record['generation']
     generation.pop('failure_reason', None)
     generation.update(outcome='complete', selected_attempt=attempt['number'],
         brightness_correction=deepcopy(attempt['brightness_correction']))
+    if record['parameters'].get('set') == 'city-2':
+        generation['selected_failed'] = reason is not None or attempt.get('outcome') == 'rejected'
     if 'saturation' in attempt['brightness_correction']:
         generation['saturation_correction'] = deepcopy(attempt['brightness_correction']['saturation'])
         generation['saturation_correction']['prepared_inputs'] = generation.get('prepared_inputs', '')
@@ -349,6 +476,7 @@ def run(records, registry, root, set_name):
         print('No pending materials', flush=True)
         return
     import torch
+    from PIL import Image
     torch.set_num_threads(4)
     torch.backends.cuda.matmul.allow_tf32 = True
     bakeoff.gpu_state(root, set_name, 'load', 10000)
@@ -367,17 +495,26 @@ def run(records, registry, root, set_name):
             bakeoff.write_registry(registry, records)
             prompt, pooled = embeddings[record['parameters']['material']]
             pipe.transformer._tile_step = 0
+            width = record['parameters'].get('source_width', 1024)
+            height = record['parameters'].get('source_height', 1024)
+            if set_name == 'city-2':
+                bakeoff.flux_layout(pipe, width, height, record['parameters']['tiling_axes'])
             torch.cuda.reset_peak_memory_stats()
             start = time.monotonic()
-            image = pipe(height=1024, width=1024, guidance_scale=0., num_inference_steps=4,
+            image = pipe(height=height, width=width, guidance_scale=0., num_inference_steps=4,
                 generator=torch.Generator('cpu').manual_seed(seed), prompt_embeds=prompt.to('cuda:0', dtype=pipe.transformer.dtype),
                 pooled_prompt_embeds=pooled.to('cuda:0', dtype=pipe.transformer.dtype), max_sequence_length=256).images[0]
-            maps, correction, reason = corrected_maps(image, record)
+            square = (image.resize((1024, 1024), Image.Resampling.LANCZOS)
+                if set_name == 'city-2' and image.size != (1024, 1024) else image)
+            maps, correction, reason = corrected_maps(square, record)
             files = save_attempt(root, record, maps, number)
             image.save(root/'out'/Path(files['albedo']).parent/'source.png')
             attempt.update(seconds=round(time.monotonic()-start, 3), brightness_correction=correction, files=files,
                 outcome='rejected' if reason else 'complete', numeric_valid=reason is None, numeric_rejection=reason,
                 peak_allocated_mib=round(torch.cuda.max_memory_allocated()/1024**2,1))
+            if set_name == 'city-2':
+                attempt.update(source_width=image.width, source_height=image.height,
+                    output_width=square.width, output_height=square.height)
             if reason:
                 attempt['reason'] = reason
             else:

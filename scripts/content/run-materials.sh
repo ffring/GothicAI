@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # Run one GPU stage on dev-ubuntu. Invoke from the Mac worktree, never remotely.
-# Usage: scripts/content/run-materials.sh city|flux|sdxl|normals|appearance|stablematerials [--base flux|sdxl]
+# Usage: scripts/content/run-materials.sh city [--set city-1|city-2]
+#        scripts/content/run-materials.sh flux|sdxl|normals|appearance|stablematerials [--base flux|sdxl]
 set -euo pipefail
 STAGE="${1:?stage required}"
 shift
 case "$STAGE" in city|flux|sdxl|normals|appearance|stablematerials) ;; *) exit 2 ;; esac
 BASE=sdxl
+SET_NAME=city-1
 if (( $# > 0 )); then
-  [[ "$STAGE" == normals || "$STAGE" == appearance ]] || exit 2
-  [[ $# == 2 && "$1" == --base ]] || exit 2
-  BASE="$2"
+  [[ $# == 2 ]] || exit 2
+  if [[ "$STAGE" == city && "$1" == --set ]]; then
+    SET_NAME="$2"
+    [[ "$SET_NAME" == city-1 || "$SET_NAME" == city-2 ]] || exit 2
+  else
+    [[ "$STAGE" == normals || "$STAGE" == appearance ]] || exit 2
+    [[ "$1" == --base ]] || exit 2
+    BASE="$2"
+  fi
 fi
 case "$BASE" in flux|sdxl) ;; *) exit 2 ;; esac
 MIN_FREE_MIB=8500
@@ -32,14 +40,15 @@ while true; do
 done
 scp "$ROOT/scripts/content/bakeoff.py" "$ROOT/scripts/content/stable_materials_adapter.py" dev-ubuntu:gothic-ai/materials/
 if [[ "$STAGE" == city ]]; then
-  scp "$ROOT/scripts/content/generate.py" "$ROOT/scripts/content/material_colour.py" "$ROOT/data/content/city-materials.csv" "$ROOT/docs/content-style.md" dev-ubuntu:gothic-ai/materials/
+  scp "$ROOT/scripts/content/generate.py" "$ROOT/scripts/content/pilot.py" "$ROOT/scripts/content/material_colour.py" "$ROOT/data/content/city-materials.csv" "$ROOT/docs/content-style.md" dev-ubuntu:gothic-ai/materials/
 fi
 # registry.jsonl is copied once at preparation. Preserve remote stage progress.
-ssh -T dev-ubuntu bash -s -- "$STAGE" "$BASE" "$MIN_FREE_MIB" <<'REMOTE'
+ssh -T dev-ubuntu bash -s -- "$STAGE" "$BASE" "$MIN_FREE_MIB" "$SET_NAME" <<'REMOTE'
 set -euo pipefail
 stage="$1"
 base="$2"
 min_free_mib="$3"
+set_name="$4"
 cd "$HOME/gothic-ai/materials"
 export HF_HOME="$PWD/hf" HF_HUB_DISABLE_IMPLICIT_TOKEN=1
 export XDG_CACHE_HOME="$PWD/cache" TMPDIR="$PWD/tmp"
@@ -48,7 +57,7 @@ exec 9>gpu.lock
 flock -n 9 || { echo 'our material generation is already running' >&2; exit 75; }
 if [[ "$stage" == city ]]; then
   # Keep city progress separate from the completed bakeoff registry.
-  .venv/bin/python generate.py prepare --registry city-1.jsonl --mapping city-materials.csv --bible content-style.md
+  .venv/bin/python generate.py prepare --registry "$set_name.jsonl" --mapping city-materials.csv --bible content-style.md --set "$set_name"
 fi
 # No file or weight may be installed outside the task directory.
 bytes=$(du -sb . | cut -f1)
@@ -150,10 +159,11 @@ args=("$stage" --registry registry.jsonl --root "$PWD")
 program=bakeoff.py
 if [[ "$stage" == city ]]; then
   program=generate.py
-  args=(run --registry city-1.jsonl --root "$PWD" --set city-1)
+  args=(run --registry "$set_name.jsonl" --root "$PWD" --set "$set_name")
 fi
 [[ "$stage" != normals && "$stage" != appearance ]] || args+=(--base "$base")
 log="$stage"
+[[ "$stage" != city ]] || log="$set_name"
 [[ "$stage" != normals && "$stage" != appearance ]] || log="$stage-$base"
 timeout -k 10 "$budget" .venv/bin/python -u "$program" "${args[@]}" > "$log.log" 2>&1
 REMOTE

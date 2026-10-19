@@ -199,7 +199,12 @@ def test_flux_load_releases_t5_before_transformer_and_routes_private_auth(tmp_pa
     assert secret not in json.dumps(records)
 
 
-def test_periodic_flux_moves_seam_and_restores_prediction_coordinates(monkeypatch):
+@pytest.mark.parametrize('shape,axes,shifted', [
+    ((4,4), 'uv', [10,11,8,9,14,15,12,13,2,3,0,1,6,7,4,5]),
+    ((8,2), 'v', list(range(8,16))+list(range(8))),
+    ((8,2), '', list(range(16))),
+])
+def test_periodic_flux_moves_seam_and_restores_prediction_coordinates(monkeypatch, shape, axes, shifted):
     class Tensor:
         def __init__(self, values, shape):
             self.values, self.shape = list(values), shape
@@ -224,8 +229,10 @@ def test_periodic_flux_moves_seam_and_restores_prediction_coordinates(monkeypatc
     monkeypatch.setitem(sys.modules, 'torch', SimpleNamespace(roll=roll))
     transformer = Transformer()
     bakeoff.periodic_flux(transformer)
+    transformer._tile_shape = shape
+    transformer._tile_axes = axes
     original = Tensor(range(16), (1, 16, 1))
     for _ in range(4):
         assert transformer.forward(original)[0].values == [2*value for value in original.values]
     assert seen[0] == seen[2] == original.values
-    assert seen[1] == seen[3] == [10, 11, 8, 9, 14, 15, 12, 13, 2, 3, 0, 1, 6, 7, 4, 5]
+    assert seen[1] == seen[3] == shifted
