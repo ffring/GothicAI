@@ -1,0 +1,72 @@
+texture,decision,class,state,scale,area_m2,uv_m_per_unit_median,reason
+NW_CITY_BARREL_01.TGA,exclude,,,,4655.499617029,1.268561823,Атлас бочки; замена вместе с моделью на этапе 2
+NW_CITY_BODENDIELEN_01.TGA,include,planks_floor,very worn,2.17,4905.210147683,4.344786827,Плиточный дощатый пол
+NW_CITY_BODENDIELEN_02.TGA,include,planks_floor,smoke darkened,2.14,2967.973731141,4.278355325,Плиточный дощатый пол
+NW_CITY_BODENDIELEN_DRECK_01.TGA,include,planks_floor,ground in dirt,2.36,835.686031006,4.711134541,Плиточный дощатый пол
+NW_CITY_BROKENSTONE_01.TGA,exclude,,,,379.873687673,2.242504735,tiled_area_fraction < 0.6
+NW_CITY_DIRTYGROUND_02.TGA,include,mud,damp and compacted,1.67,1829.532179460,5.016126784,Плиточный грязный грунт
+NW_CITY_DIRTYGROUND_WEG_02.TGA,include,dirt_path,dry and dusty,1.67,628.967910913,5.000260756,Грунтовая дорожка
+NW_CITY_DIRTYGROUND_WEG_03.TGA,include,dirt_path,deeply worn,1.67,987.493276844,5.000411142,Грунтовая дорожка
+NW_CITY_DIRTYGROUND_WEG_END_01.TGA,include,dirt_path,damp stains,1.59,50.259603868,4.768448251,Грунтовая дорожка; окончание рисунка не переносится
+NW_CITY_DIRTYGROUND_WEG_TRANS_02.TGA,exclude,,,,25.420282396,5.269361612,tiled_area_fraction < 0.6
+NW_CITY_DOOR_01.TGA,exclude,,,,2.411686029,1.000856495,Дверь с петлями; не плиточная поверхность
+NW_CITY_DOOR_02.TGA,exclude,,,,10.916039727,7.211288233,Дверь с петлями и ручкой; не плиточная поверхность
+NW_CITY_DOOR_03.TGA,exclude,,,,1.094796285,1.000606159,Дверь с замочной скважиной; не плиточная поверхность
+NW_CITY_DUNGEONFLOOR_02.TGA,include,flagstone,damp with age,0.95,1720.449426632,2.841236570,Плиточный пол из каменных плит
+NW_CITY_DUNGEONFLOOR_03.TGA,exclude,,,,185.892219851,2.952910624,tiled_area_fraction < 0.6
+NW_CITY_DUNGEONWALL_05.TGA,include,masonry_dressed,soot stains,1.10,2120.470293130,3.288886890,Плиточная кладка из обработанных блоков
+NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA,exclude,,,,119.561544547,2.776892009,Цоколь со встроенной цепью; не однородная плиточная поверхность
+NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA,include,masonry_rubble,weather worn,1.75,2034.575258661,3.499989809,Кладка цоколя без окон; класс по основному заполнению
+NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA,exclude,,,,244.419072031,2.772891423,Окно в кладке; не плиточная поверхность
+NW_CITY_FLAG_01.TGA,exclude,,,,115.435451896,2.831258487,Флаг с эмблемой; прозрачность alpha-test; tiled_area_fraction < 0.6
+NW_CITY_GITTERZAUN_01.TGA,exclude,,,,957.865216162,2.560204096,Решётчатый забор; прозрачность alpha-test
+NW_CITY_HAFENKAI_BODEN_01.TGA,include,flagstone,salt stains,2.00,7139.212971736,6.003815723,Каменное мощение причала
+NW_CITY_HAFENKAI_BODEN_TRANS_01.TGA,include,flagstone,mud in joints,1.58,228.540393025,4.739086850,Каменное мощение; переход к грунту заменяется единым материалом
+NW_CITY_HAFENKAI_MAUER_01.TGA,include,masonry_rubble,salt weathered,8.43,17491.475725902,16.857706818,Плиточная бутовая кладка набережной
+NW_CITY_HAFENRANDSTEIN_01.TGA,include,masonry_dressed,weather worn,1.50,1053.672711720,4.512585808,Повторяющиеся обработанные бордюрные блоки
+NW_CITY_HAFEN_GIEBEL_01.TGA,include,planks_wall,sun bleached,1.50,201.284430039,3.008742401,Дощатая обшивка фронтона
+NW_CITY_HAFEN_HOLZWAND_01.TGA,include,planks_wall,damp stains,1.50,3369.990732699,2.999999958,Плиточная дощатая стена без окон
+NW_CITY_HAFEN_HOLZWAND_02.TGA,exclude,,,,1454.160996287,2.962897756,Окно в дощатой стене; не плиточная поверхность
+NW_CITY_INSIDEFLOOR_11.TGA,include,planks_floor,polished by footsteps,1.89,6080.952175091,3.782213275,Плиточный дощатый пол
+NW_CITY_INSIDEWALL_11.TGA,include,masonry_rubble,smoke stained,1.92,1814.903322911,3.847846835,Каменное заполнение стены; класс по основному заполнению
+NW_CITY_INSIDEWALL_12.TGA,include,planks_wall,darkened with age,1.79,2265.107854179,3.573952959,Дощатое заполнение стены; класс по основному заполнению
+NW_CITY_INSIDEWALL_13.TGA,include,plaster,light soot,1.81,1850.288689717,3.619294214,Штукатурное заполнение стены; класс по основному заполнению
+NW_CITY_IVY_BORDER_01.TGA,exclude,,,,700.758993791,2.625690590,Плющ; прозрачность alpha-test
+NW_CITY_IVY_FULL_01.TGA,exclude,,,,235.377641824,2.855101454,Плющ; прозрачность alpha-test
+NW_CITY_PFLASTERSTEIN_01.TGA,include,cobble,very worn,3.00,2732.134469470,6.000000452,Плиточная брусчатка
+NW_CITY_PFLASTERSTEIN_BORDER_01.TGA,include,cobble,moss in joints,2.85,833.054844277,5.707582823,Брусчатка края мощения
+NW_CITY_RICH_BLACKWOOD_01.TGA,exclude,,,,564.461407872,1.210976004,tiled_area_fraction < 0.6
+NW_CITY_RICH_WALL_01.TGA,include,plaster,freshly limewashed,1.51,2025.358754203,3.026255944,Штукатурное заполнение фахверка без окон
+NW_CITY_RICH_WALL_HALF_01.TGA,include,plaster,faint damp stains,0.95,417.757836300,1.903643589,Штукатурное заполнение фахверка без окон
+NW_CITY_RICH_WINDOW_01.TGA,exclude,,,,1356.357621897,2.502129172,Окно в фахверке; tiled_area_fraction < 0.6
+NW_CITY_ROOF_01.TGA,include,roof_shingle,weathered and damp,4.31,3935.985248020,8.619746765,Кровля из деревянной дранки
+NW_CITY_ROOF_04.TGA,include,roof_tiles,rain washed,3.30,8697.338525916,6.599986899,Кровля из каменных плиток
+NW_CITY_ROOF_INSIDE_01.TGA,include,planks_wall,smoke and dust,3.67,4976.820102296,7.346966381,Деревянная обшивка изнутри кровли; класс по основному заполнению
+NW_CITY_ROPE_01.TGA,exclude,,,,1377.893347153,0.837501852,Верёвка; замена вместе с моделью на этапе 2
+NW_CITY_SHRINEFLOOR_01.TGA,exclude,,,,150.300777205,6.625562415,Орнамент пола; tiled_area_fraction < 0.6
+NW_CITY_STONEWALL_02.TGA,include,masonry_rubble,damp crevices,1.27,4.739556685,2.548176867,Плиточная бутовая кладка
+NW_CITY_TEMPLESTARROOF_01.TGA,exclude,,,,20.394362065,2.999999737,нет класса: звёздная роспись потолка; предложен painted_ceiling
+NW_CITY_WALL_03.TGA,include,plaster,patchy moss,1.24,3159.009044240,2.483279291,Штукатурное заполнение фахверка без окон
+NW_CITY_WALL_04.TGA,include,plaster,rain streaks,1.59,25.714185326,3.180656100,Штукатурное заполнение фахверка без окон
+NW_CITY_WALL_05.TGA,include,plaster,chipped with age,0.99,52.958557371,1.972199225,Штукатурное заполнение фахверка без окон
+NW_CITY_WINDOW_03.TGA,exclude,,,,518.951016514,1.983674703,Окно в фахверке; не плиточная поверхность
+NW_CITY_WOODBEAM_01.TGA,include,timber_beam,dry and worn,0.48,401.830358052,0.714012381,Плиточная поверхность деревянной балки
+NW_CITY_WOODBEAM_02.TGA,include,timber_beam,deep damp stains,0.85,5249.926722156,1.278951213,Плиточная поверхность деревянной балки
+NW_CITY_WOODBEAM_03.TGA,include,timber_beam,soot darkened,1.87,1097.067067631,2.810509387,Плиточная поверхность деревянной балки
+NW_CITY_WOOD_01.TGA,exclude,,,,2144.368575760,1.202052898,tiled_area_fraction < 0.6
+NW_CITY_WOOD_ORNAMENT_01.TGA,exclude,,,,79.234564614,1.145010929,Деревянный орнамент; не плиточная поверхность
+NW_CITY_WOOD_ORNAMENT_02.TGA,exclude,,,,6567.330508408,1.342312632,Декоративные деревянные детали предметов; не плиточная поверхность
+NW_HARBOUR_BLACKIRON_01.TGA,exclude,,,,653.098697245,0.889432747,tiled_area_fraction < 0.6; нет класса: железо; предложен wrought_iron
+NW_HARBOUR_CANONHOLE.TGA,exclude,,,,51.893664174,1.776897947,Атлас дульного среза пушки; tiled_area_fraction < 0.6
+NW_HARBOUR_CANON_01.TGA,exclude,,,,191.139605988,1.418713938,Атлас пушки; tiled_area_fraction < 0.6
+NW_HARBOUR_FISHINGNET_01.TGA,exclude,,,,1077.151607948,0.999720185,Рыболовная сеть; прозрачность alpha-test
+NW_HARBOUR_FISHINGNET_03.TGA,exclude,,,,201.852874613,1.654295233,Рыболовная сеть; прозрачность alpha-test
+NW_HARBOUR_FISHINGNET_04.TGA,exclude,,,,401.649623729,2.372901143,Рыболовная сеть; прозрачность alpha-test; tiled_area_fraction < 0.6
+NW_HARBOUR_ROPEWALL_01.TGA,exclude,,,,388.491354834,1.904645496,Верёвочная поверхность; tiled_area_fraction < 0.6
+NW_HARBOUR_ROPEWALL_02.TGA,exclude,,,,6.401116854,2.294416892,Верёвочная поверхность; tiled_area_fraction < 0.6
+NW_HARBOUR_STAIRS_01.TGA,include,flagstone,worn by footsteps,1.24,1260.871718535,3.732278676,Каменные плиты ступеней
+NW_HARBOUR_STAIRS_03.TGA,include,flagstone,dark damp patches,0.54,51.798212860,1.616142233,Каменные плиты ступеней
+NW_HARBOUR_WOODCRATE_01.TGA,exclude,,,,4566.562430733,1.096540645,Атлас ящика; tiled_area_fraction < 0.6
+NW_HARBOUR_WOODCRATE_02.TGA,exclude,,,,4011.215463773,1.415194930,Атлас ящика; tiled_area_fraction < 0.6
+NW_HARBOUR_WOODENGATE_01.TGA,exclude,,,,159.421115040,2.979002995,Решётчатые ворота; прозрачность alpha-test
+NW_HARBOUR_WOOD_IRON_01.TGA,exclude,,,,2628.832782261,3.265682722,Атлас деревянных деталей с железными скобами; tiled_area_fraction < 0.6

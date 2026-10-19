@@ -52,7 +52,8 @@ class BodyController final {
     static void fixtureLock(Npc& actor, uint64_t durationMs);
     static std::string selfTestJson();
     static std::string handleJson(const rapidjson::Value& request);
-    static std::string statusJson(const Npc* actor=nullptr);
+    // Extra boundary diagnostics are opt-in for CPU fixtures, outside the strict wire schema.
+    static std::string statusJson(const Npc* actor=nullptr,bool boundaryDiagnostics=false);
     static std::string drainJson();
     static void setSink(std::function<void(std::string_view)> sink);
     static Snapshot snapshot(const Npc& actor);

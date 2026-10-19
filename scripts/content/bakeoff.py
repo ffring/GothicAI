@@ -103,7 +103,7 @@ def enable_flux(records):
     """
     count = 0
     for record in records:
-        if not record['pipeline'].startswith('flux-'):
+        if not record['id'].startswith('bakeoff-') or not record['pipeline'].startswith('flux-'):
             continue
         model = next(m for m in record['models'] if m['id'] == MODELS['flux'][0])
         reset = model['revision'] != FLUX_REVISION or record['generation']['outcome'] == 'skipped'

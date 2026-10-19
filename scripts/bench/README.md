@@ -1009,16 +1009,18 @@ The contract covers repeated ten-centimetre risers, isolated ledges, and a
 Presentation lag stays within 10 cm; a high single ledge may visibly snap as in
 legacy movement.
 
-`monster-character-virtual-ledges` compares five isolated ledges: wolf 20/40/55 cm
-and troll 40/80 cm. `monstercharacter ledge wolf|troll HEIGHT` creates one static
+`monster-character-virtual-ledges` compares six isolated ledges: wolf 20/40/55 cm,
+troll 40/80 cm, and wolf 40 cm with a face bottom at -100 cm.
+`monstercharacter ledge wolf|troll HEIGHT [BOTTOM]` creates one static
 source mesh 100 m above a verified stock anchor, checks three support rays and
 the vertical face, and runs production `Npc::goToPosition`/MoveAlgo over a 6 m
 approach to a 15 m landing. OFF/ON use the same native running animation and
 geometry. Each eight-second window reports arrival, time, stalls, root/model
 height changes and falls. Arrival requires 60 cm horizontal / 5 cm vertical
-tolerance and actual support; all five results are retained even after a
+tolerance and actual support; all six results are retained even after a
 mechanical failure. The synthetic geometry supplies no movement or response.
 `monster-character-virtual-stair-attack` enters `T_FISTATTACKMOVE` while a stair
 presentation correction is pending, without resetting that correction. It tests
 the grounded attack handoff separately from physical lunge range. The numerical
-wolf lunge uses its previously verified lane; the bloodfly scene is unchanged.
+wolf lunge and fieldraider charge use the verified open lunge lane; the latter
+also retains its Bloodfly control and requires the native NPC collision callback.

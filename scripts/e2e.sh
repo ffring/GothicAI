@@ -418,25 +418,75 @@ if ! kill -0 "$SRV" 2>/dev/null; then
   exit 1
 fi
 
-# An isolated initial setting also exercises first-load character synchronization.
-if [[ -n "${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}${MONSTER_CHARACTER_VIRTUAL:-}" ]]; then
-  printf '[GAME]\n' >"$LOG_DIR/Gothic.ini"
-  if [[ -n "${CHARACTER_VIRTUAL:-}" ]]; then
-    [[ "$CHARACTER_VIRTUAL" == 0 || "$CHARACTER_VIRTUAL" == 1 ]] || { echo "CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
-    printf 'character_virtual=%s\n' "$CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
-  fi
-  if [[ -n "${NPC_CHARACTER_VIRTUAL:-}" ]]; then
-    [[ "$NPC_CHARACTER_VIRTUAL" == 0 || "$NPC_CHARACTER_VIRTUAL" == 1 ]] || { echo "NPC_CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
-    printf 'npc_character_virtual=%s\n' "$NPC_CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
-  fi
-  if [[ -n "${MONSTER_CHARACTER_VIRTUAL:-}" ]]; then
-    [[ "$MONSTER_CHARACTER_VIRTUAL" == 0 || "$MONSTER_CHARACTER_VIRTUAL" == 1 ]] || { echo "MONSTER_CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
-    printf 'monster_character_virtual=%s\n' "$MONSTER_CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
-  fi
+# Per-scenario defaults, as scenario:fps. Add only after repeated capped failures
+# and an uncapped pass, with the measured reason beside the entry. Explicit
+# E2E_MAX_FPS always wins, including 0 for an uncapped diagnostic run.
+E2E_FPS_EXCEPTIONS=(
+)
+if [[ -z "${E2E_MAX_FPS+x}" ]]; then
+  E2E_MAX_FPS=30
+  # macOS Bash 3 treats an empty array as unset under nounset.
+  for exception in ${E2E_FPS_EXCEPTIONS[@]+"${E2E_FPS_EXCEPTIONS[@]}"}; do
+    if [[ "${exception%:*}" == "$SCENARIO" ]]; then
+      E2E_MAX_FPS="${exception##*:}"
+      break
+    fi
+  done
 fi
-if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
-  # Keep effects audible, with no music masking the controlled fake voice.
-  printf '\n[INTERNAL]\nvidResIndex=0\n[SOUND]\nsoundVolume=1\nmusicVolume=0\n' >>"$LOG_DIR/Gothic.ini"
+[[ "$E2E_MAX_FPS" =~ ^[0-9]+$ ]] || { echo 'E2E_MAX_FPS must be a nonnegative integer' >&2; exit 2; }
+
+# Merge run-local settings so ENGINE, character synchronization and TTS recording
+# cannot erase each other. A literal 0 also overrides the base Gothic.ini cap.
+python3 - "$LOG_DIR/Gothic.ini" "$E2E_MAX_FPS" <<'PY'
+import configparser
+import os
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+ini = configparser.ConfigParser(interpolation=None, strict=False)
+ini.optionxform = str
+ini.read(path)
+
+def put(section, key, value):
+    section = next((name for name in ini.sections() if name.lower() == section.lower()), section)
+    if not ini.has_section(section):
+        ini.add_section(section)
+    for name in list(ini[section]):
+        if name.lower() == key.lower():
+            ini.remove_option(section, name)
+    ini.set(section, key, value)
+
+put("ENGINE", "zMaxFps", str(int(sys.argv[2])))
+for name in ("CHARACTER_VIRTUAL", "NPC_CHARACTER_VIRTUAL", "MONSTER_CHARACTER_VIRTUAL"):
+    value = os.environ.get(name, "")
+    if value:
+        if value not in ("0", "1"):
+            print(f"{name} must be 0 or 1", file=sys.stderr)
+            sys.exit(2)
+        put("GAME", name.lower(), value)
+if os.environ.get("GOTHIC_TTS_RECORD", "0") == "1":
+    # Keep effects audible, with no music masking the controlled fake voice.
+    put("INTERNAL", "vidResIndex", "0")
+    put("SOUND", "soundVolume", "1")
+    put("SOUND", "musicVolume", "0")
+with path.open("w") as output:
+    ini.write(output, space_around_delimiters=False)
+PY
+echo "e2e: [ENGINE] zMaxFps=$E2E_MAX_FPS (0 = uncapped); OPENGOTHIC_FPS_LOG=${OPENGOTHIC_FPS_LOG:-1}"
+# FileUtil::nestedPath resolves game paths case-insensitively, on both hosts.
+SYSTEMPACK_INI="$(find "$GOTHIC_DIR" -maxdepth 2 -iname SystemPack.ini -path '*[sS][yY][sS][tT][eE][mM]/*' -print -quit)"
+if [[ -n "$SYSTEMPACK_INI" ]]; then
+  # Original game INIs may contain CP1251 comments, including on UTF-8 hosts.
+  SYSTEMPACK_FPS="$(LC_ALL=C awk '
+    { sub(/\r$/, ""); line=tolower($0) }
+    line ~ /^[[:space:]]*\[/ { parameters=(line ~ /^[[:space:]]*\[parameters\]/) }
+    parameters && line ~ /^[[:space:]]*fps_limit[[:space:]]*=/ {
+      sub(/^[^=]*=/, "", line); print int(line); exit
+    }' "$SYSTEMPACK_INI")"
+  if [[ "${SYSTEMPACK_FPS:-0}" -gt 0 ]]; then
+    echo "WARNING: $SYSTEMPACK_INI [PARAMETERS] FPS_Limit=$SYSTEMPACK_FPS overrides e2e zMaxFps=$E2E_MAX_FPS" >&2
+  fi
 fi
 START_ARGS=(-nomenu)
 if [ -n "${SAVE:-}" ]; then
@@ -451,7 +501,7 @@ fi
 if [ "$(uname -s)" = Darwin ]; then
   until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 fi
-GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT")
+GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT" "OPENGOTHIC_FPS_LOG=${OPENGOTHIC_FPS_LOG:-1}")
 if [ "$SCENARIO" = "trace" ] || [ "$SCENARIO" = "broken" ] || [ "$SCENARIO" = "trace_crime" ]; then
   GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/$SCENARIO-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
     "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1")
