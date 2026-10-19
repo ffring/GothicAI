@@ -33,7 +33,9 @@ DEBUG_TEXTURES = (
 # The textures are reused on other objects: this limits the photographed example,
 # and does not assign the texture's meaning from either a texture or visual name.
 REPRESENTATIVE_VISUALS = {
+    "NW_HARBOUR_CANONHOLE.TGA": {"NW_HARBOUR_CANON_01.3DS"},
     "NW_HARBOUR_CANON_01.TGA": {"NW_HARBOUR_CANON_01.3DS"},
+    "NW_HARBOUR_WOODCRATE_01.TGA": {"NW_HARBOUR_CRATE_01.3DS", "NW_HARBOUR_CRATEPILE_01.3DS"},
     "NW_HARBOUR_WOODCRATE_02.TGA": {"NW_HARBOUR_CRATE_01.3DS", "NW_HARBOUR_CRATEPILE_01.3DS"},
 }
 
@@ -207,7 +209,7 @@ def choose_camera(row, semantic, city_tree, city_positions, waypoints, occluders
             continue
         target, samples = sample_targets(patch, by_patch[index])
         normal = np.asarray(patch["normal"])
-        scale = float(np.clip(math.sqrt(patch["area_m2"]) * 100 * 1.1, 70, 850))
+        scale = float(np.clip(math.sqrt(patch["area_m2"]) * 100 * 1.1, 60, 850))
         near = city_positions[int(city_tree.query(target[[0, 2]])[1])]
         for eye in eye_candidates(target, normal, scale, near):
             # The archive normal defines the visible face, including interior faces.
@@ -228,7 +230,7 @@ def choose_camera(row, semantic, city_tree, city_positions, waypoints, occluders
     score, index, target, eye, visible, scale = best
     hero, actual_target, distance, height, yaw = camera_commands(target, eye)
     patch = row["patches"][index]
-    nearest = min(waypoints, key=lambda w: np.linalg.norm(np.asarray(w["position"])[[0, 2]] - target[[0, 2]]))
+    nearest = min(waypoints, key=lambda w: np.linalg.norm(np.asarray(w["position"]) - target))
     return {
         "texture": name, "shot": Path(name).stem.lower(), "patch_index": index,
         "patch": patch, "selection": "city" if city_available else "whole-world fallback",
@@ -245,10 +247,16 @@ def write_scenario(path, cameras):
              "cheat god", "set time 12 0", "overlay off", "view hide animated morph pfx", "cam lift off", "cam look 45"]
     for camera in cameras:
         p, c = camera["hero"], camera["camera"]
-        lines += ["", f"# {camera['texture']} | {camera['nearest_waypoint']['name']} | {camera['selection']}",
+        lines += ["", f"# {camera['texture']} | {camera['nearest_waypoint']['name']} | {camera['selection']}"]
+        if camera.get("camera_note"):
+            lines += ["# Camera: " + str(camera["camera_note"]).replace("\n", " ")]
+        lines += [f"view {camera.get('view', 'hide animated morph pfx')}",
+                  f"cam look {c.get('look', 45):.3f}",
                   f"goto pos {p[0]} {p[1]} {p[2]}",
                   f"cam world {c['distance']:.3f} {c['height']:.3f} {c['yaw']:.3f}",
-                  "wait 34", "cam hold", "wait 600", f"shot {camera['shot']}"]
+                  "wait 34", "cam hold", "wait 600", f"shot {camera['shot']}",
+                  # shot is saved after the frame, so the next goto must wait.
+                  "wait 300"]
     lines += ["wait 100"]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n")
