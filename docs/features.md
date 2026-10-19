@@ -194,3 +194,11 @@ PR, который добавляет фичу или выключатель, д
 Проверяются не в каждом прогоне:
 - **только с моделями на dev-ubuntu:** реплики в бою от Gemma, трейс хода (`m5` с `QUICK_URL`), планировщик в `day` и `initiative` (с `DECIDER_URL`);
 - **только живыми прогонами:** кто вклинится в беседу (`interject`), карточки характера (`haggle`), шоураннер на настоящей модели (`showrunner_live`, `vanilla_line_live`).
+
+## Инструменты разработки
+
+| Фича | Как выключить | Модуль | Проверка | Документ |
+|---|---|---|---|---|
+| Три игры e2e на Ryzen: слоты, отдельные порты и окна | sharing требует `--display --display-shared`; старый `--display` и `--display-exclusive` занимают всё окно; ёмкость задаёт профиль `gq` | `scripts/gq.py`, `scripts/ryzen.sh`, `scripts/e2e.sh` | `scripts/tests/test_gq.py`, `test_ryzen.py`; e2e `orders`, `fight_reactions_bandits`, `calm` ([отчёт](../reports/compute/2026-10-19-ryzen-three-windows/README.md)) | [compute.md](compute.md#очередь-gq), [ryzen.md](ryzen.md) |
+| Начальная позиция X11-окна | без `TEMPEST_WINDOW_POS=x,y` — прежнее размещение | `lib/Tempest/Engine/system/api/x11api.cpp`, `scripts/ryzen.sh` | e2e трёх окон на Ryzen, `test_ryzen.py` | [ryzen.md](ryzen.md) |
+| Средний FPS представленных кадров в логе раз в 10 с | `OPENGOTHIC_FPS_LOG` выключен по умолчанию; нужна сборка с `OPENGOTHIC_ENABLE_APP_CADENCE=ON` | `common/appcadence.cpp` | одиночные и тройные e2e на Ryzen | [ryzen.md](ryzen.md) |

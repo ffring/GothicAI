@@ -36,7 +36,7 @@ def wait_for(path):
 
 
 class QueueSplitTests(unittest.TestCase):
-    def run_game(self, action='e2e', prepare=True, build_exit=0):
+    def run_game(self, action='e2e', prepare=True, build_exit=0, scenario='stages', window=None):
         directory = self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-phases-test-'))
         root = Path(directory)
         (root / 'scripts').mkdir()
@@ -59,7 +59,7 @@ if name.startswith('build ') and int(os.environ['TEST_BUILD_EXIT']):
 set -euo pipefail
 ROOT="$TEST_SESSION" SESSION="$TEST_SESSION" STATE="$TEST_SESSION/state"
 OUTPUT="$SESSION/output" RUN=run RYZEN_HOST=fake AI_PORT=''
-ACTION="$TEST_ACTION" JOBS=7 LOCK_WAIT=23 SCENARIO=stages
+ACTION="$TEST_ACTION" JOBS=7 LOCK_WAIT=23 SCENARIO="$TEST_SCENARIO"
 BENCH_SCENARIO=/benchmarks/smoke.bench RYZEN_MAX=9m
 if [[ "$ACTION" == bench ]]; then BENCH_CLASS=quiet; else unset BENCH_CLASS; fi
 TUNNEL_OPEN=0 RUN_STARTED=0 RUN_FINISHED=0 RUN_RC=0
@@ -69,12 +69,14 @@ exec 8>"$SESSION/control"
 guard_ack() { :; }
 preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
 '''
-        harness += '\n'.join([function('run_quick'), function('game_queue_args'), function('run_game')])
-        harness += '\nrun_game env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote "$ACTION" "$STATE" "$RUN" stages\n'
+        harness += '\n'.join([function('run_quick'), function('e2e_display_exclusive'),
+                              function('game_queue_args'), function('run_game')])
+        harness += '\nrun_game env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote "$ACTION" "$STATE" "$RUN" "$SCENARIO"\n'
         result = subprocess.run(
             ['bash', '-c', harness], capture_output=True, text=True, timeout=10,
             env=dict(os.environ, TEST_SESSION=str(root), TEST_ACTION=action,
-                     TEST_PREPARE=str(int(prepare)), TEST_BUILD_EXIT=str(build_exit)),
+                     TEST_PREPARE=str(int(prepare)), TEST_BUILD_EXIT=str(build_exit),
+                     TEST_SCENARIO=scenario, **(window or {})),
         )
         requests = root / 'requests.jsonl'
         return result, [json.loads(line) for line in requests.read_text().splitlines()] if requests.exists() else []
@@ -90,12 +92,13 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
     def assert_game_request(self, request, action):
         options = self.queue_options(request)
         for name, value in [('--class', 'quiet' if action == 'bench' else 'quick'),
-                            ('--threads', '4'), ('--mem', '8G'), ('--max', '9m'),
+                            ('--threads', '4'), ('--mem', '5G'), ('--max', '9m'),
                             ('--gpu-mem', '4G' if action == 'bench' else '2G'),
                             ('--wait-max', '23'),
                             ('--name', 'bench smoke' if action == 'bench' else 'e2e stages')]:
             self.assert_option(options, name, value)
         self.assertIn('--display', options)
+        self.assertEqual('--display-shared' in options, action == 'e2e')
         self.assertIn('RYZEN_RUN_ID=run-game', request[request.index('--') + 1:])
 
     def test_preparation_and_game_have_separate_resources_and_names(self):
@@ -130,6 +133,52 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
         self.assertEqual(len(requests), 1, requests)
         self.assert_option(self.queue_options(requests[0]), '--name', 'build e2e stages')
         self.assertIn('compile failure: build log tail', result.stdout)
+
+    def test_exclusive_scenario_only_changes_the_game_request(self):
+        for scenario, exclusive in (('fight_reactions_bandits', True),
+                                    ('calm', True), ('orders', True), ('stages', False),
+                                    ('fight_reactions_wolf', True), ('calm_companion', True),
+                                    ('neural-companion', True), ('wolf', True),
+                                    ('rescue_self', True), ('companion', True),
+                                    ('crimes', False), ('quest_law', False)):
+            with self.subTest(scenario=scenario):
+                result, requests = self.run_game(scenario=scenario)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(len(requests), 2, requests)
+                build = self.queue_options(requests[0])
+                self.assertNotIn('--display', build)
+                self.assertNotIn('--display-exclusive', build)
+                game = self.queue_options(requests[1])
+                self.assertIn('--display', game)
+                self.assertEqual('--display-exclusive' in game, exclusive)
+                self.assertEqual('--display-shared' in game, not exclusive)
+                self.assert_option(game, '--name', f'e2e {scenario}')
+
+    def test_forced_exclusive_overrides_shared_scenario(self):
+        result, requests = self.run_game(scenario='stages', window={'RYZEN_DISPLAY_EXCLUSIVE': '1'})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        options = self.queue_options(requests[-1])
+        self.assertIn('--display-exclusive', options)
+        self.assertNotIn('--display-shared', options)
+
+    def test_bench_does_not_use_e2e_exclusive_scenarios(self):
+        result, requests = self.run_game(action='bench', scenario='calm')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('--display-exclusive', self.queue_options(requests[-1]))
+        self.assertNotIn('--display-shared', self.queue_options(requests[-1]))
+
+    def test_custom_window_does_not_overlap_shared_slot_layout(self):
+        for window, shared in (({'TEMPEST_WINDOW_SIZE': '640x360'}, True),
+                               ({'TEMPEST_WINDOW_SIZE': '320x180'}, False),
+                               ({'TEMPEST_WINDOW_SIZE': '1280x720'}, False),
+                               ({'TEMPEST_WINDOW_POS': '20,40'}, False),
+                               ({'TEMPEST_WINDOW_POS': ''}, False)):
+            with self.subTest(window=window):
+                result, requests = self.run_game(scenario='stages', window=window)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                options = self.queue_options(requests[-1])
+                self.assertEqual('--display-shared' in options, shared)
+                self.assertEqual('--display-exclusive' in options, not shared)
 
     def test_tts_preparation_installs_missing_dependencies(self):
         for scenario in ('errand', 'errand_fork', 'errand_far', 'errand_give',
@@ -280,7 +329,7 @@ print('fake cmake: OK')
         harness = definitions() + r'''
 ROOT="$TEST_ROOT/source"
 toolchain() { :; }
-desktop() { :; }
+desktop() { RYZEN_SCREEN_SIZE="${TEST_SCREEN_SIZE:-1920x1080}"; }
 check_protocol() { :; }
 uv() { :; }
 source_digest() { printf '%s\n' "'''+self.engine_digest+r'''"; }
@@ -325,6 +374,99 @@ remote_run e2e "$TEST_ROOT/worktree" run
         self.assertFalse((self.root / 'cmake-calls.jsonl').exists())
         self.assertEqual((self.source / 'OpenGothic/ai_bridge/storygraph/build/storygraph').resolve(),
                          self.cache / 'storygraph' / self.story_digest / 'storygraph')
+
+    def test_e2e_ports_size_and_position_follow_the_assigned_slot(self):
+        self.entry(self.engine_digest)
+        self.entry(self.story_digest, 'storygraph')
+        names = ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE', 'TEMPEST_WINDOW_POS')
+        for name in names:
+            self.env.pop(name, None)
+        (self.source / 'scripts/e2e.sh').write_text('''
+python3 - "$TEST_ROOT/e2e-env.json" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({key: os.environ[key] for key in
+    ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE', 'TEMPEST_WINDOW_POS')}))
+PY
+''')
+        cases = [(slot, {}) for slot in range(3)] + [
+            (1, {'PORT': '51000'}),
+            (0, {'TEMPEST_WINDOW_SIZE': '1280x720'}),
+            (2, dict(zip(names, ('51001', '51002', '51003', '1280x720', '17,29')))),
+        ]
+        for slot, explicit in cases:
+            with self.subTest(slot=slot, explicit=explicit):
+                for name in names:
+                    self.env.pop(name, None)
+                self.env.update(explicit, GQ_DISPLAY_SLOT=str(slot))
+                self.shell(r'''
+remote_probe e2e "$TEST_ROOT/worktree" run stages
+remote_run e2e "$TEST_ROOT/worktree" run
+''')
+                expected = dict(zip(names, (str(47827 + slot * 100),
+                                           str(47829 + slot * 100),
+                                           str(47840 + slot * 100), '640x360',
+                                           ('100,100', '800,100', '100,560')[slot])))
+                if explicit.get('TEMPEST_WINDOW_SIZE', '640x360') != '640x360':
+                    expected['TEMPEST_WINDOW_POS'] = '0,0'
+                expected.update(explicit)
+                self.assertEqual(json.loads((self.root / 'e2e-env.json').read_text()), expected)
+
+    def test_bench_keeps_its_window_size_and_ports(self):
+        self.entry(self.engine_digest)
+        self.entry(self.story_digest, 'storygraph')
+        for name in ('PORT', 'ASR_PORT', 'TTS_PORT'):
+            self.env.pop(name, None)
+        self.env.update(GQ_DISPLAY_SLOT='2', TEMPEST_WINDOW_SIZE='960x540')
+        (self.bin / 'ffmpeg').write_text('#!/bin/sh\nexit 0\n')
+        (self.bin / 'ffmpeg').chmod(0o755)
+        (self.source / 'scripts/bench.sh').write_text('''
+python3 - "$TEST_ROOT/bench-env.json" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({key: os.environ.get(key) for key in
+    ('PORT', 'ASR_PORT', 'TTS_PORT', 'TEMPEST_WINDOW_SIZE')}))
+PY
+''')
+        self.shell(r'''
+remote_probe bench "$TEST_ROOT/worktree" run smoke
+remote_bench "$TEST_ROOT/worktree" run smoke
+''')
+        self.assertEqual(json.loads((self.root / 'bench-env.json').read_text()),
+                         {'PORT': None, 'ASR_PORT': None, 'TTS_PORT': None,
+                          'TEMPEST_WINDOW_SIZE': '960x540'})
+
+    def test_e2e_retains_rebuilt_graph_in_worktree_cache(self):
+        self.entry(self.engine_digest)
+        self.entry(self.story_digest, 'storygraph')
+        (self.state / 'data').mkdir()
+        graph = self.state / 'data/story.json'
+        (self.source / 'scripts/e2e.sh').write_text('''
+printf '%s' "$GOTHIC_AI_DATA" > "$TEST_ROOT/data-path"
+if [[ ! -f "$GOTHIC_AI_DATA/story.json" ]]; then
+  printf 'rebuilt graph' > "$GOTHIC_AI_DATA/story.tmp"
+  mv "$GOTHIC_AI_DATA/story.tmp" "$GOTHIC_AI_DATA/story.json"
+fi
+''')
+        self.shell(r'''
+remote_probe e2e "$TEST_ROOT/worktree" run stages
+remote_run e2e "$TEST_ROOT/worktree" run
+''')
+        self.assertEqual((self.root / 'data-path').read_text(), str(self.state / 'data'))
+        self.assertEqual(graph.read_text(), 'rebuilt graph')
+        graph_time = time.time() - 60
+        os.utime(graph, (graph_time, graph_time))
+        self.shell(r'''
+remote_probe e2e "$TEST_ROOT/worktree" run stages
+remote_run e2e "$TEST_ROOT/worktree" run
+''')
+        self.assertEqual(graph.read_text(), 'rebuilt graph')
+        self.assertAlmostEqual(graph.stat().st_mtime, graph_time, places=5)
+        self.assertFalse((self.state / 'runs/run/data').exists())
 
     def test_miss_builds_and_publishes_engine_and_storygraph(self):
         self.shell(r'''
@@ -498,7 +640,7 @@ remote() { "$@"; }
 
 
 class TunnelTests(unittest.TestCase):
-    def run_job(self, directory, mode='run', forward_fail=False, reserved_port=False):
+    def run_job(self, directory, mode='run', forward_fail=False, reserved_port=0):
         root = Path(directory)
         (root / 'scripts').mkdir()
         (root / 'inputs/run').mkdir(parents=True)
@@ -535,9 +677,9 @@ ssh() {
   printf '%s\n' "$*" >> "$SESSION/forward"
   [[ -f "$SESSION/admitted" && "$TEST_FORWARD_FAIL" == 0 ]] || return 255
   [[ "$*" != *'-O cancel'* ]] || return 0
-  if [[ "$TEST_RESERVED_PORT" == 1 && ! -f "$SESSION/retried" ]]; then
+  if [[ "$TEST_RESERVED_PORT" != 0 && ! -f "$SESSION/retried" ]]; then
     touch "$SESSION/retried"
-    printf '47827\n'
+    printf '%s\n' "$TEST_RESERVED_PORT"
     return 0
   fi
   printf '51234\n'
@@ -603,17 +745,20 @@ guard_ack() { :; }
         self.assertFalse((root / 'job-ran').exists())
 
     def test_e2e_port_is_cancelled_and_reallocated(self):
-        directory = self.enterContext(tempfile.TemporaryDirectory())
-        root, process = self.run_job(directory, reserved_port=True)
-        wait_for(root / 'submitted')
-        (root / 'admitted').touch()
-        output, _ = process.communicate(timeout=8)
-        self.assertEqual(process.returncode, 0, output)
-        calls = (root / 'forward').read_text().splitlines()
-        self.assertEqual(len(calls), 3)
-        self.assertIn('-O cancel', calls[1])
-        self.assertIn('127.0.0.1:0:127.0.0.1:47827', calls[1])
-        self.assertEqual((root / 'inputs/run/tunnel-ready').read_text(), '51234\n')
+        for slot in range(3):
+            for base in (47827, 47829, 47840):
+                with self.subTest(port=base + slot * 100):
+                    directory = self.enterContext(tempfile.TemporaryDirectory())
+                    root, process = self.run_job(directory, reserved_port=base + slot * 100)
+                    wait_for(root / 'submitted')
+                    (root / 'admitted').touch()
+                    output, _ = process.communicate(timeout=8)
+                    self.assertEqual(process.returncode, 0, output)
+                    calls = (root / 'forward').read_text().splitlines()
+                    self.assertEqual(len(calls), 3)
+                    self.assertIn('-O cancel', calls[1])
+                    self.assertIn('127.0.0.1:0:127.0.0.1:47827', calls[1])
+                    self.assertEqual((root / 'inputs/run/tunnel-ready').read_text(), '51234\n')
 
     def test_remote_bench_waits_then_preserves_url_components(self):
         with tempfile.TemporaryDirectory() as directory:

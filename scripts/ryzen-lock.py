@@ -68,8 +68,13 @@ def main():
             result = subprocess.run(
                 ["bash", str(state / "source/scripts/ryzen.sh"), "__remote", "probe",
                  arguments["action"], str(state), arguments["run"], arguments["scenario"]],
-                stdin=subprocess.DEVNULL, check=False,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, check=False,
             )
+            # SSH transports stdout/stderr separately: finish the merged child
+            # output before reporting the marker that the launcher waits for.
+            if result.stdout:
+                report(result.stdout.removesuffix("\n"))
             report(f'Ryzen: preparation check {arguments["run"]} exit {result.returncode}')
         elif action == "arm" and (run is None or confirmed):
             run = request

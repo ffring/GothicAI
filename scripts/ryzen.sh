@@ -55,15 +55,16 @@ disk_usage() {
 desktop() {
   export XDG_RUNTIME_DIR="/run/user/$(id -u)"
   export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-  local auth socket
+  local auth socket info
   command -v xdpyinfo >/dev/null || { echo 'Need xdpyinfo to find the Xwayland display' >&2; exit 1; }
   # Connecting also wakes GNOME's on-demand Xwayland. Never use xhost or change the session.
   for auth in "$XDG_RUNTIME_DIR"/.mutter-Xwaylandauth.* "$HOME/.Xauthority"; do
     [[ -r "$auth" ]] || continue
     for socket in /tmp/.X11-unix/X*; do
       [[ -S "$socket" ]] || continue
-      if DISPLAY=":${socket##*/X}" XAUTHORITY="$auth" xdpyinfo >/dev/null 2>&1; then
+      if info="$(DISPLAY=":${socket##*/X}" XAUTHORITY="$auth" xdpyinfo 2>/dev/null)"; then
         export DISPLAY=":${socket##*/X}" XAUTHORITY="$auth"
+        RYZEN_SCREEN_SIZE="$(printf '%s\n' "$info" | awk '/dimensions:/ {print $2; exit}')"
         export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
         export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
         [[ -r "$VK_DRIVER_FILES" ]] || { echo 'Missing NVIDIA Vulkan ICD' >&2; exit 1; }
@@ -75,6 +76,36 @@ desktop() {
   done
   echo 'No accessible Xwayland display. Need a running user desktop or a GPU-capable headless compositor.' >&2
   exit 1
+}
+
+e2e_window_position() {
+  [[ -z "${TEMPEST_WINDOW_POS+x}" ]] || return 0
+  if [[ "$TEMPEST_WINDOW_SIZE" != 640x360 ]]; then
+    # Nonstandard windows run exclusively, so preserve their full usable screen.
+    export TEMPEST_WINDOW_POS=0,0
+    return 0
+  fi
+  local slot="$1" width height screen_width screen_height columns x y
+  [[ "$TEMPEST_WINDOW_SIZE" =~ ^([0-9]+)x([0-9]+)$ ]] || {
+    echo 'Invalid TEMPEST_WINDOW_SIZE for e2e placement' >&2; return 2;
+  }
+  width=$((10#${BASH_REMATCH[1]})) height=$((10#${BASH_REMATCH[2]}))
+  [[ "${RYZEN_SCREEN_SIZE:-}" =~ ^([0-9]+)x([0-9]+)$ ]] || {
+    echo 'No screen dimensions from xdpyinfo for e2e placement' >&2; return 2;
+  }
+  screen_width=$((10#${BASH_REMATCH[1]})) screen_height=$((10#${BASH_REMATCH[2]}))
+  (( width > 0 && height > 0 )) || return 2
+  # Mutter's measured frames are 690x447 for a 640x360 client. Keep clear of
+  # the dock/panel (which clamp a requested 0,0), decorations and shadows.
+  columns=$(((screen_width - 200 + 60) / (width + 60)))
+  (( columns > 0 )) || columns=1
+  x=$((100 + (slot % columns) * (width + 60)))
+  y=$((100 + (slot / columns) * (height + 100)))
+  if (( x + width > screen_width || y + height > screen_height )); then
+    echo "E2e window $TEMPEST_WINDOW_SIZE in slot $slot does not fit screen $RYZEN_SCREEN_SIZE" >&2
+    return 2
+  fi
+  export TEMPEST_WINDOW_POS="$x,$y"
 }
 
 source_digest() {
@@ -426,10 +457,22 @@ remote_run() {
   fi
   echo 'Ryzen: game admitted'
   export LOG_DIR="$state/runs/$run"
-  mkdir -p "$LOG_DIR"
+  # The worktree lock spans preparation and the game; retain converted graphs.
+  mkdir -p "$LOG_DIR" "$GOTHIC_AI_DATA"
+  # gq assigns the slot when this request starts, after the upload/preparation.
+  # Keep explicit caller ports; defaults must not collide with the other slots.
+  local display_slot="${GQ_DISPLAY_SLOT:-0}"
+  [[ "$display_slot" =~ ^[0-9]+$ ]] || { echo 'Invalid GQ_DISPLAY_SLOT' >&2; return 2; }
+  display_slot=$((10#$display_slot))
+  export PORT="${PORT-$((47827 + 100 * display_slot))}"
+  export ASR_PORT="${ASR_PORT-$((47829 + 100 * display_slot))}"
+  export TTS_PORT="${TTS_PORT-$((47840 + 100 * display_slot))}"
+  export TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE-640x360}"
   [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
   started=$SECONDS
   desktop
+  e2e_window_position "$display_slot"
+  echo "Ryzen: e2e slot $display_slot; ports $PORT/$ASR_PORT/$TTS_PORT; window $TEMPEST_WINDOW_SIZE at $TEMPEST_WINDOW_POS; screen $RYZEN_SCREEN_SIZE"
   require_prepared "$action" "$state" "$run" "${SCENARIO:-m0}"
   # Dependencies were synchronized without the display; uv run must not rebuild them here.
   export UV_NO_SYNC=1
@@ -708,7 +751,7 @@ start_tunnel() {
       echo 'Ryzen: invalid allocated tunnel port' >&2; return 1;
     }
     case "$port" in
-      47827|47829|47840)
+      47827|47829|47840|47927|47929|47940|48027|48029|48040)
         ssh -S "$SESSION/control" -O cancel \
           -R "127.0.0.1:0:127.0.0.1:$AI_PORT" "$RYZEN_HOST" 8>&- || return 1
         continue ;;
@@ -801,12 +844,40 @@ PY
   esac
 }
 
+e2e_display_exclusive() {
+  # Keep timing-sensitive exceptions and their measured reason in this one list.
+  # RYZEN_DISPLAY_EXCLUSIVE=1 forces it for any scenario: rerun a suspicious
+  # failure from a shared slot this way before chasing it.
+  [[ "${RYZEN_DISPLAY_EXCLUSIVE:-0}" != 1 ]] || return 0
+  case "$1" in
+    # Measured 19.10 (reports/compute/2026-10-19-ryzen-three-windows): each passed
+    # solo and failed in some three-game rounds even with windows apart, at
+    # 77-93 FPS instead of ~105. orders missed wolf preparation, bandits the
+    # native return strike within 3 s, calm its attack and addressee checks.
+    orders|fight_reactions_bandits|calm) return 0 ;;
+    # Same fight, companion and movement timing, not measured yet: kept exclusive
+    # rather than risking false failures. Move one out only after it passes
+    # every round of a three-game measurement.
+    fight_reactions_*|calm_*|neural*|wolf|rescue*|companion) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 game_queue_args() {
-  GQ_ARGS=(--class "${BENCH_CLASS:-quick}" --threads 4 --mem 8G --display --max "${RYZEN_MAX:-30m}" --wait-max "$LOCK_WAIT")
+  GQ_ARGS=(--class "${BENCH_CLASS:-quick}" --threads 4 --mem 5G --display --max "${RYZEN_MAX:-30m}" --wait-max "$LOCK_WAIT")
   if [[ "$ACTION" == bench ]]; then
+    # Arbitrary benchmark windows can cover neighbours and affect their cadence.
+    # Keep the legacy exclusive display reservation even with a private tunnel.
     GQ_ARGS+=(--gpu-mem 4G --name "bench $(basename "$BENCH_SCENARIO" .bench)")
   else
     GQ_ARGS+=(--gpu-mem 2G --name "e2e ${SCENARIO:-m0}")
+    # A custom size or position cannot share the default slot layout safely.
+    if [[ "${TEMPEST_WINDOW_SIZE:-640x360}" != 640x360 || -n "${TEMPEST_WINDOW_POS+x}" ]] || \
+       e2e_display_exclusive "${SCENARIO:-m0}"; then
+      GQ_ARGS+=(--display-exclusive)
+    else
+      GQ_ARGS+=(--display-shared)
+    fi
   fi
 }
 
@@ -942,7 +1013,7 @@ fi
 while IFS= read -r name; do
   case "$name" in
     GOTHIC_DIR|GOTHIC_AI_URL|OPENGOTHIC_FRACTURE) ;;
-    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|CHATGPT_*|OPENAI_*)
+    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|TEMPEST_*|CHATGPT_*|OPENAI_*)
       ENV_ARGS+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)

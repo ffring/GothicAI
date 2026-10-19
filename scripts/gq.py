@@ -31,7 +31,7 @@ PROFILES = {
         "cpus": "2-15,18-31",
         "threads": 28,
         "mem": 20 * GIB,
-        "display": 1,
+        "display": 3,
         "gpu_mem": 10 * GIB,
         "quiet": True,
         "min_disk": 20 * GIB,
@@ -95,6 +95,12 @@ def same_attempt(job, snapshot):
     return (job.get("attempt"), job.get("reserved")) == (snapshot.get("attempt"), snapshot.get("reserved"))
 
 
+def exclusive_display(job):
+    # Sharing is opt-in: older clients cannot isolate their ports by slot.
+    return job.get("display", False) and (
+        job.get("display_exclusive", False) or not job.get("display_shared", False))
+
+
 def systemctl(*args):
     return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
 
@@ -103,6 +109,38 @@ def exec_property(args):
     # systemd's Exec* syntax, not shell syntax. Disable specifier/environment expansion.
     return " ".join('"' + str(s).replace("\\", "\\\\").replace('"', '\\"')
                     .replace("%", "%%").replace("$", "$$") + '"' for s in args)
+
+
+def unit_cgroup(job_id, membership_path=None):
+    """The stop callback is still inside the unit, before systemd removes its cgroup."""
+    try:
+        memberships = Path(membership_path or "/proc/self/cgroup").read_text().splitlines()
+    except OSError:
+        return None
+    for membership in memberships:
+        fields = membership.split(":", 2)
+        if (len(fields) == 3 and fields[0:2] == ["0", ""]
+                and fields[2].endswith(f"/gq-{job_id}.service")):
+            return fields[2]
+    return None
+
+
+def cgroup_memory_stats(job_id, group=None, cgroup_root=None):
+    group = unit_cgroup(job_id) or group
+    result = {"oom_kill": None, "memory_peak": None}
+    if not group:
+        return result
+    path = Path(cgroup_root or "/sys/fs/cgroup") / group.lstrip("/")
+    try:
+        events = dict(line.split() for line in (path / "memory.events").read_text().splitlines())
+        result["oom_kill"] = int(events["oom_kill"])
+    except (OSError, KeyError, ValueError):
+        pass
+    try:
+        result["memory_peak"] = int((path / "memory.peak").read_text())
+    except (OSError, ValueError):
+        pass
+    return result
 
 
 class Queue:
@@ -165,7 +203,8 @@ class Queue:
     def event(self, job, event, **extra):
         # Called only within a transaction: journal lines from different processes never interleave.
         record = {k: job.get(k) for k in ("id", "owner", "class", "name", "threads", "mem",
-                                        "gpu_mem", "display", "cpu_quota", "max", "submitted", "start")}
+                                        "gpu_mem", "display", "display_shared", "display_exclusive", "display_slot",
+                                        "cpu_quota", "max", "submitted", "start")}
         record.update(event=event, time=self.now(), **extra)
         with (self.home / "journal.jsonl").open("a", encoding="utf-8") as output:
             os.chmod(output.name, 0o600)
@@ -232,6 +271,10 @@ class Queue:
         spec = dict(spec)
         spec.setdefault("gpu_mem", 0)
         spec.setdefault("display", False)
+        spec.setdefault("display_shared", False)
+        spec.setdefault("display_exclusive", False)
+        if spec["display_exclusive"]:
+            spec["display"] = True
         if spec.get("cpu_quota") is not None:
             try:
                 spec["cpu_quota"] = cpu_quota(spec["cpu_quota"])
@@ -253,6 +296,7 @@ class Queue:
         end = self.now()
         job.update(status=reason, reason=reason, code=code, end=end)
         self.event(job, "finished", reason=reason, code=code,
+                   oom_kill=job.get("oom_kill"), memory_peak=job.get("memory_peak"),
                    wait=(job["start"] or end) - job["submitted"],
                    duration=end - job["start"] if job["start"] else 0)
 
@@ -307,6 +351,7 @@ class Queue:
                 if job.get("retry") and not job.get("cancel_reason"):
                     job.update(status="queued", start=None, retry_pending=True)
                     job.pop("retry", None)
+                    job.pop("display_slot", None)
                     self.event(job, "deferred", reason="legacy lock")
                     continue
                 try:
@@ -321,6 +366,7 @@ class Queue:
                     code = 124
                 elif reason == "cancelled":
                     code = 143
+                job.update(cgroup_memory_stats(job_id, job.get("cgroup")))
                 self.terminal(job, reason, code)
 
     def started(self, job_id):
@@ -328,6 +374,9 @@ class Queue:
             for job in state["jobs"]:
                 if job["id"] == job_id and job["status"] == "starting" and not job.get("cancel_reason"):
                     job.update(status="running", start=self.now())
+                    group = unit_cgroup(job_id)
+                    if group:
+                        job["cgroup"] = group
                     invocation = os.environ.get("INVOCATION_ID", "")
                     if re.fullmatch(r"[0-9a-f]{32}", invocation):
                         job["invocation_id"] = invocation
@@ -416,11 +465,13 @@ class Queue:
             active = [j for j in jobs if j["status"] in ACTIVE]
             queued = [j for j in jobs if j["status"] == "queued"]
             quiet_waiting = legacy_waiting or any(j["class"] == "quiet" for j in queued)
+            exclusive_waiting = next((index for index, j in enumerate(queued)
+                                      if exclusive_display(j)), None)
             if free < self.profile["min_disk"] or any(j["class"] == "quiet" for j in active):
                 return
             batch_blocked = False
             skipped_owners = set()
-            for job in queued:
+            for index, job in enumerate(queued):
                 if job.get("retry_pending"):
                     if job["class"] == "batch":
                         batch_blocked = True
@@ -450,15 +501,41 @@ class Queue:
                     if self.now() + job["max"] >= last_batch:
                         continue
                 if any(sum(j[resource] for j in active) + job[resource] > self.profile[resource]
-                       for resource in ("mem", "gpu_mem", "display")):
+                       for resource in ("mem", "gpu_mem")):
                     if kind == "batch":
                         batch_blocked = True
                     continue
+                slot = None
+                if job["display"]:
+                    # Drain games ahead of the oldest exclusive, then admit no
+                    # later games. Earlier batches retain FIFO; quiet retains its
+                    # class priority, otherwise the two admission gates can cycle.
+                    if (exclusive_waiting is not None and index > exclusive_waiting
+                            and kind != "quiet"):
+                        if kind == "batch":
+                            batch_blocked = True
+                        continue
+                    capacity = self.profile.get("display", 1)
+                    occupied = set()
+                    for current in active:
+                        if current["display"]:
+                            # Persisted jobs without display_shared are legacy
+                            # clients and reserve every slot, even if they have one.
+                            occupied.update(range(capacity) if exclusive_display(current)
+                                            else [current.get("display_slot", 0)])
+                    available = set(range(capacity)) - occupied
+                    if not available or (exclusive_display(job) and occupied):
+                        if kind == "batch":
+                            batch_blocked = True
+                        continue
+                    slot = min(available)
                 with self.legacy_probe(kind == "quiet") as available:
                     if not available:
                         break
                 job.update(status="starting", reserved=self.now(), attempt=uuid.uuid4().hex,
                            launcher={"pid": os.getpid(), "start": process_token(os.getpid())})
+                if slot is not None:
+                    job["display_slot"] = slot
                 active.append(job)
                 launch.append(dict(job))
                 if kind == "quiet":
@@ -476,6 +553,9 @@ class Queue:
             return
         env = {**job["env"], "GQ_HOME": str(self.home), "GQ_LEGACY_LOCK": str(self.legacy_lock),
                "GQ_PROFILE": self.profile_name}
+        env.pop("GQ_DISPLAY_SLOT", None)
+        if job["display"]:
+            env["GQ_DISPLAY_SLOT"] = str(job["display_slot"])
         internal = [sys.executable, SCRIPT]
         post = exec_property(["/usr/bin/env", *(f"{k}={env[k]}" for k in (
             "GQ_HOME", "GQ_LEGACY_LOCK", "GQ_PROFILE")), *internal, "_finish", job["id"]])
@@ -807,7 +887,10 @@ def status(queue):
     for job in queue.jobs():
         if job["status"] in TERMINAL:
             continue
-        resources = f"{job['threads']}t {job['mem']/GIB:g}G gpu={job['gpu_mem']/GIB:g}G окно={int(job['display'])}"
+        display = "все" if exclusive_display(job) else str(int(job["display"]))
+        slot = job.get("display_slot", 0 if job["display"] and job["status"] in ACTIVE else "—")
+        resources = (f"{job['threads']}t {job['mem']/GIB:g}G gpu={job['gpu_mem']/GIB:g}G "
+                     f"окно={display} слот={slot}")
         start = time.strftime("%H:%M:%S", time.localtime(job["start"])) if job["start"] else "—"
         estimate = queue.estimate(job["id"])
         typical = f" median={estimate['typical']:.0f}s" if estimate["typical"] is not None else ""
@@ -834,6 +917,9 @@ def parser():
         r.add_argument("--mem", type=memory, required=True)
         r.add_argument("--gpu-mem", type=memory, default=0)
         r.add_argument("--display", action="store_true")
+        r.add_argument("--display-shared", action="store_true",
+                       help="делить слоты окна с другими совместимыми заявками --display")
+        r.add_argument("--display-exclusive", action="store_true")
         r.add_argument("--cpu-quota", type=cpu_quota)
         r.add_argument("--max", type=duration, required=True)
         r.add_argument("--name", required=True)
@@ -878,7 +964,9 @@ def main(argv=None):
             waiter = {"pid": os.getpid(), "start": process_token(os.getpid())} if args.action == "run" else None
             request = {
                 "class": args.class_, "threads": args.threads, "mem": args.mem, "gpu_mem": args.gpu_mem,
-                "display": args.display, "cpu_quota": args.cpu_quota, "max": args.max,
+                "display": args.display, "display_shared": args.display_shared,
+                "display_exclusive": args.display_exclusive,
+                "cpu_quota": args.cpu_quota, "max": args.max,
                 "name": args.name, "owner": owner(), "command": command}
             if args.action == "submit":
                 return submit_job(queue, request)

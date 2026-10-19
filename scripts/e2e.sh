@@ -306,6 +306,19 @@ PORT="${PORT:-47827}"
 ASR_PORT="${ASR_PORT:-47829}"
 TTS_PORT="${TTS_PORT:-47840}"
 TTS="${TTS:-fake}"
+# Inworld writes its voice cache through one fixed .tmp file. Keep that write
+# inside this Ryzen run too; HOME still supplies credentials and read-only data.
+if [[ "${GQ_PROFILE:-}" == ryzen && ( "$TTS" == inworld || "$TTS" == inworld:* ) &&
+      ! "${TTS#*:}" =~ (^|,)[[:space:]]*cache[[:space:]]*= ]]; then
+  if [[ -f "$HOME/.local/share/gothic-ai/inworld-voices.json" ]]; then
+    cp "$HOME/.local/share/gothic-ai/inworld-voices.json" "$LOG_DIR/inworld-voices.json"
+  fi
+  if [[ "$TTS" == inworld || "$TTS" == inworld: ]]; then
+    TTS="inworld:cache=$LOG_DIR/inworld-voices.json"
+  else
+    TTS+=",cache=$LOG_DIR/inworld-voices.json"
+  fi
+fi
 VOICE_FILE="${VOICE_FILE:-$ROOT/asr-service/tests/audio/ru_1.wav}"
 # the npc planner is off unless a decision service is given (DECIDER_URL=ws://<gpu-host>:47832)
 BRAIN_ARGS=(--no-brain)
@@ -337,8 +350,43 @@ fi
   --memory-db "$LOG_DIR/memory.sqlite3" --trace-dir "$LOG_DIR/traces" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}" "${QUICK_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
 SRV=$!
 GAME=""
-# `|| true`: with set -e a failing kill of an already finished process would change the exit code
-trap 'if [ -n "$GAME" ]; then kill "$GAME" 2>/dev/null || true; fi; kill "$SRV" 2>/dev/null || true; if [ -n "$ASR_PID" ]; then kill "$ASR_PID" 2>/dev/null || true; fi; if [ -n "$TTS_PID" ]; then kill "$TTS_PID" 2>/dev/null || true; fi' EXIT
+
+report_game_exit() {
+  local game_rc signal_number signal_name
+  [[ -n "$GAME" ]] || return 0
+  wait "$GAME" && game_rc=0 || game_rc=$?
+  if (( game_rc > 128 )) && signal_name="$(kill -l "$((game_rc - 128))" 2>/dev/null)"; then
+    signal_number=$((game_rc - 128))
+    echo "game exited: signal SIG$signal_name ($signal_number), status $game_rc ($1)"
+  else
+    echo "game exited: code $game_rc ($1)"
+  fi
+  GAME=""
+}
+
+cleanup() {
+  local attempt
+  # Reap our exact child PID, including a game killed before the first poll.
+  # `|| true` preserves the scenario status if a child has already finished.
+  if [[ -n "$GAME" ]]; then
+    kill "$GAME" 2>/dev/null || true
+    # A signal during the fork/exec handoff can miss the game. Bound the wait
+    # without touching another run's process or relying on its executable name.
+    for attempt in $(seq 1 20); do
+      kill -0 "$GAME" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -KILL "$GAME" 2>/dev/null || true
+    report_game_exit cleanup
+  fi
+  kill "$SRV" 2>/dev/null || true
+  if [[ -n "$ASR_PID" ]]; then kill "$ASR_PID" 2>/dev/null || true; fi
+  if [[ -n "$TTS_PID" ]]; then kill "$TTS_PID" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 sleep 2
 if ! kill -0 "$SRV" 2>/dev/null; then
@@ -399,6 +447,7 @@ GAME=$!
 for _ in $(seq 1 "$TIMEOUT"); do
   kill -0 "$SRV" 2>/dev/null || break
   if ! kill -0 "$GAME" 2>/dev/null; then
+    report_game_exit unexpected
     echo "game exited unexpectedly, see $LOG_DIR/game.log"
     exit 1
   fi

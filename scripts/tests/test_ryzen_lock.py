@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import runpy
 import select
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -129,6 +130,46 @@ class RyzenLockTests(unittest.TestCase):
         guardian = Guardian(directory)
         self.addCleanup(guardian.close)
         return guardian
+
+    def test_probe_marker_follows_all_merged_output_on_its_own_line(self):
+        for trailing_newline in (False, True):
+            with self.subTest(trailing_newline=trailing_newline):
+                guardian = self.guardian()
+                script = guardian.state / "source/scripts/ryzen.sh"
+                script.parent.mkdir(parents=True)
+                script.write_text(
+                    f"exec {shlex.quote(sys.executable)} - <<'PY'\n" + r'''
+import os
+import threading
+
+def write_lines(fd, prefix):
+    for index in range(50):
+        os.write(fd, f"{prefix}-{index}\n".encode())
+
+threads = [threading.Thread(target=write_lines, args=(fd, prefix))
+           for fd, prefix in ((1, "stdout"), (2, "stderr"))]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+os.write(1, b"stdout-tail|")
+os.write(2, b"stderr-tail")
+''' + ('os.write(2, b"\\n")\n' if trailing_newline else '') +
+                    'raise SystemExit(17)\nPY\n')
+                guardian.send('probe ' + json.dumps({
+                    'action': 'e2e', 'run': RUN, 'scenario': 'calm',
+                }))
+                marker = f"Ryzen: preparation check {RUN} exit 17"
+                guardian.wait_output(marker)
+                guardian.eof()
+                guardian.assert_released(self)
+                lines = guardian.output.decode().splitlines()
+                self.assertEqual(lines[0], 'Ryzen: queue guard ready')
+                self.assertCountEqual(lines[1:-2], [
+                    f'{prefix}-{index}' for prefix in ('stdout', 'stderr') for index in range(50)
+                ])
+                self.assertEqual(lines[-2:], ['stdout-tail|stderr-tail', marker])
+                self.assertEqual(guardian.process.stderr.read(), b'')
 
     def test_registration_grace_period_is_60_seconds(self):
         guardian = self.guardian()
