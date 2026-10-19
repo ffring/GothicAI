@@ -1,0 +1,70 @@
+{
+  "format": "wide",
+  "brand": false,
+  "lang": "ru",
+  "hook": {"text": "Механика в широком кадре", "until": 1.8},
+  "beats": [
+    {
+      "id": "dice", "kind": "card", "dur": 6,
+      "texts": [{"text": "16:9 · те же формулы и цвета", "at": 0.2, "until": 1.7, "size": 44}],
+      "chart": {
+        "type": "dice", "talent": 40, "axisX": "метры", "axisY": "шанс, %",
+        "source": "Демо: формулы Gothic2.exe и OpenGothic, навык 40%",
+        "curves": [
+          {"curve": "exe", "name": "Gothic2.exe", "draw": [[2, 0], [3.2, 15], [3.5, 15], [4.2, 45]]},
+          {"curve": "opengothic", "name": "OpenGothic", "draw": [[2.2, 0], [4.2, 45]]}
+        ],
+        "talentMark": {"at": 2, "text": "навык 40%"},
+        "stepMark": {"at": 2.5, "text": "−⅓"},
+        "markers": [{"d": 30, "curve": "exe", "at": 4.3, "text": "30 м: {v}%"}]
+      }
+    },
+    {
+      "id": "formula", "kind": "card", "dur": 6,
+      "chart": {
+        "type": "formula", "title": "УРОН =",
+        "terms": [
+          {"text": "(лук + ловкость)", "at": 0.2, "color": "#8BE08B"},
+          {"text": "× натяжение", "at": 0.6},
+          {"text": "− защита", "at": 1},
+          {"text": "× зона попадания", "at": 1.4, "color": "#FFD678"}
+        ],
+        "legend": {"text": "Округление на каждом шаге; минимум 5", "at": 1.8},
+        "example": {"at": 2, "bow": 50, "dex": 40, "draw": 0.8, "prot": 20,
+          "zones": [{"name": "голова", "k": 2, "at": 2.4}, {"name": "тело", "k": 1, "at": 2.8}, {"name": "рука", "k": 0.5, "at": 3.2}]},
+        "source": "Демо: расчёт из входов по damagecalculator.cpp"
+      }
+    },
+    {
+      "id": "bars", "kind": "card", "dur": 6,
+      "chart": {
+        "type": "bars", "title": "Сравнение трёх групп",
+        "series": [{"name": "Было", "color": "#D8D8D8"}, {"name": "Стало", "color": "#FFD678"}],
+        "groups": [{"label": "10 м", "values": [1, 1.4], "at": 0.3}, {"label": "20 м", "values": [0.8, 1.8], "at": 1}, {"label": "30 м", "values": [0.5, 2.2], "at": 1.7}],
+        "max": 2.5, "source": "Демо: условные значения для проверки композиции"
+      }
+    },
+    {
+      "id": "dots", "kind": "card", "dur": 6,
+      "chart": {
+        "type": "dots", "title": "Попадания из тридцати выстрелов",
+        "total": 30, "hits": 17, "at": 0.5, "dur": 3, "caption": "{n} из 30",
+        "source": "Демо: условный счётчик для проверки композиции"
+      }
+    },
+    {
+      "id": "stats", "kind": "card", "dur": 6,
+      "chart": {
+        "type": "stats",
+        "rows": [{"name": "Сила", "value": "60", "color": "#FF7A66"}, {"name": "Ловкость", "value": "40", "color": "#8BE08B"}, {"name": "Навык", "value": "40%", "color": "#7EC8FF"}, {"name": "Защита", "value": "20"}],
+        "fadeAt": 3, "question": {"text": "Что определяет результат?", "at": 3.3}
+      }
+    }
+  ],
+  "lines": [[
+    {"text": "Демонстрационные", "start": 2.2, "end": 3},
+    {"text": "горизонтальные", "start": 3, "end": 3.8},
+    {"text": "субтитры", "start": 3.8, "end": 4.6},
+    {"text": "синхронизированы", "start": 4.6, "end": 5.4}
+  ]]
+}

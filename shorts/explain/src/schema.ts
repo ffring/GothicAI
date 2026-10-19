@@ -7,7 +7,7 @@ const Text = z.object({
   text: z.string(),
   at: z.number().default(0),
   until: z.number().optional(),
-  y: z.number().default(260), // the top of the text, px
+  y: z.number().optional(), // top in frame pixels; defaults to 260 tall / 140 wide
   size: z.number().default(64),
   color: z.string().optional(),
 });
@@ -19,7 +19,7 @@ const TagLine = z.object({
   count: z.object({to: z.number(), dur: z.number().default(0.8)}).optional(), // a roll that runs and stops
 });
 
-// a label over a thing in the picture; x, y: where the thing is (px of the 1080x1920 frame), from the bench's data
+// a label over a thing in the picture; x, y: pixels of the selected frame, from the bench's data
 const Tag = z.object({
   x: z.number(),
   y: z.number(),
@@ -29,7 +29,7 @@ const Tag = z.object({
   side: z.enum(['center', 'right', 'left']).default('center'), // where the box opens from the pin
 });
 
-const Point = z.tuple([z.number(), z.number()]); // px of the 1080x1920 frame, from the bench's data
+const Point = z.tuple([z.number(), z.number()]); // pixels of the selected frame, from the bench's data
 
 // a line over the picture (a line of sight from the bench's `sight`): it draws itself from `from` toward `to`; with
 // `cut` it stops there (a wall in the way): solid up to it, `cutColor` and dashed past it from `cutAt`, a cross on it
@@ -133,9 +133,9 @@ const Beat = z.object({
   dur: z.number().positive(),
   src: z.string().optional(), // footage mp4 or a still png in the workspace (the public dir)
   from: z.number().default(0), // where the footage starts
-  srcBottom: z.string().optional(), // split: the lower half
+  srcBottom: z.string().optional(), // split: bottom in tall, right in wide
   fromBottom: z.number().default(0),
-  labels: z.tuple([z.string(), z.string()]).optional(), // split: top, bottom
+  labels: z.tuple([z.string(), z.string()]).optional(), // split: top/bottom in tall, left/right in wide
   labelColors: z.tuple([z.string(), z.string()]).optional(), // default: the old rule's grey, the new one's gold
   freeze: z.number().optional(), // footage stops here (seconds into the beat)
   zoom: z.object({at: z.number(), dur: z.number(), scale: z.number(), x: z.number(), y: z.number()}).optional(),
@@ -150,6 +150,7 @@ const Beat = z.object({
 const Word = z.object({text: z.string(), start: z.number(), end: z.number()});
 
 export const Plan = z.object({
+  format: z.enum(['tall', 'wide']).default('tall'),
   stem: z.enum(['voice', 'game', 'music']).optional(), // uncalibrated sources for publication through gothic_shorts.levels
   brand: z.boolean().default(true),
   brandVolume: z.number().nonnegative().default(0.355), // draft mix only; levels sets the published sting level
