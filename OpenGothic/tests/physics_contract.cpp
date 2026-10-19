@@ -3067,7 +3067,7 @@ namespace {
       {"a down ground monster must never receive CV",true,false,false},
       {"a down flying monster must never receive CV",true,true,false}};
     Gothic::PhysicsFlags flags;
-    require(!flags.monsterCharacterVirtual,"monster CV must default to disabled");
+    require(!flags.monsterCharacterVirtual,"an unconfigured PhysicsFlags must start with monster CV off; [GAME] supplies the game default");
     // Exercise the actual MoveAlgo policy for every independent hero/human
     // flag combination, including an on-the-fly monster flag round trip.
     for(bool hero:{false,true}) for(bool humans:{false,true}) {
@@ -3084,7 +3084,7 @@ namespace {
         require(flags.allowsMonsterCharacterVirtual(sample.down,sample.flying)==false,
                 "toggling monster CV off must restore legacy eligibility for every state");
       }
-    std::printf("Monster CharacterVirtual eligibility: default OFF; four living/down/flying cases "
+    std::printf("Monster CharacterVirtual eligibility: unconfigured OFF; four living/down/flying cases "
                 "and four independent hero/human flag combinations passed OFF/ON/OFF\n");
     }
 
