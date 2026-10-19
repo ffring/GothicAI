@@ -1458,6 +1458,56 @@ async def test_boundary_wait_is_clipped_to_remaining_five_second_acquire_window(
         assert not rig.policy.requests
 
 
+@pytest.mark.parametrize(("refusals", "retry"), [
+    ([bodypilot.SOFT_BODY_OWNERSHIP_REFUSAL], True),
+    (["wrong_scope"], False),
+    ([bodypilot.SOFT_BODY_OWNERSHIP_REFUSAL, "wrong_scope"], False),
+])
+async def test_only_soft_ownership_exhaustion_retries_native_combat_after_cooldown(refusals, retry):
+    async with running() as rig:
+        rig.bridge.request_rejections["body_acquire"] = deque(refusals)
+        await rig.watch()
+        for index in range(len(refusals)):
+            rig.bridge.emit(player_row(1 + index * 2), fighter(2 + index * 2))
+            await eventually(lambda index=index: sum(rig.fight._refusals.values()) == index + 1)
+            rig.clock.advance(bodypilot.ACQUIRE_INTERVAL + 0.001)
+
+        # The native attack event can arrive while the previous observer still
+        # exists, just as speech finishes at the five-second acquisition limit.
+        rig.clock.advance(bodypilot.ACQUIRE_WINDOW + 0.1)
+        rig.combat(kind="npc_attack")
+        await eventually(lambda: not rig.pilot.active_count)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "acquire_exhausted"
+        assert summary.acquire_requests == len(refusals) and summary.acquire_completed == 0
+        assert summary.lease is None and summary.watch_removed
+        assert not rig.policy.requests and not rig.link.body_leases
+
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await asyncio.sleep(0.04)
+        assert len(rig.bridge.commands("body_watch")) == 2
+        rig.clock.advance(bodypilot.REACQUIRE_INTERVAL + 0.001)
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        if not retry:
+            rig.combat(kind="player_near")
+            await asyncio.sleep(0.04)
+            assert len(rig.bridge.commands("body_watch")) == 2
+            assert len(rig.bridge.commands("body_acquire")) == len(refusals)
+            assert not rig.policy.requests
+            return
+
+        # No new attack event or routine transition: the still-active native
+        # fight is enough once transient ownership and the backoff have ended.
+        await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
+        rig.bridge.emit(player_row(7), fighter(8))
+        await eventually(lambda: rig.policy.commands("reset"))
+        rig.bridge.emit(fighter(9, owned=True))
+        await eventually(lambda: rig.fight._decisions == 1)
+        assert len(rig.bridge.commands("body_acquire")) == len(refusals) + 1
+        assert len(rig.policy.commands("reset")) == 1
+        assert rig.fight._fallbacks == 0
+
+
 async def test_shutdown_cancels_boundary_request_before_removing_watch():
     async with running() as rig:
         rig.bridge.acquire_pending_results.append("acquired")
@@ -1855,6 +1905,75 @@ async def test_hero_down_dead_or_target_changed_ends_episode(change, reason):
         assert rig.pilot.last_summary.reason == reason
         assert rig.pilot.last_summary.target_kind == "hero"
         assert rig.pilot.last_summary.target_name is None
+
+
+@pytest.mark.parametrize("cleanup_target", ["down", "absent"])
+async def test_native_cleanup_after_hero_down_unwatches_and_later_live_attack_resets(cleanup_target):
+    async with running() as rig:
+        await rig.active()
+        first_client = rig.fight.client
+        down = fighter(4, owned=True)
+        down["target"].update(down=True, hp=1)
+        rig.bridge.emit(down)
+        await rig.ended()
+        await eventually(lambda: not rig.pilot.active_count)
+        assert rig.pilot.last_summary.reason == "hero_down"
+
+        # Native knockout scripts pass through a routine-labelled state before
+        # ZS_ATTACK's post-fight cleanup. That legitimately rearms the roster.
+        rig.roster(activity="routine", state="ZS_TALK")
+        rig.roster(activity="fight", state="ZS_ATTACK")
+        await eventually(lambda: len(rig.bridge.commands("body_watch")) == 3)
+        cleanup = fighter(5, t_game_ms=250)
+        if cleanup_target == "down":
+            cleanup["target"].update(down=True, hp=1)
+        else:
+            cleanup["self"]["weapon_state"] = 0
+            cleanup["target"].update(entity_id=0, present=False, visible=False, current_valid=False)
+            for key in cleanup["target"]:
+                if key not in {
+                    "entity_id", "present", "visible", "current_valid", "last_known_position_world_cm",
+                    "last_known_velocity_cm_s", "last_seen_game_ms", "last_known_age_ms",
+                }:
+                    cleanup["target"][key] = None
+        rig.bridge.emit(cleanup)
+        if cleanup_target == "absent":
+            await eventually(lambda: rig.fight._last_seq == 5)
+            rig.bridge.emit({**cleanup, "observation_seq": 6, "t_game_ms": 1250})
+        await eventually(lambda: not rig.pilot.active_count)
+        assert rig.pilot.last_summary.reason == ("hero_down" if cleanup_target == "down" else "target_lost")
+        assert rig.pilot.last_summary.lease is None
+        assert rig.pilot.last_summary.decisions == 0
+        assert rig.pilot.last_summary.watch_removed
+        assert not rig.link.body_leases and not rig.link.body_latest
+        assert not rig.pilot._watch_npcs and not rig.pilot._pending_unwatch
+        assert len(rig.bridge.commands("body_acquire")) == len(rig.policy.commands("reset")) == 1
+
+        # A real new attack after recovery still enters P30 even without an
+        # intervening routine row; no global "hero was down" suppression exists.
+        rig.clock.advance(bodypilot.REACQUIRE_INTERVAL + 0.1)
+        rig.combat(kind="npc_attack")
+        await eventually(lambda: len(rig.bridge.commands("body_watch")) == 5)
+        rig.bridge.emit(player_row(7), fighter(8, t_game_ms=1300))
+        await eventually(lambda: len(rig.policy.commands("reset")) == 2)
+        assert rig.fight.client is not first_client
+        rig.bridge.emit(fighter(9, owned=True, t_game_ms=1350))
+        await eventually(lambda: rig.fight._decisions == 1)
+        assert len(rig.bridge.commands("body_acquire")) == 2
+
+
+async def test_stale_prelease_down_row_does_not_suppress_current_live_fight():
+    async with running() as rig:
+        await rig.watch()
+        stale = fighter(2, t_game_ms=1)
+        stale["target"]["down"] = True
+        rig.bridge.emit(player_row(), stale, fighter(3, t_game_ms=200))
+        await eventually(lambda: rig.policy.commands("reset"))
+        rig.bridge.emit(fighter(4, owned=True, t_game_ms=250))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert len(rig.policy.commands("reset")) == 1
+        assert not rig.pilot.summaries
 
 
 @pytest.mark.parametrize("change", [{"down": True}, {"hp": 0}])

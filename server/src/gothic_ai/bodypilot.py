@@ -51,6 +51,7 @@ TRANSIENT_REJECTION_LIMIT = 10
 MAX_OBSERVATION_AGE_GAME_MS = 100
 TARGET_ABSENCE_TIMEOUT_MS = 1000
 WORLD_STOP_REASONS = frozenset({"loading", "session_changed", "world_changed", "disconnected"})
+SOFT_BODY_OWNERSHIP_REFUSAL = "NPC already has conversation or soft-action body ownership"
 # BodyController::validate and FightAlgo::resolve recheck live state after the
 # observation. These refusals retain the lease and need a fresh row, not a retry
 # of the same command. Scope, ownership and protocol failures remain terminal.
@@ -409,6 +410,17 @@ class BodyPilot:
         self.summaries.append(summary)
         if self.fights.get(summary.npc) is fight:
             del self.fights[summary.npc]
+        if (
+            summary.npc is not None and summary.reason == "acquire_exhausted"
+            and summary.lease is None and summary.acquire_completed == 0
+            and summary.acquire_requests > 0
+            and {reason for reason, _ in summary.acquire_refusals} == {SOFT_BODY_OWNERSHIP_REFUSAL}
+        ):
+            # Speech or a soft act can outlast this bounded acquisition window.
+            # A later native combat roster must retry after that owner is gone;
+            # policy failures and every other refusal keep their episode guard.
+            self._roster_attempted.discard(summary.npc)
+            self._reacquire_after[summary.npc] = self.clock() + REACQUIRE_INTERVAL
         if summary.npc in self._claimed_fights and summary.release_confirmed and summary.reason in {
             "npc_unavailable", "target_lost",
         }:
@@ -956,13 +968,18 @@ class BodyFight:
             if terminal:
                 self._set_reason(terminal)
                 return
-        elif (
-            not all(raw["target"][key] for key in ("present", "visible", "current_valid"))
-            or self._terminal(raw)
-            or self.clock() - received_at > 0.100
-            or self._now_game_ms - raw["t_game_ms"] > 100
-        ):
-            return
+        else:
+            if self.clock() - received_at > 0.100 or self._now_game_ms - raw["t_game_ms"] > 100:
+                return
+            terminal = self._terminal(raw)
+            if terminal in {"npc_down", "hero_down", "target_down", "target_lost"}:
+                self._set_reason(terminal)
+                return
+            # A pre-lease weapon transition can still finish normally. A down
+            # or vanished target cannot: its native cleanup must not keep an
+            # observing episode and subscription alive until acquire timeout.
+            if terminal or not all(raw["target"][key] for key in ("present", "visible", "current_valid")):
+                return
         observation = self.link.body_latest.get(raw["entity_id"])
         if observation is None or observation.observation_seq != raw["observation_seq"]:
             # The exact typed row is only needed at the bridge API boundary.

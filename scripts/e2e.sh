@@ -18,8 +18,10 @@
 #       a companion target in the fight summary, natural fight end and confirmed release
 #   neural-group: three one-handed bandits fight the hero and his swordsman companion under P30 at once;
 #       each gets >=10 decisions, no fallback, release <=2 s, service p95 <=20 ms; requires GOTHIC_BODY_URL
-#   neural-talk: a one-handed bandit talks, attacks under P30, loses the fleeing hero, returns to his routine,
-#       reattacks or talks again, fights with a fresh lease and knocks the hero out; LLM=fake, requires GOTHIC_BODY_URL
+#   neural-talk: a non-bandit swordsman attacks after words (AR_NONE), knocks the hero out alive, releases
+#       P30 and returns to his routine; the hero gets up. Then a hostile bandit talks, attacks, loses the
+#       fleeing hero, returns to his routine, reattacks or talks again and starts a fresh fight ending in
+#       hero_down (hero death is allowed for this bandit); LLM=fake, requires GOTHIC_BODY_URL
 #   neural-load: load an initial save while three bandits hold P30 leases; all fights end with loading,
 #       release their leases and watch, then one bandit fights under P30 again; requires GOTHIC_BODY_URL
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help

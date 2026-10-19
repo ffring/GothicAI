@@ -64,17 +64,21 @@ async def neural_companion_scenario(link: GameLink, pilot: BodyPilot | None) -> 
 async def neural_talk_scenario(
     link: GameLink, dialogue: DialogueManager, pilot: BodyPilot | None,
 ) -> dict[str, str]:
-    """Words, escape, native reattack or another conversation, then a native knockout."""
+    """A non-bandit knockout, then words, escape and a fresh fight with a hostile bandit."""
+    from .neural_knockout import neural_knockout_segment
     from .neural_load import _policy_resets
 
     if pilot is None:
         raise GameError("scenario neural-talk requires GOTHIC_BODY_URL and --neural-body")
     if dialogue.llm.name != "fake":
         raise GameError("scenario neural-talk requires LLM=fake")
+    results = await neural_knockout_segment(link, dialogue, pilot)
+    if any(not value.startswith("done") for value in results.values()):
+        return results
     await link.wait_world()
     npc, arena = "DIR_NPC_NEURAL_TALK_BANDIT", "NW_XARDAS_TOWER_VALLEY_09"
-    results: dict[str, str] = {}
     lines: list[LineStarted] = []
+    attacks: list[str] = []
 
     def check(name: str, ok: bool, detail: str) -> bool:
         results[name] = f"{'done' if ok else 'failed'} ({detail})"
@@ -85,6 +89,10 @@ async def neural_talk_scenario(
         if isinstance(message, LineStarted) and message.npc.upper() == npc:
             lines.append(message)
 
+    def attacked(attacker: str) -> None:
+        if attacker.upper() == npc:
+            attacks.append(attacker)
+
     def fight_ready() -> bool:
         fight = pilot.fights.get(npc)
         return bool(fight and fight.lease and link.body_leases.get(fight.lease.entity_id) == fight.lease
@@ -94,9 +102,11 @@ async def neural_talk_scenario(
         await asyncio.sleep(max(0, ended_at + 2 - time.monotonic()))
         entry = pilot.people.get(npc)
         clean = not pilot.handles(npc) and not link.body_leases and not link.body_latest
+        clean = clean and not pilot._watch_npcs and not pilot._pending_unwatch
         clean = clean and (entry is None or entry.activity != "body")
         return clean, (f"after_s={time.monotonic() - ended_at:.3f}, "
-                       f"leases={len(link.body_leases)}, watched={len(link.body_latest)}, "
+                       f"leases={len(link.body_leases)}, watched={len(pilot._watch_npcs)}, "
+                       f"cached_rows={len(link.body_latest)}, pending_unwatch={len(pilot._pending_unwatch)}, "
                        f"handles={int(pilot.handles(npc))}, activity={entry.activity if entry else 'away'}")
 
     async def routine() -> bool:
@@ -104,8 +114,10 @@ async def neural_talk_scenario(
         return state == "ZS_STAND_ARMSCROSSED"
 
     def summary_after(previous: set[int]) -> FightSummary | None:
+        # A speech-ownership retry can finish an observer before the real fight.
         return next((summary for summary in pilot.summaries
-                     if summary.npc == npc and id(summary) not in previous), None)
+                     if summary.npc == npc and summary.lease is not None
+                     and id(summary) not in previous), None)
 
     def ended(name: str, summary: FightSummary | None, allowed: set[str], since: float) -> bool:
         active = pilot.fights.get(npc)
@@ -150,6 +162,9 @@ async def neural_talk_scenario(
     await link.debug("player_hp", hp=1200)
     await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
     await _m5b_player_weapon(link, "none")
+    # Hold the actual conversation before the hostile guild can see the hero.
+    # Production _attack_hero releases it after the scripted words are heard.
+    await link.attach(npc)
     await link.debug("teleport", near=npc, distance=250)
     if not await _until(lambda: npc in pilot.people and pilot.people[npc].distance <= 400, 10):
         raise GameError("neural-talk preparation: bandit missing from roster")
@@ -165,22 +180,27 @@ async def neural_talk_scenario(
         ], delay=0.15)}, FakeBackend("Хм.", delay=0),
     )
     link.listeners.append(heard)
+    dialogue.on_attack.append(attacked)
     try:
         with _policy_resets() as resets:
             previous = {id(summary) for summary in pilot.summaries}
             mark = len(lines)
             await link.debug("type", text="Бандит, проверим твою шпагу.")
-            ready = await _until(fight_ready, 25)
+            ready = await _until(lambda: bool(attacks) and fight_ready(), 25)
             first = pilot.fights.get(npc)
             first_lease = first.lease if first else None
             first_client = first.client if first else None
+            unleased_attempts = sum(
+                s.npc == npc and s.lease is None and id(s) not in previous for s in pilot.summaries
+            )
             if not check("talk_to_attack", bool(ready and len(lines) > mark and first_lease
                                                 and first_lease.npc == npc and resets.get(first_client)),
                          f"lines={len(lines) - mark}, symbol={symbol}, "
                          f"lease={first_lease.control_generation if first_lease else 0}, "
                          f"decisions={first._decisions if first else 0}, "
                          f"fallback={first._fallbacks if first else 0}, "
-                         f"resets={len(resets.get(first_client, []))}"):
+                         f"resets={len(resets.get(first_client, []))}, "
+                         f"unleased_attempts={unleased_attempts}, attacks={len(attacks)}"):
                 snap = await link.snapshot(npc, fresh=True)
                 log.info("neural-talk handoff: roster=%s routine=%s hero_hp=%s summaries=%s",
                          pilot.people.get(npc), (await link.routine(npc)).current,
@@ -209,7 +229,9 @@ async def neural_talk_scenario(
             # Match neural's actual combat loadout once the conversation is over.
             # This watch is still safe while the hero is far and the pilot is idle.
             await _m5b_player_weapon(link, "melee")
-            await link.debug("teleport", near=npc, distance=600)
+            # Match neural's melee start too; this segment tests the handoff and
+            # hero_down, while approaching from outside sword reach is separate.
+            await link.debug("teleport", near=npc, distance=250)
 
             def attacking() -> bool:
                 entry = pilot.people.get(npc)
@@ -246,15 +268,18 @@ async def neural_talk_scenario(
                f"decisions={second._decisions if second else 0}, "
                f"fallback={second._fallbacks if second else 0}, "
                f"resets={len(resets.get(second_client, []))}, "
-               f"independent_client={second_client is not first_client}"):
+               f"independent_client={second_client is not first_client}, "
+               f"distance_cm={pilot.people[npc].distance if npc in pilot.people else None}"):
                 return results
             last_row: dict[str, Any] = {}
 
-            def observe_knockout(packet: dict[str, Any]) -> None:
+            def observe_end(packet: dict[str, Any]) -> None:
                 for row in packet["observations"]:
                     if second_lease is not None and (
                         row["entity_id"], row["session_epoch"], row["world_epoch"]
-                    ) == (second_lease.entity_id, second_lease.session_epoch, second_lease.world_epoch):
+                    ) == (second_lease.entity_id, second_lease.session_epoch, second_lease.world_epoch) and (
+                        row["target"]["entity_id"] == second_lease.target_entity_id
+                    ):
                         own, target = row["self"], row["target"]
                         last_row.update({
                             "game_ms": row["t_game_ms"], "npc_pos": own["position_world_cm"],
@@ -264,57 +289,32 @@ async def neural_talk_scenario(
                         })
 
             down_at = time.monotonic()
-            link.raw_body_listeners.append(observe_knockout)
+            link.raw_body_listeners.append(observe_end)
             try:
                 await link.debug("player_hp", hp=1)
                 await _until(lambda: summary_after(previous) is not None, 35)
             finally:
-                link.raw_body_listeners.remove(observe_knockout)
+                link.raw_body_listeners.remove(observe_end)
             summary = summary_after(previous)
             ended_at = time.monotonic()
             if not ended("fight_to_hero_down", summary, {"hero_down"}, down_at):
-                log.info("neural-talk knockout diagnostics: row=%s decisions=%s",
+                log.info("neural-talk end diagnostics: row=%s decisions=%s",
                          last_row, tuple(second._policy_decisions) if second else ())
                 return results
-            clean, detail = await idle_after(ended_at)
-            if not check("knockout_release", clean, detail):
-                return results
-
-            nearest = float("inf")
-
-            async def native_finished() -> bool:
-                nonlocal nearest
-                snap = await link.snapshot(npc, fresh=True)
-                if snap.player:
-                    nearest = min(nearest, snap.player.distance)
-                entry = pilot.people.get(npc)
-                return bool(entry and entry.activity == "routine" and entry.state != "ZS_ATTACK"
-                            and await routine())
-
-            returned = await _until_async(native_finished, bool, 45)
-            check("knockout_to_routine", returned and nearest <= 400,
-                  f"closest_cm={nearest:.0f}, wait_s={time.monotonic() - ended_at:.3f}, "
-                  f"roster={pilot.people.get(npc)}")
-
-            hero_status: list[int] = []
-
-            async def standing() -> bool:
-                down, dead = await link.story_eval(npc, [
-                    ["call", "NPC_ISINSTATE", ["inst", "HERO"], ["sym", "ZS_UNCONSCIOUS"]],
-                    ["call", "NPC_ISDEAD", ["inst", "HERO"]],
-                ])
-                hero_status[:] = [down, dead]
-                return not down and not dead
-
-            up = await _until_async(standing, bool, 35)
+            down, dead = await link.story_eval(npc, [
+                ["call", "NPC_ISINSTATE", ["inst", "HERO"], ["sym", "ZS_UNCONSCIOUS"]],
+                ["call", "NPC_ISDEAD", ["inst", "HERO"]],
+            ])
             snap = await link.snapshot(npc, fresh=True)
-            check("hero_gets_up", up and snap.player is not None and bool(snap.player.hp),
-                  f"standing={int(up)}, hp={snap.player.hp if snap.player else None}, "
-                  f"unconscious={hero_status[0]}, dead={hero_status[1]}, "
-                  f"wait_s={time.monotonic() - ended_at:.3f}")
+            if not check("bandit_hero_outcome", bool(down or dead),
+                         f"unconscious={down}, dead={dead}, hp={snap.player.hp if snap.player else None}"):
+                return results
+            clean, detail = await idle_after(ended_at)
+            check("bandit_release", clean, detail)
     finally:
         dialogue.llm = original_llm
         link.listeners.remove(heard)
+        dialogue.on_attack.remove(attacked)
     return results
 
 
