@@ -142,6 +142,8 @@ def recipes(mapping=ROOT/'data/content/city-materials.csv', bible=ROOT/'docs/con
             continue
         name = row['class']
         substrate = SUBSTRATES.get(name, name)
+        if texture == 'NW_CITY_HAFEN_HOLZWAND_02.TGA':
+            substrate = 'planks_wall'
         if substrate not in classes:
             raise ValueError(f'{texture}: no numeric substrate for {name}')
         style = classes[substrate]

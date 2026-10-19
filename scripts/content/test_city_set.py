@@ -95,6 +95,21 @@ def test_targets_required_for_import_but_not_for_prompt_preparation(tmp_path):
     assert len(city_set.recipes(mapping, BIBLE, require_target=False)) == 52
 
 
+def test_timber_shutter_wall_uses_wood_numeric_guidance_without_changing_window_intent(tmp_path):
+    mapping = mapping_with_targets(tmp_path)
+    textures = ['NW_CITY_HAFEN_HOLZWAND_02.TGA', 'NW_CITY_WINDOW_03.TGA']
+    rows = {row['replaces'][0]: row for row in city_set.recipes(mapping, BIBLE, textures=textures)}
+    wood, plaster = (rows[texture]['parameters'] for texture in textures)
+    classes, _ = city_set.generate.read_style(BIBLE)
+    assert wood['material_class'] == plaster['material_class'] == 'window_wall_tile'
+    assert wood['numeric_substrate'] == 'planks_wall'
+    assert wood['roughness_range'] == classes['planks_wall']['roughness']
+    assert wood['roughness_base'] == sum(classes['planks_wall']['roughness'])/2
+    assert 'small shuttered opening' in wood['depicts']
+    assert plaster['numeric_substrate'] == 'plaster'
+    assert plaster['roughness_range'] == classes['plaster']['roughness']
+
+
 def test_partial_batch_import_retains_source_and_preserves_other_pending_rows(tmp_path, fast_filter):
     mapping = mapping_with_targets(tmp_path)
     other = 'NW_CITY_WALL_03.TGA'
