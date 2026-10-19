@@ -143,8 +143,12 @@ def content_bytes(root):
 
 
 def download(records, root):
+    # Built-in tool recipes name their provider, not downloadable HF weights.
+    models = {m['id']: m for r in records
+        if not r.get('skip_reason') and r['pipeline'] != 'imagegen-filter' for m in r['models']}
+    if not models:
+        return
     from huggingface_hub import snapshot_download
-    models = {m['id']: m for r in records if not r.get('skip_reason') for m in r['models']}
     for model in models.values():
         if content_bytes(root) > 60_000_000_000:
             raise RuntimeError('60 GB pre-download safety reserve reached (80 GB task limit)')

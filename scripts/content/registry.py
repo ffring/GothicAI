@@ -8,6 +8,8 @@ The registry belongs in git; file paths are relative to the external content
 root. ``generation.outcome`` may be ``pending``, ``complete`` or ``skipped``.
 Skipped entries require a reason, retain their recipe, and have no output files.
 An inaccessible model may have a null revision only in a skipped recipe.
+The built-in image_gen.imagegen tool does not expose a seed or model revision;
+imagegen-filter records retain these values as null instead of inventing them.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ REQUIRED_FIELDS = frozenset({
 SLUG = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*\Z")
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
+BUILTIN_IMAGEGEN_MODEL = "image_gen.imagegen"
 
 
 class RegistryError(ValueError):
@@ -95,7 +98,10 @@ def validate_entry(entry: Any, *, content_root: Path | None = None) -> None:
             raise RegistryError(f"{field}: expected a nonempty string")
     if not isinstance(entry["negative"], str):
         raise RegistryError("negative: expected a string")
-    if type(entry["seed"]) is not int or not 0 <= entry["seed"] < 2**64:
+    imagegen = entry["pipeline"] == "imagegen-filter"
+    if not (imagegen and entry["seed"] is None) and (
+        type(entry["seed"]) is not int or not 0 <= entry["seed"] < 2**64
+    ):
         raise RegistryError("seed: expected an integer from 0 through 2**64-1")
     if not isinstance(entry["parameters"], dict):
         raise RegistryError("parameters: expected an object")
@@ -124,7 +130,8 @@ def validate_entry(entry: Any, *, content_root: Path | None = None) -> None:
         field = f"models[{index}]"
         if not isinstance(model, dict):
             raise RegistryError(f"{field}: expected an object")
-        if not isinstance(model.get("id"), str) or not MODEL_ID.fullmatch(model["id"]):
+        builtin_imagegen = imagegen and model.get("id") == BUILTIN_IMAGEGEN_MODEL
+        if not builtin_imagegen and (not isinstance(model.get("id"), str) or not MODEL_ID.fullmatch(model["id"])):
             raise RegistryError(f"{field}.id: expected a Hugging Face owner/repository identifier")
         if model["id"] in seen_models:
             raise RegistryError(f"{field}.id: duplicate model {model['id']!r}")
@@ -132,7 +139,7 @@ def validate_entry(entry: Any, *, content_root: Path | None = None) -> None:
         if "revision" not in model:
             raise RegistryError(f"{field}.revision: expected a full 40-character commit hash")
         revision = model["revision"]
-        if not (revision is None and outcome == "skipped"):
+        if not (revision is None and (outcome == "skipped" or builtin_imagegen)):
             if not isinstance(revision, str) or not REVISION.fullmatch(revision):
                 raise RegistryError(f"{field}.revision: expected a full 40-character commit hash")
         if not _nonempty(model.get("license")):

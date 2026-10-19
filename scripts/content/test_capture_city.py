@@ -2,9 +2,11 @@
 
 import csv
 import json
+import os
 from pathlib import Path
 import subprocess
 
+from PIL import Image
 import pytest
 
 
@@ -65,10 +67,11 @@ def test_city2_preserves_city_camera_and_captures_house_in_both_lights():
     assert "goto pos 9162 2350 3207" in scenario
 
 
-def test_city2_remote_rejects_other_set_directory():
+@pytest.mark.parametrize("set_name", ["city-2", "city-2-imagegen"])
+def test_city2_remote_rejects_other_set_directory(set_name):
     result = subprocess.run(
         ["bash", str(SCRIPT), "--remote", str(Path.home() / "gothic-ai/city-set-1"),
-         "fixture", "city-2"],
+         "fixture", set_name],
         capture_output=True, text=True,
     )
     assert result.returncode == 2
@@ -85,6 +88,22 @@ def test_capture_rejects_unsafe_set_before_creating_output(tmp_path):
     assert not output.exists()
 
 
+@pytest.mark.parametrize("set_name,flux,reason", [
+    ("city-2-imagegen", False, "requires --flux-root"),
+    ("city-2", True, "--flux-root requires --set city-2-imagegen"),
+])
+def test_flux_root_is_required_only_for_triple_capture(tmp_path, set_name, flux, reason):
+    output = tmp_path / "output"
+    command = ["bash", str(SCRIPT), "--set", set_name, "--content-root", str(tmp_path),
+               "--output", str(output)]
+    if flux:
+        command.extend(["--flux-root", str(tmp_path)])
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 2
+    assert reason in result.stderr
+    assert not output.exists()
+
+
 def fixture_capture(tmp_path, variant="after"):
     directory = tmp_path / variant
     directory.mkdir()
@@ -95,14 +114,14 @@ def fixture_capture(tmp_path, variant="after"):
     (directory / "exit.txt").write_text("0\n")
     (directory / "market.png").write_bytes(b"screenshot fixture")
     (directory / "game.log").write_text(
-        f"materials: {int(variant == 'after')} entries from fixture\n"
+        f"materials: {int(variant != 'before')} entries from fixture\n"
         "[bench] goto MARKT\n[bench] shot market\n[bench] done\n"
     )
     replacement = {"name": "WALL.TGA", "kind": "texture", "opens": 1,
                    "replacement": "/content/after/materials/wall/albedo.dds"}
     original = {"name": "WALL-C.TEX", "kind": "texture", "opens": 1, "source": "Textures.vdf"}
-    census = {"files": [] if variant == "after" else [original],
-              "replacements": [replacement] if variant == "after" else []}
+    census = {"files": [] if variant != "before" else [original],
+              "replacements": [replacement] if variant != "before" else []}
     (directory / "census.json").write_text(json.dumps(census))
     return directory, scenario, index, census, original
 
@@ -114,16 +133,93 @@ def run_check(directory, scenario, index, variant="after"):
     )
 
 
-@pytest.mark.parametrize("variant", ["before", "after"])
+@pytest.mark.parametrize("variant", ["before", "flux", "after"])
 @pytest.mark.parametrize("relative", [False, True])
 def test_census_accepts_original_baseline_and_own_replacement(tmp_path, variant, relative):
     directory, scenario, index, census, _ = fixture_capture(tmp_path, variant)
-    if relative and variant == "after":
+    if relative and variant != "before":
         census["replacements"][0]["replacement"] = "materials/wall/albedo.dds"
         (directory / "census.json").write_text(json.dumps(census))
     result = run_check(directory, scenario, index, variant)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"replaced={int(variant == 'after')} originals_opened={int(variant == 'before')}" in result.stdout
+    assert f"replaced={int(variant != 'before')} originals_opened={int(variant == 'before')}" in result.stdout
+
+
+@pytest.mark.parametrize("set_name,variants,count", [
+    ("city-1", ("before", "after"), 10),
+    ("city-2", ("before", "after"), 8),
+    ("city-2-imagegen", ("before", "flux", "after"), 5),
+])
+def test_composition_preserves_pairs_and_builds_required_triple_columns(tmp_path, set_name, variants, count):
+    captures = tmp_path / "captures"
+    colors = {"before": (200, 20, 20), "flux": (20, 200, 20), "after": (20, 20, 200)}
+    for variant in variants:
+        directory = captures / variant
+        directory.mkdir(parents=True)
+        for spot in ("city", "market", "harbour", "upper", "house", "facade_close", "facade_corner"):
+            for suffix in ("", "_night"):
+                Image.new("RGB", (96, 54), colors[variant]).save(directory / f"{spot}{suffix}.png")
+    output = tmp_path / "boards"
+    result = subprocess.run(["bash", str(SCRIPT), "--compose", str(captures), str(output), set_name],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    boards = list(output.glob("*.jpg"))
+    assert len(boards) == count
+    if set_name == "city-2-imagegen":
+        assert {path.stem for path in boards} == {
+            "facade_close", "facade_close_night", "market", "facade_corner", "harbour"}
+    for path in boards:
+        with Image.open(path) as board:
+            assert board.size == (96 * len(variants), 94)
+            for column, variant in enumerate(variants):
+                pixel = board.getpixel((column * 96 + 48, 65))
+                assert max(abs(actual - expected) for actual, expected in zip(pixel, colors[variant])) < 5
+
+
+@pytest.mark.parametrize("set_name,variants", [
+    ("city-2", ("before", "after")),
+    ("city-2-imagegen", ("before", "flux", "after")),
+])
+def test_remote_dispatch_checks_each_variant_against_its_index(tmp_path, set_name, variants):
+    task = tmp_path / "gothic-ai" / ("city-set-" + set_name.removeprefix("city-"))
+    capture = task / "inputs/fixture"
+    tools = capture / "runtime/tools"
+    tools.mkdir(parents=True)
+    (tools / "capture-city.sh").write_text(SCRIPT.read_text())
+    (tools / "city.bench").write_text("goto MARKT\nshot market\n")
+    for variant in variants:
+        directory = capture / "content" / variant / "materials"
+        directory.mkdir(parents=True)
+        # Distinct map names catch validation against another variant's index.
+        index = {} if variant == "before" else {"WALL.TGA": {"albedo": f"{variant}/albedo.dds"}}
+        (directory / "materials.json").write_text(json.dumps(index))
+    (tools / "run-ryzen.sh").write_text('''#!/usr/bin/env bash
+set -euo pipefail
+python3 - "$1" "$3" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+variant = Path(sys.argv[2]).read_text().split()[0]
+root = Path(sys.argv[1]) / variant
+root.mkdir(parents=True)
+index = json.loads((Path(os.environ['OPENGOTHIC_CONTENT']) / 'materials/materials.json').read_text())
+(root / 'exit.txt').write_text('0')
+(root / 'market.png').write_bytes(b'fixture')
+(root / 'game.log').write_text(f'materials: {len(index)} entries from fixture\\n'
+                               '[bench] goto MARKT\\n[bench] shot market\\n[bench] done\\n')
+original = {'name': 'WALL.TGA', 'kind': 'texture', 'source': 'Textures.vdf', 'opens': 1}
+replacements = [{'name': name, 'kind': 'texture', 'opens': 1,
+                 'replacement': 'materials/' + entry['albedo']} for name, entry in index.items()]
+Path(os.environ['OPENGOTHIC_CENSUS']).write_text(json.dumps({
+    'files': [original] if variant == 'before' else [], 'replacements': replacements}))
+PY
+''')
+    result = subprocess.run(["bash", str(SCRIPT), "--remote", str(task), "fixture", set_name],
+                            capture_output=True, text=True, env={**os.environ, "HOME": str(tmp_path)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [line.split(":", 1)[0] for line in result.stdout.splitlines()] == list(variants)
+    assert {path.name for path in (task / "runs/fixture").iterdir()} == set(variants)
 
 
 def test_census_rejects_compiled_original_alias_even_with_replacement(tmp_path):

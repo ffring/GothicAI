@@ -225,6 +225,28 @@ def test_city2_packs_include_and_facade_with_recorded_antitile(city2_set, tmp_pa
     assert all(entry["antitile_cell"] == 1 for entry in index.values())
 
 
+def test_imagegen_set_packs_mixed_pipelines_with_city2_placement(city2_set, tmp_path):
+    root, records, mapping = city2_set
+    for record in records:
+        record["parameters"]["set"] = "city-2-imagegen"
+    records[1]["pipeline"] = "imagegen-filter"
+    selected = packer.select_set_records(records, "city-2-imagegen", mapping)
+    output = packer.pack_set(selected, root, tmp_path / "city-2-imagegen")
+    index = json.loads((output / "materials/materials.json").read_text())
+    assert set(index) == {record["replaces"][0] for record in records}
+    for record in records:
+        entry = index[record["replaces"][0]]
+        assert entry["scale"] == record["parameters"]["scale"]
+        assert entry["antitile"] == record["parameters"]["antitile"]
+        assert entry["antitile_cell"] == record["parameters"]["antitile_cell"]
+    # The A/B generator is not accepted into the immutable city-2 set.
+    for record in records:
+        record["parameters"]["set"] = "city-2"
+    with pytest.raises(ValueError, match="must be a draft from flux-filter"):
+        packer.select_set_records(records, "city-2", mapping)
+
+
+@pytest.mark.parametrize("set_name", ["city-2", "city-2-imagegen"])
 @pytest.mark.parametrize("field,value,message", [
     ("target_luminance", 0.19, "target_luminance differs"),
     ("target_luminance", float("nan"), "finite and in"),
@@ -232,8 +254,10 @@ def test_city2_packs_include_and_facade_with_recorded_antitile(city2_set, tmp_pa
     ("antitile", "off", "antitile differs"),
     ("antitile_cell", 0, "antitile_cell must be finite and positive"),
 ])
-def test_city2_selection_validates_scalar_target_and_antitile(city2_set, field, value, message):
+def test_city2_selection_validates_scalar_target_and_antitile(city2_set, set_name, field, value, message):
     _, records, mapping = city2_set
+    for record in records:
+        record["parameters"]["set"] = set_name
     records[0]["parameters"][field] = value
     with pytest.raises(ValueError, match=message):
-        packer.select_set_records(records, "city-2", mapping)
+        packer.select_set_records(records, set_name, mapping)

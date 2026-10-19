@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Capture the complete packed city set against an explicitly empty content root.
 # Usage: capture-city.sh --content-root <packed staging root> --output <outside-git directory>
-# Optional: --set city-1|city-2; --mac-city-fps (profiled BIN and GOTHIC_DIR; waits <=40 minutes).
+# Optional: --set city-1|city-2|city-2-imagegen; imagegen needs --flux-root <packed city-2 root>.
+# --mac-city-fps uses profiled BIN and GOTHIC_DIR for city-1/2 (waits <=40 minutes).
 # Ryzen: source-matching cached engine, private ~/gothic-ai/city-set-N runtime, gq.
 # No build, default content installation, model service or engine change is performed.
 set -euo pipefail
@@ -73,7 +74,7 @@ PY
 fi
 
 if [[ "${1:-}" == --check ]]; then
-  python3 - "${2:?capture directory}" "${3:?scenario}" "${4:?material index}" "${5:?before or after}" "${6:-all}" <<'PY'
+  python3 - "${2:?capture directory}" "${3:?scenario}" "${4:?material index}" "${5:?before, flux or after}" "${6:-all}" <<'PY'
 import json
 from pathlib import Path
 import re
@@ -85,7 +86,7 @@ coverage = sys.argv[5]
 def require(ok, reason):
     if not ok:
         raise SystemExit(f'capture-city: {directory.name}: {reason}')
-require(variant in ('before', 'after'), 'unknown variant')
+require(variant in ('before', 'flux', 'after'), 'unknown variant')
 require(coverage in ('all', 'seen'), 'unknown target coverage')
 require((directory / 'exit.txt').read_text().strip() == '0', 'game exit was not zero')
 log = (directory / 'game.log').read_text(errors='replace')
@@ -100,7 +101,7 @@ for command in commands:
 require(not re.search(r'materials: (invalid|unsupported|unable)|\[bench\] (can not|unknown|marvin failed|goto failed)', log),
         'material or benchmark error in game.log')
 expected = json.loads(index.read_text())
-count = len(expected) if variant == 'after' else 0
+count = len(expected) if variant != 'before' else 0
 require(re.search(rf'materials: {count} entries from ', log), f'material index did not load {count} entries')
 events = directory / 'events.jsonl'
 if events.is_file():
@@ -129,7 +130,7 @@ albedos = {texture_key(name): 'materials/' + entry['albedo'].replace('\\', '/').
            for name, entry in expected.items()}
 opened = {texture_key(row['name']) for row in census['files'] if row['kind'] == 'texture'}
 replaced = {texture_key(row['name']) for row in census['replacements'] if row['kind'] == 'texture'}
-if variant == 'after':
+if variant != 'before':
     require(not (targets & opened), 'original target textures opened: ' + ', '.join(sorted(targets & opened)))
     require(bool(targets & replaced), 'no target textures were replaced')
     if coverage == 'all':
@@ -149,39 +150,98 @@ PY
   exit 0
 fi
 
+if [[ "${1:-}" == --compose ]]; then
+  uv run --no-project --with pillow python3 - "${2:?capture directory}" "${3:?output directory}" "${4:?set name}" <<'PY'
+from pathlib import Path
+import sys
+from PIL import Image, ImageDraw, ImageFont
+
+captures, output = map(Path, sys.argv[1:3])
+set_name = sys.argv[3]
+if set_name not in ('city-1', 'city-2', 'city-2-imagegen'):
+    raise SystemExit('unknown material set')
+output.mkdir()
+try:
+    font = ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial.ttf', 22)
+except OSError:
+    font = ImageFont.load_default()
+triple = set_name == 'city-2-imagegen'
+variants = ('before', 'flux', 'after') if triple else ('before', 'after')
+labels = ('original', 'city-2 (FLUX)', 'imagegen') if triple else variants
+if triple:
+    shots = [(spot, suffix, hour) for spot in ('facade_close', 'market', 'facade_corner', 'harbour')
+             for suffix, hour in ((('', '12:00'), ('_night', '23:00'))
+                                  if spot == 'facade_close' else (('', '12:00'),))]
+else:
+    spots = ('city', 'market', 'harbour', 'upper', 'house') if set_name == 'city-1' else (
+        'city', 'harbour', 'market', 'facade_close', 'facade_corner')
+    shots = [(spot, suffix, hour) for spot in spots
+             for suffix, hour in ((('', '12:00'),) if set_name == 'city-2' and spot in ('city', 'harbour')
+                                  else (('', '12:00'), ('_night', '23:00')))]
+for spot, suffix, hour in shots:
+    images = []
+    for variant in variants:
+        with Image.open(captures / variant / f'{spot}{suffix}.png') as source:
+            image = source.convert('RGB')
+            image.thumbnail((768, 432), Image.Resampling.LANCZOS)
+            images.append(image)
+    width, height = max(i.width for i in images), max(i.height for i in images)
+    board = Image.new('RGB', (len(variants) * width, height + 40), '#17191b')
+    draw = ImageDraw.Draw(board)
+    for position, (label, image) in enumerate(zip(labels, images)):
+        board.paste(image, (position * width, 40))
+        draw.text((position * width + 12, 8), f'{spot} {hour} | {label}', font=font, fill='white')
+    board.save(output / f'{spot}{suffix}.jpg', quality=88, optimize=True)
+print(f'{len(shots)} {"original/FLUX/imagegen JPG triples" if triple else "before/after JPG pairs"}: {output}')
+PY
+  exit 0
+fi
+
 if [[ "${1:-}" == --remote ]]; then
   TASK="${2:?remote task directory}"; RUN="${3:?run id}"; SET="${4:-city-1}"
-  [[ "$SET" == city-1 || "$SET" == city-2 ]] || exit 2
+  [[ "$SET" == city-1 || "$SET" == city-2 || "$SET" == city-2-imagegen ]] || exit 2
   [[ "$TASK" == "$HOME/gothic-ai/city-set-${SET#city-}" && "$RUN" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
   CAPTURE="$TASK/inputs/$RUN"
   export CITY_CAPTURE_ROOT="$CAPTURE/runtime"
   OUT="$TASK/runs/$RUN"
   mkdir -p "$OUT"
-  for variant in before after; do
+  VARIANTS=(before after)
+  [[ "$SET" != city-2-imagegen ]] || VARIANTS=(before flux after)
+  for variant in "${VARIANTS[@]}"; do
     printf '%s\t\t\n' "$variant" >"$CAPTURE/config.tsv"
     OPENGOTHIC_CONTENT="$CAPTURE/content/$variant" OPENGOTHIC_CENSUS="$OUT/$variant/census.json" \
       GAME_TIMEOUT="${GAME_TIMEOUT:-420}" \
       bash "$CITY_CAPTURE_ROOT/tools/run-ryzen.sh" "$OUT" "$CITY_CAPTURE_ROOT/tools/city.bench" "$CAPTURE/config.tsv"
+    index_variant="$variant"
+    [[ "$variant" != before ]] || index_variant=after
     bash "$CITY_CAPTURE_ROOT/tools/capture-city.sh" --check "$OUT/$variant" \
-      "$CITY_CAPTURE_ROOT/tools/city.bench" "$CAPTURE/content/after/materials/materials.json" "$variant"
+      "$CITY_CAPTURE_ROOT/tools/city.bench" "$CAPTURE/content/$index_variant/materials/materials.json" "$variant"
   done
   exit 0
 fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HOST="${RYZEN_HOST:-ryzen}"
-CONTENT=''; OUT=''; MAC=0; SET=city-1
+CONTENT=''; FLUX=''; OUT=''; MAC=0; SET=city-1
 while (( $# )); do
   case "$1" in
     --content-root) CONTENT="${2:?--content-root needs a directory}"; shift 2 ;;
+    --flux-root) FLUX="${2:?--flux-root needs a directory}"; shift 2 ;;
     --output) OUT="${2:?--output needs a directory}"; shift 2 ;;
-    --set) SET="${2:?--set needs city-1 or city-2}"; shift 2 ;;
+    --set) SET="${2:?--set needs city-1, city-2 or city-2-imagegen}"; shift 2 ;;
     --mac-city-fps) MAC=1; shift ;;
     -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ "$SET" == city-1 || "$SET" == city-2 ]] || { echo '--set must be city-1 or city-2' >&2; exit 2; }
+[[ "$SET" == city-1 || "$SET" == city-2 || "$SET" == city-2-imagegen ]] || { echo '--set must be city-1 or city-2 or city-2-imagegen' >&2; exit 2; }
+if [[ "$SET" == city-2-imagegen ]]; then
+  [[ -n "$FLUX" && -d "$FLUX" ]] || { echo 'city-2-imagegen requires --flux-root with packed city-2 content' >&2; exit 2; }
+  [[ "$MAC" == 0 ]] || { echo 'city-2-imagegen capture runs on Ryzen; omit --mac-city-fps' >&2; exit 2; }
+  FLUX="$(cd "$FLUX" && pwd -P)"
+else
+  [[ -z "$FLUX" ]] || { echo '--flux-root requires --set city-2-imagegen' >&2; exit 2; }
+fi
 [[ -n "$CONTENT" && -n "$OUT" ]] || { echo 'need --content-root and --output' >&2; exit 2; }
 [[ -d "$CONTENT" ]] || { echo 'content root does not exist' >&2; exit 2; }
 CONTENT="$(cd "$CONTENT" && pwd -P)"
@@ -192,32 +252,42 @@ STAGING="$(mktemp -d "$OUT/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXXXX")"
 RUN="${STAGING##*/}"
 mkdir -p "$STAGING/content/before/materials" "$STAGING/content/after/materials" "$STAGING/tools"
 printf '{}\n' >"$STAGING/content/before/materials/materials.json"
-# Copy only maps named by this already-packed index; never read original game images.
-python3 - "$CONTENT/materials" "$STAGING/content/after/materials" <<'PY'
+# Copy only maps named by already-packed indices; never read original game images.
+COPY_ARGS=("$CONTENT/materials" "$STAGING/content/after/materials")
+if [[ "$SET" == city-2-imagegen ]]; then
+  mkdir -p "$STAGING/content/flux/materials"
+  COPY_ARGS+=("$FLUX/materials" "$STAGING/content/flux/materials")
+fi
+python3 - "${COPY_ARGS[@]}" <<'PY'
 import json
 from pathlib import Path
 import shutil
 import sys
-source, target = map(Path, sys.argv[1:])
-index = json.loads((source / 'materials.json').read_text())
-if not isinstance(index, dict) or not index:
-    raise SystemExit('packed materials.json must be a nonempty object')
-for name, entry in index.items():
-    if not isinstance(name, str) or not name.upper().endswith('.TGA') or not isinstance(entry, dict):
-        raise SystemExit(f'invalid packed material: {name}')
-    for channel in ('albedo', 'normal', 'orm'):
-        value = entry.get(channel)
-        if not isinstance(value, str) or not value:
-            raise SystemExit(f'{name}: missing {channel}')
-        relative = Path(value)
-        path = (source / relative).resolve()
-        if relative.is_absolute() or '..' in relative.parts or not path.is_relative_to(source.resolve()) or path.suffix.lower() != '.dds':
-            raise SystemExit(f'unsafe DDS path: {value}')
-        destination = target / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, destination)
-shutil.copy2(source / 'materials.json', target / 'materials.json')
-print(f'Packed city set: {len(index)} materials')
+arguments = list(map(Path, sys.argv[1:]))
+indices = []
+for source, target in zip(arguments[::2], arguments[1::2]):
+    index = json.loads((source / 'materials.json').read_text())
+    if not isinstance(index, dict) or not index:
+        raise SystemExit('packed materials.json must be a nonempty object')
+    if indices and index.keys() != indices[0].keys():
+        raise SystemExit('FLUX and imagegen sets must replace the same textures')
+    indices.append(index)
+    for name, entry in index.items():
+        if not isinstance(name, str) or not name.upper().endswith('.TGA') or not isinstance(entry, dict):
+            raise SystemExit(f'invalid packed material: {name}')
+        for channel in ('albedo', 'normal', 'orm'):
+            value = entry.get(channel)
+            if not isinstance(value, str) or not value:
+                raise SystemExit(f'{name}: missing {channel}')
+            relative = Path(value)
+            path = (source / relative).resolve()
+            if relative.is_absolute() or '..' in relative.parts or not path.is_relative_to(source.resolve()) or path.suffix.lower() != '.dds':
+                raise SystemExit(f'unsafe DDS path: {value}')
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, destination)
+    shutil.copy2(source / 'materials.json', target / 'materials.json')
+    print(f'Packed city set: {len(index)} materials ({source.parent.name})')
 PY
 if [[ -z "${SAVE:-}" ]]; then
   COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
@@ -227,7 +297,7 @@ fi
 cp "$SAVE" "$STAGING/save_slot_1.sav"
 TOOLS="$ROOT/reports/render-features/2026-10-18/tools"
 SCENARIO="$ROOT/scripts/content/city.bench"
-[[ "$SET" != city-2 || "$MAC" == 1 ]] || SCENARIO="$ROOT/scripts/content/city-2.bench"
+[[ "$SET" == city-1 || "$MAC" == 1 ]] || SCENARIO="$ROOT/scripts/content/city-2.bench"
 cp "$SCENARIO" "$STAGING/tools/city.bench"
 cp "$ROOT/scripts/content/capture-city.sh" "$STAGING/tools/"
 cp "$TOOLS/analyze.py" "$TOOLS/discard-ffmpeg.sh" "$STAGING/tools/"
@@ -313,7 +383,7 @@ printf -v REMOTE_ARGS '%q %q %q %q' "$TASK" "$DIGEST" "$RUN" "$SET"
 ssh -T "$HOST" "bash -s -- $REMOTE_ARGS" <<'SH'
 set -euo pipefail
 task="$1"; digest="$2"; run="$3"; set_name="$4"
-[[ "$set_name" == city-1 || "$set_name" == city-2 ]]
+[[ "$set_name" == city-1 || "$set_name" == city-2 || "$set_name" == city-2-imagegen ]]
 [[ "$task" == "$HOME/gothic-ai/city-set-${set_name#city-}" && "$digest" =~ ^[a-f0-9]{64}$ && "$run" =~ ^[a-zA-Z0-9_-]+$ ]]
 df -h "$HOME"
 bin="$HOME/gothic-ai/engine-cache/$digest/Gothic2Notr"
@@ -338,49 +408,18 @@ set +e
 GQ_OWNER="$TASK_NAME" "$ROOT/scripts/gq" --host "$HOST" run \
   --class quick --threads 4 --mem 5G --gpu-mem 4G --display --display-exclusive \
   --max "${CITY_CAPTURE_MAX:-20m}" --wait-max "${RYZEN_LOCK_WAIT:-900}" \
-  --name "$SET before-after captures" -- \
+  --name "$SET captures" -- \
   bash "$RUNTIME/tools/capture-city.sh" --remote "$TASK" "$RUN" "$SET" 2>&1 | tee "$STAGING/capture.log"
 rc="${PIPESTATUS[0]}"
 set -e
 rsync -a -- "$HOST:$TASK/runs/$RUN/" "$STAGING/captures/" || { [[ "$rc" != 0 ]] || rc=1; }
 if [[ "$rc" == 0 ]]; then
   SPOTS=(city market harbour upper house)
-  [[ "$SET" != city-2 ]] || SPOTS=(city)
+  [[ "$SET" == city-1 ]] || SPOTS=(city)
   python3 "$STAGING/tools/analyze.py" "$STAGING/captures" "${SPOTS[@]}"
-  uv run --no-project --with pillow python3 - "$STAGING/captures" "$STAGING/pairs" "$SET" <<'PY'
-from pathlib import Path
-import sys
-from PIL import Image, ImageDraw, ImageFont
-captures, output = map(Path, sys.argv[1:3])
-output.mkdir()
-try:
-    font = ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial.ttf', 22)
-except OSError:
-    font = ImageFont.load_default()
-spots = ('city', 'market', 'harbour', 'upper', 'house') if sys.argv[3] == 'city-1' else (
-    'city', 'harbour', 'market', 'facade_close', 'facade_corner')
-count = 0
-for spot in spots:
-    times = (('', '12:00'), ('_night', '23:00'))
-    if sys.argv[3] == 'city-2' and spot in ('city', 'harbour'):
-        times = times[:1]
-    for suffix, hour in times:
-        images = []
-        for variant in ('before', 'after'):
-            with Image.open(captures / variant / f'{spot}{suffix}.png') as source:
-                image = source.convert('RGB')
-                image.thumbnail((768, 432), Image.Resampling.LANCZOS)
-                images.append(image)
-        width, height = max(i.width for i in images), max(i.height for i in images)
-        pair = Image.new('RGB', (2 * width, height + 40), '#17191b')
-        draw = ImageDraw.Draw(pair)
-        for position, (variant, image) in enumerate(zip(('before', 'after'), images)):
-            pair.paste(image, (position * width, 40))
-            draw.text((position * width + 12, 8), f'{spot} {hour} | {variant}', font=font, fill='white')
-        pair.save(output / f'{spot}{suffix}.jpg', quality=88, optimize=True)
-        count += 1
-print(f'{count} before/after JPG pairs: {output}')
-PY
+  BOARDS=pairs
+  [[ "$SET" != city-2-imagegen ]] || BOARDS=triples
+  bash "$STAGING/tools/capture-city.sh" --compose "$STAGING/captures" "$STAGING/$BOARDS" "$SET"
 fi
 printf 'City capture output: %s\n' "$STAGING"
 exit "$rc"

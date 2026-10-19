@@ -36,14 +36,14 @@ import sys
 import numpy as np
 from PIL import Image
 
-from pilot import antitile_mode, selected_rows
+from pilot import antitile_mode, CITY_2_SETS, selected_rows
 
 
 TARGETS = {
     "cobblestone": "NW_MISC_OLDSTONEPATH_01.TGA",
     "stone-wall": "NW_CITY_WALL_03.TGA",
 }
-PIPELINES = ("flux-marigold", "flux-filter", "sdxl-marigold", "sdxl-filter", "stablematerials")
+PIPELINES = ("flux-marigold", "flux-filter", "imagegen-filter", "sdxl-marigold", "sdxl-filter", "stablematerials")
 MAPS = ("albedo", "normal", "ao", "roughness", "metallic")
 NORMAL_Z_EPSILON = 1e-6
 DEFAULT_MAPPING = Path(__file__).resolve().parents[2] / "data/content/city-materials.csv"
@@ -59,7 +59,7 @@ def staging_output(path: Path) -> Path:
 
 
 def select_set_records(records: list[dict], set_name: str, mapping: Path) -> list[dict]:
-    """Select exactly one completed FLUX/filter draft per included texture.
+    """Select exactly one completed supported filter draft per included texture.
 
     Attempts explicitly marked selected=false are retained only in the registry.
     A duplicate completed selection is an error, so registry ordering cannot
@@ -87,8 +87,9 @@ def select_set_records(records: list[dict], set_name: str, mapping: Path) -> lis
         resource_id = record.get("id")
         if not isinstance(resource_id, str) or re.fullmatch(r"[a-z0-9][a-z0-9_-]*", resource_id) is None:
             raise ValueError(f"unsafe resource id: {resource_id!r}")
-        if record.get("pipeline") != "flux-filter" or record.get("status") != "draft":
-            raise ValueError(f"{resource_id}: set material must be a draft from flux-filter")
+        pipelines = ("flux-filter", "imagegen-filter") if set_name == "city-2-imagegen" else ("flux-filter",)
+        if record.get("pipeline") not in pipelines or record.get("status") != "draft":
+            raise ValueError(f"{resource_id}: set material must be a draft from {' or '.join(pipelines)}")
         replaces = record.get("replaces")
         if not isinstance(replaces, list) or len(replaces) != 1 or not isinstance(replaces[0], str):
             raise ValueError(f"{resource_id}: set material must replace exactly one texture")
@@ -105,7 +106,7 @@ def select_set_records(records: list[dict], set_name: str, mapping: Path) -> lis
             raise ValueError(f"{resource_id}: scale differs from mapping for {texture}")
         if params.get("material_class") != row["class"]:
             raise ValueError(f"{resource_id}: material_class differs from mapping for {texture}")
-        if set_name == "city-2":
+        if set_name in CITY_2_SETS:
             target = params.get("target_luminance")
             if (isinstance(target, bool) or not isinstance(target, (int, float))
                     or not math.isfinite(target) or not 0 <= target <= 1):
@@ -221,7 +222,7 @@ def pack_set(records: list[dict], content_root: Path, output: Path) -> Path:
         write_dds(directory / "orm.dds", np.stack((maps["ao"], maps["roughness"], maps["metallic"]), axis=2))
         entry = {name: f"{resource_id}/{name}.dds" for name in ("albedo", "normal", "orm")}
         entry["scale"] = record["parameters"]["scale"]
-        if record["parameters"].get("set") == "city-2":
+        if record["parameters"].get("set") in CITY_2_SETS:
             entry["antitile"] = record["parameters"]["antitile"]
             entry["antitile_cell"] = record["parameters"].get("antitile_cell", 1.0)
         index[record["replaces"][0]] = entry
