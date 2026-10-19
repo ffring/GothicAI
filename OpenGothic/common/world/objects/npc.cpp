@@ -6333,6 +6333,8 @@ bool Npc::canWitnessDeed(const Npc& culprit, const Npc* victim, PercType perc) c
   gates.culprit = this==&culprit;
   gates.victim = this==victim;
   gates.player = isPlayer();
+  gates.guild = guild();
+  gates.perceptionEnabled = hasPerc(perc);
   gates.down = isDown();
   gates.lying = isLie();
   gates.simulated = processPolicy()==NpcProcessPolicy::AiNormal;
@@ -6343,7 +6345,10 @@ bool Npc::canWitnessDeed(const Npc& culprit, const Npc* victim, PercType perc) c
   // this culprit may still see a fresh deed against somebody else.
   gates.foreignFight = DeedWitness::foreignCombat(isAttack(),currentTarget==&culprit);
   gates.range = perceptionRange(perc);
-  gates.distanceSquared = qDistTo(culprit);
+  // Native ASSESSOTHERSDAMAGE is sent by the damaged body (PerceptionMsg::self),
+  // so delivery measures range from the victim, while OTHER names the culprit.
+  gates.distanceSquared = perc==PERC_ASSESSOTHERSDAMAGE && victim!=nullptr ?
+                          qDistTo(*victim) : qDistTo(culprit);
   return gates.admitted() && canSeeNpc(culprit,false);
   }
 

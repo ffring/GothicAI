@@ -23,6 +23,7 @@ from .storyguard import StoryGuard, asleep
 
 log = logging.getLogger(__name__)
 ACTION_SECONDS = 5.0
+HUMAN_GUILD_LIMIT = 16  # Npc::isHuman(): guild < GIL_SEPERATOR_HUM
 
 
 class NpcCrimes:
@@ -72,6 +73,35 @@ class NpcCrimes:
             if f.get("npc") == npc.upper()
         }
         return [f for f in self.facts() if f.get("id") in ids]
+
+    def _human(self, npc: str, guild: int | None = None) -> bool | None:
+        if guild is None and self.crimes is not None:
+            guild = self.crimes.people.get(npc.upper(), {}).get("guild")
+        if guild is None:
+            entry = self.roster.get(npc.upper())
+            if entry is not None and "guild" in entry.model_fields_set:
+                guild = entry.guild
+        return guild < HUMAN_GUILD_LIMIT if type(guild) is int and guild >= 0 else None
+
+    async def _human_witness(self, npc: str) -> bool:
+        """The live guild proves a speaker is human; unknown or unavailable metadata never speaks."""
+        if (human := self._human(npc)) is not None:
+            return human
+        generation = self._generation
+        try:
+            values = await self.link.story_eval(npc, [["field", ["inst", "SELF"], "GUILD"]])
+        except (GameError, TimeoutError, ConnectionError):
+            return False
+        if (
+            generation != self._generation or len(values) != 1
+            or type(values[0]) is not int or values[0] < 0
+        ):
+            return False
+        if self.crimes is not None:
+            self.crimes.people[npc.upper()] = {
+                **self.crimes.people.get(npc.upper(), {}), "guild": values[0],
+            }
+        return values[0] < HUMAN_GUILD_LIMIT
 
     async def check_command(self, npc: str, action: str, args: Mapping[str, Any]) -> str | None:
         """Called before sending even a raw npc_act command; a refusal changes no world state."""
@@ -147,11 +177,14 @@ class NpcCrimes:
             kind = "attack"
         else:
             return None
+        metadata = {crimes._npc(person.npc): person for person in deed.witnesses_metadata}
         witnesses = list(dict.fromkeys(
             npc for raw in deed.witnesses if raw
             if (npc := crimes._npc(raw)) not in {culprit, crimes._npc(deed.victim), *HERO}
+            # Old snapshots can omit metadata: keep the bridge's observation but prove the live
+            # guild before allowing a voice or a body reaction. Current bridges supply every guild.
+            if self._human(npc, metadata[npc].guild if npc in metadata else None) is not False
         ))
-        metadata = {crimes._npc(person.npc): person for person in deed.witnesses_metadata}
         for npc, person in metadata.items():
             crimes.people[npc] = {
                 **crimes.people.get(npc, {}), "guild": person.guild, "npctype": person.npctype,
@@ -216,6 +249,8 @@ class NpcCrimes:
         return entry is None or (entry.activity == "routine" and not asleep(entry.state))
 
     async def _act(self, npc: str, action: str, /, **args: Any) -> str:
+        if (action == "say_svm" or args.get("svm")) and not await self._human_witness(npc):
+            raise GameError(f"not a human speaker: {npc}")
         if not self._free(npc):
             raise GameError(f"busy: {npc}")
         async with asyncio.timeout(ACTION_SECONDS):
@@ -253,7 +288,7 @@ class NpcCrimes:
         for witness in crime["witnesses"]:
             if generation != self._generation or not self.enabled:
                 return
-            if witness in fighters or not self._free(witness):
+            if witness in fighters or not self._free(witness) or not await self._human_witness(witness):
                 continue
             try:
                 card = self.cards.get(witness)
@@ -333,7 +368,7 @@ class NpcCrimes:
             return
         self.chronicle.record({
             "fact": "npc_crime_reaction", "crime": crime["id"], "npc": npc,
-            "reaction": "fight", "role": role,
+            "reaction": "fight", "role": role, "act": action_id,
         })
         self._track_reclaim(crime, npc, generation, action_id)
 
@@ -350,11 +385,14 @@ class NpcCrimes:
         self._spawn(self._reclaim(crime, fighter, generation, action_id))
 
     async def _reclaim(self, crime: Fact, fighter: str, generation: int, action_id: str = "") -> None:
-        deadline, fighting = self.clock() + RECLAIM_SECONDS, False
+        deadline = self.clock() + RECLAIM_SECONDS  # native scoped timeout is 120s; allow receipt reserve
+        fighting = False
+        outcome, reason, returned = "timeout", "deadline", 0
         culprit = ["inst", crime["culprit"]]
         try:
             while generation == self._generation and self.clock() < deadline:
                 if (generation, crime["id"]) in self._restitution_started:
+                    outcome, reason = "resolved_elsewhere", "another_defender"
                     return
                 values = await self.link.story_eval(fighter, [
                     ["call", "NPC_ISINSTATE", culprit, ["sym", "ZS_UNCONSCIOUS"]],
@@ -363,25 +401,52 @@ class NpcCrimes:
                     ["call", "NPC_HASITEMS", culprit, ["sym", crime["item"]]],
                     ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_ATTACK"]],
                     ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_RANSACKBODY"]],
+                    ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_UNCONSCIOUS"]],
                 ])
                 if (
-                    generation != self._generation or len(values) != 6
+                    generation != self._generation or len(values) != 7
                     or any(type(v) is not int for v in values)
                 ):
+                    outcome, reason = "unavailable", "invalid_vm_result"
                     return
-                unconscious, culprit_dead, fighter_dead, count, attacking, ransacking = values
-                if culprit_dead or fighter_dead:
+                unconscious, culprit_dead, fighter_dead, count, attacking, ransacking, fighter_down = values
+                if fighter_dead:
+                    outcome, reason = "defender_dead", "native_death"
+                    return
+                if fighter_down:
+                    outcome, reason = "defender_down", "native_unconsciousness"
+                    return
+                if culprit_dead:
+                    outcome, reason = "culprit_dead", "native_death"
                     return
                 completed = self._completed.get(action_id)
-                if completed is not None and (
-                    completed.npc.upper() != fighter.upper() or completed.reason != "done"
-                ):
-                    return
+                if completed is not None:
+                    if completed.npc.upper() != fighter.upper():
+                        outcome, reason = "ended", "foreign_receipt"
+                        return
+                    if completed.detail == "defender_dead":
+                        outcome, reason = "defender_dead", "native_death"
+                        return
+                    if completed.detail == "defender_down":
+                        outcome, reason = "defender_down", "native_unconsciousness"
+                        return
+                    if completed.detail == "target_dead":
+                        outcome, reason = "culprit_dead", "native_death"
+                        return
+                    if completed.reason != "done":
+                        outcome = "timeout" if completed.reason == "timeout" else "ended"
+                        reason = completed.reason or "unknown_action_outcome"
+                        return
                 # The bridge ends this scoped nonlethal action on the knockout itself. Its receipt
                 # proves the tracked fight ended even when ZS_ATTACK is already gone at this poll.
-                if unconscious and (attacking or ransacking or completed is not None):
+                native_knockout = completed is not None and completed.detail == "target_down"
+                if (unconscious or native_knockout) and (attacking or ransacking or completed is not None):
                     amount = min(int(crime["count"]), count)
-                    if amount <= 0 or (generation, crime["id"]) in self._restitution_started:
+                    if amount <= 0:
+                        outcome, reason = "no_goods", "stolen_item_missing"
+                        return
+                    if (generation, crime["id"]) in self._restitution_started:
+                        outcome, reason = "resolved_elsewhere", "another_defender"
                         return
                     self._restitution_started.add((generation, crime["id"]))
                     await self.link.story_effect(crime["culprit"], [{
@@ -394,12 +459,38 @@ class NpcCrimes:
                             "npc": crime["owner"], "culprit": crime["culprit"], "fighter": fighter,
                             "item": crime["item"], "count": amount, "how": "defeated_thief",
                         })
+                    outcome, reason, returned = "reclaimed", "defeated_thief", amount
                     return
                 if completed is not None or (fighting and not attacking):
+                    outcome, reason = "ended", completed.reason if completed else "left_attack_state"
                     return
                 fighting = fighting or bool(attacking)
                 await asyncio.sleep(0.25)
         except (GameError, TimeoutError, ConnectionError) as error:
-            log.debug("NPC stolen goods %s: %s", crime["id"], error)
+            outcome, reason = "unavailable", "game_unavailable"
+            log.warning(
+                "NPC stolen goods %s (fighter %s, act %s): %s: %s",
+                crime["id"], fighter, action_id, type(error).__name__, error,
+            )
+        except asyncio.CancelledError:
+            outcome = ""
+            raise
         finally:
             self._reclaiming.discard((generation, crime["id"], fighter))
+            if outcome and generation == self._generation:
+                self._defense_finished(crime, fighter, action_id, outcome, reason, returned)
+
+    def _defense_finished(
+        self, crime: Fact, fighter: str, action_id: str, outcome: str, reason: str, returned: int,
+    ) -> None:
+        """A terminal result is evidence about this defense, never evidence or a penalty for the hero."""
+        if any(
+            f.get("crime") == crime["id"] and f.get("fighter") == fighter and f.get("act") == action_id
+            for f in self.chronicle.facts("npc_crime_defense")
+        ):
+            return
+        self.chronicle.record({
+            "fact": "npc_crime_defense", "crime": crime["id"], "culprit": crime["culprit"],
+            "fighter": fighter, "act": action_id, "outcome": outcome, "reason": reason,
+            "item": crime["item"], "count": crime["count"], "returned": returned,
+        })

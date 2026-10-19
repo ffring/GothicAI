@@ -155,6 +155,7 @@ async def prepare_npc_pose(
     to: str | None = None,
     distance: int = 300,
     require_perception_ready: bool = True,
+    perception: Literal["theft", "others_damage"] = "theft",
     timeout: float = 15,
 ) -> tuple[bool, dict[str, Any]]:
     """Place a free, standing actor and wait for its native state, perception and pose.
@@ -178,7 +179,7 @@ async def prepare_npc_pose(
         return (
             view is not None
             and view.state == "ZS_STAND_WP"
-            and (not require_perception_ready or view.theft_ready is True)
+            and (not require_perception_ready or getattr(view, f"{perception}_ready") is True)
             and view.body == "stand"
             and (not unarmed or view.weapon == "none")
             and view.hp > 0
@@ -227,30 +228,44 @@ async def wait_npc_visibility(
     target: str,
     *,
     distance: float = 1500,
+    perception: Literal["theft", "others_damage"] = "theft",
+    state: str = "ZS_STAND_WP",
+    bodies: Collection[str] = ("stand",),
+    range_target: str | None = None,
     timeout: float = 5,
 ) -> tuple[bool, dict[str, Any]]:
-    """Prove a standing witness's real native sight and perception range before a physical deed."""
-    detail: dict[str, Any] = {"witness": witness, "target": target}
+    """Prove native sight, state and the deed's actual perception anchor without changing a callback."""
+    anchor = range_target or target
+    detail: dict[str, Any] = {
+        "witness": witness, "target": target, "perception": perception,
+        "expected_state": state, "range_target": anchor,
+    }
 
     async def ready() -> bool:
-        seen, actual, senses_range = await link.story_eval(witness, [
+        seen, actual, senses_range, anchor_distance = await link.story_eval(witness, [
             ["call", "NPC_CANSEENPC", ["inst", "SELF"], ["inst", target]],
             ["call", "NPC_GETDISTTONPC", ["inst", "SELF"], ["inst", target]],
             ["field", ["inst", "SELF"], "SENSES_RANGE"],
+            ["call", "NPC_GETDISTTONPC", ["inst", "SELF"], ["inst", anchor]],
         ])
         views = await link.npc_view([witness])
         view = views[0] if views else None
+        native_range = (
+            view.others_damage_range if view is not None and perception == "others_damage" else senses_range
+        )
         detail.update(
-            seen=seen, distance=actual, senses_range=senses_range,
+            seen=seen, distance=actual, senses_range=senses_range, perception_range=native_range,
+            anchor_distance=anchor_distance,
             view=view.model_dump() if view is not None else None,
         )
         return (
             bool(seen)
             and actual <= min(distance, senses_range)
+            and native_range is not None and anchor_distance <= native_range
             and view is not None
-            and view.state == "ZS_STAND_WP"
-            and view.theft_ready is True
-            and view.body == "stand"
+            and view.state == state
+            and getattr(view, f"{perception}_ready") is True
+            and view.body in bodies
             and view.weapon == "none"
         )
 

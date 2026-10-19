@@ -14,6 +14,7 @@
 #include "game/gamescript.h"
 #include "game/herodeed.h"
 #include "game/inventory.h"
+#include "gothic.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicsnoise.h"
 #include "testbench.h"
@@ -933,19 +934,30 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
     bool        done   = false;
     std::string reason = "done";
     std::string detail;
+    Npc* fightTarget = r.nonlethal ? world.findNpcByInstance(r.fightTarget) : nullptr;
+    const auto stopScopedFight = [&] {
+      // A terminal receipt belongs to this command only. Native retargeting or
+      // a later owner must keep its state and queues; unconscious bodies keep
+      // their own native recovery state too.
+      if(gone || !r.nonlethal || fightTarget==nullptr || !npc->isInState(r.state) ||
+         npc->target()!=fightTarget)
+        return false;
+      npc->clearAiQueue();
+      npc->clearState(true);
+      npc->setTarget(nullptr);
+      npc->resumeAiRoutine();
+      return true;
+      };
     if(!gone && r.theft.active && now>r.start+ActGraceMs) {
       const auto progress = NpcSteal::tick(world,*npc,r.theft,detail);
       done = progress!=NpcSteal::Progress::Running;
       if(progress==NpcSteal::Progress::Failed) reason = "failed";
       }
-    else if(!gone && r.nonlethal && world.findNpcByInstance(r.fightTarget)!=nullptr &&
-            world.findNpcByInstance(r.fightTarget)->isDown()) {
+    else if(!gone && fightTarget!=nullptr && fightTarget->isDown()) {
       // AR_NONE never requests finishing. Stop the command at the actual
       // knockout as well, before ZS_ATTACK can queue any post-combat action.
-      npc->clearAiQueue();
-      npc->clearState(true);
-      npc->setTarget(nullptr);
-      npc->resumeAiRoutine();
+      stopScopedFight();
+      detail = fightTarget->isDead() ? "target_dead" : "target_down";
       done = true;
       }
     else if(!gone && r.investigate) {
@@ -974,12 +986,33 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
       ++i;
       continue;
       }
+    if(!done && late && stopScopedFight()) {
+      // ZS_ATTACK_LOOP keeps counterattacking a nearby standing target even
+      // after that target leaves combat. End only this pair's native response;
+      // another server action, owner or state has priority over our old run.
+      const bool otherRun = std::any_of(running.begin(),running.end(),[&](const Running& other) {
+        return other.instance==r.fightTarget;
+        });
+      if(!otherRun && !fightTarget->isDown() && !fightTarget->isLie() &&
+         !BodyController::owns(*fightTarget) && !fightTarget->isExternalControl() &&
+         owner(npcId(world,*fightTarget)).empty() && !fightTarget->isTalk() &&
+         !Gothic::inst().isNpcInDialog(*fightTarget) && fightTarget->isInState(r.state) &&
+         fightTarget->target()==npc) {
+        fightTarget->clearAiQueue();
+        fightTarget->clearState(true);
+        fightTarget->setTarget(nullptr);
+        fightTarget->resumeAiRoutine();
+        }
+      }
     if(npc!=nullptr) {
       NpcSteal::finish(*npc,r.theft);
       if(r.deed) npc->clearServerDeed();
       }
-    if(gone)
-      reason = "gone"; else
+    if(gone) {
+      reason = "gone";
+      if(r.nonlethal && npc!=nullptr && npc->isDown())
+        detail = npc->isDead() ? "defender_dead" : "defender_down";
+      } else
     if(!done)
       reason = "timeout"; else
     if(r.giveTo!=size_t(-1)) {

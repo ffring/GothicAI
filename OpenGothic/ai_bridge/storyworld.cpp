@@ -228,7 +228,7 @@ bool StoryWorld::effects(World& world, const rapidjson::Value& msg, std::string&
     int64_t                                       lp = 0;
     for(auto& e : list) {
       if(e.kind=="give")
-        need[{!e.toHero,e.item}] += e.count;
+        need[{!e.toHero && !e.toNpc,e.item}] += e.count;
       else if(e.kind=="create")
         made[e.item] += e.count;
       else if(e.kind=="teach") {

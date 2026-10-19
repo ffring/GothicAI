@@ -37,6 +37,7 @@ MALETH = "BAU_954_MALETH"
 HOUSE, WITNESS = "NW_FARM1_INHOUSE_01", "NW_FARM1_INHOUSE_02"
 ROAD, RETURN_ROAD = "NW_FARM1_PATH_04", "NW_FARM1_PATH_03"
 CUP, CHEST = "ITMI_SILVERCUP", "CHEST_LOBART"
+ATTACK_WITNESS = LOBART
 
 
 async def npc_deeds(
@@ -60,8 +61,27 @@ async def npc_deeds(
     original_gate, original_stage = rumors.gate, rumors.stage
     received: list[NpcDeed | NpcActResult | NpcIdle] = []
     transfer_sight: dict[str, asyncio.Task[dict[str, Any]]] = {}
-    body_states: dict[str, list[dict[str, Any]]] = {VINO: [], MALETH: []}
+    body_states: dict[str, list[dict[str, Any]]] = {VINO: [], MALETH: [], LOBART: []}
     symbols: dict[int, str] = {}
+    body_latest: dict[str, dict[str, Any]] = {}
+    entities: dict[int, str] = {}
+    defense_started: float | None = None
+    defense_game_start = 0
+    defense_task: asyncio.Task[None] | None = None
+    defense_pending: set[asyncio.Task[None]] = set()
+    defense_stop = asyncio.Event()
+    defense_lock = asyncio.Lock()
+    defense_samples: list[dict[str, Any]] = []
+    defense_hp: dict[str, int] = {}
+    defense_hp_changes: list[dict[str, Any]] = []
+    defense_contacts: list[dict[str, Any]] = []
+    defense_inventory: dict[str, dict[str, int]] = {}
+    defense_event_ids: set[int] = set()
+    defense_counts = {
+        npc: {"applied_contacts": 0, "positive_hits_received": 0, "no_loss_hits_received": 0,
+              "blocked": 0, "evaded": 0, "unconscious_events": 0, "death_events": 0}
+        for npc in (VINO, LOBART)
+    }
 
     def check(name: str, ok: bool, detail: object = "") -> bool:
         results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
@@ -71,13 +91,13 @@ async def npc_deeds(
     def record(message: GameMessage) -> None:
         if isinstance(message, NpcDeed | NpcActResult | NpcIdle):
             received.append(message)
-        if isinstance(message, NpcDeed) and message.kind == "take_item":
+        if isinstance(message, NpcDeed):
             transfer_sight[message.id] = asyncio.create_task(at_transfer(message))
 
     async def at_transfer(deed: NpcDeed) -> dict[str, Any]:
         # Read the real ray and poses on receipt, without turning anyone or delivering a perception.
         # This distinguishes the opening location from the actor's earlier waypoint and heading.
-        witness = HILDA if deed.chest else LOBART
+        witness = ATTACK_WITNESS if deed.kind == "attack" else (HILDA if deed.chest else LOBART)
         native = await link.story_eval(witness, [
             ["call", "NPC_CANSEENPC", ["inst", "SELF"], ["inst", VINO]],
             ["call", "NPC_CANSEENPCFREELOS", ["inst", "SELF"], ["inst", VINO]],
@@ -93,13 +113,122 @@ async def npc_deeds(
             "native_seen_free_los_distance": native,
             "views": [view.model_dump() for view in views], "poses": poses,
         }
-        log.info("npc_deeds %s transfer sight: %s", "chest" if deed.chest else "world", detail)
+        scene = "attack" if deed.kind == "attack" else ("chest" if deed.chest else "world")
+        log.info("npc_deeds %s transfer sight: %s", scene, detail)
         return detail
 
     def observe(packet: dict[str, Any]) -> None:
         for row in packet["observations"]:
             if (npc := symbols.get(row["script_symbol"])) in body_states:
                 body_states[npc].append({"t_game_ms": row["t_game_ms"], **row["self"]})
+                body_latest[npc] = row
+                entities[row["entity_id"]] = npc
+            if defense_started is None or npc not in (VINO, LOBART):
+                continue
+            hp = row["self"]["hp"]
+            before, defense_hp[npc] = defense_hp.get(npc, hp), hp
+            if before != hp:
+                change = {
+                    "npc": npc, "game_ms": row["t_game_ms"], "hp": [before, hp],
+                    "body_state": row["self"]["body_state_base"], "goal": row["goal"],
+                    "target": row["target"],
+                }
+                defense_hp_changes.append(change)
+                log.info("npc_deeds defense hp: %s", change)
+                if hp > before:
+                    pending = asyncio.create_task(sample_defense("hp_increase", change))
+                    defense_pending.add(pending)
+                    pending.add_done_callback(defense_pending.discard)
+            for event in row["events"]:
+                if (
+                    event["perspective"] != "self" or event["event_id"] in defense_event_ids
+                    or event["source_game_ms"] < defense_game_start
+                ):
+                    continue
+                defense_event_ids.add(event["event_id"])
+                counter = {
+                    3: "applied_contacts", 7: "blocked", 8: "evaded",
+                    9: "positive_hits_received", 10: "no_loss_hits_received",
+                    11: "death_events", 12: "unconscious_events",
+                }.get(event["code"])
+                if counter is None:
+                    continue
+                defense_counts[npc][counter] += 1
+                contact = {
+                    "npc": npc, "event": event, "meaning": counter, "hp": hp,
+                    "native_target": entities.get(row["goal"]["target_id"]),
+                    "target_id": row["goal"]["target_id"], "counts": dict(defense_counts[npc]),
+                }
+                defense_contacts.append(contact)
+                log.info("npc_deeds defense contact: %s", contact)
+
+    async def sample_defense(label: str, cause: dict[str, Any] | None = None) -> None:
+        """Read both native bodies and inventories; never heal, equip or steer either fighter."""
+        async with defense_lock:
+            try:
+                views = {view.npc: view for view in await link.npc_view([VINO, LOBART])}
+                actors = {}
+                positions = {}
+                for npc, opponent in ((VINO, LOBART), (LOBART, VINO)):
+                    snap = await link.snapshot(npc, fresh=True)
+                    positions[npc] = snap.npc.pos
+                    view = views.get(npc)
+                    native = await link.story_eval(npc, [
+                        ["field", ["inst", "SELF"], "ATTRIBUTE", 0],
+                        ["field", ["inst", "SELF"], "ATTRIBUTE", 1],
+                        ["field", ["inst", "SELF"], "ATTRIBUTE", 6],
+                        ["call", "NPC_GETACTIVESPELL", ["inst", "SELF"]],
+                        ["call", "NPC_GETLASTHITSPELLID", ["inst", "SELF"]],
+                    ])
+                    inventory = {item.item: item.count for item in snap.npc.inventory}
+                    previous = defense_inventory.get(npc)
+                    changed = {
+                        item: inventory.get(item, 0) - previous.get(item, 0)
+                        for item in inventory.keys() | previous.keys()
+                        if inventory.get(item, 0) != previous.get(item, 0)
+                    } if previous is not None else {}
+                    defense_inventory[npc] = inventory
+                    row = body_latest.get(npc, {})
+                    target = row.get("target", {})
+                    actors[npc] = {
+                        "pos": snap.npc.pos, "hp": snap.npc.hp, "hp_max": snap.npc.hp_max,
+                        "state": view.state if view is not None else None,
+                        "body": view.body if view is not None else None,
+                        "weapon": view.weapon if view is not None else None,
+                        "in_hands": (
+                            view.in_hands.model_dump() if view is not None and view.in_hands else None
+                        ),
+                        "native_target": entities.get(row.get("goal", {}).get("target_id", 0)),
+                        "target_id": row.get("goal", {}).get("target_id"),
+                        "target_is_opponent": (
+                            entities.get(row.get("goal", {}).get("target_id", 0)) == opponent
+                        ),
+                        "native_hp_max_regen": native[:3], "active_last_hit_spell": native[3:],
+                        "counts": dict(defense_counts[npc]),
+                        "attack_anim": row.get("self", {}).get("attack_anim"),
+                        "target_visible": target.get("visible"),
+                        "fight_distance_cm": target.get("fight_distance_cm"),
+                        "melee_line_clear": target.get("melee_line_clear"),
+                        "inventory": inventory, "inventory_delta": changed,
+                    }
+                detail = {
+                    "label": label, "elapsed_s": round(time.monotonic() - (defense_started or 0), 3),
+                    "distance_cm": math.dist(positions[VINO], positions[LOBART]), "actors": actors,
+                    "defense": facts("npc_crime_defense"), **({"cause": cause} if cause else {}),
+                }
+                defense_samples.append(detail)
+                log.info("npc_deeds defense sample: %s", detail)
+            except (GameError, TimeoutError, ConnectionError) as err:
+                log.info("npc_deeds defense sample refused: %s", err)
+
+    async def monitor_defense() -> None:
+        while not defense_stop.is_set():
+            started = time.monotonic()
+            await sample_defense("periodic")
+            try:
+                await asyncio.wait_for(defense_stop.wait(), max(0, 1.5 - (time.monotonic() - started)))
+            except TimeoutError:
+                pass
 
     def deed_crime(kind: str, after: set[str]) -> dict[str, Any] | None:
         return next((
@@ -151,8 +280,8 @@ async def npc_deeds(
             check("pose", False, detail)
         return ok
 
-    async def visible(label: str, witness: str, target: str) -> bool:
-        ok, detail = await wait_npc_visibility(link, witness, target)
+    async def visible(label: str, witness: str, target: str, **kw: Any) -> bool:
+        ok, detail = await wait_npc_visibility(link, witness, target, **kw)
         return check(label, ok, detail)
 
     async def count(npc: str, item: str) -> int:
@@ -212,8 +341,8 @@ async def npc_deeds(
         ):
             return _logged(results)
         symbols.update(zip(
-            await link.story_eval(VINO, [["sym", VINO], ["sym", MALETH]]),
-            (VINO, MALETH), strict=True,
+            await link.story_eval(VINO, [["sym", VINO], ["sym", MALETH], ["sym", LOBART]]),
+            (VINO, MALETH, LOBART), strict=True,
         ))
         origin = (points[HOUSE]["x"], points[HOUSE]["y"], points[HOUSE]["z"])
         far = [
@@ -320,30 +449,122 @@ async def npc_deeds(
             return _logged(results)
         if not await place(MALETH, ROAD, to=VINO, distance=250, face=VINO):
             return _logged(results)
-        if not await place(HILDA, ROAD, to=VINO, distance=-500, face=VINO):
-            return _logged(results)
-        if not await visible("attack_witness_ready", HILDA, VINO):
+        if not await place(ATTACK_WITNESS, ROAD, to=VINO, distance=-450, face=VINO):
             return _logged(results)
         if not await visible("fight_lane_ready", MALETH, VINO):
             return _logged(results)
-        if not await health("attack", {VINO: 1000, MALETH: 10}):
+        if not await health("attack", {VINO: 1000, MALETH: 100}):
+            return _logged(results)
+        # Keep the passive hero off both fighting capsules before their native movement begins.
+        await link.debug("player_goto", waypoint=RETURN_ROAD)
+        attack_poses = {
+            npc: (await link.snapshot(npc, fresh=True)).npc for npc in (VINO, MALETH, ATTACK_WITNESS)
+        }
+        player = (await link.snapshot(VINO, fresh=True)).player
+        clearance = {
+            npc: math.dist(player.pos, pose.pos) for npc, pose in attack_poses.items()
+        } if player is not None else {}
+        if not check(
+            "attack_lane_clear", bool(clearance) and min(clearance[VINO], clearance[MALETH]) >= 700
+            and max(clearance.values()) <= 2000,
+            {"hero": player.pos if player is not None else None, "clearance": clearance,
+             "npcs": {npc: pose.pos for npc, pose in attack_poses.items()}},
+        ):
             return _logged(results)
         await link.body_watch([VINO, MALETH], rate_hz=20)
         body_states[VINO].clear()
         body_states[MALETH].clear()
         prior = {str(f["id"]) for f in facts("npc_crime")}
-        fight = await link.npc_act(VINO, "fight", npc=MALETH, reason="AR_NONE", deed=True)
-        await _until(lambda: deed_crime("attack", prior), 45)
-        attack = deed_crime("attack", prior)
-        aid = str(attack["id"]) if attack is not None else ""
+        deeds_before = {message.id for message in received if isinstance(message, NpcDeed)}
+        # STAND_WP does not register ASSESSOTHERSDAMAGE. A real, unmarked fight sound makes the
+        # native observer enter WATCHFIGHT with its own OTHER/VICTIM and B_CheerFight callback.
+        # Keep the initialized observer and the fighters' native states and positions through warmup.
+        warmup = await link.npc_act(
+            VINO, "fight", npc=MALETH, reason="AR_NONE", nonlethal=True, deed=False,
+        )
+        await _until(
+            lambda: any(isinstance(m, NpcActResult) and m.id == warmup for m in received), 5,
+        )
         if not check(
-            "attack", attack is not None and attack.get("victim") == MALETH
-            and HILDA in attack.get("witnesses", []) and VINO not in attack.get("witnesses", [])
-            and MALETH not in attack.get("witnesses", []) and seen(aid) == set(attack.get("witnesses", [])),
-            {"crime": attack, "actions": receipts("fight")},
+            "warmup_queued", any(
+                isinstance(m, NpcActResult) and m.id == warmup and m.status == "queued" for m in received
+            ), [m.model_dump() for m in received if isinstance(m, NpcActResult) and m.id == warmup],
         ):
             return _logged(results)
-        down = await _until(lambda: any(s["unconscious"] and not s["dead"] for s in body_states[MALETH]), 90)
+        ready, preparation = await wait_npc_visibility(
+            link, ATTACK_WITNESS, VINO, perception="others_damage", state="ZS_WATCHFIGHT",
+            bodies=("stand", "walk", "run"), range_target=MALETH, timeout=120,
+        )
+        victim = (await link.snapshot(MALETH, fresh=True)).npc
+        victim_views = await link.npc_view([MALETH])
+        standing = (
+            victim.hp > 1 and bool(victim_views) and victim_views[0].body not in {"dead", "down"}
+            and not any(s["down"] or s["dead"] or s["unconscious"] for s in body_states[MALETH])
+        )
+        if not check(
+            "warmup_unmarked", {str(f["id"]) for f in facts("npc_crime")} == prior
+            and {message.id for message in received if isinstance(message, NpcDeed)} == deeds_before,
+            {"action": warmup, "crimes_before": len(prior), "crimes_after": len(facts("npc_crime"))},
+        ):
+            return _logged(results)
+        if not check(
+            "attack_witness_ready", ready and standing,
+            {"witness": preparation, "victim_hp": victim.hp, "victim_still_up": standing,
+             "victim_views": [view.model_dump() for view in victim_views]},
+        ):
+            return _logged(results)
+        # Prepare the weak target once, before the marked command. This changes no native state,
+        # position, weapon or queued action, and there are no health writes during the marked fight.
+        if not await health("marked_attack", {MALETH: 10}):
+            return _logged(results)
+        ready, preparation = await wait_npc_visibility(
+            link, ATTACK_WITNESS, VINO, perception="others_damage", state="ZS_WATCHFIGHT",
+            bodies=("stand", "walk", "run"), range_target=MALETH, timeout=10,
+        )
+        victim = (await link.snapshot(MALETH, fresh=True)).npc
+        victim_views = await link.npc_view([MALETH])
+        if not check(
+            "marked_attack_ready", ready and victim.hp > 1 and bool(victim_views)
+            and victim_views[0].body not in {"down", "dead"},
+            {"witness": preparation, "victim_hp": victim.hp,
+             "victim_views": [view.model_dump() for view in victim_views]},
+        ):
+            return _logged(results)
+        fight = await link.npc_act(VINO, "fight", npc=MALETH, reason="AR_NONE", deed=True)
+
+        async def attack_summary() -> dict[str, Any]:
+            return {
+                "hp_min_max": {
+                    npc: [min((s["hp"] for s in body_states[npc]), default=0),
+                          max((s["hp"] for s in body_states[npc]), default=0)]
+                    for npc in (VINO, MALETH)
+                },
+                "views": [view.model_dump() for view in await link.npc_view([VINO, MALETH, ATTACK_WITNESS])],
+                "native_targets": {
+                    npc: {"goal": body_latest.get(npc, {}).get("goal"),
+                          "target": body_latest.get(npc, {}).get("target")}
+                    for npc in (VINO, MALETH)
+                },
+                "events": [
+                    message.model_dump() for message in received
+                    if (isinstance(message, NpcActResult) and message.id in {warmup, fight})
+                    or (isinstance(message, NpcIdle) and message.act in {warmup, fight})
+                ],
+            }
+
+        await _until(lambda: deed_crime("attack", prior), 120)
+        attack = deed_crime("attack", prior)
+        aid = str(attack["id"]) if attack is not None else ""
+        attack_sight = await transfer_sight[aid] if aid in transfer_sight else None
+        if not check(
+            "attack", attack is not None and attack.get("victim") == MALETH
+            and ATTACK_WITNESS in attack.get("witnesses", []) and VINO not in attack.get("witnesses", [])
+            and MALETH not in attack.get("witnesses", []) and seen(aid) == set(attack.get("witnesses", [])),
+            {"crime": attack, "actions": receipts("fight"), "actual_sight": attack_sight,
+             "summary": await attack_summary()},
+        ):
+            return _logged(results)
+        down = await _until(lambda: any(s["unconscious"] and not s["dead"] for s in body_states[MALETH]), 120)
         down_at = time.monotonic()
         ended = await completed(fight, timeout=20) if down else False
         # Observe beyond the state exit too: AR_NONE must never turn the defeated target into a
@@ -353,7 +574,8 @@ async def npc_deeds(
         if not check(
             "nonlethal", down and ended and observed and maleth.hp > 0
             and not any(s["dead"] for s in body_states[MALETH]),
-            {"hp": maleth.hp, "last": body_states[MALETH][-3:], "idle": ended},
+            {"hp": maleth.hp, "last": body_states[MALETH][-3:], "idle": ended,
+             "summary": await attack_summary()},
         ):
             return _logged(results)
         await link.body_watch([])
@@ -389,8 +611,16 @@ async def npc_deeds(
             return _logged(results)
         thief_cups, owner_cups = await count(VINO, CUP), await count(LOBART, CUP)
         prior = {str(f["id"]) for f in facts("npc_crime")}
-        await link.body_watch([VINO], rate_hz=20)
+        body_latest.pop(VINO, None)
+        body_latest.pop(LOBART, None)
+        await link.body_watch([VINO, LOBART], rate_hz=20)
         body_states[VINO].clear()
+        body_states[LOBART].clear()
+        await _until(lambda: {VINO, LOBART} <= body_latest.keys(), 5)
+        defense_game_start = max((row["t_game_ms"] for row in body_latest.values()), default=0)
+        defense_started = time.monotonic()
+        await sample_defense("before_theft")
+        defense_task = asyncio.create_task(monitor_defense())
         target = (await link.story_state(deed_target={
             "npc": VINO, "item": CUP, "what": CUP, "count": 1, "deed": True,
         })).get("deed_target", {})
@@ -398,6 +628,11 @@ async def npc_deeds(
             "world_target", target.get("owner") == LOBART and target.get("item") == CUP
             and target.get("count") == 1 and not target.get("mission") and not target.get("error"), target,
         ):
+            return _logged(results)
+        [hero_cups] = await link.story_eval(VINO, [
+            ["call", "NPC_HASITEMS", ["inst", "OTHER"], ["sym", CUP]],
+        ])
+        if not check("hero_has_no_cup", hero_cups == 0, {"hero_cups": hero_cups}):
             return _logged(results)
         world_take = await link.npc_act(VINO, "steal", item=CUP, what=CUP, count=1, deed=True)
         await _until(lambda: deed_crime("theft", prior), 30)
@@ -425,20 +660,74 @@ async def npc_deeds(
             and seen(tid) == set(theft.get("witnesses", [])), world_detail,
         ):
             return _logged(results)
-        reclaimed = await _until(
-            lambda: any(f.get("crime") == tid for f in facts("npc_crime_restitution")), 120,
+        await _until(
+            lambda: any(f.get("crime") == tid for f in facts("npc_crime_restitution"))
+            or any(f.get("crime") == tid for f in facts("npc_crime_defense")), 120,
         )
         returned = [f for f in facts("npc_crime_restitution") if f.get("crime") == tid]
+        reclaimed = bool(returned)
         decisions = [f for f in facts("npc_crime_reaction") if f.get("crime") == tid]
-        if not check(
-            "owner_reclaim", reclaimed and len(returned) == 1
+        await sample_defense("restitution_check")
+        owner_won = (
+            reclaimed and len(returned) == 1
             and returned[0].get("npc") == LOBART and returned[0].get("culprit") == VINO
             and returned[0].get("item") == CUP and returned[0].get("count") == 1
             and any(f.get("npc") == LOBART and f.get("reaction") == "fight" for f in decisions)
             and any(s["unconscious"] and not s["dead"] for s in body_states[VINO])
             and not any(s["dead"] for s in body_states[VINO])
+            and await count(VINO, CUP) == thief_cups and await count(LOBART, CUP) == owner_cups + 1
+        )
+        recovery_observed = False
+        if owner_won:
+            def healed_after_down() -> bool:
+                down = next((s for s in body_states[VINO] if s["unconscious"] and s["hp"] == 1), None)
+                return down is not None and any(
+                    s["t_game_ms"] > down["t_game_ms"] and s["hp"] >= 51 for s in body_states[VINO]
+                )
+
+            # Observe the native get-up and healing path without changing either body or HP.
+            # Its HP and inventory evidence explain recovery only when it actually happens.
+            recovery_observed = await _until(healed_after_down, 40)
+            await sample_defense("after_recovery", {"healing_observed": recovery_observed})
+            log.info("npc_deeds native recovery: observed=%s", recovery_observed)
+        defense_stop.set()
+        if defense_task is not None:
+            await defense_task
+            defense_task = None
+        if defense_pending:
+            await asyncio.gather(*defense_pending, return_exceptions=True)
+        summary = {}
+        for npc in (VINO, LOBART):
+            rows = body_states[npc]
+            down = next((s for s in rows if s["down"] or s["unconscious"]), None)
+            up = next((
+                s for s in rows if down is not None and s["t_game_ms"] > down["t_game_ms"]
+                and not s["down"] and not s["unconscious"]
+            ), None)
+            damage = next((
+                c for c in defense_contacts if c["npc"] == npc and c["meaning"] == "positive_hits_received"
+            ), None)
+            summary[npc] = {
+                "counts": defense_counts[npc], "samples": len(rows),
+                "first_damage_game_ms": damage["event"]["source_game_ms"] if damage else None,
+                "first_down_game_ms": down["t_game_ms"] if down else None,
+                "first_up_game_ms": up["t_game_ms"] if up else None,
+                "hp_min_max": [min((s["hp"] for s in rows), default=0),
+                               max((s["hp"] for s in rows), default=0)],
+                "attack_animation_samples": sum(bool(s["attack_anim"]) for s in rows),
+                "hp_changes": [change for change in defense_hp_changes if change["npc"] == npc],
+            }
+        log.info("npc_deeds defense summary: %s", summary)
+        defense_started = None
+        if not check(
+            "owner_reclaim", owner_won
+            and not any(s["dead"] for s in body_states[VINO])
             and await count(VINO, CUP) == thief_cups and await count(LOBART, CUP) == owner_cups + 1,
-            {"reaction": decisions, "returned": returned, "last": body_states[VINO][-3:]},
+            {"reaction": decisions, "returned": returned, "last": body_states[VINO][-3:],
+             "contact_counts": defense_counts, "hp_changes": defense_hp_changes,
+             "healing_observed": recovery_observed,
+             "summary": summary, "telemetry": defense_samples[-3:],
+             "defense": facts("npc_crime_defense")},
         ):
             return _logged(results)
         await link.body_watch([])
@@ -447,7 +736,10 @@ async def npc_deeds(
         )
         check("guard_coverage", True, "farm scene uses brave owner; community guard covered by module tests")
 
-        kinds = {"npc_crime", "npc_crime_seen", "npc_crime_reaction", "npc_crime_restitution", "rumor"}
+        kinds = {
+            "npc_crime", "npc_crime_seen", "npc_crime_reaction", "npc_crime_restitution",
+            "npc_crime_defense", "rumor",
+        }
         kept = [f for f in facts() if f.get("fact") in kinds]
         knowledge_before = {npc: people.of(npc) for npc in (HILDA, LOBART)}
         inventory_before = {npc: await count(npc, CUP) for npc in (VINO, LOBART)}
@@ -470,6 +762,11 @@ async def npc_deeds(
         )
         return _logged(results)
     finally:
+        defense_stop.set()
+        if defense_task is not None:
+            await defense_task
+        if defense_pending:
+            await asyncio.gather(*defense_pending, return_exceptions=True)
         for pending in transfer_sight.values():
             if not pending.done():
                 pending.cancel()

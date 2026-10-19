@@ -175,6 +175,18 @@ def test_v47_storyguard_reads_the_actual_steal_target_before_commanding_the_body
     assert "deed_target" not in json.loads(StoryStateCmd(req="s2").to_json())
 
 
+@pytest.mark.parametrize("theft,damage", [(True, False), (False, True), (None, None)])
+def test_v47_other_damage_readiness_is_independent_of_theft(theft, damage):
+    view = {"npc": "HILDA", "name": "Хильда"}
+    if theft is not None:
+        view.update(theft_ready=theft, others_damage_ready=damage, others_damage_range=800.0)
+    message = parse_game_message(_json({"type": "npc_views", "t": 1, "views": [view]}))
+    assert isinstance(message, NpcViews)
+    assert message.views[0].theft_ready is theft
+    assert message.views[0].others_damage_ready is damage
+    assert message.views[0].others_damage_range == (800.0 if theft is not None else None)
+
+
 def test_v46_held_room_entry_has_no_deed_and_uses_the_deeds_switch():
     assert PROTOCOL_VERSION >= CRIME_MEET_PROTOCOL == 46
     held = parse_game_message(_json({

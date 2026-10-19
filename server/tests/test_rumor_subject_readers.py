@@ -236,8 +236,15 @@ async def test_npc_physical_deeds_and_their_news_leave_every_hero_reader_unchang
             "subject": HILDA, "kind": "npc_attack" if kind == "attack" else "npc_theft",
             "to": LOBART, "from": ANDRE, "about": VINO, "hops": 1, "day": 3,
         })
+        for outcome in ("reclaimed", "defender_down", "timeout"):
+            systems.chronicle.record({
+                "fact": "npc_crime_defense", "crime": hero_case["id"], "culprit": HILDA,
+                "fighter": ANDRE, "act": f"defense-{outcome}", "outcome": outcome, "reason": outcome,
+                "item": "ITFO_BREAD", "count": 1, "returned": int(outcome == "reclaimed"),
+            })
+            assert hero_views() == before
         for fact in systems.chronicle.facts():
-            if fact.get("fact") in {"npc_crime", "npc_crime_seen", "rumor"}:
+            if fact.get("fact") in {"npc_crime", "npc_crime_seen", "npc_crime_defense", "rumor"}:
                 amends._on_fact(fact)
                 for runtime_type in (CrimeMemoryRuntime, CrimeLawRuntime, CrimeMeet):
                     runtime = object.__new__(runtime_type)

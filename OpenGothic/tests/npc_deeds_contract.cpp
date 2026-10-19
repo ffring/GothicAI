@@ -40,5 +40,16 @@ int main() {
   witness.simulated = true;
   witness.stateStarted = false;
   require(!witness.admitted(),"a pending native state cannot receive a perception yet");
+  witness.stateStarted = true;
+  witness.guild = GIL_SHEEP;
+  require(!witness.admitted(),"a sheep never becomes a human crime witness");
+  witness.guild = GIL_SEPERATOR_HUM;
+  require(!witness.admitted(),"the vanilla human guild separator is excluded");
+  witness.guild = GIL_OUT;
+  require(witness.admitted(),"an outlander below the human guild separator may witness");
+  witness.perceptionEnabled = false;
+  require(!witness.admitted(),"disabled perception cannot witness even with native range and visibility");
+  witness.perceptionEnabled = true;
+  require(witness.admitted(),"enabling the relevant perception admits the otherwise ready human");
   std::printf("NPC deed witness contract: %d checks passed\n",checks);
   }

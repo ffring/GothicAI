@@ -1,5 +1,7 @@
 #pragma once
 
+#include "constants.h"
+
 // Shared, side-effect-free admission for the bridge's witness snapshot. Native
 // perception callbacks are never invoked to discover an NPC deed's witnesses.
 struct DeedWitness final {
@@ -16,11 +18,14 @@ struct DeedWitness final {
   bool simulated = true;
   bool stateStarted = true;
   bool foreignFight = false;
+  uint32_t guild = GIL_NONE;
+  bool perceptionEnabled = true;
   float distanceSquared = 0;
   float range = 0;
 
   constexpr bool admitted() const {
     return !culprit && !victim && !player && !down && !lying && !sleeping &&
-           simulated && stateStarted && !foreignFight && distanceSquared<=range*range;
+           simulated && stateStarted && !foreignFight && guild<GIL_SEPERATOR_HUM &&
+           perceptionEnabled && distanceSquared<=range*range;
     }
   };

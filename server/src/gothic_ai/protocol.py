@@ -573,6 +573,8 @@ class NpcView(_GameMessage):
     room_guild: int | None = None  # whose room it is in (the scripts' guilds), indoors only
     state: str = ""
     theft_ready: bool | None = None  # v44: initialized native ASSESSTHEFT callback, for scene setup
+    others_damage_ready: bool | None = None  # v47: initialized native ASSESSOTHERSDAMAGE callback
+    others_damage_range: float | None = None  # v47: native range of that perception, cm
     body: str = "stand"
     mob: str | None = None  # what it uses: a bench, an anvil
     weapon: str = "none"
