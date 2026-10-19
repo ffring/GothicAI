@@ -29,9 +29,11 @@ struct HeroDeed final {
                                          const Item* item = nullptr, Interactive* chest = nullptr,
                                          size_t count = 0);
   // Read-only preflight uses precisely the same ownership snapshot as capture.
+  // ownershipPosition selects a remote target's room before the actor walks there;
+  // position/time/waypoint still describe the actor, and the hero keeps its portal.
   static std::shared_ptr<HeroDeed> snapshot(Npc& actor, std::string_view kind, Npc* victim = nullptr,
                                           const Item* item = nullptr, Interactive* chest = nullptr,
-                                          size_t count = 0);
+                                          size_t count = 0, const Tempest::Vec3* ownershipPosition = nullptr);
   static std::vector<InventoryItem> inventory(Npc& npc);
   static int32_t aivar(Npc& npc, std::string_view name);
   static int32_t constant(Npc& npc, std::string_view name, int32_t fallback = -1);

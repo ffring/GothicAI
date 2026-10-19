@@ -5,6 +5,7 @@
 
 #include "game/gamescript.h"
 #include "game/inventory.h"
+#include "physics/dynamicworld.h"
 #include "world/objects/interactive.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
@@ -85,11 +86,16 @@ std::shared_ptr<HeroDeed> HeroDeed::capture(Npc& hero, std::string_view kind, Np
                                           const Item* item, Interactive* chest, size_t count) {
   if(!hero.isPlayer() && !hero.isServerDeed(kind,victim))
     return {};
+  if(!hero.isPlayer() && kind=="take_item" && (chest!=nullptr || item!=nullptr)) {
+    const auto at = chest!=nullptr ? chest->position() : item->position();
+    return snapshot(hero,kind,victim,item,chest,count,&at);
+    }
   return snapshot(hero,kind,victim,item,chest,count);
   }
 
 std::shared_ptr<HeroDeed> HeroDeed::snapshot(Npc& hero, std::string_view kind, Npc* victim,
-                                           const Item* item, Interactive* chest, size_t count) {
+                                           const Item* item, Interactive* chest, size_t count,
+                                           const Tempest::Vec3* ownershipPosition) {
   static uint64_t nextId = 1;
   auto d = std::make_shared<HeroDeed>();
   d->id = nextId++;
@@ -99,7 +105,16 @@ std::shared_ptr<HeroDeed> HeroDeed::snapshot(Npc& hero, std::string_view kind, N
   d->culprit = person(hero);
   d->heroGuild = int32_t(hero.guild());
   d->position = hero.position();
-  d->room = hero.portalName();
+  if(ownershipPosition==nullptr) {
+    d->room = hero.portalName();
+    } else {
+    // A preflight happens before the actor walks there. Read the target's
+    // native ground material (the same source as MoveAlgo::portalName), with
+    // the BSP sector as fallback, rather than borrowing the actor's old room.
+    const auto ground = world.physic()->landRay(*ownershipPosition+Tempest::Vec3(0,50,0),500);
+    d->room = ground.hasCol && ground.sector!=nullptr && ground.sector[0]!='\0' ?
+              std::string_view(ground.sector) : world.roomAt(*ownershipPosition);
+    }
   d->roomGuild = world.guildOfRoom(d->room);
   d->roomOwner = resolveRoomOwner(hero,d->room);
   if(auto* wp = world.findWayPoint(hero.position()))

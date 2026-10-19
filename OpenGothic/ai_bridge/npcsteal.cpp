@@ -17,7 +17,8 @@ namespace {
 constexpr float TakeRange = 2000;
 constexpr float ChestNear = 300;
 std::string ownerOf(Npc& npc, const NpcSteal::Target& target) {
-  const auto d = HeroDeed::snapshot(npc,"take_item",nullptr,target.item,target.chest,target.count);
+  const auto at = target.chest!=nullptr ? target.chest->position() : target.item->position();
+  const auto d = HeroDeed::snapshot(npc,"take_item",nullptr,target.item,target.chest,target.count,&at);
   if(!d->owner.npc.empty()) return d->owner.npc;
   if(!d->chestOwner.npc.empty()) return d->chestOwner.npc;
   return d->roomOwner.npc;

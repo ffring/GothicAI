@@ -5024,7 +5024,7 @@ Item* Npc::takeItem(Item& item) {
   if(npcTheft && item.isMission())
     return nullptr;
   if(npcTheft) {
-    const auto current = HeroDeed::snapshot(*this,"take_item",nullptr,&item);
+    const auto current = HeroDeed::capture(*this,"take_item",nullptr,&item);
     const auto& actualOwner = current->owner.npc.empty() ? current->roomOwner.npc : current->owner.npc;
     if(actualOwner!=serverDeedOwner)
       return nullptr;
