@@ -120,3 +120,55 @@ def test_fault_endings_fail_even_without_policy_fallback(tmp_path, reason):
     checks = metrics.write_result(eligible=1, captured=1, release_issues=[])
     assert checks["fault_fallbacks"].startswith("failed")
     assert metrics.data["metrics"]["fault_endings"] == {reason: 1}
+
+
+def test_extra_check_failure_is_in_the_only_final_result(tmp_path, monkeypatch):
+    link = SimpleNamespace(body_leases={})
+    pilot = SimpleNamespace(people={}, active_count=0)
+    monkeypatch.setattr("gothic_ai.scenarios.neural_soak_metrics.rss_bytes", lambda pid: 1000)
+    (tmp_path / "game.pid").write_text("123")
+    (tmp_path / "server.log").write_text("INFO ready\n")
+    metrics = SoakMetrics(link, pilot, tmp_path)
+    metrics.summaries.append(Summary(decisions=1))
+    client = PolicyClient("tcp://unused.invalid:123")
+    metrics.actions_by_client[client][10] = 1
+    metrics._latencies.append(1.0)
+    load_check = "failed (old lease survived loading)"
+
+    checks = metrics.write_result(
+        eligible=1, captured=1, release_issues=[], extra_checks={"load": load_check},
+    )
+
+    assert all(value.startswith("done") for name, value in checks.items() if name != "load")
+    assert checks["load"] == load_check
+    assert metrics.data["status"] == "failed"
+    saved = json.loads((tmp_path / "neural_soak_result.json").read_text())
+    assert saved["status"] == "failed" and saved["checks"]["load"] == load_check
+    lines = [json.loads(line) for line in (tmp_path / "neural_soak.jsonl").read_text().splitlines()]
+    results = [line for line in lines if line["kind"] == "result"]
+    assert len(results) == 1
+    assert results[0]["status"] == "failed" and results[0]["checks"]["load"] == load_check
+
+
+def test_game_intervals_ignore_unleased_resubscription_gaps(tmp_path):
+    link = SimpleNamespace(body_leases={})
+    pilot = SimpleNamespace(people={}, active_count=0)
+    metrics = SoakMetrics(link, pilot, tmp_path)
+
+    def row(game_ms, generation):
+        return {
+            "session_epoch": 1, "world_epoch": 1, "entity_id": 7,
+            "control_generation": generation, "periodic": True, "t_game_ms": game_ms,
+        }
+
+    metrics._packet({"observations": [row(100, 0)]})
+    metrics._packet({"observations": [row(200, 1), row(250, 1)]})
+    # The same unleased actor reappears in a later wave. This 90-second
+    # subscription gap must not be reported as a stalled leased observation.
+    metrics._packet({"observations": [row(90_100, 0)]})
+    metrics._packet({"observations": [row(90_200, 2), row(90_250, 2)]})
+
+    sample = metrics.sample(force=True)
+    assert sample["game_interval_count"] == 2
+    assert sample["game_interval_p95_ms"] == 50
+    assert sample["game_interval_max_ms"] == 50

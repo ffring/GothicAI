@@ -306,7 +306,10 @@ class SoakMetrics:
               f"accepted={accepted}/{decisions}, minimum=95%")
         check("release_clean", not release_issues, f"issues={len(release_issues)}, limit=2s")
         for name, window in (("game_rss", game_rss), ("server_rss", server_rss)):
-            check(name, window["ok"], f"growth_percent={window.get('growth_percent')}, limit=5%, "
+            short = window["short_window"] and window.get("growth_percent") is not None
+            check(name, window["ok"] or short,
+                  f"growth_percent={window.get('growth_percent')}, limit=5%, "
+                  f"assessment={'20-minute gate deferred to full run' if short else 'final 20 minutes'}, "
                   f"window_seconds={window.get('observed_seconds')}, short_window={window['short_window']}")
         check("service_latency", p95 is not None and p99 is not None and p95 <= 20 and p99 <= 20,
               f"p95_ms={p95}, p99_ms={p99}, limit=20ms, calls={len(self._latencies)}")

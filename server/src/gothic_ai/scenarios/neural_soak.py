@@ -27,7 +27,7 @@ BANDITS = tuple(f"DIR_NPC_SOAK_BANDIT_{i}" for i in range(1, 5))
 COMPANION = "DIR_NPC_SOAK_COMPANION"
 TALKER = "DIR_NPC_SOAK_TALKER"
 REFUGE = "NW_XARDAS_TOWER_VALLEY_01"
-PLACES = ("NW_XARDAS_GOBBO_02", "NW_XARDAS_TOWER_VALLEY_091")
+PLACES = ("NW_XARDAS_GOBBO_02", "NW_XARDAS_TOWER_VALLEY_09")
 
 
 @dataclass
@@ -207,6 +207,8 @@ async def neural_soak_scenario(
                 for loaded in load_checks:
                     old_worlds = loaded["old_worlds"]
                     if (not loaded["reacquired"]
+                            and lease.session_epoch == loaded["new_world"][0]
+                            and lease.world_epoch >= loaded["new_world"][1]
                             and [lease.session_epoch, lease.world_epoch] not in old_worlds):
                         loaded["reacquired"] = bool(resets.get(fight.client))
                         metrics.event("load_reacquire", cause=loaded["cause"], npc=npc,
@@ -291,11 +293,14 @@ async def neural_soak_scenario(
             waiter.cancel()
         await link.wait_world()
         await pause(2.1)
+        status = await link.body_control_status()
+        new_world = [status.session_epoch, status.world_epoch]
         summaries = metrics.summaries[before:]
         old_summaries = [s for s in summaries if s.lease in {item[0] for item in old.values()}]
         packets = len(link.body_latest)
         ok = bool(
             session.parent == saved.branch and session.parent_seq == saved.seq
+            and new_world not in [list(scope) for scope in old_worlds]
             and len(old_summaries) == len(old)
             and all(s.reason == "loading" and s.release_confirmed and s.fallbacks == 0
                     and s.release_seconds is not None and s.release_seconds <= 2 for s in old_summaries)
@@ -307,9 +312,13 @@ async def neural_soak_scenario(
                       summaries=len(old_summaries), active_count=pilot.active_count,
                       leases=len(link.body_leases), cached_rows=packets,
                       old_worlds=[list(scope) for scope in old_worlds], reacquired=False,
+                      new_world=new_world,
                       reasons=[s.reason for s in old_summaries])
         load_checks.append(detail)
         metrics.event("load_check", **detail)
+        # Loading deliberately clears GameLink.party. Re-establish this fixture's
+        # declared swordsman on both sides before testing post-load combat.
+        await link.story_effect(COMPANION, [{"do": "party", "value": 1}])
         hero_dead = False
 
     async def conversation() -> None:
@@ -350,7 +359,8 @@ async def neural_soak_scenario(
         with metrics.observe(), _policy_resets() as resets:
             started = time.monotonic()
             sampler = asyncio.create_task(sample_loop())
-            next_wave = started
+            # Put the 10-minute checkpoint inside a wave, rather than its gap.
+            next_wave = started + (30 if duration >= 1200 else 0)
             while time.monotonic() - started < duration or pending_probe():
                 if time.monotonic() - started >= duration + 30:
                     break
@@ -363,9 +373,9 @@ async def neural_soak_scenario(
                     elapsed = time.monotonic() - started
                     for minute in (10, 20):
                         due = minute * (60 if duration >= 1200 else duration / 30)
-                        if minute not in scheduled_loads and elapsed >= due and any(
+                        if (minute not in scheduled_loads and elapsed >= due and not pending_probe() and any(
                             item["mid_fight"] for item in load_checks
-                        ):
+                        )):
                             saved = await _save_or_fail(link, 7)
                             await load_wave(saved, cause=f"scheduled_{minute}m")
                             scheduled_loads.add(minute)
@@ -452,7 +462,7 @@ async def neural_soak_scenario(
                         minute not in scheduled_loads
                         and elapsed >= minute * (60 if duration >= 1200 else duration / 30)
                     )), None)
-                    if marker is not None and link.body_leases:
+                    if marker is not None and link.body_leases and not pending_probe():
                         # Keep a combat checkpoint, then restore the peaceful
                         # pre-wave save, as neural-load does. Native combat must
                         # not immediately hide old-world ownership behind new leases.
@@ -486,7 +496,8 @@ async def neural_soak_scenario(
                 await heal()
                 await conversation()
                 await poll()
-                next_wave = max(started + wave * 90, time.monotonic())
+                first_wave_delay = 30 if duration >= 1200 else 0
+                next_wave = max(started + first_wave_delay + wave * 90, time.monotonic())
                 if loaded and duration < 1200:
                     # A short smoke run needs a new fight after its final load
                     # to check the fresh client/reset before its deadline.
@@ -509,7 +520,7 @@ async def neural_soak_scenario(
                 all(reacquire_checks)
             ) and (
                 duration < 180 or scheduled_loads == {10, 20}
-                and any(item["mid_fight"] for item in load_checks)
+                and any(item["mid_fight"] and item["cause"].startswith("scheduled_") for item in load_checks)
             )
             deaths = sum(item["cause"] == "hero_death" for item in load_checks)
             extra_checks["soak_loads"] = (
