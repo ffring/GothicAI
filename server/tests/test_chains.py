@@ -576,6 +576,19 @@ async def test_crime_brief_separates_the_directors_truth_from_peoples_knowledge(
         assert chains.crimes.known(HILDA) == []
 
 
+@pytest.mark.parametrize("cover", [True, False])
+async def test_old_cover_testimony_enters_chain_context_when_cover_is_disabled(graph, cover):  # noqa: F811
+    async with _setup(graph, with_crimes=True) as (_, chains, _, _):
+        deed = _record_crime(chains)
+        chains.crimes.cover = cover
+        chains.chronicle.record({
+            "fact": "testimony", "npc": "REMOTE_KNOWER", "witness": LOBART, "cover": "D1",
+            "crime_saw": [deed["id"]], "crime_told": [],
+        })
+        text = chains._crime_context(deed, {})
+        assert ("- REMOTE_KNOWER" in text) is not cover
+
+
 async def test_the_hero_can_return_his_own_loot_without_spawning_it_or_being_forgiven(graph):  # noqa: F811
     async with _setup(graph, [_return_loot()], with_crimes=True) as (fake, chains, casting, _):
         deed = _record_crime(chains, witnesses=[])

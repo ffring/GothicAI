@@ -205,9 +205,14 @@ class CrimeMeet:
     def _settled(self, npc: str, crime: str) -> bool:
         return any(
             fact.get("npc", "").upper() == npc
-            and (fact.get("fact") == "died" or (
-                fact.get("fact") in {"silenced", "forgiven"} and fact.get("crime") == crime
-            ))
+            and (
+                fact.get("fact") == "died"
+                or (
+                    fact.get("fact") in {"silenced", "forgiven"}
+                    and fact.get("crime") == crime
+                    and (self.crimes.cover or not fact.get("cover"))
+                )
+            )
             for fact in self.chronicle.facts()
         )
 

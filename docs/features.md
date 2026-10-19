@@ -64,6 +64,7 @@ PR, который добавляет фичу или выключатель, д
 | Хроника ветки сохранения | нет | `chronicle.py` | все сценарии лжи и сюжета | [story-graph.md](story-graph.md) |
 | Ложь героя о квестах и её раскрытие | нет | `quests.py`, `trust.py` | e2e `lie` | [story-graph.md](story-graph.md) |
 | Проверка слов через свидетеля | нет | `witnesses.py` | e2e `witness` | [npc-tools.md](npc-tools.md#сделано-свидетель) |
+| Прикрытие героя свидетелем: сделка, страх, раскрытие | `--no-cover` или `--no-crimes` | `deals.py`, `witnesses.py`, `crimes.py` | e2e `cover`; pytest `test_cover.py`, `test_deals.py` | [npc-wave3.md](npc-wave3.md#как-работает-сейчас) |
 | Слухи по знакомым | нет | `social.py` (`Rumors`) | e2e `rumor` | [story-graph.md](story-graph.md) |
 | Пересказ слуха вслух рядом с героем | нет | `gossip.py` | e2e `gossip`; бенч `gossip` | [npc-tools.md](npc-tools.md#сделано-двое-при-герое) |
 | Преступления, свидетели, закон общины | `--no-crimes` | `crimes.py`, `crime_law*.py`; мост — `hero_deed` | e2e `crimes`, `crime_talk`, `crime_law` | [crime.md](crime.md) |

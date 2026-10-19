@@ -352,7 +352,7 @@ class ChainAuthor:
         if victim:
             candidates.add(victim)
         for fact in self.chronicle.facts():
-            if fact.get("crime") == crime or crime in fact.get("crime_told", []):
+            if fact.get("crime") == crime or crime in self.crimes.testimony_crimes(fact):
                 candidates.update(npc for key in ("npc", "to") if (npc := fact.get(key)))
         for npc in sorted(candidates):
             known = [k for k in self.crimes.known(npc) if k.crime["id"] == crime]

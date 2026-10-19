@@ -584,7 +584,7 @@ class Rumors:
                 if "day" in crime:
                     r.since[f["npc"]] = int(crime["day"])
             case "testimony" if self.crimes is not None and f.get("npc"):
-                for crime in f.get("crime_told", []):
+                for crime in self.crimes.testimony_crimes(f):
                     r = next(
                         (r for r in self.rumors.values() if r.crime == crime and r.kind in CRIME_KINDS),
                         None,
@@ -617,6 +617,8 @@ class Rumors:
                     if key in self.rumors:
                         self.rumors[key].silent.add(f.get("npc", ""))
             case "forgiven" | "silenced" if f.get("crime"):
+                if f.get("cover") and (self.crimes is None or not self.crimes.cover):
+                    return
                 for r in self.rumors.values():
                     if r.crime == f["crime"]:
                         r.silent.add(f.get("npc", ""))
@@ -628,7 +630,9 @@ class Rumors:
         r.silent.update(
             f.get("npc", "")
             for f in self.chronicle.facts()
-            if f.get("fact") in {"forgiven", "silenced"} and f.get("crime") == r.crime
+            if f.get("fact") in {"forgiven", "silenced"}
+            and f.get("crime") == r.crime
+            and (not f.get("cover") or (self.crimes is not None and self.crimes.cover))
         )
 
     def _on_message(self, msg: GameMessage) -> None:

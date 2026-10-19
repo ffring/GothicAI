@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 import gothic_ai.deals
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.contracts import gold_text
@@ -423,6 +425,120 @@ async def test_crime_deals_require_the_victim_or_an_actual_witness():
         await deals.accept(offer.id, offer.version)
         assert chronicle.facts("silenced")[0]["crime"] == "C1"
         assert deals.crimes.known(XARDAS)[0].silenced
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    "cover,expected",
+    [
+        ({"crime": "crime:C1"}, {"crime": "C1"}),
+        ({"day": 2}, {"day": 1}),
+        ({"day": 1}, {"day": 0}),
+        ({"vouch": "Всё утро был со мной."}, {"day": 1, "vouch": "Всё утро был со мной."}),
+        ({"vouch": ""}, {"day": 1, "vouch": ""}),
+        (
+            {"crime": "C1", "day": 2, "vouch": "Он был в поле."},
+            {"crime": "C1", "day": 1, "vouch": "Он был в поле."},
+        ),
+    ],
+)
+async def test_cover_terms_are_shown_and_recorded_only_on_acceptance(cover, expected):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    deals.crimes = Crimes(dialogue.link, chronicle)
+    try:
+        if "crime" in cover:
+            _theft(chronicle, witness=XARDAS)
+        outcome = await deals.propose(XARDAS, "Ксардас", {"cover": cover}, None)
+        assert outcome.status == "accepted"
+        assert not chronicle.facts("covered") and not chronicle.facts("silenced")
+        offer = deals.open[XARDAS]
+        assert "прикрыть тебя:" in offer.show().npc_gives[0].text
+        assert "обещаешь прикрыть его" in offer.terms()
+        await deals.accept(offer.id, offer.version)
+        assert chronicle.facts("covered") == [
+            {"fact": "covered", "npc": XARDAS, "deal": offer.id, **expected}
+        ]
+        assert chronicle.facts("deal")[0]["cover"] == expected
+        if "crime" in cover:
+            [silenced] = chronicle.facts("silenced")
+            assert (silenced["crime"], silenced["cover"]) == ("C1", offer.id)
+            assert deals.crimes.known(XARDAS)[0].silenced
+        else:
+            assert not chronicle.facts("silenced")
+        deals.reload()
+        result = await deals.propose(XARDAS, "Ксардас", {"cover": {"vouch": ""}}, None)
+        assert result.status == "accepted" and deals.open[XARDAS].id != offer.id
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    "cover,why",
+    [
+        ({}, "хотя бы одно"),
+        ({"crime": None, "day": None, "vouch": None}, "хотя бы одно"),
+        ({"crime": "invented"}, "только видевший"),
+        ({"day": 4}, "сегодня"),
+        ({"day": 0}, "сегодня"),
+        ({"day": True}, "сегодня"),
+        ({"vouch": "я" * 201}, "200"),
+    ],
+)
+async def test_cover_rejects_unknown_crime_remote_day_and_empty_terms(cover, why):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    deals.crimes = Crimes(dialogue.link, chronicle)
+    try:
+        result = await deals.propose(XARDAS, "Ксардас", {"cover": cover}, None)
+        assert result.status == "rejected" and why in result.output
+        assert not deals.open and not chronicle.facts("covered")
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_cover_requires_seen_crime_and_can_follow_a_silence_deal():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    deals.crimes = Crimes(dialogue.link, chronicle)
+    try:
+        _theft(chronicle, witness="LESTER")
+        chronicle.record(
+            {
+                "fact": "rumor",
+                "kind": "theft",
+                "crime": "C1",
+                "to": XARDAS,
+                "from": "LESTER",
+            }
+        )
+        result = await deals.propose(XARDAS, "Ксардас", {"cover": {"crime": "C1"}}, None)
+        assert result.status == "rejected" and "только видевший" in result.output
+        chronicle.record({"fact": "crime_seen", "npc": XARDAS, "crime": "C1"})
+        chronicle.record({"fact": "silenced", "npc": XARDAS, "crime": "C1", "deal": "old"})
+        result = await deals.propose(XARDAS, "Ксардас", {"cover": {"crime": "C1"}}, None)
+        assert result.status == "accepted"
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("crimes,cover", [(True, False), (False, True)])
+async def test_cover_is_unavailable_without_cover_or_crimes(crimes, cover):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    deals.crimes = Crimes(dialogue.link, chronicle) if crimes else None
+    deals.cover = cover
+    try:
+        [tool] = deals.tools(XARDAS)
+        assert "cover" not in tool.parameters["properties"] and "(cover)" not in tool.description
+        assert "cover" not in deals.all_tools[0].parameters["properties"]
+        result = await deals.propose(XARDAS, "Ксардас", {"cover": {"vouch": ""}}, None)
+        assert result.status == "rejected" and "выключено" in result.output
     finally:
         await link_cm.__aexit__(None, None, None)
 

@@ -351,6 +351,24 @@ async def test_victim_gets_amends_only_after_learning_of_the_hero(graph, kind, h
         await link_cm.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("cover", [True, False])
+async def test_old_covered_testimony_opens_amends_only_with_cover_disabled(graph, cover):
+    fake = FakeGame(branch="A")
+    link_cm, amends, chronicle = await _amends(
+        fake, FakeBackend("…", delay=0), graph, MemoryStore(":memory:"), crimes=True
+    )
+    amends.crimes.cover = cover
+    try:
+        _crime(chronicle)
+        chronicle.record({
+            "fact": "testimony", "npc": LOBART, "witness": HILDA, "cover": "D1",
+            "crime_saw": [CRIME], "crime_told": [],
+        })
+        assert (f"crime:{CRIME}" in amends.lies) is not cover
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 async def test_crime_payment_forgives_the_case_and_stops_its_news(graph):
     fake = FakeGame(branch="A")
     llm = FakeBackend(script=[FakeStep("", [_crime_proposal()])], delay=0)
