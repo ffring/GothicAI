@@ -318,10 +318,41 @@ def _crime_rumors(s: Social, kind: str = "theft", witness: str = HILDA) -> tuple
     r.crimes = SimpleNamespace(
         facts=lambda: r.chronicle.facts("crime"),
         describe=lambda f: f"герой совершил {f['kind']} (день {f['day']})",
+        cover=True,
+        testimony_crimes=lambda f: f.get("crime_told", []),
     )
     for f in list(facts):
         r._on_fact(f)
     return r, next(iter(r.rumors.values())), facts
+
+
+@pytest.mark.parametrize("cover", [True, False])
+def test_cover_silence_respects_switch_when_loading_rumors(graph, cover):
+    r, rumor, facts = _crime_rumors(Social(PEOPLE, graph))
+    r.crimes.cover = cover
+    silence = {"fact": "silenced", "npc": HILDA, "crime": "c1", "cover": "D1"}
+    facts.append(silence)
+    r._on_fact(silence)
+    assert (HILDA in rumor.silent) is cover
+    r._load()
+    [rumor] = r.rumors.values()
+    assert (HILDA in rumor.silent) is cover
+    facts.append({"fact": "silenced", "npc": HILDA, "crime": "c1"})
+    r._load()
+    assert HILDA in next(iter(r.rumors.values())).silent
+
+
+@pytest.mark.parametrize("cover", ["D1", ""])
+def test_no_crimes_ignores_cover_silence_for_old_caught_rumors(graph, cover):
+    r, _, facts = _crime_rumors(Social(PEOPLE, graph))
+    r.crimes = None
+    facts[:] = [
+        {"fact": "caught", "quest": "old-lie", "npc": HILDA, "title": "не брал", "crime": "c1"},
+        {"fact": "silenced", "npc": HILDA, "crime": "c1", **({"cover": cover} if cover else {})},
+    ]
+    r._load()
+    [rumor] = r.rumors.values()
+    assert (HILDA in rumor.silent) is (not cover)
 
 
 def test_crime_witnesses_share_one_rumor_and_keep_the_speaker(graph, monkeypatch):

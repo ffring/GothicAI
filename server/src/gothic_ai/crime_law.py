@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from .chronicle import Fact
 from .crimes import COMMUNITIES, Crimes
+from .people_knowledge import rumor_subject
 
 DAY_MINUTES = 24 * 60
 REPORT_DELAYS = {"theft": DAY_MINUTES, "sheep": DAY_MINUTES, "attack": DAY_MINUTES // 2, "murder": 120}
@@ -177,6 +178,8 @@ class CrimeLaw:
         facts = self.chronicle.facts()
         times = self._times(facts)
         for index, fact in enumerate(facts):
+            if fact.get("fact") == "rumor" and rumor_subject(fact) != "PLAYER":
+                continue
             if fact.get("fact") in _TIMED_FACTS and index not in times:
                 self.chronicle.record({"fact": "crime_law_time", "event": index, "at": now})
         out = []
@@ -202,6 +205,8 @@ class CrimeLaw:
         reports: list[LawDelivery] = []
         routes: set[tuple[str, str, str, int]] = set()
         for index, fact in enumerate(facts):
+            if fact.get("fact") == "rumor" and rumor_subject(fact) != "PLAYER":
+                continue
             entries: list[tuple[str, str]] = []
             kind = fact.get("fact")
             if kind == "crime_seen":
@@ -209,7 +214,7 @@ class CrimeLaw:
             elif kind == "rumor" and fact.get("crime"):
                 entries.append((fact["crime"], fact.get("to", "")))
             elif kind == "testimony":
-                entries += [(crime, fact.get("npc", "")) for crime in fact.get("crime_told", [])]
+                entries += [(crime, fact.get("npc", "")) for crime in self.crimes.testimony_crimes(fact)]
             for crime_id, npc in entries:
                 crime = crimes.get(crime_id)
                 if crime is None or (community := crime.get("community")) not in LAW_COMMUNITIES:
@@ -243,8 +248,7 @@ class CrimeLaw:
                 reports.append(LawDelivery(community, crime, npc, due, how, status, reason))
         return reports
 
-    @staticmethod
-    def _blocker(crime: Fact, via: str, due: int, facts: list[Fact], times: dict[int, int]) -> str:
+    def _blocker(self, crime: Fact, via: str, due: int, facts: list[Fact], times: dict[int, int]) -> str:
         candidates = []
         victim = crime.get("victim") or crime.get("owner")
         for index, fact in enumerate(facts):
@@ -255,7 +259,7 @@ class CrimeLaw:
             if kind == "died" and npc == via:
                 candidates.append((at, index, "died"))
             elif fact.get("crime") == crime["id"]:
-                if kind == "silenced" and npc == via:
+                if kind == "silenced" and npc == via and (self.crimes.cover or not fact.get("cover")):
                     candidates.append((at, index, "silenced"))
                 elif kind == "forgiven" and npc == victim:
                     candidates.append((at, index, "repaid" if fact.get("paid") else "forgiven"))

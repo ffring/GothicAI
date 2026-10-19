@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
 from .gamedata.storygraph import StoryGraph
+from .people_knowledge import rumor_subject
 from .protocol import DeedItem, GameMessage, HeroDeed, Session
 
 if TYPE_CHECKING:
@@ -104,6 +105,7 @@ class Crimes:
         dialogue: DialogueManager | None = None,
         places: PlaceBook | None = None,
         names: Callable[[str], str] | None = None,
+        cover: bool = True,
     ) -> None:
         self.link = link
         self.chronicle = chronicle
@@ -111,6 +113,7 @@ class Crimes:
         self.dialogue = dialogue
         self.places = places
         self.names = names or (lambda npc: npc)
+        self.cover = cover
         self.sightings: Sightings | None = None
         self.people: dict[str, dict[str, Any]] = {}  # static world metadata, never beliefs
         self._noncrimes: set[str] = set()  # completed negative classifications, only in this world
@@ -145,6 +148,22 @@ class Crimes:
         ids = {f.get("crime") for f in self.chronicle.facts("crime_seen") if f.get("npc") == npc.upper()}
         return [f for f in self.facts() if f.get("id") in ids]
 
+    def testimony_crimes(self, testimony: Fact) -> list[str]:
+        """With cover disabled old testimony yields its truth, while ordinary silence still applies."""
+        if self.cover or not testimony.get("cover"):
+            return list(testimony.get("crime_told", []))
+        silent = set()
+        for fact in self.chronicle.facts():
+            if fact == testimony:
+                break
+            if (
+                fact.get("fact") == "silenced"
+                and fact.get("npc") == testimony.get("witness")
+                and not fact.get("cover")
+            ):
+                silent.add(fact.get("crime"))
+        return [c for c in testimony.get("crime_saw", []) if c not in silent]
+
     def known(self, npc: str) -> list[CrimeKnowledge]:
         """The single view of an npc's knowledge. Ownership alone never teaches it anything."""
         npc = npc.upper()
@@ -153,13 +172,16 @@ class Crimes:
         out: dict[tuple[str, str], CrimeKnowledge] = {}
         rank = {"suspects": 0, "heard": 1, "seen": 2}
         for f in facts:
+            if f.get("fact") == "rumor" and rumor_subject(f) != "PLAYER":
+                continue
             entries: list[tuple[str, str, str, int, str]] = []
             if f.get("fact") == "crime_seen" and f.get("npc") == npc:
                 entries.append((f["crime"], "seen", npc, 0, "PLAYER"))
             elif f.get("fact") == "rumor" and f.get("to") == npc and f.get("crime"):
                 entries.append((f["crime"], "heard", f.get("from", ""), int(f.get("hops", 1)), "PLAYER"))
             elif f.get("fact") == "testimony" and f.get("npc") == npc:
-                entries += [(c, "heard", f.get("witness", ""), 1, "PLAYER") for c in f.get("crime_told", [])]
+                told = self.testimony_crimes(f)
+                entries += [(c, "heard", f.get("witness", ""), 1, "PLAYER") for c in told]
             elif f.get("fact") == "crime_suspected" and f.get("npc") == npc:
                 entries.append((f["crime"], "suspects", npc, 0, f.get("suspect", "PLAYER")))
             for crime, degree, source, hops, suspect in entries:
@@ -173,7 +195,10 @@ class Crimes:
                         for s in facts
                     )
                     silenced = any(
-                        s.get("fact") == "silenced" and s.get("npc") == npc and s.get("crime") == crime
+                        s.get("fact") == "silenced"
+                        and s.get("npc") == npc
+                        and s.get("crime") == crime
+                        and (self.cover or not s.get("cover"))
                         for s in facts
                     )
                     out[key] = CrimeKnowledge(
@@ -332,6 +357,8 @@ class Crimes:
             )
 
     def _on_fact(self, fact: Fact) -> None:
+        if fact.get("fact") == "rumor" and rumor_subject(fact) != "PLAYER":
+            return
         if fact.get("fact") in {"crime_seen", "rumor", "testimony"}:
             npc = fact.get("npc") or fact.get("to")
             crimes = set(fact.get("crime_told", []))

@@ -84,6 +84,7 @@ from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
 from .occasions import Occasions
 from .orders import Orders
+from .people_knowledge import PeopleKnowledge
 from .perception import PerceptionDesk
 from .persona import MOOD_DELIVERY, PersonaProvider, habits_of
 from .protocol import (
@@ -233,6 +234,7 @@ class ServerState:
         self.showrunner: Showrunner | None = None
         self.vanilla: VanillaQuests | None = None
         self.trust: Trust | None = None
+        self.people_knowledge: PeopleKnowledge | None = None
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
         self.author: Author | None = None
@@ -906,6 +908,7 @@ async def serve(args: argparse.Namespace) -> int:
                 dialogue=state.dialogue,
                 places=place_book,
                 names=lambda npc: personas.cards[npc].name if npc in personas.cards else npc,
+                cover=not args.no_cover,
             )
             state.dialogue.extensions.append(state.crimes)
             if graph is not None:
@@ -949,6 +952,8 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.extensions.append(state.whereabouts)
         # what each npc knows of the hero's word: its lies found out, rumors, claims that were true
         trust = state.trust = Trust(state.chronicle, crimes=state.crimes)
+        state.people_knowledge = PeopleKnowledge(state.chronicle)
+        state.dialogue.extensions.append(state.people_knowledge)
         state.dialogue.extensions.append(trust)
         # deals the npc's offer the hero in conversation: a window, the player accepts (docs/npc-tools.md)
         state.deals = Deals(
@@ -959,6 +964,7 @@ async def serve(args: argparse.Namespace) -> int:
             names=lambda name: symbol_by_name(personas.cards, name),
             things=graph.things_of if graph is not None else None,
             crimes=state.crimes,
+            cover=not args.no_cover and not args.no_crimes,
         )
         state.dialogue.extensions.append(state.deals)
         # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)
@@ -1045,6 +1051,9 @@ async def serve(args: argparse.Namespace) -> int:
             partner=lambda: talk.partner.npc if talk.partner is not None else None,
             talking=lambda npc, on: talk.planner.talking(npc, on) if talk.planner is not None else None,
             journal=journal,
+            cover=not args.no_cover and not args.no_crimes,
+            cards=personas.cards,
+            people_knowledge=state.people_knowledge,
         )
         # its lines right after what the npc saw itself
         state.dialogue.extensions.insert(state.dialogue.extensions.index(state.sightings) + 1, witnesses)
@@ -1475,6 +1484,34 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario crime_talk: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario in {"cover", "cover_subject"}:
+                assert state.crimes is not None and state.dialogue is not None and state.talk is not None
+                assert (
+                    state.rumors is not None and state.witnesses is not None and state.sightings is not None
+                )
+                assert state.deals is not None and state.trust is not None and args.trace_dir is not None
+                run_cover = scenarios.cover_scenario
+                cover_options: dict[str, Any] = {}
+                if args.scenario == "cover_subject":
+                    assert state.people_knowledge is not None
+                    run_cover = scenarios.cover_subject_scenario
+                    cover_options["people"] = state.people_knowledge
+                results = await run_cover(
+                    link,
+                    state.crimes,
+                    state.dialogue,
+                    state.talk,
+                    state.deals,
+                    state.rumors,
+                    state.witnesses,
+                    state.sightings,
+                    state.trust,
+                    str(Path(args.trace_dir).parent),
+                    **cover_options,
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "trace_crime":
                 assert state.crimes is not None and state.dialogue is not None and state.talk is not None
@@ -2518,6 +2555,8 @@ def main() -> None:
             "crime_meet",
             "crime_talk",
             "trace_crime",
+            "cover",
+            "cover_subject",
             "crime_director",
             "crime_law",
             "showrunner",
@@ -2609,6 +2648,9 @@ def main() -> None:
     p.add_argument("--no-questlog", action="store_true", help="do not track the scripts' quest states")
     p.add_argument(
         "--no-crimes", action="store_true", help="disable crimes and law patches; scripts own law entirely"
+    )
+    p.add_argument(
+        "--no-cover", action="store_true", help="disable witness cover deals and fear of testifying"
     )
     p.add_argument(
         "--no-occasions", action="store_true", help="do not watch for the director's story occasions"

@@ -220,6 +220,23 @@ def case(system, *, crime="case-1", kind="theft", npc=LOBART, degree="seen", com
     return value
 
 
+@pytest.mark.parametrize("cover", [True, False])
+async def test_cover_settlement_respects_switch_but_normal_silence_still_settles(system, cover):
+    case(system)
+    system.crimes.cover = cover
+    system.chronicle.record(
+        {
+            "fact": "silenced",
+            "npc": LOBART,
+            "crime": "case-1",
+            "cover": "D1",
+        }
+    )
+    assert system.meet._settled(LOBART, "case-1") is cover
+    system.chronicle.record({"fact": "silenced", "npc": LOBART, "crime": "case-1"})
+    assert system.meet._settled(LOBART, "case-1")
+
+
 def near(system, npc=LOBART, *, event="player_near"):
     system.link.receive(NpcEvent(type="npc_event", npc=npc, kind=event, distance=400))
 

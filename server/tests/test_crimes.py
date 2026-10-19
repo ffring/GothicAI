@@ -85,6 +85,53 @@ async def test_own_public_and_dropped_items_are_not_crimes(system, ownership):
     assert system.chronicle.facts() == []
 
 
+@pytest.mark.parametrize("cover", [True, False])
+async def test_cover_silence_and_old_testimony_follow_switch_but_ordinary_silence_remains(system, cover):
+    system.crimes.cover = cover
+    system.crimes.record(deed(owner=LOBART, owner_npc_guild=8, witnesses=[HILDA]))
+    system.chronicle.record(
+        {
+            "fact": "silenced",
+            "npc": HILDA,
+            "crime": "deed-1",
+            "cover": "D1",
+            "deal": "D1",
+        }
+    )
+    testimony = {
+        "fact": "testimony",
+        "npc": LOBART,
+        "witness": HILDA,
+        "cover": "D1",
+        "crime_saw": ["deed-1"],
+        "crime_told": [],
+    }
+    system.chronicle.record(testimony)
+    assert system.crimes.known(HILDA)[0].silenced is cover
+    assert bool(system.crimes.known(LOBART)) is not cover
+    system.chronicle.record({"fact": "silenced", "npc": HILDA, "crime": "deed-1", "deal": "D2"})
+    assert system.crimes.known(HILDA)[0].silenced
+    assert bool(system.crimes.known(LOBART)) is not cover
+
+
+async def test_no_cover_reconstructs_only_silence_that_preceded_the_testimony(system):
+    system.crimes.cover = False
+    system.crimes.record(deed(owner=LOBART, owner_npc_guild=8, witnesses=[HILDA]))
+    system.chronicle.record({"fact": "silenced", "npc": HILDA, "crime": "deed-1"})
+    before = {
+        "fact": "testimony", "id": "before", "npc": LOBART, "witness": HILDA,
+        "cover": "D1", "crime_saw": ["deed-1"], "crime_told": [],
+    }
+    system.chronicle.record(before)
+    assert system.crimes.testimony_crimes(before) == []
+    system.crimes.record(deed(id="deed-2", owner=LOBART, owner_npc_guild=8, witnesses=[HILDA]))
+    after = {**before, "id": "after", "crime_saw": ["deed-2"]}
+    system.chronicle.record(after)
+    system.chronicle.record({"fact": "silenced", "npc": HILDA, "crime": "deed-2"})
+    assert system.crimes.testimony_crimes(after) == ["deed-2"]
+    assert [k.crime["id"] for k in system.crimes.known(LOBART)] == ["deed-2"]
+
+
 @pytest.mark.parametrize(
     "ownership,owner,community",
     [
