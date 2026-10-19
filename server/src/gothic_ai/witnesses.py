@@ -13,14 +13,15 @@ depends on where they are:
 Plot npc's and those at their posts are neither called over nor walk (storyguard.py), nor is anyone under
 our control already (following the hero, held for a job); a far question moves nobody.
 
-What the witness says is code's. It is only what the witness saw itself (sightings.py) of the day before the
-hero's words: never the truth of the chronicle, never rumors, never what it saw after he spoke. A witness
-that did not see him says so, and the lie stands. Near the hero, the witness answers aloud in its own voice
+What the witness says is code's. Its evidence is what it saw itself (sightings.py) of the day before the
+hero's words. Accepted cover deals hide their evidence and supply an alibi; a timid witness who knows
+the hero's violence denies seeing anything. Near the hero, the witness answers aloud in its own voice
 (one call, within the budget), and the asker reacts (one more).
 
 The answer is a fact, `testimony`: the asker, the witness, the hero's words it asked about and when he said
-them, what the witness saw and what it told. They are the same in wave 2; collusion (wave 3) changes only
-`told`. The asker reads it as a line С1… in «Что тебе рассказали о герое другие». catch_lie
+them, what the witness saw and what it told. Cover changes only `told` and `crime_told`, retaining the
+truth and the cover's source in the fact. The asker reads it as a line С1… in «Что тебе рассказали о герое
+другие». catch_lie
 (sightings.py) takes a С line as it takes a В line: the hero did say those words, and the witness did see
 him. Then it is a lie caught «со слов: Хильда», as heavy as one the npc saw with its own eyes (the
 author's call, 2026-10-13).
@@ -33,11 +34,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .budget import Budget
+from .characters import Card
 from .chronicle import Chronicle, Fact
 from .concerns import RANK, Concern
 from .game import GameError, GameLink
@@ -132,6 +134,8 @@ class Testimony:
     told: list[Sighting] = field(default_factory=list)
     crime_saw: list[str] = field(default_factory=list)  # actual crime_seen, never rumors or suspicions
     crime_told: list[str] = field(default_factory=list)
+    cover: str = ""  # deal id, or fear; saw and crime_saw retain the truth
+    vouch: str = ""
 
     @classmethod
     def of(cls, f: Fact) -> Testimony:
@@ -150,6 +154,8 @@ class Testimony:
             [Sighting.of(r) for r in f.get("told", [])],
             [str(crime) for crime in f.get("crime_saw", [])],
             [str(crime) for crime in f.get("crime_told", [])],
+            str(f.get("cover", "")),
+            str(f.get("vouch", "")),
         )
 
 
@@ -188,6 +194,8 @@ class Witnesses:
         talking: Callable[[str, bool], None] | None = None,
         journal: Journal | None = None,
         crimes: Crimes | None = None,
+        cover: bool = True,
+        cards: Mapping[str, Card] | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
@@ -204,6 +212,8 @@ class Witnesses:
         self.talking = talking  # the planner leaves an npc alone while it talks (planner.talking)
         self.journal = journal or Journal()
         self.crimes = crimes if crimes is not None else sightings.crimes
+        self.cover_enabled = cover
+        self.cards = cards if cards is not None else {}
         self.on_change: list[Callable[[str], None]] = []  # an asker whose concerns changed with time
         self.now = 0  # the game's clock as the latest story_state had it (minutes); 0: not known
         self.inquiries: dict[str, Inquiry] = {}  # far questions not asked yet
@@ -213,6 +223,7 @@ class Witnesses:
         self._expired: set[str] = set()  # far answers whose concern is over, notified
         sightings.hearsay = self
         link.listeners.append(self._on_message)
+        chronicle.on_fact.append(self._on_fact)
         self._load()
 
     def _on_message(self, msg: GameMessage) -> None:
@@ -310,6 +321,10 @@ class Witnesses:
             parts.append("Ты собирался расспросить при встрече:\n" + "\n".join(lines))
         shown: dict[str, Told] = {}
         for t in self.testimonies(npc):
+            if t.cover:
+                shown[f"С{len(shown) + 1}"] = Told(
+                    t.witness, t.witness_name, [], self._cover_words(t), t.said, t.id
+                )
             # A testimony may include several deeds. Each gets its own evidence row so catch_lie
             # refers to the exact crime, rather than guessing which one the hero denied.
             deeds = self._deeds(t)
@@ -317,7 +332,7 @@ class Witnesses:
                 shown[f"С{len(shown) + 1}"] = Told(
                     t.witness, t.witness_name, [], self._told(t, crime), t.said, t.id, crime
                 )
-            if t.told or not deeds:
+            if t.told or (not deeds and not t.cover):
                 shown[f"С{len(shown) + 1}"] = Told(
                     t.witness, t.witness_name, t.told, self._told(t, ""), t.said, t.id
                 )
@@ -412,7 +427,7 @@ class Witnesses:
 
     def any(self, npc: str) -> bool:
         """Whether a witness told it of seeing the hero (catch_lie is offered then)."""
-        return any(t.told or self._deeds(t) for t in self.testimonies(npc))
+        return any(t.told or t.cover or self._deeds(t) for t in self.testimonies(npc))
 
     # --- concerns.py -----------------------------------------------------------------------------
 
@@ -511,6 +526,19 @@ class Witnesses:
             f"{saw or 'героя ты не видел за сутки до того'}. Ответь коротко тому, кто спрашивает, своими "
             "словами и в своём характере — только то, что видел сам.]"
         )
+        if t.cover:
+            decision = (
+                "ты боишься героя: скажи, что ничего не видел"
+                if t.cover == "fear"
+                else f"ты обещал прикрыть героя: скажи «{t.vouch}»"
+                if t.vouch
+                else "ты обещал прикрыть героя: скажи, что не видел"
+            )
+            cue = (
+                f"[{t.name} спрашивает тебя о герое: тот говорит «{t.said}». {decision}. "
+                + (f"Остальное, о чём можешь рассказать: {saw}. " if saw else "")
+                + "Ответь коротко тому, кто спрашивает, своими словами и в своём характере.]"
+            )
         # a free witness answers on the move; one held for this stands and talks
         task = self.dialogue.event_turn(wconv.npc, cue, overlay=not self.controlled(wconv.npc), tools=())
         if task is None:
@@ -553,7 +581,7 @@ class Witnesses:
         about = about or now
         saw = _trail(self.sightings.hero_trail(witness), about)
         t = Testimony(id or f"{npc}:{witness}:{now}", npc, name, witness, wname, said, tier, now, about, saw)
-        t.told = list(saw)  # wave 3: what it tells may differ from what it saw
+        t.told = list(saw)
         if self.crimes is not None:
             deeds = [
                 f
@@ -563,6 +591,8 @@ class Witnesses:
             t.crime_saw = [str(f["id"]) for f in deeds]
             silent = {str(k.crime["id"]) for k in self.crimes.known(witness) if k.silenced}
             t.crime_told = [crime for crime in t.crime_saw if crime not in silent]
+        if self.cover_enabled:
+            self._cover(t)
         self.chronicle.record(
             {
                 "fact": "testimony",
@@ -577,6 +607,7 @@ class Witnesses:
                 "saw": [s.record() for s in t.saw],
                 "told": [s.record() for s in t.told],
                 **({"crime_saw": t.crime_saw, "crime_told": t.crime_told} if t.crime_saw else {}),
+                **({"cover": t.cover, "vouch": t.vouch} if t.cover else {}),
                 "minute": now,
                 **({"day": int(state["day"])} if "day" in state else {}),
             }
@@ -586,6 +617,89 @@ class Witnesses:
         if tier == "far":
             self.dialogue.remember(npc, name, f"Ты расспросил при встрече: {self._told(t)}")
         return t
+
+    def _cover(self, t: Testimony) -> None:
+        """Accepted promises, then fear. Neither changes the witness's actual evidence."""
+        covers = []
+        for f in self.chronicle.facts("covered"):
+            if str(f.get("npc", "")).upper() != t.witness:
+                continue
+            day = f.get("day")
+            crime = self.crimes.crime(str(f.get("crime", ""))) if self.crimes is not None else None
+            day_matches = day is not None and (
+                int(day) * DAY <= t.about and (int(day) + 1) * DAY > t.about - TRAIL_MIN
+            )
+            crime_matches = crime is not None and (
+                _crime_minute(crime) - 60 <= t.about
+                and _crime_minute(crime) + 60 >= t.about - TRAIL_MIN
+            )
+            if day_matches or crime_matches:
+                covers.append(f)
+        if covers:
+            # Several promises may hide different evidence. The latest supplies the spoken alibi.
+            t.cover = str(covers[-1]["deal"])
+            t.vouch = str(covers[-1].get("vouch", ""))
+            for f in covers:
+                crime_id = str(f.get("crime", ""))
+                t.crime_told = [c for c in t.crime_told if c != crime_id]
+                crime = self.crimes.crime(crime_id) if self.crimes is not None else None
+                places = (self.crimes.places if self.crimes is not None else None) or self.desk.places
+                place = places.of(crime.get("waypoint")) if places is not None and crime else None
+                at = _crime_minute(crime) if crime else 0
+
+                t.told = [s for s in t.told if not _covered(s, f.get("day"), place.id if place else "", at)]
+        elif self._afraid(t.witness):
+            t.cover = "fear"
+            t.told = []
+            t.crime_told = []
+
+    def _afraid(self, npc: str) -> bool:
+        card = self.cards.get(npc)
+        return bool(
+            card is not None and card.courage <= 2 and self.crimes is not None
+            and any(
+                k.degree in {"seen", "heard"} and k.suspect == HERO and not k.forgiven
+                and k.crime.get("kind") in {"attack", "murder"}
+                for k in self.crimes.known(npc)
+            )
+        )
+
+    def _on_fact(self, f: Fact) -> None:
+        """Catching the same words by another route also reveals the covering witness."""
+        if not self.cover_enabled or f.get("fact") != "caught" or not f.get("said"):
+            return
+        npc = str(f.get("npc", "")).upper()
+        words = roots(str(f.get("title", "")))
+        by = f.get("quest", "")
+        for fact in self.chronicle.facts("testimony"):
+            if (
+                fact.get("npc") != npc or not fact.get("cover")
+                or not words or not words <= roots(str(fact.get("said", "")))
+            ):
+                continue
+            t = Testimony.of(fact)
+            lied = (
+                bool(t.vouch)
+                or any(s.record() not in [r.record() for r in t.told] for s in t.saw)
+                or bool(set(t.crime_saw) - set(t.crime_told))
+            )
+            if not lied or f.get("testimony") == t.id:
+                continue
+            if any(
+                e.get("npc") == npc and e.get("testimony") == t.id
+                for e in self.chronicle.facts("exposed")
+            ):
+                continue
+            self.chronicle.record({
+                "fact": "exposed", "npc": npc, "liar": t.witness, "testimony": t.id,
+                "by": by, "cover": t.cover,
+            })
+            what = (
+                f"{t.witness_name} побоялся(ась) сказать правду"
+                if t.cover == "fear"
+                else f"{t.witness_name} тебя обманул(а), покрывая героя"
+            )
+            self.dialogue.remember(npc, t.name, what)
 
     def _inquire(self, q: Inquiry) -> None:
         self.inquiries[q.id] = q
@@ -676,6 +790,19 @@ class Witnesses:
             Testimony.of(f) for f in self.chronicle.facts("testimony") if str(f.get("npc", "")).upper() == npc
         ]
         out = [t for t in out if not now or now - t.minute <= within]
+        if not self.cover_enabled:
+            silent: set[tuple[str, str]] = set()
+            before: dict[str, set[tuple[str, str]]] = {}
+            for f in self.chronicle.facts():
+                if f.get("fact") == "silenced" and not f.get("cover"):
+                    silent.add((str(f.get("npc", "")).upper(), str(f.get("crime"))))
+                elif f.get("fact") == "testimony":
+                    before[str(f.get("id", ""))] = silent.copy()
+            for t in out:
+                if t.cover:
+                    t.told = list(t.saw)
+                    t.crime_told = [c for c in t.crime_saw if (t.witness, c) not in before.get(t.id, set())]
+                    t.cover = t.vouch = ""
         return sorted(out, key=lambda t: t.minute, reverse=True)[:n]
 
     def _asked(self, npc: str, witness: str, said: str) -> Testimony | None:
@@ -704,8 +831,17 @@ class Witnesses:
         if crime != "" and self.crimes is not None and (deeds := self._deeds(t)):
             deeds = [f for f in deeds if not crime or f["id"] == crime]
             parts.append("видел собственными глазами: " + "; ".join(self.crimes.describe(f) for f in deeds))
+        if t.cover and crime is None:
+            parts.insert(0, self._cover_words(t))
         what = "; ".join(parts) or "героя не видели за сутки до того"
         return f"{t.witness_name}, {self._day(t.minute, now)}, о его словах «{t.said}»{spoke}: {what}"
+
+    @staticmethod
+    def _cover_words(t: Testimony) -> str:
+        return (
+            f"{t.witness_name} говорит: «{t.vouch}»"
+            if t.vouch else f"{t.witness_name} говорит, что не видел"
+        )
 
     def _where(self, c: Candidate) -> str:
         if c.tier == "near":
@@ -785,6 +921,12 @@ def _trail(trail: list[Sighting], about: int) -> list[Sighting]:
 
 def _crime_minute(f: Fact) -> int:
     return int(f.get("day", 0)) * DAY + int(f.get("hour", 0)) * 60 + int(f.get("minute", 0))
+
+
+def _covered(s: Sighting, day: int | None, place: str, at: int) -> bool:
+    on_day = day is not None and s.start < (day + 1) * DAY and s.end >= day * DAY
+    nearby = bool(place) and place in s.place_ids and s.start <= at + 60 and s.end >= at - 60
+    return on_day or nearby
 
 
 def _find(near: list[Candidate], who: str) -> Candidate | None:

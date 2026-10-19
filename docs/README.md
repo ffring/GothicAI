@@ -138,7 +138,7 @@
 
 - **Голос и вывод:** `--no-voice`, `--no-tts`, `--no-console`, `--no-trace`.
 - **Модели:** `--llm chatgpt|openai|local|fake`, `--model`, `--reasoning-effort`, `--no-websocket`, `--no-brain` (планировщик быстрого контура), `--no-quick`, `--no-hold-threats`.
-- **Мир NPC:** `--no-wrath`, `--no-apply-threats`, `--no-beasts`, `--no-chests`, `--no-lead`, `--no-meet`, `--no-errands`, `--no-interject`, `--no-free-bandits`, `--no-apply-day`, `--no-knowledge`, `--no-crimes`.
+- **Мир NPC:** `--no-wrath`, `--no-apply-threats`, `--no-beasts`, `--no-chests`, `--no-lead`, `--no-meet`, `--no-errands`, `--no-interject`, `--no-free-bandits`, `--no-apply-day`, `--no-knowledge`, `--no-crimes`, `--no-cover` (сделки прикрытия и страх свидетелей).
 - **Сюжет:** `--no-director`, `--no-questlog`, `--no-occasions`, `--no-showrunner`, `--story-graph PATH`.
 - **Тело:** `--body-url`, `--no-neural-body`, `--neural-body-max` (1–4, по умолчанию 4).
 - **Сценарий:** `--scenario <имя>`, `--exit-after`.
@@ -167,7 +167,7 @@
 - **жизнь NPC** (`npc_life.py`): `day`, `noise`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
 - **беседа** (`conversation.py`): `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
 - **сделки** (`deals.py`): `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
-- **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `wrath`;
+- **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `cover` (модуль `cover.py`: сделка прикрытия, второе показание, раскрытие и загрузка), `wrath`;
 - **стыки систем** (`trace_crime.py`): `trace_crime` — свежие обломки и показание о краже в одном ходе, две поимки лжи, знание о деле и доверие;
 - **сюжет** (`story.py`; `occasions`, `questlog`, `showrunner*`, `vanilla_line*` — одноимённые модули): `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
 
@@ -189,7 +189,7 @@
 
 ## Остальные каталоги
 
-- **`shorts/`** — шортсы из игры с живыми NPC: съёмка, монтаж, объясняющие ролики, сравнения «до и после», бренд ([`shorts/README.md`](../shorts/README.md)). Сравнения собирает `gothic_shorts.compare`, точка входа — `shorts/compare/cut.py`; `gothic-shorts dub` распознаёт их планы и берёт папку дублей из `takes` или `--takes DIR`. Сравнение воды — `shorts/compare/water.bench` и `water.json`: `shorts/compare/film.sh water` снимает три сцены в гавани (крестьянин, огненный шар и вещи) крупными боковыми камерами через отдельные постановки `water-film` стенда; в дубле off тело может выйти из кадра. Обложки шаблона B — модуль `gothic_shorts.cover`, команда `cover` и поле `cover` плана; загрузка на YouTube с `--thumbnail`, отдельная команда `thumbnail`.
+- **`shorts/`** — шортсы из игры с живыми NPC: съёмка, монтаж, объясняющие ролики, сравнения «до и после», бренд ([`shorts/README.md`](../shorts/README.md)). Сравнения собирает `gothic_shorts.compare`, точка входа — `shorts/compare/cut.py`; `gothic-shorts dub` распознаёт их планы и берёт папку дублей из `takes` или `--takes DIR`. Субтитры (`srt`) и дубляж сравнения берут время строк из плана; `srt --plan FILE` выбирает план вместо `plan.json`. Сравнение воды — `shorts/compare/water.bench` и `water.json`: `shorts/compare/film.sh water` снимает три сцены в гавани (крестьянин, огненный шар и вещи) крупными боковыми камерами через отдельные постановки `water-film` стенда; в дубле off тело может выйти из кадра. Обложки шаблона B — модуль `gothic_shorts.cover`, команда `cover` и поле `cover` плана; загрузка на YouTube с `--thumbnail`, отдельная команда `thumbnail`.
 - **`site/`** — сайт и дневник на GitHub Pages ([`site/README.md`](../site/README.md)).
 - **`evals/`** — эталоны: `npc-body/` (бой), `npc-decisions/` (выбор модели решений).
 - **`reports/`** — итоговые исследования и отчёты прогонов.
@@ -206,6 +206,7 @@
 | [`compute.md`](compute.md), [`ryzen.md`](ryzen.md) | машины, очередь `gq`, прогоны на Ryzen | справочник |
 | [`npc-agent.md`](npc-agent.md) | агент NPC: два контура, приказы, восприятие | сейчас + справочник с журналом |
 | [`npc-tools.md`](npc-tools.md) | инструменты NPC: сделки, восприятие, карточки, беседа, поручения | сейчас + план с журналом |
+| [`npc-wave3.md`](npc-wave3.md) | третья волна NPC: сговор, обман в сделках, вред друг другу | план |
 | [`contracts.md`](contracts.md), [`beasts.md`](beasts.md), [`xardas-wrath.md`](xardas-wrath.md) | поручения и награды; волки; гнев Ксардаса | справочники |
 | [`story-graph.md`](story-graph.md) | граф сюжета, ложь, слухи, ремонт квестов | сейчас + план с журналом |
 | [`director.md`](director.md) | режиссёр-автор: квесты, персонажи, цепочки | сейчас + план с журналом, этапы 1–5 сделаны |
