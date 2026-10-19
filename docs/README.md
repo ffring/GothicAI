@@ -113,6 +113,7 @@
 | Навигация NPC: обучаемая — пока только на стенде; популяция N NPC, эпизоды без перезагрузки, выборка и награды | `common/nav*`, `common/game/nav*`; `scripts/nav_rl.py` — пары, сбор, финальный замер, проверки | `navdemos population`: `sample/argmax`, `RECORD=0` выключает запись; `navdemos physics cv` закрепляет CV для ученика и учителя (`nav_rl.py` по умолчанию); обычная игра не включает режим | [`navigation.md`](navigation.md) |
 | HD-текстуры | `common/resources.cpp` | работают, если есть каталог `OPENGOTHIC_TEXTURES` | — |
 | Свои материалы мира: нормали и ORM, Ламберт с AO | `common/resources.cpp`, `common/graphics/material.*`, `drawbuckets.*`, `renderer.*`, `shader/materials/`, `shader/lighting/`; фикстура `scripts/content/test-material.py` | убрать каталог контента или `OPENGOTHIC_CONTENT=` | [`own-content.md`](own-content.md#как-работает-сейчас) |
+| Генерация и сравнение своих PBR-материалов (офлайн) | `scripts/content/bakeoff.py` (FLUX NF4, SDXL, Marigold), `stable_materials_adapter.py`, `run-materials.sh`, `material_preview.py`, `pack_materials.py`, `capture-materials.sh`; `data/content/registry.jsonl`, `registry.py` | только явный запуск; `enable-flux` после принятия соглашения пользователем; материалы `draft`, по умолчанию не подключены | [`own-content.md`](own-content.md#как-работает-сейчас), [сравнение: 50 материалов, 10 игровых снимков](../reports/content/2026-10-material-bakeoff/README.md) |
 | Перепись ресурсов сессии (инструмент) | `common/contentcensus.*`, наблюдатель VFS; сводка `scripts/content-census.py` | `OPENGOTHIC_CENSUS=<путь к json>`, запись при выходе и Marvin `census`; `scripts/test_content_census.py`, бенч `smoke` | [`own-content.md`](own-content.md) |
 | Тестовый стенд | `common/testbench.*`, `OPENGOTHIC_BENCH*` | — | [`scripts/bench/README.md`](../scripts/bench/README.md) |
 
@@ -208,7 +209,7 @@
 | [`director.md`](director.md) | режиссёр-автор: квесты, персонажи, цепочки | сейчас + план с журналом, этапы 1–5 сделаны |
 | [`crime.md`](crime.md) | преступления и репутация, карта ванильных встреч | сейчас + журнал: слои 1–3, 4а, 4б и 5 приняты; этап закрыт |
 | [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода, ткань | сейчас + план с журналом |
-| [`own-content.md`](own-content.md) | своя игра: замена ресурсов, скриптов и мира Gothic своими, этапы 0–9; офлайн-перепись `scripts/content-textures.sh`, инструмент `scripts/content/`, [площади и UV четырёх миров](../reports/content/2026-10-world-textures/README.md) | сейчас + план с журналом, идёт: этапы 0–1 |
+| [`own-content.md`](own-content.md) | своя игра: замена ресурсов, скриптов и мира Gothic своими, этапы 0–9; офлайн-перепись `scripts/content-textures.sh`, инструменты и реестр `scripts/content/`, [сравнение генераторов материалов](../reports/content/2026-10-material-bakeoff/README.md), [площади и UV четырёх миров](../reports/content/2026-10-world-textures/README.md) | сейчас + план с журналом, идёт: этапы 0–1 |
 | [`manual-aim.md`](manual-aim.md) | ручное прицеливание | сейчас + план с журналом |
 | [`navigation.md`](navigation.md) | обучаемая навигация NPC; [популяционный стенд на CV и независимый набор 60 пар](../reports/navigation/2026-10-18-rl-env/README.md) | сейчас + план, идёт |
 | [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | сейчас + план |
