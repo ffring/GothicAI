@@ -438,6 +438,9 @@ has 1800 HP. Default duration is 25 seconds (`--duration` accepts 20–30). Capt
 The folder also contains the scene, engine events, frame metrics and `server.log`.
 The readiness file releases scene preparation first; the pilot starts after the recording's
 `rec` event, so the fixture's native `fight` commands cannot revoke an earlier lease.
+A take counts only when it is finished: one `rec`/`rec_stop` pair for `shot` with
+`duration × 30` frames and non-empty `shot.mp4` and `shot.wav`. A game that disconnects
+after that is fine; an earlier disconnect fails the capture even with a zero exit code.
 
 Export labels after the pilot has finished and written its `neural-body end` line:
 

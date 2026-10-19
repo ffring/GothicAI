@@ -5,6 +5,7 @@ import asyncio
 import configparser
 import importlib.util
 import json
+import logging
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -180,8 +181,11 @@ def test_runtime_uses_settings_policy_native_sound_and_prepared_scene(capture, t
             # fight setup runs after this gate and could revoke an earlier lease.
             assert (args.output / "ready").exists() and "pilot" not in state
             (args.output / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in [
-                {"kind": "rec", "seg": "shot"}, {"kind": "rec_stop", "seg": "shot"},
+                {"kind": "rec", "seg": "shot", "fps": 30},
+                {"kind": "rec_stop", "seg": "shot", "frames": args.duration * 30},
             ]))
+            (args.output / "shot.mp4").write_bytes(b"completed video")
+            (args.output / "shot.wav").write_bytes(b"completed audio")
             order.append("recorded")
             await session
             self.returncode = 0
@@ -227,6 +231,123 @@ def test_runtime_uses_settings_policy_native_sound_and_prepared_scene(capture, t
     assert asyncio.run(capture.capture(args)) == 0
     assert order == ["server", "guard", "launch", "prepared", "recorded", "pilot"]
     assert (args.output / "ready").exists() and state["pilot"].stopped.is_set()
+
+
+@pytest.mark.parametrize("transport", ["stub", "websocket"])
+@pytest.mark.parametrize("phase", ["before-rec", "after-rec", "after-rec-stop"])
+def test_disconnect_requires_finalized_recording_and_cleans_up_pilot(
+    capture, tmp_path, monkeypatch, caplog, transport, phase,
+):
+    """A zero game exit cannot turn GameServer's session cancellation into success."""
+    server_class = connect = None
+    if transport == "websocket":
+        if sys.version_info < (3, 12):
+            pytest.skip("the production server requires Python 3.12+")
+        pytest.importorskip("pydantic")
+        connect = pytest.importorskip("websockets.asyncio.client").connect
+        server_class = pytest.importorskip("gothic_ai.game").GameServer
+
+    args = arguments(tmp_path)
+    state = {}
+
+    class Pilot:
+        def __init__(self, link, url):
+            self.stopped = asyncio.Event()
+            state["pilot"] = self
+            state["pilot_started"].set()
+
+        async def run(self):
+            try:
+                await self.stopped.wait()
+            finally:
+                state["pilot_finished"] = True
+
+        async def aclose(self):
+            # Cleanup must be awaited even when GameServer cancels the session.
+            await asyncio.sleep(0)
+            self.stopped.set()
+            state["pilot_closed"] = True
+
+    class Server:
+        def __init__(self, *, port, on_link):
+            self.port = 49717
+            self.started = asyncio.Event()
+            self.on_link = on_link
+            state["server"] = self
+
+        async def serve_forever(self):
+            self.started.set()
+            await asyncio.Event().wait()
+
+    async def record_and_disconnect(disconnect):
+        await state["prepared"].wait()
+        # The real session touches ready immediately after prepare returns.
+        assert (args.output / "ready").exists()
+        if phase != "before-rec":
+            events = [{"kind": "rec", "seg": "shot", "fps": 30}]
+            event_log = args.output / "events.jsonl"
+            event_log.write_text(json.dumps(events[0]) + "\n")
+            await state["pilot_started"].wait()
+            if phase == "after-rec-stop":
+                with event_log.open("a") as stream:
+                    stream.write(json.dumps({"kind": "rec_stop", "seg": "shot",
+                                             "frames": args.duration * 30}) + "\n")
+                (args.output / "shot.mp4").write_bytes(b"completed video")
+                (args.output / "shot.wav").write_bytes(b"completed audio")
+        # In the positive case the stop is already flushed, but cancellation can
+        # still arrive before the session's next rec_stop poll.
+        await disconnect()
+
+    class Game:
+        returncode = None
+
+        async def wait(self):
+            if connect is not None:
+                async with connect(state["url"]) as websocket:
+                    await record_and_disconnect(websocket.close)
+            else:
+                link = SimpleNamespace(closed=asyncio.Event())
+                session = asyncio.create_task(state["server"].on_link(link))
+
+                async def disconnect():
+                    link.closed.set()
+                    session.cancel()
+                    await asyncio.gather(session, return_exceptions=True)
+
+                await record_and_disconnect(disconnect)
+            self.returncode = 0
+
+    async def prepared(link, shot):
+        state["prepared"].set()
+
+    async def launch(*argv, **kwargs):
+        state["url"] = kwargs["env"]["GOTHIC_AI_URL"]
+        return Game()
+
+    async def run():
+        state["prepared"] = asyncio.Event()
+        state["pilot_started"] = asyncio.Event()
+        return await asyncio.wait_for(capture.capture(args), timeout=5)
+
+    install_runtime_stubs(monkeypatch, BodyPilot=Pilot, GameServer=server_class or Server)
+    monkeypatch.setattr(capture.sys, "platform", "darwin")
+    for name in ("LLM", "ASR", "TTS"):
+        monkeypatch.setenv(name, "fake")
+    monkeypatch.setattr(capture, "prepare", prepared)
+    monkeypatch.setattr(capture, "game_guard", lambda: None)
+    monkeypatch.setattr(capture.asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(capture.logging, "basicConfig", lambda **kw: [handler.close() for handler in kw["handlers"]])
+    caplog.set_level(logging.INFO, logger="body_live_capture")
+    if phase == "after-rec-stop":
+        assert asyncio.run(run()) == 0
+        assert "capture complete" in caplog.text
+    else:
+        with pytest.raises(RuntimeError):
+            asyncio.run(run())
+        assert "capture complete" not in caplog.text
+        assert not (args.output / "shot.mp4").exists()
+    if phase != "before-rec":
+        assert state["pilot_closed"] and state["pilot_finished"]
 
 
 def test_events_accept_complete_flushed_rows_and_ignore_a_partial_tail(capture, tmp_path):

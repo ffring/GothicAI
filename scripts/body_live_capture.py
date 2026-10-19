@@ -88,6 +88,21 @@ def read_events(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.endswith("}")]
 
 
+def validate_recording(folder: Path, duration: int) -> None:
+    """A finished session (including cancellation) is not proof of a finished take."""
+    events = read_events(folder / "events.jsonl")
+    starts = [i for i, event in enumerate(events) if event.get("kind") == "rec" and event.get("seg") == "shot"]
+    stops = [i for i, event in enumerate(events) if event.get("kind") == "rec_stop" and event.get("seg") == "shot"]
+    if len(starts) != 1 or len(stops) != 1 or starts[0] >= stops[0]:
+        raise RuntimeError("incomplete recording: expected one rec/rec_stop pair for shot")
+    if events[starts[0]].get("fps") != 30 or events[stops[0]].get("frames") != duration * 30:
+        raise RuntimeError(f"incomplete recording: expected {duration * 30} frames at 30 fps")
+    for name in ("shot.mp4", "shot.wav"):
+        path = folder / name
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError(f"incomplete recording: missing or empty {name}")
+
+
 async def prepare(link, shot: str) -> None:
     from gothic_ai.bodies import Bodies
     from gothic_ai.scenarios.common import _m5b_player_weapon
@@ -151,7 +166,7 @@ async def capture(args) -> int:
     shutil.copy(args.save, run / "save_slot_1.sav")
     (run / "Gothic.ini").write_text("[INTERNAL]\nvidResIndex=0\n[GAME]\nUSEGOTHIC1CONTROLS=0\n[SOUND]\n"
                                    "soundVolume=1\nmusicVolume=0\nmusicEnabled=0\nworldSounds=0\n")
-    completed = asyncio.Event()
+    session_done = asyncio.Event()
     errors: list[Exception] = []
 
     async def session(link):
@@ -179,10 +194,15 @@ async def capture(args) -> int:
             LOG.exception("capture session failed")
             errors.append(error)
         finally:
-            if pilot is not None:
-                await pilot.aclose()
-                await task
-            completed.set()
+            try:
+                if pilot is not None:
+                    await pilot.aclose()
+                    await task
+            except Exception as error:
+                LOG.exception("capture cleanup failed")
+                errors.append(error)
+            finally:
+                session_done.set()
 
     server = GameServer(port=0, on_link=session)
     service = asyncio.create_task(server.serve_forever())
@@ -208,11 +228,12 @@ async def capture(args) -> int:
                 "-g2", "-window", "-devmode", "-save", "1", cwd=run, env=env,
                 stdout=log, stderr=asyncio.subprocess.STDOUT)
             await asyncio.wait_for(game.wait(), timeout=180)
-        await asyncio.wait_for(completed.wait(), timeout=5)
+        await asyncio.wait_for(session_done.wait(), timeout=5)
         if errors:
             raise errors[0]
         if game.returncode:
             raise RuntimeError(f"game exit {game.returncode}")
+        validate_recording(out, args.duration)
         LOG.info("capture complete: %s", out)
         return 0
     finally:
