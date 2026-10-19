@@ -867,7 +867,7 @@ async def fight_reactions(
                         raise GameError(f"fight_reactions setup: {bandit} HP baseline was not installed")
                 # Face into the open field near FARM1_FIELD, away from the static
                 # obstacle east of FIELD_06 that blocked the former +x approach.
-                await put(bandit, -i * 500, 0)
+                await put(bandit, i * 300, i * 400)
             await put(CAVALORN, 0, 1800, face=BANDITS[0])
             await link.debug("player_goto", pos=point(650, 800))
             if not await talk.hold(CAVALORN, "follow"):
@@ -947,6 +947,9 @@ async def fight_reactions(
                             and obstacles_clear(trace.latest_rows[CAVALORN], 300)
                             and obstacles_clear(trace.latest_rows[defender], 300)
                         )
+                        pair = {"geometry": geometry, "npc_los": ray, "corridor": corridor, "clear": False}
+                        report["pairs"][defender] = pair
+                        report["clear"] = False
                         if length > 0:
                             for beyond in (300, 600):
                                 row = await ground_scan((
@@ -958,10 +961,8 @@ async def fight_reactions(
                                     "local_obstacles": row["local_obstacles"],
                                 })
                                 clear = clear and obstacles_clear(row, 300)
-                        report["pairs"][defender] = {
-                            "geometry": geometry, "npc_los": ray, "corridor": corridor, "clear": bool(clear),
-                        }
-                        report["clear"] = report["clear"] and bool(clear)
+                        pair["clear"] = bool(clear)
+                        report["clear"] = all(p["clear"] for p in report["pairs"].values())
                 finally:
                     await ground_scan(hero)
                     log.info("fight_reactions arena_geometry=%s", report)
