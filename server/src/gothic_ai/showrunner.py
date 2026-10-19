@@ -541,6 +541,8 @@ class Showrunner:
             witnesses = set(crime.get("witnesses", []))
             people = {victim, *witnesses} - {""}
             for fact in facts:
+                if str(fact.get("fact", "")).startswith("npc_crime"):
+                    continue  # a separate namespace, even when the two raw deed ids coincide
                 if fact.get("fact") == "rumor" and rumor_subject(fact) != "PLAYER":
                     continue
                 if fact.get("crime") == cid:

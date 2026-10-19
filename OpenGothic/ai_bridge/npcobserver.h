@@ -12,6 +12,7 @@
 
 #include "game/constants.h"
 #include "game/gamescript.h"
+#include "npcsteal.h"
 
 class Npc;
 class World;
@@ -51,6 +52,7 @@ class NpcObserver final {
     // `routine`: an npc's daily routine, its routine variants and current state (v6)
     void routine(World& world, const rapidjson::Value& msg);
     void clear();
+    void cancelDeeds(World& world);
     // A running soft act already owns movement/queues; a body lease must not overlap it.
     bool isActing(std::string_view symbol) const;
 
@@ -72,6 +74,10 @@ class NpcObserver final {
       Tempest::Vec3 at;
       float         radius  = 0;
       bool          investigate = false;
+      NpcSteal::Active theft;
+      bool          deed = false;
+      size_t        fightTarget = size_t(-1);
+      bool          nonlethal = false;
       };
 
     void emitRoster(World& world);

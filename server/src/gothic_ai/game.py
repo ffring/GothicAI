@@ -189,6 +189,7 @@ class GameLink:
         self._body_control_last_event = 0
         self.body_control_dropped_events = 0
         self.listeners: list[Listener] = []
+        self.npc_crime_check: Callable[[str, NpcActType, dict[str, Any]], Awaitable[str | None]] | None = None
         # Policy consumers need the exact JSON values from the numeric channel (including
         # optional encoder metadata and list types), after the ordinary schema/staleness checks.
         self.raw_body_listeners: list[RawBodyListener] = []
@@ -412,6 +413,10 @@ class GameLink:
     async def send(self, cmd: _Command) -> None:
         if self.closed.is_set():
             raise GameDisconnected("game disconnected")
+        if isinstance(cmd, NpcActCmd) and self.npc_crime_check is not None:
+            reason = await self.npc_crime_check(cmd.npc, cmd.action, cmd.args)
+            if reason is not None:
+                raise GameError(reason)
         await self._conn.send(cmd.to_json())
 
     async def wait_world(self, timeout: float | None = None) -> str:
@@ -932,6 +937,7 @@ class GameLink:
         items: Iterable[str] = (),
         near: str | None = None,
         timeout: float = 5.0,
+        deed_target: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """What the director's rules read (see StoryStateCmd); with `near`, how far each npc is from it."""
         cmd = StoryStateCmd(
@@ -942,6 +948,7 @@ class GameLink:
             knows=list(knows),
             symbols=list(symbols),
             items=list(items),
+            deed_target=deed_target,
         )
         return dict((await self._request(cmd, timeout)).value or {})
 

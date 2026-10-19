@@ -44,6 +44,9 @@ class Source:
     about: str = ""
     about_name: str = ""
     direct_context: str = "ты раскрыл это сам"
+    about_field: str = ""
+    about_name_field: str = ""
+    alternatives: tuple[Source, ...] = ()
 
 
 SOURCES = {
@@ -77,11 +80,46 @@ SOURCES = {
         about_name="герой",
         direct_context="ты слышал это сам",
     ),
+    "npc_crime_seen": Source(
+        kind="npc_theft",
+        subject="culprit",
+        observer="npc",
+        key="crime",
+        context="npc_crime",
+        subject_name="culprit_name",
+        observer_name="name",
+        text="{subject_name} украл(а) чужую вещь у человека по имени {about_name}",
+        warning_direct="{subject_name} при тебе украл(а) чужую вещь",
+        warning_heard="ты слышал, что {subject_name} крал(а) чужое; со слов: {source_name}",
+        requires=(("kind", "theft"),),
+        about_field="victim",
+        about_name_field="victim_name",
+        direct_context="ты видел это сам",
+        alternatives=(Source(
+            kind="npc_attack",
+            subject="culprit",
+            observer="npc",
+            key="crime",
+            context="npc_crime",
+            subject_name="culprit_name",
+            observer_name="name",
+            text="{subject_name} напал(а) на человека по имени {about_name}",
+            warning_direct="{subject_name} при тебе напал(а) на другого человека",
+            warning_heard="ты слышал, что {subject_name} нападал(а) на другого; со слов: {source_name}",
+            requires=(("kind", "attack"),),
+            about_field="victim",
+            about_name_field="victim_name",
+            direct_context="ты видел это сам",
+            hops=3,
+        ),),
+    ),
 }
 
 
 def source_kind(kind: str) -> Source | None:
-    return next((s for s in SOURCES.values() if s.kind == kind), None)
+    return next(
+        (s for root in SOURCES.values() for s in (root, *root.alternatives) if s.kind == kind), None,
+    )
 
 
 @dataclass(frozen=True)
@@ -106,9 +144,20 @@ class PersonKnowledge:
 def source_events(fact: Fact, facts: list[Fact]) -> list[PersonKnowledge]:
     """A source can name one observer or several; all start the same piece of news."""
     source = SOURCES.get(fact.get("fact", ""))
-    if source is None or any(fact.get(key) != value for key, value in source.requires):
+    if source is None:
         return []
-    subject = str(fact.get(source.subject, "")).upper()
+    context = next(
+        (f for f in facts if f.get("fact") == source.context and f.get("id") == fact.get(source.key)),
+        {},
+    )
+    values = {**context, **fact}
+    source = next(
+        (s for s in (source, *source.alternatives)
+         if all(values.get(key) == value for key, value in s.requires)), None,
+    )
+    if source is None:
+        return []
+    subject = str(values.get(source.subject, "")).upper()
     if not subject or subject == PLAYER:
         return []
     observers = fact.get(source.observer, [])
@@ -117,10 +166,6 @@ def source_events(fact: Fact, facts: list[Fact]) -> list[PersonKnowledge]:
     if not isinstance(observers, list):
         return []
     event_id = str(fact.get(source.key) or fact.get("by") or subject)
-    context = next(
-        (f for f in facts if f.get("fact") == source.context and f.get("id") == fact.get(source.key)),
-        {},
-    )
     subject_name = str(
         fact.get("subject_name") or fact.get(source.subject_name)
         or context.get(source.subject_name) or subject
@@ -136,13 +181,14 @@ def source_events(fact: Fact, facts: list[Fact]) -> list[PersonKnowledge]:
             kind=source.kind,
             subject=subject,
             subject_name=subject_name,
-            about=source.about or observer,
-            about_name=source.about_name or observer_name,
+            about=source.about or str(values.get(source.about_field) or observer),
+            about_name=(source.about_name or str(values.get(source.about_name_field)
+                        or values.get(source.about_field) or observer_name)),
             title=str(fact.get("title") or ""),
             source=observer,
             source_name=observer_name,
             direct=True,
-            day=int(fact.get("day", int(fact.get("minute", context.get("minute", 0))) // DAY)),
+            day=int(values.get("day", int(values.get("minute", 0)) // DAY)),
         ))
     return entries
 
