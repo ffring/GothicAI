@@ -176,6 +176,7 @@ PR, который добавляет фичу или выключатель, д
 - `OPENGOTHIC_ANIM_SKIP_FAR=1`, `OPENGOTHIC_FOOTIK_WATCHED_ONLY=1` — экономия на дальних NPC для прогонов тела;
 - `OPENGOTHIC_BENCH*`, `OPENGOTHIC_*_LOG`, `OPENGOTHIC_*_TRACE` — стенд, журналы и трассы.
 - Обложки шортсов шаблона B: поле `cover` плана сравнения, `gothic-shorts cover`, `upload --thumbnail` и `thumbnail`; модули `shorts/src/gothic_shorts/{cover,compare,youtube,cli}.py`, проверки `shorts/tests/test_{cut,cover,youtube}.py`, [команды и шаблон](../shorts/README.md#covers). Без поля или команды обложки нет.
+- Субтитры сравнения по времени строк в плане: `gothic-shorts srt <workspace> --plan FILE` (по умолчанию `plan.json`); `gothic_shorts.{compare,cli}`, проверки `shorts/tests/test_srt.py`, [команда](../shorts/README.md#uploading-to-youtube). Explainer без compare-плана использует `words.ru.json`.
 
 | Фича стенда | Как включить / выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|

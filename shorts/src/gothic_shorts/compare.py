@@ -49,6 +49,31 @@ WHITE, ACCENT = (255, 255, 255, 255), (255, 214, 120, 255)  # a caption's words,
 PAGE_WORDS = 3  # a caption page: at most this many words, a new one after a comma or a full stop
 
 
+def is_compare_plan(plan: dict) -> bool:
+    """Comparison beats name recorded segments; explainer beats do not."""
+    beats = plan.get("beats") if isinstance(plan, dict) else None
+    return isinstance(beats, list) and any(isinstance(beat, dict) and "segment" in beat for beat in beats)
+
+
+def placed_lines(plan: dict) -> list[dict]:
+    """Voiced lines and words on the cut's timeline, in words.<lang>.json form."""
+    lines, offset = [], 0.0
+    for beat in plan["beats"]:
+        for line in beat.get("lines", []):
+            at = offset + line["at"] - beat["start"]
+            lines.append({
+                "n": len(lines) + 1,
+                "file": line["file"],
+                "start": round(at, 3),
+                "words": [
+                    {"text": word, "start": round(at + start, 3), "end": round(at + end, 3)}
+                    for word, start, end in line["words"]
+                ],
+            })
+        offset += beat["end"] - beat["start"]
+    return lines
+
+
 def font(spec: tuple[str, int], size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(spec[0], size, index=spec[1])
 
