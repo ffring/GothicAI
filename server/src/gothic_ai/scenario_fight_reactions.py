@@ -815,6 +815,8 @@ async def fight_reactions(
         else:
             # Both real cave bandits stand idle beside the unarmed hero. The second is held
             # listening, matching the ownership gap in the user's game.
+            # FARM1_FIELD's open centre, independent of FIELD_06's arrival offset.
+            anchor = (11052.0, anchor[1], -12932.0)
             for i, bandit in enumerate(BANDITS):
                 await link.debug("skip_important", near=bandit)
                 await link.debug("npc_goto", npc=bandit, waypoint=ARENA)
@@ -865,9 +867,9 @@ async def fight_reactions(
                         raise GameError(f"fight_reactions setup: {bandit} HP baseline was not installed")
                 # Face into the open field near FARM1_FIELD, away from the static
                 # obstacle east of FIELD_06 that blocked the former +x approach.
-                await put(bandit, -500 + i * 500, -1300)
-            await put(CAVALORN, -500, 500, face=BANDITS[0])
-            await link.debug("player_goto", pos=point(-1150, -500))
+                await put(bandit, -i * 500, 0)
+            await put(CAVALORN, 0, 1800, face=BANDITS[0])
+            await link.debug("player_goto", pos=point(650, 800))
             if not await talk.hold(CAVALORN, "follow"):
                 raise GameError("fight_reactions setup: cannot hold companion")
             await link.act(CAVALORN, "stop")
