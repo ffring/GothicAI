@@ -257,6 +257,23 @@ async def npc_will(
 
         if remember:
             # An actual look at an innocent acquaintance near the chest supplies the suspicion.
+            await rumors.tick()
+            sightings = crimes.crimes.sightings
+            memory_detail: dict[str, Any] = {}
+
+            async def recalled() -> bool:
+                # A debug npc_view is only a read. PerceptionDesk.fresh stores that actual view
+                # through the production on_view path which feeds the observer's Sightings.
+                view = await sightings.desk.fresh(LOBART)
+                look = next((o for o in view.sees if o.id == VINO), None) if view else None
+                memory_detail.update(
+                    seen=look is not None,
+                    known=bool(look and sightings.desk.knows(LOBART, look)),
+                    social_tie=bool(rumors.social and VINO in rumors.social.ties.get(LOBART, {})),
+                    sightings=[s.record() for s in sightings.mind(LOBART).sightings if s.who == VINO],
+                )
+                return bool(memory_detail["sightings"])
+
             if not await place(VINO, chest.waypoint):
                 return None
             remembered, attempts = False, []
@@ -267,10 +284,10 @@ async def npc_will(
                 seen, detail = False, {}
                 if posed:
                     seen, detail = await wait_npc_visibility(link, LOBART, VINO)
-                remembered = seen and await _until(
-                    lambda: any(s.who == VINO for s in crimes.crimes.sightings.mind(LOBART).sightings), 5,
-                )
-                attempt = {"offset": offset, "pose": pose, "visibility": detail}
+                remembered = seen and await _until_async(recalled, bool, 5)
+                attempt = {
+                    "offset": offset, "pose": pose, "visibility": detail, "memory": dict(memory_detail),
+                }
                 attempts.append(attempt)
                 log.info("npc_will %s remembered preparation: %s", label, attempt)
                 if remembered:
