@@ -800,6 +800,12 @@ struct Bench {
     std::deque<std::string> supportHistory;
     bool active=false,reached=false,stalled=false,sat=false,standing=false;
   } npcCharacterRoute;
+  struct CharacterMoveFrame {
+    Vec3 requested,acceptedDelta,steepNormal;
+    uint64_t sequence=0,dt=0;
+    float advancementRatio=0;
+    bool valid=false,steepContact=false,blocked=false;
+  };
   struct MonsterCharacterRoute {
     Npc* npc=nullptr;
     WayPoint destination,heroDestination;
@@ -821,6 +827,8 @@ struct Bench {
     uint64_t time=0,dt=0,npc=0;
     Vec3 root,visual;
     bool enabled=false,active=false,moving=false,air=false,fall=false,swim=false;
+    float bodyYaw=0;
+    CharacterMoveFrame move;
   };
   std::vector<MonsterCharacterFrame> monsterCharacterFrames;
   struct MonsterCharacterExtra {
@@ -867,6 +875,7 @@ struct Bench {
     bool enabled=false,active=false,moving=false,air=false,interactive=false,captured=false,normal=false;
     float physics=0,wall=0;
     unsigned nearby=0,virtualNearby=0,movingNearby=0,movingVirtualNearby=0;
+    CharacterMoveFrame move;
   };
   std::deque<LivingWalker> npcCharacterCrowd;
   std::vector<NpcCharacterFrame> npcCharacterFrames;
@@ -1563,6 +1572,17 @@ void npcCharacterStopMotionTrace(World* world) {
   bench.npcCharacterTraceActors.clear();
   }
 
+const char* characterMoveFrameColumns = ",diagnostics_valid,move_sequence,move_dt_ms,requested_x_cm,requested_y_cm,requested_z_cm,accepted_dx_cm,accepted_dy_cm,accepted_dz_cm,advancement_ratio,steep_contact,steep_normal_x,steep_normal_y,steep_normal_z,move_blocked";
+
+void writeCharacterMoveFrame(std::FILE* file,const Bench::CharacterMoveFrame& move) {
+  std::fprintf(file,",%d,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%.9g,%.9g,%.9g,%d\n",
+    int(move.valid),(unsigned long long)move.sequence,(unsigned long long)move.dt,
+    double(move.requested.x),double(move.requested.y),double(move.requested.z),
+    double(move.acceptedDelta.x),double(move.acceptedDelta.y),double(move.acceptedDelta.z),
+    double(move.advancementRatio),int(move.steepContact),double(move.steepNormal.x),
+    double(move.steepNormal.y),double(move.steepNormal.z),int(move.blocked));
+  }
+
 void finish() {
   npcCharacterStopMotionTrace(Gothic::inst().world());
   endAnimationControl();
@@ -1588,24 +1608,28 @@ void finish() {
     }
   if(!bench.npcCharacterFrames.empty()) {
     if(auto* file=std::fopen((outDir+"/npc-character-frames.csv").c_str(),"w")) {
-      std::fprintf(file,"phase,frame,t_game_ms,dt_ms,npc_id,x_cm,y_cm,z_cm,visual_x_cm,visual_y_cm,visual_z_cm,cv_enabled,cv_active,moving,in_air,interactive,step_ms,wall_ms,nearby_humans,nearby_cv,moving_humans,moving_cv,captured,normal_clock\n");
-      for(const auto& row:bench.npcCharacterFrames)
-        std::fprintf(file,"%s,%llu,%llu,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%.9g,%.9g,%u,%u,%u,%u,%d,%d\n",
+      std::fprintf(file,"phase,frame,t_game_ms,dt_ms,npc_id,x_cm,y_cm,z_cm,visual_x_cm,visual_y_cm,visual_z_cm,cv_enabled,cv_active,moving,in_air,interactive,step_ms,wall_ms,nearby_humans,nearby_cv,moving_humans,moving_cv,captured,normal_clock%s\n",characterMoveFrameColumns);
+      for(const auto& row:bench.npcCharacterFrames) {
+        std::fprintf(file,"%s,%llu,%llu,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%.9g,%.9g,%u,%u,%u,%u,%d,%d",
           row.phase.c_str(),(unsigned long long)row.frame,(unsigned long long)row.time,(unsigned long long)row.dt,
           (unsigned long long)row.npc,double(row.root.x),double(row.root.y),double(row.root.z),
           double(row.visual.x),double(row.visual.y),double(row.visual.z),int(row.enabled),int(row.active),int(row.moving),
           int(row.air),int(row.interactive),double(row.physics),double(row.wall),row.nearby,row.virtualNearby,row.movingNearby,row.movingVirtualNearby,int(row.captured),int(row.normal));
+        writeCharacterMoveFrame(file,row.move);
+        }
       std::fclose(file);
       } else event("npc_character_error","\"reason\":\"cannot write native NPC character frames\"");
     }
   if(!bench.monsterCharacterFrames.empty()) {
     if(auto* file=std::fopen((outDir+"/monster-character-frames.csv").c_str(),"w")) {
-      std::fprintf(file,"route,t_game_ms,dt_ms,npc_id,x_cm,y_cm,z_cm,visual_x_cm,visual_y_cm,visual_z_cm,cv_enabled,cv_active,moving,in_air,falling,swimming,animation\n");
-      for(const auto& row:bench.monsterCharacterFrames)
-        std::fprintf(file,"%s,%llu,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%d,\"%s\"\n",
+      std::fprintf(file,"route,t_game_ms,dt_ms,npc_id,x_cm,y_cm,z_cm,visual_x_cm,visual_y_cm,visual_z_cm,cv_enabled,cv_active,moving,in_air,falling,swimming,animation,body_yaw_deg%s\n",characterMoveFrameColumns);
+      for(const auto& row:bench.monsterCharacterFrames) {
+        std::fprintf(file,"%s,%llu,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%d,\"%s\",%.9g",
           row.route.c_str(),(unsigned long long)row.time,(unsigned long long)row.dt,(unsigned long long)row.npc,
           double(row.root.x),double(row.root.y),double(row.root.z),double(row.visual.x),double(row.visual.y),double(row.visual.z),
-          int(row.enabled),int(row.active),int(row.moving),int(row.air),int(row.fall),int(row.swim),row.animation.c_str());
+          int(row.enabled),int(row.active),int(row.moving),int(row.air),int(row.fall),int(row.swim),row.animation.c_str(),double(row.bodyYaw));
+        writeCharacterMoveFrame(file,row.move);
+        }
       std::fclose(file);
       } else event("monster_character_error","\"reason\":\"cannot write monster frames\"");
     }
@@ -7968,8 +7992,23 @@ std::string npcCharacterMoveJson(World& world,const CharacterVirtualDiagnostics:
     ",\"clipped_request_cm\":"+ragdollVector(move.clippedRequest)+",\"native_position_cm\":"+ragdollVector(move.nativePosition)+
     ",\"accepted_cm\":"+ragdollVector(move.accepted)+",\"request_clipped\":"+flag(move.requestClipped)+
     ",\"resolved_clipped\":"+flag(move.resolvedClipped)+",\"blocked\":"+flag(move.blocked)+
+    ",\"sequence\":"+std::to_string(move.sequence)+",\"dt_ms\":"+std::to_string(move.dt)+
+    ",\"advancement_ratio\":"+ragdollNumber(move.advancementRatio)+",\"steep_contact\":"+flag(move.steepContact)+
+    ",\"steep_contact_normal\":"+ragdollVector(move.steepContactNormal)+
     ",\"request_collision\":"+npcCharacterCollisionJson(world,move.requestCollision)+
     ",\"resolved_collision\":"+npcCharacterCollisionJson(world,move.resolvedCollision)+"}";
+  }
+
+Bench::CharacterMoveFrame characterMoveFrame(const Npc& npc) {
+  CharacterVirtualDiagnostics diagnostic;
+  Bench::CharacterMoveFrame frame;
+  frame.valid=npc.characterVirtualDiagnostics(diagnostic);
+  if(!frame.valid)return frame;
+  const auto& move=diagnostic.npcMove;
+  frame.sequence=move.sequence;frame.dt=move.dt;frame.requested=move.requested;
+  frame.acceptedDelta=move.accepted-move.initial;frame.advancementRatio=move.advancementRatio;
+  frame.steepContact=move.steepContact;frame.steepNormal=move.steepContactNormal;frame.blocked=move.blocked;
+  return frame;
   }
 
 bool npcCharacterNeedsMovableLookup(const CharacterVirtualDiagnostics::Pose& pose) {
@@ -8357,10 +8396,11 @@ void monsterCharacterClear(World& world) {
   route=Bench::MonsterCharacterRoute();
   }
 
-void monsterCharacterLedge(World& world,Npc& player,std::string_view species,float height) {
+void monsterCharacterLedge(World& world,Npc& player,std::string_view species,float height,float bottom=0.f) {
   const bool wolf=species=="wolf",troll=species=="troll";
   if((!wolf && !troll) || (wolf && height!=20.f && height!=40.f && height!=55.f) ||
-     (troll && height!=40.f && height!=80.f)) {
+     (troll && height!=40.f && height!=80.f) ||
+     (bottom!=0.f && !(wolf && height==40.f && bottom==-100.f))) {
     monsterCharacterError("ledge expects wolf 20|40|55 or troll 40|80 centimetres");return;
     }
   monsterCharacterClear(world);
@@ -8383,13 +8423,14 @@ void monsterCharacterLedge(World& world,Npc& player,std::string_view species,flo
   // Gothic source winding is reversed by PhysicVbo.
   quad({-1200,0,-900},{-1200,0,900},{1500,0,900},{1500,0,-900});
   quad({0,height,-900},{0,height,900},{1500,height,900},{1500,height,-900});
-  quad({0,0,-900},{0,0,900},{0,height,900},{0,height,-900});
+  quad({0,bottom,-900},{0,bottom,900},{0,height,900},{0,height,-900});
   bench.monsterCharacterLedgeShape.reset(PhysicMeshShape::load(PackedMesh(mesh,PackedMesh::PK_Physic)));
   auto matrix=Matrix4x4::mkIdentity();matrix.translate(anchor);
   bench.monsterCharacterLedgeBody=world.physic()->addStaticObj(bench.monsterCharacterLedgeShape.get(),matrix,"BENCH_MONSTER_SINGLE_LEDGE");
   if(bench.monsterCharacterLedgeBody.isEmpty()) {monsterCharacterError("isolated ledge collision creation failed");return;}
   auto& route=bench.monsterCharacterRoute;
   route.name=std::string(species)+"_ledge_"+std::to_string(unsigned(height));route.isolatedLedge=true;
+  if(bottom<0.f)route.name+="_buried";
   route.start=anchor+Vec3(-600,0,0);route.goal=anchor+Vec3(800,height,0);route.tolerance=60;
   for(const auto& point:{route.start,anchor+Vec3(200,height,0),route.goal}) {
     const auto floor=world.physic()->landRay(point+Vec3(0,20,0),40);
@@ -8410,7 +8451,8 @@ void monsterCharacterLedge(World& world,Npc& player,std::string_view species,flo
   event("monster_character_route_setup","\"route\":"+jsonStr(route.name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
     ",\"waypoint\":\"verified_wolf_lunge+100m\",\"start_cm\":"+ragdollVector(route.start)+",\"goal_cm\":"+ragdollVector(route.goal)+
     ",\"hero_cm\":"+ragdollVector(player.position())+",\"arrival_radius_cm\":60,\"arrival_height_tolerance_cm\":5"+
-    ",\"ledge_height_cm\":"+ragdollNumber(height)+",\"running_approach_cm\":600,\"landing_length_cm\":1500"+
+    ",\"ledge_height_cm\":"+ragdollNumber(height)+",\"face_bottom_cm\":"+ragdollNumber(bottom)+
+    ",\"running_approach_cm\":600,\"landing_length_cm\":1500"+
     ",\"native_action\":\"Npc::goToPosition\",\"synthetic_geometry\":true,\"floor_probes\":3,\"face_proof\":true");
   }
 
@@ -9006,11 +9048,13 @@ void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
 void monsterCharacterBegin(World& world) {
   auto& route=bench.monsterCharacterRoute;
   if(!route.npc) {monsterCharacterError("monster begin requires fixture actor");return;}
+  if(!bench.monsterCharacterCrowd)route.npc->setCharacterVirtualDiagnosticsEnabled(true);
   route.active=true;route.reached=false;route.stalled=false;route.falling=false;route.wasAirborne=false;route.began=world.tickCount();
   route.arrived=0;route.progressTime=route.began;route.stalls=0;route.falls=0;route.cvFrames=0;route.swimFrames=0;
   route.maxPhysicalJump=0;route.maxVisualJump=0;route.lastPosition=route.npc->position();
   route.lastVisual=route.npc->characterVisualPosition();route.progressPosition=route.lastPosition;route.lastSupported=route.lastPosition;
   for(auto& actor:bench.monsterCharacterExtras)if(actor.npc) {
+    if(!bench.monsterCharacterCrowd)actor.npc->setCharacterVirtualDiagnosticsEnabled(true);
     actor.npc->clearAiQueue();actor.npc->clearGoTo();actor.npc->stopWalking();
     actor.start=actor.npc->position();actor.lastPosition=actor.start;actor.lastVisual=actor.npc->characterVisualPosition();
     actor.progressPosition=actor.start;actor.lastSupported=actor.start;actor.progressTime=world.tickCount();
@@ -9067,19 +9111,13 @@ void monsterCharacterEnd(World& world) {
 // The attack needs three supported roots and one short native attack lane,
 // rather than the twenty-place arena used by the performance fixture.
 bool chooseMonsterAttackSite(World& world,const Npc&,const Npc&,bool withFly,Vec3& start,Vec3& goal,Vec3& flyAt) {
-  if(!withFly) {
-    // Keep the wolf's numerical lunge on its already verified part-2 lane.
-    // The bloodfly scene's short valley lane has no supported 12 m endpoint.
-    if(!characterFloor(world,Vec3(38674.5156f,4308.43604f,11976.749f),start) ||
-       !characterFloor(world,Vec3(39874.5156f,4308.43604f,11976.749f),goal))return false;
-    event("monster_character_attack_site","\"site\":\"verified_wolf_lunge\",\"known_site\":true");
-    return true;
-    }
-  const auto* anchor=world.findPoint("NW_XARDAS_TOWER_VALLEY_091");
-  if(!anchor || !characterFloor(world,anchor->groundPos,start,2000) ||
+  // Both native attacks use the verified open lunge lane. The old short valley
+  // lane can stop the fieldraider on terrain before its target collision.
+  if(!characterFloor(world,Vec3(38674.5156f,4308.43604f,11976.749f),start) ||
      !characterFloor(world,start+Vec3(withFly?350.f:1200.f,0,0),goal) ||
      (withFly && !characterFloor(world,start+Vec3(150,0,-140),flyAt)))return false;
-  event("monster_character_attack_site","\"waypoint\":\"NW_XARDAS_TOWER_VALLEY_091\",\"known_site\":true");
+  event("monster_character_attack_site","\"site\":"+jsonStr(withFly?"verified_fieldraider_charge":"verified_wolf_lunge")+
+    ",\"known_site\":true");
   return true;
   }
 
@@ -9155,7 +9193,7 @@ void monsterCharacterFields(World& world,uint64_t dt) {
     auto& npc=*actor.npc;const auto at=npc.position(),visual=npc.characterVisualPosition();
     if(!bench.monsterCharacterCrowd)bench.monsterCharacterFrames.push_back({route.name+"_"+actor.role,npc.animNames(),world.tickCount(),dt,
       world.npcId(&npc),at,visual,bool(Gothic::settingsGetI("GAME","monster_character_virtual")),npc.characterVirtualActive(),
-      npc.navigationGoal().active,npc.isInAir(),npc.isFalling(),npc.isSwim()});
+      npc.navigationGoal().active,npc.isInAir(),npc.isFalling(),npc.isSwim(),npc.rotation(),characterMoveFrame(npc)});
     actor.maxPhysicalJump=std::max(actor.maxPhysicalJump,std::abs(at.y-actor.lastPosition.y));
     actor.maxVisualJump=std::max(actor.maxVisualJump,std::abs(visual.y-actor.lastVisual.y));
     actor.travel+=std::hypot(at.x-actor.lastPosition.x,at.z-actor.lastPosition.z);
@@ -9220,7 +9258,7 @@ void monsterCharacterFields(World& world,uint64_t dt) {
   const auto at=npc->position(),visual=npc->characterVisualPosition();const auto animation=npc->animNames();
   bench.monsterCharacterFrames.push_back({route.name,animation,world.tickCount(),dt,world.npcId(npc),at,visual,
     bool(Gothic::settingsGetI("GAME","monster_character_virtual")),npc->characterVirtualActive(),npc->navigationGoal().active,
-    npc->isInAir(),npc->isFalling(),npc->isSwim()});
+    npc->isInAir(),npc->isFalling(),npc->isSwim(),npc->rotation(),characterMoveFrame(*npc)});
   if(route.name=="wolf_stairs") {
     CharacterVirtualDiagnostics d;
     const bool valid=npc->characterVirtualDiagnostics(d);
@@ -9355,8 +9393,9 @@ void npcCharacterBegin(World& world,std::string_view phase={}) {
   route.active=true;route.reached=false;route.arrived=0;route.began=world.tickCount();route.progressTime=route.began;
   route.lastPosition=route.npc->position();route.lastVisual=route.npc->characterVisualPosition();route.progressPosition=route.lastPosition;
   route.maxVisualJump=0;route.maxPhysicalJump=0;route.maxAboveFloor=0;route.stalls=0;route.stalled=false;
-  route.supportHistory.clear();route.npc->setCharacterVirtualDiagnosticsEnabled(npcCharacterTrace ||
-    std::any_of(bench.npcCharacterTraceActors.begin(),bench.npcCharacterTraceActors.end(),[&](const auto& actor){return actor.npc==route.npc;}));
+  // Route evidence includes steep-contact sliding without changing the native
+  // human controller. Diagnostics remain transient and owned by this fixture.
+  route.supportHistory.clear();route.npc->setCharacterVirtualDiagnosticsEnabled(true);
   bench.npcCharacterHasWall=false;
   event("npc_character_route_begin","\"route\":"+jsonStr(route.name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
     ",\"start_cm\":"+ragdollVector(route.npc->position())+",\"goal_cm\":"+ragdollVector(route.goal)+
@@ -9600,7 +9639,8 @@ void npcCharacterFields(World& world,Npc& player,uint64_t dt) {
     npc?npc->position():player.position(),npc?npc->characterVisualPosition():player.characterVisualPosition(),
     bool(Gothic::settingsGetI("GAME","npc_character_virtual")),npc && npc->characterVirtualActive(),
     npc && npc->navigationGoal().active,npc && npc->isInAir(),npc && npc->interactive(),bench.rec && bench.recVideo,normal,
-    world.physic()->physicsStats().stepMilliseconds,wall,nearby,virtualNearby,movingNearby,movingVirtualNearby});
+    world.physic()->physicsStats().stepMilliseconds,wall,nearby,virtualNearby,movingNearby,movingVirtualNearby,
+    npc?characterMoveFrame(*npc):Bench::CharacterMoveFrame()});
   if(!route.active || !npc)return;
   const auto position=npc->position(),visual=npc->characterVisualPosition();
   npcCharacterSupportTrace(world,*npc,position.y-route.lastPosition.y,visual.y-route.lastVisual.y);
@@ -9781,7 +9821,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("monster_character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
     }
   else if(c=="monstercharacter" && a.size()==3 && a[1]=="route")monsterCharacterPrepare(w,pl,a[2]);
-  else if(c=="monstercharacter" && a.size()==4 && a[1]=="ledge")monsterCharacterLedge(w,pl,a[2],num(a,3,NAN));
+  else if(c=="monstercharacter" && (a.size()==4 || a.size()==5) && a[1]=="ledge")
+    monsterCharacterLedge(w,pl,a[2],num(a,3,NAN),a.size()==5?num(a,4,NAN):0.f);
   else if(c=="monstercharacter" && a.size()>=2 && a[1]=="camera") {
     if((a.size()!=2 && a.size()!=4) || (a.size()==4 && (!isNumber(a[2]) || !isNumber(a[3])))) {
       monsterCharacterError("monster camera expects no arguments or yaw_degrees elevation_fraction");return;

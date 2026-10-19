@@ -925,6 +925,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     }
   auto inheritedGroundVelocity = character.GetGroundVelocity();
   bool inferredGroundVelocity = false;
+  bool climbedStep = false;
   if(seconds>0.f) {
     bool onGround = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;
     auto carriedVelocity = JPH::Vec3::sZero();
@@ -1106,6 +1107,9 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
         const bool stepped = stairUp>0.f && character.WalkStairs(seconds,up*stairUp,forwardStep,direction*settings.mWalkStairsStepForwardTest,
                                                 settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator,
                                                 diagnostic!=nullptr ? &stairProbe : nullptr);
+        // A completed ordinary step is traversable even if a toe still touches
+        // its riser. The limited rise against an extended bank is not one.
+        climbedStep = stepped && !extendedSteepFace;
         if(diagnostic!=nullptr) {
           diagnostic->stairAttempted = true;
           diagnostic->stairSucceeded = stepped;
@@ -1168,6 +1172,25 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
   result.groundNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
   result.grounded = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;
   result.steep = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnSteepGround;
+  if(!climbedStep) {
+    const auto horizontal = toMeters(Tempest::Vec3(displacement.x,0,displacement.z));
+    float strongest = -.01f*horizontal.Length();
+    for(const auto& contact:character.GetActiveContacts()) {
+      if(!contact.mHadCollision || contact.mWasDiscarded || contact.mIsSensorB ||
+         !character.IsSlopeTooSteep(contact.mSurfaceNormal))
+        continue;
+      const float into = contact.mSurfaceNormal.Dot(horizontal);
+      if(into>=strongest)
+        continue;
+      JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
+      if(!lock.SucceededAndIsInBroadPhase() || lock.GetBody().IsDynamic())
+        continue;
+      strongest = into;
+      result.steepContact = true;
+      const auto normal = contact.mSurfaceNormal;
+      result.steepContactNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
+      }
+    }
   world.characterMilliseconds += std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
   return result;
   }

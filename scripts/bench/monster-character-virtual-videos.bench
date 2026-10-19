@@ -19,6 +19,17 @@ wait 12000
 monstercharacter end
 stop
 
+# scene wolf_stairs
+monstercharacter route wolf_stairs
+wait 600
+monstercharacter follow 350 100 270
+view clean 300
+rec wolf_stairs
+monstercharacter begin
+wait 12000
+monstercharacter end
+stop
+
 # scene wolf_pack
 goto FP_ROAM_NW_BIGFARM_LAKE_MONSTER_02_01
 clear 3000
