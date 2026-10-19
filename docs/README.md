@@ -162,7 +162,7 @@
 
 **Сценарии по областям** (модуль в `server/src/gothic_ai/scenarios/`):
 - **основа** (`basics.py`): `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`, `websocket`;
-- **спутники и бой** (`companions.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`, `neural-group`;
+- **спутники и бой** (`companions.py`; `neural_knockout.py` — отрезок нокаута в `neural-talk`, `neural-load` — `neural_load.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`, `neural-group`, `neural-talk`, `neural-load`;
 - **восприятие** (`perception.py`; `broken` — `broken.py`, `places` — прямо в `cli.py`): `see`, `seen`, `hearing`, `cave`, `ground`, `places`, `knows`, `remembers`, `trace`, `broken`;
 - **жизнь NPC** (`npc_life.py`): `day`, `noise`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
 - **беседа** (`conversation.py`): `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
@@ -170,6 +170,8 @@
 - **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `wrath`;
 - **стыки систем** (`trace_crime.py`): `trace_crime` — свежие обломки и показание о краже в одном ходе, две поимки лжи, знание о деле и доверие;
 - **сюжет** (`story.py`; `occasions`, `questlog`, `showrunner*`, `vanilla_line*` — одноимённые модули): `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
+
+`neural-talk` сначала проверяет живой нокаут от NPC не из `GIL_BDT` после разговора (`AR_NONE`), возврат NPC в распорядок и подъём героя; затем мечник уводится дальше 60 м от площадки. Враждебный бандит проходит разговор, нападение, бегство героя, распорядок, повторную встречу (нападение или разговор) и новый бой с чистой памятью. После `return_to_second_fight` сценарий ждёт не меньше 20 решений этого боя или 20 с, затем герой снова убегает. `fight_end_clean` требует причину `target_lost`/`npc_unavailable`, release ≤2 с и отсутствие lease, `body` и подписки через 2 с. После 15 с без урона цели допускается один удар героя: `stall_broken` показывает число и сумму застоев, лог — последние десять решений. Это диагностика качества P30; `hero_down` от бандита не требуется. В отдельном отрезке нокаута после такого удара по-прежнему даётся не больше 30 с до `hero_down`. Звери рядом с площадкой убираются; проверяются только бои против героя. `neural-load` загружает мир во время трёх боёв P30 и проверяет очистку и новый захват после загрузки. Общую проверку release для обоих отрезков `neural-talk` покрывает `server/tests/test_neural_transitions.py`: остаточный `body` в roster отклоняется и при пустых локальных fights/lease.
 
 ## Где лежат данные
 

@@ -50,6 +50,8 @@ MAX_JSON_BYTES = 256 * 1024
 TRANSIENT_REJECTION_LIMIT = 10
 MAX_OBSERVATION_AGE_GAME_MS = 100
 TARGET_ABSENCE_TIMEOUT_MS = 1000
+WORLD_STOP_REASONS = frozenset({"loading", "session_changed", "world_changed", "disconnected"})
+SOFT_BODY_OWNERSHIP_REFUSAL = "NPC already has conversation or soft-action body ownership"
 # BodyController::validate and FightAlgo::resolve recheck live state after the
 # observation. These refusals retain the lease and need a fresh row, not a retry
 # of the same command. Scope, ownership and protocol failures remain terminal.
@@ -213,6 +215,7 @@ class BodyPilot:
         *,
         companion: Callable[[str], bool] = lambda npc: False,
         unavailable: Callable[[str], bool] = lambda npc: False,
+        talking: Callable[[str], bool] = lambda npc: False,
         clock: Callable[[], float] = time.monotonic,
         max_fights: int = 4,
     ) -> None:
@@ -220,12 +223,14 @@ class BodyPilot:
             raise ValueError("neural body max must be between 1 and 4")
         self.link, self.url = link, url
         self.companion, self.unavailable, self.clock = companion, unavailable, clock
+        self.talking = talking
         self.max_fights = max_fights
         self.people: dict[str, RosterEntry] = {}
         self.fights: dict[str, BodyFight] = {}
         self.summaries: deque[FightSummary] = deque(maxlen=32)
         self.watch_busy = 0
         self._claimed_fights: set[str] = set()
+        self._lost_fights: set[str] = set()
         self._retarget_pending: set[str] = set()
         self._reacquire_after: dict[str, float] = {}
         self._roster_attempted: set[str] = set()
@@ -261,6 +266,9 @@ class BodyPilot:
             and entry.activity not in {"dialog", "attached", "down"}
             and (entry.activity != "body" or (fight := self.fights.get(npc)) is not None
                  and (fight.lease is not None or fight._acquiring))
+            and (not self.talking(npc) or (
+                entry.activity in {"fight", "body"} and entry.state.upper() == "ZS_ATTACK"
+            ))
             and not self._companion(npc)
             and not self.unavailable(npc)
         )
@@ -276,11 +284,11 @@ class BodyPilot:
                 if entry.activity == "down"
                 or (entry.activity == "routine" and entry.state.upper() not in {"ZS_ATTACK", "ZS_MM_ATTACK"})
             }
-            self._claimed_fights.difference_update(ended)
-            self._retarget_pending.difference_update(ended)
-            self._roster_attempted.difference_update(ended)
-            for npc in ended:
-                self._reacquire_after.pop(npc, None)
+            ended.update(npc for npc in self._lost_fights if (
+                npc in entries and entries[npc].distance > 2000
+                or message.full and npc not in entries
+            ))
+            self._forget_ended(ended)
             self.people = entries if message.full else {**self.people, **entries}
             for fight in list(self.fights.values()):
                 if not self._allowed(fight.npc):
@@ -295,6 +303,7 @@ class BodyPilot:
         elif isinstance(message, (Loading, Hello)):
             self.people.clear()
             self._claimed_fights.clear()
+            self._lost_fights.clear()
             self._retarget_pending.clear()
             self._reacquire_after.clear()
             self._roster_attempted.clear()
@@ -316,6 +325,14 @@ class BodyPilot:
             if npc is not None:
                 self._start(npc)
         self._wake.set()
+
+    def _forget_ended(self, npcs: set[str]) -> None:
+        self._claimed_fights.difference_update(npcs)
+        self._lost_fights.difference_update(npcs)
+        self._retarget_pending.difference_update(npcs)
+        self._roster_attempted.difference_update(npcs)
+        for npc in npcs:
+            self._reacquire_after.pop(npc, None)
 
     def _start(self, npc: str) -> bool:
         npc = npc.upper()
@@ -393,6 +410,38 @@ class BodyPilot:
         self.summaries.append(summary)
         if self.fights.get(summary.npc) is fight:
             del self.fights[summary.npc]
+        if (
+            summary.npc is not None and summary.reason in {"hero_down", "target_down"}
+            and not self._closing and not self._resetting
+        ):
+            # Native looting/retreat can still be ZS_ATTACK after the target fell.
+            # A routine row during release may already have cleared the claim;
+            # keep this completed fight closed until a later non-combat roster.
+            self._claimed_fights.add(summary.npc)
+            self._roster_attempted.add(summary.npc)
+            self._lost_fights.discard(summary.npc)
+            self._retarget_pending.discard(summary.npc)
+        if (
+            summary.npc is not None and summary.reason == "acquire_exhausted"
+            and summary.lease is None and summary.acquire_completed == 0
+            and summary.acquire_requests > 0
+            and {reason for reason, _ in summary.acquire_refusals} == {SOFT_BODY_OWNERSHIP_REFUSAL}
+        ):
+            # Speech or a soft act can outlast this bounded acquisition window.
+            # A later native combat roster must retry after that owner is gone;
+            # policy failures and every other refusal keep their episode guard.
+            self._roster_attempted.discard(summary.npc)
+            self._reacquire_after[summary.npc] = self.clock() + REACQUIRE_INTERVAL
+        if summary.npc in self._claimed_fights and summary.release_confirmed and summary.reason in {
+            "npc_unavailable", "target_lost",
+        }:
+            # A distant NPC can return straight to native combat. Its routine
+            # while outside the roster is not observable, so range exit ends
+            # this lost episode without requiring an intervening routine row.
+            self._lost_fights.add(summary.npc)
+            entry = self.people.get(summary.npc)
+            if entry is None or entry.distance > 2000:
+                self._forget_ended({summary.npc})
         if not self.fights:
             self._resetting = False
         self._wake.set()
@@ -607,9 +656,15 @@ class BodyFight:
         return None
 
     def stop(self, reason: str) -> None:
-        self._reason = reason
+        self._set_reason(reason)
         self._acquire_cancel.set()
         self._wake.set()
+
+    def _set_reason(self, reason: str) -> None:
+        # A late RPC failure is a consequence of a world reset, not a new
+        # outcome. Retain the first reset reason through subsequent callbacks.
+        if self._reason not in WORLD_STOP_REASONS or reason == "disconnected":
+            self._reason = reason
 
     def on_message(self, message: GameMessage) -> None:
         if isinstance(message, BodyControlEvents) and self.lease is not None:
@@ -623,7 +678,7 @@ class BodyFight:
                     self._capture_invisibility(self.clock(), event.t_game_ms)
                     self._invisible_at = self._invisible_game_ms = None
                     self._native_release_reason = event.release_reason
-                    self._reason = (
+                    self._set_reason(
                         "target_lost" if event.release_reason == "target_visibility_lost"
                         else "native_restored"
                     )
@@ -650,7 +705,7 @@ class BodyFight:
             return
         for row in rows:
             if len(self._rows) >= 128:
-                self._reason = "observation_overflow"
+                self._set_reason("observation_overflow")
                 break
             self._rows.append((row, received_at))
         if self.lease is not None:
@@ -679,10 +734,10 @@ class BodyFight:
                 except TimeoutError:
                     pass
         except asyncio.CancelledError:
-            self._reason = self._reason or "shutdown"
+            self._set_reason(self._reason or "shutdown")
             raise
         except Exception:
-            self._reason = "pilot_error"
+            self._set_reason("pilot_error")
             log.exception("neural-body pilot failed npc=%s", self.npc)
         finally:
             await self._finish(self._reason or "shutdown")
@@ -696,7 +751,7 @@ class BodyFight:
             if self.lease != lease or self._closing or self._reason is not None:
                 return
             if self.link.closed.is_set() or self.link.body_leases.get(lease.entity_id) != lease:
-                self._reason = "lease_lost"
+                self._set_reason("lease_lost")
                 self._wake.set()
                 return
             sent_at = loop.time()
@@ -705,7 +760,7 @@ class BodyFight:
             except Exception:
                 # Never let a detached keepalive task fail silently and leave the
                 # main loop accepting policy decisions for an unrenewed lease.
-                self._reason = self._reason or "lease_lost"
+                self._set_reason(self._reason or "lease_lost")
                 self._wake.set()
                 return
             deadline = sent_at + HEARTBEAT_INTERVAL
@@ -730,7 +785,7 @@ class BodyFight:
             assert age is not None
             remaining = POLICY_RESPONSE_TIMEOUT - age
             if remaining <= 0:
-                self._reason = "policy_timeout"
+                self._set_reason("policy_timeout")
                 self._wake.set()
                 return
             try:
@@ -834,7 +889,7 @@ class BodyFight:
                 break
 
     def _is_leased_target(self, row: dict[str, Any]) -> bool:
-        return self._hero is None or row["target"]["entity_id"] == self._hero
+        return self.lease is None or row["target"]["entity_id"] == self.lease.target_entity_id
 
     def _leased_periodic(self, row: dict[str, Any]) -> bool:
         return bool(
@@ -922,15 +977,24 @@ class BodyFight:
         if self.lease is not None:
             terminal = self._terminal(raw)
             if terminal:
-                self._reason = terminal
+                if terminal in {"hero_down", "target_down"} and not self._is_leased_target(raw):
+                    return
+                self._set_reason(terminal)
                 return
-        elif (
-            not all(raw["target"][key] for key in ("present", "visible", "current_valid"))
-            or self._terminal(raw)
-            or self.clock() - received_at > 0.100
-            or self._now_game_ms - raw["t_game_ms"] > 100
-        ):
-            return
+        else:
+            if self.clock() - received_at > 0.100 or self._now_game_ms - raw["t_game_ms"] > 100:
+                return
+            terminal = self._terminal(raw)
+            if terminal in {"npc_down", "target_lost"}:
+                self._set_reason(terminal)
+                return
+            # Before acquisition there is no confirmed numeric target identity.
+            # A later live-target query can describe a new, healthy target, so
+            # an old down row must not close or claim this observing episode.
+            if terminal or not all(
+                raw["target"][key] for key in ("present", "visible", "current_valid")
+            ):
+                return
         observation = self.link.body_latest.get(raw["entity_id"])
         if observation is None or observation.observation_seq != raw["observation_seq"]:
             # The exact typed row is only needed at the bridge API boundary.
@@ -948,7 +1012,7 @@ class BodyFight:
                     self._refusals["target_not_allowed"] += 1
                     if self._retargeting:
                         self._claimed_fights.add(self.npc)
-                        self._reason = "target_not_allowed"
+                        self._set_reason("target_not_allowed")
                     return
                 if self._reason or self._closing or not self._allowed(self.npc):
                     return
@@ -974,7 +1038,7 @@ class BodyFight:
                     )
                 except (TimeoutError, OSError, ConnectionClosed):
                     # The bridge may own the body even though no receipt arrived.
-                    self._reason = self._reason or "acquire_uncertain"
+                    self._set_reason(self._reason or "acquire_uncertain")
                     raise
                 except GameError:
                     recovered = self.link.body_leases.get(observation.entity_id)
@@ -982,7 +1046,7 @@ class BodyFight:
                         self.lease = recovered
                         self._claimed_fights.add(self.npc)
                     if self.link.body_acquire_pending(observation.entity_id):
-                        self._reason = self._reason or "acquire_uncertain"
+                        self._set_reason(self._reason or "acquire_uncertain")
                     else:
                         self._pending_acquire = None
                     raise
@@ -1025,9 +1089,9 @@ class BodyFight:
                     await self.client.connect()
                     await self._reset_policy(self._initial_game_ms)
                 except TimeoutError:
-                    self._reason = "policy_timeout"
+                    self._set_reason("policy_timeout")
                 except (OSError, ValueError, PolicyError):
-                    self._reason = "policy_error"
+                    self._set_reason("policy_error")
             return
         if raw["observation_seq"] <= self.lease.acquired_observation_seq:
             return
@@ -1037,7 +1101,7 @@ class BodyFight:
                 try:
                     await self._reset_policy(raw["t_game_ms"])
                 except TimeoutError:
-                    self._reason = "policy_timeout"
+                    self._set_reason("policy_timeout")
                     return
             memory_only = self._lagging(raw)
             if memory_only:
@@ -1057,7 +1121,7 @@ class BodyFight:
                 self._policy_timeouts_consecutive += 1
                 self._policy_timeout_waits.append((self.clock() - started) * 1000)
                 if self._policy_timeouts_consecutive >= POLICY_TIMEOUT_LIMIT:
-                    self._reason = "policy_timeout"
+                    self._set_reason("policy_timeout")
                 return
             finally:
                 responded_at = self.clock()
@@ -1078,13 +1142,13 @@ class BodyFight:
                     self._transient_rejections_consecutive += 1
                     if self._transient_rejections_consecutive < TRANSIENT_REJECTION_LIMIT:
                         return
-                self._reason = f"policy_fallback:{result.get('reason')}"
+                self._set_reason(f"policy_fallback:{result.get('reason')}")
                 return
             if self._closing or self._reason or not self._allowed(self.npc):
-                self._reason = self._reason or "npc_unavailable"
+                self._set_reason(self._reason or "npc_unavailable")
                 return
             if self.link.body_leases.get(self.lease.entity_id) != self.lease:
-                self._reason = "lease_lost"
+                self._set_reason("lease_lost")
                 return
             if (
                 not memory_only and not self._lagging(raw)
@@ -1122,7 +1186,7 @@ class BodyFight:
                     if isinstance(error, GameError) and reason in TRANSIENT_ACTION_REJECTIONS:
                         self._transient_rejections_consecutive += 1
                         if self._transient_rejections_consecutive >= TRANSIENT_REJECTION_LIMIT:
-                            self._reason = "body_action_rejected"
+                            self._set_reason("body_action_rejected")
                         return
                     raise
                 self._policy_decisions[-1] = PolicyDecisionTrace(
@@ -1131,9 +1195,9 @@ class BodyFight:
                 self._transient_rejections_consecutive = 0
                 self._decisions += 1
         except (OSError, ValueError, PolicyError):
-            self._reason = "policy_error"
+            self._set_reason("policy_error")
         except BRIDGE_ERRORS:
-            self._reason = "body_action_rejected"
+            self._set_reason("body_action_rejected")
 
     async def _recover_acquire(self) -> bool:
         """Resolve an uncertain acquire before releasing or changing the watch."""
@@ -1234,6 +1298,8 @@ class BodyFight:
 
     async def _finish(self, reason: str) -> None:
         self.pilot._drain_events()
+        if self._reason in WORLD_STOP_REASONS:
+            reason = self._reason
         if reason in {"lease_lost", "native_restored"} and self._reason == "target_lost":
             reason = "target_lost"
         npc, client = self.npc, self.client
@@ -1351,6 +1417,8 @@ class BodyFight:
                     async with asyncio.timeout(BRIDGE_TIMEOUT):
                         await self._finish_status(lease)
         finally:
+            if reason != "finish_deadline" and self._reason in WORLD_STOP_REASONS:
+                reason = self._reason
             release_confirmed = bool(
                 lease is not None
                 and reason not in {"finish_deadline", "disconnected"}
