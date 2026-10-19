@@ -12,6 +12,7 @@ from gothic_ai.protocol import (
     ERRAND_PROTOCOL,
     FIGHT_REACTION_PROTOCOL,
     NOISE_PROTOCOL,
+    NPC_CRIME_PROTOCOL,
     PACE_PROTOCOL,
     PROTOCOL_VERSION,
     TRACE_PROTOCOL,
@@ -29,6 +30,7 @@ from gothic_ai.protocol import (
     NpcActCmd,
     NpcActResult,
     NpcChestsCmd,
+    NpcDeed,
     NpcEvent,
     NpcIdle,
     NpcLook,
@@ -43,6 +45,7 @@ from gothic_ai.protocol import (
     StoryEffectCmd,
     StoryNpcCmd,
     StoryProgramCmd,
+    StoryStateCmd,
     ThreatControlCmd,
     TriggerFired,
     parse_game_message,
@@ -121,6 +124,67 @@ def test_v44_independent_deeds_switch_and_held_deed_id():
     }))
     assert isinstance(held, PerceptionHeld)
     assert held.deed == "branch/deed-1"
+
+
+@pytest.mark.parametrize("kind", ["take_item", "attack"])
+def test_v47_npc_deed_keeps_shared_snapshot_and_culprit_separate_from_hero(kind):
+    assert PROTOCOL_VERSION == NPC_CRIME_PROTOCOL == 47
+    msg = parse_game_message(_json({
+        "type": "npc_deed", "id": "npc-deed-1", "kind": kind, "culprit": "VINO",
+        "culprit_guild": 7, "culprit_npctype": 0, "victim": "MALAK", "owner": "LOBART",
+        "chest": "CHEST_LOBART", "chest_owner": "LOBART", "room_owner": "LOBART",
+        "position": {"x": 1, "y": 2, "z": 3}, "witnesses": ["HILDA"],
+    }))
+    assert isinstance(msg, NpcDeed) and not isinstance(msg, HeroDeed)
+    assert (msg.culprit, msg.culprit_guild, msg.chest_owner, msg.room_owner) == (
+        "VINO", 7, "LOBART", "LOBART",
+    )
+    assert msg.witnesses == ["HILDA"]
+
+
+def test_npc_deed_requires_a_culprit_and_cannot_report_murder():
+    deed = {"type": "npc_deed", "id": "n1", "kind": "attack",
+            "position": {"x": 0, "y": 0, "z": 0}}
+    with pytest.raises(ValidationError):
+        parse_game_message(_json(deed))
+    with pytest.raises(ValidationError):
+        parse_game_message(_json({**deed, "culprit": "VINO", "kind": "murder"}))
+
+
+@pytest.mark.parametrize("args", [
+    {"chest": "CHEST_LOBART", "what": "ITFO_BREAD", "count": 2, "deed": True},
+    {"item": "ITFO_BREAD", "what": "ITFO_BREAD", "count": 1, "deed": True},
+])
+def test_v47_steal_command_preserves_native_target_and_deed_mark(args):
+    cmd = NpcActCmd(id="n1", npc="VINO", action="steal", args=args)
+    assert json.loads(cmd.to_json())["args"] == args
+
+
+def test_v47_fight_command_preserves_optional_reason_and_deed_mark():
+    cmd = NpcActCmd(id="n1", npc="VINO", action="fight",
+                    args={"npc": "MALAK", "reason": "AR_THEFT", "deed": True})
+    assert json.loads(cmd.to_json())["args"] == {
+        "npc": "MALAK", "reason": "AR_THEFT", "deed": True,
+    }
+
+
+def test_v47_storyguard_reads_the_actual_steal_target_before_commanding_the_body():
+    target = {"npc": "VINO", "chest": "CHEST_LOBART", "what": "ITFO_BREAD", "count": 1}
+    command = StoryStateCmd(req="s1", deed_target=target)
+    assert json.loads(command.to_json())["deed_target"] == target
+    assert "deed_target" not in json.loads(StoryStateCmd(req="s2").to_json())
+
+
+@pytest.mark.parametrize("theft,damage", [(True, False), (False, True), (None, None)])
+def test_v47_other_damage_readiness_is_independent_of_theft(theft, damage):
+    view = {"npc": "HILDA", "name": "Хильда"}
+    if theft is not None:
+        view.update(theft_ready=theft, others_damage_ready=damage, others_damage_range=800.0)
+    message = parse_game_message(_json({"type": "npc_views", "t": 1, "views": [view]}))
+    assert isinstance(message, NpcViews)
+    assert message.views[0].theft_ready is theft
+    assert message.views[0].others_damage_ready is damage
+    assert message.views[0].others_damage_range == (800.0 if theft is not None else None)
 
 
 def test_v46_held_room_entry_has_no_deed_and_uses_the_deeds_switch():

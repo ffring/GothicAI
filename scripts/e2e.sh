@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
+#   memprobe: Linux engine RSS/status after each step and smaps groups after each cycle;
+#       MEMPROBE_PHASES=wave,save,load,spawn,teleport, MEMPROBE_CYCLES=8; LLM=fake, no body URL
 #   crime_meet: save 1, native home eviction and a brave victim's Amends approach/payment;
 #       LLM=chatgpt runs only the short compensation scene with the real model
 #   m0: takes Xardas over, walks him around and returns him to his routine
@@ -124,6 +126,10 @@
 #       payment, Vino hears, then honesty 4 pays. Save/load preserves intentions and single outcomes.
 #       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720. LLM=chatgpt scripts only the later-payment setup,
 #       records one ordinary real-model refusal response verbatim, then exits.
+#   npc_deeds: Vino steals from CHEST_LOBART in front of Hilda, assaults Maleth to a living knockout,
+#       then steals a world item before brave Lobart, who defeats him and reclaims it. NPC knowledge,
+#       its rumor and save/load are checked; guards are covered by module tests.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720; no live model.
 #   crime_director: deeds and story responses (docs/crime.md, layer 5), SAVE=save_slot_1.sav.
 #       LLM=fake: unseen chest theft and its return quest, Hilda's initiative and paid silence,
 #       Lobart's learned grievance and Amends payment. LLM=chatgpt: witnessed theft goes to the
@@ -307,14 +313,18 @@
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
 #
 #   SCENARIO=m3 LLM=fake ASR=voxtral GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e.sh
+# GAME_EXTRA_ENV adds game-only environment assignments, one NAME=value per line.
+# Example: GAME_EXTRA_ENV=$'LD_PRELOAD=/path/libjemalloc.so.2\nMALLOC_CONF=prof:true'
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 GAME_BIN="${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}"
 LOG_DIR="${LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gothic-e2e.XXXXXX")}"
-TIMEOUT="${TIMEOUT:-240}"
 SCENARIO="${SCENARIO:-m0}"
+E2E_DEFAULT_TIMEOUT=240
+if [[ "$SCENARIO" == memprobe ]]; then E2E_DEFAULT_TIMEOUT=1200; fi
+TIMEOUT="${TIMEOUT:-$E2E_DEFAULT_TIMEOUT}"
 if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 && "$SCENARIO" != tts ]]; then
   echo 'GOTHIC_TTS_RECORD requires SCENARIO=tts' >&2
   exit 2
@@ -502,6 +512,16 @@ if [ "$(uname -s)" = Darwin ]; then
   until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 fi
 GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT" "OPENGOTHIC_FPS_LOG=${OPENGOTHIC_FPS_LOG:-1}")
+if [[ -n "${GAME_EXTRA_ENV:-}" ]]; then
+  while IFS= read -r assignment; do
+    [[ -n "$assignment" ]] || continue
+    [[ "$assignment" =~ ^[a-zA-Z_][a-zA-Z0-9_]*= ]] || {
+      echo 'GAME_EXTRA_ENV requires one NAME=value assignment per line' >&2
+      exit 2
+    }
+    GAME_ENV+=("$assignment")
+  done <<<"$GAME_EXTRA_ENV"
+fi
 if [ "$SCENARIO" = "trace" ] || [ "$SCENARIO" = "broken" ] || [ "$SCENARIO" = "trace_crime" ]; then
   GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/$SCENARIO-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
     "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1")
@@ -517,6 +537,7 @@ if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
 fi
 (cd "$LOG_DIR" && exec env "${GAME_ENV[@]}" "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
+printf '%s\n' "$GAME" >"$LOG_DIR/game.pid"
 
 for _ in $(seq 1 "$TIMEOUT"); do
   kill -0 "$SRV" 2>/dev/null || break

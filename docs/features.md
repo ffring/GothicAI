@@ -69,6 +69,7 @@ PR, который добавляет фичу или выключатель, д
 | Прикрытие героя свидетелем: сделка, страх, раскрытие | `--no-cover` или `--no-crimes` | `deals.py`, `witnesses.py`, `crimes.py` | e2e `cover`; pytest `test_cover.py`, `test_deals.py` | [npc-wave3.md](npc-wave3.md#как-работает-сейчас) |
 | Слухи о NPC и знание о раскрытом прикрытии: обстановка и пометки свидетеля | новые прикрытия — `--no-cover` или `--no-crimes`; старые факты читаются | `social.py`, `people_knowledge.py`, `witnesses.py`, `npc_tools.py` | e2e `cover_subject`; pytest `test_people_knowledge.py`, `test_social.py`, тесты читателей слухов | [npc-wave3.md](npc-wave3.md#как-работает-сейчас) |
 | Обман NPC в отложенной части сделки и знание о невыплате | `--no-npc-cheat` или `--no-crimes` | `npc_cheat.py`, `promise_breach.py`, `fear.py`, `deals.py`, `contracts.py`, `meetings.py`, `people_knowledge.py` | e2e `cheat`; pytest намерения, выплат, слухов, показаний и встреч | [npc-wave3.md](npc-wave3.md#как-работает-сейчас) |
+| Дела NPC телом по команде сервера: кража, несмертельный удар, человеческие свидетели с активным восприятием, итог защиты и возврат украденного | `--no-npc-crimes` или `--no-crimes` | `npc_crimes.py` (`npc_crime_defense`, `npc_crime_restitution`), `storyguard.py`, `people_knowledge.py`; мост — `npc_deed`, `npc_act steal`, `fight.deed`, `deedwitness.h`, `npc_view.others_damage_ready`, `others_damage_range`, v47 | `npc_deeds` три подряд по 32/32; полный pytest Ryzen 2462 passed, 14 skipped; обе сборки и контракт 27/27 Mac и Linux чистые; все 12 регрессий прошли, `crime_law` 20/20; страж — модульно | [npc-wave3.md](npc-wave3.md#как-работает-сейчас), [protocol.md](protocol.md#дела-npc-v47) |
 | Слухи по знакомым | нет | `social.py` (`Rumors`) | e2e `rumor` | [story-graph.md](story-graph.md) |
 | Пересказ слуха вслух рядом с героем | нет | `gossip.py` | e2e `gossip`; бенч `gossip` | [npc-tools.md](npc-tools.md#сделано-двое-при-герое) |
 | Преступления, свидетели, закон общины | `--no-crimes` | `crimes.py`, `crime_law*.py`; мост — `hero_deed` | e2e `crimes`, `crime_talk`, `crime_law` | [crime.md](crime.md) |
@@ -111,6 +112,12 @@ PR, который добавляет фичу или выключатель, д
 | Мост к ИИ-серверу | `GOTHIC_AI=0` | `ai_bridge/aibridge.cpp` | все e2e | [protocol.md](protocol.md) |
 | Изменение списка `body_watch` под lease или с заявкой на захват (v45) | нет; без владельцев остаётся полный сброс | `ai_bridge/aibridge.cpp`, `common/game/bodyobservations.*`, `common/game/bodycontroller.*` | `gothic-body-watch-test`; e2e `neural` | [npc-body-api.md](npc-body-api.md), [npc-body-observations.md](npc-body-observations.md) |
 | Диалоговые функции скриптов как программы без VM | `GOTHIC_AI_STORYEXEC=0` | `ai_bridge/dialoggraph.cpp` | e2e `graph`, `programs` | [story-graph.md](story-graph.md) |
+
+## Движок: память
+
+| Фича | Как выключить | Модуль | Проверка | Документ |
+|---|---|---|---|---|
+| Возврат свободных страниц арен glibc после успешной загрузки мира; сохранение не вызывает trim | `OPENGOTHIC_MALLOC_TRIM=0`; только Linux с glibc | `common/gothic.cpp`, `Gothic::finishLoading` | e2e `memprobe`, `load` и `wave` по 8 циклов на Ryzen | [диагноз и починка RSS](../reports/engine/2026-10-19-rss-growth/README.md) |
 
 ## Движок: физика Jolt
 
@@ -160,6 +167,7 @@ PR, который добавляет фичу или выключатель, д
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
 | Свои PBR-материалы мира и статичных vob: нормаль/ORM, GGX солнца и светильников, отражение неба без GI и с GI Probes; AO только на рассеянное небо; albedo без загрузки оригинала, с переписью подмены | убрать каталог контента или `OPENGOTHIC_CONTENT=` | `common/resources.cpp`, `graphics/material.*`, `drawbuckets.*`, `renderer.*`, `shader/materials/`, `shader/lighting/` | синтетическая DDS-фикстура `scripts/content/test-material.py`, `rf.bench` Vulkan/Metal | [Своя игра](own-content.md#как-работает-сейчас) |
+| Гекс-тайлинг своих карт: общий расчёт трёх ячеек, случайный сдвиг и поворот нормали; normal/ORM берут одну доминирующую ячейку при весе ≥0,7 с плавным переходом | `antitile: "off"` в записи `materials.json` (по умолчанию); `offset` сохраняет направление, `rotate` разрешает поворот; размер — `antitile_cell` | `resources.*`, `graphics/material.*`, `drawbuckets.*`, `shader/materials/main.frag` | `test-material.py --pattern antitile`, `rf.bench`: off/offset/rotate, автокорреляция, солнце/фонарь, PSNR и FPS | [Своя игра](own-content.md#как-работает-сейчас) |
 | Ray query на Mac: тени точечных светильников, свет не проходит сквозь стены (на Linux и Windows — с апстрима) | `-rt 0` | `common/commandline.h` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
 | GI-пробы на дискретной видеокарте с трассировкой | `-gi 0` | `common/gothic.cpp` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
 | Сглаживание CMAA2 (только при `vidResIndex=0`) | `-aa 0` | `common/commandline.h` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
@@ -185,6 +193,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича стенда | Как включить / выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
+| Измерение RSS движка по шагам на Linux | `SCENARIO=memprobe LLM=fake`, `MEMPROBE_PHASES=wave,save,load,spawn,teleport`, `MEMPROBE_CYCLES=8`; без сценария выключено | `scenarios/memprobe.py`, `scripts/e2e.sh`; `GAME_EXTRA_ENV` передаёт окружение только игре | пять фаз по 8 циклов на Ryzen; `test_memprobe.py` проверяет ошибки выполнения нативных шагов | [исследование RSS](../reports/engine/2026-10-19-rss-growth/README.md) |
 | Общий кэш Linux-бинарников движка и `storygraph` по хэшу исходников | включён в `scripts/ryzen.sh`; `clean-cache` удаляет записи старше двух часов; `RYZEN_WORKTREE` задаёт имя папки worktree | `scripts/ryzen.sh` | `test_ryzen`, `test_ryzen_lifetime`, `test_ryzen_lock`; e2e `stages` в двух worktree | [ryzen.md](ryzen.md), [compute.md](compute.md) |
 | Офлайн-перепись площадей, масштаба UV и плиточности текстур четырёх миров со статичными vob | `scripts/content-textures.sh`; без запуска скрипта не работает | `scripts/content/world-textures.cpp` | `scripts/content-textures.sh --self-test`, офлайн-прогон четырёх миров со сверкой площади ≤ 0,1 % | [own-content.md](own-content.md), [CSV и отчёт](../reports/content/2026-10-world-textures/README.md) |
 | Популяция навигации: N NPC, независимые состояния, выборка softmax и награды Detour без перезагрузки мира | `navdemos population … sample\|argmax … RECORD`; `navdemos physics cv\|native`, в `nav_rl.py` CV по умолчанию; `RECORD=0` выключает записи; `hero near\|keep`, `kill-slot SLOT AFTER_MS` — проверки стенда | `common/navdemos.*`, минимальные вставки в `worldobjects.cpp`, `npc.cpp`, `MoveAlgo::useCharacterVirtual`; `scripts/nav_rl.py` | `test_nav_rl.py`, `nav_rl.py check/equivalence/population/death-smoke` | [navigation.md](navigation.md) |

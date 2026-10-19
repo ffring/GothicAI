@@ -64,6 +64,7 @@ class Bridge:
         self.release_rejections = deque()
         self.status_error = None
         self.acquire_roster_delay = 0
+        self.acquire_grants = []
         self.target_is_hero = True
         self.target_npc = None
         self.release_pending_polls = 0
@@ -146,6 +147,7 @@ class Bridge:
         )
 
     def _grant(self, command):
+        self.acquire_grants.append(command)
         self.provider_owned = True
         self._control_scope = {name: command[name] for name in (
             "entity_id", "session_epoch", "world_epoch",
@@ -341,7 +343,11 @@ class Bridge:
                     self._activity(self._control_npc, "fight")
         self._accept_action(command, value)
         result = Result(type="result", req=command["req"], ok=True, value=value)
-        delay = self.response_delays.get(kind, 0)
+        delays = self.response_delays.get(kind, 0)
+        if isinstance(delays, deque):
+            delay = delays.popleft() if delays else 0
+        else:
+            delay = delays
         if delay:
             async def reply():
                 await asyncio.sleep(delay)
@@ -546,6 +552,9 @@ class Policy:
         self.step_fallback_reason = "fake_fallback"
         self.step_hidden_reset = True
         self.reset_mode = "normal"
+        self.reset_modes = deque()
+        self.reset_delay = 0
+        self.reset_delays = deque()
         self.reset_waiter = None
         self.step_waiter = None
         self.step_delay = 0
@@ -576,11 +585,15 @@ class Policy:
                 command = request["cmd"]
                 result = {"id": request["id"], "schema_version": 1, "ok": True}
                 if command == "reset":
+                    mode = self.reset_modes.popleft() if self.reset_modes else self.reset_mode
+                    delay = self.reset_delays.popleft() if self.reset_delays else self.reset_delay
+                    if delay:
+                        await asyncio.sleep(delay)
                     if self.reset_waiter is not None:
                         await self.reset_waiter.wait()
-                    if self.reset_mode == "error":
+                    if mode == "error":
                         result.update(ok=False, reason="reset_error", error="fake reset failure")
-                    elif self.reset_mode == "timeout":
+                    elif mode == "timeout":
                         continue
                     else:
                         result.update(reason="episode_reset", hidden_reset=True)
@@ -939,8 +952,7 @@ async def test_pre_acquire_snapshot_delivered_after_acquire_keeps_lease_and_wait
         assert not rig.bridge.commands("body_release")
 
 
-@pytest.mark.parametrize("shutdown", [False, True])
-async def test_lost_acquire_reply_reconciles_native_lease_before_clearing_watch(shutdown):
+async def test_shutdown_during_lost_acquire_reply_reconciles_native_lease_before_clearing_watch():
     async with running() as rig:
         rig.bridge.response_delays["body_acquire"] = 0.350
         rig.bridge.acquire_roster_delay = 0.500
@@ -952,8 +964,7 @@ async def test_lost_acquire_reply_reconciles_native_lease_before_clearing_watch(
         await asyncio.sleep(0.050)
         rig.bridge.emit(fighter(3, owned=True))
         assert not rig.link.body_leases
-        if shutdown:
-            await asyncio.wait_for(rig.pilot.aclose(), 1.0)
+        await asyncio.wait_for(rig.pilot.aclose(), 1.0)
         await eventually(lambda: rig.bridge.commands("body_release"))
         await eventually(lambda: any(not cmd["npcs"] for cmd in rig.bridge.commands("body_watch")))
         await eventually(lambda: rig.pilot.active_count == 0)
@@ -961,6 +972,7 @@ async def test_lost_acquire_reply_reconciles_native_lease_before_clearing_watch(
         await eventually(lambda: not rig.bridge._response_tasks)
         assert not rig.bridge.provider_owned
         assert not rig.link.body_leases
+        assert not rig.link.body_acquire_pending(1)
         assert rig.bridge._watched_npc is None
         assert rig.bridge.lease_expirations == 0
         assert len(rig.bridge.commands("body_acquire")) == 1
@@ -979,19 +991,302 @@ async def test_lost_acquire_reply_reconciles_native_lease_before_clearing_watch(
         assert release_index < unwatch_index
         assert rig.bridge.commands("body_control_status")
 
-        if not shutdown:
-            # Cleanup leaves the same pilot available for a later fight.
-            rig.bridge.response_delays.clear()
-            rig.bridge.acquire_roster_delay = 0
-            rig.roster(activity="routine", state="ZS_SIT_BENCH")
-            await rig.watch()
-            await eventually(lambda: rig.fight._watch_ready)
-            rig.bridge.emit(player_row(4), fighter(5))
-            await eventually(lambda: rig.link.body_leases)
-            rig.bridge.emit(fighter(6, owned=True))
-            await eventually(lambda: rig.bridge.commands("body_action"))
-            assert len(rig.bridge.commands("body_acquire")) == 2
-            assert len(rig.policy.commands("reset")) == 1
+
+@pytest.mark.parametrize("reply_delay", [0.350, 2.0])
+async def test_lost_acquire_reply_recovers_the_granted_lease_and_continues(reply_delay, caplog):
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        rig.bridge.response_delays["body_acquire"] = reply_delay
+        rig.bridge.acquire_roster_delay = 0.500
+        await rig.watch()
+        await eventually(lambda: rig.fight._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.provider_owned)
+        await eventually(lambda: rig.policy.commands("reset"))
+        await eventually(lambda: rig.fight.client is not None and not rig.fight.client.pending)
+        lease = rig.fight.lease
+        assert lease is not None and rig.link.body_leases == {1: lease}
+        assert not rig.link.body_acquire_pending(1)
+        assert (lease.session_epoch, lease.world_epoch, lease.entity_id, lease.control_generation) == (
+            1, 1, 1, 7,
+        )
+        assert len(rig.bridge.commands("body_acquire")) == len(rig.bridge.acquire_grants) == 1
+        assert rig.bridge.commands("body_control_status")
+        assert not rig.bridge.commands("body_release")
+        rig.bridge.emit(fighter(3, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert rig.fight.lease == lease and rig.pilot.last_summary is None
+        await rig.pilot.aclose()
+        # The receipt can arrive after status recovered the lease or after shutdown.
+        # Neither timing may grant again, republish the lease, or leak its native owner.
+        await eventually(lambda: not rig.bridge._response_tasks, timeout=2.1)
+        summary = rig.pilot.last_summary
+        assert summary.acquire_requests == summary.acquire_completed == 1
+        assert summary.acquire_uncertain_recovered == 1 and summary.setup_timeouts == 0
+        assert summary.decisions == 1 and summary.release_confirmed and summary.watch_removed
+        assert not rig.bridge.provider_owned and not rig.link.body_leases
+        assert not rig.link.body_acquire_pending(1)
+        assert len(rig.bridge.acquire_grants) == len(rig.bridge.commands("body_release")) == 1
+        assert rig.bridge.lease_expirations == 0
+        assert "acquire_uncertain_recovered=1" in caplog.text
+
+
+async def test_body_roster_during_uncertain_acquire_keeps_waiting_for_the_granted_lease():
+    async with running() as rig:
+        rig.bridge.response_delays.update(body_acquire=0.350, body_control_status=0.150)
+        rig.bridge.acquire_roster_delay = 0.800
+        await rig.watch()
+        await eventually(lambda: rig.fight._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.commands("body_control_status"))
+        assert not rig.fight._acquiring and rig.fight._pending_acquire is not None
+        assert rig.fight.lease is None and rig.link.body_acquire_pending(1)
+        # The native owner is already scripted, but its status response is still
+        # in flight. The delayed roster must not classify this actor as unavailable.
+        rig.roster(activity="body")
+        assert rig.fight._reason is None and rig.pilot.active_count == 1
+        assert not rig.bridge.commands("body_release")
+        await eventually(lambda: rig.policy.commands("reset"))
+        lease = rig.fight.lease
+        assert lease is not None and rig.link.body_leases == {1: lease}
+        assert not rig.link.body_acquire_pending(1)
+        rig.bridge.emit(fighter(3, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert rig.fight.lease == lease and len(rig.bridge.acquire_grants) == 1
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert not rig.bridge.commands("body_release")
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.acquire_uncertain_recovered == 1 and summary.decisions == 1
+        assert summary.release_confirmed and summary.watch_removed
+        assert not rig.link.body_acquire_pending(1)
+        assert not rig.link.body_leases and not rig.bridge.provider_owned
+
+
+@pytest.mark.parametrize("restored_roster_activity", ["fight", "body"])
+async def test_native_restoration_racing_acquire_status_does_not_resurrect_the_old_lease(
+    monkeypatch, restored_roster_activity,
+):
+    async with running() as rig:
+        rig.bridge.response_delays["body_acquire"] = deque([0.350, 0])
+        rig.bridge.acquire_roster_delay = 0.800
+        original_request = rig.link._request
+        restored = asyncio.Event()
+
+        async def restore_before_old_status_returns(command, timeout):
+            result = await original_request(command, timeout)
+            if command.type == "body_control_status" and not restored.is_set():
+                assert result.value["actors"][0]["owner"] == "scripted"
+                rig.bridge.provider_owned = False
+                rig.bridge._lease_watchdog.cancel()
+                # Ownership evidence can precede the next 500 ms roster. A
+                # cached body entry must not close recovery before its retry.
+                rig.bridge._activity("NPC", restored_roster_activity)
+                rig.link._dispatch(events(event(
+                    1, **rig.bridge._control_scope, reason="native_restored", owner="native",
+                    provider="neural-body", acquire_request_id=rig.bridge._acquire_request_id,
+                )))
+                restored.set()
+            return result
+
+        monkeypatch.setattr(rig.link, "_request", restore_before_old_status_returns)
+        await rig.watch()
+        await eventually(lambda: rig.fight._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(restored.is_set)
+        assert not rig.link.body_leases and rig.fight.lease is None
+        assert not rig.policy.requests and not rig.bridge.commands("body_release")
+        # A subsequent native snapshot resolves the request; only a fresh acquire
+        # may start a policy episode after that authoritative restoration.
+        await eventually(lambda: rig.fight._pending_acquire is None)
+        assert not rig.link.body_acquire_pending(1)
+        assert len(rig.bridge.commands("body_control_status")) >= 2
+        assert not rig.link.body_leases and not rig.policy.requests
+        await asyncio.sleep(0.050)
+        assert rig.pilot.active_count == 1 and rig.pilot.last_summary is None
+        assert rig.fight._reason is None and rig.fight._acquire_uncertain_recovered == 1
+        rig.clock.advance(bodypilot.ACQUIRE_INTERVAL + 0.001)
+        rig.bridge.emit(fighter(3))
+        await eventually(lambda: rig.policy.commands("reset"))
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert len(rig.bridge.commands("body_acquire")) == len(rig.bridge.acquire_grants) == 2
+        assert len(rig.policy.commands("reset")) == len(rig.link.body_leases) == 1
+        assert not rig.link.body_acquire_pending(1)
+        assert not rig.bridge.commands("body_release")
+        await rig.pilot.aclose()
+        assert rig.pilot.last_summary.release_confirmed and rig.pilot.last_summary.watch_removed
+        assert not rig.link.body_acquire_pending(1)
+        assert not rig.link.body_leases and not rig.bridge.provider_owned
+
+
+async def test_acquired_event_recovers_the_lease_while_status_remains_unavailable():
+    async with running() as rig:
+        rig.bridge.response_delays.update(body_acquire=1.0, body_control_status=0.350)
+        await rig.watch()
+        await eventually(lambda: rig.fight._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.commands("body_control_status"))
+        acquire = rig.bridge.commands("body_acquire")[0]
+        assert rig.bridge.provider_owned and rig.fight.lease is None
+        assert rig.link.body_acquire_pending(1)
+        # Another active fight's destructive poll can deliver this request's
+        # acquired event while this fight is awaiting a status that times out.
+        rig.bridge.control_events.append(event(
+            1, **rig.bridge._control_scope, provider=acquire["provider"],
+            acquire_request_id=acquire["acquire_request_id"], observation_seq=2,
+            watchdog_timeout_ms=bodypilot.LEASE_TIMEOUT_MS,
+        ))
+        await rig.link.body_events()
+        lease = rig.link.body_leases[1]
+        assert not rig.link.body_acquire_pending(1)
+        await eventually(lambda: rig.policy.commands("reset"), timeout=0.750)
+        await eventually(lambda: rig.fight.client is not None and not rig.fight.client.pending)
+        await eventually(lambda: rig.bridge.commands("body_heartbeat"))
+        assert rig.fight.lease == lease and rig.link.body_leases == {1: lease}
+        assert rig.fight._acquire_uncertain_recovered == 1 and rig.pilot.last_summary is None
+        acquired_at = rig.bridge.command_times("body_acquire")[0]
+        heartbeat_at = rig.bridge.command_times("body_heartbeat")[0]
+        assert heartbeat_at - acquired_at < bodypilot.LEASE_TIMEOUT_MS / 1000
+        assert len(rig.bridge.commands("body_acquire")) == len(rig.bridge.acquire_grants) == 1
+        assert not rig.bridge.commands("body_release")
+        rig.bridge.emit(fighter(3, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        # The late acquire receipt must not replace or duplicate the event's
+        # confirmed lease after policy setup and keepalives have already begun.
+        await eventually(lambda: not rig.bridge._response_tasks, timeout=1.1)
+        assert rig.fight.lease == lease and rig.link.body_leases == {1: lease}
+        assert len(rig.policy.commands("reset")) == len(rig.bridge.acquire_grants) == 1
+        assert rig.bridge.lease_expirations == 0 and rig.pilot.last_summary is None
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.acquire_requests == summary.acquire_completed == 1
+        assert summary.acquire_uncertain_recovered == 1 and summary.decisions == 1
+        assert summary.release_confirmed and summary.watch_removed
+        assert not rig.link.body_acquire_pending(1)
+        assert not rig.link.body_leases and not rig.bridge.provider_owned
+        assert len(rig.bridge.commands("body_release")) == 1
+        assert rig.bridge.lease_expirations == 0
+
+
+async def test_old_native_status_cannot_clear_an_acquire_started_after_its_snapshot(monkeypatch):
+    async with running() as rig:
+        rig.bridge.response_delays["body_acquire"] = 0.350
+        rig.bridge.acquire_roster_delay = 0.800
+        await rig.watch()
+        await eventually(lambda: rig.fight._watch_ready)
+        original_request = rig.link._request
+        status_captured, return_status = asyncio.Event(), asyncio.Event()
+
+        async def hold_first_status(command, timeout):
+            result = await original_request(command, timeout)
+            if command.type == "body_control_status" and not status_captured.is_set():
+                assert result.value["actors"] == []
+                status_captured.set()
+                await return_status.wait()
+            return result
+
+        monkeypatch.setattr(rig.link, "_request", hold_first_status)
+        old_status = asyncio.create_task(rig.link.body_control_status())
+        try:
+            await asyncio.wait_for(status_captured.wait(), 1.0)
+            rig.bridge.emit(player_row(), fighter())
+            await eventually(lambda: rig.bridge.provider_owned)
+            assert rig.link.body_acquire_pending(1) and rig.fight._acquiring
+        finally:
+            return_status.set()
+            await old_status
+        # This snapshot saw no request. Its late return must leave the newer
+        # client-selected request ID available for lost-receipt recovery.
+        assert rig.link.body_acquire_pending(1)
+        assert rig.fight._pending_acquire is not None and not rig.link.body_leases
+        assert not rig.policy.requests and not rig.bridge.commands("body_release")
+        await eventually(lambda: rig.policy.commands("reset"))
+        assert not rig.link.body_acquire_pending(1)
+        assert len(rig.link.body_leases) == len(rig.bridge.acquire_grants) == 1
+        rig.bridge.emit(fighter(3, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.acquire_uncertain_recovered == 1 and summary.decisions == 1
+        assert summary.release_confirmed and summary.watch_removed
+        assert not rig.link.body_acquire_pending(1)
+        assert not rig.link.body_leases and not rig.bridge.provider_owned
+
+
+async def test_lost_rejected_acquire_reply_retries_at_the_normal_interval_without_double_grant():
+    async with running() as rig:
+        rig.bridge.acquire_rejections.append("unsafe_boundary")
+        rig.bridge.response_delays["body_acquire"] = deque([0.350, 0])
+        await rig.watch()
+        await eventually(lambda: rig.fight._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.commands("body_control_status"))
+        await eventually(lambda: not rig.link.body_acquire_pending(1))
+        assert not rig.bridge.provider_owned and not rig.link.body_leases
+        assert not rig.policy.requests and rig.pilot.last_summary is None
+        rig.clock.advance(bodypilot.ACQUIRE_INTERVAL - 0.001)
+        rig.bridge.emit(fighter(3))
+        await eventually(lambda: not rig.fight._rows)
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        rig.clock.advance(0.002)
+        rig.bridge.emit(fighter(4))
+        await eventually(lambda: rig.policy.commands("reset"))
+        rig.bridge.emit(fighter(5, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        first, second = rig.bridge.commands("body_acquire")
+        assert first["acquire_request_id"] != second["acquire_request_id"]
+        assert len(rig.bridge.acquire_grants) == 1
+        assert rig.bridge.acquire_grants[0] is second
+        assert not rig.bridge.commands("body_release")
+        await eventually(lambda: not rig.bridge._response_tasks)
+        assert len(rig.link.body_leases) == 1 and len(rig.policy.commands("reset")) == 1
+        assert not rig.link.body_acquire_pending(1)
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.acquire_requests == 2 and summary.acquire_completed == 1
+        assert summary.acquire_uncertain_recovered == 1
+        assert summary.release_confirmed and summary.watch_removed
+        assert len(rig.bridge.commands("body_release")) == 1
+        assert not rig.link.body_leases and not rig.bridge.provider_owned
+        assert not rig.link.body_acquire_pending(1)
+
+
+@pytest.mark.parametrize("pending_outcome", ["acquired", "expired"])
+async def test_lost_pending_acquire_reply_waits_for_actual_state_before_retrying(pending_outcome):
+    async with running() as rig:
+        rig.bridge.acquire_pending_results.append(pending_outcome)
+        rig.bridge.acquire_pending_delay = 0.450
+        rig.bridge.response_delays["body_acquire"] = deque([0.350, 0])
+        await rig.watch()
+        await eventually(lambda: rig.fight._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.commands("body_control_status"))
+        assert rig.bridge.pending_acquire is not None
+        rig.clock.advance(bodypilot.ACQUIRE_INTERVAL + 0.001)
+        rig.bridge.emit(fighter(3))
+        await asyncio.sleep(0.050)
+        assert len(rig.bridge.commands("body_acquire")) == 1
+        assert not rig.policy.requests and not rig.bridge.commands("body_release")
+        await eventually(lambda: rig.bridge.pending_acquire is None)
+        if pending_outcome == "expired":
+            await eventually(lambda: not rig.link.body_acquire_pending(1))
+            rig.bridge.emit(fighter(4))
+        await eventually(lambda: rig.policy.commands("reset"))
+        rig.bridge.emit(fighter(5, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        assert len(rig.bridge.commands("body_acquire")) == (1 if pending_outcome == "acquired" else 2)
+        assert len(rig.bridge.acquire_grants) == 1 and len(rig.link.body_leases) == 1
+        assert not rig.link.body_acquire_pending(1)
+        assert not rig.bridge.commands("body_release")
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.acquire_uncertain_recovered == 1 and summary.acquire_completed == 1
+        assert summary.release_confirmed and summary.watch_removed
+        assert not rig.bridge.provider_owned and not rig.link.body_leases
+        assert len(rig.bridge.commands("body_release")) == 1
+        assert not rig.link.body_acquire_pending(1)
 
 
 @pytest.mark.parametrize("player_near", [False, True])
@@ -3746,7 +4041,10 @@ async def test_delayed_release_keeps_closed_fight_claimed_until_native_routine(
         assert len(rig.bridge.commands("body_acquire")) == 2
 
 
-async def test_uncertain_acquire_recovery_is_bounded_by_finish_deadline(monkeypatch, caplog):
+@pytest.mark.parametrize("cancel_reply_delay", [0, 0.350])
+async def test_uncertain_acquire_recovery_is_bounded_by_finish_deadline(
+    monkeypatch, caplog, cancel_reply_delay,
+):
     monkeypatch.setattr(bodypilot, "FINISH_TIMEOUT", 0.8)
     caplog.set_level("INFO", logger="gothic_ai.bodypilot")
     async with running() as rig:
@@ -3759,15 +4057,55 @@ async def test_uncertain_acquire_recovery_is_bounded_by_finish_deadline(monkeypa
         # received its acquire receipt or an ownership snapshot.
         rig.bridge.provider_owned = False
         rig.bridge._lease_watchdog.cancel()
+        rig.clock.advance(bodypilot.ACQUIRE_WINDOW + 0.001)
         await eventually(lambda: rig.pilot.active_count == 0, timeout=1.2)
         assert rig.fight._pending_acquire is None
         assert not rig.link.body_leases
-        assert rig.bridge._watched_npc is None
-        assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
+        # The missing cancellation/status evidence still requires this watch;
+        # finish must be bounded without abandoning the unresolved request ID.
+        assert rig.link.body_acquire_pending(1)
+        assert rig.bridge._watched_npc == "NPC"
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == ["NPC"]
+        assert rig.pilot.last_summary.end_trigger == "acquire_uncertain"
+        assert not rig.pilot.last_summary.watch_removed
         assert not rig.policy.requests
         assert not rig.pilot._done.is_set()
         assert "reason=finish_deadline" in caplog.text
         assert "unconfirmed=" in caplog.text
+        polls_before_recovery = len(rig.bridge.commands("body_control_status"))
+        rig.bridge.response_delays.clear()
+        rig.bridge.response_delays["body_release"] = cancel_reply_delay
+        await eventually(lambda: rig.bridge._watched_npc is None)
+        assert not rig.link.body_acquire_pending(1)
+        assert len(rig.bridge.commands("body_control_status")) > polls_before_recovery
+        assert not rig.link.body_leases and not rig.bridge.provider_owned
+        assert not rig.pilot._releasing
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
+
+
+async def test_uncertain_acquire_observation_stream_waits_until_the_end_of_the_window():
+    async with running() as rig:
+        rig.bridge.response_delays["body_acquire"] = 2.0
+        rig.bridge.status_error = "status_busy"
+        await rig.watch()
+        await eventually(lambda: rig.fight._watch_ready)
+        rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.commands("body_control_status"))
+        for seq in range(3, 163):
+            rig.bridge.emit(fighter(seq, owned=True))
+            await asyncio.sleep(0)
+        assert rig.fight._reason is None and rig.pilot.last_summary is None
+        assert len(rig.fight._rows) <= 1
+        assert len(rig.bridge.commands("body_acquire")) == len(rig.bridge.acquire_grants) == 1
+        assert not rig.policy.requests and not rig.bridge.commands("body_release")
+        rig.bridge.status_error = None
+        rig.clock.advance(bodypilot.ACQUIRE_WINDOW + 0.001)
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == summary.end_trigger == "acquire_uncertain"
+        assert summary.acquire_uncertain_recovered == 0 and summary.watch_removed
+        assert not rig.link.body_leases and not rig.link.body_acquire_pending(1)
+        assert not rig.bridge.provider_owned
 
 
 @pytest.mark.parametrize("confirmation", ["event", "status"])
@@ -3782,9 +4120,12 @@ async def test_orphaned_boundary_request_unsubscribes_and_allows_the_next_fight(
         rig.bridge.response_delays["body_acquire"] = 2.0
         rig.bridge.release_rejections.extend(["cancel_busy"] * 100)
         rig.bridge.status_error = "status_busy"
+        rig.bridge.request_rejections["body_events"] = deque(["events_busy"] * 100)
         await rig.watch()
         await eventually(lambda: rig.fight._watch_ready)
         rig.bridge.emit(player_row(), fighter())
+        await eventually(lambda: rig.bridge.commands("body_control_status"))
+        rig.clock.advance(bodypilot.ACQUIRE_WINDOW + 0.001)
         await eventually(lambda: rig.pilot.last_summary is not None)
         assert rig.pilot.last_summary.reason == "finish_deadline"
         summary = rig.pilot.last_summary
@@ -3792,22 +4133,29 @@ async def test_orphaned_boundary_request_unsubscribes_and_allows_the_next_fight(
         assert rig.bridge.commands("body_watch")[-1]["npcs"] == ["NPC"]
         assert rig.bridge._watched_npc == "NPC"
         assert rig.link.body_acquire_pending(1)
+        assert rig.pilot.handles("NPC")
         assert not rig.bridge.pending_acquire and not rig.bridge.provider_owned
         assert not rig.policy.requests
 
-        rig.bridge.status_error = None
         rig.bridge.response_delays.clear()
         rig.bridge.release_rejections.clear()
-        if confirmation == "event":
-            await rig.link.body_events()
-        else:
-            status = await rig.link.body_control_status()
-            assert status.actors[0].owner == "native" and status.actors[0].acquire_request_id == 0
-        assert not rig.link.body_acquire_pending(1)
+        rig.bridge.request_rejections.pop("body_events")
+        if confirmation == "status":
+            rig.bridge.control_events.clear()
+            rig.bridge.status_error = None
+        polls_before_recovery = len(rig.bridge.commands(
+            "body_events" if confirmation == "event" else "body_control_status",
+        ))
         await eventually(lambda: rig.bridge.commands("body_watch")[-1]["npcs"] == [])
+        assert len(rig.bridge.commands(
+            "body_events" if confirmation == "event" else "body_control_status",
+        )) > polls_before_recovery
+        assert not rig.link.body_acquire_pending(1)
         assert rig.bridge._watched_npc is None
+        assert not rig.pilot.handles("NPC")
         assert rig.pilot.last_summary is summary and not summary.watch_removed
 
+        rig.bridge.status_error = None
         rig.roster(activity="routine", state="ZS_SIT_BENCH")
         await rig.watch()
         await eventually(lambda: rig.fight._watch_ready)
@@ -4136,16 +4484,106 @@ async def test_service_failure_releases_to_native_and_does_not_block_loop(mode):
         assert len(rig.bridge.commands("body_action")) == 1
 
 
+@pytest.mark.parametrize("slow_operation", ["connect", "reset"])
+async def test_three_hundred_ms_initial_policy_setup_keeps_lease_and_starts_combat(
+    monkeypatch, slow_operation,
+):
+    async with running() as rig:
+        if slow_operation == "connect":
+            open_connection = asyncio.open_connection
+
+            async def slow_connect(*args, **kwargs):
+                await asyncio.sleep(0.300)
+                return await open_connection(*args, **kwargs)
+
+            monkeypatch.setattr(asyncio, "open_connection", slow_connect)
+        else:
+            rig.policy.reset_delay = 0.300
+        await rig.active()
+        assert len(rig.bridge.acquire_grants) == len(rig.link.body_leases) == 1
+        assert len(rig.policy.commands("reset")) == len(rig.bridge.commands("body_action")) == 1
+        assert not rig.bridge.commands("body_release") and rig.pilot.last_summary is None
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.setup_timeouts == summary.policy_timeouts == 0
+        assert summary.decisions == 1 and summary.release_confirmed and summary.watch_removed
+        assert not rig.link.body_leases and not rig.bridge.provider_owned
+
+
+@pytest.mark.parametrize("first_reply", ["missing", "late"])
+async def test_initial_reset_timeout_retries_once_and_keeps_the_same_lease(
+    monkeypatch, first_reply, caplog,
+):
+    monkeypatch.setattr(bodypilot, "SETUP_TIMEOUT", 0.050)
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        if first_reply == "missing":
+            rig.policy.reset_modes.extend(["timeout", "normal"])
+        else:
+            rig.policy.reset_delays.extend([0.075, 0])
+        await rig.acquire()
+        lease = rig.link.body_leases[1]
+        await eventually(lambda: len(rig.policy.commands("reset")) == 2)
+        await eventually(lambda: rig.fight.client is not None and not rig.fight.client.pending)
+        assert rig.fight.lease == lease and rig.link.body_leases == {1: lease}
+        assert not rig.bridge.commands("body_release") and not rig.policy.commands("step")
+        rig.bridge.emit(fighter(3, owned=True))
+        await eventually(lambda: rig.bridge.commands("body_action"))
+        first, second = rig.policy.commands("reset")
+        assert first["id"] != second["id"]
+        assert {key: value for key, value in first.items() if key != "id"} == {
+            key: value for key, value in second.items() if key != "id"
+        }
+        assert len(rig.policy.connections) == len(rig.bridge.acquire_grants) == 1
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.setup_timeouts == 1 and summary.policy_timeouts == 0
+        assert summary.decisions == 1 and summary.reason == "shutdown"
+        assert summary.release_confirmed and summary.watch_removed
+        assert "setup_timeouts=1" in caplog.text
+
+
 @pytest.mark.parametrize("mode", ["error", "timeout"])
-async def test_reset_failure_restores_native_before_any_step(mode):
+async def test_reset_failure_restores_native_before_any_step(monkeypatch, mode, caplog):
+    monkeypatch.setattr(bodypilot, "SETUP_TIMEOUT", 0.050)
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
     async with running() as rig:
         rig.policy.reset_mode = mode
         await rig.watch()
         rig.bridge.emit(player_row(), fighter())
         await rig.ended()
-        assert len(rig.policy.commands("reset")) == 1
+        expected_timeouts = 2 if mode == "timeout" else 0
+        assert len(rig.policy.commands("reset")) == (2 if mode == "timeout" else 1)
         assert not rig.policy.commands("step")
         assert not rig.bridge.commands("body_action")
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == ("policy_timeout" if mode == "timeout" else "policy_error")
+        assert summary.setup_timeouts == expected_timeouts and summary.policy_timeouts == 0
+        assert summary.release_confirmed and summary.watch_removed
+        assert f"setup_timeouts={expected_timeouts}" in caplog.text
+
+
+async def test_initial_connect_timeout_counts_setup_failure_and_restores_native(monkeypatch):
+    monkeypatch.setattr(bodypilot, "SETUP_TIMEOUT", 0.050)
+    async with running() as rig:
+        open_connection = asyncio.open_connection
+
+        async def slow_connect(*args, **kwargs):
+            await asyncio.sleep(0.075)
+            return await open_connection(*args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "open_connection", slow_connect)
+        await rig.watch()
+        rig.bridge.emit(player_row(), fighter())
+        await rig.ended(policy=False)
+        assert not rig.policy.requests and not rig.bridge.commands("body_action")
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "policy_timeout"
+        assert summary.setup_timeouts == 1 and summary.policy_timeouts == 0
+        assert summary.release_confirmed and summary.watch_removed
+        assert not rig.bridge.provider_owned and not rig.link.body_leases
 
 
 async def test_connection_failure_restores_native_before_first_policy_step():

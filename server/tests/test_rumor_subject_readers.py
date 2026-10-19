@@ -16,6 +16,8 @@ from gothic_ai.crime_memory import CrimeMemoryRuntime, memory_value
 from gothic_ai.daylife import DayDesk, DayWorld, _chat_trip
 from gothic_ai.errands import Errands
 from gothic_ai.gossip import _news
+from gothic_ai.npc_crimes import NpcCrimes
+from gothic_ai.people_knowledge import PeopleKnowledge
 from gothic_ai.showrunner import Showrunner
 from gothic_ai.social import DAY, Rumor
 from gothic_ai.trust import Trust
@@ -23,6 +25,7 @@ from tests.fake_game import FakeGame
 from tests.test_concerns import _setup
 from tests.test_director import HILDA, LOBART, QUEST, VINO
 from tests.test_gossip import AT, _gossip, _tick, _together
+from tests.test_npc_crimes import deed as npc_deed
 
 ANDRE = "MIL_311_ANDRE"
 
@@ -185,6 +188,74 @@ async def test_npc_news_does_not_wake_hero_crime_runtime_readers(systems):
     await law._people()
     law.link.story_eval.assert_not_awaited()
     assert law._news_levels() == {}
+
+
+@pytest.mark.parametrize("kind", ["take_item", "attack"])
+async def test_npc_physical_deeds_and_their_news_leave_every_hero_reader_unchanged(systems, kind):
+    hero_case = crime(systems)
+    systems.crimes.people[LOBART] = {"guild": 3, "npctype": 0}
+    systems.chronicle.record({"fact": "crime_seen", "npc": LOBART, "crime": hero_case["id"]})
+    showrunner = object.__new__(Showrunner)
+    showrunner.crimes, showrunner.law = systems.crimes, systems.law
+    amends = object.__new__(Amends)
+    amends._queue, amends.crimes, amends.chronicle = asyncio.Queue(), systems.crimes, systems.chronicle
+    amends.lies, amends.storylets, amends.looked = {}, {}, {}
+    chain = object.__new__(ChainAuthor)
+    chain.crimes, chain.chronicle = systems.crimes, systems.chronicle
+
+    def hero_views():
+        systems.concerns._cache.clear()
+        return {
+            "facts": systems.crimes.facts(),
+            "known": systems.crimes.known(LOBART),
+            "situation": systems.crimes.situation(LOBART),
+            "distrust": systems.crimes.distrust(LOBART),
+            "attitude": systems.crimes.attitude(LOBART),
+            "memory": memory_value(systems.crimes, LOBART),
+            "law_known": systems.law.known("city"),
+            "law_debt": systems.law.debt("city"),
+            "law_counters": systems.law.counters("city"),
+            "law_deliveries": systems.law.deliveries(),
+            "concerns": systems.concerns.of(LOBART),
+            "trust": systems.trust.of(LOBART),
+            "deals": systems.deals.lies_of(LOBART),
+            "director": showrunner._crime_briefs({}, systems.chronicle.facts()),
+            "chain": chain._crime_context(hero_case, {}),
+        }
+
+    before = hero_views()
+    service = NpcCrimes(systems.crimes.link, systems.chronicle, crimes=systems.crimes)
+    try:
+        service.record(npc_deed(
+            id=hero_case["id"], culprit=HILDA, kind=kind, owner=VINO,
+            victim=VINO if kind == "attack" else "", victim_guild=3, owner_npc_guild=3,
+            witnesses=[LOBART, ANDRE],
+        ))
+        systems.chronicle.record({
+            "fact": "rumor", "quest": "npc_crime_seen:" + hero_case["id"],
+            "subject": HILDA, "kind": "npc_attack" if kind == "attack" else "npc_theft",
+            "to": LOBART, "from": ANDRE, "about": VINO, "hops": 1, "day": 3,
+        })
+        for outcome in ("reclaimed", "defender_down", "timeout"):
+            systems.chronicle.record({
+                "fact": "npc_crime_defense", "crime": hero_case["id"], "culprit": HILDA,
+                "fighter": ANDRE, "act": f"defense-{outcome}", "outcome": outcome, "reason": outcome,
+                "item": "ITFO_BREAD", "count": 1, "returned": int(outcome == "reclaimed"),
+            })
+            assert hero_views() == before
+        for fact in systems.chronicle.facts():
+            if fact.get("fact") in {"npc_crime", "npc_crime_seen", "npc_crime_defense", "rumor"}:
+                amends._on_fact(fact)
+                for runtime_type in (CrimeMemoryRuntime, CrimeLawRuntime, CrimeMeet):
+                    runtime = object.__new__(runtime_type)
+                    runtime._wake = asyncio.Event()
+                    runtime._on_fact(fact)
+                    assert not runtime._wake.is_set()
+        assert amends._queue.empty() and amends.lies == {}
+        assert hero_views() == before
+        assert PeopleKnowledge(systems.chronicle).of(LOBART)[0].subject == HILDA
+    finally:
+        await service.close()
 
 
 async def test_npc_gossip_passes_as_fact_without_a_hero_scene(tmp_path):

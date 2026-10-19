@@ -448,6 +448,17 @@ class Npc final {
     void      stopPhysicsInvestigation(bool resume, std::string_view reason="interrupted");
     bool      canHearPhysicsNoise() const;
     bool      hasPerc(PercType perc) const;
+    float     perceptionRange(PercType perc) const;
+    bool      canWitnessDeed(const Npc& culprit, const Npc* victim, PercType perc) const;
+    // Transient command scope, deliberately absent from saves. Native NPC fights
+    // and ordinary item transfers do not acquire a crime mark.
+    void      setServerDeed(std::string_view kind, Npc* victim = nullptr, size_t count = 0,
+                           std::string_view owner = {});
+    void      clearServerDeed();
+    bool      isServerDeed(std::string_view kind, const Npc* victim = nullptr) const;
+    void      consumeServerAttack();
+    void      setNonlethalFight(Npc& target);
+    bool      isNonlethalFight(const Npc& other) const;
     uint64_t  percNextTime() const;
 
     auto      interactive() const -> Interactive* { return currentInteract; }
@@ -979,6 +990,13 @@ class Npc final {
     Tempest::Vec3                  stanceLook   = {};
     bool                           benchStill   = false;
     Npc*                           currentTarget  =nullptr;
+    std::string                    serverDeedKind;
+    const Npc*                     serverDeedVictim = nullptr;
+    bool                           serverAttackRecorded = false;
+    size_t                         serverDeedCount = 0;
+    std::string                    serverDeedOwner;
+    size_t                         nonlethalTarget = size_t(-1);
+    uint64_t                       nonlethalUntil = 0;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;
 

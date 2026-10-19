@@ -29,21 +29,23 @@
 
 Плитка — физический размер одной плитки материала в метрах; из него и плотности UV текстуры Gothic считается масштаб в `materials.json`: `scale = UV-медиана из переписи / плитка`. Яркость — диапазон средней линейной яркости альбедо. Шероховатость — ориентир для фильтра.
 
-| Класс | Что | Плитка, м | Яркость | Шероховатость | Ядро промпта (англ.) |
-|---|---|---:|---|---|---|
-| `cobble` | булыжная мостовая, камни 10–20 см | 2 | 0,10–0,20 | 0,75–0,90 | rounded cobblestone street pavement, irregular stones with dirt-filled joints |
-| `flagstone` | плиты набережной и пола, 40–80 см | 3 | 0,12–0,22 | 0,70–0,90 | large worn stone flag slabs, uneven, chipped edges |
-| `masonry_dressed` | тёсаная кладка городской и портовой стены, блоки 30–60 см | 3 | 0,12–0,22 | 0,75–0,95 | dressed stone block masonry wall, irregular courses, weathered mortar |
-| `masonry_rubble` | бутовая кладка: подвалы, подземелье, фундаменты | 2 | 0,08–0,18 | 0,80–0,95 | rough rubble stone wall, uneven fieldstones in thick mortar |
-| `plaster` | штукатурка стен домов | 2 | 0,25–0,40 | 0,85–0,95 | old lime plaster wall, off-white to ochre, stains, cracks, patches |
-| `planks_floor` | доски пола, 15–25 см | 2 | 0,06–0,14 | 0,60–0,85 | old wooden floorboards, worn, dark grime between boards |
-| `planks_wall` | дощатая стена, вертикальные доски | 2 | 0,06–0,14 | 0,70–0,90 | vertical weathered wooden plank wall, gaps, nail marks |
-| `timber_beam` | балки и брёвна | 1,5 | 0,05–0,12 | 0,65–0,85 | dark old timber beam wood grain, cracks, adze marks |
-| `roof_shingle` | деревянная дранка | 2 | 0,05–0,12 | 0,80–0,95 | weathered wooden roof shingles, overlapping, moss in places |
-| `roof_tiles` | глиняная черепица | 2 | 0,08–0,16 | 0,70–0,90 | old clay roof tiles, faded brownish red, lichen |
-| `thatch` | солома | 2 | 0,08–0,15 | 0,90–1,00 | old straw thatch roof, grey-brown, compacted |
-| `dirt_path` | утоптанная земля, дороги и дворы | 3 | 0,07–0,15 | 0,85–1,00 | soft packed brown earth road, cart wheel ruts and hoof prints, scattered straw, sparse small pebbles, continuous soil surface |
-| `mud` | грязь у воды и в низинах | 3 | 0,05–0,12 | 0,55–0,85 | wet dark brown mud ground, shallow puddles, hoof prints, scattered straw, continuous soft soil surface |
+| Класс | Что | Плитка, м | Яркость | Шероховатость | Антиповтор | Ядро промпта (англ.) |
+|---|---|---:|---|---|---|---|
+| `cobble` | булыжная мостовая, камни 10–20 см | 2 | 0,10–0,20 | 0,75–0,90 | `rotate` | rounded cobblestone street pavement, irregular stones with dirt-filled joints |
+| `flagstone` | плиты набережной и пола, 40–80 см | 3 | 0,12–0,22 | 0,70–0,90 | `rotate` | large worn stone flag slabs, uneven, chipped edges |
+| `masonry_dressed` | тёсаная кладка городской и портовой стены, блоки 30–60 см | 3 | 0,12–0,22 | 0,75–0,95 | `offset` | dressed stone block masonry wall, irregular courses, weathered mortar |
+| `masonry_rubble` | бутовая кладка: подвалы, подземелье, фундаменты | 2 | 0,08–0,18 | 0,80–0,95 | `rotate` | rough rubble stone wall, uneven fieldstones in thick mortar |
+| `plaster` | штукатурка стен домов | 2 | 0,25–0,40 | 0,85–0,95 | `rotate` | old lime plaster wall, off-white to ochre, stains, cracks, patches |
+| `planks_floor` | доски пола, 15–25 см | 2 | 0,06–0,14 | 0,60–0,85 | `offset` | old wooden floorboards, worn, dark grime between boards |
+| `planks_wall` | дощатая стена, вертикальные доски | 2 | 0,06–0,14 | 0,70–0,90 | `offset` | vertical weathered wooden plank wall, gaps, nail marks |
+| `timber_beam` | балки и брёвна | 1,5 | 0,05–0,12 | 0,65–0,85 | `offset` | dark old timber beam wood grain, cracks, adze marks |
+| `roof_shingle` | деревянная дранка | 2 | 0,05–0,12 | 0,80–0,95 | `offset` | weathered wooden roof shingles, overlapping, moss in places |
+| `roof_tiles` | глиняная черепица | 2 | 0,08–0,16 | 0,70–0,90 | `offset` | old clay roof tiles, faded brownish red, lichen |
+| `thatch` | солома | 2 | 0,08–0,15 | 0,90–1,00 | `offset` | old straw thatch roof, grey-brown, compacted |
+| `dirt_path` | утоптанная земля, дороги и дворы | 3 | 0,07–0,15 | 0,85–1,00 | `rotate` | soft packed brown earth road, cart wheel ruts and hoof prints, scattered straw, sparse small pebbles, continuous soil surface |
+| `mud` | грязь у воды и в низинах | 3 | 0,05–0,12 | 0,55–0,85 | `rotate` | wet dark brown mud ground, shallow puddles, hoof prints, scattered straw, continuous soft soil surface |
+
+Антиповтор задаётся полем `antitile` записи `materials.json`: `rotate` разрешает случайный поворот плитки, `offset` сохраняет направление кладки, досок и кровли. `antitile_cell` — размер ячейки в единицах плитки (по умолчанию 1,0); отсутствие `antitile` или `off` оставляет обычный повтор.
 
 Металличность у всех классов этапа 1 — 0. Классы добавляются по мере этапов; новый класс — строка в этой таблице.
 
