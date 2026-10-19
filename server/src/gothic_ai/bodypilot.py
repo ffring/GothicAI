@@ -889,7 +889,7 @@ class BodyFight:
                 break
 
     def _is_leased_target(self, row: dict[str, Any]) -> bool:
-        return self._hero is None or row["target"]["entity_id"] == self._hero
+        return self.lease is None or row["target"]["entity_id"] == self.lease.target_entity_id
 
     def _leased_periodic(self, row: dict[str, Any]) -> bool:
         return bool(
@@ -977,6 +977,8 @@ class BodyFight:
         if self.lease is not None:
             terminal = self._terminal(raw)
             if terminal:
+                if terminal in {"hero_down", "target_down"} and not self._is_leased_target(raw):
+                    return
                 self._set_reason(terminal)
                 return
         else:
@@ -986,10 +988,10 @@ class BodyFight:
             if terminal in {"npc_down", "target_lost"}:
                 self._set_reason(terminal)
                 return
-            # A pre-lease weapon transition can still finish normally. A fallen
-            # target needs the same live allowlist check as an acquisition before
-            # closing its episode: unrelated fights must not claim this NPC.
-            if terminal not in {None, "hero_down", "target_down"} or not all(
+            # Before acquisition there is no confirmed numeric target identity.
+            # A later live-target query can describe a new, healthy target, so
+            # an old down row must not close or claim this observing episode.
+            if terminal or not all(
                 raw["target"][key] for key in ("present", "visible", "current_valid")
             ):
                 return
@@ -1015,10 +1017,6 @@ class BodyFight:
                 if self._reason or self._closing or not self._allowed(self.npc):
                     return
                 if self.clock() - received_at > 0.100 or self.clock() - self._attempt_at >= ACQUIRE_WINDOW:
-                    return
-                if terminal in {"hero_down", "target_down"}:
-                    self._target_kind, self._target_name, self._target_npc = target
-                    self._set_reason("target_down" if self._target_kind == "companion" else "hero_down")
                     return
                 self._acquiring = True
                 self._pending_acquire = observation

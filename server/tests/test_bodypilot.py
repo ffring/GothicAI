@@ -1051,17 +1051,22 @@ async def test_foreign_target_down_before_lease_does_not_block_switch_to_hero_wi
         foreign = fighter(target_entity=8)
         foreign["target"].update(down=True, hp=0)
         rig.bridge.emit(player_row(), foreign)
-        await eventually(lambda: rig.fight._refusals["target_not_allowed"] == 1)
+
+        # The queued observation still describes entity 8, but NPC_GETTARGET
+        # already reports the healthy hero when the pilot processes that row.
+        rig.bridge.target_is_hero = True
+        rig.bridge.target_npc = None
+        await eventually(lambda: rig.fight._last_seq == foreign["observation_seq"])
+        await asyncio.sleep(0.02)
         assert rig.pilot.handles("NPC")
+        assert rig.fight._reason is None
         assert "NPC" not in rig.pilot._claimed_fights
         assert not rig.pilot.summaries
         assert not rig.bridge.commands("body_acquire") and not rig.policy.requests
 
         # Native combat can switch directly from an unrelated fallen actor to
         # the hero, with no intervening routine/down roster to clear a claim.
-        rig.bridge.target_is_hero = True
-        rig.bridge.target_npc = None
-        rig.clock.advance(bodypilot.ACQUIRE_INTERVAL + 0.1)
+        rig.clock.advance(3)
         rig.roster(activity="fight", state="ZS_ATTACK")
         rig.combat()
         rig.bridge.emit(fighter(3))
@@ -2057,7 +2062,7 @@ async def test_down_summary_restores_claim_if_routine_arrives_during_release(com
 
 
 @pytest.mark.parametrize("target_state", ["down", "absent"])
-async def test_fresh_prelease_down_or_absent_target_unwatches_without_policy(target_state):
+async def test_prelease_down_waits_for_lease_and_absent_target_unwatches(target_state):
     async with running() as rig:
         await rig.watch()
         row = fighter(5, t_game_ms=250)
@@ -2073,12 +2078,21 @@ async def test_fresh_prelease_down_or_absent_target_unwatches_without_policy(tar
                 }:
                     row["target"][key] = None
         rig.bridge.emit(row)
-        if target_state == "absent":
-            await eventually(lambda: rig.fight._last_seq == 5)
-            assert rig.pilot.handles("NPC")
-            rig.bridge.emit({**row, "observation_seq": 6, "t_game_ms": 1250})
+        await eventually(lambda: rig.fight._last_seq == 5)
+        assert rig.pilot.handles("NPC")
+        if target_state == "down":
+            assert "NPC" not in rig.pilot._claimed_fights
+            assert not rig.pilot.summaries
+            rig.clock.advance(3)
+            rig.roster(activity="fight", state="ZS_ATTACK")
+            rig.bridge.emit(fighter(6, t_game_ms=300))
+            await eventually(lambda: rig.policy.commands("reset"))
+            assert len(rig.bridge.commands("body_acquire")) == 1
+            assert not rig.pilot.summaries
+            return
+        rig.bridge.emit({**row, "observation_seq": 6, "t_game_ms": 1250})
         await eventually(lambda: not rig.pilot.active_count)
-        assert rig.pilot.last_summary.reason == ("hero_down" if target_state == "down" else "target_lost")
+        assert rig.pilot.last_summary.reason == "target_lost"
         assert rig.pilot.last_summary.lease is None
         assert rig.pilot.last_summary.decisions == 0
         assert rig.pilot.last_summary.watch_removed
@@ -2088,7 +2102,7 @@ async def test_fresh_prelease_down_or_absent_target_unwatches_without_policy(tar
         assert not rig.bridge.commands("body_acquire") and not rig.policy.requests
 
 
-async def test_fresh_prelease_companion_down_is_classified_before_claiming_episode():
+async def test_prelease_companion_down_does_not_claim_an_unconfirmed_target():
     async with running(companion=lambda npc: npc == "CAVALORN") as rig:
         rig.bridge.target_is_hero = False
         rig.bridge.target_npc = "CAVALORN"
@@ -2097,15 +2111,20 @@ async def test_fresh_prelease_companion_down_is_classified_before_claiming_episo
         row = fighter(target_entity=3)
         row["target"].update(down=True, hp=1)
         rig.bridge.emit(row)
-        await eventually(lambda: not rig.pilot.active_count)
-        summary = rig.pilot.last_summary
-        assert summary.reason == "target_down"
-        assert summary.target_kind == "companion" and summary.target_name == "Кавалорн"
-        assert summary.lease is None and summary.decisions == 0
-        assert summary.watch_removed and "NPC" in rig.pilot._claimed_fights
+        await eventually(lambda: rig.fight._last_seq == row["observation_seq"])
+        assert rig.pilot.handles("NPC")
+        assert "NPC" not in rig.pilot._claimed_fights
+        assert not rig.pilot.summaries
         assert not rig.bridge.commands("body_acquire") and not rig.policy.requests
-        assert not rig.link.body_leases and not rig.link.body_latest
-        assert not rig.pilot._watch_npcs and not rig.pilot._pending_unwatch
+
+        rig.clock.advance(3)
+        rig.roster(activity="fight", state="ZS_ATTACK", extra=[companion_entry()])
+        rig.bridge.emit(fighter(3, target_entity=3))
+        await eventually(lambda: rig.policy.commands("reset"))
+        assert rig.fight.lease.target_entity_id == 3
+        assert rig.fight._target_kind == "companion" and rig.fight._target_name == "Кавалорн"
+        assert len(rig.bridge.commands("body_acquire")) == len(rig.policy.commands("reset")) == 1
+        assert not rig.pilot.summaries
 
 
 async def test_stale_prelease_down_row_does_not_suppress_current_live_fight():
