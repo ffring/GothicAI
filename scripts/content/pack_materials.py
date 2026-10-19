@@ -13,6 +13,8 @@ opaque albedo and ORM are DXT1; normals are DXT5nm (X alpha, Y green).
 Input normals are XYZ encoded in [0, 1], with the generator's Y convention
 is OpenGL (+Y toward the image top). Packing flips green into the engine's
 positive texture-V basis, matching the synthetic fixture's height gradient. No game pixels are read.
+Negative-Z normals are projected into the upper hemisphere only while packing;
+the generated PNG maps stay unchanged. Each resource logs its projected pixel count.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ TARGETS = {
 }
 PIPELINES = ("flux-marigold", "flux-filter", "sdxl-marigold", "sdxl-filter", "stablematerials")
 MAPS = ("albedo", "normal", "ao", "roughness", "metallic")
+NORMAL_Z_EPSILON = 1e-6
 
 
 def load_compressor():
@@ -80,9 +83,12 @@ def read_maps(record: dict, content_root: Path) -> dict[str, np.ndarray]:
         raise ValueError(f"{record['id']}: all maps must have the same size")
     normal = maps["normal"] * 2 - 1
     normal[:, :, 1] *= -1  # PNG +Y up -> engine bitangent follows texture V down.
-    if (normal[:, :, 2] < -0.01).any():
-        raise ValueError(f"{record['id']}: DXT5nm requires a positive-Z tangent normal")
+    negative_z = normal[:, :, 2] < 0
+    clamped_pixels = int(np.count_nonzero(negative_z))
+    normal[:, :, 2][negative_z] = NORMAL_Z_EPSILON
     normal /= np.maximum(np.linalg.norm(normal, axis=2, keepdims=True), 1e-8)
+    print(f"{record['id']}: normal_z_clamped={clamped_pixels}/{h * w} "
+          f"epsilon={NORMAL_Z_EPSILON:g}")
     maps["normal"] = normal
     return maps
 

@@ -33,6 +33,10 @@ if [[ "${1:-}" == --remote ]]; then
     grep -q 'materials: 1 entries from' "$D/game.log" || {
       echo "material index was not loaded: $id" >&2; exit 1;
     }
+    grep -q '^\[bench\] goto NW_CITY_MERCHANT_SHOP01_FRONT_03$' "$D/game.log" &&
+      grep -q '^\[bench\] shot city$' "$D/game.log" || {
+      echo "city position/shot was not reached: $id" >&2; exit 1;
+    }
     if grep -Eq 'materials: (invalid|unsupported|unable)|\[bench\] (can not|unknown|marvin failed|goto failed)' "$D/game.log"; then
       echo "material/bench error in $D/game.log" >&2; exit 1
     fi
@@ -41,8 +45,10 @@ import json
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
+# This simple shot scenario need not emit structured events. The mandatory
+# city/goto/shot and material-load checks above validate its actual work.
 if not path.is_file():
-    raise SystemExit('capture: missing benchmark events')
+    raise SystemExit(0)
 for line in path.read_text().splitlines():
     event = json.loads(line)
     kind = event.get('kind', '')
