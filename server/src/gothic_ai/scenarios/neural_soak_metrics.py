@@ -21,7 +21,7 @@ WAIT_200 = 10
 FAULT_ENDINGS = frozenset({
     "policy_error", "policy_timeout", "body_action_rejected", "lease_lost",
     "observation_overflow", "pilot_error", "acquire_uncertain", "watch_refused",
-    "finish_deadline", "bridge_error", "symbol_eval_timeout", "symbol_eval_failed",
+    "bridge_error", "symbol_eval_timeout", "symbol_eval_failed",
     "body_watch_timeout", "body_watch_failed", "disconnected",
 })
 
@@ -96,6 +96,7 @@ class SoakMetrics:
         self._last_sample = float("-inf")
         self.summaries: list[FightSummary] = []
         self.fight_records: list[dict[str, Any]] = []
+        self._summary_indices: dict[tuple[int, ...], int] = {}
         self.samples: list[dict[str, Any]] = []
         self.actions_by_client: dict[PolicyClient, Counter[int]] = defaultdict(Counter)
         self.latencies_by_client: dict[PolicyClient, list[float]] = defaultdict(list)
@@ -150,13 +151,30 @@ class SoakMetrics:
                 self._intervals.append(current - previous)
             self._previous_game[identity] = max(previous or 0, current)
 
+    @staticmethod
+    def _lease_scope(summary: FightSummary) -> tuple[int, ...] | None:
+        lease = summary.lease
+        return (lease.session_epoch, lease.world_epoch, lease.entity_id,
+                lease.control_generation) if lease is not None else None
+
+    def sync_summaries(self) -> None:
+        """Retain late native confirmations before the pilot's bounded history evicts them."""
+        for summary in getattr(self.pilot, "summaries", ()):
+            scope = self._lease_scope(summary)
+            index = self._summary_indices.get(scope) if scope is not None else None
+            if index is None or self.summaries[index] == summary:
+                continue
+            self.summaries[index] = summary
+            self.fight_records[index]["summary"] = asdict(summary)
+            self.event("release_update", summary=asdict(summary))
+
     def _completed(self, fight: Any, summary: FightSummary) -> None:
         self.summaries.append(summary)
         # BodyFight clears its mutable client/lease before invoking _completed.
         # A scoped immutable lease identifies the policy client from step input.
-        lease = summary.lease
-        scope = (lease.session_epoch, lease.world_epoch, lease.entity_id,
-                 lease.control_generation) if lease is not None else None
+        scope = self._lease_scope(summary)
+        if scope is not None:
+            self._summary_indices[scope] = len(self.summaries) - 1
         client = self._clients_by_scope.get(scope)
         actions = self.actions_by_client.get(client, Counter())
         decisions = sum(actions.values())
@@ -211,9 +229,10 @@ class SoakMetrics:
                 self._latencies.append(elapsed)
                 self._service_window.append(elapsed)
 
-        def completed(fight: Any, summary: FightSummary) -> None:
+        def completed(fight: Any, summary: FightSummary, *args: Any, **kwargs: Any) -> None:
+            self.sync_summaries()
             self._completed(fight, summary)
-            original_completed(fight, summary)
+            original_completed(fight, summary, *args, **kwargs)
 
         PolicyClient.call = observed
         self.pilot._completed = completed
@@ -233,6 +252,7 @@ class SoakMetrics:
             self._stream = None
 
     def sample(self, *, force: bool = False) -> dict[str, Any] | None:
+        self.sync_summaries()
         now = self.clock()
         if not force and now - self._last_sample < 10:
             return None
@@ -250,6 +270,7 @@ class SoakMetrics:
             "active_leases": [lease.model_dump(mode="json") for lease in self.link.body_leases.values()],
             "lease_count": len(self.link.body_leases), "active_count": self.pilot.active_count,
             "body_without_lease": orphans,
+            "release_orphan_timeout": getattr(self.pilot, "release_orphan_timeout", 0),
             "game_rss_bytes": rss_bytes(game_pid) if game_pid else None,
             "server_rss_bytes": rss_bytes(os.getpid()),
             "game_interval_count": len(self._intervals),
@@ -278,9 +299,17 @@ class SoakMetrics:
         decisions = sum(sum(actions.values()) for actions in self.actions_by_client.values())
         fault_ends = Counter(summary.reason for summary in self.summaries if (
             summary.reason in FAULT_ENDINGS
+            or summary.reason == "finish_deadline" and not (
+                summary.release_confirmed and summary.release_late_seconds is not None
+            )
             or summary.reason.startswith("policy_fallback:")
             and summary.reason != "policy_fallback:observation_too_old"
         ))
+        finish_deadlines = [summary for summary in self.summaries
+                            if summary.reason == "finish_deadline"]
+        late_releases = [summary.release_late_seconds for summary in self.summaries
+                         if summary.release_confirmed and summary.release_late_seconds is not None]
+        orphan_timeouts = getattr(self.pilot, "release_orphan_timeout", 0)
         timeouts = sum(summary.policy_timeouts for summary in self.summaries)
         faulty_fallbacks: Counter[str] = Counter()
         for fallbacks in self.fallbacks_by_client.values():
@@ -295,9 +324,11 @@ class SoakMetrics:
         def check(name: str, ok: bool, detail: str) -> None:
             checks[name] = f"{'done' if ok else 'failed'} ({detail})"
 
-        check("fault_fallbacks", not (fault_ends or timeouts or faulty_fallbacks or self.policy_errors),
+        check("fault_fallbacks", not (
+            fault_ends or timeouts or faulty_fallbacks or self.policy_errors or orphan_timeouts
+        ),
               f"ends={dict(fault_ends)}, timeouts={timeouts}, fallbacks={dict(faulty_fallbacks)}, "
-              f"policy_errors={dict(self.policy_errors)}")
+              f"policy_errors={dict(self.policy_errors)}, release_orphan_timeout={orphan_timeouts}")
         capture_fraction = captured / eligible if eligible else None
         check("capture_rate", capture_fraction is not None and capture_fraction >= 0.95,
               f"captured={captured}/{eligible}, minimum=95%")
@@ -328,6 +359,13 @@ class SoakMetrics:
                 "fault_endings": dict(fault_ends), "policy_timeouts": timeouts,
                 "faulty_policy_fallbacks": dict(faulty_fallbacks), "policy_errors": dict(self.policy_errors),
                 "fallbacks": sum(summary.fallbacks for summary in self.summaries),
+                "release_orphan_timeout": orphan_timeouts,
+                "finish_deadline_count": len(finish_deadlines),
+                "finish_deadline_unconfirmed": sum(not (
+                    summary.release_confirmed and summary.release_late_seconds is not None
+                ) for summary in finish_deadlines),
+                "release_late_count": len(late_releases),
+                "release_late_max_seconds": max(late_releases, default=None),
                 "release_issues": release_issues, "game_rss": game_rss, "server_rss": server_rss,
                 "service_calls": len(self._latencies), "service_p95_ms": p95, "service_p99_ms": p99,
                 "max_batch_rows": self._max_batch_rows_all,

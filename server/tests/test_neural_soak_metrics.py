@@ -2,7 +2,7 @@
 
 import json
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import pytest
@@ -54,13 +54,22 @@ class Summary:
     action_rejections: tuple = ()
     fight_seconds: float = 10
     lease: BodyLease | None = None
+    release_confirmed: bool = True
+    release_late_seconds: float | None = None
+    end_trigger: str = "target_lost"
 
 
 async def test_observers_chain_and_retain_fights_beyond_the_pilot_deque(tmp_path, monkeypatch):
     now = [0.0]
     history = deque(maxlen=32)
+    completions = []
+
+    def completed(fight, summary, finish_at, release_deadline):
+        history.append(summary)
+        completions.append((finish_at, release_deadline))
+
     pilot = SimpleNamespace(
-        people={}, active_count=0, _completed=lambda fight, summary: history.append(summary),
+        people={}, active_count=0, _completed=completed, summaries=history,
     )
     link = SimpleNamespace(body_leases={}, raw_body_listeners=[])
     monkeypatch.setattr("gothic_ai.scenarios.neural_soak_metrics.rss_bytes", lambda pid: 1000)
@@ -92,9 +101,11 @@ async def test_observers_chain_and_retain_fights_beyond_the_pilot_deque(tmp_path
                 # _finish clears these fields before it publishes the summary.
                 pilot._completed(SimpleNamespace(client=None, lease=None), Summary(
                     decisions=int(index < 37), lease=lease,
-                ))
+                ), now[0], now[0] + 2)
     checks = metrics.write_result(eligible=40, captured=38, release_issues=[])
     assert len(history) == 32 and len(metrics.summaries) == 40
+    assert len(completions) == 40
+    assert all(deadline - finish_at == pytest.approx(2) for finish_at, deadline in completions)
     assert checks["capture_rate"].startswith("done")
     assert checks["accepted_commands"].startswith("failed")  # 37/40, not 37/(37+0).
     assert metrics.data["metrics"]["policy_decisions"] == 40
@@ -120,6 +131,80 @@ def test_fault_endings_fail_even_without_policy_fallback(tmp_path, reason):
     checks = metrics.write_result(eligible=1, captured=1, release_issues=[])
     assert checks["fault_fallbacks"].startswith("failed")
     assert metrics.data["metrics"]["fault_endings"] == {reason: 1}
+
+
+def test_late_release_updates_retained_snapshots_before_history_eviction(tmp_path):
+    lease = BodyLease(
+        npc="BANDIT", provider="neural-body", mode="realtime", session_epoch=1,
+        world_epoch=1, entity_id=1, control_generation=1, goal_version=1,
+        target_entity_id=2, acquired_observation_seq=1,
+    )
+    pending = Summary(reason="finish_deadline", release_confirmed=False, lease=lease)
+    history = deque(maxlen=1)
+    pilot = SimpleNamespace(
+        people={}, active_count=0, summaries=history, release_orphan_timeout=0,
+        _completed=lambda fight, summary, *args: history.append(summary),
+    )
+    metrics = SoakMetrics(
+        SimpleNamespace(body_leases={}, raw_body_listeners=[]), pilot, tmp_path,
+    )
+    with metrics.observe():
+        pilot._completed(None, pending, 1.0, 3.0)
+        # PR253 replaces the frozen summary instead of mutating the first snapshot.
+        confirmed = replace(pending, release_confirmed=True, release_late_seconds=2.75)
+        history[0] = confirmed
+        pilot._completed(None, Summary(), 4.0, 6.0)
+        assert len(history) == 1 and history[0].lease is None
+        assert metrics.summaries[0] is confirmed
+        assert metrics.fight_records[0]["summary"]["release_confirmed"]
+        assert metrics.fight_records[0]["summary"]["release_late_seconds"] == 2.75
+
+    checks = metrics.write_result(eligible=1, captured=1, release_issues=[])
+    assert checks["fault_fallbacks"].startswith("done")
+    assert checks["release_clean"].startswith("done")
+    assert metrics.data["metrics"]["finish_deadline_count"] == 1
+    assert metrics.data["metrics"]["finish_deadline_unconfirmed"] == 0
+    assert metrics.data["metrics"]["release_late_count"] == 1
+    assert metrics.data["metrics"]["release_late_max_seconds"] == 2.75
+    updates = [json.loads(line) for line in (tmp_path / "neural_soak.jsonl").read_text().splitlines()
+               if json.loads(line)["kind"] == "release_update"]
+    assert len(updates) == 1
+    assert updates[0]["summary"]["end_trigger"] == "target_lost"
+    assert updates[0]["summary"]["release_late_seconds"] == 2.75
+
+
+def test_sample_and_result_sync_late_release_even_without_another_completion(tmp_path):
+    lease = BodyLease(
+        npc="BANDIT", provider="neural-body", mode="realtime", session_epoch=1,
+        world_epoch=1, entity_id=1, control_generation=1, goal_version=1,
+        target_entity_id=2, acquired_observation_seq=1,
+    )
+    pending = Summary(reason="finish_deadline", release_confirmed=False, lease=lease)
+    history = deque([pending])
+    pilot = SimpleNamespace(people={}, active_count=0, summaries=history, release_orphan_timeout=0)
+    metrics = SoakMetrics(SimpleNamespace(body_leases={}), pilot, tmp_path)
+    metrics._completed(None, pending)
+    metrics.sample(force=True)
+    history[0] = replace(pending, release_confirmed=True, release_late_seconds=4.0)
+    metrics.sample()  # Sync runs even if the ten-second sample interval has not elapsed.
+    assert metrics.summaries[0] is history[0]
+    assert metrics.fight_records[0]["summary"]["release_late_seconds"] == 4.0
+    history[0] = replace(history[0], release_late_seconds=4.25)
+    metrics.write_result(eligible=1, captured=1, release_issues=[])
+    saved = json.loads((tmp_path / "neural_soak_result.json").read_text())
+    assert saved["fights"][0]["summary"]["release_late_seconds"] == 4.25
+    assert saved["metrics"]["release_late_max_seconds"] == 4.25
+
+
+def test_orphan_release_timeout_fails_zero_fault_gate_and_is_sampled(tmp_path):
+    pilot = SimpleNamespace(people={}, active_count=0, release_orphan_timeout=1)
+    metrics = SoakMetrics(SimpleNamespace(body_leases={}), pilot, tmp_path)
+    sample = metrics.sample(force=True)
+    assert sample["release_orphan_timeout"] == 1
+    checks = metrics.write_result(eligible=1, captured=1, release_issues=[])
+    assert checks["fault_fallbacks"].startswith("failed")
+    assert "release_orphan_timeout=1" in checks["fault_fallbacks"]
+    assert metrics.data["metrics"]["release_orphan_timeout"] == 1
 
 
 def test_extra_check_failure_is_in_the_only_final_result(tmp_path, monkeypatch):
