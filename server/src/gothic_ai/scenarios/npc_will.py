@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from .. import triggers
 from ..game import GameLink
 from ..llm.fake import FakeBackend
+from ..npc_will import OWNER_NEAR_CM, ROUTINE_CM, SIMULATION_CM
 from ..protocol import GameMessage, NpcActCmd, NpcActResult, NpcDeed, NpcIdle, Session
 from .common import (
     HILDA,
@@ -34,6 +35,8 @@ if TYPE_CHECKING:
 log = logging.getLogger("gothic_ai.scenarios")
 HOUSE, ROAD, RETURN_ROAD = "NW_FARM1_INHOUSE_01", "NW_FARM1_PATH_04", "NW_FARM1_PATH_03"
 CHEST = "CHEST_LOBART"
+# debug.npc_goto resolves native instance symbols; its `to`/`face` do not resolve the roster alias PLAYER.
+HERO_INSTANCE = "PC_HERO"
 
 
 async def npc_will(
@@ -47,9 +50,10 @@ async def npc_will(
     """Hilda's greed steals; Lobart learns, reclaims or accuses, suspects and remembers a load.
 
     Hilda's native working and sleeping places include Lobart's house. His native daytime routine
-    leaves the chest: neither ownership nor anyone's routine is invented by the fixture. Vino can
-    witness from outside Hilda's own perception. Independent branches use courage 3 and 2, then an
-    unwitnessed theft in which the owner remembers the innocent Vino. Every steal and fight below
+    leaves the chest: neither ownership nor anyone's routine is invented by the fixture. Vino waits
+    inside while Hilda decides behind a wall; her native walk can expose the theft. Branches use
+    courage 3 and 2, then an unwitnessed theft in which the owner remembers the innocent Vino.
+    Every steal and fight below
     must have been sent by NpcWill and have its persisted npc_will fact.
     """
     results: dict[str, str] = {}
@@ -149,7 +153,7 @@ async def npc_will(
                 roster=entry.model_dump() if entry is not None else None,
             )
             return bool(
-                found and found.distance > 2000 and views and views[0].theft_ready
+                found and found.distance > OWNER_NEAR_CM and views and views[0].theft_ready
                 and views[0].hero and views[0].hero.distance < 3000
                 and entry and entry.activity == "routine"
             )
@@ -165,9 +169,73 @@ async def npc_will(
             and views[0].hero and not views[0].hero.seen and views[0].hero.distance < 3000
         )
 
+    async def stage_witness(label: str, chest: Chest) -> bool:
+        assert chest.waypoint is not None
+        attempts: list[dict[str, Any]] = []
+        # Prove the future sight line inside the house, before putting Hilda behind its wall.
+        # Vino stays here with this initialized native state and heading through the actual theft.
+        for offset in (-300, 300, -450, 450):
+            posed, pose = await prepare_npc_pose(
+                link, VINO, chest.waypoint, to=HILDA, distance=offset, face=HILDA,
+            )
+            visible, detail = False, {}
+            if posed:
+                visible, detail = await wait_npc_visibility(link, VINO, HILDA)
+            poses = {}
+            for npc in (HILDA, VINO):
+                snapshot = await link.snapshot(npc, fresh=True)
+                poses[npc] = {"pos": snapshot.npc.pos, "rot": snapshot.npc.rot}
+            [free_los] = await link.story_eval(VINO, [
+                ["call", "NPC_CANSEENPCFREELOS", ["inst", "SELF"], ["inst", HILDA]],
+            ])
+            attempt = {
+                "offset": offset, "pose": pose, "visibility": detail,
+                "positions": poses, "free_los": free_los,
+            }
+            attempts.append(attempt)
+            log.info("npc_will %s witness preparation: %s", label, attempt)
+            if posed and visible:
+                return check(f"{label}_witness", True, attempt)
+        return check(f"{label}_witness", False, attempts)
+
+    async def stage_departure(label: str, chest: Chest, *, witnessed: bool) -> bool:
+        owner = (await link.snapshot(LOBART, fresh=True)).npc
+        witness = (await link.snapshot(VINO, fresh=True)).npc if witnessed else None
+
+        def position(point: dict[str, Any]) -> tuple[float, float, float]:
+            return tuple(float(point[axis]) for axis in ("x", "y", "z"))
+
+        exterior = [p for p in points.values() if not p.get("room")]
+        starts = [p for p in exterior if 500 <= math.dist(position(p), chest.pos) <= ROUTINE_CM]
+        hero_spots = [p for p in exterior if 700 <= math.dist(position(p), chest.pos) <= 2500]
+        pairs = [
+            (start, hero) for start in starts for hero in hero_spots
+            if math.dist(position(start), position(hero)) >= 700
+            and all(math.dist(position(hero), target) < 2700 for target in (
+                position(start), owner.pos, chest.pos, *((witness.pos,) if witness else ()),
+            ))
+        ]
+        # The opposite side of the house puts a real wall between the greedy NPC and the owner.
+        # The hero stays on the waynet, away from the chest's small interaction slot.
+        pairs.sort(key=lambda pair: (
+            -math.dist(position(pair[0]), owner.pos), math.dist(position(pair[1]), owner.pos),
+        ))
+        attempts: list[dict[str, Any]] = []
+        for start, hero in pairs:
+            await link.debug("player_goto", waypoint=hero["name"])
+            posed, pose = await prepare_npc_pose(
+                link, HILDA, start["name"], face=HERO_INSTANCE, timeout=5,
+            )
+            solitude = posed and await alone()
+            attempt = {"start": start["name"], "hero": hero["name"], "pose": pose, "alone": solitude}
+            attempts.append(attempt)
+            log.info("npc_will %s departure preparation: %s", label, attempt)
+            if solitude:
+                return check(f"{label}_departure", True, attempt)
+        return check(f"{label}_departure", False, attempts)
+
     async def stage_theft(label: str, *, witnessed: bool, remember: bool = False) -> Chest | None:
         cards()
-        await link.debug("time", hour=8, minute=0)
         await link.debug("player_goto", waypoint=HOUSE)
         for npc in farm:
             if not await place(npc, parked):
@@ -191,51 +259,82 @@ async def npc_will(
             # An actual look at an innocent acquaintance near the chest supplies the suspicion.
             if not await place(VINO, chest.waypoint):
                 return None
-            if not await place(LOBART, chest.waypoint, to=VINO, distance=350, face=VINO):
-                return None
-            seen, detail = await wait_npc_visibility(link, LOBART, VINO)
-            remembered = seen and await _until(
-                lambda: any(s.who == VINO for s in crimes.crimes.sightings.mind(LOBART).sightings), 5,
-            )
-            if not check(f"{label}_remembered", remembered, detail):
+            remembered, attempts = False, []
+            for offset in (-300, 300, -450, 450):
+                posed, pose = await prepare_npc_pose(
+                    link, LOBART, chest.waypoint, to=VINO, distance=offset, face=VINO,
+                )
+                seen, detail = False, {}
+                if posed:
+                    seen, detail = await wait_npc_visibility(link, LOBART, VINO)
+                remembered = seen and await _until(
+                    lambda: any(s.who == VINO for s in crimes.crimes.sightings.mind(LOBART).sightings), 5,
+                )
+                attempt = {"offset": offset, "pose": pose, "visibility": detail}
+                attempts.append(attempt)
+                log.info("npc_will %s remembered preparation: %s", label, attempt)
+                if remembered:
+                    break
+            if not check(f"{label}_remembered", remembered, attempts):
                 return None
             if not await place(VINO, parked):
                 return None
 
-        # Face the actual chest before moving the hero behind her; no perception or callback is
-        # disabled. The hero stays on the stage and both participants must remain in AiNormal.
+        # Keep the native waypoint heading, exactly as npc_deeds' successful chest preparation.
+        # The relative witness positions depend on that axis. Actual sight is checked below;
+        # no perception or callback is disabled, and Hilda's decision starts outside afterwards.
         await link.debug("player_goto", pos=tuple(chest.pos))
-        if not await place(HILDA, chest.waypoint, face="PLAYER"):
+        if not await place(HILDA, chest.waypoint):
             return None
-        await link.debug("teleport", near=HILDA, distance=-2200)
+        thief = (await link.snapshot(HILDA, fresh=True)).npc
+        owner_destination = points[owner_point]
+        dx = owner_destination["x"] - thief.pos[0]
+        dz = owner_destination["z"] - thief.pos[2]
+        length = math.hypot(dx, dz)
+        if not check(f"{label}_owner_direction", length > 0, owner_point):
+            return None
+        await link.debug("player_goto", pos=(
+            thief.pos[0] + 2200 * dx / length, thief.pos[1], thief.pos[2] + 2200 * dz / length,
+        ))
         if not check(f"{label}_owner_routine", await owner_away(), owner_point):
             return None
 
-        attempts: list[dict[str, Any]] = []
-        if witnessed:
-            ready = False
-            # npc_view also notices unseen people within 15 m. At 16–19 m a witness can see her
-            # while remaining outside her own field of view; the engine still decides witnesses.
-            for offset in (-1650, -1850, 1650, 1850):
-                if not await place(VINO, chest.waypoint, to=HILDA, distance=offset, face=HILDA):
-                    return None
-                visible, detail = await wait_npc_visibility(link, VINO, HILDA, distance=2000)
-                solitude = await alone()
-                attempts.append({"offset": offset, "visibility": detail, "alone": solitude})
-                if visible and solitude:
-                    ready = True
-                    break
-            if not check(f"{label}_witness", ready, attempts):
-                return None
+        if witnessed and not await stage_witness(label, chest):
+            return None
+        if not await stage_departure(label, chest, witnessed=witnessed):
+            return None
         if not check(
             f"{label}_perception", await alone(), [v.model_dump() for v in await link.npc_view([HILDA])],
         ):
             return None
         return chest
 
+    async def local_geometry(label: str, chest: Chest) -> dict[str, Any] | None:
+        thief = await link.snapshot(HILDA, fresh=True)
+        owner = await link.snapshot(LOBART, fresh=True)
+        geometry = {
+            "thief_pos": thief.npc.pos,
+            "owner_pos": owner.npc.pos,
+            "chest_pos": chest.pos,
+            "hero_pos": thief.player.pos if thief.player is not None else None,
+            "thief_hero": math.dist(thief.npc.pos, thief.player.pos) if thief.player else None,
+            "owner_hero": math.dist(owner.npc.pos, owner.player.pos) if owner.player else None,
+            "chest_hero": math.dist(chest.pos, thief.player.pos) if thief.player else None,
+            "thief_chest": math.dist(thief.npc.pos, chest.pos),
+        }
+        log.info("npc_will %s transfer preparation: %s", label, geometry)
+        if not check(
+            f"{label}_local", all(
+                geometry[key] is not None and geometry[key] < SIMULATION_CM
+                for key in ("thief_hero", "owner_hero", "chest_hero")
+            ) and geometry["thief_chest"] <= ROUTINE_CM, geometry,
+        ):
+            return None
+        return geometry
+
     async def steal(label: str, *, witnessed: bool, remember: bool = False) -> dict[str, Any] | None:
         chest = await stage_theft(label, witnessed=witnessed, remember=remember)
-        if chest is None:
+        if chest is None or (geometry := await local_geometry(label, chest)) is None:
             return None
         before = {str(f["id"]) for f in facts("npc_crime")}
         sent_at = len(sent)
@@ -261,13 +360,24 @@ async def npc_will(
             and len(commands) == 1 and decisions[0].get("action") == commands[0].id
             and completed and len(native) == 1 and LOBART not in witnesses
             and ((VINO in witnesses) if witnessed else not witnesses),
-            {"crime": crime, "will": decisions, "commands": [c.model_dump() for c in commands]},
+            {"crime": crime, "will": decisions, "commands": [c.model_dump() for c in commands],
+             "geometry": geometry},
+        ):
+            return None
+        attempts = [a for a in will.attempts() if a.get("action") == commands[0].id]
+        if not check(
+            f"{label}_committed", len(attempts) == 1 and attempts[0].get("outcome") == "committed"
+            and attempts[0].get("crime") == cid, attempts,
         ):
             return None
         return crime
 
     async def tell_owner(label: str, crime: dict[str, Any]) -> bool:
         cid = str(crime["id"])
+        # Learning creates a pending claim only after the owner has left honest simulation.
+        # Its actual meeting is staged later, after the courage card and initial health are ready.
+        if not await place(LOBART, parked):
+            return False
         await rumors.tick()
         rumor = next((r for r in rumors.rumors.values() if r.subject == HILDA and cid in r.quest), None)
         if not check(f"{label}_rumor_source", rumor is not None and VINO in rumor.known):
@@ -419,7 +529,7 @@ async def npc_will(
             return _logged(results)
         chest = next(c for c in await link.npc_chests(LOBART) if c.id == CHEST)
         await link.debug("player_goto", pos=(chest.pos[0], chest.pos[1], chest.pos[2] + 200))
-        await link.debug("npc_goto", npc=LOBART, to="PLAYER", distance=0)
+        await link.debug("npc_goto", npc=LOBART, to=HERO_INSTANCE, distance=0)
         await link.debug("player_goto", waypoint=HOUSE)
         conv = dialogue.open(LOBART, "Лобарт")
         held = await dialogue.borrow_body(conv, "scenario-npc-will-chest")
@@ -461,7 +571,10 @@ async def npc_will(
         # Restore the exact stealing opportunity less than two game days after the first theft.
         # A load must restore the cooldown and consumed pair even when both become eligible again.
         cards(greed=True, courage=3)
-        kept_kinds = {"npc_motive", "npc_will", "npc_crime", "npc_crime_seen", "npc_crime_suspected"}
+        kept_kinds = {
+            "npc_motive", "npc_will", "npc_will_outcome", "npc_crime", "npc_crime_seen",
+            "npc_crime_suspected",
+        }
         kept = [f for f in facts() if f.get("fact") in kept_kinds]
         saved = await _save(link, slot)
         if not check("saved", saved is not None, len(kept)):
@@ -477,21 +590,39 @@ async def npc_will(
             and [f for f in facts() if f.get("fact") in kept_kinds] == kept, len(kept),
         ):
             return _logged(results)
-        opportunity = await stage_theft("cooldown", witnessed=False)
-        if opportunity is None:
-            return _logged(results)
         before = [f for f in facts("npc_will") if f.get("npc") == HILDA and f.get("kind") == "greed"]
         deeds_before = list(facts("npc_crime"))
-        cards(greed=True)
+        checked_clock: list[int] = []
         for hour in (9, 10):
+            cards()
             await link.debug("time", hour=hour, minute=0)
+            # Native setDayTime resets every body to its routine. Restore the real opportunity
+            # after that reset, then use a fresh game clock rather than an earlier pushed view.
+            opportunity = await stage_theft(f"cooldown_{hour}", witnessed=False)
+            if opportunity is None:
+                return _logged(results)
+            if await local_geometry(f"cooldown_{hour}", opportunity) is None:
+                return _logged(results)
+            clock: dict[str, int] = {}
+
+            async def observed_hour(expected: int = hour, reading: dict[str, int] = clock) -> bool:
+                views = await link.npc_view([HILDA])
+                if not views or views[0].time is None:
+                    return False
+                reading["now"] = views[0].time
+                return views[0].time % (24 * 60) // 60 == expected
+
+            if not check(f"cooldown_{hour}_clock", await _until_async(observed_hour, bool, 5), clock):
+                return _logged(results)
+            cards(greed=True)
             await rumors.tick()
-            await will.tick()
+            await will.tick(now=clock["now"])
+            checked_clock.append(clock["now"])
         check(
             "loaded_cooldown", [
                 f for f in facts("npc_will") if f.get("npc") == HILDA and f.get("kind") == "greed"
             ] == before and facts("npc_crime") == deeds_before,
-            {"thefts": len(deeds_before), "will": len(before), "hours": [9, 10]},
+            {"thefts": len(deeds_before), "will": len(before), "game_minutes": checked_clock},
         )
         return _logged(results)
     finally:

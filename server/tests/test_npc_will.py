@@ -466,12 +466,19 @@ async def test_only_another_person_real_owned_chest_is_a_greed_target(system, wh
     assert not system.link.actions
 
 
-@pytest.mark.parametrize("distance", [0, 1999, 2000])
+@pytest.mark.parametrize("distance", [0, 1499, 1500])
 async def test_greed_waits_while_chest_owner_is_near_the_chest(system, distance):
     greed_scene(system)
     system.link.chests[LOBART][0] = system.link.chests[LOBART][0].model_copy(update={"distance": distance})
     await system.will.tick(NOW)
     assert not system.link.actions
+
+
+async def test_owner_eighteen_meters_from_chest_is_absent_when_the_thief_perceives_nobody(system):
+    greed_scene(system)
+    system.link.chests[LOBART][0] = system.link.chests[LOBART][0].model_copy(update={"distance": 1825})
+    await system.will.tick(NOW)
+    assert [(npc, action) for npc, action, _ in system.link.actions] == [(THIEF, "steal")]
 
 
 async def test_greed_uses_only_chests_in_the_thief_ordinary_routine_places(system):
@@ -632,6 +639,29 @@ async def test_native_deed_before_action_receipt_is_linked_to_the_start_once(sys
     assert system.will.pending() == []
 
 
+async def test_early_transfer_keeps_its_cooldown_when_game_minute_advances_before_receipt(system):
+    greed_scene(system)
+    send_action = system.link.npc_act
+
+    async def transfer_then_next_minute(npc, action, /, **args):
+        action_id = await send_action(npc, action, **args)
+        if action == "steal":
+            theft(system, id="early-native-deed", chest=args["chest"], hour=9, minute=0)
+            refresh(system, NOW + 1)
+        return action_id
+
+    system.link.npc_act = transfer_then_next_minute
+    await system.will.tick(NOW)
+    [attempt] = system.will.attempts()
+    assert (attempt["outcome"], attempt["crime"], attempt["at"], attempt["finished_at"]) == (
+        "committed", "early-native-deed", NOW, NOW,
+    )
+    assert system.will._now == NOW + 1
+    assert not system.will._cool(THIEF, system.cards[THIEF])
+    system.will._now = NOW + 2 * DAY
+    assert system.will._cool(THIEF, system.cards[THIEF])
+
+
 @pytest.mark.parametrize("transferred", [False, True])
 async def test_legacy_start_without_outcome_is_recovered_from_native_truth_or_retried(system, transferred):
     greed_scene(system)
@@ -655,6 +685,59 @@ async def test_legacy_start_without_outcome_is_recovered_from_native_truth_or_re
     assert attempt["motive"] == "legacy-motive"
     assert bool(system.will.pending()) is not transferred
     assert not system.link.actions
+
+
+@pytest.mark.parametrize("previous", ["committed", "aborted"])
+async def test_restarted_link_action_counter_cannot_reuse_a_saved_attempt_outcome(system, previous):
+    greed_scene(system)
+    await system.will.tick(NOW)
+    if previous == "committed":
+        commit_theft(system)
+        finish_action(system)
+        due = NOW + 2 * DAY
+    else:
+        abort_theft(system)
+        due = NOW + 60
+    first = system.will.attempts()[0]
+    saved = system.memory.head("A")
+    system.link.receive(Session(type="session", branch="loaded", parent="A", parent_seq=saved, reason="load"))
+    # NpcLink's action ids use len(actions); this models a new GameLink's counter starting at one.
+    system.link.actions.clear()
+    greed_scene(system, now=due)
+    await system.will.tick(due)
+    restored, fresh = system.will.attempts()
+    assert first["action"] == restored["action"] == fresh["action"]
+    assert restored["id"] != fresh["id"]
+    assert restored["outcome"] == previous and "outcome" not in fresh
+    assert (restored["motive"] == fresh["motive"]) is (previous == "aborted")
+    if previous == "committed":
+        abort_theft(system, now=due)
+        expected = "aborted"
+    else:
+        commit_theft(system, now=due)
+        finish_action(system)
+        expected = "committed"
+    restored, fresh = system.will.attempts()
+    assert restored["outcome"] == previous and fresh["outcome"] == expected
+    assert {outcome["attempt"] for outcome in system.chronicle.facts("npc_will_outcome")} == {
+        restored["id"], fresh["id"],
+    }
+
+
+async def test_legacy_action_only_outcomes_stay_with_their_preceding_start(system):
+    for ordinal, outcome in enumerate(("committed", "aborted"), 1):
+        system.chronicle.record({
+            "fact": "npc_will", "npc": THIEF, "kind": "greed", "act": "steal", "action": "n1",
+            "target": "CHEST_LOBART", "motive": "legacy-motive", "at": NOW + ordinal * 60,
+        })
+        system.chronicle.record({
+            "fact": "npc_will_outcome", "npc": THIEF, "kind": "greed", "action": "n1",
+            "target": "CHEST_LOBART", "motive": "legacy-motive", "outcome": outcome,
+            "finished_at": NOW + ordinal * 60,
+        })
+    first, second = system.will.attempts()
+    assert first["id"] != second["id"]
+    assert [first["outcome"], second["outcome"]] == ["committed", "aborted"]
 
 
 @pytest.mark.parametrize("who,position", [

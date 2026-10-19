@@ -30,7 +30,7 @@ DAY = 24 * 60
 SIMULATION_CM = 3000
 MEET_CM = 1500
 ROUTINE_CM = 2000
-OWNER_NEAR_CM = 2000
+OWNER_NEAR_CM = 1500
 VIEW_SECONDS = 3.0
 RETRY_MINUTES = 60
 LOOP_SECONDS = 60.0
@@ -167,10 +167,11 @@ class NpcWill:
                     self._now += (minute - previous) % DAY
             self._kick()
         elif isinstance(message, NpcIdle) and message.act:
-            if self._active.get(message.npc.upper()) == message.act:
-                self._active.pop(message.npc.upper(), None)
-            attempt = next((a for a in self.attempts() if a.get("action") == message.act), None)
+            active = self._active.get(message.npc.upper())
+            attempt = next((a for a in self.attempts()
+                            if a["id"] == active and a.get("action") == message.act), None)
             if attempt is not None:
+                self._active.pop(message.npc.upper(), None)
                 self._finished(attempt, message)
 
     def _on_fact(self, fact: Fact) -> None:
@@ -181,7 +182,7 @@ class NpcWill:
             else:
                 attempt = next((a for a in reversed(self.attempts())
                                 if a.get("kind") == "greed" and self._matches(a, fact)
-                                and self._active.get(npc) == a.get("action")), None)
+                                and self._active.get(npc) == a["id"]), None)
                 if attempt is not None:
                     self._transferred(attempt, fact)
         if fact.get("fact") in {"npc_crime", "npc_crime_seen", "npc_crime_suspected", "rumor"}:
@@ -258,6 +259,38 @@ class NpcWill:
             and self._at(crime) >= self._at(attempt)
         )
 
+    def _attempt_history(self) -> tuple[
+        list[Fact], list[tuple[int, Fact]], dict[tuple[str, str], Fact], dict[tuple[str, str], int],
+    ]:
+        facts = self.chronicle.facts()
+        starts: list[tuple[int, Fact]] = []
+        ordinals: dict[str, int] = defaultdict(int)
+        latest: dict[tuple[str, str], Fact] = {}
+        outcomes: dict[tuple[str, str], Fact] = {}
+        terminal: dict[tuple[str, str], int] = {}
+        for index, fact in enumerate(facts):
+            if fact.get("fact") == "npc_will":
+                motive = str(fact.get("motive") or "legacy")
+                ordinals[motive] += 1
+                start = {**fact, "id": fact.get("id") or f"{motive}:attempt:{ordinals[motive]}"}
+                starts.append((index, start))
+                latest[(start["npc"], start["action"])] = start
+            elif fact.get("fact") == "npc_will_outcome":
+                identity = fact.get("attempt")
+                if not identity:
+                    # Old outcomes had only the process-local action id. Attach them only to
+                    # their preceding start; a restarted GameLink may reuse that same id later.
+                    preceding = latest.get((fact["npc"], fact["action"]))
+                    if preceding is None or preceding.get("motive") != fact.get("motive"):
+                        continue
+                    identity = preceding["id"]
+                key = (identity, fact["action"])
+                terminal.setdefault(key, index)
+                old = outcomes.get(key)
+                if old is None or old.get("outcome") != "committed":
+                    outcomes[key] = fact
+        return facts, starts, outcomes, terminal
+
     def attempts(self) -> list[Fact]:
         """Project immutable starts and their outcomes without changing Chronicle's source facts.
 
@@ -265,22 +298,14 @@ class NpcWill:
         lacking outcomes can still be proved by their subsequent physical deed; absent that
         proof, a load recovers the motive rather than inventing a completed theft.
         """
-        facts = self.chronicle.facts()
+        facts, starts, outcomes, terminal = self._attempt_history()
         motives = {f.get("id"): f for f in facts if f.get("fact") == "npc_motive"}
-        outcomes: dict[str, Fact] = {}
-        terminal: dict[str, int] = {}
-        for index, fact in enumerate(facts):
-            if fact.get("fact") == "npc_will_outcome":
-                terminal.setdefault(fact["action"], index)
-                old = outcomes.get(fact["action"])
-                if old is None or old.get("outcome") != "committed":
-                    outcomes[fact["action"]] = fact
-        starts = [(index, fact) for index, fact in enumerate(facts) if fact.get("fact") == "npc_will"]
         result = []
         for index, start in starts:
             motive = motives.get(start.get("motive"), {})
             attempt = {**{key: motive[key] for key in ("owner", "item") if key in motive}, **start}
-            outcome = outcomes.get(start.get("action"))
+            key = (start["id"], start["action"])
+            outcome = outcomes.get(key)
             if outcome is not None:
                 attempt.update({key: outcome[key] for key in (
                     "outcome", "reason", "detail", "retry_at", "crime", "finished_at",
@@ -288,7 +313,7 @@ class NpcWill:
             if start.get("kind") == "greed" and attempt.get("outcome") != "committed":
                 stop = next((i for i, other in starts
                              if i > index and other.get("npc") == start.get("npc")), len(facts))
-                stop = min(stop, terminal.get(start.get("action"), len(facts)))
+                stop = min(stop, terminal.get(key, len(facts)))
                 crime = next((f for f in facts[index + 1:stop]
                               if f.get("fact") == "npc_crime" and self._matches(attempt, f)), None)
                 if crime is not None:
@@ -299,16 +324,17 @@ class NpcWill:
 
     def _outcome(self, attempt: Fact, outcome: str, reason: str, *, at: int | None = None,
                  detail: str = "", crime: str = "") -> None:
-        previous = [f for f in self.chronicle.facts("npc_will_outcome")
-                    if f.get("action") == attempt["action"]]
-        if previous and (outcome != "committed" or any(f.get("outcome") == "committed" for f in previous)):
+        _, _, outcomes, _ = self._attempt_history()
+        previous = outcomes.get((attempt["id"], attempt["action"]))
+        if previous is not None and (outcome != "committed" or previous.get("outcome") == "committed"):
             return
         finished = self._now if at is None else at
         if finished is None:
             return
         self.chronicle.record({
             "fact": "npc_will_outcome", "npc": attempt["npc"], "kind": attempt["kind"],
-            "target": attempt["target"], "motive": attempt["motive"], "action": attempt["action"],
+            "target": attempt["target"], "motive": attempt["motive"], "attempt": attempt["id"],
+            "action": attempt["action"],
             "outcome": outcome, "reason": reason, "finished_at": finished,
             **({"detail": detail} if detail else {}), **({"crime": crime} if crime else {}),
             **({"retry_at": finished + RETRY_MINUTES}
@@ -337,7 +363,7 @@ class NpcWill:
                 crime = self.npc_crimes.crime(str(attempt.get("crime") or ""))
                 if crime is not None:
                     self._transferred(attempt, crime)
-            elif not attempt.get("outcome") and self._active.get(attempt["npc"]) != attempt["action"]:
+            elif not attempt.get("outcome") and self._active.get(attempt["npc"]) != attempt["id"]:
                 self._outcome(attempt, "aborted", "load_interrupted")
 
     def _retry_ready(self, motive: Fact) -> bool:
@@ -525,9 +551,10 @@ class NpcWill:
         if not self.loop_guard.claim(npc):
             return
         self._starting[npc] = []
+        started_at = self._stamp()
         try:
             action = await self.npc_crimes._act(npc, "steal", **args)
-            self._started(motive, "steal", action, generation)
+            self._started(motive, "steal", action, generation, started_at=started_at)
         finally:
             self._starting.pop(npc, None)
 
@@ -551,6 +578,7 @@ class NpcWill:
         act = rule.action(self.cards.get(npc))
         if not self.loop_guard.claim(npc):
             return
+        started_at = self._stamp()
         if act == "fight":
             crime = self.npc_crimes.crime(cid)
             if crime is None:
@@ -564,26 +592,30 @@ class NpcWill:
             )
         if generation != self._generation:
             return
-        self._started(motive, str(act), action, generation)
+        self._started(motive, str(act), action, generation, started_at=started_at)
         if act == "accuse":
             self._accused(motive)
 
-    def _started(self, motive: Fact, act: str, action: str, generation: int) -> None:
+    def _started(self, motive: Fact, act: str, action: str, generation: int, *,
+                 started_at: dict[str, int] | None = None) -> None:
         if generation != self._generation:
             return
+        ordinal = 1 + sum(f.get("motive") == motive["id"] for f in self.chronicle.facts("npc_will"))
+        identity = f"{motive['id']}:attempt:{ordinal}"
         if action not in self.npc_crimes._completed:
-            self._active[motive["npc"]] = action
+            self._active[motive["npc"]] = identity
         attempt = {
-            "fact": "npc_will", "npc": motive["npc"], "kind": motive["kind"],
+            "fact": "npc_will", "id": identity, "npc": motive["npc"], "kind": motive["kind"],
             "target": motive["target"], "act": act, "action": action, "motive": motive["id"],
-            **({key: motive[key] for key in ("crime", "owner", "item") if key in motive}), **self._stamp(),
+            **({key: motive[key] for key in ("crime", "owner", "item") if key in motive}),
+            **(started_at if started_at is not None else self._stamp()),
         }
         self.chronicle.record(attempt)
         for crime in self._starting.get(motive["npc"], []):
             if self._matches(attempt, crime):
                 self._transferred(attempt, crime)
         if receipt := self.npc_crimes._completed.get(action):
-            current = next(a for a in self.attempts() if a["action"] == action)
+            current = next(a for a in self.attempts() if a["id"] == identity)
             self._finished(current, receipt)
 
     def _name(self, npc: str) -> str:
