@@ -188,7 +188,7 @@ def control_world(tmp_path, monkeypatch):
         sleep=world.sleep, create_task=asyncio.create_task, CancelledError=asyncio.CancelledError,
     ))
     monkeypatch.setattr(soak, "Bodies", ReadyBodies)
-    monkeypatch.setattr(soak, "_m5b_player_weapon", weapon)
+    monkeypatch.setattr(soak, "_soak_player_weapon", weapon)
     monkeypatch.setattr(soak, "_save_or_fail", lambda link, slot: link.save(slot))
     monkeypatch.setattr(soak, "CaptureTracker", forbidden)
     monkeypatch.setattr(soak, "_policy_resets", forbidden)

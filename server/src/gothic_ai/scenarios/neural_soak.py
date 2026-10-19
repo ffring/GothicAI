@@ -10,7 +10,7 @@ import time
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .. import triggers
 from ..bodies import Bodies
@@ -19,7 +19,7 @@ from ..dialogue import DialogueManager
 from ..game import GameError, GameLink
 from ..llm.fake import FakeBackend
 from ..protocol import BodyLease, GameMessage, LineStarted, NpcSpec, RoutineEntry, Session
-from .common import _m5b_player_weapon, _save_or_fail, _until, _until_async, wait_message
+from .common import _save_or_fail, _until, _until_async, wait_message
 from .neural_load import _policy_resets
 from .neural_soak_capture import CaptureTracker
 from .neural_soak_metrics import SoakMetrics, release_within_deadline
@@ -30,6 +30,27 @@ COMPANION = "DIR_NPC_SOAK_COMPANION"
 TALKER = "DIR_NPC_SOAK_TALKER"
 REFUGE = "NW_XARDAS_TOWER_VALLEY_01"
 PLACES = ("NW_XARDAS_GOBBO_02", "NW_XARDAS_TOWER_VALLEY_09")
+
+
+async def _soak_player_weapon(
+    link: GameLink, state: Literal["none", "melee"], *, timeout: float = 5,
+) -> None:
+    """Wait for the hero without changing the pilot's shared body subscription."""
+    deadline = asyncio.timeout(timeout)
+    try:
+        async with deadline:
+            while True:
+                try:
+                    await link.debug("player_weapon", state=state)
+                    return
+                except GameError as error:
+                    if str(error) != "the player cannot switch weapons now":
+                        raise
+                await asyncio.sleep(.1)
+    except TimeoutError as error:
+        if not deadline.expired():
+            raise
+        raise GameError(f"neural-soak player_weapon {state}: not ready within {timeout:g} s") from error
 
 
 @dataclass
@@ -444,7 +465,7 @@ async def neural_soak_scenario(
         native_attacking.clear()
 
     async def conversation() -> None:
-        await _m5b_player_weapon(link, "none")
+        await _soak_player_weapon(link, "none")
         if control:
             await link.body_watch(["PLAYER"], rate_hz=20)
         await link.debug("player_goto", waypoint=REFUGE)
@@ -543,7 +564,7 @@ async def neural_soak_scenario(
                 await heal()
                 await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
                 try:
-                    await _m5b_player_weapon(link, "melee", timeout=15)
+                    await _soak_player_weapon(link, "melee", timeout=15)
                 except GameError:
                     snapshot = await link.snapshot(TALKER, fresh=True)
                     log.error("neural-soak weapon preparation: hero=%s", snapshot.player)
