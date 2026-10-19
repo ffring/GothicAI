@@ -1,5 +1,6 @@
 """Set recipes, physical levels and retained retries without loading FLUX."""
 from pathlib import Path
+from copy import deepcopy
 import sys
 
 import numpy as np
@@ -73,3 +74,62 @@ def test_retry_preserves_rejected_attempt_and_enforces_three_attempts():
 def test_black_source_is_rejected_instead_of_claiming_valid_colour():
     _, _, rejection = generate.corrected_maps(Image.new('RGB', (32, 32), 'black'), recipes()[0])
     assert rejection == 'brightness correction could not reach class range'
+
+
+def test_prompt_rules_and_saturation_thresholds_come_from_bible():
+    for record in recipes():
+        cls = record['parameters']['material_class']
+        assert record['parameters']['saturation_limit'] == (.4 if cls == 'roof_tiles' else .3)
+        assert 'evenly distributed small details, no large isolated features' in record['prompt']
+        if cls in ('mud', 'dirt_path'):
+            assert 'grime in the cracks' not in record['prompt']
+            assert 'continuous' in record['prompt']
+
+
+def test_explicit_refresh_preserves_history_and_grants_only_three_new_attempts(tmp_path):
+    records = recipes()
+    target = records[0]
+    for record in records:
+        record['parameters'].pop('saturation_limit')
+        record['prompt'] = 'previous real prompt'
+        record['files'] = {key: 'old/'+key+'.png' for key in generate.bakeoff.MAPS}
+        record['generation'] = dict(outcome='complete', attempts=[dict(number=n, seed=n, outcome='complete', files=deepcopy(record['files'])) for n in (1,2,3)])
+    old = deepcopy(records)
+    mapping, bible = ROOT/'data/content/city-materials.csv', ROOT/'docs/content-style.md'
+    generate.refresh(records, mapping, bible, 'city-1', target['replaces'], 'user revised prompt')
+    assert target['generation']['attempt_limit'] == 6
+    assert target['generation']['series_start'] == 3
+    assert target['generation']['outcome'] == 'pending' and target['files'] == {}
+    assert target['generation']['recipes'][0]['prompt'] == 'previous real prompt'
+    assert len(target['generation']['recipes']) == 2
+    assert all(a['recipe_revision']==1 for a in target['generation']['attempts'])
+    assert target['generation']['previous_selections'][0]['files'] == old[0]['files']
+    assert records[1]['prompt'] == old[1]['prompt'] and records[1]['files'] == old[1]['files']
+    assert records[1]['generation']['outcome'] == 'complete'
+    snapshot = deepcopy(records)
+    generate.refresh(records, mapping, bible, 'city-1', target['replaces'], 'repeat')
+    assert records == snapshot
+    path = tmp_path/'registry.jsonl'
+    generate.bakeoff.write_registry(path, records)
+    assert generate.prepare(path, mapping, bible, 'city-1') == records
+
+
+def test_postprocess_changes_only_albedo_and_is_idempotent(tmp_path):
+    record = recipes()[0]
+    record['generation'].update(outcome='complete', prepared_inputs='a'*64)
+    record['files'] = {key: 'source/'+key+'.png' for key in generate.bakeoff.MAPS}
+    source = tmp_path/'out/source'
+    source.mkdir(parents=True)
+    for key in generate.bakeoff.MAPS:
+        Image.new('RGB', (16,16), (180,40,12)).save(source/(key+'.png'))
+    before = deepcopy(record)
+    old_bytes = {p.name:p.read_bytes() for p in source.iterdir()}
+    generate.postprocess([record], tmp_path, 'city-1')
+    assert record['files']['albedo'] != before['files']['albedo']
+    assert all(record['files'][k] == before['files'][k] for k in generate.bakeoff.MAPS if k!='albedo')
+    assert record['seed']==before['seed'] and record['prompt']==before['prompt']
+    assert old_bytes == {p.name:p.read_bytes() for p in source.iterdir()}
+    assert record['generation']['saturation_correction']['mean_hsv_s_after'] <= .3
+    snapshot = deepcopy(record)
+    generate.postprocess([record], tmp_path, 'city-1')
+    assert record == snapshot

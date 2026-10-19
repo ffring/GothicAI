@@ -32,7 +32,7 @@ while true; do
 done
 scp "$ROOT/scripts/content/bakeoff.py" "$ROOT/scripts/content/stable_materials_adapter.py" dev-ubuntu:gothic-ai/materials/
 if [[ "$STAGE" == city ]]; then
-  scp "$ROOT/scripts/content/generate.py" "$ROOT/data/content/city-materials.csv" "$ROOT/docs/content-style.md" dev-ubuntu:gothic-ai/materials/
+  scp "$ROOT/scripts/content/generate.py" "$ROOT/scripts/content/material_colour.py" "$ROOT/data/content/city-materials.csv" "$ROOT/docs/content-style.md" dev-ubuntu:gothic-ai/materials/
 fi
 # registry.jsonl is copied once at preparation. Preserve remote stage progress.
 ssh -T dev-ubuntu bash -s -- "$STAGE" "$BASE" "$MIN_FREE_MIB" <<'REMOTE'
