@@ -1,6 +1,6 @@
 # Сравнение плиточных PBR-материалов
 
-Готовы **50 материалов, 10 листов и 8 снимков из игры**. Ещё два снимка FLUX+Marigold ждут Ryzen (`gq 22af7a408206`). Пропущенных моделей больше нет: соглашение FLUX принял пользователь. Все ресурсы — `draft`; генератор выбирает пользователь.
+Готовы **50 материалов, 10 листов и 10 снимков из игры**. Пропущенных моделей больше нет: соглашение FLUX принял пользователь. Все ресурсы — `draft`; генератор выбирает пользователь.
 
 [Реестр](../../../data/content/registry.jsonl) хранит английские промпты, negative, сиды, параметры, полные ревизии HF, лицензии, замеры и пути карт. Генераторы получали только текст. Marigold и фильтр обрабатывали созданные плитки; пиксели Gothic им не передавались.
 
@@ -27,13 +27,13 @@ Ryzen, дневной префикс исходного [rf.bench](../../render-
 
 | Конвейер | Мостовая | Стена |
 |---|---|---|
-| FLUX+Marigold | В очереди | В очереди |
+| FLUX+Marigold | [Снимок](game-cobblestone-flux-marigold.jpg) | [Снимок](game-stone-wall-flux-marigold.jpg) |
 | FLUX+фильтр | [Снимок](game-cobblestone-flux-filter.jpg) | [Снимок](game-stone-wall-flux-filter.jpg) |
 | SDXL+Marigold | [Снимок](game-cobblestone-sdxl-marigold.jpg) | [Снимок](game-stone-wall-sdxl-marigold.jpg) |
 | SDXL+фильтр | [Снимок](game-cobblestone-sdxl-filter.jpg) | [Снимок](game-stone-wall-sdxl-filter.jpg) |
 | StableMaterials | [Снимок](game-cobblestone-stablematerials.jpg) | [Снимок](game-stone-wall-stablematerials.jpg) |
 
-Готовые 8 игр завершились кодом 0; загрузка материала и нужная точка подтверждены журналами. Заявки `gq`: `c35d79720ea8` (прежние 6), `6622a795be67` (2 FLUX+фильтр). JPG уменьшены с 1920×1080 до 1280×720. Цвет и ORM — DXT1, нормаль — DXT5nm, с mip-уровнями. Игра учитывает нормаль и AO; GGX показан в CPU-превью.
+Все 10 игр завершились кодом 0; загрузка материала и нужная точка подтверждены журналами. Заявки `gq`: `c35d79720ea8` (прежние 6), `6622a795be67` (2 FLUX+фильтр), `22af7a408206` (2 FLUX+Marigold). JPG уменьшены с 1920×1080 до 1280×720. Цвет и ORM — DXT1, нормаль — DXT5nm, с mip-уровнями. Игра учитывает нормаль и AO; GGX показан в CPU-превью.
 
 При упаковке DDS для Z<0 ставится Z=1e-6 с нормализацией, затем меняется знак Y под базис движка. **Прижаты 2 из 1 048 576 пикселей стены SDXL+Marigold; у остальных девяти вариантов, включая четыре FLUX, — 0.** Исходные PNG сохраняются: четыре нормали FLUX после упаковки совпадают по SHA-256 с оригиналами на dev-ubuntu; шесть прежних проверены до и после своей упаковки.
 
@@ -89,8 +89,8 @@ SDXL: 30 шагов, guidance 7, FP16, CPU offload, circular padding UNet/VAE с
 
 ## Файлы и проверки
 
-Карты: `~/gothic-ai/materials/out/bakeoff/` на dev-ubuntu; копия — `~/.local/share/gothic-ai/content/bakeoff/` на Mac. Получены 300 карт PNG и 20 исходных плиток. Каталог задачи занимает 56,37 ГБ из 80 ГБ. В git — рецепты и уменьшенные JPG; веса, PNG и DDS — вне git.
+Карты: `~/gothic-ai/materials/out/bakeoff/` на dev-ubuntu; копия — `~/.local/share/gothic-ai/content/bakeoff/` на Mac. Получены 300 карт PNG и 20 исходных плиток. Каталог задачи занимает 56,37 ГБ из 80 ГБ. В git — рецепты и 20 уменьшенных JPG; веса, PNG и DDS — вне git.
 
 Реестр проверил 50 записей и внешние файлы; 30 прежних записей не изменились. Четыре новых нормали совпадают с оригиналами после DDS-упаковки. Все 66 целевых тестов прошли; они охватывают реестр, явную авторизацию, освобождение T5, выбор источника Marigold, восстановление юнитов и изоляцию двух ожидающих захватов. Результаты генерации — 70 успешных диффузионных инференций; текстовые кодирования посчитаны отдельно.
 
-Повторить снимки: `RYZEN_LOCK_WAIT=7200 scripts/content/capture-materials.sh --content-root ~/.local/share/gothic-ai/content --output ~/.local/share/gothic-ai/content/bakeoff/captures`. Каждый RUN сохраняет свои бинарник, сейв и скрипты в `inputs/$RUN/runtime`. Исходные кадры — в `captures/<RUN>/captures/<id>/city.png` на Mac и `~/gothic-ai/material-bakeoff/runs/<RUN>/<id>/city.png` на Ryzen; RUN: `20261019T044335Z-19309`, `20261019T060648Z-5myjQnd1`. Генерация: [bakeoff.py](../../../scripts/content/bakeoff.py), [run-materials.sh](../../../scripts/content/run-materials.sh), [requirements.txt](../../../scripts/content/requirements.txt).
+Повторить снимки: `RYZEN_LOCK_WAIT=7200 scripts/content/capture-materials.sh --content-root ~/.local/share/gothic-ai/content --output ~/.local/share/gothic-ai/content/bakeoff/captures`. Каждый RUN сохраняет свои бинарник, сейв и скрипты в `inputs/$RUN/runtime`. Исходные кадры — в `captures/<RUN>/captures/<id>/city.png` на Mac и `~/gothic-ai/material-bakeoff/runs/<RUN>/<id>/city.png` на Ryzen; RUN: `20261019T044335Z-19309`, `20261019T060648Z-5myjQnd1`, `20261019T061038Z-JjT6669o`. Генерация: [bakeoff.py](../../../scripts/content/bakeoff.py), [run-materials.sh](../../../scripts/content/run-materials.sh), [requirements.txt](../../../scripts/content/requirements.txt).
