@@ -42,11 +42,14 @@ from .budget import Budget
 from .characters import Card
 from .chronicle import Chronicle, Fact
 from .concerns import RANK, Concern
+from .fear import afraid
 from .game import GameError, GameLink
 from .journal import Journal
 from .knowledge import roots
 from .llm import Tool, ToolCall
+from .npc_cheat import betrayed, keeps
 from .people_knowledge import PeopleKnowledge
+from .promise_breach import broken_promises, silence_facts
 from .protocol import GameMessage, Loading, Session, Snapshot
 from .sightings import Sighting, Sightings, Told, heard
 from .storyguard import StoryGuard
@@ -623,6 +626,7 @@ class Witnesses:
                 **({"day": int(state["day"])} if "day" in state else {}),
             }
         )
+        self._betrayal(t)
         self.journal.add("testimony", npc=npc, name=name, witness=witness, saw=len(t.saw), tier=tier)
         self.dialogue.remember(witness, wname, f"Тебя расспрашивали о герое ({name}): тот говорит «{said}»")
         if tier == "far":
@@ -632,7 +636,7 @@ class Witnesses:
     def _cover(self, t: Testimony) -> None:
         """Accepted promises, then fear. Neither changes the witness's actual evidence."""
         covers = []
-        for f in self.chronicle.facts("covered"):
+        for f in self._covers():
             if str(f.get("npc", "")).upper() != t.witness:
                 continue
             day = f.get("day")
@@ -665,15 +669,54 @@ class Witnesses:
             t.crime_told = []
 
     def _afraid(self, npc: str) -> bool:
-        card = self.cards.get(npc)
-        return bool(
-            card is not None and card.courage <= 2 and self.crimes is not None
-            and any(
-                k.degree in {"seen", "heard"} and k.suspect == HERO and not k.forgiven
-                and k.crime.get("kind") in {"attack", "murder"}
-                for k in self.crimes.known(npc)
+        return afraid(npc, self.cards, self.crimes, courage=2)
+
+    def _covers(self) -> list[Fact]:
+        """Read kept promises from both their applied facts and the original accepted deal."""
+        facts = self.chronicle.facts()
+        applied = {f.get("deal") for f in facts if f.get("fact") == "covered"}
+        covers = []
+        for f in facts:
+            if not keeps(self.chronicle, str(f.get("deal", "")), "cover"):
+                continue
+            if f.get("fact") == "covered":
+                covers.append(f)
+            elif (
+                f.get("fact") == "deal" and
+                isinstance(f.get("cover"), dict) and f.get("deal") not in applied
+            ):
+                covers.append({"npc": f.get("npc"), "deal": f.get("deal"), **f["cover"]})
+        return covers
+
+    def _betrayal(self, t: Testimony) -> None:
+        """Only evidence actually disclosed reveals a broken silence or cover in the Chronicle."""
+        deals = {
+            str(f.get("deal", ""))
+            for crime in t.crime_told
+            for f in broken_promises(
+                self.chronicle, t.witness, crime=crime, cover=self.cover_enabled, at=t.minute,
             )
-        )
+        }
+        if self.cover_enabled:
+            for f in self.chronicle.facts("deal"):
+                promise = f.get("cover")
+                deal = str(f.get("deal", ""))
+                if (
+                    str(f.get("npc", "")).upper() != t.witness
+                    or not isinstance(promise, dict) or keeps(self.chronicle, deal, "cover")
+                ):
+                    continue
+                crime = self.crimes.crime(str(promise.get("crime", ""))) if self.crimes else None
+                places = (self.crimes.places if self.crimes else None) or self.desk.places
+                place = places.of(crime.get("waypoint")) if places is not None and crime else None
+                at = _crime_minute(crime) if crime else 0
+                if any(
+                    _covered(s, promise.get("day"), place.id if place else "", at)
+                    for s in t.told
+                ):
+                    deals.add(deal)
+        for deal in deals:
+            betrayed(self.chronicle, t.witness, deal, "testified", t.npc)
 
     def _on_fact(self, f: Fact) -> None:
         """Catching the same words by another route also reveals the covering witness."""
@@ -807,9 +850,11 @@ class Witnesses:
             silent: set[tuple[str, str]] = set()
             before: dict[str, set[tuple[str, str]]] = {}
             for f in self.chronicle.facts():
-                if f.get("fact") == "silenced" and not f.get("cover"):
-                    silent.add((str(f.get("npc", "")).upper(), str(f.get("crime"))))
-                elif f.get("fact") == "testimony":
+                silent.update(
+                    (str(p.get("npc", "")).upper(), str(p.get("crime")))
+                    for p in silence_facts(self.chronicle, f, cover=False)
+                )
+                if f.get("fact") == "testimony":
                     before[str(f.get("id", ""))] = silent.copy()
             for t in out:
                 if t.cover:

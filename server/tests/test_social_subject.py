@@ -95,6 +95,44 @@ def test_source_registry_also_drives_rumor_seed_and_words(monkeypatch):
     assert rumor.told("Лобарт") == "Слух (со слов: Лобарт): Хильда: новое знание"
 
 
+def test_unpaid_seeds_one_rumor_from_all_hearers_and_restores_without_duplicates():
+    facts = [{
+        "fact": "npc_broken", "npc": HILDA, "npc_name": "Хильда", "deal": "D1",
+        "how": "unpaid", "witnesses": [LOBART, VINO, HILDA], "day": 1,
+    }]
+    desk = _rumors(facts)
+    [rumor] = desk.rumors.values()
+    assert (rumor.kind, rumor.subject, rumor.subject_name) == ("npc_broken", HILDA, "Хильда")
+    assert rumor.known == {LOBART: 0, VINO: 0}
+    assert "Хильда не отдал(а) герою обещанное" in rumor.description()
+    assert desk.tell(rumor, VINO, ANDRE) == "told"
+    [learned] = PeopleKnowledge(desk.chronicle).of(ANDRE)
+    assert learned.subject == HILDA and learned.source == VINO and not learned.direct
+    before = (dict(rumor.known), dict(rumor.since), len(facts))
+    for _ in range(2):
+        desk._load()
+        [rumor] = desk.rumors.values()
+        assert (rumor.known, rumor.since, len(facts)) == before
+        assert PeopleKnowledge(desk.chronicle).of(ANDRE) == [learned]
+
+
+def test_no_show_and_unheard_refusal_start_neither_people_knowledge_nor_rumor():
+    facts = [
+        {"fact": "npc_broken", "npc": HILDA, "deal": "D1", "how": "no_show"},
+        {"fact": "npc_broken", "npc": HILDA, "deal": "D2", "how": "unpaid", "witnesses": []},
+    ]
+    desk = _rumors(facts)
+    assert desk.rumors == {}
+    assert PeopleKnowledge(desk.chronicle).of(LOBART) == []
+
+
+def test_npc_unpaid_source_does_not_change_hero_broken_promise_words():
+    rumor = Rumor("D1", "broken", LOBART, "Лобарт", "10 золотых")
+    assert "герой задолжал" in rumor.description()
+    rumor = Rumor("meet-1", "broken", LOBART, "Лобарт", "у башни")
+    assert "герой обещал" in rumor.description() and "не пришёл" in rumor.description()
+
+
 async def test_no_cover_has_neither_exposure_nor_cover_rumor():
     fake = FakeGame(branch="A")
     async with connected(fake) as link:

@@ -125,7 +125,10 @@ def _rumors(s: Social) -> tuple[Rumors, Rumor, list[dict]]:
     r = Rumors.__new__(Rumors)
     facts: list[dict] = []
     r.social, r.dead, r.rumors, r.tells = s, set(), {}, defaultdict(int)
-    r.chronicle = type("C", (), {"record": lambda self, f: facts.append(f)})()
+    r.chronicle = SimpleNamespace(
+        record=facts.append,
+        facts=lambda kind=None: [f for f in facts if kind is None or f.get("fact") == kind],
+    )
     r.dialogue = type("D", (), {"remember": lambda self, *a: None})()
     rumor = Rumor(QUEST, "caught", LOBART, "Лобарт", "Убрать поле репы")
     rumor.known[LOBART] = 0
@@ -283,6 +286,51 @@ def test_one_who_promised_silence_tells_no_one(graph, monkeypatch):
     rumor.known[HILDA] = 1
     r.spread(3 * DAY, 3 * DAY + _h(23))
     assert VINO in rumor.known and all(f["from"] != LOBART for f in facts)
+
+
+@pytest.mark.parametrize("promise", ["lie", "crime", "cover"])
+@pytest.mark.parametrize("keeps", [False, True])
+def test_npc_intent_controls_silence_and_first_real_retelling_records_betrayal(graph, promise, keeps):
+    if promise == "lie":
+        r, rumor, facts = _rumors(Social(PEOPLE, graph))
+        teller, listeners = LOBART, [HILDA, VINO]
+        terms = {"silence": [rumor.key]}
+    else:
+        r, rumor, facts = _crime_rumors(Social(PEOPLE, graph))
+        teller, listeners = HILDA, [LOBART, VINO]
+        terms = {"cover": {"crime": "c1"}} if promise == "cover" else {"silence": ["crime:c1"]}
+    how = "cover" if promise == "cover" else "silence"
+    facts.append({"fact": "npc_intent", "npc": teller, "deal": "D1", "keeps": keeps, "how": [how]})
+    deal = {"fact": "deal", "npc": teller, "deal": "D1", **terms}
+    facts.append(deal)
+    r._on_fact(deal)
+    r.clock = DAY + _h(9)
+
+    assert (teller in rumor.silent) is keeps
+    assert r.tell(rumor, teller, listeners[0]) == ("no" if keeps else "told")
+    assert r.tell(rumor, teller, listeners[1]) == ("no" if keeps else "told")
+    betrayals = [f for f in facts if f.get("fact") == "betrayed"]
+    assert betrayals == ([] if keeps else [{
+        "fact": "betrayed", "npc": teller, "deal": "D1", "how": "told", "to": listeners[0],
+    }])
+
+
+@pytest.mark.parametrize("promise", ["silence", "cover"])
+def test_disabling_cheating_restores_raw_crime_promises_on_load(graph, promise):
+    r, _, facts = _crime_rumors(Social(PEOPLE, graph))
+    facts.extend([
+        {"fact": "npc_intent", "npc": HILDA, "deal": "D1", "keeps": False, "how": [promise]},
+        {"fact": "deal", "npc": HILDA, "deal": "D1", **(
+            {"cover": {"crime": "c1"}} if promise == "cover" else {"silence": ["crime:c1"]}
+        )},
+    ])
+    r.chronicle.npc_cheat_enabled = False
+    r._load()
+    [rumor] = r.rumors.values()
+    r.clock = DAY + _h(9)
+    assert HILDA in rumor.silent
+    assert r.tell(rumor, HILDA, LOBART) == "no"
+    assert not any(f.get("fact") == "betrayed" for f in facts)
 
 
 def test_a_debt_not_paid_back_goes_round(graph, monkeypatch):

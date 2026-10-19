@@ -13,14 +13,16 @@ from typing import Any, Literal
 
 from .chronicle import Fact
 from .crimes import COMMUNITIES, Crimes
+from .npc_cheat import betrayed
 from .people_knowledge import rumor_subject
+from .promise_breach import broken_promises, silence_facts
 
 DAY_MINUTES = 24 * 60
 REPORT_DELAYS = {"theft": DAY_MINUTES, "sheep": DAY_MINUTES, "attack": DAY_MINUTES // 2, "murder": 120}
 LAW_COMMUNITIES = tuple(key for key, value in COMMUNITIES.items() if value.lawkeepers)
 COUNTER_KINDS = {"theft": "THEFT", "attack": "ATTACK", "murder": "MURDER", "sheep": "SHEEPKILLER"}
 _GUARD_GUILDS = {"city": {1, 2}, "oldcamp": {1, 2}, "farm": {7}, "monastery": {4}}
-_TIMED_FACTS = {"died", "forgiven", "silenced", "rumor", "testimony"}
+_TIMED_FACTS = {"died", "forgiven", "silenced", "deal", "rumor", "testimony"}
 
 
 def game_minutes(fact: Mapping[str, Any]) -> int | None:
@@ -116,6 +118,10 @@ class CrimeLaw:
             "how": how, "via": via.upper(), "at": at,
         }
         self.chronicle.record(fact)
+        for promise in broken_promises(
+            self.chronicle, via, crime=crime, cover=self.crimes.cover, at=at,
+        ):
+            betrayed(self.chronicle, via, str(promise.get("deal", "")), "reported", community)
         return fact
 
     def called(
@@ -258,11 +264,13 @@ class CrimeLaw:
             kind, npc = fact.get("fact"), fact.get("npc", "").upper()
             if kind == "died" and npc == via:
                 candidates.append((at, index, "died"))
-            elif fact.get("crime") == crime["id"]:
-                if kind == "silenced" and npc == via and (self.crimes.cover or not fact.get("cover")):
-                    candidates.append((at, index, "silenced"))
-                elif kind == "forgiven" and npc == victim:
-                    candidates.append((at, index, "repaid" if fact.get("paid") else "forgiven"))
+            elif npc == via and any(
+                promise.get("crime") == crime["id"]
+                for promise in silence_facts(self.chronicle, fact, cover=self.crimes.cover)
+            ):
+                candidates.append((at, index, "silenced"))
+            elif fact.get("crime") == crime["id"] and kind == "forgiven" and npc == victim:
+                candidates.append((at, index, "repaid" if fact.get("paid") else "forgiven"))
         return min(candidates)[2] if candidates else ""
 
     def absolve(
