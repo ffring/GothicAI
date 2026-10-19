@@ -28,7 +28,7 @@ while true; do
   [[ "$game_status" == 0 ]] || { echo "Mac game preflight failed: pgrep exit $game_status" >&2; exit 1; }
   (( SECONDS - started < 3600 )) || { echo 'Mac game still running after 60 minutes; no units stopped' >&2; exit 75; }
   echo 'Waiting for the Mac game before temporarily stopping a model service'
-  sleep 30
+  sleep 5
 done
 scp "$ROOT/scripts/content/bakeoff.py" "$ROOT/scripts/content/stable_materials_adapter.py" dev-ubuntu:gothic-ai/materials/
 if [[ "$STAGE" == city ]]; then
