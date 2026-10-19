@@ -758,6 +758,13 @@ async def _native_combat_available(link: GameLink, pilot: BodyPilot | None, npc:
 
 
 async def serve(args: argparse.Namespace) -> int:
+    soak_control = os.environ.get("GOTHIC_SOAK_CONTROL") == "1"
+    if soak_control and args.scenario != "neural-soak":
+        log.error("GOTHIC_SOAK_CONTROL requires --scenario neural-soak")
+        return 2
+    if soak_control and args.neural_body:
+        log.error("scenario neural-soak control requires --no-neural-body")
+        return 2
     if args.scenario in {
         "neural",
         "neural-companion",
@@ -765,7 +772,7 @@ async def serve(args: argparse.Namespace) -> int:
         "neural-talk",
         "neural-load",
         "neural-soak",
-    } and (not args.body_url or not args.neural_body):
+    } and not soak_control and (not args.body_url or not args.neural_body):
         log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
         return 2
     if args.scenario == "neural-soak" and args.llm != "fake":

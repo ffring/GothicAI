@@ -100,7 +100,10 @@ def _scheduled_load_due(
 async def neural_soak_scenario(
     link: GameLink, dialogue: DialogueManager, pilot: BodyPilot | None, *, log_dir: Path,
 ) -> dict[str, str]:
-    if pilot is None or pilot.max_fights != 4:
+    control = os.environ.get("GOTHIC_SOAK_CONTROL") == "1"
+    if control and pilot is not None:
+        raise GameError("neural-soak control requires --no-neural-body")
+    if not control and (pilot is None or pilot.max_fights != 4):
         raise GameError("neural-soak requires GOTHIC_BODY_URL and --neural-body-max=4")
     if dialogue.llm.name != "fake":
         raise GameError("neural-soak requires LLM=fake")
@@ -114,7 +117,7 @@ async def neural_soak_scenario(
     sequence = 0
     wave = 0
     episodes: dict[int, Episode] = {}
-    capture = CaptureTracker(link, pilot, metrics.event, COMPANION)
+    capture = CaptureTracker(link, pilot, metrics.event, COMPANION) if pilot is not None else None
     release_issues: list[dict[str, Any]] = []
     load_checks: list[dict[str, Any]] = []
     conversations: list[bool] = []
@@ -130,6 +133,7 @@ async def neural_soak_scenario(
     orphan_since: dict[str, float] = {}
     orphan_reported: set[str] = set()
     sampler: asyncio.Task[None] | None = None
+    native_attacking: set[str] = set()
 
     async def sample_loop() -> None:
         while True:
@@ -137,7 +141,7 @@ async def neural_soak_scenario(
             await asyncio.sleep(.1)
 
     def pending_probe() -> bool:
-        return any(not item["reacquired"] for item in load_checks)
+        return not control and any(not item["reacquired"] for item in load_checks)
 
     async def calls(expressions: list[list[Any]]) -> None:
         nonlocal sequence
@@ -213,7 +217,28 @@ async def neural_soak_scenario(
             lines.append(message)
 
     async def poll(*, break_stalls: bool = False) -> None:
-        nonlocal hero_dead, last_hero_check
+        nonlocal hero_dead, last_hero_check, native_attacking
+        if control:
+            now = time.monotonic()
+            if now - last_hero_check >= 1:
+                last_hero_check = now
+                npcs = sorted(active_wave) if break_stalls else []
+                # Passive observation never takes ownership. Native ZS_ATTACK,
+                # rather than pilot handles, determines when this wave is over.
+                values = await link.story_eval(TALKER, [
+                    ["call", "NPC_ISDEAD", ["inst", "HERO"]],
+                    *[["&&", ["inst", npc], ["&&",
+                       [">", ["field", ["inst", npc], "ATTRIBUTE", 0], ["int", 0]],
+                       ["call", "NPC_ISINSTATE", ["inst", npc], ["sym", "ZS_ATTACK"]]]]
+                      for npc in npcs],
+                ])
+                hero_dead = hero_dead or bool(values[0])
+                if break_stalls:
+                    native_attacking = {npc for npc, attacking in zip(npcs, values[1:], strict=True)
+                                        if attacking}
+            metrics.sample()
+            return
+        assert pilot is not None and capture is not None
         metrics.sync_summaries()
         now = time.monotonic()
         orphan_now = {npc for npc, entry in pilot.people.items() if (
@@ -331,12 +356,17 @@ async def neural_soak_scenario(
             await asyncio.sleep(min(.1, max(0, until - time.monotonic())))
 
     async def load_wave(saved: Any, *, cause: str) -> None:
-        nonlocal hero_dead
+        nonlocal hero_dead, native_attacking
         old = {npc: (fight.lease, fight.client) for npc, fight in pilot.fights.items()
-               if fight.lease is not None}
-        old_worlds = sorted({(lease.session_epoch, lease.world_epoch)
-                             for lease, _ in latest_identity.values()})
+               if fight.lease is not None} if pilot is not None else {}
+        old_worlds = (sorted({(lease.session_epoch, lease.world_epoch)
+                              for lease, _ in latest_identity.values()}) if not control else
+                      [(link.body_session_epoch, link.body_generation)])
         before = len(metrics.summaries)
+        rss_before = metrics.sample(force=True)
+        metrics.event("load_start", cause=cause, wave=wave, rss_before=rss_before)
+        load_started = time.monotonic()
+        mid_fight = bool(native_attacking) if control else bool(old)
         waiter = asyncio.create_task(wait_message(link, Session, lambda msg: msg.reason == "load"))
         await asyncio.sleep(0)
         try:
@@ -345,35 +375,48 @@ async def neural_soak_scenario(
         finally:
             waiter.cancel()
         await link.wait_world()
+        if control:
+            await link.body_watch(["PLAYER"], rate_hz=20)
         await pause(2.1)
-        status = await link.body_control_status()
-        new_world = [status.session_epoch, status.world_epoch]
+        rss_after = metrics.sample(force=True)
+        if control:
+            new_world = [link.body_session_epoch, link.body_generation]
+        else:
+            status = await link.body_control_status()
+            new_world = [status.session_epoch, status.world_epoch]
         summaries = metrics.summaries[before:]
         old_summaries = [s for s in summaries if s.lease in {item[0] for item in old.values()}]
         packets = len(link.body_latest)
         ok = bool(
             session.parent == saved.branch and session.parent_seq == saved.seq
             and new_world not in [list(scope) for scope in old_worlds]
-            and _load_summaries_ok([item[0] for item in old.values()], old_summaries, cause=cause)
-            and not pilot.active_count and not link.body_leases and not packets
-            and not pilot._watch_npcs and not pilot._pending_unwatch
-            and not any(entry.activity == "body" for entry in pilot.people.values())
         )
-        detail = dict(cause=cause, ok=ok, mid_fight=bool(old), old_fights=len(old),
-                      summaries=len(old_summaries), active_count=pilot.active_count,
-                      leases=len(link.body_leases), cached_rows=packets,
-                      old_worlds=[list(scope) for scope in old_worlds], reacquired=False,
-                      new_world=new_world,
-                      reasons=[s.reason for s in old_summaries])
+        detail = dict(cause=cause, ok=ok, mid_fight=mid_fight, wave=wave,
+                      old_worlds=[list(scope) for scope in old_worlds], new_world=new_world,
+                      seconds=time.monotonic() - load_started,
+                      rss_before=rss_before, rss_after=rss_after)
+        if pilot is not None:
+            ok = bool(ok and _load_summaries_ok(
+                [item[0] for item in old.values()], old_summaries, cause=cause,
+            ) and not pilot.active_count and not link.body_leases and not packets
+                and not pilot._watch_npcs and not pilot._pending_unwatch
+                and not any(entry.activity == "body" for entry in pilot.people.values()))
+            detail.update(ok=ok, old_fights=len(old), summaries=len(old_summaries),
+                          active_count=pilot.active_count, leases=len(link.body_leases),
+                          cached_rows=packets, reacquired=False,
+                          reasons=[s.reason for s in old_summaries])
         load_checks.append(detail)
         metrics.event("load_check", **detail)
         # Loading deliberately clears GameLink.party. Re-establish this fixture's
         # declared swordsman on both sides before testing post-load combat.
         await link.story_effect(COMPANION, [{"do": "party", "value": 1}])
         hero_dead = False
+        native_attacking.clear()
 
     async def conversation() -> None:
         await _m5b_player_weapon(link, "none")
+        if control:
+            await link.body_watch(["PLAYER"], rate_hz=20)
         await link.debug("player_goto", waypoint=REFUGE)
         await link.debug("npc_goto", npc=TALKER, to="PC_HERO", distance=150, face="PC_HERO")
         await link.attach(TALKER)
@@ -419,9 +462,14 @@ async def neural_soak_scenario(
     link.listeners.append(heard)
     try:
         metrics.started = time.monotonic()
-        capture.started = metrics.started
-        with metrics.observe(), _policy_resets() as resets:
+        if capture is not None:
+            capture.started = metrics.started
+        reset_observer = contextlib.nullcontext({}) if control else _policy_resets()
+        with metrics.observe(), reset_observer as resets:
             started = time.monotonic()
+            metrics.event("run_start", control=control, duration_s=duration)
+            if control:
+                await link.body_watch(["PLAYER"], rate_hz=20)
             sampler = asyncio.create_task(sample_loop())
             # Put the 10-minute checkpoint inside a wave, rather than its gap.
             next_wave = started + (30 if duration >= 1200 else 0)
@@ -452,6 +500,8 @@ async def neural_soak_scenario(
                 place = PLACES[(wave - 1) % 2]
                 count = 3 + (wave % 2 == 0)
                 active_wave = set(BANDITS[:count])
+                wave_rss_before = metrics.sample(force=True)
+                metrics.event("wave_prepare", wave=wave, rss_before=wave_rss_before)
                 await link.debug("player_goto", waypoint=REFUGE)
                 await link.debug("npc_goto", npc=COMPANION, waypoint=REFUGE)
                 await heal()
@@ -462,6 +512,8 @@ async def neural_soak_scenario(
                     snapshot = await link.snapshot(TALKER, fresh=True)
                     log.error("neural-soak weapon preparation: hero=%s", snapshot.player)
                     raise
+                if control:
+                    await link.body_watch(["PLAYER"], rate_hz=20)
                 await check_companion()
                 saved = await _save_or_fail(link, 7)
                 await calls([["call", "WLD_INSERTNPC", ["sym", npc], ["str", PLACES[1]]]
@@ -505,6 +557,8 @@ async def neural_soak_scenario(
                 await link.debug("teleport", near=BANDITS[0], distance=250)
                 wave_start = time.monotonic()
                 metrics.event("wave_start", wave=wave, place=place, count=count)
+                if control:
+                    await link.body_watch(list(BANDITS[:count]), rate_hz=20)
                 if wave == 1:
                     await link.debug("destruction_traces", text="signal soak_wave")
                 await calls([["fn", "B_ATTACK", triggers.npc(npc),
@@ -525,7 +579,8 @@ async def neural_soak_scenario(
                     marker = _scheduled_load_due(
                         elapsed, duration, scheduled_loads, load_checks, combat=True,
                     )
-                    if (marker is not None and link.body_leases and not pending_probe()
+                    fighting = bool(native_attacking) if control else bool(link.body_leases)
+                    if (marker is not None and fighting and not pending_probe()
                             and time.monotonic() - wave_start >= ACQUIRE_WINDOW):
                         # Keep a combat checkpoint, then restore the peaceful
                         # pre-wave save, as neural-load does. Native combat must
@@ -536,29 +591,40 @@ async def neural_soak_scenario(
                         scheduled_loads.add(marker)
                         loaded = True
                         break
-                    if time.monotonic() - wave_start > 5 and not any(
+                    fighting = bool(native_attacking) if control else any(
                         pilot.handles(npc) for npc in active_wave
-                    ):
+                    )
+                    if time.monotonic() - wave_start > 5 and not fighting:
                         break
                     await asyncio.sleep(.1)
                 end = "load" if loaded else "finished"
                 if not loaded:
-                    if any(pilot.handles(npc) for npc in active_wave):
+                    fighting = bool(native_attacking) if control else any(
+                        pilot.handles(npc) for npc in active_wave
+                    )
+                    if fighting:
                         end = "escape_75s" if time.monotonic() - wave_start >= 75 else "escape_duration"
                     await link.debug("player_goto", waypoint=REFUGE)
                     await link.debug("npc_goto", npc=COMPANION, waypoint=REFUGE)
-                    await _until(
-                        lambda npcs=tuple(active_wave): not any(pilot.handles(npc) for npc in npcs), 8,
-                    )
+                    if pilot is not None:
+                        await _until(
+                            lambda npcs=tuple(active_wave): not any(pilot.handles(npc) for npc in npcs), 8,
+                        )
+                    if control:
+                        await link.body_watch(["PLAYER"], rate_hz=20)
                     await pause(2.1)
-                    capture.finish_wave(wave)
+                    if capture is not None:
+                        capture.finish_wave(wave)
                     await remove_bandits()
                 record = dict(wave=wave, place=place, count=count, end=end,
-                              seconds=round(time.monotonic() - wave_start, 3))
+                              seconds=round(time.monotonic() - wave_start, 3),
+                              rss_before=wave_rss_before, rss_after=metrics.sample(force=True))
                 wave_records.append(record)
                 metrics.event("wave_end", **record)
-                capture.finish_wave(wave)
+                if capture is not None:
+                    capture.finish_wave(wave)
                 active_wave.clear()
+                native_attacking.clear()
                 await heal()
                 await conversation()
                 await poll()
@@ -571,10 +637,11 @@ async def neural_soak_scenario(
             await pause(2.1)
             metrics.sample(force=True)
             extra = dict(
-                duration_s=duration, loads_scaled=duration < 1200, waves=wave_records, loads=load_checks,
+                control=control, duration_s=duration, loads_scaled=duration < 1200,
+                waves=wave_records, loads=load_checks,
                 conversations=conversations, reacquire_checks=reacquire_checks,
                 scheduled_loads=sorted(scheduled_loads),
-                capture_details=capture.records,
+                capture_details=capture.records if capture is not None else [],
                 episodes=[dict(npc=e.npc, wave=e.wave, lease=e.lease.model_dump(),
                                stall_broken=e.stall_broken, stalls_s=e.stalls,
                                break_wait_s=e.break_wait_s, stall_count=len(e.stalls),
@@ -582,24 +649,30 @@ async def neural_soak_scenario(
                                target_down=e.down, seconds=(e.ended or time.monotonic()) - e.started)
                           for e in episodes.values()],
             )
+            if control:
+                for name in ("reacquire_checks", "capture_details", "episodes"):
+                    del extra[name]
             extra_checks: dict[str, str] = {}
-            loads_ok = all(item["ok"] and item["reacquired"] for item in load_checks) and (
+            loads_ok = all(item["ok"] and (control or item["reacquired"]) for item in load_checks) and (
                 all(reacquire_checks)
             ) and (
                 duration < 180 or scheduled_loads == {10, 20}
                 and _has_scheduled_combat_load(load_checks)
             )
             deaths = sum(item["cause"] == "hero_death" for item in load_checks)
+            fresh = f", fresh={sum(reacquire_checks)}/{len(reacquire_checks)}" if not control else ""
             extra_checks["soak_loads"] = (
                 f"{'done' if loads_ok else 'failed'} (scheduled={sorted(scheduled_loads)}, death={deaths}, "
-                f"checks={len(load_checks)}, fresh={sum(reacquire_checks)}/{len(reacquire_checks)})"
+                f"checks={len(load_checks)}{fresh})"
             )
             talk_ok = bool(conversations and all(conversations))
             extra_checks["soak_talk"] = (
                 f"{'done' if talk_ok else 'failed'} (answered={sum(conversations)}/{len(conversations)})"
             )
             results = metrics.write_result(
-                eligible=len(capture.eligible), captured=len(capture.captured), release_issues=release_issues,
+                eligible=len(capture.eligible) if capture is not None else 0,
+                captured=len(capture.captured) if capture is not None else 0,
+                release_issues=release_issues,
                 extra=extra, extra_checks=extra_checks,
             )
             for name, value in results.items():

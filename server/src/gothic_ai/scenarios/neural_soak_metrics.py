@@ -16,7 +16,16 @@ from typing import Any
 
 from ..bodypilot import BodyFight, BodyPilot, FightSummary, PolicyClient
 from ..game import GameLink
-from ..protocol import BodyLease
+from ..protocol import (
+    ActionResult,
+    BodyLease,
+    GameMessage,
+    NpcActResult,
+    Pong,
+    Result,
+    RoutineInfo,
+    Snapshot,
+)
 
 WAIT_200 = 10
 FAULT_ENDINGS = frozenset({
@@ -101,7 +110,7 @@ class SoakMetrics:
     """
 
     def __init__(
-        self, link: GameLink, pilot: BodyPilot, log_dir: Path, *,
+        self, link: GameLink, pilot: BodyPilot | None, log_dir: Path, *,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.link, self.pilot, self.log_dir, self.clock = link, pilot, Path(log_dir), clock
@@ -125,6 +134,10 @@ class SoakMetrics:
         self._previous_game: dict[tuple[int, ...], int] = {}
         self._max_batch_rows = self._max_batch_lag_game_ms = 0
         self._max_batch_rows_all = self._max_batch_lag_all = 0
+        self._wall_previous: dict[str, float] = {}
+        self._wall_counts: Counter[str] = Counter()
+        self._wall_max: dict[str, float] = {}
+        self._wall_max_all: dict[str, float] = {}
         self._stream: Any = None
         self.data: dict[str, Any] = {}
 
@@ -149,6 +162,7 @@ class SoakMetrics:
         rows = packet["observations"]
         if not rows:
             return
+        self._wall_received("observation")
         size = len(rows)
         latest = max(row["t_game_ms"] for row in rows)
         lag = latest - min(row["t_game_ms"] for row in rows)
@@ -156,16 +170,60 @@ class SoakMetrics:
         self._max_batch_lag_game_ms = max(self._max_batch_lag_game_ms, lag)
         self._max_batch_rows_all = max(self._max_batch_rows_all, size)
         self._max_batch_lag_all = max(self._max_batch_lag_all, lag)
+        if self.pilot is None:
+            # Passive subscriptions switch between the player and each wave.
+            # Compare only actors present in consecutive packets, so returning
+            # to the player does not turn an intentional watch gap into tick lag.
+            identities = {tuple(row[name] for name in (
+                "session_epoch", "world_epoch", "entity_id", "control_generation",
+            )) for row in rows}
+            self._previous_game = {identity: value for identity, value in self._previous_game.items()
+                                   if identity in identities}
         for row in rows:
             identity = tuple(row[name] for name in (
                 "session_epoch", "world_epoch", "entity_id", "control_generation",
             ))
             previous = self._previous_game.get(identity)
             current = row["t_game_ms"]
-            if (row["control_generation"] > 0 and previous is not None
+            if ((self.pilot is None or row["control_generation"] > 0) and previous is not None
                     and current > previous and row.get("periodic", True)):
                 self._intervals.append(current - previous)
             self._previous_game[identity] = max(previous or 0, current)
+
+    def _bridge_reply(self, message: GameMessage) -> None:
+        # Observe receipt, not request completion: one late reply still counts,
+        # and a timed-out request is never mistaken for an answer. Body packets
+        # and unsolicited roster/loading/session events have separate meanings.
+        if isinstance(message, (Result, ActionResult, Pong, RoutineInfo, Snapshot, NpcActResult)):
+            self._wall_received("bridge_reply")
+
+    def _wall_received(self, channel: str) -> None:
+        now = self.clock()
+        previous = self._wall_previous.get(channel)
+        if previous is not None:
+            gap = max(0, now - previous) * 1000
+            self._wall_max[channel] = max(self._wall_max.get(channel, 0), gap)
+            self._wall_max_all[channel] = max(self._wall_max_all.get(channel, 0), gap)
+        self._wall_previous[channel] = now
+        self._wall_counts[channel] += 1
+
+    def _wall_sample(self, now: float) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for channel in ("observation", "bridge_reply"):
+            previous = self._wall_previous.get(channel)
+            age = max(0, now - previous) * 1000 if previous is not None else None
+            # Include a still-open gap, so a frozen game is visible before its
+            # first packet after recovery. Count/age distinguish silence from
+            # a window that actually received a late packet.
+            gap = max(self._wall_max.get(channel, 0), age or 0) if previous is not None else None
+            if gap is not None:
+                self._wall_max_all[channel] = max(self._wall_max_all.get(channel, 0), gap)
+            values[f"{channel}_wall_gap_max_ms"] = gap
+            values[f"{channel}_wall_age_ms"] = age
+            values[f"{channel}_wall_count"] = self._wall_counts[channel]
+        self._wall_max.clear()
+        self._wall_counts.clear()
+        return values
 
     @staticmethod
     def _lease_scope(summary: FightSummary) -> tuple[int, ...] | None:
@@ -235,8 +293,8 @@ class SoakMetrics:
     def observe(self) -> Iterator[SoakMetrics]:
         original_call = PolicyClient.call
         original_finish = BodyFight._finish
-        original_completed = self.pilot._completed
-        had_completed = "_completed" in vars(self.pilot)
+        original_completed = self.pilot._completed if self.pilot is not None else None
+        had_completed = self.pilot is not None and "_completed" in vars(self.pilot)
         self._stream = (self.log_dir / "neural_soak.jsonl").open("a")
 
         async def observed(client: PolicyClient, command: str, **fields: Any) -> dict[str, Any]:
@@ -278,22 +336,29 @@ class SoakMetrics:
             self._completed(fight, summary, args[0] if args else kwargs.get("finish_at"))
             original_completed(fight, summary, *args, **kwargs)
 
-        PolicyClient.call = observed
-        BodyFight._finish = finishing
-        self.pilot._completed = completed
+        if self.pilot is not None:
+            PolicyClient.call = observed
+            BodyFight._finish = finishing
+            self.pilot._completed = completed
         self.link.raw_body_listeners.append(self._packet)
+        listeners = getattr(self.link, "listeners", None)
+        if listeners is not None:
+            listeners.append(self._bridge_reply)
         try:
             self.sample(force=True)
             yield self
         finally:
             self.sample(force=True)
             self.link.raw_body_listeners.remove(self._packet)
-            PolicyClient.call = original_call
-            BodyFight._finish = original_finish
-            if had_completed:
-                self.pilot._completed = original_completed
-            else:
-                del self.pilot._completed
+            if listeners is not None:
+                listeners.remove(self._bridge_reply)
+            if self.pilot is not None:
+                PolicyClient.call = original_call
+                BodyFight._finish = original_finish
+                if had_completed:
+                    self.pilot._completed = original_completed
+                else:
+                    del self.pilot._completed
             self._stream.close()
             self._stream = None
 
@@ -307,16 +372,8 @@ class SoakMetrics:
             game_pid = int((self.log_dir / "game.pid").read_text().strip())
         except (OSError, ValueError):
             game_pid = None
-        leased = {lease.npc.upper() for lease in self.link.body_leases.values()}
-        orphans = sorted(npc for npc, entry in self.pilot.people.items() if (
-            entry.activity == "body" and npc.upper() not in leased
-        ))
         sample = {
             "elapsed_seconds": round(now - self.started, 3),
-            "active_leases": [lease.model_dump(mode="json") for lease in self.link.body_leases.values()],
-            "lease_count": len(self.link.body_leases), "active_count": self.pilot.active_count,
-            "body_without_lease": orphans,
-            "release_orphan_timeout": getattr(self.pilot, "release_orphan_timeout", 0),
             "game_rss_bytes": rss_bytes(game_pid) if game_pid else None,
             "server_rss_bytes": rss_bytes(os.getpid()),
             "game_interval_count": len(self._intervals),
@@ -324,10 +381,23 @@ class SoakMetrics:
             "game_interval_max_ms": max(self._intervals, default=None),
             "max_batch_rows": self._max_batch_rows,
             "max_batch_lag_game_ms": self._max_batch_lag_game_ms,
-            "service_calls": len(self._service_window),
-            "service_p95_ms": percentile(self._service_window, 0.95),
-            "service_p99_ms": percentile(self._service_window, 0.99),
+            **self._wall_sample(now),
         }
+        if self.pilot is not None:
+            leased = {lease.npc.upper() for lease in self.link.body_leases.values()}
+            orphans = sorted(npc for npc, entry in self.pilot.people.items() if (
+                entry.activity == "body" and npc.upper() not in leased
+            ))
+            sample.update({
+                "active_leases": [lease.model_dump(mode="json")
+                                  for lease in self.link.body_leases.values()],
+                "lease_count": len(self.link.body_leases), "active_count": self.pilot.active_count,
+                "body_without_lease": orphans,
+                "release_orphan_timeout": getattr(self.pilot, "release_orphan_timeout", 0),
+                "service_calls": len(self._service_window),
+                "service_p95_ms": percentile(self._service_window, 0.95),
+                "service_p99_ms": percentile(self._service_window, 0.99),
+            })
         self.samples.append(sample)
         self.event("sample", **sample)
         self._service_window.clear()
@@ -336,11 +406,12 @@ class SoakMetrics:
         return sample
 
     def write_result(
-        self, *, eligible: int, captured: int, release_issues: list[Any],
+        self, *, eligible: int = 0, captured: int = 0, release_issues: list[Any] | None = None,
         extra: dict[str, Any] | None = None,
         extra_checks: dict[str, str] | None = None,
     ) -> dict[str, str]:
         self.sample(force=True)
+        release_issues = release_issues or []
         accepted = sum(summary.decisions for summary in self.summaries)
         decisions = sum(sum(actions.values()) for actions in self.actions_by_client.values())
         fault_ends = Counter(summary.reason for summary in self.summaries if (
@@ -383,27 +454,29 @@ class SoakMetrics:
         def check(name: str, ok: bool, detail: str) -> None:
             checks[name] = f"{'done' if ok else 'failed'} ({detail})"
 
-        check("fault_fallbacks", not (
-            fault_ends or timeouts or faulty_fallbacks or self.policy_errors or orphan_timeouts
-        ),
-              f"ends={dict(fault_ends)}, timeouts={timeouts}, fallbacks={dict(faulty_fallbacks)}, "
-              f"policy_errors={dict(self.policy_errors)}, release_orphan_timeout={orphan_timeouts}")
         capture_fraction = captured / eligible if eligible else None
-        check("capture_rate", capture_fraction is not None and capture_fraction >= 0.95,
-              f"captured={captured}/{eligible}, minimum=95%")
         accept_fraction = accepted / decisions if decisions else None
-        check("accepted_commands", accept_fraction is not None and accept_fraction >= 0.95,
-              f"accepted={accepted}/{decisions}, minimum=95%")
-        check("release_clean", not release_issues and not release_deadline_issues,
-              f"issues={len(release_issues)}, deadline_issues={len(release_deadline_issues)}, limit=2s")
+        if self.pilot is not None:
+            check("fault_fallbacks", not (
+                fault_ends or timeouts or faulty_fallbacks or self.policy_errors or orphan_timeouts
+            ),
+                  f"ends={dict(fault_ends)}, timeouts={timeouts}, fallbacks={dict(faulty_fallbacks)}, "
+                  f"policy_errors={dict(self.policy_errors)}, release_orphan_timeout={orphan_timeouts}")
+            check("capture_rate", capture_fraction is not None and capture_fraction >= 0.95,
+                  f"captured={captured}/{eligible}, minimum=95%")
+            check("accepted_commands", accept_fraction is not None and accept_fraction >= 0.95,
+                  f"accepted={accepted}/{decisions}, minimum=95%")
+            check("release_clean", not release_issues and not release_deadline_issues,
+                  f"issues={len(release_issues)}, deadline_issues={len(release_deadline_issues)}, limit=2s")
         for name, window in (("game_rss", game_rss), ("server_rss", server_rss)):
             short = window["short_window"] and window.get("growth_percent") is not None
             check(name, window["ok"] or short,
                   f"growth_percent={window.get('growth_percent')}, limit=5%, "
                   f"assessment={'20-minute gate deferred to full run' if short else 'final 20 minutes'}, "
                   f"window_seconds={window.get('observed_seconds')}, short_window={window['short_window']}")
-        check("service_latency", p95 is not None and p99 is not None and p95 <= 20 and p99 <= 20,
-              f"p95_ms={p95}, p99_ms={p99}, limit=20ms, calls={len(self._latencies)}")
+        if self.pilot is not None:
+            check("service_latency", p95 is not None and p99 is not None and p95 <= 20 and p99 <= 20,
+                  f"p95_ms={p95}, p99_ms={p99}, limit=20ms, calls={len(self._latencies)}")
         check("server_log", not log_errors, f"errors={log_errors}, log=server.log")
         checks.update(extra_checks or {})
         self.data = {
@@ -440,6 +513,21 @@ class SoakMetrics:
             },
             "fights": self.fight_records, "extra": extra or {},
         }
+        common_metrics = {
+            "game_rss": game_rss, "server_rss": server_rss,
+            "max_batch_rows": self._max_batch_rows_all,
+            "max_batch_lag_game_ms": self._max_batch_lag_all,
+            "observation_wall_gap_max_ms": self._wall_max_all.get("observation"),
+            "bridge_reply_wall_gap_max_ms": self._wall_max_all.get("bridge_reply"),
+            "server_log_errors": log_errors,
+        }
+        if self.pilot is None:
+            self.data["mode"] = "control"
+            self.data["metrics"] = common_metrics
+            del self.data["fights"]
+        else:
+            self.data["mode"] = "p30"
+            self.data["metrics"].update(common_metrics)
         (self.log_dir / "neural_soak_result.json").write_text(
             json.dumps(self.data, ensure_ascii=False, indent=2, allow_nan=False,
                        default=self._json_default) + "\n"
