@@ -144,14 +144,19 @@ vec4 dbgLambert() {
 // Mikkelsen, Practical Real-Time Hex-Tiling (JCGT 2022), section 2:
 // https://jcgt.org/published/0011/03/05/
 // Keep the three cells and the albedo-derived weights for every material map.
+struct AntitileCell {
+  vec2 uv;
+  vec2 cs;
+  vec2 duvdx, duvdy;
+  };
+
 struct MaterialSampling {
   vec2 uv;
   vec2 duvdx, duvdy;
 #if defined(GBUFFER)
   vec3 dpdx, dpdy;
 #endif
-  vec2 tileUv[3];
-  mat2 rotation[3];
+  AntitileCell a, b, c;
   vec3 weights;
   bool antitile;
   };
@@ -164,6 +169,22 @@ vec3 antitileRandom(ivec2 cell) {
   return vec3(x >> 8, y >> 8, z >> 8) * (1.0 / 16777216.0);
   }
 
+AntitileCell antitileCell(ivec2 id, vec2 uv, vec2 duvdx, vec2 duvdy, float cellSize, bool rotate) {
+  vec3 random = antitileRandom(id);
+  float angle = rotate ? random.z * (2.0 * M_PI) : 0.0;
+  float c = cos(angle), s = sin(angle);
+  mat2 rotation = mat2(c,s,-s,c);
+  vec2 centre = vec2(float(id.x) + 0.5 * float(id.y),
+                     0.86602540378 * float(id.y)) * cellSize;
+  AntitileCell cell;
+  cell.uv = rotation * (uv - centre) + centre + random.xy;
+  cell.cs = vec2(c,s);
+  // All maps reuse these gradients; named cells avoid dynamic local arrays.
+  cell.duvdx = rotation * duvdx;
+  cell.duvdy = rotation * duvdy;
+  return cell;
+  }
+
 void antitileGrid(inout MaterialSampling maps) {
   const float cellSize = bucket[bucketId].antitileCell;
   // Unit-distance equilateral lattice; its vertices are the hexagon centres.
@@ -172,30 +193,23 @@ void antitileGrid(inout MaterialSampling maps) {
   vec2 skew = vec2(grid.x - grid.y * 0.57735026919, grid.y * 1.15470053838);
   ivec2 base = ivec2(floor(skew));
   vec2 f = fract(skew);
-  ivec2 cells[3];
+  ivec2 a, b, c;
   if(f.x + f.y < 1.0) {
-    cells[0] = base;
-    cells[1] = base + ivec2(1,0);
-    cells[2] = base + ivec2(0,1);
+    a = base;
+    b = base + ivec2(1,0);
+    c = base + ivec2(0,1);
     maps.weights = vec3(1.0 - f.x - f.y, f.x, f.y);
     } else {
-    cells[0] = base + ivec2(1,1);
-    cells[1] = base + ivec2(0,1);
-    cells[2] = base + ivec2(1,0);
+    a = base + ivec2(1,1);
+    b = base + ivec2(0,1);
+    c = base + ivec2(1,0);
     maps.weights = vec3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y);
     }
 
   const bool rotate = (bucket[bucketId].flags & BK_ANTITILE_ROTATE)!=0;
-  for(int i=0; i<3; ++i) {
-    vec3 random = antitileRandom(cells[i]);
-    float angle = rotate ? random.z * (2.0 * M_PI) : 0.0;
-    float c = cos(angle), s = sin(angle);
-    mat2 rotation = mat2(c,s,-s,c);
-    vec2 centre = vec2(float(cells[i].x) + 0.5 * float(cells[i].y),
-                       0.86602540378 * float(cells[i].y)) * cellSize;
-    maps.rotation[i] = rotation;
-    maps.tileUv[i] = rotation * (maps.uv - centre) + centre + random.xy;
-    }
+  maps.a = antitileCell(a, maps.uv, maps.duvdx, maps.duvdy, cellSize, rotate);
+  maps.b = antitileCell(b, maps.uv, maps.duvdx, maps.duvdy, cellSize, rotate);
+  maps.c = antitileCell(c, maps.uv, maps.duvdx, maps.duvdy, cellSize, rotate);
   }
 
 vec4 antitileDiffuse(inout MaterialSampling maps, uint tId) {
@@ -205,16 +219,16 @@ vec4 antitileDiffuse(inout MaterialSampling maps, uint tId) {
 #else
   const uint texId = 0;
 #endif
-  vec4 a = textureGrad(sampler2D(textureMain[texId], samplerMain), maps.tileUv[0],
-                       maps.rotation[0] * maps.duvdx, maps.rotation[0] * maps.duvdy);
-  vec4 b = textureGrad(sampler2D(textureMain[texId], samplerMain), maps.tileUv[1],
-                       maps.rotation[1] * maps.duvdx, maps.rotation[1] * maps.duvdy);
-  vec4 c = textureGrad(sampler2D(textureMain[texId], samplerMain), maps.tileUv[2],
-                       maps.rotation[2] * maps.duvdx, maps.rotation[2] * maps.duvdy);
+  vec4 a = textureGrad(sampler2D(textureMain[texId], samplerMain), maps.a.uv, maps.a.duvdx, maps.a.duvdy);
+  vec4 b = textureGrad(sampler2D(textureMain[texId], samplerMain), maps.b.uv, maps.b.duvdx, maps.b.duvdy);
+  vec4 c = textureGrad(sampler2D(textureMain[texId], samplerMain), maps.c.uv, maps.c.duvdx, maps.c.duvdy);
   const vec3 luminance = vec3(0.299, 0.587, 0.114);
   vec3 brightness = vec3(dot(a.rgb,luminance), dot(b.rgb,luminance), dot(c.rgb,luminance));
   // The exponent limits ghosting, while luminance breaks up straight seams.
-  maps.weights = mix(vec3(1.0), brightness, 0.6) * pow(max(maps.weights,vec3(0)),vec3(7));
+  vec3 w = max(maps.weights,vec3(0));
+  vec3 w2 = w * w;
+  vec3 w4 = w2 * w2;
+  maps.weights = mix(vec3(1.0), brightness, 0.6) * (w4 * w2 * w);
   maps.weights /= dot(maps.weights,vec3(1));
   return a * maps.weights.x + b * maps.weights.y + c * maps.weights.z;
   }
@@ -319,6 +333,30 @@ vec3 mappedNormal(vec3 normal, vec3 dpdx, vec3 dpdy, vec2 duvdx, vec2 duvdy, vec
   vec3 tangentNormal = vec3(xy, sqrt(max(0.0, 1.0 - dot(xy,xy))));
   return mappedNormal(normal, dpdx, dpdy, duvdx, duvdy, tangentNormal);
   }
+
+vec2 antitileSlope(uint tId, AntitileCell cell) {
+#if defined(BINDLESS)
+  nonuniformEXT uint texId = tId;
+#else
+  const uint texId = 0;
+#endif
+  vec4 nm = textureGrad(sampler2D(textureNormal[texId], samplerMain), cell.uv, cell.duvdx, cell.duvdy);
+  vec2 xy = nm.ag * 2.0 - 1.0;
+  float z = sqrt(max(0.0, 1.0 - dot(xy,xy)));
+  // q = R * uv: the height gradient (and normal XY) returns with R^T.
+  vec2 rotated = vec2(cell.cs.x * xy.x + cell.cs.y * xy.y,
+                     -cell.cs.y * xy.x + cell.cs.x * xy.y);
+  return rotated / max(z,1e-3);
+  }
+
+vec3 antitileOrm(uint tId, AntitileCell cell) {
+#if defined(BINDLESS)
+  nonuniformEXT uint texId = tId;
+#else
+  const uint texId = 0;
+#endif
+  return textureGrad(sampler2D(textureOrm[texId], samplerMain), cell.uv, cell.duvdx, cell.duvdy).rgb;
+  }
 #endif
 
 #if defined(ANTITILE_MATERIAL)
@@ -344,27 +382,43 @@ void mainGBuffer(vec4 t) {
   const uint tId = 0;
 #endif
   if(maps.antitile) {
-    if((bucket[bucketId].flags & BK_NORMAL)!=0) {
-      vec2 slope = vec2(0);
-      for(int i=0; i<3; ++i) {
-        vec4 nm = textureGrad(sampler2D(textureNormal[tId], samplerMain), maps.tileUv[i],
-                              maps.rotation[i] * duvdx, maps.rotation[i] * duvdy);
-        vec2 xy = nm.ag * 2.0 - 1.0;
-        float z = sqrt(max(0.0, 1.0 - dot(xy,xy)));
-        // q = R * uv: the height gradient (and normal XY) returns with R^T.
-        // Blend height derivatives so flat areas do not flatten nearby relief.
-        slope += maps.weights[i] * (transpose(maps.rotation[i]) * xy) / max(z,1e-3);
-        }
+    const bool hasNormal = (bucket[bucketId].flags & BK_NORMAL)!=0;
+    const bool hasOrm = (bucket[bucketId].flags & BK_ORM)!=0;
+    const float peak = max(maps.weights.x, max(maps.weights.y, maps.weights.z));
+    const uint dominant = maps.weights.x==peak ? 0u : (maps.weights.y==peak ? 1u : 2u);
+    vec2 slope = vec2(0);
+    vec3 orm = vec3(0);
+    if(peak>=0.7) {
+      AntitileCell cell;
+      if(dominant==0u)
+        cell = maps.a;
+      else if(dominant==1u)
+        cell = maps.b;
+      else
+        cell = maps.c;
+      if(hasNormal)
+        slope = antitileSlope(tId, cell);
+      if(hasOrm)
+        orm = antitileOrm(tId, cell);
+      } else {
+      // Reach the single-cell result continuously before dropping its two
+      // zero-weight fetches. Winner changes happen below the fade interval.
+      vec3 winner = dominant==0u ? vec3(1,0,0) : (dominant==1u ? vec3(0,1,0) : vec3(0,0,1));
+      vec3 weights = mix(maps.weights, winner, smoothstep(0.6,0.7,peak));
+      if(hasNormal)
+        slope = weights.x * antitileSlope(tId, maps.a) +
+                weights.y * antitileSlope(tId, maps.b) +
+                weights.z * antitileSlope(tId, maps.c);
+      if(hasOrm)
+        orm = weights.x * antitileOrm(tId, maps.a) +
+              weights.y * antitileOrm(tId, maps.b) +
+              weights.z * antitileOrm(tId, maps.c);
+      }
+    if(hasNormal)
       outNormal = encodeNormal(mappedNormal(shInp.normal, dpdx, dpdy, duvdx, duvdy,
-                                           normalize(vec3(slope,1))));
-      }
-    if((bucket[bucketId].flags & BK_ORM)!=0) {
-      vec3 orm = vec3(0);
-      for(int i=0; i<3; ++i)
-        orm += maps.weights[i] * textureGrad(sampler2D(textureOrm[tId], samplerMain), maps.tileUv[i],
-                                             maps.rotation[i] * duvdx, maps.rotation[i] * duvdy).rgb;
+                                           vec3(slope,1)));
+    if(hasOrm)
       outOrm.rgb = orm;
-      }
     } else {
     if((bucket[bucketId].flags & BK_NORMAL)!=0) {
       vec4 nm = textureGrad(sampler2D(textureNormal[tId], samplerMain), uv, duvdx, duvdy);

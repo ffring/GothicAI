@@ -19,6 +19,8 @@ Antitiling fixture (always includes an albedo with one conspicuous dark spot):
     uv run --no-project --with numpy python scripts/content/test-material.py \
         --output /tmp/gothic-antitile-rotate --pattern antitile --antitile rotate
 Its asymmetric raised spot makes normal-map rotation visible under sun or lamp.
+For lighting-only controls use --neutral-albedo --no-ao --strength 0.16, then
+repeat with --flat-normal; the albedo and ORM stay identical between the pair.
 Use identical --scale/--antitile-cell in off, offset and rotate directories.
 
 Screenshot measurements additionally require Pillow. Choose one planar surface
@@ -265,6 +267,7 @@ def main() -> None:
     parser.add_argument("--antitile-cell", type=float, default=1.0, help="antitiling cell size in texture tiles (default: %(default)s)")
     parser.add_argument("--albedo", action="store_true", help="also replace the original colour with neutral synthetic tiles")
     parser.add_argument("--flat-normal", action="store_true", help="neutral normal map for the relief comparison")
+    parser.add_argument("--neutral-albedo", action="store_true", help="constant grey albedo to inspect relief lighting without colour spots")
     parser.add_argument("--no-ao", action="store_true", help="white AO for the occlusion comparison")
     measurement = parser.add_mutually_exclusive_group()
     measurement.add_argument("--autocorrelation", type=Path, metavar="FRAME", help="measure screenshot luminance autocorrelation instead of generating maps")
@@ -317,6 +320,8 @@ def main() -> None:
         parser.error(f"{index_path} must contain a JSON object")
     pattern = antitile_spot if args.pattern == "antitile" else tile
     albedo, normal, orm = pattern(args.size, args.strength)
+    if args.neutral_albedo:
+        albedo[:, :, :] = 0.6
     if args.flat_normal:
         normal[:, :, :] = (0, 0, 1)
     if args.no_ao:
@@ -327,7 +332,7 @@ def main() -> None:
     entry = {"normal": "test-material/tile-normal.dds", "orm": "test-material/tile-orm.dds", "scale": args.scale}
     if args.antitile is not None or args.pattern == "antitile":
         entry.update(antitile=args.antitile or "off", antitile_cell=args.antitile_cell)
-    if args.albedo or args.pattern == "antitile":
+    if args.albedo or args.pattern == "antitile" or args.neutral_albedo:
         write_dds(fixture_dir / "tile-albedo.dds", albedo)
         entry["albedo"] = "test-material/tile-albedo.dds"
     for name in args.textures:
