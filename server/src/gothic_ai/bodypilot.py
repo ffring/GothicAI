@@ -729,6 +729,9 @@ class BodyFight:
         self._initial_game_ms: int | None = None
         self._now_game_ms = 0
         self._last_seq = 0
+        self._accepted_command_id = 0
+        self._accepted_sim_step = 0
+        self._accepted_wake = asyncio.Event()
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._policy_watchdog_task: asyncio.Task[None] | None = None
         self._policy_watchdog_at: float | None = None
@@ -812,11 +815,17 @@ class BodyFight:
         if isinstance(message, BodyControlEvents) and self.lease is not None:
             for event in message.events:
                 if (
-                    (event.entity_id, event.session_epoch, event.world_epoch, event.control_generation)
-                    == self._identity(self.lease)
-                    and event.phase == "ownership"
-                    and event.reason == "native_restored"
+                    event.entity_id, event.session_epoch, event.world_epoch, event.control_generation
+                ) != self._identity(self.lease):
+                    continue
+                if (
+                    event.phase == "accepted" and event.action_id != 0
+                    and event.command_id > self._accepted_command_id
                 ):
+                    self._accepted_command_id = event.command_id
+                    self._accepted_sim_step = event.sim_step
+                    self._accepted_wake.set()
+                if event.phase == "ownership" and event.reason == "native_restored":
                     self._capture_invisibility(self.clock(), event.t_game_ms)
                     self._invisible_at = self._invisible_game_ms = None
                     self._native_release_reason = event.release_reason
@@ -1073,12 +1082,23 @@ class BodyFight:
 
     def _lagging(self, row: dict[str, Any]) -> bool:
         return (
-            self._now_game_ms - row["t_game_ms"] > MAX_OBSERVATION_AGE_GAME_MS
+            row["sim_step"] < self._accepted_sim_step
+            or self._now_game_ms - row["t_game_ms"] > MAX_OBSERVATION_AGE_GAME_MS
             or any(
                 self._leased_periodic(pending) and pending["observation_seq"] > row["observation_seq"]
                 for pending, _ in self._rows
             )
         )
+
+    async def _wait_action_accepted(self, command_id: int) -> None:
+        # The receipt precedes transport of the previous frame's rows. Only the existing
+        # accepted event identifies the simulation step in which the engine accepted the command.
+        # Keep events that arrived before the receipt coroutine resumed, and bound a lost event
+        # by the same timeout as other bridge RPCs while the independent heartbeat continues.
+        async with asyncio.timeout(BRIDGE_TIMEOUT):
+            while self._accepted_command_id < command_id:
+                self._accepted_wake.clear()
+                await self._accepted_wake.wait()
 
     async def _reset_policy(self, initial_game_ms: int) -> None:
         assert self.client is not None and self.lease is not None
@@ -1348,7 +1368,7 @@ class BodyFight:
                 self._response_to_action.append((sent_at - responded_at) * 1000)
                 self._packet_to_action.append((sent_at - received_at) * 1000)
                 try:
-                    await self.link.body_action(
+                    receipt = await self.link.body_action(
                         self.lease, observation, action, ttl_ms=100, timeout=BRIDGE_TIMEOUT
                     )
                 except BRIDGE_ERRORS as error:
@@ -1368,6 +1388,11 @@ class BodyFight:
                 )
                 self._transient_rejections_consecutive = 0
                 self._decisions += 1
+                if action != 0:
+                    try:
+                        await self._wait_action_accepted(receipt.command_id)
+                    except TimeoutError:
+                        self._set_reason("body_action_rejected")
         except (OSError, ValueError, PolicyError):
             self._set_reason("policy_error")
         except BRIDGE_ERRORS:
@@ -1799,6 +1824,8 @@ class BodyFight:
         self._invisible_last_game_ms = 0
         self._native_release_reason = None
         self._policy_decisions.clear()
+        self._accepted_command_id = self._accepted_sim_step = 0
+        self._accepted_wake.clear()
         self._policy_watchdog_at = None
         self._latencies.clear()
         self._packet_to_request.clear()
