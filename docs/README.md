@@ -210,7 +210,7 @@
 | [`director.md`](director.md) | режиссёр-автор: квесты, персонажи, цепочки | сейчас + план с журналом, этапы 1–5 сделаны |
 | [`crime.md`](crime.md) | преступления и репутация, карта ванильных встреч | сейчас + журнал: слои 1–3, 4а, 4б и 5 приняты; этап закрыт |
 | [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода, ткань | сейчас + план с журналом |
-| [`own-content.md`](own-content.md) | своя игра: замена ресурсов, скриптов и мира Gothic своими, этапы 0–9; офлайн-перепись `scripts/content-textures.sh`, инструменты и реестр `scripts/content/`, [сравнение генераторов материалов](../reports/content/2026-10-material-bakeoff/README.md), [площади и UV четырёх миров](../reports/content/2026-10-world-textures/README.md) | сейчас + план с журналом, идёт: этапы 0–1 |
+| [`own-content.md`](own-content.md) | своя игра: замена ресурсов, скриптов и мира Gothic своими, этапы 0–9; офлайн-перепись `scripts/content-textures.sh`, инструменты и реестр `scripts/content/`, [сравнение генераторов материалов](../reports/content/2026-10-material-bakeoff/README.md), [площади и UV четырёх миров](../reports/content/2026-10-world-textures/README.md), [сопоставление 71 городской текстуры](../data/content/city-materials.csv) и проверка `scripts/content/map_textures.py` | сейчас + план с журналом, идёт: этапы 0–1 |
 | [`manual-aim.md`](manual-aim.md) | ручное прицеливание | сейчас + план с журналом |
 | [`navigation.md`](navigation.md) | обучаемая навигация NPC; [популяционный стенд на CV и независимый набор 60 пар](../reports/navigation/2026-10-18-rl-env/README.md) | сейчас + план, идёт |
 | [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | сейчас + план |
