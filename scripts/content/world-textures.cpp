@@ -5,6 +5,7 @@
 #include <zenkit/Vfs.hh>
 #include <zenkit/World.hh>
 #include <zenkit/vobs/VirtualObject.hh>
+#include <zenkit/world/WayNet.hh>
 
 #include <algorithm>
 #include <array>
@@ -19,8 +20,10 @@
 #include <locale>
 #include <map>
 #include <set>
+#include <numeric>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -46,6 +49,8 @@ struct Point {
   Point(double x,double y,double z):x(x),y(y),z(z) {}
   explicit Point(zenkit::Vec3 p):x(p.x),y(p.y),z(p.z) {}
   Point operator-(Point b) const { return {x-b.x,y-b.y,z-b.z}; }
+  Point operator+(Point b) const { return {x+b.x,y+b.y,z+b.z}; }
+  Point operator*(double a) const { return {x*a,y*a,z*a}; }
 };
 
 Point transform(Point p,const zenkit::VirtualObject* v) {
@@ -84,6 +89,7 @@ struct Triangle {
   std::array<Point,3> p;
   std::array<zenkit::Vec2,3> uv;
   std::string texture;
+  Point shadingNormal; // archive normals orient the Gothic clockwise geometry for camera placement
 };
 using Geometry = std::vector<Triangle>;
 
@@ -94,7 +100,8 @@ Triangle meshTriangle(const zenkit::Mesh& m,size_t a,size_t b,size_t c,
   const std::array indices={a,b,c};
   for(size_t k=0;k<3;++k) {
     t.p[k]=Point(m.vertices.at(vertices.at(indices[k])));
-    t.uv[k]=m.features.at(features.at(indices[k])).texture;
+    const auto& feature=m.features.at(features.at(indices[k]));
+    t.uv[k]=feature.texture; t.shadingNormal=t.shadingNormal+Point(feature.normal);
   }
   t.texture=textureName(m.materials.at(material).texture);
   return t;
@@ -143,6 +150,7 @@ Geometry staticGeometry(const zenkit::VfsNode& file,bool msh) {
         for(size_t k=0;k<3;++k) {
           const auto& w=sub.wedges.at(face.wedges[k]);
           t.p[k]=Point(m.positions.at(w.index)); t.uv[k]=w.texture;
+          t.shadingNormal=t.shadingNormal+Point(w.normal);
         }
         out.push_back(std::move(t));
       }
@@ -386,6 +394,8 @@ void writeReadme(const fs::path& path,const std::vector<Inventory>& inventories,
        "При повторном прогоне инструмент проверяет этот диапазон для тех же трёх имён.\n";
 }
 
+#include "world-intent.inc"
+
 void require(bool condition,const char* message) {
   if(!condition) throw std::runtime_error(message);
 }
@@ -433,8 +443,9 @@ void selfTest() {
 
 int main(int argc,char** argv) {
   try {
-    if(argc==2 && std::string(argv[1])=="--self-test") { selfTest(); return 0; }
-    if(argc!=3) throw std::runtime_error("usage: world-textures <game dir> <out dir> | --self-test");
+    if(argc==2 && std::string(argv[1])=="--self-test") { selfTest(); intentSelfTest(); return 0; }
+    if(argc==4 && std::string(argv[1])=="--intent") return intentMain(argv[2],argv[3]);
+    if(argc!=3) throw std::runtime_error("usage: world-textures <game dir> <out dir> | --intent <game dir> <outside json> | --self-test");
     size_t zenkitErrors=0;
     zenkit::Logger::set(zenkit::LogLevel::ERROR,[&](auto,const char* component,const char* message) {
       ++zenkitErrors; std::cerr << "ZenKit " << component << ": " << message << '\n';
