@@ -65,14 +65,24 @@ async def neural_talk_scenario(
     link: GameLink, dialogue: DialogueManager, pilot: BodyPilot | None,
 ) -> dict[str, str]:
     """A non-bandit knockout, then words, escape and a fresh fight with a hostile bandit."""
-    from .neural_knockout import neural_knockout_segment
+    from .neural_knockout import HeroDownWait, _wait_hero_down, neural_knockout_segment
     from .neural_load import _policy_resets
 
     if pilot is None:
         raise GameError("scenario neural-talk requires GOTHIC_BODY_URL and --neural-body")
     if dialogue.llm.name != "fake":
         raise GameError("scenario neural-talk requires LLM=fake")
-    results = await neural_knockout_segment(link, dialogue, pilot)
+    stalls: list[HeroDownWait] = []
+    results = await neural_knockout_segment(link, dialogue, pilot, stalls=stalls)
+
+    def stall_total() -> None:
+        results["stall_broken"] = (
+            f"done (count={sum(item.stall_broken for item in stalls)}, "
+            f"seconds={sum(item.stalled_seconds for item in stalls):.3f})"
+        )
+        log.info("%-28s %s", "stall_broken", results["stall_broken"])
+
+    stall_total()
     if any(not value.startswith("done") for value in results.values()):
         return results
     await link.wait_world()
@@ -95,19 +105,31 @@ async def neural_talk_scenario(
 
     def fight_ready() -> bool:
         fight = pilot.fights.get(npc)
-        return bool(fight and fight.lease and link.body_leases.get(fight.lease.entity_id) == fight.lease
+        return bool(fight and fight._target_kind == "hero" and fight.lease
+                    and link.body_leases.get(fight.lease.entity_id) == fight.lease
                     and fight._decisions >= 5)
 
-    async def idle_after(ended_at: float) -> tuple[bool, str]:
+    async def idle_after(ended_at: float, summary: FightSummary) -> tuple[bool, str]:
         await asyncio.sleep(max(0, ended_at + 2 - time.monotonic()))
+        lease = summary.lease
+        assert lease is not None
         entry = pilot.people.get(npc)
-        clean = not pilot.handles(npc) and not link.body_leases and not link.body_latest
-        clean = clean and not pilot._watch_npcs and not pilot._pending_unwatch
-        clean = clean and (entry is None or entry.activity != "body")
+        active = pilot.fights.get(npc)
+        hero_fight = bool(active and active._target_kind == "hero" and active.lease)
+        own_lease = link.body_leases.get(lease.entity_id) == lease
+        cached = link.body_latest.get(lease.entity_id)
+        own_cached = bool(cached and (
+            cached.entity_id, cached.session_epoch, cached.world_epoch, cached.control_generation,
+        ) == (lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation))
+        own_watch = hero_fight and npc in pilot._watch_npcs
+        own_body = bool(entry and entry.activity == "body" and (hero_fight or own_lease))
+        clean = bool(not hero_fight and not own_lease and not own_cached and not own_watch
+                     and not own_body and summary.release_confirmed and summary.watch_removed)
         return clean, (f"after_s={time.monotonic() - ended_at:.3f}, "
-                       f"leases={len(link.body_leases)}, watched={len(pilot._watch_npcs)}, "
-                       f"cached_rows={len(link.body_latest)}, pending_unwatch={len(pilot._pending_unwatch)}, "
-                       f"handles={int(pilot.handles(npc))}, activity={entry.activity if entry else 'away'}")
+                       f"hero_leases={int(own_lease)}, hero_watched={int(own_watch)}, "
+                       f"cached_rows={int(own_cached)}, hero_body={int(own_body)}, "
+                       f"watch_removed={int(summary.watch_removed)}, "
+                       f"ignored_observers={int(active is not None and not hero_fight)}")
 
     async def routine() -> bool:
         state = (await link.routine(npc)).current
@@ -116,7 +138,7 @@ async def neural_talk_scenario(
     def summary_after(previous: set[int]) -> FightSummary | None:
         # A speech-ownership retry can finish an observer before the real fight.
         return next((summary for summary in pilot.summaries
-                     if summary.npc == npc and summary.lease is not None
+                     if summary.npc == npc and summary.lease is not None and summary.target_kind == "hero"
                      and id(summary) not in previous), None)
 
     def ended(name: str, summary: FightSummary | None, allowed: set[str], since: float) -> bool:
@@ -215,7 +237,7 @@ async def neural_talk_scenario(
             ended_at = time.monotonic()
             if not ended("fight_to_flight", summary, {"target_lost", "npc_unavailable"}, fled_at):
                 return results
-            clean, detail = await idle_after(ended_at)
+            clean, detail = await idle_after(ended_at, summary)
             if not check("flight_release", clean, detail):
                 return results
             returned = await _until_async(routine, bool, 40)
@@ -292,7 +314,14 @@ async def neural_talk_scenario(
             link.raw_body_listeners.append(observe_end)
             try:
                 await link.debug("player_hp", hp=1)
-                await _until(lambda: summary_after(previous) is not None, 35)
+                waited = await _wait_hero_down(
+                    link, pilot, npc, second, lambda: summary_after(previous), label="neural-talk bandit",
+                )
+                stalls.append(waited)
+                check("bandit_stall_broken", True,
+                      f"count={waited.stall_broken}, seconds={waited.stalled_seconds:.3f}, "
+                      f"last10={waited.last_decisions}")
+                stall_total()
             finally:
                 link.raw_body_listeners.remove(observe_end)
             summary = summary_after(previous)
@@ -309,7 +338,7 @@ async def neural_talk_scenario(
             if not check("bandit_hero_outcome", bool(down or dead),
                          f"unconscious={down}, dead={dead}, hp={snap.player.hp if snap.player else None}"):
                 return results
-            clean, detail = await idle_after(ended_at)
+            clean, detail = await idle_after(ended_at, summary)
             check("bandit_release", clean, detail)
     finally:
         dialogue.llm = original_llm

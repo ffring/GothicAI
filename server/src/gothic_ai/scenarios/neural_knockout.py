@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from .. import triggers
 from ..bodies import Bodies
-from ..bodypilot import BodyPilot, FightSummary
+from ..bodypilot import BodyFight, BodyPilot, FightSummary, PolicyDecisionTrace
 from ..dialogue import DialogueManager
 from ..game import GameError, GameLink
 from ..llm import ToolCall
@@ -20,8 +22,143 @@ from .neural_load import _policy_resets
 log = logging.getLogger("gothic_ai.scenarios")
 
 
+@dataclass(frozen=True)
+class HeroDownWait:
+    stall_broken: int
+    stalled_seconds: float
+    last_decisions: tuple[PolicyDecisionTrace, ...]
+    elapsed_seconds: float
+
+
+async def _wait_hero_down(
+    link: GameLink,
+    pilot: BodyPilot,
+    npc: str,
+    fight: BodyFight,
+    completed: Callable[[], FightSummary | None],
+    *,
+    label: str,
+) -> HeroDownWait:
+    """Wait for this hero episode; break one damage-free native stalemate with a real hit."""
+    npc = npc.upper()
+    lease = fight.lease
+    if lease is None or lease.npc != npc or fight._target_kind != "hero":
+        raise GameError(f"{label}: waiting for hero_down requires an acquired hero fight")
+    started_at = last_damage_at = time.monotonic()
+    # Both callers deliberately prepare current hero HP=1 before entering this
+    # wait. Ignore queued pre-preparation HP rather than counting that write as damage.
+    last_hp = 1
+    baseline_seen = False
+    down_seen = False
+    stall_broken = 0
+    stalled_seconds = 0.0
+    last_decisions: tuple[PolicyDecisionTrace, ...] = ()
+    finish_deadline: float | None = None
+
+    def episode_summary() -> FightSummary | None:
+        summary = completed()
+        return summary if (
+            summary is not None and summary.npc == npc and summary.lease == lease
+            and summary.target_kind == "hero"
+        ) else None
+
+    def active_lease() -> bool:
+        return bool(
+            pilot.fights.get(npc) is fight and fight._target_kind == "hero"
+            and link.body_leases.get(lease.entity_id) == lease
+        )
+
+    def observe(packet: dict[str, Any]) -> None:
+        nonlocal last_hp, baseline_seen, down_seen, last_damage_at
+        if fight._target_kind != "hero" or pilot.fights.get(npc) is not fight:
+            return
+        for row in packet["observations"]:
+            if (
+                row["entity_id"], row["session_epoch"], row["world_epoch"], row["control_generation"],
+            ) != (
+                lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation,
+            ):
+                continue
+            own, target = row["self"], row["target"]
+            down_seen = down_seen or own["down"] or own["dead"] or own["unconscious"] or own["hp"] <= 0
+            if target["entity_id"] != lease.target_entity_id or not target["current_valid"]:
+                continue
+            hp = target["hp"]
+            down_seen = down_seen or bool(target["down"]) or (hp is not None and hp <= 0)
+            if type(hp) is not int or (not baseline_seen and hp > 1):
+                continue
+            baseline_seen = True
+            if hp < last_hp:
+                last_damage_at = time.monotonic()
+            last_hp = hp
+
+    link.raw_body_listeners.append(observe)
+    try:
+        while True:
+            summary = episode_summary()
+            if summary is not None:
+                if not stall_broken:
+                    last_decisions = summary.last_policy_decisions[-10:]
+                break
+            now = time.monotonic()
+            if finish_deadline is not None:
+                if now >= finish_deadline:
+                    break
+            elif now - last_damage_at >= 15:
+                # A down row or a released original lease can precede its
+                # immutable summary. Wait for cleanup without striking again.
+                finish_deadline = now + 30
+                if not down_seen and active_lease():
+                    snapshot = await link.snapshot(npc, fresh=True)
+                    if snapshot.player is None:
+                        raise GameError(f"{label}: hero position unavailable before stall break")
+                    distance = snapshot.player.distance
+                    if not down_seen and episode_summary() is None and active_lease() and distance > 450:
+                        log.info(
+                            "%s stall approach: pre_distance_cm=%.1f teleport_distance_cm=250",
+                            label, distance,
+                        )
+                        await link.debug("teleport", near=npc, distance=250)
+                    if not down_seen and episode_summary() is None and active_lease():
+                        last_decisions = tuple(fight._policy_decisions)[-10:]
+                        stalled_seconds = time.monotonic() - last_damage_at
+                        stall_broken = 1
+                        log.info(
+                            "%s stall_broken count=1 elapsed_s=%.3f no_damage_s=%.3f last10=%s",
+                            label, time.monotonic() - started_at, stalled_seconds, last_decisions,
+                        )
+                        try:
+                            await link.debug("player_hit", npc=npc)
+                        except GameError as error:
+                            if str(error) != "the hit caused no damage":
+                                raise
+                            log.info("%s stall_broken hit_error=%s", label, error)
+                        finish_deadline = time.monotonic() + 30
+            await asyncio.sleep(0.05)
+    finally:
+        link.raw_body_listeners.remove(observe)
+    if not last_decisions:
+        last_decisions = tuple(fight._policy_decisions)[-10:]
+    return HeroDownWait(stall_broken, stalled_seconds, last_decisions, time.monotonic() - started_at)
+
+
+async def _clear_beasts(link: GameLink, npc: str) -> int:
+    cleared = 0
+    for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
+        if not other.dead and other.guild >= BEASTS:
+            await link.debug("kill", instance=other.id, near=npc)
+            cleared += 1
+    for view in await link.npc_view([npc]):
+        for seen in view.sees:
+            if seen.guild >= BEASTS and seen.body != "dead":
+                await link.debug("kill", instance=seen.id, near=npc)
+                cleared += 1
+    return cleared
+
+
 async def neural_knockout_segment(
     link: GameLink, dialogue: DialogueManager, pilot: BodyPilot,
+    *, stalls: list[HeroDownWait] | None = None,
 ) -> dict[str, str]:
     """A citizen's ordinary AR_NONE fight, real unconsciousness and native recovery."""
     if dialogue.llm.name != "fake":
@@ -46,7 +183,8 @@ async def neural_knockout_segment(
 
     def summary_after(previous: set[int]) -> FightSummary | None:
         return next((summary for summary in pilot.summaries if (
-            summary.npc == npc and summary.lease is not None and id(summary) not in previous
+            summary.npc == npc and summary.lease is not None and summary.target_kind == "hero"
+            and id(summary) not in previous
         )), None)
 
     await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
@@ -55,13 +193,7 @@ async def neural_knockout_segment(
         routine=[RoutineEntry(start="00:00", end="23:59", state="ZS_STAND_ARMSCROSSED", waypoint=arena)],
     ))
     await link.debug("skip_important", near=npc)
-    for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
-        if not other.dead and other.guild >= BEASTS:
-            await link.debug("kill", instance=other.id, near=npc)
-    for view in await link.npc_view([npc]):
-        for seen in view.sees:
-            if seen.guild >= BEASTS and seen.body != "dead":
-                await link.debug("kill", instance=seen.id, near=npc)
+    log.info("neural-talk knockout preparation: beasts_cleared=%d", await _clear_beasts(link, npc))
     ready = await Bodies(link).act(
         npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
         minutes=60, arrive=True, radius=100, timeout=15,
@@ -120,6 +252,7 @@ async def neural_knockout_segment(
                     and fight._decisions >= 5
                 )
 
+            log.info("neural-talk knockout before speech: beasts_cleared=%d", await _clear_beasts(link, npc))
             await link.debug("type", text="Мечник, проверим твою шпагу.")
             ready = await _until(fight_ready, 25)
             fight = pilot.fights.get(npc)
@@ -174,7 +307,14 @@ async def neural_knockout_segment(
                 return results
 
             down_at = time.monotonic()
-            await _until(lambda: summary_after(previous) is not None, 35)
+            waited = await _wait_hero_down(
+                link, pilot, npc, fight, lambda: summary_after(previous), label="neural-talk knockout",
+            )
+            if stalls is not None:
+                stalls.append(waited)
+            check("stall_broken", True,
+                  f"count={waited.stall_broken}, seconds={waited.stalled_seconds:.3f}, "
+                  f"last10={waited.last_decisions}")
             summary = summary_after(previous)
             ended_at = time.monotonic()
             if not check("fight_to_down", bool(
@@ -202,15 +342,23 @@ async def neural_knockout_segment(
                f"after_down_s={time.monotonic() - ended_at:.3f}"):
                 return results
 
+            log.info("neural-talk knockout after down: beasts_cleared=%d", await _clear_beasts(link, npc))
             await asyncio.sleep(max(0, ended_at + 2 - time.monotonic()))
             entry = pilot.people.get(npc)
+            own_fight = pilot.fights.get(npc) is fight
+            own_lease = link.body_leases.get(lease.entity_id) == lease
+            cached = link.body_latest.get(lease.entity_id)
+            own_cached = bool(cached and (
+                cached.entity_id, cached.session_epoch, cached.world_epoch, cached.control_generation,
+            ) == (lease.entity_id, lease.session_epoch, lease.world_epoch, lease.control_generation))
+            own_watch = own_fight and npc in pilot._watch_npcs
+            own_body = bool(entry and entry.activity == "body" and (own_fight or own_lease))
             if not check("release", bool(
-                not pilot.handles(npc) and not link.body_leases and not link.body_latest
-                and not pilot._watch_npcs and not pilot._pending_unwatch
-                and summary.watch_removed and (entry is None or entry.activity != "body")
-            ), f"after_down_s={time.monotonic() - ended_at:.3f}, leases={len(link.body_leases)}, "
-               f"watched={len(pilot._watch_npcs)}, cached_rows={len(link.body_latest)}, "
-               f"body={int(entry is not None and entry.activity == 'body')}"):
+                not own_fight and not own_lease and not own_cached and not own_watch and not own_body
+                and summary.release_confirmed and summary.watch_removed
+            ), f"after_down_s={time.monotonic() - ended_at:.3f}, leases={int(own_lease)}, "
+               f"watched={int(own_watch)}, cached_rows={int(own_cached)}, body={int(own_body)}, "
+               f"entity_id={lease.entity_id}, watch_removed={int(summary.watch_removed)}"):
                 return results
 
             nearest = float("inf")
@@ -254,14 +402,16 @@ async def neural_knockout_segment(
                 npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=parked_at,
                 minutes=60, arrive=True, radius=100, timeout=15,
             )
-            [distance] = await link.story_eval(npc, [
+            distance, arena_distance = await link.story_eval(npc, [
                 ["call", "NPC_GETDISTTOWP", ["inst", "SELF"], ["str", parked_at]],
+                ["call", "NPC_GETDISTTOWP", ["inst", "SELF"], ["str", arena]],
             ])
             check("park_citizen", bool(
-                parked.status == "arrived" and distance <= 100
-                and not pilot.handles(npc) and not link.body_leases
+                parked.status == "arrived" and distance <= 100 and arena_distance > 6000
+                and pilot.fights.get(npc) is not fight and link.body_leases.get(lease.entity_id) != lease
             ), f"waypoint={parked_at}, distance_cm={distance}, status={parked.status}, "
-               f"leases={len(link.body_leases)}")
+               f"arena_distance_cm={arena_distance}, minimum_arena_cm=6000, "
+               f"leases={int(link.body_leases.get(lease.entity_id) == lease)}")
     finally:
         dialogue.llm = original_llm
         link.listeners.remove(heard)
