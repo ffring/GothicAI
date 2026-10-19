@@ -1,6 +1,7 @@
 #include "npcsteal.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "game/herodeed.h"
 #include "game/inventory.h"
@@ -16,6 +17,8 @@
 namespace {
 constexpr float TakeRange = 2000;
 constexpr float ChestNear = 300;
+constexpr float PickupNear = 100;
+constexpr float PickupHeight = 200;
 std::string ownerOf(Npc& npc, const NpcSteal::Target& target) {
   const auto at = target.chest!=nullptr ? target.chest->position() : target.item->position();
   const auto d = HeroDeed::snapshot(npc,"take_item",nullptr,target.item,target.chest,target.count,&at);
@@ -128,9 +131,34 @@ bool NpcSteal::begin(World& world, Npc& npc, const rapidjson::Value& args, Activ
   }
 
 NpcSteal::Progress NpcSteal::tick(World& world, Npc& npc, Active& active, std::string& detail) {
-  (void)world;
-  if(npc.isAiBusy()) return Progress::Running;
   auto* chest = active.target.chest;
+  if(chest==nullptr && npc.inventory().itemCount(active.target.instance)<=active.before) {
+    // AI_GotoItem uses a ground position, while its generic arrival test uses
+    // the NPC's elevated skeleton root. Admit the native pickup at arm's reach
+    // rather than requiring its fallback to land within one horizontal cm.
+    Item* item = nullptr;
+    world.detectItem(npc.position(),TakeRange,[&](Item& candidate) {
+      if(&candidate==active.target.item)
+        item = &candidate;
+      });
+    if(item==nullptr) {
+      detail = "the world theft item is gone or beyond pickup range";
+      return Progress::Failed;
+      }
+    const auto goal = npc.navigationGoal();
+    const auto delta = item->position()-npc.position();
+    if(goal.active && goal.kind=="item" && delta.x*delta.x+delta.z*delta.z<=PickupNear*PickupNear &&
+       std::abs(delta.y)<=PickupHeight) {
+      auto current = active.target;
+      current.item = item;
+      if(item->isMission() || ownerOf(npc,current)!=active.expectedOwner) {
+        detail = "the world theft target changed before pickup";
+        return Progress::Failed;
+        }
+      npc.clearGoTo(); // AI_TakeItem, its animation and the actual transfer remain in the native queue.
+      }
+    }
+  if(npc.isAiBusy()) return Progress::Running;
   if(chest!=nullptr && !active.opened) {
     if(npc.interactive()!=chest) {
       detail = "could not open the requested chest";

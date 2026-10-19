@@ -15,6 +15,9 @@ void require(bool condition, const char* message) {
 }
 
 int main() {
+  require(!DeedWitness::foreignCombat(false,false),"standing NPC with a stale unrelated target remains a witness");
+  require(DeedWitness::foreignCombat(true,false),"a participant in another fight is occupied");
+  require(!DeedWitness::foreignCombat(true,true),"a defender fighting this culprit can witness a fresh deed");
   DeedWitness witness;
   witness.range = 2000;
   require(witness.admitted(),"ready nearby witness is admitted");

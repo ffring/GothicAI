@@ -3,6 +3,10 @@
 // Shared, side-effect-free admission for the bridge's witness snapshot. Native
 // perception callbacks are never invoked to discover an NPC deed's witnesses.
 struct DeedWitness final {
+  static constexpr bool foreignCombat(bool fighting, bool targetIsCulprit) {
+    return fighting && !targetIsCulprit;
+    }
+
   bool culprit = false;
   bool victim = false;
   bool player = false;

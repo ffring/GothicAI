@@ -6341,7 +6341,7 @@ bool Npc::canWitnessDeed(const Npc& culprit, const Npc* victim, PercType perc) c
                                     state->name()=="ZS_MM_RTN_SLEEP");
   // A participant in an unrelated fight is occupied. A defender already fighting
   // this culprit may still see a fresh deed against somebody else.
-  gates.foreignFight = (isAttack() || currentTarget!=nullptr) && currentTarget!=&culprit;
+  gates.foreignFight = DeedWitness::foreignCombat(isAttack(),currentTarget==&culprit);
   gates.range = perceptionRange(perc);
   gates.distanceSquared = qDistTo(culprit);
   return gates.admitted() && canSeeNpc(culprit,false);

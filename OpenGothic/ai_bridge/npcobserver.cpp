@@ -638,7 +638,7 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
         npc->clearServerDeed();
       }
 
-  if(npc->isPhysicsInvestigating() && action!="fight" && action!="flee" && action!="draw_weapon") {
+  if(npc->isPhysicsInvestigating() && action!="fight" && action!="flee" && action!="draw_weapon" && action!="steal") {
     result("rejected","npc is investigating a noise");
     return;
     }
