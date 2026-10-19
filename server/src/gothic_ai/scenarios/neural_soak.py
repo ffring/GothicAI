@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from .. import triggers
 from ..bodies import Bodies
-from ..bodypilot import ACQUIRE_WINDOW, BodyFight, BodyPilot, FightSummary
+from ..bodypilot import ACQUIRE_WINDOW, WORLD_STOP_REASONS, BodyFight, BodyPilot, FightSummary
 from ..dialogue import DialogueManager
 from ..game import GameError, GameLink
 from ..llm.fake import FakeBackend
@@ -92,16 +92,90 @@ def _load_summaries_ok(
     death_ends = {endings[target] for target in known_dead if target in endings} if (
         cause in {"hero_death", "companion_death"}
     ) else set()
+    dead_kinds = {target for _, target in death_ends}
     expected = set(old_leases)
     return (
         len(summaries) == len(expected)
         and {summary.lease for summary in summaries} == expected
         and all(
-            (summary.reason == "loading" or (summary.reason, summary.target_kind) in death_ends)
+            (summary.reason == "loading" or (summary.reason, summary.target_kind) in death_ends
+             or (summary.reason == "native_restored"
+                 and summary.native_release_reason == "target_changed_or_lost"
+                 and summary.target_kind in dead_kinds))
             and summary.fallbacks == 0
             and release_within_deadline(summary)
             for summary in summaries
         )
+    )
+
+
+def _load_cleanup_details(
+    link: GameLink, pilot: BodyPilot, old_fights: dict[str, BodyFight], *,
+    old_worlds: Collection[tuple[int, int]], new_world: Sequence[int], status: Any,
+) -> dict[str, Any]:
+    """Check old-world cleanup without rejecting new passive roster observers."""
+    fields = ("session_epoch", "world_epoch", "entity_id", "control_generation")
+
+    def identity(value: Any) -> dict[str, Any]:
+        return {name: getattr(value, name) for name in fields if hasattr(value, name)}
+
+    def unsafe_row(row: dict[str, Any]) -> bool:
+        world = (row["session_epoch"], row["world_epoch"])
+        return (world in old_worlds or world != tuple(new_world)
+                or row["control_generation"] != 0 or row["control_allowed"])
+
+    old_objects = {id(fight) for fight in old_fights.values()}
+    old_remaining = [npc for npc, fight in pilot.fights.items() if id(fight) in old_objects]
+    stopped_fights = [dict(npc=npc, reason=fight._reason)
+                      for npc, fight in pilot.fights.items() if fight._reason in WORLD_STOP_REASONS]
+    fight_leases = [dict(npc=npc, **identity(fight.lease))
+                    for npc, fight in pilot.fights.items() if fight.lease is not None]
+    pending_fights = [dict(npc=npc, **identity(fight._pending_acquire))
+                      for npc, fight in pilot.fights.items()
+                      if fight._acquiring or fight._pending_acquire is not None]
+    pending_link = [dict(source=source, npc=pending.npc, **identity(pending.cmd))
+                    for source in ("_body_acquisitions", "_body_acquire_waiters")
+                    for pending in getattr(link, source).values()]
+    cached_rows = [identity(row) for row in link.body_latest.values()
+                   if unsafe_row(row.model_dump())]
+    queued_rows = [dict(npc=npc, **{name: row[name] for name in fields})
+                   for npc, fight in pilot.fights.items() for row, _ in fight._rows
+                   if unsafe_row(row)]
+    unsafe_watch = [npc for npc in pilot._watch_npcs if (
+        (fight := pilot.fights.get(npc)) is None or id(fight) in old_objects
+        or fight.lease is not None or fight._acquiring or fight._pending_acquire is not None
+        or fight._reason in WORLD_STOP_REASONS
+    )]
+    owned_status = [identity(actor) | {"owner": actor.owner,
+                                      "release_pending": actor.release_pending,
+                                      "acquire_pending": actor.acquire_pending,
+                                      "acquire_request_id": actor.acquire_request_id}
+                    for actor in status.actors if (
+                        actor.owner != "native" or actor.release_pending
+                        or actor.acquire_pending or actor.acquire_request_id
+                    )]
+    body_without_lease = [npc for npc, entry in pilot.people.items()
+                          if entry.activity == "body" and not any(
+                              lease.npc == npc for lease in link.body_leases.values()
+                          )]
+    residuals = dict(
+        old_fights=old_remaining, stopped_fights=stopped_fights,
+        leases=[dict(npc=lease.npc, **identity(lease)) for lease in link.body_leases.values()],
+        fight_leases=fight_leases,
+        pending_fights=pending_fights, pending_link=pending_link,
+        pending_releases=[dict(npc=npc, **identity(pending.lease))
+                          for npc, pending in pilot._releasing.items()],
+        cached_rows=cached_rows, queued_rows=queued_rows,
+        unsafe_watch=unsafe_watch, pending_unwatch=sorted(pilot._pending_unwatch),
+        owned_status=owned_status, body_without_lease=body_without_lease,
+    )
+    return dict(
+        checks={name: not values for name, values in residuals.items()}, residuals=residuals,
+        observing_fights=sorted(npc for npc, fight in pilot.fights.items() if (
+            id(fight) not in old_objects and fight.lease is None
+            and not fight._acquiring and fight._pending_acquire is None
+            and fight._reason not in WORLD_STOP_REASONS
+        )),
     )
 
 
@@ -405,10 +479,14 @@ async def neural_soak_scenario(
         nonlocal hero_dead, companion_dead, native_attacking
         dead_targets = [kind for kind, dead in (("hero", hero_dead), ("companion", companion_dead))
                         if dead] if cause in {"hero_death", "companion_death"} else []
-        old = {npc: (fight.lease, fight.client) for npc, fight in pilot.fights.items()
+        old_fights = dict(pilot.fights) if pilot is not None else {}
+        old = {npc: (fight.lease, fight.client) for npc, fight in old_fights.items()
                if fight.lease is not None} if pilot is not None else {}
         old_worlds = (sorted({(lease.session_epoch, lease.world_epoch)
-                              for lease, _ in latest_identity.values()}) if not control else
+                              for lease, _ in [*latest_identity.values(), *old.values()]}
+                            | ({(link.body_session_epoch, link.body_generation)}
+                               if link.body_session_epoch is not None
+                               and link.body_generation is not None else set())) if not control else
                       [(link.body_session_epoch, link.body_generation)])
         before = len(metrics.summaries)
         rss_before = metrics.sample(force=True)
@@ -433,29 +511,47 @@ async def neural_soak_scenario(
         else:
             status = await link.body_control_status()
             new_world = [status.session_epoch, status.world_epoch]
+            metrics.sync_summaries()
         summaries = metrics.summaries[before:]
         old_summaries = [s for s in summaries if s.lease in {item[0] for item in old.values()}]
         packets = len(link.body_latest)
-        ok = bool(
-            session.parent == saved.branch and session.parent_seq == saved.seq
-            and new_world not in [list(scope) for scope in old_worlds]
+        checks = dict(
+            save_parent=session.parent == saved.branch and session.parent_seq == saved.seq,
+            world_changed=new_world not in [list(scope) for scope in old_worlds],
         )
+        ok = all(checks.values())
         detail = dict(cause=cause, ok=ok, mid_fight=mid_fight, wave=wave,
                       dead_targets=dead_targets,
                       old_worlds=[list(scope) for scope in old_worlds], new_world=new_world,
                       seconds=time.monotonic() - load_started,
                       rss_before=rss_before, rss_after=rss_after)
         if pilot is not None:
-            ok = bool(ok and _load_summaries_ok(
+            checks["summaries"] = _load_summaries_ok(
                 [item[0] for item in old.values()], old_summaries, cause=cause,
                 dead_targets=dead_targets,
-            ) and not pilot.active_count and not link.body_leases and not packets
-                and not pilot._watch_npcs and not pilot._pending_unwatch
-                and not any(entry.activity == "body" for entry in pilot.people.values()))
-            detail.update(ok=ok, old_fights=len(old), summaries=len(old_summaries),
+            )
+            cleanup = _load_cleanup_details(
+                link, pilot, old_fights, old_worlds=old_worlds, new_world=new_world, status=status,
+            )
+            checks.update(cleanup["checks"])
+            ok = all(checks.values())
+            detail.update(ok=ok, checks=checks, cleanup_residuals=cleanup["residuals"],
+                          old_fight_npcs=sorted(old_fights),
+                          old_lease_scopes=[lease.model_dump(include={
+                              "npc", "session_epoch", "world_epoch", "entity_id", "control_generation",
+                          }) for lease, _ in old.values()],
+                          observing_fights=cleanup["observing_fights"],
+                          old_fights=len(old), summaries=len(old_summaries),
                           active_count=pilot.active_count, leases=len(link.body_leases),
                           cached_rows=packets, reacquired=False,
-                          reasons=[s.reason for s in old_summaries])
+                          reasons=[s.reason for s in old_summaries],
+                          summary_details=[dict(
+                              target_kind=s.target_kind, reason=s.reason,
+                              native_release_reason=s.native_release_reason,
+                              release_confirmed=s.release_confirmed, fallbacks=s.fallbacks,
+                              release_seconds=s.release_seconds,
+                              release_late_seconds=s.release_late_seconds,
+                          ) for s in old_summaries])
         load_checks.append(detail)
         metrics.event("load_check", **detail)
         # Loading deliberately clears GameLink.party. Re-establish this fixture's
