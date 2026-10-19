@@ -84,9 +84,12 @@ class CoverWorld:
                 {"fact": "silenced", "npc": npc, "deal": deal, "cover": deal, "crime": fields["crime"]}
             )
 
-    def saw(self, npc: str = HILDA, name: str = "Хильда", minute: int = AT_8) -> None:
-        self.seen.saw(hero_seen_by(npc, name, minute))
-        self.seen.saw(hero_seen_by(npc, name, minute + 5))
+    def saw(
+        self, npc: str = HILDA, name: str = "Хильда", minute: int = AT_8,
+        waypoint: str = "NW_FARM1_PATH_01",
+    ) -> None:
+        self.seen.saw(hero_seen_by(npc, name, minute, waypoint))
+        self.seen.saw(hero_seen_by(npc, name, minute + 5, waypoint))
 
     async def testify(self, *, witness: str = HILDA, name: str = "Хильда", said: str = SAID):
         result = await self.witnesses._testify(None, LOBART, "Лобарт", witness, name, said, "far", 0)
@@ -230,7 +233,7 @@ async def test_npc_breaking_a_promise_testifies_truthfully_and_betrayal_is_once(
     fake = FakeGame(branch="A")
     async with connected(fake) as link:
         w = CoverWorld(link, fake)
-        w.saw()
+        w.saw(waypoint="NW_FARM1_OUT_01")
         record_theft(w.chronicle)
         how = "silence" if promise == "silence" else "cover"
         terms = (
@@ -257,7 +260,7 @@ async def test_disabling_cheating_after_load_restores_cover_without_rewriting_fa
     fake = FakeGame(branch="A")
     async with connected(fake) as link:
         w = CoverWorld(link, fake)
-        w.saw()
+        w.saw(waypoint="NW_FARM1_OUT_01")
         record_theft(w.chronicle)
         w.chronicle.record({
             "fact": "npc_intent", "npc": HILDA, "deal": "D1", "keeps": False, "how": ["cover"],

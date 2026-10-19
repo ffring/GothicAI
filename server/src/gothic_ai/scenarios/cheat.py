@@ -144,7 +144,9 @@ async def cheat_scenario(
     async def buy(npc: str, request: str, args: dict[str, Any], label: str) -> Deal | None:
         name = talk.people[npc].name
         dialogue.llm = ClaimScript(
-            [(request, FakeStep("Пять золотых сейчас — и договорились.", [ToolCall("propose_deal", args)]))],
+            [(request.replace("ё", "е"), FakeStep(
+                "Пять золотых сейчас — и договорились.", [ToolCall("propose_deal", args)]
+            ))],
             [],
             "Договорились.",
             only=name,
@@ -194,7 +196,8 @@ async def cheat_scenario(
             last = kw["messages"][-1]
             observed = (
                 not self.prompts and kw.get("cache_key") == LOBART
-                and isinstance(last, Message) and ASK_PAY in last.content
+                and isinstance(last, Message)
+                and ASK_PAY.replace("ё", "е") in last.content.replace("ё", "е")
             )
             if observed:
                 self.prompts.append("\n".join(
@@ -351,7 +354,8 @@ async def cheat_scenario(
         await link.debug("type", text=ASK_PAY)
         answered = await _until(
             lambda: bool(refused.words) and any(
-                r["id"] not in previous and ASK_PAY in r.get("trigger", {}).get("text", "")
+                r["id"] not in previous
+                and ASK_PAY.replace("ё", "е") in r.get("trigger", {}).get("text", "").replace("ё", "е")
                 and r.get("status") == "completed" for r in turns()
             ),
             180 if not fake else 45,
