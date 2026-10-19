@@ -20,10 +20,12 @@
 #       each gets >=10 decisions, no fallback, release <=2 s, service p95 <=20 ms; requires GOTHIC_BODY_URL
 #   neural-talk: a non-bandit swordsman attacks after words (AR_NONE), knocks the hero out alive, releases
 #       P30 and returns to his routine; the hero gets up. Then a hostile bandit talks, attacks, loses the
-#       fleeing hero, returns to his routine, reattacks or talks again and starts a fresh fight ending in
-#       hero_down (hero death is allowed for this bandit); LLM=fake, requires GOTHIC_BODY_URL
-#       one hero hit breaks 15 s without target damage; then hero_down must follow within 30 s;
-#       stall_broken reports the count and seconds, wildlife is cleared and the swordsman parked away
+#       fleeing hero, returns to his routine, reattacks or talks again and starts a fresh fight. After
+#       return_to_second_fight, >=20 decisions or 20 s trigger another hero flight; fight_end_clean checks
+#       target_lost/npc_unavailable, release <=2 s and no lease/body/watch after 2 s; LLM=fake, GOTHIC_BODY_URL
+#       one hero hit breaks 15 s without target damage; stall_broken reports count and seconds as P30
+#       diagnostics. Only the separate knockout requires hero_down within 30 s after that hit;
+#       wildlife is cleared and the swordsman parked away
 #   neural-load: load an initial save while three bandits hold P30 leases; all fights end with loading,
 #       release their leases and watch, then one bandit fights under P30 again; requires GOTHIC_BODY_URL
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help

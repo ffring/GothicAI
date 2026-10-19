@@ -66,9 +66,9 @@ async def neural_talk_scenario(
 ) -> dict[str, str]:
     """A non-bandit knockout, then words, escape and a fresh fight with a hostile bandit."""
     from .neural_knockout import (
-        HeroDownWait,
+        HeroFightWait,
         _hero_release_state,
-        _wait_hero_down,
+        _wait_hero_fight,
         neural_knockout_segment,
     )
     from .neural_load import _policy_resets
@@ -77,7 +77,7 @@ async def neural_talk_scenario(
         raise GameError("scenario neural-talk requires GOTHIC_BODY_URL and --neural-body")
     if dialogue.llm.name != "fake":
         raise GameError("scenario neural-talk requires LLM=fake")
-    stalls: list[HeroDownWait] = []
+    stalls: list[HeroFightWait] = []
     results = await neural_knockout_segment(link, dialogue, pilot, stalls=stalls)
 
     def stall_total() -> None:
@@ -239,8 +239,8 @@ async def neural_talk_scenario(
             # Match neural's actual combat loadout once the conversation is over.
             # This watch is still safe while the hero is far and the pilot is idle.
             await _m5b_player_weapon(link, "melee")
-            # Match neural's melee start too; this segment tests the handoff and
-            # hero_down, while approaching from outside sword reach is separate.
+            # Match neural's melee start; this segment tests a fresh handoff,
+            # then a controlled escape rather than the policy's ability to win.
             await link.debug("teleport", near=npc, distance=250)
 
             def attacking() -> bool:
@@ -281,53 +281,42 @@ async def neural_talk_scenario(
                f"independent_client={second_client is not first_client}, "
                f"distance_cm={pilot.people[npc].distance if npc in pilot.people else None}"):
                 return results
-            last_row: dict[str, Any] = {}
-
-            def observe_end(packet: dict[str, Any]) -> None:
-                for row in packet["observations"]:
-                    if second_lease is not None and (
-                        row["entity_id"], row["session_epoch"], row["world_epoch"]
-                    ) == (second_lease.entity_id, second_lease.session_epoch, second_lease.world_epoch) and (
-                        row["target"]["entity_id"] == second_lease.target_entity_id
-                    ):
-                        own, target = row["self"], row["target"]
-                        last_row.update({
-                            "game_ms": row["t_game_ms"], "npc_pos": own["position_world_cm"],
-                            "hero_pos": target["position_world_cm"], "hero_hp": target["hp"],
-                            "hero_weapon": target["weapon_state"], "hero_down": target["down"],
-                            "distance_cm": target["fight_distance_cm"],
-                        })
-
-            down_at = time.monotonic()
-            link.raw_body_listeners.append(observe_end)
-            try:
-                await link.debug("player_hp", hp=1)
-                waited = await _wait_hero_down(
-                    link, pilot, npc, second, lambda: summary_after(previous), label="neural-talk bandit",
-                )
-                stalls.append(waited)
-                check("bandit_stall_broken", True,
-                      f"count={waited.stall_broken}, seconds={waited.stalled_seconds:.3f}, "
-                      f"last10={waited.last_decisions}")
-                stall_total()
-            finally:
-                link.raw_body_listeners.remove(observe_end)
+            snap = await link.snapshot(npc, fresh=True)
+            if snap.player is None:
+                raise GameError("neural-talk bandit sample: hero health unavailable")
+            waited = await _wait_hero_fight(
+                link, pilot, npc, second, lambda: summary_after(previous), label="neural-talk bandit",
+                initial_hp=snap.player.hp, max_decisions=20, max_seconds=20,
+            )
+            stalls.append(waited)
+            check("bandit_stall_broken", True,
+                  f"count={waited.stall_broken}, seconds={waited.stalled_seconds:.3f}, "
+                  f"last10={waited.last_decisions}")
+            stall_total()
+            if not check("second_fight_sample", bool(
+                (second._decisions >= 20 or waited.elapsed_seconds >= 20) and second._fallbacks == 0
+                and pilot.fights.get(npc) is second
+                and link.body_leases.get(second_lease.entity_id) == second_lease
+            ), f"decisions={second._decisions}, elapsed_s={waited.elapsed_seconds:.3f}, "
+               f"limit_decisions=20, limit_s=20, fallback={second._fallbacks}, "
+               f"hero_hp_start={snap.player.hp}"):
+                return results
+            fled_at = time.monotonic()
+            await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+            await _until(lambda: summary_after(previous) is not None, 8)
             summary = summary_after(previous)
             ended_at = time.monotonic()
-            if not ended("fight_to_hero_down", summary, {"hero_down"}, down_at):
-                log.info("neural-talk end diagnostics: row=%s decisions=%s",
-                         last_row, tuple(second._policy_decisions) if second else ())
-                return results
-            down, dead = await link.story_eval(npc, [
-                ["call", "NPC_ISINSTATE", ["inst", "HERO"], ["sym", "ZS_UNCONSCIOUS"]],
-                ["call", "NPC_ISDEAD", ["inst", "HERO"]],
-            ])
-            snap = await link.snapshot(npc, fresh=True)
-            if not check("bandit_hero_outcome", bool(down or dead),
-                         f"unconscious={down}, dead={dead}, hp={snap.player.hp if snap.player else None}"):
+            if summary is None:
+                ended("fight_end_clean", summary, {"target_lost", "npc_unavailable"}, fled_at)
                 return results
             clean, detail = await idle_after(ended_at, summary)
-            check("bandit_release", clean, detail)
+            check("fight_end_clean", bool(
+                clean and summary.reason in {"target_lost", "npc_unavailable"}
+                and summary.decisions >= 5 and summary.fallbacks == 0
+                and summary.release_seconds is not None and summary.release_seconds <= 2
+            ), f"decisions={summary.decisions}, fallback={summary.fallbacks}, reason={summary.reason}, "
+               f"release_s={summary.release_seconds}, transition_s={time.monotonic() - fled_at:.3f}, "
+               f"{detail}")
     finally:
         dialogue.llm = original_llm
         link.listeners.remove(heard)

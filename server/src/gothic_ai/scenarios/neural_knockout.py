@@ -23,7 +23,7 @@ log = logging.getLogger("gothic_ai.scenarios")
 
 
 @dataclass(frozen=True)
-class HeroDownWait:
+class HeroFightWait:
     stall_broken: int
     stalled_seconds: float
     last_decisions: tuple[PolicyDecisionTrace, ...]
@@ -56,7 +56,7 @@ def _hero_release_state(
                    f"ignored_observers={int(active is not None and not hero_fight)}")
 
 
-async def _wait_hero_down(
+async def _wait_hero_fight(
     link: GameLink,
     pilot: BodyPilot,
     npc: str,
@@ -64,16 +64,19 @@ async def _wait_hero_down(
     completed: Callable[[], FightSummary | None],
     *,
     label: str,
-) -> HeroDownWait:
-    """Wait for this hero episode; break one damage-free native stalemate with a real hit."""
+    initial_hp: int = 1,
+    max_decisions: int | None = None,
+    max_seconds: float | None = None,
+) -> HeroFightWait:
+    """Observe this hero episode with one stall hit, optionally bounded by decisions/time."""
     npc = npc.upper()
     lease = fight.lease
     if lease is None or lease.npc != npc or fight._target_kind != "hero":
-        raise GameError(f"{label}: waiting for hero_down requires an acquired hero fight")
+        raise GameError(f"{label}: observing combat requires an acquired hero fight")
     started_at = last_damage_at = time.monotonic()
-    # Both callers deliberately prepare current hero HP=1 before entering this
-    # wait. Ignore queued pre-preparation HP rather than counting that write as damage.
-    last_hp = 1
+    # KO prepares current HP=1; the bandit sample keeps the hero healthy.
+    # Ignore queued pre-preparation HP rather than counting that write as damage.
+    last_hp = initial_hp
     baseline_seen = False
     down_seen = False
     stall_broken = 0
@@ -111,7 +114,7 @@ async def _wait_hero_down(
                 continue
             hp = target["hp"]
             down_seen = down_seen or bool(target["down"]) or (hp is not None and hp <= 0)
-            if type(hp) is not int or (not baseline_seen and hp > 1):
+            if type(hp) is not int or (not baseline_seen and hp > initial_hp):
                 continue
             baseline_seen = True
             if hp < last_hp:
@@ -127,6 +130,10 @@ async def _wait_hero_down(
                     last_decisions = summary.last_policy_decisions[-10:]
                 break
             now = time.monotonic()
+            if (max_decisions is not None and fight._decisions >= max_decisions) or (
+                max_seconds is not None and now - started_at >= max_seconds
+            ):
+                break
             if finish_deadline is not None:
                 if now >= finish_deadline:
                     break
@@ -165,7 +172,7 @@ async def _wait_hero_down(
         link.raw_body_listeners.remove(observe)
     if not last_decisions:
         last_decisions = tuple(fight._policy_decisions)[-10:]
-    return HeroDownWait(stall_broken, stalled_seconds, last_decisions, time.monotonic() - started_at)
+    return HeroFightWait(stall_broken, stalled_seconds, last_decisions, time.monotonic() - started_at)
 
 
 async def _clear_beasts(link: GameLink, npc: str) -> int:
@@ -184,7 +191,7 @@ async def _clear_beasts(link: GameLink, npc: str) -> int:
 
 async def neural_knockout_segment(
     link: GameLink, dialogue: DialogueManager, pilot: BodyPilot,
-    *, stalls: list[HeroDownWait] | None = None,
+    *, stalls: list[HeroFightWait] | None = None,
 ) -> dict[str, str]:
     """A citizen's ordinary AR_NONE fight, real unconsciousness and native recovery."""
     if dialogue.llm.name != "fake":
@@ -333,7 +340,7 @@ async def neural_knockout_segment(
                 return results
 
             down_at = time.monotonic()
-            waited = await _wait_hero_down(
+            waited = await _wait_hero_fight(
                 link, pilot, npc, fight, lambda: summary_after(previous), label="neural-talk knockout",
             )
             if stalls is not None:
