@@ -145,10 +145,14 @@ async def frame(
         if witness and not await place(HILDA, ROAD, to=LOBART, distance=350, face=LOBART):
             return False
         await link.debug("teleport", near=LOBART, distance=250)
-        return await _until(lambda: all(
+        ready = await _until(lambda: all(
             npc in talk.people and talk.people[npc].distance <= 700 and talk.people[npc].earshot <= 700
             for npc in ((LOBART, HILDA) if witness else (LOBART,))
         ), 20)
+        return check("investigation_talk_near" if witness else "frame_talk_near", ready, {
+            npc: entry.model_dump() if (entry := talk.people.get(npc)) is not None else None
+            for npc in ((LOBART, HILDA) if witness else (LOBART,))
+        })
 
     async def discover(chest: Chest, label: str) -> bool:
         # Put the owner on the floor, then clear the chest's interaction slot for his native opening.
@@ -190,7 +194,7 @@ async def frame(
                     ])
                 elif self.investigation and INVESTIGATE_WORDS in text and not self.asked:
                     self.asked = True
-                    step = FakeStep("Хильда, что ты видела о Вино?", [ToolCall("ask_witness", {
+                    step = FakeStep("Спрошу у Хильды, что она видела о Вино.", [ToolCall("ask_witness", {
                         "who": "Хильда", "said": INVESTIGATE_WORDS, "about": "Вино",
                     })])
                 elif self.investigation and not self.accused and any(
@@ -212,10 +216,12 @@ async def frame(
             for row in turns()
         ), 180 if not fake else 60)
         await settled()
-        rows = [row for row in turns() if row["id"] not in before]
-        conv = dialogue.conversations.get(LOBART)
-        quotes = [e.content for e in conv.memory.entries if e.role == "assistant"] if conv else []
-        quote = quotes[-1] if quotes else ""
+        rows = [row for row in turns() if row["id"] not in before
+                and words in row.get("trigger", {}).get("text", "")]
+        quote = " ".join(
+            str(step["text"]).strip() for row in rows for step in row.get("steps", [])
+            if step.get("text") and not step.get("silent")
+        )
         log.info("frame %s response: %s", "scripted" if fake else "live", quote)
         return finished and any(row.get("status") == "completed" for row in rows), quote, rows
 
@@ -231,7 +237,14 @@ async def frame(
         if not await place(LOBART, ROAD, to=culprit, distance=300, face=culprit):
             return False
         assignments = [(culprit, 1, 1000), (culprit, 0, 10), (LOBART, 1, 1000), (LOBART, 0, 1000)]
-        trigger = "DIR_FRAME_HEALTH"
+        trigger = f"DIR_FRAME_HEALTH_{label.upper()}"
+        wanted = [hp for _, _, hp in assignments]
+        health_reading: dict[str, Any] = {"wanted": wanted}
+
+        def health_matches(values: list[Any]) -> bool:
+            health_reading["actual"] = values
+            return values == wanted
+
         await link.patch_graph([triggers.trigger(trigger, triggers.STATE, [
             {"do": "set", "target": ["field", ["inst", npc], "ATTRIBUTE", index], "value": ["int", hp]}
             for npc, index, hp in assignments
@@ -239,17 +252,20 @@ async def frame(
         try:
             healthy = await _until_async(lambda: link.story_eval(LOBART, [
                 ["field", ["inst", npc], "ATTRIBUTE", index] for npc, index, _ in assignments
-            ]), lambda values: values == [hp for _, _, hp in assignments], 5)
+            ]), health_matches, 5)
         finally:
             await link.patch_graph([triggers.removal(trigger)])
-        if not check(f"{label}_health", healthy):
+        if not check(f"{label}_health", healthy, health_reading):
             return False
-        before = {npc: await count(npc, str(crime["item"])) for npc in (culprit, LOBART)}
         bodies[culprit].clear()
         bodies[LOBART].clear()
         await link.body_watch([culprit, LOBART], rate_hz=20)
         # The passive hero observes off the combat lane. HP and positions stay native after release.
         await link.debug("player_goto", waypoint=RETURN_ROAD)
+        before = {npc: await count(npc, str(crime["item"])) for npc in (culprit, LOBART)}
+        if label == "frame" and not check("frame_precombat_empty", before[culprit] == 0,
+                                          {"item": crime["item"], "inventory": before}):
+            return False
         command_at = len(commands)
         async with will._lock:
             await will.far_world.refresh(will._generation)
@@ -329,7 +345,11 @@ async def frame(
         if not check("chest", chest is not None, [(c.id, c.why) for c in found]):
             return _logged(results)
         assert chest is not None
-        choices = [i for i in chest.items if await count(MALAK, i.item) == 0]
+        # Native routines may create food for an eating animation. A missing outfit or other
+        # nonconsumable keeps the innocent's empty inventory stable through the later encounter.
+        consumable = ("ITFO_", "ITPO_", "ITPL_")
+        choices = [i for i in chest.items if not i.item.startswith(consumable)
+                   and await count(MALAK, i.item) == 0]
         if not check("innocent_has_no_goods", bool(choices), [i.item for i in choices]):
             return _logged(results)
         item = choices[0]
@@ -371,10 +391,11 @@ async def frame(
         for npc in farm:
             if not await place(npc, parked):
                 return _logged(results)
-        if not await place(MALAK, ROAD) or not await talk_ready():
+        if not await talk_ready():
             return _logged(results)
         # Malak is present in the normal situation, rather than an invented name in the fixture.
-        await link.debug("npc_goto", npc=MALAK, to=LOBART, distance=450, face=LOBART)
+        if not await place(MALAK, ROAD, to=LOBART, distance=450, face=LOBART):
+            return _logged(results)
         if fake:
             dialogue.llm = Script(cid)  # type: ignore[assignment]
         before_trust = trust.of(LOBART)
@@ -394,6 +415,7 @@ async def frame(
         if not await fight("frame", theft, MALAK):
             return _logged(results)
         await _until(lambda: any(f.get("crime") == cid for f in facts("blame_refuted")), 10)
+        await _until(lambda: any(f.get("blamed") == beliefs[0]["id"] for f in facts("caught")), 10)
         refuted = [f for f in facts("blame_refuted") if f.get("crime") == cid]
         caught = [f for f in facts("caught") if f.get("blamed") == beliefs[0]["id"]]
         if not check("frame_refuted", len(refuted) == 1 and refuted[0].get("culprit") == MALAK
@@ -406,7 +428,21 @@ async def frame(
             return _logged(results)
 
         # The second scene retains the first scene's trust consequence. Only the bodies are staged.
-        await link.debug("npc_goto", npc=MALAK, waypoint=parked)
+        # Keep the hero nearby while the defeated man gets up by himself. Debug movement rightly
+        # refuses an unconscious body; the next scene starts only after his native recovery.
+        recovery: dict[str, Any] = {}
+
+        async def recovered() -> bool:
+            views = await link.npc_view([MALAK])
+            view = views[0] if views else None
+            recovery["view"] = view.model_dump() if view is not None else None
+            return bool(view and view.hp > 0 and view.body in {"stand", "walk", "run"}
+                        and view.state not in {"ZS_UNCONSCIOUS", "ZS_ATTACK", "ZS_RANSACKBODY"})
+
+        if not check("frame_recovered", await _until_async(recovered, bool, 60), recovery):
+            return _logged(results)
+        if not await place(MALAK, parked):
+            return _logged(results)
         await link.debug("player_goto", waypoint=HOUSE)
         if not await place(LOBART, parked) or not await place(HILDA, parked):
             return _logged(results)
@@ -415,23 +451,47 @@ async def frame(
                      {"items": [i.item for i in chest.items], "waypoint": chest.waypoint}):
             return _logged(results)
         assert chest.waypoint is not None
-        stolen = next((i.item for i in chest.items if i.item != "ITMI_GOLD"), chest.items[0].item)
-        if not await place(VINO, chest.waypoint):
+        stolen = next((i.item for i in chest.items if not i.item.startswith(consumable)), chest.items[0].item)
+        if not await place(VINO, HOUSE):
             return _logged(results)
         # The owner sees an ordinary visitor, not the later transfer. Opening the robbed chest can
-        # therefore identify the new case as a suspicion, distinct from the earlier hero theft.
-        if not await place(LOBART, chest.waypoint, to=VINO, distance=300, face=VINO):
+        # therefore identify the new case as a suspicion, distinct from the earlier hero theft. Use
+        # the house's open floor: the chest's bed corner can occlude an otherwise nearby visitor.
+        # After catching the lie he watches a hero standing on top of him. Leave that observation
+        # radius on a real waypoint, while both the owner and visitor stay in native simulation.
+        visitor_pos = (await link.snapshot(VINO, fresh=True)).npc.pos
+        hero_spots = [p for p in points.values() if not p.get("room")
+                      and 1800 <= math.dist(tuple(p[a] for a in ("x", "y", "z")), visitor_pos) <= 2200]
+        if not check("investigation_observer_space", bool(hero_spots), [p["name"] for p in hero_spots]):
             return _logged(results)
+        hero_spot = min(hero_spots, key=lambda p: abs(
+            math.dist(tuple(p[a] for a in ("x", "y", "z")), visitor_pos) - 1900,
+        ))
+        await link.debug("player_goto", waypoint=hero_spot["name"])
+        visitor_memory: dict[str, Any] = {}
 
         async def visitor() -> bool:
             view = await crimes.sightings.desk.fresh(LOBART)
-            return bool(view and any(o.id == VINO for o in view.sees) and any(
-                s.who == VINO for s in crimes.sightings.mind(LOBART).sightings
-            ))
+            remembered = [s.record() for s in crimes.sightings.mind(LOBART).sightings if s.who == VINO]
+            visitor_memory.update(view=view.model_dump() if view is not None else None, sightings=remembered)
+            return bool(view and any(o.id == VINO for o in view.sees) and remembered)
 
-        if not check("investigation_visitor", await _until_async(visitor, bool, 10)):
+        visitor_ready, visitor_attempts = False, []
+        for offset in (-300, 300, -450, 450):
+            posed, pose = await prepare_npc_pose(link, LOBART, HOUSE, to=VINO, distance=offset, face=VINO)
+            visible, visibility = await wait_npc_visibility(link, LOBART, VINO) if posed else (False, {})
+            visitor_ready = visible and await _until_async(visitor, bool, 5)
+            visitor_attempts.append({
+                "offset": offset, "pose": pose, "visibility": visibility, "memory": dict(visitor_memory),
+            })
+            if visitor_ready:
+                break
+        if not check("investigation_visitor", visitor_ready, visitor_attempts):
             return _logged(results)
         if not await place(LOBART, parked):
+            return _logged(results)
+        await link.debug("player_goto", waypoint=HOUSE)
+        if not await place(VINO, chest.waypoint):
             return _logged(results)
         witness_ready, attempts = False, []
         for offset in (-300, 300, -450, 450):
@@ -469,7 +529,9 @@ async def frame(
             for f in facts("npc_crime_suspected")
         ), [f for f in facts("npc_crime_suspected") if f.get("crime") == did]):
             return _logged(results)
-        if not await place(VINO, ROAD) or not await talk_ready(witness=True):
+        if not await talk_ready(witness=True):
+            return _logged(results)
+        if not await place(VINO, ROAD, to=LOBART, distance=450, face=LOBART):
             return _logged(results)
         script = Script(did, investigation=True)
         dialogue.llm = script  # type: ignore[assignment]
