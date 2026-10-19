@@ -11,10 +11,12 @@ namespace {
 using Input = NavMemoryTeacher::Input;
 using Cell = NavMemoryTeacher::Cell;
 using Point = NavMemoryTeacher::Point;
+using DiagnosticsOptions = NavMemoryTeacher::DiagnosticsOptions;
+using Diagnostics = NavMemoryTeacher::Diagnostics;
 constexpr float Pi = 3.14159265358979323846f;
 constexpr int NearSize = 64, FarSize = 100;
 constexpr int NearCount = NearSize*NearSize, Count = NearCount+FarSize*FarSize;
-constexpr float NearCell = 25, FarCell = 200, NearExtent = 800, Radius = 30;
+constexpr float NearCell = 25, FarCell = 200, NearExtent = 800;
 constexpr float Infinity = std::numeric_limits<float>::infinity();
 
 float length(Point p) { return std::hypot(p.rightCm,p.forwardCm); }
@@ -27,11 +29,14 @@ bool dangerous(const Cell& c) {
     if(c.channels[k]!=0) return true;
   return false;
   }
-float cost(const Cell& c) {
+bool knownFree(const Cell& c) {
+  return c.channels[0]>0 && c.channels[1]>0 && !dangerous(c);
+  }
+float cost(const Cell& c,float unknownCost) {
   // Optimism: an unobserved cell costs four times clear observed ground,
   // rather than becoming an artificial wall at the edge of perception.
   const float knownFree=float(std::min(c.channels[0],c.channels[1]))/255.f;
-  return 1.f+3.f*(1.f-knownFree);
+  return 1.f+(unknownCost-1.f)*(1.f-knownFree);
   }
 bool insideNear(Point p) {
   return std::abs(p.rightCm)<NearExtent && std::abs(p.forwardCm)<NearExtent;
@@ -50,20 +55,43 @@ const Cell& cell(const Input& in,int i) {
 
 class Grid final {
   public:
-    explicit Grid(const Input& input):in(input),blocked(Count),active(Count),costs(Count) {
+    explicit Grid(const Input& input):Grid(input,DiagnosticsOptions{}) {}
+    Grid(const Input& input,const DiagnosticsOptions& parameters)
+      :in(input),options(parameters),blocked(Count),active(Count),costs(Count) {
       for(int i=0;i<Count;++i) {
         const Point p=center(i);
-        active[size_t(i)]=i<NearCount || !insideNear(p);
+        active[size_t(i)]=i<NearCount || (!options.nearOnly && !insideNear(p));
         blocked[size_t(i)]=!clear(p);
-        costs[size_t(i)]=cost(cell(in,i));
+        costs[size_t(i)]=cost(cell(in,i),options.unknownCost);
+        }
+      }
+    void statistics(Diagnostics& result) const {
+      std::array<uint32_t,2> activeCount={},blockedCount={},dangerCount={},freeCount={};
+      for(int i=0;i<Count;++i) {
+        const size_t layer=i<NearCount ? 0 : 1;
+        dangerCount[layer]+=dangerous(cell(in,i));
+        freeCount[layer]+=knownFree(cell(in,i));
+        if(active[size_t(i)]) {
+          ++activeCount[layer];
+          blockedCount[layer]+=blocked[size_t(i)]!=0;
+          }
+        }
+      for(size_t layer=0;layer<2;++layer) {
+        const float total=layer==0 ? float(NearCount) : float(Count-NearCount);
+        result.dangerFraction[layer]=float(dangerCount[layer])/total;
+        result.knownFreeFraction[layer]=float(freeCount[layer])/total;
+        result.blockedFraction[layer]=activeCount[layer]>0 ? float(blockedCount[layer])/float(activeCount[layer]) : 0.f;
         }
       }
     // Exact circle versus occupied cell square. Near/far retain their native
     // resolutions; far cells inside the near footprint cannot bypass a near
     // obstacle. A 30-cm body margin also applies across the layer boundary.
-    bool clear(Point p,float radius=Radius) const {
-      if(std::abs(p.rightCm)>10000-radius || std::abs(p.forwardCm)>10000-radius) return false;
+    bool clear(Point p) const { return clear(p,options.bodyRadiusCm); }
+    bool clear(Point p,float radius) const {
+      const float extent=options.nearOnly ? NearExtent : 10000.f;
+      if(std::abs(p.rightCm)>extent-radius || std::abs(p.forwardCm)>extent-radius) return false;
       const auto layer=[&](bool near) {
+        if(!near && options.nearOnly) return true;
         const int size=near ? NearSize : FarSize;
         const float step=near ? NearCell : FarCell;
         const int x0=std::max(0,int(std::floor((p.rightCm-radius)/step+float(size)*.5f)));
@@ -74,7 +102,8 @@ class Grid final {
           const int index=z*size+x+(near ? 0 : NearCount);
           const Point q=center(index);
           if(!near && insideNear(q)) continue;
-          if(!dangerous(cell(in,index))) continue;
+          const auto& evidence=cell(in,index);
+          if(!dangerous(evidence) && (!options.knownFreeOnly || knownFree(evidence))) continue;
           const float dx=std::max(0.f,std::abs(p.rightCm-q.rightCm)-step*.5f);
           const float dz=std::max(0.f,std::abs(p.forwardCm-q.forwardCm)-step*.5f);
           if(dx*dx+dz*dz<=radius*radius) return false;
@@ -130,15 +159,29 @@ class Grid final {
       }
   private:
     const Input& in;
+    const DiagnosticsOptions options;
     std::vector<uint8_t> blocked,active;
     std::vector<float> costs;
   };
 
-void plan(const Input& in,Point target,std::vector<Point>& route,float& routeLength,bool& complete) {
-  Grid grid(in);
-  // Keep the direction when a goal lies beyond the 200-m far map.
-  const float scale=std::max({1.f,std::abs(target.rightCm)/9700.f,std::abs(target.forwardCm)/9700.f});
+void plan(const Input& in,Point target,std::vector<Point>& route,float& routeLength,bool& complete,
+          const DiagnosticsOptions& options=DiagnosticsOptions{},Diagnostics* diagnostics=nullptr) {
+  Grid grid(in,options);
+  // Production retains its exact 9700-cm proxy. Near-only diagnostic deliberately
+  // stops at a 700-cm proxy, with no claim about the target outside that map.
+  const float proxyExtent=options.nearOnly ? 700.f : 9700.f;
+  const float scale=std::max({1.f,std::abs(target.rightCm)/proxyExtent,std::abs(target.forwardCm)/proxyExtent});
   const Point localTarget={target.rightCm/scale,target.forwardCm/scale};
+  if(diagnostics!=nullptr) {
+    diagnostics->target=target;diagnostics->localTarget=localTarget;diagnostics->targetScale=scale;
+    diagnostics->targetClamped=scale>1;
+    const float extent=options.nearOnly ? NearExtent : 10000.f;
+    diagnostics->targetOutsideMap=std::abs(target.rightCm)>=extent || std::abs(target.forwardCm)>=extent;
+    diagnostics->startClear=grid.clear({});diagnostics->targetClear=grid.clear(target);
+    diagnostics->snappedTargetDistanceCm=Infinity;
+    diagnostics->endpointDistanceToActualTargetCm=length(target);
+    grid.statistics(*diagnostics);
+    }
   int goal=-1,start=-1;
   float goalDistance=Infinity,startDistance=Infinity;
   for(int i=0;i<Count;++i) {
@@ -150,6 +193,11 @@ void plan(const Input& in,Point target,std::vector<Point>& route,float& routeLen
     if(i<NearCount && s<startDistance && s<=125 && grid.segment({},p,true)) {startDistance=s;start=i;}
     }
   route.clear();route.push_back({});routeLength=0;complete=false;
+  if(diagnostics!=nullptr) {
+    diagnostics->startFound=start>=0;
+    if(goal>=0) diagnostics->snappedTarget=center(goal);
+    diagnostics->snappedTargetDistanceCm=goalDistance;
+    }
   if(start<0 || goal<0) return;
   struct Entry final {float score=0;int index=0;};
   struct Later final {
@@ -169,9 +217,13 @@ void plan(const Input& in,Point target,std::vector<Point>& route,float& routeLen
     const int i=queue.top().index;queue.pop();
     if(closed[size_t(i)]) continue;
     closed[size_t(i)]=1;
+    if(diagnostics!=nullptr) ++diagnostics->reachableNodes;
     const float remaining=distance(center(i),center(goal));
     if(remaining<closestDistance) {closestDistance=remaining;closest=i;}
-    if(i==goal) {closest=i;complete=true;break;}
+    if(i==goal) {
+      closest=i;complete=true;
+      if(diagnostics==nullptr) break;
+      }
     grid.neighbors(i,[&](int j) {
       if(closed[size_t(j)]) return;
       const float score=best[size_t(i)]+distance(center(i),center(j))*(grid.traversal(i)+grid.traversal(j))*.5f;
@@ -183,8 +235,14 @@ void plan(const Input& in,Point target,std::vector<Point>& route,float& routeLen
   std::vector<Point> reverse;
   for(int i=closest;i>=0;i=parent[size_t(i)]) reverse.push_back(center(i));
   route.insert(route.end(),reverse.rbegin(),reverse.rend());
-  if(complete && scale==1 && grid.segment(route.back(),target)) route.push_back(target);
+  const bool actualTargetReached=complete && scale==1 && grid.segment(route.back(),target);
+  if(actualTargetReached) route.push_back(target);
   for(size_t i=1;i<route.size();++i)routeLength+=distance(route[i-1],route[i]);
+  if(diagnostics!=nullptr) {
+    diagnostics->actualTargetReached=actualTargetReached;
+    diagnostics->endpointDistanceToActualTargetCm=distance(route.back(),target);
+    diagnostics->planCost=best[size_t(closest)];
+    }
   }
 
 void quantize(const NavigationMemory::Layer& from,size_t size,float step,NavMemoryTeacher::Cell* out) {
@@ -212,6 +270,20 @@ NavMemoryTeacher::Input NavMemoryTeacher::Input::fromLearner(const NavDemoWriter
   result.body=body;result.roads=roads;result.previous=previous;
   quantize(memory.near,64,25,result.near.data());
   quantize(memory.far,100,200,result.far.data());
+  return result;
+  }
+
+NavMemoryTeacher::Diagnostics NavMemoryTeacher::probe(const Input& input,const DiagnosticsOptions& options) {
+  if(!std::isfinite(options.bodyRadiusCm) || options.bodyRadiusCm<0 || options.bodyRadiusCm>200 ||
+     !std::isfinite(options.unknownCost) || options.unknownCost<1)
+    throw std::runtime_error("memory teacher diagnostics: invalid analysis options");
+  const auto& direction=input.roads.beyondKnown ? input.roads.goalDirection : input.roads.carrotDirection;
+  const float targetDistance=input.roads.beyondKnown ? input.roads.goalDistanceCm : input.roads.carrotDistanceCm;
+  const Point target={direction[0]*targetDistance,direction[2]*targetDistance};
+  if(!std::isfinite(target.rightCm) || !std::isfinite(target.forwardCm) || !std::isfinite(targetDistance) || targetDistance<0)
+    throw std::runtime_error("memory teacher diagnostics: invalid learner target");
+  Diagnostics result;
+  ::plan(input,target,result.path,result.planLengthCm,result.planComplete,options,&result);
   return result;
   }
 

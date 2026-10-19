@@ -35,6 +35,31 @@ class NavMemoryTeacher final {
       float rightCm = 0, forwardCm = 0;
       };
 
+    // Read-only offline probes. These parameters never enter decide(), whose
+    // production radius/cost and state are unchanged. Near-only plans to a
+    // bounded local proxy and must not be read as reaching a distant goal.
+    struct DiagnosticsOptions final {
+      float bodyRadiusCm = 30, unknownCost = 4;
+      bool nearOnly = false, knownFreeOnly = false;
+      };
+    struct Diagnostics final {
+      bool planComplete = false, actualTargetReached = false;
+      bool targetOutsideMap = false, targetClamped = false;
+      bool targetClear = false, startClear = false, startFound = false;
+      Point target, localTarget, snappedTarget;
+      float targetScale = 1;
+      float snappedTargetDistanceCm = 0, endpointDistanceToActualTargetCm = 0;
+      float planLengthCm = 0;
+      // Exact A* graph cost (start node has cost zero, as in production).
+      float planCost = 0;
+      // Raw dangerous / known-free evidence over each native-resolution map.
+      // Blocked fraction uses active graph nodes (far excludes near overlap).
+      std::array<float,2> dangerFraction = {}, blockedFraction = {}, knownFreeFraction = {};
+      uint32_t reachableNodes = 0;
+      std::vector<Point> path;
+      };
+    static Diagnostics probe(const Input& input, const DiagnosticsOptions& options);
+
     void reset();
     // Call exactly once per 100-ms decision, reset at every episode boundary.
     // Airborne observations never request jumps or climbing.

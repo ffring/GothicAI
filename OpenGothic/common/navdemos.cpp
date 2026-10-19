@@ -479,6 +479,41 @@ void planV2(World& world,Npc& npc,std::ostream& out,const std::string& label,
   out<<",\"start_supported\":"<<(floor.hasCol && floor.n.y>=.65f && std::abs(floor.v.y-position.y)<=20.f)<<"}\n";
   if(!out)throw std::runtime_error("navdemos plan-v2 write failed");
 }
+void detourPlanV3(World& world,std::ostream& out,const std::string& label,
+                  const std::string& from,const std::string& to) {
+  // Evaluation only: this path goes to the actual final goal and never enters
+  // NavMemoryTeacher or its learner-input boundary.
+  const auto start=demoPoint(world,from),goal=demoPoint(world,to);
+  const auto& mesh=NavBench::navigationMesh(world);
+  const auto path=mesh.findPath(meters(start),meters(goal));
+  out<<"{\"label\":"<<std::quoted(label)<<",\"start\":"<<std::quoted(from)<<",\"goal\":"<<std::quoted(to)
+     <<",\"start_cm\":";vector(out,start);out<<",\"goal_cm\":";vector(out,goal);
+  out<<",\"complete\":"<<path.complete<<",\"reason\":"<<std::quoted(path.reason)
+     <<",\"length_cm\":";jsonNumber(out,path.length*100.f);
+  out<<",\"start_snap_cm\":";jsonNumber(out,path.startSnapDistance*100.f);
+  out<<",\"end_snap_cm\":";jsonNumber(out,path.endSnapDistance*100.f);
+  out<<",\"straight_walkable\":"<<mesh.straightWalkable(meters(start),meters(goal))
+     <<",\"corners_cm\":[";
+  for(size_t i=0;i<path.corners.size();++i) {
+    if(i!=0) {
+      out<<',';
+    }
+    vector(out,cm(path.corners[i]));
+  }
+  out<<"],\"transitions\":[";
+  for(size_t i=0;i<path.transitions.size();++i) {
+    if(i!=0) {
+      out<<',';
+    }
+    const auto& link=path.transitions[i];
+    out<<"{\"id\":"<<link.id<<",\"type\":"<<std::quoted(transitionName(link.type))<<",\"start_cm\":";
+    vector(out,cm(link.start));out<<",\"end_cm\":";vector(out,cm(link.end));out<<'}';
+  }
+  out<<"]}\n";
+  if(!out) {
+    throw std::runtime_error("navdemos detour-plans-v3 write failed");
+  }
+}
 void probeObject(World& world,Npc& npc,std::ostream& out,const std::string& label,
                  const std::string& from,const std::string& to,
                  const std::string& openingIn={},const std::string& openingOut={}) {
@@ -1226,6 +1261,43 @@ void NavDemos::reset() {legacy=Episode{};population=Population{};settings=Settin
 void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player,const std::string& output) {
   auto a=args;
   auto& ep=legacy;
+  if(a.size()>=2 && a[1]=="detour-plans-v3") {
+    if(running() || NavBench::running()) {
+      throw std::runtime_error("navdemos cannot query Detour plans during episode");
+    }
+    if(a.size()!=3) {
+      throw std::runtime_error("navdemos detour-plans-v3 FILE (rows LABEL START GOAL)");
+    }
+    std::ifstream input(a[2]);
+    if(!input) {
+      throw std::runtime_error("navdemos cannot read detour-plans-v3 file");
+    }
+    std::ofstream out(std::filesystem::path(output)/"detour-plans-v3.jsonl");
+    if(!out) {
+      throw std::runtime_error("navdemos cannot write detour-plans-v3.jsonl");
+    }
+    out<<std::setprecision(9)<<std::boolalpha;
+    std::string line;
+    while(std::getline(input,line)) {
+      std::istringstream row(line);
+      std::string label,from,to,extra;
+      if(!(row>>label) || label[0]=='#') {
+        continue;
+      }
+      if(!(row>>from>>to) || (row>>extra)) {
+        throw std::runtime_error("navdemos detour-plans-v3 rows LABEL START GOAL");
+      }
+      detourPlanV3(w,out,label,from,to);
+    }
+    if(!input.eof()) {
+      throw std::runtime_error("navdemos detour-plans-v3 read failed");
+    }
+    out.close();
+    if(!out) {
+      throw std::runtime_error("navdemos detour-plans-v3 write failed");
+    }
+    return;
+  }
   if(a.size()>=2 && a[1]=="points-v3") {
     if(running()) {
       throw std::runtime_error("navdemos cannot export points during episode");
