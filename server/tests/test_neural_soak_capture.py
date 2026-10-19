@@ -3,6 +3,9 @@
 from collections import Counter, deque
 from types import SimpleNamespace
 
+import pytest
+
+from gothic_ai.bodypilot import BodyPilot
 from gothic_ai.protocol import BodyLease
 from gothic_ai.scenarios.neural_soak_capture import CaptureTracker
 
@@ -16,8 +19,9 @@ def rig(*, actor="BANDIT", values=(7, 1, 1, 1, 0)):
 
     link = SimpleNamespace(body_leases={}, values=values, story_eval=story_eval)
     pilot = SimpleNamespace(
-        people={actor: SimpleNamespace(state="ZS_ATTACK", activity="fight")},
+        people={actor: SimpleNamespace(state="ZS_ATTACK", activity="fight", guild=7, distance=1000)},
         fights={}, summaries=deque(maxlen=32), _releasing={}, max_fights=4,
+        talking=lambda npc: False, _companion=lambda npc: False, unavailable=lambda npc: False,
     )
     tracker = CaptureTracker(
         link, pilot, lambda kind, **fields: events.append({"kind": kind, **fields}),
@@ -48,6 +52,41 @@ async def test_foreign_target_is_excluded_even_when_the_pilot_has_a_lease():
     assert not test.tracker.eligible and not test.tracker.captured
     assert record["status"] == "excluded" and record["reason"] == "target_not_allowed"
     assert test.events[-1]["kind"] == "capture_result"
+
+
+@pytest.mark.parametrize("distance, allowed", [(2000, True), (2001, False), (6000, False)])
+async def test_capture_opportunities_respect_the_pilots_distance_limit(distance, allowed):
+    test = rig()
+    test.pilot.people["BANDIT"].distance = distance
+
+    assert BodyPilot._allowed(test.pilot, "BANDIT") is allowed
+    await test.tracker.poll(1, {"BANDIT"})
+    record, = test.tracker.finish_wave(1)
+
+    assert record["eligible"] is allowed
+    if allowed:
+        assert record["status"] == "missed"
+    else:
+        assert record["status"] == "excluded"
+        assert record["exclusion_reason"] == "out_of_range"
+        assert record["validation_reasons"] == {"out_of_range": 1}
+        assert record["window_s"] == 0
+        assert not test.calls
+
+
+async def test_leaving_range_ends_the_opportunity_even_with_cached_live_validation():
+    test = rig()
+    await test.tracker.poll(1, {"BANDIT"})
+    test.pilot.people["BANDIT"].distance = 6000
+    test.now[0] = 0.1  # Still inside the live guild/weapon/target validation cache.
+    await test.tracker.poll(1, {"BANDIT"})
+    test.now[0] = 10
+    record, = test.tracker.finish_wave(1)
+
+    assert len(test.calls) == 1
+    assert record["window_s"] == 0.1
+    assert record["validation_reasons"] == {"eligible": 1, "out_of_range": 1}
+    assert test.events[-2]["reason"] == "out_of_range"
 
 
 async def test_releasing_owners_fill_capacity_but_an_actors_own_slot_does_not():

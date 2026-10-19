@@ -13,7 +13,8 @@ from ..game import GameLink
 
 VALIDATION_INTERVAL = 0.5
 STRUCTURAL_EXCLUSIONS = frozenset({
-    "target_not_allowed", "not_one_handed", "not_human", "no_capacity", "previous_wave_owner",
+    "target_not_allowed", "not_one_handed", "not_human", "out_of_range", "no_capacity",
+    "previous_wave_owner",
 })
 
 
@@ -81,6 +82,8 @@ class CaptureTracker:
             return "not_in_roster"
         if entry.state.upper() != "ZS_ATTACK" or entry.activity not in {"fight", "body"}:
             return "not_attacking"
+        if entry.distance > 2000:
+            return "out_of_range"
         if now - item.validated_at < VALIDATION_INTERVAL:
             return item.validation_reason
         weapon = ["call", "NPC_GETEQUIPPEDMELEEWEAPON", ["inst", "SELF"]]
