@@ -2,7 +2,7 @@
 # Submit one bounded phase and return immediately. No training or PPO paths.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover|routes|record-pilot [1|2]|demo-pilot|record}"
+stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover|routes|record-pilot [1|2]|demo-pilot|record|analyze}"
 attempt="${2:-1}"
 export GQ_OWNER=nav-jumps
 host=ryzen
@@ -204,6 +204,30 @@ ROUTES
     write_record_script
     "$ROOT/scripts/gq" submit --class batch --threads 2 --mem 6G --max 2h \
       --name "nav jumps record 267 teacher v2 CV 240s" -- bash "$task/record.sh"
+    ;;
+  analyze)
+    # Offline only: verify every attempt, then explain successful demos from
+    # learner_input. No engine, teacher rollout or model training is started.
+    ssh "$host" "mkdir -p '$source_dir/scripts/tests' '$task/analysis'"
+    rsync -a "$ROOT/scripts/nav_jump_observability.py" "$host:$source_dir/scripts/"
+    rsync -a "$ROOT/scripts/tests/test_nav_jump_observability.py" "$host:$source_dir/scripts/tests/"
+    ssh "$host" "cat > '$task/analysis.sh'" <<'ANALYSIS'
+#!/usr/bin/env bash
+set -euo pipefail
+task="$(cd "$(dirname "$0")" && pwd)"
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
+cd "$task/source"
+df -h "$HOME"
+"$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_jump_observability.py
+"$task/.venv/bin/python" -I "$task/source/scripts/nav_demos.py" check \
+  "$HOME/gothic-ai/nav-demos-jumps/final" > "$task/analysis/navdemo-check.json"
+"$task/.venv/bin/python" -I "$task/source/scripts/nav_jump_observability.py" \
+  "$HOME/gothic-ai/nav-demos-jumps/final" --successful-only \
+  --success-criterion demo_goal_action_landing_side_v1 \
+  --output "$task/analysis/observability.json" --csv "$task/analysis/decisions.csv"
+ANALYSIS
+    "$ROOT/scripts/gq" submit --class batch --threads 2 --mem 6G --max 30m \
+      --name "nav jumps final NAVDEMO check and learner observability" -- bash "$task/analysis.sh"
     ;;
   *) echo "Unknown phase: $stage" >&2; exit 2 ;;
 esac
