@@ -47,6 +47,21 @@ def run(command):
     return result.stdout
 
 
+def foliage(args):
+    """Transparent leaf-only texture overrides; collision meshes stay intact."""
+    from PIL import Image
+    names = (
+        "TREE_NEEDLE_02", "TREE_NEEDLE_03", "BRANCH_01", "BRANCH_02",
+        "BRANCH_03", "BRANCH_06", "BRANCH_07", "FARN_01", "LEAVE_01",
+        "LEAVE_03", "GRASS_DECAL_01", "HOUSEGRASS_DECAL_01",
+    )
+    args.out.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        Image.new("RGBA", (4, 4), (0, 0, 0, 0)).save(args.out / f"NW_NATURE_{name}.png")
+    return {"directory": str(args.out.resolve()), "transparent_textures": len(names),
+            "purpose": "Leaf/grass render overrides for matching OFF/ON bench takes; physics unchanged"}
+
+
 def probe(path):
     data = json.loads(run([
         "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
@@ -513,9 +528,12 @@ def main():
     timing = commands.add_parser("perf", help="Check Mac native 30-second physics p95 and app FPS")
     timing.add_argument("--off", type=Path, required=True)
     timing.add_argument("--on", type=Path, required=True)
+    leaves = commands.add_parser("foliage", help="Create leaf-only transparent texture overrides for a bench")
+    leaves.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     try:
-        result = {"compose": compose, "metrics": metrics, "perf": compare_performance}[args.command](args)
+        result = {"compose": compose, "metrics": metrics, "perf": compare_performance,
+                  "foliage": foliage}[args.command](args)
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
         if args.command in ("metrics", "perf") and not result["pass"]:
             return 1

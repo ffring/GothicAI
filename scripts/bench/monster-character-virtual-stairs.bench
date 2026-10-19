@@ -8,7 +8,7 @@ on: monstercharacter on
 overlay off
 monstercharacter route wolf_stairs
 wait 600
-monstercharacter follow 350 160 270
+monstercharacter follow 350 100 270
 view clean 300
 rec wolf_stairs
 monstercharacter begin

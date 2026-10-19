@@ -991,7 +991,15 @@ and records a twelve-second `wolf_stairs` take with `watch id`, `cam follow` and
 `view clean`. Its `monster_character_stair_step` events include body state, signed
 physical/visual Y changes, requested animation movement and separate CV
 ExtendedUpdate/WalkStairs positions. A recorded take still needs framing review;
-the report documents the current foliage obstruction.
+the report documents the accepted pair and the earlier obstructed diagnostics.
+For the stair pair, `uv run scripts/monster_character_virtual_videos.py foliage --out DIR`
+creates twelve transparent leaf/grass PNG overrides. Pass the same absolute
+`OPENGOTHIC_TEXTURES=DIR` to both fresh processes: ground, trunks and all collision
+meshes remain intact. The video title discloses the render-only foliage removal.
+The monster stair policy limits physical automatic rise to the guild/slope budget
+and at most 12 cm per update, while using only the remaining horizontal request.
+Player/human paths retain the native policy; the ten-centimetre-riser contract
+explicitly selects the monster policy. Presentation lag stays within 10 cm.
 `monster-character-virtual-stair-attack` enters `T_FISTATTACKMOVE` while a stair
 presentation correction is pending, without resetting that correction. It tests
 the grounded attack handoff separately from physical lunge range. The numerical

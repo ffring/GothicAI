@@ -3088,8 +3088,91 @@ namespace {
                 "and four independent hero/human flag combinations passed OFF/ON/OFF\n");
     }
 
+  void testMonsterCharacterVirtualShortRisers() {
+    constexpr float radius=15.f, height=83.f, stepHeight=60.f;
+    constexpr float maxSlope=50.f*.01745329252f;
+    constexpr int stepCount=12;
+    constexpr float riser=10.f;
+    Resources resources;
+    zenkit::ModelHierarchy hierarchy;
+    hierarchy.collision_bbox={{-radius,0,-radius},{radius,height,radius}};
+    Skeleton skeleton(hierarchy,nullptr,"WOLF");
+    const float mass=Ragdoll::speciesMass("WOLF");
+    // Both stair pitches are below the fifty-degree limit. Include a narrow
+    // tread so the ascent budget is checked with closely spaced risers too.
+    for(float tread:{10.f,20.f}) {
+      auto terrain=movableFloor();
+      terrain.vertices.clear();
+      terrain.polygons.vertex_indices.clear();
+      terrain.polygons.material_indices.clear();
+      const auto surface=[&](float x0,float y0,float x1,float y1) {
+        const auto first=uint32_t(terrain.vertices.size());
+        terrain.vertices.insert(terrain.vertices.end(),{{x0,y0,-1000},{x0,y0,1000},
+                                                        {x1,y1,1000},{x1,y1,-1000}});
+        for(uint32_t index:{0u,2u,1u,0u,3u,2u})
+          terrain.polygons.vertex_indices.push_back(first+index);
+        terrain.polygons.material_indices.insert(terrain.polygons.material_indices.end(),{0,0});
+        };
+      surface(-1000,0,100,0);
+      for(int step=0;step<stepCount;++step) {
+        const float x=100.f+tread*float(step), y=riser*float(step);
+        surface(x,y,x,y+riser);
+        surface(x,y+riser,step+1==stepCount ? 1000.f : x+tread,y+riser);
+        }
+      for(bool limitStairRise:{false,true}) {
+        DynamicWorld world(nullptr,terrain);
+        auto wolf=world.addGhostObj(&skeleton);
+        wolf.setPosition({50,0,0});
+        wolf.setVirtualDiagnosticsEnabled(true);
+        // Use the monster policy of the actual walking controller. The 60 cm
+        // guild step is deliberately much higher than these repeated city-sized
+        // risers; limiting a test-only stepHeight would conceal the old shortcut.
+        auto state=wolf.moveVirtual({},0,stepHeight,maxSlope,mass,nullptr,limitStairRise);
+        require(state.grounded,"wolf short-riser contract must start supported on the flat approach");
+        const float target=100.f+float(stepCount-1)*tread+80.f;
+        float maximumRise=0.f, maximumDrop=0.f, progress=state.position.x;
+        unsigned stalled=0, maximumStall=0, airborne=0, maximumAirborne=0;
+        int stairAttempts=0, frames=0;
+        for(;frames<240 && state.position.x<target;++frames) {
+          const uint64_t dt=frames%3==0 ? 34 : 33;
+          const auto previous=state.position;
+          // 210 cm/s at the same 30 Hz cadence as the paired video bench.
+          state=wolf.moveVirtual({.21f*float(dt),0,0},dt,stepHeight,maxSlope,mass,nullptr,limitStairRise);
+          maximumRise=std::max(maximumRise,state.position.y-previous.y);
+          maximumDrop=std::max(maximumDrop,previous.y-state.position.y);
+          if(state.position.x-progress>=1.f) {
+            progress=state.position.x;
+            stalled=0;
+            } else {
+            stalled+=unsigned(dt);
+            maximumStall=std::max(maximumStall,stalled);
+            }
+          airborne=state.grounded ? 0 : airborne+unsigned(dt);
+          maximumAirborne=std::max(maximumAirborne,airborne);
+          CharacterVirtualDiagnostics diagnostic;
+          require(wolf.virtualDiagnostics(diagnostic),"wolf short-riser traversal must retain native stair diagnostics");
+          stairAttempts+=diagnostic.stairAttempted ? 1 : 0;
+          }
+        std::printf("Monster CharacterVirtual WOLF 10 cm risers / %.0f cm treads at 30 Hz, limited %d: "
+                    "frames %d, stair attempts %d, max root rise %.6f cm, max drop %.6f cm, "
+                    "max stall %u ms, max airborne %u ms, feet (%.6f,%.6f,%.6f) cm\n",
+                    double(tread),int(limitStairRise),frames,stairAttempts,double(maximumRise),double(maximumDrop),maximumStall,maximumAirborne,
+                    double(state.position.x),double(state.position.y),double(state.position.z));
+        if(!limitStairRise)
+          continue;
+        require(stairAttempts>0,"the ten-centimetre wolf staircase must exercise native automatic stair walking");
+        require(maximumRise<=12.01f,"a walking monster must not raise its physical root by over twelve centimetres per city-stair update");
+        require(state.grounded && state.position.x>=target,"the wolf must finish the repeated ten-centimetre staircase on its upper landing");
+        requireNear(state.position.y,float(stepCount)*riser,2.f,"the wolf must finish at the twelve-riser landing height");
+        require(maximumStall<=1000,"the limited monster stair walk must not stall for more than one second");
+        require(maximumDrop<=2.f && maximumAirborne<=100,"ascending short risers must not make the wolf fall or lose support for over one tenth of a second");
+        }
+      }
+    }
+
   void testMonsterCharacterVirtual() {
     testMonsterCharacterVirtualEligibility();
+    testMonsterCharacterVirtualShortRisers();
     constexpr float radians=.01745329252f;
     struct Monster {
       const char* name;

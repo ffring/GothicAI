@@ -146,7 +146,8 @@ class DynamicWorld final {
           };
         // Walking only: displacement in cm, dt in ms, slope in radians, mass in kg.
         VirtualMoveResult moveVirtual(const Tempest::Vec3& displacement, uint64_t dt,
-                                      float stepHeight, float maxSlope, float mass, Npc* culprit = nullptr);
+                                      float stepHeight, float maxSlope, float mass, Npc* culprit = nullptr,
+                                      bool limitStairRise = false);
         VirtualMoveResult carryVirtual(uint64_t dt, Npc* culprit = nullptr);
         void resetVirtual();
         void setVirtualDiagnosticsEnabled(bool enabled);
@@ -161,7 +162,8 @@ class DynamicWorld final {
         auto  implTryMove    (const Tempest::Vec3& dp, const Tempest::Vec3& pos0, CollisionTest& out) -> DynamicWorld::MoveCode;
         void  implSetPosition(const Tempest::Vec3& pos);
         VirtualMoveResult implMoveVirtual(const Tempest::Vec3& displacement, uint64_t dt,
-                                         float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry);
+                                         float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry,
+                                         bool limitStairRise = false);
 
       friend class DynamicWorld;
       };

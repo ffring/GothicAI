@@ -9207,7 +9207,7 @@ void monsterCharacterFields(World& world,uint64_t dt) {
     [](const auto& actor){return actor.arrivals>=3;});
   if(arrived && !route.reached) {
     route.reached=true;route.arrived=world.tickCount();
-    if(route.name=="wolf_terrain") {
+    if(route.name=="wolf_terrain" || route.name=="wolf_stairs") {
       if(route.heroRun)if(auto* hero=Gothic::inst().player()) {hero->clearAiQueue();hero->clearGoTo();hero->stopWalking();}
       // The test ends the authored chase after a measured catch. Keep native
       // idle physics running for the rest of the movie without a second goal.

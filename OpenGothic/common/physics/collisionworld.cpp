@@ -862,7 +862,8 @@ bool CollisionWorld::VirtualCharacter::diagnostics(CharacterVirtualDiagnostics& 
   }
 
 CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
-    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit,
+    bool limitStairRise) {
   const auto started = std::chrono::steady_clock::now();
   auto& state = *impl;
   auto& character = *state.character;
@@ -1041,9 +1042,25 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
             best = direction.Dot(forward);
             }
           }
-        const auto forwardStep = direction*std::max(settings.mWalkStairsMinStepForward,desiredLength-achievedLength);
+        // Monster guild steps are high enough to span several architectural
+        // risers. Jolt's minimum forward step must not turn one animation
+        // update into an extra 20 cm of chase movement. Lift only as far as
+        // this update permits and sweep the remaining requested distance; the
+        // ordinary up/forward/down casts still choose a nonpenetrating landing.
+        const float forwardDistance = desiredLength-achievedLength;
+        const auto forwardStep = direction*(limitStairRise ? forwardDistance :
+                                            std::max(settings.mWalkStairsMinStepForward,forwardDistance));
+        float stairUp = step;
+        if(limitStairRise) {
+          constexpr float oneRiser = .10f; // metres, an ordinary low stair riser
+          constexpr float maxRise = .12f; // one riser plus capsule/contact tolerance
+          const float slopeRise = desiredLength*std::tan(std::clamp(maxSlope,0.f,1.553343f));
+          const float riseBudget = std::min({step,slopeRise+oneRiser,maxRise});
+          const float achievedRise = std::max(0.f,achieved.Dot(up));
+          stairUp = std::max(0.f,riseBudget-achievedRise);
+          }
         JPH::CharacterVirtual::WalkStairsDiagnostics stairProbe;
-        const bool stepped = character.WalkStairs(seconds,up*step,forwardStep,direction*settings.mWalkStairsStepForwardTest,
+        const bool stepped = stairUp>0.f && character.WalkStairs(seconds,up*stairUp,forwardStep,direction*settings.mWalkStairsStepForwardTest,
                                                 settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator,
                                                 diagnostic!=nullptr ? &stairProbe : nullptr);
         if(diagnostic!=nullptr) {

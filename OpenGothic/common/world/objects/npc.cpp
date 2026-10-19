@@ -7204,23 +7204,19 @@ void Npc::updateCharacterVisualHeight() {
 
   if(!isPlayer() && !isHuman() && (enabled || finishNpcBlend) &&
      characterVisualHasSample && characterVisualGroundSample && now>=characterVisualSampleTick) {
-    // A monster's native stair step can cross several low risers in one update.
-    // The support-plane estimate may explain that rise as a slope, leaving no
-    // residual to blend above. Limit the final presentation, including release
-    // of its offset; keep the remainder in the same 100 ms blend history.
-    // The physical root, native step height and intentional attack motion stay
-    // with MoveAlgo. Human/player presentation keeps its existing policy.
-    constexpr float visualSpeed = 330.f; // cm/s: at most 11.22 cm at 30 Hz (34 ms)
-    const float limit = std::min(12.f,visualSpeed*float(now-characterVisualSampleTick)*.001f);
+    // Releasing an earlier stair blend can add to this update's bounded
+    // physical rise. Keep that small presentation remainder in the blend,
+    // while retaining the same ten-centimetre lag limit as human NPCs.
+    constexpr float maxVisualStep = 12.f; // cm per movement update
     const float previousY = characterVisualSamplePosition.y+previousOffset;
     const float desiredY = at.y+characterVisualYOffset;
-    const float correction = std::clamp(desiredY,previousY-limit,previousY+limit)-desiredY;
+    const float blendedY = std::clamp(desiredY,previousY-maxVisualStep,previousY+maxVisualStep);
+    const float limitedY = std::clamp(blendedY,at.y-maxVisualLag,at.y+maxVisualLag);
+    const float correction = limitedY-desiredY;
     if(correction!=0) {
       characterVisualSteps.push_back({now,correction});
       characterVisualYOffset += correction;
       }
-    // The retained rate-limited remainder may temporarily exceed maxVisualLag.
-    // Clamping it again here would reintroduce the very jump being smoothed.
     }
 
   // Keep a baseline even while the freshly loaded controller is inactive. Its first
