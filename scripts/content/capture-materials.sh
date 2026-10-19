@@ -153,6 +153,8 @@ cp -p "$bin" "$task/build/opengothic/Gothic2Notr"
 printf '%s\n' "$digest" >"$task/build/source.sha256"
 SH
 rsync -a -- "$STAGING/tools/" "$HOST:$TASK/tools/"
+# The original stand runner reads these helpers directly beneath its task root.
+rsync -a -- "$STAGING/tools/gpu-nvidia.py" "$STAGING/tools/discard-ffmpeg.sh" "$HOST:$TASK/"
 rsync -a -- "$STAGING/content/" "$HOST:$TASK/inputs/$RUN/content/"
 rsync -a -- "$STAGING/save_slot_1.sav" "$HOST:$TASK/save_slot_1.sav"
 set +e
