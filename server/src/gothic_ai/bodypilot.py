@@ -178,6 +178,7 @@ class FightSummary:
     max_batch_lag_game_ms: int
     service_p50_ms: float | None
     service_p95_ms: float | None
+    service_p99_ms: float | None
     packet_to_request_p50_ms: float | None
     packet_to_request_p95_ms: float | None
     packet_to_response_p50_ms: float | None
@@ -1887,6 +1888,7 @@ class BodyFight:
             max_batch_lag_game_ms=self._max_batch_lag_game_ms,
             service_p50_ms=_percentile(self._latencies, 0.50),
             service_p95_ms=_percentile(self._latencies, 0.95),
+            service_p99_ms=_percentile(self._latencies, 0.99),
             packet_to_request_p50_ms=_percentile(self._packet_to_request, 0.50),
             packet_to_request_p95_ms=_percentile(self._packet_to_request, 0.95),
             packet_to_response_p50_ms=_percentile(self._packet_to_response, 0.50),
@@ -1931,7 +1933,8 @@ class BodyFight:
             "release_late_seconds=%s "
             "decisions=%d fallback=%d memory_only_lag_rows=%d observation_too_old=%d "
             "policy_memory_resets=%d max_batch_rows=%d max_batch_lag_game_ms=%d service_p50_ms=%s "
-            "service_p95_ms=%s packet_to_request_p50_ms=%s packet_to_request_p95_ms=%s "
+            "service_p95_ms=%s service_p99_ms=%s "
+            "packet_to_request_p50_ms=%s packet_to_request_p95_ms=%s "
             "packet_to_response_p50_ms=%s packet_to_response_p95_ms=%s "
             "response_to_action_p50_ms=%s response_to_action_p95_ms=%s "
             "packet_to_action_p50_ms=%s packet_to_action_p95_ms=%s "
@@ -1957,6 +1960,7 @@ class BodyFight:
             summary.max_batch_lag_game_ms,
             summary.service_p50_ms,
             summary.service_p95_ms,
+            summary.service_p99_ms,
             summary.packet_to_request_p50_ms,
             summary.packet_to_request_p95_ms,
             summary.packet_to_response_p50_ms,

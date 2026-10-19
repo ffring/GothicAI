@@ -764,10 +764,25 @@ async def _native_combat_available(link: GameLink, pilot: BodyPilot | None, npc:
 
 
 async def serve(args: argparse.Namespace) -> int:
-    if args.scenario in {"neural", "neural-companion", "neural-group", "neural-talk", "neural-load"} and (
-        not args.body_url or not args.neural_body
-    ):
+    soak_control = os.environ.get("GOTHIC_SOAK_CONTROL") == "1"
+    if soak_control and args.scenario != "neural-soak":
+        log.error("GOTHIC_SOAK_CONTROL requires --scenario neural-soak")
+        return 2
+    if soak_control and args.neural_body:
+        log.error("scenario neural-soak control requires --no-neural-body")
+        return 2
+    if args.scenario in {
+        "neural",
+        "neural-companion",
+        "neural-group",
+        "neural-talk",
+        "neural-load",
+        "neural-soak",
+    } and not soak_control and (not args.body_url or not args.neural_body):
         log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
+        return 2
+    if args.scenario == "neural-soak" and args.llm != "fake":
+        log.error("scenario neural-soak requires --llm fake")
         return 2
     done = asyncio.Event()
     exit_code = 0
@@ -1361,6 +1376,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.memprobe_scenario(
                     link, bodies=state.bodies, log_dir=where, llm_name=state.dialogue.llm.name,
                     body_enabled=bodypilot is not None or bool(args.body_url),
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "neural-soak":
+                results = await scenarios.neural_soak_scenario(
+                    link, state.dialogue, bodypilot, log_dir=Path(args.memory_db).parent
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -2576,6 +2598,7 @@ def main() -> None:
             "neural-group",
             "neural-talk",
             "neural-load",
+            "neural-soak",
             "memprobe",
             "m5c",
             "m5e",

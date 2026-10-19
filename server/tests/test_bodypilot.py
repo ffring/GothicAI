@@ -2495,6 +2495,7 @@ async def test_completed_fight_summary_survives_counter_reset_and_the_next_fight
         assert summary.decisions == 3 and summary.fallbacks == 0
         assert summary.service_p50_ms == latencies[1]
         assert summary.service_p95_ms == latencies[-1]
+        assert summary.service_p99_ms == latencies[-1]
         assert summary.acquire_refusals == summary.action_rejections == ()
         assert summary.transient_rejections_consecutive == 0
         assert summary.fight_seconds == pytest.approx(0.75)
@@ -2511,6 +2512,25 @@ async def test_completed_fight_summary_survives_counter_reset_and_the_next_fight
         await rig.watch()
         assert rig.pilot.last_summary is summary
         assert summary.decisions == 3
+
+
+@pytest.mark.parametrize(("latencies", "p95", "p99"), [
+    ([], None, None),
+    ([7.5], 7.5, 7.5),
+    (list(range(100, 0, -1)), 95, 99),
+])
+async def test_completed_fight_service_tail_percentiles(latencies, p95, p99):
+    async with running() as rig:
+        await rig.active()
+        rig.fight._latencies[:] = latencies
+        row = fighter(4, owned=True)
+        row["self"]["down"] = True
+        rig.bridge.emit(row)
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.service_p95_ms == p95
+        assert summary.service_p99_ms == p99
+        assert not rig.fight._latencies
 
 
 async def test_latency_breakdown_ends_at_action_send_before_bridge_ack(monkeypatch, caplog):

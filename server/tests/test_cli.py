@@ -174,6 +174,36 @@ async def test_encounter_worker_starts_without_a_behavioral_planner(monkeypatch)
 
 
 @pytest.mark.parametrize(
+    ("scenario", "control", "enabled", "url", "llm", "valid"),
+    [
+        ("neural-soak", "1", False, None, "fake", True),
+        ("neural-soak", "1", False, "tcp://policy:47835", "fake", True),
+        ("neural-soak", "1", True, "tcp://policy:47835", "fake", False),
+        ("neural-soak", "0", False, None, "fake", False),
+        ("neural-soak", "0", True, None, "fake", False),
+        ("neural-soak", "0", True, "tcp://policy:47835", "fake", True),
+        ("neural-soak", "1", False, None, "chatgpt", False),
+        ("neural-load", "1", False, None, "fake", False),
+        (None, "1", False, None, "fake", False),
+    ],
+)
+async def test_soak_control_requires_explicit_pilot_disable_and_only_skips_body_url(
+    monkeypatch, scenario, control, enabled, url, llm, valid
+):
+    monkeypatch.setenv("GOTHIC_SOAK_CONTROL", control)
+    args = SimpleNamespace(scenario=scenario, neural_body=enabled, body_url=url, llm=llm)
+    backend = Mock(side_effect=RuntimeError("passed launch validation"))
+    monkeypatch.setattr(cli, "_backend", backend)
+    if valid:
+        with pytest.raises(RuntimeError, match="passed launch validation"):
+            await cli.serve(args)
+        backend.assert_called_once_with(args)
+    else:
+        assert await cli.serve(args) == 2
+        backend.assert_not_called()
+
+
+@pytest.mark.parametrize(
     ("flags", "env_url", "enabled", "expected_url", "created"),
     [
         ([], None, True, None, False),
