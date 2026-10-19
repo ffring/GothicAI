@@ -136,6 +136,14 @@ def test_music_duck_matches_configured_depth_and_leaves_distant_pauses_unchanged
     assert ducked_pauses == pytest.approx(original_pauses, abs=0.1)
 
 
+def test_duck_of_a_long_video_stays_within_ffmpeg_expression_depth():
+    # 137 voiced lines (an 8-minute explainer): a chain of one max() per line exceeded ffmpeg's depth limit.
+    speech = [(i * 3.0 + 0.1, i * 3.0 + 2.0) for i in range(200)]
+    envelope = levels.duck_filter(speech, levels.MUSIC_DUCK_DB)
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=440:d=601",
+                    "-af", envelope, "-f", "null", "-"], check=True, capture_output=True)
+
+
 def test_duck_ramps_smoothly_before_and_after_the_word_window(tone_inputs):
     envelope = levels.duck_filter([(4, 8)], levels.MUSIC_DUCK_DB)
     result = subprocess.run(
