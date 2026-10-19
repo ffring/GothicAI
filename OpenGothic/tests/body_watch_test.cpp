@@ -33,7 +33,10 @@ size_t assertions=0, cases=0;
 
 void expect(bool condition,std::string_view message) {
   ++assertions;
-  if(!condition) throw std::runtime_error(std::string(message));
+  if(!condition) {
+    std::cerr << "body-watch-test failure: " << message << '\n';
+    throw std::runtime_error(std::string(message));
+    }
   }
 
 Json parse(const std::string& encoded) {
@@ -65,6 +68,16 @@ Json request(const char* type,const Npc& actor) {
   }
 
 Json call(const Json& request) { return parse(BodyController::handleJson(request)); }
+
+Json action(Npc& actor,FightAlgo::PolicyAction policy) {
+  auto d=request("body_action",actor);
+  const auto current=status(actor);
+  for(const char* key:{"goal_version","target_entity_id","observation_seq"})
+    number(d,key,current[key].GetUint64());
+  number(d,"issued_game_ms",current["observed_game_ms"].GetUint64());
+  number(d,"command_id",1); number(d,"action_id",uint64_t(policy)); number(d,"ttl_ms",1000);
+  return call(d);
+  }
 
 Json acquire(Npc& actor,uint64_t awaitMs=0) {
   auto d=request("body_acquire",actor);
@@ -208,6 +221,89 @@ void pendingAcquire(Npc& a,Npc& b,PlayerControl& player) {
   expect(BodyObservations::latestSequence(a)>sequence,"pending A stream sequence keeps growing");
   release(a);
   }
+
+void movementRelease(Npc& actor,Npc& target,PlayerControl& player) {
+  struct Case final { FightAlgo::PolicyAction action; float distance,yaw; };
+  const std::array<Case,7> fixtures{{
+    {FightAlgo::PolicyAction::Approach,800,0},
+    {FightAlgo::PolicyAction::TurnToTarget,300,30},
+    {FightAlgo::PolicyAction::StrafeLeft,300,0},
+    {FightAlgo::PolicyAction::StrafeRight,300,0},
+    {FightAlgo::PolicyAction::JumpBack,150,0},
+    {FightAlgo::PolicyAction::AttackFront,150,0},
+    {FightAlgo::PolicyAction::Block,150,0},
+    }};
+  for(const auto& fixture:fixtures) {
+    ++cases;
+    BodyController::fixturePrepare(actor,target,fixture.distance,fixture.yaw);
+    actor.setExternalControl(false);
+    initialWatch(actor,200+uint64_t(fixture.action));
+    expect(acquire(actor)["accepted"].GetBool(),"release fixture acquired");
+    step(player,2);
+    const auto prepared=status(actor);
+    std::cerr << "release-fixture prepare action=" << uint64_t(fixture.action)
+              << " pose=" << actor.animNames() << " can_decide=" << prepared["can_decide"].GetBool()
+              << " mask=" << prepared["action_mask"][rapidjson::SizeType(fixture.action)].GetBool() << '\n';
+    const auto accepted=action(actor,fixture.action);
+    if(!accepted["accepted"].GetBool())
+      std::cerr << "release-fixture rejected reason=" << accepted["reason"].GetString() << '\n';
+    expect(accepted["accepted"].GetBool(),"release fixture action accepted");
+    step(player);
+    const auto before=actor.bodyObservationState();
+    const auto pose=actor.animNames();
+    const auto startedEvents=parse(BodyController::drainJson());
+    bool started=false;
+    for(const auto& event:startedEvents["events"].GetArray())
+      if(std::string_view(event["phase"].GetString())=="started" &&
+         event["action_id"].GetUint64()==uint64_t(fixture.action)) started=true;
+    if(!started) {
+      std::cerr << "release-fixture did not start action=" << uint64_t(fixture.action) << " pose=" << pose << '\n';
+      for(const auto& event:startedEvents["events"].GetArray())
+        std::cerr << "release-fixture event phase=" << event["phase"].GetString()
+                  << " reason=" << event["reason"].GetString() << " action=" << event["action_id"].GetUint64() << '\n';
+      }
+    expect(started,"release fixture physically starts its requested action");
+    const auto start=actor.world().tickCount();
+    // Target replacement is deferred until the same safe handoff used when a live
+    // opponent disappears. The explicit release must not let locomotion keep its lease.
+    const auto releaseRequest=request("body_release",actor);
+    bool deferredTargetCleared=false;
+    actor.setTarget(nullptr);
+    // Native perception may choose this enemy again on its next tick. Observe the
+    // deferred mutation itself, immediately after setTarget and before native AI runs.
+    expect(BodyController::deferNative(actor,[&] { deferredTargetCleared=actor.target()==nullptr; }),
+           "release fixture queues target-loss verification before native handoff");
+    const auto released=call(releaseRequest);
+    expect(released["accepted"].GetBool() ||
+           (std::string_view(released["reason"].GetString())=="not_owned" && !BodyController::owns(actor)),
+           "moving release accepted or already returned to native after target loss");
+    step(player);
+    const bool ownedNextTick=BodyController::owns(actor);
+    for(unsigned i=0;i<100 && BodyController::owns(actor);++i) step(player);
+    const auto events=parse(BodyController::drainJson());
+    bool restored=false;
+    uint64_t elapsed=actor.world().tickCount()-start;
+    for(const auto& event:events["events"].GetArray())
+      if(std::string_view(event["reason"].GetString())=="native_restored") {
+        restored=true; elapsed=event["t_game_ms"].GetUint64()-start;
+        }
+    std::cerr << "release-fixture action=" << uint64_t(fixture.action) << " pose=" << pose
+              << " segment_ms=" << before.segmentRemainingMs << " fai_ms=" << before.faiWaitMs
+              << " ani_ms=" << before.aniWaitMs << " ai_ms=" << before.aiWaitMs
+              << " output_ms=" << before.outputWaitMs << " interruptible=" << before.interruptible
+              << " owned_next_tick=" << ownedNextTick << " elapsed_game_ms=" << elapsed << '\n';
+    expect(!BodyController::owns(actor),"release fixture returns native authority within 3.3 game seconds");
+    expect(restored,"release fixture emits confirmed native_restored");
+    expect(deferredTargetCleared,"release applies deferred target loss before native AI resumes");
+    if(before.segmentRemainingMs==0)
+      expect(!ownedNextTick,"unprotected movement returns native authority on the next engine tick");
+    else {
+      expect(elapsed>=before.segmentRemainingMs,"release waits for the whole protected combat segment");
+      if(before.segmentRemainingMs>33)
+        expect(ownedNextTick,"release preserves a protected combat segment");
+      }
+    }
+  }
 }
 
 int main(int argc,const char** argv) {
@@ -257,6 +353,7 @@ int main(int argc,const char** argv) {
     b.setDirection(a.position()-b.position()); b.updateTransform();
     a.setExternalControl(false);
     liveLease(a,b,player);
+    movementRelease(a,b,player);
     pendingAcquire(a,b,player);
     expect(!Resources::hasGraphicsDevice() && !gothic.gameSession()->hasAudioDevice(),"fixture creates no graphics/audio device");
     BodyController::reset();

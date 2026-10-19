@@ -343,6 +343,7 @@ class MultiBridge(Bridge):
         self.acquire_ack = {}
         self.event_seq = 0
         self.observation_seq = 0
+        self.pending_releases = set()
 
     def emit(self, *rows, generation=1):
         # The native journal sequences all actors together, including several
@@ -362,6 +363,9 @@ class MultiBridge(Bridge):
         kind = command["type"]
         if kind == "body_watch":
             npcs = command["npcs"]
+            assert all(actor["npc"] in npcs for actor in self.actors.values() if actor["owned"]), (
+                "body_watch must retain active body owners and pending acquisitions"
+            )
             if (self.legacy_watch and self.link.body_leases and npcs != self.watched) or (
                 self.refuse_shrink and set(npcs) < set(self.watched)
             ):
@@ -382,6 +386,25 @@ class MultiBridge(Bridge):
             ]
         elif kind == "body_events":
             value = events().model_dump(mode="json")
+        elif kind == "body_control_status":
+            value = {
+                "type": "body_control_status", "session_epoch": 1, "world_epoch": 1,
+                "paused": False, "infrastructure_failure": False, "infrastructure_reason": "",
+                "visibility_diagnostics": visibility_diagnostics(),
+                "actors": [{
+                    "entity_id": entity, "session_epoch": 1, "world_epoch": 1,
+                    "control_generation": 7 if actor["owned"] else 0,
+                    "goal_version": 1 if actor["owned"] else 0,
+                    "target_entity_id": 2, "command_id": 0, "execution_id": 0,
+                    "owner": "scripted" if actor["owned"] else "native",
+                    "release_pending": entity in self.pending_releases,
+                    "provider": "neural-body" if actor["owned"] else "",
+                    "mode": "realtime" if actor["owned"] else "native",
+                    "t_game_ms": 200, "observation_seq": 4, "observed_game_ms": 200,
+                    "watchdog_timeout_ms": 2000, "control_allowed": False, "can_decide": False,
+                    "action_mask": [False] * 12,
+                } for entity, actor in self.actors.items()],
+            }
         elif kind in {"body_acquire", "body_action", "body_heartbeat", "body_release"}:
             entity = command["entity_id"]
             value = receipt(
@@ -421,9 +444,12 @@ class MultiBridge(Bridge):
             elif kind == "body_release":
                 if self.release_ack is not None:
                     await self.release_ack.wait()
-                self.actors[entity]["owned"] = False
-                value.update(owner="native", reason="native_restored")
-                self._activity(self.actors[entity]["npc"], "fight")
+                if entity in self.pending_releases:
+                    value.update(reason="release_pending", release_pending=True)
+                else:
+                    self.actors[entity]["owned"] = False
+                    value.update(owner="native", reason="native_restored")
+                    self._activity(self.actors[entity]["npc"], "fight")
             else:
                 assert self.actors[entity]["owned"], f"{kind} used another fight's released actor"
                 assert command["provider"] == "neural-body"
@@ -2835,9 +2861,9 @@ async def test_unconfirmed_release_hits_finish_deadline_and_closes_episode(monke
         await eventually(lambda: rig.bridge.commands("body_control_status"))
         assert rig.link.body_leases == {1: lease}
         await eventually(lambda: rig.pilot.active_count == 0, timeout=1.2)
-        assert not rig.link.body_leases
-        assert rig.bridge._watched_npc is None
-        assert rig.bridge.commands("body_watch")[-1]["npcs"] == []
+        assert rig.link.body_leases == {1: lease}
+        assert rig.bridge._watched_npc == "NPC"
+        assert rig.bridge.commands("body_watch")[-1]["npcs"] == ["NPC"]
         assert len(rig.policy.commands("end_episode")) == 1
         assert len(rig.policy.commands("close")) == 1
         assert not rig.pilot._done.is_set()
@@ -2845,8 +2871,189 @@ async def test_unconfirmed_release_hits_finish_deadline_and_closes_episode(monke
         assert "unconfirmed=" in caplog.text
         summary = rig.pilot.last_summary
         assert summary.lease == lease and summary.reason == "finish_deadline"
+        assert summary.end_trigger == "attached"
         assert not summary.release_confirmed and summary.release_seconds is None
-        assert summary.watch_removed
+        assert not summary.watch_removed
+        rig.bridge.response_delays.clear()
+        await eventually(lambda: not rig.pilot._releasing)
+        await eventually(lambda: rig.bridge._watched_npc is None)
+        assert rig.pilot.last_summary.release_late_seconds >= 0.8
+
+
+@pytest.mark.parametrize("confirmation", ["event", "status", "timeout"])
+async def test_finished_owner_retains_watch_across_new_fight_until_native(monkeypatch, caplog, confirmation):
+    monkeypatch.setattr(bodypilot, "FINISH_TIMEOUT", 0.1)
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running(multi=True) as rig:
+        await start_fights(rig, "NPC_1")
+        entity = npc_entity("NPC_1")
+        lease = rig.link.body_leases[entity]
+        rig.bridge.pending_releases.add(entity)
+        rig.pilot.fights["NPC_1"].stop("target_lost")
+        await eventually(lambda: rig.pilot.active_count == 0)
+        summary = rig.pilot.last_summary
+        assert summary.reason == "finish_deadline" and summary.end_trigger == "target_lost"
+        assert not summary.release_confirmed and summary.release_late_seconds is None
+        assert not summary.watch_removed and rig.pilot.handles("NPC_1")
+        assert rig.bridge.watched == ["NPC_1"]
+        assert rig.link.body_leases[entity] == lease
+
+        rig.bridge.roster(multi_entry("NPC_1", activity="body"), multi_entry("NPC_2"))
+        await eventually(lambda: rig.bridge.watched == ["NPC_1", "NPC_2"])
+        await eventually(lambda: rig.pilot.fights["NPC_2"]._watch_ready)
+        rig.bridge.emit(multi_fighter("NPC_2"))
+        await eventually(lambda: npc_entity("NPC_2") in rig.link.body_leases)
+        assert rig.link.body_leases[entity] == lease
+
+        # The engine eventually returns the body; the timeout variant loses all
+        # confirmation, so only the watchdog's bounded grace can clear our record.
+        rig.bridge.actors[entity]["owned"] = False
+        rig.bridge.pending_releases.discard(entity)
+        if confirmation == "event":
+            rig.link._dispatch(events(event(
+                1, entity_id=entity, reason="native_restored", owner="native",
+            )))
+        elif confirmation == "timeout":
+            rig.clock.advance(bodypilot.LEASE_TIMEOUT_MS / 1000 + bodypilot.RELEASE_ORPHAN_GRACE + 0.01)
+        await eventually(lambda: rig.bridge.watched == ["NPC_2"])
+        assert not rig.pilot.handles("NPC_1") and entity not in rig.link.body_leases
+        assert rig.pilot.handles("NPC_2") and npc_entity("NPC_2") in rig.link.body_leases
+        updated = rig.pilot.last_summary
+        if confirmation == "timeout":
+            assert rig.pilot.release_orphan_timeout == 1
+            assert not updated.release_confirmed and updated.release_late_seconds is None
+            assert "release_orphan_timeout npc=NPC_1" in caplog.text
+        else:
+            assert rig.pilot.release_orphan_timeout == 0
+            assert updated.release_confirmed and updated.release_late_seconds >= 0.1
+            assert updated.reason == "finish_deadline" and updated.end_trigger == "target_lost"
+            assert "end_trigger=target_lost release_late_seconds=" in caplog.text
+        assert not summary.release_confirmed  # Previously published snapshots stay immutable.
+
+
+async def test_unconfirmed_release_reserves_one_of_four_watch_slots(monkeypatch):
+    monkeypatch.setattr(bodypilot, "FINISH_TIMEOUT", 0.1)
+    async with running(multi=True) as rig:
+        npcs = ("NPC_1", "NPC_2", "NPC_3", "NPC_4")
+        await start_fights(rig, *npcs)
+        entity = npc_entity("NPC_1")
+        rig.bridge.pending_releases.add(entity)
+        rig.pilot.fights["NPC_1"].stop("target_lost")
+        await eventually(lambda: rig.pilot.active_count == 3)
+        assert "NPC_1" in rig.pilot._releasing
+
+        watch_count = len(rig.bridge.commands("body_watch"))
+        rig.bridge.roster(
+            *(multi_entry(npc, activity="body") for npc in npcs), multi_entry("NPC_5"),
+        )
+        rig.combat("NPC_5")
+        assert not rig.pilot.handles("NPC_5")
+        assert rig.pilot.active_count == 3
+        assert set(rig.bridge.watched) == set(npcs)
+        assert len(rig.bridge.commands("body_watch")) == watch_count
+
+        rig.bridge.actors[entity]["owned"] = False
+        rig.bridge.pending_releases.discard(entity)
+        rig.link._dispatch(events(event(
+            1, entity_id=entity, reason="native_restored", owner="native",
+        )))
+        await eventually(lambda: set(rig.bridge.watched) == set(npcs[1:]))
+        rig.bridge.roster(
+            *(multi_entry(npc, activity="body") for npc in npcs[1:]), multi_entry("NPC_5"),
+        )
+        await eventually(lambda: rig.pilot.handles("NPC_5"))
+        await eventually(lambda: rig.pilot.fights["NPC_5"]._watch_ready)
+        rig.bridge.emit(multi_fighter("NPC_5"))
+        await eventually(lambda: npc_entity("NPC_5") in rig.link.body_leases)
+        assert set(rig.bridge.watched) == {*npcs[1:], "NPC_5"}
+        assert all(len(command["npcs"]) <= 4 for command in rig.bridge.commands("body_watch"))
+
+
+@pytest.mark.parametrize("end_trigger", ["target_lost", "npc_unavailable", "hero_down", "target_down"])
+async def test_native_restored_during_end_episode_confirms_late_release(monkeypatch, end_trigger):
+    monkeypatch.setattr(bodypilot, "FINISH_TIMEOUT", 0.1)
+    async with running() as rig:
+        await rig.active()
+        lease = rig.link.body_leases[1]
+        rig.bridge.release_pending_polls = 10000
+        original_call = rig.fight.client.call
+        restored_during_cleanup = []
+
+        async def restore_during_end_episode(command, **fields):
+            if command == "end_episode":
+                assert rig.link.body_leases == {1: lease}
+                rig.bridge.provider_owned = False
+                rig.bridge._released_pending = False
+                rig.link._dispatch(events(event(
+                    1, entity_id=lease.entity_id, reason="native_restored", owner="native",
+                )))
+                if end_trigger in {"hero_down", "target_down"}:
+                    # A native routine during cleanup can clear the claim before
+                    # the final summary reinstates the fallen-target guard.
+                    rig.roster(activity="routine", state="ZS_SIT_BENCH")
+                    assert "NPC" not in rig.pilot._claimed_fights
+                restored_during_cleanup.append(True)
+            return await original_call(command, **fields)
+
+        rig.fight.client.call = restore_during_end_episode
+        rig.fight.stop(end_trigger)
+        await eventually(lambda: rig.pilot.active_count == 0)
+        summary = rig.pilot.last_summary
+        assert restored_during_cleanup == [True]
+        assert summary.reason == "finish_deadline" and summary.end_trigger == end_trigger
+        assert summary.release_confirmed and summary.watch_removed
+        assert summary.release_late_seconds >= bodypilot.FINISH_TIMEOUT
+        assert summary.release_seconds == summary.release_late_seconds
+        assert rig.bridge._watched_npc is None
+        assert not rig.pilot._releasing and rig.pilot.release_orphan_timeout == 0
+        if end_trigger in {"hero_down", "target_down"}:
+            assert "NPC" in rig.pilot._claimed_fights and "NPC" in rig.pilot._roster_attempted
+            assert "NPC" not in rig.pilot._lost_fights
+            rig.roster(activity="fight", state="ZS_ATTACK")
+            assert not rig.pilot.handles("NPC")
+        else:
+            assert "NPC" in rig.pilot._lost_fights
+
+
+@pytest.mark.parametrize("end_trigger", ["target_lost", "npc_unavailable"])
+@pytest.mark.parametrize("range_exit", ["before_native", "after_native"])
+async def test_late_release_allows_lost_fighter_to_return_without_routine(
+    monkeypatch, end_trigger, range_exit,
+):
+    monkeypatch.setattr(bodypilot, "FINISH_TIMEOUT", 0.1)
+    async with running(multi=True) as rig:
+        await start_fights(rig, "NPC_1")
+        entity = npc_entity("NPC_1")
+        rig.bridge.pending_releases.add(entity)
+        rig.pilot.fights["NPC_1"].stop(end_trigger)
+        await eventually(lambda: rig.pilot.active_count == 0)
+        assert rig.pilot.last_summary.reason == "finish_deadline"
+        assert "NPC_1" in rig.pilot._claimed_fights
+        distant = multi_entry("NPC_1", activity="body").model_copy(update={"distance": 2100.0})
+        if range_exit == "before_native":
+            rig.bridge.roster(distant)
+
+        rig.bridge.actors[entity]["owned"] = False
+        rig.bridge.pending_releases.discard(entity)
+        rig.link._dispatch(events(event(
+            1, entity_id=entity, reason="native_restored", owner="native",
+        )))
+        if range_exit == "after_native":
+            assert "NPC_1" in rig.pilot._claimed_fights and "NPC_1" in rig.pilot._lost_fights
+            rig.bridge.roster(distant)
+        assert "NPC_1" not in rig.pilot._claimed_fights
+        assert "NPC_1" not in rig.pilot._roster_attempted
+        await eventually(lambda: not rig.bridge.watched)
+
+        # Return directly to combat: no routine/down roster may be needed to
+        # forget a fight whose confirmed native actor left the visible range.
+        rig.bridge.roster(multi_entry("NPC_1"))
+        await eventually(lambda: rig.pilot.handles("NPC_1"))
+        await eventually(lambda: rig.pilot.fights["NPC_1"]._watch_ready)
+        rig.bridge.emit(multi_fighter("NPC_1"))
+        await eventually(lambda: entity in rig.link.body_leases)
+        await eventually(lambda: len(rig.policy.commands("reset")) == 2)
+        assert len(rig.bridge.commands("body_acquire")) == 2
 
 
 async def test_uncertain_acquire_recovery_is_bounded_by_finish_deadline(monkeypatch, caplog):
