@@ -33,6 +33,7 @@ from .protocol import (
 
 log = logging.getLogger(__name__)
 SERVICE_TIMEOUT = 0.100
+SETUP_TIMEOUT = 0.500
 POLICY_TIMEOUT_LIMIT = 5
 POLICY_RESPONSE_TIMEOUT = 1.0
 BRIDGE_TIMEOUT = 0.250
@@ -88,7 +89,7 @@ class PolicyClient:
         self.response_received = asyncio.Event()
 
     async def connect(self) -> None:
-        async with asyncio.timeout(SERVICE_TIMEOUT):
+        async with asyncio.timeout(SETUP_TIMEOUT):
             reader, self.writer = await asyncio.open_connection(self.host, self.port, limit=MAX_JSON_BYTES)
         self.reader_task = asyncio.create_task(self._read(reader))
 
@@ -111,7 +112,9 @@ class PolicyClient:
                 if not future.done():
                     future.set_exception(error)
 
-    async def call(self, command: str, **fields: Any) -> dict[str, Any]:
+    async def call(
+        self, command: str, *, timeout: float = SERVICE_TIMEOUT, **fields: Any,
+    ) -> dict[str, Any]:
         request = {"id": next(self.ids), "cmd": command, **fields}
         encoded = (json.dumps(request, separators=(",", ":"), allow_nan=False) + "\n").encode()
         if len(encoded) > MAX_JSON_BYTES:
@@ -121,7 +124,7 @@ class PolicyClient:
         future = asyncio.get_running_loop().create_future()
         self.pending[request["id"]] = future
         try:
-            async with asyncio.timeout(SERVICE_TIMEOUT):
+            async with asyncio.timeout(timeout):
                 self.writer.write(encoded)
                 await self.writer.drain()
                 response = await future
@@ -186,11 +189,13 @@ class FightSummary:
     acquire_refusals: tuple[tuple[str, int], ...]
     acquire_requests: int
     acquire_completed: int
+    acquire_uncertain_recovered: int
     acquire_wait_p50_ms: float | None
     acquire_wait_max_ms: float | None
     action_rejections: tuple[tuple[str, int], ...]
     transient_rejections_consecutive: int
     policy_timeouts: int
+    setup_timeouts: int
     policy_timeouts_consecutive: int
     policy_timeout_wait_p95_ms: float | None
     policy_response_silence_ms: float | None
@@ -244,6 +249,7 @@ class BodyPilot:
         self.watch_busy = 0
         self.release_orphan_timeout = 0
         self._releasing: dict[str, PendingRelease] = {}
+        self._acquire_cleanup: dict[str, BodyObservation] = {}
         self._last_release_poll = float("-inf")
         self._claimed_fights: set[str] = set()
         self._lost_fights: set[str] = set()
@@ -271,7 +277,8 @@ class BodyPilot:
 
     def handles(self, npc: str) -> bool:
         """Include observation, pending acquisition and unconfirmed release cleanup."""
-        return npc.upper() in self.fights or npc.upper() in self._releasing
+        npc = npc.upper()
+        return npc in self.fights or npc in self._releasing or npc in self._acquire_cleanup
 
     def _allowed(self, npc: str) -> bool:
         entry = self.people.get(npc)
@@ -281,7 +288,8 @@ class BodyPilot:
             and entry.distance <= 2000
             and entry.activity not in {"dialog", "attached", "down"}
             and (entry.activity != "body" or (fight := self.fights.get(npc)) is not None
-                 and (fight.lease is not None or fight._acquiring))
+                 and (fight.lease is not None or fight._acquiring or fight._pending_acquire is not None
+                      or fight._retrying_acquire and self.clock() - fight._attempt_at < ACQUIRE_WINDOW))
             and (not self.talking(npc) or (
                 entry.activity in {"fight", "body"} and entry.state.upper() == "ZS_ATTACK"
             ))
@@ -341,6 +349,7 @@ class BodyPilot:
                     self._start(npc)
         elif isinstance(message, (Loading, Hello)):
             self._releasing.clear()
+            self._acquire_cleanup.clear()
             self.people.clear()
             self._claimed_fights.clear()
             self._lost_fights.clear()
@@ -388,13 +397,13 @@ class BodyPilot:
         if (
             self.handles(npc) or self._closing or self._resetting
             or self.active_count >= self.max_fights
-            or len(self.fights.keys() | self._releasing.keys()) >= 4
+            or len(self.fights.keys() | self._releasing.keys() | self._acquire_cleanup.keys()) >= 4
             or npc in self._claimed_fights
             or self.clock() < self._reacquire_after.get(npc, float("-inf"))
             or not self._allowed(npc)
         ):
             return False
-        if (self.fights or self._releasing) and not self._watch_can_change():
+        if (self.fights or self._releasing or self._acquire_cleanup) and not self._watch_can_change():
             self.watch_busy += 1
             log.info(
                 "neural-body watch refused npc=%s reason=watch_busy active_fights=%d protocol=%s count=%d",
@@ -419,7 +428,7 @@ class BodyPilot:
         # so a concurrent finish cannot overwrite a newly admitted actor.
         async with self._watch_lock:
             npcs = [npc for npc in self._watch_npcs if (
-                (npc in self.fights or npc in self._releasing) and npc not in self._pending_unwatch
+                self.handles(npc) and npc not in self._pending_unwatch
             )]
             if fight.npc not in npcs:
                 npcs.append(fight.npc)
@@ -442,7 +451,7 @@ class BodyPilot:
         async with self._watch_lock:
             pending = self._pending_unwatch.copy()
             npcs = [npc for npc in self._watch_npcs if (
-                npc not in pending and (npc in self.fights or npc in self._releasing)
+                npc not in pending and self.handles(npc)
             )]
             self._last_watch_attempt = asyncio.get_running_loop().time()
             await self.link.body_watch(npcs, timeout=BRIDGE_TIMEOUT)
@@ -473,9 +482,11 @@ class BodyPilot:
             self._remember_retarget(updated)
             log.info(
                 "neural-body end npc=%s reason=%s end_trigger=%s release_late_seconds=%.3f "
-                "release_confirmed=True ownership_poll_timeouts=%d ownership_poll_max_gap_ms=%.1f",
+                "release_confirmed=True ownership_poll_timeouts=%d ownership_poll_max_gap_ms=%.1f "
+                "setup_timeouts=%d acquire_uncertain_recovered=%d",
                 npc, updated.reason, updated.end_trigger, late_seconds,
                 updated.ownership_poll_timeouts, updated.ownership_poll_max_gap_ms,
+                updated.setup_timeouts, updated.acquire_uncertain_recovered,
             )
         self._remember_lost_fight(
             updated if confirmed else pending.summary, orphan_expired=not confirmed,
@@ -483,7 +494,7 @@ class BodyPilot:
         self._wake.set()
 
     async def _poll_releases(self) -> None:
-        if not self._releasing:
+        if not self._releasing and not self._acquire_cleanup:
             return
         # Never infer native ownership merely from a missing local lease: another
         # RPC may have discarded it on a generation mismatch or a refusal.
@@ -497,11 +508,12 @@ class BodyPilot:
                 )
                 self._released(npc, pending, confirmed=False)
         now = asyncio.get_running_loop().time()
-        if not self._releasing or now - self._last_release_poll < EVENTS_INTERVAL:
+        if not (self._releasing or self._acquire_cleanup) or now - self._last_release_poll < EVENTS_INTERVAL:
             return
         self._last_release_poll = now
         with contextlib.suppress(*BRIDGE_ERRORS):
             self.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
+        await self._poll_acquire_cleanup()
         if not self._releasing:
             return
         with contextlib.suppress(*BRIDGE_ERRORS):
@@ -513,6 +525,42 @@ class BodyPilot:
                 if any(actor.entity_id == lease.entity_id and actor.owner == "native"
                        for actor in status.actors):
                     self._released(npc, pending)
+
+    async def _poll_acquire_cleanup(self) -> None:
+        """Finish orphaned requests without dropping their watch or admitting duplicates."""
+        for npc, observation in list(self._acquire_cleanup.items()):
+            scope = observation.session_epoch, observation.world_epoch
+            if not self.link.closed.is_set() and (
+                self.link.body_session_epoch, self.link.body_generation
+            ) == scope:
+                with contextlib.suppress(*BRIDGE_ERRORS):
+                    async with asyncio.timeout(BRIDGE_TIMEOUT):
+                        await self.link.body_cancel_acquire(observation.entity_id, timeout=BRIDGE_TIMEOUT)
+                lease = self.link.body_leases.get(observation.entity_id)
+                if lease is not None and (
+                    lease.session_epoch, lease.world_epoch, lease.provider, lease.mode
+                ) == (*scope, "neural-body", "realtime"):
+                    with contextlib.suppress(*BRIDGE_ERRORS):
+                        async with asyncio.timeout(BRIDGE_TIMEOUT):
+                            await self.link.body_release(lease, timeout=BRIDGE_TIMEOUT)
+                if (
+                    self.link.body_acquire_pending(observation.entity_id)
+                    or observation.entity_id in self.link.body_leases
+                ):
+                    # A slow cancellation must not consume the status budget.
+                    with contextlib.suppress(*BRIDGE_ERRORS):
+                        async with asyncio.timeout(BRIDGE_TIMEOUT):
+                            await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
+                if (
+                    self.link.body_acquire_pending(observation.entity_id)
+                    or observation.entity_id in self.link.body_leases
+                ):
+                    continue
+            if self._acquire_cleanup.get(npc) is not observation:
+                continue
+            self._acquire_cleanup.pop(npc)
+            self._pending_unwatch.add(npc)
+            self._wake.set()
 
     def _remember_lost_fight(self, summary: FightSummary, *, orphan_expired: bool = False) -> None:
         reason = summary.end_trigger if summary.reason == "finish_deadline" else summary.reason
@@ -563,8 +611,17 @@ class BodyPilot:
             self._start(npc)
 
     def _completed(self, fight: BodyFight, summary: FightSummary, finish_at: float,
-                   release_deadline: float) -> None:
+                   release_deadline: float, unresolved_acquire: BodyObservation | None = None) -> None:
         self.summaries.append(summary)
+        if (
+            unresolved_acquire is not None and summary.npc is not None
+            and not self._closing and not self.link.closed.is_set()
+            and summary.reason not in WORLD_STOP_REASONS
+            and (self.link.body_session_epoch, self.link.body_generation)
+            == (unresolved_acquire.session_epoch, unresolved_acquire.world_epoch)
+        ):
+            self._acquire_cleanup[summary.npc] = unresolved_acquire
+            self._pending_unwatch.discard(summary.npc)
         reason = summary.end_trigger if summary.reason == "finish_deadline" else summary.reason
         if (
             summary.npc is not None and summary.lease is not None and not summary.release_confirmed
@@ -739,6 +796,10 @@ class BodyFight:
         self._acquiring = False
         self._acquire_cancel = asyncio.Event()
         self._pending_acquire: BodyObservation | None = None
+        self._retrying_acquire = False
+        self._acquire_target: tuple[str, str | None, str] | None = None
+        self._acquire_requested_at = 0.0
+        self._last_acquire_recovery = float("-inf")
         self._symbol: int | None = None
         self._entity: int | None = None
         self._hero: int | None = None
@@ -749,10 +810,12 @@ class BodyFight:
         self._refusals: Counter[str] = Counter()
         self._acquire_requests = 0
         self._acquire_completed = 0
+        self._acquire_uncertain_recovered = 0
         self._acquire_waits: list[float] = []
         self._action_rejections: Counter[str] = Counter()
         self._transient_rejections_consecutive = 0
         self._policy_timeouts = 0
+        self._setup_timeouts = 0
         self._policy_timeouts_consecutive = 0
         self._policy_timeout_waits: list[float] = []
         self._target_absent_game_ms: int | None = None
@@ -845,6 +908,11 @@ class BodyFight:
         ):
             self.pilot._stop_all("world_changed")
             return
+        if self.lease is None and self._pending_acquire is not None:
+            # No policy episode exists yet. Keep a fresh retry row without
+            # overflowing while status is unavailable for the acquire window.
+            self._rows.clear()
+            rows = [row for row in rows if row["script_symbol"] == self._symbol][-1:]
         for row in rows:
             if len(self._rows) >= 128:
                 self._set_reason("observation_overflow")
@@ -953,7 +1021,33 @@ class BodyFight:
             await self._finish("npc_unavailable")
             return
         if self.lease is None and now - self._attempt_at >= ACQUIRE_WINDOW:
-            await self._finish("acquire_exhausted")
+            await self._finish(
+                "acquire_uncertain" if self._pending_acquire is not None else "acquire_exhausted"
+            )
+            return
+        if self._pending_acquire is not None:
+            loop = asyncio.get_running_loop()
+            if loop.time() - self._last_acquire_recovery < ACQUIRE_INTERVAL:
+                return
+            self._last_acquire_recovery = loop.time()
+            observation = self._pending_acquire
+            try:
+                async with asyncio.timeout(ACQUIRE_WINDOW - (self.clock() - self._attempt_at)):
+                    resolved = await self._recover_acquire(cancel=False)
+            except TimeoutError:
+                return
+            if not resolved or self._reason or (
+                self.link.body_session_epoch, self.link.body_generation
+            ) != (observation.session_epoch, observation.world_epoch):
+                return
+            self._acquire_uncertain_recovered += 1
+            if self.lease is not None:
+                assert self._acquire_target is not None
+                await self._start_policy(observation, self._acquire_target, self._acquire_requested_at)
+            else:
+                # Status outruns the 500 ms roster. Its stale "body" row must
+                # not terminate a confirmed native actor before the next retry.
+                self._retrying_acquire = True
             return
         if not self._watched:
             started = time.monotonic()
@@ -1052,6 +1146,9 @@ class BodyFight:
             if self._reason:
                 await self._finish(self._reason)
                 break
+            if self._pending_acquire is not None:
+                # Resolve this request before another queued row can try to acquire.
+                break
             if (
                 self.lease is not None
                 and asyncio.get_running_loop().time() - self._last_events_poll >= EVENTS_INTERVAL
@@ -1080,14 +1177,62 @@ class BodyFight:
             )
         )
 
-    async def _reset_policy(self, initial_game_ms: int) -> None:
+    async def _reset_policy(self, initial_game_ms: int, *, initial: bool = False) -> None:
         assert self.client is not None and self.lease is not None
-        result = await self.client.call(
-            "reset", session_epoch=self.lease.session_epoch, world_epoch=self.lease.world_epoch,
-            initial_game_ms=initial_game_ms, include_capabilities=True,
-        )
+        for attempt in range(2 if initial else 1):
+            try:
+                result = await self.client.call(
+                    "reset", session_epoch=self.lease.session_epoch, world_epoch=self.lease.world_epoch,
+                    initial_game_ms=initial_game_ms, include_capabilities=True,
+                    timeout=SETUP_TIMEOUT if initial else SERVICE_TIMEOUT,
+                )
+                break
+            except TimeoutError:
+                if not initial:
+                    raise
+                self._setup_timeouts += 1
+                if attempt == 1 or self._closing or self._reason:
+                    raise
         self._memory_only_step = result.get("memory_only_step") is True
         self._policy_needs_reset = False
+
+    async def _start_policy(
+        self, observation: BodyObservation, target: tuple[str, str | None, str], requested_at: float,
+    ) -> None:
+        assert self.lease is not None and self.npc is not None
+        self._retrying_acquire = False
+        self._acquire_completed += 1
+        self._acquire_waits.append((self.clock() - requested_at) * 1000)
+        self._claimed_fights.add(self.npc)
+        self._reacquire_after[self.npc] = self.clock() + REACQUIRE_INTERVAL
+        self._entity = self.lease.entity_id
+        self._hero = self.lease.target_entity_id
+        self._target_kind, self._target_name, self._target_npc = target
+        self._observed_down = None
+        self._fight_at = self.clock()
+        self._last_events_poll = float("-inf")
+        self._last_events_success_at = asyncio.get_running_loop().time()
+        self._heartbeat_task = asyncio.create_task(self._heartbeats(self.lease))
+        log.info(
+            "neural-body start npc=%s target_kind=%s target_name=%s lease=%s acquire_refusals=%s",
+            self.npc, self._target_kind, self._target_name, self._identity(self.lease),
+            dict(self._refusals),
+        )
+        self._initial_game_ms = observation.t_game_ms
+        if self._closing or self._reason:
+            return
+        try:
+            self.client = PolicyClient(self.url)
+            try:
+                await self.client.connect()
+            except TimeoutError:
+                self._setup_timeouts += 1
+                raise
+            await self._reset_policy(self._initial_game_ms, initial=True)
+        except TimeoutError:
+            self._set_reason("policy_timeout")
+        except (OSError, ValueError, PolicyError):
+            self._set_reason("policy_error")
 
     def _capture_invisibility(self, now: float, game_ms: int) -> None:
         if self._invisible_at is not None:
@@ -1193,6 +1338,8 @@ class BodyFight:
                 self._acquiring = True
                 self._pending_acquire = observation
                 requested_at = self.clock()
+                self._acquire_requested_at = requested_at
+                self._acquire_target = target
                 self._acquire_requests += 1
                 try:
                     self.lease = await self.link.body_acquire(
@@ -1207,19 +1354,14 @@ class BodyFight:
                         ),
                         timeout=BRIDGE_TIMEOUT,
                         cancel_event=self._acquire_cancel,
+                        retain_on_timeout=True,
                     )
                 except (TimeoutError, OSError, ConnectionClosed):
                     # The bridge may own the body even though no receipt arrived.
-                    self._set_reason(self._reason or "acquire_uncertain")
                     raise
                 except GameError:
                     recovered = self.link.body_leases.get(observation.entity_id)
-                    if recovered is not None and recovered.provider == "neural-body":
-                        self.lease = recovered
-                        self._claimed_fights.add(self.npc)
-                    if self.link.body_acquire_pending(observation.entity_id):
-                        self._set_reason(self._reason or "acquire_uncertain")
-                    else:
+                    if not self.link.body_acquire_pending(observation.entity_id) and recovered is None:
                         self._pending_acquire = None
                     raise
                 else:
@@ -1231,41 +1373,7 @@ class BodyFight:
             except BRIDGE_ERRORS as error:
                 self._refusals[str(error).removeprefix("body command rejected: ")] += 1
             else:
-                self._acquire_completed += 1
-                self._acquire_waits.append((self.clock() - requested_at) * 1000)
-                self._claimed_fights.add(self.npc)
-                self._reacquire_after[self.npc] = self.clock() + REACQUIRE_INTERVAL
-                self._entity = self.lease.entity_id
-                self._hero = self.lease.target_entity_id
-                self._target_kind, self._target_name, self._target_npc = target
-                self._observed_down = None
-                self._fight_at = self.clock()
-                self._last_events_poll = float("-inf")
-                # Acquisition starts the initial grace period before the first poll.
-                self._last_events_success_at = asyncio.get_running_loop().time()
-                self._heartbeat_task = asyncio.create_task(self._heartbeats(self.lease))
-                log.info(
-                    "neural-body start npc=%s target_kind=%s target_name=%s lease=%s acquire_refusals=%s",
-                    self.npc,
-                    self._target_kind,
-                    self._target_name,
-                    self._identity(self.lease),
-                    dict(self._refusals),
-                )
-                # Establish the episode while waiting for the first leased row.
-                # The independent heartbeat already protects the lease during TCP
-                # connection and reset, so neither delays that row's first step.
-                self._initial_game_ms = observation.t_game_ms
-                if self._closing or self._reason:
-                    return
-                try:
-                    self.client = PolicyClient(self.url)
-                    await self.client.connect()
-                    await self._reset_policy(self._initial_game_ms)
-                except TimeoutError:
-                    self._set_reason("policy_timeout")
-                except (OSError, ValueError, PolicyError):
-                    self._set_reason("policy_error")
+                await self._start_policy(observation, target, requested_at)
             return
         if raw["observation_seq"] <= self.lease.acquired_observation_seq:
             return
@@ -1373,8 +1481,25 @@ class BodyFight:
         except BRIDGE_ERRORS:
             self._set_reason("body_action_rejected")
 
-    async def _recover_acquire(self) -> bool:
-        """Resolve an uncertain acquire before releasing or changing the watch."""
+    def _adopt_acquired_lease(self, pending: BodyObservation) -> bool:
+        """Ownership events already validate the request ID in GameLink."""
+        assert self.npc is not None
+        lease = self.link.body_leases.get(pending.entity_id)
+        if lease is None or (
+            lease.npc, lease.provider, lease.mode, lease.session_epoch, lease.world_epoch,
+            lease.target_entity_id,
+        ) != (
+            self.npc, "neural-body", "realtime", pending.session_epoch, pending.world_epoch,
+            pending.target.entity_id,
+        ) or lease.acquired_observation_seq < pending.observation_seq:
+            return False
+        self.lease = lease
+        self._claimed_fights.add(self.npc)
+        self._pending_acquire = None
+        return True
+
+    async def _recover_acquire(self, *, cancel: bool = True) -> bool:
+        """Resolve ownership; cancel only when finishing, never while preparing a fight."""
         pending = self._pending_acquire
         assert pending is not None and self.npc is not None
         scope = pending.session_epoch, pending.world_epoch
@@ -1382,14 +1507,21 @@ class BodyFight:
             if (self.link.body_session_epoch, self.link.body_generation) != scope:
                 self._pending_acquire = None
                 return True
+            if not cancel and self._adopt_acquired_lease(pending):
+                return True
             try:
                 # Native status alone cannot prove a queued request was cancelled.
                 # Resolve its request identity before changing the observation watch.
-                await self.link.body_cancel_acquire(pending.entity_id, timeout=BRIDGE_TIMEOUT)
+                if cancel:
+                    await self.link.body_cancel_acquire(pending.entity_id, timeout=BRIDGE_TIMEOUT)
                 status = await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
             except BRIDGE_ERRORS as error:
                 if "unknown_entity" in str(error):
                     self._pending_acquire = None
+                    return True
+                if not cancel and not self.link.closed.is_set() and (
+                    self.link.body_session_epoch, self.link.body_generation
+                ) == scope and self._adopt_acquired_lease(pending):
                     return True
             else:
                 if self.link.closed.is_set() or (
@@ -1398,22 +1530,48 @@ class BodyFight:
                     self._pending_acquire = None
                     return True
                 if (status.session_epoch, status.world_epoch) == scope:
+                    if not cancel and self._adopt_acquired_lease(pending):
+                        return True
                     actor = next((row for row in status.actors if row.entity_id == pending.entity_id), None)
-                    if actor is None or actor.owner == "native":
+                    if (
+                        (actor is None or (
+                            actor.owner == "native" and actor.acquire_request_id == 0
+                            and not actor.acquire_pending
+                        ))
+                        and not self.link.body_acquire_pending(pending.entity_id)
+                        and pending.entity_id not in self.link.body_leases
+                    ):
                         self._pending_acquire = None
                         return True
-                    if actor.provider == "neural-body" and actor.mode == "realtime":
+                    recovered = self.link.body_leases.get(pending.entity_id)
+                    if (
+                        actor is not None and actor.provider == "neural-body" and actor.mode == "realtime"
+                        and (cancel or (
+                            actor.owner == "scripted" and not actor.release_pending
+                            and actor.target_entity_id == pending.target.entity_id
+                            and recovered is not None
+                            and self._identity(recovered) == (
+                                actor.entity_id, actor.session_epoch,
+                                actor.world_epoch, actor.control_generation,
+                            )
+                        ))
+                    ):
                         self.lease = BodyLease(
                             npc=self.npc, provider=actor.provider, mode=actor.mode,
                             session_epoch=actor.session_epoch, world_epoch=actor.world_epoch,
                             entity_id=actor.entity_id, control_generation=actor.control_generation,
                             goal_version=actor.goal_version, target_entity_id=actor.target_entity_id,
-                            acquired_observation_seq=pending.observation_seq,
+                            acquired_observation_seq=(
+                                recovered.acquired_observation_seq if recovered is not None
+                                else pending.observation_seq
+                            ),
                         )
                         self.link.body_leases[self.lease.entity_id] = self.lease
                         self._claimed_fights.add(self.npc)
                         self._pending_acquire = None
                         return True
+            if not cancel:
+                return False
             await asyncio.sleep(0.025)
         self._pending_acquire = None
         return True
@@ -1605,6 +1763,7 @@ class BodyFight:
             )
             if release_confirmed:
                 release_seconds = time.monotonic() - finish_at
+            unresolved_acquire = self._pending_acquire
             self._pending_acquire = None
             if client is not None:
                 try:
@@ -1638,8 +1797,9 @@ class BodyFight:
                 release_confirmed = True
                 release_seconds = time.monotonic() - finish_at
             if self._watched and (
-                release_confirmed or (lease is None and self._pending_acquire is None)
-                or not self.link.body_leases
+                unresolved_acquire is None and (
+                    release_confirmed or lease is None or not self.link.body_leases
+                )
             ):
                 with contextlib.suppress(*BRIDGE_ERRORS):
                     async with asyncio.timeout(BRIDGE_TIMEOUT):
@@ -1670,11 +1830,13 @@ class BodyFight:
             acquire_refusals=tuple(sorted(self._refusals.items())),
             acquire_requests=self._acquire_requests,
             acquire_completed=self._acquire_completed,
+            acquire_uncertain_recovered=self._acquire_uncertain_recovered,
             acquire_wait_p50_ms=_percentile(self._acquire_waits, 0.50),
             acquire_wait_max_ms=max(self._acquire_waits, default=None),
             action_rejections=tuple(sorted(self._action_rejections.items())),
             transient_rejections_consecutive=self._transient_rejections_consecutive,
             policy_timeouts=self._policy_timeouts,
+            setup_timeouts=self._setup_timeouts,
             policy_timeouts_consecutive=self._policy_timeouts_consecutive,
             policy_timeout_wait_p95_ms=_percentile(self._policy_timeout_waits, 0.95),
             policy_response_silence_ms=(
@@ -1705,6 +1867,7 @@ class BodyFight:
             "response_to_action_p50_ms=%s response_to_action_p95_ms=%s "
             "packet_to_action_p50_ms=%s packet_to_action_p95_ms=%s "
             "acquire_refusals=%s acquire_requests=%d acquire_completed=%d "
+            "acquire_uncertain_recovered=%d setup_timeouts=%d "
             "acquire_wait_p50_ms=%s acquire_wait_max_ms=%s "
             "action_rejections=%s transient_rejections_consecutive=%d "
             "policy_timeouts=%d policy_timeouts_consecutive=%d policy_timeout_wait_p95_ms=%s "
@@ -1736,6 +1899,8 @@ class BodyFight:
             dict(summary.acquire_refusals),
             summary.acquire_requests,
             summary.acquire_completed,
+            summary.acquire_uncertain_recovered,
+            summary.setup_timeouts,
             summary.acquire_wait_p50_ms,
             summary.acquire_wait_max_ms,
             dict(summary.action_rejections),
@@ -1782,6 +1947,7 @@ class BodyFight:
         self._target_npc = None
         self._observed_down = None
         self._retargeting = False
+        self._retrying_acquire = False
         self._refusals.clear()
         self._acquire_requests = self._acquire_completed = 0
         self._acquire_waits.clear()
@@ -1809,4 +1975,4 @@ class BodyFight:
         self._memory_only_step = self._policy_needs_reset = False
         self._memory_only_lag_rows = self._observation_too_old = self._policy_memory_resets = 0
         self._max_batch_rows = self._max_batch_lag_game_ms = 0
-        self.pilot._completed(self, summary, finish_at, release_deadline)
+        self.pilot._completed(self, summary, finish_at, release_deadline, unresolved_acquire)

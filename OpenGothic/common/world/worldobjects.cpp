@@ -1040,6 +1040,11 @@ void WorldObjects::setMobRoutine(gtime time, std::string_view scheme, int32_t st
   }
 
 void WorldObjects::sendPassivePerc(Npc &self, Npc &other, Npc* victim, Item* itm, int32_t perc, std::shared_ptr<HeroDeed> deed) {
+  // Vanilla use-mob handlers assume OTHER is the hero. A server-command theft
+  // snapshots its own witnesses instead; opening and closing its chest must
+  // never feed the NPC culprit to those scripts.
+  if(perc==PERC_ASSESSUSEMOB && !other.isPlayer() && other.isServerDeed("take_item"))
+    return;
   PerceptionMsg m;
   m.deed = std::move(deed);
   if(m.deed==nullptr && other.isPlayer()) {
@@ -1095,7 +1100,7 @@ void WorldObjects::passivePerceptionProcess(PerceptionMsg& msg, Npc& npc, Npc& p
     return;
 
   const float distance = npc.qDistTo(msg.pos);
-  const float range    = float(owner.script().percRanges().at(PercType(msg.what), npc.handle().senses_range));
+  const float range    = npc.perceptionRange(PercType(msg.what));
 
   if(distance > range*range)
     return;

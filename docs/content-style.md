@@ -45,6 +45,28 @@
 | `dirt_path` | утоптанная земля, дороги и дворы | 3 | 0,07–0,15 | 0,85–1,00 | soft packed brown earth road, cart wheel ruts and hoof prints, scattered straw, sparse small pebbles, continuous soil surface |
 | `mud` | грязь у воды и в низинах | 3 | 0,05–0,12 | 0,55–0,85 | wet dark brown mud ground, shallow puddles, hoof prints, scattered straw, continuous soft soil surface |
 
+Рекомендованные режимы однородных классов при разрешённом антиповторе:
+
+| Класс | Антиповтор |
+|---|---|
+| `cobble` | `rotate` |
+| `flagstone` | `rotate` |
+| `masonry_dressed` | `offset` |
+| `masonry_rubble` | `rotate` |
+| `plaster` | `rotate` |
+| `planks_floor` | `offset` |
+| `planks_wall` | `offset` |
+| `timber_beam` | `offset` |
+| `roof_shingle` | `offset` |
+| `roof_tiles` | `offset` |
+| `thatch` | `offset` |
+| `dirt_path` | `rotate` |
+| `mud` | `rotate` |
+
+Антиповтор задаётсяполем `antitile` записи `materials.json`: `rotate` разрешает случайный поворот плитки, `offset` сохраняет направление кладки, досок и кровли. `antitile_cell` — размер ячейки в единицах плитки (по умолчанию 1,0); отсутствие `antitile` или `off` оставляет обычный повтор.
+
+При подготовке замены сначала учитывается `anti_repeat` конкретной записи CSV: для `off`, в том числе у всех модулей, антиповтор должен оставаться выключенным. Таблица режимов не меняет эту политику и пока не подключена к генератору. Основная таблица материалов сохраняет шесть колонок, которые читает действующий `generate.py`.
+
 Металличность у однородных классов этапа 1 — 0. Классы добавляются по мере этапов; новые классы панелей, полос и модулей перечислены отдельно ниже и пока не подключены к генератору.
 
 ## Промпт

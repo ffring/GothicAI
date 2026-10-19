@@ -14,6 +14,7 @@
 #include "game/gamescript.h"
 #include "game/herodeed.h"
 #include "game/inventory.h"
+#include "gothic.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicsnoise.h"
 #include "testbench.h"
@@ -544,15 +545,30 @@ void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
   }
 
 void NpcObserver::releaseAll(World& world) {
+  cancelDeeds(world);
   for(auto& h:held)
     releaseHeld(world,h);
   held.clear();
   verdicts.clear();
   for(auto& r:running)
-    if(r.investigate)
-      if(auto* npc = world.findNpcByInstance(r.instance))
+    if(auto* npc = world.findNpcByInstance(r.instance)) {
+      if(r.investigate)
         npc->stopPhysicsInvestigation(owner(r.symbol).empty() && npc->canHearPhysicsNoise());
+      }
   running.erase(std::remove_if(running.begin(),running.end(),[](const Running& r){ return r.investigate; }),running.end());
+  }
+
+void NpcObserver::cancelDeeds(World& world) {
+  for(auto& r:running)
+    if(auto* npc = world.findNpcByInstance(r.instance)) {
+      if(r.theft.active)
+        NpcSteal::finish(*npc,r.theft);
+      if(r.deed)
+        npc->clearServerDeed();
+      }
+  running.erase(std::remove_if(running.begin(),running.end(),[](const Running& r){
+    return r.theft.target.item!=nullptr || r.deed;
+    }),running.end());
   }
 
 void NpcObserver::releaseHeld(World& world, Held& h) {
@@ -615,12 +631,27 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   ScriptFn state;
   Running  run;  // what is tracked until npc_idle
 
-  if(npc->isPhysicsInvestigating() && action!="fight" && action!="flee" && action!="draw_weapon") {
+  for(auto& previous:running)
+    if(previous.symbol==symbol) {
+      if(previous.theft.active)
+        NpcSteal::finish(*npc,previous.theft);
+      if(previous.deed)
+        npc->clearServerDeed();
+      }
+
+  if(npc->isPhysicsInvestigating() && action!="fight" && action!="flee" && action!="draw_weapon" && action!="steal") {
     result("rejected","npc is investigating a noise");
     return;
     }
 
-  if(action=="say_svm") {
+  if(action=="steal") {
+    std::string error;
+    if(!NpcSteal::begin(world,*npc,args,run.theft,error)) {
+      result("rejected",error);
+      return;
+      }
+    }
+  else if(action=="say_svm") {
     std::string svm = upper(JsonRead::str(args,"svm"));
     if(svm.empty()) {
       result("rejected","say_svm needs svm");
@@ -688,7 +719,13 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
       return;
       }
     if(action=="fight") {
-      const auto reasonName = upper(JsonRead::str(args,"reason"));
+      run.deed = JsonRead::boolean(args,"deed",false);
+      run.nonlethal = run.deed || JsonRead::boolean(args,"nonlethal",false);
+      if(run.nonlethal && (target->isPlayer() || target->isMonster() || target->isDown())) {
+        result("rejected","NPC nonlethal fight needs a standing human target");
+        return;
+        }
+      const auto reasonName = run.nonlethal ? std::string("AR_NONE") : upper(JsonRead::str(args,"reason"));
       if(!reasonName.empty()) {
         auto* reason = world.script().findSymbol(reasonName);
         const auto attack = HeroDeed::constant(*npc,"AIV_ATTACKREASON");
@@ -725,6 +762,12 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     npc->setOther(target);
     npc->setVictim(nullptr);
     npc->setTarget(target);
+    if(run.nonlethal) {
+      npc->setNonlethalFight(*target);
+      run.fightTarget = target->instanceSymbol();
+      }
+    if(run.deed)
+      npc->setServerDeed("attack",target);
     if(action=="fight" && npc->weaponState()==WeaponState::NoWeapon)
       npc->aiPush(AiQueue::aiDrawWeapon());
     if(auto svm = upper(JsonRead::str(args,"svm")); !svm.empty()) {
@@ -840,7 +883,7 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   run.instance = world.script().findSymbolIndex(symbol);
   run.start    = world.tickCount();
   run.state    = state;
-  run.maxMs    = run.investigate ? 46000 : (action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs));
+  run.maxMs    = run.theft.active ? StateMaxMs : (run.investigate ? 46000 : (action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs)));
   running.push_back(std::move(run));
   result("queued","");
   }
@@ -891,7 +934,33 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
     bool        done   = false;
     std::string reason = "done";
     std::string detail;
-    if(!gone && r.investigate) {
+    Npc* fightTarget = r.nonlethal ? world.findNpcByInstance(r.fightTarget) : nullptr;
+    const auto stopScopedFight = [&] {
+      // A terminal receipt belongs to this command only. Native retargeting or
+      // a later owner must keep its state and queues; unconscious bodies keep
+      // their own native recovery state too.
+      if(gone || !r.nonlethal || fightTarget==nullptr || !npc->isInState(r.state) ||
+         npc->target()!=fightTarget)
+        return false;
+      npc->clearAiQueue();
+      npc->clearState(true);
+      npc->setTarget(nullptr);
+      npc->resumeAiRoutine();
+      return true;
+      };
+    if(!gone && r.theft.active && now>r.start+ActGraceMs) {
+      const auto progress = NpcSteal::tick(world,*npc,r.theft,detail);
+      done = progress!=NpcSteal::Progress::Running;
+      if(progress==NpcSteal::Progress::Failed) reason = "failed";
+      }
+    else if(!gone && fightTarget!=nullptr && fightTarget->isDown()) {
+      // AR_NONE never requests finishing. Stop the command at the actual
+      // knockout as well, before ZS_ATTACK can queue any post-combat action.
+      stopScopedFight();
+      detail = fightTarget->isDead() ? "target_dead" : "target_down";
+      done = true;
+      }
+    else if(!gone && r.investigate) {
       done = !npc->isPhysicsInvestigating();
       if(done && !npc->physicsInvestigationResult().empty())
         reason = npc->physicsInvestigationResult();
@@ -917,8 +986,33 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
       ++i;
       continue;
       }
-    if(gone)
-      reason = "gone"; else
+    if(!done && late && stopScopedFight()) {
+      // ZS_ATTACK_LOOP keeps counterattacking a nearby standing target even
+      // after that target leaves combat. End only this pair's native response;
+      // another server action, owner or state has priority over our old run.
+      const bool otherRun = std::any_of(running.begin(),running.end(),[&](const Running& other) {
+        return other.instance==r.fightTarget;
+        });
+      if(!otherRun && !fightTarget->isDown() && !fightTarget->isLie() &&
+         !BodyController::owns(*fightTarget) && !fightTarget->isExternalControl() &&
+         owner(npcId(world,*fightTarget)).empty() && !fightTarget->isTalk() &&
+         !Gothic::inst().isNpcInDialog(*fightTarget) && fightTarget->isInState(r.state) &&
+         fightTarget->target()==npc) {
+        fightTarget->clearAiQueue();
+        fightTarget->clearState(true);
+        fightTarget->setTarget(nullptr);
+        fightTarget->resumeAiRoutine();
+        }
+      }
+    if(npc!=nullptr) {
+      NpcSteal::finish(*npc,r.theft);
+      if(r.deed) npc->clearServerDeed();
+      }
+    if(gone) {
+      reason = "gone";
+      if(r.nonlethal && npc!=nullptr && npc->isDown())
+        detail = npc->isDead() ? "defender_dead" : "defender_down";
+      } else
     if(!done)
       reason = "timeout"; else
     if(r.giveTo!=size_t(-1)) {
