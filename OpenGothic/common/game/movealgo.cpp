@@ -727,12 +727,9 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
     const float distance = std::hypot(travel.x,travel.z);
     if(distance<=.1f*float(dt))
       return; // Ignore slow contact recovery below 1 m/s.
-    const float yaw = npc.rotation()*float(M_PI)/180.f;
-    const float along = (std::cos(yaw)*travel.x+std::sin(yaw)*travel.z)/distance;
-    // Retain the native bounce's chosen heading when it already faces the
-    // accepted travel. Even a failed move may have slid sideways in Jolt.
-    if(along<.8660254f)
-      npc.setDirection(Tempest::Vec3(travel.x,0,travel.z));
+    // Even a failed move may have slid sideways in Jolt. Face the accepted
+    // travel so the next animation step no longer keeps driving into the bank.
+    npc.setDirection(Tempest::Vec3(travel.x,0,travel.z));
     };
   if(!npc.isPlayer() && moved.blocked) {
     DynamicWorld::CollisionTest legacy;
