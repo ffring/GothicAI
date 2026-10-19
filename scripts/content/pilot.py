@@ -1,6 +1,7 @@
 """Shared city-set scope and placement rules; no image inputs."""
 
 TARGET_LUMINANCE_TOLERANCE = 0.002
+CITY_2_SETS = frozenset({"city-2", "city-2-imagegen"})
 
 CITY_2_MODULES = (
     "NW_CITY_WALL_03.TGA",
@@ -33,9 +34,9 @@ ANTITILE_BY_CLASS = {
 
 
 def selected_rows(rows, set_name):
-    """Keep CSV order and deduplicate the facade/include overlap in city-2."""
+    """Keep CSV order and deduplicate the facade/include overlap in city-2 sets."""
     selected = [row for row in rows if row.get("decision") == "include"
-                or (set_name == "city-2" and row.get("texture") in CITY_2_MODULES)]
+                or (set_name in CITY_2_SETS and row.get("texture") in CITY_2_MODULES)]
     names = [row["texture"] for row in selected]
     if len(names) != len(set(names)):
         raise ValueError(f"mapping repeats selected texture in {set_name}")

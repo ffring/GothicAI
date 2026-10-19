@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Import built-in image_gen PNGs into the city-2 comparison, without models.
+
+Each ``sources/TEXTURE-attempt-N.json`` describes its neighbouring source PNG:
+texture, attempt, prompt, utc, seconds, and source (an absolute PNG path).
+This CPU-only command never calls a generator or reads provider credentials.
+It copies the ten unchanged FLUX selections and filters all imported attempts
+with the same target luminance and derived-map filter as the city-2 pilot.
+"""
+
+from __future__ import annotations
+
+import argparse
+from copy import deepcopy
+import hashlib
+import json
+import math
+from pathlib import Path
+import re
+import shutil
+import sys
+import tempfile
+
+import numpy as np
+from PIL import Image
+
+import bakeoff
+import generate
+from pilot import CITY_2_MODULES, MODULE_REPEAT_AXES
+import registry as registry_module
+import seam_fix
+
+
+SET = 'city-2-imagegen'
+SOURCE_SET = 'city-2'
+TEXTURES = frozenset((*CITY_2_MODULES, 'NW_CITY_HAFENKAI_BODEN_01.TGA',
+    'NW_CITY_DUNGEONFLOOR_02.TGA', 'NW_CITY_DUNGEONFLOOR_03.TGA',
+    'NW_CITY_DIRTYGROUND_02.TGA'))
+SOURCE_NAME = re.compile(r'(NW_CITY_[A-Z0-9_]+)-attempt-([1-3])\Z')
+MODEL = dict(id='image_gen.imagegen', revision=None,
+    license='OpenAI Terms of Use; output owned by user')
+# These describe FLUX execution, not the shared numeric map filter.
+FLUX_PARAMETERS = frozenset({'steps', 'guidance_scale', 'max_sequence_length',
+    'quantization', 'torch_dtype', 'seed_algorithm', 'tiling',
+    'negative_prompt_used'})
+
+
+def texture_name(value):
+    value = value.upper()
+    return value if value.endswith('.TGA') else value + '.TGA'
+
+
+def option_pairs(values, *, selection=False):
+    """Parse repeatable explicit selections without silently overwriting one."""
+    result = {}
+    for value in values:
+        try:
+            name, choice = value.rsplit(':', 1)
+        except ValueError as error:
+            raise ValueError(f'expected TEXTURE:{"N" if selection else "uv|u|v"}: {value}') from error
+        name = texture_name(name)
+        if name not in TEXTURES:
+            raise ValueError(f'unknown imported texture: {name}')
+        if name in result:
+            raise ValueError(f'duplicate option for {name}')
+        if selection:
+            if choice not in ('1', '2', '3'):
+                raise ValueError(f'{name}: attempt must be 1, 2 or 3')
+            choice = int(choice)
+        elif choice not in ('u', 'v', 'uv'):
+            raise ValueError(f'{name}: seam axes must be u, v or uv')
+        result[name] = choice
+    return result
+
+
+def permitted_axes(record):
+    params = record['parameters']
+    layout = params['layout']
+    if layout == 'tiled':
+        return 'uv'
+    if layout == 'panel':
+        return ''
+    if layout == 'strip':
+        axes = MODULE_REPEAT_AXES.get(record['replaces'][0], params.get('tiling_axes', ''))
+        if axes in ('u', 'v'):
+            return axes
+    raise ValueError(f'{record["id"]}: no valid repeat axes for layout {layout!r}')
+
+
+def read_sources(sources):
+    """Require the exact comparison scope and every 1-based attempt's recipe."""
+    found = {}
+    metadata_paths = set()
+    for path in sorted(sources.glob('NW_CITY_*-attempt-*.json')):
+        match = SOURCE_NAME.fullmatch(path.stem)
+        if match is None:
+            raise ValueError(f'invalid source attempt filename: {path.name}')
+        expected_texture = match[1] + '.TGA'
+        expected_attempt = int(match[2])
+        metadata = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(metadata, dict):
+            raise ValueError(f'{path.name}: expected a JSON object')
+        if metadata.get('texture') != expected_texture or metadata.get('attempt') != expected_attempt:
+            raise ValueError(f'{path.name}: texture/attempt does not match filename')
+        if expected_texture not in TEXTURES:
+            raise ValueError(f'{path.name}: not one of the 12 imported materials')
+        for field in ('prompt', 'utc'):
+            if not isinstance(metadata.get(field), str) or not metadata[field].strip():
+                raise ValueError(f'{path.name}: missing {field}')
+        seconds = metadata.get('seconds')
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
+            raise ValueError(f'{path.name}: seconds must be a finite nonnegative number')
+        raw = metadata.get('source')
+        if not isinstance(raw, str) or not Path(raw).is_absolute():
+            raise ValueError(f'{path.name}: source must be an absolute PNG path')
+        raw = Path(raw).expanduser().resolve()
+        if not raw.is_file() or raw.suffix.lower() != '.png':
+            raise ValueError(f'{path.name}: source PNG does not exist: {raw}')
+        # A tool may save its result elsewhere first; retain a staging copy too.
+        retained = path.with_suffix('.png')
+        if retained.exists() and retained.resolve() != raw:
+            if retained.read_bytes() != raw.read_bytes():
+                raise ValueError(f'{path.name}: source differs from retained neighbouring PNG')
+        with Image.open(raw) as image:
+            if image.format != 'PNG' or min(image.size) < 1:
+                raise ValueError(f'{path.name}: expected a PNG image')
+            dimensions = image.size
+            image.verify()
+        attempt = dict(metadata=metadata, source=raw, retained=retained, dimensions=dimensions)
+        found.setdefault(expected_texture, []).append(attempt)
+        metadata_paths.add(path.with_suffix('.png'))
+    png_paths = set(sources.glob('NW_CITY_*-attempt-*.png'))
+    if png_paths - metadata_paths:
+        raise ValueError('source PNGs have no attempt metadata: ' +
+            ', '.join(sorted(path.name for path in png_paths - metadata_paths)))
+    missing = TEXTURES - found.keys()
+    if missing:
+        raise ValueError(f'expected exactly 12 materials; missing {len(missing)}: ' + ', '.join(sorted(missing)))
+    for name, attempts in found.items():
+        numbers = [attempt['metadata']['attempt'] for attempt in attempts]
+        if numbers != list(range(1, len(numbers) + 1)) or not 1 <= len(numbers) <= 3:
+            raise ValueError(f'{name}: require one through three consecutive attempts starting at 1')
+    return found
+
+
+def _new_id(record):
+    prefix = SOURCE_SET + '-'
+    if not record['id'].startswith(prefix):
+        raise ValueError(f'{record["id"]}: city-2 id has unexpected prefix')
+    return SET + '-' + record['id'][len(prefix):]
+
+
+def _save_maps(sources, record, maps, number):
+    relative = Path(SET) / record['id'] / f'attempt-{number}'
+    directory = sources / relative
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in bakeoff.MAPS:
+        value = np.asarray(maps[name])
+        if not np.isfinite(value).all():
+            raise ValueError(f'{record["id"]} attempt {number}: {name} contains nonfinite values')
+        Image.fromarray(np.rint(np.clip(value, 0, 1)*255).astype('uint8')).save(directory / f'{name}.png')
+    return {name: (relative / f'{name}.png').as_posix() for name in bakeoff.MAPS}
+
+
+def import_material(record, attempts, sources, axes='', selected=None):
+    """Retain all source attempts, and select an explicitly chosen/latest one."""
+    texture = record['replaces'][0]
+    allowed = permitted_axes(record)
+    if not set(axes) <= set(allowed):
+        raise ValueError(f'{texture}: seam fix {axes!r} exceeds {record["parameters"]["layout"]} repeat axes {allowed!r}')
+    selected = selected or attempts[-1]['metadata']['attempt']
+    if selected not in [attempt['metadata']['attempt'] for attempt in attempts]:
+        raise ValueError(f'{texture}: selected attempt {selected} does not exist')
+    result = deepcopy(record)
+    result.update(id=_new_id(record), pipeline='imagegen-filter', models=[deepcopy(MODEL)],
+        seed=None, negative='', files={})
+    params = result['parameters']
+    for field in FLUX_PARAMETERS:
+        params.pop(field, None)
+    params.update(set=SET, material=result['id'], input='text only; no original pixels or game screenshots',
+        tiling='seamless requested in text; explicit CPU overlap cut where reviewed',
+        source_size_policy='nearest available generation aspect; Lanczos stretch to 1024 square',
+        output_width=1024, output_height=1024)
+    generation = dict(outcome='complete', attempts=[], selected_attempt=selected,
+        model_identity='Tool name image_gen.imagegen; underlying model/version not exposed',
+        seed_policy='No seed exposed by the built-in tool',
+        source_policy='Original generated PNG retained outside git; no reference images supplied')
+    result['generation'] = generation
+    for source in attempts:
+        metadata = source['metadata']
+        number = metadata['attempt']
+        retained = source['retained']
+        if retained.resolve() != source['source']:
+            shutil.copy2(source['source'], retained)
+        with Image.open(retained) as opened:
+            image = opened.convert('RGB').resize((1024, 1024), Image.Resampling.LANCZOS)
+        # A broad overlap can eat a module's thin structural head/sill rail.
+        # Keep its cut in a narrow boundary strip; homogeneous surfaces have
+        # more freedom to find a low-error path through a wider overlap.
+        overlap = 1 / 32 if params['decision'] == 'module' else 1 / 8
+        image, seam = seam_fix.seamless(image, axes=axes, overlap_fraction=overlap)
+        maps, correction, rejection = generate.target_corrected_maps(image, result)
+        if rejection is not None:
+            raise ValueError(f'{texture} attempt {number}: numeric admission failed: {rejection}')
+        files = _save_maps(sources, result, maps, number)
+        attempt = dict(number=number, prompt=metadata['prompt'], seed=None,
+            utc=metadata['utc'], seconds=metadata['seconds'],
+            source_png=retained.relative_to(sources).as_posix(),
+            source_sha256=hashlib.sha256(retained.read_bytes()).hexdigest(),
+            source_width=source['dimensions'][0], source_height=source['dimensions'][1],
+            output_width=1024, output_height=1024,
+            brightness_correction=correction, seam_fix=seam, files=files,
+            numeric_valid=True, numeric_rejection=None, outcome='complete', selected=number == selected)
+        generation['attempts'].append(attempt)
+        if number == selected:
+            result.update(prompt=metadata['prompt'], files=deepcopy(files))
+            params.update(source_width=attempt['source_width'], source_height=attempt['source_height'])
+            generation.update(brightness_correction=deepcopy(correction),
+                saturation_correction=deepcopy(correction['saturation']), seam_fix=deepcopy(seam))
+    registry_module.validate_entry(result, content_root=sources)
+    return result
+
+
+def import_set(staging, flux_root, registry, fixes=None, selections=None):
+    """Replace only this set's registry rows; preserve every other row verbatim."""
+    staging = Path(staging).expanduser().resolve()
+    flux_root = Path(flux_root).expanduser().resolve()
+    sources = staging / 'sources'
+    live = (Path.home() / '.local/share/gothic-ai/content').resolve()
+    if staging.is_relative_to(live) or live.is_relative_to(staging) or staging == flux_root:
+        raise ValueError('staging must be separate from the live content root and city-2')
+    registry = Path(registry)
+    records = registry_module.check_registry(registry)
+    flux = [record for record in records if record['parameters'].get('set') == SOURCE_SET]
+    if len(flux) != 22 or len({tuple(record['replaces']) for record in flux}) != 22:
+        raise ValueError(f'city-2 must contain exactly 22 distinct materials, found {len(flux)}')
+    if any(len(record['replaces']) != 1 or record['generation'].get('outcome') != 'complete' for record in flux):
+        raise ValueError('every city-2 record must be complete and replace one texture')
+    if not TEXTURES <= {record['replaces'][0] for record in flux}:
+        raise ValueError('city-2 does not contain all 12 comparison materials')
+    fixes, selections = fixes or {}, selections or {}
+    if (fixes.keys() | selections.keys()) - TEXTURES:
+        raise ValueError('fix/selection contains a texture outside the comparison scope')
+    found = read_sources(sources)
+    # Preflight every clone before writing any generated map or registry entry.
+    for record in flux:
+        if record['replaces'][0] not in TEXTURES:
+            registry_module.validate_entry(record, content_root=flux_root / 'sources')
+    imported = []
+    for record in flux:
+        texture = record['replaces'][0]
+        if texture in TEXTURES:
+            imported.append(import_material(record, found[texture], sources,
+                axes=fixes.get(texture, ''), selected=selections.get(texture)))
+        else:
+            clone = deepcopy(record)
+            clone['id'] = _new_id(record)
+            clone['parameters']['set'] = SET
+            for relative in clone['files'].values():
+                target = sources / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(flux_root / 'sources' / relative, target)
+            registry_module.validate_entry(clone, content_root=sources)
+            imported.append(clone)
+    if len(imported) != 22:
+        raise ValueError(f'expected 22 output records, found {len(imported)}')
+    kept_lines = [line for line in registry.read_bytes().splitlines(keepends=True)
+        if json.loads(line)['parameters'].get('set') != SET]
+    retained_ids = {record['id'] for record in records if record['parameters'].get('set') != SET}
+    if retained_ids & {record['id'] for record in imported}:
+        raise ValueError('new resource ids conflict with records outside this set')
+    serialized = b''.join(line if line.endswith(b'\n') else line + b'\n' for line in kept_lines)
+    serialized += ''.join(json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False) + '\n'
+        for record in imported).encode('utf-8')
+    with tempfile.NamedTemporaryFile(dir=registry.parent, prefix=registry.name + '.', suffix='.tmp', delete=False) as stream:
+        temporary = Path(stream.name)
+        stream.write(serialized)
+    try:
+        registry_module.check_registry(temporary)
+        temporary.replace(registry)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return imported
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest='command', required=True)
+    command = commands.add_parser('import', help='filter already-generated PNG sources and register the complete comparison set')
+    command.add_argument('--staging', type=Path, required=True)
+    command.add_argument('--flux-root', type=Path, required=True)
+    command.add_argument('--registry', type=Path, default=registry_module.DEFAULT_REGISTRY)
+    command.add_argument('--fix', action='append', default=[], metavar='TEXTURE:uv|u|v')
+    command.add_argument('--select', action='append', default=[], metavar='TEXTURE:N')
+    args = parser.parse_args(argv)
+    try:
+        records = import_set(args.staging, args.flux_root, args.registry,
+            option_pairs(args.fix), option_pairs(args.select, selection=True))
+    except (ValueError, OSError) as error:
+        print(f'Imagegen import failed: {error}', file=sys.stderr)
+        return 1
+    attempts = sum(len(record['generation']['attempts']) for record in records if record['pipeline'] == 'imagegen-filter')
+    print(f'Imported {len(TEXTURES)} imagegen materials ({attempts} attempts) and {len(records)-len(TEXTURES)} unchanged FLUX selections; {len(records)} records')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

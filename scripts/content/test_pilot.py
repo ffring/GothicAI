@@ -14,16 +14,18 @@ def test_city2_has_22_unique_textures_with_two_shared_include_facade_entries():
     pilot = selected_rows(rows, "city-2")
     assert len(includes) == 16
     assert len(pilot) == 22
+    assert selected_rows(rows, "city-2-imagegen") == pilot
     assert len({row["texture"] for row in includes} & set(CITY_2_MODULES)) == 2
     assert sum(row["decision"] != "include" for row in pilot) == 6
 
 
-def test_only_city2_adds_facade_rows_and_preserves_csv_order():
+def test_city2_sets_add_facade_rows_and_preserve_csv_order():
     rows = [{"texture": "A.TGA", "decision": "include"},
             {"texture": "NW_CITY_WALL_03.TGA", "decision": "module"},
             {"texture": "OTHER.TGA", "decision": "module"}]
     assert selected_rows(rows, "city-1") == rows[:1]
     assert selected_rows(rows, "city-2") == rows[:2]
+    assert selected_rows(rows, "city-2-imagegen") == rows[:2]
     with pytest.raises(ValueError, match="repeats selected"):
         selected_rows(rows + [rows[0]], "city-2")
 

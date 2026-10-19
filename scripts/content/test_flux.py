@@ -56,6 +56,12 @@ def test_enable_flux_preserves_other_materials_and_resume(tmp_path):
     assert bakeoff.read_registry(output) == records
 
 
+def test_builtin_imagegen_has_no_download_or_hf_dependency(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, 'huggingface_hub', None)
+    bakeoff.download([dict(pipeline='imagegen-filter', models=[
+        dict(id='image_gen.imagegen', revision=None)])], tmp_path)
+
+
 def test_download_sends_credential_only_to_flux_and_does_not_print_it(tmp_path, monkeypatch, capsys):
     records = recipes()
     bakeoff.enable_flux(records)

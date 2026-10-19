@@ -66,6 +66,22 @@ def test_explicit_skip_reason_can_stand_alone(tmp_path):
     registry.check_registry(write_registry(tmp_path, [entry]))
 
 
+def test_builtin_imagegen_retains_unreported_seed_and_revision(tmp_path):
+    entry = recipe()
+    entry.update(pipeline="imagegen-filter", seed=None)
+    entry["models"] = [{"id": "image_gen.imagegen", "revision": None,
+                        "license": "OpenAI terms: output belongs to the user"}]
+    assert registry.check_registry(write_registry(tmp_path, [entry])) == [entry]
+    # The exception is tied to this pipeline, not to any hosted/unpinned model.
+    entry["models"][0]["id"] = "black-forest-labs/FLUX.1-schnell"
+    with pytest.raises(registry.RegistryError, match="40-character"):
+        registry.validate_entry(entry)
+    entry["models"][0]["id"] = "image_gen.imagegen"
+    entry.update(pipeline="flux-filter", seed=1024)
+    with pytest.raises(registry.RegistryError, match="owner/repository"):
+        registry.validate_entry(entry)
+
+
 @pytest.mark.parametrize("field,value,message", [
     ("id", "../stone", "resource slug"),
     ("kind", "texture", "kind"),
@@ -77,6 +93,7 @@ def test_explicit_skip_reason_can_stand_alone(tmp_path):
     ("prompt", "", "prompt"),
     ("negative", None, "negative"),
     ("seed", True, "seed"),
+    ("seed", None, "seed"),
     ("seed", 1.0, "seed"),
     ("seed", -1, "seed"),
     ("seed", 2**64, "seed"),
