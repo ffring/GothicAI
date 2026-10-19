@@ -482,7 +482,7 @@ void BodyController::pumpWatchdogs() {
     }
   }
 
-std::string BodyController::statusJson(const Npc* actor) {
+std::string BodyController::statusJson(const Npc* actor,bool boundaryDiagnostics) {
   Json d=object(); str(d,"type","body_control_status");
   u(d,"session_epoch",BodyObservations::sessionEpoch()); u(d,"world_epoch",BodyObservations::worldEpoch());
   b(d,"paused",state().paused); b(d,"infrastructure_failure",state().infrastructure);
@@ -503,12 +503,14 @@ std::string BodyController::statusJson(const Npc* actor) {
     u(row,"t_game_ms",npc.owner.tickCount()); u(row,"observation_seq",BodyObservations::latestSequence(npc));
     u(row,"observed_game_ms",BodyObservations::latestGameMs(npc)); u(row,"watchdog_timeout_ms",l ? l->timeout : 0);
     b(row,"control_allowed",s.controlAllowed); b(row,"can_decide",s.canDecide);
-    const auto physical=npc.bodyObservationState();
-    u(row,"process_policy",uint64_t(npc.processPolicy()));
-    u(row,"segment_remaining_ms",physical.segmentRemainingMs);
-    b(row,"fai_gate",physical.faiGate); b(row,"ani_gate",physical.aniGate);
-    b(row,"ai_gate",physical.aiGate); b(row,"output_gate",physical.outputGate);
-    b(row,"interruptible",physical.interruptible);
+    if(boundaryDiagnostics) {
+      const auto physical=npc.bodyObservationState();
+      u(row,"process_policy",uint64_t(npc.processPolicy()));
+      u(row,"segment_remaining_ms",physical.segmentRemainingMs);
+      b(row,"fai_gate",physical.faiGate); b(row,"ani_gate",physical.aniGate);
+      b(row,"ai_gate",physical.aiGate); b(row,"output_gate",physical.outputGate);
+      b(row,"interruptible",physical.interruptible);
+      }
     rapidjson::Value mask(rapidjson::kArrayType);
     for(bool value:s.mask) mask.PushBack(value,row.GetAllocator());
     row.AddMember("action_mask",mask,row.GetAllocator());

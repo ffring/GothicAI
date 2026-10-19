@@ -54,7 +54,7 @@ void number(Json& d,const char* key,uint64_t value) {
   }
 
 Json status(const Npc& actor) {
-  auto d=parse(BodyController::statusJson(&actor));
+  auto d=parse(BodyController::statusJson(&actor,true));
   Json row;
   row.CopyFrom(d["actors"][0],row.GetAllocator());
   return row;
@@ -606,6 +606,9 @@ int main(int argc,const char** argv) {
     BodyController::fixturePrepare(a,b,300,0);
     b.setDirection(a.position()-b.position()); b.updateTransform();
     a.setExternalControl(false);
+    const auto wireStatus=parse(BodyController::statusJson(&a));
+    for(const char* field:{"process_policy","segment_remaining_ms","fai_gate","ani_gate","ai_gate","output_gate","interruptible"})
+      expect(!wireStatus["actors"][0].HasMember(field),"wire status keeps the strict server schema; boundary diagnostics are opt-in");
     liveLease(a,b,player);
     movementRelease(a,b,player);
     pendingAcquire(a,b,player);
