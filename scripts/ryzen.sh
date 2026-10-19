@@ -981,11 +981,12 @@ e2e_display_exclusive() {
   [[ "${RYZEN_DISPLAY_EXCLUSIVE:-}" != 1 ]] || return 0
   [[ "${RYZEN_DISPLAY_EXCLUSIVE:-}" != 0 ]] || return 1
   case "$1" in
-    # Measured 19.10 (reports/compute/2026-10-19-ryzen-three-windows): passes alone
-    # at ~100 FPS, fails 1-2 of 3 three-game rounds at ~75: after the setup's hit,
-    # Cavalorn's next blows interrupt the bandit's return strike. Isolating that
-    # window is unfinished (PR #264).
-    fight_reactions_bandits) return 0 ;;
+    # Measured 19.10 (reports/compute/2026-10-19-ryzen-three-windows): after fixing
+    # arena geometry and the stop race, two three-game rounds passed 6/6 runs,
+    # each with 6/6 checks, at 72.1-76.2 FPS; alone 6/6 checks at 101.0 FPS.
+    # With main's E2E_MAX_FPS=30 cap one more three-game round passed 3/3 at
+    # 26.9-28.0 FPS, and fight_reactions_flee alone at 27.8.
+    fight_reactions_bandits) return 1 ;;
     # Same fight, companion and movement timing, not measured yet: kept exclusive
     # rather than risking false failures. Move one out only after it passes
     # every round of a three-game measurement (scripts/ryzen-round.sh), as orders

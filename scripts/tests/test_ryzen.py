@@ -135,7 +135,7 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
         self.assertIn('compile failure: build log tail', result.stdout)
 
     def test_exclusive_scenario_only_changes_the_game_request(self):
-        for scenario, exclusive in (('fight_reactions_bandits', True),
+        for scenario, exclusive in (('fight_reactions_bandits', False),
                                     ('calm', False), ('orders', False), ('stages', False),
                                     ('fight_reactions_wolf', True), ('calm_companion', True),
                                     ('neural-companion', True), ('wolf', True),
@@ -162,7 +162,7 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
         self.assertNotIn('--display-shared', options)
 
     def test_forced_shared_overrides_listed_scenario(self):
-        result, requests = self.run_game(scenario='fight_reactions_bandits',
+        result, requests = self.run_game(scenario='fight_reactions_wolf',
                                          window={'RYZEN_DISPLAY_EXCLUSIVE': '0'})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         options = self.queue_options(requests[-1])
