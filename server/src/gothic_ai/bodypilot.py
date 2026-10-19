@@ -11,7 +11,7 @@ import math
 import time
 from collections import Counter, deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -46,6 +46,7 @@ HEARTBEAT_TIMEOUT = 0.500
 LEASE_TIMEOUT_MS = 2000
 EVENTS_INTERVAL = 0.150
 FINISH_TIMEOUT = 2.0
+RELEASE_ORPHAN_GRACE = 3.0
 MAX_JSON_BYTES = 256 * 1024
 TRANSIENT_REJECTION_LIMIT = 10
 MAX_OBSERVATION_AGE_GAME_MS = 100
@@ -158,7 +159,7 @@ class PolicyDecisionTrace:
 
 @dataclass(frozen=True)
 class FightSummary:
-    """Completed fight and acknowledged cleanup, independent of mutable pilot state."""
+    """Immutable fight snapshot, replaced when a late native return is confirmed."""
 
     npc: str | None
     lease: BodyLease | None
@@ -203,6 +204,16 @@ class FightSummary:
     release_confirmed: bool
     release_seconds: float | None
     watch_removed: bool
+    end_trigger: str
+    release_late_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class PendingRelease:
+    lease: BodyLease
+    started_at: float
+    deadline: float
+    summary: FightSummary
 
 
 class BodyPilot:
@@ -229,6 +240,9 @@ class BodyPilot:
         self.fights: dict[str, BodyFight] = {}
         self.summaries: deque[FightSummary] = deque(maxlen=32)
         self.watch_busy = 0
+        self.release_orphan_timeout = 0
+        self._releasing: dict[str, PendingRelease] = {}
+        self._last_release_poll = float("-inf")
         self._claimed_fights: set[str] = set()
         self._lost_fights: set[str] = set()
         self._retarget_pending: set[str] = set()
@@ -246,7 +260,7 @@ class BodyPilot:
 
     @property
     def last_summary(self) -> FightSummary | None:
-        """The last completed cleanup; active fights never mutate this snapshot."""
+        """The last completed fight; late release confirmation publishes a new snapshot."""
         return self.summaries[-1] if self.summaries else None
 
     @property
@@ -254,8 +268,8 @@ class BodyPilot:
         return len(self.fights)
 
     def handles(self, npc: str) -> bool:
-        """Include observation, pending acquisition and acknowledged release cleanup."""
-        return npc.upper() in self.fights
+        """Include observation, pending acquisition and unconfirmed release cleanup."""
+        return npc.upper() in self.fights or npc.upper() in self._releasing
 
     def _allowed(self, npc: str) -> bool:
         entry = self.people.get(npc)
@@ -275,6 +289,29 @@ class BodyPilot:
 
     def _companion(self, npc: str) -> bool:
         return bool(self.companion(npc) or self.link.party.get(npc, (0, 0))[1])
+
+    async def _live_target(self, actor_npc: str) -> tuple[str, str | None, str] | None:
+        """Classify the engine's current target, never the roster's combat snapshot."""
+        companions = sorted(
+            npc for npc in self.people.keys() | self.link.party.keys()
+            if self._companion(npc)
+        )
+        expressions = [TARGET_IS_HERO, *[
+            ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
+             ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
+              ["call", "HLP_GETINSTANCEID", ["inst", npc]]]]
+            for npc in companions
+        ]]
+        matches = await self.link.story_eval(actor_npc, expressions, timeout=BRIDGE_TIMEOUT)
+        if len(matches) != len(expressions):
+            raise GameError("target identity unavailable")
+        if matches[0] == 1:
+            return "hero", None, "HERO"
+        for npc, matched in zip(companions, matches[1:], strict=True):
+            if matched == 1 and self._companion(npc):
+                entry = self.people.get(npc)
+                return "companion", entry.name if entry else npc, npc
+        return None
 
     def on_message(self, message: GameMessage) -> None:
         if isinstance(message, NpcRoster):
@@ -301,6 +338,7 @@ class BodyPilot:
                 elif npc not in self._roster_attempted:
                     self._start(npc)
         elif isinstance(message, (Loading, Hello)):
+            self._releasing.clear()
             self.people.clear()
             self._claimed_fights.clear()
             self._lost_fights.clear()
@@ -314,6 +352,15 @@ class BodyPilot:
         elif isinstance(message, BodyControlEvents):
             for fight in list(self.fights.values()):
                 fight.on_message(message)
+            for npc, pending in list(self._releasing.items()):
+                if any(
+                    (event.entity_id, event.session_epoch, event.world_epoch, event.control_generation)
+                    == BodyFight._identity(pending.lease)
+                    and event.phase == "ownership" and event.reason == "native_restored"
+                    and event.owner == "native"
+                    for event in message.events
+                ):
+                    self._released(npc, pending)
         elif isinstance(message, NpcEvent) and not self._closing:
             npc = None
             if message.other.upper() in {"PLAYER", "HERO"} and message.kind in {
@@ -339,12 +386,13 @@ class BodyPilot:
         if (
             self.handles(npc) or self._closing or self._resetting
             or self.active_count >= self.max_fights
+            or len(self.fights.keys() | self._releasing.keys()) >= 4
             or npc in self._claimed_fights
             or self.clock() < self._reacquire_after.get(npc, float("-inf"))
             or not self._allowed(npc)
         ):
             return False
-        if self.fights and not self._watch_can_change():
+        if (self.fights or self._releasing) and not self._watch_can_change():
             self.watch_busy += 1
             log.info(
                 "neural-body watch refused npc=%s reason=watch_busy active_fights=%d protocol=%s count=%d",
@@ -369,7 +417,7 @@ class BodyPilot:
         # so a concurrent finish cannot overwrite a newly admitted actor.
         async with self._watch_lock:
             npcs = [npc for npc in self._watch_npcs if (
-                npc in self.fights and npc not in self._pending_unwatch
+                (npc in self.fights or npc in self._releasing) and npc not in self._pending_unwatch
             )]
             if fight.npc not in npcs:
                 npcs.append(fight.npc)
@@ -391,7 +439,9 @@ class BodyPilot:
     async def _flush_unwatch(self) -> bool:
         async with self._watch_lock:
             pending = self._pending_unwatch.copy()
-            npcs = [npc for npc in self._watch_npcs if npc not in pending and npc in self.fights]
+            npcs = [npc for npc in self._watch_npcs if (
+                npc not in pending and (npc in self.fights or npc in self._releasing)
+            )]
             self._last_watch_attempt = asyncio.get_running_loop().time()
             await self.link.body_watch(npcs, timeout=BRIDGE_TIMEOUT)
             self._watch_npcs = npcs
@@ -406,12 +456,127 @@ class BodyPilot:
                 async with asyncio.timeout(BRIDGE_TIMEOUT):
                     await self._flush_unwatch()
 
-    def _completed(self, fight: BodyFight, summary: FightSummary) -> None:
+    def _released(self, npc: str, pending: PendingRelease, *, confirmed: bool = True) -> None:
+        self._releasing.pop(npc, None)
+        if self.link.body_leases.get(pending.lease.entity_id) == pending.lease:
+            self.link.body_leases.pop(pending.lease.entity_id)
+        self._pending_unwatch.add(npc)
+        if confirmed:
+            late_seconds = time.monotonic() - pending.started_at
+            updated = replace(pending.summary, release_confirmed=True, release_late_seconds=late_seconds)
+            for index, summary in enumerate(self.summaries):
+                if summary is pending.summary:
+                    self.summaries[index] = updated
+                    break
+            self._remember_retarget(updated)
+            log.info(
+                "neural-body end npc=%s reason=%s end_trigger=%s release_late_seconds=%.3f "
+                "release_confirmed=True",
+                npc, updated.reason, updated.end_trigger, late_seconds,
+            )
+        self._remember_lost_fight(
+            updated if confirmed else pending.summary, orphan_expired=not confirmed,
+        )
+        self._wake.set()
+
+    async def _poll_releases(self) -> None:
+        if not self._releasing:
+            return
+        # Never infer native ownership merely from a missing local lease: another
+        # RPC may have discarded it on a generation mismatch or a refusal.
+        for npc, pending in list(self._releasing.items()):
+            if self.clock() >= pending.deadline:
+                self.release_orphan_timeout += 1
+                log.warning(
+                    "neural-body release_orphan_timeout npc=%s entity=%d count=%d waited_seconds=%.3f",
+                    npc, pending.lease.entity_id, self.release_orphan_timeout,
+                    time.monotonic() - pending.started_at,
+                )
+                self._released(npc, pending, confirmed=False)
+        now = asyncio.get_running_loop().time()
+        if not self._releasing or now - self._last_release_poll < EVENTS_INTERVAL:
+            return
+        self._last_release_poll = now
+        with contextlib.suppress(*BRIDGE_ERRORS):
+            self.on_message(await self.link.body_events(timeout=BRIDGE_TIMEOUT))
+        if not self._releasing:
+            return
+        with contextlib.suppress(*BRIDGE_ERRORS):
+            status = await self.link.body_control_status(timeout=BRIDGE_TIMEOUT)
+            for npc, pending in list(self._releasing.items()):
+                lease = pending.lease
+                if (status.session_epoch, status.world_epoch) != (lease.session_epoch, lease.world_epoch):
+                    continue
+                if any(actor.entity_id == lease.entity_id and actor.owner == "native"
+                       for actor in status.actors):
+                    self._released(npc, pending)
+
+    def _remember_lost_fight(self, summary: FightSummary, *, orphan_expired: bool = False) -> None:
+        reason = summary.end_trigger if summary.reason == "finish_deadline" else summary.reason
+        if (
+            summary.npc in self._claimed_fights and (summary.release_confirmed or orphan_expired)
+            and reason in {"npc_unavailable", "target_lost"}
+        ):
+            # A distant NPC can return straight to native combat. Its routine
+            # while outside the roster is not observable, so range exit ends
+            # this lost episode without requiring an intervening routine row.
+            # Lease expiry permits the same bookkeeping without fabricating a
+            # release confirmation in the summary.
+            self._lost_fights.add(summary.npc)
+            entry = self.people.get(summary.npc)
+            if entry is None or entry.distance > 2000:
+                self._forget_ended({summary.npc})
+
+    def _remember_retarget(self, summary: FightSummary) -> None:
+        if (
+            summary.npc is not None and summary.end_trigger == "target_changed"
+            and summary.release_confirmed and not self._closing and not self._resetting
+        ):
+            # Keep the claim until the dispatcher can check the live target.
+            # The completed BodyFight has already discarded its mutable state.
+            self._retarget_pending.add(summary.npc)
+
+    async def _resume_retargets(self) -> None:
+        for npc in sorted(self._retarget_pending):
+            entry = self.people.get(npc)
+            if entry is None or entry.activity != "fight" or entry.state.upper() != "ZS_ATTACK":
+                continue
+            if npc in self._claimed_fights:
+                if (
+                    self.handles(npc) or not self._allowed(npc)
+                    or self.clock() < self._reacquire_after.get(npc, float("-inf"))
+                ):
+                    continue
+                try:
+                    target = await self._live_target(npc)
+                except BRIDGE_ERRORS:
+                    continue
+                if self._closing or self._resetting or npc not in self._retarget_pending or self.handles(npc):
+                    continue
+                if target is None:
+                    self._retarget_pending.discard(npc)
+                    continue
+                self._claimed_fights.discard(npc)
+            self._start(npc)
+
+    def _completed(self, fight: BodyFight, summary: FightSummary, finish_at: float,
+                   release_deadline: float) -> None:
         self.summaries.append(summary)
+        reason = summary.end_trigger if summary.reason == "finish_deadline" else summary.reason
+        if (
+            summary.npc is not None and summary.lease is not None and not summary.release_confirmed
+            and summary.reason not in WORLD_STOP_REASONS
+            and not self.link.closed.is_set()
+            and (self.link.body_session_epoch, self.link.body_generation)
+            == (summary.lease.session_epoch, summary.lease.world_epoch)
+        ):
+            self._releasing[summary.npc] = PendingRelease(
+                summary.lease, finish_at, release_deadline, summary,
+            )
         if self.fights.get(summary.npc) is fight:
             del self.fights[summary.npc]
         if (
-            summary.npc is not None and summary.reason in {"hero_down", "target_down"}
+            summary.npc is not None and reason in {"hero_down", "target_down"}
             and not self._closing and not self._resetting
         ):
             # Native looting/retreat can still be ZS_ATTACK after the target fell.
@@ -432,18 +597,11 @@ class BodyPilot:
             # policy failures and every other refusal keep their episode guard.
             self._roster_attempted.discard(summary.npc)
             self._reacquire_after[summary.npc] = self.clock() + REACQUIRE_INTERVAL
-        if summary.npc in self._claimed_fights and summary.release_confirmed and summary.reason in {
-            "npc_unavailable", "target_lost",
-        }:
-            # A distant NPC can return straight to native combat. Its routine
-            # while outside the roster is not observable, so range exit ends
-            # this lost episode without requiring an intervening routine row.
-            self._lost_fights.add(summary.npc)
-            entry = self.people.get(summary.npc)
-            if entry is None or entry.distance > 2000:
-                self._forget_ended({summary.npc})
+        self._remember_lost_fight(summary)
         if not self.fights:
             self._resetting = False
+        if summary.reason == "finish_deadline":
+            self._remember_retarget(summary)
         self._wake.set()
 
     def _stop_all(self, reason: str) -> None:
@@ -497,13 +655,11 @@ class BodyPilot:
                     self._stop_all("disconnected")
                     break
                 await self._retry_unwatch()
+                await self._poll_releases()
                 for fight in list(self.fights.values()):
                     if fight.task is None:
                         fight.task = asyncio.create_task(fight.run())
-                for npc in sorted(self._retarget_pending):
-                    entry = self.people.get(npc)
-                    if entry is not None and entry.activity == "fight" and entry.state.upper() == "ZS_ATTACK":
-                        self._start(npc)
+                await self._resume_retargets()
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=0.025)
                 except TimeoutError:
@@ -632,28 +788,8 @@ class BodyFight:
         return self.pilot._companion(npc)
 
     async def _live_target(self) -> tuple[str, str | None, str] | None:
-        """Classify the engine's current target, never the roster's combat snapshot."""
         assert self.npc is not None
-        companions = sorted(
-            npc for npc in self.people.keys() | self.link.party.keys()
-            if self._companion(npc)
-        )
-        expressions = [TARGET_IS_HERO, *[
-            ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
-             ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
-              ["call", "HLP_GETINSTANCEID", ["inst", npc]]]]
-            for npc in companions
-        ]]
-        matches = await self.link.story_eval(self.npc, expressions, timeout=BRIDGE_TIMEOUT)
-        if len(matches) != len(expressions):
-            raise GameError("target identity unavailable")
-        if matches[0] == 1:
-            return "hero", None, "HERO"
-        for npc, matched in zip(companions, matches[1:], strict=True):
-            if matched == 1 and self._companion(npc):
-                entry = self.people.get(npc)
-                return "companion", entry.name if entry else npc, npc
-        return None
+        return await self.pilot._live_target(self.npc)
 
     def stop(self, reason: str) -> None:
         self._set_reason(reason)
@@ -1329,6 +1465,8 @@ class BodyFight:
                 if target is not None and target[2] != self._target_npc:
                     reason = "target_changed"
         finish_at = time.monotonic()
+        release_deadline = self.clock() + LEASE_TIMEOUT_MS / 1000 + RELEASE_ORPHAN_GRACE
+        end_trigger = reason
         self._capture_invisibility(self.clock(), self._now_game_ms)
         fight_seconds = self.clock() - self._fight_at if self.lease is not None else None
         policy_response_age = self._policy_response_age()
@@ -1409,8 +1547,9 @@ class BodyFight:
                             if target is not None and target[2] != self._target_npc:
                                 reason = "target_changed"
         except TimeoutError:
+            end_trigger = reason
             reason = "finish_deadline"
-            # Make a final authoritative check before discarding local ownership.
+            # Make a final authoritative check; an unconfirmed lease stays watched.
             lease = self.lease
             if lease is not None:
                 with contextlib.suppress(*BRIDGE_ERRORS):
@@ -1421,15 +1560,12 @@ class BodyFight:
                 reason = self._reason
             release_confirmed = bool(
                 lease is not None
-                and reason not in {"finish_deadline", "disconnected"}
+                and reason != "disconnected"
                 and not self.link.closed.is_set()
                 and self.link.body_leases.get(lease.entity_id) != lease
             )
             if release_confirmed:
                 release_seconds = time.monotonic() - finish_at
-            if reason == "finish_deadline" and lease is not None:
-                if self.link.body_leases.get(lease.entity_id) == lease:
-                    self.link.body_leases.pop(lease.entity_id)
             self._pending_acquire = None
             if client is not None:
                 try:
@@ -1453,6 +1589,15 @@ class BodyFight:
                 observed_terminal = observed_terminal or self._latest_terminal(lease)
                 if observed_terminal is not None:
                     reason = observed_terminal
+            # Another fight's poll can deliver native_restored while the policy
+            # episode is closing. Recheck before unwatch and orphan registration.
+            if not release_confirmed and (
+                lease is not None and reason != "disconnected"
+                and not self.link.closed.is_set()
+                and self.link.body_leases.get(lease.entity_id) != lease
+            ):
+                release_confirmed = True
+                release_seconds = time.monotonic() - finish_at
             if self._watched and (
                 release_confirmed or (lease is None and self._pending_acquire is None)
                 or not self.link.body_leases
@@ -1506,9 +1651,12 @@ class BodyFight:
             release_confirmed=release_confirmed,
             release_seconds=release_seconds,
             watch_removed=watch_removed,
+            end_trigger=end_trigger if reason == "finish_deadline" else reason,
+            release_late_seconds=release_seconds if reason == "finish_deadline" else None,
         )
         log.info(
-            "neural-body end npc=%s target_kind=%s target_name=%s reason=%s "
+            "neural-body end npc=%s target_kind=%s target_name=%s reason=%s end_trigger=%s "
+            "release_late_seconds=%s "
             "decisions=%d fallback=%d memory_only_lag_rows=%d observation_too_old=%d "
             "policy_memory_resets=%d max_batch_rows=%d max_batch_lag_game_ms=%d service_p50_ms=%s "
             "service_p95_ms=%s packet_to_request_p50_ms=%s packet_to_request_p95_ms=%s "
@@ -1524,6 +1672,8 @@ class BodyFight:
             summary.target_kind,
             summary.target_name,
             reason,
+            summary.end_trigger,
+            summary.release_late_seconds,
             self._decisions,
             self._fallbacks,
             summary.memory_only_lag_rows,
@@ -1612,4 +1762,4 @@ class BodyFight:
         self._memory_only_step = self._policy_needs_reset = False
         self._memory_only_lag_rows = self._observation_too_old = self._policy_memory_resets = 0
         self._max_batch_rows = self._max_batch_lag_game_ms = 0
-        self.pilot._completed(self, summary)
+        self.pilot._completed(self, summary, finish_at, release_deadline)
