@@ -16,7 +16,8 @@ follows the footage in either format; `parts/followMath.ts` shares the frame/zoo
 maps source pixels through cover, split and zoom. These overlays are opt-in through `follow` and `hp`.
 Their plan timings drive every reveal, turn, alignment and packet; the diagrams need no game or model process.
 Omit a diagram beat to leave it out; these five types are rejected in tall plans. Publication of either format
-uses the same `gothic_shorts.levels.publish` checks.
+uses the same `gothic_shorts.levels.publish` checks. Before them, the published footage sound fades in and out
+over 30 ms at every beat's edges and at `freeze`, so a hard cut never clicks.
 
 ```bash
 cd shorts/explain
@@ -66,6 +67,14 @@ level, then the brand sting at 1; `music` plays the looped bed at 1 with its `fa
 ducking or plan mix gains. All stems cover the full video, including the sting; music and voice stop at the
 end of the beats. Music fades are already rendered, so publication passes `music_fades=False` to `levels`.
 The body duration is the summed beats rounded to frames; the full length adds `STING_FRAMES` (66) when branded.
+
+The game stem gets linear 30 ms fades (`EDGE_FADE`) to silence at both ends of every beat and at `freeze`,
+from which Remotion's frozen video is silent. A beat may start mid-sound after a silent card, or cut
+mid-sound to the next one, and still pass the click check. `gothic_shorts.explain.render` applies them to the rendered
+WAV sample by sample, at the plan's beat edges with Remotion's frame rounding (`sound_spans`). They are not in
+the composition: Remotion evaluates a `volume` callback once per frame, so a ramp there becomes one 33 ms step
+and still clicks. The sting after the beats keeps its own start. Draft renders straight from Remotion keep
+the hard cuts; `dub` gets the faded game stem through the same `render`.
 
 For publication, `gameVolume`, `duck`, `music.volume`, `music.duck` and `brandVolume` are ignored: `levels`
 sets the levels. `beat.game` remains a relative level within the effects stem. Record footage with `MUSIC=0`
@@ -408,7 +417,8 @@ example, grouped bars, a ten-column dot grid and a centred stats panel. The vert
 pillarboxed until a horizontal asset is available.
 
 Validation: `npm run typecheck` in this folder and `uv run pytest -q tests/test_explain.py` in `shorts/`.
-The publication tests cover the default/tall/wide dimensions, all four stems and the shared levels path.
+The publication tests cover the default/tall/wide dimensions, all four stems and the shared levels path;
+the edge-fade tests cover frame rounding, `freeze` and a WAV with hard cuts that `clicks` must find clean.
 The asset-free wide demo starts with five six-second cards; representative stills are frames 150 (`dice`), 330
 (`formula`), 510 (`bars`), 690 (`dots`), 870 (`stats`), and 120 (two-line captions).
 It then adds seven P30 cards: `ppo-pool` (40 training points), `ppo-wall` (eight evaluations and R3m),
@@ -427,6 +437,9 @@ up to three people. The versions are pinned in `package.json`.
 
 ## План и журнал
 
+- 2026-10-19: the published game stem fades over 30 ms at every beat edge and at `freeze`, sample by sample
+  in `explain.render`. The combat-AI video's click at 432.27 s needed per-beat `afade` copies of each clip;
+  plans no longer need them. A ramp in Remotion's per-frame `volume` only moved the click by one frame.
 - 2026-10-19: added opt-in `follow`/`hp` and split `followBottom`/`hpBottom`, with recorded action
   names, hold/crossfade, smoothed head tracking, HP samples and shared cover/zoom/freeze math.
 - 2026-10-19: removed tick-cell letters and replaced legend letters with coloured squares;
