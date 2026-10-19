@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("gothic_ai.scenarios")
 CHEST, HOUSE = "CHEST_LOBART", "NW_FARM1_INHOUSE_01"
+HERO_INSTANCE = "PC_HERO"
 DAY = 24 * 60
 
 
@@ -236,6 +237,10 @@ async def npc_far(
 
         # The owner genuinely opens his chest. A fresh real view at the scene supplies the remembered
         # presence; only then does looked() discover the loss and derive its suspicion.
+        # Use npc_will's proven short chest approach after the autonomous transfer. Starting from
+        # Lobart's outdoor guard routine can leave the native path blocked at the farmhouse doorway.
+        await link.debug("player_goto", pos=(chest.pos[0], chest.pos[1], chest.pos[2] + 200))
+        await link.debug("npc_goto", npc=LOBART, to=HERO_INSTANCE, distance=0)
         await link.debug("player_goto", waypoint=HOUSE)
         conv = dialogue.open(LOBART, "Лобарт")
         held = await _until_async(
