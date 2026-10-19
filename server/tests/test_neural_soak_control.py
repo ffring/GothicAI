@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from gothic_ai.bodypilot import BodyFight, PolicyClient
+from gothic_ai.game import GameError
 from gothic_ai.protocol import LineStarted, Result, Saved, Session
 from gothic_ai.scenarios import neural_soak as soak
 from gothic_ai.scenarios.neural_soak_metrics import SoakMetrics
@@ -150,15 +151,10 @@ class ReadyBodies:
         return SimpleNamespace(status="arrived")
 
 
-@pytest.mark.parametrize("duration", [90, 180])
-async def test_control_runs_native_waves_death_and_scheduled_loads(
-    tmp_path, monkeypatch, duration,
-):
+@pytest.fixture
+def control_world(tmp_path, monkeypatch):
     world = NativeWorld()
     dialogue = SimpleNamespace(llm=SimpleNamespace(name="fake"), speaking=lambda npc: False)
-    original_llm = dialogue.llm
-    original_finish = BodyFight._finish
-
     def forbidden(*args, **kwargs):
         pytest.fail("the native-AI control entered the policy/capture path")
 
@@ -166,7 +162,7 @@ async def test_control_runs_native_waves_death_and_scheduled_loads(
         link.weapons.append(kind)
 
     monkeypatch.setenv("GOTHIC_SOAK_CONTROL", "1")
-    monkeypatch.setenv("GOTHIC_SOAK_SECONDS", str(duration))
+    monkeypatch.setenv("GOTHIC_SOAK_SECONDS", "180")
     monkeypatch.setattr(soak, "time", SimpleNamespace(monotonic=lambda: world.now))
     monkeypatch.setattr(soak, "asyncio", SimpleNamespace(
         sleep=world.sleep, create_task=asyncio.create_task, CancelledError=asyncio.CancelledError,
@@ -183,6 +179,17 @@ async def test_control_runs_native_waves_death_and_scheduled_loads(
     ))
     (tmp_path / "game.pid").write_text("123")
     (tmp_path / "server.log").write_text("INFO native control ready\n")
+    return world, dialogue, forbidden
+
+
+@pytest.mark.parametrize("duration", [90, 180])
+async def test_control_runs_native_waves_death_and_scheduled_loads(
+    tmp_path, monkeypatch, control_world, duration,
+):
+    world, dialogue, forbidden = control_world
+    original_llm = dialogue.llm
+    original_finish = BodyFight._finish
+    monkeypatch.setenv("GOTHIC_SOAK_SECONDS", str(duration))
 
     checks = await soak.neural_soak_scenario(world, dialogue, None, log_dir=tmp_path)
 
@@ -216,4 +223,36 @@ async def test_control_runs_native_waves_death_and_scheduled_loads(
     assert dialogue.llm is original_llm
     assert PolicyClient.call is forbidden
     assert BodyFight._finish is original_finish
+    assert not world.raw_body_listeners and not world.listeners
+
+
+@pytest.mark.parametrize("response", [
+    [0, None, 1, 1],
+    [None, 1, 1, 1],
+    [0, "1", 1, 1],
+    [0, 1],
+])
+async def test_unavailable_native_state_cannot_end_the_wave(
+    tmp_path, monkeypatch, control_world, response,
+):
+    world, dialogue, _ = control_world
+    original_llm = dialogue.llm
+    native_eval = world.story_eval
+
+    async def unavailable(npc, expressions):
+        # Only the batch observing the hero and current attackers is faulty;
+        # preparation and companion health still succeed normally.
+        if npc == soak.TALKER and len(expressions) > 1:
+            return response
+        return await native_eval(npc, expressions)
+
+    monkeypatch.setattr(world, "story_eval", unavailable)
+
+    with pytest.raises(GameError, match="neural-soak native state unavailable"):
+        await soak.neural_soak_scenario(world, dialogue, None, log_dir=tmp_path)
+
+    assert world.wave_sizes == [3]
+    assert not world.loads and not world.conversations
+    assert not (tmp_path / "neural_soak_result.json").exists()
+    assert dialogue.llm is original_llm
     assert not world.raw_body_listeners and not world.listeners

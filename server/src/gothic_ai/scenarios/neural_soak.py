@@ -227,11 +227,15 @@ async def neural_soak_scenario(
                 # rather than pilot handles, determines when this wave is over.
                 values = await link.story_eval(TALKER, [
                     ["call", "NPC_ISDEAD", ["inst", "HERO"]],
-                    *[["&&", ["inst", npc], ["&&",
+                    *[["&&",
                        [">", ["field", ["inst", npc], "ATTRIBUTE", 0], ["int", 0]],
-                       ["call", "NPC_ISINSTATE", ["inst", npc], ["sym", "ZS_ATTACK"]]]]
+                       ["call", "NPC_ISINSTATE", ["inst", npc], ["sym", "ZS_ATTACK"]]]
                       for npc in npcs],
                 ])
+                if len(values) != len(npcs) + 1 or any(
+                    type(value) not in (int, bool) for value in values
+                ):
+                    raise GameError(f"neural-soak native state unavailable: {values}")
                 hero_dead = hero_dead or bool(values[0])
                 if break_stalls:
                     native_attacking = {npc for npc, attacking in zip(npcs, values[1:], strict=True)

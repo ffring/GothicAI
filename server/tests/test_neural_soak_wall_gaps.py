@@ -19,9 +19,9 @@ from gothic_ai.protocol import (
 from gothic_ai.scenarios.neural_soak_metrics import SoakMetrics
 
 
-def packet(game_ms):
-    return {"observations": [{
-        "session_epoch": 1, "world_epoch": 1, "entity_id": 1,
+def packet(game_ms, *, entity_id=1, generation=1):
+    return {"generation": generation, "observations": [{
+        "session_epoch": 1, "world_epoch": generation, "entity_id": entity_id,
         "control_generation": 0, "periodic": True, "t_game_ms": game_ms,
     }]}
 
@@ -87,19 +87,26 @@ def test_roster_loading_and_body_packets_are_not_bridge_replies(tmp_path):
     assert sample["bridge_reply_wall_count"] == sample["observation_wall_count"] == 0
 
 
-def test_control_tick_intervals_ignore_switching_the_passive_watch(tmp_path):
+def test_control_tick_intervals_reset_when_passive_watch_changes_generation(tmp_path):
     metrics = SoakMetrics(SimpleNamespace(), None, tmp_path)
     metrics._packet(packet(100))
     metrics._packet(packet(150))
     for game_ms in (200, 250):
-        bandit = packet(game_ms)
-        bandit["observations"][0]["entity_id"] = 2
-        metrics._packet(bandit)
-    metrics._packet(packet(90_100))
-    metrics._packet(packet(90_150))
+        metrics._packet(packet(game_ms, entity_id=2, generation=2))
+    metrics._packet(packet(90_100, generation=3))
+    metrics._packet(packet(90_150, generation=3))
     sample = metrics.sample(force=True)
     assert sample["game_interval_count"] == 3
     assert sample["game_interval_max_ms"] == 50
+
+
+def test_control_tick_lag_survives_partial_alternating_actor_packets(tmp_path):
+    metrics = SoakMetrics(SimpleNamespace(), None, tmp_path)
+    for game_ms, entity_id in ((100, 1), (100, 2), (150, 1), (150, 2), (650, 1), (200, 2)):
+        metrics._packet(packet(game_ms, entity_id=entity_id))
+    sample = metrics.sample(force=True)
+    assert sample["game_interval_count"] == 4
+    assert sample["game_interval_max_ms"] == 500
 
 
 def test_control_observers_restore_listeners_on_exception_without_wrapping_pilot(tmp_path):

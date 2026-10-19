@@ -170,16 +170,9 @@ class SoakMetrics:
         self._max_batch_lag_game_ms = max(self._max_batch_lag_game_ms, lag)
         self._max_batch_rows_all = max(self._max_batch_rows_all, size)
         self._max_batch_lag_all = max(self._max_batch_lag_all, lag)
-        if self.pilot is None:
-            # Passive subscriptions switch between the player and each wave.
-            # Compare only actors present in consecutive packets, so returning
-            # to the player does not turn an intentional watch gap into tick lag.
-            identities = {tuple(row[name] for name in (
-                "session_epoch", "world_epoch", "entity_id", "control_generation",
-            )) for row in rows}
-            self._previous_game = {identity: value for identity, value in self._previous_game.items()
-                                   if identity in identities}
         for row in rows:
+            # Packets can contain only part of the watch. A passive watch change
+            # increments world_epoch, so its new scope already resets continuity.
             identity = tuple(row[name] for name in (
                 "session_epoch", "world_epoch", "entity_id", "control_generation",
             ))
