@@ -21,6 +21,7 @@
 #include "jsonread.h"
 #include "jsonwriter.h"
 #include "npcfind.h"
+#include "npcsteal.h"
 #include "npcview.h"
 #include "storyeffects.h"
 #include "textcodec.h"
@@ -381,6 +382,12 @@ std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
     s->set_instance(prev);
     });
   w.EndObject();
+
+  if(auto target = msg.FindMember("deed_target"); target!=msg.MemberEnd() && target->value.IsObject()) {
+    const auto preview = NpcSteal::preview(world,target->value);
+    w.Key("deed_target");
+    w.RawValue(preview.data(),preview.size(),rapidjson::kObjectType);
+    }
 
   const auto now = world.time();
   w.Key("dialog");   w.Bool(world.isInDialog());

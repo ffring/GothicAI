@@ -146,6 +146,115 @@ async def prepare_theft_witness(link: GameLink, npc: str) -> tuple[bool, dict[st
     return False, detail
 
 
+async def prepare_npc_pose(
+    link: GameLink,
+    npc: str,
+    waypoint: str,
+    *,
+    face: str | None = None,
+    to: str | None = None,
+    distance: int = 300,
+    timeout: float = 15,
+) -> tuple[bool, dict[str, Any]]:
+    """Place a free, standing actor and wait for its native state, perception and pose.
+
+    A relative placement happens only after ZS_STAND_WP initializes. It clears the old walk while
+    keeping that activity; issuing turn_to as a second soft action would replace it. Use one road
+    waypoint for both actors when the later AI_GotoNpc must stay on a connected stretch.
+    """
+    detail: dict[str, Any] = {"npc": npc, "waypoint": waypoint}
+    receipts: list[NpcActResult | NpcIdle] = []
+
+    def record(message: GameMessage) -> None:
+        if isinstance(message, NpcActResult | NpcIdle) and message.npc == npc:
+            receipts.append(message)
+
+    async def ready(*, unarmed: bool = True) -> bool:
+        views = await link.npc_view([npc])
+        view = views[0] if views else None
+        detail["view"] = view.model_dump() if view is not None else None
+        return (
+            view is not None
+            and view.state == "ZS_STAND_WP"
+            and view.theft_ready is True
+            and view.body == "stand"
+            and (not unarmed or view.weapon == "none")
+            and view.hp > 0
+        )
+
+    link.listeners.append(record)
+    try:
+        await link.debug("skip_important", near=npc)
+        await link.debug("npc_goto", npc=npc, waypoint=waypoint)
+        action = await link.npc_act(
+            npc, "start_activity", state="ZS_STAND_WP", waypoint=waypoint, minutes=120, place=False
+        )
+        detail["action"] = action
+        await _until(lambda: any(isinstance(r, NpcActResult) and r.id == action for r in receipts), 5)
+        detail["receipts"] = [r.model_dump() for r in receipts]
+        if not any(isinstance(r, NpcActResult) and r.id == action and r.status == "queued" for r in receipts):
+            return False, detail
+        if not await _until_async(lambda: ready(unarmed=False), bool, timeout):
+            return False, detail
+        if detail["view"]["weapon"] != "none":
+            sheathe = await link.npc_act(npc, "remove_weapon")
+            if not await _until(
+                lambda: any(
+                    isinstance(r, NpcIdle) and r.act == sheathe and r.reason == "done" for r in receipts
+                ), timeout,
+            ):
+                detail["receipts"] = [r.model_dump() for r in receipts]
+                return False, detail
+        placement: dict[str, Any] = {"npc": npc}
+        if to is None:
+            placement["waypoint"] = waypoint
+        else:
+            placement.update(to=to, distance=distance)
+        if face is not None:
+            placement["face"] = face
+        await link.debug("npc_goto", **placement)
+        detail["placement"] = placement
+        return await _until_async(ready, bool, timeout), detail
+    finally:
+        link.listeners.remove(record)
+
+
+async def wait_npc_visibility(
+    link: GameLink,
+    witness: str,
+    target: str,
+    *,
+    distance: float = 1500,
+    timeout: float = 5,
+) -> tuple[bool, dict[str, Any]]:
+    """Prove a standing witness's real native sight and perception range before a physical deed."""
+    detail: dict[str, Any] = {"witness": witness, "target": target}
+
+    async def ready() -> bool:
+        seen, actual, senses_range = await link.story_eval(witness, [
+            ["call", "NPC_CANSEENPC", ["inst", "SELF"], ["inst", target]],
+            ["call", "NPC_GETDISTTONPC", ["inst", "SELF"], ["inst", target]],
+            ["field", ["inst", "SELF"], "SENSES_RANGE"],
+        ])
+        views = await link.npc_view([witness])
+        view = views[0] if views else None
+        detail.update(
+            seen=seen, distance=actual, senses_range=senses_range,
+            view=view.model_dump() if view is not None else None,
+        )
+        return (
+            bool(seen)
+            and actual <= min(distance, senses_range)
+            and view is not None
+            and view.state == "ZS_STAND_WP"
+            and view.theft_ready is True
+            and view.body == "stand"
+            and view.weapon == "none"
+        )
+
+    return await _until_async(ready, bool, timeout), detail
+
+
 async def wait_message[M: GameMessage](
     link: GameLink, kind: type[M], match: Callable[[M], bool] = lambda _: True, timeout: float = 120
 ) -> M:

@@ -353,6 +353,8 @@ class ChainAuthor:
         if victim:
             candidates.add(victim)
         for fact in self.chronicle.facts():
+            if str(fact.get("fact", "")).startswith("npc_crime"):
+                continue  # NPC evidence is never a reader of the hero's deed id namespace
             if fact.get("fact") == "rumor" and rumor_subject(fact) != "PLAYER":
                 continue
             if fact.get("crime") == crime or crime in self.crimes.testimony_crimes(fact):

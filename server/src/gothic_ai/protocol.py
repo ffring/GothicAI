@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 46
+PROTOCOL_VERSION = 47
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
@@ -29,6 +29,7 @@ CRIME_PROTOCOL = 42  # raw hero deeds, ownership, engine perception recipients a
 FIGHT_REACTION_PROTOCOL = 43  # Look.combat_target/fighting, npc_threat, immediate fight/flee with own SVM
 CRIME_REACT_PROTOCOL = 44  # independently held hero deeds, their ids, and vanilla fight reasons
 CRIME_MEET_PROTOCOL = 46  # deeds switch also holds room entry; rule verdicts need no body action
+NPC_CRIME_PROTOCOL = 47  # marked NPC theft/attack and separate npc_deed snapshots
 
 # --- game -> server -----------------------------------------------------------
 
@@ -319,14 +320,13 @@ class DeedWitness(_GameMessage):
     npctype: int = 0
 
 
-class HeroDeed(_GameMessage):
+class DeedSnapshot(_GameMessage):
     """Raw action, rather than a crime verdict (v42). Witnesses passed the engine's perception gates.
 
     Empty owner ids and guild -1 mean unknown; guild 15 is the scripts' public ownership. Inventory and
     pocket flags bracket the original pickpocket function; the server decides whether it succeeded.
     """
 
-    type: Literal["hero_deed"]
     id: str
     kind: Literal["take_item", "use_mob", "attack", "murder", "pickpocket"]
     item: str = ""
@@ -368,6 +368,20 @@ class HeroDeed(_GameMessage):
     picked_pocket_before: int = 0
     picked_pocket_after: int = 0
     caught: bool = False
+
+
+class HeroDeed(DeedSnapshot):
+    type: Literal["hero_deed"]
+
+
+class NpcDeed(DeedSnapshot):
+    """A physical deed explicitly started by the server (v47); never a vanilla NPC fight."""
+
+    type: Literal["npc_deed"]
+    culprit: str
+    culprit_guild: int = -1
+    culprit_npctype: int = 0
+    kind: Literal["take_item", "attack"]
 
 
 class TagNear(_GameMessage):
@@ -1170,6 +1184,7 @@ GameMessage = Annotated[
     | NpcDied
     | HeroKill
     | HeroDeed
+    | NpcDeed
     | StoryWorld
     | DealAccept
     | DealDecline
@@ -1352,6 +1367,7 @@ NpcActType = Literal[
     "go_to_npc",
     "turn_away",
     "fight",  # v6: ZS_ATTACK against args.npc; npc_idle when the npc leaves that state
+    "steal",  # v47: chest|item, what, count, deed=true; native walk/open/take, then npc_deed
     "flee",  # v6: ZS_FLEE from args.npc
     "draw_weapon",  # v6
     "remove_weapon",  # v6
@@ -1834,6 +1850,7 @@ class StoryStateCmd(_Command):
     knows: list[str] = []
     symbols: list[str] = []
     items: list[str] = []
+    deed_target: dict[str, Any] | None = None  # v47: live steal target, ownership and mission protection
 
 
 class StoryPeopleCmd(_Command):

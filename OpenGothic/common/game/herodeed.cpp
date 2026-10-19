@@ -83,14 +83,20 @@ int32_t HeroDeed::aivar(Npc& npc, std::string_view name) {
 
 std::shared_ptr<HeroDeed> HeroDeed::capture(Npc& hero, std::string_view kind, Npc* victim,
                                           const Item* item, Interactive* chest, size_t count) {
-  if(!hero.isPlayer())
+  if(!hero.isPlayer() && !hero.isServerDeed(kind,victim))
     return {};
+  return snapshot(hero,kind,victim,item,chest,count);
+  }
+
+std::shared_ptr<HeroDeed> HeroDeed::snapshot(Npc& hero, std::string_view kind, Npc* victim,
+                                           const Item* item, Interactive* chest, size_t count) {
   static uint64_t nextId = 1;
   auto d = std::make_shared<HeroDeed>();
   d->id = nextId++;
   auto& world = hero.world();
   auto& script = world.script();
   d->kind = kind;
+  d->culprit = person(hero);
   d->heroGuild = int32_t(hero.guild());
   d->position = hero.position();
   d->room = hero.portalName();
@@ -153,4 +159,12 @@ void HeroDeed::witnessed(Npc& npc) {
   if(p.npc.empty() || std::any_of(witnesses.begin(),witnesses.end(),[&](const Person& i){ return i.npc==p.npc; }))
     return;
   witnesses.push_back(std::move(p));
+  }
+
+void HeroDeed::collectWitnesses(Npc& actor, Npc* harmed) {
+  const auto perception = kind=="attack" ? PERC_ASSESSOTHERSDAMAGE : PERC_ASSESSTHEFT;
+  actor.world().detectNpcNear([&](Npc& npc) {
+    if(npc.canWitnessDeed(actor,harmed,perception))
+      witnessed(npc);
+    });
   }

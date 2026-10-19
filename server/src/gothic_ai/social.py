@@ -58,7 +58,7 @@ OUTLAWS = frozenset({9, 10, 11})  # bandits, convicts, seekers: they have no dea
 # retellings away from the one lied to: a lie seen through on the spot is talked about nearby, one he took
 # a reward for goes further
 HOPS = {"caught": 2, "found_out": 3, "broken": 2, "theft": 2, "attack": 3, "murder": 4, "sheep": 2}
-HOPS.update({s.kind: s.hops for s in SOURCES.values()})
+HOPS.update({s.kind: s.hops for root in SOURCES.values() for s in (root, *root.alternatives)})
 CRIME_KINDS = frozenset({"theft", "attack", "murder", "sheep"})
 TELLS_PER_DAY = 3  # one tells a rumor to this many a day at most: it goes round in chains, not in a flood
 FRESH_DAYS = 2  # and only while it is news: the day one heard it and the next

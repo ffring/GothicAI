@@ -82,6 +82,7 @@ from .llm.siwc import AuthError, TokenStore, login
 from .meetings import Meetings
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
+from .npc_crimes import NpcCrimes
 from .occasions import Occasions
 from .orders import Orders
 from .people_knowledge import PeopleKnowledge
@@ -223,6 +224,7 @@ class ServerState:
         self.story: StoryPatches | None = None
         self.chronicle: Chronicle | None = None
         self.crimes: Crimes | None = None
+        self.npc_crimes: NpcCrimes | None = None
         self.crime_law: CrimeLawRuntime | None = None
         self.crime_memory: CrimeMemoryRuntime | None = None
         self.crime_react: CrimeReact | None = None
@@ -990,6 +992,11 @@ async def serve(args: argparse.Namespace) -> int:
         if state.crimes is not None:
             state.concerns.extra.append(state.crimes.concerns)
         state.guard = StoryGuard(graph)
+        state.npc_crimes = NpcCrimes(
+            link, state.chronicle, crimes=state.crimes, cards=personas.cards, guard=state.guard,
+            enabled=not args.no_crimes and not args.no_npc_crimes,
+        )
+        link.npc_crime_check = state.npc_crimes.check_command
         if args.lead:
             # it leads the hero to a place, a term of a deal (docs/npc-tools.md, wave 2 step 4)
             state.guide = Guide(
@@ -1319,6 +1326,8 @@ async def serve(args: argparse.Namespace) -> int:
                 await state.questlog.close()
             if state.crime_react is not None:
                 await state.crime_react.close()
+            if state.npc_crimes is not None:
+                await state.npc_crimes.close()
             if state.crime_meet is not None:
                 await state.crime_meet.close()
             if state.crime_memory is not None:
@@ -1490,6 +1499,16 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario crime_talk: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "npc_deeds":
+                assert state.npc_crimes is not None and state.people_knowledge is not None
+                assert state.rumors is not None and state.dialogue is not None and args.trace_dir is not None
+                results = await scenarios.npc_deeds(
+                    link, state.npc_crimes, state.people_knowledge, state.rumors,
+                    state.dialogue, str(Path(args.trace_dir).parent),
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario npc_deeds: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "cheat":
                 assert state.crimes is not None and state.dialogue is not None and state.talk is not None
@@ -2569,6 +2588,7 @@ def main() -> None:
             "questlog",
             "crimes",
             "crime_react",
+            "npc_deeds",
             "crime_meet",
             "crime_talk",
             "trace_crime",
@@ -2669,6 +2689,9 @@ def main() -> None:
     )
     p.add_argument(
         "--no-npc-cheat", action="store_true", help="all NPCs keep deferred deal promises"
+    )
+    p.add_argument(
+        "--no-npc-crimes", action="store_true", help="reject marked NPC theft and attack; record no NPC deeds"
     )
     p.add_argument(
         "--no-cover", action="store_true", help="disable witness cover deals and fear of testifying"

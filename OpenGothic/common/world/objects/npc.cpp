@@ -9,6 +9,7 @@
 #include "graphics/visualfx.h"
 #include "game/damagecalculator.h"
 #include "game/herodeed.h"
+#include "game/deedwitness.h"
 #include "game/bodyobservations.h"
 #include "game/bodycontroller.h"
 #include "game/bodytrajectory.h"
@@ -813,7 +814,7 @@ bool Npc::checkHealth(bool onChange, bool allowUnconscious) {
   const int minHp = isMonster() ? 0 : 1;
   if(hnpc->attribute[ATR_HITPOINTS]<=minHp) {
     if(currentOther==nullptr || !allowUnconscious || !isHuman() ||
-       owner.script().personAttitude(*this,*currentOther)==ATT_HOSTILE){
+       (owner.script().personAttitude(*this,*currentOther)==ATT_HOSTILE && !isNonlethalFight(*currentOther))){
       if(hnpc->attribute[ATR_HITPOINTS]<=0)
         onNoHealth(true,HS_Dead);
       return false;
@@ -3371,7 +3372,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
   DamageCalculator::Damage dmg={};
   DamageCalculator::Val    hitResult;
   SpellCategory            splCat     = SpellCategory::SPELL_BAD;
-  const bool               dontKill   = ((b==nullptr && splId==0) || (bMask & COLL_DONTKILL)) && (!isSwim());
+  const bool               dontKill   = isNonlethalFight(other) ||
+                                       (((b==nullptr && splId==0) || (bMask & COLL_DONTKILL)) && (!isSwim()));
   int32_t                  damageType = DamageCalculator::damageTypeMask(other);
 
   if(isSpell) {
@@ -3385,9 +3387,11 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
 
   // Capture the victim's state before its damage script changes attack reason/state.
   auto heroAttack = HeroDeed::capture(other,"attack",this);
+  if(heroAttack!=nullptr && !other.isPlayer())
+    heroAttack->collectWitnesses(other,this);
   if(!isSpell || splCat==SpellCategory::SPELL_BAD) {
     stopPhysicsInvestigation(false);
-    perceptionProcess(other,this,0,PERC_ASSESSDAMAGE,heroAttack);
+    perceptionProcess(other,this,0,PERC_ASSESSDAMAGE,other.isPlayer() ? heroAttack : nullptr);
     const auto tracePrimitiveBefore = fghAlgo.queuedAction();
     fghAlgo.onTakeHit();
     BodyController::takeHit(*this);
@@ -3464,6 +3468,11 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   if(hitResult.value>0) {
+    if(heroAttack!=nullptr && !other.isPlayer()) {
+      other.consumeServerAttack();
+      Gothic::inst().onHeroDeed(*heroAttack);
+      heroAttack.reset(); // native ASSESSOTHERSDAMAGE still runs, without changing our snapshot
+      }
     currentOther = &other;
     changeAttribute(ATR_HITPOINTS,-hitResult.value,dontKill);
 
@@ -3746,6 +3755,11 @@ void Npc::tickAnimationTags() {
 
 void Npc::tick(uint64_t dt) {
   headInput.reset();
+  if(nonlethalTarget!=size_t(-1) && owner.tickCount()>nonlethalUntil) {
+    auto* other = owner.findNpcByInstance(nonlethalTarget);
+    if(other==nullptr || (!isAttack() && !isDown() && !other->isAttack() && !other->isDown()))
+      nonlethalTarget = size_t(-1);
+    }
   static bool dbg = false;
   static int  kId = 432;
   if(dbg && !isPlayer() && hnpc->id!=kId)
@@ -5006,6 +5020,15 @@ Item* Npc::addItem(std::unique_ptr<Item>&& i) {
   }
 
 Item* Npc::takeItem(Item& item) {
+  const bool npcTheft = !isPlayer() && isServerDeed("take_item");
+  if(npcTheft && item.isMission())
+    return nullptr;
+  if(npcTheft) {
+    const auto current = HeroDeed::snapshot(*this,"take_item",nullptr,&item);
+    const auto& actualOwner = current->owner.npc.empty() ? current->roomOwner.npc : current->owner.npc;
+    if(actualOwner!=serverDeedOwner)
+      return nullptr;
+    }
   if(interactive()!=nullptr)
     return nullptr;
   if(item.isTorchBurn() && (isUsingTorch() || weaponState()!=WeaponState::NoWeapon))
@@ -5021,6 +5044,17 @@ Item* Npc::takeItem(Item& item) {
   if(sq==nullptr)
     return nullptr;
 
+  if(npcTheft && serverDeedCount>0 && serverDeedCount<item.count()) {
+    auto deed = HeroDeed::capture(*this,"take_item",nullptr,&item,nullptr,serverDeedCount);
+    deed->collectWitnesses(*this,nullptr);
+    auto* taken = addItem(item.clsId(),serverDeedCount);
+    if(taken==nullptr)
+      return nullptr;
+    item.setCount(item.count()-serverDeedCount);
+    Gothic::inst().onHeroDeed(*deed);
+    implAniWait(uint64_t(sq->totalTime()));
+    return taken;
+    }
   std::unique_ptr<Item> ptr = owner.takeItem(item);
   if(ptr!=nullptr && ptr->isTorchBurn()) {
    if(!toggleTorch())
@@ -5036,9 +5070,13 @@ Item* Npc::takeItem(Item& item) {
     return nullptr;
 
   auto deed = HeroDeed::capture(*this,"take_item",nullptr,it);
+  if(deed!=nullptr && !isPlayer())
+    deed->collectWitnesses(*this,nullptr);
   it = addItem(std::move(ptr));
   if(isPlayer() && it!=nullptr)
     owner.sendPassivePerc(*this,*this,*it,PERC_ASSESSTHEFT,std::move(deed));
+  else if(it!=nullptr && deed!=nullptr)
+    Gothic::inst().onHeroDeed(*deed);
 
   implAniWait(uint64_t(sq->totalTime()));
   return it;
@@ -5051,14 +5089,19 @@ void Npc::onWldItemRemoved(const Item& itm) {
 
 void Npc::addItem(size_t id, Interactive &chest, size_t count) {
   auto* item = chest.inventory().getItem(id);
+  if(!isPlayer() && isServerDeed("take_item") && item!=nullptr && item->isMission())
+    return;
   auto deed = HeroDeed::capture(*this,"take_item",nullptr,item,&chest,
                                 std::min(count,chest.inventory().itemCount(id)));
+  if(deed!=nullptr && !isPlayer())
+    deed->collectWitnesses(*this,nullptr);
   const auto before = invent.itemCount(id);
   Inventory::transfer(invent,chest.inventory(),nullptr,id,count,owner);
   if(deed!=nullptr && invent.itemCount(id)>before) {
     deed->count = invent.itemCount(id)-before;
-    if(auto use = chest.heroUseDeed())
-      deed->witnesses = use->witnesses;
+    if(isPlayer())
+      if(auto use = chest.heroUseDeed())
+        deed->witnesses = use->witnesses;
     Gothic::inst().onHeroDeed(*deed);
     }
   }
@@ -5471,6 +5514,8 @@ WeaponState Npc::weaponState() const {
   }
 
 bool Npc::canFinish(Npc& oth) {
+  if(isNonlethalFight(oth))
+    return false;
   auto ws = weaponState();
   if(ws!=WeaponState::W1H && ws!=WeaponState::W2H)
     return false;
@@ -6181,7 +6226,7 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc,
     return false;
     }
 
-  float r = float(world().script().percRanges().at(perc, hnpc->senses_range));
+  float r = perceptionRange(perc);
   r = r*r;
 
   if(quadDist>r) {
@@ -6276,6 +6321,63 @@ bool Npc::canHearPhysicsNoise() const {
   const auto* state = owner.script().findSymbol(aiState.funcIni.ptr);
   return state==nullptr || (state->name()!="ZS_SLEEP" && state->name()!="ZS_MAGICSLEEP" &&
                             state->name()!="ZS_MM_RTN_SLEEP");
+  }
+
+float Npc::perceptionRange(PercType perc) const {
+  return float(world().script().percRanges().at(perc,hnpc->senses_range));
+  }
+
+bool Npc::canWitnessDeed(const Npc& culprit, const Npc* victim, PercType perc) const {
+  const auto* state = owner.script().findSymbol(aiState.funcIni.ptr);
+  DeedWitness gates;
+  gates.culprit = this==&culprit;
+  gates.victim = this==victim;
+  gates.player = isPlayer();
+  gates.down = isDown();
+  gates.lying = isLie();
+  gates.simulated = processPolicy()==NpcProcessPolicy::AiNormal;
+  gates.stateStarted = aiState.started || !aiState.funcIni.isValid();
+  gates.sleeping = state!=nullptr && (state->name()=="ZS_SLEEP" || state->name()=="ZS_MAGICSLEEP" ||
+                                    state->name()=="ZS_MM_RTN_SLEEP");
+  // A participant in an unrelated fight is occupied. A defender already fighting
+  // this culprit may still see a fresh deed against somebody else.
+  gates.foreignFight = (isAttack() || currentTarget!=nullptr) && currentTarget!=&culprit;
+  gates.range = perceptionRange(perc);
+  gates.distanceSquared = qDistTo(culprit);
+  return gates.admitted() && canSeeNpc(culprit,false);
+  }
+
+void Npc::setServerDeed(std::string_view kind, Npc* victim, size_t count, std::string_view expectedOwner) {
+  serverDeedKind = kind;
+  serverDeedVictim = victim;
+  serverAttackRecorded = false;
+  serverDeedCount = count;
+  serverDeedOwner = expectedOwner;
+  }
+
+void Npc::clearServerDeed() {
+  serverDeedKind.clear();
+  serverDeedVictim = nullptr;
+  serverAttackRecorded = false;
+  serverDeedCount = 0;
+  serverDeedOwner.clear();
+  }
+
+bool Npc::isServerDeed(std::string_view kind, const Npc* victim) const {
+  return kind==serverDeedKind && (kind!="attack" || (victim==serverDeedVictim && !serverAttackRecorded));
+  }
+
+void Npc::consumeServerAttack() {
+  serverAttackRecorded = true;
+  }
+
+void Npc::setNonlethalFight(Npc& other) {
+  nonlethalTarget = other.instanceSymbol();
+  nonlethalUntil = owner.tickCount()+5000;
+  }
+
+bool Npc::isNonlethalFight(const Npc& other) const {
+  return nonlethalTarget==other.instanceSymbol() || other.nonlethalTarget==instanceSymbol();
   }
 
 bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
