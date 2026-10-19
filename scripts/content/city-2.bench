@@ -41,13 +41,13 @@ wait 3000
 shot market_night
 wait 300
 
-# Front: eye (10229,900,4243), target (9137,725,3745), front width about 12 m.
+# Front detail: eye (9865,825,4077), target (9137,725,3745), distance 8 m.
 set time 12 0
 view hide animated morph pfx
 cam lift off
 cam look -2000
 goto pos 9137 2725 3745
-cam world 1200.000 -1825.000 24.500
+cam world 800.000 -1900.000 24.500
 wait 34
 cam hold
 wait 6000
@@ -58,11 +58,13 @@ wait 3000
 shot facade_close_night
 wait 300
 
-# Corner and plinth: eye (9562,600,4983), target (8744,500,4005).
+# Opposite corner and plinth: eye (9651,350,3100), target (9162,350,3207).
+# Measured plinth spans Y=270..531; the adjoining ground is Y=270, not sea level.
+# This side avoids the market awnings and barrels in front of the other corner.
 set time 12 0
 cam look -2000
-goto pos 8744 2500 4005
-cam world 1274.756 -1900.000 50.082
+goto pos 9162 2350 3207
+cam world 500.331 -2000.000 -12.352
 wait 34
 cam hold
 wait 6000

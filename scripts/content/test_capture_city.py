@@ -62,7 +62,7 @@ def test_city2_preserves_city_camera_and_captures_house_in_both_lights():
         assert at_shot[name + "_night"] == "23 0"
     assert scenario.count("cam hold") == 2
     assert "goto pos 9137 2725 3745" in scenario
-    assert "goto pos 8744 2500 4005" in scenario
+    assert "goto pos 9162 2350 3207" in scenario
 
 
 def test_city2_remote_rejects_other_set_directory():

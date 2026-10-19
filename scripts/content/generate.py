@@ -86,11 +86,6 @@ def recipe_prompt(row, style, template, set_name):
             'architectural material albedo texture, surface fills the entire image, no background, '
             'front orthographic view, even overcast light, no shadows, no highlights, no text, no logos')
     core = style['prompt']
-    if set_name == 'city-2' and row['class'] == 'flagstone':
-        core = ('irregular worn stone flag slabs of different sizes, uneven joints filled with dirt and mud, '
-            'chipped and sunken edges, not a regular grid')
-    if set_name == 'city-2' and row['class'] == 'plaster':
-        core += ', uniform weathering with small stains and hairline cracks evenly spread, no large stains'
     prompt = template.replace('<ядро класса>', core).replace('<состояние из записи>', row['state'])
     return prompt.replace(', grime in the cracks', '') if row['class'] in ('dirt_path', 'mud') else prompt
 
