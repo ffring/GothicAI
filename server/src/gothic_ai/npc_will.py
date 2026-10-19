@@ -1,7 +1,6 @@
-"""Character rules that start nearby physical deeds, or accusations, without a model.
+"""Character rules for physical nearby deeds and distant outcomes, without a model.
 
-Motives and starts belong to the save branch. A distant or occupied body keeps its motive until
-an actual meeting; no off-screen result is invented here. MOTIVES is the complete rule table.
+Motives, transfers and starts belong to the save branch. MOTIVES is the complete rule table.
 """
 
 from __future__ import annotations
@@ -20,8 +19,19 @@ from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
 from .memory import MemoryStore
 from .npc_crimes import NpcCrimes
+from .npc_far import FarWorld
 from .people_knowledge import PeopleKnowledge
-from .protocol import GameMessage, Loading, MemoryCmd, NpcIdle, NpcRoster, NpcView, NpcViews, Session
+from .protocol import (
+    GameMessage,
+    Loading,
+    MemoryCmd,
+    NpcDeed,
+    NpcIdle,
+    NpcRoster,
+    NpcView,
+    NpcViews,
+    Session,
+)
 from .social import Rumors
 from .storyguard import StoryGuard, asleep
 
@@ -120,6 +130,7 @@ class NpcWill:
         self._tasks: set[asyncio.Task[Any]] = set()
         self.loop_guard = LoopGuard(clock)
         self._scheduled: asyncio.Task[Any] | None = None
+        self.far_world = FarWorld(self)
         link.listeners.append(self._on_message)
         chronicle.on_fact.append(self._on_fact)
 
@@ -216,6 +227,9 @@ class NpcWill:
             self._refresh_clock()
             if self._now is None:
                 return
+            await self.far_world.refresh(generation)
+            if generation != self._generation:
+                return
             self._recover_attempts()
             for rule in MOTIVES.values():
                 await getattr(self, rule.discover)(generation)
@@ -237,7 +251,8 @@ class NpcWill:
     def pending(self) -> list[Fact]:
         begun = {f.get("motive") for f in self.attempts()
                  if f.get("kind") != "greed" or f.get("outcome") == "committed"}
-        return [f for f in self.chronicle.facts("npc_motive") if f.get("id") not in begun]
+        return [f for f in self.chronicle.facts("npc_motive") if f.get("id") not in begun
+                and not (f.get("crime") and self._resolved(f["crime"]))]
 
     @staticmethod
     def _at(fact: Fact) -> int:
@@ -336,6 +351,7 @@ class NpcWill:
             "target": attempt["target"], "motive": attempt["motive"], "attempt": attempt["id"],
             "action": attempt["action"],
             "outcome": outcome, "reason": reason, "finished_at": finished,
+            **({"far": True} if attempt.get("far") else {}),
             **({"detail": detail} if detail else {}), **({"crime": crime} if crime else {}),
             **({"retry_at": finished + RETRY_MINUTES}
                if attempt["kind"] == "greed" and outcome == "aborted" else {}),
@@ -385,7 +401,9 @@ class NpcWill:
         })
 
     def _resolved(self, crime: str) -> bool:
-        return any(f.get("crime") == crime for f in self.chronicle.facts("npc_crime_restitution"))
+        return self.npc_crimes.settled(crime) or any(
+            f.get("crime") == crime for f in self.chronicle.facts("npc_crime_restitution")
+        )
 
     async def _discover_reclaim(self, generation: int) -> None:
         for crime in self.npc_crimes.facts():
@@ -451,6 +469,9 @@ class NpcWill:
         social = self.rumors.social if self.rumors is not None else None
         if social is None:
             return
+        await self._discover_far_greed(generation)
+        if generation != self._generation:
+            return
         for npc in list(self.roster):
             card = self.cards.get(npc)
             if not self._free(npc) or not self._cool(npc, card):
@@ -506,6 +527,63 @@ class NpcWill:
                     continue
                 break
 
+    async def _far_chest(self, npc: str, owner: str, chest: Any, generation: int) -> bool:
+        world = self.far_world
+        spot = world.routine(npc)
+        if (not world.free(npc) or chest.why != "owner"
+                or spot is None or spot.pos is None
+                or math.dist(spot.pos, chest.pos) > ROUTINE_CM):
+            return False
+        if not await world.far(npc, generation) or not await world.far(owner, generation):
+            return False
+        actor, other = await world.position(npc, generation), await world.position(owner, generation)
+        return bool(generation == self._generation and actor is not None and other is not None
+                    and math.dist(actor.pos, chest.pos) <= ROUTINE_CM
+                    and math.dist(other.pos, chest.pos) > OWNER_NEAR_CM)
+
+    async def _discover_far_greed(self, generation: int) -> None:
+        world, hour = self.far_world, (self._now or 0) // 60
+        for npc in world.all_names():
+            card = self.cards.get(npc)
+            if (not world.free(npc) or not self._cool(npc, card)
+                    or self._hours.get(npc) == hour or not await world.far(npc, generation)):
+                continue
+            self._hours[npc] = hour
+            if any(f.get("npc") == npc and f.get("kind") == "greed" for f in self.pending()):
+                continue
+            for owner in world.all_names():
+                if owner == npc or not await world.far(owner, generation):
+                    continue
+                try:
+                    chests = await self.link.npc_chests(owner)
+                except (GameError, TimeoutError, ConnectionError):
+                    continue
+                for chest in chests:
+                    if not await self._far_chest(npc, owner, chest, generation):
+                        continue
+                    for item in chest.items:
+                        if item.count <= 0:
+                            continue
+                        args = {"chest": chest.id, "what": item.item, "count": 1, "deed": True}
+                        if await self.npc_crimes.check_command(npc, "steal", args):
+                            continue
+                        if generation != self._generation:
+                            return
+                        if args.get("expected_owner") != owner:
+                            continue
+                        self._remember(
+                            npc, "greed", chest.id, f"greed:{npc}:{self._now}",
+                            f"честность {card.honesty}, жадность {card.greed}; чужой сундук вдали",
+                            owner=owner, item=item.item, far=True,
+                        )
+                        break
+                    else:
+                        continue
+                    break
+                else:
+                    continue
+                break
+
     async def _view(self, npc: str, generation: int) -> NpcView | None:
         views = await self.link.npc_view([npc])
         if generation != self._generation or not any(view.npc.upper() == npc for view in views):
@@ -519,6 +597,9 @@ class NpcWill:
 
     async def _steal(self, motive: Fact, rule: MotiveRule, generation: int) -> None:
         npc, owner = motive["npc"], motive["owner"]
+        if await self.far_world.far(npc, generation):
+            await self._steal_far(motive, generation)
+            return
         if (not self._free(npc) or not self._free(owner) or not self._cool(npc, self.cards.get(npc))
                 or not self._retry_ready(motive)):
             return
@@ -558,8 +639,78 @@ class NpcWill:
         finally:
             self._starting.pop(npc, None)
 
+    async def _steal_far(self, motive: Fact, generation: int) -> None:
+        npc, owner = motive["npc"], motive["owner"]
+        if not self._cool(npc, self.cards.get(npc)) or not self._retry_ready(motive):
+            return
+        chest = next((c for c in await self.link.npc_chests(owner) if c.id == motive["target"]), None)
+        if chest is None or not await self._far_chest(npc, owner, chest, generation):
+            return
+        if not any(item.item == motive["item"] and item.count > 0 for item in chest.items):
+            return
+        if not await self.far_world.alone(npc, generation):
+            return
+        args = {"chest": chest.id, "what": motive["item"], "count": 1, "deed": True}
+        if await self.npc_crimes.check_command(npc, "steal", args) or args.get("expected_owner") != owner:
+            return
+        witnesses = await self.far_world.witnesses(npc, generation)
+        metadata = {}
+        for who in dict.fromkeys([npc, owner, *witnesses]):
+            values = await self.link.story_eval(who, [
+                ["field", ["inst", "SELF"], "GUILD"],
+                ["field", ["inst", "SELF"], "NPCTYPE"],
+            ])
+            if generation != self._generation or len(values) != 2 or any(type(v) is not int for v in values):
+                return
+            metadata[who] = {"guild": values[0], "npctype": values[1]}
+        if generation != self._generation or not self.loop_guard.claim(npc):
+            return
+        started_at = self._stamp()
+        action = f"far:{motive['id']}:{len(self.attempts()) + 1}"
+        await self.link.story_effect(npc, [{
+            "do": "chest_take", "chest": chest.id, "item": motive["item"], "count": 1,
+        }], check=True)
+        if generation != self._generation:
+            return
+        self._started(motive, "steal", action, generation, started_at=started_at, far=True)
+        attempt = next(a for a in reversed(self.attempts()) if a["action"] == action)
+        self.npc_crimes.record(NpcDeed(
+            type="npc_deed", id=action, kind="take_item", culprit=npc,
+            culprit_guild=metadata[npc]["guild"], culprit_npctype=metadata[npc]["npctype"],
+            item=motive["item"], count=1, owner=owner, owner_npc_guild=metadata[owner]["guild"],
+            owner_npctype=metadata[owner]["npctype"], chest=chest.id, chest_owner=owner,
+            chest_owner_guild=metadata[owner]["guild"], chest_owner_npctype=metadata[owner]["npctype"],
+            position=dict(zip(("x", "y", "z"), chest.pos, strict=True)), waypoint=chest.waypoint,
+            day=started_at["day"], hour=started_at["hour"], minute=started_at["minute"],
+            witnesses=witnesses,
+            witnesses_metadata=[{"npc": who, **metadata[who]} for who in witnesses],
+        ), far=True)
+        self._active.pop(npc, None)
+        crime = self.npc_crimes.crime(action)
+        if crime is not None:
+            self._outcome(attempt, "committed", "far_transfer", crime=action)
+
+    async def meeting(self, npc: str, target: str, generation: int) -> str | None:
+        if await self.far_world.meeting(npc, target, generation):
+            return "far"
+        if not self._free(npc) or not self._free(target):
+            return None
+        view = await self._view(npc, generation)
+        if (view is not None and any(o.id.upper() == target and o.distance <= MEET_CM for o in view.sees)
+                and await self._local(npc, target, generation)
+                and generation == self._generation and self._free(npc) and self._free(target)):
+            return "near"
+        return None
+
+    async def fight_far(self, crime: Fact, fighter: str, generation: int, *,
+                        role: str = "reclaim") -> Fact | None:
+        return await self.far_world.fight(crime, fighter, generation, role=role)
+
     async def _meet(self, motive: Fact, rule: MotiveRule, generation: int) -> None:
         npc, target, cid = motive["npc"], motive["target"], motive["crime"]
+        if not self._resolved(cid) and await self.far_world.meeting(npc, target, generation):
+            await self._meet_far(motive, rule, generation)
+            return
         if not self._free(npc) or not self._free(target) or self._resolved(cid):
             return
         if motive["kind"] == "reclaim" and (
@@ -596,8 +747,33 @@ class NpcWill:
         if act == "accuse":
             self._accused(motive)
 
+    async def _meet_far(self, motive: Fact, rule: MotiveRule, generation: int) -> None:
+        npc, cid = motive["npc"], motive["crime"]
+        if motive["kind"] == "reclaim" and (
+            any(key[1:] == (cid, npc) for key in self.npc_crimes._reclaiming)
+            or any(f.get("crime") == cid and f.get("npc") == npc
+                   for f in self.chronicle.facts("npc_crime_reaction"))
+        ):
+            return
+        if not self.loop_guard.claim(npc):
+            return
+        act = str(rule.action(self.cards.get(npc)))
+        action = f"far:{motive['id']}"
+        if act == "fight":
+            crime = self.npc_crimes.crime(cid)
+            if crime is None or await self.fight_far(crime, npc, generation) is None:
+                return
+        if generation != self._generation or self.npc_crimes.settled(cid):
+            return
+        self._started(motive, act, action, generation, far=True)
+        self._active.pop(npc, None)
+        attempt = next(a for a in reversed(self.attempts()) if a["action"] == action)
+        if act == "accuse":
+            self._accused(motive, far=True)
+        self._outcome(attempt, "completed", "far_meeting")
+
     def _started(self, motive: Fact, act: str, action: str, generation: int, *,
-                 started_at: dict[str, int] | None = None) -> None:
+                 started_at: dict[str, int] | None = None, far: bool = False) -> None:
         if generation != self._generation:
             return
         ordinal = 1 + sum(f.get("motive") == motive["id"] for f in self.chronicle.facts("npc_will"))
@@ -607,6 +783,7 @@ class NpcWill:
         attempt = {
             "fact": "npc_will", "id": identity, "npc": motive["npc"], "kind": motive["kind"],
             "target": motive["target"], "act": act, "action": action, "motive": motive["id"],
+            **({"far": True} if far else {}),
             **({key: motive[key] for key in ("crime", "owner", "item") if key in motive}),
             **(started_at if started_at is not None else self._stamp()),
         }
@@ -622,10 +799,12 @@ class NpcWill:
         entry = self.roster.get(npc)
         return entry.name if entry is not None else npc
 
-    def _accused(self, motive: Fact) -> None:
+    def _accused(self, motive: Fact, *, far: bool = False) -> None:
         npc, target = motive["npc"], motive["target"]
         witnesses = {npc}
         for observer, view in self.views.items():
+            if far:
+                break
             if self.clock() - self._view_at.get(observer, -math.inf) > VIEW_SECONDS:
                 continue
             if any(o.id.upper() == npc and o.distance <= MEET_CM for o in view.sees):
@@ -635,6 +814,7 @@ class NpcWill:
             "fact": "npc_accused", "id": motive["id"], "npc": npc, "name": self._name(npc),
             "target": target, "target_name": self._name(target), "kind": motive["kind"],
             "crime": motive["crime"], "witnesses": sorted(witnesses),
+            **({"far": True} if far else {}),
             "witness_names": {who: self._name(who) for who in witnesses}, **self._stamp(),
         })
         branch = self.chronicle.branch

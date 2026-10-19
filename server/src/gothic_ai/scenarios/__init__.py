@@ -45,6 +45,7 @@ from .lies import xardas_wrath as xardas_wrath
 from .memprobe import memprobe_scenario as memprobe_scenario
 from .neural_load import neural_load_scenario as neural_load_scenario
 from .npc_deeds import npc_deeds as npc_deeds
+from .npc_far import npc_far as npc_far
 from .npc_life import chests_scenario as chests_scenario
 from .npc_life import day_scenario as day_scenario
 from .npc_life import errand_give_scenario as errand_give_scenario
