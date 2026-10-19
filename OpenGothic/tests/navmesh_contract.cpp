@@ -1,6 +1,7 @@
 #include "physics/navmesh.h"
 
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -59,6 +60,31 @@ int main() {
     check(!mesh.findPath({3,0,10},{35,0,5}).complete,"disconnected island must reject partial paths");
     check(!mesh.findPath({100,0,100},{17,0,10}).complete,"off-mesh start must reject path");
     check(mesh.stats().cacheBytes>0 && mesh.stats().tiles>1,"tiled cache must be populated");
+    const auto shortcuts=mesh.shortcutCandidates(128);
+    check(!shortcuts.candidates.empty(),"whole-world boundaries must expose shortcut probe sites");
+    bool connectedShortcut=false;
+    for(const auto& candidate:shortcuts.candidates) {
+      const float direct=std::sqrt(std::pow(candidate.start[0]-candidate.end[0],2.f)+
+                                   std::pow(candidate.start[1]-candidate.end[1],2.f)+
+                                   std::pow(candidate.start[2]-candidate.end[2],2.f));
+      check(candidate.horizontalDistance<=4.f && candidate.verticalDistance<=3.f,
+            "shortcut endpoints must respect physical probe bounds after insetting");
+      if(candidate.groundComplete) {
+        connectedShortcut=true;
+        check(candidate.groundDistance>=3.f*direct && candidate.groundDistance>=direct+10.f,
+              "connected shortcut must save at least 10m and two thirds of ground distance");
+        }
+      }
+    check(connectedShortcut,"same connected ground component around a wall must produce a real shortcut");
+    check(shortcuts.candidates.size()<=128 && shortcuts.groundQueries<=shortcuts.queryBudget && shortcuts.queryBudget==1280,
+          "shortcut sites and ground-query work must obey explicit budgets");
+    const auto repeatedShortcuts=mesh.shortcutCandidates(128);
+    check(repeatedShortcuts.candidates.size()==shortcuts.candidates.size() &&
+          repeatedShortcuts.groundQueries==shortcuts.groundQueries,"shortcut search must be repeatable");
+    for(size_t i=0; i<shortcuts.candidates.size(); ++i)
+      check(shortcuts.candidates[i].start==repeatedShortcuts.candidates[i].start &&
+            shortcuts.candidates[i].end==repeatedShortcuts.candidates[i].end,
+            "shortcut budget ordering must be deterministic");
     NavMesh loaded;
     loaded.buildOrLoad(geometry,params,cache,"contract");
     check(loaded.stats().fromCache,"second build must load cache");
@@ -130,6 +156,8 @@ int main() {
     const auto crossed=linked.findPath(takeoff,landing);
     check(crossed.complete && crossed.transitions.size()==1,"proven jump must connect islands");
     check(!linked.straightWalkable(takeoff,landing),"an off-mesh jump must never authorize direct ground steering");
+    check(!linked.findPath(takeoff,landing,false).complete,
+          "ground-only baseline must remain disconnected even when a proven jump joins the islands");
     const auto& transition=crossed.transitions.front();
     check(transition.type==NavMesh::LinkType::Jump && transition.id==42,"path must retain transition kind and identity");
     check(transition.cornerIndex+1<crossed.corners.size() &&
@@ -142,6 +170,8 @@ int main() {
     check(linkedLoaded.stats().fromCache && cachedCrossing.complete && cachedCrossing.transitions.size()==1 &&
           cachedCrossing.transitions.front().type==NavMesh::LinkType::Jump &&
           cachedCrossing.transitions.front().id==42,"cached transition must retain its connectivity, type and identity");
+    check(!linkedLoaded.findPath(takeoff,landing,false).complete,
+          "ground-only baseline must exclude off-mesh links from preexisting caches too");
     linkedParams.links.front().type=NavMesh::LinkType::Climb;
     linkedParams.links.front().bidirectional=true;
     NavMesh climb;

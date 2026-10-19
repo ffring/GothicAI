@@ -1,4 +1,5 @@
 #include "navtransitions.h"
+#include "navdemos.h"
 
 #include "physics/navmesh.h"
 #include "world/world.h"
@@ -9,7 +10,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
+#include <sstream>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace {
 using Tempest::Vec3;
@@ -32,6 +36,7 @@ struct Attempt {
   NavMesh::LinkType type = NavMesh::LinkType::Jump;
   size_t candidate = 0;
   bool reverse = false;
+  uint32_t id = 0;
   };
 struct Session {
   Npc* npc = nullptr;
@@ -42,11 +47,16 @@ struct Session {
   size_t index = 0, candidates = 0, accepted = 0, completed = 0;
   uint64_t limit = DefaultAttemptMs, phaseBegan = 0, stableSince = 0;
   uint64_t actionBegan = 0;
+  uint64_t frames = 0, cvFrames = 0;
+  uint64_t forcedCvFrames = 0, preparationFrames = 0, preparationCvFrames = 0;
+  uint64_t cvWaitFrames = 0;
   int hpBefore = 0, hpMin = 0;
   Vec3 placed{}, takeoff{};
   float maxRise = 0, maxDrop = 0;
   bool actionStarted = false, sawAir = false, sawJump = false, sawClimb = false;
   bool active = false;
+  bool exact = false;
+  bool expectCv = false, cvStarted = false;
   Phase phase = Phase::Prepare;
   } session;
 
@@ -97,10 +107,12 @@ void finishSession(const std::string& reason) {
      <<",\"max_horizontal_m\":"<<MaxHorizontalM<<",\"max_vertical_m\":"<<MaxVerticalM
      <<",\"takeoff_inset_m\":"<<TakeoffInsetM<<",\"landing_radius_cm\":"<<LandingRadiusCm
      <<",\"grounded_preparation_ms\":"<<GroundedPreparationMs
-     <<",\"grounded_landing_ms\":"<<GroundedLandingMs<<"}\n";
+     <<",\"grounded_landing_ms\":"<<GroundedLandingMs
+     <<",\"exact_links\":"<<session.exact<<"}\n";
   session.active=false;
   }
 uint32_t linkId(const Attempt& a) {
+  if(session.exact) return a.id;
   // Stable across separate per-edge runner processes; no implementation-defined hash.
   uint32_t value=2166136261u;
   for(char ch:session.from+"/"+session.to) {value^=static_cast<unsigned char>(ch);value*=16777619u;}
@@ -115,6 +127,8 @@ void record(World& w,const std::string& reason,bool accepted) {
   const auto obstruction=w.physic()->navigationRay(position+Vec3(0,50,0),centimeters(a.end)+Vec3(0,50,0),&npc);
   auto out=outputFile("transitions.jsonl",true);
   out<<"{\"from\":"<<std::quoted(session.from)<<",\"to\":"<<std::quoted(session.to)
+     <<",\"link_id\":"<<linkId(a)<<",\"source_start_m\":["<<a.start[0]<<','<<a.start[1]<<','<<a.start[2]
+     <<"],\"source_end_m\":["<<a.end[0]<<','<<a.end[1]<<','<<a.end[2]<<']'
      <<",\"candidate\":"<<a.candidate<<",\"reverse\":"<<a.reverse
      <<",\"type\":"<<std::quoted(typeName(a.type))<<",\"accepted\":"<<accepted
      <<",\"reason\":"<<std::quoted(reason)<<",\"elapsed_ms\":"
@@ -123,6 +137,10 @@ void record(World& w,const std::string& reason,bool accepted) {
      <<",\"hp_min\":"<<session.hpMin<<",\"native_action_started\":"<<session.actionStarted
      <<",\"saw_air\":"<<session.sawAir<<",\"saw_jump\":"<<session.sawJump
      <<",\"saw_climb\":"<<session.sawClimb<<",\"max_rise_cm\":"<<session.maxRise
+     <<",\"frames\":"<<session.frames<<",\"cv_frames\":"<<session.cvFrames
+     <<",\"forced_cv_frames\":"<<session.forcedCvFrames
+     <<",\"preparation_frames\":"<<session.preparationFrames<<",\"preparation_cv_frames\":"<<session.preparationCvFrames
+     <<",\"cv_activation_wait_frames\":"<<session.cvWaitFrames<<",\"expect_cv\":"<<session.expectCv
      <<",\"max_drop_cm\":"<<session.maxDrop<<",\"supported\":"<<supportedImpl(w,*session.npc)
      <<",\"obstruction_kind\":"<<int(obstruction.kind)<<",\"takeoff_cm\":";
   vectorJson(out,session.takeoff);out<<",\"expected_landing_cm\":";vectorJson(out,centimeters(a.end));
@@ -131,7 +149,9 @@ void record(World& w,const std::string& reason,bool accepted) {
   ++session.completed;
   if(accepted) {
     auto links=outputFile("accepted-links.txt",true);
-    const auto start=meters(session.takeoff);
+    // Exact rechecks retain the original link identity and probe coordinates.
+    // The settled physical takeoff is reported separately in transitions.jsonl.
+    const auto start=session.exact?a.start:meters(session.takeoff);
     links<<start[0]<<' '<<start[1]<<' '<<start[2]<<' '
          <<a.end[0]<<' '<<a.end[1]<<' '<<a.end[2]<<' '<<int(a.type)<<' '<<linkId(a)<<'\n';
     ++session.accepted;
@@ -153,6 +173,7 @@ NavMesh::Point inset(const NavMesh::Point& origin,const NavMesh::Point& boundary
 void prepare(World& w) {
   const auto& a=session.attempts[session.index];
   auto& npc=*session.npc;
+  if(session.exact) npc.resetNavigationEpisode();
   stopNpc();npc.setInteraction(nullptr,true);npc.clearState(false);npc.clearSpeed();
   npc.setExternalControl(true);npc.setProcessPolicy(NpcProcessPolicy::AiNormal);
   npc.setPosition(centimeters(a.start));npc.updateTransform();
@@ -164,6 +185,10 @@ void prepare(World& w) {
   session.hpBefore=npc.attribute(ATR_HITPOINTS);session.hpMin=session.hpBefore;
   session.maxRise=0;session.maxDrop=0;session.actionStarted=false;
   session.sawAir=false;session.sawJump=false;session.sawClimb=false;
+  session.frames=0;session.cvFrames=0;
+  session.forcedCvFrames=0;session.preparationFrames=0;session.preparationCvFrames=0;
+  session.cvWaitFrames=0;session.cvStarted=false;
+  session.expectCv=NavDemos::forceCharacterVirtual(npc);
   }
 void startAction(World& w) {
   const auto& a=session.attempts[session.index];
@@ -192,11 +217,91 @@ void startAction(World& w) {
 
 void NavTransitions::reset() { session=Session{}; }
 bool NavTransitions::running() { return session.active; }
+bool NavTransitions::controls(const Npc& npc) { return session.active && session.npc==&npc; }
 bool NavTransitions::supported(World& world,Npc& npc) { return supportedImpl(world,npc); }
 
 bool NavTransitions::command(const std::vector<std::string>& args,World& world,Npc& player,
                              NavMesh& mesh,const std::string& output) {
-  if(args.size()<2 || args[1]!="probe") return false;
+  if(args.size()<2) return false;
+  if(args[1]=="shortcuts") {
+    if(args.size()!=3 && args.size()!=4) throw std::runtime_error("navmesh shortcuts /abs/candidates.txt [site_budget]");
+    const std::filesystem::path destination=args[2];
+    if(!destination.is_absolute()) throw std::runtime_error("navmesh shortcuts: output must be absolute");
+    const size_t budget=args.size()==4?std::stoull(args[3]):1200;
+    if(!budget || budget>10000) throw std::runtime_error("navmesh shortcuts: site_budget must be 1..10000");
+    const auto search=mesh.shortcutCandidates(budget,MaxHorizontalM,MaxVerticalM);
+    std::ofstream links(destination),details(destination.string()+".jsonl"),summary(destination.string()+".json");
+    if(!links || !details || !summary) throw std::runtime_error("navmesh shortcuts: cannot write outputs");
+    links<<std::setprecision(9);details<<std::setprecision(9)<<std::boolalpha;
+    std::unordered_set<uint32_t> ids;
+    size_t emitted=0;
+    for(size_t i=0; i<search.candidates.size(); ++i) {
+      const auto& c=search.candidates[i];
+      std::string waypoint;float nearest=std::numeric_limits<float>::max();
+      world.forEachWayPoint([&](const WayPoint& wp) {
+        const float d=(wp.groundPos-centimeters(c.start)).length();
+        if(d<nearest || (d==nearest && wp.name<waypoint)) {nearest=d;waypoint=wp.name;}
+        });
+      for(const auto type:{NavMesh::LinkType::Jump,NavMesh::LinkType::Climb,NavMesh::LinkType::Drop}) {
+        if(type==NavMesh::LinkType::Drop && c.end[1]>=c.start[1]-.2f) continue;
+        uint32_t id=2166136261u;
+        for(float coordinate:{c.start[0],c.start[1],c.start[2],c.end[0],c.end[1],c.end[2]}) {
+          const int32_t value=int32_t(std::round(coordinate*1000.f));
+          for(unsigned shift=0; shift<32; shift+=8) {id^=(uint32_t(value)>>shift)&255u;id*=16777619u;}
+          }
+        id^=uint32_t(type);id*=16777619u;
+        if(!id) id=1;
+        while(!ids.insert(id).second) {if(!++id) id=1;}
+        links<<c.start[0]<<' '<<c.start[1]<<' '<<c.start[2]<<' '<<c.end[0]<<' '<<c.end[1]<<' '<<c.end[2]
+             <<' '<<int(type)<<' '<<id<<'\n';
+        details<<"{\"link_id\":"<<id<<",\"candidate\":"<<i<<",\"type\":"<<std::quoted(typeName(type))
+               <<",\"source_start_m\":["<<c.start[0]<<','<<c.start[1]<<','<<c.start[2]
+               <<"],\"source_end_m\":["<<c.end[0]<<','<<c.end[1]<<','<<c.end[2]<<']'
+               <<",\"nearest_waypoint\":"<<std::quoted(waypoint)<<",\"waypoint_distance_m\":"<<nearest*.01f
+               <<",\"horizontal_distance_m\":"<<c.horizontalDistance<<",\"vertical_distance_m\":"<<c.verticalDistance
+               <<",\"direct_distance_m\":"<<(centimeters(c.end)-centimeters(c.start)).length()*.01f
+               <<",\"walk_complete\":"<<c.groundComplete<<",\"walk_distance_m\":"<<c.groundDistance<<"}\n";
+        ++emitted;
+        }
+      }
+    summary<<"{\"site_budget\":"<<budget<<",\"sites\":"<<search.candidates.size()<<",\"links\":"<<emitted
+           <<",\"boundary_samples\":"<<search.boundarySamples<<",\"geometric_sites\":"<<search.geometricSites
+           <<",\"ground_queries\":"<<search.groundQueries<<",\"query_budget\":"<<search.queryBudget
+           <<",\"world_cell_m\":50,\"sample_spacing_m\":2,\"takeoff_inset_m\":0.15"
+           <<",\"max_horizontal_m\":"<<MaxHorizontalM<<",\"max_vertical_m\":"<<MaxVerticalM<<"}\n";
+    if(!links || !details || !summary) throw std::runtime_error("navmesh shortcuts: write failed");
+    return true;
+    }
+  if(args[1]=="probe-links") {
+    if(args.size()!=4 && args.size()!=5) throw std::runtime_error("navmesh probe-links NPC /abs/links.txt [attempt_ms]");
+    if(session.active) throw std::runtime_error("navmesh probe already running");
+    if(!std::filesystem::path(args[3]).is_absolute()) throw std::runtime_error("navmesh probe-links: input must be absolute");
+    auto* npc=world.findNpcByInstance(world.script().findSymbolIndex(args[2]));
+    if(!npc) throw std::runtime_error("navmesh probe-links: missing actor");
+    std::ifstream input(args[3]);
+    if(!input) throw std::runtime_error("navmesh probe-links: cannot read input");
+    session=Session{};session.npc=npc;session.player=&player;session.mesh=&mesh;session.output=output;session.exact=true;
+    session.from=args[3];session.limit=args.size()==5?std::stoull(args[4]):DefaultAttemptMs;
+    if(!session.limit) throw std::runtime_error("navmesh probe-links: attempt_ms must be positive");
+    std::string line;
+    while(std::getline(input,line)) {
+      if(line.find_first_not_of(" \t\r")==std::string::npos) continue;
+      std::istringstream row(line);Attempt attempt;unsigned type=0;
+      if(!(row>>attempt.start[0]>>attempt.start[1]>>attempt.start[2]>>attempt.end[0]>>attempt.end[1]>>attempt.end[2]>>type>>attempt.id) ||
+         type<1 || type>3) throw std::runtime_error("navmesh probe-links: invalid link row");
+      std::string extra;if(row>>extra) throw std::runtime_error("navmesh probe-links: extra fields in link row");
+      for(float value:attempt.start) if(!std::isfinite(value)) throw std::runtime_error("navmesh probe-links: invalid start");
+      for(float value:attempt.end) if(!std::isfinite(value)) throw std::runtime_error("navmesh probe-links: invalid end");
+      attempt.type=NavMesh::LinkType(type);attempt.candidate=session.attempts.size();session.attempts.push_back(attempt);
+      }
+    if(!input.eof()) throw std::runtime_error("navmesh probe-links: input read failed");
+    session.candidates=session.attempts.size();
+    outputFile("transitions.jsonl");outputFile("accepted-links.txt");
+    session.active=true;
+    if(session.attempts.empty()) finishSession("empty_input");else prepare(world);
+    return true;
+    }
+  if(args[1]!="probe") return false;
   if(args.size()!=5 && args.size()!=6)
     throw std::runtime_error("navmesh probe NPC FROM TO [attempt_ms]");
   if(session.active) throw std::runtime_error("navmesh probe already running");
@@ -235,6 +340,11 @@ void NavTransitions::tick(World& world) {
   auto& npc=*session.npc;
   session.hpMin=std::min(session.hpMin,npc.attribute(ATR_HITPOINTS));
   if(session.phase==Phase::Recover) {
+    if(session.exact) {
+      ++session.index;
+      if(session.index==session.attempts.size()) finishSession("complete");else prepare(world);
+      return;
+      }
     if(npc.isDown()) {finishSession("actor_down_after_rejected_attempt");return;}
     if(stableFor(world,GroundedLandingMs)) {
       ++session.index;
@@ -243,7 +353,19 @@ void NavTransitions::tick(World& world) {
     else if(world.tickCount()-session.phaseBegan>=RecoveryLimitMs) finishSession("previous_attempt_did_not_settle");
     return;
     }
+  if(session.expectCv && !session.cvStarted && !npc.characterVirtualActive()) {
+    ++session.cvWaitFrames;
+    if(world.tickCount()-session.phaseBegan>=PreparationLimitMs) record(world,"cv_not_active",false);
+    return;
+    }
+  session.cvStarted|=npc.characterVirtualActive();
+  ++session.frames;if(npc.characterVirtualActive()) ++session.cvFrames;
+  const bool forcedCv=NavDemos::forceCharacterVirtual(npc);
+  if(forcedCv) ++session.forcedCvFrames;
+  if(session.expectCv && !forcedCv) {record(world,"cv_forcing_lost",false);return;}
   if(session.phase==Phase::Prepare) {
+    ++session.preparationFrames;if(npc.characterVirtualActive()) ++session.preparationCvFrames;
+    if(session.expectCv && !npc.characterVirtualActive()) {record(world,"cv_lost_during_preparation",false);return;}
     if(session.hpMin<session.hpBefore) {record(world,"damage_during_preparation",false);return;}
     if((npc.position()-session.placed).length()>SupportToleranceCm) {
       record(world,"takeoff_not_supported",false);return;

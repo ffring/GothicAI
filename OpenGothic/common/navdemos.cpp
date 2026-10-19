@@ -32,6 +32,7 @@ struct Episode {
   Npc* npc=nullptr;
   Vec3 goal,previousPosition,velocity;
   std::string output,from,to,failure,initialState;
+  std::string tracedPlan;
   bool active=false,replay=false,drive=false,success=false;
   bool population=false,record=true,sampled=false,pending=false,fell=false;
   bool cvMode=false,heroNear=true,killInjected=false,resetAfterDeath=false;
@@ -74,7 +75,7 @@ struct Episode {
   NavigationMemory memory;
   NavigationMemory::View view;
   std::unique_ptr<NavDemoWriter> writer;
-  std::ofstream actions,trajectory,knownPaths,samples;
+  std::ofstream actions,trajectory,knownPaths,teacherPaths,samples;
   std::vector<RecordedKeys> replayActions;
 };
 Episode legacy;
@@ -228,7 +229,7 @@ void finish(Episode& ep,World& world) {
   closeBlocked(ep,elapsed);
   trajectory(ep,elapsed);
   if(!ep.replay) {NpcKeys::KeyState end;end.walk=true;action(ep,elapsed,end);if(ep.writer)ep.writer->finish();}
-  ep.trajectory.close();ep.actions.close();ep.knownPaths.close();ep.samples.close();
+  ep.trajectory.close();ep.actions.close();ep.knownPaths.close();ep.teacherPaths.close();ep.samples.close();
   auto out=file(ep,"episode.json");
   const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-ep.wallStart).count();
   out<<"{\"success\":"<<ep.success<<",\"replay\":"<<ep.replay<<",\"drive\":"<<ep.drive<<",\"start\":"<<std::quoted(ep.from)
@@ -332,6 +333,84 @@ NavMesh::Path plan(Episode& ep,World& world,bool blocked) {
   for(size_t i=1;i<fallback.corners.size();++i)fallback.length+=(cm(fallback.corners[i])-cm(fallback.corners[i-1])).length()*.01f;
   return fallback;
 }
+// Stand-only point syntax shared by route qualification and v2 recording. Coordinates
+// are centimetres, like the saved world and NAVDEMO poses; mesh queries use metres.
+Vec3 demoPoint(World& world,const std::string& name) {
+  if(name.rfind("cm:",0)!=0) {
+    const auto* point=world.findPoint(name,false);
+    if(!point)throw std::runtime_error("navdemos missing waypoint "+name);
+    return point->groundPos;
+  }
+  std::string values=name.substr(3);std::replace(values.begin(),values.end(),',',' ');
+  std::istringstream in(values);Vec3 point;std::string extra;
+  if(!(in>>point.x>>point.y>>point.z) || (in>>extra) ||
+     !std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+    throw std::runtime_error("navdemos invalid cm:x,y,z point "+name);
+  return point;
+}
+const char* transitionName(NavMesh::LinkType type) {
+  switch(type) {
+    case NavMesh::LinkType::Jump:return "jump";
+    case NavMesh::LinkType::Climb:return "climb";
+    case NavMesh::LinkType::Drop:return "drop";
+  }
+  return "unknown";
+}
+void writeV2Plan(std::ostream& out,const Vec3& position,const Vec3& goal,
+                 const KnownRoads::Guidance& guidance,const NavMesh::Path& path,bool direct) {
+  out<<",\"position_cm\":";vector(out,position);out<<",\"goal_cm\":";vector(out,goal);
+  out<<",\"carrot_cm\":";vector(out,guidance.carrot);
+  out<<",\"beyond_known\":"<<guidance.beyondKnown<<",\"remaining_known_cm\":"<<guidance.remainingKnownCm
+     <<",\"direct_walkable\":"<<direct<<",\"complete\":"<<(direct || path.complete)
+     <<",\"reason\":"<<std::quoted(direct?"direct_walkable":path.reason)
+     <<",\"length_m\":"<<(direct?(guidance.carrot-position).length()*.01f:path.length)
+     <<",\"start_snap_m\":"<<path.startSnapDistance<<",\"end_snap_m\":"<<path.endSnapDistance
+     <<",\"corners_cm\":[";
+  if(direct) {vector(out,position);out<<',';vector(out,guidance.carrot);}
+  else for(size_t i=0;i<path.corners.size();++i) {if(i)out<<',';vector(out,cm(path.corners[i]));}
+  out<<"],\"transitions\":[";
+  if(!direct)for(size_t i=0;i<path.transitions.size();++i) {
+    if(i)out<<',';
+    const auto& link=path.transitions[i];
+    out<<"{\"id\":"<<link.id<<",\"type\":"<<std::quoted(transitionName(link.type))
+       <<",\"corner_index\":"<<link.cornerIndex<<",\"start_cm\":";
+    vector(out,cm(link.start));out<<",\"end_cm\":";vector(out,cm(link.end));out<<'}';
+  }
+  out<<']';
+}
+void planV2(World& world,Npc& npc,std::ostream& out,const std::string& label,
+            const std::string& from,const std::string& to) {
+  const auto position=demoPoint(world,from),goal=demoPoint(world,to);
+  KnownRoads::Guidance guidance;
+  KnownRoadsBench::readGuidance(world,npc,position,goal,guidance);
+  const auto& mesh=NavBench::navigationMesh(world);
+  const auto path=mesh.findPath(meters(position),meters(guidance.carrot));
+  const bool direct=!guidance.beyondKnown && mesh.straightWalkable(meters(position),meters(guidance.carrot));
+  out<<"{\"label\":"<<std::quoted(label)<<",\"start\":"<<std::quoted(from)<<",\"goal\":"<<std::quoted(to);
+  writeV2Plan(out,position,goal,guidance,path,direct);
+  // A generated coordinate start must have actual support at its own elevation;
+  // Detour snapping to a nearby rooftop or a floor beneath it is insufficient.
+  const auto floor=world.physic()->landRay(position+Vec3(0,20,0),40.f);
+  out<<",\"start_supported\":"<<(floor.hasCol && floor.n.y>=.65f && std::abs(floor.v.y-position.y)<=20.f)<<"}\n";
+  if(!out)throw std::runtime_error("navdemos plan-v2 write failed");
+}
+void traceV2Plan(Episode& ep,const Vec3& position,const NavKeyTeacher::Decision& decision,
+                 bool direct,uint64_t elapsed) {
+  if(!ep.record || ep.drive)return;
+  std::ostringstream signature;
+  signature<<ep.path.complete<<','<<direct<<','<<ep.guidance.beyondKnown<<','
+           <<decision.hint.transitionId<<','<<decision.hint.onTransition;
+  if(!direct)for(const auto& link:ep.path.transitions)signature<<','<<link.id;
+  if(signature.str()==ep.tracedPlan && !decision.keys.jump && !decision.keys.climb)return;
+  ep.tracedPlan=signature.str();
+  auto& out=ep.teacherPaths;
+  out<<"{\"elapsed_ms\":"<<elapsed<<",\"active_transition_id\":"<<decision.hint.transitionId
+     <<",\"active_transition_type\":"<<std::quoted(transitionName(decision.hint.transitionType))
+     <<",\"on_transition\":"<<decision.hint.onTransition<<",\"jump\":"<<decision.keys.jump
+     <<",\"climb\":"<<decision.keys.climb;
+  writeV2Plan(out,position,ep.goal,ep.guidance,ep.path,direct);out<<"}\n";
+  if(!out)throw std::runtime_error("navdemos teacher-paths write failed");
+}
 void observe(Episode& ep,World& w) {
   auto& n=*ep.npc;
   const auto eyeStart=Clock::now();
@@ -407,6 +486,7 @@ void decide(Episode& ep,World& w) {
     const bool direct=!airborne && !ep.guidance.beyondKnown &&
                       mesh.straightWalkable(body.position,carrot);
     d=NavKeyTeacher::decideV2(body,ep.path,meters(ep.goal),carrot,direct);
+    traceV2Plan(ep,position,d,direct,elapsed);
   } else {
     const auto present=NavKeyTeacher::decide(body,ep.path,meters(ep.goal));
     const bool followingRoad=ep.path.reason=="waynet_fallback" && present.pathValid && !present.replan;
@@ -687,7 +767,8 @@ void tickPopulation(World& w,uint64_t dt) {
 bool NavDemos::running() {return legacy.active || population.active;}
 bool NavDemos::forceCharacterVirtual(const Npc& npc) {
   return settings.cv && ((legacy.active && legacy.npc==&npc) || preparingLegacy==&npc ||
-                          (population.active && population.members.contains(&npc)));
+                          (population.active && population.members.contains(&npc)) ||
+                          NavTransitions::controls(npc));
 }
 bool NavDemos::fullSimulation(const Npc& npc) {
   return (population.active && population.members.contains(&npc)) || forceCharacterVirtual(npc);
@@ -695,6 +776,31 @@ bool NavDemos::fullSimulation(const Npc& npc) {
 void NavDemos::reset() {legacy=Episode{};population=Population{};settings=Settings{};preparingLegacy=nullptr;}
 void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,const std::string& output) {
   auto& ep=legacy;
+  if(a.size()>=2 && (a[1]=="plan-v2" || a[1]=="plans-v2")) {
+    if(running())throw std::runtime_error("navdemos cannot query a new route during an episode");
+    const bool batch=a[1]=="plans-v2";
+    if((batch && a.size()!=4) || (!batch && a.size()!=5 && a.size()!=6))
+      throw std::runtime_error("navdemos plan-v2 NPC FROM TO [LABEL] | plans-v2 NPC PAIRS_FILE (LABEL FROM TO)");
+    auto* npc=w.findNpcByInstance(w.script().findSymbolIndex(a[2]));
+    if(!npc)throw std::runtime_error("navdemos plan-v2 missing NPC");
+    std::ofstream out(std::filesystem::path(output)/"plans-v2.jsonl",std::ios::app);
+    if(!out)throw std::runtime_error("navdemos cannot write plans-v2.jsonl");
+    out<<std::setprecision(9)<<std::boolalpha;
+    if(!batch)planV2(w,*npc,out,a.size()==6?a[5]:"0",a[3],a[4]);
+    else {
+      std::ifstream input(a[3]);
+      if(!input)throw std::runtime_error("navdemos cannot read plans-v2 pairs");
+      std::string line;
+      while(std::getline(input,line)) {
+        if(line.empty() || line[0]=='#')continue;
+        std::istringstream row(line);std::string label,from,to,extra;
+        if(!(row>>label>>from>>to) || (row>>extra))
+          throw std::runtime_error("navdemos plans-v2 pairs require LABEL FROM TO per line");
+        planV2(w,*npc,out,label,from,to);
+      }
+    }
+    return;
+  }
   if(a.size()>=2 && (a[1]=="physics" || a[1]=="hero" || a[1]=="kill-slot")) {
     if(running())throw std::runtime_error("navdemos cannot change settings during an episode");
     if(a[1]=="physics" && a.size()==3 && (a[2]=="cv" || a[2]=="native"))settings.cv=a[2]=="cv";
@@ -719,11 +825,13 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
   if(ep.active || population.active)throw std::runtime_error("navdemos already active");
   const auto* from=current?nullptr:w.findPoint(a[3],false);const auto* to=w.findPoint(a[current?3:4],false);
   auto* npc=w.findNpcByInstance(w.script().findSymbolIndex(a[2]));
-  if((!from && !current) || !to || !npc)throw std::runtime_error("navdemos missing NPC/waypoint");
+  if(!npc || (!carrot && ((!from && !current) || !to)))throw std::runtime_error("navdemos missing NPC/waypoint");
+  const auto fromPosition=current?npc->position():(carrot?demoPoint(w,a[3]):from->groundPos);
+  const auto goalPosition=carrot?demoPoint(w,a[4]):to->groundPos;
   ep=Episode{};ep.npc=npc;ep.from=current?"intentional":a[3];ep.to=a[current?3:4];ep.output=output;
   ep.cvMode=settings.cv;ep.heroNear=!current && settings.heroNear;
   ep.teacherVersion=carrot?2:1;
-  ep.goal=to->groundPos;ep.replay=replay;ep.drive=learner;
+  ep.goal=goalPosition;ep.replay=replay;ep.drive=learner;
   // Optional start arguments begin at 6.
   ep.limit=replay?0:std::stoull(a[current?4:5]);
   if(learner) {
@@ -746,20 +854,20 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
   if(settings.cv)npc->setProcessPolicy(NpcProcessPolicy::AiNormal);
   npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->clearSpeed();
   npc->setExternalControl(true);npc->clearGoTo();
-  if(!current) {npc->setPosition(from->groundPos);npc->updateTransform();}
+  if(!current) {npc->setPosition(fromPosition);npc->updateTransform();}
   // Keyboard episodes must not inherit a native route's waypoint from the save.
   npc->attachToPoint(nullptr);
   if(!current)npc->setDirection(ep.goal-npc->position());
   npc->setWalkMode(WalkBit::WM_Walk);
   if(!replay && !learner && a.size()>6) {
-    const auto path=NavBench::navigationMesh(w).findPath(meters(from->groundPos),meters(ep.goal));
+    const auto path=NavBench::navigationMesh(w).findPath(meters(fromPosition),meters(ep.goal));
     if(!path.complete || path.corners.size()<2) {
       auto out=file(ep,"episode.json");
       out<<"{\"success\":false,\"failure\":\"dagger_start_not_supported\",\"elapsed_ms\":0,\"decisions\":0}\n";
       return;
     }
     float left=path.length*(a.size()>8?std::stof(a[8]):.5f);
-    Vec3 point=from->groundPos,tangent=ep.goal-point;
+    Vec3 point=fromPosition,tangent=ep.goal-point;
     for(size_t i=1;i<path.corners.size();++i) {
       const auto begin=cm(path.corners[i-1]),end=cm(path.corners[i]);const float length=(end-begin).length()*.01f;
       if(left<=length || i+1==path.corners.size()) {point=begin+(end-begin)*std::clamp(left/std::max(length,.001f),0.f,1.f);tangent=end-begin;break;}
@@ -791,7 +899,10 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     ep.limit=ep.replayActions.back().time;
   } else {
     ep.actions=file(ep,"actions.txt");ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),ep.teacherVersion);
-    if(ep.teacherVersion==2)ep.knownPaths=file(ep,"known-paths.jsonl");
+    if(ep.teacherVersion==2) {
+      ep.knownPaths=file(ep,"known-paths.jsonl");
+      if(!ep.drive)ep.teacherPaths=file(ep,"teacher-paths.jsonl");
+    }
   }
   ep.initialState=initialState(ep);
   observe(ep,w);decide(ep,w);ep.next=ep.began+100;

@@ -84,6 +84,15 @@ class NavMesh final {
       float horizontalDistance = 0;
       float verticalDistance = 0;
       };
+    struct ShortcutCandidate : GapCandidate {
+      bool groundComplete = false;
+      float groundDistance = 0;
+      };
+    struct ShortcutSearch {
+      std::vector<ShortcutCandidate> candidates;
+      size_t boundarySamples = 0, geometricSites = 0, groundQueries = 0;
+      size_t queryBudget = 0;
+      };
 
     NavMesh();
     ~NavMesh();
@@ -94,7 +103,7 @@ class NavMesh final {
 
     void buildOrLoad(const Geometry& geometry, const Params& params,
                      const std::filesystem::path& cacheDirectory, const std::string& worldName);
-    Path findPath(const Point& start, const Point& end) const;
+    Path findPath(const Point& start, const Point& end, bool allowTransitions=true) const;
     // A ground ray must reach the end's actual polygon. Detour's raycast alone ignores
     // end height; checking its final polygon also rejects a balcony above the ray.
     // Off-mesh links never make a segment directly walkable.
@@ -104,6 +113,11 @@ class NavMesh final {
     std::vector<GapCandidate> gapCandidates(const Point& start, const Point& end,
                                           float maxHorizontal=4.f, float maxVertical=3.f,
                                           size_t maxCandidates=8) const;
+    // Whole-world boundary search, including shortcuts within one ground component.
+    // No candidate is installed as an off-mesh link. Sites and query work are bounded,
+    // and selected round-robin over 50m world cells rather than nearest-first globally.
+    ShortcutSearch shortcutCandidates(size_t siteBudget=1200, float maxHorizontal=4.f,
+                                      float maxVertical=3.f) const;
     void writePolygons(const std::filesystem::path& output) const;
     const Stats& stats() const;
     const Params& params() const;
