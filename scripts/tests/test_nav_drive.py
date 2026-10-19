@@ -250,3 +250,71 @@ def test_collect_rejects_invalid_mixing_probability(beta):
 def test_measurement_rejects_teacher_control():
     with pytest.raises(ValueError, match="Measured drives"):
         drive.collect(SimpleNamespace(teacher_beta=.5, dagger_collection=False))
+
+
+@pytest.mark.parametrize("mode,suffix", [(None, ""), ("argmax", ""), ("sample", " sample")])
+def test_policy_arguments_preserve_greedy_command_and_seed_sample_by_original_pair(mode, suffix):
+    args = SimpleNamespace(limit_ms=240000, weights=Path('/policy.navbc'), teacher_beta=0,
+                           mixing_seed=91)
+    if mode is not None:
+        args.action_mode = mode
+    assert drive.policy_arguments(args, 7) == '240000 /policy.navbc 0 98' + suffix
+    assert drive.policy_arguments(args, 8) == '240000 /policy.navbc 0 99' + suffix
+
+
+def test_sample_collection_passes_mode_to_drive_and_drive_current_and_checks_runner(tmp_path, monkeypatch):
+    pool = [dict(index=0, split='validation', split_index=0, region='lobart', npc='NPC',
+                 start='START', goal='GOAL', seed=7),
+            dict(index=1, split='control', split_index=0, region='lobart', npc='NPC',
+                 start='intentional', goal='FENCE', seed=7)]
+    monkeypatch.setattr(drive, 'load_pairs', lambda _: pool)
+    monkeypatch.setattr(drive, 'indices', lambda _args, _pairs: [0, 1])
+    monkeypatch.setattr(drive.sys, 'platform', 'linux')
+    measured = []
+    class Runner:
+        def __init__(self, args, prepare):
+            pass
+        def scenario(self, commands, directory, seed, **kwargs):
+            starts = [line for line in commands if line.startswith(('navdemos drive ', 'navdemos drive-current '))]
+            if not starts:
+                return
+            measured.extend(starts)
+            directory.mkdir(parents=True)
+            for name in ('trajectory.txt', 'actions.txt', 'samples.bin.gz'):
+                (directory / name).touch()
+            drive.write_json(directory / 'episode.json', dict(physics_mode='cv', demo_version=2,
+                teacher_version=2, teacher_beta=0, mixing_seed=int(starts[0].split()[-2]),
+                action_mode=starts[0].split()[-1], success=True, elapsed_ms=100))
+        def close(self):
+            pass
+    collector = SimpleNamespace(scenario_file=lambda args, name, commands: commands,
+                                runner_type=lambda: Runner, check_log=lambda _: None)
+    monkeypatch.setattr(drive, 'module', lambda _: collector)
+    args = SimpleNamespace(teacher_beta=0, dagger_collection=False, action_mode='sample',
+                           list_indices=False, runner=tmp_path, assets=tmp_path, save=tmp_path,
+                           cache=tmp_path / 'cache', links=tmp_path, roads=tmp_path, weights=tmp_path,
+                           output=tmp_path / 'out', limit_ms=240000, mixing_seed=91,
+                           watchdog_seconds=900, selection_seed=17, physics='cv')
+    drive.collect(args)
+    assert measured == [f'navdemos drive NPC START GOAL 240000 {tmp_path} 0 91 sample',
+                        f'navdemos drive-current NPC FENCE 240000 {tmp_path} 0 92 sample']
+    for pair in pool:
+        result = drive.read_json(drive.episode_dir(args, pair) / 'episode.json')
+        assert result['action_mode'] == result['requested_action_mode'] == 'sample'
+
+
+@pytest.mark.parametrize("existing", ["argmax", "sample"])
+def test_resume_does_not_reuse_greedy_recording_as_sample(tmp_path, existing):
+    pair = dict(index=0, split='validation', split_index=0)
+    args = SimpleNamespace(output=tmp_path, split='all', indices=None, start_index=0,
+                           count=None, resume=True, action_mode='sample')
+    directory = drive.episode_dir(args, pair)
+    directory.mkdir(parents=True)
+    for name in ('trajectory.txt', 'actions.txt', 'samples.bin.gz'):
+        (directory / name).touch()
+    drive.write_json(directory / 'episode.json', dict(action_mode=existing))
+    if existing == 'argmax':
+        with pytest.raises(ValueError, match='resume action mode differs'):
+            drive.indices(args, [pair])
+    else:
+        assert drive.indices(args, [pair]) == []

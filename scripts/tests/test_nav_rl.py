@@ -460,13 +460,14 @@ def test_parallel_drive_partitions_original_indices_and_owns_mutable_subtrees(tm
         ready.wait(timeout=5)
     monkeypatch.setattr(rl, 'module', lambda _: SimpleNamespace(collect=collect))
     args = SimpleNamespace(pairs=Path('/frozen.jsonl'), output=tmp_path, seed=7, parallel=4,
-                           indices='0,2,3,5,7,8', limit_ms=240000, weights=Path('/policy.navbc'))
+                           indices='0,2,3,5,7,8', limit_ms=240000, weights=Path('/policy.navbc'), action_mode='sample')
     rl.drive(args)
     ownership = {worker.output.name: worker.indices for worker in workers}
     assert ownership == {'w0': '0,7', 'w1': '2,8', 'w2': '3', 'w3': '5'}
     assert len({worker.output for worker in workers}) == 4
     assert all(worker.output.parent == tmp_path / 'drive-workers' for worker in workers)
     assert all(worker.teacher_beta == 0 and not worker.dagger_collection and worker.limit_ms == 240000 for worker in workers)
+    assert all(worker.action_mode == 'sample' and worker.mixing_seed == 7 for worker in workers)
     assert args.output == tmp_path and args.indices == '0,2,3,5,7,8'
 
 
@@ -478,6 +479,7 @@ def test_single_drive_keeps_original_output_layout(tmp_path, monkeypatch):
     rl.drive(args)
     assert calls[0].output == tmp_path
     assert calls[0].indices == '0'
+    assert calls[0].action_mode == 'argmax'
 
 
 def test_far_comparison_accepts_improved_speed_and_reachability():
@@ -683,3 +685,17 @@ def test_far_improvement_with_exact_drive_population_parity_uses_no_outlier_budg
     assert all(metric['passed'] for metric in report['distance_noninferiority'].values())
     assert report['comparisons']['drive_vs_population_near']['passed']
     assert report['comparisons']['drive_vs_population_far']['passed']
+
+
+@pytest.mark.parametrize("command,requested,expected", [("drive", None, "argmax"),
+    ("drive", "sample", "sample"), ("drive", "argmax", "argmax"),
+    ("population", None, "sample"), ("population", "argmax", "argmax")])
+def test_action_mode_cli_keeps_greedy_drive_and_sampled_population_defaults(tmp_path, monkeypatch, command, requested, expected):
+    captured = []
+    argv = ['nav_rl.py', command, '--output', str(tmp_path), '--pairs', '/frozen.jsonl']
+    if requested is not None:
+        argv += ['--action-mode', requested]
+    monkeypatch.setattr(rl.sys, 'argv', argv)
+    monkeypatch.setattr(rl, command, lambda args: captured.append(args))
+    rl.main()
+    assert captured[0].action_mode == expected

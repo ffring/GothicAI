@@ -467,6 +467,7 @@ def drive(args):
         if args.parallel > 1:
             worker.output = args.output / "drive-workers" / f"w{worker_index}"
         worker.command = "collect"
+        worker.action_mode = getattr(args, "action_mode", "argmax")
         worker.teacher_beta = 0
         worker.dagger_collection = False
         worker.split = "validation"
@@ -958,7 +959,8 @@ def main():
     parser.add_argument("--parallel", type=int, choices=(1, 4, 8), default=1)
     parser.add_argument("--episodes", type=int, help="Global episode cap; default N, or 1000000 with --run-ms")
     parser.add_argument("--record", action="store_true")
-    parser.add_argument("--action-mode", choices=("sample", "argmax"), default="sample")
+    parser.add_argument("--action-mode", choices=("sample", "argmax"),
+                        help="Action selection: drive defaults to argmax, population to sample")
     parser.add_argument("--hero", choices=("near", "far"), default="far")
     parser.add_argument("--limit-ms", type=int, default=240000)
     parser.add_argument("--run-ms", type=int, default=0, help="Population game-time span; 0 runs all episodes")
@@ -971,6 +973,8 @@ def main():
     for name in ("runner", "assets", "save", "cache", "ini", "weights"):
         parser.add_argument("--" + name, type=Path)
     args = parser.parse_args()
+    if args.action_mode is None:
+        args.action_mode = "argmax" if args.command == "drive" else "sample"
     for key, value in vars(args).items():
         if isinstance(value, Path):
             setattr(args, key, value.expanduser().resolve())

@@ -69,7 +69,7 @@ struct Episode {
   uint32_t teacherVersion=1;
   double teacherBeta=0;
   uint64_t mixingSeed=7,teacherControlDecisions=0;
-  std::mt19937_64 mixingRng;
+  std::mt19937_64 mixingRng,actionRng;
   KnownRoads::Guidance guidance;
   uint64_t began=0,limit=240000,next=0,decisions=0,frames=0,cvFrames=0;
   uint64_t progressAt=0;
@@ -284,6 +284,7 @@ void finish(Episode& ep,World& world) {
   out<<",\"next_corner\":";vector(out,ep.path.corners.empty()?ep.goal:cm(ep.path.corners.back()));
   if(ep.drive) {
     out<<",\"teacher_beta\":"<<ep.teacherBeta<<",\"mixing_seed\":"<<ep.mixingSeed
+       <<",\"action_mode\":"<<std::quoted(ep.sampled?"sample":"argmax")
        <<",\"teacher_control_decisions\":"<<ep.teacherControlDecisions
        <<",\"policy_population\":"<<ep.policyStates.size()
        <<",\"policy_warmup_decisions\":"<<std::min(ep.decisions,PolicyWarmupDecisions)
@@ -551,7 +552,8 @@ NpcKeys::KeyState select(Episode& ep,NavPolicy::Result result) {
     for(float value:head) {weights.push_back(std::exp(double(value)-maximum));total+=weights.back();}
     size_t index=size_t(std::max_element(head.begin(),head.end())-head.begin());
     if(ep.sampled) {
-      const double draw=std::uniform_real_distribution<double>(0.,total)(population.rngs[ep.slot]);
+      auto& rng=ep.population?population.rngs[ep.slot]:ep.actionRng;
+      const double draw=std::uniform_real_distribution<double>(0.,total)(rng);
       double cumulative=0;index=weights.size()-1;
       for(size_t j=0;j<weights.size();++j) {cumulative+=weights[j];if(draw<cumulative) {index=j;break;}}
     }
@@ -659,7 +661,7 @@ void decide(Episode& ep,World& w) {
       const auto policyCost=micros(began);
       if(measure)ep.policyUs.push_back(policyCost);
       if(ep.population)ep.phaseUs[4]+=policyCost;
-      if(i==0)executed=ep.population?select(ep,std::move(result)):result.keys;
+      if(i==0)executed=(ep.population || ep.sampled)?select(ep,std::move(result)):result.keys;
     }
     if(measure)ep.populationUs.push_back(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-populationStart).count());
     executed.headYaw=0;executed.headPitch=0;
@@ -915,13 +917,13 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
   if(a.size()==3 && a[1]=="reachable") {reachable(w,a[2],output);return;}
   if(a.size()==2 && a[1]=="wait")return;
   const bool replay=a.size()==6 && a[1]=="replay";
-  const bool drive=a.size()>=7 && a.size()<=9 && a[1]=="drive";
-  const bool current=a.size()>=6 && a.size()<=8 && a[1]=="drive-current";
+  const bool drive=a.size()>=7 && a.size()<=10 && a[1]=="drive";
+  const bool current=a.size()>=6 && a.size()<=9 && a[1]=="drive-current";
   const bool speed=a.size()==8 && a[1]=="speed";
   const bool learner=drive || current || speed;
   const bool carrot=a.size()>=2 && a[1]=="start-v2";
   if(!replay && !learner && !((a.size()==6 || a.size()==8 || a.size()==9) && (a[1]=="start" || carrot)))
-    throw std::runtime_error("navdemos start|start-v2 NPC FROM TO LIMIT [lateral_cm yaw_deg fraction] | replay NPC FROM TO ACTIONS | drive NPC FROM TO LIMIT WEIGHTS [BETA SEED] | drive-current NPC GOAL LIMIT WEIGHTS [BETA SEED] | speed NPC FROM TO LIMIT WEIGHTS POPULATION");
+    throw std::runtime_error("navdemos start|start-v2 NPC FROM TO LIMIT [lateral_cm yaw_deg fraction] | replay NPC FROM TO ACTIONS | drive NPC FROM TO LIMIT WEIGHTS [BETA SEED ACTION_MODE] | drive-current NPC GOAL LIMIT WEIGHTS [BETA SEED ACTION_MODE] | speed NPC FROM TO LIMIT WEIGHTS POPULATION");
   if(ep.active || population.active)throw std::runtime_error("navdemos already active");
   const auto* from=current?nullptr:w.findPoint(a[3],false);const auto* to=w.findPoint(a[current?3:4],false);
   auto* npc=w.findNpcByInstance(w.script().findSymbolIndex(a[2]));
@@ -942,7 +944,12 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     if(!std::isfinite(ep.teacherBeta) || ep.teacherBeta<0 || ep.teacherBeta>1)
       throw std::runtime_error("navdemos teacher beta must be in [0,1]");
     if(!speed && a.size()>betaIndex+1)ep.mixingSeed=std::stoull(a[betaIndex+1]);
-    ep.mixingRng.seed(ep.mixingSeed);
+    if(!speed && a.size()>betaIndex+2) {
+      if(a[betaIndex+2]!="sample" && a[betaIndex+2]!="argmax")
+        throw std::runtime_error("navdemos drive action mode must be sample or argmax");
+      ep.sampled=a[betaIndex+2]=="sample";
+    }
+    ep.mixingRng.seed(ep.mixingSeed);ep.actionRng.seed(ep.mixingSeed);
     ep.policyStates.resize(population);
     ep.policyUs.reserve(size_t((ep.limit+99)/100)*population);
     ep.encodeUs.reserve(size_t((ep.limit+99)/100));
