@@ -59,13 +59,13 @@ def test_sound_spans_follow_remotion_frames_and_stop_at_freeze():
     spans = explain.sound_spans({"beats": [
         {"kind": "card", "dur": 1},
         {"kind": "footage", "dur": 2, "freeze": 1},       # silent from its 30th frame
-        {"kind": "footage", "dur": 0.075},                # Math.round: frames 90..92, then 92..95
-        {"kind": "footage", "dur": 0.075, "freeze": 0.1},  # 3/30 >= 0.1 although 0.1 * 30 > 3
+        {"kind": "footage", "dur": 0.075},                # Math.round(92.25): frames 90..92
+        {"kind": "footage", "dur": 1, "freeze": 0.1},     # 3/30 >= 0.1 although ceil(0.1 * 30) is 4
         {"kind": "footage", "dur": 1, "freeze": 5},       # past its end: the whole beat
         {"kind": "footage", "dur": 1, "freeze": 0},       # frozen from the first frame: no sound
     ]})
 
-    expected = [(0, 1), (1, 2), (90 / 30, 92 / 30), (92 / 30, 95 / 30), (95 / 30, 125 / 30)]
+    expected = [(0, 1), (1, 2), (90 / 30, 92 / 30), (92 / 30, 95 / 30), (122 / 30, 152 / 30)]
     assert len(spans) == len(expected)
     for actual, span in zip(spans, expected, strict=True):
         assert actual == pytest.approx(span)
