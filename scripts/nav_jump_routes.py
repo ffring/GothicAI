@@ -215,18 +215,30 @@ def qualify(candidates, plans, per_link=4):
                                                          planned_transition_ids=[link["id"] for link in plan["transitions"]]))
     selected = []
     for identifier in sorted(accepted):
-        # Cover different approaches before adding lateral variations. The full
-        # qualified pool remains available when a teacher route later fails.
+        # Start centrally when possible, then vary both approach distance and
+        # lateral side among already qualified paths. Prefer a new distance on
+        # ties, so a side available only at the same pose cannot crowd out a
+        # distinct approach. No additional route or plan is fabricated here.
         group = sorted(accepted[identifier], key=lambda row: (abs(row["lateral_m"]), -row["beyond_m"], row["label"]))
-        distinct, remainder = [], []
-        approaches = set()
-        for row in group:
-            if row["approach_m"] not in approaches:
-                approaches.add(row["approach_m"])
-                distinct.append(row)
+        chosen = []
+        while group and len(chosen) < per_link:
+            if not chosen:
+                row = group[0]
             else:
-                remainder.append(row)
-        selected.extend((distinct + remainder)[:per_link])
+                approaches = {item["approach_m"] for item in chosen}
+                sides = {math.copysign(1., item["lateral_m"]) if item["lateral_m"] else 0. for item in chosen}
+
+                def diversity(item):
+                    new_distance = item["approach_m"] not in approaches
+                    side = math.copysign(1., item["lateral_m"]) if item["lateral_m"] else 0.
+                    new_side = side not in sides
+                    separation = min(abs(item["approach_m"] - other["approach_m"]) for other in chosen)
+                    return new_distance + new_side, new_distance, new_side, separation, item["beyond_m"]
+
+                row = max(group, key=diversity)
+            chosen.append(row)
+            group.remove(row)
+        selected.extend(chosen)
     for index, route in enumerate(selected):
         route["index"] = index
     return selected, dict(candidates=len(candidates), qualified=sum(map(len, accepted.values())),
@@ -248,6 +260,7 @@ def prepare(args):
 def qualify_files(args):
     selected, counts = qualify(list(rows(args.candidates)), list(rows(args.plans)), args.per_link)
     write_rows(args.output / "routes.jsonl", selected)
+    (args.output / "counts.json").write_text(json.dumps(counts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(counts, ensure_ascii=False), flush=True)
     return selected, counts
 

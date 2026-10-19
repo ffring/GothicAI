@@ -2,7 +2,7 @@
 # Submit one bounded phase and return immediately. No training or PPO paths.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover}"
+stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover|routes}"
 export GQ_OWNER=nav-jumps
 host=ryzen
 task="$(ssh -o ConnectTimeout=10 "$host" 'printf "%s/gothic-ai/nav-jumps" "$HOME"')"
@@ -78,6 +78,50 @@ BUILD
     fi
     "$ROOT/scripts/gq" submit --class batch --threads 2 --mem 6G --max 2h \
       --name "nav jumps $stage CV" -- env OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1 "${args[@]}"
+    ;;
+  routes)
+    # This phase uses the verified runner; only the changed route selector is synced.
+    ssh "$host" "mkdir -p '$source_dir/scripts/tests'"
+    rsync -a "$ROOT/scripts/nav_jump_routes.py" "$host:$source_dir/scripts/"
+    rsync -a "$ROOT/scripts/tests/test_nav_jump_routes.py" "$host:$source_dir/scripts/tests/"
+    ssh "$host" "cat > '$task/routes.sh'" <<'ROUTES'
+#!/usr/bin/env bash
+set -euo pipefail
+task="$(cd "$(dirname "$0")" && pwd)"
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
+df -h "$HOME"
+cd "$task/source"
+"$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_jump_routes.py
+"$task/.venv/bin/python" -I - "$task" <<'PY'
+from collections import Counter
+import importlib.util
+import json
+from pathlib import Path
+import sys
+task = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("nav_jumps_merge", task / "source/scripts/nav_jumps.py")
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+old = probe.links(task / "recheck/accepted-links-cv.txt")
+new = probe.links(task / "discover-grounded/accepted-links-cv.txt")
+combined = old + new
+if len(combined) != 121 or len({row["id"] for row in combined}) != len(combined):
+    raise RuntimeError("Expected 121 verified links with unique IDs")
+destination = task / "accepted-links-cv.txt"
+if destination.exists() and probe.links(destination) != combined:
+    raise RuntimeError("Refusing to replace the verified transition set")
+probe.write_links(destination, combined)
+print(json.dumps(dict(verified_links=len(combined), old=len(old), new=len(new),
+                      by_type=dict(Counter(probe.TYPES[row["type"]] for row in combined)))), flush=True)
+PY
+"$task/.venv/bin/python" -I "$task/source/scripts/nav_jump_routes.py" run \
+  --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
+  --save "$task/input/save.sav" --cache "$task/cache-transitions-cv" \
+  --links "$task/accepted-links-cv.txt" --roads "$task/input/places.json" --places "$task/input/places.json" \
+  --output "$task/routes" --per-link 3
+ROUTES
+    "$ROOT/scripts/gq" submit --class batch --threads 2 --mem 6G --max 2h \
+      --name "nav jumps routes v2 max3 per transition" -- bash "$task/routes.sh"
     ;;
   *) echo "Unknown phase: $stage" >&2; exit 2 ;;
 esac

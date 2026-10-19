@@ -1,6 +1,8 @@
 """Transition route qualification uses the selected v2 plan and location splits."""
 import importlib.util
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -140,6 +142,46 @@ def test_selection_covers_approaches_before_duplicate_lateral_views():
               for index, (approach, lateral) in enumerate(((1., 0.), (1., .35), (2., 0.), (3., 0.)))]
     selected, _ = routes.qualify(values, [plan(value) for value in values], per_link=3)
     assert {value["approach_m"] for value in selected} == {1., 2., 3.}
+
+
+def test_three_variants_cover_centre_both_sides_and_different_distances():
+    places = [dict(id="FARM1_BANDITS", ru="пещера", center=[0., 0., 0.])]
+    values = routes.route_candidates([link(7)], places)
+    selected, _ = routes.qualify(values, [plan(value) for value in values], per_link=3)
+    assert len(selected) == 3
+    assert selected[0]["lateral_m"] == 0.
+    assert {value["lateral_m"] for value in selected} == {0., -.35, .35}
+    assert len({value["approach_m"] for value in selected}) == 3
+    assert selected == routes.qualify(list(reversed(values)), [plan(value) for value in reversed(values)], per_link=3)[0]
+
+
+def test_side_diversity_uses_only_verified_paths_and_keeps_available_count():
+    a = candidate()
+    values = [dict(a, label=f"link-7-{index:02d}", approach_m=approach, lateral_m=lateral)
+              for index, (approach, lateral) in enumerate(((1., 0.), (2., -.35), (3., .35)))]
+    plans = [plan(value) for value in values]
+    plans[-1]["transitions"] = []
+    selected, counts = routes.qualify(values, plans, per_link=3)
+    assert len(selected) == 2
+    assert {value["lateral_m"] for value in selected} == {0., -.35}
+    assert counts["rejected"] == {"transition_not_in_teacher_path": 1}
+
+
+def test_prepare_accepts_the_version2_places_book_schema(tmp_path):
+    source = tmp_path / "places.json"
+    source.write_text(json.dumps(dict(version=2, world="NEWWORLD.ZEN", points={}, places=[
+        dict(id="CITY_ROOF", ru="крыша", center=[10000., 200., 0.]),
+        dict(id="MONASTERY", ru="монастырь", center=[0., 50., 0.])
+    ])))
+    links = tmp_path / "links.txt"
+    links.write_text("0 0 0 2 1 0 1 7\n")
+    output = tmp_path / "routes"
+    values = routes.prepare(SimpleNamespace(places=source, links=links, output=output, seed=19))
+    assert len(values) == 48
+    assert {value["region"] for value in values} == {"monastery"}
+    assert {value["place_name"] for value in values} == {"монастырь"}
+    assert len(list(routes.rows(output / "candidate-routes.jsonl"))) == 48
+    assert len((output / "candidate-pairs.txt").read_text().splitlines()) == 48
 
 
 def test_link_reader_preserves_native_type_and_identifier(tmp_path):
