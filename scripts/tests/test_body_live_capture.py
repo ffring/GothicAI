@@ -79,9 +79,10 @@ def test_game_guard_checks_the_mac_and_rejects_both_a_game_and_query_failure(
 ):
     calls = []
 
-    def run(argv, *, capture_output, text):
+    def run(argv, *, capture_output, text, env):
         calls.append(argv)
         assert capture_output and text
+        assert env["LC_ALL"] == "C"
         if len(calls) == 1:
             assert argv == ["pgrep", "-fl", "Gothic2Notr"]
             return SimpleNamespace(returncode=returncode, stdout=stdout)
@@ -143,6 +144,10 @@ def test_runtime_uses_settings_policy_native_sound_and_prepared_scene(capture, t
     class Pilot:
         def __init__(self, link, url):
             assert url == "tcp://policy.invalid:9000"
+            assert (args.output / "ready").exists()
+            assert any(event.get("kind") == "rec" and event.get("seg") == "shot"
+                       for event in capture.read_events(args.output / "events.jsonl"))
+            order.append("pilot")
             self.stopped = asyncio.Event()
             state["pilot"] = self
 
@@ -169,7 +174,16 @@ def test_runtime_uses_settings_policy_native_sound_and_prepared_scene(capture, t
         returncode = None
 
         async def wait(self):
-            await state["server"].on_link(SimpleNamespace(closed=asyncio.Event()))
+            session = asyncio.create_task(state["server"].on_link(SimpleNamespace(closed=asyncio.Event())))
+            await asyncio.sleep(0)
+            # Reaching the preparation gate must not start a policy lease. Native
+            # fight setup runs after this gate and could revoke an earlier lease.
+            assert (args.output / "ready").exists() and "pilot" not in state
+            (args.output / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in [
+                {"kind": "rec", "seg": "shot"}, {"kind": "rec_stop", "seg": "shot"},
+            ]))
+            order.append("recorded")
+            await session
             self.returncode = 0
 
     async def prepared(link, shot):
@@ -197,7 +211,6 @@ def test_runtime_uses_settings_policy_native_sound_and_prepared_scene(capture, t
         assert {key: config.getfloat("SOUND", key) for key in
                 ("soundVolume", "musicVolume", "musicEnabled", "worldSounds")} == {
                     "soundVolume": 1, "musicVolume": 0, "musicEnabled": 0, "worldSounds": 0}
-        (args.output / "events.jsonl").write_text(json.dumps({"kind": "rec_stop", "seg": "shot"}) + "\n")
         return Game()
 
     install_runtime_stubs(monkeypatch, BodyPilot=Pilot, GameServer=Server)
@@ -212,7 +225,7 @@ def test_runtime_uses_settings_policy_native_sound_and_prepared_scene(capture, t
     # Keep the host pytest log configuration and avoid retaining temporary handlers.
     monkeypatch.setattr(capture.logging, "basicConfig", lambda **kw: [handler.close() for handler in kw["handlers"]])
     assert asyncio.run(capture.capture(args)) == 0
-    assert order == ["server", "guard", "launch", "prepared"]
+    assert order == ["server", "guard", "launch", "prepared", "recorded", "pilot"]
     assert (args.output / "ready").exists() and state["pilot"].stopped.is_set()
 
 

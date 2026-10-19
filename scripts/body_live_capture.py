@@ -67,13 +67,14 @@ def scene(shot: str, output: Path, duration: int) -> str:
 
 
 def game_guard() -> None:
-    result = subprocess.run(["pgrep", "-fl", "Gothic2Notr"], capture_output=True, text=True)
+    query_env = {**os.environ, "LC_ALL": "C"}
+    result = subprocess.run(["pgrep", "-fl", "Gothic2Notr"], capture_output=True, text=True, env=query_env)
     print(result.stdout.strip() or "no game", flush=True)
     if result.returncode not in (0, 1):
         raise RuntimeError(f"pgrep failed: {result.returncode}")
     # The required broad inventory also matches cmake/ninja --target Gothic2Notr.
     # Check the process name before interpreting a build as a running game.
-    exact = subprocess.run(["pgrep", "-x", "Gothic2Notr"], capture_output=True, text=True)
+    exact = subprocess.run(["pgrep", "-x", "Gothic2Notr"], capture_output=True, text=True, env=query_env)
     if exact.returncode == 0:
         raise RuntimeError("another Gothic2Notr is running on this Mac")
     if exact.returncode != 1:
@@ -154,11 +155,21 @@ async def capture(args) -> int:
     errors: list[Exception] = []
 
     async def session(link):
-        pilot = BodyPilot(link, body_url)
-        task = asyncio.create_task(pilot.run())
+        pilot = task = None
         try:
             await prepare(link, args.shot)
             (out / "ready").touch()
+            # Preparation and native fight commands must finish before the pilot
+            # can lease anyone: a later fixture fight would revoke that lease.
+            while not link.closed.is_set():
+                events = read_events(out / "events.jsonl")
+                if any(e.get("kind") == "rec" and e.get("seg") == "shot" for e in events):
+                    break
+                await asyncio.sleep(0.05)
+            if link.closed.is_set():
+                raise RuntimeError("game disconnected before recording")
+            pilot = BodyPilot(link, body_url)
+            task = asyncio.create_task(pilot.run())
             while not link.closed.is_set():
                 events = read_events(out / "events.jsonl")
                 if any(e.get("kind") == "rec_stop" and e.get("seg") == "shot" for e in events):
@@ -168,8 +179,9 @@ async def capture(args) -> int:
             LOG.exception("capture session failed")
             errors.append(error)
         finally:
-            await pilot.aclose()
-            await task
+            if pilot is not None:
+                await pilot.aclose()
+                await task
             completed.set()
 
     server = GameServer(port=0, on_link=session)

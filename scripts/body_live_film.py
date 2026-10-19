@@ -8,9 +8,11 @@ until the lease is released. Its events.jsonl must contain body_live_control
 wrappers and body_live_sample rows for every captured frame. ``track A,B,C head``
 adds rendered head positions. Actions are accepted P30 decisions, including
 ``continue`` and commands cancelled before execution; they are not a claim that
-every chosen action started. Full-session accepted decisions must equal the one
-``neural-body end ... decisions=N`` line for that NPC. Only decisions within the
-selected recording are exported. Their frame is the engine's capture index and
+every chosen action started. The one ``neural-body start ... lease=(...)`` line
+binds the NPC symbol to its complete lease identity; provisional observation IDs
+may change only before acquisition. Full-session accepted decisions must equal
+the one ``neural-body end ... decisions=N`` line for that NPC. Only decisions within
+the selected recording are exported. Their frame is the engine's capture index and
 ``t`` is that frame's presentation timestamp in the fixed-rate video.
 """
 from __future__ import annotations
@@ -19,6 +21,7 @@ import argparse
 import csv
 import json
 import math
+from bisect import bisect_left
 from pathlib import Path
 import re
 import sys
@@ -66,6 +69,18 @@ def pilot_decisions(path: Path, npc: str) -> int:
     return counts[0]
 
 
+def pilot_lease(path: Path, npc: str) -> tuple[int, int, int, int]:
+    """Bind the NPC name to its actual lease, not provisional pre-watch entity IDs."""
+    identities = []
+    for line in path.read_text().splitlines():
+        match = re.search(r"neural-body start npc=(\S+)\s.*?\blease=\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)", line)
+        if match and match[1] == npc:
+            identities.append(tuple(integer(int(value), "pilot lease identity", minimum=1) for value in match.groups()[1:]))
+    if len(identities) != 1:
+        raise ValueError(f"{path}: expected one neural-body start lease line for {npc}, got {len(identities)}")
+    return identities[0]
+
+
 def label_data(folder: Path, *, npc: str, pilot_log: Path, segment: str = "shot",
                size: tuple[int, int] = (1920, 1080), min_decisions: int = 1,
                consecutive_wait: int = 0) -> tuple[dict, dict]:
@@ -93,10 +108,8 @@ def label_data(folder: Path, *, npc: str, pilot_log: Path, segment: str = "shot"
                and row.get("npc") == npc and row.get("seg") == segment]
     if [row.get("frame") for row in samples] != list(range(count)):
         raise ValueError(f"{folder}: {npc} samples do not cover all {count} captured frames in order")
-    entities = {integer(row.get("entity_id"), "sample entity_id", minimum=1) for row in samples}
-    if len(entities) != 1:
-        raise ValueError(f"{folder}: {npc} changes entity_id during recording")
-    entity = entities.pop()
+    for row in samples:
+        integer(row.get("entity_id"), "sample entity_id", minimum=1)
     times = [integer(row.get("t_game_ms"), "sample t_game_ms") for row in samples]
     if any(a >= b for a, b in zip(times, times[1:])):
         raise ValueError(f"{folder}: {npc} captured game clocks must increase")
@@ -123,6 +136,7 @@ def label_data(folder: Path, *, npc: str, pilot_log: Path, segment: str = "shot"
     if not any(row[1] is not None for row in track):
         raise ValueError(f"{folder}: no visible head track for {npc}")
 
+    lease = pilot_lease(pilot_log, npc)
     controls = []
     for row in events:
         if row.get("kind") != "body_live_control":
@@ -130,7 +144,8 @@ def label_data(folder: Path, *, npc: str, pilot_log: Path, segment: str = "shot"
         control = row.get("control")
         if not isinstance(control, dict):
             raise ValueError(f"{folder}: malformed body_live_control wrapper")
-        if control.get("entity_id") == entity and control.get("provider") == "neural-body":
+        scope = tuple(control.get(key) for key in ("entity_id", "session_epoch", "world_epoch", "control_generation"))
+        if scope == lease and control.get("provider") == "neural-body":
             if control.get("mode") != "realtime":
                 raise ValueError(f"{folder}: {npc} neural-body control is not realtime")
             controls.append((row, control))
@@ -138,11 +153,16 @@ def label_data(folder: Path, *, npc: str, pilot_log: Path, segment: str = "shot"
     expected = pilot_decisions(pilot_log, npc)
     if not accepted or len(accepted) != expected:
         raise ValueError(f"{folder}: {npc} accepted decisions {len(accepted)} != pilot decisions {expected}")
-    scopes = {tuple(integer(control.get(key), key, minimum=1)
-                    for key in ("session_epoch", "world_epoch", "control_generation"))
-              for _, control in accepted}
-    if len(scopes) != 1:
-        raise ValueError(f"{folder}: {npc} expected one pilot lease, got {len(scopes)}")
+    boundaries = [(row, control) for row, control in controls
+                  if control.get("phase") == "accepted" or
+                  (control.get("phase") == "ownership" and control.get("reason") == "acquired")]
+    lease_frame = min(integer(row.get("frame"), "lease frame") if row.get("seg") == segment else
+                      bisect_left(times, integer(control.get("t_game_ms"), "lease t_game_ms"))
+                      for row, control in boundaries)
+    # Before body_watch establishes its channel, observation IDs can be reassigned.
+    # Samples are named by the script symbol; once this lease exists its ID is fixed.
+    if any(row["entity_id"] != lease[0] for row in samples[lease_frame:]):
+        raise ValueError(f"{folder}: {npc} changes entity_id after lease acquisition")
     command_ids = [integer(control.get("command_id"), "command_id", minimum=1) for _, control in accepted]
     if len(command_ids) != len(set(command_ids)) or any(a >= b for a, b in zip(command_ids, command_ids[1:])):
         raise ValueError(f"{folder}: {npc} duplicate or out-of-order accepted command_id")

@@ -52,7 +52,9 @@ def write_files(folder):
                control(7, 9, "accepted", -1, 1200), control(7, 9, "started", -1, 1200)]
     (folder/"metrics.csv").write_text("seg,frame,t\n"+"".join(f"shot,{i},{t}\n" for i, t in
                                                             enumerate([0, 33, 67, 100, 133, 167])))
-    (folder/"server.log").write_text(f"INFO neural-body end npc={NPC} reason=shutdown decisions=7 fallback=0\n"
+    (folder/"server.log").write_text(f"INFO neural-body start npc={NPC} target_kind=hero lease=(101, 1, 2, 3) acquire_refusals={{}}\n"
+                                     f"INFO neural-body start npc={OTHER} target_kind=hero lease=(102, 1, 2, 3) acquire_refusals={{}}\n"
+                                     f"INFO neural-body end npc={NPC} reason=shutdown decisions=7 fallback=0\n"
                                      f"INFO neural-body end npc={OTHER} reason=shutdown decisions=1 fallback=0\n")
     save_events(folder, events)
     return events
@@ -98,7 +100,7 @@ def test_cli_writes_only_the_requested_label_schema(tmp_path):
 @pytest.mark.parametrize("fault,expected", [
     ("missing_sample", "samples do not cover all 6"),
     ("duplicate_sample", "samples do not cover all 6"),
-    ("different_entity", "changes entity_id"),
+    ("different_entity", "changes entity_id after lease acquisition"),
     ("backwards_sample", "captured game clocks must increase"),
     ("invalid_hp", "invalid self HP"),
     ("missing_track", "no visible head track"),
@@ -107,13 +109,15 @@ def test_cli_writes_only_the_requested_label_schema(tmp_path):
     ("clock", "decision game clock disagrees with capture frame 0"),
     ("bad_action", "unknown action_id 12"),
     ("duplicate_command", "duplicate or out-of-order accepted command_id"),
-    ("second_lease", "expected one pilot lease, got 2"),
+    ("second_lease", "accepted decisions 6 != pilot decisions 7"),
     ("bad_start", "started command does not match an accepted decision"),
     ("missing_continue", "continue decision lacks its continued acknowledgement"),
     ("wrong_mode", "neural-body control is not realtime"),
     ("pilot_count", "accepted decisions 7 != pilot decisions 8"),
     ("duplicate_end", "expected one neural-body end decisions line"),
     ("missing_end", "expected one neural-body end decisions line"),
+    ("missing_start", "expected one neural-body start lease line"),
+    ("duplicate_start", "expected one neural-body start lease line"),
     ("missing_frame", "metrics do not cover all 6"),
     ("missing_stop", "expected one complete shot recording"),
 ])
@@ -160,9 +164,17 @@ def test_reject_missing_or_inconsistent_live_evidence(tmp_path, fault, expected)
         path.write_text(path.read_text().replace("decisions=7", "decisions=8"))
     elif fault == "duplicate_end":
         path = folder/"server.log"
-        path.write_text(path.read_text()*2)
+        path.write_text(path.read_text()+next(line for line in path.read_text().splitlines()
+                                               if f"neural-body end npc={NPC} " in line)+"\n")
     elif fault == "missing_end":
-        (folder/"server.log").write_text("neural-body start npc="+NPC)
+        path = folder/"server.log"
+        path.write_text("\n".join(line for line in path.read_text().splitlines() if "neural-body end" not in line))
+    elif fault == "missing_start":
+        path = folder/"server.log"
+        path.write_text("\n".join(line for line in path.read_text().splitlines() if "neural-body start" not in line))
+    elif fault == "duplicate_start":
+        path = folder/"server.log"
+        path.write_text(path.read_text()+path.read_text().splitlines()[0]+"\n")
     elif fault == "missing_frame":
         path = folder/"metrics.csv"
         path.write_text(path.read_text().replace("shot,5,167\n", ""))
@@ -180,3 +192,33 @@ def test_shot_requirements_are_checked_before_output(tmp_path, options, expected
     write_files(folder)
     with pytest.raises(ValueError, match=expected):
         FILM.label_data(folder, npc=NPC, pilot_log=folder/"server.log", **options)
+
+
+@pytest.mark.parametrize("corrupt_after_acquire", [False, True])
+def test_allow_provisional_entity_renumbering_only_before_the_named_pilot_lease(tmp_path, corrupt_after_acquire):
+    folder = tmp_path/"live"
+    events = write_files(folder)
+    # A group capture starts before body_watch settles the observation channel.
+    # Only commands 4..7 are in this NPC's lease, acquired at video frame 3.
+    events = [row for row in events if not (row.get("control", {}).get("entity_id") == 101
+              and row["control"]["command_id"] < 4)]
+    accepted = next(row for row in events if row.get("control", {}).get("command_id") == 4)
+    events.append({**accepted, "control": {**accepted["control"], "phase": "ownership", "reason": "acquired",
+                                          "command_id": 0}})
+    # A prior observation scope may reuse an entity ID for a different actor.
+    events.append({**accepted, "frame": 1, "control": {**accepted["control"], "world_epoch": 1,
+                                                         "command_id": 999, "action_id": 9}})
+    for row in events:
+        if row.get("kind") == "body_live_sample" and row.get("npc") == NPC:
+            if row["frame"] < 3 or (corrupt_after_acquire and row["frame"] == 3):
+                row["entity_id"] = 900+row["frame"]
+    log = folder/"server.log"
+    log.write_text(log.read_text().replace("decisions=7", "decisions=4"))
+    save_events(folder, events)
+    if corrupt_after_acquire:
+        with pytest.raises(ValueError, match="changes entity_id after lease acquisition"):
+            FILM.label_data(folder, npc=NPC, pilot_log=log)
+    else:
+        data, stats = FILM.label_data(folder, npc=NPC, pilot_log=log)
+        assert [action["id"] for action in data["actions"]] == [4, 5, 6]
+        assert stats["accepted"] == stats["pilot"] == 4
