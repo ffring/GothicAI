@@ -2,7 +2,10 @@
 
 from copy import deepcopy
 import json
+import hashlib
+import os
 from pathlib import Path
+import subprocess
 import sys
 
 import numpy as np
@@ -19,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
-def prepared(tmp_path):
+def prepared(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, 'DEFAULT_SOURCE_ROOT', tmp_path / 'permanent-sources')
     records = generate.recipes(ROOT / 'data/content/city-materials.csv',
         ROOT / 'docs/content-style.md', 'city-2')
     staging, flux = tmp_path / 'imagegen', tmp_path / 'flux'
@@ -95,6 +99,16 @@ def test_full_import_is_idempotent_and_preserves_flux_recipes_and_files(prepared
     assert window['generation']['selected_attempt'] == 1
     assert [attempt['selected'] for attempt in window['generation']['attempts']] == [True, False]
     assert [attempt['prompt'] for attempt in window['generation']['attempts']] == ['Text only recipe 1', 'Text only recipe 2']
+    raw_attempt = window['generation']['attempts'][0]
+    permanent = registry.DEFAULT_SOURCE_ROOT / raw_attempt['source_png']
+    staged = staging / 'sources/NW_CITY_WINDOW_03-attempt-1.png'
+    assert permanent.is_file() and staged.is_symlink()
+    assert staged.resolve() == permanent.resolve()
+    assert not Path(os.readlink(staged)).is_absolute()
+    assert hashlib.sha256(permanent.read_bytes()).hexdigest() == raw_attempt['source_sha256']
+    metadata = json.loads(staged.with_suffix('.json').read_text())
+    assert metadata['source'] == raw_attempt['source_png']
+    assert metadata['source_sha256'] == raw_attempt['source_sha256']
     once = path.read_bytes()
     assert importer.import_set(staging, flux, path,
         selections={'NW_CITY_WINDOW_03.TGA': 1}) == result
@@ -234,7 +248,7 @@ def test_real_filter_retains_native_dimensions_physical_aspect_and_numeric_limit
     for relative in result['files'].values():
         with Image.open(sources / relative) as image:
             assert image.size == (1024, 1024)
-    with Image.open(sources / attempt['source_png']) as image:
+    with Image.open(registry.DEFAULT_SOURCE_ROOT / attempt['source_png']) as image:
         assert image.size == (24, 16)
 
 
@@ -244,3 +258,38 @@ def test_option_parser_rejects_duplicates_and_unknown_textures():
         importer.option_pairs(['NW_CITY_WOODBEAM_02:v', 'NW_CITY_WOODBEAM_02.TGA:v'])
     with pytest.raises(ValueError, match='unknown imported texture'):
         importer.option_pairs(['NW_CITY_ROOF_04:1'], selection=True)
+
+
+def test_cli_backs_up_after_batch_import(tmp_path, monkeypatch):
+    events = []
+
+    def imported(*args, **kwargs):
+        events.append('import')
+        assert kwargs['source_root'] == tmp_path / 'permanent'
+        return [dict(pipeline='imagegen-filter', generation=dict(attempts=[{}]))]
+
+    def backed_up(command, *, check):
+        events.append('backup')
+        assert check
+        assert command[0].endswith('/backup-sources.sh')
+        assert command[1:] == ['--registry', str(tmp_path / 'registry.jsonl'),
+            '--source-root', str(tmp_path / 'permanent')]
+
+    monkeypatch.setattr(importer, 'import_set', imported)
+    monkeypatch.setattr(importer.subprocess, 'run', backed_up)
+    assert importer.main(['import', '--staging', str(tmp_path / 'staging'),
+        '--flux-root', str(tmp_path / 'flux'), '--registry', str(tmp_path / 'registry.jsonl'),
+        '--source-root', str(tmp_path / 'permanent')]) == 0
+    assert events == ['import', 'backup']
+
+
+def test_cli_backup_failure_returns_nonzero(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(importer, 'import_set', lambda *args, **kwargs: [])
+
+    def failed(command, *, check):
+        raise subprocess.CalledProcessError(23, command)
+
+    monkeypatch.setattr(importer.subprocess, 'run', failed)
+    assert importer.main(['import', '--staging', str(tmp_path / 'staging'),
+        '--flux-root', str(tmp_path / 'flux')]) == 1
+    assert 'Imagegen import failed:' in capsys.readouterr().err

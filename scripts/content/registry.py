@@ -10,11 +10,15 @@ Skipped entries require a reason, retain their recipe, and have no output files.
 An inaccessible model may have a null revision only in a skipped recipe.
 The built-in image_gen.imagegen tool does not expose a seed or model revision;
 imagegen-filter records retain these values as null instead of inventing them.
+Raw ``source_png`` paths are relative to ~/.local/share/gothic-ai/content-sources,
+with a ``source_sha256`` beside each path. ``check`` verifies their bytes by
+default; ``--source-root`` selects an isolated store or the backup copy.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path, PurePosixPath
@@ -24,6 +28,7 @@ from typing import Any
 
 
 DEFAULT_REGISTRY = Path(__file__).resolve().parents[2] / "data/content/registry.jsonl"
+DEFAULT_SOURCE_ROOT = Path.home() / ".local/share/gothic-ai/content-sources"
 MAP_NAMES = frozenset({"albedo", "normal", "roughness", "metallic", "height", "ao"})
 REQUIRED_FIELDS = frozenset({
     "id", "kind", "replaces", "pipeline", "models", "prompt", "negative",
@@ -32,6 +37,7 @@ REQUIRED_FIELDS = frozenset({
 SLUG = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*\Z")
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 BUILTIN_IMAGEGEN_MODEL = "image_gen.imagegen"
 
 
@@ -70,7 +76,54 @@ def _safe_path(value: Any, field: str) -> PurePosixPath:
     return PurePosixPath(value)
 
 
-def validate_entry(entry: Any, *, content_root: Path | None = None) -> None:
+def source_references(value: Any, field: str = "entry") -> list[tuple[str, str]]:
+    """Find raw-source pairs anywhere in a recipe, including every attempt.
+
+    ``source_png`` is relative to the permanent source store, independently of
+    the staging/output root. Its checksum describes the generator's PNG bytes,
+    before resizing, seam repair, brightness correction or map filtering.
+    """
+    found: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        if "source_png" in value or "source_sha256" in value:
+            relative = _safe_path(value.get("source_png"), f"{field}.source_png")
+            if relative.suffix.lower() != ".png":
+                raise RegistryError(f"{field}.source_png: expected a PNG source path")
+            digest = value.get("source_sha256")
+            if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+                raise RegistryError(f"{field}.source_sha256: expected a lowercase SHA-256 digest")
+            found.append((relative.as_posix(), digest))
+        for key, item in value.items():
+            found.extend(source_references(item, f"{field}.{key}"))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(source_references(item, f"{field}[{index}]"))
+    return found
+
+
+def verify_sources(entry: Any, source_root: Path) -> None:
+    """Require every recorded raw PNG to exist beneath the source root."""
+    root = Path(source_root).expanduser().resolve()
+    for relative, expected in source_references(entry):
+        candidate = (root / relative).resolve()
+        if not candidate.is_relative_to(root):
+            raise RegistryError(f"source_png: resolved path escapes source root: {relative}")
+        if not candidate.is_file():
+            raise RegistryError(f"source_png: file does not exist: {relative}")
+        try:
+            with candidate.open("rb") as stream:
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                actual = digest.hexdigest()
+        except OSError as error:
+            raise RegistryError(f"source_png: cannot read {relative}: {error}") from error
+        if actual != expected:
+            raise RegistryError(f"source_sha256: mismatch for {relative}: expected {expected}, got {actual}")
+
+
+def validate_entry(entry: Any, *, content_root: Path | None = None,
+                   source_root: Path | None = None) -> None:
     """Raise RegistryError on invalid recipes; optionally verify output files.
 
     Metadata outside the required fields is retained for measurements and future
@@ -80,6 +133,7 @@ def validate_entry(entry: Any, *, content_root: Path | None = None) -> None:
     if not isinstance(entry, dict):
         raise RegistryError("entry: expected a JSON object")
     _finite_json(entry)
+    source_references(entry)
     missing = REQUIRED_FIELDS - entry.keys()
     if missing:
         raise RegistryError(f"entry: missing fields: {', '.join(sorted(missing))}")
@@ -164,6 +218,8 @@ def validate_entry(entry: Any, *, content_root: Path | None = None) -> None:
                 raise RegistryError(f"files.{name}: resolved path escapes content root")
             if not candidate.is_file():
                 raise RegistryError(f"files.{name}: file does not exist: {value}")
+    if source_root is not None:
+        verify_sources(entry, source_root)
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -175,9 +231,11 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def check_registry(path: Path = DEFAULT_REGISTRY, *, content_root: Path | None = None) -> list[dict[str, Any]]:
-    """Read and validate every JSONL row, including registry-wide unique ids."""
+def check_registry(path: Path = DEFAULT_REGISTRY, *, content_root: Path | None = None,
+                   source_root: Path | None = None) -> list[dict[str, Any]]:
+    """Validate recipes, unique ids, and all recorded sources by default."""
     path = Path(path)
+    source_root = DEFAULT_SOURCE_ROOT if source_root is None else Path(source_root)
     if content_root is not None and not Path(content_root).expanduser().is_dir():
         raise RegistryError(f"content root is not a directory: {content_root}")
     entries: list[dict[str, Any]] = []
@@ -189,7 +247,7 @@ def check_registry(path: Path = DEFAULT_REGISTRY, *, content_root: Path | None =
                     raise RegistryError(f"{path}:{line_number}: empty JSONL row")
                 try:
                     entry = json.loads(line, object_pairs_hook=_unique_object)
-                    validate_entry(entry, content_root=content_root)
+                    validate_entry(entry, content_root=content_root, source_root=source_root)
                     if entry["id"] in seen:
                         raise RegistryError(f"duplicate id: {entry['id']!r}")
                 except (RegistryError, json.JSONDecodeError) as error:
@@ -209,14 +267,17 @@ def main(argv: list[str] | None = None) -> int:
     check = commands.add_parser("check", help="validate JSONL recipes and optional external output files")
     check.add_argument("registry", nargs="?", type=Path, default=DEFAULT_REGISTRY)
     check.add_argument("--content-root", type=Path, help="also require output files beneath this directory")
+    check.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT,
+                       help="raw PNG store (default: ~/.local/share/gothic-ai/content-sources)")
     args = parser.parse_args(argv)
     try:
-        entries = check_registry(args.registry, content_root=args.content_root)
+        entries = check_registry(args.registry, content_root=args.content_root, source_root=args.source_root)
     except RegistryError as error:
         print(f"Registry check failed: {error}", file=sys.stderr)
         return 1
     suffix = " (output files verified)" if args.content_root is not None else ""
-    print(f"Registry check passed: {len(entries)} material recipes{suffix}")
+    source_count = len({pair for entry in entries for pair in source_references(entry)})
+    print(f"Registry check passed: {len(entries)} material recipes, {source_count} source PNGs verified{suffix}")
     return 0
 
 

@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -209,3 +210,75 @@ def test_cli_returns_nonzero_without_traceback(tmp_path):
     assert result.returncode == 1
     assert "Registry check failed:" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def source_recipe(tmp_path):
+    entry = recipe()
+    source_root = tmp_path / 'raw-sources'
+    source = source_root / 'city-3/wall-attempt-1.png'
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b'original generator PNG bytes')
+    entry['generation']['attempts'] = [dict(number=1,
+        source_png=source.relative_to(source_root).as_posix(),
+        source_sha256=hashlib.sha256(source.read_bytes()).hexdigest())]
+    return entry, source_root, source
+
+
+def test_recorded_sources_are_verified_by_default_and_cli_can_override(tmp_path, monkeypatch):
+    entry, source_root, source = source_recipe(tmp_path)
+    path = write_registry(tmp_path, [entry])
+    monkeypatch.setattr(registry, 'DEFAULT_SOURCE_ROOT', source_root)
+    assert registry.check_registry(path) == [entry]
+    result = subprocess.run([sys.executable, str(SCRIPT), 'check', str(path),
+        '--source-root', str(source_root)], capture_output=True, text=True)
+    assert result.returncode == 0
+    assert '1 source PNGs verified' in result.stdout
+    source.write_bytes(b'changed after generation')
+    with pytest.raises(registry.RegistryError, match='source_sha256: mismatch'):
+        registry.check_registry(path)
+    # Recipe construction can validate metadata before the raw PNG is retained.
+    registry.validate_entry(entry)
+
+
+def test_missing_source_and_escaping_source_symlink_fail(tmp_path):
+    entry, source_root, source = source_recipe(tmp_path)
+    source.unlink()
+    with pytest.raises(registry.RegistryError, match='source_png: file does not exist'):
+        registry.validate_entry(entry, source_root=source_root)
+    outside = tmp_path / 'outside.png'
+    outside.write_bytes(b'original generator PNG bytes')
+    source.symlink_to(outside)
+    with pytest.raises(registry.RegistryError, match='escapes source root'):
+        registry.validate_entry(entry, source_root=source_root)
+
+
+@pytest.mark.parametrize(('updates', 'message'), [
+    ({'source_png': '../outside.png'}, 'source_png'),
+    ({'source_png': '/absolute.png'}, 'source_png'),
+    ({'source_png': 'raw/source.jpg'}, 'PNG source'),
+    ({'source_sha256': None}, 'source_sha256'),
+    ({'source_sha256': 'A' * 64}, 'source_sha256'),
+    ({'source_sha256': '0' * 63}, 'source_sha256'),
+])
+def test_source_pairs_require_safe_paths_and_sha256(tmp_path, updates, message):
+    entry, _, _ = source_recipe(tmp_path)
+    entry['generation']['attempts'][0].update(updates)
+    with pytest.raises(registry.RegistryError, match=message):
+        registry.validate_entry(entry)
+
+
+@pytest.mark.parametrize('missing', ['source_png', 'source_sha256'])
+def test_source_path_and_digest_are_required_together(tmp_path, missing):
+    entry, _, _ = source_recipe(tmp_path)
+    del entry['generation']['attempts'][0][missing]
+    with pytest.raises(registry.RegistryError, match=missing):
+        registry.validate_entry(entry)
+
+
+def test_all_attempts_are_checked_including_unselected_source(tmp_path):
+    entry, source_root, source = source_recipe(tmp_path)
+    attempt = deepcopy(entry['generation']['attempts'][0])
+    attempt.update(number=2, source_png='city-3/missing-attempt-2.png', selected=False)
+    entry['generation']['attempts'].append(attempt)
+    with pytest.raises(registry.RegistryError, match='missing-attempt-2.png'):
+        registry.check_registry(write_registry(tmp_path, [entry]), source_root=source_root)
