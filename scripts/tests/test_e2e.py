@@ -67,7 +67,8 @@ class RunSettingsTests(unittest.TestCase):
                 relative_path, content = systempack
                 systempack_path = game_dir / relative_path
                 systempack_path.parent.mkdir(parents=True)
-                systempack_path.write_bytes(content.encode())
+                systempack_bytes = content if isinstance(content, bytes) else content.encode()
+                systempack_path.write_bytes(systempack_bytes)
             env = dict(os.environ)
             for name in ("E2E_MAX_FPS", "CHARACTER_VIRTUAL", "NPC_CHARACTER_VIRTUAL",
                          "MONSTER_CHARACTER_VIRTUAL", "GOTHIC_TTS_RECORD", "OPENGOTHIC_FPS_LOG"):
@@ -79,7 +80,7 @@ class RunSettingsTests(unittest.TestCase):
             ini = configparser.ConfigParser(interpolation=None)
             ini.read(ini_path)
             if systempack_path is not None:
-                self.assertEqual(systempack_path.read_bytes(), systempack[1].encode())
+                self.assertEqual(systempack_path.read_bytes(), systempack_bytes)
             return done, ini
 
     def test_default_limit_is_30(self):
@@ -147,6 +148,23 @@ class RunSettingsTests(unittest.TestCase):
             "System/SystemPack.ini", "[OTHER]\nFPS_Limit=100\n[PARAMETERS]\nFPS_Limit=0\n"))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertNotIn("WARNING:", done.stderr)
+
+    def test_systempack_cp1251_comments_do_not_break_utf8_locale(self):
+        # Real game installations have Cyrillic comments in Windows-1251.
+        comment = "; Предел кадров\r\n".encode("cp1251")
+        for value in (0, 75):
+            with self.subTest(value=value):
+                content = comment + f"[PARAMETERS]\r\nFPS_Limit={value}\r\n".encode("ascii")
+                done, ini = self.run_settings(
+                    options={"LC_ALL": "en_US.UTF-8"},
+                    systempack=("System/SystemPack.ini", content))
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(ini.getint("ENGINE", "zMaxFps"), 30)
+                self.assertIn("zMaxFps=30", done.stdout)
+                if value:
+                    self.assertIn("FPS_Limit=75 overrides e2e zMaxFps=30", done.stderr)
+                else:
+                    self.assertNotIn("WARNING:", done.stderr)
 
     def test_invalid_limit_is_rejected(self):
         for value in ("", "-1", "30.5", "no-limit"):

@@ -476,7 +476,8 @@ echo "e2e: [ENGINE] zMaxFps=$E2E_MAX_FPS (0 = uncapped); OPENGOTHIC_FPS_LOG=${OP
 # FileUtil::nestedPath resolves game paths case-insensitively, on both hosts.
 SYSTEMPACK_INI="$(find "$GOTHIC_DIR" -maxdepth 2 -iname SystemPack.ini -path '*[sS][yY][sS][tT][eE][mM]/*' -print -quit)"
 if [[ -n "$SYSTEMPACK_INI" ]]; then
-  SYSTEMPACK_FPS="$(awk '
+  # Original game INIs may contain CP1251 comments, including on UTF-8 hosts.
+  SYSTEMPACK_FPS="$(LC_ALL=C awk '
     { sub(/\r$/, ""); line=tolower($0) }
     line ~ /^[[:space:]]*\[/ { parameters=(line ~ /^[[:space:]]*\[parameters\]/) }
     parameters && line ~ /^[[:space:]]*fps_limit[[:space:]]*=/ {
