@@ -847,17 +847,22 @@ PY
 e2e_display_exclusive() {
   # Keep timing-sensitive exceptions and their measured reason in this one list.
   # RYZEN_DISPLAY_EXCLUSIVE=1 forces it for any scenario: rerun a suspicious
-  # failure from a shared slot this way before chasing it.
-  [[ "${RYZEN_DISPLAY_EXCLUSIVE:-0}" != 1 ]] || return 0
+  # failure from a shared slot this way before chasing it. =0 shares a listed
+  # scenario: only for a three-game measurement (scripts/ryzen-round.sh).
+  [[ "${RYZEN_DISPLAY_EXCLUSIVE:-}" != 1 ]] || return 0
+  [[ "${RYZEN_DISPLAY_EXCLUSIVE:-}" != 0 ]] || return 1
   case "$1" in
-    # Measured 19.10 (reports/compute/2026-10-19-ryzen-three-windows): each passed
-    # solo and failed in some three-game rounds even with windows apart, at
-    # 77-93 FPS instead of ~105. orders missed wolf preparation, bandits the
-    # native return strike within 3 s, calm its attack and addressee checks.
-    orders|fight_reactions_bandits|calm) return 0 ;;
+    # Measured 19.10 (reports/compute/2026-10-19-ryzen-three-windows): passes alone
+    # at ~100 FPS, fails 1-2 of 3 three-game rounds at ~75: after the setup's hit,
+    # Cavalorn's next blows interrupt the bandit's return strike. Isolating that
+    # window is unfinished (PR #264).
+    fight_reactions_bandits) return 0 ;;
     # Same fight, companion and movement timing, not measured yet: kept exclusive
     # rather than risking false failures. Move one out only after it passes
-    # every round of a three-game measurement.
+    # every round of a three-game measurement (scripts/ryzen-round.sh), as orders
+    # and calm did on 19.10: orders 4/4 mixed rounds at 88-108 FPS once #258
+    # placed its wolf on visible ground (6/6 more as three copies), calm 4/4 at
+    # 79-81 FPS (4/4 more earlier that day), both also passing alone.
     fight_reactions_*|calm_*|neural*|wolf|rescue*|companion) return 0 ;;
     *) return 1 ;;
   esac
@@ -1013,7 +1018,7 @@ fi
 while IFS= read -r name; do
   case "$name" in
     GOTHIC_DIR|GOTHIC_AI_URL|OPENGOTHIC_FRACTURE) ;;
-    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|TEMPEST_*|CHATGPT_*|OPENAI_*)
+    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|E2E_MAX_FPS|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|TEMPEST_*|CHATGPT_*|OPENAI_*)
       ENV_ARGS+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)

@@ -10,13 +10,16 @@ from the engine's formula or taken from the bench's log, never typed into a pict
 The plan's `format` selects `tall` (1080 × 1920, the default) or `wide` (1920 × 1080), both at 30 fps.
 `Root.tsx` calculates the composition dimensions and duration from that plan. `Explainer.tsx` lays out the
 picture and overlays; `parts/` draws the cards and captions. `brand: false` disables the ending and needs no
-external assets. Publication of either format uses the same `gothic_shorts.levels.publish` checks.
+external assets. Wide diagrams live in `parts/WideDiagrams.tsx`: `rays`, `cone`, `ticks`, `grid`, and `flow`.
+Their plan timings drive every reveal, turn, alignment and packet; the diagrams need no game or model process.
+Omit a diagram beat to leave it out; these five types are rejected in tall plans. Publication of either format
+uses the same `gothic_shorts.levels.publish` checks.
 
 ```bash
 cd shorts/explain
 npm ci
 npx remotion studio --props '{"brand":false}'                           # the demo plan: the dice chart, no assets
-npx remotion studio --props src/demo-wide.json                          # twelve wide cards, no external assets
+npx remotion studio --props src/demo-wide.json                          # nineteen wide cards, no external assets
 npx remotion still Explainer --props src/demo-wide.json --frame 330 out/wide-formula.png
 npx remotion still Explainer --public-dir "$W" --props "$W/plan.json" --frame 120 "$W/render/f120.png"
 npx remotion render Explainer --public-dir "$W" --props "$W/plan.json" --codec h264 --crf 18 "$W/render/preview.mp4"
@@ -96,7 +99,8 @@ the original plan gains and ducking for Studio and drafts; they do not run the p
   terms a line each as they are said, then a worked example computed the way `damagecalculator.cpp` does it:
   rounded at each step, protection not below 0, at least 5), `bars` (groups growing one by one), `dots` (marks
   filling up to a count), `stats` (the character's numbers greying out under a question), and the wide-only
-  `line`, `big`, `table`, `cells` described below; each but `stats` names its `source`;
+  `line`, `big`, `table`, `cells`, `rays`, `cone`, `ticks`, `grid`, `flow` described below;
+  each but `stats` names its `source`;
 - `lines`: the voice's words with their times, a sentence per line (`gothic-shorts words`); the captions are
   pages of 2-4 words of them, the word being said in gold. A page never ends on a preposition or a conjunction
   (`в`, `как`, `of the`, `than`): it goes to the next one. For captions in another language than the voice, the
@@ -220,10 +224,135 @@ appears. `notes: [{text, at, color?}]` appear below, one line each. Both arrays 
 }
 ```
 
+### `rays` — obstacle rays and observations (only wide)
+
+A top view puts the gold fighter (`я`) at the centre. `maxCm` is the observation range in centimetres;
+`rays` contains exactly 16 `{cm, hit}` entries, spaced evenly clockwise from forward (up). A hit is red
+and ends at `cm`; a miss is grey and reaches `maxCm`. `raysAt: [at, dur]` reveals the rays around the
+circle in order. The demo is explicitly labelled `демо`: its distances are illustrative, ready to replace
+with a real `observations.jsonl` row.
+
+`target: {x, y, label, at?}` positions the blue opponent relative to the fighter in centimetres: positive
+X is right, positive Y is forward/up. `at` defaults to 0. `hideAt`, when supplied, removes the opponent
+and dims the second panel with `нет данных`. `panels: [{title, lines, color, at}]` appear on the right;
+use the first for self observations and the second for the opponent. `title` is optional; `source` is required.
+
+```json
+{
+  "type": "rays", "title": "184 числа · демо", "maxCm": 600,
+  "rays": [
+    {"cm": 600, "hit": false}, {"cm": 600, "hit": false}, {"cm": 340, "hit": true}, {"cm": 280, "hit": true},
+    {"cm": 250, "hit": true}, {"cm": 315, "hit": true}, {"cm": 600, "hit": false}, {"cm": 600, "hit": false},
+    {"cm": 440, "hit": true}, {"cm": 600, "hit": false}, {"cm": 600, "hit": false}, {"cm": 390, "hit": true},
+    {"cm": 325, "hit": true}, {"cm": 370, "hit": true}, {"cm": 600, "hit": false}, {"cm": 600, "hit": false}
+  ],
+  "target": {"x": 150, "y": 230, "label": "противник", "at": 0.8}, "hideAt": 5.8,
+  "panels": [
+    {"title": "я", "lines": ["HP · оружие · поза"], "color": "#FFD678", "at": 0.4},
+    {"title": "противник", "lines": ["дальность · направление"], "color": "#7EC8FF", "at": 0.8}
+  ],
+  "raysAt": [1.3, 1.6],
+  "source": "демо лучей; реальные данные: observations.jsonl · scripts/body_trajectory_dataset.py"
+}
+```
+
+### `cone` — field of view and turn (only wide)
+
+The fighter starts facing up. `halfDeg` sets each half of the cone in degrees; `rangeCm` sets its range.
+`path: [{t, x, y}]` gives opponent positions in centimetres relative to the fighter, with the same axes as
+`rays`. Times must increase strictly. Position is linearly interpolated between keys and held at the last
+key afterward; the opponent appears at the first key's `t`. Outside the cone's angle or range it dims.
+This is a geometric illustration, not a simulation of game collision or visibility.
+
+Optional `turn: {at, dur, deg, label}` rotates the cone linearly over `dur` seconds; positive `deg` turns
+clockwise. Its label appears beside the diagram. `texts: [{text, at, color}]` reveal short lines on the
+right. `targetLabel` defaults to `противник`; `title` is optional and `source` is required.
+
+```json
+{
+  "type": "cone", "title": "Конус зрения и доворот", "halfDeg": 35, "rangeCm": 420,
+  "path": [{"t": 0.4, "x": 0, "y": 270}, {"t": 3, "x": 240, "y": 220}],
+  "turn": {"at": 4.2, "dur": 0.4, "deg": 48, "label": "≤ 400 мс"},
+  "texts": [{"text": "Доворот возвращает цель", "at": 4.6, "color": "#FFD678"}],
+  "source": "docs/npc-body-combat-gate.md:109–120; reports/npc-body/2026-10-15-stage8-resume"
+}
+```
+
+### `ticks` — decision and busy ticks (only wide)
+
+Each `rows` entry has a `label`, `cells` string made only of `D` (gold decision) and `B` (grey busy body),
+`at`, and optional `offset` (defaults to 0). `offset` shifts a row right by that many cell widths,
+including fractions. Starting at each row's `at`, its cells appear left to right over the card's `dur`.
+Letters remain only in the plan: cells show solid gold or grey, and the legend uses matching coloured
+squares with the labels from `legend: {D, B}`. Optional `align: {at, dur}` linearly moves each row to
+the first row's offset, keeping that reference row fixed. `title` is optional and `source` is required.
+
+```json
+{
+  "type": "ticks", "title": "Один тик", "dur": 2.4,
+  "rows": [
+    {"label": "игра", "cells": "DBBBBDBBBBDBBBBDBBBB", "at": 0.5},
+    {"label": "стенд", "cells": "DBBBBDBBBBDBBBBDBBBB", "offset": 1, "at": 0.9}
+  ],
+  "legend": {"D": "решение", "B": "тело занято"}, "align": {"at": 4.2, "dur": 0.8},
+  "source": "reports/npc-body/2026-10-15-schedule-equivalence"
+}
+```
+
+### `grid` — named actions (only wide)
+
+`tiles: [{label, at}]` fills a grid with `columns` columns. Every tile is dark until its `at`, then lights
+gold and stays lit. `title` and `source` are required. Time each tile to the corresponding spoken action;
+the wide demo contains all 12 primitives, with the two pauses labelled in milliseconds.
+
+```json
+{
+  "type": "grid", "title": "Действия", "columns": 2,
+  "tiles": [{"label": "подойти", "at": 0.3}, {"label": "повернуться", "at": 0.7}],
+  "source": "docs/npc-body-api.md:93–102"
+}
+```
+
+### `flow` — loops and moving packets (only wide)
+
+`nodes: [{id, label, x, y, w?, color?, at}]` places labelled blocks by their centre. X and Y are fractions
+of the **full** 1920 × 1080 frame; `w` is also a frame-width fraction and defaults to 0.2. Keep block centres
+roughly between Y=0.28 and Y=0.72 to clear the title and source. Labels accept `\n` for line breaks.
+Use unique IDs; each edge must refer to existing nodes. A node defaults to gold; choose `before` grey for
+past/host steps and `skill` blue for an opponent. `title` is optional and `source` is required.
+
+`edges: [{from, to, label?, at, curve?, packets?}]` draws arrows between block boundaries over 0.6 seconds
+from `at`; the arrowhead follows the drawn endpoint by arc length, including on curved arrows.
+`curve` bends the arrow by a signed perpendicular fraction of the **full frame height**; zero
+(the default) is straight. A positive bend from right to left goes upward, allowing a return loop over a
+row of blocks. `packets: {every, dur}` starts repeated moving points after the arrow has finished drawing:
+a new point starts every `every` seconds and crosses the arrow in `dur` seconds for the rest of the beat.
+
+```json
+{
+  "type": "flow", "title": "Самоимитация",
+  "nodes": [
+    {"id": "play", "label": "Играть\n2016 дуэлей", "x": 0.2, "y": 0.56, "w": 0.22, "at": 0.4},
+    {"id": "select", "label": "Отобрать\n25% лучших", "x": 0.5, "y": 0.56, "w": 0.22, "at": 1.4},
+    {"id": "train", "label": "Доучить", "x": 0.8, "y": 0.56, "w": 0.22, "at": 2.4}
+  ],
+  "edges": [
+    {"from": "play", "to": "select", "at": 1.4},
+    {"from": "select", "to": "train", "at": 2.4},
+    {"from": "train", "to": "play", "label": "снова", "at": 3.4, "curve": 0.23,
+      "packets": {"every": 0.9, "dur": 1.5}}
+  ],
+  "source": "reports/npc-body/2026-10-15-self-imitation"
+}
+```
+
 All new cards require `format: "wide"`. A tall plan (including the default format) fails validation
 with a path such as `beats.0.chart.type` and `line: только wide`. `at` and `draw[0]` are seconds
 from the beginning of their beat; durations must be positive. A small `source` line stays below each
-card, leaving the bottom of the frame for captions. Plan colours should come from `src/theme.ts`.
+card, leaving the bottom of the frame for captions. Plan colours should come from `src/theme.ts`: network/P30
+uses `now` gold (`#FFD678`), the opponent
+uses `skill` blue (`#7EC8FF`), failure uses `miss` red (`#FF5A5A`), and the past uses `before` grey
+(`#D8D8D8`). Title and body fonts come from the same theme; elements appear when the voice names them.
 
 ## Look
 
@@ -246,12 +375,24 @@ The asset-free wide demo starts with five six-second cards; representative still
 It then adds seven P30 cards: `ppo-pool` (40 training points), `ppo-wall` (eight evaluations and R3m),
 `throughput` (log bars), `defeats` (group colours), `network` (two big numbers and a counter), `results`
 (BC/P30 table), `gate-attempts` (v1–v11, v12, v14, v16). Each names the repository data source.
-Schema checks: `node --test tests/charts.test.mjs` (Node 22.18+ for native TypeScript stripping).
+Seven further beats demonstrate the diagrams: `observation-rays` (184 numbers and hidden-target state),
+`vision-cone` (loss of sight and a 400 ms turn), `decision-ticks` (20 Hz), `action-grid` (12 actions),
+`self-imitation-flow` (2016 duels and best 25%), `one-tick` (game/bench alignment), and `service-flow`
+(Mac ⇄ Ryzen with packets). Ray distances are labelled `демо`; the cone path illustrates geometry.
+Neither example supplies recorded telemetry.
+Schema and geometry checks: `node --test tests/charts.test.mjs` (Node 22.18+ for native TypeScript
+stripping), including rejection of wide-only cards in tall and interpolation of `cone.path`.
 
 Remotion is under the [Remotion License](https://www.remotion.pro/license): free for individuals and companies of
 up to three people. The versions are pinned in `package.json`.
 
 ## План и журнал
+
+- 2026-10-19: removed tick-cell letters and replaced legend letters with coloured squares;
+  curved flow arrowheads now follow the drawn arc length, with a 2 px regression tolerance.
+- 2026-10-19: added wide-only `rays`, `cone`, `ticks`, `grid`, `flow` with voice-relative reveals,
+  target hiding, field-of-view turns, tick alignment, curved loops and recurring packets. The wide demo
+  adds seven storyboard examples for P30; existing tall cards retain their original layout.
 
 - 2026-10-19: added wide-only `line`, `big`, `table`, `cells`, logarithmic bars and per-group colours/notes;
   the wide demo includes the P30 learning curves, throughput, defeats, model size, final evaluation and gate.
