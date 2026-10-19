@@ -110,7 +110,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "cloth",               1);
   defaults->set("GAME", "character_virtual",   1);
   defaults->set("GAME", "npc_character_virtual",1);
-  defaults->set("GAME", "monster_character_virtual",0);
+  defaults->set("GAME", "monster_character_virtual",1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
