@@ -40,7 +40,7 @@
 | `planks_wall` | дощатая стена, вертикальные доски | 2 | 0,06–0,14 | 0,70–0,90 | vertical weathered wooden plank wall, gaps, nail marks |
 | `timber_beam` | балки и брёвна | 1,5 | 0,05–0,12 | 0,65–0,85 | dark old timber beam wood grain, cracks, adze marks |
 | `roof_shingle` | деревянная дранка | 2 | 0,05–0,12 | 0,80–0,95 | weathered wooden roof shingles, overlapping, moss in places |
-| `roof_tiles` | глиняная черепица | 2 | 0,08–0,16 | 0,70–0,90 | old clay roof tiles, faded brownish red, lichen |
+| `roof_tiles` | кровельные плитки; у городской `ROOF_04` — серые каменные пластинки | 2 | 0,08–0,16 | 0,70–0,90 | weathered grey stone roof slates, overlapping courses, dark joints, lichen |
 | `thatch` | солома | 2 | 0,08–0,15 | 0,90–1,00 | old straw thatch roof, grey-brown, compacted |
 | `dirt_path` | утоптанная земля, дороги и дворы | 3 | 0,07–0,15 | 0,85–1,00 | soft packed brown earth road, cart wheel ruts and hoof prints, scattered straw, sparse small pebbles, continuous soil surface |
 | `mud` | грязь у воды и в низинах | 3 | 0,05–0,12 | 0,55–0,85 | wet dark brown mud ground, shallow puddles, hoof prints, scattered straw, continuous soft soil surface |
@@ -71,6 +71,8 @@
 
 Замена модуля сохраняет вид и функции его частей, описанные словами, а не рисунок оригинала. Его пропорции и число повторов на типичной грани берём из UV и геометрии места и записываем в карточку текстуры. Общий физический размер плитки класса к модулю не применяем. Края делаем бесшовными только по направлениям повтора; верх и низ, поперечные границы и расположение износа сохраняют свой смысл.
 
+У однородного материала тоже может быть направление: волокна досок, нахлёст кровли, ряды обшивки. Для таких `include` в таблице также указан антиповтор `off`; для ненаправленного материала допустим `on`. Цвет и вещество определяются полями конкретной записи: городская `ROOF_04` изображает серую каменную кровлю, поэтому прежнее ядро `roof_tiles` про красную глину исправлено. Это описание для будущих рецептов; существующие наборы не пересчитываются.
+
 Классы модулей (правило принято; подключение к генератору — отдельная работа):
 
 | Класс | Назначение | Состав словами (англ.) | Масштаб | Антиповтор | Бесшовность | Примеры применения |
@@ -79,11 +81,12 @@
 | `framed_masonry_tile` | повторяемый цоколь или внутренняя стена с кладкой в обвязке | masonry wall module: stone infill held by structural framing, a distinct base and upper boundary, damp wear toward the bottom | `1` | `off` | по направлениям повтора из UV | `NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA`, `NW_CITY_INSIDEWALL_11.TGA` |
 | `framed_boards_tile` | повторяемая дощатая секция внутренней стены с обвязкой | boarded wall module: boards within a timber frame, dirt at joints and frame contacts | `1` | `off` | по направлениям повтора из UV | `NW_CITY_INSIDEWALL_12.TGA` |
 | `window_wall_tile` | повторяемая стена с оконными проёмами | window wall module: window openings within a supporting wall, framing around openings, weathering below sills and at joints | `1` | `off` | по направлениям повтора из UV | `NW_CITY_WINDOW_03.TGA`, `NW_CITY_RICH_WINDOW_01.TGA`, `NW_CITY_HAFEN_HOLZWAND_02.TGA` |
-| `quay_wall_tile` | повторяемая стенка набережной с верхним поясом | quay wall module: masonry below a continuous upper ledge, darker damp wear toward the base | `1` | `off` | вдоль набережной, если это направление повторяется | `NW_CITY_HAFENKAI_MAUER_01.TGA` |
+| `quay_wall_tile` | повторяемая стенка набережной с горизонтальным уступом | quay wall module: rough masonry above and below a continuous horizontal stone ledge, darker damp joints, worn exposed ledge | `1` | `off` | вдоль набережной, если это направление повторяется | `NW_CITY_HAFENKAI_MAUER_01.TGA` |
 | `roof_structure_tile` | повторяемая внутренняя обшивка кровли вместе с каркасом | inner roof module: boards supported by timber members, dust at contacts and joints, smoke wear where appropriate | `1` | `off` | по направлениям повтора из UV | `NW_CITY_ROOF_INSIDE_01.TGA` |
-| `stair_tile` | повторяемая ступень с проступью и подступенком | stair module: worn tread, defined nosing and riser, dirt at the back and lower joints | `1` | `off` | по направлениям повтора из UV, с совмещением частей ступени | `NW_HARBOUR_STAIRS_01.TGA`, `NW_HARBOUR_STAIRS_03.TGA` |
-| `pavement_border_tile` | повторяемый край мощения с переходом к соседней поверхности | pavement edge module: laid paving beside an unpaved margin, dirt in the boundary joints and wear on the walking surface | `1` | `off` | вдоль границы, если это направление повторяется | `NW_CITY_PFLASTERSTEIN_BORDER_01.TGA` |
+| `stair_tile` | повторяемая группа ступеней с проступями и подступенками | stair module: a sequence of treads and riser fronts, worn projecting nosings and darker recesses, preserve the geometric step rhythm | `1` | `off` | по направлениям повтора из UV, с совмещением частей ступени | `NW_HARBOUR_STAIRS_01.TGA`, `NW_HARBOUR_STAIRS_03.TGA` |
+| `pavement_border_tile` | повторяемая окантовка каменного мощения | pavement border module: a narrow edging course borders fields of small paving stones, darker joints and worn stone tops | `1` | `off` | вдоль границы, если это направление повторяется | `NW_CITY_PFLASTERSTEIN_BORDER_01.TGA` |
 | `bound_timber_tile` | повторяемая балка или деревянная секция с металлической обвязкой | bound timber module: timber grain along the member, crossing iron bindings, wear at contacts and edges | `1` | `off` | вдоль оси балки, поперечные границы закреплены | `NW_CITY_WOODBEAM_01.TGA`, `NW_CITY_WOODBEAM_02.TGA`, `NW_CITY_WOODBEAM_03.TGA`, `NW_HARBOUR_WOOD_IRON_01.TGA` |
+| `banded_metal_tile` | металлическая оболочка с усиливающими поясами | banded metal module: a weathered metal body with reinforcing bands across its axis, worn exposed bands and darker contacts | `1` | `off` | вокруг оболочки по U; положение поясов по V закреплено | `NW_HARBOUR_CANON_01.TGA`: стволы пушек и конструкции светильников |
 | `path_tile` | повторяемая дорожка с вытоптанной серединой и менее затронутыми краями | path module: walked earth centre, grass and debris toward the margins, wear following the route | `1` | `off` | вдоль дорожки, без сдвига поперёк неё | `NW_CITY_DIRTYGROUND_WEG_02.TGA`, `NW_CITY_DIRTYGROUND_WEG_03.TGA` |
 | `paving_transition_tile` | повторяемый переход от каменного мощения к земле | paving transition module: stone paving on one side merging into earth on the other, dirt gathered along the boundary | `1` | `off` | вдоль границы, поперечные стороны сохраняют свои поверхности | `NW_CITY_HAFENKAI_BODEN_TRANS_01.TGA` |
 

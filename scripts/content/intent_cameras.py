@@ -9,9 +9,12 @@ uv run --no-project --with numpy --with scipy --with ijson python \
 
 All triangle coordinates and camera metadata stay outside git. The scenario
 contains positions and commands only; it uses original game resources.
+Semantics come from the committed city-materials.csv mapping; the census's
+context.json supplies waypoints as well as occlusion geometry.
 """
 
 import argparse
+import csv
 import json
 import math
 from pathlib import Path
@@ -25,6 +28,14 @@ DEBUG_TEXTURES = (
     "NW_CITY_INSIDEWALL_13.TGA", "NW_CITY_DOOR_01.TGA", "NW_HARBOUR_CANON_01.TGA",
     "NW_HARBOUR_FISHINGNET_04.TGA", "NW_HARBOUR_WOODCRATE_02.TGA",
 )
+
+# These representative objects were verified against the census and scene review.
+# The textures are reused on other objects: this limits the photographed example,
+# and does not assign the texture's meaning from either a texture or visual name.
+REPRESENTATIVE_VISUALS = {
+    "NW_HARBOUR_CANON_01.TGA": {"NW_HARBOUR_CANON_01.3DS"},
+    "NW_HARBOUR_WOODCRATE_02.TGA": {"NW_HARBOUR_CRATE_01.3DS", "NW_HARBOUR_CRATEPILE_01.3DS"},
+}
 
 
 def json_items(path, prefix):
@@ -164,8 +175,13 @@ def choose_camera(row, semantic, city_tree, city_positions, waypoints, occluders
     name = row["texture"]
     market = next((np.asarray(w["position"]) for w in waypoints if w["name"] == "MARKT"), np.array([10044, 320, 4239]))
     ranking = [patch_rank(p, name, semantic, city_tree, market) for p in row["patches"]]
-    city_available = any(r[0] for r in ranking)
-    order = sorted(range(len(ranking)), key=lambda i: ranking[i][1], reverse=True)
+    eligible = list(range(len(ranking)))
+    if name in REPRESENTATIVE_VISUALS:
+        eligible = [i for i in eligible if row["patches"][i]["visual"] in REPRESENTATIVE_VISUALS[name]]
+        if not eligible:
+            raise RuntimeError(f"{name}: verified representative visual is missing from census")
+    city_available = any(ranking[i][0] for i in eligible)
+    order = sorted(eligible, key=lambda i: ranking[i][1], reverse=True)
     chosen, buckets = [], set()
     for index in order:
         if city_available and not ranking[index][0]:
@@ -239,20 +255,23 @@ def write_scenario(path, cameras):
 
 
 def main():
+    repository = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--mapping", type=Path, default=repository / "data/content/city-materials.csv")
     parser.add_argument("--scenario", type=Path, required=True)
     parser.add_argument("--metadata", type=Path, required=True)
     parser.add_argument("--debug-scenario", type=Path)
     parser.add_argument("--only", nargs="*", help="texture basenames, for camera preparation only")
     args = parser.parse_args()
     directory = args.input.expanduser().resolve()
-    repository = Path(__file__).resolve().parents[2]
     args.metadata = args.metadata.expanduser().resolve()
     if args.metadata.is_relative_to(repository):
         parser.error("--metadata must be outside git")
-    semantics = json.loads((directory / "semantics.json").read_text())
-    waypoints = json.loads((directory / "waypoints.json").read_text())
+    fields = ("object", "role", "depicts", "colour", "weathering", "orientation")
+    with args.mapping.expanduser().resolve().open(newline="") as stream:
+        semantics = {row["texture"]: {field: row[field] for field in fields} for row in csv.DictReader(stream)}
+    waypoints = list(json_items(directory / "context.json", "waypoints.item"))
     city_positions = np.asarray([w["position"] for w in waypoints if w["name"].startswith(("NW_CITY", "SHIP_")) or w["name"] == "MARKT"])
     city_tree = cKDTree(city_positions[:, [0, 2]])
     occluders = load_occluders(directory)

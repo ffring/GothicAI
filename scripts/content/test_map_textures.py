@@ -150,7 +150,6 @@ def test_census_scope_is_fixed_and_unique(dataset, change, message):
     ("orientation", "", "orientation must contain nonempty English words"),
     ("layout", "repeated", "layout must be one of"),
     ("anti_repeat", "false", "anti_repeat must be on or off"),
-    ("anti_repeat", "off", "include requires anti_repeat=on"),
 ])
 def test_invalid_mapping_fields_have_diagnostics(dataset, field, value, message):
     source, rows, census_path, mapping_path, save = dataset
@@ -262,6 +261,17 @@ def test_module_cannot_replace_an_atlas(dataset):
     save()
     with pytest.raises(mapping.MappingError, match="atlas layout requires decision exclude"):
         mapping.check_mapping(mapping_path, census_path)
+
+
+def test_directional_tiled_surface_can_disable_anti_repeat(dataset):
+    source, rows, census_path, mapping_path, save = dataset
+    rows[0].update(**{
+        "class": "planks_floor", "scale": "2.51", "anti_repeat": "off",
+        "object": "tavern floor", "role": "walking surface", "depicts": "parallel wooden boards",
+        "colour": "warm brown", "weathering": "worn board faces", "orientation": "grain runs along boards",
+    })
+    save()
+    assert mapping.check_mapping(mapping_path, census_path)[0]["anti_repeat"] == "off"
 
 
 @pytest.mark.parametrize("index", [-4, -3, -2, -1])

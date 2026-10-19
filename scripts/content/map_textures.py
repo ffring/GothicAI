@@ -51,7 +51,7 @@ STRIP_CLASSES = frozenset({
 MODULE_CLASSES = frozenset({
     "timber_frame_tile", "framed_masonry_tile", "framed_boards_tile",
     "window_wall_tile", "quay_wall_tile", "roof_structure_tile", "stair_tile",
-    "pavement_border_tile", "bound_timber_tile", "path_tile", "paving_transition_tile",
+    "pavement_border_tile", "bound_timber_tile", "path_tile", "paving_transition_tile", "banded_metal_tile",
 })
 LAYOUTS = ("tiled", "panel", "strip", "atlas")
 LAYOUT_DECISIONS = dict(zip(LAYOUTS, ("include", "panel", "strip", "exclude")))
@@ -175,9 +175,8 @@ def _check_intent(row: dict[str, str], where: str) -> None:
         raise MappingError(f"{where}: {layout} layout requires decision {LAYOUT_DECISIONS[layout]}")
     if row["anti_repeat"] not in ("on", "off"):
         raise MappingError(f"{where}: anti_repeat must be on or off")
-    expected = "on" if row["decision"] == "include" else "off"
-    if row["anti_repeat"] != expected:
-        raise MappingError(f"{where}: {row['decision']} requires anti_repeat={expected}")
+    if row["decision"] != "include" and row["anti_repeat"] != "off":
+        raise MappingError(f"{where}: {row['decision']} requires anti_repeat=off")
 
 
 def _check_coverage(rows: list[dict[str, str]], census: dict[str, dict[str, str]], path: Path) -> None:

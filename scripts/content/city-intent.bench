@@ -478,9 +478,9 @@ cam hold
 wait 600
 shot nw_harbour_canonhole
 
-# NW_HARBOUR_CANON_01.TGA | NW_LIGHTHOUSE_IN_07 | city
-goto pos -1537 4462 16233
-cam world 67.941 22.858 -35.118
+# NW_HARBOUR_CANON_01.TGA | SHIP_DECK_22 | city
+goto pos -10485 -565 -15378
+cam world 65.203 78.907 90.819
 wait 34
 cam hold
 wait 600
@@ -550,9 +550,9 @@ cam hold
 wait 600
 shot nw_harbour_woodcrate_01
 
-# NW_HARBOUR_WOODCRATE_02.TGA | NW_FOREST_PATH_38 | city
-goto pos 2894 334 15330
-cam world 556.491 112.052 -89.953
+# NW_HARBOUR_WOODCRATE_02.TGA | SHIP_SMITH_ANVIL | city
+goto pos -9809 -609 -15233
+cam world 110.192 57.799 -79.784
 wait 34
 cam hold
 wait 600
