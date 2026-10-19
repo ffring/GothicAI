@@ -12,8 +12,8 @@ if [[ "${1:-}" == --remote ]]; then
   RUN="${3:?run id required}"
   [[ "$TASK" == "$HOME/gothic-ai/material-bakeoff" ]] || { echo 'unexpected remote task directory' >&2; exit 2; }
   [[ "$RUN" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'invalid capture run id' >&2; exit 2; }
-  export MATERIAL_CAPTURE_ROOT="$TASK"
   CAPTURE="$TASK/inputs/$RUN"
+  export MATERIAL_CAPTURE_ROOT="$CAPTURE/runtime"
   OUT="$TASK/runs/$RUN"
   mkdir -p "$OUT"
   count=0
@@ -24,7 +24,7 @@ if [[ "${1:-}" == --remote ]]; then
     printf '%s\t\t\n' "$id" >"$CAPTURE/config.tsv"
     # run-ryzen.sh is the original stand runner, with only its task root changed.
     OPENGOTHIC_CONTENT="$content" GAME_TIMEOUT="${GAME_TIMEOUT:-180}" \
-      bash "$TASK/tools/run-ryzen.sh" "$OUT" "$TASK/tools/city.bench" "$CAPTURE/config.tsv"
+      bash "$MATERIAL_CAPTURE_ROOT/tools/run-ryzen.sh" "$OUT" "$MATERIAL_CAPTURE_ROOT/tools/city.bench" "$CAPTURE/config.tsv"
     D="$OUT/$id"
     [[ "$(cat "$D/exit.txt")" == 0 && -s "$D/city.png" ]] || {
       echo "capture failed: $id (exit $(cat "$D/exit.txt"))" >&2; exit 1;
@@ -82,8 +82,8 @@ done
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 case "$OUT" in "$ROOT"|"$ROOT"/*) echo '--output must be outside git (binary captures)' >&2; exit 2 ;; esac
-RUN="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-STAGING="$OUT/$RUN"
+STAGING="$(mktemp -d "$OUT/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXXXX")"
+RUN="${STAGING##*/}"
 mkdir -p "$STAGING/content" "$STAGING/tools"
 uv run --no-project --with numpy --with pillow python3 "$ROOT/scripts/content/pack_materials.py" \
   --registry "$REGISTRY" --content-root "$CONTENT" --output "$STAGING/content" ${PACK_ARGS[@]+"${PACK_ARGS[@]}"}
@@ -147,22 +147,27 @@ bin="$HOME/gothic-ai/engine-cache/$digest/Gothic2Notr"
 [[ -x "$bin" ]] || { echo "no engine cache for source $digest; prepare this revision through gq first" >&2; exit 2; }
 grep -aq 'OPENGOTHIC_CONTENT' "$bin" || { echo 'cached engine lacks PBR content support' >&2; exit 2; }
 [[ -d "$HOME/gothic-ai/game/Data" ]]
-mkdir -p "$task/build/opengothic" "$task/tools" "$task/hd-textures/textures"
-mkdir -p "$task/inputs/$run/content"
-cp -p "$bin" "$task/build/opengothic/Gothic2Notr"
-printf '%s\n' "$digest" >"$task/build/source.sha256"
+mkdir -p "$task/inputs"
+# A run owns every mutable input, including the runner and its root helpers.
+# Reserve without -p so a duplicate run id cannot overwrite a queued capture.
+mkdir "$task/inputs/$run"
+runtime="$task/inputs/$run/runtime"
+mkdir -p "$runtime/build/opengothic" "$runtime/tools" "$runtime/hd-textures/textures" "$task/inputs/$run/content"
+cp -p "$bin" "$runtime/build/opengothic/Gothic2Notr"
+printf '%s\n' "$digest" >"$runtime/build/source.sha256"
 SH
-rsync -a -- "$STAGING/tools/" "$HOST:$TASK/tools/"
+RUNTIME="$TASK/inputs/$RUN/runtime"
+rsync -a -- "$STAGING/tools/" "$HOST:$RUNTIME/tools/"
 # The original stand runner reads these helpers directly beneath its task root.
-rsync -a -- "$STAGING/tools/gpu-nvidia.py" "$STAGING/tools/discard-ffmpeg.sh" "$HOST:$TASK/"
+rsync -a -- "$STAGING/tools/gpu-nvidia.py" "$STAGING/tools/discard-ffmpeg.sh" "$HOST:$RUNTIME/"
 rsync -a -- "$STAGING/content/" "$HOST:$TASK/inputs/$RUN/content/"
-rsync -a -- "$STAGING/save_slot_1.sav" "$HOST:$TASK/save_slot_1.sav"
+rsync -a -- "$STAGING/save_slot_1.sav" "$HOST:$RUNTIME/save_slot_1.sav"
 set +e
 GQ_OWNER=material-bakeoff "$ROOT/scripts/gq" --host "$HOST" run \
   --class quick --threads 4 --mem 5G --gpu-mem 4G --display --display-exclusive \
   --max "${MATERIAL_CAPTURE_MAX:-20m}" --wait-max "${RYZEN_LOCK_WAIT:-900}" \
   --name 'material bakeoff city captures' -- \
-  bash "$TASK/tools/capture-materials.sh" --remote "$TASK" "$RUN" 2>&1 | tee "$STAGING/capture.log"
+  bash "$RUNTIME/tools/capture-materials.sh" --remote "$TASK" "$RUN" 2>&1 | tee "$STAGING/capture.log"
 rc="${PIPESTATUS[0]}"
 set -e
 rsync -a -- "$HOST:$TASK/runs/$RUN/" "$STAGING/captures/" || { [[ "$rc" != 0 ]] || rc=1; }
