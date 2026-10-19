@@ -542,7 +542,7 @@ class Showrunner:
             for fact in facts:
                 if fact.get("crime") == cid:
                     people.update(n for n in (fact.get("npc"), fact.get("to")) if n)
-                elif cid in fact.get("crime_told", []):
+                elif cid in self.crimes.testimony_crimes(fact):
                     if fact.get("npc"):
                         people.add(fact["npc"])
             knowledge = []

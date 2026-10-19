@@ -104,6 +104,20 @@ def test_deed_control_is_independent_of_the_planner_and_threat_switch(crimes, pl
     assert ("deeds" in command) == crimes
 
 
+@pytest.mark.parametrize("flags", [[], ["--no-cover"], ["--no-crimes"], ["--scenario", "cover"]])
+def test_cover_flag_defaults_and_scenario_are_available(monkeypatch, flags):
+    async def serve(args):
+        assert args.no_cover == ("--no-cover" in flags)
+        assert args.no_crimes == ("--no-crimes" in flags)
+        return 0
+
+    monkeypatch.setattr(cli, "serve", serve)
+    monkeypatch.setattr("sys.argv", ["gothic-ai", "serve", *flags])
+    with pytest.raises(SystemExit) as exit:
+        cli.main()
+    assert exit.value.code == 0
+
+
 async def test_no_crimes_starts_no_encounter_worker_or_approach(monkeypatch):
     meeting, approach = Mock(), Mock()
     monkeypatch.setattr(cli, "CrimeMeet", meeting)

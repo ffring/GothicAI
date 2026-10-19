@@ -326,3 +326,19 @@ async def test_disabled_crimes_do_not_create_witness_concerns():
         assert concerns.of(LOBART) == []
     finally:
         await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("cover", [True, False])
+async def test_old_cover_testimony_is_a_delivery_only_when_cover_is_disabled(cover):
+    link_cm, chronicle, deals, concerns = await _setup(FakeGame(branch="A"), with_crimes=True)
+    deals.crimes.cover = cover
+    try:
+        _theft(chronicle, guild=8, npctype=0)
+        assert concerns.agenda(LOBART) == CRIME_WITNESS_EN
+        chronicle.record({
+            "fact": "testimony", "npc": XARDAS, "witness": LOBART, "cover": "D1",
+            "crime_saw": ["C1"], "crime_told": [],
+        })
+        assert bool(concerns.of(LOBART)) is cover
+    finally:
+        await link_cm.__aexit__(None, None, None)

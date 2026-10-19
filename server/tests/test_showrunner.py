@@ -753,6 +753,23 @@ async def test_crime_brief_separates_truth_beliefs_and_read_only_law(graph, stat
         assert all(t in text for t in (cid, "ITFO_BREAD", "unknown", "seen", "heard", "07:45"))
 
 
+@pytest.mark.parametrize("cover", [True, False])
+async def test_old_cover_testimony_enters_crime_brief_when_cover_is_disabled(graph, cover):
+    async with world(graph) as w:
+        crime = enable_crime(w)
+        cid = crime["id"]
+        w.showrunner.crimes.cover = cover
+        w.chronicle.record({
+            "fact": "testimony", "npc": VINO, "witness": HILDA, "cover": "D1",
+            "crime_saw": [cid], "crime_told": [],
+        })
+        case = w.showrunner._crime_briefs(occasion(), w.chronicle.facts())[cid]
+        recipients = [k for k in case["knowledge"] if k["npc"] == VINO]
+        assert bool(recipients) is not cover
+        if recipients:
+            assert (recipients[0]["degree"], recipients[0]["source"]) == ("heard", HILDA)
+
+
 @pytest.mark.parametrize(
     ("kind", "giver", "degree", "allowed"),
     [

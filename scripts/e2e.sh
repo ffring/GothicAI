@@ -112,6 +112,10 @@
 #   trace_crime: one reply catches lies by fresh fence debris and Hilda's theft testimony, then save/load.
 #       LLM=fake; SAVE=save_slot_1.sav. Native theft perceptions stay enabled; checks mixed evidence,
 #       both accepted catch_lie calls, crime knowledge and trust without treating debris as authorship proof.
+#   cover: Hilda sees a real theft, sells cover through the deal key, and lies to Lobart. Her С row cannot
+#       catch the hero; Vino's real sighting exposes her. Save/load keeps the cover and one exposed fact.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720. LLM=chatgpt runs only the one cover request to Hilda,
+#       logs her exact reply and proposal/refusal, then exits. Fear is checked by the server unit tests.
 #   crime_director: deeds and story responses (docs/crime.md, layer 5), SAVE=save_slot_1.sav.
 #       LLM=fake: unseen chest theft and its return quest, Hilda's initiative and paid silence,
 #       Lobart's learned grievance and Amends payment. LLM=chatgpt: witnessed theft goes to the

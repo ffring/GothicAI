@@ -209,7 +209,7 @@ class CrimeLaw:
             elif kind == "rumor" and fact.get("crime"):
                 entries.append((fact["crime"], fact.get("to", "")))
             elif kind == "testimony":
-                entries += [(crime, fact.get("npc", "")) for crime in fact.get("crime_told", [])]
+                entries += [(crime, fact.get("npc", "")) for crime in self.crimes.testimony_crimes(fact)]
             for crime_id, npc in entries:
                 crime = crimes.get(crime_id)
                 if crime is None or (community := crime.get("community")) not in LAW_COMMUNITIES:
@@ -243,8 +243,7 @@ class CrimeLaw:
                 reports.append(LawDelivery(community, crime, npc, due, how, status, reason))
         return reports
 
-    @staticmethod
-    def _blocker(crime: Fact, via: str, due: int, facts: list[Fact], times: dict[int, int]) -> str:
+    def _blocker(self, crime: Fact, via: str, due: int, facts: list[Fact], times: dict[int, int]) -> str:
         candidates = []
         victim = crime.get("victim") or crime.get("owner")
         for index, fact in enumerate(facts):
@@ -255,7 +254,7 @@ class CrimeLaw:
             if kind == "died" and npc == via:
                 candidates.append((at, index, "died"))
             elif fact.get("crime") == crime["id"]:
-                if kind == "silenced" and npc == via:
+                if kind == "silenced" and npc == via and (self.crimes.cover or not fact.get("cover")):
                     candidates.append((at, index, "silenced"))
                 elif kind == "forgiven" and npc == victim:
                     candidates.append((at, index, "repaid" if fact.get("paid") else "forgiven"))
