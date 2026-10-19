@@ -103,6 +103,7 @@
 | Подсистема | Где | Выключатель | Документ |
 |---|---|---|---|
 | Мост к серверу | `ai_bridge/aibridge.cpp`; NPC — `npccontroller`, `npcview`, `npcchests`; сюжет — `story*`, `dialoggraph`; голос — `voicebuffer`, `linelibrary`; `beasts`, `necromancy` | `GOTHIC_AI=0` | [`protocol.md`](protocol.md) |
+| Возврат свободных страниц арен после успешной загрузки мира (Linux с glibc); сохранение trim не вызывает | `common/gothic.cpp`, `Gothic::finishLoading`, после уничтожения старой сессии и `onWorldLoaded` | `OPENGOTHIC_MALLOC_TRIM=0` | [Диагноз и починка RSS; проверка `memprobe`](../reports/engine/2026-10-19-rss-growth/README.md) |
 | Физика Jolt вместо Bullet: тела, рэгдоллы, CharacterVirtual, вода, разрушение | `common/physics/` (`collisionworld`, `dynamicworld`, `ragdoll`, `fracture`, `cloth`, `worldwind`), `common/world/movablevobs.*` | ini `[GAME]`: `ragdoll`, `movable_vobs`, `destruction`, `buoyancy`, `character_virtual` и другие; кэш разрушений `OPENGOTHIC_FRACTURE` | [`physics.md`](physics.md) |
 | Ткань мира рядом с героем: mesh-vob и полотнища уровня | `common/physics/cloth.*`, `clothgeometry.*`, `worldcloth.*`, `common/graphics/clothvisual.*`, `common/world/portalrooms.h`; таблицы `data/cloth-vobs.csv`, `cloth-world.csv` | `[GAME] cloth=0`, Marvin `toggle cloth` | [Перепись и проверки](../reports/physics/2026-10-18-cloth/validation-notes.md#шаг-1) |
 | Наземные живые монстры на CharacterVirtual в 20 м от героя (выход 22 м), включено по умолчанию; родной отскок от крутой статичной/кинематической грани при продвижении <60% | `common/game/movealgo.cpp`, общий `common/physics/` | `[GAME] monster_character_virtual=0`; Marvin `toggle monster_character_virtual` | [Числа и парные видео шага 4](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md) |
@@ -167,6 +168,7 @@
 
 **Сценарии по областям** (модуль в `server/src/gothic_ai/scenarios/`):
 - **основа** (`basics.py`): `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`, `websocket`;
+- **память движка на Linux** (`memprobe.py`): `memprobe` — отдельные циклы `wave`, `save`, `load`, `spawn`, `teleport`, RSS после каждого шага и группы `smaps`; [результаты исследования](../reports/engine/2026-10-19-rss-growth/README.md);
 - **спутники и бой** (`companions.py`; `neural_knockout.py` — отрезок нокаута в `neural-talk`, `neural-load` — `neural_load.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`, `neural-group`, `neural-talk`, `neural-load`;
 - **восприятие** (`perception.py`; `broken` — `broken.py`, `places` — прямо в `cli.py`): `see`, `seen`, `hearing`, `cave`, `ground`, `places`, `knows`, `remembers`, `trace`, `broken`;
 - **жизнь NPC** (`npc_life.py`): `day`, `noise`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
