@@ -26,7 +26,10 @@ crop and the tile period in screen pixels from the off frame; reuse both for
 every mode. The result is the largest Pearson luminance correlation in the
 specified lag window (inclusive). PSNR compares full RGB frames unless cropped:
     uv run --no-project --with numpy --with Pillow python scripts/content/test-material.py \
-        --autocorrelation off.png --crop 100,200,400,200 --period 60 --lag-radius 3
+        --autocorrelation off.png --crop 100,200,400,200 --period 60 --lag-radius 3 \
+        --cross-period -3 --cross-radius 1
+--cross-period shifts the other screen axis, preserving a perspective tile's
+two-dimensional period without resampling the image; negative shifts are valid.
     uv run --no-project --with numpy --with Pillow python scripts/content/test-material.py \
         --psnr current.png --reference baseline.png
 """
@@ -122,23 +125,37 @@ def image_rgb(path: Path, crop: str | None) -> np.ndarray:
     return rgb
 
 
-def autocorrelation(rgb: np.ndarray, period: int, radius: int, axis: str) -> dict:
+def autocorrelation(rgb: np.ndarray, period: int, radius: int, axis: str,
+                    cross_period: int = 0, cross_radius: int = 0) -> dict:
     # Rec. 709 luminance of screenshot code values; no exposure normalization or
     # filtering that could change the measured period between fixture modes.
     luminance = rgb @ np.array((0.2126, 0.7152, 0.0722))
     dimension = 1 if axis == "x" else 0
+    if radius < 0 or cross_radius < 0:
+        raise ValueError("lag radii must be non-negative")
     if period - radius < 1 or period + radius >= luminance.shape[dimension]:
         raise ValueError("period +/- lag radius must be positive and smaller than the crop along --axis")
+    if abs(cross_period) + cross_radius >= luminance.shape[1 - dimension]:
+        raise ValueError("cross-period +/- cross radius must leave an overlap along the other axis")
+
+    def overlap(length: int, delta: int) -> tuple[slice, slice]:
+        return slice(max(0, -delta), min(length, length - delta)), slice(max(0, delta), min(length, length + delta))
+
     values = []
     for lag in range(period - radius, period + radius + 1):
-        a, b = (luminance[:, :-lag], luminance[:, lag:]) if axis == "x" else (luminance[:-lag, :], luminance[lag:, :])
-        a, b = a - a.mean(), b - b.mean()
-        denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
-        if denominator <= 1e-12:
-            raise ValueError("crop has no luminance variation at a requested lag")
-        values.append({"lag": lag, "correlation": float(np.sum(a * b) / denominator)})
+        for cross_lag in range(cross_period - cross_radius, cross_period + cross_radius + 1):
+            dx, dy = (lag, cross_lag) if axis == "x" else (cross_lag, lag)
+            ax, bx = overlap(luminance.shape[1], dx)
+            ay, by = overlap(luminance.shape[0], dy)
+            a, b = luminance[ay, ax], luminance[by, bx]
+            a, b = a - a.mean(), b - b.mean()
+            denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+            if denominator <= 1e-12:
+                raise ValueError("crop has no luminance variation at a requested lag")
+            values.append({"lag": lag, "cross_lag": cross_lag, "correlation": float(np.sum(a * b) / denominator)})
     peak = max(values, key=lambda value: value["correlation"])
-    return {"axis": axis, "period": period, "lag_radius": radius, "peak": peak, "samples": values}
+    return {"axis": axis, "period": period, "lag_radius": radius,
+            "cross_period": cross_period, "cross_radius": cross_radius, "peak": peak, "samples": values}
 
 
 def quantize(image: np.ndarray) -> np.ndarray:
@@ -256,15 +273,17 @@ def main() -> None:
     parser.add_argument("--crop", help="measurement rectangle x,y,width,height in screen pixels")
     parser.add_argument("--period", type=int, help="off-frame tile period in screen pixels for --autocorrelation")
     parser.add_argument("--lag-radius", type=int, default=0, help="search radius around the tile period in pixels (default: %(default)s)")
+    parser.add_argument("--cross-period", type=int, default=0, help="signed tile-period shift along the other screen axis (default: %(default)s)")
+    parser.add_argument("--cross-radius", type=int, default=0, help="search radius around --cross-period in pixels (default: %(default)s)")
     parser.add_argument("--axis", choices=("x", "y"), default="x", help="autocorrelation direction (default: %(default)s)")
     args = parser.parse_args()
     if args.autocorrelation or args.psnr:
         try:
             rgb = image_rgb(args.autocorrelation or args.psnr, args.crop)
             if args.autocorrelation:
-                if args.period is None or args.lag_radius < 0:
-                    parser.error("--autocorrelation requires --period and a non-negative --lag-radius")
-                result = autocorrelation(rgb, args.period, args.lag_radius, args.axis)
+                if args.period is None:
+                    parser.error("--autocorrelation requires --period")
+                result = autocorrelation(rgb, args.period, args.lag_radius, args.axis, args.cross_period, args.cross_radius)
                 result["frame"] = str(args.autocorrelation)
             else:
                 if args.reference is None:

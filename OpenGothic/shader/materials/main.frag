@@ -283,7 +283,8 @@ vec4 diffuseTex() {
   if(maps.antitile)
     tex = antitileDiffuse(maps, tId);
   else
-    tex = textureGrad(sampler2D(textureMain[tId], samplerMain),uv, maps.duvdx, maps.duvdy);
+    // The material flag is uniform within the primitive (flat bucketId).
+    tex = texture(sampler2D(textureMain[tId], samplerMain),uv);
 #else
   vec4 tex = texture(sampler2D(textureMain[tId], samplerMain),uv);
 #endif
