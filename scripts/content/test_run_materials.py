@@ -11,7 +11,7 @@ import sys
 SCRIPT = Path(__file__).with_name("run-materials.sh")
 
 
-def run_mock(tmp_path, *args, free=4000, missing_decider=False):
+def run_mock(tmp_path, *args, free=1000, missing_decider=False):
     repo = tmp_path / "repo"
     script = repo / "scripts/content/run-materials.sh"
     script.parent.mkdir(parents=True)

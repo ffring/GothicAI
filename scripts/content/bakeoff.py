@@ -358,7 +358,7 @@ def run_stage(records, registry, root, stage, base='sdxl'):
     if not pending:
         print(f'{stage}: no pending materials', flush=True)
         return
-    gpu_state(root, stage, 'load', 14000 if stage == 'flux' else 8500)
+    gpu_state(root, stage, 'load', 10000 if stage == 'flux' else 8500)
     before_load = time.monotonic()
     prompt_embeddings, encoding_stats = {}, {}
     if stage == 'flux':
