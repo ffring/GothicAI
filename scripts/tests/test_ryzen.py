@@ -136,7 +136,7 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
 
     def test_exclusive_scenario_only_changes_the_game_request(self):
         for scenario, exclusive in (('fight_reactions_bandits', True),
-                                    ('calm', True), ('orders', False)):
+                                    ('calm', True), ('orders', True), ('stages', False)):
             with self.subTest(scenario=scenario):
                 result, requests = self.run_game(scenario=scenario)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -163,7 +163,7 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
                                ({'TEMPEST_WINDOW_POS': '20,40'}, False),
                                ({'TEMPEST_WINDOW_POS': ''}, False)):
             with self.subTest(window=window):
-                result, requests = self.run_game(scenario='orders', window=window)
+                result, requests = self.run_game(scenario='stages', window=window)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 options = self.queue_options(requests[-1])
                 self.assertEqual('--display-shared' in options, shared)
