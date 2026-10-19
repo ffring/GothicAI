@@ -126,3 +126,15 @@ def test_flux_maps_pass_base_without_stopping_services(tmp_path):
     invocation = next(value for kind, value in state["events"] if kind == "python")
     assert invocation["implicit"] == "1"
     assert invocation["args"] == ["-u", "bakeoff.py", "normals", "--registry", "registry.jsonl", "--root", str(task), "--base", "flux"]
+
+
+def test_city2_uses_its_own_registry_and_log_with_the_shared_downtime_budget(tmp_path):
+    result, state, task = run_mock(tmp_path, "city", "--set", "city-2", free=22000)
+    assert result.returncode == 0, result.stdout + result.stderr
+    invocations = [value for kind, value in state["events"] if kind == "python"]
+    assert invocations[0]["args"] == ["generate.py", "prepare", "--registry", "city-2.jsonl",
+        "--mapping", "city-materials.csv", "--bible", "content-style.md", "--set", "city-2"]
+    assert invocations[1]["args"] == ["-u", "generate.py", "run", "--registry", "city-2.jsonl",
+        "--root", str(task), "--set", "city-2"]
+    assert (task/"city-2.log").is_file()
+    assert not (task/"city-1.log").exists()

@@ -177,21 +177,56 @@ def circular(module):
     import types
     from diffusers.models.downsampling import Downsample2D
     count = 0
+    def pad_axes(tensor, padding, axes):
+        left, right, top, bottom = padding
+        if left or right:
+            tensor = torch.nn.functional.pad(tensor, (left, right, 0, 0),
+                mode='circular' if 'u' in axes else 'constant')
+        if top or bottom:
+            tensor = torch.nn.functional.pad(tensor, (0, 0, top, bottom),
+                mode='circular' if 'v' in axes else 'constant')
+        return tensor
     for layer in module.modules():
         if isinstance(layer, torch.nn.Conv2d):
-            layer.padding_mode = 'circular'
+            if not hasattr(layer, '_tile_original_conv'):
+                layer._tile_original_conv = layer._conv_forward
+                layer._tile_padding = layer.padding
+                def conv(self, inputs, weight, bias):
+                    py, px = self._tile_padding
+                    inputs = pad_axes(inputs, (px, px, py, py), self._tile_axes)
+                    padding, mode = self.padding, self.padding_mode
+                    self.padding, self.padding_mode = (0, 0), 'zeros'
+                    try:
+                        return self._tile_original_conv(inputs, weight, bias)
+                    finally:
+                        self.padding, self.padding_mode = padding, mode
+                layer._conv_forward = types.MethodType(conv, layer)
+            layer._tile_axes = 'uv'
             count += 1
         if isinstance(layer, Downsample2D) and layer.use_conv and layer.padding == 0:
             original = layer.forward
             def forward(self, hidden_states, *args, _original=original, **kwargs):
-                hidden_states = torch.nn.functional.pad(hidden_states, (0, 1, 0, 1), mode='circular')
+                hidden_states = pad_axes(hidden_states, (0, 1, 0, 1), self._tile_axes)
                 self.padding = 1  # Skip the original explicit zero-pad branch.
                 try:
                     return _original(hidden_states, *args, **kwargs)
                 finally:
                     self.padding = 0
             layer.forward = types.MethodType(forward, layer)
+            layer._tile_axes = 'uv'
     return count
+
+
+def flux_layout(pipe, width, height, axes='uv'):
+    """Packed FLUX tokens are 16x16 image pixels; boundaries follow UV axes."""
+    if width % 16 or height % 16 or any(axis not in 'uv' for axis in axes):
+        raise ValueError('FLUX dimensions must be multiples of 16 and axes must be UV')
+    pipe.transformer._tile_shape = (height//16, width//16)
+    pipe.transformer._tile_axes = axes
+    pipe.transformer._tile_step = 0
+    for layer in pipe.vae.modules():
+        if hasattr(layer, '_tile_axes'):
+            layer._tile_axes = axes
 
 
 def periodic_flux(transformer):
@@ -210,18 +245,21 @@ def periodic_flux(transformer):
     def forward(self, hidden_states, *args, **kwargs):
         batch, tokens, channels = hidden_states.shape
         side = int(tokens ** .5)
-        if side * side != tokens:
-            raise ValueError('FLUX bakeoff expects a square packed latent grid')
-        shift = side // 2 if self._tile_step % 2 else 0
+        height, width = getattr(self, '_tile_shape', (side, side))
+        if height * width != tokens:
+            raise ValueError('FLUX packed latent grid does not match generation dimensions')
+        axes = getattr(self, '_tile_axes', 'uv')
+        shift_y = height//2 if self._tile_step % 2 and 'v' in axes else 0
+        shift_x = width//2 if self._tile_step % 2 and 'u' in axes else 0
         self._tile_step += 1
-        if shift:
-            hidden_states = torch.roll(hidden_states.reshape(batch, side, side, channels),
-                (shift, shift), (1, 2)).reshape(batch, tokens, channels)
+        if shift_y or shift_x:
+            hidden_states = torch.roll(hidden_states.reshape(batch, height, width, channels),
+                (shift_y, shift_x), (1, 2)).reshape(batch, tokens, channels)
         result = original(hidden_states, *args, **kwargs)
-        if shift:
+        if shift_y or shift_x:
             prediction = result[0] if isinstance(result, tuple) else result.sample
-            prediction = torch.roll(prediction.reshape(batch, side, side, channels),
-                (-shift, -shift), (1, 2)).reshape(batch, tokens, channels)
+            prediction = torch.roll(prediction.reshape(batch, height, width, channels),
+                (-shift_y, -shift_x), (1, 2)).reshape(batch, tokens, channels)
             if isinstance(result, tuple):
                 result = (prediction, *result[1:])
             else:
@@ -320,17 +358,21 @@ def filtered_maps(image, record):
     rgb = np.asarray(image.convert('RGB'), dtype=np.float32) / 255
     luminance = rgb @ np.array([.2126, .7152, .0722], dtype=np.float32)
     size = rgb.shape[0]
-    small = gaussian_filter(luminance, 2 * size / 1024, mode='wrap')
-    large = gaussian_filter(luminance, 32 * size / 1024, mode='wrap')
+    axes = record['parameters'].get('tiling_axes', 'uv')
+    modes = ('wrap' if 'v' in axes else 'reflect', 'wrap' if 'u' in axes else 'reflect')
+    small = gaussian_filter(luminance, 2 * size / 1024, mode=modes)
+    large = gaussian_filter(luminance, 32 * size / 1024, mode=modes)
     band = small - large
     scale = max(float(np.percentile(np.abs(band), 98)), .02)
     height = np.clip(.5 + band / (2 * scale), 0, 1)
-    dx = (np.roll(height, -1, axis=1) - np.roll(height, 1, axis=1)) * size / 2
-    dy = (np.roll(height, -1, axis=0) - np.roll(height, 1, axis=0)) * size / 2
+    dx = ((np.roll(height, -1, axis=1) - np.roll(height, 1, axis=1))/2
+        if 'u' in axes else np.gradient(height, axis=1)) * size
+    dy = ((np.roll(height, -1, axis=0) - np.roll(height, 1, axis=0))/2
+        if 'v' in axes else np.gradient(height, axis=0)) * size
     # Texture V points down; OpenGL-style tangent normal Y points up.
     normal = np.stack((-.025 * dx, .025 * dy, np.ones_like(dx)), axis=-1)
     normal /= np.linalg.norm(normal, axis=-1, keepdims=True)
-    ao = np.clip(1 - .8 * np.maximum(gaussian_filter(height, 8 * size / 1024, mode='wrap') - height, 0), .35, 1)
+    ao = np.clip(1 - .8 * np.maximum(gaussian_filter(height, 8 * size / 1024, mode=modes) - height, 0), .35, 1)
     roughness = np.clip(record['parameters']['roughness_base'] + .14 * (large - luminance), .35, 1)
     return dict(albedo=rgb, normal=normal * .5 + .5, height=height, roughness=roughness, metallic=np.zeros_like(height), ao=ao)
 

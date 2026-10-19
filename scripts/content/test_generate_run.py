@@ -154,3 +154,31 @@ def test_select_attempt_cannot_bypass_numerical_constraints(runtime, change):
     with pytest.raises(ValueError, match='cannot select numerically invalid attempt'):
         generate.select_attempt(record, attempt)
     assert record == snapshot
+
+
+def test_city2_exhausted_numerical_failures_keep_warned_best_without_reloading_gpu(runtime):
+    record = material()
+    record['parameters'].update(set='city-2', target_luminance=.18, target_luminance_tolerance=.002)
+    record['generation']['attempts'] = [candidate(runtime, record, 'black', n) for n in (1, 2, 3)]
+    generate.run([record], runtime.registry, runtime.root, 'city-2')
+    assert record['generation']['outcome'] == 'complete'
+    assert record['generation']['selected_failed'] is True
+    assert '3 attempts' in record['generation']['failure_warning']
+    assert record['files'] == record['generation']['attempts'][0]['files']
+    assert len(record['generation']['attempts']) == 3
+    assert runtime.calls == runtime.loads == []
+
+
+def test_city2_third_visual_rejection_retains_warned_candidate_instead_of_requiring_decision(runtime):
+    record = material()
+    record['parameters'].update(set='city-2', target_luminance=.18)
+    attempts = [candidate(runtime, record, (100,100,100), n) for n in (1, 2, 3)]
+    attempts[-1]['outcome'] = 'complete'
+    record['generation'].update(attempts=attempts, outcome='complete')
+    record['files'] = attempts[-1]['files']
+    generate.reject([record], record['id'], 'opening placement is imperfect')
+    assert len(record['generation']['attempts']) == 3
+    assert record['generation']['outcome'] == 'complete'
+    assert record['generation']['selected_failed'] is True
+    assert 'Visual review' in record['generation']['failure_warning']
+    assert attempts[-1]['reason'] == 'opening placement is imperfect'
