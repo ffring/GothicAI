@@ -38,6 +38,11 @@ def test_enable_flux_preserves_other_materials_and_resume(tmp_path):
     assert all(record['generation'] == {'outcome': 'pending'} and record['files'] == {} for record in changed)
     assert all(record['models'][0]['revision'] == bakeoff.FLUX_REVISION for record in changed)
     assert all(record['models'][0]['license'] == 'Apache-2.0' for record in changed)
+    # Refresh an earlier pending recipe after a precision change without
+    # resetting seeds, unrelated results, or completed measurements.
+    changed[1]['parameters']['quantization'] = 'earlier precision'
+    bakeoff.enable_flux(records)
+    assert changed[1]['parameters']['quantization'] == bakeoff.FLUX_QUANTIZATION
     assert all(record['seed'] == old['seed'] for record, old in zip(records, original))
     assert all('skip_reason' not in record for record in changed)
     complete = changed[0]
@@ -110,7 +115,7 @@ def test_flux_load_releases_t5_before_transformer_and_routes_private_auth(tmp_pa
     secret = 'private-test-only-flux-load'
     (tmp_path/'hf').mkdir()
     (tmp_path/'hf/token').write_text(secret)
-    calls, gpu_checks, t5_refs = [], [], []
+    calls, gpu_checks, t5_refs, encoder_offloaded = [], [], [], []
 
     class Embedding:
         device = 'cuda:0'
@@ -135,6 +140,7 @@ def test_flux_load_releases_t5_before_transformer_and_routes_private_auth(tmp_pa
         @classmethod
         def from_pretrained(cls, path, **kwargs):
             assert t5_refs[0]() is None, 'T5 must be freed before allocating transformer'
+            assert encoder_offloaded == [True]
             calls.append(('transformer', kwargs))
             return cls()
 
@@ -155,6 +161,9 @@ def test_flux_load_releases_t5_before_transformer_and_routes_private_auth(tmp_pa
 
         def enable_model_cpu_offload(self):
             pass
+
+        def maybe_free_model_hooks(self):
+            encoder_offloaded.append(True)
 
         def encode_prompt(self, **kwargs):
             assert self.t5 is t5_refs[0]()
@@ -182,7 +191,9 @@ def test_flux_load_releases_t5_before_transformer_and_routes_private_auth(tmp_pa
     assert [stage for stage, _ in gpu_checks] == ['flux-encode', 'flux-encode', 'flux']
     assert len(calls) == 4
     assert all(kwargs['token'] == secret and kwargs['local_files_only'] for _, kwargs in calls)
-    assert all(kwargs['quantization_config'] == {'load_in_8bit': True}
+    assert all(kwargs['quantization_config'] == {'load_in_4bit': True,
+        'bnb_4bit_quant_type': 'nf4', 'bnb_4bit_use_double_quant': True,
+        'bnb_4bit_compute_dtype': 'bfloat16'}
         for kind, kwargs in calls if kind in ('t5', 'transformer'))
     assert secret not in capsys.readouterr().out
     assert secret not in json.dumps(records)

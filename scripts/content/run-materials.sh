@@ -13,7 +13,7 @@ if (( $# > 0 )); then
 fi
 case "$BASE" in flux|sdxl) ;; *) exit 2 ;; esac
 MIN_FREE_MIB=8500
-[[ "$STAGE" != flux ]] || MIN_FREE_MIB=16000
+[[ "$STAGE" != flux ]] || MIN_FREE_MIB=14000
 MIN_FREE_MIB="${GPU_MIN_FREE_MIB:-$MIN_FREE_MIB}"
 [[ "$MIN_FREE_MIB" =~ ^[1-9][0-9]*$ ]] || exit 2
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

@@ -40,7 +40,7 @@ PIPELINES = ['flux-marigold', 'flux-filter', 'sdxl-marigold', 'sdxl-filter', 'st
 MAPS = ('albedo', 'normal', 'roughness', 'metallic', 'height', 'ao')
 FLUX_REVISION = '741f7c3ce8b383c54771c7003378a50191e9efe9'
 FLUX_TILING = 'circular VAE Conv2d and asymmetric downsample padding; packed latent feature rolling by half a tile on alternating denoising steps'
-FLUX_QUANTIZATION = 'bitsandbytes int8 transformer and T5; two-phase prompt encoding releases T5/CLIP before transformer load; model CPU offload for non-quantized components'
+FLUX_QUANTIZATION = 'bitsandbytes NF4 transformer and T5 with double quantization and bfloat16 compute; two-phase prompt encoding releases T5/CLIP before transformer load; model CPU offload'
 
 
 def read_registry(path):
@@ -232,19 +232,21 @@ def periodic_flux(transformer):
 
 
 def load_flux(records, root, pending):
-    """Keep int8 T5 and int8 transformer in disjoint GPU lifetimes.
+    """Keep quantized T5 and transformer in disjoint GPU lifetimes.
 
-    Diffusers intentionally leaves int8 modules on GPU during model offload.
-    Encoding the text first avoids needing their combined ~17 GB of weights,
-    plus activations, at once on the shared 24 GB card.
+    NF4 allows model CPU offload with our pinned bitsandbytes version. Encoding
+    the text first also avoids keeping both models and their activations in GPU
+    memory at once on the shared 24 GB card.
     """
     import torch
     from diffusers import BitsAndBytesConfig, FluxPipeline, FluxTransformer2DModel
     from transformers import BitsAndBytesConfig as TextBitsAndBytesConfig, T5EncoderModel
     path = str(model_path(records, root, 'flux'))
     common = dict(torch_dtype=torch.bfloat16, use_safetensors=True, local_files_only=True, low_cpu_mem_usage=True)
+    quantization = dict(load_in_4bit=True, bnb_4bit_quant_type='nf4',
+        bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=torch.bfloat16)
     text_encoder = T5EncoderModel.from_pretrained(path, subfolder='text_encoder_2',
-        quantization_config=TextBitsAndBytesConfig(load_in_8bit=True), device_map={'': 'cuda:0'},
+        quantization_config=TextBitsAndBytesConfig(**quantization), device_map={'': 'cuda:0'},
         token=flux_token(root), **common)
     encoder = FluxPipeline.from_pretrained(path, transformer=None, vae=None, text_encoder_2=text_encoder,
         token=flux_token(root), **common)
@@ -267,12 +269,15 @@ def load_flux(records, root, pending):
             'prompt_encoding_gpu_before': sample}
         del prompt, pooled, ids
         print(material, 'flux-encode', json.dumps(measurements[material]), flush=True)
+    # encode_prompt is called directly, so perform the cleanup normally done
+    # at the end of FluxPipeline.__call__ before loading the transformer.
+    encoder.maybe_free_model_hooks()
     del encoder, text_encoder
     gc.collect()
     torch.cuda.empty_cache()
-    gpu_state(root, 'flux', 'transformer-load', 14000)
+    gpu_state(root, 'flux', 'transformer-load', 10000)
     transformer = FluxTransformer2DModel.from_pretrained(path, subfolder='transformer',
-        quantization_config=BitsAndBytesConfig(load_in_8bit=True), device_map={'': 'cuda:0'},
+        quantization_config=BitsAndBytesConfig(**quantization), device_map={'': 'cuda:0'},
         token=flux_token(root), **common)
     pipe = FluxPipeline.from_pretrained(path, transformer=transformer, text_encoder=None, text_encoder_2=None,
         token=flux_token(root), **common)
@@ -353,7 +358,7 @@ def run_stage(records, registry, root, stage, base='sdxl'):
     if not pending:
         print(f'{stage}: no pending materials', flush=True)
         return
-    gpu_state(root, stage, 'load', 16000 if stage == 'flux' else 8500)
+    gpu_state(root, stage, 'load', 14000 if stage == 'flux' else 8500)
     before_load = time.monotonic()
     prompt_embeddings, encoding_stats = {}, {}
     if stage == 'flux':
