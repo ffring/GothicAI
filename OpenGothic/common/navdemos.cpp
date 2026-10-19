@@ -1078,7 +1078,10 @@ void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
   auto& n=*ep.npc;++ep.frames;if(n.characterVirtualActive())++ep.cvFrames;
   const auto p=NpcKeys::physicalPosition(n);
   ep.travelCm+=(p-ep.previousPosition).length();
-  if(dt)ep.velocity=(p-ep.previousPosition)*(1000.f/float(dt));ep.previousPosition=p;
+  if(dt) {
+    ep.velocity=(p-ep.previousPosition)*(1000.f/float(dt));
+  }
+  ep.previousPosition=p;
   if(ep.population)
     ep.fell=ep.fell || n.isFalling() || n.isInAir();
   if(const auto* player=w.player()) {
