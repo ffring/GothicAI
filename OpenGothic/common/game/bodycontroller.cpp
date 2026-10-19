@@ -427,21 +427,51 @@ void BodyController::pumpWatchdogs() {
       // Keep the final locked state for the episode collector; never silently resume native.
       ++it; continue;
       }
+    // Far policies disable ordinary near perception at 30 m. A combat segment is
+    // measured in game time, so waiting for it here can outlive the provider's wall
+    // release deadline even while the pose still advances. Return authority now;
+    // only normalize poses that belong entirely to combat/locomotion.
+    // Policy is updated after NPC ticks: an old far policy must not cut a segment
+    // if the hero has just returned nearby, before that update.
+    const auto hero=l.npc->world().player();
+    const bool farRelease=l.release && !isTerminal && !state().paused &&
+                          l.npc->processPolicy()>=NpcProcessPolicy::AiFar &&
+                          hero!=nullptr && l.npc->qDistTo(*hero)>=3000.f*3000.f;
+    if(farRelease) {
+      auto& npc=*l.npc;
+      npc.go2.clear(); npc.wayPath.clear(); l.movementStopPending=false;
+      const auto layers=npc.visual.pose().combatLayers(npc.owner.tickCount());
+      const bool combatOnly=std::all_of(layers.begin(),layers.end(),[](const Pose::CombatLayer& layer) {
+        switch(layer.state & BS_MAX) {
+          case BS_NONE: case (BS_WALK & BS_MAX): case (BS_SNEAK & BS_MAX):
+          case BS_RUN: case BS_SPRINT: case (BS_HIT & BS_MAX): case BS_PARADE:
+            return true;
+          default: return false;
+          }
+        });
+      if(combatOnly && !npc.ragdoll && !npc.isInAir() && !npc.isSwim() && !npc.isDive() &&
+         !npc.spellFrozen() && !npc.spellWhirling() && npc.interactive()==nullptr) {
+        npc.setAnimRotate(0); npc.visual.pose().stopAllAnim();
+        npc.faiWaitTime=0; npc.aniWaitTime=0;
+        npc.lastEventTime=npc.owner.tickCount();
+        npc.setAnim(Npc::Anim::Idle);
+        }
+      }
     if(l.release && l.movementStopPending && !isTerminal && stopOwnedMovement(*l.npc))
       l.movementStopPending=false;
-    if(l.release && (isTerminal || !state().paused) && safeBoundary(*l.npc)) {
+    if(l.release && (isTerminal || !state().paused) && (farRelease || safeBoundary(*l.npc))) {
       if(!isTerminal && l.movementStopPending) {
         if(!stopOwnedMovement(*l.npc)) { ++it; continue; }
         l.movementStopPending=false;
         }
       l.npc->fghAlgo.onClearTarget();
       auto npc=l.npc;
-      // A finished attack/strafe loop is allowed to return to Idle only on this legal boundary.
+      // The normal path reaches Idle only after its legal combat boundary.
       if(isTerminal) {
         // onNoHealth already installed the dead/unconscious pose; clearing GoTo through
         // stopWalking() would overwrite it before the deferred native state is applied.
         npc->go2.clear(); npc->wayPath.clear();
-        } else {
+        } else if(!farRelease) {
         npc->clearGoTo(); npc->setAnim(Npc::Anim::Idle);
         }
       event(l,"ownership","native_restored");
@@ -473,6 +503,12 @@ std::string BodyController::statusJson(const Npc* actor) {
     u(row,"t_game_ms",npc.owner.tickCount()); u(row,"observation_seq",BodyObservations::latestSequence(npc));
     u(row,"observed_game_ms",BodyObservations::latestGameMs(npc)); u(row,"watchdog_timeout_ms",l ? l->timeout : 0);
     b(row,"control_allowed",s.controlAllowed); b(row,"can_decide",s.canDecide);
+    const auto physical=npc.bodyObservationState();
+    u(row,"process_policy",uint64_t(npc.processPolicy()));
+    u(row,"segment_remaining_ms",physical.segmentRemainingMs);
+    b(row,"fai_gate",physical.faiGate); b(row,"ani_gate",physical.aniGate);
+    b(row,"ai_gate",physical.aiGate); b(row,"output_gate",physical.outputGate);
+    b(row,"interruptible",physical.interruptible);
     rapidjson::Value mask(rapidjson::kArrayType);
     for(bool value:s.mask) mask.PushBack(value,row.GetAllocator());
     row.AddMember("action_mask",mask,row.GetAllocator());

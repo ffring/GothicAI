@@ -18,6 +18,7 @@
 #include <rapidjson/writer.h>
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -25,6 +26,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <vector>
 #include <unistd.h>
 
 namespace {
@@ -79,11 +82,11 @@ Json action(Npc& actor,FightAlgo::PolicyAction policy) {
   return call(d);
   }
 
-Json acquire(Npc& actor,uint64_t awaitMs=0) {
+Json acquire(Npc& actor,uint64_t awaitMs=0,const char* mode="lockstep",uint64_t timeoutMs=5000) {
   auto d=request("body_acquire",actor);
   d.AddMember("body_control",true,d.GetAllocator());
-  d.AddMember("mode","lockstep",d.GetAllocator());
-  number(d,"timeout_ms",5000);
+  d.AddMember("mode",rapidjson::Value(mode,d.GetAllocator()),d.GetAllocator());
+  number(d,"timeout_ms",timeoutMs);
   number(d,"await_boundary_ms",awaitMs);
   number(d,"target_entity_id",BodyObservations::entityId(*actor.target()));
   return call(d);
@@ -304,6 +307,257 @@ void movementRelease(Npc& actor,Npc& target,PlayerControl& player) {
       }
     }
   }
+
+void farRelease(Npc& actor,Npc& target,Npc& hero,PlayerControl& player,std::vector<std::string>& failures) {
+  using Clock=std::chrono::steady_clock;
+  const auto heroStart=hero.position();
+  const auto check=[&](bool condition,std::string_view message) {
+    ++assertions;
+    if(!condition) failures.emplace_back(message);
+    };
+  const auto printState=[&](const char* phase,const char* cause,FightAlgo::PolicyAction policy) {
+    auto row=status(actor);
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    row.Accept(writer);
+    const auto p=actor.bodyObservationState();
+    std::cerr << "far-release-fixture phase=" << phase << " cause=" << cause
+              << " action=" << uint64_t(policy) << " pose=" << actor.animNames()
+              << " segment_ms=" << p.segmentRemainingMs << " fai_ms=" << p.faiWaitMs
+              << " ani_ms=" << p.aniWaitMs << " ai_ms=" << p.aiWaitMs
+              << " output_ms=" << p.outputWaitMs << " interruptible=" << p.interruptible
+              << " status=" << buffer.GetString() << '\n';
+    };
+  for(bool watchdog:{false,true}) {
+    for(const auto policy:{FightAlgo::PolicyAction::AttackFront,FightAlgo::PolicyAction::Approach}) {
+      ++cases;
+      const char* cause=watchdog ? "watchdog_timeout" : "released";
+      actor.setExternalControl(true);
+      hero.setPosition(actor.position()+Tempest::Vec3(0,0,800)); hero.updateTransform();
+      step(player);
+      expect(actor.processPolicy()==NpcProcessPolicy::AiNormal,"far fixture starts with full nearby simulation");
+      BodyController::fixturePrepare(actor,target,policy==FightAlgo::PolicyAction::Approach ? 800.f : 150.f,0);
+      actor.setExternalControl(false);
+      initialWatch(actor,300+uint64_t(watchdog)*20+uint64_t(policy));
+      expect(acquire(actor,0,"realtime",watchdog ? 500 : 5000)["accepted"].GetBool(),"far fixture acquired realtime lease");
+      step(player,2);
+      expect(action(actor,policy)["accepted"].GetBool(),"far fixture action accepted");
+      step(player);
+      auto events=parse(BodyController::drainJson());
+      bool started=false;
+      for(const auto& event:events["events"].GetArray())
+        if(std::string_view(event["phase"].GetString())=="started" &&
+           event["action_id"].GetUint64()==uint64_t(policy)) started=true;
+      expect(started,"far fixture physically starts requested action");
+      if(policy==FightAlgo::PolicyAction::AttackFront)
+        expect(actor.bodyObservationState().segmentRemainingMs>33,"far fixture starts a protected attack segment");
+      printState("started",cause,policy);
+      // WorldObjects switches out of AiNormal at 3000 cm and into AiFar2 at 6000 cm.
+      // Keep the actual enemy nearby: teleporting the target would request a different
+      // release through target_visibility_lost before the explicit/watchdog request.
+      hero.setPosition(actor.position()+Tempest::Vec3(9000,0,0)); hero.updateTransform();
+      step(player);
+      expect(actor.processPolicy()==NpcProcessPolicy::AiFar2,"far fixture crosses both native simulation radii");
+      expect(BodyController::owns(actor),"far fixture retains its lease before requested handoff");
+      printState("far_before_request",cause,policy);
+      BodyController::drainJson();
+      bool queueEmptyAtRestore=false,poseCleanAtRestore=false;
+      struct ResetSink final { ~ResetSink() { BodyController::setSink({}); } } resetSink;
+      BodyController::setSink([&](std::string_view encoded) {
+        const auto event=parse(std::string(encoded));
+        if(std::string_view(event["reason"].GetString())=="native_restored") {
+          // FightAlgo uses a fixed array: MV_NULL at its head means no instructions.
+          const auto row=status(actor);
+          queueEmptyAtRestore=row["purity_state"]["queue"][0].GetUint64()==uint64_t(FightAlgo::MV_NULL);
+          poseCleanAtRestore=row["segment_remaining_ms"].GetUint64()==0 &&
+                             !row["fai_gate"].GetBool() && !row["ani_gate"].GetBool() && row["interruptible"].GetBool();
+          }
+        });
+      const auto startGame=actor.world().tickCount();
+      const auto startWall=Clock::now();
+      if(watchdog) {
+        expect(call(request("body_heartbeat",actor))["accepted"].GetBool(),"far watchdog fixture starts a fresh heartbeat deadline");
+        std::this_thread::sleep_for(std::chrono::milliseconds(520));
+        BodyController::pumpWatchdogs();
+        } else {
+        expect(call(request("body_release",actor))["accepted"].GetBool(),"far explicit release accepted");
+        }
+      step(player);
+      const bool ownedNextTick=BodyController::owns(actor);
+      // Keep collecting all four combinations on a broken engine, including the state
+      // beyond both reported two- and five-second release deadlines.
+      for(unsigned i=0;i<152 && BodyController::owns(actor);++i) {
+        step(player);
+        if(i==60) printState("after_2s",cause,policy);
+        }
+      events=parse(BodyController::drainJson());
+      bool cancelled=false,restored=false,reasonCorrect=false;
+      uint64_t elapsed=actor.world().tickCount()-startGame;
+      for(const auto& event:events["events"].GetArray()) {
+        if(std::string_view(event["phase"].GetString())=="cancelled") cancelled=true;
+        if(std::string_view(event["reason"].GetString())=="native_restored") {
+          restored=true; elapsed=event["t_game_ms"].GetUint64()-startGame;
+          reasonCorrect=std::string_view(event["release_reason"].GetString())==cause;
+          }
+        }
+      const auto elapsedWall=std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now()-startWall).count();
+      printState("after_handoff",cause,policy);
+      std::cerr << "far-release-fixture result cause=" << cause << " action=" << uint64_t(policy)
+                << " owned_next_tick=" << ownedNextTick << " elapsed_game_ms=" << elapsed
+                << " elapsed_wall_ms=" << elapsedWall << " native_restored=" << restored << '\n';
+      check(!ownedNextTick && elapsed<=33,"far release returns native authority by the next engine tick");
+      check(restored,"far release emits native_restored");
+      check(reasonCorrect,"far native_restored retains the release cause");
+      check(cancelled,"far release cancels its active command");
+      const auto after=status(actor);
+      check(!BodyController::owns(actor) && after["command_id"].GetUint64()==0,"far release clears active execution");
+      check(queueEmptyAtRestore,"far release clears the body primitive queue before native AI resumes");
+      check(poseCleanAtRestore,"far release clears its protected pose and combat waits before native AI resumes");
+      check(std::string_view(BodyController::updateWatch({},50))=="allowed","far release permits removing the former owner from watch");
+      // Reset only after recording a stuck lease, so later combinations remain runnable.
+      BodyController::reset("far_fixture_cleanup");
+      }
+    }
+  hero.setPosition(heroStart); hero.updateTransform();
+  }
+
+void heroTargetRelease(Npc& actor,Npc& hero,PlayerControl& player,std::vector<std::string>& failures) {
+  using Clock=std::chrono::steady_clock;
+  const auto heroStart=hero.position();
+  const auto heroDirection=hero.rotation();
+  const bool heroExternal=hero.isExternalControl();
+  const auto heroHp=hero.attribute(ATR_HITPOINTS);
+  struct Case final { FightAlgo::PolicyAction action; float distance,yaw; bool watchdog=false; };
+  const std::array<Case,8> fixtures{{
+    {FightAlgo::PolicyAction::Approach,800,0},
+    {FightAlgo::PolicyAction::TurnToTarget,300,30},
+    {FightAlgo::PolicyAction::StrafeLeft,300,0},
+    {FightAlgo::PolicyAction::StrafeRight,300,0},
+    {FightAlgo::PolicyAction::JumpBack,150,0},
+    {FightAlgo::PolicyAction::AttackFront,150,0},
+    {FightAlgo::PolicyAction::Block,150,0},
+    {FightAlgo::PolicyAction::AttackFront,150,0,true},
+    }};
+  const auto check=[&](bool condition,std::string_view message) {
+    ++assertions;
+    if(!condition) failures.emplace_back(message);
+    };
+  const auto printState=[&](const char* phase,const char* cause,FightAlgo::PolicyAction policy) {
+    auto row=status(actor);
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    row.Accept(writer);
+    std::cerr << "hero-target-release-fixture phase=" << phase << " cause=" << cause
+              << " action=" << uint64_t(policy) << " pose=" << actor.animNames()
+              << " hero_distance_sq=" << actor.qDistTo(hero) << " status=" << buffer.GetString() << '\n';
+    };
+  for(const auto& fixture:fixtures) {
+    ++cases;
+    const char* cause=fixture.watchdog ? "watchdog_timeout" : "released";
+    actor.setExternalControl(true);
+    // fixturePrepare changes the target's transient pose/queues/control, not its
+    // equipment or attributes. Here the real player is the actual leased enemy.
+    BodyController::fixturePrepare(actor,hero,fixture.distance,fixture.yaw);
+    step(player);
+    expect(actor.processPolicy()==NpcProcessPolicy::AiNormal,"hero target fixture starts nearby");
+    actor.setExternalControl(false);
+    initialWatch(actor,400+uint64_t(fixture.watchdog)*20+uint64_t(fixture.action));
+    expect(acquire(actor,0,"realtime",fixture.watchdog ? 500 : 5000)["accepted"].GetBool(),"hero target fixture acquired realtime lease");
+    step(player,2);
+    expect(actor.target()==&hero,"hero is the actual leased target");
+    expect(action(actor,fixture.action)["accepted"].GetBool(),"hero target fixture action accepted");
+    step(player);
+    auto events=parse(BodyController::drainJson());
+    bool started=false;
+    for(const auto& event:events["events"].GetArray())
+      if(std::string_view(event["phase"].GetString())=="started" &&
+         event["action_id"].GetUint64()==uint64_t(fixture.action)) started=true;
+    expect(started,"hero target fixture physically starts its action");
+    printState("started",cause,fixture.action);
+    BodyController::drainJson();
+    const auto startGame=actor.world().tickCount();
+    const auto startWall=Clock::now();
+    // Release before the next controller tick, so target_visibility_lost cannot
+    // replace the explicit release/watchdog cause while the real enemy escapes.
+    hero.setPosition(actor.position()+Tempest::Vec3(9000,0,0)); hero.updateTransform();
+    printState("far_before_request",cause,fixture.action);
+    if(fixture.watchdog) {
+      expect(call(request("body_heartbeat",actor))["accepted"].GetBool(),"hero target watchdog fixture starts a fresh deadline");
+      std::this_thread::sleep_for(std::chrono::milliseconds(520));
+      BodyController::pumpWatchdogs();
+      } else {
+      expect(call(request("body_release",actor))["accepted"].GetBool(),"hero target release accepted");
+      }
+    step(player);
+    const bool ownedNextTick=BodyController::owns(actor);
+    for(unsigned i=0;i<152 && BodyController::owns(actor);++i) {
+      step(player);
+      if(i==60) printState("after_2s",cause,fixture.action);
+      }
+    events=parse(BodyController::drainJson());
+    bool restored=false,reasonCorrect=false;
+    uint64_t elapsed=actor.world().tickCount()-startGame;
+    for(const auto& event:events["events"].GetArray())
+      if(std::string_view(event["reason"].GetString())=="native_restored") {
+        restored=true; elapsed=event["t_game_ms"].GetUint64()-startGame;
+        reasonCorrect=std::string_view(event["release_reason"].GetString())==cause;
+        }
+    printState("after_handoff",cause,fixture.action);
+    std::cerr << "hero-target-release-fixture result cause=" << cause << " action=" << uint64_t(fixture.action)
+              << " owned_next_tick=" << ownedNextTick << " elapsed_game_ms=" << elapsed
+              << " elapsed_wall_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now()-startWall).count()
+              << " native_restored=" << restored << '\n';
+    check(actor.processPolicy()==NpcProcessPolicy::AiFar2,"escaping hero crosses both native simulation radii");
+    check(!ownedNextTick && elapsed<=33,"hero target release returns native authority by the next engine tick");
+    check(restored && reasonCorrect,"hero target release emits native_restored with its original cause");
+    check(std::string_view(BodyController::updateWatch({},50))=="allowed","hero target release permits removing its former body owner");
+    BodyController::reset("hero_target_fixture_cleanup");
+    }
+  hero.setPosition(heroStart); hero.setDirection(heroDirection); hero.updateTransform();
+  hero.setExternalControl(heroExternal);
+  hero.changeAttribute(ATR_HITPOINTS,heroHp-hero.attribute(ATR_HITPOINTS),false);
+  }
+
+void staleFarRelease(Npc& actor,Npc& target,Npc& hero,PlayerControl& player) {
+  ++cases;
+  const auto heroStart=hero.position();
+  actor.setExternalControl(true);
+  hero.setPosition(actor.position()+Tempest::Vec3(0,0,800)); hero.updateTransform();
+  step(player);
+  BodyController::fixturePrepare(actor,target,150,0);
+  actor.setExternalControl(false);
+  initialWatch(actor,500);
+  expect(acquire(actor,0,"realtime")["accepted"].GetBool(),"stale far fixture acquired");
+  step(player,2);
+  expect(action(actor,FightAlgo::PolicyAction::AttackFront)["accepted"].GetBool(),"stale far fixture attack accepted");
+  step(player);
+  expect(actor.bodyObservationState().segmentRemainingMs>33,"stale far fixture starts a protected attack");
+  const auto nearHero=hero.position();
+  hero.setPosition(actor.position()+Tempest::Vec3(9000,0,0)); hero.updateTransform();
+  step(player);
+  expect(actor.processPolicy()==NpcProcessPolicy::AiFar2 && BodyController::owns(actor),"stale far fixture enters far policy under lease");
+  hero.setPosition(nearHero); hero.updateTransform();
+  const auto remaining=actor.bodyObservationState().segmentRemainingMs;
+  expect(remaining>33 && actor.qDistTo(hero)<3000.f*3000.f,"hero returns near before protected attack ends");
+  const auto start=actor.world().tickCount();
+  BodyController::drainJson();
+  expect(call(request("body_release",actor))["accepted"].GetBool(),"stale far release accepted");
+  expect(BodyController::owns(actor),"stale far policy cannot interrupt a protected attack beside the hero");
+  for(unsigned i=0;i<46 && BodyController::owns(actor);++i) step(player);
+  const auto events=parse(BodyController::drainJson());
+  bool restored=false;
+  uint64_t elapsed=actor.world().tickCount()-start;
+  for(const auto& event:events["events"].GetArray())
+    if(std::string_view(event["reason"].GetString())=="native_restored") {
+      restored=true; elapsed=event["t_game_ms"].GetUint64()-start;
+      }
+  std::cerr << "stale-far-release-fixture segment_ms=" << remaining
+            << " elapsed_game_ms=" << elapsed << " native_restored=" << restored << '\n';
+  expect(restored && !BodyController::owns(actor),"stale far release confirms native authority");
+  expect(elapsed>=remaining && elapsed<=1500,"stale far release preserves the nearby segment and finishes within 1.5 game seconds");
+  expect(std::string_view(BodyController::updateWatch({},50))=="allowed","stale far release permits removing its former body owner");
+  hero.setPosition(heroStart); hero.updateTransform();
+  }
 }
 
 int main(int argc,const char** argv) {
@@ -355,6 +609,12 @@ int main(int argc,const char** argv) {
     liveLease(a,b,player);
     movementRelease(a,b,player);
     pendingAcquire(a,b,player);
+    std::vector<std::string> farFailures;
+    farRelease(a,b,*gothic.player(),player,farFailures);
+    heroTargetRelease(a,*gothic.player(),player,farFailures);
+    staleFarRelease(a,b,*gothic.player(),player);
+    for(const auto& failure:farFailures) std::cerr << "body-watch-test failure: " << failure << '\n';
+    expect(farFailures.empty(),"far release/watchdog fixtures restore native ownership by the next engine tick");
     expect(!Resources::hasGraphicsDevice() && !gothic.gameSession()->hasAudioDevice(),"fixture creates no graphics/audio device");
     BodyController::reset();
     BodyObservations::disable();
