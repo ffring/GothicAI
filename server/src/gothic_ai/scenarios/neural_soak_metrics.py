@@ -28,6 +28,13 @@ from ..protocol import (
 )
 
 WAIT_200 = 10
+# Native soak2 control, final 20 minutes; user decision 2026-10-19.
+# Source: reports/npc-body/2026-10-19-p30-group-soak/README.md.
+GAME_RSS_CONTROL_MIB_PER_LOAD = 182.8
+GAME_RSS_TOLERANCE_PERCENT = 10
+GAME_RSS_LIMIT_MIB_PER_LOAD = round(
+    GAME_RSS_CONTROL_MIB_PER_LOAD * (1 + GAME_RSS_TOLERANCE_PERCENT / 100), 2,
+)
 FAULT_ENDINGS = frozenset({
     "policy_error", "policy_timeout", "body_action_rejected", "lease_lost",
     "observation_overflow", "pilot_error", "acquire_uncertain", "watch_refused",
@@ -69,7 +76,11 @@ def rss_window(samples: list[dict[str, Any]], key: str, seconds: float = 1200) -
     selected = [sample for sample in samples if sample["elapsed_seconds"] >= end - seconds]
     first, last = selected[0], selected[-1]
     before, after = first.get(key), last.get(key)
-    growth = (after / before - 1) * 100 if before and after is not None else None
+    before, after = (
+        value if isinstance(value, (int, float)) and math.isfinite(value) and value > 0 else None
+        for value in (before, after)
+    )
+    growth = (after / before - 1) * 100 if before is not None and after is not None else None
     observed = last["elapsed_seconds"] - first["elapsed_seconds"]
     return {
         "ok": growth is not None and after * 100 <= before * 105,
@@ -77,6 +88,40 @@ def rss_window(samples: list[dict[str, Any]], key: str, seconds: float = 1200) -
         "observed_seconds": observed, "short_window": end < seconds,
         "start_bytes": before, "end_bytes": after, "growth_percent": growth,
     }
+
+
+def game_rss_window(
+    samples: list[dict[str, Any]], loads: list[dict[str, Any]], seconds: float = 1200,
+) -> dict[str, Any]:
+    """Compare growth per completed save load with the accepted native control.
+
+    A load's after-RSS sample marks its completion: a load already present in
+    the first RSS endpoint is excluded, and one at the last endpoint is included.
+    Check failures and load causes do not change this memory denominator.
+    """
+    window = rss_window(samples, "game_rss_bytes", seconds)
+    start, end = window.get("start_seconds"), window.get("end_seconds")
+    load_count = 0
+    if start is not None and end is not None:
+        for load in loads:
+            completed_at = (load.get("rss_after") or {}).get("elapsed_seconds")
+            if completed_at is not None and start < completed_at <= end:
+                load_count += 1
+    before, after = window.get("start_bytes"), window.get("end_bytes")
+    growth_mib = (after - before) / 1024**2 if window.get("growth_percent") is not None else None
+    per_load = growth_mib / load_count if growth_mib is not None and load_count else None
+    window.update({
+        "ok": per_load is not None and per_load <= GAME_RSS_LIMIT_MIB_PER_LOAD,
+        "growth_mib": growth_mib, "growth_mib_per_load": per_load, "load_count": load_count,
+        "native_control_mib_per_load": GAME_RSS_CONTROL_MIB_PER_LOAD,
+        "tolerance_percent": GAME_RSS_TOLERANCE_PERCENT,
+        "limit_mib_per_load": GAME_RSS_LIMIT_MIB_PER_LOAD,
+    })
+    if growth_mib is None:
+        window["reason"] = "missing RSS endpoints"
+    elif not load_count:
+        window["reason"] = "no completed save loads in observed RSS window"
+    return window
 
 
 def scan_server_errors(path: Path) -> list[dict[str, Any]]:
@@ -438,7 +483,7 @@ class SoakMetrics:
         for fallbacks in self.fallbacks_by_client.values():
             faulty_fallbacks.update({reason: count for reason, count in fallbacks.items()
                                     if reason != "observation_too_old"})
-        game_rss = rss_window(self.samples, "game_rss_bytes")
+        game_rss = game_rss_window(self.samples, (extra or {}).get("loads", []))
         server_rss = rss_window(self.samples, "server_rss_bytes")
         p95, p99 = percentile(self._latencies, 0.95), percentile(self._latencies, 0.99)
         log_errors = scan_server_errors(self.log_dir / "server.log")
@@ -461,12 +506,24 @@ class SoakMetrics:
                   f"accepted={accepted}/{decisions}, minimum=95%")
             check("release_clean", not release_issues and not release_deadline_issues,
                   f"issues={len(release_issues)}, deadline_issues={len(release_deadline_issues)}, limit=2s")
-        for name, window in (("game_rss", game_rss), ("server_rss", server_rss)):
-            short = window["short_window"] and window.get("growth_percent") is not None
-            check(name, window["ok"] or short,
-                  f"growth_percent={window.get('growth_percent')}, limit=5%, "
-                  f"assessment={'20-minute gate deferred to full run' if short else 'final 20 minutes'}, "
-                  f"window_seconds={window.get('observed_seconds')}, short_window={window['short_window']}")
+        short = game_rss["short_window"] and game_rss.get("growth_percent") is not None
+        check("game_rss", game_rss["ok"] or short,
+              f"growth_percent={game_rss.get('growth_percent')}, "
+              f"growth_mib_per_load={game_rss['growth_mib_per_load']}, "
+              f"native_control_mib_per_load={game_rss['native_control_mib_per_load']}, "
+              f"limit_mib_per_load={game_rss['limit_mib_per_load']}, "
+              f"tolerance_percent={game_rss['tolerance_percent']}, loads={game_rss['load_count']}, "
+              f"assessment={'20-minute gate deferred to full run' if short else 'final 20 minutes'}, "
+              f"window_start_seconds={game_rss.get('start_seconds')}, "
+              f"window_end_seconds={game_rss.get('end_seconds')}, "
+              f"window_seconds={game_rss.get('observed_seconds')}, "
+              f"short_window={game_rss['short_window']}, reason={game_rss.get('reason')}")
+        short = server_rss["short_window"] and server_rss.get("growth_percent") is not None
+        check("server_rss", server_rss["ok"] or short,
+              f"growth_percent={server_rss.get('growth_percent')}, limit=5%, "
+              f"assessment={'20-minute gate deferred to full run' if short else 'final 20 minutes'}, "
+              f"window_seconds={server_rss.get('observed_seconds')}, "
+              f"short_window={server_rss['short_window']}")
         if self.pilot is not None:
             check("service_latency", p95 is not None and p99 is not None and p95 <= 20 and p99 <= 20,
                   f"p95_ms={p95}, p99_ms={p99}, limit=20ms, calls={len(self._latencies)}")

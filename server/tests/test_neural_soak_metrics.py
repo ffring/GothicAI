@@ -12,7 +12,14 @@ from gothic_ai.bodypilot import BodyFight, PolicyClient
 from gothic_ai.protocol import BodyLease
 from gothic_ai.scenarios.neural_load import _policy_resets
 from gothic_ai.scenarios.neural_soak import Episode
-from gothic_ai.scenarios.neural_soak_metrics import SoakMetrics, rss_window, scan_server_errors
+from gothic_ai.scenarios.neural_soak_metrics import (
+    SoakMetrics,
+    game_rss_window,
+    rss_window,
+    scan_server_errors,
+)
+
+MIB = 1024**2
 
 
 def test_rss_uses_final_twenty_minutes_and_enforces_five_percent():
@@ -33,6 +40,133 @@ def test_short_or_missing_rss_is_explicit():
     assert rss_window(samples, "rss")["short_window"]
     assert not rss_window(samples, "rss")["ok"]
     assert not rss_window(samples, "missing")["ok"]
+
+
+def _load(completed_at, *, cause="scheduled_600", ok=True):
+    return {"cause": cause, "ok": ok,
+            "rss_before": {"elapsed_seconds": completed_at - 1},
+            "rss_after": {"elapsed_seconds": completed_at}}
+
+
+def test_game_rss_counts_all_completed_loads_only_between_observed_endpoints():
+    samples = [
+        {"elapsed_seconds": 0, "game_rss_bytes": 10_000 * MIB},
+        {"elapsed_seconds": 605, "game_rss_bytes": 1000 * MIB},
+        {"elapsed_seconds": 1800, "game_rss_bytes": 1300 * MIB},
+    ]
+    loads = [_load(at) for at in (0, 600, 605, 1800, 1800.001)]
+    loads += [_load(606, cause="hero_death", ok=False),
+              _load(1200, cause="companion_death", ok=False),
+              {"rss_before": {"elapsed_seconds": 1500}}]
+
+    window = game_rss_window(samples, loads)
+
+    assert window["start_seconds"] == 605 and window["end_seconds"] == 1800
+    assert window["observed_seconds"] == 1195 and not window["short_window"]
+    assert window["load_count"] == 3  # All causes and failed checks still contribute RSS.
+    assert window["growth_mib_per_load"] == 100 and window["ok"]
+
+
+@pytest.mark.parametrize(("extra_bytes", "ok"), [(0, True), (1, False)])
+def test_game_rss_native_control_tolerance_is_inclusive(extra_bytes, ok):
+    # 5027 MiB / 25 loads is exactly 201.08 MiB/load before floating-point division.
+    samples = [
+        {"elapsed_seconds": 0, "game_rss_bytes": 10_000 * MIB},
+        {"elapsed_seconds": 1200, "game_rss_bytes": 15_027 * MIB + extra_bytes},
+    ]
+    window = game_rss_window(samples, [_load(at) for at in range(1, 26)])
+    assert window["ok"] is ok
+    assert window["native_control_mib_per_load"] == 182.8
+    assert window["tolerance_percent"] == 10
+    assert window["limit_mib_per_load"] == 201.08
+    assert window["growth_mib_per_load"] >= 201.08
+    assert window["growth_percent"] > 5
+
+
+@pytest.mark.parametrize("missing", [None, 0, -1, float("nan"), float("inf")])
+@pytest.mark.parametrize("endpoint", [0, 1])
+def test_game_rss_missing_or_invalid_endpoint_is_unassessable(missing, endpoint):
+    samples = [{"elapsed_seconds": at, "game_rss_bytes": 100 * MIB} for at in (0, 1200)]
+    samples[endpoint]["game_rss_bytes"] = missing
+    window = game_rss_window(samples, [_load(600)])
+    assert not window["ok"] and not window["short_window"]
+    assert window["growth_mib_per_load"] is None
+    assert window["reason"] == "missing RSS endpoints"
+    json.dumps(window, allow_nan=False)
+
+
+def test_game_rss_without_samples_or_completed_loads_is_explicit():
+    empty = game_rss_window([], [_load(600)])
+    assert not empty["ok"] and empty["growth_mib_per_load"] is None
+    samples = [{"elapsed_seconds": at, "game_rss_bytes": 100 * MIB} for at in (0, 1200)]
+    window = game_rss_window(samples, [_load(0), _load(1201)])
+    assert not window["ok"] and not window["short_window"]
+    assert window["load_count"] == 0 and window["growth_mib_per_load"] is None
+    assert window["reason"] == "no completed save loads in observed RSS window"
+
+
+@pytest.mark.parametrize("control", [False, True])
+@pytest.mark.parametrize(("server_after", "server_ok"), [(1050, True), (1051, False)])
+def test_result_uses_per_load_game_growth_and_preserves_server_five_percent(
+    tmp_path, monkeypatch, control, server_after, server_ok,
+):
+    now = [0.0]
+    # Reproduce 160.3 MiB/load at about 75% raw RSS growth: raw growth is diagnostic.
+    game_before = round(1603 / .75 * MIB)
+    game_after = game_before + 1603 * MIB
+    monkeypatch.setattr("gothic_ai.scenarios.neural_soak_metrics.rss_bytes",
+                        lambda pid: game_after if pid == 123 else server_after)
+    (tmp_path / "game.pid").write_text("123")
+    (tmp_path / "server.log").write_text("INFO ready\n")
+    pilot = None if control else SimpleNamespace(people={}, active_count=0)
+    metrics = SoakMetrics(SimpleNamespace(body_leases={}), pilot, tmp_path, clock=lambda: now[0])
+    metrics.samples.append({"elapsed_seconds": 600, "game_rss_bytes": game_before,
+                            "server_rss_bytes": 1000})
+    loads = [_load(600), _load(1800.001)]
+    loads += [_load(at, cause="hero_death" if at % 2 else "companion_death", ok=False)
+              for at in (601, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1800)]
+    now[0] = 1800
+
+    checks = metrics.write_result(extra={"loads": loads})
+
+    assert checks["game_rss"].startswith("done")
+    assert "160.3" in checks["game_rss"] and "201.08" in checks["game_rss"]
+    assert "182.8" in checks["game_rss"] and "tolerance_percent=10" in checks["game_rss"]
+    assert "loads=10" in checks["game_rss"] and "final 20 minutes" in checks["game_rss"]
+    assert checks["server_rss"].startswith("done" if server_ok else "failed")
+    saved = json.loads((tmp_path / "neural_soak_result.json").read_text())
+    assert saved["mode"] == ("control" if control else "p30")
+    game = saved["metrics"]["game_rss"]
+    assert game["ok"] and not game["short_window"]
+    assert game["growth_percent"] == pytest.approx(75)
+    assert game["growth_mib_per_load"] == 160.3 and game["load_count"] == 10
+    assert game["native_control_mib_per_load"] == 182.8
+    assert game["limit_mib_per_load"] == 201.08 and game["tolerance_percent"] == 10
+    assert game["start_seconds"] == 600 and game["end_seconds"] == 1800
+    assert saved["metrics"]["server_rss"]["ok"] is server_ok
+
+
+@pytest.mark.parametrize("missing", [False, True])
+@pytest.mark.parametrize("short", [False, True])
+def test_result_defers_only_short_windows_with_valid_rss(tmp_path, monkeypatch, missing, short):
+    now = [0.0]
+    monkeypatch.setattr("gothic_ai.scenarios.neural_soak_metrics.rss_bytes",
+                        lambda pid: None if missing and pid == 123 else 1000)
+    (tmp_path / "game.pid").write_text("123")
+    (tmp_path / "server.log").write_text("INFO ready\n")
+    metrics = SoakMetrics(SimpleNamespace(), None, tmp_path, clock=lambda: now[0])
+    metrics.sample(force=True)
+    now[0] = 180 if short else 1200
+
+    checks = metrics.write_result()
+
+    assert checks["game_rss"].startswith("done" if short and not missing else "failed")
+    assert metrics.data["metrics"]["game_rss"]["growth_mib_per_load"] is None
+    assert not metrics.data["metrics"]["game_rss"]["ok"]
+    if short and not missing:
+        assert "gate deferred to full run" in checks["game_rss"]
+    elif not missing:
+        assert "no completed save loads" in checks["game_rss"]
 
 
 def test_log_errors_keep_line_references_without_private_endpoints(tmp_path):
