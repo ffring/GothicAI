@@ -2,7 +2,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from gothic_ai.chronicle import Fact
-from gothic_ai.people_knowledge import SOURCES, PeopleKnowledge, rumor_subject, source_event
+from gothic_ai.people_knowledge import SOURCES, PeopleKnowledge, rumor_subject, source_event, source_events
 
 LOBART, HILDA, VINO = "BAU_950_LOBART", "BAU_951_HILDA", "BAU_952_VINO"
 
@@ -100,6 +100,62 @@ def test_new_source_needs_only_a_registry_entry(monkeypatch):
     assert desk.warning(LOBART, HILDA) == "(Хильда: новая причина)"
     rumor = _rumor(kind="new_kind", quest="new_source:T1")
     assert "Хильда: новое знание" in _desk([rumor]).context(VINO)
+
+
+def test_source_registry_supports_several_first_observers(monkeypatch):
+    monkeypatch.setitem(
+        SOURCES, "shared_discovery",
+        replace(
+            SOURCES["exposed"], observer="witnesses", observer_name="witness_names",
+            about="PLAYER", about_name="герой", requires=(("how", "seen"),),
+        ),
+    )
+    fact = {
+        "fact": "shared_discovery", "liar": HILDA, "subject_name": "Хильда", "testimony": "T1",
+        "witnesses": [LOBART, VINO, LOBART, HILDA, "PLAYER"],
+        "witness_names": {LOBART: "Лобарт", VINO: "Вино"}, "how": "seen",
+    }
+    entries = source_events(fact, [])
+    assert [entry.source for entry in entries] == [LOBART, VINO]
+    assert [entry.source_name for entry in entries] == ["Лобарт", "Вино"]
+    assert len({(entry.key, entry.about, entry.about_name) for entry in entries}) == 1
+    assert source_events({**fact, "how": "missing"}, []) == []
+
+
+def test_unpaid_is_known_only_to_hearers_and_names_the_debtor():
+    fact = {
+        "fact": "npc_broken", "npc": HILDA, "npc_name": "Хильда", "deal": "D1",
+        "how": "unpaid", "day": 2, "witnesses": [LOBART, VINO, HILDA, "PLAYER"],
+        "witness_names": {LOBART: "Лобарт", VINO: "Вино"},
+    }
+    desk = _desk([fact])
+    for npc in [LOBART, VINO]:
+        [entry] = desk.of(npc)
+        assert (entry.subject, entry.kind, entry.key, entry.day) == (HILDA, "npc_broken", "npc_broken:D1", 2)
+        assert "Хильда не отдал(а) герою обещанное" in entry.description()
+        assert "ты слышал это сам" in desk.context(npc)
+        assert "Хильда при тебе не отдал(а)" in desk.warning(npc, HILDA)
+    assert desk.of(HILDA) == [] and desk.of("UNINVOLVED") == []
+    assert source_events({**fact, "how": "no_show"}, []) == []
+    assert source_events({**fact, "witnesses": []}, []) == []
+
+
+def test_unpaid_restores_direct_and_hearsay_knowledge_without_duplicates():
+    event = {
+        "fact": "npc_broken", "npc": HILDA, "npc_name": "Хильда", "deal": "D1",
+        "how": "unpaid", "witnesses": [LOBART], "day": 1,
+    }
+    rumor = _rumor(
+        kind="npc_broken", quest="npc_broken:D1", about="PLAYER", about_name="герой",
+    )
+    facts = [event, rumor, event.copy(), rumor.copy()]
+    for npc in [LOBART, VINO]:
+        [entry] = _desk(facts).of(npc)
+        assert entry.direct == (npc == LOBART)
+        assert _desk(facts).of(npc) == [entry]
+    assert "со слов: Лобарт" in _desk(facts).context(VINO)
+    facts.clear()
+    assert _desk(facts).of(LOBART) == [] and _desk(facts).of(VINO) == []
 
 
 async def test_turn_extension_has_only_situation():

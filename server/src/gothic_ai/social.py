@@ -40,7 +40,9 @@ from typing import TYPE_CHECKING, Any, Literal
 from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
 from .gamedata.storygraph import StoryGraph, walk
-from .people_knowledge import PLAYER, SOURCES, rumor_subject, source_event, source_kind
+from .npc_cheat import betrayed, keeps
+from .people_knowledge import PLAYER, SOURCES, rumor_subject, source_events, source_kind
+from .promise_breach import broken_promises, silence_facts
 from .protocol import GameMessage, Session
 
 if TYPE_CHECKING:
@@ -555,6 +557,12 @@ class Rumors:
             **(extra or {}),
         }
         self.chronicle.record(fact)
+        if r.is_player:
+            for promise in broken_promises(
+                self.chronicle, teller, crime=r.crime, rumor=r.key,
+                cover=self.crimes is not None and self.crimes.cover, at=at,
+            ):
+                betrayed(self.chronicle, teller, str(promise.get("deal", "")), "told", listener)
         self.dialogue.remember(listener, name, r.told(teller_name))
         return fact
 
@@ -570,15 +578,14 @@ class Rumors:
 
     def _on_fact(self, f: Fact) -> None:
         if f.get("fact") in SOURCES:
-            event = source_event(f, self.chronicle.facts())
-            if event is not None:
+            for event in source_events(f, self.chronicle.facts()):
                 r = Rumor(
                     event.key, event.kind, event.about, event.about_name, event.description(),
                     subject=event.subject, subject_name=event.subject_name,
                 )
+                r = self.rumors.setdefault(r.key, r)
                 r.known[event.source] = 0
                 r.since[event.source] = event.day
-                self.rumors.setdefault(r.key, r)
             return
         match f.get("fact"):
             case "found_out" | "caught":
@@ -654,12 +661,21 @@ class Rumors:
                 if "day" in f:
                     r.since[r.about] = int(f["day"])
                 self.rumors.setdefault(r.key, r)
-            case "deal" if f.get("silence"):
-                for key in f["silence"]:
-                    if key in self.rumors:
-                        self.rumors[key].silent.add(f.get("npc", ""))
+            case "deal":
+                if keeps(self.chronicle, str(f.get("deal", "")), "silence"):
+                    for key in f.get("silence", ()):
+                        if key in self.rumors:
+                            self.rumors[key].silent.add(f.get("npc", ""))
+                for promise in silence_facts(
+                    self.chronicle, f, cover=self.crimes is not None and self.crimes.cover,
+                ):
+                    for r in self.rumors.values():
+                        if r.crime == promise["crime"]:
+                            r.silent.add(promise.get("npc", ""))
             case "forgiven" | "silenced" if f.get("crime"):
                 if f.get("cover") and (self.crimes is None or not self.crimes.cover):
+                    return
+                if f.get("fact") == "silenced" and not silence_facts(self.chronicle, f):
                     return
                 for r in self.rumors.values():
                     if r.crime == f["crime"]:
@@ -669,13 +685,11 @@ class Rumors:
 
     def _crime_silence(self, r: Rumor) -> None:
         """A settlement also applies when a later lie starts another rumor about the same deed."""
-        r.silent.update(
-            f.get("npc", "")
-            for f in self.chronicle.facts()
-            if f.get("fact") in {"forgiven", "silenced"}
-            and f.get("crime") == r.crime
-            and (not f.get("cover") or (self.crimes is not None and self.crimes.cover))
-        )
+        for f in self.chronicle.facts():
+            promises = [f] if f.get("fact") == "forgiven" else silence_facts(
+                self.chronicle, f, cover=self.crimes is not None and self.crimes.cover,
+            )
+            r.silent.update(p.get("npc", "") for p in promises if p.get("crime") == r.crime)
 
     def _on_message(self, msg: GameMessage) -> None:
         if isinstance(msg, Session):
