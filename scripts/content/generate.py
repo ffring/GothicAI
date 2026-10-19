@@ -242,7 +242,7 @@ def save_attempt(root, record, maps, number):
     return {name: (relative/f'{name}.png').as_posix() for name in bakeoff.MAPS}
 
 
-def reject(records, resource_id, reason):
+def reject(records, resource_id, reason, explore_remaining=False):
     record = next(r for r in records if r['id'] == resource_id)
     attempts = record['generation']['attempts']
     if record['generation']['outcome'] != 'complete' or not attempts:
@@ -251,6 +251,7 @@ def reject(records, resource_id, reason):
         raise ValueError('three attempts exhausted; a decision is required')
     attempts[-1].update(outcome='rejected', reason=reason)
     record['generation']['outcome'] = 'pending'
+    record['generation']['explore_remaining'] = explore_remaining
     record['files'] = {}
 
 
@@ -309,7 +310,7 @@ def run(records, registry, root, set_name):
                 record['generation'].update(encoding=encoding[record['parameters']['material']], host='dev-ubuntu')
             bakeoff.write_registry(registry, records)
             print(record['id'], json.dumps({k: v for k, v in attempt.items() if k != 'files'}), flush=True)
-            if not reason:
+            if not reason and not record['generation'].get('explore_remaining', False):
                 break
         if record['generation']['outcome'] != 'complete':
             candidates = [a for a in attempts[record['generation'].get('series_start', 0):] if a.get('files')]

@@ -1,10 +1,76 @@
 #!/usr/bin/env bash
 # Capture the complete packed city set against an explicitly empty content root.
 # Usage: capture-city.sh --content-root <packed staging root> --output <outside-git directory>
-# Optional: --mac-city-fps (BIN and GOTHIC_DIR required; waits at most 40 minutes).
+# Optional: --mac-city-fps (profiled BIN and GOTHIC_DIR required; waits at most 40 minutes).
 # Ryzen: source-matching cached engine, private ~/gothic-ai/city-set-1 runtime, gq.
 # No build, default content installation, model service or engine change is performed.
 set -euo pipefail
+
+if [[ "${1:-}" == --check-fps ]]; then
+  python3 - "${2:?capture directory}" "${@:3}" <<'PY'
+import csv
+import json
+import math
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+spots = sys.argv[2:] or ['city']
+def require(ok, reason):
+    if not ok:
+        raise SystemExit(f'capture-city FPS: {reason}')
+summary = root / 'summary.json'
+require(summary.is_file(), 'missing summary.json')
+rows = json.loads(summary.read_text())
+require(isinstance(rows, list), 'summary.json must contain an array')
+for variant in ('before', 'after'):
+    matches = [row for row in rows if isinstance(row, dict) and row.get('label') == variant]
+    require(len(matches) == 1, f'{variant}: missing or duplicate analysis')
+    result = matches[0]
+    require(result.get('exit') == '0' and result.get('done') is True, f'{variant}: game did not finish successfully')
+    profile = root / variant / 'frames.csv'
+    require(profile.is_file() and profile.stat().st_size > 0,
+            f'{variant}: missing frames.csv; build with OPENGOTHIC_ENABLE_FRAME_PROFILE=ON')
+    with profile.open(newline='') as stream:
+        reader = csv.DictReader(stream)
+        require({'flags', 'outcome', 'begin_ns', 'end_ns', 'dt'} <= set(reader.fieldnames or []),
+                f'{variant}: invalid frame profile header')
+        profile_rows = list(reader)
+    require(len(profile_rows) > 2, f'{variant}: frame profile has no measurement window')
+    require(result.get('overflow') == 0, f'{variant}: frame profile overflowed or overflow count is missing')
+    # Match analyze.py: singleton capture groups are shots; multi-frame groups are recordings.
+    capture_groups = []
+    for index, row in enumerate(profile_rows):
+        if int(row['flags']) & 4:
+            if capture_groups and index - capture_groups[-1][-1] <= 2:
+                capture_groups[-1].append(index)
+            else:
+                capture_groups.append([index])
+    shots = [group[0] for group in capture_groups if len(group) == 1]
+    for number, spot in enumerate(spots):
+        metric = result.get('spots', {}).get(spot)
+        require(isinstance(metric, dict), f'{variant}/{spot}: missing FPS window')
+        require(3 * number + 2 < len(shots), f'{variant}/{spot}: missing shot markers')
+        start, end = shots[3 * number:3 * number + 2]
+        window = profile_rows[start + 1:end]
+        game_ms = sum(int(row['dt']) for row in window if int(row['dt']) > 0)
+        require(game_ms >= 19000, f'{variant}/{spot}: missing or incomplete 20-second game-time window')
+        presented = sum(int(row['outcome']) == 1 for row in window)
+        measured_wall = (int(profile_rows[end]['begin_ns']) - int(profile_rows[start]['end_ns'])) / 1e6
+        frames, wall, fps = (metric.get(key) for key in ('frames', 'wall_ms', 'fps'))
+        require(type(frames) is int and frames > 0 and frames == presented,
+                f'{variant}/{spot}: missing or invalid presented frame count')
+        require(type(wall) in (int, float) and math.isfinite(wall) and wall > 0
+                and math.isclose(wall, measured_wall, rel_tol=1e-6),
+                f'{variant}/{spot}: missing or invalid wall-time window')
+        require(type(fps) in (int, float) and math.isfinite(fps) and fps > 0,
+                f'{variant}/{spot}: missing or invalid FPS')
+        require(math.isclose(fps, frames * 1000 / wall, rel_tol=1e-6),
+                f'{variant}/{spot}: FPS does not match its frames and window')
+        print(f'{variant}/{spot}: fps={fps:.3f} frames={frames} wall_ms={wall:.3f} game_ms={game_ms}')
+PY
+  exit 0
+fi
 
 if [[ "${1:-}" == --check ]]; then
   python3 - "${2:?capture directory}" "${3:?scenario}" "${4:?material index}" "${5:?before or after}" "${6:-all}" <<'PY'
@@ -203,6 +269,7 @@ PY
       "$STAGING/tools/city.bench" "$STAGING/content/after/materials/materials.json" "$variant" seen
   done
   python3 "$STAGING/tools/analyze.py" "$STAGING/captures" city
+  bash "$STAGING/tools/capture-city.sh" --check-fps "$STAGING/captures" city
   printf 'Mac city FPS output: %s\n' "$STAGING"
   exit 0
 fi
