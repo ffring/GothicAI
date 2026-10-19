@@ -68,6 +68,8 @@ class DrawBuckets {
       BK_NORMAL = 0x10,
       BK_ORM    = 0x20,
       BK_MATERIAL_MAPS = 0x40,
+      BK_ANTITILE = 0x80,
+      BK_ANTITILE_ROTATE = 0x100,
       };
 
     struct BucketGpu final {
@@ -79,7 +81,10 @@ class DrawBuckets {
       float          envMapping       = 0;
       uint32_t       flags            = 0;
       float          uvScale          = 1.f;
+      float          antitileCell     = 1.f;
+      uint32_t       padding[3]       = {};
       };
+    static_assert(sizeof(BucketGpu)==80); // GPU array stride of Bucket in scene.glsl
 
     struct {
       Tempest::DescriptorArray tex;

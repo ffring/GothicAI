@@ -65,6 +65,8 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
     normal  = maps.normal;
     orm     = maps.orm;
     uvScale = maps.scale;
+    antitileCell = maps.antitileCell;
+    antitile = maps.antitile;
     materialMaps = maps.present;
     }
   }
@@ -92,6 +94,8 @@ bool Material::operator ==(const Material& other) const {
          normal==other.normal &&
          orm==other.orm &&
          uvScale==other.uvScale &&
+         antitileCell==other.antitileCell &&
+         antitile==other.antitile &&
          materialMaps==other.materialMaps &&
          frames==other.frames &&
          alpha==other.alpha &&
