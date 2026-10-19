@@ -342,6 +342,19 @@ def test_cover_silence_respects_switch_when_loading_rumors(graph, cover):
     assert HILDA in next(iter(r.rumors.values())).silent
 
 
+@pytest.mark.parametrize("cover", ["D1", ""])
+def test_no_crimes_ignores_cover_silence_for_old_caught_rumors(graph, cover):
+    r, _, facts = _crime_rumors(Social(PEOPLE, graph))
+    r.crimes = None
+    facts[:] = [
+        {"fact": "caught", "quest": "old-lie", "npc": HILDA, "title": "не брал", "crime": "c1"},
+        {"fact": "silenced", "npc": HILDA, "crime": "c1", **({"cover": cover} if cover else {})},
+    ]
+    r._load()
+    [rumor] = r.rumors.values()
+    assert (HILDA in rumor.silent) is (not cover)
+
+
 def test_crime_witnesses_share_one_rumor_and_keep_the_speaker(graph, monkeypatch):
     monkeypatch.setattr(social, "P_MEET", 1.0)
     monkeypatch.setattr(social, "P_DEAL", 0.0)

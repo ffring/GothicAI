@@ -617,7 +617,7 @@ class Rumors:
                     if key in self.rumors:
                         self.rumors[key].silent.add(f.get("npc", ""))
             case "forgiven" | "silenced" if f.get("crime"):
-                if f.get("cover") and self.crimes is not None and not self.crimes.cover:
+                if f.get("cover") and (self.crimes is None or not self.crimes.cover):
                     return
                 for r in self.rumors.values():
                     if r.crime == f["crime"]:
@@ -632,7 +632,7 @@ class Rumors:
             for f in self.chronicle.facts()
             if f.get("fact") in {"forgiven", "silenced"}
             and f.get("crime") == r.crime
-            and (not f.get("cover") or self.crimes is None or self.crimes.cover)
+            and (not f.get("cover") or (self.crimes is not None and self.crimes.cover))
         )
 
     def _on_message(self, msg: GameMessage) -> None:
