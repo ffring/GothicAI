@@ -480,22 +480,71 @@ void planV2(World& world,Npc& npc,std::ostream& out,const std::string& label,
   if(!out)throw std::runtime_error("navdemos plan-v2 write failed");
 }
 void probeObject(World& world,Npc& npc,std::ostream& out,const std::string& label,
-                 const std::string& from,const std::string& to) {
+                 const std::string& from,const std::string& to,
+                 const std::string& openingIn={},const std::string& openingOut={}) {
   const auto start=demoPoint(world,from),goal=demoPoint(world,to);
+  Vec3 openingNormal=start-goal;
+  if(!openingIn.empty() || !openingOut.empty()) {
+    const auto* inside=world.findPoint(openingIn,false);
+    const auto* outside=world.findPoint(openingOut,false);
+    if(!inside || !outside) {
+      throw std::runtime_error("navdemos object probe missing exact opening IN/OUT alias");
+    }
+    openingNormal=outside->groundPos-inside->groundPos;
+  }
+  openingNormal.y=0;
+  const float normalLength=openingNormal.length();
+  if(normalLength<.001f) {
+    throw std::runtime_error("navdemos object probe opening normal has no horizontal direction");
+  }
+  openingNormal*=1.f/normalLength;
+  const Vec3 tangent(-openingNormal.z,0,openingNormal.x);
   const auto old=npc.position();const float yaw=npc.rotation();
   npc.setPosition(start);npc.updateTransform();npc.setDirection(goal-start);
   const auto eyes=npc.navigationEyePose().origin;
-  // Entrances are authored floor positions; the visible opening is sampled
-  // one metre above that position, without moving the navigation goal.
+  // Keep the original centre ray exactly. Extra samples stay within a
+  // 130-cm-wide vertical opening at the unchanged authored floor goal.
   const auto look=goal+Vec3(0,100,0);
   const auto hit=world.physic()->navigationRay(eyes,look,&npc);
-  const bool visible=!hit.hasCol || (hit.point-look).length()<5.f;
+  const bool visibleCentre=!hit.hasCol || (hit.point-look).length()<5.f;
+  bool visibleEdge=false;
+  size_t visibleSamples=visibleCentre?1u:0u;
+  std::ostringstream samples;
+  samples<<std::setprecision(9)<<std::boolalpha;
+  const auto sample=[&](const Vec3& point,bool hasCollision,const Vec3& hitPoint,bool visible) {
+    samples<<"{\"look_cm\":";vector(samples,point);
+    samples<<",\"visible\":"<<visible<<",\"has_collision\":"<<hasCollision;
+    if(hasCollision) {
+      samples<<",\"hit_cm\":";vector(samples,hitPoint);
+    }
+    samples<<'}';
+  };
+  sample(look,hit.hasCol,hit.point,visibleCentre);
+  for(float height:{40.f,100.f,180.f}) {
+    for(float width:{-65.f,0.f,65.f}) {
+      if(width==0 && height==100.f) {
+        continue;
+      }
+      const auto edgeLook=goal+tangent*width+Vec3(0,height,0);
+      const auto edgeHit=world.physic()->navigationRay(eyes,edgeLook,&npc);
+      const bool visible=!edgeHit.hasCol || (edgeHit.point-edgeLook).length()<5.f;
+      visibleEdge=visibleEdge || visible;
+      visibleSamples+=visible?1u:0u;
+      samples<<',';
+      sample(edgeLook,edgeHit.hasCol,edgeHit.point,visible);
+    }
+  }
   const auto& mesh=NavBench::navigationMesh(world);
   const auto path=mesh.findPath(meters(start),meters(goal));
   const bool blocked=!mesh.straightWalkable(meters(start),meters(goal));
   const auto floor=world.physic()->landRay(start+Vec3(0,20,0),40.f);
   out<<"{\"label\":"<<std::quoted(label)<<",\"start\":"<<std::quoted(from)<<",\"goal\":"<<std::quoted(to)
-     <<",\"visible\":"<<visible<<",\"detour_complete\":"<<path.complete
+     <<",\"visible_centre\":"<<visibleCentre<<",\"visible_edge\":"<<visibleEdge
+     <<",\"visible\":"<<(visibleCentre || visibleEdge)
+     <<",\"visibility_criterion\":\"centre_or_opening_edge_v1\",\"visible_samples\":"<<visibleSamples
+     <<",\"opening_in\":"<<std::quoted(openingIn)<<",\"opening_out\":"<<std::quoted(openingOut)
+     <<",\"opening_normal\":";vector(out,openingNormal);
+  out<<",\"look_samples\":["<<samples.str()<<"],\"detour_complete\":"<<path.complete
      <<",\"detour_length_cm\":"<<path.length*100.f<<",\"direct_cm\":"<<(goal-start).length()
      <<",\"straight_blocked\":"<<blocked<<",\"start_supported\":"
      <<(floor.hasCol && floor.n.y>=.65f && std::abs(floor.v.y-start.y)<=20.f)
@@ -1177,24 +1226,67 @@ void NavDemos::reset() {legacy=Episode{};population=Population{};settings=Settin
 void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player,const std::string& output) {
   auto a=args;
   auto& ep=legacy;
-  if(a.size()>=2 && (a[1]=="probe-v3" || a[1]=="probes-v3")) {
-    if(running())throw std::runtime_error("navdemos cannot probe during episode");
-    const bool batch=a[1]=="probes-v3";
-    if((batch && a.size()!=4) || (!batch && a.size()!=5 && a.size()!=6))
-      throw std::runtime_error("navdemos probe-v3 NPC START GOAL [LABEL] | probes-v3 NPC FILE");
-    auto* npc=w.findNpcByInstance(w.script().findSymbolIndex(a[2]));
-    if(!npc)throw std::runtime_error("navdemos probe-v3 missing NPC");
-    std::ofstream out(std::filesystem::path(output)/"object-candidates.jsonl",std::ios::app);
+  if(a.size()>=2 && a[1]=="points-v3") {
+    if(running()) {
+      throw std::runtime_error("navdemos cannot export points during episode");
+    }
+    if(a.size()!=2) {
+      throw std::runtime_error("navdemos points-v3");
+    }
+    std::ofstream out(std::filesystem::path(output)/"points-v3.jsonl");
+    if(!out) {
+      throw std::runtime_error("navdemos cannot write points-v3.jsonl");
+    }
     out<<std::setprecision(9)<<std::boolalpha;
-    if(!batch)probeObject(w,*npc,out,a.size()==6?a[5]:"0",a[3],a[4]);
+    w.forEachWayPoint([&](const WayPoint& point) {
+      out<<"{\"name\":"<<std::quoted(point.name)<<",\"position_cm\":";vector(out,point.groundPos);
+      out<<",\"connected\":"<<point.isConnected()<<",\"freepoint\":"<<point.isFreePoint()<<"}\n";
+    });
+    if(!out) {
+      throw std::runtime_error("navdemos points-v3 write failed");
+    }
+    return;
+  }
+  if(a.size()>=2 && (a[1]=="probe-v3" || a[1]=="probes-v3")) {
+    if(running()) {
+      throw std::runtime_error("navdemos cannot probe during episode");
+    }
+    const bool batch=a[1]=="probes-v3";
+    if((batch && a.size()!=4) || (!batch && a.size()!=5 && a.size()!=6 && a.size()!=8)) {
+      throw std::runtime_error("navdemos probe-v3 NPC START GOAL [LABEL [IN_ALIAS OUT_ALIAS]] | probes-v3 NPC FILE");
+    }
+    auto* npc=w.findNpcByInstance(w.script().findSymbolIndex(a[2]));
+    if(!npc) {
+      throw std::runtime_error("navdemos probe-v3 missing NPC");
+    }
+    std::ofstream out(std::filesystem::path(output)/"object-candidates.jsonl",std::ios::app);
+    if(!out) {
+      throw std::runtime_error("navdemos cannot write object-candidates.jsonl");
+    }
+    out<<std::setprecision(9)<<std::boolalpha;
+    if(!batch) {
+      probeObject(w,*npc,out,a.size()>=6?a[5]:"0",a[3],a[4],a.size()==8?a[6]:"",a.size()==8?a[7]:"");
+    }
     else {
-      std::ifstream in(a[3]);if(!in)throw std::runtime_error("navdemos cannot read probes-v3 file");
+      std::ifstream in(a[3]);
+      if(!in) {
+        throw std::runtime_error("navdemos cannot read probes-v3 file");
+      }
       std::string line;
       while(std::getline(in,line)) {
-        if(line.empty() || line[0]=='#')continue;
-        std::istringstream row(line);std::string label,from,to,extra;
-        if(!(row>>label>>from>>to) || (row>>extra))throw std::runtime_error("navdemos probes-v3 rows LABEL START GOAL");
-        probeObject(w,*npc,out,label,from,to);
+        if(line.empty() || line[0]=='#') {
+          continue;
+        }
+        std::istringstream row(line);std::string label,from,to,openingIn,openingOut,extra;
+        if(!(row>>label>>from>>to)) {
+          throw std::runtime_error("navdemos probes-v3 rows LABEL START GOAL [IN_ALIAS OUT_ALIAS]");
+        }
+        if(row>>openingIn) {
+          if(!(row>>openingOut) || (row>>extra)) {
+            throw std::runtime_error("navdemos probes-v3 rows LABEL START GOAL [IN_ALIAS OUT_ALIAS]");
+          }
+        }
+        probeObject(w,*npc,out,label,from,to,openingIn,openingOut);
       }
     }
     return;

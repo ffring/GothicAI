@@ -29,6 +29,7 @@ KINDS = ("point", "object", "follow", "approach")
 SPLITS = ("train", "validation", "test")
 MAX_BYTES = 15 * 1024**3
 ESTIMATED_DECISION_BYTES = 20 * 1024
+SCENARIO_IDENTITY_FIELDS = ("id", "goal_kind", "split", "region", "place_id", "start", "goal", "seed", "route", "target")
 
 
 def module(name):
@@ -123,6 +124,7 @@ def object_targets(places):
                 goal = "cm:" + ",".join(format(float(value), ".9g") for value in entrance["pos"])
                 aliases = sorted({entrance[field] for field in ("in", "out") if entrance.get(field)})
                 targets.append(dict(place_id=place["id"], goal=goal, goal_aliases=aliases,
+                                    entrance_in=entrance.get("in"), entrance_out=entrance.get("out"),
                                     target_position=entrance["pos"], target_type=place["kind"], entrance=index))
         identifier = place["id"].upper()
         name = place.get("en", "").lower()
@@ -136,7 +138,7 @@ def object_targets(places):
 
 
 def build_candidates(places, training, excluded, seed, starts_per_object=12, moving_per_region=3,
-                     point_count=24, object_places=30):
+                     point_count=24, object_places=30, start_positions=None):
     targets = object_targets(places)
     place_splits = split_groups([p["place_id"] for p in targets], seed)
     region_splits = split_groups([p["region"] for p in training], seed + 1)
@@ -159,6 +161,7 @@ def build_candidates(places, training, excluded, seed, starts_per_object=12, mov
     rng.shuffle(target_places)
     chosen_places = set(target_places[:object_places])
     starts = {place["anchor"]: place["center"] for place in places if place.get("anchor") and place.get("center")}
+    starts.update(start_positions or {})
     for target in targets:
         if target["place_id"] not in chosen_places:
             continue
@@ -166,6 +169,9 @@ def build_candidates(places, training, excluded, seed, starts_per_object=12, mov
         nearby = sorted((name for name, pos in starts.items()
                          if name != target["goal"] and 500 <= math.hypot(pos[0] - center[0], pos[2] - center[2]) <= 20000))
         rng.shuffle(nearby)
+        # Prefer starts within 5–100 m before using the more distant fallback.
+        # Stable sorting retains seeded ordering for equal-distance candidates.
+        nearby.sort(key=lambda name: math.hypot(starts[name][0] - center[0], starts[name][2] - center[2]))
         added = 0
         for start in nearby:
             candidate = dict(target, goal_kind="object", start=start, region=target["place_id"],
@@ -209,11 +215,30 @@ def build_candidates(places, training, excluded, seed, starts_per_object=12, mov
     return sorted(unique.values(), key=lambda p: (KINDS.index(p["goal_kind"]), p["split"], p["id"]))
 
 
+def load_start_positions(path):
+    """Load named starts from runner point discovery without guessing coordinates."""
+    if path is None:
+        return {}
+    values = read_json(path) if Path(path).suffix == ".json" else list(rows(path))
+    if isinstance(values, dict):
+        values = [dict(name=name, position_cm=position) for name, position in values.items()]
+    result = {}
+    for value in values:
+        name = value.get("name", value.get("waypoint"))
+        position = value.get("position_cm", value.get("pos", value.get("position")))
+        if (not isinstance(name, str) or not name or not isinstance(position, (list, tuple))
+                or len(position) != 3 or not all(math.isfinite(float(coordinate)) for coordinate in position)):
+            raise ValueError(f"Invalid named start position in {path}: {value}")
+        result[name] = [float(coordinate) for coordinate in position]
+    return result
+
+
 def candidates(args):
     excluded = exclusion_pairs(args.holdout, args.ppo_validation)
     training = list(rows(args.training_pairs))
     result = build_candidates(read_json(args.roads)["places"], training, excluded, args.seed,
-                              args.starts_per_object, args.moving_per_region, args.point_count, args.object_places)
+                              args.starts_per_object, args.moving_per_region, args.point_count, args.object_places,
+                              load_start_positions(getattr(args, "start_points", None)))
     write_selection(args.selection_output or args.output / "candidates.jsonl", result)
     print(json.dumps(dict(candidates=len(result), by_kind=dict(Counter(p["goal_kind"] for p in result)))))
 
@@ -250,54 +275,156 @@ def references(root):
             episode = read_json(metadata)
             if episode.get("teacher_version") != 2 or not (metadata.parent / "samples.bin.gz").is_file():
                 continue
-            if "start" in episode and "goal" in episode:
+            if "start" in episode and "goal" in episode and not episode.get("drive") and episode.get("dagger") is None:
                 key = episode["start"], episode["goal"]
-                if key in result:
-                    # Prefer the ordinary reference over a perturbation/drive.
-                    previous = read_json(result[key] / "episode.json")
-                    if not previous.get("drive") and previous.get("dagger") is None:
-                        continue
-                if not episode.get("drive") and episode.get("dagger") is None:
-                    result[key] = metadata.parent
+                result.setdefault(key, metadata.parent)
+                if episode.get("id"):
+                    result.setdefault(episode["id"], metadata.parent)
     return result
 
 
-def object_qualified(probe):
+def object_qualification_reason(probe):
+    if probe is None:
+        return "missing_probe"
+    if probe.get("start_supported") is not True:
+        return "unsupported_start"
+    if probe.get("visible") is not True:
+        return "not_visible"
+    if probe.get("detour_complete") is not True:
+        return "no_detour"
     direct = float(probe.get("direct_cm", 0))
     detour = float(probe.get("detour_length_cm", probe.get("detour_cm", 0)))
-    return (probe.get("visible") is True and probe.get("detour_complete") is True and probe.get("start_supported") is True
-            and direct > 0 and (detour >= 1.5 * direct or probe.get("straight_blocked") is True))
+    if not math.isfinite(direct) or not math.isfinite(detour) or direct <= 0 or detour < 0:
+        return "invalid_distance"
+    if detour < 1.5 * direct and probe.get("straight_blocked") is not True:
+        return "detour_too_short"
+    return None
+
+
+def object_qualified(probe):
+    return object_qualification_reason(probe) is None
+
+
+def object_visibility(probe):
+    if probe is None:
+        return "missing_probe"
+    if probe.get("visible_centre") is True:
+        return "visible_centre"
+    if probe.get("visible") is True and probe.get("visible_edge") is True:
+        return "visible_edge_only"
+    return "legacy_visible" if probe.get("visible") is True else "not_visible"
+
+
+def qualification_gate(selected, *, minimum_points=30, minimum_objects=30, required_point_regions=(),
+                       minimum_points_per_region=1, minimum_object_places=0):
+    """Reject undersized comparisons before any v3 result is used to select data."""
+    points = [value for value in selected if value["goal_kind"] == "point"]
+    objects = [value for value in selected if value["goal_kind"] == "object"]
+    regions = Counter(value["region"] for value in points)
+    places = Counter(value["place_id"] for value in objects)
+    underfilled = {region: regions[region] for region in sorted(set(required_point_regions))
+                   if regions[region] < minimum_points_per_region}
+    counts = dict(points=len(points), objects=len(objects), point_regions=dict(sorted(regions.items())),
+                  object_places=len(places), underfilled_point_regions=underfilled)
+    if (len(points) < minimum_points or len(objects) < minimum_objects or underfilled
+            or len(places) < minimum_object_places):
+        raise ValueError(f"Qualification gate: points={len(points)}/{minimum_points}, objects={len(objects)}/{minimum_objects}, "
+                         f"object_places={len(places)}/{minimum_object_places}, point_regions={dict(sorted(regions.items()))}, "
+                         f"underfilled_regions={underfilled}, required_per_region={minimum_points_per_region}")
+    return counts
+
+
+def qualified_candidates(pool, probes, refs, *, minimum_points=0, minimum_objects=0, required_point_regions=(),
+                         minimum_points_per_region=1, minimum_object_places=0):
+    """Qualify only v2-successful routes; input selections and episode files stay unchanged."""
+    result = []
+    candidates_by_kind = Counter()
+    accepted_by_kind = Counter()
+    rejections = defaultdict(Counter)
+    v2_failures = Counter()
+    visibility = Counter()
+    qualified_visibility = Counter()
+    seen = set()
+    for value in pool:
+        kind = value["goal_kind"]
+        candidates_by_kind[kind] += 1
+        if value["id"] in seen:
+            raise ValueError(f"Duplicate candidate id: {value['id']}")
+        seen.add(value["id"])
+        selected = dict(value)
+        if kind == "object":
+            probe = probes.get(value["id"])
+            visibility[object_visibility(probe)] += 1
+            reason = object_qualification_reason(probe)
+            if reason is not None:
+                rejections[kind][reason] += 1
+                continue
+            if (probe.get("start"), probe.get("goal")) != (value["start"], value["goal"]):
+                raise ValueError(f"Probe label/route mismatch: {value['id']}")
+            selected.update(qualification=probe)
+        if kind in ("point", "object"):
+            reference = refs.get(value["id"], refs.get((value["start"], value["goal"])))
+            if reference is None:
+                rejections[kind]["missing_v2"] += 1
+                continue
+            metadata = read_json(Path(reference) / "episode.json")
+            if (metadata.get("teacher_version") != 2 or metadata.get("drive") or metadata.get("dagger") is not None
+                    or metadata.get("goal_kind", kind) != kind
+                    or (metadata.get("start"), metadata.get("goal")) != (value["start"], value["goal"])):
+                raise ValueError(f"Mismatched v2 reference for {value['id']}: {reference}")
+            if metadata.get("success") is not True:
+                rejections[kind]["v2_failed"] += 1
+                v2_failures[kind] += 1
+                continue
+            selected.update(teacher_v2_episode=str(reference), teacher_v2_success=True)
+            if kind == "point":
+                cached = metadata.get("beyond_path_fraction")
+                fraction = (float(cached) if isinstance(cached, (float, int)) and not isinstance(cached, bool)
+                            and math.isfinite(cached) else beyond_path_fraction(reference))
+                if not 0 <= fraction <= 1:
+                    raise ValueError(f"Invalid beyond-known fraction in {reference}: {fraction}")
+                if fraction <= .3:
+                    rejections[kind]["beyond_at_most_30pct"] += 1
+                    continue
+                selected["beyond_path_fraction"] = fraction
+        result.append(selected)
+        accepted_by_kind[kind] += 1
+        if kind == "object":
+            qualified_visibility[object_visibility(probe)] += 1
+    validate_splits(result)
+    qualification_gate(result, minimum_points=minimum_points, minimum_objects=minimum_objects,
+                       required_point_regions=required_point_regions, minimum_points_per_region=minimum_points_per_region,
+                       minimum_object_places=minimum_object_places)
+    counters = dict(candidates=dict(candidates_by_kind), qualified=dict(accepted_by_kind),
+                    rejections={kind: dict(counts) for kind, counts in sorted(rejections.items())},
+                    v2_failures=dict(v2_failures),
+                    object_visibility=dict(visibility), qualified_object_visibility=dict(qualified_visibility),
+                    point_regions=dict(sorted(Counter(value["region"] for value in result if value["goal_kind"] == "point").items())),
+                    object_places=dict(sorted(Counter(value["place_id"] for value in result if value["goal_kind"] == "object").items())),
+                    object_regions=dict(sorted(Counter(value["region"] for value in result if value["goal_kind"] == "object").items())))
+    return result, counters
 
 
 def qualify(args):
     excluded = exclusion_pairs(args.holdout, args.ppo_validation)
     pool = list(rows(args.scenarios or args.output / "candidates.jsonl"))
-    probes = {p.get("label", p.get("id")): p for p in rows(args.probes)} if args.probes else {}
-    refs = references(args.teacher_root)
-    result = []
     for value in pool:
         if not isolated(value, excluded):
             raise ValueError(f"Excluded route in candidate selection: {value['id']}")
-        selected = dict(value)
-        if value["goal_kind"] == "object":
-            probe = probes.get(value["id"])
-            if probe is None or not object_qualified(probe):
-                continue
-            if (probe.get("start"), probe.get("goal")) != (value["start"], value["goal"]):
-                raise ValueError(f"Probe label/route mismatch: {value['id']}")
-            selected.update(qualification=probe)
-        elif value["goal_kind"] == "point":
-            reference = refs.get((value["start"], value["goal"]))
-            if reference is None:
-                continue
-            fraction = beyond_path_fraction(reference)
-            if fraction <= .3:
-                continue
-            selected.update(teacher_v2_episode=str(reference), beyond_path_fraction=fraction)
-        result.append(selected)
-    validate_splits(result)
+    probes = {p.get("label", p.get("id")): p for p in rows(args.probes)} if args.probes else {}
+    required_regions = tuple(region for region in args.require_point_regions.split(",") if region)
+    result, counters = qualified_candidates(pool, probes, references(args.teacher_root), minimum_points=args.minimum_points,
+                                           minimum_objects=args.minimum_objects, required_point_regions=required_regions,
+                                           minimum_points_per_region=args.minimum_points_per_region,
+                                           minimum_object_places=args.minimum_object_places)
     write_selection(args.selection_output or args.output / "scenarios.jsonl", result)
-    print(json.dumps(dict(qualified=len(result), by_kind=dict(Counter(p["goal_kind"] for p in result)))))
+    print(json.dumps(counters))
+
+
+def same_scenario(metadata, value, version):
+    """Qualification enriches a dataset, without changing a recorded episode's identity."""
+    return (metadata.get("teacher_version") == version and metadata.get("demo_version") == 2
+            and all(metadata.get(key) == value.get(key) for key in SCENARIO_IDENTITY_FIELDS))
 
 
 def validate_splits(values):
@@ -400,13 +527,20 @@ def discovery(args):
         raise ValueError("No object candidates selected")
     checked_paths(args)
     probe_file = args.output / "object-probes.txt"
-    probe_file.write_text("".join(f"{p['id']} {p['start']} {p['goal']}\n" for p in selected), encoding="utf-8")
+    probe_file.write_text("".join(probe_row(p) + "\n" for p in selected), encoding="utf-8")
     runner = new_runner(args)
     try:
         runner_scenario(args, runner, "object-probes", [f"navdemos probes-v3 {args.npc} {probe_file}"],
                         args.output / "discovery", args.seed)
     finally:
         runner.close()
+
+
+def probe_row(value):
+    fields = [value["id"], value["start"], value["goal"]]
+    if value.get("entrance_in") and value.get("entrance_out"):
+        fields.extend((value["entrance_in"], value["entrance_out"]))
+    return " ".join(token(field) for field in fields)
 
 
 def start_command(value, version, npc, limit_ms):
@@ -456,8 +590,7 @@ def run(args):
             directory = episode_directory(args.output, value, args.teacher_version)
             if complete(directory):
                 metadata = read_json(directory / "episode.json")
-                if (any(metadata.get(key) != expected for key, expected in value.items())
-                        or metadata.get("teacher_version") != args.teacher_version or metadata.get("demo_version") != 2):
+                if not same_scenario(metadata, value, args.teacher_version):
                     raise ValueError(f"Existing recording belongs to another scenario: {directory}")
                 if not args.resume:
                     raise ValueError(f"Recording exists; use --resume: {directory}")
@@ -622,6 +755,12 @@ def main():
     parser.add_argument("--scenarios", type=Path)
     parser.add_argument("--selection-output", type=Path, help="Optional named pilot selection; existing selections stay frozen")
     parser.add_argument("--probes", type=Path, help="discovery/object-candidates.jsonl")
+    parser.add_argument("--start-points", type=Path, help="JSON/JSONL discovered waypoint coordinates for object starts")
+    parser.add_argument("--minimum-points", type=int, default=0)
+    parser.add_argument("--minimum-objects", type=int, default=0)
+    parser.add_argument("--minimum-object-places", type=int, default=0)
+    parser.add_argument("--minimum-points-per-region", type=int, default=1)
+    parser.add_argument("--require-point-regions", default="", help="Comma-separated required beyond-known point regions")
     parser.add_argument("--contract", type=Path)
     parser.add_argument("--roads", type=Path, default=REPO / "server/src/gothic_ai/gamedata/places.json")
     parser.add_argument("--links", type=Path, default=REPO / "reports/navigation/2026-10-16-teacher/raw/accepted-links.txt")
@@ -648,6 +787,8 @@ def main():
         parser.error("Positive --limit-ms/--count and nonnegative --start-index are required")
     if min(args.starts_per_object, args.moving_per_region, args.object_places, args.point_count) < 1:
         parser.error("Candidate counts must be positive")
+    if min(args.minimum_points, args.minimum_objects, args.minimum_object_places) < 0 or args.minimum_points_per_region < 1:
+        parser.error("Qualification minima must be nonnegative and per-region minimum positive")
     token(args.npc)
     globals()[args.command](args)
 

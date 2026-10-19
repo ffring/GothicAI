@@ -2,8 +2,8 @@
 # Submit a bounded phase and return its gq id. Never trains a student.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-teacher-v3-remote.sh build|bootstrap|prepare}"
-case "$stage" in build|bootstrap|prepare) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
+stage="${1:?Usage: nav-teacher-v3-remote.sh build|bootstrap|prepare|campaign|evaluate}"
+case "$stage" in build|bootstrap|prepare|campaign|evaluate) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 export GQ_OWNER=nav-teacher-v3
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-teacher-v3" "$HOME"')"
 ssh ryzen "mkdir -p '$task/source' '$task/input'"
@@ -28,7 +28,7 @@ df -h "$HOME"
 cd "$task/source"
 if [[ ! -x "$task/.venv/bin/python" ]]; then uv venv "$task/.venv"; fi
 uv pip install --python "$task/.venv/bin/python" numpy pytest
-if [[ "$stage" != prepare ]]; then
+if [[ "$stage" != prepare && "$stage" != evaluate ]]; then
   cmake -S "$task/source/OpenGothic" -B "$task/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DOPENGOTHIC_JOLT_X86=x86-64-v3 \
@@ -36,10 +36,16 @@ if [[ "$stage" != prepare ]]; then
   cmake --build "$task/build" --target Gothic2Notr gothic-body-runner \
     check-navmemoryteacher check-navkeyteacher --parallel 3
   "$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_teacher_v3.py \
+    scripts/tests/test_nav_teacher_v3_campaign.py \
     scripts/tests/test_nav_demos.py scripts/tests/test_nav_guidance.py \
     scripts/tests/test_nav_drive.py scripts/tests/test_nav_rl.py
 fi
-if [[ "$stage" != build ]]; then
+if [[ "$stage" == campaign || "$stage" == evaluate ]]; then
+  "$task/.venv/bin/python" -I scripts/nav_teacher_v3_campaign.py \
+    --task "$task" --data "$HOME/gothic-ai/nav-demos-v3" --parallel 3 \
+    --min-points 30 --per-region 5 --min-objects 30 --min-object-places 30 \
+    --stage "$stage"
+elif [[ "$stage" != build ]]; then
   data="$HOME/gothic-ai/nav-demos-v3"
   selection=(--output "$data" --roads "$task/input/places.json"
     --training-pairs "$task/input/training-pairs.jsonl" --holdout "$task/input/holdout-cv.jsonl"
@@ -57,5 +63,11 @@ if [[ "$stage" != build ]]; then
     --teacher-root "$data/v2" --probes "$data/discovery/object-candidates.jsonl"
 fi
 PHASE
-"$ROOT/scripts/gq" submit --class batch --threads 4 --mem 8G --max 2h \
+threads=4
+cpu_args=()
+if [[ "$stage" == campaign || "$stage" == evaluate ]]; then
+  threads=12
+  cpu_args=(--cpu-quota 1200%)
+fi
+"$ROOT/scripts/gq" submit --class batch --threads "$threads" --mem 8G --max 2h "${cpu_args[@]}" \
   --name "nav teacher v3 $stage" -- bash "$task/phase.sh" "$stage"
