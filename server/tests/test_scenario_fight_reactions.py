@@ -4,8 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from gothic_ai.game import GameError
-from gothic_ai.protocol import DebugCmd
+from gothic_ai.game import GameError, GameLink
+from gothic_ai.protocol import DebugCmd, Result
 from gothic_ai.scenario_fight_reactions import (
     CombatTrace,
     combat_shouts,
@@ -425,6 +425,7 @@ def test_companion_idle_requires_observed_fields(section, field):
 class StoppedHitLink:
     def __init__(self, trace, *, fail_hit=False):
         self.trace = trace
+        self.listeners = []
         self.raw_body_listeners = [trace.body]
         self.sent = []
         self.events = []
@@ -497,6 +498,7 @@ async def test_stopped_companion_hit_preserves_debug_refusal():
         await stopped_companion_hit(link, trace, "companion", "bandit", stop)
 
     assert len(link.sent) == 1
+    assert link.listeners == []
     assert link.raw_body_listeners == [trace.body]
 
 
@@ -515,6 +517,112 @@ async def test_stopped_companion_hit_timeout_never_sends_hit(monkeypatch):
         await stopped_companion_hit(link, trace, "companion", "bandit", stop)
 
     assert link.stop_complete and not link.sent
+    assert link.raw_body_listeners == [trace.body]
+
+
+async def test_stopped_companion_hit_arms_h_before_request_resumes_and_boundary_contact(monkeypatch):
+    trace = ready_trace()
+    link = GameLink(SimpleNamespace())
+    link.raw_body_listeners.append(trace.body)
+    stand_up = Mock()
+    orders = SimpleNamespace(_stand_up=stand_up)
+    hit = None
+    resumed = False
+    armed = []
+    proof = {"attacker": "companion", "victim": "bandit", "game_ms": 100}
+
+    def closed():
+        strike = trace.strike_after("bandit", "companion", hit) if hit is not None else None
+        return hit is not None and strike is not None
+
+    def on_hit(value, selected):
+        nonlocal hit
+        hit = value["game_ms"]
+        armed.append((value, selected))
+        check_closed()
+
+    async def send(command):
+        assert isinstance(command, DebugCmd) and command.cmd == "npc_hit"
+        assert hit is None and not resumed
+        link._dispatch(Result(type="result", req="unrelated", ok=True, value=proof))
+        assert hit is None
+        link._dispatch(Result(type="result", req=command.req, ok=True, value=proof))
+        assert hit == 100 and not resumed
+        packet = {"observations": [row(t=120, attack=True, target=111)]}
+        for listener in tuple(link.raw_body_listeners):
+            listener(packet)
+        orders._stand_up("companion", "bandit", "struck", struck=True)
+        stand_up.assert_called_once_with("companion", "bandit", "struck", struck=True)
+        assert not resumed
+
+    async def stop():
+        pass
+
+    monkeypatch.setattr(link, "send", send)
+    with suppress_companion_defense(orders, "companion", link, closed) as check_closed:
+        returned, selected = await stopped_companion_hit(
+            link, trace, "companion", "bandit", stop, on_hit=on_hit,
+        )
+        resumed = True
+
+    assert returned == proof and hit == 100
+    assert armed == [(proof, selected)]
+    assert orders._stand_up is stand_up
+    assert stand_up.call_count == 1
+    assert link.listeners == [] and link._requests == {}
+    assert link.raw_body_listeners == [trace.body]
+
+
+async def test_stopped_companion_hit_does_not_arm_h_on_failed_result_and_cleans_listener(monkeypatch):
+    trace = ready_trace()
+    link = GameLink(SimpleNamespace())
+    link.raw_body_listeners.append(trace.body)
+    on_hit = Mock()
+
+    async def send(command):
+        link._dispatch(Result(type="result", req="unrelated", ok=True, value={"game_ms": 100}))
+        on_hit.assert_not_called()
+        link._dispatch(Result(type="result", req=command.req, ok=False, error="hit refused"))
+        on_hit.assert_not_called()
+
+    async def stop():
+        pass
+
+    monkeypatch.setattr(link, "send", send)
+    with pytest.raises(GameError, match="hit refused"):
+        await stopped_companion_hit(link, trace, "companion", "bandit", stop, on_hit=on_hit)
+
+    on_hit.assert_not_called()
+    assert link.listeners == [] and link._requests == {}
+    assert link.raw_body_listeners == [trace.body]
+
+
+async def test_stopped_companion_hit_cancellation_removes_result_listener(monkeypatch):
+    trace = ready_trace()
+    link = GameLink(SimpleNamespace())
+    link.raw_body_listeners.append(trace.body)
+    sent = asyncio.Event()
+    on_hit = Mock()
+
+    async def send(_command):
+        sent.set()
+        await asyncio.Event().wait()
+
+    async def stop():
+        pass
+
+    monkeypatch.setattr(link, "send", send)
+    waiting = asyncio.create_task(
+        stopped_companion_hit(link, trace, "companion", "bandit", stop, on_hit=on_hit),
+    )
+    await sent.wait()
+    assert len(link.listeners) == 1
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+
+    on_hit.assert_not_called()
+    assert link.listeners == [] and link._requests == {}
     assert link.raw_body_listeners == [trace.body]
 
 

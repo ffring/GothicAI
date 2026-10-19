@@ -36,6 +36,7 @@ from .protocol import (
     NpcActResult,
     NpcEvent,
     PerceptionHeld,
+    Result,
     ThreatControlCmd,
     TriggerFired,
 )
@@ -313,6 +314,7 @@ def suppress_companion_defense(
 async def stopped_companion_hit(
     link: GameLink, trace: CombatTrace, attacker: str, defender: str,
     stop: Callable[[], Awaitable[None]],
+    *, on_hit: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """A stop receipt and observed idle body must precede the guaranteed hit."""
     await stop()
@@ -321,10 +323,31 @@ async def stopped_companion_hit(
         log.error("fight_reactions H=None geometry=%s", geometry)
         raise GameError(f"fight_reactions setup: no idle open melee geometry before hit; {geometry}")
     selected = trace.hit_geometry(attacker, defender)
-    response = await link._request(
-        DebugCmd(req=link._next_id("r"), cmd="npc_hit", npc=defender, by=attacker), 5,
-    )
-    return response.value or {}, selected
+    command = DebugCmd(req=link._next_id("r"), cmd="npc_hit", npc=defender, by=attacker)
+    notified = False
+
+    def publish(value: Any) -> None:
+        nonlocal notified
+        if (
+            on_hit is not None and not notified and isinstance(value, dict)
+            and type(value.get("game_ms")) is int
+        ):
+            notified = True
+            on_hit(value, selected)
+
+    def received(msg: GameMessage) -> None:
+        if isinstance(msg, Result) and msg.req == command.req and msg.ok:
+            # Result precedes post-H body packets on this WS. Arm the boundary now,
+            # before the receive loop can dispatch another frame without yielding.
+            publish(msg.value)
+
+    link.listeners.append(received)
+    try:
+        response = await link._request(command, 5)
+        publish(response.value)  # Also support links that return without dispatching Result.
+        return response.value or {}, selected
+    finally:
+        link.listeners.remove(received)
 
 
 def combat_shouts(log_file: Path, npc: str) -> list[int]:
@@ -1125,10 +1148,16 @@ async def fight_reactions(
                     with suppress_companion_defense(
                         talk.orders, CAVALORN, link, window_closed,
                     ) as check_closed:
+                        def arm_hit(proof: dict[str, Any], geometry: dict[str, Any]) -> None:
+                            nonlocal hit, selected
+                            hit, selected = proof["game_ms"], geometry
+                            check_closed()
+
                         link.raw_body_listeners.append(capture_hit)
                         try:
                             proof, selected = await stopped_companion_hit(
                                 link, trace, CAVALORN, bandit, stop_companion,
+                                on_hit=arm_hit,
                             )
                             hit = proof.get("game_ms")
                             log.info("fight_reactions guaranteed hit evidence=%s", proof)
