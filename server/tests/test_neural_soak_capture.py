@@ -152,6 +152,43 @@ async def test_refusals_are_not_double_counted_between_active_fight_and_summary(
     assert test.tracker.finish_wave(1) == [record]
 
 
+@pytest.mark.parametrize("poll_again", [False, True])
+async def test_completed_lease_between_polls_counts_as_capture(poll_again):
+    test = rig()
+    await test.tracker.poll(1, {"BANDIT"})
+    test.pilot.summaries.append(SimpleNamespace(
+        npc="BANDIT", lease=lease(), reason="target_down",
+        acquire_refusals=(("native_queue_busy", 2),),
+    ))
+    test.pilot.people.clear()  # The lease and fight are already gone on the next poll.
+    test.now[0] = .4
+    if poll_again:
+        await test.tracker.poll(1, {"BANDIT"})
+    record, = test.tracker.finish_wave(1)
+
+    assert not test.pilot.fights and not test.link.body_leases
+    assert test.tracker.eligible == test.tracker.captured == {(1, "BANDIT")}
+    assert record["status"] == "captured" and record["miss_reason"] is None
+    assert record["end_reasons"] == {"target_down": 1}
+    assert record["acquire_refusals"] == {"native_queue_busy": 2}
+    assert record["capture_delay_s"] == record["window_s"] == .4
+    assert test.tracker.finish_wave(1) == [record]
+
+
+async def test_completed_lease_does_not_turn_an_excluded_actor_into_a_capture():
+    test = rig(values=(7, 1, 1, 0, 0))
+    await test.tracker.poll(1, {"BANDIT"})
+    test.pilot.summaries.append(SimpleNamespace(
+        npc="BANDIT", lease=lease(), reason="target_down", acquire_refusals=(),
+    ))
+    test.now[0] = .4
+    record, = test.tracker.finish_wave(1)
+
+    assert not test.tracker.eligible and not test.tracker.captured
+    assert record["status"] == "excluded" and record["reason"] == "target_not_allowed"
+    assert record["capture_delay_s"] is None
+
+
 async def test_watch_refusal_and_acquire_window_have_explicit_miss_reasons():
     test = rig()
     await test.tracker.poll(1, {"BANDIT"})

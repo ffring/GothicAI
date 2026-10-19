@@ -118,6 +118,17 @@ class CaptureTracker:
         item.validated_at, item.validation_reason = now, reason
         return reason
 
+    def _mark_captured(self, item: _Candidate, now: float) -> None:
+        if not item.eligible or item.captured:
+            return
+        item.captured = True
+        self.captured.add((item.wave, item.npc))
+        # This is when evidence was observed, an upper bound on capture delay.
+        item.captured_at = now
+        if item.window_start is not None:
+            item.window_seconds += now - item.window_start
+            item.window_start = None
+
     def _evidence(self, wave: int) -> None:
         """Read cumulative refusal snapshots without draining the bounded pilot history."""
         candidates = {item.npc: item for item in self._candidates.values() if item.wave == wave}
@@ -164,6 +175,8 @@ class CaptureTracker:
             attempt.completed, attempt.reason = True, summary.reason
             for reason, count in summary.acquire_refusals:
                 attempt.refusals[reason] = max(attempt.refusals[reason], count)
+            if identity is not None:
+                self._mark_captured(item, self.clock())
 
     async def poll(self, wave: int, npcs: set[str]) -> None:
         if wave in self._finished:
@@ -205,13 +218,7 @@ class CaptureTracker:
                 lease = fight.lease if fight is not None else None
                 if (lease is not None and self.link.body_leases.get(lease.entity_id) == lease
                         and self._lease_waves.get(_lease_key(lease)) == wave):
-                    item.captured = True
-                    self.captured.add(key)
-                    if item.captured_at is None:
-                        item.captured_at = now
-                    if item.window_start is not None:
-                        item.window_seconds += now - item.window_start
-                        item.window_start = None
+                    self._mark_captured(item, now)
             elif item.window_start is not None:
                 item.window_seconds += now - item.window_start
                 item.window_start = None
