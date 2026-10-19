@@ -1,10 +1,14 @@
 """Replay files and bench scenes for filming recorded arena duels, on synthetic runner files."""
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
+
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1]/"body_replay_film.py"
 
@@ -71,3 +75,59 @@ def test_a_self_play_duel_replays_both_actors_in_accepted_order(tmp_path):
     assert replay["arena"]["opponent_owned"] is True
     assert [(c["step"], c["action_id"], c.get("actor", "primary")) for c in replay["commands"]] == [
         (1, 1, "primary"), (2, 6, "opponent"), (28, 6, "primary")]
+
+
+@pytest.mark.parametrize("platform,audio,expected", [("darwin", True, 0), ("darwin", False, 1), ("linux", False, 0)])
+def test_render_native_macos_with_game_audio_and_linux_xvfb(tmp_path, monkeypatch, platform, audio, expected):
+    spec = importlib.util.spec_from_file_location("body_replay_film", SCRIPT)
+    film = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(film)
+    monkeypatch.setattr(film.sys, "platform", platform)
+    for name in ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "LP_NUM_THREADS", "ALSOFT_DRIVERS", "DISPLAY", "WAYLAND_DISPLAY"):
+        monkeypatch.setenv(name, "inherited-linux-setting")
+    monkeypatch.setenv("TEMPEST_AUDIO_LOOPBACK", "0")
+    monkeypatch.setenv("OPENGOTHIC_PHYSICS_THREADS", "8")
+    monkeypatch.delenv("OPENGOTHIC_BENCH_ENCODER", raising=False)
+    folder = tmp_path/"p30-100000"
+    folder.mkdir()
+    (folder/"scene.bench").write_text("rec duel\nwait 1000\nstop\n")
+    # A silent rerun must fail even if the previous take left an audio file behind.
+    (folder/"duel.wav").write_bytes(b"old take")
+    save = tmp_path/"save.sav"
+    save.write_bytes(b"arena save")
+    args = SimpleNamespace(scenes=[folder], game=tmp_path/"Gothic2Notr", assets=tmp_path/"assets", save=save,
+                           size="1920x1080", threads=4, textures="", timeout_s=1800)
+    calls = []
+
+    def run(argv, *, cwd, env, stdout, stderr, timeout):
+        calls.append((argv, env))
+        assert cwd == folder/"run" and (cwd/"save_slot_1.sav").read_bytes() == b"arena save"
+        assert env["TEMPEST_WINDOW_SIZE"] == "1920x1080"
+        assert env["OPENGOTHIC_BENCH_REALTIME"] == "1"
+        assert env["OPENGOTHIC_BENCH"] == str(folder/"scene.bench")
+        assert env["OPENGOTHIC_BENCH_OUT"] == str(folder)
+        assert "DISPLAY" not in env and "WAYLAND_DISPLAY" not in env
+        if platform == "darwin":
+            assert argv[0] == str(args.game) and "xvfb-run" not in argv
+            assert not any(name in env for name in ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "LP_NUM_THREADS", "ALSOFT_DRIVERS"))
+            assert env["TEMPEST_AUDIO_LOOPBACK"] == "48000"
+            assert env["OPENGOTHIC_PHYSICS_THREADS"] == "0"
+            assert env["OPENGOTHIC_BENCH_ENCODER"] == "-c:v h264_videotoolbox -b:v 24M"
+            config = (cwd/"Gothic.ini").read_text()
+            assert "vidResIndex=2\n" in config
+            for setting in ("soundVolume=1", "musicVolume=0", "musicEnabled=0", "worldSounds=0"):
+                assert setting+"\n" in config
+        else:
+            assert argv[:7] == ["nice", "-n", "10", "xvfb-run", "-a", "-s", "-screen 0 1920x1080x24"]
+            assert env["VK_DRIVER_FILES"] == env["VK_ICD_FILENAMES"] == "/usr/share/vulkan/icd.d/lvp_icd.json"
+            assert env["LP_NUM_THREADS"] == "4" and env["ALSOFT_DRIVERS"] == "null"
+            assert not (cwd/"Gothic.ini").exists()
+        (folder/"replay.jsonl").write_text(json.dumps({"kind": "replay_end", "accepted": 10, "rejected": 0})+"\n")
+        (folder/"duel.mp4").write_bytes(b"video")
+        if audio:
+            (folder/"duel.wav").write_bytes(b"audio")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(film.subprocess, "run", run)
+    assert film.render(args) == expected
+    assert len(calls) == 1

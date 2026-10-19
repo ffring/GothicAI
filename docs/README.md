@@ -152,6 +152,7 @@
 | Бенч механики | `scripts/bench.sh <имя>` → `.bench/<имя>-<время>/` (видео, метрики, отчёт) |
 | Очередь Ryzen | `scripts/gq status`: три слота для `--display --display-shared`, `GQ_DISPLAY_SLOT`; старый `--display` и `--display-exclusive` берут все слоты. `TEMPEST_WINDOW_POS` разводит окна, `OPENGOTHIC_FPS_LOG=1` пишет FPS; [ресурсы и допуск](compute.md#очередь-gq), [порты и окна](ryzen.md), [проверка и приёмка](../reports/compute/2026-10-19-ryzen-three-windows/README.md) |
 | Общий кэш бинарников Ryzen | `scripts/ryzen.sh` использует `~/gothic-ai/engine-cache/` по хэшу исходников; `clean-cache` очищает старые записи, `RYZEN_WORKTREE` задаёт имя папки; [правила](ryzen.md) |
+| Съёмка записанных дуэлей | `scripts/body_replay_film.py prepare/render`: Mac Metal, `--size 1920x1080`, MP4 + звук боя WAV; Linux Xvfb/lavapipe; сверка `body_schedule_equivalence.py`, [описание](npc-body-control-plan.md) |
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |
 | Подписка тела под lease и с заявкой на захват | `gothic-body-watch-test` в `OpenGothic/tests/body_watch_test.cpp`, настоящие NPC без окна; правила — [`npc-body-api.md`](npc-body-api.md) |
