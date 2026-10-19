@@ -59,6 +59,7 @@ async def npc_deeds(
     original_cards, original_llm = service.cards, dialogue.llm
     original_gate, original_stage = rumors.gate, rumors.stage
     received: list[NpcDeed | NpcActResult | NpcIdle] = []
+    transfer_sight: dict[str, asyncio.Task[dict[str, Any]]] = {}
     body_states: dict[str, list[dict[str, Any]]] = {VINO: [], MALETH: []}
     symbols: dict[int, str] = {}
 
@@ -70,6 +71,30 @@ async def npc_deeds(
     def record(message: GameMessage) -> None:
         if isinstance(message, NpcDeed | NpcActResult | NpcIdle):
             received.append(message)
+        if isinstance(message, NpcDeed) and message.kind == "take_item":
+            transfer_sight[message.id] = asyncio.create_task(at_transfer(message))
+
+    async def at_transfer(deed: NpcDeed) -> dict[str, Any]:
+        # Read the real ray and poses on receipt, without turning anyone or delivering a perception.
+        # This distinguishes the opening location from the actor's earlier waypoint and heading.
+        witness = HILDA if deed.chest else LOBART
+        native = await link.story_eval(witness, [
+            ["call", "NPC_CANSEENPC", ["inst", "SELF"], ["inst", VINO]],
+            ["call", "NPC_CANSEENPCFREELOS", ["inst", "SELF"], ["inst", VINO]],
+            ["call", "NPC_GETDISTTONPC", ["inst", "SELF"], ["inst", VINO]],
+        ])
+        views = await link.npc_view([witness, VINO])
+        poses = {}
+        for npc in (witness, VINO):
+            snapshot = await link.snapshot(npc, fresh=True)
+            poses[npc] = {"pos": snapshot.npc.pos, "rot": snapshot.npc.rot}
+        detail = {
+            "witness": witness, "deed_position": deed.position.model_dump(),
+            "native_seen_free_los_distance": native,
+            "views": [view.model_dump() for view in views], "poses": poses,
+        }
+        log.info("npc_deeds %s transfer sight: %s", "chest" if deed.chest else "world", detail)
+        return detail
 
     def observe(packet: dict[str, Any]) -> None:
         for row in packet["observations"]:
@@ -117,6 +142,10 @@ async def npc_deeds(
         return await _until(finished, 30)
 
     async def place(npc: str, waypoint: str, **kw: Any) -> bool:
+        # Parked bodies are beyond native perception processing; only the active scene requires
+        # its callback. Their native state, posture, weapon and health are still checked.
+        if waypoint == parked:
+            kw.setdefault("require_perception_ready", False)
         ok, detail = await prepare_npc_pose(link, npc, waypoint, **kw)
         if not ok:
             check("pose", False, detail)
@@ -213,9 +242,31 @@ async def npc_deeds(
             return _logged(results)
         assert chest is not None
         item = next((i for i in chest.items if i.item == "ITMI_GOLD"), chest.items[0]).item
-        if not await place(VINO, HOUSE) or not await place(HILDA, WITNESS, face=VINO):
+        if not check("chest_endpoint", chest.waypoint in points, chest.waypoint):
             return _logged(results)
-        if not await visible("chest_witness_ready", HILDA, VINO):
+        assert chest.waypoint is not None
+        # The beds occlude the ray from INHOUSE_02 to this chest. Prepare Hilda in the same
+        # part of the room, first behind the future thief, keeping her clear of the opening.
+        # Prove the native ray there, then move only him back to the door. Her initialized
+        # state and heading stay intact while he walks and opens it natively.
+        if not await place(VINO, chest.waypoint):
+            return _logged(results)
+        witness_ready, attempts = False, []
+        for offset in (-300, 300, -450, 450):
+            posed, pose = await prepare_npc_pose(
+                link, HILDA, chest.waypoint, to=VINO, distance=offset, face=VINO,
+            )
+            line_of_sight: dict[str, Any] = {}
+            if posed:
+                witness_ready, line_of_sight = await wait_npc_visibility(link, HILDA, VINO)
+            attempt = {"offset": offset, "pose": pose, "visibility": line_of_sight}
+            attempts.append(attempt)
+            log.info("npc_deeds chest witness placement: %s", attempt)
+            if witness_ready:
+                break
+        if not check("chest_witness_ready", witness_ready, attempts):
+            return _logged(results)
+        if not await place(VINO, HOUSE):
             return _logged(results)
         owned_before = await count(VINO, item)
         prior = {str(f["id"]) for f in facts("npc_crime")}
@@ -225,13 +276,15 @@ async def npc_deeds(
         crime = deed_crime("theft", prior)
         cid = str(crime["id"]) if crime is not None else ""
         deeds = [m for m in received if isinstance(m, NpcDeed) and m.id == cid]
+        sight = await transfer_sight[cid] if cid in transfer_sight else None
         if not check(
             "chest_theft", crime is not None and crime.get("owner") == LOBART
             and crime.get("chest") == CHEST and crime.get("item") == item and crime.get("count") == 1
             and HILDA in crime.get("witnesses", []) and seen(cid) == set(crime.get("witnesses", []))
             and len(deeds) == 1 and deeds[0].culprit == VINO and await completed(take)
             and await count(VINO, item) == owned_before + 1,
-            {"crime": crime, "deeds": [d.model_dump() for d in deeds], "actions": receipts("steal")},
+            {"crime": crime, "deeds": [d.model_dump() for d in deeds], "actions": receipts("steal"),
+             "transfer_sight": sight},
         ):
             return _logged(results)
         knowledge = people.context(HILDA) or ""
@@ -315,6 +368,21 @@ async def npc_deeds(
             return _logged(results)
         if not check("owned_cup", await _until_async(native_drop, bool, 10), "native Lobart drop"):
             return _logged(results)
+        # The passive hero must not share the thief's capsule or obstruct the item approach.
+        # The adjacent road point keeps both active bodies near the hero without occupying their lane.
+        await link.debug("player_goto", waypoint=ROAD)
+        lane = await link.snapshot(VINO, fresh=True)
+        owner_pose = (await link.snapshot(LOBART, fresh=True)).npc
+        hero_clearance = {
+            npc: math.dist(lane.player.pos, position)
+            for npc, position in ((VINO, lane.npc.pos), (LOBART, owner_pose.pos))
+        } if lane.player is not None else {}
+        if not check(
+            "reclaim_lane_clear", bool(hero_clearance) and min(hero_clearance.values()) >= 700,
+            {"hero": lane.player.pos if lane.player is not None else None,
+             "thief": lane.npc.pos, "owner": owner_pose.pos, "hero_clearance": hero_clearance},
+        ):
+            return _logged(results)
         if not await visible("owner_witness_ready", LOBART, VINO):
             return _logged(results)
         if not await health("reclaim", {VINO: 10, LOBART: 1000}):
@@ -323,14 +391,38 @@ async def npc_deeds(
         prior = {str(f["id"]) for f in facts("npc_crime")}
         await link.body_watch([VINO], rate_hz=20)
         body_states[VINO].clear()
-        await link.npc_act(VINO, "steal", item=CUP, what=CUP, count=1, deed=True)
+        target = (await link.story_state(deed_target={
+            "npc": VINO, "item": CUP, "what": CUP, "count": 1, "deed": True,
+        })).get("deed_target", {})
+        if not check(
+            "world_target", target.get("owner") == LOBART and target.get("item") == CUP
+            and target.get("count") == 1 and not target.get("mission") and not target.get("error"), target,
+        ):
+            return _logged(results)
+        world_take = await link.npc_act(VINO, "steal", item=CUP, what=CUP, count=1, deed=True)
         await _until(lambda: deed_crime("theft", prior), 30)
         theft = deed_crime("theft", prior)
         tid = str(theft["id"]) if theft is not None else ""
+        sight = await transfer_sight[tid] if tid in transfer_sight else None
+        after_take = await link.snapshot(VINO, fresh=True)
+        world_detail = {
+            "crime": theft, "action": world_take, "preflight": target, "transfer_sight": sight,
+            "events": [
+                message.model_dump() for message in received
+                if (isinstance(message, NpcActResult) and message.id == world_take)
+                or (isinstance(message, NpcIdle) and message.act == world_take)
+            ],
+            "views": [view.model_dump() for view in await link.npc_view([VINO, LOBART])],
+            "npc_snapshot": after_take.npc.model_dump(),
+            "hero_snapshot": after_take.player.model_dump() if after_take.player is not None else None,
+            "thief_cups": [thief_cups, await count(VINO, CUP)],
+            "owner_cups": [owner_cups, await count(LOBART, CUP)],
+        }
+        log.info("npc_deeds world transfer: %s", world_detail)
         if not check(
             "world_theft", theft is not None and theft.get("owner") == LOBART
             and theft.get("item") == CUP and LOBART in theft.get("witnesses", [])
-            and seen(tid) == set(theft.get("witnesses", [])), theft,
+            and seen(tid) == set(theft.get("witnesses", [])), world_detail,
         ):
             return _logged(results)
         reclaimed = await _until(
@@ -378,6 +470,11 @@ async def npc_deeds(
         )
         return _logged(results)
     finally:
+        for pending in transfer_sight.values():
+            if not pending.done():
+                pending.cancel()
+        if transfer_sight:
+            await asyncio.gather(*transfer_sight.values(), return_exceptions=True)
         service.cards, dialogue.llm = original_cards, original_llm
         rumors.gate, rumors.stage = original_gate, original_stage
         try:

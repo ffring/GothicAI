@@ -154,6 +154,7 @@ async def prepare_npc_pose(
     face: str | None = None,
     to: str | None = None,
     distance: int = 300,
+    require_perception_ready: bool = True,
     timeout: float = 15,
 ) -> tuple[bool, dict[str, Any]]:
     """Place a free, standing actor and wait for its native state, perception and pose.
@@ -161,6 +162,7 @@ async def prepare_npc_pose(
     A relative placement happens only after ZS_STAND_WP initializes. It clears the old walk while
     keeping that activity; issuing turn_to as a second soft action would replace it. Use one road
     waypoint for both actors when the later AI_GotoNpc must stay on a connected stretch.
+    Distant parking may skip perception initialization until the actor returns near the hero.
     """
     detail: dict[str, Any] = {"npc": npc, "waypoint": waypoint}
     receipts: list[NpcActResult | NpcIdle] = []
@@ -176,7 +178,7 @@ async def prepare_npc_pose(
         return (
             view is not None
             and view.state == "ZS_STAND_WP"
-            and view.theft_ready is True
+            and (not require_perception_ready or view.theft_ready is True)
             and view.body == "stand"
             and (not unarmed or view.weapon == "none")
             and view.hp > 0
