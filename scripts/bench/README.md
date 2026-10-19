@@ -293,7 +293,9 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam hold`, `cam look <height>`, `cam game` | `fixed` stays where it is and turns after the player; `hold` keeps the frame as it is (a scene the player may fall out of); `game` is the game's camera as the player has it, without the clip of `view clean` |
 | `cam arrow [dist 600] [height 40] [side 1\|-1] [ahead 80]` | from the side of the newest arrow's way (`overlay trail` records it), `ahead` cm in front of it, kept 1.2 m over the ground; from the hero until an arrow flies. The arrow's drop reads only from the side |
 | `slowmo <k>` | the game runs k times slower than the video (1: normal, up to 20): a smaller game step per recorded frame. The game's sound is recorded as silence while slowed, so it stays in step with the picture |
-| `track <npc\|off> [head\|body]` | each recorded frame, where the npc is on the picture: `events.jsonl` kind `track` with `x y` (the head, or the trunk with `body`), `hx hy`, `bx by`, `lx ly` (the head, the trunk, the legs: the limb capsules below the knees) in pixels of the frame, and `w h`. For labels that follow the npc in a cut |
+| `track <npc[,npc...]\|off> [head\|body]` | each recorded frame, where each named npc is on the picture: `events.jsonl` kind `track` with `npc`, `x y` (the head, or the trunk with `body`), `hx hy`, `bx by`, `lx ly` (the head, the trunk, the legs: the limb capsules below the knees) in pixels of the frame, and `w h`. Comma-separated names share the recording; each keeps its own track. For labels that follow the npc in a cut |
+| `bodylive on\|off` | opt-in instrumentation of ordinary realtime body control (off by default): `body_live_control` wraps controller events, `body_live_sample` records each tracked npc's HP and target HP per captured frame. Does not acquire a lease or start a policy; requires body arena/replay off |
+| `bodylive wait /absolute/file [timeout ms]` | pause scenario commands until the file exists while the normal bridge keeps running; default timeout 120000 ms. Used to finish NPC preparation before recording |
 | `view clean [margin]\|nopfx\|full` | `clean` clips away everything closer to the camera than the subject minus `margin` (default 100 cm): trees and bushes in between; particles are hidden. The ground right in front of the camera is clipped too (white) |
 | `view hide static movable morph pfx animated` | hide draw types (debugging only: static and movable objects share draw commands, hiding them hides parts of creatures too) |
 | `overlay on\|off`, `overlay zoom on\|off`, `overlay bright on\|off` | `bright` stretches dark images (forests, interiors) |
@@ -412,6 +414,52 @@ checkout), `NO_BUILD=1`, `TIMEOUT` (seconds, default 300), `KEEP=1`, `OPENGOTHIC
 textures; by default those of `scripts/hd-textures.sh` when they have been made, as the launcher does;
 empty: the game's own), `SOUND` and `MUSIC` (volumes 0..1, default 0; with `TEMPEST_AUDIO_LOOPBACK=48000` a
 segment's sound goes into `<segment>.wav`).
+
+## Live P30 capture on Mac
+
+`scripts/body_live_capture.py` starts a local game with the production `GameServer` and
+`BodyPilot`, using `[llm].body_url` from the usual launcher settings. It uses the existing
+remote P30 service without starting or changing it. `LLM`, `ASR` and `TTS` must be `fake`;
+no clients for these models are created. Build the engine first. Each capture checks
+`pgrep -fl Gothic2Notr` immediately before launch and refuses to share the Mac with another game.
+
+```bash
+LLM=fake ASR=fake TTS=fake uv run --project server python scripts/body_live_capture.py \
+  live-takeover --output "$HOME/.local/share/gothic-ai/explain/combat-ai/footage/live-takeover"
+```
+
+Run each scene separately into an empty absolute output directory: `live-takeover` (one
+bandit and the hero answering with player attack input), `live-group` (three bandits), or
+`live-passive` (one bandit, no hero attacks). These are native fights in the normal world;
+the pilot must obtain the leases itself. The hero has immortality and 100000 HP; each bandit
+has 1800 HP. Default duration is 25 seconds (`--duration` accepts 20–30). Capture uses Metal,
+1920×1080 at 30 FPS, game sound at full volume, music and world ambience off
+(`SOUND=1 MUSIC=0 WORLD_SOUNDS=0`), and a separate 48 kHz `shot.wav` beside `shot.mp4`.
+The folder also contains the scene, engine events, frame metrics and `server.log`.
+The readiness file releases scene preparation first; the pilot starts after the recording's
+`rec` event, so the fixture's native `fight` commands cannot revoke an earlier lease.
+
+Export labels after the pilot has finished and written its `neural-body end` line:
+
+```bash
+uv run --project body-service python scripts/body_live_film.py labels /absolute/take \
+  --npc DIR_NPC_LIVE_BANDIT_1 --min-decisions 10 --output /absolute/take/actions.json
+```
+
+For `live-group`, export each `DIR_NPC_LIVE_BANDIT_1`, `_2`, `_3` to a separate
+`actions-<npc>.json`, each with `--min-decisions 10`. For `live-passive`, use
+`--min-decisions 5 --consecutive-wait 5` to require five consecutive `wait_200` choices.
+The JSON schema matches replay labels: `fps`, `frames`, `size`, `track`, `hp`, `actions`.
+Head coordinates are in captured pixels (`null` when outside the frame); HP is sampled per
+frame. Each action has `frame`, `t`, `action`, `id`, mapped to the engine's capture frame;
+`t` is that frame's video timestamp.
+
+Live labels describe accepted P30 choices, including `continue` and commands cancelled
+before execution. They do not assert that an animation started; replay labels use `started`
+instead. The exporter requires one lease per NPC, complete per-frame samples, and exactly
+one end summary per NPC. It reconciles all accepted choices in the session with the pilot's
+`decisions=` count, then exports only choices inside `shot`. It prints both counts and the
+longest consecutive `wait_200` run. Keep recordings, JSON and preview PNGs outside git.
 
 For the Bullet → Jolt stage 1 oracle, `physics dump [count=100000] [seed=73013] [input.tsv]`
 casts that many rays **and** spheres through `DynamicWorld` in the loaded world. It writes
