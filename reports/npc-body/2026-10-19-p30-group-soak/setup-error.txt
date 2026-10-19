@@ -1,6 +1,0 @@
-Запуск 20261019T035817Z-65522; до первой wave_start, lease и решений P30 — 0.
-Последний sample: 33,194 с.
-
-server.log:25: 07:08:48 I gothic_ai.chronicle: fact: {'fact': 'died', 'npc': 'DIR_NPC_SOAK_COMPANION', 'name': 'Спутник-мечник', 'tag': None, 'killer': ''}
-server.log:29: 07:08:50 E gothic_ai: scenario neural-soak failed
-server.log:40: gothic_ai.game.GameError: npc not found or busy
