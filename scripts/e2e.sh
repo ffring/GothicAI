@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
+#   memprobe: Linux engine RSS/status after each step and smaps groups after each cycle;
+#       MEMPROBE_PHASES=wave,save,load,spawn,teleport, MEMPROBE_CYCLES=8; LLM=fake, no body URL
 #   crime_meet: save 1, native home eviction and a brave victim's Amends approach/payment;
 #       LLM=chatgpt runs only the short compensation scene with the real model
 #   m0: takes Xardas over, walks him around and returns him to his routine
@@ -307,6 +309,8 @@
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
 #
 #   SCENARIO=m3 LLM=fake ASR=voxtral GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e.sh
+# GAME_EXTRA_ENV adds game-only environment assignments, one NAME=value per line.
+# Example: GAME_EXTRA_ENV=$'LD_PRELOAD=/path/libjemalloc.so.2\nMALLOC_CONF=prof:true'
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -452,6 +456,16 @@ if [ "$(uname -s)" = Darwin ]; then
   until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 fi
 GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT")
+if [[ -n "${GAME_EXTRA_ENV:-}" ]]; then
+  while IFS= read -r assignment; do
+    [[ -n "$assignment" ]] || continue
+    [[ "$assignment" =~ ^[a-zA-Z_][a-zA-Z0-9_]*= ]] || {
+      echo 'GAME_EXTRA_ENV requires one NAME=value assignment per line' >&2
+      exit 2
+    }
+    GAME_ENV+=("$assignment")
+  done <<<"$GAME_EXTRA_ENV"
+fi
 if [ "$SCENARIO" = "trace" ] || [ "$SCENARIO" = "broken" ] || [ "$SCENARIO" = "trace_crime" ]; then
   GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/$SCENARIO-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
     "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1")
@@ -467,6 +481,7 @@ if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
 fi
 (cd "$LOG_DIR" && exec env "${GAME_ENV[@]}" "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
+printf '%s\n' "$GAME" >"$LOG_DIR/game.pid"
 
 for _ in $(seq 1 "$TIMEOUT"); do
   kill -0 "$SRV" 2>/dev/null || break
