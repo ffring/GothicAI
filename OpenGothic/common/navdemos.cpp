@@ -425,19 +425,50 @@ void traceTransitionFrame(Episode& ep,World& world,uint64_t elapsed) {
   const auto& n=*ep.npc;const auto& link=ep.observedTransition;
   const auto position=NpcKeys::physicalPosition(n);
   const bool support=NavTransitions::supported(world,*ep.npc);
-  const bool near=(position-cm(link.end)).length()<=60.f;
+  const auto& mesh=NavBench::navigationMesh(world);
+  const auto sides=mesh.transitionSides(link.start,link.end,meters(position));
+  const auto sourceOffset=position-cm(link.start),endOffset=position-cm(link.end);
   NavMesh::Path landing;
-  if(support && near)
-    landing=NavBench::navigationMesh(world).findPath(meters(position),link.end,false);
+  if(support) {
+    if(sides.current.known && sides.end.known && sides.current.component!=sides.end.component) {
+      // The memoized ground topology proves this path is disconnected. Avoid
+      // flooding a whole island again at every supported physical tick.
+      landing.reason="disconnected";landing.startSnapDistance=sides.current.snapDistance;
+      landing.endSnapDistance=sides.end.snapDistance;
+    }
+    else landing=mesh.findPath(meters(position),link.end,false);
+  }
   auto& out=ep.transitionFrames;
   out<<"{\"elapsed_ms\":"<<elapsed<<",\"transition_id\":"<<link.id
      <<",\"type\":"<<std::quoted(transitionName(link.type))<<",\"position_cm\":";
   vector(out,position);
+  out<<",\"cv_active\":"<<n.characterVirtualActive()
+     <<",\"source_polygon\":"<<sides.source.polygon<<",\"end_polygon\":"<<sides.end.polygon
+     <<",\"current_polygon\":"<<sides.current.polygon
+     <<",\"source_component\":"<<sides.source.component<<",\"end_component\":"<<sides.end.component
+     <<",\"current_component\":"<<sides.current.component
+     <<",\"source_ground_known\":"<<sides.source.known<<",\"end_ground_known\":"<<sides.end.known
+     <<",\"current_ground_known\":"<<sides.current.known
+     <<",\"side_method\":"<<std::quoted(sides.method)<<",\"takeoff_side\":"<<sides.takeoffSide
+     <<",\"landing_side\":"<<sides.landingSide<<",\"source_position_cm\":";
+  vector(out,cm(link.start));out<<",\"end_position_cm\":";vector(out,cm(link.end));
+  out<<",\"takeoff_xz_distance_cm\":"<<std::hypot(sourceOffset.x,sourceOffset.z)
+     <<",\"takeoff_y_offset_cm\":"<<sourceOffset.y
+     <<",\"landing_xz_distance_cm\":"<<std::hypot(endOffset.x,endOffset.z)
+     <<",\"landing_y_offset_cm\":"<<endOffset.y
+     <<",\"source_ground_snap_m\":"<<sides.source.snapDistance
+     <<",\"end_ground_snap_m\":"<<sides.end.snapDistance
+     <<",\"current_ground_snap_m\":"<<sides.current.snapDistance
+     <<",\"current_ground_xz_offset_cm\":"<<sides.current.horizontalDistance*100.f
+     <<",\"current_ground_y_offset_cm\":"<<sides.current.verticalOffset*100.f
+     <<",\"current_ground_position_cm\":";
+  if(sides.current.known) vector(out,cm(sides.current.snapped));else out<<"null";
   out<<",\"native_jump\":"<<(n.isJump() || n.isJumpAnim())
      <<",\"native_climb\":"<<(n.bodyStateMasked()==BS_CLIMB)
      <<",\"in_air\":"<<n.isInAir()<<",\"falling\":"<<n.isFalling()
      <<",\"supported\":"<<support<<",\"landing_path_complete\":"<<landing.complete
-     <<",\"landing_path_m\":"<<landing.length<<",\"landing_snap_m\":"<<landing.startSnapDistance<<"}\n";
+     <<",\"landing_path_m\":"<<landing.length<<",\"landing_snap_m\":"<<landing.startSnapDistance
+     <<",\"landing_path_reason\":"<<std::quoted(landing.reason)<<"}\n";
   if(!out)throw std::runtime_error("navdemos transition-frames write failed");
 }
 void observe(Episode& ep,World& w) {

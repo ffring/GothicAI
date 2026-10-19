@@ -33,6 +33,7 @@ import time
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = Path.home() / "gothic-ai/nav-demos-jumps"
 TYPES = ("jump", "climb", "drop")
+SUCCESS_CRITERION = "demo_goal_action_landing_side_v1"
 LIMIT_MS = 240000
 # Reserve above 2401 * 173838 uncompressed NAVDEMO bytes, with room for gzip
 # overhead, trajectory/actions, teacher paths and runner diagnostics. The usual
@@ -239,11 +240,112 @@ def transition_evidence_legacy(route, trace, samples):
     return evidence, "landing_not_witnessed" if evidence["native_dynamics"] else "native_action_not_witnessed"
 
 
-def transition_evidence(route, trace, samples=None, frames=None):
-    """Use the native probe's action and landing criteria on physical-tick data.
+def _action_complete(frame):
+    return not any(frame.get(name) for name in ("native_jump", "native_climb", "in_air", "falling"))
 
-    The 100ms NAVDEMO fallback is diagnostic only; it cannot qualify a new
-    recording. Native animation flags, not height alone, witness jump/climb.
+
+def _side_reference(frame):
+    """Freeze scheduled-link ids; current ids in later frames remain global."""
+    result = {name: frame.get(name, 0) for name in
+              ("source_polygon", "end_polygon", "source_component", "end_component")}
+    if result["source_component"] and result["end_component"] and result["source_component"] != result["end_component"]:
+        result["method"] = "component"
+    elif result["source_polygon"] and result["end_polygon"] and result["source_polygon"] != result["end_polygon"]:
+        result["method"] = "polygon"
+    else:
+        result["method"] = "ambiguous"
+    return result
+
+
+def _frame_side(frame, reference):
+    method = reference["method"]
+    if method == "ambiguous":
+        return "ambiguous"
+    current = frame.get("current_" + method, 0)
+    if not current:
+        return "unknown"
+    if current == reference["end_" + method]:
+        return "landing"
+    if current == reference["source_" + method]:
+        return "takeoff"
+    return "other"
+
+
+def _landing_snapshot(frame, source, end, reference):
+    position = frame["position_cm"]
+    return dict(elapsed_ms=frame["elapsed_ms"], position_cm=list(position),
+                landing_xz_distance_cm=math.hypot(position[0] - end[0], position[2] - end[2]),
+                landing_y_offset_cm=position[1] - end[1], distance_3d_cm=math.dist(position, end),
+                takeoff_xz_distance_cm=math.hypot(position[0] - source[0], position[2] - source[2]),
+                takeoff_y_offset_cm=position[1] - source[1],
+                supported=frame.get("supported"), cv_active=frame.get("cv_active"),
+                landing_snap_m=frame.get("landing_snap_m"), landing_path_m=frame.get("landing_path_m"),
+                landing_path_complete=frame.get("landing_path_complete"),
+                current_polygon=frame.get("current_polygon", 0), current_component=frame.get("current_component", 0),
+                side=_frame_side(frame, reference), action_complete=_action_complete(frame))
+
+
+def _support_durations(frames, event_ms):
+    """Integrate held frame flags until first support; support spans use samples.
+
+    A continuous supported span is last-supported minus first-supported time,
+    matching the probe's stable-since clock, without assuming support persisted
+    into a later unsupported tick. Durations are observational metrics only.
+    """
+    supported = [frame for frame in frames if frame.get("supported")]
+    first = supported[0]["elapsed_ms"] if supported else None
+    end = first if first is not None else frames[-1]["elapsed_ms"] if frames else event_ms
+    durations = dict(in_air_until_first_support_ms=0, falling_until_first_support_ms=0,
+                     air_or_falling_until_first_support_ms=0, unsupported_until_first_support_ms=0)
+    for current, following in zip(frames, frames[1:]):
+        dt = max(0, min(following["elapsed_ms"], end) - max(current["elapsed_ms"], event_ms))
+        for name, active in (("in_air_until_first_support_ms", current.get("in_air")),
+                             ("falling_until_first_support_ms", current.get("falling")),
+                             ("air_or_falling_until_first_support_ms", current.get("in_air") or current.get("falling")),
+                             ("unsupported_until_first_support_ms", not current.get("supported"))):
+            if active:
+                durations[name] += dt
+    longest, began = 0, None
+    for frame in frames:
+        if frame.get("supported"):
+            if began is None:
+                began = frame["elapsed_ms"]
+            longest = max(longest, frame["elapsed_ms"] - began)
+        else:
+            began = None
+    return dict(**durations, first_support_observed=first is not None,
+                time_to_first_support_ms=first - event_ms if first is not None else None,
+                support_duration_window_end_ms=end, max_continuous_support_ms=longest,
+                supported_frames_after_event=len(supported),
+                supported_cv_frames_after_event=sum(bool(frame.get("cv_active")) for frame in supported))
+
+
+def _demo_landing_metrics(frames, event_ms, origin, source, end, reference):
+    after = [frame for frame in frames if frame["elapsed_ms"] >= event_ms]
+    snapshots = [_landing_snapshot(frame, source, end, reference) for frame in after]
+    supported = [snapshot for snapshot in snapshots if snapshot["supported"]]
+    complete = [snapshot for snapshot in snapshots if snapshot["action_complete"]]
+    landings = [snapshot for snapshot in complete if snapshot["side"] == "landing"]
+    first_landing = landings[0] if landings else None
+    returned = [snapshot["elapsed_ms"] for snapshot in snapshots
+                if first_landing and snapshot["elapsed_ms"] > first_landing["elapsed_ms"] and snapshot["side"] == "takeoff"]
+    return dict(source_position_cm=list(source), end_position_cm=list(end),
+                takeoff_position_cm=list(origin), side_reference=reference,
+                first_support_after_event=supported[0] if supported else None,
+                nearest_supported=min(supported, key=lambda row: row["distance_3d_cm"]) if supported else None,
+                first_completed_after_event=complete[0] if complete else None,
+                first_completed_landing=first_landing,
+                final_pose=snapshots[-1] if snapshots else None,
+                returned_to_takeoff=bool(returned), return_times_ms=returned,
+                **_support_durations(after, event_ms))
+
+
+def transition_evidence(route, trace, samples=None, frames=None):
+    """Witness a native action and completed arrival on the landing mesh side.
+
+    Goal success is checked by assess_episode(). The link probe's support,
+    radius, snap and local-path thresholds are recorded as metrics only. A new
+    teacher hint cannot change the frozen source/end mesh ids for this action.
     """
     if frames is None:
         evidence, failure = transition_evidence_legacy(route, trace, samples)
@@ -255,20 +357,23 @@ def transition_evidence(route, trace, samples=None, frames=None):
     active = [row for row in planned if row.get("active_transition_id") == identifier and
               row.get("active_transition_type") == kind and row.get("on_transition") is True]
     presses = active if kind == "drop" else [row for row in active if bool(row.get(kind))]
-    evidence = dict(source="transition_frames", probe_equivalent=True,
+    evidence = dict(source="transition_frames", success_criterion=SUCCESS_CRITERION, probe_equivalent=False,
                     planned=bool(planned), on_transition=bool(active), action=bool(presses),
                     native_dynamics=False, landing=False, event_ms=None, landing_ms=None,
-                    takeoff_position_cm=None, max_rise_cm=0., max_drop_cm=0.)
+                    takeoff_position_cm=None, max_rise_cm=0., max_drop_cm=0., landing_metrics={})
     if not planned:
         return evidence, "scheduled_transition_not_in_actual_path"
     if not active:
         return evidence, "approach_never_on_transition"
     if not presses:
         return evidence, "teacher_never_pressed_" + kind
-    end = [value*100 for value in route["transition_end_m"]]
     ordered = sorted(frames, key=lambda row: row["elapsed_ms"])
     if not ordered:
         return evidence, "physical_transition_frames_empty"
+    required = ("source_polygon", "end_polygon", "current_polygon", "source_component",
+                "end_component", "current_component", "cv_active")
+    if any(any(name not in frame for name in required) for frame in ordered):
+        return evidence, "transition_topology_or_cv_fields_missing"
     # A later on_transition trace must not reset a drop baseline after a jump.
     if kind == "drop":
         presses = presses[:1]
@@ -282,44 +387,58 @@ def transition_evidence(route, trace, samples=None, frames=None):
         if len(origin) != 3 or not all(math.isfinite(value) for value in origin):
             raise ValueError("Invalid physical takeoff position in teacher trace")
         evidence["takeoff_position_cm"] = list(origin)
-        max_rise, max_drop = 0., 0.
-        saw_jump = saw_climb = saw_air = witnessed = contaminated_drop = False
+        reference = _side_reference(exact[0])
+        source = exact[0].get("source_position_cm", [value*100 for value in route["transition_start_m"]])
+        end = exact[0].get("end_position_cm", [value*100 for value in route["transition_end_m"]])
+        max_rise = max_drop = 0.
+        saw_jump = saw_climb = saw_air = False
         for frame in relevant:
             elapsed = frame["elapsed_ms"]
-            if kind == "drop" and not witnessed:
-                # Check all teacher decisions, including traces that leave this id.
-                contaminated_drop |= any(began <= row["elapsed_ms"] <= elapsed and
-                                         (row.get("jump") or row.get("climb")) for row in trace)
+            if kind == "drop":
+                contaminated = any(began <= row["elapsed_ms"] <= elapsed and
+                                   (row.get("jump") or row.get("climb")) for row in trace)
                 if samples is not None:
-                    contaminated_drop |= any(began <= moment <= elapsed and (jump or climb)
-                                             for moment, jump, climb in zip(samples[0], samples[3], samples[4]))
-                if contaminated_drop:
+                    contaminated |= any(began <= moment <= elapsed and (jump or climb)
+                                        for moment, jump, climb in zip(samples[0], samples[3], samples[4]))
+                if contaminated:
                     return evidence, "drop_contaminated_by_jump_or_climb"
-            if frame.get("transition_id") == identifier and frame.get("type") == kind:
-                position = frame["position_cm"]
-                rise, drop = position[1] - origin[1], origin[1] - position[1]
-                max_rise, max_drop = max(max_rise, rise), max(max_drop, drop)
-                saw_jump |= bool(frame.get("native_jump"))
-                saw_climb |= bool(frame.get("native_climb"))
-                saw_air |= bool(frame.get("in_air") or frame.get("falling"))
-                physical = (saw_jump and (saw_air or max_rise > 10) if kind == "jump" else
-                            saw_climb and max_rise > 15 if kind == "climb" else
-                            saw_air and max_drop > 20)
-                if physical and not witnessed:
-                    witnessed = True
-                    evidence.update(native_dynamics=True, event_ms=elapsed,
-                                    max_rise_cm=max_rise, max_drop_cm=max_drop)
-            # The physical-tick writer retains the last active transition id.
-            # Never borrow another transition's landing.
-            if (witnessed and frame.get("transition_id") == identifier and frame.get("type") == kind and
-                    frame.get("supported") is True and math.dist(frame["position_cm"], end) <= 60 and
-                    frame.get("landing_path_complete") is True and
-                    0 <= frame.get("landing_path_m", math.inf) <= 1.5 and
-                    0 <= frame.get("landing_snap_m", math.inf) <= .25):
-                evidence.update(landing=True, landing_ms=elapsed,
-                                max_rise_cm=max_rise, max_drop_cm=max_drop)
-                return evidence, None
-    return evidence, "landing_not_witnessed" if evidence["native_dynamics"] else "native_action_not_witnessed"
+            if frame.get("transition_id") != identifier or frame.get("type") != kind:
+                continue
+            position = frame["position_cm"]
+            max_rise, max_drop = max(max_rise, position[1] - origin[1]), max(max_drop, origin[1] - position[1])
+            saw_jump |= bool(frame.get("native_jump"))
+            saw_climb |= bool(frame.get("native_climb"))
+            saw_air |= bool(frame.get("in_air") or frame.get("falling"))
+            evidence.update(max_rise_cm=max_rise, max_drop_cm=max_drop)
+            physical = (saw_jump and (saw_air or max_rise > 10) if kind == "jump" else
+                        saw_climb if kind == "climb" else
+                        saw_air and max_drop > 20)
+            if not physical:
+                continue
+            metrics = _demo_landing_metrics(ordered, elapsed, origin, source, end, reference)
+            # Peak excursion until the first completed pose belongs to this action;
+            # subsequent walking does not enlarge the reported jump/climb height.
+            first_complete = metrics["first_completed_after_event"]
+            until = first_complete["elapsed_ms"] if first_complete else ordered[-1]["elapsed_ms"]
+            action_positions = [row["position_cm"] for row in ordered if began <= row["elapsed_ms"] <= until]
+            metrics["max_rise_cm"] = max(max(0., point[1] - origin[1]) for point in action_positions)
+            metrics["max_drop_cm"] = max(max(0., origin[1] - point[1]) for point in action_positions)
+            first_landing, final = metrics["first_completed_landing"], metrics["final_pose"]
+            evidence.update(native_dynamics=True, event_ms=elapsed, landing=bool(first_landing),
+                            landing_ms=first_landing["elapsed_ms"] if first_landing else None,
+                            max_rise_cm=metrics["max_rise_cm"], max_drop_cm=metrics["max_drop_cm"], landing_metrics=metrics)
+            if reference["method"] == "ambiguous":
+                return evidence, "landing_side_ambiguous"
+            if not first_landing:
+                return evidence, "completed_landing_side_not_witnessed"
+            if metrics["returned_to_takeoff"]:
+                return evidence, "returned_to_takeoff_after_landing"
+            if final is None or not final["action_complete"]:
+                return evidence, "final_action_not_complete"
+            if final["side"] != "landing":
+                return evidence, "final_pose_not_on_landing_side"
+            return evidence, None
+    return evidence, "native_action_not_witnessed"
 
 
 def assess_episode(directory, route, require_frames=True):
@@ -339,18 +458,16 @@ def assess_episode(directory, route, require_frames=True):
     frames_path = directory / "transition-frames.jsonl"
     frames = json_rows(frames_path) if frames_path.is_file() else None
     evidence, failure = transition_evidence(route, json_rows(directory / "teacher-paths.jsonl"), samples, frames)
-    if not evidence["probe_equivalent"] and failure is None:
+    if evidence.get("success_criterion") != SUCCESS_CRITERION and failure is None:
         failure = "diagnostic_only_missing_transition_frames"
     if not failure and episode.get("success") is not True:
         failure = "goal_not_reached:" + episode.get("failure", "unspecified")
     initial_hp, final_hp = episode.get("initial_state", {}).get("hp"), episode.get("final_hp")
-    if not failure and (initial_hp is None or final_hp is None):
-        failure = "health_evidence_missing"
-    if not failure and (final_hp < initial_hp or episode.get("final_down") or episode.get("final_dead")):
-        failure = "health_lost_or_actor_down"
     episode.update({key: route[key] for key in ("index", "label", "start", "goal", "split", "site_id", "transition_id", "type", "region")})
     episode.update(route_index=route["index"], episode=str(directory), transition_evidence=evidence,
-                   transition_success=failure is None, qualifying_success=failure is None, transition_failure=failure or "",
+                   transition_success=failure is None, qualifying_success=failure is None, demo_success=failure is None,
+                   success_criterion=SUCCESS_CRITERION, transition_failure=failure or "",
+                   landing_metrics=evidence.get("landing_metrics", {}), health_metrics=dict(initial_hp=initial_hp, final_hp=final_hp),
                    planned_transition_ids=route.get("planned_transition_ids", [route["transition_id"]]),
                    requested_physics="cv", collection_limit_ms=LIMIT_MS,
                    action_decisions=dict(jump=sum(bool(value) for value in samples[3]), climb=sum(bool(value) for value in samples[4])))
@@ -377,6 +494,8 @@ def existing_episodes(output, routes, enforce_pilot=True):
             expected = index if key == "route_index" else by_index[index][key]
             if episode.get(key) != expected:
                 raise RuntimeError(f"Changed/unchecked previous attempt {directory}: {key}")
+        if episode.get("success_criterion") != SUCCESS_CRITERION:
+            raise RuntimeError(f"Previous attempt uses another success criterion: {directory}")
         if episode.get("collection_stop"):
             raise RuntimeError(episode["collection_stop"])
         if type(episode.get("transition_success")) is not bool:
@@ -398,7 +517,7 @@ def scenario_commands(args, route=None):
 def finish_collection(episodes, total_routes, complete, require_70pct=False):
     by_type = counts(episodes)
     passed = all(value["target_70pct"] for value in by_type.values())
-    result = dict(complete=complete, attempts=len(episodes), routes=total_routes,
+    result = dict(complete=complete, attempts=len(episodes), routes=total_routes, success_criterion=SUCCESS_CRITERION,
                   target_70pct_passed=passed, by_type=by_type)
     print(json.dumps(result, ensure_ascii=False), flush=True)
     if require_70pct and not passed:

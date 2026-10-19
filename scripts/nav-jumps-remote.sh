@@ -2,7 +2,7 @@
 # Submit one bounded phase and return immediately. No training or PPO paths.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover|routes|record-pilot [1|2]|record}"
+stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover|routes|record-pilot [1|2]|demo-pilot|record}"
 attempt="${2:-1}"
 export GQ_OWNER=nav-jumps
 host=ryzen
@@ -22,16 +22,17 @@ import json
 from pathlib import Path
 import sys
 root=Path(sys.argv[1])
-pilots=[root/f"repair-{attempt}" for attempt in (2,1) if (root/f"repair-{attempt}").exists()]
-if not pilots:
-    raise RuntimeError("Run the repaired teacher on the original 30 routes first")
-pilot=pilots[0]
+pilot=root/"demo-check"
+if not pilot.is_dir():
+    raise RuntimeError("Run demo-pilot with the demonstration success criterion first")
 episodes=[json.loads(path.read_text()) for path in (pilot/"episodes").glob("*/episode.json")]
 if len(episodes)!=30 or Counter(row["type"] for row in episodes)!={"jump":10,"climb":10,"drop":10}:
     raise RuntimeError("Pilot must finish all original 30 routes")
 original=[json.loads(path.read_text()) for path in (root/"episodes").glob("*/episode.json")]
 if {row["route_index"] for row in episodes}!={row["route_index"] for row in original}:
     raise RuntimeError("Pilot route indices differ from the original stopped 30")
+if any(row.get("success_criterion")!="demo_goal_action_landing_side_v1" for row in episodes):
+    raise RuntimeError("Pilot used an obsolete link-probe success criterion")
 for kind in ("jump","climb","drop"):
     if sum(row.get("transition_success") is True for row in episodes if row["type"]==kind)<7:
         raise RuntimeError(f"Pilot {kind} below 70%; full recording forbidden")
@@ -49,7 +50,7 @@ PY
 RECORD
 }
 case "$stage" in
-  build|bootstrap|pilot|record-pilot)
+  build|bootstrap|pilot|record-pilot|demo-pilot)
     if [[ "$stage" == record-pilot && "$attempt" != 1 && "$attempt" != 2 ]]; then
       echo 'record-pilot attempt must be 1 or 2' >&2; exit 2
     fi
@@ -82,7 +83,9 @@ if [[ "${1:-}" == record-pilot ]]; then targets=(Gothic2Notr gothic-body-runner 
 cmake --build "$task/build" --target "${targets[@]}" --parallel 3
 cd "$task/source"
 tests=(scripts/tests/test_nav_jumps.py)
-if [[ "${1:-}" == record-pilot ]]; then
+if [[ "${1:-}" == demo-pilot ]]; then
+  tests=(scripts/tests/test_nav_jump_record.py)
+elif [[ "${1:-}" == record-pilot ]]; then
   tests=(scripts/tests/test_nav_jump_record.py scripts/tests/test_nav_demos.py)
 elif [[ "${1:-}" != pilot ]]; then
   tests+=(scripts/tests/test_nav_jump_routes.py scripts/tests/test_nav_jump_observability.py scripts/tests/test_nav_demos.py)
@@ -104,7 +107,9 @@ elif [[ "${1:-}" == pilot ]]; then
     --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
     --save "$task/input/save.sav" --cache "$task/cache-ground" --output "$task/pilot-grounded" \
     --links "$task/candidates/candidates.txt" --exclude-links "$task/recheck/accepted-links-cv.txt"
-elif [[ "${1:-}" == record-pilot ]]; then
+elif [[ "${1:-}" == record-pilot || "${1:-}" == demo-pilot ]]; then
+  pilot_output="$HOME/gothic-ai/nav-demos-jumps/repair-${2:?attempt}"
+  if [[ "$1" == demo-pilot ]]; then pilot_output="$HOME/gothic-ai/nav-demos-jumps/demo-check"; fi
   pilot_indices="$("$task/.venv/bin/python" -I - "$HOME/gothic-ai/nav-demos-jumps" <<'PY'
 from collections import Counter
 import json
@@ -121,13 +126,15 @@ PY
     --save "$task/input/save.sav" --cache "$task/cache-transitions-cv" \
     --links "$task/accepted-links-cv.txt" --roads "$task/input/places.json" \
     --routes "$task/routes/routes.jsonl" --indices "$pilot_indices" --count 30 --require-70pct \
-    --output "$HOME/gothic-ai/nav-demos-jumps/repair-${2:?attempt}" --storage-root "$HOME/gothic-ai/nav-demos-jumps"
-  "$task/.venv/bin/python" -I "$task/source/scripts/nav_demos.py" check "$HOME/gothic-ai/nav-demos-jumps/repair-$2"
-  GQ_OWNER=nav-jumps "$HOME/gothic-ai/bin/gq" submit --class batch --threads 2 --mem 6G --max 2h \
-    --name "nav jumps record 267 repaired teacher v2 CV 240s" -- bash "$task/record.sh"
+    --output "$pilot_output" --storage-root "$HOME/gothic-ai/nav-demos-jumps"
+  "$task/.venv/bin/python" -I "$task/source/scripts/nav_demos.py" check "$pilot_output"
+  if [[ "$1" == demo-pilot ]]; then
+    GQ_OWNER=nav-jumps "$HOME/gothic-ai/bin/gq" submit --class batch --threads 2 --mem 6G --max 2h \
+      --name "nav jumps record 267 goal action landing side CV" -- bash "$task/record.sh"
+  fi
 fi
 BUILD
-    if [[ "$stage" == record-pilot ]]; then write_record_script; fi
+    if [[ "$stage" == demo-pilot ]]; then write_record_script; fi
     "$ROOT/scripts/gq" submit --class batch --threads 4 --mem 6G --max 2h \
       --name "nav jumps $stage engine runner tests" -- bash "$task/build.sh" "$stage" "$attempt"
     ;;

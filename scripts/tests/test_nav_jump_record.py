@@ -113,7 +113,8 @@ def test_resume_preserves_failed_attempt_and_cannot_pass_persisted_stop(tmp_path
     for name in (*recorder.REQUIRED, "transition-frames.jsonl"):
         (directory / name).write_text("")
     episode = dict(value, route_index=0, transition_success=False, qualifying_success=False,
-                   transition_failure="landing_not_witnessed", collection_stop="STOP teacher jump: 3/10")
+                   transition_failure="landing_not_witnessed", collection_stop="STOP teacher jump: 3/10",
+                   success_criterion=recorder.SUCCESS_CRITERION)
     (directory / "episode.json").write_text(json.dumps(episode))
     with pytest.raises(RuntimeError, match="STOP teacher"):
         recorder.existing_episodes(tmp_path, [value])
@@ -133,12 +134,15 @@ def native_frames(value, kind=None):
     middle = [80., 160. if kind != "drop" else 50., 0.]
     common = dict(transition_id=value["transition_id"], type=kind,
                   native_jump=False, native_climb=False, in_air=False, falling=False,
-                  supported=False, landing_path_complete=False, landing_path_m=99., landing_snap_m=99.)
+                  supported=False, landing_path_complete=False, landing_path_m=99., landing_snap_m=99., cv_active=True,
+                  source_polygon=11, end_polygon=22, current_polygon=11,
+                  source_component=1, end_component=2, current_component=1,
+                  side_method="component", source_position_cm=[0., 0., 0.], end_position_cm=target)
     return [dict(common, elapsed_ms=0, position_cm=origin),
             dict(common, elapsed_ms=16, position_cm=middle,
                  native_jump=kind == "jump", native_climb=kind == "climb",
                  in_air=kind == "drop", falling=kind == "drop"),
-            dict(common, elapsed_ms=32, position_cm=target, supported=True,
+            dict(common, elapsed_ms=32, position_cm=target, supported=True, current_polygon=22, current_component=2,
                  landing_path_complete=True, landing_path_m=.25, landing_snap_m=.10)]
 
 
@@ -149,11 +153,12 @@ def physical_trace(value):
 
 
 @pytest.mark.parametrize("kind", recorder.TYPES)
-def test_physical_frames_match_probe_action_and_landing_criteria(kind):
+def test_physical_frames_witness_native_action_and_completed_landing_side(kind):
     value = route(kind=kind)
     evidence, failure = recorder.transition_evidence(value, physical_trace(value), frames=native_frames(value))
     assert failure is None
-    assert evidence["source"] == "transition_frames" and evidence["probe_equivalent"]
+    assert evidence["source"] == "transition_frames" and not evidence["probe_equivalent"]
+    assert evidence["success_criterion"] == recorder.SUCCESS_CRITERION
     assert evidence["takeoff_position_cm"] == [0., 100., 0.]
     assert evidence["event_ms"] == 16 and evidence["landing_ms"] == 32
     if kind == "drop":
@@ -175,33 +180,50 @@ def test_jump_requires_native_flag_even_when_100ms_flags_or_height_suggest_fligh
     assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] is None
 
 
-def test_stationary_climb_flag_does_not_prove_climbing():
+def test_demo_climb_witness_is_native_bs_climb_even_with_no_measured_rise():
     value = route(kind="climb")
     frames = native_frames(value)
-    frames[1]["position_cm"][1] = 115 # Strict >15cm, not >=15cm.
+    frames[1]["position_cm"][1] = 100 # Same actual height as the takeoff.
+    evidence, failure = recorder.transition_evidence(value, physical_trace(value), frames=frames)
+    assert failure is None
+    assert evidence["native_dynamics"] and evidence["max_rise_cm"] == 0
+    frames[1]["native_climb"] = False
+    frames[1]["position_cm"][1] = 160 # Height alone still cannot prove climbing.
     assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] == "native_action_not_witnessed"
-    frames[1]["position_cm"][1] = 116
-    assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] is None
 
 
 @pytest.mark.parametrize("change", [
     dict(supported=False), dict(landing_path_complete=False),
-    dict(landing_path_m=1.50001), dict(landing_snap_m=.25001),
-    dict(position_cm=[260.01, 0., 0.]), dict(transition_id=999),
+    dict(landing_path_m=8.), dict(landing_snap_m=.42),
+    dict(position_cm=[400., 0., 0.]), dict(transition_id=999, type="climb"),
 ])
-def test_landing_requires_real_support_same_component_and_60cm_radius(change):
+def test_demo_side_accepts_probe_distance_snap_path_and_support_as_metrics(change):
     value = route()
     frames = native_frames(value)
     frames[-1].update(change)
-    assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] == "landing_not_witnessed"
+    evidence, failure = recorder.transition_evidence(value, physical_trace(value), frames=frames)
+    assert failure is None
+    assert evidence["landing_metrics"]["final_pose"]["side"] == "landing"
+    if "landing_snap_m" in change:
+        assert evidence["landing_metrics"]["final_pose"]["landing_snap_m"] == .42
+    if "position_cm" in change:
+        assert evidence["landing_metrics"]["final_pose"]["distance_3d_cm"] == 200
+    if change.get("supported") is False:
+        assert evidence["landing_metrics"]["nearest_supported"] is None
 
 
-def test_landing_within_60cm_has_no_invented_80pct_along_requirement():
+def test_native_landing_metrics_retain_first_support_distance_and_cv():
     value = route()
     frames = native_frames(value)
-    # t=.75, 50cm before the end: native probe accepts this supported landing.
-    frames[-1]["position_cm"] = [150., 0., 0.]
-    assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] is None
+    frames[-1].update(position_cm=[400., 10., 0.], landing_snap_m=.42)
+    evidence, failure = recorder.transition_evidence(value, physical_trace(value), frames=frames)
+    assert failure is None
+    metric = evidence["landing_metrics"]["first_support_after_event"]
+    assert metric["elapsed_ms"] == 32
+    assert metric["landing_xz_distance_cm"] == 200
+    assert metric["landing_y_offset_cm"] == 10
+    assert metric["distance_3d_cm"] == pytest.approx(np.hypot(200, 10))
+    assert metric["landing_snap_m"] == .42 and metric["cv_active"] is True
 
 
 def test_native_event_must_belong_to_exact_scheduled_id_and_type():
@@ -357,3 +379,120 @@ def test_new_episode_requires_frames_and_ignores_incomplete_100ms_native_flags(t
     episode = recorder.assess_episode(tmp_path, value)
     assert episode["success"] and episode["qualifying_success"] and episode["transition_success"]
     assert episode["transition_evidence"]["source"] == "transition_frames"
+    assert episode["success_criterion"] == "demo_goal_action_landing_side_v1"
+    assert episode["demo_success"]
+    metadata["success"] = False
+    (tmp_path / "episode.json").write_text(json.dumps(metadata))
+    assert recorder.assess_episode(tmp_path, value)["transition_failure"].startswith("goal_not_reached:")
+    metadata.update(success=True, final_hp=1)
+    (tmp_path / "episode.json").write_text(json.dumps(metadata))
+    assert recorder.assess_episode(tmp_path, value)["transition_success"]
+
+
+@pytest.mark.parametrize("component,polygon", [(1, 11), (99, 99), (0, 0)])
+def test_wrong_bank_other_component_and_unknown_ground_cannot_prove_landing(component, polygon):
+    value = route()
+    frames = native_frames(value)
+    frames[-1].update(current_component=component, current_polygon=polygon)
+    assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] == "completed_landing_side_not_witnessed"
+
+
+def test_return_to_takeoff_after_completed_landing_is_rejected_even_if_goal_side_later():
+    value = route()
+    frames = native_frames(value)
+    frames.append(dict(frames[-1], elapsed_ms=48, current_component=1, current_polygon=11,
+                       in_air=True, position_cm=[0., 100., 0.]))
+    frames.append(dict(frames[2], elapsed_ms=64))
+    evidence, failure = recorder.transition_evidence(value, physical_trace(value), frames=frames)
+    assert failure == "returned_to_takeoff_after_landing"
+    assert evidence["landing_metrics"]["returned_to_takeoff"]
+    assert evidence["landing_metrics"]["return_times_ms"] == [48]
+
+
+@pytest.mark.parametrize("flag", ["native_jump", "native_climb", "in_air", "falling"])
+def test_body_still_in_native_action_does_not_count_as_completed_landing(flag):
+    value = route()
+    frames = native_frames(value)
+    frames[-1][flag] = True
+    assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] == "completed_landing_side_not_witnessed"
+
+
+def test_final_pose_must_be_completed_even_after_an_earlier_completed_landing():
+    value = route()
+    frames = native_frames(value)
+    frames.append(dict(frames[-1], elapsed_ms=48, in_air=True))
+    assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] == "final_action_not_complete"
+
+
+def test_same_component_uses_strict_end_polygon_and_rejects_shared_polygon_ambiguity():
+    value = route()
+    frames = native_frames(value)
+    for frame in frames:
+        frame.update(source_component=1, end_component=1, current_component=1)
+    assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] is None
+    frames[-1]["current_polygon"] = 33
+    assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] == "completed_landing_side_not_witnessed"
+    for frame in frames:
+        frame.update(source_polygon=11, end_polygon=11, current_polygon=11)
+    assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] == "landing_side_ambiguous"
+
+
+def test_global_current_ids_keep_original_side_after_hint_changes():
+    value = route()
+    frames = native_frames(value)
+    frames[-1].update(transition_id=123456, type="drop", source_polygon=333, end_polygon=444,
+                      source_component=333, end_component=444, side_method="component")
+    evidence, failure = recorder.transition_evidence(value, physical_trace(value), frames=frames)
+    assert failure is None
+    assert evidence["landing_metrics"]["side_reference"]["end_component"] == 2
+    assert evidence["landing_metrics"]["final_pose"]["current_component"] == 2
+
+
+def test_new_criterion_requires_topology_and_cv_fields():
+    value = route()
+    for field in ("current_polygon", "source_component", "cv_active"):
+        frames = native_frames(value)
+        del frames[-1][field]
+        assert recorder.transition_evidence(value, physical_trace(value), frames=frames)[1] == "transition_topology_or_cv_fields_missing"
+
+
+def test_resume_refuses_previous_success_criterion(tmp_path):
+    value = route()
+    directory = tmp_path / "episodes/0000"
+    directory.mkdir(parents=True)
+    for name in (*recorder.REQUIRED, "transition-frames.jsonl"):
+        (directory / name).write_text("")
+    episode = dict(value, route_index=0, transition_success=True,
+                   success_criterion="native_probe_60cm_legacy")
+    (directory / "episode.json").write_text(json.dumps(episode))
+    with pytest.raises(RuntimeError, match="another success criterion"):
+        recorder.existing_episodes(tmp_path, [value])
+
+
+def test_landing_metrics_measure_air_support_durations_and_cv_frame_counts():
+    value = route()
+    frames = native_frames(value)
+    end_pose = frames[-1]
+    frames = frames[:2] + [
+        dict(end_pose, elapsed_ms=40, supported=False, in_air=True, falling=True),
+        dict(end_pose, elapsed_ms=88, supported=False, falling=True),
+        dict(end_pose, elapsed_ms=100),
+        dict(end_pose, elapsed_ms=180, cv_active=False),
+        dict(end_pose, elapsed_ms=420),
+        dict(end_pose, elapsed_ms=450, supported=False),
+        dict(end_pose, elapsed_ms=500),
+        dict(end_pose, elapsed_ms=540),
+    ]
+    frames[1].update(in_air=True, falling=False)
+    evidence, failure = recorder.transition_evidence(value, physical_trace(value), frames=frames)
+    assert failure is None
+    metrics = evidence["landing_metrics"]
+    assert metrics["time_to_first_support_ms"] == 84
+    assert metrics["in_air_until_first_support_ms"] == 72
+    assert metrics["falling_until_first_support_ms"] == 60
+    assert metrics["air_or_falling_until_first_support_ms"] == 84
+    assert metrics["unsupported_until_first_support_ms"] == 84
+    assert metrics["max_continuous_support_ms"] == 320
+    assert metrics["supported_frames_after_event"] == 5
+    assert metrics["supported_cv_frames_after_event"] == 4
+    assert metrics["first_support_observed"]

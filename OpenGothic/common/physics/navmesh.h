@@ -101,6 +101,17 @@ class NavMesh final {
       float sourceHorizontalDistance = 0, sourceVerticalDistance = 0;
       float sourceWallDistance = 0, insetWallDistance = 0, insetDistance = 0;
       };
+    struct GroundLocation {
+      bool known = false;
+      Point snapped = {};
+      uint64_t polygon = 0, component = 0;
+      float snapDistance = 0, horizontalDistance = 0, verticalOffset = 0;
+      };
+    struct TransitionSides {
+      GroundLocation source, end, current;
+      bool takeoffSide = false, landingSide = false;
+      const char* method = "ambiguous";
+      };
 
     NavMesh();
     ~NavMesh();
@@ -131,6 +142,13 @@ class NavMesh final {
     // its interior, then let the native probe resolve its bounded physical floor.
     TakeoffSite takeoffSite(const Point& source, float insetDistance=.15f,
                             float maxHorizontalSnap=.1f, float maxVerticalSnap=.25f) const;
+    // Diagnostic projection onto the 3D-closest ground polygon in the existing
+    // nearest-poly query extents. Snap distances are metrics, never side gates.
+    GroundLocation groundLocation(const Point& position) const;
+    // Distinct ground components identify the two banks. Within one component,
+    // only the exact endpoint polygon identifies a side; coincident endpoint
+    // polygons are explicitly ambiguous. Proven off-mesh links never merge banks.
+    TransitionSides transitionSides(const Point& source, const Point& end, const Point& current) const;
     void writePolygons(const std::filesystem::path& output) const;
     const Stats& stats() const;
     const Params& params() const;

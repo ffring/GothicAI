@@ -49,6 +49,7 @@ int main() {
     wall(geometry);
     NavMesh mesh;
     check(!mesh.straightWalkable({3,0,10},{17,0,10}),"unbuilt mesh must not authorize direct walking");
+    check(!mesh.groundLocation({3,0,10}).known,"unbuilt mesh must not invent ground topology");
     mesh.buildOrLoad(geometry,params,cache,"contract");
     check(mesh.stats().complete && !mesh.stats().fromCache,"first build must build complete mesh");
     const auto detour=mesh.findPath({3,0,10},{17,0,10});
@@ -60,6 +61,21 @@ int main() {
     check(!mesh.findPath({3,0,10},{35,0,5}).complete,"disconnected island must reject partial paths");
     check(!mesh.findPath({100,0,100},{17,0,10}).complete,"off-mesh start must reject path");
     check(mesh.stats().cacheBytes>0 && mesh.stats().tiles>1,"tiled cache must be populated");
+    const auto sameComponentSides=mesh.transitionSides({9,0,10},{11,0,10},{9,0,10});
+    check(std::string(sameComponentSides.method)=="polygon" &&
+          sameComponentSides.source.component==sameComponentSides.end.component &&
+          sameComponentSides.source.polygon!=sameComponentSides.end.polygon &&
+          sameComponentSides.takeoffSide && !sameComponentSides.landingSide,
+          "connected ground around a wall must distinguish banks by endpoint polygon");
+    const auto wrongPolygon=mesh.transitionSides({9,0,10},{11,0,10},{3,0,10});
+    check(wrongPolygon.current.known && wrongPolygon.current.component==wrongPolygon.end.component &&
+          wrongPolygon.current.polygon!=wrongPolygon.end.polygon && !wrongPolygon.landingSide,
+          "being in the landing ground component must not identify the landing side within one component");
+    const auto rightPolygon=mesh.transitionSides({9,0,10},{11,0,10},{11,0,10});
+    check(rightPolygon.landingSide && !rightPolygon.takeoffSide,"same-component landing requires the exact end polygon");
+    const auto ambiguous=mesh.transitionSides({3,0,2},{3,0,2},{3,0,2});
+    check(std::string(ambiguous.method)=="ambiguous" && !ambiguous.takeoffSide && !ambiguous.landingSide,
+          "coincident endpoint polygons must remain explicitly ambiguous");
     const auto shortcuts=mesh.shortcutCandidates(128);
     check(!shortcuts.candidates.empty(),"whole-world boundaries must expose shortcut probe sites");
     bool connectedShortcut=false;
@@ -132,6 +148,14 @@ int main() {
     layered.buildOrLoad(floors,params,cache,"floors");
     check(layered.straightWalkable({3,0,10},{12,0,10}),"direct walking must remain on the ground under a balcony");
     check(!layered.straightWalkable({3,0,10},{12,3,10}),"2D ray success must not confuse a balcony with the ground below");
+    const auto lowerLevel=layered.transitionSides({12,0,10},{12,3,10},{12,0,10});
+    const auto upperLevel=layered.transitionSides({12,0,10},{12,3,10},{12,3,10});
+    check(std::string(lowerLevel.method)=="component" && lowerLevel.source.component!=lowerLevel.end.component &&
+          lowerLevel.takeoffSide && !lowerLevel.landingSide && upperLevel.landingSide && !upperLevel.takeoffSide,
+          "3D ground projection must distinguish stacked floors at identical XZ");
+    const auto roofEdge=layered.transitionSides({12,0,10},{12,3,10},{18.1f,3.f,10.f});
+    check(roofEdge.current.known && roofEdge.current.horizontalDistance>.25f && roofEdge.landingSide,
+          "a physical pose outside the eroded roof edge must retain nearest-ground topology without a snap gate");
     NavMesh::Geometry gap;
     floor(gap,0,0,8,8);
     floor(gap,10,0,18,8);
@@ -181,6 +205,11 @@ int main() {
     check(!linked.straightWalkable(takeoff,landing),"an off-mesh jump must never authorize direct ground steering");
     check(!linked.findPath(takeoff,landing,false).complete,
           "ground-only baseline must remain disconnected even when a proven jump joins the islands");
+    const auto sourceBank=linked.transitionSides(link.start,link.end,takeoff);
+    const auto endBank=linked.transitionSides(link.start,link.end,landing);
+    check(std::string(sourceBank.method)=="component" && sourceBank.source.component!=sourceBank.end.component &&
+          sourceBank.takeoffSide && !sourceBank.landingSide && endBank.landingSide && !endBank.takeoffSide,
+          "a proven off-mesh jump must not merge ground components or confuse the takeoff and landing banks");
     const auto& transition=crossed.transitions.front();
     check(transition.type==NavMesh::LinkType::Jump && transition.id==42,"path must retain transition kind and identity");
     check(transition.cornerIndex+1<crossed.corners.size() &&
@@ -195,6 +224,22 @@ int main() {
           cachedCrossing.transitions.front().id==42,"cached transition must retain its connectivity, type and identity");
     check(!linkedLoaded.findPath(takeoff,landing,false).complete,
           "ground-only baseline must exclude off-mesh links from preexisting caches too");
+    const auto cachedBank=linkedLoaded.transitionSides(link.start,link.end,landing);
+    check(cachedBank.source.component==endBank.source.component && cachedBank.end.component==endBank.end.component &&
+          cachedBank.current.polygon==endBank.current.polygon && cachedBank.landingSide,
+          "ground component and polygon identifiers must be deterministic after cache load");
+    NavMesh reusedTopology;reusedTopology.buildOrLoad(gap,linkedParams,cache,"gap");
+    NavMesh::Geometry joinedGround;floor(joinedGround,0,0,18,8);
+    reusedTopology.buildOrLoad(joinedGround,params,cache,"gap");
+    const auto joinedSource=reusedTopology.groundLocation(takeoff),joinedEnd=reusedTopology.groundLocation(landing);
+    check(joinedSource.known && joinedEnd.known && joinedSource.component==joinedEnd.component,
+          "rebuilding a NavMesh must invalidate its previous disconnected component table");
+    NavMesh::Geometry parallelBanks;floor(parallelBanks,0,0,8,8);floor(parallelBanks,8.4f,0,16.4f,8);
+    NavMesh parallel;parallel.buildOrLoad(parallelBanks,params,cache,"parallel-banks");
+    const auto wrongBank=parallel.transitionSides({7.8f,0,4},{8.6f,0,4},{8.05f,0,4});
+    check(std::string(wrongBank.method)=="component" && wrongBank.takeoffSide && !wrongBank.landingSide &&
+          wrongBank.current.component!=wrongBank.end.component,
+          "a pose within 60cm of the landing endpoint on a parallel wrong bank must remain takeoff-side");
     linkedParams.links.front().type=NavMesh::LinkType::Climb;
     linkedParams.links.front().bidirectional=true;
     NavMesh climb;

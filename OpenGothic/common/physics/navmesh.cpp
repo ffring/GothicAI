@@ -161,20 +161,48 @@ struct NavMesh::Impl {
   std::unique_ptr<dtNavMeshQuery,decltype(&dtFreeNavMeshQuery)> query{nullptr,dtFreeNavMeshQuery};
   Params params;
   Stats stats;
+  std::unordered_map<dtPolyRef,uint64_t> groundComponents;
 
   void initializeQuery() {
+    groundComponents.clear();
+    std::vector<dtPolyRef> groundPolygons;
     // Cache v2 predates the ground-only query bit. Apply it in memory on both
     // freshly built and cached ground polygons without changing existing routes.
     for(int i=0; i<mesh->getMaxTiles(); ++i) {
       const auto* tile=static_cast<const dtNavMesh&>(*mesh).getTile(i);
       if(!tile || !tile->header) continue;
       for(int j=0; j<tile->header->polyCount; ++j)
-        if(tile->polys[j].getType()==DT_POLYTYPE_GROUND)
-          mesh->setPolyFlags(mesh->getPolyRefBase(tile)|dtPolyRef(j),tile->polys[j].flags|groundOnlyFlag);
+        if(tile->polys[j].getType()==DT_POLYTYPE_GROUND) {
+          const auto ref=mesh->getPolyRefBase(tile)|dtPolyRef(j);
+          mesh->setPolyFlags(ref,tile->polys[j].flags|groundOnlyFlag);
+          if(tile->polys[j].flags&1) groundPolygons.push_back(ref);
+          }
       }
     query.reset(dtAllocNavMeshQuery());
     if(!query || dtStatusFailed(query->init(mesh.get(),65535)))
       throw std::runtime_error("navmesh cannot initialize Detour query");
+    // Eager, ground-only BFS once per build/load. The minimum ground polygon
+    // reference names its component deterministically, including after cache load.
+    // Frame telemetry only reads this table; off-mesh connections are excluded.
+    std::sort(groundPolygons.begin(),groundPolygons.end());
+    groundComponents.reserve(groundPolygons.size());
+    for(const auto root:groundPolygons) {
+      if(groundComponents.find(root)!=groundComponents.end()) continue;
+      std::vector<dtPolyRef> pending{root};groundComponents[root]=uint64_t(root);
+      for(size_t at=0; at<pending.size(); ++at) {
+        const dtMeshTile* tile=nullptr;const dtPoly* poly=nullptr;
+        if(dtStatusFailed(mesh->getTileAndPolyByRef(pending[at],&tile,&poly))) continue;
+        for(auto link=poly->firstLink; link!=DT_NULL_LINK; link=tile->links[link].next) {
+          const auto ref=tile->links[link].ref;
+          if(!ref || groundComponents.find(ref)!=groundComponents.end()) continue;
+          const dtMeshTile* otherTile=nullptr;const dtPoly* other=nullptr;
+          if(dtStatusSucceed(mesh->getTileAndPolyByRef(ref,&otherTile,&other)) &&
+             other->getType()==DT_POLYTYPE_GROUND && (other->flags&1)) {
+            groundComponents[ref]=uint64_t(root);pending.push_back(ref);
+            }
+          }
+        }
+      }
     }
 
   bool load(uint64_t key) {
@@ -585,6 +613,60 @@ bool NavMesh::straightWalkable(const Point& start, const Point& end) const {
                                             &t,normal.data(),corridor.data(),&count,maxPath);
   return dtStatusSucceed(status) && !dtStatusDetail(status,DT_BUFFER_TOO_SMALL) &&
          t>1.f && count>0 && corridor[size_t(count-1)]==endRef;
+  }
+
+NavMesh::GroundLocation NavMesh::groundLocation(const Point& position) const {
+  GroundLocation result;
+  if(!impl->query) return result;
+  for(float value:position) if(!std::isfinite(value)) return result;
+  dtQueryFilter filter;filter.setIncludeFlags(groundOnlyFlag);
+  const float extents[3]={impl->params.nearestHorizontal,impl->params.nearestVertical,impl->params.nearestHorizontal};
+  std::vector<dtPolyRef> polygons(64);
+  int count=0;
+  for(;;) {
+    const auto status=impl->query->queryPolygons(position.data(),extents,&filter,polygons.data(),&count,int(polygons.size()));
+    if(dtStatusFailed(status)) return result;
+    if(!dtStatusDetail(status,DT_BUFFER_TOO_SMALL)) break;
+    polygons.resize(polygons.size()*2);
+    }
+  double best=std::numeric_limits<double>::max();
+  // Detour's findNearestPoly subtracts walkableClimb from the vertical score
+  // when XZ is over a polygon. Use the true 3D surface distance instead so that
+  // a nearby bank or a stacked floor cannot win because of that scoring bias.
+  for(int i=0; i<count; ++i) {
+    Point snapped{};bool over=false;
+    if(dtStatusFailed(impl->query->closestPointOnPoly(polygons[size_t(i)],position.data(),snapped.data(),&over))) continue;
+    bool finite=true;for(float value:snapped) finite&=std::isfinite(value);
+    if(!finite) continue;
+    double squared=0;
+    for(size_t axis=0; axis<3; ++axis) squared+=std::pow(double(snapped[axis])-double(position[axis]),2);
+    if(squared>best || (squared==best && uint64_t(polygons[size_t(i)])>=result.polygon)) continue;
+    const auto component=impl->groundComponents.find(polygons[size_t(i)]);
+    if(component==impl->groundComponents.end()) continue;
+    best=squared;result.known=true;result.snapped=snapped;
+    result.polygon=uint64_t(polygons[size_t(i)]);result.component=component->second;
+    result.snapDistance=float(std::sqrt(squared));
+    result.horizontalDistance=std::hypot(snapped[0]-position[0],snapped[2]-position[2]);
+    result.verticalOffset=snapped[1]-position[1];
+    }
+  return result;
+  }
+
+NavMesh::TransitionSides NavMesh::transitionSides(const Point& source, const Point& end, const Point& current) const {
+  TransitionSides sides;
+  sides.source=groundLocation(source);sides.end=groundLocation(end);sides.current=groundLocation(current);
+  if(!sides.source.known || !sides.end.known) return sides;
+  if(sides.source.component!=sides.end.component) {
+    sides.method="component";
+    sides.takeoffSide=sides.current.known && sides.current.component==sides.source.component;
+    sides.landingSide=sides.current.known && sides.current.component==sides.end.component;
+    }
+  else if(sides.source.polygon!=sides.end.polygon) {
+    sides.method="polygon";
+    sides.takeoffSide=sides.current.known && sides.current.polygon==sides.source.polygon;
+    sides.landingSide=sides.current.known && sides.current.polygon==sides.end.polygon;
+    }
+  return sides;
   }
 
 NavMesh::TakeoffSite NavMesh::takeoffSite(const Point& source, float insetDistance,
