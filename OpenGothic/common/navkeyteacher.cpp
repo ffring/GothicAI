@@ -146,10 +146,14 @@ NavKeyTeacher::Decision NavKeyTeacher::decide(const State& body,const NavMesh::P
     // A nearby point in the link's corridor is not its native takeoff. In
     // particular, running past a wall .35 m to one side never triggers a climb.
     // Walk back to the actual start until the narrow physical window is reached.
-    const bool takeoff=active->type==NavMesh::LinkType::Drop ? close(body.position,active->start,.25f) :
-                       close(body.position,active->start,.10f,.3f);
-    const bool traversing=airborne || (active->type==NavMesh::LinkType::Drop && t>0.f && t<1.f &&
-                                     horizontal(body.position,lerp(active->start,active->end,t))<.6f);
+    const bool takeoff=close(body.position,active->start,.10f,.3f);
+    const float alongVelocity=body.velocity[0]*(active->end[0]-active->start[0])+
+                              body.velocity[2]*(active->end[2]-active->start[2]);
+    // A moving drop reconstructs its departure from pose and velocity. It may
+    // still be inside the takeoff window while the standing flag has closed.
+    const bool advancingDrop=active->type==NavMesh::LinkType::Drop && t>0.f && alongVelocity>0.f &&
+                             horizontal(body.position,lerp(active->start,active->end,t))<=.10f;
+    const bool traversing=airborne || advancingDrop;
     if(takeoff || traversing) {
       out.hint.onTransition=true;
       out.hint.cornerIndex=active->cornerIndex+1;
@@ -158,16 +162,16 @@ NavKeyTeacher::Decision NavKeyTeacher::decide(const State& body,const NavMesh::P
       out.keys.walk=false;
       steer(out.keys,body,active->end,18.f);
       const bool aligned=std::abs(angle(body,active->end))<=std::max(1.f,body.turnSpeedDegrees*.05f);
-      // Native probing acts from rest at the takeoff. Release forward for both
-      // jump and climb until standing and aligned; change to run with the action.
-      if(!airborne && active->type!=NavMesh::LinkType::Drop) {
+      // Native probing acts from rest at the takeoff. Run-mode idle stops the
+      // preceding walk promptly; walk-mode idle can keep its root motion alive.
+      // Once a drop is moving out along the link, do not stop it for standing.
+      if(!airborne && !advancingDrop) {
         out.keys.forward=0;
-        out.keys.walk=true;
       }
       // NpcKeys advances an airborne body before consulting jump; avoid retriggering jump
       // on landing by emitting it only at the takeoff while the body is supported.
       if(takeoff && body.supported && body.standing && !airborne && !body.sliding && !body.swimming &&
-         aligned && active->type!=NavMesh::LinkType::Drop) {
+         aligned && !advancingDrop) {
         out.keys.walk=false;out.keys.forward=1;
         if(active->type==NavMesh::LinkType::Jump)
           out.keys.jump=true;

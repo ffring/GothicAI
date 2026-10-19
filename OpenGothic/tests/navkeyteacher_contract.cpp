@@ -129,11 +129,11 @@ int main() {
         }
         body={};body.position=link.start;body.standing=false;
         d=NavKeyTeacher::decide(body,linked,linked.corners.back());
-        check(d.hint.onTransition && d.keys.walk && d.keys.forward==0 && !d.keys.jump && !d.keys.climb,
+        check(d.hint.onTransition && !d.keys.walk && d.keys.forward==0 && !d.keys.jump && !d.keys.climb,
               "both native actions must release movement and wait for standing at the takeoff");
         body.standing=true;body.yawDegrees=4.8f;
         d=NavKeyTeacher::decide(body,linked,linked.corners.back());
-        check(d.keys.turn!=0 && d.keys.forward==0 && d.keys.walk && !d.keys.jump && !d.keys.climb,
+        check(d.keys.turn!=0 && d.keys.forward==0 && !d.keys.walk && !d.keys.jump && !d.keys.climb,
               "turning and a native action must not be requested in the same takeoff decision");
         body={};body.position={2.2f,0,0};body.jumping=true;body.supported=false;
         d=NavKeyTeacher::decide(body,linked,linked.corners.back());
@@ -166,6 +166,39 @@ int main() {
       check(!d.hint.onTransition && d.hint.cornerIndex>=3 && d.keys.walk,
             "supported landing must advance without historical transition flags");
       }
+
+    auto dropPath=route({{0,0,0},{2,0,0},{2.8f,-2,0},{5,-2,0}});
+    NavMesh::Path::Transition drop;
+    drop.start=dropPath.corners[1];drop.end=dropPath.corners[2];
+    drop.type=NavMesh::LinkType::Drop;drop.id=44;drop.cornerIndex=1;
+    dropPath.transitions.push_back(drop);
+    body={};body.position={2.05f,0,.29f};body.velocity={1.f,0,0};
+    d=NavKeyTeacher::decide(body,dropPath,dropPath.corners.back());
+    check(d.hint.transitionId==44 && !d.hint.onTransition && d.hint.nextCorner==drop.start &&
+          d.keys.walk && !d.keys.jump && !d.keys.climb,
+          "a drop side approach must walk to the precise start despite positive progress along the link");
+    body={};body.position=drop.start;body.yawDegrees=17.f;
+    d=NavKeyTeacher::decide(body,dropPath,dropPath.corners.back());
+    check(d.hint.onTransition && d.keys.forward==0 && d.keys.turn!=0 && !d.keys.walk,
+          "a drop must align in run-mode idle before its first forward action");
+    body.yawDegrees=0;body.standing=false;
+    d=NavKeyTeacher::decide(body,dropPath,dropPath.corners.back());
+    check(d.keys.forward==0 && !d.keys.walk,
+          "a stationary drop must wait for standing at its precise takeoff");
+    body.standing=true;
+    d=NavKeyTeacher::decide(body,dropPath,dropPath.corners.back());
+    check(d.hint.onTransition && d.keys.forward==1 && !d.keys.walk && !d.keys.jump && !d.keys.climb,
+          "an aligned standing drop must start running without a jump or climb action");
+    for(float progress:{.06f,.20f}) {
+      body={};body.position={2.f+progress,0,0};body.velocity={1.f,0,0};body.standing=false;
+      d=NavKeyTeacher::decide(body,dropPath,dropPath.corners.back());
+      check(d.hint.onTransition && d.hint.nextCorner==drop.end && d.keys.forward==1 && !d.keys.walk,
+            "an ongoing narrow-corridor drop must continue even inside takeoff after standing closes");
+    }
+    body.velocity={-1.f,0,0};
+    d=NavKeyTeacher::decide(body,dropPath,dropPath.corners.back());
+    check(!d.hint.onTransition && d.hint.nextCorner==drop.start && d.keys.walk,
+          "moving back toward a drop's start is not an ongoing departure");
 
     auto shortLink=route({{0,0,0},{2,0,0},{2.4f,0,0},{5,0,0}});
     NavMesh::Path::Transition shortJump;
