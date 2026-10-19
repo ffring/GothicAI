@@ -45,6 +45,7 @@
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
+#include "game/bodycontroller.h"
 #include "game/bodyarena.h"
 #include "game/bodyreplay.h"
 #include "game/navigationeyebench.h"
@@ -1096,8 +1097,12 @@ struct Bench {
   uint64_t    slowAcc   = 0;      // microseconds of game time owed to the next frame
   uint64_t    frameMs   = 0;      // the video's time of this frame, ms
   // track: where an npc's head (or trunk) is in each recorded frame, for labels that follow it
-  std::string trackNpc;
+  std::vector<std::string> trackNpcs;
   bool        trackHead = true;
+  // Opt-in live policy telemetry. The controller has one exclusive sink; arenas/replays own theirs.
+  bool        bodyLive = false;
+  std::string bodyLiveWait;
+  std::chrono::steady_clock::time_point bodyLiveDeadline;
   // sight: the hero's line of sight to an npc in each recorded frame and shot (the focus' rays).
   std::string sightNpc;
   float       sightFan  = 700;
@@ -1167,6 +1172,13 @@ void event(std::string_view kind, const std::string& fields = {}) {
                (unsigned long long)bench.time,jsonStr(bench.rec ? bench.recName : "").c_str(),
                bench.rec ? (long long)bench.recFrame : -1LL,jsonStr(kind).c_str(),fields.empty() ? "" : ",",fields.c_str());
   std::fflush(bench.events);
+  }
+
+void stopBodyLive() {
+  if(!bench.bodyLive)
+    return;
+  BodyController::setSink({});
+  bench.bodyLive = false;
   }
 
 const char* animationModeName() {
@@ -1446,6 +1458,8 @@ Npc* npcBySymbol(World& w, std::string_view symbol) {
 // `bodyarena`, `bodyreplay`: the configured arena's participants, with isolated animation RNG
 void setupArena(World& w, Npc& pl) {
   try {
+    if(bench.bodyLive)
+      throw std::runtime_error("bodylive must be off before bodyarena/bodyreplay");
     BodyArena::setup(w,pl);
     const auto actors=BodyArena::actors();
     bench.duelFrom=w.tickCount();
@@ -1584,6 +1598,7 @@ void writeCharacterMoveFrame(std::FILE* file,const Bench::CharacterMoveFrame& mo
   }
 
 void finish() {
+  stopBodyLive();
   npcCharacterStopMotionTrace(Gothic::inst().world());
   endAnimationControl();
   animationControlTotals();
@@ -12039,11 +12054,21 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("slowmo " + std::to_string(bench.slow));
     }
   else if(c=="track") {
-    // track <npc|off> [head|body]: each recorded frame, where it is on the picture (events.jsonl "track":
-    // x, y in pixels of the frame, w, h; and each zone: hx hy, bx by, lx ly)
-    bench.trackNpc  = a.size()>1 && a[1]!="off" ? a[1] : "";
+    // track <npc[,npc...]|off> [head|body]: one ordinary track row per actor and recorded frame.
+    bench.trackNpcs.clear();
+    if(a.size()>1 && a[1]!="off") {
+      size_t begin=0;
+      while(begin<a[1].size()) {
+        const size_t end=a[1].find(',',begin);
+        const auto symbol=a[1].substr(begin,end==std::string::npos ? end : end-begin);
+        if(!symbol.empty() && std::find(bench.trackNpcs.begin(),bench.trackNpcs.end(),symbol)==bench.trackNpcs.end())
+          bench.trackNpcs.push_back(symbol);
+        if(end==std::string::npos) break;
+        begin=end+1;
+        }
+      }
     bench.trackHead = !(a.size()>2 && a[2]=="body");
-    say("track " + (bench.trackNpc.empty() ? std::string("off") : bench.trackNpc));
+    say("track " + (bench.trackNpcs.empty() ? std::string("off") : a[1]));
     }
   else if(c=="sight") {
     // sight <npc|off> [fan cm]: each recorded frame and shot, the hero's line of sight to it on the picture
@@ -12518,10 +12543,36 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="bodyarena") {
     setupArena(w,pl);
     }
+  else if(c=="bodylive") {
+    // Live engine commands only: no controller state, watch list, policy, or lease is modified.
+    if(a.size()==2 && a[1]=="off") {
+      stopBodyLive();
+      event("body_live","\"enabled\":false");
+      }
+    else if(a.size()==2 && a[1]=="on" && !BodyArena::enabled() && !BodyReplay::active()) {
+      bench.bodyLive = true;
+      BodyController::setSink([](std::string_view row) {
+        if(bench.bodyLive)
+          event("body_live_control","\"control\":"+std::string(row));
+        });
+      event("body_live","\"enabled\":true");
+      }
+    else if(a.size()>=3 && a.size()<=4 && a[1]=="wait" && std::filesystem::path(a[2]).is_absolute() && num(a,3,120000)>0) {
+      bench.bodyLiveWait=a[2];
+      bench.bodyLiveDeadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(int64_t(num(a,3,120000)));
+      event("body_live_wait","\"path\":"+jsonStr(bench.bodyLiveWait));
+      }
+    else {
+      event("body_live_error","\"reason\":\"expected bodylive on/off or wait /absolute/path [timeout ms]; live capture requires arena/replay off\"");
+      bench.pc=bench.prog.size();
+      }
+    }
   else if(c=="bodyreplay") {
     // bodyreplay <file> [tail ms 3000]: a recorded lockstep arena episode, replayed for the camera
     // (game/bodyreplay.h); put it in place of `bodyarena`, the following `wait` ends with the replay
     try {
+      if(bench.bodyLive)
+        throw std::runtime_error("bodylive must be off before bodyreplay");
       BodyReplay::load(a.size()>1 ? a[1] : "",outDir,uint64_t(num(a,2,3000)));
       setupArena(w,pl);
       }
@@ -14400,6 +14451,24 @@ bool waitingForAi() {
   return false;
   }
 
+bool waitingForBodyLive() {
+  if(bench.bodyLiveWait.empty())
+    return false;
+  std::error_code error;
+  if(std::filesystem::is_regular_file(bench.bodyLiveWait,error)) {
+    event("body_live_ready","\"path\":"+jsonStr(bench.bodyLiveWait));
+    bench.bodyLiveWait.clear();
+    return false;
+    }
+  if(std::chrono::steady_clock::now()<bench.bodyLiveDeadline)
+    return true;
+  event("body_live_error","\"reason\":\"readiness file timeout\",\"path\":"+jsonStr(bench.bodyLiveWait));
+  bench.bodyLiveWait.clear();
+  bench.pc=bench.prog.size();
+  bench.waitUntil=0;
+  return false;
+  }
+
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
   if(NavBench::running() || NavDemos::running()) return;
   if(bench.spellEquipPending) {
@@ -14499,14 +14568,14 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     if(bench.volleyLeft>0)
       return;
     }
-  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply || !bench.waitAiKey.empty() ||
+  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply || !bench.waitAiKey.empty() || !bench.bodyLiveWait.empty() ||
         bench.downNpc!=nullptr || bench.waitRagdollNpc!=nullptr || bench.duelWaiting) {
     if(bench.speaking) {
       if(bench.time<bench.speakUntil)
         return;
       endSpeaking();
       }
-    if(waitingForReply() || waitingForAi())
+    if(waitingForReply() || waitingForAi() || waitingForBodyLive())
       return;
     if(bench.waitRagdollNpc!=nullptr) {
       const auto* npc=bench.waitRagdollNpc;
@@ -14583,7 +14652,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     if(bench.cadenceWait) return;
 #endif
     }
-  if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0 && bench.downNpc==nullptr && bench.waitRagdollNpc==nullptr && !bench.duelWaiting)
+  if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0 && bench.downNpc==nullptr && bench.waitRagdollNpc==nullptr && !bench.duelWaiting && bench.bodyLiveWait.empty())
     finish();
   }
 
@@ -15516,6 +15585,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
   }
 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
+  stopBodyLive();
   npcCharacterStopMotionTrace(Gothic::inst().world());
   KnownRoadsBench::reset();
   NavigationMemoryBench::reset();
@@ -16368,13 +16438,22 @@ bool TestBench::ragdollLootOpened(const Npc& player, const Npc& target) {
   return true;
   }
 
-// track: where the tracked npc is on this frame, into events.jsonl: x, y the head (or the trunk: track ... body),
+// track: where a tracked npc is on this frame, into events.jsonl: x, y the head (or the trunk: track ... body),
 // and every zone: hx hy (head), bx by (trunk), lx ly (the legs, below the knees); pixels of the frame
-void trackFrame(int w, int h) {
-  World* wrld = Gothic::inst().world();
+void trackActorFrame(World& world, const std::string& symbol, int w, int h) {
   auto   cam  = Gothic::inst().camera();
-  Npc*   n    = wrld!=nullptr ? npcBySymbol(*wrld,bench.trackNpc) : nullptr;
-  if(n==nullptr || cam==nullptr)
+  Npc*   n    = npcBySymbol(world,symbol);
+  if(n==nullptr)
+    return;
+  // HP/identity do not depend on visibility. Exporters still get one sample if a head is offscreen.
+  if(bench.bodyLive) {
+    const Npc* target=n->target()!=nullptr ? n->target() : world.player();
+    event("body_live_sample","\"npc\":"+jsonStr(symbol)+",\"entity_id\":"+
+          std::to_string(BodyObservations::entityId(*n))+",\"t_game_ms\":"+std::to_string(world.tickCount())+
+          ",\"self_hp\":"+std::to_string(n->attribute(ATR_HITPOINTS))+",\"target_hp\":"+
+          (target!=nullptr ? std::to_string(target->attribute(ATR_HITPOINTS)) : "null"));
+    }
+  if(cam==nullptr)
     return;
   std::vector<HitZones::Posed> caps;
   n->hitZonesPosed(caps);
@@ -16408,9 +16487,15 @@ void trackFrame(int w, int h) {
   char buf[320];
   std::snprintf(buf,sizeof(buf),"\"npc\":%s,\"x\":%.1f,\"y\":%.1f,\"hx\":%.1f,\"hy\":%.1f,\"bx\":%.1f,\"by\":%.1f,"
                 "\"lx\":%.1f,\"ly\":%.1f,\"w\":%d,\"h\":%d",
-                jsonStr(bench.trackNpc).c_str(),double(sx[main]),double(sy[main]),double(sx[0]),double(sy[0]),
+                jsonStr(symbol).c_str(),double(sx[main]),double(sy[main]),double(sx[0]),double(sy[0]),
                 double(sx[1]),double(sy[1]),double(sx[2]),double(sy[2]),w,h);
   event("track",buf);
+  }
+
+void trackFrame(int w, int h) {
+  if(auto* world=Gothic::inst().world())
+    for(const auto& symbol:bench.trackNpcs)
+      trackActorFrame(*world,symbol,w,h);
   }
 
 // sight: the hero's line of sight to the npc on this frame, into events.jsonl; points are [x, y] in pixels of the
@@ -16780,7 +16865,7 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
     bench.shot.clear();
     }
   if(bench.rec && bench.recVideo) {
-    if(!bench.trackNpc.empty() && pm.w()>0)
+    if(!bench.trackNpcs.empty() && pm.w()>0)
       trackFrame(int(pm.w()),int(pm.h()));
     if(!bench.sightNpc.empty() && pm.w()>0)
       sightFrame(int(pm.w()),int(pm.h()),"");
