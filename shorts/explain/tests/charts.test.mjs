@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {Plan} from '../src/schema.ts';
-import {inCone, interpolatePath} from '../src/parts/diagramMath.ts';
+import {inCone, interpolatePath, quadraticParameterAtLength, quadraticPoint} from '../src/parts/diagramMath.ts';
 
 const source = 'reports/example.md';
 const line = () => ({
@@ -293,4 +293,76 @@ test('cone: видимость не разрывается при переход
   assert.equal(inCone(point(-179), 5, 500, 179), true);
   assert.equal(inCone(point(179), 5, 500, -179), true);
   assert.equal(inCone(point(170), 5, 500, -179), false);
+});
+
+// Independent reference: walk a dense polyline and interpolate within the
+// segment containing the requested distance, without the production lookup.
+function quadraticPointAtLengthReference(a, c, b, progress) {
+  const points = Array.from({length: 20001}, (_, i) => {
+    const t = i / 20000;
+    return {
+      x: a.x + 2 * t * (c.x - a.x) + t * t * (a.x - 2 * c.x + b.x),
+      y: a.y + 2 * t * (c.y - a.y) + t * t * (a.y - 2 * c.y + b.y),
+    };
+  });
+  const lengths = points.slice(1).map((p, i) => Math.hypot(p.x - points[i].x, p.y - points[i].y));
+  let remaining = lengths.reduce((sum, value) => sum + value, 0) * progress;
+  for (let i = 0; i < lengths.length; i++) {
+    if (remaining <= lengths[i]) {
+      const fraction = lengths[i] === 0 ? 0 : remaining / lengths[i];
+      return {
+        x: points[i].x + (points[i + 1].x - points[i].x) * fraction,
+        y: points[i].y + (points[i + 1].y - points[i].y) * fraction,
+      };
+    }
+    remaining -= lengths[i];
+  }
+  return points.at(-1);
+}
+
+const arcStart = {x: 400, y: 400};
+const arcEnd = {x: 1520, y: 400};
+const arcControl = {x: 960, y: 400 + 0.5 * 1080};
+
+for (const [direction, a, b] of [
+  ['вперёд', arcStart, arcEnd],
+  ['назад', arcEnd, arcStart],
+]) {
+  for (const progress of [0.25, 0.5, 0.75]) {
+    test(`flow F1: curve=0.5, ${direction}, progress=${progress}: наконечник в пределах 2 px от конца линии`, () => {
+      const expected = quadraticPointAtLengthReference(a, arcControl, b, progress);
+      const parameter = quadraticParameterAtLength(a, arcControl, b, progress);
+      const tip = quadraticPoint(a, arcControl, b, parameter);
+      const distance = Math.hypot(tip.x - expected.x, tip.y - expected.y);
+      assert.ok(distance <= 2, `наконечник отстаёт на ${distance.toFixed(4)} px`);
+      if (progress !== 0.5) {
+        const naive = quadraticPoint(a, arcControl, b, progress);
+        const naiveDistance = Math.hypot(naive.x - expected.x, naive.y - expected.y);
+        assert.ok(naiveDistance > 2, `геометрия должна выявлять прежнюю ошибку: ${naiveDistance.toFixed(4)} px`);
+      }
+    });
+  }
+}
+
+test('flow: доля длины ограничена началом и концом дуги', () => {
+  for (const [progress, parameter] of [[-1, 0], [0, 0], [1, 1], [2, 1]]) {
+    assert.equal(quadraticParameterAtLength(arcStart, arcControl, arcEnd, progress), parameter);
+  }
+});
+
+test('flow: прямая стрелка сохраняет линейное движение', () => {
+  const a = {x: 100, y: 200}, c = {x: 400, y: 500}, b = {x: 700, y: 800};
+  for (const progress of [0, 0.25, 0.5, 0.75, 1]) {
+    assert.ok(Math.abs(quadraticParameterAtLength(a, c, b, progress) - progress) < 1e-10);
+  }
+});
+
+test('flow: дуга нулевой длины даёт конечный параметр и неподвижный наконечник', () => {
+  const point = {x: 300, y: 600};
+  for (const progress of [0, 0.25, 0.5, 0.75, 1]) {
+    const parameter = quadraticParameterAtLength(point, point, point, progress);
+    assert.ok(Number.isFinite(parameter) && parameter >= 0 && parameter <= 1);
+    const tip = quadraticPoint(point, point, point, parameter);
+    assert.ok(Math.hypot(tip.x - point.x, tip.y - point.y) < 1e-10);
+  }
 });

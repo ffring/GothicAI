@@ -3,7 +3,7 @@ import {AbsoluteFill, useCurrentFrame, useVideoConfig} from 'remotion';
 import type {ConeCard, FlowCard, GridCard, RaysCard, TicksCard} from '../schema';
 import {COLOR, FONT, FRAME, OUTLINE, WIDE_SAFE} from '../theme';
 import {shown} from './anim';
-import {clamp01, inCone, interpolatePath, quadraticPoint} from './diagramMath';
+import {clamp01, inCone, interpolatePath, quadraticParameterAtLength, quadraticPoint} from './diagramMath';
 
 const {width: W, height: H} = FRAME.wide;
 const LEFT = WIDE_SAFE.left;
@@ -136,13 +136,13 @@ export const TicksView: React.FC<{spec: TicksCard}> = ({spec}) => {
             {[...row.cells].map((cell, ci) => {
               const color = cell === 'D' ? COLOR.now : COLOR.before;
               const progress = clamp01((t - row.at) / spec.dur * row.cells.length - ci);
-              return <div key={ci} style={{width: cellWidth, height: 90, borderRadius: 7, boxSizing: 'border-box', border: `2px solid ${color}`, background: cell === 'D' ? `${COLOR.now}30` : `${COLOR.before}14`, display: 'flex', alignItems: 'center', justifyContent: 'center', ...text(Math.min(31, cellWidth * 0.6), color, 800), opacity: progress}}>{cell}</div>;
+              return <div key={ci} style={{width: cellWidth, height: 90, borderRadius: 7, background: color, opacity: progress}} />;
             })}
           </div>
         </div>
       ))}
       <div style={{position: 'absolute', left: LEFT + 255, top: 370 + spec.rows.length * rowHeight + 55, display: 'flex', gap: 70, opacity: shown(t, Math.min(...spec.rows.map((r) => r.at)))}}>
-        {(['D', 'B'] as const).map((cell) => <div key={cell} style={{display: 'flex', gap: 16, alignItems: 'center', ...text(30, cell === 'D' ? COLOR.now : COLOR.before, 600)}}><span style={{fontWeight: 800}}>{cell}</span><span>{spec.legend[cell]}</span></div>)}
+        {(['D', 'B'] as const).map((cell) => <div key={cell} style={{display: 'flex', gap: 16, alignItems: 'center', ...text(30, cell === 'D' ? COLOR.now : COLOR.before, 600)}}><span style={{width: 32, height: 32, borderRadius: 4, background: cell === 'D' ? COLOR.now : COLOR.before}} /><span>{spec.legend[cell]}</span></div>)}
       </div>
       <Source source={spec.source} />
     </AbsoluteFill>
@@ -196,8 +196,9 @@ export const FlowView: React.FC<{spec: FlowCard}> = ({spec}) => {
           const start = boundary(a, c), end = boundary(b, c);
           const at = edge.at;
           const progress = clamp01((t - at) / 0.6);
-          const tip = quadraticPoint(start, c, end, progress);
-          const tangent = {x: (1 - progress) * (c.x - start.x) + progress * (end.x - c.x), y: (1 - progress) * (c.y - start.y) + progress * (end.y - c.y)};
+          const tipT = quadraticParameterAtLength(start, c, end, progress);
+          const tip = quadraticPoint(start, c, end, tipT);
+          const tangent = {x: (1 - tipT) * (c.x - start.x) + tipT * (end.x - c.x), y: (1 - tipT) * (c.y - start.y) + tipT * (end.y - c.y)};
           const angle = Math.atan2(tangent.y, tangent.x) * 180 / Math.PI;
           const label = quadraticPoint(start, c, end, 0.5);
           const packets = edge.packets;

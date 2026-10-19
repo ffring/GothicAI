@@ -283,7 +283,8 @@ right. `targetLabel` defaults to `противник`; `title` is optional and `
 Each `rows` entry has a `label`, `cells` string made only of `D` (gold decision) and `B` (grey busy body),
 `at`, and optional `offset` (defaults to 0). `offset` shifts a row right by that many cell widths,
 including fractions. Starting at each row's `at`, its cells appear left to right over the card's `dur`.
-`legend: {D, B}` supplies the two legend labels. Optional `align: {at, dur}` linearly moves each row to
+Letters remain only in the plan: cells show solid gold or grey, and the legend uses matching coloured
+squares with the labels from `legend: {D, B}`. Optional `align: {at, dur}` linearly moves each row to
 the first row's offset, keeping that reference row fixed. `title` is optional and `source` is required.
 
 ```json
@@ -321,7 +322,8 @@ Use unique IDs; each edge must refer to existing nodes. A node defaults to gold;
 past/host steps and `skill` blue for an opponent. `title` is optional and `source` is required.
 
 `edges: [{from, to, label?, at, curve?, packets?}]` draws arrows between block boundaries over 0.6 seconds
-from `at`. `curve` bends the arrow by a signed perpendicular fraction of the **full frame height**; zero
+from `at`; the arrowhead follows the drawn endpoint by arc length, including on curved arrows.
+`curve` bends the arrow by a signed perpendicular fraction of the **full frame height**; zero
 (the default) is straight. A positive bend from right to left goes upward, allowing a return loop over a
 row of blocks. `packets: {every, dur}` starts repeated moving points after the arrow has finished drawing:
 a new point starts every `every` seconds and crosses the arrow in `dur` seconds for the rest of the beat.
@@ -386,6 +388,8 @@ up to three people. The versions are pinned in `package.json`.
 
 ## План и журнал
 
+- 2026-10-19: removed tick-cell letters and replaced legend letters with coloured squares;
+  curved flow arrowheads now follow the drawn arc length, with a 2 px regression tolerance.
 - 2026-10-19: added wide-only `rays`, `cone`, `ticks`, `grid`, `flow` with voice-relative reveals,
   target hiding, field-of-view turns, tick alignment, curved loops and recurring packets. The wide demo
   adds seven storyboard examples for P30; existing tall cards retain their original layout.
