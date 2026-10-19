@@ -120,6 +120,10 @@
 #       shared with Hilda (prefer Vatras). Its model reads the people block and both witness warnings;
 #       hero trust is unchanged by the rumor. Save/load restores knowledge and the rumor once.
 #       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720.
+#   cheat: Hilda sells silence after a native theft but tells Lobart; dishonest Lobart keeps a later
+#       payment, Vino hears, then honesty 4 pays. Save/load preserves intentions and single outcomes.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720. LLM=chatgpt scripts only the later-payment setup,
+#       records one ordinary real-model refusal response verbatim, then exits.
 #   crime_director: deeds and story responses (docs/crime.md, layer 5), SAVE=save_slot_1.sav.
 #       LLM=fake: unseen chest theft and its return quest, Hilda's initiative and paid silence,
 #       Lobart's learned grievance and Amends payment. LLM=chatgpt: witnessed theft goes to the

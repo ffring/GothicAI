@@ -80,6 +80,60 @@ async def test_cover_silence_stops_law_only_with_cover_enabled(law, cover):
     assert delivery.status == ("stopped" if cover else "pending")
 
 
+@pytest.mark.parametrize("promise", ["silence", "cover"])
+@pytest.mark.parametrize("keeps", [False, True])
+async def test_broken_promise_reaches_law_and_records_one_actual_betrayal(law, promise, keeps):
+    case(law)
+    law.chronicle.record({
+        "fact": "npc_intent", "npc": CITIZEN, "deal": "D1", "keeps": keeps, "how": [promise],
+    })
+    law.chronicle.record({
+        "fact": "deal", "npc": CITIZEN, "deal": "D1", "at": AT + 30, **(
+            {"cover": {"crime": "theft-1"}} if promise == "cover" else {"silence": ["crime:theft-1"]}
+        ),
+    })
+    [delivery] = law.law.deliveries()
+    assert delivery.status == ("stopped" if keeps else "pending")
+    law.law.tick(AT + REPORT_DELAYS["theft"])
+    law.law.tick(AT + REPORT_DELAYS["theft"] + 1)
+    assert bool(law.law.known("city")) is (not keeps)
+    assert law.chronicle.facts("betrayed") == ([] if keeps else [{
+        "fact": "betrayed", "npc": CITIZEN, "deal": "D1", "how": "reported", "to": "city",
+    }])
+
+
+@pytest.mark.parametrize("promise", ["silence", "cover"])
+async def test_disabling_cheating_restores_raw_promises_for_crime_knowledge_and_law(law, promise):
+    case(law)
+    law.chronicle.record({
+        "fact": "npc_intent", "npc": CITIZEN, "deal": "D1", "keeps": False, "how": [promise],
+    })
+    law.chronicle.record({
+        "fact": "deal", "npc": CITIZEN, "deal": "D1", "at": AT + 30, **(
+            {"cover": {"crime": "theft-1"}} if promise == "cover" else {"silence": ["crime:theft-1"]}
+        ),
+    })
+    assert not law.crimes.known(CITIZEN)[0].silenced
+    law.chronicle.npc_cheat_enabled = False
+    assert law.crimes.known(CITIZEN)[0].silenced
+    assert law.law.deliveries()[0].status == "stopped"
+    assert law.law.tick(AT + REPORT_DELAYS["theft"]) == []
+    assert law.chronicle.facts("betrayed") == []
+
+
+async def test_a_report_that_arrived_before_the_promise_does_not_betray_it(law):
+    case(law)
+    law.chronicle.record({
+        "fact": "npc_intent", "npc": CITIZEN, "deal": "D1", "keeps": False, "how": ["silence"],
+    })
+    law.chronicle.record({
+        "fact": "deal", "npc": CITIZEN, "deal": "D1", "at": AT + REPORT_DELAYS["theft"] + 1,
+        "silence": ["crime:theft-1"],
+    })
+    assert len(law.law.tick(AT + REPORT_DELAYS["theft"] + 2)) == 1
+    assert law.chronicle.facts("betrayed") == []
+
+
 @pytest.mark.parametrize("cover", [True, False])
 async def test_old_covered_testimony_reaches_law_when_cover_is_disabled(law, cover):
     law.crimes.cover = cover

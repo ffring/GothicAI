@@ -84,9 +84,12 @@ class CoverWorld:
                 {"fact": "silenced", "npc": npc, "deal": deal, "cover": deal, "crime": fields["crime"]}
             )
 
-    def saw(self, npc: str = HILDA, name: str = "Хильда", minute: int = AT_8) -> None:
-        self.seen.saw(hero_seen_by(npc, name, minute))
-        self.seen.saw(hero_seen_by(npc, name, minute + 5))
+    def saw(
+        self, npc: str = HILDA, name: str = "Хильда", minute: int = AT_8,
+        waypoint: str = "NW_FARM1_PATH_01",
+    ) -> None:
+        self.seen.saw(hero_seen_by(npc, name, minute, waypoint))
+        self.seen.saw(hero_seen_by(npc, name, minute + 5, waypoint))
 
     async def testify(self, *, witness: str = HILDA, name: str = "Хильда", said: str = SAID):
         result = await self.witnesses._testify(None, LOBART, "Лобарт", witness, name, said, "far", 0)
@@ -222,6 +225,59 @@ async def test_a_cover_outside_the_question_window_does_not_change_the_answer():
         t = await w.testify()
         assert t.told == t.saw and t.told
         assert not w.chronicle.facts("testimony")[0].get("cover")
+
+
+@pytest.mark.parametrize("promise", ["silence", "crime_cover", "day_cover"])
+@pytest.mark.parametrize("keeps", [False, True])
+async def test_npc_breaking_a_promise_testifies_truthfully_and_betrayal_is_once(promise, keeps):
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = CoverWorld(link, fake)
+        w.saw(waypoint="NW_FARM1_OUT_01")
+        record_theft(w.chronicle)
+        how = "silence" if promise == "silence" else "cover"
+        terms = (
+            {"silence": ["crime:C1"]} if promise == "silence" else
+            {"cover": {"crime": "C1", "vouch": VOUCH}} if promise == "crime_cover" else
+            {"cover": {"day": 1, "vouch": VOUCH}}
+        )
+        w.chronicle.record({
+            "fact": "npc_intent", "npc": HILDA, "deal": "D1", "keeps": keeps, "how": [how],
+        })
+        w.chronicle.record({"fact": "deal", "npc": HILDA, "deal": "D1", **terms})
+        t = await w.testify()
+        assert t.saw and t.crime_saw == ["C1"]
+        assert t.told == ([] if keeps and how == "cover" else t.saw)
+        assert t.crime_told == ([] if keeps and promise != "day_cover" else ["C1"])
+        assert t.cover == ("D1" if keeps and how == "cover" else "")
+        await w.testify()
+        assert w.chronicle.facts("betrayed") == ([] if keeps else [{
+            "fact": "betrayed", "npc": HILDA, "deal": "D1", "how": "testified", "to": LOBART,
+        }])
+
+
+async def test_disabling_cheating_after_load_restores_cover_without_rewriting_facts():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = CoverWorld(link, fake)
+        w.saw(waypoint="NW_FARM1_OUT_01")
+        record_theft(w.chronicle)
+        w.chronicle.record({
+            "fact": "npc_intent", "npc": HILDA, "deal": "D1", "keeps": False, "how": ["cover"],
+        })
+        w.chronicle.record({
+            "fact": "deal", "npc": HILDA, "deal": "D1", "cover": {"crime": "C1", "vouch": VOUCH},
+        })
+        saved = w.store.head("A")
+        await fake.send(type="session", branch="loaded", parent="A", parent_seq=saved, reason="load")
+        await _until(lambda: w.chronicle.branch == "loaded", 5)
+        w.chronicle.npc_cheat_enabled = False
+        t = await w.testify()
+        assert t.saw and not t.told and t.crime_saw == ["C1"] and not t.crime_told
+        assert t.cover == "D1" and t.vouch == VOUCH
+        assert w.chronicle.facts("covered") == w.chronicle.facts("silenced") == []
+        assert w.chronicle.facts("npc_intent")[0]["keeps"] is False
+        assert w.chronicle.facts("betrayed") == []
 
 
 async def test_vouch_without_a_sighting_is_a_real_testimony_and_not_evidence():

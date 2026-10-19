@@ -40,6 +40,10 @@ class Source:
     warning_direct: str
     warning_heard: str
     hops: int = 2
+    requires: tuple[tuple[str, str], ...] = ()
+    about: str = ""
+    about_name: str = ""
+    direct_context: str = "ты раскрыл это сам"
 
 
 SOURCES = {
@@ -54,6 +58,24 @@ SOURCES = {
         text="{subject_name} покрывал(а) героя и лгал(а) человеку по имени {about_name}",
         warning_direct="{subject_name} уже лгал(а) тебе, покрывая героя",
         warning_heard="ты слышал, что {subject_name} лгал(а), покрывая героя; со слов: {source_name}",
+    ),
+    "npc_broken": Source(
+        kind="npc_broken",
+        subject="npc",
+        observer="witnesses",
+        key="deal",
+        context="deal",
+        subject_name="npc_name",
+        observer_name="witness_names",
+        text="{subject_name} не отдал(а) герою обещанное по сделке",
+        warning_direct="{subject_name} при тебе не отдал(а) герою обещанное по сделке",
+        warning_heard=(
+            "ты слышал, что {subject_name} не отдал(а) герою обещанное по сделке; со слов: {source_name}"
+        ),
+        requires=(("how", "unpaid"),),
+        about=PLAYER,
+        about_name="герой",
+        direct_context="ты слышал это сам",
     ),
 }
 
@@ -81,35 +103,53 @@ class PersonKnowledge:
         return source.text.format(**vars(self)) if source is not None else self.title
 
 
-def source_event(fact: Fact, facts: list[Fact]) -> PersonKnowledge | None:
-    """The source's observer is the first to know; context supplies old facts' missing names/time."""
+def source_events(fact: Fact, facts: list[Fact]) -> list[PersonKnowledge]:
+    """A source can name one observer or several; all start the same piece of news."""
     source = SOURCES.get(fact.get("fact", ""))
-    if source is None:
-        return None
+    if source is None or any(fact.get(key) != value for key, value in source.requires):
+        return []
     subject = str(fact.get(source.subject, "")).upper()
-    observer = str(fact.get(source.observer, "")).upper()
-    if not subject or not observer or subject == PLAYER:
-        return None
+    if not subject or subject == PLAYER:
+        return []
+    observers = fact.get(source.observer, [])
+    if isinstance(observers, str):
+        observers = [observers]
+    if not isinstance(observers, list):
+        return []
     event_id = str(fact.get(source.key) or fact.get("by") or subject)
     context = next(
         (f for f in facts if f.get("fact") == source.context and f.get("id") == fact.get(source.key)),
         {},
     )
-    subject_name = str(fact.get("subject_name") or context.get(source.subject_name) or subject)
-    observer_name = str(fact.get("name") or context.get(source.observer_name) or observer)
-    return PersonKnowledge(
-        key=f"{fact['fact']}:{event_id}",
-        kind=source.kind,
-        subject=subject,
-        subject_name=subject_name,
-        about=observer,
-        about_name=observer_name,
-        title=str(fact.get("title") or ""),
-        source=observer,
-        source_name=observer_name,
-        direct=True,
-        day=int(fact.get("day", int(fact.get("minute", context.get("minute", 0))) // DAY)),
+    subject_name = str(
+        fact.get("subject_name") or fact.get(source.subject_name)
+        or context.get(source.subject_name) or subject
     )
+    names = fact.get(source.observer_name) or context.get(source.observer_name)
+    entries = []
+    for observer in dict.fromkeys(str(npc).upper() for npc in observers if npc):
+        if observer in (PLAYER, subject):
+            continue
+        observer_name = str((names.get(observer) if isinstance(names, dict) else names) or observer)
+        entries.append(PersonKnowledge(
+            key=f"{fact['fact']}:{event_id}",
+            kind=source.kind,
+            subject=subject,
+            subject_name=subject_name,
+            about=source.about or observer,
+            about_name=source.about_name or observer_name,
+            title=str(fact.get("title") or ""),
+            source=observer,
+            source_name=observer_name,
+            direct=True,
+            day=int(fact.get("day", int(fact.get("minute", context.get("minute", 0))) // DAY)),
+        ))
+    return entries
+
+
+def source_event(fact: Fact, facts: list[Fact]) -> PersonKnowledge | None:
+    """The first discovery, for callers that need only one source observer."""
+    return next(iter(source_events(fact, facts)), None)
 
 
 class PeopleKnowledge:
@@ -124,11 +164,8 @@ class PeopleKnowledge:
         dead = {f.get("npc") for f in facts if f.get("fact") == "died"}
         known: dict[tuple[str, str, str], PersonKnowledge] = {}
         for f in facts:
-            entry = source_event(f, facts)
-            if entry is not None:
-                if entry.source != npc:
-                    continue
-            elif (
+            entry = next((e for e in source_events(f, facts) if e.source == npc), None)
+            if entry is None and (
                 f.get("fact") == "rumor" and f.get("to") == npc
                 and rumor_subject(f) != PLAYER and source_kind(f.get("kind", "")) is not None
             ):
@@ -145,7 +182,7 @@ class PeopleKnowledge:
                     direct=False,
                     day=int(f.get("day", 0)),
                 )
-            else:
+            elif entry is None:
                 continue
             if entry.subject == npc or entry.subject in dead:
                 continue
@@ -161,7 +198,11 @@ class PeopleKnowledge:
     def context(self, npc: str) -> str | None:
         lines = []
         for entry in self.of(npc)[:SHOWN]:
-            how = "ты раскрыл это сам" if entry.direct else f"со слов: {entry.source_name}"
+            source = source_kind(entry.kind)
+            how = (
+                source.direct_context if entry.direct and source is not None
+                else f"со слов: {entry.source_name}"
+            )
             lines.append(f"- {entry.description()} ({how})")
         return "Что ты знаешь о людях вокруг:\n" + "\n".join(lines) if lines else None
 

@@ -965,7 +965,11 @@ async def serve(args: argparse.Namespace) -> int:
             things=graph.things_of if graph is not None else None,
             crimes=state.crimes,
             cover=not args.no_cover and not args.no_crimes,
+            cheat=not args.no_npc_cheat and not args.no_crimes,
+            cards=personas.cards,
         )
+        state.deals.roster = lambda: talk.people
+        state.deals.contracts.roster = lambda: talk.people
         state.dialogue.extensions.append(state.deals)
         # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)
         state.dialogue.extensions.append(state.deals.contracts)
@@ -1120,6 +1124,8 @@ async def serve(args: argparse.Namespace) -> int:
             # reads npc's by id reads them as the scripts' own: their cards, persona and voice
             state.cast = Cast(link, state.story, state.chronicle)
             personas.cards = Cards(personas.cards, state.cast.cards)
+            state.deals.cards = personas.cards
+            witnesses.cards = personas.cards
             personas.people = state.cast.person
             # the director's model makes characters up for a place (layer 4): for now on the console's word
             if place_book is not None:
@@ -1484,6 +1490,17 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario crime_talk: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "cheat":
+                assert state.crimes is not None and state.dialogue is not None and state.talk is not None
+                assert state.deals is not None and state.rumors is not None
+                assert state.people_knowledge is not None and args.trace_dir is not None
+                results = await scenarios.cheat_scenario(
+                    link, state.crimes, state.dialogue, state.talk, state.deals,
+                    state.rumors, state.people_knowledge, str(Path(args.trace_dir).parent),
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario cheat: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario in {"cover", "cover_subject"}:
                 assert state.crimes is not None and state.dialogue is not None and state.talk is not None
@@ -2557,6 +2574,7 @@ def main() -> None:
             "trace_crime",
             "cover",
             "cover_subject",
+            "cheat",
             "crime_director",
             "crime_law",
             "showrunner",
@@ -2648,6 +2666,9 @@ def main() -> None:
     p.add_argument("--no-questlog", action="store_true", help="do not track the scripts' quest states")
     p.add_argument(
         "--no-crimes", action="store_true", help="disable crimes and law patches; scripts own law entirely"
+    )
+    p.add_argument(
+        "--no-npc-cheat", action="store_true", help="all NPCs keep deferred deal promises"
     )
     p.add_argument(
         "--no-cover", action="store_true", help="disable witness cover deals and fear of testifying"

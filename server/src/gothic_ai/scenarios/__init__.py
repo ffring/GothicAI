@@ -10,6 +10,7 @@ from .basics import m5e_talk as m5e_talk
 from .basics import m6_knows as m6_knows
 from .basics import tts_lines as tts_lines
 from .basics import websocket as websocket
+from .cheat import cheat_scenario as cheat_scenario
 from .companions import calm_scenario as calm_scenario
 from .companions import companion_scenario as companion_scenario
 from .companions import neural_companion_scenario as neural_companion_scenario
