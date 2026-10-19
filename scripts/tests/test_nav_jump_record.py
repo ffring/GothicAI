@@ -70,7 +70,7 @@ def test_storage_counts_tree_and_reserves_next_whole_episode(tmp_path):
     free_disk = lambda _: SimpleNamespace(free=recorder.MIN_FREE_BYTES)
     metrics = recorder.check_storage(tmp_path, free_disk)
     assert metrics["existing_bytes"] == 128
-    assert metrics["reserved_bytes"] == 2401*17000
+    assert metrics["reserved_bytes"] > 2401*demos.RECORD_BYTES + 16*1024**2
     with pytest.raises(RuntimeError, match="STOP disk"):
         recorder.check_storage(tmp_path, lambda _: SimpleNamespace(free=recorder.MIN_FREE_BYTES - 1))
     # Sparse file tests the threshold without allocating gigabytes.

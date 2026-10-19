@@ -33,7 +33,10 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = Path.home() / "gothic-ai/nav-demos-jumps"
 TYPES = ("jump", "climb", "drop")
 LIMIT_MS = 240000
-RESERVE_BYTES = 2401 * 17000
+# Reserve above 2401 * 173838 uncompressed NAVDEMO bytes, with room for gzip
+# overhead, trajectory/actions, teacher paths and runner diagnostics. The usual
+# 17KB/decision compression estimate is too small for a storage safety margin.
+RESERVE_BYTES = 512 * 1024**2
 MAX_BYTES = 10 * 1024**3
 MIN_FREE_BYTES = 20 * 1024**3
 REQUIRED = ("episode.json", "samples.bin.gz", "actions.txt", "trajectory.txt", "teacher-paths.jsonl")
@@ -209,7 +212,9 @@ def assess_episode(directory, route):
     episode = json.loads((directory / "episode.json").read_text(encoding="utf-8"))
     if (episode.get("physics_mode") != "cv" or episode.get("frames", 0) <= 0 or
             episode.get("cv_frames", 0) <= 0 or episode.get("demo_version") != 2 or episode.get("teacher_version") != 2):
-        raise RuntimeError(f"Attempt did not run teacher v2 fully on CV: {directory}")
+        # Native airborne/climbing states temporarily disable actual CV inside
+        # MoveAlgo even with the episode's CV forcing active.
+        raise RuntimeError(f"Attempt lacks teacher v2/CV evidence: {directory}")
     samples = _compact_samples(directory)
     if len(samples[0]) != episode.get("decisions"):
         raise RuntimeError(f"Record count differs from episode metadata: {directory}")

@@ -2,7 +2,7 @@
 # Submit one bounded phase and return immediately. No training or PPO paths.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover|routes}"
+stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover|routes|record}"
 export GQ_OWNER=nav-jumps
 host=ryzen
 task="$(ssh -o ConnectTimeout=10 "$host" 'printf "%s/gothic-ai/nav-jumps" "$HOME"')"
@@ -122,6 +122,29 @@ PY
 ROUTES
     "$ROOT/scripts/gq" submit --class batch --threads 2 --mem 6G --max 2h \
       --name "nav jumps routes v2 max3 per transition" -- bash "$task/routes.sh"
+    ;;
+  record)
+    # Record the approved route set with the existing CV runner and private cache.
+    ssh "$host" "mkdir -p '$source_dir/scripts/tests'"
+    rsync -a "$ROOT/scripts/nav_jump_record.py" "$host:$source_dir/scripts/"
+    rsync -a "$ROOT/scripts/tests/test_nav_jump_record.py" "$host:$source_dir/scripts/tests/"
+    ssh "$host" "cat > '$task/record.sh'" <<'RECORD'
+#!/usr/bin/env bash
+set -euo pipefail
+task="$(cd "$(dirname "$0")" && pwd)"
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
+df -h "$HOME"
+cd "$task/source"
+"$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_jump_record.py
+"$task/.venv/bin/python" -I "$task/source/scripts/nav_jump_record.py" \
+  --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
+  --save "$task/input/save.sav" --cache "$task/cache-transitions-cv" \
+  --links "$task/accepted-links-cv.txt" --roads "$task/input/places.json" \
+  --routes "$task/routes/routes.jsonl" --output "$HOME/gothic-ai/nav-demos-jumps" --count 267
+"$task/.venv/bin/python" -I "$task/source/scripts/nav_demos.py" check "$HOME/gothic-ai/nav-demos-jumps"
+RECORD
+    "$ROOT/scripts/gq" submit --class batch --threads 2 --mem 6G --max 2h \
+      --name "nav jumps record 267 teacher v2 CV 240s" -- bash "$task/record.sh"
     ;;
   *) echo "Unknown phase: $stage" >&2; exit 2 ;;
 esac
