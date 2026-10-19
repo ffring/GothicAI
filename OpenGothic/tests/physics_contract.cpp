@@ -3104,7 +3104,7 @@ namespace {
       bool supported=false, diagnostics=true, success=false;
       uint64_t elapsed=0;
       unsigned stalls=0, maximumStall=0;
-      int stairAttempts=0;
+      int stairAttempts=0, steepBounces=0;
       float maximumRise=0;
       };
     std::array<std::array<Result,2>,ledges.size()> results;
@@ -3141,7 +3141,7 @@ namespace {
         auto monster=world.addGhostObj(&skeleton);
         monster.setPosition({-200,0,0});
         monster.setVirtualDiagnosticsEnabled(true);
-        auto state=monster.moveVirtual({},0,ledge.stepHeight,maxSlope,mass,nullptr,limitStairAdvance);
+        auto state=monster.moveVirtual({},0,ledge.stepHeight,maxSlope,mass,nullptr,limitStairAdvance,limitStairAdvance);
         result.supported=state.grounded;
         const float target=100.f+ledge.radius+80.f;
         float progress=state.position.x;
@@ -3152,7 +3152,8 @@ namespace {
           const auto previous=state.position;
           // The same running approach for both actual controller policies:
           // 210 cm/s at the video bench's 30 Hz update cadence.
-          state=monster.moveVirtual({.21f*float(dt),0,0},dt,ledge.stepHeight,maxSlope,mass,nullptr,limitStairAdvance);
+          state=monster.moveVirtual({.21f*float(dt),0,0},dt,ledge.stepHeight,maxSlope,mass,nullptr,limitStairAdvance,limitStairAdvance);
+          result.steepBounces+=state.blocked && state.steepContact ? 1 : 0;
           result.elapsed+=dt;
           result.maximumRise=std::max(result.maximumRise,state.position.y-previous.y);
           if(state.position.x-progress>=1.f) {
@@ -3174,10 +3175,10 @@ namespace {
         result.success=state.grounded && state.position.x>=target && std::abs(state.position.y-ledge.rise)<=2.f;
         std::printf("Monster CharacterVirtual %s isolated %.0f cm ledge, bottom %.0f cm, policy %s: "
                     "success %d, time %llu ms, frames %d, stalls %u, max stall %u ms, "
-                    "max root rise %.6f cm, stair attempts %d, feet (%.6f,%.6f,%.6f) cm\n",
+                    "max root rise %.6f cm, stair attempts %d, steep bounces %d, feet (%.6f,%.6f,%.6f) cm\n",
                     ledge.monster,double(ledge.rise),double(ledge.bottom),limitStairAdvance ? "monster" : "old",
                     int(result.success),static_cast<unsigned long long>(result.elapsed),frames,
-                    result.stalls,result.maximumStall,double(result.maximumRise),result.stairAttempts,
+                    result.stalls,result.maximumStall,double(result.maximumRise),result.stairAttempts,result.steepBounces,
                     double(state.position.x),double(state.position.y),double(state.position.z));
         }
       }
@@ -3192,6 +3193,7 @@ namespace {
     for(const auto& pair:results) {
       require(pair[1].success,"the monster stair policy must preserve traversal of an isolated ledge within the guild step");
       require(pair[1].stalls==0,"an isolated ledge within the monster guild step must not stall walking for over one second");
+      require(pair[1].steepBounces==0,"a traversable isolated ledge must not notify the monster AI of a steep-wall bounce");
       }
     }
 
@@ -3234,17 +3236,18 @@ namespace {
         // Use the monster policy of the actual walking controller. The 60 cm
         // guild step is deliberately much higher than these repeated city-sized
         // risers; limiting a test-only stepHeight would conceal the old shortcut.
-        auto state=wolf.moveVirtual({},0,stepHeight,maxSlope,mass,nullptr,limitStairAdvance);
+        auto state=wolf.moveVirtual({},0,stepHeight,maxSlope,mass,nullptr,limitStairAdvance,limitStairAdvance);
         require(state.grounded,"wolf short-riser contract must start supported on the flat approach");
         const float target=100.f+float(stepCount-1)*tread+80.f;
         float maximumRise=0.f, maximumDrop=0.f, progress=state.position.x;
         unsigned stalled=0, maximumStall=0, airborne=0, maximumAirborne=0;
-        int stairAttempts=0, frames=0;
+        int stairAttempts=0, steepBounces=0, frames=0;
         for(;frames<240 && state.position.x<target;++frames) {
           const uint64_t dt=frames%3==0 ? 34 : 33;
           const auto previous=state.position;
           // 210 cm/s at the same 30 Hz cadence as the paired video bench.
-          state=wolf.moveVirtual({.21f*float(dt),0,0},dt,stepHeight,maxSlope,mass,nullptr,limitStairAdvance);
+          state=wolf.moveVirtual({.21f*float(dt),0,0},dt,stepHeight,maxSlope,mass,nullptr,limitStairAdvance,limitStairAdvance);
+          steepBounces+=state.blocked && state.steepContact ? 1 : 0;
           maximumRise=std::max(maximumRise,state.position.y-previous.y);
           maximumDrop=std::max(maximumDrop,previous.y-state.position.y);
           if(state.position.x-progress>=1.f) {
@@ -3261,13 +3264,14 @@ namespace {
           stairAttempts+=diagnostic.stairAttempted ? 1 : 0;
           }
         std::printf("Monster CharacterVirtual WOLF 10 cm risers / %.0f cm treads at 30 Hz, limited %d: "
-                    "frames %d, stair attempts %d, max root rise %.6f cm, max drop %.6f cm, "
+                    "frames %d, stair attempts %d, steep bounces %d, max root rise %.6f cm, max drop %.6f cm, "
                     "max stall %u ms, max airborne %u ms, feet (%.6f,%.6f,%.6f) cm\n",
-                    double(tread),int(limitStairAdvance),frames,stairAttempts,double(maximumRise),double(maximumDrop),maximumStall,maximumAirborne,
+                    double(tread),int(limitStairAdvance),frames,stairAttempts,steepBounces,double(maximumRise),double(maximumDrop),maximumStall,maximumAirborne,
                     double(state.position.x),double(state.position.y),double(state.position.z));
         if(!limitStairAdvance)
           continue;
         require(stairAttempts>0,"the ten-centimetre wolf staircase must exercise native automatic stair walking");
+        require(steepBounces==0,"a traversable short-riser staircase must not notify the monster AI of a steep-wall bounce");
         require(maximumRise<=12.01f,"a walking monster must not raise its physical root by over twelve centimetres per city-stair update");
         require(state.grounded && state.position.x>=target,"the wolf must finish the repeated ten-centimetre staircase on its upper landing");
         requireNear(state.position.y,float(stepCount)*riser,2.f,"the wolf must finish at the twelve-riser landing height");
@@ -3277,10 +3281,123 @@ namespace {
       }
     }
 
+  void testMonsterCharacterVirtualSteepBlocking() {
+    constexpr float radius=15.f, height=83.f, stepHeight=60.f;
+    constexpr float radians=.01745329252f, maxSlope=50.f*radians;
+    Resources resources;
+    zenkit::ModelHierarchy hierarchy;
+    hierarchy.collision_bbox={{-radius,0,-radius},{radius,height,radius}};
+    Skeleton skeleton(hierarchy,nullptr,"WOLF");
+    const float mass=Ragdoll::speciesMass("WOLF");
+    ProtoMesh wall(PackedMesh(movableCollisionBox({20,400,2000}),PackedMesh::PK_Visual),"MONSTER_BOUNCE_WALL.MRM");
+    // A 45-degree request retains half its projected advancement while sliding
+    // along this face. That is deliberately above the old ten-percent gate.
+    for(bool kinematic:{false,true}) for(bool bounce:{false,true}) {
+      DynamicWorld world(nullptr,movableFloor());
+      auto structure=kinematic ? world.addMovableObj(wall.attach[0].shape.get(),at(100,200,0),"MONSTER_BOUNCE_WALL.MRM") :
+                                 world.addStaticObj(wall.attach[0].shape.get(),at(100,200,0),"MONSTER_BOUNCE_WALL.MRM");
+      require(!structure.isEmpty(),"monster bounce fixture must install its static or kinematic wall");
+      auto wolf=world.addGhostObj(&skeleton);
+      wolf.setPosition({50,0,0});
+      auto state=wolf.moveVirtual({},0,stepHeight,maxSlope,mass,nullptr,true,bounce);
+      require(state.grounded,"monster wall approach must begin with native ground support");
+      unsigned slidingFrames=0, blockedFrames=0;
+      for(int frame=0;frame<24;++frame) {
+        state=wolf.moveVirtual({5,0,5},17,stepHeight,maxSlope,mass,nullptr,true,bounce);
+        if(!state.steepContact || state.advancementRatio<=.2f || state.advancementRatio>=.60f)
+          continue;
+        ++slidingFrames;
+        blockedFrames+=state.blocked ? 1u : 0u;
+        require(state.grounded,"a wall contact must preserve the wolf's flat-ground support");
+        requireNear(state.steepContactNormal.x,-1.f,.001f,"a steep contact must expose the wall normal opposing the requested X motion");
+        requireNear(state.steepContactNormal.y,0.f,.001f,"a steep wall normal must not use the support floor's vertical normal");
+        requireNear(state.steepContactNormal.z,0.f,.001f,"the wall normal must not follow the remaining sideways displacement");
+        require(state.blocked==bounce,"only the enabled monster policy must turn diagonal steep-wall sliding into a movement failure");
+        if(bounce) {
+          require(state.collision.landCol && state.collision.npcCol==0.f,
+                  "a blocked steep wall must notify MoveAlgo through the world branch rather than its NPC branch");
+          requireNear((state.collision.normal-state.steepContactNormal).length(),0.f,.001f,
+                      "MoveAlgo must receive the actual steep face normal for its native bounce");
+          }
+        }
+      std::printf("Monster CharacterVirtual 45 deg %s wall, bounce %d: sliding frames %u, blocked %u, final advancement %.6f\n",
+                  kinematic ? "kinematic" : "static",int(bounce),slidingFrames,blockedFrames,double(state.advancementRatio));
+      require(slidingFrames>=10,"the diagonal wall contract must exercise sustained 20-60 percent advancement instead of a head-on stop");
+      }
+    {
+      constexpr float angle=49.f*radians;
+      auto terrain=movableFloor();
+      for(auto& vertex:terrain.vertices)
+        vertex.y=vertex.x*std::tan(angle);
+      DynamicWorld world(nullptr,terrain);
+      auto wolf=world.addGhostObj(&skeleton);
+      const Tempest::Vec3 initial(0,(radius+1.f)/std::cos(angle)-radius-1.f,0);
+      wolf.setPosition(initial);
+      auto state=wolf.moveVirtual({},0,stepHeight,maxSlope,mass,nullptr,true,true);
+      require(state.grounded,"walkable monster slope control must begin with support near the guild angle limit");
+      for(int frame=0;frame<30;++frame) {
+        state=wolf.moveVirtual({5,0,5},17,stepHeight,maxSlope,mass,nullptr,true,true);
+        require(!state.blocked && !state.steepContact,
+                "the enabled monster bounce policy must never classify a walkable slope as a steep obstruction");
+        }
+      require(state.grounded && state.position.x>initial.x+40.f && state.position.y>initial.y+40.f,
+              "the wolf must continue diagonally uphill on a walkable slope with bouncing enabled");
+      }
+    {
+      // Keep the light box taller than the wolf's guild step. A first diagonal
+      // contact therefore resembles wall sliding, but a real dynamic hull is
+      // excluded from the new blocker and must still receive walking impulses.
+      const Tempest::Vec3 dimensions(40,83,400);
+      ProtoMesh box(PackedMesh(movableBox(dimensions),PackedMesh::PK_Visual),"MONSTER_BOUNCE_BOX.MRM");
+      const float multiplier=1.f/(.4f*.83f*4.f*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD));
+      DynamicWorld world(nullptr,movableFloor());
+      auto prop=world.addMovableVob(box,"MONSTER_BOUNCE_BOX.MRM",at(100,height*.5f,0),multiplier,true,"crate",true,47);
+      require(!prop.isEmpty() && prop.mass()>.9f && prop.mass()<1.1f,
+              "dynamic monster bounce control must use a real lightweight native box");
+      auto wolf=world.addGhostObj(&skeleton);
+      wolf.setPosition({64,0,0});
+      auto state=wolf.moveVirtual({},0,stepHeight,maxSlope,mass,nullptr,true,true);
+      require(state.grounded,"dynamic box contact must begin with native floor support");
+      for(int frame=0;frame<60;++frame) {
+        state=wolf.moveVirtual({5,0,5},17,stepHeight,maxSlope,mass,nullptr,true,true);
+        require(!state.blocked && !state.steepContact,
+                "a pushable dynamic box must never become a steep-wall bounce while the wolf slides along and pushes it");
+        world.tick(17);
+        }
+      const float travel=prop.position().x-100.f;
+      std::printf("Monster CharacterVirtual 45 deg dynamic %.6f kg box: pushed %.6f cm, touched %d\n",
+                  double(prop.mass()),double(travel),int(prop.touchedByNpc()));
+      require(prop.touchedByNpc() && travel>20.f,
+              "the enabled monster bounce policy must retain actual walking impulses and movement of a light dynamic box");
+      }
+    {
+      DynamicWorld world(nullptr,movableFloor());
+      auto wolf=world.addGhostObj(&skeleton);
+      auto neighbour=world.addGhostObj(&skeleton);
+      wolf.setPosition({0,0,0});
+      neighbour.setPosition({100,0,0});
+      world.tick(0);
+      world.tick(0);
+      bool blockedByNpc=false;
+      for(int frame=0;frame<30;++frame) {
+        const auto state=wolf.moveVirtual({5,0,0},17,stepHeight,maxSlope,mass,nullptr,true,true);
+        require(!state.steepContact,"another NPC must never supply the static steep-face bounce contact");
+        if(state.blocked) {
+          require(state.collision.npcCol>0.f && !state.collision.landCol,
+                  "monster bouncing must preserve the separate native NPC collision branch");
+          blockedByNpc=true;
+          }
+        }
+      require(blockedByNpc,"the enabled monster bounce control must exercise its native neighbouring-NPC collision");
+      requireNear(neighbour.position().x,100.f,0.f,"a monster's NPC collision must not move its neighbour");
+      }
+    }
+
   void testMonsterCharacterVirtual() {
     testMonsterCharacterVirtualEligibility();
     testMonsterCharacterVirtualShortRisers();
     testMonsterCharacterVirtualIsolatedLedges();
+    testMonsterCharacterVirtualSteepBlocking();
     constexpr float radians=.01745329252f;
     struct Monster {
       const char* name;
