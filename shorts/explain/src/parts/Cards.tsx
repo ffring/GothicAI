@@ -117,9 +117,16 @@ export const BarsView: React.FC<{spec: Bars}> = ({spec}) => {
   const left = wide ? 96 : LEFT;
   const contentWidth = wide ? 1728 : WIDTH;
   const top = wide ? 360 : 560;
-  const bottom = wide ? 735 : 1060;
+  const hasNotes = spec.groups.some((g) => g.note !== undefined);
+  const bottom = wide ? (hasNotes ? 690 : 735) : 1060;
   const groupW = contentWidth / spec.groups.length;
   const barW = Math.min(wide ? 140 : 110, (groupW - 60) / spec.series.length);
+  const values = spec.groups.flatMap((g) => g.values);
+  const minPositive = Math.min(...values.filter((v) => v > 0));
+  const logBase = Number.isFinite(minPositive)
+    ? Math.min(1, 10 ** (Math.ceil(Math.log10(minPositive)) - 1))
+    : 1;
+  const logBaseLabel = String(logBase).replace('.', spec.decimal);
   return (
     <AbsoluteFill style={{background: COLOR.card}}>
       <div style={{position: 'absolute', left, top: wide ? 150 : 300, width: contentWidth, ...text(60), lineHeight: 1.15}}>{spec.title}</div>
@@ -131,6 +138,7 @@ export const BarsView: React.FC<{spec: Bars}> = ({spec}) => {
           </span>
         ))}
       </div>
+      {spec.log && <div style={{position: 'absolute', left, top: wide ? 275 : 400, width: contentWidth, textAlign: 'right', ...text(24, COLOR.before, 600)}}>Логарифмическая шкала · от {logBaseLabel}{values.includes(0) ? ' · 0 — на базе' : ''}</div>}
       <div style={{position: 'absolute', left, top: bottom, width: contentWidth, height: 3, background: COLOR.grid}} />
       {spec.groups.map((g, gi) => {
         const x0 = left + gi * groupW + (groupW - barW * spec.series.length - 16 * (spec.series.length - 1)) / 2;
@@ -138,7 +146,11 @@ export const BarsView: React.FC<{spec: Bars}> = ({spec}) => {
         return (
           <React.Fragment key={g.label}>
             {g.values.map((v, si) => {
-              const h = ((bottom - top) * v * k) / spec.max;
+              // Zero has no logarithm, so it stays on the explicitly labelled baseline.
+              const h = spec.log
+                ? (v > 0 ? (bottom - top) * Math.log(v / logBase) / Math.log(spec.max / logBase) * k : 0)
+                : ((bottom - top) * v * k) / spec.max;
+              const color = g.color ?? spec.series[si].color;
               const x = x0 + si * (barW + 16);
               return (
                 <React.Fragment key={si}>
@@ -149,7 +161,7 @@ export const BarsView: React.FC<{spec: Bars}> = ({spec}) => {
                       top: bottom - h,
                       width: barW,
                       height: h,
-                      background: spec.series[si].color,
+                      background: color,
                       borderRadius: '8px 8px 0 0',
                     }}
                   />
@@ -161,7 +173,7 @@ export const BarsView: React.FC<{spec: Bars}> = ({spec}) => {
                       transform: 'translateX(-50%)',
                       opacity: k,
                       whiteSpace: 'nowrap',
-                      ...text(36, spec.series[si].color),
+                      ...text(36, color),
                     }}
                   >
                     {spec.format.replace('{v}', String(Number(v.toFixed(2))).replace('.', spec.decimal))}
@@ -176,11 +188,12 @@ export const BarsView: React.FC<{spec: Bars}> = ({spec}) => {
                 top: bottom + 18,
                 transform: 'translateX(-50%)',
                 opacity: shown(t, g.at),
-                ...text(44),
+                ...text(wide && hasNotes ? 32 : 44),
                 ...(wide ? {width: groupW - 24, textAlign: 'center', lineHeight: 1.15} : {}),
               }}
             >
               {g.label}
+              {g.note !== undefined && <div style={{marginTop: 7, ...text(24, COLOR.before, 600), lineHeight: 1.2}}>{g.note}</div>}
             </div>
           </React.Fragment>
         );
