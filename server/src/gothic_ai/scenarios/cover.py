@@ -79,6 +79,7 @@ async def cover_scenario(
     fake = isinstance(original_llm, FakeBackend)
     chronicle, directory = service.chronicle, Path(log_dir)
     facts = chronicle.facts
+    participants = {LOBART, HILDA, VINO}
     if subject and (not fake or people is None):
         return _logged({"subject_setup": "failed (cover_subject needs LLM=fake and people knowledge)"})
 
@@ -107,11 +108,11 @@ async def cover_scenario(
         if face is not None:
             await link.npc_act(npc, "turn_to", npc=face)
 
-    async def stage_investigation(point: str) -> tuple[bool, dict[str, Any]]:
-        trio = (HILDA, VINO, LOBART)
+    async def stage_investigation(point: str, *, third: str = VINO) -> tuple[bool, dict[str, Any]]:
+        trio = (HILDA, third, LOBART)
         for npc in trio:
             await stand(npc, point)
-        await link.debug("player_goto", to=LOBART, distance=300)
+        await link.debug("teleport", near=LOBART, distance=300)
         detail: dict[str, Any] = {}
 
         async def ready() -> bool:
@@ -149,11 +150,11 @@ async def cover_scenario(
     async def settled() -> bool:
         return await _until(
             lambda: (
-                not witnesses._asking.intersection((LOBART, HILDA, VINO))
+                not witnesses._asking.intersection(participants)
                 and all(
                     not dialogue.speaking(npc)
                     and not (dialogue.conversations.get(npc) and dialogue.conversations[npc].actions)
-                    for npc in (LOBART, HILDA, VINO)
+                    for npc in participants
                 )
             ),
             60,
@@ -224,11 +225,24 @@ async def cover_scenario(
         assert crime is not None
         cid = str(crime["id"])
         await stand(HILDA, field)
-        await link.debug("player_goto", to=HILDA, distance=250)
+        await link.debug("teleport", near=HILDA, distance=250)
+        deal_position: dict[str, Any] = {}
+
+        async def deal_ready() -> bool:
+            state = await link.story_state(npcs=[HILDA])
+            current = (state.get("npcs") or {}).get(HILDA) or {}
+            entry = talk.people.get(HILDA)
+            deal_position.update({"state": current, "roster": entry.model_dump() if entry else None})
+            return (
+                current.get("state") == "alive"
+                and entry is not None and entry.name == "Хильда"
+                and entry.distance <= 600 and entry.earshot <= 600
+            )
+
         if not check(
             "deal_near",
-            await _until(lambda: HILDA in talk.people and talk.people[HILDA].distance <= 600, 20),
-            "Hilda hears the hero",
+            await _until_async(deal_ready, bool, 20),
+            deal_position,
         ):
             return _logged(results)
         state = await link.story_state(npcs=[HILDA])
@@ -338,7 +352,7 @@ async def cover_scenario(
         # Vino independently sees the hero on the farm. He need not see the cup: the exact same
         # denial also claims the hero was never on the farm, which his real sighting disproves.
         await stand(VINO, field, face="PLAYER")
-        await link.debug("player_goto", to=VINO, distance=250)
+        await link.debug("teleport", near=VINO, distance=250)
         await link.npc_act(VINO, "turn_to", npc="PLAYER")
 
         async def vino_sees() -> bool:
@@ -491,6 +505,24 @@ async def cover_scenario(
                 return _logged(results)
             social = rumors.social
             assert social is not None
+            common = sorted(
+                (social.ties.get(LOBART, {}).keys() & social.ties.get(HILDA, {}).keys())
+                - {LOBART, HILDA},
+                key=lambda npc: (npc != "VLK_439_VATRAS", npc),
+            )
+            state = await link.story_state(npcs=common)
+            third = next(
+                (npc for npc in common if (state.get("npcs", {}).get(npc) or {}).get("state") == "alive"),
+                "",
+            )
+            if not check(
+                "subject_tie",
+                bool(third),
+                {"third": third, "common": common, "ties": social.describe(third) if third else []},
+            ):
+                return _logged(results)
+            third_name = social.names[third]
+            participants.add(third)
 
             def hilda_rumors() -> list[Rumor]:
                 return [r for r in rumors.rumors.values() if r.kind == "cover" and r.subject == HILDA]
@@ -501,42 +533,38 @@ async def cover_scenario(
                 len(sources) == 1
                 and sources[0].known == {LOBART: 0}
                 and bool(people.of(LOBART))
-                and not people.of(VINO),
+                and not people.of(third),
                 {"rumors": [(r.subject, r.known) for r in sources], "first": people.context(LOBART)},
             ):
                 return _logged(results)
             rumor = sources[0]
-            if not check(
-                "subject_tie",
-                VINO in social.ties.get(LOBART, {}) and HILDA in social.ties.get(VINO, {}),
-                {"Lobart": social.describe(LOBART), "Vino": social.describe(VINO)},
-            ):
+            ready, preparation = await stage_investigation(field, third=third)
+            if not check("subject_ask_near", ready, preparation):
                 return _logged(results)
-            hero_trust = trust.of(VINO)
-            rumors.gate = lambda r, a, b: r.key == rumor.key and (a, b) == (LOBART, VINO)
-            # A clock jump follows the ordinary ties and records only a fact, as for hero rumors.
             rumors.stage = original_stage
-            await link.debug("time", hour=10, minute=0)
             await rumors.tick()
-            reached = await _until(lambda: VINO in rumor.known, 20)
+            hero_trust = trust.of(third)
+            rumors.gate = lambda r, a, b: r.key == rumor.key and (a, b) == (LOBART, third)
+            # They really meet here, outside their routine's hours; the ordinary staging guard applies.
+            passed = rumors.offer_status(rumor, LOBART, third)
             heard = [
                 f for f in facts("rumor")
                 if f.get("kind") == "cover" and f.get("subject") == HILDA
             ]
             if not check(
                 "subject_spread",
-                reached
+                passed == "told"
                 and len(heard) == 1
                 and heard[0].get("from") == LOBART
-                and heard[0].get("to") == VINO
+                and heard[0].get("to") == third
                 and heard[0].get("hops") == 1
-                and rumor.known[VINO] == 1
-                and not rumor.tells(HILDA, rumor.since.get(VINO, day)),
-                heard,
+                and rumor.known[third] == 1
+                and not rumor.tells(HILDA, rumor.since.get(third, day)),
+                {"offer": passed, "facts": heard},
             ):
                 return _logged(results)
-            check("subject_hero_trust", trust.of(VINO) == hero_trust, trust.of(VINO))
-            knowledge = people.context(VINO) or ""
+            check("subject_hero_trust", trust.of(third) == hero_trust, trust.of(third))
+            knowledge = people.context(third) or ""
             check(
                 "subject_context",
                 "Что ты знаешь о людях вокруг" in knowledge
@@ -544,18 +572,19 @@ async def cover_scenario(
                 and "Лобарт" in knowledge,
                 knowledge,
             )
-            ready, preparation = await stage_investigation(field)
-            if not check("subject_ask_near", ready, preparation):
-                return _logged(results)
-            await link.debug("player_goto", to=VINO, distance=250)
+            await link.debug("teleport", near=third, distance=250)
             if not check(
                 "subject_asker_near",
-                await _until(lambda: VINO in talk.people and talk.people[VINO].distance <= 600, 20),
-                "Vino hears the hero",
+                await _until(
+                    lambda: (entry := talk.people.get(third)) is not None
+                    and entry.name == third_name and entry.distance <= 600 and entry.earshot <= 600,
+                    20,
+                ),
+                {"third": third, "roster": talk.people.get(third)},
             ):
                 return _logged(results)
-            script, _ = await investigate(HILDA, "Хильда", asker=VINO, judge=False)
-            warning = people.warning(VINO, HILDA)
+            script, _ = await investigate(HILDA, "Хильда", asker=third, judge=False)
+            warning = people.warning(third, HILDA)
             question = "\n".join(script.questions)
             testimony_rows = [
                 line for row in script.evidence for line in row["prompt"].splitlines()
@@ -577,7 +606,7 @@ async def cover_scenario(
                 bool(warning)
                 and any("Хильда говорит:" in line and warning in line for line in testimony_rows)
                 and any(
-                    f.get("npc") == VINO and f.get("witness") == HILDA
+                    f.get("npc") == third and f.get("witness") == HILDA
                     for f in facts("testimony")
                 ),
                 testimony_rows,
@@ -589,8 +618,8 @@ async def cover_scenario(
                 "rumor",
             }
             snapshot = [f for f in facts() if f.get("fact") in kinds]
-            before_people = people.of(VINO)
-            before_trust = trust.of(VINO)
+            before_people = people.of(third)
+            before_trust = trust.of(third)
             before_known = dict(rumor.known)
             head = sightings.memory.head(chronicle.branch) if chronicle.branch else 0
             saved = await _save(link, slot)
@@ -612,18 +641,18 @@ async def cover_scenario(
                 and [f for f in facts() if f.get("fact") in kinds] == snapshot
                 and len(loaded) == 1
                 and loaded[0].known == before_known
-                and people.of(VINO) == before_people
-                and people.context(VINO) == knowledge
-                and trust.of(VINO) == before_trust,
-                {"facts": len(snapshot), "rumors": len(loaded), "knowledge": people.context(VINO)},
+                and people.of(third) == before_people
+                and people.context(third) == knowledge
+                and trust.of(third) == before_trust,
+                {"facts": len(snapshot), "rumors": len(loaded), "knowledge": people.context(third)},
             )
             if loaded:
                 check(
                     "subject_no_duplicates",
-                    rumors.offer_status(loaded[0], LOBART, VINO) == "no"
+                    rumors.offer_status(loaded[0], LOBART, third) == "no"
                     and [f for f in facts() if f.get("fact") in kinds] == snapshot
                     and len(exposed()) == 1
-                    and people.of(VINO) == before_people,
+                    and people.of(third) == before_people,
                     {"exposed": len(exposed()), "rumor_facts": len(heard), "known": loaded[0].known},
                 )
             return _logged(results)
