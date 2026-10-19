@@ -998,11 +998,14 @@ creates twelve transparent leaf/grass PNG overrides. Pass the same absolute
 meshes remain intact. The video title discloses the render-only foliage removal.
 The monster stair policy uses only the remaining horizontal request instead of
 Jolt's extra 2 cm minimum advance. It retains the full guild step (wolf 60 cm,
-troll 100 cm) for a single ledge. A blocking steep polygon taller than the guild
-step plus contact padding is treated as extended steep terrain and retains a
-12 cm rise budget. Unknown/non-polygonal shapes retain the full guild step.
+troll 100 cm) for a single ledge. A blocking steep polygon with more than the guild step plus contact padding
+exposed above the physical feet is treated as extended steep terrain and retains
+a 12 cm rise budget. The decision stays with the same body/subshape until the
+blocking contact ends; teleportation clears it. Buried portions below the feet
+are excluded. Unknown/non-polygonal shapes retain the full guild step.
 Player/human paths retain the native policy.
-The contract covers both repeated ten-centimetre risers and isolated ledges.
+The contract covers repeated ten-centimetre risers, isolated ledges, and a
+40 cm ledge whose vertical face continues 100 cm below the approach floor.
 Presentation lag stays within 10 cm; a high single ledge may visibly snap as in
 legacy movement.
 

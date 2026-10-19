@@ -799,6 +799,12 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   float pushSeconds = 0.f;
   float pushRemaining = 0.f;
   std::vector<std::pair<JPH::BodyID,float>> pushBodies;
+  struct LimitedSteepFace {
+    JPH::BodyID body;
+    JPH::SubShapeID subShape;
+    bool seen = true;
+    };
+  std::vector<LimitedSteepFace> limitedSteepFaces;
   bool contactsDirty = true;
   bool needsInitialUpdate = true;
   bool carrying = false;
@@ -845,6 +851,7 @@ void CollisionWorld::VirtualCharacter::setPosition(const Tempest::Vec3& feet) {
   impl->contactsDirty = true;
   impl->needsInitialUpdate = true;
   impl->ground = JPH::BodyID();
+  impl->limitedSteepFaces.clear();
   }
 
 void CollisionWorld::VirtualCharacter::setDiagnosticsEnabled(bool enabled) {
@@ -878,6 +885,14 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
   // capped independently of the character's weight on a supporting body.
   character.SetMaxStrength(std::min(character.GetMass()*DynamicWorld::gravityMS,450.f));
   const float seconds = float(dt)*0.001f;
+  // Zero-dt contact refreshes do not end a physical contact's classification.
+  if(dt>0) {
+    if(!limitStairAdvance)
+      state.limitedSteepFaces.clear();
+    else
+      for(auto& face:state.limitedSteepFaces)
+        face.seen = false;
+    }
   state.pushSeconds = seconds;
   state.pushRemaining = character.GetMaxStrength()*seconds;
   state.pushBodies.clear();
@@ -997,6 +1012,9 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
       if(!contact.mHadCollision || contact.mWasDiscarded || contact.mIsSensorB ||
          contact.mSurfaceNormal.Dot(desiredVelocity-contact.mLinearVelocity)>=0.f)
         continue;
+      for(auto& face:state.limitedSteepFaces)
+        if(face.body==contact.mBodyB && face.subShape==contact.mSubShapeIDB)
+          face.seen = true;
       JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
       if(lock.SucceededAndIsInBroadPhase() && Impl::blocksAutomaticStairs(lock.GetBody())) {
         stairObstacle = true;
@@ -1043,6 +1061,13 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
             best = direction.Dot(forward);
             }
           if(limitStairAdvance && !contact.mIsSensorB) {
+            const auto limited = std::find_if(state.limitedSteepFaces.begin(),state.limitedSteepFaces.end(),[&](const auto& face) {
+              return face.body==contact.mBodyB && face.subShape==contact.mSubShapeIDB;
+              });
+            if(limited!=state.limitedSteepFaces.end()) {
+              extendedSteepFace = true;
+              continue;
+              }
             JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
             if(lock.SucceededAndIsInBroadPhase()) {
               JPH::Shape::SupportingFace face;
@@ -1053,14 +1078,23 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
                   low = std::min(low,vertex.Dot(up));
                   high = std::max(high,vertex.Dot(up));
                   }
-                extendedSteepFace |= high-low>step+character.GetCharacterPadding();
+                // Face vertices are relative to the physical feet before this
+                // update. Buried geometry below that support level cannot add
+                // to the height of the obstacle the monster must climb.
+                const float exposedHeight = std::max(0.f,high-std::max(low,0.f));
+                if(exposedHeight>step+character.GetCharacterPadding()) {
+                  extendedSteepFace = true;
+                  // Retain this decision until contact ends: approaching the
+                  // crest must not turn the same bank into a new low ledge.
+                  state.limitedSteepFaces.push_back({contact.mBodyB,contact.mSubShapeIDB,true});
+                  }
                 }
               }
             }
           }
         // Keep a monster's stair advance within the remaining animation travel
-        // instead of imposing Jolt's 2 cm minimum. A face taller than the guild
-        // step is extended steep terrain rather than a single permitted riser:
+        // instead of imposing Jolt's 2 cm minimum. A face exposed above the feet
+        // by more than the guild step is extended terrain, not a permitted riser:
         // ascend it gradually. Ordinary ledges and shapes without polygonal
         // faces retain the full guild step and the native safe landing sweeps.
         const float forwardDistance = desiredLength-achievedLength;
@@ -1094,6 +1128,9 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
         }
       }
     }
+  if(dt>0)
+    state.limitedSteepFaces.erase(std::remove_if(state.limitedSteepFaces.begin(),state.limitedSteepFaces.end(),
+                                                [](const auto& face) { return !face.seen; }),state.limitedSteepFaces.end());
   if(diagnostic!=nullptr) {
     if(seconds<=0.f)
       diagnostic->afterExtendedUpdate = state.diagnosticPose();

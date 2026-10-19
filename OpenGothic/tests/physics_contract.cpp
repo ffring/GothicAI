@@ -3092,12 +3092,14 @@ namespace {
     struct Ledge {
       const char* monster;
       float radius, height, stepHeight, rise;
+      float bottom=0;
       };
-    constexpr std::array<Ledge,5> ledges={{{"WOLF",15,83,60,20},
+    constexpr std::array<Ledge,6> ledges={{{"WOLF",15,83,60,20},
                                             {"WOLF",15,83,60,40},
                                             {"WOLF",15,83,60,55},
                                             {"TROLL",68,272,100,40},
-                                            {"TROLL",68,272,100,80}}};
+                                            {"TROLL",68,272,100,80},
+                                            {"WOLF",15,83,60,40,-100}}};
     struct Result {
       bool supported=false, diagnostics=true, success=false;
       uint64_t elapsed=0;
@@ -3125,7 +3127,7 @@ namespace {
       // One vertical face with a broad flat landing, rather than a flight of
       // short risers. The approach leaves both capsules clear of the ledge.
       surface(-2000,0,100,0);
-      surface(100,0,100,ledge.rise);
+      surface(100,ledge.bottom,100,ledge.rise);
       surface(100,ledge.rise,2000,ledge.rise);
       zenkit::ModelHierarchy hierarchy;
       hierarchy.collision_bbox={{-ledge.radius,0,-ledge.radius},
@@ -3170,16 +3172,16 @@ namespace {
             ++result.stairAttempts;
           }
         result.success=state.grounded && state.position.x>=target && std::abs(state.position.y-ledge.rise)<=2.f;
-        std::printf("Monster CharacterVirtual %s isolated %.0f cm ledge, policy %s: "
+        std::printf("Monster CharacterVirtual %s isolated %.0f cm ledge, bottom %.0f cm, policy %s: "
                     "success %d, time %llu ms, frames %d, stalls %u, max stall %u ms, "
                     "max root rise %.6f cm, stair attempts %d, feet (%.6f,%.6f,%.6f) cm\n",
-                    ledge.monster,double(ledge.rise),limitStairAdvance ? "monster" : "old",
+                    ledge.monster,double(ledge.rise),double(ledge.bottom),limitStairAdvance ? "monster" : "old",
                     int(result.success),static_cast<unsigned long long>(result.elapsed),frames,
                     result.stalls,result.maximumStall,double(result.maximumRise),result.stairAttempts,
                     double(state.position.x),double(state.position.y),double(state.position.z));
         }
       }
-    // Finish all ten runs before asserting, so a failed policy still leaves
+    // Finish all twelve runs before asserting, so a failed policy still leaves
     // the measurements of every requested ledge available to the caller.
     for(const auto& pair:results) for(const auto& result:pair) {
       require(result.supported,"isolated monster ledges must start with native flat-ground support");
