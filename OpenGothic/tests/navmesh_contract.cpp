@@ -141,6 +141,19 @@ int main() {
     check(!separated.findPath(takeoff,landing).complete,"unproven gap must stay disconnected");
     const auto candidates=separated.gapCandidates(takeoff,landing);
     check(!candidates.empty() && candidates.front().horizontalDistance<=4.f,"disconnected components must expose nearby boundary probe sites");
+    const auto prepared=separated.takeoffSite(candidates.front().start);
+    check(prepared.valid && prepared.sourcePolygon!=0 && prepared.insetDistance>0.f && prepared.insetDistance<=.1501f,
+          "boundary takeoff must inset by a bounded positive amount inside its source ground polygon");
+    check(prepared.insetWallDistance>prepared.sourceWallDistance+.05f &&
+          separated.findPath(takeoff,prepared.inset,false).complete && !separated.findPath(prepared.inset,landing,false).complete,
+          "takeoff inset must gain wall clearance on the original island without crossing the gap");
+    check(!separated.takeoffSite({9.f,0.f,4.f}).valid,
+          "takeoff preparation must reject a source in a gap instead of snapping across it");
+    const auto balconyTakeoff=layered.takeoffSite({12.f,3.f,10.f});
+    check(balconyTakeoff.valid && balconyTakeoff.inset[1]>2.75f,
+          "bounded takeoff query must retain the requested balcony rather than the ground below");
+    check(!layered.takeoffSite({12.f,1.5f,10.f}).valid,
+          "bounded takeoff query must reject a source between storeys rather than finding another floor");
     check(separated.gapCandidates(takeoff,landing,1.f).empty(),"boundary search must respect jump distance bound");
     check(separated.gapCandidates(takeoff,{4,0,4}).empty(),"connected ground must not produce gap candidates");
     auto linkedParams=params;

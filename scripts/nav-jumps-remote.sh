@@ -2,13 +2,13 @@
 # Submit one bounded phase and return immediately. No training or PPO paths.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|recheck|candidates|discover}"
+stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover}"
 export GQ_OWNER=nav-jumps
 host=ryzen
 task="$(ssh -o ConnectTimeout=10 "$host" 'printf "%s/gothic-ai/nav-jumps" "$HOME"')"
 source_dir="$task/source"
 case "$stage" in
-  build|bootstrap)
+  build|bootstrap|pilot)
     ssh "$host" "mkdir -p '$source_dir' '$task/input'"
     rsync -a --exclude=build --exclude='build-*' --exclude=__pycache__ \
       "$ROOT/OpenGothic" "$ROOT/scripts" "$ROOT/AGENTS.md" "$host:$source_dir/"
@@ -35,8 +35,11 @@ cmake -S "$task/source/OpenGothic" -B "$task/build" -G Ninja \
   -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib"
 cmake --build "$task/build" --target Gothic2Notr gothic-body-runner check-navmesh --parallel 3
 cd "$task/source"
-"$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_jumps.py scripts/tests/test_nav_jump_routes.py \
-  scripts/tests/test_nav_jump_observability.py scripts/tests/test_nav_demos.py
+tests=(scripts/tests/test_nav_jumps.py)
+if [[ "${1:-}" != pilot ]]; then
+  tests+=(scripts/tests/test_nav_jump_routes.py scripts/tests/test_nav_jump_observability.py scripts/tests/test_nav_demos.py)
+fi
+"$task/.venv/bin/python" -m pytest -q "${tests[@]}"
 if [[ "${1:-}" == bootstrap ]]; then
   for phase in recheck candidates; do
     args=(--runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game"
@@ -48,6 +51,11 @@ if [[ "${1:-}" == bootstrap ]]; then
     fi
     "$task/.venv/bin/python" -I "$task/source/scripts/nav_jumps.py" "$phase" "${args[@]}"
   done
+elif [[ "${1:-}" == pilot ]]; then
+  "$task/.venv/bin/python" -I "$task/source/scripts/nav_jumps.py" pilot \
+    --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
+    --save "$task/input/save.sav" --cache "$task/cache-ground" --output "$task/pilot-grounded" \
+    --links "$task/candidates/candidates.txt" --exclude-links "$task/recheck/accepted-links-cv.txt"
 fi
 BUILD
     "$ROOT/scripts/gq" submit --class batch --threads 4 --mem 6G --max 2h \
@@ -55,10 +63,12 @@ BUILD
     ;;
   recheck|candidates|discover)
     ssh "$host" 'df -h "$HOME"'
+    output="$task/$stage"
+    [[ "$stage" != discover ]] || output="$task/discover-grounded"
     args=("$task/.venv/bin/python" -I "$source_dir/scripts/nav_jumps.py" "$stage"
       --runner "$task/build/opengothic/gothic-body-runner"
       --assets "${task%/nav-jumps}/game" --save "$task/input/save.sav"
-      --cache "$task/cache-ground" --output "$task/$stage")
+      --cache "$task/cache-ground" --output "$output")
     if [[ "$stage" == recheck ]]; then
       args+=(--links "$task/input/accepted-links-legacy.txt")
     elif [[ "$stage" == discover ]]; then

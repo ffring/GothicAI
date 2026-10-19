@@ -93,6 +93,14 @@ class NavMesh final {
       size_t boundarySamples = 0, geometricSites = 0, groundQueries = 0;
       size_t queryBudget = 0;
       };
+    struct TakeoffSite {
+      bool valid = false;
+      std::string reason;
+      Point snapped = {}, inset = {};
+      uint64_t sourcePolygon = 0;
+      float sourceHorizontalDistance = 0, sourceVerticalDistance = 0;
+      float sourceWallDistance = 0, insetWallDistance = 0, insetDistance = 0;
+      };
 
     NavMesh();
     ~NavMesh();
@@ -118,6 +126,11 @@ class NavMesh final {
     // and selected round-robin over 50m world cells rather than nearest-first globally.
     ShortcutSearch shortcutCandidates(size_t siteBudget=1200, float maxHorizontal=4.f,
                                       float maxVertical=3.f) const;
+    // Local, ground-only takeoff preparation. Never searches another storey or
+    // crosses the selected convex polygon: move at most insetDistance towards
+    // its interior, then let the native probe resolve its bounded physical floor.
+    TakeoffSite takeoffSite(const Point& source, float insetDistance=.15f,
+                            float maxHorizontalSnap=.1f, float maxVerticalSnap=.25f) const;
     void writePolygons(const std::filesystem::path& output) const;
     const Stats& stats() const;
     const Params& params() const;

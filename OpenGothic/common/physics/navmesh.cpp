@@ -587,6 +587,66 @@ bool NavMesh::straightWalkable(const Point& start, const Point& end) const {
          t>1.f && count>0 && corridor[size_t(count-1)]==endRef;
   }
 
+NavMesh::TakeoffSite NavMesh::takeoffSite(const Point& source, float insetDistance,
+                                          float maxHorizontalSnap, float maxVerticalSnap) const {
+  TakeoffSite result;result.snapped=source;result.inset=source;
+  if(!impl->query) {result.reason="mesh_not_built";return result;}
+  for(float value:source) if(!std::isfinite(value)) {result.reason="invalid_source";return result;}
+  if(!std::isfinite(insetDistance) || !std::isfinite(maxHorizontalSnap) || !std::isfinite(maxVerticalSnap) ||
+     insetDistance<0 || maxHorizontalSnap<=0 || maxVerticalSnap<=0) {
+    result.reason="invalid_limits";return result;
+    }
+  dtQueryFilter filter;filter.setIncludeFlags(groundOnlyFlag);
+  const float extents[3]={maxHorizontalSnap,maxVerticalSnap,maxHorizontalSnap};
+  dtPolyRef ref=0;
+  if(dtStatusFailed(impl->query->findNearestPoly(source.data(),extents,&filter,&ref,result.snapped.data())) || !ref) {
+    result.reason="source_off_mesh";return result;
+    }
+  result.sourcePolygon=uint64_t(ref);
+  result.sourceHorizontalDistance=std::hypot(source[0]-result.snapped[0],source[2]-result.snapped[2]);
+  result.sourceVerticalDistance=std::abs(source[1]-result.snapped[1]);
+  if(result.sourceHorizontalDistance>maxHorizontalSnap || result.sourceVerticalDistance>maxVerticalSnap) {
+    result.reason="source_snap_too_far";return result;
+    }
+  const dtMeshTile* tile=nullptr;const dtPoly* poly=nullptr;
+  if(dtStatusFailed(impl->mesh->getTileAndPolyByRef(ref,&tile,&poly)) || poly->getType()!=DT_POLYTYPE_GROUND) {
+    result.reason="source_not_ground";return result;
+    }
+  Point center{};
+  for(unsigned int vertex=0; vertex<poly->vertCount; ++vertex)
+    for(size_t axis=0; axis<3; ++axis) center[axis]+=tile->verts[size_t(poly->verts[vertex])*3+axis]/poly->vertCount;
+  result.inset=result.snapped;
+  const float dx=center[0]-result.snapped[0],dz=center[2]-result.snapped[2],length=std::hypot(dx,dz);
+  if(length>1.e-5f) {
+    // As in the old approach-path inset, stop before the interior anchor. Both
+    // endpoints stay in this convex ground polygon, rather than a nearest-poly
+    // projection that could jump across a wall to another ground component.
+    const float amount=std::min(insetDistance,length*.5f);
+    result.inset[0]+=dx/length*amount;result.inset[2]+=dz/length*amount;
+    }
+  Point adjusted{};bool over=false;
+  if(dtStatusFailed(impl->query->closestPointOnPoly(ref,result.inset.data(),adjusted.data(),&over)) || !over) {
+    result.reason="inset_left_source_polygon";return result;
+    }
+  result.inset=adjusted;
+  result.insetDistance=std::hypot(result.inset[0]-result.snapped[0],result.inset[2]-result.snapped[2]);
+  if(result.insetDistance>insetDistance+1.e-4f || std::abs(result.inset[1]-source[1])>maxVerticalSnap) {
+    result.reason="inset_correction_too_far";return result;
+    }
+  Point wall{},normal{};
+  if(dtStatusFailed(impl->query->findDistanceToWall(ref,result.snapped.data(),5.f,&filter,&result.sourceWallDistance,
+                                                   wall.data(),normal.data())) ||
+     dtStatusFailed(impl->query->findDistanceToWall(ref,result.inset.data(),5.f,&filter,&result.insetWallDistance,
+                                                   wall.data(),normal.data()))) {
+    result.reason="source_wall_query_failed";return result;
+    }
+  if(!std::isfinite(result.sourceWallDistance) || !std::isfinite(result.insetWallDistance)) {
+    result.sourceWallDistance=0;result.insetWallDistance=0;result.reason="source_wall_query_failed";return result;
+    }
+  result.valid=true;result.reason="ok";
+  return result;
+  }
+
 std::vector<NavMesh::GapCandidate> NavMesh::gapCandidates(const Point& start, const Point& end,
                                                         float maxHorizontal, float maxVertical,
                                                         size_t maxCandidates) const {
