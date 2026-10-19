@@ -708,7 +708,8 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   const float maxSlope = std::acos(std::clamp(slideAngle(),0.f,1.f));
   const auto impulseGeneration=movementImpulseGeneration;
   const auto previousState=flags;
-  const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc);
+  const bool limitStairAdvance = !npc.isPlayer() && !npc.isHuman();
+  const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc,limitStairAdvance);
   if(preserveMovementImpulse(impulseGeneration,previousState,"virtual"))
     return true;
   npc.setViewPosition(moved.position);

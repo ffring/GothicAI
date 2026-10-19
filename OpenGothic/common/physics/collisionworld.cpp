@@ -799,6 +799,12 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   float pushSeconds = 0.f;
   float pushRemaining = 0.f;
   std::vector<std::pair<JPH::BodyID,float>> pushBodies;
+  struct LimitedSteepFace {
+    JPH::BodyID body;
+    JPH::SubShapeID subShape;
+    bool seen = true;
+    };
+  std::vector<LimitedSteepFace> limitedSteepFaces;
   bool contactsDirty = true;
   bool needsInitialUpdate = true;
   bool carrying = false;
@@ -845,6 +851,7 @@ void CollisionWorld::VirtualCharacter::setPosition(const Tempest::Vec3& feet) {
   impl->contactsDirty = true;
   impl->needsInitialUpdate = true;
   impl->ground = JPH::BodyID();
+  impl->limitedSteepFaces.clear();
   }
 
 void CollisionWorld::VirtualCharacter::setDiagnosticsEnabled(bool enabled) {
@@ -862,7 +869,8 @@ bool CollisionWorld::VirtualCharacter::diagnostics(CharacterVirtualDiagnostics& 
   }
 
 CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
-    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit,
+    bool limitStairAdvance) {
   const auto started = std::chrono::steady_clock::now();
   auto& state = *impl;
   auto& character = *state.character;
@@ -877,6 +885,14 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
   // capped independently of the character's weight on a supporting body.
   character.SetMaxStrength(std::min(character.GetMass()*DynamicWorld::gravityMS,450.f));
   const float seconds = float(dt)*0.001f;
+  // Zero-dt contact refreshes do not end a physical contact's classification.
+  if(dt>0) {
+    if(!limitStairAdvance)
+      state.limitedSteepFaces.clear();
+    else
+      for(auto& face:state.limitedSteepFaces)
+        face.seen = false;
+    }
   state.pushSeconds = seconds;
   state.pushRemaining = character.GetMaxStrength()*seconds;
   state.pushBodies.clear();
@@ -996,6 +1012,9 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
       if(!contact.mHadCollision || contact.mWasDiscarded || contact.mIsSensorB ||
          contact.mSurfaceNormal.Dot(desiredVelocity-contact.mLinearVelocity)>=0.f)
         continue;
+      for(auto& face:state.limitedSteepFaces)
+        if(face.body==contact.mBodyB && face.subShape==contact.mSubShapeIDB)
+          face.seen = true;
       JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
       if(lock.SucceededAndIsInBroadPhase() && Impl::blocksAutomaticStairs(lock.GetBody())) {
         stairObstacle = true;
@@ -1029,6 +1048,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
       if(achievedLength+1.e-4f<desiredLength) {
         auto direction = forward;
         float best = settings.mWalkStairsCosAngleForwardContact;
+        bool extendedSteepFace = false;
         for(const auto& contact:character.GetActiveContacts()) {
           if(!contact.mHadCollision || contact.mWasDiscarded ||
              contact.mSurfaceNormal.Dot(desiredVelocity-contact.mLinearVelocity)>=0.f ||
@@ -1040,10 +1060,50 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
             direction = candidate/length;
             best = direction.Dot(forward);
             }
+          if(limitStairAdvance && !contact.mIsSensorB) {
+            const auto limited = std::find_if(state.limitedSteepFaces.begin(),state.limitedSteepFaces.end(),[&](const auto& face) {
+              return face.body==contact.mBodyB && face.subShape==contact.mSubShapeIDB;
+              });
+            if(limited!=state.limitedSteepFaces.end()) {
+              extendedSteepFace = true;
+              continue;
+              }
+            JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
+            if(lock.SucceededAndIsInBroadPhase()) {
+              JPH::Shape::SupportingFace face;
+              lock.GetBody().GetTransformedShape().GetSupportingFace(contact.mSubShapeIDB,contact.mSurfaceNormal,oldPosition,face);
+              if(face.size()>=3) {
+                float low = std::numeric_limits<float>::infinity(), high = -low;
+                for(const auto& vertex:face) {
+                  low = std::min(low,vertex.Dot(up));
+                  high = std::max(high,vertex.Dot(up));
+                  }
+                // Face vertices are relative to the physical feet before this
+                // update. Buried geometry below that support level cannot add
+                // to the height of the obstacle the monster must climb.
+                const float exposedHeight = std::max(0.f,high-std::max(low,0.f));
+                if(exposedHeight>step+character.GetCharacterPadding()) {
+                  extendedSteepFace = true;
+                  // Retain this decision until contact ends: approaching the
+                  // crest must not turn the same bank into a new low ledge.
+                  state.limitedSteepFaces.push_back({contact.mBodyB,contact.mSubShapeIDB,true});
+                  }
+                }
+              }
+            }
           }
-        const auto forwardStep = direction*std::max(settings.mWalkStairsMinStepForward,desiredLength-achievedLength);
+        // Keep a monster's stair advance within the remaining animation travel
+        // instead of imposing Jolt's 2 cm minimum. A face exposed above the feet
+        // by more than the guild step is extended terrain, not a permitted riser:
+        // ascend it gradually. Ordinary ledges and shapes without polygonal
+        // faces retain the full guild step and the native safe landing sweeps.
+        const float forwardDistance = desiredLength-achievedLength;
+        const auto forwardStep = direction*(limitStairAdvance ? forwardDistance :
+                                            std::max(settings.mWalkStairsMinStepForward,forwardDistance));
+        const float stairUp = extendedSteepFace ?
+                                std::max(0.f,std::min(step,.12f)-std::max(0.f,achieved.Dot(up))) : step;
         JPH::CharacterVirtual::WalkStairsDiagnostics stairProbe;
-        const bool stepped = character.WalkStairs(seconds,up*step,forwardStep,direction*settings.mWalkStairsStepForwardTest,
+        const bool stepped = stairUp>0.f && character.WalkStairs(seconds,up*stairUp,forwardStep,direction*settings.mWalkStairsStepForwardTest,
                                                 settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator,
                                                 diagnostic!=nullptr ? &stairProbe : nullptr);
         if(diagnostic!=nullptr) {
@@ -1068,6 +1128,9 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
         }
       }
     }
+  if(dt>0)
+    state.limitedSteepFaces.erase(std::remove_if(state.limitedSteepFaces.begin(),state.limitedSteepFaces.end(),
+                                                [](const auto& face) { return !face.seen; }),state.limitedSteepFaces.end());
   if(diagnostic!=nullptr) {
     if(seconds<=0.f)
       diagnostic->afterExtendedUpdate = state.diagnosticPose();

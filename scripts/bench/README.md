@@ -964,3 +964,61 @@ sides of each radius crossing. `transition_blend_delta_cm` isolates the blend's
 contribution from natural movement. A calm checkpoint is taken after 10 seconds
 at zero wind following the wind ramp. The arrow's native post-face positions are
 retained as `cloth_arrow_trajectory` events.
+
+Monster CharacterVirtual videos: `scripts/monster-character-virtual-videos.sh OUT` records
+six independent fresh-world OFF/ON pairs (seed 73024, noon). It first asks Ryzen through
+`bench.sh`; exit 75 selects Mac for the remaining series, with the Mac game/pytest wait.
+`SCENE=wolf_terrain|wolf_pack|troll_props|cliff|wolf_water|fieldraider_bloodfly` selects one
+pair. Build `Gothic2Notr` first (`NO_BUILD=0` enables local incremental builds).
+The candidate `OUT/pairs/*.mp4` keep OFF on the left and ON on the right; the accompanying
+`*-frames.png` sheets show OFF above ON once a second. Each scene follows its monster
+with matching `watch id`, `cam follow` and `view clean` settings; the pack follows its
+middle wolf. Review framing and visible geometry before accepting a candidate. The
+[validation report](../../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md#шаг-4-часть-2--парные-видео)
+lists accepted pairs and skipped preparations. Composition can also be repeated
+with `uv run scripts/monster_character_virtual_videos.py compose --off OFF.mp4 --on ON.mp4
+--out PAIR.mp4`; `metrics --off OFF_DIR --on ON_DIR` reads native movement evidence.
+`--crop X:Y:W:H` applies the same fixed crop to both videos and their contact sheet.
+Metrics include actual settled route starts and reject ON ground actors with no CV frames;
+the bloodfly control must stay on the legacy path.
+`monster-character-virtual-attacks` checks wolf lunge and fieldraider charge numerically;
+`monster-character-virtual-performance` measures twenty ground monsters for 30 seconds
+without capture. Run performance on Mac with `BENCH_HOST=local` and a build configured
+with `-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`. The opt-in flag remains OFF by default.
+
+`monster-character-virtual-stairs` pins the part-1 chase to `NW_CITY_TO_FARM2_09`
+and records a twelve-second `wolf_stairs` take with `watch id`, `cam follow` and
+`view clean`. Its `monster_character_stair_step` events include body state, signed
+physical/visual Y changes, requested animation movement and separate CV
+ExtendedUpdate/WalkStairs positions. A recorded take still needs framing review;
+the report documents the accepted pair and the earlier obstructed diagnostics.
+For the stair pair, `uv run scripts/monster_character_virtual_videos.py foliage --out DIR`
+creates twelve transparent leaf/grass PNG overrides. Pass the same absolute
+`OPENGOTHIC_TEXTURES=DIR` to both fresh processes: ground, trunks and all collision
+meshes remain intact. The video title discloses the render-only foliage removal.
+The monster stair policy uses only the remaining horizontal request instead of
+Jolt's extra 2 cm minimum advance. It retains the full guild step (wolf 60 cm,
+troll 100 cm) for a single ledge. A blocking steep polygon with more than the guild step plus contact padding
+exposed above the physical feet is treated as extended steep terrain and retains
+a 12 cm rise budget. The decision stays with the same body/subshape until the
+blocking contact ends; teleportation clears it. Buried portions below the feet
+are excluded. Unknown/non-polygonal shapes retain the full guild step.
+Player/human paths retain the native policy.
+The contract covers repeated ten-centimetre risers, isolated ledges, and a
+40 cm ledge whose vertical face continues 100 cm below the approach floor.
+Presentation lag stays within 10 cm; a high single ledge may visibly snap as in
+legacy movement.
+
+`monster-character-virtual-ledges` compares five isolated ledges: wolf 20/40/55 cm
+and troll 40/80 cm. `monstercharacter ledge wolf|troll HEIGHT` creates one static
+source mesh 100 m above a verified stock anchor, checks three support rays and
+the vertical face, and runs production `Npc::goToPosition`/MoveAlgo over a 6 m
+approach to a 15 m landing. OFF/ON use the same native running animation and
+geometry. Each eight-second window reports arrival, time, stalls, root/model
+height changes and falls. Arrival requires 60 cm horizontal / 5 cm vertical
+tolerance and actual support; all five results are retained even after a
+mechanical failure. The synthetic geometry supplies no movement or response.
+`monster-character-virtual-stair-attack` enters `T_FISTATTACKMOVE` while a stair
+presentation correction is pending, without resetting that correction. It tests
+the grounded attack handoff separately from physical lunge range. The numerical
+wolf lunge uses its previously verified lane; the bloodfly scene is unchanged.
