@@ -30,6 +30,9 @@
 #       wildlife is cleared and the swordsman parked away
 #   neural-load: load an initial save while three bandits hold P30 leases; all fights end with loading,
 #       release their leases and watch, then one bandit fights under P30 again; requires GOTHIC_BODY_URL
+#   neural-soak: bandit waves in the ordinary new-game world with a swordsman companion; LLM=fake,
+#       GOTHIC_BODY_URL, GOTHIC_SOAK_SECONDS=1800 by default; TIMEOUT=2400 for the full run.
+#       Samples in neural_soak.jsonl; records 25 s of the first wave when normal-clock bench is available
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
 #       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
 #       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
@@ -307,11 +310,15 @@ if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 && "$SCENARIO" != tts ]]; then
   echo 'GOTHIC_TTS_RECORD requires SCENARIO=tts' >&2
   exit 2
 fi
-if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = neural-group || "$SCENARIO" = neural-talk || "$SCENARIO" = neural-load ]]; then
+if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = neural-group || "$SCENARIO" = neural-talk || "$SCENARIO" = neural-load || "$SCENARIO" = neural-soak ]]; then
   [ -n "${GOTHIC_BODY_URL:-}" ] || { echo "scenario $SCENARIO requires GOTHIC_BODY_URL=tcp://host:port" >&2; exit 2; }
   [ -z "${SAVE:-}" ] || { echo "scenario $SCENARIO requires a new game (unset SAVE)" >&2; exit 2; }
 fi
 LLM="${LLM:-fake}"
+if [[ "$SCENARIO" == neural-soak && "$LLM" != fake ]]; then
+  echo 'scenario neural-soak requires LLM=fake' >&2
+  exit 2
+fi
 ASR="${ASR:-fake}"
 # own ports, so a server / ASR service running for a play session is left alone
 PORT="${PORT:-47827}"
@@ -440,6 +447,33 @@ if [ "$(uname -s)" = Darwin ]; then
   until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 fi
 GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT")
+if [[ "$SCENARIO" == neural-soak ]]; then
+  # Refuse a fixed-step recording: the soak must keep the ordinary game clock.
+  SOAK_BUILD="$(dirname "$GAME_BIN")"
+  SOAK_NORMAL_CLOCK=0
+  # Ryzen publishes the runtime directory into its shared cache. Its CMake
+  # flags remain in this task's build directory, outside that runtime copy.
+  if [[ "${GQ_PROFILE:-}" == ryzen && -f "$ROOT/../build/CMakeCache.txt" ]] &&
+     grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$ROOT/../build/CMakeCache.txt"; then
+    SOAK_NORMAL_CLOCK=1
+  fi
+  for ((i = 0; i < 4; i++)); do
+    if [[ -f "$SOAK_BUILD/CMakeCache.txt" ]]; then
+      if grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$SOAK_BUILD/CMakeCache.txt"; then
+        SOAK_NORMAL_CLOCK=1
+      fi
+      break
+    fi
+    SOAK_BUILD="$(dirname "$SOAK_BUILD")"
+  done
+  if [[ "$SOAK_NORMAL_CLOCK" == 1 ]]; then
+    GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/neural-soak-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
+      "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1"
+      "TEMPEST_WINDOW_SIZE=640x360" "OPENGOTHIC_BENCH_ENCODER=-c:v libx264 -preset ultrafast -crf 30")
+  else
+    echo 'neural-soak: video unavailable (normal-clock bench not compiled)'
+  fi
+fi
 if [ "$SCENARIO" = "trace" ] || [ "$SCENARIO" = "broken" ] || [ "$SCENARIO" = "trace_crime" ]; then
   GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/$SCENARIO-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
     "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1")
@@ -455,6 +489,7 @@ if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
 fi
 (cd "$LOG_DIR" && exec env "${GAME_ENV[@]}" "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
+printf '%s\n' "$GAME" >"$LOG_DIR/game.pid"
 
 for _ in $(seq 1 "$TIMEOUT"); do
   kill -0 "$SRV" 2>/dev/null || break
