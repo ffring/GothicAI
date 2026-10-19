@@ -84,6 +84,34 @@ class NavMesh final {
       float horizontalDistance = 0;
       float verticalDistance = 0;
       };
+    struct ShortcutCandidate : GapCandidate {
+      bool groundComplete = false;
+      float groundDistance = 0;
+      };
+    struct ShortcutSearch {
+      std::vector<ShortcutCandidate> candidates;
+      size_t boundarySamples = 0, geometricSites = 0, groundQueries = 0;
+      size_t queryBudget = 0;
+      };
+    struct TakeoffSite {
+      bool valid = false;
+      std::string reason;
+      Point snapped = {}, inset = {};
+      uint64_t sourcePolygon = 0;
+      float sourceHorizontalDistance = 0, sourceVerticalDistance = 0;
+      float sourceWallDistance = 0, insetWallDistance = 0, insetDistance = 0;
+      };
+    struct GroundLocation {
+      bool known = false;
+      Point snapped = {};
+      uint64_t polygon = 0, component = 0;
+      float snapDistance = 0, horizontalDistance = 0, verticalOffset = 0;
+      };
+    struct TransitionSides {
+      GroundLocation source, end, current;
+      bool takeoffSide = false, landingSide = false;
+      const char* method = "ambiguous";
+      };
 
     NavMesh();
     ~NavMesh();
@@ -94,7 +122,7 @@ class NavMesh final {
 
     void buildOrLoad(const Geometry& geometry, const Params& params,
                      const std::filesystem::path& cacheDirectory, const std::string& worldName);
-    Path findPath(const Point& start, const Point& end) const;
+    Path findPath(const Point& start, const Point& end, bool allowTransitions=true) const;
     // A ground ray must reach the end's actual polygon. Detour's raycast alone ignores
     // end height; checking its final polygon also rejects a balcony above the ray.
     // Off-mesh links never make a segment directly walkable.
@@ -104,6 +132,23 @@ class NavMesh final {
     std::vector<GapCandidate> gapCandidates(const Point& start, const Point& end,
                                           float maxHorizontal=4.f, float maxVertical=3.f,
                                           size_t maxCandidates=8) const;
+    // Whole-world boundary search, including shortcuts within one ground component.
+    // No candidate is installed as an off-mesh link. Sites and query work are bounded,
+    // and selected round-robin over 50m world cells rather than nearest-first globally.
+    ShortcutSearch shortcutCandidates(size_t siteBudget=1200, float maxHorizontal=4.f,
+                                      float maxVertical=3.f) const;
+    // Local, ground-only takeoff preparation. Never searches another storey or
+    // crosses the selected convex polygon: move at most insetDistance towards
+    // its interior, then let the native probe resolve its bounded physical floor.
+    TakeoffSite takeoffSite(const Point& source, float insetDistance=.15f,
+                            float maxHorizontalSnap=.1f, float maxVerticalSnap=.25f) const;
+    // Diagnostic projection onto the 3D-closest ground polygon in the existing
+    // nearest-poly query extents. Snap distances are metrics, never side gates.
+    GroundLocation groundLocation(const Point& position) const;
+    // Distinct ground components identify the two banks. Within one component,
+    // only the exact endpoint polygon identifies a side; coincident endpoint
+    // polygons are explicitly ambiguous. Proven off-mesh links never merge banks.
+    TransitionSides transitionSides(const Point& source, const Point& end, const Point& current) const;
     void writePolygons(const std::filesystem::path& output) const;
     const Stats& stats() const;
     const Params& params() const;
