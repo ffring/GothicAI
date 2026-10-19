@@ -2,6 +2,7 @@
 """Record bounded batches of qualified CV teacher-v2 jump routes on Ryzen.
 
 Run inside an admitted gq batch job (<=8 threads, <=6GiB). No training is run.
+New attempts require per-physical-tick transition-frames.jsonl evidence.
 Every Runner.scenario resets the saved world. All attempts, including failures,
 remain in output/episodes/NNNN; --resume skips completed attempts, never retries
 failed routes. A persisted pilot stop cannot be resumed automatically.
@@ -76,6 +77,37 @@ def check_storage(output, disk_usage=shutil.disk_usage):
     return dict(existing_bytes=existing, reserved_bytes=RESERVE_BYTES, free_bytes=free)
 
 
+def storage_root(output, requested=None):
+    output = Path(output).resolve()
+    root = Path(requested).resolve() if requested is not None else (
+        DEFAULT_OUTPUT.resolve() if output.is_relative_to(DEFAULT_OUTPUT.resolve()) else output)
+    if not output.is_relative_to(root):
+        raise ValueError("--storage-root must contain --output")
+    return root
+
+
+def parse_indices(value):
+    if value is None:
+        return None
+    try:
+        result = [int(item) for item in value.split(",")]
+    except ValueError as exc:
+        raise ValueError("--indices must be comma-separated nonnegative route indices") from exc
+    if not result or any(index < 0 for index in result) or len(set(result)) != len(result):
+        raise ValueError("--indices must contain distinct nonnegative route indices")
+    return result
+
+
+def selected_routes(routes, indices=None):
+    if indices is None:
+        return collection_order(routes)
+    by_index = {route["index"]: route for route in routes}
+    unknown = set(indices) - by_index.keys()
+    if unknown:
+        raise ValueError(f"Unknown original route indices: {sorted(unknown)}")
+    return [by_index[index] for index in indices]
+
+
 def load_routes(path, links_path):
     routes = json_rows(path)
     if not routes:
@@ -83,10 +115,12 @@ def load_routes(path, links_path):
     probe_module = module("nav_jumps")
     links = {link["id"]: link for link in probe_module.links(links_path)}
     route_module = module("nav_jump_routes")
-    owners = {}
-    for index, route in enumerate(routes):
-        if route.get("index") != index:
-            raise ValueError("Route indices must be consecutive starting at zero")
+    owners, seen = {}, set()
+    for route in routes:
+        index = route.get("index")
+        if type(index) is not int or index < 0 or index in seen:
+            raise ValueError("Route indices must be distinct original nonnegative integers")
+        seen.add(index)
         if route.get("type") not in TYPES or route.get("split") not in ("train", "validation", "test"):
             raise ValueError(f"Invalid route type/split: {index}")
         for key in ("label", "start", "goal", "region"):
@@ -157,7 +191,7 @@ def _compact_samples(directory):
     return times, positions, flags, jump, climb
 
 
-def transition_evidence(route, trace, samples):
+def transition_evidence_legacy(route, trace, samples):
     """Require the scheduled id in the real teacher plan, a native action and landing.
 
     A successful goal alone, matching geometric proximity, or a button without
@@ -205,8 +239,92 @@ def transition_evidence(route, trace, samples):
     return evidence, "landing_not_witnessed" if evidence["native_dynamics"] else "native_action_not_witnessed"
 
 
-def assess_episode(directory, route):
-    missing = [name for name in REQUIRED if not (directory / name).is_file()]
+def transition_evidence(route, trace, samples=None, frames=None):
+    """Use the native probe's action and landing criteria on physical-tick data.
+
+    The 100ms NAVDEMO fallback is diagnostic only; it cannot qualify a new
+    recording. Native animation flags, not height alone, witness jump/climb.
+    """
+    if frames is None:
+        evidence, failure = transition_evidence_legacy(route, trace, samples)
+        evidence.update(source="navdemo_100ms_diagnostic", probe_equivalent=False)
+        return evidence, failure
+    identifier, kind = route["transition_id"], route["type"]
+    planned = [row for row in trace if any(link.get("id") == identifier and link.get("type") == kind
+                                         for link in row.get("transitions", []))]
+    active = [row for row in planned if row.get("active_transition_id") == identifier and
+              row.get("active_transition_type") == kind and row.get("on_transition") is True]
+    presses = active if kind == "drop" else [row for row in active if bool(row.get(kind))]
+    evidence = dict(source="transition_frames", probe_equivalent=True,
+                    planned=bool(planned), on_transition=bool(active), action=bool(presses),
+                    native_dynamics=False, landing=False, event_ms=None, landing_ms=None,
+                    takeoff_position_cm=None, max_rise_cm=0., max_drop_cm=0.)
+    if not planned:
+        return evidence, "scheduled_transition_not_in_actual_path"
+    if not active:
+        return evidence, "approach_never_on_transition"
+    if not presses:
+        return evidence, "teacher_never_pressed_" + kind
+    end = [value*100 for value in route["transition_end_m"]]
+    ordered = sorted(frames, key=lambda row: row["elapsed_ms"])
+    if not ordered:
+        return evidence, "physical_transition_frames_empty"
+    # A later on_transition trace must not reset a drop baseline after a jump.
+    if kind == "drop":
+        presses = presses[:1]
+    for press in presses:
+        began = int(press["elapsed_ms"])
+        relevant = [row for row in ordered if began <= row["elapsed_ms"] <= began + 10000]
+        exact = [row for row in relevant if row.get("transition_id") == identifier and row.get("type") == kind]
+        if not exact:
+            continue
+        origin = press.get("position_cm", exact[0]["position_cm"])
+        if len(origin) != 3 or not all(math.isfinite(value) for value in origin):
+            raise ValueError("Invalid physical takeoff position in teacher trace")
+        evidence["takeoff_position_cm"] = list(origin)
+        max_rise, max_drop = 0., 0.
+        saw_jump = saw_climb = saw_air = witnessed = contaminated_drop = False
+        for frame in relevant:
+            elapsed = frame["elapsed_ms"]
+            if kind == "drop" and not witnessed:
+                # Check all teacher decisions, including traces that leave this id.
+                contaminated_drop |= any(began <= row["elapsed_ms"] <= elapsed and
+                                         (row.get("jump") or row.get("climb")) for row in trace)
+                if samples is not None:
+                    contaminated_drop |= any(began <= moment <= elapsed and (jump or climb)
+                                             for moment, jump, climb in zip(samples[0], samples[3], samples[4]))
+                if contaminated_drop:
+                    return evidence, "drop_contaminated_by_jump_or_climb"
+            if frame.get("transition_id") == identifier and frame.get("type") == kind:
+                position = frame["position_cm"]
+                rise, drop = position[1] - origin[1], origin[1] - position[1]
+                max_rise, max_drop = max(max_rise, rise), max(max_drop, drop)
+                saw_jump |= bool(frame.get("native_jump"))
+                saw_climb |= bool(frame.get("native_climb"))
+                saw_air |= bool(frame.get("in_air") or frame.get("falling"))
+                physical = (saw_jump and (saw_air or max_rise > 10) if kind == "jump" else
+                            saw_climb and max_rise > 15 if kind == "climb" else
+                            saw_air and max_drop > 20)
+                if physical and not witnessed:
+                    witnessed = True
+                    evidence.update(native_dynamics=True, event_ms=elapsed,
+                                    max_rise_cm=max_rise, max_drop_cm=max_drop)
+            # The physical-tick writer retains the last active transition id.
+            # Never borrow another transition's landing.
+            if (witnessed and frame.get("transition_id") == identifier and frame.get("type") == kind and
+                    frame.get("supported") is True and math.dist(frame["position_cm"], end) <= 60 and
+                    frame.get("landing_path_complete") is True and
+                    0 <= frame.get("landing_path_m", math.inf) <= 1.5 and
+                    0 <= frame.get("landing_snap_m", math.inf) <= .25):
+                evidence.update(landing=True, landing_ms=elapsed,
+                                max_rise_cm=max_rise, max_drop_cm=max_drop)
+                return evidence, None
+    return evidence, "landing_not_witnessed" if evidence["native_dynamics"] else "native_action_not_witnessed"
+
+
+def assess_episode(directory, route, require_frames=True):
+    required = (*REQUIRED, "transition-frames.jsonl") if require_frames else REQUIRED
+    missing = [name for name in required if not (directory / name).is_file()]
     if missing:
         raise RuntimeError(f"Incomplete attempt {directory}: missing {', '.join(missing)}; retained, no retry")
     episode = json.loads((directory / "episode.json").read_text(encoding="utf-8"))
@@ -218,7 +336,11 @@ def assess_episode(directory, route):
     samples = _compact_samples(directory)
     if len(samples[0]) != episode.get("decisions"):
         raise RuntimeError(f"Record count differs from episode metadata: {directory}")
-    evidence, failure = transition_evidence(route, json_rows(directory / "teacher-paths.jsonl"), samples)
+    frames_path = directory / "transition-frames.jsonl"
+    frames = json_rows(frames_path) if frames_path.is_file() else None
+    evidence, failure = transition_evidence(route, json_rows(directory / "teacher-paths.jsonl"), samples, frames)
+    if not evidence["probe_equivalent"] and failure is None:
+        failure = "diagnostic_only_missing_transition_frames"
     if not failure and episode.get("success") is not True:
         failure = "goal_not_reached:" + episode.get("failure", "unspecified")
     initial_hp, final_hp = episode.get("initial_state", {}).get("hp"), episode.get("final_hp")
@@ -235,23 +357,24 @@ def assess_episode(directory, route):
     return episode
 
 
-def existing_episodes(output, routes):
+def existing_episodes(output, routes, enforce_pilot=True):
     episodes = []
     root = output / "episodes"
     if not root.exists():
         return episodes
+    by_index = {route["index"]: route for route in routes}
     for directory in sorted(root.iterdir()):
         if not directory.is_dir() or not directory.name.isdecimal():
             raise RuntimeError(f"Unexpected artifact in episodes directory: {directory}")
         index = int(directory.name)
-        if index >= len(routes):
+        if index not in by_index:
             raise RuntimeError(f"Existing episode is outside selected routes: {directory}")
-        missing = [name for name in REQUIRED if not (directory / name).is_file()]
+        missing = [name for name in (*REQUIRED, "transition-frames.jsonl") if not (directory / name).is_file()]
         if missing:
             raise RuntimeError(f"Incomplete previous attempt {directory}; retained for diagnosis, no automatic retry")
         episode = json.loads((directory / "episode.json").read_text(encoding="utf-8"))
         for key in ("route_index", "label", "start", "goal", "split", "site_id", "transition_id", "type", "region"):
-            expected = index if key == "route_index" else routes[index][key]
+            expected = index if key == "route_index" else by_index[index][key]
             if episode.get(key) != expected:
                 raise RuntimeError(f"Changed/unchecked previous attempt {directory}: {key}")
         if episode.get("collection_stop"):
@@ -259,7 +382,7 @@ def existing_episodes(output, routes):
         if type(episode.get("transition_success")) is not bool:
             raise RuntimeError(f"Previous attempt lacks passage evidence: {directory}")
         episodes.append(episode)
-    stop = pilot_stop(episodes)
+    stop = pilot_stop(episodes) if enforce_pilot else None
     if stop:
         raise RuntimeError(stop)
     return episodes
@@ -272,21 +395,36 @@ def scenario_commands(args, route=None):
             f"navdemos start-v2 {args.npc} {route['start']} {route['goal']} {LIMIT_MS}", "navdemos wait"]
 
 
+def finish_collection(episodes, total_routes, complete, require_70pct=False):
+    by_type = counts(episodes)
+    passed = all(value["target_70pct"] for value in by_type.values())
+    result = dict(complete=complete, attempts=len(episodes), routes=total_routes,
+                  target_70pct_passed=passed, by_type=by_type)
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    if require_70pct and not passed:
+        raise RuntimeError("Teacher validation did not reach >=70% in every transition type")
+    return result
+
+
 def collect(args):
     if sys.platform != "linux":
         raise RuntimeError("Run collection on Ryzen inside gq batch")
     routes = load_routes(args.routes, args.links)
     args.output.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
-    previous = existing_episodes(args.output, routes)
+    previous = existing_episodes(args.output, routes, enforce_pilot=not args.require_70pct)
     if previous and not args.resume:
         raise RuntimeError("Previous attempts exist; --resume preserves and counts them without retry")
     done = {episode["route_index"] for episode in previous}
-    selected = [route for route in collection_order(routes) if route["index"] not in done][:args.count]
+    requested = selected_routes(routes, args.indices)
+    selected = [route for route in requested if route["index"] not in done]
+    if args.indices is None:
+        selected = selected[:args.count]
+    desired = {route["index"] for route in requested} if args.indices is not None else None
     if not selected:
-        print(json.dumps(dict(complete=len(previous) == len(routes), by_type=counts(previous))), flush=True)
-        return
-    check_storage(args.output)
+        assessed = [episode for episode in previous if desired is None or episode["route_index"] in desired]
+        return finish_collection(assessed, len(requested), True, args.require_70pct)
+    check_storage(args.storage_root)
     collector = module("collect_nav_demos")
     worker = copy(args)
     worker.output = args.output / "runner-work"
@@ -297,7 +435,7 @@ def collect(args):
         runner.scenario(prepare, worker.output / "prepare", args.seed, timeout=720)
         collector.check_log(worker.output / "prepare")
         for route in selected:
-            check_storage(args.output)
+            check_storage(args.storage_root)
             directory = args.output / "episodes" / f"{route['index']:04d}"
             if directory.exists():
                 raise RuntimeError(f"Refusing to replace attempt {directory}")
@@ -309,7 +447,10 @@ def collect(args):
             episode = assess_episode(directory, route)
             episode["collector_wall_s"] = time.monotonic() - began
             previous.append(episode)
-            stop = pilot_stop(previous)
+            # Explicit repair validation must finish all selected routes, so
+            # every type has its full denominator before the 70% gate. A normal
+            # full collection keeps the early <40% pilot stop.
+            stop = pilot_stop(previous) if not args.require_70pct else None
             if stop:
                 episode["collection_stop"] = stop
             write_metadata(directory / "episode.json", episode)
@@ -320,8 +461,9 @@ def collect(args):
                 raise RuntimeError(stop)
     finally:
         runner.close()
-    print(json.dumps(dict(complete=len(previous) == len(routes), attempts=len(previous),
-                          routes=len(routes), by_type=counts(previous)), ensure_ascii=False), flush=True)
+    assessed = [episode for episode in previous if desired is None or episode["route_index"] in desired]
+    complete = desired <= {episode["route_index"] for episode in previous} if desired is not None else len(previous) == len(routes)
+    return finish_collection(assessed, len(requested), complete, args.require_70pct)
 
 
 def main():
@@ -329,6 +471,9 @@ def main():
     for name in ("runner", "assets", "save", "cache", "links", "roads", "routes"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--storage-root", type=Path, help="10GiB scope; defaults to common nav-demos-jumps tree when output is inside it")
+    parser.add_argument("--indices", help="comma-separated original route indices; overrides --count, never renumbers")
+    parser.add_argument("--require-70pct", action="store_true", help="validation: finish all selected attempts (no early pilot stop), then fail unless every type reached 70%")
     parser.add_argument("--ini", type=Path)
     parser.add_argument("--npc", default="BAU_954_MALETH")
     parser.add_argument("--seed", type=int, default=19)
@@ -337,6 +482,13 @@ def main():
     parser.add_argument("--watchdog-seconds", type=int, default=900)
     args = parser.parse_args()
     args.physics = "cv"
+    try:
+        args.indices = parse_indices(args.indices)
+        if args.storage_root is not None and not args.storage_root.is_absolute():
+            parser.error("--storage-root must be absolute")
+        args.storage_root = storage_root(args.output, args.storage_root)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.count < 1 or args.count > 300 or args.watchdog_seconds <= 0:
         parser.error("--count must be 1..300 and watchdog positive")
     for name, value in vars(args).items():
@@ -346,7 +498,7 @@ def main():
         if not getattr(args, name).exists():
             parser.error(f"--{name} does not exist")
     forbidden = (Path.home() / "gothic-ai/nav-ppo").resolve()
-    for value in (args.output, args.cache):
+    for value in (args.output, args.cache, args.storage_root):
         if value.resolve() == forbidden or forbidden in value.resolve().parents:
             parser.error("Use private output/cache outside nav-ppo")
     # A cache cannot alias raw output or mutate a source tree containing inputs.

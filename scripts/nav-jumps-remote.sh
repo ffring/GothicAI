@@ -2,13 +2,57 @@
 # Submit one bounded phase and return immediately. No training or PPO paths.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover|routes|record}"
+stage="${1:?Usage: nav-jumps-remote.sh build|bootstrap|pilot|recheck|candidates|discover|routes|record-pilot [1|2]|record}"
+attempt="${2:-1}"
 export GQ_OWNER=nav-jumps
 host=ryzen
 task="$(ssh -o ConnectTimeout=10 "$host" 'printf "%s/gothic-ai/nav-jumps" "$HOME"')"
 source_dir="$task/source"
+write_record_script() {
+    ssh "$host" "cat > '$task/record.sh'" <<'RECORD'
+#!/usr/bin/env bash
+set -euo pipefail
+task="$(cd "$(dirname "$0")" && pwd)"
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
+df -h "$HOME"
+cd "$task/source"
+"$task/.venv/bin/python" -I - "$HOME/gothic-ai/nav-demos-jumps" <<'PY'
+from collections import Counter
+import json
+from pathlib import Path
+import sys
+root=Path(sys.argv[1])
+pilots=[root/f"repair-{attempt}" for attempt in (2,1) if (root/f"repair-{attempt}").exists()]
+if not pilots:
+    raise RuntimeError("Run the repaired teacher on the original 30 routes first")
+pilot=pilots[0]
+episodes=[json.loads(path.read_text()) for path in (pilot/"episodes").glob("*/episode.json")]
+if len(episodes)!=30 or Counter(row["type"] for row in episodes)!={"jump":10,"climb":10,"drop":10}:
+    raise RuntimeError("Pilot must finish all original 30 routes")
+original=[json.loads(path.read_text()) for path in (root/"episodes").glob("*/episode.json")]
+if {row["route_index"] for row in episodes}!={row["route_index"] for row in original}:
+    raise RuntimeError("Pilot route indices differ from the original stopped 30")
+for kind in ("jump","climb","drop"):
+    if sum(row.get("transition_success") is True for row in episodes if row["type"]==kind)<7:
+        raise RuntimeError(f"Pilot {kind} below 70%; full recording forbidden")
+if any(not (pilot/"episodes"/f"{row['route_index']:04d}"/"transition-frames.jsonl").is_file() for row in episodes):
+    raise RuntimeError("Pilot lacks physical-frame transition evidence")
+print(f"Full recording admitted by {pilot}",flush=True)
+PY
+"$task/.venv/bin/python" -I "$task/source/scripts/nav_jump_record.py" \
+  --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
+  --save "$task/input/save.sav" --cache "$task/cache-transitions-cv" \
+  --links "$task/accepted-links-cv.txt" --roads "$task/input/places.json" \
+  --routes "$task/routes/routes.jsonl" --output "$HOME/gothic-ai/nav-demos-jumps/final" \
+  --storage-root "$HOME/gothic-ai/nav-demos-jumps" --count 267
+"$task/.venv/bin/python" -I "$task/source/scripts/nav_demos.py" check "$HOME/gothic-ai/nav-demos-jumps/final"
+RECORD
+}
 case "$stage" in
-  build|bootstrap|pilot)
+  build|bootstrap|pilot|record-pilot)
+    if [[ "$stage" == record-pilot && "$attempt" != 1 && "$attempt" != 2 ]]; then
+      echo 'record-pilot attempt must be 1 or 2' >&2; exit 2
+    fi
     ssh "$host" "mkdir -p '$source_dir' '$task/input'"
     rsync -a --exclude=build --exclude='build-*' --exclude=__pycache__ \
       "$ROOT/OpenGothic" "$ROOT/scripts" "$ROOT/AGENTS.md" "$host:$source_dir/"
@@ -33,10 +77,14 @@ cmake -S "$task/source/OpenGothic" -B "$task/build" -G Ninja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DOPENGOTHIC_JOLT_X86=x86-64-v3 \
   -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib"
-cmake --build "$task/build" --target Gothic2Notr gothic-body-runner check-navmesh --parallel 3
+targets=(Gothic2Notr gothic-body-runner check-navmesh)
+if [[ "${1:-}" == record-pilot ]]; then targets=(Gothic2Notr gothic-body-runner check-navkeyteacher); fi
+cmake --build "$task/build" --target "${targets[@]}" --parallel 3
 cd "$task/source"
 tests=(scripts/tests/test_nav_jumps.py)
-if [[ "${1:-}" != pilot ]]; then
+if [[ "${1:-}" == record-pilot ]]; then
+  tests=(scripts/tests/test_nav_jump_record.py scripts/tests/test_nav_demos.py)
+elif [[ "${1:-}" != pilot ]]; then
   tests+=(scripts/tests/test_nav_jump_routes.py scripts/tests/test_nav_jump_observability.py scripts/tests/test_nav_demos.py)
 fi
 "$task/.venv/bin/python" -m pytest -q "${tests[@]}"
@@ -56,10 +104,32 @@ elif [[ "${1:-}" == pilot ]]; then
     --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
     --save "$task/input/save.sav" --cache "$task/cache-ground" --output "$task/pilot-grounded" \
     --links "$task/candidates/candidates.txt" --exclude-links "$task/recheck/accepted-links-cv.txt"
+elif [[ "${1:-}" == record-pilot ]]; then
+  pilot_indices="$("$task/.venv/bin/python" -I - "$HOME/gothic-ai/nav-demos-jumps" <<'PY'
+from collections import Counter
+import json
+from pathlib import Path
+import sys
+episodes=[json.loads(path.read_text()) for path in (Path(sys.argv[1])/"episodes").glob("*/episode.json")]
+if len(episodes)!=30 or Counter(row["type"] for row in episodes)!={"jump":10,"climb":10,"drop":10}:
+    raise RuntimeError("Expected original stopped pilot: exactly 10 attempts per type")
+print(",".join(str(row["route_index"]) for row in episodes))
+PY
+)"
+  "$task/.venv/bin/python" -I "$task/source/scripts/nav_jump_record.py" \
+    --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
+    --save "$task/input/save.sav" --cache "$task/cache-transitions-cv" \
+    --links "$task/accepted-links-cv.txt" --roads "$task/input/places.json" \
+    --routes "$task/routes/routes.jsonl" --indices "$pilot_indices" --count 30 --require-70pct \
+    --output "$HOME/gothic-ai/nav-demos-jumps/repair-${2:?attempt}" --storage-root "$HOME/gothic-ai/nav-demos-jumps"
+  "$task/.venv/bin/python" -I "$task/source/scripts/nav_demos.py" check "$HOME/gothic-ai/nav-demos-jumps/repair-$2"
+  GQ_OWNER=nav-jumps "$HOME/gothic-ai/bin/gq" submit --class batch --threads 2 --mem 6G --max 2h \
+    --name "nav jumps record 267 repaired teacher v2 CV 240s" -- bash "$task/record.sh"
 fi
 BUILD
+    if [[ "$stage" == record-pilot ]]; then write_record_script; fi
     "$ROOT/scripts/gq" submit --class batch --threads 4 --mem 6G --max 2h \
-      --name "nav jumps $stage engine runner tests" -- bash "$task/build.sh" "$stage"
+      --name "nav jumps $stage engine runner tests" -- bash "$task/build.sh" "$stage" "$attempt"
     ;;
   recheck|candidates|discover)
     ssh "$host" 'df -h "$HOME"'
@@ -128,21 +198,7 @@ ROUTES
     ssh "$host" "mkdir -p '$source_dir/scripts/tests'"
     rsync -a "$ROOT/scripts/nav_jump_record.py" "$host:$source_dir/scripts/"
     rsync -a "$ROOT/scripts/tests/test_nav_jump_record.py" "$host:$source_dir/scripts/tests/"
-    ssh "$host" "cat > '$task/record.sh'" <<'RECORD'
-#!/usr/bin/env bash
-set -euo pipefail
-task="$(cd "$(dirname "$0")" && pwd)"
-export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
-df -h "$HOME"
-cd "$task/source"
-"$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_jump_record.py
-"$task/.venv/bin/python" -I "$task/source/scripts/nav_jump_record.py" \
-  --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
-  --save "$task/input/save.sav" --cache "$task/cache-transitions-cv" \
-  --links "$task/accepted-links-cv.txt" --roads "$task/input/places.json" \
-  --routes "$task/routes/routes.jsonl" --output "$HOME/gothic-ai/nav-demos-jumps" --count 267
-"$task/.venv/bin/python" -I "$task/source/scripts/nav_demos.py" check "$HOME/gothic-ai/nav-demos-jumps"
-RECORD
+    write_record_script
     "$ROOT/scripts/gq" submit --class batch --threads 2 --mem 6G --max 2h \
       --name "nav jumps record 267 teacher v2 CV 240s" -- bash "$task/record.sh"
     ;;

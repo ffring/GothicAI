@@ -42,6 +42,8 @@ class NavKeyTeacher final {
 
     // Decisions are held for exactly 100 ms by the runner. While airborne/climbing retain
     // the pre-takeoff path: a new Detour query can legitimately fail between the two banks.
+    // Jump/climb approach their precise start walking, wait there for standing and yaw
+    // alignment, then press run+forward+action. A grounded corridor match cannot skip it.
     static Decision decide(const State& body, const NavMesh::Path& path,
                            const NavMesh::Point& goal);
 

@@ -71,11 +71,13 @@ struct Episode {
   std::chrono::steady_clock::time_point wallStart;
   NpcKeys::KeyState previous;
   NavMesh::Path path;
+  NavMesh::Path::Transition observedTransition;
+  bool hasObservedTransition=false;
   NavigationEye eye{[] { NavigationEye::Config c;c.layout=250;return c; }()};
   NavigationMemory memory;
   NavigationMemory::View view;
   std::unique_ptr<NavDemoWriter> writer;
-  std::ofstream actions,trajectory,knownPaths,teacherPaths,samples;
+  std::ofstream actions,trajectory,knownPaths,teacherPaths,transitionFrames,samples;
   std::vector<RecordedKeys> replayActions;
 };
 Episode legacy;
@@ -229,7 +231,7 @@ void finish(Episode& ep,World& world) {
   closeBlocked(ep,elapsed);
   trajectory(ep,elapsed);
   if(!ep.replay) {NpcKeys::KeyState end;end.walk=true;action(ep,elapsed,end);if(ep.writer)ep.writer->finish();}
-  ep.trajectory.close();ep.actions.close();ep.knownPaths.close();ep.teacherPaths.close();ep.samples.close();
+  ep.trajectory.close();ep.actions.close();ep.knownPaths.close();ep.teacherPaths.close();ep.transitionFrames.close();ep.samples.close();
   auto out=file(ep,"episode.json");
   const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-ep.wallStart).count();
   out<<"{\"success\":"<<ep.success<<",\"replay\":"<<ep.replay<<",\"drive\":"<<ep.drive<<",\"start\":"<<std::quoted(ep.from)
@@ -397,6 +399,10 @@ void planV2(World& world,Npc& npc,std::ostream& out,const std::string& label,
 void traceV2Plan(Episode& ep,const Vec3& position,const NavKeyTeacher::Decision& decision,
                  bool direct,uint64_t elapsed) {
   if(!ep.record || ep.drive)return;
+  for(const auto& link:ep.path.transitions)
+    if(link.id==decision.hint.transitionId) {
+      ep.observedTransition=link;ep.hasObservedTransition=true;break;
+    }
   std::ostringstream signature;
   signature<<ep.path.complete<<','<<direct<<','<<ep.guidance.beyondKnown<<','
            <<decision.hint.transitionId<<','<<decision.hint.onTransition;
@@ -410,6 +416,29 @@ void traceV2Plan(Episode& ep,const Vec3& position,const NavKeyTeacher::Decision&
      <<",\"climb\":"<<decision.keys.climb;
   writeV2Plan(out,position,ep.goal,ep.guidance,ep.path,direct);out<<"}\n";
   if(!out)throw std::runtime_error("navdemos teacher-paths write failed");
+}
+// Teacher-only outcome evidence at physical ticks. NAVDEMO's 100-ms body flags
+// omit native BS_JUMP and can miss support between decisions; never feed this
+// privileged evidence into the learner or its observability calculation.
+void traceTransitionFrame(Episode& ep,World& world,uint64_t elapsed) {
+  if(!ep.transitionFrames.is_open() || !ep.hasObservedTransition)return;
+  const auto& n=*ep.npc;const auto& link=ep.observedTransition;
+  const auto position=NpcKeys::physicalPosition(n);
+  const bool support=NavTransitions::supported(world,*ep.npc);
+  const bool near=(position-cm(link.end)).length()<=60.f;
+  NavMesh::Path landing;
+  if(support && near)
+    landing=NavBench::navigationMesh(world).findPath(meters(position),link.end,false);
+  auto& out=ep.transitionFrames;
+  out<<"{\"elapsed_ms\":"<<elapsed<<",\"transition_id\":"<<link.id
+     <<",\"type\":"<<std::quoted(transitionName(link.type))<<",\"position_cm\":";
+  vector(out,position);
+  out<<",\"native_jump\":"<<(n.isJump() || n.isJumpAnim())
+     <<",\"native_climb\":"<<(n.bodyStateMasked()==BS_CLIMB)
+     <<",\"in_air\":"<<n.isInAir()<<",\"falling\":"<<n.isFalling()
+     <<",\"supported\":"<<support<<",\"landing_path_complete\":"<<landing.complete
+     <<",\"landing_path_m\":"<<landing.length<<",\"landing_snap_m\":"<<landing.startSnapDistance<<"}\n";
+  if(!out)throw std::runtime_error("navdemos transition-frames write failed");
 }
 void observe(Episode& ep,World& w) {
   auto& n=*ep.npc;
@@ -479,11 +508,16 @@ void decide(Episode& ep,World& w) {
     const auto& mesh=NavBench::navigationMesh(w);
     const bool airborne=body.inAir || body.falling || body.jumping || body.climbing;
     // The only privileged query is a local obstacle route to the shared carrot.
-    // In flight retain the takeoff route, just as in version 1.
-    if(!airborne || ep.path.corners.empty()) {
+    // Retain the selected local corridor while approaching its next link. Equal
+    // cost parallel drop/jump links otherwise alternate at every Detour query.
+    // The corridor still ends at the shared carrot and is released after landing.
+    const auto present=NavKeyTeacher::decideV2(body,ep.path,meters(ep.goal),carrot,false);
+    const bool approaching=present.pathValid && !present.replan && present.hint.transitionId!=0 &&
+                          !ep.path.corners.empty() && (cm(ep.path.corners.back())-ep.guidance.carrot).length()<50.f;
+    if((!airborne && !approaching) || ep.path.corners.empty()) {
       ep.path=mesh.findPath(body.position,carrot);++ep.replans;
     }
-    const bool direct=!airborne && !ep.guidance.beyondKnown &&
+    const bool direct=!airborne && !approaching && !ep.guidance.beyondKnown &&
                       mesh.straightWalkable(body.position,carrot);
     d=NavKeyTeacher::decideV2(body,ep.path,meters(ep.goal),carrot,direct);
     traceV2Plan(ep,position,d,direct,elapsed);
@@ -722,7 +756,9 @@ void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
     ep.minHeroDistanceCm=std::min(ep.minHeroDistanceCm,distance);ep.maxHeroDistanceCm=std::max(ep.maxHeroDistanceCm,distance);
   }
   const auto elapsed=w.tickCount()-ep.began;
-  const bool arrived=(n.position()-ep.goal).length()<100.f && !n.isInAir() && !n.navigationClimbing();
+  traceTransitionFrame(ep,w,elapsed);
+  const bool teacherSupported=ep.drive || ep.teacherVersion!=2 || !ep.record || NavTransitions::supported(w,n);
+  const bool arrived=(n.position()-ep.goal).length()<100.f && !n.isInAir() && !n.navigationClimbing() && teacherSupported;
   if((!ep.replay && arrived) || elapsed>=ep.limit || n.isDown() || truncate) {
     ep.success=arrived;
     if(!ep.success && ep.failure.empty())ep.failure=n.isDown()?"actor_down":truncate?"collection_limit":"path_timeout";
@@ -901,7 +937,10 @@ void NavDemos::command(const std::vector<std::string>& a,World& w,Npc& player,co
     ep.actions=file(ep,"actions.txt");ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),ep.teacherVersion);
     if(ep.teacherVersion==2) {
       ep.knownPaths=file(ep,"known-paths.jsonl");
-      if(!ep.drive)ep.teacherPaths=file(ep,"teacher-paths.jsonl");
+      if(!ep.drive) {
+        ep.teacherPaths=file(ep,"teacher-paths.jsonl");
+        ep.transitionFrames=file(ep,"transition-frames.jsonl");
+      }
     }
   }
   ep.initialState=initialState(ep);
