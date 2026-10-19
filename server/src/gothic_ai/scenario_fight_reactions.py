@@ -176,6 +176,13 @@ class CombatTrace:
             (t for t, victim in self.strike_targets.get(npc, []) if t >= after and victim == entity), None
         )
 
+    def window_interference(self, npc: str, start: int, end: int) -> tuple[list[int], list[int]]:
+        """Attack starts and native contacts in (start, end], regardless of observed target."""
+        return (
+            [t for t in self.strikes.get(npc, ()) if start < t <= end],
+            [t for t, _ in self.contacts.get(npc, ()) if start < t <= end],
+        )
+
     def first_contact(self, npc: str, target: str) -> int | None:
         """Diagnostic applied event with its target observed on delivery, possibly already changed."""
         entity = self.entities.get(target)
@@ -925,6 +932,16 @@ async def fight_reactions(
                     )
                     if not close:
                         raise GameError("fight_reactions setup: companion did not reach the defender")
+                    if not await _until(
+                        lambda: (
+                            not trace.attacking.get(CAVALORN, True)
+                            and not trace.attacking.get(bandit, True)
+                        ), 2,
+                    ):
+                        raise GameError("fight_reactions setup: attack animations did not settle before hit")
+                    # End the ordered duel with no blow in flight. stop keeps the weapon drawn;
+                    # npc_hit must still succeed, and later self-defence remains native.
+                    await stop_companion()
                     response = await link._request(
                         DebugCmd(req=link._next_id("r"), cmd="npc_hit", npc=bandit, by=CAVALORN), 5,
                     )
@@ -1071,13 +1088,21 @@ async def fight_reactions(
                         f"threat={threat is not None}, voiced={len(voices)}, native_shout_game_ms={shouts}, "
                         f"draw_game_ms={armed}, first_hit_game_ms={hit}",
                     )
+                    window_end = min(first, hit + 3000) if first is not None else hit + 3000
+                    companion_strikes, companion_contacts = trace.window_interference(
+                        CAVALORN, hit, window_end,
+                    )
+                    clean_window = not companion_strikes and not companion_contacts
                     check(
                         f"{bandit}_fights_3s",
-                        hit is not None and first is not None and first <= hit + 3000,
+                        hit is not None and first is not None and first <= hit + 3000 and clean_window,
                         f"first_hit_game_ms={hit}, first_return_strike_game_ms={first}, "
-                        f"delay_ms={first - hit if first is not None and hit is not None else None}",
+                        f"delay_ms={first - hit if first is not None and hit is not None else None}, "
+                        f"window_end_game_ms={window_end}, clean_window={clean_window}, "
+                        f"companion_strikes_game_ms={companion_strikes}, "
+                        f"companion_contacts_game_ms={companion_contacts}",
                     )
-                    if hit is not None and (first is None or first - hit > 3000):
+                    if hit is not None and (first is None or first - hit > 3000 or not clean_window):
                         rows = {n: trace.latest_rows.get(n) for n in (bandit, CAVALORN)}
                         native_events = {
                             n: [
@@ -1087,10 +1112,16 @@ async def fight_reactions(
                             for n in (bandit, CAVALORN)
                         }
                         snapshot = await link.snapshot(bandit, fresh=True)
+                        activity = {
+                            n: trace.window_interference(n, hit, window_end)
+                            for n in (bandit, CAVALORN)
+                        }
                         log.error(
                             "fight_reactions failed counter npc=%s first_hit_game_ms=%s "
+                            "window_end_game_ms=%s strikes_and_contacts=%s "
                             "last_game_ms=%s body_owned=%s rows=%s native_events=%s commands=%s snapshot=%s",
-                            bandit, hit, trace.game_ms.get(bandit), link.body_owned(bandit), rows,
+                            bandit, hit, window_end, activity,
+                            trace.game_ms.get(bandit), link.body_owned(bandit), rows,
                             native_events, [c for c in trace.commands if c[1] in {bandit, CAVALORN}][-20:],
                             snapshot.model_dump(),
                         )

@@ -59,6 +59,80 @@ def test_post_hit_strike_must_target_companion_at_the_time_of_its_animation():
     assert trace.strike_after("bandit", "companion", 200) == 350
 
 
+def test_window_interference_excludes_hit_and_includes_deadline():
+    trace = CombatTrace({11: "companion"})
+
+    def contact(event_id, at):
+        return {
+            "event_id": event_id, "source_entity_id": 111, "source_game_ms": at,
+            "perspective": "self", "code": 3,
+        }
+
+    trace.body({"observations": [
+        row(symbol=11, t=90),
+        row(symbol=11, t=100, attack=True, events=[contact(1, 100)]),
+        row(symbol=11, t=110),
+        row(symbol=11, t=120, attack=True, events=[contact(2, 120)]),
+        row(symbol=11, t=190),
+        row(symbol=11, t=200, attack=True, events=[contact(3, 200)]),
+        row(symbol=11, t=201),
+        row(symbol=11, t=210, attack=True, events=[contact(4, 210)]),
+    ]})
+
+    assert trace.window_interference("companion", 100, 200) == ([120, 200], [120, 200])
+
+
+def test_window_interference_ends_at_first_defender_strike():
+    trace = CombatTrace({10: "bandit", 11: "companion"})
+
+    def companion_strike(at):
+        return row(symbol=11, t=at, attack=True, events=[{
+            "event_id": at, "source_entity_id": 111, "source_game_ms": at,
+            "perspective": "self", "code": 3,
+        }])
+
+    trace.body({"observations": [
+        row(t=100), row(symbol=11, t=100),
+        companion_strike(130), row(symbol=11, t=140),
+        row(t=150, attack=True, target=111), companion_strike(150),
+        row(symbol=11, t=160), companion_strike(170),
+    ]})
+    defender_strike = trace.strike_after("bandit", "companion", 100)
+    assert defender_strike == 150
+    assert trace.window_interference("companion", 100, defender_strike) == ([130, 150], [130, 150])
+
+
+def test_window_interference_uses_contact_source_time_regardless_of_delivered_target():
+    trace = CombatTrace({10: "bandit", 11: "companion"})
+    trace.body({"observations": [row(t=100), row(symbol=11, t=100, target=110)]})
+    delayed_contact = {
+        "event_id": 1, "source_entity_id": 111, "source_game_ms": 150,
+        "perspective": "self", "code": 3,
+    }
+    trace.body({"observations": [row(symbol=11, t=350, target=999, events=[delayed_contact])]})
+
+    assert trace.first_contact("companion", "bandit") is None
+    assert trace.window_interference("companion", 100, 200) == ([], [150])
+    assert trace.window_interference("companion", 200, 400) == ([], [])
+
+
+def test_window_interference_is_empty_for_quiet_companion():
+    trace = CombatTrace({10: "bandit", 11: "companion"})
+    trace.body({"observations": [row(t=100), row(symbol=11, t=100)]})
+    trace.body({"observations": [
+        row(t=150, attack=True, target=111, events=[{
+            "event_id": 1, "source_entity_id": 110, "source_game_ms": 150,
+            "perspective": "self", "code": 3,
+        }]),
+        row(symbol=11, t=150, events=[{
+            "event_id": 2, "source_entity_id": 111, "source_game_ms": 150,
+            "perspective": "self", "code": 9,
+        }]),
+    ]})
+
+    assert trace.window_interference("companion", 100, 200) == ([], [])
+
+
 def test_native_voice_requires_successful_audio_playback(tmp_path):
     game_log = tmp_path / "game.log"
     game_log.write_text(
