@@ -10,6 +10,7 @@ from .basics import m5e_talk as m5e_talk
 from .basics import m6_knows as m6_knows
 from .basics import tts_lines as tts_lines
 from .basics import websocket as websocket
+from .cheat import cheat_scenario as cheat_scenario
 from .companions import calm_scenario as calm_scenario
 from .companions import companion_scenario as companion_scenario
 from .companions import neural_companion_scenario as neural_companion_scenario
@@ -25,6 +26,7 @@ from .conversation import group_scenario as group_scenario
 from .conversation import interject_scenario as interject_scenario
 from .conversation import write_cards as write_cards
 from .cover import cover_scenario as cover_scenario
+from .cover import cover_subject_scenario as cover_subject_scenario
 from .crime_meet import crime_meet as crime_meet
 from .crime_react import crime_react as crime_react
 from .deals import contract as contract

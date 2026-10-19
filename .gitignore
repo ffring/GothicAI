@@ -18,6 +18,12 @@ secrets/
 *.sqlite
 *.sqlite3
 data/
+!/data/
+/data/*
+!/data/content/
+/data/content/*
+!/data/content/registry.jsonl
+!/data/content/city-materials.csv
 !OpenGothic/data/
 
 # OS

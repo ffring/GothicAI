@@ -118,6 +118,20 @@ def test_cover_flag_defaults_and_scenario_are_available(monkeypatch, flags):
     assert exit.value.code == 0
 
 
+@pytest.mark.parametrize("flags", [[], ["--no-npc-cheat"], ["--no-crimes"], ["--scenario", "cheat"]])
+def test_npc_cheat_flag_and_scenario_are_available(monkeypatch, flags):
+    async def serve(args):
+        assert args.no_npc_cheat == ("--no-npc-cheat" in flags)
+        assert args.no_crimes == ("--no-crimes" in flags)
+        return 0
+
+    monkeypatch.setattr(cli, "serve", serve)
+    monkeypatch.setattr("sys.argv", ["gothic-ai", "serve", *flags])
+    with pytest.raises(SystemExit) as exit:
+        cli.main()
+    assert exit.value.code == 0
+
+
 async def test_no_crimes_starts_no_encounter_worker_or_approach(monkeypatch):
     meeting, approach = Mock(), Mock()
     monkeypatch.setattr(cli, "CrimeMeet", meeting)

@@ -57,7 +57,7 @@
 Код владеет правдой, NPC — убеждениями. Ложь героя должна работать и иметь последствия.
 
 - **Правда:** `chronicle.py` — факты ветки сохранения (умер, появился, квест, ложь, раскрытие, слух). Загрузка сейва откатывает их вместе с ним.
-- **Убеждения NPC:** `knowledge.py` (что знает из диалогов и сюжета главы), `sightings.py` (видел и слышал сам, улики), `trust.py` (честность героя: lied, caught, kept), `social.py` (кто кого знает, слухи), `concerns.py` (заботы о герое из фактов).
+- **Убеждения NPC:** `knowledge.py` (что знает из диалогов и сюжета главы), `sightings.py` (видел и слышал сам, улики), `trust.py` (честность героя: lied, caught, kept), `social.py` (кто кого знает, слухи о герое и NPC), `people_knowledge.py` (что знает дурного о других NPC, из хроники), `concerns.py` (заботы о герое из фактов). Раскрытое прикрытие свидетеля становится слухом о нём; знание помечает свидетеля в расспросе и даёт короткий блок обстановки ([третья волна, слои 1–2](npc-wave3.md#как-работает-сейчас)).
 - **Как дело становится известным:**
   1. `crimes.py` берёт деяние героя и настоящих свидетелей из движка.
      `crime_react.py` решает удержанные дела на месте правилами характера и роли; модель получает только контекст.
@@ -65,7 +65,7 @@
      подход пострадавшего к `Amends`, отказ и бегство слышавших об убийстве, бой стражи;
      удержание входа v46 даёт знающим домочадцам выгнать вора и из публичного портала дома.
   2. Свидетель запоминает его (`sightings.py`).
-  3. Слух идёт по знакомым (`social.Rumors`); на сцене его ставит `gossip.py`, по поручению несёт `errands.py`.
+  3. Слух идёт по знакомым (`social.Rumors`); на сцене его ставит `gossip.py`, по поручению несёт `errands.py`. Слухи о NPC пока проходят фактом, без живой сцены; последствия для героя читают только слухи о `PLAYER`.
   4. Закон общины считает дела из хроники ветки: законник и страж сообщают сразу, остальные свидетели — по таймеру (`crime_law.py`). Ванильные диалоги законников читают наш закон через патчи графа (`crime_law_graph.py`, `crime_law_runtime.py`). Слои дальше — в [`crime.md`](crime.md).
 - **Ложь:** утверждение героя хранится вместе с правдой. Раскрыть её может улика (след, обломки), свидетель (`witnesses.ask_witness`) или сверка с фактами. Расплату ведут `amends.py` (сториллеты режиссёра) и `consequences.py` (ванильные диалоги обманутого).
 - **Восприятие:** мост каждый ход шлёт `npc_view`. Из него `perception.py` делает смысл для обеих моделей, имена показываются только знакомым. Места берутся из книги мест `places.py`, ответы «где» и «знаю» дают `whereabouts.py` и `lore.py`.
@@ -87,9 +87,9 @@
 | Вход и связь | `cli` (точка входа, `ServerState`), `game` (WebSocket), `protocol` (pydantic-схемы), `trace`, `replay`, `journal` (журнал для человека) |
 | Разговор | `dialogue`, `talk`, `turn`, `voice`, `tts`, `persona`, `memory` (SQLite, ветвится с сейвами), `budget`, `npc_tools`, `executor`, `commands`, `orders`, `group` (общая беседа), `interject`, `llm/` (`chatgpt`, `openai`, `local`, `fake`) |
 | Быстрый контур и тело | `brain/` (`decider`, `planner`, `reflex`, `day`, `apply`, `tiers`, `stimuli`, `incident`, `situation`), `incidents`, `daylife`, `initiative`, `bodies` (исход мягких действий), `bodypilot` (боевое тело P30), `beasts` (волки слышат тон), `wrath` (терпение к оскорблениям) |
-| Восприятие и знание | `perception`, `sightings`, `places`, `lore`, `whereabouts`, `knowledge`, `social`, `gossip`, `trust`, `attitudes`, `concerns` |
+| Восприятие и знание | `perception`, `sightings`, `places`, `lore`, `whereabouts`, `knowledge`, `social`, `gossip`, `trust`, `people_knowledge`, `attitudes`, `concerns` |
 | Правда, дела, ложь | `chronicle`, `crimes`, `crime_react`, `crime_meet`, `crime_memory`, `crime_law`, `crime_law_graph`, `crime_law_runtime`, `witnesses`, `quests`, `vanilla`, `consequences`, `amends` |
-| Сделки и поручения | `deals` (окно сделки, долги), `contracts` (опыт, обучение, платные задания), `chests`, `errands` (`plan`), `meetings` (`meet`), `guide` (`lead`) |
+| Сделки и поручения | `deals` (окно сделки, долги, `npc_later`), `npc_cheat` (намерение нарушить отложенное слово), `promise_breach` (первое проявление нарушения), `fear` (общее знание о насилии героя), `contracts` (опыт, обучение, платные задания), `chests`, `errands` (`plan`), `meetings` (`meet`), `guide` (`lead`) |
 | Сюжет | `story`, `validator`, `storyguard`, `programs`, `director`, `questbook`, `questlog`, `triggers`, `occasions`, `showrunner`, `authoring`, `casting`, `cast`, `characters` (карточки характера), `chains` |
 | Данные | `gamedata/`: `characters.json`, `lore.json`, `places.json`, `stash.json`, `ou.py` (реплики OU.BIN), `storygraph.py` |
 | Сценарии e2e | `scenarios/`: общее в `common.py`, поддельный Responses WS/HTTP-сервер — в `responses_server.py`; модуль каждой области — в списке «Сценарии по областям» ниже; точки входа — в `__init__.py` |
@@ -105,7 +105,7 @@
 | Мост к серверу | `ai_bridge/aibridge.cpp`; NPC — `npccontroller`, `npcview`, `npcchests`; сюжет — `story*`, `dialoggraph`; голос — `voicebuffer`, `linelibrary`; `beasts`, `necromancy` | `GOTHIC_AI=0` | [`protocol.md`](protocol.md) |
 | Физика Jolt вместо Bullet: тела, рэгдоллы, CharacterVirtual, вода, разрушение | `common/physics/` (`collisionworld`, `dynamicworld`, `ragdoll`, `fracture`, `cloth`, `worldwind`), `common/world/movablevobs.*` | ini `[GAME]`: `ragdoll`, `movable_vobs`, `destruction`, `buoyancy`, `character_virtual` и другие; кэш разрушений `OPENGOTHIC_FRACTURE` | [`physics.md`](physics.md) |
 | Ткань мира рядом с героем: mesh-vob и полотнища уровня | `common/physics/cloth.*`, `clothgeometry.*`, `worldcloth.*`, `common/graphics/clothvisual.*`, `common/world/portalrooms.h`; таблицы `data/cloth-vobs.csv`, `cloth-world.csv` | `[GAME] cloth=0`, Marvin `toggle cloth` | [Перепись и проверки](../reports/physics/2026-10-18-cloth/validation-notes.md#шаг-1) |
-| Наземные живые монстры на CharacterVirtual в 20 м от героя (выход 22 м), эксперимент по умолчанию **OFF** | `common/game/movealgo.cpp`, общий `common/physics/` | `[GAME] monster_character_virtual=0`; Marvin `toggle monster_character_virtual` | [Числа и приёмка шага 4, часть 1](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md) |
+| Наземные живые монстры на CharacterVirtual в 20 м от героя (выход 22 м), включено по умолчанию; родной отскок от крутой статичной/кинематической грани при продвижении <60% | `common/game/movealgo.cpp`, общий `common/physics/` | `[GAME] monster_character_virtual=0`; Marvin `toggle monster_character_virtual` | [Числа и парные видео шага 4](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md) |
 | Анимация: инерциальные переходы, foot IK, моргание, жесты, губы, взгляд, наклон, вздрагивание, натяжение лука, ходьба с прицелом | `common/graphics/mesh/` (`animblend`, `footik`, `eyeblink`, `talkgestures`, `lipsync`, `gaze`, `lean`, `flinch`, `bowdraw`, `aimwalk`, `aim`) | `OPENGOTHIC_ANIBLEND`, `_FOOTIK`, `_BLINK`, `_GESTURES`, `_LIPSYNC`, `_GAZE`, `_LEAN`, `_FLINCH`, `_BOWDRAW`, `_AIMWALK`, `_AIM` | — |
 | Ручной прицел героя и лучники NPC | `common/game/archery.cpp`, `aimcamera.h`, `archerai.*` | `OPENGOTHIC_MANUALAIM`, `OPENGOTHIC_NPCAIM` (или ini `[GAME] manualAim`, `npcManualAim`) | [`manual-aim.md`](manual-aim.md) |
 | Боевое тело NPC: аренда, наблюдения, арена, реплей | `common/game/bodycontroller.*`, `bodyobservations.*`, `bodyarena.*`, `bodyreplay.*` | без `--body-url` на сервере не работает | [`npc-body-api.md`](npc-body-api.md) |
@@ -113,6 +113,7 @@
 | Навигация NPC: обучаемая — пока только на стенде; популяция N NPC, эпизоды без перезагрузки, выборка и награды | `common/nav*`, `common/game/nav*`; `scripts/nav_rl.py` — пары, сбор, финальный замер, проверки | `navdemos population`: `sample/argmax`, `RECORD=0` выключает запись; `navdemos physics cv` закрепляет CV для ученика и учителя (`nav_rl.py` по умолчанию); обычная игра не включает режим | [`navigation.md`](navigation.md) |
 | HD-текстуры | `common/resources.cpp` | работают, если есть каталог `OPENGOTHIC_TEXTURES` | — |
 | Свои материалы мира: нормали и ORM, Ламберт с AO | `common/resources.cpp`, `common/graphics/material.*`, `drawbuckets.*`, `renderer.*`, `shader/materials/`, `shader/lighting/`; фикстура `scripts/content/test-material.py` | убрать каталог контента или `OPENGOTHIC_CONTENT=` | [`own-content.md`](own-content.md#как-работает-сейчас) |
+| Генерация и сравнение своих PBR-материалов (офлайн) | `scripts/content/bakeoff.py` (FLUX NF4, SDXL, Marigold), `stable_materials_adapter.py`, `run-materials.sh`, `material_preview.py`, `pack_materials.py`, `capture-materials.sh`; `data/content/registry.jsonl`, `registry.py` | только явный запуск; `enable-flux` после принятия соглашения пользователем; материалы `draft`, по умолчанию не подключены | [`own-content.md`](own-content.md#как-работает-сейчас), [сравнение: 50 материалов, 10 игровых снимков](../reports/content/2026-10-material-bakeoff/README.md) |
 | Перепись ресурсов сессии (инструмент) | `common/contentcensus.*`, наблюдатель VFS; сводка `scripts/content-census.py` | `OPENGOTHIC_CENSUS=<путь к json>`, запись при выходе и Marvin `census`; `scripts/test_content_census.py`, бенч `smoke` | [`own-content.md`](own-content.md) |
 | Тестовый стенд | `common/testbench.*`, `OPENGOTHIC_BENCH*` | — | [`scripts/bench/README.md`](../scripts/bench/README.md) |
 
@@ -138,7 +139,7 @@
 
 - **Голос и вывод:** `--no-voice`, `--no-tts`, `--no-console`, `--no-trace`.
 - **Модели:** `--llm chatgpt|openai|local|fake`, `--model`, `--reasoning-effort`, `--no-websocket`, `--no-brain` (планировщик быстрого контура), `--no-quick`, `--no-hold-threats`.
-- **Мир NPC:** `--no-wrath`, `--no-apply-threats`, `--no-beasts`, `--no-chests`, `--no-lead`, `--no-meet`, `--no-errands`, `--no-interject`, `--no-free-bandits`, `--no-apply-day`, `--no-knowledge`, `--no-crimes`, `--no-cover` (сделки прикрытия и страх свидетелей).
+- **Мир NPC:** `--no-wrath`, `--no-apply-threats`, `--no-beasts`, `--no-chests`, `--no-lead`, `--no-meet`, `--no-errands`, `--no-interject`, `--no-free-bandits`, `--no-apply-day`, `--no-knowledge`, `--no-crimes`, `--no-cover` (сделки прикрытия и страх свидетелей), `--no-npc-cheat` (нарушения отложенного слова NPC; также выключаются через `--no-crimes`).
 - **Сюжет:** `--no-director`, `--no-questlog`, `--no-occasions`, `--no-showrunner`, `--story-graph PATH`.
 - **Тело:** `--body-url`, `--no-neural-body`, `--neural-body-max` (1–4, по умолчанию 4).
 - **Сценарий:** `--scenario <имя>`, `--exit-after`.
@@ -149,14 +150,17 @@
 |---|---|
 | pytest одного модуля | `cd server && uv run pytest tests/test_<модуль>.py -q`; на Ryzen — `scripts/ryzen.sh pytest tests/test_<модуль>.py` |
 | Один сценарий e2e | `SCENARIO=<имя> scripts/ryzen.sh e2e`; на Mac — `SCENARIO=<имя> LLM=fake scripts/e2e.sh` |
+| Частота кадров e2e | На Ryzen и Mac по умолчанию `E2E_MAX_FPS=30`; `0` снимает лимит, `60` задаёт 60 FPS. `OPENGOTHIC_FPS_LOG=1` включён в e2e по умолчанию; bench и живая игра не меняются. [Настройки](ryzen.md), [приёмка 12 сценариев](../reports/compute/2026-10-19-e2e-fps-cap/README.md) |
 | Бенч механики | `scripts/bench.sh <имя>` → `.bench/<имя>-<время>/` (видео, метрики, отчёт) |
-| Очередь Ryzen | `scripts/gq status`: три слота для `--display --display-shared`, `GQ_DISPLAY_SLOT`; старый `--display` и `--display-exclusive` берут все слоты. `TEMPEST_WINDOW_POS` разводит окна, `OPENGOTHIC_FPS_LOG=1` пишет FPS; [ресурсы и допуск](compute.md#очередь-gq), [порты и окна](ryzen.md), [проверка и приёмка](../reports/compute/2026-10-19-ryzen-three-windows/README.md) |
+| Очередь Ryzen | `scripts/gq status`: три слота для `--display --display-shared`, `GQ_DISPLAY_SLOT`; старый `--display` и `--display-exclusive` берут все слоты. `TEMPEST_WINDOW_POS` разводит окна, `OPENGOTHIC_FPS_LOG=1` пишет FPS, `scripts/ryzen-round.sh` — тройной замер сценария; [ресурсы и допуск](compute.md#очередь-gq), [порты и окна](ryzen.md), [проверка и приёмка](../reports/compute/2026-10-19-ryzen-three-windows/README.md) |
 | Общий кэш бинарников Ryzen | `scripts/ryzen.sh` использует `~/gothic-ai/engine-cache/` по хэшу исходников; `clean-cache` очищает старые записи, `RYZEN_WORKTREE` задаёт имя папки; [правила](ryzen.md) |
+| Автоочистка диска Ryzen | Перед загрузкой исходников `ryzen.sh` удаляет свободные e2e-worktree после `RYZEN_CLEAN_IDLE_HOURS=48` часов без активности (`0` отключает проход); при свободном месте меньше 60 ГиБ обрезает `uv` не чаще раза в 12 часов; [границы и метки](ryzen.md#как-работает-сейчас) |
+| Съёмка записанных дуэлей | `scripts/body_replay_film.py prepare/render`: Mac Metal, `--size 1920x1080`, MP4 + звук боя WAV; Linux Xvfb/lavapipe; сверка `body_schedule_equivalence.py`, [описание](npc-body-control-plan.md), [съёмка P30 на Mac](../reports/npc-body/2026-10-19-replay-mac/README.md) |
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |
 | Подписка тела под lease и с заявкой на захват | `gothic-body-watch-test` в `OpenGothic/tests/body_watch_test.cpp`, настоящие NPC без окна; правила — [`npc-body-api.md`](npc-body-api.md) |
 
-Стенд `monster-character-virtual` сравнивает OFF/ON для волка, тролля, воды и атак без парных видео; `check-physics` проверяет их капсулы, e2e `wolf` запускается с `MONSTER_CHARACTER_VIRTUAL=1`.
+Стенд `monster-character-virtual` сравнивает OFF/ON для волка, тролля, воды и атак без парных видео; `monster-character-virtual-stairs` закрепляет погоню на `NW_CITY_TO_FARM2_09` и пишет видео с диагностикой подъёма (контракт ограничивает подъём монстра на 10-см подступенках; команда `monster_character_virtual_videos.py foliage` убирает листву только из изображения), `monster-character-virtual-stair-attack` проверяет переход в выпад с остатком сглаживания. `monster-character-virtual-ledges` сравнивает настоящий OFF/ON на одиночных уступах волка 20/40/55 см и тролля 40/80 см, а также волка 40 см с заглублённой до −100 см гранью (6 случаев); контракт проверяет сохранение полного шага гильдии при ограничении прохода вперёд. `check-physics` проверяет капсулы, отскок от крутых статичных/кинематических стен и исключения (ходовой склон, динамический ящик, NPC, уступы); e2e `wolf` запускается с `MONSTER_CHARACTER_VIRTUAL=1`. Диагностика `npc-character-virtual` и `npc_character_virtual_compare.py --steep-sliding` измеряет скольжение людей без изменения их поведения.
 
 Сценарий считается пройденным, когда все значения результата начинаются с `done`. Описание каждого — в шапке `scripts/e2e.sh`. Стенды ткани `cloth`, `cloth-orc`, `cloth-city`, `cloth-harbour` проверяют самостоятельные и извлечённые из уровня полотнища; `cloth-arrow-npc` проверяет пересечение ткани и NPC одним отрезком стрелы в обоих порядках; `cloth-visibility` проверяет заморозку вне камеры и плавный возврат; `cloth-on/off` измеряют плотное скопление, `cloth-reload` и `cloth-legacy-load` проверяют загрузку; приёмка включает извлечённые из уровня паруса, корабельные флаги и городские знамёна. Тесты сервисов лежат в их `tests/`, тесты скриптов — в `scripts/tests/`.
 
@@ -167,7 +171,7 @@
 - **жизнь NPC** (`npc_life.py`): `day`, `noise`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
 - **беседа** (`conversation.py`): `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
 - **сделки** (`deals.py`): `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
-- **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `cover` (модуль `cover.py`: сделка прикрытия, второе показание, раскрытие и загрузка), `wrath`;
+- **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `cover` (модуль `cover.py`: сделка прикрытия, второе показание, раскрытие и загрузка), `cover_subject` (там же: слух о Хильде до общего знакомого, пометки свидетеля, доверие к герою и загрузка), `cheat` (`cheat.py`: нарушенное молчание, невыплата `npc_later`, честный контроль и загрузка; `LLM=chatgpt` — один ответ при невыплате), `wrath`;
 - **стыки систем** (`trace_crime.py`): `trace_crime` — свежие обломки и показание о краже в одном ходе, две поимки лжи, знание о деле и доверие;
 - **сюжет** (`story.py`; `occasions`, `questlog`, `showrunner*`, `vanilla_line*` — одноимённые модули): `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
 
@@ -195,7 +199,7 @@
 - **`shorts/`** — шортсы из игры с живыми NPC: съёмка, монтаж, объясняющие ролики, сравнения «до и после», бренд ([`shorts/README.md`](../shorts/README.md)). Сравнения собирает `gothic_shorts.compare`, точка входа — `shorts/compare/cut.py`; `gothic-shorts dub` распознаёт их планы и берёт папку дублей из `takes` или `--takes DIR`. Субтитры (`srt`) и дубляж сравнения берут время строк из плана; `srt --plan FILE` выбирает план вместо `plan.json`. Сравнение воды — `shorts/compare/water.bench` и `water.json`: `shorts/compare/film.sh water` снимает три сцены в гавани (крестьянин, огненный шар и вещи) крупными боковыми камерами через отдельные постановки `water-film` стенда; в дубле off тело может выйти из кадра. Обложки шаблона B — модуль `gothic_shorts.cover`, команда `cover` и поле `cover` плана; загрузка на YouTube с `--thumbnail`, отдельная команда `thumbnail`.
 - **`site/`** — сайт и дневник на GitHub Pages ([`site/README.md`](../site/README.md)).
 - **`evals/`** — эталоны: `npc-body/` (бой), `npc-decisions/` (выбор модели решений).
-- **`reports/`** — итоговые исследования и отчёты прогонов.
+- **`reports/`** — итоговые исследования и отчёты прогонов. Парные видео монстров CV снимает `scripts/monster-character-virtual-videos.sh`: независимые постановки OFF/ON (включая `SCENE=wolf_stairs` у откоса) из `scripts/bench/monster-character-virtual-videos.bench` с одинаковой камерой за монстром; пригодные пары и пропуски перечислены в [отчёте шага 4](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md#шаг-4-часть-2--парные-видео). Монтаж и листы кадров — `scripts/monster_character_virtual_videos.py`; числовые атаки и 30-секундный замер Mac — `monster-character-virtual-attacks.bench` и `monster-character-virtual-performance.bench`.
 - **`research_notes/`** — заметки исследований моделей и провайдеров.
 
 ## Документы
@@ -209,13 +213,14 @@
 | [`compute.md`](compute.md), [`ryzen.md`](ryzen.md) | машины, очередь `gq`, прогоны на Ryzen | справочник |
 | [`npc-agent.md`](npc-agent.md) | агент NPC: два контура, приказы, восприятие | сейчас + справочник с журналом |
 | [`npc-tools.md`](npc-tools.md) | инструменты NPC: сделки, восприятие, карточки, беседа, поручения | сейчас + план с журналом |
-| [`npc-wave3.md`](npc-wave3.md) | третья волна NPC: сговор, обман в сделках, вред друг другу | план |
+| [`npc-wave3.md`](npc-wave3.md) | третья волна NPC: сговор, обман в сделках, вред друг другу | сейчас + план с журналом, слои 1–3 сделаны |
 | [`contracts.md`](contracts.md), [`beasts.md`](beasts.md), [`xardas-wrath.md`](xardas-wrath.md) | поручения и награды; волки; гнев Ксардаса | справочники |
 | [`story-graph.md`](story-graph.md) | граф сюжета, ложь, слухи, ремонт квестов | сейчас + план с журналом |
 | [`director.md`](director.md) | режиссёр-автор: квесты, персонажи, цепочки | сейчас + план с журналом, этапы 1–5 сделаны |
 | [`crime.md`](crime.md) | преступления и репутация, карта ванильных встреч | сейчас + журнал: слои 1–3, 4а, 4б и 5 приняты; этап закрыт |
 | [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода, ткань | сейчас + план с журналом |
-| [`own-content.md`](own-content.md) | своя игра: замена ресурсов, скриптов и мира Gothic своими, этапы 0–9; офлайн-перепись `scripts/content-textures.sh`, инструмент `scripts/content/`, [площади и UV четырёх миров](../reports/content/2026-10-world-textures/README.md) | сейчас + план с журналом, идёт: этапы 0–1 |
+| [`own-content.md`](own-content.md) | своя игра: замена ресурсов, скриптов и мира Gothic своими, этапы 0–9; офлайн-перепись `scripts/content-textures.sh`, инструменты и реестр `scripts/content/`, [сравнение генераторов материалов](../reports/content/2026-10-material-bakeoff/README.md), [площади и UV четырёх миров](../reports/content/2026-10-world-textures/README.md), [сопоставление 71 городской текстуры](../data/content/city-materials.csv) и `map_textures.py`; `generate.py` читает таблицу и библию, хранит ревизии попыток, `material_colour.py` ограничивает насыщенность с сохранением линейной яркости, `pack_materials.py --set`/`material_preview.py --set` собирают набор и лист, `capture-city.sh` + `city.bench` снимают пять городских точек днём/ночью и проверяют перепись, `--mac-city-fps` измеряет Mac; [city-1: 36 материалов, 10 пар до/после, перепись и FPS](../reports/content/2026-10-city-set-1/README.md) | сейчас + план с журналом, идёт: этапы 0–1 |
+| [`content-style.md`](content-style.md) | библия стиля своего контента: палитра, износ, классы материалов, промпты | справочник |
 | [`manual-aim.md`](manual-aim.md) | ручное прицеливание | сейчас + план с журналом |
 | [`navigation.md`](navigation.md) | обучаемая навигация NPC; [популяционный стенд на CV и независимый набор 60 пар](../reports/navigation/2026-10-18-rl-env/README.md) | сейчас + план, идёт |
 | [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | сейчас + план |

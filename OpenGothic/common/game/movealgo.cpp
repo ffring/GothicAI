@@ -708,7 +708,9 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   const float maxSlope = std::acos(std::clamp(slideAngle(),0.f,1.f));
   const auto impulseGeneration=movementImpulseGeneration;
   const auto previousState=flags;
-  const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc);
+  const bool limitStairAdvance = !npc.isPlayer() && !npc.isHuman();
+  const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc,
+                                           limitStairAdvance,limitStairAdvance);
   if(preserveMovementImpulse(impulseGeneration,previousState,"virtual"))
     return true;
   npc.setViewPosition(moved.position);
@@ -716,6 +718,19 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   virtualGroundVelocity = moved.groundVelocity;
 
   auto collision = moved.collision;
+  const bool faceTravel = limitStairAdvance && moved.steepContact && isForward(displacement) &&
+                          !npc.isAttackAnim() && npc.bodyStateMasked()!=BS_HIT;
+  const auto faceSteepTravel = [&] {
+    if(!faceTravel || collision.npc!=nullptr || collision.preFall || dt==0)
+      return;
+    const auto travel = moved.position-origin;
+    const float distance = std::hypot(travel.x,travel.z);
+    if(distance<=.1f*float(dt))
+      return; // Ignore slow contact recovery below 1 m/s.
+    // Even a failed move may have slid sideways in Jolt. Face the accepted
+    // travel so the next animation step no longer keeps driving into the bank.
+    npc.setDirection(Tempest::Vec3(travel.x,0,travel.z));
+    };
   if(!npc.isPlayer() && moved.blocked) {
     DynamicWorld::CollisionTest legacy;
     // Enrich only the AI notification, after Jolt has accepted the final origin.
@@ -723,7 +738,7 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
     // testMove restores the ellipsoid and leaves the native controller untouched.
     npc.physic.testMove(origin+displacement,origin,legacy);
     if(legacy.vob!=nullptr || legacy.npc!=nullptr || legacy.landCol) {
-      if(legacy.normal!=Tempest::Vec3())
+      if(legacy.normal!=Tempest::Vec3() && !(limitStairAdvance && moved.steepContact))
         collision.normal = legacy.normal;
       collision.vob = legacy.vob;
       if(collision.npc==nullptr) {
@@ -799,8 +814,10 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
       // Jolt owns collision resolution; retain the existing AI response when a
       // wall or another actor prevents progress (bounce, climb, or mob perception).
       onMoveFailed(displacement,collision,dt);
+      faceSteepTravel();
       return false;
       }
+    faceSteepTravel();
     return true;
     }
 
