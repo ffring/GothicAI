@@ -5,6 +5,9 @@ scene with the hero's lines, the hero says them with a TTS voice through the tal
 through speech recognition and answer with the language model, the test bench films it with the game's
 effects and separate AI npc voices, and the cut makes a 1080x1920 short with subtitles.
 
+The [explainer renderer](explain/README.md) also makes long 1920×1080 videos: set `format: "wide"` in its
+JSON plan and publish with `gothic-shorts explain`. Omitted `format` keeps the vertical 1080×1920 layout.
+
 Game music is not recorded: `film` always writes `musicVolume=0` in the take's `Gothic.ini`, including
 for old shots with a nonzero `music` value, and `worldSounds=0`: the map's looping place sounds
 (zCVobSound: wind and birds, surf, torches) would be a second tune under the bed. The cut adds one music bed for the whole short, starting
@@ -170,6 +173,7 @@ or the visual model bounds of an item or intact prop; it marks departures from t
 - A voice: a beat's `"lines": [{"at", "file", "words": [[word, from, to], ...]}]` lays each voiced line at that
   second of the segment and captions it in place of the beat's title, a page of up to three words at a time with
   the word being said lit (the timings from `gothic-shorts align`); the game's sound and the bed duck under it.
+  Subtitle tracks and dubbing use these lines' positions in the plan, including the duration of unvoiced beats.
   Such a plan (its script, the voice files) stays outside the repository, in the explainer's workspace: give its
   path as the third argument, the short goes into that folder's `render/`:
   `uv run --project shorts python shorts/compare/cut.py hits ru ~/.local/share/gothic-ai/explain/hits/plan.json`.
@@ -380,8 +384,9 @@ description, every other section goes in as their translation (YouTube shows a v
 language), and `--captions <lang>=<file>` adds subtitle tracks after the upload. `gothic-shorts srt` makes
 them: a shot's take from its `subs.<lang>.json` on the cut's time (an npc's line starts with its name, the
 burnt-in hook and captions in brackets), an explainer from `script.<lang>.txt` over its Russian voice
-(`words.ru.json`, the `|` chunks one after another). Caption tracks need the `youtube.force-ssl` scope: a
-sign-in older than it can still upload, but `--captions` asks to `youtube login` again before it sends
+(`words.ru.json`, the `|` chunks one after another). For comparisons, subtitles and dubbing follow the voiced
+lines in `plan.json` (`srt --plan FILE` selects another plan); `words.ru.json` is not needed. Caption tracks
+need the `youtube.force-ssl` scope: a sign-in older than it can still upload, but `--captions` asks to `youtube login` again before it sends
 anything. `translate` adds the other sections' titles and descriptions to a video already up (videos.update,
 the same scope): its own title, description, tags and other translations stay as they are. An English audio track (`gothic-shorts dub`) is added in Studio (Subtitles, the video, the
 language's Audio column); the API has no call for it, and Studio shows the column only to channels with

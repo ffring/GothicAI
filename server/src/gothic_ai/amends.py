@@ -36,6 +36,7 @@ from .game import GameError, GameLink
 from .gamedata.storygraph import Node, StoryGraph
 from .journal import Journal
 from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
+from .people_knowledge import rumor_subject
 from .protocol import DialogChosen, GameMessage, Loading, Session, Snapshot
 from .story import StoryPatches
 from .turn import ToolOutcome
@@ -347,6 +348,8 @@ class Amends:
     # --- watching -----------------------------------------------------------------------------
 
     def _on_fact(self, f: Fact) -> None:
+        if f.get("fact") == "rumor" and rumor_subject(f) != "PLAYER":
+            return
         match f.get("fact"):
             case "found_out" | "caught":
                 lie = Lie(
@@ -371,8 +374,8 @@ class Amends:
                 self._queue.put_nowait((key, f.get("to", ""), f.get("from_name") or ""))
             case "crime_seen":
                 self._queue_crime(f.get("npc", ""), f.get("crime", ""))
-            case "testimony":
-                for crime in f.get("crime_told", []):
+            case "testimony" if self.crimes is not None:
+                for crime in self.crimes.testimony_crimes(f):
                     self._queue_crime(f.get("npc", ""), crime)
             case "deal" if f.get("forgive"):
                 self._spawn(self._forgiven(f))

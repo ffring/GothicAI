@@ -69,6 +69,32 @@ def blocker(system, kind, *, at=AT + 30, via=CITIZEN):
     system.chronicle.record(fact)
 
 
+@pytest.mark.parametrize("cover", [True, False])
+async def test_cover_silence_stops_law_only_with_cover_enabled(law, cover):
+    law.crimes.cover = cover
+    case(law)
+    law.chronicle.record({
+        "fact": "silenced", "npc": CITIZEN, "crime": "theft-1", "cover": "D1", "at": AT + 30,
+    })
+    [delivery] = law.law.deliveries()
+    assert delivery.status == ("stopped" if cover else "pending")
+
+
+@pytest.mark.parametrize("cover", [True, False])
+async def test_old_covered_testimony_reaches_law_when_cover_is_disabled(law, cover):
+    law.crimes.cover = cover
+    case(law, via="")
+    law.chronicle.record({
+        "fact": "testimony", "npc": GUARD, "witness": CITIZEN,
+        "crime_saw": ["theft-1"], "crime_told": [], "cover": "D1", "at": AT + 30,
+        "guild": 2, "npctype": 0,
+    })
+    deliveries = law.law.deliveries()
+    assert len(deliveries) == int(not cover)
+    if deliveries:
+        assert (deliveries[0].crime["id"], deliveries[0].via) == ("theft-1", GUARD)
+
+
 @pytest.mark.parametrize("npc,guild", [(GUARD, 2), ("PAL_205_LORD", 1), (ANDRE, -1)])
 async def test_guard_and_lawkeeper_witnesses_inform_law_immediately(law, npc, guild):
     crime = case(law, via=npc, guild=guild)
