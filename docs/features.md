@@ -112,6 +112,12 @@ PR, который добавляет фичу или выключатель, д
 | Изменение списка `body_watch` под lease или с заявкой на захват (v45) | нет; без владельцев остаётся полный сброс | `ai_bridge/aibridge.cpp`, `common/game/bodyobservations.*`, `common/game/bodycontroller.*` | `gothic-body-watch-test`; e2e `neural` | [npc-body-api.md](npc-body-api.md), [npc-body-observations.md](npc-body-observations.md) |
 | Диалоговые функции скриптов как программы без VM | `GOTHIC_AI_STORYEXEC=0` | `ai_bridge/dialoggraph.cpp` | e2e `graph`, `programs` | [story-graph.md](story-graph.md) |
 
+## Движок: память
+
+| Фича | Как выключить | Модуль | Проверка | Документ |
+|---|---|---|---|---|
+| Возврат свободных страниц арен glibc после успешной загрузки мира; сохранение не вызывает trim | `OPENGOTHIC_MALLOC_TRIM=0`; только Linux с glibc | `common/gothic.cpp`, `Gothic::finishLoading` | e2e `memprobe`, `load` и `wave` по 8 циклов на Ryzen | [диагноз и починка RSS](../reports/engine/2026-10-19-rss-growth/README.md) |
+
 ## Движок: физика Jolt
 
 Сам Jolt выключателя не имеет: Bullet убран. `OPENGOTHIC_PHYSICS_THREADS` задаёт число потоков, это не выключатель.
