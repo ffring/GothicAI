@@ -29,6 +29,7 @@ class DbgPainter;
 class Serialize;
 
 class CollisionWorld;
+class Cloth;
 
 class DynamicWorld final {
   private:
@@ -48,7 +49,7 @@ class DynamicWorld final {
     static constexpr float spellSpeed  = 1; // centimeters per milliseconds
     static constexpr float characterItemRange = 300.f; // centimetres around the opt-in hero
 
-    DynamicWorld(World *world, const zenkit::Mesh& mesh);
+    DynamicWorld(World *world, const zenkit::Mesh& mesh, const zenkit::Mesh* originalCloth = nullptr);
     DynamicWorld(const DynamicWorld&)=delete;
     ~DynamicWorld();
 
@@ -66,6 +67,7 @@ class DynamicWorld final {
       C_MovableQuery = 11,
       C_SmallVobQuery = 12,
       C_Fragment = 13,
+      C_Cloth = 14,
       };
 
     enum PtrType {
@@ -136,15 +138,19 @@ class DynamicWorld final {
 
         struct VirtualMoveResult {
           Tempest::Vec3 position = {}, velocity = {}, groundNormal = {}, groundVelocity = {};
+          Tempest::Vec3 steepContactNormal = {};
           CollisionTest collision;
+          float advancementRatio = 1.f;
           bool grounded = false;
           bool steep = false;
+          bool steepContact = false;
           bool blocked = false;
           bool supportMoved = false;
           };
         // Walking only: displacement in cm, dt in ms, slope in radians, mass in kg.
         VirtualMoveResult moveVirtual(const Tempest::Vec3& displacement, uint64_t dt,
-                                      float stepHeight, float maxSlope, float mass, Npc* culprit = nullptr);
+                                      float stepHeight, float maxSlope, float mass, Npc* culprit = nullptr,
+                                      bool limitStairAdvance = false, bool bounceOnSteepContact = false);
         VirtualMoveResult carryVirtual(uint64_t dt, Npc* culprit = nullptr);
         void resetVirtual();
         void setVirtualDiagnosticsEnabled(bool enabled);
@@ -159,7 +165,8 @@ class DynamicWorld final {
         auto  implTryMove    (const Tempest::Vec3& dp, const Tempest::Vec3& pos0, CollisionTest& out) -> DynamicWorld::MoveCode;
         void  implSetPosition(const Tempest::Vec3& pos);
         VirtualMoveResult implMoveVirtual(const Tempest::Vec3& displacement, uint64_t dt,
-                                         float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry);
+                                         float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry,
+                                         bool limitStairAdvance = false, bool bounceOnSteepContact = false);
 
       friend class DynamicWorld;
       };
@@ -346,6 +353,11 @@ class DynamicWorld final {
     RayCamResult   cameraRay    (const Tempest::Vec3& from, const Tempest::Vec3& to) const;
 
     RayLandResult  ray          (const Tempest::Vec3& from, const Tempest::Vec3& to) const;
+    // Bench camera only: retain world occlusion while looking past the selected
+    // cloth object's own rigid attachments. Does not alter collision filters.
+    RayLandResult  rayClothCamera(const Tempest::Vec3& from, const Tempest::Vec3& to,
+                                 std::string_view ownVisual, const Tempest::Vec3* clothBounds,
+                                 size_t& selfHits, std::string* blockedLabel = nullptr) const;
     RayLandResult  sweep        (const Tempest::Vec3& from, const Tempest::Vec3& to, float R) const;
     RayQueryResult rayNpc       (const Tempest::Vec3& from, const Tempest::Vec3& to, const Npc* except) const;
     // Physical Jolt hulls used by bodies, plus water and NPC rigs; no duplicate visual meshes.
@@ -368,6 +380,10 @@ class DynamicWorld final {
     void           setBuoyancyEnabled(bool enabled);
     bool           buoyancyEnabled() const;
     bool           destructionEnabled() const;
+    Cloth&         cloth();
+    const Cloth&   cloth() const;
+    void           setClothEnabled(bool enabled);
+    bool           clothEnabled() const;
     // Called after the complete authored vob tree has installed its collisions.
     void           finalizeMovableVobs();
     double         movableVobValidationMilliseconds() const;
@@ -525,6 +541,7 @@ class DynamicWorld final {
     std::string_view validateSectorName(std::string_view name) const;
 
   private:
+    friend class ClothBulletBenchDriver;
     void           moveBullet(BulletBody& b, const Tempest::Vec3& dir, uint64_t dt);
     RayWaterResult implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight,
                                  uint32_t solidMask = 0) const;
@@ -542,11 +559,14 @@ class DynamicWorld final {
     void           loadDestructionVobs(Serialize& fin);
 
     std::unique_ptr<CollisionWorld>    world;
+    std::unique_ptr<Cloth>             clothWorld;
+    World*                            ownerWorld = nullptr;
 
     std::vector<std::string>           sectors;
 
     std::unique_ptr<PhysicVbo>         landMesh;
     std::unique_ptr<PhysicVbo>         waterMesh;
+    std::unique_ptr<PhysicVbo>         originalClothMesh;
     std::unique_ptr<WorldBodies>       bodies;
 
     std::unique_ptr<NpcBodyList>       npcList;

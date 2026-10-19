@@ -45,6 +45,7 @@
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
+#include "game/bodycontroller.h"
 #include "game/bodyarena.h"
 #include "game/bodyreplay.h"
 #include "game/navigationeyebench.h"
@@ -73,7 +74,10 @@
 #include "graphics/mesh/flinch.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
+#include "physics/cloth.h"
 #include "physics/physicmesh.h"
+#include "physics/physicmeshshape.h"
+#include "graphics/mesh/submesh/packedmesh.h"
 #include "world/triggers/movetrigger.h"
 #include "physics/ragdoll.h"
 #include "physics/physicsnoise.h"
@@ -95,6 +99,13 @@
 #include "marvin.h"
 
 using namespace Tempest;
+
+class ClothBulletBenchDriver final {
+  public:
+    static void step(DynamicWorld& world,DynamicWorld::BulletBody& bullet,const Vec3& direction,uint64_t dt) {
+      world.moveBullet(bullet,direction,dt);
+      }
+  };
 
 namespace {
 
@@ -523,6 +534,7 @@ enum CamMode : uint8_t {
   C_World,  // around the player, fixed world direction
   C_Fixed,  // fixed position, looking at the player
   C_Hold,   // the camera stays as it is: the position and where it looks
+  C_Turn,   // yaw at the held camera position, retaining its pitch
   C_Water,  // retain the water overview after deferred player teleports
   C_RagdollArena, // benchmark-only fixed view derived from the complete twenty-model group
   C_Face,   // close to the face, relative to the facing of the body
@@ -600,6 +612,10 @@ struct Bench {
   bool        camAuto   = false;
   int         occlTime  = 0;
   Vec3        camPos;
+  PointF      camHeldAngles;
+  PointF      camTurnAngles;
+  float       camTurnDegrees = 0;
+  uint64_t    camTurnStart = 0, camTurnDuration = 0;
 
   bool        rec       = false;
   bool        recVideo  = false;
@@ -693,7 +709,28 @@ struct Bench {
   struct WaterActor { Npc* npc=nullptr; std::string role; uint64_t sleepAt=uint64_t(-1); };
   std::vector<WaterActor> waterActors;
   bool waterBodiesReady=false,waterLootReady=false,waterKillOnThrow=false;
+  uint32_t clothZen=uint32_t(-1);
+  std::string clothCase,clothObserverSupport="native-floor";
+  Vec3 clothCenter,clothDirection=Vec3(1,0,0);
+  bool clothTrace=false,clothMeasuring=false,clothOverflow=false,clothHold=false;
+  Vec3 clothHeldPosition;
+  uint64_t clothSample=uint64_t(-1);
+  std::vector<LivingPhysics> clothPhysics;
+  std::unordered_map<uintptr_t,std::vector<Vec3>> clothPrevious;
+  std::unordered_map<uintptr_t,bool> clothPreviousActive;
+  const void* clothArrow=nullptr;
+  Vec3 clothShotTarget,clothShotNormal;
+  float clothArrowDownstream=0;
+  uint64_t clothShotAt=0,clothShotHitsBefore=0;
+  std::string clothShotKind;
+  Npc* clothArrowNpc=nullptr;
+
+
   std::string waterLootMode;
+  std::string waterFilm;
+  Vec3 waterFilmLip;
+  bool waterFilmKill=false;
+  uint64_t waterFilmStart=0;
   std::vector<std::unique_ptr<MovableFixture>> destructionFixtures;
   std::vector<uintptr_t> destructionIds;
   std::map<std::pair<uintptr_t,size_t>,Vec3> destructionFragmentOrigins;
@@ -764,6 +801,74 @@ struct Bench {
     std::deque<std::string> supportHistory;
     bool active=false,reached=false,stalled=false,sat=false,standing=false;
   } npcCharacterRoute;
+  struct CharacterMoveFrame {
+    Vec3 requested,acceptedDelta,steepNormal;
+    uint64_t sequence=0,dt=0;
+    float advancementRatio=0;
+    bool valid=false,steepContact=false,blocked=false;
+  };
+  struct MonsterCharacterRoute {
+    Npc* npc=nullptr;
+    WayPoint destination,heroDestination;
+    bool heroRun=false,isolatedLedge=false;
+    std::string name,animation;
+    Vec3 start,goal,lastPosition,lastVisual,progressPosition,lastSupported,attackStart;
+    uint64_t began=0,arrived=0,progressTime=0,attackEnded=0;
+    unsigned stalls=0,falls=0,cvFrames=0,swimFrames=0,callbacks=0;
+    float maxPhysicalJump=0,maxVisualJump=0,attackDistance=0,attackRise=0,tolerance=60;
+    bool active=false,reached=false,stalled=false,falling=false,wasAirborne=false,sawSwim=false,leftWater=false,chase=false,attack=false;
+    Vec3 savedPosition;
+    unsigned restoreSteps=0;
+  } monsterCharacterRoute;
+  // Source shape must outlive the collision handle that borrows its mesh.
+  std::unique_ptr<PhysicMeshShape> monsterCharacterLedgeShape;
+  DynamicWorld::Item monsterCharacterLedgeBody;
+  struct MonsterCharacterFrame {
+    std::string route,animation;
+    uint64_t time=0,dt=0,npc=0;
+    Vec3 root,visual;
+    bool enabled=false,active=false,moving=false,air=false,fall=false,swim=false;
+    float bodyYaw=0;
+    CharacterMoveFrame move;
+  };
+  std::vector<MonsterCharacterFrame> monsterCharacterFrames;
+  struct MonsterCharacterExtra {
+    Npc* npc=nullptr;
+    std::string role;
+    std::vector<WayPoint> points;
+    size_t next=0;
+    bool loop=false,queued=false,stalled=false,falling=false,wasAirborne=false;
+    Vec3 start,lastPosition,lastVisual,progressPosition,lastSupported;
+    uint64_t progressTime=0,arrived=0;
+    unsigned arrivals=0,stalls=0,falls=0,cvFrames=0;
+    float maxPhysicalJump=0,maxVisualJump=0,travel=0;
+  };
+  std::deque<MonsterCharacterExtra> monsterCharacterExtras;
+  struct MonsterCharacterProp {
+    std::unique_ptr<MovableFixture> fixture;
+    std::string role;
+    Vec3 start,lastIntact;
+    uintptr_t id=0;
+    float travel=0;
+    unsigned fragments=0;
+    bool broken=false;
+  };
+  std::vector<MonsterCharacterProp> monsterCharacterProps;
+  MonsterCharacterProp monsterCharacterBarrel;
+  struct MonsterCharacterPerformance {
+    uint64_t time=0,dt=0;
+    float physics=0,wall=0,maximumDistance=0;
+    unsigned nearby=0,virtualNearby=0,moving=0;
+    bool captured=false,normal=false;
+  };
+  std::vector<MonsterCharacterPerformance> monsterCharacterPerformance;
+  bool monsterCharacterMeasuring=false,monsterCharacterHasWall=false,monsterCharacterCrowd=false,monsterCharacterPack=false;
+  std::chrono::steady_clock::time_point monsterCharacterLastWall;
+  const Npc* monsterCharacterRenderRequest=nullptr;
+  Vec3 monsterCharacterHeroStart;
+  uint32_t monsterCharacterSeed=1;
+  unsigned monsterCharacterMinNearby=20,monsterCharacterMaxNearby=0;
+  float monsterCharacterMaximumDistance=0;
   struct NpcCharacterFrame {
     std::string phase;
     uint64_t frame=0,time=0,dt=0,npc=0;
@@ -771,6 +876,7 @@ struct Bench {
     bool enabled=false,active=false,moving=false,air=false,interactive=false,captured=false,normal=false;
     float physics=0,wall=0;
     unsigned nearby=0,virtualNearby=0,movingNearby=0,movingVirtualNearby=0;
+    CharacterMoveFrame move;
   };
   std::deque<LivingWalker> npcCharacterCrowd;
   std::vector<NpcCharacterFrame> npcCharacterFrames;
@@ -991,8 +1097,12 @@ struct Bench {
   uint64_t    slowAcc   = 0;      // microseconds of game time owed to the next frame
   uint64_t    frameMs   = 0;      // the video's time of this frame, ms
   // track: where an npc's head (or trunk) is in each recorded frame, for labels that follow it
-  std::string trackNpc;
+  std::vector<std::string> trackNpcs;
   bool        trackHead = true;
+  // Opt-in live policy telemetry. The controller has one exclusive sink; arenas/replays own theirs.
+  bool        bodyLive = false;
+  std::string bodyLiveWait;
+  std::chrono::steady_clock::time_point bodyLiveDeadline;
   // sight: the hero's line of sight to an npc in each recorded frame and shot (the focus' rays).
   std::string sightNpc;
   float       sightFan  = 700;
@@ -1062,6 +1172,13 @@ void event(std::string_view kind, const std::string& fields = {}) {
                (unsigned long long)bench.time,jsonStr(bench.rec ? bench.recName : "").c_str(),
                bench.rec ? (long long)bench.recFrame : -1LL,jsonStr(kind).c_str(),fields.empty() ? "" : ",",fields.c_str());
   std::fflush(bench.events);
+  }
+
+void stopBodyLive() {
+  if(!bench.bodyLive)
+    return;
+  BodyController::setSink({});
+  bench.bodyLive = false;
   }
 
 const char* animationModeName() {
@@ -1341,6 +1458,8 @@ Npc* npcBySymbol(World& w, std::string_view symbol) {
 // `bodyarena`, `bodyreplay`: the configured arena's participants, with isolated animation RNG
 void setupArena(World& w, Npc& pl) {
   try {
+    if(bench.bodyLive)
+      throw std::runtime_error("bodylive must be off before bodyarena/bodyreplay");
     BodyArena::setup(w,pl);
     const auto actors=BodyArena::actors();
     bench.duelFrom=w.tickCount();
@@ -1467,7 +1586,19 @@ void npcCharacterStopMotionTrace(World* world) {
   bench.npcCharacterTraceActors.clear();
   }
 
+const char* characterMoveFrameColumns = ",diagnostics_valid,move_sequence,move_dt_ms,requested_x_cm,requested_y_cm,requested_z_cm,accepted_dx_cm,accepted_dy_cm,accepted_dz_cm,advancement_ratio,steep_contact,steep_normal_x,steep_normal_y,steep_normal_z,move_blocked";
+
+void writeCharacterMoveFrame(std::FILE* file,const Bench::CharacterMoveFrame& move) {
+  std::fprintf(file,",%d,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%.9g,%.9g,%.9g,%d\n",
+    int(move.valid),(unsigned long long)move.sequence,(unsigned long long)move.dt,
+    double(move.requested.x),double(move.requested.y),double(move.requested.z),
+    double(move.acceptedDelta.x),double(move.acceptedDelta.y),double(move.acceptedDelta.z),
+    double(move.advancementRatio),int(move.steepContact),double(move.steepNormal.x),
+    double(move.steepNormal.y),double(move.steepNormal.z),int(move.blocked));
+  }
+
 void finish() {
+  stopBodyLive();
   npcCharacterStopMotionTrace(Gothic::inst().world());
   endAnimationControl();
   animationControlTotals();
@@ -1492,16 +1623,43 @@ void finish() {
     }
   if(!bench.npcCharacterFrames.empty()) {
     if(auto* file=std::fopen((outDir+"/npc-character-frames.csv").c_str(),"w")) {
-      std::fprintf(file,"phase,frame,t_game_ms,dt_ms,npc_id,x_cm,y_cm,z_cm,visual_x_cm,visual_y_cm,visual_z_cm,cv_enabled,cv_active,moving,in_air,interactive,step_ms,wall_ms,nearby_humans,nearby_cv,moving_humans,moving_cv,captured,normal_clock\n");
-      for(const auto& row:bench.npcCharacterFrames)
-        std::fprintf(file,"%s,%llu,%llu,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%.9g,%.9g,%u,%u,%u,%u,%d,%d\n",
+      std::fprintf(file,"phase,frame,t_game_ms,dt_ms,npc_id,x_cm,y_cm,z_cm,visual_x_cm,visual_y_cm,visual_z_cm,cv_enabled,cv_active,moving,in_air,interactive,step_ms,wall_ms,nearby_humans,nearby_cv,moving_humans,moving_cv,captured,normal_clock%s\n",characterMoveFrameColumns);
+      for(const auto& row:bench.npcCharacterFrames) {
+        std::fprintf(file,"%s,%llu,%llu,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%.9g,%.9g,%u,%u,%u,%u,%d,%d",
           row.phase.c_str(),(unsigned long long)row.frame,(unsigned long long)row.time,(unsigned long long)row.dt,
           (unsigned long long)row.npc,double(row.root.x),double(row.root.y),double(row.root.z),
           double(row.visual.x),double(row.visual.y),double(row.visual.z),int(row.enabled),int(row.active),int(row.moving),
           int(row.air),int(row.interactive),double(row.physics),double(row.wall),row.nearby,row.virtualNearby,row.movingNearby,row.movingVirtualNearby,int(row.captured),int(row.normal));
+        writeCharacterMoveFrame(file,row.move);
+        }
       std::fclose(file);
       } else event("npc_character_error","\"reason\":\"cannot write native NPC character frames\"");
     }
+  if(!bench.monsterCharacterFrames.empty()) {
+    if(auto* file=std::fopen((outDir+"/monster-character-frames.csv").c_str(),"w")) {
+      std::fprintf(file,"route,t_game_ms,dt_ms,npc_id,x_cm,y_cm,z_cm,visual_x_cm,visual_y_cm,visual_z_cm,cv_enabled,cv_active,moving,in_air,falling,swimming,animation,body_yaw_deg%s\n",characterMoveFrameColumns);
+      for(const auto& row:bench.monsterCharacterFrames) {
+        std::fprintf(file,"%s,%llu,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%d,\"%s\",%.9g",
+          row.route.c_str(),(unsigned long long)row.time,(unsigned long long)row.dt,(unsigned long long)row.npc,
+          double(row.root.x),double(row.root.y),double(row.root.z),double(row.visual.x),double(row.visual.y),double(row.visual.z),
+          int(row.enabled),int(row.active),int(row.moving),int(row.air),int(row.fall),int(row.swim),row.animation.c_str(),double(row.bodyYaw));
+        writeCharacterMoveFrame(file,row.move);
+        }
+      std::fclose(file);
+      } else event("monster_character_error","\"reason\":\"cannot write monster frames\"");
+    }
+  if(!bench.monsterCharacterPerformance.empty()) {
+    if(auto* file=std::fopen((outDir+"/monster-character-performance.csv").c_str(),"w")) {
+      std::fprintf(file,"t_game_ms,dt_ms,step_ms,wall_ms,nearby_monsters,nearby_cv,moving,maximum_distance_cm,captured,normal_clock\n");
+      for(const auto& row:bench.monsterCharacterPerformance)
+        std::fprintf(file,"%llu,%llu,%.9g,%.9g,%u,%u,%u,%.9g,%d,%d\n",
+          (unsigned long long)row.time,(unsigned long long)row.dt,double(row.physics),double(row.wall),row.nearby,
+          row.virtualNearby,row.moving,double(row.maximumDistance),int(row.captured),int(row.normal));
+      std::fclose(file);
+      } else event("monster_character_error","\"reason\":\"cannot write monster performance samples\"");
+    }
+  bench.monsterCharacterProps.clear();
+  bench.monsterCharacterLedgeBody=DynamicWorld::Item();bench.monsterCharacterLedgeShape.reset();
   bench.characterProp.reset();bench.characterPlatform.reset();bench.characterPlatformVisual.reset();
   bench.destructionFixtures.clear();
   bench.movableFixtures.clear();
@@ -1754,6 +1912,7 @@ void lookFrom(const Vec3& org, const Vec3& tgt) {
   c->setSpin(PointF(-pit,yaw));
   c->setAngles(PointF(-pit,yaw));
   bench.camPos = org;
+  bench.camHeldAngles = PointF(-pit,yaw);
   }
 
 Vec3 rotY(const Vec3& v, float deg) {
@@ -1863,6 +2022,18 @@ void arrowShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
 
 void updateCamera(World& w, Npc& pl) {
   bench.occl = 0;
+  if(bench.cam==C_Turn) {
+    if(auto* camera=Gothic::inst().camera()) {
+      const float progress=std::min(1.f,float(bench.time-bench.camTurnStart)/float(bench.camTurnDuration));
+      const float eased=progress*progress*(3.f-2.f*progress);
+      const PointF angles(bench.camTurnAngles.x,bench.camTurnAngles.y+bench.camTurnDegrees*eased);
+      camera->setPosition(bench.camPos);
+      camera->setSpin(angles);camera->setAngles(angles);
+      bench.camHeldAngles=angles;
+      if(progress>=1.f)bench.cam=C_Hold;
+      }
+    return;
+    }
   if(bench.cam==C_Water) {
     lookFrom(bench.camPos,bench.waterCameraTarget);
     return;
@@ -4648,6 +4819,697 @@ void pushMovablePinnedTable(World& world) {
   arenaAbort("movable pinned map furniture is absent");
   }
 
+// These fixtures only observe authored cloth and launch ordinary Bullet objects. No
+// synthetic impulse, replacement cloth or NPC target participates in acceptance.
+std::string clothRows(World& world,bool geometry=false) {
+  std::string rows="[";
+  for(const auto& body:world.physic()->cloth().snapshots()) {
+    if(rows.size()>1)rows+=",";
+    rows+="{\"id\":"+std::to_string(body.id)+",\"zen_id\":"+std::to_string(body.zenId)+
+      ",\"visual\":"+jsonStr(body.visual)+",\"center_cm\":"+ragdollVector(body.center)+
+      ",\"active\":"+(body.active?"true":"false")+",\"exposed\":"+(body.exposed?"true":"false")+
+      ",\"visible\":"+(body.visible?"true":"false")+",\"simulation_steps\":"+std::to_string(body.simulationSteps)+
+      ",\"vertices\":"+std::to_string(body.vertices)+
+      ",\"rendered_vertices\":"+std::to_string(body.worldPositionsCm.size())+
+      ",\"pinned\":"+std::to_string(body.pinned)+",\"weight\":"+ragdollNumber(body.simulationWeight)+
+      ",\"anchor_error_cm\":"+ragdollNumber(body.maxAnchorErrorCm)+
+      ",\"max_speed_cm_s\":"+ragdollNumber(body.maxSpeedCmPerSec)+
+      ",\"max_speed_ever_cm_s\":"+ragdollNumber(body.maxSpeedEverCmPerSec)+
+      ",\"contact_vertices\":"+std::to_string(body.contactVertices)+
+      ",\"max_speed_vertex\":"+std::to_string(body.maxSpeedVertex)+
+      ",\"max_speed_source_cm\":"+ragdollVector(body.maxSpeedSourceCm)+
+      ",\"max_speed_world_cm\":"+ragdollVector(body.maxSpeedWorldCm)+
+      ",\"max_speed_contact\":"+(body.maxSpeedContact?"true":"false")+
+      ",\"max_speed_contact_body\":"+jsonStr(body.maxSpeedContactBody)+
+      ",\"max_speed_contact_normal\":"+ragdollVector(body.maxSpeedContactNormal)+
+      ",\"max_speed_ever_vertex\":"+std::to_string(body.maxSpeedEverVertex)+
+      ",\"max_speed_ever_source_cm\":"+ragdollVector(body.maxSpeedEverSourceCm)+
+      ",\"max_speed_ever_world_cm\":"+ragdollVector(body.maxSpeedEverWorldCm)+
+      ",\"max_speed_ever_contact\":"+(body.maxSpeedEverContact?"true":"false")+
+      ",\"max_speed_ever_contact_body\":"+jsonStr(body.maxSpeedEverContactBody)+
+      ",\"max_speed_ever_contact_normal\":"+ragdollVector(body.maxSpeedEverContactNormal)+
+      ",\"transition_blend_delta_cm\":"+ragdollNumber(body.transitionMaxDeltaCm)+
+      ",\"spell_hits\":"+std::to_string(body.projectileHits)+",\"arrow_passes\":"+std::to_string(body.arrowPasses)+
+      ",\"recoveries\":"+std::to_string(body.recoveryCount);
+    rows+=",\"contact_bodies\":[";
+    for(size_t i=0;i<body.contactBodies.size();++i) {
+      if(i) rows+=",";
+      rows+=jsonStr(body.contactBodies[i]);
+      }
+    rows+="]";
+    rows+=",\"wind_occluders\":[";
+    for(size_t i=0;i<body.windOccluders.size();++i) {
+      if(i) rows+=",";
+      const auto& roof=body.windOccluders[i];
+      rows+="{\"body\":"+jsonStr(roof.body)+",\"point_cm\":"+ragdollVector(roof.pointCm)+
+            ",\"distance_cm\":"+ragdollNumber(roof.distanceCm)+"}";
+      }
+    rows+="]";
+    if(geometry && body.zenId==bench.clothZen) {
+      rows+=",\"rendered_world_vertices_cm\":[";
+      for(size_t i=0;i<body.worldPositionsCm.size();++i) {
+        if(i)rows+=",";
+        rows+=ragdollVector(body.worldPositionsCm[i]);
+        }
+      rows+="]";
+      }
+    rows+="}";
+    }
+  return rows+"]";
+  }
+
+void clothFields(World& world) {
+  if(!bench.clothTrace || bench.clothMeasuring || bench.clothSample==world.tickCount())return;
+  bench.clothSample=world.tickCount();
+  float frameDelta=0;
+  bool changed=false;
+  for(const auto& body:world.physic()->cloth().snapshots()) {
+    auto& old=bench.clothPrevious[body.id];
+    if(body.zenId==bench.clothZen && old.size()==body.worldPositionsCm.size())
+      for(size_t i=0;i<old.size();++i)frameDelta=std::max(frameDelta,(old[i]-body.worldPositionsCm[i]).length());
+    if(const auto i=bench.clothPreviousActive.find(body.id);i!=bench.clothPreviousActive.end())
+      changed|=body.zenId==bench.clothZen && i->second!=body.active;
+    bench.clothPreviousActive[body.id]=body.active;old=body.worldPositionsCm;
+    }
+  event("cloth_sample","\"case\":"+jsonStr(bench.clothCase)+",\"t_game_ms\":"+std::to_string(world.tickCount())+
+    ",\"hero_cm\":"+ragdollVector(world.player()->position())+
+    ",\"hero_target_distance_cm\":"+ragdollNumber((world.player()->position()-bench.clothCenter).length())+
+    ",\"target_max_frame_delta_cm\":"+ragdollNumber(frameDelta)+
+    ",\"target_active_changed\":"+(changed?"true":"false")+",\"cloth\":"+clothRows(world,changed));
+  }
+
+void clothCheckpoint(World& world,std::string_view label) {
+  event("cloth_checkpoint","\"case\":"+jsonStr(bench.clothCase)+",\"label\":"+jsonStr(label)+
+    ",\"t_game_ms\":"+std::to_string(world.tickCount())+",\"enabled\":"+
+    (world.physic()->clothEnabled()?"true":"false")+",\"wind_scale\":"+
+    ragdollNumber(world.physic()->cloth().windScale())+",\"cloth\":"+clothRows(world,true));
+  }
+
+bool clothStandAt(World& world,Npc& player,const Vec3& target,float distance) {
+  for(float angle:{0.f,.4f,-.4f,.8f,-.8f,1.6f,-1.6f,3.14f}) {
+    const float ca=std::cos(angle),sa=std::sin(angle);
+    const auto base=bench.clothDirection;
+    const Vec3 direction(base.x*ca-base.z*sa,0,base.x*sa+base.z*ca);
+    float horizontal=distance;
+    Vec3 point;
+    bool supported=true;
+    // Resolve the horizontal distance against the native floor, retaining the
+    // requested 3D observer radius when a banner is well above street level.
+    for(int pass=0;pass<4;++pass) {
+      const auto floor=world.physic()->landRay(target+direction*horizontal+Vec3(0,6000,0),12000);
+      if(!floor.hasCol || floor.n.y<.8f || std::abs(floor.v.y-target.y)>=distance ||
+         world.physic()->waterRay(floor.v+Vec3(0,5,0),1).hasCol) {supported=false;break;}
+      point=floor.v+Vec3(0,1,0);
+      horizontal=std::sqrt(std::max(0.f,distance*distance-(point.y-target.y)*(point.y-target.y)));
+      }
+    if(!supported || std::abs((point-target).length()-distance)>1.f)continue;
+    player.closeWeapon(true);player.clearAiQueue();player.stopWalking();player.setPosition(point);
+    player.setDirection(target-point);player.updateTransform();
+    bench.clothDirection=direction;
+    bench.clothHeldPosition=point;bench.clothHold=true;
+    return true;
+    }
+  return false;
+  }
+
+bool clothObserverFloor(World& world,const Vec3& position,Vec3& supported) {
+  const auto floor=world.physic()->landRay(position+Vec3(0,10000,0),20000);
+  if(!floor.hasCol || floor.n.y<.8f || world.physic()->waterRay(floor.v+Vec3(0,5,0),1).hasCol)
+    return false;
+  supported=floor.v+Vec3(0,1,0);
+  // A native roof or yard is a valid fixture support, provided the hero fits.
+  return !world.physic()->ray(supported+Vec3(0,5,0),supported+Vec3(0,180,0)).hasCol;
+  }
+
+bool clothNearbyObserver(World& world,const Vec3& target,Vec3& supported) {
+  float score=std::numeric_limits<float>::max();
+  // High ship flags cannot be observed from street level within the production
+  // 40 m sphere. Search native yards and decks as well as ordinary ground.
+  for(float radius:{0.f,100.f,200.f,350.f,500.f,750.f,1000.f,1500.f,2000.f,2500.f,3000.f}) {
+    const int steps=radius==0.f?1:48;
+    for(int step=0;step<steps;++step) {
+      const float angle=float(step)*2.f*float(M_PI)/float(steps);
+      Vec3 candidate;
+      if(!clothObserverFloor(world,target+Vec3(std::cos(angle)*radius,0,std::sin(angle)*radius),candidate))continue;
+      const auto distance=(candidate-target).length();
+      if(distance>3400.f)continue;
+      // Prefer a little room around a native support over balancing on a mast.
+      unsigned room=0;
+      for(const auto offset:{Vec3(25,0,0),Vec3(-25,0,0),Vec3(0,0,25),Vec3(0,0,-25)}) {
+        const auto nearby=world.physic()->landRay(candidate+offset+Vec3(0,30,0),60);
+        room+=nearby.hasCol && nearby.n.y>.8f && std::abs(nearby.v.y-candidate.y)<10.f;
+        }
+      const float cost=std::abs(distance-1800.f)+float(4-room)*500.f;
+      if(cost<score) {score=cost;supported=candidate;}
+      }
+    }
+  return std::isfinite(score) && score<std::numeric_limits<float>::max();
+  }
+
+std::string clothUpper(std::string text) {
+  for(auto& c:text)c=char(std::toupper(static_cast<unsigned char>(c)));
+  return text;
+  }
+
+bool clothCamera(World& world,std::string_view group,bool required=true,Vec3* targetOut=nullptr);
+
+float clothCameraDistance(const std::vector<Vec3>& points,const Vec3& target,const Vec3& direction) {
+  const auto* camera=Gothic::inst().camera();
+  const float halfY=(camera?camera->fovY():67.5f)*float(M_PI)/360.f;
+  const auto projection=camera?camera->projective():Matrix4x4();
+  const float aspect=camera?std::abs(projection.at(1,1)/projection.at(0,0)):4.f/3.f;
+  const float tanY=std::tan(halfY),tanX=tanY*aspect;
+  auto right=Vec3::crossProduct(direction,Vec3(0,1,0));
+  if(right.length()<.01f)right=Vec3(1,0,0);
+  else right=Vec3::normalize(right);
+  const auto up=Vec3::normalize(Vec3::crossProduct(right,direction));
+  float distance=650.f;
+  for(const auto& point:points) {
+    const auto delta=point-target;
+    const float depth=Vec3::dotProduct(delta,direction);
+    // Fit the actual projected geometry, with room for flutter at all edges.
+    distance=std::max(distance,depth+1.2f*(std::abs(Vec3::dotProduct(delta,right))+25.f)/tanX);
+    distance=std::max(distance,depth+1.2f*(std::abs(Vec3::dotProduct(delta,up))+25.f)/tanY);
+    }
+  return distance;
+  }
+
+bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& cameraTarget,
+                Vec3& cameraNormal,float& span) {
+  const auto& reference=body.referenceWorldPositionsCm.empty()?body.worldPositionsCm:body.referenceWorldPositionsCm;
+  if(reference.empty())return false;
+  float referenceLow=reference.front().y,referenceHigh=reference.front().y;
+  for(const auto& point:reference) {referenceLow=std::min(referenceLow,point.y);referenceHigh=std::max(referenceHigh,point.y);}
+  // Only a short original bottom strip can be buried. An EARTH material on an
+  // upper storey or awning must not erase the top of a city banner.
+  const float burialCeiling=referenceLow+std::min(75.f,(referenceHigh-referenceLow)*.2f);
+  const auto earthFloor=[&](const Vec3& point)->std::optional<float> {
+    auto from=point+Vec3(0,200,0);
+    const float bottom=point.y-20.f;
+    for(int pass=0;pass<8 && from.y>bottom;++pass) {
+      const auto hit=world.physic()->landRay(from,from.y-bottom);
+      if(!hit.hasCol)return {};
+      if(hit.mat==zenkit::MaterialGroup::EARTH && hit.n.y>.7f)return hit.v.y;
+      from.y=hit.v.y-.5f;
+      }
+    return {};
+    };
+  std::vector<bool> sourceBuried(reference.size(),false),currentBuried(body.worldPositionsCm.size(),false);
+  size_t buriedSource=0,buriedCurrent=0;
+  float maximumBurial=0;
+  Vec3 buriedLow,buriedHigh;
+  for(size_t i=0;i<reference.size();++i) {
+    if(reference[i].y>burialCeiling)continue;
+    const auto floor=earthFloor(reference[i]);
+    if(!floor || *floor>burialCeiling || reference[i].y>=*floor-2.f)continue;
+    sourceBuried[i]=true;
+    if(!buriedSource)buriedLow=buriedHigh=reference[i];
+    ++buriedSource;maximumBurial=std::max(maximumBurial,*floor-reference[i].y);
+    buriedLow.x=std::min(buriedLow.x,reference[i].x);buriedLow.y=std::min(buriedLow.y,reference[i].y);buriedLow.z=std::min(buriedLow.z,reference[i].z);
+    buriedHigh.x=std::max(buriedHigh.x,reference[i].x);buriedHigh.y=std::max(buriedHigh.y,reference[i].y);buriedHigh.z=std::max(buriedHigh.z,reference[i].z);
+    if(i<body.worldPositionsCm.size()) {
+      const auto currentFloor=earthFloor(body.worldPositionsCm[i]);
+      if(currentFloor && *currentFloor<=burialCeiling && body.worldPositionsCm[i].y<*currentFloor-2.f) {currentBuried[i]=true;++buriedCurrent;}
+      }
+    }
+  std::vector<Vec3> fit;
+  for(size_t i=0;i<reference.size();++i)if(!sourceBuried[i])fit.push_back(reference[i]);
+  for(size_t i=0;i<body.worldPositionsCm.size();++i)if(!currentBuried[i])fit.push_back(body.worldPositionsCm[i]);
+  if(fit.empty())return false;
+  Vec3 bounds[2]={fit.front(),fit.front()};
+  for(const auto& point:fit) {
+    bounds[0].x=std::min(bounds[0].x,point.x);bounds[0].y=std::min(bounds[0].y,point.y);bounds[0].z=std::min(bounds[0].z,point.z);
+    bounds[1].x=std::max(bounds[1].x,point.x);bounds[1].y=std::max(bounds[1].y,point.y);bounds[1].z=std::max(bounds[1].z,point.z);
+    }
+  float area=0;
+  for(size_t i=0;i+2<body.indices.size();i+=3) {
+    const auto a=body.indices[i],b=body.indices[i+1],c=body.indices[i+2];
+    if(a>=reference.size() || b>=reference.size() || c>=reference.size())continue;
+    const auto normal=Vec3::crossProduct(reference[b]-reference[a],reference[c]-reference[a]);
+    const auto next=normal.length();
+    if(next>area && (std::abs(normal.y)<next*.9f || area==0.f)) {area=next;cameraNormal=Vec3::normalize(normal);}
+    }
+  if(area<.01f)return false;
+  cameraTarget=(bounds[0]+bounds[1])*.5f;
+  span=(bounds[1]-bounds[0]).length();
+  const auto hiddenByCloth=[&](const Vec3& from,const Vec3& to,const std::vector<Vec3>& pose) {
+    const auto direction=to-from;
+    for(size_t i=0;i+2<body.indices.size();i+=3) {
+      const auto a=body.indices[i],b=body.indices[i+1],c=body.indices[i+2];
+      if(a>=pose.size() || b>=pose.size() || c>=pose.size())continue;
+      const auto edge1=pose[b]-pose[a],edge2=pose[c]-pose[a];
+      const auto cross=Vec3::crossProduct(direction,edge2);
+      const float determinant=Vec3::dotProduct(edge1,cross);
+      if(std::abs(determinant)<1.e-6f)continue;
+      const auto offset=from-pose[a];
+      const float u=Vec3::dotProduct(offset,cross)/determinant;
+      if(u<0.f || u>1.f)continue;
+      const auto q=Vec3::crossProduct(offset,edge1);
+      const float v=Vec3::dotProduct(direction,q)/determinant;
+      if(v<0.f || u+v>1.f)continue;
+      const float distance=Vec3::dotProduct(edge2,q)/determinant;
+      if(distance>=0.f && distance<.9999f)return true;
+      }
+    return false;
+    };
+  bool cameraClear=false;
+  size_t candidates=0,tested=0,hidden=0,attachments=0,selfRigidHits=0,bestBlocked=size_t(-1);
+  std::string firstBlockedLabel;
+  Vec3 firstBlockedPosition={},firstBlockedTarget={};
+  float selectedAngle=0,selectedElevation=0;
+  // A cloth's rear face can be hidden by its own front face. The authored
+  // below-ground section also cannot be photographed; neither masks world walls.
+  for(float elevation:{.55f,.8f,1.1f,0.f,-.3f,-.55f}) {
+    // High ship cloth hangs underneath its yard/stay. A view from below can
+    // show the fabric without putting the attachment in front of it.
+    if(elevation<=0.f && bounds[0].y<1000.f)continue;
+    for(float angle:{0.f,15.f,-15.f,30.f,-30.f,60.f,-60.f,180.f,195.f,165.f,210.f,150.f}) {
+      ++candidates;
+      const auto normal=rotY(cameraNormal,angle);
+      const auto direction=Vec3::normalize(normal+Vec3(0,elevation,0));
+      const float cameraDistance=clothCameraDistance(fit,cameraTarget,direction);
+      const auto eye=cameraTarget+direction*cameraDistance;
+      if(bounds[1].y<1000.f && eye.y<bounds[1].y+100.f)continue;
+      size_t blocked=0,candidateTested=0,candidateHidden=0,candidateAttachments=0,candidateSelfHits=0;
+      std::string candidateBlockedLabel;
+      Vec3 candidateBlockedPosition={},candidateBlockedTarget={};
+      const auto checkPose=[&](const std::vector<Vec3>& pose,const std::vector<bool>& buried) {
+        for(size_t vertex=0;vertex<pose.size();++vertex) {
+          if(buried[vertex])continue;
+          // Authored pins can lie inside their beam or stone mount. They
+          // remain in the frame bounds; only the free cloth needs a clear ray.
+          if(std::any_of(body.anchorsCm.begin(),body.anchorsCm.end(),[&](const Vec3& anchor) {
+               return (pose[vertex]-anchor).quadLength()<.0625f;
+               })) {++candidateAttachments;continue;}
+          const auto inward=cameraTarget-pose[vertex];
+          const float length=inward.length();
+          const auto target=pose[vertex]+(length>2.f?inward*(2.f/length):inward);
+          const auto end=target-Vec3::normalize(target-eye)*2.f;
+          if(hiddenByCloth(eye,end,pose)) {++candidateHidden;continue;}
+          ++candidateTested;
+          std::string label;
+          const auto hit=world.physic()->rayClothCamera(eye,end,body.visual,bounds,candidateSelfHits,&label);
+          if(!hit.hasCol)continue;
+          bool attachment=false;
+          if(hit.mat!=zenkit::MaterialGroup::EARTH && !hit.vob && (hit.v-target).length()<=20.f) {
+            for(const auto& anchor:body.anchorsCm)
+              if((target-anchor).length()<=25.f && (hit.v-anchor).length()<=25.f) {attachment=true;break;}
+            }
+          if(attachment)++candidateAttachments;
+          else {
+            if(!blocked) {candidateBlockedLabel=label;candidateBlockedPosition=hit.v;candidateBlockedTarget=target;}
+            ++blocked;
+            }
+          }
+        };
+      checkPose(reference,sourceBuried);checkPose(body.worldPositionsCm,currentBuried);
+      const auto ground=world.physic()->landRay(eye+Vec3(0,500,0),1000);
+      const bool groundAccepted=!ground.hasCol || eye.y-ground.v.y>=180.f;
+      if(blocked<bestBlocked) {
+        bestBlocked=blocked;tested=candidateTested;hidden=candidateHidden;attachments=candidateAttachments;selfRigidHits=candidateSelfHits;
+        firstBlockedLabel=candidateBlockedLabel;firstBlockedPosition=candidateBlockedPosition;firstBlockedTarget=candidateBlockedTarget;
+        }
+      if(blocked || !groundAccepted || !candidateTested)continue;
+      cameraEye=eye;cameraNormal=normal;cameraClear=true;
+      tested=candidateTested;hidden=candidateHidden;attachments=candidateAttachments;selfRigidHits=candidateSelfHits;
+      selectedAngle=angle;selectedElevation=elevation;break;
+      }
+    if(cameraClear)break;
+    }
+  event("cloth_camera_frame","\"zen_id\":"+std::to_string(body.zenId)+",\"visual\":"+jsonStr(body.visual)+
+    ",\"reference_vertices\":"+std::to_string(reference.size())+",\"current_vertices\":"+std::to_string(body.worldPositionsCm.size())+
+    ",\"buried_reference_vertices\":"+std::to_string(buriedSource)+",\"buried_current_vertices\":"+std::to_string(buriedCurrent)+
+    ",\"buried_bounds_min_cm\":"+(buriedSource?ragdollVector(buriedLow):"null")+
+    ",\"buried_bounds_max_cm\":"+(buriedSource?ragdollVector(buriedHigh):"null")+
+    ",\"maximum_original_burial_cm\":"+ragdollNumber(maximumBurial)+",\"fit_vertices\":"+std::to_string(fit.size())+
+    ",\"burial_strip_ceiling_cm\":"+ragdollNumber(burialCeiling)+",\"self_rigid_hits\":"+std::to_string(selfRigidHits)+
+    ",\"tested_visible_vertices\":"+std::to_string(tested)+",\"self_hidden_vertices\":"+std::to_string(hidden)+
+    ",\"attachment_allowances\":"+std::to_string(attachments)+",\"minimum_blocked_vertices\":"+std::to_string(bestBlocked)+
+    ",\"candidates\":"+std::to_string(candidates)+",\"clear\":"+(cameraClear?"true":"false")+
+    ",\"azimuth_deg\":"+ragdollNumber(selectedAngle)+",\"elevation\":"+ragdollNumber(selectedElevation)+
+    ",\"first_blocked_label\":"+jsonStr(firstBlockedLabel)+
+    ",\"first_blocked_position_cm\":"+(bestBlocked?ragdollVector(firstBlockedPosition):"null")+
+    ",\"first_blocked_target_cm\":"+(bestBlocked?ragdollVector(firstBlockedTarget):"null")+
+    ",\"first_blocked_distance_cm\":"+(bestBlocked?ragdollNumber((firstBlockedPosition-firstBlockedTarget).length()):"null")+
+    ",\"bounds_min_cm\":"+ragdollVector(bounds[0])+",\"bounds_max_cm\":"+ragdollVector(bounds[1]));
+  return cameraClear;
+  }
+
+void clothSetup(World& world,Npc& player,std::string selector,std::string label) {
+  const auto all=world.physic()->cloth().snapshots();
+  if(all.empty()) {arenaAbort("cloth fixture world has no authored cloth");return;}
+  auto found=all.end();
+  Vec3 denseObserver;
+  bool dense=false,denseSupported=false;
+  bench.clothObserverSupport="native-floor";
+  if(selector=="densest") {
+    size_t maximum=0;float nearest=std::numeric_limits<float>::max();
+    // Search observer positions and count the unchanged real 3D radius.
+    // Cluster centroids include the gaps between cloth objects, where a larger
+    // number may be active than when standing directly beside one flag.
+    std::vector<Vec3> centers;
+    for(const auto& body:all) {
+      centers.push_back(body.center);
+      Vec3 center;size_t count=0;
+      for(const auto& other:all)if((other.center-body.center).length()<7000.f) {center+=other.center;++count;}
+      if(count)centers.push_back(center/float(count));
+      }
+    for(const auto& center:centers) {
+      Vec3 floor;
+      const bool hasFloor=clothNearbyObserver(world,center,floor);
+      for(bool onFloor:{true,false}) {
+        if(onFloor && !hasFloor)continue;
+        // Static flight is a test-bench observer only, equivalent to Marvin
+        // flying up the mast. Production always keeps its unchanged 3D radius.
+        const auto observer=onFloor?floor:center-Vec3(0,100,0);
+        size_t count=0;float minimum=std::numeric_limits<float>::max();auto target=all.end();
+        for(auto i=all.begin();i!=all.end();++i) {
+          const auto distance=(i->center-observer).length();
+          count+=distance<Cloth::radiusCm;
+          if(distance<minimum) {minimum=distance;target=i;}
+          }
+        if(count>maximum || (count==maximum && onFloor && !denseSupported) ||
+           (count==maximum && onFloor==denseSupported && minimum<nearest)) {
+          maximum=count;nearest=minimum;found=target;denseObserver=observer;dense=true;denseSupported=onFloor;
+          }
+        }
+      }
+    }
+  else if(selector.find_first_not_of("0123456789")==std::string::npos) {
+    const auto zen=uint32_t(std::strtoull(selector.c_str(),nullptr,10));
+    found=std::find_if(all.begin(),all.end(),[&](const auto& body){return body.zenId==zen;});
+    }
+  else {
+    selector=clothUpper(std::move(selector));
+    found=std::find_if(all.begin(),all.end(),[&](const auto& body){return clothUpper(body.visual)==selector;});
+    if(found==all.end())
+      found=std::find_if(all.begin(),all.end(),[&](const auto& body){return clothUpper(body.visual).find(selector)!=std::string::npos;});
+    }
+  if(found==all.end()) {arenaAbort("cloth fixture requires an authored cloth id or visual selector");return;}
+  Vec3 cameraEye,cameraTarget,cameraNormal;float span=0;
+  bool cameraClear=false;
+  if(dense && clothUpper(found->visual).find("NW_SHIP_")!=std::string::npos) {
+    // Density selection is independent of the camera. A nearest furled sail can
+    // sit against its yard, whereas the complete ship has a clear broadside.
+    cameraClear=clothCamera(world,"harbour",false,&cameraTarget);
+    if(cameraClear) {
+      cameraEye=bench.camPos;span=(cameraEye-cameraTarget).length()/1.6f;
+      cameraNormal=Vec3::normalize(cameraEye-cameraTarget);
+      }
+    }
+  else cameraClear=clothFrame(world,*found,cameraEye,cameraTarget,cameraNormal,span);
+  if(!cameraClear && dense) {
+    // Retain the exact observer and active body count. Only the photographed
+    // cloth target changes if another member of the cluster is unobstructed.
+    for(auto candidate=all.begin();candidate!=all.end();++candidate) {
+      if((candidate->center-denseObserver).length()>=Cloth::radiusCm)continue;
+      if(!clothFrame(world,*candidate,cameraEye,cameraTarget,cameraNormal,span))continue;
+      found=candidate;cameraClear=true;break;
+      }
+    }
+  if(!cameraClear) {arenaAbort("cloth fixture has no unobstructed fully framed camera side");return;}
+  bench.clothZen=found->zenId;bench.clothCase=std::move(label);bench.clothCenter=found->center;
+  bench.clothDirection=Vec3(cameraNormal.x,0,cameraNormal.z);
+  if(bench.clothDirection.length()<.01f)bench.clothDirection=Vec3(1,0,0);
+  else bench.clothDirection=Vec3::normalize(bench.clothDirection);
+  bool supported=false;
+  if(dense) {
+    player.closeWeapon(true);player.clearAiQueue();player.stopWalking();player.setPosition(denseObserver);
+    player.setDirection(found->center-denseObserver);player.updateTransform();
+    bench.clothHeldPosition=denseObserver;bench.clothHold=true;supported=true;
+    bench.clothObserverSupport=denseSupported?"native-floor":"fixture-static-flight";
+    }
+  else supported=clothStandAt(world,player,found->center,1800.f) || clothStandAt(world,player,found->center,3200.f);
+  if(!supported) {
+    Vec3 observer;
+    if(clothNearbyObserver(world,found->center,observer)) {
+      player.closeWeapon(true);player.clearAiQueue();player.stopWalking();player.setPosition(observer);
+      player.setDirection(found->center-observer);player.updateTransform();
+      bench.clothHeldPosition=observer;bench.clothHold=true;supported=true;
+      }
+    }
+  if(!supported) {
+    const auto observer=found->center+bench.clothDirection*1800.f;
+    player.closeWeapon(true);player.clearAiQueue();player.stopWalking();player.setPosition(observer);
+    player.setDirection(found->center-observer);player.updateTransform();
+    bench.clothHeldPosition=observer;bench.clothHold=true;
+    bench.clothObserverSupport="fixture-static-flight";
+    }
+  bench.subject=nullptr;bench.cam=C_Hold;lookFrom(cameraEye,cameraTarget);
+  bench.clothPrevious.clear();bench.clothPreviousActive.clear();bench.clothTrace=true;
+  world.physic()->cloth().resetStats();
+  size_t nearby=0;for(const auto& body:all)nearby+=(body.center-player.position()).length()<Cloth::radiusCm;
+  event("cloth_setup","\"case\":"+jsonStr(bench.clothCase)+",\"world\":"+jsonStr(world.name())+
+    ",\"selector\":"+jsonStr(selector)+",\"zen_id\":"+std::to_string(found->zenId)+",\"visual\":"+jsonStr(found->visual)+
+    ",\"center_cm\":"+ragdollVector(found->center)+",\"hero_cm\":"+ragdollVector(player.position())+
+    ",\"observer_support\":"+jsonStr(bench.clothObserverSupport)+
+    ",\"nearby_cloth_count\":"+std::to_string(nearby)+",\"camera_cm\":"+ragdollVector(cameraEye)+
+    ",\"camera_target_cm\":"+ragdollVector(cameraTarget)+",\"camera_face_normal\":"+ragdollVector(cameraNormal)+
+    ",\"camera_frame_span_cm\":"+ragdollNumber(span));
+  }
+
+bool clothCamera(World& world,std::string_view group,bool required,Vec3* targetOut) {
+  if(group!="harbour") {if(required)arenaAbort("cloth camera group expects harbour");return false;}
+  const auto all=world.physic()->cloth().snapshots();
+  std::vector<Vec3> points;
+  size_t objects=0;
+  for(const auto& body:all)if(clothUpper(body.visual).find("NW_SHIP_")!=std::string::npos) {
+    points.insert(points.end(),body.worldPositionsCm.begin(),body.worldPositionsCm.end());++objects;
+    }
+  if(points.empty()) {if(required)arenaAbort("harbour camera requires the authored ship cloth");return false;}
+  Vec3 low=points.front(),high=low;
+  for(const auto& point:points) {
+    low.x=std::min(low.x,point.x);low.y=std::min(low.y,point.y);low.z=std::min(low.z,point.z);
+    high.x=std::max(high.x,point.x);high.y=std::max(high.y,point.y);high.z=std::max(high.z,point.z);
+    }
+  const auto target=(low+high)*.5f;
+  Vec3 eye;bool clear=false;
+  for(float angle:{3.14f,0.f,2.74f,.4f,3.54f,-.4f,2.34f,.8f}) {
+    const auto direction=Vec3::normalize(Vec3(std::cos(angle),.3f,std::sin(angle)));
+    const auto distance=clothCameraDistance(points,target,direction);
+    eye=target+direction*distance;
+    bool visible=true;
+    for(const auto& body:all)if(clothUpper(body.visual).find("NW_SHIP_")!=std::string::npos) {
+      const auto delta=body.center-eye;
+      visible&=!world.physic()->ray(eye,eye+delta*.97f).hasCol;
+      }
+    if(visible) {clear=true;break;}
+    }
+  if(!clear) {if(required)arenaAbort("harbour camera has no unobstructed view of every authored cloth object");return false;}
+  bench.subject=nullptr;bench.cam=C_Hold;lookFrom(eye,target);
+  if(targetOut)*targetOut=target;
+  event("cloth_camera","\"group\":"+jsonStr(group)+",\"objects\":"+std::to_string(objects)+
+    ",\"camera_cm\":"+ragdollVector(eye)+",\"target_cm\":"+ragdollVector(target)+
+    ",\"bounds_min_cm\":"+ragdollVector(low)+",\"bounds_max_cm\":"+ragdollVector(high));
+  return true;
+  }
+
+void clothCameraRange(World& world,float range) {
+  if(bench.cam!=C_Hold || Gothic::inst().camera()==nullptr || bench.clothZen==uint32_t(-1) ||
+     !std::isfinite(range) || range<=0.f) {
+    arenaAbort("cloth camera-range requires held selected cloth and a positive finite range");return;
+    }
+  const auto all=world.physic()->cloth().snapshots();
+  const auto body=std::find_if(all.begin(),all.end(),[](const auto& value){return value.zenId==bench.clothZen;});
+  if(body==all.end() || body->worldPositionsCm.empty()) {arenaAbort("cloth camera-range selected cloth is absent");return;}
+  auto side=bench.camPos-bench.clothCenter;side.y=0.f;
+  const float previousRange=side.length();
+  if(previousRange<.01f || range<previousRange) {arenaAbort("cloth camera-range must increase its existing horizontal range");return;}
+  const auto eye=bench.clothCenter+side*(range/previousRange)+Vec3(0,bench.camPos.y-bench.clothCenter.y,0);
+  const auto& reference=body->referenceWorldPositionsCm.empty()?body->worldPositionsCm:body->referenceWorldPositionsCm;
+  Vec3 bounds[2]={reference.front(),reference.front()};
+  const auto addBounds=[&](const auto& pose) {
+    for(const auto& point:pose) {
+      bounds[0].x=std::min(bounds[0].x,point.x);bounds[0].y=std::min(bounds[0].y,point.y);bounds[0].z=std::min(bounds[0].z,point.z);
+      bounds[1].x=std::max(bounds[1].x,point.x);bounds[1].y=std::max(bounds[1].y,point.y);bounds[1].z=std::max(bounds[1].z,point.z);
+      }
+    };
+  addBounds(reference);addBounds(body->worldPositionsCm);
+  lookFrom(eye,bench.clothCenter);
+  size_t tested=0,blocked=0,attachments=0,selfHits=0;bool framed=true;
+  const auto checkPose=[&](const auto& pose) {
+    for(const auto& point:pose) {
+      framed&=arenaProjected(point);
+      if(std::any_of(body->anchorsCm.begin(),body->anchorsCm.end(),[&](const Vec3& anchor) {
+           return (point-anchor).quadLength()<.0625f;
+           })) {++attachments;continue;}
+      const auto inward=bench.clothCenter-point;
+      const float length=inward.length();
+      const auto target=point+(length>2.f?inward*(2.f/length):inward);
+      const auto end=target-Vec3::normalize(target-eye)*2.f;
+      ++tested;
+      const auto hit=world.physic()->rayClothCamera(eye,end,body->visual,bounds,selfHits);
+      if(!hit.hasCol)continue;
+      bool attachment=false;
+      if(hit.mat!=zenkit::MaterialGroup::EARTH && !hit.vob && (hit.v-target).length()<=20.f)
+        attachment=std::any_of(body->anchorsCm.begin(),body->anchorsCm.end(),[&](const Vec3& anchor) {
+          return (target-anchor).length()<=25.f && (hit.v-anchor).length()<=25.f;
+          });
+      if(attachment)++attachments;else ++blocked;
+      }
+    };
+  checkPose(reference);checkPose(body->worldPositionsCm);
+  const bool clear=framed && tested>0 && blocked==0;
+  event("cloth_camera_range","\"horizontal_range_cm\":"+ragdollNumber(range)+
+    ",\"previous_horizontal_range_cm\":"+ragdollNumber(previousRange)+",\"camera_cm\":"+ragdollVector(eye)+
+    ",\"target_cm\":"+ragdollVector(bench.clothCenter)+",\"pitch_degrees\":"+ragdollNumber(bench.camHeldAngles.x)+
+    ",\"yaw_degrees\":"+ragdollNumber(bench.camHeldAngles.y)+",\"tested_vertices\":"+std::to_string(tested)+
+    ",\"blocked_vertices\":"+std::to_string(blocked)+",\"attachment_allowances\":"+std::to_string(attachments)+
+    ",\"self_rigid_hits\":"+std::to_string(selfHits)+",\"fully_framed\":"+(framed?"true":"false")+
+    ",\"clear\":"+(clear?"true":"false"));
+  if(!clear)arenaAbort("cloth camera-range has no unobstructed fully framed view");
+  }
+
+void clothSaveSession(World& world,const std::string& label) {
+  if(label.empty() || label.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
+    throw std::runtime_error("invalid cloth save label");
+  std::vector<uint8_t> bytes;
+  {MemWriter writer(bytes);Serialize out(writer);Pixmap preview(1,1,TextureFormat::RGBA8);std::memset(preview.data(),0,4);
+  Gothic::inst().gameSession()->save(out,"cloth "+label,preview);}
+  const auto path="session-cloth-"+label+".sav";
+  std::ofstream file(outDir+"/"+path,std::ios::binary);
+  file.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
+  if(!file)throw std::runtime_error("cannot write complete cloth GameSession archive");
+  event("cloth_session_save","\"archive\":"+jsonStr(path)+",\"bytes\":"+std::to_string(bytes.size())+
+    ",\"world\":"+jsonStr(world.name())+",\"cloth\":"+clothRows(world));
+  }
+
+void clothInitial(World& world,std::string_view label) {
+  bool rest=true;size_t count=0;
+  for(const auto& body:world.physic()->cloth().snapshots()) {
+    ++count;
+    rest&=!body.active && body.maxSpeedCmPerSec==0.f && body.maxSpeedEverCmPerSec==0.f &&
+      body.projectileHits==0 && body.arrowPasses==0 && body.recoveryCount==0 && body.maxAnchorErrorCm<=.5f;
+    }
+  event("cloth_session_initial","\"label\":"+jsonStr(label)+",\"world\":"+jsonStr(world.name())+
+    ",\"cloth_count\":"+std::to_string(count)+",\"rest\":"+(rest?"true":"false")+",\"cloth\":"+clothRows(world));
+  if(!count || !rest)arenaAbort("cloth cold load did not start from transient rest");
+  }
+
+void clothShoot(World& world,Npc& player,std::string_view kind) {
+  const auto all=world.physic()->cloth().snapshots();
+  const auto found=std::find_if(all.begin(),all.end(),[](const auto& body){return body.zenId==bench.clothZen;});
+  if(found==all.end() || !found->active) {arenaAbort("cloth projectile requires its active authored target");return;}
+  float bestArea=0;Vec3 target,normal;
+  for(size_t i=0;i+2<found->indices.size();i+=3) {
+    const auto a=found->indices[i],b=found->indices[i+1],c=found->indices[i+2];
+    if(a>=found->worldPositionsCm.size() || b>=found->worldPositionsCm.size() || c>=found->worldPositionsCm.size())continue;
+    const auto p=found->worldPositionsCm[a],q=found->worldPositionsCm[b],r=found->worldPositionsCm[c];
+    const auto cross=Vec3::crossProduct(q-p,r-p);
+    const auto area=cross.length();
+    const auto center=(p+q+r)/3.f;
+    bool pinned=false;
+    for(const auto& anchor:found->anchorsCm)if((center-anchor).length()<15.f)pinned=true;
+    if(pinned || area<=bestArea)continue;
+    const auto direction=Vec3::normalize(cross);
+    for(float side:{1.f,-1.f}) {
+      const auto from=center+direction*(250.f*side);
+      const auto hit=world.physic()->ray(from,center-direction*(100.f*side));
+      if(hit.hasCol)continue;
+      bestArea=area;target=center;normal=direction*side;break;
+      }
+    }
+  if(bestArea<1.f) {arenaAbort("cloth projectile has no exposed native cloth face");return;}
+  const bool arrow=kind=="arrow";
+  size_t symbol=size_t(-1);
+  if(arrow)symbol=world.script().findSymbolIndex("ITRW_ARROW");
+  else if(kind=="fireball" || kind=="wind") {
+    for(size_t i=0;i<world.script().symbolsCount();++i) {
+      const auto* entry=world.script().findSymbol(i);
+      if(!entry || entry->type()!=zenkit::DaedalusDataType::INSTANCE)continue;
+      auto name=entry->name();for(auto& c:name)c=char(std::toupper(static_cast<unsigned char>(c)));
+      if(!name.starts_with("ITRU_") && !name.starts_with("ITSC_"))continue;
+      Item candidate(world,i,Item::T_Inventory);
+      if(world.script().physicalSpell(candidate.spellId())==
+         (kind=="wind"?GameScript::PhysicalSpell::WindFist:GameScript::PhysicalSpell::Fireball)) {symbol=i;break;}
+      }
+    }
+  if(symbol==size_t(-1)) {arenaAbort("cloth fixture native projectile instance is unavailable");return;}
+  Item item(world,symbol,Item::T_Inventory);
+  const auto from=target+normal*250.f;
+  // shootArrow is the public free-direction entry to WorldObjects::shootBullet;
+  // the Item still creates the native spell Bullet, spell VFX and collision path.
+  auto& bullet=world.shootArrow(item,from,-normal,arrow?DynamicWorld::bulletSpeed:DynamicWorld::spellSpeed);
+  bench.clothShotKind=std::string(kind);bench.clothShotAt=bench.time;
+  bench.clothShotHitsBefore=arrow?found->arrowPasses:found->projectileHits;
+  bench.clothArrow=arrow?&bullet:nullptr;bench.clothShotTarget=target;bench.clothShotNormal=normal;
+  bench.clothArrowDownstream=0;
+  bullet.setOrigin(&player);if(arrow)bullet.setPrecise(1.f);
+  event("cloth_projectile","\"kind\":"+jsonStr(kind)+",\"zen_id\":"+std::to_string(bench.clothZen)+
+    ",\"native_spell\":"+(bullet.isSpell()?"true":"false")+",\"spell_id\":"+std::to_string(bullet.spellId())+
+    ",\"from_cm\":"+ragdollVector(from)+",\"face_target_cm\":"+ragdollVector(target)+
+    ",\"direction\":"+ragdollVector(-normal));
+  }
+
+void clothArrowNpc(World& world,Npc& player,std::string_view order) {
+  if(order!="behind" && order!="ahead") {arenaAbort("cloth arrow-npc expects behind or ahead");return;}
+  const auto all=world.physic()->cloth().snapshots();
+  const auto found=std::find_if(all.begin(),all.end(),[](const auto& body){return body.zenId==bench.clothZen;});
+  if(found==all.end() || !found->active) {arenaAbort("cloth arrow-npc requires an active authored banner");return;}
+  float bestArea=0;Vec3 target,normal;
+  for(size_t i=0;i+2<found->indices.size();i+=3) {
+    const auto p=found->worldPositionsCm[found->indices[i]],q=found->worldPositionsCm[found->indices[i+1]],r=found->worldPositionsCm[found->indices[i+2]];
+    const auto cross=Vec3::crossProduct(q-p,r-p);
+    if(cross.length()<=bestArea)continue;
+    const auto center=(p+q+r)/3.f;
+    for(float side:{1.f,-1.f}) {
+      const auto direction=Vec3::normalize(cross)*side;
+      if(std::abs(direction.y)>.25f || world.physic()->ray(center+direction*200.f,center-direction*150.f).hasCol)continue;
+      target=center;normal=direction;bestArea=cross.length();break;
+      }
+    }
+  if(bestArea<1.f) {arenaAbort("cloth arrow-npc has no unobstructed face and NPC segment");return;}
+  if(bench.clothArrowNpc==nullptr) {
+    const auto symbol=world.script().findSymbolIndex("BAU_904_BAUER");
+    if(symbol==size_t(-1)) {arenaAbort("cloth arrow-npc fixture instance unavailable");return;}
+    bench.clothArrowNpc=world.addNpc(symbol,target);
+    if(!bench.clothArrowNpc) {arenaAbort("cloth arrow-npc fixture insertion failed");return;}
+    bench.crew.push_back(bench.clothArrowNpc);
+    }
+  auto& npc=*bench.clothArrowNpc;
+  npc.clearAiQueue();npc.clearState(false);npc.stopWalking();npc.clearSpeed();npc.setExternalControl(true);
+  npc.handle().attribute[ATR_HITPOINTS]=npc.handle().attribute[ATR_HITPOINTSMAX]=50000;
+  const auto from=target+normal*200.f,to=target-normal*150.f;
+  Vec3 expectedImpact;bool prepared=false;
+  const float npcSide=order=="behind"?-70.f:70.f;
+  for(float height:{100.f,120.f,80.f,140.f,160.f}) {
+    npc.setPosition(target+normal*npcSide-Vec3(0,height,0));npc.setDirection(normal);npc.updateTransform();
+    float distance=0;
+    if(npc.rayHitZone(from,to,distance)==HitZones::None)continue;
+    expectedImpact=from+Vec3::normalize(to-from)*distance;
+    const float side=Vec3::dotProduct(expectedImpact-target,normal);
+    if((order=="behind" && side< -5.f) || (order=="ahead" && side>5.f)) {prepared=true;break;}
+    }
+  if(!prepared) {arenaAbort("cloth arrow-npc fixture bones do not lie strictly before or after its banner");return;}
+  const auto arrowSymbol=world.script().findSymbolIndex("ITRW_ARROW");
+  if(arrowSymbol==size_t(-1)) {arenaAbort("cloth arrow-npc native arrow item unavailable");return;}
+  Item item(world,arrowSymbol,Item::T_Inventory);
+  constexpr uint64_t dt=100;
+  // One synchronous native moveBullet call, with gravity compensated in its
+  // initial velocity. The native Bullet callback still resolves bones, damage,
+  // attachments and stop. Its registered body cannot tick during this call.
+  Bullet arrow(world,item,from);
+  arrow.setOrigin(&player);arrow.setPrecise(1.f);
+  const auto direction=(to-from)/float(dt)+Vec3(0,.5f*DynamicWorld::gravity*float(dt),0);
+  arrow.setDirection(direction);
+  DynamicWorld::BulletBody step(world.physic(),&arrow);
+  step.setPosition(from);step.setDirection(direction);
+  const auto before=found->arrowPasses;
+  ClothBulletBenchDriver::step(*world.physic(),step,direction,dt);
+  const auto afterRows=world.physic()->cloth().snapshots();
+  const auto after=std::find_if(afterRows.begin(),afterRows.end(),[](const auto& body){return body.zenId==bench.clothZen;});
+  const auto passes=after==afterRows.end()?before:after->arrowPasses;
+  const bool nativeHit=arrow.isFinished() && arrow.hitZone()!=HitZones::None && (arrow.impactPoint()-expectedImpact).length()<.1f;
+  const bool pass=nativeHit && passes-before==(order=="behind"?1u:0u);
+  event("cloth_arrow_npc_verify","\"order\":"+jsonStr(order)+",\"pass\":"+(pass?"true":"false")+
+    ",\"move_bullet_calls\":1,\"dt_ms\":"+std::to_string(dt)+",\"native_precise_hit\":"+(nativeHit?"true":"false")+
+    ",\"arrow_passes_before\":"+std::to_string(before)+",\"arrow_passes_after\":"+std::to_string(passes)+
+    ",\"from_cm\":"+ragdollVector(from)+",\"step_end_cm\":"+ragdollVector(to)+",\"cloth_target_cm\":"+ragdollVector(target)+
+    ",\"npc_impact_cm\":"+ragdollVector(arrow.impactPoint())+",\"npc_impact_side_cm\":"+
+    ragdollNumber(Vec3::dotProduct(arrow.impactPoint()-target,normal)));
+  if(!pass)arenaAbort("cloth single-step arrow/NPC ordering check failed");
+  }
+
 void saveMovableSession(World& world,const std::string& label) {
   if(label.empty() || label.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
     throw std::runtime_error("invalid movable save label");
@@ -5737,6 +6599,364 @@ void prepareWaterSpell(World& world,Npc& player,bool wind) {
     ",\"caster_cm\":"+ragdollVector(caster)+",\"dummy_cm\":"+ragdollVector(dummy));
   }
 
+// Film fixtures are deliberately separate from the water regression fixtures:
+// each shot owns its actors/props and accepts the stock, non-ragdoll outcome.
+std::string waterFilmPosition(World& world,const Vec3& point) {
+  const auto floor=world.physic()->landRay(point+Vec3(0,300,0),6000.f);
+  const auto water=floor.hasCol?world.physic()->waterRay(floor.v+Vec3(0,.1f,0),0):DynamicWorld::RayWaterResult{};
+  return "\"position_cm\":"+ragdollVector(point)+
+    ",\"water_y_cm\":"+(water.hasCol?ragdollNumber(water.wdepth):"null")+
+    ",\"bottom_y_cm\":"+(floor.hasCol?ragdollNumber(floor.v.y):"null");
+  }
+
+void waterFilmCheckpoint(World& world) {
+  std::string actors="[",items="[",fragments="[";
+  for(const auto& actor:bench.waterActors) {
+    if(actors.size()>1)actors+=',';
+    actors+="{\"role\":"+jsonStr(actor.role)+",\"dead\":"+(actor.npc->isDead()?"true":"false")+
+      ",\"swimming\":"+(actor.npc->isSwim()?"true":"false")+
+      ",\"last_hit_spell\":"+std::to_string(actor.npc->lastHitSpellId())+
+      ",\"ragdoll\":"+(actor.npc->ragdollBody()?"true":"false")+","+waterFilmPosition(world,actor.npc->position())+"}";
+    }
+  for(size_t i=0;i<bench.waterItems.size();++i) {
+    if(i)items+=',';
+    items+="{\"label\":"+jsonStr(std::array{"sword","ore","lute","arrow"}[i])+","+
+      waterFilmPosition(world,bench.waterItems[i]->midPosition())+"}";
+    }
+  for(const auto& body:world.physic()->waterBodySnapshot()) {
+    if(body.category!=DynamicWorld::C_Fragment || !bench.waterIds.contains(body.parentId))continue;
+    if(fragments.size()>1)fragments+=',';
+    fragments+="{\"parent\":"+jsonStr(bench.waterLabels[body.parentId])+",\"piece\":"+std::to_string(body.piece)+
+      ",\"submerged_fraction\":"+ragdollNumber(body.submergedFraction)+","+
+      waterFilmPosition(world,(body.worldBounds[0]+body.worldBounds[1])*.5f)+"}";
+    }
+  event("water_film_checkpoint","\"scene\":"+jsonStr(bench.waterFilm)+",\"elapsed_ms\":"+
+    std::to_string(world.tickCount()-bench.waterFilmStart)+",\"actors\":"+actors+"],\"items\":"+items+
+    "],\"props\":"+destructionRows(world)+",\"fragments\":"+fragments+"],\"bodies\":"+waterRows(world));
+  }
+
+void waterFilmTick(World& world) {
+  if(!bench.waterFilmKill || bench.waterActors.empty())return;
+  auto& npc=*bench.waterActors.front().npc;
+  const auto velocity=npc.spellVelocity();
+  const auto displacement=(npc.position()-bench.waterFilmLip).length();
+  if(npc.lastHitSpellId()!=26 || npc.lastHitBy()!=world.player() ||
+     velocity.length()<=100.f || displacement<=50.f)return;
+  bench.waterFilmKill=false;
+  const auto at=npc.position();
+  if(!npc.setRagdollDown(true)) {arenaAbort("water film real wind death refused");return;}
+  npc.prepareRagdoll();
+  event("water_film_death","\"scene\":"+jsonStr(bench.waterFilm)+","+waterFilmPosition(world,at)+
+    ",\"observed_wind_velocity_cm_s\":"+ragdollVector(velocity)+
+    ",\"displacement_cm\":"+ragdollNumber(displacement)+
+    ",\"ragdoll\":"+(npc.ragdollBody()?"true":"false")+",\"path\":\"onNoHealth after real WindFist hit\"");
+  }
+
+// Measure the rendered pose/model in the actual capture viewport. A stock
+// corpse may leave the close shot; that is evidence, not a fixture failure.
+struct WaterFilmPixels {
+  Matrix4x4 vp;
+  float width,height;
+  std::vector<Vec2> points;
+  bool inFrame=true;
+
+  WaterFilmPixels(const Matrix4x4& viewProjection,uint32_t w,uint32_t h)
+    :vp(viewProjection),width(float(w)),height(float(h)) {}
+
+  void point(const Vec3& p) {
+    float x=p.x,y=p.y,z=p.z,w=1;vp.project(x,y,z,w);
+    if(!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || !std::isfinite(w) || w<=0) {
+      inFrame=false;return;
+      }
+    inFrame&=std::abs(x)<=w && std::abs(y)<=w && z>=0 && z<=w;
+    // The Vulkan projection already points Y down, like the captured pixmap.
+    points.emplace_back((x/w+1.f)*width*.5f,(y/w+1.f)*height*.5f);
+    }
+
+  void box(const Vec3* bounds,const Matrix4x4& object) {
+    if(!bounds)return;
+    for(unsigned i=0;i<8;++i) {
+      Vec3 p(bounds[i&1].x,bounds[(i>>1)&1].y,bounds[(i>>2)&1].z);
+      object.project(p);point(p);
+      }
+    }
+
+  std::string json() const {
+    if(points.empty())return "null";
+    auto lo=points.front(),hi=lo;float span=0;
+    for(const auto& p:points) {
+      lo.x=std::min(lo.x,p.x);lo.y=std::min(lo.y,p.y);
+      hi.x=std::max(hi.x,p.x);hi.y=std::max(hi.y,p.y);
+      for(const auto& q:points)span=std::max(span,(p-q).length());
+      }
+    return "{\"width_px\":"+ragdollNumber(hi.x-lo.x)+",\"height_px\":"+ragdollNumber(hi.y-lo.y)+
+      ",\"span_px\":"+ragdollNumber(span)+",\"rect_px\":["+ragdollNumber(lo.x)+","+ragdollNumber(lo.y)+","+
+      ragdollNumber(hi.x)+","+ragdollNumber(hi.y)+"],\"in_frame\":"+(inFrame?"true":"false")+"}";
+    }
+  };
+
+void waterFilmFraming(World& world,uint32_t width,uint32_t height) {
+  if(!bench.rec || bench.waterFilm.empty())return;
+  const auto* camera=Gothic::inst().camera();
+  if(!camera)return;
+  std::string objects="[";
+  const auto row=[&](std::string_view label,std::string_view method,const WaterFilmPixels& pixels) {
+    if(objects.size()>1)objects+=',';
+    objects+="{\"label\":"+jsonStr(label)+",\"method\":"+jsonStr(method)+",\"pixels\":"+pixels.json()+"}";
+    };
+  if(bench.waterFilm=="body" || bench.waterFilm=="skeleton")
+    for(const auto& actor:bench.waterActors) {
+      WaterFilmPixels pixels(camera->viewProj(),width,height);
+      const auto& npc=*actor.npc;
+      if(const auto* skeleton=npc.visualSkeleton())
+        for(size_t i=0;i<skeleton->nodes.size();++i) {
+          if(!skeleton->nodes[i].name.starts_with("BIP01"))continue;
+          Vec3 point{};npc.renderedBone(i).project(point);pixels.point(point);
+          }
+      row(actor.role,"rendered_bones",pixels);
+      }
+  for(size_t i=0;i<bench.waterItems.size();++i) {
+    WaterFilmPixels pixels(camera->viewProj(),width,height);
+    pixels.box(bench.waterItems[i]->bBox(),bench.waterItems[i]->transform());
+    row(std::array{"sword","ore","lute","arrow"}[i],"native_mesh_bbox",pixels);
+    }
+  if(bench.waterFilm=="fireball")
+    for(const auto& body:world.physic()->movableVobSnapshot()) {
+      if(!bench.waterIds.contains(body.id) || body.broken)continue;
+      WaterFilmPixels pixels(camera->viewProj(),width,height);
+      if(const auto* mesh=Resources::loadMesh(body.visual))pixels.box(mesh->bbox(),body.transform);
+      row(bench.waterLabels[body.id],"native_mesh_bbox",pixels);
+      }
+  event("water_film_framing","\"scene\":"+jsonStr(bench.waterFilm)+",\"elapsed_ms\":"+
+    std::to_string(bench.time-bench.recStart)+",\"viewport_px\":["+std::to_string(width)+","+
+    std::to_string(height)+"],\"objects\":"+objects+"]");
+  }
+
+void waterFilmSetup(World& world,Npc& player,std::string_view scene) {
+  if(scene!="body" && scene!="skeleton" && scene!="fireball" && scene!="things") {
+    arenaAbort("water-film setup expects body, skeleton, fireball or things");return;
+    }
+  if(bench.spellRunes.empty())prepareSpellFixture(world,player,"wind");
+  if(bench.spellRunes.empty())return;
+  player.setTarget(nullptr);player.closeWeapon(true);player.clearAiQueue();player.clearGoTo();player.stopWalking();player.clearSpeed();
+  bench.subject=nullptr;bench.crew.clear();bench.waterActors.clear();bench.waterFilmKill=false;
+  bench.spellTrace=false;bench.spellGuardTrace=false;bench.spellReleaseAt=0;bench.spellEquipPending=0;
+  for(const auto& actor:bench.spellActors)world.removeNpc(*actor.npc);
+  for(auto* item:bench.spellItems)world.removeItem(*item);
+  for(auto* item:bench.waterItems)world.removeItem(*item);
+  bench.spellActors.clear();bench.spellItems.clear();bench.waterItems.clear();
+  bench.destructionFixtures.clear();bench.destructionIds.clear();bench.movableIds.clear();
+  bench.waterIds.clear();bench.waterLabels.clear();bench.waterReference.clear();bench.waterTravel.clear();bench.waterSleepAt.clear();
+  bench.destructionTrace=false;
+  std::vector<Vec3> places;
+  if(!waterFindWindSite(world,places) || bench.waterWaypoint!="NW_CITY_HABOUR_05") {
+    arenaAbort("water film needs the low NW_CITY_HABOUR_05 pier");return;
+    }
+  const auto dryFloor=[&](const Vec3& at,Vec3& result) {
+    const auto floor=world.physic()->landRay(at+Vec3(0,2000,0),4000.f);
+    if(!floor.hasCol || floor.n.y<.99f || world.physic()->waterRay(floor.v,1.f).hasCol)return false;
+    for(float dx:{-30.f,30.f})for(float dz:{-30.f,30.f}) {
+      const auto foot=world.physic()->landRay(floor.v+Vec3(dx,100,dz),150.f);
+      if(!foot.hasCol || foot.n.y<.99f || std::abs(foot.v.y-floor.v.y)>5.f ||
+         world.physic()->waterRay(foot.v,1.f).hasCol)return false;
+      }
+    result=floor.v;return true;
+    };
+  auto lip=bench.waterDry;
+  const auto direction=bench.waterDirection;
+  // The regression lip is the last perfectly flat point. Follow the remaining
+  // dry slope to the actual waterline before measuring the 1-2 m drop distance.
+  const auto flatLip=lip;
+  for(float distance=5.f;distance<=200.f;distance+=5.f) {
+    const auto floor=world.physic()->landRay(flatLip+direction*distance+Vec3(0,400,0),600.f);
+    if(!floor.hasCol || floor.n.y<.75f || world.physic()->waterRay(floor.v,1.f).hasCol)break;
+    lip=floor.v;
+    }
+  bool deep=false;
+  for(float distance=100.f;distance<=200.f;distance+=5.f) {
+    Vec3 surface;
+    if(!waterProbe(world,lip+direction*distance,220.f,6000.f,surface))continue;
+    bool slots=true;
+    if(scene=="things")for(unsigned i=0;i<4;++i) {
+      Vec3 drop;
+      if(!waterProbe(world,surface+Vec3(-direction.z,0,direction.x)*(float(i)-1.5f)*65.f,220.f,6000.f,drop))slots=false;
+      }
+    if(slots) {bench.waterCenter=surface;deep=true;break;}
+    }
+  if(!deep) {arenaAbort("water film needs deep water 1-2m from the actual waterline");return;}
+  bench.waterDry=lip;bench.waterDirection=direction;
+  const auto side=Vec3(-direction.z,0,direction.x);
+  bench.waterFilmLip=lip;bench.waterFilm=scene;bench.waterCase="film-"+std::string(scene);
+  std::array<std::string,2> visuals={"NW_HARBOUR_CRATE_01.3DS",""};
+  std::array<Vec3,2> supports;
+  if(scene=="fireball") {
+    // Some stock harbour barrels are authored as stone. Copy a real wooden,
+    // cached barrel visual into a NEW owned vob; never move a map object.
+    float footprint=std::numeric_limits<float>::infinity();
+    const auto native=world.physic()->waterBodySnapshot();
+    for(const auto& body:world.physic()->movableVobSnapshot()) {
+      if(!body.enabled || !body.destructible || body.broken || body.className!="barrel")continue;
+      const bool wood=std::any_of(native.begin(),native.end(),[&](const auto& sample) {
+        return sample.parentId==body.id && sample.targetFraction<1.f;
+        });
+      const auto size=body.localBounds[1]-body.localBounds[0];
+      const float area=size.x*size.z;
+      if(wood && (area<footprint || (area==footprint && body.visual<visuals[1]))) {
+        visuals[1]=body.visual;footprint=area;
+        }
+      }
+    if(visuals[1].empty()) {arenaAbort("water film needs a stock wooden destructible barrel visual");return;}
+    for(unsigned i=0;i<2;++i) {
+      Vec3 failed;bool found=false;
+      for(float retreat:{140.f,165.f,190.f}) {
+        const auto floor=world.physic()->landRay(lip-direction*retreat+side*(i?85.f:-85.f)+Vec3(0,400,0),600.f);
+        if(floor.hasCol && !world.physic()->waterRay(floor.v,1.f).hasCol &&
+           destructionSupported(world,visuals[i],floor.v,supports[i],failed)) {found=true;break;}
+        }
+      if(!found) {arenaAbort("water film crate/barrel needs dry full-footprint support");return;}
+      }
+    }
+  Vec3 caster,spellTarget=lip;bool supported=false;
+  if(scene=="fireball" && !dryFloor(lip-direction*220.f,spellTarget)) {
+    arenaAbort("water film fireball target needs dry native support");return;
+    }
+  std::vector<float> distances={200,250,300,150};
+  if(scene=="fireball") {
+    distances.clear();for(float distance=600.f;distance<=900.f;distance+=10.f)distances.push_back(distance);
+    }
+  for(float distance:distances) {
+    for(unsigned angle=0;angle<(scene=="fireball"?181u:1u);++angle) {
+      const int step=angle==0?0:int((angle+1)/2)*(angle%2?1:-1);
+      const float turn=float(step);
+      if(!dryFloor(lip-rotY(direction,turn)*distance,caster) ||
+         world.physic()->ray(caster+Vec3(0,140,0),spellTarget+Vec3(0,100,0)).hasCol)continue;
+      if(scene=="fireball") {
+        bool range=true;
+        for(unsigned i=0;i<2;++i) {
+          const auto* mesh=Resources::loadMesh(visuals[i]);
+          const auto center=supports[i]+Vec3(0,(mesh->bbox()[1].y-mesh->bbox()[0].y)*.5f,0);
+          for(const auto& at:{supports[i],center})
+            if((caster-at).length()<600.f || (caster-at).length()>800.f)range=false;
+          }
+        if(!range)continue;
+        }
+      supported=true;break;
+      }
+    if(supported)break;
+    }
+  if(!supported) {
+    Vec3 standard;
+    const bool found=scene=="fireball" && waterFireballCaster(world,spellTarget+Vec3(0,100,0),0.f,standard);
+    event("water_film_caster_search","\"scene\":"+jsonStr(scene)+",\"standard_found\":"+(found?"true":"false")+
+      ",\"standard_caster_cm\":"+(found?ragdollVector(standard):"null")+
+      ",\"standard_distance_cm\":"+(found?ragdollNumber((standard-lip).length()):"null"));
+    arenaAbort("water film caster needs a clear supported dry lane");return;
+    }
+  player.setPosition(caster);player.setDirection(direction);player.updateTransform();
+  player.handle().attribute[ATR_MANA]=player.handle().attribute[ATR_MANAMAX]=50000;player.setTalentSkill(TALENT_MAGE,6);
+  for(uint32_t id=0;id<world.npcCount();++id)
+    if(auto* npc=world.npcById(id);npc && npc!=&player && (npc->position()-lip).length()<2500.f) {
+      npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
+      }
+  if(scene!="things") {
+    if(!waterBodiesAdd(world,player,scene=="skeleton"?"SKELETON":"BAU_904_BAUER",std::string(scene),lip,false))return;
+    auto* target=bench.waterActors.back().npc;
+    if(scene=="fireball") {target->setPosition(spellTarget);target->updateTransform();}
+    target->handle().attribute[ATR_HITPOINTS]=target->handle().attribute[ATR_HITPOINTSMAX]=50000;
+    bench.spellActors.push_back({target,"water_target"});
+    }
+  if(scene=="fireball") {
+    // Fresh owned vobs keep this dry authored pose when movable is disabled.
+    // The real projectile hits the actor in the gap; only its ordinary blast
+    // can break the two props or send their fragments over the edge.
+    for(unsigned i=0;i<2;++i) {
+      const auto id=destructionAdd(world,visuals[i],supports[i]);
+      if(!id) {arenaAbort("water film fresh crate/barrel insertion failed");return;}
+      bench.waterIds.insert(id);bench.waterLabels[id]=i?"barrel":"crate";
+      }
+    }
+  bench.waterReady=true;bench.waterTrace=true;bench.waterStart=world.tickCount();bench.waterSample=uint64_t(-1);
+  bench.noiseTrace=true;bench.noisePhase="water-film-"+std::string(scene);
+  const bool bodies=scene=="body" || scene=="skeleton";
+  // Broadside close shots keep the surface legible. Do not widen the body
+  // shot to chase the stock corpse ten metres away from its buoyant partner.
+  Vec3 focus,eye;
+  bool camera=false;
+  if(bodies) {
+    focus=lip+direction*450.f;focus.y=bench.waterCenter.y;
+    for(float lateral:{420.f,-420.f}) {
+      eye=focus+side*lateral+Vec3(0,160,0);
+      if(world.physic()->ray(eye,bench.waterCenter+Vec3(0,20,0)).hasCol ||
+         world.physic()->ray(eye,lip+Vec3(0,110,0)).hasCol)continue;
+      camera=true;break;
+      }
+    }
+  else if(scene=="fireball") {
+    const float pierY=(supports[0].y+supports[1].y)*.5f;
+    // Behind the target and above its head: it stays low in the frame and the
+    // crate, the barrel and the water where their fragments land stay in view.
+    focus=lip+direction*150.f;focus.y=bench.waterCenter.y;
+    for(float lateral:{0.f,-40.f,40.f}) {
+      eye=lip-direction*480.f+side*lateral;eye.y=pierY+330.f;
+      bool clear=!world.physic()->ray(eye,bench.waterCenter+Vec3(0,20,0)).hasCol;
+      for(unsigned i=0;i<2;++i) {
+        const auto* mesh=Resources::loadMesh(visuals[i]);
+        const auto center=supports[i]+Vec3(0,(mesh->bbox()[1].y-mesh->bbox()[0].y)*.5f,0);
+        const auto hit=world.physic()->ray(eye,center);
+        if(hit.hasCol && (hit.v-center).length()>85.f)clear=false;
+        }
+      if(clear) {camera=true;break;}
+      }
+    }
+  else {
+    focus=bench.waterCenter+Vec3(0,3,0);
+    eye=bench.waterCenter-direction*210.f+Vec3(0,100,0);
+    camera=true;
+    for(unsigned i=0;i<4;++i)
+      if(world.physic()->ray(eye,bench.waterCenter+side*(float(i)-1.5f)*65.f+Vec3(0,5,0)).hasCol)camera=false;
+    }
+  if(!camera) {arenaAbort("water film camera has no clear close side view");return;}
+  bench.cam=C_Water;bench.waterCameraTarget=focus;lookFrom(eye,focus);
+  event("water_film_setup","\"scene\":"+jsonStr(scene)+",\"waypoint\":"+jsonStr(bench.waterWaypoint)+
+    ",\"lip_cm\":"+ragdollVector(lip)+",\"water_cm\":"+ragdollVector(bench.waterCenter)+
+    ",\"caster_cm\":"+ragdollVector(caster)+",\"camera_cm\":"+ragdollVector(bench.camPos)+
+    ",\"camera_target_cm\":"+ragdollVector(focus));
+  }
+
+void waterFilmBegin(World& world,Npc& player) {
+  bench.waterFilmStart=world.tickCount();
+  bench.waterFilmKill=bench.waterFilm=="body" || bench.waterFilm=="skeleton";
+  if(bench.waterFilm=="things") {
+    const auto side=Vec3(-bench.waterDirection.z,0,bench.waterDirection.x);
+    const char* symbols[]{"ITMW_1H_SLD_SWORD","ITMI_NUGGET","ITMI_LUTE","ITRW_ARROW"};
+    for(unsigned i=0;i<4;++i) {
+      auto symbol=world.script().findSymbolIndex(symbols[i]);
+      if(symbol==size_t(-1) && i==0)
+        for(size_t candidate=0;candidate<world.script().symbolsCount();++candidate) {
+          const auto* entry=world.script().findSymbol(candidate);
+          if(entry && entry->type()==zenkit::DaedalusDataType::INSTANCE && entry->name().starts_with("ITMW_") &&
+             entry->name().find("SWORD")!=std::string::npos) {symbol=candidate;break;}
+          }
+      if(symbol==size_t(-1)) {arenaAbort("water film item instance missing");return;}
+      Vec3 surface;
+      if(!waterProbe(world,bench.waterCenter+side*(float(i)-1.5f)*65.f,220.f,6000.f,surface)) {
+        arenaAbort("water film item drop needs four adjacent deep-water slots");return;
+        }
+      const auto before=world.physic()->waterBodySnapshot();
+      auto matrix=Matrix4x4::mkIdentity();matrix.translate(surface+Vec3(0,100,0));
+      auto* item=world.addItemDyn(symbol,matrix,world.npcId(&player));
+      if(!item) {arenaAbort("water film native item drop failed");return;}
+      bench.waterItems.push_back(item);
+      for(const auto& body:world.physic()->waterBodySnapshot())
+        if(body.category==DynamicWorld::C_Item &&
+           std::none_of(before.begin(),before.end(),[&](const auto& old){return old.id==body.id;})) {
+          bench.waterIds.insert(body.id);bench.waterLabels[body.id]=std::array{"sword","ore","lute","arrow"}[i];
+          }
+      }
+    }
+  event("water_film_begin","\"scene\":"+jsonStr(bench.waterFilm));
+  }
+
 void arrowFields(World& world) {
   auto* npc=bench.arrowNpc;
   if(!bench.arrowTrace || npc==nullptr || world.tickCount()==bench.arrowSampleTick) return;
@@ -6289,7 +7509,8 @@ bool characterLane(World& world,const Vec3& start,const Vec3& end,float maximumS
   return true;
   }
 
-bool characterStairsProfile(World& world,const Vec3& low,const Vec3& high,unsigned& risers,float& maximumRiser) {
+bool characterStairsProfile(World& world,const Vec3& low,const Vec3& high,unsigned& risers,float& maximumRiser,
+                            float minimumRiser=6.f,float minimumRise=45.f) {
   risers=0;maximumRiser=0;unsigned plateaus=0;
   Vec3 previous=low;
   for(unsigned i=1;i<=40;++i) {
@@ -6297,13 +7518,13 @@ bool characterStairsProfile(World& world,const Vec3& low,const Vec3& high,unsign
     if(!characterFloor(world,low+(high-low)*(float(i)/40.f),floor))return false;
     const float rise=floor.y-previous.y;
     if(rise< -2.f || rise>32.f)return false;
-    if(rise>=6.f) {++risers;maximumRiser=std::max(maximumRiser,rise);}
+    if(rise>=minimumRiser) {++risers;maximumRiser=std::max(maximumRiser,rise);}
     if(std::abs(rise)<2.f)++plateaus;
     previous=floor;
     }
   // Several discrete risers and level treads distinguish stairs from one
   // furniture top or a sloping ramp picked by the broad IK roughness probe.
-  return risers>=3 && plateaus>=8 && high.y-low.y>=45.f;
+  return risers>=3 && plateaus>=8 && high.y-low.y>=minimumRise;
   }
 
 void characterFreezeNear(World& world,Npc& player,const Vec3& start,const Vec3& goal) {
@@ -6786,8 +8007,23 @@ std::string npcCharacterMoveJson(World& world,const CharacterVirtualDiagnostics:
     ",\"clipped_request_cm\":"+ragdollVector(move.clippedRequest)+",\"native_position_cm\":"+ragdollVector(move.nativePosition)+
     ",\"accepted_cm\":"+ragdollVector(move.accepted)+",\"request_clipped\":"+flag(move.requestClipped)+
     ",\"resolved_clipped\":"+flag(move.resolvedClipped)+",\"blocked\":"+flag(move.blocked)+
+    ",\"sequence\":"+std::to_string(move.sequence)+",\"dt_ms\":"+std::to_string(move.dt)+
+    ",\"advancement_ratio\":"+ragdollNumber(move.advancementRatio)+",\"steep_contact\":"+flag(move.steepContact)+
+    ",\"steep_contact_normal\":"+ragdollVector(move.steepContactNormal)+
     ",\"request_collision\":"+npcCharacterCollisionJson(world,move.requestCollision)+
     ",\"resolved_collision\":"+npcCharacterCollisionJson(world,move.resolvedCollision)+"}";
+  }
+
+Bench::CharacterMoveFrame characterMoveFrame(const Npc& npc) {
+  CharacterVirtualDiagnostics diagnostic;
+  Bench::CharacterMoveFrame frame;
+  frame.valid=npc.characterVirtualDiagnostics(diagnostic);
+  if(!frame.valid)return frame;
+  const auto& move=diagnostic.npcMove;
+  frame.sequence=move.sequence;frame.dt=move.dt;frame.requested=move.requested;
+  frame.acceptedDelta=move.accepted-move.initial;frame.advancementRatio=move.advancementRatio;
+  frame.steepContact=move.steepContact;frame.steepNormal=move.steepContactNormal;frame.blocked=move.blocked;
+  return frame;
   }
 
 bool npcCharacterNeedsMovableLookup(const CharacterVirtualDiagnostics::Pose& pose) {
@@ -7129,6 +8365,987 @@ void characterIdleSnapshot(World& world,std::string_view label,bool begin=false)
     npcCharacterSample(world,*idle.actor,0,0,bench.step,bench.frameMs));
   }
 
+// Monster fixtures use the same MDH capsule and ordinary AI/animation movement
+// as the game. Only preparation places actors; measurements never move them.
+void monsterCharacterError(std::string_view reason) {
+  event("monster_character_error","\"reason\":"+jsonStr(reason));arenaAbort(reason);
+  }
+
+Npc* monsterCharacterActor(World& world,std::string_view instance,const Vec3& at) {
+  auto* npc=world.addNpc(world.script().findSymbolIndex(instance),at);
+  if(!npc || npc->isHuman() || npc->isDown() || !npc->visualSkeleton()) {
+    monsterCharacterError("monster fixture instance unavailable: "+std::string(instance));return nullptr;
+    }
+  npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->stopWalking();
+  npc->setExternalControl(true);npc->setProcessPolicy(NpcProcessPolicy::AiNormal);npc->setWalkMode(WalkBit::WM_Run);
+  npc->setPosition(at);npc->updateTransform();
+  const auto capsule=npc->navigationCapsule();const auto& guild=world.script().guildVal();const auto g=npc->guild();
+  const auto& collision=npc->visualSkeleton()->bboxCol;const float mdhHeight=collision[1].y-collision[0].y;
+  event("monster_character_body","\"instance\":"+jsonStr(instance)+",\"npc_id\":"+std::to_string(world.npcId(npc))+
+    ",\"guild\":"+std::to_string(g)+",\"radius_cm\":"+ragdollNumber(capsule.x)+",\"height_cm\":"+ragdollNumber(mdhHeight)+
+    ",\"mdh_collision_height_cm\":"+ragdollNumber(mdhHeight)+",\"cv_height_cm\":"+ragdollNumber(mdhHeight)+
+    ",\"legacy_query_height_cm\":"+ragdollNumber(capsule.y)+
+    ",\"step_height_cm\":"+ragdollNumber(guild.step_height[g]>0?float(guild.step_height[g]):50.f)+
+    ",\"slide_angle_deg\":"+ragdollNumber(float(guild.slide_angle[g]))+",\"mass_kg\":"+ragdollNumber(npc->physicsMass())+
+    ",\"water_knee_cm\":"+ragdollNumber(float(guild.water_depth_knee[g]))+
+    ",\"water_chest_cm\":"+ragdollNumber(float(guild.water_depth_chest[g]))+
+    ",\"has_swim_animations\":"+(npc->hasSwimAnimations()?"true":"false"));
+  return npc;
+  }
+
+void monsterCharacterClear(World& world) {
+  auto& route=bench.monsterCharacterRoute;
+  route.active=false;
+  if(route.npc) {
+    auto* npc=route.npc;route.npc=nullptr;
+    for(auto& actor:bench.monsterCharacterExtras)if(actor.npc==npc)actor.npc=nullptr;
+    world.removeNpc(*npc);
+    }
+  for(auto& actor:bench.monsterCharacterExtras)if(actor.npc) {
+    auto* npc=actor.npc;actor.npc=nullptr;world.removeNpc(*npc);
+    }
+  bench.monsterCharacterExtras.clear();bench.monsterCharacterProps.clear();
+  bench.monsterCharacterBarrel=Bench::MonsterCharacterProp();
+  bench.monsterCharacterMeasuring=false;bench.monsterCharacterCrowd=false;bench.monsterCharacterPack=false;
+  bench.characterProp.reset();bench.characterPropId=0;bench.characterPropTravel=0;
+  bench.monsterCharacterLedgeBody=DynamicWorld::Item();bench.monsterCharacterLedgeShape.reset();
+  route=Bench::MonsterCharacterRoute();
+  }
+
+void monsterCharacterLedge(World& world,Npc& player,std::string_view species,float height,float bottom=0.f) {
+  const bool wolf=species=="wolf",troll=species=="troll";
+  if((!wolf && !troll) || (wolf && height!=20.f && height!=40.f && height!=55.f) ||
+     (troll && height!=40.f && height!=80.f) ||
+     (bottom!=0.f && !(wolf && height==40.f && bottom==-100.f))) {
+    monsterCharacterError("ledge expects wolf 20|40|55 or troll 40|80 centimetres");return;
+    }
+  monsterCharacterClear(world);
+  Vec3 anchor;
+  if(!characterFloor(world,Vec3(38674.5156f,4308.43604f,11976.749f),anchor)) {
+    monsterCharacterError("isolated ledge lacks its verified stock anchor");return;
+    }
+  // One analytic riser, with a 6 m running approach and 15 m landing. The
+  // elevated support excludes stock rocks/actors while remaining part of the
+  // real World queried by both legacy MoveAlgo and CharacterVirtual.
+  anchor.y+=10000.f;
+  zenkit::Mesh mesh;mesh.materials.resize(1);mesh.materials[0].group=zenkit::MaterialGroup::STONE;
+  const auto quad=[&](Vec3 a,Vec3 b,Vec3 c,Vec3 d) {
+    const auto index=uint32_t(mesh.vertices.size());
+    for(const auto& point:{a,b,c,d})mesh.vertices.push_back({point.x,point.y,point.z});
+    mesh.polygons.vertex_indices.insert(mesh.polygons.vertex_indices.end(),
+      {index,index+2,index+1,index,index+3,index+2});
+    mesh.polygons.material_indices.insert(mesh.polygons.material_indices.end(),{0,0});
+    };
+  // Gothic source winding is reversed by PhysicVbo.
+  quad({-1200,0,-900},{-1200,0,900},{1500,0,900},{1500,0,-900});
+  quad({0,height,-900},{0,height,900},{1500,height,900},{1500,height,-900});
+  quad({0,bottom,-900},{0,bottom,900},{0,height,900},{0,height,-900});
+  bench.monsterCharacterLedgeShape.reset(PhysicMeshShape::load(PackedMesh(mesh,PackedMesh::PK_Physic)));
+  auto matrix=Matrix4x4::mkIdentity();matrix.translate(anchor);
+  bench.monsterCharacterLedgeBody=world.physic()->addStaticObj(bench.monsterCharacterLedgeShape.get(),matrix,"BENCH_MONSTER_SINGLE_LEDGE");
+  if(bench.monsterCharacterLedgeBody.isEmpty()) {monsterCharacterError("isolated ledge collision creation failed");return;}
+  auto& route=bench.monsterCharacterRoute;
+  route.name=std::string(species)+"_ledge_"+std::to_string(unsigned(height));route.isolatedLedge=true;
+  if(bottom<0.f)route.name+="_buried";
+  route.start=anchor+Vec3(-600,0,0);route.goal=anchor+Vec3(800,height,0);route.tolerance=60;
+  for(const auto& point:{route.start,anchor+Vec3(200,height,0),route.goal}) {
+    const auto floor=world.physic()->landRay(point+Vec3(0,20,0),40);
+    if(!floor.hasCol || std::abs(floor.v.y-point.y)>.1f) {
+      monsterCharacterError("isolated ledge floor proof disagrees with authored surface");return;
+      }
+    }
+  const auto face=world.physic()->ray(anchor+Vec3(-30,height*.5f,0),anchor+Vec3(30,height*.5f,0));
+  if(!face.hasCol || std::abs(face.v.x-anchor.x)>.1f) {
+    monsterCharacterError("isolated ledge lacks its single vertical face");return;
+    }
+  player.setInteraction(nullptr,true);player.clearAiQueue();player.clearGoTo();player.stopWalking();
+  player.setPosition(anchor+Vec3(-600,0,500));player.updateTransform();
+  route.npc=monsterCharacterActor(world,wolf?"Wolf":"Troll",route.start);if(!route.npc)return;
+  route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();
+  route.npc->setCharacterVirtualDiagnosticsEnabled(true);
+  bench.subject=route.npc;bench.monsterCharacterHeroStart=player.position();
+  event("monster_character_route_setup","\"route\":"+jsonStr(route.name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
+    ",\"waypoint\":\"verified_wolf_lunge+100m\",\"start_cm\":"+ragdollVector(route.start)+",\"goal_cm\":"+ragdollVector(route.goal)+
+    ",\"hero_cm\":"+ragdollVector(player.position())+",\"arrival_radius_cm\":60,\"arrival_height_tolerance_cm\":5"+
+    ",\"ledge_height_cm\":"+ragdollNumber(height)+",\"face_bottom_cm\":"+ragdollNumber(bottom)+
+    ",\"running_approach_cm\":600,\"landing_length_cm\":1500"+
+    ",\"native_action\":\"Npc::goToPosition\",\"synthetic_geometry\":true,\"floor_probes\":3,\"face_proof\":true");
+  }
+
+bool monsterCharacterOpenLane(World& world,const Vec3& center,const Vec3& direction,float halfLength,float radius,float height,
+                              Vec3& start,Vec3& goal,float maximumStep=25.f) {
+  const Vec3 side(-direction.z,0,direction.x);
+  if(!characterFloor(world,center-direction*halfLength,start) || !characterFloor(world,center+direction*halfLength,goal))return false;
+  for(float across:{-radius,0.f,radius}) {
+    Vec3 previous;
+    for(unsigned sample=0;sample<=20;++sample) {
+      Vec3 floor;
+      if(!characterFloor(world,start+(goal-start)*(float(sample)/20.f)+side*across,floor))return false;
+      if(sample && std::abs(floor.y-previous.y)>maximumStep)return false;
+      if(sample)for(float y:{25.f,height*.5f,height-10.f})
+        if(world.physic()->ray(previous+Vec3(0,y,0),floor+Vec3(0,y,0)).hasCol)return false;
+      if(std::abs(floor.y-(start.y+(goal.y-start.y)*(float(sample)/20.f)))>50.f)return false;
+      previous=floor;
+      }
+    }
+  return true;
+  }
+
+Bench::MonsterCharacterExtra& monsterCharacterExtra(World& world,Npc* npc,std::string_view role) {
+  bench.monsterCharacterExtras.emplace_back();auto& actor=bench.monsterCharacterExtras.back();
+  actor.npc=npc;actor.role=role;actor.start=npc->position();
+  actor.lastPosition=actor.start;actor.lastVisual=npc->characterVisualPosition();
+  actor.progressPosition=actor.start;actor.lastSupported=actor.start;actor.progressTime=world.tickCount();
+  return actor;
+  }
+
+void monsterCharacterPoint(Bench::MonsterCharacterExtra& actor,const Vec3& at) {
+  actor.points.emplace_back(at,"FP_MONSTER_VIDEO_"+actor.role+"_"+std::to_string(actor.points.size()));
+  actor.points.back().groundPos=at;
+  }
+
+bool monsterCharacterProp(World& world,std::string_view role,const Vec3& at) {
+  const std::string visual=role=="crate"?"NW_HARBOUR_CRATE_01.3DS":"NW_HARBOUR_BARREL_01.3DS";
+  const auto* mesh=Resources::loadMesh(visual);const auto* rule=MovableVobs::classifyVisual(visual);
+  if(!mesh || !rule) {monsterCharacterError("stock monster prop mesh/class unavailable: "+std::string(role));return false;}
+  Vec3 floor;if(!characterFloor(world,at,floor)) {monsterCharacterError("monster prop has no stock support");return false;}
+  const auto* bounds=mesh->bbox();auto matrix=Matrix4x4::mkIdentity();
+  matrix.translate(floor.x-(bounds[0].x+bounds[1].x)*.5f,floor.y-bounds[0].y+.2f,floor.z-(bounds[0].z+bounds[1].z)*.5f);
+  zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+  data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
+  data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+  const auto before=world.physic()->movableVobSnapshot();
+  auto fixture=std::make_unique<Bench::MovableFixture>();fixture->visual.setVisual(data,world,false,false);fixture->visual.setObjMatrix(matrix);
+  fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,rule->massMultiplier,rule->blocksWalking,rule->className,true);
+  if(fixture->body.isEmpty()) {monsterCharacterError("stock monster prop body unavailable");return false;}
+  fixture->body.setTransformCallback([view=&fixture->visual](const Matrix4x4& m){view->setObjMatrix(m);});
+  fixture->visual.setupFracture(world,fixture->body);
+  uintptr_t id=0;
+  for(const auto& body:world.physic()->movableVobSnapshot())
+    if(std::none_of(before.begin(),before.end(),[&](const auto& old){return old.id==body.id;})) {id=body.id;break;}
+  if(!id) {monsterCharacterError("stock monster prop snapshot unavailable");return false;}
+  event("monster_character_prop_setup","\"role\":"+jsonStr(role)+",\"mass_kg\":"+ragdollNumber(fixture->body.mass())+
+    ",\"position_cm\":"+ragdollVector(movablePosition(matrix))+",\"blocks_walking\":"+(rule->blocksWalking?"true":"false"));
+  bench.monsterCharacterProps.push_back({std::move(fixture),std::string(role),movablePosition(matrix),movablePosition(matrix),id});return true;
+  }
+
+void monsterCharacterSampleProps(World& world) {
+  if(bench.monsterCharacterProps.empty() && !bench.monsterCharacterBarrel.id)return;
+  const auto bodies=world.physic()->movableVobSnapshot();
+  const auto fragments=world.physic()->fragmentSnapshot();
+  auto sample=[&](Bench::MonsterCharacterProp& prop) {
+    for(const auto& body:bodies)if(body.id==prop.id) {
+      // Native snapshots retain the last intact matrix after fracture. Item's
+      // body pointer has been released then, so Item::matrix() is identity.
+      prop.lastIntact=movablePosition(body.transform);prop.broken=body.broken;
+      prop.travel=std::max(prop.travel,(prop.lastIntact-prop.start).length());
+      break;
+      }
+    prop.fragments=unsigned(std::count_if(fragments.begin(),fragments.end(),[&](const auto& part){return part.parentId==prop.id;}));
+    };
+  for(auto& prop:bench.monsterCharacterProps)sample(prop);
+  if(bench.monsterCharacterBarrel.id) {
+    sample(bench.monsterCharacterBarrel);
+    bench.characterPropTravel=bench.monsterCharacterBarrel.travel;
+    }
+  }
+
+void monsterCharacterPropEnd(const Bench::MonsterCharacterProp& prop,std::string_view route) {
+  event("monster_character_prop_end","\"route\":"+jsonStr(route)+",\"role\":"+jsonStr(prop.role)+
+    ",\"max_displacement_cm\":"+ragdollNumber(prop.travel)+",\"initial_cm\":"+ragdollVector(prop.start)+
+    ",\"broken\":"+(prop.broken?"true":"false")+",\"last_intact_cm\":"+ragdollVector(prop.lastIntact)+
+    ",\"fragment_count\":"+std::to_string(prop.fragments)+",\"end_cm\":"+(prop.broken?"null":ragdollVector(prop.lastIntact)));
+  }
+
+bool monsterCharacterRenderProof(World& world,Npc& npc,std::string_view role) {
+  npc.updateTransform();
+  const auto* camera=Gothic::inst().camera();const auto* skeleton=npc.visualSkeleton();
+  const auto bounds=npc.bounds();const auto object=npc.transform();
+  const float infinity=std::numeric_limits<float>::infinity();
+  Vec3 low(infinity,infinity,infinity),high(-infinity,-infinity,-infinity);
+  Vec3 ndcLow(infinity,infinity,infinity),ndcHigh(-infinity,-infinity,-infinity);
+  bool projected=camera && skeleton;unsigned behind=0;std::string bones="[";
+  auto add=[&](const Vec3& point) {
+    low.x=std::min(low.x,point.x);low.y=std::min(low.y,point.y);low.z=std::min(low.z,point.z);
+    high.x=std::max(high.x,point.x);high.y=std::max(high.y,point.y);high.z=std::max(high.z,point.z);
+    if(!camera)return;
+    float x=point.x,y=point.y,z=point.z,w=1;camera->viewProj().project(x,y,z,w);
+    if(w<=0 || !std::isfinite(w)) {++behind;projected=false;return;}
+    const Vec3 ndc(x/w,y/w,z/w);
+    ndcLow.x=std::min(ndcLow.x,ndc.x);ndcLow.y=std::min(ndcLow.y,ndc.y);ndcLow.z=std::min(ndcLow.z,ndc.z);
+    ndcHigh.x=std::max(ndcHigh.x,ndc.x);ndcHigh.y=std::max(ndcHigh.y,ndc.y);ndcHigh.z=std::max(ndcHigh.z,ndc.z);
+    projected&=std::isfinite(ndc.x) && std::isfinite(ndc.y) && std::isfinite(ndc.z) &&
+      std::abs(ndc.x)<=.98f && std::abs(ndc.y)<=.98f && ndc.z>=0 && ndc.z<=1;
+    };
+  for(unsigned i=0;i<8;++i) {
+    Vec3 point(bounds.bbox[i&1].x,bounds.bbox[(i>>1)&1].y,bounds.bbox[(i>>2)&1].z);object.project(point);add(point);
+    }
+  if(skeleton)for(const auto& bone:skeleton->nodes) {
+    const auto point=npc.mapBone(bone.name);add(point);
+    if(bone.name.find("FOOT")==std::string::npos && bone.name.find("HEAD")==std::string::npos && bone.name.find("PELVIS")==std::string::npos)continue;
+    if(bones.size()>1)bones+=',';
+    bones+="{\"name\":"+jsonStr(bone.name)+",\"position_cm\":"+ragdollVector(point)+
+      ",\"occluded\":"+(hidden(world,bench.camPos,point+Vec3(0,5,0))?"true":"false")+"}";
+    }
+  bench.monsterCharacterRenderRequest=&npc;const bool drawable=TestBench::ragdollBodyDrawable(npc);bench.monsterCharacterRenderRequest=nullptr;
+  event("monster_character_render","\"route\":"+jsonStr(bench.monsterCharacterRoute.name)+",\"role\":"+jsonStr(role)+
+    ",\"npc_id\":"+std::to_string(world.npcId(&npc))+",\"instance\":"+jsonStr(symName(world,&npc))+
+    ",\"root_cm\":"+ragdollVector(npc.position())+",\"visual_root_cm\":"+ragdollVector(npc.characterVisualPosition())+
+    ",\"world_min_cm\":"+ragdollVector(low)+",\"world_max_cm\":"+ragdollVector(high)+
+    ",\"ndc_min\":"+ragdollVector(ndcLow)+",\"ndc_max\":"+ragdollVector(ndcHigh)+
+    ",\"behind_camera_points\":"+std::to_string(behind)+",\"full_pose_projected\":"+(projected?"true":"false")+
+    ",\"body_drawable\":"+(drawable?"true":"false")+",\"hidden_draw_types\":"+std::to_string(DrawCommands::hiddenTypes)+
+    ",\"near_clip_cm\":"+ragdollNumber(camera?camera->zNear():0)+",\"bones\":"+bones+"]");
+  return drawable && projected;
+  }
+
+void monsterCharacterCamera(World& world,Npc& player,bool requested=false,float preferredYaw=0,float preferredElevation=.42f) {
+  if(requested && (!std::isfinite(preferredYaw) || !std::isfinite(preferredElevation) || preferredElevation<=0 || preferredElevation>=1)) {
+    monsterCharacterError("monster camera expects a finite yaw and elevation fraction strictly between 0 and 1");return;
+    }
+  const auto& route=bench.monsterCharacterRoute;
+  if(bench.monsterCharacterCrowd) {
+    if(requested) {monsterCharacterError("monster camera angle selection requires a prepared video fixture");return;}
+    event("monster_character_camera","\"route\":\"performance\",\"eye_cm\":"+ragdollVector(bench.camPos)+",\"fixed\":true");return;
+    }
+  if(!route.npc) {monsterCharacterError("monster camera requires a prepared fixture");return;}
+  std::vector<Vec3> points{route.start,route.goal,bench.monsterCharacterHeroStart};
+  for(const auto& actor:bench.monsterCharacterExtras) {
+    if(actor.npc)points.push_back(actor.start);
+    for(const auto& point:actor.points)points.push_back(point.pos);
+    }
+  // Include the ground along the entire lane, not only the endpoints. The
+  // resulting held camera is identical in OFF and ON and never tracks roots.
+  const auto actorPoints=points.size();
+  for(unsigned i=1;i<10;++i) {
+    Vec3 floor;const auto at=route.start+(route.goal-route.start)*(float(i)/10.f);
+    if(characterFloor(world,at,floor))points.push_back(floor);
+    }
+  const float infinity=std::numeric_limits<float>::infinity();
+  Vec3 low(infinity,infinity,infinity),high(-infinity,-infinity,-infinity);
+  float height=180,horizontalPadding=75;
+  auto envelope=[&](const Npc& npc) {
+    const auto bounds=npc.bounds();height=std::max(height,bounds.bbox[1].y-bounds.bbox[0].y);
+    const float x=std::max(std::abs(bounds.bbox[0].x),std::abs(bounds.bbox[1].x));
+    const float z=std::max(std::abs(bounds.bbox[0].z),std::abs(bounds.bbox[1].z));
+    // A static local XZ circle covers any later yaw. Extra space preserves
+    // flapping wings beyond the rest pose without following live animation.
+    horizontalPadding=std::max(horizontalPadding,std::hypot(x,z)+50.f);
+    };
+  envelope(player);envelope(*route.npc);
+  for(const auto& actor:bench.monsterCharacterExtras)if(actor.npc)envelope(*actor.npc);
+  for(const auto& point:points) {
+    low.x=std::min(low.x,point.x-horizontalPadding);low.y=std::min(low.y,point.y-35);low.z=std::min(low.z,point.z-horizontalPadding);
+    high.x=std::max(high.x,point.x+horizontalPadding);high.y=std::max(high.y,point.y+height+50);high.z=std::max(high.z,point.z+horizontalPadding);
+    }
+  const auto target=(low+high)*.5f;auto along=route.goal-route.start;along.y=0;
+  along=along.length()>1?Vec3::normalize(along):Vec3(1,0,0);const Vec3 side(-along.z,0,along.x);
+  auto* camera=Gothic::inst().camera();if(!camera) {monsterCharacterError("monster video camera unavailable");return;}
+  const float halfY=camera->fovY()*float(M_PI)/360.f;const auto projection=camera->projective();
+  const float aspect=std::abs(projection.at(1,1)/projection.at(0,0));
+  const float halfFov=std::min(halfY,std::atan(std::tan(halfY)*aspect));
+  const float distance=std::max(600.f,((high-low)*.5f).length()*1.1f/std::sin(halfFov));
+  Vec3 eye;bool found=false;float selectedYaw=0,selectedElevation=0;bool fallback=false;
+  std::vector<std::pair<float,float>> shots;
+  if(requested)shots.emplace_back(preferredYaw,preferredElevation);
+  for(float elevation:{.42f,.62f,.85f})for(float yaw:{0.f,180.f,30.f,-30.f,150.f,210.f,60.f,-60.f})
+    if(!requested || std::abs(yaw-preferredYaw)>.001f || std::abs(elevation-preferredElevation)>.001f)shots.emplace_back(yaw,elevation);
+  for(size_t shot=0;shot<shots.size();++shot) {
+    const auto [yaw,elevation]=shots[shot];
+    const auto direction=rotY(side,yaw);const auto candidate=target+direction*(distance*std::sqrt(1.f-elevation*elevation))+Vec3(0,distance*elevation,0);
+    bool visible=true;
+    for(size_t pointId=0;pointId<points.size();++pointId)for(float y:{15.f,height*.5f,height}) {
+      const auto& point=points[pointId];
+      // Theoretical lane samples inside a prop describe its occupied volume.
+      // Keep that volume in the frame without demanding a view through it;
+      // actual actors and authored endpoints retain every sight-line check.
+      bool propFootprint=false;
+      if(pointId>=actorPoints && bench.characterProp) {
+        const auto delta=point-bench.characterPropInitial;propFootprint=std::hypot(delta.x,delta.z)<120;
+        }
+      if(pointId>=actorPoints)for(const auto& prop:bench.monsterCharacterProps) {
+        const auto delta=point-prop.start;propFootprint|=std::hypot(delta.x,delta.z)<120;
+        }
+      if(!propFootprint && hidden(world,candidate,point+Vec3(0,y,0))) {visible=false;break;}
+      }
+    if(!visible)continue;
+    eye=candidate;found=true;selectedYaw=yaw;selectedElevation=elevation;fallback=requested && shot!=0;break;
+    }
+  if(!found) {monsterCharacterError("monster fixed camera cannot see the complete route and feet");return;}
+  bench.cam=C_Water;bench.waterCameraTarget=target;bench.camAuto=false;bench.smValid=false;lookFrom(eye,target);
+  std::string actors="[{\"npc_id\":"+std::to_string(world.npcId(route.npc))+",\"role\":\"primary\",\"start_cm\":"+ragdollVector(route.start)+"}";
+  for(const auto& actor:bench.monsterCharacterExtras)if(actor.npc && actor.npc!=route.npc)
+    actors+=",{\"npc_id\":"+std::to_string(world.npcId(actor.npc))+",\"role\":"+jsonStr(actor.role)+",\"start_cm\":"+ragdollVector(actor.start)+"}";
+  std::string ready="[{\"npc_id\":"+std::to_string(world.npcId(route.npc))+",\"root_cm\":"+ragdollVector(route.npc->position())+"}";
+  for(const auto& actor:bench.monsterCharacterExtras)if(actor.npc && actor.npc!=route.npc)
+    ready+=",{\"npc_id\":"+std::to_string(world.npcId(actor.npc))+",\"root_cm\":"+ragdollVector(actor.npc->position())+"}";
+  event("monster_character_camera","\"route\":"+jsonStr(route.name)+",\"camera_cm\":"+ragdollVector(eye)+
+    ",\"requested_shot\":"+(requested?"true":"false")+",\"requested_yaw_deg\":"+ragdollNumber(preferredYaw)+
+    ",\"requested_elevation_fraction\":"+ragdollNumber(preferredElevation)+",\"selected_yaw_deg\":"+ragdollNumber(selectedYaw)+
+    ",\"selected_elevation_fraction\":"+ragdollNumber(selectedElevation)+",\"used_fallback\":"+(fallback?"true":"false")+
+    ",\"seed\":"+std::to_string(bench.monsterCharacterSeed)+",\"hour\":"+std::to_string(world.time().hour())+
+    ",\"minute\":"+std::to_string(world.time().minute())+",\"hero_cm\":"+ragdollVector(bench.monsterCharacterHeroStart)+",\"actors\":"+actors+"]"+
+    ",\"ready_actors\":"+ready+"],\"hero_ready_cm\":"+ragdollVector(player.position())+
+    ",\"target_cm\":"+ragdollVector(target)+",\"bounds_min_cm\":"+ragdollVector(low)+",\"bounds_max_cm\":"+ragdollVector(high)+
+    ",\"horizontal_actor_padding_cm\":"+ragdollNumber(horizontalPadding)+",\"fov_y\":"+ragdollNumber(camera->fovY())+",\"aspect\":"+ragdollNumber(aspect)+",\"fixed\":true");
+  bool rendered=monsterCharacterRenderProof(world,player,"hero");
+  rendered=monsterCharacterRenderProof(world,*route.npc,"primary") && rendered;
+  for(auto& actor:bench.monsterCharacterExtras)if(actor.npc && actor.npc!=route.npc)
+    rendered=monsterCharacterRenderProof(world,*actor.npc,actor.role) && rendered;
+  if(!rendered)monsterCharacterError("monster fixed camera requires drawable actor meshes and their complete projected poses");
+  }
+
+void monsterCharacterRemoveAmbient(World& world,const Npc& player,const Vec3& center,float radius,std::string_view site) {
+  std::vector<Npc*> ambient;
+  for(uint32_t id=0;id<world.npcCount();++id)if(auto* npc=world.npcById(id);npc && npc!=&player && !npc->isHuman() &&
+      npc!=bench.monsterCharacterRoute.npc && (npc->position()-center).length()<=radius &&
+      std::none_of(bench.monsterCharacterExtras.begin(),bench.monsterCharacterExtras.end(),[&](const auto& actor){return actor.npc==npc;}))
+    ambient.push_back(npc);
+  for(auto* npc:ambient) {
+    if(bench.subject==npc)bench.subject=nullptr;
+    world.removeNpc(*npc);
+    }
+  event("monster_character_ambient_removed","\"site\":"+jsonStr(site)+",\"center_cm\":"+ragdollVector(center)+
+    ",\"radius_cm\":"+ragdollNumber(radius)+",\"nonhuman_count\":"+std::to_string(ambient.size()));
+  }
+
+void monsterCharacterPack(World& world,Npc& player) {
+  monsterCharacterClear(world);auto& route=bench.monsterCharacterRoute;route.name="wolf_pack";
+  std::vector<const WayPoint*> points;
+  if(const auto* known=world.findPoint("FP_ROAM_NW_BIGFARM_LAKE_MONSTER_02_01"))points.push_back(known);
+  std::vector<Vec3> ring;Vec3 center;std::string waypoint;float roughness=0,heightRange=0;unsigned stoneSupports=0;
+  for(const auto* point:points) {
+    if(!characterFloor(world,point->pos,center))continue;
+    float angle=0,rough=0;Vec3 downhill;
+    if(!slopeAt(world,center,angle,downhill,rough) || angle>25)continue;
+    for(float radius:{230.f,300.f,370.f}) {
+      ring.clear();float low=1e9f,high=-1e9f;bool valid=true;unsigned stone=0;
+      for(unsigned i=0;i<12;++i) {
+        const float yaw=float(i)*float(M_PI)/6.f;Vec3 floor;
+        if(!characterFloor(world,center+Vec3(std::cos(yaw)*radius,0,std::sin(yaw)*radius),floor) ||
+           std::abs(floor.y-center.y)>180) {valid=false;break;}
+        const auto support=world.physic()->landRay(floor+Vec3(0,15,0),30);
+        if(!support.hasCol || support.n.y<std::cos(30.f*float(M_PI)/180.f) ||
+           world.physic()->waterRay(floor+Vec3(0,1,0),0).hasCol) {valid=false;break;}
+        stone+=support.mat==zenkit::MaterialGroup::STONE;
+        if(!ring.empty() && !characterLane(world,ring.back(),floor,35)) {valid=false;break;}
+        low=std::min(low,floor.y);high=std::max(high,floor.y);ring.push_back(floor);
+        }
+      if(!valid || ring.size()!=12 || stone<4 || !characterLane(world,ring.back(),ring.front(),35) || high-low<30 || high-low>220)continue;
+      // Real terrain height variation keeps the ring visibly uneven. Stock
+      // forest surfaces provide the rock/ground, with no synthetic nav mesh.
+      waypoint=point->name;roughness=rough;heightRange=high-low;stoneSupports=stone;break;
+      }
+    if(!waypoint.empty())break;
+    }
+  if(waypoint.empty()) {monsterCharacterError("wolf pack lacks a supported uneven stock terrain ring");return;}
+  monsterCharacterRemoveAmbient(world,player,center,3000,"wolf_pack");
+  characterFreezeNear(world,player,center,center);player.stopWalking();player.clearAiQueue();player.setPosition(center);player.updateTransform();
+  for(unsigned i=0;i<3;++i) {
+    const auto index=i*4;auto* npc=monsterCharacterActor(world,"Wolf",ring[index]);if(!npc)return;
+    npc->setDirection(ring[(index+11)%12]-ring[index]);npc->updateTransform();
+    auto& actor=monsterCharacterExtra(world,npc,"wolf"+std::to_string(i+1));actor.loop=true;
+    for(unsigned j=1;j<=12;++j)monsterCharacterPoint(actor,ring[(index+24-j)%12]);
+    if(i==0)route.npc=npc;
+    }
+  route.start=ring.front();route.goal=ring[6];bench.subject=route.npc;bench.monsterCharacterPack=true;bench.monsterCharacterHeroStart=player.position();
+  event("monster_character_pack_setup","\"route\":\"wolf_pack\",\"actors\":3,\"waypoint\":"+jsonStr(waypoint)+
+    ",\"hero_cm\":"+ragdollVector(center)+",\"ring_height_range_cm\":"+ragdollNumber(heightRange)+
+    ",\"roughness_cm\":"+ragdollNumber(roughness)+",\"stone_supports\":"+std::to_string(stoneSupports)+
+    ",\"ring_supports\":12,\"native_action\":\"AI_GoToPoint\"");
+  }
+
+void monsterCharacterCliff(World& world,Npc& player,bool higher=false) {
+  monsterCharacterClear(world);auto& route=bench.monsterCharacterRoute;
+  route.name=higher?"molerat_cliff_46":"molerat_cliff_36";
+  const std::string waypoint=higher?"NW_XARDAS_TOWER_VALLEY_02":"NW_XARDAS_TOWER_VALLEY_03_C";
+  const auto* point=world.findPoint(waypoint);
+  Vec3 center,downhill;float angle=0,rough=0;
+  if(!point || !characterFloor(world,point->groundPos,center,2000) || !slopeAt(world,center,angle,downhill,rough) ||
+     !characterFloor(world,center-rotY(Vec3(1,0,0),higher?135.f:90.f)*100.f,route.start,2000) ||
+     !characterFloor(world,center+rotY(Vec3(1,0,0),higher?135.f:90.f)*500.f,route.goal,2000)) {
+    monsterCharacterError("known cliff waypoint has no supported ledge endpoints: "+waypoint);return;
+    }
+  monsterCharacterRemoveAmbient(world,player,center,3000,"cliff");
+  characterFreezeNear(world,player,route.start,route.goal);npcCharacterPlaceHero(world,player,route.start,route.goal);
+  route.npc=monsterCharacterActor(world,"Molerat",route.start);if(!route.npc)return;
+  route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();bench.subject=route.npc;
+  route.destination=WayPoint(route.goal,"FP_MONSTER_CHARACTER_LEDGE");route.destination.groundPos=route.goal;
+  bench.monsterCharacterHeroStart=player.position();
+  const float limit=float(world.script().guildVal().slide_angle[route.npc->guild()]);
+  const auto support=world.physic()->landRay(center+Vec3(0,15,0),30);
+  event("monster_character_cliff_setup","\"route\":"+jsonStr(route.name)+",\"waypoint\":"+jsonStr(waypoint)+
+    ",\"angle_deg\":"+ragdollNumber(angle)+",\"guild_slide_angle_deg\":"+ragdollNumber(limit)+
+    ",\"support_walkable\":"+(support.hasCol && support.n.y>=std::cos(limit*float(M_PI)/180.f)?"true":"false")+
+    ",\"start_cm\":"+ragdollVector(route.start)+",\"goal_cm\":"+ragdollVector(route.goal));
+  }
+
+void monsterCharacterCrowd(World& world,Npc& player) {
+  monsterCharacterClear(world);
+  if(!chooseRagdollArena(world,player)) {monsterCharacterError("monster performance lacks twenty supported stock lanes");return;}
+  const auto center=bench.ragdollArenaTarget-Vec3(0,80,0);
+  monsterCharacterRemoveAmbient(world,player,center+Vec3(0,0,-950),2500,"performance");
+  characterFreezeNear(world,player,center,center);player.stopWalking();player.clearAiQueue();player.setPosition(center+Vec3(0,0,-950));player.updateTransform();
+  const char* species[]={"Wolf","Molerat","Scavenger"};
+  for(size_t i=0;i<20;++i) {
+    const auto at=bench.ragdollArenaPlaces[i];Vec3 end;bool found=false;
+    for(const auto& direction:{Vec3(1,0,0),Vec3(-1,0,0),Vec3(0,0,1),Vec3(0,0,-1)}) {
+      if(characterFloor(world,at+direction*140.f,end) && characterLane(world,at,end,20)) {found=true;break;}
+      }
+    if(!found) {monsterCharacterError("monster performance lane has unsupported endpoint");return;}
+    auto* npc=monsterCharacterActor(world,species[i%3],at);if(!npc)return;
+    npc->setDirection(end-at);npc->updateTransform();
+    auto& actor=monsterCharacterExtra(world,npc,"crowd"+std::to_string(i+1));actor.loop=true;
+    monsterCharacterPoint(actor,end);monsterCharacterPoint(actor,at);
+    }
+  bench.monsterCharacterHeroStart=player.position();
+  bench.monsterCharacterCrowd=true;bench.subject=nullptr;bench.cam=C_Hold;bench.camAuto=false;
+  lookFrom(center+Vec3(0,1200,1300),center+Vec3(0,40,0));
+  event("monster_character_crowd_setup","\"actors\":20,\"wolves\":7,\"molerats\":7,\"scavengers\":6,\"radius_cm\":2000,\"hero_cm\":"+
+    ragdollVector(player.position())+",\"waypoint\":"+jsonStr(bench.ragdollArenaWaypoint));
+  }
+
+bool monsterCharacterSlope(World& world,Vec3& start,Vec3& goal,std::string& waypoint) {
+  std::vector<const WayPoint*> points;
+  world.forEachWayPoint([&](const WayPoint& wp){if(!wp.underWater)points.push_back(&wp);});
+  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  for(const auto* point:points) {
+    Vec3 center;if(!characterFloor(world,point->pos,center))continue;
+    float angle=0,rough=0;Vec3 downhill;
+    if(!slopeAt(world,center,angle,downhill,rough) || angle<12 || angle>25 || rough>4)continue;
+    if(!monsterCharacterOpenLane(world,center,-downhill,400,20,85,start,goal,25))continue;
+    if(goal.y-start.y<120)continue;
+    waypoint=point->name;
+    event("monster_character_surface","\"route\":\"wolf_slope\",\"angle_deg\":"+ragdollNumber(angle)+
+      ",\"roughness_cm\":"+ragdollNumber(rough));return true;
+    }
+  return false;
+  }
+
+bool monsterCharacterCourtyard(World& world,Npc& player,const Npc&,Vec3& start,Vec3& goal,std::string& waypoint) {
+  if(!characterFloor(world,Vec3(8727.44434f,128.25412f,-745.565796f),start) ||
+     !characterFloor(world,Vec3(8727.44434f,128.269653f,54.4342041f),goal))return false;
+  waypoint="KNOWN_CORAGON_COURTYARD";
+  event("monster_character_courtyard_setup","\"outdoor\":true,\"known_site\":true,\"lane_width_cm\":700");
+  characterFreezeNear(world,player,start,goal);return true;
+  }
+
+bool monsterCharacterWater(World& world,float chest,Vec3& dry,Vec3& wet,std::string& waypoint) {
+  std::vector<const WayPoint*> points;
+  world.forEachWayPoint([&](const WayPoint& wp) {
+    if(wp.name.find("BEACH")!=std::string::npos || wp.name.find("WATER")!=std::string::npos ||
+       wp.name.find("LAKE")!=std::string::npos || wp.name.find("COAST")!=std::string::npos ||
+       wp.name.find("HABOUR")!=std::string::npos)points.push_back(&wp);
+    });
+  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  for(const auto* point:points) {
+    const auto ground=world.physic()->landRay(point->pos+Vec3(0,300,0),2500);
+    if(!ground.hasCol || world.physic()->waterRay(ground.v,1).hasCol)continue;
+    for(unsigned azimuth=0;azimuth<24;++azimuth) {
+      const float angle=float(azimuth)*float(M_PI)/12.f;const Vec3 along(std::cos(angle),0,std::sin(angle));
+      Vec3 previous=ground.v;
+      for(float distance=25;distance<=1600;distance+=25) {
+        const auto at=ground.v+along*distance;
+        const auto floor=world.physic()->landRay(Vec3(at.x,ground.v.y+300,at.z),2500);
+        if(!floor.hasCol || std::abs(floor.v.y-previous.y)>20 ||
+           world.physic()->ray(previous+Vec3(0,40,0),floor.v+Vec3(0,40,0)).hasCol)break;
+        previous=floor.v;
+        const auto water=world.physic()->waterRay(floor.v+Vec3(0,.1f,0),0);
+        if(!water.hasCol || water.wdepth-floor.v.y<chest+25)continue;
+        dry=ground.v;wet=Vec3(at.x,water.wdepth-chest,at.z);waypoint=point->name;
+        event("monster_character_water_surface","\"surface_y_cm\":"+ragdollNumber(water.wdepth)+
+          ",\"depth_cm\":"+ragdollNumber(water.wdepth-floor.v.y)+",\"chest_cm\":"+ragdollNumber(chest));return true;
+        }
+      }
+    }
+  return false;
+  }
+
+bool monsterCharacterChaseGoal(World& world,const Npc& npc,const Npc& player,const Vec3& start,const Vec3& obstacleEnd,
+                               Vec3& hero,bool stairs=false) {
+  const auto& guild=world.script().guildVal();const auto g=npc.guild();
+  const float step=guild.step_height[g]>0?float(guild.step_height[g]):50.f;
+  const auto shape=npc.navigationCapsule();const float height=npc.visualSkeleton()->bboxCol[1].y-npc.visualSkeleton()->bboxCol[0].y;
+  const float nativeStop=npc.bodyObservationTarget(player).attackRangeCm;
+  const auto along=Vec3::normalize(Vec3(obstacleEnd.x-start.x,0,obstacleEnd.z-start.z));
+  const Vec3 across(-along.z,0,along.x);const float obstacleDistance=std::hypot(obstacleEnd.x-start.x,obstacleEnd.z-start.z);
+  unsigned attempts=0,noFloor=0,stepRejected=0,wallRejected=0,slopeRejected=0;
+  for(float extension=nativeStop+50.f;extension<=nativeStop+800.f;extension+=25.f)for(float yaw:{0.f,10.f,-10.f,20.f,-20.f}) {
+    const float angle=yaw*float(M_PI)/180.f;
+    const auto candidate=obstacleEnd+(along*std::cos(angle)+across*std::sin(angle))*extension;
+    const auto delta=candidate-start;const float forward=Vec3::dotProduct(delta,along);
+    // The actual straight native chase must still cross the selected stairs,
+    // rather than walking around them to a laterally displaced observer.
+    const float crossingSide=std::abs(Vec3::dotProduct(delta,across))*obstacleDistance/forward;
+    if(crossingSide>45.f || extension*std::cos(angle)<nativeStop+40.f)continue;
+    ++attempts;bool valid=true;Vec3 centerEnd;
+    const auto direction=Vec3::normalize(Vec3(delta.x,0,delta.z));const Vec3 side(-direction.z,0,direction.x);
+    const unsigned samples=unsigned(std::ceil(std::hypot(delta.x,delta.z)/15.f));
+    for(float width:{0.f,-shape.x,shape.x}) {
+      Vec3 previous=start+side*width;
+      if(!characterFloor(world,previous,previous)) {++noFloor;valid=false;break;}
+      for(unsigned sample=1;sample<=samples;++sample) {
+        const float fraction=float(sample)/float(samples);
+        const Vec3 probe(start.x+delta.x*fraction+side.x*width,previous.y,start.z+delta.z*fraction+side.z*width);
+        Vec3 floor;
+        // Follow the previously sampled support height. A long uphill segment
+        // can rise beyond characterFloor's +180 cm window from its first point.
+        if(!characterFloor(world,probe,floor)) {++noFloor;valid=false;break;}
+        if(std::abs(floor.y-previous.y)>step) {++stepRejected;valid=false;break;}
+        const float head=std::max(step+5.f,height-5.f);
+        if(world.physic()->ray(previous+Vec3(0,head,0),floor+Vec3(0,head,0)).hasCol) {
+          ++wallRejected;valid=false;break;
+          }
+        // Stair tread/riser seams can return a riser normal. Their distinct
+        // risers and tread heights were checked by characterStairsProfile;
+        // applying a smooth-slope normal limit here rejects valid stairs.
+        if(!stairs) {
+          const auto support=world.physic()->landRay(floor+Vec3(0,15,0),30.f);
+          const float normalLength=support.n.length();
+          if(support.hasCol && normalLength>0.f &&
+             support.n.y/normalLength<std::cos(float(guild.slide_angle[g])*float(M_PI)/180.f)) {
+            ++slopeRejected;valid=false;break;
+            }
+          }
+        previous=floor;
+        }
+      if(!valid)break;
+      if(width==0)centerEnd=previous;
+      }
+    if(!valid)continue;
+    hero=centerEnd;
+    event("monster_character_chase_destination","\"found\":true,\"attempts\":"+std::to_string(attempts)+
+      ",\"native_stop_cm\":"+ragdollNumber(nativeStop)+",\"extension_cm\":"+ragdollNumber(extension)+
+      ",\"yaw_offset_deg\":"+ragdollNumber(yaw)+",\"crossing_side_cm\":"+ragdollNumber(crossingSide)+
+      ",\"obstacle_end_cm\":"+ragdollVector(obstacleEnd)+",\"hero_cm\":"+ragdollVector(hero));return true;
+    }
+  event("monster_character_chase_destination","\"found\":false,\"attempts\":"+std::to_string(attempts)+
+    ",\"native_stop_cm\":"+ragdollNumber(nativeStop)+",\"no_floor\":"+std::to_string(noFloor)+
+    ",\"step_rejected\":"+std::to_string(stepRejected)+",\"wall_rejected\":"+std::to_string(wallRejected)+
+    ",\"slope_rejected\":"+std::to_string(slopeRejected)+",\"obstacle_end_cm\":"+ragdollVector(obstacleEnd));
+  return false;
+  }
+
+bool monsterCharacterStairs(World& world,Npc& npc,Npc& player,Vec3& start,Vec3& goal,std::string& waypoint,bool stoneOnly=false) {
+  std::vector<const WayPoint*> points;
+  if(!stoneOnly) {
+    if(const auto* point=world.findPoint("NW_CITY_TO_FARM2_09"))points.push_back(point);
+    } else world.forEachWayPoint([&](const WayPoint& wp) {
+    if(!wp.underWater && wp.name.starts_with("NW_CITY_") && wp.name.find("BED")==std::string::npos &&
+       (!stoneOnly || wp.name.find("DITCH")==std::string::npos))points.push_back(&wp);
+    });
+  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  if(stoneOnly)std::stable_partition(points.begin(),points.end(),[](const auto* wp){return wp->name.find("STAIR")!=std::string::npos;});
+  std::stable_partition(points.begin(),points.end(),[](const auto* wp){return wp->name=="NW_CITY_TO_FOREST_STAIRS01";});
+  if(stoneOnly)std::stable_partition(points.begin(),points.end(),[](const auto* point) {
+    return point->name.find("_TO_")==std::string::npos && point->name.find("FOREST")==std::string::npos &&
+           point->name.find("DITCH")==std::string::npos;
+    });
+  const auto offsets=stoneOnly?std::vector<float>{0.f,-80.f,80.f,-160.f,160.f,-240.f,240.f,-400.f,400.f,-600.f,600.f}:std::vector<float>{0.f,-80.f,80.f};
+  for(const auto* point:points)for(float x:offsets)for(float z:offsets) {
+    Vec3 center;if(!characterFloor(world,point->pos+Vec3(x,0,z),center))continue;
+    if(stoneOnly) {
+      const auto support=world.physic()->landRay(center+Vec3(0,15,0),30);
+      if(!support.hasCol || support.mat!=zenkit::MaterialGroup::STONE)continue;
+      }
+    float angle=0,rough=0;Vec3 downhill;
+    if(!slopeAt(world,center,angle,downhill,rough) || angle<(stoneOnly?10.f:18.f) || angle>40 ||
+       rough<(stoneOnly?2.f:6.f) || rough>25)continue;
+    Vec3 low,high;
+    if(!characterFloor(world,center+downhill*100.f,low) || !characterFloor(world,center-downhill*100.f,high))continue;
+    unsigned risers=0;float maximumRiser=0;
+    if(!characterStairsProfile(world,low,high,risers,maximumRiser,stoneOnly?4.f:6.f,stoneOnly?40.f:45.f))continue;
+    Vec3 hero;if(!monsterCharacterChaseGoal(world,npc,player,low,high,hero,true))continue;
+    start=low;goal=hero;waypoint=point->name;
+    event("monster_character_surface","\"route\":"+jsonStr(stoneOnly?"wolf_terrain":"wolf_stairs")+",\"waypoint\":"+jsonStr(waypoint)+
+      ",\"stone_surface\":"+(stoneOnly?"true":"false")+
+      ",\"angle_deg\":"+ragdollNumber(angle)+",\"roughness_cm\":"+ragdollNumber(rough)+
+      ",\"riser_count\":"+std::to_string(risers)+",\"maximum_riser_cm\":"+ragdollNumber(maximumRiser));return true;
+    }
+  return false;
+  }
+
+void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
+  monsterCharacterClear(world);auto& route=bench.monsterCharacterRoute;route.name=name;
+  route.npc=monsterCharacterActor(world,name=="troll_barrel"?"Troll":"Wolf",player.position());if(!route.npc)return;
+  std::string waypoint;
+  if(name=="wolf_terrain") {
+    if(!prepareCharacterRoute(world,player,"stairs_up",true,"NW_CITY_TO_FOREST_STAIRS01"))return;
+    const auto& stairs=bench.characterRoute;
+    auto direction=stairs.goal-stairs.start;direction.y=0;
+    if(direction.length()<1) {monsterCharacterError("known stairs lack a forward direction");return;}
+    direction=Vec3::normalize(direction);
+    auto floor=[&](const Vec3& at,Vec3& result) {
+      const auto hit=world.physic()->landRay(at+Vec3(0,500,0),1000);
+      if(!hit.hasCol || std::abs(hit.v.y-at.y)>180)return false;
+      result=hit.v;return true;
+      };
+    Vec3 escape;
+    if(!floor(stairs.start-direction*150.f,route.start) || !floor(stairs.goal,route.goal) ||
+       !floor(stairs.goal+direction*150.f,escape)) {
+      monsterCharacterError("known stairs lack supported chase and hero escape endpoints");return;
+      }
+    waypoint=stairs.waypoint;route.chase=true;route.heroRun=true;
+    route.heroDestination=WayPoint(escape,"FP_MONSTER_VIDEO_HERO_ESCAPE");route.heroDestination.groundPos=escape;
+    event("monster_character_surface","\"route\":\"wolf_terrain\",\"waypoint\":"+jsonStr(waypoint)+
+      ",\"known_stairs\":true,\"hero_escape_cm\":"+ragdollVector(escape));
+    } else if(name=="wolf_stairs") {
+    route.npc->setCharacterVirtualDiagnosticsEnabled(true);
+    if(!monsterCharacterStairs(world,*route.npc,player,route.start,route.goal,waypoint)) {
+      monsterCharacterError("wolf stairs lack a supported native chase continuation");return;
+      }
+    route.chase=true;
+    } else if(name=="wolf_slope") {
+    if(!monsterCharacterSlope(world,route.start,route.goal,waypoint)) {monsterCharacterError("wolf slope lacks a supported stock lane");return;}
+    route.chase=true;
+    } else if(name=="troll_barrel") {
+    if(!monsterCharacterCourtyard(world,player,*route.npc,route.start,route.goal,waypoint)) {monsterCharacterError("troll lacks a body-size outdoor courtyard lane");return;}
+    } else if(name=="wolf_water") {
+    // Read the wolf's actual guild instead of assuming human swimming depth.
+    const float chest=float(world.script().guildVal().water_depth_chest[route.npc->guild()]);
+    const bool canSwim=route.npc->hasSwimAnimations();
+    if(!canSwim || !monsterCharacterWater(world,chest,route.start,route.goal,waypoint)) {
+      monsterCharacterError("wolf water requires a continuous walkable stock bank and native swim animation");return;
+      }
+    } else {monsterCharacterError("unknown monster route: "+name);return;}
+  characterFreezeNear(world,player,route.start,route.goal);
+  if(route.chase) {
+    if(name=="wolf_slope") {
+      Vec3 hero;
+      if(!monsterCharacterChaseGoal(world,*route.npc,player,route.start,route.goal,hero)) {
+        monsterCharacterError("wolf slope has no supported hero destination beyond its obstacle");return;
+        }
+      route.goal=hero;
+      }
+    player.stopWalking();player.clearAiQueue();player.setPosition(route.goal);player.updateTransform();
+    } else npcCharacterPlaceHero(world,player,route.start,route.goal);
+  if(name=="troll_barrel") {
+    Vec3 hero;
+    if(!characterFloor(world,Vec3(9127.44434f,128.25412f,-745.565796f),hero)) {monsterCharacterError("courtyard hero has no floor");return;}
+    player.setPosition(hero);player.updateTransform();
+    }
+  route.npc->setPosition(route.start);route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();bench.subject=route.npc;
+  bench.monsterCharacterHeroStart=player.position();
+  if(route.chase)route.tolerance=route.npc->bodyObservationTarget(player).attackRangeCm+30.f;
+  route.destination=WayPoint(route.goal,"FP_MONSTER_CHARACTER_GOAL");route.destination.groundPos=route.goal;
+  if(name=="troll_barrel") {
+    // Reuse the stock barrel mesh and production dynamic-vob constructor.
+    const std::string visual="NW_HARBOUR_BARREL_01.3DS";const auto* mesh=Resources::loadMesh(visual);
+    const auto* rule=MovableVobs::classifyVisual(visual);
+    if(!mesh || !rule) {monsterCharacterError("stock barrel mesh/class unavailable");return;}
+    const auto center=route.start+(route.goal-route.start)*.35f;const auto* bounds=mesh->bbox();
+    auto matrix=Matrix4x4::mkIdentity();matrix.translate(center.x-(bounds[0].x+bounds[1].x)*.5f,
+      center.y-bounds[0].y+.2f,center.z-(bounds[0].z+bounds[1].z)*.5f);
+    zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+    data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
+    data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+    const auto before=world.physic()->movableVobSnapshot();
+    auto fixture=std::make_unique<Bench::MovableFixture>();fixture->visual.setVisual(data,world,false,false);fixture->visual.setObjMatrix(matrix);
+    fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,rule->massMultiplier,rule->blocksWalking,rule->className,true);
+    if(fixture->body.isEmpty()) {monsterCharacterError("stock barrel native body unavailable");return;}
+    fixture->body.setTransformCallback([view=&fixture->visual](const Matrix4x4& m){view->setObjMatrix(m);});
+    fixture->visual.setupFracture(world,fixture->body);
+    for(const auto& body:world.physic()->movableVobSnapshot())
+      if(std::none_of(before.begin(),before.end(),[&](const auto& old){return old.id==body.id;})) {bench.characterPropId=body.id;break;}
+    if(!bench.characterPropId) {monsterCharacterError("stock barrel snapshot unavailable");return;}
+    bench.characterProp=std::move(fixture);bench.characterPropInitial=movablePosition(matrix);bench.characterPropTravel=0;
+    auto& barrel=bench.monsterCharacterBarrel;barrel.role="barrel";barrel.id=bench.characterPropId;
+    barrel.start=bench.characterPropInitial;barrel.lastIntact=barrel.start;
+    event("monster_character_barrel","\"mass_kg\":"+ragdollNumber(bench.characterProp->body.mass())+
+      ",\"position_cm\":"+ragdollVector(bench.characterPropInitial)+",\"blocks_walking\":"+(rule->blocksWalking?"true":"false"));
+    if(!monsterCharacterProp(world,"crate",route.start+(route.goal-route.start)*.68f))return;
+    }
+  event("monster_character_route_setup","\"route\":"+jsonStr(name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
+    ",\"waypoint\":"+jsonStr(waypoint)+",\"start_cm\":"+ragdollVector(route.start)+",\"goal_cm\":"+ragdollVector(route.goal)+
+    ",\"hero_cm\":"+ragdollVector(player.position())+",\"arrival_radius_cm\":"+ragdollNumber(route.tolerance)+
+    ",\"native_action\":"+jsonStr(route.chase?"AI_GoToNpc":"AI_GoToPoint"));
+  }
+
+void monsterCharacterBegin(World& world) {
+  auto& route=bench.monsterCharacterRoute;
+  if(!route.npc) {monsterCharacterError("monster begin requires fixture actor");return;}
+  if(!bench.monsterCharacterCrowd)route.npc->setCharacterVirtualDiagnosticsEnabled(true);
+  route.active=true;route.reached=false;route.stalled=false;route.falling=false;route.wasAirborne=false;route.began=world.tickCount();
+  route.arrived=0;route.progressTime=route.began;route.stalls=0;route.falls=0;route.cvFrames=0;route.swimFrames=0;
+  route.maxPhysicalJump=0;route.maxVisualJump=0;route.lastPosition=route.npc->position();
+  route.lastVisual=route.npc->characterVisualPosition();route.progressPosition=route.lastPosition;route.lastSupported=route.lastPosition;
+  for(auto& actor:bench.monsterCharacterExtras)if(actor.npc) {
+    if(!bench.monsterCharacterCrowd)actor.npc->setCharacterVirtualDiagnosticsEnabled(true);
+    actor.npc->clearAiQueue();actor.npc->clearGoTo();actor.npc->stopWalking();
+    actor.start=actor.npc->position();actor.lastPosition=actor.start;actor.lastVisual=actor.npc->characterVisualPosition();
+    actor.progressPosition=actor.start;actor.lastSupported=actor.start;actor.progressTime=world.tickCount();
+    actor.next=0;actor.queued=false;actor.stalled=false;actor.falling=false;actor.wasAirborne=false;
+    actor.arrived=0;actor.arrivals=0;actor.stalls=0;actor.falls=0;actor.cvFrames=0;actor.maxVisualJump=0;actor.maxPhysicalJump=0;actor.travel=0;
+    }
+  if(route.heroRun)if(auto* hero=Gothic::inst().player()) {
+    hero->clearAiQueue();hero->clearGoTo();hero->setWalkMode(WalkBit::WM_Run);
+    hero->aiPush(AiQueue::aiGoToPoint(route.heroDestination));
+    }
+  if(!route.attack && !bench.monsterCharacterPack) {
+    route.npc->clearAiQueue();route.npc->stopWalking();
+    if(route.isolatedLedge) {
+      if(!route.npc->goToPosition(route.goal)) {monsterCharacterError("isolated ledge native running goal was rejected");return;}
+      }
+    else if(route.chase)route.npc->aiPush(AiQueue::aiGoToNpc(Gothic::inst().player()));
+    else route.npc->aiPush(AiQueue::aiGoToPoint(route.destination));
+    }
+  event("monster_character_route_begin","\"route\":"+jsonStr(route.name)+",\"cv_enabled\":"+
+    (Gothic::settingsGetI("GAME","monster_character_virtual")?"true":"false")+",\"start_cm\":"+ragdollVector(route.lastPosition));
+  }
+
+void monsterCharacterEnd(World& world) {
+  auto& route=bench.monsterCharacterRoute;
+  if(!route.active || !route.npc) {monsterCharacterError("monster end without active fixture");return;}
+  monsterCharacterSampleProps(world);
+  route.active=false;
+  event("monster_character_route_end","\"route\":"+jsonStr(route.name)+",\"success\":"+(route.reached?"true":"false")+
+    ",\"elapsed_ms\":"+std::to_string((route.reached?route.arrived:world.tickCount())-route.began)+
+    ",\"window_ms\":"+std::to_string(world.tickCount()-route.began)+",\"stalls_over_1s\":"+std::to_string(route.stalls)+
+    ",\"max_physical_jump_cm\":"+ragdollNumber(route.maxPhysicalJump)+",\"max_visual_jump_cm\":"+ragdollNumber(route.maxVisualJump)+
+    ",\"falls\":"+std::to_string(route.falls)+",\"cv_frames\":"+std::to_string(route.cvFrames)+",\"swim_frames\":"+std::to_string(route.swimFrames)+
+    ",\"saw_swim\":"+(route.sawSwim?"true":"false")+",\"left_water\":"+(route.leftWater?"true":"false")+
+    ",\"start_cm\":"+ragdollVector(route.start)+",\"goal_cm\":"+ragdollVector(route.goal)+",\"end_cm\":"+ragdollVector(route.npc->position())+
+    ",\"attack_distance_cm\":"+ragdollNumber(route.attackDistance)+",\"attack_rise_cm\":"+ragdollNumber(route.attackRise)+
+    ",\"attack_duration_ms\":"+(route.attackEnded?std::to_string(route.attackEnded-route.began):"null")+
+    ",\"charge_collision_callbacks\":"+std::to_string(route.callbacks)+",\"barrel_displacement_cm\":"+ragdollNumber(bench.characterPropTravel)+
+    ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","monster_character_virtual")?"true":"false"));
+  for(auto& actor:bench.monsterCharacterExtras)if(actor.npc) {
+    event("monster_character_actor_end","\"route\":"+jsonStr(route.name)+",\"role\":"+jsonStr(actor.role)+
+      ",\"npc_id\":"+std::to_string(world.npcId(actor.npc))+",\"instance\":"+jsonStr(symName(world,actor.npc))+
+      ",\"arrivals\":"+std::to_string(actor.arrivals)+",\"elapsed_ms\":"+(actor.arrived?std::to_string(actor.arrived-route.began):"null")+
+      ",\"stalls_over_1s\":"+std::to_string(actor.stalls)+",\"max_visual_jump_cm\":"+ragdollNumber(actor.maxVisualJump)+
+      ",\"max_physical_jump_cm\":"+ragdollNumber(actor.maxPhysicalJump)+",\"falls\":"+std::to_string(actor.falls)+
+      ",\"travel_cm\":"+ragdollNumber(actor.travel)+",\"cv_frames\":"+std::to_string(actor.cvFrames)+
+      ",\"start_cm\":"+ragdollVector(actor.start)+",\"end_cm\":"+ragdollVector(actor.npc->position()));
+    actor.npc->clearAiQueue();actor.npc->clearGoTo();actor.npc->stopWalking();
+    }
+  for(const auto& prop:bench.monsterCharacterProps)monsterCharacterPropEnd(prop,route.name);
+  if(bench.monsterCharacterBarrel.id)monsterCharacterPropEnd(bench.monsterCharacterBarrel,route.name);
+  route.npc->clearAiQueue();route.npc->clearGoTo();route.npc->stopWalking();
+  }
+
+// The attack needs three supported roots and one short native attack lane,
+// rather than the twenty-place arena used by the performance fixture.
+bool chooseMonsterAttackSite(World& world,const Npc&,const Npc&,bool withFly,Vec3& start,Vec3& goal,Vec3& flyAt) {
+  // Both native attacks use the verified open lunge lane. The old short valley
+  // lane can stop the fieldraider on terrain before its target collision.
+  if(!characterFloor(world,Vec3(38674.5156f,4308.43604f,11976.749f),start) ||
+     !characterFloor(world,start+Vec3(withFly?350.f:1200.f,0,0),goal) ||
+     (withFly && !characterFloor(world,start+Vec3(150,0,-140),flyAt)))return false;
+  event("monster_character_attack_site","\"site\":"+jsonStr(withFly?"verified_fieldraider_charge":"verified_wolf_lunge")+
+    ",\"known_site\":true");
+  return true;
+  }
+
+void monsterCharacterAttack(World& world,Npc& player,const std::string& species) {
+  monsterCharacterClear(world);
+  if(species!="wolf" && species!="fieldraider") {monsterCharacterError("unknown monster attack species");return;}
+  auto& route=bench.monsterCharacterRoute;route.name=species+"_attack";route.attack=true;route.animation="T_FISTATTACKMOVE";
+  route.npc=monsterCharacterActor(world,species=="wolf"?"Wolf":"Giant_Bug",player.position());if(!route.npc)return;
+  Vec3 flyAt;
+  if(!chooseMonsterAttackSite(world,*route.npc,player,species=="fieldraider",route.start,route.goal,flyAt)) {
+    monsterCharacterError("monster attack requires supported roots and a clear native attack lane on outdoor city stone near the market");return;
+    }
+  monsterCharacterRemoveAmbient(world,player,route.start,3000,"attack");
+  characterFreezeNear(world,player,route.start,route.goal);
+  player.stopWalking();player.clearAiQueue();player.setPosition(route.goal);player.updateTransform();
+  route.npc->setPosition(route.start);route.npc->setDirection(Vec3(1,0,0));route.npc->updateTransform();route.npc->setTarget(&player);route.npc->drawWeaponFist();
+  bench.monsterCharacterHeroStart=player.position();
+  if(species=="fieldraider") {
+    auto* fly=monsterCharacterActor(world,"Bloodfly",flyAt);if(!fly)return;
+    fly->setDirection(Vec3(1,0,0));fly->updateTransform();monsterCharacterExtra(world,fly,"bloodfly");
+    const auto& guild=world.script().guildVal();const auto g=fly->guild();
+    if(guild.water_depth_knee[g]!=999999 || guild.water_depth_chest[g]!=999999) {
+      monsterCharacterError("bloodfly control lacks the production flying exclusion marker");return;
+      }
+    event("monster_character_bloodfly_setup","\"npc_id\":"+std::to_string(world.npcId(fly))+
+      ",\"root_cm\":"+ragdollVector(flyAt)+",\"expected_cv_active\":false");
+    }
+  bench.subject=route.npc;
+  event("monster_character_attack_setup","\"route\":"+jsonStr(route.name)+",\"animation\":"+jsonStr(route.animation)+
+    ",\"target_cm\":"+ragdollVector(player.position())+",\"collision_required\":"+(species=="fieldraider"?"true":"false"));
+  }
+
+void monsterCharacterSnapshot(World& world,Npc& player,std::string_view label) {
+  std::string actors="[";
+  for(uint32_t id=0;id<world.npcCount();++id)if(const auto* npc=world.npcById(id);npc && npc!=&player && !npc->isHuman() &&
+      !npc->isDown() && (npc->position()-player.position()).length()<=2300.f) {
+    if(actors.size()>1)actors+=',';
+    actors+="{\"npc_id\":"+std::to_string(id)+",\"instance\":"+jsonStr(symName(world,npc))+
+      ",\"root_cm\":"+ragdollVector(npc->position())+",\"cv_active\":"+(npc->characterVirtualActive()?"true":"false")+"}";
+    }
+  event("monster_character_snapshot","\"label\":"+jsonStr(label)+",\"world\":"+jsonStr(world.name())+
+    ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","monster_character_virtual")?"true":"false")+",\"actors\":"+actors+"]");
+  }
+
+void monsterCharacterSave(World& world,Npc& player) {
+  auto& route=bench.monsterCharacterRoute;
+  if(!route.npc || !route.npc->characterVirtualActive()) {monsterCharacterError("monster save requires an active ON controller");return;}
+  try {
+    route.npc->clearAiQueue();route.npc->clearGoTo();route.npc->stopWalking();
+    route.savedPosition=route.npc->position();monsterCharacterSnapshot(world,player,"saved");
+    std::vector<uint8_t> session;
+    {MemWriter writer(session);Serialize out(writer);Pixmap preview(1,1,TextureFormat::RGBA8);std::memset(preview.data(),0,4);
+    Gothic::inst().gameSession()->save(out,"monster character",preview);}
+    std::ofstream file(outDir+"/session-monster.sav",std::ios::binary);
+    file.write(reinterpret_cast<const char*>(session.data()),std::streamsize(session.size()));
+    if(!file)throw std::runtime_error("cannot write monster session archive");
+    std::vector<uint8_t> bytes;const auto id=world.npcId(route.npc);
+    {MemWriter writer(bytes);Serialize out(writer);out.setContext(&world);out.setVersion(Serialize::Current);route.npc->save(out,id,"/npc/");}
+    {MemReader reader(bytes);Serialize in(reader);in.setContext(&world);in.setVersion(Serialize::Current);route.npc->load(in,id,"/npc/");route.npc->postValidate();}
+    route.npc->setExternalControl(true);route.npc->updateAnimation(0,true);
+    const float delta=(route.npc->position()-route.savedPosition).length();
+    event("monster_character_archive","\"operation\":\"native_npc_restore\",\"position_delta_cm\":"+ragdollNumber(delta)+
+      ",\"limit_cm\":0.5,\"session\":\"session-monster.sav\",\"session_bytes\":"+std::to_string(session.size())+
+      ",\"npc_archive_bytes\":"+std::to_string(bytes.size()));
+    if(delta>.5f) {monsterCharacterError("monster NPC archive moved more than 0.5 cm");return;}
+    route.restoreSteps=2;
+    } catch(const std::exception& e) {monsterCharacterError(e.what());}
+  }
+
+void monsterCharacterFields(World& world,uint64_t dt) {
+  auto& route=bench.monsterCharacterRoute;
+  if(route.active || bench.monsterCharacterCrowd)for(auto& actor:bench.monsterCharacterExtras)if(actor.npc) {
+    auto& npc=*actor.npc;const auto at=npc.position(),visual=npc.characterVisualPosition();
+    if(!bench.monsterCharacterCrowd)bench.monsterCharacterFrames.push_back({route.name+"_"+actor.role,npc.animNames(),world.tickCount(),dt,
+      world.npcId(&npc),at,visual,bool(Gothic::settingsGetI("GAME","monster_character_virtual")),npc.characterVirtualActive(),
+      npc.navigationGoal().active,npc.isInAir(),npc.isFalling(),npc.isSwim(),npc.rotation(),characterMoveFrame(npc)});
+    actor.maxPhysicalJump=std::max(actor.maxPhysicalJump,std::abs(at.y-actor.lastPosition.y));
+    actor.maxVisualJump=std::max(actor.maxVisualJump,std::abs(visual.y-actor.lastVisual.y));
+    actor.travel+=std::hypot(at.x-actor.lastPosition.x,at.z-actor.lastPosition.z);
+    actor.cvFrames+=npc.characterVirtualActive();actor.lastPosition=at;actor.lastVisual=visual;
+    const bool air=npc.isInAir() || npc.isFalling();
+    if(!npc.isSwim() && (air || actor.wasAirborne) && actor.lastSupported.y-at.y>100 && !actor.falling) {
+      ++actor.falls;actor.falling=true;
+      }
+    if(!air) {actor.falling=false;if(!npc.isSwim())actor.lastSupported=at;}
+    actor.wasAirborne=air;
+    if(npc.navigationGoal().active) {
+      if(std::hypot(at.x-actor.progressPosition.x,at.z-actor.progressPosition.z)>=5) {
+        actor.progressPosition=at;actor.progressTime=world.tickCount();actor.stalled=false;
+        }
+      if(world.tickCount()-actor.progressTime>1000 && !actor.stalled) {++actor.stalls;actor.stalled=true;}
+      }
+    if(!actor.points.empty() && actor.next<actor.points.size()) {
+      const auto& target=actor.points[actor.next];
+      if(actor.queued && (at-target.pos).length()<90 && npc.isAiQueueEmpty()) {
+        ++actor.arrivals;actor.arrived=world.tickCount();actor.queued=false;++actor.next;
+        if(actor.loop)actor.next%=actor.points.size();
+        }
+      if(!actor.queued && actor.next<actor.points.size()) {
+        npc.aiPush(AiQueue::aiGoToPoint(actor.points[actor.next]));actor.queued=true;
+        actor.progressPosition=at;actor.progressTime=world.tickCount();actor.stalled=false;
+        }
+      }
+    }
+  if(bench.monsterCharacterMeasuring
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+     && !AppCadence::done()
+#endif
+     ) {
+    unsigned nearby=0,virtualNearby=0,moving=0;float maximumDistance=0;
+    const auto* player=Gothic::inst().player();
+    for(const auto& actor:bench.monsterCharacterExtras)if(actor.npc && player) {
+      const float distance=(actor.npc->position()-player->position()).length();
+      nearby+=distance<2000;virtualNearby+=distance<2000 && actor.npc->characterVirtualActive();
+      moving+=actor.npc->navigationGoal().active;maximumDistance=std::max(maximumDistance,distance);
+      }
+    bench.monsterCharacterMinNearby=std::min(bench.monsterCharacterMinNearby,nearby);
+    bench.monsterCharacterMaxNearby=std::max(bench.monsterCharacterMaxNearby,nearby);
+    bench.monsterCharacterMaximumDistance=std::max(bench.monsterCharacterMaximumDistance,maximumDistance);
+    const auto now=std::chrono::steady_clock::now();
+    const float wall=bench.monsterCharacterHasWall?std::chrono::duration<float,std::milli>(now-bench.monsterCharacterLastWall).count():0;
+    bench.monsterCharacterLastWall=now;bench.monsterCharacterHasWall=true;bool normal=false;
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+    normal=AppCadence::normalClock();
+#endif
+    bench.monsterCharacterPerformance.push_back({world.tickCount(),dt,world.physic()->physicsStats().stepMilliseconds,wall,
+      maximumDistance,nearby,virtualNearby,moving,bench.rec && bench.recVideo,normal});
+    }
+  if(route.active)monsterCharacterSampleProps(world);
+  auto* npc=route.npc;if(!npc)return;
+  if(route.restoreSteps) {
+    const float delta=(npc->position()-route.savedPosition).length();
+    event("monster_character_archive","\"operation\":\"native_restore_step\",\"step\":"+std::to_string(3-route.restoreSteps)+
+      ",\"position_delta_cm\":"+ragdollNumber(delta)+",\"limit_cm\":0.5,\"cv_active\":"+(npc->characterVirtualActive()?"true":"false"));
+    --route.restoreSteps;if(delta>.5f)monsterCharacterError("monster native post-load step moved more than 0.5 cm");
+    }
+  if(!route.active)return;
+  const auto at=npc->position(),visual=npc->characterVisualPosition();const auto animation=npc->animNames();
+  bench.monsterCharacterFrames.push_back({route.name,animation,world.tickCount(),dt,world.npcId(npc),at,visual,
+    bool(Gothic::settingsGetI("GAME","monster_character_virtual")),npc->characterVirtualActive(),npc->navigationGoal().active,
+    npc->isInAir(),npc->isFalling(),npc->isSwim(),npc->rotation(),characterMoveFrame(*npc)});
+  if(route.name=="wolf_stairs") {
+    CharacterVirtualDiagnostics d;
+    const bool valid=npc->characterVirtualDiagnostics(d);
+    event("monster_character_stair_step","\"route\":"+jsonStr(route.name)+",\"tick\":"+std::to_string(world.tickCount())+
+      ",\"dt_ms\":"+std::to_string(dt)+",\"body_state\":"+std::to_string(unsigned(npc->bodyStateMasked()))+
+      ",\"attack_state\":"+(npc->bodyStateMasked()==BS_HIT?"true":"false")+
+      ",\"root_cm\":"+ragdollVector(at)+",\"visual_root_cm\":"+ragdollVector(visual)+
+      ",\"physical_dy_cm\":"+ragdollNumber(at.y-route.lastPosition.y)+
+      ",\"visual_dy_cm\":"+ragdollNumber(visual.y-route.lastVisual.y)+
+      ",\"visual_offset_cm\":"+ragdollNumber(visual.y-at.y)+",\"animation\":"+jsonStr(animation)+
+      ",\"in_air\":"+(npc->isInAir()?"true":"false")+",\"diagnostics_valid\":"+(valid?"true":"false")+
+      ",\"requested_cm\":"+ragdollVector(d.requested)+",\"stair_height_cm\":"+ragdollNumber(d.stairHeight)+
+      ",\"cv_before_cm\":"+ragdollVector(d.before.position)+
+      ",\"cv_extended_cm\":"+ragdollVector(d.afterExtendedUpdate.position)+
+      ",\"cv_stairs_cm\":"+ragdollVector(d.afterStairs.position)+
+      ",\"stair_attempted\":"+(d.stairAttempted?"true":"false")+
+      ",\"stair_succeeded\":"+(d.stairSucceeded?"true":"false")+",\"stair_reason\":"+jsonStr(d.stairProbe.reason));
+    }
+  route.cvFrames+=npc->characterVirtualActive();route.swimFrames+=npc->isSwim();route.sawSwim|=npc->isSwim();
+  route.maxPhysicalJump=std::max(route.maxPhysicalJump,std::abs(at.y-route.lastPosition.y));
+  route.maxVisualJump=std::max(route.maxVisualJump,std::abs(visual.y-route.lastVisual.y));
+  route.lastPosition=at;route.lastVisual=visual;
+  const bool airborne=npc->isInAir() || npc->isFalling();
+  // Short drops stay InAir; the Falling state is reserved for larger falls.
+  // Test the landing before replacing its previous support height as well.
+  if(!route.attack && !npc->isSwim() && (airborne || route.wasAirborne) &&
+     route.lastSupported.y-at.y>100.f && !route.falling) {
+    ++route.falls;route.falling=true;
+    }
+  if(!airborne) {
+    route.falling=false;
+    if(!npc->isSwim())route.lastSupported=at;
+    }
+  route.wasAirborne=airborne;
+  bool arrived=false;
+  if(route.attack) {
+    if(!route.attackEnded) {
+      const auto travel=at-route.attackStart;
+      route.attackDistance=std::max(route.attackDistance,std::hypot(travel.x,travel.z));route.attackRise=std::max(route.attackRise,travel.y);
+      if(animation.find(route.animation)==std::string::npos)route.attackEnded=world.tickCount();
+      }
+    arrived=route.attackEnded && (route.name!="fieldraider_attack" || route.callbacks>0);
+    } else {
+    const auto* hero=Gothic::inst().player();
+    const auto delta=at-(route.heroRun && hero?hero->position():route.goal);
+    arrived=std::hypot(delta.x,delta.z)<=route.tolerance && std::abs(delta.y)<80;
+    if(route.isolatedLedge)arrived&=std::abs(delta.y)<5.f && !npc->isInAir() && !npc->isFalling();
+    if(route.name=="wolf_water")arrived&=npc->isSwim();
+    if(route.name=="wolf_water_exit") {route.leftWater=route.sawSwim && !npc->isSwim() && !npc->isInAir();arrived&=route.leftWater;}
+    }
+  if(bench.monsterCharacterPack)arrived=std::all_of(bench.monsterCharacterExtras.begin(),bench.monsterCharacterExtras.end(),
+    [](const auto& actor){return actor.arrivals>=3;});
+  if(arrived && !route.reached) {
+    route.reached=true;route.arrived=world.tickCount();
+    if(route.name=="wolf_terrain" || route.name=="wolf_stairs" || route.isolatedLedge) {
+      if(route.heroRun)if(auto* hero=Gothic::inst().player()) {hero->clearAiQueue();hero->clearGoTo();hero->stopWalking();}
+      // The test ends the authored chase after a measured catch. Keep native
+      // idle physics running for the rest of the movie without a second goal.
+      npc->clearAiQueue();npc->clearGoTo();npc->stopWalking();
+      event("monster_character_native_goal_stop","\"route\":"+jsonStr(route.name)+",\"elapsed_ms\":"+
+        std::to_string(route.arrived-route.began)+",\"root_cm\":"+ragdollVector(at)+",\"native_idle\":true");
+      }
+    }
+  if(!route.attack && !route.reached && (npc->navigationGoal().active || route.isolatedLedge)) {
+    if(std::hypot(at.x-route.progressPosition.x,at.z-route.progressPosition.z)>=5.f) {
+      route.progressPosition=at;route.progressTime=world.tickCount();route.stalled=false;
+      }
+    if(world.tickCount()-route.progressTime>1000 && !route.stalled) {++route.stalls;route.stalled=true;}
+    }
+  }
+
 void npcCharacterPrepare(World& world,Npc& player,const std::string& name) {
   auto& route=bench.npcCharacterRoute;
   if(route.npc) {world.removeNpc(*route.npc);route.npc=nullptr;}
@@ -7192,8 +9409,9 @@ void npcCharacterBegin(World& world,std::string_view phase={}) {
   route.active=true;route.reached=false;route.arrived=0;route.began=world.tickCount();route.progressTime=route.began;
   route.lastPosition=route.npc->position();route.lastVisual=route.npc->characterVisualPosition();route.progressPosition=route.lastPosition;
   route.maxVisualJump=0;route.maxPhysicalJump=0;route.maxAboveFloor=0;route.stalls=0;route.stalled=false;
-  route.supportHistory.clear();route.npc->setCharacterVirtualDiagnosticsEnabled(npcCharacterTrace ||
-    std::any_of(bench.npcCharacterTraceActors.begin(),bench.npcCharacterTraceActors.end(),[&](const auto& actor){return actor.npc==route.npc;}));
+  // Route evidence includes steep-contact sliding without changing the native
+  // human controller. Diagnostics remain transient and owned by this fixture.
+  route.supportHistory.clear();route.npc->setCharacterVirtualDiagnosticsEnabled(true);
   bench.npcCharacterHasWall=false;
   event("npc_character_route_begin","\"route\":"+jsonStr(route.name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
     ",\"start_cm\":"+ragdollVector(route.npc->position())+",\"goal_cm\":"+ragdollVector(route.goal)+
@@ -7437,7 +9655,8 @@ void npcCharacterFields(World& world,Npc& player,uint64_t dt) {
     npc?npc->position():player.position(),npc?npc->characterVisualPosition():player.characterVisualPosition(),
     bool(Gothic::settingsGetI("GAME","npc_character_virtual")),npc && npc->characterVirtualActive(),
     npc && npc->navigationGoal().active,npc && npc->isInAir(),npc && npc->interactive(),bench.rec && bench.recVideo,normal,
-    world.physic()->physicsStats().stepMilliseconds,wall,nearby,virtualNearby,movingNearby,movingVirtualNearby});
+    world.physic()->physicsStats().stepMilliseconds,wall,nearby,virtualNearby,movingNearby,movingVirtualNearby,
+    npc?characterMoveFrame(*npc):Bench::CharacterMoveFrame()});
   if(!route.active || !npc)return;
   const auto position=npc->position(),visual=npc->characterVisualPosition();
   npcCharacterSupportTrace(world,*npc,position.y-route.lastPosition.y,visual.y-route.lastVisual.y);
@@ -7613,6 +9832,150 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.navigationOnly = true;
     if(a.size()!=2 || a[1]!="wait") NavBench::command(a,w,pl,outDir);
     }
+  else if(c=="monstercharacter" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+    Gothic::settingsSetI("GAME","monster_character_virtual",a[1]=="on");
+    event("monster_character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
+    }
+  else if(c=="monstercharacter" && a.size()==3 && a[1]=="route")monsterCharacterPrepare(w,pl,a[2]);
+  else if(c=="monstercharacter" && (a.size()==4 || a.size()==5) && a[1]=="ledge")
+    monsterCharacterLedge(w,pl,a[2],num(a,3,NAN),a.size()==5?num(a,4,NAN):0.f);
+  else if(c=="monstercharacter" && a.size()>=2 && a[1]=="camera") {
+    if((a.size()!=2 && a.size()!=4) || (a.size()==4 && (!isNumber(a[2]) || !isNumber(a[3])))) {
+      monsterCharacterError("monster camera expects no arguments or yaw_degrees elevation_fraction");return;
+      }
+    monsterCharacterCamera(w,pl,a.size()==4,a.size()==4?num(a,2,NAN):0,a.size()==4?num(a,3,NAN):.42f);
+    }
+  else if(c=="monstercharacter" && a.size()==5 && a[1]=="follow") {
+    auto& route=bench.monsterCharacterRoute;
+    auto* watched=route.npc;
+    if(bench.monsterCharacterPack && bench.monsterCharacterExtras.size()>=2)watched=bench.monsterCharacterExtras[1].npc;
+    if(!watched) {monsterCharacterError("follow requires prepared monster");return;}
+    exec("watch id:"+std::to_string(w.npcId(watched)),w,pl,ctrl);
+    exec("cam follow "+a[2]+" "+a[3]+" "+a[4],w,pl,ctrl);
+    exec("cam look "+ragdollNumber(std::min(130.f,std::max(45.f,(watched->bounds().bbox[1].y-watched->bounds().bbox[0].y)*.45f))),w,pl,ctrl);
+    exec(route.name=="troll_barrel"?"view clean 500":"view clean 300",w,pl,ctrl);
+    updateCamera(w,*watched);
+    std::string actors="[{\"npc_id\":"+std::to_string(w.npcId(route.npc))+",\"role\":\"primary\",\"start_cm\":"+ragdollVector(route.start)+"}";
+    for(const auto& actor:bench.monsterCharacterExtras)if(actor.npc && actor.npc!=route.npc)
+      actors+=",{\"npc_id\":"+std::to_string(w.npcId(actor.npc))+",\"role\":"+jsonStr(actor.role)+",\"start_cm\":"+ragdollVector(actor.start)+"}";
+    event("monster_character_camera","\"route\":"+jsonStr(route.name)+",\"mode\":\"follow\",\"fixed\":false,\"watch_npc_id\":"+std::to_string(w.npcId(watched))+
+      ",\"distance_cm\":"+ragdollNumber(bench.camDist)+",\"height_cm\":"+ragdollNumber(bench.camHeight)+",\"angle_deg\":"+ragdollNumber(bench.camAngle)+
+      ",\"look_height_cm\":"+ragdollNumber(bench.camLook)+",\"seed\":"+std::to_string(bench.monsterCharacterSeed)+",\"hour\":"+std::to_string(w.time().hour())+
+      ",\"minute\":"+std::to_string(w.time().minute())+",\"hero_cm\":"+ragdollVector(bench.monsterCharacterHeroStart)+",\"actors\":"+actors+"]");
+    monsterCharacterRenderProof(w,*watched,"followed");
+    }
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="pack")monsterCharacterPack(w,pl);
+  else if(c=="monstercharacter" && a.size()==2 && (a[1]=="cliff" || a[1]=="cliff46"))monsterCharacterCliff(w,pl,a[1]=="cliff46");
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="crowd")monsterCharacterCrowd(w,pl);
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  else if(c=="monstercharacter" && a.size()==3 && a[1]=="measure") {
+    if(!bench.monsterCharacterCrowd || !AppCadence::normalClock() || !AppCadence::arm(a[2]=="on")) {
+      monsterCharacterError("monster normal cadence arm requires the twenty-monster fixture");return;
+      }
+    bench.monsterCharacterMeasuring=true;bench.monsterCharacterHasWall=false;bench.monsterCharacterPerformance.clear();
+    bench.monsterCharacterMinNearby=20;bench.monsterCharacterMaxNearby=0;bench.monsterCharacterMaximumDistance=0;
+    AppCadence::counts(true,uint32_t(bench.monsterCharacterExtras.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    event("monster_character_measure_begin","\"cv_enabled\":"+std::string(Gothic::settingsGetI("GAME","monster_character_virtual")?"true":"false"));
+    }
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="report") {
+    bench.monsterCharacterMeasuring=false;
+    AppCadence::counts(false,uint32_t(bench.monsterCharacterExtras.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    event("monster_character_measure_end","\"frames\":"+std::to_string(bench.monsterCharacterPerformance.size())+
+      ",\"fixture_actors\":"+std::to_string(bench.monsterCharacterExtras.size())+",\"fixture_min_nearby\":"+std::to_string(bench.monsterCharacterMinNearby)+
+      ",\"fixture_max_nearby\":"+std::to_string(bench.monsterCharacterMaxNearby)+",\"fixture_max_distance_cm\":"+ragdollNumber(bench.monsterCharacterMaximumDistance));
+    }
+#endif
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="begin")monsterCharacterBegin(w);
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="end")monsterCharacterEnd(w);
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="reverse") {
+    auto& route=bench.monsterCharacterRoute;
+    if(!route.npc || route.name!="wolf_water" || !route.sawSwim) {monsterCharacterError("water exit requires the same wolf after actual swimming entry");return;}
+    route.goal=route.start;route.start=route.npc->position();route.name="wolf_water_exit";
+    route.destination=WayPoint(route.goal,"FP_MONSTER_CHARACTER_DRY");route.destination.groundPos=route.goal;
+    route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();
+    event("monster_character_water_reverse","\"start_cm\":"+ragdollVector(route.start)+",\"goal_cm\":"+ragdollVector(route.goal));
+    }
+  else if(c=="monstercharacter" && a.size()==3 && a[1]=="attack")monsterCharacterAttack(w,pl,a[2]);
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="stair-attack") {
+    auto& route=bench.monsterCharacterRoute;
+    if(!route.npc || !route.active || route.name!="wolf_stairs") {
+      monsterCharacterError("stair-attack requires the active stair chase");return;
+      }
+    const float pending=route.npc->characterVisualPosition().y-route.npc->position().y;
+    route.npc->clearAiQueue();route.npc->clearGoTo();route.npc->stopWalking();
+    const auto* attack=route.npc->playAnimByName("T_FISTATTACKMOVE",BS_HIT);
+    event("monster_character_stair_attack","\"pending_offset_cm\":"+ragdollNumber(pending)+
+      ",\"accepted\":"+(attack?"true":"false"));
+    if(!attack)monsterCharacterError("stair handoff lacks the wolf lunge animation");
+    }
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="attack-start") {
+    auto& route=bench.monsterCharacterRoute;
+    if(!route.npc || !route.attack) {monsterCharacterError("attack-start requires an authored monster attack fixture");return;}
+    route.npc->clearAiQueue();
+    const Animation::Sequence* sequence=nullptr;
+    if(route.name=="fieldraider_attack") {
+      // Giant_Bug's layer-2 attack does not animate root 0. Prepare the
+      // native S_FISTRUNL layer-1 clip before the ordinary attack entry point;
+      // both translation and collision remain owned by production movement.
+      const auto before=route.npc->animNames();
+      event("monster_character_attack_preparation","\"route\":"+jsonStr(route.name)+",\"before\":"+jsonStr(before)+
+        ",\"root_cm\":"+ragdollVector(route.npc->position())+",\"target_cm\":"+ragdollVector(pl.position())+
+        ",\"target_distance_cm\":"+ragdollNumber((route.npc->position()-pl.position()).length())+
+        ",\"native_stop_cm\":"+ragdollNumber(route.npc->bodyObservationTarget(pl).attackRangeCm));
+      const auto* running=route.npc->playAnimByName("S_FISTRUNL",BS_RUN);
+      event("monster_character_attack_base","\"accepted\":"+std::string(running?"true":"false")+
+        ",\"layers\":"+jsonStr(route.npc->animNames()));
+      if(!running) {monsterCharacterError("fieldraider native running base unavailable");return;}
+      sequence=route.npc->visualSkeleton()->sequence(route.animation);
+      const bool accepted=sequence && route.npc->doAttack(Npc::Anim::Attack,BS_HIT);
+      const auto after=route.npc->animNames();
+      event("monster_character_attack_running_base","\"accepted\":"+std::string(accepted?"true":"false")+
+        ",\"before\":"+jsonStr(before)+",\"after\":"+jsonStr(after)+
+        ",\"target_distance_cm\":"+ragdollNumber((route.npc->position()-pl.position()).length()));
+      if(!accepted || after.find(route.animation)==std::string::npos) {
+        monsterCharacterError("native fieldraider running attack was not accepted");return;
+        }
+      } else {
+      route.npc->clearGoTo();route.npc->stopWalking();
+      sequence=route.npc->playAnimByName(route.animation,BS_HIT);
+      if(!sequence) {monsterCharacterError("monster has no authored "+route.animation);return;}
+      }
+    route.attackStart=route.npc->position();
+    route.attackEnded=0;route.attackDistance=0;route.attackRise=0;route.callbacks=0;
+    monsterCharacterBegin(w);
+    event("monster_character_attack_begin","\"route\":"+jsonStr(route.name)+",\"animation\":"+jsonStr(route.animation)+
+      ",\"authored_duration_ms\":"+ragdollNumber(sequence->totalTime())+",\"root_cm\":"+ragdollVector(route.attackStart));
+    }
+  else if(c=="monstercharacter" && a.size()==3 && a[1]=="distance") {
+    const auto* npc=bench.monsterCharacterRoute.npc;
+    if(!npc) {monsterCharacterError("monster distance requires fixture actor");return;}
+    pl.stopWalking();pl.clearAiQueue();pl.setPosition(npc->centerPosition()+Vec3(num(a,2,400),0,0)-(pl.centerPosition()-pl.position()));pl.updateTransform();
+    event("monster_character_distance","\"distance_cm\":"+ragdollNumber((npc->centerPosition()-pl.centerPosition()).length()));
+    }
+  else if(c=="monstercharacter" && a.size()==4 && a[1]=="expect") {
+    const auto* npc=bench.monsterCharacterRoute.npc;
+    if(!npc) {monsterCharacterError("monster expectation requires fixture actor");return;}
+    const bool actual=npc->characterVirtualActive(),expected=num(a,3,0)!=0;
+    event("monster_character_expect","\"label\":"+jsonStr(a[2])+",\"npc_id\":"+std::to_string(w.npcId(npc))+
+      ",\"instance\":"+jsonStr(symName(w,npc))+",\"expected_cv_active\":"+(expected?"true":"false")+
+      ",\"cv_active\":"+(actual?"true":"false")+",\"passed\":"+(actual==expected?"true":"false")+
+      ",\"distance_cm\":"+ragdollNumber((npc->centerPosition()-pl.centerPosition()).length()));
+    if(actual!=expected)monsterCharacterError("monster CV activity disagrees with "+a[2]);
+    }
+  else if(c=="monstercharacter" && a.size()==3 && a[1]=="flying") {
+    monsterCharacterClear(w);
+    if(!chooseRagdollArena(w,pl)) {monsterCharacterError("flying exclusion requires supported stock ground");return;}
+    auto& route=bench.monsterCharacterRoute;route.name="flying_"+a[2];route.start=bench.ragdollArenaPlaces.front();
+    characterFreezeNear(w,pl,route.start,route.start);npcCharacterPlaceHero(w,pl,route.start,route.start+Vec3(1,0,0));
+    route.npc=monsterCharacterActor(w,a[2],route.start);if(!route.npc)return;bench.subject=route.npc;
+    const auto& guild=w.script().guildVal();const auto g=route.npc->guild();
+    const bool flying=guild.water_depth_knee[g]==999999 && guild.water_depth_chest[g]==999999;
+    event("monster_character_flying_setup","\"instance\":"+jsonStr(a[2])+",\"can_fly_over_water\":"+(flying?"true":"false")+
+      ",\"root_cm\":"+ragdollVector(route.start));
+    if(!flying)monsterCharacterError("flying fixture instance lacks production flying guild marker");
+    }
+  else if(c=="monstercharacter" && a.size()==2 && a[1]=="save")monsterCharacterSave(w,pl);
+  else if(c=="monstercharacter" && a.size()==3 && a[1]=="snapshot")monsterCharacterSnapshot(w,pl,a[2]);
   else if(c=="npccharacter" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","npc_character_virtual",a[1]=="on");
     event("npc_character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
@@ -8062,7 +10425,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       {"arrow_physics",&Gothic::PhysicsFlags::arrowPhysics},
       {"arrow_sticking",&Gothic::PhysicsFlags::arrowSticking},
       {"spell_physics",&Gothic::PhysicsFlags::spellPhysics},
-      {"movable_vobs",&Gothic::PhysicsFlags::movableVobs}
+      {"movable_vobs",&Gothic::PhysicsFlags::movableVobs},
+      {"cloth",&Gothic::PhysicsFlags::cloth}
       };
     auto& npc=subjectOf(pl);
     const auto tick=w.tickCount();
@@ -8179,6 +10543,147 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       ",\"waypoint\":"+jsonStr(waypoint)+",\"minimum_debris_distance_cm\":"+ragdollNumber(minimum)+
       ",\"distance_cm\":"+ragdollNumber((destination-origin).length()));
     }
+  else if(c=="water-film" && a.size()==3 && a[1]=="setup")waterFilmSetup(w,pl,a[2]);
+  else if(c=="water-film" && a.size()==2 && a[1]=="begin")waterFilmBegin(w,pl);
+  else if(c=="water-film" && a.size()==2 && a[1]=="checkpoint")waterFilmCheckpoint(w);
+  else if(c=="cloth" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+    Gothic::settingsSetI("GAME","cloth",a[1]=="on");
+    event("cloth_toggle","\"enabled\":"+std::string(w.physic()->clothEnabled()?"true":"false"));
+    }
+  else if(c=="cloth" && a.size()==4 && a[1]=="setup")clothSetup(w,pl,a[2],a[3]);
+  else if(c=="cloth" && a.size()==6 && a[1]=="room-check") {
+    if(!isNumber(a[2]) || !isNumber(a[3]) || !isNumber(a[4]) || (a[5]!="indoor" && a[5]!="outdoor")) {
+      arenaAbort("cloth room-check expects finite x y z and indoor or outdoor");return;
+      }
+    const Vec3 point(num(a,2,0),num(a,3,0),num(a,4,0));
+    if(!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+      arenaAbort("cloth room-check expects finite coordinates");return;
+      }
+    const bool indoor=w.isIndoor(point),expected=a[5]=="indoor";
+    const bool pass=indoor==expected;
+    event("cloth_room_check","\"point_cm\":"+ragdollVector(point)+",\"bsp_room\":"+jsonStr(w.roomAt(point))+
+      ",\"indoor\":"+(indoor?"true":"false")+",\"expected\":"+jsonStr(a[5])+",\"pass\":"+(pass?"true":"false"));
+    if(!pass)arenaAbort("cloth room classification check failed");
+    }
+  else if(c=="cloth" && a.size()==3 && a[1]=="wind") {
+    if(a[2]!="calm" && a[2]!="gust" && a[2]!="natural") {arenaAbort("cloth wind expects calm, gust or natural");return;}
+    w.physic()->cloth().setWindScale(a[2]=="calm"?0.f:(a[2]=="gust"?2.f:1.f));
+    event("cloth_wind","\"mode\":"+jsonStr(a[2]));
+    }
+  else if(c=="cloth" && a.size()==3 && a[1]=="checkpoint")clothCheckpoint(w,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="shoot")clothShoot(w,pl,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="arrow-npc")clothArrowNpc(w,pl,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="save")clothSaveSession(w,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="camera")clothCamera(w,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="camera-range") {
+    if(!isNumber(a[2])) {arenaAbort("cloth camera-range expects a numeric range in cm");return;}
+    clothCameraRange(w,num(a,2,0));
+    }
+  else if(c=="cloth" && a.size()==4 && a[1]=="camera-turn") {
+    const float degrees=num(a,2,0),duration=num(a,3,0);
+    auto* camera=Gothic::inst().camera();
+    if(bench.cam==C_Turn && bench.time>=bench.camTurnStart+bench.camTurnDuration)updateCamera(w,pl);
+    if(!isNumber(a[2]) || !isNumber(a[3]) || !std::isfinite(degrees) || !std::isfinite(duration) ||
+       duration<1.f || duration>60000.f || camera==nullptr || bench.cam!=C_Hold) {
+      arenaAbort("cloth camera-turn requires a held camera, finite degrees and duration from 1 to 60000 ms");return;
+      }
+    bench.camTurnAngles=bench.camHeldAngles;bench.camTurnDegrees=degrees;
+    bench.camTurnStart=bench.time;bench.camTurnDuration=uint64_t(duration);bench.cam=C_Turn;
+    bench.waitUntil=bench.time+bench.camTurnDuration+1;
+    event("cloth_camera_turn","\"degrees\":"+ragdollNumber(degrees)+",\"duration_ms\":"+
+      std::to_string(bench.camTurnDuration)+",\"camera_cm\":"+ragdollVector(bench.camPos)+
+      ",\"pitch_degrees\":"+ragdollNumber(bench.camTurnAngles.x)+",\"from_yaw_degrees\":"+
+      ragdollNumber(bench.camTurnAngles.y));
+    }
+  else if(c=="cloth" && a.size()==3 && a[1]=="initial")clothInitial(w,a[2]);
+  else if(c=="cloth" && a.size()==3 && a[1]=="verify") {
+    bool pass=true;bool target=false;
+    size_t sails=0,flags=0,exposedSails=0,exposedFlags=0;
+    for(const auto& body:w.physic()->cloth().snapshots()) {
+      if(a[2]=="harbour-wind") {
+        if(!body.active)continue;
+        if(body.visual.starts_with("NW_SHIP_SAIL_02:")) {
+          ++sails;exposedSails+=body.exposed;
+          }
+        else if(body.visual.starts_with("NW_SHIP_FLAG_01:") || body.visual.starts_with("NW_SHIP_FLAG_02:")) {
+          ++flags;exposedFlags+=body.exposed;
+          }
+        }
+      else if(a[2]=="anchors") {
+        target|=body.zenId==bench.clothZen && body.active && body.pinned>0;
+        pass&=std::isfinite(body.maxAnchorErrorCm) && body.maxAnchorErrorCm<=.5f &&
+          std::isfinite(body.maxSpeedEverCmPerSec) && body.maxSpeedEverCmPerSec<=Cloth::maxVelocityMS*100.f+.5f && body.recoveryCount==0;
+        for(const auto& point:body.worldPositionsCm)
+          pass&=std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+        }
+      else if(body.zenId==bench.clothZen) {
+        target=true;
+        if(a[2]=="arrow")pass&=bench.clothShotKind=="arrow" && body.arrowPasses>bench.clothShotHitsBefore && bench.clothArrowDownstream>=30.f;
+        else if(a[2]=="fireball" || a[2]=="wind")pass&=bench.clothShotKind==a[2] && body.projectileHits>bench.clothShotHitsBefore;
+        else pass=false;
+        }
+      }
+    if(a[2]=="harbour-wind") {
+      target=sails==5 && flags==4;
+      pass&=exposedSails==sails && exposedFlags==flags;
+      }
+    pass&=target;
+    event("cloth_verify","\"check\":"+jsonStr(a[2])+",\"pass\":"+(pass?"true":"false")+
+      ",\"active_sails\":"+std::to_string(sails)+",\"exposed_sails\":"+std::to_string(exposedSails)+
+      ",\"active_flags\":"+std::to_string(flags)+",\"exposed_flags\":"+std::to_string(exposedFlags)+
+      ",\"arrow_downstream_cm\":"+ragdollNumber(bench.clothArrowDownstream)+",\"cloth\":"+clothRows(w));
+    if(!pass)arenaAbort("cloth native "+a[2]+" check failed");
+    }
+  else if(c=="cloth" && a.size()==3 && a[1]=="distance") {
+    if(bench.clothZen==uint32_t(-1)) {arenaAbort("cloth boundary requires a selected target");return;}
+    if(!clothStandAt(w,pl,bench.clothCenter,num(a,2,4000))) {
+      if(bench.clothObserverSupport!="fixture-static-flight") {
+        arenaAbort("cloth boundary requires a dry supported observer at the requested radius");return;
+        }
+      bench.clothHeldPosition=bench.clothCenter+bench.clothDirection*num(a,2,4000);
+      pl.setPosition(bench.clothHeldPosition);pl.updateTransform();
+      }
+    event("cloth_observer","\"hero_cm\":"+ragdollVector(pl.position())+",\"distance_cm\":"+
+      ragdollNumber((pl.position()-bench.clothCenter).length()));
+    }
+  else if(c=="cloth" && a.size()==2 && a[1]=="reset-stats")w.physic()->cloth().resetStats();
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  else if(c=="cloth" && a.size()==3 && a[1]=="measure") {
+    if(!AppCadence::normalClock() || !AppCadence::arm(a[2]=="on")) {arenaAbort("cloth normal cadence arm failed");return;}
+    bench.clothMeasuring=true;bench.clothPhysics.clear();bench.clothPhysics.reserve(20000);bench.clothOverflow=false;
+    const auto all=w.physic()->cloth().snapshots();
+    const auto active=std::count_if(all.begin(),all.end(),[](const auto& body){return body.active;});
+    AppCadence::counts(true,uint32_t(active),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    event("cloth_measure_before","\"mode\":"+jsonStr(a[2])+",\"active_soft_bodies\":"+
+      std::to_string(active)+",\"cloth\":"+clothRows(w));
+    }
+  else if(c=="cloth" && a.size()==2 && a[1]=="report") {
+    bench.clothMeasuring=false;
+    const auto all=w.physic()->cloth().snapshots();
+    const auto active=std::count_if(all.begin(),all.end(),[](const auto& body){return body.active;});
+    AppCadence::counts(false,uint32_t(active),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    std::vector<float> costs;costs.reserve(bench.clothPhysics.size());
+    if(auto* file=std::fopen((outDir+"/cloth-physics.csv").c_str(),"w")) {
+      std::fprintf(file,"sample,t_game_ms,dt_ms,step_ms,native_bodies\n");
+      for(size_t i=0;i<bench.clothPhysics.size();++i) {
+        const auto& row=bench.clothPhysics[i];costs.push_back(row.milliseconds);
+        std::fprintf(file,"%zu,%llu,%llu,%.9g,%zu\n",i,(unsigned long long)row.time,
+          (unsigned long long)row.dt,double(row.milliseconds),row.bodies);
+        }
+      std::fclose(file);
+      }
+    else {arenaAbort("cannot write cloth native step timings");return;}
+    std::sort(costs.begin(),costs.end());
+    const auto p95=costs.empty()?0.f:costs[std::min(costs.size()-1,size_t(std::ceil(double(costs.size())*.95)-1))];
+    event("cloth_measure_after","\"active_soft_bodies\":"+std::to_string(active)+
+      ",\"samples\":"+std::to_string(costs.size())+",\"physics_p95_ms\":"+ragdollNumber(p95)+
+      ",\"overflow\":"+(bench.clothOverflow?"true":"false")+",\"cloth\":"+clothRows(w));
+    }
+#else
+  else if(c=="cloth" && a.size()>=2 && (a[1]=="measure" || a[1]=="report")) {
+    arenaAbort("cloth timing requires a build with OPENGOTHIC_ENABLE_APP_CADENCE=ON");
+    }
+#endif
   else if(c=="water" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","buoyancy",a[1]=="on");
     w.physic()->setBuoyancyEnabled(a[1]=="on");
@@ -8905,6 +11410,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     AppCadence::counts(false,models,dead,parts,asleep,bench.cadenceDown);
     }
+#else
+  else if(c=="cadence") {
+    arenaAbort("cadence requires a build with OPENGOTHIC_ENABLE_APP_CADENCE=ON");
+    }
 #endif
   else if(c=="ragdoll" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","ragdoll",a[1]=="on" ? 1 : 0);
@@ -9546,11 +12055,21 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("slowmo " + std::to_string(bench.slow));
     }
   else if(c=="track") {
-    // track <npc|off> [head|body]: each recorded frame, where it is on the picture (events.jsonl "track":
-    // x, y in pixels of the frame, w, h; and each zone: hx hy, bx by, lx ly)
-    bench.trackNpc  = a.size()>1 && a[1]!="off" ? a[1] : "";
+    // track <npc[,npc...]|off> [head|body]: one ordinary track row per actor and recorded frame.
+    bench.trackNpcs.clear();
+    if(a.size()>1 && a[1]!="off") {
+      size_t begin=0;
+      while(begin<a[1].size()) {
+        const size_t end=a[1].find(',',begin);
+        const auto symbol=a[1].substr(begin,end==std::string::npos ? end : end-begin);
+        if(!symbol.empty() && std::find(bench.trackNpcs.begin(),bench.trackNpcs.end(),symbol)==bench.trackNpcs.end())
+          bench.trackNpcs.push_back(symbol);
+        if(end==std::string::npos) break;
+        begin=end+1;
+        }
+      }
     bench.trackHead = !(a.size()>2 && a[2]=="body");
-    say("track " + (bench.trackNpc.empty() ? std::string("off") : bench.trackNpc));
+    say("track " + (bench.trackNpcs.empty() ? std::string("off") : a[1]));
     }
   else if(c=="sight") {
     // sight <npc|off> [fan cm]: each recorded frame and shot, the hero's line of sight to it on the picture
@@ -10018,16 +12537,43 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const uint32_t s = uint32_t(num(a,1,1));
     w.script().setSeed(s);
     bench.lcg = s*2654435761u + 1u;
+    bench.monsterCharacterSeed=s;
     pl.archer().reseed(s);
     say("seed " + std::to_string(s));
     }
   else if(c=="bodyarena") {
     setupArena(w,pl);
     }
+  else if(c=="bodylive") {
+    // Live engine commands only: no controller state, watch list, policy, or lease is modified.
+    if(a.size()==2 && a[1]=="off") {
+      stopBodyLive();
+      event("body_live","\"enabled\":false");
+      }
+    else if(a.size()==2 && a[1]=="on" && !BodyArena::enabled() && !BodyReplay::active()) {
+      bench.bodyLive = true;
+      BodyController::setSink([](std::string_view row) {
+        if(bench.bodyLive)
+          event("body_live_control","\"control\":"+std::string(row));
+        });
+      event("body_live","\"enabled\":true");
+      }
+    else if(a.size()>=3 && a.size()<=4 && a[1]=="wait" && std::filesystem::path(a[2]).is_absolute() && num(a,3,120000)>0) {
+      bench.bodyLiveWait=a[2];
+      bench.bodyLiveDeadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(int64_t(num(a,3,120000)));
+      event("body_live_wait","\"path\":"+jsonStr(bench.bodyLiveWait));
+      }
+    else {
+      event("body_live_error","\"reason\":\"expected bodylive on/off or wait /absolute/path [timeout ms]; live capture requires arena/replay off\"");
+      bench.pc=bench.prog.size();
+      }
+    }
   else if(c=="bodyreplay") {
     // bodyreplay <file> [tail ms 3000]: a recorded lockstep arena episode, replayed for the camera
     // (game/bodyreplay.h); put it in place of `bodyarena`, the following `wait` ends with the replay
     try {
+      if(bench.bodyLive)
+        throw std::runtime_error("bodylive must be off before bodyreplay");
       BodyReplay::load(a.size()>1 ? a[1] : "",outDir,uint64_t(num(a,2,3000)));
       setupArena(w,pl);
       }
@@ -11906,6 +14452,24 @@ bool waitingForAi() {
   return false;
   }
 
+bool waitingForBodyLive() {
+  if(bench.bodyLiveWait.empty())
+    return false;
+  std::error_code error;
+  if(std::filesystem::is_regular_file(bench.bodyLiveWait,error)) {
+    event("body_live_ready","\"path\":"+jsonStr(bench.bodyLiveWait));
+    bench.bodyLiveWait.clear();
+    return false;
+    }
+  if(std::chrono::steady_clock::now()<bench.bodyLiveDeadline)
+    return true;
+  event("body_live_error","\"reason\":\"readiness file timeout\",\"path\":"+jsonStr(bench.bodyLiveWait));
+  bench.bodyLiveWait.clear();
+  bench.pc=bench.prog.size();
+  bench.waitUntil=0;
+  return false;
+  }
+
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
   if(NavBench::running() || NavDemos::running()) return;
   if(bench.spellEquipPending) {
@@ -12005,14 +14569,14 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     if(bench.volleyLeft>0)
       return;
     }
-  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply || !bench.waitAiKey.empty() ||
+  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply || !bench.waitAiKey.empty() || !bench.bodyLiveWait.empty() ||
         bench.downNpc!=nullptr || bench.waitRagdollNpc!=nullptr || bench.duelWaiting) {
     if(bench.speaking) {
       if(bench.time<bench.speakUntil)
         return;
       endSpeaking();
       }
-    if(waitingForReply() || waitingForAi())
+    if(waitingForReply() || waitingForAi() || waitingForBodyLive())
       return;
     if(bench.waitRagdollNpc!=nullptr) {
       const auto* npc=bench.waitRagdollNpc;
@@ -12089,7 +14653,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     if(bench.cadenceWait) return;
 #endif
     }
-  if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0 && bench.downNpc==nullptr && bench.waitRagdollNpc==nullptr && !bench.duelWaiting)
+  if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0 && bench.downNpc==nullptr && bench.waitRagdollNpc==nullptr && !bench.duelWaiting && bench.bodyLiveWait.empty())
     finish();
   }
 
@@ -13022,6 +15586,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
   }
 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
+  stopBodyLive();
   npcCharacterStopMotionTrace(Gothic::inst().world());
   KnownRoadsBench::reset();
   NavigationMemoryBench::reset();
@@ -13147,6 +15712,8 @@ void TestBench::bodyEvent(const Npc& actor, const Npc* target, std::string_view 
 
 void TestBench::bodyForget(const Npc* npc) {
   if(bodyTraceAlive) {
+    if(bench.monsterCharacterRoute.npc==npc)bench.monsterCharacterRoute.npc=nullptr;
+    for(auto& actor:bench.monsterCharacterExtras)if(actor.npc==npc)actor.npc=nullptr;
     if(bench.characterIdle.actor==npc)bench.characterIdle.actor=nullptr;
     if(bench.characterIdle.fixtureNpc==npc)bench.characterIdle.fixtureNpc=nullptr;
     bench.npcCharacterGoals.erase(npc);bench.npcCharacterWalkers.erase(npc);
@@ -13280,6 +15847,14 @@ uint64_t TestBench::frameDt(uint64_t dt) {
   }
 
 void TestBench::beforeWorldTick(uint64_t dt) {
+  // Keep the native observer at the fixture's supported point. Nearby enemies
+  // retain their ordinary behaviour and cannot push this measurement out of range.
+  if(scenarioPath!=nullptr && bench.started && !bench.done && bench.clothTrace && bench.clothHold) {
+    if(auto* player=Gothic::inst().player()) {
+      player->stopWalking();player->clearAiQueue();
+      player->setPosition(bench.clothHeldPosition);player->updateTransform();
+      }
+    }
   // A reload observer accepts no live keyboard or mouse movement. Its actor
   // remains subject to ordinary native support and gravity, with no pose pin.
   if(scenarioPath!=nullptr && bench.started && !bench.done && bench.waterObserver && bench.ctrl)
@@ -13378,6 +15953,26 @@ std::function<void(const int16_t*,size_t)> TestBench::aiVoiceStem(std::string_vi
 
 bool TestBench::ragdollBodyDrawable(const Npc& npc) {
   const auto& mesh=npc.visual.view;
+  if(bench.monsterCharacterRenderRequest==&npc) {
+    std::string parts="[";
+    for(size_t i=0;i<mesh.subCount;++i) {
+      const auto& item=mesh.sub[i];if(item.isEmpty())continue;
+      const auto matrix=item.position();const auto& bounds=item.bounds();const auto& material=item.material();
+      auto center=(bounds.bbox[0]+bounds.bbox[1])*.5f;matrix.project(center);
+      const auto root=Vec3(matrix.at(3,0),matrix.at(3,1),matrix.at(3,2));
+      float x=center.x,y=center.y,z=center.z,w=1;
+      if(auto* camera=Gothic::inst().camera())camera->viewProj().project(x,y,z,w);
+      if(parts.size()>1)parts+=',';
+      parts+="{\"part\":"+std::to_string(i)+",\"indices\":"+std::to_string(item.meshSlice().second)+
+        ",\"root_cm\":"+ragdollVector(root)+",\"center_cm\":"+ragdollVector(center)+
+        ",\"clip_cm\":["+ragdollNumber(x)+","+ragdollNumber(y)+","+ragdollNumber(z)+","+ragdollNumber(w)+"]"+
+        ",\"radius_cm\":"+ragdollNumber(bounds.rConservative)+",\"alpha\":"+ragdollNumber(material.alphaWeight)+
+        ",\"ghost\":"+(material.isGhost?"true":"false")+",\"texture\":"+
+        (material.tex && !material.tex->isEmpty()?"true":"false")+"}";
+      }
+    event("monster_character_render_mesh","\"npc_id\":"+std::to_string(npc.world().npcId(&npc))+
+      ",\"cpu_only\":"+(mesh.cpuOnly?"true":"false")+",\"submeshes\":"+std::to_string(mesh.subCount)+",\"parts\":"+parts+"]");
+    }
   if(mesh.cpuOnly) return false;
   if(bench.destructionSkinRequest==&npc && mesh.protoMesh()!=nullptr)
     destructionSkinSample(npc,*mesh.protoMesh(),npc.visual.transform(),npc.visual.pose());
@@ -13472,6 +16067,10 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
           event("ragdoll_error","\"command\":"+jsonStr(line)+",\"reason\":"+jsonStr(error.what()));
           }
         }
+      else if(args.size()==2 && args[0]=="monstercharacter" && args[1]=="initial") {
+        ++bench.pc;monsterCharacterSnapshot(*world,*player,"initial");
+        characterIdleGuards(*world,*player);
+        }
       else if(args.size()==2 && args[0]=="npccharacter" && args[1]=="initial") {
         ++bench.pc;npcCharacterSnapshot(*world,*player,"initial");
         characterIdleGuards(*world,*player);
@@ -13498,6 +16097,9 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         // the first native step, after observing the unmodified loaded state.
         if(args[2]=="restored")
           exec("movable observe",*world,*player,ctrl);
+        }
+      else if(args.size()==3 && args[0]=="cloth" && args[1]=="initial") {
+        ++bench.pc;clothInitial(*world,args[2]);
         }
       else if(args.size()==3 && args[0]=="destruction2" && args[1]=="initial") {
         ++bench.pc;destructionSessionSnapshot(*world,args[2]);
@@ -13539,6 +16141,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     }
   movableFields(*world);
   waterFields(*world);
+  waterFilmTick(*world);
+  clothFields(*world);
   movableCandleFields(*world);
   noiseFields(*world);
   if(bench.spellReleaseAt && world->tickCount()>=bench.spellReleaseAt) {
@@ -13578,6 +16182,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       }
     }
   characterFields(*world,*player,dt,ctrl);
+  monsterCharacterFields(*world,dt);
   npcCharacterFields(*world,*player,dt);
   npcCharacterMotionTrace(*world,dt);
   bench.time += dt;
@@ -13630,6 +16235,12 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         }
     }
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  if(bench.clothMeasuring && !AppCadence::done()) {
+    const auto stats=world->physic()->physicsStats();
+    if(bench.clothPhysics.size()<20000)
+      bench.clothPhysics.push_back({world->tickCount(),dt,stats.stepMilliseconds,stats.bodies});
+    else bench.clothOverflow=true;
+    }
   if(bench.movableMeasuring && !AppCadence::done()) {
     const auto stats=world->physic()->physicsStats();
     bench.noiseMeasuredRays+=stats.rays;
@@ -13828,13 +16439,22 @@ bool TestBench::ragdollLootOpened(const Npc& player, const Npc& target) {
   return true;
   }
 
-// track: where the tracked npc is on this frame, into events.jsonl: x, y the head (or the trunk: track ... body),
+// track: where a tracked npc is on this frame, into events.jsonl: x, y the head (or the trunk: track ... body),
 // and every zone: hx hy (head), bx by (trunk), lx ly (the legs, below the knees); pixels of the frame
-void trackFrame(int w, int h) {
-  World* wrld = Gothic::inst().world();
+void trackActorFrame(World& world, const std::string& symbol, int w, int h) {
   auto   cam  = Gothic::inst().camera();
-  Npc*   n    = wrld!=nullptr ? npcBySymbol(*wrld,bench.trackNpc) : nullptr;
-  if(n==nullptr || cam==nullptr)
+  Npc*   n    = npcBySymbol(world,symbol);
+  if(n==nullptr)
+    return;
+  // HP/identity do not depend on visibility. Exporters still get one sample if a head is offscreen.
+  if(bench.bodyLive) {
+    const Npc* target=n->target()!=nullptr ? n->target() : world.player();
+    event("body_live_sample","\"npc\":"+jsonStr(symbol)+",\"entity_id\":"+
+          std::to_string(BodyObservations::entityId(*n))+",\"t_game_ms\":"+std::to_string(world.tickCount())+
+          ",\"self_hp\":"+std::to_string(n->attribute(ATR_HITPOINTS))+",\"target_hp\":"+
+          (target!=nullptr ? std::to_string(target->attribute(ATR_HITPOINTS)) : "null"));
+    }
+  if(cam==nullptr)
     return;
   std::vector<HitZones::Posed> caps;
   n->hitZonesPosed(caps);
@@ -13868,9 +16488,15 @@ void trackFrame(int w, int h) {
   char buf[320];
   std::snprintf(buf,sizeof(buf),"\"npc\":%s,\"x\":%.1f,\"y\":%.1f,\"hx\":%.1f,\"hy\":%.1f,\"bx\":%.1f,\"by\":%.1f,"
                 "\"lx\":%.1f,\"ly\":%.1f,\"w\":%d,\"h\":%d",
-                jsonStr(bench.trackNpc).c_str(),double(sx[main]),double(sy[main]),double(sx[0]),double(sy[0]),
+                jsonStr(symbol).c_str(),double(sx[main]),double(sy[main]),double(sx[0]),double(sy[0]),
                 double(sx[1]),double(sy[1]),double(sx[2]),double(sy[2]),w,h);
   event("track",buf);
+  }
+
+void trackFrame(int w, int h) {
+  if(auto* world=Gothic::inst().world())
+    for(const auto& symbol:bench.trackNpcs)
+      trackActorFrame(*world,symbol,w,h);
   }
 
 // sight: the hero's line of sight to the npc on this frame, into events.jsonl; points are [x, y] in pixels of the
@@ -14149,6 +16775,9 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
     pm = Pixmap(frame,TextureFormat::RGBA8); else
     pm = std::move(frame);
 
+  if(pm.w()>0)
+    if(auto* world=Gothic::inst().world())waterFilmFraming(*world,pm.w(),pm.h());
+
   if(pm.w()>0 && bench.overlay)
     drawOverlay(pm);
   if(pm.w()>0 && bench.cam==C_Two && bench.camNpc=="arena")
@@ -14237,7 +16866,7 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
     bench.shot.clear();
     }
   if(bench.rec && bench.recVideo) {
-    if(!bench.trackNpc.empty() && pm.w()>0)
+    if(!bench.trackNpcs.empty() && pm.w()>0)
       trackFrame(int(pm.w()),int(pm.h()));
     if(!bench.sightNpc.empty() && pm.w()>0)
       sightFrame(int(pm.w()),int(pm.h()),"");
@@ -14246,7 +16875,23 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
     }
   }
 
+void TestBench::monsterCharacterCollision(const Npc& actor, const Npc* target) {
+  auto& route=bench.monsterCharacterRoute;
+  if(scenarioPath==nullptr || !route.active || route.npc!=&actor)
+    return;
+  ++route.callbacks;
+  event("monster_character_collision","\"actor\":"+std::to_string(actor.world().npcId(&actor))+
+    ",\"target\":"+(target!=nullptr ? std::to_string(actor.world().npcId(target)) : "null"));
+  }
+
 void TestBench::arrowAt(const void* arrow, float x, float y, float z) {
+  if(scenarioPath!=nullptr && bench.started && !bench.done && bench.clothTrace && arrow==bench.clothArrow && bench.time<=bench.clothShotAt+2000) {
+    const Vec3 point(x,y,z);
+    const auto downstream=Vec3::dotProduct(point-bench.clothShotTarget,-bench.clothShotNormal);
+    bench.clothArrowDownstream=std::max(bench.clothArrowDownstream,downstream);
+    event("cloth_arrow_trajectory","\"position_cm\":"+ragdollVector(point)+
+      ",\"downstream_cm\":"+ragdollNumber(downstream));
+    }
   if(scenarioPath==nullptr || !bench.trailOn)
     return;
   const Vec3 p = {x,y,z};

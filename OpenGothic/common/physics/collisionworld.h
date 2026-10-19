@@ -22,6 +22,7 @@ class PhysicVbo;
 class Skeleton;
 class HitZones;
 class Ragdoll;
+class Cloth;
 namespace zenkit { struct INpc; }
 namespace JPH { class PhysicsSystem; }
 
@@ -134,8 +135,11 @@ class CollisionWorld final {
 
     struct CharacterMoveResult {
       Tempest::Vec3 position = {}, velocity = {}, groundNormal = {}, groundVelocity = {};
+      // Opposing, non-walkable world contact left unresolved by the stair pass.
+      Tempest::Vec3 steepContactNormal = {};
       bool grounded = false;
       bool steep = false;
+      bool steepContact = false;
       bool supportMoved = false;
       };
 
@@ -144,7 +148,8 @@ class CollisionWorld final {
       public:
         ~VirtualCharacter();
         CharacterMoveResult move(const Tempest::Vec3& displacement, uint64_t dt,
-                                 float stepHeight, float maxSlope, float mass, Npc* culprit);
+                                 float stepHeight, float maxSlope, float mass, Npc* culprit,
+                                 bool limitStairAdvance = false);
         CharacterMoveResult carry(uint64_t dt);
         void setPosition(const Tempest::Vec3& feet);
         void setDiagnosticsEnabled(bool enabled);
@@ -267,6 +272,7 @@ class CollisionWorld final {
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
     void fillRagdoll(QueryResult& result, JPH::BodyID body) const;
     JPH::PhysicsSystem& physicsSystem();
+    friend class ClothContractDriver;
     uint32_t registerRagdoll(Ragdoll& body);
     void unregisterRagdoll(Ragdoll& body);
     std::unique_ptr<Impl> impl;
@@ -278,8 +284,10 @@ class CollisionWorld final {
     std::function<void(const PhysicsNoise&)> physicsNoise;
     std::function<void(CollisionBody&,float,const Tempest::Vec3&,std::string_view)> bodyImpact;
     std::function<bool(const Tempest::Vec3&,float,float&)> waterSurface;
+    Cloth* cloth = nullptr;
     bool buoyancy = true;
     JPH::Vec3 bboxMin = JPH::Vec3::sZero();
     float accumulatedTime = 0;
     friend class Ragdoll;
+    friend class Cloth;
   };

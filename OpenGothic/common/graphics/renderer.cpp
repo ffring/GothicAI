@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "physics/cloth.h"
 
 #include <Tempest/Color>
 #include <Tempest/Fence>
@@ -171,6 +172,9 @@ void Renderer::setupSettings() {
   else {
     settings.giMethod = GiMethod::None;
     }
+
+  Log::i("render: ray query = ", int(Shaders::options().doRayQuery), ", meshlets = ", int(Shaders::options().doMeshShading),
+         ", gi = ", int(settings.giMethod), ", aa = ", settings.aaEnabled ? int(Gothic::options().aaPreset) : 0);
 
   if(settings.giMethod!=GiMethod::None) {
     // need a projective shadow, for gi
@@ -358,6 +362,8 @@ void Renderer::prepareUniforms(WorldView& wview) {
   wview.setGbuffer(textureCast<const Texture2d&>(gbufDiffuse), textureCast<const Texture2d&>(gbufNormal));
   wview.setSceneImages(textureCast<const Texture2d&>(sceneOpaque), textureCast<const Texture2d&>(sceneDepth), zbuffer);
   wview.setWindEnabled(settings.zWindEnabled, settings.windPeriod);
+  if(auto* world = Gothic::inst().world())
+    wview.setClothWind(world->physic()->clothEnabled(),world->physic()->cloth().windScale());
   }
 
 void Renderer::resetViewport(Tempest::Size res, Tempest::Size fullRes) {
@@ -402,6 +408,8 @@ void Renderer::resetViewport(Tempest::Size res, Tempest::Size fullRes) {
 
   gbufDiffuse   = device.attachment(TextureFormat::RGBA8,w,h);
   gbufNormal    = device.attachment(TextureFormat::R32U, w,h);
+  if(Shaders::options().doMaterialMaps)
+    gbufOrm = device.attachment(TextureFormat::RGBA8, w,h);
 
   ssao     = decltype(ssao)();
   epipolar = decltype(epipolar)();
@@ -641,6 +649,14 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
     frustrum[SceneGlobals::V_HiZ] = frustrum[SceneGlobals::V_Main];
     frustrum[SceneGlobals::V_Vsm] = frustrum[SceneGlobals::V_Shadow1]; //TODO: remove
     wview.updateFrustrum(frustrum);
+    }
+
+  if(world!=nullptr) {
+    // Keep a margin around the camera view so a turning camera resumes cloth
+    // before it becomes visible. The physics tick owns a copy of these planes.
+    world->physic()->cloth().setVisibilityTest([view = frustrum[SceneGlobals::V_Main]](const Vec3& center, float radius) {
+      return view.testPoint(center,radius+200.f);
+      });
     }
 
   prepareUniforms(wview);
@@ -1716,9 +1732,16 @@ void Renderer::drawSwr(Tempest::Encoder<Tempest::CommandBuffer>& cmd, WorldView&
 
 void Renderer::drawGBuffer(Encoder<CommandBuffer>& cmd, uint8_t fId, WorldView& view) {
   cmd.setDebugMarker("GBuffer");
-  cmd.setFramebuffer({{gbufDiffuse, Tempest::Vec4(), Tempest::Preserve},
-                      {gbufNormal,  Tempest::Vec4(), Tempest::Preserve}},
-                     {zbuffer, Tempest::Preserve, Tempest::Preserve});
+  if(Shaders::options().doMaterialMaps) {
+    cmd.setFramebuffer({{gbufDiffuse, Tempest::Vec4(), Tempest::Preserve},
+                        {gbufNormal, Tempest::Vec4(), Tempest::Preserve},
+                        {gbufOrm, Tempest::Vec4(1,1,0,0), Tempest::Preserve}},
+                       {zbuffer, Tempest::Preserve, Tempest::Preserve});
+    } else {
+    cmd.setFramebuffer({{gbufDiffuse, Tempest::Vec4(), Tempest::Preserve},
+                        {gbufNormal, Tempest::Vec4(), Tempest::Preserve}},
+                       {zbuffer, Tempest::Preserve, Tempest::Preserve});
+    }
   view.drawGBuffer(cmd,fId);
   }
 
@@ -1791,6 +1814,8 @@ void Renderer::drawShadowResolve(Encoder<CommandBuffer>& cmd, const WorldView& w
   cmd.setBinding(1, gbufDiffuse, Sampler::nearest());
   cmd.setBinding(2, gbufNormal,  Sampler::nearest());
   cmd.setBinding(3, zbuffer,     Sampler::nearest());
+  if(Shaders::options().doMaterialMaps)
+    cmd.setBinding(12, gbufOrm, Sampler::nearest());
   if(shadow.directLightPso==&shaders.vsmDirectLight) {
     cmd.setBinding(4, vsm.pageTbl);
     cmd.setBinding(5, vsm.pageList);
@@ -1846,6 +1871,8 @@ void Renderer::drawLights(Encoder<CommandBuffer>& cmd, const WorldView& wview) {
   cmd.setBinding(2, gbufNormal,  Sampler::nearest());
   cmd.setBinding(3, zbuffer,     Sampler::nearest());
   cmd.setBinding(4, wview.lights().lightsSsbo());
+  if(Shaders::options().doMaterialMaps)
+    cmd.setBinding(12, gbufOrm, Sampler::nearest());
   if(lights.directLightPso==&shaders.lightsVsm) {
     cmd.setBinding(5, vsm.pageTblOmni);
     cmd.setBinding(6, vsm.pageData);
@@ -2682,6 +2709,11 @@ void Renderer::drawAmbient(Encoder<CommandBuffer>& cmd, const WorldView& view) {
   cmd.setBinding(0, view.sceneGlobals().uboGlobal[SceneGlobals::V_Main]);
   cmd.setBinding(1, gbufDiffuse, Sampler::nearest());
   cmd.setBinding(2, gbufNormal,  Sampler::nearest());
+  if(Shaders::options().doMaterialMaps) {
+    cmd.setBinding(12, gbufOrm, Sampler::nearest());
+    cmd.setBinding(13, sky.viewLut, sky.sampler);
+    cmd.setBinding(14, zbuffer, Sampler::nearest());
+    }
   if(settings.giMethod==GiMethod::IrrC && settings.zCloudShadowScale) {
     cmd.setBinding(3, surf.irrImage, Sampler::nearest(ClampMode::ClampToEdge));
     cmd.setBinding(4, ssao.ssaoBlur, Sampler::nearest(ClampMode::ClampToEdge)); //TODO: remove once splatting is working

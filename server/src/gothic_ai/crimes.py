@@ -1,7 +1,7 @@
-"""The hero's deeds and their actual witnesses, while vanilla still owns every reaction.
+"""The hero's deeds and their actual witnesses, independent of the on-scene reaction.
 
 The bridge supplies ownership and pre-reaction combat state. Truth and each npc's knowledge are read
-from the Chronicle's save branch; this module never intercepts perceptions. Community law lives in
+from the Chronicle's save branch; crime_react.py settles held deeds. Community law lives in
 crime_law.py and supplies the scripts' PETZ counters through the existing story commands.
 Rules were checked against GOTHIC.DAT: C_IsTakenItemMyPossession, B_AssessTheft,
 B_AssessDamage/B_Attack, B_AssessMurder, and the lifted C_NpcBelongsTo* helpers.
@@ -17,9 +17,12 @@ from typing import TYPE_CHECKING, Any, Literal
 from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
 from .gamedata.storygraph import StoryGraph
-from .protocol import DeedItem, GameMessage, HeroDeed, Session
+from .people_knowledge import rumor_subject
+from .promise_breach import silence_facts
+from .protocol import DeedItem, DeedSnapshot, GameMessage, HeroDeed, Session
 
 if TYPE_CHECKING:
+    from .blame import Blame
     from .concerns import Concern
     from .dialogue import DialogueManager
     from .places import PlaceBook
@@ -104,6 +107,7 @@ class Crimes:
         dialogue: DialogueManager | None = None,
         places: PlaceBook | None = None,
         names: Callable[[str], str] | None = None,
+        cover: bool = True,
     ) -> None:
         self.link = link
         self.chronicle = chronicle
@@ -111,8 +115,12 @@ class Crimes:
         self.dialogue = dialogue
         self.places = places
         self.names = names or (lambda npc: npc)
+        self.cover = cover
         self.sightings: Sightings | None = None
+        self.blame: Blame | None = None
         self.people: dict[str, dict[str, Any]] = {}  # static world metadata, never beliefs
+        self._noncrimes: set[str] = set()  # completed negative classifications, only in this world
+        self.on_noncrime: list[Callable[[str], None]] = []
         chronicle.on_fact.append(self._on_fact)
         link.listeners.append(self._on_message)
 
@@ -129,25 +137,64 @@ class Crimes:
     def crime(self, crime: str) -> Fact | None:
         return next((f for f in self.facts() if f.get("id") == crime), None)
 
+    def blamed(self, npc: str, crime: str) -> bool:
+        """An active belief in another culprit suspends this victim's demand against the hero."""
+        return self.blame is not None and self.blame.active(npc, crime) is not None
+
+    def classified_noncrime(self, deed: str) -> bool:
+        """An explicit classification result; an unrecorded or duplicate deed is not one."""
+        return deed in self._noncrimes
+
+    def _noncrime(self, deed: str) -> None:
+        if deed not in self._noncrimes:
+            self._noncrimes.add(deed)
+            for listener in self.on_noncrime:
+                listener(deed)
+
     def seen(self, npc: str) -> list[Fact]:
         ids = {f.get("crime") for f in self.chronicle.facts("crime_seen") if f.get("npc") == npc.upper()}
         return [f for f in self.facts() if f.get("id") in ids]
+
+    def testimony_crimes(self, testimony: Fact) -> list[str]:
+        """With cover disabled old testimony yields its truth, while ordinary silence still applies."""
+        about = testimony.get("about")
+        if isinstance(about, str) and about.upper() not in HERO:
+            return []  # testimony about another NPC never proves anything about the hero
+        if self.cover or not testimony.get("cover"):
+            return list(testimony.get("crime_told", []))
+        silent = set()
+        for fact in self.chronicle.facts():
+            if fact == testimony:
+                break
+            silent.update(
+                promise.get("crime")
+                for promise in silence_facts(self.chronicle, fact, cover=False)
+                if promise.get("npc") == testimony.get("witness")
+            )
+        return [c for c in testimony.get("crime_saw", []) if c not in silent]
 
     def known(self, npc: str) -> list[CrimeKnowledge]:
         """The single view of an npc's knowledge. Ownership alone never teaches it anything."""
         npc = npc.upper()
         facts = self.chronicle.facts()
         crimes = {f["id"]: f for f in facts if f.get("fact") == "crime"}
+        silences = {
+            (promise.get("npc"), promise.get("crime"))
+            for f in facts for promise in silence_facts(self.chronicle, f, cover=self.cover)
+        }
         out: dict[tuple[str, str], CrimeKnowledge] = {}
         rank = {"suspects": 0, "heard": 1, "seen": 2}
         for f in facts:
+            if f.get("fact") == "rumor" and rumor_subject(f) != "PLAYER":
+                continue
             entries: list[tuple[str, str, str, int, str]] = []
             if f.get("fact") == "crime_seen" and f.get("npc") == npc:
                 entries.append((f["crime"], "seen", npc, 0, "PLAYER"))
             elif f.get("fact") == "rumor" and f.get("to") == npc and f.get("crime"):
                 entries.append((f["crime"], "heard", f.get("from", ""), int(f.get("hops", 1)), "PLAYER"))
             elif f.get("fact") == "testimony" and f.get("npc") == npc:
-                entries += [(c, "heard", f.get("witness", ""), 1, "PLAYER") for c in f.get("crime_told", [])]
+                told = self.testimony_crimes(f)
+                entries += [(c, "heard", f.get("witness", ""), 1, "PLAYER") for c in told]
             elif f.get("fact") == "crime_suspected" and f.get("npc") == npc:
                 entries.append((f["crime"], "suspects", npc, 0, f.get("suspect", "PLAYER")))
             for crime, degree, source, hops, suspect in entries:
@@ -160,10 +207,7 @@ class Crimes:
                         s.get("fact") == "forgiven" and s.get("npc") == npc and s.get("crime") == crime
                         for s in facts
                     )
-                    silenced = any(
-                        s.get("fact") == "silenced" and s.get("npc") == npc and s.get("crime") == crime
-                        for s in facts
-                    )
+                    silenced = (npc, crime) in silences
                     out[key] = CrimeKnowledge(
                         crimes[crime], degree, source, hops, suspect, forgiven, silenced
                     )
@@ -320,6 +364,8 @@ class Crimes:
             )
 
     def _on_fact(self, fact: Fact) -> None:
+        if fact.get("fact") == "rumor" and rumor_subject(fact) != "PLAYER":
+            return
         if fact.get("fact") in {"crime_seen", "rumor", "testimony"}:
             npc = fact.get("npc") or fact.get("to")
             crimes = set(fact.get("crime_told", []))
@@ -469,7 +515,7 @@ class Crimes:
         symbol = symbol.upper()
         return self.graph.npc(symbol) if self.graph is not None else symbol
 
-    def _ownership(self, deed: HeroDeed) -> tuple[str, int, int] | None:
+    def _ownership(self, deed: DeedSnapshot, *, culprit: str = "") -> tuple[str, int, int] | None:
         """Whose property was taken, strongest explicit ownership first; None means lawful.
 
         An explicitly owned item stays its owner's even in a public room. Conversely a dropped
@@ -488,9 +534,13 @@ class Crimes:
         for owner, npc_guild, npctype, guild in sources:
             if owner:
                 owner = self._npc(owner)
-                return None if owner in HERO else (owner, npc_guild, npctype)
+                own = owner == culprit if culprit else owner in HERO
+                return None if own else (owner, npc_guild, npctype)
             if guild not in PUBLIC_GUILDS:
-                return None if guild == deed.hero_guild else ("", guild, 0)
+                actor_guild = (
+                    getattr(deed, "culprit_guild", deed.hero_guild) if culprit else deed.hero_guild
+                )
+                return None if guild == actor_guild else ("", guild, 0)
         return None
 
     def _on_message(self, msg: GameMessage) -> None:
@@ -498,6 +548,7 @@ class Crimes:
             self.record(msg)
         elif isinstance(msg, Session):
             self.people.clear()
+            self._noncrimes.clear()
 
     def record(self, deed: HeroDeed) -> Fact | None:
         """Classify a raw bridge deed and keep one truth plus one fact per real witness."""
@@ -519,15 +570,16 @@ class Crimes:
                     return None
                 ownership = self._ownership(deed)
                 if ownership is None:
-                    return None
+                    return self._noncrime(deed.id)
                 owner, guild, npctype = ownership
                 victim = owner
                 community = self.community(guild, npctype)
                 kind = "theft"
             case "attack":
+                if not victim:
+                    return None
                 if (
-                    not victim
-                    or deed.victim_is_monster
+                    deed.victim_is_monster
                     or deed.victim_guild > 16
                     or deed.victim_in_fight
                     or deed.victim_enemy
@@ -536,7 +588,7 @@ class Crimes:
                     or deed.victim_tough_guy
                     or deed.victim_guild in TOUGH_GUILDS
                 ):
-                    return None
+                    return self._noncrime(deed.id)
                 community = self.community(deed.victim_guild, deed.victim_npctype)
                 kind = "attack"
             case "murder":
@@ -544,7 +596,7 @@ class Crimes:
                     return None
                 if deed.victim_is_sheep or deed.victim_guild == 18:
                     if deed.victim_tough_guy:  # bought/following sheep, including Betsy
-                        return None
+                        return self._noncrime(deed.id)
                     kind = "sheep"
                     # Vanilla has no sheep -> npc owner. Its crime belongs to a witness's
                     # community. Keep an unwitnessed sheep's community unknown, without guessing
@@ -559,7 +611,7 @@ class Crimes:
                         None,
                     )
                 elif deed.victim_is_monster or deed.victim_guild > 16:
-                    return None
+                    return self._noncrime(deed.id)
                 else:
                     kind = "murder"
                     community = self.community(deed.victim_guild, deed.victim_npctype)
@@ -608,6 +660,7 @@ class Crimes:
             **extra,
             **({"chest": deed.chest} if deed.chest else {}),
         }
+        self._noncrimes.discard(deed.id)
         self.chronicle.record(fact)
         metadata = {self._npc(p.npc): p for p in deed.witnesses_metadata}
         for npc in witnesses:

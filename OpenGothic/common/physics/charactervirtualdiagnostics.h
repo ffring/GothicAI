@@ -22,6 +22,10 @@ struct CharacterVirtualDiagnostics {
     // are displacement vectors. Neighbour pointers have the same lifetime
     // restriction as Body::payload and must be resolved when sampling.
     Tempest::Vec3 initial = {}, requested = {}, clippedRequest = {}, nativePosition = {}, accepted = {};
+    Tempest::Vec3 steepContactNormal = {};
+    uint64_t sequence = 0, dt = 0;
+    float advancementRatio = 1.f;
+    bool steepContact = false;
     bool requestClipped = false, resolvedClipped = false, blocked = false;
     NpcCollision requestCollision, resolvedCollision;
     };

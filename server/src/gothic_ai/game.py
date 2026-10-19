@@ -29,6 +29,7 @@ from .protocol import (
     BodyAcquireCmd,
     BodyActionCmd,
     BodyCancelAcquireCmd,
+    BodyControlActor,
     BodyControlEvent,
     BodyControlEvents,
     BodyControlEventsCmd,
@@ -188,6 +189,7 @@ class GameLink:
         self._body_control_last_event = 0
         self.body_control_dropped_events = 0
         self.listeners: list[Listener] = []
+        self.npc_crime_check: Callable[[str, NpcActType, dict[str, Any]], Awaitable[str | None]] | None = None
         # Policy consumers need the exact JSON values from the numeric channel (including
         # optional encoder metadata and list types), after the ordinary schema/staleness checks.
         self.raw_body_listeners: list[RawBodyListener] = []
@@ -411,6 +413,10 @@ class GameLink:
     async def send(self, cmd: _Command) -> None:
         if self.closed.is_set():
             raise GameDisconnected("game disconnected")
+        if isinstance(cmd, NpcActCmd) and self.npc_crime_check is not None:
+            reason = await self.npc_crime_check(cmd.npc, cmd.action, cmd.args)
+            if reason is not None:
+                raise GameError(reason)
         await self._conn.send(cmd.to_json())
 
     async def wait_world(self, timeout: float | None = None) -> str:
@@ -441,9 +447,18 @@ class GameLink:
 
     async def body_watch(self, npcs: list[str], rate_hz: int = 20, timeout: float = 5.0) -> dict[str, Any]:
         """Passively watch up to four existing NPC symbols at 10 or 20 Hz; [] disables it."""
-        if npcs and self._body_acquisitions:
-            raise GameError("cannot change watch while a body acquisition is pending")
         cmd = BodyWatchCmd(req=self._next_id("b"), npcs=[npc.upper() for npc in npcs], rate_hz=rate_hz)
+        watched = {"PLAYER" if npc == "HERO" else npc for npc in cmd.npcs}
+        pending_symbols = {
+            "PLAYER" if pending.npc == "HERO" else pending.npc
+            for pending in (*self._body_acquisitions.values(), *self._body_acquire_waiters.values())
+        }
+        removed = pending_symbols - watched
+        if removed:
+            raise GameError(
+                f"cannot remove {', '.join(sorted(removed))} from watch while a body acquisition is pending"
+            )
+        previous_generation = self.body_generation
         result = await self._request(cmd, timeout)
         stats = result.value if isinstance(result.value, dict) else {}
         generation = stats.get("generation")
@@ -452,6 +467,16 @@ class GameLink:
         if type(generation) is int and generation != self.body_generation:
             self._clear_body_observations()
             self.body_generation = generation
+        elif type(generation) is int and generation == previous_generation:
+            # v45 can change the watch without changing the world generation. Idle
+            # actors from the previous subscription must not fill the four-actor
+            # cache; current idle rows will return with the next packet. Retain
+            # owned actors and grants whose acquire caller has not published yet.
+            retained = (
+                self.body_leases.keys() | self._body_acquisitions.keys() | self._body_acquire_waiters.keys()
+            )
+            for entity_id in self.body_latest.keys() - retained:
+                self.body_latest.pop(entity_id)
         return stats
 
     def body_owned(self, npc: str) -> bool:
@@ -488,6 +513,7 @@ class GameLink:
         self, npc: str, observation: BodyObservation, provider: str, *,
         mode: BodyMode = "realtime", timeout_ms: int = 500, timeout: float = 5.0,
         await_boundary_ms: int = 0, cancel_event: asyncio.Event | None = None,
+        retain_on_timeout: bool = False,
     ) -> BodyLease:
         """Claim a watched actor using its real process/world/target IDs, without changing native state."""
         if mode != "realtime":
@@ -517,6 +543,7 @@ class GameLink:
             # queued request, so a following native_restored still invalidates it.
             self._body_acquire_waiters[observation.entity_id] = pending
         completed = False
+        retained = False
         try:
             try:
                 result = await self._body_request(cmd, timeout)
@@ -559,10 +586,21 @@ class GameLink:
             lease = self._body_lease(npc, provider, mode, result, acquired_seq)
             completed = True
             return lease
+        except TimeoutError:
+            # The pilot resolves a lost receipt with status inside its acquire
+            # window. Cancelling here could release an already granted lease.
+            retained = retain_on_timeout
+            raise
         finally:
             if pending is not None:
                 try:
-                    if completed:
+                    if retained:
+                        if pending.has_grant() and (self.body_session_epoch, self.body_generation) == (
+                            cmd.session_epoch, cmd.world_epoch,
+                        ):
+                            grant = pending.future.result()
+                            self._body_lease(npc, provider, mode, grant, grant.observation_seq)
+                    elif completed:
                         self._forget_body_acquire(pending)
                     elif self._body_acquisitions.get(observation.entity_id) is pending or (
                         self._body_acquire_waiters.get(observation.entity_id) is pending
@@ -607,7 +645,7 @@ class GameLink:
 
     def _body_lease(
         self, npc: str, provider: str, mode: BodyMode,
-        result: BodyControlResult | BodyControlEvent, acquired_seq: int,
+        result: BodyControlResult | BodyControlEvent | BodyControlActor, acquired_seq: int,
     ) -> BodyLease:
         lease = BodyLease(
             npc=npc.upper(), provider=provider, mode=mode, session_epoch=result.session_epoch,
@@ -733,22 +771,47 @@ class GameLink:
         return result
 
     async def body_control_status(self, *, timeout: float = 5.0) -> BodyControlStatus:
+        leases = self.body_leases.copy()
+        acquisitions = self._body_acquisitions.copy()
         result = await self._request(BodyControlStatusCmd(req=self._next_id("bs")), timeout)
         status = BodyControlStatus.model_validate(result.value)
         if status.session_epoch == self.body_session_epoch and status.world_epoch == self.body_generation:
             for actor in status.actors:
-                lease = self.body_leases.get(actor.entity_id)
-                if lease is not None and actor.control_generation != lease.control_generation:
+                lease = leases.get(actor.entity_id)
+                if (
+                    lease is not None and self.body_leases.get(actor.entity_id) == lease
+                    and actor.control_generation != lease.control_generation
+                ):
                     self.body_leases.pop(actor.entity_id, None)
             actors = {actor.entity_id: actor for actor in status.actors}
-            for entity_id, pending in list(self._body_acquisitions.items()):
+            for entity_id, pending in acquisitions.items():
+                # Another fight can acquire while this snapshot is in flight.
+                if self._body_acquisitions.get(entity_id) is not pending:
+                    continue
                 actor = actors.get(entity_id)
-                if actor is None or (actor.owner == "native" and actor.acquire_request_id == 0):
+                if actor is None or (
+                    actor.owner == "native" and actor.acquire_request_id == 0 and not actor.acquire_pending
+                ):
                     self._forget_body_acquire(pending)
                     if not pending.future.done():
                         pending.future.set_exception(GameError("body acquisition is no longer pending"))
                         # An orphaned request no longer has a task awaiting it.
                         pending.future.exception()
+                elif (
+                    entity_id not in self._body_acquire_waiters
+                    and actor.owner == "scripted" and not actor.release_pending
+                    and not pending.was_restored(actor.control_generation)
+                    and (actor.acquire_request_id, actor.provider, actor.mode, actor.target_entity_id) == (
+                        pending.cmd.acquire_request_id, pending.cmd.provider,
+                        pending.cmd.mode, pending.cmd.target_entity_id,
+                    )
+                ):
+                    # A status snapshot can recover an orphan even when both
+                    # its receipt and ownership event were lost. Forget its ID
+                    # before a late event can publish the same grant again.
+                    self._body_lease(pending.npc, pending.cmd.provider, pending.cmd.mode,
+                                     actor, pending.observation_seq)
+                    self._forget_body_acquire(pending)
         return status
 
     async def body_events(self, *, timeout: float = 5.0) -> BodyControlEvents:
@@ -874,6 +937,7 @@ class GameLink:
         items: Iterable[str] = (),
         near: str | None = None,
         timeout: float = 5.0,
+        deed_target: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """What the director's rules read (see StoryStateCmd); with `near`, how far each npc is from it."""
         cmd = StoryStateCmd(
@@ -884,6 +948,7 @@ class GameLink:
             knows=list(knows),
             symbols=list(symbols),
             items=list(items),
+            deed_target=deed_target,
         )
         return dict((await self._request(cmd, timeout)).value or {})
 

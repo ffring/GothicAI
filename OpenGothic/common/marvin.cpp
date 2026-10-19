@@ -69,6 +69,7 @@ Marvin::Marvin() {
    */
   // http://forenarchiv.worldofplayers.de/thread.php?id=85859&post=45890#45890
   cmd = std::vector<Cmd>{
+    {"census",                     C_Census},
     // gdb-like commands
     {"p %v",                       C_PrintVar},
     // similar to "Marvin Helper" https://steamcommunity.com/sharedfiles/filedetails/?id=2847617433
@@ -182,8 +183,10 @@ Marvin::Marvin() {
     {"toggle physics_noise",      C_TogglePhysicsNoise},
     {"toggle destruction",        C_ToggleDestruction},
     {"toggle buoyancy",           C_ToggleBuoyancy},
+    {"toggle cloth",              C_ToggleCloth},
     {"toggle character_virtual",  C_ToggleCharacterVirtual},
     {"toggle npc_character_virtual",C_ToggleNpcCharacterVirtual},
+    {"toggle monster_character_virtual",C_ToggleMonsterCharacterVirtual},
     };
   }
 
@@ -300,6 +303,8 @@ bool Marvin::exec(std::string_view v) {
 
   auto ret = recognize(v);
   switch(ret.cmd.type) {
+    case C_Census:
+      return Resources::writeCensus();
     case C_None:
       return true;
     case C_Incomplete:
@@ -582,6 +587,12 @@ bool Marvin::exec(std::string_view v) {
     case C_ToggleBuoyancy:
       Gothic::settingsSetI("GAME","buoyancy",Gothic::settingsGetI("GAME","buoyancy")==0 ? 1 : 0);
       return true;
+    case C_ToggleCloth: {
+      const bool enabled = !Gothic::physicsFlags().cloth;
+      Gothic::settingsSetI("GAME","cloth",enabled ? 1 : 0);
+      print(enabled ? "Cloth: ON" : "Cloth: OFF");
+      return true;
+      }
     case C_ToggleCharacterVirtual: {
       const bool enabled = !Gothic::physicsFlags().characterVirtual;
       Gothic::settingsSetI("GAME","character_virtual",enabled ? 1 : 0);
@@ -592,6 +603,12 @@ bool Marvin::exec(std::string_view v) {
       const bool enabled = !Gothic::physicsFlags().npcCharacterVirtual;
       Gothic::settingsSetI("GAME","npc_character_virtual",enabled ? 1 : 0);
       print(enabled ? "CharacterVirtual: ON (nearby human NPCs)" : "CharacterVirtual: OFF (NPCs)");
+      return true;
+      }
+    case C_ToggleMonsterCharacterVirtual: {
+      const bool enabled = !Gothic::physicsFlags().monsterCharacterVirtual;
+      Gothic::settingsSetI("GAME","monster_character_virtual",enabled ? 1 : 0);
+      print(enabled ? "CharacterVirtual: ON (nearby ground monsters)" : "CharacterVirtual: OFF (monsters)");
       return true;
       }
     }

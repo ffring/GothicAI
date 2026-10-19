@@ -77,10 +77,15 @@ void DrawBuckets::updateBindlessArrays() {
     return;
 
   std::vector<const Tempest::Texture2d*>     tex;
+  std::vector<const Tempest::Texture2d*>     normal, orm;
   std::vector<const Tempest::StorageBuffer*> vbo, ibo;
   std::vector<const Tempest::StorageBuffer*> morphId, morph;
   for(auto& i:bucketsCpu) {
     tex.push_back(i.mat.tex);
+    if(Shaders::options().doMaterialMaps) {
+      normal.push_back(i.mat.normal!=nullptr ? i.mat.normal : &Resources::fallbackTexture());
+      orm.push_back(i.mat.orm!=nullptr ? i.mat.orm : &Resources::fallbackTexture());
+      }
     if(i.staticMesh!=nullptr) {
       ibo    .push_back(&i.staticMesh->ibo8);
       vbo    .push_back(&i.staticMesh->vbo);
@@ -100,6 +105,8 @@ void DrawBuckets::updateBindlessArrays() {
   ibo    .resize(roundup(ibo.size()));
   morphId.resize(roundup(morphId.size()));
   morph  .resize(roundup(morph.size()));
+  normal .resize(roundup(normal.size()));
+  orm    .resize(roundup(orm.size()));
 
   Resources::recycle(std::move(desc.tex));
   Resources::recycle(std::move(desc.vbo));
@@ -113,6 +120,12 @@ void DrawBuckets::updateBindlessArrays() {
   desc.ibo     = device.descriptors(ibo);
   desc.morphId = device.descriptors(morphId);
   desc.morph   = device.descriptors(morph);
+  if(Shaders::options().doMaterialMaps) {
+    Resources::recycle(std::move(desc.normal));
+    Resources::recycle(std::move(desc.orm));
+    desc.normal = device.descriptors(normal);
+    desc.orm    = device.descriptors(orm);
+    }
   }
 
 bool DrawBuckets::commit(Encoder<CommandBuffer>& cmd, uint8_t fId) {
@@ -134,6 +147,21 @@ bool DrawBuckets::commit(Encoder<CommandBuffer>& cmd, uint8_t fId) {
       bx.bbox[1]    = Vec4(bbox[1].x,bbox[1].y,bbox[1].z,0.f);
       if(i.staticMesh->morph.anim!=nullptr)
         bx.flags |= BK_MORPH;
+      else if(i.mat.alpha==Material::Solid || i.mat.alpha==Material::AlphaTest) {
+        bx.uvScale = i.mat.uvScale;
+        if(i.mat.normal!=nullptr)
+          bx.flags |= BK_NORMAL;
+        if(i.mat.orm!=nullptr)
+          bx.flags |= BK_ORM;
+        if(i.mat.hasMaterialMaps())
+          bx.flags |= BK_MATERIAL_MAPS;
+        if(i.mat.hasMaterialMaps() && i.mat.antitile!=Material::Antitile::Off) {
+          bx.antitileCell = i.mat.antitileCell;
+          bx.flags |= BK_ANTITILE;
+          if(i.mat.antitile==Material::Antitile::Rotate)
+            bx.flags |= BK_ANTITILE_ROTATE;
+          }
+        }
       }
     else if(i.animMesh!=nullptr) {
       auto& bbox    = i.animMesh->bbox.bbox;

@@ -4,6 +4,9 @@
 #include "physicmeshshape.h"
 #include "physicvbo.h"
 #include "ragdoll.h"
+#include "cloth.h"
+#include "worldwind.h"
+#include "gothic.h"
 #include "arrowtrace.h"
 #include <Tempest/Log>
 #include "graphics/mesh/skeleton.h"
@@ -38,6 +41,7 @@
 #include "world/world.h"
 #include "game/serialize.h"
 #include "game/physicssave.h"
+#include "game/gamescript.h"
 
 #include "utils/dbgpainter.h"
 
@@ -187,8 +191,10 @@ struct DynamicWorld::BodyData {
 
 struct DynamicWorld::WorldBodies {
   std::vector<JPH::Vec3>                        vertices;
+  std::vector<JPH::Vec3>                        clothVertices;
   std::unique_ptr<CollisionWorld::CollisionBody> landscape;
   std::unique_ptr<CollisionWorld::CollisionBody> water;
+  std::unique_ptr<CollisionWorld::CollisionBody> originalCloth;
   };
 
 struct DynamicWorld::BBoxShape {
@@ -434,7 +440,7 @@ struct DynamicWorld::NpcBodyList final {
     return true;
     }
 
-  auto rayTest(const Tempest::Vec3& s, const Tempest::Vec3& e, float extR, const Npc* except) {
+  auto rayTest(const Tempest::Vec3& s, const Tempest::Vec3& e, float extR, const Npc* except, float* distance = nullptr) {
     NpcBody* ret     = nullptr;
     auto     dir     = Tempest::Vec3::normalize(e-s);
     auto     tMax    = (e-s).length();
@@ -458,6 +464,8 @@ struct DynamicWorld::NpcBodyList final {
           }
         }
       }
+    if(distance!=nullptr)
+      *distance=tHit;
     return ret;
     }
 
@@ -709,8 +717,10 @@ struct DynamicWorld::BBoxList final {
   DynamicWorld&          wrld;
   };
 
-DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
+DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh, const zenkit::Mesh* originalCloth) {
   world.reset(new CollisionWorld());
+  ownerWorld=owner;
+  clothWorld=std::make_unique<Cloth>(*world);
   bodies.reset(new WorldBodies());
   movableVobs.reset(new MovableVobs());
   world->setWaterSurfaceCallback([this](const Tempest::Vec3& center,float bottom,float& surface) {
@@ -756,6 +766,17 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
     }
   }
 
+  if(originalCloth!=nullptr && !originalCloth->polygons.material_indices.empty()) {
+    PackedMesh pkg(*originalCloth,PackedMesh::PK_Physic);
+    bodies->clothVertices.reserve(pkg.vertices.size());
+    for(const auto& vertex:pkg.vertices)
+      bodies->clothVertices.push_back(CollisionWorld::toMeters(Tempest::Vec3(vertex.pos[0],vertex.pos[1],vertex.pos[2])));
+    originalClothMesh=std::make_unique<PhysicVbo>(&bodies->clothVertices);
+    for(const auto& sub:pkg.subMeshes)
+      if(!sub.material.disable_collision && sub.iboLength>0)
+        originalClothMesh->addIndex(pkg.indices,sub.iboOffset,sub.iboLength,sub.material.group);
+    }
+
   JPH::Vec3 bbox[2] = {JPH::Vec3::sZero(), JPH::Vec3::sZero()};
   Tempest::Matrix4x4 mt;
   mt.identity();
@@ -797,6 +818,24 @@ DynamicWorld::~DynamicWorld(){
   for(auto* body:movableVobs->bodies)
     body->movableOwner = nullptr;
   }
+
+Cloth& DynamicWorld::cloth() { return *clothWorld; }
+const Cloth& DynamicWorld::cloth() const { return *clothWorld; }
+void DynamicWorld::setClothEnabled(bool value) {
+  clothWorld->setEnabled(value);
+  if(ownerWorld!=nullptr && ownerWorld->view()!=nullptr)
+    ownerWorld->view()->setOriginalClothVisible(!value);
+  if(value) {
+    bodies->originalCloth.reset();
+    } else if(bodies->originalCloth==nullptr && originalClothMesh!=nullptr &&
+              !originalClothMesh->isEmpty() && originalClothMesh->shape()!=nullptr) {
+    bodies->originalCloth=world->addCollisionBody(originalClothMesh->shape(),Tempest::Matrix4x4::mkIdentity(),
+                                                materialFriction(zenkit::MaterialGroup::NONE),
+                                                C_Landscape,false,false,originalClothMesh.get());
+    bodies->originalCloth->setLabel("cloth-fallback");
+    }
+  }
+bool DynamicWorld::clothEnabled() const { return clothWorld->enabled(); }
 
 DynamicWorld::RayLandResult DynamicWorld::landRay(const Tempest::Vec3& from, float maxDy) const {
   world->updateAabbs();
@@ -856,6 +895,33 @@ DynamicWorld::RayCamResult DynamicWorld::cameraRay(const Tempest::Vec3& from, co
 
 DynamicWorld::RayLandResult DynamicWorld::ray(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
   return toResult(world->rayCast(from,to,visualMask,false), to);
+  }
+
+DynamicWorld::RayLandResult DynamicWorld::rayClothCamera(const Tempest::Vec3& from,const Tempest::Vec3& to,
+                                                       std::string_view ownVisual,const Tempest::Vec3* bounds,
+                                                       size_t& selfHits,std::string* blockedLabel) const {
+  std::vector<const CollisionWorld::CollisionBody*> excluded;
+  const auto inside=[&](const Tempest::Vec3& point) {
+    return point.x>=bounds[0].x-25.f && point.x<=bounds[1].x+25.f &&
+           point.y>=bounds[0].y-25.f && point.y<=bounds[1].y+25.f &&
+           point.z>=bounds[0].z-25.f && point.z<=bounds[1].z+25.f;
+    };
+  for(;;) {
+    const auto hit=world->rayCast(from,to,visualMask,false,nullptr,&excluded);
+    if(blockedLabel)*blockedLabel=hit.body?hit.body->label():"";
+    if(!hit.hasHit || !hit.body || hit.body->category()!=C_Object || ownVisual.empty() ||
+       hit.body->label()!=ownVisual || !inside(hit.point) || excluded.size()>=8)
+      return toResult(hit,to);
+    JPH::Vec3 low,high;hit.body->getAabb(low,high);
+    const auto minimum=CollisionWorld::toCentimeters(low),maximum=CollisionWorld::toCentimeters(high);
+    if(maximum.x<bounds[0].x-25.f || minimum.x>bounds[1].x+25.f ||
+       maximum.y<bounds[0].y-25.f || minimum.y>bounds[1].y+25.f ||
+       maximum.z<bounds[0].z-25.f || minimum.z>bounds[1].z+25.f)
+      return toResult(hit,to);
+    // Repeat the whole segment with only this exact native body excluded. A
+    // wall behind or intersecting its hull must still reject the camera.
+    excluded.push_back(hit.body);++selfHits;
+    }
   }
 
 DynamicWorld::RayQueryResult DynamicWorld::rayNpc(const Tempest::Vec3& from, const Tempest::Vec3& to, const Npc* except) const {
@@ -1553,6 +1619,7 @@ void DynamicWorld::setTraceTime(int64_t minutes) {
   }
 
 void DynamicWorld::setFragmentObserver(const Tempest::Vec3& position) {
+  clothWorld->setObserver(position);
   fragmentObserver=position;
   hasFragmentObserver=true;
   }
@@ -2034,13 +2101,41 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   ArrowTrace::write(b,b.cb,"world_query",dt,nullptr,hit.hasHit,hit.fraction,hit.point,hit.normal,
                     unsigned(matId),hit.body!=nullptr ? unsigned(hit.body->category()) : 0);
 
+  // Cloth has no blocking collision shape. Notify only the travelled part of
+  // this step: either a solid world contact or an accepted NPC contact ends it.
+  const bool hasCloth=clothWorld->enabled() && clothWorld->bodyCount()!=0;
+  const auto notifyCloth=[&](const Tempest::Vec3& end) {
+    if(!hasCloth)
+      return;
+    const auto incoming=to-pos;
+    if(incoming.quadLength()<=1.e-8f)
+      return;
+    if(!isSpell) {
+      clothWorld->projectile(pos,end,Tempest::Vec3::normalize(incoming)*.35f,true);
+      }
+    else if(ownerWorld!=nullptr) {
+      const auto kind=ownerWorld->script().physicalSpell(b.spellId());
+      if(kind==GameScript::PhysicalSpell::Fireball || kind==GameScript::PhysicalSpell::WindFist)
+        clothWorld->projectile(pos,end,Tempest::Vec3::normalize(incoming)*(kind==GameScript::PhysicalSpell::WindFist ? 8.f : 5.f),false);
+      }
+    };
+
   // an arrow aimed by hand: the npcs on the way to the wall first (one stands right before it), hit
   // where their bones are
   const bool precise = !isSpell && b.cb!=nullptr && b.cb->isPrecise();
   if(precise) {
     const float a   = matId!=zenkit::MaterialGroup::NONE ? hit.fraction : 1.f;
     const auto  end = pos + (to-pos)*a;
-    if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) { return b.cb->onCollidePrecise(npc,pos,end); })) {
+    if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) {
+      // Capture the same bone intersection before damage can alter its pose.
+      float distance=0;
+      const bool boneHit=hasCloth && npc.rayHitZone(pos,end,distance)!=HitZones::None;
+      if(!b.cb->onCollidePrecise(npc,pos,end))
+        return false;
+      const auto impact=boneHit ? pos+Tempest::Vec3::normalize(end-pos)*distance : end;
+      notifyCloth(impact);
+      return true;
+      })) {
       b.cb->onStop();
       ArrowTrace::write(b,b.cb,"end",dt);
       return;
@@ -2049,6 +2144,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
 
   bool stopBullet = false;
   if(matId != zenkit::MaterialGroup::NONE) {
+    notifyCloth(pos+(to-pos)*hit.fraction);
     if(!isSpell && hit.body!=nullptr && hit.body->ptrType()==P_MovableVob) {
       auto& target=*static_cast<BodyData*>(hit.body->payload());
       // Direction is cm/ms; a 120 gram arrow transfers SI momentum at its
@@ -2110,14 +2206,19 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         }
       }
     } else {
+    auto clothEnd=to;
+    float npcDistance=0;
     if(precise)
       ; // tested above
-    else if(auto ptr = npcList->rayTest(pos,to,b.targetRange(),nullptr)) {
+    else if(auto ptr = npcList->rayTest(pos,to,b.targetRange(),nullptr,&npcDistance)) {
       ArrowTrace::write(b,b.cb,"npc_collision",dt,ptr->toNpc());
       if(b.cb!=nullptr)
         stopBullet |= b.cb->onCollide(*ptr->toNpc()); else
         stopBullet  = true;
+      if(stopBullet)
+        clothEnd=pos+Tempest::Vec3::normalize(to-pos)*npcDistance;
       }
+    notifyCloth(clothEnd);
     const float l = b.speed();
     auto        d = b.direction();
     if(!isSpell)
@@ -2155,6 +2256,13 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   }
 
 void DynamicWorld::tick(uint64_t dt) {
+  if(ownerWorld!=nullptr) {
+    const float cycle=Gothic::settingsGetF("ENGINE","zWindCycleTime")+
+                      Gothic::settingsGetF("ENGINE","zWindCycleTimeVar");
+    const uint64_t period=std::isfinite(cycle) && cycle>0.f ? uint64_t(cycle*1000.f) : 0;
+    clothWorld->setWind(WorldWind::sample(ownerWorld->tickCount(),period,
+                                        Gothic::settingsGetI("ENGINE","zWindEnabled")!=0));
+    }
   npcList   ->tickAabbs();
   bulletList->tick(dt);
   world     ->tick(dt);
@@ -2498,8 +2606,9 @@ bool DynamicWorld::NpcItem::virtualDiagnostics(CharacterVirtualDiagnostics& out)
   }
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
-    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
-  return implMoveVirtual(displacement,dt,stepHeight,maxSlope,mass,culprit,false);
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit,
+    bool limitStairAdvance, bool bounceOnSteepContact) {
+  return implMoveVirtual(displacement,dt,stepHeight,maxSlope,mass,culprit,false,limitStairAdvance,bounceOnSteepContact);
   }
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::carryVirtual(uint64_t dt, Npc* culprit) {
@@ -2507,7 +2616,8 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::carryVirtual(uin
   }
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
-    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry) {
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry,
+    bool limitStairAdvance, bool bounceOnSteepContact) {
   VirtualMoveResult result;
   if(obj==nullptr)
     return result;
@@ -2522,7 +2632,10 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
   const auto initial = obj->pos;
   auto* npcDiagnostic = carry ? nullptr : obj->virtualDiagnosticMove.get();
   if(npcDiagnostic!=nullptr) {
+    const auto sequence = npcDiagnostic->sequence+1;
     *npcDiagnostic = {};
+    npcDiagnostic->sequence = sequence;
+    npcDiagnostic->dt = dt;
     npcDiagnostic->initial = initial;
     npcDiagnostic->requested = displacement;
     }
@@ -2594,7 +2707,7 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
   const auto requested = clipNpc(initial+displacement,requestClipped,
                                  npcDiagnostic!=nullptr ? &npcDiagnostic->requestCollision : nullptr)-initial;
   auto moved = carry ? obj->virtualCharacter->carry(dt) :
-                       obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit);
+                       obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit,limitStairAdvance);
   if(carry && !moved.supportMoved)
     return result;
   bool resolvedClipped = false;
@@ -2646,20 +2759,34 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
   result.groundVelocity = moved.groundVelocity;
   result.grounded = moved.grounded;
   result.steep = moved.steep;
+  result.steepContact = moved.steepContact;
+  result.steepContactNormal = moved.steepContactNormal;
   result.blocked = preFall;
   result.supportMoved = moved.supportMoved;
   const Tempest::Vec3 horizontal(displacement.x,0,displacement.z);
   const float desiredLength = horizontal.length();
   if(!isNpcMoveSkipped(displacement) && desiredLength>0.1f) {
     const float advancement = Tempest::Vec3::dotProduct(accepted-initial,horizontal)/desiredLength;
+    result.advancementRatio = advancement/desiredLength;
     result.blocked |= advancement<=std::max(0.1f,desiredLength*0.1f);
+    // Keep neighbour clipping and charge callbacks on their existing path.
+    // World sliding can retain half the requested advance, so the old ten
+    // percent stall test alone never asks a monster to use its native bounce.
+    const bool steepBlocked = bounceOnSteepContact && moved.grounded && moved.steepContact &&
+                              !requestClipped && !resolvedClipped && !preFall && result.advancementRatio<.6f;
+    result.blocked |= steepBlocked;
     if(result.blocked && !requestClipped && !resolvedClipped && !preFall) {
       result.collision.landCol = true;
-      result.collision.normal = Tempest::Vec3::normalize(accepted-initial-horizontal);
+      result.collision.normal = steepBlocked ? moved.steepContactNormal :
+                                              Tempest::Vec3::normalize(accepted-initial-horizontal);
       }
     }
-  if(npcDiagnostic!=nullptr)
+  if(npcDiagnostic!=nullptr) {
     npcDiagnostic->blocked = result.blocked;
+    npcDiagnostic->steepContact = result.steepContact;
+    npcDiagnostic->steepContactNormal = result.steepContactNormal;
+    npcDiagnostic->advancementRatio = result.advancementRatio;
+    }
   return result;
   }
 

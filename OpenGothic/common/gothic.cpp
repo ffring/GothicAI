@@ -7,6 +7,12 @@
 #include <cctype>
 #include <cassert>
 
+#if defined(__GLIBC__)
+#include <chrono>
+#include <cstdlib>
+#include <malloc.h>
+#endif
+
 #include <zenkit/addon/daedalus.hh>
 
 #include "game/definitions/visualfxdefinitions.h"
@@ -68,8 +74,13 @@ Gothic::Gothic() {
 #endif
   setBenchmarkMode(CommandLine::inst().isBenchmarkMode());
 
-  if(Resources::hasGraphicsDevice() && Resources::device().properties().raytracing.rayQuery)
+  if(Resources::hasGraphicsDevice() && Resources::device().properties().raytracing.rayQuery) {
     opts.doGi = CommandLine::inst().isRtGi();
+    // GI probes by default on a discrete GPU: ≈0.7 ms on an RTX 3080, an M1 is at 99 % with them
+    // (reports/render-features/2026-10-18); the renderer drops them without -rt
+    if(!CommandLine::inst().hasRtGiArg() && Resources::device().properties().type==Tempest::DeviceType::Discrete)
+      opts.doGi = GiMethod::Probes;
+    }
 
   opts.aaPreset = CommandLine::inst().aaPreset();
 
@@ -102,8 +113,10 @@ Gothic::Gothic() {
   defaults->set("GAME", "physics_noise",       1);
   defaults->set("GAME", "destruction",         1);
   defaults->set("GAME", "buoyancy",            1);
+  defaults->set("GAME", "cloth",               1);
   defaults->set("GAME", "character_virtual",   1);
   defaults->set("GAME", "npc_character_virtual",1);
+  defaults->set("GAME", "monster_character_virtual",1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -508,11 +521,23 @@ bool Gothic::finishLoading() {
     return false;
   if(loadingFlag.compare_exchange_strong(state,LoadState::Idle)){
     loaderTh.join();
+#if defined(__GLIBC__)
+    const bool loadedWorld = state==LoadState::Finalize && loadingWorld && pendingGame!=nullptr;
+#endif
     if(pendingGame!=nullptr)
       game = std::move(pendingGame);
     saveTex = Texture2d();
     loadTex = Texture2d();
     onWorldLoaded();
+#if defined(__GLIBC__)
+    const char* trim = std::getenv("OPENGOTHIC_MALLOC_TRIM");
+    if(loadedWorld && (trim==nullptr || std::strcmp(trim,"0")!=0)) {
+      const auto started = std::chrono::steady_clock::now();
+      malloc_trim(0);
+      const auto elapsed = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+      Log::i("malloc_trim after world load: ",elapsed," ms");
+      }
+#endif
     return true;
     }
   return false;
@@ -540,6 +565,9 @@ void Gothic::implStartLoadSave(std::string_view banner,
   if(!loadingFlag.compare_exchange_strong(zero,one)){
     return; // loading already
     }
+#if defined(__GLIBC__)
+  loadingWorld = load;
+#endif
 
   onStartLoading();
   auto g = clearGame().release();
@@ -757,6 +785,8 @@ zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const Script
     }
 
   auto buf = zenkit::Read::from(path);
+  if(buf!=nullptr)
+    Resources::censusFile(path);
   zenkit::DaedalusScript script;
   script.load(buf.get());
   return script;
@@ -921,8 +951,10 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","physics_noise")!=0,
     settingsGetI("GAME","destruction")!=0,
     settingsGetI("GAME","buoyancy")!=0,
+    settingsGetI("GAME","cloth")!=0,
     settingsGetI("GAME","character_virtual")!=0,
-    settingsGetI("GAME","npc_character_virtual")!=0
+    settingsGetI("GAME","npc_character_virtual")!=0,
+    settingsGetI("GAME","monster_character_virtual")!=0
     };
   }
 
@@ -937,6 +969,7 @@ void Gothic::setupSettings() {
     activeWorld->physic()->setPhysicsNoiseEnabled(physicsFlagsCache.physicsNoise);
     activeWorld->physic()->setDestructionEnabled(physicsFlagsCache.destruction);
     activeWorld->physic()->setBuoyancyEnabled(physicsFlagsCache.buoyancy);
+    activeWorld->physic()->setClothEnabled(physicsFlagsCache.cloth);
     }
 
   const float soundVolume = settingsSoundVolume();

@@ -25,6 +25,7 @@ class Animation;
 class AttachBinder;
 class PfxEmitterMesh;
 class GthFont;
+class ContentCensus;
 
 namespace Dx8 {
 class DirectMusic;
@@ -108,6 +109,20 @@ class Resources final {
     static auto                      loadTextureAnim(std::string_view name) -> std::vector<const Tempest::Texture2d*>;
     static       Material            loadMaterial(const zenkit::Material& src, bool enableAlphaTest);
 
+    struct MaterialMaps {
+      const Tempest::Texture2d* albedo = nullptr;
+      const Tempest::Texture2d* normal = nullptr;
+      const Tempest::Texture2d* orm    = nullptr;
+      float                    scale  = 1.f;
+      float                    antitileCell = 1.f;
+      Material::Antitile       antitile = Material::Antitile::Off;
+      bool                     present = false;
+      bool                     hasAlbedo = false;
+      };
+    static MaterialMaps              loadMaterialMaps(std::string_view name);
+    static void                      materialAlbedoReplaced(std::string_view name);
+    static bool                      materialMapsEnabled();
+
     static const AttachBinder*       bindMesh       (const ProtoMesh& anim, const Skeleton& s);
     static const ProtoMesh*          loadMesh       (std::string_view name);
     static const PfxEmitterMesh*     loadEmiterMesh (std::string_view name);
@@ -155,11 +170,14 @@ class Resources final {
     static bool                      hasFile    (std::string_view fname);
 
     static const zenkit::Vfs&        vdfsIndex();
+    static void                      censusFile(std::u16string_view path);
+    static bool                      writeCensus();
 
     static const Tempest::IndexBuffer<uint16_t>&   cubeIbo();
 
   private:
     static Resources* inst;
+    void initCensus();
 
     struct Archive {
       std::u16string name;
@@ -187,6 +205,8 @@ class Resources final {
     void                  detectVdf(std::vector<Archive>& ret, const std::u16string& root);
 
     void                  indexHdTextures();
+    void                  indexMaterialMaps();
+    const Tempest::Texture2d* implLoadMaterialTexture(const std::string& path, bool normalMap);
     Tempest::Texture2d*   implLoadTexture(std::string_view cname, bool forceMips);
     Tempest::Texture2d    implLoadTextureUncached(std::string_view name, bool forceMips);
     Tempest::Texture2d    implLoadTextureUncached(std::string_view name, zenkit::Read& data, bool forceMips);
@@ -236,6 +256,7 @@ class Resources final {
     std::recursive_mutex              sync;
     std::unique_ptr<Dx8::DirectMusic> dxMusic;
     DmLoader*                         dmLoader = nullptr;
+    std::unique_ptr<ContentCensus>     census;
     zenkit::Vfs                       gothicAssets;
 
     std::vector<uint8_t>              fBuff, ddsBuf;
@@ -256,6 +277,16 @@ class Resources final {
     // OPENGOTHIC_TEXTURES: sharper textures of our own (scripts/hd-textures.sh) in place of the game's,
     // upper-case name without .TGA -> the DDS (or PNG) file
     std::unordered_map<std::string,std::string>                       hdTextures;
+    struct MaterialMapFiles {
+      std::string albedo, normal, orm;
+      std::string albedoReplacement;
+      float       scale = 1.f;
+      float       antitileCell = 1.f;
+      Material::Antitile antitile = Material::Antitile::Off;
+      };
+    std::unordered_map<std::string,MaterialMapFiles>                  materialMaps;
+    TextureCache                                                     materialTextureCache;
+    bool                                                             materialMapsPresent = false;
     std::map<Tempest::Color,std::unique_ptr<Tempest::Texture2d>,Less> pixCache;
     std::unordered_map<std::string,std::unique_ptr<ProtoMesh>>        aniMeshCache;
     std::unordered_map<DecalK,std::unique_ptr<ProtoMesh>,Hash>        decalMeshCache;

@@ -9,6 +9,7 @@
 #      RYZEN_HOST    SSH host for Ryzen (default: ryzen)
 #      RYZEN_LOCK_WAIT seconds to wait for the worktree lock and gq (default: auto 120, ryzen 900)
 #      RYZEN_MAX     gq job time limit, including the build (default: 30m)
+#      RYZEN_BENCH_CLASS quick (default) or quiet for timing without other jobs
 #      GAME_BIN      game executable (default: OpenGothic/build/opengothic/Gothic2Notr)
 #      TEMPEST_WINDOW_SIZE client frame size (default: 800x600)
 #      SAVE          save to start from (default: save_slot_1.sav in the main checkout)
@@ -23,9 +24,12 @@
 #      PHYSICS_NOISE optional initial GAME physics_noise setting (0 or 1), before world loading
 #      DESTRUCTION optional initial GAME destruction setting (0 or 1), before world loading
 #      BUOYANCY     optional initial GAME buoyancy setting (0 or 1), before world loading
+#      CLOTH        optional initial GAME cloth setting (0 or 1), before world loading
 #      CHARACTER_VIRTUAL optional initial GAME character_virtual setting (0 or 1), before world loading
 #      NPC_CHARACTER_VIRTUAL optional initial GAME npc_character_virtual setting (0 or 1)
+#      MONSTER_CHARACTER_VIRTUAL optional initial GAME monster_character_virtual setting (0 or 1)
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
+#      OPENGOTHIC_CENSUS  session resource JSON (use an absolute path inside out dir for Ryzen)
 #      OPENGOTHIC_FRACTURE  pre-cut meshes (default: ~/.local/share/gothic-ai/fracture, when made; empty: none)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -46,6 +50,8 @@ SCEN="${1:?usage: scripts/bench.sh <scenario> [out dir]}"
 [[ -f "$SCEN" ]] || { echo "no scenario: $1" >&2; exit 2; }
 SCEN="$(cd "$(dirname "$SCEN")" && pwd)/$(basename "$SCEN")"
 NAME="$(basename "$SCEN" .bench)"
+NEEDS_CADENCE=0
+if awk '$1 == "cadence" { found=1 } END { exit !found }' "$SCEN"; then NEEDS_CADENCE=1; fi
 OUT="${2:-$ROOT/.bench/$NAME-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
@@ -128,9 +134,35 @@ else
   START_ARGS=(-save 1)
 fi
 
+# These fixtures use a prepared world and clock; skip the new-game chapter video
+# before their first command on NEWWORLD.
+if [[ "$NAME" == cloth* || "$NAME" == monster-character-virtual* ]]; then
+  START_ARGS+=(-nointro)
+fi
+
 if [[ "${NO_BUILD:-}" != 1 ]]; then
   cmake --build "$ROOT/OpenGothic/build" --target Gothic2Notr >"$OUT/build.log" 2>&1 \
     || { tail -30 "$OUT/build.log"; exit 1; }
+fi
+
+# Normal-clock timing is compiled out of ordinary local builds. Refuse an
+# unsupported fallback before opening a game instead of producing empty timings.
+if [[ "${RYZEN_BENCH:-}" != 1 && "$NEEDS_CADENCE" == 1 ]]; then
+  CADENCE_BUILD="$(dirname "$GAME_BIN")"
+  CADENCE_SUPPORTED=0
+  for ((i = 0; i < 4; i++)); do
+    if [[ -f "$CADENCE_BUILD/CMakeCache.txt" ]]; then
+      if grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$CADENCE_BUILD/CMakeCache.txt"; then
+        CADENCE_SUPPORTED=1
+      fi
+      break
+    fi
+    CADENCE_BUILD="$(dirname "$CADENCE_BUILD")"
+  done
+  if [[ "$CADENCE_SUPPORTED" != 1 ]]; then
+    echo 'bench: cadence requires -DOPENGOTHIC_ENABLE_APP_CADENCE=ON; use BENCH_HOST=ryzen to wait for Ryzen' >&2
+    exit 2
+  fi
 fi
 
 # the game reads Gothic.ini and saves from its working directory
@@ -149,7 +181,7 @@ musicVolume=${MUSIC:-0}
 musicEnabled=$([[ "${MUSIC:-0}" == 0 || "${MUSIC:-0}" == 0.0 ]] && echo 0 || echo 1)
 worldSounds=${WORLD_SOUNDS:-1}
 EOF
-if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${BUOYANCY:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
+if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${BUOYANCY:-}${CLOTH:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}${MONSTER_CHARACTER_VIRTUAL:-}" ]]; then
   printf '\n[GAME]\n' >>"$RUN/Gothic.ini"
   if [[ -n "${MOVABLE_VOBS:-}" ]]; then
     [[ "$MOVABLE_VOBS" == 0 || "$MOVABLE_VOBS" == 1 ]] || { echo "MOVABLE_VOBS must be 0 or 1" >&2; exit 2; }
@@ -167,6 +199,10 @@ if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}
     [[ "$NPC_CHARACTER_VIRTUAL" == 0 || "$NPC_CHARACTER_VIRTUAL" == 1 ]] || { echo "NPC_CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
     printf 'npc_character_virtual=%s\n' "$NPC_CHARACTER_VIRTUAL" >>"$RUN/Gothic.ini"
   fi
+  if [[ -n "${MONSTER_CHARACTER_VIRTUAL:-}" ]]; then
+    [[ "$MONSTER_CHARACTER_VIRTUAL" == 0 || "$MONSTER_CHARACTER_VIRTUAL" == 1 ]] || { echo "MONSTER_CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
+    printf 'monster_character_virtual=%s\n' "$MONSTER_CHARACTER_VIRTUAL" >>"$RUN/Gothic.ini"
+  fi
   if [[ -n "${PHYSICS_NOISE:-}" ]]; then
     [[ "$PHYSICS_NOISE" == 0 || "$PHYSICS_NOISE" == 1 ]] || { echo "PHYSICS_NOISE must be 0 or 1" >&2; exit 2; }
     printf 'physics_noise=%s\n' "$PHYSICS_NOISE" >>"$RUN/Gothic.ini"
@@ -178,6 +214,10 @@ if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}
   if [[ -n "${BUOYANCY:-}" ]]; then
     [[ "$BUOYANCY" == 0 || "$BUOYANCY" == 1 ]] || { echo "BUOYANCY must be 0 or 1" >&2; exit 2; }
     printf 'buoyancy=%s\n' "$BUOYANCY" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${CLOTH:-}" ]]; then
+    [[ "$CLOTH" == 0 || "$CLOTH" == 1 ]] || { echo "CLOTH must be 0 or 1" >&2; exit 2; }
+    printf 'cloth=%s\n' "$CLOTH" >>"$RUN/Gothic.ini"
   fi
 fi
 
@@ -211,6 +251,60 @@ HOST=mac
 printf '%s\n' "$HOST" >"$OUT/host.txt"
 REPORT_RC=0
 python3 "$ROOT/scripts/bench_report.py" "$OUT" || REPORT_RC=$?
+python3 - "$OUT/events.jsonl" "$SCEN" <<'PY' || REPORT_RC=1
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+path = Path(sys.argv[1])
+failures = []
+observed = Counter()
+if path.exists():
+    with path.open() as events:
+        for line_number, line in enumerate(events, 1):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                failures.append(f'events.jsonl:{line_number}: invalid JSON')
+                continue
+            kind = event.get('kind', '')
+            if kind == 'cloth_verify' and event.get('pass'):
+                observed[('verify', event.get('check'))] += 1
+            elif kind == 'cloth_checkpoint':
+                observed[('checkpoint', event.get('label'))] += 1
+            elif kind == 'cloth_session_initial' and event.get('rest'):
+                observed[('initial', event.get('label'))] += 1
+            if kind == 'error' or kind.endswith('_error') or event.get('pass') is False:
+                failures.append(f"{kind}: {event.get('reason', event.get('check', 'check failed'))}")
+scenario = Path(sys.argv[2])
+if scenario.name.startswith('cloth'):
+    expected = Counter()
+    for line in scenario.read_text().splitlines():
+        command = line.split()
+        if len(command) == 3 and command[0] == 'cloth' and command[1] in ('verify', 'checkpoint', 'initial'):
+            expected[(command[1], command[2])] += 1
+    for (command, label), count in (expected - observed).items():
+        failures.append(f'missing cloth {command} {label}: {count} result(s)')
+if failures:
+    for failure in failures[:10]:
+        print(f'bench: failed: {failure}', file=sys.stderr)
+    raise SystemExit(1)
+PY
+if [[ "$NEEDS_CADENCE" == 1 ]]; then
+  python3 - "$OUT" <<'PY' || REPORT_RC=1
+import json
+import sys
+from pathlib import Path
+out = Path(sys.argv[1])
+try:
+    timing = json.loads((out / 'appcadence.csv.json').read_text())
+    valid = timing['complete'] and timing['frames'] > 0 and timing['overflow'] == 0
+except (OSError, ValueError, KeyError):
+    valid = False
+if not valid:
+    raise SystemExit('bench: normal-clock timing did not complete; no valid cadence measurement')
+PY
+fi
 echo "bench: ran on $HOST"
 echo "$OUT"
 exit "$REPORT_RC"

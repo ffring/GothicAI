@@ -11,7 +11,24 @@ static Tempest::Color toColor(zenkit::Color v) {
   }
 
 Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
-  tex = Resources::loadTexture(m.texture);
+  loadFrames(m);
+
+  Resources::MaterialMaps maps;
+  if(m.group!=zenkit::MaterialGroup::WATER && !hasFrameAnimation() &&
+     m.wave_mode==zenkit::WaveMode::NONE &&
+     (m.texture_anim_map_mode==zenkit::AnimationMapping::NONE ||
+      (m.texture_anim_map_dir.x==0.f && m.texture_anim_map_dir.y==0.f))) {
+    maps = Resources::loadMaterialMaps(m.texture);
+    // Our colour also determines alpha classification; consulting the original
+    // texture format here would open an asset that this record replaces.
+    if(maps.hasAlbedo) {
+      tex = maps.albedo!=nullptr ? maps.albedo : &Resources::fallbackTexture();
+      if(maps.albedo!=nullptr)
+        Resources::materialAlbedoReplaced(m.texture);
+      }
+    }
+  if(tex==nullptr)
+    tex = Resources::loadTexture(m.texture);
   if(tex==nullptr) {
     if(!m.texture.empty()) {
       tex = Resources::loadTexture("DEFAULT.TGA");
@@ -20,8 +37,6 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
       enableAlphaTest &= (m.color.a!=255);
       }
     }
-
-  loadFrames(m);
 
   alpha = loadAlphaFunc(m.alpha_func,m.group,m.color.a,tex,enableAlphaTest);
   if(alpha==Water && m.name=="OWODWFALL_WATERFALL_01") {
@@ -42,6 +57,18 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
 
   if(m.environment_mapping!=0)
     ; // envMapping = m.environment_mapping_strength;
+
+  if(isSolid() && m.group!=zenkit::MaterialGroup::WATER &&
+     !hasFrameAnimation() && !hasUvAnimation() && m.wave_mode==zenkit::WaveMode::NONE) {
+    if(!maps.present)
+      maps = Resources::loadMaterialMaps(m.texture);
+    normal  = maps.normal;
+    orm     = maps.orm;
+    uvScale = maps.scale;
+    antitileCell = maps.antitileCell;
+    antitile = maps.antitile;
+    materialMaps = maps.present;
+    }
   }
 
 Material::Material(const zenkit::VisualDecal& decal) {
@@ -64,6 +91,12 @@ Material::Material(const zenkit::IParticleEffect& src) {
 
 bool Material::operator ==(const Material& other) const {
   return tex==other.tex &&
+         normal==other.normal &&
+         orm==other.orm &&
+         uvScale==other.uvScale &&
+         antitileCell==other.antitileCell &&
+         antitile==other.antitile &&
+         materialMaps==other.materialMaps &&
          frames==other.frames &&
          alpha==other.alpha &&
          alphaWeight==other.alphaWeight &&

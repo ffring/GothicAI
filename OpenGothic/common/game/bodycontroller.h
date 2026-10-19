@@ -45,11 +45,16 @@ class BodyController final {
       std::string provider;
       };
     static void setActors(const std::vector<Npc*>& actors);
+    static bool hasOwners();
+    // Validate before editing the subscription. Leases and pending boundary requests survive.
+    static const char* updateWatch(const std::vector<Npc*>& actors, uint64_t periodMs);
     static void fixturePrepare(Npc& actor, Npc& target, float distanceCm, float yawOffsetDeg);
     static void fixtureLock(Npc& actor, uint64_t durationMs);
     static std::string selfTestJson();
-    static std::string handleJson(const rapidjson::Value& request);
-    static std::string statusJson(const Npc* actor=nullptr);
+    // Only the ordinary realtime bridge validates against successfully sent observations.
+    static std::string handleJson(const rapidjson::Value& request,bool sentObservations=false);
+    // Extra boundary diagnostics are opt-in for CPU fixtures, outside the strict wire schema.
+    static std::string statusJson(const Npc* actor=nullptr,bool boundaryDiagnostics=false);
     static std::string drainJson();
     static void setSink(std::function<void(std::string_view)> sink);
     static Snapshot snapshot(const Npc& actor);

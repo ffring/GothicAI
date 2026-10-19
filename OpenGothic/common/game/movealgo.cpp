@@ -309,7 +309,10 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     };
 
   if(virtualWalking) {
-    if(state!=Slide)
+    // Monster attacks can put a deliberate vertical displacement in the root
+    // (the wolf's T_FISTATTACKMOVE). Keep it, unlike ordinary walking bob.
+    const bool attackRoot = !npc.isPlayer() && !npc.isHuman() && bs==BS_HIT;
+    if(state!=Slide && !attackRoot)
       dp.y = 0.f; // walking root bob cannot detach the controller from its support
     const bool moved = tickCharacterVirtual(dt,dp);
     if(impulseGeneration!=movementImpulseGeneration)
@@ -675,7 +678,11 @@ bool MoveAlgo::useCharacterVirtual() {
   if(NavDemos::forceCharacterVirtual(npc) && npc.isHuman() && !npc.isDown())
     return true;
   const auto* hero = npc.world().player();
-  if(!Gothic::physicsFlags().npcCharacterVirtual || !npc.isHuman() || npc.isDown() || hero==nullptr) {
+  const bool human = npc.isHuman();
+  const bool enabled = human ? Gothic::physicsFlags().npcCharacterVirtual :
+                               Gothic::physicsFlags().monsterCharacterVirtual &&
+                               Gothic::physicsFlags().allowsMonsterCharacterVirtual(npc.isDown(),canFlyOverWater());
+  if(!enabled || npc.isDown() || hero==nullptr) {
     npcVirtualInRange = false;
     return false;
     }
@@ -701,7 +708,9 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   const float maxSlope = std::acos(std::clamp(slideAngle(),0.f,1.f));
   const auto impulseGeneration=movementImpulseGeneration;
   const auto previousState=flags;
-  const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc);
+  const bool limitStairAdvance = !npc.isPlayer() && !npc.isHuman();
+  const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc,
+                                           limitStairAdvance,limitStairAdvance);
   if(preserveMovementImpulse(impulseGeneration,previousState,"virtual"))
     return true;
   npc.setViewPosition(moved.position);
@@ -709,6 +718,19 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   virtualGroundVelocity = moved.groundVelocity;
 
   auto collision = moved.collision;
+  const bool faceTravel = limitStairAdvance && moved.steepContact && isForward(displacement) &&
+                          !npc.isAttackAnim() && npc.bodyStateMasked()!=BS_HIT;
+  const auto faceSteepTravel = [&] {
+    if(!faceTravel || collision.npc!=nullptr || collision.preFall || dt==0)
+      return;
+    const auto travel = moved.position-origin;
+    const float distance = std::hypot(travel.x,travel.z);
+    if(distance<=.1f*float(dt))
+      return; // Ignore slow contact recovery below 1 m/s.
+    // Even a failed move may have slid sideways in Jolt. Face the accepted
+    // travel so the next animation step no longer keeps driving into the bank.
+    npc.setDirection(Tempest::Vec3(travel.x,0,travel.z));
+    };
   if(!npc.isPlayer() && moved.blocked) {
     DynamicWorld::CollisionTest legacy;
     // Enrich only the AI notification, after Jolt has accepted the final origin.
@@ -716,7 +738,7 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
     // testMove restores the ellipsoid and leaves the native controller untouched.
     npc.physic.testMove(origin+displacement,origin,legacy);
     if(legacy.vob!=nullptr || legacy.npc!=nullptr || legacy.landCol) {
-      if(legacy.normal!=Tempest::Vec3())
+      if(legacy.normal!=Tempest::Vec3() && !(limitStairAdvance && moved.steepContact))
         collision.normal = legacy.normal;
       collision.vob = legacy.vob;
       if(collision.npc==nullptr) {
@@ -792,6 +814,23 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
       // Jolt owns collision resolution; retain the existing AI response when a
       // wall or another actor prevents progress (bounce, climb, or mob perception).
       onMoveFailed(displacement,collision,dt);
+      faceSteepTravel();
+      return false;
+      }
+    faceSteepTravel();
+    return true;
+    }
+
+  if(!npc.isPlayer() && !npc.isHuman() && npc.bodyStateMasked()==BS_HIT &&
+     validGround && pos.y-ground<stepHeight()) {
+    // Legacy grounded attacks retain their root until they leave the floor by
+    // a full step. A wolf lunge can briefly detach native support while its
+    // animation still owns both vertical and horizontal travel. Do not replace
+    // the remaining attack root with the airborne velocity integrator early.
+    setState(Run);
+    clearSpeed();
+    if(moved.blocked) {
+      onMoveFailed(displacement,collision,dt);
       return false;
       }
     return true;
@@ -834,7 +873,8 @@ void MoveAlgo::resetCharacterVirtual(bool mobTransition) {
   virtualMovementActive = false;
   virtualGroundVelocity = {};
   virtualJumpVelocity = {};
-  npcVirtualMobTransition |= mobTransition && !npc.isPlayer() && npc.isHuman();
+  npcVirtualMobTransition |= mobTransition && !npc.isPlayer() &&
+                            (npc.isHuman() || Gothic::physicsFlags().monsterCharacterVirtual);
   }
 
 void MoveAlgo::carryCharacterVirtual(uint64_t dt) {
@@ -1427,6 +1467,7 @@ void MoveAlgo::onMoveFailed(const Tempest::Vec3& dp, const DynamicWorld::Collisi
   if(forward && !info.preFall && npc.currentTarget==info.npc && npc.bodyStateMasked()==BS_HIT) {
     // if charge attack run into npc, FAI should be reengaged
     // makes ai behaviour more consistent with vanilla, when fighting field-raiders
+    TestBench::monsterCharacterCollision(npc,info.npc);
     npc.implFaiWait(0);
     return;
     }

@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
+#   memprobe: engine RSS after each step (Linux /proc status, macOS RSS and phys_footprint), and after
+#       each cycle Linux smaps groups or macOS `footprint` categories;
+#       MEMPROBE_PHASES=wave,save,load,spawn,teleport, MEMPROBE_CYCLES=8; LLM=fake, no body URL
+#   crime_meet: save 1, native home eviction and a brave victim's Amends approach/payment;
+#       LLM=chatgpt runs only the short compensation scene with the real model
 #   m0: takes Xardas over, walks him around and returns him to his routine
 #   m1: Xardas answers a player question line by line (LLM backend: LLM=fake|chatgpt|local)
 #   websocket: Lobart and Hilda speak through Responses against an in-process fake server: per-npc
@@ -16,6 +21,22 @@
 #       requires GOTHIC_BODY_URL, a new game, >=10 decisions, no fallback, service p95 <=20 ms
 #   neural-companion: the bandit attacks the hero's swordsman companion, >=6 decisions, no fallback,
 #       a companion target in the fight summary, natural fight end and confirmed release
+#   neural-group: three one-handed bandits fight the hero and his swordsman companion under P30 at once;
+#       each gets >=10 decisions, no fallback, release <=2 s, service p95 <=20 ms; requires GOTHIC_BODY_URL
+#   neural-talk: a non-bandit swordsman attacks after words (AR_NONE), knocks the hero out alive, releases
+#       P30 and returns to his routine; the hero gets up. Then a hostile bandit talks, attacks, loses the
+#       fleeing hero, returns to his routine, reattacks or talks again and starts a fresh fight. After
+#       return_to_second_fight, >=20 decisions or 20 s trigger another hero flight; fight_end_clean checks
+#       target_lost/npc_unavailable, release <=2 s and no lease/body/watch after 2 s; LLM=fake, GOTHIC_BODY_URL
+#       one hero hit breaks 15 s without target damage; stall_broken reports count and seconds as P30
+#       diagnostics. Only the separate knockout requires hero_down within 30 s after that hit;
+#       wildlife is cleared and the swordsman parked away
+#   neural-load: load an initial save while three bandits hold P30 leases; all fights end with loading,
+#       release their leases and watch, then one bandit fights under P30 again; requires GOTHIC_BODY_URL
+#   neural-soak: bandit waves in the ordinary new-game world with a swordsman companion; LLM=fake,
+#       GOTHIC_BODY_URL, GOTHIC_SOAK_SECONDS=1800 by default; TIMEOUT=2400 for the full run.
+#       GOTHIC_SOAK_CONTROL=1 uses native combat with --no-neural-body and needs no body URL.
+#       Samples in neural_soak.jsonl; records 25 s of the first wave when normal-clock bench is available
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
 #       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
 #       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
@@ -98,6 +119,36 @@
 #   trace_crime: one reply catches lies by fresh fence debris and Hilda's theft testimony, then save/load.
 #       LLM=fake; SAVE=save_slot_1.sav. Native theft perceptions stay enabled; checks mixed evidence,
 #       both accepted catch_lie calls, crime knowledge and trust without treating debris as authorship proof.
+#   cover: Hilda sees a real theft, sells cover through the deal key, and lies to Lobart. Her С row cannot
+#       catch the hero; Vino's real sighting exposes her. Save/load keeps the cover and one exposed fact.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720. LLM=chatgpt runs only the one cover request to Hilda,
+#       logs her exact reply and proposal/refusal, then exits. Fear is checked by the server unit tests.
+#   cover_subject: the same native cover/exposure, then Lobart's cover rumor reaches an acquaintance
+#       shared with Hilda (prefer Vatras). Its model reads the people block and both witness warnings;
+#       hero trust is unchanged by the rumor. Save/load restores knowledge and the rumor once.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720.
+#   cheat: Hilda sells silence after a native theft but tells Lobart; dishonest Lobart keeps a later
+#       payment, Vino hears, then honesty 4 pays. Save/load preserves intentions and single outcomes.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720. LLM=chatgpt scripts only the later-payment setup,
+#       records one ordinary real-model refusal response verbatim, then exits.
+#   npc_will: character rules start theft, reclamation and accusations near the hero; save/load cooldown;
+#       LLM=fake, SAVE=save_slot_1.sav. The scene never commands harm.
+#   npc_far: natural farm routines and greedy cards start a real off-screen chest transfer; the owner
+#       opens his chest and accuses off screen. Witness truth, save/load and cooldown are checked;
+#       Lobart's GIL_OUT farm has no community law, so guards are covered by module tests.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720; the scene never commands harm.
+#   npc_deeds: Vino steals from CHEST_LOBART in front of Hilda, assaults Maleth to a living knockout,
+#       then steals a world item before brave Lobart, who defeats him and reclaims it. NPC knowledge,
+#       its rumor and save/load are checked; guards are covered by module tests.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720; no live model.
+#   npc_director: Vino steals Lobart's chest item before Hilda; the deed becomes Lobart's line to
+#       find the thief, his ask_witness/about and blame finish its goal, then reward and save/load.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720. LLM=chatgpt asks only the ordinary showrunner
+#       once on the same deed, records its line premise or none reason and canon, without building.
+#   frame: unseen hero chest theft, Lobart believes Malak guilty, native reclaim combat finds no goods
+#       and reveals the hero's lie; Hilda's honest testimony about Vino leads to true blame and return.
+#       Save/load restores both cases without duplicates. LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=900.
+#       LLM=chatgpt stops after Lobart's one ordinary answer to «Это Малак взял», belief or refusal.
 #   crime_director: deeds and story responses (docs/crime.md, layer 5), SAVE=save_slot_1.sav.
 #       LLM=fake: unseen chest theft and its return quest, Hilda's initiative and paid silence,
 #       Lobart's learned grievance and Amends payment. LLM=chatgpt: witnessed theft goes to the
@@ -106,6 +157,11 @@
 #       Matteo witnesses a native theft; Andre stays locked until the next day, charges 50 through
 #       his native voiced dialog and accepts payment. Matteo still remembers. A second theft with
 #       an accepted silence deal never reaches Andre. Native theft perceptions stay enabled.
+#   crime_react: rule reactions at the deed (docs/crime.md, layer 4a), LLM=fake; SAVE=save_slot_1.sav.
+#       Hilda's retained theft witness and own SVM shout; Lobart courage 2 demands restitution, then
+#       a temporary scenario card with courage 3 fights through native AR_THEFT to a living knockout
+#       and the cup's return. Finally deeds:false leaves theft to vanilla without a held perception.
+#       Community guards are covered by unit tests. TIMEOUT=420; no behavioral model.
 #   requires: a book quest depending on vanilla (docs/director.md, stage 5, layer 2), no model: Hilda's
 #       offer stays absent while Lobart's turnip quest is open or running, opens after its success, and
 #       the book's second stage waits for "Сковорода для Хильды" to become running. A save and a load
@@ -199,6 +255,11 @@
 #       DECIDER_URL the scenario's own planner (a fixed stand-in); with it the server's planner, the choice
 #       pinned and the live model's own answer logged. Starts the TTS service (TTS=fake). Words scripted with LLM=fake;
 #       TIMEOUT=480
+#   noise: a real physical impact near a free human at Lobart's farm: noise event, planner decision,
+#       investigate receipt, walk within 2 m, idle within 45 s, return within 1.5 m of the routine post,
+#       and heard-noise memory
+#       with place and game time. Without DECIDER_URL a fixed stand-in chooses investigate for this NPC;
+#       with it the server's planner logs the live choice and pins investigate. SAVE=save_slot_1.sav
 #   cards: the model writes character cards (docs/npc-tools.md, wave 1 step 3) for every npc of the world with
 #       lines of its own (GOTHIC_CARDS=SYM,...: those only) into server/src/gothic_ai/gamedata/characters.json;
 #       those with a card are skipped; needs LLM=chatgpt and a long TIMEOUT for all of them
@@ -225,6 +286,11 @@
 #   remembers: seen lately (docs/npc-tools.md, step M2): Cavalorn goes into the bandits' cave first, sees them,
 #       comes back out; «там в пещере бандиты, разберись» (model scripted with LLM=fake): it remembers them
 #       though it sees them no more, walks into the cave first and fights Brago
+#   fight_reactions_wolf/sight/bandits/flee: Cavalorn intercepts a hunting wolf before its first bite;
+#       sees a bloodfly at 30 m; charges two bandits (one held listening), which shout and draw before
+#       contact and strike within 3 s; a coward flees Cavalorn while the hero stays passive. Actual
+#       strike/damage timestamps come from body_watch. Models scripted by default, DECIDER_URL optional;
+#       starts TTS (TTS=fake), TIMEOUT=300 for bandits, 180 for the other cases
 #   cave: the map of places (docs/npc-tools.md, step M3): Cavalorn goes with the hero to the steps below
 #       Xardas's tower; the bandits' cave is among the places around him, a cave entered from the steps, and
 #       `where{пещера}` finds it; «Кавалорн, зайди в пещеру.» with no place named takes him into it (model
@@ -266,29 +332,59 @@
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
 #
 #   SCENARIO=m3 LLM=fake ASR=voxtral GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e.sh
+# GAME_EXTRA_ENV adds game-only environment assignments, one NAME=value per line.
+# Example: GAME_EXTRA_ENV=$'LD_PRELOAD=/path/libjemalloc.so.2\nMALLOC_CONF=prof:true'
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 GAME_BIN="${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}"
 LOG_DIR="${LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gothic-e2e.XXXXXX")}"
-TIMEOUT="${TIMEOUT:-240}"
 SCENARIO="${SCENARIO:-m0}"
+BODY_ARGS=(--neural-body)
+if [[ "${GOTHIC_SOAK_CONTROL:-0}" == 1 && "$SCENARIO" != neural-soak ]]; then
+  echo 'GOTHIC_SOAK_CONTROL requires SCENARIO=neural-soak' >&2
+  exit 2
+fi
+E2E_DEFAULT_TIMEOUT=240
+if [[ "$SCENARIO" == memprobe ]]; then E2E_DEFAULT_TIMEOUT=1200; fi
+TIMEOUT="${TIMEOUT:-$E2E_DEFAULT_TIMEOUT}"
 if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 && "$SCENARIO" != tts ]]; then
   echo 'GOTHIC_TTS_RECORD requires SCENARIO=tts' >&2
   exit 2
 fi
-if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion ]]; then
-  [ -n "${GOTHIC_BODY_URL:-}" ] || { echo "scenario $SCENARIO requires GOTHIC_BODY_URL=tcp://host:port" >&2; exit 2; }
+if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = neural-group || "$SCENARIO" = neural-talk || "$SCENARIO" = neural-load || "$SCENARIO" = neural-soak ]]; then
+  if [[ "$SCENARIO" == neural-soak && "${GOTHIC_SOAK_CONTROL:-0}" == 1 ]]; then
+    BODY_ARGS=(--no-neural-body)
+  else
+    [ -n "${GOTHIC_BODY_URL:-}" ] || { echo "scenario $SCENARIO requires GOTHIC_BODY_URL=tcp://host:port" >&2; exit 2; }
+  fi
   [ -z "${SAVE:-}" ] || { echo "scenario $SCENARIO requires a new game (unset SAVE)" >&2; exit 2; }
 fi
 LLM="${LLM:-fake}"
+if [[ "$SCENARIO" == neural-soak && "$LLM" != fake ]]; then
+  echo 'scenario neural-soak requires LLM=fake' >&2
+  exit 2
+fi
 ASR="${ASR:-fake}"
 # own ports, so a server / ASR service running for a play session is left alone
 PORT="${PORT:-47827}"
 ASR_PORT="${ASR_PORT:-47829}"
 TTS_PORT="${TTS_PORT:-47840}"
 TTS="${TTS:-fake}"
+# Inworld writes its voice cache through one fixed .tmp file. Keep that write
+# inside this Ryzen run too; HOME still supplies credentials and read-only data.
+if [[ "${GQ_PROFILE:-}" == ryzen && ( "$TTS" == inworld || "$TTS" == inworld:* ) &&
+      ! "${TTS#*:}" =~ (^|,)[[:space:]]*cache[[:space:]]*= ]]; then
+  if [[ -f "$HOME/.local/share/gothic-ai/inworld-voices.json" ]]; then
+    cp "$HOME/.local/share/gothic-ai/inworld-voices.json" "$LOG_DIR/inworld-voices.json"
+  fi
+  if [[ "$TTS" == inworld || "$TTS" == inworld: ]]; then
+    TTS="inworld:cache=$LOG_DIR/inworld-voices.json"
+  else
+    TTS+=",cache=$LOG_DIR/inworld-voices.json"
+  fi
+fi
 VOICE_FILE="${VOICE_FILE:-$ROOT/asr-service/tests/audio/ru_1.wav}"
 # the npc planner is off unless a decision service is given (DECIDER_URL=ws://<gpu-host>:47832)
 BRAIN_ARGS=(--no-brain)
@@ -305,7 +401,7 @@ ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ] || [ "${SCENARIO#errand}" != "$SCENARIO" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ] || [ "${SCENARIO#errand}" != "$SCENARIO" ] || [ "${SCENARIO#fight_reactions_}" != "$SCENARIO" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")
@@ -317,11 +413,46 @@ if [ "$SCENARIO" = "m3" ] || [ "$SCENARIO" = "m5e" ]; then
 fi
 
 (cd "$ROOT/server" && exec uv run gothic-ai serve --port "$PORT" --scenario "$SCENARIO" --llm "$LLM" --exit-after --no-console \
-  --memory-db "$LOG_DIR/memory.sqlite3" --trace-dir "$LOG_DIR/traces" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}" "${QUICK_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
+  --memory-db "$LOG_DIR/memory.sqlite3" --trace-dir "$LOG_DIR/traces" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}" "${QUICK_ARGS[@]}" "${BODY_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
 SRV=$!
 GAME=""
-# `|| true`: with set -e a failing kill of an already finished process would change the exit code
-trap 'if [ -n "$GAME" ]; then kill "$GAME" 2>/dev/null || true; fi; kill "$SRV" 2>/dev/null || true; if [ -n "$ASR_PID" ]; then kill "$ASR_PID" 2>/dev/null || true; fi; if [ -n "$TTS_PID" ]; then kill "$TTS_PID" 2>/dev/null || true; fi' EXIT
+
+report_game_exit() {
+  local game_rc signal_number signal_name
+  [[ -n "$GAME" ]] || return 0
+  wait "$GAME" && game_rc=0 || game_rc=$?
+  if (( game_rc > 128 )) && signal_name="$(kill -l "$((game_rc - 128))" 2>/dev/null)"; then
+    signal_number=$((game_rc - 128))
+    echo "game exited: signal SIG$signal_name ($signal_number), status $game_rc ($1)"
+  else
+    echo "game exited: code $game_rc ($1)"
+  fi
+  GAME=""
+}
+
+cleanup() {
+  local attempt
+  # Reap our exact child PID, including a game killed before the first poll.
+  # `|| true` preserves the scenario status if a child has already finished.
+  if [[ -n "$GAME" ]]; then
+    kill "$GAME" 2>/dev/null || true
+    # A signal during the fork/exec handoff can miss the game. Bound the wait
+    # without touching another run's process or relying on its executable name.
+    for attempt in $(seq 1 20); do
+      kill -0 "$GAME" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -KILL "$GAME" 2>/dev/null || true
+    report_game_exit cleanup
+  fi
+  kill "$SRV" 2>/dev/null || true
+  if [[ -n "$ASR_PID" ]]; then kill "$ASR_PID" 2>/dev/null || true; fi
+  if [[ -n "$TTS_PID" ]]; then kill "$TTS_PID" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 sleep 2
 if ! kill -0 "$SRV" 2>/dev/null; then
@@ -329,21 +460,75 @@ if ! kill -0 "$SRV" 2>/dev/null; then
   exit 1
 fi
 
-# An isolated initial setting also exercises first-load character synchronization.
-if [[ -n "${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
-  printf '[GAME]\n' >"$LOG_DIR/Gothic.ini"
-  if [[ -n "${CHARACTER_VIRTUAL:-}" ]]; then
-    [[ "$CHARACTER_VIRTUAL" == 0 || "$CHARACTER_VIRTUAL" == 1 ]] || { echo "CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
-    printf 'character_virtual=%s\n' "$CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
-  fi
-  if [[ -n "${NPC_CHARACTER_VIRTUAL:-}" ]]; then
-    [[ "$NPC_CHARACTER_VIRTUAL" == 0 || "$NPC_CHARACTER_VIRTUAL" == 1 ]] || { echo "NPC_CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
-    printf 'npc_character_virtual=%s\n' "$NPC_CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
-  fi
+# Per-scenario defaults, as scenario:fps. Add only after repeated capped failures
+# and an uncapped pass, with the measured reason beside the entry. Explicit
+# E2E_MAX_FPS always wins, including 0 for an uncapped diagnostic run.
+E2E_FPS_EXCEPTIONS=(
+)
+if [[ -z "${E2E_MAX_FPS+x}" ]]; then
+  E2E_MAX_FPS=30
+  # macOS Bash 3 treats an empty array as unset under nounset.
+  for exception in ${E2E_FPS_EXCEPTIONS[@]+"${E2E_FPS_EXCEPTIONS[@]}"}; do
+    if [[ "${exception%:*}" == "$SCENARIO" ]]; then
+      E2E_MAX_FPS="${exception##*:}"
+      break
+    fi
+  done
 fi
-if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
-  # Keep effects audible, with no music masking the controlled fake voice.
-  printf '\n[INTERNAL]\nvidResIndex=0\n[SOUND]\nsoundVolume=1\nmusicVolume=0\n' >>"$LOG_DIR/Gothic.ini"
+[[ "$E2E_MAX_FPS" =~ ^[0-9]+$ ]] || { echo 'E2E_MAX_FPS must be a nonnegative integer' >&2; exit 2; }
+
+# Merge run-local settings so ENGINE, character synchronization and TTS recording
+# cannot erase each other. A literal 0 also overrides the base Gothic.ini cap.
+python3 - "$LOG_DIR/Gothic.ini" "$E2E_MAX_FPS" <<'PY'
+import configparser
+import os
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+ini = configparser.ConfigParser(interpolation=None, strict=False)
+ini.optionxform = str
+ini.read(path)
+
+def put(section, key, value):
+    section = next((name for name in ini.sections() if name.lower() == section.lower()), section)
+    if not ini.has_section(section):
+        ini.add_section(section)
+    for name in list(ini[section]):
+        if name.lower() == key.lower():
+            ini.remove_option(section, name)
+    ini.set(section, key, value)
+
+put("ENGINE", "zMaxFps", str(int(sys.argv[2])))
+for name in ("CHARACTER_VIRTUAL", "NPC_CHARACTER_VIRTUAL", "MONSTER_CHARACTER_VIRTUAL"):
+    value = os.environ.get(name, "")
+    if value:
+        if value not in ("0", "1"):
+            print(f"{name} must be 0 or 1", file=sys.stderr)
+            sys.exit(2)
+        put("GAME", name.lower(), value)
+if os.environ.get("GOTHIC_TTS_RECORD", "0") == "1":
+    # Keep effects audible, with no music masking the controlled fake voice.
+    put("INTERNAL", "vidResIndex", "0")
+    put("SOUND", "soundVolume", "1")
+    put("SOUND", "musicVolume", "0")
+with path.open("w") as output:
+    ini.write(output, space_around_delimiters=False)
+PY
+echo "e2e: [ENGINE] zMaxFps=$E2E_MAX_FPS (0 = uncapped); OPENGOTHIC_FPS_LOG=${OPENGOTHIC_FPS_LOG:-1}"
+# FileUtil::nestedPath resolves game paths case-insensitively, on both hosts.
+SYSTEMPACK_INI="$(find "$GOTHIC_DIR" -maxdepth 2 -iname SystemPack.ini -path '*[sS][yY][sS][tT][eE][mM]/*' -print -quit)"
+if [[ -n "$SYSTEMPACK_INI" ]]; then
+  # Original game INIs may contain CP1251 comments, including on UTF-8 hosts.
+  SYSTEMPACK_FPS="$(LC_ALL=C awk '
+    { sub(/\r$/, ""); line=tolower($0) }
+    line ~ /^[[:space:]]*\[/ { parameters=(line ~ /^[[:space:]]*\[parameters\]/) }
+    parameters && line ~ /^[[:space:]]*fps_limit[[:space:]]*=/ {
+      sub(/^[^=]*=/, "", line); print int(line); exit
+    }' "$SYSTEMPACK_INI")"
+  if [[ "${SYSTEMPACK_FPS:-0}" -gt 0 ]]; then
+    echo "WARNING: $SYSTEMPACK_INI [PARAMETERS] FPS_Limit=$SYSTEMPACK_FPS overrides e2e zMaxFps=$E2E_MAX_FPS" >&2
+  fi
 fi
 START_ARGS=(-nomenu)
 if [ -n "${SAVE:-}" ]; then
@@ -358,7 +543,51 @@ fi
 if [ "$(uname -s)" = Darwin ]; then
   until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 fi
-GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT")
+GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT" "OPENGOTHIC_FPS_LOG=${OPENGOTHIC_FPS_LOG:-1}")
+if [[ "$SCENARIO" == neural-soak ]]; then
+  # Refuse a fixed-step recording: the soak must keep the ordinary game clock.
+  SOAK_BUILD="$(dirname "$GAME_BIN")"
+  SOAK_NORMAL_CLOCK=0
+  # ryzen.sh publishes cache entries only from cadence-enabled builds. A fresh
+  # worktree can run that runtime through game.sh without its own CMakeCache.
+  if [[ "${GQ_PROFILE:-}" == ryzen &&
+        "${RYZEN_GAME_BIN:-}" =~ ^"$HOME/gothic-ai/engine-cache/"[a-f0-9]{64}/Gothic2Notr$ &&
+        -x "${RYZEN_GAME_BIN:-}" ]]; then
+    SOAK_NORMAL_CLOCK=1
+  fi
+  # Ryzen publishes the runtime directory into its shared cache. Its CMake
+  # flags remain in this task's build directory, outside that runtime copy.
+  if [[ "${GQ_PROFILE:-}" == ryzen && -f "$ROOT/../build/CMakeCache.txt" ]] &&
+     grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$ROOT/../build/CMakeCache.txt"; then
+    SOAK_NORMAL_CLOCK=1
+  fi
+  for ((i = 0; i < 4; i++)); do
+    if [[ -f "$SOAK_BUILD/CMakeCache.txt" ]]; then
+      if grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$SOAK_BUILD/CMakeCache.txt"; then
+        SOAK_NORMAL_CLOCK=1
+      fi
+      break
+    fi
+    SOAK_BUILD="$(dirname "$SOAK_BUILD")"
+  done
+  if [[ "$SOAK_NORMAL_CLOCK" == 1 ]]; then
+    GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/neural-soak-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
+      "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1"
+      "TEMPEST_WINDOW_SIZE=640x360" "OPENGOTHIC_BENCH_ENCODER=-c:v libx264 -preset ultrafast -crf 30")
+  else
+    echo 'neural-soak: video unavailable (normal-clock bench not compiled)'
+  fi
+fi
+if [[ -n "${GAME_EXTRA_ENV:-}" ]]; then
+  while IFS= read -r assignment; do
+    [[ -n "$assignment" ]] || continue
+    [[ "$assignment" =~ ^[a-zA-Z_][a-zA-Z0-9_]*= ]] || {
+      echo 'GAME_EXTRA_ENV requires one NAME=value assignment per line' >&2
+      exit 2
+    }
+    GAME_ENV+=("$assignment")
+  done <<<"$GAME_EXTRA_ENV"
+fi
 if [ "$SCENARIO" = "trace" ] || [ "$SCENARIO" = "broken" ] || [ "$SCENARIO" = "trace_crime" ]; then
   GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/$SCENARIO-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
     "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1" "TEMPEST_BACKGROUND=1")
@@ -374,10 +603,12 @@ if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
 fi
 (cd "$LOG_DIR" && exec env "${GAME_ENV[@]}" "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
+printf '%s\n' "$GAME" >"$LOG_DIR/game.pid"
 
 for _ in $(seq 1 "$TIMEOUT"); do
   kill -0 "$SRV" 2>/dev/null || break
   if ! kill -0 "$GAME" 2>/dev/null; then
+    report_game_exit unexpected
     echo "game exited unexpectedly, see $LOG_DIR/game.log"
     exit 1
   fi

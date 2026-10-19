@@ -145,9 +145,11 @@ def duck_filter(windows: list[Window], attenuation_db: float) -> str:
         f"(({end:.9f})+{RAMP_SECONDS}-t)/{RAMP_SECONDS})))"
         for start, end in windows
     ]
+    # A balanced tree of max(): ffmpeg's expression parser has a depth limit, so a chain of one max per
+    # line fails on a long video (137 lines); the tree's depth grows with log2 of the line count.
+    while len(ramps) > 1:
+        ramps = [f"max({a},{b})" for a, b in zip(ramps[::2], ramps[1::2])] + ramps[len(ramps) - len(ramps) % 2:]
     envelope = ramps[0]
-    for ramp in ramps[1:]:
-        envelope = f"max({envelope},{ramp})"
     # Linear amplitude ramps; the plateau is exactly the requested dB reduction.
     gain = 10 ** (-attenuation_db / 20)
     return (f"aresample=48000,asetnsamples=n=48:p=0,"

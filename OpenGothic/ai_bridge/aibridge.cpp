@@ -66,7 +66,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 42;
+constexpr int         ProtocolVersion = 48;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -203,7 +203,13 @@ struct AiBridge::Impl final {
   void onTick(uint64_t dt);
   void processInbound(World* world, Inbound& in);
   void onStartLoading();
-  void onSessionUnload() { voices.clear(); resetBodyObservations(); }
+  void onSessionUnload() {
+    if(auto world = Gothic::inst().world())
+      observer.cancelDeeds(*world);
+    observer.clear();
+    voices.clear();
+    resetBodyObservations();
+    }
   void onWorldLoaded();
   bool takePendingSession();
   void skipIntro(World& world);
@@ -282,7 +288,6 @@ struct AiBridge::Impl final {
   std::vector<Inbound> inbound;
 
   bool                 connected = false;
-  uint64_t             nextHeroDeed = 1;
   uint64_t             bodyGeneration = 0;
   bool                 bodyResetPending = false;
   std::string          lastError;
@@ -360,12 +365,13 @@ AiBridge::Impl::Impl() {
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
   gothic.onPhysicsNoiseHeard .bind(this,&Impl::onPhysicsNoiseHeard);
   gothic.onHeroDeed          .bind(this,&Impl::onHeroDeed);
-  gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
+  gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc, const HeroDeed* deed) {
     World* world = Gothic::inst().world();
     // the wolves' own (they leave the hero be) without the server too: the console drives them on the bench
     return world!=nullptr &&
            (beasts.intercept(*world,self,other,victim,perc) ||
-            (connected && observer.intercept(*world,self,other,victim,perc)));
+            (connected && observer.intercept(*world,self,other,victim,perc,deed,
+                                            deed!=nullptr ? session.branch+"/deed-"+std::to_string(deed->id) : "")));
     };
   gothic.consoleCommandFn = [this](std::string_view cmd, std::string& reply) {
     return onConsoleCommand(cmd,reply);
@@ -511,7 +517,8 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
       // Do not keep appending this optional stream to IXWebSocket's unbounded transmit buffer.
       if(BodyObservations::enabled() && BodyObservations::queuedCount()>0 && ws.bufferedAmount()<65536) {
         auto packet = BodyObservations::drainJson();
-        send(JsonWriter("body_observations").raw("packet",packet).finish());
+        if(ws.sendText(JsonWriter("body_observations").raw("packet",packet).finish()).success)
+          BodyObservations::markDrainedSent();
         }
       if(BodyObservations::enabled() && ws.bufferedAmount()<65536) {
         auto events = BodyController::drainJson();
@@ -567,6 +574,7 @@ void AiBridge::Impl::processInbound(World* world, Inbound& in) {
           beasts.releaseAll(*world);
           }
         observer.setHoldThreats(false);
+        observer.setHoldDeeds(false);
         if(chat!=nullptr)
           chat->hideDeal("");  // nobody is there to carry it out
         }
@@ -605,6 +613,8 @@ void AiBridge::Impl::onStartLoading() {
   originalLines.clear();
   originalTo.clear();
   lines.clear();
+  if(auto world = Gothic::inst().world())
+    observer.cancelDeeds(*world);
   observer.clear();
   Log::i("[story] ",graph.status(),"; ",triggers.status());
   // the server sends the patches of the new branch
@@ -729,8 +739,12 @@ void AiBridge::Impl::onObservedPerception(Npc& self, Npc& other, Npc* victim, Pe
 void AiBridge::Impl::onHeroDeed(const HeroDeed& d) {
   if(!connected)
     return;
-  JsonWriter j("hero_deed");
-  j.str("id",session.branch+"/deed-"+std::to_string(nextHeroDeed++))
+  const bool npcDeed = d.culprit.npc!="PLAYER";
+  JsonWriter j(npcDeed ? "npc_deed" : "hero_deed");
+  if(npcDeed)
+    j.str("culprit",d.culprit.npc).integer("culprit_guild",d.culprit.guild)
+     .integer("culprit_npctype",d.culprit.npctype);
+  j.str("id",session.branch+"/deed-"+std::to_string(d.id))
    .str("kind",d.kind).str("item",d.item).integer("count",int64_t(d.count))
    .str("owner",d.owner.npc).integer("owner_guild",d.ownerGuild)
    .integer("owner_npc_guild",d.owner.guild).integer("owner_npctype",d.owner.npctype)
@@ -827,7 +841,10 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   if(type=="threat_control") {
     // the server's behavioral model decides threats to free npc's first (held from the scripts)
-    observer.setHoldThreats(JsonRead::boolean(doc,"hold",false));
+    if(doc.HasMember("hold"))
+      observer.setHoldThreats(JsonRead::boolean(doc,"hold",false));
+    if(doc.HasMember("deeds"))
+      observer.setHoldDeeds(JsonRead::boolean(doc,"deeds",false));
     return;
     }
 
@@ -1064,20 +1081,11 @@ void AiBridge::Impl::onBodyControl(World& world, const rapidjson::Value& msg) {
     }
   // Exactly the same parser, scope checks, lease and resolver as the headless IPC adapter.
   send(JsonWriter("result").str("req",req).boolean("ok",true)
-       .raw("value",BodyController::handleJson(msg)).finish());
+       .raw("value",BodyController::handleJson(msg,true)).finish());
   }
 
 void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
   const auto req = JsonRead::str(msg,"req");
-  // Changing subscription changes world IDs. Release through the common arbiter first so a
-  // subscription edit cannot bypass a current non-interruptible segment's safe handoff.
-  for(uint32_t i=0;i<world.npcCount();++i) {
-    auto npc = world.npcById(i);
-    if(npc!=nullptr && BodyController::owns(*npc)) {
-      sendResult(req,false,"release active body owners before changing body_watch");
-      return;
-      }
-    }
   auto npcs = msg.FindMember("npcs");
   auto rate = msg.FindMember("rate_hz");
   if(req.empty() || npcs==msg.MemberEnd() || !npcs->value.IsArray() || npcs->value.Size()>4 ||
@@ -1115,17 +1123,26 @@ void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
       }
     watched.push_back(npc);
     }
-  resetBodyObservations();
-  BodyController::pause(Gothic::inst().isPause());
-  if(!watched.empty()) {
-    BodyObservations::Config config;
-    config.periodMs = (rate==msg.MemberEnd() || rate->value.GetInt()==20) ? 50 : 100;
-    config.maxActors = 4;
-    config.queueCapacity = 16;
-    BodyObservations::configure(config);
-    BodyObservations::watch(watched);
+  const uint64_t periodMs = (rate==msg.MemberEnd() || rate->value.GetInt()==20) ? 50 : 100;
+  if(BodyController::hasOwners()) {
+    const auto reason = BodyController::updateWatch(watched,periodMs);
+    if(std::string_view(reason)!="allowed") {
+      sendResult(req,false,reason);
+      return;
+      }
+    } else {
+    resetBodyObservations();
+    if(!watched.empty()) {
+      BodyObservations::Config config;
+      config.periodMs = periodMs;
+      config.maxActors = 4;
+      config.queueCapacity = 16;
+      BodyObservations::configure(config);
+      BodyObservations::watch(watched);
+      }
+    BodyController::setActors(watched);
     }
-  BodyController::setActors(watched);
+  BodyController::pause(Gothic::inst().isPause());
   // Observation alone does not attach a controller, clear AI queues or claim body ownership.
   sendResult(req,true,"",BodyObservations::statsJson());
   }
@@ -1139,7 +1156,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" || cmd=="npc_drop" || cmd=="player_hit" || cmd=="spawn_item" ||
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="npc_los" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" || cmd=="npc_drop" || cmd=="player_hit" || cmd=="npc_hit" || cmd=="spawn_item" ||
      cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise" || cmd=="physics_traces" || cmd=="destruction_traces") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
@@ -1191,6 +1208,27 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
   Npc*       pl    = world!=nullptr ? world->player() : nullptr;
   if(world==nullptr || pl==nullptr) {
     sendResult(req,false,"no world loaded");
+    return;
+    }
+  if(cmd=="npc_los") {
+    // Read-only scene preparation: the observer's real eye/terrain rays, independent of its ordinary
+    // senses range and field of view. No target, pose or AI state is changed.
+    Npc* observer = npcBySymbol(*world,JsonRead::str(msg,"npc"));
+    Npc* target = observer!=nullptr ? AiNpc::findNpc(*world,JsonRead::str(msg,"to"),observer) : nullptr;
+    if(observer==nullptr || target==nullptr || observer==target) {
+      sendResult(req,false,"npc_los needs distinct npc and to targets");
+      return;
+      }
+    const float distance = std::sqrt(observer->qDistTo(*target));
+    const float extra = std::max(0.f,5000.f-float(observer->handle().senses_range));
+    rapidjson::StringBuffer buf;
+    rapidjson::Writer<rapidjson::StringBuffer> value(buf);
+    value.StartObject();
+    value.Key("distance_cm"); value.Double(distance);
+    value.Key("center_clear"); value.Bool(distance<=5000 && observer->canRayHitPoint(target->centerPosition(),true,extra));
+    value.Key("head_clear"); value.Bool(distance<=5000 && observer->canRayHitPoint(target->mapHeadBone(),true,extra));
+    value.EndObject();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
     return;
     }
   if(cmd=="physics_noise") {
@@ -1668,6 +1706,51 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     victim->takeDamage(*pl,nullptr);
     const bool damaged = victim->attribute(ATR_HITPOINTS)<before;
     sendResult(req,damaged,damaged ? "" : "the hit caused no damage");
+    return;
+    }
+  if(cmd=="npc_hit") {
+    // A confirmed melee contact for a bench: only parry/backstep are bypassed. Native damage,
+    // armour, hit reactions and perceptions still identify the real attacker.
+    Npc* victim = npcBySymbol(*world,JsonRead::str(msg,"npc"));
+    Npc* by     = npcBySymbol(*world,JsonRead::str(msg,"by"));
+    if(victim==nullptr || by==nullptr || victim==by || victim==pl || by==pl ||
+       victim->isDown() || by->isDown() || victim->isImmortal()) {
+      sendResult(req,false,"npc_hit needs distinct living npcs and a mortal victim");
+      return;
+      }
+    if(by->qDistTo(*victim)>500.f*500.f) {
+      sendResult(req,false,"victim is more than five metres from the attacker");
+      return;
+      }
+    const auto mode = by->weaponState();
+    const auto* weapon = by->inventory().activeWeapon();
+    if((mode!=WeaponState::W1H && mode!=WeaponState::W2H) || weapon==nullptr) {
+      sendResult(req,false,"npc_hit needs a drawn melee weapon");
+      return;
+      }
+    bool vulnerable = false;
+    for(size_t i=0; i<zenkit::DamageType::NUM; ++i)
+      if((weapon->handle().damage_type&(1<<i))!=0 && victim->handle().protection[i]>=0)
+        vulnerable = true;
+    if(!vulnerable) {
+      sendResult(req,false,"victim is immune to the attacker's damage");
+      return;
+      }
+    const auto before = victim->attribute(ATR_HITPOINTS);
+    const auto gameMs = world->tickCount();
+    BodyObservations::noteEvent(*by,victim,"applied",gameMs);
+    victim->takeDamage(*by,nullptr,true);
+    const auto after = victim->attribute(ATR_HITPOINTS);
+    rapidjson::StringBuffer buf;
+    rapidjson::Writer<rapidjson::StringBuffer> value(buf);
+    value.StartObject();
+    value.Key("attacker"); value.String(npcSymbol(*world,*by).c_str());
+    value.Key("victim"); value.String(npcSymbol(*world,*victim).c_str());
+    value.Key("game_ms"); value.Uint64(gameMs);
+    value.Key("hp_before"); value.Int(before);
+    value.Key("hp_after"); value.Int(after);
+    value.EndObject();
+    sendResult(req,after<before,after<before ? "" : "the hit caused no damage",std::string_view(buf.GetString(),buf.GetSize()));
     return;
     }
   if(cmd=="player_take") {

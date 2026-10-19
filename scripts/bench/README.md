@@ -293,7 +293,9 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam hold`, `cam look <height>`, `cam game` | `fixed` stays where it is and turns after the player; `hold` keeps the frame as it is (a scene the player may fall out of); `game` is the game's camera as the player has it, without the clip of `view clean` |
 | `cam arrow [dist 600] [height 40] [side 1\|-1] [ahead 80]` | from the side of the newest arrow's way (`overlay trail` records it), `ahead` cm in front of it, kept 1.2 m over the ground; from the hero until an arrow flies. The arrow's drop reads only from the side |
 | `slowmo <k>` | the game runs k times slower than the video (1: normal, up to 20): a smaller game step per recorded frame. The game's sound is recorded as silence while slowed, so it stays in step with the picture |
-| `track <npc\|off> [head\|body]` | each recorded frame, where the npc is on the picture: `events.jsonl` kind `track` with `x y` (the head, or the trunk with `body`), `hx hy`, `bx by`, `lx ly` (the head, the trunk, the legs: the limb capsules below the knees) in pixels of the frame, and `w h`. For labels that follow the npc in a cut |
+| `track <npc[,npc...]\|off> [head\|body]` | each recorded frame, where each named npc is on the picture: `events.jsonl` kind `track` with `npc`, `x y` (the head, or the trunk with `body`), `hx hy`, `bx by`, `lx ly` (the head, the trunk, the legs: the limb capsules below the knees) in pixels of the frame, and `w h`. Comma-separated names share the recording; each keeps its own track. For labels that follow the npc in a cut |
+| `bodylive on\|off` | opt-in instrumentation of ordinary realtime body control (off by default): `body_live_control` wraps controller events, `body_live_sample` records each tracked npc's HP and target HP per captured frame. Does not acquire a lease or start a policy; requires body arena/replay off |
+| `bodylive wait /absolute/file [timeout ms]` | pause scenario commands until the file exists while the normal bridge keeps running; default timeout 120000 ms. Used to finish NPC preparation before recording |
 | `view clean [margin]\|nopfx\|full` | `clean` clips away everything closer to the camera than the subject minus `margin` (default 100 cm): trees and bushes in between; particles are hidden. The ground right in front of the camera is clipped too (white) |
 | `view hide static movable morph pfx animated` | hide draw types (debugging only: static and movable objects share draw commands, hiding them hides parts of creatures too) |
 | `overlay on\|off`, `overlay zoom on\|off`, `overlay bright on\|off` | `bright` stretches dark images (forests, interiors) |
@@ -412,6 +414,55 @@ checkout), `NO_BUILD=1`, `TIMEOUT` (seconds, default 300), `KEEP=1`, `OPENGOTHIC
 textures; by default those of `scripts/hd-textures.sh` when they have been made, as the launcher does;
 empty: the game's own), `SOUND` and `MUSIC` (volumes 0..1, default 0; with `TEMPEST_AUDIO_LOOPBACK=48000` a
 segment's sound goes into `<segment>.wav`).
+
+## Live P30 capture on Mac
+
+`scripts/body_live_capture.py` starts a local game with the production `GameServer` and
+`BodyPilot`, using `[llm].body_url` from the usual launcher settings. It uses the existing
+remote P30 service without starting or changing it. `LLM`, `ASR` and `TTS` must be `fake`;
+no clients for these models are created. Build the engine first. Each capture checks
+`pgrep -fl Gothic2Notr` immediately before launch and refuses to share the Mac with another game.
+
+```bash
+LLM=fake ASR=fake TTS=fake uv run --project server python scripts/body_live_capture.py \
+  live-takeover --output "$HOME/.local/share/gothic-ai/explain/combat-ai/footage/live-takeover"
+```
+
+Run each scene separately into an empty absolute output directory: `live-takeover` (one
+bandit and the hero answering with player attack input), `live-group` (three bandits), or
+`live-passive` (one bandit, no hero attacks). These are native fights in the normal world;
+the pilot must obtain the leases itself. The hero has immortality and 100000 HP; each bandit
+has 1800 HP. Default duration is 25 seconds (`--duration` accepts 20–30). Capture uses Metal,
+1920×1080 at 30 FPS, game sound at full volume, music and world ambience off
+(`SOUND=1 MUSIC=0 WORLD_SOUNDS=0`), and a separate 48 kHz `shot.wav` beside `shot.mp4`.
+The folder also contains the scene, engine events, frame metrics and `server.log`.
+The readiness file releases scene preparation first; the pilot starts after the recording's
+`rec` event, so the fixture's native `fight` commands cannot revoke an earlier lease.
+A take counts only when it is finished: one `rec`/`rec_stop` pair for `shot` with
+`duration × 30` frames and non-empty `shot.mp4` and `shot.wav`. A game that disconnects
+after that is fine; an earlier disconnect fails the capture even with a zero exit code.
+
+Export labels after the pilot has finished and written its `neural-body end` line:
+
+```bash
+uv run --project body-service python scripts/body_live_film.py labels /absolute/take \
+  --npc DIR_NPC_LIVE_BANDIT_1 --min-decisions 10 --output /absolute/take/actions.json
+```
+
+For `live-group`, export each `DIR_NPC_LIVE_BANDIT_1`, `_2`, `_3` to a separate
+`actions-<npc>.json`, each with `--min-decisions 10`. For `live-passive`, use
+`--min-decisions 5 --consecutive-wait 5` to require five consecutive `wait_200` choices.
+The JSON schema matches replay labels: `fps`, `frames`, `size`, `track`, `hp`, `actions`.
+Head coordinates are in captured pixels (`null` when outside the frame); HP is sampled per
+frame. Each action has `frame`, `t`, `action`, `id`, mapped to the engine's capture frame;
+`t` is that frame's video timestamp.
+
+Live labels describe accepted P30 choices, including `continue` and commands cancelled
+before execution. They do not assert that an animation started; replay labels use `started`
+instead. The exporter requires one lease per NPC, complete per-frame samples, and exactly
+one end summary per NPC. It reconciles all accepted choices in the session with the pilot's
+`decisions=` count, then exports only choices inside `shot`. It prints both counts and the
+longest consecutive `wait_200` run. Keep recordings, JSON and preview PNGs outside git.
 
 For the Bullet → Jolt stage 1 oracle, `physics dump [count=100000] [seed=73013] [input.tsv]`
 casts that many rays **and** spheres through `DynamicWorld` in the loaded world. It writes
@@ -697,6 +748,63 @@ incomplete; the analyzer also writes JSON beside the Markdown output.
 For a deliberately reduced series, repeat `--window-spot market --window-spot harbour` in the
 analyzer; the report then explicitly states the selected coverage.
 
+### Nearby ground-monster CharacterVirtual comparison
+
+`monster-character-virtual` is the first numerical stand for the independent
+`[GAME] monster_character_virtual` switch (production default **0**). It records no
+video. Run the same binary and save in separate fresh OFF/ON processes:
+
+```sh
+NO_BUILD=1 MOVABLE_VOBS=1 MONSTER_CHARACTER_VIRTUAL=0 OPENGOTHIC_BENCH_TAKE=off scripts/bench.sh monster-character-virtual .bench/monster-character-off
+NO_BUILD=1 MOVABLE_VOBS=1 MONSTER_CHARACTER_VIRTUAL=1 OPENGOTHIC_BENCH_TAKE=on scripts/bench.sh monster-character-virtual .bench/monster-character-on
+```
+
+The wolf follows the actual hero with native `AI_GoToNpc` across stock city stairs
+(preferring the forest stair waypoint) and a measured stock-world slope. A continuous
+15 cm support profile validates a hero destination beyond the obstacle using the
+monster's actual step, slope and stopping distance. The hero stands beyond each obstacle so the
+monster's ordinary attack-distance stopping rule cannot finish before crossing it.
+A troll uses native `AI_GoToPoint` through a body-size lane in Coragon's tavern or
+adjacent courtyard, with a real stock barrel in its way. The same wolf enters water
+along a continuous stock bank, then returns to its dry start without teleporting.
+Preparation logs the selected points and MDH radius/height, guild step/slope limits,
+water depths and mass in `monster_character_body` and route-setup events. Missing
+geometry or animation is an explicit preparation error.
+
+`monster-character-frames.csv` contains physical and visual positions after every
+native tick, actual CV use, airborne/falling/swimming state and playing animations.
+`monster_character_route_end` reports arrival and elapsed time, stalls with less
+than 5 cm horizontal progress for more than 1000 ms, maximum physical and visual
+vertical change per frame, InAir/Falling drops more than 100 cm below the last supported root (including the landing frame),
+CV/swimming frames and barrel displacement. Arrival uses the native attack range
+for a chase, or 60 cm horizontal / 80 cm vertical tolerance for point routes. Water
+entry additionally requires actual swimming; the exit requires returning to land.
+Falls exclude the deliberate attack root and swimming transition. A legacy barrel
+stall is retained as a measured result; route summaries do not silently turn it
+into successful arrival.
+
+Two separate authored `T_FISTATTACKMOVE` / `BS_HIT` clips measure wolf lunge and
+field-raider charge through the production animation and movement paths. The
+field-raider starts the native `S_FISTRUNL` base before calling the ordinary
+running-attack entry point; that moving base remains underneath the rootless
+layer-2 attack clip, with the real hero 350 cm ahead.
+The stand records maximum horizontal travel, upward root travel, observed clip duration
+and actual charge collision callbacks. Compare ON/OFF distance and duration to
+10%; the field-raider case also requires the native callback to its real target.
+The stand supplies no synthetic movement or contact response.
+
+After the comparison windows, the stand enables only the monster flag and checks
+20/22 m hysteresis, both live Marvin toggles and exclusion of Bloodfly, Harpie,
+Demon and Wisp on dry ground. `monster_character_expect` records expected and actual
+CV activity. It also saves `session-monster.sav` and performs a native `Npc::save` /
+`Npc::load` round trip with immediate and first-two-tick position checks to 0.5 cm.
+For a full session reload, use `SAVE=<absolute output>/session-monster.sav`,
+`MONSTER_CHARACTER_VIRTUAL=1`, and a small scenario whose first command is
+`monstercharacter initial`, followed by `wait 100` and
+`monstercharacter snapshot loaded`. The initial event precedes the first positive
+world step; compare its actor IDs and roots against the `saved` snapshot to 0.5 cm.
+Temporary barrel fixtures belong only to their measured route and are not saved.
+
 ## NPC movement keys (CPU runner)
 
 `keys` is a test-bench command, available in `gothic-body-runner`; it does not change the AI bridge.
@@ -824,3 +932,146 @@ spell/arrow contacts and hearing use production paths. `destruction_*` events re
 identity, real drop trajectories, piece movement/sleep and break wall time. The scenario writes PNGs,
 six videos with optional WAV audio, and `session-destruction-scattered.sav` beneath its output directory.
 The save uses the previous format; transient fixture props and fragments are not saved.
+
+
+Cloth acceptance uses authored level surfaces and mesh-vobs. Each functional
+scenario records the original OFF and Jolt ON from the same fixed camera,
+including calm and smoothly increasing gusts. Ship sails are the furled cloth
+already present in the level. The harbour scenario includes the whole ship,
+a close main-mast flag with a native Fireball, and a close furled sail. The city
+scenario fires an arrow through an extracted banner. The Valley of Mines
+scenarios show the native `S_WINDY` orc standard and the Old Camp banner; the
+latter also records both 40 m crossings and exports a moving-cloth save.
+`cloth-arrow-npc` checks the harbour wind and two single-step native arrow paths:
+cloth before the NPC must receive an impulse; cloth behind the stopping NPC must
+not. A fixture NPC is held only for these checks; production NPC logic is unchanged.
+Use the separate `cloth-on`/`cloth-off` scenarios for a clean-world timing pair without the fixture NPC.
+
+```sh
+WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-harbour /absolute/path/cloth/harbour
+WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-city /absolute/path/cloth/city
+BENCH_HOST=ryzen RYZEN_BENCH_CLASS=quiet WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-arrow-npc /absolute/path/cloth/review-arrow-npc
+WORLD=OLDWORLD.ZEN scripts/bench.sh cloth-orc /absolute/path/cloth/orc
+WORLD=OLDWORLD.ZEN scripts/bench.sh cloth /absolute/path/cloth/oldcamp
+SAVE=/absolute/path/cloth/oldcamp/session-cloth-moving.sav scripts/bench.sh cloth-reload /absolute/path/cloth/reload
+CLOTH=0 SAVE=/absolute/path/older-save.sav scripts/bench.sh cloth-legacy-load /absolute/path/cloth/legacy-load
+BENCH_HOST=ryzen RYZEN_BENCH_CLASS=quiet WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-off /absolute/path/cloth/performance/off
+BENCH_HOST=ryzen RYZEN_BENCH_CLASS=quiet WORLD=NEWWORLD.ZEN scripts/bench.sh cloth-on /absolute/path/cloth/performance/on
+```
+
+Videos that verify Metal/MoltenVK run on Mac with `BENCH_HOST=local`; put their
+output beneath `~/.local/share/gothic-ai/saves/cloth/` and check that no other game
+is running first. Other benches use Ryzen by default. `cloth initial` observes
+the untouched loaded world before its first native step: no active soft bodies,
+zero vertex speeds and zero transient hit/recovery counters. Saves use the
+ordinary GameSession archive and can be started in a separate process.
+`CLOTH=0` writes the ini switch before world loading. The legacy-load fixture
+also checks Marvin `toggle cloth` in both directions before enabling simulation.
+
+Use the same binary, world and host for both performance runs. `densest` searches
+cloth centers and local cluster centroids, counts the unchanged 3D 40 m sphere,
+and chooses the observer with the greatest real count. Compare the actual count
+in the Khorinis and Valley fixtures before selecting the final timed scene.
+Supported native floor is preferred. For ship flags more than 40 m above deck,
+the fixture can hold the actual hero in static flight near the mast; this is
+recorded as `observer_support: fixture-static-flight` and changes no production
+activation rule. The camera remains independent of that observer.
+
+`cloth-on` and `cloth-off` use the native game clock for 30 seconds, without
+video or per-frame mesh snapshots. `appcadence.csv` contains completed app frame
+intervals; `cloth-physics.csv` contains native physics step costs.
+`cloth_measure_before` and `cloth_measure_after` include actual soft-body counts
+and physics p95. Capture cadence is not game FPS. Local performance builds need
+`-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`; Ryzen enables this option automatically.
+`RYZEN_BENCH_CLASS=quiet` waits for the other queued work to finish and reserves
+the machine for the timing run; ordinary benches retain `quick`. Set
+`BENCH_HOST=ryzen` for the complete ON/OFF pair. A local cadence scenario refuses
+to start when its build lacks this option, including after an automatic fallback.
+
+| Command | Effect |
+|---|---|
+| `cloth on\|off` | Set the normal `[GAME] cloth` option, also available as Marvin `toggle cloth`. |
+| `cloth setup <zen-id\|visual\|densest> <label>` | Select an authored vob or level cloth island (for example `6367`, `NW_CITY_FLAG_01:1` or `NW_SHIP_FLAG_01:1`), place and hold the observer, and frame the entire cloth from a clear side. Test visible simulated and native-reference vertices against foreground geometry; high ship cloth can be viewed from below its yard. Exact visual labels take precedence over prefix matches. |
+| `cloth camera harbour` | Frame all ten authored ship cloth islands without changing the observer or selected physics target. |
+| `cloth camera-turn <degrees> <duration_ms>` | Smoothly turn a held camera in place, retaining its pitch, then hold the new view. `cloth-visibility` records an authored flag leaving and returning to the camera; checkpoints include `visible` and `simulation_steps` to verify that hidden time is frozen. |
+| `cloth camera-range <cm>` | Move a held cloth camera horizontally to the requested distance from the selected cloth, retain its height and clear side, and verify the whole cloth is unobstructed and framed. Run before recording the turn. |
+| `cloth wind calm\|natural\|gust` | Smoothly set the common world wind scale to 0, 1 or 2. |
+| `cloth checkpoint <label>` | Record physical/rendered vertex counts, anchor error, current and lifetime maximum vertex speed, recovery count, projectile counters and the selected cloth's rendered vertices in cm. |
+| `cloth arrow-npc behind\|ahead` | Invoke one synchronous production `moveBullet` segment with a native precise arrow and a fixture NPC behind or ahead of the selected authored banner. Verify the native bone hit and cloth arrow-pass delta 1 or 0. |
+| `cloth shoot fireball\|wind\|arrow` | Launch a real production Bullet at an exposed cloth face. The fixture does not inject a synthetic impulse or introduce an NPC target. |
+| `cloth verify anchors\|fireball\|wind\|arrow` | Require anchors within 0.5 cm, finite vertices, bounded speeds and no solver recovery; require the selected spell hit; or require an arrow contact and its actual Bullet trajectory at least 30 cm beyond the face. |
+| `cloth verify harbour-wind` | At the densest ship observer require all five active furled sails and four active flags to be outdoors and exposed to the common wind. Record separate total and exposed counts. |
+| `cloth room-check <x> <y> <z> indoor\|outdoor` | Check production room classification at an authored world position, recording the point, legacy BSP room name, actual classification and expected result. This adds no cloth or other fixture object. |
+| `cloth distance <cm>` | Move the actual hero to the requested 3D distance, retaining the camera and existing native-support or static-flight fixture mode. |
+| `cloth reset-stats` | Reset transient solver measurements. |
+| `cloth save <label>` | Write `session-cloth-<label>.sav` as a complete ordinary GameSession archive under the output directory. |
+| `cloth initial <label>` | First command of a fresh process: observe and verify transient cloth rest before the first native world step. |
+| `cloth measure on\|off`, `cloth report` | Start and report the normal-clock timing window after `cadence normal`; complete it with `cadence wait`. |
+
+Functional `cloth_sample` events include the maximum rendered vertex displacement
+since the preceding frame. Active-state changes include the complete rendered
+vertex list; explicit checkpoints and the named before/after PNGs retain both
+sides of each radius crossing. `transition_blend_delta_cm` isolates the blend's
+contribution from natural movement. A calm checkpoint is taken after 10 seconds
+at zero wind following the wind ramp. The arrow's native post-face positions are
+retained as `cloth_arrow_trajectory` events.
+
+Monster CharacterVirtual videos: `scripts/monster-character-virtual-videos.sh OUT` records
+six independent fresh-world OFF/ON pairs (seed 73024, noon). It first asks Ryzen through
+`bench.sh`; exit 75 selects Mac for the remaining series, with the Mac game/pytest wait.
+`SCENE=wolf_terrain|wolf_pack|troll_props|cliff|wolf_water|fieldraider_bloodfly` selects one
+pair. Build `Gothic2Notr` first (`NO_BUILD=0` enables local incremental builds).
+The candidate `OUT/pairs/*.mp4` keep OFF on the left and ON on the right; the accompanying
+`*-frames.png` sheets show OFF above ON once a second. Each scene follows its monster
+with matching `watch id`, `cam follow` and `view clean` settings; the pack follows its
+middle wolf. Review framing and visible geometry before accepting a candidate. The
+[validation report](../../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md#шаг-4-часть-2--парные-видео)
+lists accepted pairs and skipped preparations. Composition can also be repeated
+with `uv run scripts/monster_character_virtual_videos.py compose --off OFF.mp4 --on ON.mp4
+--out PAIR.mp4`; `metrics --off OFF_DIR --on ON_DIR` reads native movement evidence.
+`--crop X:Y:W:H` applies the same fixed crop to both videos and their contact sheet.
+Metrics include actual settled route starts and reject ON ground actors with no CV frames;
+the bloodfly control must stay on the legacy path.
+`monster-character-virtual-attacks` checks wolf lunge and fieldraider charge numerically;
+`monster-character-virtual-performance` measures twenty ground monsters for 30 seconds
+without capture. Run performance on Mac with `BENCH_HOST=local` and a build configured
+with `-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`. The opt-in flag remains OFF by default.
+
+`monster-character-virtual-stairs` pins the part-1 chase to `NW_CITY_TO_FARM2_09`
+and records a twelve-second `wolf_stairs` take with `watch id`, `cam follow` and
+`view clean`. Its `monster_character_stair_step` events include body state, signed
+physical/visual Y changes, requested animation movement and separate CV
+ExtendedUpdate/WalkStairs positions. A recorded take still needs framing review;
+the report documents the accepted pair and the earlier obstructed diagnostics.
+For the stair pair, `uv run scripts/monster_character_virtual_videos.py foliage --out DIR`
+creates twelve transparent leaf/grass PNG overrides. Pass the same absolute
+`OPENGOTHIC_TEXTURES=DIR` to both fresh processes: ground, trunks and all collision
+meshes remain intact. The video title discloses the render-only foliage removal.
+The monster stair policy uses only the remaining horizontal request instead of
+Jolt's extra 2 cm minimum advance. It retains the full guild step (wolf 60 cm,
+troll 100 cm) for a single ledge. A blocking steep polygon with more than the guild step plus contact padding
+exposed above the physical feet is treated as extended steep terrain and retains
+a 12 cm rise budget. The decision stays with the same body/subshape until the
+blocking contact ends; teleportation clears it. Buried portions below the feet
+are excluded. Unknown/non-polygonal shapes retain the full guild step.
+Player/human paths retain the native policy.
+The contract covers repeated ten-centimetre risers, isolated ledges, and a
+40 cm ledge whose vertical face continues 100 cm below the approach floor.
+Presentation lag stays within 10 cm; a high single ledge may visibly snap as in
+legacy movement.
+
+`monster-character-virtual-ledges` compares six isolated ledges: wolf 20/40/55 cm,
+troll 40/80 cm, and wolf 40 cm with a face bottom at -100 cm.
+`monstercharacter ledge wolf|troll HEIGHT [BOTTOM]` creates one static
+source mesh 100 m above a verified stock anchor, checks three support rays and
+the vertical face, and runs production `Npc::goToPosition`/MoveAlgo over a 6 m
+approach to a 15 m landing. OFF/ON use the same native running animation and
+geometry. Each eight-second window reports arrival, time, stalls, root/model
+height changes and falls. Arrival requires 60 cm horizontal / 5 cm vertical
+tolerance and actual support; all six results are retained even after a
+mechanical failure. The synthetic geometry supplies no movement or response.
+`monster-character-virtual-stair-attack` enters `T_FISTATTACKMOVE` while a stair
+presentation correction is pending, without resetting that correction. It tests
+the grounded attack handoff separately from physical lunge range. The numerical
+wolf lunge and fieldraider charge use the verified open lunge lane; the latter
+also retains its Bloodfly control and requires the native NPC collision callback.

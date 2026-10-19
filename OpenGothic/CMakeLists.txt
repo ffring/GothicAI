@@ -100,6 +100,12 @@ configure_file(common/world/movablevobsdata.h.in generated/movablevobsdata.h @ON
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/destructible-vobs.csv")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/destructible-vobs.csv" DESTRUCTIBLE_VOBS_CSV)
 configure_file(common/physics/fracturedata.h.in generated/fracturedata.h @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/cloth-vobs.csv")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/cloth-vobs.csv" CLOTH_VOBS_DATA)
+configure_file(common/graphics/clothdata.h.in generated/clothdata.h @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/cloth-world.csv")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/cloth-world.csv" CLOTH_WORLD_DATA)
+configure_file(common/physics/clothworlddata.h.in generated/clothworlddata.h @ONLY)
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 # shaders
@@ -276,6 +282,11 @@ if(UNIX AND NOT IOS AND NOT ANDROID)
   # Pure production resolver/command gates: no assets, simulation or rendering device.
   add_executable(gothic-body-resolver-test tests/body_resolver_test.cpp)
   target_link_libraries(gothic-body-resolver-test PRIVATE OpenGothic AiBridge)
+  # Real NPC/world fixture for growing and shrinking the live observation subscription.
+  add_executable(gothic-body-watch-test tests/body_watch_test.cpp)
+  target_link_libraries(gothic-body-watch-test PRIVATE OpenGothic AiBridge)
+  target_include_directories(gothic-body-watch-test SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)
+  target_compile_options(gothic-body-watch-test PRIVATE -Wall -Wconversion -Werror)
 endif()
 
 # Asset-free contracts; run explicitly with their check-* targets.
@@ -330,6 +341,18 @@ if(NOT ANDROID AND NOT IOS)
     COMMAND $<TARGET_FILE:gothic-physics-contract>
     DEPENDS gothic-physics-contract
     USES_TERMINAL)
+  add_executable(gothic-cloth-contract EXCLUDE_FROM_ALL tests/cloth_contract.cpp)
+  target_link_libraries(gothic-cloth-contract PRIVATE OpenGothic AiBridge)
+  add_executable(gothic-clothgeometry-contract EXCLUDE_FROM_ALL
+    tests/clothgeometry_contract.cpp common/physics/clothgeometry.cpp)
+  target_include_directories(gothic-clothgeometry-contract PRIVATE common)
+  add_executable(gothic-worldcloth-contract EXCLUDE_FROM_ALL tests/worldcloth_contract.cpp)
+  target_link_libraries(gothic-worldcloth-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-cloth
+    COMMAND $<TARGET_FILE:gothic-cloth-contract>
+    COMMAND $<TARGET_FILE:gothic-clothgeometry-contract>
+    COMMAND $<TARGET_FILE:gothic-worldcloth-contract>
+    DEPENDS gothic-cloth-contract gothic-clothgeometry-contract gothic-worldcloth-contract USES_TERMINAL)
   add_executable(gothic-ragdoll-contract EXCLUDE_FROM_ALL tests/physics_ragdoll_contract.cpp)
   target_link_libraries(gothic-ragdoll-contract PRIVATE OpenGothic AiBridge)
   add_executable(gothic-ragdoll-save-contract EXCLUDE_FROM_ALL tests/ragdoll_save_contract.cpp)
@@ -349,6 +372,14 @@ if(NOT ANDROID AND NOT IOS)
 endif()
 
 # editor
+
+if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-npc-deeds-contract EXCLUDE_FROM_ALL tests/npc_deeds_contract.cpp)
+  target_include_directories(gothic-npc-deeds-contract PRIVATE common)
+  add_custom_target(check-npc-deeds
+    COMMAND $<TARGET_FILE:gothic-npc-deeds-contract>
+    DEPENDS gothic-npc-deeds-contract USES_TERMINAL)
+endif()
 
 # Navigation eye has an independent contract block to keep parallel navigation work isolated.
 if(NOT ANDROID AND NOT IOS)

@@ -168,6 +168,7 @@ class Renderer final {
 
     Tempest::Attachment       gbufDiffuse;
     Tempest::Attachment       gbufNormal;
+    Tempest::Attachment       gbufOrm;
 
     struct Shadow {
       Tempest::RenderPipeline* directLightPso = nullptr;

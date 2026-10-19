@@ -36,3 +36,8 @@ Landscape::Landscape(VisualObjects& visual, const PackedMesh &packed)
     blocks.emplace_back(std::move(b));
     }
   }
+
+void Landscape::setVisible(bool visible) {
+  for(auto& block:blocks)
+    block.mesh.setVisible(visible);
+  }

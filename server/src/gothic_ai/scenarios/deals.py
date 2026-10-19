@@ -292,9 +292,14 @@ async def deal_debt(
         return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
 
     async def come() -> str | None:
-        await link.debug("player_goto", to=lender, distance=250)
+        await link.debug("teleport", near=lender, distance=250)
         talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
-        return talk.people[lender].name if await _until(lambda: lender in talk.people, 20) else None
+        ready = await _until(
+            lambda: (entry := talk.people.get(lender)) is not None
+            and entry.distance <= 600 and entry.earshot <= 600 and entry.activity != "down",
+            20,
+        )
+        return talk.people[lender].name if ready else None
 
     await link.debug("skip_important", near=lender)  # his important dialog would start as the hero comes
     await link.attach(lender)  # gold to lend

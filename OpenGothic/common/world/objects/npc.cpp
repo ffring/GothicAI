@@ -9,6 +9,7 @@
 #include "graphics/visualfx.h"
 #include "game/damagecalculator.h"
 #include "game/herodeed.h"
+#include "game/deedwitness.h"
 #include "game/bodyobservations.h"
 #include "game/bodycontroller.h"
 #include "game/bodytrajectory.h"
@@ -566,7 +567,7 @@ bool Npc::setPosition(float ix, float iy, float iz) {
   y = iy;
   z = iz;
   resetCharacterVisualHeight();
-  if(!isPlayer() && isHuman())
+  if(!isPlayer() && (isHuman() || Gothic::physicsFlags().monsterCharacterVirtual))
     mvAlgo.resetCharacterVirtual();
   if(liveTeleport) {
     // Recreate at the destination instead of sweeping a kinematic body through
@@ -813,7 +814,7 @@ bool Npc::checkHealth(bool onChange, bool allowUnconscious) {
   const int minHp = isMonster() ? 0 : 1;
   if(hnpc->attribute[ATR_HITPOINTS]<=minHp) {
     if(currentOther==nullptr || !allowUnconscious || !isHuman() ||
-       owner.script().personAttitude(*this,*currentOther)==ATT_HOSTILE){
+       (owner.script().personAttitude(*this,*currentOther)==ATT_HOSTILE && !isNonlethalFight(*currentOther))){
       if(hnpc->attribute[ATR_HITPOINTS]<=0)
         onNoHealth(true,HS_Dead);
       return false;
@@ -3312,7 +3313,7 @@ void Npc::commitDamage() {
   currentTarget->takeDamage(*this,nullptr);
   }
 
-void Npc::takeDamage(Npc &other, const Bullet* b) {
+void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence) {
   if(isDown())
     return;
 
@@ -3320,8 +3321,8 @@ void Npc::takeDamage(Npc &other, const Bullet* b) {
 
   assert(b==nullptr || !b->isSpell());
   const auto& pose    = visual.pose();
-  const bool  isJumpb = pose.isJumpBack(owner.tickCount()) && fghAlgo.isInJumpBackAngle(*this,other);
-  const bool  isBlock = (!other.isMonster() || other.inventory().activeWeapon()!=nullptr) &&
+  const bool  isJumpb = !ignoreDefence && pose.isJumpBack(owner.tickCount()) && fghAlgo.isInJumpBackAngle(*this,other);
+  const bool  isBlock = !ignoreDefence && (!other.isMonster() || other.inventory().activeWeapon()!=nullptr) &&
                          fghAlgo.isInFocusAngle(*this,other) &&
                          pose.isDefence(owner.tickCount());
   if((isBlock || isJumpb) && b==nullptr)
@@ -3371,7 +3372,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
   DamageCalculator::Damage dmg={};
   DamageCalculator::Val    hitResult;
   SpellCategory            splCat     = SpellCategory::SPELL_BAD;
-  const bool               dontKill   = ((b==nullptr && splId==0) || (bMask & COLL_DONTKILL)) && (!isSwim());
+  const bool               dontKill   = isNonlethalFight(other) ||
+                                       (((b==nullptr && splId==0) || (bMask & COLL_DONTKILL)) && (!isSwim()));
   int32_t                  damageType = DamageCalculator::damageTypeMask(other);
 
   if(isSpell) {
@@ -3385,9 +3387,11 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
 
   // Capture the victim's state before its damage script changes attack reason/state.
   auto heroAttack = HeroDeed::capture(other,"attack",this);
+  if(heroAttack!=nullptr && !other.isPlayer())
+    heroAttack->collectWitnesses(other,this);
   if(!isSpell || splCat==SpellCategory::SPELL_BAD) {
     stopPhysicsInvestigation(false);
-    perceptionProcess(other,this,0,PERC_ASSESSDAMAGE,heroAttack);
+    perceptionProcess(other,this,0,PERC_ASSESSDAMAGE,other.isPlayer() ? heroAttack : nullptr);
     const auto tracePrimitiveBefore = fghAlgo.queuedAction();
     fghAlgo.onTakeHit();
     BodyController::takeHit(*this);
@@ -3464,6 +3468,11 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   if(hitResult.value>0) {
+    if(heroAttack!=nullptr && !other.isPlayer()) {
+      other.consumeServerAttack();
+      Gothic::inst().onHeroDeed(*heroAttack);
+      heroAttack.reset(); // native ASSESSOTHERSDAMAGE still runs, without changing our snapshot
+      }
     currentOther = &other;
     changeAttribute(ATR_HITPOINTS,-hitResult.value,dontKill);
 
@@ -3746,6 +3755,11 @@ void Npc::tickAnimationTags() {
 
 void Npc::tick(uint64_t dt) {
   headInput.reset();
+  if(nonlethalTarget!=size_t(-1) && owner.tickCount()>nonlethalUntil) {
+    auto* other = owner.findNpcByInstance(nonlethalTarget);
+    if(other==nullptr || (!isAttack() && !isDown() && !other->isAttack() && !other->isDown()))
+      nonlethalTarget = size_t(-1);
+    }
   static bool dbg = false;
   static int  kId = 432;
   if(dbg && !isPlayer() && hnpc->id!=kId)
@@ -5006,6 +5020,15 @@ Item* Npc::addItem(std::unique_ptr<Item>&& i) {
   }
 
 Item* Npc::takeItem(Item& item) {
+  const bool npcTheft = !isPlayer() && isServerDeed("take_item");
+  if(npcTheft && (serverDeedSimulationError()!=nullptr || item.isMission()))
+    return nullptr;
+  if(npcTheft) {
+    const auto current = HeroDeed::capture(*this,"take_item",nullptr,&item);
+    const auto& actualOwner = current->owner.npc.empty() ? current->roomOwner.npc : current->owner.npc;
+    if(actualOwner!=serverDeedOwner)
+      return nullptr;
+    }
   if(interactive()!=nullptr)
     return nullptr;
   if(item.isTorchBurn() && (isUsingTorch() || weaponState()!=WeaponState::NoWeapon))
@@ -5021,6 +5044,17 @@ Item* Npc::takeItem(Item& item) {
   if(sq==nullptr)
     return nullptr;
 
+  if(npcTheft && serverDeedCount>0 && serverDeedCount<item.count()) {
+    auto deed = HeroDeed::capture(*this,"take_item",nullptr,&item,nullptr,serverDeedCount);
+    deed->collectWitnesses(*this,nullptr);
+    auto* taken = addItem(item.clsId(),serverDeedCount);
+    if(taken==nullptr)
+      return nullptr;
+    item.setCount(item.count()-serverDeedCount);
+    Gothic::inst().onHeroDeed(*deed);
+    implAniWait(uint64_t(sq->totalTime()));
+    return taken;
+    }
   std::unique_ptr<Item> ptr = owner.takeItem(item);
   if(ptr!=nullptr && ptr->isTorchBurn()) {
    if(!toggleTorch())
@@ -5036,9 +5070,13 @@ Item* Npc::takeItem(Item& item) {
     return nullptr;
 
   auto deed = HeroDeed::capture(*this,"take_item",nullptr,it);
+  if(deed!=nullptr && !isPlayer())
+    deed->collectWitnesses(*this,nullptr);
   it = addItem(std::move(ptr));
   if(isPlayer() && it!=nullptr)
     owner.sendPassivePerc(*this,*this,*it,PERC_ASSESSTHEFT,std::move(deed));
+  else if(it!=nullptr && deed!=nullptr)
+    Gothic::inst().onHeroDeed(*deed);
 
   implAniWait(uint64_t(sq->totalTime()));
   return it;
@@ -5051,14 +5089,20 @@ void Npc::onWldItemRemoved(const Item& itm) {
 
 void Npc::addItem(size_t id, Interactive &chest, size_t count) {
   auto* item = chest.inventory().getItem(id);
+  if(!isPlayer() && isServerDeed("take_item") &&
+     (serverDeedSimulationError()!=nullptr || (item!=nullptr && item->isMission())))
+    return;
   auto deed = HeroDeed::capture(*this,"take_item",nullptr,item,&chest,
                                 std::min(count,chest.inventory().itemCount(id)));
+  if(deed!=nullptr && !isPlayer())
+    deed->collectWitnesses(*this,nullptr);
   const auto before = invent.itemCount(id);
   Inventory::transfer(invent,chest.inventory(),nullptr,id,count,owner);
   if(deed!=nullptr && invent.itemCount(id)>before) {
     deed->count = invent.itemCount(id)-before;
-    if(auto use = chest.heroUseDeed())
-      deed->witnesses = use->witnesses;
+    if(isPlayer())
+      if(auto use = chest.heroUseDeed())
+        deed->witnesses = use->witnesses;
     Gothic::inst().onHeroDeed(*deed);
     }
   }
@@ -5471,6 +5515,8 @@ WeaponState Npc::weaponState() const {
   }
 
 bool Npc::canFinish(Npc& oth) {
+  if(isNonlethalFight(oth))
+    return false;
   auto ws = weaponState();
   if(ws!=WeaponState::W1H && ws!=WeaponState::W2H)
     return false;
@@ -6181,7 +6227,7 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc,
     return false;
     }
 
-  float r = float(world().script().percRanges().at(perc, hnpc->senses_range));
+  float r = perceptionRange(perc);
   r = r*r;
 
   if(quadDist>r) {
@@ -6243,13 +6289,15 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc,
     }
 
   if(hasPerc(perc)) {
+    // Receipt makes a witness, even when the server takes the reaction. A late
+    // passPerception has no deed, so returning it to scripts cannot add one twice.
+    if(deed!=nullptr)
+      deed->witnessed(*this);
     auto& intercept = Gothic::inst().interceptPerception;
-    if(!percPassThrough && intercept && intercept(*this,pl,victim,perc)) {
+    if(!percPassThrough && intercept && intercept(*this,pl,victim,perc,deed.get())) {
       trace("intercepted",true,false);
       return true;  // taken over by an outside AI (ai_bridge); it may hand it back
       }
-    if(deed!=nullptr)
-      deed->witnessed(*this);
     trace("native_callback",true,true);
     owner.script().invokeState(this,&pl,victim,perception[perc].func);
     return true;
@@ -6274,6 +6322,77 @@ bool Npc::canHearPhysicsNoise() const {
   const auto* state = owner.script().findSymbol(aiState.funcIni.ptr);
   return state==nullptr || (state->name()!="ZS_SLEEP" && state->name()!="ZS_MAGICSLEEP" &&
                             state->name()!="ZS_MM_RTN_SLEEP");
+  }
+
+float Npc::perceptionRange(PercType perc) const {
+  return float(world().script().percRanges().at(perc,hnpc->senses_range));
+  }
+
+bool Npc::canWitnessDeed(const Npc& culprit, const Npc* victim, PercType perc) const {
+  const auto* state = owner.script().findSymbol(aiState.funcIni.ptr);
+  DeedWitness gates;
+  gates.culprit = this==&culprit;
+  gates.victim = this==victim;
+  gates.player = isPlayer();
+  gates.guild = guild();
+  gates.perceptionEnabled = hasPerc(perc);
+  gates.down = isDown();
+  gates.lying = isLie();
+  gates.simulated = processPolicy()==NpcProcessPolicy::AiNormal;
+  gates.stateStarted = aiState.started || !aiState.funcIni.isValid();
+  gates.sleeping = state!=nullptr && (state->name()=="ZS_SLEEP" || state->name()=="ZS_MAGICSLEEP" ||
+                                    state->name()=="ZS_MM_RTN_SLEEP");
+  // A participant in an unrelated fight is occupied. A defender already fighting
+  // this culprit may still see a fresh deed against somebody else.
+  gates.foreignFight = DeedWitness::foreignCombat(isAttack(),currentTarget==&culprit);
+  gates.range = perceptionRange(perc);
+  // Native ASSESSOTHERSDAMAGE is sent by the damaged body (PerceptionMsg::self),
+  // so delivery measures range from the victim, while OTHER names the culprit.
+  gates.distanceSquared = perc==PERC_ASSESSOTHERSDAMAGE && victim!=nullptr ?
+                          qDistTo(*victim) : qDistTo(culprit);
+  return gates.admitted() && canSeeNpc(culprit,false);
+  }
+
+void Npc::setServerDeed(std::string_view kind, Npc* victim, size_t count, std::string_view expectedOwner) {
+  serverDeedKind = kind;
+  serverDeedVictim = victim;
+  serverAttackRecorded = false;
+  serverDeedSimulationLost = false;
+  serverDeedCount = count;
+  serverDeedOwner = expectedOwner;
+  }
+
+void Npc::clearServerDeed() {
+  serverDeedKind.clear();
+  serverDeedVictim = nullptr;
+  serverAttackRecorded = false;
+  serverDeedSimulationLost = false;
+  serverDeedCount = 0;
+  serverDeedOwner.clear();
+  }
+
+bool Npc::isServerDeed(std::string_view kind, const Npc* victim) const {
+  return kind==serverDeedKind && (kind!="attack" || (victim==serverDeedVictim && !serverAttackRecorded));
+  }
+
+const char* Npc::serverDeedSimulationError() {
+  // NPC queues run before WorldObjects updates the policy; the observer runs at
+  // the next frame's start. Remember a refused native pickup even if the policy
+  // has become normal again before that observer can report the failure.
+  return NpcDeedSimulation::refusal(processPolicy(),serverDeedSimulationLost);
+  }
+
+void Npc::consumeServerAttack() {
+  serverAttackRecorded = true;
+  }
+
+void Npc::setNonlethalFight(Npc& other) {
+  nonlethalTarget = other.instanceSymbol();
+  nonlethalUntil = owner.tickCount()+5000;
+  }
+
+bool Npc::isNonlethalFight(const Npc& other) const {
+  return nonlethalTarget==other.instanceSymbol() || other.nonlethalTarget==instanceSymbol();
   }
 
 bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
@@ -6404,7 +6523,7 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 
   if(id->attach(*this)) {
     currentInteract = id;
-    if(!isPlayer() && isHuman()) {
+    if(!isPlayer() && (isHuman() || Gothic::physicsFlags().monsterCharacterVirtual)) {
       mvAlgo.resetCharacterVirtual(true);
       resetCharacterVisualHeight();
       }
@@ -6425,7 +6544,7 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 void Npc::quitInteraction() {
   if(currentInteract==nullptr)
     return;
-  if(!isPlayer() && isHuman()) {
+  if(!isPlayer() && (isHuman() || Gothic::physicsFlags().monsterCharacterVirtual)) {
     mvAlgo.resetCharacterVirtual(true);
     resetCharacterVisualHeight();
     }
@@ -7126,7 +7245,10 @@ void Npc::resetCharacterVisualHeight() {
   }
 
 void Npc::updateCharacterVisualHeight() {
-  if(!isPlayer() && (!isHuman() || (!Gothic::physicsFlags().npcCharacterVirtual && characterVisualSteps.empty()))) {
+  const bool characterFlag = isPlayer() ? Gothic::physicsFlags().characterVirtual :
+                             isHuman() ? Gothic::physicsFlags().npcCharacterVirtual :
+                                         Gothic::physicsFlags().monsterCharacterVirtual;
+  if(!isPlayer() && !characterFlag && (!isHuman() || characterVisualSteps.empty())) {
     if(characterVisualHasSample)
       resetCharacterVisualHeight();
     return;
@@ -7137,15 +7259,16 @@ void Npc::updateCharacterVisualHeight() {
   const auto now = owner.tickCount();
   const auto at = position();
   const auto normal = mvAlgo.groundNormal();
-  const bool groundState = !isDown() && !spellFrozen() && interactive()==nullptr &&
-                           mvAlgo.state()==MoveAlgo::Run &&
-                           !(bodyStateMasked()==BS_JUMP && isFlyAnim());
-  const bool enabled = (isPlayer() ? Gothic::physicsFlags().characterVirtual :
-                                    Gothic::physicsFlags().npcCharacterVirtual) &&
-                        mvAlgo.characterVirtualActive() && groundState;
-  // A radius/flag handoff keeps the remaining 100 ms of a stair blend. Removing
+  const bool groundedState = !isDown() && !spellFrozen() && interactive()==nullptr &&
+                             mvAlgo.state()==MoveAlgo::Run &&
+                             !(bodyStateMasked()==BS_JUMP && isFlyAnim());
+  const bool monsterAttack = !isPlayer() && !isHuman() && bodyStateMasked()==BS_HIT;
+  const bool groundState = groundedState && !monsterAttack;
+  const bool enabled = characterFlag && mvAlgo.characterVirtualActive() && groundState;
+  // A radius handoff (or a human NPC flag handoff) keeps the remaining stair blend. Removing
   // that visual offset immediately would pop the model even though its feet agree.
-  const bool finishNpcBlend = !isPlayer() && groundState && !characterVisualSteps.empty();
+  // An attack does not create stair corrections, but must finish a pending one.
+  const bool finishNpcBlend = !isPlayer() && groundedState && !characterVisualSteps.empty();
   const float previousOffset = characterVisualYOffset;
 
   if((!enabled && !finishNpcBlend) || (characterVisualHasSample && now<characterVisualSampleTick)) {
@@ -7196,10 +7319,27 @@ void Npc::updateCharacterVisualHeight() {
       }
     }
 
+  if(!isPlayer() && !isHuman() && (enabled || finishNpcBlend) &&
+     characterVisualHasSample && characterVisualGroundSample && now>=characterVisualSampleTick) {
+    // Releasing an earlier stair blend can add to a small physical rise.
+    // Keep that presentation remainder in the blend. A high guild-sized
+    // ledge may still snap: the human ten-centimetre lag limit takes priority.
+    constexpr float maxVisualStep = 12.f; // cm per movement update
+    const float previousY = characterVisualSamplePosition.y+previousOffset;
+    const float desiredY = at.y+characterVisualYOffset;
+    const float blendedY = std::clamp(desiredY,previousY-maxVisualStep,previousY+maxVisualStep);
+    const float limitedY = std::clamp(blendedY,at.y-maxVisualLag,at.y+maxVisualLag);
+    const float correction = limitedY-desiredY;
+    if(correction!=0) {
+      characterVisualSteps.push_back({now,correction});
+      characterVisualYOffset += correction;
+      }
+    }
+
   // Keep a baseline even while the freshly loaded controller is inactive. Its first
   // floor correction can then blend from the saved height, while airborne handoffs snap.
   characterVisualHasSample = true;
-  characterVisualGroundSample = groundState;
+  characterVisualGroundSample = groundedState;
   characterVisualSamplePosition = at;
   characterVisualSampleNormal = normal;
   characterVisualSampleTick = now;

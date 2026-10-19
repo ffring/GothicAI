@@ -15,12 +15,16 @@ import './fonts';
 import {BrandSting, STING_FRAMES} from './Brand';
 import {Captions} from './parts/Captions';
 import {BarsView, DotsView, FormulaView, StatsView} from './parts/Cards';
+import {BigView, CellsView, LineView, TableView} from './parts/WideCards';
+import {ConeView, FlowView, GridView, RaysView, TicksView} from './parts/WideDiagrams';
 import {DiceChart} from './parts/DiceChart';
+import {CombatOverlay} from './parts/CombatOverlay';
+import {sourceFrame, zoomScale, type Viewport} from './parts/followMath';
 import {Sight} from './parts/Sight';
 import {Tags} from './parts/Tags';
 import {Hook, Texts} from './parts/Texts';
 import type {Beat, Plan} from './schema';
-import {COLOR, FONT, H, OUTLINE, W} from './theme';
+import {COLOR, FONT, OUTLINE, WIDE_SAFE} from './theme';
 
 // the voice speaks in these spans (seconds of the short): the game ducks under them
 type Spans = [number, number][];
@@ -50,9 +54,7 @@ const Picture: React.FC<{
   const {fps} = useVideoConfig();
   const t = useCurrentFrame() / fps;
   const z = beat.zoom;
-  const s = z
-    ? interpolate(t, [z.at, z.at + z.dur], [1, z.scale], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
-    : 1;
+  const s = zoomScale(z, t);
   const style: React.CSSProperties = {
     width,
     height,
@@ -63,19 +65,22 @@ const Picture: React.FC<{
   if (src.endsWith('.png') || src.endsWith('.jpg')) {
     return <Img src={staticFile(src)} style={style} />;
   }
-  const video = <OffthreadVideo src={staticFile(src)} startFrom={Math.round(from * fps)} volume={volume} style={style} />;
+  const video = <OffthreadVideo src={staticFile(src)} startFrom={sourceFrame(from, 0, fps)} volume={volume} style={style} />;
   if (beat.freeze !== undefined && t >= beat.freeze) {
-    return <Freeze frame={Math.round(beat.freeze * fps)}>{video}</Freeze>;
+    return <Freeze frame={sourceFrame(0, beat.freeze, fps)}>{video}</Freeze>;
   }
   return video;
 };
 
-const HalfLabel: React.FC<{text: string; top: number; color: string}> = ({text, top, color}) => (
+const HalfLabel: React.FC<{text: string; top: number; color: string; left?: number; maxWidth?: number}> = ({text, top, color, left = 40, maxWidth}) => (
   <div
     style={{
       position: 'absolute',
       top,
-      left: 40,
+      left,
+      maxWidth,
+      boxSizing: maxWidth ? 'border-box' : undefined,
+      overflowWrap: maxWidth ? 'anywhere' : undefined,
       fontFamily: FONT.body,
       fontWeight: 800,
       fontSize: 40,
@@ -98,28 +103,56 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
   game,
   stem,
 }) => {
-  const {fps} = useVideoConfig();
+  const {fps, width, height} = useVideoConfig();
+  const wide = width > height;
   const volume = (f: number) =>
     stem ? (stem === 'game' ? beat.game : 0) : game * beat.game * ducked(start + f / fps, spans, duck);
   let body: React.ReactNode = null;
+  const split = beat.kind === 'split';
+  const viewport: Viewport = {left: 0, top: 0,
+    width: split && wide ? width / 2 : width, height: split && !wide ? height / 2 : height};
+  const bottomViewport: Viewport = {...viewport, left: wide ? width / 2 : 0, top: wide ? 0 : height / 2};
   const card = beat.chart;
   if (beat.kind === 'card' && card) {
     if (card.type === 'dice') body = <DiceChart spec={card} />;
     else if (card.type === 'formula') body = <FormulaView spec={card} />;
     else if (card.type === 'bars') body = <BarsView spec={card} />;
     else if (card.type === 'dots') body = <DotsView spec={card} />;
-    else body = <StatsView spec={card} />;
+    else if (card.type === 'stats') body = <StatsView spec={card} />;
+    else if (card.type === 'line') body = <LineView spec={card} />;
+    else if (card.type === 'big') body = <BigView spec={card} />;
+    else if (card.type === 'table') body = <TableView spec={card} />;
+    else if (card.type === 'cells') body = <CellsView spec={card} />;
+    else if (card.type === 'rays') body = <RaysView spec={card} />;
+    else if (card.type === 'cone') body = <ConeView spec={card} />;
+    else if (card.type === 'ticks') body = <TicksView spec={card} />;
+    else if (card.type === 'grid') body = <GridView spec={card} />;
+    else if (card.type === 'flow') body = <FlowView spec={card} />;
   } else if (beat.kind === 'split' && beat.src && beat.srcBottom) {
-    const half = H / 2;
-    body = (
+    const half = height / 2;
+    body = wide ? (
       <>
-        <div style={{position: 'absolute', top: 0, width: W, height: half, overflow: 'hidden'}}>
-          <Picture src={beat.src} from={beat.from} beat={beat} width={W} height={half} volume={() => 0} />
+        <div style={{position: 'absolute', left: 0, width: width / 2, height, overflow: 'hidden'}}>
+          <Picture src={beat.src} from={beat.from} beat={beat} width={width / 2} height={height} volume={() => 0} />
         </div>
-        <div style={{position: 'absolute', top: half, width: W, height: half, overflow: 'hidden'}}>
-          <Picture src={beat.srcBottom} from={beat.fromBottom} beat={beat} width={W} height={half} volume={volume} />
+        <div style={{position: 'absolute', left: width / 2, width: width / 2, height, overflow: 'hidden'}}>
+          <Picture src={beat.srcBottom} from={beat.fromBottom} beat={beat} width={width / 2} height={height} volume={volume} />
         </div>
-        <div style={{position: 'absolute', top: half - 2, width: W, height: 4, background: '#000'}} />
+        <div style={{position: 'absolute', left: width / 2 - 2, width: 4, height, background: '#000'}} />
+        {beat.labels && beat.labels.map((label, i) => (
+          <HalfLabel key={i} text={label} top={WIDE_SAFE.top} left={i * width / 2 + WIDE_SAFE.left}
+            maxWidth={width / 2 - 2 * WIDE_SAFE.left} color={beat.labelColors?.[i] ?? (i === 0 ? COLOR.before : COLOR.now)} />
+        ))}
+      </>
+    ) : (
+      <>
+        <div style={{position: 'absolute', top: 0, width, height: half, overflow: 'hidden'}}>
+          <Picture src={beat.src} from={beat.from} beat={beat} width={width} height={half} volume={() => 0} />
+        </div>
+        <div style={{position: 'absolute', top: half, width, height: half, overflow: 'hidden'}}>
+          <Picture src={beat.srcBottom} from={beat.fromBottom} beat={beat} width={width} height={half} volume={volume} />
+        </div>
+        <div style={{position: 'absolute', top: half - 2, width, height: 4, background: '#000'}} />
         {beat.labels && (
           <>
             <HalfLabel text={beat.labels[0]} top={170} color={beat.labelColors?.[0] ?? COLOR.before} />
@@ -129,11 +162,19 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
       </>
     );
   } else if (beat.src) {
-    body = <Picture src={beat.src} from={beat.from} beat={beat} width={W} height={H} volume={volume} />;
+    body = <Picture src={beat.src} from={beat.from} beat={beat} width={width} height={height} volume={volume} />;
   }
   return (
     <AbsoluteFill style={{background: '#000', overflow: 'hidden'}}>
       {body}
+      {beat.kind !== 'card' && (beat.follow || beat.hp) && (
+        <CombatOverlay follow={beat.follow} hp={beat.hp} from={beat.from} beat={beat} viewport={viewport}
+          insetTop={split && beat.labels ? (wide ? 122 : 236) : (wide ? 32 : 160)} />
+      )}
+      {split && (beat.followBottom || beat.hpBottom) && (
+        <CombatOverlay follow={beat.followBottom} hp={beat.hpBottom} from={beat.fromBottom} beat={beat} viewport={bottomViewport}
+          insetTop={beat.labels ? (wide ? 122 : 106) : 32} />
+      )}
       <Sight strokes={beat.strokes} fans={beat.fans} />
       <Tags tags={beat.tags} />
       <Texts texts={beat.texts} />

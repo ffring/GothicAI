@@ -5,6 +5,9 @@ scene with the hero's lines, the hero says them with a TTS voice through the tal
 through speech recognition and answer with the language model, the test bench films it with the game's
 effects and separate AI npc voices, and the cut makes a 1080x1920 short with subtitles.
 
+The [explainer renderer](explain/README.md) also makes long 1920×1080 videos: set `format: "wide"` in its
+JSON plan and publish with `gothic-shorts explain`. Omitted `format` keeps the vertical 1080×1920 layout.
+
 Game music is not recorded: `film` always writes `musicVolume=0` in the take's `Gothic.ini`, including
 for old shots with a nonzero `music` value, and `worldSounds=0`: the map's looping place sounds
 (zCVobSound: wind and birds, surf, torches) would be a second tune under the bed. The cut adds one music bed for the whole short, starting
@@ -145,6 +148,17 @@ at a runner. `hits`: the body physics off (`off:` ragdoll, living bodies, arrow 
 flinch too) and on: three arrows stay in a bandit, one killed on the run, a bandit and a wolf killed on a slope
 over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break in the hook makes it two lines.
 
+`water`: three daytime scenes at Khorinis harbour: a farmer killed by the wind fist, a fireball
+at a crate and barrel, and a sword, ore, lute and arrow dropped into deep water. Run
+`shorts/compare/film.sh water` for both takes. `water-film setup body|fireball|things` sets a fixed close side
+camera and a fresh scene; `water-film begin` starts its native action and `water-film checkpoint` logs the
+outcome after six seconds. The off take disables ragdoll, living bodies, spell features, movable objects,
+destruction and water after every setup, with `OPENGOTHIC_FLINCH=0`. The existing `water.bench` and
+`water-bodies.bench` checks keep their own fixtures.
+The cameras frame the impact and water surface closely; the stock corpse may leave the off frame during
+its throw. At each captured frame, `water_film_framing` measures the pixel projection of rendered NPC bones
+or the visual model bounds of an item or intact prop; it marks departures from the frame without aborting.
+
 - `compare/<name>.bench`: the scenario; every `rec` is a beat. Both takes run the same steps on the fixed
   time step, so the halves stay in sync; the "off" take sets `OPENGOTHIC_FOOTIK=0`, `_GAZE`, `_LEAN`, `_AIM`,
   `_FLINCH`, `_ANIBLEND`, `_LIPSYNC` to 0, or what `"off_env"` of `compare/<name>.json` names. A line
@@ -159,6 +173,7 @@ over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break 
 - A voice: a beat's `"lines": [{"at", "file", "words": [[word, from, to], ...]}]` lays each voiced line at that
   second of the segment and captions it in place of the beat's title, a page of up to three words at a time with
   the word being said lit (the timings from `gothic-shorts align`); the game's sound and the bed duck under it.
+  Subtitle tracks and dubbing use these lines' positions in the plan, including the duration of unvoiced beats.
   Such a plan (its script, the voice files) stays outside the repository, in the explainer's workspace: give its
   path as the third argument, the short goes into that folder's `render/`:
   `uv run --project shorts python shorts/compare/cut.py hits ru ~/.local/share/gothic-ai/explain/hits/plan.json`.
@@ -369,8 +384,9 @@ description, every other section goes in as their translation (YouTube shows a v
 language), and `--captions <lang>=<file>` adds subtitle tracks after the upload. `gothic-shorts srt` makes
 them: a shot's take from its `subs.<lang>.json` on the cut's time (an npc's line starts with its name, the
 burnt-in hook and captions in brackets), an explainer from `script.<lang>.txt` over its Russian voice
-(`words.ru.json`, the `|` chunks one after another). Caption tracks need the `youtube.force-ssl` scope: a
-sign-in older than it can still upload, but `--captions` asks to `youtube login` again before it sends
+(`words.ru.json`, the `|` chunks one after another). For comparisons, subtitles and dubbing follow the voiced
+lines in `plan.json` (`srt --plan FILE` selects another plan); `words.ru.json` is not needed. Caption tracks
+need the `youtube.force-ssl` scope: a sign-in older than it can still upload, but `--captions` asks to `youtube login` again before it sends
 anything. `translate` adds the other sections' titles and descriptions to a video already up (videos.update,
 the same scope): its own title, description, tags and other translations stay as they are. An English audio track (`gothic-shorts dub`) is added in Studio (Subtitles, the video, the
 language's Audio column); the API has no call for it, and Studio shows the column only to channels with

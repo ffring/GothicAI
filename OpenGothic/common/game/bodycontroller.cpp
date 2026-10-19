@@ -164,9 +164,14 @@ void cancel(Lease& l,std::string_view reason) {
     event(l,"cancelled",reason); l.command=false;
     }
   }
+bool movementPrimitive(FightAlgo::Action primitive) {
+  return primitive==FightAlgo::MV_MOVE || primitive==FightAlgo::MV_TURN2HIT ||
+         primitive==FightAlgo::MV_STRAFEL || primitive==FightAlgo::MV_STRAFER || primitive==FightAlgo::MV_JUMPBACK;
+  }
 void requestRelease(Lease& l,std::string_view reason) {
   if(l.release) return;
   l.release=true; l.releaseReason=reason;
+  if(l.active.started && movementPrimitive(l.active.primitive)) l.movementStopPending=true;
   cancel(l,reason);
   if(reason=="disconnect" || reason=="watchdog_timeout") event(l,"ownership","provider_lost");
   event(l,"ownership","release_pending");
@@ -226,6 +231,28 @@ void BodyController::setActors(const std::vector<Npc*>& actors) {
   state().actors=actors;
   }
 
+bool BodyController::hasOwners() { return !state().leases.empty() || !state().pending.empty(); }
+
+const char* BodyController::updateWatch(const std::vector<Npc*>& actors, uint64_t periodMs) {
+  if(actors.size()>MaxActors || (periodMs!=50 && periodMs!=100))
+    return "body_watch needs up to 4 actors and rate_hz 10 or 20";
+  for(size_t i=0;i<actors.size();++i)
+    if(actors[i]==nullptr || std::find(actors.begin(),actors.begin()+std::ptrdiff_t(i),actors[i])!=actors.begin()+std::ptrdiff_t(i))
+      return "null or duplicate body_watch actor";
+  const auto included=[&](const auto& owners) {
+    return std::all_of(owners.begin(),owners.end(),[&](const auto& owner) {
+      return std::find(actors.begin(),actors.end(),owner.first)!=actors.end();
+      });
+    };
+  if(!included(state().leases) || !included(state().pending))
+    return "body_watch must retain active body owners and pending acquisitions";
+  if(periodMs!=BodyObservations::samplePeriodMs())
+    return "release active body owners before changing body_watch rate_hz";
+  BodyObservations::updateWatch(actors);
+  setActors(actors);
+  return "allowed";
+  }
+
 FightAlgo::ResolverState BodyController::resolverState(const Npc& npc) {
   const auto own=npc.bodyObservationState();
   FightAlgo::ResolverState s;
@@ -246,20 +273,30 @@ FightAlgo::ResolverState BodyController::resolverState(const Npc& npc) {
   }
 
 bool BodyController::stopOwnedMovement(Npc& actor) {
-  if(!owns(actor) || state().paused || state().infrastructure || terminal(actor) || !safeBoundary(actor))
+  const auto l=lease(actor);
+  if(!l || state().paused || state().infrastructure || terminal(actor))
     return false;
-  if(lease(actor)->release) {
+  const bool releaseMovement=l->release && l->movementStopPending;
+  if(!releaseMovement && !safeBoundary(actor)) return false;
+  if(l->release) {
     // A script queue or external-control takeover makes nativeEligible false, but must
-    // not prevent returning authority to that very script. Keep all physical locks.
+    // not prevent returning authority to that very script. Keep protected segments,
+    // physical reactions and waits that do not belong to the cancelled movement.
+    const auto physical=actor.bodyObservationState();
     const auto bs=actor.bodyStateMasked();
-    if(actor.isInAir() || actor.isSwim() || actor.isDive() || bs==BS_HIT || bs==BS_LIE || bs==BS_STUMBLE || bs==BS_FALL)
+    if(actor.isInAir() || actor.isSwim() || actor.isDive() || bs==BS_HIT || bs==BS_LIE ||
+       bs==BS_STUMBLE || bs==BS_FALL || bs==BS_ITEMINTERACT || physical.attackAnim ||
+       physical.segmentRemainingMs>0 || physical.aniGate || physical.aiGate || physical.outputGate)
       return false;
+    // RUN/strafe/turn transitions are locomotion, not protected combat segments.
+    // Stop their pose even when canInterrupt() is false, along with their own FAI wait.
+    if(releaseMovement) actor.faiWaitTime=0;
     } else if(!actor.bodyObservationState().nativeEligible) return false;
   // Remove the original Run layer before selecting Idle. Reversing this order creates
   // a moving RUNL-to-RUN transition tagged STAND that stopWalkAnim cannot remove.
   // This is the same hard stop used by the native MOVE executor in weapon range.
   actor.visual.stopWalkAnim(actor);
-  actor.clearGoTo(); actor.wayPath.clear(); actor.stopWalking(); actor.setAnimRotate(0);
+  actor.setAnimRotate(0); actor.clearGoTo(); actor.wayPath.clear(); actor.stopWalking();
   return actor.isStanding();
   }
 
@@ -390,19 +427,51 @@ void BodyController::pumpWatchdogs() {
       // Keep the final locked state for the episode collector; never silently resume native.
       ++it; continue;
       }
-    if(l.release && (isTerminal || !state().paused) && safeBoundary(*l.npc)) {
+    // Far policies disable ordinary near perception at 30 m. A combat segment is
+    // measured in game time, so waiting for it here can outlive the provider's wall
+    // release deadline even while the pose still advances. Return authority now;
+    // only normalize poses that belong entirely to combat/locomotion.
+    // Policy is updated after NPC ticks: an old far policy must not cut a segment
+    // if the hero has just returned nearby, before that update.
+    const auto hero=l.npc->world().player();
+    const bool farRelease=l.release && !isTerminal && !state().paused &&
+                          l.npc->processPolicy()>=NpcProcessPolicy::AiFar &&
+                          hero!=nullptr && l.npc->qDistTo(*hero)>=3000.f*3000.f;
+    if(farRelease) {
+      auto& npc=*l.npc;
+      npc.go2.clear(); npc.wayPath.clear(); l.movementStopPending=false;
+      const auto layers=npc.visual.pose().combatLayers(npc.owner.tickCount());
+      const bool combatOnly=std::all_of(layers.begin(),layers.end(),[](const Pose::CombatLayer& layer) {
+        switch(layer.state & BS_MAX) {
+          case BS_NONE: case (BS_WALK & BS_MAX): case (BS_SNEAK & BS_MAX):
+          case BS_RUN: case BS_SPRINT: case (BS_HIT & BS_MAX): case BS_PARADE:
+            return true;
+          default: return false;
+          }
+        });
+      if(combatOnly && !npc.ragdoll && !npc.isInAir() && !npc.isSwim() && !npc.isDive() &&
+         !npc.spellFrozen() && !npc.spellWhirling() && npc.interactive()==nullptr) {
+        npc.setAnimRotate(0); npc.visual.pose().stopAllAnim();
+        npc.faiWaitTime=0; npc.aniWaitTime=0;
+        npc.lastEventTime=npc.owner.tickCount();
+        npc.setAnim(Npc::Anim::Idle);
+        }
+      }
+    if(l.release && l.movementStopPending && !isTerminal && stopOwnedMovement(*l.npc))
+      l.movementStopPending=false;
+    if(l.release && (isTerminal || !state().paused) && (farRelease || safeBoundary(*l.npc))) {
       if(!isTerminal && l.movementStopPending) {
         if(!stopOwnedMovement(*l.npc)) { ++it; continue; }
         l.movementStopPending=false;
         }
       l.npc->fghAlgo.onClearTarget();
       auto npc=l.npc;
-      // A finished attack/strafe loop is allowed to return to Idle only on this legal boundary.
+      // The normal path reaches Idle only after its legal combat boundary.
       if(isTerminal) {
         // onNoHealth already installed the dead/unconscious pose; clearing GoTo through
         // stopWalking() would overwrite it before the deferred native state is applied.
         npc->go2.clear(); npc->wayPath.clear();
-        } else {
+        } else if(!farRelease) {
         npc->clearGoTo(); npc->setAnim(Npc::Anim::Idle);
         }
       event(l,"ownership","native_restored");
@@ -413,7 +482,7 @@ void BodyController::pumpWatchdogs() {
     }
   }
 
-std::string BodyController::statusJson(const Npc* actor) {
+std::string BodyController::statusJson(const Npc* actor,bool boundaryDiagnostics) {
   Json d=object(); str(d,"type","body_control_status");
   u(d,"session_epoch",BodyObservations::sessionEpoch()); u(d,"world_epoch",BodyObservations::worldEpoch());
   b(d,"paused",state().paused); b(d,"infrastructure_failure",state().infrastructure);
@@ -434,6 +503,14 @@ std::string BodyController::statusJson(const Npc* actor) {
     u(row,"t_game_ms",npc.owner.tickCount()); u(row,"observation_seq",BodyObservations::latestSequence(npc));
     u(row,"observed_game_ms",BodyObservations::latestGameMs(npc)); u(row,"watchdog_timeout_ms",l ? l->timeout : 0);
     b(row,"control_allowed",s.controlAllowed); b(row,"can_decide",s.canDecide);
+    if(boundaryDiagnostics) {
+      const auto physical=npc.bodyObservationState();
+      u(row,"process_policy",uint64_t(npc.processPolicy()));
+      u(row,"segment_remaining_ms",physical.segmentRemainingMs);
+      b(row,"fai_gate",physical.faiGate); b(row,"ani_gate",physical.aniGate);
+      b(row,"ai_gate",physical.aiGate); b(row,"output_gate",physical.outputGate);
+      b(row,"interruptible",physical.interruptible);
+      }
     rapidjson::Value mask(rapidjson::kArrayType);
     for(bool value:s.mask) mask.PushBack(value,row.GetAllocator());
     row.AddMember("action_mask",mask,row.GetAllocator());
@@ -512,7 +589,7 @@ void BodyController::pollAcquire(Npc& actor,bool grant) {
     }
   }
 
-std::string BodyController::handleJson(const rapidjson::Value& req) {
+std::string BodyController::handleJson(const rapidjson::Value& req,bool sentObservations) {
   pumpWatchdogs();
   if(!req.IsObject()) return result(nullptr,nullptr,false,"invalid_request");
   const auto type=textField(req,"type");
@@ -637,8 +714,11 @@ std::string BodyController::handleJson(const rapidjson::Value& req) {
   if(c.observation<=l->minimumSequence) return reject("stale_observation");
   GateState gate;
   gate.session=session; gate.world=world; gate.generation=l->generation; gate.goal=l->goal; gate.target=l->target;
-  gate.observation=BodyObservations::latestSequence(*actor); gate.observedGame=BodyObservations::latestGameMs(*actor);
-  gate.gameNow=actor->world().tickCount(); gate.wallAge=wallMs()-BodyObservations::latestWallMs(*actor);
+  auto observation=BodyObservations::SentObservation{BodyObservations::latestSequence(*actor),
+                     BodyObservations::latestGameMs(*actor),BodyObservations::latestWallMs(*actor)};
+  if(sentObservations && l->mode=="realtime") observation=BodyObservations::latestSent(*actor);
+  gate.observation=observation.sequence; gate.observedGame=observation.gameMs;
+  gate.gameNow=actor->world().tickCount(); gate.wallAge=wallMs()-observation.wallMs;
   gate.targetValid=targetValid(*actor,c.target); gate.paused=state().paused; gate.infrastructure=state().infrastructure;
   gate.busy=l->command || l->movementStopPending; gate.realtime=l->mode=="realtime"; gate.resolver=resolverState(*actor);
   GateCommand requested{session,world,generation,c.goal,c.target,c.observation,c.issued,c.ttl,c.action};
@@ -646,7 +726,7 @@ std::string BodyController::handleJson(const rapidjson::Value& req) {
   if(std::string_view(refusal)!="allowed") return reject(refusal);
   const auto resolution=FightAlgo::resolve(c.action,gate.resolver);
   c.primitive=resolution.primitive;
-  c.deadline=Clock::time_point(std::chrono::milliseconds(BodyObservations::latestWallMs(*actor)+c.ttl));
+  c.deadline=Clock::time_point(std::chrono::milliseconds(observation.wallMs+c.ttl));
   if(l->mode=="realtime" && Clock::now()>=c.deadline) return reject("expired_wall");
   l->heartbeat=Clock::now();
   if(c.action==PolicyAction::Continue) {

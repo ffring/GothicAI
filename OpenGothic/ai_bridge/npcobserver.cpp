@@ -1,6 +1,8 @@
 #include "npcobserver.h"
 #include "game/bodycontroller.h"
 
+#include <Tempest/Log>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -10,7 +12,9 @@
 #include <utility>
 
 #include "game/gamescript.h"
+#include "game/herodeed.h"
 #include "game/inventory.h"
+#include "gothic.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicsnoise.h"
 #include "testbench.h"
@@ -43,6 +47,8 @@ constexpr float    NearEnter      = 500;   // cm: "player_near" when the player 
 constexpr float    NearLeave      = 700;   // and forgets it once they are this far again
 constexpr uint64_t EventPeriodMs  = 1000;  // per npc, kind and who did it
 constexpr uint64_t MonsterNearPeriodMs = 10000;
+constexpr float    ArmedThreatRange = 1200;
+constexpr uint64_t ArmedThreatPeriodMs = 5000;
 constexpr uint64_t NearPeriodMs   = 30000;
 constexpr uint64_t NoisePeriodMs  = 10000; // per listener, regardless of body or culprit
 constexpr float    NoiseMinVolume = .35f; // source gain, 0..1, after the engine's hearing gate
@@ -227,6 +233,7 @@ NpcObserver::NpcObserver(Emit emit, Owner owner):emit(std::move(emit)), owner(st
 void NpcObserver::clear() {
   close.clear();
   lastEvent.clear();
+  previousPositions.clear();
   running.clear();
   held.clear();
   verdicts.clear();
@@ -252,6 +259,12 @@ void NpcObserver::tick(World& world) {
   if(now<nextRoster)
     return;
   nextRoster = now+RosterPeriodMs;
+  // Deed keys are unique for every action, unlike the bounded actor-pair cache.
+  for(auto it=verdicts.begin(); it!=verdicts.end();) {
+    if(now>=it->second.until)
+      it = verdicts.erase(it); else
+      ++it;
+    }
   emitRoster(world);
   }
 
@@ -268,6 +281,8 @@ void NpcObserver::emitRoster(World& world) {
    .array("npcs");
   struct Near { std::string symbol; float dist; };
   std::vector<Near> cameClose;  // reported after the roster, so the server already knows these npc's
+  std::vector<std::pair<Npc*,std::string>> people;
+  std::unordered_map<const Npc*,Tempest::Vec3> positions;
   const Tempest::Vec3 head = pl->mapHeadBone();
   const WayPoint*     way  = nullptr;  // the player's, once someone is behind a wall
   bool                wayFound = false;
@@ -291,6 +306,9 @@ void NpcObserver::emitRoster(World& world) {
     if(symbol.empty())
       return;
     const float dist = std::sqrt(npc.qDistTo(*pl));
+    positions[&npc] = npc.position();
+    if(dist<=EventRadius)
+      people.emplace_back(&npc,symbol);
     if(trackProximity(world,npc,symbol,dist))
       cameClose.push_back({symbol,dist});
     j.object()
@@ -309,6 +327,34 @@ void NpcObserver::emitRoster(World& world) {
   emit(j.finish());
   for(auto& n:cameClose)
     emitEvent(n.symbol,"player_near","PLAYER",double(n.dist),"","");
+  for(auto& n:people)
+    armedApproach(world,*n.first,n.second);
+  previousPositions = std::move(positions);
+  }
+
+void NpcObserver::armedApproach(World& world, Npc& self, std::string_view symbol) {
+  const auto who = owner(symbol);
+  if((!who.empty() && who!="attached") || self.isDown() || self.isTalk() || self.isAttack())
+    return;
+  world.detectNpc(self.position(),ArmedThreatRange,[&](Npc& other) {
+    if(&other==&self || other.isPlayer() || other.isMonster() || other.isDown() ||
+       other.weaponState()==WeaponState::NoWeapon || other.weaponState()==WeaponState::Fist ||
+       !AiNpc::isMoving(other))
+      return;
+    if(!(other.isAttack() && other.target()==&self) && world.script().personAttitude(other,self)!=ATT_HOSTILE)
+      return;
+    const auto previous = previousPositions.find(&other);
+    const float dist = std::sqrt(self.qDistTo(other));
+    // Compare the attacker's actual movement to the victim's current position: the victim walking
+    // towards a stationary armed npc is not an approaching attacker.
+    if(previous==previousPositions.end() || (previous->second-self.position()).length()<dist+15 ||
+       !self.canSeeNpc(other,true))
+      return;
+    const auto otherId = npcId(world,other);
+    if(otherId.empty() || throttled(symbol,"npc_threat/"+otherId,world.tickCount(),ArmedThreatPeriodMs))
+      return;
+    emitEvent(symbol,"npc_threat",otherId,dist,"you",TextCodec::toUtf8(other.displayName()));
+    });
   }
 
 bool NpcObserver::trackProximity(World& world, Npc& npc, std::string_view symbol, float dist) {
@@ -384,15 +430,44 @@ void NpcObserver::physicsNoise(World& world, Npc& self, const PhysicsNoise& nois
   emit(j.finish());
   }
 
-bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
-  if(!holdThreats || other.isPlayer() || &other==&self)
-    return false;  // the hero's doings stay with the scripts (crimes, guards)
-  if(perc!=PERC_ASSESSENEMY && perc!=PERC_ASSESSWARN && perc!=PERC_ASSESSDAMAGE && perc!=PERC_ASSESSOTHERSDAMAGE)
+bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc,
+                            const HeroDeed* deed, std::string_view deedId) {
+  if(&other==&self)
     return false;
+  const bool hero = other.isPlayer();
+  const bool room = hero && perc==PERC_ASSESSENTERROOM;
+  Seen seen;
+  if(hero) {
+    if(!holdDeeds)
+      return false;
+    if(room) {
+      seen = Seen{"enter_room"};
+      } else if(deed==nullptr || deedId.empty()) {
+      return false;
+      } else if(perc==PERC_ASSESSTHEFT && deed->kind=="take_item" && !deed->item.empty()) {
+      seen = Seen{"theft"};
+      } else if(perc==PERC_ASSESSOTHERSDAMAGE && deed->kind=="attack" && victim!=nullptr && !deed->victimIsMonster) {
+      seen = Seen{"attack",victim};
+      } else if(perc==PERC_ASSESSMURDER && deed->kind=="murder" && victim!=nullptr) {
+      if(deed->victimIsSheep && !deed->victimToughGuy)
+        seen = Seen{"sheep",victim}; else
+      if(!deed->victimIsMonster)
+        seen = Seen{"murder",victim};
+      }
+    // Self-defence, weapon warnings and all uncertain events stay vanilla.
+    if(seen.kind.empty())
+      return false;
+    } else {
+    if(!holdThreats)
+      return false;
+    if(perc!=PERC_ASSESSENEMY && perc!=PERC_ASSESSWARN && perc!=PERC_ASSESSDAMAGE && perc!=PERC_ASSESSOTHERSDAMAGE)
+      return false;
+    seen = classify(world,self,other,victim,perc);
+    }
   if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM || self.isTalk() ||
      self.isAttack())
     return false;  // already fighting by its scripts: they go on
-  if(classify(world,self,other,victim,perc).kind.empty())
+  if(seen.kind.empty())
     return false;
   Npc* pl = world.player();
   if(pl==nullptr || std::sqrt(self.qDistTo(*pl))>EventRadius)
@@ -403,7 +478,9 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
     return false;
 
   const uint64_t now = world.tickCount();
-  const auto     key = symbol + "/" + otherId;
+  // Separate actions of the hero must never inherit a verdict about an earlier
+  // theft or strike. Threats from other actors keep their existing pair cache.
+  const auto     key = symbol + "/" + otherId + (room ? "/room" : (hero ? "/"+std::string(deedId) : ""));
   if(auto v = verdicts.find(key); v!=verdicts.end() && now<v->second.until)
     return v->second.server;  // decided a moment ago: the server acts, or the scripts take it
   verdicts[key] = Verdict{true,now+HoldMs};  // repeats while it is being decided are held too
@@ -411,16 +488,22 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   Held h;
   h.id     = "h" + std::to_string(nextHold++);
   h.key    = key;
+  if(hero && !room) {
+    h.item = deed->item;
+    h.deed = deedId;
+    }
+  h.room   = room;
   h.self   = &self;
   h.other  = &other;
   h.victim = victim;
   h.perc   = perc;
   h.at     = now;
-  const Seen seen = classify(world,self,other,victim,perc);
   JsonWriter j("perception_held");
   j.str("hold",h.id).str("npc",symbol).str("kind",seen.kind).str("other",otherId)
    .str("other_name",TextCodec::toUtf8(other.displayName()))
    .num("distance",std::sqrt(double(self.qDistTo(other))));
+  if(!h.deed.empty())
+    j.str("deed",h.deed);
   if(seen.about==&self)
     j.str("detail","you"); else
   if(seen.about!=nullptr)
@@ -435,23 +518,57 @@ void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
   auto it = std::find_if(held.begin(),held.end(),[&](const Held& h){ return h.id==id; });
   if(it==held.end())
     return;  // released already (too late)
-  const bool server = JsonRead::str(msg,"to")=="server";
-  verdicts[it->key] = Verdict{server,world.tickCount()+VerdictMs};
+  bool server = JsonRead::str(msg,"to")=="server";
+  // Deed and room rules may deliberately end in silence, a warning or time to
+  // leave. Threats still require an actual body action before they are swallowed.
+  if(server && it->deed.empty() && !it->room) {
+    // A decision is not ownership: a busy attachment or a rejected command may leave no body acting
+    // on the verdict. Accept an actual combat provider, or the requested native fight/flee.
+    Npc* self = nullptr;
+    Npc* other = nullptr;
+    if(auto* pl = world.player())
+      world.detectNpc(pl->position(),RosterRadius,[&](Npc& npc) {
+        if(&npc==it->self)  self = &npc;
+        if(&npc==it->other) other = &npc;
+        });
+    const auto flee = AiNpc::scriptState(world,"ZS_FLEE");
+    server = self!=nullptr && other!=nullptr && !self->isDown() && self->target()==other &&
+             (BodyController::owns(*self) ||
+              (!self->isExternalControl() && (self->isAttack() || (flee.isValid() && self->isInState(flee)))));
+    }
+  // A new entry must be reconsidered against current knowledge, including after
+  // the hero left or made amends. Only in-flight room repeats share the hold.
+  verdicts[it->key] = Verdict{server,world.tickCount()+(it->room ? 0 : VerdictMs)};
   if(!server)
     releaseHeld(world,*it);
   held.erase(it);
   }
 
 void NpcObserver::releaseAll(World& world) {
+  cancelDeeds(world);
   for(auto& h:held)
     releaseHeld(world,h);
   held.clear();
   verdicts.clear();
   for(auto& r:running)
-    if(r.investigate)
-      if(auto* npc = world.findNpcByInstance(r.instance))
+    if(auto* npc = world.findNpcByInstance(r.instance)) {
+      if(r.investigate)
         npc->stopPhysicsInvestigation(owner(r.symbol).empty() && npc->canHearPhysicsNoise());
+      }
   running.erase(std::remove_if(running.begin(),running.end(),[](const Running& r){ return r.investigate; }),running.end());
+  }
+
+void NpcObserver::cancelDeeds(World& world) {
+  for(auto& r:running)
+    if(auto* npc = world.findNpcByInstance(r.instance)) {
+      if(r.theft.active)
+        NpcSteal::finish(*npc,r.theft);
+      if(r.deed)
+        npc->clearServerDeed();
+      }
+  running.erase(std::remove_if(running.begin(),running.end(),[](const Running& r){
+    return r.theft.target.item!=nullptr || r.deed;
+    }),running.end());
   }
 
 void NpcObserver::releaseHeld(World& world, Held& h) {
@@ -466,7 +583,12 @@ void NpcObserver::releaseHeld(World& world, Held& h) {
   if(self==nullptr || other==nullptr || self->isDead() || self->isDown() || other->isDead())
     return;
   if(auto v = verdicts.find(h.key); v!=verdicts.end())
-    v->second = Verdict{false,world.tickCount()+VerdictMs};
+    v->second = Verdict{false,world.tickCount()+(h.room ? 0 : VerdictMs)};
+  if(!h.item.empty()) {
+    const auto item = world.script().findSymbolIndex(h.item);
+    if(item!=size_t(-1))
+      world.script().setInstanceItem(*other,item);
+    }
   self->passPerception(*other,h.victim!=nullptr ? victim : nullptr,h.perc);
   }
 
@@ -509,12 +631,27 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   ScriptFn state;
   Running  run;  // what is tracked until npc_idle
 
-  if(npc->isPhysicsInvestigating() && action!="fight" && action!="flee" && action!="draw_weapon") {
+  for(auto& previous:running)
+    if(previous.symbol==symbol) {
+      if(previous.theft.active)
+        NpcSteal::finish(*npc,previous.theft);
+      if(previous.deed)
+        npc->clearServerDeed();
+      }
+
+  if(npc->isPhysicsInvestigating() && action!="fight" && action!="flee" && action!="draw_weapon" && action!="steal") {
     result("rejected","npc is investigating a noise");
     return;
     }
 
-  if(action=="say_svm") {
+  if(action=="steal") {
+    std::string error;
+    if(!NpcSteal::begin(world,*npc,args,run.theft,error)) {
+      result("rejected",error);
+      return;
+      }
+    }
+  else if(action=="say_svm") {
     std::string svm = upper(JsonRead::str(args,"svm"));
     if(svm.empty()) {
       result("rejected","say_svm needs svm");
@@ -581,8 +718,78 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
       result("rejected",state.isValid() ? "target is dead" : "the scripts have no such state");
       return;
       }
+    if(action=="fight") {
+      run.deed = JsonRead::boolean(args,"deed",false);
+      run.nonlethal = run.deed || JsonRead::boolean(args,"nonlethal",false);
+      if(run.nonlethal && (target->isPlayer() || target->isMonster() || target->isDown())) {
+        result("rejected","NPC nonlethal fight needs a standing human target");
+        return;
+        }
+      const auto reasonName = run.nonlethal ? std::string("AR_NONE") : upper(JsonRead::str(args,"reason"));
+      if(!reasonName.empty()) {
+        auto* reason = world.script().findSymbol(reasonName);
+        const auto attack = HeroDeed::constant(*npc,"AIV_ATTACKREASON");
+        const auto last = HeroDeed::constant(*npc,"AIV_LASTPLAYERAR");
+        const auto fight = HeroDeed::constant(*npc,"AIV_LASTFIGHTAGAINSTPLAYER");
+        const auto comment = HeroDeed::constant(*npc,"AIV_LASTFIGHTCOMMENT");
+        const auto valid = [](int32_t index) { return index>=0 && uint32_t(index)<zenkit::INpc::aivar_count; };
+        if(!reasonName.starts_with("AR_") || reason==nullptr || !reason->is_const() ||
+           reason->type()!=zenkit::DaedalusDataType::INT || !valid(attack) ||
+           (target->isPlayer() && !valid(last)) || !valid(fight) || !valid(comment)) {
+          result("rejected","fight needs a vanilla AR_* reason and its attack variables");
+          return;
+          }
+        // Match B_Attack's combat bookkeeping without B_MemorizePlayerCrime:
+        // the server already owns the witness memory and community counters.
+        auto& aiv = npc->handlePtr()->aivar;
+        aiv[size_t(attack)] = reason->get_int(0);
+        if(target->isPlayer())
+          aiv[size_t(last)] = reason->get_int(0);
+        aiv[size_t(fight)] = HeroDeed::constant(*npc,"FIGHT_CANCEL",0);
+        aiv[size_t(comment)] = 0;
+        }
+      }
+    // An urgent verdict owns the body now, rather than waiting behind a routine walk, listening or
+    // queued speech. Install the same state as AI_StartState(behavior=0), then add its fresh readiness
+    // and shout: startState clears both native queues, including the overlay queue.
+    npc->stopListening();
+    npc->thinkOfAnswer(0);
+    npc->clearAiQueue();
+    if(!npc->startState(state,"",gtime::endOfTime(),true)) {
+      result("rejected","npc could not start the state");
+      return;
+      }
+    npc->setOther(target);
+    npc->setVictim(nullptr);
     npc->setTarget(target);
-    npc->aiPush(AiQueue::aiStartState(state,0,target,nullptr,""));
+    if(run.nonlethal) {
+      npc->setNonlethalFight(*target);
+      run.fightTarget = target->instanceSymbol();
+      }
+    if(run.deed)
+      npc->setServerDeed("attack",target);
+    if(action=="fight" && npc->weaponState()==WeaponState::NoWeapon)
+      npc->aiPush(AiQueue::aiDrawWeapon());
+    if(auto svm = upper(JsonRead::str(args,"svm")); !svm.empty()) {
+      if(svm[0]!='$')
+        svm.insert(svm.begin(),'$');
+      // Explicit combat shouts belong to each defender. Ambient SVM overlays share one global
+      // barrier and silently discard the second npc's shout; play this npc's own resolved voice
+      // through the same sound/lip-sync path, without that ambient barrier or a movement wait.
+      const auto line = world.script().messageFromSvm(svm,npc->handle().voice);
+      if(!line.empty()) {
+        uint64_t audioMs = 0;
+        std::shared_ptr<LipSync::Track> voice;
+        world.addDlgSound(std::string(line)+".WAV",npc->mapHeadBone(),WorldSound::talkRange,audioMs,&voice);
+        if(audioMs>0) {
+          npc->startSpeech(std::move(voice));
+          npc->setAiOutputBarrier(world.script().messageTime(line),true);
+          TestBench::npcOutput(*npc,svm,target,audioMs);
+          Tempest::Log::i("[ai] ",symbol," combat shout ",svm," audio_ms=",audioMs,
+                         " game_ms=",world.tickCount());
+          }
+        }
+      }
     }
   else if(action=="draw_weapon") {
     const auto kind = JsonRead::str(args,"kind");
@@ -676,7 +883,7 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   run.instance = world.script().findSymbolIndex(symbol);
   run.start    = world.tickCount();
   run.state    = state;
-  run.maxMs    = run.investigate ? 46000 : (action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs));
+  run.maxMs    = run.theft.active ? StateMaxMs : (run.investigate ? 46000 : (action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs)));
   running.push_back(std::move(run));
   result("queued","");
   }
@@ -727,7 +934,33 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
     bool        done   = false;
     std::string reason = "done";
     std::string detail;
-    if(!gone && r.investigate) {
+    Npc* fightTarget = r.nonlethal ? world.findNpcByInstance(r.fightTarget) : nullptr;
+    const auto stopScopedFight = [&] {
+      // A terminal receipt belongs to this command only. Native retargeting or
+      // a later owner must keep its state and queues; unconscious bodies keep
+      // their own native recovery state too.
+      if(gone || !r.nonlethal || fightTarget==nullptr || !npc->isInState(r.state) ||
+         npc->target()!=fightTarget)
+        return false;
+      npc->clearAiQueue();
+      npc->clearState(true);
+      npc->setTarget(nullptr);
+      npc->resumeAiRoutine();
+      return true;
+      };
+    if(!gone && r.theft.active && now>r.start+ActGraceMs) {
+      const auto progress = NpcSteal::tick(world,*npc,r.theft,detail);
+      done = progress!=NpcSteal::Progress::Running;
+      if(progress==NpcSteal::Progress::Failed) reason = "failed";
+      }
+    else if(!gone && fightTarget!=nullptr && fightTarget->isDown()) {
+      // AR_NONE never requests finishing. Stop the command at the actual
+      // knockout as well, before ZS_ATTACK can queue any post-combat action.
+      stopScopedFight();
+      detail = fightTarget->isDead() ? "target_dead" : "target_down";
+      done = true;
+      }
+    else if(!gone && r.investigate) {
       done = !npc->isPhysicsInvestigating();
       if(done && !npc->physicsInvestigationResult().empty())
         reason = npc->physicsInvestigationResult();
@@ -753,8 +986,33 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
       ++i;
       continue;
       }
-    if(gone)
-      reason = "gone"; else
+    if(!done && late && stopScopedFight()) {
+      // ZS_ATTACK_LOOP keeps counterattacking a nearby standing target even
+      // after that target leaves combat. End only this pair's native response;
+      // another server action, owner or state has priority over our old run.
+      const bool otherRun = std::any_of(running.begin(),running.end(),[&](const Running& other) {
+        return other.instance==r.fightTarget;
+        });
+      if(!otherRun && !fightTarget->isDown() && !fightTarget->isLie() &&
+         !BodyController::owns(*fightTarget) && !fightTarget->isExternalControl() &&
+         owner(npcId(world,*fightTarget)).empty() && !fightTarget->isTalk() &&
+         !Gothic::inst().isNpcInDialog(*fightTarget) && fightTarget->isInState(r.state) &&
+         fightTarget->target()==npc) {
+        fightTarget->clearAiQueue();
+        fightTarget->clearState(true);
+        fightTarget->setTarget(nullptr);
+        fightTarget->resumeAiRoutine();
+        }
+      }
+    if(npc!=nullptr) {
+      NpcSteal::finish(*npc,r.theft);
+      if(r.deed) npc->clearServerDeed();
+      }
+    if(gone) {
+      reason = "gone";
+      if(r.nonlethal && npc!=nullptr && npc->isDown())
+        detail = npc->isDead() ? "defender_dead" : "defender_down";
+      } else
     if(!done)
       reason = "timeout"; else
     if(r.giveTo!=size_t(-1)) {

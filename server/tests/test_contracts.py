@@ -4,13 +4,14 @@ the code pays for."""
 from typing import Any
 
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.contracts import Contracts, symbol_by_name
+from gothic_ai.contracts import Contracts, Give, Kill, Reward, Task, symbol_by_name
 from gothic_ai.deals import Deals
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.memory import MemoryStore
 from gothic_ai.persona import PersonaProvider
+from gothic_ai.protocol import RosterEntry
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import LOBART, XARDAS, _until
 
@@ -225,6 +226,90 @@ async def test_bring_task_paid_once_he_has_it_from_the_stash():
         assert chronicle.facts("contract_paid") != []
         assert fake.hero_items == {FUR: 0, GOLD: 100} and fake.npc_items[XARDAS][FUR] == 3
         assert deals.stash.left(XARDAS)[GOLD] == 400  # the gold came out of the stash
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_dishonest_task_refuses_only_when_done_and_never_pays_after_a_load():
+    fake = FakeGame(branch="A")
+    link_cm, link, dialogue, chronicle, deals = await _setup(
+        fake, FakeBackend(reply="Хорошо.", delay=0), MemoryStore(":memory:")
+    )
+    try:
+        deal = "dishonest-contract"
+        chronicle.record(
+            {
+                "fact": "npc_intent",
+                "npc": XARDAS,
+                "deal": deal,
+                "keeps": False,
+                "how": ["contract"],
+                "why": "dishonesty",
+            }
+        )
+        contract = deals.contracts.add(
+            deal,
+            XARDAS,
+            "Ксардас",
+            Task(kill=(Kill("GIL_WOLF", WOLF, "волки", 1),), bring=(Give(FUR, 3, "Волчья шкура"),)),
+            Reward(gives=(Give(GOLD, 100, "Золото"),), xp=50),
+            fake.day,
+        )
+        roster = {
+            XARDAS: RosterEntry(id=XARDAS, name="Ксардас", distance=100),
+            LOBART: RosterEntry(id=LOBART, name="Лобарт", distance=300),
+            "BEHIND_WALL": RosterEntry(id="BEHIND_WALL", name="Сосед", distance=300, heard=2000),
+        }
+        deals.contracts.roster = lambda: roster
+        assert not await deals.contracts.pay(contract)
+        assert chronicle.facts("npc_broken") == []  # no kill, so no reward is due
+
+        await fake.send(type="hero_kill", npc="WOLF", name="Волк", guild=WOLF, monster=True)
+        await _until(lambda: contract.state == "done")
+        await deals.contracts.prepare(XARDAS)
+        assert chronicle.facts("npc_broken") == []  # the furs still have to be brought
+        assert "он ещё не принёс" in (deals.contracts.situation(XARDAS) or "")
+
+        fake.hero_items[FUR] = 3
+        await deals.contracts.prepare(XARDAS)
+        fact = chronicle.facts("npc_broken")[0]
+        assert (fact["how"], fact["deal"], fact["contract"], fact["npc_name"]) == (
+            "unpaid",
+            deal,
+            contract.id,
+            "Ксардас",
+        )
+        assert fact["witnesses"] == [LOBART]
+        cue = "[Герой выполнил поручение и ждёт платы; ты решил не платить]"
+        assert cue in (deals.contracts.situation(XARDAS) or "")
+        assert fake.hero_items == {FUR: 3} and fake.hero_xp == 0
+        assert chronicle.facts("contract_paid") == []
+        assert deals.stash.left(XARDAS)[GOLD] == 500
+
+        await deals.contracts.prepare(XARDAS)
+        assert not await deals.contracts.pay(contract)
+        again = Contracts(link, dialogue, chronicle, deals.stash)
+        assert again.contracts[contract.id].state == "unpaid"
+        assert again.contracts[contract.id].deal == deal
+        assert cue in (again.situation(XARDAS) or "")
+        await again.prepare(XARDAS)
+        assert len(chronicle.facts("npc_broken")) == 1 and chronicle.facts("contract_paid") == []
+        assert fake.hero_items == {FUR: 3} and fake.hero_xp == 0
+
+        # Another accepted exchange can settle it without reopening the dishonest obligation.
+        before = len(fake.deals)
+        out = await deals.propose(
+            XARDAS,
+            "Ксардас",
+            _terms(npc_gives=[{"item": GOLD, "count": 100}]),
+            link.snapshots[XARDAS],
+        )
+        assert out.status == "accepted"
+        await _until(lambda: len(fake.deals) > before)
+        shown = [m for m in fake.deals if m["type"] == "deal_show"][-1]
+        await fake.send(type="deal_accept", deal=shown["deal"], version=shown["version"])
+        await _until(lambda: fake.hero_items.get(GOLD) == 100)
+        assert fake.hero_items[FUR] == 3 and len(chronicle.facts("npc_broken")) == 1
     finally:
         await link_cm.__aexit__(None, None, None)
 
