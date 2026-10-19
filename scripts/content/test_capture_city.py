@@ -86,11 +86,13 @@ def test_city3_preserves_city_measurement_and_covers_every_requested_view():
             assert command[5:] not in at_shot
             at_shot[command[5:]] = hour
     day = {"city", "market", "harbour", "upper", "house", "facade_close",
-           "facade_corner", "facade_full", "upper_modules", "harbour_modules", "interior_modules"}
+           "facade_corner", "facade_full", "upper_modules", "harbour_modules", "interior_modules",
+           "alpha_flag_close", "alpha_flag_far", "alpha_ivy_border_close", "alpha_ivy_border_far",
+           "alpha_ivy_full_close", "alpha_ivy_full_far"}
     assert set(at_shot) == day | {"city_a", "city_night", "market_night", "facade_close_night"}
     assert all(at_shot[name] == "12 0" for name in day)
     assert all(at_shot[name] == "23 0" for name in ("city_night", "market_night", "facade_close_night"))
-    assert scenario.count("cam hold") == 6
+    assert scenario.count("cam hold") == 12
 
 
 def test_city3_census_tour_visits_selected_remote_surfaces_without_extra_shots(tmp_path):
@@ -98,7 +100,9 @@ def test_city3_census_tour_visits_selected_remote_surfaces_without_extra_shots(t
     prefix = CITY3_SCENARIO.read_text()
     scenario.write_text(prefix)
     index = tmp_path / "materials.json"
-    targets = ("NW_CITY_DOOR_02.TGA", "NW_CITY_DUNGEONFLOOR_03.TGA")
+    targets = ("NW_CITY_DOOR_02.TGA", "NW_CITY_DUNGEONFLOOR_03.TGA", "NW_CITY_FLAG_01.TGA",
+               "NW_CITY_IVY_BORDER_01.TGA", "NW_CITY_IVY_FULL_01.TGA", "NW_CITY_ROPE_01.TGA",
+               "NW_HARBOUR_ROPEWALL_01.TGA", "NW_HARBOUR_ROPEWALL_02.TGA")
     index.write_text(json.dumps({name: {"albedo": "albedo.dds"} for name in targets}))
     result = subprocess.run(
         ["bash", str(SCRIPT), "--append-census", str(scenario), str(SCRIPT.with_name("city-intent.bench")), str(index)],
@@ -108,12 +112,36 @@ def test_city3_census_tour_visits_selected_remote_surfaces_without_extra_shots(t
     prepared = scenario.read_text()
     assert prepared.startswith(prefix)
     tail = prepared[len(prefix):]
-    assert "Census tour: 2 packed materials; no additional shots" in result.stdout
+    assert "Census tour: 8 packed materials; no additional shots" in result.stdout
     assert "goto pos 1350 -2385 820" in tail
     assert "goto pos 30730 5079 -14675" in tail
-    assert tail.count("cam hold") == 2
+    assert tail.count("cam hold") == 8
+    assert all('# ' + name in tail for name in targets)
     assert "shot " not in tail
     assert "rec " not in tail
+
+
+@pytest.mark.parametrize("name", ["flag", "ivy_border", "ivy_full"])
+def test_city3_alpha_far_views_keep_the_target_and_increase_distance(name):
+    camera = {}
+    state = {}
+    for line in CITY3_SCENARIO.read_text().splitlines():
+        command = line.split('#', 1)[0].strip()
+        if command.startswith("goto pos "):
+            state['hero'] = tuple(map(float, command.split()[2:]))
+        elif command.startswith("cam world "):
+            state['distance'], state['height'], state['yaw'] = map(float, command.split()[2:])
+        elif command.startswith("cam look "):
+            state['look'] = float(command.split()[2])
+        elif command.startswith("shot alpha_"):
+            camera[command.removeprefix("shot ")] = state.copy()
+    close = camera[f"alpha_{name}_close"]
+    far = camera[f"alpha_{name}_far"]
+    assert far['hero'] == close['hero']
+    assert far['look'] == close['look'] == 45
+    assert far['yaw'] == close['yaw']
+    assert far['distance'] == pytest.approx(close['distance'] * 2.5, abs=.003)
+    assert far['height'] - 45 == pytest.approx((close['height'] - 45) * 2.5, abs=.003)
 
 
 def test_census_preparation_rejects_missing_camera_without_changing_scenario(tmp_path):
@@ -213,7 +241,7 @@ def test_census_accepts_original_baseline_and_own_replacement(tmp_path, variant,
     ("city-1", ("before", "after"), 10),
     ("city-2", ("before", "after"), 8),
     ("city-2-imagegen", ("before", "flux", "after"), 5),
-    ("city-3", ("before", "after"), 13),
+    ("city-3", ("before", "after"), 19),
 ])
 def test_composition_preserves_pairs_and_builds_required_triple_columns(tmp_path, set_name, variants, count):
     captures = tmp_path / "captures"
@@ -222,7 +250,9 @@ def test_composition_preserves_pairs_and_builds_required_triple_columns(tmp_path
         directory = captures / variant
         directory.mkdir(parents=True)
         for spot in ("city", "market", "harbour", "upper", "house", "facade_close", "facade_corner",
-                     "facade_full", "upper_modules", "harbour_modules", "interior_modules"):
+                     "facade_full", "upper_modules", "harbour_modules", "interior_modules",
+                     "alpha_flag_close", "alpha_flag_far", "alpha_ivy_border_close", "alpha_ivy_border_far",
+                     "alpha_ivy_full_close", "alpha_ivy_full_far"):
             for suffix in ("", "_night"):
                 Image.new("RGB", (96, 54), colors[variant]).save(directory / f"{spot}{suffix}.png")
     output = tmp_path / "boards"
@@ -238,6 +268,8 @@ def test_composition_preserves_pairs_and_builds_required_triple_columns(tmp_path
         assert {path.stem for path in boards} == {
             "city", "market", "harbour", "upper", "house", "facade_close", "facade_corner",
             "facade_full", "upper_modules", "harbour_modules", "interior_modules",
+            "alpha_flag_close", "alpha_flag_far", "alpha_ivy_border_close", "alpha_ivy_border_far",
+            "alpha_ivy_full_close", "alpha_ivy_full_far",
             "facade_close_night", "market_night"}
     for path in boards:
         with Image.open(path) as board:

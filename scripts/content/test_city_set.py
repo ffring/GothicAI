@@ -21,9 +21,12 @@ GROUND = 'NW_CITY_DIRTYGROUND_02.TGA'
 def mapping_with_targets(tmp_path):
     with MAPPING.open(newline='') as stream:
         reader = csv.DictReader(stream)
-        fields, rows = reader.fieldnames, list(reader)
+        fields, rows = list(reader.fieldnames), list(reader)
+    if 'target_coverage' not in fields:
+        fields.append('target_coverage')
     for row in rows:
         row['target_luminance'] = '.18'
+        row['target_coverage'] = '.5' if row['texture'] in city_set.alpha_material.ALPHA_TEXTURES else ''
     path = tmp_path/'mapping.csv'
     with path.open('w', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
@@ -70,7 +73,7 @@ def test_recipes_are_complete_text_only_and_do_not_mutate_mapping(tmp_path):
     mapping = mapping_with_targets(tmp_path)
     before = mapping.read_bytes()
     rows = city_set.recipes(mapping, BIBLE)
-    assert len(rows) == len({row['replaces'][0] for row in rows}) == 52
+    assert len(rows) == len({row['replaces'][0] for row in rows}) == 58
     assert mapping.read_bytes() == before
     for row in rows:
         assert row['pipeline'] == 'imagegen-filter' and row['seed'] is None
@@ -89,10 +92,17 @@ def test_recipes_are_complete_text_only_and_do_not_mutate_mapping(tmp_path):
 
 def test_targets_required_for_import_but_not_for_prompt_preparation(tmp_path):
     mapping = mapping_with_targets(tmp_path)
-    mapping.write_text(mapping.read_text().replace(',0.18\n', ',\n').replace(',.18\n', ',\n'))
-    with pytest.raises(ValueError, match='requires target_luminance'):
+    with mapping.open(newline='') as stream:
+        reader = csv.DictReader(stream)
+        fields, rows = reader.fieldnames, list(reader)
+    next(row for row in rows if row['texture'] == GROUND)['target_luminance'] = ''
+    with mapping.open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    with pytest.raises(ValueError, match=f'{GROUND}: city-3 requires target_luminance'):
         city_set.recipes(mapping, BIBLE)
-    assert len(city_set.recipes(mapping, BIBLE, require_target=False)) == 52
+    assert len(city_set.recipes(mapping, BIBLE, require_target=False)) == 58
 
 
 def test_timber_shutter_wall_uses_wood_numeric_guidance_without_changing_window_intent(tmp_path):
@@ -172,7 +182,7 @@ def test_prepare_preserves_already_retained_pending_attempt(tmp_path):
     retained = next(row for row in updated if row['replaces'] == [GROUND])
     assert retained['generation']['attempts'] == records[0]['generation']['attempts']
     assert 'reason' not in retained['generation']
-    assert len(updated) == 52
+    assert len(updated) == 58
 
 
 def test_failed_selection_requires_review_and_modules_use_narrow_overlap(tmp_path, fast_filter):
@@ -221,3 +231,75 @@ def test_cli_import_runs_backup_only_after_registry_was_written(tmp_path, fast_f
     assert city_set.main(['import', '--registry', str(registry), '--mapping', str(mapping),
         '--bible', str(BIBLE), '--source-root', str(store), '--staging', str(staging), '--texture', GROUND]) == 0
     assert len(calls) == 1 and calls[0][0].endswith('backup-sources.sh')
+
+
+def test_alpha_recipes_request_real_transparency_and_opaque_rope_axes(tmp_path):
+    rows = {row['replaces'][0]: row for row in city_set.recipes(mapping_with_targets(tmp_path), BIBLE)}
+    for name in city_set.alpha_material.ALPHA_TEXTURES:
+        row = rows[name]
+        assert 'real RGBA alpha transparency' in row['prompt']
+        assert 'no painted checkerboard' in row['prompt']
+        assert '50.0%' in row['prompt']
+        assert row['parameters']['alpha_mode'] == 'test'
+        assert row['parameters']['alpha_threshold'] == .5
+        assert row['parameters']['target_coverage'] == .5
+        assert row['parameters']['coverage_tolerance'] == .1
+        assert 'albedo only' in row['parameters']['transparent_render']
+        assert 'surface fills every pixel' not in row['prompt']
+    assert rows['NW_CITY_ROPE_01.TGA']['parameters']['tiling_axes'] == 'v'
+    assert rows['NW_HARBOUR_ROPEWALL_01.TGA']['parameters']['tiling_axes'] == 'u'
+    assert rows['NW_HARBOUR_ROPEWALL_02.TGA']['parameters']['tiling_axes'] == 'u'
+    assert all('alpha_mode' not in rows[name]['parameters'] for name in rows if 'ROPE' in name)
+    border = rows['NW_CITY_IVY_BORDER_01.TGA']['prompt']
+    assert 'LEFT side' in border and 'open RIGHT side' in border
+    flag = rows['NW_CITY_FLAG_01.TGA']['prompt']
+    assert 'plain unrecognizable nonfigurative charcoal weave patch' in flag
+    assert 'badge' not in flag and 'emblem' not in flag
+
+
+def test_source_reader_requires_real_alpha_for_only_known_cutouts(tmp_path):
+    texture = 'NW_CITY_IVY_FULL_01.TGA'
+    staging, store, raw, _ = source(tmp_path, texture=texture)
+    with pytest.raises(ValueError, match='real RGBA PNG'):
+        city_set.read_sources(staging/'sources', [texture], store)
+    Image.new('RGBA', (16, 16), (100, 80, 60, 255)).save(raw)
+    with pytest.raises(ValueError, match='requires visible foreground and transparent cutouts'):
+        city_set.read_sources(staging/'sources', [texture], store)
+    image = Image.new('RGBA', (16, 16), (100, 80, 60, 0))
+    image.paste((100, 80, 60, 255), (0, 0, 8, 16))
+    image.save(raw)
+    assert len(city_set.read_sources(staging/'sources', [texture], store)[texture]) == 1
+
+
+def test_alpha_import_keeps_rgba_and_records_failed_coverage_without_stopping(tmp_path, monkeypatch):
+    mapping = mapping_with_targets(tmp_path)
+    texture = 'NW_CITY_IVY_FULL_01.TGA'
+    registry = registry_file(tmp_path, mapping, (texture,))
+    staging, store, raw, _ = source(tmp_path, texture=texture)
+    image = Image.new('RGBA', (16, 16), (0, 0, 0, 0))
+    image.paste((120, 100, 80, 255), (0, 0, 4, 16))
+    image.save(raw)
+    original_source = raw.read_bytes()
+    # Exercise processing and selection at the source dimensions; production
+    # resize remains fixed to 1024 and is independently covered by core tests.
+    monkeypatch.setattr(city_set.alpha_material, 'resize_rgba',
+        lambda rgba: city_set.alpha_material.harden_and_dilate(rgba))
+    imported = city_set.import_batch(staging, registry, textures=[texture],
+        mapping=mapping, bible=BIBLE, source_root=store)[0]
+    assert raw.read_bytes() == original_source
+    assert imported['generation']['selected_failed']
+    assert 'best available of 1' in imported['generation']['best_available']
+    assert 'coverage' in imported['generation']['failure_warning']
+    assert imported['generation']['brightness_correction']['alpha']['output_coverage'] == .25
+    with Image.open(staging/'sources'/imported['files']['albedo']) as albedo:
+        assert albedo.mode == 'RGBA'
+        assert set(np.asarray(albedo)[..., 3].ravel()) == {0, 255}
+    source(tmp_path, texture=texture, number=2)
+    second = store/'city-3'/f'{Path(texture).stem}-attempt-2.png'
+    image.paste((120, 100, 80, 255), (0, 0, 8, 16))
+    image.save(second)
+    imported = city_set.import_batch(staging, registry, textures=[texture],
+        mapping=mapping, bible=BIBLE, source_root=store)[0]
+    assert len(imported['generation']['attempts']) == 2
+    assert imported['generation']['selected_attempt'] == 2
+    assert not imported['generation'].get('selected_failed')

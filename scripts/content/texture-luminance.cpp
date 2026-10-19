@@ -48,6 +48,39 @@ double alphaFraction(const std::vector<uint8_t>& rgba) {
   return double(nonOpaque)/(rgba.size()/4);
 }
 
+// main.frag discards alpha<0.5: byte 128 is the first surviving value.
+double coverage(const std::vector<uint8_t>& rgba) {
+  if(rgba.empty() || rgba.size()%4) throw std::runtime_error("invalid RGBA pixel buffer");
+  size_t visible=0;
+  for(size_t i=3;i<rgba.size();i+=4) if(rgba[i]>=128) ++visible;
+  return double(visible)/(rgba.size()/4);
+}
+
+double visibleLuminance(const std::vector<uint8_t>& rgba) {
+  if(rgba.empty() || rgba.size()%4) throw std::runtime_error("invalid RGBA pixel buffer");
+  double total=0;
+  size_t visible=0;
+  for(size_t i=0;i<rgba.size();i+=4) {
+    if(rgba[i+3]<128) continue;
+    total+=0.2126*linear(rgba[i])+0.7152*linear(rgba[i+1])+0.0722*linear(rgba[i+2]);
+    ++visible;
+  }
+  if(visible==0) throw std::runtime_error("texture has no pixels surviving alpha cutoff");
+  return total/visible;
+}
+
+double halfCoverage(const std::vector<uint8_t>& rgba,uint32_t width,uint32_t height,int half) {
+  size_t visible=0, count=0;
+  for(uint32_t y=0;y<height;++y) for(uint32_t x=0;x<width;++x) {
+    if((width>1 && ((half==0 && x>=width/2) || (half==1 && x<width/2)))
+        || (height>1 && ((half==2 && y>=height/2) || (half==3 && y<height/2)))) continue;
+    ++count;
+    if(rgba[4*(size_t(y)*width+x)+3]>=128) ++visible;
+  }
+  if(!count) throw std::runtime_error("empty texture half");
+  return double(visible)/count;
+}
+
 void selfTest() {
   const auto require=[](bool ok) { if(!ok) throw std::runtime_error("luminance self-test failed"); };
   require(luminance({0,0,0,255})==0);
@@ -62,7 +95,13 @@ void selfTest() {
   require(alphaFraction({0,0,0,255})==0);
   require(alphaFraction({255,255,255,0,0,0,0,128})==1);
   require(alphaFraction({255,255,255,255,0,0,0,0})==0.5);
-  std::cout << "self-test: 10 checks passed\n";
+  require(coverage({255,255,255,127,0,0,0,128})==0.5);
+  require(visibleLuminance({255,255,255,127,0,0,0,128})==0);
+  require(visibleLuminance({255,255,255,128,0,0,0,127})==1);
+  const std::vector<uint8_t> split={0,0,0,255,0,0,0,0,0,0,0,128,0,0,0,127};
+  require(halfCoverage(split,2,2,0)==1 && halfCoverage(split,2,2,1)==0);
+  require(halfCoverage(split,2,2,2)==0.5 && halfCoverage(split,2,2,3)==0.5);
+  std::cout << "self-test: 15 checks passed\n";
 }
 }
 
@@ -83,7 +122,8 @@ int main(int argc,char** argv) {
     for(const auto& [name,path]:archives)
       vfs.mount_disk(path,zenkit::VfsOverwriteBehavior::OLDER); // same archive policy as texdump.cpp
     std::set<std::string> seen;
-    struct Result { std::string name; double luminance, alphaFraction; uint32_t width, height; };
+    struct Result { std::string name; double luminance, alphaFraction, coverage; uint32_t width, height;
+                    double left, right, top, bottom; };
     std::vector<Result> results;
     for(int i=gameArg+1;i<argc;++i) {
       const std::string texture=upper(argv[i]);
@@ -98,15 +138,19 @@ int main(int argc,char** argv) {
       tex.load(stream.get());
       // Use the exact top-mip decode path of scripts/hd/texdump.cpp.
       const auto rgba=tex.as_rgba8(0);
-      results.push_back({texture,luminance(rgba),alphaFraction(rgba),tex.width(),tex.height()});
+      results.push_back({texture,properties ? visibleLuminance(rgba) : luminance(rgba),alphaFraction(rgba),
+          coverage(rgba),tex.width(),tex.height(),halfCoverage(rgba,tex.width(),tex.height(),0),
+          halfCoverage(rgba,tex.width(),tex.height(),1),halfCoverage(rgba,tex.width(),tex.height(),2),
+          halfCoverage(rgba,tex.width(),tex.height(),3)});
     }
     std::cout << "texture,target_luminance";
-    if(properties) std::cout << ",nonopaque_fraction,opaque,width,height";
+    if(properties) std::cout << ",nonopaque_fraction,opaque,width,height,target_coverage,coverage_left_half,coverage_right_half,coverage_top_half,coverage_bottom_half";
     std::cout << '\n' << std::setprecision(12);
     for(const auto& result:results) {
       std::cout << result.name << ',' << result.luminance;
       if(properties) std::cout << ',' << result.alphaFraction << ',' << (result.alphaFraction==0 ? "true" : "false")
-                               << ',' << result.width << ',' << result.height;
+                               << ',' << result.width << ',' << result.height << ',' << result.coverage
+                               << ',' << result.left << ',' << result.right << ',' << result.top << ',' << result.bottom;
       std::cout << '\n';
     }
   } catch(const std::exception& error) {

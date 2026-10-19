@@ -25,6 +25,7 @@ import numpy as np
 from PIL import Image
 
 import bakeoff
+import alpha_material
 import generate
 from import_imagegen import MODEL, _write_immutable
 from pilot import TARGET_LUMINANCE_TOLERANCE, antitile_mode, selected_rows
@@ -43,7 +44,8 @@ SUBSTRATES = dict(timber_frame_tile='plaster', framed_masonry_tile='masonry_rubb
     ground_panel='dirt_path', stone_panel='flagstone', planks_panel='planks_wall',
     timber_strip='timber_beam', stone_strip='masonry_dressed', plaster_panel='plaster',
     masonry_panel='masonry_rubble', timber_frame_panel='plaster', roof_panel='planks_wall',
-    painted_panel='plaster', roof_ridge_strip='roof_tiles', plaster_strip='plaster')
+    painted_panel='plaster', roof_ridge_strip='roof_tiles', plaster_strip='plaster',
+    rope_strip='timber_beam', cloth_panel='plaster', foliage_panel='plaster')
 
 # U/V metres from the physical module analysis, before square UV storage.
 PHYSICAL_METRES = {
@@ -85,6 +87,12 @@ PHYSICAL_METRES = {
     'NW_CITY_WOOD_ORNAMENT_02.TGA': (1.91819, 8.16460),
     'NW_HARBOUR_WOODCRATE_01.TGA': (2.13421, 3.45146),
     'NW_HARBOUR_WOODCRATE_02.TGA': (4.49052, 5.39176),
+    'NW_CITY_FLAG_01.TGA': (2.00200, 4.00400),
+    'NW_CITY_IVY_BORDER_01.TGA': (5.29006, 4.58294),
+    'NW_CITY_IVY_FULL_01.TGA': (2.68061, 2.90555),
+    'NW_CITY_ROPE_01.TGA': (.27497, 3.75734),
+    'NW_HARBOUR_ROPEWALL_01.TGA': (1.75664, 2.15476),
+    'NW_HARBOUR_ROPEWALL_02.TGA': (2.80746, 1.78725),
 }
 STRIP_AXES = {
     'NW_CITY_HAFENRANDSTEIN_01.TGA': 'u', 'NW_CITY_RICH_BLACKWOOD_01.TGA': 'v',
@@ -92,6 +100,8 @@ STRIP_AXES = {
     'NW_CITY_WALL_05.TGA': 'u', 'NW_CITY_WOODBEAM_01.TGA': 'v',
     'NW_CITY_WOODBEAM_02.TGA': 'v', 'NW_CITY_WOODBEAM_03.TGA': 'v',
     'NW_HARBOUR_STAIRS_01.TGA': 'v', 'NW_HARBOUR_WOOD_IRON_01.TGA': 'v',
+    'NW_CITY_ROPE_01.TGA': 'v', 'NW_HARBOUR_ROPEWALL_01.TGA': 'u',
+    'NW_HARBOUR_ROPEWALL_02.TGA': 'u',
 }
 SOURCE_NAME = re.compile(r'(NW_(?:CITY|HARBOUR)_[A-Z0-9_]+)-attempt-([1-3])\Z')
 REGENERATE = frozenset({'NW_CITY_WALL_03.TGA', 'NW_CITY_WINDOW_03.TGA',
@@ -134,7 +144,7 @@ def recipes(mapping=ROOT/'data/content/city-materials.csv', bible=ROOT/'docs/con
     chosen = None if textures is None else {texture_name(name) for name in textures}
     available = {row['texture'] for row in rows}
     if chosen is not None and (not chosen or chosen - available):
-        raise ValueError('requested texture is outside the opaque nonmetal city-3 scope')
+        raise ValueError('requested texture is outside the nonmetal city-3 scope')
     result = []
     for row in rows:
         texture = row['texture']
@@ -158,19 +168,44 @@ def recipes(mapping=ROOT/'data/content/city-materials.csv', bible=ROOT/'docs/con
         core = cores.get(name, style['prompt'] if not module else row['depicts'])
         if texture == 'NW_CITY_HAFEN_GIEBEL_01.TGA':
             core = 'weathered rough horizontal overlapping handmade wooden boards'
+        alpha_tested = texture in alpha_material.ALPHA_TEXTURES
+        raw_coverage = row.get('target_coverage', '')
+        target_coverage = None
+        if alpha_tested:
+            if raw_coverage:
+                target_coverage = float(raw_coverage)
+                if not math.isfinite(target_coverage) or not 0 < target_coverage < 1:
+                    raise ValueError(f'{texture}: invalid target_coverage')
+            elif require_target:
+                raise ValueError(f'{texture}: alpha material requires target_coverage')
+        composition = ('Front orthographic material elevation, surface fills every pixel, no scene or margins, '
+            'muted earthy colours, small irregular handmade detail. ')
+        if alpha_tested:
+            density = (f'Visible foreground must occupy approximately {target_coverage:.1%} of the canvas. '
+                if target_coverage is not None else 'Keep visible foreground and transparent gaps at the density of this material role. ')
+            shape = {
+                'NW_CITY_FLAG_01.TGA': 'One upright hanging cloth banner attached along its top edge, narrow woven edging, a plain unrecognizable nonfigurative charcoal weave patch, lightly frayed lower silhouette and transparent space outside the cloth; no heraldry or figurative ornament, no pole or wall.',
+                'NW_CITY_IVY_BORDER_01.TGA': 'A cohesive ivy border: dense attached stems and overlapping leaves on the LEFT side, tapering toward an irregular open RIGHT side with trailing leafy tendrils and real transparent gaps; preserve this left-to-right UV silhouette, no wall or supporting background.',
+                'NW_CITY_IVY_FULL_01.TGA': 'A dense cohesive climbing ivy patch with overlapping leaves, small irregular real transparent gaps between leaf clusters, and an organic leafy outer silhouette; no wall or supporting background.',
+            }[texture]
+            composition = ('Front orthographic flat material cutout. '+shape+' '+density+
+                'Return real RGBA alpha transparency with transparent background; no painted checkerboard, '
+                'no solid background colour, no border around the canvas. Opaque foliage or cloth carries all colour; '
+                'transparent regions are holes. Muted earthy colours, fine handmade detail. ')
         prompt = (f'Create an original late medieval harbour town material. {core}. '
             f'Object: {row["object"]}; role: {row["role"]}. Depicts: {row["depicts"]}. '
             f'Material condition: {row["state"]}; colour: {row["colour"]}; '
             f'actual wear and sparse coloured deposits: {row["weathering"]}. '
             f'Orientation: {row["orientation"]}. Physical U:V proportions {metres[0]:g}:{metres[1]:g} '
             f'metres before square UV packing. {boundaries}. '
-            'Front orthographic material elevation, surface fills every pixel, no scene or margins, '
-            'muted earthy colours, small irregular handmade detail. '
+            f'{composition}'
             f'{NO_BAKED_LIGHT}. Constant colour response independent of depth; '
             'no dark halos at contacts, no underside strips, no edge vignette or relief shading. '
             'Dirt means sparse pigment deposits, never an illumination gradient. '
             'Engine normal maps and dynamic lights supply relief and all shadows. '
-            'No perspective, text, logos, symbols or watermark. Text only; no image references.')
+            'No perspective, text, logos or watermark. Text only; no image references.')
+        if texture == 'NW_CITY_FLAG_01.TGA':
+            prompt = prompt.replace('dark emblem', 'plain unrecognizable nonfigurative charcoal weave patch')
         params = dict(set=SET, material=recipe_id(texture), material_class=name, numeric_substrate=substrate,
             decision=row['decision'], layout=row['layout'], object=row['object'], role=row['role'],
             depicts=row['depicts'], state=row['state'], scale=1. if module else float(row['scale']),
@@ -189,6 +224,13 @@ def recipes(mapping=ROOT/'data/content/city-materials.csv', bible=ROOT/'docs/con
             normal_convention='OpenGL: X right, Y up, Z toward viewer; DDS pack flips Y for engine texture-V basis',
             mapping_sha256=hashlib.sha256(mapping.read_bytes()).hexdigest(),
             bible_sha256=hashlib.sha256(bible.read_bytes()).hexdigest())
+        if alpha_tested:
+            params.update(alpha_mode='test', alpha_threshold=alpha_material.ALPHA_TEST_THRESHOLD,
+                coverage_tolerance=alpha_material.COVERAGE_TOLERANCE,
+                transparent_render='albedo only; generated normal/ORM retained but unused by the engine alpha pass',
+                numeric_substrate_note='neutral existing numeric range for retained unused maps; alpha pass renders only albedo')
+            if target_coverage is not None:
+                params['target_coverage'] = target_coverage
         raw_target = row.get('target_luminance', '')
         if raw_target:
             target = float(raw_target)
@@ -277,7 +319,13 @@ def read_sources(sources, textures, source_root):
                 raise ValueError(f'{path.name}: source is not a PNG')
             size = image.size
             image.load()
-            if 'A' in image.getbands() and image.getchannel('A').getextrema() != (255, 255):
+            if texture in alpha_material.ALPHA_TEXTURES:
+                if image.mode != 'RGBA':
+                    raise ValueError(f'{path.name}: alpha material requires real RGBA PNG, not an opaque checkerboard')
+                visible = alpha_material.coverage(np.asarray(image)[..., 3])
+                if not 0 < visible < 1:
+                    raise ValueError(f'{path.name}: alpha material requires visible foreground and transparent cutouts')
+            elif 'A' in image.getbands() and image.getchannel('A').getextrema() != (255, 255):
                 raise ValueError(f'{path.name}: generated albedo must be opaque')
         retained = path.with_suffix('.png')
         if retained.exists() and retained.read_bytes() != raw.read_bytes():
@@ -319,6 +367,7 @@ def import_material(recipe, attempts, sources, source_root, *, axes=None, select
     if axes not in ('', 'u', 'v', 'uv') or not set(axes) <= set(allowed):
         raise ValueError(f'{recipe["id"]}: seam axes {axes!r} exceed repeat axes {allowed!r}')
     numbers = [source['metadata']['attempt'] for source in attempts]
+    automatic_selection = selected is None
     selected = numbers[-1] if selected is None else selected
     if selected not in numbers:
         raise ValueError(f'{recipe["id"]}: selected attempt does not exist')
@@ -349,11 +398,22 @@ def import_material(recipe, attempts, sources, source_root, *, axes=None, select
             retained.symlink_to(link)
         metadata.update(source=source['relative'], source_sha256=source['sha256'], tool=MODEL['id'])
         source['path'].write_text(json.dumps(metadata, ensure_ascii=False, sort_keys=True)+'\n', encoding='utf-8')
+        alpha_tested = recipe['replaces'][0] in alpha_material.ALPHA_TEXTURES
         with Image.open(source['source']) as raw:
-            image = raw.convert('RGB').resize((1024, 1024), Image.Resampling.LANCZOS)
-        overlap = 1/8 if params['decision'] == 'include' else 1/32
-        image, seam = seam_fix.seamless(image, axes=axes, overlap_fraction=overlap)
-        maps, correction, rejection = generate.target_corrected_maps(image, result)
+            if alpha_tested:
+                rgba = np.asarray(raw.convert('RGBA'))
+                raw_coverage = alpha_material.coverage(rgba[..., 3])
+                image = alpha_material.resize_rgba(rgba)
+            else:
+                image = raw.convert('RGB').resize((1024, 1024), Image.Resampling.LANCZOS)
+        if alpha_tested:
+            seam = dict(axes='', applied=False, reason='bounded alpha panel; silhouette retained')
+            maps, correction, rejection = alpha_material.corrected_maps(image, result)
+            correction['alpha']['source_coverage'] = raw_coverage
+        else:
+            overlap = 1/8 if params['decision'] == 'include' else 1/32
+            image, seam = seam_fix.seamless(image, axes=axes, overlap_fraction=overlap)
+            maps, correction, rejection = generate.target_corrected_maps(image, result)
         files = save_maps(sources, result, maps, number)
         attempt = dict(number=number, prompt=metadata['prompt'], seed=None, tool=MODEL['id'],
             utc=metadata['utc'], seconds=metadata['seconds'], source_png=source['relative'],
@@ -367,13 +427,29 @@ def import_material(recipe, attempts, sources, source_root, *, axes=None, select
             if metadata.get(field, prior.get(field)):
                 attempt[field] = metadata.get(field, prior.get(field))
         generation['attempts'].append(attempt)
-        if number == selected:
-            result.update(prompt=metadata['prompt'], files=deepcopy(files))
-            result['parameters'].update(source_width=attempt['source_width'], source_height=attempt['source_height'])
-            generation.update(brightness_correction=deepcopy(correction),
-                saturation_correction=deepcopy(correction['saturation']), seam_fix=deepcopy(seam))
-            if rejection is not None:
-                generation.update(selected_failed=True, failure_warning=f'Numeric admission failed: {rejection}')
+    if recipe['replaces'][0] in alpha_material.ALPHA_TEXTURES and automatic_selection:
+        admitted = [attempt for attempt in generation['attempts'] if attempt['numeric_valid']]
+        if admitted:
+            selected = admitted[-1]['number']
+        else:
+            def error_score(attempt):
+                correction = attempt['brightness_correction']
+                return (correction['alpha']['absolute_error']/params['coverage_tolerance'] +
+                    abs(correction['linear_mean_after']-params['target_luminance'])/params['target_luminance_tolerance'])
+            selected = min(generation['attempts'], key=error_score)['number']
+            generation['best_available'] = f'best available of {len(attempts)} retained attempts; admission failed'
+    generation['selected_attempt'] = selected
+    for attempt in generation['attempts']:
+        attempt['selected'] = attempt['number'] == selected
+        if not attempt['selected']:
+            continue
+        correction = attempt['brightness_correction']
+        result.update(prompt=attempt['prompt'], files=deepcopy(attempt['files']))
+        result['parameters'].update(source_width=attempt['source_width'], source_height=attempt['source_height'])
+        generation.update(brightness_correction=deepcopy(correction),
+            saturation_correction=deepcopy(correction['saturation']), seam_fix=deepcopy(attempt['seam_fix']))
+        if not attempt['numeric_valid']:
+            generation.update(selected_failed=True, failure_warning=f'Numeric admission failed: {attempt["numeric_rejection"]}')
     if review:
         generation['visual_review'] = review
     if failed:

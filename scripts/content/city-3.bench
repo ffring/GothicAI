@@ -1,4 +1,4 @@
-# City set 3: five previous city sites, three market-house views, three module-rich sites.
+# City set 3: city sites, market-house views, module-rich sites and alpha silhouettes.
 # The original city camera and its 6 s settle + 20 s FPS window remain unchanged.
 # Daylight comparison at every site; market and facade_close also at 23:00.
 # Capture preparation appends a census-only visit to each packed material's inspection camera.
@@ -122,4 +122,63 @@ wait 34
 cam hold
 wait 6000
 shot interior_modules
+wait 300
+
+# Alpha silhouettes: the original inspection cameras and a 2.5-times wider view.
+# Each pair keeps the same target and sightline; all six central rays are clear.
+set time 12 0
+view hide animated morph pfx
+cam lift off
+cam look 45
+goto pos 8734 2233 -6389
+cam world 313.492 82.721 73.931
+wait 34
+cam hold
+wait 6000
+shot alpha_flag_close
+wait 300
+
+cam look 45
+goto pos 8734 2233 -6389
+cam world 783.731 139.302 73.931
+wait 34
+cam hold
+wait 6000
+shot alpha_flag_far
+wait 300
+
+cam look 45
+goto pos 14068 1039 2942
+cam world 541.580 169.827 -123.461
+wait 34
+cam hold
+wait 6000
+shot alpha_ivy_border_close
+wait 300
+
+cam look 45
+goto pos 14068 1039 2942
+cam world 1353.950 357.067 -123.461
+wait 34
+cam hold
+wait 6000
+shot alpha_ivy_border_far
+wait 300
+
+cam look 45
+goto pos 9776 1257 -4055
+cam world 298.516 81.236 -26.508
+wait 34
+cam hold
+wait 6000
+shot alpha_ivy_full_close
+wait 300
+
+cam look 45
+goto pos 9776 1257 -4055
+cam world 746.289 135.590 -26.508
+wait 34
+cam hold
+wait 6000
+shot alpha_ivy_full_far
 wait 500

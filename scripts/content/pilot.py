@@ -5,7 +5,6 @@ CITY_2_SETS = frozenset({"city-2", "city-2-imagegen"})
 CITY_3_SET = "city-3"
 CITY_3_DECISIONS = frozenset({"include", "module", "panel", "strip"})
 CITY_3_EXCLUDED_CLASSES = frozenset({
-    "cloth_panel", "foliage_panel", "rope_panel", "rope_strip", "net_panel", "net_strip",
     "iron_panel", "banded_metal_tile", "iron_strip",
 })
 PLACEMENT_SETS = CITY_2_SETS | {CITY_3_SET}

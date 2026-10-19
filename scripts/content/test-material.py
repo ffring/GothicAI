@@ -235,13 +235,21 @@ def downsample(image: np.ndarray) -> np.ndarray:
 def write_dds(path: Path, image: np.ndarray, *, normal: bool = False) -> None:
     size = image.shape[0]
     levels = int(math.log2(size)) + 1
-    fourcc, block_bytes = (b"DXT5", 16) if normal else (b"DXT1", 8)
+    # DXT5 makes the engine choose alpha-test even for an opaque texture.
+    # Decide on actual holes at its cutoff, after hardening, not on PNG mode.
+    cutout = not normal and image.shape[2] == 4 and np.any(image[..., 3] < 0.5)
+    fourcc, block_bytes = (b"DXT5", 16) if normal or cutout else (b"DXT1", 8)
     header = [124, 0xA1007, size, size, (size // 4) ** 2 * block_bytes, 0, levels]
     header += [0] * 11
     header += [32, 4, int.from_bytes(fourcc, "little"), 0, 0, 0, 0, 0]
     header += [0x401008, 0, 0, 0, 0]
     with path.open("wb") as output:
         output.write(b"DDS " + struct.pack("<31I", *header))
+        if cutout:
+            from alpha_mips import cutout_mip_chain
+            for mip in cutout_mip_chain(image):
+                output.write(bc3(blocks(quantize(mip))).tobytes())
+            return
         for level in range(levels):
             if normal:
                 n = image / np.maximum(np.linalg.norm(image, axis=2, keepdims=True), 1e-8)

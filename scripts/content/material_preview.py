@@ -28,10 +28,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from alpha_material import ALPHA_TEST_THRESHOLD
+
 
 PIPELINES = ("flux-marigold", "flux-filter", "sdxl-marigold", "sdxl-filter", "stablematerials")
 ROWS = ("Albedo 2 x 2", "Normal (Y+)", "Roughness", "Lambert + GGX")
 REQUIRED_MAPS = ("albedo", "normal", "roughness", "metallic", "ao")
+CHECKER_COLOURS = ((64, 68, 74), (104, 110, 118))
 
 
 def normalize(value: np.ndarray) -> np.ndarray:
@@ -49,6 +52,34 @@ def linear_to_srgb(value: np.ndarray) -> np.ndarray:
 
 def rgb_image(value: np.ndarray) -> Image.Image:
     return Image.fromarray(np.rint(np.clip(value, 0, 1) * 255).astype(np.uint8))
+
+
+def checkerboard(size: tuple[int, int], cell: int = 12) -> Image.Image:
+    """An unlit screen-space backing makes discarded albedo pixels visible."""
+    width, height = size
+    y, x = np.mgrid[:height, :width]
+    colours = np.asarray(CHECKER_COLOURS, dtype=np.uint8)
+    return Image.fromarray(colours[(x // cell + y // cell) % 2])
+
+
+def alpha_preview(image: Image.Image) -> Image.Image:
+    """Show the same binary cutoff as the game, without blending hidden RGB."""
+    if image.mode != "RGBA":
+        return image
+    rgba = np.asarray(image)
+    result = np.asarray(checkerboard(image.size)).copy()
+    visible = rgba[..., 3] / 255 >= ALPHA_TEST_THRESHOLD
+    result[visible] = rgba[..., :3][visible]
+    return Image.fromarray(result)
+
+
+def tiled_panel(image: Image.Image, size: int) -> Image.Image:
+    half = size // 2
+    tiled = Image.new(image.mode, (size, size))
+    tile = image.resize((half, half), Image.Resampling.LANCZOS)
+    for offset in ((0, 0), (half, 0), (0, half), (half, half)):
+        tiled.paste(tile, offset)
+    return alpha_preview(tiled)
 
 
 def sample_periodic(image: np.ndarray, u: np.ndarray, v: np.ndarray, wrap_axes: str = "uv") -> np.ndarray:
@@ -95,7 +126,8 @@ def plane_preview(maps: dict[str, np.ndarray], size: int, *, aspect: float = 1.,
     u = (position[..., 0] / half_width + 1) * 0.5 * repeats[0]
     v = (position[..., 1] / half_height + 1) * 0.5 * repeats[1]
     sample = lambda name: sample_periodic(maps[name], u, v, wrap_axes)
-    albedo = srgb_to_linear(sample("albedo"))
+    sampled_albedo = sample("albedo")
+    albedo = srgb_to_linear(sampled_albedo[..., :3])
     normal = normalize(sample("normal") * 2 - 1)
     roughness = np.clip(sample("roughness"), 0.045, 1)
     metallic = np.clip(sample("metallic"), 0, 1)
@@ -123,6 +155,10 @@ def plane_preview(maps: dict[str, np.ndarray], size: int, *, aspect: float = 1.,
     # Fixed highlight roll-off; identical exposure for every material.
     colour = colour / (1 + colour)
     result = linear_to_srgb(colour)
+    if sampled_albedo.shape[-1] == 4:
+        discarded = on_plane & (sampled_albedo[..., 3] < ALPHA_TEST_THRESHOLD)
+        backing = np.asarray(checkerboard((size, size)), dtype=np.float32) / 255
+        result[discarded] = backing[discarded]
     result[~on_plane] = (0.125, 0.135, 0.15)
     return rgb_image(result)
 
@@ -146,6 +182,8 @@ def read_maps(record: dict, root: Path) -> tuple[dict[str, np.ndarray] | None, s
     for name in REQUIRED_MAPS:
         mode = "RGB" if name in ("albedo", "normal") else "L"
         with Image.open(contained_path(root, files[name])) as source:
+            if name == "albedo" and ("A" in source.getbands() or "transparency" in source.info):
+                mode = "RGBA"
             maps[name] = np.asarray(source.convert(mode), dtype=np.float32) / 255
         if mode == "L":
             maps[name] = maps[name][..., None]
@@ -195,7 +233,7 @@ def module_panel(image: Image.Image, size: int, aspect: float) -> Image.Image:
         raise ValueError("preview physical aspect must be finite and positive")
     width, height = max(1, round(size * min(aspect, 1.))), max(1, round(size * min(1 / aspect, 1.)))
     panel = Image.new("RGB", (size, size), (32, 34, 38))
-    panel.paste(image.resize((width, height), Image.Resampling.LANCZOS),
+    panel.paste(alpha_preview(image.resize((width, height), Image.Resampling.LANCZOS)),
                 ((size - width) // 2, (size - height) // 2))
     return panel
 
@@ -221,11 +259,7 @@ def make_sheet(material: str, records: dict[str, dict], root: Path, output: Path
         else:
             albedo = rgb_image(maps["albedo"])
             # Each quarter is a full tile. No seam guides are painted over it.
-            tiled = Image.new("RGB", (size, size))
-            half = size // 2
-            tile = albedo.resize((half, half), Image.Resampling.LANCZOS)
-            for ox, oy in ((0, 0), (half, 0), (0, half), (half, half)):
-                tiled.paste(tile, (ox, oy))
+            tiled = tiled_panel(albedo, size)
             panels = [tiled, rgb_image(maps["normal"]).resize((size, size), Image.Resampling.LANCZOS),
                       rgb_image(np.repeat(maps["roughness"], 3, axis=2)).resize((size, size), Image.Resampling.LANCZOS),
                       plane_preview(maps, size)]
@@ -261,9 +295,13 @@ def make_set_sheet(set_name: str, records: list[dict], root: Path, output: Path,
         material_class = parameters["material_class"]
         decision = parameters.get("decision")
         is_module = decision in ("module", "panel", "strip")
+        has_alpha = maps["albedo"].shape[-1] == 4
         draw.text((x, y), texture, font=font(14), fill=(240, 242, 246))
         caption = f"{decision} / {material_class}" if decision else material_class
         draw.text((x, y + 21), caption, font=font(14), fill=(176, 195, 214))
+        if has_alpha:
+            draw.text((x, y + 38), f"alpha cutoff {ALPHA_TEST_THRESHOLD:g}; albedo only in game",
+                      font=font(11), fill=(176, 195, 214))
         if is_module:
             aspect = float(parameters["source_aspect"])
             axes = parameters.get("tiling_axes", "uv" if parameters.get("layout") == "tiled" else "")
@@ -272,17 +310,13 @@ def make_set_sheet(set_name: str, records: list[dict], root: Path, output: Path,
                       plane_preview(maps, size, aspect=aspect, repeats=(1., 1.), wrap_axes=axes))
             albedo_label = "Albedo / 1 module"
         else:
-            half = size // 2
-            tile = rgb_image(maps["albedo"]).resize((half, half), Image.Resampling.LANCZOS)
-            tiled = Image.new("RGB", (size, size))
-            for offset in ((0, 0), (half, 0), (0, half), (half, half)):
-                tiled.paste(tile, offset)
+            tiled = tiled_panel(rgb_image(maps["albedo"]), size)
             panels = (tiled, rgb_image(maps["normal"]).resize((size, size), Image.Resampling.LANCZOS),
                       plane_preview(maps, size))
             albedo_label = "Albedo 2 x 2"
         for panel_index, (label, panel) in enumerate(zip((albedo_label, "Normal (Y+)", "Oblique light / GGX"), panels)):
             px = x + panel_index * (size + gap)
-            draw.text((px, y + 45), label, font=font(12), fill=(169, 181, 197))
+            draw.text((px, y + (54 if has_alpha else 45)), label, font=font(12), fill=(169, 181, 197))
             sheet.paste(panel, (px, y + header))
     repeat_note = "physical module proportions; homogeneous surfaces repeat 2 x 2" if any(
         record["parameters"].get("decision") in ("module", "panel", "strip") for record in records

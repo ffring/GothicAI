@@ -29,8 +29,12 @@ FIELDS = (
     "texture", "decision", "class", "state", "scale", "area_m2",
     "uv_m_per_unit_median", "reason",
     "object", "role", "depicts", "colour", "weathering", "orientation",
-    "layout", "layout_share", "anti_repeat", "target_luminance",
+    "layout", "layout_share", "anti_repeat", "target_luminance", "target_coverage",
 )
+MAPPING_HEADERS = (FIELDS, FIELDS[:-1], FIELDS[:-2])
+ALPHA_TEXTURES = frozenset({
+    "NW_CITY_FLAG_01.TGA", "NW_CITY_IVY_BORDER_01.TGA", "NW_CITY_IVY_FULL_01.TGA",
+})
 CENSUS_FIELDS = frozenset({
     "world", "texture", "area_m2", "uv_m_per_unit_median", "tiled_area_fraction",
 })
@@ -80,7 +84,7 @@ def _read_csv(path: Path, *, mapping: bool) -> list[dict[str, str]]:
                 raise MappingError(f"{path}: empty CSV")
             if len(header) != len(set(header)):
                 raise MappingError(f"{path}: duplicate CSV column")
-            if mapping and header != list(FIELDS):
+            if mapping and tuple(header) not in MAPPING_HEADERS:
                 raise MappingError(f"{path}: expected CSV columns in order: {','.join(FIELDS)}")
             if not mapping and not CENSUS_FIELDS <= set(header):
                 missing = ", ".join(sorted(CENSUS_FIELDS - set(header)))
@@ -91,7 +95,11 @@ def _read_csv(path: Path, *, mapping: bool) -> list[dict[str, str]]:
                     raise MappingError(
                         f"{path}:{reader.line_num}: expected {len(header)} CSV fields, got {len(values)}"
                     )
-                rows.append(dict(zip(header, values)))
+                row = dict(zip(header, values))
+                if mapping:
+                    for field in FIELDS:
+                        row.setdefault(field, "")
+                rows.append(row)
             return rows
     except (OSError, UnicodeError, csv.Error) as error:
         raise MappingError(f"{path}: {error}") from error
@@ -209,10 +217,15 @@ def validate_mapping(
         texture = row["texture"]
         where = f"{path}:{line}: {texture}"
         target = row["target_luminance"]
-        if target or texture in pilot:
+        if target or texture in pilot or texture in ALPHA_TEXTURES:
             luminance = _number(target, f"{where}: target_luminance")
             if luminance > 1:
                 raise MappingError(f"{where}: target_luminance must be at most 1")
+        target_coverage = row.get("target_coverage", "")
+        if target_coverage or texture in ALPHA_TEXTURES:
+            coverage = _number(target_coverage, f"{where}: target_coverage")
+            if coverage > 1:
+                raise MappingError(f"{where}: target_coverage must be at most 1")
         if row["decision"] not in DECISIONS:
             raise MappingError(f"{where}: decision must be {', '.join(DECISIONS)}")
         if not row["reason"].strip():

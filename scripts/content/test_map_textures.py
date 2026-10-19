@@ -41,7 +41,7 @@ def dataset(tmp_path):
         "object": "town street", "role": "walking surface", "depicts": "small stone paving",
         "colour": "warm grey", "weathering": "dirt between stones", "orientation": "no fixed top",
         "layout": "tiled", "layout_share": "tiled:0.8;panel:0.1;strip:0.1;atlas:0",
-        "anti_repeat": "on", "target_luminance": "0.12",
+        "anti_repeat": "on", "target_luminance": "0.12", "target_coverage": "",
     } for row in source]
     rows[-4].update(decision="module", **{"class": "timber_frame_tile", "scale": "1", "anti_repeat": "off"})
     rows[-3].update(decision="panel", **{"class": "plaster_panel", "scale": "1",
@@ -302,6 +302,37 @@ def test_mapping_update_preserves_target_luminance(dataset):
     assert [row["target_luminance"] for row in mapping.update_mapping(mapping_path, census_path)] == targets
 
 
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-0.1", "1.01", "unknown"])
+def test_optional_coverage_requires_a_finite_unit_interval_scalar(dataset, value):
+    _, rows, census_path, mapping_path, save = dataset
+    rows[-4]["target_coverage"] = value
+    save()
+    with pytest.raises(mapping.MappingError, match="target_coverage"):
+        mapping.check_mapping(mapping_path, census_path)
+
+
+@pytest.mark.parametrize("texture", sorted(mapping.ALPHA_TEXTURES))
+def test_alpha_requires_coverage_and_census_update_preserves_it(dataset, texture):
+    source, rows, census_path, mapping_path, save = dataset
+    source[-4]["texture"] = rows[-4]["texture"] = texture
+    save()
+    with pytest.raises(mapping.MappingError, match="target_coverage"):
+        mapping.check_mapping(mapping_path, census_path)
+    rows[-4]["target_coverage"] = "0.500400543213"
+    rows[-4]["scale"] = "9"
+    save()
+    updated = mapping.update_mapping(mapping_path, census_path)
+    assert updated[-4]["target_coverage"] == "0.500400543213"
+    assert updated[-4]["scale"] == "1.00"
+
+
+def test_legacy_header_without_coverage_remains_readable(dataset):
+    _, rows, census_path, mapping_path, _ = dataset
+    legacy = [{field: row[field] for field in mapping.FIELDS[:-1]} for row in rows]
+    write_csv(mapping_path, mapping.FIELDS[:-1], legacy)
+    assert mapping.check_mapping(mapping_path, census_path) == rows
+
+
 @pytest.mark.parametrize("index", [-4, -3, -2, -1])
 def test_noninclude_decisions_require_anti_repeat_off(dataset, index):
     source, rows, census_path, mapping_path, save = dataset
@@ -365,7 +396,7 @@ def test_invalid_update_does_not_write_partial_results(dataset):
     ("", "empty CSV"),
     ("texture,texture\n", "duplicate CSV column"),
     ("texture,decision\n", "expected CSV columns in order"),
-    (",".join(mapping.FIELDS) + "\nshort,row\n", "expected 18 CSV fields, got 2"),
+    (",".join(mapping.FIELDS) + "\nshort,row\n", "expected 19 CSV fields, got 2"),
 ])
 def test_malformed_mapping_csv(dataset, text, message):
     source, rows, census_path, mapping_path, save = dataset

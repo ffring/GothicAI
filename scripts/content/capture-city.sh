@@ -173,7 +173,10 @@ if set_name == 'city-3':
     shots = [(spot, '', '12:00') for spot in (
         'city', 'market', 'harbour', 'upper', 'house',
         'facade_close', 'facade_corner', 'facade_full',
-        'upper_modules', 'harbour_modules', 'interior_modules')]
+        'upper_modules', 'harbour_modules', 'interior_modules',
+        'alpha_flag_close', 'alpha_flag_far',
+        'alpha_ivy_border_close', 'alpha_ivy_border_far',
+        'alpha_ivy_full_close', 'alpha_ivy_full_far')]
     shots += [(spot, '_night', '23:00') for spot in ('facade_close', 'market')]
 elif triple:
     shots = [(spot, suffix, hour) for spot in ('facade_close', 'market', 'facade_corner', 'harbour')

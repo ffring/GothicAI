@@ -1,4 +1,4 @@
-"""City-3 keeps opaque non-metal city materials in one image_gen staging set."""
+"""City-3 keeps non-metal city materials in one image_gen staging set."""
 from copy import deepcopy
 import csv
 import json
@@ -12,18 +12,18 @@ import pack_materials as packer
 from pilot import CITY_3_DECISIONS, CITY_3_EXCLUDED_CLASSES, selected_rows
 
 
-def test_city3_scope_has_52_unique_materials_and_preserves_csv_order():
+def test_city3_scope_has_58_unique_materials_and_preserves_csv_order():
     with packer.DEFAULT_MAPPING.open(newline="") as stream:
         rows = list(csv.DictReader(stream))
     selected = selected_rows(rows, "city-3")
-    assert len(selected) == len({row["texture"] for row in selected}) == 52
+    assert len(selected) == len({row["texture"] for row in selected}) == 58
     assert selected == [row for row in rows if row["decision"] in CITY_3_DECISIONS
                         and row["class"] not in CITY_3_EXCLUDED_CLASSES]
     assert {row["decision"] for row in selected} == CITY_3_DECISIONS
     assert not {row["class"] for row in selected} & CITY_3_EXCLUDED_CLASSES
 
 
-def test_city3_skips_transparency_and_standalone_metal_for_all_decisions():
+def test_city3_skips_only_standalone_metal_for_all_decisions():
     rows = [{"texture": f"{index}.TGA", "decision": decision, "class": name}
             for index, (decision, name) in enumerate(
                 (decision, name) for decision in CITY_3_DECISIONS
@@ -31,6 +31,13 @@ def test_city3_skips_transparency_and_standalone_metal_for_all_decisions():
     rows += [{"texture": "WALL.TGA", "decision": "module", "class": "framed_masonry_tile"},
              {"texture": "EXCLUDED.TGA", "decision": "exclude", "class": "stone_panel"}]
     assert selected_rows(rows, "city-3") == rows[-2:-1]
+
+
+def test_city3_includes_cloth_ivy_and_rope():
+    rows = [{"texture": name + ".TGA", "decision": decision, "class": name}
+            for name, decision in (("cloth_panel", "panel"), ("foliage_panel", "panel"),
+                                   ("rope_strip", "strip"))]
+    assert selected_rows(rows, "city-3") == rows
 
 
 @pytest.fixture
