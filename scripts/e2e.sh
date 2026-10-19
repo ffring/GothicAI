@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
-#   memprobe: Linux engine RSS/status after each step and smaps groups after each cycle;
+#   memprobe: engine RSS after each step (Linux /proc status, macOS RSS and phys_footprint), and after
+#       each cycle Linux smaps groups or macOS `footprint` categories;
 #       MEMPROBE_PHASES=wave,save,load,spawn,teleport, MEMPROBE_CYCLES=8; LLM=fake, no body URL
 #   crime_meet: save 1, native home eviction and a brave victim's Amends approach/payment;
 #       LLM=chatgpt runs only the short compensation scene with the real model
