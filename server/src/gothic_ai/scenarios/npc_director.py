@@ -235,8 +235,19 @@ async def npc_director(
                      [(c.id, c.waypoint) for c in found]):
             return _logged(results)
         assert chest is not None and chest.waypoint is not None
-        item = next((i.item for i in chest.items if not i.item.startswith(("ITFO_", "ITPO_", "ITPL_"))),
-                    chest.items[0].item)
+        # Choose existing goods through the same protection check as the eventual command. The
+        # farmer's outfit is script-owned; gold (as in npc_deeds) is ordinary property to steal.
+        item, rejected = "", {}
+        for candidate in sorted(chest.items, key=lambda i: i.item != "ITMI_GOLD"):
+            reason = await service.check_command(VINO, "steal", {
+                "chest": CHEST, "what": candidate.item, "count": 1, "deed": True,
+            })
+            if reason is None:
+                item = candidate.item
+                break
+            rejected[candidate.item] = reason
+        if not check("theft_item", bool(item), {"item": item, "rejected": rejected}):
+            return _logged(results)
         if not await place(VINO, chest.waypoint):
             return _logged(results)
         visible, attempts = False, []
@@ -279,18 +290,19 @@ async def npc_director(
         if not check("loss_discovered", opened.status == "done" and "пропало" in note, note):
             return _logged(results)
 
-        await link.debug("player_goto", waypoint=ROAD)
-        if not await place(LOBART, ROAD) or not await place(
-            HILDA, ROAD, to=LOBART, distance=350, face=LOBART,
-        ):
-            return _logged(results)
-        if not await place(VINO, ROAD, to=LOBART, distance=450, face=LOBART):
-            return _logged(results)
-        await link.debug("teleport", near=LOBART, distance=250)
-        ready = await _until(lambda: all(n in talk.people and talk.people[n].distance <= 700
-                                        and talk.people[n].earshot <= 700 for n in (LOBART, HILDA)), 20)
-        if not check("talk_near", ready):
-            return _logged(results)
+        if not live:
+            await link.debug("player_goto", waypoint=ROAD)
+            if not await place(LOBART, ROAD) or not await place(
+                HILDA, ROAD, to=LOBART, distance=350, face=LOBART,
+            ):
+                return _logged(results)
+            if not await place(VINO, ROAD, to=LOBART, distance=450, face=LOBART):
+                return _logged(results)
+            await link.debug("teleport", near=LOBART, distance=250)
+            ready = await _until(lambda: all(n in talk.people and talk.people[n].distance <= 700
+                                            and talk.people[n].earshot <= 700 for n in (LOBART, HILDA)), 20)
+            if not check("talk_near", ready):
+                return _logged(results)
         if not await _until(lambda: any(f.get("crime") == cid for f in facts("occasion")), 20):
             check("deed", False, cid)
             return _logged(results)

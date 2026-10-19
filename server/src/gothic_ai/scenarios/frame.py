@@ -514,7 +514,10 @@ async def frame(
         deed = next((f for f in facts("npc_crime") if f["id"] not in previous_npc), None)
         if not check("investigation_theft", deed is not None and deed.get("culprit") == VINO
                      and deed.get("owner") == LOBART and HILDA in deed.get("witnesses", [])
-                     and LOBART not in deed.get("witnesses", []), {"crime": deed, "action": action}):
+                     and LOBART not in deed.get("witnesses", []), {
+                         "crime": deed, "action": action,
+                         "received": [message.model_dump() for message in received[received_at:]],
+                     }):
             return _logged(results)
         assert deed is not None
         did = str(deed["id"])
