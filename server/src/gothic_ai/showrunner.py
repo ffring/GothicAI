@@ -499,7 +499,7 @@ class Showrunner:
             for f in facts
             if (
                 f.get("fact") in DEEDS
-                and f.get("fact") not in {"npc_crime", "npc_broken"}
+                and f.get("fact") != "npc_crime"
                 and (f.get("fact") != "crime" or self.crimes is not None)
             )
             or (
@@ -756,19 +756,22 @@ class Showrunner:
         return out
 
     def _npc_broken_briefs(self, occasion: Fact, facts: list[Fact]) -> dict[str, Fact]:
-        if self.crimes is None or not self.occasions.npc_cheat:
+        if self.crimes is None:
             return {}
-        broken = [f for f in facts if f.get("fact") == "npc_broken"]
-        deals = {f["deal"] for f in broken[-RECENT_DEEDS:]}
-        deals.update(
-            o["deed"]["deal"] for o in occasion_members(occasion)
-            if o.get("deed", {}).get("fact") == "npc_broken" and o["deed"].get("deal")
-        )
+        people = set()
+        for member in occasion_members(occasion):
+            people.update(member.get("people", []))
+            for event in (member.get("deed", {}), member.get("vanilla", {})):
+                people.update(event[key] for key in ("npc", "giver", "culprit", "victim", "owner")
+                              if event.get(key))
+                people.update(event.get("witnesses", []))
+        broken = [
+            f for f in facts if f.get("fact") == "npc_broken"
+            and (f.get("npc") in people or people.intersection(f.get("witnesses", [])))
+        ]
         out = {}
-        for failure in broken:
+        for failure in broken[-RECENT_DEEDS:]:
             deal = failure["deal"]
-            if deal not in deals:
-                continue
             promise = next(
                 (f for f in facts if f.get("fact") == "deal" and f.get("deal") == deal), {},
             )

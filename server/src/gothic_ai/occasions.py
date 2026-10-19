@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 PRIORITY = {"deed": 0, "vanilla": 1, "chapter": 2, "arrived": 3, "quiet": 4}
 # `claim` is recorded after the ending/reward succeeds. Only a truthful accepted claim counts;
 # a paid lie is no completed quest (vanilla.py and quests.py).
-DEEDS = {"found_out", "story_quest_done", "authored_done", "claim", "crime", "npc_crime", "npc_broken"}
+DEEDS = {"found_out", "story_quest_done", "authored_done", "claim", "crime", "npc_crime"}
 LINES = {"story_quest", "chain", "authored"}
 DAY_MINUTES = 24 * 60
 AWAY_CM = 5000
@@ -65,14 +65,13 @@ class Occasions:
         clock: Callable[[], float] = time.monotonic,
         crimes: bool = True,
         npc_crimes: bool = True,
-        npc_cheat: bool = True,
     ) -> None:
         self.link, self.chronicle, self.places = link, chronicle, places
         self.poll_s, self.settle_s, self.chapter_s = poll_s, settle_s, chapter_s
         self.busy_poll_s, self.clock = busy_poll_s, clock
         self.gather_s, self.max_gather_s = gather_s, max_gather_s
         self.crimes = crimes
-        self.npc_crimes, self.npc_cheat = npc_crimes, npc_cheat
+        self.npc_crimes = npc_crimes
         self.current: Place | None = None
         self.waypoint: str | None = None
         self.visited: set[str] = set()
@@ -290,8 +289,7 @@ class Occasions:
 
     def _is_deed(self, fact: Fact) -> bool:
         if (key := self._npc_deed_key(fact)) is not None:
-            enabled = self.npc_crimes if key[0] == "npc_crime" else self.npc_cheat
-            return self.crimes and enabled and key not in self._npc_deeds
+            return self.crimes and self.npc_crimes and key not in self._npc_deeds
         if fact.get("fact") == "crime":
             return self.crimes
         if fact.get("fact") == "claim":
@@ -307,10 +305,8 @@ class Occasions:
 
     @staticmethod
     def _npc_deed_key(fact: Fact) -> tuple[str, str] | None:
-        kind = fact.get("fact")
-        field = {"npc_crime": "id", "npc_broken": "deal"}.get(kind)
-        if field is not None and isinstance(fact.get(field), str):
-            return kind, fact[field]
+        if fact.get("fact") == "npc_crime" and isinstance(fact.get("id"), str):
+            return "npc_crime", fact["id"]
         return None
 
     def _set_time(self, state: Fact) -> None:

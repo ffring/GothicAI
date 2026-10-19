@@ -1120,7 +1120,6 @@ async def serve(args: argparse.Namespace) -> int:
             state.occasions = Occasions(
                 link, state.chronicle, place_book, crimes=not args.no_crimes,
                 npc_crimes=not args.no_crimes and not args.no_npc_crimes,
-                npc_cheat=not args.no_crimes and not args.no_npc_cheat,
             )
             directing.append(asyncio.create_task(state.occasions.run()))
         if graph is not None and not args.no_questlog:

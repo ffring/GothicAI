@@ -962,20 +962,47 @@ async def test_npc_crime_line_and_its_knowledge_survive_load_without_entering_he
 async def test_broken_npc_promise_brief_names_promise_failure_and_hearers_without_a_false_giver(graph, how):
     async with world(graph) as w:
         enable_crime(w)
+        await w.showrunner.occasions.poll()
+        await w.showrunner.occasions.next()
         promise = {"fact": "deal", "deal": "D1", "npc": HILDA, "name": "Хильда",
                    "npc_later": {"items": {"ITMI_GOLD": 10}, "day": 12}}
         failure = {"fact": "npc_broken", "deal": "D1", "npc": HILDA, "how": how,
                    "witnesses": [LOBART] if how == "unpaid" else [], "day": 12, "hour": 8, "minute": 0}
         w.chronicle.record(promise)
         w.chronicle.record(failure)
-        brief = await w.showrunner.brief(occasion(kind="deed", deed=failure))
+        await w.showrunner.occasions.poll()
+        assert w.showrunner.occasions.pending == []
+        assert not w.llm.calls
+        brief = await w.showrunner.brief(occasion())
         case = brief.npc_broken["D1"]
         assert case["promise"] == promise and case["failed"]["how"] == how
         assert case["heard"] == failure["witnesses"]
         assert case["claimant"] == "PLAYER" and case["giver"] is None
         assert "герой не может быть заказчиком" in brief.text()
-        w.showrunner.occasions.npc_cheat = False
-        assert (await w.showrunner.brief(occasion())).npc_broken == {}
+        assert (await w.showrunner.brief(occasion(people=[VINO]))).npc_broken == {}
+        await load(w.fake, w.chronicle, branch="restored")
+        assert (await w.showrunner.brief(occasion())).npc_broken == brief.npc_broken
+        assert not w.llm.calls
+
+
+@pytest.mark.parametrize("current", [
+    occasion(people=[], also=[occasion(people=[HILDA])]),
+    occasion(kind="deed", people=[], deed={"fact": "npc_crime", "culprit": HILDA}),
+    occasion(kind="vanilla", people=[], vanilla={"giver": HILDA}),
+    occasion(people=[LOBART]),
+])
+async def test_broken_npc_promise_context_follows_people_of_the_current_occasion(graph, current):
+    async with world(graph) as w:
+        enable_crime(w)
+        # Keep an older relevant breach despite unrelated recent breaches elsewhere.
+        w.chronicle.record({"fact": "npc_broken", "deal": "D1", "npc": HILDA,
+                            "how": "unpaid", "witnesses": [LOBART]})
+        for i in range(12):
+            w.chronicle.record({"fact": "npc_broken", "deal": f"AWAY_{i}", "npc": VINO,
+                                "how": "no_show"})
+        brief = await w.showrunner.brief(current)
+        assert set(brief.npc_broken) == {"D1"}
+        assert not w.llm.calls
 
 
 async def test_npc_director_switch_hides_saved_npc_cases_and_allows_none_with_reason(graph):
