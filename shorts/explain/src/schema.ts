@@ -248,6 +248,34 @@ const FlowCard = z.object({
 
 const Chart = z.discriminatedUnion('type', [DiceChart, FormulaCard, BarsCard, DotsCard, StatsCard, LineCard, BigCard, TableCard, CellsCard, RaysCard, ConeCard, TicksCard, GridCard, FlowCard]);
 
+const Follow = z.object({
+  data: z.string().min(1), // actions.json, relative to the workspace's public dir
+  names: z.record(z.string()), // only named actions are shown
+  at: At.default(0),
+  until: At.optional(),
+  offsetY: NumberValue.default(-42), // display pixels from the head; negative is above it
+  hold: NumberValue.positive().default(1.2),
+});
+
+const Hp = z.object({
+  data: z.string().min(1),
+  labels: z.tuple([z.string(), z.string()]),
+  at: At.default(0),
+});
+
+// Recorded footage pixels and frames, before cover/zoom. Null means the fighter is off camera.
+export const CombatData = z.object({
+  fps: NumberValue.positive(),
+  frames: z.number().int().positive(),
+  size: z.tuple([NumberValue.positive(), NumberValue.positive()]),
+  track: z.array(z.union([
+    z.tuple([At, NumberValue, NumberValue]),
+    z.tuple([At, z.null(), z.null()]),
+  ])),
+  hp: z.array(z.tuple([At, NumberValue, NumberValue])),
+  actions: z.array(z.object({frame: At, t: At, action: z.string(), id: z.number().int()})),
+});
+
 const Beat = z.object({
   id: z.string(),
   kind: z.enum(['footage', 'still', 'card', 'split']),
@@ -265,6 +293,10 @@ const Beat = z.object({
   tags: z.array(Tag).default([]),
   strokes: z.array(Stroke).default([]),
   fans: z.array(Fan).default([]),
+  follow: Follow.optional(),
+  followBottom: Follow.optional(), // split: bottom in tall, right in wide
+  hp: Hp.optional(),
+  hpBottom: Hp.optional(),
   chart: Chart.optional(),
 });
 
@@ -352,6 +384,9 @@ export const Plan = z.object({
 });
 
 export type Plan = z.infer<typeof Plan>;
+export type CombatData = z.infer<typeof CombatData>;
+export type Follow = z.infer<typeof Follow>;
+export type Hp = z.infer<typeof Hp>;
 export type Beat = z.infer<typeof Beat>;
 export type DiceChart = z.infer<typeof DiceChart>;
 export type FormulaCard = z.infer<typeof FormulaCard>;

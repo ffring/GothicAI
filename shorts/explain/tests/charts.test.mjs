@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {Plan} from '../src/schema.ts';
+import {CombatData, Plan} from '../src/schema.ts';
 import {inCone, interpolatePath, quadraticParameterAtLength, quadraticPoint} from '../src/parts/diagramMath.ts';
+import {sampleHp, selectAction, smoothedTrack, sourceFrame, transformPoint, zoomScale} from '../src/parts/followMath.ts';
 
 const source = 'reports/example.md';
 const line = () => ({
@@ -364,5 +365,202 @@ test('flow: дуга нулевой длины даёт конечный пар�
     assert.ok(Number.isFinite(parameter) && parameter >= 0 && parameter <= 1);
     const tip = quadraticPoint(point, point, point, parameter);
     assert.ok(Math.hypot(tip.x - point.x, tip.y - point.y) < 1e-10);
+  }
+});
+
+const nearPoint = (actual, expected) => {
+  assert.ok(Math.abs(actual.x - expected.x) < 1e-8, `x: ${actual.x} ≠ ${expected.x}`);
+  assert.ok(Math.abs(actual.y - expected.y) < 1e-8, `y: ${actual.y} ≠ ${expected.y}`);
+};
+
+test('follow: cover wide центрирует обрезку и масштабирует исходные пиксели', () => {
+  const viewport = {left: 0, top: 0, width: 1920, height: 1080};
+  nearPoint(transformPoint({x: 250, y: 250}, [1000, 1000], viewport), {x: 480, y: 60});
+  nearPoint(transformPoint({x: 640, y: 360}, [1280, 720], viewport), {x: 960, y: 540});
+});
+
+test('follow: cover tall сохраняет центр footage и обрезает боковые края', () => {
+  const viewport = {left: 0, top: 0, width: 1080, height: 1920};
+  nearPoint(transformPoint({x: 960, y: 540}, [1920, 1080], viewport), {x: 540, y: 960});
+  nearPoint(transformPoint({x: 1068, y: 432}, [1920, 1080], viewport), {x: 732, y: 768});
+  assert.ok(transformPoint({x: 0, y: 540}, [1920, 1080], viewport).x < 0);
+});
+
+test('follow: правая половина wide split добавляет смещение после cover', () => {
+  const viewport = {left: 960, top: 0, width: 960, height: 1080};
+  nearPoint(transformPoint({x: 1000, y: 400}, [1920, 1080], viewport), {x: 1480, y: 400});
+});
+
+test('follow: нижняя половина tall split добавляет вертикальное смещение', () => {
+  const viewport = {left: 0, top: 960, width: 1080, height: 960};
+  nearPoint(transformPoint({x: 960, y: 540}, [1920, 1080], viewport), {x: 540, y: 1440});
+});
+
+test('follow: zoom применяется после cover вокруг локального origin половины split', () => {
+  const viewport = {left: 960, top: 0, width: 960, height: 1080};
+  const zoom = {at: 1, dur: 2, scale: 2, x: 480, y: 540};
+  assert.equal(zoomScale(zoom, 0), 1);
+  assert.equal(zoomScale(zoom, 2), 1.5);
+  assert.equal(zoomScale(zoom, 4), 2);
+  nearPoint(transformPoint({x: 1000, y: 400}, [1920, 1080], viewport, zoom, 0), {x: 1480, y: 400});
+  nearPoint(transformPoint({x: 1000, y: 400}, [1920, 1080], viewport, zoom, 2), {x: 1500, y: 330});
+  nearPoint(transformPoint({x: 960, y: 540}, [1920, 1080], viewport, zoom, 4), {x: 1440, y: 540});
+});
+
+test('follow: from и freeze выбирают тот же исходный кадр, что Picture', () => {
+  assert.equal(sourceFrame(4, 2, 30), 180);
+  assert.equal(sourceFrame(4, 2, 30, 1.5), 165);
+  assert.equal(sourceFrame(4, 1, 30, 1.5), 150);
+  assert.equal(sourceFrame(4, 1.5, 30, 1.5), 165);
+  assert.equal(sourceFrame(4, 2, 30, 0), 120);
+  // Picture rounds startFrom and the beat/freeze frame independently.
+  assert.equal(sourceFrame(1.01, 0.01, 30), 30);
+  assert.equal(sourceFrame(1.01, 3, 30, 0.05), 32);
+});
+
+const actionSamples = [
+  {frame: 10, t: 10 / 30, action: 'approach', id: 1},
+  {frame: 30, t: 1, action: 'attack_front', id: 2},
+  {frame: 35, t: 35 / 30, action: 'unmapped', id: 3},
+  {frame: 40, t: 40 / 30, action: 'approach', id: 1},
+];
+const actionNames = {approach: 'подойти', attack_front: 'удар прямо'};
+
+test('follow: действие видно с его кадра до следующего, неназванное гасит плашку', () => {
+  assert.equal(selectAction(actionSamples, actionNames, 9, 30), null);
+  assert.deepEqual(selectAction(actionSamples, actionNames, 10, 30), {...actionSamples[0], name: 'подойти'});
+  assert.equal(selectAction(actionSamples, actionNames, 29, 30).action, 'approach');
+  assert.equal(selectAction(actionSamples, actionNames, 30, 30).name, 'удар прямо');
+  assert.equal(selectAction(actionSamples, actionNames, 35, 30), null);
+  assert.equal(selectAction(actionSamples, actionNames, 39, 30), null);
+  assert.equal(selectAction(actionSamples, actionNames, 40, 30).name, 'подойти');
+});
+
+test('follow: hold по умолчанию 1,2 с, правая граница исключена', () => {
+  assert.equal(selectAction(actionSamples, actionNames, 75, 30).name, 'подойти');
+  assert.equal(selectAction(actionSamples, actionNames, 76, 30), null);
+  assert.equal(selectAction(actionSamples, actionNames, 54, 30, 0.5).name, 'подойти');
+  assert.equal(selectAction(actionSamples, actionNames, 55, 30, 0.5), null);
+  assert.equal(selectAction(actionSamples, actionNames, 40, 30, 0), null);
+  assert.equal(selectAction([], actionNames, 0, 30), null);
+  assert.equal(selectAction([{frame: 0, t: 0, action: 'toString', id: 0}], {}, 0, 30), null);
+});
+
+test('follow: track сглажен без состояния, null немедленно скрывает плашку', () => {
+  const track = [[0, 0, 100], [1, 20, 100], [2, 0, 100], [3, null, null], [4, 500, 200]];
+  nearPoint(smoothedTrack(track, 1, 30), {x: 8, y: 100});
+  assert.equal(smoothedTrack(track, 3, 30), null);
+  nearPoint(smoothedTrack(track, 4, 30), {x: 500, y: 200});
+  nearPoint(smoothedTrack(track, 1, 30), {x: 8, y: 100});
+  assert.equal(smoothedTrack(track, -1, 30), null);
+  assert.equal(smoothedTrack([], 0, 30), null);
+});
+
+test('follow: окно сглаживания не пересекает null с обеих сторон', () => {
+  const track = [[0, 1000, 1000], [1, null, null], [2, 10, 20], [3, 20, 30], [4, null, null], [5, 1000, 1000]];
+  nearPoint(smoothedTrack(track, 2, 30), {x: 100 / 7, y: 170 / 7});
+  assert.equal(smoothedTrack(track, 4, 30), null);
+  assert.equal(smoothedTrack([[0, null, null], [10, 200, 300]], 9, 30), null);
+  nearPoint(smoothedTrack([[0, 100, 200], [20, 300, 400]], 10, 30), {x: 100, y: 200});
+});
+
+test('hp: берёт последнее значение по кадру, включая разреженные данные', () => {
+  const hp = [[5, 300, 300], [20, 250, 180], [50, 0, 40]];
+  assert.equal(sampleHp(hp, 4), null);
+  assert.deepEqual(sampleHp(hp, 5), [300, 300]);
+  assert.deepEqual(sampleHp(hp, 19), [300, 300]);
+  assert.deepEqual(sampleHp(hp, 20), [250, 180]);
+  assert.deepEqual(sampleHp(hp, 100), [0, 40]);
+  assert.equal(sampleHp([], 0), null);
+});
+
+const combatBeat = () => ({
+  id: 'fight', kind: 'footage', dur: 8, src: 'footage/p30-100000/duel.mp4',
+  follow: {data: 'footage/p30-100000/actions.json', names: actionNames},
+  hp: {data: 'footage/p30-100000/actions.json', labels: ['бандит', 'противник']},
+});
+const combatPlan = (beat = combatBeat(), format = 'wide') => ({
+  format, lang: 'ru', hook: {text: '', until: 0}, beats: [beat],
+});
+
+test('follow/hp: схема сохраняет путь, русские имена и значения по умолчанию', () => {
+  const beat = Plan.parse(combatPlan()).beats[0];
+  assert.deepEqual(beat.follow, {...combatBeat().follow, at: 0, offsetY: -42, hold: 1.2});
+  assert.deepEqual(beat.hp, {...combatBeat().hp, at: 0});
+});
+
+for (const format of ['wide', 'tall']) {
+  test(`follow/hp: все четыре поля split сохраняются в ${format}`, () => {
+    const input = {...combatBeat(), kind: 'split', srcBottom: 'footage/p30-100004/duel.mp4',
+      follow: {...combatBeat().follow, at: 0.5, until: 7, offsetY: -60, hold: 0.7},
+      hp: {...combatBeat().hp, at: 1},
+      followBottom: {data: 'footage/p30-100004/actions.json', names: {approach: 'подойти справа'}},
+      hpBottom: {data: 'footage/p30-100004/actions.json', labels: ['свой', 'противника']},
+    };
+    const beat = Plan.parse(combatPlan(input, format)).beats[0];
+    assert.deepEqual(beat.follow, input.follow);
+    assert.deepEqual(beat.hp, input.hp);
+    assert.deepEqual(beat.followBottom, {...input.followBottom, at: 0, offsetY: -42, hold: 1.2});
+    assert.deepEqual(beat.hpBottom, {...input.hpBottom, at: 0});
+  });
+}
+
+for (const hold of [0, -0.1, Infinity]) {
+  test(`follow: схема отклоняет hold=${hold} с точным путём`, () => {
+    const beat = combatBeat();
+    beat.follow.hold = hold;
+    const result = Plan.safeParse(combatPlan(beat));
+    assert.equal(result.success, false);
+    assert.ok(result.error.issues.some(({path}) => path.join('.') === 'beats.0.follow.hold'));
+  });
+}
+
+test('follow/hp: пустые пути data отклонены во всех полях', () => {
+  const beat = {...combatBeat(), kind: 'split', srcBottom: 'other.mp4'};
+  beat.followBottom = {...beat.follow};
+  beat.hpBottom = {...beat.hp};
+  for (const field of ['follow', 'hp', 'followBottom', 'hpBottom']) beat[field].data = '';
+  const result = Plan.safeParse(combatPlan(beat));
+  assert.equal(result.success, false);
+  assert.deepEqual(result.error.issues.map(({path}) => path.join('.')).sort(),
+    ['follow', 'hp', 'followBottom', 'hpBottom'].map((field) => `beats.0.${field}.data`).sort());
+});
+
+for (const labels of [['только свой'], ['свой', 'противника', 'лишний']]) {
+  test(`hp: схема требует ровно две подписи, получено ${labels.length}`, () => {
+    const beat = combatBeat();
+    beat.hp.labels = labels;
+    const result = Plan.safeParse(combatPlan(beat));
+    assert.equal(result.success, false);
+    assert.ok(result.error.issues.some(({path}) => path.join('.') === 'beats.0.hp.labels'));
+  });
+}
+
+const combatData = () => ({
+  fps: 30, frames: 90, size: [1920, 1080],
+  track: [[0, 960, 400], [1, null, null], [2, 970, 410]],
+  hp: [[0, 300, 300], [2, 280, 250]],
+  actions: [{frame: 0, t: 0, action: 'approach', id: 1}],
+});
+
+test('CombatData: записанные координаты, null, HP и действия сохраняются', () => {
+  assert.deepEqual(CombatData.parse(combatData()), combatData());
+});
+
+test('CombatData: только парный null допустим для головы вне кадра', () => {
+  for (const tuple of [[1, null, 400], [1, 960, null]]) {
+    const input = combatData();
+    input.track[1] = tuple;
+    const result = CombatData.safeParse(input);
+    assert.equal(result.success, false);
+    assert.ok(result.error.issues.some(({path}) => path.join('.') === 'track.1'));
+  }
+});
+
+test('CombatData: размеры кадра должны быть положительными и конечными', () => {
+  for (const size of [[0, 1080], [1920, -1], [Infinity, 1080]]) {
+    const result = CombatData.safeParse({...combatData(), size});
+    assert.equal(result.success, false);
+    assert.ok(result.error.issues.some(({path}) => path[0] === 'size'));
   }
 });
