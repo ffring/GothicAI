@@ -77,12 +77,20 @@ def test_a_self_play_duel_replays_both_actors_in_accepted_order(tmp_path):
         (1, 1, "primary"), (2, 6, "opponent"), (28, 6, "primary")]
 
 
-@pytest.mark.parametrize("platform,audio,expected", [("darwin", True, 0), ("darwin", False, 1), ("linux", False, 0)])
-def test_render_native_macos_with_game_audio_and_linux_xvfb(tmp_path, monkeypatch, platform, audio, expected):
+@pytest.mark.parametrize("platform,scale,audio,expected", [
+    ("darwin", 1, True, 0), ("darwin", 2, True, 0), ("darwin", 2, False, 1), ("linux", None, False, 0),
+])
+def test_render_native_macos_with_game_audio_and_linux_xvfb(tmp_path, monkeypatch, platform, scale, audio, expected):
     spec = importlib.util.spec_from_file_location("body_replay_film", SCRIPT)
     film = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(film)
     monkeypatch.setattr(film.sys, "platform", platform)
+    def check_output(argv, *, text):
+        assert platform == "darwin" and argv[:3] == ["osascript", "-l", "JavaScript"]
+        assert "backingScaleFactor" in argv[-1] and text is True
+        return str(scale)+"\n"
+
+    monkeypatch.setattr(film.subprocess, "check_output", check_output)
     for name in ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "LP_NUM_THREADS", "ALSOFT_DRIVERS", "DISPLAY", "WAYLAND_DISPLAY"):
         monkeypatch.setenv(name, "inherited-linux-setting")
     monkeypatch.setenv("TEMPEST_AUDIO_LOOPBACK", "0")
@@ -102,7 +110,7 @@ def test_render_native_macos_with_game_audio_and_linux_xvfb(tmp_path, monkeypatc
     def run(argv, *, cwd, env, stdout, stderr, timeout):
         calls.append((argv, env))
         assert cwd == folder/"run" and (cwd/"save_slot_1.sav").read_bytes() == b"arena save"
-        assert env["TEMPEST_WINDOW_SIZE"] == "1920x1080"
+        assert env["TEMPEST_WINDOW_SIZE"] == ("960x540" if scale == 2 else "1920x1080")
         assert env["OPENGOTHIC_BENCH_REALTIME"] == "1"
         assert env["OPENGOTHIC_BENCH"] == str(folder/"scene.bench")
         assert env["OPENGOTHIC_BENCH_OUT"] == str(folder)
@@ -114,7 +122,7 @@ def test_render_native_macos_with_game_audio_and_linux_xvfb(tmp_path, monkeypatc
             assert env["OPENGOTHIC_PHYSICS_THREADS"] == "0"
             assert env["OPENGOTHIC_BENCH_ENCODER"] == "-c:v h264_videotoolbox -b:v 24M"
             config = (cwd/"Gothic.ini").read_text()
-            assert "vidResIndex=2\n" in config
+            assert "vidResIndex=0\n" in config
             for setting in ("soundVolume=1", "musicVolume=0", "musicEnabled=0", "worldSounds=0"):
                 assert setting+"\n" in config
         else:

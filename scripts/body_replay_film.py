@@ -90,9 +90,22 @@ def prepare(args) -> int:
     return 0
 
 
+def macos_window_size(size: str) -> str:
+    """Tempest's macOS window uses points; --size specifies the captured pixels."""
+    scale = float(subprocess.check_output([
+        "osascript", "-l", "JavaScript", "-e",
+        'ObjC.import("AppKit"); $.NSScreen.mainScreen.backingScaleFactor',
+    ], text=True).strip())
+    width, height = (int(value) for value in size.split("x"))
+    if scale <= 0 or any(value <= 0 or not (value/scale).is_integer() for value in (width, height)):
+        raise SystemExit(f"--size {size} cannot use whole window points at display scale {scale:g}")
+    return f"{int(width/scale)}x{int(height/scale)}"
+
+
 def render(args) -> int:
     failures = 0
     macos = sys.platform == "darwin"
+    window_size = macos_window_size(args.size) if macos else args.size
     for folder in args.scenes:
         out = folder.resolve()
         run = out/"run"
@@ -101,7 +114,7 @@ def render(args) -> int:
         shutil.copy(args.save, run/"save_slot_1.sav")
         width, height = args.size.split("x")
         env = {**os.environ, "GOTHIC_AI": "0", "TEMPEST_BACKGROUND": "1",
-               "TEMPEST_WINDOW_SIZE": args.size, "OPENGOTHIC_TEXTURES": args.textures,
+               "TEMPEST_WINDOW_SIZE": window_size, "OPENGOTHIC_TEXTURES": args.textures,
                "OPENGOTHIC_BODY_TRACE": "1", "OPENGOTHIC_BODY_ANIMATION_RNG": "isolated",
                "OPENGOTHIC_BODY_SCRIPT_RNG": "isolated", "OPENGOTHIC_BENCH_REALTIME": "1",
                "OPENGOTHIC_BENCH": str(out/"scene.bench"), "OPENGOTHIC_BENCH_OUT": str(out)}
@@ -110,14 +123,15 @@ def render(args) -> int:
         argv = [str(args.game.resolve()), "-g", str(args.assets.resolve()), "-g2", "-window", "-devmode", "-save", "1"]
         if macos:
             # The macOS engine selects Metal itself. Do not inherit Linux's software renderer
-            # or null audio device. Like bench.sh, capture half of the Retina backing size.
+            # or null audio device. Full resolution prevents each realtime screenshot from
+            # scaling the previous screenshot's already reduced viewport a second time.
             for key in ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "LP_NUM_THREADS", "ALSOFT_DRIVERS"):
                 env.pop(key, None)
             env["TEMPEST_AUDIO_LOOPBACK"] = "48000"
             # Match the headless runner's Jolt schedule when replaying its recorded commands.
             env["OPENGOTHIC_PHYSICS_THREADS"] = "0"
             env.setdefault("OPENGOTHIC_BENCH_ENCODER", "-c:v h264_videotoolbox -b:v 24M")
-            (run/"Gothic.ini").write_text("[INTERNAL]\nvidResIndex=2\n[SOUND]\n"
+            (run/"Gothic.ini").write_text("[INTERNAL]\nvidResIndex=0\n[SOUND]\n"
                                          "soundVolume=1\nmusicVolume=0\nmusicEnabled=0\nworldSounds=0\n")
         else:
             env.update({"VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/lvp_icd.json",
@@ -181,7 +195,7 @@ def main() -> int:
     r.add_argument("--game", type=Path, required=True)
     r.add_argument("--assets", type=Path, required=True)
     r.add_argument("--save", type=Path, required=True)
-    r.add_argument("--size", default="960x540")
+    r.add_argument("--size", default="960x540", help="output video size in pixels, including on Retina displays")
     r.add_argument("--threads", type=int, default=4)
     r.add_argument("--textures", default="")
     r.add_argument("--timeout-s", type=int, default=1800)
