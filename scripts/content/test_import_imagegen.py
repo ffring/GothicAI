@@ -112,6 +112,97 @@ def test_numeric_failure_never_writes_registry(prepared, monkeypatch):
     assert path.read_bytes() == before
 
 
+@pytest.fixture
+def seam_sensitive_filter(monkeypatch):
+    """Make rewrites observable without running the expensive overlap cut."""
+    state = {'reject_texture': None}
+
+    def seam(image, axes='', overlap_fraction=.125):
+        if axes:
+            image = Image.new('RGB', image.size, (180, 90, 80))
+        return image, dict(applied=bool(axes), axes=axes)
+
+    def filtered(image, record):
+        if record['replaces'][0] == state['reject_texture']:
+            return {}, {}, 'brightness correction failed'
+        maps, correction, rejection = light_filter(image, record)
+        value = image.getpixel((0, 0))[0] / 255
+        return {name: np.full_like(array, value) for name, array in maps.items()}, correction, rejection
+
+    monkeypatch.setattr(importer.seam_fix, 'seamless', seam)
+    monkeypatch.setattr(importer.generate, 'target_corrected_maps', filtered)
+    return state
+
+
+def registered_map_bytes(records, sources):
+    paths = {relative for record in records for relative in record['files'].values()}
+    paths.update(relative for record in records
+        for attempt in record['generation']['attempts']
+        for relative in attempt.get('files', {}).values())
+    return {relative: (sources / relative).read_bytes() for relative in paths}
+
+
+@pytest.mark.parametrize(('options', 'message'), [
+    ({'selections': {'NW_CITY_DUNGEONFLOOR_02.TGA': 2}}, 'selected attempt 2 does not exist'),
+    ({'fixes': {'NW_CITY_WINDOW_03.TGA': 'u'}}, 'exceeds panel repeat axes'),
+    ({'fixes': {'NW_CITY_WOODBEAM_02.TGA': 'u'}}, 'exceeds strip repeat axes'),
+])
+def test_failed_reimport_options_preserve_registered_maps(prepared, seam_sensitive_filter, options, message):
+    staging, flux, path, _ = prepared
+    registered = importer.import_set(staging, flux, path)
+    before_registry = path.read_bytes()
+    before_maps = registered_map_bytes(registered, staging / 'sources')
+    assert len(before_maps) == 22 * len(importer.bakeoff.MAPS)
+    # DIRTYGROUND is processed before every invalid option above. Its changed
+    # seam output must not replace the maps from the previous successful import.
+    options = deepcopy(options)
+    options.setdefault('fixes', {})['NW_CITY_DIRTYGROUND_02.TGA'] = 'uv'
+    with pytest.raises(ValueError, match=message):
+        importer.import_set(staging, flux, path, **options)
+    assert path.read_bytes() == before_registry
+    assert registered_map_bytes(registered, staging / 'sources') == before_maps
+
+
+def test_late_numeric_failure_preserves_registered_maps(prepared, seam_sensitive_filter):
+    staging, flux, path, _ = prepared
+    registered = importer.import_set(staging, flux, path)
+    before_registry = path.read_bytes()
+    before_maps = registered_map_bytes(registered, staging / 'sources')
+    assert len(before_maps) == 22 * len(importer.bakeoff.MAPS)
+    seam_sensitive_filter['reject_texture'] = 'NW_CITY_DUNGEONFLOOR_02.TGA'
+    with pytest.raises(ValueError, match='numeric admission failed: brightness'):
+        importer.import_set(staging, flux, path,
+            fixes={'NW_CITY_DIRTYGROUND_02.TGA': 'uv'})
+    assert path.read_bytes() == before_registry
+    assert registered_map_bytes(registered, staging / 'sources') == before_maps
+
+
+def test_successful_reimport_retains_previous_maps_and_reuses_identical_version(prepared, seam_sensitive_filter):
+    staging, flux, path, _ = prepared
+    sources = staging / 'sources'
+    registered = importer.import_set(staging, flux, path)
+    before_maps = registered_map_bytes(registered, sources)
+    fixes = {'NW_CITY_DIRTYGROUND_02.TGA': 'uv'}
+    updated = importer.import_set(staging, flux, path, fixes=fixes)
+    original_ground = next(record for record in registered
+        if record['replaces'] == ['NW_CITY_DIRTYGROUND_02.TGA'])
+    updated_ground = next(record for record in updated
+        if record['replaces'] == ['NW_CITY_DIRTYGROUND_02.TGA'])
+    assert set(original_ground['files'].values()).isdisjoint(updated_ground['files'].values())
+    assert registered_map_bytes(registered, sources) == before_maps
+    for name, relative in updated_ground['files'].items():
+        assert (sources / relative).read_bytes() != before_maps[original_ground['files'][name]]
+
+    once_registry = path.read_bytes()
+    once_maps = registered_map_bytes(updated, sources)
+    once_paths = {file.relative_to(sources) for file in sources.rglob('*.png')}
+    assert importer.import_set(staging, flux, path, fixes=fixes) == updated
+    assert path.read_bytes() == once_registry
+    assert registered_map_bytes(updated, sources) == once_maps
+    assert registered_map_bytes(registered, sources) == before_maps
+    assert {file.relative_to(sources) for file in sources.rglob('*.png')} == once_paths
+
+
 def test_exact_source_scope_and_layout_axes_are_required(prepared):
     staging, _, _, records = prepared
     sources = staging / 'sources'

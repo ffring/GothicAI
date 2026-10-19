@@ -13,11 +13,11 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 import hashlib
+from io import BytesIO
 import json
 import math
 from pathlib import Path
 import re
-import shutil
 import sys
 import tempfile
 
@@ -150,27 +150,54 @@ def _new_id(record):
     return SET + '-' + record['id'][len(prefix):]
 
 
+def _write_immutable(path, data):
+    """Reuse equal bytes, but never replace a file an older recipe can name."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open('xb') as stream:
+            stream.write(data)
+    except FileExistsError:
+        if path.read_bytes() != data:
+            raise ValueError(f'refusing to overwrite retained file: {path}')
+
+
 def _save_maps(sources, record, maps, number):
-    relative = Path(SET) / record['id'] / f'attempt-{number}'
-    directory = sources / relative
-    directory.mkdir(parents=True, exist_ok=True)
+    encoded = {}
+    digest = hashlib.sha256()
     for name in bakeoff.MAPS:
         value = np.asarray(maps[name])
         if not np.isfinite(value).all():
             raise ValueError(f'{record["id"]} attempt {number}: {name} contains nonfinite values')
-        Image.fromarray(np.rint(np.clip(value, 0, 1)*255).astype('uint8')).save(directory / f'{name}.png')
+        stream = BytesIO()
+        Image.fromarray(np.rint(np.clip(value, 0, 1)*255).astype('uint8')).save(stream, format='PNG')
+        encoded[name] = stream.getvalue()
+        digest.update(name.encode() + b'\0' + encoded[name])
+    # A later failure must leave even the previous successful import's files
+    # intact. New pixels get a new directory; equal outputs reuse their paths.
+    relative = Path(SET) / record['id'] / f'attempt-{number}' / digest.hexdigest()
+    for name, data in encoded.items():
+        _write_immutable(sources / relative / f'{name}.png', data)
     return {name: (relative / f'{name}.png').as_posix() for name in bakeoff.MAPS}
+
+
+def validate_choice(record, attempts, axes='', selected=None):
+    """Check every requested choice before any material files are written."""
+    texture = record['replaces'][0]
+    allowed = permitted_axes(record)
+    if axes not in ('', 'u', 'v', 'uv'):
+        raise ValueError(f'{texture}: seam axes must be u, v or uv')
+    if not set(axes) <= set(allowed):
+        raise ValueError(f'{texture}: seam fix {axes!r} exceeds {record["parameters"]["layout"]} repeat axes {allowed!r}')
+    selected = attempts[-1]['metadata']['attempt'] if selected is None else selected
+    if selected not in [attempt['metadata']['attempt'] for attempt in attempts]:
+        raise ValueError(f'{texture}: selected attempt {selected} does not exist')
+    return selected
 
 
 def import_material(record, attempts, sources, axes='', selected=None):
     """Retain all source attempts, and select an explicitly chosen/latest one."""
     texture = record['replaces'][0]
-    allowed = permitted_axes(record)
-    if not set(axes) <= set(allowed):
-        raise ValueError(f'{texture}: seam fix {axes!r} exceeds {record["parameters"]["layout"]} repeat axes {allowed!r}')
-    selected = selected or attempts[-1]['metadata']['attempt']
-    if selected not in [attempt['metadata']['attempt'] for attempt in attempts]:
-        raise ValueError(f'{texture}: selected attempt {selected} does not exist')
+    selected = validate_choice(record, attempts, axes, selected)
     result = deepcopy(record)
     result.update(id=_new_id(record), pipeline='imagegen-filter', models=[deepcopy(MODEL)],
         seed=None, negative='', files={})
@@ -191,7 +218,7 @@ def import_material(record, attempts, sources, axes='', selected=None):
         number = metadata['attempt']
         retained = source['retained']
         if retained.resolve() != source['source']:
-            shutil.copy2(source['source'], retained)
+            _write_immutable(retained, source['source'].read_bytes())
         with Image.open(retained) as opened:
             image = opened.convert('RGB').resize((1024, 1024), Image.Resampling.LANCZOS)
         # A broad overlap can eat a module's thin structural head/sill rail.
@@ -242,10 +269,16 @@ def import_set(staging, flux_root, registry, fixes=None, selections=None):
     if (fixes.keys() | selections.keys()) - TEXTURES:
         raise ValueError('fix/selection contains a texture outside the comparison scope')
     found = read_sources(sources)
-    # Preflight every clone before writing any generated map or registry entry.
+    # Preflight the entire set, not just the next material in CSV order.
     for record in flux:
-        if record['replaces'][0] not in TEXTURES:
+        texture = record['replaces'][0]
+        if texture in TEXTURES:
+            validate_choice(record, found[texture], fixes.get(texture, ''), selections.get(texture))
+        else:
             registry_module.validate_entry(record, content_root=flux_root / 'sources')
+    retained_ids = {record['id'] for record in records if record['parameters'].get('set') != SET}
+    if retained_ids & {_new_id(record) for record in flux}:
+        raise ValueError('new resource ids conflict with records outside this set')
     imported = []
     for record in flux:
         texture = record['replaces'][0]
@@ -258,17 +291,13 @@ def import_set(staging, flux_root, registry, fixes=None, selections=None):
             clone['parameters']['set'] = SET
             for relative in clone['files'].values():
                 target = sources / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(flux_root / 'sources' / relative, target)
+                _write_immutable(target, (flux_root / 'sources' / relative).read_bytes())
             registry_module.validate_entry(clone, content_root=sources)
             imported.append(clone)
     if len(imported) != 22:
         raise ValueError(f'expected 22 output records, found {len(imported)}')
     kept_lines = [line for line in registry.read_bytes().splitlines(keepends=True)
         if json.loads(line)['parameters'].get('set') != SET]
-    retained_ids = {record['id'] for record in records if record['parameters'].get('set') != SET}
-    if retained_ids & {record['id'] for record in imported}:
-        raise ValueError('new resource ids conflict with records outside this set')
     serialized = b''.join(line if line.endswith(b'\n') else line + b'\n' for line in kept_lines)
     serialized += ''.join(json.dumps(record, ensure_ascii=False, sort_keys=True, allow_nan=False) + '\n'
         for record in imported).encode('utf-8')
