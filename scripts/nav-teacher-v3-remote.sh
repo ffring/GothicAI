@@ -2,8 +2,8 @@
 # Submit a bounded phase and return its gq id. Never trains a student.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-teacher-v3-remote.sh build|bootstrap|prepare|campaign|evaluate|diagnose|retry}"
-case "$stage" in build|bootstrap|prepare|campaign|evaluate|diagnose|retry) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
+stage="${1:?Usage: nav-teacher-v3-remote.sh build|bootstrap|prepare|campaign|evaluate|diagnose|retry|visible}"
+case "$stage" in build|bootstrap|prepare|campaign|evaluate|diagnose|retry|visible) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 export GQ_OWNER=nav-teacher-v3
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-teacher-v3" "$HOME"')"
 ssh ryzen "mkdir -p '$task/source' '$task/input'"
@@ -28,7 +28,7 @@ df -h "$HOME"
 cd "$task/source"
 if [[ ! -x "$task/.venv/bin/python" ]]; then uv venv "$task/.venv"; fi
 uv pip install --python "$task/.venv/bin/python" numpy pytest
-if [[ "$stage" != prepare && "$stage" != evaluate ]]; then
+if [[ "$stage" != prepare && "$stage" != evaluate && "$stage" != visible ]]; then
   cmake -S "$task/source/OpenGothic" -B "$task/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DOPENGOTHIC_JOLT_X86=x86-64-v3 \
@@ -47,6 +47,14 @@ if [[ "$stage" != prepare && "$stage" != evaluate ]]; then
   cmake --build "$task/build" --target "${targets[@]}" --parallel 3
   "$task/.venv/bin/python" -m pytest -q "${tests[@]}"
 fi
+if [[ "$stage" == visible ]]; then
+  test -x "$task/build/opengothic/gothic-body-runner"
+  test -x "$task/build/opengothic/gothic-navmemoryteacher-contract"
+  "$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_teacher_v3_campaign.py \
+    scripts/tests/test_nav_teacher_v3_point_analysis.py scripts/tests/test_nav_demos.py
+  "$task/.venv/bin/python" -I scripts/nav_teacher_v3_point_analysis.py \
+    --task "$task" --data "$HOME/gothic-ai/nav-demos-v3" --output "$task/point-retry-analysis"
+fi
 if [[ "$stage" == diagnose ]]; then
   analysis=(--task "$task" --data "$HOME/gothic-ai/nav-demos-v3" --output "$task/failures-v3-first")
   "$task/.venv/bin/python" -I scripts/nav_teacher_v3_failures.py prepare "${analysis[@]}"
@@ -54,11 +62,17 @@ if [[ "$stage" == diagnose ]]; then
   "$task/.venv/bin/python" -I scripts/nav_teacher_v3_failures.py analyze "${analysis[@]}" \
     --diagnostics "$task/build/opengothic/gothic-navmemoryteacher-diagnostics" \
     --detour-plans "$task/failures-v3-first/detour/detour-plans-v3.jsonl" --parallel 3
-elif [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == retry ]]; then
+elif [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == retry || "$stage" == visible ]]; then
   "$task/.venv/bin/python" -I scripts/nav_teacher_v3_campaign.py \
     --task "$task" --data "$HOME/gothic-ai/nav-demos-v3" --parallel 3 \
     --min-points 30 --per-region 5 --min-objects 30 --min-object-places 30 \
     --stage "$stage"
+  if [[ "$stage" == visible ]]; then
+    "$task/.venv/bin/python" scripts/nav_demos.py check "$HOME/gothic-ai/nav-demos-v3/v3-visible" \
+      --output "$task/visible-navdemo-check.json"
+    "$task/.venv/bin/python" scripts/nav_demos.py check "$HOME/gothic-ai/nav-demos-v3/examples" \
+      --output "$task/examples-navdemo-check.json"
+  fi
 elif [[ "$stage" != build ]]; then
   data="$HOME/gothic-ai/nav-demos-v3"
   selection=(--output "$data" --roads "$task/input/places.json"
@@ -79,7 +93,7 @@ fi
 PHASE
 threads=4
 cpu_args=()
-if [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == diagnose || "$stage" == retry ]]; then
+if [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == diagnose || "$stage" == retry || "$stage" == visible ]]; then
   threads=12
   cpu_args=(--cpu-quota 1200%)
 fi

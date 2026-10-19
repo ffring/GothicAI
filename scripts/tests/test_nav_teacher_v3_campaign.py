@@ -604,3 +604,161 @@ def test_retry_diagnostics_separates_strict_new_and_counterfactual_original_reco
     assert all(frame["start_found"] for frame in result["selected_production"])
     assert campaign.retry_diagnostic_file(Path("/binary"), Path("/original/samples.bin.gz"), [9], output, counterfactual) == result
     assert len(commands) == 1
+
+
+def visible_fixture(tmp_path):
+    selected, task, data = retry_fixture(tmp_path)
+    index = 0
+    for value in selected:
+        if value["goal_kind"] != "point":
+            continue
+        directory = campaign.cohort_directory(data, value, "v3-retry")
+        complete_episode(directory, value, 3)
+        metadata = v3.read_json(directory / "episode.json")
+        metadata["success"] = index < 10
+        v3.write_json(directory / "episode.json", metadata)
+        (directory / "teacher-paths.jsonl").write_text("[]\n")
+        index += 1
+    return selected, task, data
+
+
+def test_visible_preflight_acknowledges_closed_ten_of_thirty_without_a_point_gate(tmp_path):
+    selected, task, data = visible_fixture(tmp_path)
+    frozen, stop = campaign.visible_preflight(task, data)
+    assert frozen == selected
+    assert stop == dict(successes=10, attempted=30, stop_required=True, mechanics_closed=True)
+    value = next(value for value in selected if value["goal_kind"] == "object")
+    path = v3.episode_directory(data, value, 2) / "episode.json"
+    metadata = v3.read_json(path)
+    metadata["success"] = False
+    v3.write_json(path, metadata)
+    with pytest.raises(ValueError, match="successful object v2 baseline"):
+        campaign.visible_preflight(task, data)
+
+
+def test_point_examples_link_only_ten_successes_are_reader_visible_and_do_not_double_budget(tmp_path, monkeypatch):
+    selected, _, data = visible_fixture(tmp_path)
+    original = {path: path.read_bytes() for path in data.rglob("*") if path.is_file()}
+    before = campaign.tree_bytes(data)
+    validated = []
+
+    def measured(directory):
+        metadata = v3.read_json(Path(directory) / "episode.json")
+        assert metadata["success"] is True
+        return metric(metadata, 3)
+
+    monkeypatch.setattr(campaign, "strict_example_contract", lambda binary, directory, count: validated.append(Path(directory)))
+    result = campaign.point_examples(selected, data, Path("/contract"), metrics_fn=measured)
+    assert result["episodes"] == len(validated) == 10
+    assert result["decisions"] == 10000
+    assert result["backward"] == result["strafe"] == 10
+    assert campaign.tree_bytes(data) == before
+    paths = v3.module("nav_demos").episode_paths(data / "examples")
+    assert len(paths) == 10
+    for path in paths:
+        assert path.is_symlink()
+        assert path.resolve().is_relative_to(data / "v3-retry")
+        assert v3.read_json(path.parent / "episode.json")["success"] is True
+    assert all(path.read_bytes() == contents for path, contents in original.items())
+    # Idempotent validation preserves every original data file.
+    assert campaign.point_examples(selected, data, Path("/contract"), metrics_fn=measured)["paths"] == result["paths"]
+
+
+def test_point_example_corpus_rejects_failed_or_original_episode_links(tmp_path, monkeypatch):
+    selected, _, data = visible_fixture(tmp_path)
+    monkeypatch.setattr(campaign, "strict_example_contract", lambda *args: None)
+    measured = lambda path: metric(v3.read_json(Path(path) / "episode.json"), 3)
+    result = campaign.point_examples(selected, data, Path("/contract"), metrics_fn=measured)
+    example = Path(result["paths"][0])
+    value = next(value for value in selected if value["id"] == example.name)
+    link = example / "samples.bin.gz"
+    link.unlink()
+    link.symlink_to(campaign.cohort_directory(data, value, "v3") / "samples.bin.gz")
+    with pytest.raises(ValueError, match="outside its successful revised recording"):
+        campaign.point_examples(selected, data, Path("/contract"), metrics_fn=measured)
+    link.unlink()
+    link.symlink_to(campaign.cohort_directory(data, value, "v3-retry") / "samples.bin.gz")
+    failed = [value for value in selected if value["goal_kind"] == "point"][10]
+    unexpected = data / "examples/point" / failed["split"] / failed["id"]
+    unexpected.symlink_to(campaign.cohort_directory(data, failed, "v3-retry"), target_is_directory=True)
+    with pytest.raises(ValueError, match="Unexpected entry"):
+        campaign.point_examples(selected, data, Path("/contract"), metrics_fn=measured)
+
+
+def test_strict_point_example_contract_replays_readonly_and_requires_all_decisions(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "samples.bin.gz").write_bytes(b"preserved")
+    (source / "contract.json").write_bytes(b"original contract")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(dict(records=100, mismatches=0, previous_mismatches=0)), stderr="")
+
+    monkeypatch.setattr(campaign.subprocess, "run", run)
+    campaign.strict_example_contract(Path("/contract"), source, 100)
+    assert calls == [["/contract", str(source / "samples.bin.gz")]]
+    assert (source / "contract.json").read_bytes() == b"original contract"
+    with pytest.raises(ValueError, match="incomplete"):
+        campaign.strict_example_contract(Path("/contract"), source, 101)
+
+
+def test_visible_uses_unchanged_retry_binaries(tmp_path):
+    _, task, data = visible_fixture(tmp_path)
+    build = task / "build/opengothic"
+    build.mkdir(parents=True)
+    for name in ("gothic-body-runner", "gothic-navmemoryteacher-contract"):
+        (build / name).write_bytes(b"unchanged binary")
+    previous = dict(selection_sha256=campaign.binary_digest(task / "expanded-scenarios.jsonl"),
+                    runner_sha256=campaign.binary_digest(build / "gothic-body-runner"),
+                    contract_sha256=campaign.binary_digest(build / "gothic-navmemoryteacher-contract"))
+    v3.write_json(task / "retry-metrics.json", dict(retry_settings=previous))
+    options = SimpleNamespace(task=task, data=data, limit_ms=240000)
+    assert campaign.visible_settings(options)["cohort"] == "v3-visible"
+    (build / "gothic-body-runner").write_bytes(b"changed mechanics")
+    with pytest.raises(ValueError, match="unchanged"):
+        campaign.visible_settings(options)
+
+
+def test_visible_runs_only_the_independently_authorized_sixty_six_targets(tmp_path, monkeypatch):
+    selected, task, data = visible_fixture(tmp_path)
+    original = {path: path.read_bytes() for path in data.rglob("*") if path.is_file()}
+    original[task / "expanded-scenarios.jsonl"] = (task / "expanded-scenarios.jsonl").read_bytes()
+    trials = []
+
+    class Worker:
+        def __init__(self, args, version, budget):
+            assert args.output.name.startswith("v3-visible-")
+            assert isinstance(budget, campaign.StorageBudget)
+
+        def trial(self, value, directory):
+            assert value["goal_kind"] in ("object", "follow", "approach")
+            assert directory == campaign.cohort_directory(data, value, "v3-visible")
+            complete_episode(directory, value, 3)
+            trials.append(value)
+
+        def close(self):
+            pass
+
+    def measured(directory):
+        metadata = v3.read_json(Path(directory) / "episode.json")
+        return dict(metric(metadata, metadata["teacher_version"]), success=metadata["success"])
+
+    monkeypatch.setattr(campaign, "Worker", Worker)
+    monkeypatch.setattr(campaign, "phase_start", lambda _: None)
+    monkeypatch.setattr(campaign, "visible_settings", lambda _: dict(cohort="v3-visible", binary="unchanged"))
+    monkeypatch.setattr(campaign, "strict_example_contract", lambda *args: None)
+    monkeypatch.setattr(campaign, "retry_point_gate", lambda *args: pytest.fail("Visible targets have independent authorization"))
+    monkeypatch.setattr(v3, "episode_metrics", measured)
+    options = SimpleNamespace(task=task, data=data, parallel=3, limit_ms=240000, budget_seconds=60, stage="visible")
+    result = campaign.campaign(options)
+    assert Counter(value["goal_kind"] for value in trials) == dict(object=30, follow=18, approach=18)
+    assert result["selected"] == 66
+    assert result["all_passed"] is True and result["stop_required"] is False
+    assert result["point_stop"]["successes"] == 10 and result["point_stop"]["mechanics_closed"] is True
+    assert result["point_examples"]["episodes"] == 10
+    assert "comparison_point" not in result["checks"] and "contract_point" not in result["checks"]
+    assert not (data / "v3-visible/point").exists()
+    assert all(path.read_bytes() == contents for path, contents in original.items())
+    assert v3.read_json(task / "visible-metrics.json")["status"] == "complete"

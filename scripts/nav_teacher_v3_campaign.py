@@ -138,7 +138,7 @@ def tree_bytes(root):
     if root.exists():
         for path in root.rglob("*"):
             try:
-                if path.is_file():
+                if path.is_file() and not path.is_symlink():
                     total += path.stat().st_size
             except FileNotFoundError:
                 continue
@@ -540,7 +540,7 @@ def baseline(options, pool, probes, regions, workers, deadline):
 
 
 def cohort_directory(data, value, cohort="v3"):
-    if cohort not in ("v3", "v3-retry"):
+    if cohort not in ("v3", "v3-retry", "v3-visible"):
         raise ValueError(f"Unknown recording cohort: {cohort}")
     return Path(data) / cohort / value["goal_kind"] / value["split"] / value["id"]
 
@@ -822,9 +822,165 @@ def retry(options):
     return result
 
 
+def visible_preflight(task, data):
+    """Independent visible-target authorization does not reopen point mechanics."""
+    selected = list(v3.rows(Path(task) / "expanded-scenarios.jsonl"))
+    counts = dict(Counter(value["goal_kind"] for value in selected))
+    if counts != dict(point=30, object=30, follow=18, approach=18) or len({value["id"] for value in selected}) != 96:
+        raise ValueError(f"Visible stage requires the exact frozen 30/30/18/18 cohort: {counts}")
+    v3.validate_splits(selected)
+    point_successes = 0
+    for value in selected:
+        if value["goal_kind"] == "object":
+            baseline = v3.episode_directory(data, value, 2)
+            if Path(value["teacher_v2_episode"]).resolve() != baseline.resolve() or not v3.complete(baseline):
+                raise ValueError(f"Visible object baseline is not preserved DATA/v2: {value['id']}")
+            metadata = v3.read_json(baseline / "episode.json")
+            if not v3.same_scenario(metadata, value, 2) or metadata.get("success") is not True:
+                raise ValueError(f"Visible stage requires a matching successful object v2 baseline: {value['id']}")
+        elif value["goal_kind"] == "point":
+            directory = cohort_directory(data, value, "v3-retry")
+            if not v3.complete(directory) or not (directory / "contract.json").is_file():
+                raise ValueError(f"Closed point retry recording is missing: {value['id']}")
+            metadata = v3.read_json(directory / "episode.json")
+            if not v3.same_scenario(metadata, value, 3):
+                raise ValueError(f"Closed point retry identity changed: {value['id']}")
+            point_successes += metadata.get("success") is True
+    if point_successes != 10:
+        raise ValueError(f"Closed retry cohort must remain 10/30, found {point_successes}/30")
+    return selected, dict(successes=10, attempted=30, stop_required=True, mechanics_closed=True)
+
+
+def visible_settings(options):
+    settings = dict(selection_sha256=binary_digest(options.task / "expanded-scenarios.jsonl"),
+                    runner_sha256=binary_digest(options.task / "build/opengothic/gothic-body-runner"),
+                    contract_sha256=binary_digest(options.task / "build/opengothic/gothic-navmemoryteacher-contract"),
+                    limit_ms=options.limit_ms, cohort="v3-visible")
+    previous = v3.read_json(options.task / "retry-metrics.json").get("retry_settings", {})
+    if any(settings[key] != previous.get(key) for key in ("selection_sha256", "runner_sha256", "contract_sha256")):
+        raise ValueError("Visible targets must use the unchanged frozen selection and revised v3 binaries")
+    return settings
+
+
+def strict_example_contract(binary, directory, decisions):
+    """Replay read-only: never rewrite the preserved successful point evidence."""
+    result = subprocess.run([str(binary), str(Path(directory) / "samples.bin.gz")],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+    if result.returncode:
+        raise ValueError(f"Successful point example does not replay: {directory}: {result.stderr[-2000:]}")
+    contract = json.loads(result.stdout)
+    if contract.get("records") != decisions or contract.get("mismatches") != 0 or contract.get("previous_mismatches") != 0:
+        raise ValueError(f"Successful point example contract is incomplete: {directory}: {contract}")
+    return contract
+
+
+def point_examples(selected, data, contract_binary, metrics_fn=None):
+    metrics_fn = metrics_fn or v3.episode_metrics
+    root = Path(data) / "examples/point"
+    successful = []
+    for value in selected:
+        if value["goal_kind"] != "point":
+            continue
+        directory = cohort_directory(data, value, "v3-retry")
+        metadata = v3.read_json(directory / "episode.json")
+        if metadata.get("success") is True:
+            successful.append((value, directory))
+    if len(successful) != 10:
+        raise ValueError(f"Point examples must contain exactly 10 successful revised episodes, found {len(successful)}")
+    expected = {root / value["split"] / value["id"] for value, _ in successful}
+    for existing in root.glob("*/*"):
+        if existing not in expected or existing.is_symlink() or not existing.is_dir():
+            raise ValueError(f"Unexpected entry in successful point examples: {existing}")
+    metrics, destinations = [], []
+    names = ("episode.json", "samples.bin.gz", "actions.txt", "trajectory.txt", "contract.json", "teacher-paths.jsonl")
+    for value, directory in successful:
+        metadata = v3.read_json(directory / "episode.json")
+        if not v3.same_scenario(metadata, value, 3) or not v3.complete(directory):
+            raise ValueError(f"Successful point example identity is invalid: {directory}")
+        measured = metrics_fn(directory)  # NAVDEMO check and saved strict contract.
+        if measured.get("success") is not True or measured.get("contract_records") != measured.get("decisions"):
+            raise ValueError(f"Successful point example validation is incomplete: {directory}")
+        strict_example_contract(contract_binary, directory, measured["decisions"])
+        destination = root / value["split"] / value["id"]
+        destination.mkdir(parents=True, exist_ok=True)
+        if any(path.name not in names for path in destination.iterdir()):
+            raise ValueError(f"Unexpected files in point example: {destination}")
+        for name in names:
+            source = (directory / name).resolve()
+            target = destination / name
+            if not source.is_file():
+                raise ValueError(f"Successful point example lacks {name}: {directory}")
+            if target.exists() or target.is_symlink():
+                if not target.is_symlink() or target.resolve() != source:
+                    raise ValueError(f"Point example link points outside its successful revised recording: {target}")
+            else:
+                target.symlink_to(source)
+        metrics.append(measured)
+        destinations.append(str(destination))
+    return dict(v3.group_metrics(metrics), paths=destinations, source_cohort="v3-retry", examples_root=str(root),
+                selection="Only the 10 successful revised points; all failed raw recordings remain preserved as diagnostic evidence")
+
+
+def evaluate_visible_selection(selected, data, metrics_fn=None):
+    if any(value["goal_kind"] == "point" for value in selected):
+        raise ValueError("Visible evaluation must not include point scenarios")
+    result = evaluate_selection(selected, data, metrics_fn, cohort="v3-visible")
+    result["checks"].pop("comparison_point")
+    result["checks"].pop("contract_point")
+    result["all_passed"] = all(result["checks"].values())
+    result["stop_required"] = False
+    return result
+
+
+def visible(options):
+    frozen, point_stop_state = visible_preflight(options.task, options.data)
+    settings = visible_settings(options)
+    output = options.task / "visible-metrics.json"
+    if output.is_file() and v3.read_json(output).get("visible_settings") != settings:
+        raise ValueError("Visible target recordings belong to another binary or frozen cohort")
+    deadline = time.monotonic() + options.budget_seconds
+    budget = StorageBudget(options.task, options.data)
+    examples = point_examples(frozen, options.data, options.task / "build/opengothic/gothic-navmemoryteacher-contract")
+    selected = [value for value in frozen if value["goal_kind"] != "point"]
+    shared = dict(visible_settings=settings, recording_cohort="v3-visible", point_stop=point_stop_state,
+                  independent_visible_target_authorization=True, point_examples=examples)
+    v3.write_json(output, dict(shared, status="recording_visible_targets"))
+    workers = []
+    for index in range(options.parallel):
+        args = worker_args(options, 3, index)
+        args.output = options.task / "workers" / f"v3-visible-{index}"
+        workers.append(Worker(args, 3, budget))
+    metric_cache = {}
+
+    def measured(directory):
+        directory = Path(directory)
+        if directory not in metric_cache:
+            metric_cache[directory] = v3.episode_metrics(directory)
+        return metric_cache[directory]
+
+    try:
+        for kind in ("object", "follow", "approach"):
+            phase_start(f"v3-visible-{kind}")
+            values = [value for value in selected if value["goal_kind"] == kind]
+            emit("visible_started", kind=kind, scenarios=len(values), point_rollouts=0)
+            run_parallel(values, workers, lambda worker, value: worker.trial(value, cohort_directory(options.data, value, "v3-visible")), deadline)
+            result = evaluate_visible_selection(selected, options.data, metrics_fn=measured)
+            result.update(shared, status=f"recorded_{kind}")
+            v3.write_json(output, result)
+        result["status"] = "complete"
+        v3.write_json(output, result)
+    finally:
+        for worker in workers:
+            worker.close()
+    emit("visible_complete", **{key: value for key, value in result.items() if key not in ("episodes", "point_examples")})
+    return result
+
+
 def campaign(options):
     if options.stage == "retry":
         return retry(options)
+    if options.stage == "visible":
+        return visible(options)
     deadline = time.monotonic() + options.budget_seconds
     budget = StorageBudget(options.task, options.data)
     selection = options.task / "expanded-scenarios.jsonl"
@@ -882,7 +1038,7 @@ def main():
     parser.add_argument("--min-objects", type=int, default=30)
     parser.add_argument("--min-object-places", type=int, default=30)
     parser.add_argument("--per-region", type=int, default=5)
-    parser.add_argument("--stage", choices=("campaign", "evaluate", "analyze", "retry"), default="campaign")
+    parser.add_argument("--stage", choices=("campaign", "evaluate", "analyze", "retry", "visible"), default="campaign")
     parser.add_argument("--limit-ms", type=int, default=240000)
     parser.add_argument("--budget-seconds", type=float, default=6900)
     options = parser.parse_args()
@@ -894,7 +1050,7 @@ def main():
     try:
         result = campaign(options)
     except Exception as exc:
-        error_file = "retry-error.json" if options.stage == "retry" else "campaign-error.json"
+        error_file = f"{options.stage}-error.json" if options.stage in ("retry", "visible") else "campaign-error.json"
         v3.write_json(options.task / error_file, dict(error=type(exc).__name__, detail=str(exc)))
         emit("campaign_failed", error=type(exc).__name__, detail=str(exc))
         raise
