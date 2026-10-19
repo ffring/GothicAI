@@ -27,38 +27,114 @@
 
 ## Классы материалов
 
-Плитка — физический размер одной плитки материала в метрах; из него и плотности UV текстуры Gothic считается масштаб в `materials.json`: `scale = UV-медиана из переписи / плитка`. Яркость — диапазон средней линейной яркости альбедо. Шероховатость — ориентир для фильтра.
+Для однородных материалов ниже плитка — физический размер одной плитки в метрах; из него и плотности UV текстуры Gothic считается масштаб в `materials.json`: `scale = UV-медиана из переписи / плитка`. Для архитектурных модулей действует отдельное правило `scale = 1` из раздела «Задумка прежде материала». Яркость — диапазон средней линейной яркости альбедо. Шероховатость — ориентир для фильтра.
 
-| Класс | Что | Плитка, м | Яркость | Шероховатость | Антиповтор | Ядро промпта (англ.) |
-|---|---|---:|---|---|---|---|
-| `cobble` | булыжная мостовая, камни 10–20 см | 2 | 0,10–0,20 | 0,75–0,90 | `rotate` | rounded cobblestone street pavement, irregular stones with dirt-filled joints |
-| `flagstone` | плиты набережной и пола, 40–80 см | 3 | 0,12–0,22 | 0,70–0,90 | `rotate` | large worn stone flag slabs, uneven, chipped edges |
-| `masonry_dressed` | тёсаная кладка городской и портовой стены, блоки 30–60 см | 3 | 0,12–0,22 | 0,75–0,95 | `offset` | dressed stone block masonry wall, irregular courses, weathered mortar |
-| `masonry_rubble` | бутовая кладка: подвалы, подземелье, фундаменты | 2 | 0,08–0,18 | 0,80–0,95 | `rotate` | rough rubble stone wall, uneven fieldstones in thick mortar |
-| `plaster` | штукатурка стен домов | 2 | 0,25–0,40 | 0,85–0,95 | `rotate` | old lime plaster wall, off-white to ochre, stains, cracks, patches |
-| `planks_floor` | доски пола, 15–25 см | 2 | 0,06–0,14 | 0,60–0,85 | `offset` | old wooden floorboards, worn, dark grime between boards |
-| `planks_wall` | дощатая стена, вертикальные доски | 2 | 0,06–0,14 | 0,70–0,90 | `offset` | vertical weathered wooden plank wall, gaps, nail marks |
-| `timber_beam` | балки и брёвна | 1,5 | 0,05–0,12 | 0,65–0,85 | `offset` | dark old timber beam wood grain, cracks, adze marks |
-| `roof_shingle` | деревянная дранка | 2 | 0,05–0,12 | 0,80–0,95 | `offset` | weathered wooden roof shingles, overlapping, moss in places |
-| `roof_tiles` | глиняная черепица | 2 | 0,08–0,16 | 0,70–0,90 | `offset` | old clay roof tiles, faded brownish red, lichen |
-| `thatch` | солома | 2 | 0,08–0,15 | 0,90–1,00 | `offset` | old straw thatch roof, grey-brown, compacted |
-| `dirt_path` | утоптанная земля, дороги и дворы | 3 | 0,07–0,15 | 0,85–1,00 | `rotate` | soft packed brown earth road, cart wheel ruts and hoof prints, scattered straw, sparse small pebbles, continuous soil surface |
-| `mud` | грязь у воды и в низинах | 3 | 0,05–0,12 | 0,55–0,85 | `rotate` | wet dark brown mud ground, shallow puddles, hoof prints, scattered straw, continuous soft soil surface |
+| Класс | Что | Плитка, м | Яркость | Шероховатость | Ядро промпта (англ.) |
+|---|---|---:|---|---|---|
+| `cobble` | булыжная мостовая, камни 10–20 см | 2 | 0,10–0,20 | 0,75–0,90 | rounded cobblestone street pavement, irregular stones with dirt-filled joints |
+| `flagstone` | плиты набережной и пола, 40–80 см | 3 | 0,12–0,22 | 0,70–0,90 | large worn stone flag slabs, uneven, chipped edges |
+| `masonry_dressed` | тёсаная кладка городской и портовой стены, блоки 30–60 см | 3 | 0,12–0,22 | 0,75–0,95 | dressed stone block masonry wall, irregular courses, weathered mortar |
+| `masonry_rubble` | бутовая кладка: подвалы, подземелье, фундаменты | 2 | 0,08–0,18 | 0,80–0,95 | rough rubble stone wall, uneven fieldstones in thick mortar |
+| `plaster` | штукатурка стен домов | 2 | 0,25–0,40 | 0,85–0,95 | old lime plaster wall, off-white to ochre, stains, cracks, patches |
+| `planks_floor` | доски пола, 15–25 см | 2 | 0,06–0,14 | 0,60–0,85 | old wooden floorboards, worn, dark grime between boards |
+| `planks_wall` | дощатая стена, вертикальные доски | 2 | 0,06–0,14 | 0,70–0,90 | vertical weathered wooden plank wall, gaps, nail marks |
+| `timber_beam` | балки и брёвна | 1,5 | 0,05–0,12 | 0,65–0,85 | dark old timber beam wood grain, cracks, adze marks |
+| `roof_shingle` | деревянная дранка | 2 | 0,05–0,12 | 0,80–0,95 | weathered wooden roof shingles, overlapping, moss in places |
+| `roof_tiles` | кровельные плитки; у городской `ROOF_04` — серые каменные пластинки | 2 | 0,08–0,16 | 0,70–0,90 | weathered grey stone roof slates, overlapping courses, dark joints, lichen |
+| `thatch` | солома | 2 | 0,08–0,15 | 0,90–1,00 | old straw thatch roof, grey-brown, compacted |
+| `dirt_path` | утоптанная земля, дороги и дворы | 3 | 0,07–0,15 | 0,85–1,00 | soft packed brown earth road, cart wheel ruts and hoof prints, scattered straw, sparse small pebbles, continuous soil surface |
+| `mud` | грязь у воды и в низинах | 3 | 0,05–0,12 | 0,55–0,85 | wet dark brown mud ground, shallow puddles, hoof prints, scattered straw, continuous soft soil surface |
 
-Антиповтор задаётся полем `antitile` записи `materials.json`: `rotate` разрешает случайный поворот плитки, `offset` сохраняет направление кладки, досок и кровли. `antitile_cell` — размер ячейки в единицах плитки (по умолчанию 1,0); отсутствие `antitile` или `off` оставляет обычный повтор.
+Рекомендованные режимы однородных классов при разрешённом антиповторе:
 
-Металличность у всех классов этапа 1 — 0. Классы добавляются по мере этапов; новый класс — строка в этой таблице.
+| Класс | Антиповтор |
+|---|---|
+| `cobble` | `rotate` |
+| `flagstone` | `rotate` |
+| `masonry_dressed` | `offset` |
+| `masonry_rubble` | `rotate` |
+| `plaster` | `rotate` |
+| `planks_floor` | `offset` |
+| `planks_wall` | `offset` |
+| `timber_beam` | `offset` |
+| `roof_shingle` | `offset` |
+| `roof_tiles` | `offset` |
+| `thatch` | `offset` |
+| `dirt_path` | `rotate` |
+| `mud` | `rotate` |
+
+Антиповтор задаётсяполем `antitile` записи `materials.json`: `rotate` разрешает случайный поворот плитки, `offset` сохраняет направление кладки, досок и кровли. `antitile_cell` — размер ячейки в единицах плитки (по умолчанию 1,0); отсутствие `antitile` или `off` оставляет обычный повтор.
+
+При подготовке замены сначала учитывается `anti_repeat` конкретной записи CSV: для `off`, в том числе у всех модулей, антиповтор должен оставаться выключенным. Таблица режимов не меняет эту политику и пока не подключена к генератору. Основная таблица материалов сохраняет шесть колонок, которые читает действующий `generate.py`.
+
+Металличность у однородных классов этапа 1 — 0. Классы добавляются по мере этапов; новые классы панелей, полос и модулей перечислены отдельно ниже и пока не подключены к генератору.
 
 ## Промпт
+
+Для однородного материала с решением `include`:
 
 `<ядро класса>, <состояние из записи>, late medieval poor harbour town, weathered, damp, grime in the cracks, muted earthy colors, evenly distributed small details, no large isolated features, seamless tileable texture, top-down orthographic view, even overcast light, no shadows, no highlights, no text, no logos`
 
 Для классов грунта (`dirt_path`, `mud`) общий хвост — без `grime in the cracks`.
 
-Состояние распределяется равномерно по всей плитке, без указаний положения.
+Для такого материала состояние распределяется равномерно по всей плитке, без указаний положения. Для решений `panel`, `strip` и `module` вместо требования равномерности и общей бесшовности используются роль частей, расположение износа и ограничения соответствующего вида из раздела ниже. Общими остаются палитра, ровный свет и отсутствие теней, бликов, надписей и логотипов.
 
 Состояние из записи — несколько слов на текстуру («patchy moss», «soot stains», «salt stains»), чтобы соседние стены не выглядели одной текстурой. Генератор — FLUX.1-schnell, карты — свой фильтр ([сравнение](../reports/content/2026-10-material-bakeoff/README.md)).
 
 ## Как принимаем
 
 Наборами, а не файлами: лист материалов набора и снимки из игры днём и ночью на точках стенда. Пользователь принимает класс целиком; замечание к одному материалу — правка его записи и новая генерация.
+
+## Задумка прежде материала
+
+2026-10-19: первый набор потерял назначение фахверковых текстур. Перед генерацией описываем место, роль и раскладку, затем `depicts`, `colour`, `weathering` и `orientation` общими английскими словами. Светлая середина штукатурного заполнения и грязь у балок имеют смысл относительно рамы; их нельзя заменять равномерными крупными пятнами. Если рама нарисована в той же текстуре, она тоже часть конструкции, которую нужно описать. Оригинальные изображения служат только для изучения назначения и не подаются генератору.
+
+Раскладка и решение таблицы отвечают на разные вопросы. `layout=tiled` означает повтор по поверхности; если внутри повтора несколько архитектурных частей, решение — `module`, а не однородный материал. То же правило действует для составной балки с обвязкой, дорожки с вытоптанной серединой и краями, перехода мощения в грунт. Сохраняем исходный ритм UV: у `module` всегда `scale = 1`, антиповтор `off`. Сдвиг и поворот разрывают совмещение каркаса, окон, поясов, ступеней и границ поверхностей.
+
+Замена модуля сохраняет вид и функции его частей, описанные словами, а не рисунок оригинала. Его пропорции и число повторов на типичной грани берём из UV и геометрии места и записываем в карточку текстуры. Общий физический размер плитки класса к модулю не применяем. Края делаем бесшовными только по направлениям повтора; верх и низ, поперечные границы и расположение износа сохраняют свой смысл.
+
+У однородного материала тоже может быть направление: волокна досок, нахлёст кровли, ряды обшивки. Для таких `include` в таблице также указан антиповтор `off`; для ненаправленного материала допустим `on`. Цвет и вещество определяются полями конкретной записи: городская `ROOF_04` изображает серую каменную кровлю, поэтому прежнее ядро `roof_tiles` про красную глину исправлено. Это описание для будущих рецептов; существующие наборы не пересчитываются.
+
+Классы модулей (правило принято; подключение к генератору — отдельная работа):
+
+| Класс | Назначение | Состав словами (англ.) | Масштаб | Антиповтор | Бесшовность | Примеры применения |
+|---|---|---|---|---|---|---|
+| `timber_frame_tile` | повторяемая стена фахверка | half-timber wall module: dark timber posts at the sides, rails at the top and bottom, whitewashed plaster infill, dirtier toward the frame | `1` | `off` | по направлениям повтора из UV | `NW_CITY_WALL_03.TGA`, `NW_CITY_WALL_04.TGA`, `NW_CITY_WALL_05.TGA`, `NW_CITY_RICH_WALL_01.TGA`, `NW_CITY_RICH_WALL_HALF_01.TGA` |
+| `framed_masonry_tile` | повторяемый цоколь или внутренняя стена с кладкой в обвязке | masonry wall module: stone infill held by structural framing, a distinct base and upper boundary, damp wear toward the bottom | `1` | `off` | по направлениям повтора из UV | `NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA`, `NW_CITY_INSIDEWALL_11.TGA` |
+| `framed_boards_tile` | повторяемая дощатая обшивка потолков и стен с обвязкой | boarded interior module: boards within a timber frame, dirt at joints and frame contacts | `1` | `off` | по направлениям повтора из UV | `NW_CITY_INSIDEWALL_12.TGA` |
+| `window_wall_tile` | повторяемая стена с оконными проёмами | window wall module: window openings within a supporting wall, framing around openings, weathering below sills and at joints | `1` | `off` | по направлениям повтора из UV | `NW_CITY_WINDOW_03.TGA`, `NW_CITY_RICH_WINDOW_01.TGA`, `NW_CITY_HAFEN_HOLZWAND_02.TGA` |
+| `quay_wall_tile` | повторяемая стенка набережной с горизонтальным уступом | quay wall module: rough masonry above and below a continuous horizontal stone ledge, darker damp joints, worn exposed ledge | `1` | `off` | вдоль набережной, если это направление повторяется | `NW_CITY_HAFENKAI_MAUER_01.TGA` |
+| `roof_structure_tile` | повторяемая внутренняя обшивка кровли вместе с каркасом | inner roof module: boards supported by timber members, dust at contacts and joints, smoke wear where appropriate | `1` | `off` | по направлениям повтора из UV | `NW_CITY_ROOF_INSIDE_01.TGA` |
+| `stair_tile` | повторяемая группа ступеней с проступями и подступенками | stair module: a sequence of treads and riser fronts, worn projecting nosings and darker recesses, preserve the geometric step rhythm | `1` | `off` | по направлениям повтора из UV, с совмещением частей ступени | `NW_HARBOUR_STAIRS_01.TGA`, `NW_HARBOUR_STAIRS_03.TGA` |
+| `pavement_border_tile` | повторяемая окантовка каменного мощения | pavement border module: a narrow edging course borders fields of small paving stones, darker joints and worn stone tops | `1` | `off` | вдоль границы, если это направление повторяется | `NW_CITY_PFLASTERSTEIN_BORDER_01.TGA` |
+| `bound_timber_tile` | повторяемая балка или деревянная секция с металлической обвязкой | bound timber module: timber grain along the member, crossing iron bindings, wear at contacts and edges | `1` | `off` | вдоль оси балки, поперечные границы закреплены | `NW_CITY_WOODBEAM_01.TGA`, `NW_CITY_WOODBEAM_02.TGA`, `NW_CITY_WOODBEAM_03.TGA`, `NW_HARBOUR_WOOD_IRON_01.TGA` |
+| `banded_metal_tile` | металлическая оболочка с усиливающими поясами | banded metal module: a weathered metal body with reinforcing bands across its axis, worn exposed bands and darker contacts | `1` | `off` | вокруг оболочки по U; положение поясов по V закреплено | `NW_HARBOUR_CANON_01.TGA`: стволы пушек и конструкции светильников |
+| `path_tile` | повторяемая дорожка с вытоптанной серединой и менее затронутыми краями | path module: walked earth centre, grass and debris toward the margins, wear following the route | `1` | `off` | вдоль дорожки, без сдвига поперёк неё | `NW_CITY_DIRTYGROUND_WEG_02.TGA`, `NW_CITY_DIRTYGROUND_WEG_03.TGA` |
+| `paving_transition_tile` | повторяемый переход от каменного мощения к земле | paving transition module: stone paving on one side merging into earth on the other, dirt gathered along the boundary | `1` | `off` | вдоль границы, поперечные стороны сохраняют свои поверхности | `NW_CITY_HAFENKAI_BODEN_TRANS_01.TGA` |
+
+Предлагаемые классы панелей и полос пока не подключены к генератору:
+
+| Класс | Назначение и расположение деталей |
+|---|---|
+| `plaster_panel` | ограниченное рамой штукатурное заполнение; светлее в середине, грязь у контакта с деревом и у нижнего края |
+| `timber_frame_panel` | целый стеновой модуль с деревянной рамой и заполнением либо оконным проёмом; ориентация и края закреплены |
+| `masonry_panel` | цокольная секция с верхней балкой, кладкой и нижним основанием; сырость внизу |
+| `planks_panel` | ограниченная дощатая секция, дверь или грань ящика; стыки, обвязка и износ относятся к краям секции |
+| `roof_panel` | ограниченный участок конструкции кровли; верх, низ и направление перекрытия заданы местом |
+| `stone_panel` | ограниченное каменное заполнение или ступень; износ относительно кромок и опорной поверхности |
+| `ground_panel` | ограниченный участок грунта, окончание дорожки или переход грунта в мощение; состав поверхностей и положение границы определяются местом |
+| `painted_panel` | ограниченная окрашенная поверхность; без переноса узнаваемого орнамента оригинала |
+| `iron_panel` | ограниченная металлическая деталь или решётка; стыки и коррозия относительно кромок и креплений |
+| `cloth_panel` | целое полотнище; кромки, натяжение, потёртости у креплений и грязь внизу |
+| `foliage_panel` | ограниченная растительная плоскость; форма кроны или пучка определяется местом, без требования бесшовности |
+| `net_panel` | целая секция сети; край и крепления закреплены, износ у натянутых узлов |
+| `rope_panel` | ограниченная укладка или соединение верёвки; концы и изгибы относятся к геометрии участка |
+| `timber_strip` | балка или деревянный наличник; повтор только вдоль волокон |
+| `stone_strip` | бордюр, каменный пояс или ряд ступеней; повтор вдоль ряда, поперечные края закреплены |
+| `roof_ridge_strip` | конёк кровли; повтор вдоль гребня, разные края обращены к двум скатам |
+| `plaster_strip` | узкий архитектурный пояс штукатурного заполнения; износ относительно его границ |
+| `rope_strip` | верёвка вдоль своей оси; переплетение повторяется вдоль, поперечные края сохраняют ширину |
+| `iron_strip` | металлическая полоса или обвязка; повтор вдоль, кромки и коррозия закреплены поперёк |
+| `net_strip` | длинная полоса сети; повтор вдоль пролёта, верхняя и нижняя границы закреплены |
+
+Панель генерируется целиком под участок без требования бесшовности; износ привязан к его краям, низу или креплениям по роли. Полоса повторяется только вдоль своей оси и бесшовна в этом направлении; её поперечные края закреплены. Атлас из разных частей исключается из замены материалов и уходит вместе с моделью на этап 2.

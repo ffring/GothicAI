@@ -1,6 +1,7 @@
 """Set recipes, physical levels and retained retries without loading FLUX."""
 from pathlib import Path
 from copy import deepcopy
+import csv
 import sys
 
 import numpy as np
@@ -20,8 +21,10 @@ def recipes():
 
 def test_real_inputs_cover_includes_with_unique_pinned_text_recipes():
     records = recipes()
-    assert len(records) == 36
-    assert len({r['seed'] for r in records}) == len({r['id'] for r in records}) == 36
+    with (ROOT/'data/content/city-materials.csv').open(newline='') as stream:
+        included = {row['texture'] for row in csv.DictReader(stream) if row['decision'] == 'include'}
+    assert {r['replaces'][0] for r in records} == included
+    assert len({r['seed'] for r in records}) == len({r['id'] for r in records}) == len(included)
     for record in records:
         registry.validate_entry(record)
         assert record['parameters']['state'] in record['prompt']
@@ -29,6 +32,20 @@ def test_real_inputs_cover_includes_with_unique_pinned_text_recipes():
         assert record['parameters']['steps'] == 4
         assert record['parameters']['guidance_scale'] == 0
         assert record['models'][0]['revision'] == generate.bakeoff.FLUX_REVISION
+
+
+def test_module_panel_strip_and_atlas_decisions_do_not_enter_tile_generation(tmp_path):
+    mapping = tmp_path/'materials.csv'
+    mapping.write_text(
+        'texture,decision,class,state,scale,anti_repeat\n'
+        'PAVING.TGA,include,cobble,very worn,1,on\n'
+        'FRAME.TGA,module,timber_frame_tile,dirty edges,1,off\n'
+        'INFILL.TGA,panel,plaster_panel,dirty edges,1,off\n'
+        'BEAM.TGA,strip,timber_strip,very worn,1,off\n'
+        'DOOR.TGA,exclude,,,,off\n'
+    )
+    records = generate.recipes(mapping, ROOT/'docs/content-style.md', 'test')
+    assert [record['replaces'] for record in records] == [['PAVING.TGA']]
 
 
 def test_prepare_preserves_progress_and_detects_changed_inputs(tmp_path):
