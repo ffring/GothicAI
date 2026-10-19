@@ -124,6 +124,70 @@ async def test_npc_case_accepts_actual_or_false_culprit_and_keeps_truth_in_code(
     assert s.deeds.crime(crime["id"])["culprit"] == THIEF
 
 
+async def test_hunch_without_hero_words_is_refuted_without_catching_the_hero(system):
+    s = system
+    crime = hero_case(s)
+    conv = s.dialogue.open(LOBART, "Лобарт")
+    conv.trigger = None
+    conv.memory.entries = [Message("assistant", "Наверное, это Вино взял кубок.")]
+    assert (await accuse(s, crime["id"])).status == "accepted"
+    belief = s.blame.active(LOBART, crime["id"])
+    assert belief["because"] == "hunch" and "said" not in belief
+    s.chronicle.record({
+        "fact": "npc_crime_defense", "crime": crime["id"], "culprit": THIEF,
+        "blamed": belief["id"], "fighter": LOBART, "outcome": "no_goods",
+    })
+    await drain(s)
+    assert s.blame.active(LOBART, crime["id"]) is None
+    assert len(s.chronicle.facts("blame_refuted")) == 1
+    assert not s.chronicle.facts("caught") and not s.chronicle.facts("claim")
+    assert not Trust(s.chronicle).of(LOBART).lied
+
+
+@pytest.mark.parametrize("current", [False, True])
+async def test_declined_name_selects_the_exact_recent_hero_line(system, current):
+    s = system
+    crime = hero_case(s)
+    s.deeds.cards[THIEF].name = "Малак"
+    s.crimes.names = lambda npc: "Малак" if npc == THIEF else NAMES.get(npc, npc)
+    conv = s.dialogue.open(LOBART, "Лобарт")
+    said = "Это Малака работа."
+    conv.memory.entries = [Message("user", "Малак был у дороги.")]
+    if not current:
+        conv.memory.entries.extend([Message("user", said), Message("user", "Хорошая погода.")])
+    conv.trigger = Message("user", said if current else "Привет.")
+    assert (await accuse(s, crime["id"], "Малак")).status == "accepted"
+    belief = s.blame.active(LOBART, crime["id"])
+    assert belief["because"] == "hero_words" and belief["said"] == said
+    await s.blame.refute(belief)
+    assert s.chronicle.facts("caught")[0]["title"] == said
+
+
+@pytest.mark.parametrize("words", ["Привет.", "Кто-то взял кубок.", "Я виноват."])
+async def test_hero_words_without_the_accused_name_are_a_hunch(system, words):
+    s = system
+    crime = hero_case(s)
+    conv = s.dialogue.open(LOBART, "Лобарт")
+    conv.trigger = Message("user", words)
+    conv.memory.entries = [Message("assistant", WORDS), Message("system", WORDS)]
+    assert (await accuse(s, crime["id"])).status == "accepted"
+    belief = s.blame.active(LOBART, crime["id"])
+    assert belief["because"] == "hunch" and "said" not in belief
+    await s.blame.refute(belief)
+    assert not s.chronicle.facts("caught") and not s.chronicle.facts("claim")
+
+
+async def test_old_hero_words_outside_recent_lines_do_not_turn_a_hunch_into_a_claim(system):
+    s = system
+    crime = hero_case(s)
+    conv = s.dialogue.open(LOBART, "Лобарт")
+    conv.trigger = Message("user", "Привет.")
+    conv.memory.entries = [Message("user", WORDS), *[Message("user", "Погода.") for _ in range(8)]]
+    assert (await accuse(s, crime["id"])).status == "accepted"
+    belief = s.blame.active(LOBART, crime["id"])
+    assert belief["because"] == "hunch" and "said" not in belief
+
+
 @pytest.mark.parametrize("kind", ["hero", "npc"])
 async def test_eyewitness_victim_cannot_blame_anyone(system, kind):
     crime = hero_case(system, seen=True) if kind == "hero" else npc_case(system, seen=True)

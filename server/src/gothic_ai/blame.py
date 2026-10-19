@@ -7,18 +7,20 @@ knows whether the hero's accusation was true, and uses the ordinary honesty cons
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
 
 from .chronicle import Chronicle, Fact
 from .crimes import HERO, SUSPECT_MIN, Crimes
 from .journal import Journal
+from .knowledge import roots
 from .llm import Tool, ToolCall
 from .npc_crimes import NpcCrimes
 from .people_knowledge import PeopleKnowledge
 from .protocol import GameMessage, Loading, Session, Snapshot
 from .quests import Lie, caught
-from .sightings import Sighting
+from .sightings import HEARD, Sighting
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
@@ -184,10 +186,24 @@ class Blame:
         )
 
     @staticmethod
-    def _words(conv: Conversation) -> str:
+    def _words(conv: Conversation, name: str) -> str:
+        """The latest recent hero line naming the accused, with the witness name-stem rule."""
+        name = name.casefold().replace("ё", "е").strip()
+        if not name:
+            return ""
+        stem = name[:max(3, min(4, len(name) - 1))]
+        named = re.compile(rf"(?<!\w){re.escape(name)}(?!\w)")
+
+        def mentions(line: str) -> bool:
+            words = line.casefold().replace("ё", "е")
+            return bool(named.search(words)) or any(
+                root.startswith(stem) and name.startswith(root) for root in roots(words)
+            )
+
+        lines = [e.content for e in conv.memory.entries if e.role == "user"][-HEARD:]
         if conv.trigger is not None and conv.trigger.role == "user":
-            return conv.trigger.content.strip()
-        return next((e.content.strip() for e in reversed(conv.memory.entries) if e.role == "user"), "")
+            lines.append(conv.trigger.content)
+        return next((line.strip() for line in reversed(lines) if mentions(line)), "")
 
     async def handle(
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None,
@@ -220,16 +236,15 @@ class Blame:
                           and (cid in f.get("crime_told", []) or self._trace_matches(
                               [Sighting.of(row) for row in f.get("told", [])], culprit, crime,
                           ))), None)
-        said = self._words(conv)
+        culprit_name, name = self.crimes.names(culprit), self.crimes.names(npc)
+        said = self._words(conv, culprit_name)
         because = (
             f"testimony:{testimony['id']}" if testimony is not None
-            else "own" if self._own_trace(npc, culprit, crime) else "hero_words"
+            else "own" if self._own_trace(npc, culprit, crime)
+            else "hero_words" if said else "hunch"
         )
-        if because == "hero_words" and not said:
-            return ToolOutcome("Отклонено: о его причастности тебе никто не говорил.", "rejected")
         number = 1 + len(self.chronicle.facts("blamed"))
         action = self._title(crime)
-        culprit_name, name = self.crimes.names(culprit), self.crimes.names(npc)
         fact = {
             "fact": "blamed", "id": f"BLAME_{number}", "npc": npc,
             "name": name, "culprit": culprit,

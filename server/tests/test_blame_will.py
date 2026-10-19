@@ -128,10 +128,11 @@ async def test_hero_crime_can_launch_reclaim_against_accused_without_changing_tr
     assert "culprit" not in crime or crime["culprit"] == "PLAYER"
 
 
-@pytest.mark.parametrize("because", ["hero_words", "testimony:TESTIMONY_1", "own"])
+@pytest.mark.parametrize("because", ["hero_words", "testimony:TESTIMONY_1", "own", "hunch"])
 async def test_no_goods_refutes_belief_and_only_hero_words_expose_a_lie(system, because):
     crime = base.theft(system)
     belief = believe(system, crime, because=because)
+    assert ("said" in belief) is (because == "hero_words")
     system.link.values = [1, 0, 0, 0, 1, 0, 0]
     base.scene(system, target=HILDA)
     await system.will.tick(base.NOW)
@@ -156,10 +157,11 @@ async def test_no_goods_refutes_belief_and_only_hero_words_expose_a_lie(system, 
         assert system.dialogue.open(LOBART, NAMES[LOBART]).intent.attitude == "wary"
 
 
-@pytest.mark.parametrize("because", ["hero_words", "testimony:TESTIMONY_1"])
+@pytest.mark.parametrize("because", ["hero_words", "testimony:TESTIMONY_1", "hunch"])
 async def test_true_accusation_returns_real_goods_and_credits_only_the_hero_claim(system, because):
     crime = base.theft(system)
     belief = believe(system, crime, culprit=THIEF, because=because)
+    assert ("said" in belief) is (because == "hero_words")
     base.scene(system)
     await system.will.tick(base.NOW)
     await settle(system)
@@ -175,6 +177,7 @@ async def test_true_accusation_returns_real_goods_and_credits_only_the_hero_clai
     assert system.will.pending() == [] and len(system.link.actions) == 1
     assert not system.chronicle.facts("blame_refuted") and not system.chronicle.facts("caught")
     assert len(system.chronicle.facts("claim")) == int(because == "hero_words")
+    assert bool(Trust(system.chronicle).of(LOBART).kept) is (because == "hero_words")
     if because == "hero_words":
         [claim] = system.chronicle.facts("claim")
         assert claim["truth"] is True and claim["title"] == belief["said"]
