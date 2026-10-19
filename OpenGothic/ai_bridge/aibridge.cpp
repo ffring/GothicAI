@@ -511,7 +511,8 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
       // Do not keep appending this optional stream to IXWebSocket's unbounded transmit buffer.
       if(BodyObservations::enabled() && BodyObservations::queuedCount()>0 && ws.bufferedAmount()<65536) {
         auto packet = BodyObservations::drainJson();
-        send(JsonWriter("body_observations").raw("packet",packet).finish());
+        if(ws.sendText(JsonWriter("body_observations").raw("packet",packet).finish()).success)
+          BodyObservations::markDrainedSent();
         }
       if(BodyObservations::enabled() && ws.bufferedAmount()<65536) {
         auto events = BodyController::drainJson();
@@ -1068,7 +1069,7 @@ void AiBridge::Impl::onBodyControl(World& world, const rapidjson::Value& msg) {
     }
   // Exactly the same parser, scope checks, lease and resolver as the headless IPC adapter.
   send(JsonWriter("result").str("req",req).boolean("ok",true)
-       .raw("value",BodyController::handleJson(msg)).finish());
+       .raw("value",BodyController::handleJson(msg,true)).finish());
   }
 
 void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
