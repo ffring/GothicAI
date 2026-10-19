@@ -15,8 +15,8 @@ from typing import Any
 from .. import triggers
 from ..bodies import Bodies
 from ..game import GameError, GameLink
-from ..protocol import Session
-from .common import _logged, _m5b_player_weapon, _save_or_fail, _until_async, wait_message
+from ..protocol import Session, TriggerFired
+from .common import _logged, _m5b_player_weapon, _save_or_fail, wait_message
 
 log = logging.getLogger("gothic_ai.scenarios")
 REFUGE = "NW_XARDAS_TOWER_VALLEY_01"
@@ -88,6 +88,31 @@ def _smaps(pid: int) -> dict[str, Any]:
     return groups
 
 
+async def _run_calls(
+    link: GameLink, name: str, expressions: list[list[Any]], *, timeout: float = 5,
+) -> None:
+    # The trigger counter advances before its program runs. Only the completion
+    # event tells us whether every native call succeeded.
+    waiter = asyncio.create_task(wait_message(
+        link, TriggerFired, lambda message: message.id == name, timeout,
+    ))
+    try:
+        await asyncio.sleep(0)  # Subscribe before publishing a trigger that can fire immediately.
+        await link.patch_graph([triggers.trigger(name, triggers.STATE, [
+            {"do": "call", "call": expression} for expression in expressions
+        ])])
+        try:
+            fired = await waiter
+        except TimeoutError as error:
+            raise GameError(f"memprobe preparation: trigger {name} did not fire") from error
+        if fired.error is not None:
+            raise GameError(f"memprobe preparation: trigger {name} failed: {fired.error}")
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        await link.patch_graph([triggers.removal(name)])
+
+
 class _Metrics:
     def __init__(self, log_dir: Path) -> None:
         self.path = log_dir / "memprobe.jsonl"
@@ -141,17 +166,7 @@ async def memprobe_scenario(
     async def calls(expressions: list[list[Any]]) -> None:
         nonlocal sequence
         sequence += 1
-        name = f"DIR_MEMPROBE_OP_{sequence}"
-        await link.patch_graph([triggers.trigger(name, triggers.STATE, [
-            {"do": "call", "call": expression} for expression in expressions
-        ])])
-        try:
-            if not await _until_async(link.triggers, lambda rows: any(
-                row["id"] == name and row["count"] >= 1 for row in rows
-            ), 5):
-                raise GameError(f"memprobe preparation: trigger {name} did not fire")
-        finally:
-            await link.patch_graph([triggers.removal(name)])
+        await _run_calls(link, f"DIR_MEMPROBE_OP_{sequence}", expressions)
 
     async def remove_bandits() -> None:
         await calls([["call", "WLD_REMOVENPC", ["sym", npc]] for npc in BANDITS])
