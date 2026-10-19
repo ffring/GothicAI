@@ -228,6 +228,7 @@ def test_city2_preserves_facade_layout_and_generates_only_twenty_two_unique_surf
         assert params['scale'] == 1 and params['antitile'] == 'off'
         assert params['depicts'] in record['prompt']
         assert 'evenly distributed small details' not in record['prompt']
+        assert 'material albedo texture, surface fills the entire image, no background' in record['prompt']
         assert params['source_width']/params['source_height'] == pytest.approx(params['source_aspect'], rel=.015)
         assert params['source_width'] % 16 == params['source_height'] % 16 == 0
         assert params['tiling_axes'] == ('uv' if params['layout'] == 'tiled' else

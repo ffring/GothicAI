@@ -67,7 +67,11 @@ def generation_size(aspect):
     if min(width, height) < 256:
         factor = 256 / min(width, height)
         width, height = width * factor, height * factor
-    return int(round(width/16))*16, int(round(height/16))*16
+    width = int(round(width/16))*16
+    # Keep the physical ratio after quantizing the short dimension. Rounding
+    # both independently noticeably distorts narrow members such as beams.
+    height = int(round(width/aspect/16))*16
+    return width, height
 
 
 def recipe_prompt(row, style, template, set_name):
@@ -79,6 +83,7 @@ def recipe_prompt(row, style, template, set_name):
             '': 'complete bounded panel, fixed boundaries'}[axes]
         return (f'{style["prompt"]}, {row["depicts"]}, {seamless}, '
             'late medieval poor harbour town, weathered, damp, muted earthy colors, '
+            'architectural material albedo texture, surface fills the entire image, no background, '
             'front orthographic view, even overcast light, no shadows, no highlights, no text, no logos')
     core = style['prompt']
     if set_name == 'city-2' and row['class'] == 'flagstone':
