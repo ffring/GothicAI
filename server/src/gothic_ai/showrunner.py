@@ -27,7 +27,7 @@ from .game import GameError
 from .gamedata.storygraph import QUEST_STATES
 from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
 from .occasions import DEEDS, NEAREST, OccasionFailed, Occasions
-from .people_knowledge import rumor_subject
+from .people_knowledge import PeopleKnowledge, rumor_subject
 from .protocol import GameMessage, Loading, Session
 from .questbook import Ground, _vanilla
 
@@ -77,6 +77,11 @@ INSTRUCTIONS = """\
 должен знать о деле или быть пострадавшим от кражи. Свидетель решает свою заботу в разговоре:
 рассказать, промолчать или потребовать плату за молчание; ради этого отдельную линию не создавай.
 Не каждому делу нужна линия: none с причиной — обычный ответ, если сейчас нечего добавить.
+Дела NPC устроены отдельно: правда режиссёра не становится знанием людей. Заказчиком может быть
+пострадавший или тот, кто знает либо винит; виновник своего дела заказчиком быть не может.
+Для «найти вора» строитель получает цель blame: убедить заказчика, кто вор. Она завершается по blame
+заказчика, даже если герой подставил невиновного: награда выдана, ложь может раскрыться позднее.
+Нарушенное NPC слово — настоящая претензия героя, но герой не может быть заказчиком линии.
 Людей и места выбирай только из сводки. При нехватке бюджета на людей выбери quest или chain без новых
 людей или none. Отказ кода исправь, не повторяй его."""
 
@@ -204,6 +209,8 @@ class Brief:
     history: list[str]
     budget: Budget
     crimes: dict[str, Fact] = field(default_factory=dict)
+    npc_crimes: dict[str, Fact] = field(default_factory=dict)
+    npc_broken: dict[str, Fact] = field(default_factory=dict)
 
     def text(self) -> str:
         leading, *others = occasion_members(self.occasion)
@@ -217,7 +224,8 @@ class Brief:
         ]
         return "\n".join(
             [
-                "Повод (вид, место, время; deed — поступок героя; vanilla — событие квеста скриптов): "
+                "Повод (вид, место, время; deed — поступок героя или NPC; "
+                "vanilla — событие квеста скриптов): "
                 + json.dumps(leading, ensure_ascii=False),
                 *(["Заодно: " + json.dumps(also, ensure_ascii=False)] if also else []),
                 f"Глава {self.chapter}, день {self.day}, {self.hour:02}:{self.minute:02}.",
@@ -238,6 +246,22 @@ class Brief:
                         json.dumps(self.crimes, ensure_ascii=False),
                     ]
                     if self.crimes else []
+                ),
+                *(
+                    [
+                        "Дела NPC (правда режиссёра отдельно от знания людей; "
+                        "blames — убеждение, unknown — не знает):",
+                        json.dumps(self.npc_crimes, ensure_ascii=False),
+                    ]
+                    if self.npc_crimes else []
+                ),
+                *(
+                    [
+                        "Нарушенное NPC слово (претензия принадлежит герою; герой не может быть "
+                        "заказчиком, поэтому это контекст, без отдельного заказчика линии):",
+                        json.dumps(self.npc_broken, ensure_ascii=False),
+                    ]
+                    if self.npc_broken else []
                 ),
                 "Последние ванильные события: " + json.dumps(self.vanilla, ensure_ascii=False),
                 "Что режиссёр уже сделал на ветке, не повторяться:",
@@ -475,6 +499,7 @@ class Showrunner:
             for f in facts
             if (
                 f.get("fact") in DEEDS
+                and f.get("fact") not in {"npc_crime", "npc_broken"}
                 and (f.get("fact") != "crime" or self.crimes is not None)
             )
             or (
@@ -490,6 +515,8 @@ class Showrunner:
             )
         ][-RECENT_DEEDS:]
         crimes = self._crime_briefs(occasion, facts)
+        npc_crimes = await self._npc_crime_briefs(occasion, facts, set(world), context)
+        npc_broken = self._npc_broken_briefs(occasion, facts)
         history = []
         line_quests = set()
         for f in facts:
@@ -523,6 +550,8 @@ class Showrunner:
             history,
             budget,
             crimes,
+            npc_crimes,
+            npc_broken,
         )
 
     def _crime_briefs(self, occasion: Fact, facts: list[Fact]) -> dict[str, Fact]:
@@ -591,6 +620,170 @@ class Showrunner:
             }
         return out
 
+    @staticmethod
+    def _people_context(facts: list[Fact], people: set[str]) -> list[Fact]:
+        """Other people's breaches remain context, never extra occasions or personal evidence."""
+        return [
+            f for f in facts
+            if f.get("fact") in {"exposed", "betrayed"}
+            and any(f.get(key) in people for key in ("npc", "liar", "to"))
+        ][-RECENT_DEEDS:]
+
+    async def _npc_crime_briefs(
+        self, occasion: Fact, facts: list[Fact], world: set[str], context: str,
+    ) -> dict[str, Fact]:
+        if self.crimes is None or not self.occasions.npc_crimes:
+            return {}
+        deeds = [f for f in facts if f.get("fact") == "npc_crime"]
+        ids = {c["id"] for c in deeds[-RECENT_DEEDS:]}
+        ids.update(o["crime"] for o in occasion_members(occasion) if o.get("crime"))
+        desk = PeopleKnowledge(self.chronicle)
+        out = {}
+        for crime in deeds:
+            cid = crime["id"]
+            if cid not in ids:
+                continue
+            victim = crime.get("victim") or crime.get("owner") or ""
+            witnesses = {
+                f["npc"] for f in facts
+                if f.get("fact") == "npc_crime_seen" and f.get("crime") == cid
+            }
+            beliefs = [f for f in facts if f.get("fact") == "blamed" and f.get("crime") == cid]
+            belief_ids = {f["id"] for f in beliefs}
+            keys = {f"npc_crime_seen:{cid}", *(f"blamed:{bid}" for bid in belief_ids)}
+            people = {victim, *witnesses} - {""}
+            people.update(
+                f["npc"] for f in facts
+                if f.get("fact") in {"npc_crime_suspected", "blamed"} and f.get("crime") == cid
+            )
+            people.update(
+                f["to"] for f in facts
+                if f.get("fact") == "rumor" and f.get("quest") in keys and f.get("to")
+            )
+            people.update(
+                f["npc"] for f in facts if f.get("fact") == "testimony"
+                and cid in f.get("crime_told", []) and f.get("about")
+            )
+            knowledge = []
+            for npc in sorted(people):
+                role = "victim" if npc == victim else "witness" if npc in witnesses else "informed"
+                rows = ([{"degree": "seen", "suspect": crime["culprit"], "source": npc,
+                          "direct": True}] if npc in witnesses else [])
+                for k in desk.of(npc):
+                    if k.key not in keys:
+                        continue
+                    if k.kind == "blamed":
+                        belief = next((b for b in beliefs if k.key == f"blamed:{b['id']}"), {})
+                        because = belief.get("because", "")
+                        source = k.source
+                        if k.direct:
+                            if because == "hero_words":
+                                source = "PLAYER"
+                            elif because.startswith("testimony:"):
+                                testimony = next(
+                                    (f for f in facts if f.get("fact") == "testimony"
+                                     and f.get("id") == because.removeprefix("testimony:")), {},
+                                )
+                                source = testimony.get("witness", "")
+                        rows.append({
+                            "degree": "blames", "suspect": k.subject, "source": source,
+                            "because": because if k.direct else "heard_blame", "direct": k.direct,
+                        })
+                    elif k.kind in {"npc_theft", "npc_attack"}:
+                        if not k.direct:
+                            rows.append({
+                                "degree": "heard", "suspect": k.subject,
+                                "source": k.source, "direct": False,
+                            })
+                rows += [
+                    {"degree": "suspects", "suspect": f["suspect"], "source": npc}
+                    for f in facts if f.get("fact") == "npc_crime_suspected"
+                    and f.get("npc") == npc and f.get("crime") == cid
+                ]
+                rows += [
+                    {"degree": "heard", "suspect": f["about"], "source": f.get("witness", "")}
+                    for f in facts if f.get("fact") == "testimony" and f.get("npc") == npc
+                    and cid in f.get("crime_told", []) and f.get("about")
+                ]
+                knowledge += [
+                    {"npc": npc, "role": role, **row}
+                    for row in rows or [{"degree": "unknown"}]
+                ]
+            truth = {**crime, "distance": "far" if crime.get("far") else "near"}
+            item = crime.get("item")
+            if item:
+                # Check every world person, not just the original thief: the hero can acquire the
+                # item by trade, theft or combat. Counts describe the live VM, never a witness's mind.
+                holders = sorted((world - {"PC_HERO", "PLAYER"}) | {
+                    crime["culprit"], victim, "HERO",
+                } - {""})
+                amounts = await self.link.story_eval(context, [
+                    ["call", "NPC_HASITEMS", ["inst", npc], ["sym", item]] for npc in holders
+                ])
+                truth["item_holders"] = [
+                    {"npc": "PLAYER" if npc == "HERO" else npc, "count": count}
+                    for npc, count in zip(holders, amounts, strict=False)
+                    if type(count) is int and count > 0
+                ]
+                truth["item_holders_checked"] = (
+                    len(amounts) == len(holders) and all(type(n) is int for n in amounts)
+                )
+            community = crime.get("community")
+            out[cid] = {
+                "truth": truth,
+                "belief_truth": [
+                    {"blamed": b["id"], "npc": b["npc"], "suspect": b["culprit"],
+                     "truth": b.get("truth"), "refuted": any(
+                         f.get("fact") == "blame_refuted" and f.get("blamed") == b["id"]
+                         for f in facts
+                     )}
+                    for b in beliefs
+                ],
+                "knowledge": knowledge,
+                "victim_can_notice_missing": crime.get("kind") == "theft" and bool(victim),
+                "law": {
+                    "community": community,
+                    "known": any(
+                        f.get("fact") == "npc_crime_known" and f.get("crime") == cid
+                        and f.get("community") == community for f in facts
+                    ),
+                    "settled": any(
+                        f.get("fact") == "npc_crime_settled" and f.get("crime") == cid for f in facts
+                    ),
+                },
+                "people_context": self._people_context(facts, people | {crime["culprit"]}),
+            }
+        return out
+
+    def _npc_broken_briefs(self, occasion: Fact, facts: list[Fact]) -> dict[str, Fact]:
+        if self.crimes is None or not self.occasions.npc_cheat:
+            return {}
+        broken = [f for f in facts if f.get("fact") == "npc_broken"]
+        deals = {f["deal"] for f in broken[-RECENT_DEEDS:]}
+        deals.update(
+            o["deed"]["deal"] for o in occasion_members(occasion)
+            if o.get("deed", {}).get("fact") == "npc_broken" and o["deed"].get("deal")
+        )
+        out = {}
+        for failure in broken:
+            deal = failure["deal"]
+            if deal not in deals:
+                continue
+            promise = next(
+                (f for f in facts if f.get("fact") == "deal" and f.get("deal") == deal), {},
+            )
+            contract = next(
+                (f for f in facts if f.get("fact") == "contract" and f.get("deal") == deal), {},
+            )
+            witnesses = list(failure.get("witnesses", []))
+            out[deal] = {
+                "npc": failure["npc"], "promise": promise, "contract": contract,
+                "failed": {k: v for k, v in failure.items() if k != "witnesses"},
+                "heard": witnesses, "claimant": "PLAYER", "giver": None,
+                "people_context": self._people_context(facts, {failure["npc"], *witnesses}),
+            }
+        return out
+
     def _told(self, var: str) -> list[str]:
         # As in the repair director: the running quest's journal, without its future endings.
         q = self.author.graph.quests[var]
@@ -633,22 +826,30 @@ class Showrunner:
                     "выбери соседа, линия отвечает рядом"
                 )
         if p.crime:
-            crime = brief.crimes.get(p.crime)
+            crime = brief.npc_crimes.get(p.crime) or brief.crimes.get(p.crime)
             if crime is None:
                 errors.append(f"crime {p.crime!r} — нет такого дела в сводке")
             elif p.kind != "none":
                 victim = crime["truth"].get("victim") or crime["truth"].get("owner")
                 knows = any(
                     k["npc"] == p.giver.upper() and k["degree"] != "unknown"
+                    and (crime["truth"].get("fact") != "npc_crime" or k["degree"] != "suspects")
                     for k in crime["knowledge"]
                 )
-                notices = crime["truth"].get("kind") == "theft" and victim == p.giver.upper()
-                if p.kind not in {"quest", "chain"} or not (knows or notices):
+                notices = victim == p.giver.upper() and (
+                    crime["truth"].get("kind") == "theft"
+                    or crime["truth"].get("fact") == "npc_crime"
+                )
+                if crime["truth"].get("culprit") == p.giver.upper():
+                    errors.append(f"{p.giver} — виновник дела {p.crime}, не может быть его заказчиком")
+                elif p.kind not in {"quest", "chain"} or not (knows or notices):
                     errors.append(
                         f"{p.giver or 'новый человек'} не знает о деле {p.crime}: заказчик должен "
                         "знать о деле или быть пострадавшим от кражи, который заметит пропажу"
                     )
-        elif p.kind != "none" and brief.occasion.get("crime") and self.crimes is not None:
+        elif p.kind != "none" and brief.occasion.get("crime") and (
+            brief.crimes or brief.npc_crimes
+        ):
             errors.append("линия по поводу дела должна указать его id в crime")
         if p.kind != "none":
             errors += brief.budget.reasons

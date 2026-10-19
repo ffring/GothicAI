@@ -140,6 +140,10 @@
 #       then steals a world item before brave Lobart, who defeats him and reclaims it. NPC knowledge,
 #       its rumor and save/load are checked; guards are covered by module tests.
 #       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720; no live model.
+#   npc_director: Vino steals Lobart's chest item before Hilda; the deed becomes Lobart's line to
+#       find the thief, his ask_witness/about and blame finish its goal, then reward and save/load.
+#       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720. LLM=chatgpt asks only the ordinary showrunner
+#       once on the same deed, records its line premise or none reason and canon, without building.
 #   frame: unseen hero chest theft, Lobart believes Malak guilty, native reclaim combat finds no goods
 #       and reveals the hero's lie; Hilda's honest testimony about Vino leads to true blame and return.
 #       Save/load restores both cases without duplicates. LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=900.

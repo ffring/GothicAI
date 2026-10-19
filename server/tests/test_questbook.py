@@ -975,3 +975,111 @@ async def test_a_refused_handover_rolls_back_the_description_and_the_node(graph,
         assert fake.graph[-1]["replace"] is True and fake.graph[-1]["ops"] == previous
     finally:
         await link_cm.__aexit__(None, None, None)
+
+
+def _blame_quest(crime: str = "NPC_THEFT_1") -> Quest:
+    return _quest(stages=[
+        Stage("Убедить Хильду, кто вор.", [Goal("blame", crime=crime, journal="Хильда поверила обвинению.")]),
+        Stage(
+            "Потребовать обещанную награду.", [Goal("talk", npc=HILDA, talk=_talk("Теперь ты знаешь вора."))]
+        ),
+    ])
+
+
+def test_blame_builds_a_server_variable_without_a_world_truth_trigger():
+    q = _blame_quest()
+    assert problems(q, _ground(npc_crimes={"NPC_THEFT_1"})) == []
+    ops = build(q)
+    assert ops[0]["vars"]["DIR_Q1_S1G1"] == 0
+    assert not any(op.get("id") == "DIR_Q1_S1G1" for op in ops)
+    stage = next(op for op in ops if op.get("id") == "DIR_Q1_S1")
+    assert [">=", ["var", "DIR_Q1_S1G1"], ["int", 1]] in stage["when"]
+    assert any("существующее дело NPC" in error for error in problems(q, _ground()))
+
+
+@pytest.mark.parametrize("truth", [True, False])
+async def test_givers_blame_completes_the_goal_and_allows_reward_even_when_false(graph, monkeypatch, truth):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _blame_quest()
+        chronicle.record({"fact": "npc_crime", "id": "NPC_THEFT_1", "culprit": THIEF})
+        assert await book.make(q) == []
+        ops = patches.ops()
+        stage = next(op for op in ops if op.get("id") == "DIR_Q1_S1")
+        fake.vars.update({q.id: LOG_RUNNING, "DIR_Q1_STAGE": 1, "DIR_Q1_S1G1": 0})
+        book._fact(q, "story_quest_given")
+        effects = book.link.story_effect
+
+        async def apply(npc, changes, **kwargs):
+            await effects(npc, changes, **kwargs)
+            fake.vars.update({e["var"]: e["value"] for e in changes if e["do"] == "set"})
+
+        monkeypatch.setattr(book.link, "story_effect", apply)
+        # Other people's belief and another deed cannot solve the commission.
+        chronicle.record({"fact": "blamed", "id": "WRONG_PERSON", "npc": LOBART,
+                          "crime": "NPC_THEFT_1", "culprit": THIEF, "truth": truth})
+        chronicle.record({"fact": "blamed", "id": "WRONG_DEED", "npc": HILDA,
+                          "crime": "OTHER_THEFT", "culprit": THIEF, "truth": truth})
+        await book.settle()
+        assert fake.vars["DIR_Q1_S1G1"] == 0 and not fake.evaluate(stage["when"], HILDA)
+        chronicle.record({"fact": "blamed", "id": "BLAME_1", "npc": HILDA,
+                          "crime": "NPC_THEFT_1", "culprit": THIEF, "truth": truth})
+        await _until(lambda: bool(chronicle.facts("story_quest_goal")))
+        assert fake.vars["DIR_Q1_S1G1"] == 1 and fake.evaluate(stage["when"], HILDA)
+        fake.vars["DIR_Q1_STAGE"] = 2
+        await fake.send(type="trigger_fired", id="DIR_Q1_S1", count=1, npc="PC_HERO", other="PC_HERO")
+        await _until(lambda: book.progress(q.id).stage == 2)
+        done = Patches.of(ops).nodes["DIR_Q1_DONE"]
+        assert fake.evaluate(done["condition"], HILDA)
+        fake.npc_items.setdefault(HILDA, {})["ITMI_GOLD"] = q.gold
+        assert fake.give({"npc": HILDA, "effects": done["effects"]}) is None
+        assert fake.hero_items["ITMI_GOLD"] == q.gold
+        chronicle.record({"fact": "blame_refuted", "blamed": "BLAME_1", "how": "no_goods"})
+        await book.settle()
+        assert fake.vars["DIR_Q1_S1G1"] == 1
+        assert len(chronicle.facts("story_quest_goal")) == 1
+    finally:
+        await book.close()
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_blame_goal_and_its_completion_follow_the_saved_branch_without_duplication(graph, monkeypatch):  # noqa: F811
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, book, patches, chronicle = await _book(fake, store, graph)
+    try:
+        q = _blame_quest()
+        chronicle.record({"fact": "npc_crime", "id": "NPC_THEFT_1", "culprit": THIEF})
+        assert await book.make(q) == []
+        fake.vars.update({q.id: LOG_RUNNING, "DIR_Q1_STAGE": 1, "DIR_Q1_S1G1": 0})
+        book._fact(q, "story_quest_given")
+        before = store.head("A")
+        effects = book.link.story_effect
+
+        async def apply(npc, changes, **kwargs):
+            await effects(npc, changes, **kwargs)
+            fake.vars.update({e["var"]: e["value"] for e in changes if e["do"] == "set"})
+
+        monkeypatch.setattr(book.link, "story_effect", apply)
+        chronicle.record({"fact": "blamed", "id": "BLAME_1", "npc": HILDA,
+                          "crime": "NPC_THEFT_1", "culprit": LOBART, "truth": False})
+        await _until(lambda: len(chronicle.facts("story_quest_goal")) == 1)
+        after = store.head("A")
+        await _until(lambda: fake.heads[-1:] == [("A", after)])
+        await fake.send(type="session", branch="B", parent="A", parent_seq=after, reason="load")
+        await _until(lambda: patches.branch == "B" and chronicle.branch == "B")
+        assert book.all()[q.id] == q and fake.vars["DIR_Q1_S1G1"] == 1
+        calls = len(fake.story)
+        await book.settle()
+        assert len(fake.story) == calls and len(chronicle.facts("story_quest_goal")) == 1
+        # Loading the earlier save rolls both belief and completion back.
+        fake.vars["DIR_Q1_S1G1"] = 0
+        await fake.send(type="session", branch="C", parent="A", parent_seq=before, reason="load")
+        await _until(lambda: patches.branch == "C" and chronicle.branch == "C")
+        await book.settle()
+        assert book.all()[q.id] == q and fake.vars["DIR_Q1_S1G1"] == 0
+        assert not chronicle.facts("blamed") and not chronicle.facts("story_quest_goal")
+    finally:
+        await book.close()
+        await link_cm.__aexit__(None, None, None)
