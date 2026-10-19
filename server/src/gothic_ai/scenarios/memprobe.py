@@ -1,12 +1,19 @@
-"""Linux game-process RSS probes, with one native operation per measured step."""
+"""Game-process RSS probes, with one native operation per measured step.
+
+Linux reads /proc and groups smaps; macOS reads proc_pid_rusage and `footprint` categories.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -32,7 +39,46 @@ SMAPS_GROUPS = ("heap", "anonymous", "nvidia", "dri", "memfd_shm", "so", "other_
 MAPPING = re.compile(r"^([0-9a-f]+)-([0-9a-f]+)\s+(\S+)\s+\S+\s+\S+\s+\d+\s*(.*)$")
 
 
+class _RusageInfoV0(ctypes.Structure):
+    """``struct rusage_info_v0`` from macOS <sys/resource.h> (flavor RUSAGE_INFO_V0)."""
+
+    _fields_ = [("ri_uuid", ctypes.c_uint8 * 16), *((name, ctypes.c_uint64) for name in (
+        "ri_user_time", "ri_system_time", "ri_pkg_idle_wkups", "ri_interrupt_wkups", "ri_pageins",
+        "ri_wired_size", "ri_resident_size", "ri_phys_footprint", "ri_proc_start_abstime",
+        "ri_proc_exit_abstime",
+    ))]
+
+
+def _darwin_status(pid: int) -> dict[str, int]:
+    # VmRSS keeps the Linux name: the resident size `ps -o rss` shows. PhysFootprint is
+    # what Activity Monitor calls Memory; it also counts the game's Metal allocations.
+    info = _RusageInfoV0()
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    if libproc.proc_pid_rusage(pid, 0, ctypes.byref(info)) != 0:
+        raise GameError(f"memprobe: proc_pid_rusage({pid}) failed, errno {ctypes.get_errno()}")
+    return {"VmRSS": info.ri_resident_size, "PhysFootprint": info.ri_phys_footprint}
+
+
+def _footprint(pid: int) -> dict[str, Any]:
+    """macOS counterpart of the smaps groups: `footprint` categories in bytes."""
+    if sys.platform != "darwin":
+        return {}
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "footprint.json"
+        subprocess.run(["footprint", "-j", str(path), "-f", "bytes", str(pid)],
+                       check=True, capture_output=True, timeout=30)
+        process = json.loads(path.read_text())["processes"][0]
+    fields = ("dirty", "swapped", "reclaimable", "regions")
+    return {"footprint": {
+        **process["auxiliary"],
+        "categories": {name: {field: row[field] for field in fields}
+                       for name, row in process["categories"].items()},
+    }}
+
+
 def _status(pid: int) -> dict[str, int]:
+    if sys.platform == "darwin":
+        return _darwin_status(pid)
     rows = {}
     for line in Path(f"/proc/{pid}/status").read_text().splitlines():
         field, _, value = line.partition(":")
@@ -59,7 +105,9 @@ def _mapping_group(name: str) -> str:
     return "other_files"
 
 
-def _smaps(pid: int) -> dict[str, Any]:
+def _smaps(pid: int) -> dict[str, Any] | None:
+    if sys.platform == "darwin":
+        return None
     groups: dict[str, Any] = {
         group: {**dict.fromkeys(SMAPS_FIELDS, 0), "mappings": 0, "largest": []}
         for group in SMAPS_GROUPS
@@ -201,7 +249,8 @@ async def memprobe_scenario(
         if phase == "load":
             await _save_or_fail(link, 7)
             await asyncio.sleep(3)
-        metrics.sample("phase_start", phase, 0, "phase_start", smaps=_smaps(metrics.pid))
+        metrics.sample("phase_start", phase, 0, "phase_start", smaps=_smaps(metrics.pid),
+                       **_footprint(metrics.pid))
         for cycle in range(1, cycles + 1):
             before = metrics.sample("cycle_start", phase, cycle, "cycle_start")
 
@@ -302,7 +351,8 @@ async def memprobe_scenario(
                 await step("load_wait_world", load)
                 await step("load_settle_3s", lambda: asyncio.sleep(3))
             metrics.sample("cycle_end", phase, cycle, "cycle_end", smaps=_smaps(metrics.pid),
-                           cycle_delta_VmRSS=_status(metrics.pid)["VmRSS"] - before["VmRSS"])
+                           cycle_delta_VmRSS=_status(metrics.pid)["VmRSS"] - before["VmRSS"],
+                           **_footprint(metrics.pid))
             if checkpoint_pause:
                 await asyncio.sleep(checkpoint_pause)
         results[f"memprobe_{phase}"] = f"done ({cycles} cycles, measurements={metrics.path.name})"
