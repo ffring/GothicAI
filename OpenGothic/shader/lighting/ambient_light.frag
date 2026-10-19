@@ -91,9 +91,6 @@ void main() {
   // const vec3  linear = vec3(1);
   const vec3  linear = textureAlbedo(diff);
   float ao = textureSsao();
-#if defined(MATERIAL_MAPS) && defined(SURFEL_GI)
-  ao *= texelFetch(gbufOrm, fragCoord, 0).r;
-#endif
 
   vec3 color;
 #if defined(MATERIAL_MAPS) && !defined(SURFEL_GI)
@@ -121,6 +118,11 @@ void main() {
     {
     color = linear;
     color *= luminance(norm);
+#if defined(MATERIAL_MAPS) && defined(SURFEL_GI)
+    const vec4 orm = texelFetch(gbufOrm, fragCoord, 0);
+    if(orm.a>0.5)
+      color *= orm.r * (1.0 - orm.b);
+#endif
     }
 #if defined(SURFEL_GI)
   //NOTE: pre-exposed already

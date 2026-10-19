@@ -214,6 +214,7 @@ void main() {
   color *= luminance;
 #if defined(MATERIAL_MAPS)
   if(ownMaterial) {
+    color *= orm.r * (1.0 - orm.b);
     const vec3 view = normalize(scene.camPos - basePos);
     const float noV = max(dot(norm, view), 0.0);
     const vec3 reflection = reflect(-view, norm);
