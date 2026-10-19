@@ -176,7 +176,9 @@ void diagnostic(const std::string& name,const std::string& targetKind,
            <<",\"target_outside_map\":"<<value.targetOutsideMap<<",\"target_clamped\":"<<value.targetClamped
            <<",\"target_scale\":";number(value.targetScale);
   std::cout<<",\"target_clear\":"<<value.targetClear<<",\"start_clear\":"<<value.startClear
-           <<",\"start_found\":"<<value.startFound<<",\"target\":";point(value.target);
+           <<",\"start_found\":"<<value.startFound<<",\"start_escape_required\":"<<value.startEscapeRequired
+           <<",\"start_escape_target\":";point(value.startEscapeTarget);
+  std::cout<<",\"overlap_danger_cells\":"<<value.overlapDangerCells<<",\"target\":";point(value.target);
   std::cout<<",\"local_target\":";point(value.localTarget);
   std::cout<<",\"snapped_target\":";point(value.snappedTarget);
   std::cout<<",\"snapped_target_distance_cm\":";number(value.snappedTargetDistanceCm);
@@ -203,9 +205,10 @@ void diagnostic(const std::string& name,const std::string& targetKind,
   }
 
 void diagnose(const Input& input,uint64_t index,const NpcKeys::KeyState& replayKeys,
-              bool keysMatch,bool previousMatch,bool paths) {
+              const NavMemoryTeacher::PlanStatus& status,bool keysMatch,bool previousMatch,bool paths) {
   std::cout<<"{\"type\":\"record\",\"index\":"<<index<<",\"keys_match\":"<<keysMatch
            <<",\"previous_match\":"<<previousMatch<<",\"beyond_known\":"<<input.roads.beyondKnown
+           <<",\"steering_start_found\":"<<status.startFound<<",\"steering_escape_required\":"<<status.escapeRequired
            <<",\"replay_keys\":";
   keys(replayKeys);std::cout<<",\"diagnostics\":[";
   bool first=true;
@@ -222,6 +225,7 @@ void diagnose(const Input& input,uint64_t index,const NpcKeys::KeyState& replayK
     output("r"+std::to_string(int(radius))+"-u"+std::to_string(int(unknown)),"steering",input,options);
     }
   Options options;
+  options.bodyRadiusCm=30;
   options.knownFreeOnly=true;
   output("r30-u4-known-free","steering",input,options);
   options.knownFreeOnly=false;options.nearOnly=true;
@@ -236,8 +240,10 @@ void diagnose(const Input& input,uint64_t index,const NpcKeys::KeyState& replayK
     Options goalOptions;goalOptions.bodyRadiusCm=radius;
     output("goal-r"+std::to_string(int(radius))+"-u4","goal",goalInput,goalOptions);
     }
-  Options goalKnown;goalKnown.knownFreeOnly=true;
+  Options goalKnown;goalKnown.bodyRadiusCm=30;goalKnown.knownFreeOnly=true;
   output("goal-r30-u4-known-free","goal",goalInput,goalKnown);
+  output("production-steering","steering",input,Options{});
+  output("production-goal","goal",goalInput,Options{});
   std::cout<<"]}\n";
   }
 
@@ -263,22 +269,26 @@ std::set<uint64_t> indices(const std::string& path) {
   return result;
   }
 
-int replay(const std::string& path,const std::set<uint64_t>& selected,bool paths) {
+int replay(const std::string& path,const std::set<uint64_t>& selected,bool paths,bool allowMismatch) {
   Episode episode(path);
   NavMemoryTeacher teacher;teacher.reset();
   Observation observation;
   std::vector<uint8_t> bytes;
   NpcKeys::KeyState previous;
   uint64_t records=0,mismatches=0,previousMismatches=0,diagnosed=0;
+  uint64_t startFoundFalse=0,escapeRequired=0;
   while(episode.next(bytes)) {
     observation.decode(bytes);
     const auto actual=teacher.decide(observation.input);
+    const auto status=teacher.lastPlanStatus();
+    startFoundFalse+=!status.startFound;
+    escapeRequired+=status.escapeRequired;
     const bool keysMatch=equal(actual,observation.expected);
     const bool previousMatch=records==0 || equal(observation.input.previous,previous);
     if(!previousMatch) ++previousMismatches;
     if(!keysMatch || !previousMatch) ++mismatches;
     if(selected.count(records)!=0) {
-      diagnose(observation.input,records,actual,keysMatch,previousMatch,paths);
+      diagnose(observation.input,records,actual,status,keysMatch,previousMatch,paths);
       ++diagnosed;
       }
     previous=actual;++records;
@@ -286,8 +296,11 @@ int replay(const std::string& path,const std::set<uint64_t>& selected,bool paths
   require(records>0,"no recorded teacher decisions");
   require(selected.empty() || *selected.rbegin()<records,"requested record index exceeds the episode");
   std::cout<<"{\"type\":\"summary\",\"records\":"<<records<<",\"mismatches\":"<<mismatches
-           <<",\"previous_mismatches\":"<<previousMismatches<<",\"diagnosed_records\":"<<diagnosed<<"}\n";
-  return mismatches==0 ? 0 : 1;
+           <<",\"previous_mismatches\":"<<previousMismatches<<",\"diagnosed_records\":"<<diagnosed
+           <<",\"counterfactual\":"<<allowMismatch<<",\"steering_start_found_false\":"<<startFoundFalse
+           <<",\"steering_start_evaluable_records\":"<<records
+           <<",\"steering_escape_required_records\":"<<escapeRequired<<"}\n";
+  return allowMismatch || mismatches==0 ? 0 : 1;
   }
 
 Input target(float right,float forward,float distance=600.f) {
@@ -427,11 +440,12 @@ int main(int argc,char** argv) {
   try {
     std::cout<<std::boolalpha<<std::setprecision(std::numeric_limits<float>::max_digits10);
     std::string samples,indexFile;
-    bool paths=false,selfTests=false;
+    bool paths=false,selfTests=false,allowMismatch=false;
     for(int i=1;i<argc;++i) {
       const std::string argument=argv[i];
       if(argument=="--paths") paths=true;
       else if(argument=="--self-test") selfTests=true;
+      else if(argument=="--allow-mismatch") allowMismatch=true;
       else if(argument=="--indices") {
         require(i+1<argc,"missing --indices filename");
         require(indexFile.empty(),"duplicate --indices option");
@@ -446,11 +460,11 @@ int main(int argc,char** argv) {
     if(selfTests) selfTest();
     if(samples.empty() && selfTests && indexFile.empty()) return 0;
     if(samples.empty() || indexFile.empty()) {
-      std::cerr<<"usage: gothic-navmemoryteacher-diagnostics SAMPLES.bin.gz --indices FILE [--paths] [--self-test]\n"
+      std::cerr<<"usage: gothic-navmemoryteacher-diagnostics SAMPLES.bin.gz --indices FILE [--paths] [--self-test] [--allow-mismatch]\n"
                <<"       gothic-navmemoryteacher-diagnostics --self-test\n";
       return 2;
       }
-    return replay(samples,indices(indexFile),paths);
+    return replay(samples,indices(indexFile),paths,allowMismatch);
     }
   catch(const std::exception& error) {
     std::cerr<<"navmemoryteacher diagnostics: "<<error.what()<<'\n';

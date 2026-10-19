@@ -35,17 +35,20 @@ class NavMemoryTeacher final {
       float rightCm = 0, forwardCm = 0;
       };
 
-    // Read-only offline probes. These parameters never enter decide(), whose
-    // production radius/cost and state are unchanged. Near-only plans to a
+    // Production defaults are a 15-cm margin and unknown cost four. Alternate
+    // values are read-only probes, never parameters of decide(). Near-only plans to a
     // bounded local proxy and must not be read as reaching a distant goal.
     struct DiagnosticsOptions final {
-      float bodyRadiusCm = 30, unknownCost = 4;
+      float bodyRadiusCm = 15, unknownCost = 4;
       bool nearOnly = false, knownFreeOnly = false;
       };
     struct Diagnostics final {
       bool planComplete = false, actualTargetReached = false;
       bool targetOutsideMap = false, targetClamped = false;
       bool targetClear = false, startClear = false, startFound = false;
+      bool startEscapeRequired = false;
+      Point startEscapeTarget;
+      uint32_t overlapDangerCells = 0;
       Point target, localTarget, snappedTarget;
       float targetScale = 1;
       float snappedTargetDistanceCm = 0, endpointDistanceToActualTargetCm = 0;
@@ -60,6 +63,13 @@ class NavMemoryTeacher final {
       };
     static Diagnostics probe(const Input& input, const DiagnosticsOptions& options);
 
+    struct PlanStatus final {
+      bool startFound = false, escapeRequired = false;
+      Point escapeTarget;
+      uint32_t overlapDangerCells = 0;
+      };
+    const PlanStatus& lastPlanStatus() const { return latestPlanStatus; }
+
     void reset();
     // Call exactly once per 100-ms decision, reset at every episode boundary.
     // Airborne observations never request jumps or climbing.
@@ -72,6 +82,7 @@ class NavMemoryTeacher final {
 
   private:
     std::vector<Point> route;
+    PlanStatus latestPlanStatus;
     float routeLength = 0;
     uint32_t stuckTicks = 0, recoveryTicks = 0, recoveryAttempts = 0;
     float recoverySide = 1;

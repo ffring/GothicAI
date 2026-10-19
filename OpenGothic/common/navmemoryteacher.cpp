@@ -13,6 +13,7 @@ using Cell = NavMemoryTeacher::Cell;
 using Point = NavMemoryTeacher::Point;
 using DiagnosticsOptions = NavMemoryTeacher::DiagnosticsOptions;
 using Diagnostics = NavMemoryTeacher::Diagnostics;
+using PlanStatus = NavMemoryTeacher::PlanStatus;
 constexpr float Pi = 3.14159265358979323846f;
 constexpr int NearSize = 64, FarSize = 100;
 constexpr int NearCount = NearSize*NearSize, Count = NearCount+FarSize*FarSize;
@@ -58,6 +59,19 @@ class Grid final {
     explicit Grid(const Input& input):Grid(input,DiagnosticsOptions{}) {}
     Grid(const Input& input,const DiagnosticsOptions& parameters)
       :in(input),options(parameters),blocked(Count),active(Count),costs(Count) {
+      // Only already occupied near cells touching the current body footprint
+      // lose their inflation. Their raw square remains blocked. The exemption
+      // cannot propagate to the rest of a wall or to far coarse cells.
+      for(int i=0;i<NearCount;++i) {
+        if(!dangerous(cell(in,i))) continue;
+        const Point p=center(i);
+        const float dx=std::max(0.f,std::abs(p.rightCm)-NearCell*.5f);
+        const float dz=std::max(0.f,std::abs(p.forwardCm)-NearCell*.5f);
+        if(dx*dx+dz*dz<=options.bodyRadiusCm*options.bodyRadiusCm) {
+          bodyOverlap[size_t(i)]=1;
+          ++overlapCount;
+          }
+        }
       for(int i=0;i<Count;++i) {
         const Point p=center(i);
         active[size_t(i)]=i<NearCount || (!options.nearOnly && !insideNear(p));
@@ -85,9 +99,9 @@ class Grid final {
       }
     // Exact circle versus occupied cell square. Near/far retain their native
     // resolutions; far cells inside the near footprint cannot bypass a near
-    // obstacle. A 30-cm body margin also applies across the layer boundary.
+    // obstacle. The production 15-cm margin also applies across the seam.
     bool clear(Point p) const { return clear(p,options.bodyRadiusCm); }
-    bool clear(Point p,float radius) const {
+    bool clear(Point p,float radius,bool leavingBodyOverlap=false) const {
       const float extent=options.nearOnly ? NearExtent : 10000.f;
       if(std::abs(p.rightCm)>extent-radius || std::abs(p.forwardCm)>extent-radius) return false;
       const auto layer=[&](bool near) {
@@ -104,6 +118,14 @@ class Grid final {
           if(!near && insideNear(q)) continue;
           const auto& evidence=cell(in,index);
           if(!dangerous(evidence) && (!options.knownFreeOnly || knownFree(evidence))) continue;
+          if(near && bodyOverlap[size_t(index)]) {
+            if(leavingBodyOverlap) continue;
+            // Half-open raw occupancy, matching the memory cell addressing.
+            // A neighbour merely touching the origin is not its raw start cell.
+            if(p.rightCm>=q.rightCm-step*.5f && p.rightCm<q.rightCm+step*.5f &&
+               p.forwardCm>=q.forwardCm-step*.5f && p.forwardCm<q.forwardCm+step*.5f) return false;
+            continue;
+            }
           const float dx=std::max(0.f,std::abs(p.rightCm-q.rightCm)-step*.5f);
           const float dz=std::max(0.f,std::abs(p.forwardCm-q.forwardCm)-step*.5f);
           if(dx*dx+dz*dz<=radius*radius) return false;
@@ -119,12 +141,33 @@ class Grid final {
         const float t=float(k)/float(steps);
         const Point p={a.rightCm+(b.rightCm-a.rightCm)*t,a.forwardCm+(b.forwardCm-a.forwardCm)*t};
         if(clear(p)) {leftInitialInflation=true;continue;}
-        // An actor can start inside the safety margin of an already seen wall.
-        // Allow departure from that margin, but never through the wall itself,
-        // and never re-enter an inflated obstacle after reaching clear ground.
-        if(leftInitialInflation || !clear(p,0)) return false;
+        // A raw occupied start may leave ONLY the finite occupied footprint
+        // found at this observation's body origin. Other raw hazards retain
+        // their full margin; after reaching clear ground, re-entry is forbidden.
+        if(leftInitialInflation || !clear(p,options.bodyRadiusCm,true)) return false;
         }
       return true;
+      }
+    struct Start final {
+      int index = -1;
+      PlanStatus status;
+      };
+    Start start() const {
+      Start result;
+      result.status.escapeRequired=!clear({},0);
+      result.status.overlapDangerCells=overlapCount;
+      float nearest=Infinity;
+      const float limit=result.status.escapeRequired ? 100.f : 125.f;
+      for(int i=0;i<NearCount;++i) {
+        if(!available(i)) continue;
+        const Point p=center(i);
+        const float d=length(p);
+        if(d<nearest && d<=limit && segment({},p,true)) {
+          nearest=d;result.index=i;result.status.escapeTarget=p;
+          }
+        }
+      result.status.startFound=result.index>=0;
+      return result;
       }
     bool available(int i) const { return i>=0 && active[size_t(i)] && !blocked[size_t(i)]; }
     float traversal(int i) const { return costs[size_t(i)]; }
@@ -160,12 +203,15 @@ class Grid final {
   private:
     const Input& in;
     const DiagnosticsOptions options;
+    std::array<uint8_t,NearCount> bodyOverlap = {};
+    uint32_t overlapCount = 0;
     std::vector<uint8_t> blocked,active;
     std::vector<float> costs;
   };
 
 void plan(const Input& in,Point target,std::vector<Point>& route,float& routeLength,bool& complete,
-          const DiagnosticsOptions& options=DiagnosticsOptions{},Diagnostics* diagnostics=nullptr) {
+          const DiagnosticsOptions& options=DiagnosticsOptions{},Diagnostics* diagnostics=nullptr,
+          PlanStatus* planStatus=nullptr) {
   Grid grid(in,options);
   // Production retains its exact 9700-cm proxy. Near-only diagnostic deliberately
   // stops at a 700-cm proxy, with no claim about the target outside that map.
@@ -182,19 +228,23 @@ void plan(const Input& in,Point target,std::vector<Point>& route,float& routeLen
     diagnostics->endpointDistanceToActualTargetCm=length(target);
     grid.statistics(*diagnostics);
     }
-  int goal=-1,start=-1;
-  float goalDistance=Infinity,startDistance=Infinity;
+  const auto startInfo=grid.start();
+  const int start=startInfo.index;
+  if(planStatus!=nullptr) *planStatus=startInfo.status;
+  int goal=-1;
+  float goalDistance=Infinity;
   for(int i=0;i<Count;++i) {
     if(!grid.available(i)) continue;
     const Point p=center(i);
     const float d=distance(p,localTarget);
     if(d<goalDistance) {goalDistance=d;goal=i;}
-    const float s=length(p);
-    if(i<NearCount && s<startDistance && s<=125 && grid.segment({},p,true)) {startDistance=s;start=i;}
     }
   route.clear();route.push_back({});routeLength=0;complete=false;
   if(diagnostics!=nullptr) {
-    diagnostics->startFound=start>=0;
+    diagnostics->startFound=startInfo.status.startFound;
+    diagnostics->startEscapeRequired=startInfo.status.escapeRequired;
+    diagnostics->startEscapeTarget=startInfo.status.escapeTarget;
+    diagnostics->overlapDangerCells=startInfo.status.overlapDangerCells;
     if(goal>=0) diagnostics->snappedTarget=center(goal);
     diagnostics->snappedTargetDistanceCm=goalDistance;
     }
@@ -290,6 +340,7 @@ NavMemoryTeacher::Diagnostics NavMemoryTeacher::probe(const Input& input,const D
 void NavMemoryTeacher::reset() {
   route.clear();routeLength=0;stuckTicks=0;recoveryTicks=0;recoveryAttempts=0;
   recoverySide=1;complete=false;observedGoal=false;previousGoal={};movingTicks=0;
+  latestPlanStatus=PlanStatus{};
   }
 
 NpcKeys::KeyState NavMemoryTeacher::decide(const Input& in) {
@@ -301,7 +352,7 @@ NpcKeys::KeyState NavMemoryTeacher::decide(const Input& in) {
   if(!std::isfinite(target.rightCm) || !std::isfinite(target.forwardCm) || !std::isfinite(targetDistance) || targetDistance<0)
     throw std::runtime_error("memory teacher: non-finite learner goal");
   // Rebuild from the full quantized observation on EVERY 100-ms decision.
-  ::plan(in,target,route,routeLength,complete);
+  ::plan(in,target,route,routeLength,complete,DiagnosticsOptions{},nullptr,&latestPlanStatus);
 
   const Point goal={in.roads.goalDirection[0]*in.roads.goalDistanceCm,
                     in.roads.goalDirection[2]*in.roads.goalDistanceCm};
@@ -325,6 +376,28 @@ NpcKeys::KeyState NavMemoryTeacher::decide(const Input& in) {
     }
 
   Grid grid(in);
+  if(latestPlanStatus.escapeRequired) {
+    // Exit the raw occupied start before distant steering or recovery. Digital
+    // strafe overrides forward in NpcKeys, so select one physically clear axis
+    // and hold the body yaw fixed throughout this initial step.
+    stuckTicks=0;recoveryTicks=0;out.walk=true;
+    if(!latestPlanStatus.startFound) return out;
+    const Point exit=latestPlanStatus.escapeTarget;
+    const bool sidewaysFirst=std::abs(exit.rightCm)>std::abs(exit.forwardCm);
+    for(unsigned attempt=0;attempt<2;++attempt) {
+      const bool sideways=attempt==0 ? sidewaysFirst : !sidewaysFirst;
+      const float component=sideways ? exit.rightCm : exit.forwardCm;
+      if(component==0) continue;
+      for(float extent=30;extent<=100;extent+=10) {
+        const Point step=sideways ? Point{sign(component)*extent,0} : Point{0,sign(component)*extent};
+        if(!grid.clear(step) || !grid.segment({},step,true)) continue;
+        if(sideways) out.strafe=sign(component);
+        else out.forward=sign(component);
+        return out;
+        }
+      }
+    return out;
+    }
   if(movingTicks>0 && in.roads.goalDistanceCm<280) {
     stuckTicks=0;recoveryTicks=0;
     // A target turning back toward the follower must not push it inside the

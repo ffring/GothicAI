@@ -263,6 +263,60 @@ void selfTest() {
     noNativeAction(keys);++tests;
     }
 
+  // A hazard touching the current footprint must retain raw occupancy but
+  // must not inflate back over an otherwise raw-free body origin.
+  input=target(0,1);hazard(input,31,32);
+  teacher.reset();keys=teacher.decide(input);
+  auto diagnostic=NavMemoryTeacher::probe(input,NavMemoryTeacher::DiagnosticsOptions{});
+  require(diagnostic.startClear && diagnostic.startFound && !diagnostic.startEscapeRequired &&
+          diagnostic.overlapDangerCells==1,"a footprint neighbour was inflated over the raw-free body origin");
+  require(teacher.lastPlanStatus().startFound && !teacher.lastPlanStatus().escapeRequired,
+          "production start status differs from the footprint diagnostic");
+  noNativeAction(keys);++tests;
+
+  // An occupied raw start is not teleported to a graph node: the FIRST keys
+  // physically retreat toward that nearby free node before distant steering.
+  input=target(0,1);hazard(input,32,32);
+  teacher.reset();keys=teacher.decide(input);
+  const auto backwardExit=teacher.lastPlanStatus();
+  require(backwardExit.startFound && backwardExit.escapeRequired && keys.forward<0 &&
+          keys.strafe==0 && keys.turn==0 && std::hypot(backwardExit.escapeTarget.rightCm,
+          backwardExit.escapeTarget.forwardCm)<=100,"raw occupied start did not first step backwards to a nearby free exit");
+  noNativeAction(keys);
+  input=target(0,1);
+  for(int z=0;z<64;++z)for(int x=0;x<33;++x) hazard(input,x,z);
+  teacher.reset();keys=teacher.decide(input);
+  require(teacher.lastPlanStatus().startFound && teacher.lastPlanStatus().escapeRequired &&
+          keys.strafe>0 && keys.forward==0 && keys.turn==0,
+          "a right-only raw-start exit did not first apply an actual side step");
+  noNativeAction(keys);++tests;
+
+  // Free cells behind a further raw wall are not an escape from the body
+  // footprint. This rejects graph-start teleporting through arbitrary walls.
+  input=target(0,1);
+  for(int z=0;z<64;++z)for(int x=0;x<64;++x) hazard(input,x,z);
+  for(int z=31;z<=33;++z)for(int x=34;x<=36;++x) input.near[size_t(z)*64+size_t(x)]={};
+  teacher.reset();keys=teacher.decide(input);
+  require(!teacher.lastPlanStatus().startFound && teacher.lastPlanStatus().escapeRequired &&
+          keys.forward==0 && keys.strafe==0 && keys.turn==0,
+          "raw-start escape tunneled through danger outside the initial body footprint");
+  noNativeAction(keys);++tests;
+
+  // Staggered 75-cm openings retain a 35-cm diagonal throat: the 15-cm
+  // margin passes it, while 30-cm inflation legitimately closes that throat.
+  input=target(0,1);
+  for(int x=0;x<64;++x) {
+    if(x<31 || x>33) hazard(input,x,40);
+    if(x<32 || x>34) hazard(input,x,41);
+    }
+  NavMemoryTeacher::DiagnosticsOptions narrow;narrow.nearOnly=true;
+  const auto pass15=NavMemoryTeacher::probe(input,narrow);
+  narrow.bodyRadiusCm=30;
+  const auto pass30=NavMemoryTeacher::probe(input,narrow);
+  require(pass15.actualTargetReached && !pass30.planComplete,
+          "15-cm planning failed the narrow diagonal opening or 30-cm inflation did not close it");
+  ++tests;
+
   input=target(-1,0);
   input.roads.carrotDirection={1,0,0};input.roads.carrotDistanceCm=600;
   input.roads.beyondKnown=false;

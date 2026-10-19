@@ -450,3 +450,157 @@ def test_worker_prepares_shared_cold_cache_serially_but_keeps_distinct_engines(t
     assert len(set(map(id, results))) == len(created) == 3
     assert [worker.ready() for worker in workers] == results
     assert len(created) == 3
+
+
+def retry_fixture(tmp_path):
+    task, data = tmp_path / "task", tmp_path / "data"
+    task.mkdir()
+    selected = accepted_selection()
+    for kind in ("follow", "approach"):
+        for index in range(18):
+            selected.append(dict(id=f"{kind}-{index}", goal_kind=kind, split="train", region=REGIONS[index % 6],
+                                 start=f"S{index}", goal=f"G{index}", route=[f"G{index}", f"T{index}", f"R{index}"],
+                                 target="HERO", seed=42))
+    point_index = 0
+    for value in selected:
+        if value["goal_kind"] in ("point", "object"):
+            reference = v3.episode_directory(data, value, 2)
+            value["teacher_v2_episode"] = str(reference)
+            complete_episode(reference, value, 2)
+        if value["goal_kind"] == "point":
+            original = campaign.cohort_directory(data, value)
+            complete_episode(original, value, 3)
+            metadata = v3.read_json(original / "episode.json")
+            metadata["success"] = point_index < 8
+            v3.write_json(original / "episode.json", metadata)
+            point_index += 1
+    v3.write_selection(task / "expanded-scenarios.jsonl", selected)
+    return selected, task, data
+
+
+def test_retry_preflight_requires_the_exact_original_stop_cohort_and_successful_baseline(tmp_path):
+    selected, task, data = retry_fixture(tmp_path)
+    before = {path: path.read_bytes() for path in data.rglob("*") if path.is_file()}
+    assert campaign.retry_preflight(task, data) == selected
+    assert all(path.read_bytes() == contents for path, contents in before.items())
+    first = selected[0]
+    reference = v3.episode_directory(data, first, 2) / "episode.json"
+    metadata = v3.read_json(reference)
+    metadata["success"] = False
+    v3.write_json(reference, metadata)
+    with pytest.raises(ValueError, match="successful v2 baseline"):
+        campaign.retry_preflight(task, data)
+
+
+@pytest.mark.parametrize(("successes", "passed"), [(14, False), (15, True), (30, True)])
+def test_retry_point_gate_is_exactly_fifteen_out_of_the_same_thirty(successes, passed):
+    selected = accepted_selection()
+    points = [value for value in selected if value["goal_kind"] == "point"]
+    episodes = [metric(value, 2) for value in points]
+    episodes += [dict(metric(value, 3), success=index < successes) for index, value in enumerate(points)]
+    gate = campaign.retry_point_gate(dict(episodes=episodes), selected)
+    assert gate["successes"] == successes and gate["passed"] is passed
+    with pytest.raises(ValueError, match="all 30 exact point IDs"):
+        campaign.retry_point_gate(dict(episodes=episodes[:-1]), selected)
+
+
+@pytest.mark.parametrize(("successes", "expected_trials"), [(14, 30), (15, 96)])
+def test_retry_preserves_originals_and_gates_all_later_frozen_scenarios(tmp_path, monkeypatch, successes, expected_trials):
+    selected, task, data = retry_fixture(tmp_path)
+    original = {path: path.read_bytes() for path in data.rglob("*") if path.is_file()}
+    original[task / "expanded-scenarios.jsonl"] = (task / "expanded-scenarios.jsonl").read_bytes()
+    passed_ids = {value["id"] for value in [p for p in selected if p["goal_kind"] == "point"][:successes]}
+    trials, workers, diagnostic_calls = [], [], []
+
+    class Worker:
+        def __init__(self, args, version, budget):
+            assert args.output.parent == task / "workers"
+            assert args.output.name.startswith("v3-retry-")
+            assert version == 3 and isinstance(budget, campaign.StorageBudget)
+            workers.append(self)
+
+        def trial(self, value, directory):
+            assert directory == campaign.cohort_directory(data, value, "v3-retry")
+            complete_episode(directory, value, 3)
+            metadata = v3.read_json(directory / "episode.json")
+            metadata["success"] = value["goal_kind"] != "point" or value["id"] in passed_ids
+            v3.write_json(directory / "episode.json", metadata)
+            trials.append(value)
+
+        def close(self):
+            pass
+
+    def measured(directory):
+        metadata = v3.read_json(Path(directory) / "episode.json")
+        return dict(metric(metadata, metadata["teacher_version"]), success=metadata["success"])
+
+    def diagnostics(options, values, deadline):
+        assert len(trials) == 30 and all(value["goal_kind"] == "point" for value in trials)
+        diagnostic_calls.append(len(values))
+        return dict(start_not_found=dict(new_all_decisions=dict(count=1, denominator=30000)))
+
+    monkeypatch.setattr(campaign, "Worker", Worker)
+    monkeypatch.setattr(campaign, "phase_start", lambda _: None)
+    monkeypatch.setattr(campaign, "retry_settings", lambda _: dict(mechanics_attempt=2, binary="fixed"))
+    monkeypatch.setattr(campaign, "retry_diagnostics", diagnostics)
+    monkeypatch.setattr(v3, "episode_metrics", measured)
+    options = SimpleNamespace(task=task, data=data, parallel=3, limit_ms=240000, budget_seconds=60)
+    result = campaign.retry(options)
+    assert len(trials) == expected_trials
+    assert result["stop_required"] is (successes < 15)
+    assert result["retry_point_gate"]["successes"] == successes
+    assert diagnostic_calls == [96]
+    assert result["start_diagnostics"]["start_not_found"]["new_all_decisions"]["denominator"] == 30000
+    assert all(path.read_bytes() == contents for path, contents in original.items())
+    if successes < 15:
+        assert not (data / "v3-retry/object").exists()
+        assert not (data / "v3-retry/follow").exists()
+        assert not (data / "v3-retry/approach").exists()
+
+
+def test_retry_refuses_a_changed_binary_as_a_third_mechanics_attempt(tmp_path, monkeypatch):
+    _, task, data = retry_fixture(tmp_path)
+    v3.write_json(task / "retry-metrics.json", dict(retry_settings=dict(binary="first")))
+    monkeypatch.setattr(campaign, "retry_settings", lambda _: dict(binary="changed"))
+    monkeypatch.setattr(campaign, "Worker", lambda *_: pytest.fail("A changed binary must not launch another mechanics attempt"))
+    with pytest.raises(ValueError, match="another binary"):
+        campaign.retry(SimpleNamespace(task=task, data=data))
+
+
+def test_storage_budget_includes_both_original_and_retry_recordings(tmp_path, monkeypatch):
+    budget = storage(tmp_path, monkeypatch, 20 + DECISION_BYTES)
+    retry = tmp_path / "data/v3-retry/point/train/id/samples.bin.gz"
+    retry.parent.mkdir(parents=True)
+    retry.write_bytes(b"12345678")
+    assert budget.used() == 20
+    with budget.reserve(100):
+        with pytest.raises(ValueError, match="Disk budget"):
+            with budget.reserve(100):
+                pytest.fail("Original and retry recordings must share the 15 GiB budget")
+
+
+@pytest.mark.parametrize("counterfactual", [False, True])
+def test_retry_diagnostics_separates_strict_new_and_counterfactual_original_records(tmp_path, monkeypatch, counterfactual):
+    output = tmp_path / "diagnostics.jsonl"
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        variants = [dict(name=f"production-{kind}", target_kind=kind, start_found=True, actual_target_reached=False)
+                    for kind in ("steering", "goal")]
+        # A matrix r15-u4 shares options with production but must not be counted twice.
+        variants.append(dict(name="r15-u4", target_kind="steering", start_found=False, actual_target_reached=False))
+        kwargs["stdout"].write(json.dumps(dict(type="record", index=9, diagnostics=variants)) + "\n")
+        kwargs["stdout"].write(json.dumps(dict(type="summary", records=10, mismatches=4 if counterfactual else 0,
+            previous_mismatches=4 if counterfactual else 0, counterfactual=counterfactual,
+            steering_start_found_false=2, steering_start_evaluable_records=10, steering_escape_required_records=3)) + "\n")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(campaign.subprocess, "run", run)
+    result = campaign.retry_diagnostic_file(Path("/binary"), Path("/original/samples.bin.gz"), [9], output, counterfactual)
+    assert ("--allow-mismatch" in commands[0]) is counterfactual
+    assert result["records"] == result["steering_start_evaluable_records"] == 10
+    assert len(result["selected_production"]) == 2
+    assert all(frame["start_found"] for frame in result["selected_production"])
+    assert campaign.retry_diagnostic_file(Path("/binary"), Path("/original/samples.bin.gz"), [9], output, counterfactual) == result
+    assert len(commands) == 1

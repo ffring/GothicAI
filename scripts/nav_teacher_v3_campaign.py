@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from contextlib import contextmanager
 from copy import copy
 import importlib.util
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -538,14 +539,20 @@ def baseline(options, pool, probes, regions, workers, deadline):
     return selected
 
 
-def evaluate_selection(selected, data, metrics_fn=None):
+def cohort_directory(data, value, cohort="v3"):
+    if cohort not in ("v3", "v3-retry"):
+        raise ValueError(f"Unknown recording cohort: {cohort}")
+    return Path(data) / cohort / value["goal_kind"] / value["split"] / value["id"]
+
+
+def evaluate_selection(selected, data, metrics_fn=None, cohort="v3"):
     metrics_fn = metrics_fn or v3.episode_metrics
     episodes = []
     for value in selected:
         if value["goal_kind"] in ("point", "object"):
             reference = Path(value["teacher_v2_episode"])
             episodes.append(metrics_fn(reference))
-        directory = v3.episode_directory(data, value, 3)
+        directory = cohort_directory(data, value, cohort)
         if v3.complete(directory) and (directory / "contract.json").is_file():
             if not v3.same_scenario(v3.read_json(directory / "episode.json"), value, 3):
                 raise ValueError(f"Existing v3 recording belongs to another scenario: {directory}")
@@ -567,7 +574,257 @@ def evaluate_selection(selected, data, metrics_fn=None):
                 selected=len(selected), expected_by_kind=dict(expected))
 
 
+def retry_preflight(task, data):
+    """The final retry uses exactly the already frozen cohort and baseline."""
+    source = Path(task) / "expanded-scenarios.jsonl"
+    selected = list(v3.rows(source))
+    expected = dict(point=30, object=30, follow=18, approach=18)
+    counts = dict(Counter(value["goal_kind"] for value in selected))
+    if counts != expected or len({value["id"] for value in selected}) != len(selected):
+        raise ValueError(f"Retry requires the exact frozen 30/30/18/18 cohort: {counts}")
+    v3.validate_splits(selected)
+    original_successes = 0
+    for value in selected:
+        if value["goal_kind"] in ("point", "object"):
+            baseline = v3.episode_directory(data, value, 2)
+            if Path(value["teacher_v2_episode"]).resolve() != baseline.resolve() or not v3.complete(baseline):
+                raise ValueError(f"Retry baseline is not the preserved DATA/v2 recording: {value['id']}")
+            metadata = v3.read_json(baseline / "episode.json")
+            if not v3.same_scenario(metadata, value, 2) or metadata.get("success") is not True:
+                raise ValueError(f"Retry requires a matching successful v2 baseline: {value['id']}")
+        if value["goal_kind"] == "point":
+            original = cohort_directory(data, value)
+            if not v3.complete(original):
+                raise ValueError(f"Original point recording is missing: {value['id']}")
+            metadata = v3.read_json(original / "episode.json")
+            if not v3.same_scenario(metadata, value, 3):
+                raise ValueError(f"Original point identity changed: {value['id']}")
+            original_successes += metadata.get("success") is True
+    if original_successes != 8:
+        raise ValueError(f"Original stop cohort must remain 8/30, found {original_successes}/30")
+    return selected
+
+
+def retry_point_gate(result, selected):
+    expected = {value["id"] for value in selected if value["goal_kind"] == "point"}
+    measured = [episode for episode in result["episodes"] if episode["goal_kind"] == "point"]
+    reference = [episode for episode in measured if episode["teacher_version"] == 2]
+    trials = [episode for episode in measured if episode["teacher_version"] == 3]
+    if (len(expected) != 30 or len(reference) != 30 or len(trials) != 30
+            or {episode["id"] for episode in reference} != expected or {episode["id"] for episode in trials} != expected
+            or not all(episode["success"] for episode in reference)):
+        raise ValueError("Retry point gate needs all 30 exact point IDs and 30 successful v2 baselines")
+    successes = sum(bool(episode["success"]) for episode in trials)
+    return dict(completed=30, baseline_successes=30, successes=successes, conditional_success_fraction=successes / 30,
+                minimum_successes=15, passed=successes >= 15)
+
+
+def binary_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def retry_settings(options):
+    return dict(selection_sha256=binary_digest(options.task / "expanded-scenarios.jsonl"),
+                runner_sha256=binary_digest(options.task / "build/opengothic/gothic-body-runner"),
+                contract_sha256=binary_digest(options.task / "build/opengothic/gothic-navmemoryteacher-contract"),
+                diagnostics_sha256=binary_digest(options.task / "build/opengothic/gothic-navmemoryteacher-diagnostics"),
+                limit_ms=options.limit_ms, cohort="v3-retry", mechanics_attempt=2)
+
+
+def retry_diagnostic_file(binary, source, indices, output, counterfactual=False):
+    """Strict new replay and explicitly counterfactual old observations stay separate."""
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    index_path = output.with_suffix(".indices.txt")
+    content = "".join(f"{index}\n" for index in sorted(set(indices)))
+    if index_path.exists() and index_path.read_text(encoding="utf-8") != content:
+        raise ValueError(f"Retry diagnostic index selection changed: {index_path}")
+    index_path.write_text(content, encoding="utf-8")
+    if not output.is_file():
+        command = [str(binary), str(source), "--indices", str(index_path)]
+        if counterfactual:
+            command.append("--allow-mismatch")
+        temporary = output.with_suffix(".partial")
+        with temporary.open("w", encoding="utf-8") as stream:
+            process = subprocess.run(command, stdout=stream, stderr=subprocess.PIPE, text=True, check=False)
+        if process.returncode:
+            raise ValueError(f"Retry diagnostics failed: {source}: {process.stderr[-2000:]}")
+        temporary.replace(output)
+    summaries, found = [], []
+    for row in v3.rows(output):
+        if row.get("type") == "record":
+            found.append(row["index"])
+        elif row.get("type") == "summary":
+            summaries.append(row)
+    if len(summaries) != 1 or sorted(found) != sorted(set(indices)):
+        raise ValueError(f"Incomplete retry diagnostics: {output}")
+    summary = summaries[0]
+    required = ("steering_start_found_false", "steering_start_evaluable_records", "steering_escape_required_records")
+    if (any(not isinstance(summary.get(key), int) or summary[key] < 0 for key in required)
+            or summary["steering_start_evaluable_records"] != summary.get("records")
+            or summary["steering_start_found_false"] > summary["records"]
+            or bool(summary.get("counterfactual", False)) != counterfactual):
+        raise ValueError(f"Invalid retry all-decision start counters: {output}: {summary}")
+    if not counterfactual and (summary.get("mismatches") != 0 or summary.get("previous_mismatches") != 0):
+        raise ValueError(f"Strict retry recording does not replay: {output}")
+    selected = []
+    for row in v3.rows(output):
+        if row.get("type") != "record":
+            continue
+        for target_kind in ("steering", "goal"):
+            production = [value for value in row["diagnostics"] if value.get("target_kind") == target_kind
+                          and value.get("name") == f"production-{target_kind}"]
+            if len(production) != 1:
+                raise ValueError(f"Missing retry 15-cm {target_kind} diagnostic: {output}, index={row['index']}")
+            selected.append(dict(index=row["index"], target_kind=target_kind, start_found=production[0]["start_found"],
+                                 actual_target_reached=production[0]["actual_target_reached"]))
+    summary = dict(summary, selected_frames=len(found), selected_production=selected, output=str(output))
+    return summary
+
+
+def retry_diagnostics(options, selected, deadline):
+    binary = options.task / "build/opengothic/gothic-navmemoryteacher-diagnostics"
+    jobs = []
+    for value in selected:
+        if value["goal_kind"] != "point":
+            continue
+        directory = cohort_directory(options.data, value, "v3-retry")
+        metadata = v3.read_json(directory / "episode.json")
+        indices = list(range(metadata["decisions"] - 1, max(-1, metadata["decisions"] - 102), -10))
+        jobs.append(dict(id=value["id"], cohort="new", source=directory / "samples.bin.gz", indices=indices,
+                         decisions=metadata["decisions"], counterfactual=False))
+    original = options.task / "failures-v3-first/extraction.json"
+    if not original.is_file():
+        raise ValueError("Paired first-take diagnostic indices are missing")
+    extraction = v3.read_json(original)
+    for case in extraction["cases"]:
+        source = Path(case["source_samples"])
+        # Extraction case.json omits split: bind to the frozen point ID instead.
+        value = next((value for value in selected if value["id"] == case["id"] and value["goal_kind"] == "point"), None)
+        if value is None or source.resolve() != (cohort_directory(options.data, value) / "samples.bin.gz").resolve():
+            raise ValueError(f"Counterfactual source is not an original frozen point: {case['id']}")
+        jobs.append(dict(id=case["id"], cohort="original-counterfactual", source=source,
+                         indices=case["diagnostic_indices"], decisions=case["decisions"], counterfactual=True))
+    if len(extraction["cases"]) != 22:
+        raise ValueError(f"Paired diagnostic cohort must include all 22 original failures, found {len(extraction['cases'])}")
+
+    def diagnose(job):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Retry diagnostics exceeded the job wall budget; resume this same attempt")
+        result = retry_diagnostic_file(binary, job["source"], job["indices"],
+                                       options.task / "retry-diagnostics" / job["cohort"] / f"{job['id']}.jsonl",
+                                       job["counterfactual"])
+        if result["records"] != job["decisions"]:
+            raise ValueError(f"Retry diagnostic decision count differs: {job['id']}")
+        return dict(job, source=str(job["source"]), summary=result)
+
+    with ThreadPoolExecutor(max_workers=options.parallel) as executor:
+        outcomes = list(executor.map(diagnose, jobs))
+    groups = {}
+    for cohort in ("new", "original-counterfactual"):
+        values = [value for value in outcomes if value["cohort"] == cohort]
+        summaries = [value["summary"] for value in values]
+        counts = {key: sum(value[key] for value in summaries) for key in (
+            "records", "steering_start_found_false", "steering_start_evaluable_records", "steering_escape_required_records", "selected_frames")}
+        counts["episodes"] = len(values)
+        counts["start_not_found_fraction"] = counts["steering_start_found_false"] / counts["steering_start_evaluable_records"] if counts["steering_start_evaluable_records"] else None
+        counts["selected_start_not_found"] = {kind: sum(not frame["start_found"] for summary in summaries
+            for frame in summary["selected_production"] if frame["target_kind"] == kind) for kind in ("steering", "goal")}
+        groups[cohort] = counts
+    old_frames = old_start_false = 0
+    for case in extraction["cases"]:
+        path = options.task / "failures-v3-first" / case["id"] / "diagnostics.jsonl"
+        found = []
+        for row in v3.rows(path):
+            if row.get("type") != "record":
+                continue
+            baseline = [value for value in row["diagnostics"] if value.get("name") == "r30-u4"
+                        and value.get("target_kind", "steering") == "steering"]
+            if len(baseline) != 1:
+                raise ValueError(f"Missing original production diagnostic: {path}, index={row['index']}")
+            found.append(row["index"])
+            old_start_false += not baseline[0]["start_found"]
+        if sorted(found) != sorted(case["diagnostic_indices"]):
+            raise ValueError(f"Original diagnostic frame indices changed: {path}")
+        old_frames += len(found)
+    paired = groups["original-counterfactual"]
+    if old_frames != paired["selected_frames"] or old_frames != 350:
+        raise ValueError(f"Paired old/new diagnostic cohort must preserve the same 350 frames: {old_frames}/{paired['selected_frames']}")
+    explicit = dict(new_all_decisions=dict(count=groups["new"]["steering_start_found_false"],
+                    denominator=groups["new"]["steering_start_evaluable_records"], episodes=groups["new"]["episodes"]),
+                    new_tail_frames=dict(count=groups["new"]["selected_start_not_found"]["steering"],
+                        denominator=groups["new"]["selected_frames"], goal_count=groups["new"]["selected_start_not_found"]["goal"]),
+                    original_same_350_frames=dict(old_count=old_start_false,
+                        new_count=paired["selected_start_not_found"]["steering"], denominator=old_frames,
+                        goal_new_count=paired["selected_start_not_found"]["goal"]))
+    return dict(start_not_found=explicit, by_cohort=groups, episodes=outcomes,
+                interpretation="New all-decision counters are strict replays. Old inputs use the revised planner counterfactually; expected old-key mismatches are not a new-recording contract failure.")
+
+
+def retry(options):
+    selected = retry_preflight(options.task, options.data)
+    settings = retry_settings(options)
+    output = options.task / "retry-metrics.json"
+    if output.is_file():
+        previous = v3.read_json(output)
+        if previous.get("retry_settings") != settings:
+            raise ValueError("The final mechanics retry already belongs to another binary or frozen cohort")
+    else:
+        v3.write_json(output, dict(retry_settings=settings, status="recording_points"))
+    deadline = time.monotonic() + options.budget_seconds
+    budget = StorageBudget(options.task, options.data)
+    workers = []
+    for index in range(options.parallel):
+        args = worker_args(options, 3, index)
+        args.output = options.task / "workers" / f"v3-retry-{index}"
+        workers.append(Worker(args, 3, budget))
+    metric_cache = {}
+
+    def measured(directory):
+        directory = Path(directory)
+        if directory not in metric_cache:
+            metric_cache[directory] = v3.episode_metrics(directory)
+        return metric_cache[directory]
+
+    diagnostics = None
+    try:
+        for kind in v3.KINDS:
+            phase_start(f"v3-retry-{kind}")
+            values = [value for value in selected if value["goal_kind"] == kind]
+            emit("retry_started", kind=kind, scenarios=len(values), mechanics_attempt=2)
+            run_parallel(values, workers, lambda worker, value: worker.trial(value, cohort_directory(options.data, value, "v3-retry")), deadline)
+            result = evaluate_selection(selected, options.data, metrics_fn=measured, cohort="v3-retry")
+            result.update(retry_settings=settings, status=f"recorded_{kind}", recording_cohort="v3-retry")
+            if kind == "point":
+                result["retry_point_gate"] = retry_point_gate(result, selected)
+                result["stop_required"] = not result["retry_point_gate"]["passed"]
+                v3.write_json(output, result)
+                diagnostics = retry_diagnostics(options, selected, deadline)
+                result["start_diagnostics"] = diagnostics
+                v3.write_json(output, result)
+                if result["stop_required"]:
+                    emit("retry_stop_required", **result["retry_point_gate"])
+                    return result
+            else:
+                result["retry_point_gate"] = retry_point_gate(result, selected)
+                result["start_diagnostics"] = diagnostics
+                v3.write_json(output, result)
+        result["status"] = "complete"
+        v3.write_json(output, result)
+    finally:
+        for worker in workers:
+            worker.close()
+    emit("retry_complete", point_gate=result["retry_point_gate"], all_passed=result["all_passed"])
+    return result
+
+
 def campaign(options):
+    if options.stage == "retry":
+        return retry(options)
     deadline = time.monotonic() + options.budget_seconds
     budget = StorageBudget(options.task, options.data)
     selection = options.task / "expanded-scenarios.jsonl"
@@ -625,7 +882,7 @@ def main():
     parser.add_argument("--min-objects", type=int, default=30)
     parser.add_argument("--min-object-places", type=int, default=30)
     parser.add_argument("--per-region", type=int, default=5)
-    parser.add_argument("--stage", choices=("campaign", "evaluate", "analyze"), default="campaign")
+    parser.add_argument("--stage", choices=("campaign", "evaluate", "analyze", "retry"), default="campaign")
     parser.add_argument("--limit-ms", type=int, default=240000)
     parser.add_argument("--budget-seconds", type=float, default=6900)
     options = parser.parse_args()
@@ -637,7 +894,8 @@ def main():
     try:
         result = campaign(options)
     except Exception as exc:
-        v3.write_json(options.task / "campaign-error.json", dict(error=type(exc).__name__, detail=str(exc)))
+        error_file = "retry-error.json" if options.stage == "retry" else "campaign-error.json"
+        v3.write_json(options.task / error_file, dict(error=type(exc).__name__, detail=str(exc)))
         emit("campaign_failed", error=type(exc).__name__, detail=str(exc))
         raise
     return 1 if result["stop_required"] else 0

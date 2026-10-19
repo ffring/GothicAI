@@ -2,8 +2,8 @@
 # Submit a bounded phase and return its gq id. Never trains a student.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-teacher-v3-remote.sh build|bootstrap|prepare|campaign|evaluate|diagnose}"
-case "$stage" in build|bootstrap|prepare|campaign|evaluate|diagnose) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
+stage="${1:?Usage: nav-teacher-v3-remote.sh build|bootstrap|prepare|campaign|evaluate|diagnose|retry}"
+case "$stage" in build|bootstrap|prepare|campaign|evaluate|diagnose|retry) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 export GQ_OWNER=nav-teacher-v3
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-teacher-v3" "$HOME"')"
 ssh ryzen "mkdir -p '$task/source' '$task/input'"
@@ -37,9 +37,12 @@ if [[ "$stage" != prepare && "$stage" != evaluate ]]; then
   tests=(scripts/tests/test_nav_teacher_v3.py scripts/tests/test_nav_teacher_v3_campaign.py
     scripts/tests/test_nav_demos.py scripts/tests/test_nav_guidance.py
     scripts/tests/test_nav_drive.py scripts/tests/test_nav_rl.py)
-  if [[ "$stage" == diagnose ]]; then
+  if [[ "$stage" == diagnose || "$stage" == retry ]]; then
     targets+=(check-navmemoryteacher-diagnostics)
     tests=(scripts/tests/test_nav_teacher_v3_failures.py scripts/tests/test_nav_demos.py)
+    if [[ "$stage" == retry ]]; then
+      tests+=(scripts/tests/test_nav_teacher_v3.py scripts/tests/test_nav_teacher_v3_campaign.py)
+    fi
   fi
   cmake --build "$task/build" --target "${targets[@]}" --parallel 3
   "$task/.venv/bin/python" -m pytest -q "${tests[@]}"
@@ -51,7 +54,7 @@ if [[ "$stage" == diagnose ]]; then
   "$task/.venv/bin/python" -I scripts/nav_teacher_v3_failures.py analyze "${analysis[@]}" \
     --diagnostics "$task/build/opengothic/gothic-navmemoryteacher-diagnostics" \
     --detour-plans "$task/failures-v3-first/detour/detour-plans-v3.jsonl" --parallel 3
-elif [[ "$stage" == campaign || "$stage" == evaluate ]]; then
+elif [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == retry ]]; then
   "$task/.venv/bin/python" -I scripts/nav_teacher_v3_campaign.py \
     --task "$task" --data "$HOME/gothic-ai/nav-demos-v3" --parallel 3 \
     --min-points 30 --per-region 5 --min-objects 30 --min-object-places 30 \
@@ -76,7 +79,7 @@ fi
 PHASE
 threads=4
 cpu_args=()
-if [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == diagnose ]]; then
+if [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == diagnose || "$stage" == retry ]]; then
   threads=12
   cpu_args=(--cpu-quota 1200%)
 fi
