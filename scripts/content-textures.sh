@@ -4,6 +4,7 @@
 #
 #   scripts/content-textures.sh [output-directory]
 #   scripts/content-textures.sh --self-test
+#   scripts/content-textures.sh --intent /absolute/path/outside/repository/intent.json
 #
 # env: GOTHIC_DIR  game data (default: /Volumes/DevSSD/Dev/games/Gothic II)
 # The C++ tool mounts the VDF archives with addon world priority and writes CSV/README files.
@@ -12,22 +13,35 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 
-if [ "$#" -gt 1 ]; then
-  echo "usage: scripts/content-textures.sh [output-directory|--self-test]" >&2
+if [ "$#" -gt 2 ]; then
+  echo "usage: scripts/content-textures.sh [output-directory|--self-test|--intent outside-json]" >&2
   exit 2
 fi
 case "${1:-}" in
   -h|--help)
-    echo "usage: scripts/content-textures.sh [output-directory|--self-test]"
+    echo "usage: scripts/content-textures.sh [output-directory|--self-test|--intent outside-json]"
     exit 0 ;;
   --self-test) ;;
+  --intent)
+    if [ "$#" -ne 2 ]; then echo "--intent requires an outside-repository JSON path" >&2; exit 2; fi
+    python3 - "$ROOT" "$2" <<'PYGUARD'
+import pathlib, sys
+root, target = map(lambda p: pathlib.Path(p).resolve(), sys.argv[1:])
+if target.is_relative_to(root):
+    raise SystemExit("raw geometry must stay outside the repository")
+PYGUARD
+    ;;
   -*) echo "unknown option: $1" >&2; exit 2 ;;
 esac
+if [ "${1:-}" != --intent ] && [ "$#" -gt 1 ]; then
+  echo "only --intent accepts a second argument" >&2
+  exit 2
+fi
 
 tool() {
   local build="$ROOT/OpenGothic/build" src="$ROOT/scripts/content/world-textures.cpp"
   local library="$build/lib/ZenKit/libzenkit.a" squish="$build/lib/ZenKit/vendor/libsquish/libsquish.a"
-  local bin="$build/content/world-textures" cmake_build
+  local bin="$build/content/world-textures" cmake_build intent_src="$ROOT/scripts/content/world-intent.inc"
 
   if [ ! -f "$library" ] || [ ! -f "$squish" ]; then
     if [ -f "$build/CMakeCache.txt" ]; then
@@ -49,7 +63,7 @@ tool() {
 
   mkdir -p "$build/content"
   if [ ! -x "$bin" ] || [ "$src" -nt "$bin" ] || [ "$0" -nt "$bin" ] \
-      || [ "$library" -nt "$bin" ] || [ "$squish" -nt "$bin" ]; then
+      || [ "$intent_src" -nt "$bin" ] || [ "$library" -nt "$bin" ] || [ "$squish" -nt "$bin" ]; then
     local libraries=("$library" "$squish")
     # Existing engine builds can also provide miniz (standalone ZenKit uses ordinary VDFs).
     if [ -f "$build/libminiz.a" ]; then libraries+=("$build/libminiz.a"); fi
@@ -62,6 +76,9 @@ tool() {
 }
 
 bin="$(tool)"
+if [ "${1:-}" = --intent ]; then
+  exec "$bin" --intent "$GOTHIC_DIR" "$2"
+fi
 if [ "${1:-}" = --self-test ]; then
   exec "$bin" --self-test
 fi

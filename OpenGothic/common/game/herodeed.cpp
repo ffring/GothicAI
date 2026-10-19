@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 
+#include "game/deedwitness.h"
 #include "game/gamescript.h"
 #include "game/inventory.h"
 #include "physics/dynamicworld.h"
@@ -85,6 +86,10 @@ int32_t HeroDeed::aivar(Npc& npc, std::string_view name) {
 std::shared_ptr<HeroDeed> HeroDeed::capture(Npc& hero, std::string_view kind, Npc* victim,
                                           const Item* item, Interactive* chest, size_t count) {
   if(!hero.isPlayer() && !hero.isServerDeed(kind,victim))
+    return {};
+  if(!hero.isPlayer() && kind=="attack" &&
+     (!NpcDeedSimulation::admitted(hero.processPolicy()) || victim==nullptr ||
+      !NpcDeedSimulation::admitted(victim->processPolicy())))
     return {};
   if(!hero.isPlayer() && kind=="take_item" && (chest!=nullptr || item!=nullptr)) {
     const auto at = chest!=nullptr ? chest->position() : item->position();

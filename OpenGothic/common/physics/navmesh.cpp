@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
@@ -26,6 +27,7 @@ using Point = NavMesh::Point;
 constexpr uint32_t cacheVersion = 2;
 constexpr uint64_t hashSeed = 14695981039346656037ull;
 constexpr int maxPath = 32768;
+constexpr unsigned short groundOnlyFlag = 2;
 
 uint64_t hashBytes(uint64_t h, const void* data, size_t size) {
   const auto* bytes = static_cast<const unsigned char*>(data);
@@ -159,11 +161,48 @@ struct NavMesh::Impl {
   std::unique_ptr<dtNavMeshQuery,decltype(&dtFreeNavMeshQuery)> query{nullptr,dtFreeNavMeshQuery};
   Params params;
   Stats stats;
+  std::unordered_map<dtPolyRef,uint64_t> groundComponents;
 
   void initializeQuery() {
+    groundComponents.clear();
+    std::vector<dtPolyRef> groundPolygons;
+    // Cache v2 predates the ground-only query bit. Apply it in memory on both
+    // freshly built and cached ground polygons without changing existing routes.
+    for(int i=0; i<mesh->getMaxTiles(); ++i) {
+      const auto* tile=static_cast<const dtNavMesh&>(*mesh).getTile(i);
+      if(!tile || !tile->header) continue;
+      for(int j=0; j<tile->header->polyCount; ++j)
+        if(tile->polys[j].getType()==DT_POLYTYPE_GROUND) {
+          const auto ref=mesh->getPolyRefBase(tile)|dtPolyRef(j);
+          mesh->setPolyFlags(ref,tile->polys[j].flags|groundOnlyFlag);
+          if(tile->polys[j].flags&1) groundPolygons.push_back(ref);
+          }
+      }
     query.reset(dtAllocNavMeshQuery());
     if(!query || dtStatusFailed(query->init(mesh.get(),65535)))
       throw std::runtime_error("navmesh cannot initialize Detour query");
+    // Eager, ground-only BFS once per build/load. The minimum ground polygon
+    // reference names its component deterministically, including after cache load.
+    // Frame telemetry only reads this table; off-mesh connections are excluded.
+    std::sort(groundPolygons.begin(),groundPolygons.end());
+    groundComponents.reserve(groundPolygons.size());
+    for(const auto root:groundPolygons) {
+      if(groundComponents.find(root)!=groundComponents.end()) continue;
+      std::vector<dtPolyRef> pending{root};groundComponents[root]=uint64_t(root);
+      for(size_t at=0; at<pending.size(); ++at) {
+        const dtMeshTile* tile=nullptr;const dtPoly* poly=nullptr;
+        if(dtStatusFailed(mesh->getTileAndPolyByRef(pending[at],&tile,&poly))) continue;
+        for(auto link=poly->firstLink; link!=DT_NULL_LINK; link=tile->links[link].next) {
+          const auto ref=tile->links[link].ref;
+          if(!ref || groundComponents.find(ref)!=groundComponents.end()) continue;
+          const dtMeshTile* otherTile=nullptr;const dtPoly* other=nullptr;
+          if(dtStatusSucceed(mesh->getTileAndPolyByRef(ref,&otherTile,&other)) &&
+             other->getType()==DT_POLYTYPE_GROUND && (other->flags&1)) {
+            groundComponents[ref]=uint64_t(root);pending.push_back(ref);
+            }
+          }
+        }
+      }
     }
 
   bool load(uint64_t key) {
@@ -468,14 +507,14 @@ void NavMesh::buildOrLoad(const Geometry& geometry, const Params& parameters,
   if(impl->stats.complete) impl->save(hash);
   }
 
-NavMesh::Path NavMesh::findPath(const Point& start, const Point& end) const {
+NavMesh::Path NavMesh::findPath(const Point& start, const Point& end, bool allowTransitions) const {
   Path result;
   if(!impl->query) { result.reason="mesh_not_built"; return result; }
   for(float value:start) if(!std::isfinite(value)) { result.reason="invalid_start"; return result; }
   for(float value:end) if(!std::isfinite(value)) { result.reason="invalid_end"; return result; }
   const float extents[3]={impl->params.nearestHorizontal,impl->params.nearestVertical,impl->params.nearestHorizontal};
   dtQueryFilter filter;
-  filter.setIncludeFlags(1);
+  filter.setIncludeFlags(allowTransitions?1:groundOnlyFlag);
   dtPolyRef startRef=0, endRef=0;
   Point snappedStart{}, snappedEnd{};
   if(dtStatusFailed(impl->query->findNearestPoly(start.data(),extents,&filter,&startRef,snappedStart.data())) || !startRef) {
@@ -574,6 +613,132 @@ bool NavMesh::straightWalkable(const Point& start, const Point& end) const {
                                             &t,normal.data(),corridor.data(),&count,maxPath);
   return dtStatusSucceed(status) && !dtStatusDetail(status,DT_BUFFER_TOO_SMALL) &&
          t>1.f && count>0 && corridor[size_t(count-1)]==endRef;
+  }
+
+NavMesh::GroundLocation NavMesh::groundLocation(const Point& position) const {
+  GroundLocation result;
+  if(!impl->query) return result;
+  for(float value:position) if(!std::isfinite(value)) return result;
+  dtQueryFilter filter;filter.setIncludeFlags(groundOnlyFlag);
+  const float extents[3]={impl->params.nearestHorizontal,impl->params.nearestVertical,impl->params.nearestHorizontal};
+  std::vector<dtPolyRef> polygons(64);
+  int count=0;
+  for(;;) {
+    const auto status=impl->query->queryPolygons(position.data(),extents,&filter,polygons.data(),&count,int(polygons.size()));
+    if(dtStatusFailed(status)) return result;
+    if(!dtStatusDetail(status,DT_BUFFER_TOO_SMALL)) break;
+    polygons.resize(polygons.size()*2);
+    }
+  double best=std::numeric_limits<double>::max();
+  // Detour's findNearestPoly subtracts walkableClimb from the vertical score
+  // when XZ is over a polygon. Use the true 3D surface distance instead so that
+  // a nearby bank or a stacked floor cannot win because of that scoring bias.
+  for(int i=0; i<count; ++i) {
+    Point snapped{};bool over=false;
+    if(dtStatusFailed(impl->query->closestPointOnPoly(polygons[size_t(i)],position.data(),snapped.data(),&over))) continue;
+    bool finite=true;for(float value:snapped) finite&=std::isfinite(value);
+    if(!finite) continue;
+    double squared=0;
+    for(size_t axis=0; axis<3; ++axis) squared+=std::pow(double(snapped[axis])-double(position[axis]),2);
+    if(squared>best || (squared==best && uint64_t(polygons[size_t(i)])>=result.polygon)) continue;
+    const auto component=impl->groundComponents.find(polygons[size_t(i)]);
+    if(component==impl->groundComponents.end()) continue;
+    best=squared;result.known=true;result.snapped=snapped;
+    result.polygon=uint64_t(polygons[size_t(i)]);result.component=component->second;
+    result.snapDistance=float(std::sqrt(squared));
+    result.horizontalDistance=std::hypot(snapped[0]-position[0],snapped[2]-position[2]);
+    result.verticalOffset=snapped[1]-position[1];
+    }
+  return result;
+  }
+
+NavMesh::TransitionSides NavMesh::transitionSides(const Point& source, const Point& end, const Point& current) const {
+  TransitionSides sides;
+  sides.source=groundLocation(source);sides.end=groundLocation(end);sides.current=groundLocation(current);
+  if(!sides.source.known || !sides.end.known) return sides;
+  if(sides.source.component!=sides.end.component) {
+    sides.method="component";
+    sides.takeoffSide=sides.current.known && sides.current.component==sides.source.component;
+    sides.landingSide=sides.current.known && sides.current.component==sides.end.component;
+    }
+  else if(sides.source.polygon!=sides.end.polygon) {
+    sides.method="polygon";
+    sides.takeoffSide=sides.current.known && sides.current.polygon==sides.source.polygon;
+    sides.landingSide=sides.current.known && sides.current.polygon==sides.end.polygon;
+    }
+  return sides;
+  }
+
+NavMesh::TakeoffSite NavMesh::takeoffSite(const Point& source, float insetDistance,
+                                          float maxHorizontalSnap, float maxVerticalSnap) const {
+  TakeoffSite result;result.snapped=source;result.inset=source;
+  if(!impl->query) {result.reason="mesh_not_built";return result;}
+  for(float value:source) if(!std::isfinite(value)) {result.reason="invalid_source";return result;}
+  if(!std::isfinite(insetDistance) || !std::isfinite(maxHorizontalSnap) || !std::isfinite(maxVerticalSnap) ||
+     insetDistance<0 || maxHorizontalSnap<=0 || maxVerticalSnap<=0) {
+    result.reason="invalid_limits";return result;
+    }
+  dtQueryFilter filter;filter.setIncludeFlags(groundOnlyFlag);
+  const float extents[3]={maxHorizontalSnap,maxVerticalSnap,maxHorizontalSnap};
+  dtPolyRef ref=0;
+  if(dtStatusFailed(impl->query->findNearestPoly(source.data(),extents,&filter,&ref,result.snapped.data())) || !ref) {
+    result.reason="source_off_mesh";return result;
+    }
+  result.sourcePolygon=uint64_t(ref);
+  result.sourceHorizontalDistance=std::hypot(source[0]-result.snapped[0],source[2]-result.snapped[2]);
+  result.sourceVerticalDistance=std::abs(source[1]-result.snapped[1]);
+  if(result.sourceHorizontalDistance>maxHorizontalSnap || result.sourceVerticalDistance>maxVerticalSnap) {
+    result.reason="source_snap_too_far";return result;
+    }
+  const dtMeshTile* tile=nullptr;const dtPoly* poly=nullptr;
+  if(dtStatusFailed(impl->mesh->getTileAndPolyByRef(ref,&tile,&poly)) || poly->getType()!=DT_POLYTYPE_GROUND) {
+    result.reason="source_not_ground";return result;
+    }
+  Point center{};
+  for(unsigned int vertex=0; vertex<poly->vertCount; ++vertex)
+    for(size_t axis=0; axis<3; ++axis) center[axis]+=tile->verts[size_t(poly->verts[vertex])*3+axis]/poly->vertCount;
+  Point wall{},normal{};
+  if(dtStatusFailed(impl->query->findDistanceToWall(ref,result.snapped.data(),5.f,&filter,&result.sourceWallDistance,
+                                                   wall.data(),normal.data())) || !std::isfinite(result.sourceWallDistance)) {
+    result.sourceWallDistance=0;result.insetWallDistance=0;result.reason="source_wall_query_failed";return result;
+    }
+  // A tile polygon can be much longer along a boundary than across it. Its
+  // centroid then gives a nearly tangential move with negligible wall clearance.
+  // Maximize actual ground-wall clearance over bounded directions, always on
+  // this same convex polygon. Do not use findDistanceToWall's normal: at a wall
+  // its zero-length normalization can be non-finite.
+  bool found=false;
+  auto consider=[&](const Point& requested) {
+    Point adjusted{};bool over=false;
+    if(dtStatusFailed(impl->query->closestPointOnPoly(ref,requested.data(),adjusted.data(),&over)) || !over ||
+       std::hypot(adjusted[0]-requested[0],adjusted[2]-requested[2])>1.e-4f ||
+       std::abs(adjusted[1]-source[1])>maxVerticalSnap) return;
+    const float amount=std::hypot(adjusted[0]-result.snapped[0],adjusted[2]-result.snapped[2]);
+    if(amount>insetDistance+1.e-4f) return;
+    float clearance=0;
+    if(dtStatusFailed(impl->query->findDistanceToWall(ref,adjusted.data(),5.f,&filter,&clearance,wall.data(),normal.data())) ||
+       !std::isfinite(clearance)) return;
+    if(!found || clearance>result.insetWallDistance ||
+       (clearance==result.insetWallDistance && adjusted<result.inset)) {
+      found=true;result.inset=adjusted;result.insetDistance=amount;result.insetWallDistance=clearance;
+      }
+    };
+  const float dx=center[0]-result.snapped[0],dz=center[2]-result.snapped[2],length=std::hypot(dx,dz);
+  Point towardsCenter=result.snapped;
+  if(length>1.e-5f) {
+    const float amount=std::min(insetDistance,length*.5f);
+    towardsCenter[0]+=dx/length*amount;towardsCenter[2]+=dz/length*amount;
+    }
+  consider(towardsCenter);
+  for(unsigned i=0; i<32; ++i) {
+    const float angle=float(i)*(2.f*3.14159265358979323846f/32.f);
+    auto requested=result.snapped;
+    requested[0]+=std::cos(angle)*insetDistance;requested[2]+=std::sin(angle)*insetDistance;
+    consider(requested);
+    }
+  if(!found) {result.reason="inset_left_source_polygon";return result;}
+  result.valid=true;result.reason="ok";
+  return result;
   }
 
 std::vector<NavMesh::GapCandidate> NavMesh::gapCandidates(const Point& start, const Point& end,
@@ -700,6 +865,166 @@ std::vector<NavMesh::GapCandidate> NavMesh::gapCandidates(const Point& start, co
       if(distance(candidate.start,kept.start)<0.75f && distance(candidate.end,kept.end)<0.75f) duplicate=true;
     if(!duplicate) result.push_back(candidate);
     if(result.size()==maxCandidates) break;
+    }
+  return result;
+  }
+
+NavMesh::ShortcutSearch NavMesh::shortcutCandidates(size_t siteBudget, float maxHorizontal,
+                                                    float maxVertical) const {
+  ShortcutSearch result;
+  if(!impl->query || !siteBudget || siteBudget>10000 || !std::isfinite(maxHorizontal) ||
+     !std::isfinite(maxVertical) || maxHorizontal<=0 || maxVertical<0) return result;
+  result.queryBudget=siteBudget*10;
+  dtQueryFilter filter;
+  filter.setIncludeFlags(groundOnlyFlag);
+  struct Boundary { Point a,b,center; dtPolyRef ref=0; };
+  std::vector<Boundary> boundaries;
+  std::vector<dtPolyRef> polygons;
+  for(int i=0; i<impl->mesh->getMaxTiles(); ++i) {
+    const auto* tile=static_cast<const dtNavMesh&>(*impl->mesh).getTile(i);
+    if(!tile || !tile->header) continue;
+    for(int j=0; j<tile->header->polyCount; ++j) {
+      const auto& poly=tile->polys[j];
+      if(poly.getType()!=DT_POLYTYPE_GROUND || !(poly.flags&1)) continue;
+      const auto ref=impl->mesh->getPolyRefBase(tile)|dtPolyRef(j);
+      polygons.push_back(ref);
+      Point center{};
+      for(unsigned int k=0; k<poly.vertCount; ++k)
+        for(size_t axis=0; axis<3; ++axis) center[axis]+=tile->verts[size_t(poly.verts[k])*3+axis]/poly.vertCount;
+      float vertices[64*6];dtPolyRef neighbors[64];int count=0;
+      const auto status=impl->query->getPolyWallSegments(ref,&filter,vertices,neighbors,&count,64);
+      if(dtStatusFailed(status) || dtStatusDetail(status,DT_BUFFER_TOO_SMALL))
+        throw std::runtime_error("navmesh shortcut boundary query capacity");
+      for(int edge=0; edge<count; ++edge) {
+        if(neighbors[edge]) continue;
+        const auto* p=vertices+edge*6;
+        boundaries.push_back({{p[0],p[1],p[2]},{p[3],p[4],p[5]},center,ref});
+        }
+      }
+    }
+  // Connectivity is ground-only, even when this mesh already contains accepted links.
+  // Avoid a whole-component failed Detour search for every disconnected roof/island.
+  std::unordered_map<dtPolyRef,size_t> components;
+  size_t component=0;
+  for(const auto root:polygons) {
+    if(components.find(root)!=components.end()) continue;
+    std::vector<dtPolyRef> pending{root};components[root]=component++;
+    for(size_t at=0; at<pending.size(); ++at) {
+      const dtMeshTile* tile=nullptr;const dtPoly* poly=nullptr;
+      if(dtStatusFailed(impl->mesh->getTileAndPolyByRef(pending[at],&tile,&poly))) continue;
+      for(auto link=poly->firstLink; link!=DT_NULL_LINK; link=tile->links[link].next) {
+        const auto ref=tile->links[link].ref;
+        if(!ref || components.find(ref)!=components.end()) continue;
+        const dtMeshTile* otherTile=nullptr;const dtPoly* other=nullptr;
+        if(dtStatusSucceed(impl->mesh->getTileAndPolyByRef(ref,&otherTile,&other)) &&
+           other->getType()==DT_POLYTYPE_GROUND && (other->flags&1)) {
+          components[ref]=components[root];pending.push_back(ref);
+          }
+        }
+      }
+    }
+  auto cell=[&](float value){return int(std::floor(value/maxHorizontal));};
+  auto key=[](int x,int z){return (uint64_t(uint32_t(x))<<32)|uint32_t(z);};
+  std::unordered_map<uint64_t,std::vector<size_t>> bins;
+  for(size_t i=0; i<boundaries.size(); ++i) {
+    const auto& b=boundaries[i];
+    for(int z=cell(std::min(b.a[2],b.b[2])); z<=cell(std::max(b.a[2],b.b[2])); ++z)
+      for(int x=cell(std::min(b.a[0],b.b[0])); x<=cell(std::max(b.a[0],b.b[0])); ++x)
+        bins[key(x,z)].push_back(i);
+    }
+  auto inward=[&](const Point& edge,const Boundary& boundary) {
+    auto point=edge;
+    const float dx=boundary.center[0]-edge[0],dz=boundary.center[2]-edge[2];
+    const float length=std::hypot(dx,dz);
+    if(length>1.e-5f) {
+      const float amount=std::min(.15f,length*.5f);
+      point[0]+=dx/length*amount;point[2]+=dz/length*amount;
+      }
+    Point snapped{};bool over=false;
+    if(dtStatusSucceed(impl->query->closestPointOnPoly(boundary.ref,point.data(),snapped.data(),&over)) && over)
+      return snapped;
+    return edge;
+    };
+  struct Site { ShortcutCandidate candidate; dtPolyRef from=0,to=0; };
+  constexpr size_t SitesPerCell=128;
+  std::map<std::pair<int,int>,std::vector<Site>> areas;
+  auto score=[](const Site& s){return s.candidate.horizontalDistance+.25f*s.candidate.verticalDistance;};
+  for(size_t i=0; i<boundaries.size(); ++i) {
+    const auto& source=boundaries[i];
+    const int samples=std::max(1,int(std::ceil(std::hypot(source.b[0]-source.a[0],source.b[2]-source.a[2])/2.f)));
+    for(int sample=0; sample<samples; ++sample) {
+      ++result.boundarySamples;
+      const float t=(float(sample)+.5f)/float(samples);
+      const Point edge={source.a[0]+(source.b[0]-source.a[0])*t,
+                        source.a[1]+(source.b[1]-source.a[1])*t,
+                        source.a[2]+(source.b[2]-source.a[2])*t};
+      std::unordered_set<size_t> checked;
+      for(int z=cell(edge[2]-maxHorizontal); z<=cell(edge[2]+maxHorizontal); ++z)
+        for(int x=cell(edge[0]-maxHorizontal); x<=cell(edge[0]+maxHorizontal); ++x) {
+          const auto found=bins.find(key(x,z));
+          if(found==bins.end()) continue;
+          for(const auto j:found->second) {
+            if(j==i || !checked.insert(j).second) continue;
+            const auto& target=boundaries[j];
+            if(source.ref==target.ref) continue;
+            const float dx=target.b[0]-target.a[0],dz=target.b[2]-target.a[2],length=dx*dx+dz*dz;
+            if(length<1.e-6f) continue;
+            const float along=std::clamp(((edge[0]-target.a[0])*dx+(edge[2]-target.a[2])*dz)/length,0.f,1.f);
+            const Point opposite={target.a[0]+dx*along,target.a[1]+(target.b[1]-target.a[1])*along,target.a[2]+dz*along};
+            const float acrossX=opposite[0]-edge[0],acrossZ=opposite[2]-edge[2];
+            const float horizontal=std::hypot(acrossX,acrossZ),vertical=std::abs(opposite[1]-edge[1]);
+            if(horizontal>maxHorizontal || vertical>maxVertical || (horizontal<.35f && vertical<.4f)) continue;
+            // Facing boundary interiors reject pairs running along the same wall,
+            // and avoid placing takeoff on the outside of a polygon at a corner.
+            if(acrossX*(source.center[0]-edge[0])+acrossZ*(source.center[2]-edge[2])>=-.01f ||
+               acrossX*(target.center[0]-opposite[0])+acrossZ*(target.center[2]-opposite[2])<=.01f) continue;
+            Site site;site.from=source.ref;site.to=target.ref;
+            auto& candidate=site.candidate;
+            candidate.start=inward(edge,source);candidate.end=inward(opposite,target);
+            candidate.horizontalDistance=std::hypot(candidate.end[0]-candidate.start[0],candidate.end[2]-candidate.start[2]);
+            candidate.verticalDistance=std::abs(candidate.end[1]-candidate.start[1]);
+            if(candidate.horizontalDistance>maxHorizontal || candidate.verticalDistance>maxVertical) continue;
+            auto& sites=areas[{int(std::floor(edge[0]/50.f)),int(std::floor(edge[2]/50.f))}];
+            bool duplicate=false;
+            for(const auto& previous:sites)
+              if(distance(previous.candidate.start,candidate.start)<.75f && distance(previous.candidate.end,candidate.end)<.75f) {
+                duplicate=true;break;
+                }
+            if(duplicate) continue;
+            if(sites.size()<SitesPerCell) sites.push_back(site);
+            else {
+              auto worst=std::max_element(sites.begin(),sites.end(),[&](const Site& a,const Site& b){return score(a)<score(b);});
+              if(score(site)<score(*worst)) *worst=site;
+              }
+            }
+          }
+      }
+    }
+  for(auto& area:areas) {
+    auto& sites=area.second;
+    result.geometricSites+=sites.size();
+    std::sort(sites.begin(),sites.end(),[&](const Site& a,const Site& b) {
+      if(score(a)!=score(b)) return score(a)<score(b);
+      if(a.candidate.start!=b.candidate.start) return a.candidate.start<b.candidate.start;
+      return a.candidate.end<b.candidate.end;
+      });
+    }
+  size_t tested=0;
+  for(size_t round=0; round<SitesPerCell; ++round) {
+    for(const auto& area:areas) {
+      if(round>=area.second.size()) continue;
+      if(tested++>=result.queryBudget || result.candidates.size()==siteBudget) return result;
+      const auto& site=area.second[round];auto candidate=site.candidate;
+      if(components[site.from]==components[site.to]) {
+        ++result.groundQueries;
+        const auto path=findPath(candidate.start,candidate.end,false);
+        if(!path.complete && path.reason!="disconnected") continue;
+        candidate.groundComplete=path.complete;candidate.groundDistance=path.length;
+        }
+      const float direct=distance(candidate.start,candidate.end);
+      if(candidate.groundComplete && (candidate.groundDistance<3.f*direct || candidate.groundDistance<direct+10.f)) continue;
+      result.candidates.push_back(candidate);
+      }
     }
   return result;
   }

@@ -130,6 +130,8 @@
 #       payment, Vino hears, then honesty 4 pays. Save/load preserves intentions and single outcomes.
 #       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720. LLM=chatgpt scripts only the later-payment setup,
 #       records one ordinary real-model refusal response verbatim, then exits.
+#   npc_will: character rules start theft, reclamation and accusations near the hero; save/load cooldown;
+#       LLM=fake, SAVE=save_slot_1.sav. The scene never commands harm.
 #   npc_deeds: Vino steals from CHEST_LOBART in front of Hilda, assaults Maleth to a living knockout,
 #       then steals a world item before brave Lobart, who defeats him and reclaims it. NPC knowledge,
 #       its rumor and save/load are checked; guards are covered by module tests.

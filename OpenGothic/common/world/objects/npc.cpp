@@ -5021,7 +5021,7 @@ Item* Npc::addItem(std::unique_ptr<Item>&& i) {
 
 Item* Npc::takeItem(Item& item) {
   const bool npcTheft = !isPlayer() && isServerDeed("take_item");
-  if(npcTheft && item.isMission())
+  if(npcTheft && (serverDeedSimulationError()!=nullptr || item.isMission()))
     return nullptr;
   if(npcTheft) {
     const auto current = HeroDeed::capture(*this,"take_item",nullptr,&item);
@@ -5089,7 +5089,8 @@ void Npc::onWldItemRemoved(const Item& itm) {
 
 void Npc::addItem(size_t id, Interactive &chest, size_t count) {
   auto* item = chest.inventory().getItem(id);
-  if(!isPlayer() && isServerDeed("take_item") && item!=nullptr && item->isMission())
+  if(!isPlayer() && isServerDeed("take_item") &&
+     (serverDeedSimulationError()!=nullptr || (item!=nullptr && item->isMission())))
     return;
   auto deed = HeroDeed::capture(*this,"take_item",nullptr,item,&chest,
                                 std::min(count,chest.inventory().itemCount(id)));
@@ -6356,6 +6357,7 @@ void Npc::setServerDeed(std::string_view kind, Npc* victim, size_t count, std::s
   serverDeedKind = kind;
   serverDeedVictim = victim;
   serverAttackRecorded = false;
+  serverDeedSimulationLost = false;
   serverDeedCount = count;
   serverDeedOwner = expectedOwner;
   }
@@ -6364,12 +6366,20 @@ void Npc::clearServerDeed() {
   serverDeedKind.clear();
   serverDeedVictim = nullptr;
   serverAttackRecorded = false;
+  serverDeedSimulationLost = false;
   serverDeedCount = 0;
   serverDeedOwner.clear();
   }
 
 bool Npc::isServerDeed(std::string_view kind, const Npc* victim) const {
   return kind==serverDeedKind && (kind!="attack" || (victim==serverDeedVictim && !serverAttackRecorded));
+  }
+
+const char* Npc::serverDeedSimulationError() {
+  // NPC queues run before WorldObjects updates the policy; the observer runs at
+  // the next frame's start. Remember a refused native pickup even if the policy
+  // has become normal again before that observer can report the failure.
+  return NpcDeedSimulation::refusal(processPolicy(),serverDeedSimulationLost);
   }
 
 void Npc::consumeServerAttack() {
