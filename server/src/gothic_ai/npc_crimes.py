@@ -16,7 +16,7 @@ from .characters import Card
 from .chronicle import Chronicle, Fact
 from .crime_law import CrimeLaw
 from .crime_react import OWNER_FIGHT_COURAGE, RECLAIM_SECONDS, SHOUT_RANGE_CM
-from .crimes import HERO, Crimes
+from .crimes import HERO, SUSPECT_MIN, Crimes
 from .game import GameError, GameLink
 from .protocol import GameMessage, Loading, NpcActResult, NpcDeed, NpcIdle, NpcRoster, RosterEntry, Session
 from .storyguard import StoryGuard, asleep
@@ -73,6 +73,50 @@ class NpcCrimes:
             if f.get("npc") == npc.upper()
         }
         return [f for f in self.facts() if f.get("id") in ids]
+
+    def suspect_chest(
+        self, npc: str, chest: str, missing: Mapping[str, int], *, waypoint: str = "",
+    ) -> list[Fact]:
+        """A remembered presence explains a loss, without identifying the real thief.
+
+        NPC deeds keep their own namespace. Suspecting the hero in one of these cases is deferred
+        until that namespace has a bridge to hero accusations; it must never create a hero case.
+        """
+        crimes = self.crimes
+        if not self.enabled or crimes is None or crimes.sightings is None:
+            return []
+        npc = npc.upper()
+        out = []
+        for crime in self.facts():
+            if (
+                crime.get("kind") != "theft" or crime.get("chest") != chest
+                or crime.get("owner") != npc or crime.get("item") not in missing
+            ):
+                continue
+            at = int(crime["day"]) * 1440 + int(crime["hour"]) * 60 + int(crime["minute"])
+            place = crimes.places.of(crime.get("waypoint") or waypoint) if crimes.places else None
+            if place is None:
+                continue
+            for sight in crimes.sightings.mind(npc).sightings:
+                if (
+                    sight.trace_kind or sight.who in HERO or sight.who == npc
+                    or sight.end < at - SUSPECT_MIN or sight.start > at + SUSPECT_MIN
+                    or place.id not in sight.place_ids
+                ):
+                    continue
+                if any(
+                    f.get("npc") == npc and f.get("crime") == crime["id"]
+                    and f.get("suspect") == sight.who
+                    for f in self.chronicle.facts("npc_crime_suspected")
+                ):
+                    continue
+                fact = {
+                    "fact": "npc_crime_suspected", "npc": npc, "crime": crime["id"],
+                    "suspect": sight.who, "chest": chest, "sighting": sight.record(),
+                }
+                self.chronicle.record(fact)
+                out.append(fact)
+        return out
 
     def _human(self, npc: str, guild: int | None = None) -> bool | None:
         if guild is None and self.crimes is not None:
@@ -353,7 +397,7 @@ class NpcCrimes:
             except (GameError, TimeoutError, ConnectionError) as error:
                 log.debug("NPC crime %s reaction of %s: %s", crime["id"], witness, error)
 
-    async def _fight(self, crime: Fact, npc: str, generation: int, *, role: str, svm: str = "") -> None:
+    async def _fight(self, crime: Fact, npc: str, generation: int, *, role: str, svm: str = "") -> str:
         actor, target = self.roster.get(npc), self.roster.get(crime["culprit"])
         if reason := self.guard.harm(
             npc, target=crime["culprit"], state=actor.state if actor else "",
@@ -365,12 +409,13 @@ class NpcCrimes:
             **({"svm": svm} if svm else {}),
         )
         if generation != self._generation:
-            return
+            raise GameError("мир сменился во время защиты")
         self.chronicle.record({
             "fact": "npc_crime_reaction", "crime": crime["id"], "npc": npc,
             "reaction": "fight", "role": role, "act": action_id,
         })
         self._track_reclaim(crime, npc, generation, action_id)
+        return action_id
 
     def _track_reclaim(self, crime: Fact, fighter: str, generation: int, action_id: str = "") -> None:
         key = (generation, crime["id"], fighter)

@@ -15,6 +15,7 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.npc_crimes import NpcCrimes
 from gothic_ai.people_knowledge import PeopleKnowledge
 from gothic_ai.protocol import Loading, NpcActResult, NpcDeed, NpcIdle, NpcRoster, Session
+from gothic_ai.sightings import Sighting
 from gothic_ai.social import Rumors, Social
 from tests.test_crime_react import card
 from tests.test_crimes import HILDA, LOBART, Link
@@ -23,6 +24,37 @@ THIEF, VICTIM = "BAU_952_VINO", "BAU_953_MALETH"
 GUARD, OTHER_GUARD = "MIL_300_GUARD", "MIL_301_GUARD"
 PLOT = "NONE_100_XARDAS"
 NAMES = {LOBART: "Лобарт", HILDA: "Хильда", THIEF: "Вино", VICTIM: "Малет"}
+
+
+@pytest.mark.parametrize("suspect", [THIEF, HILDA])
+async def test_missing_chest_suspects_remembered_person_even_when_innocent(system, suspect):
+    crime = system.deeds.record(deed(chest="CHEST", chest_owner=LOBART))
+    at = 3 * 1440 + 9 * 60 + 15
+    sight = Sighting(suspect, NAMES[suspect], at - 2, at + 2, place_ids=["FARM"])
+    system.hero.sightings = SimpleNamespace(mind=lambda npc: SimpleNamespace(sightings=[sight]))
+    system.hero.places = SimpleNamespace(of=lambda wp: SimpleNamespace(id="FARM"))
+    suspected = system.deeds.suspect_chest(LOBART, "CHEST", {"ITFO_BREAD": 1})
+    assert [(f["crime"], f["suspect"]) for f in suspected] == [(crime["id"], suspect)]
+    assert system.deeds.suspect_chest(LOBART, "CHEST", {"ITFO_BREAD": 1}) == []
+    assert system.chronicle.facts("crime_suspected") == []
+    assert system.hero.known(LOBART) == []
+    assert system.deeds.seen(LOBART) == []
+
+
+@pytest.mark.parametrize("change", ["hero", "old", "elsewhere", "other_item", "disabled"])
+async def test_chest_suspicion_needs_spatial_temporal_memory_and_skips_hero(system, change):
+    system.deeds.record(deed(chest="CHEST", chest_owner=LOBART))
+    at = 3 * 1440 + 9 * 60 + 15
+    sight = Sighting("PLAYER" if change == "hero" else THIEF, "Кто-то", at, at,
+                     place_ids=["CITY" if change == "elsewhere" else "FARM"])
+    if change == "old":
+        sight.start = sight.end = at - 120
+    system.hero.sightings = SimpleNamespace(mind=lambda npc: SimpleNamespace(sightings=[sight]))
+    system.hero.places = SimpleNamespace(of=lambda wp: SimpleNamespace(id="FARM"))
+    system.deeds.enabled = change != "disabled"
+    item = "OTHER" if change == "other_item" else "ITFO_BREAD"
+    assert system.deeds.suspect_chest(LOBART, "CHEST", {item: 1}) == []
+    assert system.chronicle.facts("npc_crime_suspected") == []
 
 
 class NpcLink(Link):
