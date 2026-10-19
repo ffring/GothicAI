@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from gothic_ai import triggers
 from gothic_ai.protocol import (
     BROKEN_TRACE_PROTOCOL,
+    CRIME_MEET_PROTOCOL,
     CRIME_PROTOCOL,
     CRIME_REACT_PROTOCOL,
     ERRAND_PROTOCOL,
@@ -120,6 +121,19 @@ def test_v44_independent_deeds_switch_and_held_deed_id():
     }))
     assert isinstance(held, PerceptionHeld)
     assert held.deed == "branch/deed-1"
+
+
+def test_v46_held_room_entry_has_no_deed_and_uses_the_deeds_switch():
+    assert PROTOCOL_VERSION >= CRIME_MEET_PROTOCOL == 46
+    held = parse_game_message(_json({
+        "type": "perception_held", "hold": "room1", "npc": "LOBART", "other": "PLAYER",
+        "kind": "enter_room", "distance": 250,
+    }))
+    assert isinstance(held, PerceptionHeld)
+    assert held.kind == "enter_room" and held.deed is None
+    assert json.loads(ThreatControlCmd(hold=True, deeds=False).to_json()) == {
+        "type": "threat_control", "hold": True, "deeds": False,
+    }
 
 
 def test_v43_native_combat_target_and_armed_npc_threat():

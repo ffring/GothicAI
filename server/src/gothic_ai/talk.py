@@ -348,6 +348,7 @@ class TalkDesk:
         self.planner = planner
         # what an npc perceives now, for the behavioral model (perception.py)
         self.view_of: Callable[[str], tuple[str, ...]] = lambda npc: ()
+        self.refuses: Callable[[str], bool] = lambda npc: False
         self.end_silence_s = end_silence_s
         self.people: dict[str, RosterEntry] = {}  # the roster: people around the hero
         self.game_time: tuple[int, int] | None = None
@@ -498,6 +499,8 @@ class TalkDesk:
         if to is None:
             self._spawn(self.link.send(ChatStatusCmd(status="notice", detail="Рядом некому ответить")))
             return
+        if self._refused(to.id):
+            return
         talk = self.partner
         if talk is None or talk.npc != to.id:
             if talk is not None:
@@ -531,6 +534,8 @@ class TalkDesk:
         """The npc opens the conversation itself (it came up to the hero): it is his partner now, and his next
         words go to it. Not while he talks to another; True if it is the partner already."""
         npc = npc.upper()
+        if self.refuses(npc):
+            return False
         if self.partner is not None:
             return self.partner.npc == npc
         self._open(npc, name, self.clock()).posture = posture
@@ -568,6 +573,8 @@ class TalkDesk:
 
     async def _answer(self, talk: Talk, text: str) -> None:
         npc = talk.npc
+        if self._refused(npc):
+            return
         snap = asyncio.create_task(self._snapshot(npc)) if npc not in self.attached else None
         if npc in self.held:  # it listens, walks along or follows already
             if "scene" in self.held[npc]:  # it stood talking to another (gossip.py): now it listens to him
@@ -583,6 +590,8 @@ class TalkDesk:
             await snap
         if self.partner is not talk:
             return  # the hero turned to someone else meanwhile
+        if self._refused(npc):
+            return
         body = POSTURE_OPTIONS[choice].ru if choice else None
         self.dialogue.say_as_player(npc, text, overlay=choice not in (None, "listen"), body=body)
 
@@ -645,9 +654,20 @@ class TalkDesk:
     async def listen(self, npc: str) -> bool:
         """The npc stops and turns to the hero, held while it listens; False if its body cannot be held."""
         npc = npc.upper()
+        if self.refuses(npc):
+            return False
         if not await self.hold(npc, "listen"):
             return False
         self._spawn(self._act(npc, "turn_to", npc="PLAYER"))
+        return True
+
+    def _refused(self, npc: str) -> bool:
+        """A rule's current refusal applies to voice and typed speech as well as native dialogs."""
+        if not self.refuses(npc):
+            return False
+        if self.partner is not None and self.partner.npc == npc:
+            self._end("refused")
+        self._spawn(self._soft(npc, "say_svm", svm="NOTNOW", overlay=True))
         return True
 
     async def _act(self, npc: str, action: str, /, **args: Any) -> None:

@@ -78,7 +78,9 @@ def test_questlog_is_enabled_by_default_including_scenarios(monkeypatch, flags):
     assert exit.value.code == 0
 
 
-@pytest.mark.parametrize("flags", [[], ["--scenario", "crimes"], ["--no-crimes"]])
+@pytest.mark.parametrize(
+    "flags", [[], ["--scenario", "crimes"], ["--scenario", "crime_meet"], ["--no-crimes"]]
+)
 def test_crimes_is_enabled_by_default_including_scenarios(monkeypatch, flags):
     async def serve(args):
         assert args.no_crimes == ("--no-crimes" in flags)
@@ -100,6 +102,33 @@ def test_deed_control_is_independent_of_the_planner_and_threat_switch(crimes, pl
     assert command["hold"] == (planner and hold_threats)
     assert command.get("deeds", False) == crimes
     assert ("deeds" in command) == crimes
+
+
+async def test_no_crimes_starts_no_encounter_worker_or_approach(monkeypatch):
+    meeting, approach = Mock(), Mock()
+    monkeypatch.setattr(cli, "CrimeMeet", meeting)
+    monkeypatch.setattr(cli, "ImportantApproach", approach)
+    state = cli.ServerState()
+    assert cli._start_crime_meet(state, Mock(), {}) is None
+    assert state.crime_meet is None
+    meeting.assert_not_called()
+    approach.assert_not_called()
+
+
+async def test_encounter_worker_starts_without_a_behavioral_planner(monkeypatch):
+    meeting = Mock(return_value=SimpleNamespace(run=AsyncMock(), refuses=Mock(return_value=False)))
+    monkeypatch.setattr(cli, "CrimeMeet", meeting)
+    monkeypatch.setattr(cli, "ImportantApproach", Mock())
+    state = cli.ServerState()
+    state.crimes = state.crime_react = state.crime_memory = Mock()
+    state.bodies = state.talk = state.chronicle = Mock()
+    assert state.brain is None
+    task = cli._start_crime_meet(state, Mock(), {})
+    assert task is not None
+    await task
+    assert state.crime_meet is meeting.return_value
+    assert state.talk.refuses is state.crime_meet.refuses
+    state.crime_meet.run.assert_awaited_once()
 
 
 @pytest.mark.parametrize(

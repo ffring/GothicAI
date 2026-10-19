@@ -13,6 +13,8 @@ from .crime_law_graph import (
     LAWFUL,
     absolution_program,
     ambient_ops,
+    city_entry_nodes,
+    city_entry_program,
     counter_values,
     gate_nodes,
     law_var,
@@ -100,8 +102,10 @@ class CrimeLawRuntime:
         if self.patches._background:
             await asyncio.gather(*tuple(self.patches._background))
         if self._programs is None:
-            keys = [(node, "condition") for node in gate_nodes(self.graph)]
+            entries = city_entry_nodes(self.graph)
+            keys = [(node, "condition") for node in sorted(set(gate_nodes(self.graph)) | entries)]
             keys += [(node, "information") for node in gate_nodes(self.graph) if node.endswith("_PETZMASTER")]
+            keys += [(node, "information") for node in sorted(entries)]
             keys += [(node, "information") for node in self._paynow]
             if "DIA_PARLAN_WELCOME" in self.graph.nodes:
                 keys.append(("DIA_PARLAN_WELCOME", "information"))
@@ -121,6 +125,8 @@ class CrimeLawRuntime:
                     continue
                 if node in self._paynow or node == "DIA_PARLAN_WELCOME":
                     steps = absolution_program(steps)
+                elif node in entries:
+                    steps = city_entry_program(node, part, steps)
                 else:
                     steps = project_program(communities[node], steps)
                 ops.append({"op": "program", "node": node, "part": part, "steps": steps})

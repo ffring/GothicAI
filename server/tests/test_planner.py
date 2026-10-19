@@ -546,14 +546,14 @@ async def test_scripted_events_are_context_only() -> None:
     assert planner.stats.scripted_events == 1
 
 
-@pytest.mark.parametrize("kind", ["theft", "attack", "murder", "sheep"])
-async def test_held_hero_deeds_are_context_without_model_calls_or_planner_verdicts(kind) -> None:
+@pytest.mark.parametrize("kind", ["theft", "attack", "murder", "sheep", "enter_room"])
+async def test_held_hero_events_are_context_without_model_calls_or_planner_verdicts(kind) -> None:
     planner, decider, applier, clock = make()
     planner.on_roster([entry("WITNESS", 8)], clock.t)
     planner.npcs["WITNESS"].next_check = clock.t + 100
     planner.on_message(parse_game_message(json.dumps({
         "type": "perception_held", "npc": "WITNESS", "other": "PLAYER",
-        "kind": kind, "hold": "h1", "deed": "d1",
+        "kind": kind, "hold": "h1", "deed": None if kind == "enter_room" else "d1",
     })))
     await step(planner, clock, 1)
     assert decider.calls == []
@@ -561,6 +561,21 @@ async def test_held_hero_deeds_are_context_without_model_calls_or_planner_verdic
     assert planner.npcs["WITNESS"].holds == []
     assert planner.npcs["WITNESS"].stimuli[-1].kind == kind
     assert planner.stats.scripted_events == 1
+
+
+@pytest.mark.parametrize("crime_rooms", [False, True])
+async def test_room_observations_react_only_without_crime_rules(crime_rooms) -> None:
+    planner, decider, _, clock = make()
+    planner.crime_rooms = crime_rooms
+    planner.on_roster([entry("LOBART", 4, in_view=True)], clock.t)
+    planner.npcs["LOBART"].next_check = clock.t + 100
+    planner.on_message(parse_game_message(json.dumps({
+        "type": "npc_event", "npc": "LOBART", "other": "PLAYER", "kind": "enter_room",
+    })))
+    await step(planner, clock, 0.05)
+    assert bool(decider.calls) is not crime_rooms
+    assert planner.npcs["LOBART"].stimuli[-1].kind == "enter_room"
+    assert planner.stats.scripted_events == int(crime_rooms)
 
 
 async def test_mid_tier_reacts_only_to_salient_events() -> None:

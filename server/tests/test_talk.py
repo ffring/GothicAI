@@ -482,3 +482,33 @@ async def test_a_body_provider_keeps_its_body_while_talking():
         assert not any(m["type"] in {"attach", "action", "npc_act"} for m in fake.received)
     finally:
         await cm.__aexit__(None, None, None)
+
+
+async def test_rule_refusal_blocks_voice_model_and_ends_existing_partner_until_resolved():
+    fake = FakeGame()
+    llm = FakeBackend("Снова поговорим.", delay=0)
+    cm, link, dialogue, talk = await _desk(fake, llm, FakeDecider(choice="keep_working"))
+    blocked = {XARDAS}
+    talk.refuses = blocked.__contains__
+    try:
+        await fake.roster(XARDAS_NEAR)
+        await _until(lambda: XARDAS in talk.people)
+        assert not talk.begin(XARDAS, "Ксардас")
+        assert not await talk.listen(XARDAS)
+        await fake.send(type="player_text", text="Поговорим?", focus=XARDAS)
+        await _until(lambda: any(m.get("action") == "say_svm" for m in fake.received))
+        assert talk.partner is None
+        assert not llm.calls
+        assert XARDAS not in fake.attached
+
+        blocked.clear()  # a canonical settlement changes the predicate in the same poll
+        await fake.send(type="player_text", text="А теперь?", focus=XARDAS)
+        await _until(lambda: fake.said == ["Снова поговорим."])
+        assert talk.partner is not None
+        blocked.add(XARDAS)  # newly heard murder must also close an existing conversation
+        calls = len(llm.calls)
+        await fake.send(type="player_text", text="Ты слышал?", focus=XARDAS)
+        await _until(lambda: talk.partner is None)
+        assert len(llm.calls) == calls
+    finally:
+        await cm.__aexit__(None, None, None)

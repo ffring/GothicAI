@@ -67,6 +67,7 @@ PR, который добавляет фичу или выключатель, д
 | Пересказ слуха вслух рядом с героем | нет | `gossip.py` | e2e `gossip`; бенч `gossip` | [npc-tools.md](npc-tools.md#сделано-двое-при-герое) |
 | Преступления, свидетели, закон общины | `--no-crimes` | `crimes.py`, `crime_law*.py`; мост — `hero_deed` | e2e `crimes`, `crime_talk`, `crime_law` | [crime.md](crime.md) |
 | Реакция свидетеля на месте: правила роли и характера, родные SVM, зов стражи, память ванили | `--no-crimes` | `crime_react.py`, `crime_memory.py`; мост — `threat_control.deeds`, v44 | e2e `crime_react`, pytest `test_crime_react.py`, `test_crime_memory.py` | [crime.md](crime.md) |
+| Встреча со знающим NPC: возмещение пострадавшему, изгнание из дома, страж и известный убийца, закрытые ворота для вора | `--no-crimes` | `crime_meet.py`, `crime_memory.py`, `amends.py`, `initiative.py`, `crime_law_graph.py`; мост — удержание входа, v46 | `crime_meet`: 37/37, живой Amends 24/24; pytest `test_crime_meet.py`, `test_crime_memory.py`, `test_crime_law_graph.py`, `test_initiative.py` | [crime.md](crime.md) |
 | Сюжетные ответы на преступления: квест вернуть украденное, свидетель заговаривает, жертва требует возмещения | `--no-crimes`; квесты — ещё и `--no-showrunner` | `crimes.py`, `occasions.py`, `showrunner.py`, `chains.py`, `amends.py` | e2e `crime_director` (с `LLM=chatgpt` — живой шоураннер) | [crime.md](crime.md) |
 | Гнев Ксардаса: ответ некроманта | `--no-wrath` | `wrath.py`; мост — `ai_bridge/necromancy*` | e2e `wrath`; бенч `necro` | [xardas-wrath.md](xardas-wrath.md) |
 
