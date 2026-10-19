@@ -50,6 +50,15 @@ class Source:
 
 
 SOURCES = {
+    "blamed": Source(
+        kind="blamed", subject="culprit", observer="npc", key="id", context="",
+        subject_name="culprit_name", observer_name="name",
+        text="{title}",
+        warning_direct="ты считаешь {subject_name} виновным; это убеждение, а не увиденное дело",
+        warning_heard="{about_name} считает {subject_name} виновным; со слов: {source_name}",
+        about_field="npc", about_name_field="name",
+        direct_context="ты считаешь его виновным",
+    ),
     "npc_accused": Source(
         kind="npc_suspected", subject="target", observer="witnesses", key="id", context="",
         subject_name="target_name", observer_name="witness_names",
@@ -228,8 +237,18 @@ class PeopleKnowledge:
         npc = npc.upper()
         facts = self.chronicle.facts()
         dead = {f.get("npc") for f in facts if f.get("fact") == "died"}
+        refuted = {f.get("blamed") for f in facts if f.get("fact") == "blame_refuted"}
+        latest_belief = {
+            (f.get("npc"), f.get("crime")): f.get("id")
+            for f in facts if f.get("fact") == "blamed"
+        }
         known: dict[tuple[str, str, str], PersonKnowledge] = {}
         for f in facts:
+            if f.get("fact") == "blamed" and (
+                f.get("id") in refuted
+                or latest_belief.get((f.get("npc"), f.get("crime"))) != f.get("id")
+            ):
+                continue
             entry = next((e for e in source_events(f, facts) if e.source == npc), None)
             if entry is None and (
                 f.get("fact") == "rumor" and f.get("to") == npc
@@ -269,7 +288,12 @@ class PeopleKnowledge:
                 source.direct_context if entry.direct and source is not None
                 else f"со слов: {entry.source_name}"
             )
-            lines.append(f"- {entry.description()} ({how})")
+            description = entry.description()
+            if entry.kind == "blamed" and entry.direct and entry.about == npc.upper():
+                prefix = f"{entry.about_name} считает, что "
+                if description.startswith(prefix):
+                    description = "ты считаешь, что " + description.removeprefix(prefix)
+            lines.append(f"- {description} ({how})")
         return "Что ты знаешь о людях вокруг:\n" + "\n".join(lines) if lines else None
 
     def warning(self, npc: str, subject: str) -> str | None:

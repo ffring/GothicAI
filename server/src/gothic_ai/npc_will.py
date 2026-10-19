@@ -12,7 +12,7 @@ import time
 from collections import defaultdict, deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .characters import Card
 from .chronicle import Chronicle, Fact
@@ -34,6 +34,9 @@ from .protocol import (
 )
 from .social import Rumors
 from .storyguard import StoryGuard, asleep
+
+if TYPE_CHECKING:
+    from .blame import Blame
 
 log = logging.getLogger(__name__)
 DAY = 24 * 60
@@ -110,6 +113,7 @@ class NpcWill:
         self, link: GameLink, chronicle: Chronicle, npc_crimes: NpcCrimes, *,
         cards: Mapping[str, Card] | None = None, guard: StoryGuard | None = None,
         people: PeopleKnowledge | None = None, rumors: Rumors | None = None,
+        blame: Blame | None = None,
         memory: MemoryStore | None = None, busy: Callable[[str], bool] = lambda _: False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -117,6 +121,7 @@ class NpcWill:
         self.cards = cards if cards is not None else npc_crimes.cards
         self.guard, self.people = guard or npc_crimes.guard, people or PeopleKnowledge(chronicle)
         self.rumors, self.memory, self.busy, self.clock = rumors, memory, busy, clock
+        self.blame = blame
         self.roster = npc_crimes.roster
         self.views: dict[str, NpcView] = {}
         self._view_at: dict[str, float] = {}
@@ -196,7 +201,9 @@ class NpcWill:
                                 and self._active.get(npc) == a["id"]), None)
                 if attempt is not None:
                     self._transferred(attempt, fact)
-        if fact.get("fact") in {"npc_crime", "npc_crime_seen", "npc_crime_suspected", "rumor"}:
+        if fact.get("fact") in {
+            "npc_crime", "npc_crime_seen", "npc_crime_suspected", "rumor", "blamed", "blame_refuted",
+        }:
             self._kick()
 
     def _kick(self) -> None:
@@ -252,7 +259,25 @@ class NpcWill:
         begun = {f.get("motive") for f in self.attempts()
                  if f.get("kind") != "greed" or f.get("outcome") == "committed"}
         return [f for f in self.chronicle.facts("npc_motive") if f.get("id") not in begun
-                and not (f.get("crime") and self._resolved(f["crime"]))]
+                and not (f.get("crime") and self._resolved(f["crime"]))
+                and self._belief_current(f)]
+
+    def _belief_current(self, motive: Fact) -> bool:
+        if self.blame is None or not motive.get("crime"):
+            return not motive.get("blamed")
+        belief = self.blame.active(motive["npc"], motive["crime"])
+        if motive.get("blamed"):
+            return belief is not None and belief["id"] == motive["blamed"]
+        # A deliberate attribution replaces a mere suspicion or an earlier piece of hearsay.
+        return belief is None
+
+    def _crime(self, motive: Fact) -> Fact | None:
+        if motive.get("blamed") and self.blame is not None:
+            belief = self.blame.active(motive["npc"], motive["crime"])
+            if belief is not None and belief["id"] == motive["blamed"]:
+                return self.blame.crime_for(belief)
+            return None
+        return self.npc_crimes.crime(motive["crime"])
 
     @staticmethod
     def _at(fact: Fact) -> int:
@@ -406,6 +431,14 @@ class NpcWill:
         )
 
     async def _discover_reclaim(self, generation: int) -> None:
+        if self.blame is not None:
+            for belief in self.blame.beliefs():
+                crime = self.blame.crime_for(belief)
+                if crime is None or crime.get("kind") != "theft" or self._resolved(crime["id"]):
+                    continue
+                npc, culprit, cid = belief["npc"], belief["culprit"], belief["crime"]
+                self._remember(npc, "reclaim", culprit, f"reclaim:{belief['id']}",
+                               "считает его виновным в пропаже", crime=cid, blamed=belief["id"])
         for crime in self.npc_crimes.facts():
             owner, culprit, cid = crime.get("owner"), crime.get("culprit"), crime.get("id")
             if crime.get("kind") != "theft" or not owner or not culprit or self._resolved(cid):
@@ -715,8 +748,7 @@ class NpcWill:
             return
         if motive["kind"] == "reclaim" and (
             any(key[1:] == (cid, npc) for key in self.npc_crimes._reclaiming)
-            or any(f.get("crime") == cid and f.get("npc") == npc
-                   for f in self.chronicle.facts("npc_crime_reaction"))
+            or self._reacted(motive)
         ):
             return
         view = await self._view(npc, generation)
@@ -731,7 +763,7 @@ class NpcWill:
             return
         started_at = self._stamp()
         if act == "fight":
-            crime = self.npc_crimes.crime(cid)
+            crime = self._crime(motive)
             if crime is None:
                 return
             action = await self.npc_crimes._fight(
@@ -751,16 +783,31 @@ class NpcWill:
         npc, cid = motive["npc"], motive["crime"]
         if motive["kind"] == "reclaim" and (
             any(key[1:] == (cid, npc) for key in self.npc_crimes._reclaiming)
-            or any(f.get("crime") == cid and f.get("npc") == npc
-                   for f in self.chronicle.facts("npc_crime_reaction"))
+            or self._reacted(motive)
         ):
             return
+        if motive.get("blamed") and self.blame is not None:
+            crime = self._crime(motive)
+            if crime is None:
+                return
+            values = await self.link.story_eval(npc, [
+                ["call", "NPC_HASITEMS", ["inst", motive["target"]], ["sym", crime["item"]]],
+            ])
+            if generation != self._generation or not self._belief_current(motive):
+                return
+            if len(values) != 1 or type(values[0]) is not int:
+                return
+            if values[0] <= 0:
+                belief = self.blame.active(npc, cid)
+                if belief is not None:
+                    await self.blame.refute(belief, how="no_goods")
+                return
         if not self.loop_guard.claim(npc):
             return
         act = str(rule.action(self.cards.get(npc)))
         action = f"far:{motive['id']}"
         if act == "fight":
-            crime = self.npc_crimes.crime(cid)
+            crime = self._crime(motive)
             if crime is None or await self.fight_far(crime, npc, generation) is None:
                 return
         if generation != self._generation or self.npc_crimes.settled(cid):
@@ -771,6 +818,15 @@ class NpcWill:
         if act == "accuse":
             self._accused(motive, far=True)
         self._outcome(attempt, "completed", "far_meeting")
+
+    def _reacted(self, motive: Fact) -> bool:
+        original = self.npc_crimes.crime(motive["crime"])
+        return any(
+            f.get("crime") == motive["crime"] and f.get("npc") == motive["npc"]
+            and f.get("culprit", (original or {}).get("culprit")) == motive["target"]
+            and (not motive.get("blamed") or f.get("blamed") == motive["blamed"])
+            for f in self.chronicle.facts("npc_crime_reaction")
+        )
 
     def _started(self, motive: Fact, act: str, action: str, generation: int, *,
                  started_at: dict[str, int] | None = None, far: bool = False) -> None:

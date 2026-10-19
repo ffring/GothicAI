@@ -252,7 +252,7 @@ class FarWorld:
         if not self._current(generation) or self.will.npc_crimes.settled(crime["id"]):
             return None
         culprit, cid = crime["culprit"], crime["id"]
-        action = f"far:{cid}:{fighter}:{role}"
+        action = f"far:{cid}:{fighter}:{role}:{culprit}:{crime.get('blamed', '')}"
         chronicle = self.will.chronicle
         previous = next((f for f in chronicle.facts("npc_crime_defense")
                          if f.get("act") == action and f.get("crime") == cid), None)
@@ -315,17 +315,21 @@ class FarWorld:
                     "fact": "npc_crime_restitution", "crime": cid, "npc": crime["owner"],
                     "culprit": culprit, "fighter": fighter, "item": crime["item"], "count": returned,
                     "how": "defeated_thief", "far": True,
+                    **({"blamed": crime["blamed"]} if crime.get("blamed") else {}),
                 })
                 outcome = "reclaimed"
         chronicle.record({
             "fact": "npc_crime_reaction", "crime": cid, "npc": fighter,
+            "culprit": culprit,
             "reaction": "fight", "role": role, "act": action, "far": True,
+            **({"blamed": crime["blamed"]} if crime.get("blamed") else {}),
         })
         result = {
             "fact": "npc_crime_defense", "crime": cid, "culprit": culprit,
             "fighter": fighter, "act": action, "outcome": outcome, "reason": reason,
             "item": crime.get("item", ""), "count": crime.get("count", 0), "returned": returned,
             "far": True,
+            **({"blamed": crime["blamed"]} if crime.get("blamed") else {}),
         }
         chronicle.record(result)
         return result

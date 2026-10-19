@@ -195,7 +195,7 @@ class CrimeMeet:
             return
         if fact.get("fact") in {
             "crime", "crime_seen", "rumor", "testimony", "crime_known", "forgiven", "silenced",
-            "absolved", "died",
+            "absolved", "died", "blamed", "blame_refuted",
         }:
             # A model may be writing a demand. Cancel it before its next await can install stale work.
             for npc, task in tuple(self._demands.items()):
@@ -231,6 +231,7 @@ class CrimeMeet:
             for known in self.crimes.known(npc)
             if known.degree in {"seen", "heard"} and known.suspect == "PLAYER"
             and not known.forgiven and not known.silenced
+            and not self.crimes.blamed(npc, known.crime["id"])
         }
         known = {
             (fact.get("community"), fact.get("crime"))

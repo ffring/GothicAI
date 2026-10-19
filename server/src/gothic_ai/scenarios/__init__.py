@@ -34,6 +34,7 @@ from .deals import deal_debt as deal_debt
 from .deals import deal_demo as deal_demo
 from .deals import deal_window as deal_window
 from .deals import haggle as haggle
+from .frame import frame as frame
 from .lies import amends_storylet as amends_storylet
 from .lies import lie_found_out as lie_found_out
 from .lies import rumor_spread as rumor_spread

@@ -88,7 +88,7 @@ STATE_S = 2.5  # story_state in prepare: within the turn's PREPARE_S
 TICK_S = 5.0
 
 ASK = "ask_witness"
-ASK_TOOL = Tool(
+HERO_ASK_TOOL = Tool(
     ASK,
     "Расспросить знакомого о герое, когда сам ты не видел, а его слова проверить хочешь (кого можно спросить "
     "и где он — в обстановке). Рядом — окликнешь, и он подойдёт; поодаль — сходишь к нему и вернёшься; "
@@ -105,6 +105,22 @@ ASK_TOOL = Tool(
         },
         "required": ["who", "said"],
         "additionalProperties": False,
+    },
+)
+
+ASK_TOOL = Tool(
+    ASK,
+    HERO_ASK_TOOL.description + " С about — что свидетель видел о другом человеке; не о герое.",
+    {
+        **HERO_ASK_TOOL.parameters,
+        "properties": {
+            **HERO_ASK_TOOL.parameters["properties"],
+            "about": {
+                "type": ["string", "null"],
+                "description": "о ком спрашиваешь: имя человека из обстановки; null — о герое",
+            },
+        },
+        "required": ["who", "said", "about"],
     },
 )
 
@@ -133,13 +149,15 @@ class Testimony:
     said: str  # the hero's words it asked about
     tier: str
     minute: int  # when it was told
-    about: int  # when the hero said those words: what the witness tells of is the day before
+    at: int  # when the hero said those words
     saw: list[Sighting] = field(default_factory=list)
     told: list[Sighting] = field(default_factory=list)
     crime_saw: list[str] = field(default_factory=list)  # actual crime_seen, never rumors or suspicions
     crime_told: list[str] = field(default_factory=list)
     cover: str = ""  # deal id, or fear; saw and crime_saw retain the truth
     vouch: str = ""
+    about: str = HERO  # the person asked about; old facts used about as a timestamp
+    about_name: str = ""
 
     @classmethod
     def of(cls, f: Fact) -> Testimony:
@@ -153,13 +171,15 @@ class Testimony:
             str(f.get("said", "")),
             str(f.get("tier", "")),
             minute,
-            int(f.get("about", minute)),
+            int(f.get("at", f.get("about", minute) if not isinstance(f.get("about"), str) else minute)),
             [Sighting.of(r) for r in f.get("saw", [])],
             [Sighting.of(r) for r in f.get("told", [])],
             [str(crime) for crime in f.get("crime_saw", [])],
             [str(crime) for crime in f.get("crime_told", [])],
             str(f.get("cover", "")),
             str(f.get("vouch", "")),
+            str(f.get("about") or HERO).upper() if isinstance(f.get("about"), str) else HERO,
+            str(f.get("about_name", "")),
         )
 
 
@@ -175,6 +195,8 @@ class Inquiry:
     said: str
     minute: int  # when the hero said it and the asker meant to ask
     meets: int  # their meeting, when it is asked
+    about: str = HERO
+    about_name: str = ""
 
 
 class Witnesses:
@@ -201,6 +223,7 @@ class Witnesses:
         cover: bool = True,
         cards: Mapping[str, Card] | None = None,
         people_knowledge: PeopleKnowledge | None = None,
+        npc_crimes: bool = True,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
@@ -218,6 +241,8 @@ class Witnesses:
         self.journal = journal or Journal()
         self.crimes = crimes if crimes is not None else sightings.crimes
         self.cover_enabled = cover
+        self.npc_crimes_enabled = npc_crimes
+        self.all_tools = (ASK_TOOL if npc_crimes else HERO_ASK_TOOL,)
         self.cards = cards if cards is not None else {}
         self.people_knowledge = people_knowledge or PeopleKnowledge(chronicle)
         self.on_change: list[Callable[[str], None]] = []  # an asker whose concerns changed with time
@@ -225,6 +250,7 @@ class Witnesses:
         self.inquiries: dict[str, Inquiry] = {}  # far questions not asked yet
         self._near: dict[str, list[Candidate]] = {}  # asker -> whom it may ask, from the last prepare
         self._shown: dict[str, dict[str, Told]] = {}  # asker -> exact testimony evidence row, last turn
+        self._npc_rows: set[tuple[str, str]] = set()  # NPC testimony cannot catch a hero lie by itself
         self._asking: set[str] = set()  # askers with a question under way
         self._expired: set[str] = set()  # far answers whose concern is over, notified
         sightings.hearsay = self
@@ -241,6 +267,7 @@ class Witnesses:
                 self.now = 0
                 self._near.clear()
                 self._shown.clear()
+                self._npc_rows.clear()
                 self._asking.clear()
 
     def _load(self) -> None:
@@ -248,6 +275,7 @@ class Witnesses:
         self.inquiries.clear()
         self._near.clear()
         self._shown.clear()
+        self._npc_rows.clear()
         self._expired.clear()
         done = {
             f.get("id") for f in self.chronicle.facts() if f.get("fact") in ("testimony", "inquiry_lapsed")
@@ -255,7 +283,8 @@ class Witnesses:
         for f in self.chronicle.facts("inquiry"):
             if f.get("id") not in done:
                 q = _inquiry(f)
-                self.inquiries[q.id] = q
+                if q.about == HERO or self.npc_crimes_enabled:
+                    self.inquiries[q.id] = q
 
     # --- whom it may ask ---------------------------------------------------------------------------
 
@@ -323,12 +352,16 @@ class Witnesses:
         waiting = [q for q in self.inquiries.values() if q.npc == npc]
         if waiting:
             lines = [
-                f"- {q.witness_name} — о его словах «{q.said}» (встретитесь {self._at(q.meets)})"
+                f"- {q.witness_name} — "
+                + (f"о человеке {q.about_name}, " if q.about != HERO else "")
+                + f"о его словах «{q.said}» (встретитесь {self._at(q.meets)})"
                 for q in waiting
             ]
             parts.append("Ты собирался расспросить при встрече:\n" + "\n".join(lines))
         shown: dict[str, Told] = {}
+        self._npc_rows = {row for row in self._npc_rows if row[0] != npc}
         for t in self.testimonies(npc):
+            first = len(shown)
             if t.cover:
                 shown[f"С{len(shown) + 1}"] = Told(
                     t.witness, t.witness_name, [], self._cover_words(t), t.said, t.id
@@ -344,13 +377,17 @@ class Witnesses:
                 shown[f"С{len(shown) + 1}"] = Told(
                     t.witness, t.witness_name, t.told, self._told(t, ""), t.said, t.id
                 )
+            if t.about != HERO:
+                self._npc_rows.update((npc, sid) for sid in list(shown)[first:])
         self._shown[npc] = shown
         if shown:
             lines = [
                 f"- {sid}: {t.words}.{self._warning(npc, t.witness)}" for sid, t in shown.items()
             ]
+            subject = "" if any(row[0] == npc for row in self._npc_rows) else " о герое"
             parts.append(
-                "Что тебе рассказали о герое другие (с их слов, сам ты этого не видел):\n" + "\n".join(lines)
+                f"Что тебе рассказали{subject} другие (с их слов, сам ты этого не видел):\n"
+                + "\n".join(lines)
             )
         return "\n".join(parts) or None
 
@@ -361,7 +398,7 @@ class Witnesses:
     all_tools: tuple[Tool, ...] = (ASK_TOOL,)
 
     def tools(self, npc: str) -> list[Tool]:
-        return [ASK_TOOL] if self._near.get(npc.upper()) else []
+        return list(self.all_tools) if self._near.get(npc.upper()) else []
 
     async def handle(
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
@@ -371,6 +408,17 @@ class Witnesses:
         npc = conv.npc
         who = str(call.arguments.get("who", "")).strip()
         said = str(call.arguments.get("said", "")).strip().strip("«»\"' .")
+        about, about_name = HERO, ""
+        if "about" in call.arguments:
+            if not self.npc_crimes_enabled:
+                return ToolOutcome("Отклонено: расспросы о других людях выключены.", "rejected")
+            if call.arguments["about"] is not None:
+                subject = self._subject(npc, str(call.arguments["about"]).strip())
+                if subject is None:
+                    return ToolOutcome(
+                        "Отклонено: about — имя человека из обстановки, кроме героя.", "rejected"
+                    )
+                about, about_name = subject
         near = self._near.get(npc, [])
         c = _find(near, who)
         if c is None:
@@ -386,14 +434,16 @@ class Witnesses:
             )
         if npc in self._asking:
             return ToolOutcome("Отклонено: ты уже ждёшь ответа на свой вопрос.", "rejected")
-        if any(q.npc == npc and q.witness == c.npc for q in self.inquiries.values()):
+        if any(q.npc == npc and q.witness == c.npc and q.about == about for q in self.inquiries.values()):
             return ToolOutcome(f"Отклонено: ты уже собирался спросить при встрече: {c.name}.", "rejected")
-        if (old := self._asked(npc, c.npc, said)) is not None:
+        if (old := self._asked(npc, c.npc, said, about)) is not None:
             return ToolOutcome(f"Ты уже спрашивал: {self._told(old)}.", "read")
         now = self._now()
         if c.tier == "far":
             q = Inquiry(
-                f"{npc}:{c.npc}:{now}", npc, conv.persona.name, c.npc, c.name, said, now, c.meets or 0
+                f"{npc}:{c.npc}:{about}:{now}", npc, conv.persona.name, c.npc, c.name, said, now,
+                c.meets or 0,
+                about, about_name,
             )
             self._inquire(q)
             return ToolOutcome(
@@ -416,7 +466,7 @@ class Witnesses:
 
         async def job() -> tuple[str, bool]:
             try:
-                return await self._ask(conv, c, said, now, asking)
+                return await self._ask(conv, c, said, now, asking, about, about_name)
             finally:
                 self._asking.discard(npc)
 
@@ -427,21 +477,27 @@ class Witnesses:
     def recall(self, npc: str, query: str) -> str | None:
         """What it was told of the hero, by whom the query names, or all of it."""
         q = query.lower()
-        told = [t for t in self.testimonies(npc, KEPT_MIN * 3, 10) if t.witness_name.lower()[:4] in q]
-        told = told or (self.testimonies(npc, KEPT_MIN * 3, 10) if "геро" in q else [])
+        recent = self.testimonies(npc, KEPT_MIN * 3, 10)
+        told = [t for t in recent if t.witness_name.lower()[:4] in q
+                or (t.about_name and t.about_name.lower()[:4] in q)]
+        told = told or ([t for t in recent if t.about == HERO] if "геро" in q else [])
         if not told:
             return None
-        return "Что тебе рассказали о герое другие:\n" + "\n".join(f"- {self._told(t)}" for t in told)
+        subject = "" if any(t.about != HERO for t in told) else " о герое"
+        return f"Что тебе рассказали{subject} другие:\n" + "\n".join(f"- {self._told(t)}" for t in told)
 
     # --- for sightings.catch_lie (sightings.Hearsay) -----------------------------------------------
 
     def told(self, npc: str, sid: str) -> Told | None:
         """The testimony behind a С line of the npc's latest situation."""
-        return self._shown.get(npc.upper(), {}).get(sid)
+        npc = npc.upper()
+        if (npc, sid) in self._npc_rows:
+            return None
+        return self._shown.get(npc, {}).get(sid)
 
     def any(self, npc: str) -> bool:
         """Whether a witness told it of seeing the hero (catch_lie is offered then)."""
-        return any(t.told or t.cover or self._deeds(t) for t in self.testimonies(npc))
+        return any(t.about == HERO and (t.told or t.cover or self._deeds(t)) for t in self.testimonies(npc))
 
     # --- concerns.py -----------------------------------------------------------------------------
 
@@ -457,7 +513,8 @@ class Witnesses:
         out = []
         for t in self.testimonies(npc, CONCERN_MIN):
             key = f"witness:{t.id}"
-            if t.tier != "far" or not (t.told or self._deeds(t)) or key in spoken or t.id in settled:
+            if (t.about != HERO or t.tier != "far" or not (t.told or self._deeds(t))
+                    or key in spoken or t.id in settled):
                 continue
             if frozenset(roots(t.said)) in words:
                 continue  # caught for those words by what it saw itself
@@ -469,7 +526,8 @@ class Witnesses:
     # --- asking -----------------------------------------------------------------------------------
 
     async def _ask(
-        self, conv: Conversation, c: Candidate, said: str, about: int, asking: asyncio.Task[None] | None
+        self, conv: Conversation, c: Candidate, said: str, at: int, asking: asyncio.Task[None] | None,
+        about: str = HERO, about_name: str = "",
     ) -> tuple[str, bool]:
         """Near: it calls the witness over; a walk: it goes to the witness and back. Then the witness tells
         what it saw (aloud, if the hero hears) and the asker reacts."""
@@ -499,7 +557,7 @@ class Witnesses:
                 await self._act(c.npc, "turn_to", npc=npc)
             else:
                 await self._soft(c.npc, "turn_to", npc=npc)
-            t = await self._testify(None, npc, name, c.npc, c.name, said, c.tier, about)
+            t = await self._testify(None, npc, name, c.npc, c.name, said, c.tier, at, about, about_name)
             await self._speak(wconv, t)
             if c.tier == "walk":
                 await self._act(npc, "go_to_npc", npc=HERO, radius=BACK_CM)
@@ -532,14 +590,21 @@ class Witnesses:
         if self.budget is not None and not self.budget.allow(t.witness):
             return
         saw = "; ".join(self.sightings.words(s, t.minute) for s in t.told)
-        if self.crimes is not None:
-            deeds = "; ".join(self.crimes.describe(f) for f in self._deeds(t))
+        if self.crimes is not None or t.about != HERO:
+            deeds = "; ".join(self._describe(t, f) for f in self._deeds(t))
             saw = "; ".join(part for part in (saw, deeds) if part)
         cue = (
             f"[{t.name} спрашивает тебя о герое: тот говорит «{t.said}». Что ты видел сам: "
             f"{saw or 'героя ты не видел за сутки до того'}. Ответь коротко тому, кто спрашивает, своими "
             "словами и в своём характере — только то, что видел сам.]"
         )
+        if t.about != HERO:
+            cue = (
+                f"[{t.name} спрашивает тебя о человеке {t.about_name}: герой говорит «{t.said}». "
+                f"Что ты видел сам: {saw or 'этого человека ты тогда не видел'}. "
+                "Ответь коротко тому, кто спрашивает, своими словами и в своём характере — "
+                "только то, что видел сам.]"
+            )
         if t.cover:
             decision = (
                 "ты боишься героя: скажи, что ничего не видел"
@@ -577,35 +642,52 @@ class Witnesses:
             "Противоречит ли это "
             f"словам героя «{t.said}» и что сказать ему — решай сам.]"
         )
+        if t.about != HERO:
+            cue = (
+                f"[Ответ о человеке {t.about_name}: {self._told(t)}. "
+                "Показание — строки С1… в «Что тебе рассказали другие». "
+                "Кого считать виновным и что сказать герою — решай сам.]"
+            )
         if self.budget is None or self.budget.allow(npc):
-            self.dialogue.event_turn(npc, cue, tools=("catch_lie", "set_intent"), kind="witness")
+            self.dialogue.event_turn(
+                npc, cue, tools=(("catch_lie" if t.about == HERO else "blame"), "set_intent"), kind="witness"
+            )
         else:
             self.dialogue.note(npc, cue.strip("[]"))
 
     async def _testify(
-        self, id: str | None, npc: str, name: str, witness: str, wname: str, said: str, tier: str, about: int
+        self, id: str | None, npc: str, name: str, witness: str, wname: str, said: str, tier: str, at: int,
+        about: str = HERO, about_name: str = "",
     ) -> Testimony | None:
-        """What the witness tells: what it saw itself of the day before the hero's words (`about`). The fact,
+        """What the witness tells: its own evidence before the hero's words (`at`). The fact,
         and both remember. `id`: the far question's, else a new one. None if a load came meanwhile."""
+        if about != HERO and not self.npc_crimes_enabled:
+            return None
         branch = self.chronicle.branch
         state = await self._state()
         if self.chronicle.branch != branch:
             return None  # another world: this answer belongs to none of its facts
         now = self._now()
-        about = about or now
-        saw = _trail(self.sightings.hero_trail(witness), about)
-        t = Testimony(id or f"{npc}:{witness}:{now}", npc, name, witness, wname, said, tier, now, about, saw)
+        at = at or now
+        about = about.upper()
+        saw = _trail(self.sightings.hero_trail(witness), at) if about == HERO else []
+        t = Testimony(
+            id or f"{npc}:{witness}:{about}:{now}", npc, name, witness, wname, said, tier, now, at, saw,
+            about=about, about_name=about_name,
+        )
         t.told = list(saw)
-        if self.crimes is not None:
+        if self.crimes is not None and about == HERO:
             deeds = [
                 f
                 for f in reversed(self.crimes.seen(witness))
-                if about - TRAIL_MIN <= _crime_minute(f) <= about
+                if at - TRAIL_MIN <= _crime_minute(f) <= at
             ][:TOLD]
             t.crime_saw = [str(f["id"]) for f in deeds]
             silent = {str(k.crime["id"]) for k in self.crimes.known(witness) if k.silenced}
             t.crime_told = [crime for crime in t.crime_saw if crime not in silent]
-        if self.cover_enabled:
+        if about != HERO:
+            self._npc_evidence(t)
+        elif self.cover_enabled:
             self._cover(t)
         self.chronicle.record(
             {
@@ -617,7 +699,8 @@ class Witnesses:
                 "witness_name": wname,
                 "said": said,
                 "tier": tier,
-                "about": about,
+                "at": at,
+                **({"about": about, "about_name": about_name} if about != HERO else {}),
                 "saw": [s.record() for s in t.saw],
                 "told": [s.record() for s in t.told],
                 **({"crime_saw": t.crime_saw, "crime_told": t.crime_told} if t.crime_saw else {}),
@@ -626,12 +709,94 @@ class Witnesses:
                 **({"day": int(state["day"])} if "day" in state else {}),
             }
         )
-        self._betrayal(t)
+        if about == HERO:
+            self._betrayal(t)
         self.journal.add("testimony", npc=npc, name=name, witness=witness, saw=len(t.saw), tier=tier)
-        self.dialogue.remember(witness, wname, f"Тебя расспрашивали о герое ({name}): тот говорит «{said}»")
+        self.dialogue.remember(
+            witness, wname,
+            f"Тебя расспрашивали о {about_name or 'герое'} ({name}): герой говорит «{said}»",
+        )
         if tier == "far":
             self.dialogue.remember(npc, name, f"Ты расспросил при встрече: {self._told(t)}")
         return t
+
+    def _subject(self, npc: str, who: str) -> tuple[str, str] | None:
+        """Resolve a named human, including one absent from the current view; never the hero."""
+        if not who or who.upper() in {HERO, "HERO", "PC_HERO"} or who.lower() in {"герой", "героя", "я"}:
+            return None
+        social = self.social()
+        names = dict(social.names) if social is not None else {}
+        names.update({key: card.name for key, card in self.cards.items()})
+        if view := self.desk.view(npc):
+            names.update({o.id.upper(): o.name for o in view.sees if o.kind == "human"})
+        people = [Candidate(key.upper(), name, "", None, False)
+                  for key, name in names.items() if key.upper() not in {HERO, "HERO", "PC_HERO"}]
+        person = _find(people, who)
+        return (person.npc, person.name) if person else None
+
+    def _npc_seen(self, witness: str) -> list[Fact]:
+        seen = {f.get("crime") for f in self.chronicle.facts("npc_crime_seen")
+                if str(f.get("npc", "")).upper() == witness}
+        return [f for f in self.chronicle.facts("npc_crime") if f.get("id") in seen]
+
+    def _case(self, t: Testimony) -> Fact | None:
+        """The asker's known case the words concern. Hidden crimes do not narrow a witness's answer."""
+        facts = self.chronicle.facts()
+        known = {f.get("crime") for f in facts
+                 if str(f.get("npc", "")).upper() == t.npc
+                 and f.get("fact") in {"npc_crime_seen", "npc_crime_suspected"}}
+        known.update(f.get("crime") for f in facts
+                     if f.get("fact") == "rumor" and str(f.get("to", "")).upper() == t.npc)
+        known.update(crime for f in facts
+                     if f.get("fact") == "testimony" and str(f.get("npc", "")).upper() == t.npc
+                     for crime in f.get("crime_told", []))
+        known.update(k.key.removeprefix("npc_crime_seen:") for k in self.people_knowledge.of(t.npc)
+                     if k.key.startswith("npc_crime_seen:"))
+        if self.crimes is not None:
+            known.update(k.crime["id"] for k in self.crimes.known(t.npc))
+        cases = [f for f in facts if f.get("fact") in {"crime", "npc_crime"}
+                 and f.get("id") in known and t.npc in {f.get("victim"), f.get("owner")}
+                 and _crime_minute(f) <= t.at]
+        words = roots(t.said)
+        return max(cases, key=lambda f: (
+            str(f.get("id", "")).lower() in t.said.lower(),
+            len(words & roots(str(f.get("item_name") or f.get("item") or ""))),
+            _crime_minute(f),
+        ), default=None)
+
+    def _npc_evidence(self, t: Testimony) -> None:
+        case = self._case(t)
+        lo, hi = (_crime_minute(case) - 60, _crime_minute(case) + 60) if case else (t.at - TRAIL_MIN, t.at)
+        hi = min(hi, t.at)  # nothing observed after the words being checked
+        t.saw = [s for s in reversed(self.sightings.mind(t.witness).sightings)
+                 if s.who == t.about and not s.trace_kind and s.end >= lo and s.start <= hi][:TOLD]
+        t.told = list(t.saw)
+        t.crime_saw = [str(f["id"]) for f in reversed(self._npc_seen(t.witness))
+                       if f.get("culprit") == t.about and lo <= _crime_minute(f) <= hi][:TOLD]
+        t.crime_told = list(t.crime_saw)
+
+    def _describe(self, t: Testimony, crime: Fact) -> str:
+        if t.about == HERO and self.crimes is not None:
+            return self.crimes.describe(crime)
+        if self.crimes is not None:
+            description = self.crimes.describe(crime)
+            return description.replace("герой ", f"{t.about_name} ", 1) + f" (дело {crime['id']})"
+        victim = "на тебя" if crime.get("victim") == t.npc else "на другого человека"
+        item = str(crime.get("item_name") or crime.get("item") or "чужую вещь")
+        where = " из твоего сундука" if crime.get("chest") and crime.get("owner") == t.npc else ""
+        action = f"взял {item}{where}" if crime.get("kind") == "theft" else f"напал {victim}"
+        return f"{t.about_name} {action} ({self._day(_crime_minute(crime), t.minute)}; дело {crime['id']})"
+
+    def _npc_told(self, t: Testimony, crime: str | None, now: int) -> str:
+        parts = []
+        if crime != "":
+            deeds = [f for f in self._deeds(t) if not crime or f["id"] == crime]
+            if deeds:
+                parts.append("видел собственными глазами: " + "; ".join(self._describe(t, f) for f in deeds))
+        if not crime:
+            parts.extend(f"видел: {t.about_name} — {self.sightings.words(s, now)}" for s in t.told)
+        what = "; ".join(parts) or f"{t.about_name} тогда не видел"
+        return f"{t.witness_name}, {self._day(t.minute, now)}, о человеке {t.about_name}: {what}"
 
     def _cover(self, t: Testimony) -> None:
         """Accepted promises, then fear. Neither changes the witness's actual evidence."""
@@ -642,11 +807,11 @@ class Witnesses:
             day = f.get("day")
             crime = self.crimes.crime(str(f.get("crime", ""))) if self.crimes is not None else None
             day_matches = day is not None and (
-                int(day) * DAY <= t.about and (int(day) + 1) * DAY > t.about - TRAIL_MIN
+                int(day) * DAY <= t.at and (int(day) + 1) * DAY > t.at - TRAIL_MIN
             )
             crime_matches = crime is not None and (
-                _crime_minute(crime) - 60 <= t.about
-                and _crime_minute(crime) + 60 >= t.about - TRAIL_MIN
+                _crime_minute(crime) - 60 <= t.at
+                and _crime_minute(crime) + 60 >= t.at - TRAIL_MIN
             )
             if day_matches or crime_matches:
                 covers.append(f)
@@ -770,6 +935,7 @@ class Witnesses:
                 "said": q.said,
                 "minute": q.minute,
                 "meets": q.meets,
+                **({"about": q.about, "about_name": q.about_name} if q.about != HERO else {}),
             }
         )
         self.journal.add("ask_witness", npc=q.npc, name=q.name, witness=q.witness, tier="far", said=q.said)
@@ -798,7 +964,10 @@ class Witnesses:
             if q.npc in dead or q.witness in dead:
                 self._lapse(q, "dead")
             elif self.now >= q.meets and self.inquiries.pop(q.id, None) is not None:
-                await self._testify(q.id, q.npc, q.name, q.witness, q.witness_name, q.said, "far", q.minute)
+                await self._testify(
+                    q.id, q.npc, q.name, q.witness, q.witness_name, q.said, "far", q.minute,
+                    q.about, q.about_name,
+                )
         for npc in self._expire():
             for listener in self.on_change:
                 listener(npc)
@@ -845,7 +1014,8 @@ class Witnesses:
         out = [
             Testimony.of(f) for f in self.chronicle.facts("testimony") if str(f.get("npc", "")).upper() == npc
         ]
-        out = [t for t in out if not now or now - t.minute <= within]
+        out = [t for t in out if (not now or now - t.minute <= within)
+               and (self.npc_crimes_enabled or t.about == HERO)]
         if not self.cover_enabled:
             silent: set[tuple[str, str]] = set()
             before: dict[str, set[tuple[str, str]]] = {}
@@ -863,17 +1033,23 @@ class Witnesses:
                     t.cover = t.vouch = ""
         return sorted(out, key=lambda t: t.minute, reverse=True)[:n]
 
-    def _asked(self, npc: str, witness: str, said: str) -> Testimony | None:
+    def _asked(self, npc: str, witness: str, said: str, about: str = HERO) -> Testimony | None:
         """The same question to the same witness within the hour: its answer."""
         words = roots(said)
         now = self._now()
         for t in self.testimonies(npc, ASK_AGAIN_MIN, 10):
-            if t.witness == witness and now - t.minute <= ASK_AGAIN_MIN and roots(t.said) == words:
+            if (t.witness == witness and t.about == about and now - t.minute <= ASK_AGAIN_MIN
+                    and roots(t.said) == words):
                 return t
         return None
 
     def _deeds(self, t: Testimony) -> list[Fact]:
         """The testimony's deeds still backed by the witness's own evidence in this branch."""
+        if t.about != HERO:
+            witnessed = {
+                str(f["id"]): f for f in self._npc_seen(t.witness) if f.get("culprit") == t.about
+            }
+            return [witnessed[crime] for crime in t.crime_told if crime in witnessed]
         if self.crimes is None:
             return []
         witnessed = {str(f["id"]): f for f in self.crimes.seen(t.witness)}
@@ -883,7 +1059,9 @@ class Witnesses:
         """«Хильда, сегодня в 09:35, о его словах «…»: героя видели сегодня 08:10–08:30 — у сарая; без
         доспеха»; when the hero said them, if it was not then."""
         now = max(self._now(), t.minute)
-        spoke = f" (он сказал их {self._day(t.about, now)})" if t.minute - t.about > 30 else ""
+        if t.about != HERO:
+            return self._npc_told(t, crime, now)
+        spoke = f" (он сказал их {self._day(t.at, now)})" if t.minute - t.at > 30 else ""
         seen = "; ".join(self.sightings.words(s, now) for s in t.told)
         parts = [f"героя видели {seen}"] if seen and not crime else []
         if crime != "" and self.crimes is not None and (deeds := self._deeds(t)):
@@ -1023,6 +1201,8 @@ def _inquiry(f: Fact) -> Inquiry:
         str(f.get("said", "")),
         int(f.get("minute", 0)),
         int(f.get("meets", 0)),
+        str(f.get("about") or HERO).upper(),
+        str(f.get("about_name", "")),
     )
 
 

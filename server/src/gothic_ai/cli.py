@@ -25,6 +25,7 @@ from . import (
 from .amends import Amends
 from .authoring import Author
 from .beasts import TONE_MAX_TOKENS, BeastDesk
+from .blame import Blame
 from .bodies import Bodies
 from .bodypilot import BodyPilot
 from .brain import DeciderClient, GameApplier, NpcPlanner, PlannerConfig
@@ -227,6 +228,7 @@ class ServerState:
         self.chronicle: Chronicle | None = None
         self.crimes: Crimes | None = None
         self.npc_crimes: NpcCrimes | None = None
+        self.blame: Blame | None = None
         self.npc_will: NpcWill | None = None
         self.npc_crime_law: NpcCrimeLaw | None = None
         self.crime_law: CrimeLawRuntime | None = None
@@ -1016,6 +1018,11 @@ async def serve(args: argparse.Namespace) -> int:
             enabled=not args.no_crimes and not args.no_npc_crimes,
         )
         link.npc_crime_check = state.npc_crimes.check_command
+        if state.crimes is not None:
+            state.blame = Blame(
+                link, state.chronicle, state.crimes, state.npc_crimes, state.dialogue, journal=journal,
+            )
+            state.dialogue.extensions.append(state.blame)
         if state.chests is not None:
             state.chests.npc_suspect = state.npc_crimes.suspect_chest
         if args.lead:
@@ -1086,6 +1093,7 @@ async def serve(args: argparse.Namespace) -> int:
             cover=not args.no_cover and not args.no_crimes,
             cards=personas.cards,
             people_knowledge=state.people_knowledge,
+            npc_crimes=not args.no_crimes and not args.no_npc_crimes,
         )
         # its lines right after what the npc saw itself
         state.dialogue.extensions.insert(state.dialogue.extensions.index(state.sightings) + 1, witnesses)
@@ -1264,6 +1272,7 @@ async def serve(args: argparse.Namespace) -> int:
         state.npc_will = NpcWill(
             link, state.chronicle, state.npc_crimes, cards=personas.cards, guard=state.guard,
             people=state.people_knowledge, rumors=state.rumors, memory=memory,
+            blame=state.blame,
             busy=lambda npc: npc in talk.attached or state.dialogue.speaking(npc),
         )
         state.npc_crime_law = NpcCrimeLaw(
@@ -1361,6 +1370,8 @@ async def serve(args: argparse.Namespace) -> int:
                 await state.npc_will.close()
             if state.npc_crimes is not None:
                 await state.npc_crimes.close()
+            if state.blame is not None:
+                await state.blame.close()
             if state.crime_meet is not None:
                 await state.crime_meet.close()
             if state.crime_memory is not None:
@@ -1579,6 +1590,17 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario npc_far: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "frame":
+                assert state.npc_will is not None and state.chests is not None
+                assert state.dialogue is not None and state.talk is not None
+                assert state.witnesses is not None and state.trust is not None and args.trace_dir is not None
+                results = await scenarios.frame(
+                    link, state.npc_will, state.chests, state.dialogue, state.talk,
+                    state.witnesses, state.trust, str(Path(args.trace_dir).parent),
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario frame: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "cheat":
                 assert state.crimes is not None and state.dialogue is not None and state.talk is not None
@@ -2663,6 +2685,7 @@ def main() -> None:
             "npc_deeds",
             "npc_will",
             "npc_far",
+            "frame",
             "crime_meet",
             "crime_talk",
             "trace_crime",

@@ -22,6 +22,7 @@ from .promise_breach import silence_facts
 from .protocol import DeedItem, DeedSnapshot, GameMessage, HeroDeed, Session
 
 if TYPE_CHECKING:
+    from .blame import Blame
     from .concerns import Concern
     from .dialogue import DialogueManager
     from .places import PlaceBook
@@ -116,6 +117,7 @@ class Crimes:
         self.names = names or (lambda npc: npc)
         self.cover = cover
         self.sightings: Sightings | None = None
+        self.blame: Blame | None = None
         self.people: dict[str, dict[str, Any]] = {}  # static world metadata, never beliefs
         self._noncrimes: set[str] = set()  # completed negative classifications, only in this world
         self.on_noncrime: list[Callable[[str], None]] = []
@@ -135,6 +137,10 @@ class Crimes:
     def crime(self, crime: str) -> Fact | None:
         return next((f for f in self.facts() if f.get("id") == crime), None)
 
+    def blamed(self, npc: str, crime: str) -> bool:
+        """An active belief in another culprit suspends this victim's demand against the hero."""
+        return self.blame is not None and self.blame.active(npc, crime) is not None
+
     def classified_noncrime(self, deed: str) -> bool:
         """An explicit classification result; an unrecorded or duplicate deed is not one."""
         return deed in self._noncrimes
@@ -151,6 +157,9 @@ class Crimes:
 
     def testimony_crimes(self, testimony: Fact) -> list[str]:
         """With cover disabled old testimony yields its truth, while ordinary silence still applies."""
+        about = testimony.get("about")
+        if isinstance(about, str) and about.upper() not in HERO:
+            return []  # testimony about another NPC never proves anything about the hero
         if self.cover or not testimony.get("cover"):
             return list(testimony.get("crime_told", []))
         silent = set()
