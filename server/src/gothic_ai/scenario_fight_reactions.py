@@ -13,7 +13,8 @@ import math
 import re
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,6 @@ from .game import GameError, GameLink
 from .incidents import IncidentDesk
 from .protocol import (
     ActionCmd,
-    ActionResult,
     Beasts,
     DebugCmd,
     GameMessage,
@@ -194,6 +194,25 @@ class CombatTrace:
             and obstacles_clear(a, 120) and obstacles_clear(b, 120)
         )
 
+    def companion_idle(self, npc: str) -> bool:
+        row = self.latest_rows.get(npc, {})
+        own = row.get("self", {})
+        return (
+            row.get("target", {}).get("entity_id") == 0
+            and not own.get("attack_anim", True) and not own.get("prehit", True)
+        )
+
+    def validate_hit_preparation(self, attacker: str, hit: int, geometry: dict[str, Any]) -> None:
+        recent = [t for t in self.strikes.get(attacker, ()) if hit - 100 <= t <= hit]
+        if (
+            recent or geometry.get("attacker_attack_anim") is not False
+            or geometry.get("attacker_prehit") is not False
+        ):
+            raise GameError(
+                f"fight_reactions setup: companion was attacking at H={hit}; "
+                f"recent_strikes_game_ms={recent}, geometry={geometry}"
+            )
+
     def hit_geometry(self, attacker: str, defender: str) -> dict[str, Any]:
         target = self.latest_rows.get(defender, {}).get("target", {})
         return {
@@ -202,6 +221,7 @@ class CombatTrace:
             "distance_cm": self.distance(attacker, defender),
             "target_entity": target.get("entity_id"),
             **{k: target.get(k) for k in ("visible", "melee_line_clear", "in_w_range", "focus_30")},
+            "attacker_target_entity": self.target.get(attacker),
             "attacker_attack_anim": self.latest.get(attacker, {}).get("attack_anim"),
             "attacker_prehit": self.latest.get(attacker, {}).get("prehit"),
             "defender_attack_anim": self.latest.get(defender, {}).get("attack_anim"),
@@ -231,8 +251,11 @@ def obstacles_clear(row: dict[str, Any], clearance_cm: float) -> bool:
 async def wait_hit_geometry(
     link: GameLink, trace: CombatTrace, attacker: str, defender: str, timeout: float = 5,
 ) -> bool:
-    """Wait for a current open melee line; an in-flight defender attack is allowed."""
-    if trace.hit_ready(attacker, defender):
+    """Wait for an idle companion and an open melee line; the defender may be attacking."""
+    def ready() -> bool:
+        return trace.hit_ready(attacker, defender) and trace.companion_idle(attacker)
+
+    if ready():
         return True
     changed = asyncio.Event()
 
@@ -243,7 +266,7 @@ async def wait_hit_geometry(
     link.raw_body_listeners.append(observed)
     try:
         async with asyncio.timeout(timeout):
-            while not trace.hit_ready(attacker, defender):
+            while not ready():
                 await changed.wait()
                 changed.clear()
         return True
@@ -253,29 +276,55 @@ async def wait_hit_geometry(
         link.raw_body_listeners.remove(observed)
 
 
-async def stop_and_hit(link: GameLink, attacker: str, defender: str) -> dict[str, Any]:
-    """Send stop then hit on the same WS before awaiting either receipt."""
-    stop = ActionCmd(id=link._next_id("a"), npc=attacker, action="stop")
-    stopped: asyncio.Future[ActionResult] = asyncio.get_running_loop().create_future()
+@contextmanager
+def suppress_companion_defense(
+    orders: Any, npc: str, link: GameLink, closed: Callable[[], bool],
+) -> Iterator[Callable[[], None]]:
+    """Mute only this companion, restoring synchronously in the boundary body packet."""
+    original = orders._stand_up
+    restored = False
 
-    def heard(msg: GameMessage) -> None:
-        if isinstance(msg, ActionResult) and msg.id == stop.id and not stopped.done():
-            stopped.set_result(msg)
+    def stand_up(who: str, foe: str, did: str, *, struck: bool) -> None:
+        if who.upper() != npc.upper():
+            original(who, foe, did, struck=struck)
 
-    link.listeners.append(heard)
+    def restore() -> None:
+        nonlocal restored
+        if not restored:
+            orders._stand_up = original
+            restored = True
+
+    def check_closed() -> None:
+        if closed():
+            restore()
+
+    def observed(_packet: dict[str, Any]) -> None:
+        check_closed()
+
+    orders._stand_up = stand_up
+    link.raw_body_listeners.append(observed)
     try:
-        await link.send(stop)
-        response = await link._request(
-            DebugCmd(req=link._next_id("r"), cmd="npc_hit", npc=defender, by=attacker), 5,
-        )
-        receipt = await asyncio.wait_for(stopped, 5)
-        if not receipt.ok:
-            raise GameError(f"fight_reactions setup: stop {receipt.status}: {receipt.detail}")
-        return response.value or {}
+        yield check_closed
     finally:
-        link.listeners.remove(heard)
-        if not stopped.done():
-            stopped.cancel()
+        restore()
+        link.raw_body_listeners.remove(observed)
+
+
+async def stopped_companion_hit(
+    link: GameLink, trace: CombatTrace, attacker: str, defender: str,
+    stop: Callable[[], Awaitable[None]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A stop receipt and observed idle body must precede the guaranteed hit."""
+    await stop()
+    if not await wait_hit_geometry(link, trace, attacker, defender):
+        geometry = trace.hit_geometry(attacker, defender)
+        log.error("fight_reactions H=None geometry=%s", geometry)
+        raise GameError(f"fight_reactions setup: no idle open melee geometry before hit; {geometry}")
+    selected = trace.hit_geometry(attacker, defender)
+    response = await link._request(
+        DebugCmd(req=link._next_id("r"), cmd="npc_hit", npc=defender, by=attacker), 5,
+    )
+    return response.value or {}, selected
 
 
 def combat_shouts(log_file: Path, npc: str) -> list[int]:
@@ -1004,7 +1053,11 @@ async def fight_reactions(
                     return results
 
                 async def stop_companion() -> None:
-                    await link.act(CAVALORN, "stop")
+                    stopped = await link.act(CAVALORN, "stop")
+                    if not stopped.ok:
+                        raise GameError(
+                            f"fight_reactions setup: stop {stopped.status}: {stopped.detail}"
+                        )
                     if not await _until(lambda: CAVALORN not in talk.orders.fights, 3):
                         raise GameError("fight_reactions setup: prior companion duel did not stop")
 
@@ -1045,14 +1098,19 @@ async def fight_reactions(
                             and trace.target.get(CAVALORN) == trace.entities.get(bandit)
                         ), 15,
                     )
-                    if not close or not await wait_hit_geometry(link, trace, CAVALORN, bandit):
+                    if not close:
                         geometry = trace.hit_geometry(CAVALORN, bandit)
                         log.error("fight_reactions H=None geometry=%s", geometry)
-                        raise GameError(
-                            f"fight_reactions setup: no open melee geometry before hit; {geometry}"
-                        )
+                        raise GameError(f"fight_reactions setup: companion did not close; {geometry}")
                     selected = trace.hit_geometry(CAVALORN, bandit)
                     contacts: dict[int, dict[str, Any]] = {}
+                    hit: int | None = None
+
+                    def window_closed() -> bool:
+                        return hit is not None and (
+                            trace.strike_after(bandit, CAVALORN, hit) is not None
+                            or trace.game_ms.get(bandit, 0) >= hit + 3000
+                        )
 
                     def capture_hit(packet: dict[str, Any]) -> None:
                         for row in packet["observations"]:
@@ -1064,37 +1122,48 @@ async def fight_reactions(
                                         event["source_game_ms"], trace.hit_geometry(CAVALORN, bandit),
                                     )
 
-                    hit: int | None = None
-                    link.raw_body_listeners.append(capture_hit)
-                    try:
-                        # Consecutive WS sends, with no stop receipt awaited between them.
-                        proof = await stop_and_hit(link, CAVALORN, bandit)
-                        hit = proof.get("game_ms")
-                        log.info("fight_reactions guaranteed hit evidence=%s", proof)
-                        if not (
-                            type(hit) is int
-                            and proof.get("attacker") == CAVALORN and proof.get("victim") == bandit
-                            and proof.get("hp_before", 0) > proof.get("hp_after", 0) > 0
-                        ):
-                            raise GameError("fight_reactions setup: native hit evidence is invalid")
-                        if not await _until(lambda: CAVALORN not in talk.orders.fights, 3):
-                            raise GameError("fight_reactions setup: prior companion duel did not stop")
-                        observed = await _until(
-                            lambda: (
-                                any(t == hit for t, _ in trace.contacts.get(CAVALORN, ()))
-                                and (hit, 9) in trace.received_contacts.get(bandit, ())
-                                and trace.hp.get(bandit, proof["hp_before"]) <= proof["hp_after"]
-                            ), 5,
-                        )
-                        if not observed:
-                            raise GameError("fight_reactions setup: native hit is absent from body history")
-                        return hit
-                    finally:
-                        link.raw_body_listeners.remove(capture_hit)
-                        log.info(
-                            "fight_reactions H=%s geometry=%s selected_geometry=%s",
-                            hit, contacts.get(hit, selected), selected,
-                        )
+                    with suppress_companion_defense(
+                        talk.orders, CAVALORN, link, window_closed,
+                    ) as check_closed:
+                        link.raw_body_listeners.append(capture_hit)
+                        try:
+                            proof, selected = await stopped_companion_hit(
+                                link, trace, CAVALORN, bandit, stop_companion,
+                            )
+                            hit = proof.get("game_ms")
+                            log.info("fight_reactions guaranteed hit evidence=%s", proof)
+                            if not (
+                                type(hit) is int
+                                and proof.get("attacker") == CAVALORN and proof.get("victim") == bandit
+                                and proof.get("hp_before", 0) > proof.get("hp_after", 0) > 0
+                            ):
+                                raise GameError("fight_reactions setup: native hit evidence is invalid")
+                            # The boundary packet may already have arrived with the receipt.
+                            check_closed()
+                            observed = await _until(
+                                lambda: (
+                                    any(t == hit for t, _ in trace.contacts.get(CAVALORN, ()))
+                                    and (hit, 9) in trace.received_contacts.get(bandit, ())
+                                    and trace.hp.get(bandit, proof["hp_before"]) <= proof["hp_after"]
+                                ), 5,
+                            )
+                            if not observed:
+                                raise GameError(
+                                    "fight_reactions setup: native hit is absent from body history"
+                                )
+                            trace.validate_hit_preparation(CAVALORN, hit, contacts.get(hit, selected))
+                            if not await _until(window_closed, 10):
+                                raise GameError(
+                                    "fight_reactions setup: incomplete 3000 ms observation window; "
+                                    f"npc={bandit}, hit={hit}, last_game_ms={trace.game_ms.get(bandit)}"
+                                )
+                            return hit
+                        finally:
+                            link.raw_body_listeners.remove(capture_hit)
+                            log.info(
+                                "fight_reactions H=%s geometry=%s selected_geometry=%s",
+                                hit, contacts.get(hit, selected), selected,
+                            )
 
                 # Both defenders have reacted. Isolate their post-hit measurements so a native
                 # target switch or two opponents pinning Cavalorn cannot prevent the first hit.
@@ -1175,18 +1244,6 @@ async def fight_reactions(
                         parked.remove(bandit)
                     talk.orders.fight_intent(CAVALORN, bandit)
                     hit = await hit_from_companion(bandit)
-                    if hit is not None:
-                        complete = await _until(
-                            lambda b=bandit, h=hit: (
-                                trace.strike_after(b, CAVALORN, h) is not None
-                                or trace.game_ms.get(b, 0) >= h + 3000
-                            ), 10,
-                        )
-                        if not complete:
-                            raise GameError(
-                                f"fight_reactions setup: incomplete 3000 ms observation window; "
-                                f"npc={bandit}, hit={hit}, last_game_ms={trace.game_ms.get(bandit)}"
-                            )
                     first = trace.strike_after(bandit, CAVALORN, hit) if hit is not None else None
                     threat = next(
                         (
