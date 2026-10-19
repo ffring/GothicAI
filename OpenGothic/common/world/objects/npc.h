@@ -456,6 +456,7 @@ class Npc final {
                            std::string_view owner = {});
     void      clearServerDeed();
     bool      isServerDeed(std::string_view kind, const Npc* victim = nullptr) const;
+    const char* serverDeedSimulationError();
     void      consumeServerAttack();
     void      setNonlethalFight(Npc& target);
     bool      isNonlethalFight(const Npc& other) const;
@@ -993,6 +994,7 @@ class Npc final {
     std::string                    serverDeedKind;
     const Npc*                     serverDeedVictim = nullptr;
     bool                           serverAttackRecorded = false;
+    bool                           serverDeedSimulationLost = false;
     size_t                         serverDeedCount = 0;
     std::string                    serverDeedOwner;
     size_t                         nonlethalTarget = size_t(-1);

@@ -137,17 +137,26 @@ async def npc_will(
         # resets a prior scene's standing activity without creating a new daily destination.
         await link.npc_act(LOBART, "set_routine", name="START")
         await link.debug("npc_goto", npc=LOBART, waypoint=owner_point)
+        detail: dict[str, Any] = {"routine_waypoint": owner_point}
 
         async def ready() -> bool:
             found = next((c for c in await link.npc_chests(LOBART) if c.id == CHEST), None)
             views = await link.npc_view([LOBART])
+            entry = will.roster.get(LOBART)
+            detail.update(
+                chest_distance=found.distance if found is not None else None,
+                view=views[0].model_dump() if views else None,
+                roster=entry.model_dump() if entry is not None else None,
+            )
             return bool(
                 found and found.distance > 2000 and views and views[0].theft_ready
                 and views[0].hero and views[0].hero.distance < 3000
-                and will.roster.get(LOBART) and will.roster[LOBART].activity == "routine"
+                and entry and entry.activity == "routine"
             )
 
-        return await _until_async(ready, bool, 15)
+        prepared = await _until_async(ready, bool, 15)
+        log.info("npc_will owner routine preparation: %s", detail)
+        return prepared
 
     async def alone() -> bool:
         views = await link.npc_view([HILDA])
@@ -173,7 +182,9 @@ async def npc_will(
         assert chest.waypoint is not None
         routine = [r for r in population[HILDA]["routine"] if r.get("pos")]
         distance = min((math.dist(r["pos"], chest.pos) for r in routine), default=math.inf)
-        if not check(f"{label}_ordinary_place", distance <= 2000, round(distance)):
+        if not check(
+            f"{label}_ordinary_place", distance <= 2000, round(distance) if math.isfinite(distance) else None,
+        ):
             return None
 
         if remember:

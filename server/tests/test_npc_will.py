@@ -13,7 +13,7 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.npc_crimes import NpcCrimes
 from gothic_ai.npc_will import MOTIVES, LoopGuard, NpcWill
 from gothic_ai.people_knowledge import PeopleKnowledge
-from gothic_ai.protocol import Chest, NpcIdle, NpcRoster, NpcView, NpcViews, Session
+from gothic_ai.protocol import Chest, NpcIdle, NpcRoster, NpcView, NpcViews, Session, Snapshot
 from gothic_ai.social import Social
 from tests.test_crimes import HILDA, LOBART
 from tests.test_npc_crimes import NAMES, THIEF, NpcLink, deed
@@ -33,6 +33,8 @@ class WillLink(NpcLink):
         self.view_queries: list[str] = []
         self.people: list[dict[str, Any]] = []
         self.chests: dict[str, list[Chest]] = {}
+        self.snapshots: dict[str, Snapshot] = {}
+        self.snapshot_queries: list[tuple[str, bool]] = []
 
     async def npc_view(self, npcs: list[str]) -> list[NpcView]:
         self.view_queries.extend(npcs)
@@ -43,6 +45,10 @@ class WillLink(NpcLink):
 
     async def npc_chests(self, npc: str) -> list[Chest]:
         return self.chests.get(npc, [])
+
+    async def snapshot(self, npc: str, *, fresh: bool = False) -> Snapshot:
+        self.snapshot_queries.append((npc, fresh))
+        return self.snapshots[npc]
 
 
 @pytest.fixture
@@ -91,6 +97,15 @@ def scene(system, *, now: int = NOW, actor: str = LOBART, target: str = THIEF, *
     ]
     system.link.views.update((view.npc, view) for view in views)
     system.link.receive(NpcViews(type="npc_views", t=0, views=views))
+    for entry in entries:
+        system.link.snapshots[entry["id"]] = Snapshot.model_validate({
+            "type": "snapshot", "t": 0,
+            "world": {"name": "NEWWORLD", "day": now // DAY, "hour": now % DAY // 60, "minute": now % 60},
+            "npc": {"id": entry["id"], "name": entry["name"],
+                    "pos": [entry["distance"], 0, 0 if entry["id"] == actor else 300],
+                    "rot": 0, "hp": 100, "hp_max": 100, "busy": False},
+            "player": {"name": "Герой", "pos": [0, 0, 0], "distance": entry["distance"]},
+        })
 
 
 def theft(system, *, witnesses: list[str] | None = None, **fields: Any) -> dict[str, Any]:
@@ -103,13 +118,13 @@ def greed_scene(system, *, honesty: int = 1, now: int = NOW) -> None:
     system.cards[THIEF] = character(THIEF, honesty=honesty, greed=5)
     system.link.people = [
         {"npc": npc, "name": NAMES[npc], "guild": 12, "routine": [
-            {"start": 0, "end": 0, "state": "ZS_STAND", "waypoint": "FARM1_IN", "pos": [0, 0, 0]},
+            {"start": 0, "end": 0, "state": "ZS_STAND", "waypoint": "FARM1_IN", "pos": [2500, 0, 0]},
         ]}
         for npc in (THIEF, LOBART)
     ]
     system.will.rumors = SimpleNamespace(social=Social(system.link.people), clock=now)
     system.link.chests[LOBART] = [Chest(
-        id="CHEST_LOBART", why="owner", pos=(100, 0, 0), distance=3000, waypoint="FARM1_IN",
+        id="CHEST_LOBART", why="owner", pos=(2600, 0, 0), distance=3100, waypoint="FARM1_IN",
         items=[{"item": "ITFO_BREAD", "name": "Хлеб", "count": 7}],
     )]
     scene(system, now=now, actor=THIEF, target=LOBART, distance=2500)
@@ -119,6 +134,10 @@ def greed_scene(system, *, honesty: int = 1, now: int = NOW) -> None:
     })
     system.link.views[THIEF] = alone
     system.link.receive(NpcViews(type="npc_views", t=1, views=[alone]))
+    snapshot = system.link.snapshots[LOBART]
+    system.link.snapshots[LOBART] = snapshot.model_copy(update={
+        "npc": snapshot.npc.model_copy(update={"pos": (-500, 0, 0)}),
+    })
 
 
 def refresh(system, now: int) -> None:
@@ -130,6 +149,23 @@ def refresh(system, now: int) -> None:
 def finish_action(system) -> None:
     latest = system.chronicle.facts("npc_will")[-1]
     system.link.receive(NpcIdle(type="npc_idle", npc=latest["npc"], act=latest["action"], reason="done"))
+
+
+def commit_theft(system, *, now: int = NOW) -> dict[str, Any]:
+    latest = system.chronicle.facts("npc_will")[-1]
+    result = theft(
+        system, id=f"deed-{latest['action']}", chest=latest["target"], day=now // DAY,
+        hour=now % DAY // 60, minute=now % 60,
+    )
+    return result
+
+
+def abort_theft(system, *, now: int = NOW, detail: str = "left_simulation") -> None:
+    system.will.rumors.clock = now
+    latest = system.chronicle.facts("npc_will")[-1]
+    system.link.receive(NpcIdle(
+        type="npc_idle", npc=latest["npc"], act=latest["action"], reason="failed", detail=detail,
+    ))
 
 
 @pytest.mark.parametrize("honesty,greed,allowed", [
@@ -368,6 +404,7 @@ async def test_greedy_npc_steals_one_item_by_the_native_checked_command(system):
 async def test_greed_cannot_repeat_before_its_character_cooldown(system, honesty, days):
     greed_scene(system, honesty=honesty)
     await system.will.tick(NOW)
+    commit_theft(system)
     finish_action(system)
     before = NOW + days * DAY - 60
     system.moments.now += 60
@@ -439,7 +476,7 @@ async def test_greed_waits_while_chest_owner_is_near_the_chest(system, distance)
 
 async def test_greed_uses_only_chests_in_the_thief_ordinary_routine_places(system):
     greed_scene(system)
-    system.link.chests[LOBART][0] = system.link.chests[LOBART][0].model_copy(update={"pos": (2001, 0, 0)})
+    system.link.chests[LOBART][0] = system.link.chests[LOBART][0].model_copy(update={"pos": (4501, 0, 0)})
     await system.will.tick(NOW)
     assert not system.link.actions
 
@@ -465,6 +502,7 @@ async def test_loading_restores_greed_cooldown_and_older_save_has_no_future_cool
     greed_scene(system)
     before = system.memory.head("A")
     await system.will.tick(NOW)
+    commit_theft(system)
     saved = system.memory.head("A")
     system.link.receive(Session(type="session", branch="saved", parent="A", parent_seq=saved, reason="load"))
     greed_scene(system, now=NOW + DAY)
@@ -476,6 +514,179 @@ async def test_loading_restores_greed_cooldown_and_older_save_has_no_future_cool
     await system.will.tick(NOW + DAY)
     assert len(system.link.actions) == 2
     assert len(system.chronicle.facts("npc_motive")) == len(system.chronicle.facts("npc_will")) == 1
+
+
+async def test_left_simulation_preserves_motive_without_a_crime_or_cooldown_and_retries_after_hour(system):
+    greed_scene(system)
+    await system.will.tick(NOW)
+    original = system.chronicle.facts("npc_will")[0]
+    abort_theft(system, now=NOW + 7)
+    [outcome] = system.chronicle.facts("npc_will_outcome")
+    assert (outcome["action"], outcome["outcome"], outcome["reason"], outcome["detail"]) == (
+        original["action"], "aborted", "failed", "left_simulation",
+    )
+    assert outcome["finished_at"] == NOW + 7 and outcome["retry_at"] == NOW + 67
+    assert not system.deeds.facts()
+    assert system.will._cool(THIEF, system.cards[THIEF])
+    assert [m["id"] for m in system.will.pending()] == [original["motive"]]
+    refresh(system, NOW + 66)
+    await system.will.tick(NOW + 66)
+    assert len(system.link.actions) == 1
+    refresh(system, NOW + 67)
+    await system.will.tick(NOW + 67)
+    assert len(system.link.actions) == 2
+    assert len(system.chronicle.facts("npc_motive")) == 1
+    assert {a["motive"] for a in system.will.attempts()} == {original["motive"]}
+
+
+async def test_loading_aborted_attempt_restores_retry_deadline_without_duplicate_outcome(system):
+    greed_scene(system)
+    await system.will.tick(NOW)
+    abort_theft(system, now=NOW + 7)
+    saved = system.memory.head("A")
+    system.link.receive(Session(type="session", branch="loaded", parent="A", parent_seq=saved, reason="load"))
+    greed_scene(system, now=NOW + 66)
+    await system.will.tick(NOW + 66)
+    assert len(system.link.actions) == 1 and len(system.will.pending()) == 1
+    assert len(system.chronicle.facts("npc_will_outcome")) == 1
+    refresh(system, NOW + 67)
+    await system.will.tick(NOW + 67)
+    assert len(system.link.actions) == 2
+    assert len(system.chronicle.facts("npc_will_outcome")) == 1
+
+
+async def test_loading_start_without_receipt_keeps_motive_and_recovers_retry_once(system):
+    greed_scene(system)
+    await system.will.tick(NOW)
+    saved = system.memory.head("A")
+    system.link.receive(Session(type="session", branch="loaded", parent="A", parent_seq=saved, reason="load"))
+    greed_scene(system, now=NOW + 7)
+    await system.will.tick(NOW + 7)
+    [outcome] = system.chronicle.facts("npc_will_outcome")
+    assert (outcome["outcome"], outcome["reason"], outcome["retry_at"]) == (
+        "aborted", "load_interrupted", NOW + 67,
+    )
+    assert len(system.link.actions) == 1 and len(system.will.pending()) == 1
+    recovered = system.memory.head("loaded")
+    system.link.receive(Session(
+        type="session", branch="loaded_twice", parent="loaded", parent_seq=recovered, reason="load",
+    ))
+    greed_scene(system, now=NOW + 66)
+    await system.will.tick(NOW + 66)
+    assert len(system.chronicle.facts("npc_will_outcome")) == 1
+    assert len(system.link.actions) == 1
+    refresh(system, NOW + 67)
+    await system.will.tick(NOW + 67)
+    assert len(system.link.actions) == 2
+    assert len(system.chronicle.facts("npc_motive")) == 1
+
+
+async def test_transfer_commits_once_despite_interrupted_closing_and_starts_cooldown_at_transfer(system):
+    greed_scene(system)
+    await system.will.tick(NOW)
+    case = commit_theft(system, now=NOW + 7)
+    abort_theft(system, now=NOW + 10)
+    abort_theft(system, now=NOW + 10)
+    [attempt] = system.will.attempts()
+    [outcome] = system.chronicle.facts("npc_will_outcome")
+    assert (attempt["outcome"], attempt["reason"], attempt["crime"]) == (
+        "committed", "native_transfer", case["id"],
+    )
+    assert outcome["finished_at"] == NOW + 7
+    assert system.will.pending() == []
+    cutoff = NOW + 7 + 2 * DAY
+    refresh(system, cutoff - 1)
+    await system.will.tick(cutoff - 1)
+    assert len(system.link.actions) == 1
+    refresh(system, cutoff)
+    await system.will.tick(cutoff)
+    assert len(system.link.actions) == 2
+
+
+async def test_future_independent_theft_cannot_turn_an_aborted_attempt_into_a_success(system):
+    greed_scene(system)
+    await system.will.tick(NOW)
+    abort_theft(system, now=NOW + 7)
+    commit_theft(system, now=NOW + 8)
+    [attempt] = system.will.attempts()
+    assert attempt["outcome"] == "aborted" and "crime" not in attempt
+    assert len(system.chronicle.facts("npc_will_outcome")) == 1
+    assert system.will._cool(THIEF, system.cards[THIEF])
+
+
+async def test_native_deed_before_action_receipt_is_linked_to_the_start_once(system):
+    greed_scene(system)
+    send_action = system.link.npc_act
+
+    async def early_transfer(npc, action, /, **args):
+        action_id = await send_action(npc, action, **args)
+        if action == "steal":
+            theft(system, id="early-native-deed", chest=args["chest"], hour=9, minute=0)
+        return action_id
+
+    system.link.npc_act = early_transfer
+    await system.will.tick(NOW)
+    [attempt] = system.will.attempts()
+    assert (attempt["outcome"], attempt["crime"]) == ("committed", "early-native-deed")
+    assert len(system.chronicle.facts("npc_will_outcome")) == 1
+    assert system.will.pending() == []
+
+
+@pytest.mark.parametrize("transferred", [False, True])
+async def test_legacy_start_without_outcome_is_recovered_from_native_truth_or_retried(system, transferred):
+    greed_scene(system)
+    system.chronicle.record({
+        "fact": "npc_motive", "id": "legacy-motive", "kind": "greed", "npc": THIEF,
+        "target": "CHEST_LOBART", "owner": LOBART, "item": "ITFO_BREAD", "at": NOW,
+    })
+    system.chronicle.record({
+        "fact": "npc_will", "npc": THIEF, "kind": "greed", "act": "steal", "action": "legacy-action",
+        "target": "CHEST_LOBART", "motive": "legacy-motive", "at": NOW,
+    })
+    if transferred:
+        theft(system, id="legacy-native-deed", chest="CHEST_LOBART", hour=9, minute=7)
+    saved = system.memory.head("A")
+    system.link.receive(Session(type="session", branch="loaded", parent="A", parent_seq=saved, reason="load"))
+    greed_scene(system, now=NOW + 10)
+    await system.will.tick(NOW + 10)
+    [attempt] = system.will.attempts()
+    [outcome] = system.chronicle.facts("npc_will_outcome")
+    assert outcome["outcome"] == ("committed" if transferred else "aborted")
+    assert attempt["motive"] == "legacy-motive"
+    assert bool(system.will.pending()) is not transferred
+    assert not system.link.actions
+
+
+@pytest.mark.parametrize("who,position", [
+    (THIEF, (3000, 0, 0)), (LOBART, (-3000, 0, 0)),
+])
+async def test_fresh_snapshot_blocks_start_when_stale_roster_still_says_both_are_near(system, who, position):
+    greed_scene(system)
+    snapshot = system.link.snapshots[who]
+    system.link.snapshots[who] = snapshot.model_copy(update={
+        "npc": snapshot.npc.model_copy(update={"pos": position}),
+    })
+    await system.will.tick(NOW)
+    assert not system.link.actions
+    assert all(fresh for _, fresh in system.link.snapshot_queries)
+
+
+@pytest.mark.parametrize("chest,actor,allowed", [
+    ((3000, 0, 0), (2500, 0, 0), False),
+    ((2999, 0, 0), (2500, 0, 0), True),
+    ((2600, 0, 0), (599, 0, 0), False),
+    ((2600, 0, 0), (600, 0, 0), True),
+])
+async def test_start_requires_a_local_chest_even_when_the_thief_ordinary_routine_uses_it(system, chest, actor,
+                                                                                     allowed):
+    greed_scene(system)
+    system.link.chests[LOBART][0] = system.link.chests[LOBART][0].model_copy(update={"pos": chest})
+    snapshot = system.link.snapshots[THIEF]
+    system.link.snapshots[THIEF] = snapshot.model_copy(update={
+        "npc": snapshot.npc.model_copy(update={"pos": actor}),
+    })
+    await system.will.tick(NOW)
+    assert bool(system.link.actions) is allowed
 
 
 def test_loop_guard_rejects_ninth_start_in_a_minute_without_throttling_another_npc():

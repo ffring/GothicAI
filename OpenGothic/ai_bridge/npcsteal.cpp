@@ -131,6 +131,13 @@ bool NpcSteal::begin(World& world, Npc& npc, const rapidjson::Value& args, Activ
   }
 
 NpcSteal::Progress NpcSteal::tick(World& world, Npc& npc, Active& active, std::string& detail) {
+  const bool transferred = active.target.chest!=nullptr ? active.opened :
+                           npc.inventory().itemCount(active.target.instance)>active.before;
+  if(!transferred)
+    if(const auto* reason = npc.serverDeedSimulationError()) {
+      detail = reason;
+      return Progress::Failed;
+      }
   auto* chest = active.target.chest;
   if(chest==nullptr && npc.inventory().itemCount(active.target.instance)<=active.before) {
     // AI_GotoItem uses a ground position, while its generic arrival test uses

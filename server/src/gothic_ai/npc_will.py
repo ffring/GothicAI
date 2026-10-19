@@ -32,6 +32,7 @@ MEET_CM = 1500
 ROUTINE_CM = 2000
 OWNER_NEAR_CM = 2000
 VIEW_SECONDS = 3.0
+RETRY_MINUTES = 60
 LOOP_SECONDS = 60.0
 LOOP_STARTS = 8
 
@@ -111,8 +112,10 @@ class NpcWill:
         self._view_at: dict[str, float] = {}
         self._hours: dict[str, int] = {}
         self._active: dict[str, str] = {}
+        self._starting: dict[str, list[Fact]] = {}
         self._generation = 0
         self._now: int | None = None
+        self._await_clock = False
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task[Any]] = set()
         self.loop_guard = LoopGuard(clock)
@@ -142,6 +145,8 @@ class NpcWill:
             self._view_at.clear()
             self._hours.clear()
             self._active.clear()
+            self._starting.clear()
+            self._await_clock = True
             for task in tuple(self._tasks):
                 task.cancel()
             self._scheduled = None
@@ -151,13 +156,34 @@ class NpcWill:
                 self.views[npc], self._view_at[npc] = view, self.clock()
                 if view.time is not None:
                     self._now = view.time
+                    self._await_clock = False
             self._kick()
         elif isinstance(message, NpcRoster):
+            if self._now is not None and message.hour is not None and message.minute is not None:
+                minute = message.hour * 60 + message.minute
+                previous = self._now % DAY
+                # A roster has no day: only accept forward time, including midnight.
+                if minute >= previous or previous - minute > DAY // 2:
+                    self._now += (minute - previous) % DAY
             self._kick()
-        elif isinstance(message, NpcIdle) and self._active.get(message.npc.upper()) == message.act:
-            self._active.pop(message.npc.upper(), None)
+        elif isinstance(message, NpcIdle) and message.act:
+            if self._active.get(message.npc.upper()) == message.act:
+                self._active.pop(message.npc.upper(), None)
+            attempt = next((a for a in self.attempts() if a.get("action") == message.act), None)
+            if attempt is not None:
+                self._finished(attempt, message)
 
     def _on_fact(self, fact: Fact) -> None:
+        if fact.get("fact") == "npc_crime" and fact.get("kind") == "theft":
+            npc = str(fact.get("culprit") or "")
+            if npc in self._starting:
+                self._starting[npc].append(fact)
+            else:
+                attempt = next((a for a in reversed(self.attempts())
+                                if a.get("kind") == "greed" and self._matches(a, fact)
+                                and self._active.get(npc) == a.get("action")), None)
+                if attempt is not None:
+                    self._transferred(attempt, fact)
         if fact.get("fact") in {"npc_crime", "npc_crime_seen", "npc_crime_suspected", "rumor"}:
             self._kick()
 
@@ -185,10 +211,11 @@ class NpcWill:
             generation = self._generation
             if now is not None:
                 self._now = now
-            elif self._now is None and self.rumors is not None and self.rumors.clock is not None:
-                self._now = self.rumors.clock
+                self._await_clock = False
+            self._refresh_clock()
             if self._now is None:
                 return
+            self._recover_attempts()
             for rule in MOTIVES.values():
                 await getattr(self, rule.discover)(generation)
                 if generation != self._generation:
@@ -207,8 +234,117 @@ class NpcWill:
     evaluate = tick
 
     def pending(self) -> list[Fact]:
-        begun = {f.get("motive") for f in self.chronicle.facts("npc_will")}
+        begun = {f.get("motive") for f in self.attempts()
+                 if f.get("kind") != "greed" or f.get("outcome") == "committed"}
         return [f for f in self.chronicle.facts("npc_motive") if f.get("id") not in begun]
+
+    @staticmethod
+    def _at(fact: Fact) -> int:
+        return int(fact.get("at", int(fact.get("day", 0)) * DAY
+                            + int(fact.get("hour", 0)) * 60 + int(fact.get("minute", 0))))
+
+    def _refresh_clock(self) -> None:
+        # Rumors keeps ticking when the hero leaves all NPC views. It resets its clock on
+        # Session; do not read a previous world's clock while loading is still in progress.
+        if not self._await_clock and self.rumors is not None and self.rumors.clock is not None:
+            self._now = max(self._now or 0, self.rumors.clock)
+
+    def _matches(self, attempt: Fact, crime: Fact) -> bool:
+        return bool(
+            crime.get("kind") == "theft" and crime.get("culprit") == attempt.get("npc")
+            and crime.get("owner") == attempt.get("owner")
+            and crime.get("item") == attempt.get("item")
+            and (not crime.get("chest") or crime["chest"] == attempt.get("target"))
+            and self._at(crime) >= self._at(attempt)
+        )
+
+    def attempts(self) -> list[Fact]:
+        """Project immutable starts and their outcomes without changing Chronicle's source facts.
+
+        A transfer is authoritative even when closing the chest was interrupted. Older starts
+        lacking outcomes can still be proved by their subsequent physical deed; absent that
+        proof, a load recovers the motive rather than inventing a completed theft.
+        """
+        facts = self.chronicle.facts()
+        motives = {f.get("id"): f for f in facts if f.get("fact") == "npc_motive"}
+        outcomes: dict[str, Fact] = {}
+        terminal: dict[str, int] = {}
+        for index, fact in enumerate(facts):
+            if fact.get("fact") == "npc_will_outcome":
+                terminal.setdefault(fact["action"], index)
+                old = outcomes.get(fact["action"])
+                if old is None or old.get("outcome") != "committed":
+                    outcomes[fact["action"]] = fact
+        starts = [(index, fact) for index, fact in enumerate(facts) if fact.get("fact") == "npc_will"]
+        result = []
+        for index, start in starts:
+            motive = motives.get(start.get("motive"), {})
+            attempt = {**{key: motive[key] for key in ("owner", "item") if key in motive}, **start}
+            outcome = outcomes.get(start.get("action"))
+            if outcome is not None:
+                attempt.update({key: outcome[key] for key in (
+                    "outcome", "reason", "detail", "retry_at", "crime", "finished_at",
+                ) if key in outcome})
+            if start.get("kind") == "greed" and attempt.get("outcome") != "committed":
+                stop = next((i for i, other in starts
+                             if i > index and other.get("npc") == start.get("npc")), len(facts))
+                stop = min(stop, terminal.get(start.get("action"), len(facts)))
+                crime = next((f for f in facts[index + 1:stop]
+                              if f.get("fact") == "npc_crime" and self._matches(attempt, f)), None)
+                if crime is not None:
+                    attempt.update(outcome="committed", reason="native_transfer", crime=crime["id"],
+                                   finished_at=self._at(crime))
+            result.append(attempt)
+        return result
+
+    def _outcome(self, attempt: Fact, outcome: str, reason: str, *, at: int | None = None,
+                 detail: str = "", crime: str = "") -> None:
+        previous = [f for f in self.chronicle.facts("npc_will_outcome")
+                    if f.get("action") == attempt["action"]]
+        if previous and (outcome != "committed" or any(f.get("outcome") == "committed" for f in previous)):
+            return
+        finished = self._now if at is None else at
+        if finished is None:
+            return
+        self.chronicle.record({
+            "fact": "npc_will_outcome", "npc": attempt["npc"], "kind": attempt["kind"],
+            "target": attempt["target"], "motive": attempt["motive"], "action": attempt["action"],
+            "outcome": outcome, "reason": reason, "finished_at": finished,
+            **({"detail": detail} if detail else {}), **({"crime": crime} if crime else {}),
+            **({"retry_at": finished + RETRY_MINUTES}
+               if attempt["kind"] == "greed" and outcome == "aborted" else {}),
+        })
+
+    def _transferred(self, attempt: Fact, crime: Fact) -> None:
+        self._outcome(attempt, "committed", "native_transfer", at=self._at(crime), crime=crime["id"])
+
+    def _finished(self, attempt: Fact, receipt: NpcIdle) -> None:
+        self._refresh_clock()
+        if attempt["kind"] == "greed" and attempt.get("outcome") == "committed":
+            crime = self.npc_crimes.crime(str(attempt.get("crime") or ""))
+            if crime is not None:
+                self._transferred(attempt, crime)
+            return
+        completed = attempt["kind"] != "greed" and receipt.reason in {"done", "arrived"}
+        self._outcome(attempt, "completed" if completed else "aborted", receipt.reason or "unknown",
+                      detail=receipt.detail or "")
+
+    def _recover_attempts(self) -> None:
+        for attempt in self.attempts():
+            if attempt["kind"] != "greed":
+                continue
+            if attempt.get("outcome") == "committed":
+                crime = self.npc_crimes.crime(str(attempt.get("crime") or ""))
+                if crime is not None:
+                    self._transferred(attempt, crime)
+            elif not attempt.get("outcome") and self._active.get(attempt["npc"]) != attempt["action"]:
+                self._outcome(attempt, "aborted", "load_interrupted")
+
+    def _retry_ready(self, motive: Fact) -> bool:
+        last = next((a for a in reversed(self.attempts()) if a.get("motive") == motive["id"]), None)
+        return last is None or (
+            last.get("outcome") == "aborted" and (self._now or 0) >= last.get("retry_at", math.inf)
+        )
 
     def _stamp(self) -> dict[str, int]:
         now = self._now or 0
@@ -253,11 +389,10 @@ class NpcWill:
         interval = greed_interval(card)
         if not interval:
             return False
-        starts = [int(f.get("at", int(f.get("day", 0)) * DAY + int(f.get("hour", 0)) * 60
-                                + int(f.get("minute", 0))))
-                  for f in self.chronicle.facts("npc_will")
-                  if f.get("npc") == npc and f.get("kind") == "greed"]
-        return not starts or (self._now or 0) - max(starts) >= interval
+        transfers = [f["finished_at"] for f in self.attempts()
+                     if f.get("npc") == npc and f.get("kind") == "greed"
+                     and f.get("outcome") == "committed"]
+        return not transfers or (self._now or 0) - max(transfers) >= interval
 
     def _free(self, npc: str) -> bool:
         entry = self.roster.get(npc)
@@ -269,6 +404,22 @@ class NpcWill:
             and not self.busy(npc) and not getattr(self.link, "body_owned", lambda _: False)(npc)
             and npc not in self._active
         )
+
+    async def _local(self, npc: str, target: str, generation: int, *,
+                     chest: tuple[float, float, float] | None = None) -> bool:
+        """A fresh position check prevents walking to a remote chest in an ordinary routine place."""
+        actor = await self.link.snapshot(npc, fresh=True)
+        if (generation != self._generation or actor.npc.id.upper() != npc or actor.player is None
+                or math.dist(actor.npc.pos, actor.player.pos) >= SIMULATION_CM):
+            return False
+        other = await self.link.snapshot(target, fresh=True)
+        if (generation != self._generation or other.npc.id.upper() != target or other.player is None
+                or math.dist(other.npc.pos, other.player.pos) >= SIMULATION_CM):
+            return False
+        if chest is not None:
+            return (math.dist(chest, actor.player.pos) < SIMULATION_CM
+                    and math.dist(actor.npc.pos, chest) <= ROUTINE_CM)
+        return math.dist(actor.npc.pos, other.npc.pos) <= MEET_CM
 
     async def _discover_greed(self, generation: int) -> None:
         social = self.rumors.social if self.rumors is not None else None
@@ -300,6 +451,8 @@ class NpcWill:
                         return
                     if (chest.why != "owner" or chest.distance <= OWNER_NEAR_CM
                             or not any(math.dist(chest.pos, pos) <= ROUTINE_CM for pos in spots)):
+                        continue
+                    if not await self._local(npc, owner, generation, chest=chest.pos):
                         continue
                     for item in chest.items:
                         if item.count <= 0:
@@ -340,7 +493,8 @@ class NpcWill:
 
     async def _steal(self, motive: Fact, rule: MotiveRule, generation: int) -> None:
         npc, owner = motive["npc"], motive["owner"]
-        if not self._free(npc) or not self._free(owner) or not self._cool(npc, self.cards.get(npc)):
+        if (not self._free(npc) or not self._free(owner) or not self._cool(npc, self.cards.get(npc))
+                or not self._retry_ready(motive)):
             return
         chest = next((c for c in await self.link.npc_chests(owner) if c.id == motive["target"]), None)
         if (generation != self._generation or chest is None or chest.why != "owner"
@@ -364,12 +518,18 @@ class NpcWill:
             return
         if args.get("expected_owner") != owner:
             return
+        if not await self._local(npc, owner, generation, chest=chest.pos):
+            return
         if generation != self._generation or not self._free(npc) or not self._free(owner):
             return
         if not self.loop_guard.claim(npc):
             return
-        action = await self.npc_crimes._act(npc, "steal", **args)
-        self._started(motive, "steal", action, generation)
+        self._starting[npc] = []
+        try:
+            action = await self.npc_crimes._act(npc, "steal", **args)
+            self._started(motive, "steal", action, generation)
+        finally:
+            self._starting.pop(npc, None)
 
     async def _meet(self, motive: Fact, rule: MotiveRule, generation: int) -> None:
         npc, target, cid = motive["npc"], motive["target"], motive["crime"]
@@ -383,6 +543,8 @@ class NpcWill:
             return
         view = await self._view(npc, generation)
         if view is None or not any(o.id.upper() == target and o.distance <= MEET_CM for o in view.sees):
+            return
+        if not await self._local(npc, target, generation):
             return
         if not self._free(npc) or not self._free(target) or generation != self._generation:
             return
@@ -411,11 +573,18 @@ class NpcWill:
             return
         if action not in self.npc_crimes._completed:
             self._active[motive["npc"]] = action
-        self.chronicle.record({
+        attempt = {
             "fact": "npc_will", "npc": motive["npc"], "kind": motive["kind"],
             "target": motive["target"], "act": act, "action": action, "motive": motive["id"],
-            **({"crime": motive["crime"]} if motive.get("crime") else {}), **self._stamp(),
-        })
+            **({key: motive[key] for key in ("crime", "owner", "item") if key in motive}), **self._stamp(),
+        }
+        self.chronicle.record(attempt)
+        for crime in self._starting.get(motive["npc"], []):
+            if self._matches(attempt, crime):
+                self._transferred(attempt, crime)
+        if receipt := self.npc_crimes._completed.get(action):
+            current = next(a for a in self.attempts() if a["action"] == action)
+            self._finished(current, receipt)
 
     def _name(self, npc: str) -> str:
         entry = self.roster.get(npc)

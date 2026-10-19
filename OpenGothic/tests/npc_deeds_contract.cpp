@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <string_view>
 
 namespace {
 int checks = 0;
@@ -15,6 +16,28 @@ void require(bool condition, const char* message) {
 }
 
 int main() {
+  require(NpcDeedSimulation::admitted(NpcProcessPolicy::AiNormal),
+          "a fully simulated marked NPC may transfer or capture a deed");
+  require(NpcDeedSimulation::refusal(NpcProcessPolicy::AiNormal)==nullptr,
+          "normal simulation has no failure reason");
+  for(auto policy:std::array{NpcProcessPolicy::Player,NpcProcessPolicy::AiFar,NpcProcessPolicy::AiFar2}) {
+    require(!NpcDeedSimulation::admitted(policy),
+            "a marked NPC outside normal simulation cannot transfer or capture a deed");
+    const auto* reason = NpcDeedSimulation::refusal(policy);
+    require(reason!=nullptr && std::string_view(reason)=="left_simulation",
+            "the same production admission reports the native left_simulation failure");
+    }
+  bool simulationLost = false;
+  require(NpcDeedSimulation::refusal(NpcProcessPolicy::AiNormal,simulationLost)==nullptr,
+          "a new deed begins without a latched simulation failure");
+  require(NpcDeedSimulation::refusal(NpcProcessPolicy::AiFar,simulationLost)!=nullptr && simulationLost,
+          "a refused queued pickup remembers leaving simulation");
+  const auto* latched = NpcDeedSimulation::refusal(NpcProcessPolicy::AiNormal,simulationLost);
+  require(latched!=nullptr && std::string_view(latched)=="left_simulation",
+          "returning before the observer tick cannot revive the refused deed or lose its exact failure");
+  simulationLost = false; // setServerDeed/clearServerDeed start a new scoped action
+  require(NpcDeedSimulation::refusal(NpcProcessPolicy::AiNormal,simulationLost)==nullptr,
+          "resetting the command admits a fresh local deed");
   require(!DeedWitness::foreignCombat(false,false),"standing NPC with a stale unrelated target remains a witness");
   require(DeedWitness::foreignCombat(true,false),"a participant in another fight is occupied");
   require(!DeedWitness::foreignCombat(true,true),"a defender fighting this culprit can witness a fresh deed");

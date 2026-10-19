@@ -2,6 +2,23 @@
 
 #include "constants.h"
 
+// A marked NPC deed must still have native simulation at its transfer/capture point.
+// Shared with the queued ground pickup, which can run before the bridge's next tick.
+struct NpcDeedSimulation final {
+  static constexpr bool admitted(NpcProcessPolicy policy) {
+    return policy==NpcProcessPolicy::AiNormal;
+    }
+
+  static constexpr const char* refusal(NpcProcessPolicy policy) {
+    return admitted(policy) ? nullptr : "left_simulation";
+    }
+
+  static constexpr const char* refusal(NpcProcessPolicy policy, bool& lost) {
+    lost = lost || !admitted(policy);
+    return lost ? "left_simulation" : nullptr;
+    }
+  };
+
 // Shared, side-effect-free admission for the bridge's witness snapshot. Native
 // perception callbacks are never invoked to discover an NPC deed's witnesses.
 struct DeedWitness final {
