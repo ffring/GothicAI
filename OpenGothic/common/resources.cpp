@@ -21,9 +21,22 @@
 #include <zenkit/Texture.hh>
 
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <limits>
 #include <stdexcept>
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#include <rapidjson/document.h>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #include "graphics/mesh/submesh/pfxemittermesh.h"
 #include "graphics/mesh/submesh/packedmesh.h"
@@ -38,6 +51,7 @@
 #include "utils/gthfont.h"
 
 #include "gothic.h"
+#include "contentcensus.h"
 #include "utils/string_frm.h"
 
 #include <dmusic.h>
@@ -61,6 +75,7 @@ static void emplaceTag(char* buf, char tag){
 
 Resources::Resources() {
   inst=this;
+  initCensus();
   // Sound buffers remain CPU data: native sound selection consumes RNG and
   // dialogue uses their durations even when playback is disabled.
   fBuff.reserve(8*1024*1024);
@@ -69,6 +84,7 @@ Resources::Resources() {
 Resources::Resources(Tempest::Device &device)
   : dev(&device), sound(std::make_unique<Tempest::SoundDevice>()) {
   inst=this;
+  initCensus();
 
   static const uint16_t index[] = {
       0, 1, 2, 0, 2, 3,
@@ -94,6 +110,7 @@ Resources::Resources(Tempest::Device &device)
   fBuff .reserve(8*1024*1024);
   ddsBuf.reserve(8*1024*1024);
   indexHdTextures();
+  indexMaterialMaps();
 
   {
   Pixmap pm(1,1,TextureFormat::RGBA8);
@@ -197,7 +214,29 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
 Resources::~Resources() {
   if(dmLoader!=nullptr)
     DmLoader_release(dmLoader);
+  writeCensus();
   inst=nullptr;
+  }
+
+void Resources::initCensus() {
+  const char* path = std::getenv("OPENGOTHIC_CENSUS");
+  if(path==nullptr || path[0]=='\0')
+    return;
+  census = std::make_unique<ContentCensus>(path);
+  gothicAssets.set_open_observer([this](std::string_view name, std::string_view source) {
+    census->opened(name,source);
+    });
+  }
+
+void Resources::censusFile(std::u16string_view path) {
+  if(inst==nullptr || inst->census==nullptr)
+    return;
+  const auto source = TextCodec::toUtf8(path);
+  inst->census->opened(source,source);
+  }
+
+bool Resources::writeCensus() {
+  return inst==nullptr || inst->census==nullptr || inst->census->write();
   }
 
 Tempest::Device& Resources::device() {
@@ -497,6 +536,107 @@ void Resources::indexHdTextures() {
   Log::i("textures: ",hdTextures.size()," of our own from \"",dir,"\"");
   }
 
+void Resources::indexMaterialMaps() {
+  std::filesystem::path root;
+  if(const char* dir = std::getenv("OPENGOTHIC_CONTENT")) {
+    if(dir[0]=='\0')
+      return;
+    root = dir;
+    } else if(const char* home = std::getenv("HOME")) {
+    root = std::filesystem::path(home)/".local/share/gothic-ai/content";
+    } else {
+    return;
+    }
+  root /= "materials";
+
+  std::ifstream file(root/"materials.json", std::ios::binary);
+  if(!file)
+    return;
+  const std::string text{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+  rapidjson::Document table;
+  table.Parse<rapidjson::kParseValidateEncodingFlag>(text.data(), text.size());
+  if(table.HasParseError() || !table.IsObject()) {
+    Log::e("materials: invalid materials.json in \"",root.string(),"\"");
+    return;
+    }
+
+  for(auto& entry:table.GetObject()) {
+    if(!entry.value.IsObject()) {
+      Log::e("materials: invalid entry \"",entry.name.GetString(),"\"");
+      continue;
+      }
+    MaterialMapFiles maps;
+    auto path = [&](const char* field, std::string& out) {
+      const auto it = entry.value.FindMember(field);
+      if(it==entry.value.MemberEnd())
+        return true;
+      if(!it->value.IsString())
+        return false;
+      const std::string name(it->value.GetString(), it->value.GetStringLength());
+      const auto relative = std::filesystem::path(name);
+      if(name.empty() || name.find('\0')!=std::string::npos || relative.is_absolute() || !FileExt::hasExt(name,"DDS"))
+        return false;
+      for(const auto& component:relative)
+        if(component=="..")
+          return false;
+      out = (root/relative).lexically_normal().string();
+      return true;
+      };
+    bool valid = path("albedo", maps.albedo) && path("normal", maps.normal) && path("orm", maps.orm);
+    if(const auto scale = entry.value.FindMember("scale"); scale!=entry.value.MemberEnd()) {
+      if(!scale->value.IsNumber()) {
+        valid = false;
+        } else {
+        const auto value = scale->value.GetDouble();
+        if(!std::isfinite(value) || std::abs(value)>std::numeric_limits<float>::max())
+          valid = false;
+        else
+          maps.scale = float(value);
+        }
+      }
+    if(!valid) {
+      Log::e("materials: invalid entry \"",entry.name.GetString(),"\"");
+      continue;
+      }
+    std::string key(entry.name.GetString(), entry.name.GetStringLength());
+    for(auto& c:key)
+      c = char(std::toupper(uint8_t(c)));
+    materialMaps[std::move(key)] = std::move(maps);
+    }
+  for(const auto& entry:materialMaps) {
+    const auto& maps = entry.second;
+    if(!maps.normal.empty() || !maps.orm.empty() || maps.scale!=1.f) {
+      materialMapsPresent = true;
+      break;
+      }
+    }
+  Log::i("materials: ",materialMaps.size()," entries from \"",root.string(),"\"");
+  }
+
+const Texture2d* Resources::implLoadMaterialTexture(const std::string& path, bool normalMap) {
+  if(path.empty())
+    return nullptr;
+  // The normal map must be DXT5 even if the same file was already used as colour.
+  const auto key = (normalMap ? "normal:" : "color:")+path;
+  if(auto it = materialTextureCache.find(key); it!=materialTextureCache.end())
+    return it->second.get();
+  std::unique_ptr<Texture2d> texture;
+  try {
+    Pixmap pm(path);
+    if(pm.format()!=TextureFormat::DXT5 && (normalMap || pm.format()!=TextureFormat::DXT1)) {
+      Log::e("materials: unsupported DDS format in \"",path,"\"");
+      } else {
+      texture = std::make_unique<Texture2d>(device().texture(pm,pm.mipCount()>1));
+      }
+    }
+  catch(...) {
+    Log::e("materials: unable to load \"",path,"\"");
+    }
+  const auto ret = texture.get();
+  materialTextureCache.emplace(key,std::move(texture));
+  return ret;
+  }
+
 Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMips) {
   if(isHeadless() || name.empty())
     return Texture2d();
@@ -510,7 +650,10 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMi
     if(auto it = hdTextures.find(key); it!=hdTextures.end()) {
       try {
         Tempest::Pixmap pm(it->second);
-        return device().texture(pm,true);
+        auto texture = device().texture(pm,true);
+        if(census)
+          census->replaced(name,it->second);
+        return texture;
         }
       catch(...) {
         Log::e("textures: unable to load \"",it->second,"\"");
@@ -1058,6 +1201,31 @@ Texture2d Resources::loadTexturePm(const Pixmap &pm) {
 
 Material Resources::loadMaterial(const zenkit::Material& src, bool enableAlphaTest) {
   return Material(src,enableAlphaTest);
+  }
+
+Resources::MaterialMaps Resources::loadMaterialMaps(std::string_view name) {
+  if(isHeadless() || name.empty())
+    return {};
+  std::lock_guard<std::recursive_mutex> g(inst->sync);
+  if(inst->materialMaps.empty())
+    return {};
+  std::string key(name);
+  for(auto& c:key)
+    c = char(std::toupper(uint8_t(c)));
+  const auto it = inst->materialMaps.find(key);
+  if(it==inst->materialMaps.end())
+    return {};
+  const auto& files = it->second;
+  MaterialMaps ret;
+  ret.albedo = inst->implLoadMaterialTexture(files.albedo,false);
+  ret.normal = inst->implLoadMaterialTexture(files.normal,true);
+  ret.orm    = inst->implLoadMaterialTexture(files.orm,false);
+  ret.scale  = files.scale;
+  return ret;
+  }
+
+bool Resources::materialMapsEnabled() {
+  return inst!=nullptr && inst->materialMapsPresent;
   }
 
 const ProtoMesh* Resources::loadMesh(std::string_view name) {

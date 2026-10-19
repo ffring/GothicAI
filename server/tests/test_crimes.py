@@ -81,6 +81,7 @@ def deed(**fields: Any) -> HeroDeed:
 )
 async def test_own_public_and_dropped_items_are_not_crimes(system, ownership):
     assert system.crimes.record(deed(**ownership)) is None
+    assert system.crimes.classified_noncrime("deed-1")
     assert system.chronicle.facts() == []
 
 
@@ -396,5 +397,42 @@ async def test_save_load_restores_crime_and_seen_at_the_saved_branch_head(system
 async def test_no_session_does_not_create_truth_and_close_removes_listener(system):
     system.chronicle.branch = None
     assert system.crimes.record(deed(owner=LOBART)) is None
+    assert not system.crimes.classified_noncrime("deed-1")
     await system.crimes.close()
     assert system.crimes._on_message not in system.link.listeners
+
+
+async def test_duplicate_record_is_not_a_negative_classification(system):
+    raw = deed(owner=LOBART, owner_npc_guild=12)
+    assert system.crimes.record(raw) is not None
+    assert system.crimes.record(raw) is None
+    assert not system.crimes.classified_noncrime(raw.id)
+
+
+@pytest.mark.parametrize("fields", [
+    {"item": ""},
+    {"count": 0},
+    {"kind": "attack", "victim": ""},
+    {"kind": "murder", "victim": ""},
+    {"kind": "pickpocket", "victim": ""},
+    {"kind": "pickpocket", "victim": LOBART, "picked_pocket_before": 1, "picked_pocket_after": 1},
+    {"kind": "unknown"},
+])
+async def test_incomplete_or_unclassified_deed_is_not_a_negative_classification(system, fields):
+    classified = []
+    system.crimes.on_noncrime.append(classified.append)
+    # model_copy also exercises record's defensive branch for an unknown future deed kind.
+    raw = deed().model_copy(update=fields)
+    assert system.crimes.record(raw) is None
+    assert not system.crimes.classified_noncrime(raw.id)
+    assert classified == [] and system.crimes.facts() == []
+
+
+async def test_noncrime_signal_follows_classification_and_is_cleared_on_session(system):
+    classified = []
+    system.crimes.on_noncrime.append(classified.append)
+    system.link.receive(deed())  # nobody owns the item
+    assert classified == ["deed-1"]
+    assert system.crimes.classified_noncrime("deed-1")
+    system.link.receive(Session(type="session", branch="B"))
+    assert not system.crimes.classified_noncrime("deed-1")

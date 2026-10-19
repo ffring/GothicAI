@@ -441,9 +441,18 @@ class GameLink:
 
     async def body_watch(self, npcs: list[str], rate_hz: int = 20, timeout: float = 5.0) -> dict[str, Any]:
         """Passively watch up to four existing NPC symbols at 10 or 20 Hz; [] disables it."""
-        if npcs and self._body_acquisitions:
-            raise GameError("cannot change watch while a body acquisition is pending")
         cmd = BodyWatchCmd(req=self._next_id("b"), npcs=[npc.upper() for npc in npcs], rate_hz=rate_hz)
+        watched = {"PLAYER" if npc == "HERO" else npc for npc in cmd.npcs}
+        pending_symbols = {
+            "PLAYER" if pending.npc == "HERO" else pending.npc
+            for pending in (*self._body_acquisitions.values(), *self._body_acquire_waiters.values())
+        }
+        removed = pending_symbols - watched
+        if removed:
+            raise GameError(
+                f"cannot remove {', '.join(sorted(removed))} from watch while a body acquisition is pending"
+            )
+        previous_generation = self.body_generation
         result = await self._request(cmd, timeout)
         stats = result.value if isinstance(result.value, dict) else {}
         generation = stats.get("generation")
@@ -452,6 +461,16 @@ class GameLink:
         if type(generation) is int and generation != self.body_generation:
             self._clear_body_observations()
             self.body_generation = generation
+        elif type(generation) is int and generation == previous_generation:
+            # v45 can change the watch without changing the world generation. Idle
+            # actors from the previous subscription must not fill the four-actor
+            # cache; current idle rows will return with the next packet. Retain
+            # owned actors and grants whose acquire caller has not published yet.
+            retained = (
+                self.body_leases.keys() | self._body_acquisitions.keys() | self._body_acquire_waiters.keys()
+            )
+            for entity_id in self.body_latest.keys() - retained:
+                self.body_latest.pop(entity_id)
         return stats
 
     def body_owned(self, npc: str) -> bool:

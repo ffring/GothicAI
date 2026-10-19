@@ -42,6 +42,9 @@ from .consequences import LieConsequences
 from .contracts import symbol_by_name
 from .crime_law_graph import init_ops as crime_law_ops
 from .crime_law_runtime import CrimeLawRuntime
+from .crime_meet import CrimeMeet
+from .crime_memory import CrimeMemoryRuntime
+from .crime_react import CrimeReact
 from .crimes import COMMUNITIES, Crimes
 from .daylife import DayDesk
 from .deals import Deals
@@ -56,7 +59,7 @@ from .gossip import GossipDesk
 from .group import GroupTalk
 from .guide import Guide
 from .incidents import IncidentDesk
-from .initiative import InitiativeDesk
+from .initiative import ImportantApproach, InitiativeDesk
 from .interject import Interjections
 from .journal import Journal, print_sink
 from .knowledge import Knowledge
@@ -160,7 +163,7 @@ HELP = """commands (npc defaults to the last attached one):
   director look     look for such quests now and repair them
   occasions         the hero's place, queued and recent occasions for the director
   questlog          the scripts' open quests and recent state changes
-  crimes            the current branch's crimes, their witnesses and communities
+  crimes            the current branch's crimes, witnesses, encounter reactions and communities
   lines             the director's plot lines, their state and remaining budget
   pitch             an occasion here and now, subject to the director's budget
   claims            quests of the scripts the hero said were done: believed, lies, found out
@@ -220,6 +223,9 @@ class ServerState:
         self.chronicle: Chronicle | None = None
         self.crimes: Crimes | None = None
         self.crime_law: CrimeLawRuntime | None = None
+        self.crime_memory: CrimeMemoryRuntime | None = None
+        self.crime_react: CrimeReact | None = None
+        self.crime_meet: CrimeMeet | None = None
         self.quests: QuestBoard | None = None
         self.director: Director | None = None
         self.occasions: Occasions | None = None
@@ -384,6 +390,17 @@ class Console:
                 else:
                     for fact in crimes.chronicle.facts("crime"):
                         print(json.dumps(fact, ensure_ascii=False))
+                        for reaction in crimes.chronicle.facts("crime_reaction"):
+                            if reaction.get("crime") == fact["id"]:
+                                print("  " + json.dumps(reaction, ensure_ascii=False))
+                        for reaction in crimes.chronicle.facts("crime_meet"):
+                            if reaction.get("crime") == fact["id"]:
+                                print("  " + json.dumps(reaction, ensure_ascii=False))
+                    for reaction in crimes.chronicle.facts("crime_reaction"):
+                        if reaction.get("verdict") == "scripts" and not crimes.crime(
+                            reaction.get("crime", "")
+                        ):
+                            print("  " + json.dumps(reaction, ensure_ascii=False))
                     print("communities:")
                     for community in COMMUNITIES:
                         print(f"  {community}: {', '.join(crimes.lawkeepers(community)) or '-'}")
@@ -690,11 +707,35 @@ def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -
     return BodyPilot(
         link,
         args.body_url,
+        max_fights=args.neural_body_max,
         companion=talk.orders.companion,
-        unavailable=lambda npc: (
-            npc.upper() in talk.attached or (talk.partner is not None and talk.partner.npc == npc.upper())
-        ),
+        unavailable=lambda npc: npc.upper() in talk.attached,
+        talking=lambda npc: talk.partner is not None and talk.partner.npc == npc.upper(),
     )
+
+
+def _perception_control(args: argparse.Namespace, *, planner: bool) -> ThreatControlCmd:
+    """Deeds have rules even when no behavioral model is configured."""
+    return ThreatControlCmd(
+        hold=planner and not args.no_hold_threats,
+        deeds=True if not args.no_crimes else None,
+    )
+
+
+def _start_crime_meet(state: ServerState, link: GameLink, cards: Any) -> asyncio.Task[None] | None:
+    """The crime switch owns encounters too, independently of the behavioral planner."""
+    if state.crimes is None:
+        return None
+    assert state.crime_react is not None and state.crime_memory is not None
+    assert state.bodies is not None and state.talk is not None and state.chronicle is not None
+    state.crime_meet = CrimeMeet(
+        link, state.crimes, state.crime_react, state.crime_memory,
+        amends=state.amends,
+        approach=ImportantApproach(link, state.bodies, state.talk, state.guard, state.chronicle),
+        cards=cards,
+    )
+    state.talk.refuses = state.crime_meet.refuses
+    return asyncio.create_task(state.crime_meet.run())
 
 
 async def _native_combat_available(link: GameLink, pilot: BodyPilot | None, npc: str) -> bool:
@@ -709,15 +750,17 @@ async def _native_combat_available(link: GameLink, pilot: BodyPilot | None, npc:
         entry = pilot.people.get(npc)
         if (entry is not None and entry.activity == "body") or npc in pilot._claimed_fights:
             return False
-        if pilot.npc != npc:
+        if not pilot.handles(npc):
             return True
-        # _start sets npc synchronously, before any acquire request or claim. Checking only the lease
-        # or claimed set here would let a native command reset the state during that initial window.
+        # The dispatcher registers a fight before any acquire request or claim. Checking only the
+        # lease or claimed set would let a native command reset that fight during its initial window.
         await asyncio.sleep(0.05)
 
 
 async def serve(args: argparse.Namespace) -> int:
-    if args.scenario in {"neural", "neural-companion"} and (not args.body_url or not args.neural_body):
+    if args.scenario in {"neural", "neural-companion", "neural-group", "neural-talk", "neural-load"} and (
+        not args.body_url or not args.neural_body
+    ):
         log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
         return 2
     done = asyncio.Event()
@@ -867,6 +910,14 @@ async def serve(args: argparse.Namespace) -> int:
             state.dialogue.extensions.append(state.crimes)
             if graph is not None:
                 state.crime_law = CrimeLawRuntime(link, state.crimes, graph, state.story)
+            state.crime_memory = CrimeMemoryRuntime(link, state.crimes)
+            state.crime_react = CrimeReact(
+                link,
+                state.crimes,
+                state.crime_law.law if state.crime_law is not None else None,
+                cards=personas.cards,
+                project=state.crime_memory.project,
+            )
         # the director's triggers fire in the game, with or without the server: the chronicle hears of them
         state.triggers = Triggers(link, state.chronicle)
         talk = state.talk
@@ -1012,6 +1063,10 @@ async def serve(args: argparse.Namespace) -> int:
         directing: list[asyncio.Task[None]] = []
         if state.crime_law is not None:
             directing.append(asyncio.create_task(state.crime_law.run()))
+        if state.crime_memory is not None:
+            directing.append(asyncio.create_task(state.crime_memory.run()))
+        if state.crime_react is not None:
+            directing.append(asyncio.create_task(state.crime_react.run()))
         if place_book is not None and not args.no_occasions:
             state.occasions = Occasions(link, state.chronicle, place_book, crimes=not args.no_crimes)
             directing.append(asyncio.create_task(state.occasions.run()))
@@ -1115,6 +1170,14 @@ async def serve(args: argparse.Namespace) -> int:
                 asyncio.create_task(state.vanilla.run()),
                 asyncio.create_task(state.amends.run()),
             ]
+        elif graph is not None and state.crimes is not None:
+            # A victim's rule-driven demand remains available without background story authoring.
+            # Neither repair nor optional Amends queues run in this mode; CrimeMeet calls demand.
+            amends_director = Director(link, graph, state.story, state.chronicle, llm)
+            state.amends = Amends(
+                link, graph, state.story, state.chronicle, amends_director, llm,
+                dialogue=state.dialogue, journal=journal, crimes=state.crimes,
+            )
         # rumors of the hero's lies go round the people that know each other (story graph, stage 5)
         state.rumors = Rumors(
             link,
@@ -1180,11 +1243,9 @@ async def serve(args: argparse.Namespace) -> int:
                 config=PlannerConfig(apply_day=args.apply_day),
                 trace=trace,  # its decisions: data for fine-tuning (M5d)
             )
+            planner.crime_rooms = state.crimes is not None
             state.incidents.follow(planner)  # free npc's speak when the moment calls for it
             state.talk.planner = planner  # npc's in a conversation are left to it; others overhear
-            if not args.no_hold_threats:
-                # threats to free npc's: the behavioral model first, the scripts if it does not take them
-                await link.send(ThreatControlCmd(hold=True))
             link.listeners.append(planner.on_message)
             # what the npc wants from the hero, from the conversation, steers it afterwards
             def on_intent(npc: str, intent: Intent) -> None:
@@ -1217,6 +1278,9 @@ async def serve(args: argparse.Namespace) -> int:
             if state.errands is not None:  # an npc on an errand
                 state.errands.attach_planner(planner)
             brain = asyncio.create_task(planner.run())
+        if (crime_meet_task := _start_crime_meet(state, link, personas.cards)) is not None:
+            directing.append(crime_meet_task)
+        await link.send(_perception_control(args, planner=decider is not None))
         bodypilot = _start_bodypilot(args, link, state.talk)
         body_task = asyncio.create_task(bodypilot.run()) if bodypilot is not None else None
         try:
@@ -1238,6 +1302,12 @@ async def serve(args: argparse.Namespace) -> int:
                 task.cancel()
             if state.questlog is not None:
                 await state.questlog.close()
+            if state.crime_react is not None:
+                await state.crime_react.close()
+            if state.crime_meet is not None:
+                await state.crime_meet.close()
+            if state.crime_memory is not None:
+                await state.crime_memory.close()
             if state.crimes is not None:
                 await state.crimes.close()
             if state.crime_law is not None:
@@ -1250,9 +1320,18 @@ async def serve(args: argparse.Namespace) -> int:
         if args.scenario is None:
             return
         try:
-            if args.scenario in {"neural", "neural-companion"}:
-                scenario = (scenarios.neural_companion_scenario if args.scenario == "neural-companion"
-                            else scenarios.neural_scenario)
+            if args.scenario == "neural-talk":
+                results = await scenarios.neural_talk_scenario(link, state.dialogue, bodypilot)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario in {"neural", "neural-companion", "neural-group", "neural-load"}:
+                scenario = {
+                    "neural": scenarios.neural_scenario,
+                    "neural-companion": scenarios.neural_companion_scenario,
+                    "neural-group": scenarios.neural_group_scenario,
+                    "neural-load": scenarios.neural_load_scenario,
+                }[args.scenario]
                 results = await scenario(link, bodypilot)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -1357,6 +1436,24 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await crimes_scenario(link, state.crimes)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario crimes: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "crime_react":
+                assert state.crimes is not None and state.crime_react is not None
+                results = await scenarios.crime_react(
+                    link, state.crimes, state.crime_react,
+                    hold_threats=state.brain is not None and not args.no_hold_threats,
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario crime_react: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "crime_meet":
+                assert state.crimes is not None and state.crime_react is not None
+                assert state.crime_meet is not None and state.amends is not None
+                results = await scenarios.crime_meet(
+                    link, state.crimes, state.crime_react, state.crime_meet, state.amends,
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario crime_meet: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "crime_talk":
                 assert state.crimes is not None and state.dialogue is not None and state.talk is not None
@@ -2372,6 +2469,9 @@ def main() -> None:
             "m5b",
             "neural",
             "neural-companion",
+            "neural-group",
+            "neural-talk",
+            "neural-load",
             "m5c",
             "m5e",
             "orders",
@@ -2414,6 +2514,8 @@ def main() -> None:
             "occasions",
             "questlog",
             "crimes",
+            "crime_react",
+            "crime_meet",
             "crime_talk",
             "trace_crime",
             "crime_director",
@@ -2484,7 +2586,14 @@ def main() -> None:
         "--neural-body",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="let the body policy fight the hero with one eligible npc at a time (requires --body-url)",
+        help="let the body policy fight the hero or companions with eligible npcs (requires --body-url)",
+    )
+    p.add_argument(
+        "--neural-body-max",
+        type=int,
+        choices=range(1, 5),
+        default=4,
+        help="maximum simultaneous body policy fights (1-4; default: 4)",
     )
     p.add_argument(
         "--quick-url",

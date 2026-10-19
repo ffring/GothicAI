@@ -33,6 +33,10 @@ retained in `BulletCompat.LICENSE`; the Jolt library and its existing code retai
 
 Keep these when updating a library from upstream.
 
+- `ZenKit/` `Vfs::set_open_observer` (`Vfs.hh`, `Vfs.cc`): optional successful-open callback
+  with the winning archive filename or host file path, set before mounting. File nodes keep
+  provenance through overrides; `find` and `resolve` do not count as opens. Used only by
+  `OPENGOTHIC_CENSUS`; without an observer no provenance metadata is allocated.
 - `JoltPhysics/Jolt/Physics/Character/CharacterVirtual.{h,cpp}`: optional transient
   `WalkStairsDiagnostics` records the rejection stage and sweep results. The stair support test
   tests the full lookahead endpoint first, then at most four intermediate positions, checking the

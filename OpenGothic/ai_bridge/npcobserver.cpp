@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "game/gamescript.h"
+#include "game/herodeed.h"
 #include "game/inventory.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicsnoise.h"
@@ -257,6 +258,12 @@ void NpcObserver::tick(World& world) {
   if(now<nextRoster)
     return;
   nextRoster = now+RosterPeriodMs;
+  // Deed keys are unique for every action, unlike the bounded actor-pair cache.
+  for(auto it=verdicts.begin(); it!=verdicts.end();) {
+    if(now>=it->second.until)
+      it = verdicts.erase(it); else
+      ++it;
+    }
   emitRoster(world);
   }
 
@@ -422,15 +429,44 @@ void NpcObserver::physicsNoise(World& world, Npc& self, const PhysicsNoise& nois
   emit(j.finish());
   }
 
-bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
-  if(!holdThreats || other.isPlayer() || &other==&self)
-    return false;  // the hero's doings stay with the scripts (crimes, guards)
-  if(perc!=PERC_ASSESSENEMY && perc!=PERC_ASSESSWARN && perc!=PERC_ASSESSDAMAGE && perc!=PERC_ASSESSOTHERSDAMAGE)
+bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc,
+                            const HeroDeed* deed, std::string_view deedId) {
+  if(&other==&self)
     return false;
+  const bool hero = other.isPlayer();
+  const bool room = hero && perc==PERC_ASSESSENTERROOM;
+  Seen seen;
+  if(hero) {
+    if(!holdDeeds)
+      return false;
+    if(room) {
+      seen = Seen{"enter_room"};
+      } else if(deed==nullptr || deedId.empty()) {
+      return false;
+      } else if(perc==PERC_ASSESSTHEFT && deed->kind=="take_item" && !deed->item.empty()) {
+      seen = Seen{"theft"};
+      } else if(perc==PERC_ASSESSOTHERSDAMAGE && deed->kind=="attack" && victim!=nullptr && !deed->victimIsMonster) {
+      seen = Seen{"attack",victim};
+      } else if(perc==PERC_ASSESSMURDER && deed->kind=="murder" && victim!=nullptr) {
+      if(deed->victimIsSheep && !deed->victimToughGuy)
+        seen = Seen{"sheep",victim}; else
+      if(!deed->victimIsMonster)
+        seen = Seen{"murder",victim};
+      }
+    // Self-defence, weapon warnings and all uncertain events stay vanilla.
+    if(seen.kind.empty())
+      return false;
+    } else {
+    if(!holdThreats)
+      return false;
+    if(perc!=PERC_ASSESSENEMY && perc!=PERC_ASSESSWARN && perc!=PERC_ASSESSDAMAGE && perc!=PERC_ASSESSOTHERSDAMAGE)
+      return false;
+    seen = classify(world,self,other,victim,perc);
+    }
   if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM || self.isTalk() ||
      self.isAttack())
     return false;  // already fighting by its scripts: they go on
-  if(classify(world,self,other,victim,perc).kind.empty())
+  if(seen.kind.empty())
     return false;
   Npc* pl = world.player();
   if(pl==nullptr || std::sqrt(self.qDistTo(*pl))>EventRadius)
@@ -441,7 +477,9 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
     return false;
 
   const uint64_t now = world.tickCount();
-  const auto     key = symbol + "/" + otherId;
+  // Separate actions of the hero must never inherit a verdict about an earlier
+  // theft or strike. Threats from other actors keep their existing pair cache.
+  const auto     key = symbol + "/" + otherId + (room ? "/room" : (hero ? "/"+std::string(deedId) : ""));
   if(auto v = verdicts.find(key); v!=verdicts.end() && now<v->second.until)
     return v->second.server;  // decided a moment ago: the server acts, or the scripts take it
   verdicts[key] = Verdict{true,now+HoldMs};  // repeats while it is being decided are held too
@@ -449,16 +487,22 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   Held h;
   h.id     = "h" + std::to_string(nextHold++);
   h.key    = key;
+  if(hero && !room) {
+    h.item = deed->item;
+    h.deed = deedId;
+    }
+  h.room   = room;
   h.self   = &self;
   h.other  = &other;
   h.victim = victim;
   h.perc   = perc;
   h.at     = now;
-  const Seen seen = classify(world,self,other,victim,perc);
   JsonWriter j("perception_held");
   j.str("hold",h.id).str("npc",symbol).str("kind",seen.kind).str("other",otherId)
    .str("other_name",TextCodec::toUtf8(other.displayName()))
    .num("distance",std::sqrt(double(self.qDistTo(other))));
+  if(!h.deed.empty())
+    j.str("deed",h.deed);
   if(seen.about==&self)
     j.str("detail","you"); else
   if(seen.about!=nullptr)
@@ -474,7 +518,9 @@ void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
   if(it==held.end())
     return;  // released already (too late)
   bool server = JsonRead::str(msg,"to")=="server";
-  if(server) {
+  // Deed and room rules may deliberately end in silence, a warning or time to
+  // leave. Threats still require an actual body action before they are swallowed.
+  if(server && it->deed.empty() && !it->room) {
     // A decision is not ownership: a busy attachment or a rejected command may leave no body acting
     // on the verdict. Accept an actual combat provider, or the requested native fight/flee.
     Npc* self = nullptr;
@@ -489,7 +535,9 @@ void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
              (BodyController::owns(*self) ||
               (!self->isExternalControl() && (self->isAttack() || (flee.isValid() && self->isInState(flee)))));
     }
-  verdicts[it->key] = Verdict{server,world.tickCount()+VerdictMs};
+  // A new entry must be reconsidered against current knowledge, including after
+  // the hero left or made amends. Only in-flight room repeats share the hold.
+  verdicts[it->key] = Verdict{server,world.tickCount()+(it->room ? 0 : VerdictMs)};
   if(!server)
     releaseHeld(world,*it);
   held.erase(it);
@@ -519,7 +567,12 @@ void NpcObserver::releaseHeld(World& world, Held& h) {
   if(self==nullptr || other==nullptr || self->isDead() || self->isDown() || other->isDead())
     return;
   if(auto v = verdicts.find(h.key); v!=verdicts.end())
-    v->second = Verdict{false,world.tickCount()+VerdictMs};
+    v->second = Verdict{false,world.tickCount()+(h.room ? 0 : VerdictMs)};
+  if(!h.item.empty()) {
+    const auto item = world.script().findSymbolIndex(h.item);
+    if(item!=size_t(-1))
+      world.script().setInstanceItem(*other,item);
+    }
   self->passPerception(*other,h.victim!=nullptr ? victim : nullptr,h.perc);
   }
 
@@ -633,6 +686,31 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     if(!state.isValid() || target->isDead()) {
       result("rejected",state.isValid() ? "target is dead" : "the scripts have no such state");
       return;
+      }
+    if(action=="fight") {
+      const auto reasonName = upper(JsonRead::str(args,"reason"));
+      if(!reasonName.empty()) {
+        auto* reason = world.script().findSymbol(reasonName);
+        const auto attack = HeroDeed::constant(*npc,"AIV_ATTACKREASON");
+        const auto last = HeroDeed::constant(*npc,"AIV_LASTPLAYERAR");
+        const auto fight = HeroDeed::constant(*npc,"AIV_LASTFIGHTAGAINSTPLAYER");
+        const auto comment = HeroDeed::constant(*npc,"AIV_LASTFIGHTCOMMENT");
+        const auto valid = [](int32_t index) { return index>=0 && uint32_t(index)<zenkit::INpc::aivar_count; };
+        if(!reasonName.starts_with("AR_") || reason==nullptr || !reason->is_const() ||
+           reason->type()!=zenkit::DaedalusDataType::INT || !valid(attack) ||
+           (target->isPlayer() && !valid(last)) || !valid(fight) || !valid(comment)) {
+          result("rejected","fight needs a vanilla AR_* reason and its attack variables");
+          return;
+          }
+        // Match B_Attack's combat bookkeeping without B_MemorizePlayerCrime:
+        // the server already owns the witness memory and community counters.
+        auto& aiv = npc->handlePtr()->aivar;
+        aiv[size_t(attack)] = reason->get_int(0);
+        if(target->isPlayer())
+          aiv[size_t(last)] = reason->get_int(0);
+        aiv[size_t(fight)] = HeroDeed::constant(*npc,"FIGHT_CANCEL",0);
+        aiv[size_t(comment)] = 0;
+        }
       }
     // An urgent verdict owns the body now, rather than waiting behind a routine walk, listening or
     // queued speech. Install the same state as AI_StartState(behavior=0), then add its fresh readiness

@@ -1,10 +1,14 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
 from gothic_ai import triggers
 from gothic_ai.protocol import (
     BROKEN_TRACE_PROTOCOL,
+    CRIME_MEET_PROTOCOL,
     CRIME_PROTOCOL,
+    CRIME_REACT_PROTOCOL,
     ERRAND_PROTOCOL,
     FIGHT_REACTION_PROTOCOL,
     NOISE_PROTOCOL,
@@ -32,12 +36,14 @@ from gothic_ai.protocol import (
     NpcSpec,
     NpcThing,
     NpcViews,
+    PerceptionHeld,
     RoutineEntry,
     SayCmd,
     Snapshot,
     StoryEffectCmd,
     StoryNpcCmd,
     StoryProgramCmd,
+    ThreatControlCmd,
     TriggerFired,
     parse_game_message,
 )
@@ -102,6 +108,32 @@ def test_hero_deed_retains_ownership_ids_and_engine_witnesses():
     assert msg.position.model_dump() == {"x": 1, "y": 2, "z": 3}
     assert msg.witnesses == ["BAU_951_HILDA"]
     assert (msg.room_owner, msg.room_guild, msg.waypoint) == ("BAU_950_LOBART", 7, "NW_FARM1_HOUSE")
+
+
+def test_v44_independent_deeds_switch_and_held_deed_id():
+    assert PROTOCOL_VERSION >= CRIME_REACT_PROTOCOL == 44
+    assert "deeds" not in json.loads(ThreatControlCmd(hold=True).to_json())
+    command = json.loads(ThreatControlCmd(hold=False, deeds=True).to_json())
+    assert command == {"type": "threat_control", "hold": False, "deeds": True}
+    held = parse_game_message(_json({
+        "type": "perception_held", "hold": "h1", "npc": "HILDA", "other": "PLAYER",
+        "kind": "theft", "deed": "branch/deed-1",
+    }))
+    assert isinstance(held, PerceptionHeld)
+    assert held.deed == "branch/deed-1"
+
+
+def test_v46_held_room_entry_has_no_deed_and_uses_the_deeds_switch():
+    assert PROTOCOL_VERSION >= CRIME_MEET_PROTOCOL == 46
+    held = parse_game_message(_json({
+        "type": "perception_held", "hold": "room1", "npc": "LOBART", "other": "PLAYER",
+        "kind": "enter_room", "distance": 250,
+    }))
+    assert isinstance(held, PerceptionHeld)
+    assert held.kind == "enter_room" and held.deed is None
+    assert json.loads(ThreatControlCmd(hold=True, deeds=False).to_json()) == {
+        "type": "threat_control", "hold": True, "deeds": False,
+    }
 
 
 def test_v43_native_combat_target_and_armed_npc_threat():

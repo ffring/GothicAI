@@ -494,6 +494,7 @@ void GameScript::loadDialogOU() {
       auto buf = zenkit::Read::from(full);
       if(buf==nullptr)
         continue;
+      Resources::censusFile(full);
       auto zen = zenkit::ReadArchive::from(buf.get());
       if(zen==nullptr)
         continue;

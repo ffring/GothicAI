@@ -10,7 +10,7 @@ from typing import Any, cast
 from .. import triggers
 from ..beasts import BeastDesk
 from ..bodies import Bodies
-from ..bodypilot import BodyPilot
+from ..bodypilot import BodyPilot, FightSummary
 from ..brain import NpcPlanner
 from ..budget import Budget
 from ..dialogue import DialogueManager
@@ -22,6 +22,7 @@ from ..perception import BEASTS, PerceptionDesk
 from ..persona import PersonaProvider
 from ..protocol import (
     Beasts,
+    BodyLease,
     DebugCmd,
     DialogChosen,
     GameMessage,
@@ -58,6 +59,533 @@ async def neural_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, 
 async def neural_companion_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, str]:
     """A one-handed bandit attacks the hero's swordsman companion, with native combat on both sides."""
     return await _neural_fight_scenario(link, pilot, companion=True)
+
+
+async def neural_talk_scenario(
+    link: GameLink, dialogue: DialogueManager, pilot: BodyPilot | None,
+) -> dict[str, str]:
+    """A non-bandit knockout, then words, escape and a fresh fight with a hostile bandit."""
+    from .neural_knockout import (
+        HeroFightWait,
+        _hero_release_state,
+        _wait_hero_fight,
+        neural_knockout_segment,
+    )
+    from .neural_load import _policy_resets
+
+    if pilot is None:
+        raise GameError("scenario neural-talk requires GOTHIC_BODY_URL and --neural-body")
+    if dialogue.llm.name != "fake":
+        raise GameError("scenario neural-talk requires LLM=fake")
+    stalls: list[HeroFightWait] = []
+    results = await neural_knockout_segment(link, dialogue, pilot, stalls=stalls)
+
+    def stall_total() -> None:
+        results["stall_broken"] = (
+            f"done (count={sum(item.stall_broken for item in stalls)}, "
+            f"seconds={sum(item.stalled_seconds for item in stalls):.3f})"
+        )
+        log.info("%-28s %s", "stall_broken", results["stall_broken"])
+
+    stall_total()
+    if any(not value.startswith("done") for value in results.values()):
+        return results
+    await link.wait_world()
+    npc, arena = "DIR_NPC_NEURAL_TALK_BANDIT", "NW_XARDAS_TOWER_VALLEY_09"
+    lines: list[LineStarted] = []
+    attacks: list[str] = []
+
+    def check(name: str, ok: bool, detail: str) -> bool:
+        results[name] = f"{'done' if ok else 'failed'} ({detail})"
+        log.info("%-28s %s", name, results[name])
+        return ok
+
+    def heard(message: GameMessage) -> None:
+        if isinstance(message, LineStarted) and message.npc.upper() == npc:
+            lines.append(message)
+
+    def attacked(attacker: str) -> None:
+        if attacker.upper() == npc:
+            attacks.append(attacker)
+
+    def fight_ready() -> bool:
+        fight = pilot.fights.get(npc)
+        return bool(fight and fight._target_kind == "hero" and fight.lease
+                    and link.body_leases.get(fight.lease.entity_id) == fight.lease
+                    and fight._decisions >= 5)
+
+    async def idle_after(ended_at: float, summary: FightSummary) -> tuple[bool, str]:
+        await asyncio.sleep(max(0, ended_at + 2 - time.monotonic()))
+        clean, detail = _hero_release_state(link, pilot, npc, summary)
+        return clean, f"after_s={time.monotonic() - ended_at:.3f}, {detail}"
+
+    async def routine() -> bool:
+        state = (await link.routine(npc)).current
+        return state == "ZS_STAND_ARMSCROSSED"
+
+    def summary_after(previous: set[int]) -> FightSummary | None:
+        # A speech-ownership retry can finish an observer before the real fight.
+        return next((summary for summary in pilot.summaries
+                     if summary.npc == npc and summary.lease is not None and summary.target_kind == "hero"
+                     and id(summary) not in previous), None)
+
+    def ended(name: str, summary: FightSummary | None, allowed: set[str], since: float) -> bool:
+        active = pilot.fights.get(npc)
+        return check(name, bool(summary and summary.reason in allowed and summary.decisions >= 5
+                               and summary.fallbacks == 0 and summary.release_confirmed
+                               and summary.release_seconds is not None and summary.release_seconds <= 2),
+                     f"decisions={summary.decisions if summary else active._decisions if active else 0}, "
+                     f"fallback={summary.fallbacks if summary else active._fallbacks if active else 0}, "
+                     f"reason={summary.reason if summary else 'active' if active else 'missing'}, "
+                     f"release_s={summary.release_seconds if summary else None}, "
+                     f"transition_s={time.monotonic() - since:.3f}")
+
+    # This bandit has the same native sword as neural. Give its daily routine a
+    # known local waypoint, so returning to it can be observed without issuing stop/calm.
+    log.info("neural-talk preparation: place hero, create bandit")
+    await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+    await link.story_npc(NpcSpec(
+        npc=npc, like="BDT_1002_BANDIT_L", at=arena, name="Бандит", guild="GIL_BDT",
+        routine=[RoutineEntry(start="00:00", end="23:59", state="ZS_STAND_ARMSCROSSED", waypoint=arena)],
+    ))
+    log.info("neural-talk preparation: bandit created, clear wildlife")
+    await link.debug("skip_important", near=npc)
+    for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
+        if not other.dead and other.guild >= BEASTS:
+            await link.debug("kill", instance=other.id, near=npc)
+    for view in await link.npc_view([npc]):
+        for seen in view.sees:
+            if seen.guild >= BEASTS and seen.body != "dead":
+                await link.debug("kill", instance=seen.id, near=npc)
+    ready = await Bodies(link).act(
+        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+        minutes=60, arrive=True, radius=100, timeout=15,
+    )
+    if ready.status != "arrived":
+        raise GameError(f"neural-talk preparation: {ready.status} {ready.detail}")
+    weapon = ["call", "NPC_GETEQUIPPEDMELEEWEAPON", ["inst", "SELF"]]
+    symbol, sword = await link.story_eval(npc, [
+        ["sym", npc], ["&", ["field", weapon, "FLAGS"], ["var", "ITEM_SWD"]],
+    ])
+    if not sword:
+        raise GameError("neural-talk preparation: no one-handed sword")
+    await link.debug("player_hp", hp=1200)
+    await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
+    await _m5b_player_weapon(link, "none")
+    # Hold the actual conversation before the hostile guild can see the hero.
+    # Production _attack_hero releases it after the scripted words are heard.
+    await link.attach(npc)
+    await link.debug("teleport", near=npc, distance=250)
+    if not await _until(lambda: npc in pilot.people and pilot.people[npc].distance <= 400, 10):
+        raise GameError("neural-talk preparation: bandit missing from roster")
+
+    attack = ToolCall("set_intent", {
+        "goal": "fight", "target": "PLAYER", "attitude": "hostile", "agenda": None,
+    })
+    original_llm = dialogue.llm
+    dialogue.llm = _ByNpc(
+        {"Бандит": FakeBackend(script=[
+            FakeStep("Ну что, герой, решил проверить мою шпагу? Сам напросился!", [attack]),
+            FakeStep("Опять ты. Что тебе?"),
+        ], delay=0.15)}, FakeBackend("Хм.", delay=0),
+    )
+    link.listeners.append(heard)
+    dialogue.on_attack.append(attacked)
+    try:
+        with _policy_resets() as resets:
+            previous = {id(summary) for summary in pilot.summaries}
+            mark = len(lines)
+            await link.debug("type", text="Бандит, проверим твою шпагу.")
+            ready = await _until(lambda: bool(attacks) and fight_ready(), 25)
+            first = pilot.fights.get(npc)
+            first_lease = first.lease if first else None
+            first_client = first.client if first else None
+            unleased_attempts = sum(
+                s.npc == npc and s.lease is None and id(s) not in previous for s in pilot.summaries
+            )
+            if not check("talk_to_attack", bool(ready and len(lines) > mark and first_lease
+                                                and first_lease.npc == npc and resets.get(first_client)),
+                         f"lines={len(lines) - mark}, symbol={symbol}, "
+                         f"lease={first_lease.control_generation if first_lease else 0}, "
+                         f"decisions={first._decisions if first else 0}, "
+                         f"fallback={first._fallbacks if first else 0}, "
+                         f"resets={len(resets.get(first_client, []))}, "
+                         f"unleased_attempts={unleased_attempts}, attacks={len(attacks)}"):
+                snap = await link.snapshot(npc, fresh=True)
+                log.info("neural-talk handoff: roster=%s routine=%s hero_hp=%s summaries=%s",
+                         pilot.people.get(npc), (await link.routine(npc)).current,
+                         snap.player.hp if snap.player else None,
+                         [(s.reason, s.decisions, dict(s.acquire_refusals)) for s in pilot.summaries])
+                return results
+
+            fled_at = time.monotonic()
+            await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+            await _until(lambda: summary_after(previous) is not None, 8)
+            summary = summary_after(previous)
+            ended_at = time.monotonic()
+            if not ended("fight_to_flight", summary, {"target_lost", "npc_unavailable"}, fled_at):
+                return results
+            clean, detail = await idle_after(ended_at, summary)
+            if not check("flight_release", clean, detail):
+                return results
+            returned = await _until_async(routine, bool, 40)
+            state = (await link.routine(npc)).current
+            if not check("flight_to_routine", returned,
+                         f"state={state}, wait_s={time.monotonic() - fled_at:.3f}"):
+                return results
+
+            previous = {id(summary) for summary in pilot.summaries}
+            await link.debug("player_hp", hp=1200)
+            # Match neural's actual combat loadout once the conversation is over.
+            # This watch is still safe while the hero is far and the pilot is idle.
+            await _m5b_player_weapon(link, "melee")
+            # Match neural's melee start; this segment tests a fresh handoff,
+            # then a controlled escape rather than the policy's ability to win.
+            await link.debug("teleport", near=npc, distance=250)
+
+            def attacking() -> bool:
+                entry = pilot.people.get(npc)
+                return bool(entry and entry.activity in {"fight", "body"} and entry.state == "ZS_ATTACK")
+
+            # GIL_BDT sees a returning enemy: another native attack is expected.
+            # Only ask for another conversation when that perception did not attack.
+            reattacked = await _until(attacking, 5)
+            branch = "native_reattack" if reattacked else "talk_then_attack"
+            if not reattacked:
+                await _m5b_player_weapon(link, "none")
+                mark = len(lines)
+                await link.debug("type", text="Бандит, я вернулся. Поговорим?")
+                answered = await _until(lambda: any(
+                    "Опять ты" in dialogue._lines.get(line.line, ("", None))[0]
+                    for line in lines[mark:]
+                ), 15)
+                if not check("return_to_talk", answered,
+                             f"branch={branch}, lines={len(lines) - mark}, roster={pilot.people.get(npc)}"):
+                    return results
+                await _until(lambda: not dialogue.speaking(npc), 12)
+                await _m5b_player_weapon(link, "melee")
+                await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
+            ready = await _until(fight_ready, 25)
+            second = pilot.fights.get(npc)
+            second_lease = second.lease if second else None
+            second_client = second.client if second else None
+            if not check("return_to_second_fight", bool(
+                ready and second_lease and second_lease != first_lease
+                and second_client is not first_client and resets.get(second_client)
+                and second._fallbacks == 0
+            ), f"branch={branch}, lease={second_lease.control_generation if second_lease else 0}, "
+               f"previous_lease={first_lease.control_generation if first_lease else 0}, "
+               f"decisions={second._decisions if second else 0}, "
+               f"fallback={second._fallbacks if second else 0}, "
+               f"resets={len(resets.get(second_client, []))}, "
+               f"independent_client={second_client is not first_client}, "
+               f"distance_cm={pilot.people[npc].distance if npc in pilot.people else None}"):
+                return results
+            snap = await link.snapshot(npc, fresh=True)
+            if snap.player is None:
+                raise GameError("neural-talk bandit sample: hero health unavailable")
+            waited = await _wait_hero_fight(
+                link, pilot, npc, second, lambda: summary_after(previous), label="neural-talk bandit",
+                initial_hp=snap.player.hp, max_decisions=20, max_seconds=20,
+            )
+            stalls.append(waited)
+            check("bandit_stall_broken", True,
+                  f"count={waited.stall_broken}, seconds={waited.stalled_seconds:.3f}, "
+                  f"last10={waited.last_decisions}")
+            stall_total()
+            if not check("second_fight_sample", bool(
+                (second._decisions >= 20 or waited.elapsed_seconds >= 20) and second._fallbacks == 0
+                and pilot.fights.get(npc) is second
+                and link.body_leases.get(second_lease.entity_id) == second_lease
+            ), f"decisions={second._decisions}, elapsed_s={waited.elapsed_seconds:.3f}, "
+               f"limit_decisions=20, limit_s=20, fallback={second._fallbacks}, "
+               f"hero_hp_start={snap.player.hp}"):
+                return results
+            fled_at = time.monotonic()
+            await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+            await _until(lambda: summary_after(previous) is not None, 8)
+            summary = summary_after(previous)
+            ended_at = time.monotonic()
+            if summary is None:
+                ended("fight_end_clean", summary, {"target_lost", "npc_unavailable"}, fled_at)
+                return results
+            clean, detail = await idle_after(ended_at, summary)
+            check("fight_end_clean", bool(
+                clean and summary.reason in {"target_lost", "npc_unavailable"}
+                and summary.decisions >= 5 and summary.fallbacks == 0
+                and summary.release_seconds is not None and summary.release_seconds <= 2
+            ), f"decisions={summary.decisions}, fallback={summary.fallbacks}, reason={summary.reason}, "
+               f"release_s={summary.release_seconds}, transition_s={time.monotonic() - fled_at:.3f}, "
+               f"{detail}")
+    finally:
+        dialogue.llm = original_llm
+        link.listeners.remove(heard)
+        dialogue.on_attack.remove(attacked)
+    return results
+
+
+async def neural_group_scenario(link: GameLink, pilot: BodyPilot | None) -> dict[str, str]:
+    """Three independent P30 leases in a native melee against the hero and his companion."""
+    if pilot is None:
+        raise GameError("scenario neural-group requires GOTHIC_BODY_URL and --neural-body")
+    await link.wait_world()
+    if link.hello is None or link.hello.protocol < 45 or pilot.max_fights < 3:
+        raise GameError("scenario neural-group requires protocol >=45 and --neural-body-max >=3")
+    npcs = tuple(f"DIR_NPC_NEURAL_BANDIT_{index}" for index in range(1, 4))
+    companion = "DIR_NPC_NEURAL_COMPANION"
+    companion_name = "Спутник-мечник"
+    arena = "NW_XARDAS_TOWER_VALLEY_09"
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object) -> None:
+        results[name] = f"{'done' if ok else 'failed'} ({detail})"
+
+    await link.debug("player_goto", waypoint="NW_XARDAS_TOWER_VALLEY_01")
+    weapon = ["call", "NPC_GETEQUIPPEDMELEEWEAPON", ["inst", "SELF"]]
+    symbols: dict[str, int] = {}
+    for index, actor in enumerate((*npcs, companion)):
+        # Prepare one actor at a time, then park it away from the waypoint. Four
+        # native walks to the same occupied spot cannot all finish their AI queues.
+        # Each bandit also needs its own symbol: body_watch rejects copies of one.
+        if actor == companion:
+            await link.story_npc(NpcSpec(
+                npc=companion, like="BDT_1002_BANDIT_L", at=arena,
+                name=companion_name, guild="GIL_VLK",
+                routine=[RoutineEntry(
+                    start="00:00", end="23:59", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+                )],
+            ))
+        else:
+            await link.own_npc(actor, like="BDT_1002_BANDIT_L", waypoint=arena)
+        await link.debug("skip_important", near=actor)
+        for other in (await link.snapshot(actor, fresh=True)).nearby_npcs:
+            if not other.dead and other.guild >= BEASTS:
+                await link.debug("kill", instance=other.id, near=actor)
+        for view in await link.npc_view([actor]):
+            for seen in view.sees:
+                if seen.guild >= BEASTS and seen.body != "dead":
+                    await link.debug("kill", instance=seen.id, near=actor)
+        await link.debug("npc_goto", npc=actor, waypoint=arena, face="PC_HERO")
+        ready = await Bodies(link).act(
+            actor, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+            minutes=60, arrive=True, radius=100, timeout=15,
+        )
+        if ready.status != "arrived":
+            snap = await link.snapshot(actor, fresh=True)
+            state = (await link.routine(actor)).current
+            raise GameError(
+                f"neural-group preparation: {actor} {ready.status} {ready.detail}, "
+                f"state={state}, pos={snap.npc.pos}"
+            )
+        symbol, sword, name = await link.story_eval(actor, [
+            ["sym", actor], ["&", ["field", weapon, "FLAGS"], ["var", "ITEM_SWD"]],
+            ["field", weapon, "NAME"],
+        ])
+        if not sword:
+            raise GameError(f"neural-group preparation: {actor} has no one-handed sword ({name})")
+        symbols[actor] = symbol
+        log.info("neural-group arena: npc=%s symbol=%s weapon=%s", actor, symbol, name)
+        await link.debug("npc_goto", npc=actor, to=actor, distance=700 + index * 350, face="PC_HERO")
+    if len(set(symbols.values())) != 4:
+        raise GameError("neural-group preparation: actor symbols are not unique")
+
+    await link.story_effect(companion, [{"do": "party", "value": 1}])
+    for actor in (*npcs, companion):
+        drawn = await Bodies(link).act(actor, "draw_weapon", kind="melee")
+        if drawn.status != "done":
+            raise GameError(f"neural-group preparation: {actor} sword draw {drawn.status}")
+    await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
+    await _m5b_player_weapon(link, "melee")
+    await link.debug("npc_goto", npc=npcs[0], waypoint=arena, face="PC_HERO")
+    await link.debug("npc_goto", npc=npcs[1], to=npcs[0], distance=-250, face="PC_HERO")
+    await link.debug("npc_goto", npc=companion, to=npcs[0], distance=700, face=npcs[0])
+    await link.debug("npc_goto", npc=npcs[2], to=companion, distance=250, face=companion)
+
+    # One preparation trigger, removed before combat; no healing while the pilot fights.
+    # Native ATTRIBUTE slots: maximum HP = 1, current HP = 0. Read the engine's
+    # snapshot as well: a VM-only check can agree with a wrongly indexed write.
+    actors = ("HERO", companion, *npcs)
+    attributes = (1, 0)
+    health_fields = [
+        ["field", ["inst", actor], "ATTRIBUTE", attribute]
+        for actor in actors for attribute in attributes
+    ]
+
+    async def live_health() -> list[int | None]:
+        snapshots = [await link.snapshot(actor, fresh=True) for actor in actors[1:]]
+        player = snapshots[0].player
+        if player is None:
+            raise GameError("neural-group preparation: player health unavailable")
+        return [player.hp_max, player.hp, *[
+            value for snapshot in snapshots for value in (snapshot.npc.hp_max, snapshot.npc.hp)
+        ]]
+
+    before = await live_health()
+    if len(before) != 10 or any(type(value) is not int for value in before):
+        raise GameError(f"neural-group preparation: health unavailable {before}")
+    health = [max(minimum, maximum) for minimum, maximum in zip(
+        (1200, 900, 1800, 1800, 1800), before[::2], strict=True,
+    ) for _ in range(2)]
+    health_trigger = "DIR_NEURAL_GROUP_HEALTH"
+    await link.patch_graph([triggers.trigger(health_trigger, triggers.STATE, [
+        {"do": "call", "call": [
+            "call", "NPC_CHANGEATTRIBUTE", ["inst", actor], ["int", attribute],
+            ["-", ["int", health[index * 2 + offset]], health_fields[index * 2 + offset]],
+        ]}
+        for index, actor in enumerate(actors) for offset, attribute in enumerate(attributes)
+    ])])
+    try:
+        if not await _until_async(
+            live_health, lambda got: got == health, 5,
+        ):
+            raise GameError("neural-group preparation: health did not apply")
+    finally:
+        await link.patch_graph([triggers.removal(health_trigger)])
+    log.info("neural-group arena: hp_max/hp before=%s prepared=%s", before, health)
+
+    previous = {id(summary) for summary in pilot.summaries}
+    summaries: dict[int, FightSummary] = {}
+    completed_at: dict[int, float] = {}
+    leases: dict[str, BodyLease] = {}
+    leased_entities: dict[tuple[int, int, int, int], int] = {}
+    one_handed: set[tuple[int, int, int, int]] = set()
+    down_at: dict[tuple[int, int, int, int], float] = {}
+    down_reason: dict[tuple[int, int, int, int], str] = {}
+    max_leases = 0
+
+    def identity(lease: BodyLease) -> tuple[int, int, int, int]:
+        return lease.session_epoch, lease.world_epoch, lease.entity_id, lease.control_generation
+
+    def observe(packet: dict[str, Any]) -> None:
+        nonlocal max_leases
+        now = time.monotonic()
+        for npc in npcs:
+            fight = pilot.fights.get(npc)
+            if fight is not None and fight.lease is not None:
+                leases[npc] = fight.lease
+        # Count actual acknowledged ownership, rather than observing/acquiring fights.
+        active = {lease.npc for lease in link.body_leases.values() if (
+            lease.npc in npcs and pilot.handles(lease.npc)
+            and leases.get(lease.npc) == lease
+        )}
+        max_leases = max(max_leases, len(active))
+        for npc, lease in leases.items():
+            key = identity(lease)
+            for row in packet["observations"]:
+                if (
+                    row["script_symbol"] != symbols[npc]
+                    or (row["entity_id"], row["session_epoch"], row["world_epoch"])
+                    != (lease.entity_id, lease.session_epoch, lease.world_epoch)
+                    or row["control_generation"] not in {0, lease.control_generation}
+                    or row["observation_seq"] <= lease.acquired_observation_seq
+                ):
+                    continue
+                if row["periodic"] and row["control_generation"] == lease.control_generation:
+                    if key not in leased_entities:
+                        log.info(
+                            "neural-group first leased row: npc=%s hp=%s target_hp=%s target_hp_max=%s",
+                            npc, row["self"]["hp"], row["target"]["hp"], row["target"]["hp_max"],
+                        )
+                    leased_entities[key] = row["entity_id"]
+                    if row["self"]["weapon_state"] == 2:
+                        one_handed.add(key)
+                own, target = row["self"], row["target"]
+                if key not in down_at:
+                    if own["dead"] or own["unconscious"] or own["down"] or own["hp"] <= 0:
+                        down_reason[key] = "npc_down"
+                    elif target["entity_id"] == lease.target_entity_id and (
+                        target["down"] or (target["hp"] is not None and target["hp"] <= 0)
+                    ):
+                        down_reason[key] = "target_down"
+                    if key in down_reason:
+                        down_at[key] = now
+
+    def completed() -> bool:
+        for summary in pilot.summaries:
+            if id(summary) not in previous and summary.npc in npcs:
+                summaries[id(summary)] = summary
+                previous.add(id(summary))
+                # Each fight gets its own clock; the last duel must not inflate earlier releases.
+                completed_at[id(summary)] = time.monotonic()
+        return set(npcs) <= {summary.npc for summary in summaries.values()} and not any(
+            pilot.handles(npc) for npc in npcs
+        )
+
+    attack_trigger = "DIR_NEURAL_GROUP_ATTACK"
+    link.raw_body_listeners.append(observe)
+    try:
+        await link.debug("teleport", near=npcs[0], distance=250)
+        combat_health = await live_health()
+        if combat_health != health:
+            raise GameError(f"neural-group preparation: health changed before attack {combat_health}")
+        log.info("neural-group combat ready: hp_max/hp=%s", combat_health)
+        # All three native B_ATTACK calls run in the same trigger tick, without soft acts
+        # that would block body_acquire. Scripts may subsequently choose either party member.
+        await link.patch_graph([triggers.trigger(attack_trigger, triggers.STATE, [
+            {"do": "call", "call": [
+                "fn", "B_ATTACK", triggers.npc(npc), target, ["var", "AR_NONE"], ["int", 0],
+            ]}
+            for npc, target in zip(npcs, (triggers.HERO, triggers.HERO, triggers.npc(companion)), strict=True)
+        ])])
+        if not await _until(completed, 192):
+            log.info("neural-group timeout: hp_max/hp=%s active_fights=%d",
+                     await live_health(), pilot.active_count)
+    finally:
+        link.raw_body_listeners.remove(observe)
+        await link.patch_graph([triggers.removal(attack_trigger)])
+
+    check("neural_group_simultaneous", max_leases == 3, f"max_active_leases={max_leases}, expected=3")
+    for index, npc in enumerate(npcs, 1):
+        npc_summaries = [summary for summary in summaries.values() if summary.npc == npc]
+        decisions = sum(summary.decisions for summary in npc_summaries)
+        fallbacks = sum(summary.fallbacks for summary in npc_summaries)
+        # A bandit may finish with the companion and then attack the hero. Check
+        # every lease and service episode, with a separate end/release clock.
+        for episode, summary in enumerate(npc_summaries or [None], 1):
+            prefix = f"neural_group_{index}"
+            if len(npc_summaries) > 1:
+                prefix += f"_fight_{episode}"
+            lease = summary.lease if summary else None
+            key = identity(lease) if lease else None
+            check(f"{prefix}_lease", bool(
+                lease and lease.npc == npc and lease.entity_id == leased_entities.get(key)
+                and lease.provider == "neural-body" and lease.mode == "realtime" and key in one_handed
+                and (summary.target_kind == "hero" or (
+                    summary.target_kind == "companion" and summary.target_name == companion_name
+                ))
+            ), f"npc={npc}, entity={leased_entities.get(key)}, one_handed={key in one_handed}, "
+               f"target={summary.target_kind if summary else None}, lease={lease}")
+            check(f"{prefix}_decisions", bool(summary) and decisions >= 10,
+                  f"decisions_per_bandit={decisions}, minimum=10")
+            check(f"{prefix}_fallback", bool(summary) and fallbacks == 0,
+                  f"fallback_per_bandit={fallbacks}")
+            expected_end = down_reason.get(key)
+            if expected_end == "target_down" and summary is not None and summary.target_kind == "hero":
+                expected_end = "hero_down"
+            check(f"{prefix}_outcome", bool(summary and expected_end and summary.reason == expected_end),
+                  f"reason={summary.reason if summary else None}, observed={expected_end}")
+            released_in = completed_at[id(summary)] - down_at[key] if key in down_at else None
+            check(f"{prefix}_release", bool(
+                summary and summary.release_confirmed and released_in is not None and released_in <= 2
+            ), f"confirmed={summary.release_confirmed if summary else False}, after_down_s={released_in}")
+            p95 = summary.service_p95_ms if summary else None
+            check(f"{prefix}_service_p95", p95 is not None and p95 <= 20, f"p95_ms={p95}, maximum_ms=20")
+            check(f"{prefix}_summary", summary is not None,
+                  f"npc={npc}, decisions={summary.decisions}, fallback={summary.fallbacks}, "
+                  f"acquire_refusals={dict(summary.acquire_refusals)}, "
+                  f"action_rejections={dict(summary.action_rejections)}, reason={summary.reason}, "
+                  f"fight_s={summary.fight_seconds}, service_p50_ms={summary.service_p50_ms}, "
+                  f"service_p95_ms={summary.service_p95_ms}" if summary else f"npc={npc}, missing")
+    await asyncio.sleep(0.3)
+    check("neural_group_idle", bool(
+        set(npcs) <= {summary.npc for summary in summaries.values()}
+        and all(summary.watch_removed for summary in summaries.values())
+        and pilot.active_count == 0 and not any(pilot.handles(npc) for npc in npcs)
+        and not link.body_leases and not link.body_latest
+    ), f"active_fights={pilot.active_count}, leases={len(link.body_leases)}, "
+       f"watched_actors={len(link.body_latest)}, "
+       f"watch_removed={[summary.watch_removed for summary in summaries.values()]}")
+    return _logged(results)
 
 
 async def _neural_fight_scenario(
@@ -170,7 +698,8 @@ async def _neural_fight_scenario(
 
     def observe(packet: dict[str, Any]) -> None:
         nonlocal leased_entity, one_handed, down_at, down_reason
-        lease = pilot.lease
+        fight = pilot.fights.get(npc)
+        lease = fight.lease if fight is not None else None
         if lease is None or lease.npc != npc:
             return
         for row in packet["observations"]:
@@ -289,9 +818,9 @@ async def _neural_fight_scenario(
     await asyncio.sleep(0.3)
     check(
         "neural_idle",
-        bool(summary and summary.watch_removed and pilot.npc is None and pilot.lease is None
-             and pilot.client is None and not link.body_leases),
-        f"npc={pilot.npc}, lease={pilot.lease}, watch_removed={summary.watch_removed if summary else False}",
+        bool(summary and summary.watch_removed and pilot.active_count == 0 and not link.body_leases),
+        f"active_fights={pilot.active_count}, leases={len(link.body_leases)}, "
+        f"watch_removed={summary.watch_removed if summary else False}",
     )
     return _logged(results)
 

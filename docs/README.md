@@ -48,7 +48,9 @@
 | Быстрый, поведенческий | Strands Decider 2B (`decider-service`), Gemma 4 12B для реплик в бою | реакции и позы, бегство, следующий час дня, кто вмешается в беседу, подойти ли к герою | `brain/` (`DeciderClient`, `NpcPlanner`, `Reflexes`, `GameApplier`), `--decider-url`, `--quick-url` |
 | Медленный, говорящий | gpt-6.1-sol по подписке ChatGPT | что сказать, намерение, сделки, поручения, обещания | `dialogue.py`, `llm/`, `--llm`, `--model`; лимит самоинициативы — `budget.py` |
 
-Боевое тело — третий слой: `bodypilot.py` берёт NPC в аренду (lease) у движка и ведёт его политикой P30 из `body-service`. Если сервис отвалился, бой возвращается к родному поведению движка. Подробно — [`npc-agent.md`](npc-agent.md), [`npc-body-control-plan.md`](npc-body-control-plan.md), [`npc-body-api.md`](npc-body-api.md).
+Боевое тело — третий слой: `bodypilot.py` берёт до четырёх NPC в аренду (lease) у движка и ведёт независимые бои политикой P30 из `body-service`, каждый со своим TCP-соединением и памятью GRU. Лимит задаёт `--neural-body-max` (1–4, по умолчанию 4). Если соединение с сервисом отвалилось, этот бой возвращается к родному поведению движка. Подробно — [`npc-agent.md`](npc-agent.md), [`npc-body-control-plan.md`](npc-body-control-plan.md), [`npc-body-api.md`](npc-body-api.md).
+Для нескольких боёв нужен протокол ≥45 из `hello`: при старой или неизвестной версии новый кандидат получает `watch_busy` без изменения подписки (лог и счётчик, без сводки боя); отказ движка ≥45 остаётся `watch_refused`. `GameLink.body_watch` сохраняет lease и ожидающие захваты при смене подписки, если все ожидающие NPC остаются в списке; при прежней generation очищает кэш свободных актёров. Неудачное сжатие подписки повторяется отдельно и не блокирует повторный захват после смены цели.
+После подвисания игры пилот отправляет накопившиеся строки только в память, оставляя действие свежей последней строке. В `gothic-body serve-net` это включено по умолчанию; `--no-allow-stale-memory-only` возвращает проверку возраста для строк памяти.
 
 ## Правда и убеждения
 
@@ -58,6 +60,10 @@
 - **Убеждения NPC:** `knowledge.py` (что знает из диалогов и сюжета главы), `sightings.py` (видел и слышал сам, улики), `trust.py` (честность героя: lied, caught, kept), `social.py` (кто кого знает, слухи), `concerns.py` (заботы о герое из фактов).
 - **Как дело становится известным:**
   1. `crimes.py` берёт деяние героя и настоящих свидетелей из движка.
+     `crime_react.py` решает удержанные дела на месте правилами характера и роли; модель получает только контекст.
+     `crime_meet.py` решает последующие встречи по личному знанию и знанию закона:
+     подход пострадавшего к `Amends`, отказ и бегство слышавших об убийстве, бой стражи;
+     удержание входа v46 даёт знающим домочадцам выгнать вора и из публичного портала дома.
   2. Свидетель запоминает его (`sightings.py`).
   3. Слух идёт по знакомым (`social.Rumors`); на сцене его ставит `gossip.py`, по поручению несёт `errands.py`.
   4. Закон общины считает дела из хроники ветки: законник и страж сообщают сразу, остальные свидетели — по таймеру (`crime_law.py`). Ванильные диалоги законников читают наш закон через патчи графа (`crime_law_graph.py`, `crime_law_runtime.py`). Слои дальше — в [`crime.md`](crime.md).
@@ -82,7 +88,7 @@
 | Разговор | `dialogue`, `talk`, `turn`, `voice`, `tts`, `persona`, `memory` (SQLite, ветвится с сейвами), `budget`, `npc_tools`, `executor`, `commands`, `orders`, `group` (общая беседа), `interject`, `llm/` (`chatgpt`, `openai`, `local`, `fake`) |
 | Быстрый контур и тело | `brain/` (`decider`, `planner`, `reflex`, `day`, `apply`, `tiers`, `stimuli`, `incident`, `situation`), `incidents`, `daylife`, `initiative`, `bodies` (исход мягких действий), `bodypilot` (боевое тело P30), `beasts` (волки слышат тон), `wrath` (терпение к оскорблениям) |
 | Восприятие и знание | `perception`, `sightings`, `places`, `lore`, `whereabouts`, `knowledge`, `social`, `gossip`, `trust`, `attitudes`, `concerns` |
-| Правда, дела, ложь | `chronicle`, `crimes`, `crime_law`, `crime_law_graph`, `crime_law_runtime`, `witnesses`, `quests`, `vanilla`, `consequences`, `amends` |
+| Правда, дела, ложь | `chronicle`, `crimes`, `crime_react`, `crime_meet`, `crime_memory`, `crime_law`, `crime_law_graph`, `crime_law_runtime`, `witnesses`, `quests`, `vanilla`, `consequences`, `amends` |
 | Сделки и поручения | `deals` (окно сделки, долги), `contracts` (опыт, обучение, платные задания), `chests`, `errands` (`plan`), `meetings` (`meet`), `guide` (`lead`) |
 | Сюжет | `story`, `validator`, `storyguard`, `programs`, `director`, `questbook`, `questlog`, `triggers`, `occasions`, `showrunner`, `authoring`, `casting`, `cast`, `characters` (карточки характера), `chains` |
 | Данные | `gamedata/`: `characters.json`, `lore.json`, `places.json`, `stash.json`, `ou.py` (реплики OU.BIN), `storygraph.py` |
@@ -106,6 +112,8 @@
 | Headless-раннер для обучения тела | `game/bodyrunner.cpp` → `gothic-body-runner` (stdio RPC) | — | [`npc-body-headless-runner.md`](npc-body-headless-runner.md) |
 | Навигация NPC: обучаемая — пока только на стенде; популяция N NPC, эпизоды без перезагрузки, выборка и награды | `common/nav*`, `common/game/nav*`; `scripts/nav_rl.py` — пары, сбор, финальный замер, проверки | `navdemos population`: `sample/argmax`, `RECORD=0` выключает запись; `navdemos physics cv` закрепляет CV для ученика и учителя (`nav_rl.py` по умолчанию); обычная игра не включает режим | [`navigation.md`](navigation.md) |
 | HD-текстуры | `common/resources.cpp` | работают, если есть каталог `OPENGOTHIC_TEXTURES` | — |
+| Свои материалы мира: нормали и ORM, Ламберт с AO | `common/resources.cpp`, `common/graphics/material.*`, `drawbuckets.*`, `renderer.*`, `shader/materials/`, `shader/lighting/`; фикстура `scripts/content/test-material.py` | убрать каталог контента или `OPENGOTHIC_CONTENT=` | [`own-content.md`](own-content.md#как-работает-сейчас) |
+| Перепись ресурсов сессии (инструмент) | `common/contentcensus.*`, наблюдатель VFS; сводка `scripts/content-census.py` | `OPENGOTHIC_CENSUS=<путь к json>`, запись при выходе и Marvin `census`; `scripts/test_content_census.py`, бенч `smoke` | [`own-content.md`](own-content.md) |
 | Тестовый стенд | `common/testbench.*`, `OPENGOTHIC_BENCH*` | — | [`scripts/bench/README.md`](../scripts/bench/README.md) |
 
 Консоль для агентов: `ai status | attach <npc> | detach | dialogs <npc> | ptt start|stop|cancel` (в `aibridge.cpp`). Флаги командной строки игры — `common/commandline.cpp` (`-nointro`, `-save`, `-window`, …). Флаги рендера (`-ms`, `-rt`, `-gi`, `-vsm`, `-rtsm`, `-aa`): что из них работает на Mac и Ryzen и сколько стоит — [замер 18.10](../reports/render-features/2026-10-18/README.md).
@@ -132,7 +140,7 @@
 - **Модели:** `--llm chatgpt|openai|local|fake`, `--model`, `--reasoning-effort`, `--no-websocket`, `--no-brain` (планировщик быстрого контура), `--no-quick`, `--no-hold-threats`.
 - **Мир NPC:** `--no-wrath`, `--no-apply-threats`, `--no-beasts`, `--no-chests`, `--no-lead`, `--no-meet`, `--no-errands`, `--no-interject`, `--no-free-bandits`, `--no-apply-day`, `--no-knowledge`, `--no-crimes`.
 - **Сюжет:** `--no-director`, `--no-questlog`, `--no-occasions`, `--no-showrunner`, `--story-graph PATH`.
-- **Тело:** `--body-url`, `--no-neural-body`.
+- **Тело:** `--body-url`, `--no-neural-body`, `--neural-body-max` (1–4, по умолчанию 4).
 - **Сценарий:** `--scenario <имя>`, `--exit-after`.
 
 ## Тесты и прогоны
@@ -142,9 +150,11 @@
 | pytest одного модуля | `cd server && uv run pytest tests/test_<модуль>.py -q`; на Ryzen — `scripts/ryzen.sh pytest tests/test_<модуль>.py` |
 | Один сценарий e2e | `SCENARIO=<имя> scripts/ryzen.sh e2e`; на Mac — `SCENARIO=<имя> LLM=fake scripts/e2e.sh` |
 | Бенч механики | `scripts/bench.sh <имя>` → `.bench/<имя>-<время>/` (видео, метрики, отчёт) |
-| Очередь Ryzen | `scripts/gq status` |
+| Очередь Ryzen | `scripts/gq status`: три слота для `--display --display-shared`, `GQ_DISPLAY_SLOT`; старый `--display` и `--display-exclusive` берут все слоты. `TEMPEST_WINDOW_POS` разводит окна, `OPENGOTHIC_FPS_LOG=1` пишет FPS; [ресурсы и допуск](compute.md#очередь-gq), [порты и окна](ryzen.md), [проверка и приёмка](../reports/compute/2026-10-19-ryzen-three-windows/README.md) |
+| Общий кэш бинарников Ryzen | `scripts/ryzen.sh` использует `~/gothic-ai/engine-cache/` по хэшу исходников; `clean-cache` очищает старые записи, `RYZEN_WORKTREE` задаёт имя папки; [правила](ryzen.md) |
 | Сборка игры | `scripts/build-engine.sh` → `OpenGothic/build/opengothic/Gothic2Notr` |
 | Контрактные тесты движка | цели `gothic-*-contract` в `OpenGothic/CMakeLists.txt`, исходники в `OpenGothic/tests/` |
+| Подписка тела под lease и с заявкой на захват | `gothic-body-watch-test` в `OpenGothic/tests/body_watch_test.cpp`, настоящие NPC без окна; правила — [`npc-body-api.md`](npc-body-api.md) |
 
 Стенд `monster-character-virtual` сравнивает OFF/ON для волка, тролля, воды и атак без парных видео; `check-physics` проверяет их капсулы, e2e `wolf` запускается с `MONSTER_CHARACTER_VIRTUAL=1`.
 
@@ -152,14 +162,16 @@
 
 **Сценарии по областям** (модуль в `server/src/gothic_ai/scenarios/`):
 - **основа** (`basics.py`): `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`, `websocket`;
-- **спутники и бой** (`companions.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`;
+- **спутники и бой** (`companions.py`; `neural_knockout.py` — отрезок нокаута в `neural-talk`, `neural-load` — `neural_load.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`, `neural-group`, `neural-talk`, `neural-load`;
 - **восприятие** (`perception.py`; `broken` — `broken.py`, `places` — прямо в `cli.py`): `see`, `seen`, `hearing`, `cave`, `ground`, `places`, `knows`, `remembers`, `trace`, `broken`;
 - **жизнь NPC** (`npc_life.py`): `day`, `noise`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
 - **беседа** (`conversation.py`): `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
 - **сделки** (`deals.py`): `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
-- **ложь и дела** (`lies.py`; `crimes`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_talk`, `crime_law`, `crime_director`, `wrath`;
+- **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `wrath`;
 - **стыки систем** (`trace_crime.py`): `trace_crime` — свежие обломки и показание о краже в одном ходе, две поимки лжи, знание о деле и доверие;
 - **сюжет** (`story.py`; `occasions`, `questlog`, `showrunner*`, `vanilla_line*` — одноимённые модули): `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
+
+`neural-talk` сначала проверяет живой нокаут от NPC не из `GIL_BDT` после разговора (`AR_NONE`), возврат NPC в распорядок и подъём героя; затем мечник уводится дальше 60 м от площадки. Враждебный бандит проходит разговор, нападение, бегство героя, распорядок, повторную встречу (нападение или разговор) и новый бой с чистой памятью. После `return_to_second_fight` сценарий ждёт не меньше 20 решений этого боя или 20 с, затем герой снова убегает. `fight_end_clean` требует причину `target_lost`/`npc_unavailable`, release ≤2 с и отсутствие lease, `body` и подписки через 2 с. После 15 с без урона цели допускается один удар героя: `stall_broken` показывает число и сумму застоев, лог — последние десять решений. Это диагностика качества P30; `hero_down` от бандита не требуется. В отдельном отрезке нокаута после такого удара по-прежнему даётся не больше 30 с до `hero_down`. Звери рядом с площадкой убираются; проверяются только бои против героя. `neural-load` загружает мир во время трёх боёв P30 и проверяет очистку и новый захват после загрузки. Общую проверку release для обоих отрезков `neural-talk` покрывает `server/tests/test_neural_transitions.py`: остаточный `body` в roster отклоняется и при пустых локальных fights/lease.
 
 ## Где лежат данные
 
@@ -168,7 +180,7 @@
   - `memory.sqlite3` — память NPC и правки сюжета;
   - `traces/`, `story.json`, `saves/original`, `hd-textures/`, `fracture/`, `voices/`, `music/`, `brand/`, `explain/`, `body/`.
 - Логи e2e — в `LOG_DIR`, по умолчанию временная папка `gothic-e2e.*`.
-- На Ryzen — `~/gothic-ai/<задача>/`.
+- На Ryzen — `~/gothic-ai/<задача>/`; общий кэш движка и `storygraph` — `~/gothic-ai/engine-cache/`.
 - Отчёты прогонов — `reports/<область>/<дата-тема>/`.
 
 ## Остальные каталоги
@@ -190,12 +202,13 @@
 | [`compute.md`](compute.md), [`ryzen.md`](ryzen.md) | машины, очередь `gq`, прогоны на Ryzen | справочник |
 | [`npc-agent.md`](npc-agent.md) | агент NPC: два контура, приказы, восприятие | сейчас + справочник с журналом |
 | [`npc-tools.md`](npc-tools.md) | инструменты NPC: сделки, восприятие, карточки, беседа, поручения | сейчас + план с журналом |
+| [`npc-wave3.md`](npc-wave3.md) | третья волна NPC: сговор, обман в сделках, вред друг другу | план |
 | [`contracts.md`](contracts.md), [`beasts.md`](beasts.md), [`xardas-wrath.md`](xardas-wrath.md) | поручения и награды; волки; гнев Ксардаса | справочники |
 | [`story-graph.md`](story-graph.md) | граф сюжета, ложь, слухи, ремонт квестов | сейчас + план с журналом |
 | [`director.md`](director.md) | режиссёр-автор: квесты, персонажи, цепочки | сейчас + план с журналом, этапы 1–5 сделаны |
-| [`crime.md`](crime.md) | преступления и репутация | сейчас + план, идёт: слои 1–3 и 5 сделаны |
+| [`crime.md`](crime.md) | преступления и репутация, карта ванильных встреч | сейчас + журнал: слои 1–3, 4а, 4б и 5 приняты; этап закрыт |
 | [`physics.md`](physics.md) | Jolt, рэгдоллы, разрушение, вода, ткань | сейчас + план с журналом |
-| [`own-content.md`](own-content.md) | своя игра: замена ресурсов, скриптов и мира Gothic своими, этапы 0–9 | сейчас + план с журналом, идёт: этапы 0–1 |
+| [`own-content.md`](own-content.md) | своя игра: замена ресурсов, скриптов и мира Gothic своими, этапы 0–9; офлайн-перепись `scripts/content-textures.sh`, инструмент `scripts/content/`, [площади и UV четырёх миров](../reports/content/2026-10-world-textures/README.md) | сейчас + план с журналом, идёт: этапы 0–1 |
 | [`manual-aim.md`](manual-aim.md) | ручное прицеливание | сейчас + план с журналом |
 | [`navigation.md`](navigation.md) | обучаемая навигация NPC; [популяционный стенд на CV и независимый набор 60 пар](../reports/navigation/2026-10-18-rl-env/README.md) | сейчас + план, идёт |
 | [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | сейчас + план |

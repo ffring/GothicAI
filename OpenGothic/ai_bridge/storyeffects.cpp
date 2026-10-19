@@ -83,6 +83,7 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   e.routine = upper(JsonRead::str(x,"routine"));
   e.count  = int32_t(JsonRead::integer(x,"count",JsonRead::integer(x,"amount",
                      JsonRead::integer(x,"value",JsonRead::integer(x,"seconds",1)))));
+  e.day    = int32_t(JsonRead::integer(x,"day",0));
   e.toNpc  = JsonRead::str(x,"to")=="npc";
   e.toHero = JsonRead::str(x,"to")!="self" && !e.toNpc;
   auto* item = vm ? vm->find_symbol_by_name(e.item) : nullptr;
@@ -117,6 +118,21 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   if(e.kind=="set") {
     if(vm && (var==nullptr || var->type()!=DaedalusDataType::INT || var->is_const() || var->is_member()))
       return "set: no variable " + e.var;
+    return {};
+    }
+  if(e.kind=="crime_memory") {
+    if(e.count<0 || e.count>4 || e.day<0)
+      return "crime_memory: value must be 0..4 and day nonnegative";
+    if(vm) {
+      for(auto name:{"AIV_NPCSAWPLAYERCOMMIT","AIV_NPCSAWPLAYERCOMMITDAY","AIV_CRIMEABSOLUTIONLEVEL"}) {
+        auto* s = vm->find_symbol_by_name(name);
+        if(s==nullptr || !s->is_const() || s->type()!=DaedalusDataType::INT ||
+           s->get_int(0)<0 || uint32_t(s->get_int(0))>=zenkit::INpc::aivar_count)
+          return std::string("crime_memory: no AIV constant ")+name;
+        }
+      if(vm->find_symbol_by_name("B_GETCURRENTABSOLUTIONLEVEL")==nullptr)
+        return "crime_memory: no B_GetCurrentAbsolutionLevel";
+      }
     return {};
     }
   if(e.kind=="journal") {
@@ -234,6 +250,17 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
   else if(kind=="set") {
     if(auto* s = vm.find_symbol_by_name(var))
       s->set_int(count);
+    }
+  else if(kind=="crime_memory") {
+    // B_MemorizePlayerCrime also writes PETZ counters. Project only its NPC-local fields, with
+    // the current native absolution stamp so a new deed after payment remains readable.
+    auto level = call("B_GETCURRENTABSOLUTIONLEVEL",{Value::instance(npc.handlePtr())});
+    if(level) {
+      auto& aiv = npc.handlePtr()->aivar;
+      aiv[size_t(intConst(vm,"AIV_NPCSAWPLAYERCOMMIT"))] = count;
+      aiv[size_t(intConst(vm,"AIV_NPCSAWPLAYERCOMMITDAY"))] = day;
+      aiv[size_t(intConst(vm,"AIV_CRIMEABSOLUTIONLEVEL"))] = level->i;
+      }
     }
   else if(kind=="journal") {
     call("LOG_CREATETOPIC",{Value::str(topic),Value::integer(constant("LOG_MISSION",0))});

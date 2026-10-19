@@ -164,9 +164,14 @@ void cancel(Lease& l,std::string_view reason) {
     event(l,"cancelled",reason); l.command=false;
     }
   }
+bool movementPrimitive(FightAlgo::Action primitive) {
+  return primitive==FightAlgo::MV_MOVE || primitive==FightAlgo::MV_TURN2HIT ||
+         primitive==FightAlgo::MV_STRAFEL || primitive==FightAlgo::MV_STRAFER || primitive==FightAlgo::MV_JUMPBACK;
+  }
 void requestRelease(Lease& l,std::string_view reason) {
   if(l.release) return;
   l.release=true; l.releaseReason=reason;
+  if(l.active.started && movementPrimitive(l.active.primitive)) l.movementStopPending=true;
   cancel(l,reason);
   if(reason=="disconnect" || reason=="watchdog_timeout") event(l,"ownership","provider_lost");
   event(l,"ownership","release_pending");
@@ -226,6 +231,28 @@ void BodyController::setActors(const std::vector<Npc*>& actors) {
   state().actors=actors;
   }
 
+bool BodyController::hasOwners() { return !state().leases.empty() || !state().pending.empty(); }
+
+const char* BodyController::updateWatch(const std::vector<Npc*>& actors, uint64_t periodMs) {
+  if(actors.size()>MaxActors || (periodMs!=50 && periodMs!=100))
+    return "body_watch needs up to 4 actors and rate_hz 10 or 20";
+  for(size_t i=0;i<actors.size();++i)
+    if(actors[i]==nullptr || std::find(actors.begin(),actors.begin()+std::ptrdiff_t(i),actors[i])!=actors.begin()+std::ptrdiff_t(i))
+      return "null or duplicate body_watch actor";
+  const auto included=[&](const auto& owners) {
+    return std::all_of(owners.begin(),owners.end(),[&](const auto& owner) {
+      return std::find(actors.begin(),actors.end(),owner.first)!=actors.end();
+      });
+    };
+  if(!included(state().leases) || !included(state().pending))
+    return "body_watch must retain active body owners and pending acquisitions";
+  if(periodMs!=BodyObservations::samplePeriodMs())
+    return "release active body owners before changing body_watch rate_hz";
+  BodyObservations::updateWatch(actors);
+  setActors(actors);
+  return "allowed";
+  }
+
 FightAlgo::ResolverState BodyController::resolverState(const Npc& npc) {
   const auto own=npc.bodyObservationState();
   FightAlgo::ResolverState s;
@@ -246,20 +273,30 @@ FightAlgo::ResolverState BodyController::resolverState(const Npc& npc) {
   }
 
 bool BodyController::stopOwnedMovement(Npc& actor) {
-  if(!owns(actor) || state().paused || state().infrastructure || terminal(actor) || !safeBoundary(actor))
+  const auto l=lease(actor);
+  if(!l || state().paused || state().infrastructure || terminal(actor))
     return false;
-  if(lease(actor)->release) {
+  const bool releaseMovement=l->release && l->movementStopPending;
+  if(!releaseMovement && !safeBoundary(actor)) return false;
+  if(l->release) {
     // A script queue or external-control takeover makes nativeEligible false, but must
-    // not prevent returning authority to that very script. Keep all physical locks.
+    // not prevent returning authority to that very script. Keep protected segments,
+    // physical reactions and waits that do not belong to the cancelled movement.
+    const auto physical=actor.bodyObservationState();
     const auto bs=actor.bodyStateMasked();
-    if(actor.isInAir() || actor.isSwim() || actor.isDive() || bs==BS_HIT || bs==BS_LIE || bs==BS_STUMBLE || bs==BS_FALL)
+    if(actor.isInAir() || actor.isSwim() || actor.isDive() || bs==BS_HIT || bs==BS_LIE ||
+       bs==BS_STUMBLE || bs==BS_FALL || bs==BS_ITEMINTERACT || physical.attackAnim ||
+       physical.segmentRemainingMs>0 || physical.aniGate || physical.aiGate || physical.outputGate)
       return false;
+    // RUN/strafe/turn transitions are locomotion, not protected combat segments.
+    // Stop their pose even when canInterrupt() is false, along with their own FAI wait.
+    if(releaseMovement) actor.faiWaitTime=0;
     } else if(!actor.bodyObservationState().nativeEligible) return false;
   // Remove the original Run layer before selecting Idle. Reversing this order creates
   // a moving RUNL-to-RUN transition tagged STAND that stopWalkAnim cannot remove.
   // This is the same hard stop used by the native MOVE executor in weapon range.
   actor.visual.stopWalkAnim(actor);
-  actor.clearGoTo(); actor.wayPath.clear(); actor.stopWalking(); actor.setAnimRotate(0);
+  actor.setAnimRotate(0); actor.clearGoTo(); actor.wayPath.clear(); actor.stopWalking();
   return actor.isStanding();
   }
 
@@ -390,6 +427,8 @@ void BodyController::pumpWatchdogs() {
       // Keep the final locked state for the episode collector; never silently resume native.
       ++it; continue;
       }
+    if(l.release && l.movementStopPending && !isTerminal && stopOwnedMovement(*l.npc))
+      l.movementStopPending=false;
     if(l.release && (isTerminal || !state().paused) && safeBoundary(*l.npc)) {
       if(!isTerminal && l.movementStopPending) {
         if(!stopOwnedMovement(*l.npc)) { ++it; continue; }

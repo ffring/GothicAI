@@ -39,6 +39,10 @@ PR, который добавляет фичу или выключатель, д
 | NPC сам подходит и заговаривает | нет; без планировщика её нет | `initiative.py`, `concerns.py` | e2e `initiative` | [npc-tools.md](npc-tools.md#сделано-инициатива) |
 | Реакция на физический шум: посмотреть, пойти проверить | нет; без планировщика её нет | `brain/situation.py`, `brain/apply.py` | — | [protocol.md](protocol.md#физический-шум-v36) |
 | Боевое тело P30 | `--no-neural-body`; без `--body-url` его нет | `bodypilot.py`, `body-service/`; движок — `common/game/bodycontroller.*` | e2e `neural`, `neural-companion`; бенчи `body-api`, `body-arena`, `body-observe` | [npc-body-control-plan.md](npc-body-control-plan.md), [npc-body-api.md](npc-body-api.md) |
+| До четырёх независимых боёв P30 | `--neural-body-max 1` ограничивает одним боем; допустимо 1–4, по умолчанию 4; несколько боёв только при протоколе ≥45 из `hello` | `bodypilot.py`, `cli.py`; отдельное TCP-соединение и lease у каждого боя; старый/неизвестный протокол — `watch_busy` только в логе и счётчике, без изменения подписки, отказ движка ≥45 — `watch_refused` | `test_bodypilot.py`; e2e `neural-group` проверяет три одновременных lease, решения, release, снятие подписки и задержку сервиса | [npc-body-control-plan.md](npc-body-control-plan.md) |
+| Переходы P30 между разговором, боем и загрузкой | вместе с пилотом; сценарии требуют `GOTHIC_BODY_URL` | `bodypilot.py`, `scenarios/companions.py`, `scenarios/neural_knockout.py` (отрезок `neural-talk`), `scenarios/neural_load.py` | e2e `neural-talk`: сначала NPC не из `GIL_BDT` нападает после слов с `AR_NONE`, герой переживает нокаут и встаёт, lease снят и NPC в распорядке; затем враждебный бандит: разговор, нападение, бегство, распорядок, повторная встреча (нападение или разговор), новый бой с чистой памятью; после `return_to_second_fight` ≥20 решений или 20 с, новое бегство и `fight_end_clean`: `target_lost`/`npc_unavailable`, release ≤2 с, через 2 с нет lease, `body` и подписки; один удар героя после 15 с без урона цели, число и сумма `stall_broken` как диагностика P30 (ожидание `hero_down` до 30 с остаётся только для отдельного нокаута); звери убраны, мечник отведён; `neural-load`: загрузка при трёх lease, снятие подписки и новый бой | [npc-body-control-plan.md](npc-body-control-plan.md) |
+| Изменение подписки тела без потери текущих боёв | вместе с пилотом | `game.py`, `bodypilot.py`; все NPC с ожидающим захватом остаются в списке, при прежней generation кэш свободных актёров очищается, lease и ожидающие захваты сохраняются; неудачное сжатие повторяется и не блокирует retarget | `test_body_control.py`, `test_bodypilot.py` | [npc-body-control-plan.md](npc-body-control-plan.md) |
+| Память P30 после подвисаний игры | `gothic-body serve-net --no-allow-stale-memory-only` возвращает проверку возраста строк памяти | `bodypilot.py`, `body-service/src/gothic_body/runtime.py`, `serving_net.py` | `test_bodypilot.py`, `test_runtime.py`, `test_serving_net.py`; e2e `neural`, `neural-companion` | [npc-body-control-plan.md](npc-body-control-plan.md) |
 | Волки слышат тон героя | `--no-beasts` | `beasts.py`; мост — `ai_bridge/beasts*` | e2e `wolf`; бенч `wolf` | [beasts.md](beasts.md) |
 
 ## Сервер: восприятие и знание
@@ -63,6 +67,8 @@ PR, который добавляет фичу или выключатель, д
 | Слухи по знакомым | нет | `social.py` (`Rumors`) | e2e `rumor` | [story-graph.md](story-graph.md) |
 | Пересказ слуха вслух рядом с героем | нет | `gossip.py` | e2e `gossip`; бенч `gossip` | [npc-tools.md](npc-tools.md#сделано-двое-при-герое) |
 | Преступления, свидетели, закон общины | `--no-crimes` | `crimes.py`, `crime_law*.py`; мост — `hero_deed` | e2e `crimes`, `crime_talk`, `crime_law` | [crime.md](crime.md) |
+| Реакция свидетеля на месте: правила роли и характера, родные SVM, зов стражи, память ванили | `--no-crimes` | `crime_react.py`, `crime_memory.py`; мост — `threat_control.deeds`, v44 | e2e `crime_react`, pytest `test_crime_react.py`, `test_crime_memory.py` | [crime.md](crime.md) |
+| Встреча со знающим NPC: возмещение пострадавшему, изгнание из дома, страж и известный убийца, закрытые ворота для вора | `--no-crimes` | `crime_meet.py`, `crime_memory.py`, `amends.py`, `initiative.py`, `crime_law_graph.py`; мост — удержание входа, v46 | `crime_meet`: 37/37, живой Amends 24/24; pytest `test_crime_meet.py`, `test_crime_memory.py`, `test_crime_law_graph.py`, `test_initiative.py` | [crime.md](crime.md) |
 | Сюжетные ответы на преступления: квест вернуть украденное, свидетель заговаривает, жертва требует возмещения | `--no-crimes`; квесты — ещё и `--no-showrunner` | `crimes.py`, `occasions.py`, `showrunner.py`, `chains.py`, `amends.py` | e2e `crime_director` (с `LLM=chatgpt` — живой шоураннер) | [crime.md](crime.md) |
 | Гнев Ксардаса: ответ некроманта | `--no-wrath` | `wrath.py`; мост — `ai_bridge/necromancy*` | e2e `wrath`; бенч `necro` | [xardas-wrath.md](xardas-wrath.md) |
 
@@ -98,6 +104,7 @@ PR, который добавляет фичу или выключатель, д
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
 | Мост к ИИ-серверу | `GOTHIC_AI=0` | `ai_bridge/aibridge.cpp` | все e2e | [protocol.md](protocol.md) |
+| Изменение списка `body_watch` под lease или с заявкой на захват (v45) | нет; без владельцев остаётся полный сброс | `ai_bridge/aibridge.cpp`, `common/game/bodyobservations.*`, `common/game/bodycontroller.*` | `gothic-body-watch-test`; e2e `neural` | [npc-body-api.md](npc-body-api.md), [npc-body-observations.md](npc-body-observations.md) |
 | Диалоговые функции скриптов как программы без VM | `GOTHIC_AI_STORYEXEC=0` | `ai_bridge/dialoggraph.cpp` | e2e `graph`, `programs` | [story-graph.md](story-graph.md) |
 
 ## Движок: физика Jolt
@@ -147,6 +154,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
+| Карты нормалей и ORM своих материалов мира и статичных vob; Ламберт с AO, без GGX | убрать каталог контента или `OPENGOTHIC_CONTENT=` | `common/resources.cpp`, `graphics/material.*`, `drawbuckets.*`, `renderer.*`, `shader/materials/`, `shader/lighting/` | синтетическая DDS-фикстура `scripts/content/test-material.py`, `rf.bench` Vulkan/Metal | [Своя игра](own-content.md#как-работает-сейчас) |
 | Ray query на Mac: тени точечных светильников, свет не проходит сквозь стены (на Linux и Windows — с апстрима) | `-rt 0` | `common/commandline.h` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
 | GI-пробы на дискретной видеокарте с трассировкой | `-gi 0` | `common/gothic.cpp` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
 | Сглаживание CMAA2 (только при `vidResIndex=0`) | `-aa 0` | `common/commandline.h` | замер рендера | [отчёт](../reports/render-features/2026-10-18/README.md) |
@@ -163,6 +171,7 @@ PR, который добавляет фичу или выключатель, д
 Это не фичи игры, а инструменты и опции. Включаются явно:
 - `gothic-ai serve --scenario <имя>`, `--journal`, `--voice-files`;
 - HD-текстуры: каталог в `OPENGOTHIC_TEXTURES`, его передаёт лаунчер, когда текстуры сделаны;
+- Перепись оригинальных ресурсов: `OPENGOTHIC_CENSUS=<путь к json>`, запись при выходе и Marvin `census`; `common/contentcensus.*`, наблюдатель VFS, `scripts/content-census.py`; проверки — `smoke` на Ryzen и `scripts/test_content_census.py`, [own-content.md](own-content.md);
 - `GOTHIC_AI_STORYCHECK=1` — сверка условий скриптов с поднятыми; в `-devmode` включена сама;
 - `OPENGOTHIC_ANIM_SKIP_FAR=1`, `OPENGOTHIC_FOOTIK_WATCHED_ONLY=1` — экономия на дальних NPC для прогонов тела;
 - `OPENGOTHIC_BENCH*`, `OPENGOTHIC_*_LOG`, `OPENGOTHIC_*_TRACE` — стенд, журналы и трассы.
@@ -170,6 +179,8 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича стенда | Как включить / выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
+| Общий кэш Linux-бинарников движка и `storygraph` по хэшу исходников | включён в `scripts/ryzen.sh`; `clean-cache` удаляет записи старше двух часов; `RYZEN_WORKTREE` задаёт имя папки worktree | `scripts/ryzen.sh` | `test_ryzen`, `test_ryzen_lifetime`, `test_ryzen_lock`; e2e `stages` в двух worktree | [ryzen.md](ryzen.md), [compute.md](compute.md) |
+| Офлайн-перепись площадей, масштаба UV и плиточности текстур четырёх миров со статичными vob | `scripts/content-textures.sh`; без запуска скрипта не работает | `scripts/content/world-textures.cpp` | `scripts/content-textures.sh --self-test`, офлайн-прогон четырёх миров со сверкой площади ≤ 0,1 % | [own-content.md](own-content.md), [CSV и отчёт](../reports/content/2026-10-world-textures/README.md) |
 | Популяция навигации: N NPC, независимые состояния, выборка softmax и награды Detour без перезагрузки мира | `navdemos population … sample\|argmax … RECORD`; `navdemos physics cv\|native`, в `nav_rl.py` CV по умолчанию; `RECORD=0` выключает записи; `hero near\|keep`, `kill-slot SLOT AFTER_MS` — проверки стенда | `common/navdemos.*`, минимальные вставки в `worldobjects.cpp`, `npc.cpp`, `MoveAlgo::useCharacterVirtual`; `scripts/nav_rl.py` | `test_nav_rl.py`, `nav_rl.py check/equivalence/population/death-smoke` | [navigation.md](navigation.md) |
 
 Остальная обучаемая навигация ([navigation.md](navigation.md)) — пока исследование, в игру не включена.
@@ -185,3 +196,11 @@ PR, который добавляет фичу или выключатель, д
 Проверяются не в каждом прогоне:
 - **только с моделями на dev-ubuntu:** реплики в бою от Gemma, трейс хода (`m5` с `QUICK_URL`), планировщик в `day` и `initiative` (с `DECIDER_URL`);
 - **только живыми прогонами:** кто вклинится в беседу (`interject`), карточки характера (`haggle`), шоураннер на настоящей модели (`showrunner_live`, `vanilla_line_live`).
+
+## Инструменты разработки
+
+| Фича | Как выключить | Модуль | Проверка | Документ |
+|---|---|---|---|---|
+| Три игры e2e на Ryzen: слоты, отдельные порты и окна | sharing требует `--display --display-shared`; старый `--display` и `--display-exclusive` занимают всё окно; ёмкость задаёт профиль `gq` | `scripts/gq.py`, `scripts/ryzen.sh`, `scripts/e2e.sh` | `scripts/tests/test_gq.py`, `test_ryzen.py`; e2e `orders`, `fight_reactions_bandits`, `calm` ([отчёт](../reports/compute/2026-10-19-ryzen-three-windows/README.md)) | [compute.md](compute.md#очередь-gq), [ryzen.md](ryzen.md) |
+| Начальная позиция X11-окна | без `TEMPEST_WINDOW_POS=x,y` — прежнее размещение | `lib/Tempest/Engine/system/api/x11api.cpp`, `scripts/ryzen.sh` | e2e трёх окон на Ryzen, `test_ryzen.py` | [ryzen.md](ryzen.md) |
+| Средний FPS представленных кадров в логе раз в 10 с | `OPENGOTHIC_FPS_LOG` выключен по умолчанию; нужна сборка с `OPENGOTHIC_ENABLE_APP_CADENCE=ON` | `common/appcadence.cpp` | одиночные и тройные e2e на Ryzen | [ryzen.md](ryzen.md) |

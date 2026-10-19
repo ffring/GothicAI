@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
+#   crime_meet: save 1, native home eviction and a brave victim's Amends approach/payment;
+#       LLM=chatgpt runs only the short compensation scene with the real model
 #   m0: takes Xardas over, walks him around and returns him to his routine
 #   m1: Xardas answers a player question line by line (LLM backend: LLM=fake|chatgpt|local)
 #   websocket: Lobart and Hilda speak through Responses against an in-process fake server: per-npc
@@ -16,6 +18,18 @@
 #       requires GOTHIC_BODY_URL, a new game, >=10 decisions, no fallback, service p95 <=20 ms
 #   neural-companion: the bandit attacks the hero's swordsman companion, >=6 decisions, no fallback,
 #       a companion target in the fight summary, natural fight end and confirmed release
+#   neural-group: three one-handed bandits fight the hero and his swordsman companion under P30 at once;
+#       each gets >=10 decisions, no fallback, release <=2 s, service p95 <=20 ms; requires GOTHIC_BODY_URL
+#   neural-talk: a non-bandit swordsman attacks after words (AR_NONE), knocks the hero out alive, releases
+#       P30 and returns to his routine; the hero gets up. Then a hostile bandit talks, attacks, loses the
+#       fleeing hero, returns to his routine, reattacks or talks again and starts a fresh fight. After
+#       return_to_second_fight, >=20 decisions or 20 s trigger another hero flight; fight_end_clean checks
+#       target_lost/npc_unavailable, release <=2 s and no lease/body/watch after 2 s; LLM=fake, GOTHIC_BODY_URL
+#       one hero hit breaks 15 s without target damage; stall_broken reports count and seconds as P30
+#       diagnostics. Only the separate knockout requires hero_down within 30 s after that hit;
+#       wildlife is cleared and the swordsman parked away
+#   neural-load: load an initial save while three bandits hold P30 leases; all fights end with loading,
+#       release their leases and watch, then one bandit fights under P30 again; requires GOTHIC_BODY_URL
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
 #       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
 #       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
@@ -106,6 +120,11 @@
 #       Matteo witnesses a native theft; Andre stays locked until the next day, charges 50 through
 #       his native voiced dialog and accepts payment. Matteo still remembers. A second theft with
 #       an accepted silence deal never reaches Andre. Native theft perceptions stay enabled.
+#   crime_react: rule reactions at the deed (docs/crime.md, layer 4a), LLM=fake; SAVE=save_slot_1.sav.
+#       Hilda's retained theft witness and own SVM shout; Lobart courage 2 demands restitution, then
+#       a temporary scenario card with courage 3 fights through native AR_THEFT to a living knockout
+#       and the cup's return. Finally deeds:false leaves theft to vanilla without a held perception.
+#       Community guards are covered by unit tests. TIMEOUT=420; no behavioral model.
 #   requires: a book quest depending on vanilla (docs/director.md, stage 5, layer 2), no model: Hilda's
 #       offer stays absent while Lobart's turnip quest is open or running, opens after its success, and
 #       the book's second stage waits for "Сковорода для Хильды" to become running. A save and a load
@@ -288,7 +307,7 @@ if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 && "$SCENARIO" != tts ]]; then
   echo 'GOTHIC_TTS_RECORD requires SCENARIO=tts' >&2
   exit 2
 fi
-if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion ]]; then
+if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = neural-group || "$SCENARIO" = neural-talk || "$SCENARIO" = neural-load ]]; then
   [ -n "${GOTHIC_BODY_URL:-}" ] || { echo "scenario $SCENARIO requires GOTHIC_BODY_URL=tcp://host:port" >&2; exit 2; }
   [ -z "${SAVE:-}" ] || { echo "scenario $SCENARIO requires a new game (unset SAVE)" >&2; exit 2; }
 fi
@@ -299,6 +318,19 @@ PORT="${PORT:-47827}"
 ASR_PORT="${ASR_PORT:-47829}"
 TTS_PORT="${TTS_PORT:-47840}"
 TTS="${TTS:-fake}"
+# Inworld writes its voice cache through one fixed .tmp file. Keep that write
+# inside this Ryzen run too; HOME still supplies credentials and read-only data.
+if [[ "${GQ_PROFILE:-}" == ryzen && ( "$TTS" == inworld || "$TTS" == inworld:* ) &&
+      ! "${TTS#*:}" =~ (^|,)[[:space:]]*cache[[:space:]]*= ]]; then
+  if [[ -f "$HOME/.local/share/gothic-ai/inworld-voices.json" ]]; then
+    cp "$HOME/.local/share/gothic-ai/inworld-voices.json" "$LOG_DIR/inworld-voices.json"
+  fi
+  if [[ "$TTS" == inworld || "$TTS" == inworld: ]]; then
+    TTS="inworld:cache=$LOG_DIR/inworld-voices.json"
+  else
+    TTS+=",cache=$LOG_DIR/inworld-voices.json"
+  fi
+fi
 VOICE_FILE="${VOICE_FILE:-$ROOT/asr-service/tests/audio/ru_1.wav}"
 # the npc planner is off unless a decision service is given (DECIDER_URL=ws://<gpu-host>:47832)
 BRAIN_ARGS=(--no-brain)
@@ -330,8 +362,43 @@ fi
   --memory-db "$LOG_DIR/memory.sqlite3" --trace-dir "$LOG_DIR/traces" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}" "${QUICK_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
 SRV=$!
 GAME=""
-# `|| true`: with set -e a failing kill of an already finished process would change the exit code
-trap 'if [ -n "$GAME" ]; then kill "$GAME" 2>/dev/null || true; fi; kill "$SRV" 2>/dev/null || true; if [ -n "$ASR_PID" ]; then kill "$ASR_PID" 2>/dev/null || true; fi; if [ -n "$TTS_PID" ]; then kill "$TTS_PID" 2>/dev/null || true; fi' EXIT
+
+report_game_exit() {
+  local game_rc signal_number signal_name
+  [[ -n "$GAME" ]] || return 0
+  wait "$GAME" && game_rc=0 || game_rc=$?
+  if (( game_rc > 128 )) && signal_name="$(kill -l "$((game_rc - 128))" 2>/dev/null)"; then
+    signal_number=$((game_rc - 128))
+    echo "game exited: signal SIG$signal_name ($signal_number), status $game_rc ($1)"
+  else
+    echo "game exited: code $game_rc ($1)"
+  fi
+  GAME=""
+}
+
+cleanup() {
+  local attempt
+  # Reap our exact child PID, including a game killed before the first poll.
+  # `|| true` preserves the scenario status if a child has already finished.
+  if [[ -n "$GAME" ]]; then
+    kill "$GAME" 2>/dev/null || true
+    # A signal during the fork/exec handoff can miss the game. Bound the wait
+    # without touching another run's process or relying on its executable name.
+    for attempt in $(seq 1 20); do
+      kill -0 "$GAME" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -KILL "$GAME" 2>/dev/null || true
+    report_game_exit cleanup
+  fi
+  kill "$SRV" 2>/dev/null || true
+  if [[ -n "$ASR_PID" ]]; then kill "$ASR_PID" 2>/dev/null || true; fi
+  if [[ -n "$TTS_PID" ]]; then kill "$TTS_PID" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 sleep 2
 if ! kill -0 "$SRV" 2>/dev/null; then
@@ -392,6 +459,7 @@ GAME=$!
 for _ in $(seq 1 "$TIMEOUT"); do
   kill -0 "$SRV" 2>/dev/null || break
   if ! kill -0 "$GAME" 2>/dev/null; then
+    report_game_exit unexpected
     echo "game exited unexpectedly, see $LOG_DIR/game.log"
     exit 1
   fi

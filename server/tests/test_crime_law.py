@@ -119,6 +119,34 @@ async def test_rumor_to_another_community_or_civilian_does_not_teach_the_law(law
     assert law.law.known("city") == []
 
 
+async def test_guard_call_teaches_heard_and_arrives_through_common_path_once(law):
+    crime = case(law, via="")
+    law.crimes.people[GUARD] = {"guild": 2, "npctype": 0}
+    law.crimes.people[CITIZEN] = {"guild": 3, "npctype": 0}
+    facts = law.law.called(crime["id"], CITIZEN, [GUARD, GUARD, CITIZEN], at=AT + 1)
+    rumor, arrival = facts
+    knowledge, = law.crimes.known(GUARD)
+    assert knowledge.degree == "heard" and knowledge.source == CITIZEN
+    assert rumor["how"] == arrival["how"] == "called"
+    assert rumor["quest"] == "crime:theft-1" and rumor["kind"] == "theft"
+    assert arrival["fact"] == "crime_known" and arrival["at"] == AT + 1
+    assert arrival["via"] == CITIZEN
+    assert law.crimes.known(CITIZEN) == []
+    assert law.law.called(crime["id"], CITIZEN, [GUARD], at=AT + 2) == []
+    assert law.law.tick(AT + 2000) == []
+    assert law.law.unpaid("city") == [crime]
+
+
+async def test_guard_call_without_a_guard_or_real_law_does_not_deliver(law):
+    case(law, via="")
+    assert law.law.called("missing", CITIZEN, [GUARD], at=AT) == []
+    assert law.law.called("theft-1", CITIZEN, [], at=AT) == []
+    assert law.law.called("theft-1", CITIZEN, [CITIZEN], at=AT) == []
+    case(law, crime="loner", community=None, via="")
+    assert law.law.called("loner", CITIZEN, [GUARD], at=AT) == []
+    assert law.chronicle.facts("crime_known") == []
+
+
 @pytest.mark.parametrize("kind", ["died", "silenced", "forgiven", "repaid"])
 async def test_blocker_before_deadline_stops_witness_report(law, kind):
     case(law)

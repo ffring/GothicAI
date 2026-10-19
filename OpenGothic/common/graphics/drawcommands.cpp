@@ -116,6 +116,17 @@ void DrawCommands::setBindings(Tempest::Encoder<CommandBuffer>& cmd, const DrawC
     cmd.setBinding(L_Sampler, smp);
     }
 
+  if(Shaders::options().doMaterialMaps && v==SceneGlobals::V_Main &&
+     (cx.alpha==Material::Solid || cx.alpha==Material::AlphaTest)) {
+    if(cx.isBindless()) {
+      cmd.setBinding(L_Normal, buckets.normals());
+      cmd.setBinding(L_Orm, buckets.orm());
+      } else {
+      cmd.setBinding(L_Normal, bx.mat.normal!=nullptr ? *bx.mat.normal : Resources::fallbackTexture());
+      cmd.setBinding(L_Orm, bx.mat.orm!=nullptr ? *bx.mat.orm : Resources::fallbackTexture());
+      }
+    }
+
   if(v==SceneGlobals::V_Main && cx.isShadowmapRequired()) {
     cmd.setBinding(L_Shadow0, *scene.shadowMap[0], Resources::shadowSampler());
     cmd.setBinding(L_Shadow1, *scene.shadowMap[1], Resources::shadowSampler());

@@ -66,7 +66,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 43;
+constexpr int         ProtocolVersion = 46;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -282,7 +282,6 @@ struct AiBridge::Impl final {
   std::vector<Inbound> inbound;
 
   bool                 connected = false;
-  uint64_t             nextHeroDeed = 1;
   uint64_t             bodyGeneration = 0;
   bool                 bodyResetPending = false;
   std::string          lastError;
@@ -360,12 +359,13 @@ AiBridge::Impl::Impl() {
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
   gothic.onPhysicsNoiseHeard .bind(this,&Impl::onPhysicsNoiseHeard);
   gothic.onHeroDeed          .bind(this,&Impl::onHeroDeed);
-  gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
+  gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc, const HeroDeed* deed) {
     World* world = Gothic::inst().world();
     // the wolves' own (they leave the hero be) without the server too: the console drives them on the bench
     return world!=nullptr &&
            (beasts.intercept(*world,self,other,victim,perc) ||
-            (connected && observer.intercept(*world,self,other,victim,perc)));
+            (connected && observer.intercept(*world,self,other,victim,perc,deed,
+                                            deed!=nullptr ? session.branch+"/deed-"+std::to_string(deed->id) : "")));
     };
   gothic.consoleCommandFn = [this](std::string_view cmd, std::string& reply) {
     return onConsoleCommand(cmd,reply);
@@ -567,6 +567,7 @@ void AiBridge::Impl::processInbound(World* world, Inbound& in) {
           beasts.releaseAll(*world);
           }
         observer.setHoldThreats(false);
+        observer.setHoldDeeds(false);
         if(chat!=nullptr)
           chat->hideDeal("");  // nobody is there to carry it out
         }
@@ -730,7 +731,7 @@ void AiBridge::Impl::onHeroDeed(const HeroDeed& d) {
   if(!connected)
     return;
   JsonWriter j("hero_deed");
-  j.str("id",session.branch+"/deed-"+std::to_string(nextHeroDeed++))
+  j.str("id",session.branch+"/deed-"+std::to_string(d.id))
    .str("kind",d.kind).str("item",d.item).integer("count",int64_t(d.count))
    .str("owner",d.owner.npc).integer("owner_guild",d.ownerGuild)
    .integer("owner_npc_guild",d.owner.guild).integer("owner_npctype",d.owner.npctype)
@@ -827,7 +828,10 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   if(type=="threat_control") {
     // the server's behavioral model decides threats to free npc's first (held from the scripts)
-    observer.setHoldThreats(JsonRead::boolean(doc,"hold",false));
+    if(doc.HasMember("hold"))
+      observer.setHoldThreats(JsonRead::boolean(doc,"hold",false));
+    if(doc.HasMember("deeds"))
+      observer.setHoldDeeds(JsonRead::boolean(doc,"deeds",false));
     return;
     }
 
@@ -1069,15 +1073,6 @@ void AiBridge::Impl::onBodyControl(World& world, const rapidjson::Value& msg) {
 
 void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
   const auto req = JsonRead::str(msg,"req");
-  // Changing subscription changes world IDs. Release through the common arbiter first so a
-  // subscription edit cannot bypass a current non-interruptible segment's safe handoff.
-  for(uint32_t i=0;i<world.npcCount();++i) {
-    auto npc = world.npcById(i);
-    if(npc!=nullptr && BodyController::owns(*npc)) {
-      sendResult(req,false,"release active body owners before changing body_watch");
-      return;
-      }
-    }
   auto npcs = msg.FindMember("npcs");
   auto rate = msg.FindMember("rate_hz");
   if(req.empty() || npcs==msg.MemberEnd() || !npcs->value.IsArray() || npcs->value.Size()>4 ||
@@ -1115,17 +1110,26 @@ void AiBridge::Impl::onBodyWatch(World& world, const rapidjson::Value& msg) {
       }
     watched.push_back(npc);
     }
-  resetBodyObservations();
-  BodyController::pause(Gothic::inst().isPause());
-  if(!watched.empty()) {
-    BodyObservations::Config config;
-    config.periodMs = (rate==msg.MemberEnd() || rate->value.GetInt()==20) ? 50 : 100;
-    config.maxActors = 4;
-    config.queueCapacity = 16;
-    BodyObservations::configure(config);
-    BodyObservations::watch(watched);
+  const uint64_t periodMs = (rate==msg.MemberEnd() || rate->value.GetInt()==20) ? 50 : 100;
+  if(BodyController::hasOwners()) {
+    const auto reason = BodyController::updateWatch(watched,periodMs);
+    if(std::string_view(reason)!="allowed") {
+      sendResult(req,false,reason);
+      return;
+      }
+    } else {
+    resetBodyObservations();
+    if(!watched.empty()) {
+      BodyObservations::Config config;
+      config.periodMs = periodMs;
+      config.maxActors = 4;
+      config.queueCapacity = 16;
+      BodyObservations::configure(config);
+      BodyObservations::watch(watched);
+      }
+    BodyController::setActors(watched);
     }
-  BodyController::setActors(watched);
+  BodyController::pause(Gothic::inst().isPause());
   // Observation alone does not attach a controller, clear AI queues or claim body ownership.
   sendResult(req,true,"",BodyObservations::statsJson());
   }

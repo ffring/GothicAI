@@ -294,6 +294,7 @@ class NpcPlanner:
         # takes a chosen trip over (chat, pray, tavern): walks the npc there; without it a trip is not done
         self.on_plan: Callable[[Decision, NpcRecord, DayOption], None] | None = None
         self.applier = applier
+        self.crime_rooms = False  # CrimeMeet handles hero room entry; keep it only as model context.
         self.builder = builder or SituationBuilder()
         self.cfg = config or PlannerConfig()
         self.clock = clock
@@ -400,6 +401,7 @@ class NpcPlanner:
         place: str | None = None,
         loudness: float | None = None,
         source: str | None = None,
+        context_only: bool = False,
     ) -> None:
         rec = self.npcs.get(npc.upper())
         if rec is None or (rec.tier is Tier.OFF and rec.activity != "fight"):
@@ -432,7 +434,9 @@ class NpcPlanner:
         rec.stimuli = merge(rec.stimuli, stim, now)
         if other == "PLAYER":
             rec.last_interaction = now
-        if p.scripted:  # the game's scripts react; it stays as context for later decisions
+        if p.scripted or context_only or (
+            self.crime_rooms and kind == "enter_room" and other.upper() in {"PLAYER", "HERO", "PC_HERO"}
+        ):  # scripts or crime rules react; retain context for later decisions
             self.stats.scripted_events += 1
             return
         if p.threat and rec.waiting_body is not None:
@@ -457,6 +461,20 @@ class NpcPlanner:
 
     def on_held(self, msg: PerceptionHeld, now: float) -> None:
         """A threat the game holds from the npc's scripts until the model decides (or 0.6 s pass)."""
+        if msg.deed is not None or msg.other.upper() in {"PLAYER", "HERO", "PC_HERO"}:
+            # CrimeReact/CrimeMeet settle hero deeds and room entry. Keep their context,
+            # including when a malformed hold has no deed id and must fall back to scripts.
+            self.on_event(
+                msg.npc,
+                msg.kind,
+                now,
+                other=msg.other,
+                distance_cm=msg.distance,
+                detail=msg.detail,
+                other_name=msg.other_name,
+                context_only=True,
+            )
+            return
         rec = self.npcs.get(msg.npc.upper())
         if rec is not None and rec.activity == "body":
             self.applier.verdict(msg.hold, "server", npc=rec.id)

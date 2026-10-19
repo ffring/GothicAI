@@ -13,7 +13,9 @@ from .basics import websocket as websocket
 from .companions import calm_scenario as calm_scenario
 from .companions import companion_scenario as companion_scenario
 from .companions import neural_companion_scenario as neural_companion_scenario
+from .companions import neural_group_scenario as neural_group_scenario
 from .companions import neural_scenario as neural_scenario
+from .companions import neural_talk_scenario as neural_talk_scenario
 from .companions import orders_scenario as orders_scenario
 from .companions import rescue as rescue
 from .companions import wolf_scenario as wolf_scenario
@@ -22,6 +24,8 @@ from .conversation import gossip_scenario as gossip_scenario
 from .conversation import group_scenario as group_scenario
 from .conversation import interject_scenario as interject_scenario
 from .conversation import write_cards as write_cards
+from .crime_meet import crime_meet as crime_meet
+from .crime_react import crime_react as crime_react
 from .deals import contract as contract
 from .deals import deal_debt as deal_debt
 from .deals import deal_demo as deal_demo
@@ -35,6 +39,7 @@ from .lies import vanilla_given as vanilla_given
 from .lies import vanilla_lie as vanilla_lie
 from .lies import witness_check as witness_check
 from .lies import xardas_wrath as xardas_wrath
+from .neural_load import neural_load_scenario as neural_load_scenario
 from .npc_life import chests_scenario as chests_scenario
 from .npc_life import day_scenario as day_scenario
 from .npc_life import errand_give_scenario as errand_give_scenario

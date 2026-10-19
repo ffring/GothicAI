@@ -408,6 +408,8 @@ void Renderer::resetViewport(Tempest::Size res, Tempest::Size fullRes) {
 
   gbufDiffuse   = device.attachment(TextureFormat::RGBA8,w,h);
   gbufNormal    = device.attachment(TextureFormat::R32U, w,h);
+  if(Shaders::options().doMaterialMaps)
+    gbufOrm = device.attachment(TextureFormat::RGBA8, w,h);
 
   ssao     = decltype(ssao)();
   epipolar = decltype(epipolar)();
@@ -1730,9 +1732,16 @@ void Renderer::drawSwr(Tempest::Encoder<Tempest::CommandBuffer>& cmd, WorldView&
 
 void Renderer::drawGBuffer(Encoder<CommandBuffer>& cmd, uint8_t fId, WorldView& view) {
   cmd.setDebugMarker("GBuffer");
-  cmd.setFramebuffer({{gbufDiffuse, Tempest::Vec4(), Tempest::Preserve},
-                      {gbufNormal,  Tempest::Vec4(), Tempest::Preserve}},
-                     {zbuffer, Tempest::Preserve, Tempest::Preserve});
+  if(Shaders::options().doMaterialMaps) {
+    cmd.setFramebuffer({{gbufDiffuse, Tempest::Vec4(), Tempest::Preserve},
+                        {gbufNormal, Tempest::Vec4(), Tempest::Preserve},
+                        {gbufOrm, Tempest::Vec4(1,1,0,0), Tempest::Preserve}},
+                       {zbuffer, Tempest::Preserve, Tempest::Preserve});
+    } else {
+    cmd.setFramebuffer({{gbufDiffuse, Tempest::Vec4(), Tempest::Preserve},
+                        {gbufNormal, Tempest::Vec4(), Tempest::Preserve}},
+                       {zbuffer, Tempest::Preserve, Tempest::Preserve});
+    }
   view.drawGBuffer(cmd,fId);
   }
 
@@ -1805,6 +1814,8 @@ void Renderer::drawShadowResolve(Encoder<CommandBuffer>& cmd, const WorldView& w
   cmd.setBinding(1, gbufDiffuse, Sampler::nearest());
   cmd.setBinding(2, gbufNormal,  Sampler::nearest());
   cmd.setBinding(3, zbuffer,     Sampler::nearest());
+  if(Shaders::options().doMaterialMaps)
+    cmd.setBinding(12, gbufOrm, Sampler::nearest());
   if(shadow.directLightPso==&shaders.vsmDirectLight) {
     cmd.setBinding(4, vsm.pageTbl);
     cmd.setBinding(5, vsm.pageList);
@@ -1860,6 +1871,8 @@ void Renderer::drawLights(Encoder<CommandBuffer>& cmd, const WorldView& wview) {
   cmd.setBinding(2, gbufNormal,  Sampler::nearest());
   cmd.setBinding(3, zbuffer,     Sampler::nearest());
   cmd.setBinding(4, wview.lights().lightsSsbo());
+  if(Shaders::options().doMaterialMaps)
+    cmd.setBinding(12, gbufOrm, Sampler::nearest());
   if(lights.directLightPso==&shaders.lightsVsm) {
     cmd.setBinding(5, vsm.pageTblOmni);
     cmd.setBinding(6, vsm.pageData);
@@ -2696,6 +2709,8 @@ void Renderer::drawAmbient(Encoder<CommandBuffer>& cmd, const WorldView& view) {
   cmd.setBinding(0, view.sceneGlobals().uboGlobal[SceneGlobals::V_Main]);
   cmd.setBinding(1, gbufDiffuse, Sampler::nearest());
   cmd.setBinding(2, gbufNormal,  Sampler::nearest());
+  if(Shaders::options().doMaterialMaps)
+    cmd.setBinding(12, gbufOrm, Sampler::nearest());
   if(settings.giMethod==GiMethod::IrrC && settings.zCloudShadowScale) {
     cmd.setBinding(3, surf.irrImage, Sampler::nearest(ClampMode::ClampToEdge));
     cmd.setBinding(4, ssao.ssaoBlur, Sampler::nearest(ClampMode::ClampToEdge)); //TODO: remove once splatting is working
