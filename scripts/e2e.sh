@@ -462,7 +462,8 @@ for name in ("CHARACTER_VIRTUAL", "NPC_CHARACTER_VIRTUAL", "MONSTER_CHARACTER_VI
     value = os.environ.get(name, "")
     if value:
         if value not in ("0", "1"):
-            sys.exit(f"{name} must be 0 or 1")
+            print(f"{name} must be 0 or 1", file=sys.stderr)
+            sys.exit(2)
         put("GAME", name.lower(), value)
 if os.environ.get("GOTHIC_TTS_RECORD", "0") == "1":
     # Keep effects audible, with no music masking the controlled fake voice.

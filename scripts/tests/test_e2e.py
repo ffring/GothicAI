@@ -173,6 +173,13 @@ class RunSettingsTests(unittest.TestCase):
                 self.assertEqual(done.returncode, 2, done.stderr)
                 self.assertIn("E2E_MAX_FPS must be a nonnegative integer", done.stderr)
 
+    def test_invalid_character_virtual_keeps_usage_error_status(self):
+        for name in ("CHARACTER_VIRTUAL", "NPC_CHARACTER_VIRTUAL", "MONSTER_CHARACTER_VIRTUAL"):
+            with self.subTest(name=name):
+                done, _ = self.run_settings(options={name: "invalid"})
+                self.assertEqual(done.returncode, 2, done.stderr)
+                self.assertIn(f"{name} must be 0 or 1", done.stderr)
+
 
 class RyzenOptionForwardingTests(unittest.TestCase):
     def test_explicit_zero_limit_is_forwarded_to_ryzen(self):
