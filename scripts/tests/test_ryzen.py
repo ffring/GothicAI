@@ -136,7 +136,11 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
 
     def test_exclusive_scenario_only_changes_the_game_request(self):
         for scenario, exclusive in (('fight_reactions_bandits', True),
-                                    ('calm', True), ('orders', True), ('stages', False)):
+                                    ('calm', True), ('orders', True), ('stages', False),
+                                    ('fight_reactions_wolf', True), ('calm_companion', True),
+                                    ('neural-companion', True), ('wolf', True),
+                                    ('rescue_self', True), ('companion', True),
+                                    ('crimes', False), ('quest_law', False)):
             with self.subTest(scenario=scenario):
                 result, requests = self.run_game(scenario=scenario)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -149,6 +153,13 @@ preparation_needed() { [[ "$TEST_PREPARE" == 1 ]]; }
                 self.assertEqual('--display-exclusive' in game, exclusive)
                 self.assertEqual('--display-shared' in game, not exclusive)
                 self.assert_option(game, '--name', f'e2e {scenario}')
+
+    def test_forced_exclusive_overrides_shared_scenario(self):
+        result, requests = self.run_game(scenario='stages', window={'RYZEN_DISPLAY_EXCLUSIVE': '1'})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        options = self.queue_options(requests[-1])
+        self.assertIn('--display-exclusive', options)
+        self.assertNotIn('--display-shared', options)
 
     def test_bench_does_not_use_e2e_exclusive_scenarios(self):
         result, requests = self.run_game(action='bench', scenario='calm')

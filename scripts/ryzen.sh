@@ -846,15 +846,19 @@ PY
 
 e2e_display_exclusive() {
   # Keep timing-sensitive exceptions and their measured reason in this one list.
-  # Add an exception only after a passing solo run fails with concurrent games.
+  # RYZEN_DISPLAY_EXCLUSIVE=1 forces it for any scenario: rerun a suspicious
+  # failure from a shared slot this way before chasing it.
+  [[ "${RYZEN_DISPLAY_EXCLUSIVE:-0}" != 1 ]] || return 0
   case "$1" in
-    # Solo passed; visible triple 2/3 missed wolf preparation at about 80 FPS.
-    orders) return 0 ;;
-    # Visible triple 2/3 passed; one missed the native return strike within 3s.
-    fight_reactions_bandits) return 0 ;;
-    # Initial triple 1/2 failed; visible 3/3 passed. Keep combat exceptions until
-    # both combat cases pass every round (bandits above still fails one).
-    calm) return 0 ;;
+    # Measured 19.10 (reports/compute/2026-10-19-ryzen-three-windows): each passed
+    # solo and failed in some three-game rounds even with windows apart, at
+    # 77-93 FPS instead of ~105. orders missed wolf preparation, bandits the
+    # native return strike within 3 s, calm its attack and addressee checks.
+    orders|fight_reactions_bandits|calm) return 0 ;;
+    # Same fight, companion and movement timing, not measured yet: kept exclusive
+    # rather than risking false failures. Move one out only after it passes
+    # every round of a three-game measurement.
+    fight_reactions_*|calm_*|neural*|wolf|rescue*|companion) return 0 ;;
     *) return 1 ;;
   esac
 }
