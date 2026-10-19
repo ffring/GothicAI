@@ -411,6 +411,17 @@ class BodyPilot:
         if self.fights.get(summary.npc) is fight:
             del self.fights[summary.npc]
         if (
+            summary.npc is not None and summary.reason in {"hero_down", "target_down"}
+            and not self._closing and not self._resetting
+        ):
+            # Native looting/retreat can still be ZS_ATTACK after the target fell.
+            # A routine row during release may already have cleared the claim;
+            # keep this completed fight closed until a later non-combat roster.
+            self._claimed_fights.add(summary.npc)
+            self._roster_attempted.add(summary.npc)
+            self._lost_fights.discard(summary.npc)
+            self._retarget_pending.discard(summary.npc)
+        if (
             summary.npc is not None and summary.reason == "acquire_exhausted"
             and summary.lease is None and summary.acquire_completed == 0
             and summary.acquire_requests > 0
