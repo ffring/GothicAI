@@ -430,7 +430,9 @@ class NpcCrimes:
             raise GameError("мир сменился во время защиты")
         self.chronicle.record({
             "fact": "npc_crime_reaction", "crime": crime["id"], "npc": npc,
+            "culprit": crime["culprit"],
             "reaction": "fight", "role": role, "act": action_id,
+            **({"blamed": crime["blamed"]} if crime.get("blamed") else {}),
         })
         self._track_reclaim(crime, npc, generation, action_id)
         return action_id
@@ -527,6 +529,7 @@ class NpcCrimes:
                             "fact": "npc_crime_restitution", "crime": crime["id"],
                             "npc": crime["owner"], "culprit": crime["culprit"], "fighter": fighter,
                             "item": crime["item"], "count": amount, "how": "defeated_thief",
+                            **({"blamed": crime["blamed"]} if crime.get("blamed") else {}),
                         })
                     outcome, reason, returned = "reclaimed", "defeated_thief", amount
                     return
@@ -562,4 +565,5 @@ class NpcCrimes:
             "fact": "npc_crime_defense", "crime": crime["id"], "culprit": crime["culprit"],
             "fighter": fighter, "act": action_id, "outcome": outcome, "reason": reason,
             "item": crime["item"], "count": crime["count"], "returned": returned,
+            **({"blamed": crime["blamed"]} if crime.get("blamed") else {}),
         })

@@ -193,7 +193,7 @@ async def test_crime_cover_hides_a_later_trace_when_the_deed_just_left_the_quest
 
         t = await w.testify()
 
-        assert t.about == AT_8 + 24 * 60 + 30
+        assert t.at == AT_8 + 24 * 60 + 30
         assert t.saw == [sighting] and t.told == []
         assert t.crime_saw == t.crime_told == []  # the deed itself is over a day old
         fact = w.chronicle.facts("testimony")[0]

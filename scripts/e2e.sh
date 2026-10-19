@@ -140,6 +140,10 @@
 #       then steals a world item before brave Lobart, who defeats him and reclaims it. NPC knowledge,
 #       its rumor and save/load are checked; guards are covered by module tests.
 #       LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=720; no live model.
+#   frame: unseen hero chest theft, Lobart believes Malak guilty, native reclaim combat finds no goods
+#       and reveals the hero's lie; Hilda's honest testimony about Vino leads to true blame and return.
+#       Save/load restores both cases without duplicates. LLM=fake; SAVE=save_slot_1.sav; TIMEOUT=900.
+#       LLM=chatgpt stops after Lobart's one ordinary answer to «Это Малак взял», belief or refusal.
 #   crime_director: deeds and story responses (docs/crime.md, layer 5), SAVE=save_slot_1.sav.
 #       LLM=fake: unseen chest theft and its return quest, Hilda's initiative and paid silence,
 #       Lobart's learned grievance and Amends payment. LLM=chatgpt: witnessed theft goes to the

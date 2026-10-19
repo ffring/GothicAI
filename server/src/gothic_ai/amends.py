@@ -381,7 +381,7 @@ class Amends:
                 self._spawn(self._forgiven(f))
             case "forgiven" if self.crimes is not None:
                 self._spawn(self._forgiven(f))
-            case "silenced" | "died" if self.crimes is not None:
+            case "silenced" | "died" | "blamed" if self.crimes is not None:
                 self._spawn(self._withdraw_crimes(self._world))
 
     def _queue_crime(self, npc: str, crime_id: str) -> None:
@@ -406,6 +406,8 @@ class Amends:
         if self.crimes is None:
             return None
         npc = npc.upper()
+        if self.crimes.blamed(npc, crime_id):
+            return None
         if any(f.get("npc", "").upper() == npc for f in self.chronicle.facts("died")):
             return None
         return next(

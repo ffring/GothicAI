@@ -313,9 +313,8 @@ async def test_who_may_be_asked_and_when_not():
         await w.witnesses.prepare(LOBART)
         assert w.witnesses.tools(LOBART) == []
     params = ASK_TOOL.parameters
-    assert params["additionalProperties"] is False and sorted(params["required"]) == sorted(
-        params["properties"]
-    )
+    assert params["additionalProperties"] is False and set(params["required"]) == {"who", "said"}
+    assert "about" in params["properties"]
 
 
 async def test_a_far_witness_is_asked_at_their_meeting_and_the_answer_is_on_its_mind():
