@@ -164,6 +164,7 @@
 
 **Сценарии по областям** (модуль в `server/src/gothic_ai/scenarios/`):
 - **основа** (`basics.py`): `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`, `websocket`;
+- **память движка на Linux** (`memprobe.py`): `memprobe` — отдельные циклы `wave`, `save`, `load`, `spawn`, `teleport`, RSS после каждого шага и группы `smaps`; [результаты исследования](../reports/engine/2026-10-19-rss-growth/README.md);
 - **спутники и бой** (`companions.py`; `neural_knockout.py` — отрезок нокаута в `neural-talk`, `neural-load` — `neural_load.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`, `neural-group`, `neural-talk`, `neural-load`;
 - **восприятие** (`perception.py`; `broken` — `broken.py`, `places` — прямо в `cli.py`): `see`, `seen`, `hearing`, `cave`, `ground`, `places`, `knows`, `remembers`, `trace`, `broken`;
 - **жизнь NPC** (`npc_life.py`): `day`, `noise`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;

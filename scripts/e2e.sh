@@ -317,8 +317,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 GAME_BIN="${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}"
 LOG_DIR="${LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gothic-e2e.XXXXXX")}"
-TIMEOUT="${TIMEOUT:-240}"
 SCENARIO="${SCENARIO:-m0}"
+E2E_DEFAULT_TIMEOUT=240
+if [[ "$SCENARIO" == memprobe ]]; then E2E_DEFAULT_TIMEOUT=1200; fi
+TIMEOUT="${TIMEOUT:-$E2E_DEFAULT_TIMEOUT}"
 if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 && "$SCENARIO" != tts ]]; then
   echo 'GOTHIC_TTS_RECORD requires SCENARIO=tts' >&2
   exit 2
