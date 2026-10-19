@@ -15,6 +15,7 @@ import './fonts';
 import {BrandSting, STING_FRAMES} from './Brand';
 import {Captions} from './parts/Captions';
 import {BarsView, DotsView, FormulaView, StatsView} from './parts/Cards';
+import {BigView, CellsView, LineView, TableView} from './parts/WideCards';
 import {DiceChart} from './parts/DiceChart';
 import {Sight} from './parts/Sight';
 import {Tags} from './parts/Tags';
@@ -112,7 +113,11 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
     else if (card.type === 'formula') body = <FormulaView spec={card} />;
     else if (card.type === 'bars') body = <BarsView spec={card} />;
     else if (card.type === 'dots') body = <DotsView spec={card} />;
-    else body = <StatsView spec={card} />;
+    else if (card.type === 'stats') body = <StatsView spec={card} />;
+    else if (card.type === 'line') body = <LineView spec={card} />;
+    else if (card.type === 'big') body = <BigView spec={card} />;
+    else if (card.type === 'table') body = <TableView spec={card} />;
+    else if (card.type === 'cells') body = <CellsView spec={card} />;
   } else if (beat.kind === 'split' && beat.src && beat.srcBottom) {
     const half = height / 2;
     body = wide ? (
