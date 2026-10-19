@@ -533,6 +533,13 @@ if [[ "$SCENARIO" == neural-soak ]]; then
   # Refuse a fixed-step recording: the soak must keep the ordinary game clock.
   SOAK_BUILD="$(dirname "$GAME_BIN")"
   SOAK_NORMAL_CLOCK=0
+  # ryzen.sh publishes cache entries only from cadence-enabled builds. A fresh
+  # worktree can run that runtime through game.sh without its own CMakeCache.
+  if [[ "${GQ_PROFILE:-}" == ryzen &&
+        "${RYZEN_GAME_BIN:-}" =~ ^"$HOME/gothic-ai/engine-cache/"[a-f0-9]{64}/Gothic2Notr$ &&
+        -x "${RYZEN_GAME_BIN:-}" ]]; then
+    SOAK_NORMAL_CLOCK=1
+  fi
   # Ryzen publishes the runtime directory into its shared cache. Its CMake
   # flags remain in this task's build directory, outside that runtime copy.
   if [[ "${GQ_PROFILE:-}" == ryzen && -f "$ROOT/../build/CMakeCache.txt" ]] &&

@@ -72,6 +72,64 @@ class SoakControlTests(unittest.TestCase):
                 if body_flag is not None:
                     self.assertEqual(result.stdout, body_flag)
 
+
+class SoakVideoTests(unittest.TestCase):
+    def video_environment(self, *, cached=False, executable=True, profile="ryzen", cadence=None):
+        source = SCRIPT.read_text()
+        block = source[source.index("GAME_ENV=("):source.index('if [[ -n "${GAME_EXTRA_ENV:-}" ]]')]
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            root = home / "task/source"
+            run = home / "task/runs/run"
+            root.mkdir(parents=True)
+            run.mkdir(parents=True)
+            if cached:
+                runtime = home / "gothic-ai/engine-cache" / ("a" * 64) / "Gothic2Notr"
+                runtime.parent.mkdir(parents=True)
+                runtime.write_text("#!/bin/sh\nexit 0\n")
+                runtime.chmod(0o755 if executable else 0o644)
+                game = run / "game.sh"
+                game.write_text('#!/bin/bash\nexec "$RYZEN_GAME_BIN" "$@" -g2 -window\n')
+            else:
+                runtime = None
+                game = root / "OpenGothic/build/opengothic/Gothic2Notr"
+                game.parent.mkdir(parents=True)
+                if cadence is not None:
+                    (game.parent.parent / "CMakeCache.txt").write_text(
+                        f"OPENGOTHIC_ENABLE_APP_CADENCE:BOOL={cadence}\n")
+            env = dict(os.environ, HOME=str(home), ROOT=str(root), LOG_DIR=str(run),
+                       GAME_BIN=str(game), SCENARIO="neural-soak", PORT="47817",
+                       GQ_PROFILE=profile)
+            env.pop("RYZEN_GAME_BIN", None)
+            if runtime is not None:
+                env["RYZEN_GAME_BIN"] = str(runtime)
+            done = subprocess.run(
+                ["bash", "-euc", block + '\nprintf "%s\\n" "${GAME_ENV[@]}"'],
+                check=False, env=env, capture_output=True, text=True, timeout=5)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return done.stdout.splitlines()
+
+    def test_ryzen_cache_hit_records_without_a_worktree_build(self):
+        observed = self.video_environment(cached=True)
+        self.assertIn("OPENGOTHIC_BENCH_REALTIME=1", observed)
+        self.assertTrue(any(line.endswith("/scripts/bench/neural-soak-e2e.bench")
+                            for line in observed))
+        self.assertFalse(any("video unavailable" in line for line in observed))
+
+    def test_cache_hint_requires_ryzen_and_an_executable_runtime(self):
+        for options in ({"profile": "local"}, {"executable": False}):
+            with self.subTest(options=options):
+                observed = self.video_environment(cached=True, **options)
+                self.assertNotIn("OPENGOTHIC_BENCH_REALTIME=1", observed)
+                self.assertTrue(any("video unavailable" in line for line in observed))
+
+    def test_local_build_still_requires_cadence(self):
+        for cadence in (None, "OFF", "ON"):
+            with self.subTest(cadence=cadence):
+                observed = self.video_environment(profile="local", cadence=cadence)
+                self.assertEqual("OPENGOTHIC_BENCH_REALTIME=1" in observed, cadence == "ON")
+
+
 class RunSettingsTests(unittest.TestCase):
     def run_settings(self, *, options=None, existing_ini="", scenario="stages",
                      exception=None, systempack=None):
@@ -101,7 +159,7 @@ class RunSettingsTests(unittest.TestCase):
                 env.pop(name, None)
             env.update(LOG_DIR=str(log_dir), GOTHIC_DIR=str(game_dir), SCENARIO=scenario)
             env.update(options or {})
-            done = subprocess.run(["bash", "-euc", block], env=env, capture_output=True,
+            done = subprocess.run(["bash", "-euc", block], check=False, env=env, capture_output=True,
                                   text=True, timeout=5)
             ini = configparser.ConfigParser(interpolation=None)
             ini.read(ini_path)
@@ -213,7 +271,7 @@ class RyzenOptionForwardingTests(unittest.TestCase):
         block = source[source.index("# Carry e2e options"):source.index('if [[ "$ACTION" == e2e &&')]
         done = subprocess.run(
             ["bash", "-euc", 'ENV_ARGS=()\n' + block + 'printf \'%s\\n\' "${ENV_ARGS[@]}"'],
-            env={"PATH": os.environ["PATH"], "E2E_MAX_FPS": "0"},
+            check=False, env={"PATH": os.environ["PATH"], "E2E_MAX_FPS": "0"},
             capture_output=True, text=True, timeout=5)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.splitlines(), ["E2E_MAX_FPS=0"])

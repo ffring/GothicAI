@@ -39,7 +39,7 @@ FAULT_ENDINGS = frozenset({
     "policy_error", "policy_timeout", "body_action_rejected", "lease_lost",
     "observation_overflow", "pilot_error", "acquire_uncertain", "watch_refused",
     "bridge_error", "symbol_eval_timeout", "symbol_eval_failed",
-    "body_watch_timeout", "body_watch_failed", "disconnected",
+    "body_watch_timeout", "body_watch_failed", "disconnected", "acceptance_timeout",
 })
 
 
@@ -452,14 +452,21 @@ class SoakMetrics:
         release_issues = release_issues or []
         accepted = sum(summary.decisions for summary in self.summaries)
         decisions = sum(sum(actions.values()) for actions in self.actions_by_client.values())
-        fault_ends = Counter(summary.reason for summary in self.summaries if (
-            summary.reason in FAULT_ENDINGS
-            or summary.reason == "finish_deadline" and not (
-                summary.release_confirmed and summary.release_late_seconds is not None
-            )
-            or summary.reason.startswith("policy_fallback:")
-            and summary.reason != "policy_fallback:observation_too_old"
-        ))
+        fault_ends: Counter[str] = Counter()
+        for summary in self.summaries:
+            # Cleanup may replace the outcome with finish_deadline. A later
+            # native confirmation must not hide the fault that ended the fight.
+            reason = (summary.end_trigger if summary.end_trigger in FAULT_ENDINGS
+                      else summary.reason)
+            if (
+                reason in FAULT_ENDINGS
+                or reason == "finish_deadline" and not (
+                    summary.release_confirmed and summary.release_late_seconds is not None
+                )
+                or reason.startswith("policy_fallback:")
+                and reason != "policy_fallback:observation_too_old"
+            ):
+                fault_ends[reason] += 1
         finish_deadlines = [summary for summary in self.summaries
                             if summary.reason == "finish_deadline"]
         late_releases = [summary.release_late_seconds for summary in self.summaries

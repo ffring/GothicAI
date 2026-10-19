@@ -194,6 +194,7 @@ class Summary:
     release_seconds: float | None = 0
     release_late_seconds: float | None = None
     end_trigger: str = "target_lost"
+    accept_wait_timeouts: int = 0
 
 
 async def test_observers_chain_and_retain_fights_beyond_the_pilot_deque(tmp_path, monkeypatch):
@@ -259,6 +260,7 @@ async def test_observers_chain_and_retain_fights_beyond_the_pilot_deque(tmp_path
 
 @pytest.mark.parametrize("reason", [
     "finish_deadline", "bridge_error", "symbol_eval_timeout", "body_watch_failed", "lease_lost",
+    "acceptance_timeout",
 ])
 def test_fault_endings_fail_even_without_policy_fallback(tmp_path, reason):
     link = SimpleNamespace(body_leases={})
@@ -268,6 +270,56 @@ def test_fault_endings_fail_even_without_policy_fallback(tmp_path, reason):
     checks = metrics.write_result(eligible=1, captured=1, release_issues=[])
     assert checks["fault_fallbacks"].startswith("failed")
     assert metrics.data["metrics"]["fault_endings"] == {reason: 1}
+
+
+@pytest.mark.parametrize(("reason", "timeouts", "fault"), [
+    ("acceptance_timeout", 4, True),
+    ("target_lost", 1, False),
+])
+def test_missing_acceptance_fails_despite_receipts_but_recovered_wait_is_tolerated(
+    tmp_path, monkeypatch, reason, timeouts, fault,
+):
+    monkeypatch.setattr("gothic_ai.scenarios.neural_soak_metrics.rss_bytes", lambda pid: 1000)
+    (tmp_path / "game.pid").write_text("123")
+    (tmp_path / "server.log").write_text("INFO ready\n")
+    metrics = SoakMetrics(
+        SimpleNamespace(body_leases={}), SimpleNamespace(people={}, active_count=0), tmp_path,
+    )
+    lease = BodyLease(
+        npc="BANDIT", provider="neural-body", mode="realtime", session_epoch=1,
+        world_epoch=1, entity_id=1, control_generation=1, goal_version=1,
+        target_entity_id=2, acquired_observation_seq=1,
+    )
+    metrics.summaries.append(Summary(
+        decisions=4, reason=reason, end_trigger=reason, lease=lease,
+        release_seconds=0.1, accept_wait_timeouts=timeouts,
+    ))
+    metrics.actions_by_client[PolicyClient("tcp://unused.invalid:123")][10] = 4
+    metrics._latencies.extend([1.0] * 4)
+
+    checks = metrics.write_result(eligible=1, captured=1)
+
+    assert all(value.startswith("done") for name, value in checks.items()
+               if name != "fault_fallbacks")
+    assert checks["accepted_commands"] == "done (accepted=4/4, minimum=95%)"
+    assert checks["fault_fallbacks"].startswith("failed" if fault else "done")
+    assert metrics.data["status"] == ("failed" if fault else "done")
+    assert metrics.data["metrics"]["fault_endings"] == ({reason: 1} if fault else {})
+
+
+def test_late_native_confirmation_does_not_hide_acceptance_timeout(tmp_path):
+    metrics = SoakMetrics(
+        SimpleNamespace(body_leases={}), SimpleNamespace(people={}, active_count=0), tmp_path,
+    )
+    metrics.summaries.append(Summary(
+        reason="finish_deadline", end_trigger="acceptance_timeout",
+        release_confirmed=True, release_late_seconds=2.75, accept_wait_timeouts=4,
+    ))
+
+    checks = metrics.write_result(eligible=1, captured=1)
+
+    assert checks["fault_fallbacks"].startswith("failed")
+    assert metrics.data["metrics"]["fault_endings"] == {"acceptance_timeout": 1}
 
 
 def test_late_release_updates_retained_snapshots_before_history_eviction(tmp_path):
