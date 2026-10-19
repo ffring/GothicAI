@@ -50,6 +50,26 @@ class Source:
 
 
 SOURCES = {
+    "npc_accused": Source(
+        kind="npc_suspected", subject="target", observer="witnesses", key="id", context="",
+        subject_name="target_name", observer_name="witness_names",
+        text="{about_name} думает, что {subject_name} украл(а) его вещь",
+        warning_direct="{about_name} подозревает {subject_name} в краже; доказательств нет",
+        warning_heard=(
+            "ты слышал, что {about_name} подозревает {subject_name} в краже; со слов: {source_name}"
+        ),
+        requires=(("kind", "suspect"),), about_field="npc", about_name_field="name",
+        direct_context="ты слышал обвинение; это подозрение, не доказательство",
+        alternatives=(Source(
+            kind="npc_accusation", subject="target", observer="witnesses", key="id", context="",
+            subject_name="target_name", observer_name="witness_names",
+            text="{about_name} обвиняет {subject_name} в краже своей вещи",
+            warning_direct="{about_name} обвиняет {subject_name} в краже своей вещи",
+            warning_heard="ты слышал обвинение {subject_name} в краже; со слов: {source_name}",
+            requires=(("kind", "reclaim"),), about_field="npc", about_name_field="name",
+            direct_context="ты слышал обвинение",
+        ),),
+    ),
     "exposed": Source(
         kind="cover",
         subject="liar",

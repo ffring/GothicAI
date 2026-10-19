@@ -53,6 +53,7 @@ from .npc_life import initiative_scenario as initiative_scenario
 from .npc_life import lead_scenario as lead_scenario
 from .npc_life import meet_scenario as meet_scenario
 from .npc_life import noise_scenario as noise_scenario
+from .npc_will import npc_will as npc_will
 from .perception import cave_scenario as cave_scenario
 from .perception import ground_scenario as ground_scenario
 from .perception import hearing_scenario as hearing_scenario

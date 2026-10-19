@@ -29,6 +29,21 @@ def _desk(facts: list[Fact]) -> PeopleKnowledge:
     return PeopleKnowledge(SimpleNamespace(facts=lambda: list(facts)))
 
 
+def test_accusation_rumor_preserves_owner_belief_without_proving_theft():
+    fact = {
+        "fact": "npc_accused", "id": "suspect:C1:VINO", "crime": "C1", "kind": "suspect",
+        "npc": LOBART, "name": "Лобарт", "target": VINO, "target_name": "Вино",
+        "witnesses": [LOBART, HILDA], "witness_names": {LOBART: "Лобарт", HILDA: "Хильда"},
+    }
+    entries = source_events(fact, [fact])
+    assert len(entries) == 2 and all(e.kind == "npc_suspected" for e in entries)
+    assert entries[0].description() == "Лобарт думает, что Вино украл(а) его вещь"
+    heard = _rumor(VINO, "Вино", kind="npc_suspected", quest="npc_accused:suspect:C1:VINO",
+                   about=LOBART, about_name="Лобарт", to=HILDA)
+    assert "Лобарт думает" in _desk([heard]).context(HILDA)
+    assert all(e.kind != "npc_theft" for e in _desk([fact, heard]).of(HILDA))
+
+
 def test_source_names_and_day_restore_from_old_testimony():
     facts = _exposed()
     entry = source_event(facts[-1], facts)

@@ -68,6 +68,9 @@
      кража или несмертельный удар NPC, человеческие свидетели с активным обработчиком
      восприятия, повторная проверка гильдии на сервере перед SVM, крик, защита
      стража или смелого хозяина, итог `npc_crime_defense` и возврат вещи после победы.
+     Серверный прототип `npc_will.py` (возврат, подозрение, корысть) пока не принят:
+     атомарная граница `AiNormal` при переносе вещи требует изменения моста
+     (блокер и текущее состояние — в журнале [слоя 5а](npc-wave3.md#план-и-журнал)).
      `storyguard` защищает сюжет.
      Факты `npc_crime` и `npc_crime_seen` не попадают в читатели дел героя.
      Подготовка `npc_deeds` читает `npc_view.others_damage_ready` и
@@ -97,7 +100,7 @@
 | Разговор | `dialogue`, `talk`, `turn`, `voice`, `tts`, `persona`, `memory` (SQLite, ветвится с сейвами), `budget`, `npc_tools`, `executor`, `commands`, `orders`, `group` (общая беседа), `interject`, `llm/` (`chatgpt`, `openai`, `local`, `fake`) |
 | Быстрый контур и тело | `brain/` (`decider`, `planner`, `reflex`, `day`, `apply`, `tiers`, `stimuli`, `incident`, `situation`), `incidents`, `daylife`, `initiative`, `bodies` (исход мягких действий), `bodypilot` (боевое тело P30), `beasts` (волки слышат тон), `wrath` (терпение к оскорблениям) |
 | Восприятие и знание | `perception`, `sightings`, `places`, `lore`, `whereabouts`, `knowledge`, `social`, `gossip`, `trust`, `people_knowledge`, `attitudes`, `concerns` |
-| Правда, дела, ложь | `chronicle`, `crimes`, `crime_react`, `crime_meet`, `crime_memory`, `crime_law`, `crime_law_graph`, `crime_law_runtime`, `npc_crimes`, `witnesses`, `quests`, `vanilla`, `consequences`, `amends` |
+| Правда, дела, ложь | `chronicle`, `crimes`, `crime_react`, `crime_meet`, `crime_memory`, `crime_law`, `crime_law_graph`, `crime_law_runtime`, `npc_crimes`, `npc_will`, `witnesses`, `quests`, `vanilla`, `consequences`, `amends` |
 | Сделки и поручения | `deals` (окно сделки, долги, `npc_later`), `npc_cheat` (намерение нарушить отложенное слово), `promise_breach` (первое проявление нарушения), `fear` (общее знание о насилии героя), `contracts` (опыт, обучение, платные задания), `chests`, `errands` (`plan`), `meetings` (`meet`), `guide` (`lead`) |
 | Сюжет | `story`, `validator`, `storyguard`, `programs`, `director`, `questbook`, `questlog`, `triggers`, `occasions`, `showrunner`, `authoring`, `casting`, `cast`, `characters` (карточки характера), `chains` |
 | Данные | `gamedata/`: `characters.json`, `lore.json`, `places.json`, `stash.json`, `ou.py` (реплики OU.BIN), `storygraph.py` |
@@ -149,7 +152,7 @@
 
 - **Голос и вывод:** `--no-voice`, `--no-tts`, `--no-console`, `--no-trace`.
 - **Модели:** `--llm chatgpt|openai|local|fake`, `--model`, `--reasoning-effort`, `--no-websocket`, `--no-brain` (планировщик быстрого контура), `--no-quick`, `--no-hold-threats`.
-- **Мир NPC:** `--no-wrath`, `--no-apply-threats`, `--no-beasts`, `--no-chests`, `--no-lead`, `--no-meet`, `--no-errands`, `--no-interject`, `--no-free-bandits`, `--no-apply-day`, `--no-knowledge`, `--no-crimes`, `--no-cover` (сделки прикрытия и страх свидетелей), `--no-npc-cheat` (нарушения отложенного слова NPC), `--no-npc-crimes` (команды вреда NPC и запись их дел; оба последних также выключаются через `--no-crimes`).
+- **Мир NPC:** `--no-wrath`, `--no-apply-threats`, `--no-beasts`, `--no-chests`, `--no-lead`, `--no-meet`, `--no-errands`, `--no-interject`, `--no-free-bandits`, `--no-apply-day`, `--no-knowledge`, `--no-crimes`, `--no-cover` (сделки прикрытия и страх свидетелей), `--no-npc-cheat` (нарушения отложенного слова NPC), `--no-npc-crimes` (мотивы, команды вреда NPC и запись их дел; оба последних также выключаются через `--no-crimes`).
 - **Сюжет:** `--no-director`, `--no-questlog`, `--no-occasions`, `--no-showrunner`, `--story-graph PATH`.
 - **Тело:** `--body-url`, `--no-neural-body`, `--neural-body-max` (1–4, по умолчанию 4).
 - **Сценарий:** `--scenario <имя>`, `--exit-after`.
@@ -183,7 +186,7 @@
 - **жизнь NPC** (`npc_life.py`): `day`, `noise`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
 - **беседа** (`conversation.py`): `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
 - **сделки** (`deals.py`): `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
-- **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `cover` (модуль `cover.py`: сделка прикрытия, второе показание, раскрытие и загрузка), `cover_subject` (там же: слух о Хильде до общего знакомого, пометки свидетеля, доверие к герою и загрузка), `cheat` (`cheat.py`: нарушенное молчание, невыплата `npc_later`, честный контроль и загрузка; `LLM=chatgpt` — один ответ при невыплате), `npc_deeds` (`npc_deeds.py`: кража NPC из сундука, знание Хильды о воре, нападение при родном `ZS_WATCHFIGHT`, настоящий нокаут, возврат кубка смелым хозяином, итог защиты и загрузка; `LLM=fake`; страж проверяется модульно), `wrath`;
+- **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `cover` (модуль `cover.py`: сделка прикрытия, второе показание, раскрытие и загрузка), `cover_subject` (там же: слух о Хильде до общего знакомого, пометки свидетеля, доверие к герою и загрузка), `cheat` (`cheat.py`: нарушенное молчание, невыплата `npc_later`, честный контроль и загрузка; `LLM=chatgpt` — один ответ при невыплате), `npc_will` (`npc_will.py`: подготовленный, ещё не прогнанный сценарий слоя 5а; самостоятельная кража по характеру, возврат своего, обвинение и загрузка с остыванием; `LLM=fake`), `npc_deeds` (`npc_deeds.py`: кража NPC из сундука, знание Хильды о воре, нападение при родном `ZS_WATCHFIGHT`, настоящий нокаут, возврат кубка смелым хозяином, итог защиты и загрузка; `LLM=fake`; страж проверяется модульно), `wrath`;
 - **стыки систем** (`trace_crime.py`): `trace_crime` — свежие обломки и показание о краже в одном ходе, две поимки лжи, знание о деле и доверие;
 - **сюжет** (`story.py`; `occasions`, `questlog`, `showrunner*`, `vanilla_line*` — одноимённые модули): `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
 
