@@ -15,7 +15,7 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.npc_crimes import NpcCrimes
 from gothic_ai.people_knowledge import PeopleKnowledge, source_event
 from gothic_ai.protocol import Session
-from gothic_ai.social import Rumors
+from gothic_ai.social import DAY, Rumors, Social
 from gothic_ai.trust import Trust
 from tests.test_crimes import HILDA, LOBART
 from tests.test_crimes import deed as hero_deed
@@ -271,16 +271,24 @@ async def test_source_and_rumor_describe_belief_without_visual_proof(system):
     assert event.kind == "blamed" and event.subject == THIEF
     assert "Лобарт считает, что Вино украл" in event.description()
     people = PeopleKnowledge(s.chronicle)
-    assert "считает его виновным" in people.context(LOBART) and "видел" not in people.context(LOBART)
+    own_context = people.context(LOBART)
+    assert "ты считаешь, что Вино украл" in own_context and "видел" not in own_context
+    assert "Лобарт считает, что" not in own_context
+    assert "ты считаешь, что Вино украл" in s.blame.situation(LOBART)
     rumors = Rumors(s.link, s.dialogue, s.chronicle)
     rumor = next(r for r in rumors.rumors.values() if r.kind == "blamed")
     assert rumor.subject == THIEF and rumor.description() == event.description()
-    s.chronicle.record({
-        "fact": "rumor", "quest": event.key, "kind": "blamed", "subject": THIEF,
-        "subject_name": "Вино", "about": LOBART, "about_name": "Лобарт", "title": event.description(),
-        "from": LOBART, "from_name": "Лобарт", "to": HILDA,
-    })
+    rumors.social = Social([{"npc": npc, "name": NAMES[npc]} for npc in (LOBART, HILDA, THIEF)])
+    rumors.social.tie(LOBART, HILDA).meets = [(0, DAY)]
+    rumors.gate = lambda *_: True
+    rumors.clock = 3 * DAY + 600
+    assert rumors.spread(rumors.clock, rumors.clock + 1) == 1
+    [learned] = s.chronicle.facts("rumor")
+    assert (learned["from"], learned["to"], learned["subject"], learned["kind"]) == (
+        LOBART, HILDA, THIEF, "blamed",
+    )
     assert "Лобарт считает, что Вино" in people.context(HILDA)
+    assert "ты считаешь, что Вино" not in people.context(HILDA)
     assert not Trust(s.chronicle).of(HILDA).heard
 
 

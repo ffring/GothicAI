@@ -288,7 +288,12 @@ class PeopleKnowledge:
                 source.direct_context if entry.direct and source is not None
                 else f"со слов: {entry.source_name}"
             )
-            lines.append(f"- {entry.description()} ({how})")
+            description = entry.description()
+            if entry.kind == "blamed" and entry.direct and entry.about == npc.upper():
+                prefix = f"{entry.about_name} считает, что "
+                if description.startswith(prefix):
+                    description = "ты считаешь, что " + description.removeprefix(prefix)
+            lines.append(f"- {description} ({how})")
         return "Что ты знаешь о людях вокруг:\n" + "\n".join(lines) if lines else None
 
     def warning(self, npc: str, subject: str) -> str | None:
