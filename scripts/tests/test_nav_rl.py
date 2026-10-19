@@ -164,6 +164,104 @@ def test_population_throughput_uses_concurrent_span_not_sum(tmp_path, monkeypatc
     assert result["decisions_per_second"] == pytest.approx(406 / 13)
 
 
+def test_parallel_population_recording_keeps_worker_outputs_and_pair_provenance(tmp_path, monkeypatch):
+    pairs = [dict(pair, index=index, split="train", split_index=index)
+             for index, pair in enumerate(candidates())]
+    monkeypatch.setattr(rl, "checked_paths", lambda *a, **k: None)
+    monkeypatch.setattr(rl, "load_pairs", lambda p: pairs)
+    monkeypatch.setattr(rl, "new_runner", lambda *a: SimpleNamespace(close=lambda: None))
+    def scenario(args, runner, name, commands, directory):
+        assert commands[-2].split()[-3] == "1"  # RECORD flag, followed by hero/run-ms.
+        rl.write_json(directory / "population.json", dict(decisions=7))
+        rl.write_json(directory / "episodes/0/episode.json", dict(pair_index=0))
+    monkeypatch.setattr(rl, "scenario", scenario)
+    args = SimpleNamespace(parallel=4, pairs=None, output=tmp_path, population=20,
+                           record=True, action_mode="sample", seed=3, npc="NPC",
+                           roads=Path("/roads.json"), weights=Path("/policy.navbc"),
+                           limit_ms=40000, episodes=20, hero="far", run_ms=40000,
+                           watchdog_seconds=30)
+    rl.population(args)
+    result = rl.read_json(tmp_path / "throughput-n20-r4.json")
+    directories = [Path(worker["directory"]) for worker in result["workers"]]
+    assert len(set(directories)) == 4
+    assert result["decisions"] == 28
+    for index, directory in enumerate(directories):
+        pair_index = (index * args.population) % len(pairs)
+        selected = rl.read_json(directory / "episodes/0/episode.json")
+        assert selected["region"] == pairs[pair_index]["region"]
+        assert selected["index"] == selected["split_index"] == pair_index
+        pair_file = tmp_path / "runner-pairs" / f"n20-r4-w{index}.txt"
+        assert pair_file.read_text().splitlines()[0] == f"{pairs[pair_index]['start']} {pairs[pair_index]['goal']}"
+
+
+@pytest.mark.parametrize("record", [False, True])
+@pytest.mark.parametrize("initial_failure", [False, True])
+def test_population_keeps_clean_workers_and_counts_rejected_episode_in_denominator(
+        tmp_path, monkeypatch, record, initial_failure):
+    pairs = [dict(pair, index=index) for index, pair in enumerate(candidates())]
+    monkeypatch.setattr(rl, "checked_paths", lambda *a, **k: None)
+    monkeypatch.setattr(rl, "load_pairs", lambda p: pairs)
+    monkeypatch.setattr(rl, "new_runner", lambda *a: SimpleNamespace(close=lambda: None))
+    diagnostic = dict(stage="observation", time_ms=1234, elapsed_ms=100,
+                      diagnostic="NAVBC nonfinite body input",
+                      fields=[dict(name="body.flags[2]", value="nan"), dict(name="ground_normal.y", value="nan")])
+    def scenario(args, runner, name, commands, directory):
+        worker = int(name.rsplit("w", 1)[1])
+        if worker == 0:
+            rejected = dict(pair_index=0, decisions=0 if initial_failure else 3, success=False,
+                            failure="nonfinite_observation", termination="nonfinite_observation",
+                            training_valid=False, nonfinite_observation=diagnostic)
+            episodes = [rejected] if initial_failure else [dict(pair_index=1, decisions=4, success=True), rejected]
+        else:
+            episodes = [dict(pair_index=0, decisions=7, success=True, training_valid=True)]
+        rl.write_json(directory / "population.json", dict(decisions=sum(ep["decisions"] for ep in episodes),
+                      episodes=len(episodes), invalid_observation_episodes=int(worker == 0),
+                      training_valid_episodes=len(episodes) - int(worker == 0)))
+        for index, episode_data in enumerate(episodes):
+            destination = directory / "episodes" / str(index)
+            rl.write_json(destination / "episode.json", episode_data)
+            # Collection accounting uses metadata only. Corrupt rejected records
+            # must not abort the worker or remove its clean neighbours.
+            (destination / "samples.bin.gz").write_bytes(b"not-a-gzip-stream")
+    monkeypatch.setattr(rl, "scenario", scenario)
+    args = SimpleNamespace(parallel=4, pairs=None, output=tmp_path, population=20,
+                           record=record, action_mode="sample", seed=3, npc="NPC",
+                           roads=Path("/roads.json"), weights=Path("/policy.navbc"),
+                           limit_ms=40000, episodes=20, hero="far", run_ms=40000,
+                           watchdog_seconds=30)
+    rl.population(args)
+    result = rl.read_json(tmp_path / "throughput-n20-r4.json")
+    assert len(result["workers"]) == 4
+    assert result["episodes"] == (4 if initial_failure else 5)
+    assert result["decisions"] == (21 if initial_failure else 28)
+    assert result["training_valid_episodes"] == (3 if initial_failure else 4)
+    assert result["rejected_nonfinite_episodes"] == 1
+    assert result["rejected_nonfinite_decisions"] == (0 if initial_failure else 3)
+    assert result["rejected_nonfinite_fraction"] == pytest.approx(1 / result["episodes"])
+    assert result["episode_terminations"]["nonfinite_observation"] == 1
+    assert len(result["rejected_nonfinite_diagnostics"]) == 1
+    rejected = result["rejected_nonfinite_diagnostics"][0]
+    assert rejected["worker"] == 0
+    assert rejected["metadata"]["nonfinite_observation"] == diagnostic
+    assert rejected["metadata"]["training_valid"] is False
+    assert Path(rejected["episode"]).is_dir()
+    for worker in result["workers"]:
+        directory = Path(worker["directory"])
+        assert (directory / "measurement.json").is_file()
+        for path in directory.rglob("samples.bin.gz"):
+            assert path.read_bytes() == b"not-a-gzip-stream"
+
+
+def test_population_cli_allows_parallel_recording(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(rl, "population", calls.append)
+    monkeypatch.setattr(rl.sys, "argv", ["nav_rl.py", "population", "--output", str(tmp_path),
+                                      "--pairs", str(tmp_path / "pairs.jsonl"),
+                                      "--parallel", "4", "--record"])
+    rl.main()
+    assert len(calls) == 1 and calls[0].parallel == 4 and calls[0].record
+
+
 def test_drive_requires_previously_frozen_teacher_set():
     with pytest.raises(ValueError, match="frozen"):
         # Exercise the guard before any runner or weights can be loaded.
@@ -362,13 +460,14 @@ def test_parallel_drive_partitions_original_indices_and_owns_mutable_subtrees(tm
         ready.wait(timeout=5)
     monkeypatch.setattr(rl, 'module', lambda _: SimpleNamespace(collect=collect))
     args = SimpleNamespace(pairs=Path('/frozen.jsonl'), output=tmp_path, seed=7, parallel=4,
-                           indices='0,2,3,5,7,8', limit_ms=240000, weights=Path('/policy.navbc'))
+                           indices='0,2,3,5,7,8', limit_ms=240000, weights=Path('/policy.navbc'), action_mode='sample')
     rl.drive(args)
     ownership = {worker.output.name: worker.indices for worker in workers}
     assert ownership == {'w0': '0,7', 'w1': '2,8', 'w2': '3', 'w3': '5'}
     assert len({worker.output for worker in workers}) == 4
     assert all(worker.output.parent == tmp_path / 'drive-workers' for worker in workers)
     assert all(worker.teacher_beta == 0 and not worker.dagger_collection and worker.limit_ms == 240000 for worker in workers)
+    assert all(worker.action_mode == 'sample' and worker.mixing_seed == 7 for worker in workers)
     assert args.output == tmp_path and args.indices == '0,2,3,5,7,8'
 
 
@@ -380,6 +479,7 @@ def test_single_drive_keeps_original_output_layout(tmp_path, monkeypatch):
     rl.drive(args)
     assert calls[0].output == tmp_path
     assert calls[0].indices == '0'
+    assert calls[0].action_mode == 'argmax'
 
 
 def test_far_comparison_accepts_improved_speed_and_reachability():
@@ -585,3 +685,17 @@ def test_far_improvement_with_exact_drive_population_parity_uses_no_outlier_budg
     assert all(metric['passed'] for metric in report['distance_noninferiority'].values())
     assert report['comparisons']['drive_vs_population_near']['passed']
     assert report['comparisons']['drive_vs_population_far']['passed']
+
+
+@pytest.mark.parametrize("command,requested,expected", [("drive", None, "argmax"),
+    ("drive", "sample", "sample"), ("drive", "argmax", "argmax"),
+    ("population", None, "sample"), ("population", "argmax", "argmax")])
+def test_action_mode_cli_keeps_greedy_drive_and_sampled_population_defaults(tmp_path, monkeypatch, command, requested, expected):
+    captured = []
+    argv = ['nav_rl.py', command, '--output', str(tmp_path), '--pairs', '/frozen.jsonl']
+    if requested is not None:
+        argv += ['--action-mode', requested]
+    monkeypatch.setattr(rl.sys, 'argv', argv)
+    monkeypatch.setattr(rl, command, lambda args: captured.append(args))
+    rl.main()
+    assert captured[0].action_mode == expected

@@ -467,6 +467,7 @@ def drive(args):
         if args.parallel > 1:
             worker.output = args.output / "drive-workers" / f"w{worker_index}"
         worker.command = "collect"
+        worker.action_mode = getattr(args, "action_mode", "argmax")
         worker.teacher_beta = 0
         worker.dagger_collection = False
         worker.split = "validation"
@@ -483,6 +484,32 @@ def drive(args):
             future.result()
 
 
+def population_episode_counts(episodes, worker_index):
+    """Count every closed episode without opening possibly rejected raw records."""
+    count = valid = rejected_decisions = 0
+    terminations = Counter()
+    diagnostics = []
+    for path, episode in episodes:
+        count += 1
+        termination = episode.get("termination") or episode.get("failure") or ("arrived" if episode.get("success") else "unknown")
+        terminations[termination] += 1
+        rejected = (termination == "nonfinite_observation"
+                    or episode.get("training_valid") is False and "nonfinite_observation" in episode)
+        valid += episode.get("training_valid", not rejected) is not False and not rejected
+        if rejected:
+            decisions = episode.get("decisions", 0)
+            if not isinstance(decisions, int) or isinstance(decisions, bool) or decisions < 0:
+                raise ValueError(f"Invalid rejected episode decision count in {path}")
+            rejected_decisions += decisions
+            # Keep all metadata, including the named diagnostic values and stage.
+            # A zero-decision failure still occupies one episode in the denominator.
+            diagnostics.append(dict(worker=worker_index, episode=str(Path(path).parent), metadata=episode))
+    return dict(episodes=count, training_valid_episodes=valid, episode_terminations=dict(terminations),
+                rejected_nonfinite_episodes=len(diagnostics), rejected_nonfinite_decisions=rejected_decisions,
+                rejected_nonfinite_fraction=len(diagnostics) / count if count else 0.,
+                rejected_nonfinite_diagnostics=diagnostics)
+
+
 def population_worker(args, worker_index, barrier=None):
     worker = copy(args)
     worker.seed = (args.seed + worker_index) & 0xffffffff
@@ -491,8 +518,8 @@ def population_worker(args, worker_index, barrier=None):
     try:
         runner = new_runner(worker, name)
         pairs = load_pairs(args.pairs)
-        # Rotate the route order between workers, preserving all pair provenance.
-        offset = worker_index % len(pairs)
+        # Separate initial slot populations between workers, preserving provenance.
+        offset = (worker_index * args.population) % len(pairs)
         selected = pairs[offset:] + pairs[:offset]
         pair_file = runner_pairs(args.output / "runner-pairs" / f"{name}.txt", selected)
         directory = args.output / "population" / name
@@ -506,9 +533,10 @@ def population_worker(args, worker_index, barrier=None):
         scenario(worker, runner, name, [f"roads load {args.roads}", f"roads on {args.npc}", command, "navdemos wait"], directory)
         wall = time.monotonic() - started
         result = read_json(directory / "population.json")
-        if args.record:
-            for episode_path in sorted((directory / "episodes").rglob("episode.json")):
-                episode = read_json(episode_path)
+        episode_records = []
+        for episode_path in sorted((directory / "episodes").rglob("episode.json")):
+            episode = read_json(episode_path)
+            if args.record:
                 pair_index = episode["pair_index"]
                 if not isinstance(pair_index, int) or not 0 <= pair_index < len(selected):
                     raise ValueError(f"Invalid population pair index in {episode_path}")
@@ -517,9 +545,20 @@ def population_worker(args, worker_index, barrier=None):
                                split=pair.get("split", "population"), split_index=pair.get("split_index", pair_index),
                                weights=str(args.weights), limit_ms=args.limit_ms, drive=True)
                 write_json(episode_path, episode)
+            episode_records.append((episode_path, episode))
+        health = population_episode_counts(episode_records, worker_index)
+        for field, observed in (("episodes", health["episodes"]),
+                                ("invalid_observation_episodes", health["rejected_nonfinite_episodes"]),
+                                ("training_valid_episodes", health["training_valid_episodes"])):
+            if field in result and result[field] != observed:
+                raise ValueError(f"Population {field} count differs from episode metadata in {directory}: {result[field]}/{observed}")
+        result.update(health)
         decisions = result.get("decisions", result.get("total_decisions"))
-        if not isinstance(decisions, int) or decisions <= 0:
+        if (not isinstance(decisions, int) or isinstance(decisions, bool) or decisions < 0
+                or decisions == 0 and not result["rejected_nonfinite_episodes"]):
             raise ValueError(f"Population has no decisions: {directory}")
+        if result["rejected_nonfinite_decisions"] > decisions:
+            raise ValueError(f"Rejected decisions exceed population decisions in {directory}")
         result.update(worker=worker_index, population=args.population, parallel=args.parallel,
                       collector_wall_s=wall, directory=str(directory), weights=str(args.weights),
                       action_mode=args.action_mode, recording=args.record, hero=args.hero,
@@ -548,10 +587,21 @@ def population(args):
     all_wall = time.monotonic() - started
     wall = max(result["collector_wall_s"] for result in results)
     decisions = sum(result["decisions"] for result in results)
+    episodes = sum(worker.get("episodes", 0) for worker in results)
+    rejected = sum(worker.get("rejected_nonfinite_episodes", 0) for worker in results)
+    terminations = Counter()
+    for worker in results:
+        terminations.update(worker.get("episode_terminations", {}))
     result = dict(population=args.population, parallel=args.parallel, decisions=decisions,
                   collection_wall_s=wall, total_wall_s=all_wall, decisions_per_second=decisions / wall,
                   timing_scope="concurrent_full_population_scenarios_excluding_initial_world_and_navmesh_preparation",
-                  recording=args.record, action_mode=args.action_mode, workers=results)
+                  recording=args.record, action_mode=args.action_mode, workers=results,
+                  episodes=episodes, training_valid_episodes=sum(worker.get("training_valid_episodes", 0) for worker in results),
+                  episode_terminations=dict(terminations), rejected_nonfinite_episodes=rejected,
+                  rejected_nonfinite_decisions=sum(worker.get("rejected_nonfinite_decisions", 0) for worker in results),
+                  rejected_nonfinite_fraction=rejected / episodes if episodes else 0.,
+                  rejected_nonfinite_diagnostics=[diagnostic for worker in results
+                                                  for diagnostic in worker.get("rejected_nonfinite_diagnostics", [])])
     if all("measured_decisions" in worker and "collect_seconds" in worker for worker in results):
         warmed_decisions = sum(worker["measured_decisions"] for worker in results)
         warmed_wall = max(worker["collect_seconds"] for worker in results)
@@ -909,7 +959,8 @@ def main():
     parser.add_argument("--parallel", type=int, choices=(1, 4, 8), default=1)
     parser.add_argument("--episodes", type=int, help="Global episode cap; default N, or 1000000 with --run-ms")
     parser.add_argument("--record", action="store_true")
-    parser.add_argument("--action-mode", choices=("sample", "argmax"), default="sample")
+    parser.add_argument("--action-mode", choices=("sample", "argmax"),
+                        help="Action selection: drive defaults to argmax, population to sample")
     parser.add_argument("--hero", choices=("near", "far"), default="far")
     parser.add_argument("--limit-ms", type=int, default=240000)
     parser.add_argument("--run-ms", type=int, default=0, help="Population game-time span; 0 runs all episodes")
@@ -922,6 +973,8 @@ def main():
     for name in ("runner", "assets", "save", "cache", "ini", "weights"):
         parser.add_argument("--" + name, type=Path)
     args = parser.parse_args()
+    if args.action_mode is None:
+        args.action_mode = "argmax" if args.command == "drive" else "sample"
     for key, value in vars(args).items():
         if isinstance(value, Path):
             setattr(args, key, value.expanduser().resolve())
@@ -938,8 +991,6 @@ def main():
         parser.error("--reference is required")
     if args.command == "population" and (args.episodes < args.population or (args.hero == "near" and args.population != 1)):
         parser.error("population requires episodes >= N; near hero mode requires N=1")
-    if args.command == "population" and args.parallel > 1 and args.record:
-        parser.error("parallel population measurements require recording disabled")
     try:
         {"generate": generate, "qualify": qualify, "drive": drive, "population": population,
          "check": check, "summarize": summarize, "history": history, "compare": compare, "equivalence": equivalence, "death-smoke": death_smoke}[args.command](args)
