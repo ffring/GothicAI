@@ -23,22 +23,148 @@ toolchain() {
 
 take_lock() {
   mkdir -p "$(dirname "$WORKTREE_LOCK")"
-  exec 9>"$WORKTREE_LOCK"
   local started=$SECONDS monitor waiter status
+  local wait_seconds=$((10#$LOCK_WAIT)) remaining
   echo "Ryzen: waiting for worktree lock $WORKTREE_LOCK (up to ${LOCK_WAIT}s)"
   # Without a PTY ssh disconnects do not send SIGHUP. EOF cancels our own waiter,
   # so an interrupted Mac command cannot later acquire the lock unattended.
   (IFS= read -r unused || kill -TERM "$$") <&0 &
   monitor=$!
-  flock -w "$LOCK_WAIT" 9 &
-  waiter=$!
-  trap 'kill "$monitor" "$waiter" 2>/dev/null || true; exit 143' HUP INT TERM
-  wait "$waiter" && status=0 || status=$?
+  while :; do
+    exec 9>"$WORKTREE_LOCK"
+    remaining=$((wait_seconds - (SECONDS - started)))
+    (( remaining >= 0 )) || remaining=0
+    flock -w "$remaining" 9 &
+    waiter=$!
+    trap 'kill "$monitor" "$waiter" 2>/dev/null || true; exit 143' HUP INT TERM
+    wait "$waiter" && status=0 || status=$?
+    [[ "$status" == 0 ]] || break
+    # The lock path may have been replaced while we waited on its old inode.
+    # Never upload under that retired lock: reopen the current path instead.
+    if python3 - "$WORKTREE_LOCK" <<'PY'
+import os
+import sys
+try:
+    current = os.stat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(1)
+sys.exit(not os.path.samestat(current, os.fstat(9)))
+PY
+    then break; fi
+    exec 9>&-
+    if (( SECONDS - started >= wait_seconds )); then status=1; break; fi
+  done
   kill "$monitor" 2>/dev/null || true
   wait "$monitor" 2>/dev/null || true
   trap - HUP INT TERM
   [[ "$status" == 0 ]] || { echo 'Ryzen занят' >&2; exit 75; }
   echo "Ryzen: lock acquired in $((SECONDS - started))s"
+}
+
+auto_clean() {
+  python3 - "$WORKTREE_LOCK" "${CLEAN_IDLE_HOURS:-48}" <<'PY'
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+import time
+
+root = Path.home() / 'gothic-ai/e2e'
+own = root / Path(sys.argv[1]).name.removesuffix('.lock')
+idle_hours = int(sys.argv[2])
+now = time.time()
+cutoff = now - idle_hours * 3600
+gib = 1024 ** 3
+
+def available():
+    return shutil.disk_usage(root).free
+
+def lock_file(path):
+    # A lock symlink must never redirect creation/truncation outside e2e.
+    return os.fdopen(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600), 'w')
+
+def try_lock(stream):
+    return subprocess.run(['flock', '-n', str(stream.fileno())],
+                          pass_fds=(stream.fileno(),), check=False).returncode == 0
+
+def activity(directory):
+    marker = directory / '.last-used'
+    if marker.exists():
+        return marker.lstat().st_mtime
+    # Legacy worktrees have no marker. Inspect at most two levels, without
+    # following links into game data, shared caches or other task directories.
+    latest = directory.stat().st_mtime
+    for entry in directory.iterdir():
+        metadata = entry.lstat()
+        latest = max(latest, metadata.st_mtime)
+        if stat.S_ISDIR(metadata.st_mode):
+            for child in entry.iterdir():
+                latest = max(latest, child.lstat().st_mtime)
+    return latest
+
+if root.is_symlink() or own.is_symlink():
+    raise SystemExit('Ryzen: refusing a symlink for the e2e/worktree directory')
+own.mkdir(parents=True, exist_ok=True)
+with lock_file(own / '.last-used') as marker:
+    os.utime(marker.fileno(), None)
+
+before = available()
+removed, errors = [], []
+if idle_hours:
+    for directory in sorted(root.iterdir()):
+        if (directory == own or directory.name.startswith('.')
+                or directory.is_symlink() or not directory.is_dir()):
+            continue
+        try:
+            if activity(directory) >= cutoff:
+                continue
+            path = root / (directory.name + '.lock')
+            with lock_file(path) as lock:
+                if not try_lock(lock):
+                    continue
+                # Skip a lock path replaced between open and flock.
+                if path.stat().st_ino != os.fstat(lock.fileno()).st_ino:
+                    continue
+                if directory.is_symlink() or activity(directory) >= cutoff:
+                    continue
+                shutil.rmtree(directory)
+                # Legacy wrappers may already have this inode open, but not
+                # locked yet. Keep the named lock so they cannot later acquire
+                # a detached inode alongside a new invocation of this worktree.
+                removed.append(directory.name)
+        except FileNotFoundError:
+            continue  # A concurrent cleaner already removed this entry.
+        except OSError as error:
+            errors.append(f'{directory.name}: {error.strerror}')
+freed = max(0, available() - before)
+summary = ', '.join(removed) if removed else 'none'
+suffix = f"; errors: {'; '.join(errors)}" if errors else ''
+print(f'Ryzen: auto-clean removed {summary}; freed {freed / gib:.2f} GiB'
+      + (' (disabled)' if not idle_hours else '') + suffix, flush=True)
+
+if available() < 60 * gib:
+    # Serialize the cooldown check across different worktree controllers. uv
+    # itself owns the cache lock; we never remove cache files ourselves.
+    with lock_file(root / '.uv-prune.lock') as lock:
+        if try_lock(lock):
+            marker = root / '.uv-prune'
+            if not marker.exists() or now - marker.lstat().st_mtime >= 12 * 3600:
+                before = available()
+                # Stamp attempts too: a broken uv must not be retried by every
+                # concurrent invocation while the disk is under pressure.
+                with lock_file(marker) as stamp:
+                    os.utime(stamp.fileno(), None)
+                try:
+                    result = subprocess.run([str(Path.home() / '.local/bin/uv'), 'cache', 'prune'],
+                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    suffix = '' if result.returncode == 0 else f'; failed (exit {result.returncode})'
+                except OSError as error:
+                    suffix = f'; failed ({error.strerror})'
+                freed = max(0, available() - before)
+                print(f'Ryzen: uv cache prune freed {freed / gib:.2f} GiB{suffix}', flush=True)
+PY
 }
 
 disk_usage() {
@@ -509,6 +635,8 @@ fi
 
 ACTION="${1:-}"
 case "$ACTION" in setup|e2e|pytest|bench|clean|clean-cache) shift ;; *) echo 'Usage: scripts/ryzen.sh setup|e2e|pytest [args...]|bench <scenario> <out>|clean|clean-cache' >&2; exit 2 ;; esac
+CLEAN_IDLE_HOURS="${RYZEN_CLEAN_IDLE_HOURS:-48}"
+[[ "$CLEAN_IDLE_HOURS" =~ ^[0-9]+$ ]] || { echo 'RYZEN_CLEAN_IDLE_HOURS must be nonnegative hours' >&2; exit 2; }
 if [[ "$ACTION" == bench ]]; then
   BENCH_CLASS="${RYZEN_BENCH_CLASS:-quick}"
   case "$BENCH_CLASS" in
@@ -697,11 +825,12 @@ if [[ "$ACTION" == e2e ]]; then
   LOG_DIR="$(cd "$LOG_DIR" && pwd)"
   OUTPUT="$LOG_DIR/launcher.log"
 fi
-bootstrap="$(declare -f take_lock disk_usage)
+bootstrap="$(declare -f take_lock auto_clean disk_usage)
 set -euo pipefail
 LOCK_WAIT=$LOCK_WAIT
 $(printf 'WORKTREE_LOCK=%q' "$STATE.lock")
 take_lock
+$(if [[ "$ACTION" != clean ]]; then printf 'CLEAN_IDLE_HOURS=%q\nauto_clean\n' "$CLEAN_IDLE_HOURS"; fi)
 disk_usage
 $(if [[ -n "${GQ_HOME+set}" ]]; then printf 'export GQ_HOME=%q\n' "$GQ_HOME"; fi)
 $(printf 'exec python3 -u -c %q %q %q' "$(cat "$ROOT/scripts/ryzen-lock.py")" "$STATE" "$REMOTE_HOME/gothic-ai/bin/gq")"
@@ -847,17 +976,22 @@ PY
 e2e_display_exclusive() {
   # Keep timing-sensitive exceptions and their measured reason in this one list.
   # RYZEN_DISPLAY_EXCLUSIVE=1 forces it for any scenario: rerun a suspicious
-  # failure from a shared slot this way before chasing it.
-  [[ "${RYZEN_DISPLAY_EXCLUSIVE:-0}" != 1 ]] || return 0
+  # failure from a shared slot this way before chasing it. =0 shares a listed
+  # scenario: only for a three-game measurement (scripts/ryzen-round.sh).
+  [[ "${RYZEN_DISPLAY_EXCLUSIVE:-}" != 1 ]] || return 0
+  [[ "${RYZEN_DISPLAY_EXCLUSIVE:-}" != 0 ]] || return 1
   case "$1" in
-    # Measured 19.10 (reports/compute/2026-10-19-ryzen-three-windows): each passed
-    # solo and failed in some three-game rounds even with windows apart, at
-    # 77-93 FPS instead of ~105. orders missed wolf preparation, bandits the
-    # native return strike within 3 s, calm its attack and addressee checks.
-    orders|fight_reactions_bandits|calm) return 0 ;;
+    # Measured 19.10 (reports/compute/2026-10-19-ryzen-three-windows): passes alone
+    # at ~100 FPS, fails 1-2 of 3 three-game rounds at ~75: after the setup's hit,
+    # Cavalorn's next blows interrupt the bandit's return strike. Isolating that
+    # window is unfinished (PR #264).
+    fight_reactions_bandits) return 0 ;;
     # Same fight, companion and movement timing, not measured yet: kept exclusive
     # rather than risking false failures. Move one out only after it passes
-    # every round of a three-game measurement.
+    # every round of a three-game measurement (scripts/ryzen-round.sh), as orders
+    # and calm did on 19.10: orders 4/4 mixed rounds at 88-108 FPS once #258
+    # placed its wolf on visible ground (6/6 more as three copies), calm 4/4 at
+    # 79-81 FPS (4/4 more earlier that day), both also passing alone.
     fight_reactions_*|calm_*|neural*|wolf|rescue*|companion) return 0 ;;
     *) return 1 ;;
   esac
@@ -1013,7 +1147,7 @@ fi
 while IFS= read -r name; do
   case "$name" in
     GOTHIC_DIR|GOTHIC_AI_URL|OPENGOTHIC_FRACTURE) ;;
-    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|MEMPROBE_*|GAME_EXTRA_ENV|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|TEMPEST_*|CHATGPT_*|OPENAI_*)
+    SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|E2E_MAX_FPS|MEMPROBE_*|GAME_EXTRA_ENV|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|TEMPEST_*|CHATGPT_*|OPENAI_*)
       ENV_ARGS+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)

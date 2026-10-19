@@ -5,6 +5,9 @@
         scripts/content/material_preview.py --registry data/content/registry.jsonl \
         --content-root ~/.local/share/gothic-ai/content/bakeoff --output /tmp/sheets
 
+Add ``--set city-1`` to render every include texture from the matching staged
+set as one materials.jpg sheet (albedo 2x2, normal and obliquely lit preview).
+
 Albedo is sRGB. Normal PNGs encode tangent XYZ in [0, 1], with positive Y up;
 scalar maps are linear. The preview uses one fixed camera, directional light,
 exposure and Lambert + isotropic GGX BRDF for every variant. It is an inspection
@@ -206,6 +209,48 @@ def make_sheet(material: str, records: dict[str, dict], root: Path, output: Path
     sheet.save(output / f"{material}.jpg", quality=88, optimize=True, subsampling=0)
 
 
+def make_set_sheet(set_name: str, records: list[dict], root: Path, output: Path, size: int) -> Path:
+    """Each material gets the same three views, light and exposure."""
+    margin, gap, header, top, footer = 18, 10, 70, 82, 36
+    columns = min(3, len(records))
+    if columns == 0:
+        raise ValueError("cannot render an empty material set")
+    cell_width, cell_height = 3 * size + 2 * gap, size + header
+    rows = math.ceil(len(records) / columns)
+    width = 2 * margin + columns * cell_width + (columns - 1) * margin
+    height = top + rows * cell_height + (rows - 1) * margin + footer
+    sheet = Image.new("RGB", (width, height), (24, 28, 34))
+    draw = ImageDraw.Draw(sheet)
+    draw.text((margin, 14), f"Khorinis / {set_name} / {len(records)} materials", font=font(25), fill=(242, 243, 245))
+    draw.text((margin, 47), "FLUX.1-schnell + generated height filter / same camera, oblique light and exposure", font=font(14), fill=(169, 181, 197))
+    for index, record in enumerate(records):
+        maps, reason = read_maps(record, root)
+        if maps is None:
+            raise ValueError(f"{record['id']}: selected material is skipped: {reason}")
+        x = margin + (index % columns) * (cell_width + margin)
+        y = top + (index // columns) * (cell_height + margin)
+        texture = record["replaces"][0]
+        material_class = record["parameters"]["material_class"]
+        draw.text((x, y), texture, font=font(14), fill=(240, 242, 246))
+        draw.text((x, y + 21), material_class, font=font(14), fill=(176, 195, 214))
+        half = size // 2
+        tile = rgb_image(maps["albedo"]).resize((half, half), Image.Resampling.LANCZOS)
+        tiled = Image.new("RGB", (size, size))
+        for offset in ((0, 0), (half, 0), (0, half), (half, half)):
+            tiled.paste(tile, offset)
+        panels = (tiled, rgb_image(maps["normal"]).resize((size, size), Image.Resampling.LANCZOS),
+                  plane_preview(maps, size))
+        for panel_index, (label, panel) in enumerate(zip(("Albedo 2 x 2", "Normal (Y+)", "Oblique light / GGX"), panels)):
+            px = x + panel_index * (size + gap)
+            draw.text((px, y + 45), label, font=font(12), fill=(169, 181, 197))
+            sheet.paste(panel, (px, y + header))
+    draw.text((margin, height - 25), "sRGB albedo; linear maps; normal Y+; 2 repeats on preview plane; no original game pixels", font=font(13), fill=(169, 181, 197))
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / "materials.jpg"
+    sheet.save(destination, quality=88, optimize=True, subsampling=0)
+    return destination
+
+
 def read_registry(path: Path) -> dict[str, dict[str, dict]]:
     groups: dict[str, dict[str, dict]] = {}
     for number, line in enumerate(path.read_text().splitlines(), 1):
@@ -213,6 +258,8 @@ def read_registry(path: Path) -> dict[str, dict[str, dict]]:
             continue
         record = json.loads(line)
         if record.get("kind") != "material":
+            continue
+        if record.get("parameters", {}).get("set"):
             continue
         material = record.get("parameters", {}).get("material")
         if material is None:
@@ -240,12 +287,21 @@ def main() -> None:
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--content-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--set", dest="set_name", help="render one named material set into materials.jpg")
+    parser.add_argument("--mapping", type=Path, default=Path(__file__).resolve().parents[2] / "data/content/city-materials.csv")
     parser.add_argument("--cell-size", type=int, default=256, help="even panel size in pixels (128..384)")
     args = parser.parse_args()
     if args.cell_size < 128 or args.cell_size > 384 or args.cell_size % 2:
         parser.error("--cell-size must be an even integer from 128 to 384")
     root = args.content_root.expanduser().resolve()
     try:
+        if args.set_name:
+            from pack_materials import select_set_records
+            records = [json.loads(line) for line in args.registry.read_text().splitlines() if line.strip()]
+            selected = select_set_records(records, args.set_name, args.mapping)
+            destination = make_set_sheet(args.set_name, selected, root, args.output, args.cell_size)
+            print(f"Wrote {len(selected)} material previews to {destination}")
+            return
         groups = read_registry(args.registry)
         args.output.mkdir(parents=True, exist_ok=True)
         for material, records in groups.items():
