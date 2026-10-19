@@ -217,3 +217,28 @@ def test_contract_rejects_unreplayed_previous_keys(tmp_path, monkeypatch):
         returncode=0, stdout=json.dumps(dict(records=10, mismatches=0, previous_mismatches=1)), stderr=""))
     with pytest.raises(ValueError, match="contract mismatch"):
         teacher.replay_contract("/contract", tmp_path)
+
+
+def test_new_runner_supplies_default_ini_to_reused_runner(tmp_path, monkeypatch):
+    args = SimpleNamespace(output=tmp_path, cache=tmp_path / "cache", links=tmp_path / "links", seed=42)
+    prepare = tmp_path / "prepare.bench"
+    calls = []
+
+    class Runner:
+        def __init__(self, worker, initial):
+            # navmesh_measure.Runner reads this attribute before launching.
+            assert worker.ini is None
+            assert worker.output == tmp_path / "runner-work"
+            assert worker.output.is_dir()
+            assert initial == prepare
+
+        def scenario(self, scenario, output, seed, timeout):
+            calls.append((scenario, output, seed, timeout))
+
+    collector = SimpleNamespace(scenario_file=lambda *a: prepare, runner_type=lambda: Runner,
+                                check_log=lambda path: calls.append(path))
+    monkeypatch.setattr(teacher, "module", lambda name: collector)
+    runner = teacher.new_runner(args)
+    assert isinstance(runner, Runner)
+    assert not hasattr(args, "ini")
+    assert calls == [(prepare, tmp_path / "runner-work/prepare", 42, 720), tmp_path / "runner-work/prepare"]

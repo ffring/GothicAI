@@ -350,6 +350,7 @@ def checked_paths(args):
 def new_runner(args):
     collector = module("collect_nav_demos")
     worker = copy(args)
+    worker.ini = getattr(args, "ini", None)
     worker.output = args.output / "runner-work"
     worker.output.mkdir(parents=True, exist_ok=True)
     prepare = collector.scenario_file(args, "v3-prepare", [f"navmesh build {args.cache} {args.links}"])
