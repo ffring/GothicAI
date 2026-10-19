@@ -133,3 +133,50 @@ def test_postprocess_changes_only_albedo_and_is_idempotent(tmp_path):
     snapshot = deepcopy(record)
     generate.postprocess([record], tmp_path, 'city-1')
     assert record == snapshot
+
+
+def test_refresh_other_texture_after_acknowledging_its_postprocess_inputs(tmp_path):
+    records = recipes()[:2]
+    for record in records:
+        record['prompt'] = 'previous real prompt'
+        record['parameters'].pop('saturation_limit')
+        record['files'] = {key: 'old/'+key+'.png' for key in generate.bakeoff.MAPS}
+        record['generation'] = dict(outcome='complete', attempts=[dict(
+            number=n, seed=n, outcome='complete', files=deepcopy(record['files'])) for n in (1, 2, 3)])
+    mapping, bible = ROOT/'data/content/city-materials.csv', ROOT/'docs/content-style.md'
+    generate.refresh(records, mapping, bible, 'city-1', records[0]['replaces'], 'revise first')
+    first = deepcopy(records[0])
+    second = deepcopy(records[1])
+    assert second['generation']['prepared_inputs']
+    assert 'attempt_limit' not in second['generation']
+    # The same distinction must survive saving/loading between separate CLI calls.
+    path = tmp_path/'registry.jsonl'
+    generate.bakeoff.write_registry(path, records)
+    records = generate.bakeoff.read_registry(path)
+    generate.refresh(records, mapping, bible, 'city-1', records[1]['replaces'], 'revise second')
+    assert records[0] == first
+    refreshed = records[1]
+    assert refreshed['prompt'] == recipes()[1]['prompt']
+    assert refreshed['generation']['outcome'] == 'pending'
+    assert refreshed['generation']['attempt_limit'] == 6
+    assert refreshed['generation']['series_start'] == 3
+    assert refreshed['files'] == {}
+    assert refreshed['generation']['previous_selections'][0]['files'] == second['files']
+    assert refreshed['generation']['recipes'][0]['prompt'] == second['prompt']
+    assert len(refreshed['generation']['recipes']) == 2
+    snapshot = deepcopy(records)
+    for record in records:
+        generate.refresh(records, mapping, bible, 'city-1', record['replaces'], 'repeat')
+    assert records == snapshot
+
+
+def test_refresh_preserves_budget_already_granted_by_older_generator():
+    records = recipes()[:2]
+    for record in records:
+        record['prompt'] = 'previous real prompt'
+    mapping, bible = ROOT/'data/content/city-materials.csv', ROOT/'docs/content-style.md'
+    generate.refresh(records, mapping, bible, 'city-1', records[0]['replaces'], 'previous generator')
+    del records[0]['generation']['refreshed_inputs']
+    snapshot = deepcopy(records)
+    generate.refresh(records, mapping, bible, 'city-1', records[0]['replaces'], 'repeat after upgrade')
+    assert records == snapshot

@@ -137,10 +137,18 @@ def refresh(records, mapping, bible, set_name, textures, reason):
         history = archive_recipe(record)
         generation = record['generation']
         signature = input_signature(recipe)
-        if generation.get('prepared_inputs') == signature:
-            continue  # Repeating refresh cannot grant another attempt budget.
-        generation['prepared_inputs'] = signature
         if record['replaces'][0] in selected:
+            refreshed = generation.get('refreshed_inputs')
+            # Older registries acknowledged postprocessing for every row in
+            # prepared_inputs. Only an explicitly refreshed recipe granted a
+            # generation budget; recover that distinction without rewriting it.
+            if refreshed is None and 'refresh_reason' in generation:
+                revised = next((r for r in history if r['revision'] == generation.get('recipe_revision')), None)
+                if revised is not None:
+                    refreshed = input_signature(dict(revised, replaces=record['replaces']))
+            if refreshed == signature:
+                continue  # Repeating refresh cannot grant another attempt budget.
+            generation['prepared_inputs'] = signature
             generation.setdefault('previous_selections', []).append(deepcopy({
                 'seed': record['seed'], 'files': record['files'],
                 'brightness_correction': generation.get('brightness_correction'),
@@ -151,10 +159,13 @@ def refresh(records, mapping, bible, set_name, textures, reason):
             history.append(dict(revision=revision, **deepcopy({k: record[k] for k in ('prompt', 'negative', 'models', 'parameters')})))
             generation.update(outcome='pending', recipe_revision=revision,
                 series_start=len(generation['attempts']), attempt_limit=len(generation['attempts'])+3,
-                refresh_reason=reason)
+                refresh_reason=reason, refreshed_inputs=signature)
             generation.pop('visual_review', None)
             record['files'] = {}
         else:
+            if generation.get('prepared_inputs') == signature:
+                continue
+            generation['prepared_inputs'] = signature
             record['parameters'].update(saturation_limit=recipe['parameters']['saturation_limit'],
                 postprocess_bible_sha256=recipe['parameters']['bible_sha256'])
 
@@ -196,39 +207,43 @@ def corrected_maps(image, record):
     lo, hi = record['parameters']['luminance_range']
     # Aim at the class midpoint when correcting, leaving room for 8-bit rounding.
     target = (lo+hi)/2 if not lo <= before <= hi else before
-    gain = 1.0
-    if target != before:
-        left, right = 0., 1.
-        while float((np.clip(linear*right, 0, 1) @ weights).mean()) < target and right < 65536:
-            right *= 2
-        for _ in range(40):
-            gain = (left+right)/2
-            if float((np.clip(linear*gain, 0, 1) @ weights).mean()) < target:
-                left = gain
-            else:
-                right = gain
-    adjusted = np.clip(linear*gain, 0, 1)
-    encoded = np.where(adjusted <= .0031308, adjusted*12.92, 1.055*adjusted**(1/2.4)-.055)
-    pixels = np.rint(encoded*255).astype('uint8')
-    normalized = pixels.astype(np.float32)/255
-    quantized_linear = np.where(normalized <= .04045, normalized/12.92, ((normalized+.055)/1.055)**2.4)
-    after = float((quantized_linear @ weights).mean())
+    for _ in range(2):
+        gain = 1.0
+        if target != before:
+            left, right = 0., 1.
+            while float((np.clip(linear*right, 0, 1) @ weights).mean()) < target and right < 65536:
+                right *= 2
+            for _ in range(40):
+                gain = (left+right)/2
+                if float((np.clip(linear*gain, 0, 1) @ weights).mean()) < target:
+                    left = gain
+                else:
+                    right = gain
+        adjusted = np.clip(linear*gain, 0, 1)
+        encoded = np.where(adjusted <= .0031308, adjusted*12.92, 1.055*adjusted**(1/2.4)-.055)
+        pixels = np.rint(encoded*255).astype('uint8')
+        normalized = pixels.astype(np.float32)/255
+        quantized_linear = np.where(normalized <= .04045, normalized/12.92, ((normalized+.055)/1.055)**2.4)
+        after = float((quantized_linear @ weights).mean())
+        limited_pixels, saturation = limit_saturation(pixels.astype(np.float64)/255,
+            record['parameters']['saturation_limit'])
+        # An initially in-range level can cross a boundary after desaturation's
+        # 8-bit rounding. Correct that level to the midpoint before deriving maps.
+        if lo <= saturation['linear_mean_after'] <= hi or target == (lo+hi)/2:
+            break
+        target = (lo+hi)/2
     correction = dict(method='uniform linear RGB gain with clipping; no spatial edits',
-        linear_mean_before=before, linear_mean_after=after, target=target, gain=gain,
+        linear_mean_before=before, linear_mean_after_level=after, target=target, gain=gain,
         clipped_channel_fraction=float((linear*gain > 1).mean()), range=[lo, hi])
     maps = bakeoff.filtered_maps(Image.fromarray(pixels), record)
-    pixels, saturation = limit_saturation(pixels.astype(np.float64)/255, record['parameters']['saturation_limit'])
-    maps['albedo'] = pixels.astype(np.float32)/255
+    maps['albedo'] = limited_pixels.astype(np.float32)/255
     correction['saturation'] = saturation
+    # Admission uses the actual stored albedo after saturation and quantization.
+    correction['linear_mean_after'] = saturation['linear_mean_after']
     rlo, rhi = record['parameters']['roughness_range']
     # Quantized endpoints must also lie inside the class range.
     maps['roughness'] = np.clip(maps['roughness'], np.ceil(rlo*255)/255, np.floor(rhi*255)/255)
-    rejection = None
-    if not lo <= after <= hi:
-        rejection = 'brightness correction could not reach class range'
-    elif correction['clipped_channel_fraction'] > .4:
-        rejection = 'more than 40% of colour channels clipped after level correction'
-    return maps, correction, rejection
+    return maps, correction, numeric_rejection(record, correction)
 
 
 def save_attempt(root, record, maps, number):
@@ -255,9 +270,60 @@ def reject(records, resource_id, reason, explore_remaining=False):
     record['files'] = {}
 
 
+def numeric_rejection(record, correction):
+    """Validate final stored colour measurements, independently of visual review."""
+    import math
+    saturation = correction.get('saturation', {})
+    # Old attempts measured luminance before saturation; its own measurement is
+    # authoritative when present, including the final 8-bit rounding.
+    after = saturation.get('linear_mean_after', correction.get('linear_mean_after'))
+    lo, hi = record['parameters']['luminance_range']
+    if not isinstance(after, (int, float)) or not math.isfinite(after) or not lo <= after <= hi:
+        return 'brightness correction could not reach class range'
+    clipped = correction.get('clipped_channel_fraction')
+    if not isinstance(clipped, (int, float)) or not math.isfinite(clipped) or not 0 <= clipped <= .4:
+        return 'more than 40% of colour channels clipped after level correction'
+    mean_s = saturation.get('mean_hsv_s_after')
+    limit = record['parameters']['saturation_limit']
+    if not isinstance(mean_s, (int, float)) or not math.isfinite(mean_s) or not 0 <= mean_s <= limit:
+        return 'final mean HSV saturation exceeds class limit or is not measured'
+    return None
+
+
+def retain_best_candidate(record):
+    """At the limit, visual compromises must still obey numerical limits."""
+    generation = record['generation']
+    series = generation['attempts'][generation.get('series_start', 0):]
+    candidates = []
+    for attempt in series:
+        reason = numeric_rejection(record, attempt.get('brightness_correction', {}))
+        attempt.update(numeric_valid=reason is None, numeric_rejection=reason)
+        if attempt.get('files') and reason is None:
+            candidates.append(attempt)
+    if not candidates:
+        details = sorted({a['numeric_rejection'] for a in series if a['numeric_rejection']})
+        reason = f'{len(series)} attempts in current series exhausted with no numerically valid candidate'
+        if details:
+            reason += ': ' + '; '.join(details)
+        generation.update(outcome='pending', failure_reason=reason)
+        for key in ('selected_attempt', 'brightness_correction', 'saturation_correction', 'selection_note'):
+            generation.pop(key, None)
+        record['files'] = {}
+        return reason
+    best = min(candidates, key=lambda a: abs(
+        a['brightness_correction'].get('saturation', {}).get('linear_mean_after',
+            a['brightness_correction']['linear_mean_after'])-a['brightness_correction']['target']))
+    select_attempt(record, best, 'Attempt limit reached; best numerically valid candidate retained')
+    return None
+
+
 def select_attempt(record, attempt, note=''):
+    reason = numeric_rejection(record, attempt.get('brightness_correction', {}))
+    if reason:
+        raise ValueError(f'{record["id"]}: cannot select numerically invalid attempt: {reason}')
     record.update(seed=attempt['seed'], files=deepcopy(attempt['files']))
     generation = record['generation']
+    generation.pop('failure_reason', None)
     generation.update(outcome='complete', selected_attempt=attempt['number'],
         brightness_correction=deepcopy(attempt['brightness_correction']))
     if 'saturation' in attempt['brightness_correction']:
@@ -270,11 +336,19 @@ def select_attempt(record, attempt, note=''):
 def run(records, registry, root, set_name):
     if platform.system() != 'Linux' or root.resolve() != (Path.home()/'gothic-ai/materials').resolve():
         raise RuntimeError('models run only in ~/gothic-ai/materials on dev-ubuntu')
-    import torch
     pending = [r for r in records if r['parameters'].get('set') == set_name and r['generation']['outcome'] == 'pending']
+    # A retry after an exhausted failure must not load FLUX or grant more seeds.
+    for record in pending:
+        if len(record['generation']['attempts']) >= record['generation'].get('attempt_limit', 3):
+            reason = retain_best_candidate(record)
+            bakeoff.write_registry(registry, records)
+            if reason:
+                raise RuntimeError(f'{record["id"]}: {reason}')
+    pending = [r for r in pending if r['generation']['outcome'] == 'pending']
     if not pending:
         print('No pending materials', flush=True)
         return
+    import torch
     torch.set_num_threads(4)
     torch.backends.cuda.matmul.allow_tf32 = True
     bakeoff.gpu_state(root, set_name, 'load', 10000)
@@ -302,7 +376,8 @@ def run(records, registry, root, set_name):
             files = save_attempt(root, record, maps, number)
             image.save(root/'out'/Path(files['albedo']).parent/'source.png')
             attempt.update(seconds=round(time.monotonic()-start, 3), brightness_correction=correction, files=files,
-                outcome='rejected' if reason else 'complete', peak_allocated_mib=round(torch.cuda.max_memory_allocated()/1024**2,1))
+                outcome='rejected' if reason else 'complete', numeric_valid=reason is None, numeric_rejection=reason,
+                peak_allocated_mib=round(torch.cuda.max_memory_allocated()/1024**2,1))
             if reason:
                 attempt['reason'] = reason
             else:
@@ -313,12 +388,10 @@ def run(records, registry, root, set_name):
             if not reason and not record['generation'].get('explore_remaining', False):
                 break
         if record['generation']['outcome'] != 'complete':
-            candidates = [a for a in attempts[record['generation'].get('series_start', 0):] if a.get('files')]
-            if not candidates:
-                raise RuntimeError(f'{record["id"]}: no generated candidate')
-            best = min(candidates, key=lambda a: abs(a['brightness_correction']['linear_mean_after']-a['brightness_correction']['target']))
-            select_attempt(record, best, 'Attempt limit reached; best available candidate retained')
+            reason = retain_best_candidate(record)
             bakeoff.write_registry(registry, records)
+            if reason:
+                raise RuntimeError(f'{record["id"]}: {reason}')
 
 
 def main():
