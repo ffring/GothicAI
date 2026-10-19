@@ -10,3 +10,4 @@ numpy==2.2.6
 Pillow==12.0.0
 scipy==1.16.2
 sentencepiece==0.2.1
+bitsandbytes==0.48.1

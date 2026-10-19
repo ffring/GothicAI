@@ -61,7 +61,7 @@ def load_pipeline(model_path: str):
         raise RuntimeError("StableMaterials generation requires CUDA on dev-ubuntu")
     path = Path(model_path).expanduser().resolve(strict=True)
     pipeline_class = _pipeline_class(path)
-    local = {"local_files_only": True}
+    local = {"local_files_only": True, "token": False}
     vae = AutoencoderKL.from_pretrained(
         path, subfolder="vae", torch_dtype=torch.float32, use_safetensors=True, **local
     )
