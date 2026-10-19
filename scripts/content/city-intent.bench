@@ -1,0 +1,576 @@
+# Original resources; geometry-selected texture inspection cameras.
+cheat god
+set time 12 0
+overlay off
+view hide animated morph pfx
+cam lift off
+cam look 45
+
+# NW_CITY_BARREL_01.TGA | NW_CITY_MERCHANT_PATH_21 | city
+goto pos 6910 -608 1181
+cam world 69.521 49.879 83.606
+wait 34
+cam hold
+wait 600
+shot nw_city_barrel_01
+
+# NW_CITY_BODENDIELEN_01.TGA | NW_CITY_HABOUR_TAVERN01_01 | city
+goto pos 1776 -231 -794
+cam world 315.290 498.887 -179.535
+wait 34
+cam hold
+wait 600
+shot nw_city_bodendielen_01
+
+# NW_CITY_BODENDIELEN_02.TGA | NW_CITY_BARRACK01_03 | city
+goto pos 5138 705 9061
+cam world 193.642 324.180 64.041
+wait 34
+cam hold
+wait 600
+shot nw_city_bodendielen_02
+
+# NW_CITY_BODENDIELEN_DRECK_01.TGA | NW_CITY_HABOUR_HUT_01_IN | city
+goto pos 1591 -235 346
+cam world 286.742 450.650 8.708
+wait 34
+cam hold
+wait 600
+shot nw_city_bodendielen_dreck_01
+
+# NW_CITY_BROKENSTONE_01.TGA | NW_CITY_PATH_HABOUR_07 | city
+goto pos 4000 224 -1268
+cam world 299.060 81.023 -110.102
+wait 34
+cam hold
+wait 600
+shot nw_city_brokenstone_01
+
+# NW_CITY_DIRTYGROUND_02.TGA | NW_CITY_HABOUR_KASERN_MAIN_ENTRY | city
+goto pos 4045 705 6948
+cam world 444.162 684.556 9.606
+wait 34
+cam hold
+wait 600
+shot nw_city_dirtyground_02
+
+# NW_CITY_DIRTYGROUND_WEG_02.TGA | NW_CITY_PATH_HABOUR_03 | city
+goto pos 1758 -233 -1650
+cam world 372.652 574.854 -124.064
+wait 34
+cam hold
+wait 600
+shot nw_city_dirtyground_weg_02
+
+# NW_CITY_DIRTYGROUND_WEG_03.TGA | NW_CITY_PATH_HABOUR_16 | city
+goto pos 3706 -232 2396
+cam world 399.532 621.792 6.751
+wait 34
+cam hold
+wait 600
+shot nw_city_dirtyground_weg_03
+
+# NW_CITY_DIRTYGROUND_WEG_END_01.TGA | NW_CITY_PATH_HABOUR_02 | city
+goto pos 1268 -234 -1823
+cam world 290.581 455.196 175.588
+wait 34
+cam hold
+wait 600
+shot nw_city_dirtyground_weg_end_01
+
+# NW_CITY_DIRTYGROUND_WEG_TRANS_02.TGA | NW_CITY_MAINSTREET_08 | city
+goto pos 5329 194 -1784
+cam world 268.760 355.118 150.280
+wait 34
+cam hold
+wait 600
+shot nw_city_dirtyground_weg_trans_02
+
+# NW_CITY_DOOR_01.TGA | NW_CITY_HABOUR_HUT_01_IN | city
+goto pos 1364 -4358 522
+cam world 125.667 60.005 -174.857
+wait 34
+cam hold
+wait 600
+shot nw_city_door_01
+
+# NW_CITY_DOOR_02.TGA | NW_CITY_HABOUR_WERFT_IN_01 | city
+goto pos 1350 -4430 820
+cam world 115.001 59.225 -179.924
+wait 34
+cam hold
+wait 600
+shot nw_city_door_02
+
+# NW_CITY_DOOR_03.TGA | NW_CITY_HABOUR_HUT_01_IN | city
+goto pos 1350 -4462 746
+cam world 115.001 58.404 -179.861
+wait 34
+cam hold
+wait 600
+shot nw_city_door_03
+
+# NW_CITY_DUNGEONFLOOR_02.TGA | NW_CITY_KANAL_ROOM_04_03 | city
+goto pos 9364 -684 2193
+cam world 340.604 535.446 138.566
+wait 34
+cam hold
+wait 600
+shot nw_city_dungeonfloor_02
+
+# NW_CITY_DUNGEONFLOOR_03.TGA | NW_XARDAS_TOWER_IN1_19 | whole-world fallback
+goto pos 30730 5079 -14675
+cam world 118.293 178.062 -54.601
+wait 34
+cam hold
+wait 600
+shot nw_city_dungeonfloor_03
+
+# NW_CITY_DUNGEONWALL_05.TGA | NW_CITY_SHOP03_01_B | city
+goto pos 8056 -517 3134
+cam world 184.182 66.597 116.512
+wait 34
+cam hold
+wait 600
+shot nw_city_dungeonwall_05
+
+# NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA | NW_CITY_TO_KANAL_04 | city
+goto pos 8356 314 2770
+cam world 374.464 108.571 -63.830
+wait 34
+cam hold
+wait 600
+shot nw_city_fachwerkbasement_chain_01
+
+# NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA | NW_CITY_UPTOWN_JUDGE_02_B | city
+goto pos 16806 1122 -1710
+cam world 560.442 112.045 83.448
+wait 34
+cam hold
+wait 600
+shot nw_city_fachwerkbasement_empty_01
+
+# NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA | NW_CITY_SALANDRIL | city
+goto pos 12898 1038 2987
+cam world 411.712 94.756 -19.008
+wait 34
+cam hold
+wait 600
+shot nw_city_fachwerkbasement_window_01
+
+# NW_CITY_FLAG_01.TGA | NW_CITY_MAINSTREET_TOWER_01 | city
+goto pos 8734 2233 -6389
+cam world 313.492 82.721 73.931
+wait 34
+cam hold
+wait 600
+shot nw_city_flag_01
+
+# NW_CITY_GITTERZAUN_01.TGA | NW_CITY_UPTOWN_PATH_27 | city
+goto pos 12739 1158 307
+cam world 630.564 119.974 -34.722
+wait 34
+cam hold
+wait 600
+shot nw_city_gitterzaun_01
+
+# NW_CITY_HAFENKAI_BODEN_01.TGA | NW_CITY_WAY_TO_SHIP_12 | city
+goto pos -7172 -267 -14113
+cam world 489.600 740.287 122.719
+wait 34
+cam hold
+wait 600
+shot nw_city_hafenkai_boden_01
+
+# NW_CITY_HAFENKAI_BODEN_TRANS_01.TGA | NW_CITY_HABOUR_KASERN_01 | city
+goto pos 1006 -230 2464
+cam world 407.870 632.719 83.306
+wait 34
+cam hold
+wait 600
+shot nw_city_hafenkai_boden_trans_01
+
+# NW_CITY_HAFENKAI_MAUER_01.TGA | NW_CITY_WAY_TO_SHIP_25 | city
+goto pos -7834 -2468 -10713
+cam world 849.806 150.945 174.611
+wait 34
+cam hold
+wait 600
+shot nw_city_hafenkai_mauer_01
+
+# NW_CITY_HAFENRANDSTEIN_01.TGA | NW_CITY_WAY_TO_SHIP_05 | city
+goto pos -6553 -249 -4599
+cam world 542.457 409.608 114.812
+wait 34
+cam hold
+wait 600
+shot nw_city_hafenrandstein_01
+
+# NW_CITY_HAFEN_GIEBEL_01.TGA | NW_CITY_HABOUR_KASERN_02 | city
+goto pos 1271 120 2836
+cam world 315.526 71.204 -162.039
+wait 34
+cam hold
+wait 600
+shot nw_city_hafen_giebel_01
+
+# NW_CITY_HAFEN_HOLZWAND_01.TGA | NW_CITY_HABOUR_TAVERN01_07 | city
+goto pos 1529 -86 -300
+cam world 571.702 113.446 -90.048
+wait 34
+cam hold
+wait 600
+shot nw_city_hafen_holzwand_01
+
+# NW_CITY_HAFEN_HOLZWAND_02.TGA | NW_CITY_PATH_HABOUR_13_B | city
+goto pos 2335 -104 1154
+cam world 469.174 86.634 0.264
+wait 34
+cam hold
+wait 600
+shot nw_city_hafen_holzwand_02
+
+# NW_CITY_INSIDEFLOOR_11.TGA | SHIP_IN_17 | city
+goto pos -9947 -641 -15942
+cam world 193.779 324.444 -27.648
+wait 34
+cam hold
+wait 600
+shot nw_city_insidefloor_11
+
+# NW_CITY_INSIDEWALL_11.TGA | NW_CITY_UPTOWN_HUT_03_02 | city
+goto pos 15238 988 -3648
+cam world 678.727 126.866 -118.015
+wait 34
+cam hold
+wait 600
+shot nw_city_insidewall_11
+
+# NW_CITY_INSIDEWALL_12.TGA | NW_CITY_INGMAR | city
+goto pos 15713 1455 -140
+cam world 315.707 -408.626 113.975
+wait 34
+cam hold
+wait 600
+shot nw_city_insidewall_12
+
+# NW_CITY_INSIDEWALL_13.TGA | NW_CITY_REICH02_BED_01 | city
+goto pos 10270 1372 -2355
+cam world 786.850 139.075 -40.510
+wait 34
+cam hold
+wait 600
+shot nw_city_insidewall_13
+
+# NW_CITY_IVY_BORDER_01.TGA | NW_CITY_CITYHALL_04_B | city
+goto pos 14068 1039 2942
+cam world 541.580 169.827 -123.461
+wait 34
+cam hold
+wait 600
+shot nw_city_ivy_border_01
+
+# NW_CITY_IVY_FULL_01.TGA | NW_CITY_UPTOWN_PATH_03_C | city
+goto pos 9776 1257 -4055
+cam world 298.516 81.236 -26.508
+wait 34
+cam hold
+wait 600
+shot nw_city_ivy_full_01
+
+# NW_CITY_PFLASTERSTEIN_01.TGA | NW_CITY_SMALLTALK_02 | city
+goto pos 11950 855 -2848
+cam world 485.238 742.948 -50.120
+wait 34
+cam hold
+wait 600
+shot nw_city_pflasterstein_01
+
+# NW_CITY_PFLASTERSTEIN_BORDER_01.TGA | NW_CITY_HABOUR_KASERN_CENTRE_04 | city
+goto pos 4794 705 6740
+cam world 442.123 680.475 147.534
+wait 34
+cam hold
+wait 600
+shot nw_city_pflasterstein_border_01
+
+# NW_CITY_RICH_BLACKWOOD_01.TGA | NW_CITY_CITYHALL_10 | city
+goto pos 15936 1465 -764
+cam world 275.951 78.182 -46.949
+wait 34
+cam hold
+wait 600
+shot nw_city_rich_blackwood_01
+
+# NW_CITY_RICH_WALL_01.TGA | NW_CITY_UPTOWN_HUT_03_STAIRS_B | city
+goto pos 14116 1555 -2995
+cam world 396.331 92.565 61.979
+wait 34
+cam hold
+wait 600
+shot nw_city_rich_wall_01
+
+# NW_CITY_RICH_WALL_HALF_01.TGA | NW_CITY_SHOP_SALANDRIL_01 | city
+goto pos 12590 1251 3781
+cam world 388.761 92.116 71.017
+wait 34
+cam hold
+wait 600
+shot nw_city_rich_wall_half_01
+
+# NW_CITY_RICH_WINDOW_01.TGA | NW_CITY_CORNELIUS | city
+goto pos 14647 1655 222
+cam world 414.870 94.879 133.045
+wait 34
+cam hold
+wait 600
+shot nw_city_rich_window_01
+
+# NW_CITY_ROOF_01.TGA | NW_CITY_PATH_HABOUR_15 | city
+goto pos 1366 306 1706
+cam world 707.694 515.629 90.952
+wait 34
+cam hold
+wait 600
+shot nw_city_roof_01
+
+# NW_CITY_ROOF_04.TGA | NW_CITY_BARRACK02_SMALLTALK_01 | city
+goto pos 3118 1297 8483
+cam world 659.399 580.457 160.056
+wait 34
+cam hold
+wait 600
+shot nw_city_roof_04
+
+# NW_CITY_ROOF_INSIDE_01.TGA | NW_CITY_HABOUR_TAVERN01_01 | city
+goto pos 1636 489 -699
+cam world 592.770 -564.500 -36.445
+wait 34
+cam hold
+wait 600
+shot nw_city_roof_inside_01
+
+# NW_CITY_ROPE_01.TGA | SHIP_DECK_17 | city
+goto pos -10152 2694 -16744
+cam world 366.189 66.264 0.452
+wait 34
+cam hold
+wait 600
+shot nw_city_rope_01
+
+# NW_CITY_SHRINEFLOOR_01.TGA | NW_CITY_MERCHANT_TEMPLE_IN | city
+goto pos 9997 225 -496
+cam world 380.468 592.699 -42.331
+wait 34
+cam hold
+wait 600
+shot nw_city_shrinefloor_01
+
+# NW_CITY_STONEWALL_02.TGA | NW_BIGMILL_04 | whole-world fallback
+goto pos 59634 4318 -22884
+cam world 207.420 101.264 96.174
+wait 34
+cam hold
+wait 600
+shot nw_city_stonewall_02
+
+# NW_CITY_TEMPLESTARROOF_01.TGA | NW_TROLLAREA_PORTAL_11 | whole-world fallback
+goto pos 82562 3825 30198
+cam world 496.570 104.230 -89.977
+wait 34
+cam hold
+wait 600
+shot nw_city_templestarroof_01
+
+# NW_CITY_WALL_03.TGA | NW_CITY_MERCHANT_HUT_02_ENTRY | city
+goto pos 9137 905 3745
+cam world 479.218 102.698 24.462
+wait 34
+cam hold
+wait 600
+shot nw_city_wall_03
+
+# NW_CITY_WALL_04.TGA | NW_CITY_MERCHANT_PATH_12 | city
+goto pos 7122 710 -1240
+cam world 484.694 103.266 -56.007
+wait 34
+cam hold
+wait 600
+shot nw_city_wall_04
+
+# NW_CITY_WALL_05.TGA | NW_CITY_MERCHANT_PATH_14_B | city
+goto pos 7490 501 -216
+cam world 442.355 98.336 33.975
+wait 34
+cam hold
+wait 600
+shot nw_city_wall_05
+
+# NW_CITY_WINDOW_03.TGA | NW_CITY_KANAL_ROOM_01_02 | city
+goto pos 2986 1955 6924
+cam world 602.369 117.304 119.535
+wait 34
+cam hold
+wait 600
+shot nw_city_window_03
+
+# NW_CITY_WOODBEAM_01.TGA | NW_CITY_HABOUR_HUT_07_IN | city
+goto pos 4421 49 506
+cam world 91.242 -85.614 114.650
+wait 34
+cam hold
+wait 600
+shot nw_city_woodbeam_01
+
+# NW_CITY_WOODBEAM_02.TGA | NW_CITY_HABOUR_02_B | city
+goto pos -940 -616 -739
+cam world 708.167 85.938 -157.106
+wait 34
+cam hold
+wait 600
+shot nw_city_woodbeam_02
+
+# NW_CITY_WOODBEAM_03.TGA | SHIP_IN_27 | city
+goto pos -10074 1835 -15199
+cam world 478.719 48.590 128.896
+wait 34
+cam hold
+wait 600
+shot nw_city_woodbeam_03
+
+# NW_CITY_WOOD_01.TGA | NW_CITY_MERCHANT_PATH_37 | city
+goto pos 10971 225 5251
+cam world 275.105 441.010 -119.194
+wait 34
+cam hold
+wait 600
+shot nw_city_wood_01
+
+# NW_CITY_WOOD_ORNAMENT_01.TGA | NW_FARM1_INSTABLE_02 | whole-world fallback
+goto pos 15599 2137 -16569
+cam world 62.238 -271.975 -109.698
+wait 34
+cam hold
+wait 600
+shot nw_city_wood_ornament_01
+
+# NW_CITY_WOOD_ORNAMENT_02.TGA | NW_CITY_BARRACK02_SMALLTALK_01 | city
+goto pos 3196 1080 8651
+cam world 365.157 -479.720 179.070
+wait 34
+cam hold
+wait 600
+shot nw_city_wood_ornament_02
+
+# NW_HARBOUR_BLACKIRON_01.TGA | NW_CITY_WAY_TO_SHIP_20 | city
+goto pos -8399 -75 -19159
+cam world 147.077 44.476 10.565
+wait 34
+cam hold
+wait 600
+shot nw_harbour_blackiron_01
+
+# NW_HARBOUR_CANONHOLE.TGA | NW_CITY_SHIP_GUARD_01 | city
+goto pos -8852 -419 -14433
+cam world 71.627 53.846 2.582
+wait 34
+cam hold
+wait 600
+shot nw_harbour_canonhole
+
+# NW_HARBOUR_CANON_01.TGA | NW_LIGHTHOUSE_IN_07 | city
+goto pos -1537 4462 16233
+cam world 67.941 22.858 -35.118
+wait 34
+cam hold
+wait 600
+shot nw_harbour_canon_01
+
+# NW_HARBOUR_FISHINGNET_01.TGA | SHIP_IN_09 | city
+goto pos -10215 534 -18671
+cam world 65.789 68.905 6.761
+wait 34
+cam hold
+wait 600
+shot nw_harbour_fishingnet_01
+
+# NW_HARBOUR_FISHINGNET_03.TGA | NW_CITY_HABOUR_POOR_AREA_PATH_01_01 | city
+goto pos -574 -24 -5636
+cam world 27.137 42.395 -6.020
+wait 34
+cam hold
+wait 600
+shot nw_harbour_fishingnet_03
+
+# NW_HARBOUR_FISHINGNET_04.TGA | NW_CITY_PIRATESCAMP_03 | city
+goto pos -2522 -239 12252
+cam world 208.397 64.239 -124.932
+wait 34
+cam hold
+wait 600
+shot nw_harbour_fishingnet_04
+
+# NW_HARBOUR_ROPEWALL_01.TGA | SHIP_IN_14 | city
+goto pos -10178 1209 -19660
+cam world 116.172 149.849 -92.134
+wait 34
+cam hold
+wait 600
+shot nw_harbour_ropewall_01
+
+# NW_HARBOUR_ROPEWALL_02.TGA | NW_TAVERNE_TROLLAREA_MONSTER_02_01 | whole-world fallback
+goto pos 44752 3347 1768
+cam world 44.808 68.092 47.680
+wait 34
+cam hold
+wait 600
+shot nw_harbour_ropewall_02
+
+# NW_HARBOUR_STAIRS_01.TGA | NW_CITY_UPTOWN_PATH_01 | city
+goto pos 8619 438 -4749
+cam world 480.855 335.720 -179.903
+wait 34
+cam hold
+wait 600
+shot nw_harbour_stairs_01
+
+# NW_HARBOUR_STAIRS_03.TGA | NW_TROLLAREA_PORTALTEMPEL_04 | whole-world fallback
+goto pos 77806 3959 23075
+cam world 212.021 198.842 -76.914
+wait 34
+cam hold
+wait 600
+shot nw_harbour_stairs_03
+
+# NW_HARBOUR_WOODCRATE_01.TGA | NW_CITY_WAY_TO_SHIP_16 | city
+goto pos -7216 -137 -16159
+cam world 257.068 44.696 -160.093
+wait 34
+cam hold
+wait 600
+shot nw_harbour_woodcrate_01
+
+# NW_HARBOUR_WOODCRATE_02.TGA | NW_FOREST_PATH_38 | city
+goto pos 2894 334 15330
+cam world 556.491 112.052 -89.953
+wait 34
+cam hold
+wait 600
+shot nw_harbour_woodcrate_02
+
+# NW_HARBOUR_WOODENGATE_01.TGA | SHIP_IN_28 | city
+goto pos -10274 -158 -13897
+cam world 396.548 615.428 -25.005
+wait 34
+cam hold
+wait 600
+shot nw_harbour_woodengate_01
+
+# NW_HARBOUR_WOOD_IRON_01.TGA | NW_CITY_SMITH_01_03 | city
+goto pos 4990 465 -746
+cam world 177.628 -210.836 21.865
+wait 34
+cam hold
+wait 600
+shot nw_harbour_wood_iron_01
+wait 100
