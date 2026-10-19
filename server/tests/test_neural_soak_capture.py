@@ -183,3 +183,42 @@ async def test_late_summary_and_old_owner_do_not_leak_into_the_next_wave():
     second, = test.tracker.finish_wave(2)
     assert not second["captured"]
     assert second["acquire_refusals"] == {} and second["end_reasons"] == {}
+
+
+async def test_teardown_preserves_live_foreign_target_exclusion_and_its_history():
+    test = rig(values=(7, 1, 1, 0, 0))  # The bandit attacks Cavalorn, rather than our party.
+    for tick in (0, 0.5, 1):
+        test.now[0] = tick
+        await test.tracker.poll(1, {"BANDIT"})
+    test.pilot.people["BANDIT"].state = "ZS_STAND"
+    test.pilot.people["BANDIT"].activity = "routine"
+    for tick in (2, 3, 4, 5, 6):
+        test.now[0] = tick
+        await test.tracker.poll(1, {"BANDIT"})
+    test.pilot.people.clear()  # Load/removal happens before the final poll.
+    test.now[0] = 7
+    await test.tracker.poll(1, {"BANDIT"})
+    record, = test.tracker.finish_wave(1)
+
+    assert record["status"] == "excluded"
+    assert record["reason"] == record["exclusion_reason"] == "target_not_allowed"
+    assert record["validation_reasons"] == {
+        "target_not_allowed": 3, "not_attacking": 5, "not_in_roster": 1,
+    }
+    assert test.events[-1]["validation_reasons"] == record["validation_reasons"]
+
+
+async def test_primary_exclusion_uses_live_validation_instead_of_acquire_refusals():
+    test = rig(values=(7, 1, 0, 0, 0))  # Unsupported weapon, regardless of its current target.
+    test.pilot.fights["BANDIT"] = SimpleNamespace(
+        lease=None, _refusals=Counter(target_not_allowed=48),
+    )
+    await test.tracker.poll(1, {"BANDIT"})
+    test.pilot.people.clear()
+    test.now[0] = 1
+    await test.tracker.poll(1, {"BANDIT"})
+    record, = test.tracker.finish_wave(1)
+
+    assert record["exclusion_reason"] == "not_one_handed"
+    assert record["acquire_refusals"] == {"target_not_allowed": 48}
+    assert record["validation_reasons"] == {"not_one_handed": 1, "not_in_roster": 1}

@@ -12,6 +12,9 @@ from ..bodypilot import ACQUIRE_WINDOW, BRIDGE_ERRORS, BRIDGE_TIMEOUT, TARGET_IS
 from ..game import GameLink
 
 VALIDATION_INTERVAL = 0.5
+STRUCTURAL_EXCLUSIONS = frozenset({
+    "target_not_allowed", "not_one_handed", "not_human", "no_capacity", "previous_wave_owner",
+})
 
 
 def _lease_key(lease: Any) -> tuple[int, int, int, int] | None:
@@ -43,6 +46,7 @@ class _Candidate:
     last_emitted: tuple[str, bool] | None = None
     validated_at: float = float("-inf")
     validation_reason: str = "not_in_roster"
+    validation_reasons: Counter[str] = field(default_factory=Counter)
     attempts: list[_Attempt] = field(default_factory=list)
 
 
@@ -185,6 +189,7 @@ class CaptureTracker:
                 reason = "previous_wave_owner"
             if reason == "eligible" and other_slots >= min(4, self.pilot.max_fights):
                 reason = "no_capacity"
+            item.validation_reasons[reason] += 1
             qualifies = reason == "eligible"
             if qualifies:
                 item.eligible = True
@@ -240,7 +245,13 @@ class CaptureTracker:
             if item.captured:
                 reason = "captured"
             elif not item.eligible:
-                reason = item.last_reason
+                # Removal, escape or load can replace a validated combat exclusion
+                # with a final roster absence. Preserve the actual combat cause.
+                structural = Counter({
+                    reason: count for reason, count in item.validation_reasons.items()
+                    if reason in STRUCTURAL_EXCLUSIONS
+                })
+                reason = structural.most_common(1)[0][0] if structural else item.last_reason
             elif refusals:
                 reason = refusals.most_common(1)[0][0]
             elif "watch_refused" in ends:
@@ -257,6 +268,7 @@ class CaptureTracker:
                 "exclusion_reason": reason if status == "excluded" else None,
                 "miss_reason": reason if status == "missed" else None,
                 "acquire_refusals": dict(sorted(refusals.items())),
+                "validation_reasons": dict(sorted(item.validation_reasons.items())),
                 "end_reasons": dict(sorted(ends.items())),
                 "window_s": round(item.window_seconds, 3),
                 "first_eligible_s": (
