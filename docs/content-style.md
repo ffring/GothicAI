@@ -11,6 +11,7 @@
 - Тёмная и тёплая, насыщенность низкая. Камень серо-коричневый, дерево тёмно-коричневое, на солнце выветренное до серого. Штукатурка грязно-белая или охристая, не чисто-белая. Кровля и земля — самое тёмное.
 - Яркие цвета — только малыми пятнами на ткани и краске; в материалах поверхностей их нет.
 - Средняя яркость цвета (альбедо) задаётся диапазоном на класс (ниже). Конвейер сам приводит среднюю линейную яркость плитки в диапазон класса — это поправка уровня, а не перерисовка. Ориентир: линейное 0,10 ≈ sRGB 89, 0,20 ≈ 124, 0,35 ≈ 160.
+- Средняя насыщенность HSV S (среднее по пикселям): не больше 0,30 для всех классов, кроме `roof_tiles` — не больше 0,40. После поправки яркости конвейер равномерно сдвигает цвет к серому той же линейной яркости до соблюдения порога, без перерисовки.
 
 ## Износ
 
@@ -41,16 +42,20 @@
 | `roof_shingle` | деревянная дранка | 2 | 0,05–0,12 | 0,80–0,95 | weathered wooden roof shingles, overlapping, moss in places |
 | `roof_tiles` | глиняная черепица | 2 | 0,08–0,16 | 0,70–0,90 | old clay roof tiles, faded brownish red, lichen |
 | `thatch` | солома | 2 | 0,08–0,15 | 0,90–1,00 | old straw thatch roof, grey-brown, compacted |
-| `dirt_path` | утоптанная земля, дороги и дворы | 3 | 0,07–0,15 | 0,85–1,00 | packed earth path, footprints, small pebbles, dry mud |
-| `mud` | грязь у воды и в низинах | 3 | 0,05–0,12 | 0,55–0,85 | wet dark mud with puddle edges and straw bits |
+| `dirt_path` | утоптанная земля, дороги и дворы | 3 | 0,07–0,15 | 0,85–1,00 | soft packed brown earth road, cart wheel ruts and hoof prints, scattered straw, sparse small pebbles, continuous soil surface |
+| `mud` | грязь у воды и в низинах | 3 | 0,05–0,12 | 0,55–0,85 | wet dark brown mud ground, shallow puddles, hoof prints, scattered straw, continuous soft soil surface |
 
 Металличность у всех классов этапа 1 — 0. Классы добавляются по мере этапов; новый класс — строка в этой таблице.
 
 ## Промпт
 
-`<ядро класса>, <состояние из записи>, late medieval poor harbour town, weathered, damp, grime in the cracks, muted earthy colors, seamless tileable texture, top-down orthographic view, even overcast light, no shadows, no highlights, no text, no logos`
+`<ядро класса>, <состояние из записи>, late medieval poor harbour town, weathered, damp, grime in the cracks, muted earthy colors, evenly distributed small details, no large isolated features, seamless tileable texture, top-down orthographic view, even overcast light, no shadows, no highlights, no text, no logos`
 
-Состояние из записи — несколько слов на текстуру («moss at the bottom», «soot stains», «salt stains»), чтобы соседние стены не выглядели одной текстурой. Генератор — FLUX.1-schnell, карты — свой фильтр ([сравнение](../reports/content/2026-10-material-bakeoff/README.md)).
+Для классов грунта (`dirt_path`, `mud`) общий хвост — без `grime in the cracks`.
+
+Состояние распределяется равномерно по всей плитке, без указаний положения.
+
+Состояние из записи — несколько слов на текстуру («patchy moss», «soot stains», «salt stains»), чтобы соседние стены не выглядели одной текстурой. Генератор — FLUX.1-schnell, карты — свой фильтр ([сравнение](../reports/content/2026-10-material-bakeoff/README.md)).
 
 ## Как принимаем
 

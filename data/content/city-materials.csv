@@ -7,7 +7,7 @@ NW_CITY_BROKENSTONE_01.TGA,exclude,,,,379.873687673,2.242504735,tiled_area_fract
 NW_CITY_DIRTYGROUND_02.TGA,include,mud,damp and compacted,1.67,1829.532179460,5.016126784,Плиточный грязный грунт
 NW_CITY_DIRTYGROUND_WEG_02.TGA,include,dirt_path,dry and dusty,1.67,628.967910913,5.000260756,Грунтовая дорожка
 NW_CITY_DIRTYGROUND_WEG_03.TGA,include,dirt_path,deeply worn,1.67,987.493276844,5.000411142,Грунтовая дорожка
-NW_CITY_DIRTYGROUND_WEG_END_01.TGA,include,dirt_path,damp at edges,1.59,50.259603868,4.768448251,Грунтовая дорожка; окончание рисунка не переносится
+NW_CITY_DIRTYGROUND_WEG_END_01.TGA,include,dirt_path,damp stains,1.59,50.259603868,4.768448251,Грунтовая дорожка; окончание рисунка не переносится
 NW_CITY_DIRTYGROUND_WEG_TRANS_02.TGA,exclude,,,,25.420282396,5.269361612,tiled_area_fraction < 0.6
 NW_CITY_DOOR_01.TGA,exclude,,,,2.411686029,1.000856495,Дверь с петлями; не плиточная поверхность
 NW_CITY_DOOR_02.TGA,exclude,,,,10.916039727,7.211288233,Дверь с петлями и ручкой; не плиточная поверхность
@@ -23,14 +23,14 @@ NW_CITY_GITTERZAUN_01.TGA,exclude,,,,957.865216162,2.560204096,Решётчат�
 NW_CITY_HAFENKAI_BODEN_01.TGA,include,flagstone,salt stains,2.00,7139.212971736,6.003815723,Каменное мощение причала
 NW_CITY_HAFENKAI_BODEN_TRANS_01.TGA,include,flagstone,mud in joints,1.58,228.540393025,4.739086850,Каменное мощение; переход к грунту заменяется единым материалом
 NW_CITY_HAFENKAI_MAUER_01.TGA,include,masonry_rubble,salt weathered,8.43,17491.475725902,16.857706818,Плиточная бутовая кладка набережной
-NW_CITY_HAFENRANDSTEIN_01.TGA,include,masonry_dressed,worn edges,1.50,1053.672711720,4.512585808,Повторяющиеся обработанные бордюрные блоки
+NW_CITY_HAFENRANDSTEIN_01.TGA,include,masonry_dressed,weather worn,1.50,1053.672711720,4.512585808,Повторяющиеся обработанные бордюрные блоки
 NW_CITY_HAFEN_GIEBEL_01.TGA,include,planks_wall,sun bleached,1.50,201.284430039,3.008742401,Дощатая обшивка фронтона
-NW_CITY_HAFEN_HOLZWAND_01.TGA,include,planks_wall,damp lower edges,1.50,3369.990732699,2.999999958,Плиточная дощатая стена без окон
+NW_CITY_HAFEN_HOLZWAND_01.TGA,include,planks_wall,damp stains,1.50,3369.990732699,2.999999958,Плиточная дощатая стена без окон
 NW_CITY_HAFEN_HOLZWAND_02.TGA,exclude,,,,1454.160996287,2.962897756,Окно в дощатой стене; не плиточная поверхность
 NW_CITY_INSIDEFLOOR_11.TGA,include,planks_floor,polished by footsteps,1.89,6080.952175091,3.782213275,Плиточный дощатый пол
 NW_CITY_INSIDEWALL_11.TGA,include,masonry_rubble,smoke stained,1.92,1814.903322911,3.847846835,Каменное заполнение стены; класс по основному заполнению
 NW_CITY_INSIDEWALL_12.TGA,include,planks_wall,darkened with age,1.79,2265.107854179,3.573952959,Дощатое заполнение стены; класс по основному заполнению
-NW_CITY_INSIDEWALL_13.TGA,include,plaster,soot near ceiling,1.81,1850.288689717,3.619294214,Штукатурное заполнение стены; класс по основному заполнению
+NW_CITY_INSIDEWALL_13.TGA,include,plaster,light soot,1.81,1850.288689717,3.619294214,Штукатурное заполнение стены; класс по основному заполнению
 NW_CITY_IVY_BORDER_01.TGA,exclude,,,,700.758993791,2.625690590,Плющ; прозрачность alpha-test
 NW_CITY_IVY_FULL_01.TGA,exclude,,,,235.377641824,2.855101454,Плющ; прозрачность alpha-test
 NW_CITY_PFLASTERSTEIN_01.TGA,include,cobble,very worn,3.00,2732.134469470,6.000000452,Плиточная брусчатка
@@ -46,7 +46,7 @@ NW_CITY_ROPE_01.TGA,exclude,,,,1377.893347153,0.837501852,Верёвка; зам
 NW_CITY_SHRINEFLOOR_01.TGA,exclude,,,,150.300777205,6.625562415,Орнамент пола; tiled_area_fraction < 0.6
 NW_CITY_STONEWALL_02.TGA,include,masonry_rubble,damp crevices,1.27,4.739556685,2.548176867,Плиточная бутовая кладка
 NW_CITY_TEMPLESTARROOF_01.TGA,exclude,,,,20.394362065,2.999999737,нет класса: звёздная роспись потолка; предложен painted_ceiling
-NW_CITY_WALL_03.TGA,include,plaster,moss at the bottom,1.24,3159.009044240,2.483279291,Штукатурное заполнение фахверка без окон
+NW_CITY_WALL_03.TGA,include,plaster,patchy moss,1.24,3159.009044240,2.483279291,Штукатурное заполнение фахверка без окон
 NW_CITY_WALL_04.TGA,include,plaster,rain streaks,1.59,25.714185326,3.180656100,Штукатурное заполнение фахверка без окон
 NW_CITY_WALL_05.TGA,include,plaster,chipped with age,0.99,52.958557371,1.972199225,Штукатурное заполнение фахверка без окон
 NW_CITY_WINDOW_03.TGA,exclude,,,,518.951016514,1.983674703,Окно в фахверке; не плиточная поверхность
