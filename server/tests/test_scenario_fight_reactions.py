@@ -1,4 +1,9 @@
-from gothic_ai.scenario_fight_reactions import CombatTrace, combat_shouts
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+
+from gothic_ai.scenario_fight_reactions import CombatTrace, combat_shouts, wait_attack_gap
 
 
 def row(symbol=10, *, t=100, hp=100, attack=False, weapon=0, pos=(1.0, 2.0, 3.0), target=20, events=()):
@@ -131,6 +136,61 @@ def test_window_interference_is_empty_for_quiet_companion():
     ]})
 
     assert trace.window_interference("companion", 100, 200) == ([], [])
+
+
+async def test_wait_attack_gap_rechecks_transient_gap_before_accepting_current_quiet():
+    trace = CombatTrace({10: "bandit", 11: "companion"})
+    trace.body({"observations": [row(attack=True), row(symbol=11, attack=True)]})
+    link = SimpleNamespace(raw_body_listeners=[trace.body])
+    waiting = asyncio.create_task(wait_attack_gap(link, trace, "companion", "bandit", timeout=1))
+    await asyncio.sleep(0)
+
+    for packet in (
+        {"observations": [row(t=150), row(symbol=11, t=150)]},
+        {"observations": [row(t=160, attack=True), row(symbol=11, t=160, attack=True)]},
+    ):
+        for listener in tuple(link.raw_body_listeners):
+            listener(packet)
+
+    await asyncio.sleep(0)
+    assert trace.attacking == {"bandit": True, "companion": True}
+    assert not waiting.done()
+    packet = {"observations": [row(t=170), row(symbol=11, t=170)]}
+    for listener in tuple(link.raw_body_listeners):
+        listener(packet)
+
+    await asyncio.sleep(0)
+    assert waiting.done()
+    assert await waiting
+    assert link.raw_body_listeners == [trace.body]
+
+
+async def test_wait_attack_gap_unknown_bodies_timeout_and_remove_listener():
+    trace = CombatTrace({10: "bandit", 11: "companion"})
+    link = SimpleNamespace(raw_body_listeners=[trace.body])
+    waiting = asyncio.create_task(wait_attack_gap(link, trace, "companion", "bandit", timeout=0.01))
+    await asyncio.sleep(0)
+    packet = {"observations": [row(symbol=11)]}
+    for listener in tuple(link.raw_body_listeners):
+        listener(packet)
+
+    assert not await waiting
+    assert trace.attacking == {"companion": False}
+    assert link.raw_body_listeners == [trace.body]
+
+
+async def test_wait_attack_gap_cancellation_removes_listener():
+    trace = CombatTrace({10: "bandit", 11: "companion"})
+    trace.body({"observations": [row(attack=True), row(symbol=11, attack=True)]})
+    link = SimpleNamespace(raw_body_listeners=[trace.body])
+    waiting = asyncio.create_task(wait_attack_gap(link, trace, "companion", "bandit"))
+    await asyncio.sleep(0)
+    assert len(link.raw_body_listeners) == 2
+    waiting.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    assert link.raw_body_listeners == [trace.body]
 
 
 def test_native_voice_requires_successful_audio_playback(tmp_path):

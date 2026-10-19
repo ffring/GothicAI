@@ -192,6 +192,34 @@ class CombatTrace:
         return min((t for t, _ in self.received_contacts.get(npc, [])), default=None)
 
 
+async def wait_attack_gap(
+    link: GameLink, trace: CombatTrace, one: str, other: str, timeout: float = 2,
+) -> bool:
+    """Catch the first observed gap between attacks, including gaps shorter than a polling tick."""
+    def quiet() -> bool:
+        return not trace.attacking.get(one, True) and not trace.attacking.get(other, True)
+
+    if quiet():
+        return True
+    changed = asyncio.Event()
+
+    def observed(_packet: dict[str, Any]) -> None:
+        # CombatTrace.body is registered first, so these states belong to this packet.
+        changed.set()
+
+    link.raw_body_listeners.append(observed)
+    try:
+        async with asyncio.timeout(timeout):
+            while not quiet():
+                await changed.wait()
+                changed.clear()
+        return True
+    except TimeoutError:
+        return False
+    finally:
+        link.raw_body_listeners.remove(observed)
+
+
 def combat_shouts(log_file: Path, npc: str) -> list[int]:
     """Only successful native audio playback logs count; a queued or suppressed SVM is insufficient."""
     if not log_file.exists():
@@ -932,12 +960,7 @@ async def fight_reactions(
                     )
                     if not close:
                         raise GameError("fight_reactions setup: companion did not reach the defender")
-                    if not await _until(
-                        lambda: (
-                            not trace.attacking.get(CAVALORN, True)
-                            and not trace.attacking.get(bandit, True)
-                        ), 2,
-                    ):
+                    if not await wait_attack_gap(link, trace, CAVALORN, bandit):
                         raise GameError("fight_reactions setup: attack animations did not settle before hit")
                     # End the ordered duel with no blow in flight. stop keeps the weapon drawn;
                     # npc_hit must still succeed, and later self-defence remains native.
