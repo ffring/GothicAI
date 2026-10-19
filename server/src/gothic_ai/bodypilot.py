@@ -189,6 +189,7 @@ class FightSummary:
     acquire_wait_p50_ms: float | None
     acquire_wait_max_ms: float | None
     action_rejections: tuple[tuple[str, int], ...]
+    accept_wait_timeouts: int
     transient_rejections_consecutive: int
     policy_timeouts: int
     policy_timeouts_consecutive: int
@@ -473,9 +474,11 @@ class BodyPilot:
             self._remember_retarget(updated)
             log.info(
                 "neural-body end npc=%s reason=%s end_trigger=%s release_late_seconds=%.3f "
-                "release_confirmed=True ownership_poll_timeouts=%d ownership_poll_max_gap_ms=%.1f",
+                "release_confirmed=True ownership_poll_timeouts=%d ownership_poll_max_gap_ms=%.1f "
+                "accept_wait_timeouts=%d",
                 npc, updated.reason, updated.end_trigger, late_seconds,
                 updated.ownership_poll_timeouts, updated.ownership_poll_max_gap_ms,
+                updated.accept_wait_timeouts,
             )
         self._remember_lost_fight(
             updated if confirmed else pending.summary, orphan_expired=not confirmed,
@@ -732,6 +735,11 @@ class BodyFight:
         self._accepted_command_id = 0
         self._accepted_sim_step = 0
         self._accepted_wake = asyncio.Event()
+        self._accept_wait_timeouts = 0
+        self._last_accept_command_id = 0
+        self._last_accept_at: float | None = None
+        self._awaiting_accept_command_id = 0
+        self._accept_wait_since: float | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._policy_watchdog_task: asyncio.Task[None] | None = None
         self._policy_watchdog_at: float | None = None
@@ -818,6 +826,17 @@ class BodyFight:
                     event.entity_id, event.session_epoch, event.world_epoch, event.control_generation
                 ) != self._identity(self.lease):
                     continue
+                if event.phase == "accepted" and event.command_id > self._last_accept_command_id:
+                    if self._accept_wait_expired():
+                        self._set_reason("acceptance_timeout")
+                    else:
+                        self._last_accept_command_id = event.command_id
+                        self._last_accept_at = asyncio.get_running_loop().time()
+                        if self._accept_wait_since is not None:
+                            self._accept_wait_since = (
+                                None if event.command_id >= self._awaiting_accept_command_id
+                                else self._last_accept_at
+                            )
                 if (
                     event.phase == "accepted" and event.action_id != 0
                     and event.command_id > self._accepted_command_id
@@ -1009,6 +1028,9 @@ class BodyFight:
                 return
             self._watch_ready = True
         if self.lease is not None:
+            if self._accept_wait_expired():
+                await self._finish("acceptance_timeout")
+                return
             if (
                 self.link.body_leases.get(self.lease.entity_id) != self.lease
                 or self._ownership_poll_gap_ms() > LEASE_TIMEOUT_MS
@@ -1090,11 +1112,28 @@ class BodyFight:
             )
         )
 
-    async def _wait_action_accepted(self, command_id: int) -> None:
+    def _accept_wait_expired(self) -> bool:
+        return (
+            self._accept_wait_since is not None
+            and (asyncio.get_running_loop().time() - self._accept_wait_since) * 1000 > LEASE_TIMEOUT_MS
+        )
+
+    def _note_accept_wait(self, command_id: int, sent_at: float) -> None:
+        if command_id <= self._last_accept_command_id:
+            return
+        self._awaiting_accept_command_id = max(self._awaiting_accept_command_id, command_id)
+        if self._accept_wait_since is None:
+            self._accept_wait_since = max(sent_at, self._last_accept_at or sent_at)
+
+    async def _wait_action_accepted(self, command_id: int, *, sent_at: float | None = None) -> None:
         # The receipt precedes transport of the previous frame's rows. Only the existing
         # accepted event identifies the simulation step in which the engine accepted the command.
         # Keep events that arrived before the receipt coroutine resumed, and bound a lost event
         # by the same timeout as other bridge RPCs while the independent heartbeat continues.
+        # A single missing event is transient; the silence window spans subsequent commands.
+        self._note_accept_wait(
+            command_id, sent_at if sent_at is not None else asyncio.get_running_loop().time(),
+        )
         async with asyncio.timeout(BRIDGE_TIMEOUT):
             while self._accepted_command_id < command_id:
                 self._accepted_wake.clear()
@@ -1367,6 +1406,7 @@ class BodyFight:
                 sent_at = self.clock()
                 self._response_to_action.append((sent_at - responded_at) * 1000)
                 self._packet_to_action.append((sent_at - received_at) * 1000)
+                accept_sent_at = asyncio.get_running_loop().time()
                 try:
                     receipt = await self.link.body_action(
                         self.lease, observation, action, ttl_ms=100, timeout=BRIDGE_TIMEOUT
@@ -1390,9 +1430,13 @@ class BodyFight:
                 self._decisions += 1
                 if action != 0:
                     try:
-                        await self._wait_action_accepted(receipt.command_id)
+                        await self._wait_action_accepted(receipt.command_id, sent_at=accept_sent_at)
                     except TimeoutError:
-                        self._set_reason("body_action_rejected")
+                        self._accept_wait_timeouts += 1
+                        if self._accept_wait_expired():
+                            self._set_reason("acceptance_timeout")
+                else:
+                    self._note_accept_wait(receipt.command_id, accept_sent_at)
         except (OSError, ValueError, PolicyError):
             self._set_reason("policy_error")
         except BRIDGE_ERRORS:
@@ -1698,6 +1742,7 @@ class BodyFight:
             acquire_wait_p50_ms=_percentile(self._acquire_waits, 0.50),
             acquire_wait_max_ms=max(self._acquire_waits, default=None),
             action_rejections=tuple(sorted(self._action_rejections.items())),
+            accept_wait_timeouts=self._accept_wait_timeouts,
             transient_rejections_consecutive=self._transient_rejections_consecutive,
             policy_timeouts=self._policy_timeouts,
             policy_timeouts_consecutive=self._policy_timeouts_consecutive,
@@ -1731,7 +1776,7 @@ class BodyFight:
             "packet_to_action_p50_ms=%s packet_to_action_p95_ms=%s "
             "acquire_refusals=%s acquire_requests=%d acquire_completed=%d "
             "acquire_wait_p50_ms=%s acquire_wait_max_ms=%s "
-            "action_rejections=%s transient_rejections_consecutive=%d "
+            "action_rejections=%s accept_wait_timeouts=%d transient_rejections_consecutive=%d "
             "policy_timeouts=%d policy_timeouts_consecutive=%d policy_timeout_wait_p95_ms=%s "
             "policy_response_silence_ms=%s ownership_poll_timeouts=%d "
             "ownership_poll_max_gap_ms=%.1f unconfirmed=%s",
@@ -1764,6 +1809,7 @@ class BodyFight:
             summary.acquire_wait_p50_ms,
             summary.acquire_wait_max_ms,
             dict(summary.action_rejections),
+            summary.accept_wait_timeouts,
             summary.transient_rejections_consecutive,
             summary.policy_timeouts,
             summary.policy_timeouts_consecutive,
@@ -1826,6 +1872,10 @@ class BodyFight:
         self._policy_decisions.clear()
         self._accepted_command_id = self._accepted_sim_step = 0
         self._accepted_wake.clear()
+        self._accept_wait_timeouts = 0
+        self._last_accept_command_id = self._awaiting_accept_command_id = 0
+        self._last_accept_at = None
+        self._accept_wait_since = None
         self._policy_watchdog_at = None
         self._latencies.clear()
         self._packet_to_request.clear()

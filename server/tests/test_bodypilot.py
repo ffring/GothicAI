@@ -1323,18 +1323,170 @@ async def test_continue_needs_no_acceptance_event_and_preserves_the_action_barri
         assert not rig.bridge.commands("body_release")
 
 
-async def test_missing_action_acceptance_event_has_a_bounded_wait_and_restores_native(monkeypatch):
+async def test_one_missing_action_acceptance_event_continues_and_is_reported(monkeypatch, caplog):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.025)
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        assert rig.fight._decisions == 1 and rig.link.body_owned("NPC")
+        assert not rig.bridge.commands("body_release")
+        assert rig.pilot.last_summary is None
+
+        # A lost event leaves the last known barrier intact; the next eligible row
+        # can make its ordinary decision without waiting for the missing message.
+        rig.bridge.action_accepted_events = True
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: rig.fight._decisions == 2)
+        assert rig.bridge.commands("body_action")[-1]["observation_seq"] == 4
+        assert not rig.policy.commands("step")[-1].get("memory_only", False)
+        assert not rig.bridge.commands("body_release")
+        await rig.pilot.aclose()
+        summary = rig.pilot.last_summary
+        assert summary.reason == "shutdown"
+        assert summary.accept_wait_timeouts == 1
+        assert summary.decisions == 2 and summary.action_rejections == ()
+        assert all(decision.accepted for decision in summary.last_policy_decisions)
+        assert "accept_wait_timeouts=1" in caplog.text
+        assert rig.fight._accept_wait_timeouts == 0
+        assert not rig.bridge.provider_owned
+
+
+async def test_late_action_acceptance_after_wait_timeout_still_sets_the_memory_barrier(monkeypatch):
     monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.025)
     async with running() as rig:
         rig.bridge.action_accepted_events = False
         await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        before_acceptance = fighter(4, owned=True, sim_step=7)
+        rig.bridge.emit(before_acceptance)
+        rig.bridge.accept_action(first, sim_step=8)
+        await eventually(lambda: len(rig.policy.commands("step")) == 2)
+        step = rig.policy.commands("step")[-1]
+        assert step["observation"] == before_acceptance and step["memory_only"] is True
+        assert rig.fight._accepted_sim_step == 8
+        assert len(rig.bridge.commands("body_action")) == 1
+
+        rig.bridge.action_accepted_events = True
+        rig.bridge.emit(fighter(5, owned=True, sim_step=8))
+        await eventually(lambda: rig.fight._decisions == 2)
+        assert rig.bridge.commands("body_action")[-1]["observation_seq"] == 5
+        assert not rig.policy.commands("step")[-1].get("memory_only", False)
+        assert rig.fight._accept_wait_timeouts == 1
+        assert not rig.bridge.commands("body_release")
+
+
+async def test_late_acceptance_before_a_new_receipt_restarts_the_full_silence_window(monkeypatch):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.025)
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        receipt_ready = asyncio.Event()
+        release_receipt = asyncio.Event()
+        original_action = rig.link.body_action
+
+        async def held_receipt(*args, **kwargs):
+            result = await original_action(*args, **kwargs)
+            receipt_ready.set()
+            await release_receipt.wait()
+            return result
+
+        monkeypatch.setattr(rig.link, "body_action", held_receipt)
+        rig.bridge.emit(fighter(4, owned=True))
+        await asyncio.wait_for(receipt_ready.wait(), 0.1)
+        second = rig.bridge.commands("body_action")[-1]
+        assert second["command_id"] > first["command_id"]
+        rig.bridge.accept_action(first, sim_step=8)
+        accepted_at = rig.fight._last_accept_at
+        assert accepted_at is not None
+        assert rig.bridge.command_times("body_action")[-1] < accepted_at
+        assert rig.fight._accept_wait_since is None
+
+        release_receipt.set()
+        await eventually(lambda: (
+            rig.fight._awaiting_accept_command_id == second["command_id"]
+            and rig.fight._accept_wait_since is not None
+        ))
+        assert rig.fight._accept_wait_since >= accepted_at
+        rig.bridge.accept_action(second, sim_step=8)
+        await eventually(lambda: rig.fight._accept_wait_since is None)
+        assert rig.fight._last_accept_command_id == second["command_id"]
+        assert rig.fight._accept_wait_timeouts == 1
+        assert not rig.bridge.commands("body_release")
+
+
+async def test_accepted_receipts_without_acceptance_events_expire_after_the_lease_window(monkeypatch):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.015)
+    monkeypatch.setattr(bodypilot, "LEASE_TIMEOUT_MS", 200)
+    monkeypatch.setattr(bodypilot, "HEARTBEAT_INTERVAL", 0.010)
+    monkeypatch.setattr(bodypilot, "EVENTS_INTERVAL", 0.010)
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        for seq in range(4, 7):
+            rig.bridge.emit(fighter(seq, owned=True))
+            await eventually(lambda seq=seq: rig.fight._accept_wait_timeouts == seq - 2)
+        assert len(rig.bridge.commands("body_action")) == 4
+        assert len(rig.bridge.commands("body_heartbeat")) > 1
+        assert rig.bridge.lease_expirations == 0
         await rig.ended()
         summary = rig.pilot.last_summary
-        assert summary.reason == "body_action_rejected"
-        assert summary.decisions == 1 and summary.action_rejections == ()
-        assert summary.last_policy_decisions[-1].accepted
+        assert summary.reason == "acceptance_timeout"
+        assert summary.accept_wait_timeouts == summary.decisions == 4
+        assert summary.action_rejections == () and summary.policy_timeouts == 0
+        assert all(decision.accepted for decision in summary.last_policy_decisions)
+        assert not rig.bridge.provider_owned and rig.bridge.lease_expirations == 0
+
+
+async def test_acknowledged_actions_allow_idle_longer_than_the_acceptance_silence_window(monkeypatch):
+    monkeypatch.setattr(bodypilot, "LEASE_TIMEOUT_MS", 200)
+    monkeypatch.setattr(bodypilot, "HEARTBEAT_INTERVAL", 0.010)
+    monkeypatch.setattr(bodypilot, "EVENTS_INTERVAL", 0.010)
+    async with running() as rig:
+        await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._last_accept_command_id == first["command_id"])
+        assert rig.fight._accept_wait_since is None
+        await asyncio.sleep(0.250)
+        assert rig.fight._reason is None and rig.link.body_owned("NPC")
+        assert rig.pilot.last_summary is None and rig.bridge.lease_expirations == 0
+        assert not rig.fight._accept_wait_expired()
+        assert rig.fight._accept_wait_timeouts == 0
         assert len(rig.bridge.commands("body_action")) == 1
-        assert not rig.bridge.provider_owned
+        assert not rig.bridge.commands("body_release")
+        rig.bridge.emit(fighter(4, owned=True))
+        await eventually(lambda: rig.fight._decisions == 2)
+        assert rig.bridge.commands("body_action")[-1]["observation_seq"] == 4
+
+
+async def test_late_acceptance_after_the_silence_deadline_cannot_revive_the_fight(monkeypatch):
+    monkeypatch.setattr(bodypilot, "BRIDGE_TIMEOUT", 0.025)
+    async with running() as rig:
+        rig.bridge.action_accepted_events = False
+        await rig.active()
+        first = rig.bridge.commands("body_action")[0]
+        await eventually(lambda: rig.fight._accept_wait_timeouts == 1)
+        # Deliver the late event before the next _tick can observe the expired
+        # deadline. Its own guard must preserve the same terminal outcome.
+        rig.fight._accept_wait_since = (
+            asyncio.get_running_loop().time() - bodypilot.LEASE_TIMEOUT_MS / 1000 - 0.001
+        )
+        assert rig.fight._accept_wait_expired()
+        rig.bridge.accept_action(first, sim_step=8)
+        assert rig.fight._reason == "acceptance_timeout"
+        assert rig.fight._last_accept_command_id == 0
+        assert rig.fight._accept_wait_expired()
+        await rig.ended()
+        summary = rig.pilot.last_summary
+        assert summary.reason == "acceptance_timeout"
+        assert summary.accept_wait_timeouts == summary.decisions == 1
+        assert summary.action_rejections == ()
+        assert len(rig.bridge.commands("body_action")) == 1
 
 
 async def test_reset_precedes_first_periodic_row_with_the_acquired_identity():
