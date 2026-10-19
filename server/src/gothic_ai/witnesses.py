@@ -115,8 +115,12 @@ ASK_TOOL = Tool(
         **HERO_ASK_TOOL.parameters,
         "properties": {
             **HERO_ASK_TOOL.parameters["properties"],
-            "about": {"type": "string", "description": "о ком спрашиваешь: имя человека из обстановки"},
+            "about": {
+                "type": ["string", "null"],
+                "description": "о ком спрашиваешь: имя человека из обстановки; null — о герое",
+            },
         },
+        "required": ["who", "said", "about"],
     },
 )
 
@@ -408,10 +412,13 @@ class Witnesses:
         if "about" in call.arguments:
             if not self.npc_crimes_enabled:
                 return ToolOutcome("Отклонено: расспросы о других людях выключены.", "rejected")
-            subject = self._subject(npc, str(call.arguments.get("about", "")).strip())
-            if subject is None:
-                return ToolOutcome("Отклонено: about — имя человека из обстановки, кроме героя.", "rejected")
-            about, about_name = subject
+            if call.arguments["about"] is not None:
+                subject = self._subject(npc, str(call.arguments["about"]).strip())
+                if subject is None:
+                    return ToolOutcome(
+                        "Отклонено: about — имя человека из обстановки, кроме героя.", "rejected"
+                    )
+                about, about_name = subject
         near = self._near.get(npc, [])
         c = _find(near, who)
         if c is None:

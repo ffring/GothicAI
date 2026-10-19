@@ -165,7 +165,8 @@ async def test_far_npc_question_and_answer_survive_reload_without_repeating_the_
         assert (t.about, t.at, t.crime_told) == (MALETH, question.minute, ["N1"])
 
 
-async def test_disabled_npc_crimes_removes_about_and_refuses_crafted_calls_and_old_npc_questions():
+@pytest.mark.parametrize("about", ["Малет", None])
+async def test_disabled_npc_crimes_removes_about_and_refuses_crafted_calls_and_old_npc_questions(about):
     fake = FakeGame(branch="A")
     async with connected(fake) as link:
         w = World(link, fake, lobart())
@@ -179,7 +180,7 @@ async def test_disabled_npc_crimes_removes_about_and_refuses_crafted_calls_and_o
         conv = w.dialogue.open(LOBART, "Лобарт")
         conv.trigger = Message("user", SAID)
         out = await disabled.handle(w.dialogue, conv, ToolCall(
-            "ask_witness", {"who": "Хильду", "said": SAID, "about": "Малет"}, "ask"), None)
+            "ask_witness", {"who": "Хильду", "said": SAID, "about": about}, "ask"), None)
         assert out is not None and out.status == "rejected" and "выключены" in out.output
         assert await disabled._testify(None, LOBART, "Лобарт", HILDA, "Хильда", SAID,
                                        "far", 0, MALETH, "Малет") is None
@@ -192,3 +193,22 @@ def test_legacy_testimony_timestamp_and_new_subject_are_read_without_confusion()
                         "at": AT_8, "minute": AT_8 + 60})
     assert (old.about, old.at) == (HERO, AT_8)
     assert (new.about, new.at) == (MALETH, AT_8)
+
+
+async def test_nullable_about_uses_the_hero_route_for_strict_model_tool_calls():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        conv = w.dialogue.open(LOBART, "Лобарт")
+        conv.trigger = Message("user", "Я всё утро был в городе")
+        await w.witnesses.prepare(LOBART)
+        tool = w.witnesses.tools(LOBART)[0]
+        assert set(tool.parameters["required"]) == set(tool.parameters["properties"])
+        assert "null" in tool.parameters["properties"]["about"]["type"]
+        out = await w.witnesses.handle(w.dialogue, conv, ToolCall(
+            "ask_witness", {"who": "Андре", "said": "всё утро был в городе", "about": None}, "ask"), None)
+        assert out is not None and out.status == "accepted"
+        question = next(iter(w.witnesses.inquiries.values()))
+        assert question.about == HERO and question.about_name == ""
+        fact = w.chronicle.facts("inquiry")[0]
+        assert "about" not in fact and "about_name" not in fact
