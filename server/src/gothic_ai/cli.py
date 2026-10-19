@@ -82,6 +82,7 @@ from .llm.siwc import AuthError, TokenStore, login
 from .meetings import Meetings
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
+from .npc_crime_law import NpcCrimeLaw
 from .npc_crimes import NpcCrimes
 from .npc_will import NpcWill
 from .occasions import Occasions
@@ -227,6 +228,7 @@ class ServerState:
         self.crimes: Crimes | None = None
         self.npc_crimes: NpcCrimes | None = None
         self.npc_will: NpcWill | None = None
+        self.npc_crime_law: NpcCrimeLaw | None = None
         self.crime_law: CrimeLawRuntime | None = None
         self.crime_memory: CrimeMemoryRuntime | None = None
         self.crime_react: CrimeReact | None = None
@@ -1264,6 +1266,9 @@ async def serve(args: argparse.Namespace) -> int:
             people=state.people_knowledge, rumors=state.rumors, memory=memory,
             busy=lambda npc: npc in talk.attached or state.dialogue.speaking(npc),
         )
+        state.npc_crime_law = NpcCrimeLaw(
+            link, state.chronicle, state.npc_crimes, will=state.npc_will,
+        )
         brain = None
         bodypilot: BodyPilot | None = None
         if decider is not None:
@@ -1350,6 +1355,8 @@ async def serve(args: argparse.Namespace) -> int:
                 await state.questlog.close()
             if state.crime_react is not None:
                 await state.crime_react.close()
+            if state.npc_crime_law is not None:
+                await state.npc_crime_law.close()
             if state.npc_will is not None:
                 await state.npc_will.close()
             if state.npc_crimes is not None:
@@ -1562,6 +1569,16 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario npc_will: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "npc_far":
+                assert state.npc_will is not None and state.chests is not None
+                assert state.dialogue is not None and args.trace_dir is not None
+                results = await scenarios.npc_far(
+                    link, state.npc_will, state.chests, state.dialogue,
+                    str(Path(args.trace_dir).parent),
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario npc_far: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "cheat":
                 assert state.crimes is not None and state.dialogue is not None and state.talk is not None
@@ -2645,6 +2662,7 @@ def main() -> None:
             "crime_react",
             "npc_deeds",
             "npc_will",
+            "npc_far",
             "crime_meet",
             "crime_talk",
             "trace_crime",

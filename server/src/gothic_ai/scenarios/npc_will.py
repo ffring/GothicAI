@@ -62,6 +62,8 @@ async def npc_will(
     original_cards, original_crime_cards = will.cards, crimes.cards
     original_gate, original_stage = rumors.gate, rumors.stage
     original_llm, send = dialogue.llm, link.send
+    original_busy = will.busy
+    preparing: set[str] = set()
     neutral = {npc: replace(card, honesty=5, greed=1) for npc, card in original_cards.items()}
     sent: list[NpcActCmd] = []
     received: list[NpcActResult | NpcDeed | NpcIdle] = []
@@ -391,8 +393,10 @@ async def npc_will(
 
     async def tell_owner(label: str, crime: dict[str, Any]) -> bool:
         cid = str(crime["id"])
+        preparing.add(LOBART)
         # Learning creates a pending claim only after the owner has left honest simulation.
-        # Its actual meeting is staged later, after the courage card and initial health are ready.
+        # This near-body scenario holds its fixture until the final positions and health are ready;
+        # otherwise the new distant-meeting rule can consume the claim during parking.
         if not await place(LOBART, parked):
             return False
         await rumors.tick()
@@ -429,6 +433,7 @@ async def npc_will(
     async def encounter(label: str, crime: dict[str, Any], courage: int) -> bool:
         cid = str(crime["id"])
         voice_at, sent_at = len(received), len(sent)
+        preparing.add(LOBART)
         cards(courage=courage)
         await link.debug("player_goto", waypoint=ROAD)
         if not await place(LOBART, parked) or not await place(VINO, parked) or not await place(HILDA, ROAD):
@@ -441,9 +446,13 @@ async def npc_will(
             rows.clear()
         # Keep the hero off the direct AI_GotoNpc lane while leaving both bodies within 30 m.
         await link.debug("player_goto", waypoint=RETURN_ROAD)
-        # This is the final scene placement. Until this instant the owner is outside simulation,
-        # so an autonomous meeting cannot replace either actor's preparation activity.
+        # Release the prepared character only after fresh engine positions prove the final scene.
+        # A tick already in flight must not use its earlier far geometry after the fixture is free.
         await link.debug("npc_goto", npc=LOBART, to=HILDA, distance=300, face=HILDA)
+        async with will._lock:
+            await will.far_world.refresh(will._generation)
+            cards(courage=courage)
+            preparing.discard(LOBART)
         await _until(
             lambda: any(f.get("crime") == cid and f.get("npc") == LOBART for f in facts("npc_will")), 30,
         )
@@ -475,6 +484,7 @@ async def npc_will(
         )
 
     link.send = sending  # type: ignore[method-assign]
+    will.busy = lambda npc: npc in preparing or original_busy(npc)
     link.listeners.append(record)
     link.raw_body_listeners.append(body)
     cards()
@@ -548,6 +558,7 @@ async def npc_will(
         await link.debug("player_goto", pos=(chest.pos[0], chest.pos[1], chest.pos[2] + 200))
         await link.debug("npc_goto", npc=LOBART, to=HERO_INSTANCE, distance=0)
         await link.debug("player_goto", waypoint=HOUSE)
+        preparing.add(LOBART)
         conv = dialogue.open(LOBART, "Лобарт")
         held = await dialogue.borrow_body(conv, "scenario-npc-will-chest")
         try:
@@ -572,6 +583,10 @@ async def npc_will(
             return _logged(results)
         await link.debug("player_goto", waypoint=RETURN_ROAD)
         await link.debug("npc_goto", npc=LOBART, to=VINO, distance=300, face=VINO)
+        async with will._lock:
+            await will.far_world.refresh(will._generation)
+            cards(courage=3)
+            preparing.discard(LOBART)
         await _until(
             lambda: any(f.get("kind") == "suspect" and f.get("crime") == cid for f in facts("npc_will")), 30,
         )
@@ -646,6 +661,7 @@ async def npc_will(
         will.cards, crimes.cards = original_cards, original_crime_cards
         rumors.gate, rumors.stage = original_gate, original_stage
         dialogue.llm = original_llm
+        will.busy = original_busy
         link.send = send  # type: ignore[method-assign]
         try:
             if not link.closed.is_set():

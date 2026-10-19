@@ -57,7 +57,7 @@
 Код владеет правдой, NPC — убеждениями. Ложь героя должна работать и иметь последствия.
 
 - **Правда:** `chronicle.py` — факты ветки сохранения (умер, появился, квест, ложь, раскрытие, слух). Загрузка сейва откатывает их вместе с ним.
-- **Убеждения NPC:** `knowledge.py` (что знает из диалогов и сюжета главы), `sightings.py` (видел и слышал сам, улики), `trust.py` (честность героя: lied, caught, kept), `social.py` (кто кого знает, слухи о герое и NPC), `people_knowledge.py` (что знает дурного о других NPC, из хроники), `concerns.py` (заботы о герое из фактов). Раскрытое прикрытие, невыплата по сделке и увиденное дело NPC становятся знанием и слухом о виновнике; знание помечает свидетеля в расспросе и даёт короткий блок обстановки ([третья волна, слои 1–5а](npc-wave3.md#как-работает-сейчас)).
+- **Убеждения NPC:** `knowledge.py` (что знает из диалогов и сюжета главы), `sightings.py` (видел и слышал сам, улики), `trust.py` (честность героя: lied, caught, kept), `social.py` (кто кого знает, слухи о герое и NPC), `people_knowledge.py` (что знает дурного о других NPC, из хроники), `concerns.py` (заботы о герое из фактов). Раскрытое прикрытие, невыплата по сделке и увиденное дело NPC становятся знанием и слухом о виновнике; знание помечает свидетеля в расспросе и даёт короткий блок обстановки ([третья волна, слои 1–5б](npc-wave3.md#как-работает-сейчас)).
 - **Как дело становится известным:**
   1. `crimes.py` берёт деяние героя и настоящих свидетелей из движка.
      `crime_react.py` решает удержанные дела на месте правилами характера и роли; модель получает только контекст.
@@ -69,11 +69,15 @@
      восприятия, повторная проверка гильдии на сервере перед SVM, крик, защита
      стража или смелого хозяина, итог `npc_crime_defense` и возврат вещи после победы.
      `npc_will.py` выбирает по карточке возврат своего, обвинение по подозрению и кражу
-     из чужого сундука в обычных местах. Оба участника и место кражи — рядом с героем;
+     из чужого сундука в обычных местах. Для подробной сцены оба участника и место кражи — рядом с героем;
      перед настоящим переносом мост проверяет `AiNormal`. Прерванный подход сохраняет
      мотив без остывания и ждёт игровой час. `chests.py` даёт отдельный
      `npc_crime_suspected` только после открытия сундука; подозрение не становится доказательством.
-     `storyguard` защищает сюжет.
+     `npc_far.py` исполняет те же мотивы вдали итогом: реальные позиции (fallback — текущий
+     распорядок), `chest_take` v48, человеческие неспящие свидетели по `theft_range` без видимости,
+     детерминированный бой по уровню, силе и HP. `npc_crime_law.py` доносит дела NPC закону
+     общины и завершает их при встрече стража; отдельные `npc_crime_known` / `npc_crime_settled`
+     не попадают в закон героя. `storyguard` защищает сюжет.
      Факты `npc_crime` и `npc_crime_seen` не попадают в читатели дел героя.
      Подготовка `npc_deeds` читает `npc_view.others_damage_ready` и
      `others_damage_range`, дожидаясь настоящего callback свидетеля нападения;
@@ -102,7 +106,7 @@
 | Разговор | `dialogue`, `talk`, `turn`, `voice`, `tts`, `persona`, `memory` (SQLite, ветвится с сейвами), `budget`, `npc_tools`, `executor`, `commands`, `orders`, `group` (общая беседа), `interject`, `llm/` (`chatgpt`, `openai`, `local`, `fake`) |
 | Быстрый контур и тело | `brain/` (`decider`, `planner`, `reflex`, `day`, `apply`, `tiers`, `stimuli`, `incident`, `situation`), `incidents`, `daylife`, `initiative`, `bodies` (исход мягких действий), `bodypilot` (боевое тело P30), `beasts` (волки слышат тон), `wrath` (терпение к оскорблениям) |
 | Восприятие и знание | `perception`, `sightings`, `places`, `lore`, `whereabouts`, `knowledge`, `social`, `gossip`, `trust`, `people_knowledge`, `attitudes`, `concerns` |
-| Правда, дела, ложь | `chronicle`, `crimes`, `crime_react`, `crime_meet`, `crime_memory`, `crime_law`, `crime_law_graph`, `crime_law_runtime`, `npc_crimes`, `npc_will`, `witnesses`, `quests`, `vanilla`, `consequences`, `amends` |
+| Правда, дела, ложь | `chronicle`, `crimes`, `crime_react`, `crime_meet`, `crime_memory`, `crime_law`, `crime_law_graph`, `crime_law_runtime`, `npc_crimes`, `npc_will`, `npc_far`, `npc_crime_law`, `witnesses`, `quests`, `vanilla`, `consequences`, `amends` |
 | Сделки и поручения | `deals` (окно сделки, долги, `npc_later`), `npc_cheat` (намерение нарушить отложенное слово), `promise_breach` (первое проявление нарушения), `fear` (общее знание о насилии героя), `contracts` (опыт, обучение, платные задания), `chests`, `errands` (`plan`), `meetings` (`meet`), `guide` (`lead`) |
 | Сюжет | `story`, `validator`, `storyguard`, `programs`, `director`, `questbook`, `questlog`, `triggers`, `occasions`, `showrunner`, `authoring`, `casting`, `cast`, `characters` (карточки характера), `chains` |
 | Данные | `gamedata/`: `characters.json`, `lore.json`, `places.json`, `stash.json`, `ou.py` (реплики OU.BIN), `storygraph.py` |
@@ -189,7 +193,7 @@
 - **жизнь NPC** (`npc_life.py`): `day`, `noise`, `initiative`, `lead`, `meet`, `meet_missed`, `errand`, `errand_fork`, `errand_far`, `errand_give`, `chests`, `chests_lobart`;
 - **беседа** (`conversation.py`): `group`, `interject`, `gossip`, `gossip_demo`, `cards`;
 - **сделки** (`deals.py`): `deal`, `deal_demo`, `debt`, `contract`, `haggle`;
-- **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `cover` (модуль `cover.py`: сделка прикрытия, второе показание, раскрытие и загрузка), `cover_subject` (там же: слух о Хильде до общего знакомого, пометки свидетеля, доверие к герою и загрузка), `cheat` (`cheat.py`: нарушенное молчание, невыплата `npc_later`, честный контроль и загрузка; `LLM=chatgpt` — один ответ при невыплате), `npc_will` (`npc_will.py`: самостоятельная кража по характеру, возврат своего, обвинение и загрузка с остыванием; `LLM=fake`), `npc_deeds` (`npc_deeds.py`: кража NPC из сундука, знание Хильды о воре, нападение при родном `ZS_WATCHFIGHT`, настоящий нокаут, возврат кубка смелым хозяином, итог защиты и загрузка; `LLM=fake`; страж проверяется модульно), `wrath`;
+- **ложь и дела** (`lies.py`; `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director` — одноимённые модули): `lie`, `vlie`, `vgive`, `vcheck`, `rumor`, `witness`, `amends`, `amends_deal`, `crimes`, `crime_react`, `crime_meet`, `crime_talk`, `crime_law`, `crime_director`, `cover` (модуль `cover.py`: сделка прикрытия, второе показание, раскрытие и загрузка), `cover_subject` (там же: слух о Хильде до общего знакомого, пометки свидетеля, доверие к герою и загрузка), `cheat` (`cheat.py`: нарушенное молчание, невыплата `npc_later`, честный контроль и загрузка; `LLM=chatgpt` — один ответ при невыплате), `npc_far` (`npc_far.py`: самостоятельная кража вдали по естественному распорядку, честные свидетели без видимости, подозрение и обвинение, загрузка; закон фермы Лобарта — модульно; `LLM=fake`), `npc_will` (`npc_will.py`: самостоятельная кража по характеру, возврат своего, обвинение и загрузка с остыванием; `LLM=fake`), `npc_deeds` (`npc_deeds.py`: кража NPC из сундука, знание Хильды о воре, нападение при родном `ZS_WATCHFIGHT`, настоящий нокаут, возврат кубка смелым хозяином, итог защиты и загрузка; `LLM=fake`; страж проверяется модульно), `wrath`;
 - **стыки систем** (`trace_crime.py`): `trace_crime` — свежие обломки и показание о краже в одном ходе, две поимки лжи, знание о деле и доверие;
 - **сюжет** (`story.py`; `occasions`, `questlog`, `showrunner*`, `vanilla_line*` — одноимённые модули): `graph`, `programs`, `repair`, `authored`, `own`, `own_repair`, `trigger`, `stages`, `requires`, `chain`, `cast`, `person`, `character`, `occasions`, `questlog`, `showrunner`, `showrunner_live`, `vanilla_line`, `vanilla_line_live`.
 
@@ -231,7 +235,7 @@
 | [`compute.md`](compute.md), [`ryzen.md`](ryzen.md) | машины, очередь `gq`, прогоны на Ryzen | справочник |
 | [`npc-agent.md`](npc-agent.md) | агент NPC: два контура, приказы, восприятие | сейчас + справочник с журналом |
 | [`npc-tools.md`](npc-tools.md) | инструменты NPC: сделки, восприятие, карточки, беседа, поручения | сейчас + план с журналом |
-| [`npc-wave3.md`](npc-wave3.md) | третья волна NPC: сговор, обман в сделках, вред друг другу | сейчас + план с журналом; слои 1–5а сделаны: три `npc_will` по 72/72, pytest 2581 passed / 14 skipped, обе сборки, контракт 39/39 и пять соседних сценариев прошли; 5б и 6 — план |
+| [`npc-wave3.md`](npc-wave3.md) | третья волна NPC: сговор, обман в сделках, вред друг другу | сейчас + план с журналом; слои 1–5б сделаны: три `npc_far` по 23/23, pytest Ryzen 2746 passed / 14 skipped, обе сборки, восемь соседних сценариев 217/217; закон Лобарта — модульно; 6 — план |
 | [`contracts.md`](contracts.md), [`beasts.md`](beasts.md), [`xardas-wrath.md`](xardas-wrath.md) | поручения и награды; волки; гнев Ксардаса | справочники |
 | [`story-graph.md`](story-graph.md) | граф сюжета, ложь, слухи, ремонт квестов | сейчас + план с журналом |
 | [`director.md`](director.md) | режиссёр-автор: квесты, персонажи, цепочки | сейчас + план с журналом, этапы 1–5 сделаны |

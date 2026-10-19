@@ -67,6 +67,9 @@ class NpcCrimes:
     def crime(self, crime: str) -> Fact | None:
         return next((f for f in self.facts() if f.get("id") == crime), None)
 
+    def settled(self, crime: str) -> bool:
+        return any(f.get("crime") == crime for f in self.chronicle.facts("npc_crime_settled"))
+
     def seen(self, npc: str) -> list[Fact]:
         ids = {
             f.get("crime") for f in self.chronicle.facts("npc_crime_seen")
@@ -191,7 +194,7 @@ class NpcCrimes:
             npc, target=target, state=actor_state, target_state=target_state, item=item, mission=mission,
         )
 
-    def record(self, deed: NpcDeed) -> Fact | None:
+    def record(self, deed: NpcDeed, *, far: bool = False) -> Fact | None:
         """One truth and one discovery per actual witness, in the current save branch only."""
         crimes = self.crimes
         if not self.enabled or crimes is None or self.chronicle.branch is None or self.crime(deed.id):
@@ -248,6 +251,7 @@ class NpcCrimes:
             "victim": victim, "owner": owner, "community": community, "item": item, "count": count,
             "place": deed.position.model_dump(), "waypoint": deed.waypoint,
             "day": deed.day, "hour": deed.hour, "minute": deed.minute, "witnesses": witnesses,
+            **({"far": True} if far else {}),
             **({"chest": deed.chest} if deed.chest else {}),
         }
         self.chronicle.record(fact)
@@ -327,10 +331,12 @@ class NpcCrimes:
         })
 
     async def _react(self, crime: Fact, generation: int) -> None:
+        if self.settled(crime["id"]):
+            return
         fighters: set[str] = set()
         svm = "DIRTYTHIEF" if crime["kind"] == "theft" else "HELP"
         for witness in crime["witnesses"]:
-            if generation != self._generation or not self.enabled:
+            if generation != self._generation or not self.enabled or self.settled(crime["id"]):
                 return
             if witness in fighters or not self._free(witness) or not await self._human_witness(witness):
                 continue
@@ -343,6 +349,8 @@ class NpcCrimes:
                 )
                 guard_fights = self.law is not None and self.law.is_guard(witness, crime["community"])
                 if owner_fights or guard_fights:
+                    if self._law_started(crime["id"]):
+                        continue
                     # Starting ZS_ATTACK clears queued speech. Pass a fighting witness's own SVM
                     # through the same native state-start path as the hero's on-scene reactions.
                     await self._fight(
@@ -381,6 +389,8 @@ class NpcCrimes:
                         }
                         if not self.law.is_guard(guard, crime["community"]):
                             continue
+                    if self.settled(crime["id"]) or self._law_started(crime["id"]):
+                        continue
                     if not self._free(guard):
                         continue
                     if self.guard.body(guard, str(person.get("state") or "")):
@@ -397,7 +407,15 @@ class NpcCrimes:
             except (GameError, TimeoutError, ConnectionError) as error:
                 log.debug("NPC crime %s reaction of %s: %s", crime["id"], witness, error)
 
+    def _law_started(self, crime: str) -> bool:
+        return any(
+            f.get("crime") == crime and f.get("reaction") == "fight" and f.get("role") == "law"
+            for f in self.chronicle.facts("npc_crime_reaction")
+        )
+
     async def _fight(self, crime: Fact, npc: str, generation: int, *, role: str, svm: str = "") -> str:
+        if self.settled(crime["id"]):
+            raise GameError("дело NPC уже завершено")
         actor, target = self.roster.get(npc), self.roster.get(crime["culprit"])
         if reason := self.guard.harm(
             npc, target=crime["culprit"], state=actor.state if actor else "",
@@ -436,6 +454,9 @@ class NpcCrimes:
         culprit = ["inst", crime["culprit"]]
         try:
             while generation == self._generation and self.clock() < deadline:
+                if self.settled(crime["id"]):
+                    outcome, reason = "resolved_elsewhere", "case_settled"
+                    return
                 if (generation, crime["id"]) in self._restitution_started:
                     outcome, reason = "resolved_elsewhere", "another_defender"
                     return
@@ -492,6 +513,9 @@ class NpcCrimes:
                         return
                     if (generation, crime["id"]) in self._restitution_started:
                         outcome, reason = "resolved_elsewhere", "another_defender"
+                        return
+                    if self.settled(crime["id"]):
+                        outcome, reason = "resolved_elsewhere", "case_settled"
                         return
                     self._restitution_started.add((generation, crime["id"]))
                     await self.link.story_effect(crime["culprit"], [{

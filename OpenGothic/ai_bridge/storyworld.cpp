@@ -13,14 +13,17 @@
 
 #include "game/inventory.h"
 #include "physics/dynamicworld.h"
+#include "world/objects/interactive.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 
 #include "eval.h"
+#include "chesttake.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
 #include "npcfind.h"
+#include "npcchests.h"
 #include "npcsteal.h"
 #include "npcview.h"
 #include "storyeffects.h"
@@ -211,7 +214,10 @@ bool StoryWorld::effects(World& world, const rapidjson::Value& msg, std::string&
       list.push_back(std::move(e));
       }
     }
+  std::vector<ChestTake::Request> takes;
   for(auto& e : list) {
+    if(e.kind=="chest_take")
+      takes.push_back({e.chest,e.item,e.count});
     // v39: a mission item (ITEM_MISSION) never goes from one npc to another
     const size_t id = e.kind=="give" && e.toNpc ? world.script().findSymbolIndex(e.item) : size_t(-1);
     if(auto* it = id==size_t(-1) ? nullptr : const_cast<Inventory&>(npc->inventory()).getItem(id); it!=nullptr && it->isMission()) {
@@ -219,6 +225,19 @@ bool StoryWorld::effects(World& world, const rapidjson::Value& msg, std::string&
       return false;
       }
     }
+  // Mandatory for chest_take even without check:true: no partial take, no mission stack, and no
+  // earlier effect may run before every requested source stack passes preflight.
+  error = ChestTake::check(takes,[&](const std::string& chest, const std::string& item)
+      -> std::optional<ChestTake::Stock> {
+    auto* source = NpcChests::find(world,chest);
+    if(source==nullptr)
+      return std::nullopt;
+    const auto id = world.script().findSymbolIndex(item);
+    auto* stock = source->inventory().getItem(id);
+    return ChestTake::Stock{int64_t(source->inventory().itemCount(id)),stock!=nullptr && stock->isMission()};
+    });
+  if(!error.empty())
+    return false;
   if(JsonRead::boolean(msg,"check",false)) {
     // all or nothing (v10, a deal): each giver must have all it gives, or nothing happens; what the npc
     // creates (v17, its stash) is its own to give, and the hero must have the learning points of all
@@ -323,6 +342,10 @@ std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
       auto display = TextCodec::toUtf8(n->displayName());
       w.Key("name");
       w.String(display.data(),rapidjson::SizeType(display.size()));
+      // v48: authoritative positions for a batch of far NPCs, without running their bodies.
+      const auto pos = n->position();
+      w.Key("pos");
+      w.StartArray(); w.Double(pos.x); w.Double(pos.y); w.Double(pos.z); w.EndArray();
       }
     if(n!=nullptr && near!=nullptr) {
       // alive or dead: how far an npc would go to see for itself, and whether it sees it from here (v12)

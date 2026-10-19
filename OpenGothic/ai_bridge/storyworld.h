@@ -39,7 +39,7 @@ class StoryWorld final {
     // [{"npc", "name", "distance", "guild"}]; empty if there is no such npc
     std::string nearby(World& world, const rapidjson::Value& msg);
     // story_state: what the director's rules read (stage 5), as JSON: values of global int `vars`, whether
-    // `npcs` live ({"state": "alive", "dead" or "absent", "name"}), which dialogs (`knows`) the hero has
+    // `npcs` live ({"state": "alive", "dead" or "absent", "name", "pos" (v48)}), which dialogs (`knows`) the hero has
     // heard, what script `symbols` are ("npc", "item", "info", "var", "const", "func", "other"; missing:
     // absent), the names of `items` (instances), whether a dialog or a cutscene runs now, and the game time
     std::string state(World& world, const rapidjson::Value& msg);

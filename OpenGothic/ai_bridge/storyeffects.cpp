@@ -8,6 +8,8 @@
 #include <zenkit/DaedalusVm.hh>
 
 #include "game/gamescript.h"
+#include "game/inventory.h"
+#include "world/objects/interactive.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "gothic.h"
@@ -15,6 +17,7 @@
 
 #include "eval.h"
 #include "jsonread.h"
+#include "npcchests.h"
 #include "textcodec.h"
 
 using namespace Tempest;
@@ -70,6 +73,7 @@ int32_t intConst(zenkit::DaedalusVm& vm, std::string_view name) {
 std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm, StoryEffect& e) {
   e.kind   = std::string(JsonRead::str(x,"do"));
   e.item   = upper(JsonRead::str(x,"item"));
+  e.chest  = upper(JsonRead::str(x,"chest"));
   e.teach  = std::string(JsonRead::str(x,"teach"));
   e.arg    = upper(JsonRead::str(x,"arg"));
   e.var    = upper(JsonRead::str(x,"var"));
@@ -88,11 +92,13 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   e.toHero = JsonRead::str(x,"to")!="self" && !e.toNpc;
   auto* item = vm ? vm->find_symbol_by_name(e.item) : nullptr;
   auto* var  = vm ? vm->find_symbol_by_name(e.var) : nullptr;
-  if(e.kind=="give" || e.kind=="create") {
+  if(e.kind=="give" || e.kind=="create" || e.kind=="chest_take") {
     if(vm && (item==nullptr || item->type()!=DaedalusDataType::INSTANCE))
       return e.kind + ": no item " + e.item;
     if(e.count<=0)
       return e.kind + ": count must be positive";
+    if(e.kind=="chest_take" && e.chest.empty())
+      return "chest_take: needs a chest";
     if(e.kind=="give" && e.toNpc) {
       auto* t = vm && !e.target.empty() ? vm->find_symbol_by_name(e.target) : nullptr;
       if(e.target.empty() || (vm && (t==nullptr || t->type()!=DaedalusDataType::INSTANCE)))
@@ -204,7 +210,17 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
   self->set_instance(npc.handlePtr());
   other->set_instance(player.handlePtr());
 
-  if(kind=="give" && toNpc) {
+  if(kind=="chest_take") {
+    // v48: an outcome far from the hero. Direct transfer sends neither perceptions nor npc_deed;
+    // Npc::addItem(chest) is deliberately avoided because it also captures a marked physical deed.
+    auto& world = npc.world();
+    auto* source = NpcChests::find(world,chest);
+    const auto id = world.script().findSymbolIndex(item);
+    if(source!=nullptr && id!=size_t(-1))
+      Inventory::transfer(const_cast<Inventory&>(npc.inventory()),source->inventory(),nullptr,
+                          id,size_t(count),world);
+    }
+  else if(kind=="give" && toNpc) {
     // to another npc (v39): an errand far from the hero, the walk taken as done (errands.py)
     auto* s = vm.find_symbol_by_name(item);
     auto* t = vm.find_symbol_by_name(target);
