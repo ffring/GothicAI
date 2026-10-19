@@ -36,5 +36,15 @@
     "gi": 1,
     "aa": 1
   },
-  "active_owned_jobs_after_stop": 0
+  "followup_source_commit": "174be153b6751f5484f59c17162c7abb69bbf5c0",
+  "fps_limit_followup": {
+    "ini": "per-run Gothic.ini [ENGINE] zMaxFps=30",
+    "systempack_fps_limit": 0,
+    "completed_runs": 3,
+    "normal_stages": 2,
+    "capped_stages": 1,
+    "capped_crimes": 0,
+    "stop_reason": "user requested wrap-up; second capped stages cancelled before admission"
+  },
+  "active_owned_jobs_after_measurement": 0
 }
