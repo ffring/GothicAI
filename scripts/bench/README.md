@@ -38,6 +38,10 @@ then the census, an overview `market-overview.png` and thirty seconds of app cad
 same host with `WORLD=NEWWORLD.ZEN`, `OPENGOTHIC_CENSUS=<absolute output>/census.json` and either
 `OPENGOTHIC_CONTENT=` (originals) or the set root `~/.local/share/gothic-ai/content-staging/market-set/content`.
 A `shot` is written at the end of its frame, so the scenario waits after each one before moving the camera.
+`own-mesh-relief` takes daylight and indoor close-ups of the props' textures (barrel, crate, table, bench,
+chest, cart, signpost, stall roof, inner window, cupboard; `<prop>_view.png` and `<prop>_near.png`), then the census.
+It checks the tile relief of the atlases ([report](../../reports/content/2026-10-prop-relief/README.md)): run it with
+the props' root and with a root of the earlier bake, `OPENGOTHIC_CENSUS=<absolute output>/census.json`, `TIMEOUT=900`.
 `own-mesh-mob` frames the harbour `BENCH_NW_CITY_01.ASC` beside the wooden wall
 (prop-survey 20649, ZEN vob.id 23479), then uses the native `AI_UseMob` seat/stand
 fixture at `NW_CITY_HABOUR_BENCH_01`. It writes empty, seated and standing screenshots,
