@@ -142,6 +142,39 @@ def test_final_quantized_luminance_after_saturation_is_the_admission_measurement
     assert rejection == 'brightness correction could not reach class range'
 
 
+def test_original_mean_colour_bypasses_saturation_cap_and_is_checked_on_stored_pixels():
+    from material_colour import _linear, linear_to_oklab
+    record = material()
+    target = _linear(np.array([.7, .24, .1]))
+    record['parameters'].update(target_oklab=linear_to_oklab(target).tolist(),
+        target_luminance=float(target @ [.2126, .7152, .0722]))
+    maps, correction, rejection = generate.target_corrected_maps(
+        Image.new('RGB', (16, 16), (100, 100, 100)), record)
+    assert rejection is None
+    assert correction['saturation']['mean_hsv_s_after'] > .3
+    assert correction['saturation']['cap_applied'] is False
+    stored = np.rint(maps['albedo']*255).astype(float)/255
+    np.testing.assert_allclose(_linear(stored).mean(axis=(0, 1)), target, atol=.005)
+    correction['linear_rgb_mean_after'][0] += .02
+    assert 'colour correction' in generate.numeric_rejection(record, correction)
+
+
+def test_original_mean_colour_supersedes_legacy_alpha_weighted_luminance():
+    from material_colour import _linear, linear_to_oklab
+    record = material()
+    target = _linear(np.array([.7, .24, .1]))
+    record['parameters'].update(target_oklab=linear_to_oklab(target).tolist(),
+        target_luminance=.9, target_luminance_tolerance=.002)
+    _, correction, rejection = generate.target_corrected_maps(
+        Image.new('RGB', (16, 16), (100, 100, 100)), record)
+    assert rejection is None
+    assert correction['linear_mean_after'] < .2
+    np.testing.assert_allclose(correction['linear_rgb_mean_after'], target, atol=.005)
+    assert abs(correction['linear_mean_after']-.9) > .002
+    correction['saturation']['linear_mean_after'] = float('nan')
+    assert generate.numeric_rejection(record, correction) == 'final mean luminance is not finite or is not measured'
+
+
 @pytest.mark.parametrize('change', ['saturation', 'clipping'])
 def test_select_attempt_cannot_bypass_numerical_constraints(runtime, change):
     record = material()

@@ -31,6 +31,7 @@ from import_imagegen import MODEL, _write_immutable
 from pilot import TARGET_LUMINANCE_TOLERANCE, antitile_mode, selected_rows
 import registry as registry_module
 import seam_fix
+from material_colour import colour_target
 
 ROOT = Path(__file__).resolve().parents[2]
 SET = 'city-3'
@@ -239,6 +240,10 @@ def recipes(mapping=ROOT/'data/content/city-materials.csv', bible=ROOT/'docs/con
             params['target_luminance'] = target
         elif require_target:
             raise ValueError(f'{texture}: city-3 requires target_luminance')
+        target_colour = colour_target(row)
+        if target_colour is not None:
+            params.update(target_oklab=target_colour,
+                colour_policy='original OKLab of mean linear RGB; per-channel linear gains; no saturation cap')
         result.append(dict(id=recipe_id(texture), kind='material', replaces=[texture],
             pipeline='imagegen-filter', models=[deepcopy(MODEL)], prompt=prompt, negative='',
             seed=None, status='draft', files={}, parameters=params,

@@ -8,6 +8,9 @@ The extractor decodes Gothic textures in memory, using texdump.cpp's ZenKit
 path. City-3 uses the engine's alpha>=0.5 cutoff for coverage and visible-pixel
 mean linear Rec.709 luminance. Earlier sets keep their alpha-weighted scalar.
 Original pixels are never exported or passed to material generation.
+
+``--materials`` measures periods, direction and mean color for the entire
+mapping. It preserves the existing luminance and alpha-coverage targets.
 """
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 
-from map_textures import ALPHA_TEXTURES, DEFAULT_MAPPING, FIELDS, MAPPING_HEADERS
+from map_textures import ALPHA_TEXTURES, DEFAULT_MAPPING, FIELDS, MAPPING_HEADERS, MEASUREMENT_FIELDS, _check_measurements
 from pilot import selected_rows
 
 
@@ -60,6 +63,10 @@ PROPERTIES_FIELDS = (
     "texture", "target_luminance", "nonopaque_fraction", "opaque", "width", "height",
     "target_coverage", "coverage_left_half", "coverage_right_half", "coverage_top_half", "coverage_bottom_half",
 )
+EXTRACTED_MEASUREMENT_FIELDS = (
+    "target_period_u_uv", "target_period_v_uv", "target_direction", "target_direction_confidence",
+    "target_oklab_l", "target_oklab_a", "target_oklab_b",
+)
 
 
 def parse_properties(value, expected, set_name="city-3"):
@@ -84,6 +91,68 @@ def parse_properties(value, expected, set_name="city-3"):
     if set(result) != set(expected):
         raise ValueError(f"extractor texture set differs from {set_name}")
     return result
+
+
+def parse_material_measurements(value, rows):
+    """Accept scalar-only rows for the complete 71-material mapping."""
+    reader = csv.DictReader(io.StringIO(value), strict=True)
+    if reader.fieldnames != [*PROPERTIES_FIELDS, *EXTRACTED_MEASUREMENT_FIELDS]:
+        raise ValueError("extractor must return only the scalar material measurements columns")
+    source = {row["texture"]: row for row in rows}
+    result = {}
+    for row in reader:
+        if None in row or any(item is None for item in row.values()):
+            raise ValueError("extractor has a malformed CSV row")
+        texture = row["texture"]
+        if texture in result:
+            raise ValueError(f"extractor repeats texture {texture}")
+        if texture not in source:
+            raise ValueError(f"extractor contains unknown texture {texture}")
+        values = {field: row[field] for field in EXTRACTED_MEASUREMENT_FIELDS}
+        for axis in ("u", "v"):
+            values[f"target_period_{axis}_m"] = format(float(row[f"target_period_{axis}_uv"]) *
+                float(source[texture]["uv_m_per_unit_median"]), ".12g")
+        _check_measurements(dict(source[texture], **values), texture)
+        result[texture] = values
+    if set(result) != set(source):
+        raise ValueError("extractor texture set differs from the complete mapping")
+    return result
+
+
+def measure_all(extractor, game, rows):
+    result = subprocess.run([str(extractor), "--measurements", str(game),
+                             *(row["texture"] for row in rows)], check=True, capture_output=True, text=True)
+    return parse_material_measurements(result.stdout, rows)
+
+
+def update_material_measurements(path, rows, values):
+    if set(values) != {row["texture"] for row in rows}:
+        raise ValueError("measurement texture set differs from the complete mapping")
+    updated = []
+    for row in rows:
+        if set(values[row["texture"]]) != set(MEASUREMENT_FIELDS):
+            raise ValueError("measurement must contain exactly the scalar material fields")
+        merged = {field: row.get(field, "") for field in FIELDS}
+        merged.update(values[row["texture"]])
+        _check_measurements(merged, row["texture"])
+        updated.append(merged)
+    _write_mapping(path, updated)
+    return updated
+
+
+def _write_mapping(path, rows):
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=path.parent,
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            writer = csv.DictWriter(stream, fieldnames=FIELDS, lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def measure(extractor, game, rows, set_name="city-2", *, with_coverage=False):
@@ -121,18 +190,7 @@ def update_mapping(path, rows, measurements, set_name="city-2", *, coverages=Non
                     target_coverage=(format(coverages[row["texture"]], ".12g")
                     if coverages is not None and row["texture"] in coverages else row.get("target_coverage", "")))
                for row in rows]
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=path.parent,
-                                         delete=False) as stream:
-            temporary = Path(stream.name)
-            writer = csv.DictWriter(stream, fieldnames=FIELDS, lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(updated)
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+    _write_mapping(path, updated)
     return updated
 
 
@@ -144,9 +202,18 @@ def main(argv=None):
     parser.add_argument("--set", dest="set_name", choices=("city-2", "city-3"), default="city-2",
                         help="material scope to measure (default: city-2)")
     parser.add_argument("--write", action="store_true", help="atomically update target_luminance and city-3 alpha target_coverage")
+    parser.add_argument("--materials", action="store_true", help="measure scalar periods, direction and OKLab for all mapping rows")
     args = parser.parse_args(argv)
     try:
         rows = read_mapping(args.mapping)
+        if args.materials:
+            values = measure_all(args.extractor, args.game, rows)
+            if args.write:
+                update_material_measurements(args.mapping, rows, values)
+            writer = csv.DictWriter(sys.stdout, fieldnames=("texture", *MEASUREMENT_FIELDS), lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(dict(texture=name, **value) for name, value in values.items())
+            return 0
         coverages = None
         if args.set_name == "city-3":
             values, coverages = measure(args.extractor, args.game, rows, args.set_name, with_coverage=True)

@@ -16,7 +16,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def recipes():
-    return generate.recipes(ROOT/'data/content/city-materials.csv', ROOT/'docs/content-style.md', 'city-1')
+    records = generate.recipes(ROOT/'data/content/city-materials.csv', ROOT/'docs/content-style.md', 'city-1')
+    # These cases retain the historical class/saturation policy. Measured
+    # original colour has separate admission tests and overrides that policy.
+    for record in records:
+        record['parameters'].pop('target_oklab', None)
+        record['parameters'].pop('colour_policy', None)
+    return records
 
 
 def test_real_inputs_cover_includes_with_unique_pinned_text_recipes():
@@ -214,6 +220,9 @@ def city2_recipes(tmp_path):
         writer.writeheader()
         for row in rows:
             row['target_luminance'] = '.18'
+            for field in ('target_oklab_l', 'target_oklab_a', 'target_oklab_b'):
+                if field in row:
+                    row[field] = ''
             writer.writerow(row)
     return generate.recipes(mapping, ROOT/'docs/content-style.md', 'city-2')
 

@@ -26,6 +26,9 @@ def mapping_with_targets(tmp_path):
         fields.append('target_coverage')
     for row in rows:
         row['target_luminance'] = '.18'
+        for field in ('target_oklab_l', 'target_oklab_a', 'target_oklab_b'):
+            if field in row:
+                row[field] = ''
         row['target_coverage'] = '.5' if row['texture'] in city_set.alpha_material.ALPHA_TEXTURES else ''
     path = tmp_path/'mapping.csv'
     with path.open('w', newline='') as stream:
@@ -88,6 +91,30 @@ def test_recipes_are_complete_text_only_and_do_not_mutate_mapping(tmp_path):
     gable = next(row for row in rows if row['replaces'] == ['NW_CITY_HAFEN_GIEBEL_01.TGA'])
     assert 'horizontal overlapping' in gable['prompt']
     assert 'vertical' not in gable['prompt']
+
+
+def test_recipes_propagate_numeric_mean_colour_without_modifying_old_records(tmp_path):
+    from material_colour import linear_to_oklab
+    mapping = mapping_with_targets(tmp_path)
+    with mapping.open(newline='') as stream:
+        reader = csv.DictReader(stream)
+        fields, rows = list(reader.fieldnames), list(reader)
+    colour_fields = ['target_oklab_'+channel for channel in ('l', 'a', 'b')]
+    fields += [field for field in colour_fields if field not in fields]
+    target = linear_to_oklab([.25, .16, .06]).tolist()
+    for row in rows:
+        row.update({field: '' for field in colour_fields})
+        if row['texture'] == GROUND:
+            row.update(zip(colour_fields, target))
+    with mapping.open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    recipes = city_set.recipes(mapping, BIBLE)
+    coloured = next(row for row in recipes if row['replaces'] == [GROUND])
+    assert coloured['parameters']['target_oklab'] == target
+    assert 'no saturation cap' in coloured['parameters']['colour_policy']
+    assert all('target_oklab' not in row['parameters'] for row in recipes if row is not coloured)
 
 
 def test_targets_required_for_import_but_not_for_prompt_preparation(tmp_path):

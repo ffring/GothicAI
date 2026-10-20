@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
-from material_colour import limit_saturation
+from material_colour import correct_mean_colour, limit_saturation, linear_to_oklab, oklab_to_linear
 
 
 def linear(rgb):
@@ -88,3 +88,58 @@ def test_mixed_dark_pixels_and_random_colours_remain_finite_and_compliant():
 def test_invalid_inputs_are_rejected(source, limit):
     with pytest.raises(ValueError):
         limit_saturation(source, limit)
+
+
+def test_oklab_uses_linear_srgb_and_roundtrips_mean_colours():
+    np.testing.assert_allclose(linear_to_oklab([1, 0, 0]), [.62795536, .22486306, .12584630], atol=1e-8)
+    colours = np.array([[0, 0, 0], [1, 1, 1], [.08, .3, .12]])
+    np.testing.assert_allclose(oklab_to_linear(linear_to_oklab(colours)), colours, atol=2e-15)
+
+
+def test_mean_colour_uses_three_uniform_linear_gains_and_quantized_measurement():
+    source = np.array([[[.3, .5, .6], [.4, .6, .5]], [[.6, .4, .3], [.5, .3, .4]]])
+    before = linear(source)
+    target = before.mean(axis=(0, 1))*[1.4, .6, 1.1]
+    result, metadata = correct_mean_colour(source, linear_to_oklab(target))
+    after = linear(result.astype(float)/255)
+    np.testing.assert_allclose(after, before*metadata['channel_gains'], atol=.004)
+    np.testing.assert_allclose(after.mean(axis=(0, 1)), target, atol=.005)
+    np.testing.assert_allclose(metadata['linear_rgb_mean_after'], after.mean(axis=(0, 1)))
+    # Averaging pixel OKLab is a different operation and must not be used.
+    np.testing.assert_allclose(metadata['mean_oklab_after'], linear_to_oklab(after.mean(axis=(0, 1))))
+    assert metadata['attainable'] and metadata['saturation']['cap_applied'] is False
+
+
+def test_channel_gain_solver_accounts_for_clipping():
+    source_linear = np.array([[.1, .3, .2], [.9, .5, .4]])
+    source = np.where(source_linear <= .0031308, source_linear*12.92,
+        1.055*source_linear**(1/2.4)-.055)
+    target = np.array([.8, .4, .3])
+    result, metadata = correct_mean_colour(source, linear_to_oklab(target))
+    np.testing.assert_allclose(linear(result/255).mean(axis=0), target, atol=.005)
+    assert metadata['channel_gains'][0] == pytest.approx(6.)
+    assert metadata['clipped_channel_fraction'] == pytest.approx(1/6)
+
+
+def test_colour_mask_excludes_background_without_modifying_weights():
+    source = np.array([[.6, .3, .1], [1., 1., 1.]])
+    mask = np.array([.5, 0.])
+    target = np.array([.12, .07, .03])
+    result, metadata = correct_mean_colour(source, linear_to_oklab(target), mask)
+    np.testing.assert_array_equal(mask, [.5, 0.])
+    np.testing.assert_allclose(linear(result[0]/255), target, atol=.005)
+    np.testing.assert_allclose(metadata['linear_rgb_mean_before'], linear(source[0]))
+
+
+def test_zero_channels_report_unreachable_colour_instead_of_creating_detail():
+    result, metadata = correct_mean_colour(np.zeros((4, 3)), linear_to_oklab([.2, .1, .05]))
+    assert not result.any()
+    assert metadata['attainable'] is False
+    assert metadata['linear_rgb_max_error'] == pytest.approx(.2)
+
+
+@pytest.mark.parametrize('target, mask', [([float('nan'), 0, 0], None), ([.5, 2, 2], None),
+    ([.5, 0, 0], [0, 0]), ([.5, 0, 0], [1, -1]), ([.5, 0, 0], [1])])
+def test_invalid_colour_targets_and_masks_are_rejected(target, mask):
+    with pytest.raises(ValueError):
+        correct_mean_colour(np.full((2, 3), .5), target, mask)
