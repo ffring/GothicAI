@@ -131,11 +131,28 @@ def test_grid_uses_pixel_centres_visible_cell_means_and_wrapped_boxes():
     assert [measured[field] for field in DETAIL_FIELDS] == pytest.approx(expected, abs=1e-12)
 
 
-def test_legacy_fields_are_byte_identical_on_black_fixture():
-    # The pre-detail ABI returned thirteen positive-zero doubles for this image.
-    measured = measure_material(np.zeros((32, 48, 3), dtype=np.uint8))
+def test_legacy_fields_are_byte_identical_on_stripes_with_alpha():
+    y, x = np.mgrid[:128, :128]
+    phase = (6 * x + 3 * y) % 128
+    triangle = np.minimum(phase, 128 - phase)
+    image = np.stack((48 + 2 * triangle, 32 + triangle, 200 - triangle,
+                      np.where((x + 3 * y) % 19 == 0, 127,
+                               np.where((x + y) % 2, 128, 255))), axis=2).astype(np.uint8)
+    # Measured through the thirteen-double C ABI from origin/main
+    # aa6e284214892c3c3bc52960dd98c0f8525dea3f, with c++ -std=c++17 -O2
+    # -shared -fPIC (Apple clang 21.0.0, arm64 macOS). All thirteen are nonzero.
+    expected = [float.fromhex(value) for value in (
+        "0x1.5555555555555p-3", "0x1.5555555555555p-2",
+        "0x1.d831cc2752717p-1", "0x1.d618dea9905dfp-1",
+        "0x1.0000000000000p+1", "0x1.927e8fd42be02p-2",
+        "0x1.d611a3aac31b4p+6", "0x1.faaead6548f0ap-2",
+        "0x1.765cec96d760ep-4", "-0x1.0d9aed1941c7dp-3",
+        "0x1.7b94cbe543441p-3", "0x1.cb726282338bep-5",
+        "0x1.97eecd4db32b9p-2",
+    )]
+    measured = measure_material(image)
     values = [measured[key] for key in ("period_u_uv", "period_v_uv", "period_u_confidence",
                                       "period_v_confidence")]
     values += [("none", "U", "V").index(measured["direction"]), measured["direction_confidence"],
                measured["direction_angle_deg"], *measured["oklab"], *measured["mean_linear_rgb"]]
-    assert struct.pack("=13d", *values) == bytes(13 * 8)
+    assert struct.pack("=13d", *values) == struct.pack("=13d", *expected)

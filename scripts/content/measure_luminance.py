@@ -10,8 +10,8 @@ mean linear Rec.709 luminance. Earlier sets keep their alpha-weighted scalar.
 Original pixels are never exported or passed to material generation.
 
 ``--materials`` measures periods, direction, mean color, contrast and detail for
-the entire mapping. It fills missing scalar targets and refreshes only contrast
-and detail, preserving all existing earlier measurements.
+the entire mapping. It refreshes every scalar material target, preserving the
+other mapping fields, including luminance and alpha coverage.
 """
 from __future__ import annotations
 
@@ -134,8 +134,7 @@ def update_material_measurements(path, rows, values):
         if set(values[row["texture"]]) != set(MEASUREMENT_FIELDS):
             raise ValueError("measurement must contain exactly the scalar material fields")
         merged = {field: row.get(field, "") for field in FIELDS}
-        merged.update({field: value for field, value in values[row["texture"]].items()
-                       if field in DETAIL_FIELDS or not merged[field]})
+        merged.update(values[row["texture"]])
         _check_measurements(merged, row["texture"])
         updated.append(merged)
     _write_mapping(path, updated)

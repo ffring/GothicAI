@@ -166,12 +166,7 @@ def material_csv(names):
 
 def test_all_materials_scalar_parser_derives_meters_and_atomic_update_preserves_existing(tmp_path):
     rows = [{field: "unchanged" for field in measurement.FIELDS}]
-    rows[0].update(texture="A.TGA", uv_m_per_unit_median="4", target_luminance=".12", target_coverage=".3",
-                   target_period_u_uv="0.100000000000", target_period_v_uv="0.000000000000",
-                   target_period_u_m="0.400000000000", target_period_v_m="0.000000000000",
-                   target_direction="none", target_direction_confidence="0.123000000000",
-                   target_oklab_l="0.500000000000", target_oklab_a="-0.020000000000",
-                   target_oklab_b="0.030000000000")
+    rows[0].update(texture="A.TGA", uv_m_per_unit_median="4", target_luminance=".12", target_coverage=".3")
     before = deepcopy(rows)
     values = measurement.parse_material_measurements(material_csv(["A.TGA"]), rows)
     assert values["A.TGA"]["target_period_u_m"] == "0.5"
@@ -179,9 +174,9 @@ def test_all_materials_scalar_parser_derives_meters_and_atomic_update_preserves_
     path = tmp_path / "materials.csv"
     updated = measurement.update_material_measurements(path, rows, values)
     assert rows == before
-    for field in set(measurement.FIELDS) - set(measurement.DETAIL_FIELDS):
+    for field in set(measurement.FIELDS) - set(measurement.MEASUREMENT_FIELDS):
         assert updated[0][field] == before[0][field]
-    assert {field: updated[0][field] for field in measurement.DETAIL_FIELDS} == dict.fromkeys(measurement.DETAIL_FIELDS, "0.2")
+    assert {field: updated[0][field] for field in measurement.MEASUREMENT_FIELDS} == values["A.TGA"]
     assert measurement.read_mapping(path) == updated
 
 
