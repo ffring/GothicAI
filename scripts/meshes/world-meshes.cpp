@@ -20,6 +20,7 @@
 #include <locale>
 #include <map>
 #include <numeric>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -33,8 +34,56 @@ constexpr std::array<uint64_t,4> textureVobs = {11546,4438,4718,499};
 constexpr std::array textureAreas = {2533385.016,1781506.359,1316101.720,13138.775};
 const std::set<std::string> modifiers = {
   "BIG","SMALL","LARGE","HIGH","LOW","LONG","SHORT","HALF","BROKEN","DEFECT",
-  "NORMAL","POOR","RICH","OPEN","CLOSED","LEFT","RIGHT","L","R","NEW","OLD"
+  "NORMAL","POOR","RICH","OPEN","CLOSED","LEFT","RIGHT","L","R","NEW","OLD",
+  "IN","OUT","TOP","MIDDLE","CORNER","PART","GROUND","INDOOR","M","MS","ML","BL","BR","TL","TR",
+  "DESTROYED","FILLED","EMPTY","BENT","BEND","HUGE","STRAIGHT","ROUND","RED","WHITE","NICE",
+  "HEAVY","ALONE","VERYHIGH","BIGHIGH","BIGFLAT","XL","MED","MEDIUM","PEASANT","WAR","MIS"
 };
+// First matching visual glob wins. These names need context beyond a trailing token.
+const std::vector<std::pair<std::string,std::string>> familyOverrides = {
+  {"NW_CITY_WINDOW_*","WINDOW"},
+  {"NW_CITY_BEAMS_*","BEAMS"},
+  {"NW_CITY_SIGN_*","SIGN"},
+  {"NW_CITY_MARKETSTALL_*","MARKETSTALL"},
+  {"NW_NATURE_STONE_CULT_TOP_*","STONE"},
+  {"NW_NATURE_STONE_CULT_STAND_*","STONE"},
+  {"NW_NATURE_STONE_CULT_PART_*","STONE"},
+  {"NW_NATURE_STONE_CULT_SCENE_*","STONE"},
+  {"OC_DECORATE_V?","DECORATION"},
+  {"NC_LOB_NICE*","DECORATION"},
+  {"ORC_E_DEKO_*","DECORATION"},
+  {"NW_MISC_*_STANDY","DISPLAY"},
+  {"OC_BARRELS_REIHE","BARRELROW"},
+  {"OC_BARRELS_STRUBBELIG","BARRELPILE"},
+  {"NW_MISC_STRAW_GROUP_*","STRAWGROUP"},
+  {"NW_NATURE_GREAT_WEED_XGROUP","WEEDGROUP"},
+  {"OW_LOB_BUSH_WATER_*","BUSH"},
+  {"ADDON_STONES_CRYSTAL_ROSE_*","CRYSTAL"},
+  {"OW_SHIPWRECK_*","SHIPWRECK"},
+  {"NW_DRAGONISLE_TORTURE_*","TORTUREDEVICE"},
+  {"EVT_SPAWN_*","SPAWNPOINT"},
+  {"NW_MISC_INNOS_GROUND_*","STATUE"},
+  {"NW_MISC_DECO_INNOS_*","STATUE"},
+  {"NW_HARBOUR_IRONROPEHOLDER_WROPE_*","IRONROPEHOLDER"},
+  {"DT_SKELETON_V??_HEAD","SKULL"},
+  {"NW_DRAGONISLE_BIGDOOR_HEAD_*","BIGDOOR"},
+  {"OC_LOB_BOWTRAIN","TRAININGTARGET"}
+};
+// Only explicit equivalent nouns, never automatic singularization or compound splitting.
+const std::map<std::string,std::string> familyAliases = {
+  {"BUSHES","BUSH"},{"CRATEBROKEN","CRATE"},{"HOHETANNEN","HOHETANNE"},
+  {"CACTUSBIG","CACTUS"},{"CACTUSLONG","CACTUS"},
+  {"FISHINGNETBIG","FISHINGNET"},{"FISHINGNETSMALL","FISHINGNET"}
+};
+const std::set<std::string> natureFamilies = {
+  "BAUMSTAMM","BAUMSTUMPF","BIGTREE","BLAETTERDACH","BROKENSTONE","BUSH","CACTUS","CAVEWEBS",
+  "COUPLESTONES","CRYSTAL","DEADTREE","DUCKWEED","FARN","FARNTEPPICH","GRASSGROUP","HANGPLANTS",
+  "HOHETANNE","JUNGLETREE","LIANA","MANYSTONES","MUSHROOM","OLDTREE","PALM","PLANT","REED",
+  "ROOT","ROOTS","SIDEPLANT","SMALLPALM","SMALLTREE","SMALLWEED","SPIDERWEBS","STALAG","STONE",
+  "TANNE","THINTREE","TREE","TREEGROUP","WALLFERN","WATERGRASS","WATERLILI","WEEDGROUP","WOODPIECE"
+};
+
+std::string kind(const std::string& family) { return natureFamilies.contains(family) ? "nature" : "object"; }
 
 void require(bool condition,const std::string& message) {
   if(!condition) throw std::runtime_error(message);
@@ -74,18 +123,6 @@ bool variant(const std::string& s) {
   return s.size()>1 && std::isalpha(static_cast<unsigned char>(s.back())) && digits(s.substr(0,s.size()-1));
 }
 
-std::string family(const std::string& visual) {
-  const auto name=fs::path(basename(visual)).stem().string();
-  auto parts=tokens(name);
-  while(!parts.empty() && variant(parts.back())) parts.pop_back();
-  if(!parts.empty()) {
-    while(!parts.back().empty() && std::isdigit(static_cast<unsigned char>(parts.back().back())))
-      parts.back().pop_back();
-    while(!parts.empty() && modifiers.contains(parts.back())) parts.pop_back();
-  }
-  return parts.empty() ? name : parts.back();
-}
-
 bool glob(std::string pattern,std::string value) {
   pattern=upper(pattern); value=upper(value);
   size_t p=0,v=0,star=std::string::npos,retry=0;
@@ -97,6 +134,27 @@ bool glob(std::string pattern,std::string value) {
   }
   while(p<pattern.size() && pattern[p]=='*') ++p;
   return p==pattern.size();
+}
+
+bool sizeOrPolygons(const std::string& token) {
+  static const std::regex code("([0-9]+X[0-9]+(X[0-9]+)?M?)|([0-9]+PP?)");
+  return std::regex_match(token,code);
+}
+
+std::string family(const std::string& visual) {
+  const auto name=fs::path(basename(visual)).stem().string();
+  for(const auto& [pattern,result]:familyOverrides) if(glob(pattern,name)) return result;
+  auto parts=tokens(name);
+  while(!parts.empty()) {
+    auto& token=parts.back();
+    if(variant(token) || sizeOrPolygons(token) || modifiers.contains(token)) { parts.pop_back(); continue; }
+    // Attached suffixes can expose another modifier: M02 -> M, HUGE3 -> HUGE.
+    while(!token.empty() && std::isdigit(static_cast<unsigned char>(token.back()))) token.pop_back();
+    if(variant(token) || modifiers.contains(token)) { parts.pop_back(); continue; }
+    const auto alias=familyAliases.find(token);
+    return alias==familyAliases.end() ? token : alias->second;
+  }
+  return name;
 }
 
 std::vector<std::string> readGlobs(const fs::path& path) {
@@ -332,6 +390,30 @@ Visuals families(const Visuals& visuals,const Meshes& meshes) {
   return out;
 }
 
+Visuals filterKind(const Visuals& visuals,const Meshes& meshes,const std::string& selectedKind) {
+  Visuals out;
+  for(const auto& [name,s]:visuals) if(kind(meshes.at(name).family)==selectedKind) out.emplace(name,s);
+  return out;
+}
+
+Stats visualTotal(const Visuals& visuals) {
+  Stats out;
+  for(const auto& [name,s]:visuals) out.merge(s);
+  return out;
+}
+
+Visuals coverageVisuals(const Visuals& visuals,double target) {
+  Visuals out;
+  const auto count=coverage(visuals,target).count;
+  const auto rows=ranked(visuals);
+  for(size_t i=0;i<count;++i) out.emplace(rows[i].first,*rows[i].second);
+  return out;
+}
+
+size_t movableVisuals(const Visuals& visuals,const Meshes& meshes) {
+  return std::count_if(visuals.begin(),visuals.end(),[&](const auto& row) { return meshes.at(row.first).movable; });
+}
+
 std::vector<std::string> familyVisuals(const std::string& family,const Visuals& visuals,const Meshes& meshes) {
   std::vector<std::string> out;
   for(const auto& [name,s]:ranked(visuals)) if(meshes.at(name).family==family) out.push_back(name);
@@ -357,7 +439,7 @@ void writeCsv(const fs::path& path,const Inventory& inv,const Inventory& all,con
   auto f=output(path);
   f << "world,visual,format,instances,instances_newworld,instances_oldworld,instances_addonworld,"
        "instances_dragonisland,instances_total,item_instances,triangles,bbox_x_m,bbox_y_m,bbox_z_m,"
-       "area_per_instance_m2,area_total_m2,textures,movable,destructible,family,cum_instances_fraction,cum_area_fraction\n";
+       "area_per_instance_m2,area_total_m2,textures,movable,destructible,family,kind,cum_instances_fraction,cum_area_fraction\n";
   const auto fractions=cumulative(inv.visuals);
   size_t row=0;
   for(const auto& [name,s]:ranked(inv.visuals)) {
@@ -367,19 +449,19 @@ void writeCsv(const fs::path& path,const Inventory& inv,const Inventory& all,con
     f << ',' << global.instances() << ',' << s->items << ',' << m.geometry.size()
       << ',' << m.bbox.x << ',' << m.bbox.y << ',' << m.bbox.z << ',' << m.localArea << ',' << s->area << ',';
     csvString(f,textureNames(m)); f << ',' << m.movable << ',' << m.destructible << ',';
-    csvString(f,m.family); f << ',' << fractions[row][0] << ',' << fractions[row][1] << '\n'; ++row;
+    csvString(f,m.family); f << ',' << kind(m.family) << ',' << fractions[row][0] << ',' << fractions[row][1] << '\n'; ++row;
   }
 }
 
 void writeFamilies(const fs::path& path,const Inventory& all,const Meshes& meshes) {
   auto f=output(path);
-  f << "family,visuals,instances_newworld,instances_oldworld,instances_addonworld,instances_dragonisland,"
+  f << "family,kind,visuals,instances_newworld,instances_oldworld,instances_addonworld,instances_dragonisland,"
        "instances_total,area_total_m2,movable_visuals,example_visuals\n";
   const auto grouped=families(all.visuals,meshes);
   for(const auto& [name,s]:ranked(grouped)) {
     auto names=familyVisuals(name,all.visuals,meshes);
     const auto movable=std::count_if(names.begin(),names.end(),[&](const auto& n) { return meshes.at(n).movable; });
-    csvString(f,name); f << ',' << names.size();
+    csvString(f,name); f << ',' << kind(name) << ',' << names.size();
     for(auto count:s->counts) f << ',' << count;
     f << ',' << s->instances() << ',' << s->area << ',' << movable << ',';
     if(names.size()>5) names.resize(5);
@@ -409,7 +491,8 @@ uint64_t movableInstances(const Visuals& visuals,const Meshes& meshes) {
 
 void writeAreas(const fs::path& path,const std::vector<Inventory>& inventories,const Meshes& meshes) {
   auto f=output(path);
-  f << "world,area,instances,area_m2,visuals,families,visuals_for_80pct_instances,movable_instances,top_visuals\n";
+  f << "world,area,instances,area_m2,visuals,families,visuals_for_80pct_instances,movable_instances,"
+       "object_instances,object_visuals,object_visuals_for_80pct,top_visuals\n";
   std::vector<const Inventory*> sorted;
   for(const auto& inv:inventories) sorted.push_back(&inv);
   std::sort(sorted.begin(),sorted.end(),[](auto a,auto b) { return a->world<b->world; });
@@ -417,21 +500,24 @@ void writeAreas(const fs::path& path,const std::vector<Inventory>& inventories,c
     Visuals totals;
     for(const auto& [name,s]:areaRows(*inv,totals)) {
       const auto& visuals=inv->areas.at(name);
+      const auto objects=filterKind(visuals,meshes,"object");
       csvString(f,inv->world); f << ','; csvString(f,name);
       f << ',' << s->instances() << ',' << s->area << ',' << visuals.size() << ',' << families(visuals,meshes).size()
-        << ',' << coverage(visuals,0.8).count << ',' << movableInstances(visuals,meshes) << ',';
+        << ',' << coverage(visuals,0.8).count << ',' << movableInstances(visuals,meshes)
+        << ',' << visualTotal(objects).instances() << ',' << objects.size() << ',' << coverage(objects,0.8).count << ',';
       csvString(f,topVisuals(visuals)); f << '\n';
     }
   }
 }
 
-void familyTable(std::ostream& f,const Inventory& inv,const Meshes& meshes,bool byArea) {
+void familyTable(std::ostream& f,const Inventory& inv,const Meshes& meshes,bool byArea,bool objectsOnly=false) {
   f << "| Семейство | Визуалов | Экземпляров | Площадь, м² | Подвижных визуалов | Примеры |\n"
        "|---|---:|---:|---:|---:|---|\n";
-  const auto grouped=families(inv.visuals,meshes);
+  const auto visuals=objectsOnly ? filterKind(inv.visuals,meshes,"object") : inv.visuals;
+  const auto grouped=families(visuals,meshes);
   const auto rows=ranked(grouped,byArea);
   for(size_t i=0;i<std::min(size_t(20),rows.size());++i) {
-    const auto& [name,s]=rows[i]; auto names=familyVisuals(name,inv.visuals,meshes);
+    const auto& [name,s]=rows[i]; auto names=familyVisuals(name,visuals,meshes);
     const auto movable=std::count_if(names.begin(),names.end(),[&](const auto& n) { return meshes.at(n).movable; });
     f << "| " << name << " | " << names.size() << " | " << s->instances() << " | " << s->area << " | " << movable << " | ";
     if(names.size()>5) names.resize(5);
@@ -469,12 +555,32 @@ void writeReadme(const fs::path& path,const std::vector<Inventory>& inventories,
        "`OpenGothic/data/movable-vobs.csv` и `destructible-vobs.csv` (без регистра, `*` — любая строка, `?` — один символ). "
        "Это признаки таблиц движка, не вывод из имени семейства или типа vob.\n\n"
        "## Семейства и районы\n\n"
-       "Семейство: имя без расширения разбивается по `_`; с хвоста снимаются числовые и вариантные токены "
-       "(`01`, `3`, `01B`, `V1`, `V2`, одиночная буква), у последнего оставшегося токена отрезаются хвостовые цифры "
-       "(`BARREL2` → `BARREL`), затем снимаются хвостовые модификаторы. Семейство — последний оставшийся токен; "
-       "если токенов не осталось, берётся полное имя. Это эвристическая группировка имён, а не ручная классификация.\n\n"
+       "Сначала применяется первая подходящая строка явной таблицы визуал-глоб → семейство ниже. "
+       "Иначе имя без расширения разбивается по `_` и просматривается с хвоста: пропускаются числа и варианты "
+       "(`01`, `3`, `01B`, `V1`, `V2`, одиночная буква), коды размера `\\d+X\\d+(X\\d+)?M?`, "
+       "коды полигонов `\\d+P`/`\\d+PP` и перечисленные модификаторы. После каждого снятого хвоста правило "
+       "повторяется: `STONE_02_BIG_124P` → `STONE`. У токена отрезаются хвостовые цифры, затем снова "
+       "проверяется модификатор (`M02` → `M` снимается, `BARREL2` → `BARREL` остаётся). "
+       "Первое оставшееся существительное становится семейством с явной нормализацией из второй таблицы; "
+       "если ничего не осталось, используется полное имя.\n\n"
        "Полный список модификаторов: ";
   f << '`' << join({modifiers.begin(),modifiers.end()},"`, `") << "`.\n\n"
+       "Явная таблица (регистр не учитывается, `*` и `?` — глоб):\n\n"
+       "| Визуал-глоб | Семейство |\n|---|---|\n";
+  for(const auto& [pattern,result]:familyOverrides) f << "| `" << pattern << "` | " << result << " |\n";
+  f << "\nЯвные эквивалентные существительные; автоматического выделения частей слитного слова и "
+       "единственного числа нет:\n\n| Остаток имени | Семейство |\n|---|---|\n";
+  for(const auto& [name,result]:familyAliases) f << "| " << name << " | " << result << " |\n";
+  f << "\n`CRATEPILE` и `BARRELGROUP` сохраняются отдельно: это группы, другая модель. "
+       "`STRAWGROUP`, `WEEDGROUP`, `BARRELROW` и `BARRELPILE` также обозначают целые группы. "
+       "Для непрозрачных имён `DECORATE`, `NICE`, `DEKO` выбрано общее существительное `DECORATION`, "
+       "без предположения о точном виде украшения. По именам просмотрены все " << all.visuals.size()
+    << " визуала и все " << families(all.visuals,meshes).size()
+    << " получившихся семейств: чисел, размерных кодов, прилагательных и позиций среди семейств нет.\n\n"
+       "`kind` определяется **только явным списком семейств nature**: `"
+    << join({natureFamilies.begin(),natureFamilies.end()},"`, `")
+    << "`. Всё остальное — `object`, в том числе кости, черепа, факелы и заборы; "
+       "`NW_NATURE_FENCE_01` имеет `kind=object`. Слово `NATURE` в имени визуала не используется для классификации.\n\n"
        "Каждому учтённому vob назначается ближайший waypoint своего `world.way_net->points`, "
        "исключая `free_point`, в радиусе **30 м** по 3D-расстоянию от позиции vob. На равном расстоянии выбирается "
        "первое имя по алфавиту. При отсутствии точки — `<NONE>`. У имени снимаются хвостовые числовые токены, "
@@ -491,13 +597,15 @@ void writeReadme(const fs::path& path,const std::vector<Inventory>& inventories,
        "`instances_newworld`, `instances_oldworld`, `instances_addonworld`, `instances_dragonisland`, `instances_total` "
        "в каждом файле дают глобальные числа этого визуала по четырём мирам.\n"
        "- `triangles`, `bbox_x_m`, `bbox_y_m`, `bbox_z_m`, `area_per_instance_m2`: полная локальная геометрия одного экземпляра. "
-       "`textures`: имена через `;`; `movable`, `destructible`: 0/1; `family`: семейство.\n"
+       "`textures`: имена через `;`; `movable`, `destructible`: 0/1; `family`: семейство; `kind`: `nature` или `object`.\n"
        "- `cum_instances_fraction`, `cum_area_fraction`: накопленные доли 0–1 в порядке строк, с итогами области файла в знаменателе.\n\n"
-       "[families.csv](families.csv): семейство, число разных визуалов, экземпляры по мирам и всего, суммарная площадь, "
+       "[families.csv](families.csv): семейство, его `kind`, число разных визуалов, экземпляры по мирам и всего, суммарная площадь, "
        "число подвижных визуалов, до пяти самых частых примеров; сортировка по экземплярам, площади и имени.\n\n"
        "[areas.csv](areas.csv): `world`, `area`, `instances`, `area_m2`, число разных `visuals` и `families`, "
        "`visuals_for_80pct_instances` (минимум визуалов для ≥80 % экземпляров района при сортировке по экземплярам), "
-       "`movable_instances`, `top_visuals` (до пяти `ИМЯ:число` через `;`). Сортировка по имени мира, затем экземплярам, площади и имени района.\n\n"
+       "`movable_instances`, `object_instances`, `object_visuals`, `object_visuals_for_80pct` (экземпляры и разные визуалы "
+       "только `object`, затем минимум этих визуалов для ≥80 % экземпляров `object` района), "
+       "`top_visuals` (до пяти `ИМЯ:число` через `;`). Сортировка по имени мира, затем экземплярам, площади и имени района.\n\n"
        "## Сверка сумм\n\n"
        "Независимая сумма по всем треугольникам считается до разнесения по визуалам. Прогон падает, если "
        "сумма экземпляров не равна числу учтённых vob или площадь расходится больше чем на 0,1 %. "
@@ -520,6 +628,15 @@ void writeReadme(const fs::path& path,const std::vector<Inventory>& inventories,
     << std::setprecision(3) << " | — | — |\n\n";
   f << (matched ? "Число vob и площадь совпали во всех четырёх мирах в точности опубликованного округления.\n\n" :
                   "Есть расхождение с опубликованным отчётом текстур; требуется выяснение причины.\n\n");
+  f << "| Область | Вид | Экземпляров | Доля экземпляров, % | Площадь, м² | Доля площади, % |\n"
+       "|---|---|---:|---:|---:|---:|\n";
+  for(const auto* inv:{&all,&inventories.front()}) for(const auto& selectedKind:{"nature","object"}) {
+    const auto s=visualTotal(filterKind(inv->visuals,meshes,selectedKind));
+    f << "| " << (inv==&all ? "Все миры" : "NEWWORLD.ZEN") << " | " << selectedKind << " | " << s.instances()
+      << " | " << 100*fraction(s.instances(),inv->includedVobs) << " | " << s.area << " | "
+      << 100*fraction(s.area,inv->total().area) << " |\n";
+  }
+  f << '\n';
   size_t mrm=0,msh=0;
   for(const auto& [name,s]:all.visuals) { if(meshes.at(name).format=="MRM") ++mrm; else ++msh; }
   f << "В этих vob встречаются " << mrm << " визуалов MRM и " << msh << " MSH. Это использованные визуалы четырёх миров, "
@@ -543,15 +660,19 @@ void writeReadme(const fs::path& path,const std::vector<Inventory>& inventories,
   }
   f << "\n## Топ-20 семейств по экземплярам\n\n"; familyTable(f,all,meshes,false);
   f << "\n## Топ-20 семейств по площади\n\n"; familyTable(f,all,meshes,true);
+  f << "\n## Топ-20 семейств object по экземплярам\n\n"; familyTable(f,all,meshes,false,true);
+  f << "\n## Топ-20 семейств object по площади\n\n"; familyTable(f,all,meshes,true,true);
   f << "\n## Покрытие\n\n"
        "Число визуалов и семейств до первого достижения ≥50/80/90 % выбранной меры. "
        "Для каждой меры своя сортировка по убыванию; семейства ранжируются по сумме всех своих визуалов.\n\n"
        "| Область | Мера | 50 %: визуалов | 50 %: семейств | 80 %: визуалов | 80 %: семейств | 90 %: визуалов | 90 %: семейств |\n"
        "|---|---|---:|---:|---:|---:|---:|---:|\n";
-  for(const auto* inv:{&all,&inventories.front()}) for(bool byArea:{false,true}) {
-    f << "| " << (inv==&all ? "Все миры" : "NEWWORLD.ZEN") << " | " << (byArea ? "Площадь" : "Экземпляры");
-    const auto grouped=families(inv->visuals,meshes);
-    for(double target:{0.5,0.8,0.9}) f << " | " << coverage(inv->visuals,target,byArea).count << " | " << coverage(grouped,target,byArea).count;
+  for(bool objectsOnly:{false,true}) for(const auto* inv:{&all,&inventories.front()}) for(bool byArea:{false,true}) {
+    f << "| " << (inv==&all ? "Все миры" : "NEWWORLD.ZEN") << (objectsOnly ? ", object" : ", все виды")
+      << " | " << (byArea ? "Площадь" : "Экземпляры");
+    const auto visuals=objectsOnly ? filterKind(inv->visuals,meshes,"object") : inv->visuals;
+    const auto grouped=families(visuals,meshes);
+    for(double target:{0.5,0.8,0.9}) f << " | " << coverage(visuals,target,byArea).count << " | " << coverage(grouped,target,byArea).count;
     f << " |\n";
   }
   f << "\n## Топ-15 районов NEWWORLD.ZEN по экземплярам\n\n"
@@ -565,30 +686,62 @@ void writeReadme(const fs::path& path,const std::vector<Inventory>& inventories,
       << families(visuals,meshes).size() << " | " << coverage(visuals,0.8).count << " | " << movableInstances(visuals,meshes)
       << " | " << topVisuals(visuals) << " |\n";
   }
-  const auto grouped=families(all.visuals,meshes);
-  const auto familyRows=ranked(grouped); const auto& first=familyRows.front();
-  const auto firstNames=familyVisuals(first.first,all.visuals,meshes);
-  std::string district; double best=-1;
-  for(size_t i=0;i<std::min(size_t(15),districts.size());++i) {
-    const auto& name=districts[i].first;
-    if(name.rfind("NW_CITY_",0)!=0 || name=="NW_CITY_TO") continue;
-    const auto& visuals=nw.areas.at(name);
-    const auto c=coverage(visuals,0.8); const double efficiency=fraction(c.value,double(c.count));
-    if(efficiency>best || (efficiency==best && name<district)) { best=efficiency; district=name; }
+  Visuals objectDistrictTotals;
+  for(const auto& [name,visuals]:nw.areas) objectDistrictTotals[name]=visualTotal(filterKind(visuals,meshes,"object"));
+  const auto objectDistricts=ranked(objectDistrictTotals);
+  f << "\n## Топ-15 районов NEWWORLD.ZEN по object_instances\n\n"
+       "| Район | Экземпляров object | Площадь object, м² | Визуалов object | Визуалов object для 80 % | Подвижных экземпляров object | Топ визуалов object |\n"
+       "|---|---:|---:|---:|---:|---:|---|\n";
+  for(size_t i=0;i<std::min(size_t(15),objectDistricts.size());++i) {
+    const auto& [name,s]=objectDistricts[i]; const auto objects=filterKind(nw.areas.at(name),meshes,"object");
+    f << "| `" << name << "` | " << s->instances() << " | " << s->area << " | " << objects.size()
+      << " | " << coverage(objects,0.8).count << " | " << movableInstances(objects,meshes)
+      << " | " << topVisuals(objects) << " |\n";
   }
-  require(!district.empty(),"no NW_CITY district for recommendation");
-  const auto& selected=nw.areas.at(district); const auto c=coverage(selected,0.8);
+  const auto objects=filterKind(all.visuals,meshes,"object");
+  const auto grouped=families(objects,meshes);
+  const auto familyRows=ranked(grouped); const auto& first=familyRows.front();
+  const auto firstNames=familyVisuals(first.first,objects,meshes);
+  const std::set<std::string> nonVegetation={
+    "BROKENSTONE","CAVEWEBS","COUPLESTONES","CRYSTAL","MANYSTONES","SPIDERWEBS","STALAG","STONE"
+  };
+  Stats vegetation;
+  for(const auto& [name,s]:filterKind(all.visuals,meshes,"nature"))
+    if(!nonVegetation.contains(meshes.at(name).family)) vegetation.merge(s);
   f << "\n## С чего начать\n\n"
-    << "По числу экземпляров первым идёт семейство **" << first.first << "**: экземпляров — " << first.second->instances()
-    << " (" << 100*fraction(first.second->instances(),all.includedVobs) << " %), " << firstNames.size()
-    << " разных визуалов, " << first.second->area << " м². Это первый кандидат при приоритете количества.\n\n"
-    << "Среди городских районов `NW_CITY_*` в топ-15 выше (кроме переходов `NW_CITY_TO`) наибольшее число экземпляров "
-       "на визуал в наборе для 80 % даёт **" << district
-    << "**: разных визуалов — " << selected.size() << ", экземпляров — " << totals.at(district).instances() << ". Топ-"
-    << c.count << " закрывает " << uint64_t(c.value) << " экземпляров ("
-    << 100*fraction(c.value,totals.at(district).instances()) << " %), " << best << " экземпляров на визуал. "
-    << "Полный набор района закрывает " << selected.size() << " визуалов; сокращённый набор для 80 % — " << c.count
-    << ". Это вывод из таблиц частот, без решений о геймплее.\n";
+    << "Растительность, деревья и грибы дают " << vegetation.instances() << " экземпляров ("
+    << 100*fraction(vegetation.instances(),all.includedVobs) << " %) и " << vegetation.area << " м² ("
+    << 100*fraction(vegetation.area,all.total().area) << " %) во всех мирах. Сюда включены пни и стволы; "
+       "это `nature` без семейств `" << join({nonVegetation.begin(),nonVegetation.end()},"`, `")
+    << "`. Полная категория `nature` в сверке включает также камни, кристаллы и паутину. "
+       "Растительность требует отдельного вида ручной работы; для первого набора утвари и построек ниже используются только `object`.\n\n"
+    << "Первое семейство `object` по экземплярам — **" << first.first << "**: " << first.second->instances()
+    << " экземпляров, " << firstNames.size() << " разных визуалов и " << first.second->area << " м². Его визуалы: `"
+    << join(firstNames,"`, `") << "`.\n\n"
+       "Для первого цельного городского набора сравниваются четыре района. В 80 %-набор входят самые частые визуалы "
+       "`object` до первого достижения ≥80 % экземпляров `object` района; доля показана по фактически закрытым экземплярам. "
+       "Критерий выбора — наибольшее число закрытых экземпляров на один визуал этого набора.\n\n"
+       "| Район | Экземпляров object | Разных визуалов object | Визуалов для 80 % | Закрыто экземпляров | Доля, % | Из выбранных в movable-vobs.csv |\n"
+       "|---|---:|---:|---:|---:|---:|---:|\n";
+  std::string district; double best=-1;
+  for(const auto& name:std::array{"NW_CITY_HABOUR","NW_CITY_MERCHANT","NW_CITY_KANAL","NW_CITY_UPTOWN"}) {
+    require(nw.areas.contains(name),std::string("missing city district: ")+name);
+    const auto areaObjects=filterKind(nw.areas.at(name),meshes,"object");
+    const auto selected=coverageVisuals(areaObjects,0.8); const auto covered=visualTotal(selected).instances();
+    const auto count=visualTotal(areaObjects).instances();
+    const double efficiency=fraction(covered,double(selected.size()));
+    if(efficiency>best || (efficiency==best && name<district)) { best=efficiency; district=name; }
+    f << "| `" << name << "` | " << count << " | " << areaObjects.size() << " | " << selected.size()
+      << " | " << covered << " | " << 100*fraction(covered,count) << " | " << movableVisuals(selected,meshes) << " |\n";
+  }
+  const auto areaObjects=filterKind(nw.areas.at(district),meshes,"object");
+  const auto selected=coverageVisuals(areaObjects,0.8); const auto covered=visualTotal(selected).instances();
+  f << "\nПо этому критерию начинать стоит с **" << district << "**: полный набор содержит " << areaObjects.size()
+    << " разных визуалов `object`, а сокращённый — **" << selected.size() << "** и закрывает " << covered
+    << " из " << visualTotal(areaObjects).instances() << " экземпляров `object` ("
+    << 100*fraction(covered,visualTotal(areaObjects).instances()) << " %), " << best << " экземпляров на визуал. "
+    << "Из этих " << selected.size() << " визуалов **" << movableVisuals(selected,meshes)
+    << "** уже перечислены в `movable-vobs.csv`. Это вывод из таблиц частот, без решений о геймплее.\n";
 }
 
 void selfTest() {
@@ -597,8 +750,23 @@ void selfTest() {
   for(const auto& [name,expected]:std::vector<std::pair<std::string,std::string>>{
       {"NW_HARBOUR_BARREL_01","BARREL"},{"NW_CITY_WEAPON_BARREL_01","BARREL"},{"OC_BARREL_V1","BARREL"},
       {"OC_MOB_TABLE_NORMAL_DEFECT","TABLE"},{"NW_CITY_CUPBOARD_POOR_02","CUPBOARD"},{"MIN_LOB_HANDRAIL_3","HANDRAIL"},
-      {"x/barrel2.mrm","BARREL"},{"OC_BARREL_01B","BARREL"},{"OC_BARREL_A","BARREL"},{"01_V2_A","01_V2_A"}})
+      {"x/barrel2.mrm","BARREL"},{"OC_BARREL_01B","BARREL"},{"OC_BARREL_A","BARREL"},{"01_V2_A","01_V2_A"},
+      {"OC_BARREL_V1_DESTROYED","BARREL"},{"NW_CITY_WINDOW_STONE_OUT_01","WINDOW"},
+      {"ADDON_VALLEYPLANT_TREE_02_XL_191P","TREE"},{"NW_NATURE_STONE_BIGHIGH_01","STONE"},
+      {"ADDON_STONES_STONE_02_BIG_124P","STONE"},{"ADDON_MISC_WOODPILLAR_M02","WOODPILLAR"},
+      {"EVT_TPL_METALTHORNS_2X2X05M","METALTHORNS"},{"ADDON_PLANTS_WALLFERN_02_234PP","WALLFERN"},
+      {"NW_CITY_TABLE_PEASANT_01","TABLE"},{"NW_CITY_MAP_WAR_OPEN_01","MAP"},
+      {"OC_DECORATE_V1","DECORATION"},{"NW_MISC_STRAW_GROUP_01","STRAWGROUP"},
+      {"ADDON_CANYONPLANT_BUSHES_02_240P","BUSH"},{"NW_HARBOUR_CRATEBROKEN_01","CRATE"},
+      {"NW_NATURE_HOHETANNEN_02_531P","HOHETANNE"},{"NW_HARBOUR_CRATEPILE_01","CRATEPILE"},
+      {"NW_HARBOUR_BARRELGROUP_01","BARRELGROUP"},{"NW_NATURE_SIDEPLANT_CORNER_01","SIDEPLANT"},
+      {"EVT_MAINHALL_DOOR_LOCK_BL_01","LOCK"},{"OC_LOB_TORCHHOLDER_FILLED","TORCHHOLDER"}})
     check(family(name)==expected,"family: "+name);
+  check(sizeOrPolygons("4X4X4M") && sizeOrPolygons("4X4M") && sizeOrPolygons("2X3M") &&
+        sizeOrPolygons("234PP") && sizeOrPolygons("191P") && !sizeOrPolygons("SMALLPALM"),"size and polygon codes");
+  check(kind(family("NW_NATURE_FENCE_01"))=="object" && kind("BUSH")=="nature" &&
+        kind("CRYSTAL")=="nature" && kind("TORCH")=="object" && kind("SKULL")=="object",
+        "kind uses explicit family set, not visual prefix");
   check(glob("OC_BARREL_V?","oc_barrel_v1") && !glob("OC_BARREL_V?","OC_BARREL_V12"),"glob question mark and case");
   check(glob("NW_CITY_TABLE_*","nw_city_table_01") && glob("NW_CITY_TABLE_*","NW_CITY_TABLE_") &&
         !glob("NW_CITY_TABLE_*","NW_CITY_CHAIR_01"),"glob star and mismatch");
@@ -648,6 +816,14 @@ void selfTest() {
   const auto grouped=families(small,testMeshes);
   check(grouped.at("F").instances()==9 && grouped.at("F").area==4 && coverage(grouped,0.8).count==1,
         "family aggregation and coverage");
+  testMeshes["A"].family="BARREL"; testMeshes["A"].movable=true;
+  testMeshes["B"].family="BUSH"; testMeshes["C"].family="TORCH";
+  const auto objects=filterKind(small,testMeshes,"object");
+  check(objects.size()==2 && visualTotal(objects).instances()==7 &&
+        visualTotal(filterKind(small,testMeshes,"nature")).instances()==3,"kind partitions visuals and instances");
+  const auto selected=coverageVisuals(objects,0.8);
+  check(selected.size()==1 && visualTotal(selected).instances()==6 && movableVisuals(selected,testMeshes)==1,
+        "object 80 percent set and movable visual count");
   std::cout << "self-test: " << checks << " checks passed\n";
 }
 }
