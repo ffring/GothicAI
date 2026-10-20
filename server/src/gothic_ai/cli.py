@@ -745,6 +745,7 @@ def _start_crime_meet(state: ServerState, link: GameLink, cards: Any) -> asyncio
         cards=cards,
     )
     state.talk.refuses = state.crime_meet.refuses
+    state.talk.refusal = state.crime_meet.refusal
     return asyncio.create_task(state.crime_meet.run())
 
 
@@ -1529,6 +1530,14 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await crimes_scenario(link, state.crimes)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario crimes: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "crime_ally":
+                assert state.dialogue is not None and state.talk is not None and state.crimes is not None
+                results = await scenarios.crime_ally(
+                    link, state.dialogue, state.talk, state.crimes, perception=state.perception
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario crime_ally: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "crime_react":
                 assert state.crimes is not None and state.crime_react is not None
@@ -2707,6 +2716,7 @@ def main() -> None:
             "npc_far",
             "frame",
             "crime_meet",
+            "crime_ally",
             "crime_talk",
             "trace_crime",
             "cover",

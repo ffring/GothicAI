@@ -597,6 +597,23 @@ async def test_conversational_refusal_reads_live_knowledge_without_waiting_for_p
 async def test_refusal_does_not_turn_a_suspicion_into_a_conversation_ban(system):
     case(system, kind="murder", npc=CITIZEN, community="city", degree="suspects")
     assert not system.meet.refuses(CITIZEN)
+    assert system.meet.refusal(CITIZEN) is None
+
+
+@pytest.mark.parametrize("courage,reaction", [(3, "refuse"), (2, "flee")])
+async def test_refusal_returns_the_murder_case_role_and_reaction(system, courage, reaction):
+    crime = case(system, kind="murder", npc=STRANGER, community="city")
+    system.meet.cards = {STRANGER: card(STRANGER, courage=courage)}
+    reason = system.meet.refusal(STRANGER.lower())
+    assert reason is not None
+    assert reason.crime == crime
+    assert reason.crime["kind"] == "murder"
+    assert reason.role == "stranger"
+    assert reason.reaction == reaction
+    assert system.meet.refuses(STRANGER)
+    system.chronicle.record({"fact": "forgiven", "crime": crime["id"], "npc": STRANGER})
+    assert system.meet.refusal(STRANGER) is None
+    assert not system.meet.refuses(STRANGER)
 
 
 @pytest.mark.parametrize("settlement", ["silenced", "forgiven"])
