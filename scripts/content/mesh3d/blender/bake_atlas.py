@@ -9,7 +9,8 @@ config: {"glb": model with tile UVs in metres and zone-key materials (barrel.py)
          "size": 1024, "colour_samples": 16, "seed": 1, "ao_samples": 64, "ao_distance": 0.15, "ao_strength": 0.85,
          "sectors": 20, "tone_spread": 0.28, "light_part": [index, gain],
          "edge_radius": 0.006, "wet_height": 0.18, "algae": 0.7, "bleach": 0.35,
-         "planks_per_tile": {KEY: n}, "seam_width": 0.07, "seam_dark": 0.75, "contrast": {KEY: gamma}}
+         "planks_per_tile": {KEY: n}, "seam_width": 0.07, "seam_dark": 0.75, "contrast": {KEY: gamma},
+         "nodes": [NODE NAME, ...]}
 The tiling materials are sampled through the tile UVs and baked into a new atlas
 UV: per-part tone (the builder's "_part" attribute when present, otherwise
 angular sectors around the axis and lid planks along X), dark seams where a part's tile plank ends, worn light edges from the Bevel
@@ -17,6 +18,8 @@ node, sun-bleached tops, a wet algae-dark bottom and baked AO. Each zone then
 gets more local contrast and is scaled back to its measured mean colour: the
 original reads by painted contrast, not by a brighter mean.
 Writes atlas PNGs, model.glb with the atlas as its only UV map, metrics.json.
+With "nodes" (a MOB with several attachments, chest.py) the GLB's objects are
+baked into one atlas together and exported again as those named nodes.
 """
 import json
 import math
@@ -47,6 +50,13 @@ scene.world = world
 
 bpy.ops.import_scene.gltf(filepath=str(staging / cfg["glb"]))  # an absolute path stays as it is
 meshes = [o for o in scene.objects if o.type == "MESH"]
+node_names = cfg.get("nodes", [])
+if node_names:  # remember each face's node through the join
+    if sorted(o.name for o in meshes) != sorted(node_names):
+        raise SystemExit(f"GLB objects {[o.name for o in meshes]} do not match nodes {node_names}")
+    for o in meshes:
+        attr = o.data.attributes.new("_node", "INT", "FACE")
+        attr.data.foreach_set("value", np.full(len(o.data.polygons), node_names.index(o.name), np.int32))
 for o in scene.objects:
     o.select_set(o in meshes)
 bpy.context.view_layer.objects.active = meshes[0]
@@ -102,8 +112,10 @@ if light:
 tone_attr = mesh.attributes.new("tone", "FLOAT", "FACE")
 tone_attr.data.foreach_set("value", tones[part].astype(np.float32))
 zone_attr = mesh.attributes.new("zone", "FLOAT", "FACE")
-hidden = normals[:, 2] < -0.9  # the bottom stands on the ground: baked, but not part of the measured mean
-zone_attr.data.foreach_set("value", np.where(hidden, 0, mat_index + 1).astype(np.float32))
+# Faces pointing down (a barrel's bottom on the ground) are left out of the measured mean, but still
+# get their zone's gain: a canopy's underside is seen. They carry half a step on top of their zone.
+hidden = normals[:, 2] < -0.9
+zone_attr.data.foreach_set("value", (mat_index + 1 + np.where(hidden, 0.5, 0.0)).astype(np.float32))
 
 
 # --- bake materials ---
@@ -289,11 +301,12 @@ ao = bake_pass("ao", "AO", samples=cfg.get("ao_samples", 64))[:, :, 0]
 
 strength = cfg.get("ao_strength", 0.85)
 albedo = colour * (1 - strength * (1 - ao))[..., None]
-zone_id = np.rint(zone).astype(int)
+zone_id = np.floor(zone + 1e-3).astype(int)
+down = zone - zone_id > 0.25
 report = {}
 for index, key in enumerate(keys):
-    sel = zone_id == index + 1  # hidden faces have zone 0 and keep their colour
-    measured = sel & inside
+    sel = zone_id == index + 1  # the gain reaches every pixel of the zone, faces pointing down included
+    measured = sel & inside & ~down
     if not measured.any():
         continue
     gamma = cfg.get("contrast", {}).get(key, 1.0)
@@ -355,20 +368,64 @@ for key, (atlas_key, group) in cfg["slots"].items():
     if atlas_key not in new_slots:
         new_slots.append(atlas_key)
 remap = np.array([new_slots.index(cfg["slots"][k][0]) for k in keys])
-mesh.polygons.foreach_set("material_index", remap[mat_index].astype(np.int32))
-mesh.materials.clear()
+mesh.materials.clear()  # resets every face's material index, so the indices are set after the new materials
 groups = {atlas_key: group for atlas_key, group in cfg["slots"].values()}
 for atlas_key in new_slots:
     mat = bpy.data.materials.new(atlas_key)
     mat["group"] = groups[atlas_key]
     mesh.materials.append(mat)
+mesh.polygons.foreach_set("material_index", remap[mat_index].astype(np.int32))
+mesh.update()
+written = np.empty(len(mesh.polygons), np.int32)
+mesh.polygons.foreach_get("material_index", written)
+faces_per_material = np.bincount(written, minlength=len(new_slots)).tolist()
+exported = [obj]
+if node_names:  # split the baked mesh back into its named nodes
+    for index in range(1, len(node_names)):
+        node = np.empty(len(mesh.polygons), np.int32)
+        mesh.attributes["_node"].data.foreach_get("value", node)
+        faces = node == index
+        verts = np.zeros(len(mesh.vertices), bool)
+        loops = np.empty(len(mesh.loops), np.int32)
+        mesh.loops.foreach_get("vertex_index", loops)
+        starts = np.empty(len(mesh.polygons), np.int32)
+        mesh.polygons.foreach_get("loop_start", starts)
+        totals = np.empty(len(mesh.polygons), np.int32)
+        mesh.polygons.foreach_get("loop_total", totals)
+        for start, total in zip(starts[faces], totals[faces]):
+            verts[loops[start:start + total]] = True
+        mesh.vertices.foreach_set("select", verts)
+        edge_verts = np.empty(len(mesh.edges) * 2, np.int32)
+        mesh.edges.foreach_get("vertices", edge_verts)
+        mesh.edges.foreach_set("select", verts[edge_verts.reshape(-1, 2)].all(axis=1))
+        mesh.polygons.foreach_set("select", faces)
+        for o in scene.objects:
+            o.select_set(o == obj)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.separate(type="SELECTED")
+        bpy.ops.object.mode_set(mode="OBJECT")
+    exported = [o for o in scene.objects if o.type == "MESH"]
+    for o in exported:
+        o.name = "tmp-" + o.name
+    for o in exported:
+        values = np.empty(len(o.data.polygons), np.int32)
+        o.data.attributes["_node"].data.foreach_get("value", values)
+        if len(set(values.tolist())) != 1:
+            raise SystemExit(f"node split left mixed faces in {o.name}")
+        o.name = o.data.name = node_names[int(values[0])]
+        o.data.attributes.remove(o.data.attributes["_node"])
 for o in scene.objects:
-    o.select_set(o == obj)
+    o.select_set(o in exported)
 bpy.ops.export_scene.gltf(filepath=str(out / "model.glb"), export_format="GLB", use_selection=True,
                           export_apply=True, export_yup=True, export_extras=True, export_normals=True,
                           export_texcoords=True, export_animations=False, export_attributes=False)
 coverage = float(inside.mean())
-metrics = {"atlas": size, "coverage": round(coverage, 4), "triangles": sum(len(p.vertices) - 2 for p in mesh.polygons),
-           "materials": new_slots, "zones": report, "blender_version": bpy.app.version_string}
+metrics = {"atlas": size, "coverage": round(coverage, 4),
+           "triangles": sum(len(p.vertices) - 2 for o in exported for p in o.data.polygons),
+           "materials": new_slots, "faces_per_material": dict(zip(new_slots, faces_per_material)), "zones": report,
+           "blender_version": bpy.app.version_string}
+if node_names:
+    metrics["nodes"] = {o.name: len(o.data.polygons) for o in exported}
 (out / "metrics.json").write_text(json.dumps(metrics, indent=2))
 print("ATLAS", json.dumps(metrics))
