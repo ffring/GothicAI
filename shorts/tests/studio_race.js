@@ -58,7 +58,11 @@ function documentStub() {
     ids.set(id, new Element('div', id));
   }
   ids.get('fit').appendChild(new Element());
-  Object.assign(ids.get('video'), {src: '', duration: NaN, addEventListener() {}});
+  Object.assign(ids.get('video'), {
+    src: '', duration: NaN, pauseCalls: 0,
+    pause() { this.pauseCalls += 1; },
+    addEventListener() {},
+  });
   return {
     getElementById: (id) => ids.get(id) || null,
     createElement: (tag) => new Element(tag),
@@ -66,7 +70,7 @@ function documentStub() {
   };
 }
 
-async function page() {
+async function page(fetchOverride) {
   const document = documentStub();
   const oldRead = deferred();
   const oldReadStarted = deferred();
@@ -75,7 +79,7 @@ async function page() {
   let reads = 0;
   const context = vm.createContext({
     document, navigator: {}, performance: {now: () => 0}, setTimeout, clearTimeout,
-    fetch: async (path, options) => {
+    fetch: fetchOverride || (async (path, options) => {
       if (path === '/api/session') {
         assert.equal(options.method, undefined);
         reads += 1;
@@ -89,9 +93,9 @@ async function page() {
       assert.equal(path, '/api/restore?line=2&take=1');
       restoreStarted.resolve();
       return restorePost.promise;
-    },
+    }),
   });
-  vm.runInContext(source + '\nglobalThis.studio = {S, choose, restore, goto};', context, {timeout: 1000});
+  vm.runInContext(source + '\nglobalThis.studio = {S, choose, discard, restore, goto};', context, {timeout: 1000});
   await new Promise(setImmediate); // finish the application's initial load(false)
   assert.equal(document.getElementById('cur').textContent, 'Первая фраза.');
   return {studio: context.studio, document, oldRead, oldReadStarted, restorePost, restoreStarted};
@@ -139,11 +143,103 @@ async function navigationRace() {
   assert.equal(document.getElementById('cur').textContent, 'Вторая фраза.');
 }
 
+async function playbackActions(mode) {
+  const snapshot = session();
+  const posts = [];
+  const {studio, document} = await page(async (path, options) => {
+    if (path === '/api/session') return response(snapshot);
+    assert.equal(options.method, 'POST');
+    posts.push(path);
+    const ln = snapshot.lines[0];
+    if (path === '/api/discard?line=1&take=1') {
+      ln.takes = [take(2)];
+      ln.chosen = 2;
+    } else {
+      assert.equal(path, '/api/restore?line=1&take=1');
+      ln.takes = [take(1), take(2)];
+      ln.chosen = 1;
+    }
+    return response({ok: true});
+  });
+  const video = document.getElementById('video');
+  let audioPauses = 0;
+  const start = () => {
+    studio.S.mode = mode;
+    studio.S.audio = mode === 'play' ? {pause() { audioPauses += 1; }} : null;
+  };
+  start();
+  await studio.discard();
+  assert.equal(studio.S.mode, 'idle');
+  assert.equal(video.pauseCalls, 1);
+  assert.equal(studio.S.audio, null);
+  assert.equal(posts.length, 0, 'the first discard only arms, including during playback');
+  assert.ok(studio.S.discardArm);
+  assert.equal(document.getElementById('trashbtn').textContent, 'Ещё раз — в корзину');
+  assert.match(document.getElementById('trashbtn').className, /\barmed\b/);
+  await studio.discard();
+  assert.deepEqual(posts, ['/api/discard?line=1&take=1']);
+  assert.equal(studio.S.discardArm, null);
+  assert.equal(studio.S.discarded.length, 1);
+  assert.equal(studio.S.session.lines[0].chosen, 2);
+  assert.equal(document.getElementById('trashbtn').textContent, 'В корзину');
+
+  start();
+  await studio.restore();
+  assert.equal(studio.S.mode, 'idle');
+  assert.equal(video.pauseCalls, 2);
+  assert.equal(studio.S.audio, null);
+  assert.equal(audioPauses, mode === 'play' ? 2 : 0);
+  assert.deepEqual(posts, ['/api/discard?line=1&take=1', '/api/restore?line=1&take=1']);
+  assert.equal(studio.S.session.lines[0].chosen, 1);
+  assert.equal(studio.S.session.lines[0].takes.length, 2);
+  assert.equal(studio.S.discarded.length, 0);
+  assert.equal(document.getElementById('msg').textContent, 'Дубль фразы 1 вернулся и выбран.');
+}
+
+async function activeRecordingDoesNotChangeTakes(mode) {
+  let posts = 0;
+  const {studio, document} = await page(async (path) => {
+    if (path === '/api/session') return response(session());
+    posts += 1;
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  studio.S.mode = mode;
+  studio.S.discarded.push({n: 2, k: 1});
+  await studio.discard();
+  await studio.restore();
+  assert.equal(studio.S.mode, mode);
+  assert.equal(posts, 0);
+  assert.equal(document.getElementById('video').pauseCalls, 0);
+  assert.equal(studio.S.discardArm, null);
+  assert.equal(studio.S.discarded.length, 1);
+  assert.equal(studio.S.session.lines[0].chosen, 1);
+}
+
+async function restoreMissingLineKeepsAValidIndex() {
+  const posts = [];
+  const {studio, document} = await page(async (path, options) => {
+    if (path === '/api/session') return response(session());
+    assert.equal(options.method, 'POST');
+    posts.push(path);
+    return response({ok: true});
+  });
+  studio.S.discarded.push({n: 99, k: 1});
+  await studio.restore();
+  assert.deepEqual(posts, ['/api/restore?line=99&take=1']);
+  assert.equal(studio.S.i, 0);
+  assert.equal(studio.S.discarded.length, 0);
+  assert.equal(document.getElementById('cur').textContent, 'Первая фраза.');
+  assert.equal(document.getElementById('msg').className, 'msg');
+}
+
 const timeout = setTimeout(() => { throw new Error('studio race test timed out'); }, 5000);
 (async () => {
   await restoreRace(false);
   await restoreRace(true);
   await navigationRace();
+  for (const mode of ['play', 'run']) await playbackActions(mode);
+  for (const mode of ['rec', 'saving', 'room']) await activeRecordingDoesNotChangeTakes(mode);
+  await restoreMissingLineKeepsAValidIndex();
 })().catch((err) => {
   console.error(err);
   process.exitCode = 1;

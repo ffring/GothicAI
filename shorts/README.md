@@ -242,6 +242,7 @@ with the picture, the arrows change the line, 1-9 choose a take. Press Backspace
 twice within 3 s to send the chosen take to `voice/trash/`; Esc cancels the pending discard. Z (or "Вернуть дубль")
 restores the last discarded take from `voice/trash/` and selects it, returning to its line. The undo stack lasts
 until the page is reloaded; Z also works with the Russian keyboard layout.
+The trash and restore buttons stop playback or rehearsal before acting.
 "Тишина 10 с" records the room for the noise reduction, "Прогон" runs the draft with the prompter alone.
 
 The microphone is taken as it is (no echo cancelling, noise suppression or automatic gain) and the take is

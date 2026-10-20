@@ -200,7 +200,7 @@ def test_the_studio_javascript_has_valid_syntax():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_old_choose_responses_do_not_undo_restore_or_navigation():
+def test_the_studio_handles_take_actions_and_late_responses():
     done = subprocess.run(
         ["node", str(Path(__file__).with_name("studio_race.js")), str(APP / "app.js")],
         capture_output=True,

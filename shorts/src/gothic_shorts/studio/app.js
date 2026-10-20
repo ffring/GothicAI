@@ -456,6 +456,7 @@ function disarmDiscard(announce = true) {
 }
 
 async function discard() {
+  if (S.mode === 'play' || S.mode === 'run') stopPlay();
   if (S.mode !== 'idle' || S.changingTake) return;
   const ln = line();
   const t = chosenTake(ln);
@@ -490,6 +491,7 @@ async function discard() {
 }
 
 async function restore() {
+  if (S.mode === 'play' || S.mode === 'run') stopPlay();
   if (S.mode !== 'idle' || S.changingTake || !S.discarded.length) return;
   disarmDiscard();
   const {n, k} = S.discarded[S.discarded.length - 1];
@@ -498,7 +500,7 @@ async function restore() {
   try {
     await api(`/api/restore?line=${n}&take=${k}`, '');
     S.discarded.pop();
-    S.i = S.session.lines.findIndex((ln) => ln.n === n);
+    S.i = Math.max(0, S.session.lines.findIndex((ln) => ln.n === n));
     await load();
     await showLine();
     say(`Дубль фразы ${n} вернулся и выбран.`);
