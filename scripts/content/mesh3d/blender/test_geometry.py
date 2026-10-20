@@ -1,5 +1,8 @@
 """Small deterministic geometry checks; no Blender or model runtime needed."""
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -238,18 +241,9 @@ def test_uv_projection_rejects_cuboids_even_when_target_is_named_barrel(size):
 
 
 def test_uv_projection_uses_geometry_for_actual_pr312_static_mrm_barrel_target():
-    # Target contract from PR #312: asset kind describes storage, not shape.
-    target = {
-        "id": "barrel", "visual": "NW_HARBOUR_BARREL_01.MRM", "kind": "static_mrm",
-        "budget_tris": 1500,
-        "bbox_min": [-.398562736511, -.55889465332, -.400130805969],
-        "bbox_max": [.399873046875, .548935012817, .398304977417],
-        "zones": [
-            {"key": "OWN_PROP_WOOD_STAVE", "group": "WOOD", "role": "curved vertical staves"},
-            {"key": "OWN_PROP_WOOD_HEAD", "group": "WOOD", "role": "inset plank ends"},
-            {"key": "OWN_PROP_IRON_BAND", "group": "METAL", "role": "forged retaining hoops and rivets"},
-        ],
-    }
+    path = Path(__file__).resolve().parents[4] / "data/content/mesh3d-pilot.json"
+    target = next(row for row in json.loads(path.read_text()) if row["id"] == "barrel")
+    assert target["kind"] == "static_mrm"
     vertices, faces = cylinder()
     vertices = fit_bbox(vertices, {"up_axis": "+Y", "meters_per_unit": 1.}, target)
     assert select_uv_projection(vertices, faces, target) == "cylinder"
