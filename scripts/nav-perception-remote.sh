@@ -2,8 +2,8 @@
 # Submit one bounded perception phase; no teachers or demonstrations are collected.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-perception-remote.sh build|compare}"
-case "$stage" in build|compare) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
+stage="${1:?Usage: nav-perception-remote.sh build|compare|evaluate}"
+case "$stage" in build|compare|evaluate) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 export GQ_OWNER=nav-perception
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-perception" "$HOME"')"
 ssh ryzen "mkdir -p '$task/source' '$task/input'"
@@ -33,11 +33,28 @@ cmake --build "$task/build" --target Gothic2Notr gothic-body-runner \
   check-navigation-eye check-navigation-memory check-navmemoryteacher --parallel 3
 "$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_demos.py \
   scripts/tests/test_nav_teacher_v3.py scripts/tests/test_nav_teacher_v3_coverage.py \
-  scripts/tests/test_nav_perception.py
+  scripts/tests/test_nav_perception.py scripts/tests/test_nav_perception_eval.py \
+  scripts/tests/test_nav_perception_safety.py
 if [[ "$stage" == compare ]]; then
   "$task/.venv/bin/python" -I scripts/nav_perception.py prepare --task "$task"
   "$task/.venv/bin/python" -I scripts/nav_perception.py replay --task "$task"
+elif [[ "$stage" == evaluate ]]; then
+  # Both independent measurements run even if one reports a failed criterion.
+  safety_status=0
+  "$task/.venv/bin/python" -I scripts/nav_perception_safety.py --task "$task" \
+    --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
+    --save "$task/input/save.sav" --cache "$task/safety-cache" --roads "$task/input/places.json" \
+    --links "$HOME/gothic-ai/nav-jumps/accepted-links-cv.txt" \
+    --routes "$HOME/gothic-ai/nav-jumps/routes/routes.jsonl" \
+    --records "$HOME/gothic-ai/nav-demos-jumps/final" --mode gaze || safety_status=$?
+  evaluation_status=0
+  "$task/.venv/bin/python" -I scripts/nav_perception_eval.py --task "$task" \
+    --mode gaze --parallel 3 || evaluation_status=$?
+  if [[ "$safety_status" != 0 || "$evaluation_status" != 0 ]]; then
+    echo "Perception measurements: safety=$safety_status evaluation=$evaluation_status" >&2
+    exit 1
+  fi
 fi
 PHASE
-"$ROOT/scripts/gq" submit --class batch --threads 12 --mem 8G --max 2h --cpu-quota 1200% \
+"$ROOT/scripts/gq" submit --class batch --threads 12 --mem 8G --max 3h --cpu-quota 1200% \
   --name "nav perception $stage" -- bash "$task/phase.sh" "$stage"

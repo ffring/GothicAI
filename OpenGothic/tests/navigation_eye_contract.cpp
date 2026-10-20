@@ -110,6 +110,7 @@ size_t forwardHorizon(const NavigationEye& eye) {
 void freshNearAndCachedFar() {
   NavigationEye::Config cfg;
   cfg.layout = 250;
+  cfg.floorSampling = NavigationEye::FloorSampling::Baseline;
   NavigationEye eye(cfg);
   DynamicWorld world(nullptr,wall(1500));
   NavigationEye::Pose pose;
@@ -152,6 +153,7 @@ void freshNearAndCachedFar() {
 void floorSamplingModes() {
   NavigationEye::Config cfg;
   cfg.layout = 250;
+  cfg.floorSampling = NavigationEye::FloorSampling::Baseline;
   NavigationEye baseline(cfg);
   cfg.floorSampling = NavigationEye::FloorSampling::ForwardRows;
   NavigationEye extra(cfg);

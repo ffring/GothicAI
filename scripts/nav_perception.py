@@ -101,9 +101,62 @@ def replay(task, modes=MODES):
         print(json.dumps(dict(event="perception_replay_finished", mode=mode)), flush=True)
 
 
+def ratios(counts):
+    def divide(numerator, denominator):
+        return numerator / denominator if denominator else None
+    return dict(unknown_passable=divide(counts.get("truth_passable_unknown", 0), counts.get("truth_passable", 0)),
+                false_among_danger=divide(counts.get("false_danger", 0), counts.get("danger", 0)),
+                detected_impassable=divide(counts.get("true_danger", 0), counts.get("truth_unpassable", 0)))
+
+
+def summarize(task):
+    """Aggregate only the frozen 1-Hz cohort; exclude extra diagnostic frames."""
+    result = dict(modes={}, preparation=v3.read_json(task / "replay/preparation.json"))
+    expected_frames = result["preparation"]["sampled_frames"]
+    reference = None
+    for mode in MODES:
+        directory = task / "replay" / mode
+        timing = v3.read_json(directory / "perception-timing.json")
+        signatures, status, counts, band = [], Counter(), Counter(), Counter()
+        for row in v3.rows(directory / "perception-frames.jsonl"):
+            if not row["sampled"]:
+                continue
+            signatures.append((row["label"], row["elapsed_ms"], row["corridor_status"],
+                               row["corridor"].get("cells", 0), row["corridor"].get("truth_passable", 0)))
+            status[row["corridor_status"]] += 1
+            counts.update(row["corridor"])
+            band.update(row["forward_band"])
+        if len(signatures) != expected_frames or timing["sampled_frames"] != expected_frames:
+            raise ValueError(f"Incomplete frozen sampling: {mode}")
+        if reference is not None and signatures != reference:
+            raise ValueError(f"Unpaired truth geometry or sampled poses: {mode}")
+        reference = signatures
+        result["modes"][mode] = dict(status=dict(status), corridor=dict(counts), fractions=ratios(counts),
+            forward_band=dict(band), timing=timing,
+            ray_increase=timing["ray_count"] / 238 - 1)
+    eligible = [name for name in ("gaze", "rows") if result["modes"][name]["ray_increase"] <= .25]
+    if not eligible:
+        raise ValueError("Neither candidate satisfies the ray budget")
+    selected = min(eligible, key=lambda name: (result["modes"][name]["fractions"]["unknown_passable"],
+        result["modes"][name]["fractions"]["false_among_danger"],
+        -result["modes"][name]["fractions"]["detected_impassable"],
+        result["modes"][name]["timing"]["eye"]["mean_us"]))
+    result["selected"] = selected
+    old = v3.read_json(task.parent / "nav-teacher-v3/oracle-experiment/coverage/metrics.json")["all"]["coverage"]["counts"]
+    old["true_danger"] = old["danger"] - old["false_danger"]
+    result["archived_memory_v1"] = dict(corridor=old, fractions=ratios(old))
+    chosen = result["modes"][selected]["fractions"]
+    result["acceptance"] = dict(unknown=chosen["unknown_passable"] <= .25,
+        false_danger=chosen["false_among_danger"] <= .30,
+        detected_impassable=chosen["detected_impassable"] >= ratios(old)["detected_impassable"])
+    v3.write_json(task / "replay/summary.json", result)
+    print(json.dumps(dict(event="perception_summarized", selected=selected, acceptance=result["acceptance"])), flush=True)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("prepare", "replay"))
+    parser.add_argument("phase", choices=("prepare", "replay", "summarize"))
     parser.add_argument("--task", type=Path, required=True)
     parser.add_argument("--source", type=Path)
     parser.add_argument("--data", type=Path)
@@ -113,8 +166,10 @@ def main():
     if args.phase == "prepare":
         prepare(task, (args.source or task.parent / "nav-teacher-v3").resolve(),
                 (args.data or task.parent / "nav-demos-v3").resolve())
-    else:
+    elif args.phase == "replay":
         replay(task, args.mode or MODES)
+    else:
+        summarize(task)
 
 
 if __name__ == "__main__":

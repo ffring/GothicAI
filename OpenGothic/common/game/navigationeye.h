@@ -26,7 +26,7 @@ class NavigationEye final {
       float    nearRangeCm = 1000.f;
       uint64_t nearPeriodMs = 100;
       uint64_t farPeriodMs = 500;
-      FloorSampling floorSampling = FloorSampling::Baseline;
+      FloorSampling floorSampling = FloorSampling::WalkingGazeDown;
       };
 
     // The applied head frame plus the actor's own feet position. This overload

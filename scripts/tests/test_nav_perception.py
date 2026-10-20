@@ -63,3 +63,41 @@ def test_replay_rejects_duplicate_scenario_even_if_counts_match(tmp_path, monkey
     monkeypatch.setattr(perception, "EXPECTED", {"point": 2})
     with pytest.raises(ValueError, match="Duplicate"):
         perception.frozen_cases(source)
+
+
+def summary_fixture(tmp_path):
+    task = tmp_path / "perception"
+    write_rows(task / "replay/preparation.json", [dict(sampled_frames=1)])
+    old = dict(truth_passable=8, truth_passable_unknown=3, truth_unpassable=2, danger=2, false_danger=1)
+    write_rows(tmp_path / "nav-teacher-v3/oracle-experiment/coverage/metrics.json",
+               [dict(all=dict(coverage=dict(counts=old)))])
+    for mode, unknown, rays in (("baseline", 3, 238), ("gaze", 1, 238), ("rows", 2, 273)):
+        counts = dict(cells=10, truth_passable=8, truth_passable_unknown=unknown,
+                      truth_unpassable=2, true_danger=1, danger=2, false_danger=1)
+        row = dict(label="point", elapsed_ms=100, sampled=True, corridor_status="ok",
+                   corridor=counts, forward_band=counts)
+        # Extra diagnostic frames must never improve the measured denominator.
+        extra = dict(row, sampled=False, elapsed_ms=200, corridor=dict(cells=100000))
+        write_rows(task / "replay" / mode / "perception-frames.jsonl", [row, extra])
+        write_rows(task / "replay" / mode / "perception-timing.json",
+                   [dict(sampled_frames=1, ray_count=rays, eye=dict(mean_us=1000))])
+    return task
+
+
+def test_summary_keeps_denominators_separate_and_excludes_diagnostics(tmp_path):
+    result = perception.summarize(summary_fixture(tmp_path))
+    assert result["selected"] == "gaze"
+    assert result["modes"]["gaze"]["corridor"]["cells"] == 10
+    assert result["modes"]["gaze"]["fractions"] == dict(
+        unknown_passable=1 / 8, false_among_danger=1 / 2, detected_impassable=1 / 2)
+    assert result["acceptance"] == dict(unknown=True, false_danger=False, detected_impassable=True)
+
+
+def test_summary_rejects_changed_truth_geometry_between_modes(tmp_path):
+    task = summary_fixture(tmp_path)
+    path = task / "replay/rows/perception-frames.jsonl"
+    values = list(perception.v3.rows(path))
+    values[0]["corridor"]["truth_passable"] = 7
+    write_rows(path, values)
+    with pytest.raises(ValueError, match="Unpaired"):
+        perception.summarize(task)
