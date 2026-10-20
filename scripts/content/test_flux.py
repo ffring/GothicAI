@@ -56,9 +56,10 @@ def test_enable_flux_preserves_other_materials_and_resume(tmp_path):
     assert bakeoff.read_registry(output) == records
 
 
-def test_builtin_imagegen_has_no_download_or_hf_dependency(tmp_path, monkeypatch):
+@pytest.mark.parametrize('pipeline', ['imagegen-filter', 'imagegen-concept'])
+def test_builtin_imagegen_has_no_download_or_hf_dependency(tmp_path, monkeypatch, pipeline):
     monkeypatch.setitem(sys.modules, 'huggingface_hub', None)
-    bakeoff.download([dict(pipeline='imagegen-filter', models=[
+    bakeoff.download([dict(pipeline=pipeline, models=[
         dict(id='image_gen.imagegen', revision=None)])], tmp_path)
 
 
