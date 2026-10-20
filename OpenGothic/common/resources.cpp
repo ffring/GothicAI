@@ -580,7 +580,7 @@ void Resources::indexMeshOverrides() {
   Log::i("meshes: ",meshOverrides.size()," entries from \"",root.string(),"\"");
   }
 
-bool Resources::meshReplacementIndexed(std::string_view name) {
+bool Resources::meshReplacementLoaded(std::string_view name) {
   if(inst==nullptr)
     return false;
   std::lock_guard<std::recursive_mutex> guard(inst->sync);
@@ -593,7 +593,8 @@ bool Resources::meshReplacementIndexed(std::string_view name) {
   std::string key(name);
   for(auto& c:key)
     c = char(std::toupper(uint8_t(c)));
-  return inst->meshOverrides.find(key)!=inst->meshOverrides.end();
+  const auto it = inst->meshOverrides.find(key);
+  return it!=inst->meshOverrides.end() && it->second.loaded;
   }
 
 zenkit::MultiResolutionMesh Resources::loadVisualMesh(std::string_view name, bool* replaced) {
@@ -607,12 +608,14 @@ zenkit::MultiResolutionMesh Resources::loadVisualMesh(std::string_view name, boo
     for(auto& c:key)
       c = char(std::toupper(uint8_t(c)));
     if(const auto it = inst->meshOverrides.find(key); it!=inst->meshOverrides.end()) {
+      it->second.loaded = false;
       try {
         auto mesh = loadGltfMesh(it->second.file);
         if(inst->census)
           inst->census->replaced(key+".MRM",it->second.replacement);
         if(replaced!=nullptr)
           *replaced = true;
+        it->second.loaded = true;
         return mesh;
         }
       catch(const std::exception& error) {

@@ -616,57 +616,85 @@ void fractureCache(const Fixture& fixture) {
         unsetenv("OPENGOTHIC_FRACTURE");
       }
     } environment(root);
-  require(!Resources::meshReplacementIndexed("OWN_MESH.MRM"),"an absent Resources instance has no mesh index");
+  require(!Resources::meshReplacementLoaded("OWN_MESH.MRM"),"an absent Resources instance has no loaded replacement");
   const auto original = FractureMesh::load("own_mesh.3ds");
   require(original!=nullptr && original->pieces.size()==8 && original->volume>0,
           "synthetic original fracture cache must contain eight valid solid pieces");
   for(const auto& piece:original->pieces)
     require(piece.hull!=nullptr && piece.triangles.size()==4,"each original cache piece must have a real convex hull");
 
-  const auto expectOriginal = [&] {
+  const auto expectFracture = [&](bool own) {
     Resources resources;
-    require(!Resources::meshReplacementIndexed("own_mesh.3ds"),"disabled or absent mesh index must have no replacement");
-    require(FractureMesh::load("path/own_mesh.3ds")!=nullptr,
-            "original fracture cache must load when the visual is not indexed");
+    require(!Resources::meshReplacementLoaded("own_mesh.3ds"),"an index entry alone must not count as a loaded replacement");
+    Resources::mountWork(fixture.root/"_work");
+    // DynamicWorld::addMovableVob receives an already loaded ProtoMesh before
+    // asking for its fracture cache, including when restoring saved destruction.
+    const auto* proto = Resources::loadMesh("own_mesh.3ds");
+    require(proto!=nullptr && close(proto->bbox()[0].x,own ? -400.f : 10.f),
+            "fracture guard must follow the geometry actually selected for the visual");
+    require(proto->attach.size()==1 && proto->attach[0].shape!=nullptr &&
+            proto->attach[0].sub.size()==1 &&
+            proto->attach[0].sub[0].texName==(own ? "OWN_TEST_BARREL_WOOD.TGA" : "ORIGINAL.TGA"),
+            "selected visual must retain its collision shape and material");
+    for(const auto* visual:{"own_mesh.3ds","OWN_MESH.MRM","path/Own_Mesh.3Ds","path\\own_mesh"}) {
+      require(Resources::meshReplacementLoaded(visual)==own,
+              "loaded replacement lookup must normalize case, paths and extension");
+      const auto fracture = FractureMesh::load(visual);
+      if(own) {
+        require(fracture==nullptr,"successfully loaded GLB must block the original fracture cache");
+        }
+      else {
+        require(fracture!=nullptr && fracture->pieces.size()==8 && fracture->volume==original->volume,
+                "original geometry must retain eight cached pieces for saved destruction");
+        for(const auto& piece:fracture->pieces)
+          require(piece.hull!=nullptr && piece.triangles.size()==4,
+                  "fallback fracture pieces must retain their solid hulls");
+        }
+      }
+    require(!Resources::meshReplacementLoaded("OTHER.MRM"),"loaded replacement state must be specific to the visual");
+    bool replaced = !own;
+    const auto source = Resources::loadVisualMesh("OWN_MESH.MRM",&replaced);
+    require(replaced==own && source.sub_meshes.size()==1 && close(source.bbox.min.x,own ? -400.f : 10.f),
+            "shared visual loader must report the geometry selected for the visual");
+    require(Resources::meshReplacementLoaded("OWN_MESH.MRM")==own,
+            "shared visual loader must retain the actual replacement result");
+    checkCensus(fixture,own,2);
     };
   std::filesystem::remove(fixture.root/"meshes/meshes.json");
-  expectOriginal();
+  expectFracture(false);
   fixture.index("{}");
-  expectOriginal();
+  expectFracture(false);
   fixture.index();
   setenv("OPENGOTHIC_CONTENT","",1);
-  expectOriginal();
+  expectFracture(false);
   setenv("OPENGOTHIC_CONTENT",fixture.root.c_str(),1);
 
   struct FractureLog {
     size_t count = 0;
     FractureLog() {
       Tempest::Log::setOutputCallback([this](Tempest::Log::Mode mode, const char* text) {
-        if(mode==Tempest::Log::Info && std::string_view(text).find("fracture: disabled for indexed mesh replacement")!=std::string_view::npos)
+        if(mode==Tempest::Log::Info && std::string_view(text).find("fracture: disabled for loaded mesh replacement")!=std::string_view::npos)
           ++count;
         });
       }
     ~FractureLog() { Tempest::Log::setOutputCallback({}); }
     } log;
   glbFile(fixture.root/"meshes/test/own.glb");
-  {
-    Resources resources;
-    for(const auto* visual:{"own_mesh.3ds","OWN_MESH.MRM","path/Own_Mesh.3Ds","path\\own_mesh"}) {
-      require(Resources::meshReplacementIndexed(visual),"indexed visual lookup must normalize case, paths and extension");
-      require(FractureMesh::load(visual)==nullptr,"indexed GLB must block the original fracture cache");
-      }
-    require(!Resources::meshReplacementIndexed("OTHER.MRM"),"mesh index membership must be specific to the visual");
-    }
+  expectFracture(true);
   require(log.count==1,"fracture guard must log once per visual, independent of case and extension");
-  textFile(fixture.root/"meshes/test/own.glb","broken glb");
-  {
-    Resources resources;
-    require(FractureMesh::load("OWN_MESH.MRM")==nullptr,
-            "index membership must block stale fractures even when the GLB would fall back");
-    }
+  expectFracture(true);
   require(log.count==1,"fracture guard must not log again after Resources is recreated");
+  textFile(fixture.root/"meshes/test/own.glb","broken glb");
+  expectFracture(false);
+  std::filesystem::remove(fixture.root/"meshes/test/own.glb");
+  expectFracture(false);
+  GlbOptions unsupported;
+  unsupported.alpha = "BLEND";
+  glbFile(fixture.root/"meshes/test/own.glb",unsupported);
+  expectFracture(false);
+  require(log.count==1,"fallback to the original must not log a disabled fracture cache");
   fixture.indexPath("../test/own.glb");
-  expectOriginal();
+  expectFracture(false);
   fixture.index();
   glbFile(fixture.root/"meshes/test/own.glb");
   }

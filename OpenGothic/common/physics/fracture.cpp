@@ -81,15 +81,15 @@ float FractureRule::meleeDamage(Melee kind,float weaponDamage,float strength) co
   }
 
 std::shared_ptr<const FractureMesh> FractureMesh::load(std::string_view visual) {
-  if(Resources::meshReplacementIndexed(visual)) {
+  if(Resources::meshReplacementLoaded(visual)) {
     // Until own-mesh fracture generation is available, never reuse pieces of
-    // the original visual, including when an indexed GLB temporarily fails.
+    // the original visual for a successfully loaded replacement.
     static std::mutex mutex;
     static std::unordered_set<std::string> logged;
     const auto name = basename(visual);
     std::lock_guard<std::mutex> guard(mutex);
     if(logged.insert(name).second)
-      Tempest::Log::i("fracture: disabled for indexed mesh replacement \"",name,".MRM\": original cached pieces do not match our mesh");
+      Tempest::Log::i("fracture: disabled for loaded mesh replacement \"",name,".MRM\": original cached pieces do not match our mesh");
     return {};
     }
   std::filesystem::path root;
