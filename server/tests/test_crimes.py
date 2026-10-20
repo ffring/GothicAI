@@ -839,3 +839,43 @@ async def test_sides_precede_all_seen_facts_and_survive_chronicle_reload(system)
     assert loaded_crimes.sides.fights == {}
     assert loaded_crimes.known(HILDA)[0].degree == "seen"
     await loaded_crimes.close()
+
+
+@pytest.mark.parametrize("why", ["fought", "companion", "hostile", "quest"])
+async def test_listener_uses_the_same_side_reasons_without_witness_metadata(system, why):
+    system.crimes.people.update({HILDA: {"guild": 1, "npctype": 0}, LOBART: {"guild": 8}})
+    if why == "fought":
+        system.crimes.sides.note_fight(LOBART, HILDA)
+    elif why == "companion":
+        system.crimes.people[HILDA]["npctype"] = 2
+        system.crimes.sides.note_fight(LOBART, "PLAYER")
+    elif why == "hostile":
+        system.crimes.sides.hostile_guilds.add((1, 8))
+    else:
+        quest = Quest("DIR_KILL", HILDA, "Поручение", Talk("Возьмусь", []), [
+            Stage("Убить врага", [Goal(kind="kill", npcs=[LOBART])]),
+        ], "Готово")
+        system.crimes.sides.book = SimpleNamespace(
+            all=lambda: {quest.id: quest}, progress=lambda _: Progress("given", 1),
+        )
+    crime = system.crimes.record(deed(kind="murder", victim=LOBART, victim_guild=8))
+    assert crime["victim_guild"] == 8
+    first = system.crimes.learn_side(HILDA.lower(), crime)
+    assert first == {"fact": "crime_side", "npc": HILDA, "crime": crime["id"], "why": why}
+    assert system.crimes.learn_side(HILDA, crime) == first
+    assert len(system.chronicle.facts("crime_side")) == 1
+
+
+@pytest.mark.parametrize("saved,person,expected", [
+    (8, 9, "hostile"), (None, 8, "hostile"), (-1, 8, "hostile"), (None, None, None),
+])
+async def test_listener_hostility_needs_known_victim_guild_and_prefers_saved(system, saved, person, expected):
+    system.crimes.people[HILDA] = {"guild": 1, "npctype": 0}
+    if person is not None:
+        system.crimes.people[LOBART] = {"guild": person}
+    system.crimes.sides.hostile_guilds.update({(1, 8), (1, -1)})
+    crime = {"id": "old-murder", "kind": "murder", "victim": LOBART}
+    if saved is not None:
+        crime["victim_guild"] = saved
+    side = system.crimes.learn_side(HILDA, crime)
+    assert (side["why"] if side else None) == expected
