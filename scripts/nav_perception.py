@@ -82,12 +82,13 @@ def runner_args(task, output):
         npc="BAU_954_MALETH", seed=20102026, physics="cv", watchdog_seconds=5400)
 
 
-def replay(task, modes=MODES):
+def replay(task, modes=MODES, output=None):
+    output = output or task / "replay"
     for mode in modes:
-        directory = task / "replay" / mode
+        directory = output / mode
         if (directory / "perception-timing.json").is_file():
             raise ValueError(f"Refusing to overwrite completed replay: {directory}")
-        options = runner_args(task, task / "replay" / (mode + "-worker"))
+        options = runner_args(task, output / (mode + "-worker"))
         v3.checked_paths(options)
         runner = v3.new_runner(options)
         try:
@@ -161,13 +162,16 @@ def main():
     parser.add_argument("--source", type=Path)
     parser.add_argument("--data", type=Path)
     parser.add_argument("--mode", choices=MODES, action="append")
+    parser.add_argument("--output", type=Path, help="Separate absolute replay output; original poses remain read-only")
     args = parser.parse_args()
     task = args.task.resolve()
+    if args.output is not None and not args.output.is_absolute():
+        parser.error("Replay output must be absolute")
     if args.phase == "prepare":
         prepare(task, (args.source or task.parent / "nav-teacher-v3").resolve(),
                 (args.data or task.parent / "nav-demos-v3").resolve())
     elif args.phase == "replay":
-        replay(task, args.mode or MODES)
+        replay(task, args.mode or MODES, args.output)
     else:
         summarize(task)
 

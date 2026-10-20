@@ -20,11 +20,11 @@ def scenario(kind="point", index=0):
     return value
 
 
-def write_episode(directory, value, teacher, mode="gaze"):
+def write_episode(directory, value, teacher, mode="gaze", memory_version=2):
     directory.mkdir(parents=True, exist_ok=True)
     metadata = dict(start=value["start"], goal=value["goal"], goal_kind=value["goal_kind"], seed=0,
                     teacher_version=2 if teacher == "v2" else 3, demo_version=2, success=True,
-                    navigation_memory_version=2, perception_mode=mode,
+                    navigation_memory_version=memory_version, perception_mode=mode,
                     decisions=2, elapsed_ms=150, limit_ms=240000, detour_length_cm=50,
                     blocked_spans=0, blocked_ms=0, max_blocked_ms=0, failure="",
                     record=False, demonstration_recorded=False, oracle=teacher == "oracle",
@@ -49,8 +49,8 @@ def args_for(task):
     return args
 
 
-def write_witness(task, args, value, teacher, mode):
-    directory = task / "evaluation/workers/0/scenarios"
+def write_witness(task, args, value, teacher, mode, output=None):
+    directory = (output or task / "evaluation") / "workers/0/scenarios"
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{evaluation.scenario_name(value, teacher)}.bench"
     path.write_text("\n".join([f"seed {value['seed']}", "cheat god", "set time 10 0", "navdemos physics cv",
@@ -97,6 +97,17 @@ def test_raw_identity_refuses_wrong_mode_version_goal_or_training_record(tmp_pat
     metadata[field] = value
     with pytest.raises(ValueError, match="identity, representation or recording"):
         evaluation.validate_raw(tmp_path, metadata, case, "memory", "gaze")
+
+
+def test_water_memory_version_requires_explicit_matching_native_representation(tmp_path):
+    case = scenario()
+    metadata = write_episode(tmp_path, case, "memory", memory_version=3)
+    evaluation.validate_raw(tmp_path, metadata, case, "memory", "gaze", memory_version=3)
+    with pytest.raises(ValueError, match="identity, representation or recording"):
+        evaluation.validate_raw(tmp_path, metadata, case, "memory", "gaze")
+    with pytest.raises(ValueError, match="identity, representation or recording"):
+        evaluation.validate_raw(tmp_path, dict(metadata, navigation_memory_version=2), case,
+                                "memory", "gaze", memory_version=3)
 
 
 def test_completed_native_episode_is_recovered_once_then_strictly_resumed(tmp_path, monkeypatch):
@@ -178,3 +189,52 @@ def test_same_build_experiment_collects_all_three_modes_and_resumes_without_reru
     with pytest.raises(ValueError, match="another binary"):
         evaluation.run(options)
     assert len(calls) == 6
+
+
+def test_memory_followup_keeps_parent_inputs_and_original_comparison_untouched(tmp_path, monkeypatch):
+    task, output = tmp_path / "nav-perception", tmp_path / "nav-perception/evaluation-water-1"
+    args = args_for(task)
+    for name in ("runner", "save", "links", "roads"):
+        path = getattr(args, name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(name.encode())
+    original = task / "evaluation/metrics.json"
+    original.parent.mkdir(parents=True)
+    original.write_text("old three-teacher comparison\n")
+    source = task.parent / "nav-teacher-v3/expanded-scenarios.jsonl"
+    selected = [scenario(kind) for kind in ("point", "object")]
+    evaluation.v3.write_selection(source, selected)
+    before_source, before_original = source.read_bytes(), original.read_bytes()
+    monkeypatch.setattr(evaluation, "EXPECTED", {"point": 1, "object": 1})
+    monkeypatch.setattr(evaluation, "frozen_cases", lambda _: (source, selected))
+    monkeypatch.setattr(evaluation.campaign, "phase_start", lambda _: None)
+    calls = []
+
+    def run(self, name, commands, directory, seed):
+        assert self.args.runner == args.runner and self.args.save == args.save
+        assert self.args.output.is_relative_to(output)
+        value = next(value for value in selected if directory.name == value["id"])
+        write_witness(task, self.args, value, "memory", "gaze", output)
+        write_episode(directory, value, "memory", memory_version=3)
+        calls.append(value["id"])
+
+    monkeypatch.setattr(evaluation.Worker, "scenario", run)
+    options = SimpleNamespace(task=task, output=output, mode="gaze", teachers=["memory"], memory_version=3,
+                              parallel=1, budget_seconds=60)
+    result = evaluation.run(options)
+    assert result["episodes"] == 2 and len(calls) == 2
+    assert result["settings"]["teachers"] == ["memory"]
+    assert result["settings"]["navigation_memory_version"] == 3
+    assert result["comparisons"] == {"point": {}, "object": {}}
+    assert set(result["by_kind"]["object"]) == {"memory"}
+    evaluation.run(options)
+    assert len(calls) == 2
+    assert source.read_bytes() == before_source and original.read_bytes() == before_original
+    options.memory_version = 2
+    with pytest.raises(ValueError, match="another binary"):
+        evaluation.run(options)
+    options.memory_version = 3
+    options.teachers = ["memory", "v2"]
+    with pytest.raises(ValueError, match="another binary"):
+        evaluation.run(options)
+    assert len(calls) == 2

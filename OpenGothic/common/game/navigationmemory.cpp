@@ -109,6 +109,7 @@ void NavigationMemory::update(const std::vector<NavigationEye::Ray>& rays, const
     rayStamps.resize(rays.size());
 
   uint64_t oldest = pose.gameMs;
+  std::vector<const NavigationEye::Ray*> water;
   for(size_t i=0; i<rays.size(); ++i) {
     const auto& ray = rays[i];
     oldest = std::min(oldest,ray.sampledAtMs);
@@ -121,7 +122,14 @@ void NavigationMemory::update(const std::vector<NavigationEye::Ray>& rays, const
     const float observedPath = pathAt(ray.sampledAtMs);
     ingest(nearGrid,ray,observedPath);
     ingest(farGrid,ray,observedPath);
+    if(ray.hit && ray.kind==NavigationEye::HitKind::Water &&
+       std::none_of(water.begin(),water.end(),[&](const auto* other) {
+         return other->sampledAtMs==ray.sampledAtMs && (other->point-ray.point).quadLength()<1.e-4f;
+         }))
+      water.push_back(&ray);
     }
+  reconstructWater(nearGrid,water);
+  reconstructWater(farGrid,water);
   // Empty ticks must retain history until the next eye output arrives. With an
   // output, keep the predecessor of its oldest cached timestamp for interpolation.
   if(!rays.empty()) {
@@ -192,7 +200,9 @@ void NavigationMemory::ingest(Grid& grid, const NavigationEye::Ray& ray, float o
         // Sharing a projected cell (especially a two-metre far cell) does not
         // mean this ray crossed the old hit. Only a newer free segment within
         // clearHeightCm of its actual 3D position contradicts that observation.
-        for(Channel channel:{Ground,Wall,Water,Movable,Surface}) {
+        // Water is a static horizontal surface. Empty air above it, including
+        // a nearby ray within the clearance tolerance, does not contradict it.
+        for(Channel channel:{Ground,Wall,Movable,Surface}) {
           const auto& evidence = cell.evidence[channel];
           if((cell.known&(1u<<channel))!=0 && ray.sampledAtMs>evidence.gameMs &&
              evidence.heightCm>=std::min(a,b)-Constants::clearHeightCm &&
@@ -229,6 +239,71 @@ void NavigationMemory::ingest(Grid& grid, const NavigationEye::Ray& ray, float o
     remember(cell,Wall,ray.point.y);
   else
     remember(cell,Surface,ray.point.y);
+  }
+
+void NavigationMemory::reconstructWater(Grid& grid, const std::vector<const NavigationEye::Ray*>& observations) {
+  // Reconstruct only small patches bracketed by this eye sample's water hits.
+  // Isolated points and gaps wider than a metre remain unchanged; there is no
+  // extrapolation to an unseen lake boundary or connection through dry ground.
+  constexpr float maxEdgeCm = 100.f, surfaceToleranceCm = 10.f, dryGroundCm = 2.f;
+  constexpr size_t maxNeighbours = 6;
+  struct Neighbour final { size_t index = 0; float distanceSquared = 0; };
+  for(size_t i=0; i<observations.size(); ++i) {
+    const auto& a = *observations[i];
+    std::vector<Neighbour> neighbours;
+    for(size_t j=0; j<observations.size(); ++j) {
+      if(i==j)
+        continue;
+      const auto& b = *observations[j];
+      const float dx = b.point.x-a.point.x, dz = b.point.z-a.point.z;
+      const float distanceSquared = dx*dx+dz*dz;
+      if(a.sampledAtMs==b.sampledAtMs && std::abs(a.point.y-b.point.y)<=surfaceToleranceCm &&
+         distanceSquared<=maxEdgeCm*maxEdgeCm)
+        neighbours.push_back({j,distanceSquared});
+      }
+    std::sort(neighbours.begin(),neighbours.end(),[](const Neighbour& a, const Neighbour& b) {
+      return a.distanceSquared<b.distanceSquared;
+      });
+    if(neighbours.size()>maxNeighbours)
+      neighbours.resize(maxNeighbours);
+    for(size_t j=0; j<neighbours.size(); ++j)
+      for(size_t k=j+1; k<neighbours.size(); ++k) {
+        if(neighbours[j].index<i || neighbours[k].index<i)
+          continue; // Each patch is owned by its first observed vertex.
+        const auto& b = *observations[neighbours[j].index];
+        const auto& c = *observations[neighbours[k].index];
+        const float bx = b.point.x-a.point.x, bz = b.point.z-a.point.z;
+        const float cx = c.point.x-a.point.x, cz = c.point.z-a.point.z;
+        const float edgeX = c.point.x-b.point.x, edgeZ = c.point.z-b.point.z;
+        if(edgeX*edgeX+edgeZ*edgeZ>maxEdgeCm*maxEdgeCm ||
+           std::abs(b.point.y-c.point.y)>surfaceToleranceCm)
+          continue;
+        const float area = bx*cz-bz*cx;
+        if(std::abs(area)<1.f)
+          continue;
+        const int x0 = std::max(grid.minX,cellCoordinate(std::min({a.point.x,b.point.x,c.point.x}),grid.cellCm));
+        const int x1 = std::min(grid.minX+int(grid.size)-1,cellCoordinate(std::max({a.point.x,b.point.x,c.point.x}),grid.cellCm));
+        const int z0 = std::max(grid.minZ,cellCoordinate(std::min({a.point.z,b.point.z,c.point.z}),grid.cellCm));
+        const int z1 = std::min(grid.minZ+int(grid.size)-1,cellCoordinate(std::max({a.point.z,b.point.z,c.point.z}),grid.cellCm));
+        for(int z=z0; z<=z1; ++z)
+          for(int x=x0; x<=x1; ++x) {
+            const float px = (float(x)+.5f)*grid.cellCm, pz = (float(z)+.5f)*grid.cellCm;
+            const float dx = px-a.point.x, dz = pz-a.point.z;
+            const float u = (dx*cz-dz*cx)/area, v = (bx*dz-bz*dx)/area;
+            if(u<0.f || v<0.f || u+v>1.f)
+              continue;
+            const float height = a.point.y+u*(b.point.y-a.point.y)+v*(c.point.y-a.point.y);
+            auto& cell = grid.at(x,z);
+            if((cell.known&(1u<<Ground))!=0 && cell.evidence[Ground].heightCm>height+dryGroundCm)
+              continue;
+            auto& evidence = cell.evidence[Water];
+            if((cell.known&(1u<<Water))!=0 && evidence.gameMs>a.sampledAtMs)
+              continue;
+            evidence = {a.sampledAtMs,pathAt(a.sampledAtMs),height,px,pz};
+            cell.known |= uint8_t(1u<<Water);
+            }
+        }
+    }
   }
 
 float NavigationMemory::confidence(const Evidence& evidence, bool movable) const {

@@ -3,7 +3,9 @@
 
 Run inside the caller's gq batch on Ryzen. Memory-v3, oracle-v3 and v2 use
 the same binary, perception mode, CV physics, seeds and original 240-second
-limit. Only TASK/evaluation is written; completed trials are strictly resumed.
+limit. Only the selected output directory is written; completed trials are
+strictly resumed. A follow-up may select memory alone without touching the
+original three-teacher comparison.
 """
 from __future__ import annotations
 
@@ -53,22 +55,24 @@ def frozen_cases(task):
     return source, selected
 
 
-def directory_for(task, value, teacher):
+def directory_for(task, value, teacher, output=None):
     if teacher not in TEACHERS:
         raise ValueError(f"Unknown teacher: {teacher}")
-    return task / "evaluation" / teacher / value["goal_kind"] / value["split"] / value["id"]
+    return (output or task / "evaluation") / teacher / value["goal_kind"] / value["split"] / value["id"]
 
 
-def settings(task, mode, source):
+def settings(task, mode, source, teachers=TEACHERS, memory_version=MEMORY_VERSION):
     if mode not in ("gaze", "rows"):
         raise ValueError("Select gaze or rows perception")
+    if not teachers or len(set(teachers)) != len(teachers) or any(teacher not in TEACHERS for teacher in teachers):
+        raise ValueError("Select unique known evaluation teachers")
     args = perception.runner_args(task, task / "evaluation/workers/0")
-    return dict(perception_mode=mode, navigation_memory_version=MEMORY_VERSION,
+    return dict(perception_mode=mode, navigation_memory_version=memory_version,
                 runner_sha256=campaign.binary_digest(args.runner),
                 cohort_sha256=campaign.binary_digest(source), source=str(source),
                 input_sha256={name: campaign.binary_digest(getattr(args, name)) for name in ("save", "links", "roads")},
                 assets=str(args.assets), physics="cv", limit_ms=LIMIT_MS,
-                teachers=list(TEACHERS), expected_by_kind=EXPECTED, demonstration_recorded=False)
+                teachers=list(teachers), expected_by_kind=EXPECTED, demonstration_recorded=False)
 
 
 def command_sequence(args, value, teacher, mode):
@@ -83,12 +87,12 @@ def scenario_name(value, teacher):
     return f"perception-eval-{teacher}-{value['id']}"
 
 
-def validate_raw(directory, metadata, value, teacher, mode):
+def validate_raw(directory, metadata, value, teacher, mode, memory_version=MEMORY_VERSION):
     version = 2 if teacher == "v2" else 3
     expected_source = {"memory": "learner_memory", "oracle": "detour_raster", "v2": "detour_teacher_v2"}[teacher]
     if (metadata.get("teacher_version") != version or metadata.get("demo_version") != 2
             or any(metadata.get(key) != value.get(key) for key in ("start", "goal", "goal_kind"))
-            or metadata.get("limit_ms") != LIMIT_MS or metadata.get("navigation_memory_version") != MEMORY_VERSION
+            or metadata.get("limit_ms") != LIMIT_MS or metadata.get("navigation_memory_version") != memory_version
             or metadata.get("perception_mode") != mode
             or metadata.get("oracle") is not (teacher == "oracle")
             or metadata.get("observation_source") != expected_source
@@ -98,10 +102,11 @@ def validate_raw(directory, metadata, value, teacher, mode):
         raise ValueError(f"Evaluation identity, representation or recording mode differs: {directory}")
 
 
-def validate_witness(task, args, value, teacher, mode):
+def validate_witness(task, args, value, teacher, mode, output=None):
     expected = [f"seed {value['seed']}", "cheat god", "set time 10 0", "navdemos physics cv",
                 *command_sequence(args, value, teacher, mode), "label done"]
-    witnesses = sorted((task / "evaluation/workers").glob(f"*/scenarios/{scenario_name(value, teacher)}.bench"))
+    witnesses = sorted(((output or task / "evaluation") / "workers").glob(
+        f"*/scenarios/{scenario_name(value, teacher)}.bench"))
     if not witnesses or any(path.read_text(encoding="utf-8").splitlines() != expected for path in witnesses):
         raise ValueError(f"Missing or different saved scenario command: {value['id']}/{teacher}")
 
@@ -111,8 +116,8 @@ class Worker(campaign.Worker):
         super().__init__(args, 3, None)
         self.identity = identity
 
-    def trial(self, task, value, teacher, mode):
-        directory = directory_for(task, value, teacher)
+    def trial(self, task, value, teacher, mode, output=None):
+        directory = directory_for(task, value, teacher, output)
         episode = directory / "episode.json"
         resumed = episode.is_file()
         started = time.monotonic()
@@ -125,8 +130,9 @@ class Worker(campaign.Worker):
         if not oracle.complete_text(directory, value["goal_kind"]):
             raise ValueError(f"Incomplete evaluation text files: {directory}")
         metadata = v3.read_json(episode)
-        validate_raw(directory, metadata, value, teacher, mode)
-        validate_witness(task, self.args, value, teacher, mode)
+        validate_raw(directory, metadata, value, teacher, mode,
+                     self.identity.get("navigation_memory_version", MEMORY_VERSION))
+        validate_witness(task, self.args, value, teacher, mode, output)
         if "id" in metadata:
             if (not v3.same_scenario(metadata, value, 2 if teacher == "v2" else 3)
                     or metadata.get("perception_evaluation_identity") != self.identity
@@ -147,18 +153,19 @@ class Worker(campaign.Worker):
         return measured
 
 
-def summarize(task, selected, identity):
+def summarize(task, selected, identity, output=None):
     groups, comparisons, episodes = {}, {}, []
     for kind in EXPECTED:
         by_teacher = {}
-        for teacher in TEACHERS:
+        for teacher in identity["teachers"]:
             values = []
             for value in selected:
                 if value["goal_kind"] != kind:
                     continue
-                directory = directory_for(task, value, teacher)
+                directory = directory_for(task, value, teacher, output)
                 metadata = v3.read_json(directory / "episode.json")
-                validate_raw(directory, metadata, value, teacher, identity["perception_mode"])
+                validate_raw(directory, metadata, value, teacher, identity["perception_mode"],
+                             identity["navigation_memory_version"])
                 if (not v3.same_scenario(metadata, value, 2 if teacher == "v2" else 3)
                         or metadata.get("perception_evaluation_identity") != identity
                         or metadata.get("experiment_mode") != teacher):
@@ -168,7 +175,8 @@ def summarize(task, selected, identity):
             episodes.extend(values)
         groups[kind] = {teacher: v3.group_metrics(values) for teacher, values in by_teacher.items()}
         comparisons[kind] = {f"{trial}_vs_{reference}": oracle.paired_comparison(by_teacher[reference], by_teacher[trial])
-                             for trial, reference in (("memory", "v2"), ("oracle", "v2"), ("memory", "oracle"))}
+                             for trial, reference in (("memory", "v2"), ("oracle", "v2"), ("memory", "oracle"))
+                             if trial in by_teacher and reference in by_teacher}
     return dict(settings=identity, scenarios=len(selected), episodes=len(episodes), by_kind=groups,
                 comparisons=comparisons, episode_metrics=episodes, complete=True, demonstration_recorded=False)
 
@@ -176,8 +184,10 @@ def summarize(task, selected, identity):
 def run(options):
     task = options.task
     source, selected = frozen_cases(task)
-    current = settings(task, options.mode, source)
-    output = task / "evaluation"
+    teachers = tuple(getattr(options, "teachers", TEACHERS))
+    memory_version = getattr(options, "memory_version", MEMORY_VERSION)
+    current = settings(task, options.mode, source, teachers, memory_version)
+    output = getattr(options, "output", None) or task / "evaluation"
     output.mkdir(parents=True, exist_ok=True)
     state_path = output / "state.json"
     if state_path.exists():
@@ -196,19 +206,19 @@ def run(options):
         args.watchdog_seconds = 900
         workers.append(Worker(args, current))
     try:
-        for teacher in TEACHERS:
+        for teacher in teachers:
             for kind in EXPECTED:
                 campaign.phase_start(f"perception-eval-{teacher}-{kind}")
                 values = [value for value in selected if value["goal_kind"] == kind]
                 campaign.run_parallel(values, workers,
-                    lambda worker, value: worker.trial(task, value, teacher, options.mode), deadline)
+                    lambda worker, value: worker.trial(task, value, teacher, options.mode, output), deadline)
                 atomic_json(state_path, dict(settings=current, status=f"completed_{teacher}_{kind}"))
     finally:
         for worker in workers:
             worker.close()
-    if settings(task, options.mode, source) != current:
+    if settings(task, options.mode, source, teachers, memory_version) != current:
         raise ValueError("Evaluation binary or frozen inputs changed during collection")
-    result = summarize(task, selected, current)
+    result = summarize(task, selected, current, output)
     atomic_json(output / "metrics.json", result)
     atomic_json(state_path, dict(settings=current, status="complete"))
     campaign.emit("perception_evaluation_complete", episodes=result["episodes"], by_kind=result["by_kind"])
@@ -218,6 +228,11 @@ def run(options):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", type=Path, required=True)
+    parser.add_argument("--output", type=Path, help="Absolute output directory; default TASK/evaluation")
+    parser.add_argument("--teachers", nargs="+", choices=TEACHERS, default=list(TEACHERS),
+                        help="Teachers to evaluate with the same frozen cases (default: all three)")
+    parser.add_argument("--memory-version", type=int, choices=(2, 3), default=MEMORY_VERSION,
+                        help="Required native navigation memory representation (default: historical 2)")
     parser.add_argument("--mode", choices=("gaze", "rows"), required=True)
     parser.add_argument("--parallel", type=int, choices=(1, 2, 3), default=3)
     parser.add_argument("--budget-seconds", type=float, default=6900)
@@ -225,6 +240,10 @@ def main():
     if not options.task.is_absolute() or not 0 < options.budget_seconds <= 7200:
         parser.error("An absolute task path and a wall budget in (0,7200] seconds are required")
     options.task = options.task.resolve()
+    if options.output is not None:
+        if not options.output.is_absolute():
+            parser.error("Evaluation output path must be absolute")
+        options.output = options.output.resolve()
     run(options)
 
 

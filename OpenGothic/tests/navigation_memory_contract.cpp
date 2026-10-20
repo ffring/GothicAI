@@ -298,6 +298,60 @@ void farCellClearingNeedsActualIntersection() {
           "free ray through the actual recorded hit clears it even in a far cell");
   std::puts("far clearing: parallel ray 150 cm away retains hit; ray through actual 3D hit clears it");
   }
+
+void waterSurfaceIsNotEmptyAirOrSubmergedGround() {
+  Memory memory;
+  Memory::View view;
+  memory.update({ray({512,0,12},Kind::Water)},{{0,0,0},{1,0,0},0});
+  // This ray misses the water surface by ten centimetres. The generic free
+  // clearance tolerance must not erase the static surface below that air.
+  memory.update({ray({1000,10,12},Kind::None,0,100,{0,10,12})},{{0,0,0},{1,0,0},100});
+  memory.view(view);
+  require(around(view.near,12,512,&Memory::Cell::water)>.99f,
+          "new free air above visible water does not make its surface traversable");
+  memory.update({ray({512,-100,12},Kind::World,1.f,200)},{{0,0,0},{1,0,0},200});
+  memory.view(view);
+  require(around(view.near,12,512,&Memory::Cell::water)>.99f,
+          "observing a submerged bottom does not replace visible water with free ground");
+  std::puts("water: nearby empty air and observed submerged ground retain the water hazard");
+  }
+
+void boundedWaterPatches() {
+  const auto sample = [](float height=0.f, float edge=60.f, uint64_t lastTime=0) {
+    return std::vector<Ray>{ray({312,0,12},Kind::Water),ray({312+edge,0,12},Kind::Water),
+                            ray({312,height,12+edge},Kind::Water,1.f,lastTime)};
+    };
+  const auto interior = [](const Memory::View& view)->const Memory::Cell& {
+    // Centre of the near cell wholly between the three observed hit cells.
+    return view.near.cells[45*Memory::Constants::nearSize+33]; // x=337.5,z=37.5
+    };
+  Memory memory;
+  Memory::View view;
+  memory.update(sample(),{{0,0,0},{1,0,0},0});
+  memory.view(view);
+  require(interior(view).water>.99f,"nearby simultaneous water hits bracket a continuous water surface");
+  require(view.near.cells[47*Memory::Constants::nearSize+34].water==0,
+          "water reconstruction does not extrapolate beyond its observed triangle");
+
+  for(const auto& observations:{sample(0,150),sample(20),sample(0,60,100)}) {
+    Memory isolated;
+    isolated.update(observations,{{0,0,0},{1,0,0},100});
+    isolated.view(view);
+    require(interior(view).water==0,
+            "distant, noncoplanar or asynchronous water hits do not fill unknown gaps");
+    }
+
+  for(float groundHeight:{50.f,-100.f}) {
+    Memory shore;
+    auto observations=sample();
+    observations.push_back(ray({337,groundHeight,37},Kind::World,1.f));
+    shore.update(observations,{{0,0,0},{1,0,0},0});
+    shore.view(view);
+    require((interior(view).water>0)==(groundHeight<0),
+            "water patches respect observed dry ground while retaining submerged bottom water");
+    }
+  std::puts("water patches: bounded same-sample coplanar triangles; no dry-land, long-gap or height extrapolation");
+  }
 }
 
 int main() {
@@ -309,5 +363,7 @@ int main() {
   overheadWallAndWater();
   windowAndTravelHistory();
   farCellClearingNeedsActualIntersection();
+  waterSurfaceIsNotEmptyAirOrSubmergedGround();
+  boundedWaterPatches();
   std::puts("navigation memory contracts passed");
   }

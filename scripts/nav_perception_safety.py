@@ -151,6 +151,40 @@ def select_fixtures(fixtures, per_kind=3):
     return selected
 
 
+def baseline_water_fixtures(path):
+    """Keep all three original water controls, regardless of their outcomes."""
+    fixtures = json.loads(Path(path).read_text())
+    water = [row for row in fixtures if row.get("kind") == "water"]
+    if len(water) != 3 or any(row.get("qualified") is not True for row in water):
+        raise ValueError("Water baseline must contain exactly three qualified original water fixtures")
+    for row in water:
+        for key in ("projected_start_cm", "goal_cm", "hazard_cm"):
+            values = row.get(key, [])
+            if len(values) != 3 or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
+                raise ValueError(f"Invalid original water fixture coordinate: {key}")
+    if len({row["label"] for row in water}) != 3:
+        raise ValueError("Original water fixture labels must be unique")
+    return water
+
+
+def select_water_followup(original, candidates, new_shores=3):
+    """Freeze independent shores before attempting any teacher episode."""
+    selected = list(original)
+    for row in candidates:
+        if row.get("kind") != "water" or row.get("qualified") is not True:
+            continue
+        if row["label"] in {other["label"] for other in selected}:
+            continue
+        if any(math.hypot(row["hazard_cm"][0] - other["hazard_cm"][0],
+                          row["hazard_cm"][2] - other["hazard_cm"][2]) < 500 for other in selected):
+            continue
+        selected.append(row)
+        if len(selected) == len(original) + new_shores:
+            return selected
+    raise ValueError(f"Water preparation: qualified {len(selected) - len(original)}/{new_shores} new shores "
+                     "at least 500cm from every original/new hazard; no episodes attempted")
+
+
 def fall_intervals(frames):
     """Physical airborne/landing intervals, without joining a grounded slope."""
     result, active = [], None
@@ -266,30 +300,43 @@ def run(options):
     if sys.platform != "linux":
         raise ValueError("Safety episodes require Ryzen/Linux inside caller-owned gq batch")
     v3 = module("nav_teacher_v3")
-    output = options.output or options.task / "safety-check-1"
+    baseline = getattr(options, "water_baseline", None)
+    original_water = baseline_water_fixtures(baseline) if baseline else []
+    new_shores = getattr(options, "new_shores", 3)
+    memory_version = getattr(options, "memory_version", 2)
+    kinds = ("water",) if baseline else KINDS
+    output = options.output or options.task / ("water-check-1" if baseline else "safety-check-1")
+    if baseline and (baseline == output or output in baseline.parents):
+        raise ValueError("Water follow-up output must be separate from original fixtures")
     output.mkdir(parents=True, exist_ok=True)
     args = SimpleNamespace(output=output, runner=options.runner, assets=options.assets, save=options.save,
         cache=options.cache, links=options.links, roads=options.roads, npc=options.npc, ini=None,
         seed=19102026, physics="cv", watchdog_seconds=900, limit_ms=options.limit_ms)
     v3.checked_paths(args)
-    heights = height_candidates(options.routes, options.links, options.records)
+    heights = [] if baseline else height_candidates(options.routes, options.links, options.records)
     height_file = output / "height-fixtures.txt"
     height_text = "\n".join(heights) + "\n"
     shores_file = output / "shore-seeds.txt"
-    shore_text = "".join(label + " " + " ".join(map(str, center)) + "\n" for label, center in SHORES)
+    custom_seeds = getattr(options, "shore_seeds", None)
+    shore_text = (custom_seeds.read_text() if custom_seeds else
+                  "".join(label + " " + " ".join(map(str, center)) + "\n" for label, center in SHORES))
     source_identity = dict(input_sha256={name: digest(getattr(options, name))
                            for name in ("runner", "routes", "links", "save", "roads")},
         historical_records_sha256={str(path.relative_to(options.records)): digest(path)
-            for path in sorted((options.records / "episodes").glob("*/episode.json"))},
+            for path in ([] if baseline else sorted((options.records / "episodes").glob("*/episode.json")))},
         assets=str(options.assets), records=str(options.records), npc=args.npc, physics="cv", seed=args.seed,
         mode=options.mode, limit_ms=options.limit_ms, per_kind=options.per_kind, teachers=list(TEACHERS),
-        navigation_memory_version=2, safety_script_sha256=digest(Path(__file__)), criteria_version=CRITERIA_VERSION,
+        navigation_memory_version=memory_version, safety_script_sha256=digest(Path(__file__)), criteria_version=CRITERIA_VERSION,
         criteria=dict(harmful_fall="HP loss during witnessed >60cm unsupported descent or within 500ms of landing",
                       deep_water="swimming or feet water depth +1cm >= actual guild water_depth_chest",
+                      visible_water_followup="no entry deeper than 10cm on the six water fixtures" if baseline else None,
                       unrelated_damage="inconclusive; cannot count as a clean safety pass",
                       harmless_descent="diagnostic only", landing_damage_window_ms=LANDING_DAMAGE_WINDOW_MS),
         height_candidates_sha256=hashlib.sha256(height_text.encode()).hexdigest(),
         shore_seeds_sha256=hashlib.sha256(shore_text.encode()).hexdigest(),
+        kinds=list(kinds), water_baseline_sha256=digest(baseline) if baseline else None,
+        water_baseline_source=str(baseline) if baseline else None,
+        new_shores=new_shores if baseline else 0, new_shore_min_separation_cm=500 if baseline else None,
         recordings_created=False, player_godmode="runner cheat god affects HERO only; controlled actor is Maleth")
     identity_file = output / "identity.json"
     if identity_file.exists():
@@ -299,18 +346,27 @@ def run(options):
         if any(output.iterdir()):
             raise ValueError(f"Safety output contains unidentified prior work: {output}")
         write_json(identity_file, source_identity)
-    height_file.write_text(height_text)
+    if not baseline:
+        height_file.write_text(height_text)
     shores_file.write_text(shore_text)
     runner = v3.new_runner(args)
     try:
         fixtures_file = output / "fixtures.json"
         if fixtures_file.exists():
-            fixtures = select_fixtures(json.loads(fixtures_file.read_text()), options.per_kind)
+            saved = json.loads(fixtures_file.read_text())
+            fixtures = (select_water_followup(original_water, saved, new_shores) if baseline else
+                        select_fixtures(saved, options.per_kind))
+            if saved != fixtures:
+                raise ValueError("Saved safety fixtures differ from the frozen pre-episode selection")
         else:
-            for name, command, source in (("height", "perception-hazards", height_file), ("shore", "perception-shores", shores_file)):
+            preparation = [("shore", "perception-shores", shores_file)]
+            if not baseline:
+                preparation.insert(0, ("height", "perception-hazards", height_file))
+            for name, command, source in preparation:
                 v3.runner_scenario(args, runner, f"safety-{name}-prepare", [f"navdemos {command} {source}"], output / name, args.seed)
-            fixtures = select_fixtures(rows(output / "height/perception-hazards.jsonl") +
-                                       rows(output / "shore/perception-hazards.jsonl"), options.per_kind)
+            water = rows(output / "shore/perception-hazards.jsonl")
+            fixtures = (select_water_followup(original_water, water, new_shores) if baseline else
+                        select_fixtures(rows(output / "height/perception-hazards.jsonl") + water, options.per_kind))
             write_json(fixtures_file, fixtures)
         results = []
         for teacher in TEACHERS:
@@ -326,7 +382,7 @@ def run(options):
                     commands = command_sequence(args, fixture, teacher, options.mode)
                     v3.runner_scenario(args, runner, f"safety-{teacher}-{fixture['label']}", commands, directory, args.seed)
                 metadata = json.loads((directory / "episode.json").read_text())
-                validate_episode(directory, metadata, fixture, teacher, options.mode, args.limit_ms)
+                validate_episode(directory, metadata, fixture, teacher, options.mode, args.limit_ms, memory_version)
                 if resumed and metadata.get("perception_safety_identity") != identity:
                     raise ValueError(f"Safety episode belongs to different inputs or criteria: {directory}")
                 if not resumed:
@@ -334,16 +390,24 @@ def run(options):
                     write_json(directory / "episode.json", metadata)
                 measured = dict(assess(fixture, metadata, rows(directory / "perception-safety-frames.jsonl")),
                                 teacher=teacher, teacher_version=version)
+                if baseline:
+                    measured["fixture_cohort"] = "original" if fixture in original_water else "new"
                 results.append(measured)
                 print(json.dumps(measured), flush=True)
         result = dict(episodes=results, by_kind={kind: {teacher: group_metrics(
             [row for row in results if row["kind"] == kind and row["teacher"] == teacher])
-            for teacher in TEACHERS} for kind in KINDS},
+            for teacher in TEACHERS} for kind in kinds},
             identity=source_identity, fixtures=fixtures, recordings_created=False, complete=True,
             v3_passed=all(row["safe"] for row in results if row["teacher"] == "memory"),
             all_teachers_passed=all(row["safe"] for row in results))
+        if baseline:
+            result["v3_water_avoidance_passed"] = all(row["safe"] and row["entered_water_frames"] == 0
+                for row in results if row["teacher"] == "memory")
+            result["water_by_cohort"] = {cohort: {teacher: group_metrics(
+                [row for row in results if row["fixture_cohort"] == cohort and row["teacher"] == teacher])
+                for teacher in TEACHERS} for cohort in ("original", "new")}
         write_json(output / "metrics.json", result)
-        if not result["v3_passed"]:
+        if not result["v3_passed"] or (baseline and not result["v3_water_avoidance_passed"]):
             raise RuntimeError(f"Memory-v3 safety control failed or inconclusive: {result['by_kind']}")
         return result
     finally:
@@ -361,7 +425,7 @@ def command_sequence(args, fixture, teacher, mode):
             "navdemos wait"]
 
 
-def validate_episode(directory, metadata, fixture, teacher, mode, limit_ms):
+def validate_episode(directory, metadata, fixture, teacher, mode, limit_ms, memory_version=2):
     version = 2 if teacher == "v2" else 3
     expected_source = "detour_teacher_v2" if teacher == "v2" else "learner_memory"
     if ((directory / "samples.bin.gz").exists() or metadata.get("record") is not False
@@ -369,7 +433,7 @@ def validate_episode(directory, metadata, fixture, teacher, mode, limit_ms):
         raise ValueError("Safety evaluation unexpectedly recorded demonstration samples")
     if (metadata.get("start") != token(fixture["projected_start_cm"])
             or metadata.get("goal") != token(fixture["goal_cm"]) or metadata.get("teacher_version") != version
-            or metadata.get("oracle") is not False or metadata.get("navigation_memory_version") != 2
+            or metadata.get("oracle") is not False or metadata.get("navigation_memory_version") != memory_version
             or metadata.get("demo_version") != 2 or metadata.get("observation_source") != expected_source
             or metadata.get("limit_ms") != limit_ms or metadata.get("perception_mode") != mode):
         raise ValueError(f"Safety episode identity/memory version mismatch: {directory}")
@@ -390,6 +454,14 @@ def main():
     for name in ("task", "runner", "assets", "save", "cache", "links", "roads", "routes", "records"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--output", type=Path, help="Absolute output path; default TASK/safety-check-1 (preserves old safety preparation)")
+    parser.add_argument("--water-baseline", type=Path,
+                        help="Original fixtures.json: repeat its exact three water controls, skip heights")
+    parser.add_argument("--new-shores", type=int, choices=(3,), default=3,
+                        help="With --water-baseline, add three independently qualified shores before episodes")
+    parser.add_argument("--shore-seeds", type=Path,
+                        help="Optional absolute physical shore search seed file (LABEL X Y Z in cm)")
+    parser.add_argument("--memory-version", type=int, choices=(2, 3), default=2,
+                        help="Required native navigation memory representation (default: historical 2)")
     parser.add_argument("--npc", default="BAU_954_MALETH")
     parser.add_argument("--mode", choices=("gaze", "rows"), default="gaze")
     parser.add_argument("--limit-ms", type=int, default=30000)
@@ -397,8 +469,10 @@ def main():
     options = parser.parse_args()
     if any(not getattr(options, name).is_absolute() for name in ("task", "runner", "assets", "save", "cache", "links", "roads", "routes", "records")):
         parser.error("All input/output paths must be absolute")
-    if options.output is not None and not options.output.is_absolute():
-        parser.error("Safety output path must be absolute")
+    for name in ("output", "water_baseline", "shore_seeds"):
+        value = getattr(options, name)
+        if value is not None and not value.is_absolute():
+            parser.error(f"Safety {name} path must be absolute")
     if options.npc != "BAU_954_MALETH":
         parser.error("Safety controls require the ordinary BAU_954_MALETH NPC (runner HERO alone has godmode)")
     if not 1000 <= options.limit_ms <= 60000:

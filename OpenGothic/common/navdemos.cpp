@@ -116,6 +116,7 @@ struct Episode {
   std::unique_ptr<NavDemoWriter> writer;
   std::ofstream actions,trajectory,knownPaths,teacherPaths,transitionFrames,samples,targetTrajectory;
   std::ofstream perceptionSafetyFrames;
+  std::ofstream perceptionWaterObservations;
   std::vector<RecordedKeys> replayActions;
 };
 Episode legacy;
@@ -307,7 +308,7 @@ void finish(Episode& ep,World& world) {
                        <<distance<<' '<<int(distance>=200.f && distance<=500.f)<<'\n';
   }
   if(!ep.replay) {NpcKeys::KeyState end;end.walk=true;action(ep,elapsed,end);if(ep.writer)ep.writer->finish();}
-  ep.trajectory.close();ep.actions.close();ep.knownPaths.close();ep.teacherPaths.close();ep.transitionFrames.close();ep.samples.close();ep.targetTrajectory.close();ep.perceptionSafetyFrames.close();
+  ep.trajectory.close();ep.actions.close();ep.knownPaths.close();ep.teacherPaths.close();ep.transitionFrames.close();ep.samples.close();ep.targetTrajectory.close();ep.perceptionSafetyFrames.close();ep.perceptionWaterObservations.close();
   auto out=file(ep,"episode.json");
   const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-ep.wallStart).count();
   out<<"{\"success\":"<<ep.success<<",\"replay\":"<<ep.replay<<",\"drive\":"<<ep.drive<<",\"start\":"<<std::quoted(ep.from)
@@ -895,6 +896,58 @@ void observe(Episode& ep,World& w) {
   ep.memory.update(ep.eye.memorySamples(),pose);
   if(ep.population)ep.phaseUs[1]+=micros(memoryStart);
 }
+void tracePerceptionWater(Episode& ep,const NavDemoWriter::Snapshot& sample) {
+  if(!ep.perceptionMonitor)return;
+  const auto& view=*sample.memory;
+  auto& out=ep.perceptionWaterObservations;
+  const auto byte=[](float value) {return unsigned(std::lround(value*255.f));};
+  const auto channels=[&](const NavigationMemory::Cell& cell) {
+    out<<'['<<byte(cell.confidence)<<','<<byte(cell.free)<<','<<byte(cell.wall)<<','<<byte(cell.ledge)
+       <<','<<byte(cell.drop)<<','<<byte(cell.water)<<','<<byte(cell.movable)<<']';
+  };
+  out<<"{\"elapsed_ms\":"<<sample.gameMs-ep.began<<",\"position_cm\":";vector(out,view.pose.position);
+  out<<",\"forward\":";vector(out,view.pose.forward);
+  out<<",\"water_hit_rays\":[";
+  size_t hits=0,index=0;
+  for(const auto& ray:ep.eye.memorySamples()) {
+    const size_t rayIndex=index++;
+    if(!ray.hit || ray.kind!=NavigationEye::HitKind::Water)continue;
+    if(hits++)out<<',';
+    out<<"{\"index\":"<<rayIndex<<",\"cached_far\":"<<(rayIndex>=ep.eye.rayCount())
+       <<",\"observed_age_ms\":"<<sample.gameMs-ray.sampledAtMs<<",\"point_cm\":";vector(out,ray.point);
+    out<<",\"origin_cm\":";vector(out,ray.origin);
+    out<<",\"direction\":";vector(out,ray.direction);
+    out<<",\"normal_y\":"<<ray.normalY<<'}';
+  }
+  out<<"],\"near_water_cells\":[";
+  size_t cells=0,farWater=0;
+  for(size_t row=0;row<view.near.size;++row)for(size_t column=0;column<view.near.size;++column) {
+    const auto& cell=view.near.cells[row*view.near.size+column];
+    if(byte(cell.water)==0)continue;
+    if(cells++)out<<',';
+    out<<'['<<row<<','<<column<<','<<byte(cell.water)<<']';
+  }
+  for(const auto& cell:view.far.cells)farWater+=byte(cell.water)>0;
+  out<<"],\"far_water_cells\":"<<farWater<<",\"goal_line\":[";
+  auto direction=ep.goal-view.pose.position;direction.y=0;
+  const float length=direction.length();
+  if(length>0)direction*=1.f/length;
+  const Vec3 right(-view.pose.forward.z,0,view.pose.forward.x);
+  for(unsigned distance=0;distance<=300;distance+=25) {
+    if(distance)out<<',';
+    const auto delta=direction*float(distance);
+    const auto project=[&](const Vec3& axis) {return delta.x*axis.x+delta.z*axis.z;};
+    const int column=int(std::floor(project(right)/view.near.cellCm+float(view.near.size)*.5f));
+    const int row=int(std::floor(project(view.pose.forward)/view.near.cellCm+float(view.near.size)*.5f));
+    out<<"{\"distance_cm\":"<<distance<<",\"channels\":";
+    if(row>=0 && column>=0 && row<int(view.near.size) && column<int(view.near.size))
+      channels(view.near.cells[size_t(row)*view.near.size+size_t(column)]);
+    else out<<"null";
+    out<<'}';
+  }
+  out<<"]}\n";
+  if(!out)throw std::runtime_error("navdemos perception water observation write failed");
+}
 NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance* guidance=nullptr) {
   auto& n=*ep.npc;
   const auto position=ep.teacherVersion>=2 ? NpcKeys::physicalPosition(n) : n.position();
@@ -925,6 +978,7 @@ NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance
   }
   sample.roads.goalDirection=direction(ep.goal-position,n.rotationRad());sample.roads.goalDistanceCm=(ep.goal-position).length();
   sample.previous=ep.previous;sample.eye=&ep.eye.samples();sample.memory=&ep.view;
+  tracePerceptionWater(ep,sample);
   return sample;
 }
 std::vector<NonfiniteObservation::Field> nonfiniteFields(const NavDemoWriter::Snapshot& sample,bool sensors) {
@@ -1895,7 +1949,10 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
   NpcKeys::enable(*npc,true);ep.previousPosition=NpcKeys::physicalPosition(*npc);
   ep.began=ep.next=ep.progressAt=w.tickCount();ep.active=true;ep.wallStart=std::chrono::steady_clock::now();
   ep.expectedStart=NpcKeys::physicalPosition(*npc);
-  if(ep.perceptionMonitor)ep.perceptionSafetyFrames=file(ep,"perception-safety-frames.jsonl");
+  if(ep.perceptionMonitor) {
+    ep.perceptionSafetyFrames=file(ep,"perception-safety-frames.jsonl");
+    ep.perceptionWaterObservations=file(ep,"perception-water-observations.jsonl");
+  }
   if(ep.teacherVersion>=2 && !ep.drive) {
     const auto reference=NavBench::navigationMesh(w).findPath(meters(ep.expectedStart),meters(ep.goal));
     ep.detourLengthCm=reference.complete?reference.length*100.:0;

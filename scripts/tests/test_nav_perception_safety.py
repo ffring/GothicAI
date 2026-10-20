@@ -1,5 +1,6 @@
 """Safety controls require physical CV evidence, independent of arrival."""
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -134,6 +135,42 @@ def test_different_seeds_rediscovering_same_shore_do_not_count_twice():
         safety.select_fixtures(fixtures)
 
 
+def water_fixture(label, x):
+    return dict(label=label, kind="water", qualified=True, reason="ok", link_id=0,
+                projected_start_cm=[x, 100, 0], goal_cm=[x, 0, 800], hazard_cm=[x, 0, 500])
+
+
+def test_water_followup_keeps_exact_original_three_and_freezes_independent_new_shores(tmp_path):
+    original = [water_fixture(f"original-{i}", i * 1000) for i in range(3)]
+    path = tmp_path / "old/fixtures.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps([*original, dict(kind="cliff", qualified=True)]))
+    before = path.read_bytes()
+    loaded = safety.baseline_water_fixtures(path)
+    candidates = [water_fixture("rediscovered-original", 300), water_fixture("new-a", 3000),
+                  water_fixture("too-close-to-new-a", 3400),
+                  dict(water_fixture("not-qualified", 5000), qualified=False),
+                  water_fixture("new-b", 3500), water_fixture("new-c", 4000),
+                  water_fixture("not-selected-after-three", 5000)]
+    selected = safety.select_water_followup(loaded, candidates)
+    assert selected[:3] == original
+    assert [row["label"] for row in selected[3:]] == ["new-a", "new-b", "new-c"]
+    assert safety.select_water_followup(loaded, selected) == selected
+    assert path.read_bytes() == before
+
+
+def test_water_followup_cannot_replace_a_failing_original_or_count_nearby_shore(tmp_path):
+    original = [water_fixture(f"original-{i}", i * 1000) for i in range(3)]
+    path = tmp_path / "fixtures.json"
+    path.write_text(json.dumps(original[:2]))
+    with pytest.raises(ValueError, match="exactly three qualified"):
+        safety.baseline_water_fixtures(path)
+    candidates = [water_fixture("new-a", 3000), water_fixture("new-b", 4000),
+                  water_fixture("same-as-new-b", 4001)]
+    with pytest.raises(ValueError, match="qualified 2/3 new shores.*no episodes attempted"):
+        safety.select_water_followup(original, candidates)
+
+
 @pytest.mark.parametrize("teacher", safety.TEACHERS)
 def test_both_teachers_share_fixture_without_recording_or_oracle(teacher):
     args = SimpleNamespace(roads=Path("/own/roads"), npc="BAU_954_MALETH", limit_ms=30000)
@@ -161,3 +198,19 @@ def test_episode_validation_binds_teacher_representation_and_disables_recording(
     (tmp_path / "samples.bin.gz").write_bytes(b"bad")
     with pytest.raises(ValueError, match="unexpectedly recorded"):
         safety.validate_episode(tmp_path, metadata, fixture, teacher, "gaze", 30000)
+
+
+@pytest.mark.parametrize("teacher", safety.TEACHERS)
+def test_water_patch_representation_three_cannot_mix_with_historical_two(tmp_path, teacher):
+    fixture = dict(projected_start_cm=[1, 2, 3], goal_cm=[4, 5, 6])
+    metadata = dict(start="cm:1,2,3", goal="cm:4,5,6", demo_version=2,
+                    teacher_version=2 if teacher == "v2" else 3, limit_ms=30000,
+                    observation_source="detour_teacher_v2" if teacher == "v2" else "learner_memory",
+                    oracle=False, navigation_memory_version=3, perception_mode="gaze",
+                    record=False, demonstration_recorded=False)
+    safety.validate_episode(tmp_path, metadata, fixture, teacher, "gaze", 30000, memory_version=3)
+    with pytest.raises(ValueError, match="identity/memory version"):
+        safety.validate_episode(tmp_path, metadata, fixture, teacher, "gaze", 30000)
+    with pytest.raises(ValueError, match="identity/memory version"):
+        safety.validate_episode(tmp_path, dict(metadata, navigation_memory_version=2), fixture,
+                                teacher, "gaze", 30000, memory_version=3)
