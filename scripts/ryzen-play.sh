@@ -134,7 +134,7 @@ def remote_install(action, payload, source):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise ValueError("Gothic AI is playing or updating; close it before install/update") from None
+            raise ValueError("Gothic AI is open, playing or updating; close it before install/update") from None
         queue = home / "gothic-ai/bin/gq"
         if not os.access(queue, os.X_OK):
             raise ValueError("gq is not installed: run scripts/gq install ryzen on the Mac")

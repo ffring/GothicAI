@@ -215,6 +215,9 @@ async def test_queue_reports_waiting_events_and_cancels_by_eof(desktop, tmp_path
                 await asyncio.sleep(0.01)
         assert messages == [ready]
         assert any(e.kind == "ready" and e.proc == "queue" for e in events)
+        with (Path.home() / "gothic-ai/play.install.lock").open("ab") as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         runner.stop()
         assert await asyncio.wait_for(task, 10) == 0
         assert marker.exists() and not state.groups
@@ -227,28 +230,63 @@ async def test_queue_reports_waiting_events_and_cancels_by_eof(desktop, tmp_path
 
 
 async def test_queue_waiting_detail_reaches_the_window(desktop, tmp_path, monkeypatch):
-    events = []
-    state = SessionFile(tmp_path / "launcher.json")
-    state.acquire()
-    runner = LinuxSession(
-        desktop, tmp_path, tmp_path / "logs", "menu", False, lambda m: None, events.append, state
+    messages = []
+    waiting, running = asyncio.Event(), asyncio.Event()
+
+    def write(msg):
+        messages.append(json.loads(json.dumps(msg)))
+        if msg["event"] == "service" and msg["data"]["proc"] == "queue" and msg["data"]["kind"] == "waiting":
+            waiting.set()
+        if msg["event"] == "session" and msg["data"]["state"] == "running":
+            running.set()
+
+    control = control_module.Control(
+        write,
+        config_dir=tmp_path / "config",
+        state_file=tmp_path / "launcher.json",
+        log_root=tmp_path / "logs",
     )
+    monkeypatch.setattr(control, "_config", lambda: Config.load(tmp_path / "config"))
+    monkeypatch.setattr(control_module, "find_layout", lambda config: desktop)
+    monkeypatch.setattr(sys, "platform", "linux")
+    detail = "gq own: ждём игры: other (another-owner, another-game)"
+    worker_session = {
+        "state": "running", "mode": "new", "code": None,
+        "services": {"server": {"state": "ready"}},
+        "health_url": "http://127.0.0.1:12345/health",
+    }
     script = (
         "import sys; "
-        "print('gq own: ждём игры: other (another-owner, another-game)', file=sys.stderr, flush=True); "
+        f"print({detail!r}, file=sys.stderr, flush=True); "
+        "sys.stdin.buffer.read(1); "  # Admit only after the window has received the waiting event.
+        f"print({json.dumps({'event': 'session', 'data': worker_session})!r}, flush=True); "
         "sys.stdin.buffer.read()"
     )
-    monkeypatch.setattr(runner, "command", lambda: [sys.executable, "-c", script])
-    task = asyncio.create_task(runner.run())
+    monkeypatch.setattr(LinuxSession, "command", lambda self: [sys.executable, "-c", script])
     try:
-        async with asyncio.timeout(10):
-            while not events:
-                await asyncio.sleep(0.01)
-        assert events[0].kind == "waiting" and "another-owner, another-game" in events[0].detail
+        await control.session_start(mode="new", smoke=True)
+        assert isinstance(control.supervisor, LinuxSession)
+        assert not control.admitted
+        await asyncio.wait_for(waiting.wait(), 10)
+        assert control.session["state"] == "waiting"
+        assert control.session["services"]["queue"] == {"state": "waiting", "detail": detail}
+        assert messages[-1] == {
+            "event": "service",
+            "data": {"proc": "queue", "kind": "waiting", "detail": detail, "data": None},
+        }
+        assert messages[0]["event"] == "session" and messages[0]["data"]["state"] == "waiting"
+        runner = control.supervisor
+        runner.process.stdin.write(b"\n")
+        await runner.process.stdin.drain()
+        await asyncio.wait_for(running.wait(), 10)
+        assert control.session["state"] == "running"
+        assert control.session["health_url"] == worker_session["health_url"]
+        assert control.session["services"]["server"] == {"state": "ready"}
+        assert control.session["services"]["queue"] == {"state": "ready", "detail": "Допуск gq получен"}
+        assert messages[-1] == {"event": "session", "data": control.session}
+        assert messages[0]["data"]["state"] == "waiting"  # Stored window messages are independent snapshots.
     finally:
-        runner.stop()
-        await task
-        state.release()
+        await asyncio.wait_for(control.shutdown(), 10)
 
 
 async def test_parent_crash_closes_the_queue_lifetime_pipe(desktop, tmp_path):

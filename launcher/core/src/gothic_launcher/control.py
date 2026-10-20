@@ -63,7 +63,7 @@ from .commands import (
     services,
     tools,
 )
-from .linux_session import LinuxSession
+from .linux_session import LinuxSession, installation_lock
 from .settings import CONFIG_DIR, Config, Secrets, Settings
 from .state import STATE_DIR, AlreadyRunning, SessionFile
 from .supervisor import Event, NotReady, Supervisor, temporary
@@ -554,4 +554,5 @@ def main() -> int:
         format="%(asctime)s %(levelname).1s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    return asyncio.run(serve())
+    with installation_lock() if sys.platform == "linux" else contextlib.nullcontext():
+        return asyncio.run(serve())
