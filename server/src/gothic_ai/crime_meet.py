@@ -254,6 +254,7 @@ class CrimeMeet:
         return (
             not self._closed and not self._loading and active.generation == self._generation
             and active.branch == self.chronicle.branch
+            and self.reactions.role(npc, active.encounter.crime) != "ally"
             and any(crime["id"] == active.encounter.crime["id"] for crime, _ in self._cases(npc))
         )
 

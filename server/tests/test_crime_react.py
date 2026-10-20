@@ -206,6 +206,37 @@ async def test_ally_role_precedes_guard_but_not_owner(system):
     assert system.react.role(MATTEO, case) == "owner"
 
 
+@pytest.mark.parametrize("npc,expected", [
+    (HILDA, "ally"), (CITIZEN, "member"), (GUARD, "guard"), (MATTEO, "owner"),
+])
+async def test_justified_hearsay_changes_only_an_unrelated_listeners_role(system, npc, expected):
+    case = system.crimes.record(deed(kind="murder", victim=MATTEO, victim_guild=3))
+    system.chronicle.record({
+        "fact": "rumor", "to": npc, "from": "ALLY", "crime": case["id"], "kind": "murder", "hops": 1,
+        "excuse": "fought", "excuse_by": "ALLY", "excuse_by_name": "Союзник",
+    })
+    assert system.react.role(npc, case) == expected
+    assert system.crimes.does_not_blame(npc, case) is (expected == "ally")
+    if expected == "ally":
+        assert "Ты не винишь героя" in system.crimes.situation(npc)
+        system.chronicle.record({"fact": "crime_seen", "npc": npc, "crime": case["id"]})
+        assert system.react.role(npc, case) == "stranger"
+        assert not system.crimes.does_not_blame(npc, case)
+
+
+async def test_unrelated_bandit_does_not_blame_a_justified_killing_in_the_bl_community(system):
+    system.crimes.people[HILDA] = {"guild": 9, "npctype": 5}
+    case = system.crimes.record(deed(kind="murder", victim=LOBART, victim_guild=9, victim_npctype=5))
+    system.chronicle.record({
+        "fact": "rumor", "to": HILDA, "from": "ALLY", "crime": case["id"], "kind": "murder",
+        "excuse": "hostile", "excuse_by": "ALLY",
+    })
+    assert system.react.base_role(HILDA, case) == "stranger"
+    assert system.react.role(HILDA, case) == "ally"
+    assert system.crimes.attitude(HILDA) is None
+    assert system.crimes.distrust(HILDA) == []
+
+
 @pytest.mark.parametrize("unknown", [HILDA, LOBART])
 async def test_household_requires_observer_and_owner_home_metadata(system, unknown):
     case = crime(system)

@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Literal
 
+from .chronicle import Fact
 from .game import GameError
 from .protocol import GameMessage, HeroDeed, Loading, NpcEvent, NpcViews, Perception, Session
 
@@ -117,7 +118,36 @@ class CrimeSides:
         return conv is not None and conv.intent.goal == "follow_hero"
 
     def reason(self, npc: str, deed: HeroDeed) -> SideReason | None:
+        """Keep the bridge's witness metadata and combat snapshot for direct witnesses."""
         npc, victim = self._npc(npc), self._npc(deed.victim)
+        friends = {self._npc(p.npc) for p in deed.witnesses_metadata if p.npctype == 2}
+        metadata = next((p for p in deed.witnesses_metadata if self._npc(p.npc) == npc), None)
+        guild = metadata.guild if metadata is not None else self.crimes.people.get(npc, {}).get("guild", -1)
+        return self._reason(npc, victim, friends, guild, deed.victim_guild, deed.victim_enemy)
+
+    def heard_reason(self, npc: str, crime: Fact) -> SideReason | None:
+        """A listener can have its own side, independent of the teller's version."""
+        npc = self._npc(npc)
+        victim = self._npc(crime.get("victim", ""))
+        people = self.crimes.people
+        friends = {self._npc(actor) for actor, person in people.items() if person.get("npctype") == 2}
+        guild = people.get(npc, {}).get("guild", -1)
+        victim_guild = crime.get("victim_guild")
+        if victim_guild is None or victim_guild < 0:
+            victim_guild = people.get(victim, {}).get("guild")
+        if victim_guild is not None and victim_guild < 0:
+            victim_guild = None
+        return self._reason(npc, victim, friends, guild, victim_guild)
+
+    def _reason(
+        self,
+        npc: str,
+        victim: str,
+        friends: set[str],
+        guild: int,
+        victim_guild: int | None,
+        victim_enemy: bool = False,
+    ) -> SideReason | None:
         dialogue = self.crimes.dialogue
         conversations = dialogue.conversations if dialogue is not None else {}
         for actor, conv in conversations.items():
@@ -128,7 +158,6 @@ class CrimeSides:
         self._prune()
         if (npc, victim) in self.fights or (victim, npc) in self.fights:
             return "fought"
-        friends = {self._npc(p.npc) for p in deed.witnesses_metadata if p.npctype == 2}
         if self._companion(npc, friends):
             group = {"PLAYER", *friends}
             candidates = set(conversations)
@@ -136,14 +165,12 @@ class CrimeSides:
                 candidates.update(self.orders.standing)
             group.update(actor for actor in candidates if self._companion(actor, friends))
             if (
-                deed.victim_enemy
+                victim_enemy
                 or victim in self.group_threats
                 or any((victim, member) in self.fights for member in group)
             ):
                 return "companion"
-        metadata = next((p for p in deed.witnesses_metadata if self._npc(p.npc) == npc), None)
-        guild = metadata.guild if metadata is not None else self.crimes.people.get(npc, {}).get("guild", -1)
-        if (guild, deed.victim_guild) in self.hostile_guilds:
+        if victim_guild is not None and (guild, victim_guild) in self.hostile_guilds:
             return "hostile"
         if self.book is not None:
             for quest in self.book.all().values():

@@ -134,6 +134,47 @@ async def test_direct_evidence_wins_over_later_rumor_and_suspicion(knowledge):
     assert (known.degree, known.source, known.hops) == ("seen", LOBART, 0)
 
 
+@pytest.mark.parametrize("justified_first", [False, True])
+async def test_justification_wins_over_plain_hearsay_but_never_direct_evidence(knowledge, justified_first):
+    crime = knowledge.crimes.record(deed(kind="murder", victim=LOBART, victim_guild=8))
+    excuse = {"excuse": "fought", "excuse_by": HILDA, "excuse_by_name": "Хильда"}
+    versions = [excuse, {}] if justified_first else [{}, excuse]
+    for fields in versions:
+        learn(knowledge, MALETH, crime["id"], "heard", **fields)
+    (known,) = knowledge.crimes.known(MALETH)
+    assert (known.degree, known.excuse, known.excuse_by, known.excuse_by_name) == (
+        "heard", "fought", HILDA, "Хильда",
+    )
+    assert knowledge.crimes.excuse(MALETH, crime["id"]) == excuse
+    assert "Хильда говорит: Лобарт дрался с ним" in knowledge.crimes.situation(MALETH)
+    # Without CrimeReact only a recorded personal side suppresses consequences.
+    assert not knowledge.crimes.does_not_blame(MALETH, crime)
+    learn(knowledge, MALETH, crime["id"], "seen")
+    learn(knowledge, MALETH, crime["id"], "heard", **excuse)
+    (known,) = knowledge.crimes.known(MALETH)
+    assert (known.degree, known.excuse, known.excuse_by) == ("seen", "", "")
+
+
+@pytest.mark.parametrize("snapshot", [False, True])
+async def test_ally_testimony_justification_is_knowledge_and_can_be_retold(knowledge, snapshot):
+    knowledge.crimes.sides.note_fight(LOBART, HILDA)
+    crime = knowledge.crimes.record(deed(kind="murder", victim=LOBART, victim_guild=8, witnesses=[HILDA]))
+    excuse = {"excuse": "fought", "excuse_by": HILDA, "excuse_by_name": "Хильда"}
+    fields = {"crime_excuses": {crime["id"]: excuse}} if snapshot else {}
+    knowledge.chronicle.record({
+        "fact": "testimony", "npc": MALETH, "witness": HILDA, "crime_told": [crime["id"]], **fields,
+    })
+    (known,) = knowledge.crimes.known(MALETH)
+    assert (known.degree, known.excuse, known.excuse_by) == ("heard", "fought", HILDA)
+    assert knowledge.crimes.excuse(MALETH, crime["id"]) == excuse
+    # A later source does not replace the original source; a personal side does.
+    learn(knowledge, MALETH, crime["id"], "heard", excuse="quest", excuse_by=LOBART)
+    assert knowledge.crimes.excuse(MALETH, crime["id"]) == excuse
+    knowledge.crimes.sides.note_fight(LOBART, MALETH)
+    knowledge.crimes.learn_side(MALETH, crime)
+    assert knowledge.crimes.excuse(MALETH, crime["id"])["excuse_by"] == MALETH
+
+
 async def test_missing_crime_references_cannot_invent_knowledge(knowledge):
     for degree in ("seen", "heard", "suspects"):
         learn(knowledge, LOBART, "not-in-this-branch", degree)
