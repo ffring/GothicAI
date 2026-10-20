@@ -408,9 +408,11 @@ class DynamicWorld final {
     struct MovableVobSnapshot {
       uintptr_t          id = 0;
       uint32_t           zenId = uint32_t(-1);
-      std::string        visual, className;
+      std::string        visual, className, disposition;
       bool               blocksWalking = false, legacyCollision = true, enabled = false, sleeping = true, touchedByNpc = false;
       float              mass = 0;
+      float              hullVolume = 0, density = 0, massMultiplier = 1;
+      zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
       bool               destructible = false, broken = false;
       float              health = 0, maxHealth = 0, impactThreshold = 0;
       Tempest::Matrix4x4 transform, origin;

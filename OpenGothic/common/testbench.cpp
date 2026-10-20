@@ -694,6 +694,12 @@ struct Bench {
   std::string movablePhase;
   uint64_t movablePhaseStart=0,movableSampleTick=0;
   std::vector<LivingPhysics> movablePhysics;
+  uint32_t ownMeshZen=uint32_t(-1);
+  Vec3 ownMeshAxis,ownMeshApproach,ownMeshHeroStart,ownMeshBodyStart;
+  float ownMeshMaxCrossTrack=0;
+  std::deque<std::pair<uint64_t,Vec3>> ownMeshHeroHistory;
+  bool ownMeshWalking=false;
+  unsigned ownMeshArrowHits=0;
   std::unordered_set<uintptr_t> waterIds;
   std::unordered_map<uintptr_t,std::string> waterLabels;
   std::unordered_map<uintptr_t,uint64_t> waterSleepAt;
@@ -3128,6 +3134,190 @@ void movableCheckpoint(World& world) {
     "],\"bodies\":"+movableRows(world)+",\"walker_cm\":"+
     (bench.movableWalker?ragdollVector(bench.movableWalker->position()):"null"));
   bench.movableTrace=false;
+  }
+
+void ownMeshWalk(World& world,Npc& player) {
+  if(bench.ownMeshZen==uint32_t(-1)) {arenaAbort("own-mesh requires setup");return;}
+  auto start=bench.ownMeshAxis+bench.ownMeshApproach*270.f;
+  const auto floor=world.physic()->landRay(start+Vec3(0,200,0),700.f);
+  if(!floor.hasCol || floor.n.y<.8f) {arenaAbort("own-mesh approach has no supported ground");return;}
+  start.y=floor.v.y;
+  player.closeWeapon(true);player.clearAiQueue();player.stopWalking();player.clearSpeed();
+  player.setPosition(start);player.setDirection(-bench.ownMeshApproach);player.updateTransform();
+  bench.ownMeshHeroStart=start;bench.ownMeshHeroHistory.clear();bench.ownMeshWalking=true;bench.ownMeshMaxCrossTrack=0;
+  for(const auto& body:world.physic()->movableVobSnapshot())
+    if(body.zenId==bench.ownMeshZen)bench.ownMeshBodyStart=movablePosition(body.transform);
+  }
+
+void ownMeshSetup(World& world,Npc& player,uint32_t zenId,const Vec3& approach) {
+  const auto all=world.physic()->movableVobSnapshot();
+  const auto found=std::find_if(all.begin(),all.end(),[zenId](const auto& body){return body.zenId==zenId;});
+  if(found==all.end() || !found->visual.starts_with("NW_HARBOUR_BARREL_01") || approach.length()<.9f) {
+    arenaAbort("own-mesh requires the authored NW_HARBOUR_BARREL_01 and a horizontal approach");return;
+    }
+  bench.ownMeshZen=zenId;bench.ownMeshApproach=Vec3::normalize(approach);
+  bench.ownMeshAxis=(found->localBounds[0]+found->localBounds[1])*.5f;
+  found->origin.project(bench.ownMeshAxis);
+  std::string corridor="[";
+  for(float distance=270.f;distance>=90.f;distance-=30.f) {
+    auto point=bench.ownMeshAxis+bench.ownMeshApproach*distance;
+    const auto floor=world.physic()->landRay(point+Vec3(0,200,0),700.f);
+    if(!floor.hasCol || floor.n.y<.8f) {arenaAbort("own-mesh straight corridor has no supported ground");return;}
+    if(corridor.size()>1)corridor+=',';
+    corridor+=ragdollVector(floor.v);
+    }
+  ownMeshWalk(world,player);bench.ownMeshWalking=false;
+  bench.cam=C_Hold;
+  const auto camera=bench.ownMeshAxis+Vec3(-.25879f,0,.96593f)*430.f+Vec3(0,160,0);
+  lookFrom(camera,bench.ownMeshAxis);
+  event("own_mesh_setup","\"zen_id\":"+std::to_string(zenId)+",\"visual\":"+jsonStr(found->visual)+
+    ",\"origin\":"+ragdollMatrix(found->origin)+",\"axis_half_height_cm\":"+ragdollVector(bench.ownMeshAxis)+
+    ",\"approach_direction\":"+ragdollVector(bench.ownMeshApproach)+
+    ",\"approach_floor_cm\":"+corridor+"]"+
+    ",\"hero_start_cm\":"+ragdollVector(bench.ownMeshHeroStart)+",\"camera_cm\":"+ragdollVector(camera));
+  }
+
+void ownMeshArrow(World& world,Npc& player) {
+  if(bench.ownMeshZen==uint32_t(-1)) {arenaAbort("own-mesh arrow requires setup");return;}
+  const auto symbol=world.script().findSymbolIndex("ITRW_ARROW");
+  if(symbol==size_t(-1)) {arenaAbort("own-mesh arrow instance unavailable");return;}
+  const auto target=bench.ownMeshAxis,from=target+bench.ownMeshApproach*270.f;
+  const float speed=DynamicWorld::bulletSpeed;
+  const auto direction=Vec3::normalize(Archery::launch(from,target,speed)-from);
+  Item arrow(world,symbol,Item::T_Inventory);
+  auto& bullet=world.shootArrow(arrow,from,direction,speed);
+  bullet.setOrigin(&player);bullet.setPrecise(1.f);
+  bench.ownMeshArrowHits=0;
+  event("own_mesh_arrow","\"zen_id\":"+std::to_string(bench.ownMeshZen)+",\"from_cm\":"+
+    ragdollVector(from)+",\"target_cm\":"+ragdollVector(target)+",\"speed_cm_ms\":"+ragdollNumber(speed));
+  }
+
+void ownMeshClearance(World& world,Npc& player) {
+  if(bench.ownMeshZen==uint32_t(-1)) {arenaAbort("own-mesh clearance requires setup");return;}
+  auto bodies=world.physic()->movableVobContacts(100.f);
+  // With MOVABLE_VOBS=0 there is no native dynamic hull to overlap. Keep the
+  // same line/camera guards against the original source collision mesh.
+  if(!world.physic()->movableVobsEnabled()) {
+    for(const auto& source:world.physic()->movableVobSnapshot())if(source.zenId==bench.ownMeshZen) {
+      DynamicWorld::MovableVobContacts body;
+      body.zenId=source.zenId;body.visual=source.visual;body.disposition=source.disposition;
+      body.hullMin=body.hullMax=bench.ownMeshAxis;
+      for(unsigned corner=0;corner<8;++corner) {
+        Vec3 point(source.localBounds[corner&1].x,source.localBounds[(corner>>1)&1].y,source.localBounds[(corner>>2)&1].z);
+        source.origin.project(point);
+        body.hullMin=Vec3(std::min(body.hullMin.x,point.x),std::min(body.hullMin.y,point.y),std::min(body.hullMin.z,point.z));
+        body.hullMax=Vec3(std::max(body.hullMax.x,point.x),std::max(body.hullMax.y,point.y),std::max(body.hullMax.z,point.z));
+        }
+      bodies.push_back(std::move(body));break;
+      }
+    }
+  for(const auto& body:bodies) {
+    if(body.zenId!=bench.ownMeshZen)continue;
+    std::string contacts="[";float gap=100.f;
+    for(const auto& hit:body.contacts) {
+      const bool floor=hit.category==DynamicWorld::C_Landscape && hit.below;
+      if(!floor)gap=std::min(gap,-hit.depth);
+      if(contacts.size()>1)contacts+=',';
+      contacts+="{\"other\":"+jsonStr(hit.other)+",\"zen_id\":"+std::to_string(hit.otherZenId)+
+        ",\"category\":"+std::to_string(hit.category)+",\"floor_support\":"+(floor?"true":"false")+
+        ",\"depth_cm\":"+ragdollNumber(hit.depth)+",\"point_cm\":"+ragdollVector(hit.point)+"}";
+      }
+    event("own_mesh_clearance","\"zen_id\":"+std::to_string(body.zenId)+
+      ",\"enabled\":"+(body.enabled?"true":"false")+",\"disposition\":"+jsonStr(body.disposition)+
+      ",\"margin_cm\":100,\"minimum_non_floor_gap_cm\":"+(body.enabled?ragdollNumber(gap):"null")+",\"contacts\":"+contacts+"]");
+    if(gap<=0.f || (world.physic()->movableVobsEnabled() && !body.enabled)) {
+      arenaAbort("own-mesh barrel must retain a positive gap and remain movable when enabled");return;
+      }
+    const auto extent=(body.hullMax-body.hullMin)*.5f;
+    const auto axis=bench.ownMeshAxis;
+    const auto* camera=Gothic::inst().camera();bool framed=camera!=nullptr,visible=true;
+    Vec3 ndcMin(1e9f,1e9f,1e9f),ndcMax(-1e9f,-1e9f,-1e9f);
+    const auto eye=axis+Vec3(-.25879f,0,.96593f)*430.f+Vec3(0,160,0);
+    for(unsigned corner=0;corner<8;++corner) {
+      const Vec3 point((corner&1)?body.hullMax.x:body.hullMin.x,(corner&2)?body.hullMax.y:body.hullMin.y,
+                       (corner&4)?body.hullMax.z:body.hullMin.z);
+      float x=point.x,y=point.y,z=point.z,w=1;
+      if(camera)camera->viewProj().project(x,y,z,w);
+      if(w<=0)framed=false;
+      else {
+        x/=w;y/=w;z/=w;
+        framed=framed && std::abs(x)<.95f && std::abs(y)<.95f && z>=0.f && z<=1.f;
+        ndcMin=Vec3(std::min(ndcMin.x,x),std::min(ndcMin.y,y),std::min(ndcMin.z,z));
+        ndcMax=Vec3(std::max(ndcMax.x,x),std::max(ndcMax.y,y),std::max(ndcMax.z,z));
+        }
+      const auto hit=world.physic()->ray(eye,point);
+      const auto own=world.physic()->rayMovableVob(eye,point);
+      visible=visible && (!hit.hasCol || (own && own->zenId==bench.ownMeshZen));
+      }
+    event("own_mesh_camera","\"zen_id\":"+std::to_string(body.zenId)+",\"eye_cm\":"+ragdollVector(eye)+
+      ",\"framed\":"+(framed?"true":"false")+",\"visible\":"+(visible?"true":"false")+
+      ",\"ndc_min\":"+ragdollVector(ndcMin)+",\"ndc_max\":"+ragdollVector(ndcMax));
+    if(!framed || !visible) {arenaAbort("own-mesh camera must see the complete barrel from the free side");return;}
+    for(unsigned line=0;line<3;++line) {
+      const auto direction=line==2?-bench.ownMeshApproach:bench.ownMeshApproach;
+      float edge=std::numeric_limits<float>::infinity();
+      if(std::abs(direction.x)>.001f)edge=std::min(edge,extent.x/std::abs(direction.x));
+      if(std::abs(direction.z)>.001f)edge=std::min(edge,extent.z/std::abs(direction.z));
+      for(float y:{axis.y,body.hullMin.y+40.f,body.hullMin.y+110.f,body.hullMin.y+170.f}) {
+        if(line==1 && y!=axis.y)continue;
+        auto from=axis+direction*(edge+2.f);from.y=y;
+        const auto to=from+direction*200.f;
+        const auto hit=world.physic()->navigationRay(from,to,&player);
+        const auto visual=world.physic()->ray(from,to);
+        event("own_mesh_line","\"zen_id\":"+std::to_string(body.zenId)+",\"line\":"+
+          jsonStr(line==0?"hero_approach":line==1?"arrow":"push")+",\"from_cm\":"+ragdollVector(from)+
+          ",\"to_cm\":"+ragdollVector(to)+",\"length_cm\":200,\"physical_hit\":"+(hit.hasCol?"true":"false")+
+          ",\"physical_hit_distance_cm\":"+ragdollNumber(hit.hasCol?(hit.point-from).length():200.f)+
+          ",\"physical_kind\":"+std::to_string(unsigned(hit.kind))+",\"visual_hit\":"+(visual.hasCol?"true":"false")+
+          ",\"visual_hit_distance_cm\":"+ragdollNumber(visual.hasCol?(visual.v-from).length():200.f));
+        if(hit.hasCol || visual.hasCol) {arenaAbort("own-mesh approach, arrow and push require clear 200 cm lines");return;}
+        }
+      }
+    return;
+    }
+  arenaAbort("own-mesh clearance body disappeared");
+  }
+
+void ownMeshFields(World& world,Npc& player) {
+  if(!bench.ownMeshWalking)return;
+  const Vec3 side(-bench.ownMeshApproach.z,0,bench.ownMeshApproach.x);
+  const float crossTrack=Vec3::dotProduct(player.position()-bench.ownMeshHeroStart,side);
+  bench.ownMeshMaxCrossTrack=std::max(bench.ownMeshMaxCrossTrack,std::abs(crossTrack));
+  // Steer the held forward input back to the straight approach line. This
+  // prevents a slanted barrel facet from turning the test into a walk around
+  // it; all positions and velocities still come from the native controller.
+  player.setDirection(Vec3::normalize(-bench.ownMeshApproach-side*(crossTrack*.1f)));
+  bench.ownMeshHeroHistory.emplace_back(world.tickCount(),player.position());
+  while(bench.ownMeshHeroHistory.size()>1 &&
+        bench.ownMeshHeroHistory[1].first+500<world.tickCount())bench.ownMeshHeroHistory.pop_front();
+  }
+
+void ownMeshCheckpoint(World& world,Npc& player) {
+  if(bench.ownMeshZen==uint32_t(-1)) {arenaAbort("own-mesh checkpoint requires setup");return;}
+  ownMeshFields(world,player);
+  const auto hero=player.position(),delta=hero-bench.ownMeshAxis;
+  const auto& history=bench.ownMeshHeroHistory;
+  const uint64_t elapsed=history.empty()?0:world.tickCount()-history.front().first;
+  const auto movement=history.empty()?Vec3():hero-history.front().second;
+  const float speed=elapsed?Vec3(movement.x,0,movement.z).length()*1000.f/float(elapsed):0.f;
+  for(const auto& body:world.physic()->movableVobSnapshot()) {
+    if(body.zenId!=bench.ownMeshZen)continue;
+    const auto position=movablePosition(body.transform);
+    event("own_mesh_checkpoint","\"zen_id\":"+std::to_string(body.zenId)+
+      ",\"enabled\":"+(body.enabled?"true":"false")+",\"disposition\":"+jsonStr(body.disposition)+
+      ",\"hero_start_cm\":"+ragdollVector(bench.ownMeshHeroStart)+",\"hero_position_cm\":"+ragdollVector(hero)+
+      ",\"hero_axis_distance_cm\":"+ragdollNumber(std::hypot(delta.x,delta.z))+
+      ",\"max_cross_track_cm\":"+ragdollNumber(bench.ownMeshMaxCrossTrack)+
+      ",\"final_sample_ms\":"+std::to_string(elapsed)+",\"final_speed_cm_s\":"+ragdollNumber(speed)+
+      ",\"body_start_cm\":"+ragdollVector(bench.ownMeshBodyStart)+",\"body_position_cm\":"+ragdollVector(position)+
+      ",\"body_displacement_cm\":"+ragdollNumber((position-bench.ownMeshBodyStart).length())+
+      ",\"body_transform\":"+ragdollMatrix(body.transform)+",\"npc_contact\":"+(body.touchedByNpc?"true":"false")+
+      ",\"mass_kg\":"+ragdollNumber(body.mass)+",\"hull_volume_m3\":"+ragdollNumber(body.hullVolume)+
+      ",\"material_group\":"+std::to_string(unsigned(body.material))+",\"density_kg_m3\":"+ragdollNumber(body.density)+
+      ",\"mass_multiplier\":"+ragdollNumber(body.massMultiplier)+",\"arrow_hits\":"+std::to_string(bench.ownMeshArrowHits));
+    bench.ownMeshWalking=false;return;
+    }
+  arenaAbort("own-mesh authored body disappeared");
   }
 
 void prepareMovableFixture(World& world,Npc& player) {
@@ -10796,6 +10986,12 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     noiseDropItems(w,1);
     }
   else if(c=="noise" && a.size()==2 && a[1]=="checkpoint") noiseCheckpoint(w);
+  else if(c=="own-mesh" && a.size()==5 && a[1]=="setup")
+    ownMeshSetup(w,pl,uint32_t(std::stoul(a[2])),Vec3(num(a,3,0),0,num(a,4,0)));
+  else if(c=="own-mesh" && a.size()==2 && a[1]=="arrow")ownMeshArrow(w,pl);
+  else if(c=="own-mesh" && a.size()==2 && a[1]=="clearance")ownMeshClearance(w,pl);
+  else if(c=="own-mesh" && a.size()==2 && a[1]=="walk")ownMeshWalk(w,pl);
+  else if(c=="own-mesh" && a.size()==2 && a[1]=="checkpoint")ownMeshCheckpoint(w,pl);
   else if(c=="movable" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","movable_vobs",a[1]=="on");
     w.physic()->setMovableVobsEnabled(a[1]=="on");
@@ -15808,6 +16004,18 @@ void TestBench::note(const char* text) {
     }
   }
 
+void TestBench::ownMeshArrowHit(uint32_t zenId,const Vec3& point,const Vec3& normal) {
+  if(!isActive() || !bench.started || bench.done || bench.ownMeshZen==uint32_t(-1))return;
+  const auto delta=point-bench.ownMeshAxis;
+  const bool matched=zenId==bench.ownMeshZen;
+  if(matched)++bench.ownMeshArrowHits;
+  event("own_mesh_arrow_hit","\"zen_id\":"+std::to_string(zenId)+
+    ",\"expected_zen_id\":"+std::to_string(bench.ownMeshZen)+",\"matched\":"+(matched?"true":"false")+
+    ",\"point_cm\":"+ragdollVector(point)+",\"normal\":"+ragdollVector(normal)+
+    ",\"axis_distance_cm\":"+ragdollNumber(std::hypot(delta.x,delta.z))+
+    ",\"half_height_error_cm\":"+ragdollNumber(delta.y));
+  }
+
 std::string_view TestBench::who(const Npc* npc) {
   auto w = Gothic::inst().world();
   if(npc==nullptr || w==nullptr)
@@ -16140,6 +16348,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         (bench.destructionFarmNpc->position()-bench.destructionFarmNpcGoal->pos).length());
     }
   movableFields(*world);
+  ownMeshFields(*world,*player);
   waterFields(*world);
   waterFilmTick(*world);
   clothFields(*world);

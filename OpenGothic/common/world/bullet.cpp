@@ -160,6 +160,7 @@ void Bullet::onSpellWorldHit(const DynamicWorld::BulletWorldHit& hit) {
   }
 
 void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
+  TestBench::ownMeshArrowHit(hit.movable!=nullptr ? hit.movable->zenId : uint32_t(-1),hit.point,hit.normal);
   impactAt = hit.point;
   impactOwner = hit.bone;
   impactKnown = true;
