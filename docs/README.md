@@ -31,7 +31,7 @@
 
 Пилот качества материалов: [численные замеры 71 оригинала и проверки 58 наших альбедо](../reports/content/2026-10-pilot-measures/README.md), `scripts/content/measure-originals.sh`, общая функция `material-measures.h` / `material_measures.py`, `measure_city.py`, политика `material_scale.py`, поканальный цвет `material_colour.py`, детектор `material_lighting.py` и `marigold_iid.py` (отдельный venv на dev-ubuntu). [Текущие поля CSV и ограничения](own-content.md#численные-замеры-качества-материалов).
 
-Генераторы 3D для предметов этапа 2: [кандидаты, лицензии, конвейер и пилот](../reports/content/2026-10-3d-generators/README.md); выбор за пользователем.
+Генераторы 3D для предметов этапа 2: [кандидаты, лицензии, конвейер и пилот](../reports/content/2026-10-3d-generators/README.md); выбор за пользователем. CPU-обработка и листы сравнения — [`scripts/content/mesh3d/blender/`](../scripts/content/mesh3d/blender/) (Blender 4.5.3 LTS на Ryzen через `gq batch`): `postprocess.py`, `parametric.py`, `sheet.py`, синтетический прогон `synthetic.py`; чистые проверки — `scripts/content/mesh3d/check-blender.sh`. [Входы, команды и ограничения](../reports/content/2026-10-3d-generators/README.md#как-работает-сейчас).
 
 ## Путь одной реплики героя
 

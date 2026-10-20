@@ -1,0 +1,405 @@
+"""Mesh pilot geometry shared by Blender and the Blender-free checks.
+
+All coordinates and UV distances are metres in glTF space (+Y up). Functions
+operate on NumPy arrays; importing this module does not import Blender.
+"""
+
+import numpy as np
+
+
+def linear_to_oklab(rgb):
+    """Convert *linear*, nonnegative RGB to OKLab (not gamma-encoded sRGB)."""
+    rgb = np.asarray(rgb, dtype=np.float64)
+    if rgb.shape[-1] != 3 or np.any(rgb < 0) or not np.all(np.isfinite(rgb)):
+        raise ValueError("color must be finite nonnegative linear RGB")
+    lms = rgb @ np.array([
+        [0.4122214708, 0.2119034982, 0.0883024619],
+        [0.5363325363, 0.6806995451, 0.2817188376],
+        [0.0514459929, 0.1073969566, 0.6299787005],
+    ])
+    return np.cbrt(lms) @ np.array([
+        [0.2104542553, 1.9779984951, 0.0259040371],
+        [0.7936177850, -2.4285922050, 0.7827717662],
+        [-0.0040720468, 0.4505937099, -0.8086757660],
+    ])
+
+
+def kmeans(values, k, weights=None, max_iterations=40):
+    """Deterministic, area-weighted k-means; returns labels and sorted centres.
+
+    Farthest-point initialisation has no random seed. Empty clusters are removed,
+    so a constant colour never creates duplicate material zones.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    if values.ndim != 2 or not len(values) or not np.all(np.isfinite(values)):
+        raise ValueError("kmeans needs a nonempty finite matrix")
+    if not 1 <= k <= 4:
+        raise ValueError("k must be between 1 and 4")
+    weights = np.ones(len(values)) if weights is None else np.asarray(weights, dtype=float)
+    if weights.shape != (len(values),) or np.any(weights < 0) or not weights.sum() > 0:
+        raise ValueError("kmeans weights must be nonnegative with positive sum")
+    mean = np.average(values, axis=0, weights=weights)
+    centres = [values[np.argmin(np.sum((values - mean) ** 2, axis=1))]]
+    distance = np.sum((values - centres[0]) ** 2, axis=1)
+    for _ in range(1, min(k, len(values))):
+        # Weight suppresses insignificant colour specks during initialisation.
+        index = np.argmax(distance * weights)
+        if distance[index] < 1e-14:
+            break
+        centres.append(values[index])
+        distance = np.minimum(distance, np.sum((values - values[index]) ** 2, axis=1))
+    centres = np.asarray(centres)
+    for _ in range(max_iterations):
+        distances = np.sum((values[:, None, :] - centres[None, :, :]) ** 2, axis=2)
+        labels = distances.argmin(axis=1)
+        updated = []
+        for index in range(len(centres)):
+            selected = labels == index
+            if weights[selected].sum() > 0:
+                updated.append(np.average(values[selected], axis=0, weights=weights[selected]))
+        updated = np.asarray(updated)
+        if updated.shape == centres.shape and np.max(np.abs(updated - centres)) < 1e-7:
+            centres = updated
+            break
+        centres = updated
+    order = np.lexsort(centres.T[::-1])
+    centres = centres[order]
+    labels = np.sum((values[:, None, :] - centres[None, :, :]) ** 2, axis=2).argmin(axis=1)
+    return labels.astype(np.int32), centres
+
+
+def choose_clusters(values, max_clusters=3, weights=None):
+    """Choose 1–3 visible OKLab clusters without splitting small colour noise."""
+    values = np.asarray(values, dtype=float)
+    weights = np.ones(len(values)) if weights is None else np.asarray(weights, dtype=float)
+    if not 1 <= max_clusters <= 3:
+        raise ValueError("wood supports 1 to 3 clusters")
+    best = None
+    best_score = float("inf")
+    for count in range(1, max_clusters + 1):
+        labels, centres = kmeans(values, count, weights)
+        residual = np.sum((values - centres[labels]) ** 2, axis=1)
+        # A new zone must explain a visible OKLab difference, not generator noise.
+        score = np.average(residual, weights=weights) + 0.0004 * len(centres)
+        if score < best_score:
+            best_score = score
+            best = labels, centres
+    return best
+
+
+def triangle_areas(vertices, faces):
+    triangle = np.asarray(vertices, dtype=float)[np.asarray(faces, dtype=np.int64)]
+    return np.linalg.norm(np.cross(triangle[:, 1] - triangle[:, 0], triangle[:, 2] - triangle[:, 0]), axis=1) * 0.5
+
+
+def classify_zones(vertices, faces, color, metallic, zones):
+    """Return face material-slot indices. Explicit metallic takes precedence.
+
+    WOOD zones are assigned from dark to light OKLab clusters, in target order.
+    Without metallic the darkest neutral cluster (L < .55, chroma < .06) is iron.
+    A single other nonmetal zone is supported for targets with no WOOD slot.
+    """
+    faces = np.asarray(faces, dtype=np.int64)
+    color = np.asarray(color, dtype=float)
+    if color.shape != (len(vertices), 3):
+        raise ValueError("color must have one linear RGB value per vertex")
+    metal_slots = [i for i, zone in enumerate(zones) if zone["group"].upper() == "METAL"]
+    wood_slots = [i for i, zone in enumerate(zones) if zone["group"].upper() == "WOOD"]
+    if len(metal_slots) > 1:
+        raise ValueError("metallic cannot disambiguate multiple METAL zones")
+    if not wood_slots:
+        wood_slots = [i for i in range(len(zones)) if i not in metal_slots]
+        if len(wood_slots) != 1:
+            raise ValueError("non-WOOD material classification needs one nonmetal zone")
+    elif any(i not in metal_slots + wood_slots for i in range(len(zones))):
+        raise ValueError("color classification only supports WOOD and METAL together")
+    areas = triangle_areas(vertices, faces)
+    if not areas.sum() > 0:
+        raise ValueError("mesh has no surface area")
+    lab = linear_to_oklab(color[faces].mean(axis=1))
+    is_metal = np.zeros(len(faces), dtype=bool)
+    if metallic is not None:
+        metallic = np.asarray(metallic, dtype=float)
+        if metallic.shape != (len(vertices),) or not np.all(np.isfinite(metallic)):
+            raise ValueError("metallic must have one finite scalar per vertex")
+        is_metal = metallic[faces].mean(axis=1) > 0.5
+    elif metal_slots:
+        clusters, centres = kmeans(lab, 4, areas)
+        neutral = (centres[:, 0] < 0.55) & (np.linalg.norm(centres[:, 1:], axis=1) < 0.06)
+        candidates = np.flatnonzero(neutral)
+        if len(candidates):
+            is_metal = clusters == candidates[np.argmin(centres[candidates, 0])]
+    if is_metal.any() and not metal_slots:
+        raise ValueError("mesh has metallic faces but target has no METAL zone")
+    labels = np.full(len(faces), wood_slots[0], dtype=np.int32)
+    if is_metal.any():
+        labels[is_metal] = metal_slots[0]
+    wood = ~is_metal
+    if wood.any():
+        clusters, _ = choose_clusters(lab[wood], min(3, len(wood_slots)), areas[wood])
+        labels[wood] = np.asarray(wood_slots)[clusters]
+    return labels
+
+
+def face_adjacency(faces):
+    """Pairs of faces sharing a manifold edge; nonmanifold edges do not vote."""
+    faces = np.asarray(faces, dtype=np.int64)
+    edges = np.concatenate((faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]))
+    edges.sort(axis=1)
+    owners = np.tile(np.arange(len(faces)), 3)
+    order = np.lexsort((edges[:, 1], edges[:, 0]))
+    edges, owners = edges[order], owners[order]
+    starts = np.r_[0, np.flatnonzero(np.any(edges[1:] != edges[:-1], axis=1)) + 1]
+    counts = np.diff(np.r_[starts, len(edges)])
+    paired = starts[counts == 2]
+    return np.column_stack((owners[paired], owners[paired + 1]))
+
+
+def smooth_labels(faces, labels, areas, iterations=2, locked_labels=()):
+    """Area-weighted face-neighbour votes, retaining explicit metal boundaries.
+
+    Locked labels neither change nor propagate. A face itself casts one vote;
+    ties retain its existing label. This removes islands without eroding iron.
+    """
+    labels = np.asarray(labels, dtype=np.int32).copy()
+    areas = np.asarray(areas, dtype=float)
+    if len(labels) != len(faces) or areas.shape != labels.shape or np.any(labels < 0):
+        raise ValueError("labels and areas must match the faces")
+    adjacency = face_adjacency(faces)
+    source = np.r_[adjacency[:, 0], adjacency[:, 1]]
+    destination = np.r_[adjacency[:, 1], adjacency[:, 0]]
+    locked = np.isin(labels, locked_labels)
+    for _ in range(iterations):
+        votes = np.zeros((len(labels), int(labels.max()) + 1))
+        votes[np.arange(len(labels)), labels] = areas
+        eligible = ~locked[source] & ~locked[destination]
+        np.add.at(votes, (destination[eligible], labels[source[eligible]]), areas[source[eligible]])
+        winner = votes.argmax(axis=1)
+        current = votes[np.arange(len(labels)), labels]
+        change = ~locked & (votes[np.arange(len(labels)), winner] > current + 1e-12)
+        labels[change] = winner[change]
+    return labels
+
+
+def budget_ratio(current, budget):
+    """Collapse ratio with a small rounding allowance; never request > 1."""
+    if current <= 0 or budget < 4:
+        raise ValueError("positive triangle count and budget >= 4 required")
+    return min(1.0, (budget - 1) / current) if current > budget else 1.0
+
+
+def simplify_loop(points, tolerance):
+    """Keep sorted indices of a closed 3D polyline within a metric tolerance.
+
+    Two far-apart points split the ring into open Ramer–Douglas–Peucker halves.
+    Each discarded point lies within ``tolerance`` of its retained chord. The
+    result retains at least three points when the input has at least three.
+    A repeated final copy of the first point is omitted from the output.
+    """
+    points = np.asarray(points, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all():
+        raise ValueError("loop points must be a finite (N,3) matrix")
+    if not np.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("loop tolerance must be finite and nonnegative")
+    count = len(points)
+    if count > 1 and np.array_equal(points[0], points[-1]):
+        count -= 1
+        points = points[:count]
+    if count <= 3:
+        return np.arange(count, dtype=np.int32)
+    first = int(np.argmax(np.sum((points - points.mean(axis=0)) ** 2, axis=1)))
+    second = int(np.argmax(np.sum((points - points[first]) ** 2, axis=1)))
+    if first == second:
+        return np.arange(3, dtype=np.int32)
+    first, second = sorted((first, second))
+    retained = {first, second}
+
+    def chord_distance(candidates, start, finish):
+        delta = finish - start
+        length_squared = float(delta @ delta)
+        if length_squared == 0:
+            return np.sum((candidates - start) ** 2, axis=1)
+        projection = np.clip((candidates - start) @ delta / length_squared, 0, 1)
+        return np.sum((candidates - start - projection[:, None] * delta) ** 2, axis=1)
+
+    halves = (np.arange(first, second + 1),
+              np.r_[np.arange(second, count), np.arange(first + 1)])
+    for half in halves:
+        pending = [(0, len(half) - 1)]
+        while pending:
+            start, finish = pending.pop()
+            if finish - start <= 1:
+                continue
+            candidates = half[start + 1:finish]
+            distances = chord_distance(points[candidates], points[half[start]], points[half[finish]])
+            furthest = int(np.argmax(distances))
+            if distances[furthest] > tolerance ** 2:
+                pivot = start + 1 + furthest
+                retained.add(int(half[pivot]))
+                pending.extend(((start, pivot), (pivot, finish)))
+    if len(retained) < 3:
+        candidates = np.array([i for i in range(count) if i not in retained])
+        distances = chord_distance(points[candidates], points[first], points[second])
+        retained.add(int(candidates[np.argmax(distances)]))
+    return np.asarray(sorted(retained), dtype=np.int32)
+
+
+def _horizontal_hull(points):
+    points = np.unique(np.asarray(points, dtype=float), axis=0)
+    if len(points) < 3:
+        raise ValueError("mesh has no horizontal extent")
+    def cross(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    lower, upper = [], []
+    for point in points:
+        while len(lower) > 1 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+    for point in points[::-1]:
+        while len(upper) > 1 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+    return np.asarray(lower[:-1] + upper[:-1])
+
+
+def fit_bbox(vertices, meta, target):
+    """Rotate declared up to +Y, orient minimum horizontal OBB, fit target bbox.
+
+    The target's bbox minimum is the anchor; a base at Y=0 stays on the ground.
+    Independent axis scaling matches the requested item dimensions exactly.
+    """
+    vertices = np.asarray(vertices, dtype=float)
+    up_axis = meta["up_axis"].upper()
+    if up_axis not in ("+X", "-X", "+Y", "-Y", "+Z", "-Z"):
+        raise ValueError("up_axis must be signed X, Y or Z")
+    units = float(meta["meters_per_unit"])
+    if not np.isfinite(units) or units <= 0:
+        raise ValueError("meters_per_unit must be positive")
+    up = np.eye(3)["XYZ".index(up_axis[1])] * (1 if up_axis[0] == "+" else -1)
+    destination = np.array([0., 1., 0.])
+    axis = np.cross(up, destination)
+    cosine = float(up @ destination)
+    if cosine < -0.999:
+        rotation = np.diag([1., -1., -1.])
+    else:
+        skew = np.array([[0., -axis[2], axis[1]], [axis[2], 0., -axis[0]], [-axis[1], axis[0], 0.]])
+        rotation = np.eye(3) + skew + skew @ skew / (1 + cosine)
+    points = (vertices * units) @ rotation.T
+    lower = np.asarray(target["bbox_min"], dtype=float)
+    upper = np.asarray(target["bbox_max"], dtype=float)
+    size = upper - lower
+    if lower.shape != (3,) or not np.all(np.isfinite(size)) or np.any(size <= 0):
+        raise ValueError("target bbox must have positive finite dimensions")
+    hull = _horizontal_hull(points[:, [0, 2]])
+    edges = np.roll(hull, -1, axis=0) - hull
+    angles = np.unique(np.round(np.mod(np.arctan2(edges[:, 1], edges[:, 0]), np.pi / 2), 10))
+    best = None
+    for angle in angles:
+        basis = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+        extent = np.ptp(hull @ basis, axis=0)
+        area = np.prod(extent)
+        # Equal-area orientations choose the target-compatible width/depth.
+        distortion = abs(np.log((extent[0] / extent[1]) / (size[0] / size[2])))
+        alternative = abs(np.log((extent[1] / extent[0]) / (size[0] / size[2])))
+        if alternative < distortion:
+            basis = basis @ np.array([[0., -1.], [1., 0.]])
+            distortion = alternative
+        candidate = (area, distortion, basis)
+        if best is None or area < best[0] - max(1e-12, best[0] * 1e-8) or (np.isclose(area, best[0], rtol=1e-8, atol=1e-12) and distortion < best[1]):
+            best = candidate
+    points[:, [0, 2]] = points[:, [0, 2]] @ best[2]
+    extent = np.ptp(points, axis=0)
+    if np.any(extent <= 1e-12):
+        raise ValueError("mesh must have three-dimensional extent")
+    return ((points - points.min(axis=0)) * (size / extent) + lower).astype(np.float32)
+
+
+def box_uv(vertices, faces):
+    """Per-corner metric box projection on the zone's PCA OBB axes.
+
+    Each face selects its dominant projection plane. The longest in-plane OBB
+    direction becomes V, so a tiled wood material's V grain follows the plank.
+    """
+    vertices = np.asarray(vertices, dtype=float)
+    faces = np.asarray(faces, dtype=np.int64)
+    used = np.unique(faces)
+    points = vertices[used]
+    centre = points.mean(axis=0)
+    _, basis = np.linalg.eigh((points - centre).T @ (points - centre))
+    basis = basis[:, ::-1]
+    local = (vertices - centre) @ basis
+    extent = np.ptp(local[used], axis=0)
+    triangles = local[faces]
+    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    dropped = np.abs(normals).argmax(axis=1)
+    uv = np.empty((len(faces), 3, 2), dtype=np.float32)
+    for axis in range(3):
+        selection = dropped == axis
+        plane = [i for i in range(3) if i != axis]
+        u, v = sorted(plane, key=lambda i: extent[i])
+        uv[selection, :, 0] = triangles[selection, :, u]
+        uv[selection, :, 1] = triangles[selection, :, v]
+    return uv
+
+
+def cylinder_uv(vertices, faces):
+    """Metric cylindrical projection around +Y with unwrapped seam and flat caps.
+
+    Circumferential scale uses each face's local radius; V integrates the median
+    radial profile, accounting for a barrel's bulge. Cap projections use metres.
+    """
+    vertices = np.asarray(vertices, dtype=float)
+    faces = np.asarray(faces, dtype=np.int64)
+    used = np.unique(faces)
+    centre = (vertices[used].min(axis=0) + vertices[used].max(axis=0)) * 0.5
+    local = vertices - centre
+    triangle = local[faces]
+    normal = np.cross(triangle[:, 1] - triangle[:, 0], triangle[:, 2] - triangle[:, 0])
+    cap = np.abs(normal[:, 1]) > np.linalg.norm(normal[:, [0, 2]], axis=1) * 2
+    angle = np.arctan2(triangle[:, :, 2], triangle[:, :, 0])
+    seam = np.ptp(angle, axis=1) > np.pi
+    angle[seam] = np.where(angle[seam] < 0, angle[seam] + 2 * np.pi, angle[seam])
+    radius = np.linalg.norm(triangle[:, :, [0, 2]], axis=2)
+    u = angle * radius.mean(axis=1)[:, None]
+    # Sample a profile rather than accumulating the generator's vertex noise.
+    side_vertices = np.unique(faces[~cap]) if np.any(~cap) else used
+    y = local[side_vertices, 1]
+    r = np.linalg.norm(local[side_vertices][:, [0, 2]], axis=1)
+    bins = np.linspace(y.min(), y.max(), min(129, max(3, int(np.sqrt(len(used))))))
+    ids = np.minimum(np.searchsorted(bins, y, side="right") - 1, len(bins) - 2)
+    profile_y, profile_r = [], []
+    for index in range(len(bins) - 1):
+        selection = ids == index
+        if np.any(selection):
+            profile_y.append(np.median(y[selection]))
+            profile_r.append(np.median(r[selection]))
+    profile_y, profile_r = np.asarray(profile_y), np.asarray(profile_r)
+    if len(profile_y) > 1:
+        distance = np.r_[0., np.cumsum(np.hypot(np.diff(profile_y), np.diff(profile_r)))]
+        # Extend end bins with unit slope to avoid shortening the top/bottom.
+        v = np.interp(triangle[:, :, 1], profile_y, distance)
+        v += np.minimum(triangle[:, :, 1] - profile_y[0], 0)
+        v += np.maximum(triangle[:, :, 1] - profile_y[-1], 0)
+    else:
+        v = triangle[:, :, 1]
+    uv = np.stack((u, v), axis=2).astype(np.float32)
+    uv[cap] = triangle[cap][:, :, [0, 2]]
+    # Stave thickness has faces along a radial plane: angular U would collapse
+    # their width. Project those faces isometrically in their own tangent plane.
+    radial = triangle.mean(axis=1)
+    tangent = np.column_stack((-radial[:, 2], np.zeros(len(faces)), radial[:, 0]))
+    normal_length = np.linalg.norm(normal, axis=1)
+    tangent_length = np.linalg.norm(tangent, axis=1)
+    cosine = np.abs(np.einsum("ij,ij->i", normal, tangent))
+    radial_face = ~cap & (cosine > normal_length * tangent_length * 0.7)
+    if np.any(radial_face):
+        selected = triangle[radial_face]
+        face_normal = normal[radial_face] / normal_length[radial_face, None]
+        # Preserve the stave's vertical grain while making the plane isometric.
+        vertical = np.array([0., 1., 0.]) - face_normal[:, 1, None] * face_normal
+        vertical /= np.linalg.norm(vertical, axis=1)[:, None]
+        horizontal = np.cross(vertical, face_normal)
+        relative = selected - selected[:, :1]
+        uv[radial_face] = np.stack((np.einsum("fij,fj->fi", relative, horizontal),
+                                   np.einsum("fij,fj->fi", relative, vertical)), axis=-1)
+    return uv
