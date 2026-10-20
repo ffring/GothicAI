@@ -29,13 +29,14 @@ uv run --no-project --with numpy --with pillow python scripts/content/mesh3d/pac
 
 Рельеф плитки запекается ослабленным: фильтр этапа 1 (`bakeoff.filtered_maps`) растягивает рельеф любой плитки на полный диапазон, и в игре дерево выглядело выдавленной имитацией, а ткань — твёрдой и искрящейся. Сила карты нормалей плитки — по материалу зоны: ткань, ковёр и мешковина ×0,12, свои процедурные стекло, воск и кость ×1, всё остальное ×0,25; `tile_normal` в настройках задаёт её для зоны. У ткани, верёвки и меха нет светлых стёртых кромок (`edge_wear`, по умолчанию 0,7 маски кромок). Обе величины пишутся в `metrics.json` по зонам. [Замеры и игровое сравнение](../../../../reports/content/2026-10-prop-relief/README.md).
 
-Ящик и замер оригинала:
+Ящик и замер оригинала. Плитки ящиков сначала собирает `market_tiles.py --spec scripts/content/mesh3d/blender/crate-tiles.json`, атлас пишется в набор рынка:
 
 ```sh
+ST=~/.local/share/gothic-ai/content-staging/market-set
 $B -b --factory-startup -P scripts/content/mesh3d/blender/crate.py -- \
-  scripts/content/mesh3d/blender/crate.json /absolute/output/crate
+  scripts/content/mesh3d/blender/crate.json $ST/build/crate
 $B -b --factory-startup -P scripts/content/mesh3d/blender/bake_atlas.py -- \
-  scripts/content/mesh3d/blender/crate-atlas.json /absolute/output/crate-atlas
+  scripts/content/mesh3d/blender/crate-atlas.json $ST/build/crate/atlas
 # C++20 против ZenKit, как target-measures.cpp: позиции в NEWWORLD.ZEN и средний цвет текселей меша
 c++ -std=c++20 -O2 -DZKNO_REM=1 -D_ZK_WITH_MMAP=1 -IOpenGothic/lib/ZenKit/include -I<zenkit build>/include \
   scripts/content/mesh3d/prop-survey.cpp <zenkit build>/libzenkit.a <zenkit build>/vendor/libsquish/libsquish.a -o prop-survey
@@ -48,7 +49,13 @@ c++ -std=c++20 -O2 -DZKNO_REM=1 -D_ZK_WITH_MMAP=1 -IOpenGothic/lib/ZenKit/includ
 
 `../barrel-material-measures.cpp` — зональный замер бочки по её текстуре `NW_CITY_BARREL_01` (бок, днища, строки обручей). Собирается так же, как `prop-survey.cpp`, и даёт цели `barrel-atlas.json`. Плитки дерева всех четырёх предметов — материалы `mesh3d-barrel-wood-stave` и `mesh3d-barrel-wood-head` в реестре.
 
-`crate.py` собирает ящик по частям: рамка из брусков на каждой грани, доски с щелями внутри, тёмный короб за щелями, Г-образные уголки и гвозди. Внешние точки (шляпки гвоздей) касаются bbox цели. На общем ребре грани не перекрываются: ребро забирает грань с высшим приоритетом (верх, затем торцы, затем длинные грани). Каждая деталь пишет свой номер в атрибут `_part`, и `bake_atlas.py` тонирует по нему. Шляпки гвоздей трёхгранные и утоплены в дерево на 1 мм, без основания; это единственные открытые рёбра, их число — в `metrics.json`. `prop-survey.cpp` выводит только числа: где стоят копии визуала (для кадра стенда) и средний цвет текселей, которые использует меш, с делением на «дерево» и «серое» по R/G.
+`crate.py` и `crate_pile.py` с 21 октября 2026 года строят ящики порта по замыслу из [отчёта](../../../../reports/content/2026-10-crates-redesign/README.md). Общий ящик — `harbour_crate.py`:
+- на торцах угловые стойки поверх горизонтальных досок и верёвочная ручка между ними;
+- на длинных гранях горизонтальные доски разной ширины и одна вертикальная планка посередине;
+- крышка из досок вдоль ящика, тёмный короб за щелями;
+- износ геометрией: разная ширина и небольшой наклон досок, доски чуть выступают или утоплены, одна сломана с дырой на короб, одна доска крышки сдвинута.
+
+Металла нет, кроме гвоздей одиночного ящика. Шляпки гвоздей трёхгранные и утоплены в дерево на 1 мм, без основания; это единственные открытые рёбра, их число — в `metrics.json`. Шляпки касаются bbox цели. Каждая деталь пишет свой номер в атрибут `_part`, и `bake_atlas.py` тонирует по нему. Плитка дерева — `own_prop_wood_crate`, четыре доски на плитку; бесшовна только вдоль волокна (`axes: v`): иначе сшивка сдвигает стыки досок с четвертей, и каждая доска модели ловит полосу соседней. Прежний ящик пилота с рамкой на каждой грани и Г-уголками — в истории git и [отчёте пилота](../../../../reports/content/2026-10-crate-from-concept/README.md). `prop-survey.cpp` выводит только числа: где стоят копии визуала (для кадра стенда) и средний цвет текселей, которые использует меш, с делением на «дерево» и «серое» по R/G.
 
 `barrel.py` снимает профиль с альфы вида спереди (`front` — путь внутри `content-sources`), остальные части берёт из `barrel.json`: число клёпок, положение и высоту обручей, стык, венец, доски крышки. Пишет `model.glb` и `metrics.json`. `compare.py` рендерит GLB с одним светом и камерой по списку видов, материалы `ours` берёт из `maps_dir/<ключ>/`. `iron_material.py` делает бесшовное кованое железо со средним цветом замера.
 
