@@ -42,6 +42,10 @@ A `shot` is written at the end of its frame, so the scenario waits after each on
 chest, cart, signpost, stall roof, inner window, cupboard; `<prop>_view.png` and `<prop>_near.png`), then the census.
 It checks the tile relief of the atlases ([report](../../reports/content/2026-10-prop-relief/README.md)): run it with
 the props' root and with a root of the earlier bake, `OPENGOTHIC_CENSUS=<absolute output>/census.json`, `TIMEOUT=900`.
+`own-mesh-backfaces` takes close-ups of the seven market props whose parts were inside out (barrel group,
+carpet, shield, oil lamp, wolf head, candle, rope; `backfaces_<prop>[_<side>].png`): the barrel group and the rope from
+four sides, the carpet at its four edges, the wall props from their `own-mesh-market` spots at about half the distance,
+then the census. Run it with the set root and with a root of the earlier bake.
 `own-mesh-mob` frames the harbour `BENCH_NW_CITY_01.ASC` beside the wooden wall
 (prop-survey 20649, ZEN vob.id 23479), then uses the native `AI_UseMob` seat/stand
 fixture at `NW_CITY_HABOUR_BENCH_01`. It writes empty, seated and standing screenshots,
