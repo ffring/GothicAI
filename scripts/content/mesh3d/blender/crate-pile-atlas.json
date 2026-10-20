@@ -2,20 +2,20 @@
   "glb": "market-set/build/crate-pile/model.glb",
   "maps_dir": "market-set/tiles",
   "scales": {
-    "OWN_PROP_WOOD_PLANK": 2.6315789,
-    "OWN_PROP_WOOD_BRACE": 2.6315789,
+    "OWN_PROP_WOOD_MOSSY": 2.6315789,
+    "OWN_PROP_WOOD_MOSSY_BRACE": 2.6315789,
     "OWN_PROP_IRON_BAND": 5.0
   },
   "targets": {
-    "OWN_PROP_WOOD_PLANK": [
-      0.024,
-      0.02,
-      0.011
+    "OWN_PROP_WOOD_MOSSY": [
+      0.0222,
+      0.0178,
+      0.0076
     ],
-    "OWN_PROP_WOOD_BRACE": [
-      0.02,
-      0.017,
-      0.009
+    "OWN_PROP_WOOD_MOSSY_BRACE": [
+      0.0161,
+      0.0129,
+      0.0055
     ],
     "OWN_PROP_IRON_BAND": [
       0.0282,
@@ -24,11 +24,11 @@
     ]
   },
   "slots": {
-    "OWN_PROP_WOOD_PLANK": [
+    "OWN_PROP_WOOD_MOSSY": [
       "OWN_CRATEPILE_HARBOUR_WOOD",
       "WOOD"
     ],
-    "OWN_PROP_WOOD_BRACE": [
+    "OWN_PROP_WOOD_MOSSY_BRACE": [
       "OWN_CRATEPILE_HARBOUR_WOOD",
       "WOOD"
     ],
@@ -45,19 +45,19 @@
   "angle_limit": 60,
   "margin": 0.003,
   "wet_height": 3.0,
-  "algae": 1.0,
+  "algae": 0.0,
   "planks_per_tile": {
-    "OWN_PROP_WOOD_PLANK": 4,
-    "OWN_PROP_WOOD_BRACE": 4
+    "OWN_PROP_WOOD_MOSSY": 4,
+    "OWN_PROP_WOOD_MOSSY_BRACE": 4
   },
   "contrast": {
-    "OWN_PROP_WOOD_PLANK": 1.3,
-    "OWN_PROP_WOOD_BRACE": 1.3,
+    "OWN_PROP_WOOD_MOSSY": 1.0,
+    "OWN_PROP_WOOD_MOSSY_BRACE": 1.0,
     "OWN_PROP_IRON_BAND": 1.2
   },
   "bleach": 0.0,
   "edge_wear": {
-    "OWN_PROP_WOOD_PLANK": 0.2,
-    "OWN_PROP_WOOD_BRACE": 0.2
+    "OWN_PROP_WOOD_MOSSY": 0.2,
+    "OWN_PROP_WOOD_MOSSY_BRACE": 0.2
   }
 }

@@ -58,6 +58,12 @@
     2048,
     1463
    ]
+  },
+  "own_prop_wood_mossy": {
+   "png": "~/.local/share/gothic-ai/content-sources/mesh3d-market/tile-wood-mossy.png",
+   "axes": "uv",
+   "roughness": 0.97,
+   "metallic": 0.0
   }
  }
 }
