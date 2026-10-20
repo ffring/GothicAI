@@ -32,6 +32,13 @@ records the replacement, original-mesh screenshots and alternating branch/main r
 row next to that barrel (`own-mesh-crate.png`); the barrels stay in its frame.
 `own-mesh-table` frames the `NW_CITY_TABLE_PEASANT_01` in a harbour house (candle-lit room,
 candle and books stay on it) and writes `own-mesh-table.png`.
+`own-mesh-mob` frames the harbour `BENCH_NW_CITY_01.ASC` beside the wooden wall
+(prop-survey 20649, ZEN vob.id 23479), then uses the native `AI_UseMob` seat/stand
+fixture at `NW_CITY_HABOUR_BENCH_01`. It writes empty, seated and standing screenshots,
+NPC motion traces and a final census. Run with `WORLD=NEWWORLD.ZEN`, `BENCH_HOST=ryzen`,
+`GOTHIC_AI=0`, `OPENGOTHIC_TEXTURES=`, an explicit `OPENGOTHIC_CONTENT=<test content>`
+and `OPENGOTHIC_CENSUS=<absolute output>/census.json`; pass an absolute output directory
+to `scripts/bench.sh own-mesh-mob`. Repeat with `OPENGOTHIC_CONTENT=` for the original.
 
 `own-mesh-fracture` breaks `NW_HARBOUR_BARREL_01` with the real one-handed
 attack animation from `destruction-step2-melee`. It takes before/after screenshots,
