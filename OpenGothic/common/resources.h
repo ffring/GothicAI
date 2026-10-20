@@ -132,8 +132,14 @@ class Resources final {
     static const ProtoMesh*          loadMesh       (std::string_view name);
     // All static visual readers share the same indexed GLB/original MRM path.
     static zenkit::MultiResolutionMesh loadVisualMesh(std::string_view name, bool* replaced = nullptr);
-    // True after loadVisualMesh successfully selected the replacement.
-    static bool                      meshReplacementLoaded(std::string_view name);
+    struct MeshReplacementSource {
+      std::filesystem::path file;
+      size_t size = 0;
+      uint32_t crc32 = 0;
+      };
+    // True after loadVisualMesh successfully selected the replacement;
+    // optionally returns its path and the identity of the bytes actually loaded.
+    static bool                      meshReplacementLoaded(std::string_view name, MeshReplacementSource* source = nullptr);
     static const PfxEmitterMesh*     loadEmiterMesh (std::string_view name);
     static const Skeleton*           loadSkeleton   (std::string_view name);
     static const Animation*          loadAnimation  (std::string_view name);
@@ -301,6 +307,8 @@ class Resources final {
       std::filesystem::path file;
       std::string replacement;
       bool loaded = false;
+      size_t sourceSize = 0;
+      uint32_t sourceCrc32 = 0;
       };
     std::unordered_map<std::string,MeshOverride>                     meshOverrides;
     std::map<Tempest::Color,std::unique_ptr<Tempest::Texture2d>,Less> pixCache;
