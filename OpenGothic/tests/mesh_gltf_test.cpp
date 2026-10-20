@@ -2,6 +2,7 @@
 #include "gltfmesh.h"
 #include "graphics/shaders.h"
 #include "graphics/mesh/protomesh.h"
+#include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/mesh/submesh/pfxemittermesh.h"
 #include "physics/fracture.h"
@@ -17,6 +18,7 @@
 #include <rapidjson/writer.h>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -324,6 +326,323 @@ void checkCensus(const Fixture& fixture, bool own, uint64_t expectedOpens) {
     }
   require(originalOpens==(own ? 0 : expectedOpens),"only fallback may open the original MRM");
   require(replacementOpens==(own ? expectedOpens : 0),"only successful GLB loads may count as replacements");
+  }
+
+void chunk(std::vector<uint8_t>& bytes, uint16_t type, const std::vector<uint8_t>& body = {}) {
+  bytes.push_back(uint8_t(type));
+  bytes.push_back(uint8_t(type>>8));
+  word(bytes,uint32_t(body.size()));
+  bytes.insert(bytes.end(),body.begin(),body.end());
+  }
+
+void shortWord(std::vector<uint8_t>& bytes, uint16_t value) {
+  bytes.push_back(uint8_t(value));
+  bytes.push_back(uint8_t(value>>8));
+  }
+
+struct ModelOptions {
+  bool twoAttachments = false;
+  bool softSkin = false;
+  bool reflected = false;
+  bool scaled = false;
+  };
+
+zenkit::ModelHierarchy modelFiles(const Fixture& fixture, const ModelOptions& options = {}) {
+  zenkit::ModelHierarchy hierarchy {};
+  hierarchy.nodes.resize(options.twoAttachments ? 3 : 2);
+  hierarchy.nodes[0] = {-1,"ZM_TEST_BENCH",zenkit::Mat4::identity()};
+  hierarchy.nodes[0].transform[0][0] = options.reflected ? 1.f : -1.f;
+  hierarchy.nodes[0].transform[2][2] = -1.f;
+  if(options.scaled) {
+    hierarchy.nodes[0].transform[0][0] *= 2.f;
+    hierarchy.nodes[0].transform[1][1] *= 3.f;
+    hierarchy.nodes[0].transform[2][2] *= 4.f;
+    }
+  hierarchy.nodes[1] = {0,"ZS_POS0",zenkit::Mat4::identity()};
+  hierarchy.nodes[1].transform[3] = {7,8,9,1};
+  if(options.twoAttachments)
+    hierarchy.nodes[2] = {0,"ZM_TEST_LID",zenkit::Mat4::identity()};
+  hierarchy.root_translation = {11,22,33};
+  hierarchy.bbox = {{-500,-100,-500},{500,700,500}};
+  hierarchy.collision_bbox = hierarchy.bbox;
+  hierarchy.checksum = 42;
+  std::vector<std::byte> hierarchyBytes;
+  auto writer = zenkit::Write::to(&hierarchyBytes);
+  hierarchy.save(writer.get());
+  writer.reset();
+
+  // Reuse the normalized synthetic MRM section. ModelMesh::save in this
+  // vendored ZenKit omits the soft-skin count and joins attachment sections
+  // into one chunk, so emit the tiny model container explicitly.
+  std::ifstream original(fixture.root/"_work/OWN_MESH.MRM",std::ios::binary);
+  std::vector<uint8_t> proto{std::istreambuf_iterator<char>(original),std::istreambuf_iterator<char>()};
+  require(proto.size()>12,"synthetic model attachment must contain a proto mesh");
+  proto.resize(proto.size()-6); // MRM END is not part of the attachment.
+  std::vector<uint8_t> model,body;
+  word(body,0x04030506);
+  chunk(model,0xD000,body);
+  body.clear();
+  shortWord(body,options.twoAttachments ? 2 : 1);
+  const std::array<const char*,2> names = {"ZM_TEST_BENCH","ZM_TEST_LID"};
+  for(size_t i=0;i<(options.twoAttachments ? 2u : 1u);++i) {
+    const auto* name = names[i];
+    body.insert(body.end(),name,name+std::strlen(name));
+    body.push_back('\n');
+    }
+  chunk(model,0xD020,body);
+  model.insert(model.end(),proto.begin(),proto.end());
+  if(options.twoAttachments)
+    model.insert(model.end(),proto.begin(),proto.end());
+  body.clear();
+  word(body,hierarchy.checksum);
+  shortWord(body,options.softSkin ? 1 : 0);
+  if(options.softSkin) {
+    std::vector<uint8_t> version;
+    word(version,4);
+    chunk(body,0xE100,version);
+    body.insert(body.end(),proto.begin(),proto.end());
+    std::vector<uint8_t> weights,skin;
+    const std::array<zenkit::Vec3,3> positions = {{{10,20,30},{14,20,30},{10,25,30}}};
+    for(const auto& position:positions) {
+      word(weights,1);
+      real(weights,1.f);
+      real(weights,position.x); real(weights,position.y); real(weights,position.z);
+      weights.push_back(0);
+      }
+    word(skin,uint32_t(weights.size()));
+    skin.insert(skin.end(),weights.begin(),weights.end());
+    word(skin,0); // No separate wedge-normal table.
+    shortWord(skin,1);
+    word(skin,0); // All vertices follow the root.
+    for(float value:{12.f,22.5f,30.f,1.f,0.f,0.f,0.f,1.f,0.f,0.f,0.f,1.f,2.f,2.5f,0.f})
+      real(skin,value);
+    shortWord(skin,0); // No child oriented boxes.
+    chunk(body,0xB1FF,skin);
+    chunk(body,0xE110);
+    }
+  chunk(model,0xD030,body);
+  chunk(model,0xD040);
+
+  const auto writeBytes = [](const std::filesystem::path& path, const auto& bytes) {
+    std::ofstream out(path,std::ios::binary);
+    out.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
+    require(bool(out),"synthetic model fixture must be writable");
+    };
+  writeBytes(fixture.root/"_work/OWN_MODEL.MDH",hierarchyBytes);
+  writeBytes(fixture.root/"_work/OWN_MODEL.MDM",model);
+  std::vector<uint8_t> mdl;
+  for(const auto value:hierarchyBytes)
+    mdl.push_back(std::to_integer<uint8_t>(value));
+  mdl.insert(mdl.end(),model.begin(),model.end());
+  writeBytes(fixture.root/"_work/OWN_MODEL.MDL",mdl);
+
+  auto reader = zenkit::Read::from(fixture.root/"_work/OWN_MODEL.MDL");
+  zenkit::Model restored;
+  restored.load(reader.get());
+  require(restored.hierarchy.nodes.size()==hierarchy.nodes.size() &&
+          restored.hierarchy.nodes[1].name=="ZS_POS0" &&
+          restored.mesh.attachments.size()==(options.twoAttachments ? 2u : 1u) &&
+          restored.mesh.meshes.size()==(options.softSkin ? 1u : 0u),
+          "synthetic MDL hierarchy, attachments and soft skins must roundtrip");
+  for(const auto& item:restored.mesh.attachments)
+    require(item.second.positions.size()==3 && item.second.sub_meshes[0].mat.texture=="ORIGINAL.TGA",
+            "synthetic model attachment must retain the original triangle");
+  return hierarchy;
+  }
+
+void sameMatrix(const Tempest::Matrix4x4& a, const Tempest::Matrix4x4& b, std::string_view message) {
+  for(int i=0;i<4;++i)
+    for(int j=0;j<4;++j)
+      require(close(a.at(i,j),b.at(i,j)),message);
+  }
+
+bool samePoint(const Tempest::Vec3& a, const Tempest::Vec3& b) {
+  return close(a.x,b.x) && close(a.y,b.y) && close(a.z,b.z);
+  }
+
+void modelCensus(const Fixture& fixture, std::string_view file, bool replaced, bool hierarchyOpened) {
+  const auto document = fixture.census();
+  bool original = false,mdh = false;
+  for(const auto& item:document["files"].GetArray()) {
+    if(std::string_view(item["name"].GetString())==file) {
+      original = item["opens"].GetUint64()==1;
+      require(std::string_view(item["kind"].GetString())=="model","opened original model must retain its census kind");
+      }
+    if(std::string_view(item["name"].GetString())=="OWN_MODEL.MDH")
+      mdh = item["opens"].GetUint64()==1;
+    }
+  require(original,"model replacement must still open the original model for its hierarchy or attachment names");
+  require(mdh==hierarchyOpened,"MDH must be recorded when its hierarchy was opened");
+  require(document["replacements"].Size()==(replaced ? 1u : 0u),"only successful model replacement may enter census");
+  if(replaced) {
+    const auto& item = document["replacements"][0];
+    require(std::string_view(item["name"].GetString())==file &&
+            std::string_view(item["kind"].GetString())=="mesh" && item["opens"].GetUint64()==1 &&
+            std::string_view(item["replacement"].GetString())=="meshes/test/own.glb",
+            "model replacement census must name the MDL or MDM mesh file and content-relative GLB");
+    }
+  }
+
+void modelGeometry(const ProtoMesh& proto, const zenkit::ModelHierarchy& hierarchy,
+                   bool own, const ModelOptions& options = {}, bool skeletonExpected = true) {
+  require(proto.attach.size()==(options.twoAttachments ? 2u : 1u),"model must retain its attachment count");
+  require(proto.skined.size()==(options.softSkin ? 1u : 0u),"model must retain its original soft skins on fallback");
+  const Skeleton expected(hierarchy,nullptr,"OWN_MODEL.MDL");
+  require((proto.skeleton!=nullptr)==skeletonExpected,"model must retain its original hierarchy-loading behavior");
+  if(skeletonExpected) {
+    require(proto.nodes.size()==expected.nodes.size() && proto.skeleton->nodes.size()==expected.nodes.size(),
+            "replacement must preserve every original model node");
+    require(samePoint(proto.skeleton->rootTr,{11,22,33}),"replacement must preserve nonzero root_translation");
+    for(size_t i=0;i<proto.nodes.size();++i) {
+      require(proto.skeleton->nodes[i].name==expected.nodes[i].name && proto.nodes[i].parentId==expected.nodes[i].parent,
+              "replacement must preserve node names and parents");
+      sameMatrix(proto.nodes[i].transform,expected.nodes[i].tr,"replacement must preserve original local node transforms");
+      sameMatrix(proto.skeleton->tr[i],expected.tr[i],"replacement must preserve accumulated bind transforms");
+      }
+    require(proto.pos.size()==1 && proto.pos[0].name=="ZS_POS0" && proto.pos[0].node==1,
+            "replacement must preserve the interactive seating node");
+    sameMatrix(proto.pos[0].transform,expected.nodes[1].tr,"ZS_POS0 transform must remain the original one");
+    }
+  const auto found = std::find_if(proto.attach.begin(),proto.attach.end(),[](const auto& item) {
+    return item.name=="ZM_TEST_BENCH";
+    });
+  require(found!=proto.attach.end(),"model must retain the attachment name");
+  const size_t attachId = size_t(found-proto.attach.begin());
+  if(skeletonExpected)
+    require(proto.nodes[0].attachId==attachId && found->hasNode,"replacement must hang on the same original root node");
+  require(found->shape!=nullptr && found->sub.size()==1,"model attachment must retain its ordinary physics shape and surface");
+  require(found->sub[0].texName==(own ? "OWN_TEST_BARREL_WOOD.TGA" : "ORIGINAL.TGA"),
+          "model attachment must use the selected geometry's material name");
+  require(proto.attachPoints.size()==proto.attach.size() && proto.attachPoints[attachId].size()==3,
+          "hit-zone source must use the selected attachment's three vertices");
+  const std::array<Tempest::Vec3,3> original = {{{10,20,30},{14,20,30},{10,25,30}}};
+  const std::array<Tempest::Vec3,3> glb = {{{-100,200,300},{-400,200,300},{-100,600,300}}};
+  for(auto point:proto.attachPoints[attachId]) {
+    if(own)
+      expected.tr[0].project(point);
+    const auto& target = own ? glb : original;
+    require(std::any_of(target.begin(),target.end(),[&](auto value) { return samePoint(point,value); }),
+            "attachment vertices after global bind transform must match GLB mirrored centimetres, or unchanged fallback");
+    }
+  if(own) {
+    require(proto.nodePoints[0].size()==3,"hit zones at the attachment node must use replacement geometry");
+    for(const auto& point:proto.nodePoints[0])
+      require(std::any_of(proto.attachPoints[attachId].begin(),proto.attachPoints[attachId].end(),
+                         [&](auto value) { return samePoint(point,value); }),"node hit-zone points must come from the replacement attachment");
+    auto inverse = expected.tr[0];
+    inverse.inverse();
+    auto minimum = glb[0],maximum = glb[0];
+    inverse.project(minimum);
+    maximum = minimum;
+    for(auto point:glb) {
+      inverse.project(point);
+      minimum.x = std::min(minimum.x,point.x); minimum.y = std::min(minimum.y,point.y); minimum.z = std::min(minimum.z,point.z);
+      maximum.x = std::max(maximum.x,point.x); maximum.y = std::max(maximum.y,point.y); maximum.z = std::max(maximum.z,point.z);
+      }
+    require(samePoint(found->bbox.bbox[0],minimum) && samePoint(found->bbox.bbox[1],maximum),
+            "replacement attachment bounds must be recomputed in its node's local space");
+    }
+  }
+
+void modelCases(const Fixture& fixture) {
+  glbFile(fixture.root/"meshes/test/own.glb");
+  auto hierarchy = modelFiles(fixture);
+  const auto load = [&](std::string_view visual, std::string_view file, bool own,
+                        const ModelOptions& options = {}, bool skeletonExpected = true) {
+    Resources resources;
+    Resources::mountWork(fixture.root/"_work");
+    const auto* proto = Resources::loadMesh(visual);
+    require(proto!=nullptr,"synthetic MOB model must load through real Resources");
+    modelGeometry(*proto,hierarchy,own,options,skeletonExpected);
+    modelCensus(fixture,file,own,own && file=="OWN_MODEL.MDM");
+    };
+  std::filesystem::remove(fixture.root/"meshes/meshes.json");
+  load("OWN_MODEL.MDL","OWN_MODEL.MDL",false);
+  load("OWN_MODEL.MDM","OWN_MODEL.MDM",false,{},false);
+  fixture.index("{}");
+  load("OWN_MODEL.MDL","OWN_MODEL.MDL",false);
+  load("OWN_MODEL.ASC","OWN_MODEL.MDM",false,{},false);
+  fixture.index(R"({"own_model":{"glb":"test/own.glb"}})");
+  load("OWN_MODEL.MDL","OWN_MODEL.MDL",true);
+  // MDS itself needs Gothic::inst() before Resources can load its animation.
+  // Constructing Gothic also mounts a game installation and loads settings;
+  // exercise the shared model-replacement function through isolated MDH+MDM
+  // fixtures instead, without making this unit test depend on installed data.
+  load("OWN_MODEL.MDM","OWN_MODEL.MDM",true);
+  load("OWN_MODEL.ASC","OWN_MODEL.MDM",true);
+  for(const auto options:{ModelOptions{true,false},ModelOptions{false,true}}) {
+    hierarchy = modelFiles(fixture,options);
+    load("OWN_MODEL.MDL","OWN_MODEL.MDL",false,options);
+    }
+  hierarchy = modelFiles(fixture);
+  textFile(fixture.root/"meshes/test/own.glb","broken model replacement");
+  load("OWN_MODEL.MDL","OWN_MODEL.MDL",false);
+  glbFile(fixture.root/"meshes/test/own.glb");
+  }
+
+void modelGpuGeometry(const Fixture& fixture, Tempest::Device& device, std::string_view visual,
+                      const zenkit::ModelHierarchy& hierarchy, const std::filesystem::path& glb, bool reflected, bool mask = false) {
+  const auto* proto = Resources::loadMesh(visual);
+  require(proto!=nullptr && proto->attach.size()==1 && proto->nodes.size()==2,
+          "GPU model replacement must retain its original hierarchy and attachment");
+  const auto& attachment = proto->attach[0];
+  require(attachment.shape!=nullptr && attachment.sub.size()==1 && attachment.hasNode && proto->nodes[0].attachId==0,
+          "GPU model replacement must retain its shape, surface and original attachment node");
+  const auto source = loadGltfMesh(glb);
+  const Skeleton expected(hierarchy,nullptr,visual);
+  std::vector<Resources::Vertex> vertices(attachment.vbo.size());
+  std::vector<uint32_t> indices(attachment.ibo.size());
+  require(!vertices.empty() && !indices.empty(),"GPU model fixture must upload real vertices and triangle indices");
+  device.readBytes(attachment.vbo,vertices.data(),vertices.size()*sizeof(vertices[0]));
+  device.readBytes(attachment.ibo,indices.data(),indices.size()*sizeof(indices[0]));
+  const auto& global = expected.tr[0];
+  const auto& sourceNormal = source.sub_meshes[0].wedges[0].normal;
+  Tempest::Vec3 localNormal {
+    global.at(0,0)*sourceNormal.x+global.at(0,1)*sourceNormal.y+global.at(0,2)*sourceNormal.z,
+    global.at(1,0)*sourceNormal.x+global.at(1,1)*sourceNormal.y+global.at(1,2)*sourceNormal.z,
+    global.at(2,0)*sourceNormal.x+global.at(2,1)*sourceNormal.y+global.at(2,2)*sourceNormal.z};
+  const float length = std::sqrt(localNormal.x*localNormal.x+localNormal.y*localNormal.y+localNormal.z*localNormal.z);
+  localNormal *= 1.f/length;
+  size_t triangles = 0;
+  for(size_t i=0;i+2<indices.size();i+=3) {
+    const auto& a = vertices.at(indices[i]);
+    const auto& b = vertices.at(indices[i+1]);
+    const auto& c = vertices.at(indices[i+2]);
+    Tempest::Vec3 cross {
+      (b.pos[1]-a.pos[1])*(c.pos[2]-a.pos[2])-(b.pos[2]-a.pos[2])*(c.pos[1]-a.pos[1]),
+      (b.pos[2]-a.pos[2])*(c.pos[0]-a.pos[0])-(b.pos[0]-a.pos[0])*(c.pos[2]-a.pos[2]),
+      (b.pos[0]-a.pos[0])*(c.pos[1]-a.pos[1])-(b.pos[1]-a.pos[1])*(c.pos[0]-a.pos[0])};
+    if(cross.x==0.f && cross.y==0.f && cross.z==0.f)
+      continue;
+    ++triangles;
+    std::array<Tempest::Vec3,3> world;
+    for(size_t j=0;j<3;++j) {
+      const auto& vertex = vertices.at(indices[i+j]);
+      const Tempest::Vec3 normal {vertex.norm[0],vertex.norm[1],vertex.norm[2]};
+      require(samePoint(normal,localNormal),"attachment normals must use the normalized transpose of global bind linear transform");
+      require(cross.x*normal.x+cross.y*normal.y+cross.z*normal.z<0.f,
+              "attachment front face must retain MRM winding, including a negative bind determinant");
+      world[j] = {vertex.pos[0],vertex.pos[1],vertex.pos[2]};
+      global.project(world[j]);
+      require(std::any_of(source.positions.begin(),source.positions.end(),[&](auto point) {
+        return samePoint(world[j],{point.x,point.y,point.z});
+        }),"uploaded vertices after their global bind transform must coincide with the GLB scene");
+      }
+    const auto edge1 = world[1]-world[0],edge2 = world[2]-world[0];
+    const float dot = (edge1.y*edge2.z-edge1.z*edge2.y)*sourceNormal.x+
+                      (edge1.z*edge2.x-edge1.x*edge2.z)*sourceNormal.y+
+                      (edge1.x*edge2.y-edge1.y*edge2.x)*sourceNormal.z;
+    require(reflected ? dot>0.f : dot<0.f,"global triangle winding must account for the bind transform parity");
+    }
+  require(triangles==1,"GPU fixture must retain exactly the original GLB triangle without meshlet padding");
+  require(attachment.sub[0].material.alpha==(mask ? Material::AlphaTest : Material::Solid),
+          "model replacement must retain explicit OPAQUE/MASK policy despite transparent BC1 albedo");
+  const auto census = fixture.census();
+  bool replaced = false;
+  for(const auto& item:census["replacements"].GetArray())
+    if(std::string_view(item["name"].GetString())==visual)
+      replaced = std::string_view(item["kind"].GetString())=="mesh";
+  require(replaced,"GPU model replacement must be recorded as mesh in census");
   }
 
 void resourcePaths(const Fixture& fixture, bool own, bool mountOriginal = true) {
@@ -794,10 +1113,24 @@ void maskBc1Policy(const Fixture& fixture) {
   options.alpha = "MASK";
   glbFile(fixture.root/"meshes/test/own.glb",options);
   glbFile(fixture.root/"meshes/test/opaque.glb");
+  options = {};
+  options.rotated = true;
+  glbFile(fixture.root/"meshes/test/oblique.glb",options);
+  const auto rotation = modelFiles(fixture);
+  std::filesystem::copy_file(fixture.root/"_work/OWN_MODEL.MDL",fixture.root/"_work/OWN_MODEL_ROTATION.MDL");
+  std::filesystem::copy_file(fixture.root/"_work/OWN_MODEL.MDL",fixture.root/"_work/OWN_MODEL_MASK.MDL");
+  const auto scaled = modelFiles(fixture,ModelOptions{false,false,false,true});
+  std::filesystem::copy_file(fixture.root/"_work/OWN_MODEL.MDL",fixture.root/"_work/OWN_MODEL_SCALED.MDL");
+  const auto reflected = modelFiles(fixture,ModelOptions{false,false,true,true});
+  std::filesystem::copy_file(fixture.root/"_work/OWN_MODEL.MDL",fixture.root/"_work/OWN_MODEL_REFLECTED.MDL");
   originalFile(fixture.root/"_work/NATIVE.MRM");
   fixture.index(R"({
     "OWN_MESH":{"glb":"test/own.glb"},
-    "OWN_OPAQUE":{"glb":"test/opaque.glb"}
+    "OWN_OPAQUE":{"glb":"test/opaque.glb"},
+    "OWN_MODEL_ROTATION":{"glb":"test/opaque.glb"},
+    "OWN_MODEL_MASK":{"glb":"test/own.glb"},
+    "OWN_MODEL_SCALED":{"glb":"test/oblique.glb"},
+    "OWN_MODEL_REFLECTED":{"glb":"test/oblique.glb"}
   })");
 
   Tempest::VulkanApi api;
@@ -829,6 +1162,11 @@ void maskBc1Policy(const Fixture& fixture) {
     const auto& native = original->attach[0].sub[0].material;
     require(native.tex==mask.tex && native.alpha==Material::Solid,
             "native MRM must preserve its historical BC1 solid classification");
+
+    modelGpuGeometry(fixture,device,"OWN_MODEL_ROTATION.MDL",rotation,fixture.root/"meshes/test/opaque.glb",false);
+    modelGpuGeometry(fixture,device,"OWN_MODEL_MASK.MDL",rotation,fixture.root/"meshes/test/own.glb",false,true);
+    modelGpuGeometry(fixture,device,"OWN_MODEL_SCALED.MDL",scaled,fixture.root/"meshes/test/oblique.glb",false);
+    modelGpuGeometry(fixture,device,"OWN_MODEL_REFLECTED.MDL",reflected,fixture.root/"meshes/test/oblique.glb",true);
 
     const auto* bc1 = Resources::loadMaterialAlbedo("OPAQUE_BC1.TGA");
     const auto* bc3 = Resources::loadMaterialAlbedo("OPAQUE_BC3.TGA");
@@ -877,6 +1215,7 @@ int main() {
     rejectionCases(fixture);
     indexCases(fixture);
     fractureCache(fixture);
+    modelCases(fixture);
     setenv("TEMPEST_AUDIO_LOOPBACK","48000",1);
     maskBc1Policy(fixture);
     std::cout << "{\"test\":\"mesh_gltf\",\"passed\":true,\"assertions\":" << assertions << "}\n";
