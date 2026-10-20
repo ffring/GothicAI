@@ -82,7 +82,7 @@ def check(directory, scenario, material_index, iteration3=False, market_house=Fa
     print(f"{directory.name}: shots={len(shots)} materials={len(index)} pilot_replaced={len(targets & replaced)} pilot_originals={len(targets & opened)}")
 
 
-def compose(captures, output, iteration2=False, iteration3=False, market_house=False):
+def compose(captures, output, iteration2=False, iteration3=False, market_house=False, market_house2=False):
     from PIL import Image, ImageDraw, ImageFont
     output.mkdir(parents=True, exist_ok=True)
     try:
@@ -100,12 +100,14 @@ def compose(captures, output, iteration2=False, iteration3=False, market_house=F
     if market_house:
         variants = ("original", "pilot-3b", "house-1")
         labels = ("original", "iteration 3b", "house-1")
-    spots = HOUSE_SPOTS if market_house else SPOTS
+    if market_house2:
+        variants = labels = ("original", "house-1", "house-2")
+    spots = HOUSE_SPOTS if market_house or market_house2 else SPOTS
     for spot in spots:
         panels = []
         for variant in variants:
             with Image.open(captures / variant / (spot + ".png")) as source:
-                if market_house and source.size != (1280, 720):
+                if (market_house or market_house2) and source.size != (1280, 720):
                     raise ValueError(f"{variant}/{spot}: expected 1280x720, got {source.width}x{source.height}")
                 panel = source.convert("RGB")
                 panel.thumbnail((768, 432), Image.Resampling.LANCZOS)
@@ -117,7 +119,8 @@ def compose(captures, output, iteration2=False, iteration3=False, market_house=F
         for position, (label, panel) in enumerate(zip(labels, panels)):
             board.paste(panel, (position * width, 44))
             draw.text((position * width + 12, 10), f"{spot} | {label}", font=font, fill="white")
-        board.save(output / f"{spot}.jpg", quality=90, optimize=True)
+        suffix = "-house-2" if market_house2 else ""
+        board.save(output / f"{spot}{suffix}.jpg", quality=90, optimize=True)
     print(f"composed {len(spots)} {'/'.join(variants)} boards: {output}")
 
 
@@ -166,10 +169,11 @@ if __name__ == "__main__":
     if len(sys.argv) in (5, 6) and sys.argv[1] == "check" and (len(sys.argv) == 5 or sys.argv[5] in ("--iteration-3", "--market-house")):
         check(*map(Path, sys.argv[2:5]), iteration3=sys.argv[-1] == "--iteration-3",
               market_house=sys.argv[-1] == "--market-house")
-    elif len(sys.argv) == 4 and sys.argv[1] in ("compose", "compose-2", "compose-3", "compose-house"):
+    elif len(sys.argv) == 4 and sys.argv[1] in ("compose", "compose-2", "compose-3", "compose-house", "compose-house-2"):
         compose(*map(Path, sys.argv[2:]), iteration2=sys.argv[1] == "compose-2",
-                iteration3=sys.argv[1] == "compose-3", market_house=sys.argv[1] == "compose-house")
+                iteration3=sys.argv[1] == "compose-3", market_house=sys.argv[1] == "compose-house",
+                market_house2=sys.argv[1] == "compose-house-2")
     elif len(sys.argv) >= 5 and sys.argv[1] == "detail":
         detail(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4:])
     else:
-        raise SystemExit("usage: capture-quality-pilot.py check DIRECTORY SCENARIO INDEX [--iteration-3|--market-house] | compose|compose-2|compose-3|compose-house CAPTURES OUTPUT | detail CAPTURES OUTPUT.csv VARIANT...")
+        raise SystemExit("usage: capture-quality-pilot.py check DIRECTORY SCENARIO INDEX [--iteration-3|--market-house] | compose|compose-2|compose-3|compose-house|compose-house-2 CAPTURES OUTPUT | detail CAPTURES OUTPUT.csv VARIANT...")

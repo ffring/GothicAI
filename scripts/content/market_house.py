@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw
 
 import bakeoff
 import city_set
-from material_colour import _linear, _srgb, oklab_to_linear
+from material_colour import _linear, _srgb, linear_to_oklab, oklab_to_linear
 from material_lighting import measure_file as measure_light
 import pack_materials
 import quality_pilot as pilot
@@ -46,6 +46,28 @@ def prepare_image(image, name):
 def apply_gains(pixels, gains):
     linear = _linear(np.asarray(pixels, dtype=np.float64)/255)
     return np.rint(_srgb(np.clip(linear*np.asarray(gains), 0, 1))*255).astype(np.uint8)
+
+
+def oak_mask(pixels):
+    """Soft dark-and-brown selection; grey-green damp remains plaster."""
+    linear = _linear(np.asarray(pixels, dtype=float)/255)
+    log_y = np.log(np.maximum(linear @ LUMINANCE, 1e-8))
+    histogram, edges = np.histogram(log_y, bins=256)
+    centres = (edges[:-1]+edges[1:])/2
+    count = histogram.cumsum()
+    sums = (histogram*centres).cumsum()
+    score = (sums[-1]*count-sums*count[-1])**2 / np.maximum(count*(count[-1]-count), 1)
+    # A two-colour input has an entire optimal threshold interval. Its centre
+    # keeps the sigmoid away from either material's flat interior.
+    threshold = float(centres[np.isclose(score, score.max(), rtol=1e-12, atol=0)].mean())
+    b = linear_to_oklab(linear)[..., 2]
+    bright_b = float(np.median(b[log_y > threshold]))
+    sigmoid = lambda x: 1/(1+np.exp(-np.clip(x, -60, 60)))
+    mask = sigmoid((threshold-log_y)/.3)*sigmoid((b-bright_b)/.003)
+    return mask, dict(log_y_threshold=threshold, log_y_width=.3,
+        bright_b_median=bright_b, b_width=.003,
+        mask_above_half_fraction=float((mask > .5).mean()),
+        method='Otsu log linear luminance sigmoid × OKLab b above bright-part median sigmoid')
 
 
 def correct_house_colour(images, areas, targets):

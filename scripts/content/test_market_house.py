@@ -94,6 +94,48 @@ def test_house_gain_solver_accounts_for_highlight_clipping():
     assert corrected[TEXTURES[0]][0, 1, 0] == 255
 
 
+def test_oak_mask_selects_brown_posts_but_excludes_plaster_and_dark_grey_green_stains():
+    plaster = [208, 208, 204]
+    pixels = np.full((48, 80, 3), plaster, dtype=np.uint8)
+    posts = np.zeros(pixels.shape[:2], dtype=bool)
+    posts[:, 10:20] = True
+    posts[:, 54:64] = True
+    stains = np.zeros_like(posts)
+    stains[8:22, 30:44] = True
+    stains[30:42, 68:78] = True
+    pixels[posts] = [96, 44, 12]
+    pixels[stains] = [36, 60, 66]
+    original = pixels.copy()
+
+    mask, metadata = market_house.oak_mask(pixels)
+
+    assert mask.shape == pixels.shape[:2]
+    assert np.issubdtype(mask.dtype, np.floating)
+    assert np.isfinite(mask).all()
+    assert 0 <= mask.min() <= mask.max() <= 1
+    assert mask[posts].min() > .9
+    assert mask[stains].max() < .1
+    assert mask[~(posts | stains)].max() < .1
+    assert isinstance(metadata, dict)
+    np.testing.assert_array_equal(pixels, original)
+
+
+def test_oak_mask_has_a_soft_transition_on_a_brown_to_plaster_ramp():
+    start = np.array([96, 44, 12], dtype=float)
+    end = np.array([208, 208, 204], dtype=float)
+    ramp = np.rint(start + np.linspace(0, 1, 256)[:, None] * (end - start)).astype(np.uint8)
+    pixels = np.broadcast_to(ramp[None, ...], (16, 256, 3)).copy()
+
+    mask, _ = market_house.oak_mask(pixels)
+
+    # A thresholded segmentation would have only zeroes and ones. A broad
+    # transition also catches a nominal sigmoid that is effectively a step.
+    values = mask[0]
+    assert np.count_nonzero((values > .1) & (values < .9)) >= 10
+    assert np.unique(values).size >= 20
+    assert np.max(np.abs(np.diff(values))) < .15
+
+
 @pytest.mark.parametrize('name', TEXTURES)
 def test_prepare_resizes_once_with_lanczos_then_seams_only_allowed_axes(name, monkeypatch):
     assert market_house.TEXTURES == TEXTURES
