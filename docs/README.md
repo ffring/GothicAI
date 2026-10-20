@@ -39,7 +39,7 @@
 
 Собственные осколки индексированных GLB: `scripts/fracture.sh content <каталог> [--verify]`, соседние `.fracture` v2 с размером/CRC32; оригинальные осколки остаются в отдельном кэше. Стенд `own-mesh-fracture` сравнивает поломку своей бочки и оригинала; [отчёт, снимки и числа](../reports/content/2026-10-own-meshes-fracture/README.md).
 
-[Подготовка TRELLIS на dev-ubuntu](own-content.md#генерация-3d), `scripts/content/mesh3d/` — установка, mesh-only адаптер, сырой NPZ и отдельное окно GPU. [Генерация бочки, сид 1](../reports/content/2026-10-3d-pilot/generation.md): v1 и TRELLIS.2 512 создали raw-меши и метаданные в scope с лимитом 20 ГиБ, CPU-превью готовы на Mac; сервисы восстановлены, суммарный простой 592 с. Первое окно 1024 завершилось host OOM.
+[Подготовка TRELLIS на dev-ubuntu](own-content.md#генерация-3d), `scripts/content/mesh3d/` — установка, mesh-only адаптер, сырой NPZ и отдельное окно GPU. [Пакетный пилот 10 × 2 × 2 и проба бочки](../reports/content/2026-10-3d-pilot/generation.md): одна загрузка каждой модели, v1 прошёл 20/20, TRELLIS.2 512 — 1 ok / 1 cgroup OOM / 18 пропусков при лимите 20 ГиБ. Все 21 NPZ на Mac сверены по SHA-256, готовы 21 CPU-превью и пять JPG. `run-mesh3d.sh --batch --max-downtime 3600 --authorization <метка>` отдельно учитывает разрешение и первый ответ каждой восстанавливаемой службы, проверяет ≥24 ГиБ MemAvailable и ограничивает генерацию до 50-й минуты; сервисы восстановлены, простой 469 с. `preview_raw.py --batch-root/--sources-dir/--sheets-dir` собирает листы; известный oversized 1024 не запускался. В пробе бочки v1 и TRELLIS.2 512 ранее создали NPZ и CPU-превью; суммарный простой двух пробных окон — 592 с, первое окно 1024 завершилось host OOM.
 
 ## Путь одной реплики героя
 
