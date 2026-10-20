@@ -59,7 +59,7 @@ def check(directory, scenario, material_index):
     print(f"{directory.name}: shots={len(shots)} materials={len(index)} pilot_replaced={len(targets & replaced)} pilot_originals={len(targets & opened)}")
 
 
-def compose(captures, output):
+def compose(captures, output, iteration2=False):
     from PIL import Image, ImageDraw, ImageFont
     output.mkdir(parents=True, exist_ok=True)
     try:
@@ -68,6 +68,9 @@ def compose(captures, output):
         font = ImageFont.load_default(size=22)
     variants = ("original", "city-3", "pilot-b", "pilot-c")
     labels = ("original", "A: city-3", "B: new prompt + colour", "C: B + Marigold + colour")
+    if iteration2:
+        variants = ("original", "city-3", "pilot-b", "pilot-2")
+        labels = ("original", "city-3", "iteration 1 B", "iteration 2")
     for spot in SPOTS:
         panels = []
         for variant in variants:
@@ -83,13 +86,13 @@ def compose(captures, output):
             board.paste(panel, (position * width, 44))
             draw.text((position * width + 12, 10), f"{spot} | {label}", font=font, fill="white")
         board.save(output / f"{spot}.jpg", quality=90, optimize=True)
-    print(f"composed {len(SPOTS)} original/city-3/B/C boards: {output}")
+    print(f"composed {len(SPOTS)} {'/'.join(variants)} boards: {output}")
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 5 and sys.argv[1] == "check":
         check(*map(Path, sys.argv[2:]))
-    elif len(sys.argv) == 4 and sys.argv[1] == "compose":
-        compose(*map(Path, sys.argv[2:]))
+    elif len(sys.argv) == 4 and sys.argv[1] in ("compose", "compose-2"):
+        compose(*map(Path, sys.argv[2:]), iteration2=sys.argv[1] == "compose-2")
     else:
-        raise SystemExit("usage: capture-quality-pilot.py check DIRECTORY SCENARIO INDEX | compose CAPTURES OUTPUT")
+        raise SystemExit("usage: capture-quality-pilot.py check DIRECTORY SCENARIO INDEX | compose|compose-2 CAPTURES OUTPUT")
