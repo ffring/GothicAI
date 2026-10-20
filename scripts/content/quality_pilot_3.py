@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+from io import BytesIO
 import json
 from pathlib import Path
 import shutil
@@ -27,13 +28,15 @@ import pack_materials
 import quality_pilot as pilot
 import quality_pilot_2 as iteration2
 import registry as registry_module
-from seam_fix import seamless
+from seam_fix import _minimum_path, seamless
 
 
 NAMESPACE = 'quality-pilot-3'
 SETS = ('pilot-3a', 'pilot-3b')
 METRICS = ('log_spread', 'detail_k3', 'detail_k9', 'detail_k27')
-NEW_TEXTURES = tuple(name for name in pilot.TEXTURES if name not in (
+WINDOW = 'NW_CITY_WINDOW_03.TGA'
+TEXTURES = (*pilot.TEXTURES, WINDOW)
+NEW_TEXTURES = tuple(name for name in TEXTURES if name not in (
     'NW_CITY_BODENDIELEN_01.TGA', 'NW_CITY_HAFENKAI_BODEN_01.TGA'))
 
 
@@ -63,8 +66,38 @@ def prepared_input(image, target, *, frozen):
     return pilot.file_digest(target)
 
 
+def window_canvas(image, physical):
+    """Cut the native U join, then sample the physical panel to UV storage once."""
+    source = np.asarray(image)
+    height, width = source.shape[:2]
+    overlap = max(3, round(width/64))
+    period = width-overlap
+    error = np.mean(((source[:, :overlap].astype(float)-source[:, period:])/255)**2, axis=2)
+    path, cost = _minimum_path(error[:, 1:-1])
+    path += 1
+    canvas = source[:, :period].copy()
+    canvas[:, :overlap] = np.where((np.arange(overlap)[None] <= path[:, None])[..., None],
+        source[:, period:], source[:, :overlap])
+    # Periodic neighbours belong only to U. This single 2D Lanczos sample also
+    # packs the 193 x 214 cm physical rectangle into square UV storage.
+    periodic = Image.fromarray(np.concatenate([canvas]*3, axis=1))
+    packed = periodic.resize((3072, 1024), Image.Resampling.LANCZOS).crop((1024, 0, 2048, 1024))
+    aspect = physical[0]/physical[1]
+    geometry = dict(physical_uv_metres=physical, modules_u=1, modules_v=1,
+        source_size=[width, height], canvas_size=[period, height],
+        source_to_physical_stretch=max(period/height/aspect, aspect/(period/height)), resamples_to_uv=1)
+    seam = dict(applied=True, axes='u', overlap_fraction=1/64, source_size=[width, height],
+        output_size=[1024, 1024], method='native U minimum-error cut; single periodic-U Lanczos resample to square UV',
+        operations=[dict(axis='u', overlap_px=overlap, period_before_resize_px=period,
+            path=path.tolist(), mean_squared_rgb_error=cost/height)])
+    return packed, geometry, seam
+
+
 def prepare(args):
     old = {r['replaces'][0]: r for r in bakeoff.read_registry(args.iteration2_registry)}
+    city_window = next(r for r in pack_materials.select_set_records(
+        bakeoff.read_registry(args.base_registry), 'city-3', args.mapping) if r['replaces'][0] == WINDOW)
+    old[WINDOW] = city_window
     new = pilot.read_sources(args.input_dir, NEW_TEXTURES, args.source_root, namespace=NAMESPACE)
     selection = json.loads(args.selection.read_text())
     mapping = pilot.csv_rows(args.mapping)
@@ -74,10 +107,12 @@ def prepare(args):
         directory.mkdir(parents=True, exist_ok=True)
         flagged = directory / 'flagged'
         flagged.mkdir(exist_ok=True)
-        for name in pilot.TEXTURES:
+        for name in TEXTURES:
             previous = old[name]
             fresh = variant == 'pilot-3b' and name in NEW_TEXTURES
             attempts = new[name] if fresh else previous['generation']['attempts']
+            if name == WINDOW and not fresh:
+                attempts = [dict(a, attempt=a['number']) for a in attempts]
             number = (selection['selected_attempts'][name] if fresh
                 else previous['generation']['selected_attempt'])
             chosen = next(a for a in attempts if a['attempt'] == number)
@@ -93,14 +128,35 @@ def prepare(args):
             params.update(set=variant, material=resource_id, scale=1., source_attempt=number,
                 detail_targets=targets, detail_fit_tolerance=.03, detail_fit_max_iterations=8,
                 detail_gain_bounds=dict(g0=[.8, 1.6], g1=[.5, 3.], g2=[.5, 3.], g3=[.5, 3.]))
-            with Image.open(args.source_root / chosen['source_png']) as source:
+            input_path = args.source_root / chosen['source_png']
+            input_source = None
+            if name == WINDOW:
+                row = mapping[name]
+                physical = [float(row['uv_m_u']), float(row['uv_m_v'])]
+                params.update(decision='module', layout='panel', antitile='off', tiling_axes='u',
+                    target_oklab=[float(row['target_oklab_' + axis]) for axis in ('l', 'a', 'b')],
+                    detail_count_target=dict(u=1, v=1), physical_uv_metres=physical,
+                    source_aspect=physical[0]/physical[1],
+                    parts=row['parts'], source_size_policy='one physical window-wall canvas; one Lanczos resample to 1024-square UV storage')
+                if not fresh:
+                    input_path = args.city3 / 'sources' / previous['files']['albedo']
+                    relative = Path(NAMESPACE) / 'city-3-selected-window-albedo.png'
+                    _write_immutable(args.source_root / relative, input_path.read_bytes())
+                    input_source = dict(source_png=relative.as_posix(), source_sha256=pilot.file_digest(input_path),
+                        registry_id=previous['id'], selected_albedo=previous['files']['albedo'])
+                    input_path = args.source_root / relative
+            with Image.open(input_path) as source:
                 image = source.convert('RGB')
             geometry = None
             if name == pilot.ROOF_INSIDE:
                 image, geometry = pilot.roof_canvas(image)
-            image = image.resize((1024, 1024), Image.Resampling.LANCZOS)
-            axes = '' if params['layout'] == 'panel' else params['tiling_axes']
-            image, seam = seamless(image, axes=axes, overlap_fraction=1/64)
+            if name == WINDOW:
+                params.update(source_width=image.width, source_height=image.height)
+                image, geometry, seam = window_canvas(image, physical)
+            else:
+                image = image.resize((1024, 1024), Image.Resampling.LANCZOS)
+                axes = '' if params['layout'] == 'panel' else params['tiling_axes']
+                image, seam = seamless(image, axes=axes, overlap_fraction=1/64)
             maps, colour, rejection = generate.target_corrected_maps(image, record)
             pixels = Image.fromarray(np.rint(maps['albedo'] * 255).astype(np.uint8))
             target = directory / (Path(name).stem + '.png')
@@ -123,6 +179,9 @@ def prepare(args):
                 prepared_sha256=digest, detector_before=lighting,
                 source_policy='text-only image_gen; original generator PNG bytes retained and checksummed',
                 model_identity=previous['generation']['model_identity'])
+            if name == WINDOW and not fresh:
+                record['generation'].update(source_iteration='city-3', input_source=input_source,
+                    selection_reason='selected city-3 final albedo retained as input')
             records.append(record)
     return records
 
@@ -177,15 +236,18 @@ def apply_iid(record, args, candidates):
 def contact_sheet(records, args):
     old = {r['replaces'][0]: r for r in bakeoff.read_registry(args.iteration2_registry)}
     current = {(r['parameters']['set'], r['replaces'][0]): r for r in records}
-    side, header = 512, 36
-    sheet = Image.new('RGB', (side * 3, (side + header) * 7), '#252626')
+    side, header = 400, 28
+    sheet = Image.new('RGB', (side * 3, (side + header) * len(TEXTURES)), '#252626')
     draw = ImageDraw.Draw(sheet)
     try:
-        font = ImageFont.truetype('/System/Library/Fonts/Menlo.ttc', 13)
+        font = ImageFont.truetype('/System/Library/Fonts/Menlo.ttc', 11)
     except OSError:
         font = ImageFont.load_default()
-    for row, name in enumerate(pilot.TEXTURES):
-        paths = [args.iteration2_root / old[name]['files']['albedo']]
+    city_window = next(r for r in pack_materials.select_set_records(
+        bakeoff.read_registry(args.base_registry), 'city-3', args.mapping) if r['replaces'][0] == WINDOW)
+    for row, name in enumerate(TEXTURES):
+        paths = [args.city3 / 'sources' / city_window['files']['albedo'] if name == WINDOW
+                 else args.iteration2_root / old[name]['files']['albedo']]
         paths += [args.derived_root / current[(variant, name)]['files']['albedo'] for variant in SETS]
         for column, (label, path) in enumerate(zip(('iteration-2', *SETS), paths)):
             with Image.open(path) as opened:
@@ -193,7 +255,13 @@ def contact_sheet(records, args):
             x, y = column * side, row * (side + header)
             sheet.paste(image, (x, y + header))
             draw.text((x + 5, y + 10), f'{label} {Path(name).stem}', fill='white', font=font)
-    sheet.save(args.report_dir / 'materials-2-3a-3b.jpg', quality=94)
+    for quality in range(90, 39, -5):
+        encoded = BytesIO()
+        sheet.save(encoded, format='JPEG', quality=quality, optimize=True)
+        if encoded.tell() <= 1_000_000:
+            (args.report_dir / 'materials-2-3a-3b.jpg').write_bytes(encoded.getvalue())
+            return
+    raise ValueError('material sheet exceeds 1 MB')
 
 
 def build(args, records):
@@ -204,7 +272,16 @@ def build(args, records):
     for record in records:
         variant, name = record['parameters']['set'], record['replaces'][0]
         generation = record['generation']
-        visual = iteration2.visual_measurement(name, counts[variant][name])
+        if name == WINDOW:
+            observed = counts[variant][name]
+            errors = [abs(observed[axis]-1) for axis in ('u', 'v')]
+            visual = dict(target_counts=json.dumps(dict(u=1, v=1)),
+                visual_counts=json.dumps(observed, sort_keys=True, ensure_ascii=False),
+                visual_max_relative_error=max(errors), visual_count_pass=max(errors) <= .2)
+            if variant == 'pilot-3b' and observed['parts'] != record['parameters']['parts'].split('; '):
+                raise ValueError('pilot-3b/window: observed parts differ from CSV')
+        else:
+            visual = iteration2.visual_measurement(name, counts[variant][name])
         if not visual['visual_count_pass']:
             raise ValueError(f'{variant}/{name}: visual count outside 20%')
         pixels = apply_iid(record, args, candidates)
@@ -212,6 +289,8 @@ def build(args, records):
         generation['detector_after_iid'] = dict(after_iid, lighting_risk=lighting_risk(after_iid))
         fitted, fit = fit_material_detail(pixels.astype(float) / 255,
             record['parameters']['detail_targets'], target_oklab=record['parameters']['target_oklab'])
+        if name == WINDOW and fit['clipped_pixel_fraction'] > .01:
+            raise ValueError(f'{variant}/{name}: clipped pixels exceed 1%')
         generation.update(detail_fit=fit, colour_correction=fit['colour'],
             visual_inspection=dict(observed=counts[variant][name], **visual))
         record['_maps'] = bakeoff.filtered_maps(Image.fromarray(fitted), record)
@@ -229,6 +308,7 @@ def build(args, records):
             **{'target_' + key: record['parameters']['detail_targets'][key] for key in METRICS},
             **{key: measured[key] for key in METRICS},
             gains=json.dumps(fit['gains'], sort_keys=True), fit=json.dumps(fit, sort_keys=True),
+            shoulder_pixel_fraction=fit['shoulder_pixel_fraction'],
             colour_max_error=colour_error, colour_pass=colour_error <= .005, **visual,
             detector_before=generation['detector_before']['lighting_risk'],
             detector_after_iid=generation['detector_after_iid']['lighting_risk'],
