@@ -8,7 +8,7 @@ config: {"glb": model with tile UVs in metres and zone-key materials (barrel.py)
          "slots": {KEY: [ATLAS_KEY, GROUP]}, "metal": [KEY, ...],
          "size": 1024, "colour_samples": 16, "seed": 1, "ao_samples": 64, "ao_distance": 0.15, "ao_strength": 0.85,
          "sectors": 20, "tone_spread": 0.28, "light_part": [index, gain],
-         "edge_radius": 0.006, "wet_height": 0.18, "bleach": 0.35,
+         "edge_radius": 0.006, "wet_height": 0.18, "algae": 0.7, "bleach": 0.35,
          "planks_per_tile": {KEY: n}, "seam_width": 0.07, "seam_dark": 0.75, "contrast": {KEY: gamma}}
 The tiling materials are sampled through the tile UVs and baked into a new atlas
 UV: per-part tone (the builder's "_part" attribute when present, otherwise
@@ -225,7 +225,7 @@ for slot in obj.material_slots:
         rough_out = rough
         metal_out = metallic
     colour = mix(nodes, links, math_node(nodes, links, "MULTIPLY", wet, 0.45), colour, (0.0, 0.0, 0.0, 1.0))
-    colour = mix(nodes, links, math_node(nodes, links, "MULTIPLY", algae, 0.7), colour, (0.010, 0.016, 0.006, 1.0))
+    colour = mix(nodes, links, math_node(nodes, links, "MULTIPLY", algae, cfg.get("algae", 0.7)), colour, (0.010, 0.016, 0.006, 1.0))
 
     nmap = node(nodes, "ShaderNodeNormalMap", uv_map="Tile")
     links.new(normal_tex, nmap.inputs["Color"])
