@@ -3,13 +3,16 @@
 blender -b --factory-startup -P candle.py -- candle.json OUT_DIR   (run from the repository root)
 config: {"id": "candle", "target": "data/content/mesh3d-market.json", "seed": 1, "segments": 20,
          "dish": [0.18, 0.032, 0.006], "feet": [3, 0.025, 0.03], "handle": [0.05, 0.012, 0.008],
-         "candle": [0.06, 0.2, 4.0], "candle_grid": [24, 9], "drips": 6, "puddle": [0.11, 0.009],
+         "candle": [0.06, 0.2, 4.0], "candle_grid": [24, 10], "drips": 0, "drip": 0.0, "drip_width": [0.085, 0.04],
+         "drip_rods": [8, 14], "puddle": [0.11, 0.009],
          "iron_tile": 0.2, "wax_tile": 0.15}
 The dish is a lathe shell (floor, raised rim with a rolled lip) on three stubby
 feet, with a flat ring handle on the far side, as on the concept. The candle is
-a thick leaning cylinder whose surface swells into drips that end in fat drops,
-with a melted, uneven top folding into a crater round the wick; a wobbly puddle
-of wax spreads over the dish floor.
+a thick leaning cylinder with a melted, uneven top folding into a crater round
+the wick. Its drips are separate rods half sunk into its side ("drip_rods": count,
+sides), thicker toward the bottom and ending in a drop; the older swell of the
+surface ("drips", "drip") is still there but off, it gave blocky ledges. A wobbly
+puddle of wax spreads over the dish floor.
 """
 import math
 import sys
@@ -111,7 +114,8 @@ def swell(a, f):
         t = min(max((f - tip) / 0.08, 0.0), 1.0)
         body = t * t * (3 - 2 * t)
         drop = 0.9 * math.exp(-((f - tip - 0.035) / 0.04) ** 2)
-        width = 0.13 + 0.06 * (1 - f)
+        w0, w1 = cfg.get("drip_width", [0.13, 0.06])
+        width = w0 + w1 * (1 - f)
         extra = max(extra, cfg.get("drip", 0.013) * (body + drop) * math.exp(-(d / width) ** 2))
     return extra
 
@@ -132,14 +136,43 @@ for k in range(csides):
     col.append(radial * (r_c * 0.6) + Z * (h_c - 0.014 - top_drop[k] * 0.5))   # melted rim folding in
     rows.append([P.vert(floor + tilt @ p, part) for p in col])
 centre_top = P.vert(floor + tilt @ (Z * (h_c - 0.03)), part)
+centre_bottom = P.vert(floor, part)   # a hidden cap under the foot: open, the body came out inside out in game
 n = len(rows[0])
 for k in range(csides):
     k2 = (k + 1) % csides
+    P.poly((rows[k2][0], rows[k][0], centre_bottom), WAX, ((0, 0), (0.1, 0), (0.05, 0.1)))
     u0, u1 = k / csides * 2 * math.pi * r_c / wax_tile, (k + 1) / csides * 2 * math.pi * r_c / wax_tile
     for i in range(n - 1):
         v0, v1 = i * h_c / crings / wax_tile, (i + 1) * h_c / crings / wax_tile
         P.poly((rows[k][i], rows[k2][i], rows[k2][i + 1], rows[k][i + 1]), WAX, ((u0, v0), (u1, v0), (u1, v1), (u0, v1)))
     P.poly((rows[k][n - 1], rows[k2][n - 1], centre_top), WAX, ((0, 0), (0.1, 0), (0.05, 0.1)))
+# drip rods: rounded ridges half sunk into the side, thin at the rim, ending in a fat drop
+n_rods, rod_sides = cfg.get("drip_rods", [0, 14])
+for d in range(n_rods):
+    a = 2 * math.pi * (d + rng.uniform(-0.3, 0.3)) / max(n_rods, 1)
+    radial = Vector((math.cos(a), math.sin(a), 0))
+    side_v = Z.cross(radial)
+    reach = rng.uniform(0.25, 0.85) * h_c
+    top_z = h_c - 0.012
+    steps = 6
+    part = P.new_part()
+    rings = []
+    wob = rng.uniform(-0.6, 0.6)
+    for j in range(steps + 1):
+        f = j / steps
+        z = top_z - f * reach
+        rr = 0.005 + 0.004 * f + (0.006 * math.exp(-((f - 0.92) / 0.08) ** 2))
+        c = radial * (r_c - rr * 0.35) + side_v * (0.006 * wob * math.sin(f * 3.0)) + Z * z
+        rings.append([P.vert(floor + tilt @ (c + (radial * math.cos(2 * math.pi * k / rod_sides) + side_v * math.sin(2 * math.pi * k / rod_sides)) * rr), part)
+                      for k in range(rod_sides)])
+    tip_v = P.vert(floor + tilt @ (radial * (r_c - 0.003) + Z * (top_z - reach - 0.008)), part)
+    for j in range(steps):
+        for k in range(rod_sides):
+            k2 = (k + 1) % rod_sides
+            P.poly((rings[j][k2], rings[j][k], rings[j + 1][k], rings[j + 1][k2]), WAX, ((0, 0), (0.02, 0), (0.02, 0.02), (0, 0.02)))
+    for k in range(rod_sides):
+        P.poly((rings[steps][(k + 1) % rod_sides], rings[steps][k], tip_v), WAX, ((0, 0), (0.02, 0), (0.01, 0.02)))
+
 # wick
 P.post(floor + tilt @ (Z * (h_c - 0.008)), floor + tilt @ (Z * (h_c - 0.035)), 0.006, 0.007, X, Y, IRON, iron_tile)
 

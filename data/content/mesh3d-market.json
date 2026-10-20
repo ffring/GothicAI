@@ -207,7 +207,7 @@
   {
     "id": "candle",
     "visual": "NW_CITY_CANDLE_01.MRM",
-    "budget_tris": 1600,
+    "budget_tris": 2700,
     "zones": [
       {
         "key": "OWN_PROP_IRON_BAND",
@@ -526,7 +526,17 @@
       {
         "key": "OWN_PROP_BONE",
         "group": "UNDEF",
-        "role": "teeth and nose"
+        "role": "teeth"
+      },
+      {
+        "key": "OWN_PROP_EYE",
+        "group": "UNDEF",
+        "role": "amber glass eyes"
+      },
+      {
+        "key": "OWN_PROP_NOSE",
+        "group": "UNDEF",
+        "role": "black nose"
       }
     ],
     "kind": "static_mrm",

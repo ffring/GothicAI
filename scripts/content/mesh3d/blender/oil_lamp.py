@@ -2,8 +2,8 @@
 
 blender -b --factory-startup -P oil_lamp.py -- oil-lamp.json OUT_DIR   (run from the repository root)
 config: {"id": "oil-lamp", "target": "data/content/mesh3d-market.json", "seed": 1, "segments": 16,
-         "plate": [0.2, 0.3, 0.025], "arm": [0.012, 0.035], "lamp_from_wall": 0.27,
-         "reservoir": [0.065, 0.08], "glass": [0.062, 0.2], "metal_tile": 0.2, "glass_tile": 0.15, "wood_tile": 0.38}
+         "plate": [0.2, 0.3, 0.025], "arm": [0.024, 0.04], "arm_top": 0.035, "lamp_from_wall": 0.28,
+         "reservoir": [0.085, 0.09], "glass": [0.098, 0.225], "metal_tile": 0.2, "glass_tile": 0.15, "wood_tile": 0.38}
 A dark wooden back plate on the post side (the original's metal reaches that side
 of its bbox), a forged arm out of it ending in a curl, a ring hanging from the curl
 and under it the lamp: a squat brass reservoir, a collar and a tall bulb of milky
@@ -79,7 +79,7 @@ for dz in (ph * 0.35, -ph * 0.35):   # two nail heads holding it
 # forged arm: straight out, then a curl down; the lamp hangs from the curl
 arm_size, curl = cfg.get("arm", [0.012, 0.035])
 lamp_y = lo.y + cfg.get("lamp_from_wall", 0.27)
-arm_z = hi.z - 0.07
+arm_z = hi.z - cfg.get("arm_top", 0.07)
 start = Vector((plate_c.x, lo.y + pt, arm_z))
 pts = [start + Y * (f * (lamp_y - start.y)) for f in np.linspace(0, 1, 5)]
 end = pts[-1]
