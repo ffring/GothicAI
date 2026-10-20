@@ -32,15 +32,20 @@ if [ "$(uname -s)" = Linux ]; then
   if ! command -v bun >/dev/null; then
     # Install only the binary in the user's home; leave shell profiles and bun.lock alone.
     python3 - <<'PY'
+import hashlib
 import io
 import os
 import urllib.request
 import zipfile
 from pathlib import Path
 
-url = "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64.zip"
+url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-x64.zip"
+expected_sha256 = "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18"
 with urllib.request.urlopen(url) as response:
-    archive = zipfile.ZipFile(io.BytesIO(response.read()))
+    data = response.read()
+if hashlib.sha256(data).hexdigest() != expected_sha256:
+    raise SystemExit("Bun 1.4.3 download failed SHA-256 verification; nothing was installed")
+archive = zipfile.ZipFile(io.BytesIO(data))
 binary = Path.home() / ".local/bin/bun"
 binary.parent.mkdir(parents=True, exist_ok=True)
 temporary = binary.with_suffix(".download")

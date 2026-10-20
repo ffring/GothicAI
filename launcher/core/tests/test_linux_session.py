@@ -8,13 +8,17 @@ import json
 import os
 import signal
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
+from gothic_launcher import cli
+from gothic_launcher import control as control_module
 from gothic_launcher import linux_session as linux
 from gothic_launcher.commands import LaunchError, Layout
 from gothic_launcher.linux_session import LinuxSession
+from gothic_launcher.settings import Config
 from gothic_launcher.state import SessionFile
 
 
@@ -63,6 +67,78 @@ def test_install_lock_blocks_updates_and_refuses_an_active_update(desktop):
             linux.installation_lock()
 
 
+def test_terminal_play_waits_for_enter_after_a_busy_install_lock(desktop, tmp_path, monkeypatch, capsys):
+    control = control_module.Control(
+        lambda msg: None,
+        config_dir=tmp_path / "config",
+        state_file=tmp_path / "launcher.json",
+        log_root=tmp_path / "logs",
+    )
+    monkeypatch.setattr(control, "_config", lambda: Config.load(tmp_path / "config"))
+    monkeypatch.setattr(control_module, "Control", lambda write: control)
+    monkeypatch.setattr(control_module, "find_layout", lambda config: desktop)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "argv", ["gothic-launcher", "play"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    prompts = []
+    monkeypatch.setattr("builtins.input", prompts.append)
+    lock_path = Path.home() / "gothic-ai/play.install.lock"
+    lock_path.parent.mkdir(parents=True)
+    with lock_path.open("ab") as writer:
+        fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(SystemExit) as result:
+            cli.main()
+    assert result.value.code == 2
+    assert "Gothic AI install/update is running" in capsys.readouterr().err
+    assert prompts == ["Press Enter to close this terminal."]
+    assert control.task is None and control.supervisor is None
+
+
+@pytest.mark.parametrize(("code", "tty"), [(7, True), (7, False), (0, True)])
+def test_terminal_play_pauses_only_after_an_error_on_a_tty(code, tty, monkeypatch, capsys):
+    async def finished_session(control, mode, smoke):
+        return code
+
+    monkeypatch.setattr(cli, "_controlled_session", finished_session)
+    monkeypatch.setattr(sys, "argv", ["gothic-launcher", "play"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: tty)
+    prompts = []
+    monkeypatch.setattr("builtins.input", prompts.append)
+    with pytest.raises(SystemExit) as result:
+        cli.main()
+    assert result.value.code == code
+    assert prompts == (["Press Enter to close this terminal."] if code and tty else [])
+    if code:
+        assert "Gothic AI exited with code 7" in capsys.readouterr().err
+
+
+def test_terminal_play_does_not_pause_on_keyboard_interrupt(monkeypatch):
+    def interrupted(args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "play", interrupted)
+    monkeypatch.setattr(sys, "argv", ["gothic-launcher", "play"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    prompts = []
+    monkeypatch.setattr("builtins.input", prompts.append)
+    with pytest.raises(SystemExit) as result:
+        cli.main()
+    assert result.value.code == 130 and not prompts
+
+
+@pytest.mark.parametrize(("smoke", "mode"), [(False, "continue"), (True, "new")])
+def test_terminal_play_selects_continue_unless_smoke(smoke, mode, monkeypatch):
+    calls = []
+
+    async def controlled_session(control, selected_mode, selected_smoke):
+        calls.append((selected_mode, selected_smoke))
+        return 0
+
+    monkeypatch.setattr(cli, "_controlled_session", controlled_session)
+    assert cli.play(Namespace(smoke=smoke)) == 0
+    assert calls == [(mode, smoke)]
+
+
 def test_portaudio_requires_a_loadable_library(monkeypatch):
     calls = []
     monkeypatch.setattr(ctypes, "CDLL", calls.append)
@@ -98,6 +174,22 @@ def test_play_request_retains_exclusive_live_limits(desktop, tmp_path, monkeypat
         assert "--smoke" in worker and "--no-voice" in worker and "_session" in worker
     finally:
         runner.lock.close()
+
+
+async def test_missing_portaudio_prints_the_install_command(desktop, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(linux, "portaudio_available", lambda: False)
+    state = SessionFile(tmp_path / "launcher.json")
+    state.acquire()
+    runner = LinuxSession(
+        desktop, tmp_path, tmp_path / "logs", "continue", False, lambda msg: None, cli.print_event, state
+    )
+    monkeypatch.setattr(runner, "command", lambda: [sys.executable, "-c", "pass"])
+    try:
+        assert await asyncio.wait_for(runner.run(), 10) == 0
+        assert "sudo apt install libportaudio2" in capsys.readouterr().out
+    finally:
+        runner.stop()
+        state.release()
 
 
 async def test_queue_reports_waiting_events_and_cancels_by_eof(desktop, tmp_path, monkeypatch):

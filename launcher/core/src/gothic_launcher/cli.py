@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import getpass
 import json
 import os
@@ -351,6 +352,7 @@ def main() -> None:
     a.add_argument("file", nargs="?")
 
     args = parser.parse_args()
+    interrupted = False
     try:
         match args.command:
             case "up":
@@ -374,4 +376,10 @@ def main() -> None:
         code = 2
     except KeyboardInterrupt:
         code = 130
+        interrupted = True
+    if args.command == "play" and code and not interrupted:
+        print(f"Gothic AI exited with code {code}.", file=sys.stderr)
+        if sys.stdin.isatty():
+            with contextlib.suppress(EOFError):
+                input("Press Enter to close this terminal.")
     sys.exit(code)

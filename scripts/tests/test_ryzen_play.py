@@ -2,6 +2,7 @@
 import fcntl
 import importlib.machinery
 import importlib.util
+import io
 import tempfile
 import tomllib
 import unittest
@@ -169,6 +170,38 @@ class RyzenPlayTests(unittest.TestCase):
         self.assertEqual(command[-3:], ["gothic-launcher", "play", "--smoke"])
         self.assertIn("--locked", command)
         self.assertEqual(Path(command[command.index("--project") + 1]).name, "core")
+
+    def test_terminal_wrapper_keeps_startup_errors_visible(self):
+        with patch.object(session.os, "execv", side_effect=OSError("uv not found")), \
+                patch.object(session.sys.stdin, "isatty", return_value=True), \
+                patch("builtins.input") as wait_for_enter, \
+                patch.object(session.sys, "stderr", new_callable=io.StringIO) as error:
+            self.assertEqual(session.main([]), 2)
+            self.assertIn("uv not found", error.getvalue())
+            wait_for_enter.assert_called_once_with("Press Enter to close this terminal.")
+
+    def test_bun_checksum_mismatch_does_not_install_or_replace_binary(self):
+        script = Path(__file__).resolve().parents[1] / "build-launcher.sh"
+        bootstrap = script.read_text().split("python3 - <<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                binary = home / ".local/bin/bun"
+                if existing:
+                    binary.parent.mkdir(parents=True)
+                    binary.write_bytes(b"existing bun")
+                response = io.BytesIO(b"corrupt download")
+                with patch("urllib.request.urlopen", return_value=response) as download, \
+                        patch.object(Path, "home", return_value=home):
+                    with self.assertRaisesRegex(SystemExit, "SHA-256 verification; nothing was installed"):
+                        exec(compile(bootstrap, str(script), "exec"), {})
+                download.assert_called_once_with(
+                    "https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-x64.zip")
+                if existing:
+                    self.assertEqual(binary.read_bytes(), b"existing bun")
+                    self.assertEqual(list(binary.parent.iterdir()), [binary])
+                else:
+                    self.assertFalse((home / ".local").exists())
 
     def test_desktop_opens_visible_terminal_with_game_icon(self):
         entry = install.desktop_entry(Path("/home/player/gothic-ai/play"))
