@@ -2,6 +2,7 @@
 
 import csv
 import importlib.util
+import json
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,61 @@ SPEC = importlib.util.spec_from_file_location(
     "capture_quality_pilot", Path(__file__).with_name("capture-quality-pilot.py"))
 capture = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(capture)
+
+
+def capture_check_inputs(tmp_path, variant, materials, *, original=False):
+    directory = tmp_path / variant
+    directory.mkdir()
+    (directory / "exit.txt").write_text("0\n")
+    scenario = tmp_path / "pilot.bench"
+    scenario.write_text("".join(f"shot {spot}\n" for spot in capture.SPOTS))
+    index = tmp_path / "materials.json"
+    index.write_text(json.dumps({} if original else {"test": {}}))
+    (directory / "game.log").write_text(
+        f"materials: {0 if original else 1} entries from test\n"
+        + "".join(f"[bench] shot {spot}\n" for spot in capture.SPOTS)
+        + "[bench] done\n")
+    textures = [{"kind": "texture", "name": material + ".TGA"} for material in materials]
+    (directory / "census.json").write_text(json.dumps({
+        "files": textures if original else [], "replacements": [] if original else textures,
+    }))
+    for spot in capture.SPOTS:
+        (directory / f"{spot}.png").write_bytes(b"shot")
+    return directory, scenario, index
+
+
+@pytest.mark.parametrize("variant", ("pilot-3a", "pilot-3b"))
+def test_iteration3_captures_require_window(tmp_path, variant):
+    inputs = capture_check_inputs(tmp_path, variant, capture.MATERIALS)
+    with pytest.raises(SystemExit, match="pilot textures not replaced: NW_CITY_WINDOW_03"):
+        capture.check(*inputs)
+
+
+@pytest.mark.parametrize("variant", ("original", "pilot-2", "pilot-3a", "pilot-3b"))
+def test_iteration3_captures_validate_eight_targets(tmp_path, variant, capsys):
+    original = variant == "original"
+    inputs = capture_check_inputs(tmp_path, variant, capture.ITERATION3_MATERIALS, original=original)
+    capture.check(*inputs, iteration3=variant in ("original", "pilot-2"))
+    expected = "pilot_replaced=0 pilot_originals=8" if original else "pilot_replaced=8 pilot_originals=0"
+    assert expected in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("variant", ("original", "pilot-2"))
+def test_historical_captures_allow_seven_but_iteration3_requires_window(tmp_path, variant):
+    inputs = capture_check_inputs(tmp_path, variant, capture.MATERIALS, original=variant == "original")
+    capture.check(*inputs)
+    with pytest.raises(SystemExit, match="NW_CITY_WINDOW_03"):
+        capture.check(*inputs, iteration3=True)
+
+
+def test_iteration3_rejects_opened_window_original(tmp_path):
+    inputs = capture_check_inputs(tmp_path, "pilot-3b", capture.ITERATION3_MATERIALS)
+    census = inputs[0] / "census.json"
+    data = json.loads(census.read_text())
+    data["files"] = [{"kind": "texture", "name": "NW_CITY_WINDOW_03-C.TEX"}]
+    census.write_text(json.dumps(data))
+    with pytest.raises(SystemExit, match="pilot originals opened: NW_CITY_WINDOW_03"):
+        capture.check(*inputs)
 
 
 def test_flat_frame_has_no_detail_and_uses_linear_rec709(tmp_path):

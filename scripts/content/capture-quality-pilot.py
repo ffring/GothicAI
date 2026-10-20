@@ -7,6 +7,8 @@ ln(Y + .001)), detail_k9 (mean absolute residual from a reflected 9x9 box),
 and their *_ratio values against CAPTURES/original at the same spot. A ratio
 is empty when the original metric is zero. Inputs must be exactly 1280x720.
 Run with: uv run --no-project --with numpy --with pillow --with scipy python
+``check`` includes the window for pilot-3a/pilot-3b; pass ``--iteration-3``
+to check the same eight targets in original/pilot-2 captures.
 """
 import csv
 import json
@@ -20,6 +22,7 @@ MATERIALS = (
     "NW_CITY_ROOF_INSIDE_01", "NW_CITY_WALL_03", "NW_CITY_HAFENKAI_BODEN_01",
     "NW_HARBOUR_STAIRS_01",
 )
+ITERATION3_MATERIALS = (*MATERIALS, "NW_CITY_WINDOW_03")
 
 
 def texture_key(name):
@@ -31,7 +34,7 @@ def texture_key(name):
     return name
 
 
-def check(directory, scenario, material_index):
+def check(directory, scenario, material_index, iteration3=False):
     def require(condition, reason):
         if not condition:
             raise SystemExit(f"pilot capture {directory.name}: {reason}")
@@ -53,7 +56,7 @@ def check(directory, scenario, material_index):
     census = json.loads((directory / "census.json").read_text())
     opened = {texture_key(row["name"]) for row in census["files"] if row["kind"] == "texture"}
     replaced = {texture_key(row["name"]) for row in census["replacements"] if row["kind"] == "texture"}
-    targets = set(MATERIALS)
+    targets = set(ITERATION3_MATERIALS if iteration3 or directory.name in ("pilot-3a", "pilot-3b") else MATERIALS)
     if index:
         require(targets <= replaced, "pilot textures not replaced: " + ", ".join(sorted(targets - replaced)))
         require(not (targets & opened), "pilot originals opened: " + ", ".join(sorted(targets & opened)))
@@ -143,12 +146,12 @@ def detail(captures, output, variants):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 5 and sys.argv[1] == "check":
-        check(*map(Path, sys.argv[2:]))
+    if len(sys.argv) in (5, 6) and sys.argv[1] == "check" and (len(sys.argv) == 5 or sys.argv[5] == "--iteration-3"):
+        check(*map(Path, sys.argv[2:5]), iteration3=len(sys.argv) == 6)
     elif len(sys.argv) == 4 and sys.argv[1] in ("compose", "compose-2", "compose-3"):
         compose(*map(Path, sys.argv[2:]), iteration2=sys.argv[1] == "compose-2",
                 iteration3=sys.argv[1] == "compose-3")
     elif len(sys.argv) >= 5 and sys.argv[1] == "detail":
         detail(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4:])
     else:
-        raise SystemExit("usage: capture-quality-pilot.py check DIRECTORY SCENARIO INDEX | compose|compose-2|compose-3 CAPTURES OUTPUT | detail CAPTURES OUTPUT.csv VARIANT...")
+        raise SystemExit("usage: capture-quality-pilot.py check DIRECTORY SCENARIO INDEX [--iteration-3] | compose|compose-2|compose-3 CAPTURES OUTPUT | detail CAPTURES OUTPUT.csv VARIANT...")
