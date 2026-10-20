@@ -136,9 +136,11 @@ for k in range(csides):
     col.append(radial * (r_c * 0.6) + Z * (h_c - 0.014 - top_drop[k] * 0.5))   # melted rim folding in
     rows.append([P.vert(floor + tilt @ p, part) for p in col])
 centre_top = P.vert(floor + tilt @ (Z * (h_c - 0.03)), part)
+centre_bottom = P.vert(floor, part)   # a hidden cap under the foot: open, the body came out inside out in game
 n = len(rows[0])
 for k in range(csides):
     k2 = (k + 1) % csides
+    P.poly((rows[k2][0], rows[k][0], centre_bottom), WAX, ((0, 0), (0.1, 0), (0.05, 0.1)))
     u0, u1 = k / csides * 2 * math.pi * r_c / wax_tile, (k + 1) / csides * 2 * math.pi * r_c / wax_tile
     for i in range(n - 1):
         v0, v1 = i * h_c / crings / wax_tile, (i + 1) * h_c / crings / wax_tile

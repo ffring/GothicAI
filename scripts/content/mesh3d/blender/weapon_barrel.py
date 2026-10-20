@@ -171,9 +171,8 @@ def axe(top, axis, length):
 def spear(top, axis, length):
     flat, edge = frame(axis)
     hl, hw = cfg.get("spear", [0.32, 0.085])
-    tip = top - axis * 0.0
     socket = top + axis * hl
-    lens(socket, tip, hw, 0.016, STEEL, P.new_part(), taper=0.9)          # leaf from the socket to the point
+    lens(socket, top, hw, 0.016, STEEL, P.new_part(), taper=0.9)          # leaf from the socket to the point
     P.post(socket, socket + axis * 0.06, 0.04, 0.034, flat, edge, IRON, 0.1)
     P.post(socket + axis * 0.06, top + axis * length, 0.032, 0.032, flat, edge, HAFT, 0.3)
 

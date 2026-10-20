@@ -149,6 +149,7 @@ for sx in (-1, 1):
     for i in range(4):
         P.poly((corners[i], corners[(i + 1) % 4], apex), FUR, ((0, 0), (0.1, 0), (0.05, 0.15)))
 
+
 def dome(centre, normal, radius, depth, material, segs=8):
     """A low dome (eye, nose) on the surface: a ring at the base and a rounded cap toward normal."""
     n = normal.normalized()
