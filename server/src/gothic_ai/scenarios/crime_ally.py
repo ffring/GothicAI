@@ -10,7 +10,7 @@ from ..executor import Intent
 from ..game import GameError, GameLink
 from ..llm import ToolCall
 from ..llm.fake import FakeBackend, FakeStep
-from ..protocol import GameMessage, HeroDeed, NpcEvent
+from ..protocol import GameMessage, HeroDeed, Perception
 from .common import _ByNpc, _logged, _OnWords, _until, _until_async
 
 if TYPE_CHECKING:
@@ -89,18 +89,25 @@ async def crime_ally(
         for _ in range(2):
             await link.debug("kill", instance="YGOBBO_GREEN", near=CAVALORN, by=CAVALORN)
 
-        # One native hero hit must knock Brago out before Cavalorn's counterattack. Set only the
-        # hero's initial strength through the existing fixture path; remove the trigger before combat.
+        # A native melee hit kills a person hostile to the hero instead of knocking him out.
+        # Neutralize only Brago's attitude to the hero for this fixture; his guild's hostility
+        # to Cavalorn is unchanged. Restore the original attitude before the finishing kill.
         strength = ["field", ["inst", "HERO"], "ATTRIBUTE", 4]
+        attitude = ["call", "NPC_GETATTITUDE", ["inst", BRAGO], ["inst", "HERO"]]
+        original_attitude, neutral = await link.story_eval(BRAGO, [attitude, ["var", "ATT_NEUTRAL"]])
         trigger = "DIR_CRIME_ALLY_STRENGTH"
         await link.patch_graph([triggers.trigger(trigger, triggers.STATE, [
             {"do": "set", "target": strength, "value": ["int", 10000]},
+            {"do": "call", "call": ["call", "NPC_SETATTITUDE", ["inst", BRAGO], ["int", neutral]]},
         ])])
         try:
-            prepared = await _until_async(lambda: link.evaluate(strength), lambda value: value == 10000, 5)
+            prepared = await _until_async(
+                lambda: link.story_eval(BRAGO, [strength, attitude]),
+                lambda values: values == [10000, neutral], 5,
+            )
         finally:
             await link.patch_graph([triggers.removal(trigger)])
-        if not check("hero_ready", prepared, "armor, strength=10000; native melee damage"):
+        if not check("hero_ready", prepared, f"armor, strength=10000, Brago attitude={neutral}"):
             return _logged(results)
 
         await link.debug("player_goto", to=CAVALORN, distance=300)
@@ -111,11 +118,47 @@ async def crime_ally(
         if not check("follow", await _until(lambda: bool(follows) and 0 <= distance(CAVALORN) <= 500, 20)):
             return _logged(results)
 
-        # The hero goes to XARDAS_BANDITS, as in companion; Cavalorn follows along the real waynet.
+        # The direct jump from the fire into the cave exceeds follow's native 60 m limit.
+        # Wait together on the road before entering XARDAS_BANDITS along the real waynet.
+        together_detail: dict[str, Any] = {}
+
+        async def together() -> bool:
+            views = await link.npc_view([CAVALORN])
+            view = views[0] if views else None
+            hero = view.hero if view is not None else None
+            together_detail.update(
+                waypoint=(view.nearest_waypoint or view.waypoint) if view is not None else None,
+                state=view.state if view is not None else None,
+                body=view.body if view is not None else None,
+                hero_cm=hero.distance if hero is not None else None,
+            )
+            return hero is not None and hero.distance <= 450
+
+        await link.debug("player_goto", waypoint="NW_XARDAS_STAIRS_01")
+        if not check("stairs_01", await _until_async(together, bool, 40), together_detail):
+            return _logged(results)
+        await link.debug("player_goto", waypoint="NW_XARDAS_STAIRS_02")
+        if not check("stairs_02", await _until_async(together, bool, 40), together_detail):
+            return _logged(results)
+        await link.debug("player_goto", waypoint="NW_XARDAS_STAIRS_03")
+        if not check("road", await _until_async(together, bool, 40), together_detail):
+            return _logged(results)
+        # The native waynet enters the cave through STAIRS_04 -> BANDITS_01.
+        await link.debug("player_goto", waypoint="NW_XARDAS_STAIRS_04")
+        if not check("cave_turn", await _until_async(together, bool, 40), together_detail):
+            return _logged(results)
+        # Follow the entrance explicitly instead of asking the companion to cut the cave's corner.
+        await link.debug("player_goto", waypoint="NW_XARDAS_BANDITS_01")
+        if not check("cave_entrance", await _until_async(together, bool, 40), together_detail):
+            return _logged(results)
         await link.debug("player_goto", to=BRAGO, distance=300)
-        if not check("bandits", await _until(
+        bandits_near = await _until(
             lambda: 0 <= distance(BRAGO) <= 500 and 0 <= distance(CAVALORN) <= 600, 60,
-        ), "XARDAS_BANDITS"):
+        )
+        if not check(
+            "bandits", bandits_near,
+            f"XARDAS_BANDITS; Cavalorn={distance(CAVALORN):.0f} cm, Brago={distance(BRAGO):.0f} cm",
+        ):
             return _logged(results)
         if perception is not None:
             await perception.fresh(BRAGO)
@@ -127,17 +170,25 @@ async def crime_ally(
             return (
                 conv is not None
                 and (conv.intent.goal, conv.intent.target) == ("fight", CAVALORN)
-                and any(isinstance(message, NpcEvent)
-                        and message.npc == CAVALORN and message.kind == "npc_attack"
+                and any(isinstance(message, Perception)
+                        and message.npc == CAVALORN and message.perc == "ASSESSDAMAGE"
                         and message.other == BRAGO for message in received)
             )
 
         if not check(
-            "brago_attacked", await _until(attacked, 30), f"set_intent fight -> {CAVALORN}; npc_attack",
+            "brago_attacked", await _until(attacked, 30), f"set_intent fight -> {CAVALORN}; ASSESSDAMAGE",
         ):
             return _logged(results)
 
+        # The first real blow is proven. Preempt Brago's scripted fight so its damage callback
+        # cannot replace the prepared attitude while the hero knocks him out.
+        stopped = await link.act(BRAGO, "stop")
+        if not check("brago_stopped", stopped.ok, stopped.status):
+            return _logged(results)
         await link.debug("teleport", near=BRAGO, distance=250)
+        current_attitude = await link.evaluate(attitude)
+        if not check("knockout_ready", current_attitude == neutral, f"Brago attitude={current_attitude}"):
+            return _logged(results)
 
         async def hit() -> bool:
             try:
@@ -149,6 +200,9 @@ async def crime_ally(
                 return False  # A native parry or backstep may briefly block the real damage path.
 
         hit_landed = await _until_async(hit, bool, 5)
+        # A companion otherwise finishes the downed enemy himself before the next roster arrives.
+        # Retreat preempts the fight with stop/follow and suppresses another automatic attack.
+        talk.hear("Кавалорн, отступай!", CAVALORN, {"via": "scenario"})
         down = await _until(lambda: BRAGO in talk.people and talk.people[BRAGO].activity == "down", 10)
         snapshot = await link.snapshot(BRAGO, fresh=True)
         if not check(
@@ -157,6 +211,9 @@ async def crime_ally(
         ):
             return _logged(results)
 
+        turned = await link.act(CAVALORN, "turn_to", npc="PLAYER")
+        if not check("cavalorn_faces_hero", turned.ok, turned.status):
+            return _logged(results)
         witness: dict[str, Any] = {}
 
         async def witness_ready() -> bool:
@@ -167,12 +224,26 @@ async def crime_ally(
             witness["sees_hero"] = seen
             return (
                 view is not None and view.hp > 0 and view.body == "stand"
-                and view.state != "ZS_ATTACK" and view.others_damage_ready is True
+                and view.state != "ZS_ATTACK" and CAVALORN in talk.attached
                 and view.hero is not None and view.hero.distance <= 1000 and bool(seen)
                 and (talk.orders is None or CAVALORN not in talk.orders.fights)
             )
 
         if not check("witness_ready", await _until_async(witness_ready, bool, 20), witness):
+            return _logged(results)
+        restore = "DIR_CRIME_ALLY_RESTORE_ATTITUDE"
+        await link.patch_graph([triggers.trigger(restore, triggers.STATE, [
+            {"do": "call", "call": [
+                "call", "NPC_SETATTITUDE", ["inst", BRAGO], ["int", original_attitude],
+            ]},
+        ])])
+        try:
+            restored = await _until_async(
+                lambda: link.evaluate(attitude), lambda value: value == original_attitude, 5,
+            )
+        finally:
+            await link.patch_graph([triggers.removal(restore)])
+        if not check("brago_restored", restored, f"Brago attitude={original_attitude}"):
             return _logged(results)
         await link.debug("kill", instance=BRAGO, by="PLAYER")
 
