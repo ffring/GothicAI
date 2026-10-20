@@ -1,9 +1,10 @@
 // Original texture pixels remain in memory. Only scalar properties leave the decoder.
 // Build against the engine's ZenKit ABI as scripts/content-textures.sh does.
-// texture-luminance [--properties] <game dir> <TEXTURE.TGA>... | --self-test
+// texture-luminance [--properties|--measurements] <game dir> <TEXTURE.TGA>... | --self-test
 #include <zenkit/Stream.hh>
 #include <zenkit/Texture.hh>
 #include <zenkit/Vfs.hh>
+#include "material-measures.h"
 
 #include <cmath>
 #include <cctype>
@@ -108,9 +109,10 @@ void selfTest() {
 int main(int argc,char** argv) {
   try {
     if(argc==2 && std::string(argv[1])=="--self-test") { selfTest(); return 0; }
-    const bool properties=argc>1 && std::string(argv[1])=="--properties";
+    const bool measurements=argc>1 && std::string(argv[1])=="--measurements";
+    const bool properties=measurements || (argc>1 && std::string(argv[1])=="--properties");
     const int gameArg=properties ? 2 : 1;
-    if(argc<gameArg+2) throw std::runtime_error("usage: texture-luminance [--properties] <game dir> <TEXTURE.TGA>... | --self-test");
+    if(argc<gameArg+2) throw std::runtime_error("usage: texture-luminance [--properties|--measurements] <game dir> <TEXTURE.TGA>... | --self-test");
     std::map<std::string,fs::path> archives;
     for(const auto& entry:fs::directory_iterator(fs::path(argv[gameArg])/"Data")) {
       const auto name=upper(entry.path().filename().string());
@@ -123,7 +125,7 @@ int main(int argc,char** argv) {
       vfs.mount_disk(path,zenkit::VfsOverwriteBehavior::OLDER); // same archive policy as texdump.cpp
     std::set<std::string> seen;
     struct Result { std::string name; double luminance, alphaFraction, coverage; uint32_t width, height;
-                    double left, right, top, bottom; };
+                    double left, right, top, bottom; material_measures::Result measurements; };
     std::vector<Result> results;
     for(int i=gameArg+1;i<argc;++i) {
       const std::string texture=upper(argv[i]);
@@ -141,16 +143,23 @@ int main(int argc,char** argv) {
       results.push_back({texture,properties ? visibleLuminance(rgba) : luminance(rgba),alphaFraction(rgba),
           coverage(rgba),tex.width(),tex.height(),halfCoverage(rgba,tex.width(),tex.height(),0),
           halfCoverage(rgba,tex.width(),tex.height(),1),halfCoverage(rgba,tex.width(),tex.height(),2),
-          halfCoverage(rgba,tex.width(),tex.height(),3)});
+          halfCoverage(rgba,tex.width(),tex.height(),3),
+          measurements ? material_measures::measure(rgba.data(),tex.width(),tex.height()) : material_measures::Result{}});
     }
     std::cout << "texture,target_luminance";
     if(properties) std::cout << ",nonopaque_fraction,opaque,width,height,target_coverage,coverage_left_half,coverage_right_half,coverage_top_half,coverage_bottom_half";
+    if(measurements) std::cout << ",target_period_u_uv,target_period_v_uv,target_direction,target_direction_confidence,target_oklab_l,target_oklab_a,target_oklab_b";
     std::cout << '\n' << std::setprecision(12);
     for(const auto& result:results) {
       std::cout << result.name << ',' << result.luminance;
       if(properties) std::cout << ',' << result.alphaFraction << ',' << (result.alphaFraction==0 ? "true" : "false")
                                << ',' << result.width << ',' << result.height << ',' << result.coverage
                                << ',' << result.left << ',' << result.right << ',' << result.top << ',' << result.bottom;
+      if(measurements) {
+        const auto& m=result.measurements;
+        std::cout << ',' << m.periodU << ',' << m.periodV << ',' << (m.direction==1?"U":m.direction==2?"V":"none")
+                  << ',' << m.directionConfidence << ',' << m.oklab[0] << ',' << m.oklab[1] << ',' << m.oklab[2];
+      }
       std::cout << '\n';
     }
   } catch(const std::exception& error) {

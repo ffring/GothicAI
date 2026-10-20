@@ -96,6 +96,7 @@ def seed_for(texture, attempt=1):
 
 
 def recipes(mapping, bible, set_name):
+    from material_colour import colour_target
     classes, template = read_style(bible)
     with mapping.open(newline='') as stream:
         rows = list(csv.DictReader(stream))
@@ -147,6 +148,10 @@ def recipes(mapping, bible, set_name):
                 scale=1. if is_module else float(row['scale']),
                 antitile=antitile_mode(row), antitile_cell=1.,
                 saturation_limit=.25 if row['class'] == 'roof_tiles' else style['saturation_limit'])
+        target_colour = colour_target(row)
+        if target_colour is not None:
+            result[-1]['parameters'].update(target_oklab=target_colour,
+                colour_policy='original OKLab of mean linear RGB; per-channel linear gains; no saturation cap')
     if not result:
         raise ValueError('mapping has no included materials')
     return result
@@ -230,13 +235,16 @@ def refresh(records, mapping, bible, set_name, textures, reason):
             generation['prepared_inputs'] = signature
             record['parameters'].update(saturation_limit=recipe['parameters']['saturation_limit'],
                 postprocess_bible_sha256=recipe['parameters']['bible_sha256'])
+            for key in ('target_oklab', 'colour_policy'):
+                if key in recipe['parameters']:
+                    record['parameters'][key] = deepcopy(recipe['parameters'][key])
 
 
 def postprocess(records, root, set_name):
-    """Apply only saturation to completed, unregenerated selected albedos."""
+    """Correct selected albedo colour without regenerating spatial detail."""
     import numpy as np
     from PIL import Image
-    from material_colour import limit_saturation
+    from material_colour import correct_mean_colour, limit_saturation
     for record in records:
         if record['parameters'].get('set') != set_name or record['generation']['outcome'] != 'complete':
             continue
@@ -247,19 +255,27 @@ def postprocess(records, root, set_name):
             continue
         source = root/'out'/record['files']['albedo']
         with Image.open(source) as image:
-            pixels, correction = limit_saturation(np.asarray(image.convert('RGB'))/255, limit)
+            rgb = np.asarray(image.convert('RGB'))/255
+            if 'target_oklab' in record['parameters']:
+                pixels, correction = correct_mean_colour(rgb, record['parameters']['target_oklab'])
+            else:
+                pixels, correction = limit_saturation(rgb, limit)
         relative = Path(set_name)/record['id']/('colour-'+signature[:12])/'albedo.png'
         target = root/'out'/relative
         target.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(pixels).save(target)
         correction.update(input=record['files']['albedo'], output=relative.as_posix(), prepared_inputs=signature)
         generation.setdefault('postprocess', []).append(deepcopy(correction))
-        generation['saturation_correction'] = correction
+        if 'target_oklab' in record['parameters']:
+            generation['mean_colour_correction'] = correction
+            generation['saturation_correction'] = dict(correction['saturation'], prepared_inputs=signature)
+        else:
+            generation['saturation_correction'] = correction
         record['files']['albedo'] = relative.as_posix()
 
 
 def corrected_maps(image, record):
-    if 'target_luminance' in record['parameters']:
+    if 'target_luminance' in record['parameters'] or 'target_oklab' in record['parameters']:
         return target_corrected_maps(image, record)
     import numpy as np
     from PIL import Image
@@ -311,11 +327,22 @@ def corrected_maps(image, record):
 
 
 def target_corrected_maps(image, record):
-    """Match one original scalar; never use the original image in generation."""
+    """Match original numeric colour or luminance; never use original pixels."""
     import numpy as np
     from PIL import Image
-    from material_colour import limit_saturation
+    from material_colour import correct_mean_colour, limit_saturation
     rgb = np.asarray(image.convert('RGB'), dtype=np.float32)/255
+    if 'target_oklab' in record['parameters']:
+        pixels, correction = correct_mean_colour(rgb, record['parameters']['target_oklab'])
+        lo, hi = record['parameters']['luminance_range']
+        correction.update(target=record['parameters'].get('target_luminance'),
+            range=[lo, hi], class_range_advisory=True,
+            outside_class_range=not lo <= correction['linear_mean_after'] <= hi)
+        maps = bakeoff.filtered_maps(Image.fromarray(pixels), record)
+        maps['albedo'] = pixels.astype(np.float32)/255
+        rlo, rhi = record['parameters']['roughness_range']
+        maps['roughness'] = np.clip(maps['roughness'], np.ceil(rlo*255)/255, np.floor(rhi*255)/255)
+        return maps, correction, numeric_rejection(record, correction)
     linear = np.where(rgb <= .04045, rgb/12.92, ((rgb+.055)/1.055)**2.4)
     weights = np.array([.2126, .7152, .0722])
     before = float((linear @ weights).mean())
@@ -379,12 +406,26 @@ def reject(records, resource_id, reason, explore_remaining=False):
 def numeric_rejection(record, correction):
     """Validate final stored colour measurements, independently of visual review."""
     import math
+    if 'target_oklab' in record['parameters']:
+        import numpy as np
+        from material_colour import TARGET_COLOUR_TOLERANCE, oklab_to_linear
+        after_colour = np.asarray(correction.get('linear_rgb_mean_after', []), dtype=float)
+        target_colour = oklab_to_linear(record['parameters']['target_oklab'])
+        tolerance = record['parameters'].get('target_colour_tolerance', TARGET_COLOUR_TOLERANCE)
+        if (after_colour.shape != (3,) or not np.isfinite(after_colour).all() or
+                np.max(np.abs(after_colour-target_colour)) > tolerance):
+            return 'colour correction could not reach original mean linear RGB within quantization tolerance'
     saturation = correction.get('saturation', {})
     # Old attempts measured luminance before saturation; its own measurement is
     # authoritative when present, including the final 8-bit rounding.
     after = saturation.get('linear_mean_after', correction.get('linear_mean_after'))
     lo, hi = record['parameters']['luminance_range']
-    if 'target_luminance' in record['parameters']:
+    if 'target_oklab' in record['parameters']:
+        # Colour measures the engine-visible pixels. Its RGB mean supersedes
+        # legacy luminance, which may have used continuous alpha weighting.
+        if not isinstance(after, (int, float)) or not math.isfinite(after):
+            return 'final mean luminance is not finite or is not measured'
+    elif 'target_luminance' in record['parameters']:
         target = record['parameters']['target_luminance']
         tolerance = record['parameters'].get('target_luminance_tolerance', TARGET_LUMINANCE_TOLERANCE)
         if not isinstance(after, (int, float)) or not math.isfinite(after) or abs(after-target) > tolerance:
@@ -395,7 +436,7 @@ def numeric_rejection(record, correction):
     if not isinstance(clipped, (int, float)) or not math.isfinite(clipped) or not 0 <= clipped <= .4:
         return 'more than 40% of colour channels clipped after level correction'
     mean_s = saturation.get('mean_hsv_s_after')
-    limit = record['parameters']['saturation_limit']
+    limit = 1. if 'target_oklab' in record['parameters'] else record['parameters']['saturation_limit']
     if not isinstance(mean_s, (int, float)) or not math.isfinite(mean_s) or not 0 <= mean_s <= limit:
         return 'final mean HSV saturation exceeds class limit or is not measured'
     return None
@@ -403,6 +444,26 @@ def numeric_rejection(record, correction):
 
 def retain_best_candidate(record):
     """At the limit, visual compromises must still obey numerical limits."""
+    def distance(attempt):
+        import math
+        correction = attempt.get('brightness_correction', {})
+        if 'target_oklab' in record['parameters']:
+            import numpy as np
+            from material_colour import oklab_to_linear
+            after = np.asarray(correction.get('linear_rgb_mean_after', []), dtype=float)
+            if after.shape != (3,) or not np.isfinite(after).all():
+                return math.inf
+            # Rank against the current recipe, just like numerical admission;
+            # cached errors or a legacy luminance target may describe old inputs.
+            target = oklab_to_linear(record['parameters']['target_oklab'])
+            return float(np.max(np.abs(after-target)))
+        after = correction.get('saturation', {}).get('linear_mean_after',
+            correction.get('linear_mean_after'))
+        target = record['parameters'].get('target_luminance', correction.get('target'))
+        if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in (after, target)):
+            return math.inf
+        return abs(after-target)
+
     generation = record['generation']
     series = generation['attempts'][generation.get('series_start', 0):]
     candidates = []
@@ -420,11 +481,6 @@ def retain_best_candidate(record):
         # so a single difficult surface does not stop the rest of the pilot.
         available = [a for a in series if a.get('files')]
         if record['parameters'].get('set') == 'city-2' and available:
-            def distance(attempt):
-                correction = attempt.get('brightness_correction', {})
-                after = correction.get('saturation', {}).get('linear_mean_after',
-                    correction.get('linear_mean_after', 0.))
-                return abs(after-record['parameters']['target_luminance'])
             best = min(available, key=distance)
             select_attempt(record, best, 'Attempt limit reached; best failed candidate retained: '+reason,
                 allow_failed=True)
@@ -435,9 +491,7 @@ def retain_best_candidate(record):
             generation.pop(key, None)
         record['files'] = {}
         return reason
-    best = min(candidates, key=lambda a: abs(
-        a['brightness_correction'].get('saturation', {}).get('linear_mean_after',
-            a['brightness_correction']['linear_mean_after'])-a['brightness_correction']['target']))
+    best = min(candidates, key=distance)
     select_attempt(record, best, 'Attempt limit reached; best numerically valid candidate retained')
     return None
 

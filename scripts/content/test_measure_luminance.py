@@ -147,3 +147,44 @@ def test_invalid_coverage_update_does_not_touch_csv(tmp_path, coverages, message
     with pytest.raises(ValueError, match=message):
         measurement.update_mapping(path, rows, {"NW_CITY_IVY_FULL_01.TGA": .1}, "city-3", coverages=coverages)
     assert path.read_text() == "unchanged\n"
+
+
+def material_csv(names):
+    stream = io.StringIO()
+    writer = csv.DictWriter(stream, fieldnames=(*measurement.PROPERTIES_FIELDS,
+                                               *measurement.EXTRACTED_MEASUREMENT_FIELDS))
+    writer.writeheader()
+    for name in names:
+        row = {field: "0" for field in measurement.PROPERTIES_FIELDS}
+        row.update(texture=name, target_period_u_uv="0.125", target_period_v_uv="0",
+                   target_direction="V", target_direction_confidence="0.9",
+                   target_oklab_l="0.4", target_oklab_a="-0.01", target_oklab_b="0.02")
+        writer.writerow(row)
+    return stream.getvalue()
+
+
+def test_all_materials_scalar_parser_derives_meters_and_atomic_update_preserves_existing(tmp_path):
+    rows = [{field: "unchanged" for field in measurement.FIELDS}]
+    rows[0].update(texture="A.TGA", uv_m_per_unit_median="4", target_luminance=".12", target_coverage=".3")
+    before = deepcopy(rows)
+    values = measurement.parse_material_measurements(material_csv(["A.TGA"]), rows)
+    assert values["A.TGA"]["target_period_u_m"] == "0.5"
+    assert values["A.TGA"]["target_period_v_m"] == "0"
+    path = tmp_path / "materials.csv"
+    updated = measurement.update_material_measurements(path, rows, values)
+    assert rows == before
+    for field in set(measurement.FIELDS) - set(measurement.MEASUREMENT_FIELDS):
+        assert updated[0][field] == before[0][field]
+    assert measurement.read_mapping(path) == updated
+
+
+@pytest.mark.parametrize("change,message", [
+    (lambda value: value.replace("target_oklab_b", "pixels"), "only the scalar"),
+    (lambda value: value.replace("0.125", "NaN"), "finite"),
+    (lambda value: value.replace("-0.01", "-0.6"), "target_oklab_a"),
+    (lambda value: value.replace("A.TGA", "B.TGA"), "unknown texture"),
+])
+def test_all_materials_parser_rejects_nonscalar_or_invalid_values(change, message):
+    with pytest.raises(ValueError, match=message):
+        measurement.parse_material_measurements(change(material_csv(["A.TGA"])),
+            [{"texture": "A.TGA", "uv_m_per_unit_median": "4"}])

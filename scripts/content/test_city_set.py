@@ -26,6 +26,9 @@ def mapping_with_targets(tmp_path):
         fields.append('target_coverage')
     for row in rows:
         row['target_luminance'] = '.18'
+        for field in ('target_oklab_l', 'target_oklab_a', 'target_oklab_b'):
+            if field in row:
+                row[field] = ''
         row['target_coverage'] = '.5' if row['texture'] in city_set.alpha_material.ALPHA_TEXTURES else ''
     path = tmp_path/'mapping.csv'
     with path.open('w', newline='') as stream:
@@ -88,6 +91,30 @@ def test_recipes_are_complete_text_only_and_do_not_mutate_mapping(tmp_path):
     gable = next(row for row in rows if row['replaces'] == ['NW_CITY_HAFEN_GIEBEL_01.TGA'])
     assert 'horizontal overlapping' in gable['prompt']
     assert 'vertical' not in gable['prompt']
+
+
+def test_recipes_propagate_numeric_mean_colour_without_modifying_old_records(tmp_path):
+    from material_colour import linear_to_oklab
+    mapping = mapping_with_targets(tmp_path)
+    with mapping.open(newline='') as stream:
+        reader = csv.DictReader(stream)
+        fields, rows = list(reader.fieldnames), list(reader)
+    colour_fields = ['target_oklab_'+channel for channel in ('l', 'a', 'b')]
+    fields += [field for field in colour_fields if field not in fields]
+    target = linear_to_oklab([.25, .16, .06]).tolist()
+    for row in rows:
+        row.update({field: '' for field in colour_fields})
+        if row['texture'] == GROUND:
+            row.update(zip(colour_fields, target))
+    with mapping.open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    recipes = city_set.recipes(mapping, BIBLE)
+    coloured = next(row for row in recipes if row['replaces'] == [GROUND])
+    assert coloured['parameters']['target_oklab'] == target
+    assert 'no saturation cap' in coloured['parameters']['colour_policy']
+    assert all('target_oklab' not in row['parameters'] for row in recipes if row is not coloured)
 
 
 def test_targets_required_for_import_but_not_for_prompt_preparation(tmp_path):
@@ -217,6 +244,60 @@ def test_reuse_keeps_raw_provenance_without_new_tool_call(tmp_path, fast_filter)
     assert reused['generation']['attempts'] == original['generation']['attempts']
     assert city_set.registry_module.source_references(reused) == city_set.registry_module.source_references(original)
     assert any(path.is_symlink() for path in (new_stage/'sources/raw-sources').rglob('*.png'))
+
+
+@pytest.mark.parametrize('unreachable', [False, True])
+def test_reuse_admits_stored_albedos_against_real_measured_colour(tmp_path, fast_filter, unreachable):
+    from material_colour import _linear, oklab_to_linear
+    texture = 'NW_CITY_HAFENKAI_BODEN_01.TGA'
+    mapping = mapping_with_targets(tmp_path)
+    registry = registry_file(tmp_path, mapping, textures=[texture])
+    old_stage, store, _, _ = source(tmp_path, texture=texture)
+    source(tmp_path, texture=texture, number=2)
+    original = city_set.import_batch(old_stage, registry, textures=[texture], mapping=mapping,
+        bible=BIBLE, source_root=store)[0]
+    original['id'] = original['id'].replace('city-3-', 'city-2-imagegen-', 1)
+    original['parameters']['set'] = 'city-2-imagegen'
+    registry.write_text(json.dumps(original)+'\n')
+    if unreachable:
+        # A selected old output with no RGB signal cannot attain a nonblack
+        # measured target by multiplication, even if older metadata said valid.
+        Image.new('RGB', (16, 16), 'black').save(old_stage/'sources'/original['files']['albedo'])
+    original_bytes = {path: (old_stage/'sources'/path).read_bytes()
+        for path in city_set._map_references(original)}
+    before_registry = registry.read_bytes()
+    destination = tmp_path/'city-3'
+    # MAPPING retains actual target_oklab; the legacy source fixture does not.
+    options = dict(textures=[texture], mapping=MAPPING, bible=BIBLE, source_root=store)
+    if unreachable:
+        with pytest.raises(ValueError, match='reused albedo fails current colour admission'):
+            city_set.reuse(destination, old_stage, registry, **options)
+        assert registry.read_bytes() == before_registry
+    else:
+        reused = city_set.reuse(destination, old_stage, registry, **options)[0]
+        target = oklab_to_linear(reused['parameters']['target_oklab'])
+        with Image.open(old_stage/'sources'/original['files']['albedo']) as image:
+            before = _linear(np.asarray(image.convert('RGB'), dtype=float)/255).mean(axis=(0, 1))
+        assert abs(before-target).max() > .005
+        for selected in (reused, *reused['generation']['attempts']):
+            with Image.open(destination/'sources'/selected['files']['albedo']) as image:
+                actual = _linear(np.asarray(image.convert('RGB'), dtype=float)/255).mean(axis=(0, 1))
+            np.testing.assert_allclose(actual, target, atol=.005)
+            correction = selected.get('brightness_correction', selected.get('generation', {}).get('brightness_correction'))
+            np.testing.assert_allclose(correction['linear_rgb_mean_after'], actual)
+        for old, new in zip(original['generation']['attempts'], reused['generation']['attempts']):
+            assert new['numeric_valid'] and new['numeric_rejection'] is None
+            for field in ('source_png', 'source_sha256', 'prompt', 'utc', 'seconds'):
+                assert new[field] == old[field]
+            assert all(new['files'][name] == old['files'][name] for name in city_set.bakeoff.MAPS if name != 'albedo')
+        assert reused['files'] == reused['generation']['attempts'][1]['files']
+        assert reused['generation']['new_tool_calls'] == 0
+        assert reused['generation']['reused_from'] == original['id']
+        assert city_set.registry_module.source_references(reused) == city_set.registry_module.source_references(original)
+        saved = registry.read_bytes()
+        assert city_set.reuse(destination, old_stage, registry, **options)[0] == reused
+        assert registry.read_bytes() == saved
+    assert all((old_stage/'sources'/path).read_bytes() == value for path, value in original_bytes.items())
 
 
 def test_cli_import_runs_backup_only_after_registry_was_written(tmp_path, fast_filter, monkeypatch):

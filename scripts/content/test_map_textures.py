@@ -42,6 +42,10 @@ def dataset(tmp_path):
         "colour": "warm grey", "weathering": "dirt between stones", "orientation": "no fixed top",
         "layout": "tiled", "layout_share": "tiled:0.8;panel:0.1;strip:0.1;atlas:0",
         "anti_repeat": "on", "target_luminance": "0.12", "target_coverage": "",
+        "target_period_u_uv": "0.125", "target_period_v_uv": "0.25",
+        "target_period_u_m": "0.62625", "target_period_v_m": "1.2525",
+        "target_direction": "none", "target_direction_confidence": "0.1",
+        "target_oklab_l": "0.5", "target_oklab_a": "-0.02", "target_oklab_b": "0.03",
     } for row in source]
     rows[-4].update(decision="module", **{"class": "timber_frame_tile", "scale": "1", "anti_repeat": "off"})
     rows[-3].update(decision="panel", **{"class": "plaster_panel", "scale": "1",
@@ -65,6 +69,33 @@ def test_scale_uses_uv_divided_by_tile_and_decimal_rounding():
     assert mapping.material_scale(Decimal("5.01"), "cobble") == Decimal("2.51")
     assert mapping.material_scale(Decimal("5.01"), "flagstone") == Decimal("1.67")
     assert mapping.material_scale(Decimal("5.01"), "timber_beam") == Decimal("3.34")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("target_period_u_uv", "NaN"), ("target_period_v_uv", "1.01"),
+    ("target_period_u_m", "0.7"), ("target_direction", "horizontal"),
+    ("target_direction_confidence", "1.1"), ("target_oklab_l", ""),
+    ("target_oklab_a", "-0.51"), ("target_oklab_b", "Infinity"),
+])
+def test_check_requires_valid_original_material_measurements(dataset, field, value):
+    source, rows, census_path, mapping_path, save = dataset
+    rows[0][field] = value
+    save()
+    with pytest.raises(mapping.MappingError, match=field):
+        mapping.check_mapping(mapping_path, census_path)
+
+
+def test_update_preserves_original_measurements_and_recomputes_meters(dataset):
+    source, rows, census_path, mapping_path, save = dataset
+    before = deepcopy(rows)
+    source[0]["uv_m_per_unit_median"] = "6"
+    save()
+    updated = mapping.update_mapping(mapping_path, census_path)
+    assert updated[0]["target_period_u_m"] == "0.750"
+    assert updated[0]["target_period_v_m"] == "1.50"
+    for field in mapping.MEASUREMENT_FIELDS:
+        if not field.endswith("_m"):
+            assert [row[field] for row in updated] == [row[field] for row in before]
 
 
 def test_complete_scope_and_cli_summary_are_read_only(dataset, capsys):
@@ -396,7 +427,7 @@ def test_invalid_update_does_not_write_partial_results(dataset):
     ("", "empty CSV"),
     ("texture,texture\n", "duplicate CSV column"),
     ("texture,decision\n", "expected CSV columns in order"),
-    (",".join(mapping.FIELDS) + "\nshort,row\n", "expected 19 CSV fields, got 2"),
+    (",".join(mapping.FIELDS) + "\nshort,row\n", f"expected {len(mapping.FIELDS)} CSV fields, got 2"),
 ])
 def test_malformed_mapping_csv(dataset, text, message):
     source, rows, census_path, mapping_path, save = dataset
