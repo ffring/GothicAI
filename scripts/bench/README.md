@@ -39,6 +39,8 @@ NPC motion traces and a final census. Run with `WORLD=NEWWORLD.ZEN`, `BENCH_HOST
 `GOTHIC_AI=0`, `OPENGOTHIC_TEXTURES=`, an explicit `OPENGOTHIC_CONTENT=<test content>`
 and `OPENGOTHIC_CENSUS=<absolute output>/census.json`; pass an absolute output directory
 to `scripts/bench.sh own-mesh-mob`. Repeat with `OPENGOTHIC_CONTENT=` for the original.
+[The paired Ryzen check](../../reports/content/2026-10-own-meshes-mob/README.md)
+records matching seated positions/yaw, native standing and mesh census entries.
 
 `own-mesh-fracture` breaks `NW_HARBOUR_BARREL_01` with the real one-handed
 attack animation from `destruction-step2-melee`. It takes before/after screenshots,

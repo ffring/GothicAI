@@ -10,6 +10,7 @@ ui off
 view nopfx
 cam lift off
 # Empty close view from the open side; keep the hero below the world.
+# Shots capture the next frame: wait before changing the scene or camera.
 goto pos 2982 -2121 -5631
 clear 5000
 cam look 2030
@@ -18,6 +19,7 @@ wait 34
 cam hold
 wait 5000
 shot own-mesh-mob-empty
+wait 34
 # The native fixture pins the authored bench by waypoint and checks a clear
 # fixed view of the supported approach and the actual seating sockets.
 npccharacter on
@@ -28,12 +30,18 @@ rec own-mesh-mob-seat novideo
 npccharacter sit
 wait 5500
 npccharacter snapshot seated
+cam look 80
+cam world 300 160 145
+wait 34
+cam hold
 shot own-mesh-mob-seated
+wait 34
 npccharacter stand
 wait 5500
 npccharacter end
 npccharacter snapshot standing
 shot own-mesh-mob-standing
+wait 34
 npccharacter trace off
 stop
 census
