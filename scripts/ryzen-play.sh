@@ -103,6 +103,7 @@ def prepare():
     run(["cmake", "--build", graph / "build", "--target", "storygraph", "--parallel", "12"])
     for project in ("server", "asr-service", "tts-service", "launcher/core"):
         run([Path.home() / ".local/bin/uv", "sync", "--locked", "--project", repo / project])
+    os.environ["CARGO_BUILD_JOBS"] = "12"
     try:
         run([repo / "scripts/build-launcher.sh", "--no-install"])
     except subprocess.CalledProcessError:
