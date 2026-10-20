@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Measure city-2 original brightness as scalars, optionally updating only that CSV column.
+"""Measure original brightness and alpha coverage as scalars.
 
     python scripts/content/measure_luminance.py --extractor /path/to/texture-luminance \
         --game '/path/to/Gothic II' --write
 
 The extractor decodes Gothic textures in memory, using texdump.cpp's ZenKit
-path. Only alpha-weighted mean linear Rec.709 luminance reaches this script.
+path. City-3 uses the engine's alpha>=0.5 cutoff for coverage and visible-pixel
+mean linear Rec.709 luminance. Earlier sets keep their alpha-weighted scalar.
 Original pixels are never exported or passed to material generation.
 """
 from __future__ import annotations
@@ -20,22 +21,22 @@ import subprocess
 import sys
 import tempfile
 
-from map_textures import DEFAULT_MAPPING, FIELDS
+from map_textures import ALPHA_TEXTURES, DEFAULT_MAPPING, FIELDS, MAPPING_HEADERS
 from pilot import selected_rows
 
 
 def read_mapping(path):
     with path.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream, strict=True)
-        if reader.fieldnames not in (list(FIELDS), list(FIELDS[:-1])):
-            raise ValueError("mapping must contain the current columns, optionally without target_luminance")
+        if tuple(reader.fieldnames or ()) not in MAPPING_HEADERS:
+            raise ValueError("mapping must contain the current columns, optionally without target_coverage and target_luminance")
         rows = list(reader)
     if any(None in row or any(value is None for value in row.values()) for row in rows):
         raise ValueError("mapping has a malformed CSV row")
     return rows
 
 
-def parse_measurements(value, expected):
+def parse_measurements(value, expected, set_name="city-2"):
     reader = csv.DictReader(io.StringIO(value), strict=True)
     if reader.fieldnames != ["texture", "target_luminance"]:
         raise ValueError("extractor must return only texture,target_luminance")
@@ -51,29 +52,75 @@ def parse_measurements(value, expected):
             raise ValueError(f"{texture}: target_luminance must be finite and in [0, 1]")
         result[texture] = luminance
     if set(result) != set(expected):
-        raise ValueError("extractor texture set differs from the city-2 pilot")
+        raise ValueError(f"extractor texture set differs from {set_name}")
     return result
 
 
-def measure(extractor, game, rows):
-    names = [row["texture"] for row in selected_rows(rows, "city-2")]
+PROPERTIES_FIELDS = (
+    "texture", "target_luminance", "nonopaque_fraction", "opaque", "width", "height",
+    "target_coverage", "coverage_left_half", "coverage_right_half", "coverage_top_half", "coverage_bottom_half",
+)
+
+
+def parse_properties(value, expected, set_name="city-3"):
+    reader = csv.DictReader(io.StringIO(value), strict=True)
+    if reader.fieldnames != list(PROPERTIES_FIELDS):
+        raise ValueError("extractor must return only the scalar properties columns")
+    result = {}
+    for row in reader:
+        if None in row or any(item is None for item in row.values()):
+            raise ValueError("extractor has a malformed CSV row")
+        texture = row["texture"]
+        if texture in result:
+            raise ValueError(f"extractor repeats texture {texture}")
+        for field in ("target_luminance", "target_coverage", "nonopaque_fraction",
+                      "coverage_left_half", "coverage_right_half", "coverage_top_half", "coverage_bottom_half"):
+            number = float(row[field])
+            if not math.isfinite(number) or not 0 <= number <= 1:
+                raise ValueError(f"{texture}: {field} must be finite and in [0, 1]")
+        if row["opaque"] not in ("true", "false") or any(int(row[field]) <= 0 for field in ("width", "height")):
+            raise ValueError(f"{texture}: invalid scalar texture properties")
+        result[texture] = {field: float(row[field]) for field in ("target_luminance", "target_coverage")}
+    if set(result) != set(expected):
+        raise ValueError(f"extractor texture set differs from {set_name}")
+    return result
+
+
+def measure(extractor, game, rows, set_name="city-2", *, with_coverage=False):
+    names = [row["texture"] for row in selected_rows(rows, set_name)]
     if not names:
-        raise ValueError("city-2 pilot has no textures")
-    result = subprocess.run([str(extractor), str(game), *names], check=True,
+        raise ValueError(f"{set_name} has no textures")
+    properties = set_name == "city-3" or with_coverage
+    command = [str(extractor), *(["--properties"] if properties else []), str(game), *names]
+    result = subprocess.run(command, check=True,
                             capture_output=True, text=True)
-    return parse_measurements(result.stdout, names)
+    if properties:
+        values = parse_properties(result.stdout, names, set_name)
+        luminance = {name: row["target_luminance"] for name, row in values.items()}
+        coverage = {name: row["target_coverage"] for name, row in values.items() if name in ALPHA_TEXTURES}
+        return (luminance, coverage) if with_coverage else luminance
+    return parse_measurements(result.stdout, names, set_name)
 
 
-def update_mapping(path, rows, measurements):
-    names = {row["texture"] for row in selected_rows(rows, "city-2")}
+def update_mapping(path, rows, measurements, set_name="city-2", *, coverages=None):
+    names = {row["texture"] for row in selected_rows(rows, set_name)}
     if set(measurements) != names:
-        raise ValueError("measurement texture set differs from the city-2 pilot")
+        raise ValueError(f"measurement texture set differs from {set_name}")
     if any(isinstance(value, bool) or not isinstance(value, (int, float))
            or not math.isfinite(value) or not 0 <= value <= 1 for value in measurements.values()):
         raise ValueError("target_luminance must be finite and in [0, 1]")
-    # Preserve every pre-existing field, including any non-pilot scalar.
+    if coverages is not None:
+        if set(coverages) != names & ALPHA_TEXTURES:
+            raise ValueError(f"coverage texture set differs from alpha materials in {set_name}")
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) or not 0 <= value <= 1 for value in coverages.values()):
+            raise ValueError("target_coverage must be finite and in [0, 1]")
+    # Preserve every pre-existing field, including scalars outside this set.
     updated = [dict(row, target_luminance=(format(measurements[row["texture"]], ".12g")
-                    if row["texture"] in names else row.get("target_luminance", ""))) for row in rows]
+                    if row["texture"] in names else row.get("target_luminance", "")),
+                    target_coverage=(format(coverages[row["texture"]], ".12g")
+                    if coverages is not None and row["texture"] in coverages else row.get("target_coverage", "")))
+               for row in rows]
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=path.parent,
@@ -94,16 +141,26 @@ def main(argv=None):
     parser.add_argument("--extractor", type=Path, required=True)
     parser.add_argument("--game", type=Path, required=True)
     parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
-    parser.add_argument("--write", action="store_true", help="atomically add/update only target_luminance")
+    parser.add_argument("--set", dest="set_name", choices=("city-2", "city-3"), default="city-2",
+                        help="material scope to measure (default: city-2)")
+    parser.add_argument("--write", action="store_true", help="atomically update target_luminance and city-3 alpha target_coverage")
     args = parser.parse_args(argv)
     try:
         rows = read_mapping(args.mapping)
-        values = measure(args.extractor, args.game, rows)
+        coverages = None
+        if args.set_name == "city-3":
+            values, coverages = measure(args.extractor, args.game, rows, args.set_name, with_coverage=True)
+        else:
+            values = measure(args.extractor, args.game, rows, args.set_name)
         if args.write:
-            update_mapping(args.mapping, rows, values)
+            update_mapping(args.mapping, rows, values, args.set_name, coverages=coverages)
         writer = csv.writer(sys.stdout, lineterminator="\n")
-        writer.writerow(("texture", "target_luminance"))
-        writer.writerows((texture, format(value, ".12g")) for texture, value in values.items())
+        writer.writerow(("texture", "target_luminance", "target_coverage") if coverages is not None else ("texture", "target_luminance"))
+        for texture, value in values.items():
+            row = [texture, format(value, ".12g")]
+            if coverages is not None:
+                row.append(format(coverages[texture], ".12g") if texture in coverages else "")
+            writer.writerow(row)
     except (OSError, ValueError, csv.Error, subprocess.CalledProcessError) as error:
         detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) and error.stderr else str(error)
         print(f"measure_luminance: {detail}", file=sys.stderr)

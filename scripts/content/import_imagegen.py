@@ -2,7 +2,8 @@
 """Import built-in image_gen PNGs into the city-2 comparison, without models.
 
 Each ``sources/TEXTURE-attempt-N.json`` describes its neighbouring source PNG:
-texture, attempt, prompt, utc, seconds, and source (an absolute PNG path).
+texture, attempt, prompt, utc, seconds, and source (relative to the permanent
+source store; absolute tool output paths are accepted only for initial import).
 This CPU-only command never calls a generator or reads provider credentials.
 It copies the ten unchanged FLUX selections and filters all imported attempts
 with the same target luminance and derived-map filter as the city-2 pilot.
@@ -16,9 +17,11 @@ import hashlib
 from io import BytesIO
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sys
+import subprocess
 import tempfile
 
 import numpy as np
@@ -87,8 +90,9 @@ def permitted_axes(record):
     raise ValueError(f'{record["id"]}: no valid repeat axes for layout {layout!r}')
 
 
-def read_sources(sources):
+def read_sources(sources, source_root=None):
     """Require the exact comparison scope and every 1-based attempt's recipe."""
+    source_root = Path(source_root or registry_module.DEFAULT_SOURCE_ROOT).expanduser().resolve()
     found = {}
     metadata_paths = set()
     for path in sorted(sources.glob('NW_CITY_*-attempt-*.json')):
@@ -111,9 +115,15 @@ def read_sources(sources):
         if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
             raise ValueError(f'{path.name}: seconds must be a finite nonnegative number')
         raw = metadata.get('source')
-        if not isinstance(raw, str) or not Path(raw).is_absolute():
-            raise ValueError(f'{path.name}: source must be an absolute PNG path')
-        raw = Path(raw).expanduser().resolve()
+        if not isinstance(raw, str):
+            raise ValueError(f'{path.name}: source must name a PNG path')
+        if Path(raw).is_absolute():
+            raw = Path(raw).resolve()
+        else:
+            relative = registry_module._safe_path(raw, f'{path.name}.source')
+            raw = (source_root / relative).resolve()
+            if not raw.is_relative_to(source_root):
+                raise ValueError(f'{path.name}: source escapes permanent store')
         if not raw.is_file() or raw.suffix.lower() != '.png':
             raise ValueError(f'{path.name}: source PNG does not exist: {raw}')
         # A tool may save its result elsewhere first; retain a staging copy too.
@@ -121,12 +131,16 @@ def read_sources(sources):
         if retained.exists() and retained.resolve() != raw:
             if retained.read_bytes() != raw.read_bytes():
                 raise ValueError(f'{path.name}: source differs from retained neighbouring PNG')
+        expected_digest = metadata.get('source_sha256')
+        if expected_digest is not None and hashlib.sha256(raw.read_bytes()).hexdigest() != expected_digest:
+            raise ValueError(f'{path.name}: source_sha256 does not match PNG')
         with Image.open(raw) as image:
             if image.format != 'PNG' or min(image.size) < 1:
                 raise ValueError(f'{path.name}: expected a PNG image')
             dimensions = image.size
             image.verify()
-        attempt = dict(metadata=metadata, source=raw, retained=retained, dimensions=dimensions)
+        attempt = dict(metadata=metadata, metadata_path=path, source=raw,
+            retained=retained, dimensions=dimensions)
         found.setdefault(expected_texture, []).append(attempt)
         metadata_paths.add(path.with_suffix('.png'))
     png_paths = set(sources.glob('NW_CITY_*-attempt-*.png'))
@@ -194,9 +208,10 @@ def validate_choice(record, attempts, axes='', selected=None):
     return selected
 
 
-def import_material(record, attempts, sources, axes='', selected=None):
+def import_material(record, attempts, sources, axes='', selected=None, source_root=None):
     """Retain all source attempts, and select an explicitly chosen/latest one."""
     texture = record['replaces'][0]
+    source_root = Path(source_root or registry_module.DEFAULT_SOURCE_ROOT).expanduser().resolve()
     selected = validate_choice(record, attempts, axes, selected)
     result = deepcopy(record)
     result.update(id=_new_id(record), pipeline='imagegen-filter', models=[deepcopy(MODEL)],
@@ -217,9 +232,22 @@ def import_material(record, attempts, sources, axes='', selected=None):
         metadata = source['metadata']
         number = metadata['attempt']
         retained = source['retained']
-        if retained.resolve() != source['source']:
-            _write_immutable(retained, source['source'].read_bytes())
-        with Image.open(retained) as opened:
+        relative = Path(SET) / retained.name
+        permanent = source_root / relative
+        raw_bytes = source['source'].read_bytes()
+        _write_immutable(permanent, raw_bytes)
+        digest = hashlib.sha256(raw_bytes).hexdigest()
+        # Staging is disposable; its relative symlink points at the durable PNG.
+        link_target = os.path.relpath(permanent, retained.parent)
+        if not retained.is_symlink() or os.readlink(retained) != link_target:
+            if retained.exists() and retained.read_bytes() != raw_bytes:
+                raise ValueError(f'refusing to replace differing staging source: {retained}')
+            retained.unlink(missing_ok=True)
+            retained.symlink_to(link_target)
+        metadata.update(source=relative.as_posix(), source_sha256=digest)
+        source['metadata_path'].write_text(json.dumps(metadata, ensure_ascii=False,
+            sort_keys=True) + '\n', encoding='utf-8')
+        with Image.open(permanent) as opened:
             image = opened.convert('RGB').resize((1024, 1024), Image.Resampling.LANCZOS)
         # A broad overlap can eat a module's thin structural head/sill rail.
         # Keep its cut in a narrow boundary strip; homogeneous surfaces have
@@ -232,8 +260,7 @@ def import_material(record, attempts, sources, axes='', selected=None):
         files = _save_maps(sources, result, maps, number)
         attempt = dict(number=number, prompt=metadata['prompt'], seed=None,
             utc=metadata['utc'], seconds=metadata['seconds'],
-            source_png=retained.relative_to(sources).as_posix(),
-            source_sha256=hashlib.sha256(retained.read_bytes()).hexdigest(),
+            source_png=relative.as_posix(), source_sha256=digest,
             source_width=source['dimensions'][0], source_height=source['dimensions'][1],
             output_width=1024, output_height=1024,
             brightness_correction=correction, seam_fix=seam, files=files,
@@ -244,11 +271,11 @@ def import_material(record, attempts, sources, axes='', selected=None):
             params.update(source_width=attempt['source_width'], source_height=attempt['source_height'])
             generation.update(brightness_correction=deepcopy(correction),
                 saturation_correction=deepcopy(correction['saturation']), seam_fix=deepcopy(seam))
-    registry_module.validate_entry(result, content_root=sources)
+    registry_module.validate_entry(result, content_root=sources, source_root=source_root)
     return result
 
 
-def import_set(staging, flux_root, registry, fixes=None, selections=None):
+def import_set(staging, flux_root, registry, fixes=None, selections=None, source_root=None):
     """Replace only this set's registry rows; preserve every other row verbatim."""
     staging = Path(staging).expanduser().resolve()
     flux_root = Path(flux_root).expanduser().resolve()
@@ -257,7 +284,8 @@ def import_set(staging, flux_root, registry, fixes=None, selections=None):
     if staging.is_relative_to(live) or live.is_relative_to(staging) or staging == flux_root:
         raise ValueError('staging must be separate from the live content root and city-2')
     registry = Path(registry)
-    records = registry_module.check_registry(registry)
+    source_root = Path(source_root or registry_module.DEFAULT_SOURCE_ROOT).expanduser().resolve()
+    records = registry_module.check_registry(registry, source_root=source_root)
     flux = [record for record in records if record['parameters'].get('set') == SOURCE_SET]
     if len(flux) != 22 or len({tuple(record['replaces']) for record in flux}) != 22:
         raise ValueError(f'city-2 must contain exactly 22 distinct materials, found {len(flux)}')
@@ -268,7 +296,7 @@ def import_set(staging, flux_root, registry, fixes=None, selections=None):
     fixes, selections = fixes or {}, selections or {}
     if (fixes.keys() | selections.keys()) - TEXTURES:
         raise ValueError('fix/selection contains a texture outside the comparison scope')
-    found = read_sources(sources)
+    found = read_sources(sources, source_root=source_root)
     # Preflight the entire set, not just the next material in CSV order.
     for record in flux:
         texture = record['replaces'][0]
@@ -284,7 +312,7 @@ def import_set(staging, flux_root, registry, fixes=None, selections=None):
         texture = record['replaces'][0]
         if texture in TEXTURES:
             imported.append(import_material(record, found[texture], sources,
-                axes=fixes.get(texture, ''), selected=selections.get(texture)))
+                axes=fixes.get(texture, ''), selected=selections.get(texture), source_root=source_root))
         else:
             clone = deepcopy(record)
             clone['id'] = _new_id(record)
@@ -305,7 +333,7 @@ def import_set(staging, flux_root, registry, fixes=None, selections=None):
         temporary = Path(stream.name)
         stream.write(serialized)
     try:
-        registry_module.check_registry(temporary)
+        registry_module.check_registry(temporary, source_root=source_root)
         temporary.replace(registry)
     finally:
         temporary.unlink(missing_ok=True)
@@ -319,13 +347,16 @@ def main(argv=None):
     command.add_argument('--staging', type=Path, required=True)
     command.add_argument('--flux-root', type=Path, required=True)
     command.add_argument('--registry', type=Path, default=registry_module.DEFAULT_REGISTRY)
+    command.add_argument('--source-root', type=Path, default=registry_module.DEFAULT_SOURCE_ROOT)
     command.add_argument('--fix', action='append', default=[], metavar='TEXTURE:uv|u|v')
     command.add_argument('--select', action='append', default=[], metavar='TEXTURE:N')
     args = parser.parse_args(argv)
     try:
         records = import_set(args.staging, args.flux_root, args.registry,
-            option_pairs(args.fix), option_pairs(args.select, selection=True))
-    except (ValueError, OSError) as error:
+            option_pairs(args.fix), option_pairs(args.select, selection=True), source_root=args.source_root)
+        subprocess.run([str(Path(__file__).with_name('backup-sources.sh')),
+            '--registry', str(args.registry), '--source-root', str(args.source_root)], check=True)
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f'Imagegen import failed: {error}', file=sys.stderr)
         return 1
     attempts = sum(len(record['generation']['attempts']) for record in records if record['pipeline'] == 'imagegen-filter')

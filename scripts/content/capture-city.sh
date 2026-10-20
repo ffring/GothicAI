@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Capture the complete packed city set against an explicitly empty content root.
 # Usage: capture-city.sh --content-root <packed staging root> --output <outside-git directory>
-# Optional: --set city-1|city-2|city-2-imagegen; imagegen needs --flux-root <packed city-2 root>.
-# --mac-city-fps uses profiled BIN and GOTHIC_DIR for city-1/2 (waits <=40 minutes).
+# Optional: --set city-1|city-2|city-2-imagegen|city-3; imagegen needs --flux-root <packed city-2 root>.
+# --mac-city-fps uses profiled BIN and GOTHIC_DIR for city-1/2/3 (waits <=40 minutes).
 # Ryzen: source-matching cached engine, private ~/gothic-ai/city-set-N runtime, gq.
 # No build, default content installation, model service or engine change is performed.
 set -euo pipefail
@@ -158,7 +158,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 captures, output = map(Path, sys.argv[1:3])
 set_name = sys.argv[3]
-if set_name not in ('city-1', 'city-2', 'city-2-imagegen'):
+if set_name not in ('city-1', 'city-2', 'city-2-imagegen', 'city-3'):
     raise SystemExit('unknown material set')
 output.mkdir()
 try:
@@ -168,7 +168,17 @@ except OSError:
 triple = set_name == 'city-2-imagegen'
 variants = ('before', 'flux', 'after') if triple else ('before', 'after')
 labels = ('original', 'city-2 (FLUX)', 'imagegen') if triple else variants
-if triple:
+if set_name == 'city-3':
+    labels = ('original', 'city-3')
+    shots = [(spot, '', '12:00') for spot in (
+        'city', 'market', 'harbour', 'upper', 'house',
+        'facade_close', 'facade_corner', 'facade_full',
+        'upper_modules', 'harbour_modules', 'interior_modules',
+        'alpha_flag_close', 'alpha_flag_far',
+        'alpha_ivy_border_close', 'alpha_ivy_border_far',
+        'alpha_ivy_full_close', 'alpha_ivy_full_far')]
+    shots += [(spot, '_night', '23:00') for spot in ('facade_close', 'market')]
+elif triple:
     shots = [(spot, suffix, hour) for spot in ('facade_close', 'market', 'facade_corner', 'harbour')
              for suffix, hour in ((('', '12:00'), ('_night', '23:00'))
                                   if spot == 'facade_close' else (('', '12:00'),))]
@@ -197,9 +207,47 @@ PY
   exit 0
 fi
 
+if [[ "${1:-}" == --append-census ]]; then
+  python3 - "${2:?staged scenario}" "${3:?inspection scenario}" "${4:?material index}" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+scenario, inspection, index = map(Path, sys.argv[1:])
+targets = json.loads(index.read_text())
+if not isinstance(targets, dict) or not targets:
+    raise SystemExit('census tour requires a nonempty packed material index')
+blocks = {}
+current = None
+for line in inspection.read_text().splitlines():
+    match = re.match(r'^# ([A-Z0-9_]+\.TGA) \|', line)
+    if match:
+        current = match[1]
+        blocks[current] = []
+    command = line.split('#', 1)[0].strip()
+    if current is not None and command.startswith(('view ', 'cam ', 'goto ', 'wait ')):
+        blocks[current].append(command)
+missing = sorted(set(targets) - blocks.keys())
+if missing:
+    raise SystemExit('missing census camera: ' + ', '.join(missing))
+for name in targets:
+    commands = blocks[name]
+    if not any(c.startswith('goto ') for c in commands) or 'cam hold' not in commands:
+        raise SystemExit('incomplete census camera: ' + name)
+lines = ['# Census-only surface tour: visit every packed target without additional boards.',
+         'set time 12 0', 'view hide animated morph pfx', 'cam lift off']
+for name in targets:
+    lines += ['', '# ' + name] + blocks[name]
+scenario.write_text(scenario.read_text().rstrip() + '\n\n' + '\n'.join(lines) + '\n')
+print(f'Census tour: {len(targets)} packed materials; no additional shots')
+PY
+  exit 0
+fi
+
 if [[ "${1:-}" == --remote ]]; then
   TASK="${2:?remote task directory}"; RUN="${3:?run id}"; SET="${4:-city-1}"
-  [[ "$SET" == city-1 || "$SET" == city-2 || "$SET" == city-2-imagegen ]] || exit 2
+  [[ "$SET" == city-1 || "$SET" == city-2 || "$SET" == city-2-imagegen || "$SET" == city-3 ]] || exit 2
   [[ "$TASK" == "$HOME/gothic-ai/city-set-${SET#city-}" && "$RUN" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
   CAPTURE="$TASK/inputs/$RUN"
   export CITY_CAPTURE_ROOT="$CAPTURE/runtime"
@@ -228,13 +276,13 @@ while (( $# )); do
     --content-root) CONTENT="${2:?--content-root needs a directory}"; shift 2 ;;
     --flux-root) FLUX="${2:?--flux-root needs a directory}"; shift 2 ;;
     --output) OUT="${2:?--output needs a directory}"; shift 2 ;;
-    --set) SET="${2:?--set needs city-1, city-2 or city-2-imagegen}"; shift 2 ;;
+    --set) SET="${2:?--set needs city-1, city-2, city-2-imagegen or city-3}"; shift 2 ;;
     --mac-city-fps) MAC=1; shift ;;
     -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[[ "$SET" == city-1 || "$SET" == city-2 || "$SET" == city-2-imagegen ]] || { echo '--set must be city-1 or city-2 or city-2-imagegen' >&2; exit 2; }
+[[ "$SET" == city-1 || "$SET" == city-2 || "$SET" == city-2-imagegen || "$SET" == city-3 ]] || { echo '--set must be city-1 or city-2 or city-2-imagegen or city-3' >&2; exit 2; }
 if [[ "$SET" == city-2-imagegen ]]; then
   [[ -n "$FLUX" && -d "$FLUX" ]] || { echo 'city-2-imagegen requires --flux-root with packed city-2 content' >&2; exit 2; }
   [[ "$MAC" == 0 ]] || { echo 'city-2-imagegen capture runs on Ryzen; omit --mac-city-fps' >&2; exit 2; }
@@ -297,8 +345,17 @@ fi
 cp "$SAVE" "$STAGING/save_slot_1.sav"
 TOOLS="$ROOT/reports/render-features/2026-10-18/tools"
 SCENARIO="$ROOT/scripts/content/city.bench"
-[[ "$SET" == city-1 || "$MAC" == 1 ]] || SCENARIO="$ROOT/scripts/content/city-2.bench"
+if [[ "$MAC" == 0 ]]; then
+  case "$SET" in
+    city-2|city-2-imagegen) SCENARIO="$ROOT/scripts/content/city-2.bench" ;;
+    city-3) SCENARIO="$ROOT/scripts/content/city-3.bench" ;;
+  esac
+fi
 cp "$SCENARIO" "$STAGING/tools/city.bench"
+if [[ "$SET" == city-3 && "$MAC" == 0 ]]; then
+  bash "$ROOT/scripts/content/capture-city.sh" --append-census "$STAGING/tools/city.bench" \
+    "$ROOT/scripts/content/city-intent.bench" "$STAGING/content/after/materials/materials.json"
+fi
 cp "$ROOT/scripts/content/capture-city.sh" "$STAGING/tools/"
 cp "$TOOLS/analyze.py" "$TOOLS/discard-ffmpeg.sh" "$STAGING/tools/"
 
@@ -383,7 +440,7 @@ printf -v REMOTE_ARGS '%q %q %q %q' "$TASK" "$DIGEST" "$RUN" "$SET"
 ssh -T "$HOST" "bash -s -- $REMOTE_ARGS" <<'SH'
 set -euo pipefail
 task="$1"; digest="$2"; run="$3"; set_name="$4"
-[[ "$set_name" == city-1 || "$set_name" == city-2 || "$set_name" == city-2-imagegen ]]
+[[ "$set_name" == city-1 || "$set_name" == city-2 || "$set_name" == city-2-imagegen || "$set_name" == city-3 ]]
 [[ "$task" == "$HOME/gothic-ai/city-set-${set_name#city-}" && "$digest" =~ ^[a-f0-9]{64}$ && "$run" =~ ^[a-zA-Z0-9_-]+$ ]]
 df -h "$HOME"
 bin="$HOME/gothic-ai/engine-cache/$digest/Gothic2Notr"

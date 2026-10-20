@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pack generated PNG maps for the bakeoff or a complete staging material set.
 
-    uv run --no-project --with numpy --with pillow python \
+    uv run --no-project --with numpy --with pillow --with scipy python \
         scripts/content/pack_materials.py --registry data/content/registry.jsonl \
         --content-root ~/.local/share/gothic-ai/content \
         --output /tmp/material-capture-content
@@ -9,7 +9,8 @@
 Each resource gets a separate OPENGOTHIC_CONTENT root. Its materials.json
 replaces exactly one fixture texture, leaving the other city material original.
 The DDS compressor and mip generation are shared with test-material.py:
-opaque albedo and ORM are DXT1; normals are DXT5nm (X alpha, Y green).
+opaque albedo and ORM are DXT1; cutout albedo is DXT5 with hard alpha and
+coverage-preserving mips; normals are DXT5nm (X alpha, Y green).
 Input normals are XYZ encoded in [0, 1], with the generator's Y convention
 is OpenGL (+Y toward the image top). Packing flips green into the engine's
 positive texture-V basis, matching the synthetic fixture's height gradient. No game pixels are read.
@@ -36,7 +37,7 @@ import sys
 import numpy as np
 from PIL import Image
 
-from pilot import antitile_mode, CITY_2_SETS, selected_rows
+from pilot import antitile_mode, CITY_3_SET, PLACEMENT_SETS, selected_rows
 
 
 TARGETS = {
@@ -87,7 +88,10 @@ def select_set_records(records: list[dict], set_name: str, mapping: Path) -> lis
         resource_id = record.get("id")
         if not isinstance(resource_id, str) or re.fullmatch(r"[a-z0-9][a-z0-9_-]*", resource_id) is None:
             raise ValueError(f"unsafe resource id: {resource_id!r}")
-        pipelines = ("flux-filter", "imagegen-filter") if set_name == "city-2-imagegen" else ("flux-filter",)
+        if set_name == CITY_3_SET:
+            pipelines = ("imagegen-filter",)
+        else:
+            pipelines = ("flux-filter", "imagegen-filter") if set_name == "city-2-imagegen" else ("flux-filter",)
         if record.get("pipeline") not in pipelines or record.get("status") != "draft":
             raise ValueError(f"{resource_id}: set material must be a draft from {' or '.join(pipelines)}")
         replaces = record.get("replaces")
@@ -106,7 +110,7 @@ def select_set_records(records: list[dict], set_name: str, mapping: Path) -> lis
             raise ValueError(f"{resource_id}: scale differs from mapping for {texture}")
         if params.get("material_class") != row["class"]:
             raise ValueError(f"{resource_id}: material_class differs from mapping for {texture}")
-        if set_name in CITY_2_SETS:
+        if set_name in PLACEMENT_SETS:
             target = params.get("target_luminance")
             if (isinstance(target, bool) or not isinstance(target, (int, float))
                     or not math.isfinite(target) or not 0 <= target <= 1):
@@ -162,7 +166,11 @@ def read_maps(record: dict, content_root: Path) -> dict[str, np.ndarray]:
             raise ValueError(f"{record['id']}: missing {name} map")
         with Image.open(map_path(content_root, files[name])) as source:
             source.load()
-            array = np.asarray(source.convert("RGB" if name in ("albedo", "normal") else "L"), dtype=np.float32) / 255
+            # Preserve PNG transparency, including indexed PNG tRNS. An opaque
+            # RGBA albedo still packs as DXT1 so the engine keeps it Solid.
+            mode = "RGBA" if name == "albedo" and ("A" in source.getbands() or "transparency" in source.info) else (
+                "RGB" if name in ("albedo", "normal") else "L")
+            array = np.asarray(source.convert(mode), dtype=np.float32) / 255
         maps[name] = array
     h, w = maps["albedo"].shape[:2]
     if h != w or not 16 <= h <= 2048 or h & (h - 1):
@@ -222,7 +230,7 @@ def pack_set(records: list[dict], content_root: Path, output: Path) -> Path:
         write_dds(directory / "orm.dds", np.stack((maps["ao"], maps["roughness"], maps["metallic"]), axis=2))
         entry = {name: f"{resource_id}/{name}.dds" for name in ("albedo", "normal", "orm")}
         entry["scale"] = record["parameters"]["scale"]
-        if record["parameters"].get("set") in CITY_2_SETS:
+        if record["parameters"].get("set") in PLACEMENT_SETS:
             entry["antitile"] = record["parameters"]["antitile"]
             entry["antitile_cell"] = record["parameters"].get("antitile_cell", 1.0)
         index[record["replaces"][0]] = entry
