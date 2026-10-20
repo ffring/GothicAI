@@ -15,6 +15,7 @@ import unittest
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'ryzen.sh'
+BENCH_SCRIPT = SCRIPT.with_name('bench.sh')
 
 
 def function(name):
@@ -1176,6 +1177,121 @@ sys.exit(subprocess.call([{shutil.which('rsync')!r}, *args]))
                     expected.append(target)
                 for path in expected:
                     self.assertEqual(path.read_text(), path.stem)
+
+
+class ContentTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix='ryzen-content-test-')))
+        self.env = {name: value for name, value in os.environ.items()
+                    if not name.startswith(('OPENGOTHIC_', 'GOTHIC_', 'TEMPEST_', 'BENCH_', 'RYZEN_'))}
+        self.env['TEST_ROOT'] = str(self.root)
+        self.binaries = self.root / 'bin'
+        self.binaries.mkdir()
+        self.env['PATH'] = str(self.binaries) + os.pathsep + os.environ['PATH']
+        rsync = self.binaries / 'rsync'
+        rsync.write_text(f'#!{sys.executable}\n' + r'''
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+root = Path(os.environ['TEST_ROOT'])
+with (root / 'rsync.jsonl').open('a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\n')
+assert sys.argv[1:3] == ['-a', '--delete']
+host, destination = sys.argv[-1].split(':', 1)
+assert host == 'test'
+shutil.copytree(sys.argv[-2], root / 'remote' / destination, dirs_exist_ok=True)
+''')
+        rsync.chmod(0o755)
+
+    def sync(self, *, value=None, run='one'):
+        env = dict(self.env, TEST_RUN=run)
+        if value is not None:
+            env['OPENGOTHIC_CONTENT'] = value
+        harness = r'''
+set -euo pipefail
+STATE="$TEST_ROOT/remote/gothic-ai/e2e/own" REMOTE=gothic-ai/e2e/own
+RUN="$TEST_RUN" RYZEN_HOST=test ENV_ARGS=()
+remote() { "$@"; }
+'''+function('sync_content')+r'''
+sync_content
+printf '%s\n' "${ENV_ARGS[@]-}"
+'''
+        return subprocess.run(['bash', '-c', harness], env=env,
+                              capture_output=True, text=True, timeout=5)
+
+    def test_upload_is_per_run_and_passes_remote_path(self):
+        content = self.root / 'content with spaces'
+        meshes = content / 'meshes'
+        meshes.mkdir(parents=True)
+        index = meshes / 'meshes.json'
+        index.write_text('{"FIRST":{}}')
+        for run, text in (('one', '{"FIRST":{}}'), ('two', '{"SECOND":{}}')):
+            index.write_text(text)
+            result = self.sync(value=str(content), run=run)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            remote = self.root / f'remote/gothic-ai/e2e/own/inputs/{run}/content'
+            self.assertEqual(result.stdout.strip(), f'OPENGOTHIC_CONTENT={remote}')
+            self.assertEqual((remote / 'meshes/meshes.json').read_text(), text)
+        self.assertEqual((self.root / 'remote/gothic-ai/e2e/own/inputs/one/content/meshes/meshes.json').read_text(),
+                         '{"FIRST":{}}')
+        calls = [json.loads(line) for line in (self.root / 'rsync.jsonl').read_text().splitlines()]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][-2], f'{content.resolve()}/')
+
+    def test_empty_value_disables_remote_default_without_upload(self):
+        result = self.sync(value='')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip(), 'OPENGOTHIC_CONTENT=')
+        self.assertFalse((self.root / 'rsync.jsonl').exists())
+        self.assertFalse((self.root / 'remote').exists())
+
+    def test_unset_value_preserves_remote_default_without_upload(self):
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip(), '')
+        self.assertFalse((self.root / 'rsync.jsonl').exists())
+        self.assertFalse((self.root / 'remote').exists())
+
+    def test_missing_explicit_directory_fails_before_upload(self):
+        result = self.sync(value=str(self.root / 'missing'))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('Missing OPENGOTHIC_CONTENT directory:', result.stderr)
+        self.assertFalse((self.root / 'rsync.jsonl').exists())
+
+    def test_bench_routes_supplied_content_to_ryzen(self):
+        scripts = self.root / 'scripts'
+        scripts.mkdir()
+        shutil.copyfile(BENCH_SCRIPT, scripts / 'bench.sh')
+        launcher = scripts / 'ryzen.sh'
+        launcher.write_text(f'#!{sys.executable}\n' + r'''
+import json
+import os
+from pathlib import Path
+import sys
+assert sys.argv[1] == 'bench'
+out = Path(sys.argv[3])
+(out / 'content.json').write_text(json.dumps(os.environ.get('OPENGOTHIC_CONTENT')))
+(out / 'game.log').write_text('mock remote game\n')
+''')
+        launcher.chmod(0o755)
+        scenario = self.root / 'smoke.bench'
+        scenario.write_text('quit\n')
+        content = self.root / 'content outside output'
+        content.mkdir()
+        for index, value in enumerate((None, '', str(content))):
+            with self.subTest(content=value):
+                env = dict(self.env, BENCH_HOST='ryzen')
+                env.pop('KEEP', None)
+                if value is not None:
+                    env['OPENGOTHIC_CONTENT'] = value
+                out = self.root / f'out-{index}'
+                result = subprocess.run(['bash', str(scripts / 'bench.sh'), str(scenario), str(out)],
+                                        env=env, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads((out / 'content.json').read_text()), value)
+                self.assertEqual((out / 'host.txt').read_text(), 'ryzen\n')
 
 
 if __name__ == '__main__':
