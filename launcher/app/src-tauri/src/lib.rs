@@ -252,8 +252,10 @@ pub fn run() {
                     app.exit(0);
                 }
                 #[cfg(target_os = "linux")]
-                {
-                    let _ = api;
+                if game_runs(app) {
+                    api.prevent_close();
+                    request_quit(app);
+                } else {
                     app.exit(0);
                 }
             }
