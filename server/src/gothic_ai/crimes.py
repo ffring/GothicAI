@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from .chronicle import Chronicle, Fact
+from .crime_sides import CrimeSides
 from .game import GameError, GameLink
 from .gamedata.storygraph import StoryGraph
 from .people_knowledge import rumor_subject
@@ -119,6 +120,7 @@ class Crimes:
         self.sightings: Sightings | None = None
         self.blame: Blame | None = None
         self.people: dict[str, dict[str, Any]] = {}  # static world metadata, never beliefs
+        self.sides = CrimeSides(self)
         self._noncrimes: set[str] = set()  # completed negative classifications, only in this world
         self.on_noncrime: list[Callable[[str], None]] = []
         chronicle.on_fact.append(self._on_fact)
@@ -136,6 +138,13 @@ class Crimes:
 
     def crime(self, crime: str) -> Fact | None:
         return next((f for f in self.facts() if f.get("id") == crime), None)
+
+    def side(self, npc: str, crime: str) -> Fact | None:
+        """A witness's recorded side, inherited with the save branch like the deed itself."""
+        return next((
+            fact for fact in self.chronicle.facts("crime_side")
+            if fact.get("npc") == npc.upper() and fact.get("crime") == crime
+        ), None)
 
     def blamed(self, npc: str, crime: str) -> bool:
         """An active belief in another culprit suspends this victim's demand against the hero."""
@@ -253,6 +262,8 @@ class Crimes:
                 line = f"Ты слышал (со слов: {self.names(k.source)}): {what}; переходов: {k.hops}."
             else:
                 line = f"Ты подозреваешь: {what}. Ты видел героя рядом, самого дела не видел; это догадка."
+            if self.side(npc, k.crime["id"]) is not None:
+                line += " Жертва была твоим врагом: ты не винишь героя."
             if k.forgiven:
                 line += " Ты простил это дело."
             if k.silenced:
@@ -269,6 +280,7 @@ class Crimes:
             if k.suspect == "PLAYER"
             and k.degree != "suspects"
             and not k.forgiven
+            and self.side(npc, k.crime["id"]) is None
             and (
                 k.degree == "seen"
                 or k.crime.get("victim") == npc.upper()
@@ -283,6 +295,8 @@ class Crimes:
 
     def _attitude_of(self, npc: str, knowledge: CrimeKnowledge) -> str | None:
         if knowledge.suspect != "PLAYER" or knowledge.degree == "suspects" or knowledge.forgiven:
+            return None
+        if self.side(npc, knowledge.crime["id"]) is not None:
             return None
         community = self._person_community(npc)
         crime = knowledge.crime
@@ -544,6 +558,7 @@ class Crimes:
         return None
 
     def _on_message(self, msg: GameMessage) -> None:
+        self.sides.on_message(msg)
         if isinstance(msg, HeroDeed):
             self.record(msg)
         elif isinstance(msg, Session):
@@ -663,6 +678,14 @@ class Crimes:
         self._noncrimes.discard(deed.id)
         self.chronicle.record(fact)
         metadata = {self._npc(p.npc): p for p in deed.witnesses_metadata}
+        if kind == "murder":
+            # These facts must precede every crime_seen: listeners immediately change attitudes
+            # and deliver news to the law when knowledge is recorded.
+            for npc in witnesses:
+                if why := self.sides.reason(npc, deed):
+                    self.chronicle.record(
+                        {"fact": "crime_side", "npc": npc, "crime": deed.id, "why": why}
+                    )
         for npc in witnesses:
             person = metadata.get(npc)
             self.chronicle.record(
