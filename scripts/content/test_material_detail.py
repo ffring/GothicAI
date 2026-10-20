@@ -26,6 +26,7 @@ def test_flat_image_is_unchanged(gray):
     assert metadata["converged"]
     assert metadata["iterations"] == 0
     assert metadata["gains"] == dict(g0=1, g1=1, g2=1, g3=1)
+    assert metadata["shoulder_pixel_fraction"] == (1 if gray == 255 else 0)
 
 
 @pytest.mark.parametrize("amplitude", [.5, 1.5])
@@ -57,6 +58,21 @@ def test_unreachable_detail_reports_bounded_gains_and_residual_ratios():
     assert metadata["subcell_gain"] == 1.5
     assert max(metadata["ratios"].values()) < .5
     assert 0 <= metadata["clipped_pixel_fraction"] <= 1
+
+
+def test_shoulder_fraction_uses_final_gains_before_colour_correction():
+    # Alternating pixels have no broad bands: only the subcell gain changes
+    # their contrast. At 1.5 it lifts the bright half above linear RGB 0.7.
+    linear = np.broadcast_to(np.where(np.arange(64) % 2, .6, .04), (64, 64))
+    source = np.repeat(np.rint(_srgb(linear)*255).astype(np.uint8)[..., None], 3, axis=-1)
+    before = measure_material(source)
+    assert np.max(_linear(source/255)) < .7
+
+    _, metadata = fit_material_detail(source/255,
+        {field: before[field]*10 for field in FIELDS}, target_oklab=before["oklab"])
+
+    assert metadata["subcell_gain"] == 1.5
+    assert metadata["shoulder_pixel_fraction"] == .5
 
 
 @pytest.mark.parametrize("channel_scales", [[1, 1, 1], [1, .55, .3]], ids=["neutral", "coloured"])
