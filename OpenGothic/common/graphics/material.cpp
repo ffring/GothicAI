@@ -10,8 +10,9 @@ static Tempest::Color toColor(zenkit::Color v) {
   return c;
   }
 
-Material::Material(const zenkit::Material& m, bool enableAlphaTest)
-  :alphaTestEnabled(enableAlphaTest), sourceAlphaFunc(m.alpha_func),
+Material::Material(const zenkit::Material& m, bool enableAlphaTest, bool requireAlphaTest)
+  :alphaTestEnabled(enableAlphaTest), alphaTestRequired(enableAlphaTest && requireAlphaTest),
+   sourceAlphaFunc(m.alpha_func),
    sourceMaterialGroup(m.group), sourceColorAlpha(m.color.a) {
   loadFrames(m);
 
@@ -38,7 +39,7 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest)
       }
     }
 
-  alpha = loadAlphaFunc(sourceAlphaFunc,sourceMaterialGroup,sourceColorAlpha,tex,alphaTestEnabled);
+  alpha = loadAlphaFunc(sourceAlphaFunc,sourceMaterialGroup,sourceColorAlpha,tex,alphaTestEnabled,alphaTestRequired);
   classifiedAlpha = alpha;
   if(alpha==Water && m.name=="OWODWFALL_WATERFALL_01") {
     // NOTE: waterfall heuristics
@@ -103,6 +104,7 @@ bool Material::operator ==(const Material& other) const {
          frames==other.frames &&
          alpha==other.alpha &&
          alphaTestEnabled==other.alphaTestEnabled &&
+         alphaTestRequired==other.alphaTestRequired &&
          sourceAlphaFunc==other.sourceAlphaFunc &&
          sourceMaterialGroup==other.sourceMaterialGroup &&
          sourceColorAlpha==other.sourceColorAlpha &&
@@ -122,7 +124,7 @@ bool Material::isSolid() const {
 void Material::setAlbedo(const Tempest::Texture2d* texture) {
   tex = texture;
   if(alpha==classifiedAlpha) {
-    alpha = loadAlphaFunc(sourceAlphaFunc,sourceMaterialGroup,sourceColorAlpha,tex,alphaTestEnabled);
+    alpha = loadAlphaFunc(sourceAlphaFunc,sourceMaterialGroup,sourceColorAlpha,tex,alphaTestEnabled,alphaTestRequired);
     classifiedAlpha = alpha;
     }
   }
@@ -156,7 +158,7 @@ Material::AlphaFunc Material::loadAlphaFunc(zenkit::AlphaFunction zenAlpha,
                                             zenkit::MaterialGroup matGroup,
                                             uint8_t clrAlpha,
                                             const Tempest::Texture2d* tex,
-                                            bool enableAlphaTest) {
+                                            bool enableAlphaTest, bool requireAlphaTest) {
   Material::AlphaFunc alpha = Material::AlphaFunc::AlphaTest;
   switch(zenAlpha) {
     case zenkit::AlphaFunction::BLEND:
@@ -188,7 +190,7 @@ Material::AlphaFunc Material::loadAlphaFunc(zenkit::AlphaFunction zenAlpha,
     alpha = Material::AlphaFunc::Transparent;
     }
 
-  if(alpha==Material::AlphaFunc::AlphaTest || alpha==Material::AlphaFunc::Transparent) {
+  if((alpha==Material::AlphaFunc::AlphaTest && !requireAlphaTest) || alpha==Material::AlphaFunc::Transparent) {
     if(tex!=nullptr && tex->format()==Tempest::TextureFormat::DXT1 && clrAlpha==255) {
       alpha = Material::AlphaFunc::Solid;
       }

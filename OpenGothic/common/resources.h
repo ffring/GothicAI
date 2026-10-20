@@ -6,6 +6,7 @@
 #include <Tempest/SoundDevice>
 
 #include <zenkit/Vfs.hh>
+#include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/world/VobTree.hh>
 
 #include <tuple>
@@ -109,7 +110,8 @@ class Resources final {
     static const Tempest::Texture2d* loadTexture(std::string_view name, int32_t v, int32_t c);
     static       Tempest::Texture2d  loadTexturePm(const Tempest::Pixmap& pm);
     static auto                      loadTextureAnim(std::string_view name) -> std::vector<const Tempest::Texture2d*>;
-    static       Material            loadMaterial(const zenkit::Material& src, bool enableAlphaTest);
+    static       Material            loadMaterial(const zenkit::Material& src, bool enableAlphaTest,
+                                                   bool requireAlphaTest = false);
 
     struct MaterialMaps {
       const Tempest::Texture2d* albedo = nullptr;
@@ -128,6 +130,10 @@ class Resources final {
 
     static const AttachBinder*       bindMesh       (const ProtoMesh& anim, const Skeleton& s);
     static const ProtoMesh*          loadMesh       (std::string_view name);
+    // All static visual readers share the same indexed GLB/original MRM path.
+    static zenkit::MultiResolutionMesh loadVisualMesh(std::string_view name, bool* replaced = nullptr);
+    // True after loadVisualMesh successfully selected the replacement.
+    static bool                      meshReplacementLoaded(std::string_view name);
     static const PfxEmitterMesh*     loadEmiterMesh (std::string_view name);
     static const Skeleton*           loadSkeleton   (std::string_view name);
     static const Animation*          loadAnimation  (std::string_view name);
@@ -209,6 +215,7 @@ class Resources final {
 
     void                  indexHdTextures();
     void                  indexMaterialMaps();
+    void                  indexMeshOverrides();
     const Tempest::Texture2d* implLoadMaterialTexture(const std::string& path, bool normalMap);
     Tempest::Texture2d*   implLoadTexture(std::string_view cname, bool forceMips);
     Tempest::Texture2d    implLoadTextureUncached(std::string_view name, bool forceMips);
@@ -290,6 +297,12 @@ class Resources final {
     std::unordered_map<std::string,MaterialMapFiles>                  materialMaps;
     TextureCache                                                     materialTextureCache;
     bool                                                             materialMapsPresent = false;
+    struct MeshOverride {
+      std::filesystem::path file;
+      std::string replacement;
+      bool loaded = false;
+      };
+    std::unordered_map<std::string,MeshOverride>                     meshOverrides;
     std::map<Tempest::Color,std::unique_ptr<Tempest::Texture2d>,Less> pixCache;
     std::unordered_map<std::string,std::unique_ptr<ProtoMesh>>        aniMeshCache;
     std::unordered_map<DecalK,std::unique_ptr<ProtoMesh>,Hash>        decalMeshCache;

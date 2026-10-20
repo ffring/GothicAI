@@ -679,6 +679,27 @@ sync_hd_textures() {
   ENV_ARGS+=("OPENGOTHIC_TEXTURES=$STATE/hd-textures/textures")
 }
 
+sync_content() {
+  # An unset variable keeps the engine's previous default. Each explicit upload
+  # belongs to this run, so a later invocation cannot replace its input files.
+  [[ -n "${OPENGOTHIC_CONTENT+set}" ]] || return 0
+  if [[ -z "$OPENGOTHIC_CONTENT" ]]; then
+    ENV_ARGS+=("OPENGOTHIC_CONTENT=")
+    return 0
+  fi
+  local content
+  content="$(python3 - "$OPENGOTHIC_CONTENT" <<'PY'
+import os
+import sys
+print(os.path.realpath(os.path.expanduser(sys.argv[1])))
+PY
+)"
+  [[ -d "$content" ]] || { echo "Missing OPENGOTHIC_CONTENT directory: $content" >&2; return 2; }
+  remote mkdir -p "$STATE/inputs/$RUN/content"
+  rsync -a --delete "$content/" "$RYZEN_HOST:$REMOTE/inputs/$RUN/content/"
+  ENV_ARGS+=("OPENGOTHIC_CONTENT=$STATE/inputs/$RUN/content")
+}
+
 if [[ "$ACTION" == setup ]]; then
   remote bash -s <<'REMOTE'
 set -euo pipefail
@@ -1064,6 +1085,7 @@ else
 fi
 if [[ "$ACTION" == pytest ]]; then GQ_ARGS+=(--wait-max "$LOCK_WAIT"); fi
 ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS")
+sync_content
 if [[ "$ACTION" == bench ]]; then
   [[ -z "$AI_PORT" ]] || ENV_ARGS+=("RYZEN_AI_TUNNEL=1")
   REMOTE_OUT="$STATE/runs/$RUN"
@@ -1083,7 +1105,7 @@ PY
   # Preserve game options, translating paths into this run's output directory.
   while IFS= read -r name; do
     case "$name" in
-      GOTHIC_DIR|OPENGOTHIC_TEXTURES|OPENGOTHIC_FRACTURE) continue ;;
+      GOTHIC_DIR|OPENGOTHIC_TEXTURES|OPENGOTHIC_FRACTURE|OPENGOTHIC_CONTENT) continue ;;
       OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|DESTRUCTION|BUOYANCY|CLOTH|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL)
         value="$(bench_path "${!name}")"
         ENV_ARGS+=("$name=$value") ;;
@@ -1147,7 +1169,7 @@ fi
 # Carry e2e options, including scenario-specific GOTHIC_* settings; paths are remapped below.
 while IFS= read -r name; do
   case "$name" in
-    GOTHIC_DIR|GOTHIC_AI_URL|OPENGOTHIC_FRACTURE) ;;
+    GOTHIC_DIR|GOTHIC_AI_URL|OPENGOTHIC_FRACTURE|OPENGOTHIC_CONTENT) ;;
     SCENARIO|LLM|ASR|TTS|TIMEOUT|PORT|ASR_PORT|TTS_PORT|DECIDER_URL|QUICK_URL|E2E_MAX_FPS|MEMPROBE_*|GAME_EXTRA_ENV|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|GOTHIC_*|OPENGOTHIC_*|TEMPEST_*|CHATGPT_*|OPENAI_*)
       ENV_ARGS+=("$name=${!name}") ;;
   esac

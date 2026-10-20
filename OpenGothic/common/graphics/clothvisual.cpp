@@ -120,6 +120,7 @@ struct Geometry {
   std::vector<zenkit::MorphAnimation> animations;
   std::vector<std::vector<int32_t>> morphIndices;
   bool coarsePhysics = false;
+  bool explicitAlphaTest = false;
   const ProtoMesh* fullProto = nullptr;
   std::unique_ptr<ProtoMesh> ownedFullProto, rigidProto, clothProto;
   };
@@ -180,7 +181,7 @@ void tessellate(Geometry& out, const std::vector<ClothGeometry::Vertex>& vertice
     }
   mesh.bbox.min = {lo.x,lo.y,lo.z};
   mesh.bbox.max = {hi.x,hi.y,hi.z};
-  PackedMesh packed(mesh,PackedMesh::PK_VisualMorph);
+  PackedMesh packed(mesh,PackedMesh::PK_VisualMorph,out.explicitAlphaTest);
   out.packedToPhysics = packed.verticesId;
   out.clothProto = std::make_unique<ProtoMesh>(std::move(packed),visual);
   for(const auto& animation:out.animations) {
@@ -250,19 +251,21 @@ std::shared_ptr<Geometry> loadGeometry(std::string_view visual, const Definition
   const bool morph = FileExt::hasExt(resource,"MMS") || FileExt::hasExt(resource,"MMB");
   FileExt::exchangeExt(resource,"3DS","MRM");
   FileExt::exchangeExt(resource,"MMS","MMB");
-  auto reader = Resources::getFileBuffer(resource);
   zenkit::MultiResolutionMesh source;
+  bool replaced = false;
   std::vector<zenkit::MorphAnimation> animations;
   if(morph) {
+    auto reader = Resources::getFileBuffer(resource);
     zenkit::MorphMesh mesh;
     mesh.load(reader.get());
     source = std::move(mesh.mesh);
     animations = std::move(mesh.animations);
     }
   else
-    source.load(reader.get());
+    source = Resources::loadVisualMesh(resource,&replaced);
   PackedMesh packed(source,PackedMesh::PK_VisualMorph);
   auto out = std::make_shared<Geometry>();
+  out->explicitAlphaTest = replaced;
   out->animations = std::move(animations);
   std::vector<ClothGeometry::Vertex> vertices;
   std::vector<uint32_t> indices, triangleMaterials;
@@ -318,7 +321,7 @@ std::shared_ptr<Geometry> loadGeometry(std::string_view visual, const Definition
     return matches(def.material,sub.mat.name);
     }),rigid.sub_meshes.end());
   if(!rigid.sub_meshes.empty()) {
-    PackedMesh rigidPacked(rigid,PackedMesh::PK_VisualMorph);
+    PackedMesh rigidPacked(rigid,PackedMesh::PK_VisualMorph,replaced);
     if(out->animations.empty())
       out->rigidProto = std::make_unique<ProtoMesh>(std::move(rigidPacked),visual);
     else

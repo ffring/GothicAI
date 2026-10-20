@@ -14,6 +14,7 @@ automatically; to update one, copy the needed parts of a newer upstream version 
 | `JoltPhysics/` | https://github.com/jrouwe/JoltPhysics | e77f175595e64cb44218cc9d9d56fc365ad0e36a (v5.6.0) | MIT | everything but `Jolt/`, `Build/CMakeLists.txt` and `LICENSE` (examples, test framework, unit/performance tests, viewer, documentation, assets and build helper scripts omitted) |
 | `dmusic/` | https://github.com/GothicKit/dmusic | b73b270b94714b8ec8d9d0b2a9f3a5c445da52d1 | MIT | `docs/`, `examples/` |
 | `rapidjson/` | https://github.com/Tencent/rapidjson | f54b0e47a08782a6131cc3d60f94d038fa6e0a51 (v1.1.0) | MIT | everything but `include/` (header-only) |
+| `cgltf/` | https://github.com/jkuhlmann/cgltf | 360db1a95480fe102ae9c69b27c5d101167ff5ba (v1.15) | MIT | everything but `cgltf.h` and `LICENSE` (single-header GLB parser) |
 | `TinySoundFont/` | https://github.com/schellingb/TinySoundFont | 92a8f0e9fe3c98358be7d8564db21fc4b1142d04 | MIT | `examples/`, `sfotool/` |
 | `edd-dbg/`, `miniz/` | as in upstream OpenGothic | — | see the directories | — |
 
@@ -33,6 +34,8 @@ retained in `BulletCompat.LICENSE`; the Jolt library and its existing code retai
 
 Keep these when updating a library from upstream.
 
+- `cgltf/` `cgltf.h`: removed a tab from an otherwise empty line to pass the repository's
+  diff whitespace check; parser code is unchanged.
 - `ZenKit/` `Vfs::set_open_observer` (`Vfs.hh`, `Vfs.cc`): optional successful-open callback
   with the winning archive filename or host file path, set before mounting. File nodes keep
   provenance through overrides; `find` and `resolve` do not count as opens. Used only by
