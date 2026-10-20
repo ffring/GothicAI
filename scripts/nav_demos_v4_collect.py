@@ -37,6 +37,8 @@ demos = module("nav_demos")
 SEED = 19102026
 MEMORY_VERSION = 3
 FAMILIES = ("point", "object", "approach", "follow", "jump")
+FOLLOW_BELOW_GATE = "follow_below_gate"
+FOLLOW_BELOW_GATE_MIN_FRACTION = .7
 MOVING_SPLITS = dict(harbour="train", market="train", port_streets="train", upper_streets="train",
                      onar="validation", lobart="test")
 INPUTS = ("training-pairs.jsonl", "ppo-validation.jsonl", "holdout-cv.jsonl", "places.json",
@@ -178,7 +180,17 @@ def directory_for(task, value):
     return Path(task) / "recordings" / family(value) / "train" / identifier
 
 
-def prepare_selections(task):
+def freeze_selection(path, values):
+    """Verify frozen selections without even rewriting an identical old file."""
+    path = Path(path)
+    if path.exists():
+        if list(v3.rows(path)) != values:
+            raise ValueError(f"Refusing to replace scenario selection: {path}")
+    else:
+        v3.write_selection(path, values)
+
+
+def prepare_selections(task, follow_below_gate=False):
     source = Path(task) / "input"
     excluded = v3.exclusion_pairs(source / "holdout-cv.jsonl", source / "ppo-validation.jsonl")
     training = list(v3.rows(source / "training-pairs.jsonl"))
@@ -199,8 +211,17 @@ def prepare_selections(task):
     for name, values in selections.items():
         if any(value["split"] != "train" for value in values):
             raise ValueError("Held-out scenario entered a recording selection")
-        v3.write_selection(Path(task) / "recording-input" / f"{name}.jsonl", values)
-    v3.write_selection(Path(task) / "recording-input/moving-all-splits.jsonl", moving)
+        freeze_selection(Path(task) / "recording-input" / f"{name}.jsonl", values)
+    freeze_selection(Path(task) / "recording-input/moving-all-splits.jsonl", moving)
+    if follow_below_gate:
+        # The additive family uses the frozen training selection verbatim. It
+        # never changes the old family or expands any held-out membership.
+        source = list(v3.rows(Path(task) / "recording-input/follow.jsonl"))
+        selections[FOLLOW_BELOW_GATE] = [dict(value, dataset_family=FOLLOW_BELOW_GATE,
+            follow_below_gate=True, minimum_follow_fraction=FOLLOW_BELOW_GATE_MIN_FRACTION)
+            for value in source]
+        freeze_selection(Path(task) / "recording-input" / f"{FOLLOW_BELOW_GATE}.jsonl",
+                         selections[FOLLOW_BELOW_GATE])
     return selections
 
 
@@ -277,7 +298,10 @@ def validate_native(metadata, value, identity):
     if "id" in metadata and (metadata.get("recording_identity") != identity
             or any(metadata.get(key) != value.get(key) for key in v3.SCENARIO_IDENTITY_FIELDS)
             or (family(value) == "jump" and any(metadata.get(key) != value.get(key) for key in
-                ("index", "site_id", "transition_id", "type", "dataset_family")))):
+                ("index", "site_id", "transition_id", "type", "dataset_family")))
+            or (family(value) == FOLLOW_BELOW_GATE and (any(metadata.get(key) != value.get(key) for key in
+                ("dataset_family", "follow_below_gate", "minimum_follow_fraction"))
+                or metadata.get("teacher_goal_success") != metadata.get("success")))):
         raise ValueError(f"Completed recording belongs to another frozen scenario: {value['id']}")
 
 
@@ -286,6 +310,15 @@ def eligibility(metadata, moving=None):
         return metadata.get("transition_success") is True
     if metadata.get("goal_kind") == "follow":
         moving = moving or {}
+        if metadata.get("dataset_family") == FOLLOW_BELOW_GATE:
+            return (metadata.get("follow_below_gate") is True
+                    and metadata.get("minimum_follow_fraction") == FOLLOW_BELOW_GATE_MIN_FRACTION
+                    and metadata.get("failure") not in ("actor_down", "target_down", "collection_limit")
+                    and all(metadata.get(key) is False for key in
+                        ("final_dead", "final_down", "target_final_dead", "target_final_down"))
+                    and metadata.get("elapsed_ms", 0) >= metadata["limit_ms"]
+                    and moving.get("first_contact_ms") is not None and moving.get("follow_observed_ms", 0) > 0
+                    and (moving.get("follow_fraction") or 0) >= FOLLOW_BELOW_GATE_MIN_FRACTION)
         return (metadata.get("success") is True and not metadata.get("final_dead", False)
                 and not metadata.get("final_down", False) and metadata.get("elapsed_ms", 0) >= metadata["limit_ms"]
                 and moving.get("first_contact_ms") is not None and moving.get("follow_observed_ms", 0) > 0
@@ -307,6 +340,9 @@ def measured_episode(directory, metadata, checked):
             raise ValueError(f"Moving target trace is incomplete: {directory}")
         result.update(v3.follow_metrics(trace[:, 0], trace[:, 4], metadata["elapsed_ms"]))
     result["training_eligible"] = eligibility(metadata, result)
+    if result["family"] == FOLLOW_BELOW_GATE:
+        result.update(follow_below_gate=True, minimum_follow_fraction=FOLLOW_BELOW_GATE_MIN_FRACTION,
+                      teacher_goal_success=metadata.get("teacher_goal_success", metadata["success"]))
     return result
 
 
@@ -336,12 +372,14 @@ class Worker(campaign.Worker):
         super().__init__(runner_args(options, index), 3, budget)
 
     def trial(self, value):
+        identity = recording_identity(self.identity, value)
         jump = family(value) == "jump"
         if jump != self.jump:
             self.close()
             self.jump, self.args = jump, runner_args(self.options, self.index, jump)
         directory = directory_for(self.options.task, value)
-        scenario_name = f"demos-v4-{value['id']}"
+        scenario_name = (f"demos-v4-{FOLLOW_BELOW_GATE}-{value['id']}" if family(value) == FOLLOW_BELOW_GATE
+                         else f"demos-v4-{value['id']}")
         expected = [f"seed {value['seed']}", "cheat god", "set time 10 0", "navdemos physics cv",
                     *commands(self.args, value), "label done"]
         resumed = (directory / "episode.json").is_file()
@@ -358,12 +396,14 @@ class Worker(campaign.Worker):
         if not witnesses or any(path.read_text(encoding="utf-8").splitlines() != expected for path in witnesses):
             raise ValueError(f"Missing or changed seeded command witness: {value['id']}")
         metadata = v3.read_json(directory / "episode.json")
-        validate_native(metadata, value, self.identity)
+        validate_native(metadata, value, identity)
         if "id" not in metadata:
             if jump:
                 metadata = jumps.assess_episode(directory, value)
             metadata["runner_goal"] = metadata.get("goal")
-            metadata.update(value, recording_identity=self.identity, collector_wall_s=time.monotonic() - started)
+            metadata.update(value, recording_identity=identity, collector_wall_s=time.monotonic() - started)
+            if family(value) == FOLLOW_BELOW_GATE:
+                metadata["teacher_goal_success"] = metadata["success"]
         checked = demos.summarize(directory, validate=True)
         if checked.get("navigation_memory_versions") != [3] or checked.get("format_versions") != [2]:
             raise ValueError("Only memory-v3 NAVDEMO-v2 recordings are allowed")
@@ -392,9 +432,59 @@ def settings(options, include_follow):
         limit_ms=options.limit_ms, include_follow=include_follow, seed=SEED, max_bytes=options.max_bytes)
 
 
-def summarize(episodes, selections, include_follow, used):
+def collection_settings(base_identity, prior_settings=None, *, follow_below_gate=False, source_follow_sha256=None):
+    """Authorize an additive family while preserving the original recording identity.
+
+    All old core inputs must match before the caller creates selections, changes
+    state, or launches a runner. Subsequent resumes require exactly the same
+    explicit opt-in and family policy.
+    """
+    prior_base = prior_settings
+    if prior_settings is not None and prior_settings.get("schema_version") == 2:
+        if not follow_below_gate:
+            raise ValueError("Existing follow_below_gate recordings require the explicit --follow-below-gate opt-in")
+        prior_base = prior_settings.get("base_recording_identity")
+    if prior_settings is not None and prior_base != base_identity:
+        raise ValueError("Recording state belongs to another binary, input, selection or follow gate")
+    if not follow_below_gate:
+        return base_identity
+    if base_identity.get("include_follow") is not False:
+        raise ValueError("The additive follow_below_gate family cannot enable the ordinary follow family")
+    if not source_follow_sha256:
+        raise ValueError("The additive follow family requires its frozen source selection hash")
+    policy = dict(dataset_family=FOLLOW_BELOW_GATE, follow_below_gate=True,
+        minimum_follow_fraction=FOLLOW_BELOW_GATE_MIN_FRACTION,
+        metric="time_weighted_2m_5m_after_first_contact", require_full_horizon=True,
+        require_surviving_actor_and_target=True, source_family="follow",
+        source_selection_sha256=source_follow_sha256,
+        source_validation_attempt_2_sha256=base_identity["validation_attempt_2_sha256"])
+    result = dict(schema_version=2, base_recording_identity=base_identity,
+                  family_policies={FOLLOW_BELOW_GATE: policy})
+    if prior_settings is not None and prior_settings.get("schema_version") == 2 and prior_settings != result:
+        raise ValueError("Frozen follow_below_gate authorization policy or source selection changed")
+    return result
+
+
+def recording_identity(identity, value):
+    """Old families retain their exact schema-v1 identity after state migration."""
+    if identity.get("schema_version") != 2:
+        if family(value) == FOLLOW_BELOW_GATE:
+            raise ValueError("follow_below_gate recordings require an additive family identity")
+        return identity
+    base = identity["base_recording_identity"]
+    if family(value) != FOLLOW_BELOW_GATE:
+        return base
+    policy = identity["family_policies"][FOLLOW_BELOW_GATE]
+    if (value.get("goal_kind") != "follow" or value.get("follow_below_gate") is not True
+            or value.get("minimum_follow_fraction") != policy["minimum_follow_fraction"]):
+        raise ValueError("Scenario differs from the frozen follow_below_gate policy")
+    return dict(base, schema_version=2, dataset_family=FOLLOW_BELOW_GATE, follow_below_gate=True,
+                minimum_follow_fraction=policy["minimum_follow_fraction"], family_policy=policy)
+
+
+def summarize(episodes, selections, include_follow, used, follow_below_gate=False):
     groups = {}
-    for name in FAMILIES:
+    for name in (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ())):
         values = [value for value in episodes if value["family"] == name]
         keys = sum((Counter(value["key_counts"]) for value in values), Counter())
         decisions = sum(value["decisions"] for value in values)
@@ -404,7 +494,7 @@ def summarize(episodes, selections, include_follow, used):
         if name == "follow" and not include_follow:
             complete = True
         groups[name] = dict(episodes=len(values),
-            successes=eligible if name == "jump" else sum(bool(value["success"]) for value in values),
+            successes=eligible if name in ("jump", FOLLOW_BELOW_GATE) else sum(bool(value["success"]) for value in values),
             teacher_goal_successes=sum(bool(value["success"]) for value in values),
             training_eligible=eligible, decisions=decisions, backward=keys["back"], strafe=keys["strafe"],
             backward_fraction=keys["back"] / decisions if decisions else None,
@@ -412,25 +502,57 @@ def summarize(episodes, selections, include_follow, used):
             dataset_bytes=sum(campaign.tree_bytes(value["episode"]) for value in values), complete=complete,
             available_candidates=len(selections[name]), excluded=name == "follow" and not include_follow,
             candidate_pool_exhausted=len(values) == len(selections[name]) and not complete)
+        if name == FOLLOW_BELOW_GATE:
+            groups[name].update(follow_below_gate=True,
+                                minimum_follow_fraction=FOLLOW_BELOW_GATE_MIN_FRACTION)
     return dict(complete=all(value["complete"] for value in groups.values()), by_family=groups,
                 navigation_memory_version=3, demo_version=2, dataset_bytes=used, episodes=episodes,
                 student_training_run=False)
 
 
 def run(options):
+    deadline = time.monotonic() + options.wall_minutes * 60
     if sys.platform != "linux":
         raise ValueError("Run collection on Ryzen/Linux inside the caller's gq batch")
-    include_follow = follow_enabled(options.task, options.include_follow)
-    identity = settings(options, include_follow)
-    selections = prepare_selections(options.task)
+    follow_below_gate = getattr(options, "follow_below_gate", False)
+    if follow_below_gate and options.include_follow == "yes":
+        raise ValueError("--follow-below-gate is a separate family; it cannot enable ordinary follow")
+    include_follow = False if follow_below_gate else follow_enabled(options.task, options.include_follow)
+    base_identity = settings(options, include_follow)
     output = options.task / "recordings"
-    output.mkdir(parents=True, exist_ok=True)
     state = output / "collection-state.json"
+    prior_settings = None
     if state.exists():
-        if v3.read_json(state).get("settings") != identity:
+        prior_settings = v3.read_json(state).get("settings")
+        if not isinstance(prior_settings, dict):
+            raise ValueError("Existing recording state lacks its frozen collection identity")
+        # Check every old core identity field before making any new file. The
+        # policy check below additionally freezes the new family's source hash.
+        prior_base = prior_settings.get("base_recording_identity") if prior_settings.get("schema_version") == 2 else prior_settings
+        if prior_base != base_identity:
             raise ValueError("Recording state belongs to another binary, input, selection or follow gate")
-    elif any(output.iterdir()):
+        if prior_settings.get("schema_version") == 2 and not follow_below_gate:
+            raise ValueError("Existing follow_below_gate recordings require the explicit --follow-below-gate opt-in")
+        for name in (*FAMILIES, "moving-all-splits"):
+            if not (options.task / "recording-input" / f"{name}.jsonl").is_file():
+                raise ValueError(f"Existing collection lacks its frozen selection: {name}")
+    elif output.exists() and any(output.iterdir()):
         raise ValueError("Existing recordings lack frozen collection identity")
+    if follow_below_gate:
+        if any(path.is_file() for path in (output / "follow").rglob("*")):
+            raise ValueError("The additive override cannot migrate existing ordinary follow recordings")
+        if (prior_settings is None or prior_settings.get("schema_version") != 2) and any(
+                path.is_file() for path in (output / FOLLOW_BELOW_GATE).rglob("*")):
+            raise ValueError("Existing follow_below_gate recordings lack their frozen authorization policy")
+    if prior_settings is None:
+        # Fresh collections have no old selections to preserve.
+        prepare_selections(options.task)
+    source_follow_sha256 = (campaign.binary_digest(options.task / "recording-input/follow.jsonl")
+                            if follow_below_gate else None)
+    identity = collection_settings(base_identity, prior_settings, follow_below_gate=follow_below_gate,
+                                   source_follow_sha256=source_follow_sha256)
+    selections = prepare_selections(options.task, follow_below_gate)
+    families = (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ()))
     allowed = {directory_for(options.task, value) for values in selections.values() for value in values}
     if any(path.parent not in allowed for path in output.rglob("samples.bin*")):
         raise ValueError("Recording exists outside frozen train selections")
@@ -438,11 +560,14 @@ def run(options):
     budget = StorageBudget(output, options.max_bytes)
     workers = [Worker(options, index, budget, identity) for index in range(options.parallel)]
     episodes, done = [], set()
-    deadline = time.monotonic() + options.wall_minutes * 60
     new = 0
+    def metrics():
+        return summarize(episodes, selections, include_follow, budget.used(), follow_below_gate)
+
     try:
         # Verify prior attempts first; partial output is never automatically rerun.
-        for name in FAMILIES:
+        existing = []
+        for name in families:
             expected = {directory_for(options.task, value) for value in selections[name]}
             for directory in (output / name / "train").glob("*"):
                 if directory not in expected:
@@ -452,16 +577,30 @@ def run(options):
                 if directory.exists():
                     if name == "follow" and not include_follow:
                         raise ValueError("Follow recordings exist despite a closed follow gate")
-                    episodes.append(workers[0].trial(value))
-                    done.add(value["id"])
+                    existing.append(value)
+        campaign.emit("collection_resume_started", episodes=len(existing), parallel=options.parallel)
         with ThreadPoolExecutor(max_workers=options.parallel) as executor:
+            for offset in range(0, len(existing), options.parallel):
+                if time.monotonic() >= deadline:
+                    atomic_json(state, dict(settings=identity, status="resume_verification_incomplete"))
+                    campaign.emit("collection_resume_bounded", verified_episodes=len(episodes),
+                                  total_episodes=len(existing), new_episodes=0)
+                    return dict(complete=False, resume_verification_complete=False,
+                                verified_episodes=len(episodes), total_episodes=len(existing), new_episodes=0)
+                batch = existing[offset:offset + options.parallel]
+                futures = [executor.submit(worker.trial, value) for worker, value in zip(workers, batch)]
+                measured = [future.result() for future in futures]
+                episodes.extend(measured)
+                done.update((family(value), value["id"]) for value in batch)
+                campaign.emit("collection_resume_progress", verified_episodes=len(episodes), total_episodes=len(existing))
+            campaign.emit("collection_resume_complete", episodes=len(existing))
             while True:
                 progressed = False
-                for name in FAMILIES:
-                    result = summarize(episodes, selections, include_follow, budget.used())
+                for name in families:
+                    result = metrics()
                     if result["by_family"][name]["complete"]:
                         continue
-                    pending = [value for value in selections[name] if value["id"] not in done]
+                    pending = [value for value in selections[name] if (name, value["id"]) not in done]
                     # Round-robin families prevent long road collections starving other sets.
                     for offset in range(0, min(len(pending), options.round_size), options.parallel):
                         if time.monotonic() + 900 >= deadline or new >= options.max_new:
@@ -474,23 +613,24 @@ def run(options):
                         # Always drain and preserve all concurrently started attempts.
                         measured = [future.result() for future in futures]
                         episodes.extend(measured)
-                        done.update(value["id"] for value in batch)
+                        done.update((family(value), value["id"]) for value in batch)
                         new += len(batch)
                         progressed = True
-                        result = summarize(episodes, selections, include_follow, budget.used())
+                        result = metrics()
                         atomic_json(output / "collection-metrics.json", dict(result, settings=identity))
                         campaign.emit("collection_progress", family=name, new_episodes=new,
                                       by_family=result["by_family"], bytes=budget.used())
                         if result["by_family"][name]["complete"]:
                             break
-                if not progressed or summarize(episodes, selections, include_follow, budget.used())["complete"]:
+                if not progressed or metrics()["complete"]:
                     break
     finally:
         for worker in workers:
             worker.close()
-    if settings(options, include_follow) != identity:
+    if (settings(options, include_follow) != base_identity
+            or (follow_below_gate and campaign.binary_digest(options.task / "recording-input/follow.jsonl") != source_follow_sha256)):
         raise ValueError("Frozen recording inputs or binaries changed during the phase")
-    result = summarize(episodes, selections, include_follow, budget.used())
+    result = metrics()
     atomic_json(output / "collection-metrics.json", dict(result, settings=identity))
     atomic_json(state, dict(settings=identity, status="complete" if result["complete"] else "bounded_phase_complete"))
     campaign.emit("collection_phase_complete", complete=result["complete"], new_episodes=new,
@@ -502,6 +642,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", type=Path, required=True)
     parser.add_argument("--include-follow", choices=("auto", "yes", "no"), default="auto")
+    parser.add_argument("--follow-below-gate", action="store_true",
+                        help="Explicitly add separate follow_below_gate training data with the authorized 70%% per-episode rule")
     parser.add_argument("--wall-minutes", type=float, default=100)
     parser.add_argument("--max-new", type=int, default=300)
     parser.add_argument("--round-size", type=int, default=12)

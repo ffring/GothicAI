@@ -166,6 +166,103 @@ def test_collection_identity_freezes_second_validation_result_hash(tmp_path, mon
     assert collect.settings(options, True)["validation_attempt_2_sha256"] != identity["validation_attempt_2_sha256"]
 
 
+def legacy_identity():
+    return dict(schema_version=1, navigation_memory_version=3, demo_version=2, perception_mode="gaze", physics="cv",
+        validation_attempt_2_sha256="validation-2-hash", input_sha256={name: f"hash-{name}" for name in collect.INPUTS},
+        runner_sha256="runner-hash", contract_sha256="contract-hash", limit_ms=240000,
+        include_follow=False, seed=collect.SEED, max_bytes=15_000_000_000)
+
+
+def test_follow_override_is_additive_opt_in_and_preserves_original_recording_provenance():
+    base = legacy_identity()
+    before = deepcopy(base)
+    assert collect.collection_settings(base, base) == base
+    upgraded = collect.collection_settings(base, base, follow_below_gate=True, source_follow_sha256="source-follow-hash")
+    assert base == before
+    assert upgraded["schema_version"] == 2
+    assert upgraded["base_recording_identity"] == before
+    policy = upgraded["family_policies"]["follow_below_gate"]
+    assert policy["follow_below_gate"] is True and policy["minimum_follow_fraction"] == .7
+    assert policy["source_selection_sha256"] == "source-follow-hash"
+    assert policy["source_validation_attempt_2_sha256"] == before["validation_attempt_2_sha256"]
+    for value in (point(), object_value(), moving(kind="approach"), dict(point(), dataset_family="jump")):
+        assert collect.recording_identity(upgraded, value) == before
+    tagged = dict(moving(), dataset_family="follow_below_gate", follow_below_gate=True, minimum_follow_fraction=.7)
+    new_identity = collect.recording_identity(upgraded, tagged)
+    assert new_identity != before and new_identity["schema_version"] == 2
+    assert new_identity["dataset_family"] == "follow_below_gate"
+    assert new_identity["family_policy"] == policy
+    assert new_identity["minimum_follow_fraction"] == .7 and new_identity["follow_below_gate"] is True
+    assert collect.collection_settings(base, upgraded, follow_below_gate=True,
+        source_follow_sha256="source-follow-hash") == upgraded
+    with pytest.raises(ValueError):
+        collect.collection_settings(base, upgraded)
+    with pytest.raises(ValueError):
+        collect.collection_settings(base, upgraded, follow_below_gate=True, source_follow_sha256="changed-follow-hash")
+
+
+@pytest.mark.parametrize("field,changed", [
+    ("runner_sha256", "other-runner"), ("contract_sha256", "other-contract"),
+    ("validation_attempt_2_sha256", "other-validation"), ("input_sha256", {"training-pairs.jsonl": "changed"}),
+    ("seed", 20), ("limit_ms", 239900), ("max_bytes", 15_000_000_001),
+    ("navigation_memory_version", 2), ("demo_version", 1), ("perception_mode", "grid"),
+    ("physics", "native"), ("include_follow", True),
+])
+def test_follow_override_cannot_migrate_changed_core_or_mutate_existing_identity(tmp_path, field, changed):
+    previous = legacy_identity()
+    state = tmp_path / "collection-state.json"
+    collect.atomic_json(state, dict(settings=previous, status="bounded_phase_complete"))
+    before = state.read_bytes(), state.stat().st_mtime_ns, deepcopy(previous)
+    requested = deepcopy(previous)
+    requested[field] = changed
+    with pytest.raises(ValueError):
+        collect.collection_settings(requested, previous, follow_below_gate=True, source_follow_sha256="source-follow-hash")
+    assert (state.read_bytes(), state.stat().st_mtime_ns, previous) == before
+
+
+def test_follow_override_rejects_policy_drift_on_subsequent_resume():
+    base = legacy_identity()
+    upgraded = collect.collection_settings(base, base, follow_below_gate=True, source_follow_sha256="source-follow-hash")
+    tampered = deepcopy(upgraded)
+    tampered["family_policies"]["follow_below_gate"]["minimum_follow_fraction"] = .69
+    with pytest.raises(ValueError):
+        collect.collection_settings(base, tampered, follow_below_gate=True, source_follow_sha256="source-follow-hash")
+
+
+def test_follow_override_copies_only_frozen_train_selection_without_rewriting_existing_files(tmp_path, monkeypatch):
+    source = tmp_path / "input"
+    source.mkdir()
+    for name in ("training-pairs.jsonl", "object-candidates.jsonl", "object-probes.jsonl",
+                 "moving-scenarios.jsonl", "holdout-cv.jsonl", "ppo-validation.jsonl"):
+        (source / name).write_text("")
+    collect.atomic_json(source / "places.json", dict(places=[]))
+    moving_values = [moving(), moving(1, "onar", "validation"), moving(2, "lobart", "test"),
+                     moving(3, kind="approach")]
+    monkeypatch.setattr(collect, "select_points", lambda *args: [point()])
+    monkeypatch.setattr(collect, "select_objects", lambda *args: [object_value()])
+    monkeypatch.setattr(collect, "select_moving", lambda *args: moving_values)
+    routes = [dict(point(index, split="train" if index < 168 else "validation"), index=index)
+              for index in range(267)]
+    monkeypatch.setattr(collect.jumps, "load_routes", lambda *args: routes)
+    monkeypatch.setattr(collect.jumps, "collection_order", lambda values: values)
+    original = collect.prepare_selections(tmp_path)
+    frozen = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+              for path in (tmp_path / "recording-input").iterdir()}
+    upgraded = collect.prepare_selections(tmp_path, follow_below_gate=True)
+    assert all((path.read_bytes(), path.stat().st_mtime_ns) == saved for path, saved in frozen.items())
+    assert {key: upgraded[key] for key in original} == original
+    assert upgraded["follow_below_gate"] == [dict(original["follow"][0], dataset_family="follow_below_gate",
+        follow_below_gate=True, minimum_follow_fraction=.7)]
+    value = upgraded["follow_below_gate"][0]
+    assert value["goal_kind"] == "follow" and value["split"] == "train"
+    assert collect.directory_for(tmp_path, value) == tmp_path / "recordings/follow_below_gate/train/follow-0"
+    assert collect.directory_for(tmp_path, value) != collect.directory_for(tmp_path, original["follow"][0])
+    again = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+             for path in (tmp_path / "recording-input").iterdir()}
+    assert collect.prepare_selections(tmp_path, follow_below_gate=True) == upgraded
+    assert all((path.read_bytes(), path.stat().st_mtime_ns) == saved for path, saved in again.items())
+
+
 @pytest.mark.parametrize("split", ["validation", "test"])
 def test_no_heldout_commands_or_recording_paths(tmp_path, split):
     value = point(split=split)
@@ -174,6 +271,11 @@ def test_no_heldout_commands_or_recording_paths(tmp_path, split):
         collect.directory_for(tmp_path, value)
     with pytest.raises(ValueError, match="forbidden"):
         collect.commands(collect.runner_args(options, 0), value)
+    tagged = dict(moving(split=split), dataset_family="follow_below_gate", follow_below_gate=True, minimum_follow_fraction=.7)
+    with pytest.raises(ValueError, match="forbidden"):
+        collect.directory_for(tmp_path, tagged)
+    with pytest.raises(ValueError, match="forbidden"):
+        collect.commands(collect.runner_args(options, 0), tagged)
 
 
 def test_commands_enable_recording_memory_input_and_correct_teacher(tmp_path):
@@ -219,11 +321,66 @@ def test_follow_eligibility_needs_contact_full_horizon_and_eighty_percent():
     assert collect.eligibility(dict(metadata, dataset_family="jump", success=False, transition_success=True), measured)
 
 
+def below_gate_metadata(**changes):
+    result = dict(native(moving()), dataset_family="follow_below_gate", follow_below_gate=True,
+        minimum_follow_fraction=.7, success=False, teacher_goal_success=False, final_dead=False, final_down=False,
+        target_final_dead=False, target_final_down=False)
+    result.update(changes)
+    return result
+
+
+@pytest.mark.parametrize("fraction,expected", [(.7, True), (.699, False), (.75, True)])
+def test_follow_below_gate_uses_explicit_seventy_percent_without_changing_native_success(fraction, expected):
+    metadata = below_gate_metadata()
+    measured = dict(first_contact_ms=100, follow_observed_ms=239900, follow_fraction=fraction)
+    assert collect.eligibility(metadata, measured) is expected
+    assert metadata["success"] is False
+    assert not collect.eligibility(dict(metadata, dataset_family="follow", follow_below_gate=False), measured)
+
+
+@pytest.mark.parametrize("changes,measured_changes", [
+    (dict(elapsed_ms=239900), {}),
+    ({}, dict(first_contact_ms=None)),
+    ({}, dict(follow_observed_ms=0)),
+    (dict(final_dead=True), {}),
+    (dict(final_down=True), {}),
+    (dict(target_final_dead=True), {}),
+    (dict(target_final_down=True), {}),
+    (dict(final_dead=None), {}),
+    (dict(target_final_down=None), {}),
+    (dict(follow_below_gate=False), {}),
+    (dict(minimum_follow_fraction=.69), {}),
+])
+def test_follow_below_gate_rejects_missing_contact_horizon_survival_or_policy(changes, measured_changes):
+    measured = dict(first_contact_ms=100, follow_observed_ms=239900, follow_fraction=.75)
+    assert not collect.eligibility(below_gate_metadata(**changes), dict(measured, **measured_changes))
+
+
+def test_follow_below_gate_occupancy_uses_physical_time_after_first_contact(tmp_path):
+    # Four of five observed trace rows are in band, but only 69.9% of the
+    # elapsed post-contact time is: decision counts cannot supply the label.
+    metadata = below_gate_metadata(id="follow-0", split="train", decisions=5)
+    (tmp_path / "target-trajectory.txt").write_text("\n".join([
+        "0 0 0 0 600 0", "100000 0 0 0 300 0", "100100 0 0 0 300 0",
+        "100200 0 0 0 300 0", "197860 0 0 0 600 0", "240000 0 0 0 300 0", ""]))
+    measured = collect.measured_episode(tmp_path, metadata, dict(key_counts={}))
+    assert measured["first_contact_ms"] == 100000
+    assert measured["follow_observed_ms"] == 140000
+    assert measured["follow_fraction"] == pytest.approx(.699)
+    assert measured["training_eligible"] is False
+    assert measured["success"] is False
+
+
 def test_aggregate_storage_reserves_across_families_and_releases_after_failure(tmp_path, monkeypatch):
     budget = collect.StorageBudget(tmp_path, max_bytes=2 * 20480)
     monkeypatch.setattr(collect.shutil, "disk_usage", lambda root: SimpleNamespace(free=10**12))
-    (tmp_path / "failed-point.bin").write_bytes(b"x" * 10)
+    retained = tmp_path / "point/train/failed/samples.bin.gz"
+    retained.parent.mkdir(parents=True)
+    retained.write_bytes(b"x" * 10)
+    new_family = tmp_path / "follow_below_gate/train/follow-0/samples.bin.gz"
+    new_family.parent.mkdir(parents=True)
     with budget.reserve(100):
+        new_family.write_bytes(b"x" * 10)
         with pytest.raises(ValueError, match="Disk budget"):
             with budget.reserve(100):
                 pytest.fail("Concurrent family exceeded aggregate budget")
@@ -232,17 +389,18 @@ def test_aggregate_storage_reserves_across_families_and_releases_after_failure(t
     with pytest.raises(RuntimeError):
         with budget.reserve(100):
             raise RuntimeError("retained partial attempt")
-    assert budget.reserved == 0 and (tmp_path / "failed-point.bin").read_bytes() == b"x" * 10
+    assert budget.reserved == 0 and retained.read_bytes() == new_family.read_bytes() == b"x" * 10
 
 
 def test_raw_completed_record_recovers_by_exact_witness_then_resumes_immutably(tmp_path, monkeypatch):
     options = SimpleNamespace(task=tmp_path, limit_ms=240000)
-    identity = dict(limit_ms=240000, navigation_memory_version=3)
+    identity = legacy_identity()
     value = point()
     directory = collect.directory_for(tmp_path, value)
     directory.mkdir(parents=True)
     for name in ("samples.bin.gz", "actions.txt", "trajectory.txt"):
         (directory / name).write_bytes(b"retained")
+    (directory / "contract.json").write_text('{"records":2,"mismatches":0,"previous_mismatches":0}\n')
     collect.atomic_json(directory / "episode.json", native(value))
     worker = collect.Worker(options, 0, None, identity)
     args = worker.args
@@ -261,6 +419,11 @@ def test_raw_completed_record_recovers_by_exact_witness_then_resumes_immutably(t
     before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in directory.iterdir()}
     assert worker.trial(value) == measured
     assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in directory.iterdir()}
+    upgraded = collect.collection_settings(identity, identity, follow_below_gate=True, source_follow_sha256="source-follow-hash")
+    worker.identity = upgraded
+    assert worker.trial(value) == measured
+    assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in directory.iterdir()}
+    assert v3.read_json(directory / "episode.json")["recording_identity"] == identity
     metadata["seed"] += 1
     collect.atomic_json(directory / "episode.json", metadata)
     with pytest.raises(ValueError, match="another frozen scenario"):
