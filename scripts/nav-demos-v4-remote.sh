@@ -53,7 +53,7 @@ if [[ "$stage" == record ]]; then
   "$task/.venv/bin/python" -I scripts/nav_follow_analysis.py "$task/validation/attempt-2" \
     --output "$task/analysis/attempt-2-follow.json"
   "$task/.venv/bin/python" -I scripts/nav_demos_v4_collect.py --task "$task" --include-follow auto \
-    --wall-minutes 100 --max-new 2000
+    --wall-minutes 100 --max-new 2000 --max-bytes 15000000000
 else
   "$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_demos_v4.py \
     scripts/tests/test_nav_teacher_v3.py scripts/tests/test_nav_teacher_v3_oracle.py \
