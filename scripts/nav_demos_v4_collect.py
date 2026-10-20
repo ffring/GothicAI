@@ -54,12 +54,7 @@ def atomic_json(path, value):
 
 
 class CollectionState:
-    """Publish status and verified immutable recording identities under one lock.
-
-    Legacy episodes have no sample digest. Their first successful NAVDEMO and
-    teacher-contract verification pins it here, outside the recording directory.
-    Later resumes compare the pin before recalculating any derived metrics.
-    """
+    """Keep sample hashes and status outside immutable recording directories."""
     def __init__(self, path, settings, previous=None):
         self.path, self.lock = Path(path), threading.Lock()
         self.data = dict(previous if previous is not None else
@@ -68,26 +63,42 @@ class CollectionState:
         integrity = self.data.setdefault("integrity", dict(schema_version=1, episodes={}))
         if (integrity.get("schema_version") != 1 or not isinstance(integrity.get("episodes"), dict)):
             raise ValueError("Unsupported recording integrity cache")
+        summary = self.path.with_name("collection-metrics.json")
+        self.saved = {str(Path(value["episode"])): value for value in
+                      (v3.read_json(summary).get("episodes", []) if summary.is_file() else [])}
 
     def key(self, directory):
         return str(Path(directory).relative_to(self.path.parent))
 
-    def verify(self, directory, fingerprint):
+    def saved_metrics(self, directory):
         with self.lock:
-            prior = self.data["integrity"]["episodes"].get(self.key(directory))
-            if prior is not None and prior != fingerprint:
-                raise ValueError(f"Immutable recording fingerprint changed: {directory}")
+            return self.saved.get(str(Path(directory)))
 
-    def pin(self, directory, fingerprint):
+    def verify_samples(self, directory, metadata, *, allow_unpinned=False):
+        digest = campaign.binary_digest(Path(directory) / "samples.bin.gz")
+        with self.lock:
+            pin = self.data["integrity"]["episodes"].get(self.key(directory), {})
+            saved = self.saved.get(str(Path(directory)), {})
+            summaries = (metadata, metadata.get("collection_metrics", {}), saved, pin)
+            recorded = [value["samples_sha256"] for value in summaries if value.get("samples_sha256")]
+        if not recorded and not allow_unpinned:
+            raise ValueError(f"Completed recording lacks its recorded samples hash: {directory}")
+        if any(value != digest for value in recorded):
+            raise ValueError(f"Recorded samples hash differs: {directory}")
+        return digest
+
+    def pin_samples(self, directory, digest):
         with self.lock:
             episodes = self.data["integrity"]["episodes"]
-            key = self.key(directory)
-            prior = episodes.get(key)
-            if prior is not None and prior != fingerprint:
-                raise ValueError(f"Immutable recording fingerprint changed: {directory}")
-            if prior is None:
-                episodes[key] = fingerprint
-                atomic_json(self.path, self.data)
+            prior = episodes.get(self.key(directory), {})
+            if prior.get("samples_sha256", digest) != digest:
+                raise ValueError(f"Recorded samples hash differs: {directory}")
+            episodes[self.key(directory)] = dict(samples_sha256=digest)
+            atomic_json(self.path, self.data)
+
+    def remember_metrics(self, directory, measured):
+        with self.lock:
+            self.saved[str(Path(directory))] = measured
 
     def update(self, **values):
         with self.lock:
@@ -95,17 +106,11 @@ class CollectionState:
             atomic_json(self.path, self.data)
 
 
-def recording_fingerprint(directory, metadata, value, identity):
+def recorded_parameters(metadata):
     fields = (*v3.SCENARIO_IDENTITY_FIELDS, "index", "site_id", "transition_id", "type",
-              "dataset_family", "follow_below_gate", "minimum_follow_fraction")
-    digest = campaign.binary_digest(Path(directory) / "samples.bin.gz")
-    if metadata.get("samples_sha256", digest) != digest:
-        raise ValueError(f"Recorded samples hash differs: {value['id']}")
-    return dict(scenario={key: metadata.get(key) for key in fields},
-                teacher_version=metadata["teacher_version"],
-                navigation_memory_version=metadata["navigation_memory_version"],
-                demo_version=metadata["demo_version"], recording_identity=identity,
-                samples_sha256=digest)
+              "dataset_family", "follow_below_gate", "minimum_follow_fraction", "command_seed",
+              "limit_ms", "teacher_version", "navigation_memory_version", "demo_version")
+    return {key: metadata[key] for key in fields if key in metadata}
 
 
 def balanced(values, key, seed=SEED):
@@ -344,7 +349,9 @@ def validate_native(metadata, value, identity):
         raise ValueError("Wrong teacher observation source")
     if value["goal_kind"] not in ("follow", "approach") and metadata.get("goal") != value["goal"]:
         raise ValueError("Raw recording goal differs")
-    if (value["goal_kind"] in ("follow", "approach") or "seed" in metadata) and metadata.get("seed") != value["seed"]:
+    # Point/object native metadata uses zero for the moving-target seed. The
+    # global scenario seed is witnessed by the command file, not this field.
+    if value["goal_kind"] in ("follow", "approach") and metadata.get("seed") != value["seed"]:
         raise ValueError(f"Recording seed differs: {value['id']}")
     if value["goal_kind"] == "approach" and (metadata.get("target_immortal") is not True
             or metadata.get("target_nonhostile") is not True or metadata.get("target_final_dead") is not False
@@ -429,27 +436,58 @@ class Worker(campaign.Worker):
         self.jump = False
         super().__init__(runner_args(options, index), 3, budget)
 
+    def resume(self, value, directory):
+        """Completed attempts own their parameters and finalized measurements."""
+        if not v3.complete(directory):
+            raise ValueError(f"Incomplete recording retained: {directory}")
+        metadata = v3.read_json(directory / "episode.json")
+        parameters = recorded_parameters(metadata)
+        saved = metadata.get("collection_metrics") or self.state.saved_metrics(directory)
+        digest = self.state.verify_samples(directory, metadata, allow_unpinned=saved is None)
+        checked = demos.summarize(directory, validate=True)
+        if saved is not None:
+            measured = dict(saved)
+        else:
+            # A native attempt completed just before collection was interrupted.
+            # Fill only missing collection labels; keep its recorded seed and
+            # parameters. Finalization is saved outside the recording directory.
+            for key, item in value.items():
+                metadata.setdefault(key, item)
+            metadata.setdefault("command_seed", value["seed"])
+            if family(value) == "jump":
+                metadata.update(jumps.assess_episode(directory, metadata))
+            else:
+                replay_contract(self.args.contract, directory, metadata["decisions"])
+            measured = measured_episode(directory, metadata, checked)
+        measured.update(seed=metadata.get("seed"), scenario=parameters,
+                        samples_sha256=digest)
+        self.state.pin_samples(directory, digest)
+        self.state.remember_metrics(directory, measured)
+        campaign.emit("recording_complete", family=family(value), id=value["id"], resumed=True,
+            success=measured["success"], training_eligible=measured["training_eligible"], decisions=measured["decisions"])
+        return measured
+
     def trial(self, value):
+        directory = directory_for(self.options.task, value)
+        if (directory / "episode.json").is_file():
+            return self.resume(value, directory)
         identity = recording_identity(self.identity, value)
         jump = family(value) == "jump"
         if jump != self.jump:
             self.close()
             self.jump, self.args = jump, runner_args(self.options, self.index, jump)
-        directory = directory_for(self.options.task, value)
         scenario_name = (f"demos-v4-{FOLLOW_BELOW_GATE}-{value['id']}" if family(value) == FOLLOW_BELOW_GATE
                          else f"demos-v4-{value['id']}")
         expected = [f"seed {value['seed']}", "cheat god", "set time 10 0", "navdemos physics cv",
                     *commands(self.args, value), "label done"]
-        resumed = (directory / "episode.json").is_file()
         started = time.monotonic()
-        if not resumed:
-            if directory.exists():
-                raise ValueError(f"Partial recording retained; refusing to overwrite: {directory}")
-            if getattr(self.options, "verify_existing_only", False):
-                raise ValueError(f"Verification cannot start a new recording: {directory}")
-            with self.budget.reserve(self.args.limit_ms, jump=jump):
-                campaign.emit("recording_started", family=family(value), id=value["id"])
-                self.scenario(scenario_name, commands(self.args, value), directory, value["seed"])
+        if directory.exists():
+            raise ValueError(f"Partial recording retained; refusing to overwrite: {directory}")
+        if getattr(self.options, "verify_existing_only", False):
+            raise ValueError(f"Verification cannot start a new recording: {directory}")
+        with self.budget.reserve(self.args.limit_ms, jump=jump):
+            campaign.emit("recording_started", family=family(value), id=value["id"])
+            self.scenario(scenario_name, commands(self.args, value), directory, value["seed"])
         if not v3.complete(directory):
             raise ValueError(f"Incomplete recording retained: {directory}")
         witnesses = sorted((self.options.task / "recording-workers").glob(f"*/*/scenarios/{scenario_name}.bench"))
@@ -457,30 +495,29 @@ class Worker(campaign.Worker):
             raise ValueError(f"Missing or changed seeded command witness: {value['id']}")
         metadata = v3.read_json(directory / "episode.json")
         validate_native(metadata, value, identity)
-        if "id" not in metadata:
-            metadata["runner_goal"] = metadata.get("goal")
-            metadata.update(value, recording_identity=identity, collector_wall_s=time.monotonic() - started)
-            if family(value) == FOLLOW_BELOW_GATE:
-                metadata["teacher_goal_success"] = metadata["success"]
-        fingerprint = recording_fingerprint(directory, metadata, value, identity)
-        self.state.verify(directory, fingerprint)
+        metadata["runner_goal"] = metadata.get("goal")
+        actual_seed = metadata.get("seed")
+        metadata.update(value, recording_identity=identity, collector_wall_s=time.monotonic() - started,
+                        command_seed=value["seed"])
+        metadata["seed"] = actual_seed
+        if family(value) == FOLLOW_BELOW_GATE:
+            metadata["teacher_goal_success"] = metadata["success"]
+        digest = self.state.verify_samples(directory, metadata, allow_unpinned=True)
         if jump:
             metadata.update(jumps.assess_episode(directory, value))
         checked = demos.summarize(directory, validate=True)
         if checked.get("navigation_memory_versions") != [3] or checked.get("format_versions") != [2]:
             raise ValueError("Only memory-v3 NAVDEMO-v2 recordings are allowed")
         if not jump:
-            replay_contract(self.args.contract, directory, metadata["decisions"], write=not resumed)
+            replay_contract(self.args.contract, directory, metadata["decisions"], write=True)
         measured = measured_episode(directory, metadata, checked)
-        # Existing recordings are immutable, including a completed native attempt
-        # interrupted before the collector decorated its metadata. The current
-        # collection summary is authoritative for eligibility and derived values.
-        if not resumed:
-            metadata.update(training_eligible=measured["training_eligible"], collection_metrics=measured,
-                            samples_sha256=fingerprint["samples_sha256"])
-            atomic_json(directory / "episode.json", metadata)
-        self.state.pin(directory, fingerprint)
-        campaign.emit("recording_complete", family=family(value), id=value["id"], resumed=resumed,
+        measured.update(seed=metadata.get("seed"), scenario=recorded_parameters(metadata), samples_sha256=digest)
+        metadata.update(training_eligible=measured["training_eligible"], collection_metrics=measured,
+                        samples_sha256=digest)
+        atomic_json(directory / "episode.json", metadata)
+        self.state.pin_samples(directory, digest)
+        self.state.remember_metrics(directory, measured)
+        campaign.emit("recording_complete", family=family(value), id=value["id"], resumed=False,
             success=measured["success"], training_eligible=measured["training_eligible"], decisions=measured["decisions"])
         return measured
 
@@ -621,8 +658,16 @@ def run(options):
                             if follow_below_gate else None)
     identity = collection_settings(base_identity, prior_settings, follow_below_gate=follow_below_gate,
                                    source_follow_sha256=source_follow_sha256)
-    selections = prepare_selections(options.task, follow_below_gate)
     families = (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ()))
+    if prior_settings is None:
+        selections = prepare_selections(options.task, follow_below_gate)
+    else:
+        # Completed IDs refer to these frozen candidate lists. Do not regenerate
+        # old seeds, qualification or route parameters while resuming.
+        selections = {name: list(v3.rows(options.task / "recording-input" / f"{name}.jsonl"))
+                      for name in families}
+        if any(value.get("split") != "train" for values in selections.values() for value in values):
+            raise ValueError("Held-out scenario entered a recording selection")
     allowed = {directory_for(options.task, value) for values in selections.values() for value in values}
     if any(path.parent not in allowed for path in output.rglob("samples.bin*")):
         raise ValueError("Recording exists outside frozen train selections")
