@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the text recipes for locally generated material assets.
+"""Validate the text recipes for locally generated material and concept assets.
 
     python3 scripts/content/registry.py check
     python3 scripts/content/registry.py check --content-root /path/to/bakeoff
@@ -9,7 +9,7 @@ root. ``generation.outcome`` may be ``pending``, ``complete`` or ``skipped``.
 Skipped entries require a reason, retain their recipe, and have no output files.
 An inaccessible model may have a null revision only in a skipped recipe.
 The built-in image_gen.imagegen tool does not expose a seed or model revision;
-imagegen-filter records retain these values as null instead of inventing them.
+imagegen-filter and imagegen-concept records retain these values as null.
 Raw ``source_png`` paths are relative to ~/.local/share/gothic-ai/content-sources,
 with a ``source_sha256`` beside each path. ``check`` verifies their bytes by
 default; ``--source-root`` selects an isolated store or the backup copy.
@@ -18,6 +18,7 @@ default; ``--source-root`` selects an isolated store or the backup copy.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta
 import hashlib
 import json
 import math
@@ -127,8 +128,8 @@ def validate_entry(entry: Any, *, content_root: Path | None = None,
     """Raise RegistryError on invalid recipes; optionally verify output files.
 
     Metadata outside the required fields is retained for measurements and future
-    recipes. It must remain ordinary, finite JSON. Completed drafts contain all
-    six maps; pending and skipped drafts contain no output paths.
+    recipes. It must remain ordinary, finite JSON. Completed materials contain
+    all six maps; concepts retain a raw PNG with no map files.
     """
     if not isinstance(entry, dict):
         raise RegistryError("entry: expected a JSON object")
@@ -139,8 +140,9 @@ def validate_entry(entry: Any, *, content_root: Path | None = None,
         raise RegistryError(f"entry: missing fields: {', '.join(sorted(missing))}")
     if not isinstance(entry["id"], str) or not SLUG.fullmatch(entry["id"]):
         raise RegistryError("id: expected a lowercase resource slug")
-    if entry["kind"] != "material":
-        raise RegistryError("kind: expected 'material'")
+    if entry["kind"] not in ("material", "concept"):
+        raise RegistryError("kind: expected 'material' or 'concept'")
+    concept = entry["kind"] == "concept"
     if entry["status"] != "draft":
         raise RegistryError("status: expected 'draft'")
     if not isinstance(entry["replaces"], list) or any(not _nonempty(item) for item in entry["replaces"]):
@@ -152,7 +154,7 @@ def validate_entry(entry: Any, *, content_root: Path | None = None,
             raise RegistryError(f"{field}: expected a nonempty string")
     if not isinstance(entry["negative"], str):
         raise RegistryError("negative: expected a string")
-    imagegen = entry["pipeline"] == "imagegen-filter"
+    imagegen = entry["pipeline"] == "imagegen-filter" or (concept and entry["pipeline"] == "imagegen-concept")
     if not (imagegen and entry["seed"] is None) and (
         type(entry["seed"]) is not int or not 0 <= entry["seed"] < 2**64
     ):
@@ -175,6 +177,21 @@ def validate_entry(entry: Any, *, content_root: Path | None = None,
         outcome = "skipped"
     if outcome == "skipped" and not _nonempty(skip_reason):
         raise RegistryError("skipped entry: expected a nonempty skip_reason or generation.reason")
+    if concept:
+        if entry["pipeline"] != "imagegen-concept" or entry["seed"] is not None:
+            raise RegistryError("concept: expected imagegen-concept pipeline and null seed")
+        if generation.get("outcome") != "complete" or outcome != "complete":
+            raise RegistryError("concept: generation.outcome must be 'complete'")
+        if len(entry["replaces"]) != 1:
+            raise RegistryError("concept: replaces must name exactly one visual")
+        if not all(field in entry for field in ("source_png", "source_sha256")):
+            raise RegistryError("concept: expected top-level source_png and source_sha256")
+        try:
+            utc = datetime.fromisoformat(entry.get("utc", "").replace("Z", "+00:00"))
+        except (ValueError, AttributeError, TypeError) as error:
+            raise RegistryError("concept.utc: expected an ISO 8601 UTC timestamp") from error
+        if utc.utcoffset() != timedelta(0):
+            raise RegistryError("concept.utc: expected an ISO 8601 UTC timestamp")
 
     models = entry["models"]
     if not isinstance(models, list) or not models:
@@ -198,6 +215,8 @@ def validate_entry(entry: Any, *, content_root: Path | None = None,
                 raise RegistryError(f"{field}.revision: expected a full 40-character commit hash")
         if not _nonempty(model.get("license")):
             raise RegistryError(f"{field}.license: expected a nonempty license identifier")
+    if concept and seen_models != {BUILTIN_IMAGEGEN_MODEL}:
+        raise RegistryError("concept.models: expected only the built-in image_gen.imagegen tool")
 
     files = entry["files"]
     if not isinstance(files, dict):
@@ -205,7 +224,9 @@ def validate_entry(entry: Any, *, content_root: Path | None = None,
     unknown_maps = files.keys() - MAP_NAMES
     if unknown_maps:
         raise RegistryError(f"files: unknown map names: {', '.join(sorted(unknown_maps))}")
-    if outcome == "complete" and files.keys() != MAP_NAMES:
+    if concept and files:
+        raise RegistryError("concept.files: must be empty; raw PNG is named by source_png")
+    if not concept and outcome == "complete" and files.keys() != MAP_NAMES:
         raise RegistryError(f"files: completed material requires {', '.join(sorted(MAP_NAMES))}")
     if outcome in ("pending", "skipped") and files:
         raise RegistryError(f"files: {outcome} material must have no output files")
@@ -277,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     suffix = " (output files verified)" if args.content_root is not None else ""
     source_count = len({pair for entry in entries for pair in source_references(entry)})
-    print(f"Registry check passed: {len(entries)} material recipes, {source_count} source PNGs verified{suffix}")
+    print(f"Registry check passed: {len(entries)} recipes, {source_count} source PNGs verified{suffix}")
     return 0
 
 
