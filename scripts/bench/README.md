@@ -28,6 +28,10 @@ seconds of normal app cadence without video. Use a fresh `WORLD=NEWWORLD.ZEN`, `
 for the GLB replacement; `OPENGOTHIC_CONTENT=` gives the original-mesh comparison.
 For FPS comparisons use `RYZEN_BENCH_CLASS=quiet`; [the barrel report](../../reports/content/2026-10-own-meshes/README.md)
 records the replacement, original-mesh screenshots and alternating branch/main runs.
+`own-mesh-crate` is the same take two metres away, framed on the `NW_HARBOUR_CRATE_01`
+row next to that barrel (`own-mesh-crate.png`); the barrels stay in its frame.
+`own-mesh-table` frames the `NW_CITY_TABLE_PEASANT_01` in a harbour house (candle-lit room,
+candle and books stay on it) and writes `own-mesh-table.png`.
 
 `own-mesh-fracture` breaks `NW_HARBOUR_BARREL_01` with the real one-handed
 attack animation from `destruction-step2-melee`. It takes before/after screenshots,
