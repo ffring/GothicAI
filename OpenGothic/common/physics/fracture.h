@@ -28,6 +28,7 @@ struct FractureMesh {
   double volume = 0;
 
   // OPENGOTHIC_FRACTURE, otherwise ~/.local/share/gothic-ai/fracture.
+  // Indexed mesh replacements never use the original visual's fracture cache.
   static std::shared_ptr<const FractureMesh> load(std::string_view visual);
   };
 

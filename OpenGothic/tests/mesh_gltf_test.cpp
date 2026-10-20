@@ -4,9 +4,11 @@
 #include "graphics/mesh/protomesh.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/mesh/submesh/pfxemittermesh.h"
+#include "physics/fracture.h"
 #include "resources.h"
 
 #include <Tempest/Device>
+#include <Tempest/Log>
 #include <Tempest/VulkanApi>
 #include <zenkit/Stream.hh>
 #include <rapidjson/document.h>
@@ -464,10 +466,10 @@ void converterCases(const Fixture& fixture) {
   for(const auto& wedge:mesh.sub_meshes[0].wedges)
     require(close(wedge.normal.x,0.f) && close(wedge.normal.y,-.8f) && close(wedge.normal.z,.6f),
             "normal must use the inverse transpose of the composed rotation and nonuniform scale");
-  const std::array<std::pair<const char*,zenkit::MaterialGroup>,7> groups = {{
+  const std::array<std::pair<const char*,zenkit::MaterialGroup>,6> groups = {{
       {"UNDEF",zenkit::MaterialGroup::UNDEFINED},{"METAL",zenkit::MaterialGroup::METAL},
       {"STONE",zenkit::MaterialGroup::STONE},{"WOOD",zenkit::MaterialGroup::WOOD},
-      {"EARTH",zenkit::MaterialGroup::EARTH},{"WATER",zenkit::MaterialGroup::WATER},
+      {"EARTH",zenkit::MaterialGroup::EARTH},
       {"SNOW",zenkit::MaterialGroup::SNOW}}};
   for(const auto& group:groups) {
     options = {};
@@ -499,7 +501,8 @@ void converterCases(const Fixture& fixture) {
           "exactly 65535 positions and wedges must remain valid");
   }
 
-void invalidGlb(const Fixture& fixture, std::string_view name, const GlbOptions& options) {
+void invalidGlb(const Fixture& fixture, std::string_view name, const GlbOptions& options,
+                std::string_view reason = {}) {
   const auto path = fixture.root/"meshes/test/own.glb";
   glbFile(path,options);
   bool rejected = false;
@@ -507,6 +510,9 @@ void invalidGlb(const Fixture& fixture, std::string_view name, const GlbOptions&
   catch(const std::runtime_error& error) {
     rejected = true;
     require(std::string_view(error.what()).size()>0,"GLB rejection must explain its reason");
+    if(!reason.empty())
+      require(std::string_view(error.what()).find(reason)!=std::string_view::npos,
+              "GLB rejection must explain the unsupported material group");
     }
   require(rejected,"converter must reject "+std::string(name));
   fixture.index();
@@ -520,6 +526,13 @@ void rejectionCases(const Fixture& fixture) {
   std::filesystem::remove(fixture.root/"meshes/test/own.glb");
   resourcePaths(fixture,false);
   GlbOptions options;
+  for(const auto* alpha:{"OPAQUE","MASK"}) {
+    options = {};
+    options.group = "WATER";
+    options.alpha = alpha;
+    invalidGlb(fixture,"WATER static material",options,"water belongs to world mesh surfaces and overrides OPAQUE/MASK");
+    }
+  options = {};
   options.skin = true; invalidGlb(fixture,"skin",options);
   options = {}; options.alpha = "BLEND"; invalidGlb(fixture,"BLEND",options);
   options = {}; options.normals = false; invalidGlb(fixture,"missing NORMAL",options);
@@ -562,6 +575,100 @@ void indexCases(const Fixture& fixture) {
   resourcePaths(fixture,false);
   fixture.index(R"({"invalid":{"glb":"../escape.glb"},"oWn_MeSh":{"glb":"test/own.glb"}})");
   resourcePaths(fixture,true);
+  }
+
+void fractureCache(const Fixture& fixture) {
+  const auto root = fixture.root/"fracture";
+  std::filesystem::create_directories(root);
+  // Eight independent solid tetrahedra exercise the real cache parser and
+  // Jolt convex-hull construction, with no geometry from the original game.
+  std::ofstream file(root/"OWN_MESH.fracture");
+  file << "GOTHIC_FRACTURE 1\npieces 8\n";
+  const std::array<std::array<float,3>,4> points = {{{0,0,0},{10,0,0},{0,10,0},{0,0,10}}};
+  const std::array<std::array<size_t,3>,4> triangles = {{{0,2,1},{0,1,3},{0,3,2},{1,2,3}}};
+  for(size_t piece=0;piece<8;++piece) {
+    file << "piece 166.6666666667 " << float(piece)*20.f+2.5f << " 2.5 2.5 4\n";
+    for(const auto& triangle:triangles) {
+      file << "tri ORIGINAL.TGA\n";
+      for(const auto index:triangle) {
+        const auto& point = points[index];
+        file << point[0]+float(piece)*20.f << ' ' << point[1] << ' ' << point[2] << " 0 1 0 0 0\n";
+        }
+      }
+    }
+  file.close();
+  require(bool(file),"temporary fracture cache must be writable");
+
+  struct FractureEnvironment {
+    std::string previous;
+    bool hadPrevious = false;
+    explicit FractureEnvironment(const std::filesystem::path& path) {
+      if(const auto* old = std::getenv("OPENGOTHIC_FRACTURE")) {
+        previous = old;
+        hadPrevious = true;
+        }
+      setenv("OPENGOTHIC_FRACTURE",path.c_str(),1);
+      }
+    ~FractureEnvironment() {
+      if(hadPrevious)
+        setenv("OPENGOTHIC_FRACTURE",previous.c_str(),1);
+      else
+        unsetenv("OPENGOTHIC_FRACTURE");
+      }
+    } environment(root);
+  require(!Resources::meshReplacementIndexed("OWN_MESH.MRM"),"an absent Resources instance has no mesh index");
+  const auto original = FractureMesh::load("own_mesh.3ds");
+  require(original!=nullptr && original->pieces.size()==8 && original->volume>0,
+          "synthetic original fracture cache must contain eight valid solid pieces");
+  for(const auto& piece:original->pieces)
+    require(piece.hull!=nullptr && piece.triangles.size()==4,"each original cache piece must have a real convex hull");
+
+  const auto expectOriginal = [&] {
+    Resources resources;
+    require(!Resources::meshReplacementIndexed("own_mesh.3ds"),"disabled or absent mesh index must have no replacement");
+    require(FractureMesh::load("path/own_mesh.3ds")!=nullptr,
+            "original fracture cache must load when the visual is not indexed");
+    };
+  std::filesystem::remove(fixture.root/"meshes/meshes.json");
+  expectOriginal();
+  fixture.index("{}");
+  expectOriginal();
+  fixture.index();
+  setenv("OPENGOTHIC_CONTENT","",1);
+  expectOriginal();
+  setenv("OPENGOTHIC_CONTENT",fixture.root.c_str(),1);
+
+  struct FractureLog {
+    size_t count = 0;
+    FractureLog() {
+      Tempest::Log::setOutputCallback([this](Tempest::Log::Mode mode, const char* text) {
+        if(mode==Tempest::Log::Info && std::string_view(text).find("fracture: disabled for indexed mesh replacement")!=std::string_view::npos)
+          ++count;
+        });
+      }
+    ~FractureLog() { Tempest::Log::setOutputCallback({}); }
+    } log;
+  glbFile(fixture.root/"meshes/test/own.glb");
+  {
+    Resources resources;
+    for(const auto* visual:{"own_mesh.3ds","OWN_MESH.MRM","path/Own_Mesh.3Ds","path\\own_mesh"}) {
+      require(Resources::meshReplacementIndexed(visual),"indexed visual lookup must normalize case, paths and extension");
+      require(FractureMesh::load(visual)==nullptr,"indexed GLB must block the original fracture cache");
+      }
+    require(!Resources::meshReplacementIndexed("OTHER.MRM"),"mesh index membership must be specific to the visual");
+    }
+  require(log.count==1,"fracture guard must log once per visual, independent of case and extension");
+  textFile(fixture.root/"meshes/test/own.glb","broken glb");
+  {
+    Resources resources;
+    require(FractureMesh::load("OWN_MESH.MRM")==nullptr,
+            "index membership must block stale fractures even when the GLB would fall back");
+    }
+  require(log.count==1,"fracture guard must not log again after Resources is recreated");
+  fixture.indexPath("../test/own.glb");
+  expectOriginal();
+  fixture.index();
+  glbFile(fixture.root/"meshes/test/own.glb");
   }
 
 void alphaDdsFile(const std::filesystem::path& path, bool transparentBc1, bool dxt5 = false) {
@@ -702,6 +809,7 @@ int main() {
     generatedBarrel(fixture);
     rejectionCases(fixture);
     indexCases(fixture);
+    fractureCache(fixture);
     setenv("TEMPEST_AUDIO_LOOPBACK","48000",1);
     maskBc1Policy(fixture);
     std::cout << "{\"test\":\"mesh_gltf\",\"passed\":true,\"assertions\":" << assertions << "}\n";

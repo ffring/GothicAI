@@ -132,6 +132,8 @@ class Resources final {
     static const ProtoMesh*          loadMesh       (std::string_view name);
     // All static visual readers share the same indexed GLB/original MRM path.
     static zenkit::MultiResolutionMesh loadVisualMesh(std::string_view name, bool* replaced = nullptr);
+    // Index membership only: an original fracture cache cannot describe our GLB.
+    static bool                      meshReplacementIndexed(std::string_view name);
     static const PfxEmitterMesh*     loadEmiterMesh (std::string_view name);
     static const Skeleton*           loadSkeleton   (std::string_view name);
     static const Animation*          loadAnimation  (std::string_view name);

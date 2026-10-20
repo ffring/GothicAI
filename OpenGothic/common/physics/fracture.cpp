@@ -1,7 +1,9 @@
 #include "fracture.h"
 #include "fracturedata.h"
+#include "resources.h"
 
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Tempest/Log>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -9,7 +11,9 @@
 #include <filesystem>
 #include <fstream>
 #include <locale>
+#include <mutex>
 #include <sstream>
+#include <unordered_set>
 
 namespace {
 std::string basename(std::string_view visual) {
@@ -77,6 +81,17 @@ float FractureRule::meleeDamage(Melee kind,float weaponDamage,float strength) co
   }
 
 std::shared_ptr<const FractureMesh> FractureMesh::load(std::string_view visual) {
+  if(Resources::meshReplacementIndexed(visual)) {
+    // Until own-mesh fracture generation is available, never reuse pieces of
+    // the original visual, including when an indexed GLB temporarily fails.
+    static std::mutex mutex;
+    static std::unordered_set<std::string> logged;
+    const auto name = basename(visual);
+    std::lock_guard<std::mutex> guard(mutex);
+    if(logged.insert(name).second)
+      Tempest::Log::i("fracture: disabled for indexed mesh replacement \"",name,".MRM\": original cached pieces do not match our mesh");
+    return {};
+    }
   std::filesystem::path root;
   if(const auto* path=std::getenv("OPENGOTHIC_FRACTURE")) {
     if(path[0]=='\0') return {};

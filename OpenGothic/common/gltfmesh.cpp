@@ -118,7 +118,8 @@ zenkit::MaterialGroup materialGroup(const cgltf_material& material) {
       if(group=="STONE") return zenkit::MaterialGroup::STONE;
       if(group=="WOOD")  return zenkit::MaterialGroup::WOOD;
       if(group=="EARTH") return zenkit::MaterialGroup::EARTH;
-      if(group=="WATER") return zenkit::MaterialGroup::WATER;
+      if(group=="WATER")
+        reject("material extras.group WATER is unsupported for static visuals: water belongs to world mesh surfaces and overrides OPAQUE/MASK");
       if(group=="SNOW")  return zenkit::MaterialGroup::SNOW;
       reject("unknown material extras.group: " + group);
       }

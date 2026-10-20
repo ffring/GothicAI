@@ -580,6 +580,22 @@ void Resources::indexMeshOverrides() {
   Log::i("meshes: ",meshOverrides.size()," entries from \"",root.string(),"\"");
   }
 
+bool Resources::meshReplacementIndexed(std::string_view name) {
+  if(inst==nullptr)
+    return false;
+  std::lock_guard<std::recursive_mutex> guard(inst->sync);
+  const auto slash = name.find_last_of("/\\");
+  if(slash!=std::string_view::npos)
+    name.remove_prefix(slash+1);
+  const auto dot = name.find_last_of('.');
+  if(dot!=std::string_view::npos)
+    name = name.substr(0,dot);
+  std::string key(name);
+  for(auto& c:key)
+    c = char(std::toupper(uint8_t(c)));
+  return inst->meshOverrides.find(key)!=inst->meshOverrides.end();
+  }
+
 zenkit::MultiResolutionMesh Resources::loadVisualMesh(std::string_view name, bool* replaced) {
   std::lock_guard<std::recursive_mutex> guard(inst->sync);
   if(replaced!=nullptr)
