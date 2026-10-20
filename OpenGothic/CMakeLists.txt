@@ -316,6 +316,30 @@ if(NOT ANDROID AND NOT IOS)
   add_custom_target(check-navkeyteacher
     COMMAND $<TARGET_FILE:gothic-navkeyteacher-contract>
     DEPENDS gothic-navkeyteacher-contract USES_TERMINAL)
+  add_executable(gothic-navmemoryteacher-contract EXCLUDE_FROM_ALL
+    tests/navmemoryteacher_contract.cpp common/navmemoryteacher.cpp)
+  target_include_directories(gothic-navmemoryteacher-contract PRIVATE
+    common lib/Tempest/Engine/include lib/Tempest/Engine
+    lib/Tempest/Engine/thirdparty/zlib ${CMAKE_BINARY_DIR}/lib/Tempest/thirdparty/zlib)
+  target_link_libraries(gothic-navmemoryteacher-contract PRIVATE zlibstatic)
+  if(NOT MSVC)
+    target_compile_options(gothic-navmemoryteacher-contract PRIVATE -Wall -Wconversion -Werror)
+  endif()
+  add_custom_target(check-navmemoryteacher
+    COMMAND $<TARGET_FILE:gothic-navmemoryteacher-contract> --self-test
+    DEPENDS gothic-navmemoryteacher-contract USES_TERMINAL)
+  add_executable(gothic-navmemoryteacher-diagnostics EXCLUDE_FROM_ALL
+    tests/navmemoryteacher_diagnostics.cpp common/navmemoryteacher.cpp)
+  target_include_directories(gothic-navmemoryteacher-diagnostics PRIVATE
+    common lib/Tempest/Engine/include lib/Tempest/Engine
+    lib/Tempest/Engine/thirdparty/zlib ${CMAKE_BINARY_DIR}/lib/Tempest/thirdparty/zlib)
+  target_link_libraries(gothic-navmemoryteacher-diagnostics PRIVATE zlibstatic)
+  if(NOT MSVC)
+    target_compile_options(gothic-navmemoryteacher-diagnostics PRIVATE -Wall -Wconversion -Werror)
+  endif()
+  add_custom_target(check-navmemoryteacher-diagnostics
+    COMMAND $<TARGET_FILE:gothic-navmemoryteacher-diagnostics> --self-test
+    DEPENDS gothic-navmemoryteacher-diagnostics USES_TERMINAL)
   add_executable(gothic-navmesh-contract EXCLUDE_FROM_ALL
     tests/navmesh_contract.cpp common/physics/navmesh.cpp)
   target_link_libraries(gothic-navmesh-contract PRIVATE Recast Detour)
@@ -325,6 +349,15 @@ if(NOT ANDROID AND NOT IOS)
   add_custom_target(check-navmesh
     COMMAND $<TARGET_FILE:gothic-navmesh-contract>
     DEPENDS gothic-navmesh-contract USES_TERMINAL)
+  add_executable(gothic-navoracle-contract EXCLUDE_FROM_ALL
+    tests/navoracle_contract.cpp common/physics/navmesh.cpp)
+  target_link_libraries(gothic-navoracle-contract PRIVATE Recast Detour)
+  if(NOT MSVC)
+    target_compile_options(gothic-navoracle-contract PRIVATE -Wall -Wconversion -Werror)
+  endif()
+  add_custom_target(check-navoracle
+    COMMAND $<TARGET_FILE:gothic-navoracle-contract>
+    DEPENDS gothic-navoracle-contract USES_TERMINAL)
   add_executable(gothic-aim-contract EXCLUDE_FROM_ALL tests/aim_contract.cpp)
   target_link_libraries(gothic-aim-contract PRIVATE OpenGothic AiBridge)
   add_custom_target(check-aim
