@@ -15,6 +15,7 @@ from gothic_ai.bodies import Bodies
 from gothic_ai.brain.planner import NpcRecord
 from gothic_ai.budget import Budget
 from gothic_ai.chronicle import Chronicle
+from gothic_ai.crimes import Crimes
 from gothic_ai.dialogue import DialogueManager, SceneLine
 from gothic_ai.gossip import INSTRUCTIONS, GossipDesk
 from gothic_ai.journal import Journal
@@ -312,6 +313,57 @@ async def test_scene_instead_of_a_silent_pass(tmp_path):
     # one call for two: one token of each one's bucket
     assert g.budget.allow(LOBART) and not g.budget.allow(LOBART)
     assert g.budget.allow(HILDA) and not g.budget.allow(HILDA)
+
+
+@pytest.mark.parametrize("retold", [False, True])
+@pytest.mark.parametrize("why,reason", [
+    ("fought", "Браго дрался с ним"),
+    ("companion", "Браго напал на героя и его спутников"),
+    ("hostile", "Браго был его врагом"),
+    ("quest", "сам хотел, чтобы Браго умер"),
+])
+async def test_crime_scene_brief_keeps_the_excuse_and_asks_teller_to_voice_it(tmp_path, retold, why, reason):
+    async with _gossip(tmp_path) as g:
+        crimes = Crimes(g.desk.link, g.chronicle, names=lambda npc: "Браго" if npc == "BRAGO" else npc)
+        g.rumors.crimes = crimes
+        g.chronicle.record({"fact": "crime", "id": "c1", "kind": "murder", "victim": "BRAGO", "day": 1})
+        source = HILDA if retold else LOBART
+        g.chronicle.record({"fact": "crime_side", "npc": source, "crime": "c1", "why": why})
+        if retold:
+            g.chronicle.record({
+                "fact": "rumor", "crime": "c1", "kind": "murder", "from": HILDA, "to": LOBART,
+                "excuse": why, "excuse_by": HILDA, "excuse_by_name": HILDA,
+            })
+        rumor = Rumor("crime:c1", "murder", source, source, "герой убил человека: Браго", crime="c1")
+        rumor.known[LOBART] = int(retold)
+        scene = gossip.Scene("scene", LOBART, HILDA, "Лобарт", "Хильда", rumor.key, "words")
+        scene.news = rumor.description()
+        brief = g.desk._brief(scene, rumor)
+        name = "Хильда" if retold else "Лобарт"
+        assert f"Оправдание: {name} говорит: {reason}" in brief
+        assert "Рассказчик должен озвучить эту причину вместе с новостью." in brief
+        assert crimes.excuse(LOBART, "c1")["excuse_by_name"] == source
+
+
+async def test_view_can_offer_the_justified_version_to_a_knowing_listener(tmp_path, monkeypatch):
+    async with _gossip(tmp_path) as g:
+        crimes = Crimes(g.desk.link, g.chronicle)
+        g.rumors.crimes = crimes
+        g.chronicle.record({"fact": "crime", "id": "c1", "kind": "murder", "victim": "BRAGO", "day": 1})
+        g.chronicle.record({"fact": "crime_side", "npc": LOBART, "crime": "c1", "why": "fought"})
+        rumor = Rumor("crime:c1", "murder", LOBART, "Лобарт", "убийство", crime="c1")
+        rumor.known.update({LOBART: 0, HILDA: 1})
+        g.rumors.rumors = {rumor.key: rumor}
+        g.rumors.clock = AT
+        offers = []
+
+        async def offer(r, a, b, gap, name):
+            offers.append((r, a, b))
+
+        monkeypatch.setattr(g.desk, "_offer", offer)
+        g.desk._on_view(NpcView.model_validate(_view(LOBART, "Лобарт", _look(HILDA, "Хильда", 4))))
+        await _until(lambda: bool(offers))
+        assert offers == [(rumor, LOBART, HILDA)]
 
 
 async def test_one_fact_per_pass_and_witnesses(tmp_path):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from types import SimpleNamespace
 from typing import Any
 
@@ -8,17 +9,32 @@ import pytest
 
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.crime_meet import MURDER_REASON, CrimeMeet, reaction_for
-from gothic_ai.crime_memory import CrimeMemoryRuntime
+from gothic_ai.crime_memory import CrimeMemoryRuntime, memory_value
 from gothic_ai.crime_react import CrimeReact
 from gothic_ai.crimes import Crimes
+from gothic_ai.fear import knows_violence
 from gothic_ai.memory import MemoryStore
 from gothic_ai.places import PlaceBook
-from gothic_ai.protocol import HoldVerdictCmd, Loading, NpcEvent, NpcIdle, NpcRoster, PerceptionHeld, Session
+from gothic_ai.protocol import (
+    HeroDeed,
+    HoldVerdictCmd,
+    Loading,
+    NpcEvent,
+    NpcIdle,
+    NpcRoster,
+    PerceptionHeld,
+    Session,
+)
+from gothic_ai.social import Rumors
 from tests.test_crime_react import GUARD, OTHER_GUARD, ReactLink, card
 from tests.test_crimes import HILDA, LOBART
 
 CITIZEN = "VLK_400_CITIZEN"
 STRANGER = "BAU_900_STRANGER"
+CAVALORN = "BAU_4300_ADDON_CAVALORN"
+BRAGO = "BDT_1014_BANDIT_L"
+THIRD = "BAU_901_THIRD"
+RUMOR_AT = 24 * 60 + 11 * 60
 
 
 @pytest.mark.parametrize("kind,role,courage,law,expected", [
@@ -413,6 +429,228 @@ async def test_allied_witness_neither_refuses_flees_nor_fights_after_murder(syst
     assert not system.meet.refuses(npc)
     assert system.link.actions == []
     assert system.link.refusal == {}
+    assert system.chronicle.facts("crime_meet") == []
+
+
+def ally_murder(system, *, victim_guild=9):
+    system.crimes.people.update({
+        CAVALORN: {"guild": 8, "npctype": 0},
+        BRAGO: {"guild": victim_guild, "npctype": 0},
+        THIRD: {"guild": 8, "npctype": 0},
+    })
+    system.crimes.sides.note_fight(BRAGO, CAVALORN)
+    crime = system.crimes.record(HeroDeed.model_validate({
+        "type": "hero_deed", "id": "brago-murder", "kind": "murder", "victim": BRAGO,
+        "victim_guild": victim_guild, "witnesses": [CAVALORN, HILDA],
+        "witnesses_metadata": [{"npc": CAVALORN, "guild": 8}, {"npc": HILDA, "guild": 12}],
+        "position": {"x": 0, "y": 0, "z": 0}, "day": 1, "hour": 10, "minute": 0,
+    }))
+    assert crime is not None
+    assert system.crimes.side(CAVALORN, crime["id"])["why"] == "fought"
+    assert system.crimes.side(HILDA, crime["id"]) is None
+    return crime
+
+
+def crime_rumors(system):
+    rumors = Rumors.__new__(Rumors)
+    rumors.social = SimpleNamespace(names={
+        CAVALORN: "Кавалорн", BRAGO: "Браго", STRANGER: "Крестьянин", THIRD: "Третий", HILDA: "Хильда",
+    })
+    rumors.dead, rumors.rumors, rumors.tells, rumors.waiting = set(), {}, defaultdict(int), None
+    rumors.chronicle, rumors.crimes = system.chronicle, system.crimes
+    rumors.dialogue = SimpleNamespace(remember=lambda *args: None)
+    rumors._load()
+    return rumors
+
+
+@pytest.mark.parametrize("courage", [2, 3, 5])
+async def test_ally_rumor_does_not_make_a_stranger_blame_the_hero(system, courage):
+    crime = ally_murder(system)
+    rumors = crime_rumors(system)
+    [rumor] = rumors.rumors.values()
+    fact = rumors._learn(rumor, STRANGER, CAVALORN, RUMOR_AT, "met")
+    assert (fact["excuse"], fact["excuse_by"], fact["excuse_by_name"]) == (
+        "fought", CAVALORN, "Кавалорн",
+    )
+    [knowledge] = system.crimes.known(STRANGER)
+    assert (knowledge.degree, knowledge.excuse, knowledge.excuse_by) == ("heard", "fought", CAVALORN)
+    assert system.crimes.side(STRANGER, crime["id"]) is None
+    assert system.react.role(STRANGER, crime) == "ally"
+    assert system.meet.refusal(STRANGER) is None
+    assert not knows_violence(STRANGER, system.crimes)
+    assert memory_value(system.crimes, STRANGER) == (0, 0)
+    situation = system.crimes.situation(STRANGER)
+    assert "дрался с ним" in situation
+    assert "не винишь героя" in situation
+    system.meet.cards = {STRANGER: card(STRANGER, courage=courage)}
+    near(system, STRANGER)
+    await system.meet.tick()
+    assert system.link.actions == []
+    assert system.chronicle.facts("crime_meet") == []
+    assert system.crimes.crime(crime["id"]) == crime
+
+
+async def test_ally_excuse_keeps_its_first_source_through_retelling_and_save_load(system):
+    crime = ally_murder(system)
+    rumors = crime_rumors(system)
+    [rumor] = rumors.rumors.values()
+    rumors._learn(rumor, STRANGER, CAVALORN, RUMOR_AT, "met")
+    relayed = rumors._learn(rumor, THIRD, STRANGER, RUMOR_AT + 1, "met")
+    assert (relayed["excuse"], relayed["excuse_by"], relayed["excuse_by_name"], relayed["hops"]) == (
+        "fought", CAVALORN, "Кавалорн", 2,
+    )
+    assert system.react.role(THIRD, crime) == "ally"
+    assert system.meet.refusal(THIRD) is None
+    saved = system.memory.head("A")
+    system.chronicle.record({"fact": "crime_seen", "npc": THIRD, "crime": crime["id"]})
+    assert system.react.role(THIRD, crime) == "stranger"
+    people = system.crimes.people.copy()
+    loaded = Session(type="session", branch="B", parent="A", parent_seq=saved, reason="load")
+    system.link.session = loaded
+    system.link.receive(loaded)
+    system.crimes.people.update(people)
+    reloaded = Chronicle(system.link, system.memory)
+    loaded_crimes = Crimes(system.link, reloaded)
+    try:
+        [knowledge] = loaded_crimes.known(THIRD)
+        assert (knowledge.degree, knowledge.excuse, knowledge.excuse_by) == (
+            "heard", "fought", CAVALORN,
+        )
+        assert reloaded.facts("rumor")[-1] == relayed
+        rumors._load()
+        [rumor] = rumors.rumors.values()
+        again = rumors._learn(rumor, CITIZEN, THIRD, RUMOR_AT + 2, "met")
+        assert (again["excuse"], again["excuse_by"], again["hops"]) == ("fought", CAVALORN, 3)
+        assert system.react.role(THIRD, crime) == "ally"
+        assert system.meet.refusal(THIRD) is None
+        assert not knows_violence(THIRD, system.crimes)
+        assert memory_value(system.crimes, THIRD) == (0, 0)
+    finally:
+        await loaded_crimes.close()
+
+
+@pytest.mark.parametrize("tellers", [(HILDA,), (HILDA, CAVALORN), (CAVALORN, HILDA)])
+async def test_plain_rumor_still_blames_but_an_excused_version_wins_in_either_order(system, tellers):
+    crime = ally_murder(system)
+    rumors = crime_rumors(system)
+    [rumor] = rumors.rumors.values()
+    for minute, teller in enumerate(tellers):
+        rumors._learn(rumor, STRANGER, teller, RUMOR_AT + minute, "met")
+    [knowledge] = system.crimes.known(STRANGER)
+    if CAVALORN in tellers:
+        assert (knowledge.excuse, knowledge.excuse_by) == ("fought", CAVALORN)
+        assert system.react.role(STRANGER, crime) == "ally"
+        assert system.meet.refusal(STRANGER) is None
+        assert not knows_violence(STRANGER, system.crimes)
+        assert memory_value(system.crimes, STRANGER) == (0, 0)
+    else:
+        assert not knowledge.excuse
+        refusal = system.meet.refusal(STRANGER)
+        assert (refusal.role, refusal.reaction) == ("stranger", "refuse")
+        assert knows_violence(STRANGER, system.crimes)
+        assert memory_value(system.crimes, STRANGER) == (4, 1)
+
+
+@pytest.mark.parametrize("courage", [2, 3])
+async def test_later_excused_version_stops_existing_flight_or_refusal(system, courage):
+    crime = ally_murder(system)
+    rumors = crime_rumors(system)
+    [rumor] = rumors.rumors.values()
+    rumors._learn(rumor, STRANGER, HILDA, RUMOR_AT, "met")
+    system.meet.cards = {STRANGER: card(STRANGER, courage=courage)}
+    near(system, STRANGER)
+    await system.meet.tick()
+    assert STRANGER in system.meet._active
+    assert system.link.refusal[STRANGER] == 2
+    assert system.link.projection[STRANGER] == 3
+    actions = len(system.link.actions)
+    rumors._learn(rumor, STRANGER, CAVALORN, RUMOR_AT + 1, "met")
+    await system.meet.tick()
+    assert system.react.role(STRANGER, crime) == "ally"
+    assert system.meet.refusal(STRANGER) is None
+    assert STRANGER not in system.meet._active
+    assert system.link.refusal[STRANGER] == 0
+    assert system.link.native.get(STRANGER, "ZS_STAND") == "ZS_STAND"
+    assert system.link.projection[STRANGER] == 0
+    assert len(system.link.actions) == actions
+    assert len(system.chronicle.facts("crime_meet")) == 1
+
+
+@pytest.mark.parametrize("npc,role,courage,reaction", [
+    (CITIZEN, "member", 2, "flee"),
+    (CITIZEN, "member", 3, "refuse"),
+    (CITIZEN, "member", 4, "fight"),
+    (GUARD, "guard", 2, "fight"),
+    (GUARD, "guard", 5, "fight"),
+])
+async def test_excused_rumor_keeps_victims_community_and_guard_consequences(
+    system, npc, role, courage, reaction,
+):
+    crime = ally_murder(system, victim_guild=3)
+    rumors = crime_rumors(system)
+    [rumor] = rumors.rumors.values()
+    fact = rumors._learn(rumor, npc, CAVALORN, RUMOR_AT, "met")
+    assert fact["excuse"] == "fought"
+    assert system.react.role(npc, crime) == role
+    assert knows_violence(npc, system.crimes)
+    assert memory_value(system.crimes, npc) == (4, 1)
+    assert system.crimes.attitude(npc) == "hostile"
+    delivered = system.react.law.tick(RUMOR_AT)
+    assert bool(delivered) is (role == "guard")
+    if role == "guard":
+        assert delivered[0]["crime"] == crime["id"]
+        assert delivered[0]["via"] == GUARD
+    system.meet.cards = {npc: card(npc, courage=courage)}
+    near(system, npc)
+    await system.meet.tick()
+    [meeting] = system.chronicle.facts("crime_meet")
+    assert (meeting["role"], meeting["reaction"]) == (role, reaction)
+    assert "не винишь героя" not in system.crimes.situation(npc)
+
+
+@pytest.mark.parametrize("npc", [STRANGER, GUARD])
+@pytest.mark.parametrize("why", ["hostile", "quest", "fought", "companion"])
+async def test_listener_gets_own_side_before_normal_rumor_and_does_not_blame(system, npc, why):
+    crime = ally_murder(system, victim_guild=3)
+    if why == "hostile":
+        system.crimes.sides.hostile_guilds.add((system.crimes.people[npc]["guild"], 3))
+    elif why == "quest":
+        quest = SimpleNamespace(id="kill-brago", giver=npc, stages=[SimpleNamespace(goals=[
+            SimpleNamespace(kind="kill", npcs=[BRAGO]),
+        ])])
+        system.crimes.sides.book = SimpleNamespace(
+            all=lambda: {quest.id: quest}, progress=lambda _: SimpleNamespace(state="given"),
+        )
+    elif why == "fought":
+        system.crimes.sides.note_fight(BRAGO, npc)
+    else:
+        system.crimes.people[npc]["npctype"] = 2
+        system.crimes.sides.note_fight(BRAGO, "PLAYER")
+    rumors = crime_rumors(system)
+    [rumor] = rumors.rumors.values()
+    observed = []
+
+    def on_fact(fact):
+        observed.append((fact["fact"], system.crimes.side(npc, crime["id"])))
+        if fact["fact"] == "rumor":
+            assert system.crimes.attitude(npc) is None
+            assert system.react.law.tick(RUMOR_AT) == []
+
+    system.chronicle.on_fact.append(on_fact)
+    fact = rumors._learn(rumor, npc, HILDA, RUMOR_AT, "met")
+    assert "excuse" not in fact
+    assert [kind for kind, _ in observed] == ["crime_side", "rumor"]
+    assert all(side is not None and side["why"] == why for _, side in observed)
+    assert system.react.role(npc, crime) == "ally"
+    assert system.meet.refusal(npc) is None
+    assert system.crimes.attitude(npc) is None
+    assert not knows_violence(npc, system.crimes)
+    assert memory_value(system.crimes, npc) == (0, 0)
+    assert system.react.law.deliveries() == []
+    assert system.chronicle.facts("crime_known") == []
+    near(system, npc)
+    await system.meet.tick()
+    assert system.link.actions == []
     assert system.chronicle.facts("crime_meet") == []
 
 

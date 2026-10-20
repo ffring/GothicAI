@@ -43,7 +43,7 @@ def _memory_cases(crimes: Crimes, npc: str, *, law: CrimeLaw | None = None) -> l
         and k.suspect == "PLAYER"
         and not k.forgiven
         and not k.silenced
-        and crimes.side(npc, k.crime["id"]) is None
+        and not crimes.does_not_blame(npc, k.crime)
         and not (
             k.crime["id"] in absolved if law is None else (
                 law.is_guard(npc, k.crime.get("community"))

@@ -117,6 +117,7 @@ class CrimeReact:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.link, self.crimes = link, crimes
+        crimes.react = self
         self.law = law or CrimeLaw(crimes)
         self.cards = cards if cards is not None else {}
         self.project = project
@@ -174,6 +175,8 @@ class CrimeReact:
 
     async def close(self) -> None:
         self._closed = True
+        if self.crimes.react is self:
+            self.crimes.react = None
         if self._on_message in self.link.listeners:
             self.link.listeners.remove(self._on_message)
         if self._on_fact in self.crimes.chronicle.on_fact:
@@ -209,6 +212,17 @@ class CrimeReact:
         return "room:" + room if room else None
 
     def role(self, npc: str, crime: Fact) -> Role | None:
+        role = self.base_role(npc, crime)
+        if role == "owner":
+            return role
+        if self.crimes.side(npc, crime["id"]) is not None:
+            return "ally"
+        if role == "stranger" and self.crimes.does_not_blame(npc, crime):
+            return "ally"
+        return role
+
+    def base_role(self, npc: str, crime: Fact) -> Role | None:
+        """Connection to the victim before a personal side or a heard justification."""
         npc = npc.upper()
         deed = self._deeds.get(crime["id"])
         owners = {str(crime.get("owner", "")).upper(), str(crime.get("victim", "")).upper()}
@@ -216,8 +230,6 @@ class CrimeReact:
             owners.update(self.crimes._npc(n) for n in (deed.owner, deed.room_owner, deed.chest_owner) if n)
         if npc in owners:
             return "owner"
-        if self.crimes.side(npc, crime["id"]) is not None:
-            return "ally"
         person = self.crimes.people.get(npc, {})
         community = crime.get("community")
         if self.law.is_guard(npc, community, person):
