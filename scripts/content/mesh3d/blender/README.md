@@ -2,6 +2,21 @@
 
 Ручной офлайн-конвейер для [пилота генераторов](../../../../reports/content/2026-10-3d-generators/README.md). Игра его сама не запускает. Концепты и генерация — отдельные шаги.
 
+## Модель по концепту
+
+Основной путь этапа 2 с 2026-10-20: модель строится по своему концепту `image_gen`, генераторы 3D не используются ([бочка](../../../../reports/content/2026-10-barrel-from-concept/README.md)).
+
+```sh
+B=/Applications/Blender.app/Contents/MacOS/Blender
+$B -b --factory-startup -P scripts/content/mesh3d/blender/barrel.py -- \
+  scripts/content/mesh3d/blender/barrel.json /absolute/output/barrel
+$B -b --factory-startup -P scripts/content/mesh3d/blender/compare.py -- /absolute/compare.json
+uv run --with numpy --with pillow python scripts/content/mesh3d/iron_material.py \
+  /absolute/maps/own_prop_iron_band --target R G B
+```
+
+`barrel.py` снимает профиль с альфы вида спереди (`front` — путь внутри `content-sources`), остальные части берёт из `barrel.json`: число клёпок, положение и высоту обручей, стык, венец, доски крышки. Пишет `model.glb` и `metrics.json`. `compare.py` рендерит GLB с одним светом и камерой по списку видов, материалы `ours` берёт из `maps_dir/<ключ>/`. `iron_material.py` делает бесшовное кованое железо со средним цветом замера.
+
 ## Установка и запуск
 
 Blender **5.2.2 LTS** (та же линейка 5.2, что на Mac) устанавливается официальным портативным архивом с закреплённым SHA-256 в `~/gothic-ai/mesh3d/blender` на Ryzen. Установщик сначала показывает `df -h ~` и требует 23 ГиБ до распаковки, чтобы сохранить порог очереди 20 ГиБ. `run-ryzen.sh` копирует только Python-файлы этого модуля в свою папку и запускает `blender -b -P` через `gq batch`: 6 потоков, 8 ГиБ RAM, без GPU. Workbench использует Mesa llvmpipe без окна.

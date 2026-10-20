@@ -65,27 +65,46 @@ def _write_immutable(path: Path, raw: bytes, root: Path) -> None:
             raise ValueError(f"refusing to overwrite retained PNG: {path}")
 
 
+VIEWS = ("34", "front", "top")
+
+
 def import_concept(target: dict, source: Path, variant: int, prompt: str, utc: str,
                    registry_path: Path = registry_module.DEFAULT_REGISTRY,
-                   source_root: Path = registry_module.DEFAULT_SOURCE_ROOT) -> dict:
-    """Copy exact tool bytes once and append one recipe; equal retries reuse it."""
-    if type(variant) is not int or variant not in (1, 2):
-        raise ValueError("variant must be 1 or 2")
+                   source_root: Path = registry_module.DEFAULT_SOURCE_ROOT,
+                   view: str | None = None, edit_of: str | None = None) -> dict:
+    """Copy exact tool bytes once and append one recipe; equal retries reuse it.
+
+    A modelling concept has views: ``34`` from text, then ``front`` and ``top``
+    as image_gen edits of our own ``34`` image (``edit_of``), never of the original.
+    """
+    if type(variant) is not int or not 1 <= variant <= 9:
+        raise ValueError("variant must be an integer 1..9")
+    if view is not None and view not in VIEWS:
+        raise ValueError(f"view must be one of {', '.join(VIEWS)}")
+    if edit_of is not None and (view in (None, "34") or not registry_module.SLUG.fullmatch(edit_of)):
+        raise ValueError("edit_of names our own 34 concept and needs a front or top view")
     target_id = target["id"]
     if not isinstance(target_id, str) or not registry_module.SLUG.fullmatch(target_id):
         raise ValueError("target.id must be a lowercase resource slug")
     raw = Path(source).read_bytes()
     metrics = _png_metrics(raw)
-    relative = f"{SOURCE_SET}/{target_id}-v{variant}.png"
+    suffix = f"-v{variant}" + (f"-{view}" if view else "")
+    relative = f"{SOURCE_SET}/{target_id}{suffix}.png"
+    parameters = dict(set=SOURCE_SET, target=target_id, variant=variant,
+                      input="text only; original numbers only")
+    if view:
+        parameters["view"] = view
+    if edit_of:
+        parameters["edit_of"] = edit_of
+        parameters["input"] = "text plus our own concept image; original numbers only"
     record = dict(
-        id=f"{SOURCE_SET}-{target_id}-v{variant}", kind="concept",
+        id=f"{SOURCE_SET}-{target_id}{suffix}", kind="concept",
         replaces=[target["visual"]], pipeline="imagegen-concept",
         models=[dict(id="image_gen.imagegen", revision=None,
                      license="OpenAI Terms of Use; output owned by user")],
         prompt=prompt, negative="", seed=None, utc=utc, status="draft", files={},
         source_png=relative, source_sha256=hashlib.sha256(raw).hexdigest(),
-        parameters=dict(set=SOURCE_SET, target=target_id, variant=variant,
-                        input="text only; original numbers only"),
+        parameters=parameters,
         generation=dict(outcome="complete", alpha=metrics,
                         model_identity="Tool image_gen.imagegen; underlying model/version not exposed",
                         seed_policy="No seed exposed by the built-in tool"),
@@ -164,7 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     command = commands.add_parser("import", help="retain one unchanged PNG and back up sources")
     command.add_argument("--target", required=True)
     command.add_argument("--png", type=Path, required=True)
-    command.add_argument("--variant", type=int, choices=(1, 2), required=True)
+    command.add_argument("--variant", type=int, choices=range(1, 10), required=True)
+    command.add_argument("--view", choices=VIEWS)
+    command.add_argument("--edit-of", help="registry id of our own 34 concept this view was edited from")
     command.add_argument("--prompt-file", type=Path, required=True)
     command.add_argument("--utc", required=True)
     sheet = commands.add_parser("sheet", help="compose the 5 × 2 JPG contact sheet")
@@ -182,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(f"unknown target: {args.target}")
             record = import_concept(selected[0], args.png, args.variant,
                 args.prompt_file.read_text(encoding="utf-8").strip(), args.utc,
-                args.registry, args.source_root)
+                args.registry, args.source_root, args.view, args.edit_of)
             subprocess.run([str(Path(__file__).resolve().parents[1] / "backup-sources.sh"),
                 "--registry", str(args.registry), "--source-root", str(args.source_root)], check=True)
             print(f"Imported {record['id']}: {record['source_sha256']}")
