@@ -61,7 +61,7 @@ export LIBRARY_PATH="$CUDA_HOME/lib:$CUDA_HOME/targets/x86_64-linux/lib${LIBRARY
 export LD_LIBRARY_PATH="$CUDA_HOME/lib:$CUDA_HOME/targets/x86_64-linux/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 mkdir -p "$TMPDIR" "runs/$run_id"
 
-models=(trellis2 trellis)
+models=(trellis trellis2)
 [[ "$model" == both ]] || models=("$model")
 for current in "${models[@]}"; do
   [[ -x ".venv-$current/bin/python" ]] || { echo "Missing environment for $current; run setup first" >&2; exit 1; }
@@ -124,14 +124,18 @@ if [[ -f downtime.tsv ]]; then
   prior=$(awk '{s+=$3} END {print s+0}' downtime.tsv)
 fi
 [[ "$prior" =~ ^[0-9]+$ ]] || { echo 'Invalid downtime history' >&2; exit 1; }
-# The 30-minute pilot window reserves its final 600 seconds for recovery.
+# Cumulative pilot downtime stays below 30 minutes. This additional window
+# is at most 23 minutes, including a 600-second recovery reserve.
 budget=$(( 1200 - prior ))
+(( budget <= 780 )) || budget=780
 (( budget > 60 )) || { echo 'Cumulative stopped-service budget exhausted; no services stopped' >&2; exit 75; }
 deadline=$(( $(date +%s) + budget ))
 stopped=()
 health_urls=()
 stop_epoch=0
 run_pid=
+run_scope=
+monitor_pid=
 restore() {
   local rc=$? index unit healthy attempt elapsed total
   trap - EXIT HUP INT TERM
@@ -145,6 +149,13 @@ restore() {
     done
     kill -KILL -- "-$run_pid" 2>/dev/null
     wait "$run_pid" 2>/dev/null
+  fi
+  if [[ -n "$run_scope" ]]; then
+    timeout 15 systemctl --user stop "$run_scope" 2>/dev/null
+  fi
+  if [[ -n "$monitor_pid" ]]; then
+    kill "$monitor_pid" 2>/dev/null
+    wait "$monitor_pid" 2>/dev/null
   fi
   # Start every stopped unit before waiting for either model to become ready.
   for unit in ${stopped[@]+"${stopped[@]}"}; do
@@ -182,6 +193,34 @@ restore() {
 trap restore EXIT
 trap 'exit 130' HUP INT TERM
 
+# Verify the actual process cgroup before any service is stopped. These limits
+# apply only to this pilot's scopes; no user-manager or system limits are changed.
+cat > "runs/$run_id/limited-exec.sh" <<'LIMITED'
+#!/usr/bin/env bash
+set -euo pipefail
+cg=$(awk -F: '$1 == "0" {print $3}' /proc/self/cgroup)
+cgdir="/sys/fs/cgroup$cg"
+[[ "$(cat "$cgdir/memory.max")" == 21474836480 ]]
+[[ "$(cat "$cgdir/memory.swap.max")" == 0 ]]
+# This systemd version lacks MemoryOOMGroup; the delegated scope file is writable.
+echo 1 > "$cgdir/memory.oom.group"
+[[ "$(cat "$cgdir/memory.oom.group")" == 1 ]]
+printf '%s\n' "$cgdir" > "$1"
+shift
+exec "$@"
+LIMITED
+scope_properties=(--user --scope --quiet -p MemoryMax=20G -p MemorySwapMax=0)
+manager_cg=$(systemctl --user show --property=ControlGroup --value)
+grep -qw memory "/sys/fs/cgroup$manager_cg/cgroup.controllers"
+grep -qw memory "/sys/fs/cgroup$manager_cg/cgroup.subtree_control"
+systemd-run "${scope_properties[@]}" --unit="mesh3d-preflight-$run_id" \
+  bash "$PWD/runs/$run_id/limited-exec.sh" "$PWD/runs/$run_id/preflight-cgroup.txt" true
+available_kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+(( available_kib >= 26 * 1024 * 1024 )) || {
+  echo "MemAvailable below 26 GiB: $available_kib KiB; no services stopped" >&2
+  exit 75
+}
+log_event memory-preflight "available_kib=$available_kib memory_max=21474836480 swap_max=0 oom_group=1"
 log_event window-start "$model seed=$seed"
 timeout 5 nvidia-smi > "runs/$run_id/nvidia-before.txt"
 free_mib=$(free_memory)
@@ -208,22 +247,65 @@ done
 timeout 5 nvidia-smi > "runs/$run_id/nvidia-ready.txt"
 (( free_mib >= min_free_mib )) || { echo "Insufficient GPU memory: $free_mib MiB free, require $min_free_mib MiB" >&2; exit 75; }
 
+monitor_scope() {
+  local path_file="$1" journal="$2" cgdir value peak events
+  while kill -0 "$run_pid" 2>/dev/null; do
+    if [[ -s "$path_file" ]]; then
+      cgdir=$(cat "$path_file")
+      if [[ -r "$cgdir/memory.current" ]]; then
+        value=$(cat "$cgdir/memory.current" 2>/dev/null) || value=unavailable
+        peak=$(cat "$cgdir/memory.peak" 2>/dev/null) || peak=unavailable
+        events=$(tr '\n' ',' < "$cgdir/memory.events" 2>/dev/null) || events=unavailable
+        printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$value" "$peak" "$events" >> "$journal"
+      fi
+    fi
+    sleep 1
+  done
+}
+
+# v1 first, then the corrected 512 loader. The earlier cascade decoder reached
+# 29103 MiB RSS; omitting its unused 2465 MiB texture weights still exceeds the
+# 20480 MiB scope limit. Do not admit that known oversized variant in this pilot.
+variants=()
 for current in "${models[@]}"; do
+  if [[ "$current" == trellis ]]; then variants+=(trellis); else variants+=(trellis2-512); fi
+done
+for variant in "${variants[@]}"; do
   budget=$(( deadline - $(date +%s) ))
   (( budget > 0 )) || { echo 'Generation deadline reached' >&2; exit 124; }
-  output="$PWD/runs/$run_id/$current"
-  log_event generation-start "$current budget_seconds=$budget"
-  setsid timeout --kill-after=10 "$budget" ".venv-$current/bin/python" -u generate_trellis.py \
+  current=trellis
+  pipeline_args=()
+  if [[ "$variant" == trellis2-* ]]; then
+    current=trellis2
+    pipeline_args=(--pipeline-type "${variant#trellis2-}")
+  fi
+  output="$PWD/runs/$run_id/$variant"
+  run_scope="mesh3d-$run_id-$variant.scope"
+  path_file="$PWD/runs/$run_id/$variant.cgroup"
+  log_event generation-start "$variant budget_seconds=$budget scope=$run_scope memory_max=21474836480"
+  setsid timeout --kill-after=10 "$budget" systemd-run "${scope_properties[@]}" --unit="$run_scope" \
+    bash "$PWD/runs/$run_id/limited-exec.sh" "$path_file" \
+    "$PWD/.venv-$current/bin/python" -u "$PWD/generate_trellis.py" \
     --root "$PWD" --image "$PWD/inputs/$run_id.png" --model "$current" \
-    --seed "$seed" --output "$output" > "runs/$run_id/$current.log" 2>&1 &
+    --seed "$seed" --output "$output" "${pipeline_args[@]}" > "runs/$run_id/$variant.log" 2>&1 &
   run_pid=$!
+  monitor_scope "$path_file" "$PWD/runs/$run_id/$variant.cgroup-memory.tsv" &
+  monitor_pid=$!
   set +e
   wait "$run_pid"
   rc=$?
+  timeout 15 systemctl --user stop "$run_scope" 2>/dev/null
+  kill "$monitor_pid" 2>/dev/null
+  wait "$monitor_pid" 2>/dev/null
+  monitor_pid=
+  run_scope=
   run_pid=
   set -e
-  log_event generation-end "$current exit=$rc"
-  (( rc == 0 )) || { cat "runs/$run_id/$current.log" >&2; exit "$rc"; }
+  log_event generation-end "$variant exit=$rc"
+  (( rc == 0 )) || { cat "runs/$run_id/$variant.log" >&2; exit "$rc"; }
 done
+if [[ "$model" != trellis ]]; then
+  log_event generation-skip 'trellis2-1024_cascade estimated_rss_mib=26638 memory_max_mib=20480; prior measured decode exceeds cap even after unused weights removed'
+fi
 printf 'Results: ~/gothic-ai/mesh3d/runs/%s\n' "$run_id"
 REMOTE

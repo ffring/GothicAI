@@ -1,14 +1,17 @@
 """Numerical/file contract tests. No model, network or GPU imports."""
+import json
 from pathlib import Path
 import socket
 import sys
+import time
+from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
-from generate_trellis import read_rgba, sample_voxel_attributes, save_raw, srgb_to_linear
+from generate_trellis import MemoryJournal, read_rgba, sample_voxel_attributes, save_raw, srgb_to_linear
 
 
 @pytest.fixture(autouse=True)
@@ -83,3 +86,39 @@ def test_rgba_requires_transparency_and_foreground(tmp_path):
 def test_check_imports_no_gpu_dependency_in_cpu_module():
     assert "torch" not in sys.modules
     assert "transformers" not in sys.modules
+
+
+def test_live_metadata_is_durable_before_model_returns(tmp_path):
+    # No CUDA import: the counter is a stub, while writes/threading are real.
+    peak = {"bytes": 2**20}
+    cuda = SimpleNamespace(is_initialized=lambda: True)
+    for name in ("memory_allocated", "memory_reserved", "max_memory_allocated", "max_memory_reserved"):
+        setattr(cuda, name, lambda: peak["bytes"])
+    meta = {"attempts": []}
+    journal = MemoryJournal(tmp_path, meta, SimpleNamespace(cuda=cuda))
+    try:
+        journal.begin_attempt("512", 1)
+        saved = json.loads((tmp_path / "meta.json").read_text())
+        assert saved["active_attempt"] == 0
+        assert saved["attempts"][0]["outcome"] == "running"
+        assert saved["attempts"][0]["peak_allocated_mib"] == 1
+        peak["bytes"] = 2 * 2**20
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            saved = json.loads((tmp_path / "meta.json").read_text())
+            if saved["peak_allocated_mib"] == 2:
+                break
+            time.sleep(0.05)
+        assert saved["peak_allocated_mib"] == 2
+        assert saved["peak_rss_mib"] > 0
+        records = [json.loads(line) for line in (tmp_path / "memory.jsonl").read_text().splitlines()]
+        assert records[-1]["active_attempt"] == 0
+        assert records[-1]["pipeline_type"] == "512"
+        assert records[-1]["peak_allocated_mib"] == 2
+        journal.update_attempt(outcome="ok", stage="finished")
+        journal.finish_attempt()
+    finally:
+        journal.stop()
+    saved = json.loads((tmp_path / "meta.json").read_text())
+    assert saved["active_attempt"] is None
+    assert saved["attempts"][0]["outcome"] == "ok"

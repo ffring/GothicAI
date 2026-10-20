@@ -6,6 +6,9 @@ import gc
 import hashlib
 import json
 import os
+import resource
+import sys
+import threading
 from pathlib import Path
 import subprocess
 import time
@@ -112,6 +115,119 @@ def _numpy(tensor):
     return tensor.detach().cpu().numpy()
 
 
+class MemoryJournal:
+    """Persist process/CUDA high-water marks while a model is still running."""
+
+    def __init__(self, output, meta, torch):
+        self.output, self.meta, self.torch = output, meta, torch
+        self.lock = threading.RLock()
+        self.stopped = threading.Event()
+        self.started = time.monotonic()
+        self.attempt_started = None
+        self.error = None
+        self.cgroup = None
+        try:
+            for line in Path("/proc/self/cgroup").read_text().splitlines():
+                if line.startswith("0::"):
+                    self.cgroup = Path("/sys/fs/cgroup") / line[3:].lstrip("/")
+                    break
+        except OSError:
+            pass
+        meta.update(outcome="running", active_attempt=None,
+                    rss_scope="process lifetime high-water mark; includes earlier attempts")
+        self.sample()
+        self.thread = threading.Thread(target=self._run, name="mesh3d-memory", daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while not self.stopped.wait(1):
+            try:
+                self.sample()
+            except Exception as error:
+                self.error = error
+                print(f"Memory telemetry failed: {error}", file=sys.stderr, flush=True)
+                return
+
+    def sample(self):
+        with self.lock:
+            now = time.monotonic()
+            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            record = {"timestamp_unix": time.time(), "seconds": round(now - self.started, 3),
+                      "peak_rss_mib": round(rss / (2**20 if sys.platform == "darwin" else 1024), 3)}
+            cuda = self.torch.cuda
+            for field, getter in (("allocated_mib", cuda.memory_allocated),
+                                  ("reserved_mib", cuda.memory_reserved),
+                                  ("peak_allocated_mib", cuda.max_memory_allocated),
+                                  ("peak_reserved_mib", cuda.max_memory_reserved)):
+                record[field] = round(getter() / 2**20, 3) if cuda.is_initialized() else 0
+            if self.cgroup is not None:
+                for name in ("current", "peak", "max", "swap.max"):
+                    try:
+                        value = (self.cgroup / f"memory.{name}").read_text().strip()
+                        record[f"cgroup_memory_{name.replace('.', '_')}_bytes"] = int(value) if value != "max" else value
+                    except OSError:
+                        pass
+                try:
+                    record["cgroup_memory_oom_group"] = int((self.cgroup / "memory.oom.group").read_text())
+                except OSError:
+                    pass
+                try:
+                    record["cgroup_memory_events"] = {
+                        key: int(value) for key, value in (line.split() for line in
+                            (self.cgroup / "memory.events").read_text().splitlines())}
+                except OSError:
+                    pass
+            index = self.meta["active_attempt"]
+            record["active_attempt"] = index
+            if index is not None:
+                attempt = self.meta["attempts"][index]
+                record.update(pipeline_type=attempt["pipeline_type"], stage=attempt["stage"])
+                attempt.update(seconds=round(now - self.attempt_started, 3),
+                               **{key: record[key] for key in
+                                  ("peak_rss_mib", "peak_allocated_mib", "peak_reserved_mib")})
+            self.meta.update(seconds=record["seconds"], memory=record)
+            for key in ("peak_rss_mib", "peak_allocated_mib", "peak_reserved_mib"):
+                self.meta[key] = max(self.meta.get(key, 0), record[key])
+            with (self.output / "memory.jsonl").open("a") as stream:
+                stream.write(json.dumps(record) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary = self.output / ".meta.json.tmp"
+            with temporary.open("w") as stream:
+                json.dump(self.meta, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(self.output / "meta.json")
+
+    def begin_attempt(self, pipeline_type, seed):
+        with self.lock:
+            self.attempt_started = time.monotonic()
+            attempt = {"pipeline_type": pipeline_type, "seed": seed,
+                       "stage": "loading", "outcome": "running"}
+            self.meta["active_attempt"] = len(self.meta["attempts"])
+            self.meta["attempts"].append(attempt)
+            self.sample()
+            return attempt
+
+    def update_attempt(self, **fields):
+        with self.lock:
+            self.meta["attempts"][self.meta["active_attempt"]].update(fields)
+            self.sample()
+
+    def finish_attempt(self):
+        with self.lock:
+            self.sample()
+            self.meta["active_attempt"] = None
+            self.sample()
+
+    def stop(self):
+        self.stopped.set()
+        self.thread.join()
+        if self.error is not None:
+            self.meta["telemetry_error"] = f"{type(self.error).__name__}: {self.error}"
+
+
 def generate(args):
     from adapter import assert_clean_imports, load_pipeline
     import torch
@@ -153,24 +269,30 @@ def generate(args):
             "nvidia_smi_before": _nvidia_smi(), "attempts": []}
     if not torch.cuda.is_available():
         raise RuntimeError("Generation requires CUDA on dev-ubuntu")
-    total_started = time.monotonic()
-    pipeline_types = ["1024_cascade", "512"] if args.model == "trellis2" else [None]
+    requested_type = args.pipeline_type
+    pipeline_types = [None]
+    if args.model == "trellis2":
+        pipeline_types = ["1024_cascade", "512"] if requested_type == "auto" else [requested_type]
     meta["parameters"].update({"low_vram": args.model == "trellis2", "num_samples": 1,
                                "formats": ["mesh"], "preprocess_image": True})
     if args.model == "trellis2":
-        meta["parameters"].update(pipeline_type="1024_cascade", oom_fallback="512", max_num_tokens=49152)
+        meta["parameters"].update(pipeline_type=pipeline_types[0],
+                                  oom_fallback="512" if requested_type == "auto" else None,
+                                  max_num_tokens=49152)
+    telemetry = MemoryJournal(args.output, meta, torch)
     failure = None
     try:
         for pipeline_type in pipeline_types:
             pipeline = None
             result = None
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats()
-            started = time.monotonic()
-            attempt = {"pipeline_type": pipeline_type, "seed": args.seed}
+            with telemetry.lock:
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
+                attempt = telemetry.begin_attempt(pipeline_type, args.seed)
             try:
                 pipeline = load_pipeline(root, args.model, pipeline_type=pipeline_type)
                 pipeline.cuda()
+                telemetry.update_attempt(stage="inference")
                 if args.model == "trellis2":
                     result = pipeline.run(image, seed=args.seed, pipeline_type=pipeline_type,
                                           max_num_tokens=49152)[0]
@@ -185,36 +307,36 @@ def generate(args):
                     vertices, faces = _numpy(result.vertices), _numpy(result.faces)
                     color = srgb_to_linear(_numpy(result.vertex_attrs)[:, :3])
                     fields = {}
-                meta["mesh"] = save_raw(args.output / "raw.npz", vertices, faces, color, **fields)
+                telemetry.update_attempt(stage="saving")
+                mesh = save_raw(args.output / "raw.npz", vertices, faces, color, **fields)
+                with telemetry.lock:
+                    meta["mesh"] = mesh
                 assert_clean_imports()
-                attempt["outcome"] = "ok"
+                torch.cuda.synchronize()
+                telemetry.update_attempt(outcome="ok", stage="finished")
             except torch.OutOfMemoryError as error:
-                attempt.update(outcome="oom", error=str(error))
-                if pipeline_type != "1024_cascade":
+                telemetry.update_attempt(outcome="oom", stage="finished", error=str(error))
+                if requested_type != "auto" or pipeline_type != "1024_cascade":
                     failure = error
                 error.__traceback__ = None
             except Exception as error:
-                attempt.update(outcome="error", error=f"{type(error).__name__}: {error}")
+                telemetry.update_attempt(outcome="error", stage="finished", error=f"{type(error).__name__}: {error}")
                 failure = error
                 error.__traceback__ = None
             finally:
-                torch.cuda.synchronize()
-                attempt.update(seconds=round(time.monotonic() - started, 3),
-                               peak_allocated_mib=round(torch.cuda.max_memory_allocated() / 2**20, 3),
-                               peak_reserved_mib=round(torch.cuda.max_memory_reserved() / 2**20, 3))
-                meta["attempts"].append(attempt)
+                telemetry.finish_attempt()
                 del result, pipeline
                 gc.collect()
                 torch.cuda.empty_cache()
             if attempt["outcome"] == "ok" or failure is not None:
                 break
     finally:
-        meta["seconds"] = round(time.monotonic() - total_started, 3)
-        meta["peak_allocated_mib"] = max(a["peak_allocated_mib"] for a in meta["attempts"])
-        meta["peak_reserved_mib"] = max(a["peak_reserved_mib"] for a in meta["attempts"])
-        meta["nvidia_smi_after"] = _nvidia_smi()
-        meta["outcome"] = meta["attempts"][-1]["outcome"]
-        (args.output / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
+        telemetry.stop()
+        meta["outcome"] = meta["attempts"][-1]["outcome"] if meta["attempts"] else "error"
+        try:
+            meta["nvidia_smi_after"] = _nvidia_smi()
+        finally:
+            telemetry.sample()
     if failure is not None:
         raise failure
     print(json.dumps({"model": args.model, "output": str(args.output), "seconds": meta["seconds"],
@@ -227,11 +349,14 @@ def main():
     parser.add_argument("--model", choices=["trellis2", "trellis"], required=True)
     parser.add_argument("--image", type=Path)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--pipeline-type", choices=["auto", "512", "1024_cascade"], default="auto")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
     if args.image is None or args.output is None:
         parser.error("generation requires --image and --output")
+    if args.model == "trellis" and args.pipeline_type != "auto":
+        parser.error("--pipeline-type applies only to trellis2")
     generate(args)
 
 
