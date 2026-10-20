@@ -27,6 +27,21 @@ uv run --no-project --with numpy --with pillow python scripts/content/mesh3d/pac
 
 `bake_atlas.py` даёт модели новую развёртку-атлас и запекает в неё плиточные материалы этапа 1. Сверху добавляются тон каждой детали, тёмные щели по краям досок, светлые стёртые кромки, выгоревший верх, мокрый низ и AO. Затем каждая зона растягивается по контрасту и возвращается к своему замеренному среднему цвету. Пути `glb` и `maps_dir` в настройках — внутри `content-staging`. В GLB остаётся одна UV, атлас, и материалы атласа с группами звука. `pack_prop.py` упаковывает атлас в DDS один раз и даёт каждому материалу GLB свой ключ `materials.json` на эти файлы.
 
+Ящик и замер оригинала:
+
+```sh
+$B -b --factory-startup -P scripts/content/mesh3d/blender/crate.py -- \
+  scripts/content/mesh3d/blender/crate.json /absolute/output/crate
+$B -b --factory-startup -P scripts/content/mesh3d/blender/bake_atlas.py -- \
+  scripts/content/mesh3d/blender/crate-atlas.json /absolute/output/crate-atlas
+# C++20 против ZenKit, как target-measures.cpp: позиции в NEWWORLD.ZEN и средний цвет текселей меша
+c++ -std=c++20 -O2 -DZKNO_REM=1 -D_ZK_WITH_MMAP=1 -IOpenGothic/lib/ZenKit/include -I<zenkit build>/include \
+  scripts/content/mesh3d/prop-survey.cpp <zenkit build>/libzenkit.a <zenkit build>/vendor/libsquish/libsquish.a -o prop-survey
+./prop-survey "<Gothic II>" NW_HARBOUR_CRATE_01.MRM
+```
+
+`crate.py` собирает ящик по частям: рамка из брусков на каждой грани, доски с щелями внутри, тёмный короб за щелями, Г-образные уголки и гвозди. Внешние точки (шляпки гвоздей) касаются bbox цели. На общем ребре грани не перекрываются: ребро забирает грань с высшим приоритетом (верх, затем торцы, затем длинные грани). Каждая деталь пишет свой номер в атрибут `_part`, и `bake_atlas.py` тонирует по нему. Шляпки гвоздей трёхгранные и утоплены в дерево на 1 мм, без основания; это единственные открытые рёбра, их число — в `metrics.json`. `prop-survey.cpp` выводит только числа: где стоят копии визуала (для кадра стенда) и средний цвет текселей, которые использует меш, с делением на «дерево» и «серое» по R/G.
+
 `barrel.py` снимает профиль с альфы вида спереди (`front` — путь внутри `content-sources`), остальные части берёт из `barrel.json`: число клёпок, положение и высоту обручей, стык, венец, доски крышки. Пишет `model.glb` и `metrics.json`. `compare.py` рендерит GLB с одним светом и камерой по списку видов, материалы `ours` берёт из `maps_dir/<ключ>/`. `iron_material.py` делает бесшовное кованое железо со средним цветом замера.
 
 ## Установка и запуск

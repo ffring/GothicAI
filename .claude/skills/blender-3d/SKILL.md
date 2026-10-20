@@ -11,7 +11,7 @@ description: 3D modelling in Blender for the Gothic AI project — building mode
 
 - План и решения — `docs/own-content.md`, этап 2.
 - Цели предметов — `data/content/mesh3d-pilot.json`: bbox в метрах glTF, точка привязки, бюджет треугольников, зоны `{key, group, role}`. Числа оригинала измеряет `scripts/content/mesh3d/measure_targets.py`.
-- Скрипты Blender — `scripts/content/mesh3d/blender/` (README; `barrel.py` — пример модели по концепту, `bake_atlas.py` и `pack_prop.py` — своя запечённая текстура на предмет, `compare.py` — рендер рядом с концептом, `parametric.py`, `sheet.py`). Сначала переиспользуй их, потом пиши новое.
+- Скрипты Blender — `scripts/content/mesh3d/blender/` (README; `barrel.py` и `crate.py` — примеры моделей по концепту, `../prop-survey.cpp` — числа оригинала для кадра и цвета, `bake_atlas.py` и `pack_prop.py` — своя запечённая текстура на предмет, `compare.py` — рендер рядом с концептом, `parametric.py`, `sheet.py`). Сначала переиспользуй их, потом пиши новое.
 - Blender — одна версия везде, **5.2 LTS**. На Mac (`/Applications/Blender.app/Contents/MacOS/Blender`) — короткие скрипты и быстрые рендеры. На Ryzen (`~/gothic-ai/mesh3d/blender`, 5.2.2, ставит `scripts/content/mesh3d/blender/install.sh`) — пакеты через `run-ryzen.sh` и `gq batch`. Новую версию ставим сразу на обе машины.
 
 ## Путь предмета

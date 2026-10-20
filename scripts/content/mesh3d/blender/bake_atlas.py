@@ -6,13 +6,13 @@ config: {"glb": model with tile UVs in metres and zone-key materials (barrel.py)
          (relative paths: under content-staging),
          "scales": {KEY: tile scale}, "targets": {KEY: [measured linear r, g, b]},
          "slots": {KEY: [ATLAS_KEY, GROUP]}, "metal": [KEY, ...],
-         "size": 1024, "seed": 1, "ao_samples": 64, "ao_distance": 0.15, "ao_strength": 0.85,
+         "size": 1024, "colour_samples": 16, "seed": 1, "ao_samples": 64, "ao_distance": 0.15, "ao_strength": 0.85,
          "sectors": 20, "tone_spread": 0.28, "light_part": [index, gain],
          "edge_radius": 0.006, "wet_height": 0.18, "bleach": 0.35,
          "planks_per_tile": {KEY: n}, "seam_width": 0.07, "seam_dark": 0.75, "contrast": {KEY: gamma}}
 The tiling materials are sampled through the tile UVs and baked into a new atlas
-UV: per-part tone (parts are angular sectors around the axis, lid planks along
-X), dark seams where a part's tile plank ends, worn light edges from the Bevel
+UV: per-part tone (the builder's "_part" attribute when present, otherwise
+angular sectors around the axis and lid planks along X), dark seams where a part's tile plank ends, worn light edges from the Bevel
 node, sun-bleached tops, a wet algae-dark bottom and baked AO. Each zone then
 gets more local contrast and is scaled back to its measured mean colour: the
 original reads by painted contrast, not by a brighter mean.
@@ -89,8 +89,13 @@ head = np.array([keys[i].endswith("HEAD") for i in mat_index])
 lid_planks = cfg.get("lid_planks", 4)
 plank = np.clip(((centres[:, 0] - lo[0]) / (hi[0] - lo[0]) * lid_planks).astype(int), 0, lid_planks - 1)
 part = np.where(head, sectors + plank, part)
+if "_PART" in mesh.attributes:  # the builder numbered its parts (a POINT attribute "_part" in the GLB)
+    values = np.empty(len(mesh.vertices), np.float32)
+    mesh.attributes["_PART"].data.foreach_get("value", values)
+    first_vertex = np.array([mesh.loops[p.loop_start].vertex_index for p in mesh.polygons])
+    part = np.rint(values[first_vertex]).astype(int)
 spread = cfg.get("tone_spread", 0.28)
-tones = 1 + spread * rng.uniform(-1, 1, sectors + lid_planks)
+tones = 1 + spread * rng.uniform(-1, 1, max(int(part.max()) + 1, sectors + lid_planks))
 light = cfg.get("light_part")
 if light:
     tones[light[0]] = light[1]
@@ -274,12 +279,12 @@ def bake_pass(name, kind, source=None, samples=4, margin=16, colour_space="Non-C
     return pixels.reshape(size, size, 4)[:, :, :3]
 
 
-colour = bake_pass("colour", "EMIT", "colour")
-rough = bake_pass("rough", "EMIT", "rough")[:, :, 0]
+colour = bake_pass("colour", "EMIT", "colour", samples=cfg.get("colour_samples", 16))  # samples filter the fine tile grain
+rough = bake_pass("rough", "EMIT", "rough", samples=cfg.get("colour_samples", 16))[:, :, 0]
 metal = bake_pass("metal", "EMIT", "metal")[:, :, 0]
 zone = bake_pass("zone", "EMIT", "zone", samples=1, margin=16)[:, :, 0]
 inside = bake_pass("inside", "EMIT", "zone", samples=1, margin=0)[:, :, 0] > 0.5
-normal = bake_pass("normal", "NORMAL", samples=4)
+normal = bake_pass("normal", "NORMAL", samples=cfg.get("colour_samples", 16))
 ao = bake_pass("ao", "AO", samples=cfg.get("ao_samples", 64))[:, :, 0]
 
 strength = cfg.get("ao_strength", 0.85)
@@ -342,6 +347,8 @@ for key, (atlas_key, _group) in cfg["slots"].items():
 # --- export: atlas UV only, zone materials merged into atlas materials ---
 mesh.uv_layers.remove(mesh.uv_layers["Tile"])
 mesh.attributes.remove(mesh.attributes["tone"])
+if "_PART" in mesh.attributes:
+    mesh.attributes.remove(mesh.attributes["_PART"])
 mesh.attributes.remove(mesh.attributes["zone"])
 new_slots = []
 for key, (atlas_key, group) in cfg["slots"].items():

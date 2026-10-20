@@ -26,7 +26,7 @@ DEFAULT_TARGETS = Path(__file__).resolve().parents[3] / "data/content/mesh3d-pil
 SOURCE_SET = "mesh3d-pilot"
 
 
-def _png_metrics(raw: bytes) -> dict:
+def _png_metrics(raw: bytes, min_transparent: float = 0.30) -> dict:
     with Image.open(BytesIO(raw)) as image:
         if image.format != "PNG":
             raise ValueError("concept source must be a PNG")
@@ -40,8 +40,9 @@ def _png_metrics(raw: bytes) -> dict:
             raise ValueError("concept PNG has no visible object")
         width, height = image.size
         transparent = alpha.histogram()[0] / (width * height)
-        if transparent <= 0.30:
-            raise ValueError(f"concept PNG needs more than 30% fully transparent pixels; got {transparent:.1%}")
+        if transparent <= min_transparent:
+            raise ValueError(f"concept PNG needs more than {min_transparent:.0%} fully transparent pixels; "
+                             f"got {transparent:.1%}")
         if bbox[0] == 0 or bbox[1] == 0 or bbox[2] == width or bbox[3] == height:
             raise ValueError("concept object touches the image edge")
         return dict(width=width, height=height, transparent_fraction=transparent, alpha_cutoff=128,
@@ -65,7 +66,7 @@ def _write_immutable(path: Path, raw: bytes, root: Path) -> None:
             raise ValueError(f"refusing to overwrite retained PNG: {path}")
 
 
-VIEWS = ("34", "front", "top")
+VIEWS = ("34", "front", "side", "top")
 
 
 def import_concept(target: dict, source: Path, variant: int, prompt: str, utc: str,
@@ -74,7 +75,7 @@ def import_concept(target: dict, source: Path, variant: int, prompt: str, utc: s
                    view: str | None = None, edit_of: str | None = None) -> dict:
     """Copy exact tool bytes once and append one recipe; equal retries reuse it.
 
-    A modelling concept has views: ``34`` from text, then ``front`` and ``top``
+    A modelling concept has views: ``34`` from text, then ``front``, ``side`` and ``top``
     as image_gen edits of our own ``34`` image (``edit_of``), never of the original.
     """
     if type(variant) is not int or not 1 <= variant <= 9:
@@ -87,7 +88,8 @@ def import_concept(target: dict, source: Path, variant: int, prompt: str, utc: s
     if not isinstance(target_id, str) or not registry_module.SLUG.fullmatch(target_id):
         raise ValueError("target.id must be a lowercase resource slug")
     raw = Path(source).read_bytes()
-    metrics = _png_metrics(raw)
+    # A flat orthographic view of a face fills its canvas; it only needs a free border.
+    metrics = _png_metrics(raw, 0.30 if view in (None, "34") else 0.10)
     suffix = f"-v{variant}" + (f"-{view}" if view else "")
     relative = f"{SOURCE_SET}/{target_id}{suffix}.png"
     parameters = dict(set=SOURCE_SET, target=target_id, variant=variant,

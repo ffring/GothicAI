@@ -173,8 +173,16 @@ def test_views_and_edits_of_our_own_concept(tmp_path):
     with pytest.raises(ValueError, match="edit_of"):
         concepts.import_concept(TARGET, png(tmp_path / "c.png"), 3, "Top.", UTC, registry, source_root,
                                 view="34", edit_of=first["id"])
+    wide = tmp_path / "wide.png"  # an orthographic face: 19% transparent, free border
+    image = Image.new("RGBA", (100, 100))
+    image.paste((120, 80, 35, 255), (5, 5, 95, 95))
+    image.save(wide)
+    top = concepts.import_concept(TARGET, wide, 3, "Top.", UTC, registry, source_root, view="top", edit_of=first["id"])
+    assert top["generation"]["alpha"]["transparent_fraction"] < 0.30
+    with pytest.raises(ValueError, match="more than 30%"):
+        concepts.import_concept(TARGET, wide, 4, "Wide.", UTC, registry, source_root, view="34")
     with pytest.raises(ValueError, match="view must be"):
-        concepts.import_concept(TARGET, png(tmp_path / "d.png"), 3, "Side.", UTC, registry, source_root, view="side")
+        concepts.import_concept(TARGET, png(tmp_path / "d.png"), 3, "Back.", UTC, registry, source_root, view="back")
 
 
 def test_contact_sheet_has_five_columns_two_rows_and_preserves_sources(tmp_path):
