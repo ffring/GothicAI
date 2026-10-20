@@ -15,6 +15,7 @@ def knows_violence(npc: str, crimes: Crimes | None) -> bool:
     return crimes is not None and any(
         k.degree in {"seen", "heard"} and k.suspect == "PLAYER" and not k.forgiven
         and k.crime.get("kind") in {"attack", "murder"}
+        and crimes.side(npc, k.crime["id"]) is None
         for k in crimes.known(npc.upper())
     )
 

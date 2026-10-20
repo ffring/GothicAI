@@ -61,7 +61,6 @@ class CrimeSides:
         if isinstance(message, (Loading, Session)):
             self.fights.clear()
             self.group_threats.clear()
-            self.hostile_guilds.clear()
             self._prepared = False
             self._generation += 1
         elif isinstance(message, NpcEvent):
@@ -78,7 +77,10 @@ class CrimeSides:
                         self.note_fight(actor.id, actor.combat_target)
 
     async def prepare(self) -> None:
-        """Read the world's real guild matrix once, rather than asking during a killing."""
+        """Read the world's guild matrix once; keep the last reading until a replacement is ready.
+
+        The window without a matrix lasts only until the process's first successful reading.
+        """
         if self._prepared:
             return
         generation = self._generation

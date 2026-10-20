@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 HOLD_SECONDS = 0.5  # the bridge releases after 0.6 s; leave a frame for our verdict
 SHOUT_RANGE_CM = 2500
 RECLAIM_SECONDS = 180.0
+GUILD_RETRY_SECONDS = 5.0
 OWNER_FIGHT_COURAGE = 3
 HELP_COURAGE = 4
 COWARD_COURAGE = 2
@@ -130,6 +131,7 @@ class CrimeReact:
         self._fact_wake = asyncio.Event()
         self._generation = 0
         self._prepared = False
+        self._guild_retry_at = 0.0
         self._closed = False
         self._reclaiming: set[tuple[int, str, str]] = set()
         self._restitution_started: set[tuple[int, str]] = set()
@@ -139,27 +141,31 @@ class CrimeReact:
 
     async def prepare(self) -> None:
         """Read actual homes once per world; no routine-prefix guesses for stateless households."""
-        generation = self._generation
-        people = await self.link.story_people()
-        if generation != self._generation:
+        if not self._prepared:
+            generation = self._generation
+            people = await self.link.story_people()
+            if generation != self._generation:
+                return
+            for person in people:
+                npc = str(person.get("npc", "")).upper()
+                if npc:
+                    self.crimes.people[npc] = {**self.crimes.people.get(npc, {}), **person}
+            self._prepared = True
+        if self.clock() < self._guild_retry_at:
             return
-        for person in people:
-            npc = str(person.get("npc", "")).upper()
-            if npc:
-                self.crimes.people[npc] = {**self.crimes.people.get(npc, {}), **person}
-        await self.crimes.sides.prepare()
-        if generation != self._generation:
-            return
-        self._prepared = True
+        self._guild_retry_at = self.clock() + GUILD_RETRY_SECONDS
+        try:
+            await self.crimes.sides.prepare()
+        except (GameError, TimeoutError) as error:
+            log.debug("crime reactions: guilds unavailable: %s", error)
 
     async def run(self) -> None:
         while not self.link.closed.is_set():
             await self.link.wait_world()
-            if not self._prepared:
-                try:
-                    await self.prepare()
-                except (GameError, TimeoutError) as error:
-                    log.debug("crime reactions: people unavailable: %s", error)
+            try:
+                await self.prepare()
+            except (GameError, TimeoutError) as error:
+                log.debug("crime reactions: people unavailable: %s", error)
             # Session resets the cache; a short poll only loads metadata, never makes decisions.
             try:
                 await asyncio.wait_for(self.link.closed.wait(), 1.0)
@@ -262,6 +268,7 @@ class CrimeReact:
             self._reclaiming.clear()
             self._restitution_started.clear()
             self._prepared = False
+            self._guild_retry_at = 0.0
             for task in tuple(self._tasks):
                 task.cancel()
         elif isinstance(message, HeroDeed):

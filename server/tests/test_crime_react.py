@@ -12,6 +12,7 @@ from gothic_ai.chronicle import Chronicle
 from gothic_ai.crime_law import CrimeLaw
 from gothic_ai.crime_react import CrimeReact, reaction_for
 from gothic_ai.crimes import Crimes
+from gothic_ai.game import GameError
 from gothic_ai.memory import MemoryStore
 from gothic_ai.places import PlaceBook
 from gothic_ai.protocol import HoldVerdictCmd, NpcActResult, NpcRoster, PerceptionHeld
@@ -495,6 +496,42 @@ async def test_prepare_uses_real_house_metadata_and_preserves_npctype(system):
     assert system.crimes.people[HILDA] == {
         "npc": HILDA, "guild": 12, "npctype": 0, "home_room": "NW_HOUSE_LOBART",
     }
+
+
+async def test_failed_guild_read_keeps_people_ready_and_retries_only_the_matrix(system):
+    now = 0.0
+    system.react.clock = lambda: now
+    system.link.people = [{"npc": HILDA, "guild": 12, "home_room": "LOBART"}]
+    people_calls, matrix_calls = 0, 0
+    read_people, evaluate = system.link.story_people, system.link.story_eval
+
+    async def people():
+        nonlocal people_calls
+        people_calls += 1
+        return await read_people()
+
+    async def guilds(npc, exprs):
+        nonlocal matrix_calls
+        if exprs and exprs[0][:2] == ["call", "WLD_GETGUILDATTITUDE"]:
+            matrix_calls += 1
+            if matrix_calls == 1:
+                raise GameError("matrix unavailable")
+        return await evaluate(npc, exprs)
+
+    system.link.story_people, system.link.story_eval = people, guilds
+    await system.react.prepare()
+    assert system.react._prepared
+    assert system.crimes.people[HILDA]["home_room"] == "LOBART"
+    assert not system.crimes.sides._prepared
+    assert (people_calls, matrix_calls) == (1, 1)
+
+    now = 4.9
+    await system.react.prepare()
+    assert (people_calls, matrix_calls) == (1, 1)
+    now = 5.0
+    await system.react.prepare()
+    assert system.crimes.sides._prepared
+    assert (people_calls, matrix_calls) == (1, 2)
 
 
 async def test_identity_read_preserves_home_loaded_while_vm_reply_is_pending(system):

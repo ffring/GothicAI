@@ -262,6 +262,8 @@ class Crimes:
                 line = f"Ты слышал (со слов: {self.names(k.source)}): {what}; переходов: {k.hops}."
             else:
                 line = f"Ты подозреваешь: {what}. Ты видел героя рядом, самого дела не видел; это догадка."
+            if self.side(npc, k.crime["id"]) is not None:
+                line += " Жертва была твоим врагом: ты не винишь героя."
             if k.forgiven:
                 line += " Ты простил это дело."
             if k.silenced:

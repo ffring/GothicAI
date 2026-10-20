@@ -6,11 +6,13 @@ from typing import Any
 
 import pytest
 
+from gothic_ai.characters import Card
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.commands import Order
 from gothic_ai.crimes import COMMUNITIES, Crimes, pickpocket_outcome
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.executor import Intent
+from gothic_ai.fear import afraid
 from gothic_ai.gamedata.storygraph import Node, StoryGraph
 from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.memory import MemoryStore
@@ -507,6 +509,30 @@ def side(system, why):
     assert [fact["npc"] for fact in system.chronicle.facts("crime_seen")] == [HILDA]
 
 
+async def test_enemy_witness_fears_only_other_violence_and_understands_its_side(system):
+    cards = {
+        npc: Card(npc, npc, "", "", greed=3, honesty=3, courage=2, talk=3, pushy=3, strangers=3)
+        for npc in (HILDA, LEE)
+    }
+    system.crimes.sides.note_fight(LOBART, HILDA)
+    system.crimes.record(deed(kind="murder", victim=LOBART, victim_guild=8, witnesses=[HILDA, LEE]))
+    assert system.crimes.side(HILDA, "deed-1") is not None
+    assert not afraid(HILDA, cards, system.crimes, courage=2)
+    assert afraid(LEE, cards, system.crimes, courage=2)
+    ally_situation = system.crimes.situation(HILDA)
+    outsider_situation = system.crimes.situation(LEE)
+    assert "Ты видел сам" in ally_situation
+    assert " Жертва была твоим врагом: ты не винишь героя." in ally_situation
+    assert "Ты видел сам" in outsider_situation
+    assert "ты не винишь героя" not in outsider_situation
+
+    system.crimes.record(deed(
+        id="other-murder", kind="murder", victim="OTHER_VICTIM", victim_guild=8, witnesses=[HILDA],
+    ))
+    assert system.crimes.side(HILDA, "other-murder") is None
+    assert afraid(HILDA, cards, system.crimes, courage=2)
+
+
 @pytest.mark.parametrize("attacker,target", [(HILDA, LOBART), (LOBART, HILDA)])
 async def test_fight_intent_survives_reset_before_the_execution(system, attacker, target):
     system.crimes.sides.note_intent(attacker, Intent(goal="fight", target=target))
@@ -680,13 +706,15 @@ async def test_outsiders_and_unrelated_or_expired_conflict_still_judge_the_killi
 
 
 @pytest.mark.parametrize("reset", [Loading(type="loading"), Session(type="session", branch="B")])
-async def test_world_reset_clears_short_combat_memory_and_guild_cache(system, reset):
+async def test_world_reset_clears_short_combat_memory_and_keeps_guild_cache(system, reset):
     system.crimes.sides.note_fight(HILDA, LOBART)
+    system.crimes.sides.note_fight(LOBART, "PLAYER")
     system.crimes.sides.hostile_guilds.add((8, 8))
     system.link.receive(reset)
     murder(system)
     assert system.crimes.sides.fights == {}
-    assert system.crimes.sides.hostile_guilds == set()
+    assert system.crimes.sides.group_threats == {}
+    assert system.crimes.sides.hostile_guilds == {(8, 8)}
     assert system.crimes.side(HILDA, "deed-1") is None
 
 
@@ -732,6 +760,41 @@ async def test_old_world_guild_query_cannot_fill_the_new_world_cache(system):
     await pending
     assert system.crimes.sides.hostile_guilds == set()
     assert not system.crimes.sides._prepared
+
+
+async def test_last_guild_matrix_classifies_a_killing_while_new_world_refresh_is_pending(system):
+    requested, ready = asyncio.Event(), asyncio.Event()
+    refreshing = False
+
+    async def evaluate(npc, exprs):
+        if exprs == [["var", "GIL_MAX"], ["var", "ATT_HOSTILE"]]:
+            return [3, 0]
+        if refreshing:
+            requested.set()
+            await ready.wait()
+            return [2] * len(exprs)
+        return [0 if (expr[2][1], expr[3][1]) == (1, 2) else 2 for expr in exprs]
+
+    system.link.story_eval = evaluate
+    await system.crimes.sides.prepare()
+    assert system.crimes.sides.hostile_guilds == {(1, 2)}
+    system.link.receive(Session(type="session", branch="B"))
+    refreshing = True
+    pending = asyncio.create_task(system.crimes.sides.prepare())
+    await requested.wait()
+    try:
+        assert not pending.done()
+        assert system.crimes.sides.hostile_guilds == {(1, 2)}
+        system.crimes.record(deed(
+            kind="murder", victim=LOBART, victim_guild=2, witnesses=[HILDA],
+            witnesses_metadata=[{"npc": HILDA, "guild": 1, "npctype": 0}],
+        ))
+        side(system, "hostile")
+    finally:
+        ready.set()
+        await pending
+    assert system.crimes.sides.hostile_guilds == set()
+    assert system.crimes.sides._prepared
 
 
 @pytest.mark.parametrize("state,stage,giver,expected", [
