@@ -289,14 +289,14 @@
     "budget_tris": 6000,
     "zones": [
       {
-        "key": "OWN_PROP_WOOD_PLANK",
+        "key": "OWN_PROP_WOOD_MOSSY",
         "group": "WOOD",
-        "role": "sawn boards and planks"
+        "role": "mossy grimy crate planks"
       },
       {
-        "key": "OWN_PROP_WOOD_BRACE",
+        "key": "OWN_PROP_WOOD_MOSSY_BRACE",
         "group": "WOOD",
-        "role": "crate frame battens"
+        "role": "mossy grimy crate frame battens"
       },
       {
         "key": "OWN_PROP_IRON_BAND",
