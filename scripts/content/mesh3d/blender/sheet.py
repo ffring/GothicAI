@@ -153,7 +153,7 @@ def render_result_cells(objects, extent, directory):
         wire = obj.modifiers.new("Visible triangle edges", "WIREFRAME")
         wire.thickness = extent * 0.0008
         wire.use_replace = False
-        wire.use_even_offset = True
+        wire.use_even_offset = False
         wire.use_boundary = True
         wire.material_offset = 1
     bpy.context.scene.display.shading.color_type = "MATERIAL"

@@ -64,7 +64,7 @@ def crate():
 
 
 def target(kind):
-    return {"id": f"synthetic-{kind}", "visual": f"SYNTHETIC_{kind.upper()}", "kind": kind,
+    return {"id": kind, "visual": f"SYNTHETIC_{kind.upper()}", "kind": "static_mrm",
             "bbox_min": [-0.47, -0.08, -0.38], "bbox_max": [0.47, 1.12, 0.38],
             "budget_tris": 1800 if kind == "barrel" else 1200,
             "zones": [{"key": "PILOT_WOOD", "group": "WOOD", "role": "boards"},
@@ -80,6 +80,103 @@ def glb_document(path):
     if kind != 0x4E4F534A:
         raise AssertionError("first GLB chunk must be JSON")
     return json.loads(data[20:20 + size])
+
+
+def uv_quality(vertices, faces, uv, projection):
+    """Measure physical metres per U/V, retaining each triangle's distortion.
+
+    The inverse UV Jacobian's rows are the surface vectors traced by one unit
+    in U and V. Their lengths preserve the checker directions, unlike singular
+    values. Cylinder sides permit changing circumference; caps and flat plank
+    edges use planar UVs and therefore keep the stricter box criterion.
+    """
+    if projection not in ("cylinder", "box"):
+        raise ValueError("projection must be cylinder or box")
+    vertices = np.asarray(vertices, dtype=float)
+    faces = np.asarray(faces, dtype=np.int64)
+    uv = np.asarray(uv, dtype=float)
+    triangles = vertices[faces]
+    if uv.shape != (len(faces), 3, 2) or len(faces) == 0:
+        raise ValueError("UVs must contain three corners per nonempty triangle mesh")
+    edges = triangles[:, 1:] - triangles[:, :1]
+    normals = np.cross(edges[:, 0], edges[:, 1])
+    double_area = np.linalg.norm(normals, axis=1)
+    first_length = np.linalg.norm(edges[:, 0], axis=1)
+    if np.any(double_area <= 0) or not np.isfinite(double_area).all():
+        raise ValueError("UV quality requires finite nondegenerate triangles")
+    e1 = edges[:, 0] / first_length[:, None]
+    e2 = np.cross(normals / double_area[:, None], e1)
+    local = np.stack((np.einsum("fij,fj->fi", edges, e1),
+                      np.einsum("fij,fj->fi", edges, e2)), axis=-1)
+    try:
+        jacobian = np.linalg.solve(local, uv[:, 1:] - uv[:, :1])
+        inverse = np.linalg.inv(jacobian)
+    except np.linalg.LinAlgError as error:
+        raise ValueError("UV quality requires nondegenerate UV triangles") from error
+    meters = np.linalg.norm(inverse, axis=2)
+    if not np.isfinite(meters).all():
+        raise ValueError("UV quality requires finite UV coordinates")
+    area = double_area * .5
+
+    def describe(values, weights):
+        return {"min": float(values.min()), "max": float(values.max()),
+                "mean": float(np.average(values, weights=weights))}
+
+    def surface(mask):
+        stats = {"triangles": int(mask.sum())}
+        if np.any(mask):
+            stats["u_meters_per_uv"] = describe(meters[mask, 0], area[mask])
+            stats["v_meters_per_uv"] = describe(meters[mask, 1], area[mask])
+        return stats
+
+    stats = {"projection": projection, **surface(np.ones(len(faces), dtype=bool))}
+    if projection == "cylinder":
+        centre = (vertices.min(axis=0) + vertices.max(axis=0)) * .5
+        relative = triangles - centre
+        cap = abs(normals[:, 1]) > np.linalg.norm(normals[:, [0, 2]], axis=1) * 2
+        radial = relative.mean(axis=1)
+        tangent = np.column_stack((-radial[:, 2], np.zeros(len(faces)), radial[:, 0]))
+        horizontal_normal = np.linalg.norm(normals[:, [0, 2]], axis=1)
+        radial_face = (~cap & (abs(np.einsum("ij,ij->i", normals, tangent))
+                              > horizontal_normal * np.linalg.norm(tangent, axis=1) * .3))
+        side = ~(cap | radial_face)
+        stats["planar"] = surface(~side)
+        stats["cylindrical"] = surface(side)
+        if np.any(side):
+            radius = np.linalg.norm(relative[:, :, [0, 2]], axis=2).mean(axis=1)[side]
+            if np.any(radius <= 0):
+                raise ValueError("cylindrical sides require a positive radius")
+            mean_radius = np.average(radius, weights=area[side])
+            # Evaluate the fixed-angle map at its mean radius. Separately check
+            # side extrema below, so this reference never hides local failures.
+            reference = meters[side, 0] * mean_radius / radius
+            stats["cylindrical"]["mean_radius_meters"] = float(mean_radius)
+            stats["cylindrical"]["u_at_mean_radius_meters_per_uv"] = float(
+                np.average(reference, weights=area[side]))
+    return stats
+
+
+def assert_uv_quality(stats):
+    """Apply the pilot's checker tolerances without discarding small faces."""
+    def within(surface, direction, tolerance):
+        if not surface["triangles"]:
+            return
+        limits = surface[f"{direction}_meters_per_uv"]
+        assert limits["min"] >= 1 - tolerance and limits["max"] <= 1 + tolerance, (
+            f"{stats['projection']} UV {direction.upper()} {limits['min']:.6f}.."
+            f"{limits['max']:.6f} m outside 1m +/-{tolerance:.0%}")
+
+    within(stats, "v", .05)
+    if stats["projection"] == "box":
+        within(stats, "u", .05)
+    else:
+        within(stats["planar"], "u", .05)
+        side = stats["cylindrical"]
+        within(side, "u", .15)
+        if side["triangles"]:
+            reference = side["u_at_mean_radius_meters_per_uv"]
+            assert abs(reference - 1) <= .05, (
+                f"cylinder UV U at mean radius {reference:.6f}m outside 1m +/-5%")
 
 
 def verify(obj, raw_v, raw_f, raw_m, meta, goal, metrics, output):
@@ -100,20 +197,8 @@ def verify(obj, raw_v, raw_f, raw_m, meta, goal, metrics, output):
     area = triangle_areas(aligned, raw_f)
     iou = float(area[pred & expected].sum() / area[pred | expected].sum())
     accuracy = float(area[pred == expected].sum() / area.sum())
-    # UV singular values measure physical checker lengths, including anisotropy.
     uv = np.array([item.uv[:] for item in obj.data.uv_layers.active.data]).reshape(-1, 3, 2)
-    edges = v[f[:, 1:]] - v[f[:, :1]]
-    e1 = edges[:, 0] / np.linalg.norm(edges[:, 0], axis=1)[:, None]
-    normals = np.cross(edges[:, 0], edges[:, 1])
-    normals /= np.linalg.norm(normals, axis=1)[:, None]
-    e2 = np.cross(normals, e1)
-    local = np.stack((np.einsum("fij,fj->fi", edges, e1),
-                      np.einsum("fij,fj->fi", edges, e2)), axis=-1)
-    jacobian = np.linalg.solve(local, uv[:, 1:] - uv[:, :1])
-    scale = np.linalg.svd(jacobian, compute_uv=False)
-    final_area = triangle_areas(v, f)
-    # Area-weighted average in each principal direction avoids tiny bevel outliers.
-    mean_scale = np.average(scale, weights=final_area, axis=0)
+    uv_stats = uv_quality(v, f, uv, metrics["uv_projection"])
     doc = glb_document(output / "model.glb")
     assert {m["name"] for m in doc["materials"]} == {z["key"] for z in goal["zones"]}
     assert {m["extras"]["group"] for m in doc["materials"]} == {"WOOD", "METAL"}
@@ -122,10 +207,10 @@ def verify(obj, raw_v, raw_f, raw_m, meta, goal, metrics, output):
     assert metrics["triangles"] <= goal["budget_tris"], metrics
     assert metrics["open_edges"] == metrics["non_manifold_edges"] == 0, metrics
     assert iou >= 0.9, f"iron area IoU {iou:.4f} < 0.9"
-    assert np.all(abs(mean_scale - 1) <= 0.05), f"UV scale {mean_scale} outside 1m +/-5%"
+    assert_uv_quality(uv_stats)
     return {"triangles": metrics["triangles"], "raw_triangles": len(raw_f),
             "metal_area_iou": iou, "zone_area_accuracy": accuracy,
-            "uv_meters_scale": mean_scale.tolist(), "budget": goal["budget_tris"]}
+            "uv_quality": uv_stats, "budget": goal["budget_tris"]}
 
 
 def main():
@@ -163,8 +248,17 @@ def main():
         control.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(control / "raw.npz", vertices=pv, faces=pf, color=pc, metallic=pm)
         (control / "meta.json").write_text(json.dumps({"up_axis": "+Y", "meters_per_unit": 1.0}) + "\n")
-        process_arrays(pv, pf, pc, pm, goal, item / "parametric",
-                       {"up_axis": "+Y", "meters_per_unit": 1.0}, cleanup=False)
+        control_obj, control_metrics = process_arrays(
+            pv, pf, pc, pm, goal, item / "parametric",
+            {"up_axis": "+Y", "meters_per_unit": 1.0}, cleanup=False)
+        cv, cf = mesh_arrays(control_obj)
+        control_uv = np.array([item.uv[:] for item in control_obj.data.uv_layers.active.data]).reshape(-1, 3, 2)
+        control_quality = uv_quality(cv, cf, control_uv, control_metrics["uv_projection"])
+        assert_uv_quality(control_quality)
+        assert control_metrics["triangles"] <= goal["budget_tris"], control_metrics
+        assert control_metrics["open_edges"] == control_metrics["non_manifold_edges"] == 0, control_metrics
+        summary[kind]["parametric"] = {"triangles": control_metrics["triangles"],
+                                        "uv_quality": control_quality}
         variants = {"title": f"Synthetic {kind}", "variants": [
             {"label": "synthetic x analytic x seed 0", "raw": str(raw_path), "meta": str(meta_path),
              "result": str(item / "processed")},

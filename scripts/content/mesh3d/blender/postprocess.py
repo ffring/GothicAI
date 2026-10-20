@@ -10,7 +10,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from geometry import (box_uv, budget_ratio, classify_zones, cylinder_uv, fit_bbox,
-                      simplify_loop, smooth_labels, triangle_areas)
+                      select_uv_projection, simplify_loop, smooth_labels, triangle_areas)
 
 
 def load_target(path, ident=None):
@@ -226,16 +226,47 @@ def decimate(obj, budget):
         if sum(map(len, kept)) <= budget // 4:
             break
         tolerance *= 1.6
-    mapping = {}
+    pending = {}
     for loop, indices in zip(loops, kept):
         points = np.array([v.co[:] for v in loop])
-        keep_set = set(indices)
-        for index, vertex in enumerate(loop):
-            if index not in keep_set:
-                closest = indices[np.argmin(np.linalg.norm(points[indices] - points[index], axis=1))]
-                mapping[vertex] = loop[closest]
-    if mapping:
+        # Stay on the contour arc between consecutive retained vertices. Global
+        # nearest points can jump across a narrow corner and join separate fans.
+        for left, right in zip(indices, np.roll(indices, -1)):
+            arc = (np.arange((right - left) % len(loop) + 1) + left) % len(loop)
+            distance = np.r_[0., np.cumsum(np.linalg.norm(np.diff(points[arc], axis=0), axis=1))]
+            for position, index in enumerate(arc[1:-1], 1):
+                anchor = left if distance[position] <= distance[-1] * .5 else right
+                pending[loop[index]] = loop[anchor]
+    while pending:
+        mapping, reserved = {}, set()
+        for vertex, anchor in pending.items():
+            if not vertex.is_valid or not anchor.is_valid:
+                continue
+            edge = next((e for e in vertex.link_edges if e.other_vert(vertex) == anchor), None)
+            if edge is None or not edge.is_manifold or any(len(f.verts) != 3 for f in edge.link_faces):
+                continue
+            vertex_neighbors = {e.other_vert(vertex) for e in vertex.link_edges}
+            anchor_neighbors = {e.other_vert(anchor) for e in anchor.link_edges}
+            opposite = {v for f in edge.link_faces for v in f.verts} - {vertex, anchor}
+            # The edge link condition preserves the two manifold surface fans.
+            if len(opposite) != 2 or vertex_neighbors & anchor_neighbors != opposite:
+                continue
+            # A tetrahedron also shares both opposite vertices, but collapsing
+            # it would identify two surviving triangles with each other.
+            if (any(set(f.verts) == opposite | {vertex} for f in vertex.link_faces)
+                    and any(set(f.verts) == opposite | {anchor} for f in anchor.link_faces)):
+                continue
+            neighborhood = vertex_neighbors | anchor_neighbors | {vertex, anchor}
+            if not reserved.isdisjoint(neighborhood):
+                continue
+            mapping[vertex] = anchor
+            reserved.update(neighborhood)
+        if not mapping:
+            break  # Freeze any contour vertices whose collapse is not safe.
         bmesh.ops.weld_verts(bm, targetmap=mapping)
+        pending = {vertex: anchor for vertex, anchor in pending.items()
+                   if vertex.is_valid and anchor.is_valid}
+    bm.normal_update()
     bm.verts.index_update()
     locked = {v.index for e in bm.edges if len(e.link_faces) == 2
               and e.link_faces[0].material_index != e.link_faces[1].material_index
@@ -304,13 +335,13 @@ def materials(obj, target):
         obj.data.materials.append(mat)
 
 
-def unwrap(obj, target):
+def unwrap(obj, projection):
     v, f = mesh_arrays(obj)
     labels = np.array([p.material_index for p in obj.data.polygons])
     uv = np.empty((len(f), 3, 2))
     for index in np.unique(labels):
         mask = labels == index
-        if target["kind"] == "barrel":
+        if projection == "cylinder":
             uv[mask] = cylinder_uv(v, f[mask])
         else:
             uv[mask] = box_uv(v, f[mask])
@@ -380,6 +411,7 @@ def process_arrays(vertices, faces, color, metallic, target, output_dir, meta, c
     for mat in list(bpy.data.materials):
         bpy.data.materials.remove(mat)
     aligned = fit_bbox(vertices, meta, target)
+    projection = select_uv_projection(aligned, faces, target)
     labels = classify_zones(aligned, faces, color, metallic, target["zones"])
     labels = smooth_labels(faces, labels, triangle_areas(aligned, faces),
                            locked_labels=[i for i, z in enumerate(target["zones"])
@@ -401,7 +433,7 @@ def process_arrays(vertices, faces, color, metallic, target, output_dir, meta, c
     coords[:, 1] *= -1
     obj.data.vertices.foreach_set("co", coords.ravel())
     obj.data.update()
-    uv = unwrap(obj, target)
+    uv = unwrap(obj, projection)
     # Hulls use physical connectivity, before normal seams duplicate vertices.
     hull_count = collision(obj, output, target["id"])
     # Blender 4.5 smooth-by-angle, plus actual split vertices for Gothic importers.
@@ -436,6 +468,7 @@ def process_arrays(vertices, faces, color, metallic, target, output_dir, meta, c
                "open_edges": open_edges, "non_manifold_edges": nonmanifold,
                "zone_area_fractions": shares, "collision_hulls": hull_count,
                "uv_area_ratio": float(uv_area.sum() / areas.sum()),
+               "uv_projection": projection,
                "seconds": round(time.monotonic() - started, 3),
                "blender_version": bpy.app.version_string}
     (output / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")

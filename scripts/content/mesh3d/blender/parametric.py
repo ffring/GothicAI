@@ -150,7 +150,7 @@ def main():
     import postprocess
 
     target = postprocess.load_target(args.target, args.id)
-    vertices, faces, color, metallic = build(target["kind"])
+    vertices, faces, color, metallic = build(target["id"])
     # Construct directly in target proportions before the common orientation/fit.
     size = np.asarray(target["bbox_max"]) - np.asarray(target["bbox_min"])
     vertices *= size / np.ptp(vertices, axis=0)

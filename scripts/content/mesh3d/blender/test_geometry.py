@@ -5,7 +5,8 @@ import pytest
 
 from geometry import (
     box_uv, budget_ratio, choose_clusters, classify_zones, cylinder_uv,
-    fit_bbox, kmeans, linear_to_oklab, simplify_loop, smooth_labels, triangle_areas,
+    fit_bbox, kmeans, linear_to_oklab, select_uv_projection, simplify_loop,
+    smooth_labels, triangle_areas,
 )
 
 
@@ -169,6 +170,21 @@ def test_box_uv_keeps_world_metre_scale_on_rotated_faces_and_long_grain():
     assert np.all(np.ptp(uv[:, :, 1], axis=1) >= np.ptp(uv[:, :, 0], axis=1))
 
 
+def physical_checker_scale(vertices, faces, uv):
+    triangles = vertices[faces]
+    physical = np.linalg.solve(uv[:, 1:] - uv[:, :1], triangles[:, 1:] - triangles[:, :1])
+    return np.linalg.norm(physical, axis=2)
+
+
+def test_box_uv_is_metric_in_both_directions_on_sloped_faces():
+    vertices, faces = cuboid()
+    vertices[7] += [.18, -.23, .12]
+    uv = box_uv(vertices, faces)
+    # Every face participates, including the small oblique faces.
+    scale = physical_checker_scale(vertices, faces, uv)
+    np.testing.assert_allclose(scale, 1., rtol=1e-5)
+
+
 def cylinder(segments=96, radius=.6, height=1.4):
     angles = np.arange(segments) * (2 * np.pi / segments)
     vertices = np.array([[radius * np.cos(angle), y, radius * np.sin(angle)] for y in (0., height) for angle in angles])
@@ -179,6 +195,66 @@ def cylinder(segments=96, radius=.6, height=1.4):
     return vertices, np.asarray(faces)
 
 
+@pytest.mark.parametrize("projection", ["cylinder", "box"])
+def test_uv_projection_explicit_target_override_wins_over_geometry(projection):
+    vertices, faces = cuboid() if projection == "cylinder" else cylinder()
+    assert select_uv_projection(vertices, faces, {"uv_projection": projection}) == projection
+
+
+def test_uv_projection_rejects_unsupported_explicit_override():
+    vertices, faces = cylinder()
+    with pytest.raises(ValueError, match="uv_projection"):
+        select_uv_projection(vertices, faces, {"uv_projection": "sphere"})
+
+
+def test_uv_projection_detects_low_poly_circular_sections_using_faces():
+    vertices, faces = cylinder(segments=8)
+    assert select_uv_projection(vertices, faces, {}) == "cylinder"
+
+
+def noisy_bowed_barrel():
+    sides, rings = 48, 17
+    theta, height = np.meshgrid(np.arange(sides) * 2 * np.pi / sides, np.linspace(0, 1.2, rings))
+    radius = .36 + .075 * np.sin(np.pi * height / 1.2)
+    radius += .003 * np.sin(theta * 13 + height * 17)
+    noisy_height = height + .006 * np.sin(theta * 7 + height * 19)
+    vertices = np.stack((radius * np.cos(theta), noisy_height, radius * np.sin(theta)), axis=-1).reshape(-1, 3)
+    first = (np.arange(rings - 1)[:, None] * sides + np.arange(sides)).ravel()
+    following = (first // sides) * sides + (first + 1) % sides
+    faces = np.vstack((np.column_stack((first, first + sides, following)),
+                       np.column_stack((following, first + sides, following + sides))))
+    return vertices, faces
+
+
+def test_uv_projection_detects_noisy_bowed_barrel_independent_of_target_kind():
+    vertices, faces = noisy_bowed_barrel()
+    assert select_uv_projection(vertices, faces, {"id": "test", "kind": "static_mrm"}) == "cylinder"
+
+
+@pytest.mark.parametrize("size", [(1., 1., 1.), (2., 3., 1.)])
+def test_uv_projection_rejects_cuboids_even_when_target_is_named_barrel(size):
+    vertices, faces = cuboid(size)
+    assert select_uv_projection(vertices, faces, {"id": "barrel", "kind": "barrel"}) == "box"
+
+
+def test_uv_projection_uses_geometry_for_actual_pr312_static_mrm_barrel_target():
+    # Target contract from PR #312: asset kind describes storage, not shape.
+    target = {
+        "id": "barrel", "visual": "NW_HARBOUR_BARREL_01.MRM", "kind": "static_mrm",
+        "budget_tris": 1500,
+        "bbox_min": [-.398562736511, -.55889465332, -.400130805969],
+        "bbox_max": [.399873046875, .548935012817, .398304977417],
+        "zones": [
+            {"key": "OWN_PROP_WOOD_STAVE", "group": "WOOD", "role": "curved vertical staves"},
+            {"key": "OWN_PROP_WOOD_HEAD", "group": "WOOD", "role": "inset plank ends"},
+            {"key": "OWN_PROP_IRON_BAND", "group": "METAL", "role": "forged retaining hoops and rivets"},
+        ],
+    }
+    vertices, faces = cylinder()
+    vertices = fit_bbox(vertices, {"up_axis": "+Y", "meters_per_unit": 1.}, target)
+    assert select_uv_projection(vertices, faces, target) == "cylinder"
+
+
 def test_cylinder_uv_has_metric_scale_including_seam():
     vertices, faces = cylinder()
     uv = cylinder_uv(vertices, faces)
@@ -187,6 +263,26 @@ def test_cylinder_uv_has_metric_scale_including_seam():
         uv_length = np.linalg.norm(uv[:, a] - uv[:, b], axis=1)
         np.testing.assert_allclose(uv_length, world_length, rtol=.001)
     assert np.max(np.ptp(uv[:, :, 0], axis=1)) < .05
+
+
+def test_cylinder_v_uses_actual_meridian_not_noisy_radial_samples():
+    vertices, faces = noisy_bowed_barrel()
+    vertices *= [1.18, 1., .93]
+    uv = cylinder_uv(vertices, faces)
+    scale = physical_checker_scale(vertices, faces, uv)
+    np.testing.assert_allclose(scale[:, 1], 1., rtol=1e-5)
+    # On the genuinely circumferential faces near the ellipse's cardinal axes,
+    # retain the existing angular U, including its seam. Oblique noisy faces
+    # may use the planar fallback instead.
+    centre = (vertices.min(axis=0) + vertices.max(axis=0)) * .5
+    triangles = vertices[faces] - centre
+    angle = np.arctan2(triangles[:, :, 2], triangles[:, :, 0])
+    seam = np.ptp(angle, axis=1) > np.pi
+    angle[seam] = np.where(angle[seam] < 0, angle[seam] + 2 * np.pi, angle[seam])
+    radius = np.linalg.norm(triangles[:, :, [0, 2]], axis=2).mean(axis=1)
+    circumferential = abs(np.sin(2 * angle.mean(axis=1))) < .15
+    assert circumferential.sum() > 50
+    np.testing.assert_allclose(uv[circumferential, :, 0], (angle * radius[:, None])[circumferential], rtol=1e-6, atol=1e-7)
 
 
 def test_cylinder_caps_have_planar_metric_uv():
@@ -206,6 +302,34 @@ def test_cylinder_stave_radial_thickness_faces_have_nondegenerate_metric_uv():
         world_length = np.linalg.norm(vertices[faces[-2:, a]] - vertices[faces[-2:, b]], axis=1)
         uv_length = np.linalg.norm(uv[-2:, a] - uv[-2:, b], axis=1)
         np.testing.assert_allclose(uv_length, world_length, rtol=.00001)
+
+
+def test_cylinder_lid_plank_chords_use_planar_metric_uv():
+    vertices, faces = cylinder(radius=.47, height=1.2)
+    vertices[:, 1] -= .08
+    # Rounded coordinates of two failed processed control triangles: a long
+    # plank edge across the lid and a short oblique plank end, both vertical.
+    planks = np.array([
+        [[.3309, 1.0624, .0913], [-.0693, 1.0984, -.2761], [.3309, 1.0984, .0913]],
+        [[-.0433, 1.0984, .2795], [.0210, 1.0624, .2340], [.0210, 1.0984, .2340]],
+    ])
+    extra_faces = np.arange(6).reshape(-1, 3) + len(vertices)
+    vertices = np.vstack((vertices, planks.reshape(-1, 3)))
+    faces = np.vstack((faces, extra_faces))
+    uv = cylinder_uv(vertices, faces)
+    np.testing.assert_allclose(physical_checker_scale(vertices, faces[-2:], uv[-2:]), 1., rtol=1e-5)
+
+
+def test_generated_barrel_control_checks_every_face_including_lid_edges():
+    from parametric import build_barrel
+
+    vertices, faces, _, _ = build_barrel()
+    target = {"bbox_min": [-.47, -.08, -.38], "bbox_max": [.47, 1.12, .38]}
+    vertices = fit_bbox(vertices, {"up_axis": "+Y", "meters_per_unit": 1.}, target)
+    uv = cylinder_uv(vertices, faces)
+    scale = physical_checker_scale(vertices, faces, uv)
+    assert np.all((scale[:, 0] >= .85) & (scale[:, 0] <= 1.15))
+    assert np.all((scale[:, 1] >= .95) & (scale[:, 1] <= 1.05))
 
 
 def test_triangle_areas_use_actual_surface_area():

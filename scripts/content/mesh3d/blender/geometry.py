@@ -262,6 +262,57 @@ def _horizontal_hull(points):
     return np.asarray(lower[:-1] + upper[:-1])
 
 
+def select_uv_projection(vertices, faces, target):
+    """Select a target override or detect round sections around the +Y axis.
+
+    Inspect the mesh in oriented glTF coordinates (+Y up). Face
+    intersections work for a low-poly cylinder whose vertices occur only at its
+    ends, as well as a densely sampled bowed barrel. Section circularity uses
+    edges as well as corners, so a cube's four equidistant corners cannot pass.
+    Neither the target id nor its asset kind controls the projection.
+    """
+    if "uv_projection" in target:
+        projection = target["uv_projection"]
+        if projection not in ("cylinder", "box"):
+            raise ValueError("uv_projection must be cylinder or box")
+        return projection
+    vertices = np.asarray(vertices, dtype=float)
+    faces = np.asarray(faces, dtype=np.int64)
+    if not len(vertices) or not len(faces):
+        return "box"
+    triangles = vertices[faces]
+    minimum, maximum = triangles[:, :, 1].min(axis=1), triangles[:, :, 1].max(axis=1)
+    bottom, top = minimum.min(), maximum.max()
+    if top - bottom <= 1e-12:
+        return "box"
+    centers, radii = [], []
+    for fraction in (.15, .325, .5, .675, .85):
+        level = bottom + (top - bottom) * fraction
+        section = triangles[(minimum <= level) & (maximum > level)]
+        points = []
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            crossing = (section[:, a, 1] <= level) != (section[:, b, 1] <= level)
+            start, end = section[crossing, a], section[crossing, b]
+            fraction_y = (level - start[:, 1]) / (end[:, 1] - start[:, 1])
+            points.append((start + fraction_y[:, None] * (end - start))[:, [0, 2]])
+        points = np.unique(np.concatenate(points), axis=0)
+        if len(points) < 3:
+            return "box"
+        hull = _horizontal_hull(points)
+        if len(hull) < 3:
+            return "box"
+        following = np.roll(hull, -1, axis=0)
+        area = abs(np.sum(hull[:, 0] * following[:, 1] - hull[:, 1] * following[:, 0])) * .5
+        perimeter = np.linalg.norm(following - hull, axis=1).sum()
+        if perimeter <= 1e-12 or 4 * np.pi * area / perimeter ** 2 < .93:
+            return "box"
+        centers.append((hull.min(axis=0) + hull.max(axis=0)) * .5)
+        radii.append(np.sqrt(area / np.pi))
+    centers = np.asarray(centers)
+    drift = np.linalg.norm(centers - np.median(centers, axis=0), axis=1).max()
+    return "cylinder" if drift <= np.median(radii) * .08 else "box"
+
+
 def fit_bbox(vertices, meta, target):
     """Rotate declared up to +Y, orient minimum horizontal OBB, fit target bbox.
 
@@ -315,10 +366,11 @@ def fit_bbox(vertices, meta, target):
 
 
 def box_uv(vertices, faces):
-    """Per-corner metric box projection on the zone's PCA OBB axes.
+    """Per-corner metric box projection guided by the zone's PCA OBB axes.
 
     Each face selects its dominant projection plane. The longest in-plane OBB
-    direction becomes V, so a tiled wood material's V grain follows the plank.
+    direction, projected into the face, becomes V so the grain follows the plank.
+    An orthonormal face basis keeps sloped triangles at the same metre scale.
     """
     vertices = np.asarray(vertices, dtype=float)
     faces = np.asarray(faces, dtype=np.int64)
@@ -337,16 +389,22 @@ def box_uv(vertices, faces):
         selection = dropped == axis
         plane = [i for i in range(3) if i != axis]
         u, v = sorted(plane, key=lambda i: extent[i])
-        uv[selection, :, 0] = triangles[selection, :, u]
-        uv[selection, :, 1] = triangles[selection, :, v]
+        face_normal = normals[selection]
+        face_normal = face_normal / np.linalg.norm(face_normal, axis=1)[:, None]
+        vertical = np.eye(3)[v] - face_normal[:, v, None] * face_normal
+        vertical /= np.linalg.norm(vertical, axis=1)[:, None]
+        horizontal = np.cross(vertical, face_normal)
+        horizontal *= np.where(horizontal[:, u] < 0, -1., 1.)[:, None]
+        uv[selection, :, 0] = np.einsum("fij,fj->fi", triangles[selection], horizontal)
+        uv[selection, :, 1] = np.einsum("fij,fj->fi", triangles[selection], vertical)
     return uv
 
 
 def cylinder_uv(vertices, faces):
     """Metric cylindrical projection around +Y with unwrapped seam and flat caps.
 
-    Circumferential scale uses each face's local radius; V integrates the median
-    radial profile, accounting for a barrel's bulge. Cap projections use metres.
+    Circumferential scale uses each face's local radius. V measures the physical
+    meridian at constant U on that triangle. Cap projections use metres.
     """
     vertices = np.asarray(vertices, dtype=float)
     faces = np.asarray(faces, dtype=np.int64)
@@ -361,45 +419,35 @@ def cylinder_uv(vertices, faces):
     angle[seam] = np.where(angle[seam] < 0, angle[seam] + 2 * np.pi, angle[seam])
     radius = np.linalg.norm(triangle[:, :, [0, 2]], axis=2)
     u = angle * radius.mean(axis=1)[:, None]
-    # Sample a profile rather than accumulating the generator's vertex noise.
-    side_vertices = np.unique(faces[~cap]) if np.any(~cap) else used
-    y = local[side_vertices, 1]
-    r = np.linalg.norm(local[side_vertices][:, [0, 2]], axis=1)
-    bins = np.linspace(y.min(), y.max(), min(129, max(3, int(np.sqrt(len(used))))))
-    ids = np.minimum(np.searchsorted(bins, y, side="right") - 1, len(bins) - 2)
-    profile_y, profile_r = [], []
-    for index in range(len(bins) - 1):
-        selection = ids == index
-        if np.any(selection):
-            profile_y.append(np.median(y[selection]))
-            profile_r.append(np.median(r[selection]))
-    profile_y, profile_r = np.asarray(profile_y), np.asarray(profile_r)
-    if len(profile_y) > 1:
-        distance = np.r_[0., np.cumsum(np.hypot(np.diff(profile_y), np.diff(profile_r)))]
-        # Extend end bins with unit slope to avoid shortening the top/bottom.
-        v = np.interp(triangle[:, :, 1], profile_y, distance)
-        v += np.minimum(triangle[:, :, 1] - profile_y[0], 0)
-        v += np.maximum(triangle[:, :, 1] - profile_y[-1], 0)
-    else:
-        v = triangle[:, :, 1]
-    uv = np.stack((u, v), axis=2).astype(np.float32)
+    uv = np.stack((u, triangle[:, :, 1]), axis=2)
     uv[cap] = triangle[cap][:, :, [0, 2]]
-    # Stave thickness has faces along a radial plane: angular U would collapse
-    # their width. Project those faces isometrically in their own tangent plane.
+    # Stave thickness and the vertical edges of lid planks are planes, rather
+    # than circular sections. Their normals deviate from the radial direction;
+    # angular U would collapse or stretch their width. Project them isometrically.
     radial = triangle.mean(axis=1)
     tangent = np.column_stack((-radial[:, 2], np.zeros(len(faces)), radial[:, 0]))
     normal_length = np.linalg.norm(normal, axis=1)
     tangent_length = np.linalg.norm(tangent, axis=1)
     cosine = np.abs(np.einsum("ij,ij->i", normal, tangent))
-    radial_face = ~cap & (cosine > normal_length * tangent_length * 0.7)
-    if np.any(radial_face):
-        selected = triangle[radial_face]
-        face_normal = normal[radial_face] / normal_length[radial_face, None]
+    horizontal_normal_length = np.linalg.norm(normal[:, [0, 2]], axis=1)
+    planar_side = ~cap & (cosine > horizontal_normal_length * tangent_length * 0.3)
+    side = ~(cap | planar_side)
+    if np.any(side):
+        # Sparse or elliptical sections do not define a reliable median radius
+        # profile. Instead, measure this triangle's constant-U surface tangent.
+        # Rescaling V alone leaves U coordinates and its physical scale intact.
+        edges = triangle[side, 1:] - triangle[side, :1]
+        uv_edges = uv[side, 1:] - uv[side, :1]
+        physical = np.linalg.solve(uv_edges, edges)
+        uv[side, :, 1] *= np.linalg.norm(physical[:, 1], axis=1)[:, None]
+    if np.any(planar_side):
+        selected = triangle[planar_side]
+        face_normal = normal[planar_side] / normal_length[planar_side, None]
         # Preserve the stave's vertical grain while making the plane isometric.
         vertical = np.array([0., 1., 0.]) - face_normal[:, 1, None] * face_normal
         vertical /= np.linalg.norm(vertical, axis=1)[:, None]
         horizontal = np.cross(vertical, face_normal)
         relative = selected - selected[:, :1]
-        uv[radial_face] = np.stack((np.einsum("fij,fj->fi", relative, horizontal),
-                                   np.einsum("fij,fj->fi", relative, vertical)), axis=-1)
-    return uv
+        uv[planar_side] = np.stack((np.einsum("fij,fj->fi", relative, horizontal),
+                                  np.einsum("fij,fj->fi", relative, vertical)), axis=-1)
+    return uv.astype(np.float32)
