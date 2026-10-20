@@ -31,7 +31,7 @@
 
 Пилот качества материалов: [численные замеры 71 оригинала и проверки 58 наших альбедо](../reports/content/2026-10-pilot-measures/README.md), `scripts/content/measure-originals.sh`, общая функция `material-measures.h` / `material_measures.py`, `measure_city.py`, политика `material_scale.py`, поканальный цвет `material_colour.py`, детектор `material_lighting.py` и `marigold_iid.py` (отдельный venv на dev-ubuntu). [Текущие поля CSV и ограничения](own-content.md#численные-замеры-качества-материалов).
 
-Генераторы 3D для предметов этапа 2: [кандидаты, лицензии, конвейер и пилот](../reports/content/2026-10-3d-generators/README.md); выбор за пользователем.
+Генераторы 3D для предметов этапа 2: [кандидаты, лицензии, конвейер и пилот](../reports/content/2026-10-3d-generators/README.md); [подготовка TRELLIS на dev-ubuntu](own-content.md#генерация-3d), `scripts/content/mesh3d/` — установка, mesh-only адаптер, сырой NPZ и отдельное окно GPU. Генерация проверяется отдельно после подготовки окружений.
 
 ## Путь одной реплики героя
 
