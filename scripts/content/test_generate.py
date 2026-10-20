@@ -28,7 +28,8 @@ def recipes():
 def test_real_inputs_cover_includes_with_unique_pinned_text_recipes():
     records = recipes()
     with (ROOT/'data/content/city-materials.csv').open(newline='') as stream:
-        included = {row['texture'] for row in csv.DictReader(stream) if row['decision'] == 'include'}
+        included = {row['texture'] for row in csv.DictReader(stream) if row['decision'] == 'include'
+                    and not row['texture'].startswith('NW_MISC_')}
     assert {r['replaces'][0] for r in records} == included
     assert len({r['seed'] for r in records}) == len({r['id'] for r in records}) == len(included)
     for record in records:

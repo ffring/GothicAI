@@ -41,6 +41,8 @@ ANTITILE_BY_CLASS = {
 
 def selected_rows(rows, set_name):
     """Keep CSV order and use one scope for generation, packing and measurement."""
+    # The market/wall additions are preparation targets, outside existing sets.
+    rows = [row for row in rows if not row.get("texture", "").startswith("NW_MISC_")]
     if set_name == CITY_3_SET:
         selected = [row for row in rows if row.get("decision") in CITY_3_DECISIONS
                     and row.get("class") not in CITY_3_EXCLUDED_CLASSES]

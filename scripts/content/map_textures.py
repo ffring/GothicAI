@@ -6,7 +6,7 @@
 
 ``update`` refreshes area, UV density and material scale, preserving the manual
 decisions and original scalar measurements (metre periods follow UV density).
-It writes only after validating all 71 city and harbour textures.
+It writes only after validating the city, harbour and seven market/wall textures.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import re
 import sys
 import tempfile
 
-from pilot import selected_rows
+from pilot import CITY_3_EXCLUDED_CLASSES, selected_rows
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,8 +36,17 @@ MEASUREMENT_FIELDS = (
     "target_period_u_uv", "target_period_v_uv", "target_period_u_m", "target_period_v_m",
     "target_direction", "target_direction_confidence", "target_oklab_l", "target_oklab_a", "target_oklab_b",
 )
-FIELDS = (*LEGACY_FIELDS[:-2], *MEASUREMENT_FIELDS, *LEGACY_FIELDS[-2:])
-MAPPING_HEADERS = (FIELDS, FIELDS[:-1], FIELDS[:-2], LEGACY_FIELDS, LEGACY_FIELDS[:-1], LEGACY_FIELDS[:-2])
+MEASURED_FIELDS = (*LEGACY_FIELDS[:-2], *MEASUREMENT_FIELDS, *LEGACY_FIELDS[-2:])
+COUNT_FIELDS = (
+    "count_u", "count_v", "counted", "count_direction", "parts", "uv_m_u", "uv_m_v",
+    "element_cm_u", "element_cm_v",
+)
+FIELDS = (*MEASURED_FIELDS[:-2], *COUNT_FIELDS, *MEASURED_FIELDS[-2:])
+MAPPING_HEADERS = (
+    FIELDS, FIELDS[:-1], FIELDS[:-2],
+    MEASURED_FIELDS, MEASURED_FIELDS[:-1], MEASURED_FIELDS[:-2],
+    LEGACY_FIELDS, LEGACY_FIELDS[:-1], LEGACY_FIELDS[:-2],
+)
 ALPHA_TEXTURES = frozenset({
     "NW_CITY_FLAG_01.TGA", "NW_CITY_IVY_BORDER_01.TGA", "NW_CITY_IVY_FULL_01.TGA",
 })
@@ -51,6 +60,12 @@ TILE_METERS = {name: Decimal(meters) for name, meters in {
     "roof_tiles": "2", "thatch": "2", "dirt_path": "3", "mud": "3",
 }.items()}
 SCOPE_SIZE = 71
+MISC_TEXTURES = frozenset({
+    "NW_MISC_STRONG_STONEWALL_01.TGA", "NW_MISC_STRONG_STONEWALL_SIDE_01.TGA",
+    "NW_MISC_STRONG_STONEWALL_ENTRANCE_01.TGA", "NW_MISC_STRONG_STONEWALL_BLOCKBORDER_01.TGA",
+    "NW_MISC_STRONG_STONEWALL_ROUNDBORDER_01.TGA", "NW_MISC_OLDSTONEPATH_01.TGA",
+    "NW_MISC_OLDSTONEPATH_WAY_01.TGA",
+})
 PANEL_CLASSES = frozenset({
     "plaster_panel", "masonry_panel", "timber_frame_panel", "planks_panel",
     "roof_panel", "stone_panel", "painted_panel", "iron_panel", "cloth_panel",
@@ -146,8 +161,37 @@ def _check_measurements(row: dict[str, str], where: str) -> None:
             raise MappingError(f"{where}: {field} must be finite and in [-0.5, 0.5]")
 
 
+def _check_counts(row: dict[str, str], where: str) -> None:
+    # Older tables did not record visual counts. Preserve their read/update path.
+    if not any(row.get(field, "") for field in COUNT_FIELDS):
+        return
+    if row["decision"] == "exclude" or row["class"] in CITY_3_EXCLUDED_CLASSES:
+        raise MappingError(f"{where}: excluded preparation target requires empty count fields")
+    if not row.get("counted", "").strip():
+        raise MappingError(f"{where}: counted must be nonempty")
+    if row.get("count_direction") not in ("U", "V", "none"):
+        raise MappingError(f"{where}: count_direction must be U, V or none")
+    if row["decision"] in ("module", "panel", "strip") and not row.get("parts", "").strip():
+        raise MappingError(f"{where}: {row['decision']} requires nonempty parts")
+    for axis in ("u", "v"):
+        meters = _number(row.get(f"uv_m_{axis}", ""), f"{where}: uv_m_{axis}", positive=True)
+        raw_count = row.get(f"count_{axis}", "")
+        raw_size = row.get(f"element_cm_{axis}", "")
+        if not raw_count:
+            if raw_size:
+                raise MappingError(f"{where}: empty count_{axis} requires empty element_cm_{axis}")
+            continue
+        count = _number(raw_count, f"{where}: count_{axis}", positive=True)
+        pilot_half_count = row["texture"] == "NW_HARBOUR_STAIRS_01.TGA" and axis == "u" and count == Decimal("2.5")
+        if count != count.to_integral_value() and not pilot_half_count:
+            raise MappingError(f"{where}: count_{axis} must be a whole number")
+        size = _number(raw_size, f"{where}: element_cm_{axis}", positive=True)
+        if abs(size - 100 * meters / count) > Decimal("0.01"):
+            raise MappingError(f"{where}: stale element_cm_{axis}; expected 100 × uv_m_{axis} / count_{axis}")
+
+
 def _scope(texture: str) -> bool:
-    return texture.startswith(("NW_CITY_", "NW_HARBOUR_"))
+    return texture.startswith(("NW_CITY_", "NW_HARBOUR_")) or texture in MISC_TEXTURES
 
 
 def read_census(path: Path) -> dict[str, dict[str, str]]:
@@ -166,8 +210,12 @@ def read_census(path: Path) -> dict[str, dict[str, str]]:
         if fraction > 1:
             raise MappingError(f"{where}: tiled_area_fraction must be at most 1")
         census[texture] = row
-    if len(census) != SCOPE_SIZE:
-        raise MappingError(f"{path}: expected {SCOPE_SIZE} city/harbour textures, got {len(census)}")
+    core_size = len(census.keys() - MISC_TEXTURES)
+    if core_size != SCOPE_SIZE:
+        raise MappingError(f"{path}: expected {SCOPE_SIZE} city/harbour textures, got {core_size}")
+    misc = census.keys() & MISC_TEXTURES
+    if misc and misc != MISC_TEXTURES:
+        raise MappingError(f"{path}: missing market/wall textures: {', '.join(sorted(MISC_TEXTURES - misc))}")
     return census
 
 
@@ -267,6 +315,7 @@ def validate_mapping(
             if actual != Decimal(source[field]):
                 raise MappingError(f"{where}: stale {field}: {row[field]!r}; census has {source[field]!r}; run update")
         _check_measurements(row, where)
+        _check_counts(row, where)
         if row["decision"] == "exclude":
             for field in ("class", "state", "scale"):
                 if row[field]:
