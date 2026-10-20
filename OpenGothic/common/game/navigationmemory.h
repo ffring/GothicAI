@@ -12,12 +12,15 @@
 // observations and the actor's own body pose; no world or physics access.
 class NavigationMemory final {
   public:
+    static constexpr uint32_t RepresentationVersion = 2;
+
     struct Constants final {
       static constexpr size_t nearSize = 64, farSize = 100;
       static constexpr float nearCellCm = 25.f, farCellCm = 200.f;
       static constexpr float staticTauSeconds = 30.f, movableTauSeconds = 5.f;
       static constexpr float distanceLambdaCm = 3000.f;
       static constexpr float stepCm = 50.f;
+      static constexpr float maxSlopeDegrees = 45.f, bodyHeightCm = 180.f;
       static constexpr float groundNormalY = .7f, wallNormalY = .3f;
       static constexpr float clearHeightCm = 25.f;
       };
@@ -26,6 +29,10 @@ class NavigationMemory final {
       Tempest::Vec3 position = {}; // feet, centimetres
       Tempest::Vec3 forward = {1.f,0.f,0.f}; // body, not head; XZ only
       uint64_t gameMs = 0;
+      // The same guild limits passed to CharacterVirtual, supplied by the caller.
+      float stepHeightCm = Constants::stepCm;
+      float maxSlopeDegrees = Constants::maxSlopeDegrees;
+      float bodyHeightCm = Constants::bodyHeightCm;
       };
 
     struct Cell final {

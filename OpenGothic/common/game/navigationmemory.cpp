@@ -140,9 +140,10 @@ void NavigationMemory::ingest(Grid& grid, const NavigationEye::Ray& ray, float o
     auto& evidence = cell.evidence[channel];
     if(ray.sampledAtMs<evidence.gameMs)
       return;
-    if(channel==Clearance && (cell.known&(1u<<Clearance))!=0 && height>evidence.heightCm)
-      return; // A high ray does not refresh an older glimpse of low empty air.
-    if(ray.sampledAtMs==evidence.gameMs && (cell.known&(1u<<channel))!=0 && channel==Clearance)
+    if((channel==Clearance || channel==Wall) && (cell.known&(1u<<channel))!=0 && height>evidence.heightCm)
+      return; // A high ray does not refresh or replace an older low observation.
+    if(ray.sampledAtMs==evidence.gameMs && (cell.known&(1u<<channel))!=0 &&
+       (channel==Clearance || channel==Wall))
       height = std::min(height,evidence.heightCm);
     evidence = {ray.sampledAtMs,observedPath,height,ray.point.x,ray.point.z};
     cell.known |= uint8_t(1u<<channel);
@@ -243,6 +244,13 @@ void NavigationMemory::read(const Grid& grid, Layer& result) const {
   result.cells.resize(grid.size*grid.size);
   std::fill(result.cells.begin(),result.cells.end(),Cell{});
   const Vec3 right(-body.forward.z,0,body.forward.x);
+  const float step = std::isfinite(body.stepHeightCm) && body.stepHeightCm>0.f ?
+                     body.stepHeightCm : Constants::stepCm;
+  const float slopeDegrees = std::isfinite(body.maxSlopeDegrees) ?
+                             std::clamp(body.maxSlopeDegrees,0.f,89.f) : Constants::maxSlopeDegrees;
+  const float slope = std::tan(slopeDegrees*3.14159265358979323846f/180.f);
+  const float bodyHeight = std::isfinite(body.bodyHeightCm) && body.bodyHeightCm>0.f ?
+                           body.bodyHeightCm : Constants::bodyHeightCm;
   for(int z=grid.minZ; z<grid.minZ+int(grid.size); ++z)
     for(int x=grid.minX; x<grid.minX+int(grid.size); ++x) {
       const auto& input = grid.at(x,z);
@@ -262,24 +270,62 @@ void NavigationMemory::read(const Grid& grid, Layer& result) const {
           output.confidence = std::max(output.confidence,c[channel]);
           }
       output.free = std::max(output.free,c[Free]);
-      output.wall = std::max(output.wall,c[Wall]);
+      // A hit above an observed walking surface does not prove a wall in the
+      // space occupied by the body. Nearby ground is evidence, not a guess at
+      // the height of unseen terrain. Without it the wall remains conservative.
+      bool overheadWall = false;
+      if(c[Wall]>0.f) {
+        const auto& wall = input.evidence[Wall];
+        float nearest = std::numeric_limits<float>::infinity();
+        for(int nz=z-1; nz<=z+1; ++nz)
+          for(int nx=x-1; nx<=x+1; ++nx) {
+            if(!grid.contains(nx,nz))
+              continue;
+            const auto& neighbour = grid.at(nx,nz);
+            if((neighbour.known&(1u<<Ground))==0)
+              continue;
+            const auto& ground = neighbour.evidence[Ground];
+            const float gx = ground.hitX-wall.hitX, gz = ground.hitZ-wall.hitZ;
+            const float distance = gx*gx+gz*gz;
+            if(distance<nearest) {
+              nearest = distance;
+              overheadWall = wall.heightCm>ground.heightCm+bodyHeight;
+              }
+            }
+        }
+      if(!overheadWall)
+        output.wall = std::max(output.wall,c[Wall]);
       output.water = std::max(output.water,c[Water]);
       output.movable = std::max(output.movable,c[Movable]);
       if(c[Ground]>0.f) {
-        const float height = input.evidence[Ground].heightCm;
-        output.groundHeightCm = height;
-        const float difference = height-body.position.y;
-        if(difference>=Constants::stepCm)
-          output.ledge = std::max(output.ledge,c[Ground]);
-        else if(difference<-Constants::stepCm)
-          output.drop = std::max(output.drop,c[Ground]);
-        else
-          output.free = std::max(output.free,c[Ground]);
+        const auto& ground = input.evidence[Ground];
+        output.groundHeightCm = ground.heightCm;
+        output.free = std::max(output.free,c[Ground]);
+        // Height relative to the actor's feet says nothing about traversability
+        // several metres ahead. A hazard needs a locally observed discontinuity
+        // exceeding both the body's step and its maximum walking slope.
+        for(int nz=z-1; nz<=z+1; ++nz)
+          for(int nx=x-1; nx<=x+1; ++nx) {
+            if((nx==x && nz==z) || !grid.contains(nx,nz))
+              continue;
+            const auto& neighbour = grid.at(nx,nz);
+            if((neighbour.known&(1u<<Ground))==0)
+              continue;
+            const auto& other = neighbour.evidence[Ground];
+            const float difference = ground.heightCm-other.heightCm;
+            const float dx = ground.hitX-other.hitX, dz = ground.hitZ-other.hitZ;
+            const float distance = std::sqrt(dx*dx+dz*dz);
+            if(std::abs(difference)<=step || std::abs(difference)<=distance*slope)
+              continue;
+            const float certainty = std::min(c[Ground],confidence(other,false));
+            if(difference>0.f)
+              output.ledge = std::max(output.ledge,certainty);
+            else
+              output.drop = std::max(output.drop,certainty);
+            }
         }
-      if(c[Clearance]>0.f && input.evidence[Clearance].heightCm<body.position.y-Constants::stepCm &&
-         (c[Ground]==0.f || input.evidence[Ground].gameMs<input.evidence[Clearance].gameMs ||
-          input.evidence[Ground].heightCm<body.position.y-Constants::stepCm))
-        output.drop = std::max(output.drop,c[Clearance]);
+      // Empty air below a ray is not a ground measurement: it cannot establish
+      // a drop without a local observed change in the supporting surface.
       }
   }
 

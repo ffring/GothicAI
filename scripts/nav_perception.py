@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Paired eye/memory measurements on the frozen v3 poses; no demonstrations.
+
+Run on Ryzen inside the caller's gq batch. All writes belong to --task.
+The source experiment and its recordings are opened read-only.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+
+def module(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+
+v3 = module("nav_teacher_v3")
+coverage = module("nav_teacher_v3_coverage")
+MODES = ("baseline", "gaze", "rows")
+EXPECTED = {"point": 30, "object": 30, "follow": 18, "approach": 18}
+
+
+def frozen_cases(source):
+    path = source / "expanded-scenarios.jsonl"
+    cases = list(v3.rows(path))
+    if dict(Counter(case["goal_kind"] for case in cases)) != EXPECTED:
+        raise ValueError("Expected the frozen 30/30/18/18 v3 cohort")
+    if len({case["id"] for case in cases}) != len(cases):
+        raise ValueError("Duplicate frozen scenario")
+    return cases
+
+
+def prepare(task, source, data):
+    cases = frozen_cases(source)
+    output = task / "replay"
+    output.mkdir(parents=True, exist_ok=True)
+    count = samples = 0
+    with (output / "poses.txt").open("w", encoding="utf-8") as stream:
+        for case in cases:
+            cohort = "v3-retry" if case["goal_kind"] == "point" else "v3-visible"
+            directory = data / cohort / case["goal_kind"] / case["split"] / case["id"]
+            meta = v3.read_json(directory / "episode.json")
+            if not v3.same_scenario(meta, case, 3):
+                raise ValueError(f"Frozen episode identity mismatch: {directory}")
+            wanted = set(coverage.sample_indices(meta["decisions"], case["id"], 20102026))
+            written = 0
+            previous = None
+            for index, row in enumerate(v3.rows(directory / "teacher-paths.jsonl")):
+                elapsed = int(row["elapsed_ms"])
+                if previous is not None and elapsed - previous != 100:
+                    raise ValueError(f"Non-100ms source decision interval: {directory}")
+                previous = elapsed
+                numbers = [elapsed, *row["position_cm"], row["yaw_deg"], *row["goal_cm"], int(index in wanted)]
+                stream.write(case["id"] + " " + " ".join(format(value, ".12g") for value in numbers) + "\n")
+                written += 1
+                samples += index in wanted
+            if written != meta["decisions"]:
+                raise ValueError(f"Incomplete source trajectory: {directory}")
+            count += written
+    result = dict(scenarios=len(cases), updates=count, sampled_frames=samples,
+                  cohort_sha256=hashlib.sha256((source / "expanded-scenarios.jsonl").read_bytes()).hexdigest(),
+                  poses_sha256=hashlib.sha256((output / "poses.txt").read_bytes()).hexdigest(),
+                  sampling="seed20102026 one decision in10 plus final; full100ms pose history",
+                  recordings_created=False)
+    v3.write_json(output / "preparation.json", result)
+    print(json.dumps(dict(event="perception_prepared", **result)), flush=True)
+    return result
+
+
+def runner_args(task, output):
+    return SimpleNamespace(output=output, runner=task / "build/opengothic/gothic-body-runner",
+        assets=task.parent / "game", save=task / "input/save.sav", cache=task / "cache",
+        links=task / "input/accepted-links.txt", roads=task / "input/places.json", ini=None,
+        npc="BAU_954_MALETH", seed=20102026, physics="cv", watchdog_seconds=5400)
+
+
+def replay(task, modes=MODES):
+    for mode in modes:
+        directory = task / "replay" / mode
+        if (directory / "perception-timing.json").is_file():
+            raise ValueError(f"Refusing to overwrite completed replay: {directory}")
+        options = runner_args(task, task / "replay" / (mode + "-worker"))
+        v3.checked_paths(options)
+        runner = v3.new_runner(options)
+        try:
+            print(json.dumps(dict(event="perception_replay_started", mode=mode)), flush=True)
+            v3.runner_scenario(options, runner, "perception-" + mode,
+                [f"navdemos perception-replay {task / 'replay/poses.txt'} {mode}"], directory, options.seed)
+        finally:
+            runner.close()
+        if not (directory / "perception-timing.json").is_file():
+            raise ValueError(f"Replay did not produce timings: {directory}")
+        print(json.dumps(dict(event="perception_replay_finished", mode=mode)), flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("phase", choices=("prepare", "replay"))
+    parser.add_argument("--task", type=Path, required=True)
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--data", type=Path)
+    parser.add_argument("--mode", choices=MODES, action="append")
+    args = parser.parse_args()
+    task = args.task.resolve()
+    if args.phase == "prepare":
+        prepare(task, (args.source or task.parent / "nav-teacher-v3").resolve(),
+                (args.data or task.parent / "nav-demos-v3").resolve())
+    else:
+        replay(task, args.mode or MODES)
+
+
+if __name__ == "__main__":
+    main()

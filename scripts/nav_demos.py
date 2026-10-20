@@ -10,6 +10,9 @@ The gzip payload has a 32-byte HEADER followed by packed records. Versions 1 and
 on the familiar route instead of the next graph node. RECORD_DTYPE remains the
 version 1 alias; use RECORD_DTYPES[version] when creating version 2 records.
 Memory channels are probabilities quantized by round(255*p); divide by 255.
+episode.json.navigation_memory_version identifies their interpretation independently
+of the binary format: absent means legacy version 1; version 2 uses local terrain
+transitions instead of height relative to the observer's feet.
 ground_height_cm=0,height_valid=0 represents an unknown height (never NaN).
 Body and road vectors use x=right,y=up,z=forward in the current body frame.
 World position/yaw and teacher hints are debug fields, excluded by learner_input().
@@ -122,6 +125,20 @@ def episode_version(path: str | Path) -> int:
     """Read the validated format version without loading sensor records."""
     with gzip.open(_samples_path(path), "rb") as stream:
         return _read_header(stream)
+
+
+def episode_memory_version(path: str | Path) -> int:
+    """Read memory semantics separately from NAVDEMO's byte-layout version.
+
+    Existing episodes without a tag retain legacy semantics (version 1).
+    The tag belongs to episode.json; loading old samples never rewrites it.
+    """
+    source = _samples_path(path).parent / "episode.json"
+    metadata = json.loads(source.read_text(encoding="utf-8")) if source.is_file() else {}
+    version = metadata.get("navigation_memory_version", 1)
+    if type(version) is not int or version < 1:
+        raise ValueError(f"invalid navigation_memory_version in {source}: {version!r}")
+    return version
 
 
 def iter_chunks(path: str | Path, chunk_records: int = 64) -> Iterator[np.ndarray]:
@@ -247,6 +264,7 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
     episodes = []
     for file in files:
         version = episode_version(file)
+        memory_version = episode_memory_version(file)
         if validate:
             layout = ray_layout(file)
             metadata = json.loads((file.parent / "episode.json").read_text(encoding="utf-8"))
@@ -343,6 +361,7 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
         compressed_bytes = file.stat().st_size
         episodes.append({"episode": str(file.parent), "decisions": record_count,
                          "format_version": version,
+                         "navigation_memory_version": memory_version,
                          "first_ms": first_ms, "last_ms": last_ms,
                          "compressed_bytes": compressed_bytes, **last_debug})
         total_records += record_count
@@ -352,9 +371,15 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
         root = root / "episodes"
     dataset_bytes = sum(file.stat().st_size for file in root.rglob("*") if file.is_file()) if root.is_dir() else compressed_bytes
     versions = sorted({episode["format_version"] for episode in episodes})
+    memory_versions = sorted({episode["navigation_memory_version"] for episode in episodes})
+    if validate:
+        _require(len(memory_versions) == 1,
+                 f"mixed navigation memory versions: {memory_versions}; use separate datasets")
     return {
         "format_version": versions[0] if len(versions) == 1 else None,
         "format_versions": versions, "episodes": len(files), "decisions": total_records,
+        "navigation_memory_version": memory_versions[0] if len(memory_versions) == 1 else None,
+        "navigation_memory_versions": memory_versions,
         "record_bytes": RECORD_BYTES, "uncompressed_bytes": total_records * RECORD_BYTES + len(files) * HEADER.size,
         "compressed_samples_bytes": compressed_bytes, "dataset_bytes": dataset_bytes,
         "dataset_gb": dataset_bytes / 1e9,

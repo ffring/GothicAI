@@ -6,6 +6,7 @@
 #include "navpolicy.h"
 #include "navtransitions.h"
 #include "game/knownroadsbench.h"
+#include "game/navperceptionbench.h"
 #include "world/world.h"
 #include "world/objects/npc.h"
 
@@ -301,6 +302,7 @@ void finish(Episode& ep,World& world) {
      <<",\"distance_cm\":";jsonNumber(out,(ep.npc->position()-ep.goal).length());
   out<<",\"failure\":"<<std::quoted(ep.failure)
      <<",\"teacher_version\":"<<ep.teacherVersion<<",\"demo_version\":"<<(ep.teacherVersion==3?2:ep.teacherVersion)
+     <<",\"navigation_memory_version\":"<<NavigationMemory::RepresentationVersion
      <<",\"oracle\":"<<ep.oracle<<",\"record\":"<<bool(ep.writer)
      <<",\"demonstration_recorded\":"<<bool(ep.writer)<<",\"demo_recorded\":"<<bool(ep.writer)
      <<",\"solver\":"<<std::quoted(ep.teacherVersion==3?"memory_teacher_v3":ep.teacherVersion==2?"teacher_v2":"teacher_v1")
@@ -871,7 +873,11 @@ void observe(Episode& ep,World& w) {
   const auto memoryStart=Clock::now();
   NavigationMemory::Pose pose;
   pose.position=n.position();pose.forward={std::cos(n.rotationRad()),0,std::sin(n.rotationRad())};pose.gameMs=w.tickCount();
-  ep.memory.update(ep.eye.samples(),pose);
+  const auto& guild=w.script().guildVal();
+  const float step=float(guild.step_height[n.guild()]);
+  pose.stepHeightCm=step>0.f?step:50.f;
+  pose.maxSlopeDegrees=std::acos(std::clamp(std::cos(float(guild.slide_angle[n.guild()])*Pi/180.f),0.f,1.f))*180.f/Pi;
+  ep.memory.update(ep.eye.memorySamples(),pose);
   if(ep.population)ep.phaseUs[1]+=micros(memoryStart);
 }
 NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance* guidance=nullptr) {
@@ -1500,6 +1506,11 @@ bool NavDemos::fullSimulation(const Npc& npc) {
 }
 void NavDemos::reset() {legacy=Episode{};population=Population{};settings=Settings{};preparingLegacy=nullptr;}
 void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player,const std::string& output) {
+  if(args.size()>=2 && args[1]=="perception-replay") {
+    if(running() || NavBench::running())throw std::runtime_error("navdemos cannot replay perception during an episode");
+    NavPerceptionBench::command(args,w,player,output);
+    return;
+  }
   auto a=args;
   auto& ep=legacy;
   if(a.size()>=2 && (a[1]=="oracle" || a[1]=="record")) {
