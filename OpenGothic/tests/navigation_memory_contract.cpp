@@ -150,19 +150,23 @@ void groundAndLowEmptyAir() {
   const std::vector<Ray> ground = {ray({300,80,100},Kind::World,1.f)};
   memory.update(ground,{{0,0,0},{1,0,0},0});
   memory.view(view);
-  require(strongest(view.near,&Memory::Cell::ledge).confidence>.99f,"ground eighty centimetres above feet is a ledge");
+  require(strongest(view.near,&Memory::Cell::ledge).confidence==0,"isolated ground above feet is not a ledge");
+  require(around(view.near,100,300,&Memory::Cell::free)>.99f,"observed isolated ground is free");
   memory.update(ground,{{0,100,0},{1,0,0},1000});
   memory.view(view);
-  require(strongest(view.near,&Memory::Cell::ledge).confidence==0,"ledge is recomputed relative to current feet");
-  require(around(view.near,100,300,&Memory::Cell::free)>0,"ground near current feet is free");
+  require(strongest(view.near,&Memory::Cell::ledge).confidence==0,"moving feet does not invent a ledge");
   memory.update(ground,{{0,200,0},{1,0,0},2000});
   memory.view(view);
-  require(strongest(view.near,&Memory::Cell::drop).confidence>0,"remembered ground below current feet is a drop");
+  require(strongest(view.near,&Memory::Cell::drop).confidence==0,"moving feet does not turn remembered ground into a drop");
 
   Memory hole;
   hole.update({ray({500,-200,0},Kind::None)},{{0,0,0},{1,0,0},0});
   hole.view(view);
-  require(around(view.near,0,450,&Memory::Cell::drop)>.99f,"ray through air below expected ground proves a drop");
+  require(strongest(view.near,&Memory::Cell::drop).confidence==0,"low empty air without observed local ground proves no drop");
+  hole.update({ray({450,0,0},Kind::World,1.f,1000)},{{0,0,0},{1,0,0},1000});
+  hole.update({ray({500,-200,0},Kind::None,0,2000)},{{0,0,0},{1,0,0},2000});
+  hole.view(view);
+  require(strongest(view.near,&Memory::Cell::drop).confidence==0,"new low empty air does not turn stale ground into a drop");
 
   Memory vertical;
   vertical.update({ray({500,0,0},Kind::World,1.f),ray({500,150,100},Kind::World)},{{0,0,0},{1,0,0},0});
@@ -174,7 +178,81 @@ void groundAndLowEmptyAir() {
   vertical.update({ray({700,150,140},Kind::None,0,2000)},{{0,0,0},{1,0,0},2000});
   vertical.view(view);
   require(around(view.near,100,500,&Memory::Cell::wall)==0,"new empty ray through recorded wall height clears that wall");
-  std::puts("ground: ledge/free/drop follow current feet; low empty air proves drop; high air preserves lower surfaces");
+  std::puts("ground: hazards independent of feet; low air alone proves no drop; high air preserves lower surfaces");
+  }
+
+void localStepsAndSlopes() {
+  Memory::View view;
+  for(float direction:{-1.f,1.f}) {
+    Memory slope;
+    std::vector<Ray> observations;
+    for(int i=0; i<20; ++i) {
+      const float x = 12.f+float(i)*25.f;
+      observations.push_back(ray({x,direction*x*.4f,12.f},Kind::World,1.f,0,{x,500,12.f}));
+      }
+    for(int i=0; i<20; ++i) {
+      const float x = 1012.f+float(i)*200.f;
+      observations.push_back(ray({x,direction*x*.4f,12.f},Kind::World,1.f,0,{x,3000,12.f}));
+      }
+    slope.update(observations,{{0,0,0},{1,0,0},0});
+    slope.view(view);
+    for(const auto* layer:{&view.near,&view.far}) {
+      require(strongest(*layer,&Memory::Cell::ledge).confidence==0,"continuous walkable slope is not a ledge");
+      require(strongest(*layer,&Memory::Cell::drop).confidence==0,"continuous walkable slope is not a drop");
+      require(strongest(*layer,&Memory::Cell::free).confidence>.99f,"continuous slope remains observed free ground");
+      }
+    }
+
+  Memory edge;
+  edge.update({ray({312,0,12},Kind::World,1.f),ray({337,80,12},Kind::World,1.f)},{{0,0,0},{1,0,0},0});
+  edge.view(view);
+  require(strongest(view.near,&Memory::Cell::ledge).confidence>.99f,"higher side of a local eighty-centimetre step is a ledge");
+  require(strongest(view.near,&Memory::Cell::drop).confidence>.99f,"lower side of a local eighty-centimetre step is a drop");
+  edge.update({},{{0,500,0},{1,0,0},1000});
+  edge.view(view);
+  require(strongest(view.near,&Memory::Cell::ledge).confidence>0 && strongest(view.near,&Memory::Cell::drop).confidence>0,
+          "real discontinuity survives actor height changes");
+
+  Memory step;
+  step.update({ray({312,0,12},Kind::World,1.f),ray({337,50,12},Kind::World,1.f)},{{0,0,0},{1,0,0},0});
+  step.view(view);
+  require(strongest(view.near,&Memory::Cell::ledge).confidence==0 && strongest(view.near,&Memory::Cell::drop).confidence==0,
+          "a step at the body's limit remains traversable");
+  Memory::Pose limited = {{0,0,0},{1,0,0},1000};
+  limited.stepHeightCm = 20;
+  step.update({},limited);
+  step.view(view);
+  require(strongest(view.near,&Memory::Cell::ledge).confidence>0,"local step uses the actor's actual step height");
+
+  Memory incline;
+  incline.update({ray({1012,0,12},Kind::World,1.f),ray({1212,100,12},Kind::World,1.f)},{{0,0,0},{1,0,0},0});
+  incline.view(view);
+  require(strongest(view.far,&Memory::Cell::ledge).confidence==0,"a one-metre rise across two metres is walkable");
+  limited.maxSlopeDegrees = 20;
+  incline.update({},limited);
+  incline.view(view);
+  require(strongest(view.far,&Memory::Cell::ledge).confidence>0,"local slope uses the actor's actual walking limit");
+  std::puts("local terrain: continuous slopes free; genuine step and drop retained; guild step/slope limits respected");
+  }
+
+void overheadWallAndWater() {
+  Memory memory;
+  Memory::View view;
+  memory.update({ray({312,0,12},Kind::World,1.f),ray({312,300,12},Kind::World,0),
+                 ray({512,0,12},Kind::Water)},{{0,0,0},{1,0,0},0});
+  memory.view(view);
+  require(strongest(view.near,&Memory::Cell::wall).confidence==0,"wall hit above the observed ground and body is overhead");
+  require(strongest(view.near,&Memory::Cell::water).confidence>.99f,"water remains hazardous");
+  memory.update({ray({312,0,12},Kind::World,1.f,1000),ray({312,150,12},Kind::World,0,1000),
+                 ray({312,300,12},Kind::World,0,1000)},{{0,0,0},{1,0,0},1000});
+  memory.view(view);
+  require(strongest(view.near,&Memory::Cell::wall).confidence>.99f,"a higher wall hit cannot overwrite the observed wall in the body's space");
+
+  Memory unseenGround;
+  unseenGround.update({ray({312,300,12},Kind::World,0)},{{0,0,0},{1,0,0},0});
+  unseenGround.view(view);
+  require(strongest(view.near,&Memory::Cell::wall).confidence>.99f,"without observed local ground the wall remains conservative");
+  std::puts("walls: observed overhead hit filtered; low wall and water retained; no guessed terrain under unseen wall");
   }
 
 void windowAndTravelHistory() {
@@ -220,6 +298,60 @@ void farCellClearingNeedsActualIntersection() {
           "free ray through the actual recorded hit clears it even in a far cell");
   std::puts("far clearing: parallel ray 150 cm away retains hit; ray through actual 3D hit clears it");
   }
+
+void waterSurfaceIsNotEmptyAirOrSubmergedGround() {
+  Memory memory;
+  Memory::View view;
+  memory.update({ray({512,0,12},Kind::Water)},{{0,0,0},{1,0,0},0});
+  // This ray misses the water surface by ten centimetres. The generic free
+  // clearance tolerance must not erase the static surface below that air.
+  memory.update({ray({1000,10,12},Kind::None,0,100,{0,10,12})},{{0,0,0},{1,0,0},100});
+  memory.view(view);
+  require(around(view.near,12,512,&Memory::Cell::water)>.99f,
+          "new free air above visible water does not make its surface traversable");
+  memory.update({ray({512,-100,12},Kind::World,1.f,200)},{{0,0,0},{1,0,0},200});
+  memory.view(view);
+  require(around(view.near,12,512,&Memory::Cell::water)>.99f,
+          "observing a submerged bottom does not replace visible water with free ground");
+  std::puts("water: nearby empty air and observed submerged ground retain the water hazard");
+  }
+
+void boundedWaterPatches() {
+  const auto sample = [](float height=0.f, float edge=60.f, uint64_t lastTime=0) {
+    return std::vector<Ray>{ray({312,0,12},Kind::Water),ray({312+edge,0,12},Kind::Water),
+                            ray({312,height,12+edge},Kind::Water,1.f,lastTime)};
+    };
+  const auto interior = [](const Memory::View& view)->const Memory::Cell& {
+    // Centre of the near cell wholly between the three observed hit cells.
+    return view.near.cells[45*Memory::Constants::nearSize+33]; // x=337.5,z=37.5
+    };
+  Memory memory;
+  Memory::View view;
+  memory.update(sample(),{{0,0,0},{1,0,0},0});
+  memory.view(view);
+  require(interior(view).water>.99f,"nearby simultaneous water hits bracket a continuous water surface");
+  require(view.near.cells[47*Memory::Constants::nearSize+34].water==0,
+          "water reconstruction does not extrapolate beyond its observed triangle");
+
+  for(const auto& observations:{sample(0,150),sample(20),sample(0,60,100)}) {
+    Memory isolated;
+    isolated.update(observations,{{0,0,0},{1,0,0},100});
+    isolated.view(view);
+    require(interior(view).water==0,
+            "distant, noncoplanar or asynchronous water hits do not fill unknown gaps");
+    }
+
+  for(float groundHeight:{50.f,-100.f}) {
+    Memory shore;
+    auto observations=sample();
+    observations.push_back(ray({337,groundHeight,37},Kind::World,1.f));
+    shore.update(observations,{{0,0,0},{1,0,0},0});
+    shore.view(view);
+    require((interior(view).water>0)==(groundHeight<0),
+            "water patches respect observed dry ground while retaining submerged bottom water");
+    }
+  std::puts("water patches: bounded same-sample coplanar triangles; no dry-land, long-gap or height extrapolation");
+  }
 }
 
 int main() {
@@ -227,7 +359,11 @@ int main() {
   timeAndDistanceDecay();
   cachedRaysAndIncompleteRays();
   groundAndLowEmptyAir();
+  localStepsAndSlopes();
+  overheadWallAndWater();
   windowAndTravelHistory();
   farCellClearingNeedsActualIntersection();
+  waterSurfaceIsNotEmptyAirOrSubmergedGround();
+  boundedWaterPatches();
   std::puts("navigation memory contracts passed");
   }

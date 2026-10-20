@@ -6,6 +6,8 @@
 #include "navpolicy.h"
 #include "navtransitions.h"
 #include "game/knownroadsbench.h"
+#include "game/navperceptionbench.h"
+#include "game/navperceptionsafety.h"
 #include "world/world.h"
 #include "world/objects/npc.h"
 
@@ -64,6 +66,7 @@ struct Episode {
   std::string tracedPlan;
   bool active=false,replay=false,drive=false,success=false;
   bool oracle=false;
+  bool perceptionMonitor=false;
   bool population=false,record=true,sampled=false,pending=false,fell=false;
   bool trainingValid=true,accounted=false;
   std::string nonfiniteStage;
@@ -112,6 +115,8 @@ struct Episode {
   NavigationMemory::View view;
   std::unique_ptr<NavDemoWriter> writer;
   std::ofstream actions,trajectory,knownPaths,teacherPaths,transitionFrames,samples,targetTrajectory;
+  std::ofstream perceptionSafetyFrames;
+  std::ofstream perceptionWaterObservations;
   std::vector<RecordedKeys> replayActions;
 };
 Episode legacy;
@@ -136,6 +141,8 @@ struct Population {
 struct Settings {
   bool cv=false,heroNear=true,killArmed=false,killFired=false;
   bool oracle=false,recordDemos=true;
+  bool perceptionMonitor=false;
+  NavigationEye::FloorSampling floorSampling=NavigationEye::FloorSampling::WalkingGazeDown;
   size_t killSlot=0;
   uint64_t killAfterMs=0;
 } settings;
@@ -146,6 +153,14 @@ struct PrepareLegacy {
 };
 using Clock=std::chrono::steady_clock;
 double micros(Clock::time_point start) {return std::chrono::duration<double,std::micro>(Clock::now()-start).count();}
+const char* perceptionMode(NavigationEye::FloorSampling mode) {
+  switch(mode) {
+    case NavigationEye::FloorSampling::Baseline: return "baseline";
+    case NavigationEye::FloorSampling::WalkingGazeDown: return "gaze";
+    case NavigationEye::FloorSampling::ForwardRows: return "rows";
+  }
+  return "invalid";
+}
 
 NavMesh::Point meters(const Vec3& p) {return {p.x*.01f,p.y*.01f,p.z*.01f};}
 Vec3 cm(const NavMesh::Point& p) {return {p[0]*100,p[1]*100,p[2]*100};}
@@ -293,7 +308,7 @@ void finish(Episode& ep,World& world) {
                        <<distance<<' '<<int(distance>=200.f && distance<=500.f)<<'\n';
   }
   if(!ep.replay) {NpcKeys::KeyState end;end.walk=true;action(ep,elapsed,end);if(ep.writer)ep.writer->finish();}
-  ep.trajectory.close();ep.actions.close();ep.knownPaths.close();ep.teacherPaths.close();ep.transitionFrames.close();ep.samples.close();ep.targetTrajectory.close();
+  ep.trajectory.close();ep.actions.close();ep.knownPaths.close();ep.teacherPaths.close();ep.transitionFrames.close();ep.samples.close();ep.targetTrajectory.close();ep.perceptionSafetyFrames.close();ep.perceptionWaterObservations.close();
   auto out=file(ep,"episode.json");
   const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-ep.wallStart).count();
   out<<"{\"success\":"<<ep.success<<",\"replay\":"<<ep.replay<<",\"drive\":"<<ep.drive<<",\"start\":"<<std::quoted(ep.from)
@@ -301,6 +316,9 @@ void finish(Episode& ep,World& world) {
      <<",\"distance_cm\":";jsonNumber(out,(ep.npc->position()-ep.goal).length());
   out<<",\"failure\":"<<std::quoted(ep.failure)
      <<",\"teacher_version\":"<<ep.teacherVersion<<",\"demo_version\":"<<(ep.teacherVersion==3?2:ep.teacherVersion)
+     <<",\"navigation_memory_version\":"<<NavigationMemory::RepresentationVersion
+     <<",\"perception_mode\":"<<std::quoted(perceptionMode(ep.eye.config().floorSampling))
+     <<",\"perception_monitor\":"<<ep.perceptionMonitor
      <<",\"oracle\":"<<ep.oracle<<",\"record\":"<<bool(ep.writer)
      <<",\"demonstration_recorded\":"<<bool(ep.writer)<<",\"demo_recorded\":"<<bool(ep.writer)
      <<",\"solver\":"<<std::quoted(ep.teacherVersion==3?"memory_teacher_v3":ep.teacherVersion==2?"teacher_v2":"teacher_v1")
@@ -871,8 +889,64 @@ void observe(Episode& ep,World& w) {
   const auto memoryStart=Clock::now();
   NavigationMemory::Pose pose;
   pose.position=n.position();pose.forward={std::cos(n.rotationRad()),0,std::sin(n.rotationRad())};pose.gameMs=w.tickCount();
-  ep.memory.update(ep.eye.samples(),pose);
+  const auto& guild=w.script().guildVal();
+  const float step=float(guild.step_height[n.guild()]);
+  pose.stepHeightCm=step>0.f?step:50.f;
+  pose.maxSlopeDegrees=std::acos(std::clamp(std::cos(float(guild.slide_angle[n.guild()])*Pi/180.f),0.f,1.f))*180.f/Pi;
+  ep.memory.update(ep.eye.memorySamples(),pose);
   if(ep.population)ep.phaseUs[1]+=micros(memoryStart);
+}
+void tracePerceptionWater(Episode& ep,const NavDemoWriter::Snapshot& sample) {
+  if(!ep.perceptionMonitor)return;
+  const auto& view=*sample.memory;
+  auto& out=ep.perceptionWaterObservations;
+  const auto byte=[](float value) {return unsigned(std::lround(value*255.f));};
+  const auto channels=[&](const NavigationMemory::Cell& cell) {
+    out<<'['<<byte(cell.confidence)<<','<<byte(cell.free)<<','<<byte(cell.wall)<<','<<byte(cell.ledge)
+       <<','<<byte(cell.drop)<<','<<byte(cell.water)<<','<<byte(cell.movable)<<']';
+  };
+  out<<"{\"elapsed_ms\":"<<sample.gameMs-ep.began<<",\"position_cm\":";vector(out,view.pose.position);
+  out<<",\"forward\":";vector(out,view.pose.forward);
+  out<<",\"water_hit_rays\":[";
+  size_t hits=0,index=0;
+  for(const auto& ray:ep.eye.memorySamples()) {
+    const size_t rayIndex=index++;
+    if(!ray.hit || ray.kind!=NavigationEye::HitKind::Water)continue;
+    if(hits++)out<<',';
+    out<<"{\"index\":"<<rayIndex<<",\"cached_far\":"<<(rayIndex>=ep.eye.rayCount())
+       <<",\"observed_age_ms\":"<<sample.gameMs-ray.sampledAtMs<<",\"point_cm\":";vector(out,ray.point);
+    out<<",\"origin_cm\":";vector(out,ray.origin);
+    out<<",\"direction\":";vector(out,ray.direction);
+    out<<",\"normal_y\":"<<ray.normalY<<'}';
+  }
+  out<<"],\"near_water_cells\":[";
+  size_t cells=0,farWater=0;
+  for(size_t row=0;row<view.near.size;++row)for(size_t column=0;column<view.near.size;++column) {
+    const auto& cell=view.near.cells[row*view.near.size+column];
+    if(byte(cell.water)==0)continue;
+    if(cells++)out<<',';
+    out<<'['<<row<<','<<column<<','<<byte(cell.water)<<']';
+  }
+  for(const auto& cell:view.far.cells)farWater+=byte(cell.water)>0;
+  out<<"],\"far_water_cells\":"<<farWater<<",\"goal_line\":[";
+  auto direction=ep.goal-view.pose.position;direction.y=0;
+  const float length=direction.length();
+  if(length>0)direction*=1.f/length;
+  const Vec3 right(-view.pose.forward.z,0,view.pose.forward.x);
+  for(unsigned distance=0;distance<=300;distance+=25) {
+    if(distance)out<<',';
+    const auto delta=direction*float(distance);
+    const auto project=[&](const Vec3& axis) {return delta.x*axis.x+delta.z*axis.z;};
+    const int column=int(std::floor(project(right)/view.near.cellCm+float(view.near.size)*.5f));
+    const int row=int(std::floor(project(view.pose.forward)/view.near.cellCm+float(view.near.size)*.5f));
+    out<<"{\"distance_cm\":"<<distance<<",\"channels\":";
+    if(row>=0 && column>=0 && row<int(view.near.size) && column<int(view.near.size))
+      channels(view.near.cells[size_t(row)*view.near.size+size_t(column)]);
+    else out<<"null";
+    out<<'}';
+  }
+  out<<"]}\n";
+  if(!out)throw std::runtime_error("navdemos perception water observation write failed");
 }
 NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance* guidance=nullptr) {
   auto& n=*ep.npc;
@@ -890,6 +964,7 @@ NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance
   const auto head=n.navigationEyePose().forward;
   sample.body.headYawDeg=std::remainder(std::atan2(head.z,head.x)*180.f/Pi-n.rotation(),360.f);
   sample.body.headPitchDeg=std::atan2(head.y,std::hypot(head.x,head.z))*180.f/Pi;
+  sample.body.headPitchDeg+=ep.eye.gazePitchDeg();
   if(ep.teacherVersion>=2) {
     const auto& roads=guidance?*guidance:ep.guidance;
     sample.roads.carrotDirection=direction(roads.carrot-position,n.rotationRad());
@@ -903,6 +978,7 @@ NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance
   }
   sample.roads.goalDirection=direction(ep.goal-position,n.rotationRad());sample.roads.goalDistanceCm=(ep.goal-position).length();
   sample.previous=ep.previous;sample.eye=&ep.eye.samples();sample.memory=&ep.view;
+  tracePerceptionWater(ep,sample);
   return sample;
 }
 std::vector<NonfiniteObservation::Field> nonfiniteFields(const NavDemoWriter::Snapshot& sample,bool sensors) {
@@ -1398,6 +1474,24 @@ void beginPopulation(const std::vector<std::string>& a,World& w,Npc& player,cons
   pop.startupSeconds=std::chrono::duration<double>(Clock::now()-pop.wallStart).count();
   for(auto& slot:pop.slots)slot->phaseUs={};
 }
+void tracePerceptionSafety(Episode& ep,World& w,uint64_t elapsed) {
+  if(!ep.perceptionMonitor)return;
+  auto& n=*ep.npc;
+  const auto p=NpcKeys::physicalPosition(n);
+  const auto water=w.physic()->waterRay(p+Vec3(0,2,0),50.f);
+  const float depth=water.hasCol && std::isfinite(water.wdepth)?std::max(0.f,water.wdepth-p.y):0.f;
+  auto& out=ep.perceptionSafetyFrames;
+  out<<"{\"elapsed_ms\":"<<elapsed<<",\"position_cm\":";vector(out,p);
+  out<<",\"cv_active\":"<<n.characterVirtualActive()<<",\"supported\":"<<NavTransitions::supported(w,n)
+     <<",\"in_air\":"<<n.isInAir()<<",\"falling\":"<<n.isFalling()
+     <<",\"native_jump\":"<<(n.isJump() || n.isJumpAnim())
+     <<",\"native_climb\":"<<n.navigationClimbing()<<",\"swimming\":"<<n.isSwim()
+     <<",\"water_depth_cm\":"<<depth
+     <<",\"deep_water_threshold_cm\":"<<w.script().guildVal().water_depth_chest[n.guild()]
+     <<",\"hitpoints\":"<<n.attribute(ATR_HITPOINTS)
+     <<",\"hitpoints_max\":"<<n.attribute(ATR_HITPOINTSMAX)<<"}\n";
+  if(!out)throw std::runtime_error("navdemos perception safety frame write failed");
+}
 void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
   if(!ep.active)return;
   auto& n=*ep.npc;++ep.frames;if(n.characterVirtualActive())++ep.cvFrames;
@@ -1414,6 +1508,7 @@ void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
     ep.minHeroDistanceCm=std::min(ep.minHeroDistanceCm,distance);ep.maxHeroDistanceCm=std::max(ep.maxHeroDistanceCm,distance);
   }
   const auto elapsed=w.tickCount()-ep.began;
+  tracePerceptionSafety(ep,w,elapsed);
   if(ep.target) {
     auto& target=*ep.target;
     if(target.isDown()) {ep.failure="target_down";finish(ep,w);return;}
@@ -1500,8 +1595,32 @@ bool NavDemos::fullSimulation(const Npc& npc) {
 }
 void NavDemos::reset() {legacy=Episode{};population=Population{};settings=Settings{};preparingLegacy=nullptr;}
 void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player,const std::string& output) {
+  if(args.size()>=2 && (args[1]=="perception-hazards" || args[1]=="perception-shores")) {
+    if(running() || NavBench::running())throw std::runtime_error("navdemos cannot probe hazards during an episode");
+    NavPerceptionSafety::command(args,w,output);
+    return;
+  }
+  if(args.size()>=2 && args[1]=="perception-replay") {
+    if(running() || NavBench::running())throw std::runtime_error("navdemos cannot replay perception during an episode");
+    NavPerceptionBench::command(args,w,player,output);
+    return;
+  }
   auto a=args;
   auto& ep=legacy;
+  if(a.size()>=2 && (a[1]=="perception-mode" || a[1]=="perception-monitor")) {
+    if(running() || NavBench::running() || a.size()!=3)
+      throw std::runtime_error("navdemos perception settings require an idle stand and one value");
+    if(a[1]=="perception-mode") {
+      if(a[2]=="baseline")settings.floorSampling=NavigationEye::FloorSampling::Baseline;
+      else if(a[2]=="gaze")settings.floorSampling=NavigationEye::FloorSampling::WalkingGazeDown;
+      else if(a[2]=="rows")settings.floorSampling=NavigationEye::FloorSampling::ForwardRows;
+      else throw std::runtime_error("navdemos perception-mode baseline|gaze|rows");
+    } else {
+      if(a[2]!="on" && a[2]!="off")throw std::runtime_error("navdemos perception-monitor on|off");
+      settings.perceptionMonitor=a[2]=="on";
+    }
+    return;
+  }
   if(a.size()>=2 && (a[1]=="oracle" || a[1]=="record")) {
     if(running() || NavBench::running()) {
       throw std::runtime_error("navdemos cannot change evaluation settings during episode");
@@ -1743,6 +1862,10 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
   const auto fromPosition=current?npc->position():(carrot?demoPoint(w,a[3]):from->groundPos);
   const auto goalPosition=carrot?demoPoint(w,a[4]):to->groundPos;
   ep=Episode{};ep.npc=npc;ep.from=current?"intentional":a[3];ep.to=a[current?3:4];ep.output=output;
+  auto eyeConfig=ep.eye.config();eyeConfig.floorSampling=settings.floorSampling;ep.eye=NavigationEye(eyeConfig);
+  ep.perceptionMonitor=settings.perceptionMonitor;
+  if(settings.recordDemos && settings.floorSampling==NavigationEye::FloorSampling::ForwardRows)
+    throw std::runtime_error("navdemos rows is evaluation-only; use record off");
   ep.cvMode=settings.cv;ep.heroNear=!current && settings.heroNear;
   ep.teacherVersion=(memory || object || moving)?scenarioTeacher:(carrot?2:1);
   ep.oracle=settings.oracle;
@@ -1826,6 +1949,10 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
   NpcKeys::enable(*npc,true);ep.previousPosition=NpcKeys::physicalPosition(*npc);
   ep.began=ep.next=ep.progressAt=w.tickCount();ep.active=true;ep.wallStart=std::chrono::steady_clock::now();
   ep.expectedStart=NpcKeys::physicalPosition(*npc);
+  if(ep.perceptionMonitor) {
+    ep.perceptionSafetyFrames=file(ep,"perception-safety-frames.jsonl");
+    ep.perceptionWaterObservations=file(ep,"perception-water-observations.jsonl");
+  }
   if(ep.teacherVersion>=2 && !ep.drive) {
     const auto reference=NavBench::navigationMesh(w).findPath(meters(ep.expectedStart),meters(ep.goal));
     ep.detourLengthCm=reference.complete?reference.length*100.:0;
@@ -1854,6 +1981,7 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
   }
   if(ep.target)ep.targetTrajectory=file(ep,"target-trajectory.txt");
   ep.initialState=initialState(ep);
+  tracePerceptionSafety(ep,w,0);
   observe(ep,w);decide(ep,w);ep.next=ep.began+100;
 }
 void NavDemos::tick(World& w,uint64_t dt) {

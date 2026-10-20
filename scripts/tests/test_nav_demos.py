@@ -103,6 +103,45 @@ def test_mixed_dataset_is_not_reported_as_one_version(tmp_path):
     assert summary['decisions'] == 6
 
 
+def test_missing_memory_tag_is_legacy_without_rewriting_episode(tmp_path):
+    path = write_episode(tmp_path / 'legacy', 2)
+    metadata_path = path / 'episode.json'
+    original = metadata_path.read_bytes()
+    assert demos.episode_memory_version(path) == 1
+    summary = demos.summarize(path, validate=True)
+    assert summary['navigation_memory_version'] == 1
+    assert summary['navigation_memory_versions'] == [1]
+    assert metadata_path.read_bytes() == original
+
+
+def test_memory_versions_are_reported_independently_of_binary_layout(tmp_path):
+    write_episode(tmp_path / 'legacy', 2)
+    current = write_episode(tmp_path / 'local-terrain', 2)
+    metadata_path = current / 'episode.json'
+    metadata = json.loads(metadata_path.read_text())
+    metadata['navigation_memory_version'] = 2
+    metadata_path.write_text(json.dumps(metadata))
+    assert demos.episode_memory_version(current) == 2
+    summary = demos.summarize(tmp_path)
+    assert summary['format_version'] == 2
+    assert summary['navigation_memory_version'] is None
+    assert summary['navigation_memory_versions'] == [1, 2]
+    assert {value['navigation_memory_version'] for value in summary['episode_details']} == {1, 2}
+    with pytest.raises(ValueError, match='mixed navigation memory versions:'):
+        demos.summarize(tmp_path, validate=True)
+
+
+@pytest.mark.parametrize('version', [0, -1, True, '2', 2.0, None])
+def test_invalid_memory_version_is_rejected(tmp_path, version):
+    path = write_episode(tmp_path / 'invalid', 2)
+    metadata_path = path / 'episode.json'
+    metadata = json.loads(metadata_path.read_text())
+    metadata['navigation_memory_version'] = version
+    metadata_path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match='invalid navigation_memory_version'):
+        demos.summarize(path)
+
+
 @pytest.mark.parametrize(('field', 'value', 'error'), [
     ('beyond_known', 2, 'not a bit'),
     ('carrot_distance_cm', -1, 'negative roads.carrot_distance_cm'),

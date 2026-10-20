@@ -109,6 +109,7 @@ void NavigationMemory::update(const std::vector<NavigationEye::Ray>& rays, const
     rayStamps.resize(rays.size());
 
   uint64_t oldest = pose.gameMs;
+  std::vector<const NavigationEye::Ray*> water;
   for(size_t i=0; i<rays.size(); ++i) {
     const auto& ray = rays[i];
     oldest = std::min(oldest,ray.sampledAtMs);
@@ -121,7 +122,14 @@ void NavigationMemory::update(const std::vector<NavigationEye::Ray>& rays, const
     const float observedPath = pathAt(ray.sampledAtMs);
     ingest(nearGrid,ray,observedPath);
     ingest(farGrid,ray,observedPath);
+    if(ray.hit && ray.kind==NavigationEye::HitKind::Water &&
+       std::none_of(water.begin(),water.end(),[&](const auto* other) {
+         return other->sampledAtMs==ray.sampledAtMs && (other->point-ray.point).quadLength()<1.e-4f;
+         }))
+      water.push_back(&ray);
     }
+  reconstructWater(nearGrid,water);
+  reconstructWater(farGrid,water);
   // Empty ticks must retain history until the next eye output arrives. With an
   // output, keep the predecessor of its oldest cached timestamp for interpolation.
   if(!rays.empty()) {
@@ -140,9 +148,10 @@ void NavigationMemory::ingest(Grid& grid, const NavigationEye::Ray& ray, float o
     auto& evidence = cell.evidence[channel];
     if(ray.sampledAtMs<evidence.gameMs)
       return;
-    if(channel==Clearance && (cell.known&(1u<<Clearance))!=0 && height>evidence.heightCm)
-      return; // A high ray does not refresh an older glimpse of low empty air.
-    if(ray.sampledAtMs==evidence.gameMs && (cell.known&(1u<<channel))!=0 && channel==Clearance)
+    if((channel==Clearance || channel==Wall) && (cell.known&(1u<<channel))!=0 && height>evidence.heightCm)
+      return; // A high ray does not refresh or replace an older low observation.
+    if(ray.sampledAtMs==evidence.gameMs && (cell.known&(1u<<channel))!=0 &&
+       (channel==Clearance || channel==Wall))
       height = std::min(height,evidence.heightCm);
     evidence = {ray.sampledAtMs,observedPath,height,ray.point.x,ray.point.z};
     cell.known |= uint8_t(1u<<channel);
@@ -191,7 +200,9 @@ void NavigationMemory::ingest(Grid& grid, const NavigationEye::Ray& ray, float o
         // Sharing a projected cell (especially a two-metre far cell) does not
         // mean this ray crossed the old hit. Only a newer free segment within
         // clearHeightCm of its actual 3D position contradicts that observation.
-        for(Channel channel:{Ground,Wall,Water,Movable,Surface}) {
+        // Water is a static horizontal surface. Empty air above it, including
+        // a nearby ray within the clearance tolerance, does not contradict it.
+        for(Channel channel:{Ground,Wall,Movable,Surface}) {
           const auto& evidence = cell.evidence[channel];
           if((cell.known&(1u<<channel))!=0 && ray.sampledAtMs>evidence.gameMs &&
              evidence.heightCm>=std::min(a,b)-Constants::clearHeightCm &&
@@ -230,6 +241,71 @@ void NavigationMemory::ingest(Grid& grid, const NavigationEye::Ray& ray, float o
     remember(cell,Surface,ray.point.y);
   }
 
+void NavigationMemory::reconstructWater(Grid& grid, const std::vector<const NavigationEye::Ray*>& observations) {
+  // Reconstruct only small patches bracketed by this eye sample's water hits.
+  // Isolated points and gaps wider than a metre remain unchanged; there is no
+  // extrapolation to an unseen lake boundary or connection through dry ground.
+  constexpr float maxEdgeCm = 100.f, surfaceToleranceCm = 10.f, dryGroundCm = 2.f;
+  constexpr size_t maxNeighbours = 6;
+  struct Neighbour final { size_t index = 0; float distanceSquared = 0; };
+  for(size_t i=0; i<observations.size(); ++i) {
+    const auto& a = *observations[i];
+    std::vector<Neighbour> neighbours;
+    for(size_t j=0; j<observations.size(); ++j) {
+      if(i==j)
+        continue;
+      const auto& b = *observations[j];
+      const float dx = b.point.x-a.point.x, dz = b.point.z-a.point.z;
+      const float distanceSquared = dx*dx+dz*dz;
+      if(a.sampledAtMs==b.sampledAtMs && std::abs(a.point.y-b.point.y)<=surfaceToleranceCm &&
+         distanceSquared<=maxEdgeCm*maxEdgeCm)
+        neighbours.push_back({j,distanceSquared});
+      }
+    std::sort(neighbours.begin(),neighbours.end(),[](const Neighbour& a, const Neighbour& b) {
+      return a.distanceSquared<b.distanceSquared;
+      });
+    if(neighbours.size()>maxNeighbours)
+      neighbours.resize(maxNeighbours);
+    for(size_t j=0; j<neighbours.size(); ++j)
+      for(size_t k=j+1; k<neighbours.size(); ++k) {
+        if(neighbours[j].index<i || neighbours[k].index<i)
+          continue; // Each patch is owned by its first observed vertex.
+        const auto& b = *observations[neighbours[j].index];
+        const auto& c = *observations[neighbours[k].index];
+        const float bx = b.point.x-a.point.x, bz = b.point.z-a.point.z;
+        const float cx = c.point.x-a.point.x, cz = c.point.z-a.point.z;
+        const float edgeX = c.point.x-b.point.x, edgeZ = c.point.z-b.point.z;
+        if(edgeX*edgeX+edgeZ*edgeZ>maxEdgeCm*maxEdgeCm ||
+           std::abs(b.point.y-c.point.y)>surfaceToleranceCm)
+          continue;
+        const float area = bx*cz-bz*cx;
+        if(std::abs(area)<1.f)
+          continue;
+        const int x0 = std::max(grid.minX,cellCoordinate(std::min({a.point.x,b.point.x,c.point.x}),grid.cellCm));
+        const int x1 = std::min(grid.minX+int(grid.size)-1,cellCoordinate(std::max({a.point.x,b.point.x,c.point.x}),grid.cellCm));
+        const int z0 = std::max(grid.minZ,cellCoordinate(std::min({a.point.z,b.point.z,c.point.z}),grid.cellCm));
+        const int z1 = std::min(grid.minZ+int(grid.size)-1,cellCoordinate(std::max({a.point.z,b.point.z,c.point.z}),grid.cellCm));
+        for(int z=z0; z<=z1; ++z)
+          for(int x=x0; x<=x1; ++x) {
+            const float px = (float(x)+.5f)*grid.cellCm, pz = (float(z)+.5f)*grid.cellCm;
+            const float dx = px-a.point.x, dz = pz-a.point.z;
+            const float u = (dx*cz-dz*cx)/area, v = (bx*dz-bz*dx)/area;
+            if(u<0.f || v<0.f || u+v>1.f)
+              continue;
+            const float height = a.point.y+u*(b.point.y-a.point.y)+v*(c.point.y-a.point.y);
+            auto& cell = grid.at(x,z);
+            if((cell.known&(1u<<Ground))!=0 && cell.evidence[Ground].heightCm>height+dryGroundCm)
+              continue;
+            auto& evidence = cell.evidence[Water];
+            if((cell.known&(1u<<Water))!=0 && evidence.gameMs>a.sampledAtMs)
+              continue;
+            evidence = {a.sampledAtMs,pathAt(a.sampledAtMs),height,px,pz};
+            cell.known |= uint8_t(1u<<Water);
+            }
+        }
+    }
+  }
+
 float NavigationMemory::confidence(const Evidence& evidence, bool movable) const {
   const double age = double(body.gameMs-evidence.gameMs)*.001;
   const double distance = std::max(0.,pathCm-double(evidence.pathCm));
@@ -243,6 +319,13 @@ void NavigationMemory::read(const Grid& grid, Layer& result) const {
   result.cells.resize(grid.size*grid.size);
   std::fill(result.cells.begin(),result.cells.end(),Cell{});
   const Vec3 right(-body.forward.z,0,body.forward.x);
+  const float step = std::isfinite(body.stepHeightCm) && body.stepHeightCm>0.f ?
+                     body.stepHeightCm : Constants::stepCm;
+  const float slopeDegrees = std::isfinite(body.maxSlopeDegrees) ?
+                             std::clamp(body.maxSlopeDegrees,0.f,89.f) : Constants::maxSlopeDegrees;
+  const float slope = std::tan(slopeDegrees*3.14159265358979323846f/180.f);
+  const float bodyHeight = std::isfinite(body.bodyHeightCm) && body.bodyHeightCm>0.f ?
+                           body.bodyHeightCm : Constants::bodyHeightCm;
   for(int z=grid.minZ; z<grid.minZ+int(grid.size); ++z)
     for(int x=grid.minX; x<grid.minX+int(grid.size); ++x) {
       const auto& input = grid.at(x,z);
@@ -262,24 +345,62 @@ void NavigationMemory::read(const Grid& grid, Layer& result) const {
           output.confidence = std::max(output.confidence,c[channel]);
           }
       output.free = std::max(output.free,c[Free]);
-      output.wall = std::max(output.wall,c[Wall]);
+      // A hit above an observed walking surface does not prove a wall in the
+      // space occupied by the body. Nearby ground is evidence, not a guess at
+      // the height of unseen terrain. Without it the wall remains conservative.
+      bool overheadWall = false;
+      if(c[Wall]>0.f) {
+        const auto& wall = input.evidence[Wall];
+        float nearest = std::numeric_limits<float>::infinity();
+        for(int nz=z-1; nz<=z+1; ++nz)
+          for(int nx=x-1; nx<=x+1; ++nx) {
+            if(!grid.contains(nx,nz))
+              continue;
+            const auto& neighbour = grid.at(nx,nz);
+            if((neighbour.known&(1u<<Ground))==0)
+              continue;
+            const auto& ground = neighbour.evidence[Ground];
+            const float gx = ground.hitX-wall.hitX, gz = ground.hitZ-wall.hitZ;
+            const float distance = gx*gx+gz*gz;
+            if(distance<nearest) {
+              nearest = distance;
+              overheadWall = wall.heightCm>ground.heightCm+bodyHeight;
+              }
+            }
+        }
+      if(!overheadWall)
+        output.wall = std::max(output.wall,c[Wall]);
       output.water = std::max(output.water,c[Water]);
       output.movable = std::max(output.movable,c[Movable]);
       if(c[Ground]>0.f) {
-        const float height = input.evidence[Ground].heightCm;
-        output.groundHeightCm = height;
-        const float difference = height-body.position.y;
-        if(difference>=Constants::stepCm)
-          output.ledge = std::max(output.ledge,c[Ground]);
-        else if(difference<-Constants::stepCm)
-          output.drop = std::max(output.drop,c[Ground]);
-        else
-          output.free = std::max(output.free,c[Ground]);
+        const auto& ground = input.evidence[Ground];
+        output.groundHeightCm = ground.heightCm;
+        output.free = std::max(output.free,c[Ground]);
+        // Height relative to the actor's feet says nothing about traversability
+        // several metres ahead. A hazard needs a locally observed discontinuity
+        // exceeding both the body's step and its maximum walking slope.
+        for(int nz=z-1; nz<=z+1; ++nz)
+          for(int nx=x-1; nx<=x+1; ++nx) {
+            if((nx==x && nz==z) || !grid.contains(nx,nz))
+              continue;
+            const auto& neighbour = grid.at(nx,nz);
+            if((neighbour.known&(1u<<Ground))==0)
+              continue;
+            const auto& other = neighbour.evidence[Ground];
+            const float difference = ground.heightCm-other.heightCm;
+            const float dx = ground.hitX-other.hitX, dz = ground.hitZ-other.hitZ;
+            const float distance = std::sqrt(dx*dx+dz*dz);
+            if(std::abs(difference)<=step || std::abs(difference)<=distance*slope)
+              continue;
+            const float certainty = std::min(c[Ground],confidence(other,false));
+            if(difference>0.f)
+              output.ledge = std::max(output.ledge,certainty);
+            else
+              output.drop = std::max(output.drop,certainty);
+            }
         }
-      if(c[Clearance]>0.f && input.evidence[Clearance].heightCm<body.position.y-Constants::stepCm &&
-         (c[Ground]==0.f || input.evidence[Ground].gameMs<input.evidence[Clearance].gameMs ||
-          input.evidence[Ground].heightCm<body.position.y-Constants::stepCm))
-        output.drop = std::max(output.drop,c[Clearance]);
+      // Empty air below a ray is not a ground measurement: it cannot establish
+      // a drop without a local observed change in the supporting surface.
       }
   }
 
