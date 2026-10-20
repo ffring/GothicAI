@@ -97,6 +97,7 @@ def classify_zones(vertices, faces, color, metallic, zones):
 
     WOOD zones are assigned from dark to light OKLab clusters, in target order.
     Without metallic the darkest neutral cluster (L < .55, chroma < .06) is iron.
+    Metal uses the first METAL zone; metallic and color do not identify its role.
     A single other nonmetal zone is supported for targets with no WOOD slot.
     """
     faces = np.asarray(faces, dtype=np.int64)
@@ -105,8 +106,6 @@ def classify_zones(vertices, faces, color, metallic, zones):
         raise ValueError("color must have one linear RGB value per vertex")
     metal_slots = [i for i, zone in enumerate(zones) if zone["group"].upper() == "METAL"]
     wood_slots = [i for i, zone in enumerate(zones) if zone["group"].upper() == "WOOD"]
-    if len(metal_slots) > 1:
-        raise ValueError("metallic cannot disambiguate multiple METAL zones")
     if not wood_slots:
         wood_slots = [i for i in range(len(zones)) if i not in metal_slots]
         if len(wood_slots) != 1:

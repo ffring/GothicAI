@@ -71,6 +71,25 @@ def test_fallback_recognises_dark_neutral_iron_and_keeps_brown_wood():
     np.testing.assert_array_equal(classify_zones(*inputs, ZONES), [1, 0, 0])
 
 
+@pytest.mark.parametrize("target_id", ["crate", "chest"])
+@pytest.mark.parametrize("explicit_metallic", [True, False])
+def test_real_pilot_targets_accept_multiple_metal_zones(target_id, explicit_metallic):
+    from parametric import build
+
+    targets_path = Path(__file__).resolve().parents[4] / "data/content/mesh3d-pilot.json"
+    target = next(item for item in json.loads(targets_path.read_text())
+                  if item["id"] == target_id)
+    zones = target["zones"]
+    metal_slots = [index for index, zone in enumerate(zones) if zone["group"] == "METAL"]
+    assert len(metal_slots) == 2
+    vertices, faces, color, metallic = build("crate")
+    labels = classify_zones(vertices, faces, color,
+                            metallic if explicit_metallic else None, zones)
+    is_metal = metallic[faces].mean(axis=1) > 0.5
+    np.testing.assert_array_equal(labels[is_metal], metal_slots[0])
+    assert all(zones[index]["group"] == "WOOD" for index in labels[~is_metal])
+
+
 def test_smoothing_replaces_isolated_wood_cluster_but_keeps_metal_boundaries():
     # A central face has one neighbour across each edge.
     faces = np.array([[0, 1, 2], [1, 0, 3], [2, 1, 4], [0, 2, 5]])

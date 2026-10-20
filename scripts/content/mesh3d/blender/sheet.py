@@ -233,6 +233,7 @@ def render_captions(width, height, captions, directory):
     camera = bpy.context.object
     camera.rotation_euler = (0, 0, 0)
     camera.data.type = "ORTHO"
+    camera.data.sensor_fit = "HORIZONTAL"
     camera.data.ortho_scale = width
     scene.camera = camera
     return render_pixels(directory, "captions")
