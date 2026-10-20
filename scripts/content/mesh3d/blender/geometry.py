@@ -364,89 +364,138 @@ def fit_bbox(vertices, meta, target):
     return ((points - points.min(axis=0)) * (size / extent) + lower).astype(np.float32)
 
 
-def box_uv(vertices, faces):
-    """Per-corner metric box projection guided by the zone's PCA OBB axes.
+def _uv_patches(vertices, faces):
+    """Connected surface patches, stopping at a normal turn of twenty degrees."""
+    triangles = vertices[faces]
+    normal = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    area = np.linalg.norm(normal, axis=1)
+    normal /= area[:, None]
+    pairs = face_adjacency(faces)
+    pairs = pairs[np.einsum("ij,ij->i", normal[pairs[:, 0]], normal[pairs[:, 1]]) > np.cos(np.deg2rad(20))]
+    parents = np.arange(len(faces))
 
-    Each face selects its dominant projection plane. The longest in-plane OBB
-    direction, projected into the face, becomes V so the grain follows the plank.
-    An orthonormal face basis keeps sloped triangles at the same metre scale.
-    """
-    vertices = np.asarray(vertices, dtype=float)
-    faces = np.asarray(faces, dtype=np.int64)
-    used = np.unique(faces)
-    points = vertices[used]
+    def root(face):
+        while parents[face] != face:
+            parents[face] = parents[parents[face]]
+            face = parents[face]
+        return face
+
+    for a, b in pairs:
+        a, b = root(a), root(b)
+        if a != b:
+            parents[b] = a
+    labels = np.array([root(face) for face in range(len(faces))])
+    _, labels = np.unique(labels, return_inverse=True)
+    return labels.astype(np.int32), normal, area
+
+
+def _planar_patch_uv(points, normal):
+    """One metric OBB plane and origin for the complete connected patch."""
     centre = points.mean(axis=0)
-    _, basis = np.linalg.eigh((points - centre).T @ (points - centre))
-    basis = basis[:, ::-1]
-    local = (vertices - centre) @ basis
-    extent = np.ptp(local[used], axis=0)
-    triangles = local[faces]
-    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
-    dropped = np.abs(normals).argmax(axis=1)
+    _, axes = np.linalg.eigh((points - centre).T @ (points - centre))
+    vertical = axes[:, -1] - normal * (axes[:, -1] @ normal)
+    vertical /= np.linalg.norm(vertical)
+    horizontal = np.cross(vertical, normal)
+    return np.column_stack(((points - centre) @ horizontal, (points - centre) @ vertical))
+
+
+def box_uv(vertices, faces, return_patches=False):
+    """Metre-scale box charts on connected, similarly oriented surface patches."""
+    vertices = np.asarray(vertices, dtype=float)
+    faces = np.asarray(faces, dtype=np.int64)
+    labels, normals, areas = _uv_patches(vertices, faces)
     uv = np.empty((len(faces), 3, 2), dtype=np.float32)
-    for axis in range(3):
-        selection = dropped == axis
-        plane = [i for i in range(3) if i != axis]
-        u, v = sorted(plane, key=lambda i: extent[i])
-        face_normal = normals[selection]
-        face_normal = face_normal / np.linalg.norm(face_normal, axis=1)[:, None]
-        vertical = np.eye(3)[v] - face_normal[:, v, None] * face_normal
-        vertical /= np.linalg.norm(vertical, axis=1)[:, None]
-        horizontal = np.cross(vertical, face_normal)
-        horizontal *= np.where(horizontal[:, u] < 0, -1., 1.)[:, None]
-        uv[selection, :, 0] = np.einsum("fij,fj->fi", triangles[selection], horizontal)
-        uv[selection, :, 1] = np.einsum("fij,fj->fi", triangles[selection], vertical)
-    return uv
+    for label in range(int(labels.max()) + 1):
+        selected = labels == label
+        used, corners = np.unique(faces[selected], return_inverse=True)
+        normal = np.sum(normals[selected] * areas[selected, None], axis=0)
+        normal /= np.linalg.norm(normal)
+        uv[selected] = _planar_patch_uv(vertices[used], normal)[corners].reshape(-1, 3, 2)
+    types = np.zeros(len(faces), dtype=np.int32)
+    return (uv, labels, types) if return_patches else uv
 
 
-def cylinder_uv(vertices, faces):
-    """Metric cylindrical projection around +Y with unwrapped seam and flat caps.
+def cylinder_uv(vertices, faces, return_patches=False):
+    """Shared cap, cylindrical and OBB charts around the object's +Y axis.
 
-    Circumferential scale uses each face's local radius. V measures the physical
-    meridian at constant U on that triangle. Cap projections use metres.
+    A chart never changes its projection, origin or scale between triangles.
+    Cylinder U measures the ellipse arc at the patch's mean radius. V integrates
+    the physical meridian of a shared fitted radius profile, retaining constant
+    angular stave width on a bowed body. Two half charts put the wrapping seam
+    on patch boundaries. Returned face types are 0=box, 1=cylinder and 2=cap.
     """
     vertices = np.asarray(vertices, dtype=float)
     faces = np.asarray(faces, dtype=np.int64)
-    used = np.unique(faces)
-    centre = (vertices[used].min(axis=0) + vertices[used].max(axis=0)) * 0.5
+    labels, normals, areas = _uv_patches(vertices, faces)
+    centre = (vertices.min(axis=0) + vertices.max(axis=0)) * .5
     local = vertices - centre
-    triangle = local[faces]
-    normal = np.cross(triangle[:, 1] - triangle[:, 0], triangle[:, 2] - triangle[:, 0])
-    cap = np.abs(normal[:, 1]) > np.linalg.norm(normal[:, [0, 2]], axis=1) * 2
-    angle = np.arctan2(triangle[:, :, 2], triangle[:, :, 0])
-    seam = np.ptp(angle, axis=1) > np.pi
-    angle[seam] = np.where(angle[seam] < 0, angle[seam] + 2 * np.pi, angle[seam])
-    radius = np.linalg.norm(triangle[:, :, [0, 2]], axis=2)
-    u = angle * radius.mean(axis=1)[:, None]
-    uv = np.stack((u, triangle[:, :, 1]), axis=2)
-    uv[cap] = triangle[cap][:, :, [0, 2]]
-    # Stave thickness and the vertical edges of lid planks are planes, rather
-    # than circular sections. Their normals deviate from the radial direction;
-    # angular U would collapse or stretch their width. Project them isometrically.
-    radial = triangle.mean(axis=1)
-    tangent = np.column_stack((-radial[:, 2], np.zeros(len(faces)), radial[:, 0]))
-    normal_length = np.linalg.norm(normal, axis=1)
-    tangent_length = np.linalg.norm(tangent, axis=1)
-    cosine = np.abs(np.einsum("ij,ij->i", normal, tangent))
-    horizontal_normal_length = np.linalg.norm(normal[:, [0, 2]], axis=1)
-    planar_side = ~cap & (cosine > horizontal_normal_length * tangent_length * 0.3)
-    side = ~(cap | planar_side)
-    if np.any(side):
-        # Sparse or elliptical sections do not define a reliable median radius
-        # profile. Instead, measure this triangle's constant-U surface tangent.
-        # Rescaling V alone leaves U coordinates and its physical scale intact.
-        edges = triangle[side, 1:] - triangle[side, :1]
-        uv_edges = uv[side, 1:] - uv[side, :1]
-        physical = np.linalg.solve(uv_edges, edges)
-        uv[side, :, 1] *= np.linalg.norm(physical[:, 1], axis=1)[:, None]
-    if np.any(planar_side):
-        selected = triangle[planar_side]
-        face_normal = normal[planar_side] / normal_length[planar_side, None]
-        # Preserve the stave's vertical grain while making the plane isometric.
-        vertical = np.array([0., 1., 0.]) - face_normal[:, 1, None] * face_normal
-        vertical /= np.linalg.norm(vertical, axis=1)[:, None]
-        horizontal = np.cross(vertical, face_normal)
-        relative = selected - selected[:, :1]
-        uv[planar_side] = np.stack((np.einsum("fij,fj->fi", relative, horizontal),
-                                  np.einsum("fij,fj->fi", relative, vertical)), axis=-1)
-    return uv.astype(np.float32)
+    axes = np.ptp(vertices[:, [0, 2]], axis=0) * .5
+    normalized = local[:, [0, 2]] / axes
+    theta = np.arctan2(normalized[:, 1], normalized[:, 0])
+    rho = np.linalg.norm(normalized, axis=1)
+    uv = np.empty((len(faces), 3, 2), dtype=np.float32)
+    patch_ids = np.empty(len(faces), dtype=np.int32)
+    types = np.empty(len(faces), dtype=np.int32)
+    next_id = 0
+    angle_grid = np.linspace(-np.pi, np.pi, 8193)
+    speed = np.hypot(axes[0] * np.sin(angle_grid), axes[1] * np.cos(angle_grid))
+    arc = np.r_[0., np.cumsum((speed[:-1] + speed[1:]) * np.diff(angle_grid) * .5)]
+    quadrature_x, quadrature_w = np.polynomial.legendre.leggauss(16)
+    for label in range(int(labels.max()) + 1):
+        selected = np.flatnonzero(labels == label)
+        planar = np.all(normals[selected] @ normals[selected[0]] > 1 - 1e-6)
+        cap = np.average(np.abs(normals[selected, 1]), weights=areas[selected]) > .98
+        radial = local[faces[selected]].mean(axis=1)[:, [0, 2]] / axes ** 2
+        radial /= np.linalg.norm(radial, axis=1)[:, None]
+        alignment = np.abs(np.einsum("ij,ij->i", normals[selected][:, [0, 2]], radial))
+        cylindrical = not planar and not cap and np.average(alignment, weights=areas[selected]) > .85
+        # Separate half charts before assigning coordinates; no internal edge
+        # crosses the angular branch cut. Flat patches need no artificial seam.
+        halves = (local[faces[selected], 2].mean(axis=1) >= 0).astype(int) if cylindrical else np.zeros(len(selected), dtype=int)
+        for half in np.unique(halves):
+            group = selected[halves == half]
+            used, corners = np.unique(faces[group], return_inverse=True)
+            points = local[used]
+            if cap:
+                coordinates = points[:, [0, 2]]
+                projection = 2
+            elif not cylindrical:
+                normal = np.sum(normals[group] * areas[group, None], axis=0)
+                normal /= np.linalg.norm(normal)
+                coordinates = _planar_patch_uv(points, normal)
+                projection = 0
+            else:
+                angle = theta[used].copy()
+                if half:
+                    angle[angle < -np.pi / 2] += 2 * np.pi
+                else:
+                    angle[angle > np.pi / 2] -= 2 * np.pi
+                # Arc is periodic; the branch adjustment belongs to the chart,
+                # rather than to individual triangles.
+                wrapped = (angle + np.pi) % (2 * np.pi) - np.pi
+                arc_u = np.interp(wrapped, angle_grid, arc)
+                arc_u += np.floor((angle + np.pi) / (2 * np.pi)) * arc[-1]
+                reference = np.average(rho[faces[group]].mean(axis=1), weights=areas[group])
+                height = points[:, 1]
+                bottom, top = height.min(), height.max()
+                span = top - bottom
+                if span <= 1e-12:
+                    raise ValueError("cylindrical UV patch needs a vertical extent")
+                scaled_height = (height - bottom) / span * 2 - 1
+                distinct = len(np.unique(np.round(scaled_height, 5)))
+                degree = min(5, distinct - 1)
+                profile = np.polynomial.polynomial.polyfit(scaled_height, rho[used], degree)
+                derivative = np.polynomial.polynomial.polyder(profile)
+                # Integrate each vertex's meridian from the one patch origin.
+                sample_height = (scaled_height[:, None] + 1) * (quadrature_x + 1) * .5 - 1
+                slope = np.polynomial.polynomial.polyval(sample_height, derivative) * 2 / span
+                meridian_radius = np.hypot(axes[0] * np.cos(angle), axes[1] * np.sin(angle))
+                metric = np.sqrt(1 + (slope * meridian_radius[:, None]) ** 2)
+                vertical = (height - bottom) * .5 * (metric @ quadrature_w)
+                coordinates = np.column_stack((arc_u * reference, vertical))
+                projection = 1
+            uv[group] = coordinates[corners].reshape(-1, 3, 2)
+            patch_ids[group] = next_id
+            types[group] = projection
+            next_id += 1
+    return (uv, patch_ids, types) if return_patches else uv

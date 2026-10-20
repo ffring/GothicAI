@@ -9,7 +9,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from geometry import (box_uv, budget_ratio, classify_zones, cylinder_uv, fit_bbox,
+from geometry import (box_uv, budget_ratio, classify_zones, cylinder_uv, face_adjacency, fit_bbox,
                       select_uv_projection, simplify_loop, smooth_labels, triangle_areas)
 
 
@@ -310,6 +310,14 @@ def decimate(obj, budget):
             and any(len(e.link_faces) > 2 for e in f.edges)]
     if fins:
         bmesh.ops.delete(bm, geom=fins, context="FACES")
+    # Dissolve can retriangulate a curved strip into long, narrow chords. Rotate
+    # internal diagonals for better triangles without moving material contours
+    # or adding triangles; keep the sharp corners of boards intact.
+    bm.normal_update()
+    diagonals = [e for e in bm.edges if e.is_manifold
+                 and e.link_faces[0].material_index == e.link_faces[1].material_index
+                 and e.calc_face_angle() < math.radians(60)]
+    bmesh.ops.beautify_fill(bm, faces=list(bm.faces), edges=diagonals, method="AREA")
     bm.to_mesh(obj.data)
     bm.free()
     count = len(obj.data.polygons)
@@ -335,19 +343,38 @@ def materials(obj, target):
         obj.data.materials.append(mat)
 
 
+def uv_continuity(vertices, faces, uv, patch_ids):
+    """Measure shared-corner jumps inside charts, before normal vertex splits."""
+    pairs = face_adjacency(faces)
+    pairs = pairs[patch_ids[pairs[:, 0]] == patch_ids[pairs[:, 1]]]
+    a, b = pairs.T
+    match = faces[a, :, None] == faces[b, None, :]
+    corners_a = np.argsort(~match.any(axis=2), axis=1)[:, :2]
+    corners_b = np.take_along_axis(match.argmax(axis=2), corners_a, axis=1)
+    difference = uv[a[:, None], corners_a] - uv[b[:, None], corners_b]
+    jump = np.linalg.norm(difference, axis=2).max(axis=1)
+    triangles = vertices[faces]
+    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    normals /= np.linalg.norm(normals, axis=1)[:, None]
+    coplanar = np.linalg.norm(normals[a] - normals[b], axis=1) < 1e-6
+    return {"patches": int(len(np.unique(patch_ids))), "interior_edges": int(len(pairs)),
+            "coplanar_interior_edges": int(coplanar.sum()),
+            "seam_edges": int((jump > 1e-5).sum()),
+            "coplanar_seam_edges": int(((jump > 1e-5) & coplanar).sum()),
+            "max_jump": float(jump.max(initial=0.0))}
+
+
 def unwrap(obj, projection):
     v, f = mesh_arrays(obj)
-    labels = np.array([p.material_index for p in obj.data.polygons])
-    uv = np.empty((len(f), 3, 2))
-    for index in np.unique(labels):
-        mask = labels == index
-        if projection == "cylinder":
-            uv[mask] = cylinder_uv(v, f[mask])
-        else:
-            uv[mask] = box_uv(v, f[mask])
+    project = cylinder_uv if projection == "cylinder" else box_uv
+    uv, patch_ids, patch_types = project(v, f, return_patches=True)
+    # Keep chart identities through normal splits for the acceptance checks.
+    for name, values in (("UVPatch", patch_ids), ("UVProjection", patch_types)):
+        attribute = obj.data.attributes.new(name=name, type="INT", domain="FACE")
+        attribute.data.foreach_set("value", values)
     layer = obj.data.uv_layers.new(name="Meters")
     layer.data.foreach_set("uv", uv.ravel())
-    return uv
+    return uv, uv_continuity(v, f, uv, patch_ids)
 
 
 def export(obj, path):
@@ -433,7 +460,7 @@ def process_arrays(vertices, faces, color, metallic, target, output_dir, meta, c
     coords[:, 1] *= -1
     obj.data.vertices.foreach_set("co", coords.ravel())
     obj.data.update()
-    uv = unwrap(obj, projection)
+    uv, continuity = unwrap(obj, projection)
     # Hulls use physical connectivity, before normal seams duplicate vertices.
     hull_count = collision(obj, output, target["id"])
     # Blender 4.5 smooth-by-angle, plus actual split vertices for Gothic importers.
@@ -469,6 +496,7 @@ def process_arrays(vertices, faces, color, metallic, target, output_dir, meta, c
                "zone_area_fractions": shares, "collision_hulls": hull_count,
                "uv_area_ratio": float(uv_area.sum() / areas.sum()),
                "uv_projection": projection,
+               "uv_continuity": continuity,
                "seconds": round(time.monotonic() - started, 3),
                "blender_version": bpy.app.version_string}
     (output / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")

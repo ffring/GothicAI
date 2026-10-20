@@ -8,7 +8,7 @@ import pytest
 
 from geometry import (
     box_uv, budget_ratio, choose_clusters, classify_zones, cylinder_uv,
-    fit_bbox, kmeans, linear_to_oklab, select_uv_projection, simplify_loop,
+    face_adjacency, fit_bbox, kmeans, linear_to_oklab, select_uv_projection, simplify_loop,
     smooth_labels, triangle_areas,
 )
 
@@ -204,7 +204,8 @@ def test_box_uv_is_metric_in_both_directions_on_sloped_faces():
     uv = box_uv(vertices, faces)
     # Every face participates, including the small oblique faces.
     scale = physical_checker_scale(vertices, faces, uv)
-    np.testing.assert_allclose(scale, 1., rtol=1e-5)
+    np.testing.assert_allclose(scale, 1., rtol=.05)
+    assert_no_patch_uv_jumps(faces, *box_uv(vertices, faces, return_patches=True)[:2])
 
 
 def cylinder(segments=96, radius=.6, height=1.4):
@@ -278,24 +279,15 @@ def test_cylinder_uv_has_metric_scale_including_seam():
     assert np.max(np.ptp(uv[:, :, 0], axis=1)) < .05
 
 
-def test_cylinder_v_uses_actual_meridian_not_noisy_radial_samples():
+def test_cylinder_shared_meridian_and_ellipse_arc_keep_metric_checker():
     vertices, faces = noisy_bowed_barrel()
     vertices *= [1.18, 1., .93]
-    uv = cylinder_uv(vertices, faces)
+    uv, patches, types = cylinder_uv(vertices, faces, return_patches=True)
     scale = physical_checker_scale(vertices, faces, uv)
-    np.testing.assert_allclose(scale[:, 1], 1., rtol=1e-5)
-    # On the genuinely circumferential faces near the ellipse's cardinal axes,
-    # retain the existing angular U, including its seam. Oblique noisy faces
-    # may use the planar fallback instead.
-    centre = (vertices.min(axis=0) + vertices.max(axis=0)) * .5
-    triangles = vertices[faces] - centre
-    angle = np.arctan2(triangles[:, :, 2], triangles[:, :, 0])
-    seam = np.ptp(angle, axis=1) > np.pi
-    angle[seam] = np.where(angle[seam] < 0, angle[seam] + 2 * np.pi, angle[seam])
-    radius = np.linalg.norm(triangles[:, :, [0, 2]], axis=2).mean(axis=1)
-    circumferential = abs(np.sin(2 * angle.mean(axis=1))) < .15
-    assert circumferential.sum() > 50
-    np.testing.assert_allclose(uv[circumferential, :, 0], (angle * radius[:, None])[circumferential], rtol=1e-6, atol=1e-7)
+    np.testing.assert_allclose(scale[:, 1], 1., rtol=.05)
+    np.testing.assert_allclose(scale[:, 0], 1., rtol=.15)
+    assert np.all(types == 1)
+    assert_no_patch_uv_jumps(faces, uv, patches)
 
 
 def test_cylinder_caps_have_planar_metric_uv():
@@ -333,16 +325,46 @@ def test_cylinder_lid_plank_chords_use_planar_metric_uv():
     np.testing.assert_allclose(physical_checker_scale(vertices, faces[-2:], uv[-2:]), 1., rtol=1e-5)
 
 
-def test_generated_barrel_control_checks_every_face_including_lid_edges():
+def assert_no_patch_uv_jumps(faces, uv, patches):
+    checked = 0
+    for a, b in face_adjacency(faces):
+        if patches[a] != patches[b]:
+            continue
+        common = np.intersect1d(faces[a], faces[b])
+        first = uv[a, [list(faces[a]).index(vertex) for vertex in common]]
+        second = uv[b, [list(faces[b]).index(vertex) for vertex in common]]
+        np.testing.assert_allclose(first, second, atol=1e-5, rtol=0)
+        checked += 1
+    assert checked > 0
+
+
+def test_generated_barrel_control_checks_all_charts_and_lid_diagonals():
     from parametric import build_barrel
 
     vertices, faces, _, _ = build_barrel()
     target = {"bbox_min": [-.47, -.08, -.38], "bbox_max": [.47, 1.12, .38]}
     vertices = fit_bbox(vertices, {"up_axis": "+Y", "meters_per_unit": 1.}, target)
-    uv = cylinder_uv(vertices, faces)
+    uv, patches, types = cylinder_uv(vertices, faces, return_patches=True)
     scale = physical_checker_scale(vertices, faces, uv)
     assert np.all((scale[:, 0] >= .85) & (scale[:, 0] <= 1.15))
     assert np.all((scale[:, 1] >= .95) & (scale[:, 1] <= 1.05))
+    np.testing.assert_allclose(scale[types != 1], 1., rtol=.05)
+    assert_no_patch_uv_jumps(faces, uv, patches)
+    # The same lid board used to choose cylinder/plane across this diagonal.
+    assert patches[2358] == patches[2359]
+    assert types[2358] == types[2359] == 0
+
+
+def test_dense_bowed_barrel_uses_continuous_shared_charts():
+    vertices, faces = noisy_bowed_barrel()
+    target = {"bbox_min": [-.47, -.08, -.38], "bbox_max": [.47, 1.12, .38]}
+    vertices = fit_bbox(vertices.astype(np.float32), {"up_axis": "+Y", "meters_per_unit": 1.}, target)
+    uv, patches, types = cylinder_uv(vertices, faces, return_patches=True)
+    assert np.all(types == 1)
+    assert_no_patch_uv_jumps(faces, uv, patches)
+    scale = physical_checker_scale(vertices, faces, uv)
+    np.testing.assert_allclose(scale[:, 0], 1., rtol=.15)
+    np.testing.assert_allclose(scale[:, 1], 1., rtol=.05)
 
 
 def test_triangle_areas_use_actual_surface_area():
