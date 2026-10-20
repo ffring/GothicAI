@@ -2,8 +2,15 @@
 # Submit a bounded phase and return its gq ID. Never trains a student.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-demos-v4-remote.sh build-validate|validate-moving|retry|record|record-follow-below-gate}"
+stage="${1:?Usage: nav-demos-v4-remote.sh build-validate|validate-moving|retry|record|record-follow-below-gate [EXPECT_EXISTING]}"
 case "$stage" in build-validate|validate-moving|retry|record|record-follow-below-gate) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
+expect_existing="${2:-}"
+if [[ -n "$expect_existing" && ! "$expect_existing" =~ ^[1-9][0-9]*$ ]]; then
+  echo 'EXPECT_EXISTING must be a positive episode count' >&2; exit 2
+fi
+if [[ -n "$expect_existing" && "$stage" != record-follow-below-gate ]]; then
+  echo 'Existing corpus regression requires record-follow-below-gate' >&2; exit 2
+fi
 export GQ_OWNER=nav-demos-v4
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-demos-v4" "$HOME"')"
 ssh ryzen 'df -h "$HOME"'
@@ -32,6 +39,7 @@ ssh ryzen "cat > '$task/phase.sh'" <<'PHASE'
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
 stage="${1:?phase}"
+expect_existing="${2:-}"
 export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
 export PATH="$HOME/.local/bin:$VULKAN_SDK/bin:$PATH"
 export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
@@ -53,6 +61,10 @@ if [[ "$stage" == record || "$stage" == record-follow-below-gate ]]; then
   if [[ "$stage" == record-follow-below-gate ]]; then
     follow=(--include-follow no --follow-below-gate)
   fi
+  if [[ -n "$expect_existing" ]]; then
+    NAV_DEMOS_V4_CORPUS_TASK="$task" NAV_DEMOS_V4_CORPUS_EXPECT="$expect_existing" \
+      "$task/.venv/bin/python" -m pytest -q -s scripts/tests/test_nav_demos_v4_corpus.py
+  fi
   "$task/.venv/bin/python" -I scripts/nav_demos_v4_collect.py --task "$task" "${follow[@]}" \
     --wall-minutes 100 --max-new 2000 --max-bytes 15000000000
 else
@@ -69,4 +81,4 @@ else
 fi
 PHASE
 "$ROOT/scripts/gq" submit --class batch --threads 12 --cpu-quota 1200% --mem 8G --max 2h \
-  --name "nav demos v4 $stage" -- bash "$task/phase.sh" "$stage"
+  --name "nav demos v4 $stage" -- bash "$task/phase.sh" "$stage" "$expect_existing"

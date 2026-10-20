@@ -1,6 +1,8 @@
 """Asset-free selection, storage, eligibility and resume checks for demos-v4."""
 from collections import Counter
 from copy import deepcopy
+from contextlib import nullcontext
+import gzip
 import importlib.util
 import json
 from pathlib import Path
@@ -296,6 +298,46 @@ def native(value):
                 success=True, elapsed_ms=240000, limit_ms=240000, decisions=2, failure="")
 
 
+def episode_files(directory):
+    return {path.relative_to(directory): (path.read_bytes(), path.stat().st_mtime_ns)
+            for path in directory.rglob("*") if path.is_file()}
+
+
+def retained_record(tmp_path, monkeypatch, *, finalized=True, value=None):
+    """A historical episode with real files and only native parsing mocked."""
+    value = value or point()
+    identity = legacy_identity()
+    worker = collect.Worker(SimpleNamespace(task=tmp_path, limit_ms=240000), 0, None, identity)
+    directory = collect.directory_for(tmp_path, value)
+    directory.mkdir(parents=True)
+    (directory / "samples.bin.gz").write_bytes(gzip.compress(b"retained NAVDEMO samples", mtime=0))
+    for name in ("actions.txt", "trajectory.txt", "runner.log"):
+        (directory / name).write_text("retained historical output\n")
+    metadata = native(value)
+    if finalized:
+        metadata.update(value, recording_identity=identity, training_eligible=False,
+            collection_metrics=dict(training_eligible=False, retired_metric=17))
+    collect.atomic_json(directory / "episode.json", metadata)
+    collect.atomic_json(directory / "contract.json", dict(records=2, mismatches=0,
+        previous_mismatches=0, retired_contract_metric=7))
+    witness = worker.args.output / "scenarios" / f"demos-v4-{value['id']}.bench"
+    witness.parent.mkdir(parents=True)
+    witness.write_text("\n".join([f"seed {value['seed']}", "cheat god", "set time 10 0", "navdemos physics cv",
+        *collect.commands(worker.args, value), "label done", ""]))
+    monkeypatch.setattr(worker, "scenario", lambda *args: pytest.fail("A retained episode must not run again"))
+    monkeypatch.setattr(collect.demos, "summarize", lambda *args, **kwargs: dict(navigation_memory_versions=[3],
+        format_versions=[2], key_counts=dict(back=1, strafe=1, jump=0, climb=0)))
+
+    def replay(command, **kwargs):
+        assert command == [str(worker.args.contract), str(directory / "samples.bin.gz")]
+        assert kwargs == dict(capture_output=True, text=True, check=False)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(dict(records=2, mismatches=0,
+            previous_mismatches=0, current_contract_metric=9)))
+
+    monkeypatch.setattr(collect.subprocess, "run", replay)
+    return worker, value, directory
+
+
 @pytest.mark.parametrize("field,bad", [("navigation_memory_version", 2), ("teacher_version", 2),
     ("demo_version", 1), ("oracle", True), ("record", False), ("demonstration_recorded", False),
     ("perception_mode", "grid"), ("physics_mode", "native"), ("limit_ms", 100), ("start", "OTHER"),
@@ -392,42 +434,121 @@ def test_aggregate_storage_reserves_across_families_and_releases_after_failure(t
     assert budget.reserved == 0 and retained.read_bytes() == new_family.read_bytes() == b"x" * 10
 
 
-def test_raw_completed_record_recovers_by_exact_witness_then_resumes_immutably(tmp_path, monkeypatch):
-    options = SimpleNamespace(task=tmp_path, limit_ms=240000)
-    identity = legacy_identity()
-    value = point()
-    directory = collect.directory_for(tmp_path, value)
-    directory.mkdir(parents=True)
-    for name in ("samples.bin.gz", "actions.txt", "trajectory.txt"):
-        (directory / name).write_bytes(b"retained")
-    (directory / "contract.json").write_text('{"records":2,"mismatches":0,"previous_mismatches":0}\n')
-    collect.atomic_json(directory / "episode.json", native(value))
-    worker = collect.Worker(options, 0, None, identity)
-    args = worker.args
-    witness = args.output / "scenarios" / "demos-v4-point-0.bench"
-    witness.parent.mkdir(parents=True)
-    witness.write_text("\n".join([f"seed {value['seed']}", "cheat god", "set time 10 0", "navdemos physics cv",
-        *collect.commands(args, value), "label done", ""]))
-    monkeypatch.setattr(worker, "scenario", lambda *args: pytest.fail("Completed recording must not run again"))
-    monkeypatch.setattr(collect.demos, "summarize", lambda *args, **kwargs: dict(navigation_memory_versions=[3],
-        format_versions=[2], key_counts=dict(back=1, strafe=1, jump=0, climb=0)))
-    monkeypatch.setattr(collect, "replay_contract", lambda *args: dict(records=2, mismatches=0, previous_mismatches=0))
+def test_raw_completed_record_recovers_by_exact_witness_without_rewriting_recording(tmp_path, monkeypatch):
+    worker, value, directory = retained_record(tmp_path, monkeypatch, finalized=False)
+    before = episode_files(directory)
     measured = worker.trial(value)
-    assert measured["training_eligible"] is True
-    metadata = v3.read_json(directory / "episode.json")
-    assert metadata["id"] == value["id"] and metadata["recording_identity"] == identity
-    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in directory.iterdir()}
+    assert measured["id"] == value["id"] and measured["training_eligible"] is True
+    assert episode_files(directory) == before
+    assert "id" not in v3.read_json(directory / "episode.json")
     assert worker.trial(value) == measured
-    assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in directory.iterdir()}
+    assert episode_files(directory) == before
+    identity = legacy_identity()
     upgraded = collect.collection_settings(identity, identity, follow_below_gate=True, source_follow_sha256="source-follow-hash")
     worker.identity = upgraded
     assert worker.trial(value) == measured
-    assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in directory.iterdir()}
-    assert v3.read_json(directory / "episode.json")["recording_identity"] == identity
-    metadata["seed"] += 1
+    assert episode_files(directory) == before
+
+
+@pytest.mark.parametrize("old_metrics", [
+    dict(training_eligible=False, retired_metric=17),
+    dict(training_eligible=False, payload_bytes=1, validated=False, key_counts={}),
+    {},
+])
+def test_resume_recalculates_stale_derived_metrics_without_mutating_episode_files(tmp_path, monkeypatch, old_metrics):
+    worker, value, directory = retained_record(tmp_path, monkeypatch)
+    metadata = v3.read_json(directory / "episode.json")
+    metadata["collection_metrics"] = old_metrics
     collect.atomic_json(directory / "episode.json", metadata)
-    with pytest.raises(ValueError, match="another frozen scenario"):
+    before = episode_files(directory)
+    measured = worker.trial(value)
+    assert measured["training_eligible"] is True
+    assert measured["validated"] is True
+    assert measured["key_counts"] == dict(back=1, strafe=1, jump=0, climb=0)
+    assert measured["payload_bytes"] > 1
+    assert "retired_metric" not in measured
+    assert v3.read_json(directory / "episode.json")["training_eligible"] is False
+    assert episode_files(directory) == before
+    assert worker.trial(value) == measured
+    assert episode_files(directory) == before
+
+
+def test_pinned_resume_ignores_changed_derived_fields_and_auxiliary_log_payload(tmp_path, monkeypatch):
+    worker, value, directory = retained_record(tmp_path, monkeypatch)
+    measured = worker.trial(value)
+    state_before = v3.read_json(tmp_path / "recordings/collection-state.json")["integrity"]
+    metadata = v3.read_json(directory / "episode.json")
+    metadata.update(training_eligible=False, collection_metrics=dict(follow_below_gate=True, payload_bytes=-1))
+    collect.atomic_json(directory / "episode.json", metadata)
+    with (directory / "runner.log").open("ab") as stream:
+        stream.write(b"\n")
+    before = episode_files(directory)
+    updated = worker.trial(value)
+    assert updated["training_eligible"] is True
+    assert updated["payload_bytes"] == measured["payload_bytes"] + 1
+    assert episode_files(directory) == before
+    assert v3.read_json(tmp_path / "recordings/collection-state.json")["integrity"] == state_before
+
+
+def test_pinned_samples_change_rejected_before_revalidation_or_new_recording(tmp_path, monkeypatch):
+    worker, value, directory = retained_record(tmp_path, monkeypatch)
+    worker.trial(value)
+    state = tmp_path / "recordings/collection-state.json"
+    state_before = state.read_bytes(), state.stat().st_mtime_ns
+    (directory / "samples.bin.gz").write_bytes(gzip.compress(b"different NAVDEMO samples", mtime=0))
+    before = episode_files(directory)
+    monkeypatch.setattr(collect.demos, "summarize", lambda *args, **kwargs: pytest.fail("Pinned sample change must fail before parsing"))
+    monkeypatch.setattr(collect.subprocess, "run", lambda *args, **kwargs: pytest.fail("Pinned sample change must fail before replay"))
+    with pytest.raises(ValueError, match="(?i)(fingerprint|integrity|sample)"):
         worker.trial(value)
+    assert episode_files(directory) == before
+    assert (state.read_bytes(), state.stat().st_mtime_ns) == state_before
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("start", "OTHER"), ("goal", "OTHER"), ("seed", collect.SEED + 1),
+    ("teacher_version", 2), ("navigation_memory_version", 2),
+])
+@pytest.mark.parametrize("finalized", [False, True])
+def test_resume_rejects_changed_immutable_identity_even_for_legacy_unpinned_record(tmp_path, monkeypatch, field, bad, finalized):
+    worker, value, directory = retained_record(tmp_path, monkeypatch, finalized=finalized)
+    metadata = v3.read_json(directory / "episode.json")
+    metadata[field] = bad
+    collect.atomic_json(directory / "episode.json", metadata)
+    before = episode_files(directory)
+    monkeypatch.setattr(collect.demos, "summarize", lambda *args, **kwargs: pytest.fail("Invalid native identity must fail before parsing"))
+    with pytest.raises(ValueError):
+        worker.trial(value)
+    assert episode_files(directory) == before
+
+
+def test_new_recording_finalizes_once_then_resume_preserves_all_episode_files(tmp_path, monkeypatch):
+    worker, value, directory = retained_record(tmp_path, monkeypatch, finalized=False)
+    originals = {path.name: path.read_bytes() for path in directory.iterdir() if path.name != "contract.json"}
+    for path in directory.iterdir():
+        path.unlink()
+    directory.rmdir()
+    calls = []
+
+    def scenario(name, commands, destination, seed):
+        assert destination == directory and seed == value["seed"]
+        calls.append(name)
+        destination.mkdir(parents=True)
+        for name, payload in originals.items():
+            (destination / name).write_bytes(payload)
+
+    monkeypatch.setattr(worker, "scenario", scenario)
+    worker.budget = SimpleNamespace(reserve=lambda *args, **kwargs: nullcontext())
+    result = worker.trial(value)
+    metadata = v3.read_json(directory / "episode.json")
+    assert calls == [f"demos-v4-{value['id']}"]
+    assert metadata["recording_identity"] == legacy_identity()
+    assert metadata["id"] == value["id"] and metadata["training_eligible"] is True
+    assert (directory / "contract.json").is_file()
+    before = episode_files(directory)
+    assert worker.trial(value) == result
+    assert calls == [f"demos-v4-{value['id']}"]
+    assert episode_files(directory) == before
 
 
 def test_partial_attempt_is_retained_and_never_retried(tmp_path, monkeypatch):
@@ -447,9 +568,22 @@ def test_contract_replay_does_not_rewrite_existing_contract(tmp_path, monkeypatc
     result = dict(records=42, mismatches=0, previous_mismatches=0)
     monkeypatch.setattr(collect.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(result)))
     path = tmp_path / "contract.json"
-    assert collect.replay_contract(Path("/contract"), tmp_path, 42) == result
+    assert collect.replay_contract(Path("/contract"), tmp_path, 42, write=True) == result
     before = path.read_bytes(), path.stat().st_mtime_ns
+    result["new_derived_metric"] = 100
     assert collect.replay_contract(Path("/contract"), tmp_path, 42) == result
     assert (path.read_bytes(), path.stat().st_mtime_ns) == before
     with pytest.raises(ValueError, match="mismatch"):
         collect.replay_contract(Path("/contract"), tmp_path, 43)
+
+
+@pytest.mark.parametrize("changes", [dict(records=41), dict(mismatches=1), dict(previous_mismatches=1)])
+def test_contract_replay_still_rejects_current_teacher_mismatch_or_decision_count(tmp_path, monkeypatch, changes):
+    saved = dict(records=42, mismatches=0, previous_mismatches=0, retired_metric=7)
+    collect.atomic_json(tmp_path / "contract.json", saved)
+    before = episode_files(tmp_path)
+    result = dict(saved, **changes)
+    monkeypatch.setattr(collect.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(result)))
+    with pytest.raises(ValueError, match="mismatch"):
+        collect.replay_contract(Path("/contract"), tmp_path, 42)
+    assert episode_files(tmp_path) == before

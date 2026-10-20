@@ -53,6 +53,61 @@ def atomic_json(path, value):
     temporary.replace(path)
 
 
+class CollectionState:
+    """Publish status and verified immutable recording identities under one lock.
+
+    Legacy episodes have no sample digest. Their first successful NAVDEMO and
+    teacher-contract verification pins it here, outside the recording directory.
+    Later resumes compare the pin before recalculating any derived metrics.
+    """
+    def __init__(self, path, settings, previous=None):
+        self.path, self.lock = Path(path), threading.Lock()
+        self.data = dict(previous if previous is not None else
+                         v3.read_json(self.path) if self.path.is_file() else {})
+        self.data["settings"] = settings
+        integrity = self.data.setdefault("integrity", dict(schema_version=1, episodes={}))
+        if (integrity.get("schema_version") != 1 or not isinstance(integrity.get("episodes"), dict)):
+            raise ValueError("Unsupported recording integrity cache")
+
+    def key(self, directory):
+        return str(Path(directory).relative_to(self.path.parent))
+
+    def verify(self, directory, fingerprint):
+        with self.lock:
+            prior = self.data["integrity"]["episodes"].get(self.key(directory))
+            if prior is not None and prior != fingerprint:
+                raise ValueError(f"Immutable recording fingerprint changed: {directory}")
+
+    def pin(self, directory, fingerprint):
+        with self.lock:
+            episodes = self.data["integrity"]["episodes"]
+            key = self.key(directory)
+            prior = episodes.get(key)
+            if prior is not None and prior != fingerprint:
+                raise ValueError(f"Immutable recording fingerprint changed: {directory}")
+            if prior is None:
+                episodes[key] = fingerprint
+                atomic_json(self.path, self.data)
+
+    def update(self, **values):
+        with self.lock:
+            self.data.update(values)
+            atomic_json(self.path, self.data)
+
+
+def recording_fingerprint(directory, metadata, value, identity):
+    fields = (*v3.SCENARIO_IDENTITY_FIELDS, "index", "site_id", "transition_id", "type",
+              "dataset_family", "follow_below_gate", "minimum_follow_fraction")
+    digest = campaign.binary_digest(Path(directory) / "samples.bin.gz")
+    if metadata.get("samples_sha256", digest) != digest:
+        raise ValueError(f"Recorded samples hash differs: {value['id']}")
+    return dict(scenario={key: metadata.get(key) for key in fields},
+                teacher_version=metadata["teacher_version"],
+                navigation_memory_version=metadata["navigation_memory_version"],
+                demo_version=metadata["demo_version"], recording_identity=identity,
+                samples_sha256=digest)
+
+
 def balanced(values, key, seed=SEED):
     groups = defaultdict(list)
     for value in sorted(values, key=lambda value: value["id"]):
@@ -289,8 +344,8 @@ def validate_native(metadata, value, identity):
         raise ValueError("Wrong teacher observation source")
     if value["goal_kind"] not in ("follow", "approach") and metadata.get("goal") != value["goal"]:
         raise ValueError("Raw recording goal differs")
-    if value["goal_kind"] in ("follow", "approach") and metadata.get("seed") != value["seed"]:
-        raise ValueError("Moving seed differs")
+    if (value["goal_kind"] in ("follow", "approach") or "seed" in metadata) and metadata.get("seed") != value["seed"]:
+        raise ValueError(f"Recording seed differs: {value['id']}")
     if value["goal_kind"] == "approach" and (metadata.get("target_immortal") is not True
             or metadata.get("target_nonhostile") is not True or metadata.get("target_final_dead") is not False
             or metadata.get("target_final_down") is not False):
@@ -346,7 +401,7 @@ def measured_episode(directory, metadata, checked):
     return result
 
 
-def replay_contract(binary, directory, decisions):
+def replay_contract(binary, directory, decisions, *, write=False):
     """Replay each time, but keep already checked recording metadata immutable."""
     process = subprocess.run([str(binary), str(Path(directory) / "samples.bin.gz")],
                              capture_output=True, text=True, check=False)
@@ -358,16 +413,19 @@ def replay_contract(binary, directory, decisions):
         raise ValueError(f"Teacher contract mismatch: {directory}: {result}")
     path = Path(directory) / "contract.json"
     if path.exists():
-        if v3.read_json(path) != result:
+        saved = v3.read_json(path)
+        if (saved.get("records") != decisions or saved.get("mismatches") != 0
+                or saved.get("previous_mismatches") != 0):
             raise ValueError(f"Saved contract changed: {directory}")
-    else:
+    elif write:
         atomic_json(path, result)
     return result
 
 
 class Worker(campaign.Worker):
-    def __init__(self, options, index, budget, identity):
+    def __init__(self, options, index, budget, identity, state=None):
         self.options, self.index, self.identity = options, index, identity
+        self.state = state or CollectionState(options.task / "recordings/collection-state.json", identity)
         self.jump = False
         super().__init__(runner_args(options, index), 3, budget)
 
@@ -385,8 +443,10 @@ class Worker(campaign.Worker):
         resumed = (directory / "episode.json").is_file()
         started = time.monotonic()
         if not resumed:
-            if directory.exists() and any(directory.iterdir()):
+            if directory.exists():
                 raise ValueError(f"Partial recording retained; refusing to overwrite: {directory}")
+            if getattr(self.options, "verify_existing_only", False):
+                raise ValueError(f"Verification cannot start a new recording: {directory}")
             with self.budget.reserve(self.args.limit_ms, jump=jump):
                 campaign.emit("recording_started", family=family(value), id=value["id"])
                 self.scenario(scenario_name, commands(self.args, value), directory, value["seed"])
@@ -398,24 +458,28 @@ class Worker(campaign.Worker):
         metadata = v3.read_json(directory / "episode.json")
         validate_native(metadata, value, identity)
         if "id" not in metadata:
-            if jump:
-                metadata = jumps.assess_episode(directory, value)
             metadata["runner_goal"] = metadata.get("goal")
             metadata.update(value, recording_identity=identity, collector_wall_s=time.monotonic() - started)
             if family(value) == FOLLOW_BELOW_GATE:
                 metadata["teacher_goal_success"] = metadata["success"]
+        fingerprint = recording_fingerprint(directory, metadata, value, identity)
+        self.state.verify(directory, fingerprint)
+        if jump:
+            metadata.update(jumps.assess_episode(directory, value))
         checked = demos.summarize(directory, validate=True)
         if checked.get("navigation_memory_versions") != [3] or checked.get("format_versions") != [2]:
             raise ValueError("Only memory-v3 NAVDEMO-v2 recordings are allowed")
         if not jump:
-            contract = replay_contract(self.args.contract, directory, metadata["decisions"])
+            replay_contract(self.args.contract, directory, metadata["decisions"], write=not resumed)
         measured = measured_episode(directory, metadata, checked)
-        if "training_eligible" in metadata:
-            if metadata["training_eligible"] != measured["training_eligible"] or metadata.get("collection_metrics") != measured:
-                raise ValueError("Previously finalized recording metrics changed")
-        else:
-            metadata.update(training_eligible=measured["training_eligible"], collection_metrics=measured)
+        # Existing recordings are immutable, including a completed native attempt
+        # interrupted before the collector decorated its metadata. The current
+        # collection summary is authoritative for eligibility and derived values.
+        if not resumed:
+            metadata.update(training_eligible=measured["training_eligible"], collection_metrics=measured,
+                            samples_sha256=fingerprint["samples_sha256"])
             atomic_json(directory / "episode.json", metadata)
+        self.state.pin(directory, fingerprint)
         campaign.emit("recording_complete", family=family(value), id=value["id"], resumed=resumed,
             success=measured["success"], training_eligible=measured["training_eligible"], decisions=measured["decisions"])
         return measured
@@ -515,15 +579,19 @@ def run(options):
     if sys.platform != "linux":
         raise ValueError("Run collection on Ryzen/Linux inside the caller's gq batch")
     follow_below_gate = getattr(options, "follow_below_gate", False)
+    verify_only = getattr(options, "verify_existing_only", False)
+    expect_existing = getattr(options, "expect_existing", None)
     if follow_below_gate and options.include_follow == "yes":
         raise ValueError("--follow-below-gate is a separate family; it cannot enable ordinary follow")
     include_follow = False if follow_below_gate else follow_enabled(options.task, options.include_follow)
     base_identity = settings(options, include_follow)
     output = options.task / "recordings"
-    state = output / "collection-state.json"
+    state_path = output / "collection-state.json"
+    prior_state = None
     prior_settings = None
-    if state.exists():
-        prior_settings = v3.read_json(state).get("settings")
+    if state_path.exists():
+        prior_state = v3.read_json(state_path)
+        prior_settings = prior_state.get("settings")
         if not isinstance(prior_settings, dict):
             raise ValueError("Existing recording state lacks its frozen collection identity")
         # Check every old core identity field before making any new file. The
@@ -538,6 +606,8 @@ def run(options):
                 raise ValueError(f"Existing collection lacks its frozen selection: {name}")
     elif output.exists() and any(output.iterdir()):
         raise ValueError("Existing recordings lack frozen collection identity")
+    if verify_only and prior_settings is None:
+        raise ValueError("Verification requires an existing frozen collection")
     if follow_below_gate:
         if any(path.is_file() for path in (output / "follow").rglob("*")):
             raise ValueError("The additive override cannot migrate existing ordinary follow recordings")
@@ -556,13 +626,16 @@ def run(options):
     allowed = {directory_for(options.task, value) for values in selections.values() for value in values}
     if any(path.parent not in allowed for path in output.rglob("samples.bin*")):
         raise ValueError("Recording exists outside frozen train selections")
-    atomic_json(state, dict(settings=identity, status="running"))
+    state = CollectionState(state_path, identity, prior_state)
+    state.update(status="verifying_existing" if verify_only else "running")
     budget = StorageBudget(output, options.max_bytes)
-    workers = [Worker(options, index, budget, identity) for index in range(options.parallel)]
+    workers = [Worker(options, index, budget, identity, state) for index in range(options.parallel)]
     episodes, done = [], set()
     new = 0
+    verified = 0
     def metrics():
-        return summarize(episodes, selections, include_follow, budget.used(), follow_below_gate)
+        return dict(summarize(episodes, selections, include_follow, budget.used(), follow_below_gate),
+                    resume_verified_episodes=verified)
 
     try:
         # Verify prior attempts first; partial output is never automatically rerun.
@@ -578,11 +651,13 @@ def run(options):
                     if name == "follow" and not include_follow:
                         raise ValueError("Follow recordings exist despite a closed follow gate")
                     existing.append(value)
+        if expect_existing is not None and len(existing) != expect_existing:
+            raise ValueError(f"Expected {expect_existing} existing episodes, found {len(existing)}")
         campaign.emit("collection_resume_started", episodes=len(existing), parallel=options.parallel)
         with ThreadPoolExecutor(max_workers=options.parallel) as executor:
             for offset in range(0, len(existing), options.parallel):
                 if time.monotonic() >= deadline:
-                    atomic_json(state, dict(settings=identity, status="resume_verification_incomplete"))
+                    state.update(status="resume_verification_incomplete")
                     campaign.emit("collection_resume_bounded", verified_episodes=len(episodes),
                                   total_episodes=len(existing), new_episodes=0)
                     return dict(complete=False, resume_verification_complete=False,
@@ -591,10 +666,11 @@ def run(options):
                 futures = [executor.submit(worker.trial, value) for worker, value in zip(workers, batch)]
                 measured = [future.result() for future in futures]
                 episodes.extend(measured)
+                verified += len(measured)
                 done.update((family(value), value["id"]) for value in batch)
                 campaign.emit("collection_resume_progress", verified_episodes=len(episodes), total_episodes=len(existing))
             campaign.emit("collection_resume_complete", episodes=len(existing))
-            while True:
+            while not verify_only:
                 progressed = False
                 for name in families:
                     result = metrics()
@@ -631,8 +707,10 @@ def run(options):
             or (follow_below_gate and campaign.binary_digest(options.task / "recording-input/follow.jsonl") != source_follow_sha256)):
         raise ValueError("Frozen recording inputs or binaries changed during the phase")
     result = metrics()
+    result["resume_verification_complete"] = True
     atomic_json(output / "collection-metrics.json", dict(result, settings=identity))
-    atomic_json(state, dict(settings=identity, status="complete" if result["complete"] else "bounded_phase_complete"))
+    state.update(status="existing_verified" if verify_only else
+                 "complete" if result["complete"] else "bounded_phase_complete")
     campaign.emit("collection_phase_complete", complete=result["complete"], new_episodes=new,
                   bytes=result["dataset_bytes"], by_family=result["by_family"])
     return result
@@ -644,6 +722,10 @@ def main():
     parser.add_argument("--include-follow", choices=("auto", "yes", "no"), default="auto")
     parser.add_argument("--follow-below-gate", action="store_true",
                         help="Explicitly add separate follow_below_gate training data with the authorized 70%% per-episode rule")
+    parser.add_argument("--verify-existing-only", action="store_true",
+                        help="Validate all existing recordings and refresh the global summary without starting scenarios")
+    parser.add_argument("--expect-existing", type=int,
+                        help="Require this exact number of existing episodes before verification")
     parser.add_argument("--wall-minutes", type=float, default=100)
     parser.add_argument("--max-new", type=int, default=300)
     parser.add_argument("--round-size", type=int, default=12)
@@ -655,6 +737,8 @@ def main():
         parser.error("An absolute task and the unchanged 240000-ms collection horizon are required")
     if not 15 < options.wall_minutes <= 110 or min(options.max_new, options.round_size) <= 0:
         parser.error("Wall budget must be in (15,110] minutes; positive episode bounds are required")
+    if options.expect_existing is not None and options.expect_existing < 0:
+        parser.error("Expected existing episode count cannot be negative")
     options.task = options.task.resolve()
     try:
         run(options)
