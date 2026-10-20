@@ -9,7 +9,9 @@ case "$mode" in all|--skip-dinov3|--dinov3-only) ;; *) exit 2 ;; esac
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 if [[ "$(uname -s)" == Darwin ]]; then
   ssh dev-ubuntu mkdir -p gothic-ai/mesh3d
-  scp "$script_dir/"*.py "$script_dir/setup-dev-ubuntu.sh" dev-ubuntu:gothic-ai/mesh3d/
+  scp "$script_dir/adapter.py" "$script_dir/generate_trellis.py" \
+    "$script_dir/check_imports.py" "$script_dir/download_weights.py" \
+    "$script_dir/setup-dev-ubuntu.sh" dev-ubuntu:gothic-ai/mesh3d/
   exec ssh -T dev-ubuntu bash gothic-ai/mesh3d/setup-dev-ubuntu.sh "$mode"
 fi
 [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || exit 2

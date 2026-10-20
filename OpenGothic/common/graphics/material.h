@@ -10,7 +10,7 @@
 class Material final {
   public:
     Material()=default;
-    Material(const zenkit::Material& m, bool enableAlphaTest);
+    Material(const zenkit::Material& m, bool enableAlphaTest, bool requireAlphaTest = false);
     Material(const zenkit::VisualDecal& decal);
     Material(const zenkit::IParticleEffect &src);
 
@@ -69,6 +69,9 @@ class Material final {
 
   private:
     bool             alphaTestEnabled = false;
+    // An explicit GLB MASK must survive DXT1's one-bit transparency and later
+    // albedo changes; native materials retain their format-based heuristics.
+    bool             alphaTestRequired = false;
     zenkit::AlphaFunction sourceAlphaFunc = zenkit::AlphaFunction::NONE;
     zenkit::MaterialGroup sourceMaterialGroup = zenkit::MaterialGroup::UNDEFINED;
     uint8_t          sourceColorAlpha = 255;
@@ -76,7 +79,8 @@ class Material final {
     AlphaFunc        classifiedAlpha = AlphaTest;
 
     static AlphaFunc loadAlphaFunc(zenkit::AlphaFunction zenAlpha, zenkit::MaterialGroup matGroup,
-                                   uint8_t alpha, const Tempest::Texture2d* tex, bool enableAlphaTest);
+                                   uint8_t alpha, const Tempest::Texture2d* tex, bool enableAlphaTest,
+                                   bool requireAlphaTest = false);
     void             loadFrames(const zenkit::Material& m);
     void             loadFrames(const std::string_view fr, float fps);
   };

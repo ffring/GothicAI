@@ -282,3 +282,56 @@ def test_all_attempts_are_checked_including_unselected_source(tmp_path):
     entry['generation']['attempts'].append(attempt)
     with pytest.raises(registry.RegistryError, match='missing-attempt-2.png'):
         registry.check_registry(write_registry(tmp_path, [entry]), source_root=source_root)
+
+
+def concept_recipe(tmp_path):
+    entry, source_root, _ = source_recipe(tmp_path)
+    attempt = entry['generation']['attempts'][0]
+    entry.update(id='mesh3d-pilot-barrel-v1', kind='concept', pipeline='imagegen-concept', seed=None,
+        replaces=['BARREL.MRM'], files={}, utc='2026-10-20T12:00:00Z',
+        source_png=attempt['source_png'], source_sha256=attempt['source_sha256'],
+        generation={'outcome': 'complete'},
+        models=[dict(id='image_gen.imagegen', revision=None, license='OpenAI Terms of Use')])
+    return entry, source_root
+
+
+def test_concepts_and_materials_share_registry_and_source_verification(tmp_path):
+    concept, source_root = concept_recipe(tmp_path)
+    material = recipe()
+    path = write_registry(tmp_path, [material, concept])
+    assert registry.check_registry(path, source_root=source_root) == [material, concept]
+    assert registry.source_references(concept) == [(concept['source_png'], concept['source_sha256'])]
+    # Same standalone API used by backup-sources.sh on dev-ubuntu.
+    registry.validate_entry(concept, source_root=source_root)
+    assert registry.main(['check', str(path), '--source-root', str(source_root)]) == 0
+
+
+@pytest.mark.parametrize(('updates', 'message'), [
+    ({'pipeline': 'imagegen-filter'}, 'imagegen-concept pipeline'),
+    ({'seed': 123}, 'null seed'),
+    ({'generation': {}}, 'generation.outcome'),
+    ({'generation': {'outcome': 'pending'}}, 'generation.outcome'),
+    ({'replaces': []}, 'exactly one visual'),
+    ({'utc': '2026-10-20T12:00:00'}, 'UTC timestamp'),
+    ({'utc': '2026-10-20T12:00:00+03:00'}, 'UTC timestamp'),
+    ({'utc': None}, 'UTC timestamp'),
+    ({'files': {'albedo': 'source.png'}}, 'concept.files'),
+    ({'models': [dict(id='owner/model', revision='a' * 40, license='MIT')]}, 'built-in'),
+])
+def test_concepts_require_completed_builtin_tool_and_raw_source(tmp_path, updates, message):
+    entry, _ = concept_recipe(tmp_path)
+    entry.update(updates)
+    with pytest.raises(registry.RegistryError, match=message):
+        registry.validate_entry(entry)
+
+
+def test_concept_requires_top_level_raw_source_and_utc(tmp_path):
+    entry, _ = concept_recipe(tmp_path)
+    nested = dict(source_png=entry.pop('source_png'), source_sha256=entry.pop('source_sha256'))
+    entry['generation']['attempts'] = [nested]
+    with pytest.raises(registry.RegistryError, match='top-level source_png'):
+        registry.validate_entry(entry)
+    entry.update(nested)
+    del entry['utc']
+    with pytest.raises(registry.RegistryError, match='UTC timestamp'):
+        registry.validate_entry(entry)

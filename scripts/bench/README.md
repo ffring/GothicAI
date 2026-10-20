@@ -21,6 +21,14 @@ or other Mac-only game paths require local execution (`auto` falls back, `ryzen`
 For performance comparisons (before/after or FPS), run both takes on the same machine:
 pin `BENCH_HOST=ryzen` or `BENCH_HOST=local`. `host.txt` and the report header identify the host.
 
+`own-mesh-barrel` frames the complete authored `NW_HARBOUR_BARREL_01` cargo barrel
+in Khorinis harbour at noon, writes `own-mesh-barrel.png`, then measures thirty
+seconds of normal app cadence without video. Use a fresh `WORLD=NEWWORLD.ZEN`, `MOVABLE_VOBS=0`,
+`OPENGOTHIC_CENSUS=<absolute output>/census.json`, and `OPENGOTHIC_CONTENT=<test content>`
+for the GLB replacement; `OPENGOTHIC_CONTENT=` gives the original-mesh comparison.
+For FPS comparisons use `RYZEN_BENCH_CLASS=quiet`; [the barrel report](../../reports/content/2026-10-own-meshes/README.md)
+records the replacement, original-mesh screenshots and alternating branch/main runs.
+
 Corpse water: `water-bodies` records a real harbour WindFist throw, a dead wolf and a
 sinking skeleton, then saves `session-water-bodies.sav` and tries normal corpse loot
 from dry ground and while swimming. `water-bodies-shallow` observes a corpse on the
