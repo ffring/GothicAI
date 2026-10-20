@@ -61,6 +61,14 @@ elif name == "systemctl":
     if action == "show":
         print("/user.slice/test")
     elif action == "is-active":
+        if (unit == "gothic-gemma" and unit in state["started"]
+                and state["gemma_restore_failures"]):
+            # Give the ready Decider worker time to record its first response.
+            time.sleep(0.15)
+            state["gemma_restore_failures"] -= 1
+            state["epoch"] += 3
+            save()
+            raise SystemExit(3)
         raise SystemExit(0 if unit in state["active"] else 3)
     elif action in ("start", "stop"):
         if not unit.endswith(".scope"):
@@ -71,6 +79,7 @@ elif name == "systemctl":
                 state["free_mib"] += 8000
             else:
                 state["active"].append(unit)
+                state["started"].append(unit)
                 state["epoch"] += {"gothic-gemma": 2, "gothic-decider": 3}[unit]
             save()
     else:
@@ -105,7 +114,7 @@ else:
 
 def run_window(tmp_path, *, available_gib=24, memory_max=21474836480,
                active=("gothic-gemma", "gothic-decider"), free_mib=1000,
-               consumed=False, durations=None, returncodes=None):
+               consumed=False, durations=None, returncodes=None, gemma_restore_failures=0):
     """Execute the production heredoc; redirect only Linux kernel file paths."""
     home = tmp_path / "home"
     task = home / "gothic-ai/mesh3d"
@@ -138,6 +147,7 @@ def run_window(tmp_path, *, available_gib=24, memory_max=21474836480,
         "epoch": START_EPOCH, "active": list(active), "free_mib": free_mib,
         "durations": durations or {"trellis": 11, "trellis2": 13},
         "returncodes": returncodes or {},
+        "started": [], "gemma_restore_failures": gemma_restore_failures,
     }))
     trace = tmp_path / "trace.jsonl"
     fake_bin = tmp_path / "bin"
@@ -196,12 +206,30 @@ def test_batch_loads_v1_then_512_once_and_accounts_only_this_authorization(tmp_p
     rows = [line.split("\t") for line in
             (task / "authorizations" / f"{AUTHORIZATION}.tsv").read_text().splitlines()]
     assert rows[0] == ["start", RUN_ID, str(START_EPOCH), "3600", "3000"]
-    assert [row[2:] for row in rows if row[0] == "service"] == [
+    assert sorted(row[2:] for row in rows if row[0] == "service") == sorted([
         ["gothic-gemma", "100000", "100037", "37"],
         ["gothic-decider", "100003", "100037", "34"],
-    ]
+    ])
     assert rows[-1] == ["window", RUN_ID, "100000", "100037", "37"]
     assert (task / "downtime.tsv").read_text() == "old-smoke\t999999\n"
+
+
+@pytest.mark.parametrize("delayed_checks,expected_rc", [(10, 0), (30, 1)])
+def test_restore_records_each_service_readiness_independently(tmp_path, delayed_checks, expected_rc):
+    result, _, calls, task = run_window(tmp_path, gemma_restore_failures=delayed_checks)
+    assert result.returncode == expected_rc, result.stdout + result.stderr
+    rows = [line.split("\t") for line in
+            (task / "authorizations" / f"{AUTHORIZATION}.tsv").read_text().splitlines()]
+    service_rows = [row[2:] for row in rows if row[0] == "service"]
+    assert len(service_rows) == 2
+    assert ["gothic-decider", "100003", "100037", "34"] in service_rows
+    gemma_ready = 100037 + 3 * delayed_checks
+    assert ["gothic-gemma", "100000", str(gemma_ready), str(gemma_ready - START_EPOCH)] in service_rows
+    decider_responses = [call for call in calls if call["command"] == "curl"
+                         and call["epoch"] >= 100037 and call["args"][-1].endswith(":47832/")]
+    assert len(decider_responses) == 1
+    if expected_rc:
+        assert "SERVICE RESTORE FAILED: gothic-gemma" in result.stderr
 
 
 def test_restores_only_the_unit_actually_stopped(tmp_path):

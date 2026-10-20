@@ -13,19 +13,18 @@ authorization=
 while (( $# > 0 )); do
   case "$1" in
     --batch) batch=1; shift ;;
-    --image|--seed|--model|--images-dir|--max-downtime|--authorization)
+    --image|--seed|--model|--max-downtime|--authorization)
       (( $# >= 2 )) || exit 2
       case "$1" in
         --image) image="$2" ;;
         --seed) seed="$2" ;;
         --model) model="$2" ;;
-        --images-dir) images_dir="$2" ;;
         --max-downtime) max_downtime="$2" ;;
         --authorization) authorization="$2" ;;
       esac
       shift 2 ;;
     --help|-h)
-      echo 'Usage: run-mesh3d.sh (--batch [--images-dir DIR] | --image RGBA.png --seed N) [--model both|trellis2|trellis] --max-downtime SECONDS --authorization LABEL'
+      echo 'Usage: run-mesh3d.sh (--batch | --image RGBA.png --seed N) [--model both|trellis2|trellis] --max-downtime SECONDS --authorization LABEL'
       exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -163,7 +162,8 @@ run_pid=
 run_scope=
 monitor_pid=
 restore() {
-  local rc=$? index unit healthy attempt elapsed now service_elapsed
+  local rc=$? index unit healthy attempt elapsed now service_elapsed pid
+  local -a health_pids=()
   # Background launch/monitor shells must never restore the parent window.
   (( BASH_SUBSHELL == 0 )) || exit "$rc"
   trap - EXIT HUP INT TERM
@@ -191,24 +191,31 @@ restore() {
     log_event start "$unit"
   done
   for index in "${!stopped[@]}"; do
-    unit="${stopped[$index]}"
-    healthy=0
-    # Two services x 30 x (3s status + 2s HTTP + 2s sleep), within the 600s reserve.
-    for attempt in {1..30}; do
-      if timeout 3 systemctl --user is-active --quiet "$unit" && unit_responds "$unit" "${health_urls[$index]}"; then
-        healthy=1
-        break
+    (
+      trap - EXIT HUP INT TERM
+      unit="${stopped[$index]}"
+      healthy=0
+      # Each service gets 30 bounded probes, in parallel within the 600s reserve.
+      for attempt in {1..30}; do
+        if timeout 3 systemctl --user is-active --quiet "$unit" && unit_responds "$unit" "${health_urls[$index]}"; then
+          healthy=1
+          break
+        fi
+        sleep 2
+      done
+      now=$(date +%s)
+      service_elapsed=$(( now - stop_epochs[index] ))
+      printf 'service\t%s\t%s\t%s\t%s\t%s\n' "$run_id" "$unit" "${stop_epochs[$index]}" "$now" "$service_elapsed" >> "$authorization_log"
+      log_event health "$unit:$healthy downtime_seconds=$service_elapsed"
+      if [[ "$healthy" != 1 ]]; then
+        echo "SERVICE RESTORE FAILED: $unit" >&2
+        exit 1
       fi
-      sleep 2
-    done
-    now=$(date +%s)
-    service_elapsed=$(( now - stop_epochs[index] ))
-    printf 'service\t%s\t%s\t%s\t%s\t%s\n' "$run_id" "$unit" "${stop_epochs[$index]}" "$now" "$service_elapsed" >> "$authorization_log"
-    log_event health "$unit:$healthy downtime_seconds=$service_elapsed"
-    if [[ "$healthy" != 1 ]]; then
-      echo "SERVICE RESTORE FAILED: $unit" >&2
-      rc=1
-    fi
+    ) &
+    health_pids+=("$!")
+  done
+  for pid in ${health_pids[@]+"${health_pids[@]}"}; do
+    wait "$pid" || rc=1
   done
   if (( stop_epoch > 0 )); then
     elapsed=$(( $(date +%s) - stop_epoch ))
