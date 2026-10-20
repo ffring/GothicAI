@@ -246,6 +246,60 @@ def test_reuse_keeps_raw_provenance_without_new_tool_call(tmp_path, fast_filter)
     assert any(path.is_symlink() for path in (new_stage/'sources/raw-sources').rglob('*.png'))
 
 
+@pytest.mark.parametrize('unreachable', [False, True])
+def test_reuse_admits_stored_albedos_against_real_measured_colour(tmp_path, fast_filter, unreachable):
+    from material_colour import _linear, oklab_to_linear
+    texture = 'NW_CITY_HAFENKAI_BODEN_01.TGA'
+    mapping = mapping_with_targets(tmp_path)
+    registry = registry_file(tmp_path, mapping, textures=[texture])
+    old_stage, store, _, _ = source(tmp_path, texture=texture)
+    source(tmp_path, texture=texture, number=2)
+    original = city_set.import_batch(old_stage, registry, textures=[texture], mapping=mapping,
+        bible=BIBLE, source_root=store)[0]
+    original['id'] = original['id'].replace('city-3-', 'city-2-imagegen-', 1)
+    original['parameters']['set'] = 'city-2-imagegen'
+    registry.write_text(json.dumps(original)+'\n')
+    if unreachable:
+        # A selected old output with no RGB signal cannot attain a nonblack
+        # measured target by multiplication, even if older metadata said valid.
+        Image.new('RGB', (16, 16), 'black').save(old_stage/'sources'/original['files']['albedo'])
+    original_bytes = {path: (old_stage/'sources'/path).read_bytes()
+        for path in city_set._map_references(original)}
+    before_registry = registry.read_bytes()
+    destination = tmp_path/'city-3'
+    # MAPPING retains actual target_oklab; the legacy source fixture does not.
+    options = dict(textures=[texture], mapping=MAPPING, bible=BIBLE, source_root=store)
+    if unreachable:
+        with pytest.raises(ValueError, match='reused albedo fails current colour admission'):
+            city_set.reuse(destination, old_stage, registry, **options)
+        assert registry.read_bytes() == before_registry
+    else:
+        reused = city_set.reuse(destination, old_stage, registry, **options)[0]
+        target = oklab_to_linear(reused['parameters']['target_oklab'])
+        with Image.open(old_stage/'sources'/original['files']['albedo']) as image:
+            before = _linear(np.asarray(image.convert('RGB'), dtype=float)/255).mean(axis=(0, 1))
+        assert abs(before-target).max() > .005
+        for selected in (reused, *reused['generation']['attempts']):
+            with Image.open(destination/'sources'/selected['files']['albedo']) as image:
+                actual = _linear(np.asarray(image.convert('RGB'), dtype=float)/255).mean(axis=(0, 1))
+            np.testing.assert_allclose(actual, target, atol=.005)
+            correction = selected.get('brightness_correction', selected.get('generation', {}).get('brightness_correction'))
+            np.testing.assert_allclose(correction['linear_rgb_mean_after'], actual)
+        for old, new in zip(original['generation']['attempts'], reused['generation']['attempts']):
+            assert new['numeric_valid'] and new['numeric_rejection'] is None
+            for field in ('source_png', 'source_sha256', 'prompt', 'utc', 'seconds'):
+                assert new[field] == old[field]
+            assert all(new['files'][name] == old['files'][name] for name in city_set.bakeoff.MAPS if name != 'albedo')
+        assert reused['files'] == reused['generation']['attempts'][1]['files']
+        assert reused['generation']['new_tool_calls'] == 0
+        assert reused['generation']['reused_from'] == original['id']
+        assert city_set.registry_module.source_references(reused) == city_set.registry_module.source_references(original)
+        saved = registry.read_bytes()
+        assert city_set.reuse(destination, old_stage, registry, **options)[0] == reused
+        assert registry.read_bytes() == saved
+    assert all((old_stage/'sources'/path).read_bytes() == value for path, value in original_bytes.items())
+
+
 def test_cli_import_runs_backup_only_after_registry_was_written(tmp_path, fast_filter, monkeypatch):
     mapping = mapping_with_targets(tmp_path)
     registry = registry_file(tmp_path, mapping)

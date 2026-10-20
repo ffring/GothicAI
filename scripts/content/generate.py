@@ -444,6 +444,26 @@ def numeric_rejection(record, correction):
 
 def retain_best_candidate(record):
     """At the limit, visual compromises must still obey numerical limits."""
+    def distance(attempt):
+        import math
+        correction = attempt.get('brightness_correction', {})
+        if 'target_oklab' in record['parameters']:
+            import numpy as np
+            from material_colour import oklab_to_linear
+            after = np.asarray(correction.get('linear_rgb_mean_after', []), dtype=float)
+            if after.shape != (3,) or not np.isfinite(after).all():
+                return math.inf
+            # Rank against the current recipe, just like numerical admission;
+            # cached errors or a legacy luminance target may describe old inputs.
+            target = oklab_to_linear(record['parameters']['target_oklab'])
+            return float(np.max(np.abs(after-target)))
+        after = correction.get('saturation', {}).get('linear_mean_after',
+            correction.get('linear_mean_after'))
+        target = record['parameters'].get('target_luminance', correction.get('target'))
+        if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in (after, target)):
+            return math.inf
+        return abs(after-target)
+
     generation = record['generation']
     series = generation['attempts'][generation.get('series_start', 0):]
     candidates = []
@@ -461,11 +481,6 @@ def retain_best_candidate(record):
         # so a single difficult surface does not stop the rest of the pilot.
         available = [a for a in series if a.get('files')]
         if record['parameters'].get('set') == 'city-2' and available:
-            def distance(attempt):
-                correction = attempt.get('brightness_correction', {})
-                after = correction.get('saturation', {}).get('linear_mean_after',
-                    correction.get('linear_mean_after', 0.))
-                return abs(after-record['parameters']['target_luminance'])
             best = min(available, key=distance)
             select_attempt(record, best, 'Attempt limit reached; best failed candidate retained: '+reason,
                 allow_failed=True)
@@ -476,9 +491,7 @@ def retain_best_candidate(record):
             generation.pop(key, None)
         record['files'] = {}
         return reason
-    best = min(candidates, key=lambda a: abs(
-        a['brightness_correction'].get('saturation', {}).get('linear_mean_after',
-            a['brightness_correction']['linear_mean_after'])-a['brightness_correction']['target']))
+    best = min(candidates, key=distance)
     select_attempt(record, best, 'Attempt limit reached; best numerically valid candidate retained')
     return None
 

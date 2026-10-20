@@ -31,7 +31,7 @@ from import_imagegen import MODEL, _write_immutable
 from pilot import TARGET_LUMINANCE_TOLERANCE, antitile_mode, selected_rows
 import registry as registry_module
 import seam_fix
-from material_colour import colour_target
+from material_colour import colour_target, correct_mean_colour
 
 ROOT = Path(__file__).resolve().parents[2]
 SET = 'city-3'
@@ -508,6 +508,50 @@ def _map_references(value):
             yield from _map_references(child)
 
 
+def _correct_reused_colour(record, sources):
+    """Apply the new mean colour to retained albedos, preserving other maps."""
+    generation, params = record['generation'], record['parameters']
+    corrected = {}
+
+    def correct(files):
+        source = files['albedo']
+        if source not in corrected:
+            with Image.open(sources/source) as image:
+                rgb = np.asarray(image.convert('RGB'), dtype=float)/255
+                alpha = np.asarray(image.getchannel('A')) if 'A' in image.getbands() else None
+            pixels, correction = correct_mean_colour(rgb, params['target_oklab'],
+                mask=alpha >= 128 if alpha is not None else None)
+            if alpha is not None:
+                pixels = np.dstack((pixels, alpha))
+            stream = BytesIO()
+            Image.fromarray(pixels).save(stream, format='PNG')
+            encoded = stream.getvalue()
+            relative = Path(SET)/record['id']/'reuse-colour'/hashlib.sha256(encoded).hexdigest()/'albedo.png'
+            _write_immutable(sources/relative, encoded)
+            correction.update(input=source, output=relative.as_posix(),
+                target=params.get('target_luminance'), range=params['luminance_range'],
+                class_range_advisory=True)
+            corrected[source] = relative.as_posix(), correction
+        output, correction = corrected[source]
+        return dict(files, albedo=output), deepcopy(correction)
+
+    for attempt in generation.get('attempts', []):
+        if not attempt.get('files'):
+            continue
+        attempt['files'], correction = correct(attempt['files'])
+        attempt['brightness_correction'] = correction
+        rejection = generate.numeric_rejection(record, correction)
+        attempt.update(numeric_valid=rejection is None, numeric_rejection=rejection)
+    files, correction = correct(record['files'])
+    rejection = generate.numeric_rejection(record, correction)
+    if rejection is not None:
+        raise ValueError(f'{record["id"]}: reused albedo fails current colour admission: {rejection}')
+    record['files'] = files
+    generation.update(brightness_correction=correction,
+        saturation_correction=deepcopy(correction['saturation']),
+        reuse_colour_correction=deepcopy(correction))
+
+
 def reuse(staging, from_root, registry=registry_module.DEFAULT_REGISTRY, *, textures,
           mapping=ROOT/'data/content/city-materials.csv', bible=ROOT/'docs/content-style.md',
           source_root=registry_module.DEFAULT_SOURCE_ROOT):
@@ -554,6 +598,8 @@ def reuse(staging, from_root, registry=registry_module.DEFAULT_REGISTRY, *, text
             if not retained.is_symlink() or os.readlink(retained) != link:
                 retained.unlink(missing_ok=True)
                 retained.symlink_to(link)
+        if 'target_oklab' in clone['parameters']:
+            _correct_reused_colour(clone, staging/'sources')
         registry_module.validate_entry(clone, content_root=staging/'sources', source_root=source_root)
         imported.append(clone)
     replacements = {record['id']: record for record in imported}
