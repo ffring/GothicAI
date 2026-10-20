@@ -10,6 +10,7 @@ import pytest
 
 from gothic_ai import social
 from gothic_ai.chronicle import Chronicle
+from gothic_ai.crime_react import CrimeReact
 from gothic_ai.crimes import Crimes
 from gothic_ai.deals import Deals
 from gothic_ai.dialogue import DialogueManager
@@ -371,6 +372,7 @@ def _crime_rumors(s: Social, kind: str = "theft", witness: str = HILDA) -> tuple
         describe=lambda f: f"герой совершил {f['kind']} (день {f['day']})",
         learn_side=lambda npc, crime: None,
         excuse=lambda npc, crime: {},
+        react=None,
         cover=True,
         testimony_crimes=lambda f: f.get("crime_told", []),
     )
@@ -437,6 +439,8 @@ def test_justified_murder_upgrades_known_news_and_keeps_its_source_on_reload(gra
     ])
     r.chronicle.on_fact = []
     r.crimes = Crimes(SimpleNamespace(listeners=[]), r.chronicle)
+    r.crimes.people = {p["npc"]: {"guild": p["guild"], "npctype": 0} for p in PEOPLE}
+    CrimeReact(r.crimes.link, r.crimes)
     r._load()
     [rumor] = r.rumors.values()
     notes = []

@@ -551,6 +551,48 @@ async def test_plain_rumor_still_blames_but_an_excused_version_wins_in_either_or
         assert memory_value(system.crimes, STRANGER) == (4, 1)
 
 
+@pytest.mark.parametrize("npc,degree,react,expected", [
+    (HILDA, "seen", True, False),
+    (CITIZEN, "heard", True, False),
+    (GUARD, "heard", True, False),
+    (STRANGER, "heard", True, True),
+    (STRANGER, "heard", False, False),
+])
+async def test_justified_version_only_upgrades_a_known_strangers_heard_murder(
+    system, monkeypatch, npc, degree, react, expected,
+):
+    crime = ally_murder(system, victim_guild=3)
+    rumors = crime_rumors(system)
+    [rumor] = rumors.rumors.values()
+    if degree == "heard":
+        rumors._learn(rumor, npc, HILDA, RUMOR_AT, "met")
+    assert system.crimes.known(npc)[0].degree == degree
+    assert CAVALORN in rumor.known and npc in rumor.known
+    if not react:
+        system.crimes.react = None
+    monkeypatch.setattr("gothic_ai.social.P_MEET", 1.0)
+    rumors.clock = RUMOR_AT + 1
+    rumors.social.ties = {CAVALORN: {npc: SimpleNamespace()}}
+    staged = []
+    rumors.stage = lambda r, teller, listener: staged.append((teller, listener))
+    facts, tells, known = system.chronicle.facts("rumor"), dict(rumors.tells), dict(rumor.known)
+    assert rumors._passes(rumor, CAVALORN, npc, rumors.clock, True) is expected
+    assert rumors.offer_status(rumor, CAVALORN, npc) == ("told" if expected else "no")
+    if expected:
+        assert staged == [(CAVALORN, npc)]
+        assert len(system.chronicle.facts("rumor")) == len(facts) + 1
+        [knowledge] = system.crimes.known(npc)
+        assert (knowledge.excuse, knowledge.excuse_by) == ("fought", CAVALORN)
+        assert system.react.role(npc, crime) == "ally"
+        assert rumors.tells[rumor.key, CAVALORN, RUMOR_AT // (24 * 60)] == 1
+    else:
+        assert staged == []
+        assert system.chronicle.facts("rumor") == facts
+        assert dict(rumors.tells) == tells
+        assert rumor.known == known
+        assert not system.crimes.known(npc)[0].excuse
+
+
 @pytest.mark.parametrize("courage", [2, 3])
 async def test_later_excused_version_stops_existing_flight_or_refusal(system, courage):
     crime = ally_murder(system)

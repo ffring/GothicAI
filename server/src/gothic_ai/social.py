@@ -483,6 +483,9 @@ class Rumors:
         return listener not in r.known or bool(
             self.crimes is not None and r.is_player and r.crime
             and (crime := self.crimes.crime(r.crime)) is not None and crime.get("kind") == "murder"
+            and self.crimes.react is not None
+            and self.crimes.react.base_role(listener, crime) == "stranger"
+            and any(k.crime["id"] == r.crime and k.degree == "heard" for k in self.crimes.known(listener))
             and not self.crimes.excuse(listener, r.crime)
             and self.crimes.excuse(teller, r.crime)
         )
