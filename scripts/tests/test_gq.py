@@ -133,10 +133,11 @@ def queue(gq, host, monkeypatch):
 
 def spec(kind="quick", *, owner="session-a", threads=4, mem=GIB,
          gpu_mem=0, display=False, display_shared=False, display_exclusive=False,
-         maximum=60, name="test", command=None):
+         interactive=False, maximum=60, name="test", command=None):
     return {"class": kind, "threads": threads, "mem": mem,
             "gpu_mem": gpu_mem, "display": display, "display_shared": display_shared,
             "display_exclusive": display_exclusive,
+            "interactive": interactive,
             "max": maximum,
             "name": name, "command": command or ["true"], "owner": owner}
 
@@ -156,6 +157,62 @@ def test_quick_runs_with_batch_even_when_all_batch_threads_are_claimed(queue):
     batch = start(queue, "batch", threads=28, mem=16 * GIB)
     quick = start(queue, threads=4, mem=4 * GIB)
     assert queue.get(batch)["status"] == queue.get(quick)["status"] == "running"
+
+
+def test_interactive_does_not_wait_for_background_memory_or_gpu(queue):
+    batch = start(queue, "batch", threads=28, mem=20 * GIB, gpu_mem=10 * GIB)
+    player = start(queue, threads=8, mem=8 * GIB, gpu_mem=3 * GIB,
+                   display_exclusive=True, interactive=True, maximum=6 * 3600)
+    assert queue.get(batch)["status"] == queue.get(player)["status"] == "running"
+    ordinary = enqueue(queue)
+    queue.tick()
+    assert queue.get(ordinary)["status"] == "queued"
+
+
+@pytest.mark.parametrize("quiet_active", [False, True])
+def test_interactive_bypasses_quiet_and_legacy_without_admitting_other_games(
+        queue, monkeypatch, quiet_active):
+    quiet = start(queue, "quiet") if quiet_active else enqueue(queue, "quiet")
+    earlier_game = enqueue(queue, display_shared=True, display=True)
+    player = enqueue(queue, display_exclusive=True, interactive=True)
+
+    @contextmanager
+    def unavailable_legacy(*_args):
+        yield False
+
+    monkeypatch.setattr(queue, "legacy_probe", unavailable_legacy)
+    monkeypatch.setattr(queue, "legacy_waiting", lambda: True)
+    queue.tick()
+    assert queue.get(player)["status"] == "running"
+    assert queue.get(earlier_game)["status"] == "queued"
+    assert queue.get(quiet)["status"] == ("running" if quiet_active else "queued")
+
+
+def test_interactive_waits_for_active_games_and_blocks_all_new_windows(queue):
+    active = start(queue, display_shared=True, display=True)
+    earlier_game = enqueue(queue, "quiet", display_shared=True, display=True)
+    player = enqueue(queue, display_exclusive=True, interactive=True)
+    later_game = enqueue(queue, display_shared=True, display=True)
+    queue.tick()
+    assert all(queue.get(ident)["status"] == "queued"
+               for ident in (earlier_game, player, later_game))
+    queue.finish(active, "success")
+    queue.tick()
+    assert queue.get(player)["status"] == "running"
+    assert all(queue.get(ident)["status"] == "queued" for ident in (earlier_game, later_game))
+    queue.finish(player, "success")
+    queue.tick()
+    assert queue.get(earlier_game)["status"] == "running"
+
+
+@pytest.mark.parametrize("overrides", [
+    {"display_exclusive": False}, {"kind": "batch"}, {"kind": "quiet"},
+    {"maximum": 6 * 3600 + 1},
+])
+def test_interactive_rejects_other_classes_shared_windows_and_long_runtime(queue, gq, overrides):
+    request = {"display_exclusive": True, "interactive": True, **overrides}
+    with pytest.raises(gq.QueueError, match="interactive"):
+        queue.submit(spec(**request))
 
 
 @pytest.mark.parametrize("resource", ["mem", "gpu_mem"])
@@ -774,6 +831,49 @@ def test_systemd_launch_sets_affinity_limits_runtime_and_stop_callback(gq, host,
     assert "_finish" in properties["ExecStopPost"] and ident in properties["ExecStopPost"]
     assert properties["StandardOutput"] == f"append:{q.home}/logs/{ident}.log"
     assert "_execute" in arguments and arguments[-1] == ident
+
+
+def test_cli_interactive_uses_live_cpu_weight_and_exact_six_hour_limit(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    monkeypatch.setattr(gq, "Queue", lambda: q)
+    monkeypatch.setattr(gq, "wait_job", lambda *_args, **_kwargs: 0)
+    assert gq.main(["run", "--class", "quick", "--threads", "8", "--mem", "8G",
+                    "--gpu-mem", "3G", "--display-exclusive", "--interactive", "--max", "6h",
+                    "--name", "Gothic AI", "--", "true"]) == 0
+    q.tick()
+    player, = q.jobs()
+    assert player["interactive"] and player["display"] and player["display_exclusive"]
+    properties = dict(value.removeprefix("--property=").split("=", 1)
+                      for value in calls(host, "systemd-run")[0] if value.startswith("--property="))
+    assert properties["CPUWeight"] == "1000"
+    assert properties["CPUAffinity"] == "2-15 18-31"
+    assert properties["MemoryMax"] == str(8 * GIB)
+    assert properties["RuntimeMaxSec"] == "21600s"
+
+
+def test_interactive_execute_starts_with_background_exclusive_legacy_lock(gq, host, monkeypatch):
+    q = make_queue(gq, host, monkeypatch)
+    marker = host["home"].parent / "interactive-started"
+    ident = q.submit(spec(display_exclusive=True, interactive=True, command=[
+        sys.executable, "-c", "from pathlib import Path; import sys; Path(sys.argv[1]).touch()", str(marker)]))
+    with host["legacy"].open("a+") as background:
+        fcntl.flock(background, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        q.tick()
+        assert q.get(ident)["status"] == "starting"
+        assert gq.execute(q, ident) == 0
+        assert marker.exists()
+
+
+def test_interactive_wait_reports_current_window_owners(queue, gq, monkeypatch, capsys):
+    game = start(queue, name="e2e stage", owner="other-session", display=True)
+    start(queue, "batch", name="background-training")
+    player = enqueue(queue, interactive=True, display_exclusive=True)
+    monkeypatch.setattr(gq.time, "sleep", lambda _seconds: queue.cancel(player, "session-a"))
+    assert gq.wait_job(queue, player) == 143
+    report = capsys.readouterr().err
+    assert "ждём игры" in report
+    assert game in report and "other-session" in report and "e2e stage" in report
+    assert "background-training" not in report
 
 
 def test_starting_units_reserve_slots_and_receive_their_slot_environment(gq, host, monkeypatch):
