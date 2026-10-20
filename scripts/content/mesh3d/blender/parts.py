@@ -20,10 +20,13 @@ X, Y, Z = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))
 
 def load_goal(cfg):
     """The config's target, its zone keys and its bbox in Blender axes (glTF X, -Z, Y)."""
-    repo = Path(__file__).resolve().parents[4]
-    targets = json.loads(Path(cfg.get("target", repo / "data/content/mesh3d-pilot.json")).read_text())
-    targets = targets["targets"] if isinstance(targets, dict) else targets
-    goal = next(t for t in targets if t["id"] == cfg["id"])
+    if "goal" in cfg:  # a target measured outside the pilot set, written into the config
+        goal = cfg["goal"]
+    else:
+        repo = Path(__file__).resolve().parents[4]
+        targets = json.loads(Path(cfg.get("target", repo / "data/content/mesh3d-pilot.json")).read_text())
+        targets = targets["targets"] if isinstance(targets, dict) else targets
+        goal = next(t for t in targets if t["id"] == cfg["id"])
     if "zones" in cfg:  # the original's intent can differ from the pilot's guessed zones (stone, not wood)
         goal = {**goal, "zones": cfg["zones"]}
     gmin, gmax = np.array(goal["bbox_min"]), np.array(goal["bbox_max"])
@@ -162,40 +165,60 @@ class Parts:
         for i in range(3):
             self.poly((base[i], base[(i + 1) % 3], tip), material, [(0, 0), (radius, 0), (radius / 2, height)])
 
-    def finish(self, goal, out, lo, hi, extra=None):
-        """Triangulate, export model.glb with zone materials and "_part", write metrics.json."""
+    def to_object(self, goal, name):
+        """Triangulate into a new object with zone materials and "_part"; returns (object, open edges)."""
         bm = self.bm
         bmesh.ops.triangulate(bm, faces=bm.faces)
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         open_edges = sum(1 for e in bm.edges if not e.is_manifold)
-        mesh = bpy.data.meshes.new(goal["id"])
+        mesh = bpy.data.meshes.new(name)
         bm.to_mesh(mesh)
         bm.free()
         mesh.validate()
         mesh.update()
-        part_attr = mesh.attributes.get("_part")
         for zone in goal["zones"]:
-            mat = bpy.data.materials.new(zone["key"])
-            mat["group"] = zone["group"]
+            mat = bpy.data.materials.get(zone["key"])
+            if mat is None:
+                mat = bpy.data.materials.new(zone["key"])
+                mat["group"] = zone["group"]
             mesh.materials.append(mat)
         mesh.shade_smooth()
         mesh.set_sharp_from_angle(angle=math.radians(30))
-        obj = bpy.data.objects.new(goal["id"], mesh)
+        obj = bpy.data.objects.new(name, mesh)
         bpy.context.scene.collection.objects.link(obj)
-        for o in list(bpy.context.scene.objects):
-            o.select_set(o == obj)
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.export_scene.gltf(filepath=str(out / "model.glb"), export_format="GLB", use_selection=True,
-                                  export_apply=True, export_yup=True, export_extras=True, export_normals=True,
-                                  export_texcoords=True, export_animations=False, export_attributes=True)
-        blo = np.min([c[:] for c in obj.bound_box], axis=0)
-        bhi = np.max([c[:] for c in obj.bound_box], axis=0)
-        metrics = {"triangles": len(mesh.polygons), "budget": goal["budget_tris"],
-                   "open_edges": open_edges, "open_edges_expected": 3 * self.nails,
-                   "parts": self.parts, "has_part_attribute": part_attr is not None,
-                   "bbox_delta_min_m": (blo - np.array(lo)).round(4).tolist(),
-                   "bbox_delta_max_m": (bhi - np.array(hi)).round(4).tolist(),
-                   "blender_version": bpy.app.version_string, **(extra or {})}
-        (out / "metrics.json").write_text(json.dumps(metrics, indent=2))
-        print("BUILT", json.dumps(metrics))
-        return metrics
+        return obj, open_edges
+
+    def finish(self, goal, out, lo, hi, extra=None):
+        """Triangulate, export model.glb with zone materials and "_part", write metrics.json."""
+        return finish_nodes(goal, out, lo, hi, [(goal["id"], self)], extra)
+
+
+def finish_nodes(goal, out, lo, hi, nodes, extra=None):
+    """Export one GLB node per (name, Parts): a model with several attachments (a chest body and
+    its lid) keeps each attachment's node name. Part numbers must not repeat across the nodes."""
+    objects, open_edges, nails, parts = [], 0, 0, 0
+    for name, P in nodes:
+        obj, edges = P.to_object(goal, name)
+        objects.append(obj)
+        open_edges += edges
+        nails += P.nails
+        parts = max(parts, P.parts)
+    for o in list(bpy.context.scene.objects):
+        o.select_set(o in objects)
+    bpy.context.view_layer.objects.active = objects[0]
+    bpy.ops.export_scene.gltf(filepath=str(out / "model.glb"), export_format="GLB", use_selection=True,
+                              export_apply=True, export_yup=True, export_extras=True, export_normals=True,
+                              export_texcoords=True, export_animations=False, export_attributes=True)
+    corners = np.array([o.matrix_world @ Vector(c) for o in objects for c in o.bound_box])
+    blo, bhi = corners.min(axis=0), corners.max(axis=0)
+    metrics = {"triangles": sum(len(o.data.polygons) for o in objects), "budget": goal["budget_tris"],
+               "open_edges": open_edges, "open_edges_expected": 3 * nails,
+               "parts": parts, "has_part_attribute": all(o.data.attributes.get("_part") is not None for o in objects),
+               "bbox_delta_min_m": (blo - np.array(lo)).round(4).tolist(),
+               "bbox_delta_max_m": (bhi - np.array(hi)).round(4).tolist(),
+               "blender_version": bpy.app.version_string, **(extra or {})}
+    if len(nodes) > 1:
+        metrics["nodes"] = {o.name: len(o.data.polygons) for o in objects}
+    (out / "metrics.json").write_text(json.dumps(metrics, indent=2))
+    print("BUILT", json.dumps(metrics))
+    return metrics

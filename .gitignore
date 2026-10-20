@@ -27,6 +27,7 @@ data/
 !/data/content/mesh3d-market.json
 !/data/content/quality-pilot.jsonl
 !/data/content/quality-pilot-2.jsonl
+!/data/content/quality-pilot-3.jsonl
 !/data/content/city-materials.csv
 !OpenGothic/data/
 

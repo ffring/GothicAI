@@ -68,7 +68,7 @@ def check(directory, scenario, material_index):
     print(f"{directory.name}: shots={len(shots)} materials={len(index)} pilot_replaced={len(targets & replaced)} pilot_originals={len(targets & opened)}")
 
 
-def compose(captures, output, iteration2=False):
+def compose(captures, output, iteration2=False, iteration3=False):
     from PIL import Image, ImageDraw, ImageFont
     output.mkdir(parents=True, exist_ok=True)
     try:
@@ -80,6 +80,9 @@ def compose(captures, output, iteration2=False):
     if iteration2:
         variants = ("original", "city-3", "pilot-b", "pilot-2")
         labels = ("original", "city-3", "iteration 1 B", "iteration 2")
+    if iteration3:
+        variants = ("original", "pilot-2", "pilot-3a", "pilot-3b")
+        labels = ("original", "iteration 2", "iteration 3a", "iteration 3b")
     for spot in SPOTS:
         panels = []
         for variant in variants:
@@ -142,9 +145,10 @@ def detail(captures, output, variants):
 if __name__ == "__main__":
     if len(sys.argv) == 5 and sys.argv[1] == "check":
         check(*map(Path, sys.argv[2:]))
-    elif len(sys.argv) == 4 and sys.argv[1] in ("compose", "compose-2"):
-        compose(*map(Path, sys.argv[2:]), iteration2=sys.argv[1] == "compose-2")
+    elif len(sys.argv) == 4 and sys.argv[1] in ("compose", "compose-2", "compose-3"):
+        compose(*map(Path, sys.argv[2:]), iteration2=sys.argv[1] == "compose-2",
+                iteration3=sys.argv[1] == "compose-3")
     elif len(sys.argv) >= 5 and sys.argv[1] == "detail":
         detail(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4:])
     else:
-        raise SystemExit("usage: capture-quality-pilot.py check DIRECTORY SCENARIO INDEX | compose|compose-2 CAPTURES OUTPUT | detail CAPTURES OUTPUT.csv VARIANT...")
+        raise SystemExit("usage: capture-quality-pilot.py check DIRECTORY SCENARIO INDEX | compose|compose-2|compose-3 CAPTURES OUTPUT | detail CAPTURES OUTPUT.csv VARIANT...")
