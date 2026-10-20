@@ -10,7 +10,7 @@ config: {"glb": model with tile UVs in metres and zone-key materials (barrel.py)
          "sectors": 20, "tone_spread": 0.28, "light_part": [index, gain],
          "edge_radius": 0.006, "wet_height": 0.18, "algae": 0.7, "bleach": 0.35,
          "planks_per_tile": {KEY: n}, "seam_width": 0.07, "seam_dark": 0.75, "contrast": {KEY: gamma},
-         "nodes": [NODE NAME, ...]}
+         "nodes": [NODE NAME, ...], "tile_normal": {KEY: strength}, "edge_wear": {KEY: share}}
 The tiling materials are sampled through the tile UVs and baked into a new atlas
 UV: per-part tone (the builder's "_part" attribute when present, otherwise
 angular sectors around the axis and lid planks along X), dark seams where a part's tile plank ends, worn light edges from the Bevel
@@ -20,6 +20,13 @@ original reads by painted contrast, not by a brighter mean.
 Writes atlas PNGs, model.glb with the atlas as its only UV map, metrics.json.
 With "nodes" (a MOB with several attachments, chest.py) the GLB's objects are
 baked into one atlas together and exported again as those named nodes.
+The stage-1 filter (bakeoff.filtered_maps) stretches every tile's relief to the full
+range: a wood tile's normal leans 38 degrees on average, canvas 64, where real grain is a
+few. Baked at full strength the wood read in game as an embossed imitation and cloth as
+a hard, sparkling surface (user, 2026-10-20). So each tile's normal map is baked at a
+strength by its material: cloth x0.12, our own gentle procedural tiles (glass, wax, bone)
+x1, everything else x0.25; "tile_normal" overrides it per zone. Cloth, rope and fur get
+no worn light edges ("edge_wear", default 0.7 of the Bevel edge mask).
 """
 import json
 import math
@@ -38,6 +45,27 @@ staging = Path.home() / ".local/share/gothic-ai/content-staging"
 size = cfg.get("size", 1024)
 rng = np.random.default_rng(cfg.get("seed", 1))
 metal_keys = set(cfg.get("metal", []))
+CLOTH_WORDS = ("CLOTH", "CANVAS", "SACKING", "CARPET")
+GENTLE_WORDS = ("GLASS", "WAX", "BONE")      # own procedural tiles with real, weak relief
+NO_WEAR_WORDS = CLOTH_WORDS + ("ROPE", "FUR")
+
+
+def tile_normal(key):
+    """Strength of a zone's tile normal map in the bake."""
+    if key in cfg.get("tile_normal", {}):
+        return cfg["tile_normal"][key]
+    if any(w in key for w in CLOTH_WORDS):
+        return 0.12
+    if any(w in key for w in GENTLE_WORDS):
+        return 1.0
+    return 0.25
+
+
+def edge_wear(key):
+    """Share of the Bevel edge mask that lightens a non-metal zone's edges (worn wood)."""
+    if key in cfg.get("edge_wear", {}):
+        return cfg["edge_wear"][key]
+    return 0.0 if any(w in key for w in NO_WEAR_WORDS) else 0.7
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
@@ -231,7 +259,7 @@ for slot in obj.material_slots:
                               math_node(nodes, links, "MULTIPLY", edge, 0.5)), clamp=True)
     else:
         worn = mix(nodes, links, 1.0, colour, (2.2, 2.05, 1.85, 1.0), "MULTIPLY")
-        colour = mix(nodes, links, math_node(nodes, links, "MULTIPLY", edge, 0.7), colour, worn)
+        colour = mix(nodes, links, math_node(nodes, links, "MULTIPLY", edge, edge_wear(key)), colour, worn)
         bleached = mix(nodes, links, 1.0, grey.outputs[0], (1.45, 1.4, 1.32, 1.0), "MULTIPLY")
         colour = mix(nodes, links, math_node(nodes, links, "MULTIPLY", up, cfg.get("bleach", 0.35)), colour, bleached)
         rough_out = rough
@@ -240,6 +268,7 @@ for slot in obj.material_slots:
     colour = mix(nodes, links, math_node(nodes, links, "MULTIPLY", algae, cfg.get("algae", 0.7)), colour, (0.010, 0.016, 0.006, 1.0))
 
     nmap = node(nodes, "ShaderNodeNormalMap", uv_map="Tile")
+    nmap.inputs["Strength"].default_value = tile_normal(key)
     links.new(normal_tex, nmap.inputs["Color"])
     bevel_n = node(nodes, "ShaderNodeBevel", samples=8)
     bevel_n.inputs["Radius"].default_value = cfg.get("edge_radius", 0.006)
@@ -319,7 +348,8 @@ for index, key in enumerate(keys):
     gain = np.array(targets[key]) / np.maximum(mean, 1e-6)
     albedo[sel] *= gain
     report[key] = {"pixels": int(measured.sum()), "contrast": gamma, "mean_before": mean.round(5).tolist(),
-                   "gain": gain.round(3).tolist(), "target": targets[key]}
+                   "gain": gain.round(3).tolist(), "target": targets[key],
+                   "tile_normal": tile_normal(key), "edge_wear": edge_wear(key) if key not in metal_keys else None}
 albedo = np.clip(albedo, 0, 1)
 
 
