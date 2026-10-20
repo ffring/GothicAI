@@ -22,9 +22,7 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
     // Our colour also determines alpha classification; consulting the original
     // texture format here would open an asset that this record replaces.
     if(maps.hasAlbedo) {
-      tex = maps.albedo!=nullptr ? maps.albedo : &Resources::fallbackTexture();
-      if(maps.albedo!=nullptr)
-        Resources::materialAlbedoReplaced(m.texture);
+      tex = Resources::loadMaterialAlbedo(m.texture);
       }
     }
   if(tex==nullptr)
@@ -109,6 +107,12 @@ bool Material::operator ==(const Material& other) const {
 
 bool Material::isSolid() const {
   return !isGhost && (alpha==Material::Solid || alpha==Material::AlphaTest);
+  }
+
+void Material::setAlbedo(const Tempest::Texture2d* texture) {
+  tex = texture;
+  if(alpha==Solid || alpha==AlphaTest)
+    alpha = loadAlphaFunc(zenkit::AlphaFunction::NONE,zenkit::MaterialGroup::UNDEFINED,255,tex,true);
   }
 
 bool Material::isForwardShading(AlphaFunc alpha) {

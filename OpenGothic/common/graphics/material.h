@@ -50,6 +50,7 @@ class Material final {
     bool operator == (const Material& other) const;
 
     bool isSolid() const;
+    void setAlbedo(const Tempest::Texture2d* texture);
 
     bool hasMaterialMaps()       const { return materialMaps; }
     bool hasFrameAnimation()     const { return !frames.empty() && texAniFPSInv!=0;    }
