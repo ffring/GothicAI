@@ -46,6 +46,7 @@ def dataset(tmp_path):
         "target_period_u_m": "0.62625", "target_period_v_m": "1.2525",
         "target_direction": "none", "target_direction_confidence": "0.1",
         "target_oklab_l": "0.5", "target_oklab_a": "-0.02", "target_oklab_b": "0.03",
+        **dict.fromkeys(mapping.COUNT_FIELDS, ""),
     } for row in source]
     rows[-4].update(decision="module", **{"class": "timber_frame_tile", "scale": "1", "anti_repeat": "off"})
     rows[-3].update(decision="panel", **{"class": "plaster_panel", "scale": "1",
@@ -156,6 +157,89 @@ def test_census_scope_is_fixed_and_unique(dataset, change, message):
         source.append(deepcopy(source[0]))
     save()
     with pytest.raises(mapping.MappingError, match=message):
+        mapping.check_mapping(mapping_path, census_path)
+
+
+def test_market_wall_scope_admits_exactly_seven_known_misc_textures(dataset):
+    source, rows, census_path, mapping_path, save = dataset
+    for texture in sorted(mapping.MISC_TEXTURES):
+        source.append(dict(source[0], texture=texture))
+        rows.append(dict(rows[0], texture=texture))
+    source.append(dict(source[0], texture="NW_MISC_STRONG_STONEWALL_HOLE_01.TGA"))
+    save()
+    assert len(mapping.check_mapping(mapping_path, census_path)) == 78
+    source.pop(-2)
+    save()
+    with pytest.raises(mapping.MappingError, match="missing market/wall textures"):
+        mapping.check_mapping(mapping_path, census_path)
+
+
+def visual_counts(row):
+    row.update(count_u="8", count_v="4", counted="stone blocks", count_direction="U",
+        parts="", uv_m_u="4", uv_m_v="3", element_cm_u="50", element_cm_v="75")
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("count_u", "0", "count_u"), ("count_u", "NaN", "count_u"),
+    ("count_v", "2.5", "count_v must be a whole number"),
+    ("counted", "", "counted must be nonempty"),
+    ("count_direction", "horizontal", "count_direction"),
+    ("uv_m_u", "", "uv_m_u"), ("uv_m_v", "Infinity", "uv_m_v"),
+    ("element_cm_u", "", "element_cm_u"),
+    ("element_cm_v", "74", "stale element_cm_v"),
+])
+def test_visual_counts_validate_measured_sizes(dataset, field, value, message):
+    _, rows, census_path, mapping_path, save = dataset
+    visual_counts(rows[0])
+    rows[0][field] = value
+    save()
+    with pytest.raises(mapping.MappingError, match=message):
+        mapping.check_mapping(mapping_path, census_path)
+
+
+def test_nonrepeating_axis_keeps_count_and_size_empty(dataset):
+    _, rows, census_path, mapping_path, save = dataset
+    visual_counts(rows[0])
+    rows[0].update(count_u="", element_cm_u="")
+    save()
+    mapping.check_mapping(mapping_path, census_path)
+    rows[0]["element_cm_u"] = "50"
+    save()
+    with pytest.raises(mapping.MappingError, match="empty count_u requires empty element_cm_u"):
+        mapping.check_mapping(mapping_path, census_path)
+
+
+@pytest.mark.parametrize("index", [-4, -3, -2])
+def test_composite_visual_counts_require_parts(dataset, index):
+    _, rows, census_path, mapping_path, save = dataset
+    visual_counts(rows[index])
+    save()
+    with pytest.raises(mapping.MappingError, match="requires nonempty parts"):
+        mapping.check_mapping(mapping_path, census_path)
+    rows[index]["parts"] = "left and right posts; top and bottom rails"
+    save()
+    mapping.check_mapping(mapping_path, census_path)
+
+
+def test_pilot_half_count_and_visual_measurements_survive_census_update(dataset):
+    source, rows, census_path, mapping_path, save = dataset
+    source[0]["texture"] = rows[0]["texture"] = "NW_HARBOUR_STAIRS_01.TGA"
+    visual_counts(rows[0])
+    rows[0].update(count_u="2.5", element_cm_u="160")
+    before = {field: rows[0][field] for field in mapping.COUNT_FIELDS}
+    source[0]["uv_m_per_unit_median"] = "6"
+    save()
+    updated = mapping.update_mapping(mapping_path, census_path)
+    assert {field: updated[0][field] for field in mapping.COUNT_FIELDS} == before
+
+
+@pytest.mark.parametrize("index,material", [(-1, ""), (-3, "iron_panel")])
+def test_exclude_and_cannon_targets_keep_visual_count_fields_empty(dataset, index, material):
+    _, rows, census_path, mapping_path, save = dataset
+    visual_counts(rows[index])
+    rows[index]["class"] = material
+    save()
+    with pytest.raises(mapping.MappingError, match="requires empty count fields"):
         mapping.check_mapping(mapping_path, census_path)
 
 
@@ -361,6 +445,14 @@ def test_legacy_header_without_coverage_remains_readable(dataset):
     _, rows, census_path, mapping_path, _ = dataset
     legacy = [{field: row[field] for field in mapping.FIELDS[:-1]} for row in rows]
     write_csv(mapping_path, mapping.FIELDS[:-1], legacy)
+    assert mapping.check_mapping(mapping_path, census_path) == rows
+
+
+@pytest.mark.parametrize("header", [mapping.MEASURED_FIELDS, mapping.MEASURED_FIELDS[:-1]])
+def test_legacy_header_without_visual_counts_remains_readable(dataset, header):
+    _, rows, census_path, mapping_path, _ = dataset
+    legacy = [{field: row[field] for field in header} for row in rows]
+    write_csv(mapping_path, header, legacy)
     assert mapping.check_mapping(mapping_path, census_path) == rows
 
 

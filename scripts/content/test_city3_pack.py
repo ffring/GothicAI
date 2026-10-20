@@ -18,6 +18,7 @@ def test_city3_scope_has_58_unique_materials_and_preserves_csv_order():
     selected = selected_rows(rows, "city-3")
     assert len(selected) == len({row["texture"] for row in selected}) == 58
     assert selected == [row for row in rows if row["decision"] in CITY_3_DECISIONS
+                        and not row["texture"].startswith("NW_MISC_")
                         and row["class"] not in CITY_3_EXCLUDED_CLASSES]
     assert {row["decision"] for row in selected} == CITY_3_DECISIONS
     assert not {row["class"] for row in selected} & CITY_3_EXCLUDED_CLASSES

@@ -70,7 +70,8 @@ def small_set(tmp_path):
 
 def test_entire_city_table_packs_to_one_root_with_csv_scales(tmp_path):
     with packer.DEFAULT_MAPPING.open() as stream:
-        rows = [row for row in csv.DictReader(stream) if row["decision"] == "include"]
+        rows = [row for row in csv.DictReader(stream) if row["decision"] == "include"
+                and not row["texture"].startswith("NW_MISC_")]
     root, records, mapping = fixture_records(tmp_path, rows)
     selected = packer.select_set_records(records, "city-1", mapping)
     output = packer.pack_set(selected, root, tmp_path / "content-staging/city-1")

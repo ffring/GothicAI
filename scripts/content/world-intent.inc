@@ -10,7 +10,13 @@ constexpr double intentStripAspect=4;
 constexpr double intentPlaceRadius=1000; // cm, a local ten-metre concentration
 
 bool cityTexture(const std::string& name) {
-  return name.rfind("NW_CITY_",0)==0 || name.rfind("NW_HARBOUR_",0)==0;
+  constexpr std::array<const char*,7> cityMiscTextures={
+    "NW_MISC_STRONG_STONEWALL_01.TGA","NW_MISC_STRONG_STONEWALL_SIDE_01.TGA",
+    "NW_MISC_STRONG_STONEWALL_ENTRANCE_01.TGA","NW_MISC_STRONG_STONEWALL_BLOCKBORDER_01.TGA",
+    "NW_MISC_STRONG_STONEWALL_ROUNDBORDER_01.TGA","NW_MISC_OLDSTONEPATH_01.TGA",
+    "NW_MISC_OLDSTONEPATH_WAY_01.TGA"};
+  return name.rfind("NW_CITY_",0)==0 || name.rfind("NW_HARBOUR_",0)==0 ||
+    std::find(cityMiscTextures.begin(),cityMiscTextures.end(),name)!=cityMiscTextures.end();
 }
 double dot(Point a,Point b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
 Point cross(Point a,Point b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x}; }

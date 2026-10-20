@@ -30,6 +30,13 @@ def test_city2_sets_add_facade_rows_and_preserve_csv_order():
         selected_rows(rows + [rows[0]], "city-2")
 
 
+@pytest.mark.parametrize("set_name", ["city-1", "city-2", "city-2-imagegen", "city-3"])
+def test_preparation_misc_rows_do_not_expand_existing_sets(set_name):
+    city = {"texture": "NW_CITY_ROOF_01.TGA", "decision": "include", "class": "roof_shingle"}
+    market = {"texture": "NW_MISC_OLDSTONEPATH_01.TGA", "decision": "include", "class": "flagstone"}
+    assert selected_rows([city, market], set_name) == [city]
+
+
 def test_include_class_policy_applies_and_architecture_disables_antitile():
     assert antitile_mode({"decision": "include", "class": "planks_wall", "anti_repeat": "off"}) == "offset"
     assert antitile_mode({"decision": "include", "class": "flagstone", "anti_repeat": "on"}) == "rotate"
