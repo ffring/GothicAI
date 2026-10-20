@@ -1,10 +1,13 @@
 #include "commandline.h"
 #include "gltfmesh.h"
+#include "graphics/shaders.h"
 #include "graphics/mesh/protomesh.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/mesh/submesh/pfxemittermesh.h"
 #include "resources.h"
 
+#include <Tempest/Device>
+#include <Tempest/VulkanApi>
 #include <zenkit/Stream.hh>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
@@ -560,6 +563,132 @@ void indexCases(const Fixture& fixture) {
   fixture.index(R"({"invalid":{"glb":"../escape.glb"},"oWn_MeSh":{"glb":"test/own.glb"}})");
   resourcePaths(fixture,true);
   }
+
+void alphaDdsFile(const std::filesystem::path& path, bool transparentBc1, bool dxt5 = false) {
+  std::array<uint8_t,144> bytes{};
+  auto field = [&](size_t at, uint32_t value) {
+    for(size_t i=0;i<4;++i)
+      bytes[at*4+i] = uint8_t(value>>(i*8));
+    };
+  field(0,0x20534444); // DDS
+  field(1,124);
+  field(2,0x81007);
+  field(3,4);
+  field(4,4);
+  field(5,dxt5 ? 16 : 8);
+  field(7,1);
+  field(19,32);
+  field(20,4);
+  field(21,dxt5 ? 0x35545844 : 0x31545844); // DXT5 / DXT1
+  field(27,0x1000);
+  if(dxt5) {
+    bytes[128] = 255; // Opaque alpha endpoint, all alpha indices zero.
+    bytes[136] = 255;
+    bytes[137] = 255;
+    }
+  else if(transparentBc1) {
+    bytes[130] = 255; // c0=0 <= c1=65535 selects BC1's three-colour mode.
+    bytes[131] = 255;
+    bytes[132] = 3;   // Pixel 0 uses transparent palette entry 3; pixel 1 uses opaque 0.
+    const uint16_t c0 = uint16_t(uint16_t(bytes[128]) | uint16_t(uint16_t(bytes[129])<<8));
+    const uint16_t c1 = uint16_t(uint16_t(bytes[130]) | uint16_t(uint16_t(bytes[131])<<8));
+    require(c0<=c1 && (bytes[132]&3u)==3u && ((bytes[132]>>2)&3u)==0u,
+            "BC1 fixture must contain both transparent and visible texels");
+    }
+  else {
+    bytes[128] = 255; // c0 > c1, opaque four-colour block.
+    bytes[129] = 255;
+    }
+  std::ofstream out(path,std::ios::binary);
+  out.write(reinterpret_cast<const char*>(bytes.data()),dxt5 ? 144 : 136);
+  if(!out)
+    throw std::runtime_error("unable to write mesh alpha DDS fixture");
+  }
+
+void maskBc1Policy(const Fixture& fixture) {
+  std::filesystem::create_directories(fixture.root/"materials");
+  alphaDdsFile(fixture.root/"materials/transparent-bc1.dds",true);
+  alphaDdsFile(fixture.root/"materials/opaque-bc1.dds",false);
+  alphaDdsFile(fixture.root/"materials/opaque-bc3.dds",false,true);
+  textFile(fixture.root/"materials/materials.json",R"({
+    "OWN_TEST_BARREL_WOOD.TGA":{"albedo":"transparent-bc1.dds"},
+    "ORIGINAL.TGA":{"albedo":"transparent-bc1.dds"},
+    "OPAQUE_BC1.TGA":{"albedo":"opaque-bc1.dds"},
+    "OPAQUE_BC3.TGA":{"albedo":"opaque-bc3.dds"}
+  })");
+  GlbOptions options;
+  options.alpha = "MASK";
+  glbFile(fixture.root/"meshes/test/own.glb",options);
+  glbFile(fixture.root/"meshes/test/opaque.glb");
+  originalFile(fixture.root/"_work/NATIVE.MRM");
+  fixture.index(R"({
+    "OWN_MESH":{"glb":"test/own.glb"},
+    "OWN_OPAQUE":{"glb":"test/opaque.glb"}
+  })");
+
+  Tempest::VulkanApi api;
+  Tempest::Device device(api);
+  {
+    Resources resources(device);
+    Shaders shaders;
+    shaders.waitCompiler();
+    Resources::mountWork(fixture.root/"_work");
+    const auto* masked = Resources::loadMesh("OWN_MESH.3DS");
+    require(masked!=nullptr && masked->attach.size()==1 && masked->attach[0].sub.size()==1,
+            "MASK BC1 fixture must load through the ordinary ProtoMesh path");
+    const auto& mask = masked->attach[0].sub[0].material;
+    require(mask.tex!=nullptr && mask.tex->format()==Tempest::TextureFormat::DXT1,
+            "MASK regression must use an actual uploaded BC1 texture");
+    require(mask.alpha==Material::AlphaTest && mask.isTextureInShadowPass(),
+            "glTF MASK must retain alpha test and texture sampling in the shadow pass for BC1");
+
+    const auto* opaque = Resources::loadMesh("OWN_OPAQUE.3DS");
+    require(opaque!=nullptr && opaque->attach.size()==1 && opaque->attach[0].sub.size()==1,
+            "OPAQUE BC1 fixture must load through the ordinary ProtoMesh path");
+    const auto& solid = opaque->attach[0].sub[0].material;
+    require(solid.tex==mask.tex && solid.alpha==Material::Solid && !solid.isTextureInShadowPass(),
+            "glTF OPAQUE must stay solid with the exact same transparent BC1 texture");
+
+    const auto* original = Resources::loadMesh("NATIVE.3DS");
+    require(original!=nullptr && original->attach.size()==1 && original->attach[0].sub.size()==1,
+            "native MRM BC1 fixture must load through its unchanged path");
+    const auto& native = original->attach[0].sub[0].material;
+    require(native.tex==mask.tex && native.alpha==Material::Solid,
+            "native MRM must preserve its historical BC1 solid classification");
+
+    const auto* bc1 = Resources::loadMaterialAlbedo("OPAQUE_BC1.TGA");
+    const auto* bc3 = Resources::loadMaterialAlbedo("OPAQUE_BC3.TGA");
+    require(bc1!=nullptr && bc1->format()==Tempest::TextureFormat::DXT1 &&
+            bc3!=nullptr && bc3->format()==Tempest::TextureFormat::DXT5,
+            "albedo policy transitions must exercise real opaque BC1 and BC3 textures");
+    auto changed = mask;
+    for(const auto* texture:{bc1,bc3,mask.tex}) {
+      changed.setAlbedo(texture);
+      require(changed.tex==texture && changed.alpha==Material::AlphaTest && changed.isTextureInShadowPass(),
+              "glTF MASK policy must survive albedo changes between BC1 and BC3");
+      }
+    for(auto mode:{Material::Solid,Material::Water,Material::Ghost,Material::Multiply,Material::Multiply2,
+                   Material::Transparent,Material::AdditiveLight}) {
+      auto overridden = mask;
+      overridden.alpha = mode;
+      overridden.setAlbedo(bc1);
+      overridden.setAlbedo(bc3);
+      require(overridden.alpha==mode,"forced MASK policy must retain explicit material alpha overrides");
+      }
+
+    // Both have identical source fields and current alpha after BC3 is selected;
+    // only the retained glTF MASK policy differs and must keep buckets distinct.
+    const auto source = Resources::loadVisualMesh("OWN_MESH.MRM");
+    Material legacyPolicy(source.sub_meshes[0].mat,true);
+    auto forcedPolicy = mask;
+    legacyPolicy.setAlbedo(bc3);
+    forcedPolicy.setAlbedo(bc3);
+    require(legacyPolicy.alpha==Material::AlphaTest && forcedPolicy.alpha==Material::AlphaTest,
+            "material equality fixture must have the same visible alpha classification");
+    require(!(legacyPolicy==forcedPolicy),"material equality must distinguish native and forced MASK policies");
+    }
+  device.waitIdle();
+  }
 }
 
 int main() {
@@ -573,6 +702,8 @@ int main() {
     generatedBarrel(fixture);
     rejectionCases(fixture);
     indexCases(fixture);
+    setenv("TEMPEST_AUDIO_LOOPBACK","48000",1);
+    maskBc1Policy(fixture);
     std::cout << "{\"test\":\"mesh_gltf\",\"passed\":true,\"assertions\":" << assertions << "}\n";
     return 0;
     }

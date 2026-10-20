@@ -36,6 +36,7 @@ class PackedMesh {
       size_t           iboOffset = 0;
       size_t           iboLength = 0;
       bool             alphaTest = true;
+      bool             alphaTestRequired = false;
       };
 
     struct Cluster final {

@@ -110,7 +110,8 @@ class Resources final {
     static const Tempest::Texture2d* loadTexture(std::string_view name, int32_t v, int32_t c);
     static       Tempest::Texture2d  loadTexturePm(const Tempest::Pixmap& pm);
     static auto                      loadTextureAnim(std::string_view name) -> std::vector<const Tempest::Texture2d*>;
-    static       Material            loadMaterial(const zenkit::Material& src, bool enableAlphaTest);
+    static       Material            loadMaterial(const zenkit::Material& src, bool enableAlphaTest,
+                                                   bool requireAlphaTest = false);
 
     struct MaterialMaps {
       const Tempest::Texture2d* albedo = nullptr;

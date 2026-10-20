@@ -1287,8 +1287,8 @@ Texture2d Resources::loadTexturePm(const Pixmap &pm) {
   return device().texture(pm);
   }
 
-Material Resources::loadMaterial(const zenkit::Material& src, bool enableAlphaTest) {
-  return Material(src,enableAlphaTest);
+Material Resources::loadMaterial(const zenkit::Material& src, bool enableAlphaTest, bool requireAlphaTest) {
+  return Material(src,enableAlphaTest,requireAlphaTest);
   }
 
 Resources::MaterialMaps Resources::loadMaterialMaps(std::string_view name) {

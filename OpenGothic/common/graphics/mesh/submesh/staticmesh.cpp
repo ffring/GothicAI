@@ -18,7 +18,8 @@ StaticMesh::StaticMesh(const PackedMesh& mesh) {
   for(size_t i=0;i<mesh.subMeshes.size();++i) {
     sub[i].texName   = mesh.subMeshes[i].material.texture;
     sub[i].material  = Resources::loadMaterial(mesh.subMeshes[i].material,
-                                             mesh.isUsingAlphaTest && mesh.subMeshes[i].alphaTest);
+                                             mesh.isUsingAlphaTest && mesh.subMeshes[i].alphaTest,
+                                             mesh.subMeshes[i].alphaTestRequired);
     sub[i].iboOffset = mesh.subMeshes[i].iboOffset;
     sub[i].iboLength = mesh.subMeshes[i].iboLength;
     }

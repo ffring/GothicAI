@@ -441,9 +441,12 @@ PackedMesh::PackedMesh(const zenkit::MultiResolutionMesh& mesh, PkgType type, bo
   packMeshletsObj(mesh,type,nullptr);
   // Native MRM keeps its historical alpha heuristics. GLB declares OPAQUE or
   // MASK explicitly, including when both occur in one mesh.
-  if(explicitAlphaTest)
-    for(auto& sub:subMeshes)
+  if(explicitAlphaTest) {
+    for(auto& sub:subMeshes) {
       sub.alphaTest = sub.material.alpha_func!=zenkit::AlphaFunction::NONE;
+      sub.alphaTestRequired = sub.alphaTest;
+      }
+    }
   }
 
 PackedMesh::PackedMesh(const zenkit::SoftSkinMesh& skinned) {
