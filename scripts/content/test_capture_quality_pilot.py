@@ -51,20 +51,39 @@ def test_frame_size_is_not_rescaled(tmp_path):
 def test_detail_csv_compares_each_spot_with_its_original(tmp_path, monkeypatch):
     def measure(path):
         baseline = 2 if path.stem == "facade" else 4
-        scale = .75 if path.parent.name == "pilot-2" else 1
+        scale = {"original": 1, "pilot-2": .75, "pilot-3a": .95, "pilot-3b": 1.05}[path.parent.name]
         return {"mean_y": baseline * scale, "log_spread": baseline * 2 * scale,
                 "detail_k9": baseline * 3 * scale}
 
     monkeypatch.setattr(capture, "SPOTS", ("facade", "stairs"))
     monkeypatch.setattr(capture, "measure_frame", measure)
     output = tmp_path / "report" / "detail.csv"
-    capture.detail(tmp_path / "captures", output, ["original", "pilot-2"])
+    variants = ["original", "pilot-2", "pilot-3a", "pilot-3b"]
+    capture.detail(tmp_path / "captures", output, variants)
     with output.open() as stream:
         rows = list(csv.DictReader(stream))
     assert [(row["spot"], row["variant"]) for row in rows] == [
-        ("facade", "original"), ("facade", "pilot-2"),
-        ("stairs", "original"), ("stairs", "pilot-2"),
-    ]
+        (spot, variant) for spot in ("facade", "stairs") for variant in variants]
     for row in rows:
         for field in ("mean_y", "log_spread", "detail_k9"):
-            assert float(row[field + "_ratio"]) == (1 if row["variant"] == "original" else .75)
+            assert float(row[field + "_ratio"]) == pytest.approx(
+                {"original": 1, "pilot-2": .75, "pilot-3a": .95, "pilot-3b": 1.05}[row["variant"]])
+
+
+def test_iteration3_boards_keep_panel_width_and_variant_order(tmp_path):
+    variants = ("original", "pilot-2", "pilot-3a", "pilot-3b")
+    colours = ((220, 20, 20), (20, 220, 20), (20, 20, 220), (220, 220, 20))
+    captures = tmp_path / "captures"
+    for variant, colour in zip(variants, colours):
+        (captures / variant).mkdir(parents=True)
+        for spot in capture.SPOTS:
+            Image.new("RGB", (1280, 720), colour).save(captures / variant / f"{spot}.png")
+    output = tmp_path / "boards"
+    capture.compose(captures, output, iteration3=True)
+    assert {path.name for path in output.iterdir()} == {f"{spot}.jpg" for spot in capture.SPOTS}
+    for path in output.iterdir():
+        with Image.open(path) as board:
+            assert board.format == "JPEG"
+            assert board.size == (4 * 768, 432 + 44)
+            for panel, colour in enumerate(colours):
+                assert board.getpixel((panel * 768 + 384, 260)) == pytest.approx(colour, abs=3)
