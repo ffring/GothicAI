@@ -46,7 +46,7 @@ def test_fear_overrides_dishonesty(kind, degree, courage):
     known = SimpleNamespace(
         degree=degree, suspect="PLAYER", forgiven=False, crime={"id": "C1", "kind": kind},
     )
-    crimes = SimpleNamespace(known=lambda npc: [known], side=lambda npc, crime: None)
+    crimes = SimpleNamespace(known=lambda npc: [known], does_not_blame=lambda npc, crime: False)
     intent = decide(chronicle, NPC, "D1", ["contract"], cards={NPC: card}, crimes=crimes)
     assert intent["keeps"] is (courage <= 3)
 
@@ -66,7 +66,7 @@ def test_unrelated_or_forgiven_violence_does_not_scare(kind, degree, suspect, fo
     known = SimpleNamespace(
         degree=degree, suspect=suspect, forgiven=forgiven, crime={"id": "C1", "kind": kind},
     )
-    crimes = SimpleNamespace(known=lambda npc: [known], side=lambda npc, crime: None)
+    crimes = SimpleNamespace(known=lambda npc: [known], does_not_blame=lambda npc, crime: False)
     assert not decide(chronicle, NPC, "D1", ["meet"], cards={NPC: card}, crimes=crimes)["keeps"]
 
 
