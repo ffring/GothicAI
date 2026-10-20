@@ -1,6 +1,7 @@
 // The voice-over studio: a line of the script at a time, over the part of the draft it is said over.
 // Space records (the picture starts PREROLL seconds before the line's place, the cue turns at the place),
 // Space again keeps the take, Esc throws it away, Enter plays the chosen take with the picture.
+// Backspace/Delete or the trash button twice within 3 s discards a take; Z restores the last discarded take.
 'use strict';
 
 const PREROLL = 1.5; // seconds of picture before the line's place: time to breathe in
@@ -22,6 +23,9 @@ const S = {
   sound: false,
   audio: null, // a take playing
   peakHold: 0,
+  discardArm: null,
+  discarded: [], // {n, k}, newest last; only this page's session
+  changingTake: false,
 };
 
 const line = () => S.session.lines[S.i];
@@ -61,6 +65,9 @@ async function load(keepLine = true) {
 function render() {
   const lines = S.session.lines;
   const ln = line();
+  const arm = S.discardArm;
+  if (arm && (S.mode !== 'idle' || arm.n !== ln.n || arm.k !== chosenTake(ln)?.k ||
+              performance.now() >= arm.until)) disarmDiscard();
   $('count').textContent = `Фраза ${ln.n} из ${lines.length}`;
   $('prev').textContent = S.i > 0 ? lines[S.i - 1].text : '';
   $('cur').textContent = ln.text;
@@ -89,16 +96,24 @@ function render() {
     el.ondblclick = () => play(t);
     box.appendChild(el);
   });
-  if (ln.takes.length) {
+  if (!ln.takes.length) box.innerHTML = '<span class="hint">Дублей пока нет.</span>';
+  if (ln.takes.length || S.discarded.length) {
     const acts = document.createElement('span');
     acts.className = 'actions';
-    acts.innerHTML = '<button id="playbtn">▶ Прослушать</button><button id="trashbtn">В корзину</button>';
+    acts.innerHTML = (ln.takes.length
+      ? '<button id="playbtn">▶ Прослушать</button><button id="trashbtn">В корзину</button>' : '') +
+      (S.discarded.length ? '<button id="restorebtn">Вернуть дубль</button>' : '');
     box.appendChild(acts);
-    $('playbtn').onclick = () => play(chosenTake(line()));
-    $('trashbtn').onclick = () => discard();
-  } else {
-    box.innerHTML = '<span class="hint">Дублей пока нет.</span>';
+    if (ln.takes.length) {
+      $('playbtn').onclick = () => play(chosenTake(line()));
+      $('trashbtn').onclick = () => discard();
+    }
+    if (S.discarded.length) {
+      $('restorebtn').onclick = () => restore();
+      $('restorebtn').disabled = S.changingTake;
+    }
   }
+  renderDiscardButton();
 
   const pills = $('lines');
   pills.innerHTML = '';
@@ -252,6 +267,8 @@ async function showLine() {
 // -- takes ------------------------------------------------------------------------------------------------
 
 async function record() {
+  if (S.changingTake) return;
+  disarmDiscard();
   stopPlay();
   if (!S.node) {
     // the first press only turns the microphone on: nobody is ready to speak right after the permission
@@ -374,7 +391,8 @@ function tick() {
 }
 
 async function play(t) {
-  if (!t) return;
+  if (!t || S.changingTake) return;
+  disarmDiscard();
   stopPlay();
   const a = new Audio(t.url);
   S.audio = a;
@@ -407,6 +425,8 @@ function stopPlay() {
 }
 
 async function choose(k) {
+  if (S.changingTake) return;
+  if (k !== chosenTake(line())?.k) disarmDiscard();
   try {
     await api(`/api/choose?line=${line().n}&take=${k}`, '');
     await load();
@@ -415,25 +435,84 @@ async function choose(k) {
   }
 }
 
+function renderDiscardButton() {
+  const btn = $('trashbtn');
+  if (!btn) return;
+  btn.textContent = S.discardArm ? 'Ещё раз — в корзину' : 'В корзину';
+  btn.classList.toggle('armed', Boolean(S.discardArm));
+  btn.disabled = S.changingTake;
+}
+
+function disarmDiscard(announce = true) {
+  const arm = S.discardArm;
+  if (!arm) return;
+  clearTimeout(arm.timer);
+  S.discardArm = null;
+  renderDiscardButton();
+  if (announce) say(`Дубль ${arm.idx} остался.`);
+}
+
 async function discard() {
+  if (S.mode !== 'idle' || S.changingTake) return;
   const ln = line();
   const t = chosenTake(ln);
   if (!t) return;
   const idx = ln.takes.indexOf(t) + 1;
-  if (!confirm(`Дубль ${idx} фразы ${ln.n} — в корзину? (файл не удаляется, уходит в voice/trash)`)) return;
+  const arm = S.discardArm;
+  if (!arm || arm.n !== ln.n || arm.k !== t.k || performance.now() >= arm.until) {
+    disarmDiscard(false);
+    const next = {n: ln.n, k: t.k, idx, until: performance.now() + 3000};
+    S.discardArm = next;
+    next.timer = setTimeout(() => {
+      if (S.discardArm === next) disarmDiscard();
+    }, 3000);
+    renderDiscardButton();
+    say(`Дубль ${idx} фразы ${ln.n} — в корзину? Ещё раз ⌫ или кнопку — за 3 с.`);
+    return;
+  }
+  disarmDiscard(false);
+  S.changingTake = true;
+  render();
   try {
     await api(`/api/discard?line=${ln.n}&take=${t.k}`, '');
+    S.discarded.push({n: ln.n, k: t.k});
     await load();
-    say(`Дубль ${idx} в корзине.`);
+    say(`Дубль ${idx} фразы ${ln.n} в корзине. Z — вернуть.`);
   } catch (err) {
     say(err.message, true);
+  } finally {
+    S.changingTake = false;
+    render();
+  }
+}
+
+async function restore() {
+  if (S.mode !== 'idle' || S.changingTake || !S.discarded.length) return;
+  disarmDiscard();
+  const {n, k} = S.discarded[S.discarded.length - 1];
+  S.changingTake = true;
+  render();
+  try {
+    await api(`/api/restore?line=${n}&take=${k}`, '');
+    S.discarded.pop();
+    S.i = S.session.lines.findIndex((ln) => ln.n === n);
+    await load();
+    await showLine();
+    say(`Дубль фразы ${n} вернулся и выбран.`);
+  } catch (err) {
+    say(err.message, true);
+  } finally {
+    S.changingTake = false;
+    render();
   }
 }
 
 async function goto(idx) {
-  if (S.mode === 'rec' || S.mode === 'saving' || S.mode === 'room') return;
+  if (S.changingTake || S.mode === 'rec' || S.mode === 'saving' || S.mode === 'room') return;
+  const next = Math.max(0, Math.min(S.session.lines.length - 1, idx));
+  if (next !== S.i) disarmDiscard();
   stopPlay();
-  S.i = Math.max(0, Math.min(S.session.lines.length - 1, idx));
+  S.i = next;
   render();
   await showLine();
 }
@@ -441,7 +520,8 @@ async function goto(idx) {
 // -- the room's silence, the rehearsal ---------------------------------------------------------------------
 
 async function room() {
-  if (S.mode !== 'idle') return;
+  if (S.mode !== 'idle' || S.changingTake) return;
+  disarmDiscard();
   try {
     await mic();
   } catch (err) {
@@ -479,7 +559,8 @@ async function finishRoom() {
 
 async function rehearse() {
   if (S.mode === 'run') return stopPlay();
-  if (S.mode !== 'idle' || !hasVideo()) return;
+  if (S.mode !== 'idle' || S.changingTake || !hasVideo()) return;
+  disarmDiscard();
   const ln = line();
   await seek(ln.plan ? Math.max(0, ln.plan[0] - PREROLL) : 0);
   video.muted = !S.sound;
@@ -499,6 +580,7 @@ document.addEventListener('keydown', (e) => {
     else if (S.mode === 'rec') stop(false);
     else if (S.mode === 'play' || S.mode === 'run') stopPlay();
   } else if (k === 'Escape') {
+    disarmDiscard();
     if (S.mode === 'rec') stop(true);
     else stopPlay();
   } else if (k === 'Enter') {
@@ -516,7 +598,10 @@ document.addEventListener('keydown', (e) => {
     if (t) choose(t.k);
   } else if ((k === 'Backspace' || k === 'Delete') && S.mode === 'idle') {
     e.preventDefault();
-    discard();
+    if (!e.repeat) discard();
+  } else if (e.code === 'KeyZ' && !e.shiftKey && S.mode === 'idle') {
+    e.preventDefault();
+    if (!e.repeat) restore();
   }
 });
 

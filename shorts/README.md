@@ -238,7 +238,10 @@ The short's folder holds `script.ru.txt` (a line of the voice per row), a plan w
 (`plan.json` or `plan.storyboard.json`) and the draft `render/preview.mp4` (without captions). Space starts a
 take: the picture runs from 1.5 s before the line's place, the line lights up when its place comes, a bar
 shows how long the plan gives it; Space again keeps the take, Esc throws it away. Enter plays the chosen take
-with the picture, the arrows change the line, 1-9 choose a take, Backspace sends it to `voice/trash/`.
+with the picture, the arrows change the line, 1-9 choose a take. Press Backspace (or the "В корзину" button)
+twice within 3 s to send the chosen take to `voice/trash/`; Esc cancels the pending discard. Z (or "Вернуть дубль")
+restores the last discarded take from `voice/trash/` and selects it, returning to its line. The undo stack lasts
+until the page is reloaded; Z also works with the Russian keyboard layout.
 "Тишина 10 с" records the room for the noise reduction, "Прогон" runs the draft with the prompter alone.
 
 The microphone is taken as it is (no echo cancelling, noise suppression or automatic gain) and the take is
