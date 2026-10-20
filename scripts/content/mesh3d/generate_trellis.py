@@ -169,7 +169,7 @@ def generate(args):
             started = time.monotonic()
             attempt = {"pipeline_type": pipeline_type, "seed": args.seed}
             try:
-                pipeline = load_pipeline(root, args.model)
+                pipeline = load_pipeline(root, args.model, pipeline_type=pipeline_type)
                 pipeline.cuda()
                 if args.model == "trellis2":
                     result = pipeline.run(image, seed=args.seed, pipeline_type=pipeline_type,

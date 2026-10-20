@@ -157,7 +157,7 @@ def pipeline_class(root: Path, model: str):
     return cls
 
 
-def load_pipeline(root: Path, model: str):
+def load_pipeline(root: Path, model: str, pipeline_type: str | None = None):
     """Load only local checkpoints; missing weights fail instead of downloading."""
     import torch
     cls = pipeline_class(root, model)
@@ -167,6 +167,11 @@ def load_pipeline(root: Path, model: str):
     model_lib = importlib.import_module(f"{package}.models")
     models = {}
     for name, checkpoint in config["models"].items():
+        if model == "trellis2":
+            if pipeline_type == "512" and name.endswith("_1024"):
+                continue
+            if pipeline_type == "1024_cascade" and name == "tex_slat_flow_model_512":
+                continue
         if model == "trellis" and name in ("slat_decoder_gs", "slat_decoder_rf"):
             raise ValueError("Local TRELLIS pipeline must contain only the mesh decoder")
         checkpoint = Path(checkpoint)

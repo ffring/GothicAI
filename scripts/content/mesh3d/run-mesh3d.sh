@@ -124,8 +124,8 @@ if [[ -f downtime.tsv ]]; then
   prior=$(awk '{s+=$3} END {print s+0}' downtime.tsv)
 fi
 [[ "$prior" =~ ^[0-9]+$ ]] || { echo 'Invalid downtime history' >&2; exit 1; }
-# The final 600 seconds are reserved for bounded service recovery.
-budget=$(( 3000 - prior ))
+# The 30-minute pilot window reserves its final 600 seconds for recovery.
+budget=$(( 1200 - prior ))
 (( budget > 60 )) || { echo 'Cumulative stopped-service budget exhausted; no services stopped' >&2; exit 75; }
 deadline=$(( $(date +%s) + budget ))
 stopped=()
@@ -173,7 +173,7 @@ restore() {
     total=$(( prior + elapsed ))
     printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$run_id" "$elapsed" >> downtime.tsv
     log_event downtime "window_seconds=$elapsed cumulative_seconds=$total"
-    (( total <= 3600 )) || { echo 'CUMULATIVE SERVICE DOWNTIME LIMIT EXCEEDED' >&2; rc=1; }
+    (( total <= 1800 )) || { echo 'CUMULATIVE SERVICE DOWNTIME LIMIT EXCEEDED' >&2; rc=1; }
   fi
   timeout 5 nvidia-smi > "runs/$run_id/nvidia-restored.txt" || rc=1
   log_event window-end "exit=$rc"

@@ -31,7 +31,7 @@
 
 Пилот качества материалов: [численные замеры 71 оригинала и проверки 58 наших альбедо](../reports/content/2026-10-pilot-measures/README.md), `scripts/content/measure-originals.sh`, общая функция `material-measures.h` / `material_measures.py`, `measure_city.py`, политика `material_scale.py`, поканальный цвет `material_colour.py`, детектор `material_lighting.py` и `marigold_iid.py` (отдельный venv на dev-ubuntu). [Шаг 2: семь материалов A/B/C и семь игровых сравнений](../reports/content/2026-10-quality-pilot/README.md): экспериментальный [шаблон пилота](content-style.md#шаблон-пилота), `quality_pilot.py prepare/build`, отдельный реестр `data/content/quality-pilot.jsonl`, staging `pilot-b` / `pilot-c`; `capture-quality-pilot.sh` / `.py` и сценарий `quality-pilot.bench` снимают четыре набора на Ryzen через `gq`. [Текущие поля CSV и ограничения](own-content.md#численные-замеры-качества-материалов).
 
-Генераторы 3D для предметов этапа 2: [кандидаты, лицензии, конвейер и пилот](../reports/content/2026-10-3d-generators/README.md); [подготовка TRELLIS на dev-ubuntu](own-content.md#генерация-3d), `scripts/content/mesh3d/` — установка, mesh-only адаптер, сырой NPZ и отдельное окно GPU. Генерация проверяется отдельно после подготовки окружений.
+Генераторы 3D для предметов этапа 2: [кандидаты, лицензии, конвейер и пилот](../reports/content/2026-10-3d-generators/README.md); [подготовка TRELLIS на dev-ubuntu](own-content.md#генерация-3d), `scripts/content/mesh3d/` — установка, mesh-only адаптер, сырой NPZ и отдельное окно GPU. [Первое окно на бочке](../reports/content/2026-10-3d-pilot/generation.md): host OOM при декодировании 1024, сервисы восстановлены; raw-мешей пока нет.
 
 ## Путь одной реплики героя
 
