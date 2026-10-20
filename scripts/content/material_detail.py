@@ -62,6 +62,7 @@ def fit_material_detail(rgb_float_0_1, targets, *, target_oklab):
         fitted += min(gains[1], 1.5)*subcell
         adjusted = linear*np.exp(fitted-logs)[..., None]
         maximum = adjusted.max(axis=-1)
+        shoulder_pixel_fraction = float((maximum > .7).mean())
         shoulder = np.where(maximum > .7,
             .7 + .3*np.tanh((maximum-.7)/.3), maximum)
         adjusted *= np.divide(shoulder, maximum, out=np.ones_like(maximum),
@@ -71,11 +72,11 @@ def fit_material_detail(rgb_float_0_1, targets, *, target_oklab):
         pixels, colour = correct_mean_colour(srgb, target_oklab)
         clipped_pixels |= np.any(np.clip(adjusted, 0, 1)*colour["channel_gains"] > 1, axis=-1)
         measured = measure_material(pixels)
-        return pixels, measured, colour, float(clipped_pixels.mean())
+        return pixels, measured, colour, float(clipped_pixels.mean()), shoulder_pixel_fraction
 
     gains = np.ones(4, dtype=np.float64)
     for iteration in range(9):
-        pixels, measured, colour, clipped = render(gains)
+        pixels, measured, colour, clipped, shoulder_pixel_fraction = render(gains)
         actual = np.array([measured[field] for field in FIELDS])
         relative_error = np.divide(actual-target, target, out=actual.copy(), where=target > 0)
         if np.all(np.abs(relative_error) <= .03) or iteration == 8:
@@ -95,4 +96,5 @@ def fit_material_detail(rgb_float_0_1, targets, *, target_oklab):
         limits={name: ("minimum" if np.isclose(gains[i], GAIN_BOUNDS[i, 0]) else
                        "maximum" if np.isclose(gains[i], GAIN_BOUNDS[i, 1]) else None)
                 for i, name in enumerate(names)},
-        clipped_pixel_fraction=clipped, colour=colour)
+        clipped_pixel_fraction=clipped, shoulder_pixel_fraction=shoulder_pixel_fraction,
+        colour=colour)

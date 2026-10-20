@@ -67,7 +67,9 @@ INI
     -g "$HOME/gothic-ai/game" -g2 -window -devmode -save 1) >"$out/game.log" 2>&1 || rc=$?
   printf '%s\n' "$rc" >"$out/exit.txt"
   [[ "$rc" == 0 ]] || { tail -30 "$out/game.log"; exit "$rc"; }
-  python3 "$task/scripts/capture-quality-pilot.py" check "$out" "$task/scripts/quality-pilot.bench" "$task/content/$variant/materials/materials.json"
+  check_args=()
+  [[ "$TASK" != gothic-ai/quality-pilot-3 ]] || check_args+=(--iteration-3)
+  python3 "$task/scripts/capture-quality-pilot.py" check "$out" "$task/scripts/quality-pilot.bench" "$task/content/$variant/materials/materials.json" "${check_args[@]}"
   exit 0
 fi
 
