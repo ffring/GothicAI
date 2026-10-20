@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Capture original / city-3 / pilot-b / pilot-c in an isolated Ryzen runtime.
+# Capture original / city-3 / pilot-b / pilot-c or pilot-2 on Ryzen.
 # --prepare builds this worktree's unchanged engine through gq.
 # --capture VARIANT OUTPUT copies only the requested staging set and captures it.
 # --compose CAPTURES OUTPUT writes seven original / city-3 / B / C boards.
+# --compose-2 CAPTURES OUTPUT writes seven original / city-3 / B / pilot-2 boards.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HOST="${RYZEN_HOST:-ryzen}"
-TASK='gothic-ai/quality-pilot'
+TASK="${QUALITY_PILOT_TASK:-gothic-ai/quality-pilot}"
 
 if [[ "${1:-}" == --remote-prepare ]]; then
   task="$HOME/$TASK"
@@ -25,7 +26,7 @@ fi
 
 if [[ "${1:-}" == --remote-capture ]]; then
   variant="${2:?variant}"
-  [[ "$variant" == original || "$variant" == city-3 || "$variant" == pilot-b || "$variant" == pilot-c ]] || exit 2
+  [[ "$variant" == original || "$variant" == city-3 || "$variant" == pilot-b || "$variant" == pilot-c || "$variant" == pilot-2 ]] || exit 2
   task="$HOME/$TASK"
   out="$task/runs/$variant"
   mkdir -p "$out/run"
@@ -69,8 +70,8 @@ INI
   exit 0
 fi
 
-if [[ "${1:-}" == --compose ]]; then
-  exec uv run --no-project --with pillow python "$ROOT/scripts/content/capture-quality-pilot.py" compose "${2:?captures}" "${3:?output}"
+if [[ "${1:-}" == --compose || "${1:-}" == --compose-2 ]]; then
+  exec uv run --no-project --with pillow python "$ROOT/scripts/content/capture-quality-pilot.py" "${1#--}" "${2:?captures}" "${3:?output}"
 fi
 
 if [[ "${1:-}" == --prepare ]]; then
@@ -81,15 +82,15 @@ if [[ "${1:-}" == --prepare ]]; then
     "$ROOT/scripts/content/quality-pilot.bench" "$HOST:$TASK/scripts/"
   common="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
   rsync -a "${SAVE:-$(dirname "$common")/save_slot_1.sav}" "$HOST:$TASK/save_slot_1.sav"
-  GQ_OWNER=quality-pilot "$ROOT/scripts/gq" --host "$HOST" run --class quick \
+  GQ_OWNER="${TASK##*/}" "$ROOT/scripts/gq" --host "$HOST" run --class quick \
     --threads 8 --mem 10G --max 25m --wait-max 900 --name 'pilot engine build' -- \
-    bash "$TASK/scripts/capture-quality-pilot.sh" --remote-prepare
+    env QUALITY_PILOT_TASK="$TASK" bash "$TASK/scripts/capture-quality-pilot.sh" --remote-prepare
   exit 0
 fi
 
 if [[ "${1:-}" == --capture ]]; then
   variant="${2:?variant}"; out="${3:?output}"
-  [[ "$variant" == original || "$variant" == city-3 || "$variant" == pilot-b || "$variant" == pilot-c ]] || exit 2
+  [[ "$variant" == original || "$variant" == city-3 || "$variant" == pilot-b || "$variant" == pilot-c || "$variant" == pilot-2 ]] || exit 2
   mkdir -p "$out/$variant"
   if [[ "$variant" != original ]]; then
     source_root="${CONTENT_STAGING_ROOT:-$HOME/.local/share/gothic-ai/content-staging}/$variant"
@@ -102,12 +103,12 @@ if [[ "${1:-}" == --capture ]]; then
   rsync -a "$ROOT/scripts/content/capture-quality-pilot.sh" "$ROOT/scripts/content/capture-quality-pilot.py" \
     "$ROOT/scripts/content/quality-pilot.bench" "$HOST:$TASK/scripts/"
   rc=0
-  GQ_OWNER=quality-pilot "$ROOT/scripts/gq" --host "$HOST" run --class quick \
+  GQ_OWNER="${TASK##*/}" "$ROOT/scripts/gq" --host "$HOST" run --class quick \
     --threads 4 --mem 5G --gpu-mem 4G --display --display-exclusive \
     --max 6m --wait-max 900 --name "pilot $variant captures" -- \
-    bash "$TASK/scripts/capture-quality-pilot.sh" --remote-capture "$variant" || rc=$?
+    env QUALITY_PILOT_TASK="$TASK" bash "$TASK/scripts/capture-quality-pilot.sh" --remote-capture "$variant" || rc=$?
   rsync -a "$HOST:$TASK/runs/$variant/" "$out/$variant/"
   exit "$rc"
 fi
-echo 'usage: capture-quality-pilot.sh --prepare | --capture original|city-3|pilot-b|pilot-c OUTPUT | --compose CAPTURES OUTPUT' >&2
+echo 'usage: capture-quality-pilot.sh --prepare | --capture original|city-3|pilot-b|pilot-c|pilot-2 OUTPUT | --compose|--compose-2 CAPTURES OUTPUT' >&2
 exit 2

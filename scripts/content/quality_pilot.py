@@ -105,7 +105,7 @@ def prepared_png(image, target, *, frozen):
     return digest
 
 
-def read_sources(directory, names, source_root):
+def read_sources(directory, names, source_root, *, namespace='quality-pilot'):
     found = {name: [] for name in names}
     for path in sorted(directory.glob('NW_*-attempt-*.json')):
         match = SOURCE_NAME.fullmatch(path.stem)
@@ -130,7 +130,7 @@ def read_sources(directory, names, source_root):
                 raise ValueError(f'{source}: expected original PNG')
             size = list(image.size)
             image.verify()
-        relative = Path('quality-pilot') / source.name
+        relative = Path(namespace) / source.name
         _write_immutable(source_root / relative, raw)
         _write_immutable(source_root / relative.with_suffix('.json'), path.read_bytes())
         found[name].append(dict(attempt=number, prompt=meta['prompt'], utc=meta['utc'],
