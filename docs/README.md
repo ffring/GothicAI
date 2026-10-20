@@ -33,6 +33,8 @@
 
 Генераторы 3D для предметов этапа 2: [кандидаты, лицензии и конвейер](../reports/content/2026-10-3d-generators/README.md); пользователь запустил пилот 2026-10-20. [Пять численных целей и 10 концептов](../reports/content/2026-10-3d-pilot/README.md): `data/content/mesh3d-pilot.json`, `scripts/content/mesh3d/measure_targets.py` + `target-measures.cpp` (из оригинала выходят только числа), `concepts.py` (импорт PNG и лист 5 × 2), проверка `check-concepts.sh`; исходники в `content-sources/mesh3d-pilot/`, рецепты `kind: concept` в общем реестре.
 
+[Подготовка TRELLIS на dev-ubuntu](own-content.md#генерация-3d), `scripts/content/mesh3d/` — установка, mesh-only адаптер, сырой NPZ и отдельное окно GPU. [Генерация бочки, сид 1](../reports/content/2026-10-3d-pilot/generation.md): v1 и TRELLIS.2 512 создали raw-меши и метаданные в scope с лимитом 20 ГиБ, CPU-превью готовы на Mac; сервисы восстановлены, суммарный простой 592 с. Первое окно 1024 завершилось host OOM.
+
 ## Путь одной реплики героя
 
 1. Герой держит клавишу разговора. `voice.py` пишет микрофон Mac и стримит звук в `asr-service`. Тот передаёт его Voxtral на dev-ubuntu, запасной вариант — подписка ChatGPT. Промежуточный текст сразу показывается в игре.
