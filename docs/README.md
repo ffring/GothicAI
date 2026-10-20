@@ -29,7 +29,9 @@
 - **Сервер — один процесс asyncio.** `cli.ServerState` держит все подсистемы (около 45, все необязательные). Каждая получает `GameLink` из `game.py` и подписывается на сообщения игры через `link.listeners`.
 - Где что считается и почему — [`compute.md`](compute.md). Адреса машин лежат вне git.
 
-Пилот качества материалов: [численные замеры 71 оригинала и проверки 58 наших альбедо](../reports/content/2026-10-pilot-measures/README.md), `scripts/content/measure-originals.sh`, общая функция `material-measures.h` / `material_measures.py`, `measure_city.py`, политика `material_scale.py`, поканальный цвет `material_colour.py`, детектор `material_lighting.py` и `marigold_iid.py` (отдельный venv на dev-ubuntu). [Текущие поля CSV и ограничения](own-content.md#численные-замеры-качества-материалов).
+Пилот качества материалов: [численные замеры 71 оригинала и проверки 58 наших альбедо](../reports/content/2026-10-pilot-measures/README.md), `scripts/content/measure-originals.sh`, общая функция `material-measures.h` / `material_measures.py`, `measure_city.py`, политика `material_scale.py`, поканальный цвет `material_colour.py`, детектор `material_lighting.py` и `marigold_iid.py` (отдельный venv на dev-ubuntu). [Шаг 2: семь материалов A/B/C и семь игровых сравнений](../reports/content/2026-10-quality-pilot/README.md): экспериментальный [шаблон пилота](content-style.md#шаблон-пилота), `quality_pilot.py prepare/build`, отдельный реестр `data/content/quality-pilot.jsonl`, staging `pilot-b` / `pilot-c`; `capture-quality-pilot.sh` / `.py` и сценарий `quality-pilot.bench` снимают четыре набора на Ryzen через `gq`. [Текущие поля CSV и ограничения](own-content.md#численные-замеры-качества-материалов).
+
+Генераторы 3D для предметов этапа 2: [кандидаты, лицензии, конвейер и пилот](../reports/content/2026-10-3d-generators/README.md); выбор за пользователем.
 
 ## Путь одной реплики героя
 
