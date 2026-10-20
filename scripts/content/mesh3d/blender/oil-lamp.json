@@ -1,0 +1,27 @@
+{
+  "id": "oil-lamp",
+  "target": "data/content/mesh3d-market.json",
+  "seed": 1,
+  "segments": 20,
+  "plate": [
+    0.2,
+    0.3,
+    0.025
+  ],
+  "arm": [
+    0.022,
+    0.04
+  ],
+  "lamp_from_wall": 0.27,
+  "reservoir": [
+    0.065,
+    0.08
+  ],
+  "glass": [
+    0.062,
+    0.2
+  ],
+  "metal_tile": 0.2,
+  "glass_tile": 0.15,
+  "wood_tile": 0.38
+}
