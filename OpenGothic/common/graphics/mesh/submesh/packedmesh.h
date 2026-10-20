@@ -35,6 +35,7 @@ class PackedMesh {
       zenkit::Material material;
       size_t           iboOffset = 0;
       size_t           iboLength = 0;
+      bool             alphaTest = true;
       };
 
     struct Cluster final {
@@ -80,7 +81,7 @@ class PackedMesh {
     std::vector<BVHNode>  bvhNodes;
     std::vector<UVec4>    bvh8Nodes;
 
-    PackedMesh(const zenkit::MultiResolutionMesh& mesh, PkgType type);
+    PackedMesh(const zenkit::MultiResolutionMesh& mesh, PkgType type, bool explicitAlphaTest = false);
     PackedMesh(const zenkit::Mesh& mesh, PkgType type);
     PackedMesh(const zenkit::SoftSkinMesh& mesh);
 

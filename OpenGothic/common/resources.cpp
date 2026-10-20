@@ -52,6 +52,7 @@
 
 #include "gothic.h"
 #include "contentcensus.h"
+#include "gltfmesh.h"
 #include "utils/string_frm.h"
 
 #include <dmusic.h>
@@ -65,6 +66,7 @@ Resources* Resources::inst=nullptr;
 Resources::Resources() {
   inst=this;
   initCensus();
+  indexMeshOverrides();
   // Sound buffers remain CPU data: native sound selection consumes RNG and
   // dialogue uses their durations even when playback is disabled.
   fBuff.reserve(8*1024*1024);
@@ -100,6 +102,7 @@ Resources::Resources(Tempest::Device &device)
   ddsBuf.reserve(8*1024*1024);
   indexHdTextures();
   indexMaterialMaps();
+  indexMeshOverrides();
 
   {
   Pixmap pm(1,1,TextureFormat::RGBA8);
@@ -525,6 +528,92 @@ void Resources::indexHdTextures() {
   Log::i("textures: ",hdTextures.size()," of our own from \"",dir,"\"");
   }
 
+void Resources::indexMeshOverrides() {
+  std::filesystem::path root;
+  if(const char* dir = std::getenv("OPENGOTHIC_CONTENT")) {
+    if(dir[0]=='\0')
+      return;
+    root = dir;
+    } else if(const char* home = std::getenv("HOME")) {
+    root = std::filesystem::path(home)/".local/share/gothic-ai/content";
+    } else {
+    return;
+    }
+  root /= "meshes";
+  std::ifstream file(root/"meshes.json",std::ios::binary);
+  if(!file)
+    return;
+  const std::string text{std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};
+  rapidjson::Document table;
+  table.Parse<rapidjson::kParseValidateEncodingFlag>(text.data(),text.size());
+  if(table.HasParseError() || !table.IsObject()) {
+    Log::e("meshes: invalid meshes.json in \"",root.string(),"\"");
+    return;
+    }
+  for(const auto& entry:table.GetObject()) {
+    std::string key(entry.name.GetString(),entry.name.GetStringLength());
+    if(key.empty() || key.find('\0')!=std::string::npos || key.find_first_of("/\\")!=std::string::npos ||
+       std::filesystem::path(key).has_extension() || !entry.value.IsObject() ||
+       !entry.value.HasMember("glb") || !entry.value["glb"].IsString()) {
+      Log::e("meshes: invalid entry \"",key,"\"");
+      continue;
+      }
+    const auto& value = entry.value["glb"];
+    const std::string path(value.GetString(),value.GetStringLength());
+    const std::filesystem::path relative(path);
+    bool valid = !path.empty() && path.find('\0')==std::string::npos &&
+                 !relative.is_absolute() && !relative.has_root_name() && FileExt::hasExt(path,"GLB");
+    for(const auto& part:relative)
+      if(part=="..")
+        valid = false;
+    if(!valid) {
+      Log::e("meshes: invalid glb path for \"",key,"\"");
+      continue;
+      }
+    for(auto& c:key)
+      c = char(std::toupper(uint8_t(c)));
+    meshOverrides[std::move(key)] = {
+      (root/relative).lexically_normal(),
+      (std::filesystem::path("meshes")/relative).lexically_normal().generic_string()
+      };
+    }
+  Log::i("meshes: ",meshOverrides.size()," entries from \"",root.string(),"\"");
+  }
+
+zenkit::MultiResolutionMesh Resources::loadVisualMesh(std::string_view name, bool* replaced) {
+  std::lock_guard<std::recursive_mutex> guard(inst->sync);
+  if(replaced!=nullptr)
+    *replaced = false;
+  auto original = std::string(name);
+  FileExt::exchangeExt(original,"3DS","MRM");
+  if(FileExt::hasExt(original,"MRM")) {
+    auto key = original.substr(0,original.size()-4);
+    for(auto& c:key)
+      c = char(std::toupper(uint8_t(c)));
+    if(const auto it = inst->meshOverrides.find(key); it!=inst->meshOverrides.end()) {
+      try {
+        auto mesh = loadGltfMesh(it->second.file);
+        if(inst->census)
+          inst->census->replaced(key+".MRM",it->second.replacement);
+        if(replaced!=nullptr)
+          *replaced = true;
+        return mesh;
+        }
+      catch(const std::exception& error) {
+        Log::e("meshes: unable to replace \"",original,"\" with \"",it->second.file.string(),"\": ",error.what());
+        }
+      }
+    }
+  // Do not even look up the original archive entry until replacement has failed.
+  const auto* entry = Resources::vdfsIndex().find(original);
+  if(entry==nullptr)
+    return {};
+  zenkit::MultiResolutionMesh mesh;
+  auto reader = entry->open_read();
+  mesh.load(reader.get());
+  return mesh;
+  }
+
 void Resources::indexMaterialMaps() {
   std::filesystem::path root;
   if(const char* dir = std::getenv("OPENGOTHIC_CONTENT")) {
@@ -754,19 +843,13 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
   if(FileExt::hasExt(name,"3DS")) {
     FileExt::exchangeExt(name,"3DS","MRM");
 
-    const auto* entry = Resources::vdfsIndex().find(name);
-    if(entry == nullptr)
-      return nullptr;
-
-    zenkit::MultiResolutionMesh zmsh;
-
-    auto reader = entry->open_read();
-    zmsh.load(reader.get());
+    bool replaced = false;
+    auto zmsh = loadVisualMesh(name,&replaced);
 
     if(zmsh.sub_meshes.empty())
       return nullptr;
 
-    PackedMesh packed(zmsh,PackedMesh::PK_Visual);
+    PackedMesh packed(zmsh,PackedMesh::PK_Visual,replaced);
     return std::unique_ptr<ProtoMesh>{new ProtoMesh(std::move(packed),name)};
     }
 
@@ -914,16 +997,13 @@ PfxEmitterMesh* Resources::implLoadEmiterMesh(std::string_view name) {
   if(FileExt::hasExt(cname,"3DS")) {
     FileExt::exchangeExt(cname,"3DS","MRM");
 
-    const auto* entry = Resources::vdfsIndex().find(cname);
-    if (entry == nullptr) return nullptr;
-    zenkit::MultiResolutionMesh zmsh;
-    auto reader = entry->open_read();
-    zmsh.load(reader.get());
+    bool replaced = false;
+    auto zmsh = loadVisualMesh(cname,&replaced);
 
     if(zmsh.sub_meshes.empty())
       return nullptr;
 
-    PackedMesh packed(zmsh,PackedMesh::PK_Visual);
+    PackedMesh packed(zmsh,PackedMesh::PK_Visual,replaced);
     ret = std::unique_ptr<PfxEmitterMesh>(new PfxEmitterMesh(packed));
     return ret.get();
     }

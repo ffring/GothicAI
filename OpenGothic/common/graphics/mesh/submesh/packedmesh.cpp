@@ -426,7 +426,7 @@ PackedMesh::PackedMesh(const zenkit::Mesh& mesh, PkgType type) {
     }
   }
 
-PackedMesh::PackedMesh(const zenkit::MultiResolutionMesh& mesh, PkgType type) {
+PackedMesh::PackedMesh(const zenkit::MultiResolutionMesh& mesh, PkgType type, bool explicitAlphaTest) {
   subMeshes.resize(mesh.sub_meshes.size());
   /* NOTE: some mods do have corrupted content description,
    * using alpha_test==0, for some of vegetation
@@ -439,6 +439,11 @@ PackedMesh::PackedMesh(const zenkit::MultiResolutionMesh& mesh, PkgType type) {
   }
 
   packMeshletsObj(mesh,type,nullptr);
+  // Native MRM keeps its historical alpha heuristics. GLB declares OPAQUE or
+  // MASK explicitly, including when both occur in one mesh.
+  if(explicitAlphaTest)
+    for(auto& sub:subMeshes)
+      sub.alphaTest = sub.material.alpha_func!=zenkit::AlphaFunction::NONE;
   }
 
 PackedMesh::PackedMesh(const zenkit::SoftSkinMesh& skinned) {
