@@ -2,8 +2,8 @@
 # Submit a bounded phase and return its gq ID. Never trains a student.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-demos-v4-remote.sh build-validate|validate-moving}"
-case "$stage" in build-validate|validate-moving) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
+stage="${1:?Usage: nav-demos-v4-remote.sh build-validate|validate-moving|retry|record}"
+case "$stage" in build-validate|validate-moving|retry|record) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 export GQ_OWNER=nav-demos-v4
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-demos-v4" "$HOME"')"
 ssh ryzen 'df -h "$HOME"'
@@ -39,7 +39,7 @@ df -h "$HOME"
 cd "$task/source"
 if [[ ! -x "$task/.venv/bin/python" ]]; then uv venv "$task/.venv"; fi
 uv pip install --python "$task/.venv/bin/python" numpy pytest
-if [[ "$stage" == build-validate ]]; then
+if [[ "$stage" == build-validate || "$stage" == retry ]]; then
   cmake -S "$task/source/OpenGothic" -B "$task/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DOPENGOTHIC_JOLT_X86=x86-64-v3 \
@@ -47,10 +47,23 @@ if [[ "$stage" == build-validate ]]; then
   cmake --build "$task/build" --target Gothic2Notr gothic-body-runner \
     check-navmemoryteacher check-navkeyteacher --parallel 3
 fi
-"$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_demos_v4.py \
-  scripts/tests/test_nav_teacher_v3.py scripts/tests/test_nav_teacher_v3_oracle.py \
-  scripts/tests/test_nav_demos.py
-"$task/.venv/bin/python" -I scripts/nav_demos_v4.py validate-moving --task "$task" --parallel 3
+if [[ "$stage" == record ]]; then
+  "$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_demos_v4_collect.py \
+    scripts/tests/test_nav_jump_record.py scripts/tests/test_nav_follow_analysis.py
+  "$task/.venv/bin/python" -I scripts/nav_demos_v4_collect.py --task "$task" --include-follow auto \
+    --wall-minutes 100 --max-new 2000
+else
+  "$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_demos_v4.py \
+    scripts/tests/test_nav_teacher_v3.py scripts/tests/test_nav_teacher_v3_oracle.py \
+    scripts/tests/test_nav_demos.py scripts/tests/test_nav_follow_analysis.py
+  if [[ -f "$task/validation/attempt-1/metrics.json" ]]; then
+    "$task/.venv/bin/python" -I scripts/nav_follow_analysis.py "$task/validation/attempt-1" \
+      --output "$task/analysis/attempt-1-follow.json"
+  fi
+  validation=(--task "$task" --parallel 3)
+  if [[ "$stage" == retry ]]; then validation+=(--attempt 2 --episodes-per-kind 10); fi
+  "$task/.venv/bin/python" -I scripts/nav_demos_v4.py validate-moving "${validation[@]}"
+fi
 PHASE
 "$ROOT/scripts/gq" submit --class batch --threads 12 --cpu-quota 1200% --mem 8G --max 2h \
   --name "nav demos v4 $stage" -- bash "$task/phase.sh" "$stage"

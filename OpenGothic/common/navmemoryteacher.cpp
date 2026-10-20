@@ -339,7 +339,7 @@ NavMemoryTeacher::Diagnostics NavMemoryTeacher::probe(const Input& input,const D
 
 void NavMemoryTeacher::reset() {
   route.clear();routeLength=0;stuckTicks=0;recoveryTicks=0;recoveryAttempts=0;
-  recoverySide=1;complete=false;observedGoal=false;previousGoal={};movingTicks=0;
+  recoverySide=1;complete=false;observedGoal=false;previousGoal={};movingTicks=0;runningTargetTicks=0;
   latestPlanStatus=PlanStatus{};
   }
 
@@ -361,16 +361,22 @@ NpcKeys::KeyState NavMemoryTeacher::decide(const Input& in) {
     const float c=std::cos(angle),s=std::sin(angle);
     const Point predicted={previousGoal.rightCm*c-previousGoal.forwardCm*s-in.body.velocityCmS[0]*.1f,
                            previousGoal.rightCm*s+previousGoal.forwardCm*c-in.body.velocityCmS[2]*.1f};
-    if(distance(goal,predicted)>8 && distance(goal,predicted)<120) movingTicks=5;
+    const float targetStep=distance(goal,predicted);
+    if(targetStep>8 && targetStep<120) movingTicks=5;
     else if(movingTicks>0) --movingTicks;
+    // This is the target's observed displacement after subtracting our own
+    // movement, not its hidden native gait or world velocity. Retain a running
+    // observation briefly through a turn or the target's next acceleration.
+    if(targetStep>22 && targetStep<120) runningTargetTicks=5;
+    else if(runningTargetTicks>0) --runningTargetTicks;
     }
   observedGoal=true;previousGoal=goal;
   // Motion is inferred exclusively from learner observations. The previous
   // recorded action carries the gait hysteresis; no scenario mode is read.
   if(movingTicks>0) {
     out.walk=in.previous.walk;
-    if(in.roads.goalDistanceCm>600) out.walk=false;
-    else if(in.roads.goalDistanceCm<400) out.walk=true;
+    if(in.roads.goalDistanceCm>400 || (runningTargetTicks>0 && in.roads.goalDistanceCm>300)) out.walk=false;
+    else if(in.roads.goalDistanceCm<300) out.walk=true;
     }
 
   if(in.body.flags[0] || in.body.flags[1] || in.body.flags[3]) return out;
@@ -411,12 +417,16 @@ NpcKeys::KeyState NavMemoryTeacher::decide(const Input& in) {
     const float angle=std::atan2(goal.rightCm,goal.forwardCm)*180.f/Pi;
     if(std::abs(angle)>10) out.turn=-sign(angle);
     if(in.roads.goalDistanceCm<220) {
-      Point away;
-      if(std::abs(goal.rightCm)>std::abs(goal.forwardCm)) away={-sign(goal.rightCm)*70,0};
-      else away={0,-sign(goal.forwardCm)*70};
-      if(grid.segment({},away,true)) {
-        if(away.rightCm!=0) out.strafe=sign(away.rightCm);
-        else out.forward=sign(away.forwardCm);
+      const bool sidewaysFirst=std::abs(goal.rightCm)>std::abs(goal.forwardCm);
+      for(unsigned attempt=0;attempt<2;++attempt) {
+        const bool sideways=attempt==0 ? sidewaysFirst : !sidewaysFirst;
+        const float component=sideways ? goal.rightCm : goal.forwardCm;
+        if(component==0) continue;
+        const Point away=sideways ? Point{-sign(component)*70,0} : Point{0,-sign(component)*70};
+        if(!grid.segment({},away,true)) continue;
+        if(sideways) out.strafe=-sign(component);
+        else out.forward=-sign(component);
+        break;
         }
       }
     return out;

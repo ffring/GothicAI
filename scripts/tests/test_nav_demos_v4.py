@@ -91,7 +91,9 @@ def test_validation_commands_explicitly_disable_recording_and_oracle(tmp_path, t
 def measured(kind, teacher, index=0, success=True, observed=100, in_band=100, contacted=True):
     return dict(scenario(kind, index=index), mode=teacher, success=success, failure="" if success else "path_timeout",
         first_contact_ms=100 if contacted else None, follow_observed_ms=observed,
-        follow_in_band_ms=in_band, follow_fraction=in_band / observed if observed else None)
+        follow_in_band_ms=in_band, follow_fraction=in_band / observed if observed else None,
+        elapsed_ms=240000, limit_ms=240000, final_dead=False, final_down=False,
+        target_final_dead=False, target_final_down=False)
 
 
 def threshold_episodes():
@@ -225,3 +227,182 @@ def test_run_refuses_an_existing_output_with_changed_settings(tmp_path, monkeypa
     v3.write_json(validation.output_for(tmp_path) / "state.json", dict(settings=dict(navigation_memory_version=2)))
     with pytest.raises(ValueError, match="another binary, input, seed, memory or time limit"):
         validation.run(SimpleNamespace(task=tmp_path, parallel=3, limit_ms=240000))
+
+
+def expanded_inputs(task, monkeypatch):
+    originals = [scenario(kind, split, index) for split in ("train", "validation", "test")
+                 for kind in validation.KINDS for index in range(3)]
+    v3.write_selection(task / "input/moving-scenarios.jsonl", originals)
+    v3.write_selection(task / "input/training-pairs.jsonl", [dict(region="region-validation-0", start="S", goal="G")])
+    v3.write_json(task / "input/places.json", dict(places=[]))
+    for name in ("holdout-cv.jsonl", "ppo-validation.jsonl"):
+        (task / "input" / name).write_text("")
+    monkeypatch.setattr(v3, "exclusion_pairs", lambda *args: set())
+    pool = [dict(scenario(kind, index=index), region="region-validation-0")
+            for kind in validation.KINDS for index in range(3, 14)]
+    # These have attractive IDs, but belong to regions held for other splits.
+    pool += [dict(scenario(kind, "test", 99), id=f"{kind}-000", region="region-test-0") for kind in validation.KINDS]
+    calls = []
+
+    def candidates(places, training, excluded, seed, **kwargs):
+        calls.append((places, training, excluded, seed, kwargs))
+        return pool
+
+    monkeypatch.setattr(v3, "build_candidates", candidates)
+    return originals, pool, calls
+
+
+def test_final_validation_retains_originals_extends_only_validation_and_freezes_before_runs(tmp_path, monkeypatch):
+    originals, _, calls = expanded_inputs(tmp_path, monkeypatch)
+    sentinel = validation.output_for(tmp_path) / "metrics.json"
+    v3.write_json(sentinel, dict(original_attempt="untouched"))
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in tmp_path.rglob("*") if path.is_file()}
+    source, selected = validation.validation_cases(tmp_path, attempt=2, episodes_per_kind=10)
+    assert source == tmp_path / "validation/attempt-2/cases.jsonl"
+    expected_originals = [value for value in originals if value["split"] == "validation"]
+    assert selected[:6] == expected_originals
+    assert all(sum(value["goal_kind"] == kind for value in selected) == 10 for kind in validation.KINDS)
+    assert all(value["split"] == "validation" and value["region"].startswith("region-validation-") for value in selected)
+    assert calls[0][3:] == (19102026, dict(moving_per_region=20, point_count=24))
+    assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before}
+    frozen = source.read_bytes(), source.stat().st_mtime_ns
+    assert validation.validation_cases(tmp_path, 2, 10) == (source, selected)
+    assert (source.read_bytes(), source.stat().st_mtime_ns) == frozen
+    assert not list(tmp_path.rglob("samples.bin*"))
+
+
+def test_final_validation_rejects_changed_frozen_cases_and_short_pool(tmp_path, monkeypatch):
+    _, pool, _ = expanded_inputs(tmp_path, monkeypatch)
+    source, _ = validation.validation_cases(tmp_path, 2, 10)
+    before = source.read_bytes()
+    pool[0]["seed"] += 1
+    with pytest.raises(ValueError, match="frozen selection or its inputs changed"):
+        validation.validation_cases(tmp_path, 2, 10)
+    assert source.read_bytes() == before
+    pool.clear()
+    with pytest.raises(ValueError, match="new validation follow routes"):
+        validation.validation_cases(tmp_path, 2, 10)
+    assert source.read_bytes() == before
+
+
+def test_final_validation_rejects_changed_region_split_and_wrong_counts(tmp_path, monkeypatch):
+    _, pool, _ = expanded_inputs(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="10 episodes per kind"):
+        validation.validation_cases(tmp_path, 2, 3)
+    for value in pool:
+        if value["split"] == "validation":
+            value["split"] = "train"
+    with pytest.raises(ValueError, match="changed the frozen region split"):
+        validation.validation_cases(tmp_path, 2, 10)
+    assert not validation.output_for(tmp_path, 2).exists()
+
+
+def test_final_validation_identity_binds_original_selection_training_exclusions_and_runner(tmp_path, monkeypatch):
+    expanded_inputs(tmp_path, monkeypatch)
+    source, selected = validation.validation_cases(tmp_path, 2, 10)
+    options = SimpleNamespace(task=tmp_path, attempt=2, episodes_per_kind=10, limit_ms=240000)
+    args = validation.runner_args(options, 0)
+    for path in (args.runner, args.save, args.links):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("input")
+    identity = validation.settings(options, source, selected)
+    assert identity["attempt"] == 2 and identity["expected_by_kind"] == dict(follow=10, approach=10)
+    assert args.output == tmp_path / "validation/attempt-2/workers/0"
+    assert validation.directory_for(tmp_path, selected[0], "v3", 2).is_relative_to(validation.output_for(tmp_path, 2))
+    for path in (args.runner, args.save, args.links, args.roads, source,
+                 *(tmp_path / "input" / name for name in identity["selection_input_sha256"])):
+        original = path.read_bytes()
+        path.write_bytes(original + b" ")
+        assert validation.settings(options, source, selected) != identity
+        path.write_bytes(original)
+    assert validation.settings(options, source, selected) == identity
+
+
+def test_collection_follow_gate_is_independent_of_approach_and_v2_failure():
+    episodes = threshold_episodes()
+    for value in episodes:
+        if value["goal_kind"] == "approach":
+            value["success"] = False
+        elif value["mode"] == "v2":
+            value["follow_in_band_ms"] = 0
+    result = validation.summarize_metrics(episodes)
+    assert result["passed"] is False
+    assert result["collection"] == dict(follow=True, approach=True, roads=True, objects=True, jumps=True)
+    assert result["teacher_follow_gates"] == dict(follow_v3_passed=True, follow_v2_passed=False)
+    episodes[0]["follow_in_band_ms"] -= 1
+    result = validation.summarize_metrics(episodes)
+    assert result["collection"]["follow"] is False
+    assert result["collection"]["approach"] is True
+
+
+def test_follow_summary_uses_timed_occupancy_and_keeps_native_timeout_as_evidence():
+    episodes = threshold_episodes()
+    episodes[0].update(success=False, failure="path_timeout")
+    result = validation.summarize_metrics(episodes)
+    follow = result["by_kind"]["follow"]["v3"]
+    assert follow["successes"] == 1 and follow["native_successes"] == 1
+    assert follow["native_failures"] == dict(path_timeout=1)
+    assert follow["failures"] == dict(follow_band_below_threshold=1)
+    assert result["collection"]["follow"] is True
+
+
+@pytest.mark.parametrize("changed,expected", [
+    (dict(elapsed_ms=1000), "follow_incomplete_horizon"),
+    (dict(limit_ms=None), "follow_incomplete_horizon"),
+    (dict(elapsed_ms=None), "follow_incomplete_horizon"),
+    (dict(failure="actor_down", elapsed_ms=1000), "actor_down"),
+    (dict(failure="target_down", elapsed_ms=1000), "target_down"),
+    (dict(final_dead=True), "actor_down"),
+    (dict(final_down=True), "actor_down"),
+    (dict(target_final_dead=True), "target_down"),
+    (dict(target_final_down=True), "target_down"),
+    (dict(failure="blocked"), "blocked"),
+])
+def test_follow_never_passes_truncated_or_terminal_trials_even_with_perfect_band(changed, expected):
+    episodes = threshold_episodes()
+    episodes[0].update(changed)
+    assert validation.follow_outcome(episodes[0]) == expected
+    result = validation.summarize_metrics(episodes)
+    assert result["by_kind"]["follow"]["v3"]["failures"][expected] == 1
+    assert result["by_kind"]["follow"]["v3"]["passed"] is False
+    assert result["passed"] is False
+    assert result["collection"]["follow"] is False
+
+
+def test_follow_no_contact_failure_uses_native_reason_and_full_horizon_boundary():
+    value = measured("follow", "v3", contacted=False, observed=0, in_band=0)
+    assert validation.full_follow_horizon(value) is True
+    assert validation.follow_outcome(value) == "follow_no_contact"
+    value.update(first_contact_ms=100, follow_observed_ms=100, follow_in_band_ms=80)
+    assert validation.follow_outcome(value) == ""
+    value["elapsed_ms"] -= 1
+    assert validation.follow_outcome(value) == "follow_incomplete_horizon"
+
+
+def test_follow_diagnostics_distinguish_too_far_too_close_and_measure_physical_speed(tmp_path):
+    value = scenario()
+    write_episode(tmp_path, value)
+    metadata = v3.read_json(tmp_path / "episode.json")
+    metadata.update(elapsed_ms=350, decisions=4)
+    v3.write_json(tmp_path / "episode.json", metadata)
+    times = [0, 100, 200, 300, 350]
+    actions = np.zeros((5, 9))
+    actions[:, 0] = times
+    actions[:, 4] = 1
+    actions[1, 4] = 0
+    np.savetxt(tmp_path / "actions.txt", actions)
+    trajectory = np.zeros((5, 5))
+    trajectory[:, 0] = times
+    trajectory[:, 1] = np.asarray(times) * .2
+    np.savetxt(tmp_path / "trajectory.txt", trajectory)
+    target = np.zeros((5, 6))
+    target[:, 0] = times
+    target[:, 1] = np.asarray(times) * .3
+    target[:, 4] = [900, 400, 100, 700, 400]
+    np.savetxt(tmp_path / "target-trajectory.txt", target)
+    result = validation.text_metrics(tmp_path)
+    assert result["follow_observed_ms"] == 250 and result["follow_in_band_ms"] == 100
+    assert result["follow_too_close_ms"] == 100 and result["follow_too_far_ms"] == 50
+    assert result["follow_actor_speed_m_s"] == pytest.approx(2)
+    assert result["follow_target_speed_m_s"] == pytest.approx(3)
+    assert result["follow_walk_ms"] == 150 and result["follow_run_ms"] == 100

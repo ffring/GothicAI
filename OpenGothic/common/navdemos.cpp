@@ -54,6 +54,9 @@ struct Episode {
   size_t targetLeg=0;
   uint64_t targetResume=0,scenarioSeed=0,firstContactMs=0,followMs=0,inBandMs=0;
   bool contacted=false,targetQueued=false;
+  Vec3 previousTargetPosition;
+  uint64_t targetObservedAt=0,targetRunningUntil=0;
+  bool targetObserved=false;
   std::mt19937_64 targetRng;
   double detourLengthCm=0,travelCm=0;
   uint64_t backwardDecisions=0,strafeDecisions=0;
@@ -1272,18 +1275,35 @@ void decide(Episode& ep,World& w) {
       // These stand controls use the same target distance, previous action and
       // carrot exposed to the learner. Native jump/climb execution is retained.
       const float distance=(ep.goal-position).length();
+      if(ep.targetObserved && elapsed>ep.targetObservedAt) {
+        const auto movement=ep.goal-ep.previousTargetPosition;
+        const float targetSpeed=std::hypot(movement.x,movement.z)*1000.f/float(elapsed-ep.targetObservedAt);
+        if(targetSpeed>220.f)ep.targetRunningUntil=elapsed+500;
+      }
+      ep.previousTargetPosition=ep.goal;ep.targetObservedAt=elapsed;ep.targetObserved=true;
       d.keys.walk=ep.previous.walk;
-      if(distance>600.f)d.keys.walk=false;
-      else if(distance<400.f)d.keys.walk=true;
+      if(distance>400.f || (elapsed<ep.targetRunningUntil && distance>300.f))d.keys.walk=false;
+      else if(distance<300.f)d.keys.walk=true;
       if(ep.goalKind=="follow" && (ep.guidance.carrot-position).length()<50.f) {
         d.keys.forward=0;d.keys.strafe=0;
         if(distance<220.f) {
           auto away=position-ep.goal;away.y=0;
-          const float length=away.length();
-          if(length>0 && mesh.straightWalkable(meters(position),meters(position+away*(70.f/length)))) {
-            const auto relative=local(away,n.rotationRad());
-            if(std::abs(relative[0])>std::abs(relative[2]))d.keys.strafe=relative[0]>0?1.f:-1.f;
-            else d.keys.forward=relative[2]>0?1.f:-1.f;
+          const auto relative=local(away,n.rotationRad());
+          const bool sidewaysFirst=std::abs(relative[0])>std::abs(relative[2]);
+          for(unsigned attempt=0;attempt<2;++attempt) {
+            const bool sideways=attempt==0 ? sidewaysFirst : !sidewaysFirst;
+            const float component=relative[sideways?0:2];
+            if(component==0)continue;
+            const float sign=component>0?1.f:-1.f;
+            const float yaw=n.rotationRad();
+            const auto step=sideways?Vec3(-std::sin(yaw),0,std::cos(yaw))*(sign*70.f):
+                                     Vec3(std::cos(yaw),0,std::sin(yaw))*(sign*70.f);
+            // NpcKeys executes a cardinal axis, not the diagonal away vector.
+            // Verify that exact step and try the other away axis if blocked.
+            if(!mesh.straightWalkable(meters(position),meters(position+step)))continue;
+            if(sideways)d.keys.strafe=sign;
+            else d.keys.forward=sign;
+            break;
           }
         }
       }
@@ -1572,8 +1592,20 @@ void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
   const bool arrived=!following && (n.position()-ep.goal).length()<(ep.goalKind=="approach"?200.f:100.f) &&
                      !n.isInAir() && !n.navigationClimbing() && teacherSupported;
   if((!ep.replay && arrived) || elapsed>=ep.limit || n.isDown() || truncate) {
-    ep.success=following?(elapsed>=ep.limit && ep.followMs>0 && double(ep.inBandMs)/double(ep.followMs)>=.8):arrived;
-    if(!ep.success && ep.failure.empty())ep.failure=n.isDown()?"actor_down":truncate?"collection_limit":"path_timeout";
+    if(following) {
+      ep.success=!n.isDown() && !truncate && elapsed>=ep.limit && ep.followMs>0 &&
+                 double(ep.inBandMs)/double(ep.followMs)>=.8;
+      // Following has an observation horizon, not a final path endpoint. The
+      // last steering failure must not overwrite a successful tracking metric.
+      if(ep.success)ep.failure.clear();
+      else if(n.isDown())ep.failure="actor_down";
+      else if(truncate)ep.failure="collection_limit";
+      else ep.failure=ep.contacted?"follow_band_below_threshold":"follow_no_contact";
+    }
+    else {
+      ep.success=arrived;
+      if(!ep.success && ep.failure.empty())ep.failure=n.isDown()?"actor_down":truncate?"collection_limit":"path_timeout";
+    }
     if(ep.population) {
       measureBlocked(ep,elapsed);reward(ep,w,arrived || n.isDown(),!arrived && !n.isDown());
       if(ep.record && !arrived && !n.isDown()) {
