@@ -48,8 +48,7 @@ struct ObjVisual::FractureView {
         materials[triangle.texture].push_back(&triangle);
       for(const auto& [texture,triangles]:materials) {
         Material material;
-        material.tex = Resources::loadTexture(texture);
-        material.alpha = Material::Solid;
+        material.setAlbedo(Resources::loadMaterialAlbedo(texture));
         // The small-mesh constructor accepts one 64-vertex meshlet. Keep flat
         // face normals and independent UVs by batching at most 20 triangles.
         for(size_t first=0;first<triangles.size();first+=20) {

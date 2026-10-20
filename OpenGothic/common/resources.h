@@ -104,6 +104,8 @@ class Resources final {
     static Tempest::Texture2d        loadTextureUncached(std::string_view name, bool forceMips = false);
     static const Tempest::Texture2d* loadTexture(std::string_view name, bool forceMips = false);
     static const Tempest::Texture2d* loadTexture(Tempest::Color color);
+    static bool                      hasTextureVariant(std::string_view name);
+    static std::string               textureVariantName(std::string_view name, int32_t v, int32_t c);
     static const Tempest::Texture2d* loadTexture(std::string_view name, int32_t v, int32_t c);
     static       Tempest::Texture2d  loadTexturePm(const Tempest::Pixmap& pm);
     static auto                      loadTextureAnim(std::string_view name) -> std::vector<const Tempest::Texture2d*>;
@@ -120,6 +122,7 @@ class Resources final {
       bool                     hasAlbedo = false;
       };
     static MaterialMaps              loadMaterialMaps(std::string_view name);
+    static const Tempest::Texture2d* loadMaterialAlbedo(std::string_view name);
     static void                      materialAlbedoReplaced(std::string_view name);
     static bool                      materialMapsEnabled();
 
