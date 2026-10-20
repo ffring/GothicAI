@@ -175,7 +175,7 @@
   {
     "id": "rope",
     "visual": "NW_HARBOUR_ROPE_01.MRM",
-    "budget_tris": 2500,
+    "budget_tris": 4000,
     "zones": [
       {
         "key": "OWN_PROP_ROPE",
@@ -601,6 +601,11 @@
         "key": "OWN_PROP_WOOD_END",
         "group": "WOOD",
         "role": "sawn log ends"
+      },
+      {
+        "key": "OWN_PROP_WOOD_SPLIT",
+        "group": "WOOD",
+        "role": "split faces along the grain"
       }
     ],
     "kind": "static_mrm",
