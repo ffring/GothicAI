@@ -10,7 +10,8 @@ static Tempest::Color toColor(zenkit::Color v) {
   return c;
   }
 
-Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
+Material::Material(const zenkit::Material& m, bool enableAlphaTest)
+  :alphaTestEnabled(enableAlphaTest) {
   loadFrames(m);
 
   Resources::MaterialMaps maps;
@@ -32,11 +33,11 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
       tex = Resources::loadTexture("DEFAULT.TGA");
       } else {
       tex = Resources::loadTexture(toColor(m.color));
-      enableAlphaTest &= (m.color.a!=255);
+      alphaTestEnabled &= (m.color.a!=255);
       }
     }
 
-  alpha = loadAlphaFunc(m.alpha_func,m.group,m.color.a,tex,enableAlphaTest);
+  alpha = loadAlphaFunc(m.alpha_func,m.group,m.color.a,tex,alphaTestEnabled);
   if(alpha==Water && m.name=="OWODWFALL_WATERFALL_01") {
     // NOTE: waterfall heuristics
     alpha = Solid;
@@ -69,7 +70,8 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
     }
   }
 
-Material::Material(const zenkit::VisualDecal& decal) {
+Material::Material(const zenkit::VisualDecal& decal)
+  :alphaTestEnabled(true) {
   tex = Resources::loadTexture(decal.name);
   if(tex==nullptr && !decal.name.empty())
     tex = Resources::loadTexture("DEFAULT.TGA");
@@ -97,6 +99,7 @@ bool Material::operator ==(const Material& other) const {
          materialMaps==other.materialMaps &&
          frames==other.frames &&
          alpha==other.alpha &&
+         alphaTestEnabled==other.alphaTestEnabled &&
          alphaWeight==other.alphaWeight &&
          texAniMapDirPeriod==other.texAniMapDirPeriod &&
          texAniFPSInv==other.texAniFPSInv &&
@@ -112,7 +115,7 @@ bool Material::isSolid() const {
 void Material::setAlbedo(const Tempest::Texture2d* texture) {
   tex = texture;
   if(alpha==Solid || alpha==AlphaTest)
-    alpha = loadAlphaFunc(zenkit::AlphaFunction::NONE,zenkit::MaterialGroup::UNDEFINED,255,tex,true);
+    alpha = loadAlphaFunc(zenkit::AlphaFunction::NONE,zenkit::MaterialGroup::UNDEFINED,255,tex,alphaTestEnabled);
   }
 
 bool Material::isForwardShading(AlphaFunc alpha) {

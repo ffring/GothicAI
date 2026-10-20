@@ -68,6 +68,8 @@ class Material final {
     static bool isTextureInShadowPass(AlphaFunc alpha);
 
   private:
+    bool             alphaTestEnabled = false;
+
     static AlphaFunc loadAlphaFunc(zenkit::AlphaFunction zenAlpha, zenkit::MaterialGroup matGroup,
                                    uint8_t alpha, const Tempest::Texture2d* tex, bool enableAlphaTest);
     void             loadFrames(const zenkit::Material& m);

@@ -1,6 +1,7 @@
 #include "commandline.h"
 #include "graphics/material.h"
 #include "graphics/mesh/skeleton.h"
+#include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/meshobjects.h"
 #include "graphics/sceneglobals.h"
 #include "graphics/shaders.h"
@@ -73,7 +74,7 @@ struct Fixture final {
     std::filesystem::create_directories(root/"_work");
     ddsFile(root/"materials/solid.dds",false);
     ddsFile(root/"materials/alpha.dds",true);
-    for(const auto* name:{"NW_CITY_ROPE_01.TGA","HUM_BODY_V0_C0.TGA"})
+    for(const auto* name:{"NW_CITY_ROPE_01.TGA","HUM_BODY_V0_C0.TGA","HUM_BODY_V1_C0.TGA"})
       ddsFile(root/"_work"/name,true);
     for(const auto* name:{"NW_CITY_WOOD_01.TGA","NW_HARBOUR_WOODCRATE_01.TGA",
                          "NW_HARBOUR_WOODCRATE_02.TGA","HUM_BODY_V2_C3.TGA",
@@ -126,6 +127,35 @@ void variants() {
   require(Resources::textureVariantName(longName,2,3)==longName,"long-name fallback must remain unchanged");
   }
 
+void opaqueStaticVariant(MeshObjects& owner, const zenkit::MultiResolutionMesh& mesh, bool ownAlbedo) {
+  PackedMesh packed(mesh,PackedMesh::PK_Visual);
+  packed.isUsingAlphaTest = false;
+  StaticMesh rigid(packed);
+  require(rigid.sub.size()==1,"the opaque fixture must contain one real static submesh");
+  require(rigid.sub[0].material.alpha==Material::Solid,
+          "StaticMesh must pass the mesh's disabled alpha-test flag to its material");
+
+  MeshObjects::Mesh selected(owner,rigid,ownAlbedo ? 2 : 1,0,ownAlbedo ? 3 : 0);
+  require(selected.nodesCount()==1,"the renderer must allocate the selected opaque static submesh");
+  const auto& material = selected.node(0).material();
+  const auto* expected = Resources::loadMaterialAlbedo(ownAlbedo ? "HUM_BODY_V2_C3.TGA" : "HUM_BODY_V1_C0.TGA");
+  require(material.tex==expected,"the static draw bucket must use the selected DXT5 variant");
+  require(material.tex!=nullptr && material.tex->format()==Tempest::TextureFormat::DXT5,
+          "the opaque static variant must exercise a DXT5 texture");
+  require(material.alpha==Material::Solid,
+          "a DXT5 variant must preserve the static mesh's disabled alpha-test flag");
+
+  Material fragment;
+  fragment.setAlbedo(expected);
+  require(fragment.tex==expected && fragment.alpha==Material::Solid,
+          "a default fracture material must remain solid with a DXT5 albedo");
+
+  Material enabled(source("UNLISTED.TGA"),true);
+  Material disabled(source("UNLISTED.TGA"),false);
+  require(enabled.alpha==Material::Solid && disabled.alpha==Material::Solid && !(enabled==disabled),
+          "equal current formats must not hide a different alpha-test policy");
+  }
+
 void skinnedVariant(bool ownAlbedo) {
   // Use the renderer owner: the CPU-only MeshObjects path does not select
   // skinned texture variants or allocate the resulting material's draw bucket.
@@ -167,6 +197,7 @@ void skinnedVariant(bool ownAlbedo) {
           "the skinned variant must use its own DDS format");
   require(material.alpha==(ownAlbedo ? Material::AlphaTest : Material::Solid),
           "the skinned variant draw bucket must reclassify alpha from its selected albedo");
+  opaqueStaticVariant(owner,skin.mesh,ownAlbedo);
   }
 
 void replacements(Tempest::Device& device, const Fixture& fixture) {

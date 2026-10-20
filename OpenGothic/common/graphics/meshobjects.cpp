@@ -142,7 +142,7 @@ MeshObjects::Mesh::Mesh(MeshObjects& owner, const StaticMesh& mesh, int32_t vers
   cpuOnly = owner.parent==nullptr;
   if(cpuOnly) {
     for(auto& s:mesh.sub) {
-      if(!Resources::hasTextureVariant(s.texName) && version!=0)
+      if(s.texName.find_first_of("VC")==std::string::npos && version!=0)
         continue;
       CpuNode n;
       n.bounds = mesh.bbox;
@@ -159,7 +159,7 @@ MeshObjects::Mesh::Mesh(MeshObjects& owner, const StaticMesh& mesh, int32_t vers
   subCount = 0;
   for(size_t i=0;i<mesh.sub.size();++i) {
     // NOTE: light dragon hunter armour
-    if(!Resources::hasTextureVariant(mesh.sub[i].texName) && version!=0)
+    if(mesh.sub[i].texName.find_first_of("VC")==std::string::npos && version!=0)
       continue;
     Item it = owner.implGet(mesh,mesh.sub[i],0,0,version,staticDraw);
     if(it.isEmpty())
