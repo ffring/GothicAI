@@ -207,7 +207,7 @@
   {
     "id": "candle",
     "visual": "NW_CITY_CANDLE_01.MRM",
-    "budget_tris": 800,
+    "budget_tris": 1600,
     "zones": [
       {
         "key": "OWN_PROP_IRON_BAND",

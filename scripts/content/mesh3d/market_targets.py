@@ -45,7 +45,7 @@ TARGETS = [
     {"id": "barrel-group", "visual": "NW_HARBOUR_BARRELGROUP_01.MRM", "budget_tris": 6000,
      "zones": [zone("OWN_PROP_WOOD_STAVE", "WOOD", "barrel staves and head"), IRON, WOOD_FRAME]},
     {"id": "rope", "visual": "NW_HARBOUR_ROPE_01.MRM", "budget_tris": 4000, "zones": [ROPE]},
-    {"id": "candle", "visual": "NW_CITY_CANDLE_01.MRM", "budget_tris": 800,
+    {"id": "candle", "visual": "NW_CITY_CANDLE_01.MRM", "budget_tris": 1600,
      "zones": [IRON, zone("OWN_PROP_WAX", "UNDEF", "candle wax and drips")]},
     {"id": "weapon-bag", "visual": "NW_CITY_WEAPON_BAG_01.MRM", "budget_tris": 1500,
      "zones": [zone("OWN_PROP_LEATHER", "UNDEF", "leather and cloth wrapping"), STEEL,

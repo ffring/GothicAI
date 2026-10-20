@@ -12,7 +12,9 @@ A source tile is quilted seamless along its axes (seam_fix.seamless), resized to
 1024² and turned into the six stage-1 maps by the CPU filter (bakeoff.filtered_maps).
 "crop": [l, t, r, b] with "size": [w, h] cuts a panel (a whole carpet) out of our own
 concept instead and keeps its aspect; such a panel has axes "".
-"copy" reuses an existing tile directory unchanged. The atlas bake later scales
+"copy" reuses an existing tile directory unchanged; "procedural": {"base": [r, g, b],
+"noise": 0.08, "seed": 1, "relief": 0.25} makes a smooth periodic surface (wax, glass, bone) with
+no image_gen; relief scales its normal, height and AO down from the filter's full strength. The atlas bake later scales
 each zone to the original's measured mean colour, so a tile carries pattern and
 relief, not the final colour. --import-sources keeps each source PNG once in
 content-sources/mesh3d-market/ and appends one material recipe per tile.
@@ -59,6 +61,32 @@ def build_tile(source: Path, axes: str, roughness: float, metallic: float, out: 
         value = np.clip(np.asarray(maps[name], dtype=np.float32), 0, 1)
         Image.fromarray(np.rint(value * 255).astype("uint8")).save(out / f"{name}.png")
     return seam
+
+
+def procedural_tile(spec: dict, out: Path) -> None:
+    """A smooth, periodic noise surface (wax, glass, bone): no image_gen, reproducible from the spec."""
+    from scipy.ndimage import gaussian_filter
+    rng = np.random.default_rng(spec.get("seed", 1))
+    field = np.zeros((1024, 1024), dtype=np.float32)
+    for sigma, weight in ((48, 0.6), (12, 0.3), (3, 0.1)):
+        layer = gaussian_filter(rng.standard_normal((1024, 1024)).astype(np.float32), sigma, mode="wrap")
+        field += weight * layer / max(float(np.abs(layer).max()), 1e-6)
+    shade = np.clip(1 + spec.get("noise", 0.08) * field, 0, None)[..., None]
+    rgb = np.clip(np.array(spec["base"], dtype=np.float32) * shade, 0, 1)
+    image = Image.fromarray(np.rint(rgb * 255).astype("uint8"))
+    maps = bakeoff.filtered_maps(image, {"parameters": {"tiling_axes": "uv", "roughness_base": spec["roughness"]}})
+    maps["metallic"] = np.full_like(maps["height"], spec.get("metallic", 0.0))
+    # The stage-1 filter stretches any relief to full strength; these surfaces are smooth.
+    relief = spec.get("relief", 0.25)
+    flat = np.array([0.5, 0.5, 1.0], dtype=np.float32)
+    normal = flat + (np.asarray(maps["normal"], dtype=np.float32) - flat) * relief
+    maps["normal"] = normal
+    maps["height"] = 0.5 + (np.asarray(maps["height"], dtype=np.float32) - 0.5) * relief
+    maps["ao"] = 1 - (1 - np.asarray(maps["ao"], dtype=np.float32)) * relief
+    out.mkdir(parents=True, exist_ok=True)
+    for name in MAPS:
+        value = np.clip(np.asarray(maps[name], dtype=np.float32), 0, 1)
+        Image.fromarray(np.rint(value * 255).astype("uint8")).save(out / f"{name}.png")
 
 
 def record_for(key: str, spec: dict, seam: dict, raw: bytes, utc: str, files_root: Path, tile_dir: Path) -> dict:
@@ -121,9 +149,14 @@ def main() -> int:
     records = []
     for key, tile in spec["tiles"].items():
         target = output / key
+        if "procedural" in tile:
+            shutil.rmtree(target, ignore_errors=True)
+            procedural_tile({**tile["procedural"], "roughness": tile["roughness"], "metallic": tile.get("metallic", 0.0)}, target)
+            print(f"{key}: procedural {tile['procedural']}")
+            continue
         if "copy" in tile:
             shutil.rmtree(target, ignore_errors=True)
-            shutil.copytree(Path(tile["copy"]).expanduser(), target)
+            shutil.copytree(Path(tile["copy"]).expanduser(), target)  # pilot tiles: wood and iron
             print(f"{key}: copied {tile['copy']}")
             continue
         raw = Path(tile["png"]).read_bytes()
