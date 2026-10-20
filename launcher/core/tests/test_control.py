@@ -68,7 +68,11 @@ def setup(tmp_path, monkeypatch):
     )
     window = Window()
     c = Control(
-        window, config_dir=config_dir, state_file=tmp_path / "launcher.json", log_root=tmp_path / "logs"
+        window,
+        config_dir=config_dir,
+        state_file=tmp_path / "launcher.json",
+        log_root=tmp_path / "logs",
+        admitted=True,  # exercise the local supervisor; queue admission has its own Linux tests
     )
 
     def fake_services(config, layout, ports: Ports, cwd: Path) -> list[Proc]:
@@ -220,3 +224,21 @@ async def test_checks_respect_switched_off_parts(checks_setup):
     await call(c, "settings.set", key="voice.enabled", value=False)
     with pytest.raises(RuntimeError, match="выключен"):
         await call(c, "test.voice")
+
+
+async def test_smoke_control_uses_fake_model_without_saving_overrides(setup, monkeypatch):
+    c, window, tmp_path = setup
+    saved = (c.config_dir / "settings.toml").read_text()
+    captured = {}
+
+    def smoke_services(config, layout, ports, cwd):
+        captured.update(config.settings.model_dump())
+        return []
+
+    monkeypatch.setattr(control_module, "services", smoke_services)
+    await call(c, "session.start", mode="new", smoke=True)
+    await c.shutdown()
+    assert captured["llm"]["backend"] == "fake"
+    assert not captured["llm"]["quick"] and not captured["llm"]["body_url"]
+    assert not captured["voice"]["enabled"] and not captured["tts"]["enabled"]
+    assert (c.config_dir / "settings.toml").read_text() == saved

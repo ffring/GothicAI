@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the launcher (Gothic AI.app), signs it and installs it to /Applications.
+# Builds the launcher: signed Gothic AI.app on macOS, a native binary on Linux.
 #
 #   scripts/build-launcher.sh               release build, signed, installed
 #   scripts/build-launcher.sh --no-install  only build and sign
@@ -26,6 +26,38 @@ for arg in "$@"; do
     *) echo "usage: $0 [--debug] [--no-install]" >&2; exit 2 ;;
   esac
 done
+
+if [ "$(uname -s)" = Linux ]; then
+  export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
+  if ! command -v bun >/dev/null; then
+    # Install only the binary in the user's home; leave shell profiles and bun.lock alone.
+    python3 - <<'PY'
+import io
+import os
+import urllib.request
+import zipfile
+from pathlib import Path
+
+url = "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64.zip"
+with urllib.request.urlopen(url) as response:
+    archive = zipfile.ZipFile(io.BytesIO(response.read()))
+binary = Path.home() / ".local/bin/bun"
+binary.parent.mkdir(parents=True, exist_ok=True)
+temporary = binary.with_suffix(".download")
+temporary.write_bytes(archive.read("bun-linux-x64/bun"))
+temporary.chmod(0o755)
+os.replace(temporary, binary)
+PY
+  fi
+  cd "$APP_SRC"
+  bun install --frozen-lockfile
+  args=(--no-bundle)
+  if [ "$PROFILE" = debug ]; then args+=(--debug); fi
+  bun tauri build "${args[@]}"
+  # ryzen-play.sh installs the desktop entry pointing into this checkout.
+  echo "built: $APP_SRC/src-tauri/target/$PROFILE/gothic-launcher"
+  exit 0
+fi
 
 identity="${GOTHIC_SIGNING_IDENTITY:-}"
 if [ -z "$identity" ] && [ -f "$ROOT/.env" ]; then
