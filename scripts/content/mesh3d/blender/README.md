@@ -15,6 +15,18 @@ uv run --with numpy --with pillow python scripts/content/mesh3d/iron_material.py
   /absolute/maps/own_prop_iron_band --target R G B
 ```
 
+Своя текстура на предмет:
+
+```sh
+$B -b --factory-startup -P scripts/content/mesh3d/blender/bake_atlas.py -- \
+  scripts/content/mesh3d/blender/barrel-atlas.json /absolute/output/barrel-atlas
+uv run --no-project --with numpy --with pillow python scripts/content/mesh3d/pack_prop.py \
+  --bake /absolute/output/barrel-atlas --visual NW_HARBOUR_BARREL_01 --name mesh3d-barrel-atlas \
+  --output ~/.local/share/gothic-ai/content-staging/mesh3d-barrel-atlas
+```
+
+`bake_atlas.py` даёт модели новую развёртку-атлас и запекает в неё плиточные материалы этапа 1. Сверху добавляются тон каждой детали, тёмные щели по краям досок, светлые стёртые кромки, выгоревший верх, мокрый низ и AO. Затем каждая зона растягивается по контрасту и возвращается к своему замеренному среднему цвету. Пути `glb` и `maps_dir` в настройках — внутри `content-staging`. В GLB остаётся одна UV, атлас, и материалы атласа с группами звука. `pack_prop.py` упаковывает атлас в DDS один раз и даёт каждому материалу GLB свой ключ `materials.json` на эти файлы.
+
 `barrel.py` снимает профиль с альфы вида спереди (`front` — путь внутри `content-sources`), остальные части берёт из `barrel.json`: число клёпок, положение и высоту обручей, стык, венец, доски крышки. Пишет `model.glb` и `metrics.json`. `compare.py` рендерит GLB с одним светом и камерой по списку видов, материалы `ours` берёт из `maps_dir/<ключ>/`. `iron_material.py` делает бесшовное кованое железо со средним цветом замера.
 
 ## Установка и запуск

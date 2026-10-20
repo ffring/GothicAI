@@ -3,7 +3,7 @@
 blender -b --factory-startup -P barrel.py -- barrel.json OUT_DIR
 config: {"target": mesh3d-pilot.json (default: the repo's), "id": "barrel",
          "front": front-view RGBA PNG (relative: under content-sources), "sides": 20, "seed": 1,
-         "hoops": [[centre_fraction, height_m], ...], "hoop_thickness": 0.008,
+         "hoops": [[centre_fraction, height_m], ...], "hoop_thickness": 0.008, "hoop_slope": 0.02,
          "rim": 0.025, "chime_depth": 0.03, "gap": 0.004, "rim_drop": 0.006,
          "lid_planks": 4, "jitter": 0.12,
          "stave_tile": 0.38, "planks_per_tile": 4, "ring_step": 0.09}
@@ -156,19 +156,23 @@ for i in range(sides):
 # Hoops: raised skin plus top and bottom lips, welded to the stave rings.
 for a, b in hoops:
     idx = [j for j, z in enumerate(levels) if a - 1e-6 <= z <= b + 1e-6]
-    outer = [ring(levels[j], r_at(levels[j]) + t_hoop) for j in idx]
+    # The hoop's top edge slopes down to the staves instead of a flat ledge: a narrow ledge
+    # facing the sun breaks into a bright dashed line on the game's shadow map.
+    slope = cfg.get("hoop_slope", 0.02)
+    skin = [levels[j] - (slope if j == idx[-1] else 0.0) for j in idx]
+    outer = [ring(z, r_at(z) + t_hoop) for z in skin]
     r_mid = r_at((a + b) / 2) + t_hoop
     for i in range(sides):
         k = (i + 1) % sides
         u0, u1 = angles[i] * r_mid, (angles[i] + 2 * math.pi / sides) * r_mid
         for m in range(len(idx) - 1):
-            z0, z1 = levels[idx[m]], levels[idx[m + 1]]
+            z0, z1 = skin[m], skin[m + 1]
             quad((outer[m][i], outer[m][k], outer[m + 1][k], outer[m + 1][i]), BAND,
                  ((u0, z0), (u1, z0), (u1, z1), (u0, z1)))
         for m, j in ((0, idx[0]), (len(idx) - 1, idx[-1])):
-            z = levels[j]
+            z, dz = skin[m], abs(levels[j] - skin[m]) + t_hoop
             quad((body[j][i], body[j][k], outer[m][k], outer[m][i]), BAND,
-                 ((u0, z), (u1, z), (u1, z + t_hoop), (u0, z + t_hoop)))
+                 ((u0, z), (u1, z), (u1, z + dz), (u0, z + dz)))
 
 # Hoop seams: an overlapping plate with two rivet heads, all on one side as in the concept.
 def box(centre, tu, tv, tn, hu, hv, depth, material):
@@ -196,7 +200,7 @@ from mathutils import Vector  # noqa: E402
 
 seam = cfg.get("seam_stave", 0)
 for a, b in hoops:
-    za, zb = a, b
+    za, zb = a, b - cfg.get("hoop_slope", 0.02)  # the plate sits on the hoop skin, below its sloped top
     s0, s1 = angles[seam], angles[seam + 1]
     def p(r, ang, z):
         return Vector((cx + r * math.cos(ang), cy + r * math.sin(ang), base_z + z))
