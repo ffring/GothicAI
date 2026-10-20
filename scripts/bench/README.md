@@ -29,6 +29,20 @@ for the GLB replacement; `OPENGOTHIC_CONTENT=` gives the original-mesh compariso
 For FPS comparisons use `RYZEN_BENCH_CLASS=quiet`; [the barrel report](../../reports/content/2026-10-own-meshes/README.md)
 records the replacement, original-mesh screenshots and alternating branch/main runs.
 
+`own-mesh-fracture` breaks `NW_HARBOUR_BARREL_01` with the real one-handed
+attack animation from `destruction-step2-melee`. It takes before/after screenshots,
+records the attack, writes a checkpoint with the fragments, and flushes the resource
+census. Use `WORLD=NEWWORLD.ZEN`, `GOTHIC_AI=0`, `OPENGOTHIC_TEXTURES=`,
+`OPENGOTHIC_CONTENT=<generated test content with its .fracture>` and an absolute
+`OPENGOTHIC_CENSUS=<absolute output>/census.json`. Repeat with `OPENGOTHIC_CONTENT=`
+and the unchanged original `OPENGOTHIC_FRACTURE` cache for comparison.
+NEWWORLD has other visuals sharing `NW_CITY_BARREL_01.TGA`; for a zero-original-texture
+census, map this name to the procedural barrel DDS in the temporary test material index
+as shown in the report. The replacement mesh and pieces still use `OWN_TEST_BARREL_WOOD.TGA`.
+Run through `BENCH_HOST=ryzen scripts/bench.sh own-mesh-fracture <absolute output>`;
+[the report](../../reports/content/2026-10-own-meshes-fracture/README.md) records
+source identity, piece volume, native hits and original resource opens.
+
 Corpse water: `water-bodies` records a real harbour WindFist throw, a dead wolf and a
 sinking skeleton, then saves `session-water-bodies.sav` and tries normal corpse loot
 from dry ground and while swimming. `water-bodies-shallow` observes a corpse on the

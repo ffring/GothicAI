@@ -33,6 +33,8 @@
 
 Генераторы 3D для предметов этапа 2: [кандидаты, лицензии и конвейер](../reports/content/2026-10-3d-generators/README.md); пользователь запустил пилот 2026-10-20. [Пять численных целей и 10 концептов](../reports/content/2026-10-3d-pilot/README.md): `data/content/mesh3d-pilot.json`, `scripts/content/mesh3d/measure_targets.py` + `target-measures.cpp` (из оригинала выходят только числа), `concepts.py` (импорт PNG и лист 5 × 2), проверка `check-concepts.sh`; исходники в `content-sources/mesh3d-pilot/`, рецепты `kind: concept` в общем реестре.
 
+Собственные осколки индексированных GLB: `scripts/fracture.sh content <каталог> [--verify]`, соседние `.fracture` v2 с размером/CRC32; оригинальные осколки остаются в отдельном кэше. Стенд `own-mesh-fracture` сравнивает поломку своей бочки и оригинала; [отчёт, снимки и числа](../reports/content/2026-10-own-meshes-fracture/README.md).
+
 ## Путь одной реплики героя
 
 1. Герой держит клавишу разговора. `voice.py` пишет микрофон Mac и стримит звук в `asr-service`. Тот передаёт его Voxtral на dev-ubuntu, запасной вариант — подписка ChatGPT. Промежуточный текст сразу показывается в игре.
