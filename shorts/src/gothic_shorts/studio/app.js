@@ -10,6 +10,7 @@ const video = $('video');
 
 const S = {
   session: null,
+  loadRequest: 0, // only the latest session request may update the page
   i: 0, // the current line (index)
   mode: 'idle', // idle | rec | saving | play | run | room
   ctx: null,
@@ -46,9 +47,11 @@ async function api(path, body) {
 }
 
 async function load(keepLine = true) {
-  const i = S.i;
-  S.session = await api('/api/session');
-  S.i = keepLine ? Math.min(i, S.session.lines.length - 1) : 0;
+  const request = ++S.loadRequest;
+  const session = await api('/api/session');
+  if (request !== S.loadRequest) return;
+  S.session = session;
+  S.i = keepLine ? Math.min(S.i, S.session.lines.length - 1) : 0;
   document.title = `Озвучка · ${S.session.name}`;
   $('name').textContent = `${S.session.name} · озвучка`;
   if (S.session.video && !video.src.endsWith(S.session.video)) {

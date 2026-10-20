@@ -5,6 +5,7 @@ import subprocess
 import threading
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -196,3 +197,14 @@ def test_the_studio_does_not_use_native_browser_dialogs():
 def test_the_studio_javascript_has_valid_syntax():
     done = subprocess.run(["node", "--check", str(APP / "app.js")], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_old_choose_responses_do_not_undo_restore_or_navigation():
+    done = subprocess.run(
+        ["node", str(Path(__file__).with_name("studio_race.js")), str(APP / "app.js")],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
