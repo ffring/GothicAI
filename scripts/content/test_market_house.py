@@ -94,43 +94,130 @@ def test_house_gain_solver_accounts_for_highlight_clipping():
     assert corrected[TEXTURES[0]][0, 1, 0] == 255
 
 
-def test_oak_mask_selects_brown_posts_but_excludes_plaster_and_dark_grey_green_stains():
-    plaster = [208, 208, 204]
-    pixels = np.full((48, 80, 3), plaster, dtype=np.uint8)
-    posts = np.zeros(pixels.shape[:2], dtype=bool)
-    posts[:, 10:20] = True
-    posts[:, 54:64] = True
-    stains = np.zeros_like(posts)
-    stains[8:22, 30:44] = True
-    stains[30:42, 68:78] = True
-    pixels[posts] = [96, 44, 12]
-    pixels[stains] = [36, 60, 66]
-    original = pixels.copy()
+def test_material_colour_couples_painted_oak_to_final_beam_and_matches_group_targets():
+    wall, window, *stone, oak = TEXTURES
+    panels = {}
+    for name in (wall, window):
+        pixels = np.full((256, 256, 3), [210, 205, 190], dtype=np.uint8)
+        pixels[:, 16:56] = [85, 65, 40]
+        pixels[:, 200:240] = [85, 65, 40]
+        panels[name] = pixels
+    panels[window][70:194, 78:178] = [85, 65, 40]
+    images = dict(panels)
+    for name, colour in zip(stone, ([125, 130, 110], [155, 145, 125], [100, 100, 95])):
+        images[name] = np.full((64, 64, 3), colour, dtype=np.uint8)
+    images[oak] = np.full((64, 64, 3), [90, 60, 30], dtype=np.uint8)
+    originals = {name: pixels.copy() for name, pixels in images.items()}
+    areas = dict(zip(TEXTURES, (3., 1., 2., 5., 1., 4.)))
+    targets = dict(zip(TEXTURES, map(np.array, (
+        [.25, .24, .20], [.16, .15, .12], [.10, .15, .12],
+        [.12, .13, .11], [.08, .14, .10], [.025, .020, .010]))))
 
-    mask, metadata = market_house.oak_mask(pixels)
+    corrected, _, masks = market_house.correct_material_colours(images, areas, targets)
 
-    assert mask.shape == pixels.shape[:2]
-    assert np.issubdtype(mask.dtype, np.floating)
-    assert np.isfinite(mask).all()
-    assert 0 <= mask.min() <= mask.max() <= 1
-    assert mask[posts].min() > .9
-    assert mask[stains].max() < .1
-    assert mask[~(posts | stains)].max() < .1
+    for group in ((wall, window), stone):
+        group_areas = {name: areas[name] for name in group}
+        expected = sum(areas[name] * targets[name] for name in group) / sum(group_areas.values())
+        actual = house_mean({name: corrected[name] for name in group}, group_areas)
+        np.testing.assert_allclose(actual, expected, atol=.005, rtol=0)
+    final_oak_mean = linear(corrected[oak]).mean(axis=(0, 1))
+    np.testing.assert_allclose(final_oak_mean, targets[oak], atol=.005, rtol=0)
+    wood_pixels, pixel_areas = [], []
+    for name in (wall, window):
+        pixels = linear(corrected[name])[masks[name] > .5]
+        assert pixels.size
+        wood_pixels.append(pixels)
+        # A selected texel represents its share of this panel's world area;
+        # the shutter therefore contributes more oak than a plain wall panel.
+        pixel_areas.append(np.full(len(pixels), areas[name] / masks[name].size))
+    painted_oak_mean = np.average(np.concatenate(wood_pixels), axis=0,
+                                 weights=np.concatenate(pixel_areas))
+    np.testing.assert_allclose(painted_oak_mean, final_oak_mean, atol=.005, rtol=0)
+    for name in TEXTURES:
+        np.testing.assert_array_equal(images[name], originals[name])
+
+
+def test_oak_masks_average_light_wood_grain_and_keep_soft_plaster_spots_light():
+    y, x = np.mgrid[:256, :256]
+    soft_spot = np.exp(-((x - 128) ** 2 + (y - 128) ** 2) / (2 * 18 ** 2))
+    pixels = np.rint(np.array([210, 207, 198]) - 12 * soft_spot[..., None]).astype(np.uint8)
+    posts = ((32 <= x) & (x < 96)) | ((160 <= x) & (x < 224))
+    pixels[posts] = [54, 30, 15]
+    pixels[posts & (x % 8 == 0)] = [182, 167, 135]
+    images = {name: pixels.copy() for name in TEXTURES[:2]}
+
+    masks, metadata = market_house.oak_masks(images)
+
+    for name, mask in masks.items():
+        assert mask.shape == pixels.shape[:2]
+        assert np.issubdtype(mask.dtype, np.floating)
+        assert np.isfinite(mask).all()
+        assert 0 <= mask.min() <= mask.max() <= 1
+        # Test broad interiors, away from the intentionally soft material edge.
+        assert mask[:, 48:80].min() > .9
+        assert mask[:, 176:208].min() > .9
+        assert mask[:, 112:144].max() < .1
+        np.testing.assert_array_equal(images[name], pixels)
     assert isinstance(metadata, dict)
-    np.testing.assert_array_equal(pixels, original)
 
 
-def test_oak_mask_has_a_soft_transition_on_a_brown_to_plaster_ramp():
+def test_oak_masks_use_one_pooled_threshold_and_treat_identical_inputs_identically():
+    wall, window = TEXTURES[:2]
+    images = {wall: np.full((64, 64, 3), 45, dtype=np.uint8),
+              window: np.full((64, 64, 3), 200, dtype=np.uint8)}
+
+    masks, _ = market_house.oak_masks(images)
+
+    # An independent Otsu threshold on either constant input would put both
+    # materials at its sigmoid midpoint instead of separating the two classes.
+    assert masks[wall].min() > .9
+    assert masks[window].max() < .1
+
+    pixels = np.full((64, 64, 3), 200, dtype=np.uint8)
+    pixels[:, 16:48] = 45
+    masks, _ = market_house.oak_masks({wall: pixels.copy(), window: pixels.copy()})
+    # There is no V variation, so wrap and reflect must give the same result.
+    np.testing.assert_array_equal(masks[wall], masks[window])
+
+
+def test_oak_masks_blur_log_luminance_with_periodic_u_and_only_wall_periodic_v():
+    from scipy.ndimage import gaussian_filter
+
+    wall, window = TEXTURES[:2]
+    y = np.linspace(0, 1, 1024)[:, None]
+    x = np.arange(1024)[None, :] * 2 * np.pi / 1024
+    luminance = np.exp(-2 + .5 * (2 * y - 1) + .2 * np.sin(x))
+    pixels = encoded(np.repeat(luminance[..., None], 3, axis=2))
+    images = {wall: pixels.copy(), window: pixels.copy()}
+
+    masks, _ = market_house.oak_masks(images)
+
+    log_y = np.log(linear(pixels) @ np.array([.2126, .7152, .0722]))
+    thresholds = []
+    for name, modes in ((wall, ('wrap', 'wrap')), (window, ('reflect', 'wrap'))):
+        blurred = gaussian_filter(log_y, sigma=6, mode=modes)
+        mask = masks[name]
+        assert np.all((mask > 0) & (mask < 1))
+        # Inverting the stated sigmoid must recover one threshold at every
+        # pixel. This checks blur order, sigma, boundary modes and width .3.
+        threshold = blurred + .3 * np.log(mask / (1 - mask))
+        np.testing.assert_allclose(threshold, threshold.mean(), atol=1e-6, rtol=0)
+        thresholds.append(threshold.mean())
+    assert thresholds[0] == pytest.approx(thresholds[1], abs=1e-6)
+    assert np.max(np.abs(masks[wall][0] - masks[window][0])) > .1
+
+
+def test_oak_masks_have_a_soft_transition_on_a_brown_to_plaster_ramp():
     start = np.array([96, 44, 12], dtype=float)
     end = np.array([208, 208, 204], dtype=float)
     ramp = np.rint(start + np.linspace(0, 1, 256)[:, None] * (end - start)).astype(np.uint8)
     pixels = np.broadcast_to(ramp[None, ...], (16, 256, 3)).copy()
 
-    mask, _ = market_house.oak_mask(pixels)
+    masks, _ = market_house.oak_masks({name: pixels.copy() for name in TEXTURES[:2]})
 
     # A thresholded segmentation would have only zeroes and ones. A broad
     # transition also catches a nominal sigmoid that is effectively a step.
-    values = mask[0]
+    values = masks[TEXTURES[0]][0]
     assert np.count_nonzero((values > .1) & (values < .9)) >= 10
     assert np.unique(values).size >= 20
     assert np.max(np.abs(np.diff(values))) < .15

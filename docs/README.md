@@ -49,7 +49,7 @@
 
 [Дом у рынка: концепция и шесть текстур](../reports/content/2026-10-market-house-concept/README.md#текстуры-дома): `scripts/content/market_house.py prepare/build`, реестр `data/content/market-house.jsonl`, staging `house-1` на базе `pilot-3b`. Один общий RGB-множитель по площади дома, узкие стыки, без подгонки детали и IID. `market-house.bench` и `capture-quality-pilot.sh` с `QUALITY_PILOT_TASK=gothic-ai/market-house` снимают три вида original / pilot-3b / house-1 через `gq` одной сборкой; `--compose-house` собирает три JPEG. [Текущий порядок и ограничения](own-content.md#дом-у-рынка-концепция-и-текстуры), [здание прежде текстуры](content-style.md#здание-прежде-текстуры).
 
-Для house-2 подготовлены `oak_mask` и `capture-quality-pilot.sh --compose-house-2`; [проверка маски на реальных исходниках и необходимое уточнение](../reports/content/2026-10-market-house-concept/README.md#цвет-по-материалам-подготовка-house-2). Новый набор пока не собран.
+[House-2: цвет по материалам](../reports/content/2026-10-market-house-concept/README.md#цвет-по-материалам-house-2): `market_house.py prepare/build --set house-2`, отдельный дуб балки, общий камень и дуб/штукатурка по `oak_masks` (Gaussian ln Y + общий Оцу). Все шесть яркостей и дуб в пределах ±25%; тот же бинарник дал три кадра и 12/12 замен. `capture-quality-pilot.sh --compose-house-2` сохраняет прежние JPEG и собирает original / house-1 / house-2.
 
 ## Путь одной реплики героя
 
