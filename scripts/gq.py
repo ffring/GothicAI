@@ -678,6 +678,18 @@ def command_gate(fd, command):
 
 def execute(queue, job_id):
     job = queue.get(job_id)
+    deadline = None
+    if job.get("interactive"):
+        # An older, still-running pump may have launched this newly submitted
+        # request with ordinary quick properties. The helper loads current code
+        # from disk: fix only its own unit before allowing the command to start.
+        result = systemctl("set-property", "--runtime", f"gq-{job_id}.service", "CPUWeight=1000")
+        if result.returncode:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise QueueError(f"не удалось задать приоритет игры: {detail}")
+        # RuntimeMaxSec cannot be changed on a running service. Keep the six-hour
+        # ceiling here too, including when an old pump supplied max * 1.25.
+        deadline = time.monotonic() + job["max"]
     # A legacy EX can win the race between reservation and unit start. Never wait here:
     # retry admission instead, so RuntimeMaxSec measures work, not lock waiting.
     with (contextlib.nullcontext(True) if job.get("interactive")
@@ -694,6 +706,7 @@ def execute(queue, job_id):
         # exists and forward later stops, including the gap inside Popen itself.
         child = None
         interrupted = 0
+        timed_out = False
         read_fd = write_fd = None
 
         def stop(signum, _frame):
@@ -702,6 +715,15 @@ def execute(queue, job_id):
             if child is not None and child.returncode is None:
                 with contextlib.suppress(ProcessLookupError):
                     os.kill(child.pid, signum)
+
+        def monitor():
+            nonlocal timed_out
+            if deadline is not None and time.monotonic() >= deadline:
+                if not timed_out:
+                    queue.cancel(job_id, job["owner"], reason="timeout")
+                    timed_out = True
+            elif not alive(job.get("waiter")):
+                queue.retry_cancel(job_id, job["owner"])
 
         previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
         try:
@@ -734,12 +756,10 @@ def execute(queue, job_id):
             os.close(write_fd)
             write_fd = None
             while child.poll() is None:
-                if not alive(job.get("waiter")):
-                    queue.retry_cancel(job_id, job["owner"])
+                monitor()
                 time.sleep(POLL)
             while unit_has_children(job_id):
-                if not alive(job.get("waiter")):
-                    queue.retry_cancel(job_id, job["owner"])
+                monitor()
                 time.sleep(POLL)
             if interrupted:
                 return 128 + interrupted

@@ -73,7 +73,14 @@ state = json.loads(path.read_text()) if path.exists() else {
     "ActiveState": "inactive", "SubState": "dead", "Result": "success",
     "ExecMainCode": "1", "ExecMainStatus": "0", "LoadState": "not-found"}
 command = next((value for value in args if value in
-                ("show", "stop", "is-active", "reset-failed", "status")), "show")
+                ("show", "stop", "is-active", "reset-failed", "status", "set-property")), "show")
+if command == "set-property":
+    if os.environ.get("FAKE_SYSTEMD_SET_PROPERTY_FAIL"):
+        print("fake property update failed", file=sys.stderr)
+        sys.exit(1)
+    state.update(dict(value.split("=", 1) for value in args if "=" in value))
+    path.write_text(json.dumps(state))
+    sys.exit(0)
 if command in ("stop", "reset-failed"):
     state.update(ActiveState="inactive", SubState="dead")
     path.write_text(json.dumps(state))
@@ -860,8 +867,88 @@ def test_interactive_execute_starts_with_background_exclusive_legacy_lock(gq, ho
         fcntl.flock(background, fcntl.LOCK_EX | fcntl.LOCK_NB)
         q.tick()
         assert q.get(ident)["status"] == "starting"
+        systemd_state(host, ident, CPUWeight="100", RuntimeMaxUSec="27000000000")
         assert gq.execute(q, ident) == 0
         assert marker.exists()
+        properties = json.loads((host["systemd"] / f"gq-{ident}.json").read_text())
+        assert properties["CPUWeight"] == "1000"
+        assert ["--user", "set-property", "--runtime", f"gq-{ident}.service", "CPUWeight=1000"] in calls(host, "systemctl")
+
+
+def test_interactive_property_failure_prevents_command_start(gq, host, monkeypatch, capsys):
+    q = make_queue(gq, host, monkeypatch)
+    marker = host["home"].parent / "must-not-start"
+    ident = q.submit(spec(display_exclusive=True, interactive=True, command=[
+        sys.executable, "-c", "from pathlib import Path; import sys; Path(sys.argv[1]).touch()", str(marker)]))
+    q.tick()
+    monkeypatch.setenv("FAKE_SYSTEMD_SET_PROPERTY_FAIL", "1")
+    monkeypatch.setattr(gq, "Queue", lambda: q)
+    assert gq.main(["_execute", ident]) == 2
+    assert q.get(ident)["status"] == "starting"
+    assert not marker.exists()
+    report = capsys.readouterr().err
+    assert "приоритет игры" in report and "fake property update failed" in report
+    assert "Traceback" not in report
+
+
+@pytest.mark.parametrize("phase", ["command", "orphan"])
+def test_interactive_helper_timeout_stops_children_without_systemd_timer(gq, host, monkeypatch, phase):
+    q = make_queue(gq, host, monkeypatch)
+    marker = host["home"].parent / "started"
+    source = ("from pathlib import Path; import sys,time; Path(sys.argv[1]).touch(); time.sleep(5)"
+              if phase == "command" else
+              "from pathlib import Path; import subprocess,sys; "
+              "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(5)']); "
+              "Path(sys.argv[1]).write_text(str(child.pid))")
+    ident = q.submit(spec(display_exclusive=True, interactive=True, maximum=1,
+                         command=[sys.executable, "-c", source, str(marker)]))
+    q.tick()
+    systemd_state(host, ident, RuntimeMaxUSec="infinity")
+    command = None
+    stopped = False
+    checking_orphans = False
+    original_popen, original_systemctl = gq.subprocess.Popen, gq.systemctl
+
+    def spawn(argv, *args, **kwargs):
+        nonlocal command
+        process = original_popen(argv, *args, **kwargs)
+        if "_command" in argv:
+            command = process
+        return process
+
+    def stop_unit(*args):
+        nonlocal stopped
+        result = original_systemctl(*args)
+        if args[0] == "stop":
+            stopped = True
+            os.kill(command.pid if phase == "command" else int(marker.read_text()), signal.SIGTERM)
+        return result
+
+    def has_orphans(_job_id):
+        nonlocal checking_orphans
+        checking_orphans = True
+        return phase == "orphan" and not stopped
+
+    monkeypatch.setattr(gq.subprocess, "Popen", spawn)
+    monkeypatch.setattr(gq, "systemctl", stop_unit)
+    monkeypatch.setattr(gq, "unit_has_children", has_orphans)
+    monkeypatch.setattr(gq.time, "monotonic", lambda: (
+        1002 if (marker.exists() if phase == "command" else checking_orphans) else 1000))
+    try:
+        gq.execute(q, ident)
+        assert marker.exists() and stopped
+        assert q.get(ident)["cancel_reason"] == "timeout"
+        q.finish(ident, "success")
+        assert q.get(ident)["status"] == "timeout" and q.get(ident)["code"] == 124
+    finally:
+        if command is not None and command.poll() is None:
+            command.terminate()
+            command.wait()
+        if phase == "orphan" and marker.exists() and not stopped:
+            try:
+                os.kill(int(marker.read_text()), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
 
 def test_interactive_wait_reports_current_window_owners(queue, gq, monkeypatch, capsys):
@@ -1415,6 +1502,7 @@ def test_execute_keeps_the_user_commands_nonzero_exit_code(gq, host, monkeypatch
     previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         assert gq.execute(q, ident) == 7
+        assert not any("set-property" in args for args in calls(host, "systemctl"))
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
