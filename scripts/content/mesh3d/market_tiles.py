@@ -10,6 +10,8 @@ spec: {"output": "<content-staging>/market-set/tiles",
                  "own_prop_wood_plank": {"copy": "/abs/existing/tile/dir"}}}
 A source tile is quilted seamless along its axes (seam_fix.seamless), resized to
 1024² and turned into the six stage-1 maps by the CPU filter (bakeoff.filtered_maps).
+"crop": [l, t, r, b] with "size": [w, h] cuts a panel (a whole carpet) out of our own
+concept instead and keeps its aspect; such a panel has axes "".
 "copy" reuses an existing tile directory unchanged. The atlas bake later scales
 each zone to the original's measured mean colour, so a tile carries pattern and
 relief, not the final colour. --import-sources keeps each source PNG once in
@@ -39,15 +41,18 @@ MAPS = ("albedo", "normal", "roughness", "metallic", "ao", "height")
 SOURCE_SET = "mesh3d-market"
 
 
-def build_tile(source: Path, axes: str, roughness: float, metallic: float, out: Path) -> dict:
+def build_tile(source: Path, axes: str, roughness: float, metallic: float, out: Path,
+               crop: list | None = None, size: list | None = None) -> dict:
     with Image.open(source) as image:
         rgb = image.convert("RGB")
-    if rgb.size != (1024, 1024):
+    if crop:  # a panel (a whole carpet), not a tile: cut its rectangle and keep its own aspect
+        rgb = rgb.crop(tuple(crop)).resize(tuple(size), Image.Resampling.LANCZOS)
+    elif rgb.size != (1024, 1024):
         side = min(rgb.size)
         left, top = (rgb.width - side) // 2, (rgb.height - side) // 2
         rgb = rgb.crop((left, top, left + side, top + side)).resize((1024, 1024), Image.Resampling.LANCZOS)
     rgb, seam = seamless(rgb, axes) if axes else (rgb, dict(applied=False, axes=""))
-    maps = bakeoff.filtered_maps(rgb, {"parameters": {"tiling_axes": axes or "uv", "roughness_base": roughness}})
+    maps = bakeoff.filtered_maps(rgb, {"parameters": {"tiling_axes": axes, "roughness_base": roughness}})
     maps["metallic"] = np.full_like(maps["height"], metallic)
     out.mkdir(parents=True, exist_ok=True)
     for name in MAPS:
@@ -65,7 +70,7 @@ def record_for(key: str, spec: dict, seam: dict, raw: bytes, utc: str, files_roo
         prompt=spec["prompt"], negative="", seed=None, utc=utc, status="draft",
         files={name: (tile_dir / f"{name}.png").relative_to(files_root).as_posix() for name in MAPS},
         source_png=relative, source_sha256=hashlib.sha256(raw).hexdigest(),
-        parameters=dict(set=SOURCE_SET, zone_key=key.upper(), tiling_axes=spec["axes"],
+        parameters=dict(set=SOURCE_SET, zone_key=key.upper(), tiling_axes=spec["axes"], crop=spec.get("crop"),
                         roughness_base=spec["roughness"], metallic=spec.get("metallic", 0.0),
                         input="text only; no original pixels", colour_policy="final colour set by the atlas bake"),
         generation=dict(outcome="complete", seam_correction=seam,
@@ -122,7 +127,8 @@ def main() -> int:
             print(f"{key}: copied {tile['copy']}")
             continue
         raw = Path(tile["png"]).read_bytes()
-        seam = build_tile(Path(tile["png"]), tile["axes"], tile["roughness"], tile.get("metallic", 0.0), target)
+        seam = build_tile(Path(tile["png"]), tile["axes"], tile["roughness"], tile.get("metallic", 0.0), target,
+                          tile.get("crop"), tile.get("size"))
         print(f"{key}: built from {Path(tile['png']).name}, seam {seam.get('applied')}")
         if args.import_sources:
             record = record_for(key, tile, seam, raw, args.utc, files_root, target)
