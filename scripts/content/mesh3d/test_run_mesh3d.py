@@ -103,7 +103,7 @@ else:
 '''
 
 
-def run_window(tmp_path, *, available_gib=27, memory_max=21474836480,
+def run_window(tmp_path, *, available_gib=24, memory_max=21474836480,
                active=("gothic-gemma", "gothic-decider"), free_mib=1000,
                consumed=False, durations=None, returncodes=None):
     """Execute the production heredoc; redirect only Linux kernel file paths."""
@@ -214,7 +214,7 @@ def test_restores_only_the_unit_actually_stopped(tmp_path):
 
 
 @pytest.mark.parametrize("available_gib,memory_max,expected_rc", [
-    (25, 21474836480, 75), (27, 10737418240, 1),
+    (23, 21474836480, 75), (24, 10737418240, 1),
 ])
 def test_memory_preflight_refuses_before_stopping_services(tmp_path, available_gib, memory_max, expected_rc):
     result, state, calls, task = run_window(tmp_path, available_gib=available_gib, memory_max=memory_max)

@@ -246,8 +246,8 @@ grep -qw memory "/sys/fs/cgroup$manager_cg/cgroup.subtree_control"
 systemd-run "${scope_properties[@]}" --unit="mesh3d-preflight-$run_id" \
   bash "$PWD/runs/$run_id/limited-exec.sh" "$PWD/runs/$run_id/preflight-cgroup.txt" true
 available_kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
-(( available_kib >= 26 * 1024 * 1024 )) || {
-  echo "MemAvailable below 26 GiB: $available_kib KiB; no services stopped" >&2
+(( available_kib >= 24 * 1024 * 1024 )) || {
+  echo "MemAvailable below 24 GiB: $available_kib KiB; no services stopped" >&2
   exit 75
 }
 log_event memory-preflight "available_kib=$available_kib memory_max=21474836480 swap_max=0 oom_group=1"
