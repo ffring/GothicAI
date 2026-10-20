@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import gc
 import hashlib
 import json
@@ -228,15 +229,8 @@ class MemoryJournal:
             self.meta["telemetry_error"] = f"{type(self.error).__name__}: {self.error}"
 
 
-def generate(args):
-    from adapter import assert_clean_imports, load_pipeline
-    import torch
-
+def _generation_metadata(args, torch):
     root = args.root.expanduser().resolve()
-    image = read_rgba(args.image)
-    args.output.mkdir(parents=True, exist_ok=True)
-    if (args.output / "raw.npz").exists() or (args.output / "meta.json").exists():
-        raise FileExistsError(f"Variant already has output: {args.output}")
     repo = "TRELLIS.2" if args.model == "trellis2" else "TRELLIS"
     features = "dinov3" if args.model == "trellis2" else "dinov2"
     models = [dict(REVISIONS[args.model]), dict(REVISIONS[features])]
@@ -257,8 +251,7 @@ def generate(args):
     config_data = json.loads(config.read_text())
     config_args = config_data["args"]
     sampler_keys = ("sparse_structure_sampler", "shape_slat_sampler", "tex_slat_sampler") if args.model == "trellis2" else ("sparse_structure_sampler", "slat_sampler")
-    meta = {"model": args.model, "models": models, "dependencies": dependencies, "seed": args.seed,
-            "input": {"filename": args.image.name, "sha256": hashlib.sha256(args.image.read_bytes()).hexdigest()},
+    meta = {"model": args.model, "models": models, "dependencies": dependencies,
             "parameters": {key: config_args[key] for key in sampler_keys},
             "axes": {"up": "+Z", "handedness": "right", "coordinates": "unchanged upstream XYZ"},
             "scale": {"canonical_bounds": [-0.5, 0.5], "units": "normalized object; no physical calibration"},
@@ -279,12 +272,46 @@ def generate(args):
         meta["parameters"].update(pipeline_type=pipeline_types[0],
                                   oom_fallback="512" if requested_type == "auto" else None,
                                   max_num_tokens=49152)
+    return meta, pipeline_types
+
+
+def _infer_and_save(pipeline, image, model, pipeline_type, seed, output, telemetry):
+    if model == "trellis2":
+        result = pipeline.run(image, seed=seed, pipeline_type=pipeline_type,
+                              max_num_tokens=49152)[0]
+        vertices, faces = _numpy(result.vertices), _numpy(result.faces)
+        attrs = sample_voxel_attributes(vertices, _numpy(result.coords), _numpy(result.attrs),
+                                         _numpy(result.origin), result.voxel_size)
+        fields = {"metallic": np.clip(attrs[:, 3], 0, 1),
+                  "roughness": np.clip(attrs[:, 4], 0, 1)}
+        color = srgb_to_linear(attrs[:, :3])
+    else:
+        result = pipeline.run(image, seed=seed, formats=["mesh"])["mesh"][0]
+        vertices, faces = _numpy(result.vertices), _numpy(result.faces)
+        color = srgb_to_linear(_numpy(result.vertex_attrs)[:, :3])
+        fields = {}
+    telemetry.update_attempt(stage="saving")
+    mesh = save_raw(output / "raw.npz", vertices, faces, color, **fields)
+    return mesh
+
+
+def generate(args):
+    from adapter import assert_clean_imports, load_pipeline
+    import torch
+
+    root = args.root.expanduser().resolve()
+    image = read_rgba(args.image)
+    args.output.mkdir(parents=True, exist_ok=True)
+    if (args.output / "raw.npz").exists() or (args.output / "meta.json").exists():
+        raise FileExistsError(f"Variant already has output: {args.output}")
+    meta, pipeline_types = _generation_metadata(args, torch)
+    meta.update(seed=args.seed, input={"filename": args.image.name, "sha256": _sha256(args.image)})
+    requested_type = args.pipeline_type
     telemetry = MemoryJournal(args.output, meta, torch)
     failure = None
     try:
         for pipeline_type in pipeline_types:
             pipeline = None
-            result = None
             with telemetry.lock:
                 torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
@@ -293,22 +320,8 @@ def generate(args):
                 pipeline = load_pipeline(root, args.model, pipeline_type=pipeline_type)
                 pipeline.cuda()
                 telemetry.update_attempt(stage="inference")
-                if args.model == "trellis2":
-                    result = pipeline.run(image, seed=args.seed, pipeline_type=pipeline_type,
-                                          max_num_tokens=49152)[0]
-                    vertices, faces = _numpy(result.vertices), _numpy(result.faces)
-                    attrs = sample_voxel_attributes(vertices, _numpy(result.coords), _numpy(result.attrs),
-                                                     _numpy(result.origin), result.voxel_size)
-                    fields = {"metallic": np.clip(attrs[:, 3], 0, 1),
-                              "roughness": np.clip(attrs[:, 4], 0, 1)}
-                    color = srgb_to_linear(attrs[:, :3])
-                else:
-                    result = pipeline.run(image, seed=args.seed, formats=["mesh"])["mesh"][0]
-                    vertices, faces = _numpy(result.vertices), _numpy(result.faces)
-                    color = srgb_to_linear(_numpy(result.vertex_attrs)[:, :3])
-                    fields = {}
-                telemetry.update_attempt(stage="saving")
-                mesh = save_raw(args.output / "raw.npz", vertices, faces, color, **fields)
+                mesh = _infer_and_save(pipeline, image, args.model, pipeline_type,
+                                       args.seed, args.output, telemetry)
                 with telemetry.lock:
                     meta["mesh"] = mesh
                 assert_clean_imports()
@@ -325,7 +338,7 @@ def generate(args):
                 error.__traceback__ = None
             finally:
                 telemetry.finish_attempt()
-                del result, pipeline
+                del pipeline
                 gc.collect()
                 torch.cuda.empty_cache()
             if attempt["outcome"] == "ok" or failure is not None:
@@ -343,22 +356,140 @@ def generate(args):
                       "peak_allocated_mib": meta["peak_allocated_mib"], "peak_reserved_mib": meta["peak_reserved_mib"]}))
 
 
+def _batch_record(batch_output, **record):
+    record["timestamp_unix"] = time.time()
+    with (batch_output / "batch.jsonl").open("a") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    print(json.dumps(record, ensure_ascii=False), flush=True)
+
+
+def generate_batch(args):
+    """Keep one model resident while persisting every input/seed independently."""
+    from adapter import assert_clean_imports, load_pipeline
+    import torch
+
+    if args.model == "trellis2" and args.pipeline_type != "512":
+        raise ValueError("TRELLIS.2 batch requires --pipeline-type 512")
+    images = sorted(path for path in args.images_dir.iterdir()
+                    if path.is_file() and path.suffix.lower() == ".png")
+    if not images:
+        raise ValueError(f"No PNG inputs in {args.images_dir}")
+    variants = [(image, seed, args.output / image.stem / f"{args.model}-s{seed}")
+                for image in images for seed in args.seeds]
+    if len({output for _, _, output in variants}) != len(variants):
+        raise ValueError("Batch input stems and seeds must be unique")
+    # Validate all inputs and destinations before loading a model.
+    for image in images:
+        read_rgba(image).close()
+    for _, _, output in variants:
+        if (output / "raw.npz").exists() or (output / "meta.json").exists():
+            raise FileExistsError(f"Variant already has output: {output}")
+    args.output.mkdir(parents=True, exist_ok=True)
+    base, pipeline_types = _generation_metadata(args, torch)
+    pipeline_type = pipeline_types[0]
+    pipeline, loaded = None, False
+    errors = set()
+    exit_code, stop_reason = 0, None
+    for index, (image_path, seed, output) in enumerate(variants):
+        if stop_reason is None and args.deadline is not None and time.time() >= args.deadline:
+            exit_code, stop_reason = 87, "deadline"
+        if stop_reason is not None:
+            for pending_image, pending_seed, pending_output in variants[index:]:
+                _batch_record(args.output, event="variant_skipped", outcome="not_run",
+                              model=args.model, input=pending_image.name, seed=pending_seed,
+                              output=str(pending_output), reason=stop_reason)
+            break
+        output.mkdir(parents=True, exist_ok=True)
+        # CUDA peaks belong to this variant; RSS remains a process lifetime peak.
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        meta = copy.deepcopy(base)
+        meta.update(seed=seed, input={"filename": image_path.name, "sha256": _sha256(image_path)},
+                    torch_peak_scope="current variant; reset before model load/inference")
+        telemetry = MemoryJournal(output, meta, torch)
+        error_text, signature = None, None
+        inference_started = None
+        try:
+            telemetry.begin_attempt(pipeline_type, seed)
+            _batch_record(args.output, event="variant_started", outcome="running", model=args.model,
+                          input=image_path.name, seed=seed, output=str(output))
+            if not loaded:
+                started = time.monotonic()
+                pipeline = load_pipeline(args.root.expanduser().resolve(), args.model,
+                                         pipeline_type=pipeline_type)
+                pipeline.cuda()
+                loaded = True
+                with telemetry.lock:
+                    meta["model_load_seconds"] = round(time.monotonic() - started, 3)
+            telemetry.update_attempt(stage="inference")
+            inference_started = time.monotonic()
+            with read_rgba(image_path) as image:
+                mesh = _infer_and_save(pipeline, image, args.model, pipeline_type, seed, output, telemetry)
+            torch.cuda.synchronize()
+            with telemetry.lock:
+                meta.update(mesh=mesh, inference_seconds=round(time.monotonic() - inference_started, 3))
+            assert_clean_imports()
+            telemetry.update_attempt(outcome="ok", stage="finished")
+        except Exception as error:
+            error_text = f"{type(error).__name__}: {error}"
+            outcome = "oom" if isinstance(error, torch.OutOfMemoryError) else "error"
+            # Allocation sizes can differ, while a second OOM is the same failure.
+            signature = "OutOfMemoryError" if outcome == "oom" else error_text
+            telemetry.update_attempt(outcome=outcome, stage="finished", error=error_text)
+            if not loaded:
+                exit_code, stop_reason = 2, "pipeline_load_failed"
+            elif signature in errors:
+                exit_code, stop_reason = 86, "repeated_generator_error"
+            else:
+                errors.add(signature)
+                exit_code = 1
+            error.__traceback__ = None
+        finally:
+            if inference_started is not None and "inference_seconds" not in meta:
+                with telemetry.lock:
+                    meta["inference_seconds"] = round(time.monotonic() - inference_started, 3)
+            telemetry.finish_attempt()
+            telemetry.stop()
+            meta["outcome"] = meta["attempts"][-1]["outcome"]
+            telemetry.sample()
+            gc.collect()
+            torch.cuda.empty_cache()
+        record = {key: meta[key] for key in ("seconds", "peak_rss_mib", "peak_allocated_mib",
+                                             "peak_reserved_mib", "mesh", "model_load_seconds",
+                                             "inference_seconds") if key in meta}
+        _batch_record(args.output, event="variant_finished", outcome=meta["outcome"], model=args.model,
+                      input=image_path.name, seed=seed, output=str(output), error=error_text,
+                      error_signature=signature, **record)
+    return exit_code
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--model", choices=["trellis2", "trellis"], required=True)
-    parser.add_argument("--image", type=Path)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--image", type=Path)
+    inputs.add_argument("--images-dir", type=Path)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2])
+    parser.add_argument("--deadline", type=float, help="Do not start a variant at/after this Unix time")
     parser.add_argument("--pipeline-type", choices=["auto", "512", "1024_cascade"], default="auto")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
-    if args.image is None or args.output is None:
-        parser.error("generation requires --image and --output")
+    if args.output is None:
+        parser.error("generation requires --output")
     if args.model == "trellis" and args.pipeline_type != "auto":
         parser.error("--pipeline-type applies only to trellis2")
+    if args.images_dir is not None:
+        if args.model == "trellis2" and args.pipeline_type != "512":
+            parser.error("TRELLIS.2 batch requires --pipeline-type 512")
+        return generate_batch(args)
     generate(args)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
