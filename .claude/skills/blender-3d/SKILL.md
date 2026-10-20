@@ -12,7 +12,7 @@ description: 3D modelling in Blender for the Gothic AI project — building or e
 - План и решения — `docs/own-content.md`, этап 2. Пилот — `reports/content/2026-10-3d-pilot/`.
 - Цели предметов — `data/content/mesh3d-pilot.json`: bbox в метрах glTF, точка привязки, бюджет треугольников, зоны `{key, group, role}`.
 - Готовый конвейер — `scripts/content/mesh3d/blender/` (README, `postprocess.py`, `parametric.py`, `sheet.py`). Сначала переиспользуй его, потом пиши новое.
-- Blender: на Mac — 5.2 LTS (`/Applications/Blender.app/Contents/MacOS/Blender`), для коротких скриптов и быстрых рендеров. На Ryzen — 4.5.3 LTS (`~/gothic-ai/mesh3d/blender`), пакеты через `scripts/content/mesh3d/blender/run-ryzen.sh` и `gq batch`. Скрипты конвейера обязаны работать на 4.5.
+- Blender — одна версия везде, **5.2 LTS**. На Mac (`/Applications/Blender.app/Contents/MacOS/Blender`) — короткие скрипты и быстрые рендеры. На Ryzen (`~/gothic-ai/mesh3d/blender`, 5.2.2, ставит `scripts/content/mesh3d/blender/install.sh`) — пакеты через `run-ryzen.sh` и `gq batch`. Новую версию ставим сразу на обе машины.
 
 ## Правила проекта
 
@@ -29,7 +29,7 @@ description: 3D modelling in Blender for the Gothic AI project — building or e
 1. **Сначала задумка.** Что это, из каких частей (клёпки, обручи, доски, ножки), размеры в метрах из цели, что видно игроку, бюджет треугольников. Части называй по роли, каждой части — свой слот материала по ключу зоны.
 2. **Строй данными, а не операторами.** Используй `bmesh`, `bpy.data`, numpy через `foreach_get`/`foreach_set`. Операторы `bpy.ops` зависят от контекста и в режиме `-b` ломаются. Если без оператора никак — `with bpy.context.temp_override(...)`. После `bmesh` — `to_mesh`, `mesh.validate()`, `mesh.update()`.
 3. **Настоящий масштаб с самого начала.** Применяй трансформации до модификаторов, зависящих от размера (Bevel, Solidify, Weld), и до экспорта. Начало координат — как в цели.
-4. **Смотри на результат после каждого заметного шага.** Рендер 512–768 px: 3/4, спереди, сверху, плюс каркас (копия с модификатором Wireframe). Workbench — быстро и одинаково на 4.5 и 5.2. Открой PNG через Read и сравни с концептом и целью. Числам без картинки не верь.
+4. **Смотри на результат после каждого заметного шага.** Рендер 512–768 px: 3/4, спереди, сверху, плюс каркас (копия с модификатором Wireframe). Workbench — быстрый и без GPU. Открой PNG через Read и сравни с концептом и целью. Числам без картинки не верь.
 5. **Проверки перед экспортом:**
    - треугольники в бюджете, bbox равен цели;
    - 0 открытых и non-manifold рёбер там, где их быть не должно;
@@ -37,7 +37,6 @@ description: 3D modelling in Blender for the Gothic AI project — building or e
    - UV-шахматка 10 см лежит ровно, а волокно идёт вдоль длинной стороны детали.
 6. **Нормали.** `mesh.shade_smooth()` и `mesh.set_sharp_from_angle(angle=math.radians(30))`; `use_auto_smooth` больше нет (с 4.1). glTF сам расщепляет острые рёбра.
 7. **Экспорт.** `bpy.ops.export_scene.gltf(export_format="GLB", use_selection=True, export_apply=True, export_yup=True, export_extras=True)`. Затем glTF Validator и, для игры, стенд `own-mesh-*.bench` на Ryzen с проверкой переписи.
-8. **Различия версий** проверяй по `bpy.app.version`: имя движка Eevee и параметры экспортёра менялись между 4.x и 5.x.
 
 ## Чего избегать
 
