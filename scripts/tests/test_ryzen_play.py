@@ -2,6 +2,7 @@
 import ctypes
 import importlib.machinery
 import importlib.util
+import io
 import tempfile
 import tomllib
 import unittest
@@ -65,7 +66,7 @@ class RyzenPlayTests(unittest.TestCase):
 
     def test_prepare_keeps_build_and_all_uv_sync_inside_the_queue(self):
         repo = Path("/tmp/play")
-        command = install.build_command(repo, "prepare-source")
+        command = install.build_command("prepare-source")
         separator = command.index("--")
         options = command[:separator]
         self.assertEqual(options[options.index("--class") + 1], "quick")
@@ -80,9 +81,10 @@ class RyzenPlayTests(unittest.TestCase):
         calls = [call.args[0] for call in run.call_args_list]
         self.assertIn("-DCMAKE_BUILD_TYPE=RelWithDebInfo", calls[0])
         self.assertEqual(calls[1][1:3], ["--build", repo / "OpenGothic/build"])
-        self.assertEqual([call[-1] for call in calls[2:]],
+        self.assertIn("storygraph", calls[3])
+        self.assertEqual([call[-1] for call in calls[4:]],
                          [repo / name for name in ("server", "asr-service", "tts-service", "launcher/core")])
-        self.assertTrue(all("--locked" in call for call in calls[2:]))
+        self.assertTrue(all("--locked" in call for call in calls[4:]))
 
     def test_play_exclusive_six_hour_live_request(self):
         command = session.session_command(Path("/repo"), microphone=False)
@@ -105,6 +107,20 @@ class RyzenPlayTests(unittest.TestCase):
             load_library.assert_called_once_with("libportaudio.so.2")
         with patch.object(ctypes, "CDLL", side_effect=OSError("not installed")):
             self.assertFalse(session.portaudio_available())
+
+    def test_missing_portaudio_prints_install_command_and_starts_without_microphone(self):
+        output = io.StringIO()
+        with patch.dict(session.os.environ, DISPLAY=":0", ALSOFT_DRIVERS="null"), \
+                patch.object(session.Path, "is_file", return_value=True), \
+                patch.object(session.os, "chdir"), \
+                patch.object(session, "portaudio_available", return_value=False), \
+                patch.object(session.subprocess, "Popen") as start, \
+                patch.object(session.sys, "stdout", output):
+            start.return_value.wait.return_value = 0
+            self.assertEqual(session.main([]), 0)
+            self.assertIn("--no-voice", start.call_args.args[0])
+            self.assertNotIn("ALSOFT_DRIVERS", session.os.environ)
+        self.assertIn("sudo apt install libportaudio2", output.getvalue())
 
     def test_desktop_opens_visible_terminal_with_game_icon(self):
         entry = install.desktop_entry(Path("/home/player/gothic-ai/play"))

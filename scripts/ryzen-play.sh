@@ -72,7 +72,7 @@ def create_settings(path, source, repo, home):
     return True
 
 
-def build_command(repo, source):
+def build_command(source):
     return [str(Path.home() / "gothic-ai/bin/gq"), "run", "--class", "quick",
             "--threads", "12", "--mem", "12G", "--max", "30m",
             "--name", "Gothic AI install/update", "--", sys.executable, "-c", source, "__prepare"]
@@ -94,6 +94,12 @@ def prepare():
          "-DOPENGOTHIC_ENABLE_APP_CADENCE=ON", f"-DCMAKE_CXX_FLAGS=-I{sdk}/include",
          f"-DCMAKE_EXE_LINKER_FLAGS=-L{sdk}/lib"])
     run(["cmake", "--build", build, "--target", "Gothic2Notr", "--parallel", "12"])
+    # The server's NPC knowledge/director needs this converter on a fresh machine.
+    graph = repo / "OpenGothic/ai_bridge/storygraph"
+    run(["cmake", "-S", graph, "-B", graph / "build", "-G", "Ninja",
+         "-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+         "-DCMAKE_CXX_FLAGS=-include algorithm"])
+    run(["cmake", "--build", graph / "build", "--target", "storygraph", "--parallel", "12"])
     for project in ("server", "asr-service", "tts-service", "launcher/core"):
         run([Path.home() / ".local/bin/uv", "sync", "--locked", "--project", repo / project])
 
@@ -140,7 +146,7 @@ def remote_install(action, payload, source):
         (queue.parent / "gq.profile").write_text("ryzen\n")
         os.chdir(repo)
         os.environ["GQ_OWNER"] = "ryzen-play-install"
-        result = owned_process(build_command(repo, source))
+        result = owned_process(build_command(source))
         if result:
             return result
         create_settings(home / ".config/gothic-ai/settings.toml", payload["settings"], repo, home)
