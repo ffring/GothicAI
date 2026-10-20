@@ -104,17 +104,24 @@ BACKFACE = (1.0, 0.0, 1.0, 1)
 
 
 def mark_backfaces(mat):
-    """Mix a flat magenta emission over the material wherever the face is seen from its back."""
+    """Mix a flat magenta emission over the material wherever the camera sees a face from its back.
+    Only camera rays: a bounce ray that starts on one of two coplanar faces hits the other from
+    behind at once and would tint a correct face magenta."""
     mat.use_nodes = True
     nodes, links = mat.node_tree.nodes, mat.node_tree.links
     out = next(n for n in nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output)
     surface = out.inputs["Surface"]
     front = surface.links[0].from_socket if surface.is_linked else None
     geometry = nodes.new("ShaderNodeNewGeometry")
+    path = nodes.new("ShaderNodeLightPath")
+    seen = nodes.new("ShaderNodeMath")
+    seen.operation = "MULTIPLY"
+    links.new(geometry.outputs["Backfacing"], seen.inputs[0])
+    links.new(path.outputs["Is Camera Ray"], seen.inputs[1])
     back = nodes.new("ShaderNodeEmission")
     back.inputs["Color"].default_value = BACKFACE
     mix = nodes.new("ShaderNodeMixShader")
-    links.new(geometry.outputs["Backfacing"], mix.inputs["Fac"])
+    links.new(seen.outputs[0], mix.inputs["Fac"])
     if front is not None:
         links.new(front, mix.inputs[1])
     links.new(back.outputs[0], mix.inputs[2])
