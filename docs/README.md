@@ -170,13 +170,13 @@
 
 | Сервис | Что | Где работает | Как сервер его находит |
 |---|---|---|---|
-| `asr-service/` | распознавание речи: Voxtral (audio.cpp), запасной — подписка ChatGPT | клиент на Mac, модель на dev-ubuntu | `--asr-url`, `GOTHIC_ASR_URL` |
-| `tts-service/` | голос NPC: Inworld TTS-2, запасной — VoxCPM2 (audio.cpp) | клиент на Mac, VoxCPM2 на dev-ubuntu | `--tts-url`, `GOTHIC_TTS_URL` |
+| `asr-service/` | распознавание речи: Voxtral (audio.cpp), запасной — подписка ChatGPT | клиент на Mac или Ryzen, модель на dev-ubuntu | `--asr-url`, `GOTHIC_ASR_URL` |
+| `tts-service/` | голос NPC: Inworld TTS-2, запасной — VoxCPM2 (audio.cpp) | клиент на Mac или Ryzen, VoxCPM2 на dev-ubuntu | `--tts-url`, `GOTHIC_TTS_URL` |
 | `decider-service/` | быстрые решения NPC: Strands Decider 2B, полосы urgent и background | dev-ubuntu | `--decider-url`, `GOTHIC_DECIDER_URL` |
 | `server/deploy/gemma/` | Gemma 4 12B (llama.cpp): реплики в бою, первые слова | dev-ubuntu | `--quick-url`, `GOTHIC_QUICK_LLM_URL` |
 | `body-service/` | политика боя P30 (GRU), обучение BC и PPO | сервис — Ryzen, ядра 0–1; обучение — Ryzen и dev-ubuntu | `--body-url`, `GOTHIC_BODY_URL` |
-| `launcher/` | `core/` поднимает сервисы и игру одной командой; `app/` — окно (Tauri, Svelte) | Mac | — |
-| `libs/chatgpt-auth/` | вход через ChatGPT (OAuth PKCE), общее хранилище токенов | Mac | — |
+| `launcher/` | `core/` поднимает сервисы и игру одной командой; `app/` — окно (Tauri, Svelte); на Ryzen — значок GNOME с Ptyxis | ядро — Mac и Linux, приложение — Mac | `up --continue`, временные `--no-voice` и `--smoke`; [Ryzen](launcher.md#ryzen-linux) |
+| `libs/chatgpt-auth/` | вход через ChatGPT (OAuth PKCE), общее хранилище токенов | Mac или Ryzen, отдельный вход на каждой машине | — |
 
 Настройки сервисов — `.env` по образцу [`.env.example`](../.env.example). Развёртывание GPU-сервисов — `scripts/deploy-gpu.sh`.
 
@@ -200,6 +200,7 @@
 | Частота кадров e2e | На Ryzen и Mac по умолчанию `E2E_MAX_FPS=30`; `0` снимает лимит, `60` задаёт 60 FPS. `OPENGOTHIC_FPS_LOG=1` включён в e2e по умолчанию; bench и живая игра не меняются. [Настройки](ryzen.md), [приёмка 12 сценариев](../reports/compute/2026-10-19-e2e-fps-cap/README.md) |
 | Бенч механики | `scripts/bench.sh <имя>` → `.bench/<имя>-<время>/` (видео, метрики, отчёт); `bench.sh` / `ryzen.sh` синхронизируют явно заданный `OPENGOTHIC_CONTENT` в отдельный каталог входов прогона на Ryzen; пустое значение выключает свой контент, незаданное сохраняет выбор движка по умолчанию |
 | Очередь Ryzen | `scripts/gq status`: три слота для `--display --display-shared`, `GQ_DISPLAY_SLOT`; старый `--display` и `--display-exclusive` берут все слоты. `TEMPEST_WINDOW_POS` разводит окна, `OPENGOTHIC_FPS_LOG=1` пишет FPS, `scripts/ryzen-round.sh` — тройной замер сценария; [ресурсы и допуск](compute.md#очередь-gq), [порты и окна](ryzen.md), [проверка и приёмка](../reports/compute/2026-10-19-ryzen-three-windows/README.md) |
+| Личная игра на Ryzen | С Mac: `scripts/ryzen-play.sh install` / `update`; `~/gothic-ai/play/` — клон `main`. Значок **Gothic AI** открывает `scripts/ryzen-play-session.sh` в Ptyxis: fullscreen, звук PipeWire, последнее сохранение, `gq --interactive --display-exclusive` до 6 ч с `CPUWeight=1000`; `--smoke` проверяет без моделей. [Установка, вход и микрофон](launcher.md#ryzen-linux) |
 | Общий кэш бинарников Ryzen | `scripts/ryzen.sh` использует `~/gothic-ai/engine-cache/` по хэшу исходников; `clean-cache` очищает старые записи, `RYZEN_WORKTREE` задаёт имя папки; [правила](ryzen.md) |
 | Автоочистка диска Ryzen | Перед загрузкой исходников `ryzen.sh` удаляет свободные e2e-worktree после `RYZEN_CLEAN_IDLE_HOURS=48` часов без активности (`0` отключает проход); при свободном месте меньше 60 ГиБ обрезает `uv` не чаще раза в 12 часов; [границы и метки](ryzen.md#как-работает-сейчас) |
 | Съёмка записанных дуэлей | `scripts/body_replay_film.py prepare/render`: Mac Metal, `--size 1920x1080`, MP4 + звук боя WAV; Linux Xvfb/lavapipe; сверка `body_schedule_equivalence.py`, [описание](npc-body-control-plan.md), [съёмка P30 на Mac](../reports/npc-body/2026-10-19-replay-mac/README.md) |
@@ -279,5 +280,5 @@
 | `npc-body-*.md` (`api`, `arena`, `bc`, `combat-contract`, `headless-runner`, `observations`, `trajectories`) | боевое тело по этапам | справочники |
 | [`npc-body-combat-gate.md`](npc-body-combat-gate.md), [`npc-body-stage8-stop-report.md`](npc-body-stage8-stop-report.md) | этап 8: журнал до допуска и остановка 14.10 | исторические: gate пройден 15.10, итог в плане |
 | [`npc-scheduler.md`](npc-scheduler.md) | планировщик решений NPC | проект от 11.10; шаги 1–3 сделаны, планировщик работает в `brain/` |
-| [`launcher.md`](launcher.md) | лаунчер | этапы L1–L3 сделаны, лаунчером пользуются |
+| [`launcher.md`](launcher.md) | лаунчер Mac и личная игра на Ryzen (Linux) | этапы L1–L3 сделаны; установка с Mac, значок GNOME, сеанс через `gq` |
 | [`MVP.md`](MVP.md) | первая спецификация MVP | исторический |
