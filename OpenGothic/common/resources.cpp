@@ -19,6 +19,7 @@
 #include <zenkit/Texture.hh>
 #include <zenkit/addon/texcvt.hh>
 #include <zenkit/Texture.hh>
+#include <miniz.h>
 
 #include <cctype>
 #include <cmath>
@@ -580,7 +581,7 @@ void Resources::indexMeshOverrides() {
   Log::i("meshes: ",meshOverrides.size()," entries from \"",root.string(),"\"");
   }
 
-bool Resources::meshReplacementLoaded(std::string_view name) {
+bool Resources::meshReplacementLoaded(std::string_view name, MeshReplacementSource* source) {
   if(inst==nullptr)
     return false;
   std::lock_guard<std::recursive_mutex> guard(inst->sync);
@@ -594,7 +595,11 @@ bool Resources::meshReplacementLoaded(std::string_view name) {
   for(auto& c:key)
     c = char(std::toupper(uint8_t(c)));
   const auto it = inst->meshOverrides.find(key);
-  return it!=inst->meshOverrides.end() && it->second.loaded;
+  if(it==inst->meshOverrides.end() || !it->second.loaded)
+    return false;
+  if(source!=nullptr)
+    *source = {it->second.file,it->second.sourceSize,it->second.sourceCrc32};
+  return true;
   }
 
 zenkit::MultiResolutionMesh Resources::loadVisualMesh(std::string_view name, bool* replaced) {
@@ -610,11 +615,14 @@ zenkit::MultiResolutionMesh Resources::loadVisualMesh(std::string_view name, boo
     if(const auto it = inst->meshOverrides.find(key); it!=inst->meshOverrides.end()) {
       it->second.loaded = false;
       try {
-        auto mesh = loadGltfMesh(it->second.file);
+        std::vector<uint8_t> bytes;
+        auto mesh = loadGltfMesh(it->second.file,&bytes);
         if(inst->census)
           inst->census->replaced(key+".MRM",it->second.replacement);
         if(replaced!=nullptr)
           *replaced = true;
+        it->second.sourceSize = bytes.size();
+        it->second.sourceCrc32 = uint32_t(mz_crc32(0,bytes.data(),bytes.size()));
         it->second.loaded = true;
         return mesh;
         }
