@@ -158,14 +158,20 @@ def material_csv(names):
         row = {field: "0" for field in measurement.PROPERTIES_FIELDS}
         row.update(texture=name, target_period_u_uv="0.125", target_period_v_uv="0",
                    target_direction="V", target_direction_confidence="0.9",
-                   target_oklab_l="0.4", target_oklab_a="-0.01", target_oklab_b="0.02")
+                   target_oklab_l="0.4", target_oklab_a="-0.01", target_oklab_b="0.02",
+                   **dict.fromkeys(measurement.DETAIL_FIELDS, "0.2"))
         writer.writerow(row)
     return stream.getvalue()
 
 
 def test_all_materials_scalar_parser_derives_meters_and_atomic_update_preserves_existing(tmp_path):
     rows = [{field: "unchanged" for field in measurement.FIELDS}]
-    rows[0].update(texture="A.TGA", uv_m_per_unit_median="4", target_luminance=".12", target_coverage=".3")
+    rows[0].update(texture="A.TGA", uv_m_per_unit_median="4", target_luminance=".12", target_coverage=".3",
+                   target_period_u_uv="0.100000000000", target_period_v_uv="0.000000000000",
+                   target_period_u_m="0.400000000000", target_period_v_m="0.000000000000",
+                   target_direction="none", target_direction_confidence="0.123000000000",
+                   target_oklab_l="0.500000000000", target_oklab_a="-0.020000000000",
+                   target_oklab_b="0.030000000000")
     before = deepcopy(rows)
     values = measurement.parse_material_measurements(material_csv(["A.TGA"]), rows)
     assert values["A.TGA"]["target_period_u_m"] == "0.5"
@@ -173,9 +179,43 @@ def test_all_materials_scalar_parser_derives_meters_and_atomic_update_preserves_
     path = tmp_path / "materials.csv"
     updated = measurement.update_material_measurements(path, rows, values)
     assert rows == before
-    for field in set(measurement.FIELDS) - set(measurement.MEASUREMENT_FIELDS):
+    for field in set(measurement.FIELDS) - set(measurement.DETAIL_FIELDS):
         assert updated[0][field] == before[0][field]
+    assert {field: updated[0][field] for field in measurement.DETAIL_FIELDS} == dict.fromkeys(measurement.DETAIL_FIELDS, "0.2")
     assert measurement.read_mapping(path) == updated
+
+
+def test_missing_previous_scalar_targets_are_still_filled(tmp_path):
+    rows = [{"texture": "A.TGA", "uv_m_per_unit_median": "4"}]
+    values = measurement.parse_material_measurements(material_csv(["A.TGA"]), rows)
+    updated = measurement.update_material_measurements(tmp_path / "mapping.csv", rows, values)
+    assert {field: updated[0][field] for field in measurement.MEASUREMENT_FIELDS} == values["A.TGA"]
+
+
+@pytest.mark.parametrize("header", measurement.MAPPING_HEADERS)
+def test_all_accepted_mapping_headers_remain_readable(tmp_path, header):
+    row = {field: "preserved" for field in header}
+    path = tmp_path / "mapping.csv"
+    with path.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=header)
+        writer.writeheader()
+        writer.writerow(row)
+    assert measurement.read_mapping(path) == [row]
+
+
+@pytest.mark.parametrize("field", measurement.DETAIL_FIELDS)
+@pytest.mark.parametrize("value", ["", "NaN", "Infinity", "-0.1"])
+def test_all_materials_parser_requires_finite_nonnegative_detail(field, value):
+    rows = list(csv.DictReader(io.StringIO(material_csv(["A.TGA"]))))
+    rows[0][field] = value
+    stream = io.StringIO()
+    writer = csv.DictWriter(stream, fieldnames=(*measurement.PROPERTIES_FIELDS,
+                                               *measurement.EXTRACTED_MEASUREMENT_FIELDS))
+    writer.writeheader()
+    writer.writerows(rows)
+    with pytest.raises(ValueError, match=field):
+        measurement.parse_material_measurements(stream.getvalue(),
+            [{"texture": "A.TGA", "uv_m_per_unit_median": "4"}])
 
 
 @pytest.mark.parametrize("change,message", [
