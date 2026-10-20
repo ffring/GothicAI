@@ -631,6 +631,56 @@ with scattered original furniture, and the separate fresh process must load thos
 and continue for a second. Authored map vobs may return to their initial transforms; temporary
 fixture mugs are outside the map archive. Moved-vob persistence belongs to stage 4, point 2.
 
+`own-mesh-physics.bench` compares collisions of original content and the procedural
+barrel from `scripts/meshes/make_test_barrel.py <empty directory> --radius-scale K` (default 1).
+K changes X/Z about the barrel axis, preserving Y and origin. Use a fresh `NEWWORLD.ZEN`,
+absolute content/output paths, and `MOVABLE_VOBS=0` / `1` before loading; the scenario keeps
+destruction off. `movable-census` and `own-mesh-*` skip the new-game intro.
+
+The fixture is authored ZEN id 24244 at `(10248.6309, 326.437866, 2359.78076)` cm.
+With K=1.5 it remains enabled/`ok`; the nearest wall is 51.081 cm away.
+The accepted fixture uses free directions: the hero and arrow approach from +X, and the hero
+pushes along -X, away from the wall. Nine 200 cm segments check both Jolt and visible geometry:
+approach and push at four heights, plus the half-height arrow path. The free-side camera
+at `(10137.3, 485.94, 2775.03)` cm frames the whole barrel. Nearby geometry stays in place;
+the fixture does not require a clear metre in every direction.
+
+Run each of the three content variants (no mesh index, K=1, K=1.5) with both mobility values
+through the standard launcher only:
+
+```bash
+BENCH_HOST=ryzen WORLD=NEWWORLD.ZEN MOVABLE_VOBS=0 CHARACTER_VIRTUAL=1 \
+  OPENGOTHIC_CONTENT=/absolute/temporary/content \
+  scripts/bench.sh own-mesh-physics /absolute/output
+```
+
+Use an empty temporary content directory for the original variant, and generated directories
+for K=1 and K=1.5; repeat with `MOVABLE_VOBS=1`. The launcher stages game runs under
+`~/gothic-ai/e2e/<worktree>` and obtains the `gq` window slot itself. Separate test builds and
+temporary preparation files use `~/gothic-ai/own-meshes/`. Do not call the remote launcher directly or
+start an extra game outside `bench.sh`. The working content directory is not used by this stand.
+
+The narrow `own-mesh setup <zen id> <approach x> <approach z>` command selects an existing
+barrel, checks the ground along the approach, and places only the hero/camera. `own-mesh arrow`
+launches a real native arrow toward half-height; `own_mesh_arrow_hit` records the actual
+collision point, ZEN id, radial distance, and height error. `own-mesh walk` resets only the
+hero to the straight approach. While forward is held, yaw steering corrects cross-track error;
+only the native character controller supplies positions and velocities. `own-mesh checkpoint`
+records the maximum cross-track deviation, hero stop radius and final
+500 ms speed while forward is held, body displacement/NPC contact, hull volume in m³,
+mass, material density, class multiplier, and disposition. In ON mode the hero radius is
+relative to the original axis; use body displacement for the push. Native clearance contacts
+are diagnostic and available only in ON mode; the directional rays validate the fixture.
+The authored barrel is never inserted or teleported.
+
+The original barrel reports UNDEF / 2000 kg/m³ and the test barrel WOOD / 700 kg/m³;
+this explains their different masses at the same bbox. K=1.5/K=1 hull volume is 2.25.
+The report contains all direct snapshot fields, per-instance census changes, stop/hit/push
+measurements, and three screenshots. Seven mobility changes follow the new hull profile;
+the visual-name CSV rules and fracture protection are preserved. Mesh/hull caches are in
+memory, and the disk navmesh key already includes the selected geometry.
+[Results](../../reports/content/2026-10-own-meshes-physics/README.md).
+
 Film mode (what `gothic-shorts film` sets): `OPENGOTHIC_BENCH_REALTIME=1` keeps the fixed steps to the wall
 clock and draws only the captured frame; `TEMPEST_AUDIO_LOOPBACK=48000` records the game's sound into
 `<segment>.wav` instead of playing it; `TEMPEST_WINDOW_SIZE=<w>x<h>` (points) sets the frame;

@@ -72,6 +72,8 @@ namespace TestBench {
                                   std::string& value, std::string& error);
   // An arrow (a bolt) has moved to (x, y, z), cm: the overlay draws the way it flew (`overlay trail`)
   void     arrowAt(const void* arrow, float x, float y, float z);
+  // Native projectile callback, observed only by the authored own-mesh barrel stand.
+  void     ownMeshArrowHit(uint32_t zenId, const Tempest::Vec3& point, const Tempest::Vec3& normal);
   // Native melee baseline telemetry. Opt in with OPENGOTHIC_BODY_TRACE=1; no events outside an active bench.
   bool     bodyTracing();
   void     bodyEvent(const Npc& actor, const Npc* target, std::string_view phase, uint64_t gameTime,

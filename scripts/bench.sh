@@ -137,7 +137,7 @@ fi
 
 # These fixtures use a prepared world and clock; skip the new-game chapter video
 # before their first command on NEWWORLD.
-if [[ "$NAME" == cloth* || "$NAME" == monster-character-virtual* || "$NAME" == own-mesh-barrel || "$NAME" == own-mesh-fracture ]]; then
+if [[ "$NAME" == cloth* || "$NAME" == monster-character-virtual* || "$NAME" == own-mesh-* || "$NAME" == movable-census ]]; then
   START_ARGS+=(-nointro)
 fi
 
