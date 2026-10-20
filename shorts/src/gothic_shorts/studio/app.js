@@ -27,6 +27,8 @@ const S = {
   discardArm: null,
   discarded: [], // {n, k}, newest last; only this page's session
   changingTake: false,
+  preparingRecord: false,
+  takeChanges: Promise.resolve(), // serialize take mutations; session reads may finish independently
 };
 
 const line = () => S.session.lines[S.i];
@@ -44,6 +46,12 @@ async function api(path, body) {
   const data = await res.json();
   if (!res.ok || data.error) throw new Error(data.error || res.statusText);
   return data;
+}
+
+function changeTake(path) {
+  const request = S.takeChanges.then(() => api(path, ''));
+  S.takeChanges = request.catch(() => {}); // a failed request must not block the next action
+  return request;
 }
 
 async function load(keepLine = true) {
@@ -79,7 +87,8 @@ function render() {
   if (S.mode === 'idle') {
     $('cur').className = 'cur';
     $('state').className = 'state ready';
-    $('state').textContent = S.ctx ? 'Пробел — записать' : 'Пробел — включить микрофон и записать';
+    $('state').textContent = S.preparingRecord ? 'Подготавливаю запись…'
+      : S.ctx ? 'Пробел — записать' : 'Пробел — включить микрофон и записать';
     fit(0);
   }
 
@@ -113,7 +122,7 @@ function render() {
     }
     if (S.discarded.length) {
       $('restorebtn').onclick = () => restore();
-      $('restorebtn').disabled = S.changingTake;
+      $('restorebtn').disabled = S.changingTake || S.preparingRecord;
     }
   }
   renderDiscardButton();
@@ -270,39 +279,47 @@ async function showLine() {
 // -- takes ------------------------------------------------------------------------------------------------
 
 async function record() {
-  if (S.changingTake) return;
+  if (S.changingTake || S.preparingRecord || S.mode === 'rec' || S.mode === 'saving' || S.mode === 'room') return;
   disarmDiscard();
   stopPlay();
-  if (!S.node) {
-    // the first press only turns the microphone on: nobody is ready to speak right after the permission
-    try {
-      await mic();
-      await S.ctx.resume();
-    } catch (err) {
-      say(`Микрофон недоступен: ${err.message}. Разреши доступ к микрофону для этой страницы.`, true);
+  S.preparingRecord = true;
+  try {
+    render();
+    if (!S.node) {
+      // the first press only turns the microphone on: nobody is ready to speak right after the permission
+      try {
+        await mic();
+        await S.ctx.resume();
+      } catch (err) {
+        say(`Микрофон недоступен: ${err.message}. Разреши доступ к микрофону для этой страницы.`, true);
+        return;
+      }
+      say('Микрофон включён: посмотри на уровень, скажи пару слов. Пробел — записать.');
       return;
     }
-    render();
-    say('Микрофон включён: посмотри на уровень, скажи пару слов. Пробел — записать.');
-    return;
+    await S.ctx.resume();
+    const ln = line();
+    S.chunks = [];
+    S.clipped = false;
+    S.cancel = false;
+    S.videoFrom = null;
+    if (hasVideo() && ln.plan) {
+      S.videoFrom = Math.max(0, ln.plan[0] - PREROLL);
+      await seek(S.videoFrom);
+      video.muted = !S.sound;
+      video.play();
+    }
+    S.node.port.postMessage('start');
+    S.recStart = performance.now();
+    S.mode = 'rec';
+    say('');
+    requestAnimationFrame(tick);
+  } catch (err) {
+    say(`Запись не началась: ${err.message}`, true);
+  } finally {
+    S.preparingRecord = false;
+    if (S.mode === 'idle') render();
   }
-  await S.ctx.resume();
-  const ln = line();
-  S.chunks = [];
-  S.clipped = false;
-  S.cancel = false;
-  S.videoFrom = null;
-  if (hasVideo() && ln.plan) {
-    S.videoFrom = Math.max(0, ln.plan[0] - PREROLL);
-    await seek(S.videoFrom);
-    video.muted = !S.sound;
-    video.play();
-  }
-  S.node.port.postMessage('start');
-  S.recStart = performance.now();
-  S.mode = 'rec';
-  say('');
-  requestAnimationFrame(tick);
 }
 
 function stop(cancel) {
@@ -394,7 +411,7 @@ function tick() {
 }
 
 async function play(t) {
-  if (!t || S.changingTake) return;
+  if (!t || S.changingTake || S.preparingRecord) return;
   disarmDiscard();
   stopPlay();
   const a = new Audio(t.url);
@@ -428,10 +445,10 @@ function stopPlay() {
 }
 
 async function choose(k) {
-  if (S.changingTake) return;
+  if (S.changingTake || S.preparingRecord) return;
   if (k !== chosenTake(line())?.k) disarmDiscard();
   try {
-    await api(`/api/choose?line=${line().n}&take=${k}`, '');
+    await changeTake(`/api/choose?line=${line().n}&take=${k}`);
     await load();
   } catch (err) {
     say(err.message, true);
@@ -443,7 +460,7 @@ function renderDiscardButton() {
   if (!btn) return;
   btn.textContent = S.discardArm ? 'Ещё раз — в корзину' : 'В корзину';
   btn.classList.toggle('armed', Boolean(S.discardArm));
-  btn.disabled = S.changingTake;
+  btn.disabled = S.changingTake || S.preparingRecord;
 }
 
 function disarmDiscard(announce = true) {
@@ -457,7 +474,7 @@ function disarmDiscard(announce = true) {
 
 async function discard() {
   if (S.mode === 'play' || S.mode === 'run') stopPlay();
-  if (S.mode !== 'idle' || S.changingTake) return;
+  if (S.mode !== 'idle' || S.changingTake || S.preparingRecord) return;
   const ln = line();
   const t = chosenTake(ln);
   if (!t) return;
@@ -478,7 +495,7 @@ async function discard() {
   S.changingTake = true;
   render();
   try {
-    await api(`/api/discard?line=${ln.n}&take=${t.k}`, '');
+    await changeTake(`/api/discard?line=${ln.n}&take=${t.k}`);
     S.discarded.push({n: ln.n, k: t.k});
     await load();
     say(`Дубль ${idx} фразы ${ln.n} в корзине. Z — вернуть.`);
@@ -492,13 +509,13 @@ async function discard() {
 
 async function restore() {
   if (S.mode === 'play' || S.mode === 'run') stopPlay();
-  if (S.mode !== 'idle' || S.changingTake || !S.discarded.length) return;
+  if (S.mode !== 'idle' || S.changingTake || S.preparingRecord || !S.discarded.length) return;
   disarmDiscard();
   const {n, k} = S.discarded[S.discarded.length - 1];
   S.changingTake = true;
   render();
   try {
-    await api(`/api/restore?line=${n}&take=${k}`, '');
+    await changeTake(`/api/restore?line=${n}&take=${k}`);
     S.discarded.pop();
     S.i = Math.max(0, S.session.lines.findIndex((ln) => ln.n === n));
     await load();
@@ -513,7 +530,7 @@ async function restore() {
 }
 
 async function goto(idx) {
-  if (S.changingTake || S.mode === 'rec' || S.mode === 'saving' || S.mode === 'room') return;
+  if (S.changingTake || S.preparingRecord || S.mode === 'rec' || S.mode === 'saving' || S.mode === 'room') return;
   const next = Math.max(0, Math.min(S.session.lines.length - 1, idx));
   if (next !== S.i) disarmDiscard();
   stopPlay();
@@ -525,7 +542,7 @@ async function goto(idx) {
 // -- the room's silence, the rehearsal ---------------------------------------------------------------------
 
 async function room() {
-  if (S.mode !== 'idle' || S.changingTake) return;
+  if (S.mode !== 'idle' || S.changingTake || S.preparingRecord) return;
   disarmDiscard();
   try {
     await mic();
@@ -564,7 +581,7 @@ async function finishRoom() {
 
 async function rehearse() {
   if (S.mode === 'run') return stopPlay();
-  if (S.mode !== 'idle' || S.changingTake || !hasVideo()) return;
+  if (S.mode !== 'idle' || S.changingTake || S.preparingRecord || !hasVideo()) return;
   disarmDiscard();
   const ln = line();
   await seek(ln.plan ? Math.max(0, ln.plan[0] - PREROLL) : 0);
