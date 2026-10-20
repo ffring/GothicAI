@@ -23,6 +23,7 @@ data/
 !/data/content/
 /data/content/*
 !/data/content/registry.jsonl
+!/data/content/quality-pilot.jsonl
 !/data/content/city-materials.csv
 !OpenGothic/data/
 
