@@ -333,7 +333,12 @@
       {
         "key": "OWN_PROP_WOOD_PAINTED",
         "group": "WOOD",
-        "role": "painted shield boards"
+        "role": "shield boards painted dull red"
+      },
+      {
+        "key": "OWN_PROP_WOOD_PAINTED_LIGHT",
+        "group": "WOOD",
+        "role": "shield boards painted off-white"
       },
       {
         "key": "OWN_PROP_IRON_BAND",
