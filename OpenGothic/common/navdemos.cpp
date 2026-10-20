@@ -350,6 +350,15 @@ void finish(Episode& ep,World& world) {
        <<",\"max_blocked_ms\":"<<ep.maxBlockedMs<<",\"first_contact_ms\":"<<(ep.contacted?int64_t(ep.firstContactMs):-1)
        <<",\"follow_ms\":"<<ep.followMs<<",\"in_band_ms\":"<<ep.inBandMs
        <<",\"follow_fraction\":"<<(ep.followMs?double(ep.inBandMs)/double(ep.followMs):0);
+  if(ep.target)
+    out<<",\"target_immortal\":"<<ep.target->isImmortal()
+       <<",\"target_attitude\":"<<int(ep.target->attitude())
+       <<",\"target_temp_attitude\":"<<int(ep.target->tempAttitude())
+       <<",\"target_external_control\":"<<ep.target->isExternalControl()
+       <<",\"target_nonhostile\":"<<(world.script().personAttitude(*ep.npc,*ep.target)>=ATT_NEUTRAL &&
+                                      world.script().personAttitude(*ep.target,*ep.npc)>=ATT_NEUTRAL)
+       <<",\"target_final_down\":"<<ep.target->isDown()
+       <<",\"target_final_dead\":"<<ep.target->isDead();
   out<<",\"next_corner\":";vector(out,ep.path.corners.empty()?ep.goal:cm(ep.path.corners.back()));
   if(ep.drive) {
     out<<",\"teacher_beta\":"<<ep.teacherBeta<<",\"mixing_seed\":"<<ep.mixingSeed
@@ -1122,6 +1131,15 @@ void guidanceFor(Episode& ep,World& w,const Vec3& position) {
   if(ep.goalKind=="point")KnownRoadsBench::readGuidance(w,*ep.npc,position,ep.goal,ep.guidance);
   else {
     ep.guidance={};ep.guidance.carrot=ep.goal;ep.guidance.beyondKnown=true;
+    if(ep.goalKind=="follow") {
+      // Intent is visible in the existing learner fields: the physical target
+      // remains the final goal, while steering ends 2.5 m before it. The frozen
+      // memory planner receives this carrot just like any local road endpoint.
+      const auto delta=ep.goal-position;
+      const float distance=delta.length();
+      ep.guidance.carrot=position+delta*(distance>250.f?(distance-250.f)/distance:0.f);
+      ep.guidance.beyondKnown=false;
+    }
   }
 }
 void oracleMemory(NavMemoryTeacher::Input& input,const NavMesh::LocalRaster& raster) {
@@ -1250,6 +1268,26 @@ void decide(Episode& ep,World& w) {
     const bool direct=!airborne && !approaching && !ep.guidance.beyondKnown &&
                       mesh.straightWalkable(body.position,carrot);
     d=NavKeyTeacher::decideV2(body,ep.path,meters(ep.goal),carrot,direct);
+    if(ep.target && !airborne && !d.hint.onTransition) {
+      // These stand controls use the same target distance, previous action and
+      // carrot exposed to the learner. Native jump/climb execution is retained.
+      const float distance=(ep.goal-position).length();
+      d.keys.walk=ep.previous.walk;
+      if(distance>600.f)d.keys.walk=false;
+      else if(distance<400.f)d.keys.walk=true;
+      if(ep.goalKind=="follow" && (ep.guidance.carrot-position).length()<50.f) {
+        d.keys.forward=0;d.keys.strafe=0;
+        if(distance<220.f) {
+          auto away=position-ep.goal;away.y=0;
+          const float length=away.length();
+          if(length>0 && mesh.straightWalkable(meters(position),meters(position+away*(70.f/length)))) {
+            const auto relative=local(away,n.rotationRad());
+            if(std::abs(relative[0])>std::abs(relative[2]))d.keys.strafe=relative[0]>0?1.f:-1.f;
+            else d.keys.forward=relative[2]>0?1.f:-1.f;
+          }
+        }
+      }
+    }
     traceV2Plan(ep,position,d,direct,elapsed);
   } else {
     const auto present=NavKeyTeacher::decide(body,ep.path,meters(ep.goal));
@@ -1584,6 +1622,9 @@ void tickPopulation(World& w,uint64_t dt) {
 }
 
 bool NavDemos::running() {return legacy.active || population.active;}
+bool NavDemos::nonhostileTarget(const Npc& npc) {
+  return legacy.active && legacy.goalKind=="approach" && legacy.target==&npc;
+}
 bool NavDemos::forceCharacterVirtual(const Npc& npc) {
   return settings.cv && ((legacy.active && (legacy.npc==&npc || legacy.target==&npc)) || preparingLegacy==&npc ||
                           (population.active && population.members.contains(&npc)) ||
@@ -1916,6 +1957,13 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     auto& target=*ep.target;
     target.setProcessPolicy(NpcProcessPolicy::AiNormal);target.setInteraction(nullptr,true);
     target.clearAiQueue();target.clearState(false);target.clearSpeed();target.setExternalControl(true);
+    if(goalKind=="approach") {
+      // This is a navigation target, not a combat encounter. The cloned stand
+      // NPC still follows the ordinary seeded wandering route below.
+      auto& handle=target.handle();
+      handle.flags=zenkit::NpcFlag(uint32_t(handle.flags)|uint32_t(zenkit::NpcFlag::IMMORTAL));
+      target.setAttitude(ATT_FRIENDLY);target.setTempAttitude(ATT_FRIENDLY);
+    }
     target.clearGoTo();target.attachToPoint(nullptr);target.setDirection(ep.targetRoute[1]->groundPos-target.position());
     target.setWalkMode(WalkBit::WM_Walk);target.aiPush(AiQueue::aiGoToPoint(*ep.targetRoute[1]));ep.targetQueued=true;
     ep.goal=NpcKeys::physicalPosition(target);

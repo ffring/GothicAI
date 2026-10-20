@@ -365,9 +365,13 @@ NpcKeys::KeyState NavMemoryTeacher::decide(const Input& in) {
     else if(movingTicks>0) --movingTicks;
     }
   observedGoal=true;previousGoal=goal;
-  // Motion is inferred exclusively from learner observations. Static targets
-  // use the same walking gait as v2; a receding target can be caught at a run.
-  if(movingTicks>0 && in.roads.goalDistanceCm>400) out.walk=false;
+  // Motion is inferred exclusively from learner observations. The previous
+  // recorded action carries the gait hysteresis; no scenario mode is read.
+  if(movingTicks>0) {
+    out.walk=in.previous.walk;
+    if(in.roads.goalDistanceCm>600) out.walk=false;
+    else if(in.roads.goalDistanceCm<400) out.walk=true;
+    }
 
   if(in.body.flags[0] || in.body.flags[1] || in.body.flags[3]) return out;
   if(in.roads.goalDistanceCm<75) {
@@ -398,7 +402,9 @@ NpcKeys::KeyState NavMemoryTeacher::decide(const Input& in) {
       }
     return out;
     }
-  if(movingTicks>0 && in.roads.goalDistanceCm<280) {
+  // Following exposes its stand-off point as the learner's carrot. Approaching
+  // exposes the target itself, so nearby target motion must not prevent contact.
+  if(movingTicks>0 && !in.roads.beyondKnown && targetDistance<50) {
     stuckTicks=0;recoveryTicks=0;
     // A target turning back toward the follower must not push it inside the
     // tracking band. Retreat using only currently clear remembered ground.

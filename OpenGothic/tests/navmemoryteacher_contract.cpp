@@ -355,32 +355,48 @@ void selfTest() {
     input.roads.goalDistanceCm=600+float(tick)*20;
     input.roads.carrotDistanceCm=input.roads.goalDistanceCm;
     keys=teacher.decide(input);noNativeAction(keys);
-    require(keys.forward>0 && !keys.walk,"a receding target beyond four metres must be caught at a run");
+    require(keys.forward>0 && !keys.walk,"a receding target beyond six metres must be caught at a run");
     input.previous=keys;
     }
+  ++tests;
+
+  input=target(0,1,600);input.body.velocityCmS={0,0,100};teacher.reset();
+  keys=teacher.decide(input);input.previous=keys;
+  const std::array<float,7> distances={620,550,480,390,480,570,620};
+  const std::array<bool,7> walking={false,false,false,true,true,true,false};
+  for(size_t i=0;i<distances.size();++i) {
+    input.roads.goalDistanceCm=distances[i];input.roads.carrotDistanceCm=distances[i];
+    keys=teacher.decide(input);noNativeAction(keys);
+    require(keys.walk==walking[i],"moving target gait did not retain the recorded walk/run hysteresis");
+    input.previous=keys;
+    }
+  ++tests;
+
+  input=target(0,1,230);input.roads.beyondKnown=false;input.roads.carrotDistanceCm=0;teacher.reset();
+  keys=teacher.decide(input);input.previous=keys;
+  input.roads.goalDistanceCm=250;
+  keys=teacher.decide(input);noNativeAction(keys);
+  require(keys.forward==0 && keys.strafe==0 && keys.turn==0,"a nearby moving target must retain following distance");
+  input.previous=keys;
+  for(unsigned tick=1;tick<=6;++tick) {
+    keys=teacher.decide(input);noNativeAction(keys);
+    require(keys.forward==0 && keys.strafe==0,"a reached follow carrot must remain stopped when the target pauses");
+    input.previous=keys;
+    }
+  ++tests;
+
+  input=target(0,1,210);input.roads.beyondKnown=false;input.roads.carrotDistanceCm=0;teacher.reset();
+  keys=teacher.decide(input);input.previous=keys;
+  input.roads.goalDistanceCm=190;
+  keys=teacher.decide(input);noNativeAction(keys);
+  require(keys.forward<0 || keys.strafe!=0,"a moving target approaching inside two metres must trigger a safe retreat");
   ++tests;
 
   input=target(0,1,230);teacher.reset();
   keys=teacher.decide(input);input.previous=keys;
   input.roads.goalDistanceCm=250;input.roads.carrotDistanceCm=250;
   keys=teacher.decide(input);noNativeAction(keys);
-  require(keys.forward==0 && keys.strafe==0 && keys.turn==0,"a nearby moving target must retain following distance");
-  input.previous=keys;
-  for(unsigned tick=1;tick<=5;++tick) {
-    keys=teacher.decide(input);noNativeAction(keys);
-    if(tick<5)
-      require(keys.forward==0 && keys.strafe==0,"nearby target motion must persist for five decisions");
-    else
-      require(keys.forward>0 && keys.walk,"a now stationary point must resume approach after five decisions");
-    input.previous=keys;
-    }
-  ++tests;
-
-  input=target(0,1,210);teacher.reset();
-  keys=teacher.decide(input);input.previous=keys;
-  input.roads.goalDistanceCm=190;input.roads.carrotDistanceCm=190;
-  keys=teacher.decide(input);noNativeAction(keys);
-  require(keys.forward<0 || keys.strafe!=0,"a moving target approaching inside two metres must trigger a safe retreat");
+  require(keys.forward>0,"approaching a nearby moving target must not inherit following stand-off");
   ++tests;
 
   input=target(0,1,600);input.body.velocityCmS={0,0,100};teacher.reset();
