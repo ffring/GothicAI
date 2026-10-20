@@ -119,6 +119,13 @@ int main() {
             }),"ordinary flat polygons and tile edges must remain free without a second erosion");
     height(cell(flatRaster.near,32,32),0,"flat near");
     height(cell(flatRaster.far,49,49),0,"flat far");
+    // x=16 is exactly five tile widths (.1m * 32). Reaching that endpoint
+    // may leave Detour's ray corridor in the linked polygon on the other side
+    // of the shared edge; it is still ordinary covered flat ground.
+    const auto tileBoundary=raster(flat,{1,0,10});
+    const auto& boundaryCell=cell(tileBoundary.far,50,57);
+    check(boundaryCell.traversable && !boundaryCell.heightBoundary,
+          "shared flat tile boundary must not be painted as a cliff by endpoint polygon identity");
     check(!cell(flatRaster.far,55,55).heightValid && !cell(flatRaster.far,55,55).traversable,
           "far cells beyond exact geometry must stay uncovered");
     check(!raster(flat,{1000,0,1000}).supportValid,"off-mesh body must not snap to a remote floor");

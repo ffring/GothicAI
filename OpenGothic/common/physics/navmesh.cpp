@@ -264,8 +264,23 @@ struct NavMesh::Impl {
     float fraction=0;Point normal{};int count=0;
     const auto status=query->raycast(from,a.data(),b.data(),&filter,&fraction,normal.data(),
                                     corridor.data(),&count,int(corridor.size()));
-    return dtStatusSucceed(status) && !dtStatusDetail(status,DT_BUFFER_TOO_SMALL) &&
-           fraction>1.f && count>0 && corridor[size_t(count-1)]==to;
+    if(dtStatusFailed(status) || dtStatusDetail(status,DT_BUFFER_TOO_SMALL) || fraction<=1.f || count<=0) return false;
+    const auto last=corridor[size_t(count-1)];
+    if(last==to) return true;
+    // An endpoint exactly on a tile/polygon edge may remain in the polygon
+    // from which the ray approached it. Detour's point-in-poly is half-open,
+    // so its reference need not equal the raster's selected neighbour. Accept
+    // only a directly linked ground neighbour sharing that numerical endpoint
+    // and the same height; never use the much larger support-snap tolerance.
+    const dtMeshTile* tile=nullptr;const dtPoly* poly=nullptr;
+    if(dtStatusFailed(mesh->getTileAndPolyByRef(last,&tile,&poly))) return false;
+    bool linked=false;
+    for(auto link=poly->firstLink;link!=DT_NULL_LINK;link=tile->links[link].next)
+      linked|=tile->links[link].ref==to;
+    if(!linked) return false;
+    Point boundary{};bool over=false;
+    if(dtStatusFailed(query->closestPointOnPoly(last,b.data(),boundary.data(),&over))) return false;
+    return std::hypot(boundary[0]-b[0],boundary[2]-b[2])<=1.e-4f && std::abs(boundary[1]-b[1])<=1.e-3f;
     }
 
   bool load(uint64_t key) {
