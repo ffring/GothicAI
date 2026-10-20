@@ -1420,6 +1420,24 @@ void beginPopulation(const std::vector<std::string>& a,World& w,Npc& player,cons
   pop.startupSeconds=std::chrono::duration<double>(Clock::now()-pop.wallStart).count();
   for(auto& slot:pop.slots)slot->phaseUs={};
 }
+void tracePerceptionSafety(Episode& ep,World& w,uint64_t elapsed) {
+  if(!ep.perceptionMonitor)return;
+  auto& n=*ep.npc;
+  const auto p=NpcKeys::physicalPosition(n);
+  const auto water=w.physic()->waterRay(p+Vec3(0,2,0),50.f);
+  const float depth=water.hasCol && std::isfinite(water.wdepth)?std::max(0.f,water.wdepth-p.y):0.f;
+  auto& out=ep.perceptionSafetyFrames;
+  out<<"{\"elapsed_ms\":"<<elapsed<<",\"position_cm\":";vector(out,p);
+  out<<",\"cv_active\":"<<n.characterVirtualActive()<<",\"supported\":"<<NavTransitions::supported(w,n)
+     <<",\"in_air\":"<<n.isInAir()<<",\"falling\":"<<n.isFalling()
+     <<",\"native_jump\":"<<(n.isJump() || n.isJumpAnim())
+     <<",\"native_climb\":"<<n.navigationClimbing()<<",\"swimming\":"<<n.isSwim()
+     <<",\"water_depth_cm\":"<<depth
+     <<",\"deep_water_threshold_cm\":"<<w.script().guildVal().water_depth_chest[n.guild()]
+     <<",\"hitpoints\":"<<n.attribute(ATR_HITPOINTS)
+     <<",\"hitpoints_max\":"<<n.attribute(ATR_HITPOINTSMAX)<<"}\n";
+  if(!out)throw std::runtime_error("navdemos perception safety frame write failed");
+}
 void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
   if(!ep.active)return;
   auto& n=*ep.npc;++ep.frames;if(n.characterVirtualActive())++ep.cvFrames;
@@ -1436,18 +1454,7 @@ void tickEpisode(Episode& ep,World& w,uint64_t dt,bool truncate=false) {
     ep.minHeroDistanceCm=std::min(ep.minHeroDistanceCm,distance);ep.maxHeroDistanceCm=std::max(ep.maxHeroDistanceCm,distance);
   }
   const auto elapsed=w.tickCount()-ep.began;
-  if(ep.perceptionMonitor) {
-    auto& out=ep.perceptionSafetyFrames;
-    const auto water=w.physic()->waterRay(p,50.f);
-    const float depth=water.hasCol && std::isfinite(water.wdepth)?std::max(0.f,water.wdepth-p.y):0.f;
-    out<<"{\"elapsed_ms\":"<<elapsed<<",\"position_cm\":";vector(out,p);
-    out<<",\"cv_active\":"<<n.characterVirtualActive()<<",\"supported\":"<<NavTransitions::supported(w,n)
-       <<",\"in_air\":"<<n.isInAir()<<",\"falling\":"<<n.isFalling()
-       <<",\"native_jump\":"<<(n.isJump() || n.isJumpAnim())
-       <<",\"native_climb\":"<<n.navigationClimbing()<<",\"swimming\":"<<n.isSwim()
-       <<",\"water_depth_cm\":"<<depth<<"}\n";
-    if(!out)throw std::runtime_error("navdemos perception safety frame write failed");
-  }
+  tracePerceptionSafety(ep,w,elapsed);
   if(ep.target) {
     auto& target=*ep.target;
     if(target.isDown()) {ep.failure="target_down";finish(ep,w);return;}
@@ -1917,6 +1924,7 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
   }
   if(ep.target)ep.targetTrajectory=file(ep,"target-trajectory.txt");
   ep.initialState=initialState(ep);
+  tracePerceptionSafety(ep,w,0);
   observe(ep,w);decide(ep,w);ep.next=ep.began+100;
 }
 void NavDemos::tick(World& w,uint64_t dt) {
